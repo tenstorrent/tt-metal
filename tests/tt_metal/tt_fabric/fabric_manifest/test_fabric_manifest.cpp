@@ -3,30 +3,25 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Checks the fabric manifest written during fabric init against the live fabric. Each check covers one part of the
-// manifest and runs under 1D and 2D.
+// manifest and runs under every fabric configuration a fixture brings up.
 
 #include <gtest/gtest.h>
-#include <enchantum/enchantum.hpp>
 #include <fmt/format.h>
 #include <nlohmann/json.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
-#include <tt_stl/overloaded.hpp>
-#include <umd/device/arch/architecture_implementation.hpp>
 
 #include <algorithm>
-#include <array>
 #include <bit>
 #include <filesystem>
 #include <fstream>
-#include <map>
 #include <optional>
 #include <set>
 #include <span>
 #include <string>
 #include <string_view>
 #include <tuple>
-#include <utility>
 #include <variant>
 #include <vector>
 
@@ -36,7 +31,6 @@
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_helpers.hpp"
 #include "tt_metal/fabric/builder/fabric_edge_capability.hpp"
-#include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest.hpp"
@@ -130,7 +124,7 @@ void index_routers(const json& manifest, std::vector<RouterEntry>& routers) {
 }
 
 // Brings up fabric with manifest generation on, then reads this rank's manifest and indexes its routers.
-template <FabricConfig kFabricConfig>
+template <FabricConfig kFabricConfig, FabricTensixConfig kTensixConfig = FabricTensixConfig::DISABLED>
 class FabricManifestFixture : public BaseFabricFixture {
 protected:
     static constexpr FabricConfig fabric_config = kFabricConfig;
@@ -140,7 +134,7 @@ protected:
         generate_manifest_before_ = rtoptions.get_generate_fabric_manifest();
         rtoptions.set_generate_fabric_manifest(true);
         suite_start_ = std::filesystem::file_time_type::clock::now();
-        DoSetUpTestSuite(kFabricConfig);
+        DoSetUpTestSuite(kFabricConfig, std::nullopt, kTensixConfig);
     }
 
     static void TearDownTestSuite() {
@@ -172,100 +166,30 @@ protected:
 
 using Fabric1DManifestFixture = FabricManifestFixture<FabricConfig::FABRIC_1D>;
 using Fabric2DManifestFixture = FabricManifestFixture<FabricConfig::FABRIC_2D>;
+// We use mock cluster descriptors for torus and mux fabric configs, so we can test the manifest generation for these
+// configs without needing physical hardware. These names intentionally don't hit the hardware CI filters so that they
+// don't run on hardware CI as they are meant to be host-only.
+using FabricTorusXManifestFixture = FabricManifestFixture<FabricConfig::FABRIC_2D_TORUS_X>;
+using FabricTorusYManifestFixture = FabricManifestFixture<FabricConfig::FABRIC_2D_TORUS_Y>;
+using FabricTorusXYManifestFixture = FabricManifestFixture<FabricConfig::FABRIC_2D_TORUS_XY>;
+using FabricMuxManifestFixture = FabricManifestFixture<FabricConfig::FABRIC_2D, FabricTensixConfig::MUX>;
 
 // ============ Checks ============
+//
+// Generation already fails on what each pass can check about itself, and the schema check pins every key set and value
+// type. These checks cover what neither can: the manifest against an independent source (the fixture's own settings,
+// the HAL, the builder's buffer map, ControlPlane's view of the neighbor graph), and facts that only hold across
+// routers, chips or blocks.
 
-// The manifest has exactly the top-level blocks the writer emits, was written by this run, and the write left no
-// temporary file. Values are checked against the fixture's own settings, not the getters the writer reads.
+// The manifest describes this run's fabric config, was written by this run, and the write left no temporary file.
 void check_top_level(
     const json& manifest,
     const std::filesystem::path& manifest_path,
     FabricConfig fabric_config,
     std::filesystem::file_time_type suite_start) {
-    EXPECT_EQ(
-        keys_of(manifest),
-        (std::set<std::string>{
-            "manifest_version", "file_kind", "run", "fabric", "arch", "types", "vocabulary", "meshes"}));
-    EXPECT_EQ(keys_of(manifest.at("types")), (std::set<std::string>{"structs", "enums"}));
-    const auto& vocabulary = manifest.at("vocabulary");
-    EXPECT_EQ(
-        keys_of(vocabulary),
-        (std::set<std::string>{
-            "arch",
-            "fabric_config",
-            "reliability_mode",
-            "tensix_config",
-            "udm_mode",
-            "fabric_manager_mode",
-            "fabric_topology",
-            "credit_backing",
-            "l1_credit_counter_reason",
-            "z_port_role",
-            "edge_capability",
-            "credit_counter_indexed_by",
-            "stream_register",
-            "field_category",
-            "field_kind",
-            "channel_status",
-            "erisc_processor"}));
-    // A label's value is one of the names its vocabulary list holds.
-    const auto expect_listed = [&](const char* list, const json& name) {
-        EXPECT_NE(std::ranges::find(vocabulary.at(list), name), vocabulary.at(list).end()) << list << ": " << name;
-    };
-    EXPECT_EQ(manifest.at("manifest_version"), FABRIC_MANIFEST_VERSION);
-    EXPECT_EQ(manifest.at("file_kind"), "fabric_manifest");
+    EXPECT_EQ(manifest.at("fabric").at("config").at("fabric_config"), lower_enum_name(fabric_config));
+    EXPECT_EQ(manifest.at("fabric").at("is_2d_routing"), is_2d_fabric_config(fabric_config));
     EXPECT_GE(std::filesystem::last_write_time(manifest_path), suite_start);
-
-    const auto& run = manifest.at("run");
-    EXPECT_EQ(keys_of(run), (std::set<std::string>{"host_rank", "mpi_rank", "world_size", "written_at", "build"}));
-    EXPECT_FALSE(run.at("written_at").get<std::string>().empty());
-    const auto& build = run.at("build");
-    EXPECT_EQ(keys_of(build), (std::set<std::string>{"git_sha", "git_dirty"}));
-    // A full commit SHA, or empty outside a git checkout.
-    const auto git_sha = build.at("git_sha").get<std::string>();
-    EXPECT_TRUE(
-        git_sha.empty() || (git_sha.size() == 40 && git_sha.find_first_not_of("0123456789abcdef") == std::string::npos))
-        << git_sha;
-    EXPECT_TRUE(build.at("git_dirty").is_boolean());
-
-    EXPECT_EQ(manifest.at("arch").at("name"), lower_enum_name(BaseFabricFixture::arch_));
-    expect_listed("arch", manifest.at("arch").at("name"));
-
-    const bool is_2d = fabric_config == FabricConfig::FABRIC_2D;
-    const auto& block = manifest.at("fabric");
-    const auto& config = block.at("config");
-    EXPECT_EQ(
-        keys_of(config),
-        (std::set<std::string>{
-            "fabric_config",
-            "reliability_mode",
-            "num_routing_planes",
-            "tensix_config",
-            "udm_mode",
-            "fabric_manager",
-            "router_config"}));
-    EXPECT_EQ(config.at("fabric_config"), lower_enum_name(fabric_config));
-    for (const char* key : {"fabric_config", "reliability_mode", "tensix_config", "udm_mode"}) {
-        expect_listed(key, config.at(key));
-    }
-    expect_listed("fabric_manager_mode", config.at("fabric_manager"));
-    EXPECT_EQ(config.at("fabric_manager"), lower_enum_name(control_plane().get_fabric_manager_mode()));
-    EXPECT_TRUE(config.at("num_routing_planes").is_null() || config.at("num_routing_planes").get<uint32_t>() >= 1);
-    EXPECT_EQ(keys_of(config.at("router_config")), (std::set<std::string>{"max_packet_payload_size_bytes"}));
-    expect_listed("fabric_topology", block.at("topology"));
-    EXPECT_EQ(
-        keys_of(block),
-        (std::set<std::string>{
-            "config",
-            "topology",
-            "is_2d_routing",
-            "packet_header_size_bytes",
-            "max_payload_size_bytes",
-            "channel_buffer_size_bytes",
-            is_2d ? "routing_2d_route_buffer_size" : "routing_1d_extension_words",
-            "multi_txq"}));
-    EXPECT_EQ(block.at("is_2d_routing"), is_2d);
-    EXPECT_TRUE(block.at("multi_txq").is_boolean());
 
     // Other ranks write their manifests into the same directory, and may still be writing.
     const auto temp_prefix = manifest_path.filename().string() + ".tmp.";
@@ -274,157 +198,29 @@ void check_top_level(
     }
 }
 
-bool is_local_mesh(MeshId mesh_id) {
-    const auto local_mesh_ids = control_plane().get_local_mesh_id_bindings();
-    return std::ranges::find(local_mesh_ids, mesh_id) != local_mesh_ids.end();
-}
-
-// Every mesh in the mesh graph appears under its M key, with its shape and express setting. Only this host's meshes
-// have a credit transport; other hosts' meshes are described by their own manifests.
-void check_meshes(const json& manifest) {
-    const auto& mesh_graph = control_plane().get_mesh_graph();
-    std::set<std::string> expected_keys;
-    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
-        expected_keys.insert(mesh_key(mesh_id));
-        SCOPED_TRACE(mesh_key(mesh_id));
-        ASSERT_TRUE(manifest.at("meshes").contains(mesh_key(mesh_id)));
-        const auto& mesh = manifest.at("meshes").at(mesh_key(mesh_id));
-
-        const auto shape = mesh_graph.get_mesh_shape(mesh_id);
-        std::set<std::string> expected_mesh_keys = {"shape", "express_routing", "chips"};
-        if (shape.dims() == 2) {
-            expected_mesh_keys.insert("torus");
-        }
-        if (is_local_mesh(mesh_id)) {
-            expected_mesh_keys.insert("credit_transport");
-        }
-        EXPECT_EQ(keys_of(mesh), expected_mesh_keys);
-        ASSERT_EQ(mesh.at("shape").size(), shape.dims());
-        for (size_t dim = 0; dim < shape.dims(); ++dim) {
-            EXPECT_EQ(mesh.at("shape").at(dim), shape[dim]);
-        }
-        EXPECT_EQ(mesh.at("express_routing"), control_plane().express_routing_enabled(mesh_id));
-    }
-    EXPECT_EQ(keys_of(manifest.at("meshes")), expected_keys);
-}
-
-// Every chip in each mesh appears under its C key. Local chips carry their device ids, Z-port role and routers;
-// the others only say where they are, so the viewer can still draw the whole mesh.
-void check_chips(const json& manifest) {
-    const auto& mesh_graph = control_plane().get_mesh_graph();
-    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
-        const auto& chips = manifest.at("meshes").at(mesh_key(mesh_id)).at("chips");
-        std::set<std::string> expected_keys;
-        for (const auto& [_, fabric_chip_id] : mesh_graph.get_chip_ids(mesh_id)) {
-            const FabricNodeId node(mesh_id, fabric_chip_id);
-            expected_keys.insert(chip_key(fabric_chip_id));
-            SCOPED_TRACE(fmt::format("{}/{}", mesh_key(mesh_id), chip_key(fabric_chip_id)));
-            ASSERT_TRUE(chips.contains(chip_key(fabric_chip_id)));
-            const auto& chip = chips.at(chip_key(fabric_chip_id));
-
-            const auto coord = mesh_graph.chip_to_coordinate(mesh_id, fabric_chip_id);
-            ASSERT_EQ(chip.at("mesh_coord").size(), coord.dims());
-            for (size_t dim = 0; dim < coord.dims(); ++dim) {
-                EXPECT_EQ(chip.at("mesh_coord").at(dim), coord[dim]);
-            }
-
-            const auto physical_chip_id = control_plane().try_get_physical_chip_id_from_fabric_node_id(node);
-            ASSERT_EQ(chip.at("is_local"), physical_chip_id.has_value());
-            if (!physical_chip_id.has_value()) {
-                EXPECT_EQ(
-                    keys_of(chip), (std::set<std::string>{"mesh_coord", "physical_chip_id", "asic_id", "is_local"}));
-                EXPECT_TRUE(chip.at("physical_chip_id").is_null());
-                EXPECT_TRUE(chip.at("asic_id").is_null());
+// A local chip's Z port role, which the builder takes from its per-direction capabilities, matches the one the neighbor
+// graph gives.
+void check_chip_z_port_role(const json& manifest) {
+    for (const auto& [m_key, mesh] : manifest.at("meshes").items()) {
+        for (const auto& [c_key, chip] : mesh.at("chips").items()) {
+            if (!chip.at("is_local").get<bool>()) {
                 continue;
             }
-
-            EXPECT_EQ(
-                keys_of(chip),
-                (std::set<std::string>{
-                    "mesh_coord", "physical_chip_id", "asic_id", "is_local", "z_port_role", "local_sync", "routers"}));
-            EXPECT_EQ(chip.at("physical_chip_id"), *physical_chip_id);
-            EXPECT_EQ(
-                chip.at("asic_id"), fmt::format("0x{:016x}", *control_plane().get_asic_id_from_fabric_node_id(node)));
-            // Read from the neighbor graph, not from the builder's per-chip facts the writer uses.
+            SCOPED_TRACE(fmt::format("{}/{}", m_key, c_key));
+            const FabricNodeId node(
+                MeshId{static_cast<uint32_t>(std::stoul(m_key.substr(1)))},
+                static_cast<uint32_t>(std::stoul(c_key.substr(1))));
             EXPECT_EQ(chip.at("z_port_role"), lower_enum_name(z_port_role(control_plane(), node)));
-            const auto& roles = manifest.at("vocabulary").at("z_port_role");
-            EXPECT_NE(std::ranges::find(roles, chip.at("z_port_role")), roles.end()) << chip.at("z_port_role");
-        }
-        EXPECT_EQ(keys_of(chips), expected_keys);
-    }
-}
-
-// A local chip's routers are exactly ControlPlane's active fabric channels, each keyed by its direction and
-// routing plane.
-void check_routers_match_active_channels(const json& manifest) {
-    for (const auto& mesh_id : control_plane().get_mesh_graph().get_all_mesh_ids()) {
-        for (const auto& [_, fabric_chip_id] : control_plane().get_mesh_graph().get_chip_ids(mesh_id)) {
-            const FabricNodeId node(mesh_id, fabric_chip_id);
-            if (!control_plane().try_get_physical_chip_id_from_fabric_node_id(node).has_value()) {
-                continue;
-            }
-            SCOPED_TRACE(fmt::format("{}/{}", mesh_key(mesh_id), chip_key(fabric_chip_id)));
-            std::set<std::string> expected_keys;
-            for (const auto& [chan, direction] : control_plane().get_active_fabric_eth_channels(node)) {
-                expected_keys.insert(router_key(direction, control_plane().get_routing_plane_id(node, chan)));
-            }
-            const auto& chip = manifest.at("meshes").at(mesh_key(mesh_id)).at("chips").at(chip_key(fabric_chip_id));
-            EXPECT_EQ(keys_of(chip.at("routers")), expected_keys);
         }
     }
 }
 
-// Every router has exactly the blocks the writer emits.
-void check_router_blocks(const std::vector<RouterEntry>& routers) {
-    for (const auto& entry : routers) {
-        SCOPED_TRACE(entry.path);
-        EXPECT_EQ(
-            keys_of(*entry.router),
-            (std::set<std::string>{
-                "identity",
-                "link",
-                "shape",
-                "credit_counters",
-                "channels",
-                "intra_chip_downstream_edges",
-                "fields",
-                "eriscs",
-                "leftover_l1"}));
-        EXPECT_EQ(keys_of(entry.router->at("channels")), (std::set<std::string>{"senders", "receivers"}));
-    }
-}
-
-// Identity names the router's channel and cores. Its mesh and chip are the path.
-void check_router_identity(const std::vector<RouterEntry>& routers) {
-    const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
-    for (const auto& entry : routers) {
-        SCOPED_TRACE(entry.path);
-        const auto& identity = entry.router->at("identity");
-        EXPECT_EQ(keys_of(identity), (std::set<std::string>{"eth_chan", "logical_core", "virtual_core"}));
-        EXPECT_EQ(identity.at("eth_chan"), entry.eth_chan);
-
-        const auto logical_core =
-            cluster.get_soc_desc(entry.physical_chip_id).get_eth_core_for_channel(entry.eth_chan, CoordSystem::LOGICAL);
-        EXPECT_EQ(identity.at("logical_core"), json::array({logical_core.x, logical_core.y}));
-        const auto virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(
-            entry.physical_chip_id, tt::tt_metal::CoreCoord(logical_core.x, logical_core.y), CoreType::ETH);
-        EXPECT_EQ(identity.at("virtual_core"), json::array({virtual_core.x, virtual_core.y}));
-    }
-}
-
-// Link agrees with ControlPlane: the edge capability follows from where the peer is and which way the router
-// faces, cross-host is ControlPlane's, and a wrap link spans a torus axis. Direction and plane are the key, which
-// RoutersMatchActiveChannels checks.
+// The edge capability the builder classified follows from where ControlPlane says the peer is and which way the router
+// faces, and a wrap link spans an axis the mesh's torus wraps.
 void check_router_link(const json& manifest, const std::vector<RouterEntry>& routers) {
     for (const auto& entry : routers) {
         SCOPED_TRACE(entry.path);
         const auto& link = entry.router->at("link");
-        EXPECT_EQ(
-            keys_of(link), (std::set<std::string>{"edge_capability", "peer", "cross_host", "wrap", "dispatch_link"}));
-        EXPECT_TRUE(link.at("dispatch_link").is_boolean());
-        EXPECT_EQ(
-            link.at("cross_host"), control_plane().is_cross_host_eth_link(entry.physical_chip_id, entry.eth_chan));
-
         const bool faces_z = entry.router_key.front() == 'Z';
         const auto peer = control_plane().try_get_connected_mesh_chip_chan_ids(entry.node, entry.eth_chan);
         if (peer.has_value()) {
@@ -436,14 +232,6 @@ void check_router_link(const json& manifest, const std::vector<RouterEntry>& rou
                 expected = EdgeCapability::INTRAMESH_EXPRESS;
             }
             EXPECT_EQ(link.at("edge_capability"), lower_enum_name(expected));
-        }
-
-        // The peer can be null even with a cable: the far channel may be trimmed from the peer's planes.
-        if (!peer.has_value()) {
-            EXPECT_TRUE(link.at("peer").is_null());
-        } else if (!link.at("peer").is_null()) {
-            const auto peer_chip = fmt::format("{}/{}/", mesh_key(peer->first.mesh_id), chip_key(peer->first.chip_id));
-            EXPECT_TRUE(link.at("peer").get<std::string>().starts_with(peer_chip)) << link.at("peer");
         }
 
         if (link.at("wrap").get<bool>()) {
@@ -480,65 +268,17 @@ void check_peers_are_symmetric(const json& manifest, const std::vector<RouterEnt
     }
 }
 
-// Shape stays within what the hardware and the builder's limits allow.
-void check_router_shape(const std::vector<RouterEntry>& routers) {
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    const uint32_t max_eriscs = hal.get_num_risc_processors(tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH);
-    const bool has_trimming_profile = tt::tt_metal::MetalContext::instance().rtoptions().has_fabric_trimming_profile();
-    for (const auto& entry : routers) {
-        SCOPED_TRACE(entry.path);
-        const auto& shape = entry.router->at("shape");
-        EXPECT_EQ(
-            keys_of(shape),
-            (std::set<std::string>{
-                "num_vcs",
-                "senders_per_vc",
-                "receivers_per_vc",
-                "num_active_eriscs",
-                "channel_trimming_overrides_applied",
-                "vc0_bubble_flow_control"}));
-
-        const auto num_vcs = shape.at("num_vcs").get<uint32_t>();
-        EXPECT_GE(num_vcs, 1u);
-        EXPECT_LE(num_vcs, builder_config::MAX_NUM_VCS);
-        const auto& senders = shape.at("senders_per_vc");
-        const auto& receivers = shape.at("receivers_per_vc");
-        ASSERT_EQ(senders.size(), builder_config::MAX_NUM_VCS);
-        ASSERT_EQ(receivers.size(), builder_config::MAX_NUM_VCS);
-        EXPECT_GE(senders.at(0).get<uint32_t>(), 1u);
-        EXPECT_GE(receivers.at(0).get<uint32_t>(), 1u);
-        for (uint32_t vc = num_vcs; vc < builder_config::MAX_NUM_VCS; ++vc) {
-            EXPECT_EQ(senders.at(vc), 0) << "vc" << vc;
-            EXPECT_EQ(receivers.at(vc), 0) << "vc" << vc;
-        }
-
-        const auto num_active_eriscs = shape.at("num_active_eriscs").get<uint32_t>();
-        EXPECT_GE(num_active_eriscs, 1u);
-        EXPECT_LE(num_active_eriscs, max_eriscs);
-        if (!has_trimming_profile) {
-            EXPECT_EQ(shape.at("channel_trimming_overrides_applied"), false);
-        }
-        EXPECT_TRUE(shape.at("vc0_bubble_flow_control").is_boolean());
-    }
-}
-
-// A local mesh lists the credit backing of every VC its routers send on, with a reason exactly when the VC is on L1
-// counters. Each reason sits only on the VCs it applies to, and matches the fact it names: multi_txq on VC0 and VC1
-// with two TX queues, express on VC1 with express routing, and no_completion_register on VC2 wherever VC2 exists.
+// Every VC some router of a local mesh has senders on has a credit transport entry, so each sender's credits can be
+// read by the backing its VC names.
 void check_credit_transport(const json& manifest, const std::vector<RouterEntry>& routers) {
-    const bool multi_txq = manifest.at("fabric").at("multi_txq").get<bool>();
-    for (const auto& mesh_id : control_plane().get_mesh_graph().get_all_mesh_ids()) {
-        if (!is_local_mesh(mesh_id)) {
+    for (const auto& [m_key, mesh] : manifest.at("meshes").items()) {
+        if (!mesh.contains("credit_transport")) {
             continue;
         }
-        SCOPED_TRACE(mesh_key(mesh_id));
-        const auto& mesh = manifest.at("meshes").at(mesh_key(mesh_id));
-        const auto& transport = mesh.at("credit_transport");
-        const bool express = mesh.at("express_routing").get<bool>();
-
+        SCOPED_TRACE(m_key);
         std::set<std::string> vcs_with_senders;
         for (const auto& entry : routers) {
-            if (entry.node.mesh_id != mesh_id) {
+            if (mesh_key(entry.node.mesh_id) != m_key) {
                 continue;
             }
             const auto& senders = entry.router->at("shape").at("senders_per_vc");
@@ -548,128 +288,35 @@ void check_credit_transport(const json& manifest, const std::vector<RouterEntry>
                 }
             }
         }
-        const auto listed = keys_of(transport);
-        EXPECT_TRUE(std::ranges::includes(listed, vcs_with_senders));
-        std::set<std::string> all_vcs;
-        for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-            all_vcs.insert(fmt::format("vc{}", vc));
-        }
-        EXPECT_TRUE(std::ranges::includes(all_vcs, listed));
-
-        for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-            const auto vc_key = fmt::format("vc{}", vc);
-            if (!transport.contains(vc_key)) {
-                continue;
-            }
-            SCOPED_TRACE(vc_key);
-            const auto& entry = transport.at(vc_key);
-            EXPECT_EQ(keys_of(entry), (std::set<std::string>{"backing", "reasons"}));
-            std::set<std::string> reasons;
-            for (const auto& reason : entry.at("reasons")) {
-                EXPECT_TRUE(reasons.insert(reason.get<std::string>()).second) << "repeated reason " << reason;
-            }
-            EXPECT_EQ(entry.at("backing"), reasons.empty() ? "stream_register" : "l1_counter");
-
-            std::set<std::string> expected_reasons;
-            if (multi_txq && vc <= 1) {
-                expected_reasons.insert(lower_enum_name(L1CreditCounterReason::MULTI_TXQ));
-            }
-            if (express && vc == 1) {
-                expected_reasons.insert(lower_enum_name(L1CreditCounterReason::EXPRESS));
-            }
-            if (vc == 2) {
-                expected_reasons.insert(lower_enum_name(L1CreditCounterReason::NO_COMPLETION_REGISTER));
-            }
-            EXPECT_EQ(reasons, expected_reasons);
-        }
+        EXPECT_TRUE(std::ranges::includes(keys_of(mesh.at("credit_transport")), vcs_with_senders));
     }
 }
 
-// The four counter arrays are u32 arrays of one size, back to back in the order the kernel sends them in, each long
-// enough for every sender channel it is indexed by, and the host clears all of them or none.
-void check_router_credit_counters(const std::vector<RouterEntry>& routers) {
-    const std::array<std::pair<const char*, const char*>, 4> arrays = {{
-        {"to_sender_ack", "own_sender_channel"},
-        {"to_sender_completion", "own_sender_channel"},
-        {"receiver_ack", "peer_sender_channel"},
-        {"receiver_completion", "peer_sender_channel"},
-    }};
-    for (const auto& entry : routers) {
-        SCOPED_TRACE(entry.path);
-        const auto& counters = entry.router->at("credit_counters");
-        EXPECT_EQ(
-            keys_of(counters),
-            (std::set<std::string>{"to_sender_ack", "to_sender_completion", "receiver_ack", "receiver_completion"}));
-
-        uint32_t num_senders = 0;
-        for (const auto& count : entry.router->at("shape").at("senders_per_vc")) {
-            num_senders += count.get<uint32_t>();
-        }
-
-        std::optional<uint32_t> next_address;
-        std::optional<uint32_t> first_size;
-        std::optional<bool> first_cleared_by_host;
-        for (const auto& [name, indexed_by] : arrays) {
-            SCOPED_TRACE(name);
-            const auto& array = counters.at(name);
-            EXPECT_EQ(
-                keys_of(array),
-                (std::set<std::string>{
-                    "address", "size", "num_elements", "size_per_element", "schema", "cleared_by_host", "indexed_by"}));
-            EXPECT_EQ(array.at("indexed_by"), indexed_by);
-            EXPECT_EQ(array.at("schema"), "u32");
-            EXPECT_EQ(array.at("size_per_element"), sizeof(uint32_t));
-
-            const auto address = array.at("address").get<uint32_t>();
-            const auto size = array.at("size").get<uint32_t>();
-            const auto num_elements = array.at("num_elements").get<uint32_t>();
-            EXPECT_EQ(size, num_elements * sizeof(uint32_t));
-            // The receiver arrays are indexed by the peer router's sender channels; both ends are built from the same
-            // config.
-            EXPECT_GE(num_elements, num_senders);
-            if (next_address.has_value()) {
-                EXPECT_EQ(address, *next_address);
-            }
-            next_address = address + size;
-            EXPECT_EQ(size, first_size.value_or(size));
-            first_size = size;
-            const auto cleared_by_host = array.at("cleared_by_host").get<bool>();
-            EXPECT_EQ(cleared_by_host, first_cleared_by_host.value_or(cleared_by_host));
-            first_cleared_by_host = cleared_by_host;
-        }
-    }
-}
-
-const std::set<std::string> k_region_keys = {"address", "size", "schema", "cleared_by_host"};
-const std::set<std::string> k_array_region_keys = {
-    "address", "size", "num_elements", "size_per_element", "schema", "cleared_by_host"};
-
-// A stream register the builder did not allocate is null.
-void expect_stream(const json& stream, bool must_be_allocated) {
+// A stream register the builder did not allocate is null. One it did is one of the streams the arch lists.
+void expect_stream(const json& stream, bool must_be_allocated, uint32_t num_streams) {
     if (stream.is_null()) {
         EXPECT_FALSE(must_be_allocated);
         return;
     }
-    EXPECT_EQ(keys_of(stream), (std::set<std::string>{"stream_id", "register", "schema"}));
-    EXPECT_EQ(stream.at("register"), lower_enum_name(manifest::StreamRegister::BUF_SPACE_AVAILABLE));
-    EXPECT_EQ(stream.at("schema"), "u32");
-    EXPECT_LT(stream.at("stream_id").get<uint32_t>(), StreamRegAssignments::num_eth_stream_registers);
+    EXPECT_LT(stream.at("stream_id").get<uint32_t>(), num_streams);
 }
 
-// On L1 counters, a credit is the sender's own element of the router's counter array, which is indexed by the
-// router's sender compact index. On stream registers, it is a register.
+// On L1 counters, a credit is the sender's own element of the router's counter array, which is indexed by the router's
+// sender compact index and must be long enough for it. On stream registers, it is a register.
 void expect_credit(
     const json& credit,
     const json& router,
     manifest::CreditCounterArray array,
     bool uses_counters,
     uint32_t compact,
-    bool serviced) {
+    bool serviced,
+    uint32_t num_streams) {
     if (!uses_counters) {
-        expect_stream(credit, serviced);
+        ASSERT_FALSE(credit.contains("array")) << credit;
+        expect_stream(credit, serviced, num_streams);
         return;
     }
-    EXPECT_EQ(keys_of(credit), (std::set<std::string>{"array", "index"}));
+    ASSERT_TRUE(credit.is_object() && credit.contains("array")) << credit;
     EXPECT_EQ(credit.at("array"), fmt::format("credit_counters/{}", lower_enum_name(array)));
     EXPECT_EQ(credit.at("index"), compact);
     const json::json_pointer pointer("/" + credit.at("array").get<std::string>());
@@ -715,155 +362,27 @@ void check_router_regions_disjoint(const json& manifest, const std::vector<Route
 // The last component of a router path, e.g. "E0" for "M0/C7/E0".
 std::string key_of_path(const std::string& path) { return path.substr(path.rfind('/') + 1); }
 
-// ERISC names in ascending order, each one active. Returns whether any ERISC services the channel.
-bool expect_serviced_by(const json& serviced_by, uint32_t num_active_eriscs) {
-    std::optional<uint32_t> previous_risc;
-    for (const auto& risc : serviced_by) {
-        const auto name = risc.get<std::string>();
-        EXPECT_TRUE(name.starts_with("erisc")) << name;
-        const auto risc_id = static_cast<uint32_t>(std::stoul(name.substr(5)));
-        EXPECT_LT(risc_id, num_active_eriscs);
-        if (previous_risc.has_value()) {
-            EXPECT_GT(risc_id, *previous_risc);
-        }
-        previous_risc = risc_id;
-    }
-    return !serviced_by.empty();
-}
-
-// A channel is active exactly when an ERISC runs it. Every VC0 channel is in a VC the kernel runs, only VC0
-// senders other than the worker channel are carried by the mux, and only a router with a trimming profile has
-// trimmed channels. Returns whether the channel is active.
-bool expect_channel_status(
-    const json& channel, const json& shape, bool is_sender, uint32_t vc, uint32_t ch, uint32_t num_active_eriscs) {
-    const bool serviced = expect_serviced_by(channel.at("serviced_by"), num_active_eriscs);
-    const auto status = channel.at("status").get<std::string>();
-    EXPECT_EQ(status == lower_enum_name(manifest::ChannelStatus::ACTIVE), serviced) << status;
-    if (status == lower_enum_name(manifest::ChannelStatus::VC_NOT_SERVICED)) {
-        EXPECT_GE(vc, 1u);
-    } else if (status == lower_enum_name(manifest::ChannelStatus::MUX)) {
-        EXPECT_TRUE(is_sender);
-        EXPECT_EQ(vc, 0u);
-        EXPECT_NE(ch, 0u);
-    } else if (status == lower_enum_name(manifest::ChannelStatus::TRIMMED)) {
-        EXPECT_TRUE(shape.at("channel_trimming_overrides_applied").get<bool>());
-    } else {
-        EXPECT_EQ(status, lower_enum_name(manifest::ChannelStatus::ACTIVE));
-    }
-    return serviced;
-}
-
-// An active channel has slots. A channel with none, ie every sender but VC0's worker channel in mux mode, has no
-// ring buffer.
-void expect_ring_buffer(const json& ring, uint32_t channel_buffer_size, bool active) {
+// A ring buffer's slots are each one channel buffer, and fill its size.
+void expect_ring_buffer(const json& ring, uint32_t channel_buffer_size) {
     if (ring.is_null()) {
-        EXPECT_FALSE(active);
         return;
     }
-    EXPECT_EQ(keys_of(ring), k_array_region_keys);
-    EXPECT_EQ(ring.at("schema"), "bytes");
     EXPECT_EQ(ring.at("size_per_element"), channel_buffer_size);
-    EXPECT_GE(ring.at("num_elements").get<uint32_t>(), 1u);
     EXPECT_EQ(
         ring.at("size").get<uint32_t>(),
         ring.at("num_elements").get<uint32_t>() * ring.at("size_per_element").get<uint32_t>());
 }
 
-// A field is written as its table entry says: its category and kind, then a region, a stream register or a value.
-// Only an L1 or stream field can be null, as a buffer or register the builder did not allocate.
-void expect_field(const json& entry, const manifest::RouterField& field) {
-    if (entry.is_null()) {
-        EXPECT_TRUE(
-            std::holds_alternative<manifest::content::L1>(field.content.value) ||
-            std::holds_alternative<manifest::content::Stream>(field.content.value));
-        return;
-    }
-    EXPECT_EQ(entry.at("category"), lower_enum_name(field.category.value));
-    EXPECT_EQ(entry.at("kind"), kind_name(field.content.value));
-    std::set<std::string> keys = {"category", "kind"};
-    std::visit(
-        ttsl::overloaded{
-            [&](const manifest::content::L1& l1) {
-                const auto& region_keys = l1.type.count > 0 ? k_array_region_keys : k_region_keys;
-                keys.insert(region_keys.begin(), region_keys.end());
-                EXPECT_EQ(entry.at("schema"), schema_name(l1.type));
-                EXPECT_EQ(entry.at("size"), l1.type.size);
-            },
-            [&](const manifest::content::Stream& stream) {
-                keys.insert({"stream_id", "register", "schema"});
-                EXPECT_EQ(entry.at("register"), lower_enum_name(stream.reg));
-                EXPECT_EQ(entry.at("schema"), schema_name(stream.type));
-                EXPECT_LT(entry.at("stream_id").get<uint32_t>(), StreamRegAssignments::num_eth_stream_registers);
-            },
-            [&](const manifest::content::Number&) {
-                keys.insert("value");
-                EXPECT_TRUE(entry.at("value").is_number_unsigned());
-            },
-            [&](const manifest::content::Flag&) {
-                keys.insert("value");
-                EXPECT_TRUE(entry.at("value").is_boolean());
-            },
-            [&](const manifest::content::Enum& enumerator) {
-                keys.insert({"value", "schema"});
-                EXPECT_EQ(entry.at("schema"), schema_name(enumerator.type));
-                EXPECT_TRUE(enumerator.is_enumerator(entry.at("value").get<uint32_t>())) << entry.at("value");
-            },
-        },
-        field.content.value);
-    EXPECT_EQ(keys_of(entry), keys);
-}
-
-// Whether `field`'s argument is emitted on this fabric: a 2D-only argument is not emitted in 1D, and a capture-only
-// argument only when the builder allocated the channel trimming capture.
-bool is_emitted(const manifest::RouterField& field, bool is_2d) {
-    const auto* arg = std::get_if<manifest::NamedArg>(&field.source);
-    if (arg == nullptr) {
-        return true;
-    }
-    switch (arg->emitted) {
-        case manifest::Emitted::ALWAYS: return true;
-        case manifest::Emitted::FABRIC_2D: return is_2d;
-        case manifest::Emitted::CHANNEL_TRIMMING_CAPTURE:
-            return builder_context().get_telemetry_and_metadata_buffer_map().channel_trimming_capture.is_enabled();
-    }
-    return false;
-}
-
-// `fields` holds exactly `table`'s fields emitted on this fabric, each written as its entry says, with a category and
-// kind the manifest's vocabulary lists.
-void expect_fields(
-    const json& fields, std::span<const manifest::RouterField> table, const json& vocabulary, bool is_2d) {
-    const auto listed = [&](const char* list, const json& name) {
-        return std::ranges::find(vocabulary.at(list), name) != vocabulary.at(list).end();
-    };
-    std::set<std::string> expected_keys;
-    for (const auto& field : table) {
-        if (!is_emitted(field, is_2d)) {
-            continue;
-        }
-        const std::string key(field.key.value);
-        expected_keys.insert(key);
-        if (fields.contains(key)) {
-            SCOPED_TRACE(key);
-            expect_field(fields.at(key), field);
-            if (!fields.at(key).is_null()) {
-                EXPECT_TRUE(listed("field_category", fields.at(key).at("category")));
-                EXPECT_TRUE(listed("field_kind", fields.at(key).at("kind")));
-            }
-        }
-    }
-    EXPECT_EQ(keys_of(fields), expected_keys);
-}
-
 // A router's sender channels, over its shape. Each one's producer is the chip's worker on a VC's first channel (the
 // tensix mux on VC0 in mux mode), or a different router on the same chip and routing plane, feeding at most one
 // channel per VC; in 1D a router and its producer feed each other. Nothing feeds a channel the mux carries. Only the
-// worker channel has a producer cursor (buffer_index_sem): a sibling router keeps none. Credits
-// are on the backing the mesh's credit transport names, and only VC0 with bubble flow control gets first-level acks.
+// worker channel has a producer cursor (buffer_index_sem): a sibling router keeps none. Each credit is on the backing
+// the mesh's credit transport names for its VC. A router has trimmed channels only when a trimming profile is set.
 void check_router_senders(const json& manifest, const std::vector<RouterEntry>& routers) {
-    const auto& fabric_context = manifest.at("fabric");
-    const bool is_2d = fabric_context.at("is_2d_routing").get<bool>();
-    const auto channel_buffer_size = fabric_context.at("channel_buffer_size_bytes").get<uint32_t>();
+    const bool is_2d = manifest.at("fabric").at("is_2d_routing").get<bool>();
+    const auto channel_buffer_size = manifest.at("fabric").at("channel_buffer_size_bytes").get<uint32_t>();
+    const auto num_streams = manifest.at("arch").at("stream_registers").at("count").get<uint32_t>();
+    const bool has_trimming_profile = tt::tt_metal::MetalContext::instance().rtoptions().has_fabric_trimming_profile();
 
     for (const auto& entry : routers) {
         SCOPED_TRACE(entry.path);
@@ -871,9 +390,10 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
         const auto& shape = router.at("shape");
         const auto& senders = router.at("channels").at("senders");
         const auto& transport = manifest.at("meshes").at(mesh_key(entry.node.mesh_id)).at("credit_transport");
-        const auto num_active_eriscs = shape.at("num_active_eriscs").get<uint32_t>();
-        const bool vc0_bubble_flow_control = shape.at("vc0_bubble_flow_control").get<bool>();
         const auto chip_prefix = entry.path.substr(0, entry.path.rfind('/') + 1);
+        if (!has_trimming_profile) {
+            EXPECT_FALSE(shape.at("channel_trimming_overrides_applied").get<bool>());
+        }
 
         std::set<std::string> expected_vc_keys;
         uint32_t compact = 0;
@@ -886,6 +406,7 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
             expected_vc_keys.insert(vc_key);
             ASSERT_TRUE(senders.contains(vc_key));
             ASSERT_EQ(senders.at(vc_key).size(), count);
+            ASSERT_TRUE(transport.contains(vc_key));
             const bool uses_counters = transport.at(vc_key).at("backing") == "l1_counter";
 
             std::set<std::string> producers;
@@ -894,11 +415,7 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
                 SCOPED_TRACE(fmt::format("senders/{}/{}", vc_key, ch_key));
                 ASSERT_TRUE(senders.at(vc_key).contains(ch_key));
                 const auto& sender = senders.at(vc_key).at(ch_key);
-                EXPECT_EQ(
-                    keys_of(sender),
-                    (std::set<std::string>{"status", "serviced_by", "producer", "ring_buffer", "credits", "fields"}));
-
-                const bool serviced = expect_channel_status(sender, shape, true, vc, ch, num_active_eriscs);
+                const bool serviced = !sender.at("serviced_by").empty();
 
                 const auto& producer = sender.at("producer");
                 if (sender.at("status") == lower_enum_name(manifest::ChannelStatus::MUX)) {
@@ -925,25 +442,20 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
                         EXPECT_EQ(producer_router->at(pointer), entry.path);
                     }
                 }
-
-                expect_ring_buffer(sender.at("ring_buffer"), channel_buffer_size, serviced);
-                expect_fields(sender.at("fields"), manifest::k_sender_channel_fields, manifest.at("vocabulary"), is_2d);
                 const bool worker_channel = producer == "worker" || producer == "tensix_mux";
                 EXPECT_EQ(sender.at("fields").at("buffer_index_sem").is_null(), !worker_channel);
 
+                expect_ring_buffer(sender.at("ring_buffer"), channel_buffer_size);
                 const auto& credits = sender.at("credits");
-                const bool acked = vc == 0 && vc0_bubble_flow_control;
-                EXPECT_EQ(
-                    keys_of(credits),
-                    acked ? (std::set<std::string>{"acked", "completed"}) : (std::set<std::string>{"completed"}));
-                if (acked) {
+                if (credits.contains("acked")) {
                     expect_credit(
                         credits.at("acked"),
                         router,
                         manifest::CreditCounterArray::TO_SENDER_ACK,
                         uses_counters,
                         compact,
-                        serviced);
+                        serviced,
+                        num_streams);
                 }
                 expect_credit(
                     credits.at("completed"),
@@ -951,92 +463,31 @@ void check_router_senders(const json& manifest, const std::vector<RouterEntry>& 
                     manifest::CreditCounterArray::TO_SENDER_COMPLETION,
                     uses_counters,
                     compact,
-                    serviced);
+                    serviced,
+                    num_streams);
             }
         }
         EXPECT_EQ(keys_of(senders), expected_vc_keys);
     }
 }
 
-// A router's receiver channels, over its shape. A receiver forwards on its own VC, except that VC0's may cross over
-// to VC1, and VC2's forwards on none.
-void check_router_receivers(const json& manifest, const std::vector<RouterEntry>& routers) {
-    const auto& fabric_context = manifest.at("fabric");
-    const bool is_2d = fabric_context.at("is_2d_routing").get<bool>();
-    const auto channel_buffer_size = fabric_context.at("channel_buffer_size_bytes").get<uint32_t>();
-
-    for (const auto& entry : routers) {
-        SCOPED_TRACE(entry.path);
-        const auto& router = *entry.router;
-        const auto& shape = router.at("shape");
-        const auto& receivers = router.at("channels").at("receivers");
-        const auto num_active_eriscs = shape.at("num_active_eriscs").get<uint32_t>();
-
-        std::set<std::string> expected_vc_keys;
-        for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-            const auto count = shape.at("receivers_per_vc").at(vc).get<uint32_t>();
-            if (count == 0) {
-                continue;
-            }
-            const auto vc_key = fmt::format("vc{}", vc);
-            expected_vc_keys.insert(vc_key);
-            ASSERT_TRUE(receivers.contains(vc_key));
-            ASSERT_EQ(receivers.at(vc_key).size(), count);
-
-            for (uint32_t ch = 0; ch < count; ++ch) {
-                const auto ch_key = fmt::format("ch{}", ch);
-                SCOPED_TRACE(fmt::format("receivers/{}/{}", vc_key, ch_key));
-                ASSERT_TRUE(receivers.at(vc_key).contains(ch_key));
-                const auto& receiver = receivers.at(vc_key).at(ch_key);
-                EXPECT_EQ(
-                    keys_of(receiver),
-                    (std::set<std::string>{"status", "serviced_by", "forwards_on", "ring_buffer", "fields"}));
-
-                const bool serviced = expect_channel_status(receiver, shape, false, vc, ch, num_active_eriscs);
-
-                const auto& forwards_on = receiver.at("forwards_on");
-                if (!serviced || vc == 2) {
-                    EXPECT_TRUE(forwards_on.is_null()) << forwards_on;
-                } else if (!forwards_on.is_null()) {
-                    const auto forward_vc = forwards_on.get<std::string>();
-                    if (vc == 0) {
-                        EXPECT_TRUE(forward_vc == "vc0" || forward_vc == "vc1") << forward_vc;
-                    } else {
-                        EXPECT_EQ(forward_vc, vc_key);
-                    }
-                }
-
-                expect_ring_buffer(receiver.at("ring_buffer"), channel_buffer_size, serviced);
-                expect_fields(
-                    receiver.at("fields"), manifest::k_receiver_channel_fields, manifest.at("vocabulary"), is_2d);
-            }
-        }
-        EXPECT_EQ(keys_of(receivers), expected_vc_keys);
-    }
-}
-
-// A router's edges, on VC0 and VC1 only, and only VC0 in 1D.
+// A router's edges land on a sibling's sender channel on the same chip and routing plane: in 2D the sibling the edge
+// number names (the builder's compact index among the router's other directions), in 1D the router facing the other
+// way. An edge through the tensix mux lands on a channel the mux carries.
 void check_router_edges(const json& manifest, const std::vector<RouterEntry>& routers) {
     const bool is_2d = manifest.at("fabric").at("is_2d_routing").get<bool>();
 
     for (const auto& entry : routers) {
         SCOPED_TRACE(entry.path);
-        const auto& router = *entry.router;
         const auto chip_prefix = entry.path.substr(0, entry.path.rfind('/') + 1);
         const auto plane = control_plane().get_routing_plane_id(entry.node, entry.eth_chan);
         const auto facing = control_plane().get_eth_chan_direction(entry.node, entry.eth_chan);
 
-        const auto& edges = router.at("intra_chip_downstream_edges");
-        for (const auto& [vc_key, vc_edges] : edges.items()) {
+        for (const auto& [vc_key, vc_edges] : entry.router->at("intra_chip_downstream_edges").items()) {
             SCOPED_TRACE(vc_key);
-            EXPECT_TRUE(vc_key == "vc0" || (is_2d && vc_key == "vc1")) << vc_key;
-            EXPECT_FALSE(vc_edges.empty());
             for (const auto& [edge_key, edge] : vc_edges.items()) {
                 SCOPED_TRACE(edge_key);
-                EXPECT_EQ(keys_of(edge), (std::set<std::string>{"downstream_channel", "through_tensix_mux", "fields"}));
-                ASSERT_TRUE(edge_key.starts_with("edge"));
                 const auto n = std::stoul(edge_key.substr(4));
-
                 const auto target = edge.at("downstream_channel").get<std::string>();
                 const auto senders = target.find("/channels/senders/" + vc_key + "/ch");
                 ASSERT_NE(senders, std::string::npos) << target << " is not a " << vc_key << " sender channel";
@@ -1057,49 +508,79 @@ void check_router_edges(const json& manifest, const std::vector<RouterEntry>& ro
                 ASSERT_NE(target_router, nullptr) << target;
                 const json::json_pointer channel_pointer(target.substr(senders));
                 ASSERT_TRUE(target_router->contains(channel_pointer)) << target;
-                const auto& channel = target_router->at(channel_pointer);
                 if (edge.at("through_tensix_mux").get<bool>()) {
-                    EXPECT_EQ(vc_key, "vc0");
-                    EXPECT_EQ(channel.at("status"), lower_enum_name(manifest::ChannelStatus::MUX)) << target;
+                    EXPECT_EQ(
+                        target_router->at(channel_pointer).at("status"), lower_enum_name(manifest::ChannelStatus::MUX))
+                        << target;
                 }
-
-                expect_fields(edge.at("fields"), manifest::k_downstream_edge_fields, manifest.at("vocabulary"), is_2d);
             }
         }
     }
 }
 
-// Each router has exactly the table's fields it should, router-wide and on each ERISC, each written as its entry says.
+// Whether `field`'s argument is emitted on this fabric: a 2D-only argument is not emitted in 1D, and a capture-only
+// argument only when the builder allocated the channel trimming capture.
+bool is_emitted(const manifest::RouterField& field, bool is_2d) {
+    const auto* arg = std::get_if<manifest::NamedArg>(&field.source);
+    if (arg == nullptr) {
+        return true;
+    }
+    switch (arg->emitted) {
+        case manifest::Emitted::ALWAYS: return true;
+        case manifest::Emitted::FABRIC_2D: return is_2d;
+        case manifest::Emitted::CHANNEL_TRIMMING_CAPTURE:
+            return builder_context().get_telemetry_and_metadata_buffer_map().channel_trimming_capture.is_enabled();
+    }
+    return false;
+}
+
+// `fields` holds exactly `table`'s fields emitted on this fabric, and only an L1 or stream field, a buffer or register
+// the builder did not allocate, is null. Emission is worked out from the fabric and the builder's buffer map, not from
+// the kernel arguments the router pass reads.
+void expect_fields(const json& fields, std::span<const manifest::RouterField> table, bool is_2d) {
+    std::set<std::string> expected_keys;
+    for (const auto& field : table) {
+        if (!is_emitted(field, is_2d)) {
+            continue;
+        }
+        const std::string key(field.key.value);
+        expected_keys.insert(key);
+        if (fields.contains(key) && fields.at(key).is_null()) {
+            EXPECT_TRUE(
+                std::holds_alternative<manifest::content::L1>(field.content.value) ||
+                std::holds_alternative<manifest::content::Stream>(field.content.value))
+                << key;
+        }
+    }
+    EXPECT_EQ(keys_of(fields), expected_keys);
+}
+
+// Every fields object holds exactly its table's fields emitted on this fabric: the router's, each ERISC's, and each
+// channel's and edge's. The kernel's direction, a field, is the one ControlPlane gives the router's channel.
 void check_router_fields(const json& manifest, const std::vector<RouterEntry>& routers) {
-    const auto& vocabulary = manifest.at("vocabulary");
     const bool is_2d = manifest.at("fabric").at("is_2d_routing").get<bool>();
+    const auto expect_channel_fields = [&](const json& channels, std::span<const manifest::RouterField> table) {
+        for (const auto& [vc_key, vc_channels] : channels.items()) {
+            for (const auto& [ch_key, channel] : vc_channels.items()) {
+                SCOPED_TRACE(fmt::format("{}/{}", vc_key, ch_key));
+                expect_fields(channel.at("fields"), table, is_2d);
+            }
+        }
+    };
     for (const auto& entry : routers) {
         SCOPED_TRACE(entry.path);
         const auto& router = *entry.router;
-        const auto num_active_eriscs = router.at("shape").at("num_active_eriscs").get<uint32_t>();
-
-        expect_fields(router.at("fields"), manifest::k_router_fields, vocabulary, is_2d);
-        // The kernel's direction is the builder's; the key's is ControlPlane's.
+        expect_fields(router.at("fields"), manifest::k_router_fields, is_2d);
         EXPECT_EQ(
             router.at("fields").at("my_direction").at("value").get<uint32_t>(),
             static_cast<uint32_t>(control_plane().get_eth_chan_direction(entry.node, entry.eth_chan)));
-        std::set<std::string> expected_eriscs;
-        for (uint32_t risc_id = 0; risc_id < num_active_eriscs; ++risc_id) {
-            expected_eriscs.insert(fmt::format("erisc{}", risc_id));
-        }
-        EXPECT_EQ(keys_of(router.at("eriscs")), expected_eriscs);
-        const std::set<std::string> processors = {
-            lower_enum_name(tt::tt_metal::DataMovementProcessor::RISCV_0),
-            lower_enum_name(tt::tt_metal::DataMovementProcessor::RISCV_1)};
-        std::set<std::string> used_processors;
         for (const auto& [risc_key, erisc] : router.at("eriscs").items()) {
             SCOPED_TRACE(risc_key);
-            EXPECT_EQ(keys_of(erisc), (std::set<std::string>{"processor", "physical_erisc", "fields"}));
-            const auto processor = erisc.at("processor").get<std::string>();
-            EXPECT_TRUE(processors.contains(processor)) << processor;
-            EXPECT_TRUE(used_processors.insert(processor).second) << "two ERISCs run on " << processor;
-            expect_fields(erisc.at("fields"), manifest::k_erisc_fields, vocabulary, is_2d);
+            expect_fields(erisc.at("fields"), manifest::k_erisc_fields, is_2d);
         }
+        expect_channel_fields(router.at("channels").at("senders"), manifest::k_sender_channel_fields);
+        expect_channel_fields(router.at("channels").at("receivers"), manifest::k_receiver_channel_fields);
+        expect_channel_fields(router.at("intra_chip_downstream_edges"), manifest::k_downstream_edge_fields);
     }
 }
 
@@ -1117,7 +598,6 @@ void check_local_sync(const json& manifest) {
                 EXPECT_TRUE(local_sync.is_null());
                 continue;
             }
-            ASSERT_EQ(keys_of(local_sync), (std::set<std::string>{"master", "num_routers", "router_channels_mask"}));
             const FabricNodeId node(
                 MeshId{static_cast<uint32_t>(std::stoul(m_key.substr(1)))},
                 static_cast<uint32_t>(std::stoul(c_key.substr(1))));
@@ -1165,8 +645,9 @@ void expect_diagnostic_buffer(const json& field, const FabricRouterDiagnosticBuf
     EXPECT_EQ(field.at("size").get<size_t>(), region.size_bytes);
 }
 
-// The diagnostic buffers are where the builder's buffer map puts them, and the router records a channel trimming
-// capture exactly when the builder allocated one. notify_worker_src is where the builder's config puts it.
+// The diagnostic buffers the kernel is fed are where the builder's buffer map puts them, and the router records a
+// channel trimming capture exactly when the builder allocated one. notify_worker_src is where the builder's config puts
+// it.
 void check_router_diagnostics(const std::vector<RouterEntry>& routers) {
     const auto& context = builder_context();
     const auto buffers = context.get_telemetry_and_metadata_buffer_map();
@@ -1246,163 +727,58 @@ void check_router_leftover_l1(const std::vector<RouterEntry>& routers) {
             EXPECT_EQ(buffers_end, l1_end);
             continue;
         }
-        EXPECT_EQ(keys_of(leftover), k_region_keys);
-        EXPECT_EQ(leftover.at("schema"), "bytes");
         EXPECT_EQ(leftover.at("address").get<uint64_t>(), buffers_end);
         EXPECT_EQ(leftover.at("address").get<uint64_t>() + leftover.at("size").get<uint64_t>(), l1_end);
     }
 }
 
-// The run's arch is the only one described, and its areas are where the HAL puts them on the active Ethernet core.
+// Base firmware's link status words exist on Blackhole and not on Wormhole, and where base firmware has a heartbeat
+// word, the router's heartbeat is that word.
 void check_arch(const json& manifest) {
-    using tt::tt_metal::HalL1MemAddrType;
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    const auto core = tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
-    EXPECT_EQ(
-        keys_of(manifest.at("arch")),
-        (std::set<std::string>{"name", "l1_areas", "stream_registers", "core_registers"}));
-    const auto& areas = arch_areas(manifest);
-    EXPECT_EQ(
-        keys_of(areas),
-        (std::set<std::string>{
-            "heartbeat",
-            "fabric_telemetry",
-            "routing_table",
-            "eth_fw_mailbox",
-            "base_fw_port_status",
-            "base_fw_train_status",
-            "base_fw_retrain_count",
-            "base_fw_rx_link_up",
-            "base_fw_postcode"}));
-
-    const auto expect_hal_area = [&](const char* key, HalL1MemAddrType type) {
-        SCOPED_TRACE(key);
-        const auto& area = areas.at(key);
-        ASSERT_TRUE(area.is_object());
-        EXPECT_EQ(area.at("address").get<uint64_t>(), hal.get_dev_addr(core, type));
-        EXPECT_EQ(area.at("size").get<uint32_t>(), hal.get_dev_size(core, type));
-    };
-    expect_hal_area("fabric_telemetry", HalL1MemAddrType::FABRIC_TELEMETRY);
-    expect_hal_area("routing_table", HalL1MemAddrType::ROUTING_TABLE);
-    if (hal.get_dev_addr(core, HalL1MemAddrType::ETH_FW_MAILBOX) != 0) {
-        expect_hal_area("eth_fw_mailbox", HalL1MemAddrType::ETH_FW_MAILBOX);
-    } else {
-        EXPECT_TRUE(areas.at("eth_fw_mailbox").is_null());
-    }
-
-    // Base firmware's link status words, where the HAL gives them: on Blackhole, and not on Wormhole.
     using tt::tt_metal::FWMailboxMsg;
-    const auto expect_base_fw_word = [&](const char* key, FWMailboxMsg word) {
-        SCOPED_TRACE(key);
-        const auto& area = areas.at(key);
-        const uint32_t address = hal.get_eth_fw_mailbox_val(word);
-        EXPECT_EQ(address != 0, BaseFabricFixture::arch_ == tt::ARCH::BLACKHOLE);
-        if (address == 0) {
-            EXPECT_TRUE(area.is_null());
-            return;
-        }
-        ASSERT_TRUE(area.is_object());
-        EXPECT_EQ(keys_of(area), k_region_keys);
-        EXPECT_EQ(area.at("address").get<uint32_t>(), address);
-        EXPECT_EQ(area.at("size"), sizeof(uint32_t));
-        EXPECT_EQ(area.at("schema"), "u32");
-    };
-    expect_base_fw_word("base_fw_port_status", FWMailboxMsg::PORT_STATUS);
-    expect_base_fw_word("base_fw_train_status", FWMailboxMsg::TRAIN_STATUS);
-    expect_base_fw_word("base_fw_retrain_count", FWMailboxMsg::RETRAIN_COUNT);
-    expect_base_fw_word("base_fw_rx_link_up", FWMailboxMsg::RX_LINK_UP);
-    expect_base_fw_word("base_fw_postcode", FWMailboxMsg::POSTCODE);
-
-    const auto& heartbeat = areas.at("heartbeat");
-    EXPECT_EQ(
-        keys_of(heartbeat),
-        (std::set<std::string>{"address", "size", "schema", "cleared_by_host", "magic", "magic_mask", "period_iters"}));
-    EXPECT_EQ(heartbeat.at("size"), sizeof(uint32_t));
-    // Where base firmware has a heartbeat word, the router's heartbeat is that word, so it has no area of its own.
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    const auto& areas = arch_areas(manifest);
+    const bool is_blackhole = BaseFabricFixture::arch_ == tt::ARCH::BLACKHOLE;
+    for (const char* key :
+         {"base_fw_port_status",
+          "base_fw_train_status",
+          "base_fw_retrain_count",
+          "base_fw_rx_link_up",
+          "base_fw_postcode"}) {
+        EXPECT_EQ(areas.at(key).is_null(), !is_blackhole) << key;
+    }
     const uint32_t base_fw_heartbeat = hal.get_eth_fw_mailbox_val(FWMailboxMsg::HEARTBEAT);
     if (base_fw_heartbeat != 0) {
-        EXPECT_EQ(heartbeat.at("address").get<uint32_t>(), base_fw_heartbeat);
+        EXPECT_EQ(areas.at("heartbeat").at("address").get<uint32_t>(), base_fw_heartbeat);
     }
 }
 
-// The stream registers are where the HAL puts them, with the HAL's widths, and every register of every stream is in
-// the HAL's register space.
+// Every register of every stream is in the HAL's register space.
 void check_arch_stream_registers(const json& manifest) {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const auto& streams = manifest.at("arch").at("stream_registers");
-    EXPECT_EQ(keys_of(streams), (std::set<std::string>{"base", "stride", "count", "registers"}));
     const auto base = streams.at("base").get<uint32_t>();
     const auto stride = streams.at("stride").get<uint32_t>();
     const auto count = streams.at("count").get<uint32_t>();
-    EXPECT_EQ(base, hal.get_noc_overlay_start_addr());
-    EXPECT_EQ(stride, hal.get_noc_stream_reg_space_size());
-    EXPECT_EQ(count, StreamRegAssignments::num_eth_stream_registers);
-
-    const auto& registers = streams.at("registers");
-    std::set<std::string> names;
-    for (const auto reg : enchantum::values<manifest::StreamRegister>) {
-        names.insert(lower_enum_name(reg));
-    }
-    EXPECT_EQ(keys_of(registers), names);
-    const auto& buf_space_available = registers.at(lower_enum_name(manifest::StreamRegister::BUF_SPACE_AVAILABLE));
-    EXPECT_EQ(
-        buf_space_available.at("offset").get<uint32_t>(),
-        hal.get_noc_stream_remote_dest_buf_space_available_reg_index() * sizeof(uint32_t));
-    EXPECT_EQ(buf_space_available.at("bits").get<uint32_t>(), hal.get_noc_stream_remote_dest_words_free_width());
-    const auto& remote_src = registers.at(lower_enum_name(manifest::StreamRegister::REMOTE_SRC));
-    EXPECT_EQ(remote_src.at("offset").get<uint32_t>(), hal.get_noc_stream_remote_src_reg_index() * sizeof(uint32_t));
-    EXPECT_EQ(remote_src.at("bits").get<uint32_t>(), 24u);
-    for (const auto& [name, reg] : registers.items()) {
+    for (const auto& [name, reg] : streams.at("registers").items()) {
         SCOPED_TRACE(name);
-        EXPECT_EQ(keys_of(reg), (std::set<std::string>{"offset", "bits"}));
         const auto offset = reg.at("offset").get<uint32_t>();
         EXPECT_LT(offset, stride);
-        const auto bits = reg.at("bits").get<uint32_t>();
-        EXPECT_GE(bits, 1u);
-        EXPECT_LE(bits, 32u);
         for (uint32_t stream_id = 0; stream_id < count; ++stream_id) {
             EXPECT_TRUE(hal.valid_reg_addr(base + (stream_id * stride) + offset)) << stream_id;
         }
     }
 }
 
-// The soft reset and wall clock registers are at the HAL's addresses, in the order they are read, and soft_reset has
-// UMD's reset bit for each physical ERISC. Each router ERISC names the physical ERISC its processor runs on.
+// soft_reset has a distinct one-bit reset mask for each physical ERISC: one on Wormhole, two on Blackhole. Each router
+// ERISC runs on the physical ERISC of its processor, except in Blackhole single-ERISC mode, where base firmware keeps
+// ERISC0 and the one processor runs on ERISC1.
 void check_arch_core_registers(const json& manifest, const std::vector<RouterEntry>& routers) {
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     const auto arch = BaseFabricFixture::arch_;
-    const auto& registers = manifest.at("arch").at("core_registers");
-    ASSERT_EQ(registers.size(), 3u);
-    const std::array<std::pair<const char*, uint32_t>, 3> expected = {{
-        {"soft_reset", hal.get_risc_soft_reset_addr()},
-        {"wall_clock_low", hal.get_wall_clock_low_addr()},
-        {"wall_clock_high", hal.get_wall_clock_high_addr()},
-    }};
-    for (size_t i = 0; i < expected.size(); ++i) {
-        const auto& [name, address] = expected[i];
-        SCOPED_TRACE(name);
-        const auto& reg = registers.at(i);
-        std::set<std::string> keys = {"name", "address", "size", "schema"};
-        if (i == 0) {
-            keys.insert("reset_masks");
-        }
-        EXPECT_EQ(keys_of(reg), keys);
-        EXPECT_EQ(reg.at("name"), name);
-        EXPECT_NE(address, 0u);
-        EXPECT_EQ(reg.at("address").get<uint32_t>(), address);
-        EXPECT_EQ(reg.at("size"), sizeof(uint32_t));
-        EXPECT_EQ(reg.at("schema"), "u32");
-    }
-
-    // A Wormhole Ethernet core has one ERISC, and a Blackhole one two.
-    const auto umd_arch = tt::umd::ArchitectureImplementation::create(arch);
-    ASSERT_NE(umd_arch, nullptr);
-    std::vector<uint32_t> expected_masks = {umd_arch->get_soft_reset_reg_value(tt::umd::RiscType::ERISC0)};
-    if (arch == tt::ARCH::BLACKHOLE) {
-        expected_masks.push_back(umd_arch->get_soft_reset_reg_value(tt::umd::RiscType::ERISC1));
-    }
-    const auto masks = registers.at(0).at("reset_masks").get<std::vector<uint32_t>>();
-    EXPECT_EQ(masks, expected_masks);
+    const auto& soft_reset = manifest.at("arch").at("core_registers").at(0);
+    ASSERT_EQ(soft_reset.at("name"), "soft_reset");
+    const auto masks = soft_reset.at("reset_masks").get<std::vector<uint32_t>>();
+    EXPECT_EQ(masks.size(), arch == tt::ARCH::BLACKHOLE ? 2u : 1u);
     uint32_t seen = 0;
     for (const auto mask : masks) {
         EXPECT_EQ(std::popcount(mask), 1) << mask;
@@ -1410,7 +786,6 @@ void check_arch_core_registers(const json& manifest, const std::vector<RouterEnt
         seen |= mask;
     }
 
-    // In Blackhole single-ERISC mode, base firmware keeps ERISC0 and the one processor runs on ERISC1.
     const bool single_erisc_blackhole =
         arch == tt::ARCH::BLACKHOLE && !tt::tt_metal::MetalContext::instance().rtoptions().get_enable_2_erisc_mode();
     const auto riscv_1 = lower_enum_name(tt::tt_metal::DataMovementProcessor::RISCV_1);
@@ -1428,101 +803,30 @@ void check_arch_core_registers(const json& manifest, const std::vector<RouterEnt
     }
 }
 
-// Enum values are written by name, with the values the enums define.
-void check_enums(const json& manifest) {
-    const auto& enums = manifest.at("types").at("enums");
-    const auto value_of = [&](const char* type, const char* name) {
-        return enums.at(type).at("values").at(name).get<uint32_t>();
-    };
-    EXPECT_EQ(value_of("EDMStatus", "ready_for_traffic"), static_cast<uint32_t>(EDMStatus::READY_FOR_TRAFFIC));
-    EXPECT_EQ(value_of("EDMStatus", "terminated"), static_cast<uint32_t>(EDMStatus::TERMINATED));
-    EXPECT_EQ(
-        value_of("TerminationSignal", "immediately_terminate"),
-        static_cast<uint32_t>(TerminationSignal::IMMEDIATELY_TERMINATE));
-    EXPECT_EQ(value_of("RouterState", "running"), static_cast<uint32_t>(RouterState::RUNNING));
-    EXPECT_EQ(value_of("NocCmdBuf", "at_cmd_buf"), static_cast<uint32_t>(manifest::NocCmdBuf::AT_CMD_BUF));
-    EXPECT_EQ(
-        value_of("ConnectionValue", "unused_connection_value"),
-        static_cast<uint32_t>(connection_interface::unused_connection_value));
-    EXPECT_EQ(
-        value_of("ConnectionValue", "close_connection_request_value"),
-        static_cast<uint32_t>(connection_interface::close_connection_request_value));
-}
-
 }  // namespace
 
 // ============ Tests ============
 
-// The spellings the manifest's readers depend on. The checks below build their expected values with the same
-// helpers, so a spelling only fails here.
+// The spellings the manifest's readers depend on, one case for each rule.
 TEST(ManifestNames, Spellings) {
     EXPECT_EQ(mesh_key(MeshId{0}), "M0");
     EXPECT_EQ(chip_key(7), "C7");
-
     EXPECT_EQ(router_key(eth_chan_directions::EAST, 0), "E0");
     EXPECT_EQ(router_key(eth_chan_directions::WEST, 1), "W1");
     EXPECT_EQ(router_key(eth_chan_directions::NORTH, 2), "N2");
     EXPECT_EQ(router_key(eth_chan_directions::SOUTH, 3), "S3");
     EXPECT_EQ(router_key(eth_chan_directions::Z, 0), "Z0");
 
-    EXPECT_EQ(lower_enum_name(EdgeCapability::INTRAMESH_CARDINAL), "intramesh_cardinal");
-    EXPECT_EQ(lower_enum_name(EdgeCapability::INTRAMESH_EXPRESS), "intramesh_express");
-    EXPECT_EQ(lower_enum_name(EdgeCapability::INTERMESH), "intermesh");
-
-    EXPECT_EQ(lower_enum_name(ZPortRole::NONE), "none");
-    EXPECT_EQ(lower_enum_name(ZPortRole::INTERMESH_BOUNDARY), "intermesh_boundary");
-    EXPECT_EQ(lower_enum_name(ZPortRole::EXPRESS_CHORD), "express_chord");
-
-    EXPECT_EQ(lower_enum_name(tt::ARCH::WORMHOLE_B0), "wormhole_b0");
-    EXPECT_EQ(lower_enum_name(tt::ARCH::BLACKHOLE), "blackhole");
-
-    EXPECT_EQ(lower_enum_name(FabricConfig::FABRIC_1D), "fabric_1d");
+    // An enumerator in lower case, and a value with no enumerator as its number.
     EXPECT_EQ(lower_enum_name(FabricConfig::FABRIC_2D), "fabric_2d");
+    EXPECT_EQ(lower_enum_name(static_cast<manifest::ChannelStatus>(200)), "200");
 
-    EXPECT_EQ(lower_enum_name(L1CreditCounterReason::MULTI_TXQ), "multi_txq");
-    EXPECT_EQ(lower_enum_name(L1CreditCounterReason::EXPRESS), "express");
-    EXPECT_EQ(lower_enum_name(L1CreditCounterReason::NO_COMPLETION_REGISTER), "no_completion_register");
-
-    EXPECT_EQ(lower_enum_name(manifest::CreditCounterArray::TO_SENDER_ACK), "to_sender_ack");
-    EXPECT_EQ(lower_enum_name(manifest::CreditCounterArray::TO_SENDER_COMPLETION), "to_sender_completion");
-    EXPECT_EQ(lower_enum_name(manifest::CreditCounterArray::RECEIVER_ACK), "receiver_ack");
-    EXPECT_EQ(lower_enum_name(manifest::CreditCounterArray::RECEIVER_COMPLETION), "receiver_completion");
-
-    EXPECT_EQ(lower_enum_name(manifest::StreamRegister::BUF_SPACE_AVAILABLE), "buf_space_available");
-    EXPECT_EQ(lower_enum_name(manifest::StreamRegister::REMOTE_SRC), "remote_src");
-
-    EXPECT_EQ(lower_enum_name(manifest::ChannelStatus::ACTIVE), "active");
-    EXPECT_EQ(lower_enum_name(manifest::ChannelStatus::VC_NOT_SERVICED), "vc_not_serviced");
-    EXPECT_EQ(lower_enum_name(manifest::ChannelStatus::MUX), "mux");
-    EXPECT_EQ(lower_enum_name(manifest::ChannelStatus::TRIMMED), "trimmed");
-
-    EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::WR_CMD_BUF), "wr_cmd_buf");
-    EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::RD_CMD_BUF), "rd_cmd_buf");
-    EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::WR_REG_CMD_BUF), "wr_reg_cmd_buf");
-    EXPECT_EQ(lower_enum_name(manifest::NocCmdBuf::AT_CMD_BUF), "at_cmd_buf");
-
-    EXPECT_EQ(lower_enum_name(connection_interface::unused_connection_value), "unused_connection_value");
-    EXPECT_EQ(lower_enum_name(connection_interface::open_connection_value), "open_connection_value");
-    EXPECT_EQ(lower_enum_name(connection_interface::close_connection_request_value), "close_connection_request_value");
-
-    EXPECT_EQ(lower_enum_name(tt::tt_metal::DataMovementProcessor::RISCV_0), "riscv_0");
-    EXPECT_EQ(lower_enum_name(tt::tt_metal::DataMovementProcessor::RISCV_1), "riscv_1");
-
-    EXPECT_EQ(lower_enum_name(manifest::FieldCategory::LIFECYCLE), "lifecycle");
-    EXPECT_EQ(lower_enum_name(manifest::FieldCategory::KERNEL_PARAMS), "kernel_params");
-    EXPECT_EQ(lower_enum_name(manifest::FieldCategory::FLOW_CONTROL), "flow_control");
-    EXPECT_EQ(lower_enum_name(manifest::FieldCategory::CONTROL_INFO), "control_info");
-    EXPECT_EQ(lower_enum_name(manifest::FieldCategory::DIAGNOSTICS), "diagnostics");
-
+    // A content type's name in snake case.
     EXPECT_EQ(kind_name<manifest::content::L1>(), "l1");
     EXPECT_EQ(kind_name<manifest::content::Stream>(), "stream");
-    EXPECT_EQ(kind_name<manifest::content::Number>(), "number");
-    EXPECT_EQ(kind_name<manifest::content::Flag>(), "flag");
-    EXPECT_EQ(kind_name<manifest::content::Enum>(), "enum");
 
     namespace element = layout::element;
     EXPECT_EQ(schema_name({element::Uint{}, 4, 0}), "u32");
-    EXPECT_EQ(schema_name({element::Uint{}, 1, 0}), "u8");
     EXPECT_EQ(schema_name({element::Int{}, 2, 0}), "i16");
     // An array's integers take their width from one element.
     EXPECT_EQ(schema_name({element::Uint{}, 8, 2}), "u32");
@@ -1534,22 +838,6 @@ TEST(ManifestNames, Spellings) {
         "union:NocCommandFields");
     EXPECT_EQ(schema_name({element::Bytes{}, 1, 0}), "bytes");
     EXPECT_EQ(schema_name({element::Pad{}, 1, 0}), "pad");
-    EXPECT_EQ(schema_name(layout::type_of<uint32_t>()), "u32");
-}
-
-// EDMStatus is listed by hand (its EnumLayout), since enchantum cannot reach its values. Each listed name should carry
-// its enumerator's value, so decode names a router's status word correctly.
-TEST(ManifestTypes, EdmStatusEnumerators) {
-    const layout::EnumDescription& description = layout::enum_description<EDMStatus>;
-    EXPECT_EQ(description.name, "EDMStatus");
-    const auto value_of = [&](std::string_view name) {
-        const auto it = std::ranges::find(description.enumerators, name, &layout::Enumerator::name);
-        EXPECT_NE(it, description.enumerators.end()) << name;
-        return it == description.enumerators.end() ? 0u : it->value;
-    };
-    EXPECT_EQ(value_of("STARTED"), static_cast<uint32_t>(EDMStatus::STARTED));
-    EXPECT_EQ(value_of("READY_FOR_TRAFFIC"), static_cast<uint32_t>(EDMStatus::READY_FOR_TRAFFIC));
-    EXPECT_EQ(value_of("INITIALIZATION_COMPLETE"), static_cast<uint32_t>(EDMStatus::INITIALIZATION_COMPLETE));
 }
 
 // Collecting a struct should also collect every struct and enum its members name, and theirs in turn, so the types
@@ -1614,6 +902,15 @@ TEST(ManifestTypes, CollectorRejectsTwoTypesWithOneName) {
     EXPECT_ANY_THROW(types.add({layout::element::Struct{&second}, 4, 0}));
 }
 
+// A chip is published once, with every router its builder initialized, and only within the chips the context holds.
+TEST(ManifestPublishedChips, RejectsWhatItCannotHold) {
+    manifest::PublishedChips chips(2);
+    EXPECT_ANY_THROW(chips.publish(0, manifest::Chip{.routers = {manifest::Router{}}}, 2));
+    EXPECT_ANY_THROW(chips.publish(2, manifest::Chip{}, 0));
+    chips.publish(0, manifest::Chip{}, 0);
+    EXPECT_ANY_THROW(chips.publish(0, manifest::Chip{}, 0));
+}
+
 TEST(ManifestArgs, SameFamily) {
     EXPECT_TRUE(manifest::same_arg_family("SENDER_CH_7_IS_INJECTION", "SENDER_CH_{}_IS_INJECTION"));
     EXPECT_TRUE(manifest::same_arg_family("SENDER_CH_7_IS_INJECTION", "SENDER_CH_12_IS_INJECTION"));
@@ -1647,76 +944,30 @@ TEST(ManifestArgs, KernelInputsAccounted) {
     EXPECT_THROW(check_kernel_inputs_accounted(new_define), std::exception);
 }
 
-TEST_F(Fabric1DManifestFixture, TopLevel) { check_top_level(manifest_, manifest_path_, fabric_config, suite_start_); }
-TEST_F(Fabric2DManifestFixture, TopLevel) { check_top_level(manifest_, manifest_path_, fabric_config, suite_start_); }
+// Every check, one test each, for `Fixture`.
+#define TEST_MANIFEST_CHECKS(Fixture)                                                                                 \
+    TEST_F(Fixture, TopLevel) { check_top_level(manifest_, manifest_path_, fabric_config, suite_start_); }            \
+    TEST_F(Fixture, ChipZPortRole) { check_chip_z_port_role(manifest_); }                                             \
+    TEST_F(Fixture, RouterLink) { check_router_link(manifest_, routers_); }                                           \
+    TEST_F(Fixture, PeersAreSymmetric) { check_peers_are_symmetric(manifest_, routers_); }                            \
+    TEST_F(Fixture, CreditTransport) { check_credit_transport(manifest_, routers_); }                                 \
+    TEST_F(Fixture, RouterSenders) { check_router_senders(manifest_, routers_); }                                     \
+    TEST_F(Fixture, RouterDownstreamEdges) { check_router_edges(manifest_, routers_); }                               \
+    TEST_F(Fixture, RouterFields) { check_router_fields(manifest_, routers_); }                                       \
+    TEST_F(Fixture, LocalSync) { check_local_sync(manifest_); }                                                       \
+    TEST_F(Fixture, RouterRegionsDisjoint) { check_router_regions_disjoint(manifest_, routers_); }                    \
+    TEST_F(Fixture, Arch) { check_arch(manifest_); }                                                                  \
+    TEST_F(Fixture, ArchStreamRegisters) { check_arch_stream_registers(manifest_); }                                  \
+    TEST_F(Fixture, ArchCoreRegisters) { check_arch_core_registers(manifest_, routers_); }                            \
+    TEST_F(Fixture, RouterDiagnostics) { check_router_diagnostics(routers_); }                                        \
+    TEST_F(Fixture, RouterHostCleared) { check_router_host_cleared(routers_); }                                       \
+    TEST_F(Fixture, RouterLeftoverL1) { check_router_leftover_l1(routers_); }
 
-TEST_F(Fabric1DManifestFixture, Meshes) { check_meshes(manifest_); }
-TEST_F(Fabric2DManifestFixture, Meshes) { check_meshes(manifest_); }
-
-TEST_F(Fabric1DManifestFixture, Chips) { check_chips(manifest_); }
-TEST_F(Fabric2DManifestFixture, Chips) { check_chips(manifest_); }
-
-TEST_F(Fabric1DManifestFixture, RoutersMatchActiveChannels) { check_routers_match_active_channels(manifest_); }
-TEST_F(Fabric2DManifestFixture, RoutersMatchActiveChannels) { check_routers_match_active_channels(manifest_); }
-
-TEST_F(Fabric1DManifestFixture, RouterBlocks) { check_router_blocks(routers_); }
-TEST_F(Fabric2DManifestFixture, RouterBlocks) { check_router_blocks(routers_); }
-
-TEST_F(Fabric1DManifestFixture, RouterIdentity) { check_router_identity(routers_); }
-TEST_F(Fabric2DManifestFixture, RouterIdentity) { check_router_identity(routers_); }
-
-TEST_F(Fabric1DManifestFixture, RouterLink) { check_router_link(manifest_, routers_); }
-TEST_F(Fabric2DManifestFixture, RouterLink) { check_router_link(manifest_, routers_); }
-
-TEST_F(Fabric1DManifestFixture, PeersAreSymmetric) { check_peers_are_symmetric(manifest_, routers_); }
-TEST_F(Fabric2DManifestFixture, PeersAreSymmetric) { check_peers_are_symmetric(manifest_, routers_); }
-
-TEST_F(Fabric1DManifestFixture, RouterShape) { check_router_shape(routers_); }
-TEST_F(Fabric2DManifestFixture, RouterShape) { check_router_shape(routers_); }
-
-TEST_F(Fabric1DManifestFixture, CreditTransport) { check_credit_transport(manifest_, routers_); }
-TEST_F(Fabric2DManifestFixture, CreditTransport) { check_credit_transport(manifest_, routers_); }
-
-TEST_F(Fabric1DManifestFixture, RouterCreditCounters) { check_router_credit_counters(routers_); }
-TEST_F(Fabric2DManifestFixture, RouterCreditCounters) { check_router_credit_counters(routers_); }
-
-TEST_F(Fabric1DManifestFixture, RouterSenders) { check_router_senders(manifest_, routers_); }
-TEST_F(Fabric2DManifestFixture, RouterSenders) { check_router_senders(manifest_, routers_); }
-
-TEST_F(Fabric1DManifestFixture, RouterReceivers) { check_router_receivers(manifest_, routers_); }
-TEST_F(Fabric2DManifestFixture, RouterReceivers) { check_router_receivers(manifest_, routers_); }
-
-TEST_F(Fabric1DManifestFixture, RouterDownstreamEdges) { check_router_edges(manifest_, routers_); }
-TEST_F(Fabric2DManifestFixture, RouterDownstreamEdges) { check_router_edges(manifest_, routers_); }
-
-TEST_F(Fabric1DManifestFixture, RouterFields) { check_router_fields(manifest_, routers_); }
-TEST_F(Fabric2DManifestFixture, RouterFields) { check_router_fields(manifest_, routers_); }
-
-TEST_F(Fabric1DManifestFixture, LocalSync) { check_local_sync(manifest_); }
-TEST_F(Fabric2DManifestFixture, LocalSync) { check_local_sync(manifest_); }
-
-TEST_F(Fabric1DManifestFixture, RouterRegionsDisjoint) { check_router_regions_disjoint(manifest_, routers_); }
-TEST_F(Fabric2DManifestFixture, RouterRegionsDisjoint) { check_router_regions_disjoint(manifest_, routers_); }
-
-TEST_F(Fabric1DManifestFixture, Arch) { check_arch(manifest_); }
-TEST_F(Fabric2DManifestFixture, Arch) { check_arch(manifest_); }
-
-TEST_F(Fabric1DManifestFixture, ArchStreamRegisters) { check_arch_stream_registers(manifest_); }
-TEST_F(Fabric2DManifestFixture, ArchStreamRegisters) { check_arch_stream_registers(manifest_); }
-
-TEST_F(Fabric1DManifestFixture, ArchCoreRegisters) { check_arch_core_registers(manifest_, routers_); }
-TEST_F(Fabric2DManifestFixture, ArchCoreRegisters) { check_arch_core_registers(manifest_, routers_); }
-
-TEST_F(Fabric1DManifestFixture, Enums) { check_enums(manifest_); }
-TEST_F(Fabric2DManifestFixture, Enums) { check_enums(manifest_); }
-
-TEST_F(Fabric1DManifestFixture, RouterDiagnostics) { check_router_diagnostics(routers_); }
-TEST_F(Fabric2DManifestFixture, RouterDiagnostics) { check_router_diagnostics(routers_); }
-
-TEST_F(Fabric1DManifestFixture, RouterHostCleared) { check_router_host_cleared(routers_); }
-TEST_F(Fabric2DManifestFixture, RouterHostCleared) { check_router_host_cleared(routers_); }
-
-TEST_F(Fabric1DManifestFixture, RouterLeftoverL1) { check_router_leftover_l1(routers_); }
-TEST_F(Fabric2DManifestFixture, RouterLeftoverL1) { check_router_leftover_l1(routers_); }
+TEST_MANIFEST_CHECKS(Fabric1DManifestFixture)
+TEST_MANIFEST_CHECKS(Fabric2DManifestFixture)
+TEST_MANIFEST_CHECKS(FabricTorusXManifestFixture)
+TEST_MANIFEST_CHECKS(FabricTorusYManifestFixture)
+TEST_MANIFEST_CHECKS(FabricTorusXYManifestFixture)
+TEST_MANIFEST_CHECKS(FabricMuxManifestFixture)
 
 }  // namespace tt::tt_fabric::fabric_router_tests

@@ -618,27 +618,6 @@ json make_mesh_json(const manifest::Mesh& mesh, TypeCollector& types) {
     return out;
 }
 
-// types is written last, from every schema the other blocks wrote, and placed before vocabulary.
-json make_manifest_json(const manifest::ManifestFacts& facts) {
-    TypeCollector types;
-    json arch = make_arch_json(facts.arch, types);
-    json meshes = json::object();
-    for (const auto& mesh : facts.meshes) {
-        meshes[mesh_key(mesh.mesh_id)] = make_mesh_json(mesh, types);
-    }
-
-    json out;
-    out["manifest_version"] = FABRIC_MANIFEST_VERSION;
-    out["file_kind"] = "fabric_manifest";
-    out["run"] = make_run_json(facts.run);
-    out["fabric"] = make_fabric_json(facts.fabric);
-    out["arch"] = std::move(arch);
-    out["types"] = make_types_json(types);
-    out["vocabulary"] = make_vocabulary_json();
-    out["meshes"] = std::move(meshes);
-    return out;
-}
-
 // Writes the manifest to a temporary name and renames it into place, so a reader never sees a partial manifest.
 void serialize_fabric_manifest_to_file(
     const ControlPlane& control_plane, const std::filesystem::path& output_file_path) {
@@ -675,6 +654,27 @@ void serialize_fabric_manifest_to_file(
 }
 
 }  // namespace
+
+// types is written last, from every schema the other blocks wrote, and placed before vocabulary.
+json make_manifest_json(const manifest::ManifestFacts& facts) {
+    TypeCollector types;
+    json arch = make_arch_json(facts.arch, types);
+    json meshes = json::object();
+    for (const auto& mesh : facts.meshes) {
+        meshes[mesh_key(mesh.mesh_id)] = make_mesh_json(mesh, types);
+    }
+
+    json out;
+    out["manifest_version"] = FABRIC_MANIFEST_VERSION;
+    out["file_kind"] = "fabric_manifest";
+    out["run"] = make_run_json(facts.run);
+    out["fabric"] = make_fabric_json(facts.fabric);
+    out["arch"] = std::move(arch);
+    out["types"] = make_types_json(types);
+    out["vocabulary"] = make_vocabulary_json();
+    out["meshes"] = std::move(meshes);
+    return out;
+}
 
 std::filesystem::path fabric_manifest_path(const tt::llrt::RunTimeOptions& rtoptions) {
     const auto& distributed_context = tt_metal::distributed::multihost::DistributedContext::get_current_world();

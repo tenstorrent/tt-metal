@@ -171,8 +171,9 @@ to update:
 ## Testing
 
 - `tests/scripts/run_fabric_manifest_tests.sh` runs everything that needs no fabric hardware: the device-free unit
-tests, the manifest fixtures on several mock clusters (1D and 2D, Wormhole and Blackhole, and one mesh split across
-two ranks), and the schema check on every manifest they write.
+tests, the manifest fixtures on several mock clusters (1D and 2D, Wormhole and Blackhole, one mesh split across two
+ranks, torus galaxies, the tensix mux, VC2, channel trimming's capture and profile, and four Blackhole galaxies as
+express meshes on four ranks), and the schema check on every manifest they write.
 - On hardware, `Fabric1DManifestFixture.*` and `Fabric2DManifestFixture.*` in `fabric_unit_tests` write and check
 manifests from real devices.
 - `tests/tt_metal/tt_fabric/fabric_manifest/check_manifest_schema.py` checks any manifest against the schema, and checks that `types` holds exactly what its schemas reach. It needs `jsonschema`:
