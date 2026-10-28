@@ -171,8 +171,40 @@ def _device_only(runners):
 
             d["ASB_ms"] = _rep(md, asb, nrep)
             d["sampler_fast"] = bool(getattr(r.samp, "fast", False))
+        if os.environ.get("DSV41_ROUND_TL_TRUNC") == "1":
+            try:
+                d["trunc"] = _trunc(r, P, nrep)
+            except Exception as e:  # noqa: BLE001
+                d["trunc_error"] = repr(e)
         res[f"k{r.k}" + ("" if r.draft else "_nodraft")] = d
     return res
+
+
+def _trunc(r, P, nrep):
+    """Device time of truncated copies of the monolithic round trace (captured at the END of a pass, released right after): no layers (embedding + states + head + argmax + accept + commit-less
+    drafter), 10 / 20 / 40 layers, and the 0- and 40-layer rounds cut after the argmax ('verify') / after the accept rule ('accept'). Differences give: layers (+ Engram + taps + commit),
+    per-layer slope of the SPEC verify path, head + sampler, accept, drafter."""
+    dec, md = r.dec, r.md
+    full = dec.layers
+    cases = [("L0", 0, None), ("L0_verify", 0, "verify"), ("L0_accept", 0, "accept"), ("L10", 10, None), ("L20", 20, None), ("L40_verify", len(full), "verify"), ("L40_accept", len(full), "accept")]
+    out = {}
+    r.set_bucket(P)
+    _STATE["nomarks"] = True
+    try:
+        for name, nl, stop in cases:
+            dec.layers, dec.stop_after = full[:nl], stop
+            tid = ttnn.begin_trace_capture(md, cq_id=0)
+            dec.forward()
+            ttnn.end_trace_capture(md, tid, cq_id=0)
+            ttnn.synchronize_device(md)
+            out[name] = _rep(md, lambda: ttnn.execute_trace(md, tid, cq_id=0, blocking=False), nrep)
+            ttnn.release_trace(md, tid)
+    finally:
+        dec.layers, dec.stop_after = full, None
+        _STATE["nomarks"] = False
+        r.set_bucket(None)
+        r._use(torch.full((r.B,), r.max_pos))
+    return out
 
 
 def install():
@@ -219,7 +251,7 @@ def install():
     def end(md, tid, *a, **k):
         r = oe(md, tid, *a, **k)
         _STATE["cap"] = False
-        if _STATE["marks"] is not None:
+        if _STATE["marks"] is not None and not _STATE.get("nomarks"):
             os.makedirs(OUT, exist_ok=True)
             with open(os.path.join(OUT, f"marks_trace{int(tid)}.json"), "w") as f:
                 json.dump(_STATE["marks"], f)
