@@ -1,20 +1,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
-"""CPU unit tests of codec.py (no ttnn import: importing ttnn opens the cluster).
-Intended repo path: models/demos/deepseek_v41_flash_d_p/tests/test_ckv_codec.py.
-Run: PYTHONPATH=<repo> python -m pytest -q /scratch/dnijemcevic/ckv_derisk/test_codec.py"""
+"""CPU unit tests of tt/ckv_codec.py (no ttnn import: importing ttnn opens the cluster)."""
 
 import os
-import sys
 
 import pytest
 import torch
 
-sys.path.insert(0, os.path.dirname(__file__))
-import codec  # noqa: E402
-
-from models.demos.deepseek_v41_flash_d_p.reference import kernels as K  # noqa: E402
+from models.demos.deepseek_v41_flash_d_p.reference import kernels as K
+from models.demos.deepseek_v41_flash_d_p.tt import ckv_codec as codec
 
 GOLD = (
     "/data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s10240_c5120/kv_cache/layer_2.safetensors"
