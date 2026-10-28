@@ -1,0 +1,8 @@
+# A channel trimming profile for the T3K mock cluster, for run_fabric_manifest_tests.sh. It trims every router on
+# physical chip 4 (M0/C0) to sender channel 0, with no receiver forwarding, so the manifest has trimmed channels.
+channel_trimming_capture:
+  chip_4:
+    eth_channel_0: {sender_channel_used_bitfield: "0x0001", receiver_channel_data_forwarded_bitfield: "0x0000"}
+    eth_channel_1: {sender_channel_used_bitfield: "0x0001", receiver_channel_data_forwarded_bitfield: "0x0000"}
+    eth_channel_6: {sender_channel_used_bitfield: "0x0001", receiver_channel_data_forwarded_bitfield: "0x0000"}
+    eth_channel_7: {sender_channel_used_bitfield: "0x0001", receiver_channel_data_forwarded_bitfield: "0x0000"}

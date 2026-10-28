@@ -34,7 +34,7 @@ on all of them, so how a value is read says which ERISCs it comes from:
 | Reader | Reads from | Used for |
 | --- | --- | --- |
 | `read_emitted_value` | Every ERISC, which must agree | Router, receiver and edge values, and the values the computed facts use |
-| `read_sender_channel_value` | The ERISCs that run the channel. One that doesn't may have the same value or 0 | Sender channel fields |
+| `read_sender_channel_value` | The ERISCs the builder assigned the channel to, whose `IS_SENDER_CHANNEL_<c>_SERVICED` is set, even on a VC the kernel doesn't run. One it didn't assign may have the same value or 0 | Sender channel fields |
 | `get_named_arg` | One ERISC | ERISC fields, and who services each channel |
 | `has_define` | The defines every ERISC shares | VC gates, VC0 crossover |
 
