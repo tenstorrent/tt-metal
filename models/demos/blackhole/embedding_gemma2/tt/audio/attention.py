@@ -30,9 +30,10 @@ the same fp32 value, so every row with at least one valid key (every valid query
 matches. Rows of padding queries are not meaningful (HF's are not either); nothing valid reads them.
 
 Contract
-    input   x [B, 1, S, 1024] bf16 TILE DRAM (norm_pre_attn output), S a multiple of 32
+    input   x [B, 1, S, 1024] bf16 TILE, DRAM or L1 (norm_pre_attn output), S a multiple of 32
             mask [B, 1, S, 64] fp32 TILE DRAM (audio_encoder.attention_mask; 0 keep / -1e9 drop)
-    output  [B, 1, S, 1024] bf16 TILE DRAM
+    output  [B, 1, S, 1024] bf16 TILE, L1 when it fits (config.audio_act_memory_config) else DRAM;
+            the intermediates follow the same rule (the fused QKV output with a 96 KB-per-bank cap)
     Constants (load time): Wqkv [1,1,1024,3072] bf16, qscale [1,1,1,128] fp32, E^T [1, 8, 128, 32] fp32
     per layer; the shift index [1,1,32,64] uint16 (shared).
 """

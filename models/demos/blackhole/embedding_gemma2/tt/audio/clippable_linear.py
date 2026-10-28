@@ -9,8 +9,10 @@ The four bounds are per-tensor scalars stored in the checkpoint (bf16). They are
 `from_state_dict` and folded into `ttnn.clamp` as python floats, so the forward has no extra inputs.
 
 Contract
-    input   x [B, 1, S, in_features] bf16 or fp32 TILE, DRAM interleaved
-    output  [B, 1, S, out_features] TILE DRAM, dtype `out_dtype` (default bf16)
+    input   x [B, 1, S, in_features] bf16 or fp32 TILE, DRAM or L1 interleaved
+    output  [B, 1, S, out_features] TILE, dtype `out_dtype` (default bf16), L1 interleaved when it fits
+            (config.audio_act_memory_config) else DRAM. E5c: 2D-multicast program config
+            (audio/linear.py) with the output clamp fused into the matmul as HARDTANH.
 """
 
 from __future__ import annotations

@@ -8,8 +8,11 @@
     out = x + residual_weight * RMSNorm_post(h)            residual_weight 0.5
 
 Contract
-    input   x [B, 1, S, 1024] bf16 TILE DRAM
-    output  [B, 1, S, 1024] bf16 TILE DRAM (row-wise: padded rows stay independent of valid rows)
+    input   x [B, 1, S, 1024] bf16 TILE (DRAM or L1)
+    output  [B, 1, S, 1024] bf16 TILE, L1 when it fits (config.audio_act_memory_config) else DRAM
+            (row-wise: padded rows stay independent of valid rows)
+E5c: silu and ffw2's input clamp run as one unary_chain; the 0.5 residual scale is the residual
+add's pre-activation (bit-identical to the separate ops).
 """
 
 from __future__ import annotations

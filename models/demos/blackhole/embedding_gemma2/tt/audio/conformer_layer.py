@@ -14,8 +14,10 @@ bounded by the clippable-linear clamps and the norms, many orders of magnitude b
 tests log the largest |activation| HF produces).
 
 Contract
-    input   x [B, 1, S, 1024] act_dtype TILE DRAM, mask [B, 1, S, 64] fp32 TILE DRAM (attention.attention_mask)
-    output  [B, 1, S, 1024] act_dtype TILE DRAM (act_dtype bf16 by default, see AudioModel)
+    input   x [B, 1, S, 1024] act_dtype TILE (DRAM or L1), mask [B, 1, S, 64] fp32 TILE DRAM
+            (attention.attention_mask)
+    output  [B, 1, S, 1024] act_dtype TILE (act_dtype bf16 by default, see AudioModel), L1 interleaved
+            when it fits (config.audio_act_memory_config, E5c) else DRAM
 """
 
 from __future__ import annotations

@@ -22,6 +22,7 @@ Contract (forward)
     mel         [B, 1, T, 128] fp32 TILE DRAM, T = 4 * S (frame bucket); frames past the clip are 0
     frame_mask  [B, 1, T, 1] fp32 TILE DRAM (1 valid frame / 0 padding), multiplied into mel on device
     mask1       [1, 1, B*(T/2)*64, 1] bf16 TILE DRAM: frame_mask[::2] repeated over the 64 frequency rows
+    (E5c: the masked mel, the conv0 input and conv0's output path run in L1 when they fit)
     output      [B, 1, S, 1024] act_dtype (bf16 default) TILE DRAM (rows >= the clip's token count are
                 not meaningful)
 """

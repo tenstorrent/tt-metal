@@ -15,8 +15,9 @@ h_{t-4}, ..., h_{t-1} for every row. The k = 4 tap is h itself. Taps are accumul
 the same order on both paths.
 
 Contract
-    input   x [B, 1, S, 1024] bf16 TILE DRAM, S a multiple of 32
-    output  [B, 1, S, 1024] bf16 TILE DRAM. Row t depends on rows <= t only, so padding rows (at the
+    input   x [B, 1, S, 1024] bf16 TILE (DRAM or L1), S a multiple of 32
+    output  [B, 1, S, 1024] bf16 TILE, L1 when it fits (config.audio_act_memory_config) else DRAM.
+            Row t depends on rows <= t only, so padding rows (at the
             end) never reach valid rows.
 """
 
