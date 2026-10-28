@@ -563,10 +563,33 @@ def test_convert_to_hwc_rejects_output_config_without_shard_spec(device, output_
         ttnn.experimental.convert_to_hwc(input_tensor, memory_config=output_mem_config, dtype=ttnn.bfloat16)
 
 
-# The kernels size the output from the input dtype, so a different output dtype returned garbage.
-def test_convert_to_hwc_rejects_dtype_change(device, expect_error):
+@pytest.mark.parametrize("output_dtype", [ttnn.bfloat16, ttnn.float32])
+@pytest.mark.parametrize("input_buffer_type", [ttnn.BufferType.L1, ttnn.BufferType.DRAM], ids=["l1", "dram"])
+@pytest.mark.parametrize("provide_memory_config", [True, False])
+@pytest.mark.parametrize("C, HW", [(3, 128), (4, 2048)], ids=["one_block", "two_blocks"])
+def test_convert_to_hwc_output_dtype(device, C, HW, output_dtype, input_buffer_type, provide_memory_config):
+    if input_buffer_type == ttnn.BufferType.DRAM and not provide_memory_config:
+        pytest.skip("DRAM input requires an explicit output memory config")
+    core_grid, input_tensor = _width_sharded_hwc_input(device, C, HW, input_buffer_type)
+    expected = ttnn.to_torch(input_tensor).transpose(2, 3).reshape(1, 1, HW, C)
+
+    kwargs = {"dtype": output_dtype}
+    if provide_memory_config:
+        alignment = 16 // (4 if output_dtype == ttnn.float32 else 2)
+        output_shard_spec = ttnn.ShardSpec(core_grid, (HW, round_up(C, alignment)), ttnn.ShardOrientation.ROW_MAJOR)
+        kwargs["memory_config"] = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec
+        )
+    output = ttnn.experimental.convert_to_hwc(input_tensor, **kwargs)
+
+    assert output.dtype == output_dtype
+    actual = ttnn.to_torch(output)[:, :, :, :C]
+    assert torch.equal(actual.float(), expected.float())
+
+
+def test_convert_to_hwc_rejects_unsupported_output_dtype(device, expect_error):
     core_grid, input_tensor = _width_sharded_hwc_input(device, 3, 128, ttnn.BufferType.L1)
     output_shard_spec = ttnn.ShardSpec(core_grid, (128, 8), ttnn.ShardOrientation.ROW_MAJOR)
     output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec)
-    with expect_error(RuntimeError, "convert_to_hwc does not convert dtypes"):
-        ttnn.experimental.convert_to_hwc(input_tensor, memory_config=output_mem_config, dtype=ttnn.float32)
+    with expect_error(RuntimeError, "convert_to_hwc output dtype must be BFLOAT16 or FLOAT32"):
+        ttnn.experimental.convert_to_hwc(input_tensor, memory_config=output_mem_config, dtype=ttnn.uint32)
