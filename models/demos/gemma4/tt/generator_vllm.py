@@ -6099,7 +6099,8 @@ class MTPRetainedRow:
 
 @dataclasses.dataclass
 class MTPSession:
-    """The drafter state of one state slot: its owner and its retained proposal."""
+    """The drafter state of one state slot: its owner, its retained proposal and its counters (``dropped``:
+    proposals the runner committed past without verifying, contract s.4d)."""
 
     owner: tuple
     anchor: int = None
@@ -6107,6 +6108,7 @@ class MTPSession:
     retained: MTPRetainedRow = None
     steps: int = 0
     committed: int = 0
+    dropped: int = 0
 
 
 class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
@@ -6435,9 +6437,10 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         if session is None:
             return
         if session.steps:
+            dropped = f", {session.dropped} proposals dropped unverified" if session.dropped else ""
             logger.info(
                 f"Gemma4MTP contract summary: slot {slot} ({why}) {session.steps} steps, "
-                f"{session.committed} tokens, {session.committed / session.steps:.2f} tokens/step"
+                f"{session.committed} tokens, {session.committed / session.steps:.2f} tokens/step{dropped}"
             )
 
     def _spec_follow_slot_moves(self, moved):
@@ -6460,6 +6463,15 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
     def release_persistent_capture(self) -> None:
         for slot in list(self._mtp_sessions):
             self._mtp_drop_session(slot, "shutdown")
+        if self._mtp_dropped_proposals:
+            # Each one cost a drafter replay that answered nothing (an ordinary decode the runner had
+            # submitted before the proposal was published, contract s.4d); a steady rate here means the
+            # scheduler overlaps more steps than the drafter can serve.
+            logger.info(
+                f"Gemma4MTP speculative contract: {self._mtp_dropped_proposals} proposals dropped unverified "
+                "over the engine's life"
+            )
+            self._mtp_dropped_proposals = 0
         self._mtp_last_replay = None
         self._mtp_step_tables = None
         self._mtp_installed_tables = None
@@ -6970,6 +6982,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
                 # rather than verified (contract s.4d) and the row reseeds at
                 # the anchor the runner committed.
                 self._mtp_dropped_proposals += 1
+                session.dropped += 1
                 session.retained = retained = None
             if retained is not None:
                 expected = retained.anchor_position + n
