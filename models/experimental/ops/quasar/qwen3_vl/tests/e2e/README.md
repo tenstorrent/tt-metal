@@ -97,18 +97,18 @@ A hang shows up as the pytest timeout. The script prints the last lines of `prog
 | 2026-10-26 | craq-sim 8x4 (.so md5 74c8eb33), branch on main fb6d34ceaed | 134 (+12 experimental add/mul) | 94 (+10) | 23 (+2): 8x5 L1 shard grids, 12-bank DRAM sharding | 16 | 1 | 1 h 45 min (95 min in tests; 12-50 s per case) |
 | 2026-10-26 | craq-sim 8x4, main 5285b13d773 with the DFB drain (no #57646 revert, no tensor_layout droppable) | 134 (+12) | 94 (+10) | 23 (+2) | 16 | 1 | 1 h 34 min (88 min in tests); every case's outcome identical to the run above |
 
-The 16 failures: base add (7) and multiply (3), all passing through the experimental ops; `linear` with a captured 8x8 matmul grid (2); `plus_one` int32 and uint32 (2, Q10); `scatter` (1, Q1); `layer_norm` `[2752, 4096]` at PCC 0.998996 against 0.999 (1). The timeout is prefill SDPA `[16, 12288, 64]` (more than 20 min on craq-sim; the `[32, 4096, 128]` case passes in 13 min). Per-case results and times: `generated/qwen3_vl_ops_sweep_1026/summary.md` and `results.tsv` on the run host.
+The 16 failures: base add (7) and multiply (3), all passing through the experimental ops; `linear` with a captured 8x8 matmul grid (2); `plus_one` int32 and uint32 (2, Q10); `scatter` (1, Q1); `layer_norm` `[2752, 4096]` at PCC 0.998996 against 0.999 (1). The timeout is prefill SDPA `[16, 12288, 64]` (more than 20 min on craq-sim; the `[32, 4096, 128]` case passes in 13 min).
 
 ## Baselines
 
 Latest result per target. Tiny size, 2 vision / 2 text layers, 1 decode step. Wall time is the first-to-last-op span from `progress.log` (setup and weight loading add a few minutes). craq-sim is the staged `release_qsr` build with craq-sim#538 (md5 7f4a2163), except where noted.
 
-| Target | Grid | Verdict | Wall time | Date | Run folder (`generated/qwen3_vl_quasar/...`) |
-|---|---|---|---|---|---|
-| craq-sim, main 9c941a0cc3a | 8x4 | PASS (prefill 0.99681, decode0 0.99841; lowest `text.layer1.mlp` 0.99433) | 15 min | 2026-10-28 | `craq_8x4/20261028T195550Z` |
-| craq-sim, main 9c941a0cc3a | 2x1 | PASS (prefill 0.99698, decode0 0.99861; lowest `text.layer1.mlp` 0.99427) | 42 min | 2026-10-28 | `craq_2x3/20261028T151400Z` |
-| emu-quasar-2x3, DRAM clamp bypassed (`emu-quasar-2x3-uncapped`, see Run), main 1e85fb6a52e with #62744 | 2x1 | runs every stage (1211 device ops; no hang or crash); FAIL on PCC from `vision.block0.attn` on, the accepted DRAM-wrap effect (S7) | 217 min ops (3 h 38 min pytest) | 2026-10-28 | `emu_2x3/20261028T020831Z` |
-| ttsim WH (md5 e9c03997); `ttsim_wh_host_cast_fp32_upload` | 2x1 | PASS (prefill 0.99943, decode0 0.99950) | 10 min | 2026-10-27 | `wh_bh_wh_2x3_quasar/20261027T170038Z` |
-| WH N150 silicon | 8x9 | PASS (all stages >= 0.9993), with the #59510 fix | — | 2026-10-06 | aus-wh-08 `wh_bh_hw_native_quasar/20261006T182734Z` |
+| Target | Grid | Verdict | Wall time |
+|---|---|---|---|
+| craq-sim, main c4725ba800a | 8x4 | PASS (prefill 0.99681, decode0 0.99841; lowest `text.layer1.mlp` 0.99433) | 15 min |
+| craq-sim, main 9c941a0cc3a | 2x1 | PASS (prefill 0.99698, decode0 0.99861; lowest `text.layer1.mlp` 0.99427) | 42 min |
+| emu-quasar-2x3, DRAM clamp bypassed (`emu-quasar-2x3-uncapped`, see Run), main 1e85fb6a52e with #62744 | 2x1 | runs every stage (1211 device ops; no hang or crash); FAIL on PCC from `vision.block0.attn` on, the accepted DRAM-wrap effect (S7) | 217 min ops (3 h 38 min pytest) |
+| ttsim WH (md5 e9c03997); `ttsim_wh_host_cast_fp32_upload` | 2x1 | PASS (prefill 0.99943, decode0 0.99950) | 10 min |
+| WH N150 silicon | 8x9 | PASS (all stages >= 0.9993), with the #59510 fix | — |
 
 Blackhole (ttsim and hardware) is not part of the baseline.
