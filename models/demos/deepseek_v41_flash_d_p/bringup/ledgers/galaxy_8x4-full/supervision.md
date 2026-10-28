@@ -769,3 +769,15 @@ Open for the owner: dlukic / node access; push; the in-RAM engram slowdown in th
   F223; 2x2 rung `last` ladder + profile pass; ttnn rebuild needed; FIX.8 released as the full-size gate) -> P.6 (bar
   from the post-FIX.8 wall) -> FIX.9 -> P.4 / P.5 -> index query fp4. Do not touch the tree until the profile series
   ends (each position is a fresh process loading the code).
+
+## 2026-10-28 22:20 MILESTONE + HAND-OFF: resident-engram 5-position profile done (f17604c27c2)
+Page: https://claude.ai/artifact/EeioFZEY2jHgdzPRYXbaxc . Results: overseer_tools/profile_eng_20261028/ (+ /scratch/dnijemcevic/posprof/results/ENG*).
+| context | device before (TBLOCK) | device now | wall before | wall now |
+| 0       | 219.5 | 220.8 | 615.0 | 432.2 |
+| 51.2k   | 233.9 | 229.1 | 640.8 | 463.7 |
+| 102.4k  | 237.5 | 237.4 | 633.8 | 464.8 |
+| 204.8k  | 249.1 | 248.2 | 644.1 | 469.7 |
+| 512k    | 284.4 | 288.2 | 645.8 | 464.0 |
+Wall -28..-30 % (P.1 + P.2 + the engram host path); device flat (FIX.7 casts +88 op calls, ~+1 ms). Still host-bound.
+NEXT (owner order 22:00): merge origin/dnijemcevic/model_bringup_bfp4kv @ 9697878dfb0 -> ttnn rebuild -> release FIX.8
+(orchestrator --until FIX.8) -> P.6 (set its chunk_wall_ms bar from FIX.8's wall) -> FIX.9 -> P.4 / P.5 -> index query fp4.
