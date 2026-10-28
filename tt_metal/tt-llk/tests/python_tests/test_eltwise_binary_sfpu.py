@@ -1102,7 +1102,7 @@ def test_eltwise_binary_sfpu_mask(formats, dest_acc, mathop, **run_kwargs):
 def test_eltwise_binary_sfpu_atan2(formats, dest_acc, mathop, **run_kwargs):
     # atan2(y, x): y = tile0, x = tile1. Signed [-5, 5] gives mixed signs so all quadrants
     # (and the |y|>=|x| / x<0 branches) are exercised. A minimax approximation: gated by
-    # its step budget on Wormhole, and by tolerance + PCC elsewhere.
+    # its step budget on Wormhole and Blackhole, and by tolerance + PCC on Quasar.
     skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     sfpu_binary(

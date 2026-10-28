@@ -90,6 +90,9 @@ class PrefillRunParams:
     mtp_levels: int = 0
     # Decode's MTP level count, 0 = mtp_levels. Levels past mtp_levels reuse its KV: table aliases + acks.
     mtp_decode_levels: int = 0
+    # Chunks per forward, PREFILL_FORWARD_TOKENS_BUDGET // chunk_size. 1 = one chunk per prefill_chunk call; > 1
+    # needs an adapter with supports_packed_forward and drives the runtime's prefill_forward.
+    forward_chunks: int = 1
 
     @property
     def sp_factor(self) -> int:
@@ -153,6 +156,11 @@ class PrefillModelAdapter(ABC):
     supports_mtp: bool = False
     supports_tp_shard_kv: bool = False
     tp_shard_kv_default: bool = False
+    # Whether the runtime implements prefill_forward (several chunks per forward), so the runner may run with
+    # PREFILL_FORWARD_TOKENS_BUDGET above the chunk size. See docs/ADDING_A_PREFILL_MODEL.md.
+    supports_packed_forward: bool = False
+    # Whether a pipeline split can hand indexer indices from one rank to the next (cross-layer indexer reuse).
+    passes_indexer_indices: bool = False
     # Fail PCC verification unless the producer drained exactly one completion per layer per chunk.
     verify_layer_completions: bool = False
 
@@ -239,8 +247,9 @@ class PrefillModelAdapter(ABC):
         """Construct the model for this rank and return a runtime handle. The runtime
         is stateless w.r.t. the KV cache — it receives the engine-owned ``KvCaches`` as an
         argument on each call. The engine then calls ``.compile(kv_caches)`` and drives
-        it (make_chunk_input, prefill_chunk, and — when enabled — build_kv_chunk_table /
-        set_layer_completion_sink). ``params`` carries the per-rank knobs."""
+        it (make_chunk_input, prefill_chunk — or prefill_forward when ``params.forward_chunks > 1`` — and,
+        when enabled, build_kv_chunk_table / set_layer_completion_sink). ``params`` carries the per-rank
+        knobs."""
 
     # =====================================================================
     # Test-only metadata (HF download coordinates + reference modeling).

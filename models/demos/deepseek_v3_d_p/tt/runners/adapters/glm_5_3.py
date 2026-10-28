@@ -37,6 +37,7 @@ class GLM53Adapter(MLAPrefillAdapter):
     hf_model_default = "/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4"
     ttnn_cache_default = "/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill"
     default_gate_mode = "DEVICE_FP32"
+    passes_indexer_indices = True
     prefill_trace_default = (
         "/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k"
     )
@@ -98,6 +99,7 @@ class GLM53Adapter(MLAPrefillAdapter):
             num_kvpe_cache_layers=params.num_layers + mtp_levels,
             num_users=params.num_users,
             tp_axis=kv_tp_axis,
+            bank_aligned=True,
         )
         first_full = full_indexer_rank(hf_config, params.first_layer_idx)
         num_index_layers = (
@@ -113,6 +115,7 @@ class GLM53Adapter(MLAPrefillAdapter):
             num_users=params.num_users,
             dtype=ttnn.bfloat8_b,
             tp_axis=kv_tp_axis,
+            bank_aligned=True,
         )
         return MlaKvCaches(kvpe=kvpe_cache, index=index_cache)
 

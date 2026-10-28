@@ -6,6 +6,10 @@ one serializer that writes it, and the measurement records."""
 
 import json
 import math
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 import pytest
 import yaml
@@ -15,17 +19,19 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import ApproximationMode, DestAccumulation, MathOperation
 from helpers.ulp_domains import Domain, Problem
 from helpers.ulp_table import (
-    TABLE_PATH,
+    TABLE_PATHS,
     AccuracyContract,
     BudgetKey,
     Measurement,
     Metric,
     Reading,
     Row,
+    arch_of_table,
     dump_table,
     from_plain,
     load_table,
     read_table,
+    table_arch,
     write_table_file,
 )
 
@@ -216,9 +222,72 @@ def test_an_empty_document_is_an_empty_table(text):
     assert read_table(text) == {}
 
 
-def test_the_table_on_disk_is_exactly_what_the_serializer_writes():
-    """No hand formatting survives a re-emit, so none may be in the file."""
-    assert dump_table(load_table()) == TABLE_PATH.read_text(encoding="utf-8")
+@pytest.mark.parametrize(
+    "chip, table",
+    [
+        (ChipArchitecture.WORMHOLE, ChipArchitecture.WORMHOLE),
+        (ChipArchitecture.BLACKHOLE, ChipArchitecture.BLACKHOLE),
+        (ChipArchitecture.QUASAR, ChipArchitecture.WORMHOLE),
+    ],
+    ids=lambda a: a.value,
+)
+def test_each_chip_reads_the_table_it_is_meant_to(chip, table):
+    """Every accuracy test derives its expectation from `MEASURED_ARCH`, so nothing
+    else would notice a mapping that sent Blackhole to Wormhole's table."""
+    assert table_arch(chip) is table
+    assert arch_of_table(TABLE_PATHS[table]) is table
+
+
+@pytest.mark.parametrize(
+    "name, arch",
+    [
+        ("sfpu_accuracy_budget_wh.yaml", ChipArchitecture.WORMHOLE),
+        ("base_sfpu_accuracy_budget_bh.yaml", ChipArchitecture.BLACKHOLE),
+        ("budget.yaml", None),
+    ],
+)
+def test_a_table_file_names_its_architecture(name, arch):
+    """`ulp_budget_diff` judges a table under the architecture its name says, a CI
+    copy of it included, and refuses to guess for any other name."""
+    assert arch_of_table(Path("/tmp") / name) is arch
+
+
+def test_importing_the_table_tools_does_not_ask_the_chip():
+    """A host with no card and no `CHIP_ARCH` (the report's host tests, `python -m
+    helpers.ulp_budget_diff`) imports the table, the sweep and the guard; resolving the
+    session's architecture there would open the device. In a fresh interpreter, with
+    the chip query made to fail."""
+    code = (
+        "import helpers.chip_architecture as chip; "
+        "chip.get_chip_architecture = lambda: (_ for _ in ()).throw(SystemExit(3)); "
+        "import helpers.ulp_table, helpers.ulp_sweep, helpers.ulp_budget_diff"
+    )
+    env = {k: v for k, v in os.environ.items() if k != "CHIP_ARCH"}
+    python_tests = next(iter(TABLE_PATHS.values())).parent.parent
+    done = subprocess.run([sys.executable, "-c", code], cwd=python_tests, env=env)
+    assert done.returncode == 0
+
+
+@pytest.mark.parametrize("path", TABLE_PATHS.values(), ids=lambda p: p.stem[-2:])
+def test_writing_a_table_to_a_named_path_does_not_ask_the_chip(
+    path, tmp_path, monkeypatch
+):
+    """The normalise command in `SFPU_ULP.md` runs on a host with no card: checking a
+    table before writing it does not depend on which architecture it is for."""
+
+    def ask_the_chip():
+        raise AssertionError("asked the chip")
+
+    monkeypatch.setattr("helpers.ulp_table.measured_arch", ask_the_chip)
+    out = tmp_path / path.name
+    write_table_file(load_table(path), out)
+    assert out.read_text(encoding="utf-8") == path.read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize("path", TABLE_PATHS.values(), ids=lambda p: p.stem[-2:])
+def test_the_table_on_disk_is_exactly_what_the_serializer_writes(path):
+    """No hand formatting survives a re-emit, so none may be in either file."""
+    assert dump_table(load_table(path)) == path.read_text(encoding="utf-8")
 
 
 def test_a_measurement_round_trips_through_its_json_line():

@@ -356,11 +356,15 @@ std::map<ChipId, CoreArrivals> group_arrivals(const std::vector<Arrival>& arriva
     for (const Arrival& arrival : arrivals) {
         by_chip[arrival.chip][CoreCoord{arrival.logical_x, arrival.logical_y}].push_back(&arrival);
     }
-    std::erase_if(by_chip, [&](auto& chip_arrivals) {
-        auto& [chip, by_core] = chip_arrivals;
-        bool counts_ok = by_core.size() == cores.size();
+    for (auto& [chip, by_core] : by_chip) {
         for (auto& [core, core_arrivals] : by_core) {
             std::ranges::sort(core_arrivals, {}, &Arrival::cycles);
+        }
+    }
+    std::erase_if(by_chip, [&](const auto& chip_arrivals) {
+        const auto& [chip, by_core] = chip_arrivals;
+        bool counts_ok = by_core.size() == cores.size();
+        for (const auto& [core, core_arrivals] : by_core) {
             const size_t expected = core == cores.start_coord || core == cores.end_coord ? kRounds / 2 : kRounds;
             if (core_arrivals.size() != expected) {
                 std::printf(

@@ -12,7 +12,7 @@
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/test_utils/stimulus.hpp"
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt_metal/impl/context/context_types.hpp"
 #include <tt-metalium/tt_align.hpp>
@@ -25,7 +25,7 @@
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 #include "tt_metal/impl/dispatch/host_device_transfer.hpp"
 
-#include <umd/device/io_window/io_window.hpp>
+#include <tt-umd/io_window/io_window.hpp>
 
 #include <chrono>
 #include <functional>
