@@ -61,16 +61,16 @@ tt::umd::RiscType dram_core_teardown_reset_riscs(ARCH arch) {
     return arch == ARCH::QUASAR ? tt::umd::RiscType::ALL_DATA_MOVEMENT : tt::umd::RiscType::BRISC;
 }
 
-// Port this core uses to reach SPA instance `dest`. Local GDDR stays on D2D0: that is the window
+// Port this core uses to reach Mimir `dest`. Local GDDR stays on D2D0: that is the window
 // the remapper claims. A recorded peer route selects the port. With no topology, Mimir 0 reaches
-// any other instance through D2D1 and every other sender uses D2D0.
-uint8_t cce_gddr_port(const tt::umd::SocDescriptor& soc, uint32_t channel, uint32_t sender, uint32_t dest) {
-    if (dest == sender) {
+// any other Mimir through D2D1 and every other sender uses D2D0.
+uint8_t cce_gddr_port(const tt::umd::SocDescriptor& soc, uint32_t channel, uint32_t dest) {
+    if (dest == channel) {
         return 0;
     }
     const auto& channels = soc.get_arch_descriptor().get_mimir_channels();
     if (channels.empty()) {
-        return sender == 0 ? 1 : 0;
+        return channel == 0 ? 1 : 0;
     }
     TT_FATAL(channel < channels.size(), "CCE channel {} has no mimir_channels entry", channel);
     for (const auto& route : channels[channel].routes) {
@@ -84,10 +84,15 @@ uint8_t cce_gddr_port(const tt::umd::SocDescriptor& soc, uint32_t channel, uint3
 
 CceSpaRoutes cce_spa_routes_for_channel(const metal_SocDescriptor& soc, uint32_t channel) {
     const auto& channels = soc.get_arch_descriptor().get_mimir_channels();
-    uint32_t sender = channel;
     if (!channels.empty()) {
         TT_FATAL(channel < channels.size(), "CCE channel {} has no mimir_channels entry", channel);
-        sender = channels[channel].instance;
+        // Metal, UMD's resolver, the ATT DRAM selectors and the cce_gddr/cce_sram helpers all take the
+        // channel as the SPA instance. UMD's DMRISC remap still reads the descriptor's instance.
+        TT_FATAL(
+            channels[channel].instance == channel,
+            "Mimir channel {} lists SPA instance {}; Metal uses the channel as the instance, so they must match",
+            channel,
+            channels[channel].instance);
     }
     const tt::umd::GrendelAddressWindows windows{};
     CceSpaRoutes routes{};
@@ -97,7 +102,7 @@ CceSpaRoutes cce_spa_routes_for_channel(const metal_SocDescriptor& soc, uint32_t
     routes.sram_spa_base = windows.dram_l1_base;
     routes.sram_tile_stride = windows.dram_l1_stride;
     for (uint32_t dest = 0; dest < CCE_SPA_ROUTES_MAX_INSTANCES; ++dest) {
-        routes.gddr_d2d[dest] = cce_gddr_port(soc, channel, sender, dest);
+        routes.gddr_d2d[dest] = cce_gddr_port(soc, channel, dest);
     }
     return routes;
 }
