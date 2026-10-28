@@ -138,7 +138,7 @@ Per `PORTING.md`: V4 hooks default to V4 behavior, and the V4.1 files hold only 
 | File | Change |
 |---|---|
 | `tt/model.py` | `verify_rows`, T-row buffers, `_step_context` over `pos_f [1, 1, 1, T]`, verify traces and variant key, `decode_verify_traced`, fallback test |
-| `tt/decode/attention.py` | `decode_rows(...)` (or a `rows` mode of `decode`): T-row compressor, per-row ring views, per-row select, B = T SDPA; T-row `sel_tile` in `build_decode_caches` |
+| `tt/decode/attention.py` | `decode` with `S = T` rows (`decode_inputs(..., rows=T)`): T-row compressor, per-row ring views, per-row select, B = T SDPA; T-row `sel_tile` in `build_decode_caches` |
 | `tt/decode/decoder_layer.py` | T-row mHC; MoE through the multi-row experts |
 | `tt/decode/moe.py`, V4 `tt/decode/moe.py` | T-row replica path (lift `assert t == 1` behind the op's new support) |
 | V4 `tt/decode/hyperconnection.py` | `row_major_streams` with T rows |

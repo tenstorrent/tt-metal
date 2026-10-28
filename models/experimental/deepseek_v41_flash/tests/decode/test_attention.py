@@ -7,8 +7,8 @@ A case decodes a group of layers token by token from position 0, each layer on i
 random input and in layer order -- the order their shared compressed KV / top-k needs.
 The reference (``tests/reference.py``) steps the same layers the same way.
 
-``test_attention_decode_rows`` feeds the same positions as ``ROWS``-row ROW_MAJOR blocks through
-``decode_rows`` (DSpark's parallel verify), against the same token-by-token reference.
+``test_attention_decode_s5`` feeds the same positions as ``S``-row ROW_MAJOR blocks, ``hidden``
+``[1, S, 1, D]``, through ``decode`` (DSpark's parallel verify), against the same token-by-token reference.
 
 The converted ttnn weights are cached under ``CACHE_DIR`` (``$DEEPSEEK_V4_CACHE_DIR``, default ``../cache``, per checkpoint).
 
@@ -35,7 +35,7 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4Wei
 
 PCC = 0.95
 # DSpark's block: the token plus four drafts.
-ROWS = 5
+S = 5
 
 
 def _snapshot():
@@ -125,39 +125,40 @@ def test_attention_decode(device, layers, seq_len):
     ids=("window", "ratio2", "ratio1"),
 )
 @torch.no_grad()
-def test_attention_decode_rows(device, layers, seq_len):
-    assert seq_len % ROWS == 0
+def test_attention_decode_s5(device, layers, seq_len):
+    assert seq_len % S == 0
     config, reference, attns, rope = _build(device, layers, seq_len)
-    caches = build_decode_caches(device, config, layers, seq_len, verify_rows=ROWS)
+    caches = build_decode_caches(device, config, layers, seq_len, verify_rows=S)
 
     torch.manual_seed(0)
     hidden = torch.randn(len(layers), seq_len, config.hidden_size)
-    # The block's rows, packed on one width-sharded L1 row group as decode_rows' all_gather_for_matmul takes them.
-    hidden_config = width_sharded_l1_config(ROWS, config.hidden_size, device, tile_height=1)
+    # The block's rows on every core of one width-sharded L1 row group, as decode's all_gather_for_matmul takes them.
+    hidden_config = width_sharded_l1_config(S, config.hidden_size, device, tile_height=1)
     window = config.sliding_window
     checked = {0, 1, window - 2, window - 1, window} | set(range(seq_len - 4, seq_len))
-    for start in range(0, seq_len, ROWS):
-        positions = range(start, start + ROWS)
+    for start in range(0, seq_len, S):
+        positions = range(start, start + S)
         # The reference shares the group's compressed state, so it steps position-major.
         expected = {i: [] for i in layers}
         for pos in positions:
             for j, i in enumerate(layers):
                 expected[i].append(reference[i](hidden[j, pos].reshape(1, 1, -1).clone(), pos))
         for j, i in enumerate(layers):
-            out = attns[i].decode_rows(
+            out = attns[i].decode(
                 ttnn.from_torch(
-                    hidden[j, start : start + ROWS].reshape(1, ROWS, 1, -1),
+                    hidden[j, start : start + S].reshape(1, S, 1, -1),
                     dtype=ttnn.bfloat16,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     device=device,
                     memory_config=hidden_config,
                 ),
                 scache=caches[i],
-                rows=attns[i].decode_rows_inputs(start, ROWS, *rope[i]),
+                **attns[i].decode_inputs(start, *rope[i], rows=S),
             )
+            assert list(out.shape) == [1, S, 1, config.hidden_size]
             if checked.isdisjoint(positions):
                 continue
-            got = ttnn.to_torch(out).reshape(ROWS, -1).float()
+            got = ttnn.to_torch(out).reshape(S, -1).float()
             for k, pos in enumerate(positions):
                 passing, pcc = comp_pcc(expected[i][k].reshape(-1), got[k], PCC)
                 logger.info(f"layer {i} (ratio {config.compress_ratios[i]}) pos {pos} (row {k}): PCC {pcc}")
