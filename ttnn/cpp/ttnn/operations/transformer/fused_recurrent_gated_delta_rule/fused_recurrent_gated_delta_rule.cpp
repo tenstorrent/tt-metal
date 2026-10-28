@@ -533,4 +533,64 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     return {o, state_opt};
 }
 
+std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_kda(
+    const ttnn::Tensor& q,
+    const ttnn::Tensor& k,
+    const ttnn::Tensor& v,
+    const ttnn::Tensor& g,
+    const ttnn::Tensor& beta,
+    std::optional<float> scale,
+    const std::optional<ttnn::Tensor>& initial_state,
+    const std::optional<ttnn::Tensor>& state_indices,
+    const std::optional<ttnn::Tensor>& num_accepted_tokens,
+    bool inplace_final_state,
+    bool output_final_state,
+    bool output_per_token_state,
+    bool use_qk_l2norm_in_kernel,
+    bool use_gate_in_kernel,
+    const std::optional<ttnn::Tensor>& A_log,
+    const std::optional<ttnn::Tensor>& dt_bias,
+    std::optional<float> lower_bound,
+    bool use_beta_sigmoid_in_kernel,
+    bool allow_neg_eigval,
+    const std::optional<ttnn::Tensor>& cu_seqlens,
+    bool state_v_first,
+    const std::optional<ttnn::Tensor>& output_tensor,
+    const std::optional<ttnn::Tensor>& initial_state_block_idx,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<FusedRecurrentGdnProgramConfig>& program_config) {
+    TT_FATAL(
+        g.logical_shape().rank() == 4,
+        "fused_recurrent_kda: g must be the per-key decay [B,T,HV,K] (rank 4), got {}",
+        g.logical_shape());
+    return fused_recurrent_gated_delta_rule(
+        q,
+        k,
+        v,
+        g,
+        beta,
+        scale,
+        initial_state,
+        state_indices,
+        num_accepted_tokens,
+        inplace_final_state,
+        output_final_state,
+        output_per_token_state,
+        use_qk_l2norm_in_kernel,
+        use_gate_in_kernel,
+        A_log,
+        dt_bias,
+        lower_bound,
+        use_beta_sigmoid_in_kernel,
+        allow_neg_eigval,
+        cu_seqlens,
+        state_v_first,
+        output_tensor,
+        initial_state_block_idx,
+        memory_config,
+        compute_kernel_config,
+        program_config);
+}
+
 }  // namespace ttnn::transformer

@@ -164,6 +164,50 @@ void bind_fused_recurrent_gated_delta_rule(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("program_config") = nb::none());
+
+    const auto* kda_doc =
+        R"doc(
+        Kimi Delta Attention recurrence (flash-linear-attention `fused_recurrent_kda`): fused_recurrent_gated_delta_rule
+        with a per-key decay vector. g is [B, T, HV, K] and scales row k of the state by exp(g[k]) before the read;
+        H == HV (no GQA); the gate is the softplus form g = -exp(A_log) * softplus(g_raw + dt_bias) with dt_bias
+        [HV*K], or the bounded form g = lower_bound * sigmoid(exp(A_log) * (g_raw + dt_bias)) (Kimi K3,
+        lower_bound = -5), both with use_gate_in_kernel. Every other argument, and the returned (o, state), are
+        those of fused_recurrent_gated_delta_rule; the registered golden is the GDN golden with the rank-4 g.
+
+        This build validates the call and rejects it: the KDA path arrives in stage 5 of the v2 plan.
+        )doc";
+
+    ttnn::bind_function<"fused_recurrent_kda", "ttnn.transformer.">(
+        mod,
+        kda_doc,
+        &ttnn::transformer::fused_recurrent_kda,
+        nb::arg("q").noconvert(),
+        nb::arg("k").noconvert(),
+        nb::arg("v").noconvert(),
+        nb::arg("g").noconvert(),
+        nb::arg("beta").noconvert(),
+        nb::kw_only(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("initial_state") = nb::none(),
+        nb::arg("state_indices") = nb::none(),
+        nb::arg("num_accepted_tokens") = nb::none(),
+        nb::arg("inplace_final_state") = false,
+        nb::arg("output_final_state") = false,
+        nb::arg("output_per_token_state") = false,
+        nb::arg("use_qk_l2norm_in_kernel") = false,
+        nb::arg("use_gate_in_kernel") = false,
+        nb::arg("A_log") = nb::none(),
+        nb::arg("dt_bias") = nb::none(),
+        nb::arg("lower_bound") = nb::none(),
+        nb::arg("use_beta_sigmoid_in_kernel") = false,
+        nb::arg("allow_neg_eigval") = false,
+        nb::arg("cu_seqlens") = nb::none(),
+        nb::arg("state_v_first") = false,
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("initial_state_block_idx") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("program_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::transformer

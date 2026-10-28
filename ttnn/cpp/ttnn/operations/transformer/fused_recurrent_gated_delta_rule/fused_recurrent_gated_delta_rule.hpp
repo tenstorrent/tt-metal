@@ -68,4 +68,38 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
     const std::optional<FusedRecurrentGdnProgramConfig>& program_config = std::nullopt);
 
+/**
+ * Kimi Delta Attention (flash-linear-attention `fused_recurrent_kda`): the same recurrence with a per-key decay
+ * vector, g [B, T, HV, K], applied row-wise to the state before the read, H == HV, and the softplus or the bounded
+ * sigmoid gate (lower_bound). A thin alias of fused_recurrent_gated_delta_rule that requires rank-4 g; this build
+ * rejects every call after validation, naming stage 5 of the v2 plan.
+ */
+std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_kda(
+    const ttnn::Tensor& q,
+    const ttnn::Tensor& k,
+    const ttnn::Tensor& v,
+    const ttnn::Tensor& g,
+    const ttnn::Tensor& beta,
+    std::optional<float> scale = std::nullopt,
+    const std::optional<ttnn::Tensor>& initial_state = std::nullopt,
+    const std::optional<ttnn::Tensor>& state_indices = std::nullopt,
+    const std::optional<ttnn::Tensor>& num_accepted_tokens = std::nullopt,
+    bool inplace_final_state = false,
+    bool output_final_state = false,
+    bool output_per_token_state = false,
+    bool use_qk_l2norm_in_kernel = false,
+    bool use_gate_in_kernel = false,
+    const std::optional<ttnn::Tensor>& A_log = std::nullopt,
+    const std::optional<ttnn::Tensor>& dt_bias = std::nullopt,
+    std::optional<float> lower_bound = std::nullopt,
+    bool use_beta_sigmoid_in_kernel = false,
+    bool allow_neg_eigval = false,
+    const std::optional<ttnn::Tensor>& cu_seqlens = std::nullopt,
+    bool state_v_first = false,
+    const std::optional<ttnn::Tensor>& output_tensor = std::nullopt,
+    const std::optional<ttnn::Tensor>& initial_state_block_idx = std::nullopt,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<FusedRecurrentGdnProgramConfig>& program_config = std::nullopt);
+
 }  // namespace ttnn::transformer
