@@ -28,8 +28,8 @@ from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     assemble_recurrent,
     convolution_segment_to_torch,
     deallocate_state,
-    recurrent_segment_to_torch,
     device_scalar,
+    recurrent_segment_to_torch,
 )
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     KDA_VERSIONS,

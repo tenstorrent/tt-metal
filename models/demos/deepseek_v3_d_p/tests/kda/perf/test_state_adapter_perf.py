@@ -41,9 +41,9 @@ from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     allocate_native_state,
     contract_memory_configs,
     deallocate_state,
+    device_scalar,
     export_state,
     import_state,
-    device_scalar,
 )
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical, make_actual_start
 
