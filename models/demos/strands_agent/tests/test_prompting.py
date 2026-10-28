@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""CPU-only: prompt encoding and answer building match the reference JSON."""
+"""CPU-only: prompt encoding and answer building match the reference JSON; batch planning."""
 
 import json
 from pathlib import Path
@@ -10,9 +10,11 @@ import pytest
 import torch
 from transformers import AutoTokenizer
 
+from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.demos.strands_agent.tests.common import ids_sha256, load_example_state
 from models.demos.strands_agent.tt.answers import build_answer
 from models.demos.strands_agent.tt.head import load_config
+from models.demos.strands_agent.tt.model import plan_batches
 from models.demos.strands_agent.tt.prompting import encode_request
 from models.demos.strands_agent.tt.weight_mapping import resolve_checkpoint
 
@@ -63,3 +65,23 @@ def test_missing_type_resolves_like_upstream_union(kind, spec):
 
     assert resolve_kind(spec) == kind
     assert render_question("q", spec) == render_question("q", {"type": kind, **spec})
+
+
+@pytest.mark.parametrize(
+    "lengths",
+    [[114, 120, 112, 417, 393, 407, 176, 140, 458, 2787, 2801], [100] * 40, [4096, 90, 3000, 700, 95], [5000], []],
+)
+def test_plan_batches(lengths):
+    max_batch, max_tokens = 32, 8192
+    groups = plan_batches(lengths, max_batch, max_tokens)
+    assert sorted(i for g in groups for i in g) == list(range(len(lengths)))
+    for g in groups:
+        bucket = Qwen36Model._mask_bucket_for(max(lengths[i] for i in g))
+        assert len(g) == 1 or (len(g) <= max_batch and len(g) * bucket <= max_tokens)
+    if lengths[:3] == [114, 120, 112]:  # the example questions: one forward per bucket
+        assert [sorted(lengths[i] for i in g) for g in groups] == [
+            [112, 114, 120],
+            [140, 176],
+            [393, 407, 417, 458],
+            [2787, 2801],
+        ]
