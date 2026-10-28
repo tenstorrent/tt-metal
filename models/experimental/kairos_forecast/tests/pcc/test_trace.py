@@ -1,9 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Trace replay on fresh inputs (skill §1 C, PLAN v1.21): three batch sizes captured after all buffers exist, each
-replayed on inputs it was not captured with, interleaved, and compared with the eager forward and the golden.
-The job log must not contain ttnn's "active trace" allocation warning (checked by the caller with grep), so the
-eager references run before the first capture."""
+"""Trace replay on fresh inputs (skill §1 C, PLAN v1.21): four batch sizes (2, 8, 16 and paper's 512 rows) captured
+after all buffers exist, each replayed on inputs it was not captured with, interleaved, and compared with the eager
+forward and the golden. Paper is captured on a transformed paper context (rows reversed, x 1.5 + 0.1) and then
+replayed on the golden paper input, scored against the golden head (D3 item 6). ttnn's "active trace" allocation
+warning fails the test (tests/conftest.py), so the eager references run before the first capture."""
 import pytest
 import torch
 
@@ -26,13 +27,16 @@ def golden_pair(case, call=0):
     return _cat_fronts(a, b), torch.cat([a["head"], b["head"]])
 
 
-def bench_pair(case, n, W):
+def bench_pair(case, n, W, transform=None, gold=False):
+    """The flip halves of the first n series of a bench golden (from its bias0), optionally transformed, with the
+    golden head when gold (only meaningful for the whole untransformed H <= 128 case)."""
     rec = load(case)
     router = RouterState(rec["bias0"])
     x = rec["context"][:n]
+    x = transform(x) if transform else x
     fa, _ = front_end(x, router, W)
     fb, _ = front_end(-x, router, W)
-    return _cat_fronts(fa, fb), None
+    return _cat_fronts(fa, fb), (torch.cat(rec["head"]) if gold else None)
 
 
 @pytest.mark.parametrize("device_params", [{"trace_region_size": 64 << 20}], indirect=True)
@@ -40,18 +44,20 @@ def bench_pair(case, n, W):
 def test_trace_fresh_inputs(device, prec):
     W = DF.load_weights()
     m = TtKairos(device, W, getattr(Precision, prec)())
-    capture = [golden_pair("single_gift")[0], golden_pair("ragged4")[0], bench_pair("paper", 8, W)[0]]
+    capture = [golden_pair("single_gift")[0], golden_pair("ragged4")[0], bench_pair("paper", 8, W)[0]] + [None] * 2 + [
+        bench_pair("paper", 256, W, lambda x: x.flip(0) * 1.5 + 0.1)[0]]
     fresh = [  # (B, front, golden head or None): none is the input its trace was captured with
         (2, *bench_pair("single", 1, W)),
         (8, *golden_pair("bias_5call", 3)),
         (16, *bench_pair("ragged", 8, W)),
         (2, *golden_pair("single_gift")),  # back to a captured input after the others ran
         (8, *bench_pair("long_horizon", 4, W)),
+        (512, *bench_pair("paper", 256, W, gold=True)),  # the scored paper replay, captured on another input
     ]
     eagers = [m.forward(f) for _B, f, _g in fresh]  # eager first: nothing may allocate once a trace exists
     tr = TracedKairos(m)
     try:
-        for (B, f, gold), eager, cap in zip(fresh, eagers, capture + [None, None]):
+        for (B, f, gold), eager, cap in zip(fresh, eagers, capture, strict=True):
             if cap is not None:  # capture on a different input of the same batch, then replay the fresh one
                 tr.forward(cap)
             got = tr.forward(f)
