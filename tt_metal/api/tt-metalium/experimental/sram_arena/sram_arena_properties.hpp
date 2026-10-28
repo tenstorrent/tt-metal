@@ -20,11 +20,6 @@ struct LockstepSRAMArenaProperties {
     //
     // Invariant: must be > 0.
     size_type per_bank_size;  // in bytes
-
-    // Currently SRAMArena is SRAM only,
-    // but if we want to generalize it:
-    //
-    // MemoryResource resource = SRAM;
 };
 
 /**
@@ -42,8 +37,6 @@ struct RangeLockstepSRAMArenaProperties {
     //
     // Invariant: must be > 0.
     size_type per_bank_size;  // in bytes
-
-    // MemoryResource resource = SRAM;
 };
 
 using SRAMArenaProperties = std::variant<LockstepSRAMArenaProperties, RangeLockstepSRAMArenaProperties>;
