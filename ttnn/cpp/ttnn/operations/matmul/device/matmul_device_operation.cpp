@@ -2339,7 +2339,68 @@ void validate_matmul_mcast1d_config(
         TT_FATAL(!optional_bias.has_value(), "{}: Bias is not supported when using gather_in0.", config_name);
     } else {
         const auto device_grid_1d = input_tensor_a.device()->compute_with_storage_grid_size();
-        check_tensor_in_grid(input_tensor_a, device_grid_1d);
+        if (input_tensor_a.is_sharded()) {
+            // Anchor on allowed_worker_cores (matches factory at
+            // matmul_multicore_reuse_mcast_1d_program_factory.cpp:6944-6967).
+            const auto& worker = program_config.allowed_worker_cores.value();
+            CoreCoord start_core = worker.bounding_box().start_coord;
+            if (attributes.sub_device_id.has_value()) {
+                start_core = input_tensor_a.device()
+                                 ->worker_cores(
+                                     tt::tt_metal::HalProgrammableCoreType::TENSIX,
+                                     attributes.sub_device_id.value())
+                                 .bounding_box()
+                                 .start_coord;
+            }
+            const auto worker_bbox = worker.bounding_box();
+            const auto cwsg = worker_bbox.grid_size();
+            const CoreRangeSet matmul_core_rect(
+                CoreRange(start_core, CoreCoord(start_core.x + cwsg.x - 1, start_core.y + cwsg.y - 1)));
+            const uint32_t M =
+                operations::matmul::utilities::get_M_dim(a_shape_padded, in0_tile, program_config.fuse_batch);
+            const auto& shard_grid = input_tensor_a.shard_spec().value().grid;
+            // mcast_in0 pins exact count; mcast_in1 allows shard >= div_up(M, per_core_M) since the
+            // factory writes args only to the first `expected_cores` row-major cores.
+            const uint32_t expected_cores =
+                program_config.mcast_in0 ? shard_grid.num_cores() : tt::div_up(M, program_config.per_core_M);
+            TT_FATAL(
+                shard_grid.num_cores() >= expected_cores,
+                "{}: sharded in0 has {} cores but factory needs at least {}.",
+                config_name,
+                shard_grid.num_cores(),
+                expected_cores);
+            // Containment: every shard core must lie inside allowed_worker_cores (strictly tighter than
+            // the old device-grid check this branch replaces).
+            const auto shard_cores = tt::tt_metal::corerange_to_cores(shard_grid, std::nullopt, /*row_wise=*/true);
+            for (const auto& c : shard_cores) {
+                TT_FATAL(
+                    worker.contains(c),
+                    "{}: sharded in0 core {} is outside allowed_worker_cores {}.",
+                    config_name,
+                    c,
+                    worker);
+            }
+            // Factory writes per-core args row-major in the bbox rect; the first `expected_cores`
+            // row-major cores of the shard must match that enumeration (#60249 catch).
+            const auto expected_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
+                start_core, expected_cores, matmul_core_rect, /*row_wise=*/true);
+            const auto expected_cores_vec =
+                tt::tt_metal::corerange_to_cores(expected_grid, std::nullopt, /*row_wise=*/true);
+            const std::vector<CoreCoord> shard_first_n(shard_cores.begin(), shard_cores.begin() + expected_cores);
+            TT_FATAL(
+                shard_first_n == expected_cores_vec,
+                "{}: first {} row-major cores of sharded in0 grid {} must match factory core set {} "
+                "(row-major from sub-device origin {}, cwsg {}x{}).",
+                config_name,
+                expected_cores,
+                shard_grid,
+                expected_grid,
+                start_core,
+                cwsg.x,
+                cwsg.y);
+        } else {
+            check_tensor_in_grid(input_tensor_a, device_grid_1d);
+        }
         if (!attributes.global_cb.has_value()) {
             check_tensor_in_grid(input_tensor_b, device_grid_1d);
         }
