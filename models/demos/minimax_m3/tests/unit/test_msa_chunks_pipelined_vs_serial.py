@@ -8,7 +8,8 @@ selection and sparse attention run on the compute sub-device, alternating two ga
 must get exactly what the serial ``msa_sp_attention_cache_read`` gives it: the right (slot_id, layer) cache row, a
 gather that has landed, a buffer no later gather has overwritten, and ops confined to a sub-grid that
 reproduce the full-grid arithmetic. The outputs are compared bit for bit, over two windows (the second on
-warm programs) and after a window that aborted mid-schedule.
+warm programs) and after a window that aborted mid-schedule. A TP-deduped index_k cache (rebuilt by its own
+gather route) runs the same schedule.
 """
 
 from dataclasses import replace
@@ -35,8 +36,14 @@ CHUNKS = [(0, 1), (1, 2), (2, 1), (0, 2)]
 
 
 @parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
-@pytest.mark.parametrize("cache_dtype", [ttnn.bfloat16, ttnn.bfloat8_b], ids=["bf16cache", "bf8cache"])
-def test_msa_chunks_pipelined_matches_serial(mesh_device, device_params, cache_dtype, reset_seeds, expect_error):
+@pytest.mark.parametrize(
+    "cache_dtype, index_k_tp_shard",
+    [(ttnn.bfloat16, False), (ttnn.bfloat8_b, False), (ttnn.bfloat8_b, True)],
+    ids=["bf16cache", "bf8cache", "bf8cache-index_k_tp_deduped"],
+)
+def test_msa_chunks_pipelined_matches_serial(
+    mesh_device, device_params, cache_dtype, index_k_tp_shard, reset_seeds, expect_error
+):
     rows, cols = mesh_device.shape
     assert (rows, cols) == (8, 4)
     sp, tp, sp_axis, tp_axis = rows, cols, 0, 1
@@ -77,6 +84,7 @@ def test_msa_chunks_pipelined_matches_serial(mesh_device, device_params, cache_d
         num_users=num_users,
         head_dim=HEAD_DIM,
         cache_dtype=cache_dtype,
+        index_k_tp_shard=index_k_tp_shard,
     )
     chunks = []
     try:

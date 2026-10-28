@@ -253,10 +253,12 @@ def test_attention_packed_vs_alone(mesh_device, device_params, layer_kind, reset
 
 @pytest.mark.timeout(1800)
 @parametrize_mesh_with_fabric(mesh_shapes=[(8, 4)], linear_fabric=True)
-def test_attention_packed_overlap_vs_serial(mesh_device, device_params, reset_seeds, monkeypatch):
+@pytest.mark.parametrize("index_k_tp_shard", [False, True], ids=["index_k_replicated", "index_k_tp_deduped"])
+def test_attention_packed_overlap_vs_serial(mesh_device, device_params, index_k_tp_shard, reset_seeds, monkeypatch):
     """The sparse packed forward with the MSA gather/compute overlap (msa_chunks_pipelined) against the same forward
     with the overlap off: outputs and caches bit for bit. Two cache layers and the attention on the second, so a
-    slot-for-row mix-up in the pipelined gather lands on layer 0's untouched row instead of passing."""
+    slot-for-row mix-up in the pipelined gather lands on layer 0's untouched row instead of passing. With a
+    TP-deduped index_k the window carries its two-leg rebuild as well."""
     rows, cols = tuple(mesh_device.shape)
     assert (rows, cols) == (8, 4)
     layers, layer = 2, 1
@@ -272,7 +274,9 @@ def test_attention_packed_overlap_vs_serial(mesh_device, device_params, reset_se
     results = {}
     for overlap in (True, False):
         monkeypatch.setattr(msa, "MSA_CHUNK_OVERLAP", overlap)
-        kvc = allocate_kv_caches(mesh_device, num_layers=layers, max_seq_len=CAP, num_users=USERS)
+        kvc = allocate_kv_caches(
+            mesh_device, num_layers=layers, max_seq_len=CAP, num_users=USERS, index_k_tp_shard=index_k_tp_shard
+        )
         try:
             for slot, f in fills.items():
                 for a, b, x in f:

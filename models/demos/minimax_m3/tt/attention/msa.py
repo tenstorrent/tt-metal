@@ -58,6 +58,19 @@ def _ensure_dram(t):
     return t
 
 
+def _overlap_kwargs(overlap):
+    """high_bw_all_gather kwargs that confine a gather to ``overlap``'s gather sub-device with its persistent
+    semaphores (an MsaOverlap, see tt/ccl.py); {} outside a window."""
+    if overlap is None:
+        return {}
+    return dict(
+        subdevice_id=overlap.gather_sd_id,
+        sub_core_grids=overlap.gather_cores,
+        ready_semaphore=overlap.ready_semaphore,
+        data_valid_semaphore=overlap.data_valid_semaphore,
+    )
+
+
 def high_bw_sp_gather(
     t, mesh_config, ccl_manager, out_buf, *, input_batch_index=None, gathered_dim_size=None, overlap=None
 ):
@@ -67,14 +80,6 @@ def high_bw_sp_gather(
     bounds the rows moved per rank (rank r still lands at its fixed slot r*rows). ``overlap`` (an
     MsaOverlap, see tt/ccl.py) confines the workers to its gather sub-device with its persistent semaphores,
     so the gather can run beside compute on the other sub-device."""
-    kwargs = {}
-    if overlap is not None:
-        kwargs = dict(
-            subdevice_id=overlap.gather_sd_id,
-            sub_core_grids=overlap.gather_cores,
-            ready_semaphore=overlap.ready_semaphore,
-            data_valid_semaphore=overlap.data_valid_semaphore,
-        )
     return ttnn.experimental.high_bw_all_gather(
         t,
         dim=2,
@@ -83,7 +88,7 @@ def high_bw_sp_gather(
         num_links=ccl_manager.num_links,
         input_batch_index=input_batch_index,
         gathered_dim_size=gathered_dim_size,
-        **kwargs,
+        **_overlap_kwargs(overlap),
     )
 
 
@@ -438,35 +443,48 @@ def _log_index_k_route_once(is_2d, *, sp, tp, rows):
     )
 
 
+def _index_k_route_is_2d():
+    return ttnn.get_fabric_config() in _FABRIC_2D_CONFIGS
+
+
 def _gather_tp_sharded_index_k(
-    index_k_cache, *, cache_row, mesh_config, ccl_manager, tp_axis, cached_len, chunk_local, block_size
+    index_k_cache,
+    bufs,
+    *,
+    cache_row,
+    mesh_config,
+    ccl_manager,
+    tp_axis,
+    cached_len,
+    chunk_local,
+    block_size,
+    overlap,
 ):
     """Rebuild one cache row (slot_id, layer) of the TP-deduped index_k cache as the full context on every chip.
 
-    Each chip holds ``rows = seq_local/tp`` rows (see MiniMaxKVCache). The result is the persistent worst-case
-    buffer ``[1, 1, rows*sp*tp, hd]`` with chip (s, t) at ``(s*tp + t)*rows``: the stripe-major layout the
-    indexer decodes in-kernel with ``block_cyclic_cache_tp_sharded``. Two routes give the same buffer:
+    Each chip holds ``rows = seq_local/tp`` rows (see MiniMaxKVCache). The result is ``bufs["index_k"]``, the
+    persistent worst-case buffer ``[1, 1, rows*sp*tp, hd]`` with chip (s, t) at ``(s*tp + t)*rows``: the
+    stripe-major layout the indexer decodes in-kernel with ``block_cyclic_cache_tp_sharded``. Two routes give
+    the same buffer:
 
       * 2D fabric: one full-mesh snake ``high_bw_all_gather`` (row-major over the mesh IS the sp*tp order),
         moving only the written prefix of every chip.
-      * otherwise: a TP-inner gather (chip t at t*rows inside each SP row), then an SP-outer gather of that.
-        The SP leg has to move every TP stripe's fixed slot up to the last one's prefix, so it carries close
-        to the whole capacity rather than the prefix.
+      * otherwise: a TP-inner gather into ``bufs["index_k_row"]`` (chip t at t*rows inside each SP row), then
+        an SP-outer gather of that. The SP leg has to move every TP stripe's fixed slot up to the last one's
+        prefix, so it carries close to the whole capacity rather than the prefix.
 
-    The gathered tensor aliases the persistent buffers: never deallocate.
+    ``overlap`` (None outside a window) runs the route, both legs, on the gather sub-device. The gathered tensor
+    aliases the persistent buffers: never deallocate.
     """
     device = ccl_manager.mesh_device
     sp_axis = mesh_config.sp_axis
     sp, tp = device.shape[sp_axis], device.shape[tp_axis]
     rows = index_k_cache.shape[2]
-    hd = index_k_cache.shape[3]
     _, n_rows = msa_cache_read_extent(cached_len, chunk_local, sp, block_size, tp=tp)
     assert n_rows <= rows, f"index_k cache read past capacity: {n_rows} > {rows} rows"
-    full = ccl_manager.get_high_bw_gather_buffer(
-        "msa_cache_index_k_tp", (1, 1, rows * sp * tp, hd), index_k_cache.dtype
-    )
+    full = bufs["index_k"]
 
-    is_2d = ttnn.get_fabric_config() in _FABRIC_2D_CONFIGS
+    is_2d = _index_k_route_is_2d()
     _log_index_k_route_once(is_2d, sp=sp, tp=tp, rows=rows)
     if is_2d:
         return ttnn.experimental.high_bw_all_gather(
@@ -477,19 +495,22 @@ def _gather_tp_sharded_index_k(
             num_links=ccl_manager.num_links,
             input_batch_index=cache_row,
             gathered_dim_size=n_rows * sp * tp,
+            **_overlap_kwargs(overlap),
         )
 
-    row = ccl_manager.get_high_bw_gather_buffer("msa_cache_index_k_tp_row", (1, 1, rows * tp, hd), index_k_cache.dtype)
     row = ttnn.experimental.high_bw_all_gather(
         index_k_cache,
         dim=2,
-        output_tensor=row,
+        output_tensor=bufs["index_k_row"],
         cluster_axis=tp_axis,
         num_links=ccl_manager.num_links,
         input_batch_index=cache_row,
         gathered_dim_size=n_rows * tp,
+        **_overlap_kwargs(overlap),
     )
-    return high_bw_sp_gather(row, mesh_config, ccl_manager, full, gathered_dim_size=((tp - 1) * rows + n_rows) * sp)
+    return high_bw_sp_gather(
+        row, mesh_config, ccl_manager, full, gathered_dim_size=((tp - 1) * rows + n_rows) * sp, overlap=overlap
+    )
 
 
 def msa_cache_gather(
@@ -533,11 +554,9 @@ def msa_cache_gather(
         if kv_cache.index_k_tp_axis is None:
             index_k_full = gather("index_k", kv_cache.index_k)
         else:
-            # The two-leg (or full-mesh) rebuild runs on the whole grid; the pipelined path never takes a deduped
-            # cache (msa_overlap_chunks), so this is the serial chain.
-            assert overlap is None and set_idx == 0, "a TP-deduped index_k cache is gathered serially"
             index_k_full = _gather_tp_sharded_index_k(
                 kv_cache.index_k,
+                bufs,
                 cache_row=cache_row,
                 mesh_config=mesh_config,
                 ccl_manager=ccl_manager,
@@ -545,25 +564,36 @@ def msa_cache_gather(
                 cached_len=cached_len,
                 chunk_local=chunk_local,
                 block_size=block_size,
+                overlap=overlap,
             )
     return k_full, v_full, index_k_full, kv_len
 
 
 def msa_gather_buffers(kv_cache, ccl_manager, sp, set_idx=0):
     """Buffer set ``set_idx`` of the persistent worst-case gather buffers for this cache: ``k`` / ``v`` /
-    ``index_k`` -> [1, 1, seq_local*sp, hd], allocated on first use by a full-grid op (so never inside the
-    overlap window)."""
+    ``index_k`` -> [1, 1, seq_local*sp, hd], plus ``index_k_row`` -> [1, 1, rows*tp, hd] (the TP leg's landing)
+    when a TP-deduped index_k is rebuilt over a 1D fabric. Allocated on first use by a full-grid op (so never
+    inside the overlap window)."""
     seq_local = kv_cache.k.shape[2]
-    return {
-        name: ccl_manager.get_high_bw_gather_buffer(
+
+    def buf(name, cache_t, rows):
+        return ccl_manager.get_high_bw_gather_buffer(
             # set 0 keeps the serial path's key, so both paths share those buffers
             f"msa_cache_{name}" if set_idx == 0 else f"msa_cache_{name}/{set_idx}",
-            (1, 1, seq_local * sp, cache_t.shape[3]),
+            (1, 1, rows, cache_t.shape[3]),
             cache_t.dtype,
         )
-        for name, cache_t in (("k", kv_cache.k), ("v", kv_cache.v), ("index_k", kv_cache.index_k))
-        if not (name == "index_k" and kv_cache.index_k_tp_axis is not None)  # deduped: rebuilt by its own route
-    }
+
+    bufs = {"k": buf("k", kv_cache.k, seq_local * sp), "v": buf("v", kv_cache.v, seq_local * sp)}
+    if kv_cache.index_k_tp_axis is None:
+        bufs["index_k"] = buf("index_k", kv_cache.index_k, seq_local * sp)
+        return bufs
+    tp = ccl_manager.mesh_device.shape[kv_cache.index_k_tp_axis]
+    rows = kv_cache.index_k.shape[2]  # seq_local / tp: the rebuild lands the same seq_local*sp rows
+    bufs["index_k"] = buf("index_k_tp", kv_cache.index_k, rows * sp * tp)
+    if not _index_k_route_is_2d():
+        bufs["index_k_row"] = buf("index_k_tp_row", kv_cache.index_k, rows * tp)
+    return bufs
 
 
 def msa_sp_attention_cache_read(
@@ -636,12 +666,9 @@ class MsaChunk:
 def msa_overlap_chunks(cached_lens, kv_cache, mesh_config, ccl_manager):
     """Indices of a packed forward's chunks (given by their ``cached_lens``) that msa_chunks_pipelined takes:
     the warm ones (cached_len > 0) when the overlap is on, a cache exists, at least two are warm and there is
-    an SP axis to gather over, and a TP-replicated index_k cache; [] otherwise, and every chunk then runs its
-    serial chain."""
+    an SP axis to gather over; [] otherwise, and every chunk then runs its serial chain."""
     warm = [i for i, c in enumerate(cached_lens) if c > 0]
     if not (MSA_CHUNK_OVERLAP and kv_cache is not None and len(warm) >= 2):
-        return []
-    if kv_cache.index_k_tp_axis is not None:  # a TP-deduped index_k is rebuilt by a full-grid gather: no window
         return []
     return warm if ccl_manager.mesh_device.shape[mesh_config.sp_axis] >= 2 else []
 
@@ -713,6 +740,7 @@ def msa_chunks_pipelined(
                         topk_blocks=topk_blocks,
                         kv_len=kv_len,
                         overlap=overlap,
+                        index_k_tp_sharded=kv_cache.index_k_tp_axis is not None,
                         **geometry,
                     )
                     with zone("sparse_sdpa"):
