@@ -188,8 +188,17 @@ def patch_llama_weight_loading(monkeypatch):
 
 
 @pytest.mark.requires_device
-@pytest.mark.parametrize("lr_scheduler_type, use_clip_grad_norm", [("constant", False), ("cosine", True)])
-def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path, lr_scheduler_type, use_clip_grad_norm):
+@pytest.mark.parametrize(
+    "lr_scheduler_type, warmup_steps, use_clip_grad_norm, expected_first_lr_scale",
+    [
+        ("constant", 0, False, 1.0),
+        ("cosine", 0, True, 1.0),
+        ("constant_with_warmup", 2, False, 0.5),
+    ],
+)
+def test_grpo_trainer_one_step_smoke(
+    patch_llama_weight_loading, tmp_path, lr_scheduler_type, warmup_steps, use_clip_grad_norm, expected_first_lr_scale
+):
     """One full GRPO optimizer step on a tiny random-init Llama.
 
     Asserts the loop reaches every callback hook, produces finite metrics,
@@ -227,7 +236,7 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path, lr_sc
         temperature=1.0,
         max_completion_length=4,
         num_generations=2,
-        warmup_steps=0,
+        warmup_steps=warmup_steps,
         lr_scheduler_type=lr_scheduler_type,
         use_clip_grad_norm=use_clip_grad_norm,
     )
@@ -296,6 +305,9 @@ def test_grpo_trainer_one_step_smoke(patch_llama_weight_loading, tmp_path, lr_sc
 
     metrics = recorder.last_step_metrics
     assert metrics is not None
+    assert metrics["lr"] == pytest.approx(
+        optimizer_dict["lr"] * expected_first_lr_scale
+    ), "first-step LR does not match the scheduler contract"
     for key in ("reward_mean", "reward_std", "mean_completion_len", "generation_time_s"):
         assert key in metrics, f"missing metric {key}"
         assert np.isfinite(metrics[key]), f"metric {key} is not finite: {metrics[key]}"
@@ -610,10 +622,52 @@ def test_build_lr_scheduler_returns_none_for_constant_lr(lr_scheduler_type, warm
     assert _build_lr_scheduler(_make_muon_with_adamw(), cfg, 4) is None
 
 
-@pytest.mark.parametrize("lr_scheduler_type, warmup_steps", [("constant_with_warmup", 2), ("cosine", 0), ("cosine", 2)])
-def test_build_lr_scheduler_rejects_schedules_for_muon_with_adamw(expect_error, lr_scheduler_type, warmup_steps):
+@pytest.mark.parametrize(
+    "lr_scheduler_type, warmup_steps, expected_first_lr_scale",
+    [("constant_with_warmup", 2, 0.5), ("cosine", 0, 1.0), ("cosine", 2, 0.5)],
+)
+def test_build_lr_scheduler_supports_schedules_for_muon_with_adamw(
+    lr_scheduler_type, warmup_steps, expected_first_lr_scale
+):
     from ttml.trainers.grpo_trainer import _build_lr_scheduler
 
+    optimizer = _make_muon_with_adamw()
+    base_lrs = optimizer.get_group_lrs()
     cfg = GRPOConfig(**{**_HOST_GRPO_CONFIG, "lr_scheduler_type": lr_scheduler_type, "warmup_steps": warmup_steps})
-    with expect_error(ValueError, "does not support LR schedules"):
-        _build_lr_scheduler(_make_muon_with_adamw(), cfg, 4)
+    scheduler = _build_lr_scheduler(optimizer, cfg, 4)
+
+    assert scheduler is not None
+    assert optimizer.get_group_lrs() == pytest.approx([lr * expected_first_lr_scale for lr in base_lrs], abs=1e-9)
+
+
+@pytest.mark.parametrize(
+    "warmup_steps, total_steps, expected_scales",
+    [
+        (0, 6, [1.0, 0.93971, 0.775, 0.55, 0.325, 0.16029, 0.1]),
+        (2, 6, [0.5, 1.0, 1.0, 0.8682, 0.55, 0.2318, 0.1]),
+    ],
+)
+def test_build_lr_scheduler_cosine_with_min_lr_scales_each_group_relatively(warmup_steps, total_steps, expected_scales):
+    from ttml.trainers.grpo_trainer import _build_lr_scheduler
+
+    optimizer = _make_muon_with_adamw()
+    base_lrs = optimizer.get_group_lrs()
+    cfg = GRPOConfig(
+        **{
+            **_HOST_GRPO_CONFIG,
+            "lr_scheduler_type": "cosine_with_min_lr",
+            "warmup_steps": warmup_steps,
+            "min_lr_rate": 0.1,
+        }
+    )
+    scheduler = _build_lr_scheduler(optimizer, cfg, total_steps=total_steps)
+    assert scheduler is not None
+
+    observed_scales = []
+    for step in range(total_steps + 1):
+        group_scales = [lr / base_lr for lr, base_lr in zip(optimizer.get_group_lrs(), base_lrs)]
+        assert group_scales == pytest.approx([group_scales[0]] * len(group_scales), abs=1e-6)
+        observed_scales.append(group_scales[0])
+        if step < total_steps:
+            scheduler.step()
+    assert observed_scales == pytest.approx(expected_scales, abs=2e-3)

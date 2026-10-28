@@ -23,7 +23,7 @@ import torch
 import ttml
 import ttnn
 from safetensors.numpy import save_file
-from ttml.common.schedulers import CosineAnnealingScheduler, LinearScheduler, SequentialScheduler
+from ttml.common.schedulers import CosineAnnealingScheduler, LambdaScheduler, LinearScheduler, SequentialScheduler
 from ttml.common.utils import create_optimizer, no_grad, validate_clip_grad_norm
 
 from .callback import TrainerCallback
@@ -752,13 +752,21 @@ def _build_lr_scheduler(optimizer: Any, cfg: GRPOConfig, total_steps: int) -> Op
             f"or 'constant_with_warmup' with warmup_steps <= 1 (got lr_scheduler_type="
             f"{cfg.lr_scheduler_type!r}, warmup_steps={warmup_steps})."
         )
-    base_lr = optimizer.get_lr()
     warmup = LinearScheduler(optimizer, 1.0 / warmup_steps, 1.0, max(1, warmup_steps - 1)) if warmup_steps > 0 else None
     decay_steps = total_steps - warmup_steps
     if cfg.lr_scheduler_type == "constant_with_warmup" or decay_steps <= 0:
         return warmup
-    min_lr_rate = cfg.min_lr_rate if cfg.lr_scheduler_type == "cosine_with_min_lr" else 0.0
-    decay = CosineAnnealingScheduler(optimizer, decay_steps, base_lr * min_lr_rate)
+    if cfg.lr_scheduler_type == "cosine_with_min_lr":
+        min_lr_rate = float(cfg.min_lr_rate)
+
+        # Keep the floor relative to each group's own base LR (HF semantics).
+        def _cosine_with_floor(step: int) -> float:
+            progress = min(step / decay_steps, 1.0)
+            return min_lr_rate + (1.0 - min_lr_rate) * 0.5 * (1.0 + math.cos(math.pi * progress))
+
+        decay = LambdaScheduler(optimizer, _cosine_with_floor)
+    else:
+        decay = CosineAnnealingScheduler(optimizer, decay_steps, 0.0)
     if warmup is None:
         return decay
     return SequentialScheduler(optimizer, [warmup, decay], [warmup_steps, decay_steps])
