@@ -1,0 +1,145 @@
+{
+  "status": "reduced_native_exactness_and_memory_pass_full64_pending",
+  "scope": "Real decoder layers0/3, B32, four BH devices. Native262144 logical context/table; minimallegal8192tok/row bounded externalpool. Not serving retention/capacity, full-model quality, or clean performance.",
+  "source_commit": "a956bdea622",
+  "flags": {
+    "grouped": 1,
+    "masked": 1,
+    "flat": 1,
+    "shared_control": 0,
+    "shared_candidate": 1
+  },
+  "runtime_cpp_sha256": "afd47e3a3337851b2938ca27e3438ece90d3eb5aa99d78261ef1d9b45b7019d0",
+  "lengths": [
+    1,
+    33,
+    255,
+    256,
+    257,
+    511,
+    512
+  ],
+  "outputs": 8,
+  "exactness": "Complete logical K/V, FP32 recurrent state, BF16 convolution state and logits hashed on all4devices; generated token arrays exact at all7lengths; ragged rows;4stable traces, no recapture.",
+  "comparison": {
+    "status": "pass",
+    "batch": 32,
+    "layers": [
+      0,
+      3
+    ],
+    "all_devices_tokens_logits_and_complete_logical_states_exact": true,
+    "expected_removed_weight_payload_bytes_per_device": 50135040,
+    "measured_allocator_reduction_bytes_per_device": {
+      "after_construction": {
+        "net_reduction": 50135040,
+        "removed_packed_weight_bytes": 50135040,
+        "other_allocation_delta": 0
+      },
+      "after_preparation": {
+        "net_reduction": 49774592,
+        "removed_packed_weight_bytes": 50135040,
+        "other_allocation_delta": -360448
+      }
+    },
+    "limitations": [
+      "Diagnostic tracked timing is not clean headline performance.",
+      "Bounded external request pool does not establish serving B32 retention/capacity.",
+      "Raw allocator deltas include any changed persistent runtime/program allocations."
+    ]
+  },
+  "arms": {
+    "control": {
+      "phases": {
+        "after_construction": {
+          "bytes_per_device": {
+            "decoder_weights_constants": 161399296,
+            "workspace_ccl_sampler": 72141312,
+            "embedding_head_final_norm": 973742080,
+            "active_cache_and_recurrent_state": 168263680,
+            "request_buckets_outputs": 144029696,
+            "native_rope_tables": 67108864,
+            "unitemized_runtime_program_trace": 1015808
+          },
+          "allocator_bytes_per_device": 1587700736,
+          "exact_reconciliation": true
+        },
+        "after_preparation": {
+          "bytes_per_device": {
+            "decoder_weights_constants": 161399296,
+            "workspace_ccl_sampler": 72141312,
+            "embedding_head_final_norm": 973742080,
+            "active_cache_and_recurrent_state": 168263680,
+            "request_buckets_outputs": 144029696,
+            "unitemized_runtime_program_trace": 63311872,
+            "native_rope_tables": 67108864
+          },
+          "allocator_bytes_per_device": 1649996800,
+          "exact_reconciliation": true
+        }
+      },
+      "construction_and_preparation_allocation_event_peak_bytes_per_device": 3259783168,
+      "tracked_diagnostic_median_ttft_ms": 65.30947657302022,
+      "tracked_diagnostic_median_decode_tps_per_user": 256.04969226109995,
+      "timing_scope": "Tracking enabled; real requests, no clean headline performance claim. Candidate was slower in these short diagnostics."
+    },
+    "shared": {
+      "phases": {
+        "after_construction": {
+          "bytes_per_device": {
+            "decoder_weights_constants": 111264256,
+            "workspace_ccl_sampler": 72141312,
+            "embedding_head_final_norm": 973742080,
+            "active_cache_and_recurrent_state": 168263680,
+            "request_buckets_outputs": 144029696,
+            "native_rope_tables": 67108864,
+            "unitemized_runtime_program_trace": 1015808
+          },
+          "allocator_bytes_per_device": 1537565696,
+          "exact_reconciliation": true
+        },
+        "after_preparation": {
+          "bytes_per_device": {
+            "decoder_weights_constants": 111264256,
+            "workspace_ccl_sampler": 72141312,
+            "embedding_head_final_norm": 973742080,
+            "active_cache_and_recurrent_state": 168263680,
+            "request_buckets_outputs": 144029696,
+            "unitemized_runtime_program_trace": 63672320,
+            "native_rope_tables": 67108864
+          },
+          "allocator_bytes_per_device": 1600222208,
+          "exact_reconciliation": true
+        }
+      },
+      "construction_and_preparation_allocation_event_peak_bytes_per_device": 3209615360,
+      "tracked_diagnostic_median_ttft_ms": 67.96456594020128,
+      "tracked_diagnostic_median_decode_tps_per_user": 249.0386205390229,
+      "timing_scope": "Tracking enabled; real requests, no clean headline performance claim. Candidate was slower in these short diagnostics."
+    }
+  },
+  "note": "The original1024tok/row fixture failed the actual native paged_update_cache table-width<=physical-pages guard before correctness. Failed output/log preserved. Native context was retained; physical pool enlarged to the smallest legal aggregate geometry.",
+  "next_gates": [
+    "Final fixture request-allocation windows and measured dynamic trace teardown bytes",
+    "All64-layer control/shared exact states/logits/tokens and allocation owner deltas",
+    "Clean native-chat4096-in128-out B32 timing with tracking/profiler/watcher disabled",
+    "Separate watcher and prompt-correct qualitative evidence before promotion",
+    "Actual CI B32 prefix-retention/capacity probe; native pool fit is not a serving retention guarantee"
+  ],
+  "full64_removed_payload_forecast_bytes_per_device": 1604321280,
+  "full64_measured_saving_bytes_per_device": null,
+  "raw_artifacts": {
+    "reduced-control.json": {
+      "path": "/home/mvasiljev/build/qwen38-swe/memory-prefix/reduced-control.json",
+      "sha256": "2d52e3121a764902277e02c1dbeeccd808189fe5999eec8de9ca99112c495d58"
+    },
+    "reduced-shared.json": {
+      "path": "/home/mvasiljev/build/qwen38-swe/memory-prefix/reduced-shared.json",
+      "sha256": "7e8e24e63449a1d70d8ccecc44e58f4301b2c7e02134495750a3c3124cea469f"
+    },
+    "reduced-comparison.json": {
+      "path": "/home/mvasiljev/build/qwen38-swe/memory-prefix/reduced-comparison.json",
+      "sha256": "9567eeb663ae746621a6dc3f371fb883abe36b57972fdc3691cb6363f12896ff"
+    }
+  }
+}

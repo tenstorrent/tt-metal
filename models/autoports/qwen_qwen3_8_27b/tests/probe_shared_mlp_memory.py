@@ -151,7 +151,18 @@ def main():
             prompts = [
                 (torch.arange(length - (i % 3 if length > 3 else 0)) + 1000 + i * 17).tolist() for i in range(a.batch)
             ]
-            tokens = gen.generate(prompts, a.outputs, stop_on_eos=False, buffered_output=True)
+            ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+            try:
+                tokens = gen.generate(prompts, a.outputs, stop_on_eos=False, buffered_output=True)
+                ttnn.synchronize_device(mesh)
+            finally:
+                graph = ttnn.graph.end_graph_capture()
+            ledger.update(graph)
+            del graph
+            request_memory = memory()
+            reconciled = ledger.snapshot(
+                [], domain=mesh.id(), allocator_bytes=request_memory["allocated"], baseline_bytes=baseline["allocated"]
+            )
             states = {
                 f"{layer.layer_idx}.{field}": digest(tensor)
                 for layer, state in zip(model.layers, cache)
@@ -164,6 +175,12 @@ def main():
                 logits=digest(gen.logits),
                 states=states,
                 generation_metrics=dict(gen.last_generation_metrics),
+                allocation=dict(
+                    allocator=request_memory,
+                    cumulative_event_peak_bytes_per_device=reconciled["event_dram_peak_bytes_per_device"],
+                    exact_allocator_reconciliation=reconciled["exact_allocator_reconciliation"],
+                    scope="Allocation events cover construction, preparation and each completed request through this row; not clean timing",
+                ),
             )
             result["records"].append(record)
             assert trace_ids == {str(k): str(v) for k, v in gen.decode_traces.items()}
@@ -188,12 +205,33 @@ def main():
         result.update(status="fail", error_type=type(e).__name__, error=str(e))
         raise
     finally:
-        target.write_text(json.dumps(result, indent=2) + "\n")
-        if gen is not None:
-            for trace in list(gen.decode_traces.values()) + [gen.sample_trace, gen.buffered_sample_trace]:
-                if trace is not None:
-                    ttnn.release_trace(mesh, trace)
-        ttnn.close_mesh_device(mesh)
+        body_passed = result["status"] == "pass"
+        cleanup_error = None
+        try:
+            if gen is not None:
+                ttnn.synchronize_device(mesh)
+                before_release = memory()
+                released_ids = []
+                for trace in list(gen.decode_traces.values()) + [gen.sample_trace, gen.buffered_sample_trace]:
+                    if trace is not None:
+                        ttnn.release_trace(mesh, trace)
+                        released_ids.append(str(trace))
+                ttnn.synchronize_device(mesh)
+                after_release = memory()
+                result["trace_release"] = dict(
+                    trace_ids=released_ids,
+                    actual_released_dram_bytes_per_device=before_release["allocated"] - after_release["allocated"],
+                    configured_trace_region_bytes=0,
+                    scope="Standalone dynamic traces: allocator delta after releasing only traces at final teardown; not a serving128MiB arena payload measurement",
+                )
+        except BaseException as error:
+            cleanup_error = error
+            result.update(status="fail", cleanup_error=f"{type(error).__name__}: {error}")
+        finally:
+            target.write_text(json.dumps(result, indent=2) + "\n")
+            ttnn.close_mesh_device(mesh)
+        if cleanup_error is not None and body_passed:
+            raise cleanup_error
 
 
 if __name__ == "__main__":

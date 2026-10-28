@@ -1140,7 +1140,7 @@
       "local_profile": "swe_optimization/grouped-fixed-clock-profile-comparison.json"
     },
     "swe-20261028-shared-mlp-candidate": {
-      "status": "default_off_candidate_native_validation_pending",
+      "status": "default_off_reduced_native_exactness_memory_pass_full64_pending",
       "selection": "QWEN38_SHARED_MLP_WEIGHTS=1",
       "supported_context": 262144,
       "capability_reduction": null,
@@ -1149,7 +1149,21 @@
       "expected_removed_weight_payload_bytes_per_device": 1604321280,
       "measured_allocation_delta_bytes_per_device": null,
       "cache_state_dtype_layout_change": false,
-      "validation": "tests/probe_shared_mlp_memory.py and tests/compare_shared_mlp_memory.py; reduced0/3 thenfull64; measured serving capacity and native-long-context revalidation remain pending"
+      "validation": "tests/probe_shared_mlp_memory.py and tests/compare_shared_mlp_memory.py; reduced0/3 thenfull64; measured serving capacity and native-long-context revalidation remain pending",
+      "reduced_native_evidence": "swe_optimization/SHARED_MLP_REDUCED.json",
+      "reduced_native": {
+        "layers": [
+          0,
+          3
+        ],
+        "batch": 32,
+        "table_context": 262144,
+        "external_pool_tokens_per_row": 8192,
+        "removed_packed_weight_bytes_per_device": 50135040,
+        "net_prepared_saving_bytes_per_device": 49774592,
+        "complete_logical_states_logits_tokens_exact_all4devices": true,
+        "clean_performance_status": "pending; short tracked diagnostics were slower"
+      }
     }
   },
   "stage05_prefill_policy": {
