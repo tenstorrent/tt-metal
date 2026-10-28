@@ -21,6 +21,8 @@
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
 
+#include "metal2_host_api/test_helpers/dfb_placement_test_helpers.hpp"
+
 namespace tt::tt_metal::experimental {
 namespace {
 
@@ -418,6 +420,88 @@ TEST_F(ProgramSpecTestQuasar, CPU_DisableImplicitSyncForAllAgreesWithExplicitLis
     auto program = MakeProgramFromSpec(*mesh_device_, spec);
     const uint32_t dfb_id = program.impl().get_dfb_handle("dfb");
     EXPECT_FALSE(program.impl().get_dataflow_buffer(dfb_id)->config.enable_producer_implicit_sync);
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementIgnoresExcludedUnpairedEndpoint) {
+    // A producer without a consumer is accepted on a node excluded from DFB placement.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR);
+    spec.work_units = {
+        MakeMinimalWorkUnit("paired", NodeCoord{0, 0}, {"dm_kernel", "compute_kernel"}),
+        MakeMinimalWorkUnit("lone-producer", NodeCoord{1, 0}, {"dm_kernel"})};
+    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementAllowsUnpairedEndpointsOutsideReservation) {
+    // Disjoint producer and consumer nodes are accepted when DFB placement excludes both.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR);
+    spec.work_units = {
+        MakeMinimalWorkUnit("lone-producer", NodeCoord{0, 0}, {"dm_kernel"}),
+        MakeMinimalWorkUnit("lone-consumer", NodeCoord{1, 0}, {"compute_kernel"})};
+    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({2, 0}));
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementRejectsReservedUnpairedProducer) {
+    // A reserved node with a producer but no consumer is rejected.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR);
+    spec.work_units = {
+        MakeMinimalWorkUnit("paired", NodeCoord{0, 0}, {"dm_kernel", "compute_kernel"}),
+        MakeMinimalWorkUnit("lone-producer", NodeCoord{1, 0}, {"dm_kernel"})};
+    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}, {1, 0}));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("producer but no consumer")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementRejectsReservedUnpairedConsumer) {
+    // A reserved node with a consumer but no producer is rejected.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR);
+    spec.work_units = {
+        MakeMinimalWorkUnit("paired", NodeCoord{0, 0}, {"dm_kernel", "compute_kernel"}),
+        MakeMinimalWorkUnit("lone-consumer", NodeCoord{1, 0}, {"compute_kernel"})};
+    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}, {1, 0}));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("consumer but no producer")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementPreservesBindingCompatibility) {
+    // Mismatched consumer access patterns are rejected even when one consumer is outside DFB placement.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR);
+    auto other = spec.kernels[1];
+    other.unique_id = KernelSpecName{"other_consumer"};
+    other.dfb_bindings[0].access_pattern = DFBAccessPattern::ALL;
+    spec.kernels.push_back(other);
+    spec.work_units.push_back(MakeMinimalWorkUnit("other", NodeCoord{1, 0}, {"other_consumer"}));
+    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("mismatched access_pattern")));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_DFBPlacementDoesNotEnableMultiBinding) {
+    // On Gen1, two producers on a reserved node are rejected when multi-binding is disabled.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = test_helpers::MakeDFBWithTwoGen1Producers();
+    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Multiple same-role kernel instances")));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_DFBPlacementAllowsExplicitGen1MultiBinding) {
+    // On Gen1, two producers on a reserved node are accepted when multi-binding is enabled.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = test_helpers::MakeDFBWithTwoGen1Producers();
+    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
+    spec.dataflow_buffers[0].advanced_options.allow_instance_multi_binding = true;
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
 }
 
 }  // namespace
