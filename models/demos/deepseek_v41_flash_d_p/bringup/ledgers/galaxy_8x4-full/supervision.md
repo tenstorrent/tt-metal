@@ -723,3 +723,8 @@ Open for the owner: dlukic / node access; push; the in-RAM engram slowdown in th
   tt/engram_kv.py, begin_chunk / take_engram_rows in tt/model.py and the ENGRAM_ASYNC block of tt/settings.py (the
   engram code moves back from the 2x2 to the Galaxy for P.6, owner). Anything else shared: coordinate through the owner;
   ids: 2x2 DS41-150..169 / F220..F229 (as ENGRAM_HOST_PATH.md 4a), Galaxy DS41-130..149 / F207..F219. Pushed.
+- 19:20 OWNER: the 4-bit KV runs on the 2x2 (pushes to dnijemcevic/model_bringup_bfp4kv). Galaxy queue after P.6, all
+  independent of the 4-bit work and of the 2x2's files: FIX.9 (HELD until P.6) DS41-132 shared expert x / h as bfp8 in
+  the fused head (precision: above the reference today), then P.4 / P.5 (host time), then the index query to fp4 width
+  (indexer.py only; the index-key cache waits for FIX.8). FIX.8 (integration of the 2x2's work) takes priority whenever
+  the bfp4kv branch is ready. No-device side work: the precision audit hook (rest of F208), F209.
