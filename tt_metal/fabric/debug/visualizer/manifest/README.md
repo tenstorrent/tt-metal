@@ -173,12 +173,19 @@ to update:
 - `tests/scripts/run_fabric_manifest_tests.sh` runs everything that needs no fabric hardware: the device-free unit
 tests, the manifest fixtures on several mock clusters (1D and 2D, Wormhole and Blackhole, one mesh split across two
 ranks, torus galaxies, the tensix mux, VC2, channel trimming's capture and profile, and four Blackhole galaxies as
-express meshes on four ranks), and the schema check on every manifest they write.
+express meshes on four ranks), the schema check on every manifest they write, and the rank check on each run's
+manifests.
 - On hardware, `Fabric1DManifestFixture.*` and `Fabric2DManifestFixture.*` in `fabric_unit_tests` write and check
 manifests from real devices.
 - `tests/tt_metal/tt_fabric/fabric_manifest/check_manifest_schema.py` checks any manifest against the schema, and checks that `types` holds exactly what its schemas reach. It needs `jsonschema`:
   ```bash
   python3 tests/tt_metal/tt_fabric/fabric_manifest/check_manifest_schema.py generated/fabric
+  ```
+- `tests/tt_metal/tt_fabric/fabric_manifest/check_manifest_ranks.py` checks that one run's per-rank manifests fit
+together: every chip is local in exactly one rank, and a router whose peer is on another rank's chip names a router
+that rank wrote, which names it back:
+  ```bash
+  python3 tests/tt_metal/tt_fabric/fabric_manifest/check_manifest_ranks.py generated/fabric
   ```
 
 ## Limits and future work
