@@ -2288,3 +2288,11 @@ Problem: `decide --reject` reverted P.3's model paths but left ~230 lines in ttn
 bindings, test, docs) and INDEX.md - forks every agent may write (F48) are outside the pick's paths; and a full revert
 would also drop the pick's finding (known_issues DS41-131, BREADCRUMBS). Overseer reverted the fork code by hand and
 kept the notes. To do: reject reverts every file the pick changed except the knowledge files.
+
+## F220: a model switch set in the environment is part of a unit's stamp (DeepSeek-V4.1 2x2 engram bfp8 A/B, 2026-10-28)
+
+`DS41_ENGRAM_ROWS=bfp8 verify --tasks L.s4096 L.last L.s55296` printed "reused: same code, kept PASS" for all three
+rungs: the stamp's environment key kept only `BRINGUP_` / `TT_` variables, so the bf16 run's PASS stood in for the
+bfp8 run and the A/B compared a run with itself. `stamps.env_key` now also keeps every prefix a model declares in its
+`tt/settings.py` (`Settings("DS41_", ...)`, found by `stamps.settings_prefixes()`). With no such variable set the key
+is unchanged, so no kept result is invalidated. Selftest: `test_a_model_switch_in_the_environment_changes_the_stamp`.
