@@ -42,9 +42,16 @@ from __future__ import annotations
 
 import torch
 
-from models.experimental.tirex2_forecast.reference import dataflow as df
+Q = 9  # quantiles; head views are [rows, Q * steps], quantile-major (head_view)
 
-Q, P = df.QUANTILES, df.PATCH
+
+def head_view(raw: torch.Tensor, steps: int = 64) -> torch.Tensor:
+    """Kairos head output [rows, 2, 576] (2 decoder tokens x 9 quantiles x 64 steps) -> [rows, 9 * steps]: the
+    quantile-major forecast in normalized space, first `steps` steps (64 at H = 64: decoder token 0 only;
+    128 for pcc_normalized_full, D0 amendment 4)."""
+    R = raw.shape[0]
+    q = raw.reshape(R, 2, Q, 64).permute(0, 2, 1, 3).reshape(R, Q, 128)[..., :steps]
+    return q.reshape(R, -1)
 FLAT_STD = 0.05  # normalized units: 5 % of the series' own scale
 ACTIVE_FRAC = 0.05  # active rows: golden head std >= 5 % of the golden's global std
 
@@ -57,12 +64,12 @@ def pearson(a: torch.Tensor, b: torch.Tensor) -> float:
 
 
 def spread(head: torch.Tensor) -> torch.Tensor:
-    h = head.reshape(*head.shape[:-1], Q, P)
+    h = head.reshape(*head.shape[:-1], Q, head.shape[-1] // Q)
     return (h - h.mean(-2, keepdim=True)).reshape(head.shape)
 
 
 def collapsed(head: torch.Tensor) -> torch.Tensor:
-    h = head.reshape(*head.shape[:-1], Q, P)
+    h = head.reshape(*head.shape[:-1], Q, head.shape[-1] // Q)
     return h.mean(-2, keepdim=True).expand_as(h).reshape(head.shape)
 
 
@@ -72,11 +79,6 @@ def row_pccs(exp: torch.Tensor, got: torch.Tensor) -> torch.Tensor:
     e, g = e - e.mean(1, keepdim=True), g - g.mean(1, keepdim=True)
     den = e.norm(dim=1) * g.norm(dim=1)
     return torch.where(den > 0, (e * g).sum(1) / den.clamp_min(1e-300), torch.zeros_like(den))
-
-
-def forecast_from_head(head: torch.Tensor, loc, scale, horizon: int, target_mask) -> torch.Tensor:
-    q = df.band_calibration(df.head_to_quantiles(head, loc, scale, horizon))
-    return q[target_mask]
 
 
 def active_rows(g_head: torch.Tensor) -> torch.Tensor:
@@ -125,11 +127,19 @@ def gate_metrics(head, g_head, q, g_q, scale_targets) -> dict:
     }
 
 
-def collapsed_metrics(g_head, g_q, loc, scale, horizon, target_mask) -> dict:
-    """The gate metrics of the golden head output with every quantile collapsed to the quantile mean."""
-    c = collapsed(g_head)
-    qc = forecast_from_head(c, loc, scale, horizon, target_mask)
-    return gate_metrics(c, g_head, qc, g_q, scale[target_mask])
+def collapsed_raw(raw: torch.Tensor) -> torch.Tensor:
+    """[rows, 2, 576] with every quantile replaced by the mean over quantiles (per token and step)."""
+    h = raw.reshape(raw.shape[0], 2, Q, 64)
+    return h.mean(2, keepdim=True).expand_as(h).reshape(raw.shape)
+
+
+def collapsed_metrics(g_raw, g_q, post, scale_targets, steps=64) -> dict:
+    """The gate metrics of the golden head output with every quantile collapsed to the quantile mean.
+    post: raw head [rows, 2, 576] -> data-space forecast [series, 9, H] (inverse norm, flip average, clamp)."""
+    c = collapsed_raw(g_raw)
+    m = gate_metrics(head_view(c, steps), head_view(g_raw, steps), post(c), g_q, scale_targets)
+    m["pcc_normalized_full"] = pearson(head_view(g_raw, 128), head_view(c, 128))
+    return m
 
 
 def fmt(m: dict) -> str:
