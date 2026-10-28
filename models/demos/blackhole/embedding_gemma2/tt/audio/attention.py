@@ -41,10 +41,12 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.embedding_gemma2.tt.audio.clippable_linear import ClippableLinear
-from models.demos.blackhole.embedding_gemma2.tt.audio.config import ATTN_BLOCK, AudioAttentionConfig
+from models.demos.blackhole.embedding_gemma2.tt.audio.config import ATTN_BLOCK, AudioAttentionConfig, ClipBounds
+from models.demos.blackhole.embedding_gemma2.tt.audio.linear import audio_linear
 from models.demos.blackhole.embedding_gemma2.tt.audio.program_configs import block_bmm_config
-from models.demos.blackhole.embedding_gemma2.tt.config import compute_kernel_config_norm
-from models.demos.blackhole.embedding_gemma2.tt.weights import as_weight, substate
+from models.demos.blackhole.embedding_gemma2.tt.audio.weights import clip_bounds
+from models.demos.blackhole.embedding_gemma2.tt.config import compute_kernel_config_hifi4, compute_kernel_config_norm
+from models.demos.blackhole.embedding_gemma2.tt.weights import as_weight, linear_weight, substate
 
 CTX = 2 * ATTN_BLOCK  # keys per query block: previous block + own block
 REL_WIDTH = 3 * ATTN_BLOCK  # columns of Q E^T before the shift
@@ -115,22 +117,21 @@ class AudioAttention(LightweightModule):
     def __init__(
         self,
         config: AudioAttentionConfig,
-        q_proj: ClippableLinear,
-        k_proj: ClippableLinear,
-        v_proj: ClippableLinear,
+        wqkv: ttnn.Tensor,
+        qkv_bounds: tuple[ClipBounds, ClipBounds, ClipBounds],
         post: ClippableLinear,
         qscale: ttnn.Tensor,
         rel_keys_t: ttnn.Tensor,
     ):
         super().__init__()
         self.config = config
-        self.q_proj = q_proj
-        self.k_proj = k_proj
-        self.v_proj = v_proj
+        self.wqkv = wqkv
+        self.qkv_bounds = qkv_bounds
         self.post = post
         self.qscale = qscale
         self.rel_keys_t = rel_keys_t
         self.compute_kernel_config = compute_kernel_config_norm()
+        self.proj_kernel_config = compute_kernel_config_hifi4()
 
     @classmethod
     def from_state_dict(
@@ -144,39 +145,72 @@ class AudioAttention(LightweightModule):
         act_dtype=ttnn.bfloat16,
     ) -> "AudioAttention":
         """`state_dict` holds the HF `layers.<i>.self_attn.` sub-state (`.linear.` folded). q/k/v are
-        always fp32; `act_dtype` is the output dtype of `post`, see AudioModel."""
+        always fp32; `act_dtype` is the output dtype of `post`, see AudioModel.
+
+        q / k / v run as one fused projection (weights concatenated to [1024, 3072]) after one input
+        clamp. That needs identical q / k / v input bounds, which holds in all 12 layers of
+        google/embeddinggemma-2 (E5c `bounds.py`); other bounds raise."""
         H = config.hidden_size
         kw = dict(cache_dir=cache_dir)
         f32 = ttnn.float32
-        proj = {
-            p: ClippableLinear.from_state_dict(
-                substate(state_dict, f"{p}_proj"), H, H, device, name=f"{name}.{p}_proj", out_dtype=f32, **kw
-            )
-            for p in "qkv"
-        }
+        subs = {p: substate(state_dict, f"{p}_proj") for p in "qkv"}
+        for p, sd in subs.items():
+            if tuple(sd["weight"].shape) != (H, H):
+                raise ValueError(f"{name}.{p}_proj: expected weight {(H, H)}, got {tuple(sd['weight'].shape)}")
+        bounds = tuple(clip_bounds(subs[p], f"{name}.{p}_proj") for p in "qkv")
+        if len({(b.input_min, b.input_max) for b in bounds}) != 1:
+            raise ValueError(f"{name}: q / k / v input clip bounds differ {bounds}; the fused QKV needs them equal")
+        wqkv = torch.cat([subs[p]["weight"] for p in "qkv"], dim=0)  # [3H, H]
+        wqkv = as_weight(linear_weight(wqkv), device, cache_dir=cache_dir, name=f"{name}.wqkv")
         post = ClippableLinear.from_state_dict(
             substate(state_dict, "post"), H, H, device, name=f"{name}.post", out_dtype=act_dtype, **kw
         )
         pds = state_dict["per_dim_scale"]
         if tuple(pds.shape) != (config.head_dim,):
             raise ValueError(f"{name}.per_dim_scale: expected ({config.head_dim},), got {tuple(pds.shape)}")
-        qscale = (config.q_scale * torch.nn.functional.softplus(pds.float())).repeat(config.num_heads)
-        qscale = as_weight(qscale.reshape(1, 1, 1, H), device, cache_dir=cache_dir, name=f"{name}.qscale", dtype=f32)
+        # per head-dim scale, broadcast over the heads of the [B, H, S, hd] layout
+        qscale = config.q_scale * torch.nn.functional.softplus(pds.float())
+        qscale = as_weight(
+            qscale.reshape(1, 1, 1, config.head_dim), device, cache_dir=cache_dir, name=f"{name}.qscale_hd", dtype=f32
+        )
         relw = state_dict["relative_k_proj.weight"]
         if tuple(relw.shape) != (H, H):
             raise ValueError(f"{name}.relative_k_proj: expected {(H, H)}, got {tuple(relw.shape)}")
         rel_t = as_weight(
             rel_key_matrix(relw, config), device, cache_dir=cache_dir, name=f"{name}.rel_keys_t", dtype=f32
         )
-        return cls(config, proj["q"], proj["k"], proj["v"], post, qscale, rel_t)
+        return cls(config, wqkv, bounds, post, qscale, rel_t)
 
     # ------------------------------------------------------------------ helpers
-    def _heads(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        """[B, 1, S, H*hd] -> [B, H, S, hd]."""
-        B, _, S, _ = x.shape
+    def _qkv_heads(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
+        """x [B, 1, S, 1024] -> scaled q, scaled k, v, each [B, H, S, hd] fp32.
+
+        q = clamp_q(x' Wq) * qscale, k = clamp_k(x' Wk) * k_scale, v = clamp_v(x' Wv) with
+        x' = clamp_in(x): one fused matmul, one head split, and each output clamp applied as the
+        SFPU pre-activation of its scale multiply (same ops, same order as separate clamp + mul)."""
         cfg = self.config
-        r = ttnn.reshape(x, (B, S, cfg.num_heads, cfg.head_dim))  # may alias x: not deallocated here
-        return ttnn.permute(r, (0, 2, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        bq, bk, bv = self.qkv_bounds
+        xc = ttnn.clamp(x, min=bq.input_min, max=bq.input_max, memory_config=dram)
+        qkv = audio_linear(
+            xc, self.wqkv, dtype=ttnn.float32, compute_kernel_config=self.proj_kernel_config, memory_config=dram
+        )
+        ttnn.deallocate(xc)
+        q_r, k_r, v_r = ttnn.experimental.nlp_create_qkv_heads(
+            qkv, num_heads=cfg.num_heads, num_kv_heads=cfg.num_heads, transpose_k_heads=False, memory_config=dram
+        )
+        ttnn.deallocate(qkv)
+
+        def clamp_op(b):
+            return ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH, b.output_min, b.output_max)
+
+        q = ttnn.multiply(q_r, self.qscale, input_tensor_a_activations=[clamp_op(bq)], memory_config=dram)
+        ttnn.deallocate(q_r)
+        k = ttnn.multiply(k_r, cfg.k_scale, input_tensor_a_activations=[clamp_op(bk)], memory_config=dram)
+        ttnn.deallocate(k_r)
+        v = ttnn.clamp(v_r, min=bv.output_min, max=bv.output_max, memory_config=dram)
+        ttnn.deallocate(v_r)
+        return q, k, v
 
     def _rel_shift(self, X: ttnn.Tensor) -> ttnn.Tensor:
         """X [B, M, 32, 96] -> [B, M, 32, 64] with out[i, j] = X[i, 32 - i + j] (row-major view trick)."""
@@ -213,20 +247,7 @@ class AudioAttention(LightweightModule):
             raise ValueError(f"audio attention needs S % {ATTN_BLOCK} == 0, got {S}")
         nb, H, hd = S // ATTN_BLOCK, cfg.num_heads, cfg.head_dim
 
-        q_lin = self.q_proj(x)
-        q_s = ttnn.multiply(q_lin, self.qscale, memory_config=dram)
-        ttnn.deallocate(q_lin)
-        k_lin = self.k_proj(x)
-        k_s = ttnn.multiply(k_lin, cfg.k_scale, memory_config=dram)
-        ttnn.deallocate(k_lin)
-        v_lin = self.v_proj(x)
-
-        q = self._heads(q_s)
-        k = self._heads(k_s)
-        v = self._heads(v_lin)
-        ttnn.deallocate(q_s)
-        ttnn.deallocate(k_s)
-        ttnn.deallocate(v_lin)
+        q, k, v = self._qkv_heads(x)
 
         # relative-position term on the [S, 96] layout, then shifted into the 64-key context
         rel_t = self.rel_keys_t if B == 1 else ttnn.repeat(self.rel_keys_t, ttnn.Shape([B, 1, 1, 1]))
