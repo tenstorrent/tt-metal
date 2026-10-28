@@ -91,6 +91,7 @@ def main():
         requested_outputs=a.outputs,
         capacity_pool_ids=a.capacity_pool_ids,
         capacity_image_digest=os.environ.get("QWEN38_CAPACITY_IMAGE_DIGEST"),
+        capacity_study_id=os.environ.get("QWEN38_CAPACITY_STUDY_ID"),
         stress_cycles=a.cycles,
         configured_trace_region_bytes=trace_region,
         capacity_guards=dict(

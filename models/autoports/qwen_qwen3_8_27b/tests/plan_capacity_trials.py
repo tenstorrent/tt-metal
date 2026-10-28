@@ -4,7 +4,9 @@
 This tool never opens a device or invents an observed maximum. A selected native
 pool still requires the real0.30 serving prefix/lifecycle qualification.
 """
+
 import argparse
+import hashlib
 import json
 from pathlib import Path
 
@@ -30,7 +32,11 @@ def validate_pass(row):
     assert row["environment"]["TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE"] == "0"
     assert all(
         row["environment"][flag] == "1"
-        for flag in ["QWEN38_GROUPED_RECURRENCE", "QWEN38_MASKED_RECURRENCE", "QWEN38_FLAT_PREFILL"]
+        for flag in [
+            "QWEN38_GROUPED_RECURRENCE",
+            "QWEN38_MASKED_RECURRENCE",
+            "QWEN38_FLAT_PREFILL",
+        ]
     )
     ids = row["capacity_pool_ids"]
     assert row["physical_cache_pool"]["actual_bytes_per_device"] == pool_bytes(ids)
@@ -42,32 +48,148 @@ def validate_pass(row):
     assert all(len(r["logits"]) == 4 and r["allocation"]["exact_allocator_reconciliation"] for r in row["records"])
     for phase in ["after_construction", "after_preparation"]:
         assert row[phase]["exact_allocator_reconciliation"]
-        assert row[phase]["independently_reconciled_allocator_domains"] == ["DRAM", "TRACE"]
+        assert row[phase]["independently_reconciled_allocator_domains"] == [
+            "DRAM",
+            "TRACE",
+        ]
     obs = row["capacity_observation"]
     assert obs["minimum_free_from_allocation_events"] >= GUARD
     assert obs["minimum_trace_free_from_allocation_events"] >= 8 * 1024**2
     assert obs["largest_contiguous_free_per_bank"] >= obs["maximum_request_allocation_per_bank"] + FRAGMENT_GUARD
 
 
+def receipt_digest(row):
+    return hashlib.sha256(json.dumps(row, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+
+
+def campaign_identity(row):
+    keys = (
+        "source_sha256",
+        "runtime",
+        "capacity_image_digest",
+        "vllm_distribution_version",
+        "checkpoint_file_sha256",
+        "effective_precision",
+        "capacity_study_id",
+        "capacity_guards",
+        "environment",
+        "shared_mlp_readers",
+        "shared_mlp_cores",
+        "layers",
+        "batch",
+        "native_context",
+        "requested_outputs",
+        "configured_trace_region_bytes",
+        "throw_exception_on_fallback",
+        "layer_types",
+    )
+    return {key: row.get(key) for key in keys}
+
+
+def validate_boundary_contract(row):
+    expected = dict(
+        layers="all64",
+        batch=32,
+        native_context=262144,
+        requested_outputs=128,
+        configured_trace_region_bytes=128 * 1024**2,
+        shared_mlp_readers=1,
+        shared_mlp_cores=80,
+        throw_exception_on_fallback=True,
+    )
+    if any(row.get(k) != value for k, value in expected.items()):
+        raise ValueError("Unsafe boundary changed the registered workload/geometry")
+    if row.get("capacity_guards") != dict(
+        min_normal_free_bytes=512 * 1024**2,
+        fragment_guard_bytes_per_bank=8 * 1024**2,
+        min_trace_free_bytes=8 * 1024**2,
+    ):
+        raise ValueError("Receipt changed registered capacity guards")
+    if row.get("stress_cycles") not in (1, 3):
+        raise ValueError("Unexpected stress cycle contract")
+    pool = row.get("physical_cache_pool", {})
+    n = row["capacity_pool_ids"]
+    actual = n * 17285120 + ((-3 * n) % 8) * 5120 * 16
+    if (
+        pool.get("actual_bytes_per_device") != actual
+        or pool.get("global_ids") != n
+        or pool.get("checkpoint_tokens") != 512
+        or pool.get("unique_snapshot_pools") != 16
+    ):
+        raise ValueError("Unsafe boundary lacks exact physical pool ownership")
+    for phase in ("after_construction", "after_preparation"):
+        allocation = row.get(phase, {})
+        if not allocation.get("exact_allocator_reconciliation") or allocation.get(
+            "independently_reconciled_allocator_domains"
+        ) != ["DRAM", "TRACE"]:
+            raise ValueError("Unsafe boundary lacks reconciled allocator domains")
+    records = row.get("records", [])
+    expected_lengths = [513, 4096, 16384] * row["stress_cycles"]
+    if [r["length"] for r in records] != expected_lengths[: len(records)] or len(records) > len(expected_lengths):
+        raise ValueError("Unsafe boundary changed completed workload prefix")
+    if row.get("status") == "pass" and len(records) != len(expected_lengths):
+        raise ValueError("Passing receipt must complete every registered stress case")
+    if row.get("status") != "pass" and not records:
+        raise ValueError("Unsafe boundary must include a completed stress-case witness")
+    for r in records:
+        if (
+            len(r.get("tokens", [])) != 32
+            or any(len(t) != 128 for t in r["tokens"])
+            or len(r.get("logits", [])) != 4
+            or not r.get("allocation", {}).get("exact_allocator_reconciliation")
+        ):
+            raise ValueError("Unsafe boundary has incomplete completed-request evidence")
+
+
+def known_guard_failure(row):
+    return (
+        row.get("close_mesh_device_returned") is True
+        and not row.get("cleanup_error")
+        and not row.get("close_error")
+        and row.get("error_type") == "AssertionError"
+    ) and any(
+        text in row.get("error", "")
+        for text in (
+            "Transient headroom failed",
+            "TRACE headroom failed",
+            "Fragmentation guard failed",
+        )
+    )
+
+
 def next_trials(receipts, max_attempts=8):
     assert all(r["shared"] in ("0", "1") for r in receipts)
-    identities = [
-        (
-            r["source_sha256"],
-            r["runtime"],
-            r.get("capacity_image_digest"),
-            r.get("vllm_distribution_version"),
-            r.get("checkpoint_file_sha256"),
+    identities = [campaign_identity(r) for r in receipts]
+    assert not identities or all(value == identities[0] for value in identities), "Unmatched campaign identity"
+    # Inspect every receipt before reducing repeated trials at an ID. A later
+    # successful retry cannot erase an unexplained crash or unknown failure.
+    unknown = [
+        dict(
+            ids=r["capacity_pool_ids"],
+            shared=r["shared"],
+            error=r.get("error", ""),
+            receipt_sha256=receipt_digest(r),
         )
         for r in receipts
+        if r["status"] != "pass" and not known_guard_failure(r)
     ]
-    assert not identities or all(value == identities[0] for value in identities), "Unmatched source/runtime"
+    if unknown:
+        return {
+            "blocked": dict(
+                status="needs_owner_review",
+                issues=unknown,
+                no_device_trials_may_continue=True,
+            )
+        }
     witness = {}
     for row in receipts:
-        if row["status"] != "pass":
-            continue
-        validate_pass(row)
-        for record in row["records"]:
+        if row["status"] == "pass":
+            validate_pass(row)
+        # Completed requests remain correctness witnesses even when a later
+        # headroom check fails in the same receipt.
+        for record in row.get("records", []):
+            if not all(key in record for key in ("length", "input_sha256", "tokens", "logits")):
+                continue
             key = record["length"]
             value = (record["input_sha256"], record["tokens"], record["logits"])
             assert (
@@ -87,7 +209,11 @@ def next_trials(receipts, max_attempts=8):
             error = row.get("error", "")
             if not row.get("close_mesh_device_returned") or not any(
                 text in error
-                for text in ["Transient headroom failed", "TRACE headroom failed", "Fragmentation guard failed"]
+                for text in [
+                    "Transient headroom failed",
+                    "TRACE headroom failed",
+                    "Fragmentation guard failed",
+                ]
             ):
                 result[shared] = dict(status="needs_owner_review", ids=n, error=error)
                 break
@@ -107,11 +233,15 @@ def next_trials(receipts, max_attempts=8):
             high = min((n for n in failures if n > low), default=None)
             if high == low + 1:
                 if effective[low]["stress_cycles"] == 3:
+                    validate_boundary_contract(effective[high])
                     result[shared] = dict(
                         status="native_max_safe_verified_at_one_ID_boundary",
                         ids=low,
                         actual_physical_cache_bytes_per_device=pool_bytes(low),
                         next_ID_failed_same_guards=high,
+                        selected_receipt_sha256=receipt_digest(effective[low]),
+                        unsafe_receipt_sha256=receipt_digest(effective[high]),
+                        campaign_identity=campaign_identity(effective[low]),
                         requires_actual_serving_qualification=True,
                     )
                     continue
@@ -124,7 +254,10 @@ def next_trials(receipts, max_attempts=8):
                 step = max(1, min(128, margin // (PER_ID + 4 * 139264 + 65536)))
                 n, cycles = low + step, 1
         if len(arm) >= max_attempts:
-            result[shared] = dict(status="bounded_search_incomplete", largest_tested_pass=max(passing, default=None))
+            result[shared] = dict(
+                status="bounded_search_incomplete",
+                largest_tested_pass=max(passing, default=None),
+            )
             continue
         result[shared] = dict(
             status="next_native_trial",
