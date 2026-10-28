@@ -42,7 +42,7 @@ inline uint32_t relay_affine_prefix_sender_slots(uint32_t key_tiles, tt::ARCH ar
 
 // Legacy program descriptors, as select_final_carry's: the metal2 ProgramSpec cannot yet open fabric connections.
 struct RelayAffinePrefixProgramFactory {
-    // One program per coordinate: each sends to its own successor on the sequence-parallel ring.
+    // One program per coordinate: each sends to its own successor along the sequence-parallel axis.
     static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
         const RelayAffinePrefixParams&,
         const RelayAffinePrefixInputs&,
