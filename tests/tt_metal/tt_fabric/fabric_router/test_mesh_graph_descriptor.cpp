@@ -3152,7 +3152,7 @@ const std::string kGptOssRing = R"proto(
       edges { src: "s0" dst: "s1" }
       edges { src: "s1" dst: "s2" }
       edges { src: "s2" dst: "s3" }
-      edges { src: "s3" dst: "s0" }
+      edges { src: "s3" dst: "s0" loopback: true }
     }
 )proto";
 
@@ -3168,7 +3168,8 @@ std::string llama_8b_pod_pipeline(const int wide = 8, const int narrow = 32) {
         out << "  stages { id: \"s" << stage << "\" label: \"Token1x2\" shape { dims: [ 1, 2 ] } }\n";
     }
     for (int stage = 0; stage < stages; ++stage) {
-        out << "  edges { src: \"s" << stage << "\" dst: \"s" << (stage + 1) % stages << "\" }\n";
+        out << "  edges { src: \"s" << stage << "\" dst: \"s" << (stage + 1) % stages << "\""
+            << (stage + 1 == stages ? " loopback: true" : "") << " }\n";
     }
     out << "}\n";
     return out.str();
@@ -3267,7 +3268,7 @@ void expect_pipeline_rejected(const std::string& pipelines, const std::string& r
 
 namespace tt::tt_fabric::fabric_router_tests {
 
-// A closing edge back to an earlier stage is a ring, and it is kept.
+// A closing edge marked loopback makes a ring, and the mark is kept.
 TEST(MeshGraphDescriptorTests, GptOssRingParsesAndIsReadable) {
     MeshGraphDescriptor desc(mgd_with_pipelines(kGptOssRing));
     ASSERT_TRUE(desc.has_pipeline_descriptors());
@@ -3284,8 +3285,11 @@ TEST(MeshGraphDescriptorTests, GptOssRingParsesAndIsReadable) {
     ASSERT_EQ(pipeline.edges.size(), 4u);
     EXPECT_EQ(pipeline.edges[0].src, "s0");
     EXPECT_EQ(pipeline.edges[0].dst, "s1");
+    EXPECT_FALSE(pipeline.edges[0].loopback);
+    EXPECT_FALSE(pipeline.edges[2].loopback);
     EXPECT_EQ(pipeline.edges[3].src, "s3");
     EXPECT_EQ(pipeline.edges[3].dst, "s0");
+    EXPECT_TRUE(pipeline.edges[3].loopback);
 }
 
 // Stage count is not limited, and stages in one pipeline may have different shapes.
@@ -3321,7 +3325,7 @@ TEST(MeshGraphDescriptorTests, JointStageShapeParses) {
             shape { dims: [ 4, 4 ] }
           }
           edges { src: "s0" dst: "s7" }
-          edges { src: "s7" dst: "s0" }
+          edges { src: "s7" dst: "s0" loopback: true }
         }
     )proto";
     MeshGraphDescriptor desc(mgd_with_pipelines(pipeline));
@@ -3379,9 +3383,9 @@ TEST(MeshGraphDescriptorTests, DflashForkWithFabricReturnsParses) {
           }
           edges { src: "router" dst: "target0" }
           edges { src: "target0" dst: "target1" }
-          edges { src: "target1" dst: "router" }
+          edges { src: "target1" dst: "router" loopback: true }
           edges { src: "router" dst: "draft0" }
-          edges { src: "draft0" dst: "router" }
+          edges { src: "draft0" dst: "router" loopback: true }
         }
     )proto";
     MeshGraphDescriptor desc(text_proto);
@@ -3576,7 +3580,7 @@ TEST(MeshGraphDescriptorTests, DeadEndBranchParses) {
           }
           edges { src: "s0" dst: "s1" }
           edges { src: "s0" dst: "s2" }
-          edges { src: "s1" dst: "s0" }
+          edges { src: "s1" dst: "s0" loopback: true }
         }
     )proto";
     MeshGraphDescriptor desc(mgd_with_pipelines(pipeline));
@@ -3770,6 +3774,111 @@ TEST(MeshGraphDescriptorTests, EdgePolicyRelaxedIsRejected) {
         "STRICT");
 }
 
+// A cycle needs one edge marked loopback, because the edges not marked loopback must have no cycle.
+TEST(MeshGraphDescriptorTests, RejectsRingWithoutLoopback) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "unmarked_ring"
+              stages {
+                id: "s0"
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: "s1"
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: "s2"
+                shape { dims: [ 4, 2 ] }
+              }
+              edges { src: "s0" dst: "s1" }
+              edges { src: "s1" dst: "s2" }
+              edges { src: "s2" dst: "s0" }
+            }
+        )proto",
+        "pipeline 'unmarked_ring': cycle s0 -> s1 -> s2 -> s0 has no loopback edge; mark one of its edges loopback: "
+        "true");
+}
+
+// Each cycle needs its own loopback edge. Here the second return to the router is not marked.
+TEST(MeshGraphDescriptorTests, RejectsForkWithOneUnmarkedReturn) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "fork"
+              stages {
+                id: "router"
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: "target"
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: "draft"
+                shape { dims: [ 4, 2 ] }
+              }
+              edges { src: "router" dst: "target" }
+              edges { src: "target" dst: "router" loopback: true }
+              edges { src: "router" dst: "draft" }
+              edges { src: "draft" dst: "router" }
+            }
+        )proto",
+        "pipeline 'fork': cycle router -> draft -> router has no loopback edge");
+}
+
+// A loopback edge must close a cycle: its dst reaches its src over the other edges.
+TEST(MeshGraphDescriptorTests, RejectsLoopbackThatClosesNoCycle) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "chain"
+              stages {
+                id: "s0"
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: "s1"
+                shape { dims: [ 4, 2 ] }
+              }
+              edges { src: "s0" dst: "s1" loopback: true }
+            }
+        )proto",
+        "pipeline 'chain': loopback edge s0 -> s1 closes no cycle; s1 does not reach s0 over the other edges");
+}
+
+// The loopback edge may be any edge of the cycle, and a repeated loopback edge is another channel.
+TEST(MeshGraphDescriptorTests, LoopbackOnAnyEdgeOfTheCycleParses) {
+    MeshGraphDescriptor desc(mgd_with_pipelines(R"proto(
+        pipeline_descriptors {
+          name: "ring"
+          stages {
+            id: "s0"
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: "s1"
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: "s2"
+            shape { dims: [ 4, 2 ] }
+          }
+          edges { src: "s0" dst: "s1" }
+          edges { src: "s1" dst: "s2" loopback: true }
+          edges { src: "s1" dst: "s2" loopback: true }
+          edges { src: "s2" dst: "s0" }
+        }
+    )proto"));
+    const PipelineDescriptorData& pipeline = desc.pipeline_descriptors().front();
+    ASSERT_EQ(pipeline.edges.size(), 4u);
+    EXPECT_FALSE(pipeline.edges[0].loopback);
+    EXPECT_TRUE(pipeline.edges[1].loopback);
+    EXPECT_TRUE(pipeline.edges[2].loopback);
+    EXPECT_FALSE(pipeline.edges[3].loopback);
+}
+
 // An unknown field, a channel policy, and a comment are not pipeline-edge checks.
 TEST(MeshGraphDescriptorTests, UnknownFieldElsewhereStillParses) {
     const std::string text_proto = R"proto(
@@ -3833,7 +3942,7 @@ const std::string kMergeRing = R"proto(
         shape { dims: [ 2, 2 ] }
       }
       edges { src: "s0" dst: "s1" }
-      edges { src: "s1" dst: "s0" policy: STRICT }
+      edges { src: "s1" dst: "s0" policy: STRICT loopback: true }
     }
 )proto";
 
@@ -4052,7 +4161,7 @@ TEST(MeshGraphDescriptorTests, TierBRejectsTooManyCrossings) {
           }
           edges { src: "s0" dst: "s1" }
           edges { src: "s0" dst: "s1" }
-          edges { src: "s1" dst: "s0" }
+          edges { src: "s1" dst: "s0" loopback: true }
         }
     )proto";
     EXPECT_THAT(
@@ -4198,7 +4307,8 @@ std::string subtorus_8stage_with_ring(const bool drop_closing_connection) {
         pipeline << "  stages { id: \"s" << stage << "\" shape { dims: [ 4, 4 ] } }\n";
     }
     for (int stage = 0; stage < 8; ++stage) {
-        pipeline << "  edges { src: \"s" << stage << "\" dst: \"s" << (stage + 1) % 8 << "\" }\n";
+        pipeline << "  edges { src: \"s" << stage << "\" dst: \"s" << (stage + 1) % 8 << "\""
+                 << (stage + 1 == 8 ? " loopback: true" : "") << " }\n";
     }
     pipeline << "}\n";
     return text + pipeline.str();
@@ -4252,7 +4362,7 @@ TEST(MeshGraphDescriptorTests, TierBRejectsTooManyCrossingsBetweenPods) {
                     shape { dims: [ 2, 4 ] }
                   }
                   edges { src: "s0" dst: "s1" }
-                  edges { src: "s1" dst: "s0" }
+                  edges { src: "s1" dst: "s0" loopback: true }
                 }
             )proto"));
         }),
@@ -4295,7 +4405,8 @@ TEST(MeshGraphDescriptorTests, TierBAcceptsWhenTheSearchRunsOutOfSteps) {
         text_proto << "  stages { id: \"s" << stage << "\" shape { dims: [ 2, 4 ] } }\n";
     }
     for (int stage = 0; stage < kMeshes; ++stage) {
-        text_proto << "  edges { src: \"s" << stage << "\" dst: \"s" << (stage + 1) % kMeshes << "\" }\n";
+        text_proto << "  edges { src: \"s" << stage << "\" dst: \"s" << (stage + 1) % kMeshes << "\""
+                   << (stage + 1 == kMeshes ? " loopback: true" : "") << " }\n";
     }
     text_proto << "}\n";
     EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto.str()));

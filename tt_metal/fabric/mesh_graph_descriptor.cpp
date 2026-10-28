@@ -2811,7 +2811,8 @@ void MeshGraphDescriptor::populate_pipeline_descriptors() {
         }
         record.edges.reserve(static_cast<std::size_t>(pipeline.edges_size()));
         for (const auto& edge : pipeline.edges()) {
-            record.edges.push_back(PipelineDescriptorData::Edge{.src = edge.src(), .dst = edge.dst()});
+            record.edges.push_back(
+                PipelineDescriptorData::Edge{.src = edge.src(), .dst = edge.dst(), .loopback = edge.loopback()});
         }
         pipeline_descriptors_.push_back(std::move(record));
     }
@@ -2991,6 +2992,81 @@ void MeshGraphDescriptor::validate_pipeline_descriptors(
                     edge.src(),
                     edge.dst(),
                     proto::Policy_Name(edge.policy())));
+            }
+        }
+
+        // The resolver orders stages along the edges not marked loopback, so those edges must have no cycle.
+        // Edges already reported above are left out.
+        std::unordered_map<std::string, std::vector<std::string>> forward;
+        for (const auto& edge : pipeline.edges()) {
+            if (!edge.loopback() && ids.contains(edge.src()) && ids.contains(edge.dst()) && edge.src() != edge.dst()) {
+                forward[edge.src()].push_back(edge.dst());
+            }
+        }
+        enum class Visit { kNew, kOnPath, kDone };
+        std::unordered_map<std::string, Visit> visit;
+        std::vector<std::string> path;
+        std::optional<std::string> cycle;
+        const auto find_cycle = [&](auto&& self, const std::string& stage) -> void {
+            visit[stage] = Visit::kOnPath;
+            path.push_back(stage);
+            for (const std::string& next : forward[stage]) {
+                if (cycle.has_value()) {
+                    return;
+                }
+                if (visit[next] == Visit::kOnPath) {
+                    const auto start = std::find(path.begin(), path.end(), next);
+                    std::string text;
+                    for (auto it = start; it != path.end(); ++it) {
+                        text += *it + " -> ";
+                    }
+                    cycle = text + next;
+                    return;
+                }
+                if (visit[next] == Visit::kNew) {
+                    self(self, next);
+                }
+            }
+            path.pop_back();
+            visit[stage] = Visit::kDone;
+        };
+        for (const auto& stage : pipeline.stages()) {
+            if (!cycle.has_value() && visit[stage.id()] == Visit::kNew) {
+                find_cycle(find_cycle, stage.id());
+            }
+        }
+        if (cycle.has_value()) {
+            error_messages.push_back(fmt::format(
+                "pipeline '{}': cycle {} has no loopback edge; mark one of its edges loopback: true",
+                pipeline.name(),
+                *cycle));
+        }
+
+        // A loopback edge must close a cycle: its dst reaches its src over the other edges.
+        for (const auto& edge : pipeline.edges()) {
+            if (!edge.loopback() || !ids.contains(edge.src()) || !ids.contains(edge.dst()) ||
+                edge.src() == edge.dst()) {
+                continue;
+            }
+            std::unordered_set<std::string> reached = {edge.dst()};
+            std::vector<std::string> frontier = {edge.dst()};
+            while (!frontier.empty() && !reached.contains(edge.src())) {
+                const std::string stage = frontier.back();
+                frontier.pop_back();
+                for (const std::string& next : forward[stage]) {
+                    if (reached.insert(next).second) {
+                        frontier.push_back(next);
+                    }
+                }
+            }
+            if (!reached.contains(edge.src())) {
+                error_messages.push_back(fmt::format(
+                    "pipeline '{}': loopback edge {} -> {} closes no cycle; {} does not reach {} over the other edges",
+                    pipeline.name(),
+                    edge.src(),
+                    edge.dst(),
+                    edge.dst(),
+                    edge.src()));
             }
         }
     }
