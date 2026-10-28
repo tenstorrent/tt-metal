@@ -585,10 +585,10 @@ def _nd_dram_sharded(shard_shape):
     return ttnn.MemoryConfig(ttnn.BufferType.DRAM, spec)
 
 
-def _l1_height_sharded(shard_height, shard_width, num_cores):
+def _l1_sharded(memory_layout, shard_height, shard_width, num_cores):
     cores = ttnn.num_cores_to_corerangeset(num_cores, ttnn.CoreCoord(8, 8), row_wise=True)
     return ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        memory_layout,
         ttnn.BufferType.L1,
         ttnn.ShardSpec(cores, (shard_height, shard_width), ttnn.ShardOrientation.ROW_MAJOR),
     )
@@ -596,7 +596,7 @@ def _l1_height_sharded(shard_height, shard_width, num_cores):
 
 # 8 devices on a line and a ring; small shapes run multicast, large ones unicast. Slices that start mid-row (11 tiles x 7
 # rows per device), 256 B row-major rows, a row-major gather on dim 0, an ND-sharded DRAM output with each device's
-# stripe in one bank, and a height-sharded L1 input.
+# stripe in one bank, a height-sharded L1 input, and 192 B row-major rows resharded into 256 B output pages.
 @skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(7)
 @pytest.mark.parametrize(
@@ -613,7 +613,27 @@ def _l1_height_sharded(shard_height, shard_width, num_cores):
             _nd_dram_sharded([1, 1, 64, 1024]),
             _nd_dram_sharded([1, 1, 64, 1024]),
         ),
-        ([1, 1, 2048, 1024], 3, ttnn.TILE_LAYOUT, _l1_height_sharded(32, 128, 64), ttnn.DRAM_MEMORY_CONFIG),
+        (
+            [1, 1, 2048, 1024],
+            3,
+            ttnn.TILE_LAYOUT,
+            _l1_sharded(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, 32, 128, 64),
+            ttnn.DRAM_MEMORY_CONFIG,
+        ),
+        (
+            [1, 1, 64, 768],
+            3,
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.DRAM_MEMORY_CONFIG,
+            _l1_sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, 64, 128, 6),
+        ),
+        (
+            [1, 1, 2048, 768],
+            3,
+            ttnn.ROW_MAJOR_LAYOUT,
+            ttnn.DRAM_MEMORY_CONFIG,
+            _l1_sharded(ttnn.TensorMemoryLayout.WIDTH_SHARDED, 2048, 128, 6),
+        ),
     ],
     ids=[
         "mid_row_small",
@@ -622,6 +642,8 @@ def _l1_height_sharded(shard_height, shard_width, num_cores):
         "rm_dim0",
         "nd_dram_stripe_per_bank",
         "l1_height_sharded_in",
+        "rm_reshard_3_to_4_small",
+        "rm_reshard_3_to_4_large",
     ],
 )
 @pytest.mark.parametrize("enable_trace", [True, False], ids=["trace", "non-trace"])
@@ -699,3 +721,39 @@ def test_all_gather_persistent_output_overlap(bh_1d_mesh_device, ag_output_shape
     for i, capture in enumerate(captures):
         for d, device_tensor in enumerate(ttnn.get_device_tensors(capture)):
             assert torch.equal(ttnn.to_torch(device_tensor), goldens[i]), f"iteration {i}: device {d} mismatch"
+
+
+# A persistent output in another memory than the memory_config (unset here, so the input's L1): the op builds for the
+# output it writes. 16 B L1 rows into 128 B DRAM rows only multicast can carry (the unicast relay would re-read its DRAM
+# output at the 16 B L1 alignment), at a size that would otherwise pick unicast.
+@skip_for_wormhole_b0()
+@skip_for_n_or_less_dev(7)
+@pytest.mark.parametrize(
+    "device_params",
+    [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}, {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
+    indirect=True,
+    ids=["line", "ring"],
+)
+def test_all_gather_persistent_output_memory(bh_1d_mesh_device):
+    mesh_device = bh_1d_mesh_device
+    shape = [1, 1, 65536, 64]
+    golden = torch.randn(shape, dtype=torch.bfloat16)
+    mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(3, None), mesh_shape=tuple(mesh_device.shape))
+    tt_input = ttnn.from_torch(
+        golden,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=mesh_mapper,
+    )
+    output = ttnn.from_torch(
+        torch.zeros(shape, dtype=torch.bfloat16),
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    ttnn.all_gather(tt_input, dim=3, cluster_axis=0, output_tensor=output)
+    ttnn.synchronize_device(mesh_device)
+    for d, device_tensor in enumerate(ttnn.get_device_tensors(output)):
+        assert torch.equal(ttnn.to_torch(device_tensor), golden), f"device {d} mismatch"

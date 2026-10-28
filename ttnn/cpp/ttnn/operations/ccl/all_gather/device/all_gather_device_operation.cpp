@@ -252,6 +252,10 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
     const AllGatherParams& args, const AllGatherInputs& tensor_args) {
     // Pick the kernel algorithm based on limitations and heuristics
     bool use_unicast = false;
+    // The factories build for the output tensor itself, and a persistent one may live in another memory.
+    const auto& output_spec = tensor_args.persistent_output_tensor.has_value()
+                                  ? tensor_args.persistent_output_tensor->tensor_spec()
+                                  : args.output_spec;
     if (args.is_true_2d()) {
         // Limitation: Unicast algorithm currently does not support true 2D topologies
         use_unicast = false;
@@ -267,7 +271,7 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
         use_unicast = false;
     } else if (!compute_walk_geometry(
                     tensor_args.input_tensor,
-                    args.output_spec,
+                    output_spec,
                     args.dim_from_end,
                     args.num_devices,
                     args.packet_size,
@@ -304,7 +308,7 @@ AllGatherDeviceOperation::program_factory_t AllGatherDeviceOperation::select_pro
                 use_unicast = busiest_link_bytes >= (is_ring ? ring_unicast_bytes : line_unicast_bytes);
                 // Except when every device's output stripe sits in one bank: the unicast relay's writes and re-reads
                 // all queue on it (ND-sharded DRAM, 8 MB: multicast 1.3-1.4x faster).
-                use_unicast = use_unicast && !stripe_in_one_bank(args.output_spec, args.dim_from_end, args.num_devices);
+                use_unicast = use_unicast && !stripe_in_one_bank(output_spec, args.dim_from_end, args.num_devices);
                 break;
             }
             default: break;  // uncalibrated arch

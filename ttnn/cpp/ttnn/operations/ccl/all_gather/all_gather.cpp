@@ -12,7 +12,6 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/tt_align.hpp>
 
-#include <algorithm>
 #include <numeric>
 
 namespace ttnn {
@@ -73,37 +72,21 @@ std::pair<bool, std::string> use_composite_all_gather(
     const uint32_t input_aligned_page_size = input_tensor.buffer()->aligned_page_size();
     const uint32_t output_page_size = output_spec.compute_page_size_bytes();
 
-    // The factory derives chunks-per-page (concat) and split-factor (split) with a truncating
-    // division, so a non-integer page ratio would silently mis-place every write.
-    if (std::max(input_page_size, output_page_size) % std::min(input_page_size, output_page_size) != 0) {
-        return {
-            true,
-            fmt::format(
-                "input and output rows are {} B and {} B; one shard width must be a whole multiple of the other",
-                input_page_size,
-                output_page_size)};
-    }
-    // concat and split move data at content granularity, so the input page must have no padding.
-    if (input_page_size != output_page_size && input_page_size != input_aligned_page_size) {
-        return {
-            true,
-            fmt::format(
-                "input rows ({} B) are padded to the {} B memory alignment; resharding needs unpadded rows",
-                input_page_size,
-                input_tensor.buffer()->alignment())};
-    }
     // NoC write alignment (NOC_{L1,DRAM}_WRITE_ALIGNMENT_BYTES): 16 B on Wormhole/Blackhole, 1 B on Quasar.
     // Ideally this should be queried (Hal::get_write_alignment(HalMemType) is currently unreachable from TTNN).
-    // split cuts each input page into output rows read from the input, so they also keep its read alignment.
+    // Resharding (input and output rows differ) cuts rows anywhere on a quantum that is a multiple of the NoC write
+    // alignment and of the input's read alignment, so both rows must be multiples of it (then the input is unpadded).
     constexpr uint32_t noc_write_alignment = 16;
-    const uint32_t split_alignment = std::lcm(noc_write_alignment, input_tensor.buffer()->alignment());
-    if (input_page_size > output_page_size && output_page_size % split_alignment != 0) {
+    const uint32_t cut_alignment = std::lcm(noc_write_alignment, input_tensor.buffer()->alignment());
+    if (input_page_size != output_page_size &&
+        (input_page_size % cut_alignment != 0 || output_page_size % cut_alignment != 0)) {
         return {
             true,
             fmt::format(
-                "output is sharded finer than the input; its rows ({} B) must be a multiple of {} B",
+                "input and output rows are {} B and {} B; resharding needs both to be multiples of {} B",
+                input_page_size,
                 output_page_size,
-                split_alignment)};
+                cut_alignment)};
     }
     // matched and concat write a whole *aligned* input page into each output page slot, so the slot
     // must be at least that large. They differ only across memories with unequal alignments.
