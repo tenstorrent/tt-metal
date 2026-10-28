@@ -27,8 +27,7 @@ void kernel_main() {
     constexpr uint32_t TILE = 4096;
 
     const uint32_t r = get_arg_val<uint32_t>(0);
-    const uint32_t nv0 = get_arg_val<uint32_t>(1);  // valid tokens of group 0 / 1 (token g*TG + tl)
-    const uint32_t nv1 = get_arg_val<uint32_t>(2);
+    // valid tokens of group g (token g*TG + tl): runtime args 1 + g (G = NGRP up to 4)
     const uint32_t x_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t w_addr = get_common_arg_val<uint32_t>(1);
 
@@ -45,7 +44,7 @@ void kernel_main() {
         DeviceZoneScopedN("PR_zerodone");
     }
     for (uint32_t g = 0; g < NGRP; ++g) {
-        const uint32_t nv = g == 0 ? nv0 : nv1;
+        const uint32_t nv = get_arg_val<uint32_t>(1 + g);
         for (uint32_t j = 0; j < TPJ; ++j) {
             for (uint32_t tl = 0; tl < nv; ++tl) {
                 const uint32_t page = (g * TG + tl) * NT + r * TPJ + j;

@@ -200,10 +200,10 @@ class DSV41MHC:
         return mhc_post(part, self.consts10, x.shape[0], self._w.iters, self._w.eps, self.sq_eps, self.post_fidelity)
 
     def pre_fused_ok(self, T):
-        """mixes + collapse + norm of a sub-block as ONE program (mhc_pre.py): T = 1..8 token rows, T-aware kernels, DSV41_MHC_PRE=1 (default)"""
+        """mixes + collapse + norm of a sub-block as ONE program (mhc_pre.py): T = 1..8 token rows (9..16 with DSV41_MHC_PRE16=1), T-aware kernels, DSV41_MHC_PRE=1 (default)"""
         return (
             _taware()
-            and T <= 8
+            and (T <= 8 or (T <= 16 and _flag("DSV41_MHC_PRE16")))
             and _flag("DSV41_MHC_PRE", "1")
             and _flag("DSV41_MHC_MIXES_V2", "1")
             and _flag("DSV41_MHC_CN_FUSED", "1")
@@ -213,9 +213,11 @@ class DSV41MHC:
         """== (self.mixes(x), self.collapse_norm[_rm](x, pre_in, w, eps)) in one program, bit-identical:
         -> ((pre, post, comb), h) or ((pre, post, comb), h, h_tok) if emit_rm."""
         T = int(x.shape[0])
-        Ti = 4 if T <= 4 else 8
-        tg = 4 if Ti == 8 and os.environ.get("DSV41_MHC_MIXES_T4", "1") == "1" else 8
-        plan = proj_plan(Ti, self.dim, self.device, tg, T)
+        Ti = (
+            4 if T <= 4 else 8 if T <= 8 else -(-T // 4) * 4
+        )  # T = 9..16 (DSV41_MHC_PRE16): 3 / 4 groups of 4 tokens, each the T=4 program (the last one partial)
+        tg = 4 if Ti >= 8 and os.environ.get("DSV41_MHC_MIXES_T4", "1") == "1" else 8
+        plan = proj_plan(Ti, self.dim, self.device, tg, T, shared=Ti > 8)
         w4 = self._norm_weight(w, T)
         pre, post, comb, h, rm = mhc_mixes_cn(
             x,
@@ -275,7 +277,7 @@ class DSV41MHC:
         h, part = mhc_collapse(x, pre)
         return mhc_norm_apply(h, part, w4, eps, emit_rm=True)
 
-    def expand(self, y, residual, post, comb, y2=None):
+    def expand(self, y, residual, post, comb, y2=None, lite=False):
         """new_j = post_j * (y [+ y2]) + sum_i comb[i, j] residual_i -> [T,1,n,C] fp32. y: [T,1,1,C] fp32 or [1,1,T,C]
         (token rows) fp32/bf16; optional y2 [1,1,T,C] fp32 (added to y inside the kernel)."""
         T = residual.shape[0]
@@ -290,7 +292,7 @@ class DSV41MHC:
             )
             return _slice_rows(out, T, 0)
         if _flag("DSV41_MHC_EXPAND_V2", "1"):
-            return mhc_expand2(y, residual, post, comb, y2)
+            return mhc_expand2(y, residual, post, comb, y2, lite=lite)
         return mhc_expand(y, residual, post, comb, y2)
 
     def expand_mixes(self, y, residual, post, comb, y2, nxt):

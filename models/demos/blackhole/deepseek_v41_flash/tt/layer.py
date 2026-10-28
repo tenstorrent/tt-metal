@@ -28,6 +28,9 @@ from models.demos.blackhole.deepseek_v41_flash.tt.shared_expert_v2 import (
 )
 
 _STREAM_BF16 = os.environ.get("DSV41_STREAM_BF16") == "1"
+_X2LITE = (
+    os.environ.get("DSV41_MHC_X2LITE", "0") == "1"
+)  # default OFF: the attention-side expand writes only rows 0..3 of x2 (see mhc_expand2 lite)
 
 
 def _rnd_bf16(t):
@@ -239,7 +242,8 @@ class DSV41Layer:
             x2 = _rnd_bf16(self.mhc_attn.expand(a, xp, attn_post, attn_comb, None))
             ffn_pre, ffn_post, ffn_comb = self.mhc_ffn.mixes(x2)
         elif fuse_pre:
-            x2 = self.mhc_attn.expand(P2(a), xp, attn_post, attn_comb, None)
+            # DSV41_MHC_X2LITE=1: x2 only feeds the FFN-side mHC kernels (rows 0..3 read with 256 B reads): write just those rows
+            x2 = self.mhc_attn.expand(P2(a), xp, attn_post, attn_comb, None, lite=_X2LITE)
         else:
             x2, (ffn_pre, ffn_post, ffn_comb) = self.mhc_attn.expand_mixes(
                 P2(a), xp, attn_post, attn_comb, None, self.mhc_ffn

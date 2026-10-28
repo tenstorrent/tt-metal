@@ -12,7 +12,9 @@ KDIR = os.path.join(
 )  # absolute: the overlay package must use ITS kernels
 
 
-def mhc_expand2(y, x, post, comb, y2=None, n_cores=None):
+def mhc_expand2(y, x, post, comb, y2=None, n_cores=None, lite=False):
+    """lite=True: write only rows 0..3 of the output tiles (2 x 256 B per page); rows 4..31 of the result are NOT written (undefined). Only for a result consumed by the mHC kernels
+    (they read rows 0..3 with 256 B reads), never by a ttnn op (the head matmul needs zero padding)."""
     T, _, n, D = (int(v) for v in x.shape)
     assert n == 4 and T <= 32
     for t in (x, post, comb) + ((y2,) if y2 is not None else ()):
@@ -23,9 +25,14 @@ def mhc_expand2(y, x, post, comb, y2=None, n_cores=None):
     has_y2 = y2 is not None
     assert not has_y2 or int(y2.shape[2]) == T and int(y2.shape[0]) == 1
     y2t = y2 if has_y2 else y
+    wmode = (
+        2 if lite else int(os.environ.get("DSV41_MHC_EXP_WMODE", "0"))
+    )  # env: sweep only (1: 2 KB writes, 2: rows 0..3)
     nt = D // 32
     if n_cores is None:
-        n_cores = 32 if T <= 8 else 80  # swept: more cores is slower for T<=8 (DRAM write bound)
+        n_cores = int(os.environ.get("DSV41_MHC_EXP_CORES", "0")) or (
+            32 if T <= 8 else 80
+        )  # env: sweep only (default off)  # swept: more cores is slower for T<=8 (DRAM write bound)
     mesh = x.device()
     out = ttnn.allocate_tensor_on_device(
         ttnn.Shape([T, 1, n, D]), ttnn.float32, ttnn.TILE_LAYOUT, mesh, ttnn.DRAM_MEMORY_CONFIG
@@ -78,7 +85,7 @@ def mhc_expand2(y, x, post, comb, y2=None, n_cores=None):
         kernel_source=f"{KDIR}/mhc_expand2_writer.cpp",
         source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
         core_ranges=core_set,
-        compile_time_args=[CB_O, CB_A, CB_SA, T, nt, gpc, int(has_y2)] + acc(out) + acc(comb) + acc(post),
+        compile_time_args=[CB_O, CB_A, CB_SA, T, nt, gpc, int(has_y2)] + acc(out) + acc(comb) + acc(post) + [wmode],
         runtime_args=rt,
         common_runtime_args=[out.buffer_address(), comb.buffer_address(), post.buffer_address()],
         config=ttnn.WriterConfigDescriptor(),
@@ -99,6 +106,7 @@ def mhc_expand2(y, x, post, comb, y2=None, n_cores=None):
                 n,
                 D,
                 len(cores),
+                wmode,
                 y_row,
                 y_bf16,
                 has_y2,

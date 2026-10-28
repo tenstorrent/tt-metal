@@ -25,7 +25,9 @@ def mhc_mixes_cn(
 ):
     """-> (pre [T,1,1,4], post [T,1,4,1], comb [T,1,4,4], h bf16 [1,1,T,D] (norm applied), rm bf16 [T,1,1,D] or None)"""
     T, _, n, D = (int(v) for v in x.shape)
-    assert n == 4 and T == plan.tv and D == plan.D and T <= 8
+    assert (
+        n == 4 and T == plan.tv and D == plan.D and (T <= 8 or (T <= 16 and plan.TG == 4))
+    )  # T = 9..16: G = 3 / 4 groups of 4 tokens (DSV41_MHC_PRE16)
     TG, G, S, TPJ, PPT, PGPG, NPG = plan.TG, plan.G, plan.S, plan.TPJ, plan.PPT, plan.PGPG, plan.NPG
     mesh = x.device()
     grid = mesh.compute_with_storage_grid_size()
@@ -60,8 +62,8 @@ def mhc_mixes_cn(
     # ---------------- projection cores (proj2 reader / compute, proj3 writer) ----------------
     rrt, wrt, crt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
     for r, (cx, cy) in enumerate(pcores):
-        nvs = [max(0, min(TG, plan.tv - g * TG)) for g in range(2)]
-        rrt[cx][cy] = [r, nvs[0], nvs[1]]
+        nvs = [max(0, min(TG, plan.tv - g * TG)) for g in range(max(G, 2))]
+        rrt[cx][cy] = [r] + nvs
         wrt[cx][cy] = [r // PPT, (r % PPT) * TG, int(pn.x), int(pn.y)]
         crt[cx][cy] = []
     # projection CB indices 10..17 (index 1 is the shared packed-partial pages: post2_compute hard-codes Q = 1)

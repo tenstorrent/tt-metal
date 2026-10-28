@@ -28,7 +28,7 @@ def _grid_cores(mesh, n):
 class ProjPlan:
     """Work split of the projection for T token rows per device."""
 
-    def __init__(self, T, D=5120, max_cores=100, tg=8, tv=None):
+    def __init__(self, T, D=5120, max_cores=100, tg=8, tv=None, shared=False):
         assert T % 4 == 0 and T <= 32
         self.T, self.D = T, D
         self.tv = (
@@ -41,7 +41,9 @@ class ProjPlan:
         self.G = T // self.TG
         self.NJ = D // 32
         self.S = next(
-            s for s in (40, 32, 20) if self.G * s <= max_cores and (32 // self.TG) and s % (32 // self.TG) == 0
+            s
+            for s in (40, 32, 20)
+            if (s if shared else self.G * s) <= max_cores and (32 // self.TG) and s % (32 // self.TG) == 0
         )  # column ranges
         self.TPJ = self.NJ // self.S
         assert self.TPJ * self.S == self.NJ
@@ -55,15 +57,16 @@ class ProjPlan:
 _PLANS = {}
 
 
-def proj_plan(T, D=5120, mesh=None, tg=8, tv=None):
-    key = (T, D, tg, tv)
+def proj_plan(T, D=5120, mesh=None, tg=8, tv=None, shared=False):
+    """shared=True: the fused front (mhc_pre.py) where ONE core per column range serves all token groups (S <= cores, not G*S)"""
+    key = (T, D, tg, tv) + ((True,) if shared else ())
     p = _PLANS.get(key)
     if p is None:
         mc = 100
         if mesh is not None:
             g = mesh.compute_with_storage_grid_size()
             mc = int(g.x) * int(g.y)
-        p = _PLANS[key] = ProjPlan(T, D, mc, tg, tv)
+        p = _PLANS[key] = ProjPlan(T, D, mc, tg, tv, shared)
     return p
 
 

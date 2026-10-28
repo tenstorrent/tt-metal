@@ -20,6 +20,9 @@ void kernel_main() {
     constexpr auto o_args = TensorAccessorArgs<7>();
     constexpr auto c_args = TensorAccessorArgs<o_args.next_compile_time_args_offset()>();
     constexpr auto p_args = TensorAccessorArgs<c_args.next_compile_time_args_offset()>();
+    constexpr uint32_t WMODE = get_compile_time_arg_val(
+        p_args.next_compile_time_args_offset());  // 0: whole 4 KB tile; 1: 2 KB (faces 0, 1); 2: rows 0..3 of faces 0,
+                                                  // 1 (EXPERIMENT: padding rows are NOT written)
     constexpr uint32_t TILE = 4096;
 
     const uint32_t j0 = get_arg_val<uint32_t>(0);
@@ -70,7 +73,18 @@ void kernel_main() {
             const uint32_t kk = k + q;
             const uint32_t t = kk % T;
             const uint32_t j = j0 + kk / T;
-            noc.async_write(out, o_acc, TILE, {.offset_bytes = q * TILE}, {.page_id = t * NT + j, .offset_bytes = 0});
+            if constexpr (WMODE == 0) {
+                noc.async_write(
+                    out, o_acc, TILE, {.offset_bytes = q * TILE}, {.page_id = t * NT + j, .offset_bytes = 0});
+            } else if constexpr (WMODE == 1) {
+                noc.async_write(
+                    out, o_acc, 2048, {.offset_bytes = q * TILE}, {.page_id = t * NT + j, .offset_bytes = 0});
+            } else {
+                noc.async_write(
+                    out, o_acc, 256, {.offset_bytes = q * TILE}, {.page_id = t * NT + j, .offset_bytes = 0});
+                noc.async_write(
+                    out, o_acc, 256, {.offset_bytes = q * TILE + 1024}, {.page_id = t * NT + j, .offset_bytes = 1024});
+            }
         }
         noc.async_writes_flushed();
         out.pop_front(n);
