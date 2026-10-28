@@ -292,6 +292,10 @@ constexpr uint32_t MAX_VCS = 16;
 // "Not queued anywhere" -- a page delivered to the next chip's output rather than forwarded again.
 constexpr uint32_t VC_NONE = 0xFFFFFFFFu;
 
+// Floor of four pages a channel: the credit threshold is a quarter of the channel and must stay >= 1,
+// and a channel shallower than a read batch spends all its time announcing.
+constexpr uint32_t MIN_VC_PAGES = 4;
+
 // Ring slot = token + forwarding metadata. 64 rather than the 32 in use keeps the slot stride DRAM-aligned
 // (14336 + 64 = 64 * 225), which lets a fabric write target a (token_size + 64)-byte forwarding page
 // directly.

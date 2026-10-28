@@ -25,16 +25,24 @@ struct CombineFabric2dParams {
     uint32_t seq_len_per_chip = 640;
     uint32_t axis = 0;
     uint32_t num_links = 2;
-    // How much smaller than the dense forwarding region to make this op's. A FACTOR rather than a page
-    // count, so it means the same thing for every model, and an op parameter rather than a constant
-    // because where the throughput curve bends is a per-model measurement: the caller is the one who
-    // knows whether DRAM or microseconds is the scarcer thing for the model it is running.
+    // Pages one forwarding channel holds. An op parameter rather than a constant because where the
+    // throughput curve bends is a per-model measurement: the caller is the one who knows whether DRAM
+    // or microseconds is the scarcer thing for the model it is running.
     //
-    // 16 is what the models routing to many experts over a wide embedding settle on, and so the right
+    // A page count rather than anything derived from the traffic. The region is split by movement
+    // class, so every chain of classes ends in one that delivers to the next chip's output and needs
+    // no space anywhere -- a blocked chip always has a legal move and no depth can deadlock the ring.
+    // That makes a channel a pipeline buffer, sized by what has to be in flight to keep the cable
+    // busy, and a launch's total volume is simply the wrong axis to scale it on. See the channel notes
+    // in combine_fabric2d_assignments.hpp.
+    //
+    // 64 is what the models routing to many experts over a wide embedding settle on, and so the right
     // thing for a caller that has not thought about it to inherit. Every caller that reaches the op
     // through ttnn::prim sets it explicitly, so this initializer is the sibling-style fallback for a
-    // params struct built some other way, not a value the op path falls back to.
-    uint32_t fwd_reduction = 16;
+    // params struct built some other way, not a value the op path falls back to -- except the
+    // overlapped path, which omits it in both of the places it builds these params and must go on
+    // omitting it in both, or the forwarding buffer it allocates stops matching the one it validates.
+    uint32_t fwd_vc_pages = 64;
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Mesh;
     // Set only when combine runs overlapped inside the routed expert: its threshold decides the order
     // experts are walked, and its writers report completion to the collector.

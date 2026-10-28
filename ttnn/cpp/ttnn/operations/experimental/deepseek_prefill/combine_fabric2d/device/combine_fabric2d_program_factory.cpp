@@ -59,44 +59,21 @@ static_assert(DRAIN_SINK_OFF < PROD_BUF_OFF, "drain sink overlaps the token ring
 // receiver eRisc. Everything else goes to forwardign buffer. Op manages when will sender cores send
 // "home-made" tokens and when will they send tokens from the forwarding buffer.
 //
-// How much smaller than the dense buffer this op used to allocate is args.fwd_reduction, a FACTOR rather
-// than a page count so it means the same thing for every model: the dense size scaled with
-// num_experts_per_tok and the experts a chip hosts, so a fixed page count would be a different reduction
-// for each of them.
+// How deep each channel is is args.fwd_vc_pages, a page count carried in the model's config. Any depth is
+// free of correctness risk, which is the point of splitting the region by movement class: every chain of
+// classes ends in one that delivers to the next chip's output and so needs no space anywhere, meaning a
+// blocked chip always has a legal move and no size can deadlock the ring. See the channel notes in
+// combine_fabric2d_assignments.hpp.
 //
-// Reducing it is free of correctness risk, which is the point of splitting the region by movement class:
-// every chain of classes ends in one that delivers to the next chip's output and so needs no space
-// anywhere, meaning a blocked chip always has a legal move and no size can deadlock the ring. See the
-// channel notes in combine_fabric2d_assignments.hpp.
-//
-// What it costs is throughput, and where that curve bends is a measurement, not a derivation -- which is
-// why it is an op parameter carried in the model's config, not a constant here.
+// What too shallow a channel costs is throughput, and where that curve bends is a measurement, not a
+// derivation -- which is why it is an op parameter rather than a constant here.
 
-// What the dense region cost per stream, which is what the factor divides. Kept verbatim from the
-// version this replaces so "8x smaller" is measured against the thing it actually replaced: a
-// destination's whole return volume is seq_len_per_chip * num_experts_per_tok, chunks to one
-// destination share it, and a stream relays half_extent - 1 of them -- the nearest reachable from an
-// origin that splits its run num_links ways, the farthest only from the opposite chip, whose run is
-// split across every stream. Plus a page per chunk for the integer slicing.
-uint32_t dense_pages_per_stream(const CombineFabric2dParams& args) {
-    const uint32_t per_destination = args.seq_len_per_chip * args.num_experts_per_tok;
-    const uint32_t half_extent = ring_extent(args) / 2;
-    return (half_extent - 2) * (per_destination / args.num_links) + per_destination / stream_count(args.num_links) +
-           relay_chunks_per_stream(ring_extent(args)) * args.experts_per_chip;
-}
-
-// Floor of four pages a channel: the credit threshold is a quarter of the channel and must stay >= 1,
-// and a channel shallower than a read batch spends all its time announcing.
-constexpr uint32_t MIN_VC_PAGES = 4;
-
-uint32_t fwd_vc_pages(const CombineFabric2dParams& args) {
-    const uint32_t per_stream = dense_pages_per_stream(args) / args.fwd_reduction;
-    const uint32_t pages = per_stream / num_vcs(ring_extent(args));
-    return pages < MIN_VC_PAGES ? MIN_VC_PAGES : pages;
-}
-
+// Nothing here is derived from how much traffic a launch carries. It used to be: the region was sized
+// from an upper bound on a destination's whole return volume and then divided by a reduction factor.
+// Credit return made that obsolete -- a producer waits for a page rather than assuming one -- and a
+// channel is just a pipeline buffer, so its depth is given rather than computed.
 uint32_t fwd_pages_per_stream(const CombineFabric2dParams& args) {
-    return num_vcs(ring_extent(args)) * fwd_vc_pages(args);
+    return num_vcs(ring_extent(args)) * args.fwd_vc_pages;
 }
 
 constexpr uint32_t align_l1(uint32_t addr) { return (addr + 63u) & ~63u; }
@@ -344,7 +321,7 @@ KernelPlan make_kernel_plan(
     plan.final_arrived_addr = static_cast<uint32_t>(sems.final_arrived.address());
     plan.launch_credit_addr = static_cast<uint32_t>(sems.launch_credit.address());
     plan.credit_done_addr = static_cast<uint32_t>(sems.credit_done.address());
-    plan.vc_pages = fwd_vc_pages(args);
+    plan.vc_pages = args.fwd_vc_pages;
     for (uint32_t v = 0; v < sems.vc_arrived.size(); v++) {
         plan.vc_arrived_addr.push_back(static_cast<uint32_t>(sems.vc_arrived[v].address()));
         plan.vc_freed_addr.push_back(static_cast<uint32_t>(sems.vc_freed[v].address()));

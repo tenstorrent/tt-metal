@@ -31,10 +31,12 @@ class DeepSeekV4ProConfig:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 384
     NUM_EXPERTS_PER_TOKEN = 6
-    # Divisor on combine_fabric2d's forwarding region -- see DeepSeekV3Config.COMBINE_FWD_REDUCTION for
-    # what it trades. Measured 8x4 over 1x-64x: 16 costs this model 5.9% on hot_expert traffic and
-    # nothing on balanced, for 35 -> 17 MB a chip.
-    COMBINE_FWD_REDUCTION = 16
+    # Pages one of combine_fabric2d's forwarding channels holds. The region is split by movement class,
+    # so no depth can deadlock the ring -- this trades DRAM against throughput and nothing else. A channel
+    # is a pipeline buffer, so the figure is a page count rather than anything scaled from the sequence
+    # length. Carried over from what the reduction factor it replaces produced at ring8 / 5k; not yet
+    # swept on its own axis.
+    COMBINE_FWD_VC_PAGES = 50
     # Pages one of dispatch_fabric2d's forwarding channels holds. The region is split by movement class,
     # so no depth can deadlock the ring -- this trades DRAM against throughput and nothing else. A channel
     # is a pipeline buffer, so the figure is a page count rather than anything scaled from the sequence
