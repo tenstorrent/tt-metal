@@ -693,7 +693,10 @@ def _run_rotary_embedding_llama_direct_cos_padding_tail_case(device, q_seq_len, 
 
 
 @pytest.mark.parametrize("batch, n_heads, q_seq_len, rope_seq_len", ((129, 2, 128, 96),))
-def test_rotary_embedding_llama_short_cos_sin_multi_batch(device, batch, n_heads, q_seq_len, rope_seq_len):
+@pytest.mark.parametrize("trans_mat_sharded", (False, True), ids=("interleaved_trans_mat", "sharded_trans_mat"))
+def test_rotary_embedding_llama_short_cos_sin_multi_batch(
+    device, batch, n_heads, q_seq_len, rope_seq_len, trans_mat_sharded
+):
     """Cos/sin shorter than the input with several batches per core must not run past the end of the cos/sin buffer."""
     compute_grid_size = device.compute_with_storage_grid_size()
     if compute_grid_size.x * compute_grid_size.y != 64:
@@ -706,12 +709,28 @@ def test_rotary_embedding_llama_short_cos_sin_multi_batch(device, batch, n_heads
     trans_mat = get_rot_transformation_mat(dhead=head_dim)
 
     tensor_kwargs = {"dtype": ttnn.bfloat16, "layout": ttnn.TILE_LAYOUT, "device": device}
+    if trans_mat_sharded:
+        # A sharded trans_mat with interleaved cos/sin selects the prefill-sharded factory.
+        num_cores = compute_grid_size.x * compute_grid_size.y
+        trans_mat_tt = ttnn.from_torch(
+            trans_mat.repeat(1, 1, num_cores, 1),
+            memory_config=ttnn.create_sharded_memory_config(
+                shape=(ttnn.TILE_SIZE, ttnn.TILE_SIZE),
+                core_grid=ttnn.num_cores_to_corerangeset(num_cores, compute_grid_size, row_wise=True),
+                strategy=ttnn.ShardStrategy.HEIGHT,
+                orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                use_height_and_width_as_shard_shape=True,
+            ),
+            **tensor_kwargs,
+        )
+    else:
+        trans_mat_tt = ttnn.from_torch(trans_mat, **tensor_kwargs)
     out = ttnn.to_torch(
         ttnn.experimental.rotary_embedding_llama(
             ttnn.from_torch(q, **tensor_kwargs),
             ttnn.from_torch(cos, **tensor_kwargs),
             ttnn.from_torch(sin, **tensor_kwargs),
-            ttnn.from_torch(trans_mat, **tensor_kwargs),
+            trans_mat_tt,
             is_decode_mode=False,
         )
     ).float()
