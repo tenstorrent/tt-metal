@@ -9,6 +9,7 @@ masked pad rows up to 63, [REG] in row 64 with RoPE position N, as the reference
 the encoder and D_PAD (32: 2 tokens, pad) in the decoder, viewed as (B, S, 512) around attention.
 RoPE: the q/k projection rows of each head are permuted at load from pair order (2i, 2i+1) to half order
 (i, i + 32), so the rotation is q * cos + (q @ R) * sin with R the rotate-half matrix (QK^T is unchanged).
+q @ R is not a matmul: its signed-permuted rows are extra projection columns, folded at load (R1-1, rotated_rows).
 """
 from __future__ import annotations
 
@@ -26,12 +27,11 @@ def _half_rows(w):
     return w.view(H, DK, -1)[:, HALF].reshape(H * DK, -1)
 
 
-def rotate_half_matrix():
-    r = torch.zeros(DK, DK)
-    h = DK // 2
-    r[torch.arange(h) + h, torch.arange(h)] = -1.0  # out[:, i] = -x[:, i + 32]
-    r[torch.arange(h), torch.arange(h) + h] = 1.0  # out[:, i + 32] = x[:, i]
-    return r
+def rotated_rows(w):
+    """Half-order q/k weight (out, in) -> the weight of x @ R (R1-1): per head, row i = -row i + 32, row i + 32 =
+    row i. A signed permutation of whole 32-row halves, so bf16 and bfp8 (16-wide blocks) store it exactly."""
+    h = w.view(H, DK, -1)
+    return torch.cat([-h[:, DK // 2 :], h[:, : DK // 2]], 1).reshape(H * DK, -1)
 
 
 def positions(n_tok, pad, reg_row=None):
@@ -63,13 +63,6 @@ def pack_embedding_weight(w, b):
     return out
 
 
-def _heads(x, B, S):
-    """(B, S, 512) -> (B, 8, S, 64)."""
-    import ttnn
-
-    return ttnn.permute(ttnn.reshape(x, (B, S, H, DK)), (0, 2, 1, 3))
-
-
 class TtKairos:
     def __init__(self, device, W, precision: Precision | None = None, layers=(LAYERS, LAYERS)):
         import ttnn
@@ -89,10 +82,10 @@ class TtKairos:
         for i in range(self.n_enc):
             a = f"encoder.block.{i}.layer.0.SelfAttention"
             f = f"encoder.block.{i}.layer.1"
-            qkv = torch.cat([_half_rows(W[f"{a}.q.weight"]), _half_rows(W[f"{a}.k.weight"]), W[f"{a}.v.weight"]])
+            q, k, v = _half_rows(W[f"{a}.q.weight"]), _half_rows(W[f"{a}.k.weight"]), W[f"{a}.v.weight"]
             self.enc.append({
                 "n1": upload_norm(device, W[f"encoder.block.{i}.layer.0.layer_norm.weight"]),
-                "qkv": up(qkv), "o": up(W[f"{a}.o.weight"], wd(keep_bf16=True)),
+                "qkv": up(torch.cat([q, k, v])), "qkvr": up(torch.cat([rotated_rows(q), rotated_rows(k), v])), "o": up(W[f"{a}.o.weight"], wd(keep_bf16=True)),
                 "n2": upload_norm(device, W[f"{f}.layer_norm.weight"]),
                 "wi": up(W[f"{f}.DenseReluDense.wi.weight"]),
                 "wo": up(W[f"{f}.DenseReluDense.wo.weight"], wd(keep_bf16=True)),
@@ -102,13 +95,14 @@ class TtKairos:
         for i in range(self.n_dec):
             s, c, f = (f"decoder.block.{i}.layer.{j}" for j in range(3))
             sa, ca = f"{s}.SelfAttention", f"{c}.EncDecAttention"
-            qkv = torch.cat([_half_rows(W[f"{sa}.q.weight"]), _half_rows(W[f"{sa}.k.weight"]), W[f"{sa}.v.weight"]])
-            kv = torch.cat([_half_rows(W[f"{ca}.k.weight"]), W[f"{ca}.v.weight"]])
+            q, k, v = _half_rows(W[f"{sa}.q.weight"]), _half_rows(W[f"{sa}.k.weight"]), W[f"{sa}.v.weight"]
+            cq, ck = _half_rows(W[f"{ca}.q.weight"]), _half_rows(W[f"{ca}.k.weight"])
             self.dec.append({
-                "n1": upload_norm(device, W[f"{s}.layer_norm.weight"]), "qkv": up(qkv),
+                "n1": upload_norm(device, W[f"{s}.layer_norm.weight"]), "qkv": up(torch.cat([q, k, v])),
+                "qkvr": up(torch.cat([rotated_rows(q), rotated_rows(k), v])),
                 "o": up(W[f"{sa}.o.weight"], wd(keep_bf16=True)),
-                "n2": upload_norm(device, W[f"{c}.layer_norm.weight"]), "q": up(_half_rows(W[f"{ca}.q.weight"])),
-                "kv": up(kv), "co": up(W[f"{ca}.o.weight"], wd(keep_bf16=True)),
+                "n2": upload_norm(device, W[f"{c}.layer_norm.weight"]), "q": up(torch.cat([cq, rotated_rows(cq), cq])),
+                "kv": up(torch.cat([ck, W[f"{ca}.v.weight"], rotated_rows(ck)])), "co": up(W[f"{ca}.o.weight"], wd(keep_bf16=True)),
                 "n3": upload_norm(device, W[f"{f}.layer_norm.weight"]),
                 "wi": up(W[f"{f}.DenseReluDense.wi.weight"]),
                 "wo": up(W[f"{f}.DenseReluDense.wo.weight"], wd(keep_bf16=True)),
@@ -121,7 +115,6 @@ class TtKairos:
         self.head_r = up(W[f"{p}.residual_layer.weight"], hd)
         self.head_b = upload(device, (W[f"{p}.output_layer.bias"] + W[f"{p}.residual_layer.bias"]).reshape(1, -1),
                              dtype=ttnn.float32)
-        self.rot = upload(device, rotate_half_matrix().reshape(1, 1, DK, DK))
         causal = torch.zeros(D_PAD, D_PAD)
         causal[:, N_SEG:] = NEG
         causal[torch.triu(torch.ones(N_SEG, N_SEG, dtype=torch.bool), 1).nonzero(as_tuple=True)] = NEG
@@ -210,12 +203,19 @@ class TtKairos:
         return ttnn.rms_norm(x, epsilon=1e-6, weight=w, compute_kernel_config=self.p.hifi4(),
                              memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-    def _rope(self, x, cs):
+    def _rope(self, x, xr, cs):
+        """x * cos + (x @ R) * sin; x @ R comes from the folded weight columns (R1-1)."""
         import ttnn
 
         cos, sin = cs
-        xr = ttnn.matmul(x, self.rot, compute_kernel_config=self.p.hifi4())
         return ttnn.add(ttnn.multiply(x, cos), ttnn.multiply(xr, sin))
+
+    def _split(self, x, w, B, S):
+        """Normed x and a [a | b | c] weight -> three [B, 8, S, 64] head tensors."""
+        import ttnn
+
+        y = ttnn.reshape(self._lin(x, w), (B, S, 3 * D))
+        return ttnn.transformer.split_query_key_value_and_split_heads(y, num_heads=H, transpose_key=False)
 
     def _attend(self, q, k, v, mask, B, Sq):
         """q [B, 8, Sq, 64], k / v [B, 8, Sk, 64] (rotated) -> (1, 1, B * Sq, 512). T5: no score scaling."""
@@ -231,9 +231,10 @@ class TtKairos:
         """Normed x -> rotated q, rotated k, v [B, 8, S, 64] (q / k in half order)."""
         import ttnn
 
-        qkv = ttnn.reshape(self._lin(x, blk["qkv"]), (B, S, 3 * D))
-        q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(qkv, num_heads=H, transpose_key=False)
-        return self._rope(q, cs), self._rope(k, cs), v
+        q, k, v = self._split(x, blk["qkv"], B, S)
+        qr, kr, vd = self._split(x, blk["qkvr"], B, S)  # [qR | kR | v]: v again, unused
+        ttnn.deallocate(vd)
+        return self._rope(q, qr, cs), self._rope(k, kr, cs), v
 
     def _self_attn(self, x, blk, cs, mask, B, S):
         return self._attend(*self._qkv(x, blk, cs, B, S), mask, B, S)
@@ -247,11 +248,10 @@ class TtKairos:
         """Decoder cross-attention sublayer output (q 32 rows x k 96 rows), before the residual add."""
         import ttnn
 
-        q = ttnn.reshape(self._lin(self._norm(h, blk["n2"]), blk["q"]), (B, D_PAD, D))
-        kv = ttnn.reshape(self._lin(enc, blk["kv"]), (B, S_PAD, 2 * D))
-        q, k, v = _heads(q, B, D_PAD), _heads(ttnn.slice(kv, (0, 0, 0), (B, S_PAD, D)), B, S_PAD), _heads(
-            ttnn.slice(kv, (0, 0, D), (B, S_PAD, 2 * D)), B, S_PAD)
-        return self._lin(self._attend(self._rope(q, cs_q), self._rope(k, cs_k), v, mask, B, D_PAD), blk["co"])
+        q, qr, qd = self._split(self._norm(h, blk["n2"]), blk["q"], B, D_PAD)  # [q | qR | q]: q again, unused
+        k, v, kr = self._split(enc, blk["kv"], B, S_PAD)  # R1-3: no reshape + permute head split
+        ttnn.deallocate(qd)
+        return self._lin(self._attend(self._rope(q, qr, cs_q), self._rope(k, kr, cs_k), v, mask, B, D_PAD), blk["co"])
 
     def _ff(self, h, blk, norm):
         import ttnn
