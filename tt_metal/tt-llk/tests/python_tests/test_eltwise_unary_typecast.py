@@ -224,6 +224,67 @@ def test_eltwise_unary_typecast_uint32_to_fp32_rounding(
     )
 
 
+# The uint8 wrap and uint16 saturation edges the 0..255 sweep above never reaches. Odd lanes stay in
+# 0..127 so no readback word is all-ones, which is what the Blackhole NOC returns on a timeout.
+_INT_EDGE_PAIRS = [
+    InputOutputFormat(DataFormat.Int32, DataFormat.UInt8),
+    InputOutputFormat(DataFormat.UInt32, DataFormat.UInt8),
+    InputOutputFormat(DataFormat.UInt16, DataFormat.UInt8),
+    InputOutputFormat(DataFormat.UInt32, DataFormat.UInt16),
+]
+_INT_EDGE_VALUES = {
+    DataFormat.Int32: (
+        [0, 1, -1, -2, 127, -127, 128, -128, -129, 255, -255, 256, -256, -257, 1000, -1000,
+         65535, -65535, 65536, -65536, 2**31 - 1, -(2**31) + 1, -(2**31)],
+        -(2**31),
+        2**31,
+    ),
+    DataFormat.UInt32: (
+        [0, 1, 127, 128, 255, 256, 257, 65534, 65535, 65536, 65537, 2**24, 2**31 - 1, 2**31,
+         2**31 + 65535, 2**32 - 2, 2**32 - 1],
+        0,
+        2**32,
+    ),
+    DataFormat.UInt16: (
+        [0, 1, 127, 128, 255, 256, 257, 32767, 32768, 65534, 65535],
+        0,
+        2**16,
+    ),
+}  # fmt: skip
+
+
+def _int_edge_spec(in_fmt: DataFormat) -> StimuliSpec:
+    edges, low, high = _INT_EDGE_VALUES[in_fmt]
+
+    def distribution(size, dtype, generator):
+        values = torch.randint(
+            low, high, (size,), dtype=torch.int64, generator=generator
+        )
+        values[0 : 2 * len(edges) : 2] = torch.tensor(edges, dtype=torch.int64)
+        values[1::2] &= 0x7F
+        return values.to(dtype)
+
+    return StimuliSpec(distribution=distribution, seed=0)
+
+
+@parametrize(
+    formats=_INT_EDGE_PAIRS,
+    dest_acc=_production_dest_acc,
+)
+def test_eltwise_unary_typecast_int_edges(
+    formats: InputOutputFormat,
+    dest_acc: DestAccumulation,
+):
+    _run_typecast(
+        formats,
+        dest_acc,
+        ApproximationMode.No,
+        [32, 32],
+        _int_edge_spec(formats.input_format),
+        twos_complement=formats.input_format == DataFormat.Int32,
+    )
+
+
 _FP32_EXP_BIAS = 127
 _FP32_MANTISSA_BITS = 23
 _FP32_SIGN_BIT = 1 << 31
@@ -338,6 +399,7 @@ def _build_typecast_config(
     tile_cnt_A: int,
     src_B: torch.Tensor,
     tile_cnt_B: int,
+    twos_complement: bool = False,
 ) -> TestConfig:
     # Unpack straight into Dest when either:
     #  * the input is 32-bit -- the unpacker has no SrcA/SrcB path for
@@ -386,6 +448,7 @@ def _build_typecast_config(
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
             tile_count_res=tile_cnt_A,
+            twos_complement=twos_complement,
         ),
         dest_acc=dest_acc,
         unpack_to_dest=unpack_to_dest,
@@ -424,6 +487,7 @@ def _run_typecast(
     spec_A: StimuliSpec,
     *,
     max_ulp: int | None = None,
+    twos_complement: bool = False,
 ):
     src_A, tile_cnt_A, src_B, tile_cnt_B = generate_stimuli(
         stimuli_format_A=formats.input_format,
@@ -451,6 +515,7 @@ def _run_typecast(
         tile_cnt_A,
         src_B,
         tile_cnt_B,
+        twos_complement,
     )
 
     res_from_L1 = configuration.run().result
