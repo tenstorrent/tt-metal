@@ -632,6 +632,12 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
         this->cflags_ += common_flags;
         this->lflags_ += common_flags;
     }
+    // Kernels get line tables only; the later -g1 overrides the environment's -g. Firmware keeps -g.
+    if (!this->is_fw_ && env_.get_rtoptions().get_riscv_debug_info_enabled() &&
+        env_.get_rtoptions().get_riscv_kernel_debug_info_lines_only()) {
+        this->cflags_ += "-g1 ";
+        this->lflags_ += "-g1 ";
+    }
 
     this->linker_script_ = env_.root_ + jit_build_query.linker_script(params);
 

@@ -23,6 +23,10 @@ Configure the Inspector by setting the following environment variables:
    export TT_METAL_INSPECTOR_RPC=1                              # optional: enable/disable the Inspector RPC server. Default is `1` (enabled).
 
 Enabling the Inspector will override `TT_METAL_RISCV_DEBUG_INFO` and debugging info will be generated for riscv elfs.
+Set `TT_METAL_RISCV_DEBUG_INFO=lines` to build kernels with line tables only (`-g1`): callstacks keep source lines
+and inlined frames and kernels compile faster, but kernel ELFs carry no variables, constants, enums or types. tt-triage
+then can't show kernel locals and arguments or read kernel globals and constants (the fast-dispatch and fabric
+stream dumps), and DPRINT prints enum values as numbers. Firmware keeps full debug info.
 You can also use unix sockets for the RPC server by setting `TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS` to a unix socket path,
 e.g. `unix:/tmp/inspector_socket`.
 

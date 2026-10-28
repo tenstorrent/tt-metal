@@ -1604,8 +1604,10 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
 
         // TT_METAL_RISCV_DEBUG_INFO
         // Enable RISC-V debug info. Defaults to inspector setting, override with 0/1.
+        // "lines" builds kernels with line tables only (-g1: callstacks with source lines, no variables), which
+        // compiles faster; firmware keeps full debug info, whose globals and enums tt-triage reads.
         // Default: Inherits from inspector setting
-        // Usage: export TT_METAL_RISCV_DEBUG_INFO=1  # or =0 to disable
+        // Usage: export TT_METAL_RISCV_DEBUG_INFO=1  # or =0 to disable, or =lines
         case EnvVarID::TT_METAL_RISCV_DEBUG_INFO: {
             bool enable_riscv_debug_info = this->get_inspector_enabled();  // Default from inspector
             if (value) {
@@ -1615,6 +1617,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
                 }
             }
             this->set_riscv_debug_info_enabled(enable_riscv_debug_info);
+            this->set_riscv_kernel_debug_info_lines_only(value != nullptr && strcmp(value, "lines") == 0);
             break;
         }
 

@@ -288,6 +288,7 @@ class RunTimeOptions {
 
     bool jit_analytics_enabled = false;
     bool riscv_debug_info_enabled = false;
+    bool riscv_kernel_debug_info_lines_only = false;
     uint32_t watcher_debug_delay = 0;
 
     bool validate_kernel_binaries = false;
@@ -709,6 +710,10 @@ public:
             compile_hash_str += "_att:";
             compile_hash_str += noc_att_map_;
         }
+        // Line-table-only kernels get their own JIT build directory; default cache keys stay unchanged.
+        if (riscv_debug_info_enabled && riscv_kernel_debug_info_lines_only) {
+            compile_hash_str += "_kernel_debug_info_lines";
+        }
         return compile_hash_str;
     }
 
@@ -801,6 +806,10 @@ public:
     // Whether to compile with -g to include DWARF debug info in the binary.
     bool get_riscv_debug_info_enabled() const { return riscv_debug_info_enabled; }
     void set_riscv_debug_info_enabled(bool enable) { riscv_debug_info_enabled = enable; }
+
+    // With debug info enabled: build kernels with line tables only (-g1); firmware keeps -g.
+    bool get_riscv_kernel_debug_info_lines_only() const { return riscv_kernel_debug_info_lines_only; }
+    void set_riscv_kernel_debug_info_lines_only(bool lines_only) { riscv_kernel_debug_info_lines_only = lines_only; }
 
     unsigned get_num_hw_cqs() const { return num_hw_cqs; }
     void set_num_hw_cqs(unsigned num) { num_hw_cqs = num; }
