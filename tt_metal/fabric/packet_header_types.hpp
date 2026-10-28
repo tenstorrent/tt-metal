@@ -8,6 +8,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -53,6 +54,11 @@ static_assert(
 static_assert(
     PKT_HDR_2D_ROUTE_BUFFER_SIZES.back() == Routing2DCodec::MAX_AXIS_SIZE + Routing2DCodec::MAX_ORTHOGONAL_AXIS_SIZE,
     "the largest 2D header must hold the action map of the largest mesh (64x4)");
+// compute_2d_pkt_hdr_route_buffer_size takes the first size that fits, so the 2D list must be in ascending order for it
+// to pick the smallest.
+static_assert(
+    std::ranges::is_sorted(PKT_HDR_2D_ROUTE_BUFFER_SIZES),
+    "compute_2d_pkt_hdr_route_buffer_size takes the first size that fits, so the sizes must be in ascending order");
 
 // The number of extension words a 1D header needs to carry routes of up to max_hops hops (at least 1). The base routing
 // word holds the first BASE_HOPS hops, and each extension word holds BASE_HOPS more, so 16 hops need none and 17 need
