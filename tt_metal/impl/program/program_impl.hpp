@@ -473,9 +473,8 @@ public:
     //     per pipe, ring address per relay slot) so two bindings in one batch are checked against
     //     each other as well as against committed state.
     //   commit_prefetcher_pipe_slot_bind arms the pipe's credit lanes when receivers are bound,
-    //     points the slot's relay DFB (if any) at the pipe ring, and fills the per-core records on
-    //     `cores` and on `extra_cores` (the slot's extra cores when the pipe is its accessor group's
-    //     first, else empty). Only valid right after a successful check of the same batch.
+    //     points the slot's relay DFB (if any) at the pipe ring, and fills the per-core records.
+    //     Only valid right after a successful check of the same batch.
     // Rebinding the same pipe is a no-op; a different pipe on an already-bound core is rejected.
     // Legal after compile.
     struct PrefetcherPipeBindPreflight {
@@ -491,10 +490,7 @@ public:
         const experimental::PrefetcherPipeImpl& prefetcher_pipe,
         PrefetcherPipeBindPreflight& preflight) const;
     void commit_prefetcher_pipe_slot_bind(
-        uint8_t prefetcher_pipe_id,
-        const CoreRangeSet& cores,
-        const CoreRangeSet& extra_cores,
-        experimental::PrefetcherPipeImpl& prefetcher_pipe);
+        uint8_t prefetcher_pipe_id, const CoreRangeSet& cores, experimental::PrefetcherPipeImpl& prefetcher_pipe);
 
     // The slot whose relay DFB is `relay_dfb_host_id`, if that DFB relays a pipe.
     std::optional<uint8_t> get_prefetcher_pipe_id_for_relay(uint32_t relay_dfb_host_id) const;
@@ -526,9 +522,9 @@ public:
         struct SlotCores {
             uint8_t prefetcher_pipe_id;
             CoreRangeSet cores;
-            // The slot's extra cores if this parameter is its accessor group's first pipe (they take
-            // this pipe's record), else empty.
-            CoreRangeSet extra_cores;
+            // This parameter is its accessor group's first pipe, so its bind also gives the slot's
+            // extra cores this pipe's record.
+            bool binds_extra_cores = false;
             bool sender_role = false;
         };
         std::vector<SlotCores> slots;

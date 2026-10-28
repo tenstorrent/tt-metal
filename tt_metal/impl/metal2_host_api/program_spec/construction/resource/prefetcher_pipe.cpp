@@ -129,7 +129,7 @@ PrefetcherPipeHandlesByKernel ReservePrefetcherPipeSlots(
                 placements.at(pipe_name).slots.push_back(
                     {.prefetcher_pipe_id = prefetcher_pipe_id,
                      .cores = is_sender_role ? role_nodes : to_node_range_set(pipe->receivers),
-                     .extra_cores = pipe_name == binding.pipe_parameter_names[0] ? binding.extra_nodes : NodeRangeSet(),
+                     .binds_extra_cores = pipe_name == binding.pipe_parameter_names[0],
                      .sender_role = is_sender_role});
             }
 

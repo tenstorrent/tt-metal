@@ -5074,7 +5074,8 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
         .semaphore_bindings = {SemaphoreBinding{
             .semaphore_spec_name = RING_SIGNAL_SEM, .accessor_name = "in0_ring_signal"}},
         .compile_time_args = in0_forward_cta,
-        .runtime_arg_schema = {.runtime_arg_names = {"is_worker", "ring_idx", "next_core_noc_x", "next_core_noc_y"}},
+        .runtime_arg_schema =
+            {.runtime_arg_names = {"is_worker_core", "ring_idx", "next_core_noc_x", "next_core_noc_y"}},
         .hw_config = in0_forward_hw,
     });
 
@@ -5097,7 +5098,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
                 {"in1_in_ring_order", static_cast<uint32_t>(stream_in1)},
                 {"rest_of_ring_blocks", rest_of_ring_blocks},
             },
-        .runtime_arg_schema = {.runtime_arg_names = {"is_worker", "ring_idx"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"is_worker_core", "ring_idx"}},
         .hw_config =
             DataMovementHardwareConfig{
                 .config_1xx =
@@ -5211,7 +5212,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
                         .endpoint_type = DFBEndpointType::CONSUMER},
                 },
             .compile_time_args = std::move(compute_cta),
-            .runtime_arg_schema = {.runtime_arg_names = {"is_worker", "ring_idx"}},
+            .runtime_arg_schema = {.runtime_arg_names = {"is_worker_core", "ring_idx"}},
             .hw_config = compute_hw,
         });
     }
@@ -5263,26 +5264,29 @@ static ttnn::device_operation::ProgramArtifacts create_program_gather_in0_artifa
     KernelRunArgs in0_ring_run_args{.kernel = IN0_RING};
     KernelRunArgs in1_reader_run_args{.kernel = IN1_READER};
     KernelRunArgs compute_run_args{.kernel = COMPUTE};
-    for (uint32_t i = 0; i < ring_size; ++i) {
-        const CoreCoord next_core = (i > 0) ? ring[i - 1] : (hops.empty() ? ring[ring_size - 1] : hops.front());
-        const CoreCoord next_core_noc = device.worker_core_from_logical_core(next_core);
-        AddRuntimeArgsForNode(
-            in0_ring_run_args.runtime_arg_values,
-            ring[i],
-            {{"is_worker", 1},
-             {"ring_idx", i},
-             {"next_core_noc_x", static_cast<uint32_t>(next_core_noc.x)},
-             {"next_core_noc_y", static_cast<uint32_t>(next_core_noc.y)}});
-        AddRuntimeArgsForNode(in1_reader_run_args.runtime_arg_values, ring[i], {{"is_worker", 1}, {"ring_idx", i}});
-        AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, ring[i], {{"is_worker", 1}, {"ring_idx", i}});
-    }
-    for (const CoreCoord& core : corerange_to_cores(idle_cores, std::nullopt, row_major)) {
+    auto add_ring_kernel_args = [&](const CoreCoord& core,
+                                    uint32_t is_worker_core,
+                                    uint32_t ring_idx,
+                                    const CoreCoord& next_core_noc) {
         AddRuntimeArgsForNode(
             in0_ring_run_args.runtime_arg_values,
             core,
-            {{"is_worker", 0}, {"ring_idx", 0}, {"next_core_noc_x", 0}, {"next_core_noc_y", 0}});
-        AddRuntimeArgsForNode(in1_reader_run_args.runtime_arg_values, core, {{"is_worker", 0}, {"ring_idx", 0}});
-        AddRuntimeArgsForNode(compute_run_args.runtime_arg_values, core, {{"is_worker", 0}, {"ring_idx", 0}});
+            {{"is_worker_core", is_worker_core},
+             {"ring_idx", ring_idx},
+             {"next_core_noc_x", static_cast<uint32_t>(next_core_noc.x)},
+             {"next_core_noc_y", static_cast<uint32_t>(next_core_noc.y)}});
+        AddRuntimeArgsForNode(
+            in1_reader_run_args.runtime_arg_values, core, {{"is_worker_core", is_worker_core}, {"ring_idx", ring_idx}});
+        AddRuntimeArgsForNode(
+            compute_run_args.runtime_arg_values, core, {{"is_worker_core", is_worker_core}, {"ring_idx", ring_idx}});
+    };
+    for (uint32_t i = 0; i < ring_size; ++i) {
+        const CoreCoord next_core = (i > 0) ? ring[i - 1] : (hops.empty() ? ring[ring_size - 1] : hops.front());
+        add_ring_kernel_args(ring[i], 1, i, device.worker_core_from_logical_core(next_core));
+    }
+    // The idle cores' kernels return before reading their other args.
+    for (const CoreCoord& core : corerange_to_cores(idle_cores, std::nullopt, row_major)) {
+        add_ring_kernel_args(core, 0, 0, CoreCoord{0, 0});
     }
 
     ProgramRunArgs run_args;

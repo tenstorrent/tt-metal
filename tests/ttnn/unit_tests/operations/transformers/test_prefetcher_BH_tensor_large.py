@@ -22,6 +22,7 @@ Every test delivers through DRAM-sender PrefetcherPipes
    spellings. See the comments on those tests for the capture-vs-replay semantics they cover.
 """
 
+import contextlib
 import math
 import time
 import zlib
@@ -1425,12 +1426,11 @@ def test_tensor_prefetcher_gather_in0_pipes(
     ), "second gather_in0 pipes invocation did not hit the program cache"
 
 
-def _hop_cores(device, num_hops):
-    """``num_hops`` single cores in the column right of the ring, one per row from the top."""
-    ring_cols = device.dram_grid_size().x
-    return ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(ring_cols, y), ttnn.CoreCoord(ring_cols, y)) for y in range(num_hops)}
-    )
+def _hop_cores(device, num_hops, x=None):
+    """``num_hops`` single cores in grid column ``x`` (by default the column right of the ring), one per
+    row from the top."""
+    x = device.dram_grid_size().x if x is None else x
+    return ttnn.CoreRangeSet({_core_range(x, y) for y in range(num_hops)})
 
 
 @pytest.mark.parametrize(
@@ -1520,7 +1520,7 @@ def test_tensor_prefetcher_gather_in0_pipes_scattered_ring(device, stream_in1, n
         ttnn.bfloat16,
         distribution_strategy,
         stream_in1=stream_in1,
-        hop_cores=ttnn.CoreRangeSet({_core_range(gap_x, y) for y in range(num_hops)}) if num_hops else None,
+        hop_cores=_hop_cores(device, num_hops, x=gap_x) if num_hops else None,
         ring_xs=ring_xs,
         ring_ys=ring_ys,
     )
@@ -1573,6 +1573,19 @@ def _scattered_ring_sub_devices(device, shape, ring_xs, ring_ys, gap_x):
     return [_one_core_per_range(cells)]
 
 
+@contextlib.contextmanager
+def _loaded_sub_device_manager(device, sub_device_cores):
+    """A sub-device manager with one sub-device per CoreRangeSet of ``sub_device_cores``, loaded while
+    the body runs."""
+    manager = device.create_sub_device_manager([ttnn.SubDevice([cores]) for cores in sub_device_cores], 0)
+    device.load_sub_device_manager(manager)
+    try:
+        yield
+    finally:
+        device.clear_loaded_sub_device_manager()
+        device.remove_sub_device_manager(manager)
+
+
 @skip_for_slow_dispatch("sub-device managers need fast dispatch")
 @pytest.mark.parametrize("shape", ["split", "hole", "ring_only", "checkerboard", "per_core"])
 def test_tensor_prefetcher_gather_in0_pipes_scattered_ring_sub_device_shapes(device, shape):
@@ -1586,11 +1599,7 @@ def test_tensor_prefetcher_gather_in0_pipes_scattered_ring_sub_device_shapes(dev
     on the one holding its cores."""
     recv_per_bank = 2
     ring_xs, ring_ys, gap_x = _scattered_ring(device, recv_per_bank)
-    manager = device.create_sub_device_manager(
-        [ttnn.SubDevice([cores]) for cores in _scattered_ring_sub_devices(device, shape, ring_xs, ring_ys, gap_x)], 0
-    )
-    device.load_sub_device_manager(manager)
-    try:
+    with _loaded_sub_device_manager(device, _scattered_ring_sub_devices(device, shape, ring_xs, ring_ys, gap_x)):
         setup = _streaming_gather_in0_setup(
             device,
             f"scattered_sub_device_{shape}",
@@ -1612,9 +1621,6 @@ def test_tensor_prefetcher_gather_in0_pipes_scattered_ring_sub_device_shapes(dev
             runs=2,
         )
         del pipes, _space, setup
-    finally:
-        device.clear_loaded_sub_device_manager()
-        device.remove_sub_device_manager(manager)
 
 
 @skip_for_slow_dispatch("sub-device managers need fast dispatch")
@@ -1637,24 +1643,10 @@ def test_tensor_prefetcher_gather_in0_pipes_scattered_ring_sub_device_manager_sw
     )
     _space, pipes = _make_tensor_prefetcher_pipes(device, setup["bank_to_receivers"], setup["entry_size"] * 2)
     label = "gather_in0_pipes_scattered_ring_sub_device_manager_switch"
-    _prefetch_and_check_runs_over_pipes(
-        device, setup, pipes, _hifi4_compute_kernel_config(device), f"{label} no manager", runs=1
-    )
-    manager = device.create_sub_device_manager(
-        [
-            ttnn.SubDevice([cores])
-            for cores in _scattered_ring_sub_devices(device, "ring_only", ring_xs, ring_ys, gap_x)
-        ],
-        0,
-    )
-    device.load_sub_device_manager(manager)
-    try:
-        _prefetch_and_check_runs_over_pipes(
-            device, setup, pipes, _hifi4_compute_kernel_config(device), f"{label} ring_only", runs=2
-        )
-    finally:
-        device.clear_loaded_sub_device_manager()
-        device.remove_sub_device_manager(manager)
+    compute_kernel_config = _hifi4_compute_kernel_config(device)
+    _prefetch_and_check_runs_over_pipes(device, setup, pipes, compute_kernel_config, f"{label} no manager", runs=1)
+    with _loaded_sub_device_manager(device, _scattered_ring_sub_devices(device, "ring_only", ring_xs, ring_ys, gap_x)):
+        _prefetch_and_check_runs_over_pipes(device, setup, pipes, compute_kernel_config, f"{label} ring_only", runs=2)
 
 
 @pytest.mark.parametrize(

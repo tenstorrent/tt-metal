@@ -40,8 +40,16 @@ def _core_range(x0, y0, x1, y1):
     return ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(x0, y0), ttnn.CoreCoord(x1, y1))})
 
 
+def _one_core_per_range(cores):
+    """The CoreCoords ``cores`` as a CoreRangeSet of one core per range, in order."""
+    return ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in cores])
+
+
 class _Layout:
     """Reader, receiver and matmul geometry for `recv_per_reader` receivers per DRAM bank."""
+
+    # One K-block per pipe entry, in0_block_w tiles deep.
+    in0_block_w = 2
 
     def __init__(self, device, recv_per_reader, reverse_senders=False):
         grid = device.compute_with_storage_grid_size()
@@ -57,12 +65,13 @@ class _Layout:
         # The senders, then one core that is neither a sender nor a receiver.
         cores = [ttnn.CoreCoord(i % grid.x, self.matmul_grid[1] + i // grid.x) for i in range(self.num_banks + 1)]
         assert cores[-1].y < grid.y, f"{self.num_banks} senders do not fit below the {self.matmul_grid} matmul grid"
-        self.sender_cores = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in cores[:-1]])
+        self.sender_cores = _one_core_per_range(cores[:-1])
         self.spare_core = cores[-1]
         self._bank_senders = cores[-2::-1] if reverse_senders else cores[:-1]
-        # One K-block per pipe entry, in0_block_w tiles deep.
-        self.in0_block_w = 2
-        self.k_tiles = self.num_blocks * self.in0_block_w
+
+    @property
+    def k_tiles(self):
+        return self.num_blocks * self.in0_block_w
 
     def bank_receivers(self, b):
         """Bank b's receivers: the row-major matmul workers b*R .. b*R + R - 1, a row segment."""
@@ -98,16 +107,13 @@ class _GatherLayout(_Layout):
         ring_cells = [ttnn.CoreCoord(x, y) for y in range(0, grid.y, 2) for x in range(grid.x) if x not in sender_xs]
         self.ring = ring_cells[: self.num_blocks]
         assert len(self.ring) == self.num_blocks, f"a {self.num_blocks}-core ring does not fit every other row"
-        self.receiver_cores = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in self.ring])
-        self.sender_cores = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in self._bank_senders])
+        self.receiver_cores = _one_core_per_range(self.ring)
+        self.sender_cores = _one_core_per_range(self._bank_senders)
         self.worker_cores = _core_range(0, 0, grid.x - 1, grid.y - 1).subtract(self.sender_cores)
-        self.in0_block_w = 2
-        self.k_tiles = self.num_blocks * self.in0_block_w
 
     def bank_receivers(self, b):
         """Bank b's receivers: ring positions b*R .. b*R + R - 1."""
-        receivers = self.ring[b * self.recv_per_reader : (b + 1) * self.recv_per_reader]
-        return ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in receivers])
+        return _one_core_per_range(self.ring[b * self.recv_per_reader : (b + 1) * self.recv_per_reader])
 
 
 def _make_pipes(device, layout, ring_size, mapping=None, receiver_domain=None):
@@ -381,6 +387,9 @@ def test_worker_pipes_gather_in0_matmul_senders_inside_ring(device):
         stream_in1=False,
     )
 
+    out_memory_config = ring_sharded(N // layout.num_blocks)
+    compute_kernel_config = _compute_kernel_config(device)
+
     with _prefetcher_sub_devices(device, layout) as worker_sub_device_id:
         ttnn.dram_prefetcher(tt_weights[:1] + [tt_addrs], num_layers, prefetcher_pipes=pipes)
         device.set_sub_device_stall_group([worker_sub_device_id])
@@ -389,8 +398,8 @@ def test_worker_pipes_gather_in0_matmul_senders_inside_ring(device):
                 tt_act,
                 tt_weights[layer],
                 program_config=program_config,
-                memory_config=ring_sharded(N // layout.num_blocks),
-                compute_kernel_config=_compute_kernel_config(device),
+                memory_config=out_memory_config,
+                compute_kernel_config=compute_kernel_config,
                 sub_device_id=worker_sub_device_id,
                 prefetcher_pipes=pipes,
             )

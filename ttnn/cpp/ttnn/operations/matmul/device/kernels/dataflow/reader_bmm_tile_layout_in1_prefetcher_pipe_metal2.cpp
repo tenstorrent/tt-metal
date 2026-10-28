@@ -26,7 +26,7 @@ void kernel_main() {
     constexpr auto rest_of_ring_blocks = get_arg(args::rest_of_ring_blocks);
 
     // A core that only fills out the ring's rectangle: no pipe reaches it, so it must not construct one.
-    if (get_arg(args::is_worker) == 0) {
+    if (get_arg(args::is_worker_core) == 0) {
         return;
     }
     // This worker's position in the gather ring.
