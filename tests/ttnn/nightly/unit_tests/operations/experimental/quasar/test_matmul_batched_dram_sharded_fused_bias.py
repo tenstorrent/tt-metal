@@ -92,3 +92,77 @@ def test_quasar_batched_dram_sharded_matmul_fused_bias_multi_batch(device, n_til
     got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
     ref = torch.matmul(in0, in1) + bias
     assert_with_pcc(ref, got, pcc=0.999)
+
+
+def test_quasar_batched_dram_sharded_matmul_packer_l1_acc_multi_batch(device):
+    """Regression test for #62436: multi-block K reduction with packer L1 accumulation.
+
+    When in0_block_w=1, k=128 (num_blocks=4 > 1) and batches_per_core=2, packer_l1_acc_en
+    is true and out_shard_tiles > out_block_tiles. Output (CB 4) and intermediate (CB 5)
+    must not alias onto the multi-batch shard, otherwise partial sums are dropped.
+    """
+    workers = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    num_banks = len(workers)
+    tile = 32
+    m = tile
+    k = 128
+    n = tile * num_banks
+    batches_per_core = 2
+    batch = batches_per_core * num_banks
+
+    worker_grid = ttnn.CoreRangeSet(
+        [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in workers]
+    )
+    dram_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_banks - 1, 0))})
+    in0_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(worker_grid, (batches_per_core * m, k), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    in1_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.DRAM,
+        ttnn.ShardSpec(dram_grid, (batches_per_core * k, n), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    out_mc = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(worker_grid, (batches_per_core * m, n), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+
+    torch.manual_seed(12345)
+    in0 = torch.rand([1, batch, m, k], dtype=torch.bfloat16)
+    in1 = torch.rand([1, batch, k, n], dtype=torch.bfloat16)
+    in0_t = ttnn.from_torch(in0, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in0_mc)
+    in1_t = ttnn.from_torch(in1, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16, device=device, memory_config=in1_mc)
+
+    params = qsr.MatmulParams()
+    params.program_config = qsr.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig(
+        in0_block_w=1,
+        per_core_M=m // tile,
+        per_core_N=n // tile,
+        fused_activation=None,
+    )
+    params.output_mem_config = out_mc
+    params.output_dtype = ttnn.bfloat16
+
+    attributes = qsr.create_matmul_attributes(in0_t, in1_t, params, [])
+    tensor_args = qsr.MatmulInputs()
+    tensor_args.input_tensors = [in0_t, in1_t]
+    tensor_args.optional_input_tensors = []
+
+    factory = qsr.matmul_select_program_factory(attributes, tensor_args)
+    assert isinstance(
+        factory, qsr.MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory
+    ), f"Expected batched HS DRAM factory, got {type(factory)}"
+
+    output = qsr.MatmulDeviceOperation.create_output_tensors(attributes, tensor_args)
+    descriptor = qsr.MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory.create_descriptor(
+        attributes, tensor_args, output
+    )
+
+    result = ttnn.generic_op([in0_t, in1_t, output[0]], descriptor)
+    got = ttnn.to_torch(result.cpu().to(ttnn.ROW_MAJOR_LAYOUT))
+    ref = torch.matmul(in0, in1)
+    assert_with_pcc(ref, got, pcc=0.999)
+
