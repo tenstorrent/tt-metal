@@ -434,3 +434,15 @@
   team: ttnn
   budget_type: sanity
   owner_id: U084B1CES7M # Borys Bradel
+
+# The Metal 2.0 form of generic_op, which runs on Quasar where the ProgramDescriptor form does not. It leaves out the
+# host-only hash tests and the tests of the Python classes, which "ttnn misc ops group" already runs.
+- name: "ttnn quasar generic_op"
+  cmd: >-
+    TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="3,2" pytest --timeout 600 -v tests/ttnn/unit_tests/operations/debug/test_generic_op_program_spec.py -k "not test_hash_"
+  skus:
+    sim_quasar:
+      timeout: 5
+  team: ttnn
+  budget_type: sanity
+  owner_id: U09AWQGLN77 # Konstantinos Fragkiadakis
