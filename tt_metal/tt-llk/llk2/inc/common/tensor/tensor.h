@@ -57,6 +57,16 @@ enum class Exu : std::uint8_t
 
 using Dims = std::array<std::uint32_t, 6>;
 
+// ---- tile geometry constants (the same on every arch) ---------------------------------------------------------------
+inline constexpr std::uint32_t face_cols          = 16; ///< datums in a face row; every face is this wide
+inline constexpr std::uint32_t max_face_rows      = 16; ///< rows in a full face; shorter tiles have shorter faces
+inline constexpr std::uint32_t default_tile_dim   = 32; ///< tile height and width when the caller names none
+inline constexpr std::uint32_t dest_row_datums    = 16; ///< datums in one Dest row
+inline constexpr std::uint32_t min_dest_face_rows = 8;  ///< every face takes at least an 8-row slot in Dest (Quasar's tiny_face_stride)
+inline constexpr std::uint32_t bfp_block_datums   = 16; ///< block float formats share one exponent byte per 16 datums
+inline constexpr std::uint32_t l1_alignment_bytes = 16; ///< tiles in L1 are padded to whole 16-byte words
+inline constexpr std::uint32_t bits_per_byte      = 8;
+
 template <std::size_t Rank>
 struct TensorShape
 {
@@ -124,7 +134,7 @@ constexpr bool equal(const Dims& a, const Dims& b)
 constexpr Dims dense_strides(const Dims& s) // L1: row-major in dim order
 {
     Dims t {};
-    t[DatumX] = 1;
+    t[DatumX] = 1; // datums are contiguous along x
     for (std::size_t d = DatumX; d-- > 0;)
     {
         t[d] = s[d + 1] * t[d + 1];
@@ -135,9 +145,9 @@ constexpr Dims dense_strides(const Dims& s) // L1: row-major in dim order
 constexpr Dims dest_strides(const Dims& s) // Dest: rows of 16 datums, a face in at least an 8-row slot (every arch)
 {
     Dims t {};
-    t[DatumX] = 1;
-    t[DatumY] = 16;
-    t[FaceX]  = 16 * max_u32(s[DatumY], 8);
+    t[DatumX] = 1; // datums are contiguous along a row
+    t[DatumY] = dest_row_datums;
+    t[FaceX]  = dest_row_datums * max_u32(s[DatumY], min_dest_face_rows);
     t[FaceY]  = t[FaceX] * s[FaceX];
     t[TileX]  = t[FaceY] * s[FaceY];
     t[TileY]  = t[TileX] * s[TileX];
@@ -174,7 +184,7 @@ constexpr std::uint32_t datum_bits(DataFormat f)
         case DataFormat::Bfp2_b:
             return 2;
         default:
-            return 0; // not supported yet
+            return 0; // not supported yet: no Tensor can be made in this format
     }
 }
 
@@ -198,11 +208,17 @@ constexpr std::uint32_t faces_per_tile(const TensorShape<6>& s)
     return s.sizes[FaceY] * s.sizes[FaceX];
 }
 
-// Bytes of one tile in L1: mantissas, plus one exponent byte per 16 datums for block formats, 16-byte aligned.
+constexpr std::uint32_t round_up(std::uint32_t value, std::uint32_t multiple)
+{
+    return (value + multiple - 1) / multiple * multiple;
+}
+
+// Bytes of one tile in L1: mantissas, plus one exponent byte per block for block formats; each part padded to
+// whole 16-byte words.
 constexpr std::uint32_t tile_bytes(DataFormat f, std::uint32_t datums)
 {
-    const std::uint32_t exponents = is_bfp(f) ? (datums / 16 + 15) / 16 * 16 : 0;
-    return (datums * datum_bits(f) / 8 + exponents + 15) / 16 * 16;
+    const std::uint32_t exponents = is_bfp(f) ? round_up(datums / bfp_block_datums, l1_alignment_bytes) : 0;
+    return round_up(datums * datum_bits(f) / bits_per_byte + exponents, l1_alignment_bytes);
 }
 
 constexpr std::uint32_t tile_bytes(const TensorSpec<6>& t)
@@ -244,13 +260,15 @@ constexpr bool free_or(const TensorSpec<6>& d, Thread t, Exu e) // nobody's, or 
 // ---- constructing: the tile is named, or min(dim, 32) per axis -------------------------------------------------
 constexpr bool is_valid_tile(std::uint32_t h, std::uint32_t w)
 {
-    return w > 0 && w % 16 == 0 && (h == 1 || h == 2 || h == 4 || h == 8 || (h > 0 && h % 16 == 0));
+    // Tiny tiles are 1, 2, 4 or 8 rows tall; full tiles a whole number of faces tall.
+    const bool tiny_height = h == 1 || h == 2 || h == 4 || h == 8;
+    return w > 0 && w % face_cols == 0 && (tiny_height || (h > 0 && h % max_face_rows == 0));
 }
 
 constexpr Dims tiled(std::uint32_t tiles_y, std::uint32_t tiles_x, std::uint32_t h, std::uint32_t w)
 {
-    const std::uint32_t face_rows = min_u32(h, 16);
-    return {tiles_y, tiles_x, h / face_rows, w / 16, face_rows, 16};
+    const std::uint32_t face_rows = min_u32(h, max_face_rows);
+    return {tiles_y, tiles_x, h / face_rows, w / face_cols, face_rows, face_cols};
 }
 
 constexpr TensorSpec<6> laid_out(const Dims& sizes, DataFormat f, Storage storage)
@@ -267,19 +285,19 @@ constexpr TensorSpec<6> make_spec(Storage storage)
     return laid_out(tiled(Rows / H, Cols / W, H, W), F, storage);
 }
 
-template <std::uint32_t Rows, std::uint32_t Cols, DataFormat F, std::uint32_t H = min_u32(Rows, 32), std::uint32_t W = min_u32(Cols, 32)>
+template <std::uint32_t Rows, std::uint32_t Cols, DataFormat F, std::uint32_t H = min_u32(Rows, default_tile_dim), std::uint32_t W = min_u32(Cols, default_tile_dim)>
 inline constexpr TensorSpec<6> l1_spec = make_spec<Rows, Cols, F, H, W>(Storage::L1);
 
-template <std::uint32_t Rows, std::uint32_t Cols, DataFormat F, std::uint32_t H = min_u32(Rows, 32), std::uint32_t W = min_u32(Cols, 32)>
+template <std::uint32_t Rows, std::uint32_t Cols, DataFormat F, std::uint32_t H = min_u32(Rows, default_tile_dim), std::uint32_t W = min_u32(Cols, default_tile_dim)>
 inline constexpr TensorSpec<6> dst_spec = make_spec<Rows, Cols, F, H, W>(Storage::Dest);
 
-template <std::uint32_t Rows, std::uint32_t Cols, DataFormat F, std::uint32_t H = min_u32(Rows, 32), std::uint32_t W = min_u32(Cols, 32)>
+template <std::uint32_t Rows, std::uint32_t Cols, DataFormat F, std::uint32_t H = min_u32(Rows, default_tile_dim), std::uint32_t W = min_u32(Cols, default_tile_dim)>
 constexpr auto l1_tensor(std::uint32_t address)
 {
     return Tensor<l1_spec<Rows, Cols, F, H, W>>(address);
 }
 
-template <std::uint32_t Rows, std::uint32_t Cols, DataFormat F, std::uint32_t H = min_u32(Rows, 32), std::uint32_t W = min_u32(Cols, 32)>
+template <std::uint32_t Rows, std::uint32_t Cols, DataFormat F, std::uint32_t H = min_u32(Rows, default_tile_dim), std::uint32_t W = min_u32(Cols, default_tile_dim)>
 constexpr auto dst_tensor(std::uint32_t row)
 {
     return Tensor<dst_spec<Rows, Cols, F, H, W>>(row);
