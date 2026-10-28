@@ -14,6 +14,7 @@ The reference updates the bias on every forward (no training guard); the flip ru
 (_autoregressive_generate twice), so the -x half sees the bias after the x half.
 """
 import torch
+import torch.nn.functional as F
 
 TARGET_DIST = (0.05, 0.10, 0.55, 0.15, 0.15)
 UPDATE_RATE = 0.01
@@ -31,22 +32,22 @@ class RouterState:
         self.bias = self.bias0.clone()
 
     def route(self, patches, w_gate):
-        """patches [P, 128] fp32 (NaN allowed), w_gate [5, 128]. Returns (weights [P, 3], indices [P, 3], margin)."""
-        x = torch.nan_to_num(patches.to(torch.float32), nan=0.0)
-        scores = torch.softmax(x @ w_gate.T.to(torch.float32) + self.bias, dim=-1)
-        top = torch.topk(scores, TOP_K + 1, dim=-1)
-        indices = top.indices[:, :TOP_K]
-        w = top.values[:, :TOP_K]
-        weights = w / w.sum(dim=-1, keepdim=True)
-        margin = float((top.values[:, TOP_K - 1] - top.values[:, TOP_K]).min())
-        return weights, indices, margin
+        """patches [P, 128] fp32 (NaN allowed), w_gate [5, 128]: moe.py Gate.forward's ops, in its order.
+        Returns (weights [P, 3], indices [P, 3], scores [P, 5]); call update() after."""
+        scores = F.linear(torch.nan_to_num(patches, nan=0.0), w_gate)
+        scores = (scores + self.bias).softmax(dim=-1, dtype=torch.float32)
+        indices = torch.topk(scores, TOP_K, dim=-1)[1]
+        weights = scores.gather(1, indices)
+        weights /= weights.sum(dim=-1, keepdim=True)
+        return weights, indices, scores
 
     def update(self, weights, indices):
         """Apply after each forward's routing; for the flip, before routing the -x half."""
-        counts = torch.bincount(indices.flatten(), weights=weights.flatten().to(torch.float32), minlength=N_EXPERTS)
+        counts = torch.bincount(indices.view(-1), weights=weights.view(-1), minlength=N_EXPERTS)
         total = counts.sum()
-        target = torch.tensor(TARGET_DIST, dtype=torch.float32)
-        self.bias = self.bias + UPDATE_RATE * ((target * total - counts) / total)  # moe.py op order
+        target = torch.tensor(TARGET_DIST).to(dtype=counts.dtype)
+        load_error = target * total - counts
+        self.bias += UPDATE_RATE * (load_error / total)  # moe.py op order, in place
 
 
 def top3_margin(ref_scores):
