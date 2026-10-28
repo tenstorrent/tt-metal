@@ -828,7 +828,7 @@ std::unordered_map<experimental::ProgramExecutionUID, nlohmann::json::array_t> c
                     marker.runtime_host_id, marker.trace_id, marker.trace_id_counter);
                 if (isMarkerAZoneEndpoint(marker)) {
                     if (marker.marker_name != "SYNC-ZONE-SENDER" && marker.marker_name != "SYNC-ZONE-RECEIVER" &&
-                        marker.marker_name != "PROFILER-NOC-QUICK-SEND" && !marker.marker_name.ends_with("-FW") &&
+                        marker.marker_name != "PROFILER-NOC-QUICK-PUSH" && !marker.marker_name.ends_with("-FW") &&
                         (!marker.marker_name.ends_with("-KERNEL") || marker.risc == tracy::RiscType::BRISC ||
                          marker.risc == tracy::RiscType::NCRISC ||
                          (marker.risc >= tracy::RiscType::QUASAR_DM0 && marker.risc <= tracy::RiscType::QUASAR_DM7))) {
@@ -1990,7 +1990,7 @@ void DeviceProfiler::readDeviceMarkerData(
     const kernel_profiler::PacketTypes packet_type = get_packet_type(timer_id);
     const auto [trace_id, trace_id_count] = getTraceIdAndCount(run_host_id, device_trace_counter);
 
-    const auto& [_, new_marker_inserted] = device_markers.emplace(
+    const auto& [existing_marker_it, new_marker_inserted] = device_markers.emplace(
         run_host_id,
         trace_id,
         trace_id_count,
@@ -2011,6 +2011,26 @@ void DeviceProfiler::readDeviceMarkerData(
         meta_data);
 
     if (!new_marker_inserted) {
+        // tmp-diag: a zone start/end that collides with an already-stored marker (same timestamp, core, risc and
+        // 16-bit marker id) is silently dropped here; report it to confirm whether that is what breaks the
+        // PROFILER-NOC-QUICK-PUSH pairs.
+        if (packet_type == kernel_profiler::ZONE_START || packet_type == kernel_profiler::ZONE_END) {
+            log_warning(
+                tt::LogMetal,
+                "tmp-diag: duplicate zone endpoint dropped: {} {} run {} core ({},{}) {} ts {} marker_id {} existing: "
+                "{} {} data {}",
+                marker_details.marker_name,
+                enchantum::to_string(get_marker_type_from_packet_type(packet_type)),
+                run_host_id,
+                physical_core.x,
+                physical_core.y,
+                enchantum::to_string(risc_type),
+                timestamp,
+                static_cast<uint16_t>(timer_id),
+                existing_marker_it->marker_name,
+                enchantum::to_string(existing_marker_it->marker_type),
+                existing_marker_it->data);
+        }
         return;
     }
 
