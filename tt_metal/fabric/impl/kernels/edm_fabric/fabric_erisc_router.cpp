@@ -1201,13 +1201,14 @@ FORCE_INLINE void send_credits_to_upstream_workers(
         local_sender_channel_worker_interface
             .template notify_persistent_connection_of_free_space<enable_deadlock_avoidance>(num_credits);
     } else {
-        // Without stream registers a persistent (router) producer takes the read counter as a worker does.
+        // Without stream registers a persistent (router) producer takes the read counter as a worker does, and is
+        // connected from wait_for_static_connection_to_ready() on.
         // Connection liveness checks are only done for connections that are not persistent
         // For those connections, it's unsafe to use free-slots counters held in stream registers
         // due to the lack of race avoidant connection protocol. Therefore, we update our read counter
         // instead because these connections will be read/write counter based instead
         local_sender_channel_worker_interface.increment_local_read_counter(num_credits);
-        if (channel_connection_established) {
+        if (SKIP_CONNECTION_LIVENESS_CHECK || channel_connection_established) {
             local_sender_channel_worker_interface
                 .template notify_worker_of_read_counter_update<enable_read_counter_update_noc_flush>();
         } else {
