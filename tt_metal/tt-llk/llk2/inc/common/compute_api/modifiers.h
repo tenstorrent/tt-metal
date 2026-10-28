@@ -8,7 +8,8 @@
 
 #pragma once
 
-#include "resolver/plan.h" // Broadcast
+#include "resolver/plan.h"   // Broadcast
+#include "tensor/tensor.h"   // Thread
 
 namespace llk2
 {
@@ -31,6 +32,13 @@ struct sub_modifiers
 struct copy_modifiers
 {
     bool transpose = false; ///< width-height transpose of each tile on the way to Dest (today's transpose_wh_tile)
+};
+
+/// Modifiers of every SFPU activation (vec_silu, vec_tanh, ...).
+struct vec_modifiers
+{
+    bool fast     = false;        ///< approximate mode: today's fast_and_approx / APPROX template argument
+    Thread thread = Thread::Math; ///< the thread that drives the SFPU: Thread::Math or Thread::Pack (the target kernel's choice)
 };
 
 } // namespace llk2
