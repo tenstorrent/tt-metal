@@ -19,6 +19,8 @@ Where it runs in the head:
   own chip       on the Y sender if there is one, else on a same-row port: a local write + increment.
 """
 
+import os
+
 import torch
 from ttnn.bringup.combine_rf.routing_a2a import (
     _PLAN,
@@ -460,7 +462,10 @@ class RoutingStream:
         self.fbase = self.xbase + nx * self.PCAP
         self.flags = flags  # (the forwarding slots' flags: 16 B a slot, zeroed L1)
         nf = max([len(v) for v in self.fwd_plan()[0].values()] + [0])
-        assert al(router.pbuf_sub) + (nx + nf) * self.PCAP <= abytes, "ports: no L1 for the routing buffers"
+        assert al(router.pbuf_sub) + (nx + nf) * self.PCAP <= abytes, (
+            f"ports: no L1 for the routing buffers ({al(router.pbuf_sub)} B logits + {nx} + {nf} slots x {self.PCAP} B = "
+            f"{al(router.pbuf_sub) + (nx + nf) * self.PCAP} B > the arena's {abytes} B)"
+        )
         assert 2 * ny * self.PCAP <= abytes, "the watcher core: no L1 for the Y senders' buffers"
         self.ny = ny
 
@@ -548,7 +553,9 @@ class RoutingStream:
         for d in ("fwd", "bwd"):
             peer = rg["next"] if d == "fwd" else rg["prev"]
             if peer is not None and rg.get(f"{d}_links"):
-                out[0 if (peer[1] - coord[1]) % self.C == 1 else 1] = d
+                # (a line by the sign: modulo C 2 both neighbours are + 1)
+                fwd = (peer[1] - coord[1]) % self.C == 1 if self.wrap_x else peer[1] > coord[1]
+                out[0 if fwd else 1] = d
         return out
 
     def path(self, s, d):
@@ -702,6 +709,7 @@ class RoutingStream:
             ENT_CAP=self.inst_cap,
             WX=int(self.wrap_x),
             WY=int(self.wrap_y),
+            YT=int(os.environ.get("SPC_YTIE") == "1"),  # (the combine's Y tie split: the plan's ports, as routing_a2a)
             DCACHE=1,
             PROBE_NOSTORE=0,
             CT0=ct0,

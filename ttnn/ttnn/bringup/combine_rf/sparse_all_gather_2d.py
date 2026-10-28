@@ -28,6 +28,7 @@ instead - only its END(GMAX), into ring 0 of the receiving port of that link (fr
 gates that port's completion but not its END order (_wiring).
 """
 
+import os
 import functools
 
 import torch
@@ -38,6 +39,7 @@ from .fabric_all_gather_py import (
     NOC0,
     NOC1,
     _SEM_CACHE,
+    _worker_nearest_noc0,
     _worker_nearest_noc1,
     allowed_cores,
     eth_noc_coord,
@@ -621,6 +623,7 @@ def place_ports(mesh_device, chips, allowed=None):
             )
         ),
         None if allowed is None else tuple(sorted(allowed)),
+        os.environ.get("SPC_PLACE", "noc1"),
     )
     hit = _PORTS_CACHE.get(key)
     if hit is not None and hit[0] is mesh_device:
@@ -637,18 +640,81 @@ def _place_ports(mesh_device, chips, allowed=None):
     }
     eth = probe_ethernet_cores(mesh_device, connections, allowed_cores(mesh_device))  # (a setup-time probe)
     port_core = {}
+    mode = os.environ.get("SPC_PLACE", "noc1")
+    if mode == "auto":  # (probe: the nearest-port placement when it leaves >= 8 cells of `allowed` to the accumulators, else
+        # uniform on NoC0 - the per-chip placement's union of port cells costs the accumulators' cells where cells are few)
+        os.environ["SPC_PLACE"] = "noc1"
+        try:
+            near = _place_ports(mesh_device, chips, allowed)
+        finally:
+            os.environ["SPC_PLACE"] = "auto"
+        left = len(set(allowed) - {(c.x, c.y) for c in near.values()})
+        return near if left >= 8 else _place_ports_uniform(mesh_device, chips, allowed, eth, noc=0)
+    if mode in ("uni0", "uni1"):  # (probe: one logical cell per (direction, link) on every chip - the fewest NoC hops summed
+        # over the chips, NoC0 / NoC1 - so the ports take 8 cells of the shared cell list, not their union over chips)
+        return _place_ports_uniform(mesh_device, chips, allowed, eth, noc=int(mode[-1]))
     for coord, ports in chips.items():
         taken = set()
         for d, p in ports.items():
             for li, l in enumerate(p["links"]):
                 exy = eth_noc_coord(mesh_device, coord, eth[(coord, p["peer"], l)])
-                core = _worker_nearest_noc1(mesh_device, coord, exy, taken, allowed)
+                # (probe SPC_PLACE=noc0: nearest on NoC0, for the sender on NoC0 - SPC_SNOC=0)
+                near = _worker_nearest_noc0 if os.environ.get("SPC_PLACE", "noc1") == "noc0" else _worker_nearest_noc1
+                core = near(mesh_device, coord, exy, taken, allowed)
                 if core is None:  # (no Ethernet core reported - the mock cluster runs no probe: the first free core)
                     x, y = min((xy for xy in allowed if xy not in taken), key=lambda xy: (xy[1], xy[0]))
                     core = ttnn.CoreCoord(x, y)
                 taken.add((core.x, core.y))
                 port_core[(coord, d, li)] = core
     return port_core
+
+
+def _place_ports_uniform(mesh_device, chips, allowed, eth, noc):
+    from .fabric_all_gather_py import _chip_maps, _noc_grid
+
+    gx, gy = _noc_grid(mesh_device)
+    slots = sorted({(d, li) for ports in chips.values() for d, p in ports.items() for li in range(len(p["links"]))})
+    phys = {}  # (coord, logical cell) -> physical NoC (x, y)
+    for coord in chips:
+        t2p = _chip_maps(mesh_device, coord)[2]
+        for x, y in allowed:
+            v = mesh_device.worker_core_from_logical_core(ttnn.CoreCoord(x, y))
+            phys[(coord, (x, y))] = (t2p.get(v.x, v.x), v.y)
+
+    def hops(coord, cell, exy):
+        px, py = phys[(coord, cell)]
+        ex, ey = exy
+        if noc == 0:  # (+X then +Y, wrapping)
+            return (ex - px) % gx + (ey - py) % gy
+        return (py - ey) % gy + (px - ex) % gx  # (NoC1: -Y then -X, wrapping)
+
+    cost = {}
+    for d, li in slots:
+        for cell in allowed:
+            t = 0
+            for coord, ports in chips.items():
+                if d not in ports or li >= len(ports[d]["links"]):
+                    continue
+                exy = eth_noc_coord(mesh_device, coord, eth[(coord, ports[d]["peer"], ports[d]["links"][li])])
+                t += hops(coord, cell, exy)
+            cost[((d, li), cell)] = t
+    taken, pick = set(), {}
+    left = set(slots)
+    while left:  # (greedy: the slot whose best free cell is cheapest first)
+        best = min(
+            ((cost[(sl, cell)], sl, cell) for sl in left for cell in allowed if cell not in taken),
+            key=lambda e: (e[0], e[2][1], e[2][0]),
+        )
+        _, sl, cell = best
+        pick[sl] = cell
+        taken.add(cell)
+        left.discard(sl)
+    return {
+        (coord, d, li): ttnn.CoreCoord(*pick[(d, li)])
+        for coord, ports in chips.items()
+        for d, p in ports.items()
+        for li in range(len(p["links"]))
+    }
 
 
 def ensure_semaphores(mesh_device, *, num_links=2, torus=(False, False)):

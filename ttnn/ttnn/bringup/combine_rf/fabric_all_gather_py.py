@@ -638,6 +638,26 @@ def _worker_nearest_noc1(mesh_device, coord, eth_xy, taken, allowed):
     return best[1] if best is not None else None
 
 
+def _worker_nearest_noc0(mesh_device, coord, eth_xy, taken, allowed):
+    """_worker_nearest_noc1 for a sender on NoC0, which routes +X, then +Y, wrapping around the grid: the fewest NoC0 hops
+    to the Ethernet core at physical eth_xy (a worker just below the Ethernet row wraps the whole column; one near the
+    grid's far edge is a few hops away)."""
+    t2p = _chip_maps(mesh_device, coord)[2]
+    gx, gy = _noc_grid(mesh_device)
+    ex, ey = eth_xy
+    best = None
+    for x, y in sorted(allowed):
+        lc = ttnn.CoreCoord(x, y)
+        if (x, y) in taken:
+            continue
+        v = mesh_device.worker_core_from_logical_core(lc)
+        px = t2p.get(v.x, v.x)
+        score = ((ex - px) % gx + (ey - v.y) % gy, v.y, px)
+        if best is None or score < best[0]:
+            best = (score, lc)
+    return best[1] if best is not None else None
+
+
 def _worker_below(mesh_device, coord, noc_x, taken, allowed):
     """Logical worker core (from `allowed`) in physical NoC column noc_x closest below the Ethernet row, not yet
     taken; else the nearest physical column. Worker coordinates are translated, so they are mapped back per chip."""

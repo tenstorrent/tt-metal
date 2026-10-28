@@ -653,10 +653,12 @@ void kernel_main() {
 """
 
 
-def route(src, home, R, C, wrap_x, wrap_y, link):
+def route(src, home, R, C, wrap_x, wrap_y, link, ytie=False):
     """[(chip, direction)] hops from src to home: Y first, then X (lines: forced; rings: shorter way). Ties as the
     fabric's routing tables (routing_table_generator.cpp: the first of (N, S) / (E, W)): Y- (North, row - 1) and X+
-    (East, column + 1) - a multi-hop unicast must leave through its route's first hop."""
+    (East, column + 1) - a multi-hop unicast must leave through its route's first hop. ytie (the combine's SPC_YTIE,
+    its senders re-encode these routes): a Y tie goes Y+ when the source's and home's columns differ in parity - half
+    the opposite row's chips each way."""
     hops = []
     r, c = src
 
@@ -667,7 +669,7 @@ def route(src, home, R, C, wrap_x, wrap_y, link):
             return (1 if plus else -1), (f if plus else n - f)
         return (1 if b > a else -1), abs(b - a)
 
-    s, k = step(R, r, home[0], wrap_y, False)
+    s, k = step(R, r, home[0], wrap_y, ytie and (c + home[1]) % 2 == 1)
     for _ in range(k):
         hops.append(((r, c), "Y+" if s > 0 else "Y-"))
         r = (r + s) % R

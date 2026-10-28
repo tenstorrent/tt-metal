@@ -265,6 +265,9 @@ def _ids(name, g, c):
     raise ValueError(name)
 
 
+YTIE = os.environ.get("SPC_YTIE") == "1"  # (the combine's Y tie split: the floor on the routes it sends)
+
+
 def _routing(name, c, seed=0):
     """rows_by_chip (y row, home, t, link, local expert) in expert order, per-chip counts / regions over the global
     experts, rows per chip (padded), the busiest link's rows."""
@@ -286,7 +289,7 @@ def _routing(name, c, seed=0):
                 src = chips[e // EPC]
                 link = (t + k) % L
                 pend[src].append((e % EPC, o, t, link, int(gbits[o, t, k])))
-                for hc, d in route(src, chips[o], R, C, *c.wrap, link):
+                for hc, d in route(src, chips[o], R, C, *c.wrap, link, YTIE):
                     load[(hc, d, link)] = load.get((hc, d, link), 0) + 1
     rows, counts, regions, n_rows = (
         {},
@@ -348,7 +351,7 @@ _AB = [
     ("k3", "acc_on_ports", 16),
 ]
 # the scaling cases: the planners' defaults (combine_auto's choice), every mesh, chunk and routing
-_SCALE_MODELS = ("k3", "glm53_flash")
+_SCALE_MODELS = ("k3", "glm53_flash", "glm53", "m3", "k27")
 _ROUTINGS = ("uniform", "zipf_spread_1.2", "zipf_packed_1.2")
 _PERF = [(m, mode, a, 5120, "uniform", GALAXY) for m, mode, a in _AB if mode is not None] + [
     (m, None, 16, chunk, routing, load)
@@ -453,31 +456,35 @@ _LANDING = [
     for pool in pools
     for routing in ("uniform",) + (("zipf_spread_1.2",) if chunk == 8192 else ())
 ]
+_LANDING_GALAXY = [  # (the whole Galaxy: 31 sources, the planner's pool)
+    (m, 5120, "uniform", None, "8x4") for m in ("k3", "glm53_flash", "glm53", "m3", "k27")
+]
 
 
 @pytest.mark.parametrize(
-    "mesh_device, device_params, model, chunk, routing, pool, landing",
+    "mesh_device, device_params, model, chunk, routing, pool, landing, mesh",
     [
         pytest.param(
-            *_mesh_params("2x4", fabric_payload(MODELS[m]["H"])),
+            *_mesh_params(mesh, fabric_payload(MODELS[m]["H"])),
             m,
             chunk,
             routing,
             pool,
             landing,
-            id=f"{m}-{chunk}-{routing}-pool{pool or 'auto'}-{landing}",
+            mesh,
+            id=f"{m}-{chunk}-{routing}-pool{pool or 'auto'}-{landing}" + ("" if mesh == "2x4" else f"-{mesh}"),
         )  # fmt: skip
-        for m, chunk, routing, pool in _LANDING
+        for m, chunk, routing, pool, mesh in [x + ("2x4",) for x in _LANDING] + _LANDING_GALAXY
         for landing in ("rings", "shared")
     ],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.timeout(3600)
-def test_flat_combine_landing(mesh_device, device_params, model, chunk, routing, pool, landing):
+def test_flat_combine_landing(mesh_device, device_params, model, chunk, routing, pool, landing, mesh):
     """The combine's landing pools, rings vs shared (slot grants), ports apart, at one pool size."""
     c = closeout_cfg(
-        model, chunk, "2x4", routings=(routing,), timing=True, pipe=True, ITERS=12, combine_mode="ports apart",
-        landing=landing, pool_slots=pool,
+        model, chunk, mesh, routings=(routing,), timing=True, pipe=True, ITERS=12, combine_mode="ports apart",
+        landing=landing, pool_slots=pool, a_max=int(os.environ.get("FC_AMAX", "16")),  # (FC_AMAX: accumulators at most)
     )  # fmt: skip
     logger.info(f"landing {model} {chunk} {routing} pool {pool} {landing}: {c}")
     _run(mesh_device, c)
@@ -526,6 +533,28 @@ def test_flat_combine_landing_soak(mesh_device, device_params, model, chunk, rou
         model, chunk, "2x4", routings=(routing,), timing=False, combine_mode="ports apart", landing="shared",
         pool_slots=pool, soak=calls,
     )  # fmt: skip
+    _run(mesh_device, c)
+
+
+_SOAK_GALAXY = [(m, r) for m in _SCALE_MODELS for r in ("uniform", "zipf_spread_1.0", "zipf_packed_1.0")]
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params, model, routing",
+    [
+        pytest.param(*_mesh_params("8x4", fabric_payload(MODELS[m]["H"])), m, r, id=f"{m}-{r}-8x4-soak")
+        for m, r in _SOAK_GALAXY
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+@pytest.mark.timeout(7200)
+def test_flat_combine_soak_galaxy(mesh_device, device_params, model, routing):
+    """The fused flat + combine soaked on the Galaxy (auto layout, the probes from the environment): FC_SOAK_CALLS fused
+    calls back to back after the first, every 500th and the last checked against the reference."""
+    c = closeout_cfg(
+        model, 5120, "8x4", routings=(routing,), timing=False, soak=int(os.environ.get("FC_SOAK_CALLS", "20000"))
+    )
+    logger.info(f"galaxy soak {model} {routing}: {c.soak} calls")
     _run(mesh_device, c)
 
 
@@ -617,6 +646,7 @@ def _check_y(ys, x_host, tidx_t, cnts, regs, op, c, routing, per_chip_rows=96):
 
 def _flat_combine_rf_routing(mesh_device, op, routing, c):
     S, K, EPC, H, I, CAP, ITERS = c.S, c.K, c.EPC, c.H, c.I, c.CAP, c.ITERS
+    ITERS = int(os.environ.get("FC_ITERS_FORCE", ITERS))  # (e.g. NoC-trace captures: few calls)
     R, C, N, TORUS = c.R, c.C, c.N, c.torus
     torch.manual_seed(0)
     rows, counts, regions, n_rows, busiest = _routing(routing, c)
@@ -871,7 +901,7 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
     # accumulators on the ports (L1 hand-off only) there is no alone variant)
     alone = (
         None
-        if ACC_ON_PORTS or not c.timing
+        if ACC_ON_PORTS or not (c.timing or os.environ.get("FC_SOAK_FN") == "alone")
         else sparse_combine_rf_prepare(
             mesh_device,
             S,
@@ -892,7 +922,11 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
         f"{routing}: flat writers {writers}, arena {a_rows * 64 >> 10} KB/core, combine ports "
         f"{sorted(set(fused.cells['ports'].values()))} accs {fused.cells['accs']}"
     )
-    logger.info(f"{routing}: ring depth fused {fused.depth}" + ("" if alone is None else f", alone {alone.depth}"))
+    logger.info(
+        f"{routing}: ring depth fused {fused.depth}" + ("" if alone is None else f", alone {alone.depth}")
+        + f"; credit policy fused {getattr(fused, 'cred_policy', '?')}"
+        + ("" if alone is None else f", alone {getattr(alone, 'cred_policy', '?')}")
+    )
     if L1:
         desc, l1_args = fused.build_l1(y, out)
     else:
@@ -1003,12 +1037,22 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
             logger.info(
                 f"  home {o}: {len(bad)} / {S} tokens off; first {bad[:8]}; out[0,:4] {outs[o][0, :4].tolist()} ref {ref[o][0, :4].tolist()}"
             )
-    assert worst < 2e-2 or os.environ.get("SPC_NOYREAD") == "1", f"{routing}: combine result off ({worst:.2e})"
+    assert (
+        worst < 2e-2 or os.environ.get("SPC_NOYREAD") == "1" or os.environ.get("SPC_ABL", "0") != "0"
+    ), f"{routing}: combine result off ({worst:.2e})"
     for i_ in range(
         c.soak
     ):  # (a soak: fused calls back to back, every 500th and the last checked against the reference)
-        run_fused()
-        if i_ % 500 == 499 or i_ == c.soak - 1:
+        # (FC_SOAK_FN: fused (default) / alone (the combine without the flat) / flat (the flat without the combine: its
+        # output is not the combine's - the checks see the last fused call's); FC_SOAK_EVERY: checks every N calls)
+        {"alone": lambda: alone(y, out), "flat": run_flat}.get(os.environ.get("FC_SOAK_FN", ""), run_fused)()
+        every_ = int(os.environ.get("FC_SOAK_EVERY", "500"))
+        if os.environ.get("FC_SOAK_NOCHECK") == "1":  # (hangs only: no result checks)
+            if i_ % every_ == every_ - 1:
+                ttnn.synchronize_device(mesh_device)
+                logger.info(f"{routing}: soak {i_ + 1} of {c.soak} calls (no check), worst per-token rel err 0")
+            continue
+        if i_ % every_ == every_ - 1 or i_ == c.soak - 1:
             ttnn.synchronize_device(mesh_device)
             o2 = [ttnn.to_torch(t).reshape(S, H).float() for t in ttnn.get_device_tensors(out)]
             w2 = max(
@@ -1025,7 +1069,8 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
             assert w2 < 2e-2, f"{routing}: soak call {i_ + 1}: combine result off ({w2:.2e})"
 
     def tprof(fn, run_, name):  # (SPC_TPROF: timeline of one call per chip, us from the combine's first start)
-        fn()
+        for _ in range(int(os.environ.get("SPC_TPROF_N", "1"))):  # (N > 1: the last of N back to back, as pipelined)
+            fn()
         ttnn.synchronize_device(mesh_device)
         for ci, t in enumerate(ttnn.get_device_tensors(run_.tdbg)):
             d = (ttnn.to_torch(t).reshape(48, 128).to(torch.int64) & 0xFFFFFFFF).tolist()
@@ -1063,7 +1108,14 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
                     f"TPROF {routing} {name} chip {ci} sender {r[0] & 0xFF}: end {us(r[2]):.0f} slot {r[3] / 1350:.0f} "
                     f"idle {r[4] / 1350:.0f} cred {r[5] / 1350:.0f} send {r[8] / 1350:.0f} flush {r[10] / 1350:.0f} us | rows "
                     f"{r[7]} blocked {r[6]} empty {r[9]} credit packets {r[11]} | book {r[12] / 1350:.0f} blk {r[13] / 1350:.0f} us "
-                    f"passes {r[14]} piggy {r[15]}"
+                    f"passes {r[14]} piggy {r[15]} | first row {us(r[16]) if r[16] else -1:.0f} last row "
+                    f"{us(r[17]) if r[17] else -1:.0f} us | blocked: no layout {r[18]} full {r[19]} | kernel {us(r[22]):.0f} loop {us(r[1]):.0f} "
+                    f"headers {us(r[20]):.0f} barrier {us(r[21]):.0f} loop end {us(r[23]):.0f}"
+                )
+            if os.environ.get("SPC_TPROF_ACC") == "1":  # (each accumulator: page, end, rows, local rows, local done)
+                logger.info(
+                    f"TPROF {routing} {name} chip {ci} acc list: "
+                    + " ".join(f"{r[0] & 0xFF}:{us(r[3]):.0f}/{r[5]}/{r[4]}/{us(r[2]) if r[2] else -1:.0f}" for r in adp)
                 )
             ae = sorted((us(r[3]), r[5], r[4]) for r in adp)  # (accumulators: end, rows, local rows)
             logger.info(
@@ -1113,7 +1165,7 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
         return
     if c.trace:  # (each variant captured once, after its eager calls above: every program built and loaded)
 
-        def traced(fn, name, batches=(10, 40, 100)):
+        def traced(fn, name, batches=(10, 40, 100), run_=None):
             fn()
             ttnn.synchronize_device(mesh_device)
             tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
@@ -1150,14 +1202,16 @@ def _flat_combine_rf_routing(mesh_device, op, routing, c):
                     f"(slowest chip) median {statistics.median(d) if d else 0:.0f} min {d[0] if d else 0:.0f} "
                     f"max {d[-1] if d else 0:.0f} ({len(d)} replays seen)"
                 )
+            if run_ is not None and os.environ.get("SPC_TPROF") == "1":  # (the last replay's timeline: traced, no host gaps)
+                tprof(lambda: None, run_, f"{name.split()[0]}-traced")
             ttnn.release_trace(mesh_device, tid)
             if not prof:
                 logger.info(f"FC_TRACE {routing} {name:13s}: wall a replay " + " ".join(f"{w:.0f}" for w in walls))
             return statistics.median(walls), (statistics.median(devs[-1]) if devs and devs[-1] else None)
 
-        w_fused, d_fused = traced(run_fused, "fused")
+        w_fused, d_fused = traced(run_fused, "fused", run_=fused)
         w_flat, d_flat = traced(run_flat, "flat alone")
-        w_comb, d_comb = (None, None) if alone is None else traced(lambda: alone(y, out), "combine alone")
+        w_comb, d_comb = (None, None) if alone is None else traced(lambda: alone(y, out), "combine alone", run_=alone)
         fmt = lambda v: "-" if v is None else f"{v:.0f}"  # noqa: E731
         logger.info(
             f"FC_TRACE_SUMMARY {routing} {R}x{C} wrap {c.wrap} E{EPC}/chip K{K} S{S} H{H}: wall a replay fused "
