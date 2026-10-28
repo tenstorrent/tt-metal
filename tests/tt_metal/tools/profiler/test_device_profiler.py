@@ -1563,13 +1563,14 @@ NOC_EVENT_QUICK_PUSH_CONFIGS = {
         knobs={"BLOCKING": 0, "SKIP_READ": 1, "WARMUP": 200, "ITER_ZONE": 1, "PUSH_EVERY": 7},
         program_support_count=8000,
     ),
-    "fd-mcast": dict(env={}, loop_count=4000, knobs={"MCAST_EVERY": 7}, mcast_every=7),
     "sd-sparse": dict(
         env={"slowDispatch": True, "do_mid_run_dump": True, "do_cpp_post_process": True},
         loop_count=300,
         knobs={"BLOCKING": 0, "SKIP_READ": 1, "WARMUP": 200, "ITER_ZONE": 1, "DELAY_NOPS": 20000},
         program_support_count=8000,
     ),
+    # Last on purpose: a hang here (seen with a bad multicast range) poisons the chips for every later config.
+    "fd-mcast": dict(env={}, loop_count=4000, knobs={"MCAST_EVERY": 7}, mcast_every=7),
 }
 
 
