@@ -177,6 +177,35 @@ the values, rel L2 3.5e-3 vs the exact rows; a format change, so C (accuracy) an
   do not see the engram output identical. The 2x2 subset has no end-to-end token metric: the Galaxy's 40-layer ladder
   at 56k + K.1 is the confirmation.
 
+**Row reuse on real text and code: would a row cache in RAM pay? (QB, 2026-10-28, CPU only.)** Corpus: text = 16
+Project Gutenberg books + wikitext-103 test (3.1M tokens); code = 10 code bases (redis C, ripgrep and axum Rust, express
+JS, vue core TS, gson Java, cobra Go, flask and the CPython stdlib Python, tt-metal C++; 2.8M tokens); at most 400k
+tokens a source, requests of 16384 tokens, the model's tokenizer and layer 1's hashes (layer 14 hashes the same
+n-grams). Cache hit = a row lookup that repeats one still in the cache; LRU checked exact against a plain LRU dict.
+Script and log: `/localdev/dnijemcevic/bringup/engram_2026-10-28/engram_cache_sim.py`, `cache_sim_l1.log`.
+- Within one request (what mmap's page cache already gives for free): text 13 % of lookups repeat in the first 5120
+  tokens (18 % in 16k; a whole 400k-token book 39 %); code 53 % (59 %; a whole 400k-token code base 80 %). By n-gram
+  size 2 / 3 / 4 in 5120 tokens: text 28 / 8 / 3 %, code 66 / 51 / 41 %.
+- Shared across requests: warm on half the sources, measure on the other, unseen half (the stream continues):
+
+| cache per layer (264 B a row) | text -> text | code -> code | text -> code | mixed -> mixed |
+|---|---|---|---|---|
+| 1M rows, 0.3 GiB | 27 % | 71 % | 71 % | 45 % |
+| 4M rows, 1.0 GiB | 38 % | 77 % | 77 % | 52 % |
+| 16M rows, 4.1 GiB | 50 % | 80 % | 79 % | 62 % |
+| 64M rows or more, 16.5 GiB+ | 56 % | 80 % | 79 % | 69 % (every row seen kept) |
+
+- A pinned top-K of the warm half's most frequent rows does worse than LRU at the same size (mixed: 25 / 33 / 41 % at
+  1 / 4 / 16M rows; text-trained top-K on code: 7-13 %). The OS page cache at the same bytes (4 KiB = 16 rows a page)
+  is worse while small (mixed 37 / 41 / 47 / 61 %) and better past ~60 GiB a layer (92 % at 66 GiB) because each page
+  read brings 15 neighbours: it is the table becoming resident.
+- At the measured cold cost (8 threads, ~3.45 us a missed row: 424 ms for 122880 distinct rows), a 5120-token chunk's
+  gather per layer: text with no shared cache ~370 ms, LRU 4 GiB ~210 ms, every row seen kept ~190 ms; code ~85 ms;
+  mixed LRU 4 / 16.5 GiB ~160 / 130 ms. Resident: 9-15 ms. The misses are mostly 3- and 4-gram rows never seen
+  before: 3M tokens of traffic leave 31-44 % of text lookups new. More traffic raises the ceiling (a lower bound
+  here), but no cache size gets text near resident's time; only the whole table in RAM, or reading ahead of the
+  device (the async stage), hides the disk.
+
 ## 4. Plan (owner-agreed staging; each stage = its own setting in `tt/settings.py`, its own commit, its own A/B)
 
 Invariant for every stage: **the device rows stay bit-identical to today's** (check by byte comparison, not a
