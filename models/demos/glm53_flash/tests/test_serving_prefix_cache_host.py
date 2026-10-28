@@ -137,6 +137,15 @@ def test_mm_spans_and_payload_from_the_plugin_lists():
 
 
 # ----------------------------------------------------------------------------------- hit decisions
+@pytest.fixture(autouse=True)
+def _restore_at_any_aligned_snapshot(monkeypatch):
+    """The mechanics below restore at 32-aligned snapshot positions (320, 2336, ...). The served default restores only
+    at CHUNK-aligned snapshots (``GLM53_VLLM_APC_HIT_ALIGN`` unset = the device chunk: the continued chunk then
+    starts where the warm-up's continued-chunk walk started, so its programs exist under the sealed cache); that
+    policy is covered by ``test_hit_align_default_restores_only_at_chunk_aligned_snapshots``."""
+    monkeypatch.setenv("GLM53_VLLM_APC_HIT_ALIGN", "32")
+
+
 def _geometry(**kw):
     base = dict(rows=2, cols=4, users_per_row=4, max_seq_len=4096, pad_token_id=PAD)
     base.update(kw)
@@ -872,6 +881,32 @@ def test_host_store_round_trips_through_the_scratch_without_allocating():
         store.save(0, 1)
     store.release()
     assert not store.data and not store.t
+
+
+def test_hit_align_default_restores_only_at_chunk_aligned_snapshots(monkeypatch):
+    """``GLM53_VLLM_APC_HIT_ALIGN`` unset = the device chunk: a multi-turn hit is served from the highest CHUNK-aligned
+    snapshot at or below vLLM's hit (the eager prefill's chunk-end snapshot), never from an unaligned decode crossing
+    (recorded, kept for a later aligned restore point); ``0`` = any 32-aligned snapshot (the mechanics above)."""
+    monkeypatch.delenv("GLM53_VLLM_APC_HIT_ALIGN", raising=False)
+    g = _geometry(max_seq_len=65536)
+    chunk = g.device_prefill_chunk
+    apc = SlotPrefixCache(g, entries=2)
+    assert apc.hit_align == chunk
+    ids = torch.arange(chunk + 300, dtype=torch.int32) % 1000 + 1
+    apc.begin(0, 0, 0)
+    apc.record_prefill(0, 0, 0, ids)
+    assert apc.plan_snapshot(0, 0, chunk, "prefill") == 1  # the eager prefill's chunk-end snapshot
+    for p in range(chunk + 300, chunk + 320):
+        apc.record_decode(0, 0, p, 50 + p)
+    assert apc.plan_snapshot(0, 0, chunk + 320, "decode") == 0  # the 32-aligned decode crossing, unaligned to the chunk
+    apc.release(0, 0)
+    turn = torch.cat([apc.content(0, 0).tokens[: chunk + 320].clone(), torch.full((40,), 9, dtype=torch.int32)])
+    hit = apc.lookup(turn, [], chunk + 320)
+    assert hit is not None and (hit.position, hit.entry) == (chunk, 1), "restored at the chunk end, not at 320 past it"
+    assert apc.lookup(turn, [], 320) is None, "a hit below the first chunk-aligned snapshot is a miss"
+    monkeypatch.setenv("GLM53_VLLM_APC_HIT_ALIGN", "0")
+    any_pos = SlotPrefixCache(g, entries=2)
+    assert any_pos.hit_align == 0
 
 
 def test_zz_no_ttnn_was_imported_by_the_suite():

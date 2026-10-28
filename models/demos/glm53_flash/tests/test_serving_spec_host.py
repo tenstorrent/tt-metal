@@ -375,7 +375,10 @@ def test_boot_order_with_spec():
     assert a.trace_id == 7 and a._trace_outputs == (("logits_tr",), ("ids_tr",))
     assert a.tt_supported_decode_batch_sizes == (4,) and "capture_prefill" in kinds
     fills = [c for c in eng.calls if c[0] == "prefill_fill"]
-    assert fills == [("prefill_fill", 0, 0, 128, fills[0][4])]  # the warm-up prompt fills the drafter too
+    chunk = a.geometry.device_prefill_chunk
+    # every warm-up prompt (the auto ladder: each bucket lone and continued) fills the drafter chunk by chunk too
+    assert {(f[2], f[3]) for f in fills} >= {(0, min(n, chunk)) for n in a._warmup_prefill_lengths()}
+    assert all(f[3] <= chunk for f in fills)
     warmed = [c for c in eng.calls if c[0] == "warmup_prefill_fill"]
     # traced lengths 256..2048 (the fake's), the eager buckets up to the 16384 device chunk, within 65536 positions
     assert warmed == [("warmup_prefill_fill", (256, 512, 1024, 2048, 16384))]

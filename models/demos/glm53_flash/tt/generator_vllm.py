@@ -397,6 +397,8 @@ class GLM53SpecEngine:
         the adapter compares across speculative steps (``GLM53_VLLM_SPEC_ALLOC_CHECK``), which must not change
         between two steps (a per-step allocation that survives a replay is what a replay corrupts)."""
         ttnn = _ttnn()
+        if getattr(ttnn, "device", None) is None or getattr(self.model, "device", None) is None:
+            return 0  # no allocator to ask (the host tests' fakes): a constant footprint
         mv = ttnn.device.get_memory_view(self.model.device, ttnn.BufferType.DRAM)
         return int(mv.total_bytes_allocated_per_bank)
 
@@ -1171,7 +1173,8 @@ class GLM53FlashForCausalLM:
         at request time under the sealed program cache (SliceDeviceOperation, the 2026-10-28 served APC runs on the
         8x4: entry 0, then entry 1 at the hit's restore). The entries hold placeholder carries afterwards (a slot's
         real snapshots overwrite them); the live states are zeroed after the decode capture anyway."""
-        if self.model.kda_snapshots is None or getattr(self, "_apc_snapshots_warmed", False):
+        store = getattr(self.model, "kda_snapshots", None)  # None on a text-only launch (and the host fakes)
+        if self.apc is None or store is None or getattr(self, "_apc_snapshots_warmed", False):
             return
         t0 = time.perf_counter()
         B = self.geometry.users_per_row

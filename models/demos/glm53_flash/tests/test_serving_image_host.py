@@ -252,6 +252,10 @@ class _FakeVision:
         self.encoded: list[list[MMItem]] = []
         self.chunks: list[tuple] = []
 
+    def warmup(self):
+        """``VisionRuntime.warmup``: every patch bucket through the tower before the captures (counted here)."""
+        self.warmups = getattr(self, "warmups", 0) + 1
+
     def dummy_item(self):
         return _image_item()
 
@@ -341,8 +345,11 @@ def test_warmup_runs_a_dummy_image_prompt_through_the_eager_stream_prefill(monke
     ps = [c for c in m.calls if c[0] == "prefill_streams"]
     assert ps == [("prefill_streams", 0, 0, 288, 512, 256)]  # 16 + 256 + 16 tokens -> the 512 bucket, 256 vision rows
     assert v.chunks[0][:3] == (288, 512, list(range(16, 272)))
-    # the text ladder still ran before it (the text-only boot is untouched)
-    assert [c for c in m.calls if c[0] == "prefill"] == [("prefill", 0, 0, 128)]
+    # the text ladder (every eager bucket, lone and continued) still ran before it (the text-only boot is untouched)
+    text = [c for c in m.calls if c[0] == "prefill"]
+    chunk = a.geometry.device_prefill_chunk
+    assert {(c[2], c[3]) for c in text} >= {(0, min(n, chunk)) for n in a._warmup_prefill_lengths()}
+    assert m.calls.index(text[0]) < m.calls.index(ps[0])
     monkeypatch.setenv(gv.WARMUP_MM_ENV, "0")
     a2, m2, v2 = _mm_adapter()
     assert v2.encoded == [] and not [c for c in m2.calls if c[0] == "prefill_streams"]
