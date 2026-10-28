@@ -134,10 +134,13 @@ struct FabricRouterDiagnosticBufferMap {
 };
 
 struct FabricEriscDatamoverConfig {
-    static constexpr uint32_t WR_CMD_BUF = 0;      // for large writes
-    static constexpr uint32_t RD_CMD_BUF = 1;      // for all reads
-    static constexpr uint32_t WR_REG_CMD_BUF = 2;  // for small writes (e.g., registers, semaphores)
-    static constexpr uint32_t AT_CMD_BUF = 3;      // for atomics
+    // The NoC command buffer a router uses for a kind of transfer.
+    enum class NocCmdBuf : uint32_t {
+        WR_CMD_BUF = 0,      // for large writes
+        RD_CMD_BUF = 1,      // for all reads
+        WR_REG_CMD_BUF = 2,  // for small writes (e.g., registers, semaphores)
+        AT_CMD_BUF = 3,      // for atomics
+    };
     static constexpr uint32_t DEFAULT_NOC_VC = 2;
     static constexpr uint32_t NUM_EDM_NOC_VCS = 2;
 
@@ -258,15 +261,13 @@ struct FabricEriscDatamoverConfig {
 
     // add the noc-usage and cmd_buf-usage here
     std::array<std::size_t, builder_config::num_max_receiver_channels> receiver_channel_forwarding_noc_ids = {};
-    std::array<std::size_t, builder_config::num_max_receiver_channels> receiver_channel_forwarding_data_cmd_buf_ids =
-        {};
-    std::array<std::size_t, builder_config::num_max_receiver_channels> receiver_channel_forwarding_sync_cmd_buf_ids =
-        {};
+    std::array<NocCmdBuf, builder_config::num_max_receiver_channels> receiver_channel_forwarding_data_cmd_buf_ids = {};
+    std::array<NocCmdBuf, builder_config::num_max_receiver_channels> receiver_channel_forwarding_sync_cmd_buf_ids = {};
     std::array<std::size_t, builder_config::num_max_receiver_channels> receiver_channel_local_write_noc_ids = {};
-    std::array<std::size_t, builder_config::num_max_receiver_channels> receiver_channel_local_write_cmd_buf_ids = {};
+    std::array<NocCmdBuf, builder_config::num_max_receiver_channels> receiver_channel_local_write_cmd_buf_ids = {};
 
     std::array<std::size_t, builder_config::num_max_sender_channels> sender_channel_ack_noc_ids = {};
-    std::array<std::size_t, builder_config::num_max_sender_channels> sender_channel_ack_cmd_buf_ids = {};
+    std::array<NocCmdBuf, builder_config::num_max_sender_channels> sender_channel_ack_cmd_buf_ids = {};
 
     // emd vcs
     std::size_t edm_noc_vc = 0;

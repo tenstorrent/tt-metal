@@ -484,22 +484,22 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(
     // set default noc and cmd bufs (current setup in TG 4U)
     for (uint32_t i = 0; i < builder_config::num_max_receiver_channels; i++) {
         this->receiver_channel_forwarding_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_RECEIVER_FORWARDING_NOC;
-        this->receiver_channel_forwarding_data_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_REG_CMD_BUF;
-        this->receiver_channel_forwarding_sync_cmd_buf_ids[i] = FabricEriscDatamoverConfig::RD_CMD_BUF;
+        this->receiver_channel_forwarding_data_cmd_buf_ids[i] = NocCmdBuf::WR_REG_CMD_BUF;
+        this->receiver_channel_forwarding_sync_cmd_buf_ids[i] = NocCmdBuf::RD_CMD_BUF;
         this->receiver_channel_local_write_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_RECEIVER_LOCAL_WRITE_NOC;
-        this->receiver_channel_local_write_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
+        this->receiver_channel_local_write_cmd_buf_ids[i] = NocCmdBuf::WR_CMD_BUF;
 
         if (requires_forced_assignment_to_noc1()) {
             this->receiver_channel_forwarding_noc_ids[i] =
                 FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_FORWARDING_NOC;
             this->receiver_channel_local_write_noc_ids[i] =
                 FabricEriscDatamoverConfig::BLACKHOLE_SINGLE_ERISC_MODE_RECEIVER_LOCAL_WRITE_NOC;
-            this->receiver_channel_forwarding_data_cmd_buf_ids[i] = FabricEriscDatamoverConfig::WR_CMD_BUF;
+            this->receiver_channel_forwarding_data_cmd_buf_ids[i] = NocCmdBuf::WR_CMD_BUF;
         }
     }
     for (uint32_t i = 0; i < builder_config::num_max_sender_channels; i++) {
         this->sender_channel_ack_noc_ids[i] = FabricEriscDatamoverConfig::DEFAULT_SENDER_ACK_NOC;
-        this->sender_channel_ack_cmd_buf_ids[i] = FabricEriscDatamoverConfig::AT_CMD_BUF;
+        this->sender_channel_ack_cmd_buf_ids[i] = NocCmdBuf::AT_CMD_BUF;
 
         if (requires_forced_assignment_to_noc1()) {
             this->sender_channel_ack_noc_ids[i] =
