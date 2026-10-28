@@ -728,3 +728,6 @@ Open for the owner: dlukic / node access; push; the in-RAM engram slowdown in th
   the fused head (precision: above the reference today), then P.4 / P.5 (host time), then the index query to fp4 width
   (indexer.py only; the index-key cache waits for FIX.8). FIX.8 (integration of the 2x2's work) takes priority whenever
   the bfp4kv branch is ready. No-device side work: the precision audit hook (rest of F208), F209.
+- 19:25 OWNER: work autonomously; PUSH after each major milestone (Paris pass, profile published, P.6 accepted, each fix
+  job) together with a hand-off-quality entry here, in case something interrupts. Replaces "push only on my word" for
+  this branch and this plan.
