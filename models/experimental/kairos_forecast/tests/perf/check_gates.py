@@ -56,8 +56,15 @@ LOWER_IS_BETTER = {
     "bias_row_max_final",
     "bias_row_drift_max",  # D4 item 1: row-indexed, against the fixed record
     "bias_row_drift_max_final",
+    "spread_ratio_row_drift_max",  # D5 R1-0a: row-indexed spread ratio, against the fixed record
+    "spread_ratio_row_drift_max_final",
 }
-ROW_DRIFT = {"bias_row_drift_max": "bias_rows", "bias_row_drift_max_final": "bias_rows_final"}
+ROW_DRIFT = {
+    "bias_row_drift_max": "bias_rows",
+    "bias_row_drift_max_final": "bias_rows_final",
+    "spread_ratio_row_drift_max": "spread_rows",  # D5 R1-0a
+    "spread_ratio_row_drift_max_final": "spread_rows_final",
+}
 # D0 amendment 1 / D2 fix 4: gated on the target and every suite / bench case in both precisions, report-only for
 # free-running rollout steps >= 2 and e2e_stream.
 ROUTING_KEYS = {"route_mismatch_rows", "bias_max_abs_diff", "min_top3_margin"}

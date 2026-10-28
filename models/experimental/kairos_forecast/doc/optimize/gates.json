@@ -1,5 +1,5 @@
 {
- "_doc": "G1 re-raise proposal, written by tests/perf/propose_gates.py (its docstring has the rules) from the round-0 suite record of pcc job 1051, with the D4 rules (bias_row_max_final floor, row-indexed bias drift, spread_ratio_p50 drift toward 1, median_err drift, spread_ratio_max case floors). Absolute floors on every case and precision (PLAN v1.20); p01 / p99 at >= 100 active rows and p50 at >= 8 (check_gates prints `not applicable` otherwise). Drift is against the fixed records iter_00/bench.json (bench) and iter_00/suite.jsonl (suite).",
+ "_doc": "G1 re-raise proposal, written by tests/perf/propose_gates.py (its docstring has the rules) from the round-0 suite record (pcc job 1051; the fixed records were re-recorded in pcc job 1105 and bench job 1107), with the D4 rules (bias_row_max_final floor, row-indexed bias drift, spread_ratio_p50 drift toward 1, median_err drift, spread_ratio_max case floors). Absolute floors on every case and precision (PLAN v1.20); p01 / p99 at >= 100 active rows and p50 at >= 8 (check_gates prints `not applicable` otherwise). Drift is against the fixed records iter_00/bench.json (bench) and iter_00/suite.jsonl (suite). D5 R1-0a adds spread_ratio_row_drift_max[_final] (per-row spread ratio against the fixed record, abs 0.15).",
  "floors": {
   "*/accuracy": {
    "pcc_normalized": 0.999,
@@ -288,6 +288,12 @@
   },
   "bias_row_drift_max_final": {
    "abs": 0.02
+  },
+  "spread_ratio_row_drift_max": {
+   "abs": 0.15
+  },
+  "spread_ratio_row_drift_max_final": {
+   "abs": 0.15
   }
  },
  "drift_by": {

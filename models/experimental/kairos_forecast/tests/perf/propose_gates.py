@@ -104,6 +104,7 @@ REL = (
     "median_err",
 )
 ROW_DRIFT = 0.02
+SPREAD_ROW_DRIFT = 0.15  # D5 R1-0a: half the 0.7x / 1.3x probe
 
 
 def _up(x, digits=2):
@@ -128,6 +129,7 @@ def propose(records):
     drift["spread_ratio_p50"] = {"toward": 1.0, "abs": 0.01}
     drift.update({k: {"rel": 0.5} for k in REL})
     drift.update({k: {"abs": ROW_DRIFT} for k in ("bias_row_drift_max", "bias_row_drift_max_final")})
+    drift.update({k: {"abs": SPREAD_ROW_DRIFT} for k in ("spread_ratio_row_drift_max", "spread_ratio_row_drift_max_final")})
     drift_by = {"*/performance": {k: {"abs": v} for k, v in DRIFT["performance"].items()}}
     for r in records:
         key = f"{r['name']}/{r['precision']}"

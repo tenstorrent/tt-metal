@@ -15,6 +15,7 @@ drift from a fixed record (suite.json and bench.json).
                         both halves cancels in (a - flip(b)) / 2)
     lag1[_h0|_h1]       every quantile one step late along the 128-step token pair (head space)
     level_shift_final, lag1_final   the same on the final data-space forecast only (+0.05 x the target's scale)
+    spread_shift_rows_<f>[_h0|_h1|_final]  one row's band x1.3 or x0.7, on the level_shift_rows row counts (D5 R1-0a)
     level_shift_rows[_h0|_h1|_final]  +0.05 on a few rows only (v1.25, D4 item 1): 1 row at B <= 16, 2 at 32, 4 at 64,
                         1 % of the rows on paper / ragged (B = series per forward; the first active rows)
 
@@ -52,6 +53,7 @@ FIXED = {
 if os.environ.get("KAIROS_FIXED_SUITE"):  # development: score against another record (e.g. a pcc job's records)
     FIXED = {"suite": Path(os.environ["KAIROS_FIXED_SUITE"])}
 SHIFT = 0.05
+SPREAD_SHIFTS = (1.3, 0.7)  # D5 R1-0a: per-row band scaling probes
 PERFECT = {"route_mismatch_rows": 0, "route_mismatch_patches": 0, "bias_max_abs_diff": 0.0, "min_top3_margin": 1.0}
 
 
@@ -124,6 +126,12 @@ def head_transforms(k_rows=1):
         t[f"lag1_h{half}"] = lambda r, h, half=half: _unseq(_lag(_seq(r))) if h == half else r
         t[f"level_shift_rows_h{half}"] = lambda r, h, half=half: _shift_rows(r, k_rows) if h == half else r
     t["level_shift_rows"] = lambda r, h: _shift_rows(r, k_rows)
+    for f in SPREAD_SHIFTS:  # D5 R1-0a: one row's band scaled, on the level_shift_rows row counts
+        t[f"spread_shift_rows_{f}"] = lambda r, h, f=f: _band(r, f, _active(r).nonzero().flatten()[:k_rows])
+        for half in (0, 1):
+            t[f"spread_shift_rows_{f}_h{half}"] = (
+                lambda r, h, f=f, half=half: _band(r, f, _active(r).nonzero().flatten()[:k_rows]) if h == half else r
+            )
     return t
 
 
@@ -190,6 +198,18 @@ def scorings(name):
         return q
 
     out["level_shift_rows_final"] = case_records(name, final=rows_final)
+
+    def spread_final(f):
+        def g(q, s):
+            q = q.clone()
+            mu = q[:k].mean(1, keepdim=True)
+            q[:k] = mu + f * (q[:k] - mu)
+            return q
+
+        return g
+
+    for f in SPREAD_SHIFTS:
+        out[f"spread_shift_rows_{f}_final"] = case_records(name, final=spread_final(f))
     return out
 
 

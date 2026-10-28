@@ -201,6 +201,29 @@ def test_row_drift_non_finite_or_missing_fails():  # D5 R1-0b: max() skipped a N
                 assert any(metric in f and "non-finite or missing" in f for f in fails), (metric, row, bad)
 
 
+SPREAD_GATES = dict(
+    GATES, drift={"spread_ratio_row_drift_max": {"abs": 0.15}, "spread_ratio_row_drift_max_final": {"abs": 0.15}}
+)
+
+
+def test_spread_row_drift():  # D5 R1-0a: one row's band at 1.3x or 0.7x fails, head and final space
+    rows = [1.0 + 0.002 * i for i in range(16)]
+    base = _rec(spread_rows=rows, spread_rows_final=rows)
+    assert not check([copy.deepcopy(base)], [base], SPREAD_GATES)
+    for vec, metric in (("spread_rows", "spread_ratio_row_drift_max"), ("spread_rows_final", "spread_ratio_row_drift_max_final")):
+        for row in (0, 9):
+            for f in (1.3, 0.7):
+                moved = list(rows)
+                moved[row] *= f
+                fails = check([_rec(**{**base, vec: moved})], [base], SPREAD_GATES)
+                assert any(metric in f_ and f"row {row}" in f_ for f_ in fails), (metric, row, f)
+            moved = list(rows)
+            moved[row] = float("nan")
+            assert check([_rec(**{**base, vec: moved})], [base], SPREAD_GATES)
+        assert not check([_rec(**{**base, vec: [x * 1.1 for x in rows]})], [base], SPREAD_GATES)
+    assert check([_rec(spread_rows_final=rows)], [base], SPREAD_GATES)  # a missing vector fails
+
+
 def test_row_drift_against_row_base():  # broken_outputs: the move is taken against the golden itself
     gold = _rec(bias_rows=[0.0] * 8, bias_rows_final=[0.0] * 8)
     dev = _rec(bias_rows=[0.3] + [0.0] * 7, bias_rows_final=[0.0] * 8)  # a fixed record with an outlier row
