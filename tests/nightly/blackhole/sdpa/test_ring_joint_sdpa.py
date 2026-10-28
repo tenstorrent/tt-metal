@@ -9079,14 +9079,12 @@ def test_ring_joint_attention_chunked_unrolled_v_perf_check(model_name, ring_siz
 # expansion (every K row once per head, latent 512 -> 128), 1.335x the attention-only FLOPs at this shape; it is not
 # comparable to the absorbed rows above.
 if MESH_CONFIG.is_galaxy:
-    # sp=8 tp=4. Projected, not measured: the attention-only calibration (4.80 / 3.46 ms) re-based to this util
-    # (x1.335) and scaled by the LoudBox speedups of the in-place QK with the first slice in parts (-6.5% / -5.3%) and
-    # of progressive slice readiness with interleaved ring steps (-0.5% / -3.4%), so the band is +/-5% until the next
-    # Galaxy run re-calibrates it to a measured centre and +/-1.5%.
+    # sp=8 tp=4, the Galaxy's floater schedules (ring_joint_floater_layout.hpp): measured on the Blackhole Galaxy, two
+    # runs within 0.3% (K3 61.06 / 60.88%, K2.7 55.89 / 55.62%).
     EXPANDED_K_CHUNKED_PERF_CHECK_CONFIGS = [
         # (model_name, ring_size, expected_util, margin)
-        ("kimi_k3_expanded_k", 8, 51.96, 0.05),
-        ("kimi_k2_7_expanded_k", 8, 48.86, 0.05),
+        ("kimi_k3_expanded_k", 8, 60.97, 0.015),
+        ("kimi_k2_7_expanded_k", 8, 55.76, 0.015),
     ]
 else:
     # The Blackhole LoudBox ring (sp=8 tp=1), production fabric packets, with the floaters
