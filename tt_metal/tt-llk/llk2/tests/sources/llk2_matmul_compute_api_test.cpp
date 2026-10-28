@@ -46,17 +46,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
     [[maybe_unused]] const Operand& buffer_B   = params.buffer_B;
     [[maybe_unused]] const Operand& buffer_Res = params.buffer_Res;
 
-    const auto x   = llk2::Tensor<in0_spec>(buffer_A[0]);
-    const auto w   = llk2::Tensor<in1_spec>(buffer_B[0]);
-    const auto acc = llk2::dst_tensor<RT_DIM * 32, CT_DIM * 32, dest_format>(0);
+    const auto x = llk2::Tensor<in0_spec>(buffer_A[0]);
+    const auto w = llk2::Tensor<in1_spec>(buffer_B[0]);
 
 #ifdef LLK_TRISC_MATH
     _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
     _llk_math_wait_for_dest_available_<dest_sync>();
 #endif
 
-    const auto y = llk2::matmul(x, w, acc);
+    const auto y = llk2::matmul(x, w, 0); // [M, N] in Dest from row 0, laid out by matmul
     static_assert(decltype(y)::spec.thread == llk2::Thread::Math && decltype(y)::spec.exu == llk2::Exu::Fpu, "the result is the FPU's");
+    static_assert(decltype(y)::spec.format == dest_format && llk2::tile_count(decltype(y)::spec.shape) == RT_DIM * CT_DIM, "y is [M, N] in the Dest format");
 
 #ifdef LLK_TRISC_MATH
     _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();

@@ -2,12 +2,19 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The Resolver's driver (report 3, section 4), for a chain of one: each Compute API call resolves only itself.
-// An op provides three pure functions in an OpApi; the driver runs them in order, at compile time:
-//   options(in0, in1, mods, settings) -> OpConfig   negotiation; an op that cannot run them fails the build
-//   work(in0, in1, config)            -> Work       loop counts
-//   plan(in0, in1, config, work)      -> Plan       what each unit does
-// resolved<Api, A, B, Mods> names the result, so it is a compile-time object that can be passed by reference.
+// The Resolver's driver (tt-llk-lab llk-tensor, report 3, section 4), for a chain of one: each Compute API call
+// resolves only itself. An op provides four pure functions in an OpApi:
+//   accepts(in0, in1, mods, settings)       can the op run on these tensors at all
+//   options(in0, in1, mods, settings)       negotiation: the representation it runs in      -> OpConfig
+//   work(in0, in1, config)                  allocation: loop counts                         -> Work
+//   plan(in0, in1, mods, config, work)      planning: what each unit does                   -> Plan
+// The driver runs them in that order, at compile time. accepted<...> and resolved<...> name the results, so they
+// are compile-time objects; the Compute API static_asserts accepted<...> before it reads resolved<...>, so an op
+// that cannot run on its tensors fails the build at the call, with a message.
+//
+// OpApi is a class template over the op's modifier struct, so every op's functions take their own modifier type.
+// The functions themselves are plain constexpr functions reached through pointers: they cannot be templates, and do
+// not need to be, because everything they read arrives as a constexpr argument.
 
 #pragma once
 
@@ -20,6 +27,7 @@ namespace llk2
 template <class Mods>
 struct OpApi
 {
+    bool (*accepts)(const TensorSpec<6>& in0, const TensorSpec<6>& in1, const Mods& mods, const KernelSettings& settings);
     OpConfig (*options)(const TensorSpec<6>& in0, const TensorSpec<6>& in1, const Mods& mods, const KernelSettings& settings);
     Work (*work)(const TensorSpec<6>& in0, const TensorSpec<6>& in1, const OpConfig& config);
     Plan (*plan)(const TensorSpec<6>& in0, const TensorSpec<6>& in1, const Mods& mods, const OpConfig& config, const Work& work);
@@ -41,15 +49,9 @@ constexpr Resolved resolve(const OpApi<Mods>& api, const TensorSpec<6>& in0, con
 }
 
 template <const auto& Api, const TensorSpec<6>& A, const TensorSpec<6>& B, auto Mods>
-inline constexpr Resolved resolved = resolve(Api, A, B, Mods, kernel_settings);
+inline constexpr bool accepted = Api.accepts(A, B, Mods, kernel_settings);
 
-// A failed check inside a constexpr evaluation is a compile error at the call that needed it.
-constexpr void check(bool ok)
-{
-    if (!ok)
-    {
-        __builtin_trap();
-    }
-}
+template <const auto& Api, const TensorSpec<6>& A, const TensorSpec<6>& B, auto Mods>
+inline constexpr Resolved resolved = resolve(Api, A, B, Mods, kernel_settings);
 
 } // namespace llk2
