@@ -125,6 +125,7 @@ SUSTAINED_S = float(os.environ.get("EMBEDDING_GEMMA2_SUSTAINED_S", "30"))
 BURST_IDLE_S, BURST_REPS, BURST_N = 3.0, 5, 20
 SUSTAINED_WINDOW_MS = 500.0
 SOFT_TOKEN_PCC = 0.99  # tower tests' soft-token bar
+_DEVICE_GRID: list[int] | None = None  # what the open device reports (EMBEDDING_GEMMA2_GRID); in every record
 
 TEXT_CASES = ((1, 128), (1, 512), (1, 2048), (1, 8192), (8, 512), (32, 128))
 TEXT_LONG_CASES = ((1, 32768),)
@@ -214,7 +215,7 @@ def _stats(samples: list[float]) -> dict:
 
 def _emit(rec: dict) -> dict:
     """Append one record to perf.jsonl (all fields) and perf.csv (CSV_FIELDS), and log it."""
-    rec = {"run_id": RUN_ID, "time": time.strftime("%Y-%m-%d %H:%M:%S"), **rec}
+    rec = {"run_id": RUN_ID, "time": time.strftime("%Y-%m-%d %H:%M:%S"), "compute_grid": _DEVICE_GRID, **rec}
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     with open(OUT_DIR / "perf.jsonl", "a") as f:
         f.write(json.dumps(rec) + "\n")
@@ -292,10 +293,12 @@ def run_info():
 
 def _open_device():
     # EMBEDDING_GEMMA2_GRID selects the grid; default: the device's own (13 x 10 on a P150a)
+    global _DEVICE_GRID
     device = open_eg2_device(0)
+    grid = device.compute_with_storage_grid_size()
+    _DEVICE_GRID = [grid.x, grid.y]
     path = OUT_DIR / "device_info.json"
-    if not path.exists():
-        grid = device.compute_with_storage_grid_size()
+    if not path.exists() or json.loads(path.read_text()).get("compute_grid") != _DEVICE_GRID:
         dram = device.dram_grid_size()
         info = {"arch": str(device.arch()), "compute_grid": [grid.x, grid.y], "dram_grid": [dram.x, dram.y]}
         OUT_DIR.mkdir(parents=True, exist_ok=True)

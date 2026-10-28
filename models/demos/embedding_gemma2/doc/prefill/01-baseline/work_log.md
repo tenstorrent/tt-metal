@@ -95,3 +95,78 @@ Analysis (CPU only): `python3 $R/scripts/analyze.py $R/analysis/tables $R/run/pr
 - Reconciliation, host round trip / H2D / D2H per bucket, top three with owners: present.
 - Trace evidence: alloc tracking run on all buckets, replay == eager bitwise, 128 MiB region.
 - Known gaps: one sustained run per bucket (no repeat), roofline is a model, traced gaps not profiled.
+
+## E9.1-r1: compute grid 12 x 10 (2026-10-28)
+
+Person's instruction (2026-10-28): optimize for a 10-row x 12-column compute grid (Galaxy target),
+not the P150a's 13 x 10. Run folder: `/local/ttuser/gtobar/tt-ops/runs/embeddinggemma-2/e9/01r-geometry-precision/`
+(below: `$G`); every device command through `$G/scripts/run.sh` (card-free check, env dump,
+`timeout -s KILL`, `__tt_exit`). Code: commits `7224692da5`, `b0ae1e5ead` and the E9.1-r1 part B
+final commit (Commits table below).
+
+### How 12 x 10 is reached on a P150a [M]
+
+| attempt | result | log |
+|---|---|---|
+| default device open | `compute_with_storage_grid_size()` = (13, 10) | `$G/logs/grid_probe_default.log` |
+| `DispatchCoreConfig(WORKER, axis=COL)` | (13, 10): column dispatch is already the Blackhole default | `grid_probe_col.log` |
+| `DispatchCoreConfig(WORKER, axis=ROW)` | open fails: `TT_THROW: ROW dispatch core axis is not supported for blackhole arch unless fabric tensix MUX is enabled` | `grid_probe_row.log` (exit 1) |
+| `TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=11,9` in the environment | (12, 10), an op runs | `grid_probe_envvar_col.log` |
+| same, set from Python after `import ttnn`, before the first open | (12, 10) | `grid_probe_env_in_python.log`, `grid_probe_dyn_after_import.log` |
+| same, set after a first open in the same process | stays (13, 10): the runtime reads it once per process | `grid_probe_dyn_toggle.log` |
+
+So the model uses the runtime override. `tt/config.py`: `EMBEDDING_GEMMA2_GRID=<cols>x<rows>`
+selects the grid; `request_device_grid` sets the override before the device opens and
+`check_device_grid` (in `conftest.open_eg2_device`, used by the test fixture, `perf.py`,
+`prefill.py`, `dtype_sweep.py`, `dtype_probe.py`, `bench_sustained.py`; `demo.py __main__` calls the
+same two helpers) raises if the open device reports another grid. `compute_grid(device)` is the only
+grid read in the text code (`linear.py`, `attention.py`, `masks.py`, `config.act_memory_config`);
+the override also caps the ops that pick their own grid (norms, eltwise, `minimal_matmul`). Defaults:
+`tests/perf/prefill.py` 12 x 10; every other entry point the device's own grid (13 x 10 on a P150a).
+
+### Evidence
+
+- **13 x 10 path unchanged [M]**: traced outputs for buckets 128-8192 are bitwise equal to the base
+  commit `f6b3ded953` (`$G/logs/cmp_base13_new13.log`, `ALL_BITWISE_EQUAL True`).
+- **12 x 10 vs 13 x 10 [M]**: bitwise equal for 128-4096; 8192 differs (`$G/logs/cmp_new13_new12.log`:
+  last-hidden PCC between the grids 0.99750, max abs diff 492 (values: abs max 2784, std 46); vs HF fp32
+  0.99415 at 12 x 10, 0.99446 at 13 x 10, `$G/logs/dump_vs_ref_base.log`). The base commit run
+  with only the override (no model change) gives the same 12 x 10 output (`cmp_base12_new12.log`).
+- **Which op makes 8192 differ [M]** (`$G/scripts/dump_ops.py`, `compare_ops.py`; one eager 1 x 8192
+  forward per grid with a ttnn post-operation hook that fingerprints every op output;
+  `$G/logs/b4_compare_ops.log`; eager-with-hook output equals the traced dump at both grids,
+  `b4_eager_vs_traced.log`): the first 25 op outputs are bitwise equal; op #25, layer 0, the MLP gate
+  projection with fused `gelu_tanh` ([1, 1, 8192, 512] x [512, 2048]), runs as `ttnn.linear` (2D
+  multicast config) at 13 x 10 and as `ttnn.experimental.minimal_matmul` at 12 x 10, in every layer
+  (24 swaps, the only op-name differences). Everything after it differs.
+  Cause [I] (`tt/linear.py mcast2d_config`, arithmetic in `$G/logs/b4_cb_budget.log`): at M = 8192
+  per_core_M = 26; per_core_N = ceil(64 / 13) = 5 fits the 900 KiB CB budget only at in0_block_w 1
+  (916,096 B <= 921,600 B); at 12 columns per_core_N = 6 needs 1,078,016 B at in0_block_w 1, so no
+  2D config fits and `linear` falls back to `minimal_matmul` with the fused activation. The two
+  kernels apply gelu at different points (packer vs minimal_matmul's fused activation), so the bfp8
+  outputs round differently. Both pass the gate. Perf note for stage 3: the code comment records
+  minimal_matmul's fused activation as slow (218 us vs 40 us without, PLE gate at M = 4096); the
+  12 x 10 gate projection at >= 8192 should be measured there.
+- **No op uses more than 120 cores at 12 x 10 [M]**: Tracy, one warmed eager 1 x 2048 forward
+  (`$G/scripts/tracy_case.sh 2048 12x10`, CSV `$G/tracy/b1_s2048_12x10/ops_perf_results.csv`),
+  `$G/scripts/core_counts.py <csv> 120` (`$G/logs/b3_core_counts_12x10.log`): 646 forward ops, max
+  CORE COUNT 120, AVAILABLE WORKER CORE COUNT 120 on every op, 0 ops above 120. Control on the
+  stage-1 13 x 10 profile (`b3_core_counts_13x10_control.log`): max 130, 449 / 646 ops above 120.
+  At 12 x 10 the 2D matmuls with N = 2048 / 512 run on 110 cores (11 columns: ceil(Nt / 12)); a
+  stage-3 tuning item.
+- **Tests at both grids, precision `p3_qkv_gu` [M]** (`$G/logs/gates_summary.log`): text PCC +
+  trace + precision config + full model + full model trace 147 passed, `test_text_model[b1_s32768]`
+  passed, demo 2 passed, at 12 x 10 and at 13 x 10.
+- **Entry points at both grids [M]** (`$G/logs/chain_b2_summary.log`): `perf.py` default 4 passed
+  at 13 x 10 (text 1 x 512 forward 6.879 ms, `run_b1_perf_13x10/`) and 12 x 10 (7.078 ms,
+  `run_b1_perf_12x10/`; every record carries `compute_grid`, `device_info.json` [12, 10]); demo
+  pytest 2 passed and demo `__main__` exit 0 (logs the grid; retrieval argmax TT == HF) at both
+  grids; `dtype_probe.py --inputs e9` runs at 12 x 10 (`b1_probe_e9_12x10.jsonl`, `compute_grid`
+  [12, 10]; `p3_qkv_gu` min last hidden 0.98836 at L 200, the b1_s256 family).
+- **Contract gate at 12 x 10, `p3_qkv_gu`, traced replay vs cached HF fp32 [M]** (last-hidden PCC /
+  embedding cosine): 128 0.99170 / 0.99747, 256 **0.98872** / 0.99763 (fails), 512 0.99366 / 0.99882,
+  1024 0.99233 / 0.99911, 2048 0.99321 / 0.99927, 4096 0.99387 / 0.99947, 8192 0.99415 / 0.99955
+  (`$G/run_b_gate_12x10/prefill.jsonl`); 16384 0.99496 / 0.99953, 32768 0.99453 / 0.99945, 65536
+  0.99420 / 0.99937 (`$G/run_b2_gate_12x10/prefill.jsonl`, `TT_METAL_TRACE_ALLOC_TRACKING=1`).
+  Replay equals eager bitwise on every bucket. The 256 failure is the precision issue that the
+  E9.1-r re-selection (part C) addresses.

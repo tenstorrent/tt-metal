@@ -159,11 +159,13 @@ def test_multimodal_demo(eg2_device):
 
 
 if __name__ == "__main__":
-    from models.demos.embedding_gemma2.tt.config import request_device_grid, requested_grid
+    from models.demos.embedding_gemma2.tt.config import check_device_grid, request_device_grid, requested_grid
 
-    request_device_grid(requested_grid())  # EMBEDDING_GEMMA2_GRID; default: the device's own grid
+    grid = requested_grid()  # EMBEDDING_GEMMA2_GRID; default: the device's own grid
+    request_device_grid(grid)
     dev = ttnn.open_device(device_id=0, trace_region_size=TRACE_REGION)
     try:
+        logger.info(f"compute grid {check_device_grid(dev, grid)}")
         run_demo(dev)
         run_multimodal_demo(dev, compare_hf="--no-hf" not in sys.argv)
     finally:
