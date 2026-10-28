@@ -201,7 +201,14 @@ class Case:
         # bf16-rounded on host so the reference sees exactly what the device reads
         return tuple(torch.randn(shape, generator=g).bfloat16().float() for _ in range(3))
 
-    def run(self, q, k, v, mask, *, want_dense=True, want_ref=True):
+    def blocks_per_core(self):
+        """(most, fewest) Q blocks a working core holds: the op splits the flat (head, Q block) units evenly."""
+        cols, rows = self.rt.sdpa_compute_grid
+        cores = cols * rows
+        total = HEADS_PER_DEVICE * self.geo.nb()
+        return -(-total // cores), max(1, total // cores)
+
+    def run(self, q, k, v, mask, *, want_dense=True, want_ref=True, q_blocks_per_pass=None):
         rt, geo = self.rt, self.geo
         tq, tk, tv = (self._upload(x, self.seq_dims) for x in (q, k, v))
         pooled_k, pooled_v = (pool(x, geo, self.S).bfloat16().float() for x in (k, v))
@@ -229,6 +236,7 @@ class Case:
             ccl_core_grid_offset=(rt.ccl_column, 0),
             use_column_major_ccl=True,
             block_size=BLOCK,
+            q_blocks_per_pass=q_blocks_per_pass,
         )
         sparse = ttnn.to_torch(out, mesh_composer=self.composer).float()
         dense = None
@@ -376,6 +384,54 @@ def test_production_5s(runtime, k_chunk, density):
     r = case.run(*case.inputs(6), mask, want_ref=False)
     _check(
         f"5s k{k_chunk} d{density}",
+        r,
+        _density(mask, geo, case.S),
+        dense_min=0.9995 if density == 1 else 0.99,
+        ref_min=None,
+    )
+
+
+@pytest.mark.parametrize("passes", [2, 3])
+@pytest.mark.parametrize("geom", ["r1024k256", "r1184k256"])
+def test_forced_passes(runtime, geom, passes):
+    """Each core's Q blocks split into several passes over K / V gathered once: the same output as one pass.
+
+    Not bit-identical in general: a step's lazy-rescale decision covers the Q blocks stepped together, and the
+    grouping depends on how many blocks are resident.
+    """
+    geo = ALIGNED.get(geom) or RAGGED[geom]
+    case = Case(runtime, geo)
+    most, fewest = case.blocks_per_core()
+    q_blocks_per_pass = -(-most // passes)
+    if -(-most // q_blocks_per_pass) != passes or passes > fewest:
+        pytest.skip(f"{most} / {fewest} blocks per core cannot be split into {passes} passes")
+    mask = make_mask(geo, case.S, case.H, density=0.2, seed=7)
+    q, k, v = case.inputs(7)
+    one = case.run(q, k, v, mask, want_dense=False, want_ref=False)
+    r = case.run(q, k, v, mask, want_dense=False, q_blocks_per_pass=q_blocks_per_pass)
+    p_one = _pcc(one["sparse"], r["sparse"])
+    max_diff = (one["sparse"] - r["sparse"]).abs().max().item()
+    logger.info(
+        f"[passes {geom}] {passes} passes of <= {q_blocks_per_pass} blocks ({most} per core): pcc vs one pass "
+        f"{p_one:.6f}, max |diff| {max_diff:.3e}"
+    )
+    _check(f"passes {passes} {geom}", r, _density(mask, geo, case.S), dense_min=None, ref_min=0.999)
+    assert p_one > 0.99999, f"{passes} passes vs one pass: pcc {p_one:.6f}"
+
+
+@SLOW
+@pytest.mark.parametrize("density", [KEEP_ALL, 0.15])
+def test_production_10s(runtime, density):
+    """MiniMax-H3 at 10 s: 9184 rows per device, more Q blocks per core than fit L1 at once, so the op picks
+    several passes (logged by the program factory). No torch reference at this size."""
+    geo = Geometry(9184, 9184 * MESH_CONFIG.sp_size, 256, dense_chunks=(256, 512))
+    case = Case(runtime, geo)
+    most, _ = case.blocks_per_core()
+    logger.info(f"[10s] {most} Q blocks per core at most")
+    mask = make_mask(geo, case.S, case.H, density=density, seed=8)
+    r = case.run(*case.inputs(8), mask, want_ref=False)
+    _check(
+        f"10s d{density}",
         r,
         _density(mask, geo, case.S),
         dense_min=0.9995 if density == 1 else 0.99,

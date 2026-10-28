@@ -1359,17 +1359,19 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
  * Every K/V entry the reader pushes is consumed by the steps that need it and popped once, after the last of them.
  * The per-chunk flash state (running sum, running max, output accumulator) lives in the restore CBs {cb_sum_in,
  * cb_max_in, cb_prev_out}, one SLOT per resident chunk in Q-chunk order, updated in place (see
- * sdpa_resident_piece_step_compact for the contract). The slot CBs are filled once, on the first active ring iteration
- * (exactly full, write pointer held at the base), and are neither pushed nor popped until the last ring iteration,
- * where normalize_row_streaming consumes the n_res slots from the front in order and the unused slots are popped.
+ * sdpa_resident_piece_step_compact for the contract). The slot CBs are filled once per pass, on its first active ring
+ * iteration (exactly full, write pointer held at the base), and are neither pushed nor popped until its last ring
+ * iteration, where normalize_row_streaming consumes the n_res slots from the front in order and the unused slots are
+ * popped, so every slot CB is empty with its pointers at the base for the next pass.
  *
  * Steps are per piece: per streamed piece, one step per group of the head's resident chunks that keep a block of it,
  * grouped until their compact scores fill kQkCap tiles; each chunk has its own run table of kept blocks (its Q
  * rows against those blocks' K^T columns / V rows, addressed in place in the staged entry). A piece streamed only for
  * another chain member is drained. The reader forces block 0 of every shard kept for every chunk, so the first step of
  * a head on piece 0 creates every slot's state before any other piece. Dropped blocks are pooled by the column bias of
- * the pooled chunks that follow the local pieces on the first active ring iteration: one full-width step per resident
- * chunk of the head, each with its own bias row (pushed by the reader in Q-chunk order after the pooled K/V entry).
+ * the pooled chunks that follow the local pieces on the pass's first active ring iteration: one full-width step per
+ * resident chunk of the head, each with its own bias row (pushed by the reader in Q-chunk order after the pooled K/V
+ * entry).
  *
  * The Q chunks a core owns can span two heads (a contiguous flat split); the reader streams the heads' pieces
  * interleaved per k, in head order, and this function mirrors that order. On the last ring iteration the normalized
@@ -1410,7 +1412,8 @@ template <
     uint32_t pooled_last_tiles,
     uint32_t resident_slots,
     uint32_t plan_block_words,
-    uint32_t plan_rec_base>
+    uint32_t plan_rec_base,
+    uint32_t num_q_passes>
 void sdpa_ring_resident(
     const uint32_t global_q_start,
     const uint32_t global_q_end,
@@ -1486,8 +1489,9 @@ void sdpa_ring_resident(
     ASSERT(get_local_cb_interface(cb_prev_out).fifo_num_pages == kOutCap);
 #endif
 
+    // The pass's chunks (global_q_start / global_q_end bound the current pass).
     const uint32_t n_res = global_q_end - global_q_start;
-    ASSERT(n_res >= 1 && n_res <= resident_slots);
+    ASSERT(n_res <= resident_slots);
 
     // Resident chunk i: head, kept-block words and the head chain's kept-piece union (plan words from the reader).
     uint32_t res_head[resident_slots];
@@ -1769,6 +1773,12 @@ void sdpa_ring_resident(
             sdpa_cb_pop_front_out_of_line(cb_prev_out, (resident_slots - n_res) * out_tiles);
         }
         sdpa_cb_pop_front_out_of_line(cb_max_in, kStatsCap);
-        sdpa_cb_pop_front_out_of_line(cb_q_in, n_res * q_chunk_tiles);
+        if constexpr (num_q_passes > 1) {
+            // The reader fills cb_q_in to capacity every pass: pop it whole, so the next pass's Q starts at the base.
+            CircularBuffer(cb_q_in).wait_front(resident_slots * q_chunk_tiles);
+            sdpa_cb_pop_front_out_of_line(cb_q_in, resident_slots * q_chunk_tiles);
+        } else {
+            sdpa_cb_pop_front_out_of_line(cb_q_in, n_res * q_chunk_tiles);
+        }
     }
 }

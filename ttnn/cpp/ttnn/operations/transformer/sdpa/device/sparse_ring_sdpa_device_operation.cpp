@@ -155,6 +155,10 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(
         !get_fp32_dest_acc_en(args.compute_kernel_config),
         "SparseRingSDPA requires streaming compute; set fp32_dest_acc_en=false");
+    TT_FATAL(
+        !args.q_blocks_per_pass.has_value() || (*args.q_blocks_per_pass >= 1 && *args.q_blocks_per_pass <= 32),
+        "SparseRingSDPA: q_blocks_per_pass must be in [1, 32], got {}",
+        args.q_blocks_per_pass.value_or(0));
 
     validate_all_gather_on_program_cache_miss(args.all_gather_operation_attributes, args.all_gather_tensor_args);
     TT_FATAL(!args.all_gather_operation_attributes.full_mesh, "SparseRingSDPA gathers along one mesh axis");
@@ -363,7 +367,8 @@ ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
         args.ccl_core_grid_offset,
         args.all_gather_operation_attributes,
         args.all_gather_tensor_args,
-        args.block_size);
+        args.block_size,
+        args.q_blocks_per_pass);
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> SparseRingSDPADeviceOperation::create_op_performance_model(
@@ -427,7 +432,8 @@ SparseRingSDPAResult sparse_ring_sdpa(
     const std::optional<float> scale,
     const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
-    const uint32_t block_size) {
+    const uint32_t block_size,
+    const std::optional<uint32_t> q_blocks_per_pass) {
     using OperationType = ttnn::prim::SparseRingSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -486,7 +492,8 @@ SparseRingSDPAResult sparse_ring_sdpa(
         std::move(all_gather_operation_attributes),
         std::move(all_gather_tensor_args),
         ccl_core_grid_offset,
-        block_size);
+        block_size,
+        q_blocks_per_pass);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,

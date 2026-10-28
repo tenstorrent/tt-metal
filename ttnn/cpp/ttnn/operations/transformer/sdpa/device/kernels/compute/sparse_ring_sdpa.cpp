@@ -19,9 +19,10 @@
 #include "sparse_ring_streaming.hpp"
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/fused_op_indexer.hpp"
 
-// Sparse ring attention compute: every core keeps its resident Q chunks and their flash state in L1 for the whole
-// op, and applies each K/V piece the reader streams to every resident chunk that keeps a block of it
-// (sdpa_ring_resident, once per ring iteration).
+// Sparse ring attention compute: every core keeps the Q chunks of its current pass and their flash state in L1, and
+// applies each K/V piece the reader streams to every resident chunk that keeps a block of it (sdpa_ring_resident,
+// once per ring iteration). The core's chunks are split evenly into num_q_passes passes; each pass runs the ring
+// order from the start.
 void kernel_main() {
     // Positional compile-time args (shared layout with the reader and writer; unused slots are not read).
     constexpr uint32_t NH = get_compile_time_arg_val(0);
@@ -65,9 +66,6 @@ void kernel_main() {
     argidx += 4;  // KV-pad rotation words (unused: no KV cache)
     const uint32_t active_ring_iter_mask = get_arg_val<uint32_t>(argidx++);
 
-    RingSDPAOpIndexer fused_op_indexer(
-        ring_size_runtime, ring_index_runtime, forward_writes_expected, backward_writes_expected);
-
     // CB indices: the block starts at positional slot 49.
     constexpr uint32_t cb_arg_offset = 49;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
@@ -95,6 +93,7 @@ void kernel_main() {
     // Plan layout: one plan page per ring iteration (record base word), or 0 for a page per resident chunk. The
     // reader takes the same arg.
     constexpr uint32_t plan_rec_base = get_named_compile_time_arg_val("plan_rec_base");
+    constexpr uint32_t num_q_passes = get_named_compile_time_arg_val("num_q_passes");
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
     matmul_init(cb_q_in, cb_k_in);
@@ -102,90 +101,99 @@ void kernel_main() {
     // The identity scale stays fronted for the whole op.
     CircularBuffer(cb_identity_scale_in).wait_front(1);
 
-    // Which resident chunks have state in their slot, carried across ring iterations.
-    uint32_t initialized_slots = 0;
-    // The first active iteration starts with fresh slots.
-    bool seen_active_iter = false;
-    for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
-        const uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
-        // Host precomputes which ring iterations have useful work; the ring-id sequencing above still advances so
-        // compute stays aligned with the reader, the writer and the all-gather.
-        if (((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
-            continue;
+    const uint32_t q_per_core = global_q_end - global_q_start;
+    for (uint32_t q_pass = 0; q_pass < num_q_passes; ++q_pass) {
+        const uint32_t pass_q_start = global_q_start + (q_pass * q_per_core) / num_q_passes;
+        const uint32_t pass_q_end = global_q_start + ((q_pass + 1) * q_per_core) / num_q_passes;
+        RingSDPAOpIndexer fused_op_indexer(
+            ring_size_runtime, ring_index_runtime, forward_writes_expected, backward_writes_expected);
+        // Which resident chunks have state in their slot, carried across the pass's ring iterations.
+        uint32_t initialized_slots = 0;
+        // The pass's first active iteration starts with fresh slots.
+        bool seen_active_iter = false;
+        for (uint32_t ring_iter = 0; ring_iter < ring_size; ++ring_iter) {
+            const uint32_t ring_id = fused_op_indexer.get_next_ring_id_and_sync();
+            // Host precomputes which ring iterations have useful work; the ring-id sequencing above still advances so
+            // compute stays aligned with the reader, the writer and the all-gather.
+            if (((active_ring_iter_mask >> ring_iter) & 1u) == 0) {
+                continue;
+            }
+            const bool is_first_active_iter = !seen_active_iter;
+            seen_active_iter = true;
+            const bool is_last_ring_iter = is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
+
+            // Global logical_n tail: the shard-relative K chunk holding the last real tile and the fully padded tiles
+            // after it, on the shard where logical_n lands. Anchored on the last real tile, so a chunk-final sub-tile
+            // partial column also counts as a masked chunk.
+            const int32_t global_nt_within_ring_iter =
+                static_cast<int32_t>(logical_nt) - static_cast<int32_t>(ring_id * kv_local_padded_Nt);
+            const bool global_n_is_within_ring_iter =
+                global_nt_within_ring_iter > 0 && global_nt_within_ring_iter <= (int32_t)kv_local_padded_Nt;
+            const uint32_t global_n_mask_chunk_id =
+                global_n_is_within_ring_iter ? (uint32_t)(global_nt_within_ring_iter - 1) / Sk_chunk_t : 0;
+            const uint32_t global_n_valid_tiles_in_chunk =
+                global_n_is_within_ring_iter
+                    ? (uint32_t)global_nt_within_ring_iter - global_n_mask_chunk_id * Sk_chunk_t
+                    : 0;
+            const uint32_t global_n_padded_tiles_iter =
+                global_n_is_within_ring_iter ? Sk_chunk_t - global_n_valid_tiles_in_chunk : 0;
+            const bool ring_iter_needs_global_n_mask =
+                global_n_is_within_ring_iter && (global_n_padded_tiles_iter > 0 || global_n_partial_col > 0);
+            const uint32_t global_n_padded_tiles = ring_iter_needs_global_n_mask ? global_n_padded_tiles_iter : 0;
+            // Local padded tail of the shard.
+            const bool local_n_needs_masking = local_n_has_padding;
+            const uint32_t local_n_mask_chunk_id = kv_local_padded_Nt / Sk_chunk_t;
+
+            sdpa_ring_resident<
+                Sq_chunk_t,
+                Sk_chunk_t,
+                DHt,
+                vDHt,
+                NH,
+                scale_fp32,
+                qk_subblock_w,
+                cb_q_in,
+                cb_k_in,
+                cb_v_in,
+                cb_qk_im,
+                cb_identity_scale_in,
+                cb_exp_max_diff,
+                cb_max_A,
+                cb_col_identity,
+                cb_recip_scratch,
+                cb_max_in,
+                cb_prev_out,
+                cb_out,
+                cb_sum_in,
+                kv_local_padded_Nt,
+                kv_region_Nt,
+                chunk_size_t,
+                vDHt,  // V CB row width in tiles (V is a separate tensor)
+                global_n_has_padding,
+                local_n_has_padding,
+                local_n_padded_tiles,
+                cb_sparse_plan,
+                cb_pooled_bias,
+                pooled_chunks,
+                pooled_last_tiles,
+                resident_slots,
+                plan_block_words,
+                plan_rec_base,
+                num_q_passes>(
+                pass_q_start,
+                pass_q_end,
+                num_q_chunks,
+                ring_id,
+                num_local_k_chunks,
+                logical_nt,
+                ring_iter_needs_global_n_mask,
+                local_n_needs_masking,
+                global_n_mask_chunk_id,
+                local_n_mask_chunk_id,
+                global_n_padded_tiles,
+                initialized_slots,
+                is_last_ring_iter,
+                is_first_active_iter);
         }
-        const bool is_first_active_iter = !seen_active_iter;
-        seen_active_iter = true;
-        const bool is_last_ring_iter = is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
-
-        // Global logical_n tail: the shard-relative K chunk holding the last real tile and the fully padded tiles
-        // after it, on the shard where logical_n lands. Anchored on the last real tile, so a chunk-final sub-tile
-        // partial column also counts as a masked chunk.
-        const int32_t global_nt_within_ring_iter =
-            static_cast<int32_t>(logical_nt) - static_cast<int32_t>(ring_id * kv_local_padded_Nt);
-        const bool global_n_is_within_ring_iter =
-            global_nt_within_ring_iter > 0 && global_nt_within_ring_iter <= (int32_t)kv_local_padded_Nt;
-        const uint32_t global_n_mask_chunk_id =
-            global_n_is_within_ring_iter ? (uint32_t)(global_nt_within_ring_iter - 1) / Sk_chunk_t : 0;
-        const uint32_t global_n_valid_tiles_in_chunk =
-            global_n_is_within_ring_iter ? (uint32_t)global_nt_within_ring_iter - global_n_mask_chunk_id * Sk_chunk_t
-                                         : 0;
-        const uint32_t global_n_padded_tiles_iter =
-            global_n_is_within_ring_iter ? Sk_chunk_t - global_n_valid_tiles_in_chunk : 0;
-        const bool ring_iter_needs_global_n_mask =
-            global_n_is_within_ring_iter && (global_n_padded_tiles_iter > 0 || global_n_partial_col > 0);
-        const uint32_t global_n_padded_tiles = ring_iter_needs_global_n_mask ? global_n_padded_tiles_iter : 0;
-        // Local padded tail of the shard.
-        const bool local_n_needs_masking = local_n_has_padding;
-        const uint32_t local_n_mask_chunk_id = kv_local_padded_Nt / Sk_chunk_t;
-
-        sdpa_ring_resident<
-            Sq_chunk_t,
-            Sk_chunk_t,
-            DHt,
-            vDHt,
-            NH,
-            scale_fp32,
-            qk_subblock_w,
-            cb_q_in,
-            cb_k_in,
-            cb_v_in,
-            cb_qk_im,
-            cb_identity_scale_in,
-            cb_exp_max_diff,
-            cb_max_A,
-            cb_col_identity,
-            cb_recip_scratch,
-            cb_max_in,
-            cb_prev_out,
-            cb_out,
-            cb_sum_in,
-            kv_local_padded_Nt,
-            kv_region_Nt,
-            chunk_size_t,
-            vDHt,  // V CB row width in tiles (V is a separate tensor)
-            global_n_has_padding,
-            local_n_has_padding,
-            local_n_padded_tiles,
-            cb_sparse_plan,
-            cb_pooled_bias,
-            pooled_chunks,
-            pooled_last_tiles,
-            resident_slots,
-            plan_block_words,
-            plan_rec_base>(
-            global_q_start,
-            global_q_end,
-            num_q_chunks,
-            ring_id,
-            num_local_k_chunks,
-            logical_nt,
-            ring_iter_needs_global_n_mask,
-            local_n_needs_masking,
-            global_n_mask_chunk_id,
-            local_n_mask_chunk_id,
-            global_n_padded_tiles,
-            initialized_slots,
-            is_last_ring_iter,
-            is_first_active_iter);
     }
 }

@@ -22,6 +22,9 @@ namespace ttnn::transformer {
 // through its pooled entry (score q * mean(k), value mean(v), weight = the block's token count). block_size is a
 // compile-time parameter of the kernels; only 64 is supported for now. q_chunk_size must equal block_size and
 // k_chunk_size (the K/V piece) must be a multiple of it. nb_pad = round_up(ceil(N/ring_size / B), 32).
+// Every core keeps its Q blocks and their softmax state in L1. When they do not all fit, each core's blocks are split
+// into passes (the same pass count on every core); each pass replays the ring over the K/V the all-gather delivered
+// once, during the first pass. q_blocks_per_pass caps the blocks per core per pass (nullopt: the most that fit L1).
 //   q, k, v    [1, H, N/ring_size, D]  bf16 TILE (sequence-sharded along the ring axis)
 //   block_mask [1, H, nqb_pad, ring_size * nb_pad]  uint32 ROW_MAJOR; != 0 keeps global block s * nb_pad + b
 //   pooled_k   [1, H, ring_size * nb_pad, D]  bf16 TILE; per-block mean K over the valid tokens, zero padding
@@ -49,6 +52,7 @@ ttnn::Tensor sparse_ring_sdpa(
     std::optional<float> scale = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
-    uint32_t block_size = 64);
+    uint32_t block_size = 64,
+    std::optional<uint32_t> q_blocks_per_pass = std::nullopt);
 
 }  // namespace ttnn::transformer

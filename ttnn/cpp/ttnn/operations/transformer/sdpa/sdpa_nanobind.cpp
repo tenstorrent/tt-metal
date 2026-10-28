@@ -188,7 +188,8 @@ ttnn::Tensor sparse_ring_sdpa_wrapper(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     CoreCoord ccl_core_grid_offset,
     bool use_column_major_ccl,
-    uint32_t block_size) {
+    uint32_t block_size,
+    std::optional<uint32_t> q_blocks_per_pass) {
     return ttnn::transformer::sparse_ring_sdpa(
         input_tensor_q,
         input_tensor_k,
@@ -212,7 +213,8 @@ ttnn::Tensor sparse_ring_sdpa_wrapper(
         compute_kernel_config,
         use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                              : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
-        block_size);
+        block_size,
+        q_blocks_per_pass);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_product_attention_wrapper(
@@ -889,6 +891,11 @@ void bind_sdpa(nb::module_& mod) {
                 as ring_joint_scaled_dot_product_attention.
             block_size (int): mask block size in tokens (square blocks). A compile-time parameter of the kernels;
                 only 64 is supported for now. nb_pad = round_up(ceil(N/ring_size / block_size), 32). Defaults to 64.
+            q_blocks_per_pass (int, optional): at most this many Q blocks per core per pass (1 to 32). Every core
+                keeps its Q blocks and their softmax state in L1; when they do not fit, each core's blocks are split
+                into the same number of passes and each pass replays the ring over the K/V gathered once. Defaults
+                to None: the most blocks whose buffers fit L1. The pass count may not exceed the smallest number of
+                blocks a working core holds.
 
         Returns:
             ttnn.Tensor: [1, H, N/ring_size, D], same layout as input_tensor_q.
@@ -916,7 +923,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("ccl_core_grid_offset"),
         nb::arg("use_column_major_ccl") = false,
-        nb::arg("block_size") = 64);
+        nb::arg("block_size") = 64,
+        nb::arg("q_blocks_per_pass") = nb::none());
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.

@@ -40,7 +40,7 @@ inline Slice q_chunk_out_slice(uint32_t q_chunk, uint32_t nb, uint32_t nq, uint3
 // Sparse ring attention writer. Compute keeps every resident Q chunk's accumulators in L1 for the whole op, so there
 // is no save / restore between ring iterations: this kernel generates the constant tiles (column identity and
 // reduce scaler), follows the ring sequence to stay aligned with the reader and the all-gather, and on the
-// last active ring iteration writes each resident chunk's normalized output, in Q-chunk order.
+// last active ring iteration of each pass writes that pass's normalized outputs, in Q-chunk order.
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
@@ -132,31 +132,40 @@ void kernel_main() {
                 arrival_preview.get_next_ring_id([](uint32_t, uint32_t) {}), mesh_rows, mesh_cols, snake_orientation);
         });
     const uint32_t sdpa_ring_iterations = packed_schedule.ring_iterations;
-    for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
-        // The ring-id sequence advances on every iteration so the writer stays aligned with the reader, compute and
-        // the all-gather; only the last active iteration writes.
-        const uint32_t ring_id =
-            ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
-                fused_op_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
-        if (((active_ring_iter_mask >> ring_iter) & 1u) == 0 ||
-            !is_last_active_ring_iter(active_ring_iter_mask, ring_iter)) {
-            continue;
+    // Passes split the core's Q blocks evenly (see the reader); each replays the ring order from the start (the
+    // writer never waits on the all-gather, so a fresh copy of the receiver is enough).
+    constexpr uint32_t num_q_passes = get_named_compile_time_arg_val("num_q_passes");
+    const uint32_t q_per_core = global_q_end - global_q_start;
+    const RingSDPAOpReceiver receiver_start = fused_op_receiver;
+    for (uint32_t q_pass = 0; q_pass < num_q_passes; ++q_pass) {
+        const uint32_t pass_q_start = global_q_start + (q_pass * q_per_core) / num_q_passes;
+        const uint32_t pass_q_end = global_q_start + ((q_pass + 1) * q_per_core) / num_q_passes;
+        RingSDPAOpReceiver pass_receiver = receiver_start;
+        for (uint32_t ring_iter = 0; ring_iter < sdpa_ring_iterations; ++ring_iter) {
+            // The ring-id sequence advances on every iteration so the writer stays aligned with the reader, compute
+            // and the all-gather; only the pass's last active iteration writes.
+            const uint32_t ring_id =
+                ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
+                    pass_receiver.get_next_ring_id_and_sync(), mesh_rows, mesh_cols, snake_orientation);
+            if (((active_ring_iter_mask >> ring_iter) & 1u) == 0 ||
+                !is_last_active_ring_iter(active_ring_iter_mask, ring_iter)) {
+                continue;
+            }
+            SPARSE_ZONE("WR_RES_OUT");  // cb_out waits (compute's final normalization) plus the output writes
+            const uint32_t end_seq_tile = q_local_padded_Nt * (ring_id + 1);
+            for (uint32_t q_flat = pass_q_start; q_flat < pass_q_end; ++q_flat) {
+                const auto decoded_q = decompose_global_q_index(q_flat, num_q_chunks, NH, use_zigzag_balancing);
+                write_block_row_grouped_trid<output_has_no_padding>(
+                    noc,
+                    out_generator,
+                    q_chunk_out_slice(decoded_q.q_chunk, decoded_q.nb, decoded_q.nq, Sq_chunk_t, vDHt),
+                    end_seq_tile,
+                    cb_out,
+                    tile_bytes,
+                    out_subblock_h,
+                    /*flush_trid=*/0);
+            }
+            noc.async_write_barrier();
         }
-        SPARSE_ZONE("WR_RES_OUT");  // cb_out waits (compute's final normalization) plus the output writes
-        const uint32_t end_seq_tile = q_local_padded_Nt * (ring_id + 1);
-        for (uint32_t q_index = 0; q_index + global_q_start < global_q_end; ++q_index) {
-            const auto decoded_q =
-                decompose_global_q_index(global_q_start + q_index, num_q_chunks, NH, use_zigzag_balancing);
-            write_block_row_grouped_trid<output_has_no_padding>(
-                noc,
-                out_generator,
-                q_chunk_out_slice(decoded_q.q_chunk, decoded_q.nb, decoded_q.nq, Sq_chunk_t, vDHt),
-                end_seq_tile,
-                cb_out,
-                tile_bytes,
-                out_subblock_h,
-                /*flush_trid=*/0);
-        }
-        noc.async_write_barrier();
     }
 }

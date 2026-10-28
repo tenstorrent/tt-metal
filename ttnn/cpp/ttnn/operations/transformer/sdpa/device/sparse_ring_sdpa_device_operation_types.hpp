@@ -33,6 +33,9 @@ struct SparseRingSDPAParams {
     // Square block of the mask, in tokens: one mask row per Q block of block_size rows, one mask column per K block
     // of block_size tokens. A compile-time parameter of the kernels; only 64 is supported for now.
     uint32_t block_size = 64;
+    // Q blocks per core per pass (resident slots). nullopt: the largest count whose CBs fit L1. Each core's blocks
+    // are split into the same number of passes; the K/V all-gather runs once.
+    std::optional<uint32_t> q_blocks_per_pass = std::nullopt;
 
     // We need a constructor, because all_gather_struct is not default initializable.
     SparseRingSDPAParams(
@@ -45,7 +48,8 @@ struct SparseRingSDPAParams {
         experimental::prim::RingAttentionAllGatherAsyncParams all_gather_operation_attributes,
         experimental::prim::RingAttentionAllGatherAsyncInputs all_gather_tensor_args,
         CoreCoord ccl_core_grid_offset,
-        uint32_t block_size) :
+        uint32_t block_size,
+        std::optional<uint32_t> q_blocks_per_pass) :
         scale(scale),
         logical_n(logical_n),
         ring_size(ring_size),
@@ -55,7 +59,8 @@ struct SparseRingSDPAParams {
         all_gather_operation_attributes(std::move(all_gather_operation_attributes)),
         all_gather_tensor_args(std::move(all_gather_tensor_args)),
         ccl_core_grid_offset(ccl_core_grid_offset),
-        block_size(block_size) {}
+        block_size(block_size),
+        q_blocks_per_pass(q_blocks_per_pass) {}
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
 
@@ -72,7 +77,8 @@ struct SparseRingSDPAParams {
         "ccl_core_grid_offset",
         "all_gather_operation_attributes",
         "all_gather_tensor_args",
-        "block_size");
+        "block_size",
+        "q_blocks_per_pass");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(scale),
@@ -83,7 +89,8 @@ struct SparseRingSDPAParams {
             std::cref(ccl_core_grid_offset),
             std::cref(all_gather_operation_attributes),
             std::cref(all_gather_tensor_args),
-            std::cref(block_size));
+            std::cref(block_size),
+            std::cref(q_blocks_per_pass));
     }
 };
 

@@ -261,11 +261,13 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         block_mask: 1 x NH x nb_pad x n_blocks_pad (uint32);  pooled_k / pooled_v: 1 x NH x n_blocks_pad x DH
         output_tensor: B x NH x local_N x DH
 
-    Every core holds its Q blocks (block_size rows) in L1 for the whole op (one accumulator set each). Each ring
-    iteration, every K/V piece (k_chunk_size keys) that any Q block of the core's head group keeps is delivered
-    once to the group and applied to every resident Q block that keeps one of its blocks. On the first active ring
-    iteration the pooled entries (one per dropped block, weighted by its token count through a generated column
-    bias) are applied too. After the last ring iteration each Q block is normalized and written out.
+    Every core holds the Q blocks (block_size rows) of its current pass in L1 (one accumulator set each); when a
+    core's blocks do not fit at once they are split evenly into passes, and every pass replays the ring over the K/V
+    the all-gather delivered during the first one. Each ring iteration, every K/V piece (k_chunk_size keys) that any
+    Q block of the core's head group keeps is delivered once to the group and applied to every resident Q block
+    that keeps one of its blocks. On a pass's first active ring iteration the pooled entries (one per dropped block,
+    weighted by its token count through a generated column bias) are applied too. After a pass's last ring
+    iteration each of its Q blocks is normalized and written out.
     */
 
     log_debug(tt::LogOp, "SparseRingSDPA create_descriptor");
@@ -458,19 +460,12 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
 
     log_debug(tt::LogOp, "max_q_per_core: {}", max_q_per_core);
 
-    // Every Q block the core owns stays fronted in cb_q_in for the whole op (read once).
-    TT_FATAL(
-        max_q_per_core <= kResidentMaxSlots,
-        "SparseRingSDPA holds at most {} Q blocks per core, this split needs {}",
-        kResidentMaxSlots,
-        max_q_per_core);
     // The plan page's 16-word header carries the shard's kept-block bits (one word per 32 blocks) plus the union
     // piece bits (2 words) and the pooled flag.
     TT_FATAL(
         tt::div_up(mask_nb, 32u) + 3 <= 16,
         "SparseRingSDPA: {} blocks per shard exceed the plan header (at most 416)",
         mask_nb);
-    uint32_t q_tiles = Sq_chunk_t * DHt * max_q_per_core;
     // Group delivery: one producer per head group multicasts each piece (see group_mcast in the reader) over a
     // 3-deep K/V CB, so the producer can send the next piece while every member computes on the previous ones.
     // Without it (B > 1, or no head chain) the K/V CBs are double-buffered.
@@ -486,8 +481,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
 
     log_debug(
         tt::LogOp,
-        "q_tiles: {}, k_tiles: {}, v_tiles: {}, qk_tiles: {}, out0_t: {}, statistics_tiles: {}",
-        q_tiles,
+        "k_tiles: {}, v_tiles: {}, qk_tiles: {}, out0_t: {}, statistics_tiles: {}",
         k_tiles,
         v_tiles,
         qk_tiles,
@@ -893,54 +887,139 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         });
         return cb_index;
     };
-    const auto allocate_tile_cb = [&](uint32_t num_tiles, uint32_t tile_size, tt::DataFormat data_format) -> uint32_t {
-        return allocate_cb(tile_size, num_tiles, data_format);
+
+    // Every core keeps the Q blocks of its current pass and one accumulator set each in L1 ("slots"). The CBs whose
+    // size depends on the slot count are laid out by lay_out_cbs(slots, alloc), which the pass split below runs once
+    // per candidate count with a byte counter and then once with the real allocator, so the fit check and the
+    // allocation cannot disagree.
+    // One step covers one piece for a group of resident Q blocks, each with its own kept blocks; member g's scores are
+    // stored compactly (row stride = its kept width), and members are grouped until the scores fill
+    // kResidentGroup x Sq_chunk_t rows of Sk_chunk_t tiles (at least qk_tiles). The new-max / alpha scratches
+    // hold one tile row per slot. The compute kernel derives the same capacity (sdpa_ring_resident, kGroupCap) and
+    // ASSERTs the page count.
+    // The staging CBs (max, out, sum) hold one accumulator set per slot, addressed by slot and updated in place:
+    // exactly `slots` entries, filled on the first active ring iteration of a pass and neither pushed nor popped
+    // until the pass's final normalization, so the unpacker's read index and the packer's write index name the same
+    // tile (the buffer is exactly full, the write pointer wrapped to its base).
+    // Plan page: 16 summary words, then the Q block's full mask row (scratch the reader scans in place). The summary
+    // is [kept-block words (plan_block_words)][union piece bits lo, hi][do_pooled]. Single page: a second page pushed
+    // the static CB region past the L1 buffers the full pipeline's CCL manager pins (clash by 1792 B at the 10 s
+    // shape). One pooled chunk of bias tiles in flight; 2*Sk_chunk_t pushed the static CB region past the L1 buffers
+    // at the 10 s / 15 s shapes.
+    constexpr uint32_t kResidentGroup = 4;
+    struct CbLayout {
+        uint32_t q_in, k_in, v_in, identity_scale_in, col_identity, qk_im, max_A, exp_max_diff, out, stats_in, prev_out,
+            recip_scratch, sum_in, sparse_plan, pooled_bias;
+    };
+    const auto lay_out_cbs = [&](uint32_t slots, const auto& alloc) -> CbLayout {
+        const auto tile_cb = [&](uint32_t num_tiles, uint32_t tile_size, tt::DataFormat data_format) {
+            return alloc(tile_size, num_tiles, data_format);
+        };
+        CbLayout l{};
+        l.q_in = tile_cb(Sq_chunk_t * DHt * slots, q_tile_size, q_df);
+        l.k_in = tile_cb(k_tiles, k_tile_size, k_df);
+        l.v_in = tile_cb(v_tiles, v_tile_size, v_df);
+        l.identity_scale_in = tile_cb(scale_tiles, scalar_tile_size, scalar_df);
+        l.col_identity = tile_cb(scale_tiles, scalar_tile_size, scalar_df);
+        const uint32_t qk_im_cb_tiles = std::max(qk_tiles, std::min(slots, kResidentGroup) * Sq_chunk_t * Sk_chunk_t);
+        const uint32_t res_stats_tiles = statistics_tiles * slots;
+        l.qk_im = tile_cb(qk_im_cb_tiles, qk_im_tile_size, qk_im_df);
+        l.max_A = tile_cb(res_stats_tiles, stats_tile_size, stats_df);
+        l.exp_max_diff = tile_cb(res_stats_tiles, stats_tile_size, stats_df);
+        l.out = tile_cb(out0_t, out_tile_size, out_df);
+        l.stats_in = tile_cb(statistics_tiles * slots, im_tile_size, im_df);
+        l.prev_out = tile_cb(out_im_tiles * slots, out_tile_size, out_df);
+        l.recip_scratch = tile_cb(1, im_tile_size, im_df);  // 1-tile recip scratch for normalize_row_streaming
+        l.sum_in = tile_cb(statistics_tiles * slots, stats_tile_size, stats_df);
+        l.sparse_plan = alloc(64 + mask_row_bytes, 1, tt::DataFormat::UInt32);
+        l.pooled_bias = tile_cb(Sk_chunk_t, mask_tile_size, mask_df);
+        return l;
+    };
+    const auto cb_bytes_for_slots = [&](uint32_t slots) -> uint64_t {
+        uint64_t bytes = 0;
+        uint32_t index = 0;
+        lay_out_cbs(slots, [&](uint32_t page_size_bytes, uint32_t num_pages, tt::DataFormat) -> uint32_t {
+            bytes += static_cast<uint64_t>(page_size_bytes) * num_pages;
+            return index++;
+        });
+        return bytes;
     };
 
-    const uint32_t cb_q_in = allocate_tile_cb(q_tiles, q_tile_size, q_df);
-    const uint32_t cb_k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df);
-    const uint32_t cb_v_in = allocate_tile_cb(v_tiles, v_tile_size, v_df);
+    // Pass split. S = slots per pass: the largest count (at most kResidentMaxSlots, the core's block count and
+    // q_blocks_per_pass) whose CBs end below the lowest live L1 buffer (validate_circular_buffer_region enforces
+    // exactly this; in the pipeline, global semaphores and persistent buffers occupy the top of L1). P passes split
+    // every core's blocks evenly, so each working core needs at least P blocks: then no core has an empty pass, and
+    // every head-group member streams its group's pieces in every pass (pointer lockstep).
+    const auto lowest_l1_buffer = mesh_device->lowest_occupied_compute_l1_address();
+    const uint32_t cb_space_top = lowest_l1_buffer.has_value() ? static_cast<uint32_t>(lowest_l1_buffer.value())
+                                                               : mesh_device->l1_size_per_core();
+    const uint32_t usable_l1 =
+        cb_space_top - mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    uint32_t max_slots = std::min(kResidentMaxSlots, max_q_per_core);
+    if (args.q_blocks_per_pass.has_value()) {
+        max_slots = std::min(max_slots, *args.q_blocks_per_pass);
+    }
+    uint32_t fit_slots = max_slots;
+    while (fit_slots > 0 && cb_bytes_for_slots(fit_slots) > usable_l1) {
+        --fit_slots;
+    }
+    TT_FATAL(
+        fit_slots > 0,
+        "SparseRingSDPA CBs need {} B with one Q block per core but only {} B of L1 are usable (k_chunk={}); reduce "
+        "k_chunk_size.",
+        cb_bytes_for_slots(1),
+        usable_l1,
+        Sk_chunk_t * tt::constants::TILE_HEIGHT);
+    const uint32_t num_q_passes = tt::div_up(max_q_per_core, fit_slots);
+    // Every working core holds base or base + 1 blocks (all hold one when there are fewer blocks than cores).
+    const uint32_t min_q_per_working_core = std::max(1u, all_heads_num_q_chunks / num_cores);
+    TT_FATAL(
+        num_q_passes <= min_q_per_working_core,
+        "SparseRingSDPA: {} passes of at most {} Q blocks would leave a core with {} blocks an empty pass; allow more "
+        "Q blocks per pass (q_blocks_per_pass) or reduce k_chunk_size",
+        num_q_passes,
+        fit_slots,
+        min_q_per_working_core);
+    TT_FATAL(
+        num_q_passes == 1 || (!gqa_grouped_kv && !k_uses_batch_chain),
+        "SparseRingSDPA: several Q passes need separate K and V heads per query head (MHA), got NH {} NHK {} NHV {}",
+        NH,
+        NHK,
+        NHV);
+    const uint32_t resident_slots = tt::div_up(max_q_per_core, num_q_passes);
+    log_info(
+        tt::LogOp,
+        "SparseRingSDPA: {} Q blocks per core at most, {} pass(es) of at most {} ({} of {} B of L1 for CBs)",
+        max_q_per_core,
+        num_q_passes,
+        resident_slots,
+        cb_bytes_for_slots(resident_slots),
+        usable_l1);
+
+    const CbLayout cbs = lay_out_cbs(resident_slots, allocate_cb);
+    const uint32_t cb_q_in = cbs.q_in;
+    const uint32_t cb_k_in = cbs.k_in;
+    const uint32_t cb_v_in = cbs.v_in;
+    const uint32_t cb_identity_scale_in = cbs.identity_scale_in;
+    const uint32_t cb_col_identity = cbs.col_identity;
+    const uint32_t cb_qk_im = cbs.qk_im;
+    const uint32_t cb_max_A = cbs.max_A;
+    const uint32_t cb_exp_max_diff = cbs.exp_max_diff;
+    const uint32_t cb_out = cbs.out;
+    const uint32_t cb_stats_in = cbs.stats_in;
+    const uint32_t cb_prev_out = cbs.prev_out;
+    const uint32_t cb_recip_scratch = cbs.recip_scratch;
+    const uint32_t cb_sum_in = cbs.sum_in;
+    const uint32_t cb_sparse_plan = cbs.sparse_plan;
+    const uint32_t cb_pooled_bias = cbs.pooled_bias;
 
     // The dense op's padding-mask and scale CBs: the resident step masks padding by narrowing its K width and applies
     // the scale inside its exp, so neither is allocated. Their slots in the shared CB argument block stay.
     constexpr uint32_t inactive_cb = std::numeric_limits<uint32_t>::max();
     const uint32_t cb_mask_in = inactive_cb;
-
+    const uint32_t cb_scale_in = inactive_cb;
     // No attention sink: alias a valid CB so compile-time tile-size queries remain valid.
     const uint32_t cb_attention_sink = cb_q_in;
-
-    const uint32_t cb_scale_in = inactive_cb;
-    const uint32_t cb_identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
-    const uint32_t cb_col_identity = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
-
-    // One step covers one piece for a group of resident Q blocks, each with its own kept blocks; member g's scores are
-    // stored compactly (row stride = its kept width), and members are grouped until the scores fill
-    // kResidentGroup x Sq_chunk_t rows of Sk_chunk_t tiles (at least qk_tiles). The new-max / alpha scratches
-    // hold one tile row per resident Q block. The compute kernel derives the same capacity (sdpa_ring_resident,
-    // kGroupCap) and ASSERTs the page count.
-    constexpr uint32_t kResidentGroup = 4;
-    const uint32_t qk_im_cb_tiles =
-        std::max(qk_tiles, std::min(max_q_per_core, kResidentGroup) * Sq_chunk_t * Sk_chunk_t);
-    const uint32_t res_stats_tiles = statistics_tiles * max_q_per_core;
-    const uint32_t cb_qk_im = allocate_tile_cb(qk_im_cb_tiles, qk_im_tile_size, qk_im_df);
-    const uint32_t cb_max_A = allocate_tile_cb(res_stats_tiles, stats_tile_size, stats_df);
-    const uint32_t cb_exp_max_diff = allocate_tile_cb(res_stats_tiles, stats_tile_size, stats_df);
-
-    const uint32_t cb_out = allocate_tile_cb(out0_t, out_tile_size, out_df);
-
-    // The staging CBs (max, out, sum) hold one accumulator set per resident Q block, addressed by block slot and
-    // updated in place: exactly max_q_per_core entries, filled once on the first active ring iteration and neither
-    // pushed nor popped until the final normalization, so the unpacker's read index and the packer's write index
-    // name the same tile (the buffer is exactly full, the write pointer wrapped to its base).
-    const uint32_t fifo_entries = max_q_per_core;
-    const uint32_t cb_stats_in = allocate_tile_cb(statistics_tiles * fifo_entries, im_tile_size, im_df);
-    const uint32_t cb_prev_out = allocate_tile_cb(out_im_tiles * fifo_entries, out_tile_size, out_df);
-
-    // 1-tile recip scratch CB for normalize_row_streaming.
-    const uint32_t cb_recip_scratch = allocate_tile_cb(1, im_tile_size, im_df);
-
-    const uint32_t cb_sum_in = allocate_tile_cb(statistics_tiles * fifo_entries, stats_tile_size, stats_df);
-
     // Slots of the dense op's CB argument block no kernel of this op reads: the second accumulator set, the
     // save / restore and signal CBs, and the metadata mailbox. Not allocated; the slots stay so the indices hold.
     const uint32_t cb_out_im_A = inactive_cb;
@@ -952,12 +1031,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const uint32_t cb_sum_out = inactive_cb;
     const uint32_t cb_signal = inactive_cb;
     const uint32_t cb_kv_pad_derived = inactive_cb;
-    // Reader->compute plan words per ring iteration, and the pooled-chunk column bias tiles.
-    // Plan page: 16 summary words, then the Q block's full mask row (scratch the reader scans in place). The summary
-    // is [kept-block words (plan_block_words)][union piece bits lo, hi][do_pooled].
-    // Single page: a second page pushed the static CB region past the L1 buffers the full pipeline's CCL manager
-    // pins (clash by 1792 B at the 10 s shape).
-    const uint32_t cb_sparse_plan = allocate_cb(64 + mask_row_bytes, 1, tt::DataFormat::UInt32);
     // Every Q block's plan record goes in one page per ring iteration, after the header (16 words) and the shard
     // slice the reader scans (mask_nb_pad words), so the reader does not wait for compute to pop a page per block at
     // each iteration boundary. The records fit in the scratch the whole-row reads already need; a short row (one
@@ -965,11 +1038,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     // phase-alignment dummies: every chain / group member pushes the same sequence, so the pointers stay in step.
     const uint32_t plan_rec_words = tt::div_up(mask_nb, 32u) + 3;
     const bool plan_fits_one_page =
-        (16 + mask_nb_pad + max_q_per_core * plan_rec_words) * sizeof(uint32_t) <= 64 + mask_row_bytes;
+        (16 + mask_nb_pad + resident_slots * plan_rec_words) * sizeof(uint32_t) <= 64 + mask_row_bytes;
     const uint32_t plan_rec_base = plan_fits_one_page ? 16 + mask_nb_pad : 0;
-    // One pooled chunk of bias tiles in flight; 2*Sk_chunk_t pushed the static CB region past the L1 buffers at the
-    // 10 s / 15 s shapes.
-    const uint32_t cb_pooled_bias = allocate_tile_cb(Sk_chunk_t, mask_tile_size, mask_df);
     {
         uint64_t cb_bytes = 0;
         for (const auto& cb : desc.cbs) {
@@ -977,11 +1047,11 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         }
         log_debug(
             tt::LogOp,
-            "SparseRingSDPA CBs: {} buffers, {} bytes (q {} t, k {} t, v {} t, qk {} t, out_im {} t, stats {} t; "
+            "SparseRingSDPA CBs: {} buffers, {} bytes ({} slots; k {} t, v {} t, qk {} t, out_im {} t, stats {} t; "
             "im tile {} B)",
             desc.cbs.size(),
             cb_bytes,
-            q_tiles,
+            resident_slots,
             k_tiles,
             v_tiles,
             qk_tiles,
@@ -1538,9 +1608,11 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         {"kv_stripe_split", 1u},
         // Mask block size in tiles (square blocks: Q block rows == K block columns). Only 2 (64 tokens) for now.
         {"block_tiles", block_tiles},
-        // Resident Q blocks: the slot count every core sizes its state arrays by, and the words of per-shard
-        // kept-block bits the reader puts in every plan page (block b: word b/32, bit b%32).
-        {"resident_slots", max_q_per_core},
+        // Resident Q blocks: the slot count (Q blocks per core per pass) every core sizes its state arrays by, the
+        // pass count (identical on every core; each core's blocks are split evenly over the passes), and the words of
+        // per-shard kept-block bits the reader puts in every plan page (block b: word b/32, bit b%32).
+        {"resident_slots", resident_slots},
+        {"num_q_passes", num_q_passes},
         {"plan_block_words", tt::div_up(mask_nb, 32u)},
         // Group delivery by multicast (see group_mcast above).
         {"group_mcast", group_mcast ? 1u : 0u},
