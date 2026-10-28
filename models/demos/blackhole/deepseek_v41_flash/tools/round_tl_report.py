@@ -34,10 +34,10 @@ def st(xs):
 for f in sorted(glob.glob(os.path.join(d, "rounds_pass*.json"))):
     J = json.load(open(f))
     recs = [r for r in J["records"] if not r["calib"]]
-    ks = sorted({(r["k"], r["draft"], r.get("rows", "g")) for r in recs})
+    ks = sorted({(r["k"], r["draft"], r.get("rmode", "g")) for r in recs})
     print(f"\n### {os.path.basename(f)}  ({J['label']}; {len(recs)} rounds, warm-up {warm} dropped per k)")
     for k, dr, rw in ks:
-        rs = [r for r in recs if r["k"] == k and r["draft"] == dr and r.get("rows", "g") == rw][warm:]
+        rs = [r for r in recs if r["k"] == k and r["draft"] == dr and r.get("rmode", "g") == rw][warm:]
         if len(rs) < 5:
             print(f"\nk={k} rows={rw}: only {len(rs)} rounds after warm-up, skipped")
             continue

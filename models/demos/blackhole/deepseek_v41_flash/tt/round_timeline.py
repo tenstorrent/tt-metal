@@ -258,7 +258,7 @@ def install():
             else:
                 self.sample_cfg = None
             _STATE["nr_pass"] += 1
-        cur = {"k": self.k, "n": self.n, "T": self.T, "B": self.B, "draft": self.draft, "calib": _STATE["calib"], "t0": t0, "rows": smode}
+        cur = {"k": self.k, "n": self.n, "T": self.T, "B": self.B, "draft": self.draft, "calib": _STATE["calib"], "t0": t0, "rmode": smode}
         _CUR[0] = cur
         try:
             out = orig_round(self, X, base, force)
