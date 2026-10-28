@@ -164,6 +164,8 @@ inline constexpr matmul_main_form_cell matmul_main_form_cells[] = {
     {MathFidelity::HiFi2, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, false},
     {MathFidelity::HiFi3, true, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float16_b, true},
     {MathFidelity::HiFi3, true, false, DataFormat::Float16_b, DataFormat::Float32, DataFormat::Float16_b, false},
+    // Float16_b to Bfp4_b at HiFi3 from a 32-bit DEST, one k step: the keyed forms read 0.4 cycles behind main on a single tile
+    {MathFidelity::HiFi3, true, true, DataFormat::Float16_b, DataFormat::Bfp4_b, DataFormat::Bfp4_b, false},
     {MathFidelity::HiFi3, true, true, DataFormat::Float32, DataFormat::Bfp8_b, DataFormat::Float32, false},
     {MathFidelity::HiFi3, true, true, DataFormat::Float32, DataFormat::Float16_b, DataFormat::Float32, false},
     {MathFidelity::HiFi3, true, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, false},
@@ -181,9 +183,29 @@ inline constexpr matmul_main_form_cell matmul_main_form_cells[] = {
     {MathFidelity::LoFi, false, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, false, 4, 4, 1, 2, 4, 2},
 };
 
+// Mixed operand pairs whose keyed forms read slower than main's on the tt-llk mixed sweep (perf_matmul_mix, ABBA against main):
+// Float32 against a block float operand (Bfp8_b or Bfp4_b, either order) at HiFi2, any block, k, DEST, sync and output (up to 9 percent on K 32 rows),
+// and Bfp8_b in in1 against Float16_b in in0 at HiFi2, half sync, 16-bit DEST, one k step (a single tile, 0.2 cycles).
+constexpr bool matmul_block_float_format(const DataFormat f)
+{
+    return f == DataFormat::Bfp8_b || f == DataFormat::Bfp4_b;
+}
+
+template <MathFidelity math_fidelity, std::uint32_t kt_per_section, bool fp32_dest, DataFormat in0, DataFormat in1, DataFormat out_format, int sync>
+constexpr bool matmul_mixed_main_form()
+{
+    return math_fidelity == MathFidelity::HiFi2 &&
+           ((in0 == DataFormat::Float32 && matmul_block_float_format(in1)) || (in1 == DataFormat::Float32 && matmul_block_float_format(in0)) ||
+            (!fp32_dest && kt_per_section == 1 && sync == 0 && in1 == DataFormat::Bfp8_b && in0 == DataFormat::Float16_b && out_format == DataFormat::Float32));
+}
+
 template <MathFidelity math_fidelity, std::uint32_t kt_per_section, bool fp32_dest, DataFormat in0, DataFormat in1, DataFormat out_format, DataFormat pack_format, bool several_blocks, std::uint32_t row_tiles = 0, int sync = 0, std::uint32_t min_side = 99>
 constexpr bool matmul_main_form_cell_selected()
 {
+    if (matmul_mixed_main_form<math_fidelity, kt_per_section, fp32_dest, in0, in1, out_format, sync>())
+    {
+        return true;
+    }
     for (const matmul_main_form_cell& c : matmul_main_form_cells)
     {
         if (c.fidelity == math_fidelity && c.k1 == (kt_per_section == 1) && c.fp32_dest == fp32_dest && c.out == out_format && c.pack == pack_format &&
@@ -218,6 +240,7 @@ struct matmul_forced_form_cell
     bool several = false; // only with several inner blocks (the sweeps run one)
     int sections = 0;     // 0 any, 1 only a kernel of one DEST section (what the sweeps run), 2 only several sections
     std::uint32_t max_h = 0xFFFF; // block height (rt) in tiles, at most
+    bool in0_only = false;        // the input format must be that of in0, not in1
 };
 
 inline constexpr matmul_forced_form_cell matmul_forced_form_cells[] = {
@@ -246,7 +269,7 @@ inline constexpr matmul_forced_form_cell matmul_forced_form_cells[] = {
     {MathFidelity::HiFi2, 0, 2, 32, false, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 2, 2, 4, false, 'r', false, 0, 4},
     {MathFidelity::HiFi2, 1, 2, 32, false, DataFormat::Bfp8_b, DataFormat::Bfp8_b, DataFormat::Bfp8_b, 2, 2, 4, false, 'r', false, 0, 4},
     // Bfp8_b to Float32 at HiFi2, half sync, one k step, 16-bit DEST, a single tile: the table's form reads 0.6 cycles behind main
-    {MathFidelity::HiFi2, 0, 1, 1, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 1, 1, false, 'r', false, 0, 1},
+    {MathFidelity::HiFi2, 0, 1, 1, false, DataFormat::Bfp8_b, DataFormat::Float32, DataFormat::Float32, 1, 1, 1, false, 'r', false, 0, 1, true},
     // Float16_b HiFi4 at full sync over 32 k steps, 1x1, 1x8 and 2x4 blocks; at half sync over 2 to 4 k steps, a single tile
     {MathFidelity::HiFi4, 1, 32, 32, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 1, 1, 1, false, 'r', false, 0, 1},
     {MathFidelity::HiFi4, 1, 32, 32, false, DataFormat::Float16_b, DataFormat::Float16_b, DataFormat::Float16_b, 1, 1, 8, false, 'r', false, 0, 8},
@@ -264,7 +287,7 @@ constexpr char matmul_forced_form()
     for (const matmul_forced_form_cell& c : matmul_forced_form_cells)
     {
         if (c.fidelity == math_fidelity && c.sync == sync && kt_per_section >= c.min_k && kt_per_section <= c.max_k && c.fp32_dest == fp32_dest &&
-            c.out == out_format && c.pack == pack_format && (c.in == in0 || c.in == in1) && w >= c.min_w && w <= c.max_w && h >= c.min_h && h <= c.max_h && (!c.wide || w >= h) && (!c.several || several_blocks) &&
+            c.out == out_format && c.pack == pack_format && (c.in == in0 || c.in == in1) && (!c.in0_only || c.in == in0) && w >= c.min_w && w <= c.max_w && h >= c.min_h && h <= c.max_h && (!c.wide || w >= h) && (!c.several || several_blocks) &&
             (c.sections == 0 || (c.sections == 1 ? dest_sections == 1 : dest_sections > 1)))
         {
             return c.form;
