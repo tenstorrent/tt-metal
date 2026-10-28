@@ -32,11 +32,11 @@ from models.experimental.tafsut_forecast.tests.pcc import metrics as M
 from models.experimental.tafsut_forecast.tests.perf.check_gates import DEFAULT_BASELINES, load_records
 from models.experimental.tafsut_forecast.tests.perf.test_forward_perf import forward_inputs
 
-# (case, forward index, named rows): D4 item 3
+# (case, forward index, named rows): D4 item 3; 121, 394, 250 and 973 are the case band floors' rows (D5 R1-0a)
 NAMED = [
-    ("long_horizon", 1, [16, 311, 393]),
-    ("long_horizon", 0, [283]),
-    ("paper", 0, [536]),
+    ("long_horizon", 1, [16, 311, 393, 250]),
+    ("long_horizon", 0, [283, 121, 394]),
+    ("paper", 0, [536, 973]),
     ("horizon4", 0, [1]),
 ]
 N_CONTROL = 5
@@ -110,12 +110,60 @@ def test_row_stages(device, case, k, named, precision):
             f"pcc {float(rp[j]):.6f} | full batch "
             + (f"bias {full[0]:+.4f} ratio {full[1]:.4f}" if full else "n/a")
             + f" | |spread| mean {hw:.3f}"
-            + "\n[rows]     fut rel err (embed, blocks 0-11, head): "
+            + f"\n[rows]     fut rel err (embed, blocks 0-{df.NL - 1}, head): "
             + " ".join(f"{e:.4f}" for e in fut)
-            + "\n[rows]     ctx rel err (embed, blocks 0-10):       "
+            + f"\n[rows]     ctx rel err (embed, blocks 0-{df.NL - 2}):       "
             + " ".join(f"{e:.4f}" for e in ctx)
         )
     assert float(rp.min()) > 0.9999, "the reference does not reproduce the golden rows"
+
+
+# D5 R1-0c: the rows whose error jumps at the last block (283) or at the head (536)
+TAIL = [("long_horizon", 0, [283]), ("paper", 0, [536])]
+
+
+@pytest.mark.parametrize("precision", ["accuracy", "performance"])
+@pytest.mark.parametrize("case,k,named", TAIL, ids=[f"{c}-f{k + 1}" for c, k, _ in TAIL])
+def test_tail_isolation(device, case, k, named, precision):
+    """The last block and the head alone, fed the reference's residual stream: block 13 from the reference's block-12
+    output, the head from the reference's block-13 output. Error made there on the named rows against the controls."""
+    import ttnn
+
+    from models.experimental.tafsut_forecast.tt.common import Precision
+    from models.experimental.tafsut_forecast.tt.model import TtTafsut
+
+    g, gh, x, rows, n_named = rows_of(case, k, named)
+    n = gh.shape[1]
+    prep = df.prepare_inputs(x[rows])
+    tt = TtTafsut(device, precision=Precision.by_name(precision))
+    rtaps = []
+    ref = df.forward(df.Weights(), prep, n_read=df.NFUT, taps=rtaps)
+    P = prep.tokens.shape[1]
+    c = tt.constants(len(rows), prep.ctx_len)
+    inp = tt.upload_inputs(tt.host_inputs(prep))
+    up = lambda t: ttnn.from_torch(t.bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    h13 = tt.layer(up(rtaps[df.NL - 1]), tt.layers[df.NL - 1], inp, c, last=True)
+    b13 = ttnn.to_torch(h13).float()
+    o13 = tt.head(h13)
+    head13 = ttnn.to_torch(o13).float()
+    oh = tt.head(up(rtaps[df.NL]))
+    headh = ttnn.to_torch(oh).float()
+    for t in (h13, o13, oh):
+        ttnn.deallocate(t)
+    tt.deallocate_inputs(inp)
+    fut = slice(0, df.NFUT)
+    print(f"\n[tail] {case} f{k + 1} {precision}: named {rows[:n_named]}, controls {rows[n_named:]}")
+    print("[tail] rel err: input (ref bf16) | block 13 out | head via device block 13 | head from ref block 13 | bias")
+    for j, row in enumerate(rows):
+        e_in = rel(rtaps[df.NL - 1][j, P : P + df.NFUT].bfloat16().float(), rtaps[df.NL - 1][j, P : P + df.NFUT])
+        e13 = rel(b13[j, fut], rtaps[df.NL][j, fut])
+        eh13 = rel(head13[j, :n], ref[j, :n])
+        ehh = rel(headh[j, :n], ref[j, :n])
+        bias = float((head13[j, :n].double() - ref[j, :n].double()).mean())
+        print(
+            f"[tail] {'NAMED' if j < n_named else 'ctl  '} row {row:4d}: {e_in:.4f} | {e13:.4f} | {eh13:.4f} | "
+            f"{ehh:.4f} | {bias:+.4f}"
+        )
 
 
 EPS = 2.0**-9
