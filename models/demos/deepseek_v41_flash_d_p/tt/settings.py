@@ -370,10 +370,18 @@ TABLE = {
         "at about TF32",
     ),
     "MOE_IMPL": Setting(
-        "flat",
+        "block",
         ("flat", "block"),
         "the MoE layer (tt/MOE_BLOCK.md; owner decisions 2026-10-27, reports/moe_block_decisions_2026-10-27.md, an A/B "
-        "on the 2x2, the Galaxy keeps flat meanwhile). flat = today's steps: router (ROUTER_IMPL), routed experts "
+        "on the 2x2). Default block: OWNER DECISION 2026-10-28 (FIX.6), the one configuration is the block MoE with its "
+        "fused head (MOE_HEAD / MOE_TAIL fused) on the torus. Evidence (supervision.md 06:20): 8x4 FABRIC_2D_TORUS_XY, "
+        "one 5120-token chunk, 40 layers, device 219.5 / 233.9 / 237.5 / 249.1 / 284.4 ms at context 0 / 50k / 100k / "
+        "200k / 500k vs flat on FABRIC_2D 308.1 / 314.6 / 323.3 / 338.0 / 375.7; warm host wall 615-646 ms vs 672-1005; "
+        "L.s10240 PASS (top5 1.0, final hidden rel 0.192) and L.smoke Paris with block on the torus. The galaxy boxes "
+        "open FABRIC_2D_TORUS_XY; flat on the torus hangs at the first MoE call (DS41-130) and block's fused head does "
+        "not build on 8x4 FABRIC_2D lines (DS41-129), so FABRIC_2D is no longer a target on the Galaxy (owner: 'I don't "
+        "care about fabric2d if torus works'); flat stays selectable (the FABRIC_2D boxes, comparisons). "
+        "flat = today's steps: router (ROUTER_IMPL), routed experts "
         "(flat op + weighted combine), shared expert (flat op), moe_add. block = Marko Staletovic's MoE block "
         "(models/demos/moe_block, tt/moe_block_adapter.py) for all four, in the experts step: x as ffn_norm gathers it "
         "(D2: the block's x_gathered input, ffn_norm unchanged); the block's ops router (D3: partial logits over H/TP, "
@@ -382,7 +390,7 @@ TABLE = {
         "routed experts as our FlatRoutedExpert (bfp4, weights_nk, our weight cache, EXPERTS_LAYOUT: D6, marko = the "
         "block's own layout_of) in the block's "
         "token exchange (owner dispatch, flat experts + combine in one program) with the fixed combine order (D7: the "
-        "exchange's deterministic planner); EXPERTS_PRECISION=glm only (D8); lines or a torus (D10 lines on the 2x2; D14 torus allowed, untested on DS41). MOE_HEAD picks the "
+        "exchange's deterministic planner); EXPERTS_PRECISION=glm only (D8); lines or a torus (D10 lines on the 2x2; D14 torus, the Galaxy's fabric since FIX.6). MOE_HEAD picks the "
         "head",
     ),
     "MOE_HEAD": Setting(

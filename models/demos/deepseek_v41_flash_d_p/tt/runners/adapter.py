@@ -3,8 +3,8 @@
 # SPDX-License-Identifier: Apache-2.0
 """``DS41PrefillAdapter``: the common/prefill engine <-> DeepSeek-V4.1-Flash (text decoder; vision and MTP skipped).
 
-Single rank on a 2D Blackhole mesh (FABRIC_2D; SP = mesh rows over axis 0, TP = mesh columns over axis 1, both read
-from mesh.shape). The model is the all-device tt/model.py:TtDS41Model, the ladder's model (lm_head off). The KV caches
+Single rank on a 2D Blackhole mesh (the spec's 2D fabric: FABRIC_2D_TORUS_XY on the Galaxy, FABRIC_2D elsewhere;
+SP = mesh rows over axis 0, TP = mesh columns over axis 1, both read from mesh.shape). The model is the all-device tt/model.py:TtDS41Model, the ladder's model (lm_head off). The KV caches
 the engine owns (tt/runners/kv_contract.py) are the model's served state: each slot's DS41DeviceState is bound to
 its slabs of them, so the window / compressor modules write the served records in place (one format: bf16
 ROW_MAJOR, what the ladder runs on).
