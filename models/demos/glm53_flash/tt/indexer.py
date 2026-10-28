@@ -201,27 +201,45 @@ class TtIndexCache:
         other = self.scratch if self.scratch is not None else self.dummy_slot
         return torch.stack([table_host[slot] if c == owner else table_host[other] for c in range(cols)])
 
-    def prefill_pool_views(self, user: int) -> list[ttnn.Tensor]:
-        """Page-table views ([1, pool_blocks], batch_idx 0) a prefill of ``user`` fills: its own row when not
-        partitioned; partitioned: the per-chip owner/scratch (or owner/dummy) row and, with a scratch slot, the
-        (replicated) scratch row."""
-        key = ("pools", user)
+    def _pool_view_rows(self, user: int) -> list[torch.Tensor]:
+        """The host pool page-table rows a prefill of ``user`` fills (batch_idx 0): its own row when not partitioned;
+        partitioned: the per-chip owner/scratch (or owner/dummy) rows and, with a scratch slot, the scratch row."""
+        pt = self._pt_host
         if not self.partition:
+            return [pt[user : user + 1]]
+        rows = [self._owner_rows(user, pt)]
+        if self.scratch is not None:
+            rows.append(pt[self.scratch : self.scratch + 1])
+        return rows
+
+    def _upload_pool_view(self, rows: torch.Tensor, per_chip: bool) -> ttnn.Tensor:
+        if per_chip:
+            return self.mesh.upload(rows, ttnn.int32, cols=0, layout=ttnn.ROW_MAJOR_LAYOUT)
+        if self.mesh is not None:
+            return self.mesh.upload(rows, ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        return ttnn.from_torch(rows.contiguous(), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+
+    def prefill_pool_views(self, user: int, b0: int = 0) -> list[ttnn.Tensor]:
+        """Page-table views ([1, pool_blocks], batch_idx 0) a prefill of ``user`` fills from pool block ``b0`` on
+        (``_pool_view_rows``). ``b0 == 0``: the user's views, built once. ``b0 > 0``: the rows shifted by ``b0`` on the
+        host and padded back to the full width with the row's last block (never written: the pools past the write
+        are zero-padded, not stored), uploaded for this call (the caller frees them): the width never changes, so the
+        fill runs one program for every chunk start (the earlier device slice was a program per start block)."""
+        per_chip = self.partition
+        if b0 == 0:
+            key = ("pools", user)
             if key not in self._prefill_views:
-                self._prefill_views[key] = self._pool_table_row(user)
-            return [self._prefill_views[key]]
-        if key not in self._prefill_views:
-            pt = self._pt_host
-            self._prefill_views[key] = self.mesh.upload(
-                self._owner_rows(user, pt), ttnn.int32, cols=0, layout=ttnn.ROW_MAJOR_LAYOUT
-            )
-            if self.scratch is not None and ("pools", "scratch") not in self._prefill_views:
-                self._prefill_views[("pools", "scratch")] = self.mesh.upload(
-                    pt[self.scratch : self.scratch + 1], ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
-                )
-        if self.scratch is None:
-            return [self._prefill_views[key]]
-        return [self._prefill_views[key], self._prefill_views[("pools", "scratch")]]
+                self._prefill_views[key] = [
+                    self._upload_pool_view(r, per_chip and i == 0) for i, r in enumerate(self._pool_view_rows(user))
+                ]
+            return self._prefill_views[key]
+        if not 0 < b0 < self.pool_blocks:
+            raise ValueError(f"pool start block {b0} outside [1, {self.pool_blocks})")
+        out = []
+        for i, r in enumerate(self._pool_view_rows(user)):
+            shifted = torch.cat([r[:, b0:], r[:, -1:].expand(-1, b0)], dim=1).contiguous()
+            out.append(self._upload_pool_view(shifted, per_chip and i == 0))
+        return out
 
     def _pool_table_row(self, user: int) -> ttnn.Tensor:
         """[1, pool_blocks] row ``user`` of the identity pool page table (a device slice, cached by the caller)."""
@@ -284,11 +302,10 @@ class TtIndexCache:
         elif b0 == 0 and not self.partition:
             ttnn.experimental.paged_fill_cache(self.pool_cache, pooled, self.page_table, batch_idx=user)
         else:
-            # page-table view(s) of the target slot's blocks from b0 on (device slices: no host upload in the pass)
-            for full in self.prefill_pool_views(user):
-                view = full if b0 == 0 else ttnn.slice(full, [0, b0], [1, self.pool_blocks])
+            # fixed-width page-table view(s) of the target slot's blocks from b0 on: one fill program for every start
+            for view in self.prefill_pool_views(user, b0):
                 ttnn.experimental.paged_fill_cache(self.pool_cache, pooled, view, batch_idx=0)
-                if view is not full:
+                if b0:
                     ttnn.deallocate(view)
 
     def update_pools(self, pooled_rows: ttnn.Tensor, pool_ids: ttnn.Tensor):
