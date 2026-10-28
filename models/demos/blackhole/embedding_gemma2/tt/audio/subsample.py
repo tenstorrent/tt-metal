@@ -34,7 +34,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.blackhole.embedding_gemma2.tt.audio.config import SUBSAMPLE, AudioConfig
+from models.demos.blackhole.embedding_gemma2.tt.audio.config import SUBSAMPLE, AudioConfig, audio_act_memory_config
 from models.demos.blackhole.embedding_gemma2.tt.config import compute_kernel_config_hifi4, compute_kernel_config_norm
 from models.demos.blackhole.embedding_gemma2.tt.weights import as_weight, linear_weight
 
@@ -155,15 +155,19 @@ class AudioSubsample(LightweightModule):
         E5c: the host uploads mel in tile layout (was [B,T,128,1] row-major, which cost a 0.75 ms
         row-major reshape at 1 x 768 before the multiply)."""
         B, _, T, F = x.mel.shape
-        dram = ttnn.DRAM_MEMORY_CONFIG
-        masked = ttnn.multiply(x.mel, x.frame_mask, memory_config=dram)
-        rm = ttnn.to_layout(masked, ttnn.ROW_MAJOR_LAYOUT, memory_config=dram)
+        mc = audio_act_memory_config(x.mel.device(), x.mel.shape, ttnn.float32)  # E5c: L1 when it fits
+        masked = ttnn.multiply(x.mel, x.frame_mask, memory_config=mc)
+        rm = ttnn.to_layout(masked, ttnn.ROW_MAJOR_LAYOUT, memory_config=mc)
         ttnn.deallocate(masked)
-        return ttnn.reshape(rm, (B, T, F, 1))
+        return ttnn.reshape(rm, (B, T, F, 1), memory_config=mc)
 
     def _post_conv(self, i: int, out: ttnn.Tensor, x: "AudioSubsampleInputs", B: int, T: int) -> ttnn.Tensor:
         """LayerNorm over channels + ReLU (+ the layer-1 input mask after conv0)."""
         dram = ttnn.DRAM_MEMORY_CONFIG
+        if out.is_sharded():  # an L1 conv input gives a height-sharded output; layer_norm needs interleaved
+            o = ttnn.sharded_to_interleaved(out, dram)
+            ttnn.deallocate(out)
+            out = o
         ln = ttnn.layer_norm(
             out,
             epsilon=self.config.rms_norm_eps,
