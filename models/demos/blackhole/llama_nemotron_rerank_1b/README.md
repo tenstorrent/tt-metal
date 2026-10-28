@@ -197,6 +197,8 @@ stream (0.99944). No effect: raising the power limit (the card stays at 150 W).
   minimal_matmul a 16 x 8 weight block read takes ~15 k cycles against ~6 k alone: DRAM reads saturate at
   ~287 B/cycle (~390 GB/s) over any number of reading cores (perf_tools/probe_dram_read.py), and the read
   queue is shared with the activation reads and the output writes.
+* FF2 with bf16 DST and a bf16 partial-sum CB, (5,16,7,5,1): 1116 -> 1101 us per layer (32x512 147.28 -> 146.98 M
+  cycles, 75.9 %) but MIRACL batch 32 Pearson 0.99949, under the 0.9995 gate (batch 8 0.99963): rejected.
 * bs1 (34 %): the matmuls at 512 rows run at 27-52 % of their limit; FF2 at LoFi is bound by its weight read.
   DRAM-sharded weights are the next step. 1 x 128 / 1 x 512 read ~0.3 ms slower than in the previous README
   (5.97 / 7.50 ms), not yet traced to a change.
