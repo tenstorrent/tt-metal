@@ -65,6 +65,8 @@ def main():
     ap.add_argument("--no-time", action="store_true")
     ap.add_argument("--no-time-old", action="store_true")
     ap.add_argument("--bf16-acc", action="store_true")
+    ap.add_argument("--in0-depth", type=int, default=2)
+    ap.add_argument("--in1-depth", type=int, default=2)
     ap.add_argument("--defines", default="", help="comma-separated kernel defines for the fused op")
     args = ap.parse_args()
     K, N, xdt, fid, block, old_block = SHAPES[args.kind]

@@ -101,6 +101,8 @@ def matmul_add_norm(
     fp32_acc=True,
     y_fidelity=None,
     skip_gamma=False,
+    in0_depth=2,
+    in1_depth=2,
 ):
     """x ``[1, 1, M, K]``, w ``[K, N]``, residual: the resident stream from ``to_resident`` for [M, N]
     (updated in place to residual + x @ w). Returns y = rmsnorm(residual) * gamma ``[1, 1, M, N]``.
@@ -145,15 +147,15 @@ def matmul_add_norm(
     out_tiles = mb * nb
     res_shard_tiles = g.M_per_core * g.N_per_core
     cbs = [
-        mg.cb(0, mb * kb * 2, x.dtype, all_cores),
-        mg.cb(1, kb * nb * 2, w.dtype, all_cores),
+        mg.cb(0, mb * kb * in0_depth, x.dtype, all_cores),
+        mg.cb(1, kb * nb * in1_depth, w.dtype, all_cores),
         mg.cb(3, out_tiles, ttnn.float32 if fp32_acc else ttnn.bfloat16, all_cores),
         ttnn.cb_descriptor_from_sharded_tensor(4, residual),
         mg.cb(6, 1, ttnn.bfloat16, all_cores),
         mg.cb(8, nb, ttnn.bfloat16, all_cores),
         mg.cb(9, mb, ttnn.float32, all_cores),
         mg.cb(10, 2 * mb, ttnn.float32, all_cores),
-        mg.cb(11, 1, ttnn.float32, all_cores),
+        mg.cb(11, 4, ttnn.float32, all_cores),
         mg.cb(12, 1, ttnn.bfloat16, all_cores),
         mg.cb(17, 2 * out_tiles, y_dtype, all_cores),
     ] + ([] if skip_gamma else [mg.cb(5, nb, ttnn.bfloat16, all_cores)])

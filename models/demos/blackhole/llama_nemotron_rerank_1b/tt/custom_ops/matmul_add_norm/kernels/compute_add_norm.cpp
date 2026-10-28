@@ -234,60 +234,74 @@ void pass1(uint32_t blk, uint32_t n_real) {
 template <uint32_t M_block_tiles, uint32_t N_block_tiles, uint32_t res_w>
 void pass2(uint32_t blk, uint32_t eps_bits) {
     constexpr uint32_t out_tiles = M_block_tiles * N_block_tiles;
+    constexpr uint32_t G = 4;  // tile-rows per DST session for the inverse RMS (fp32 DST: 4 slots)
     CircularBuffer cb_gath(gath_cb), cb_inv(inv_cb), cb_y(y_cb);
     cb_gath.wait_front(M_block_tiles);
     cb_y.reserve_back(out_tiles);
-    for (uint32_t m = 0; m < M_block_tiles; ++m) {
-        const uint32_t row = (blk * M_block_tiles + m) * res_w;
+    // G tile-rows at a time: their inverse RMS in one DST session (CB 11 holds G tiles), then their y.
+    for (uint32_t m0 = 0; m0 < M_block_tiles; m0 += G) {
+        const uint32_t cnt = M_block_tiles - m0 < G ? M_block_tiles - m0 : G;
+        cb_inv.reserve_back(G);
         pack_reconfig_data_format(inv_cb);
         col_sum_init(gath_cb, one_cb, inv_cb);
-        cb_inv.reserve_back(1);
         tile_regs_acquire();
-        col_sum_tile(gath_cb, one_cb, m, 0);
-        transpose_slot0();  // mean squares: row 0 -> column 0, for the column broadcast below
+        for (uint32_t j = 0; j < cnt; ++j) {
+            col_sum_tile(gath_cb, one_cb, m0 + j, j);
+        }
+        MATH((llk_math_reduce_uninit()));
+        transpose_dest_init<DST_ACCUM_MODE, true>();
+        for (uint32_t j = 0; j < cnt; ++j) {
+            transpose_dest<DST_ACCUM_MODE, true>(j);  // mean squares: row 0 -> column 0
+        }
         binop_with_scalar_tile_init();
-        add_unary_tile(0, eps_bits);
+        for (uint32_t j = 0; j < cnt; ++j) {
+            add_unary_tile(j, eps_bits);
+        }
         rsqrt_tile_init();
-        rsqrt_tile(0);
+        for (uint32_t j = 0; j < cnt; ++j) {
+            rsqrt_tile(j);
+        }
         tile_regs_commit();
         tile_regs_wait();
-        pack_tile(0, inv_cb);
+        for (uint32_t j = 0; j < cnt; ++j) {
+            pack_tile<true>(j, inv_cb, j);
+        }
         tile_regs_release();
-        cb_inv.push_back(1);
+        cb_inv.push_back(G);
+        cb_inv.wait_front(G);
 
-        cb_inv.wait_front(1);
-#ifdef SKIP_YMUL
-        cb_inv.pop_front(1);
-        continue;
-#endif
         reconfig_data_format(res_cb, inv_cb);
         mul_cols_init(res_cb, inv_cb);
         pack_reconfig_data_format(y_cb);
-        for (uint32_t n = 0; n < N_block_tiles; n += 4) {
-            const uint32_t cnt = N_block_tiles - n < 4 ? N_block_tiles - n : 4;
+        for (uint32_t mi = 0; mi < cnt; ++mi) {
+            const uint32_t m = m0 + mi;
+            const uint32_t row = (blk * M_block_tiles + m) * res_w;
+            for (uint32_t n = 0; n < N_block_tiles; n += 4) {
+                const uint32_t c4 = N_block_tiles - n < 4 ? N_block_tiles - n : 4;
 #ifndef NO_GAMMA
-            reconfig_data_format(res_cb, inv_cb);
-            mul_cols_init(res_cb, inv_cb);
+                reconfig_data_format(res_cb, inv_cb);
+                mul_cols_init(res_cb, inv_cb);
 #endif
-            tile_regs_acquire();
-            for (uint32_t j = 0; j < cnt; ++j) {
-                mul_cols_tile(res_cb, inv_cb, row + (n + j < res_w ? n + j : 0), 0, j);
-            }
+                tile_regs_acquire();
+                for (uint32_t j = 0; j < c4; ++j) {
+                    mul_cols_tile(res_cb, inv_cb, row + (n + j < res_w ? n + j : 0), mi, j);
+                }
 #ifndef NO_GAMMA
-            reconfig_data_format_srca(gamma_cb);
-            mul_dest_init(gamma_cb);
-            for (uint32_t j = 0; j < cnt; ++j) {
-                mul_dest_tile(gamma_cb, n + j, j);
-            }
+                reconfig_data_format_srca(gamma_cb);
+                mul_dest_init(gamma_cb);
+                for (uint32_t j = 0; j < c4; ++j) {
+                    mul_dest_tile(gamma_cb, n + j, j);
+                }
 #endif
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t j = 0; j < cnt; ++j) {
-                pack_tile<true>(j, y_cb, m * N_block_tiles + n + j);
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t j = 0; j < c4; ++j) {
+                    pack_tile<true>(j, y_cb, m * N_block_tiles + n + j);
+                }
+                tile_regs_release();
             }
-            tile_regs_release();
         }
-        cb_inv.pop_front(1);
+        cb_inv.pop_front(G);
     }
     cb_y.push_back(out_tiles);
     cb_gath.pop_front(M_block_tiles);
