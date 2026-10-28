@@ -129,10 +129,11 @@ def matmul_pack_form(
         and formats.output_format != DataFormat.Float32
         and formats.input_format in (DataFormat.Float16_b, DataFormat.Float32)
     ):
-        # HiFi2 two-tile blocks of one K tile, and one-row Bfp8_b blocks of five or more tiles from Float32 operands: the per-tile pack
+        # HiFi2 two-tile blocks of one K tile (not to a block float output: with the pack format taken from the output the per-tile pack reads 0.9 cycles
+        # ahead there), and one-row Bfp8_b blocks of five or more tiles from Float32 operands: the per-tile pack
         # is on the critical path
         if math_fidelity == MathFidelity.HiFi2 and (
-            (kt_dim == 1 and rt_dim * ct_dim == 2)
+            (kt_dim == 1 and rt_dim * ct_dim == 2 and not formats.output_format.is_block_float())
             or (
                 formats.input_format == DataFormat.Float32
                 and formats.output_format == DataFormat.Bfp8_b

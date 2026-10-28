@@ -177,8 +177,8 @@ constexpr bool llk_matmul_block_pack() {
     if constexpr (
         keyed && DST_SYNC_MODE != DstSync::SyncFull && throttle_level == 0 &&
         (in_format == DataFormat::Float16_b || in_format == DataFormat::Float32) && kt_per_section == 1 && math_fidelity == MathFidelity::HiFi2 &&
-        out_format != DataFormat::Float32 && pack_tile_num_faces[output] == 4 && pack_tile_face_r_dim[output] == FACE_R_DIM &&
-        pack_partial_face[output] == 0 && block_rt * block_ct == 2) {
+        out_format != DataFormat::Float32 && out_format != DataFormat::Bfp8_b && out_format != DataFormat::Bfp4_b && pack_tile_num_faces[output] == 4 &&
+        pack_tile_face_r_dim[output] == FACE_R_DIM && pack_partial_face[output] == 0 && block_rt * block_ct == 2) {
         return true;
     } else if constexpr (
         keyed && DST_SYNC_MODE != DstSync::SyncFull && throttle_level == 0 && in_format == DataFormat::Float32 &&
