@@ -1986,15 +1986,20 @@ def test_every_layer_verifies_and_reseeds_through_its_own_group_table(monkeypatc
 # ===== Acceptance-adaptive draft length (tt/spec_policy.py): the pure policy functions.
 from models.demos.gemma4.tt.spec_policy import (  # noqa: E402
     SPEC_ADAPTIVE_ENV,
+    SPEC_ENTRY_HORIZON_ENV,
     SPEC_EWMA_ENV,
+    SPEC_EXIT_GAIN_ENV,
     SPEC_MIN_GAIN_ENV,
     SPEC_PLAIN_STEP_MS_ENV,
     SPEC_PROBE_STEPS_ENV,
+    SPEC_RETRY_OVERHEAD_ENV,
     SPEC_RETRY_STEPS_ENV,
     AcceptanceStats,
+    CostLine,
     RecordCandidate,
     SpecPolicy,
     SpecPolicyConfig,
+    cost_at,
     describe_costs,
     rank_records,
 )
@@ -2016,7 +2021,15 @@ def _row(cond, alpha=0.2):
 
 def test_policy_config_defaults_are_on_with_the_documented_knobs():
     assert SpecPolicyConfig.from_env({}) == SpecPolicyConfig(
-        adaptive=True, min_gain=1.10, retry_steps=8, probe_steps=32, ewma=0.2, plain_step_ms=None
+        adaptive=True,
+        min_gain=1.10,
+        exit_gain=0.95,
+        entry_horizon=64,
+        retry_steps=8,
+        retry_overhead=0.03,
+        probe_steps=32,
+        ewma=0.1,
+        plain_step_ms=None,
     )
 
 
@@ -2024,13 +2037,17 @@ def test_policy_config_reads_every_knob_from_the_env():
     env = {
         SPEC_ADAPTIVE_ENV: "0",
         SPEC_MIN_GAIN_ENV: "1.25",
+        SPEC_EXIT_GAIN_ENV: "0.9",
+        SPEC_ENTRY_HORIZON_ENV: "16",
         SPEC_RETRY_STEPS_ENV: "4",
+        SPEC_RETRY_OVERHEAD_ENV: "0.05",
         SPEC_PROBE_STEPS_ENV: "0",
         SPEC_EWMA_ENV: "0.5",
         SPEC_PLAIN_STEP_MS_ENV: "22.5",
     }
-    assert SpecPolicyConfig.from_env(env) == SpecPolicyConfig(False, 1.25, 4, 0, 0.5, 22.5)
+    assert SpecPolicyConfig.from_env(env) == SpecPolicyConfig(False, 1.25, 0.9, 16, 4, 0.05, 0, 0.5, (22.5,))
     assert SpecPolicyConfig.from_env({SPEC_PLAIN_STEP_MS_ENV: " "}).plain_step_ms is None
+    assert SpecPolicyConfig.from_env({SPEC_PLAIN_STEP_MS_ENV: "31,83"}).plain_step_ms == (31.0, 83.0)
 
 
 @pytest.mark.parametrize(
@@ -2038,11 +2055,11 @@ def test_policy_config_reads_every_knob_from_the_env():
     [
         (SPEC_ADAPTIVE_ENV, "maybe", "must be 1 or 0"),
         (SPEC_MIN_GAIN_ENV, "0.9", "must be at least 1.0"),
-        (SPEC_MIN_GAIN_ENV, "x", "must be a number"),
+        (SPEC_EXIT_GAIN_ENV, "1.5", r"must be in \[0.0, 1.1\]"),
         (SPEC_RETRY_STEPS_ENV, "-1", "must be at least 0"),
         (SPEC_PROBE_STEPS_ENV, "2.5", "must be an integer"),
         (SPEC_EWMA_ENV, "1.5", r"must be in \[0.0, 1.0\]"),
-        (SPEC_PLAIN_STEP_MS_ENV, "-3", "must be at least 0.0"),
+        (SPEC_PLAIN_STEP_MS_ENV, "-3", "must be positive"),
     ],
 )
 def test_bad_policy_knobs_are_refused_naming_the_knob(name, value, message, expect_error):
@@ -2092,7 +2109,10 @@ def test_rank_records_scores_expected_tokens_per_cost_relative_to_the_plain_step
     assert [c.shape for c in ranked] == [(8, 3), (1, 5), (5, 5), (16, 1)]
     assert ranked[0].expected_tokens == pytest.approx(5.875) and ranked[0].gain == pytest.approx(5.875 / 2 / 1.75)
     assert ranked[1].gain == pytest.approx(7.96875 / 2 / 2.5) and ranked[3].gain == pytest.approx(3.5 / 2 / 1.5)
-    assert all(c.reason == "gain" for c in ranked)
+    assert all(c.reason == "gain" and c.rows == 2 and c.entry_ms == 0.0 for c in ranked)
+    assert ranked[0].tokens_per_row == pytest.approx(5.875 / 2)
+    with expect_error(ValueError, "negative entry cost"):
+        rank_records([RecordCandidate((1, 5), 2048, 50.0, -1.0)], rows, _PLAIN)
     with expect_error(ValueError, "positive plain step cost"):
         rank_records(_cands(_COSTS), rows, 0.0)
     with expect_error(ValueError, "non-positive cost"):
@@ -2110,13 +2130,25 @@ def test_the_policy_picks_k5_at_high_acceptance_and_drops_to_k3_k1_and_plain_as_
     assert choice([1.0] * 5).shape == (1, 5)  # 6 tokens at 2.5x: 2.4x
     assert choice([0.7] * 5).shape == (8, 3)  # 2.53 at 1.75x = 1.45x beats 2.94 at 2.5x = 1.18x
     assert choice([0.8, 0.2, 0.2, 0.2, 0.2]).shape == (16, 1)  # only the first draft lands: 1.8 at 1.5x = 1.20x
-    assert choice([0.4] * 5) is None  # 1.4 at 1.5x = 0.93x: nothing beats the plain step
+    # 1.4 at 1.5x = 0.93x: below the exit gain, but a speculating batch never leaves on one step
+    held = choice([0.4] * 5)
+    assert held.shape == (16, 1) and held.reason == "hold" and policy.below_exit == 1
+    assert choice([0.4] * 5) is None and policy.below_exit == 0 and policy.last_k == 0
 
 
 def test_the_margin_decides_between_a_marginal_record_and_the_plain_step():
     row = _row([0.8, 0.2, 0.2, 0.2, 0.2])  # (16,1): 1.8 tokens at 1.5x the plain step = 1.20x
     assert SpecPolicy(SpecPolicyConfig(min_gain=1.15), 5).decide(_cands(_COSTS), [row], _PLAIN, 5).shape == (16, 1)
     assert SpecPolicy(SpecPolicyConfig(min_gain=1.25), 5).decide(_cands(_COSTS), [row], _PLAIN, 5) is None
+    # hysteresis: once in, the same row is held down to the exit gain, and leaves after EXIT_STEPS below it
+    policy = SpecPolicy(SpecPolicyConfig(min_gain=1.15, exit_gain=1.0), 5)
+    assert policy.decide(_cands(_COSTS), [row], _PLAIN, 5).reason == "gain"
+    weaker = _row([0.6, 0.2, 0.2, 0.2, 0.2])  # 1.6 tokens: 1.07x, between the exit and the entry gain
+    assert policy.decide(_cands(_COSTS), [weaker], _PLAIN, 5).reason == "hold"
+    weakest = _row([0.4, 0.2, 0.2, 0.2, 0.2])  # 1.4 tokens: 0.93x, below the exit gain
+    assert policy.decide(_cands(_COSTS), [weakest], _PLAIN, 5).reason == "hold" and policy.below_exit == 1
+    assert policy.decide(_cands(_COSTS), [weakest], _PLAIN, 5) is None
+    assert policy.decide(_cands(_COSTS), [weaker], _PLAIN, 5) is None, "1.07x does not re-enter: no hold from plain"
 
 
 def test_the_cost_table_is_consumed_as_measured():
@@ -2126,20 +2158,51 @@ def test_the_cost_table_is_consumed_as_measured():
     assert SpecPolicy(SpecPolicyConfig(), 5).decide(_cands(cheap_k5), [row], _PLAIN, 5).shape == (1, 5)
     dear = {shape: ms * 2 for shape, ms in _COSTS.items()}
     assert SpecPolicy(SpecPolicyConfig(), 5).decide(_cands(dear), [row], _PLAIN, 5) is None
-    # the adapter adds the reseed cost to a record's step cost on a step that reseeds
-    assert SpecPolicy(SpecPolicyConfig(), 5).decide([RecordCandidate((8, 3), 2048, 55.0)], [row], _PLAIN, 3) is None
+    # entering costs the reseed: the saving over the entry horizon, 64 x (2.53 x 20 - 35) = 1000 ms, must cover it
+    enter = SpecPolicy(SpecPolicyConfig(), 5).decide([RecordCandidate((8, 3), 2048, 35.0, 900.0)], [row], _PLAIN, 3)
+    assert enter.reason == "enter" and enter.entry_ms == 900.0
+    assert (
+        SpecPolicy(SpecPolicyConfig(), 5).decide([RecordCandidate((8, 3), 2048, 35.0, 1100.0)], [row], _PLAIN, 3)
+        is None
+    )
+    assert (
+        SpecPolicy(SpecPolicyConfig(entry_horizon=8), 5).decide(
+            [RecordCandidate((8, 3), 2048, 35.0, 200.0)], [row], _PLAIN, 3
+        )
+        is None
+    )
+    # every cost is a line in the position, read at the step's top position
+    line = CostLine(0, 30.0, 1000, 80.0)
+    assert [line.at(p) for p in (-5, 0, 500, 1000, 5000)] == [30.0, 30.0, 55.0, 80.0, 80.0]
+    assert cost_at(30.0, 700) == 30.0 and cost_at((0, 30.0, 1000, 80.0), 250) == 42.5 and cost_at(line, 250) == 42.5
+    assert CostLine.of(line) is line and CostLine.flat(7.0, 100) == CostLine(0, 7.0, 100, 7.0)
+    assert CostLine(0, 30.0, 0, 80.0).at(10) == 30.0, "a line without a span is flat"
 
 
 def test_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_length():
-    policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, probe_steps=0), 5)
-    row = _row([0.4] * 5)
+    policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.2, probe_steps=0), 5)
+    row = _row([0.4] * 5)  # (16,1): 1.4 tokens at 1.5x = 0.93x, the cheapest record and above min_gain / 4
     kinds = []
     for _ in range(8):
         choice = policy.decide(_cands(_COSTS), [row], _PLAIN, 5)
         kinds.append(None if choice is None else (choice.shape, choice.reason))
     assert kinds == [None, None, None, ((16, 1), "retry"), None, None, None, ((16, 1), "retry")]
-    assert policy.declined == 0 and policy.last_k == 1
-    never = SpecPolicy(SpecPolicyConfig(retry_steps=0), 5)
+    assert policy.declined == 0 and policy.last_k == 1 and policy.trial
+    assert policy.decide(_cands(_COSTS), [row], _PLAIN, 5) is None, "a trial below the entry gain is not held"
+    # the overhead gate: (30 - 20) / (N x 20) <= 0.03 needs 17 plain steps, whatever retry_steps says, so the
+    # retry is the 18th decision
+    policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, probe_steps=0), 5)
+    first = next(i for i in range(1, 40) if policy.decide(_cands(_COSTS), [row], _PLAIN, 5) is not None)
+    assert first == 18
+    # a reseed is part of the overhead: (900 + 30 - 20) / (N x 20) <= 0.2 needs 228 plain steps
+    policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, retry_overhead=0.2, probe_steps=0), 5)
+    reseeding = [RecordCandidate(s, 1024, ms, 900.0) for s, ms in _COSTS.items()]
+    assert all(policy.decide(reseeding, [row], _PLAIN, 5) is None for _ in range(228))
+    assert policy.decide(reseeding, [row], _PLAIN, 5).reason == "retry"
+    # a record the statistics rule out (gain below min_gain / 4) is never retried
+    hopeless = SpecPolicy(SpecPolicyConfig(retry_steps=1, retry_overhead=1.0, probe_steps=0), 5)
+    assert all(hopeless.decide([RecordCandidate((16, 1), 1024, 120.0)], [row], _PLAIN, 5) is None for _ in range(10))
+    never = SpecPolicy(SpecPolicyConfig(retry_steps=0, retry_overhead=1.0), 5)
     assert all(never.decide(_cands(_COSTS), [row], _PLAIN, 5) is None for _ in range(20))
 
 
@@ -2162,8 +2225,13 @@ def test_below_the_cap_the_policy_probes_the_next_larger_draft_length_every_n_st
     policy.decide(_cands(_COSTS, n=5), [_row([1.0] * 5) for _ in range(5)], _PLAIN, 5)
     assert policy.below_cap == 0 and policy.last_k == 5
     policy.decide(_cands(_COSTS, n=5), rows, _PLAIN, 5)
-    policy.decide(_cands(_COSTS, n=5), [_row([0.1] * 5) for _ in range(5)], _PLAIN, 5)
+    for _ in range(2):  # two decisions below the exit gain leave for the plain step
+        policy.decide(_cands(_COSTS, n=5), [_row([0.1] * 5) for _ in range(5)], _PLAIN, 5)
     assert policy.below_cap == 0 and policy.last_k == 0
+    # entering (a reseed this step) is not a step below the cap: no probe starts from it
+    entering = SpecPolicy(SpecPolicyConfig(probe_steps=1), 5)
+    choice = entering.decide([RecordCandidate((8, 3), 2048, 35.0, 1.0)], rows, _PLAIN, 5)
+    assert choice.reason == "enter" and entering.below_cap == 0
     # without a larger record the probe step keeps the choice
     only = SpecPolicy(SpecPolicyConfig(probe_steps=1), 5)
     assert only.decide([RecordCandidate((16, 1), 2048, 30.0)], rows, _PLAIN, 5).reason == "gain"
@@ -2171,20 +2239,28 @@ def test_below_the_cap_the_policy_probes_the_next_larger_draft_length_every_n_st
 
 def test_measure_positions_time_each_rung_at_the_first_position_it_serves():
     widths = [2048, 8192, 32768]
-    assert SpeculativeDecoder.serving_measure_positions(widths, 5) == [(2048, 0), (8192, 2042), (32768, 8186)]
-    for w, pos in SpeculativeDecoder.serving_measure_positions(widths, 5):
-        assert serving_width_for(widths, pos, 5) == w
-    assert SpeculativeDecoder.serving_measure_positions([4096, 1024, 1024], 1) == [(1024, 0), (4096, 1022)]
+    positions = SpeculativeDecoder.serving_measure_positions(widths, 5)
+    assert positions == [(2048, 0, 2041), (8192, 2042, 8185), (32768, 8186, 32761)]
+    for w, first, last in positions:
+        assert serving_width_for(widths, first, 5) == w and serving_width_for(widths, last, 5) == w
+    assert SpeculativeDecoder.serving_measure_positions(widths, 5, top_position=10000) == [
+        (2048, 0, 2041),
+        (8192, 2042, 8185),
+        (32768, 8186, 10000),
+    ]
+    assert SpeculativeDecoder.serving_measure_positions([4096, 1024, 1024], 1) == [(1024, 0, 1021), (4096, 1022, 4093)]
+    assert SpeculativeDecoder.serving_measure_positions([4096], 1, top_position=0) == [(4096, 0, 0)]
 
 
 def test_describe_costs_lists_the_plain_step_then_every_record():
     costs = {
-        ("step", (1, 5), 2048): 50.0,
+        ("step", (1, 5), 2048): (0, 50.0, 2041, 52.0),
         ("step", (1, 5), 8192): 52.5,
-        ("reseed", (1, 5)): 18.0,
+        ("reseed", (1, 5)): CostLine(0, 18.0, 1018, 30.0),
         ("step", (16, 1), 2048): 30.0,
     }
-    assert describe_costs(costs, 20.0) == (
-        "plain 20.0 | (1, 5): S_k 2048 50.0, S_k 8192 52.5; reseed 18.0 | (16, 1): S_k 2048 30.0"
+    assert describe_costs(costs, CostLine(0, 20.0, 1018, 60.0)) == (
+        "plain 20.0@0..60.0@1018 | (1, 5): S_k 2048 50.0@0..52.0@2041, S_k 8192 52.5; reseed 18.0@0..30.0@1018 | "
+        "(16, 1): S_k 2048 30.0"
     )
-    assert describe_costs({}, None) == "plain unmeasured"
+    assert describe_costs({}, 20.0) == "plain 20.0" and describe_costs({}, None) == "plain unmeasured"

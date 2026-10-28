@@ -40,6 +40,7 @@ from models.demos.gemma4.tests.unit.mtp_contract_harness import (
     logits_result,
     stub_drafter_modules,
 )
+from models.demos.gemma4.tt.spec_policy import CostLine
 
 
 @pytest.fixture
@@ -737,7 +738,16 @@ def test_warmup_runs_the_base_buckets_then_prepares_then_captures(adapter, monke
     _warmup(mtp, False)
     _warmup(mtp, True)
     kinds = [event[0] for event in mtp.events]
-    assert kinds == ["base_warmup", "prepare", "base_warmup", "capture", "refresh", "measure", "time_plain"]
+    assert kinds == [
+        "base_warmup",
+        "prepare",
+        "base_warmup",
+        "capture",
+        "refresh",
+        "measure",
+        "time_plain",
+        "time_plain",
+    ]
     assert mtp.events[0] == ("base_warmup", False) and mtp.events[2] == ("base_warmup", True)
     assert mtp.events[1] == ("prepare", list(DEFAULT_SHAPES), 16)
     assistant = dict(built[0][1])
@@ -775,6 +785,7 @@ def test_a_traced_only_warmup_prepares_before_it_captures(adapter, monkeypatch, 
         "capture",
         "refresh",
         "measure",
+        "time_plain",
         "time_plain",
     ]
 
@@ -1390,8 +1401,9 @@ STEP_MS = {(1, 5): 50.0, (5, 5): 50.0, (8, 3): 35.0, (16, 1): 30.0}
 
 @pytest.fixture
 def adaptive(adapter, monkeypatch):
-    """A model with the scripted cost table, a three-step retry and no probe."""
-    model = build_mtp_model(adapter, monkeypatch, env={"GEMMA4_SPEC_RETRY_STEPS": "3", "GEMMA4_SPEC_PROBE_STEPS": "0"})
+    """A model with the scripted cost table, a three-step retry at a 0.2 overhead and no probe."""
+    env = {"GEMMA4_SPEC_RETRY_STEPS": "3", "GEMMA4_SPEC_RETRY_OVERHEAD": "0.2", "GEMMA4_SPEC_PROBE_STEPS": "0"}
+    model = build_mtp_model(adapter, monkeypatch, env=env)
     install_decoder(model, step_ms=STEP_MS, plain_ms=PLAIN_MS)
     return model
 
@@ -1429,9 +1441,11 @@ def test_the_first_proposal_speculates_from_the_optimistic_prior_and_high_accept
 def test_acceptance_statistics_come_from_the_accepted_counts_of_the_verified_drafts(adaptive):
     _solo_rounds(adaptive, [2])  # the verify carried 5 drafts and committed 3 tokens: 2 accepted, the third rejected
     stats = adaptive._mtp_sessions[0].stats
-    assert stats.cond == pytest.approx([1.0, 1.0, 0.8, 1.0, 1.0]) and stats.observed == [1, 1, 1, 0, 0]
+    assert stats.cond == pytest.approx([1.0, 1.0, 0.9, 1.0, 1.0]) and stats.observed == [1, 1, 1, 0, 0]
     assert stats.ewma_accepted == 2.0
-    assert adaptive._spec_policy.prior.cond == pytest.approx([1.0, 1.0, 0.8, 1.0, 1.0]), "the batch prior learns too"
+    assert adaptive._spec_policy.prior.cond == pytest.approx([1.0, 1.0, 0.9, 1.0, 1.0]), "the batch prior learns too"
+    # fewer than ROW_MIN_OBSERVATIONS of its own: the row reads the prior, the unobserved tail capped by draft 3
+    assert stats.effective_cond(5) == pytest.approx([1.0, 1.0, 0.9, 0.9, 0.9])
     assert adaptive._mtp_sessions[0].retained.verified == 0, "the new proposal is not verified yet"
 
 
@@ -1444,17 +1458,17 @@ def test_a_draftless_verify_and_an_ordinary_step_observe_nothing(adaptive):
 
 
 def test_falling_acceptance_drops_k5_to_k3_then_plain_and_retries_at_k1_after_n_plain_steps(adaptive):
-    """EWMA 0.2 on the first draft only: 1 -> .8 -> .64 -> .512 (K=5 still 1.42x) -> .41 ((8,3) 1.27x beats
-    (1,5)) -> .33 -> .26 (nothing reaches 1.10x: plain); three plain steps, then the retry at the smallest
-    record, (16, 1), which observes another rejection and the plain steps resume."""
-    assert _solo_rounds(adaptive, [5] + [0] * 12) == [5, 5, 5, 5, 3, 3, 3, 0, 0, 0, 1, 0, 0, 0]
-    assert [s[1] for s in _steps(adaptive)] == [(1, 5)] * 4 + [(8, 3)] * 3 + [(16, 1)]
-    assert len(_names(adaptive, "decode")) == 1 + 5, "the first step and the five plain steps ran the base decode"
-    assert _names(adaptive, "reseed")[-1][1:3] == (
-        (16, 1),
-        [0],
-    ), "the retry reseeds: the plain steps dropped the proposal"
-    assert adaptive._mtp_sessions[0].stats.cond[0] == pytest.approx(0.8**7)
+    """EWMA 0.1 on the first draft only: K=5 keeps its 2.5x record above 1.10x for five rejections, then (8,3)
+    (1.75x) is the better gain for seven more, is held through the hysteresis band (gain between 0.95x and
+    1.10x, then one step below) for four, and the plain step follows. With the fixture's 0.2 retry overhead,
+    three plain steps amortize the cheapest record, (16, 1): its retry is a trial that observes one more
+    rejection and leaves at once, and the plain steps resume."""
+    assert _solo_rounds(adaptive, [5] + [0] * 21) == [5] * 6 + [3] * 11 + [0] * 3 + [1] + [0] * 2
+    assert [s[1] for s in _steps(adaptive)] == [(1, 5)] * 6 + [(8, 3)] * 11 + [(16, 1)]
+    assert len(_names(adaptive, "decode")) == 1 + 4, "the first step and the four plain steps ran the base decode"
+    assert _names(adaptive, "reseed")[-1][1:3] == ((16, 1), [0]), "the retry reseeds after the plain steps"
+    assert adaptive._mtp_sessions[0].stats.cond[0] == pytest.approx(0.9**17)
+    assert adaptive._spec_policy.declined == 2 and not adaptive._spec_policy.trial
 
 
 def test_a_batch_may_replay_a_smaller_record_than_its_rows_select(adapter, monkeypatch):
@@ -1473,12 +1487,14 @@ def test_a_batch_may_replay_a_smaller_record_than_its_rows_select(adapter, monke
 
 
 def test_the_reseed_cost_of_entering_speculation_is_part_of_the_candidates_cost(adapter, monkeypatch):
+    """The reseed is the entry cost: the saving over the entry horizon must cover it before a row enters."""
     mtp = build_mtp_model(adapter, monkeypatch, env={"GEMMA4_SPEC_RETRY_STEPS": "0"})
     install_decoder(mtp, step_ms=STEP_MS)
-    mtp._spec_costs.update({("reseed", shape): 40.0 for shape in DEFAULT_SHAPES})
-    # At 0.8: (8,3) 2.95 tokens at 1.75x = 1.69x and (1,5) 3.69 at 2.5x = 1.48x without a reseed; with a 40 ms
-    # reseed on top they are 0.79x, 0.82x and (16,1) 0.51x, below the margin.
+    mtp._spec_costs.update({("reseed", shape): 2000.0 for shape in DEFAULT_SHAPES})
+    # At 0.8 every record clears 1.10x ((8,3): 2.95 tokens at 1.75x = 1.69x), but the saving over the 64-step
+    # entry horizon, 64 x (2.95 x 20 - 35) = 1536 ms, does not cover a 2000 ms reseed: the row stays plain.
     mtp._spec_policy.prior.cond = [0.8] * 5
+    mtp._spec_policy.prior.informed = [True] * 5
     _prefill(mtp)
     _ordinary(mtp, [3], [2], [10], result=_tensor([150]))
     proposal = _propose(mtp, [[150] + [-1] * 5], [[3] + [-1] * 5])
@@ -1530,11 +1546,11 @@ def test_every_record_switch_is_logged_with_the_ewma_the_cost_ratio_and_the_gain
     messages = []
     monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
     monkeypatch.setattr(adapter, "SPEC_POLICY_LOG_INTERVAL_S", 0.0)
-    _solo_rounds(adaptive, [5] + [0] * 12)
+    _solo_rounds(adaptive, [5] + [0] * 21)
     lines = [m for m in messages if m.startswith("Gemma4MTP adaptive K:")]
     assert lines[0] == (
         "Gemma4MTP adaptive K: 1 rows, cap (1, 5) -> record (1, 5) S_k=1024 (gain; was none); EWMA accepted prior, "
-        "per-position 1.00/1.00/1.00/1.00/1.00, expected 6.00 tokens/row at 50.0 ms (2.50x plain), gain 2.40x"
+        "per-position 1.00/1.00/1.00/1.00/1.00, expected 6.00 tokens/row at 50.0 ms (2.50x plain 20.0), gain 2.40x"
     )
     assert [re.search(r"-> (record \(\d+, \d+\) S_k=\d+|plain step)", line).group(1) for line in lines] == [
         "record (1, 5) S_k=1024",
@@ -1543,10 +1559,10 @@ def test_every_record_switch_is_logged_with_the_ewma_the_cost_ratio_and_the_gain
         "record (16, 1) S_k=1024",
         "plain step",
     ]
-    assert "(retry; was K=0)" in lines[3] and "at 30.0 ms (1.50x plain)" in lines[3]
+    assert "(retry; was K=0)" in lines[3] and "at 30.0 ms (1.50x plain 20.0), gain 0.79x" in lines[3]
     assert lines[2] == (
-        "Gemma4MTP adaptive K: 1 rows, cap (1, 5) -> plain step (was K=3); EWMA accepted 1.31, "
-        "per-position 0.26/1.00/1.00/1.00/1.00, plain 20.0 ms"
+        "Gemma4MTP adaptive K: 1 rows, cap (1, 5) -> plain step (was K=3); EWMA accepted 0.93, "
+        "per-position 0.19/1.00/1.00/1.00/1.00, plain 20.0 ms"
     )
     assert [m for m in messages if "proposing nothing" in m] == [], "the policy's plain steps use their own line"
 
@@ -1554,7 +1570,7 @@ def test_every_record_switch_is_logged_with_the_ewma_the_cost_ratio_and_the_gain
 def test_record_switches_are_rate_limited_to_one_line_per_interval(adaptive, adapter, monkeypatch):
     messages = []
     monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
-    _solo_rounds(adaptive, [5] + [0] * 12)  # four switches after the first decision, within the 1 s interval
+    _solo_rounds(adaptive, [5] + [0] * 21)  # four switches after the first decision, within the 1 s interval
     assert len([m for m in messages if m.startswith("Gemma4MTP adaptive K:")]) == 1
     assert adaptive._spec_policy_logged[0] == 5 and adaptive._spec_policy_logged[2] == 4
 
@@ -1566,7 +1582,7 @@ def test_the_session_summary_reports_the_accepted_drafts_ewma(adaptive, adapter,
     adaptive.release_request(0)
     assert [m for m in messages if "contract summary" in m] == [
         "Gemma4MTP contract summary: slot 0 (release) 3 steps, 11 tokens, 3.67 tokens/step, "
-        "4.60 accepted drafts/verify (EWMA over 2)"
+        "4.80 accepted drafts/verify (EWMA over 2)"
     ]
 
 
@@ -1575,7 +1591,7 @@ def test_the_session_summary_reports_the_accepted_drafts_ewma(adaptive, adapter,
 
 def test_warmup_measures_the_records_and_times_the_plain_step_after_the_capture(adapter, monkeypatch, assistant_dir):
     mtp = build_mtp_model(adapter, monkeypatch, warm=False, env={"GEMMA4_ASSISTANT_MODEL": assistant_dir})
-    costs = {("step", (1, 5), 1024): 50.0, ("step", (1, 5), 2048): 52.0, ("reseed", (1, 5)): 18.0}
+    costs = {("step", (1, 5), 1024): (0, 50.0, 1018, 70.0), ("step", (1, 5), 2048): 52.0, ("reseed", (1, 5)): 18.0}
     stub_drafter_modules(monkeypatch, mtp.events, costs=costs, plain_ms=21.5)
     _warmup(mtp, True)
     assert [event[0] for event in mtp.events] == [
@@ -1585,28 +1601,29 @@ def test_warmup_measures_the_records_and_times_the_plain_step_after_the_capture(
         "refresh",
         "measure",
         "time_plain",
+        "time_plain",
     ]
-    assert mtp._spec_costs == costs and mtp._spec_plain_ms == 21.5
+    top = 1024 - 6  # the context minus one verify block: every cost is a line from position 0 to here
+    assert mtp._spec_costs == {key: CostLine.of(value) for key, value in costs.items()}
+    assert mtp._spec_plain_cost == CostLine(0, 21.5, top, 21.5)
+    assert _names(mtp, "measure") == [("measure", top, sorted(costs))]
     zero = [[0] * 8] * 32  # the decode warmup's zero table: 32 rows, 8 blocks (the null block)
     assert _names(mtp, "refresh") == [("refresh", [zero, zero])], "a bounded target's ring tables are installed first"
-    assert _names(mtp, "time_plain") == [("time_plain", 32, zero)]
+    assert _names(mtp, "time_plain") == [("time_plain", 32, 0, zero), ("time_plain", 32, top, zero)]
     assert mtp._mtp_step_tables is None, "the warmup's table is not a decode step the next proposal may read"
     assert len(mtp._mtp_installed_tables) == 2
     assert all(torch.equal(t, torch.tensor(zero, dtype=torch.int32)) for t in mtp._mtp_installed_tables)
     mtp.release_persistent_capture()
-    assert mtp._spec_costs is None and mtp._spec_plain_ms is None
+    assert mtp._spec_costs is None and mtp._spec_plain_cost is None
 
 
 def test_the_plain_step_cost_from_the_env_skips_the_timed_replay(adapter, monkeypatch, assistant_dir):
-    mtp = build_mtp_model(
-        adapter,
-        monkeypatch,
-        warm=False,
-        env={"GEMMA4_ASSISTANT_MODEL": assistant_dir, "GEMMA4_SPEC_PLAIN_STEP_MS": "29"},
-    )
-    stub_drafter_modules(monkeypatch, mtp.events, costs={("step", (1, 5), 1024): 50.0})
-    _warmup(mtp, True)
-    assert _names(mtp, "time_plain") == [] and mtp._spec_plain_ms == 29.0
+    for raw, line in (("29", CostLine(0, 29.0, 1018, 29.0)), ("29,80", CostLine(0, 29.0, 1018, 80.0))):
+        env = {"GEMMA4_ASSISTANT_MODEL": assistant_dir, "GEMMA4_SPEC_PLAIN_STEP_MS": raw}
+        mtp = build_mtp_model(adapter, monkeypatch, warm=False, env=env)
+        stub_drafter_modules(monkeypatch, mtp.events, costs={("step", (1, 5), 1024): 50.0})
+        _warmup(mtp, True)
+        assert _names(mtp, "time_plain") == [] and mtp._spec_plain_cost == line, raw
 
 
 def test_adaptive_off_measures_nothing_at_warmup(adapter, monkeypatch, assistant_dir):
@@ -1616,4 +1633,4 @@ def test_adaptive_off_measures_nothing_at_warmup(adapter, monkeypatch, assistant
     stub_drafter_modules(monkeypatch, mtp.events)
     _warmup(mtp, True)
     assert [event[0] for event in mtp.events] == ["base_warmup", "prepare", "capture"]
-    assert mtp._spec_costs is None and mtp._spec_plain_ms is None
+    assert mtp._spec_costs is None and mtp._spec_plain_cost is None

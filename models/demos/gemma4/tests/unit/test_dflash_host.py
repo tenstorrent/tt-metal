@@ -35,6 +35,7 @@ from models.demos.gemma4.tests.unit.dflash_contract_harness import (
     make_expect_error,
 )
 from models.demos.gemma4.tests.unit.dflash_sampling_harness import attach_sampling_state
+from models.demos.gemma4.tt.spec_policy import CostLine
 
 
 @pytest.fixture
@@ -1707,10 +1708,10 @@ class _RecordingDecoder:
             self._pv_widths[int(width)]["trace"] = object()
         return {int(width): 0.1 for width in widths}
 
-    def measure_widths(self):
+    def measure_widths(self, top_position):
         captured = sorted(w for w, r in self._pv_widths.items() if r["trace"] is not None)
-        self.events.append(("measure", tuple(captured)))
-        return {w: 40.0 + i for i, w in enumerate(captured)}
+        self.events.append(("measure", int(top_position), tuple(captured)))
+        return {w: (0, 40.0 + i, int(top_position), 60.0 + i) for i, w in enumerate(captured)}
 
 
 def _warm(adapter, monkeypatch, plain_ms=33.0, env=None):
@@ -1725,9 +1726,9 @@ def _warm(adapter, monkeypatch, plain_ms=33.0, env=None):
     model.model_args[0].max_seq_len = 4096
     monkeypatch.setattr(adapter.Gemma4ForCausalLM, "warmup_model_decode", lambda self, *a, **k: "warm", raising=False)
 
-    def time_plain_step(self, warmup_kwargs, page_table, repeats=2):
-        model.events.append(("time_plain", list(page_table.shape)))
-        return plain_ms
+    def time_plain_step(self, warmup_kwargs, page_table, position=0, repeats=2):
+        model.events.append(("time_plain", list(page_table.shape), int(position)))
+        return plain_ms + position / 100.0
 
     monkeypatch.setattr(adapter.Gemma4DFlashContractForCausalLM, "_spec_time_plain_step", time_plain_step)
     return model
@@ -1757,19 +1758,26 @@ def test_the_traced_warmup_measures_every_captured_width_and_times_the_plain_ste
     model.warmup_model_decode(enable_trace=False, kv_cache=model.kv_cache, num_blocks=64)
     assert model._spec_costs is None and _names(model, "time_plain") == []
     model.warmup_model_decode(enable_trace=True, kv_cache=model.kv_cache, num_blocks=64)
-    ladder = list(model._spec_width_ladder)
-    assert model._spec_costs == {("step", (1, 5), w): 40.0 + i for i, w in enumerate(sorted(ladder))}
-    assert model._spec_plain_ms == 33.0
-    assert _names(model, "time_plain") == [("time_plain", [32, 64])], "the decode warmup's zero table: batch x blocks"
+    ladder = sorted(model._spec_width_ladder)
+    top = 4096 - 6  # the context minus one verify block: every cost is a line from position 0 to here
+    assert model._spec_costs == {
+        ("step", (1, 5), w): CostLine(0, 40.0 + i, top, 60.0 + i) for i, w in enumerate(ladder)
+    }
+    assert model._spec_plain_cost == CostLine(0, 33.0, top, 33.0 + top / 100.0)
+    assert _names(_RecordingDecoder.instances[0], "measure") == [("measure", top, tuple(ladder))]
+    assert _names(model, "time_plain") == [
+        ("time_plain", [32, 64], 0),
+        ("time_plain", [32, 64], top),
+    ], "the decode warmup's zero table (batch x blocks) at position 0 and at the top"
     model.release_persistent_capture()
-    assert model._spec_costs is None and model._spec_plain_ms is None
+    assert model._spec_costs is None and model._spec_plain_cost is None
 
 
 def test_the_plain_step_cost_from_the_env_skips_the_timed_replay(adapter, monkeypatch):
     model = _warm(adapter, monkeypatch, env={"GEMMA4_SPEC_PLAIN_STEP_MS": "35.5"})
     model.warmup_model_decode(enable_trace=False, kv_cache=model.kv_cache, num_blocks=64)
     model.warmup_model_decode(enable_trace=True, kv_cache=model.kv_cache, num_blocks=64)
-    assert model._spec_plain_ms == 35.5 and _names(model, "time_plain") == []
+    assert model._spec_plain_cost == CostLine(0, 35.5, 4096 - 6, 35.5) and _names(model, "time_plain") == []
 
 
 def test_adaptive_off_measures_nothing_at_warmup(adapter, monkeypatch):
@@ -1777,7 +1785,7 @@ def test_adaptive_off_measures_nothing_at_warmup(adapter, monkeypatch):
     model.warmup_model_decode(enable_trace=False, kv_cache=model.kv_cache, num_blocks=64)
     model.warmup_model_decode(enable_trace=True, kv_cache=model.kv_cache, num_blocks=64)
     assert [e[0] for e in _RecordingDecoder.instances[0].events] == ["prepare", "capture"]
-    assert model._spec_costs is None and model._spec_plain_ms is None
+    assert model._spec_costs is None and model._spec_plain_cost is None
 
 
 def test_a_changed_ladder_between_preparation_and_capture_is_refused(warm_model, expect_error_dflash_width_prepare):
@@ -2007,19 +2015,19 @@ DFLASH_PLAIN_MS = 34.0
 
 
 def _with_costs(model, step_ms=DFLASH_STEP_MS, plain_ms=DFLASH_PLAIN_MS):
-    """Install the cost table the traced warmup would have measured: one record, ``(1, 5)``, per width."""
+    """Install the cost table the traced warmup would have measured: one record, ``(1, 5)``, per width (flat
+    in the position)."""
     model._spec_decoder.costs = {1024: float(step_ms)}
-    model._spec_costs = {("step", (1, 5), 1024): float(step_ms)}
-    model._spec_plain_ms = float(plain_ms)
+    model._spec_costs = {("step", (1, 5), 1024): CostLine.flat(step_ms)}
+    model._spec_plain_cost = CostLine.flat(plain_ms)
     return model
 
 
 @pytest.fixture
 def costed(adapter, monkeypatch):
-    """A contract model with the CI leg's costs, a three-step retry and no probe."""
-    return _with_costs(
-        build_model(adapter, monkeypatch, env={"GEMMA4_SPEC_RETRY_STEPS": "3", "GEMMA4_SPEC_PROBE_STEPS": "0"})
-    )
+    """A contract model with the CI leg's costs, a three-step retry at a 0.6 overhead and no probe."""
+    env = {"GEMMA4_SPEC_RETRY_STEPS": "3", "GEMMA4_SPEC_RETRY_OVERHEAD": "0.6", "GEMMA4_SPEC_PROBE_STEPS": "0"}
+    return _with_costs(build_model(adapter, monkeypatch, env=env))
 
 
 def _inform_prior(model, cond):
@@ -2071,22 +2079,24 @@ def test_without_a_cost_table_every_solo_greedy_request_speculates_and_a_warning
 def test_the_first_request_speculates_from_the_optimistic_prior_and_the_counts_feed_its_ewma(costed):
     assert _dflash_rounds(costed, [2]) == [5, 5]  # the verify carried 5 drafts and committed 3 tokens
     stats = costed._dflash_stats
-    assert stats.cond == pytest.approx([1.0, 1.0, 0.8, 1.0, 1.0]) and stats.observed == [1, 1, 1, 0, 0]
+    assert stats.cond == pytest.approx([1.0, 1.0, 0.9, 1.0, 1.0]) and stats.observed == [1, 1, 1, 0, 0]
     assert stats.ewma_accepted == 2.0 and stats.spec_steps == 1
-    assert costed._spec_policy.prior.cond == pytest.approx([1.0, 1.0, 0.8, 1.0, 1.0]), "the batch prior learns too"
+    assert costed._spec_policy.prior.cond == pytest.approx([1.0, 1.0, 0.9, 1.0, 1.0]), "the batch prior learns too"
     assert costed._dflash_retained.verified == 0, "the new proposal is not verified yet"
 
 
 def test_rejections_end_the_session_and_the_request_runs_plain(costed):
-    """EWMA 0.2 on the first draft: 1 -> .8 -> .64 -> .51 -> .41 keeps the 1.38x replay above 1.10x (the
-    deeper, unobserved positions are capped by the first), .33 does not: the fifth proposal is the plain
-    step, the session ends and every later step of the request is the base decode."""
-    assert _dflash_rounds(costed, [0] * 7) == [5, 5, 5, 5, 5, 0, 0, 0]
-    assert len(_names(costed, "replay")) == 6 and len(_names(costed, "release_decoder")) == 1
-    assert _names(costed, "decode") == [("decode", [650], [8]), ("decode", [651], [9])]
+    """From a 0.35 prior (1.53 tokens at 1.38x = 1.11x) the session starts; EWMA 0.1 on the first draft takes
+    the gain under 1.10x at once, the record is held through the hysteresis band down to 0.95x and for one
+    step below it, and the eighth proposal is the plain step: the session ends and every later step of the
+    request is the base decode."""
+    _inform_prior(costed, [0.35] * 5)
+    assert _dflash_rounds(costed, [0] * 9) == [5] * 7 + [0] * 3
+    assert len(_names(costed, "replay")) == 8 and len(_names(costed, "release_decoder")) == 1
+    assert _names(costed, "decode") == [("decode", [850], [10]), ("decode", [851], [11])]
     assert not costed._spec_active and costed._dflash_stats is None
     prior = costed._spec_policy.prior
-    assert prior.effective_cond(5) == pytest.approx([0.8**5] * 5) and prior.informed == [True] + [False] * 4
+    assert prior.effective_cond(5) == pytest.approx([0.35 * 0.9**7] + [0.35] * 4)
     assert costed._spec_policy.declined == 3, "the decline and the two plain steps count toward the retry"
 
 
@@ -2096,21 +2106,25 @@ def test_after_n_plain_steps_the_next_request_bootstraps_and_its_first_proposal_
     messages = []
     monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
     monkeypatch.setattr(adapter, "SPEC_POLICY_LOG_INTERVAL_S", 0.0)
-    _dflash_rounds(costed, [0] * 7)
+    _inform_prior(costed, [0.35] * 5)
+    _dflash_rounds(costed, [0] * 9)
     costed.release_request(0)
     _prefill(costed, key=20)
-    assert _ordinary(costed, [3], [2], [20]).tolist() == [750], "the retry is due: the session starts"
-    proposal = _propose(costed, [[750] + [-1] * 5], [[3] + [-1] * 5])
-    assert proposal.num_valid.tolist() == [5] and costed._spec_policy.declined == 0
+    # three plain steps amortize the bootstrap replay plus one step at the fixture's 0.6 overhead:
+    # (46.9 + 46.9 - 34) / (3 x 34) = 0.59
+    assert _ordinary(costed, [3], [2], [20]).tolist() == [950], "the retry is due: the session starts"
+    proposal = _propose(costed, [[950] + [-1] * 5], [[3] + [-1] * 5])
+    assert proposal.num_valid.tolist() == [5] and costed._spec_policy.declined == 0 and costed._spec_policy.trial
     lines = [m for m in messages if m.startswith("Gemma4DFlash adaptive K:")]
     assert lines[0] == (
         "Gemma4DFlash adaptive K: 1 rows, cap (1, 5) -> record (1, 5) S_k=1024 (gain; was none); EWMA accepted "
-        "prior, per-position 1.00/1.00/1.00/1.00/1.00, expected 6.00 tokens/row at 46.9 ms (1.38x plain), gain 4.35x"
+        "prior, per-position 0.35/0.35/0.35/0.35/0.35, expected 1.54 tokens/row at 46.9 ms (1.38x plain 34.0), "
+        "gain 1.11x"
     )
-    assert lines[1].startswith("Gemma4DFlash adaptive K: 1 rows, cap (1, 5) -> plain step (was K=5); EWMA accepted ")
-    assert "(retry; was K=0)" in lines[2] and "gain 1.08x" in lines[2]
-    # another rejection: the retry observed, the policy declines again and the request runs plain
-    out = _verify(costed, [[750, 801, 802, 803, 804, 805]], [list(range(3, 9))], [5], keys=[20])
+    assert lines[1].startswith("Gemma4DFlash adaptive K: 1 rows, cap (1, 5) -> plain step (was K=5); EWMA accepted 0.")
+    assert "(retry; was K=0)" in lines[2] and "gain 0.91x" in lines[2]
+    # another rejection: the trial observed, the policy declines at once and the request runs plain
+    out = _verify(costed, [[950, 1001, 1002, 1003, 1004, 1005]], [list(range(3, 9))], [5], keys=[20])
     ids = out.argmax_ids[0].tolist()
     proposal = _propose(costed, [[ids[0]] + [-1] * 5], [[4] + [-1] * 5], counts=[1])
     assert proposal.num_valid.tolist() == [0] and not costed._spec_active
@@ -2150,7 +2164,7 @@ def test_the_session_summary_reports_the_accepted_drafts_ewma(costed, adapter, m
     _dflash_rounds(costed, [5, 3])
     costed.release_request(0)
     assert [m for m in messages if "contract summary" in m] == [
-        "Gemma4DFlash contract summary: 3 steps, 11 tokens, 3.67 tokens/step, 4.60 accepted drafts/verify (EWMA over 2)"
+        "Gemma4DFlash contract summary: 3 steps, 11 tokens, 3.67 tokens/step, 4.80 accepted drafts/verify (EWMA over 2)"
     ]
 
 

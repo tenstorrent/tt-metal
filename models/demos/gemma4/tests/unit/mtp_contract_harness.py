@@ -23,7 +23,7 @@ import torch
 
 from models.demos.gemma4.tests.unit.dflash_contract_harness import DeviceResult, _sampling, _table, _tensor
 from models.demos.gemma4.tests.unit.dflash_sampling_harness import attach_sampling_state
-from models.demos.gemma4.tt.spec_policy import SPEC_POLICY_ENV
+from models.demos.gemma4.tt.spec_policy import SPEC_POLICY_ENV, CostLine
 
 #: Host stand-in for the 262144-wide vocabulary.
 VOCAB = 600
@@ -46,14 +46,14 @@ PLAIN_MS = 20.0
 
 
 def scripted_costs(shapes, widths, step_ms, reseed_ms=None):
-    """A cost table in the decoder's layout: ``step_ms[shape]`` at every rung of ``widths[shape]`` and
-    ``reseed_ms[shape]`` (default 0) per shape."""
+    """A cost table in the decoder's layout: ``step_ms[shape]`` (a number = flat in the position, or a cost line
+    tuple) at every rung of ``widths[shape]`` and ``reseed_ms[shape]`` (default 0) per shape."""
     costs = {}
     for shape in shapes:
         shape = tuple(shape)
         for w in widths[shape]:
-            costs[("step", shape, int(w))] = float(step_ms[shape])
-        costs[("reseed", shape)] = float((reseed_ms or {}).get(shape, 0.0))
+            costs[("step", shape, int(w))] = CostLine.of(step_ms[shape])
+        costs[("reseed", shape)] = CostLine.of((reseed_ms or {}).get(shape, 0.0))
     return costs
 
 
@@ -185,10 +185,10 @@ class Decoder:
         self.captured = True
         self.events.append(("capture", list(self.shapes)))
 
-    def serving_measure_costs(self):
+    def serving_measure_costs(self, top_position):
         if not self.captured:
             raise RuntimeError("serving_measure_costs before serving_capture")
-        self.events.append(("measure", sorted(self.costs)))
+        self.events.append(("measure", int(top_position), sorted(self.costs)))
         return dict(self.costs)
 
     def serving_release(self):
@@ -292,7 +292,7 @@ def install_decoder(model, shapes=DEFAULT_SHAPES, max_rows=None, widths=None, st
     if step_ms is not None:
         decoder.costs = scripted_costs(shapes, model._mtp_widths, step_ms)
         model._spec_costs = dict(decoder.costs)
-        model._spec_plain_ms = float(plain_ms if plain_ms is not None else PLAIN_MS)
+        model._spec_plain_cost = CostLine.of(plain_ms if plain_ms is not None else PLAIN_MS)
     return decoder
 
 
@@ -412,8 +412,8 @@ def stub_drafter_modules(monkeypatch, events, costs=None, plain_ms=PLAIN_MS):
             self.costs = dict(costs or {})
             built.append(("decoder", kwargs))
 
-    def time_plain_step(self, warmup_kwargs, page_table, repeats=2):
-        events.append(("time_plain", int(warmup_kwargs["max_batch_size"]), page_table.tolist()))
+    def time_plain_step(self, warmup_kwargs, page_table, position=0, repeats=2):
+        events.append(("time_plain", int(warmup_kwargs["max_batch_size"]), int(position), page_table.tolist()))
         return float(plain_ms)
 
     common = sys.modules["models.demos.gemma4.tt.common"]

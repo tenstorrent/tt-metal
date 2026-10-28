@@ -132,8 +132,8 @@ class Decoder:
         self.replays = 0
         self.costs = {}  # what measure_widths reports ({width: ms}); scripted per test, empty = no table
 
-    def measure_widths(self):
-        self.events.append(("measure", sorted(self.costs)))
+    def measure_widths(self, top_position):
+        self.events.append(("measure", int(top_position), sorted(self.costs)))
         return dict(self.costs)
 
     def width_for(self, start):
