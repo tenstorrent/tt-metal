@@ -19,8 +19,7 @@ import os
 from pathlib import Path
 
 import ttnn
-from models.common.moe.tt_moe_decode import moe_compute_kwargs
-from models.common.moe.tt_moe_decode import TTMoEDecode
+from models.common.moe.tt_moe_decode import TTMoEDecode, moe_compute_kwargs
 from models.common.moe.tt_moe_decode_config import TTMoEDecodeConfig
 from models.common.moe.tt_moe_gate_config import TTMoEGateConfig
 from models.demos.blackhole.deepseek_v41_flash.tt.router import DSV41Gate
@@ -29,17 +28,25 @@ from models.demos.blackhole.deepseek_v41_flash.tt.router import DSV41Gate
 class _TailDecode(TTMoEDecode):
     """TTMoEDecode whose tilize + fast_reduce tail is one fused program (moe_tail.py) when T < 32; set DSV41_MOE_TAIL=0 for the stock path."""
 
-    def forward(self, tt_x, tt_scores, tt_indices, layer_id: int = 0):
-        import os
-
+    def tail_ok(self):
         cfg = self.config
-        if (
+        return not (
             os.environ.get("DSV41_MOE_TAIL", "1") == "0"
             or cfg.batch_per_device >= ttnn.TILE_SIZE
             or cfg.num_fast_reduce_outputs != 1
             or self._needs_fast_reduce_padding
             or cfg.num_shared_experts != 0
-        ):
+        )
+
+    fold = None  # DSV41_SHARED_EXPERT_TP=1: [1,1,T,D] bf16 partial of the column-sharded shared expert, added to the routed partial before the reduce_scatter
+
+    def forward(self, tt_x, tt_scores, tt_indices, layer_id: int = 0):
+        pass
+
+        cfg = self.config
+        if not self.tail_ok():
+            if self.fold is not None:
+                raise RuntimeError("shared-expert fold needs the fused tail path (T < 32, DSV41_MOE_TAIL != 0)")
             return super().forward(tt_x, tt_scores, tt_indices, layer_id)
         from models.demos.blackhole.deepseek_v41_flash.tt.moe_tail import make_col_tensor, moe_tail
 
@@ -75,6 +82,10 @@ class _TailDecode(TTMoEDecode):
         red = moe_tail(combine, tt_scores, tt_indices, self.expert_state.tt_expert_mapping, self._col)
         if d_i:
             ttnn.deallocate(i_t)
+        if self.fold is not None:
+            red2 = ttnn.add(red, self.fold, dtype=ttnn.bfloat16)
+            ttnn.deallocate(red)
+            red = red2
         out = ttnn.reduce_scatter(red, **cfg.reduce_scatter.model_dump())
         ttnn.deallocate(red)
         return out
@@ -200,7 +211,7 @@ class DSV41MoEBlock:
     def _weightless_decode(mesh_device, cfg, buffers, expert_state=None):
         from types import SimpleNamespace
 
-        from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim, effective_matmul_ring_size
+        from ttnn.experimental.moe_compute_utils import auto_output_width_shard_dim
 
         from models.common.moe.tt_moe_decode import _TTMoEDecodeBuffers
 
@@ -282,7 +293,11 @@ class DSV41MoEBlock:
         ttnn.deallocate(fence)
         self._l1("warmup: end")
 
-    def forward(self, tt_x_gate: ttnn.Tensor, tt_x_tokens: ttnn.Tensor, forced_routing=None) -> ttnn.Tensor:
+    def can_fold(self):
+        """True when ``forward(..., fold=partial)`` is supported (fused tail path)."""
+        return hasattr(self.decode, "tail_ok") and self.decode.tail_ok()
+
+    def forward(self, tt_x_gate: ttnn.Tensor, tt_x_tokens: ttnn.Tensor, forced_routing=None, fold=None) -> ttnn.Tensor:
         """tt_x_gate: [1, 1, tokens_per_device, hidden] tile layout (router input).
         tt_x_tokens: [tokens_per_device, 1, 1, hidden] row-major bf16 DRAM (dispatch input).
         Returns [1, 1, tokens_per_device, hidden / mesh_cols] per device."""
@@ -308,7 +323,11 @@ class DSV41MoEBlock:
         if tt_scores.layout != ttnn.ROW_MAJOR_LAYOUT:
             tt_scores = ttnn.to_layout(tt_scores, ttnn.ROW_MAJOR_LAYOUT)
         self._l1("after typecasts")
-        out = self.decode.forward(tt_x=tt_x_tokens, tt_scores=tt_scores, tt_indices=tt_indices, layer_id=0)
+        self.decode.fold = fold
+        try:
+            out = self.decode.forward(tt_x=tt_x_tokens, tt_scores=tt_scores, tt_indices=tt_indices, layer_id=0)
+        finally:
+            self.decode.fold = None
         self._l1("after decode")
         return out
 

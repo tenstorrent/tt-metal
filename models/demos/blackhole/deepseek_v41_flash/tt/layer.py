@@ -99,6 +99,16 @@ class DSV41Layer:
             self.shared = DSV41SharedExpert(
                 mesh_device, moe_weights["shared_w0"][sid], moe_weights["shared_w1"][sid], moe_weights["shared_w2"][sid]
             )
+        # DSV41_SHARED_EXPERT_TP=1 (default off): decode / spec-verify run the shared expert split over the 8 mesh columns (tt/shared_expert_tp.py), its
+        # partial folded into the routed partial before the MoE reduce_scatter. Built from the same host tensors as the replicated one (no weight cache involved);
+        # the replicated copy stays (prefill and the T >= 32 chunked path use it).
+        self.shared_tp = None
+        if os.environ.get("DSV41_SHARED_EXPERT_TP", "0") == "1" and os.environ.get("DSV41_SHARED", "v2") != "v1":
+            from models.demos.blackhole.deepseek_v41_flash.tt.shared_expert_tp import DSV41SharedExpertColTP
+
+            self.shared_tp = DSV41SharedExpertColTP(
+                mesh_device, moe_weights["shared_w0"][sid], moe_weights["shared_w1"][sid], moe_weights["shared_w2"][sid]
+            )
         up = lambda t: ttnn.from_torch(
             t.reshape(1, 1, 1, -1).float(),
             device=mesh_device,
@@ -259,20 +269,36 @@ class DSV41Layer:
             )  # h [1,1,Tp,D] bf16, h_tok [Tp,1,1,D] bf16 row-major
             h, h_tok = S2(h), S0(h_tok)
         mark("mhc_ffn_collapse+norm")
-        m = self.moe.forward(h, h_tok, forced_routing)  # [1,1,T,D/cols] per device
+        tp = getattr(self, "shared_tp", None)
+        use_tp = tp is not None and getattr(self.moe, "can_fold", lambda: False)() and h.shape[2] < 32
+        if use_tp:
+            part = tp.forward(
+                h
+            )  # this column's slice of the shared expert; summed with the routed partial by the MoE reduce_scatter
+            mark("shared_expert_tp")
+            m = self.moe.forward(h, h_tok, forced_routing, fold=part)
+            ttnn.deallocate(part)
+        else:
+            m = self.moe.forward(h, h_tok, forced_routing)  # [1,1,T,D/cols] per device
         mark("moe")
         m = self.mesh_config.allgather(
             m, self.ccl, axis=1, dim=3, **({"lean_ag": True} if getattr(self.mesh_config, "_dsv41_lean", False) else {})
         )  # -> [1,1,T,D] replicated
         mark("moe_allgather")
-        sh = self.shared.forward(h)  # shared expert, replicated bfp8 (see shared_expert.py)
+        sh = (
+            None if use_tp else self.shared.forward(h)
+        )  # shared expert, replicated bfp8 (see shared_expert.py); None: folded into m
         mark("shared_expert")
         if self.debug is not None:
             self.debug.update(
-                attn_out=a, ffn_in=h, ffn_out=ttnn.add(ttnn.typecast(m, ttnn.float32), sh), routed=m, shared=sh
+                attn_out=a,
+                ffn_in=h,
+                ffn_out=m if sh is None else ttnn.add(ttnn.typecast(m, ttnn.float32), sh),
+                routed=m,
+                shared=sh,
             )
         x3 = S0o(
-            self.mhc_ffn.expand(P2(m), x2, ffn_post, ffn_comb, P2(sh))
+            self.mhc_ffn.expand(P2(m), x2, ffn_post, ffn_comb, None if sh is None else P2(sh))
         )  # post * (routed + shared) + comb^T x, summed inside the kernel
         if _STREAM_BF16:
             x3 = _rnd_bf16(x3)
