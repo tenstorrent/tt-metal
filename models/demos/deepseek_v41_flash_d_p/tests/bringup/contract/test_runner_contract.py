@@ -275,7 +275,7 @@ def kv_checks(
 ) -> list[str]:
     """Every served cache of every slot through the table vs the golden; the prefix / last-block / rewrite rules."""
     _, kvc, _ = R.harness()
-    gk = C.GoldenKV()
+    gk = C.GoldenKV(window="last")  # OV-16 (owner decision B): window KV on the ring positions its limit measures
     thr = R.state_threshold()
     fails = []
     finals = {}

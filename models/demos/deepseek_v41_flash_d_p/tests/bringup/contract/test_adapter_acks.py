@@ -16,9 +16,10 @@ pos_end), what prefill_runner's LayerCompletionRingWriter receives) the test rea
 through the table over UMD, as the KV Manager does. Pass:
   - acks: one per served layer per chunk, in layer order, naming the chunk (slot_id, actual_start, actual_end) the
     engine passed (prefill_reader.cpp:121-160: the k-th ack of a chunk migrates layer k)
-  - at each ack: the chunk's rows of every cache the layer owns vs the golden (caches.golden_failures: every row of a
-    dumped layer and of the compressed caches; another layer's window KV at the positions its ring snapshots hold;
-    every served layer compared at least once, the per-layer mode printed) (server per-channel PCC >= 0.97), the pad
+  - at each ack: the chunk's rows of every cache the layer owns vs the golden (caches.golden_failures: every row of the
+    compressed caches; a dumped layer's window KV on the last min(128, hi - lo) positions of the range, the ring the
+    limit's drift measures (owner decision B, 2026-10-27); another layer's window KV at the positions its ring
+    snapshots hold; every served layer compared at least once, the per-layer mode printed) (server per-channel PCC >= 0.97), the pad
     rows of the last record zero; the same records re-read after the chunk returns and the mesh syncs hold the same
     bytes (an ack before the KV is in DRAM ships stale KV: K-71)
   - at the end: each slot's [0, end) vs the golden; slot 0's reused prefix [0, 960) byte-identical to what turn 1's
@@ -46,7 +47,7 @@ def test_adapter_acks(mesh_device, tmp_path):
 
     R.self_check()
     _, kvc, _ = R.harness()
-    gk = C.GoldenKV()
+    gk = C.GoldenKV(window="last")  # OV-16, owner decision B: window KV on the drift's ring positions
     tokens = gk.tokens().numpy()
     thr = R.state_threshold()
     layers = C.served_prefix()

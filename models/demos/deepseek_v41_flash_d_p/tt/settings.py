@@ -414,6 +414,17 @@ TABLE = {
         "(DS41-67). P.6, 2x2, chunk 53248-55296, plain profile: device total 639.62 vs fabric 641.23 (P.5; the "
         "typecast-both-ways version 642.09); ladder last worst layer L03 0.99674 vs 0.99681, state min 0.99776",
     ),
+    "TP_SUM_BLOCKS": Setting(
+        "cols",
+        ("cols", "rows"),
+        "how tt/ccl.py:tp_sum (the replicated TP sums: q_a / wkv exchange, mHC mixes, compressor, indexer and engram "
+        "partials) splits its fabric reduce-scatter. cols (K.1 contract, DS41-128): column blocks (dim 3) + a column "
+        "gather; when the width does not split into 32 x TP columns, the fixed-order gather_add. The add order then "
+        "depends on the column only, so a position's sum is the same whatever row of the chunk it lands on (the "
+        "serving contract: layer 0's window KV rewritten by the pulled-back chunk with the same bytes). rows: the old "
+        "row blocks (dim 2) + row gather: on TP > 2 each row block adds the TP partials in another ring order, so a "
+        "position's bf16 sum depends on the chunk's start (1 ulp on whole tiles). Same volume either way",
+    ),
     "HC_TP_SUM": Setting(
         "gather_add",
         ("gather_add", "all_reduce"),

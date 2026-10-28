@@ -458,3 +458,11 @@ check (F196 / F197); host times stay hidden until verified warm.
   'We need answer one word. Capital of France = Paris'. Unit stamp kept; dump copy /data/dnijemcevic/k1_smoke_20261027_2305.
   Next per the owner's order: B (test_adapter_acks), K.1 commit, then the reconcile with origin model_bringup, the
   5-position profile (flat + block), torus.
+- 00:45 K.1 attempt 6 (in progress), reviewed live: B implemented as decided (caches.GoldenKV(window="last"), no
+  limit/golden touched; test_adapter_acks PASS in its check 00:09). test_runner_contract then found DS41-128: on TP 4
+  tp_sum's row-block reduce-scatter adds the partials in a row-dependent ring order -> the pulled-back chunk rewrote
+  layer 0 window KV with other bytes (704 rows, 1 bf16 ulp). Agent fix: setting TP_SUM_BLOCKS=cols (column blocks,
+  order fixed per column; same volume; 'rows' keeps the old path). Accepted in principle (determinism of the same path
+  is an owner rule). Consequences: runner smoke re-runs in K.1 (model code changed); after the K.1 commit the overseer
+  re-verifies M.1 + L.* (accuracy, ~40 min) before the reconcile; SEED-BOX RE-VERIFY += TP_SUM_BLOCKS; perf of the
+  column RS shows in the 5-position profile.

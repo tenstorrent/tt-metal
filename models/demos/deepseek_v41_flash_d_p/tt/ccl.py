@@ -9,8 +9,9 @@
             link-rate program; preallocated output, caller-owned L1_SMALL semaphores) and
             ttnn.bringup.fabric_reduce_scatter(exact_fp32_add=True) (each add one IEEE fp32 rounding on the SFPU):
             sum_cols = ONE reduce-scatter over the TP axis by column blocks (dim 3: the chip's [S/SP, H/TP] slice
-            of the sum, no full sum and no mesh_partition); tp_sum = a reduce-scatter by row blocks + a fabric
-            all_gather of the rows (the sum replicated, bit-identical on every chip of the row).
+            of the sum, no full sum and no mesh_partition); tp_sum = a reduce-scatter by column blocks + a fabric
+            all_gather of the columns (the sum replicated, bit-identical on every chip of the row; TP_SUM_BLOCKS=rows:
+            row blocks, whose add order depends on the row's place in the chunk on TP > 2, DS41-128).
 
     fabric_bf16  (P.6, owner comparison: Marko Staletovic's GLM-5.3 choice, glm53_flash_d_p/tt/common.py:scatter_rows,
             GLM_SCATTER_OP=fabric_bf16) fabric, but the TP partial sums that go through the reduce-scatter (sum_cols:
@@ -226,36 +227,40 @@ def _rs_ok(t: ttnn.Tensor, dim: int, g: int) -> bool:
 
 def tp_sum(mesh, t: ttnn.Tensor, exact: bool = False, fp32: bool = True) -> ttnn.Tensor:
     """The exact fp32 sum of ``t`` ([1, 1, R, W] fp32 TILE) over the TP axis, replicated on every chip of the row,
-    bit-identical across them. Does not consume ``t``. stock: _gather_add. fabric: fabric_reduce_scatter of row
-    blocks (exact SFPU add) -> fabric_all_gather of the rows; when R is not a multiple of 32 TP or W of 32 (the norms'
-    [S/SP, 1] sum of squares, the engram gates' [S/SP, 12]), _gather_add on the fabric gather. fabric_bf16 (P.6): the
+    bit-identical across them. Does not consume ``t``. stock: _gather_add. fabric: fabric_reduce_scatter of column
+    blocks (exact SFPU add) -> fabric_all_gather of the columns (TP_SUM_BLOCKS=rows: row blocks and rows); when the
+    split dim is not a multiple of 32 TP (the norms' [S/SP, 1] sum of squares, the [S/SP, 32] mHC row),
+    _gather_add on the fabric gather (mesh-column order). Column blocks or the gather: every row adds in the same
+    order wherever the chunk starts (DS41-128). fabric_bf16 (P.6): the
     RS (FPU add) and the row gather in bf16, the result typecast to fp32; ``t`` may be bf16 (partial_dtype).
     ``exact`` (an fp32 ``t``): the exact fp32 sum under fabric_bf16 too (the engram gate partials, MHC_FUSED=on: the
     [S/SP, 32] row the fork writes is tile-aligned, where the old [S/SP, 12] row was not and stayed exact).
     ``fp32`` False (BF16_ACTIVATIONS=on, P.20): the fabric_bf16 path's bf16 result as it is (no typecast back; the
     consumer reads bf16); the other paths return fp32 either way."""
     tp = mesh.shape[TP_AXIS]
-    if not fabric() or not _rs_ok(t, 2, tp):
+    # TP_SUM_BLOCKS=cols (K.1, DS41-128): column blocks, so a row's add order never depends on its row in the chunk
+    dim = 3 if settings.get("TP_SUM_BLOCKS") == "cols" else 2
+    if not fabric() or not _rs_ok(t, dim, tp):
         tf = _exact_input(t)
         out = _gather_add(mesh, tf)
         if tf is not t:
             dealloc(tf)
         return out
-    if bf16_sums() and not exact:  # CCL_IMPL=fabric_bf16: RS and row gather in bf16, back to fp32 (P.6)
-        part = _rs_bf16(mesh, t, 2)
-        out = all_gather(part, 2, TP_AXIS)
+    if bf16_sums() and not exact:  # CCL_IMPL=fabric_bf16: RS and gather in bf16, back to fp32 (P.6)
+        part = _rs_bf16(mesh, t, dim)
+        out = all_gather(part, dim, TP_AXIS)
         dealloc(part)
         return _to_fp32(out) if fp32 else out
     part = ttnn.bringup.fabric_reduce_scatter(
         t,
         cluster_axis=TP_AXIS,
         num_links=rs_links(mesh),
-        dim=2,
+        dim=dim,
         exact_fp32_add=True,
         cache_descriptors=True,
         program_hash=glue_fold(),
     )
-    out = all_gather(part, 2, TP_AXIS)
+    out = all_gather(part, dim, TP_AXIS)
     dealloc(part)
     return out
 
