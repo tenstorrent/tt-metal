@@ -147,9 +147,18 @@ def _device_only(runners):
     res = {}
     nrep = int(os.environ.get("DSV41_ROUND_TL_NREP", "40"))
     for r in runners:
+        try:
+            _device_only_one(r, nrep, res)
+        except Exception as e:  # noqa: BLE001
+            res[f"k{r.k}_error"] = repr(e)[:300]
+    return res
+
+
+def _device_only_one(r, nrep, res):
+    if True:
         P = getattr(r, "_tl_last_bucket", "none")
         if P == "none" or r.tr.get(P) is None or r.tr[P].get("tid") is None:
-            continue
+            return
         t = r.tr[P]
         md = r.md
         ex = lambda tid: ttnn.execute_trace(md, tid, cq_id=0, blocking=False)
@@ -177,7 +186,6 @@ def _device_only(runners):
             except Exception as e:  # noqa: BLE001
                 d["trunc_error"] = repr(e)
         res[f"k{r.k}" + ("" if r.draft else "_nodraft")] = d
-    return res
 
 
 def _trunc(r, P, nrep):
@@ -192,13 +200,24 @@ def _trunc(r, P, nrep):
     _STATE["nomarks"] = True
     try:
         for name, nl, stop in cases:
-            dec.layers, dec.stop_after = full[:nl], stop
-            tid = ttnn.begin_trace_capture(md, cq_id=0)
-            dec.forward()
-            ttnn.end_trace_capture(md, tid, cq_id=0)
-            ttnn.synchronize_device(md)
-            out[name] = _rep(md, lambda: ttnn.execute_trace(md, tid, cq_id=0, blocking=False), nrep)
-            ttnn.release_trace(md, tid)
+            tid = None
+            try:
+                dec.layers, dec.stop_after = full[:nl], stop
+                dec.forward()  # eager warm (programs of this variant in the cache, as capture_trace does before every capture)
+                ttnn.synchronize_device(md)
+                tid = ttnn.begin_trace_capture(md, cq_id=0)
+                dec.forward()
+                ttnn.end_trace_capture(md, tid, cq_id=0)
+                ttnn.synchronize_device(md)
+                out[name] = _rep(md, lambda: ttnn.execute_trace(md, tid, cq_id=0, blocking=False), nrep)
+                ttnn.release_trace(md, tid)
+            except Exception as e:  # noqa: BLE001
+                out[name + "_error"] = repr(e)[:300]
+                if tid is not None and _STATE["cap"]:
+                    try:
+                        ttnn.end_trace_capture(md, tid, cq_id=0)
+                    except Exception:  # noqa: BLE001
+                        pass
     finally:
         dec.layers, dec.stop_after = full, None
         _STATE["nomarks"] = False
