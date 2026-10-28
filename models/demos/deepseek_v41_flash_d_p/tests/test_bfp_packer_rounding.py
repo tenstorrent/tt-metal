@@ -203,13 +203,19 @@ def _copy_pack(
         ttnn.KernelDescriptor(
             kernel_source=compute,
             core_ranges=core,
-            compile_time_args=[t] if compute == COPY else [t, 0, 16],
-            runtime_args=[],
+            compile_time_args=[t] if compute == COPY else [0, 16],
+            runtime_args=[] if compute == COPY else _rt_all(t),
             config=cfg,
         ),
     ]
     ttnn.generic_op([xin, out], ttnn.ProgramDescriptor(kernels=kernels, semaphores=[], cbs=cbs))
     return ttnn.to_torch(out).view(torch.uint8)
+
+
+def _rt_all(*args):
+    rt = ttnn.RuntimeArgs()
+    rt[0][0] = list(args)
+    return rt
 
 
 def _raw_bytes(device, tt: ttnn.Tensor) -> torch.Tensor:
@@ -338,7 +344,7 @@ def test_op_packer_rounding(device, op):
     _check(name, fn(device, x), x, out_dtype, rule)
 
 
-ROUND = "ttnn/ttnn/bringup/ckv_bfp4/kernels/ckv_bfp4_compute.cpp"
+ROUND = "ttnn/ttnn/bringup/ckv_bfp4_ttnn/kernels/ckv_bfp4_compute.cpp"
 
 
 @pytest.mark.parametrize("seed", [0, 1])
