@@ -3,8 +3,12 @@
 
 """Fresh inputs through captured traces (skill §1 C, D2 item 4): every replay against eager on inputs the trace was
 not captured with, at several shapes (paper 1024 x 2048 and 1 x 32768 included), shapes interleaved so that each
-new shape releases and recaptures the others. ttnn's "Allocating device buffers is potentially unsafe" warning
-(an allocation while a trace is alive) fails the test."""
+new shape releases and recaptures the others.
+
+Run with ``TT_METAL_TRACE_ALLOC_TRACKING=1`` (read when ttnn is imported; the tests fail without it): ttnn then
+tracks every buffer allocated while a trace is alive and ``execute_trace`` raises if one is still live, the exact
+form of the "Allocating device buffers is potentially unsafe" warning (which also fails the tests if it appears:
+without tracking it is printed once per process for any such allocation, a capture's freed intermediates included)."""
 
 import pytest
 import torch
@@ -16,6 +20,13 @@ from models.experimental.tafsut_forecast.tt.trace import TracedForward
 
 TRACE = [{"l1_small_size": 16384, "trace_region_size": 256 * 1024**2}]
 UNSAFE = "potentially unsafe"
+
+
+@pytest.fixture(autouse=True)
+def _tracking():
+    from ttnn.tools.trace_allocation_tracker import TRACE_ALLOC_TRACKING
+
+    assert TRACE_ALLOC_TRACKING, "run the trace tests with TT_METAL_TRACE_ALLOC_TRACKING=1"
 
 
 def series(rows, length, seed):
@@ -63,3 +74,20 @@ def test_trace_fresh_inputs(device, capfd):
     traced.release()
     out = capfd.readouterr()
     assert UNSAFE not in out.out + out.err, "an allocation happened while a trace was alive"
+
+
+@pytest.mark.parametrize("device_params", TRACE, indirect=True)
+def test_trace_tracker_control(device):
+    """Positive control: a buffer allocated while a trace is alive and still live at replay must make it raise."""
+    import ttnn
+
+    tt = TtTafsut(device, n_layers=1)
+    traced = TracedForward(tt)
+    prep = tt.prepare_inputs(series(4, 2048, seed=0))
+    traced(prep)
+    live = ttnn.from_torch(torch.zeros(32, 32), layout=ttnn.TILE_LAYOUT, device=device)  # allocated with a trace alive
+    with pytest.raises(RuntimeError) as e:
+        traced(prep)
+    print(f"[trace-control] {str(e.value).splitlines()[0][:300]}")
+    ttnn.deallocate(live)
+    traced.release()

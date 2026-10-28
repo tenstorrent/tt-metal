@@ -15,31 +15,44 @@ from models.experimental.tafsut_forecast.tt.model import TtTafsut
 class TracedForward:
     """Every shape's persistent buffers (constants, inputs) are allocated before any trace is captured: a buffer
     allocated after a capture can sit in that trace's freed intermediates and is overwritten on replay (it broke
-    ``long_horizon`` forward 2 at 512 rows, job 934). A new shape therefore releases and recaptures every trace."""
+    ``long_horizon`` forward 2 at 512 rows, job 934). A new shape therefore releases and recaptures every trace.
+
+    Each shape's output buffer is allocated eagerly too, with no trace alive, and each capture copies its result into
+    it: an output allocated inside a capture while another trace exists could sit in that trace's intermediates and
+    be overwritten when the other shape replays (D2 item 4). The only allocations made while a trace is alive are a
+    capture's own intermediates, all freed before the capture ends (``TT_METAL_TRACE_ALLOC_TRACKING=1`` checks it)."""
 
     def __init__(self, tt: TtTafsut):
         self.tt = tt
         self._inputs: dict = {}  # key -> persistent device inputs
-        self._traces: dict = {}  # key -> (trace id, device output)
+        self._outs: dict = {}  # key -> persistent device output
+        self._traces: dict = {}  # key -> trace id
 
     def _key(self, prep: df.Prepared):
         return (prep.tokens.shape[0], prep.ctx_len)
 
     def _release_traces(self):
-        for tid, out in self._traces.values():
+        for tid in self._traces.values():
             ttnn.release_trace(self.tt.device, tid)
-            ttnn.deallocate(out)
         self._traces.clear()
 
     def _capture_all(self):
+        """No trace is alive here. Compile runs (and the output buffer of a new shape) first, then every capture."""
         dev = self.tt.device
         for key, inp in self._inputs.items():
-            ttnn.deallocate(self.tt.forward_device(inp, self.tt.constants(*key)))  # compile run, no trace alive
+            c = self.tt.constants(*key)
+            if key not in self._outs:
+                self._outs[key] = self.tt.forward_device(inp, c)
+            tmp = self.tt.forward_device(inp, c)  # compile run of the forward and the copy
+            ttnn.copy(tmp, self._outs[key])
+            ttnn.deallocate(tmp)
         for key, inp in self._inputs.items():
             tid = ttnn.begin_trace_capture(dev, cq_id=0)
-            out = self.tt.forward_device(inp, self.tt.constants(*key))
+            tmp = self.tt.forward_device(inp, self.tt.constants(*key))
+            ttnn.copy(tmp, self._outs[key])
+            ttnn.deallocate(tmp)
             ttnn.end_trace_capture(dev, tid, cq_id=0)
-            self._traces[key] = (tid, out)
+            self._traces[key] = tid
 
     def upload(self, prep: df.Prepared):
         """Fill the shape's persistent inputs. A new shape first releases every trace, then allocates its constants
@@ -54,9 +67,9 @@ class TracedForward:
         return key
 
     def execute(self, prep: df.Prepared):
-        tid, out = self._traces[self._key(prep)]
-        ttnn.execute_trace(self.tt.device, tid, cq_id=0, blocking=False)
-        return out
+        key = self._key(prep)
+        ttnn.execute_trace(self.tt.device, self._traces[key], cq_id=0, blocking=False)
+        return self._outs[key]
 
     def __call__(self, prep: df.Prepared) -> torch.Tensor:
         self.upload(prep)
@@ -82,4 +95,7 @@ class TracedForward:
         self._release_traces()
         for inp in self._inputs.values():
             self.tt.deallocate_inputs(inp)
+        for out in self._outs.values():
+            ttnn.deallocate(out)
         self._inputs.clear()
+        self._outs.clear()
