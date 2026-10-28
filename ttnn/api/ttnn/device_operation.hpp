@@ -203,6 +203,8 @@ void enqueue_mesh_workload(
         program.set_runtime_id(runtime_id);
     }
 
+    const auto cq_id = ttnn::core::get_current_command_queue_id_for_thread();
+
     // Inspector: emit debug entry with tensor parameters
     if (tt::tt_metal::experimental::inspector::IsEnabled()) {
         auto operation_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
@@ -216,9 +218,7 @@ void enqueue_mesh_workload(
                 [&](const Tensor& t) { spec_copies.emplace_back(t.tensor_spec()); }, tensor_args);
         }
 
-        // Metal has no implicit queue selection; pass the thread's current TTNN queue explicitly.
-        auto trace_id = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(
-            mesh_device, ttnn::core::get_current_command_queue_id_for_thread().get());
+        auto trace_id = tt::tt_metal::experimental::inspector::GetCurrentMeshTraceId(mesh_device, cq_id.get());
         tt::tt_metal::experimental::inspector::EmitMeshWorkloadDebugEntry(
             workload, runtime_id, operation_name, std::move(spec_copies), trace_id);
     }
@@ -227,7 +227,10 @@ void enqueue_mesh_workload(
         return;
     }
 
-    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    // Resolve the queue only after the graph-capture early return: NO_DISPATCH capture must work even when the
+    // selected queue id does not exist on this device.
+    tt::tt_metal::distributed::EnqueueMeshWorkload(
+        ttnn::core::current_mesh_command_queue(*mesh_device, cq_id), workload, false);
 
     ttnn::graph::track_mesh_workload_execution(workload, mesh_device, runtime_id);
 

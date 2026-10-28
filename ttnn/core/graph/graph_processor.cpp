@@ -653,7 +653,9 @@ void track_mesh_workload_execution(
     }
 
     const auto manager_id = *mesh_device->get_active_sub_device_manager_id();
-    const auto command_queue_id = static_cast<uint8_t>(mesh_device->mesh_command_queue().id());
+    // The thread's selected queue id is recorded directly; no queue lookup is needed (and a NO_DISPATCH capture must
+    // work even if the selected id does not exist on this device).
+    const auto command_queue_id = ttnn::core::get_current_command_queue_id_for_thread().get();
     const auto mesh_device_id = static_cast<uint32_t>(mesh_device->id());
     const bool default_manager =
         mesh_device->get_active_sub_device_manager_id() == mesh_device->get_default_sub_device_manager_id();

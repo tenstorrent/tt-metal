@@ -7,6 +7,7 @@
 #include <enchantum/enchantum.hpp>
 
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 namespace ttnn::core {
 
@@ -48,6 +49,11 @@ QueueId pop_current_command_queue_id_for_thread() { return QueueId(tt::tt_metal:
 ScopeGuard with_command_queue_id(QueueId cq_id) {
     push_current_command_queue_id_for_thread(cq_id);
     return make_guard([cq_id]() { pop_current_command_queue_id_for_thread(); });
+}
+
+tt::tt_metal::distributed::MeshCommandQueue& current_mesh_command_queue(
+    tt::tt_metal::distributed::MeshDevice& mesh_device, std::optional<QueueId> cq_id) {
+    return mesh_device.mesh_command_queue(cq_id.value_or(get_current_command_queue_id_for_thread()).get());
 }
 
 }  // namespace ttnn::core

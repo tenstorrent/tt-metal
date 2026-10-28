@@ -16,6 +16,12 @@
 #include "ttnn/config.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/common/guard.hpp"
+#include "ttnn/common/queue_id.hpp"
+
+namespace tt::tt_metal::distributed {
+class MeshCommandQueue;
+class MeshDevice;
+}  // namespace tt::tt_metal::distributed
 
 namespace ttnn {
 
@@ -53,8 +59,15 @@ void with_command_queue_id(QueueId cq_id, T&& func) {
     std::forward<T>(func)();
 }
 
+// Returns the mesh command queue TTNN should dispatch to: `cq_id` if provided, otherwise the thread's current
+// command queue id (cq 0 when none has been selected). TTNN code must use this instead of calling
+// `mesh_device.mesh_command_queue()` without an explicit id, so that the cq defaulting rule lives in one place.
+tt::tt_metal::distributed::MeshCommandQueue& current_mesh_command_queue(
+    tt::tt_metal::distributed::MeshDevice& mesh_device, std::optional<QueueId> cq_id = std::nullopt);
+
 }  // namespace core
 
+using core::current_mesh_command_queue;
 using core::get_current_command_queue_id_for_thread;
 using core::get_memory_config;
 using core::has_storage_type_of;

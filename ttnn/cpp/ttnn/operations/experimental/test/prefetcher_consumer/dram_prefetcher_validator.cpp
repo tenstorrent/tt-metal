@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "dram_prefetcher_validator.hpp"
+#include "ttnn/core.hpp"
 
 #include "ttnn/prefetcher_pipe.hpp"
 #include "ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher.hpp"
@@ -412,7 +413,8 @@ void test_tensor_prefetcher_pipe_validator(
              .receivers = prefetcher_pipes[i]->receiver_cores(),
              .ring_size = prefetcher_pipes[i]->ring_size(),
              .entry_size = geom.page_bytes_per_recv});
-        run_args.advanced_options.prefetcher_pipe_args.emplace(name, metal_exp::PrefetcherPipeArgument{*prefetcher_pipes[i]});
+        run_args.advanced_options.prefetcher_pipe_args.emplace(
+            name, metal_exp::PrefetcherPipeArgument{*prefetcher_pipes[i]});
     }
     const metal_exp::TensorParamName source_name{"source_tensor"};
     const metal_exp::ScratchpadSpecName scratch_name{"expected"};
@@ -470,8 +472,9 @@ void test_tensor_prefetcher_pipe_validator(
 
     tt::tt_metal::distributed::MeshWorkload workload;
     workload.add_program(tt::tt_metal::distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
-    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/false);
-    tt::tt_metal::distributed::Finish(mesh_device->mesh_command_queue());
+    tt::tt_metal::distributed::EnqueueMeshWorkload(
+        ttnn::core::current_mesh_command_queue(*mesh_device), workload, /*blocking=*/false);
+    tt::tt_metal::distributed::Finish(ttnn::core::current_mesh_command_queue(*mesh_device));
 }
 
 }  // namespace ttnn::operations::experimental::test

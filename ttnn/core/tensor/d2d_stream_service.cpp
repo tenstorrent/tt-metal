@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "tensor/d2d_stream_service.hpp"
+#include "ttnn/core.hpp"
 
 #include <chrono>
 #include <limits>
@@ -836,7 +837,7 @@ D2DStreamServiceSender::~D2DStreamServiceSender() {
                     static_cast<uint32_t>(addr),
                     terminate_word);
             }
-            tt::tt_metal::distributed::Finish(mesh->mesh_command_queue());
+            tt::tt_metal::distributed::Finish(ttnn::core::current_mesh_command_queue(*mesh));
             for (const auto& [coord, core] : impl_->service_cores) {
                 svc.wait_done(tt::tt_metal::internal::get_device(*mesh, coord), core);
             }
@@ -950,7 +951,7 @@ void D2DStreamServiceSender::wait_for_fabric_links() {
     // CQ-ordered AFTER the producer, so whatever the caller enqueues next is fenced until
     // the link is free. No host Finish: CQ order already provides that ordering, and
     // blocking the host here would be redundant. Non-blocking.
-    EnqueueMeshWorkload(mesh->mesh_command_queue(), *impl_->lease_wait_workload, /*blocking=*/false);
+    EnqueueMeshWorkload(ttnn::core::current_mesh_command_queue(*mesh), *impl_->lease_wait_workload, /*blocking=*/false);
 }
 
 void D2DStreamServiceSender::release_fabric_links() {
@@ -967,7 +968,8 @@ void D2DStreamServiceSender::release_fabric_links() {
     // when the producer runs — the service then completes its handshake with the
     // producer in the same window. CQ order keeps the grant (1, here) and the service's
     // own reset (0, on its hot path) strictly alternating. Non-blocking.
-    EnqueueMeshWorkload(mesh->mesh_command_queue(), *impl_->lease_release_workload, /*blocking=*/false);
+    EnqueueMeshWorkload(
+        ttnn::core::current_mesh_command_queue(*mesh), *impl_->lease_release_workload, /*blocking=*/false);
 }
 
 // ===========================================================================
@@ -1003,7 +1005,7 @@ D2DStreamServiceReceiver::~D2DStreamServiceReceiver() {
                     static_cast<uint32_t>(addr),
                     terminate_word);
             }
-            tt::tt_metal::distributed::Finish(mesh->mesh_command_queue());
+            tt::tt_metal::distributed::Finish(ttnn::core::current_mesh_command_queue(*mesh));
             for (const auto& [coord, core] : impl_->service_cores) {
                 svc.wait_done(tt::tt_metal::internal::get_device(*mesh, coord), core);
             }
@@ -1096,7 +1098,7 @@ void D2DStreamServiceReceiver::wait_for_fabric_links() {
         "D2DStreamServiceReceiver::wait_for_fabric_links: lease wait workload not built");
     // Mirror of the sender: CQ-enqueue a kernel that spins until every receiver service
     // core is off the link (link_grant == 0). CQ-ordered, no host Finish. Non-blocking.
-    EnqueueMeshWorkload(mesh->mesh_command_queue(), *impl_->lease_wait_workload, /*blocking=*/false);
+    EnqueueMeshWorkload(ttnn::core::current_mesh_command_queue(*mesh), *impl_->lease_wait_workload, /*blocking=*/false);
 }
 
 void D2DStreamServiceReceiver::release_fabric_links() {
@@ -1111,7 +1113,8 @@ void D2DStreamServiceReceiver::release_fabric_links() {
     // Mirror of the sender: CQ-enqueue the grant (link_grant = 1) BEFORE the consumer
     // workload so the receiver service can drain + complete its handshake in the same
     // window. Non-blocking.
-    EnqueueMeshWorkload(mesh->mesh_command_queue(), *impl_->lease_release_workload, /*blocking=*/false);
+    EnqueueMeshWorkload(
+        ttnn::core::current_mesh_command_queue(*mesh), *impl_->lease_release_workload, /*blocking=*/false);
 }
 
 // Gates are spaced by the L1 alignment so any NoC write can open one.
@@ -1971,12 +1974,14 @@ D2DStreamService::create_pair(
     // Launch the persistent kernels (non-blocking). Receiver first so it's parked
     // on its socket wait before the sender starts pushing pages.
     EnqueueMeshWorkload(
-        receiver_handle->impl_->mesh_device->mesh_command_queue(),
+        ttnn::core::current_mesh_command_queue(*receiver_handle->impl_->mesh_device),
         *receiver_handle->impl_->workload,
         /*blocking=*/false);
     receiver_handle->impl_->launched = true;
     EnqueueMeshWorkload(
-        sender_handle->impl_->mesh_device->mesh_command_queue(), *sender_handle->impl_->workload, /*blocking=*/false);
+        ttnn::core::current_mesh_command_queue(*sender_handle->impl_->mesh_device),
+        *sender_handle->impl_->workload,
+        /*blocking=*/false);
     sender_handle->impl_->launched = true;
 
     // Ownership of the service-core claims now lives in the handles.
@@ -2062,7 +2067,9 @@ std::unique_ptr<D2DStreamServiceSender> D2DStreamService::create_sender(
     CMAKE_UNIQUE_NAMESPACE::send_sender_lanes(
         ctx, endpoints.receiver_rank, mo.coords, &sender_handle->impl_->lane_links);
     EnqueueMeshWorkload(
-        sender_handle->impl_->mesh_device->mesh_command_queue(), *sender_handle->impl_->workload, /*blocking=*/false);
+        ttnn::core::current_mesh_command_queue(*sender_handle->impl_->mesh_device),
+        *sender_handle->impl_->workload,
+        /*blocking=*/false);
     sender_handle->impl_->launched = true;
 
     committed = true;
@@ -2130,7 +2137,8 @@ std::unique_ptr<D2DStreamServiceReceiver> D2DStreamService::create_receiver(
         receiver_backing,
         cfg,
         sender_lanes);
-    EnqueueMeshWorkload(receiver_mesh->mesh_command_queue(), *receiver_handle->impl_->workload, /*blocking=*/false);
+    EnqueueMeshWorkload(
+        ttnn::core::current_mesh_command_queue(*receiver_mesh), *receiver_handle->impl_->workload, /*blocking=*/false);
     receiver_handle->impl_->launched = true;
 
     committed = true;
