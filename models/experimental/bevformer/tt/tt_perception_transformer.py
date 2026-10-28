@@ -157,10 +157,10 @@ class TTPerceptionTransformer:
         can_bus = ttnn.linear(can_bus, mlp.linear2.weight, bias=mlp.linear2.bias, activation="relu")
         can_bus = layer_norm(can_bus, mlp.norm)
         bev_queries = ttnn.add(bev_queries, can_bus)
-        # The encoder takes the cameras' features as (num_cams, num_keys, bs, C).
+        # The encoder takes the cameras' features batch-first, (bs, num_cams, num_keys, C), as its
+        # spatial cross-attention reads them; splitting the leading dim of a TILE tensor is a view.
         value = self.camera_features(mlvl_feats, bs)
-        num_keys = value.shape[1]
-        value = ttnn.permute(ttnn.reshape(value, (bs, self.num_cams, num_keys, self.embed_dims)), (1, 2, 0, 3))
+        value = ttnn.reshape(value, (bs, self.num_cams, value.shape[1], self.embed_dims))
         shift = None
         if prev_bev is not None:
             # As upstream's encoder: the rotated previous BEV paired with the encoder's input
@@ -172,5 +172,6 @@ class TTPerceptionTransformer:
         bev_embed = self.encoder(
             bev_queries, value=value, bev_pos=bev_pos, prev_bev=prev_bev, shift=shift, img_metas=frame.img_metas
         )
+        ttnn.deallocate(value)
         signpost(header="TTNN PerceptionTransformer Forward End")
         return bev_embed
