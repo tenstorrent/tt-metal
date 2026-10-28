@@ -121,34 +121,71 @@ def load_mlp_weights(
                 w_gate_up=wgu,
             )
 
-        # Default: INTERLEAVED DRAM shards; ttnn.linear works for decode and prefill.
-        return MLPWeights(
-            w1=tpc.shard_w(
-                state_dict["gate_proj.weight"],
+        # QWEN36_WEIGHT_PREFETCH (gateup): with the prefill AGMM weight present, w1/w3 are read by the 1D decode
+        # matmul only, so they load receiver-contiguous for the Tensor prefetcher instead of interleaved (no extra
+        # DRAM). None -> target off/unsupported -> the interleaved load below.
+        from models.demos.blackhole.qwen36.tt import weight_prefetch
+
+        _pf_gu = wgu is not None and getattr(args, "mlp_1d_decode", False)
+
+        def gate_up(name, progcfg_name):
+            w = (
+                weight_prefetch.load_prefetched(
+                    "gateup",
+                    f"mlp.{name}",
+                    mesh_device,
+                    state_dict[f"{name}.weight"],
+                    -1,
+                    gateup_dtype,
+                    cache(name),
+                    getattr(args, progcfg_name, None),
+                    tp,
+                    replaces_primary=True,
+                )
+                if _pf_gu
+                else None
+            )
+            if w is not None:
+                return w
+            return tpc.shard_w(
+                state_dict[f"{name}.weight"],
                 mesh_device,
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                cache_path=cache("gate_proj"),
+                cache_path=cache(name),
                 dtype=gateup_dtype,
-            ),
-            w3=tpc.shard_w(
-                state_dict["up_proj.weight"],
-                mesh_device,
-                dim=-1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                cache_path=cache("up_proj"),
-                dtype=gateup_dtype,
-            ),
-            w2=tpc.shard_w(
-                state_dict["down_proj.weight"],
-                mesh_device,
-                dim=0,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                cache_path=cache("down_proj"),
-                dtype=down_dtype,
-            ),
-            w_gate_up=wgu,
+            )
+
+        # Default: INTERLEAVED DRAM shards; ttnn.linear works for decode and prefill. Load order w1, w3, w2 as before.
+        w1 = gate_up("gate_proj", "mlp_w1_decode_1d_progcfg")
+        w3 = gate_up("up_proj", "mlp_w3_decode_1d_progcfg")
+        w2 = tpc.shard_w(
+            state_dict["down_proj.weight"],
+            mesh_device,
+            dim=0,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_path=cache("down_proj"),
+            dtype=down_dtype,
         )
+        # QWEN36_WEIGHT_PREFETCH (down): prefill reads w2 too, so decode gets a receiver-contiguous copy.
+        _w2_pc = getattr(args, "mlp_w2_decode_1d_progcfg", None) if getattr(args, "mlp_1d_decode", False) else None
+        weight_prefetch.attach_twin(
+            mesh_device,
+            w2,
+            weight_prefetch.load_prefetched(
+                "down",
+                "mlp.down_proj",
+                mesh_device,
+                state_dict["down_proj.weight"],
+                0,
+                down_dtype,
+                cache("down_proj"),
+                _w2_pc,
+                tp,
+            ),
+            _w2_pc,
+        )
+        return MLPWeights(w1=w1, w2=w2, w3=w3, w_gate_up=wgu)
 
     def load(name, dtype):
         return ttnn.as_tensor(
@@ -253,6 +290,7 @@ class Qwen36MLP:
         """TP forward: replicated input; reduce-scatter output fractured on hidden dim
         (decode_ar: all-reduce -> replicated RES40 output instead)."""
         from models.demos.blackhole.qwen36.tt import tp_common as tpc
+        from models.demos.blackhole.qwen36.tt import weight_prefetch
         from models.tt_transformers.tt.ccl import tt_all_reduce
 
         w = self.weights
@@ -293,19 +331,20 @@ class Qwen36MLP:
         elif self._mlp_1d_decode and x.shape[-2] <= ttnn.TILE_SIZE:
             # 1D mcast decode matmuls on a small explicit grid, silu fused in the w1 progcfg.
             # mcast_in0 needs interleaved in0, but ff-norm hands us a width-shard -> interleave first.
+            # weight_prefetch.linear == ttnn.linear unless QWEN36_WEIGHT_PREFETCH registered the weight.
             x_il = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
-            w1_out = ttnn.linear(
+            w1_out = weight_prefetch.linear(
                 x_il,
                 w.w1,
+                args.mlp_w1_decode_1d_progcfg,
                 compute_kernel_config=ckc,
-                program_config=args.mlp_w1_decode_1d_progcfg,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
-            w3_out = ttnn.linear(
+            w3_out = weight_prefetch.linear(
                 x_il,
                 w.w3,
+                args.mlp_w3_decode_1d_progcfg,
                 compute_kernel_config=ckc,
-                program_config=args.mlp_w3_decode_1d_progcfg,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
             )
             ttnn.deallocate(x_il)
@@ -377,7 +416,7 @@ class Qwen36MLP:
             if (x.shape[-2] <= ttnn.TILE_SIZE or (_prefill_tuned and tpc.prefill_l1_rows_ok(x.shape[-2])))
             else mc
         )
-        partial = ttnn.linear(hidden, w.w2, compute_kernel_config=ckc, memory_config=mc_w2_out, program_config=w2_pc)
+        partial = weight_prefetch.linear(hidden, w.w2, w2_pc, compute_kernel_config=ckc, memory_config=mc_w2_out)
         ttnn.deallocate(hidden)
 
         if decode_ar is not None:

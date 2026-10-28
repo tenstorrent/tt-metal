@@ -14,6 +14,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
+from models.demos.blackhole.qwen36.tt import weight_prefetch
 from models.experimental.gated_attention_gated_deltanet.tt.ttnn_delta_rule_ops import (
     fused_recurrent_gated_delta_rule_ttnn,
     recurrent_gated_delta_rule_decode_ttnn,
@@ -457,6 +458,17 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
             cache_path=c("qkvzab" + (".il" if _proj1d else ".dramshard")),
             dtype=_in_dtype,
         )
+        if _proj1d:
+            # QWEN36_WEIGHT_PREFETCH (gdn_in): receiver-contiguous decode copy for the Tensor prefetcher.
+            _pc = getattr(args, "gdn_qkvz_decode_1d_progcfg", None)
+            weight_prefetch.attach_twin(
+                mesh,
+                tw["qkvz"],
+                weight_prefetch.load_prefetched(
+                    "gdn_in", "gdn.qkvzab", mesh, fused, -1, _in_dtype, c("qkvzab.il"), _pc, tp
+                ),
+                _pc,
+            )
     else:
         fused = torch.cat(
             [
@@ -495,6 +507,17 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
         cache_path=c("out.dramshard" if _out_sharded else "out"),
         dtype=ttnn.bfloat8_b,
     )
+    if not _out_sharded and getattr(args, "proj_1d_decode", False):
+        # QWEN36_WEIGHT_PREFETCH (gdn_out): receiver-contiguous decode copy for the Tensor prefetcher.
+        _pc = getattr(args, "gdn_out_decode_1d_progcfg", None)
+        weight_prefetch.attach_twin(
+            mesh,
+            tw["out"],
+            weight_prefetch.load_prefetched(
+                "gdn_out", "gdn.out_proj", mesh, sd[P + "out_proj.weight"], 0, ttnn.bfloat8_b, c("out"), _pc, tp
+            ),
+            _pc,
+        )
     if getattr(args, "num_devices", 1) > 1:
         # COLUMN-parallel copy of the out-proj for prefill.
         # Decode keeps the row-sharded tw["out"] (matmul + all-reduce).
