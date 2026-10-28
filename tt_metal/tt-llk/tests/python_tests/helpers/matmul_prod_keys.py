@@ -97,11 +97,27 @@ def _cell_hit(cells, fidelity, kb, fp32_dest, in_format, out_format, pack_format
     return False
 
 
+# LoFi, half sync, 16-bit DEST cells of a Float16_b or Float32 in1 against a block float in0 that read 0.2 to 11 cycles behind main with the keyed forms
+# (in1, in0, output, k steps, ct, rt)
+_LOFI_MAIN_CELLS = {
+    (DataFormat.Float16_b, DataFormat.Bfp8_b, DataFormat.Float32, 4, 5, 1),
+    (DataFormat.Float16_b, DataFormat.Bfp8_b, DataFormat.Float32, 32, 5, 1),
+    (DataFormat.Float32, DataFormat.Bfp8_b, DataFormat.Float32, 32, 6, 1),
+    (DataFormat.Float32, DataFormat.Bfp4_b, DataFormat.Bfp4_b, 1, 4, 2),
+    (DataFormat.Float32, DataFormat.Bfp4_b, DataFormat.Float32, 4, 2, 1),
+    (DataFormat.Float32, DataFormat.Bfp8_b, DataFormat.Bfp4_b, 1, 2, 4),
+}
+
+
 def mixed_main_form(fidelity, kb, fp32_dest, in_format, in_format_b, out_format, full_sync, ct=0, rt=0) -> bool:
     """matmul_mixed_main_form of llk_matmul_forms.h; in_format is in1 (SrcA), in_format_b is in0 (SrcB)."""
-    if in_format_b is None or fidelity != MathFidelity.HiFi2:
+    if in_format_b is None:
         return False
     block = (DataFormat.Bfp8_b, DataFormat.Bfp4_b)
+    if fidelity == MathFidelity.LoFi:
+        return not full_sync and not fp32_dest and ct > 0 and (in_format, in_format_b, out_format, kb, ct, rt) in _LOFI_MAIN_CELLS
+    if fidelity != MathFidelity.HiFi2:
+        return False
     f32_in1 = in_format == DataFormat.Float32 and in_format_b in block
     if f32_in1 and ct > 0:
         # Float32 in in1: the keyed forms win on rows of 3 tiles or fewer and lose on wider rows

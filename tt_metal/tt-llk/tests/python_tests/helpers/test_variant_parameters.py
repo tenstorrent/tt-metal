@@ -540,10 +540,11 @@ class MATMUL_FORM_KEYS(TemplateParameter):
             return [MATMUL_FORM_KEYS(2, DataFormat.Float32, True)]
         # cells where the keyed forms read slower than main's keep main's form (the unknown key), as the ttnn kernels do
         if math_fidelity is not None and dest_sync in (DestSync.Half, DestSync.Full) and dest_acc is not None:
-            from helpers.matmul_prod_keys import forced_form, main_form_cell
+            from helpers.matmul_prod_keys import forced_form, main_form_cell, mixed_main_form
 
             fp32_dest = dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats)
-            forced = (
+            # a LoFi cell that keeps main's form does not take a forced one
+            forced = "" if math_fidelity == MathFidelity.LoFi and mixed_main_form(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.input_format_B, formats.output_format, dest_sync == DestSync.Full, ct_dim, rt_dim) else (
                 forced_form(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, dest_sync == DestSync.Full, rt_dim, ct_dim, False, sections, in_format_b=formats.input_format_B)
             )
             if forced:

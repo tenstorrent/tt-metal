@@ -204,9 +204,17 @@ constexpr bool matmul_mixed_main_form()
         ct_dim != 0 &&
         (kt_per_section > 1 ? (ct_dim < 4 && !(sync == 1 && kt_per_section <= 4 && ct_dim == 1 && rt_dim == 1) && !(sync == 0 && kt_per_section <= 4 && ct_dim == 3 && rt_dim == 1))
                             : (!(ct_dim >= 4 && rt_dim >= 4) && !(sync == 0 && ct_dim == 1 && rt_dim == 1)));
-    return math_fidelity == MathFidelity::HiFi2 &&
+    // LoFi, half sync, 16-bit DEST cells of a Float16_b or Float32 in1 against a block float in0 that read 0.2 to 11 cycles behind main with the keyed forms
+    constexpr bool lofi_cell =
+        math_fidelity == MathFidelity::LoFi && sync == 0 && !fp32_dest && matmul_block_float_format(in0) && ct_dim != 0 &&
+        ((in1 == DataFormat::Float16_b && in0 == DataFormat::Bfp8_b && out_format == DataFormat::Float32 && rt_dim == 1 && ct_dim == 5 && (kt_per_section == 4 || kt_per_section == 32)) ||
+         (in1 == DataFormat::Float32 && in0 == DataFormat::Bfp8_b && out_format == DataFormat::Float32 && rt_dim == 1 && ct_dim == 6 && kt_per_section == 32) ||
+         (in1 == DataFormat::Float32 && in0 == DataFormat::Bfp4_b && out_format == DataFormat::Bfp4_b && rt_dim == 2 && ct_dim == 4 && kt_per_section == 1) ||
+         (in1 == DataFormat::Float32 && in0 == DataFormat::Bfp4_b && out_format == DataFormat::Float32 && rt_dim == 1 && ct_dim == 2 && kt_per_section == 4) ||
+         (in1 == DataFormat::Float32 && in0 == DataFormat::Bfp8_b && out_format == DataFormat::Bfp4_b && rt_dim == 4 && ct_dim == 2 && kt_per_section == 1));
+    return lofi_cell || (math_fidelity == MathFidelity::HiFi2 &&
            ((f32_in1 && !keyed) || (in0 == DataFormat::Float32 && matmul_block_float_format(in1) && sync == 0 && kt_per_section == 1) ||
-            (!fp32_dest && kt_per_section == 1 && sync == 0 && in1 == DataFormat::Bfp8_b && in0 == DataFormat::Float16_b && out_format == DataFormat::Float32));
+            (!fp32_dest && kt_per_section == 1 && sync == 0 && in1 == DataFormat::Bfp8_b && in0 == DataFormat::Float16_b && out_format == DataFormat::Float32)));
 }
 
 template <MathFidelity math_fidelity, std::uint32_t kt_per_section, bool fp32_dest, DataFormat in0, DataFormat in1, DataFormat out_format, DataFormat pack_format, bool several_blocks, std::uint32_t row_tiles = 0, int sync = 0, std::uint32_t min_side = 99, std::uint32_t ct_dim = 0, std::uint32_t rt_dim = 0>
