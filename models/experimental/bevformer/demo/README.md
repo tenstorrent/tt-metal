@@ -143,6 +143,12 @@ size; the loader rescales them with the images and pads normalized images at the
 `can_bus` is the absolute 18-value vector for the frame. The runner makes translation and heading
 relative to the preceding frame.
 
+Camera calibration is fixed for the lifetime of an initialized model. The encoder creates the
+3D-to-2D projection setup from camera intrinsics and extrinsics during initialization, and the
+first sequence frame is an unmeasured warmup. Every later frame must use the same calibration.
+If any camera intrinsic or extrinsic changes, reinitialize the model before processing that frame
+so the 3D-to-2D projections are created again from the new calibration.
+
 ```json
 {
   "camera_order": [
