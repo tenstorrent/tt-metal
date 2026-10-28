@@ -27,6 +27,7 @@ from helpers.utils import passed_test
 from llk2_paths import cpp_source, include_dirs
 
 TILE_DIM = 32
+SECTIONS = 2  # copy into both Dest sections, one acquire/commit/pack/release round each
 
 
 @dataclass
@@ -39,7 +40,8 @@ class LLK2_COPY_SHAPE(TemplateParameter):
         return (
             f"constexpr std::uint32_t TILES_Y = {self.tiles_y};\n"
             f"constexpr std::uint32_t TILES_X = {self.tiles_x};\n"
-            f"constexpr bool TRANSPOSE = {str(self.transpose == Transpose.Yes).lower()};"
+            f"constexpr bool TRANSPOSE = {str(self.transpose == Transpose.Yes).lower()};\n"
+            f"constexpr std::uint32_t SECTIONS = {SECTIONS};"
         )
 
 
@@ -97,6 +99,9 @@ def test_llk2_copy(transpose, format_dest_acc_and_shape):
             input_dimensions=input_dimensions,
         )
 
+    # Every round packs the same result to its own part of the output.
+    golden = golden.repeat(SECTIONS)
+
     configuration = TestConfig(
         cpp_source("llk2_copy_compute_api_test.cpp"),
         formats,
@@ -113,7 +118,7 @@ def test_llk2_copy(transpose, format_dest_acc_and_shape):
             formats.output_format,
             tile_count_A=tile_cnt_A,
             tile_count_B=tile_cnt_B,
-            tile_count_res=tile_cnt_A,
+            tile_count_res=tile_cnt_A * SECTIONS,
         ),
         dest_acc=dest_acc,
         unpack_to_dest=unpack_to_dest,
