@@ -1,5 +1,12 @@
 # Prefill stage 1: baseline and target contract (E9)
 
+**Reproduce at 12 x 10** (environment in `work_log.md`, "Environment"; `EMBEDDING_GEMMA2_GRID=12x10` is
+the harness default): quick default `pytest models/demos/embedding_gemma2/tests/perf/prefill.py -s -q`
+(buckets 128 / 1024 / 8192, burst; 3 passed in 53 s, `ctl_start`) and the full stage-1 sweep
+`EMBEDDING_GEMMA2_PREFILL_ALL=1 pytest models/demos/embedding_gemma2/tests/perf/prefill.py -s -q`
+(10 buckets, gate + burst + sustained + telemetry + host; 40 passed in 1339 s, `sweep_all`). Timings
+from the E9.1-r2b table in `work_log.md`.
+
 **This is the stage-1 baseline at the contract geometry: 12 x 10 compute grid (120 cores, Galaxy
 target), text precision `sdpa_nofp32acc`** (E9.1-r2b re-baseline, 2026-10-28). Text-encoder prefill of
 `google/embeddinggemma-2` on one Blackhole P150a (12 x 10 via `EMBEDDING_GEMMA2_GRID=12x10`, every
@@ -37,10 +44,12 @@ Owner stages: 02 topology, 03 matmul, 04 attention, 05 memory.
 - Up to 8192 the sustained clock holds 1350 MHz and sustained = burst within 0.1 %. From 16384 up the
   firmware lowers AICLK to 1293 / 1237 / 1193 MHz (minimum 1150) at 118-134 W median, and sustained
   is 2.8 / 5.4 / 3.5 % above burst **[M]**. The drop is larger than in the 13 x 10 `p3_qkv_gu`
-  baseline (1325 / 1312 / 1306 MHz). It is not the grid: at 32768 the 13 x 10 control on the same code
-  gives the same clock and time (Controls) **[M]**; so it follows the code and precision change
-  (bf16 Q/K/V and gate / up outputs in `sdpa_nofp32acc`) **[I: by elimination; not isolated per op]**.
-  Power stays under the 150 W TDP and current under the 200 A TDC as medians; which limit the
+  baseline (1325 / 1312 / 1306 MHz). The grid is excluded: at 32768 the 13 x 10 control on the same
+  code gives the same clock and time (Controls) **[M]**. The cause is unattributed: only the grid was
+  controlled. Sustained power and Vcore are lower in the 12 x 10 sweep than in the 13 x 10
+  `p3_qkv_gu` baseline (32768 / 65536 power median 121 / 134 W vs 130 / 138 W; Vcore at 32768 0.767 V
+  vs 0.785 V; `perf_summary.json` `sustained_telemetry`, top level vs `superseded_13x10_p3_qkv_gu`)
+  **[M]**. Power stays under the 150 W TDP and current under the 200 A TDC as medians; which limit the
   firmware applies is not exposed in sysfs **[I]**.
 - Burst at >= 16384 is not a full-clock figure: the clock starts dropping inside the first windows
   (as in the 13 x 10 baseline).
@@ -174,7 +183,9 @@ Model, method and tables: `/local/ttuser/gtobar/tt-ops/runs/embeddinggemma-2/roo
 `out/roofline_sdpa_nofp32acc.json` (sha256 `58935ff3ee4f...`, written 12:19:26, read unchanged after the
 runs): roofline = max(FPU, SFPU, DRAM) for the text tower at 120 cores and 1.35 GHz, cold, every
 activation on chip (optimistic from 16384, where activations exceed L1). "+SFPU" serializes the SFPU
-term. The op-table floor in `profiles_12x10` is a separate, simpler model (per op, padded tensors
+term. The FPU term assumes 89 % of peak matmul throughput, and % of roofline is computed against
+1.35 GHz while the long buckets ran at about 1.19-1.29 GHz sustained (at 65536, 1193 MHz: about 38 %
+of a roofline scaled to the clock actually run, vs 33.8 % at 1.35 GHz) **[I: linear clock scaling]**. The op-table floor in `profiles_12x10` is a separate, simpler model (per op, padded tensors
 once); the headline uses the roofline session's number.
 
 ## Known open item (not fixed here)

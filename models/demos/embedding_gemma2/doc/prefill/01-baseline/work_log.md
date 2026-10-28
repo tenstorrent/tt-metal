@@ -22,7 +22,7 @@ log with `__start` / `__end wall_s` / `__tt_exit`), one at a time.
 | `4eed20c34c` | E9.1-r2a: text precision default `p2_sdpa_fast` -> `sdpa_nofp32acc` (`selected_precision_config.json` text section, config_id); contract / datatype_sweep / REPORT / work_log amendments |
 | `a903d517c6` | E9.1-r2a: root README cost and fallback fixes; `prefill_op_table.py` roofline uses the profiled grid (`--grid-cores`, CSV, `device_info.json`) |
 | `637e2b5292` | E9.1-r2b commit 1, E9.1-r2a review minors: README cost label, this table and the config hash, datatype_sweep README layout and gate keys, `--grid-cores 0` error + CPU test, 13 x 10 tables regenerated with `grid_cores` |
-| (E9.1-r2b re-baseline commit) | 12 x 10 re-baseline: README (12 x 10 headline first, 13 x 10 kept as superseded), `perf_summary.json` (12 x 10 top level, 13 x 10 nested), `profiles_12x10/`, this log; `prefill_summary.py --superseded` and extra keys - docs and tooling only |
+| `ec3ca0e1c6` | E9.1-r2b 12 x 10 re-baseline: README (12 x 10 headline first, 13 x 10 kept as superseded), `perf_summary.json` (12 x 10 top level, 13 x 10 nested), `profiles_12x10/`, this log; `prefill_summary.py --superseded` and extra keys - docs and tooling only |
 
 The measurements ran on the working tree of `7ef04f02da` before two non-semantic changes: black
 reformatting at commit time, and `@pytest.mark.timeout(3600)` (added after the 65536 sustained case
@@ -218,7 +218,12 @@ E9.1-r2b commit 1 (r2a review minors, CPU only) **[M]**: `prefill_op_table.py --
 below) is now an error (argparse exit 2; `table(grid_cores=0)` raises) instead of falling back to
 the CSV; `tests/perf/test_prefill_op_table.py` (CPU only: grid from the CSV column, from
 `device_info.json`, column over `device_info.json`, no record, mixed values, explicit override,
-0 / -120, CLI 0): 9 passed (`e9/01r2b/logs/c1_test_prefill_op_table.log`). The committed 13 x 10
+0 / -120, CLI 0): 9 passed (`e9/01r2b/logs/c1_test_prefill_op_table.log`). Fail-then-pass of the
+`grid_cores=0` check (added in E9.2 commit 1, CPU only, `e9/02-topology/logs/c1_gridcores_fail_then_pass.log`)
+**[M]**: the `a903d517c6` version of `prefill_op_table.py` (`git show a903d517c6:...`) returns a table
+with `grid_cores` 120 for `table(<2048 CSV>, 2048, grid_cores=0)` (the 0 falls through to the CSV
+value, no error); the `ec3ca0e1c6` version raises `ValueError: grid_cores must be a positive core
+count, got 0`. The committed 13 x 10
 tables (`profiles/b1_s*/`) were regenerated from their raw CSVs (`e9/01-baseline/tracy/`): JSON equal
 except the new `grid_cores` 130 key, markdown equal except the header's "130 cores", all 10 buckets
 (`e9/01r2b/logs/c1_regen_13x10_tables.log`).
@@ -268,7 +273,8 @@ curr1_max 200 A, PCIe x16 32 GT/s, thermal trip count 0 (unchanged from the cont
   to the r2a alloc-tracking gate run, so `perf_summary.json` cites that run as the alloc-tracking gate.
 - **Extra control at 32768** (not in the brief's list): the sustained clock drop at >= 16384 is larger
   than in the 13 x 10 baseline; 13 x 10 vs 12 x 10 at 32768 on the same code shows no grid effect
-  (599.3 vs 599.7 ms, both 1237 MHz), so the drop comes with the code / precision change.
+  (599.3 vs 599.7 ms, both 1237 MHz): the grid is excluded; the cause is unattributed (E9.2 commit 1
+  rewording, review E9.1-r2b minor 2: only the grid was controlled).
 - **SDPA at 2048**: the expected 13.8 ms is the `p3_qkv_gu` 12 x 10 profile; at `sdpa_nofp32acc` it
   is 8.66 ms (13 x 10: 6.85 ms). The 2-wave cause stands (q_chunk 64, 128 units); its cost is +1.81 ms.
 - `target_contract.json` unchanged. Proposed to the orchestrator (not applied): `checkout.commit`
@@ -280,7 +286,7 @@ curr1_max 200 A, PCIe x16 32 GT/s, thermal trip count 0 (unchanged from the cont
 
 | observation | evidence | control | resolution |
 |---|---|---|---|
-| sustained / burst 1.028 / 1.054 / 1.035 at 16384 / 32768 / 65536 (AICLK 1293 / 1237 / 1193) vs 1.015-1.019 at 13 x 10 `p3_qkv_gu` | `run/prefill.jsonl` telemetry last third | 13 x 10 vs 12 x 10 at 32768, same code: same clock and time | controlled: not the grid; follows the precision / code change **[I]**; recorded as a named limitation |
+| sustained / burst 1.028 / 1.054 / 1.035 at 16384 / 32768 / 65536 (AICLK 1293 / 1237 / 1193) vs 1.015-1.019 at 13 x 10 `p3_qkv_gu` | `run/prefill.jsonl` telemetry last third | 13 x 10 vs 12 x 10 at 32768, same code: same clock and time | grid excluded, cause unattributed (only the grid is controlled). Sustained power and Vcore are lower at 12 x 10 than in the 13 x 10 `p3_qkv_gu` baseline (32768 / 65536: 121 / 134 W vs 130 / 138 W; Vcore at 32768 0.767 V vs 0.785 V; `perf_summary.json` `sustained_telemetry`). Recorded as a named limitation |
 | 8192 at 13 x 10 throttles in sustained (1318 MHz), 12 x 10 does not (1350) | `run_ctl13`, `run_ctl12` | burst numbers (no throttle) | documented: the sustained 12 x 10 cost at 8192 (+7.2 %) is below the burst cost (+8.5 %) |
 | traced residual 6.1 / 63.4 ms at 32768 / 65536 | `analysis/r2b.json` | kernel sum from a cold 1350 MHz profile | attributed to the clock drop inside burst windows **[I]** (as at 13 x 10) |
 | host work negative at >= 16384 | host records N = 14 / 6 / 5 | replay + sync timed in the same phase | noise under clock drift |
@@ -296,3 +302,17 @@ curr1_max 200 A, PCIe x16 32 GT/s, thermal trip count 0 (unchanged from the cont
   "before" for this geometry.
 - Gaps: one sustained run per bucket (repeats only at 512 / 2048 / 8192 / 32768); the roofline is a
   model; traced gaps are not profiled; the larger clock drop at >= 16384 is not attributed per op.
+
+## E9.2 commit 1: contract change and E9.1-r2b review minors (2026-10-28, docs only)
+
+- **Contract change (orchestrator-approved, E9.2 brief)**: `target_contract.json` `checkout.commit`
+  `4624946b1b` -> `ec3ca0e1c6` (the 12 x 10 re-baseline commit), `checkout.commit_note` names the
+  superseded 13 x 10 base, `hardware.compute_grid_note` says stage 1 was re-baselined at 12 x 10
+  (E9.1-r2b) with every forward op on 120 cores at all 10 buckets, `checkout.contract_changes`
+  extended. Shapes, gates, metric and regime unchanged.
+- Review minors (verdicts.md row E9.1-r2b): (1) README "Reproduce at 12 x 10" pointer at the top;
+  (2) sustained-clock paragraph (README) and anomaly-ledger row 1 (this log) reworded to "grid
+  excluded, cause unattributed", with the power / Vcore comparison; the bf16 mechanism clause and
+  "controlled" are dropped; (3) the `--grid-cores 0` fail-then-pass is recorded under "E9.1-r2b
+  commit 1" above; (4) README roofline paragraph: 89 % FPU efficiency and the clock caveat;
+  (5) commits table placeholder replaced with `ec3ca0e1c6`.

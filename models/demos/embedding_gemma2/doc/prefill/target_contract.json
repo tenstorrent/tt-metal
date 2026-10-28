@@ -4,16 +4,16 @@
   "checkout": {
     "repo": "/local/ttuser/gtobar/tt-metal",
     "branch": "gtobarTT/embedding_gemma2_bringup",
-    "commit": "4624946b1b67f3beb008d02037803a50446857b1",
-    "commit_note": "stage-1 base commit; harness commit 7ef04f02da (tests/perf/prefill*.py, no model code change); baseline docs commit logged in doc/prefill/01-baseline/work_log.md",
+    "commit": "ec3ca0e1c67e70e7b621b39cbd8101f18eb2c5db",
+    "commit_note": "stage-1 12 x 10 re-baseline commit (E9.1-r2b; model code as at a903d517c6, measured on HEAD 637e2b5292 + docs). The superseded 13 x 10 stage-1 base was 4624946b1b (harness commit 7ef04f02da). Commits logged in doc/prefill/01-baseline/work_log.md",
     "model_dir": "models/demos/embedding_gemma2",
     "precision_config": "doc/datatype_sweep/selected_precision_config.json (text sdpa_nofp32acc since E9.1-r2a, 2026-10-28; E9.1-r selected p2_sdpa_fast; stage 1 measured p3_qkv_gu)",
-    "contract_changes": "2026-10-28 E9.1-r (orchestrator-approved, person's geometry instruction): compute_grid 13x10 -> 12x10, text precision p3_qkv_gu -> p2_sdpa_fast, open_decisions.b1_s256 resolved without override. 2026-10-28 E9.1-r2a (orchestrator decision, E9.1-r review finding 4): text precision p2_sdpa_fast -> sdpa_nofp32acc (tie within noise on time; wider worst-case probe margin; no exp_approx). Logged in doc/prefill/01-baseline/work_log.md."
+    "contract_changes": "2026-10-28 E9.1-r (orchestrator-approved, person's geometry instruction): compute_grid 13x10 -> 12x10, text precision p3_qkv_gu -> p2_sdpa_fast, open_decisions.b1_s256 resolved without override. 2026-10-28 E9.1-r2a (orchestrator decision, E9.1-r review finding 4): text precision p2_sdpa_fast -> sdpa_nofp32acc (tie within noise on time; wider worst-case probe margin; no exp_approx). 2026-10-28 E9.2 commit 1 (orchestrator-approved): checkout.commit 4624946b1b -> ec3ca0e1c6 (12 x 10 re-baseline) and compute_grid_note updated. Logged in doc/prefill/01-baseline/work_log.md."
   },
   "hardware": {
     "part": "Blackhole P150a (tt-smi board_type p150a, board_id 0000040331911033, bus 0000:01:00.0)",
     "compute_grid": [12, 10],
-    "compute_grid_note": "Galaxy target grid (10 rows x 12 columns), person's instruction 2026-10-28; stage 1 was measured on the P150a's full 13 x 10. On the P150a, 12 x 10 is reached with the runtime option TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=11,9, set by tt/config.py (EMBEDDING_GEMMA2_GRID=12x10, default of tests/perf/prefill.py) before the first device open and checked with compute_with_storage_grid_size() == (12, 10). DispatchCoreConfig axis COL is already the Blackhole default and gives (13, 10); axis ROW is rejected without fabric tensix MUX. Tracy at 1 x 2048: 0 of 646 ops above 120 cores. Evidence: doc/prefill/01-baseline/work_log.md, 'E9.1-r1: compute grid 12 x 10'.",
+    "compute_grid_note": "Galaxy target grid (10 rows x 12 columns), person's instruction 2026-10-28; stage 1 was first measured on the P150a's full 13 x 10 and re-baselined at 12 x 10 (E9.1-r2b, commit ec3ca0e1c6; profiles at all 10 buckets: every forward op AVAILABLE WORKER CORE COUNT 120, max CORE COUNT 120). On the P150a, 12 x 10 is reached with the runtime option TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=11,9, set by tt/config.py (EMBEDDING_GEMMA2_GRID=12x10, default of tests/perf/prefill.py) before the first device open and checked with compute_with_storage_grid_size() == (12, 10). DispatchCoreConfig axis COL is already the Blackhole default and gives (13, 10); axis ROW is rejected without fabric tensix MUX. Tracy at 1 x 2048: 0 of 646 ops above 120 cores. Evidence: doc/prefill/01-baseline/work_log.md, 'E9.1-r1: compute grid 12 x 10'.",
     "chips_used": 1,
     "power_limit_w": 150,
     "power_limits_detail": "TDP limit 150 W (tt-smi limits.tdp_limit, TDP_LIMIT_MAX 0x96; hwmon power1_max 150000000 uW), TDC limit 200 A (curr1_max), board power limit 300 W (BOARD_POWER_LIMIT 0x12c), AICLK max 1350 MHz (AICLK_LIMIT_MAX 0x546). Default limits, not changed; optimize at these.",
