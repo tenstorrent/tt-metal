@@ -163,7 +163,7 @@ class MATMUL_ROW_MOP(TemplateParameter):
             and {formats.input_format, formats.input_format_B} == {DataFormat.Float16_b, DataFormat.Bfp8_b}
         ):
             return []
-        if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, max(ct_dim, rt_dim), dest_sync == DestSync.Full, min(ct_dim, rt_dim), in_format_b=formats.input_format_B):
+        if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, max(ct_dim, rt_dim), dest_sync == DestSync.Full, min(ct_dim, rt_dim), in_format_b=formats.input_format_B, ct=ct_dim, rt=rt_dim):
             return []
         if dest_sync == DestSync.Half and forced_form(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, rt_dim, ct_dim, False, sections, in_format_b=formats.input_format_B):
             return []
@@ -540,15 +540,16 @@ class MATMUL_FORM_KEYS(TemplateParameter):
             return [MATMUL_FORM_KEYS(2, DataFormat.Float32, True)]
         # cells where the keyed forms read slower than main's keep main's form (the unknown key), as the ttnn kernels do
         if math_fidelity is not None and dest_sync in (DestSync.Half, DestSync.Full) and dest_acc is not None:
-            from helpers.matmul_prod_keys import forced_form, main_form_cell
+            from helpers.matmul_prod_keys import forced_form, main_form_cell, mixed_main_form
 
             fp32_dest = dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats)
-            forced = (
+            # a LoFi cell that keeps main's form does not take a forced one
+            forced = "" if math_fidelity == MathFidelity.LoFi and mixed_main_form(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.input_format_B, formats.output_format, dest_sync == DestSync.Full, ct_dim, rt_dim) else (
                 forced_form(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, dest_sync == DestSync.Full, rt_dim, ct_dim, False, sections, in_format_b=formats.input_format_B)
             )
             if forced:
                 return [MATMUL_FORM_KEYS(1 if kt_dim == 1 else 2, formats.output_format, 0 < max(ct_dim, rt_dim) <= 8, False, forced)]
-            if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, False, max(ct_dim, rt_dim), dest_sync == DestSync.Full, min(ct_dim, rt_dim), in_format_b=formats.input_format_B):
+            if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, False, max(ct_dim, rt_dim), dest_sync == DestSync.Full, min(ct_dim, rt_dim), in_format_b=formats.input_format_B, ct=ct_dim, rt=rt_dim):
                 return [MATMUL_FORM_KEYS(0, formats.output_format, 0 < max(ct_dim, rt_dim) <= 8, unfused)]
         # the forms depend on k only as 1, 2 to 4 or 5 and more; one representative keeps the variant count down
         return [
@@ -670,7 +671,7 @@ class MATMUL_UNPACK_TTSYNC(TemplateParameter):
             return []
         from helpers.matmul_prod_keys import mixed_main_form
 
-        if mixed_main_form(math_fidelity, kt_dim, dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats), formats.input_format, formats.input_format_B, formats.output_format, dest_sync == DestSync.Full):
+        if mixed_main_form(math_fidelity, kt_dim, dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats), formats.input_format, formats.input_format_B, formats.output_format, dest_sync == DestSync.Full, ct_dim, rt_dim):
             return []
         if MATMUL_K_LOOP.for_block(formats, dest_acc, math_fidelity, ct_dim, rt_dim, kt_dim):
             return []

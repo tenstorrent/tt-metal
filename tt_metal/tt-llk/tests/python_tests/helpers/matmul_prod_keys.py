@@ -97,21 +97,47 @@ def _cell_hit(cells, fidelity, kb, fp32_dest, in_format, out_format, pack_format
     return False
 
 
-def mixed_main_form(fidelity, kb, fp32_dest, in_format, in_format_b, out_format, full_sync) -> bool:
+# LoFi, half sync, 16-bit DEST cells of a Float16_b or Float32 in1 against a block float in0 that read 0.2 to 11 cycles behind main with the keyed forms
+# (in1, in0, output, k steps, ct, rt)
+_LOFI_MAIN_CELLS = {
+    (DataFormat.Float16_b, DataFormat.Bfp8_b, DataFormat.Float32, 4, 5, 1),
+    (DataFormat.Float16_b, DataFormat.Bfp8_b, DataFormat.Float32, 32, 5, 1),
+    (DataFormat.Float32, DataFormat.Bfp8_b, DataFormat.Float32, 32, 6, 1),
+    (DataFormat.Float32, DataFormat.Bfp4_b, DataFormat.Bfp4_b, 1, 4, 2),
+    (DataFormat.Float32, DataFormat.Bfp4_b, DataFormat.Float32, 4, 2, 1),
+    (DataFormat.Float32, DataFormat.Bfp8_b, DataFormat.Bfp4_b, 1, 2, 4),
+}
+
+
+def mixed_main_form(fidelity, kb, fp32_dest, in_format, in_format_b, out_format, full_sync, ct=0, rt=0) -> bool:
     """matmul_mixed_main_form of llk_matmul_forms.h; in_format is in1 (SrcA), in_format_b is in0 (SrcB)."""
-    if in_format_b is None or fidelity != MathFidelity.HiFi2:
+    if in_format_b is None:
         return False
     block = (DataFormat.Bfp8_b, DataFormat.Bfp4_b)
+    if fidelity == MathFidelity.LoFi:
+        return not full_sync and not fp32_dest and ct > 0 and (in_format, in_format_b, out_format, kb, ct, rt) in _LOFI_MAIN_CELLS
+    if fidelity != MathFidelity.HiFi2:
+        return False
+    f32_in1 = in_format == DataFormat.Float32 and in_format_b in block
+    if f32_in1 and ct > 0:
+        # Float32 in in1: the keyed forms win on rows of 3 tiles or fewer and lose on wider rows
+        keyed = (
+            (ct < 4 and not (full_sync and kb <= 4 and ct == 1 and rt == 1) and not (not full_sync and kb <= 4 and ct == 3 and rt == 1))
+            if kb > 1
+            else not (ct >= 4 and rt >= 4) and not (not full_sync and ct == 1 and rt == 1)
+        )
+        f32_in1 = not keyed
+    f32_in0_half_k1 = in_format_b == DataFormat.Float32 and in_format in block and not full_sync and kb == 1
     return (
-        (in_format_b == DataFormat.Float32 and in_format in block)
-        or (in_format == DataFormat.Float32 and in_format_b in block)
+        f32_in1
+        or f32_in0_half_k1
         or (not fp32_dest and kb == 1 and not full_sync and in_format == DataFormat.Bfp8_b and in_format_b == DataFormat.Float16_b and out_format == DataFormat.Float32)
     )
 
 
-def main_form_cell(fidelity, kb, fp32_dest, in_format, out_format, pack_format, several_blocks=False, row_tiles=0, full_sync=False, min_side=99, in_format_b=None) -> bool:
+def main_form_cell(fidelity, kb, fp32_dest, in_format, out_format, pack_format, several_blocks=False, row_tiles=0, full_sync=False, min_side=99, in_format_b=None, ct=0, rt=0) -> bool:
     """matmul_main_form_cell_selected of llk_matmul_forms.h; the table cells for equal in0 and in1 formats, in_format_b (in0) given for a mixed pair."""
-    if mixed_main_form(fidelity, kb, fp32_dest, in_format, in_format_b, out_format, full_sync):
+    if mixed_main_form(fidelity, kb, fp32_dest, in_format, in_format_b, out_format, full_sync, ct, rt):
         return True
     return _cell_hit(_MAIN_CELLS, fidelity, kb, fp32_dest, in_format, out_format, pack_format, several_blocks, row_tiles, full_sync, min_side)
 
