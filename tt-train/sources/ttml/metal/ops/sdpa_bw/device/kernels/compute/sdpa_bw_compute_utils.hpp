@@ -104,7 +104,10 @@ void apply_statistics_inplace(const uint32_t cb_attention_weights, const uint32_
 // Loads lse from cb_intermediates via column-broadcast and computes in-place using SFPU.
 // Scores stay in DST at full FP32 — no CB roundtrip, no TF32 truncation.
 // Must be called inside a tile_regs_acquire/commit block, after matmul + mask.
-void apply_softmax_statistics_on_dst(const uint32_t scores_reg, const uint32_t cb_intermediates) {
+// `lse_tile_idx` selects the lse tile inside cb_intermediates (grouped-heads path keeps one
+// fronted tile per head).
+void apply_softmax_statistics_on_dst(
+    const uint32_t scores_reg, const uint32_t cb_intermediates, const uint32_t lse_tile_idx = 0U) {
     const uint32_t lse_reg = scores_reg + 1U;
 
     // Reconfigure only SrcB for the B2D broadcast (Float32 intermediates).
@@ -119,7 +122,7 @@ void apply_softmax_statistics_on_dst(const uint32_t scores_reg, const uint32_t c
     MATH((llk_math_eltwise_unary_datacopy_init<ckernel::DataCopyType::B2D, DST_ACCUM_MODE, BroadcastType::COL>(
         cb_intermediates)));
 
-    unary_bcast<BroadcastType::COL>(cb_intermediates, /* tile_idx */ 0, lse_reg);
+    unary_bcast<BroadcastType::COL>(cb_intermediates, lse_tile_idx, lse_reg);
 
     sub_binary_tile_init();
     sub_binary_tile(scores_reg, lse_reg, scores_reg);
@@ -199,13 +202,17 @@ void compute_u_scalar_row(
 // Computes gradient w.r.t. attention weights: dP = dO @ V^T
 // This is the first step in the backward chain from output gradient to score gradient.
 // Input: dO (grad_output) and V (value), Output: dP (grad_attn_weights)
+// `grad_output_tile_base` offsets the dO row inside cb_grad_output (grouped-heads path keeps
+// one fronted dO row per head).
 void compute_grad_attn_weights(
     const uint32_t cb_grad_output,
     const uint32_t cb_value,
     const uint32_t tiles_per_row,
     const uint32_t cb_grad_attn_weights,
     const uint32_t cb_prev_pack,
-    const uint32_t scaler_bits) {
+    const uint32_t scaler_bits,
+    const uint32_t grad_output_tile_base = 0U,
+    const uint32_t value_tile_base = 0U) {
     reconfig_data_format(cb_grad_output, cb_value);
     // This call is required to set up the matmul correctly
     matmul_init(cb_grad_output, cb_value, /* transpose */ 1);
@@ -214,8 +221,8 @@ void compute_grad_attn_weights(
         matmul_tiles(
             cb_grad_output,
             cb_value,
-            /* tile_idx */ tile_idx,
-            /* tile_idx */ tile_idx,
+            /* tile_idx */ grad_output_tile_base + tile_idx,
+            /* tile_idx */ value_tile_base + tile_idx,
             /* dst_reg_idx*/ 0);
     }
     tile_regs_commit();
@@ -236,14 +243,17 @@ void compute_grad_attn_weights(
 //   - dP = grad_attn_weights (gradient from dO @ V^T)
 //   - u = u_scalar_row (per-row sum: sum(dO * O))
 //   - scale = 1/sqrt(d_k) applied here for numerical stability in subsequent matmuls
+// `u_tile_idx` selects the u tile inside cb_u_scalar_row (grouped-heads path keeps one fronted
+// u tile per head).
 void compute_grad_scores(
     const uint32_t cb_grad_attn_weights,
     const uint32_t cb_attention_weights,
     const uint32_t cb_u_scalar_row,
     const uint32_t scaler_bits,
-    /* output */ const uint32_t cb_grad_scores) {
+    /* output */ const uint32_t cb_grad_scores,
+    const uint32_t u_tile_idx = 0U) {
     cb_wait_front(cb_grad_attn_weights, onetile);
-    cb_wait_front(cb_u_scalar_row, onetile);
+    cb_wait_front(cb_u_scalar_row, u_tile_idx + 1U);
 
     const uint32_t grad_reg = 0;
     const uint32_t attn_weights_reg = 1U;
@@ -255,7 +265,7 @@ void compute_grad_scores(
         cb_grad_attn_weights,
         cb_u_scalar_row,
         /* tile_idx */ 0,
-        /* tile_idx */ 0,
+        /* tile_idx */ u_tile_idx,
         grad_reg);
 
     reconfig_data_format_srca(cb_grad_attn_weights, cb_attention_weights);

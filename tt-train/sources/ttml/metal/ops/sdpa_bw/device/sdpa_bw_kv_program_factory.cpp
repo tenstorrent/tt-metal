@@ -11,6 +11,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
+#include "metal/common/sdpa_grouped_heads.hpp"
 
 namespace {
 
@@ -60,6 +61,7 @@ constexpr uint32_t kNumOfIntermCBTiles = 1U;  // single FP32 logsumexp tile per 
 const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
 const std::string kCausalMaskDefKey = "CAUSAL_MASK";
 const std::string kBalancedParallelismDefKey = "BALANCED_PARALLELISM";
+const std::string kGroupedKvRowsDefKey = "GROUPED_KV_ROWS";
 
 /**
  * Calculate work-balanced pair distribution for causal SDPA backward KV.
@@ -274,9 +276,43 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     // Balanced Parallelism Decision
     // -------------------------------------------------------------------------
     const uint32_t pairs_per_seq = St / 2;
-    const uint32_t total_pairs = NC * pairs_per_seq;
+    const uint32_t total_pairs_per_row = NC * pairs_per_seq;
     const bool use_balanced_parallelism = (args.mask_type == AttentionMaskType::Causal) && (St % 2 == 0) &&
                                           (total_rows_to_process > num_available_cores) && (St > 0);
+
+    const uint32_t block_size_q = get_block_size(qWt, 4U);
+    const uint32_t block_size_v = get_block_size(vWt, 4U);
+
+    const auto data_format = input_data_format;
+    const auto precise_data_format = tt::DataFormat::Float32;
+
+    // -------------------------------------------------------------------------
+    // Multi-row K/V items (balanced causal only): one work item holds kv_rows_per_item
+    // consecutive K/V rows and their dK/dV accumulators, so the causal Q / dO / lse / u suffix
+    // is streamed from DRAM once per item instead of once per K/V row.
+    // See metal/common/sdpa_grouped_heads.hpp for the gate.
+    // -------------------------------------------------------------------------
+    const uint64_t available_L1_in_bytes =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const auto grouped_fits_in_l1 = [&](uint32_t rows) {
+        const uint64_t bf16_tile = bfloat16_single_tile_size_bytes;
+        const uint64_t fp32_tile = float32_single_tile_size_bytes;
+        const uint64_t required =
+            /* grad_output, query (2 rows each) */ 2ULL * (vWt + qWt) * bf16_tile +
+            /* key, value (2x rows each) */ 2ULL * rows * (kWt + vWt) * bf16_tile +
+            /* causal mask */ 2ULL * bf16_tile +
+            /* intermediates */ 2ULL * fp32_tile +
+            /* matmul reduce, P, dP, dS^T, P^T, u */ 6ULL * fp32_tile +
+            /* dK / dV accumulators (rows each) */ uint64_t{rows} * (kWt + vWt) * fp32_tile +
+            /* grad_key, grad_value outputs (2 rows each) */ 2ULL * (kWt + vWt) * bf16_tile;
+        return required <= available_L1_in_bytes;
+    };
+    const uint32_t kv_rows_per_item =
+        use_balanced_parallelism
+            ? ttml::metal::sdpa::pick_kv_rows_per_item(St, total_pairs_per_row, num_available_cores, grouped_fits_in_l1)
+            : 1U;
+    const bool use_grouped_kv_rows = kv_rows_per_item > 1U;
+    const uint32_t total_pairs = total_pairs_per_row / kv_rows_per_item;
 
     uint32_t num_cores = 0;
     tt::tt_metal::CoreRangeSet all_cores{};
@@ -303,12 +339,6 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         num_rows_per_core_group_2 = std::get<5>(work_split);
     }
 
-    const uint32_t block_size_q = get_block_size(qWt, 4U);
-    const uint32_t block_size_v = get_block_size(vWt, 4U);
-
-    const auto data_format = input_data_format;
-    const auto precise_data_format = tt::DataFormat::Float32;
-
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
@@ -319,11 +349,11 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
     [[maybe_unused]] auto cb_query = create_circular_buffer(
         program, all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
 
-    [[maybe_unused]] auto cb_key =
-        create_circular_buffer(program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kWt);
+    [[maybe_unused]] auto cb_key = create_circular_buffer(
+        program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kv_rows_per_item * kWt);
 
     [[maybe_unused]] auto cb_value = create_circular_buffer(
-        program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt);
+        program, all_cores, kValueCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kv_rows_per_item * vWt);
 
     // Create mask buffer if using attention mask from DRAM or generating causal mask on-the-fly
     // Not needed for AttentionMaskType::None
@@ -350,10 +380,20 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         kSingleTileBuffer);
 
     [[maybe_unused]] auto cb_grad_value_accum = create_circular_buffer(
-        program, all_cores, kGradValueAccumCbIndex, precise_data_format, float32_single_tile_size_bytes, vWt);
+        program,
+        all_cores,
+        kGradValueAccumCbIndex,
+        precise_data_format,
+        float32_single_tile_size_bytes,
+        kv_rows_per_item * vWt);
 
     [[maybe_unused]] auto cb_grad_key_accum = create_circular_buffer(
-        program, all_cores, kGradKeyAccumCbIndex, precise_data_format, float32_single_tile_size_bytes, kWt);
+        program,
+        all_cores,
+        kGradKeyAccumCbIndex,
+        precise_data_format,
+        float32_single_tile_size_bytes,
+        kv_rows_per_item * kWt);
 
     [[maybe_unused]] auto cb_attn_weights_transposed = create_circular_buffer(
         program,
@@ -444,6 +484,11 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
         writer_defines[kBalancedParallelismDefKey] = "1";
         compute_defines[kBalancedParallelismDefKey] = "1";
     }
+    if (use_grouped_kv_rows) {
+        reader_defines[kGroupedKvRowsDefKey] = "1";
+        writer_defines[kGroupedKvRowsDefKey] = "1";
+        compute_defines[kGroupedKvRowsDefKey] = "1";
+    }
 
     // Per-arch math fidelity. Wormhole has HW bug TT #38306: HiFi4 + fp32_dest_acc + matmul_block
     // corrupts FP32 dest accumulation, so we use HiFi3 there. Blackhole is unaffected and uses HiFi4.
@@ -454,12 +499,13 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
 
     // Reader compile-time arguments
     std::vector<uint32_t> reader_compile_args = {
-        qWt,              // 0: Q/K width in tiles (Q@K^T path)
-        kWt,              // 1: key width in tiles (K read)
-        vWt,              // 2: value/dO/O width in tiles
-        St,               // 3: sequence length in tiles
-        qNH,              // 4: number of query heads
-        heads_per_group,  // 5: heads per group
+        qWt,               // 0: Q/K width in tiles (Q@K^T path)
+        kWt,               // 1: key width in tiles (K read)
+        vWt,               // 2: value/dO/O width in tiles
+        St,                // 3: sequence length in tiles
+        qNH,               // 4: number of query heads
+        heads_per_group,   // 5: heads per group
+        kv_rows_per_item,  // 6: K/V rows per work item (1 unless GROUPED_KV_ROWS)
     };
     tt::tt_metal::TensorAccessorArgs(grad_output_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(query_buffer).append_to(reader_compile_args);
@@ -473,11 +519,12 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
 
     // Writer compile-time arguments
     std::vector<uint32_t> writer_compile_args = {
-        kWt,             // 0: key width in tiles (grad_K)
-        vWt,             // 1: value width in tiles (grad_V)
-        St,              // 2: sequence length in tiles
-        qNH,             // 3: number of query heads
-        heads_per_group  // 4: heads per group
+        kWt,              // 0: key width in tiles (grad_K)
+        vWt,              // 1: value width in tiles (grad_V)
+        St,               // 2: sequence length in tiles
+        qNH,              // 3: number of query heads
+        heads_per_group,  // 4: heads per group
+        kv_rows_per_item  // 5: K/V rows per work item (1 unless GROUPED_KV_ROWS)
     };
     tt::tt_metal::TensorAccessorArgs(grad_key_buffer).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(grad_value_buffer).append_to(writer_compile_args);
@@ -514,7 +561,8 @@ SDPABackwardKVProgramFactory::cached_program_t SDPABackwardKVProgramFactory::cre
             heads_per_group,     // 6: heads per group
             scaler,              // 7: scale factor
             minus_one,           // 8: mask transform constant
-            custom_inf           // 9: used to transform mask from 0/-1 to 0/-inf
+            custom_inf,          // 9: used to transform mask from 0/-1 to 0/-inf
+            kv_rows_per_item     // 10: K/V rows per work item (used only with GROUPED_KV_ROWS)
         };
 
         kernels.compute_group_1 = tt::tt_metal::CreateKernel(

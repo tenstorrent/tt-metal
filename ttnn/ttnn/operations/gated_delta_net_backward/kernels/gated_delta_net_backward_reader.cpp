@@ -291,8 +291,8 @@ static __attribute__((noipa)) void read_flat_block(
     uint32_t h,
     uint32_t dt,
     uint32_t d0,
-    uint32_t dn) {
-    constexpr uint32_t tile_bytes = 32 * 32 * ESZ;
+    uint32_t dn,
+    uint32_t tile_bytes = 32 * 32 * ESZ) {
     cb_reserve_back(cb, block_pages);
     const uint32_t dst = get_write_ptr(cb);
     for (uint32_t r = 0; r < Ct; ++r) {
@@ -367,6 +367,7 @@ void kernel_main() {
     constexpr auto dhta = TensorAccessorArgs<h0a.next_compile_time_args_offset()>();
     constexpr auto sca = TensorAccessorArgs<dhta.next_compile_time_args_offset()>();
     constexpr auto scina = TensorAccessorArgs<sca.next_compile_time_args_offset()>();
+    constexpr auto tinva = TensorAccessorArgs<scina.next_compile_time_args_offset()>();
 
     const auto q_acc = TensorAccessor(qa, q_addr, in_tile);
     const auto k_acc = TensorAccessor(ka, k_addr, in_tile);
@@ -378,6 +379,9 @@ void kernel_main() {
     [[maybe_unused]] const auto dht_acc = TensorAccessor(dhta, dht_addr, in_tile);
     const auto sc_acc = TensorAccessor(sca, sc_addr, f32_tile);
     const auto scin_acc = TensorAccessor(scina, scin_addr, in_tile);
+    // After the scan-owner list: the caller-supplied T_inv (HAS_TINV), or 0.
+    const uint32_t tinv_addr = get_arg_val<uint32_t>(16 + num_owned);
+    [[maybe_unused]] const auto tinv_acc = TensorAccessor(tinva, tinv_addr, f32_tile);
 
     build_constant_tiles(scale_bits);
 
@@ -416,6 +420,11 @@ void kernel_main() {
             gather_gate(b_acc, in_tile, Ct, gbase, b, t0, h);
         }
         cb_push_back(cb_gatein, 2 * Ct);
+
+        if constexpr (HAS_TINV) {
+            // [Ct, Ct] block of head h out of the token-major [B,T,HV*C] f32 T_inv.
+            read_flat_block(tinv_acc, cb_tinvin, Ct * Ct, b, tt0, gH * Ct, h, Ct, 0, Ct, f32_tile);
+        }
 
         for (uint32_t vb = 0; vb < NVB; ++vb) {
             if constexpr (FLAT) {

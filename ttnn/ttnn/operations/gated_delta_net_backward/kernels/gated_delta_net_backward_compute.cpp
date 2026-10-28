@@ -542,23 +542,30 @@ void kernel_main() {
 
         // ---- ut_matrix_block -------------------------------------------
         p_mbc(cb_kb, cb_veca, cb_kc, 0, VA_BETA, Ct, Kt, 1, CtKt);
-        mmT(cb_kc, cb_kb, cb_cc, 0, 0, Ct, Kt, Ct);
-        PMUL(cb_cc, cb_cbL, cb_cc, 0, 0, CtCt, 0);
-        PMUL(cb_cc, cb_const, cb_cc, 0, CST_NSTRICT, CtCt, 0);  // cb_cc = A
+        if constexpr (HAS_TINV) {
+            // T_inv from the forward (stable block inversion); see HAS_TINV in gdn_common.hpp.
+            cb_wait_front(cb_tinvin, CtCt);
+            PCOPY(cb_tinvin, cb_ca, 0, CtCt, CtCt);
+            cb_pop_front(cb_tinvin, CtCt);
+        } else {
+            mmT(cb_kc, cb_kb, cb_cc, 0, 0, Ct, Kt, Ct);
+            PMUL(cb_cc, cb_cbL, cb_cc, 0, 0, CtCt, 0);
+            PMUL(cb_cc, cb_const, cb_cc, 0, CST_NSTRICT, CtCt, 0);  // cb_cc = A
 
-        // ---- ut_inverse_block (Neumann doubling) -----------------------
-        PCOPY(cb_cc, cb_cd, 0, CtCt, CtCt);
-        PADD(cb_const, cb_cc, cb_ca, CST_EYE, 0, CtCt, CtCt);
-        cb_pop_front(cb_cc, CtCt);
-        for (uint32_t j = 1; j < NEUMANN_STEPS; ++j) {
-            PCOPY(cb_cd, cb_ce, 0, CtCt, CtCt);
-            mm_ip(cb_cd, cb_ce, cb_cd, 0, 0, Ct, Ct, Ct);  // Pw <- Pw @ Pw
-            cb_pop_front(cb_ce, CtCt);
-            mm(cb_ca, cb_cd, cb_ce, 0, 0, Ct, Ct, Ct);  // Z = Tinv @ Pw
-            PADD(cb_ca, cb_ce, cb_ca, 0, 0, CtCt, 0);
-            cb_pop_front(cb_ce, CtCt);
+            // ---- ut_inverse_block (Neumann doubling) -------------------
+            PCOPY(cb_cc, cb_cd, 0, CtCt, CtCt);
+            PADD(cb_const, cb_cc, cb_ca, CST_EYE, 0, CtCt, CtCt);
+            cb_pop_front(cb_cc, CtCt);
+            for (uint32_t j = 1; j < NEUMANN_STEPS; ++j) {
+                PCOPY(cb_cd, cb_ce, 0, CtCt, CtCt);
+                mm_ip(cb_cd, cb_ce, cb_cd, 0, 0, Ct, Ct, Ct);  // Pw <- Pw @ Pw
+                cb_pop_front(cb_ce, CtCt);
+                mm(cb_ca, cb_cd, cb_ce, 0, 0, Ct, Ct, Ct);  // Z = Tinv @ Pw
+                PADD(cb_ca, cb_ce, cb_ca, 0, 0, CtCt, 0);
+                cb_pop_front(cb_ce, CtCt);
+            }
+            cb_pop_front(cb_cd, CtCt);
         }
-        cb_pop_front(cb_cd, CtCt);
 
         // ---- chunk_prep_products_block ---------------------------------
         p_mbc(cb_kc, cb_veca, cb_kc, 0, VA_GAMMA, Ct, Kt, 1, 0);

@@ -61,9 +61,9 @@ void kernel_main() {
 
         for (uint32_t c = 0; c < sl.ncols; c += block) {
             const uint32_t n = (c + block <= sl.ncols) ? block : (sl.ncols - c);
-            cb_wait_front(cb::a, n);
-            cb_wait_front(cb::gamma, n);
-            cb_wait_front(cb::dy, n);
+            cb_wait_front(cb::a, block);
+            cb_wait_front(cb::gamma, block);
+            cb_wait_front(cb::dy, block);
             for (uint32_t i = 0; i < n; ++i) {
                 // dL_da = inv * (gamma * dy - t * a)
                 tile_regs_acquire();
@@ -93,9 +93,18 @@ void kernel_main() {
                 pack_and_push(0, cb::dgamma);
 #endif
             }
-            cb_pop_front(cb::a, n);
-            cb_pop_front(cb::gamma, n);
-            cb_pop_front(cb::dy, n);
+            if (n < block) {
+                // Keep the output streams block-aligned; the writer only drains the first n tiles.
+                cb_reserve_back(cb::dx, block - n);
+                cb_push_back(cb::dx, block - n);
+#ifdef COMPUTE_DGAMMA
+                cb_reserve_back(cb::dgamma, block - n);
+                cb_push_back(cb::dgamma, block - n);
+#endif
+            }
+            cb_pop_front(cb::a, block);
+            cb_pop_front(cb::gamma, block);
+            cb_pop_front(cb::dy, block);
         }
 
         cb_pop_front(cb::rms, 1);

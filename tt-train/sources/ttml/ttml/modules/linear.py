@@ -93,6 +93,9 @@ class ColumnParallelLinear(AbstractModuleBase):
             the output is replicated across TP devices (needed when the consumer
             expects an un-sharded tensor, e.g. the final LM-head projection).
         axis_name: Mesh axis used for tensor parallelism.
+        sequence_parallel: The input comes from a sequence all-gather, whose
+            backward reduce-scatters the (partial) input gradient, so the
+            replicating broadcast -- whose backward all-reduces it -- is skipped.
     """
 
     def __init__(
@@ -104,12 +107,14 @@ class ColumnParallelLinear(AbstractModuleBase):
         bias_init: Callable | None = None,
         gather_output: bool = False,
         axis_name: str = "tp",
+        sequence_parallel: bool = False,
     ) -> None:
         super().__init__()
 
         self.in_features = in_features
         self.out_features = out_features
         self.gather_output = gather_output
+        self.sequence_parallel = sequence_parallel
         self.axis_name = axis_name
         self.cluster_axis = ttml.mesh().axis_index(axis_name)
 
@@ -133,8 +138,9 @@ class ColumnParallelLinear(AbstractModuleBase):
             self.bias = None
 
     def forward(self, x):
-        # Broadcast ensures the input is replicated across all TP devices.
-        x = ttml.ops.distributed.broadcast(x, self.cluster_axis)
+        if not self.sequence_parallel:
+            # Broadcast ensures the input is replicated across all TP devices.
+            x = ttml.ops.distributed.broadcast(x, self.cluster_axis)
         bias_t = self.bias.tensor if self.bias is not None else None
         x = ttml.ops.linear.linear(x, self.weight.tensor, bias_t)
         if self.gather_output:
@@ -158,6 +164,9 @@ class RowParallelLinear(AbstractModuleBase):
             ``ColumnParallelLinear`` with ``gather_output=False``).  When ``False``
             a scatter is inserted to partition the input.
         axis_name: Mesh axis used for tensor parallelism.
+        sequence_parallel: Reduce-scatter the partial products along the
+            sequence (dim 2) instead of all-reducing them, leaving each device
+            its slice of the sequence. Requires ``input_is_parallel``.
     """
 
     def __init__(
@@ -169,13 +178,17 @@ class RowParallelLinear(AbstractModuleBase):
         bias_init: Callable | None = None,
         input_is_parallel: bool = False,
         axis_name: str = "tp",
+        sequence_parallel: bool = False,
     ) -> None:
         super().__init__()
 
+        if sequence_parallel and not input_is_parallel:
+            raise ValueError("RowParallelLinear: sequence_parallel requires input_is_parallel")
         self.in_features = in_features
         self.out_features = out_features
         # TODO: use ttnn.Tensor.tensor_topology() once CCL ops will properly update this property
         self.input_is_parallel = input_is_parallel
+        self.sequence_parallel = sequence_parallel
         self.axis_name = axis_name
         self.cluster_axis = ttml.mesh().axis_index(axis_name)
 
@@ -201,8 +214,12 @@ class RowParallelLinear(AbstractModuleBase):
             # Split the input along the feature dimension across TP devices.
             x = ttml.ops.distributed.scatter(x, 3, self.cluster_axis)
         x = ttml.ops.linear.linear(x, self.weight.tensor, None)
-        # Sum partial products across TP devices to obtain the full result.
-        x = ttml.ops.distributed.all_reduce(x, self.input_is_parallel, self.cluster_axis)
+        if self.sequence_parallel:
+            # Sum partial products and keep this device's slice of the sequence.
+            x = ttml.ops.distributed.reduce_scatter(x, 2, self.cluster_axis)
+        else:
+            # Sum partial products across TP devices to obtain the full result.
+            x = ttml.ops.distributed.all_reduce(x, self.input_is_parallel, self.cluster_axis)
         # Bias is replicated, so it is safe to add after the all-reduce.
         if self.bias is not None:
             x = ttml.ops.binary.add(x, self.bias.tensor)

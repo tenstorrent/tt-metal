@@ -1,0 +1,47 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+// rmsnorm_fw phase A: per (tile-row, slice) work item
+//   partial = sum_{tiles j in slice} x_j * x_j     (elementwise; the last tile masked to C)
+// One fp32 tile per item; phase B sums the slices and row-reduces.
+
+#include "rmsnorm_fw_compute_common.hpp"
+
+void kernel_main() {
+    compute_kernel_hw_startup(cb::x, cb::zero, cb::partial_out);
+    cb_wait_front(cb::zero, 1);
+#ifdef DO_MASK_W
+    cb_wait_front(cb::mask, 1);
+#endif
+
+    for (uint32_t item = 0; item < work_count; ++item) {
+        const uint32_t work_start = get_arg_val<uint32_t>(0);
+        const SliceGeometry sl = slice_for(work_start + item);
+
+        tile_regs_acquire();
+        load_tile(cb::zero, 0, 0);  // accumulator
+        for (uint32_t c = 0; c < sl.ncols; c += block) {
+            const uint32_t n = (c + block <= sl.ncols) ? block : (sl.ncols - c);
+            cb_wait_front(cb::x, block);
+            for (uint32_t i = 0; i < n; ++i) {
+                load_tile(cb::x, i, 1);
+                load_tile(cb::x, i, 2);
+                mul_binary_tile_init();
+                mul_binary_tile(1, 2, 1);
+#ifdef DO_MASK_W
+                if (sl.col0 + c + i + 1 == Wt) {
+                    load_tile(cb::mask, 0, 2);
+                    mul_binary_tile_init();
+                    mul_binary_tile(1, 2, 1);
+                }
+#endif
+                add_binary_tile_init();
+                add_binary_tile(0, 1, 0);
+            }
+            cb_pop_front(cb::x, block);
+        }
+        tile_regs_commit();
+        pack_and_push(0, cb::partial_out);
+    }
+}

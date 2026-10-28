@@ -27,6 +27,9 @@
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
 #include "sdpa_bw_compute_utils.hpp"
+#ifdef GROUPED_KV_ROWS
+#include "sdpa_bw_grouped_utils.hpp"
+#endif
 
 // ----------------------------------------------------------------------
 // SDPA Backward Compute Kernel for Key and Value Gradients (dK, dV)
@@ -75,6 +78,9 @@ constexpr uint32_t heads_per_group = get_compile_time_arg_val(6);  // number of 
 constexpr uint32_t scaler_bits = get_compile_time_arg_val(7);      // sqrt(Et) - sdpa scaler factor
 constexpr uint32_t minus_one_bits = get_compile_time_arg_val(8);   // used to transform mask from 1/0 to 0/-1
 constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(9);  // used to transform mask from 0/-1 to 0/-inf
+#ifdef GROUPED_KV_ROWS
+constexpr uint32_t kv_rows_per_item = get_compile_time_arg_val(10);  // consecutive K/V tile-rows per work item
+#endif
 
 constexpr uint32_t cb_grad_output = tt::CBIndex::c_0;  // Gradient w.r.t. output
 constexpr uint32_t cb_query = tt::CBIndex::c_2;        // Original query
@@ -228,6 +234,147 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
     cb_pop_front(cb_value, v_tiles);
 }
 
+#ifdef GROUPED_KV_ROWS
+/**
+ * Process one grouped work item: kv_rows_per_item consecutive K/V tile-rows [k0, k0 + R) of one
+ * (batch, kv_head). The reader stages all R K/V rows once and streams the causal Q / dO / lse / u
+ * suffix starting at row k0 once (per Q head); every Q row is applied to each K/V row r <= h.
+ * Per-row math is identical to process_single_row; see sdpa_bw_grouped_utils.hpp for the
+ * accumulator layout.
+ *
+ * @param global_item_idx Item index: (batch * kv_heads + kv_head) * (Ht / R) + block index.
+ */
+FORCE_INLINE void process_grouped_item(uint32_t global_item_idx) {
+    constexpr uint32_t R = kv_rows_per_item;
+    constexpr uint32_t items_per_seq = Ht / R;
+    constexpr uint32_t k_tiles_per_item = R * qk_tiles;
+    constexpr uint32_t v_tiles_per_item = R * v_tiles;
+
+    cb_wait_front(cb_key, k_tiles_per_item);
+    cb_wait_front(cb_value, v_tiles_per_item);
+
+    // Last PACK targets of the previous item were the BF16 outputs; everything inside the loop
+    // packs Float32 (see the comment in process_single_row).
+    pack_reconfig_data_format(cb_grad_key, cb_attention_weights);
+
+    const uint32_t k0 = (global_item_idx % items_per_seq) * R;  // first K/V tile-row of the item
+    const uint32_t num_q_tiles_to_process = Ht - k0;            // causal suffix shared by all R rows
+
+    cb_reserve_back(cb_grad_value_accum, v_tiles_per_item);
+    cb_reserve_back(cb_grad_key_accum, k_tiles_per_item);
+
+    constexpr uint32_t matmul_accum_reg = 0;
+    for (uint32_t head_idx = 0; head_idx < heads_per_group; ++head_idx) {
+        for (uint32_t q_idx = 0; q_idx < num_q_tiles_to_process; ++q_idx) {
+            const uint32_t h = k0 + q_idx;
+
+            cb_wait_front(cb_query, qk_tiles);
+            cb_wait_front(cb_grad_output, v_tiles);
+            cb_wait_front(cb_intermediates, num_of_interm_tiles);
+
+            // K/V rows k0 + r with r <= q_idx are at or below the diagonal for this Q row.
+            const uint32_t rows_active = (q_idx + 1 < R) ? (q_idx + 1) : R;
+            for (uint32_t r = 0; r < rows_active; ++r) {
+                const uint32_t k_row_tile = k0 + r;
+
+                reconfig_data_format(cb_query, cb_key);
+                matmul_init(cb_query, cb_key, /* transpose */ 1);
+                tile_regs_acquire();
+                for (uint32_t tile_idx = 0; tile_idx < qk_tiles; ++tile_idx) {
+                    matmul_tiles(
+                        cb_query,
+                        cb_key,
+                        /* tile_idx */ tile_idx,
+                        /* tile_idx */ r * qk_tiles + tile_idx,
+                        /* dst_reg_idx*/ matmul_accum_reg);
+                }
+
+                if (h == k_row_tile) {
+                    apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
+                } else {
+                    binop_with_scalar_tile_init();
+                    mul_unary_tile(matmul_accum_reg, scaler_bits);
+                }
+
+                apply_softmax_statistics_on_dst(matmul_accum_reg, cb_intermediates);
+
+                tile_regs_commit();
+                tile_regs_wait();
+                cb_reserve_back(cb_attention_weights, onetile);
+                pack_reconfig_data_format(cb_grad_key_accum, cb_attention_weights);
+                pack_tile(matmul_accum_reg, cb_attention_weights);
+                tile_regs_release();
+                cb_push_back(cb_attention_weights, onetile);
+
+                // dP = dO @ V_r^T
+                compute_grad_attn_weights(
+                    cb_grad_output,
+                    cb_value,
+                    v_tiles,
+                    cb_grad_attn_weights,
+                    cb_attention_weights,
+                    scaler_bits,
+                    /* grad_output_tile_base */ 0,
+                    /* value_tile_base */ r * v_tiles);
+
+                compute_grad_scores_and_transposes(
+                    cb_grad_attn_weights,
+                    cb_attention_weights,
+                    cb_u_scalar_row,
+                    scaler_bits,
+                    cb_grad_scores_transposed,
+                    cb_attn_weights_transposed);
+
+                // Row r is first touched at its own diagonal (q_idx == r) by head 0.
+                const bool do_accumulate = (head_idx > 0) || (q_idx > r);
+
+                // dV_r += P^T @ dO
+                grouped_accumulate_row_matmul(
+                    cb_attn_weights_transposed,
+                    cb_grad_output,
+                    cb_grad_value_accum,
+                    v_tiles,
+                    block_size_v,
+                    /* accum_tile_base */ r * v_tiles,
+                    do_accumulate);
+
+                // dK_r += dS^T @ Q
+                grouped_accumulate_row_matmul(
+                    cb_grad_scores_transposed,
+                    cb_query,
+                    cb_grad_key_accum,
+                    qk_tiles,
+                    block_size_q,
+                    /* accum_tile_base */ r * qk_tiles,
+                    do_accumulate);
+
+                cb_pop_front(cb_grad_attn_weights, onetile);
+                cb_pop_front(cb_attention_weights, onetile);
+            }
+
+            cb_pop_front(cb_u_scalar_row, onetile);
+            cb_pop_front(cb_intermediates, num_of_interm_tiles);
+            cb_pop_front(cb_query, qk_tiles);
+            cb_pop_front(cb_grad_output, v_tiles);
+        }
+    }
+
+    cb_push_back(cb_grad_value_accum, v_tiles_per_item);
+    cb_push_back(cb_grad_key_accum, k_tiles_per_item);
+    cb_wait_front(cb_grad_value_accum, v_tiles_per_item);
+    cb_wait_front(cb_grad_key_accum, k_tiles_per_item);
+    for (uint32_t r = 0; r < R; ++r) {
+        grouped_pack_accum_to_output(cb_grad_value_accum, cb_grad_value, /* tile_base */ r * v_tiles, v_tiles);
+        grouped_pack_accum_to_output(cb_grad_key_accum, cb_grad_key, /* tile_base */ r * qk_tiles, qk_tiles);
+    }
+    cb_pop_front(cb_grad_value_accum, v_tiles_per_item);
+    cb_pop_front(cb_grad_key_accum, k_tiles_per_item);
+
+    cb_pop_front(cb_key, k_tiles_per_item);
+    cb_pop_front(cb_value, v_tiles_per_item);
+}
+#endif  // GROUPED_KV_ROWS
+
 void kernel_main() {
     // Runtime args
     // For standard mode: arg0 = start_row
@@ -252,7 +399,13 @@ void kernel_main() {
 #endif
 
 #ifdef BALANCED_PARALLELISM
-    constexpr uint32_t pairs_per_seq = Ht / 2;
+#ifdef GROUPED_KV_ROWS
+    // Items are blocks of kv_rows_per_item K/V rows; pair block i with block (Ht/R - 1 - i).
+    constexpr uint32_t items_per_seq = Ht / kv_rows_per_item;
+#else
+    constexpr uint32_t items_per_seq = Ht;
+#endif
+    constexpr uint32_t pairs_per_seq = items_per_seq / 2;
 
     for (uint32_t p = 0; p < num_pairs; ++p) {
         const uint32_t global_pair_idx = start_idx + p;
@@ -261,13 +414,18 @@ void kernel_main() {
         const uint32_t pair_in_seq = global_pair_idx % pairs_per_seq;
 
         const uint32_t light_row_in_seq = pair_in_seq;
-        const uint32_t heavy_row_in_seq = Ht - 1 - pair_in_seq;
+        const uint32_t heavy_row_in_seq = items_per_seq - 1 - pair_in_seq;
 
-        const uint32_t light_global_row = seq_idx * Ht + light_row_in_seq;
-        const uint32_t heavy_global_row = seq_idx * Ht + heavy_row_in_seq;
+        const uint32_t light_global_row = seq_idx * items_per_seq + light_row_in_seq;
+        const uint32_t heavy_global_row = seq_idx * items_per_seq + heavy_row_in_seq;
 
+#ifdef GROUPED_KV_ROWS
+        process_grouped_item(heavy_global_row);
+        process_grouped_item(light_global_row);
+#else
         process_single_row(heavy_global_row);
         process_single_row(light_global_row);
+#endif
     }
 #else
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {

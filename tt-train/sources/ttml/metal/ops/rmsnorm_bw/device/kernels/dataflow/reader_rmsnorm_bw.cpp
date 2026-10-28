@@ -32,10 +32,12 @@ FORCE_INLINE void generate_ones_row0_tile(uint32_t cb_id) {
     cb_push_back(cb_id, 1);
 }
 
+// Streams are always pushed/popped in whole `block`s (a CB only wraps cleanly when every push has the same
+// size); a short final block of a slice fills `n` tiles and leaves the rest of the block unused.
 template <typename Accessor>
-FORCE_INLINE void read_block_async(
-    uint32_t cb_id, const Accessor& acc, uint32_t first_page, uint32_t n, uint32_t tile_bytes) {
-    cb_reserve_back(cb_id, n);
+FORCE_INLINE void read_tiles_async(
+    uint32_t cb_id, const Accessor& acc, uint32_t first_page, uint32_t n, uint32_t reserve, uint32_t tile_bytes) {
+    cb_reserve_back(cb_id, reserve);
     uint32_t l1 = get_write_ptr(cb_id);
     for (uint32_t j = 0; j < n; ++j) {
         noc_async_read_page(first_page + j, acc, l1);
@@ -89,8 +91,8 @@ void kernel_main() {
 
 #ifdef APPLY
         // rms is [rows*32, 1] -> one tile per tile-row; partials are [rows*32, S*32] -> S tiles per tile-row.
-        read_block_async(cb::rms, rms_acc, r, 1, tile_bytes);
-        read_block_async(cb::partials, partials_acc, r * S, S, f32_tile_bytes);
+        read_tiles_async(cb::rms, rms_acc, r, 1, 1, tile_bytes);
+        read_tiles_async(cb::partials, partials_acc, r * S, S, S, f32_tile_bytes);
         noc_async_read_barrier();
         cb_push_back(cb::rms, 1);
         cb_push_back(cb::partials, S);
@@ -99,13 +101,13 @@ void kernel_main() {
         for (uint32_t c = 0; c < ncols; c += block) {
             const uint32_t n = (c + block <= ncols) ? block : (ncols - c);
             const uint32_t page = r * Wt + col0 + c;
-            read_block_async(cb::a, a_acc, page, n, tile_bytes);
-            read_block_async(cb::gamma, gamma_acc, col0 + c, n, tile_bytes);
-            read_block_async(cb::dy, dy_acc, page, n, tile_bytes);
+            read_tiles_async(cb::a, a_acc, page, n, block, tile_bytes);
+            read_tiles_async(cb::gamma, gamma_acc, col0 + c, n, block, tile_bytes);
+            read_tiles_async(cb::dy, dy_acc, page, n, block, tile_bytes);
             noc_async_read_barrier();
-            cb_push_back(cb::a, n);
-            cb_push_back(cb::gamma, n);
-            cb_push_back(cb::dy, n);
+            cb_push_back(cb::a, block);
+            cb_push_back(cb::gamma, block);
+            cb_push_back(cb::dy, block);
         }
     }
 }

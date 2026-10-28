@@ -264,6 +264,7 @@ def gated_delta_net_backward(
     compute_kernel_config=None,
     memory_config: ttnn.MemoryConfig = None,
     key_head_dim: int = None,
+    tinv: ttnn.Tensor = None,
 ):
     """Backward pass (VJP) of the chunked gated delta rule.
 
@@ -280,6 +281,14 @@ def gated_delta_net_backward(
         compute_kernel_config: precision knobs (math fidelity, fp32 dest accum).
         memory_config: placement of the outputs; defaults to q's.
         key_head_dim: `K` in FLAT mode (see below); defaults to `V`.
+        tinv: FLAT mode only, optional: each chunk's UT inverse
+            `(I + strict(beta k k^T . L))^-1` as float32 TILE `[B, T, HV*C]` --
+            the forward's `A` intermediate (`chunk_gated_delta_rule(...,
+            output_intermediates=True)`), reshaped token-major.  When given, the
+            op uses it instead of rebuilding the inverse by Neumann doubling,
+            which loses all precision for strongly aligned keys (real
+            checkpoints): intermediate matrix powers reach ~1e18 while the
+            inverse itself is O(1).
 
     FLAT mode -- rank-3, token-major inputs with the heads folded into the last
     dim: q/k `[B, T, HK*K]`, v/do `[B, T, HV*V]`, g/beta `[B, T, HV]`.  The
@@ -322,6 +331,7 @@ def gated_delta_net_backward(
         compute_kernel_config=compute_kernel_config,
         memory_config=memory_config,
         key_head_dim=key_head_dim,
+        tinv=tinv,
     )
     _LAST_SCRATCH = scratch
     return outputs

@@ -18,6 +18,45 @@ from .parameter import Parameter
 from _ttml.modules import RunMode
 
 
+class _ScaleSequenceParallelUpdate(ttml.autograd.Function):
+    """``x * forward_scale`` forward, ``grad * backward_scale`` backward.
+
+    Under sequence parallelism a row-parallel LoRA update is computed replicated
+    on every device and folded into the base path's reduce-scatter, which sums
+    the ``tp`` identical copies -- so the forward pre-divides by ``tp``. The
+    reduce-scatter's backward hands every device the full output gradient, which
+    is already the gradient of the (single, replicated) update, so the backward
+    must not divide.
+    """
+
+    @staticmethod
+    def forward(ctx, input, forward_scale, backward_scale):
+        ctx.backward_scale = backward_scale
+        return ttnn.multiply(input.get_value(), forward_scale)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return ttnn.multiply(grad_output, ctx.backward_scale)
+
+
+class _SumGradAcrossTP(ttml.autograd.Function):
+    """Identity forward, all-reduce (sum) of the gradient across the TP axis in backward.
+
+    A column-parallel LoRA keeps ``lora_A`` replicated but ``lora_B`` column-sharded,
+    so each device's ``dA`` only covers its own output columns. The true ``dA`` is
+    the sum over devices; without it the replicas of ``lora_A`` diverge.
+    """
+
+    @staticmethod
+    def forward(ctx, input, cluster_axis):
+        ctx.cluster_axis = cluster_axis
+        return input.get_value()
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        return ttml.core.distributed.all_reduce(grad_output, cluster_axis=ctx.cluster_axis)
+
+
 @dataclass
 class LoraConfig:
     """Configuration for LoRA (Low-Rank Adaptation) injection.
@@ -119,6 +158,7 @@ class LoraColumnParallelLinear(AbstractModuleBase):
         self.in_features = base_layer.in_features
         self.out_features = base_layer.out_features
         self.gather_output = base_layer.gather_output
+        self.sequence_parallel = getattr(base_layer, "sequence_parallel", False)
         self.axis_name = base_layer.axis_name
         self.cluster_axis = base_layer.cluster_axis
 
@@ -139,7 +179,8 @@ class LoraColumnParallelLinear(AbstractModuleBase):
 
     def forward(self, x):
         bias_t = self.bias.tensor if self.bias is not None else None
-        x = ttml.ops.distributed.broadcast(x, self.cluster_axis)
+        if not self.sequence_parallel:
+            x = ttml.ops.distributed.broadcast(x, self.cluster_axis)
         base = ttml.ops.linear.linear(x, self.weight.tensor, bias_t)
         if self.gather_output:
             base = ttml.ops.distributed.all_gather(
@@ -151,7 +192,8 @@ class LoraColumnParallelLinear(AbstractModuleBase):
         lora_input = x
         if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
             lora_input = ttml.ops.dropout.dropout(x, self.dropout_prob)
-        h = ttml.ops.linear.linear(lora_input, self.lora_A.tensor, None)
+        lora_A = _SumGradAcrossTP.apply(self.lora_A.tensor, self.cluster_axis)
+        h = ttml.ops.linear.linear(lora_input, lora_A, None)
         lora_update = ttml.ops.linear.linear(h, self.lora_B.tensor, None)
         if self.gather_output:
             lora_update = ttml.ops.distributed.all_gather(
@@ -173,6 +215,7 @@ class LoraRowParallelLinear(AbstractModuleBase):
         self.in_features = base_layer.in_features
         self.out_features = base_layer.out_features
         self.input_is_parallel = base_layer.input_is_parallel
+        self.sequence_parallel = getattr(base_layer, "sequence_parallel", False)
         self.axis_name = base_layer.axis_name
         self.cluster_axis = base_layer.cluster_axis
 
@@ -192,6 +235,8 @@ class LoraRowParallelLinear(AbstractModuleBase):
         self.lora_B = Parameter(_create_lora_B(config.rank, self.out_features))
 
     def forward(self, x):
+        if self.sequence_parallel:
+            return self._forward_sequence_parallel(x)
         if not self.input_is_parallel:
             x = ttml.ops.distributed.scatter(x, 3, self.cluster_axis)
         base = ttml.ops.linear.linear(x, self.weight.tensor, None)
@@ -208,6 +253,28 @@ class LoraRowParallelLinear(AbstractModuleBase):
         h = ttml.ops.distributed.all_reduce(h, self.input_is_parallel, self.cluster_axis)
         lora_update = ttml.ops.linear.linear(h, self.lora_B.tensor, None)
         return base + lora_update * self.scaling
+
+    def _forward_sequence_parallel(self, x):
+        """Output sliced along the sequence (dim 2), one reduce-scatter for both paths.
+
+        The base product is partial per device. The LoRA update is replicated
+        (``h`` is all-reduced before the replicated ``lora_B``), so it enters the
+        reduce-scatter pre-divided by ``tp``; see :class:`_ScaleSequenceParallelUpdate`.
+        That keeps ``lora_B``'s gradient whole and identical on every device.
+        """
+        tp = ttml.mesh().axis_size(self.axis_name)
+        base = ttml.ops.linear.linear(x, self.weight.tensor, None)
+        lora_input = x
+        if self.get_run_mode() == RunMode.TRAIN and self.dropout_prob > 0.0:
+            lora_input = ttml.ops.dropout.dropout(x, self.dropout_prob)
+        h = ttml.ops.linear.linear(lora_input, self.lora_A.tensor, None)
+        h = ttml.ops.distributed.all_reduce(h, True, self.cluster_axis)
+        lora_update = ttml.ops.linear.linear(h, self.lora_B.tensor, None)
+        lora_update = _ScaleSequenceParallelUpdate.apply(lora_update, self.scaling / tp, self.scaling)
+        out = ttml.ops.distributed.reduce_scatter(base + lora_update, 2, self.cluster_axis)
+        if self.bias is not None:
+            out = ttml.ops.binary.add(out, self.bias.tensor)
+        return out
 
 
 _LORA_MODULE_MAP: dict[type, type] = {

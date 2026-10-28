@@ -34,8 +34,10 @@ void kernel_main() {
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(4);  // num of heads per group
     [[maybe_unused]] constexpr uint32_t Sk_chunk_t =
         get_compile_time_arg_val(5);  // multi-tile K/V chunking factor (consumed in chunked reader path)
+    [[maybe_unused]] constexpr uint32_t heads_per_item =
+        get_compile_time_arg_val(6);  // Q heads per work item (>1 only with GROUPED_HEADS)
     constexpr uint32_t pairs_per_seq = Ht / 2;
-    constexpr auto query_args = TensorAccessorArgs<6>();
+    constexpr auto query_args = TensorAccessorArgs<7>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
     constexpr auto value_args = TensorAccessorArgs<key_args.next_compile_time_args_offset()>();
 
@@ -69,6 +71,25 @@ void kernel_main() {
     // is fully resident in L1 before compute starts processing it. Ht is constrained to be
     // a multiple of Sk_chunk_t by the program factory, so the round-up never reads OOB.
     auto read_row = [&](const uint32_t global_row_idx) {
+#ifdef GROUPED_HEADS
+        // Grouped (GQA) item: global_row_idx enumerates (batch, kv_head, head sub-group, q_row).
+        // Stage the Q row of every head in the sub-group, then stream each K/V chunk exactly once
+        // for all of them.
+        constexpr uint32_t items_per_group = heads_per_group / heads_per_item;
+        const uint32_t q_row_tile = global_row_idx % Ht;
+        const uint32_t item_seq_idx = global_row_idx / Ht;           // (batch, kv_group, sub-group) flattened
+        const uint32_t kv_seq_idx = item_seq_idx / items_per_group;  // batch_idx * num_of_groups + kv_group_idx
+        const uint32_t sub_group_idx = item_seq_idx % items_per_group;
+        const uint32_t batch_idx = kv_seq_idx / num_of_groups;
+        const uint32_t kv_group_idx = kv_seq_idx % num_of_groups;
+        const uint32_t first_q_head = kv_group_idx * heads_per_group + sub_group_idx * heads_per_item;
+        for (uint32_t h = 0; h < heads_per_item; ++h) {
+            const uint32_t q_start_idx = ((batch_idx * q_heads + first_q_head + h) * Ht + q_row_tile) * qWt;
+            read_tiles_by_row(cb_query, query_address_generator, q_start_idx, qWt, tile_bytes, qWt);
+        }
+        const uint32_t key_offset = kv_seq_idx * qWt * Ht;
+        const uint32_t value_offset = kv_seq_idx * vWt * Ht;
+#else
         const uint32_t q_start_idx = global_row_idx * qWt;
         read_tiles_by_row(cb_query, query_address_generator, q_start_idx, qWt, tile_bytes, qWt);
 
@@ -78,6 +99,7 @@ void kernel_main() {
         const uint32_t key_offset = (batch_idx * num_of_groups + kv_group_idx) * qWt * Ht;
         const uint32_t value_offset = (batch_idx * num_of_groups + kv_group_idx) * vWt * Ht;
         const uint32_t q_row_tile = global_row_idx % Ht;
+#endif
         const uint32_t num_kv_tiles_to_read = round_up(q_row_tile + 1U, Sk_chunk_t);
         const uint32_t num_kv_chunks = num_kv_tiles_to_read / Sk_chunk_t;
 

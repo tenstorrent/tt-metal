@@ -9,17 +9,30 @@
 
 namespace ttml::metal::ops::rmsnorm_fw::device {
 
+struct RMSNormForwardSharedVariables {
+    tt::tt_metal::KernelHandle reader_kernel_id{};
+    tt::tt_metal::KernelHandle writer_kernel_id{};
+    std::vector<tt::tt_metal::CoreCoord> cores;
+};
+
+struct RMSNormForwardPartialProgramFactory {
+    using shared_variables_t = RMSNormForwardSharedVariables;
+    using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
+
+    static cached_program_t create(
+        const partial::operation_attributes_t& operation_attributes,
+        const partial::tensor_args_t& tensor_args,
+        partial::tensor_return_value_t& tensor_return_value);
+
+    static void override_runtime_arguments(
+        cached_program_t& cached_program,
+        const partial::operation_attributes_t& operation_attributes,
+        const partial::tensor_args_t& tensor_args,
+        partial::tensor_return_value_t& tensor_return_value);
+};
+
 struct RMSNormForwardProgramFactory {
-    struct shared_variables_t {
-        tt::tt_metal::KernelHandle rmsnorm_fw_reader_kernel_id{};
-        tt::tt_metal::KernelHandle rmsnorm_fw_writer_kernel_id{};
-        tt::tt_metal::KernelHandle rmsnorm_fw_kernel_group_1_id{};
-        tt::tt_metal::KernelHandle rmsnorm_fw_kernel_group_2_id{};
-        tt::tt_metal::CoreRangeSet core_group_1;
-        tt::tt_metal::CoreRangeSet core_group_2;
-        uint32_t num_cores{};
-        uint32_t num_cores_y{};
-    };
+    using shared_variables_t = RMSNormForwardSharedVariables;
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(

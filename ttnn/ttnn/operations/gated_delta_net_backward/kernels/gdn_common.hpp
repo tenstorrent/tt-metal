@@ -85,8 +85,13 @@ constexpr uint32_t VECB_BLOCKS = get_compile_time_arg_val(49);
 constexpr uint32_t FLAT = get_compile_time_arg_val(50);
 constexpr uint32_t gHK = get_compile_time_arg_val(51);  // key-head count
 constexpr uint32_t gG = get_compile_time_arg_val(52);   // value heads per key head
+// HAS_TINV (FLAT only): the caller supplies each chunk's UT inverse T_inv = (I + strict(beta k k^T . L))^-1
+// as an f32 token-major [B,T,HV*C] tensor (the forward's `A` intermediate). Stage P then reads it instead
+// of rebuilding it by Neumann doubling, which loses all precision once the keys of a chunk are strongly
+// aligned (intermediate powers of the strictly-lower UT matrix reach ~1e18 while T_inv itself is O(1)).
+constexpr uint32_t HAS_TINV = get_compile_time_arg_val(53);
 
-constexpr uint32_t CT_ACC_BASE = 53;
+constexpr uint32_t CT_ACC_BASE = 54;
 
 // derived
 constexpr uint32_t CHUNK = Ct * 32;  // tokens per chunk
@@ -145,6 +150,7 @@ constexpr uint32_t cb_vecb = 28;
 constexpr uint32_t cb_vecc = 29;
 constexpr uint32_t cb_egr = 30;
 constexpr uint32_t cb_gegr = 31;
+constexpr uint32_t cb_tinvin = 32;  // HAS_TINV: caller-supplied T_inv block (f32)
 
 // cb_const block offsets (tiles).  NUM_CONST_MASKS [C,C] mask blocks first, then
 // the three single-tile / Ct-tile constants; all offsets derive from the

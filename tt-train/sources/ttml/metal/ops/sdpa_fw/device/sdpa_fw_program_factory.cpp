@@ -10,6 +10,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
+#include "metal/common/sdpa_grouped_heads.hpp"
 
 namespace {
 
@@ -63,6 +64,7 @@ const std::string kReturnIntermediates = "RETURN_INTERMEDIATES";
 const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
 const std::string kCausalMaskDefKey = "CAUSAL_MASK";
 const std::string kBalancedParallelismDefKey = "BALANCED_PARALLELISM";
+const std::string kGroupedHeadsDefKey = "GROUPED_HEADS";
 
 // Pick the multi-tile K/V chunk size. Returns the number of K tiles processed per inner-loop
 // iteration of the compute kernel.
@@ -318,9 +320,59 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // 2. Even number of sequence tiles (St % 2 == 0) for clean pairing
     // 3. Enough work for all cores (total_pairs >= num_available_cores)
     const uint32_t pairs_per_seq = St / 2;
-    const uint32_t total_pairs = NC * pairs_per_seq;
-    const bool use_balanced_parallelism =
-        (mask_type == AttentionMaskType::Causal) && (St % 2 == 0) && (total_pairs >= num_available_cores) && (St > 0);
+    const uint32_t total_pairs_per_head = NC * pairs_per_seq;
+    const bool use_balanced_parallelism = (mask_type == AttentionMaskType::Causal) && (St % 2 == 0) &&
+                                          (total_pairs_per_head >= num_available_cores) && (St > 0);
+
+    // -------------------------------------------------------------------------
+    // GQA-grouped K/V streaming decision (long sequences only)
+    // -------------------------------------------------------------------------
+    // In the per-head row layout every Q row re-streams its causal K/V prefix from DRAM, so the
+    // heads_per_group Q heads that share one K/V head read the same K/V heads_per_group times.
+    // At long seq_len this makes the kernel DRAM-bound (K/V traffic ~ heads_per_group * St^2 / 2
+    // tile rows per K/V head, vs. O(St) for K/V themselves).
+    //
+    // Grouped mode makes the work item (batch, kv_head, sub-group of heads_per_item heads, q_row):
+    // the reader stages heads_per_item Q rows once and streams each K/V chunk once; compute keeps
+    // a per-head (max, sum, O) state in L1 and loops the heads per chunk. K/V DRAM traffic drops
+    // by heads_per_item x; FLOPs are unchanged. heads_per_item is a divisor of heads_per_group
+    // chosen by a small per-core stream cost model (fewer, fatter items win as long as at least
+    // half the grid stays busy - this is what restricts grouping to longer sequences) and whose
+    // L1 footprint fits (see pick_heads_per_item).
+    constexpr bool fp32_dest_acc_en = true;
+    const uint32_t dst_size = fp32_dest_acc_en ? 4U : 8U;
+    const uint32_t block_size = get_block_size(vWt, dst_size - 1U);
+    const uint32_t pv_block_size = get_block_size(vWt, dst_size);
+    const uint32_t Sk_chunk_t = pick_sk_chunk_t(St);
+    TT_FATAL(Sk_chunk_t > 0U && (St % Sk_chunk_t == 0U), "Sk_chunk_t={} must be > 0 and divide St={}", Sk_chunk_t, St);
+
+    const uint64_t available_L1_in_bytes =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const auto grouped_fits_in_l1 = [&](uint32_t heads_per_item) {
+        const uint64_t bf16_tile = bfloat16_single_tile_size_bytes;
+        const uint64_t fp32_tile = float32_single_tile_size_bytes;
+        const uint64_t required =
+            /* cb_query (2x heads_per_item rows) */ 2ULL * heads_per_item * qWt * bf16_tile +
+            /* cb_key, cb_value (2 chunks each) */ 2ULL * Sk_chunk_t * (kWt + vWt) * bf16_tile +
+            /* causal mask, scalers */ (kNumCausalMaskTiles + 2ULL * kNumScalerTiles) * bf16_tile +
+            /* intermediates */ 2ULL * kIntermediateTiles * fp32_tile +
+            /* attention weights */ Sk_chunk_t * fp32_tile +
+            /* ring max + cur max */ (heads_per_item + 2ULL) * bf16_tile +
+            /* exp max diff, cur sum */ 2ULL * fp32_tile +
+            /* ring sum */ (heads_per_item + 1ULL) * fp32_tile +
+            /* ring mm_out */ (heads_per_item + 1ULL) * vWt * fp32_tile +
+            /* output (2 rows) */ 2ULL * vWt * bf16_tile;
+        return required <= available_L1_in_bytes;
+    };
+    const uint32_t heads_per_item =
+        use_balanced_parallelism
+            ? ttml::metal::sdpa::pick_heads_per_item(
+                  heads_per_group, uint64_t{qB} * kNH * pairs_per_seq, num_available_cores, grouped_fits_in_l1)
+            : 1U;
+    const bool use_grouped_heads = heads_per_item > 1U;
+
+    // Balanced work items: per-head Q rows, or (batch, kv_head, sub-group) rows when grouped.
+    const uint32_t total_pairs = use_grouped_heads ? total_pairs_per_head / heads_per_item : total_pairs_per_head;
 
     // Variables for work distribution (will be set based on parallelism mode)
     uint32_t num_cores = 0;
@@ -334,7 +386,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     if (use_balanced_parallelism) {
         // Use all available cores for balanced distribution
         num_cores = std::min(num_available_cores, total_pairs);
-        all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, true);
+        // Column-major (row_wise=false) to match the {i / num_cores_y, i % num_cores_y} core
+        // enumeration used when assigning runtime args (matters only when num_cores < grid).
+        all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size, false);
         core_group_1 = all_cores;  // All cores in one group for balanced mode
 
         // Calculate pair distribution across cores
@@ -366,15 +420,8 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     //
     // Both are clamped to divisors of `vWt` by `get_block_size`, so the matmul outer loop
     // and the SFPU outer loop each tile `vWt` evenly without remainder handling.
-    constexpr bool fp32_dest_acc_en = true;
-    const uint32_t dst_size = fp32_dest_acc_en ? 4U : 8U;
-    const uint32_t block_size = get_block_size(vWt, dst_size - 1U);
-    const uint32_t pv_block_size = get_block_size(vWt, dst_size);
-
-    // Multi-tile K/V chunking factor. Compute kernel processes Sk_chunk_t K and V tiles per
-    // inner-loop iteration; reader pre-stages chunk-sized K/V blocks in L1.
-    const uint32_t Sk_chunk_t = pick_sk_chunk_t(St);
-    TT_FATAL(Sk_chunk_t > 0U && (St % Sk_chunk_t == 0U), "Sk_chunk_t={} must be > 0 and divide St={}", Sk_chunk_t, St);
+    // (`block_size`, `pv_block_size` and the multi-tile K/V chunking factor `Sk_chunk_t` are
+    // computed above, before the grouped-heads decision, which needs them for its L1 estimate.)
 
     const auto data_format = input_data_format;
     const auto precise_data_format = tt::DataFormat::Float32;
@@ -383,8 +430,10 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
 
+    // Grouped mode stages the Q rows of the heads_per_item heads of a work item.
+    const uint32_t q_tiles_per_item = heads_per_item * qWt;
     [[maybe_unused]] auto cb_query = create_circular_buffer(
-        program, all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
+        program, all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * q_tiles_per_item);
 
     // K and V are read in Sk_chunk_t-tile chunks. Double-buffer the chunks so the reader
     // can overlap next-chunk DRAM with current-chunk compute.
@@ -415,13 +464,14 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // create intermediate buffer only if we need to return intermediates
     // Intermediate shape: (B, H, S, 32) = 1 FP32 tile wide (logsumexp = max + log(sum_exp))
     if (args.return_intermediates) {
+        // Grouped mode emits heads_per_item LSE tiles per item; give the writer one tile of slack.
         [[maybe_unused]] auto cb_intermediate = create_circular_buffer(
             program,
             all_cores,
             kIntermediateCbIndex,
             precise_data_format,
             float32_single_tile_size_bytes,
-            kIntermediateTiles);
+            use_grouped_heads ? 2U * kIntermediateTiles : kIntermediateTiles);
     }
 
     [[maybe_unused]] auto cb_reduction_scaler = create_circular_buffer(
@@ -439,8 +489,18 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     [[maybe_unused]] auto cb_attention_weights = create_circular_buffer(
         program, all_cores, kAttentionWeightsCbIndex, precise_data_format, float32_single_tile_size_bytes, Sk_chunk_t);
 
+    // Running softmax state. In grouped mode the prev_* CBs become per-head rings holding
+    // heads_per_item (+1 slack) entries, consumed/refilled in cyclic head order every chunk
+    // (see sdpa_fw_grouped_utils.hpp); cur_* stay single-entry transients.
+    const uint32_t state_ring_entries = use_grouped_heads ? heads_per_item + 1U : 1U;
+
     [[maybe_unused]] auto cb_prev_max_value = create_circular_buffer(
-        program, all_cores, kPrevMaxValueCbIndex, data_format, bfloat16_single_tile_size_bytes, kMaxValueHolderTiles);
+        program,
+        all_cores,
+        kPrevMaxValueCbIndex,
+        data_format,
+        bfloat16_single_tile_size_bytes,
+        state_ring_entries * kMaxValueHolderTiles);
 
     [[maybe_unused]] auto cb_cur_max_value = create_circular_buffer(
         program, all_cores, kCurMaxValueCbIndex, data_format, bfloat16_single_tile_size_bytes, kMaxValueHolderTiles);
@@ -450,19 +510,38 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         program, all_cores, kExpMaxDiffCbIndex, precise_data_format, float32_single_tile_size_bytes, kExpMaxDiffTiles);
 
     [[maybe_unused]] auto cb_prev_exp_sum = create_circular_buffer(
-        program, all_cores, kPrevSumExpCbIndex, precise_data_format, float32_single_tile_size_bytes, kExpSumTiles);
+        program,
+        all_cores,
+        kPrevSumExpCbIndex,
+        precise_data_format,
+        float32_single_tile_size_bytes,
+        state_ring_entries * kExpSumTiles);
 
     [[maybe_unused]] auto cb_cur_exp_sum = create_circular_buffer(
         program, all_cores, kCurSumExpCbIndex, precise_data_format, float32_single_tile_size_bytes, kExpSumTiles);
 
     [[maybe_unused]] auto cb_prev_mm_out = create_circular_buffer(
-        program, all_cores, kPrevMmOutCbIndex, precise_data_format, float32_single_tile_size_bytes, vWt);
+        program,
+        all_cores,
+        kPrevMmOutCbIndex,
+        precise_data_format,
+        float32_single_tile_size_bytes,
+        state_ring_entries * vWt);
 
-    [[maybe_unused]] auto cb_cur_mm_out = create_circular_buffer(
-        program, all_cores, kCurMmOutCbIndex, precise_data_format, float32_single_tile_size_bytes, vWt);
+    // Grouped mode fuses the O rescale into the PV matmul and never touches cur_mm_out.
+    if (!use_grouped_heads) {
+        [[maybe_unused]] auto cb_cur_mm_out = create_circular_buffer(
+            program, all_cores, kCurMmOutCbIndex, precise_data_format, float32_single_tile_size_bytes, vWt);
+    }
 
-    [[maybe_unused]] auto cb_output =
-        create_circular_buffer(program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, vWt);
+    // Grouped mode emits heads_per_item output rows per item; double-buffer one row.
+    [[maybe_unused]] auto cb_output = create_circular_buffer(
+        program,
+        all_cores,
+        kOutputCbIndex,
+        data_format,
+        bfloat16_single_tile_size_bytes,
+        use_grouped_heads ? 2U * vWt : vWt);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -533,6 +612,9 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     if (use_balanced_parallelism) {
         defines[kBalancedParallelismDefKey] = "1";
     }
+    if (use_grouped_heads) {
+        defines[kGroupedHeadsDefKey] = "1";
+    }
 
     // Per-arch math fidelity. Wormhole has HW bug TT #38306: HiFi4 + fp32_dest_acc + matmul_block
     // corrupts FP32 dest accumulation, so we use HiFi3 there. Blackhole is unaffected and uses HiFi4.
@@ -549,6 +631,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         qNH,              // number of heads in query
         heads_per_group,  // number of heads per group
         Sk_chunk_t,       // multi-tile K/V chunking factor
+        heads_per_item,   // Q heads per work item (1 = per-head rows; >1 = GROUPED_HEADS)
     };
     tt::tt_metal::TensorAccessorArgs(query_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(key_buffer).append_to(reader_compile_args);
@@ -563,9 +646,11 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
         kReaderKernelPath);
 
     std::vector<uint32_t> writer_compile_args = {
-        vWt,  // num tile in inner dim in output/value (d_v/TILE_W)
-        St,   // num tile in seq len dim (S/TILE_H)
-        qNH,  // number of heads in query
+        vWt,              // num tile in inner dim in output/value (d_v/TILE_W)
+        St,               // num tile in seq len dim (S/TILE_H)
+        qNH,              // number of heads in query
+        heads_per_group,  // number of heads per group
+        heads_per_item,   // Q heads per work item (grouped mode writes heads_per_item rows per item)
     };
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(intermediates_buffer).append_to(writer_compile_args);
@@ -603,6 +688,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
             Sk_chunk_t,          // multi-tile K/V chunking factor
             pv_block_size,       // PV matmul_block ct_dim (cap = dst_size, no scratch)
             scaler_bf16,         // BF16 (RNE) scale for the WH fused scale+exp path
+            heads_per_item,      // Q heads per work item (used by GROUPED_HEADS)
         };
 
         kernels.compute_group_1 = tt::tt_metal::CreateKernel(

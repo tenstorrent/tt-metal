@@ -24,6 +24,8 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(2);               // sequence length in tiles
     constexpr uint32_t q_heads = get_compile_time_arg_val(3);          // number of query heads
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(4);  // heads per group
+    [[maybe_unused]] constexpr uint32_t kv_rows_per_item =
+        get_compile_time_arg_val(5);  // K/V tile-rows per work item (>1 only with GROUPED_KV_ROWS)
 
 #ifdef CAUSAL_MASK
     // Generate causal mask tile ONCE - will be reused for every diagonal
@@ -35,7 +37,7 @@ void kernel_main() {
     const uint32_t tile_bytes_v = get_tile_size(cb_grad_value);
 
     // TensorAccessor definitions with chained offsets
-    constexpr auto grad_key_args = TensorAccessorArgs<5>();
+    constexpr auto grad_key_args = TensorAccessorArgs<6>();
     constexpr auto grad_value_args = TensorAccessorArgs<grad_key_args.next_compile_time_args_offset()>();
 
     // Create TensorAccessor generators for output gradients
@@ -45,7 +47,12 @@ void kernel_main() {
     const uint32_t num_of_groups = q_heads / heads_per_group;
 
 #ifdef BALANCED_PARALLELISM
-    constexpr uint32_t pairs_per_seq = Ht / 2;
+#ifdef GROUPED_KV_ROWS
+    constexpr uint32_t items_per_seq = Ht / kv_rows_per_item;
+#else
+    constexpr uint32_t items_per_seq = Ht;
+#endif
+    constexpr uint32_t pairs_per_seq = items_per_seq / 2;
 
     auto write_row = [&](const uint32_t global_row_idx) {
         const uint32_t batch_idx = global_row_idx / (num_of_groups * Ht);
@@ -66,14 +73,18 @@ void kernel_main() {
         const uint32_t seq_idx = global_pair_idx / pairs_per_seq;
         const uint32_t pair_in_seq = global_pair_idx % pairs_per_seq;
 
-        const uint32_t light_row_in_seq = pair_in_seq;
-        const uint32_t heavy_row_in_seq = Ht - 1 - pair_in_seq;
+        const uint32_t light_item_in_seq = pair_in_seq;
+        const uint32_t heavy_item_in_seq = items_per_seq - 1 - pair_in_seq;
 
-        const uint32_t light_global_row = seq_idx * Ht + light_row_in_seq;
-        const uint32_t heavy_global_row = seq_idx * Ht + heavy_row_in_seq;
-
-        write_row(heavy_global_row);
-        write_row(light_global_row);
+        // Compute emits dV_r, dK_r for each of the item's kv_rows_per_item consecutive rows in order.
+        auto write_item = [&](const uint32_t item_in_seq) {
+            const uint32_t first_row = seq_idx * Ht + item_in_seq * kv_rows_per_item;
+            for (uint32_t r = 0; r < kv_rows_per_item; ++r) {
+                write_row(first_row + r);
+            }
+        };
+        write_item(heavy_item_in_seq);
+        write_item(light_item_in_seq);
     }
 #else
     const uint32_t end_row = start_row + num_rows_to_process;

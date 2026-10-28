@@ -6,413 +6,281 @@
 
 #include <bit>
 #include <cstdint>
-#include <enchantum/enchantum.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
+#include "kernels/rmsnorm_fw_cbs.hpp"
 #include "metal/common/program_utils.hpp"
-#include "rmsnorm_fw_device_operation_types.hpp"
 
 namespace {
 
-constexpr auto kWriterKernelPath =
-    "tt-train/sources/ttml/metal/ops/rmsnorm_fw/device/kernels/dataflow/"
-    "writer_rmsnorm_fw_interleaved_start_id.cpp";
-
 constexpr auto kReaderKernelPath =
-    "tt-train/sources/ttml/metal/ops/rmsnorm_fw/device/kernels/dataflow/"
-    "reader_rmsnorm_fw_interleaved_start_id.cpp";
-
-constexpr auto kComputeKernelPath =
+    "tt-train/sources/ttml/metal/ops/rmsnorm_fw/device/kernels/dataflow/reader_rmsnorm_fw.cpp";
+constexpr auto kWriterKernelPath =
+    "tt-train/sources/ttml/metal/ops/rmsnorm_fw/device/kernels/dataflow/writer_rmsnorm_fw.cpp";
+constexpr auto kPartialComputeKernelPath =
+    "tt-train/sources/ttml/metal/ops/rmsnorm_fw/device/kernels/compute/rmsnorm_fw_partial_kernel.cpp";
+constexpr auto kApplyComputeKernelPath =
     "tt-train/sources/ttml/metal/ops/rmsnorm_fw/device/kernels/compute/rmsnorm_fw_kernel.cpp";
 
-// reader runtime args
-constexpr uint32_t kInputBufferIdx = 0;
-constexpr uint32_t kGammaBufferIdx = 1U;
-// writer runtime args
-constexpr uint32_t kOutputBufferIdx = 0;
-constexpr uint32_t kRMSOutputBufferIdx = 1U;
+// Tiles streamed per CB push; bounds the L1 footprint independently of the slice width.
+constexpr uint32_t kBlockTiles = 4U;
 
-constexpr auto kInputCbIndex = tt::CBIndex::c_0;
-constexpr auto kMaskCbIndex = tt::CBIndex::c_1;
-constexpr auto kScalerCbIndex = tt::CBIndex::c_2;
-constexpr auto kEpsCbIndex = tt::CBIndex::c_3;
-constexpr auto kGammaCbIndex = tt::CBIndex::c_4;
-constexpr auto kRmsBeforeReductionCbIndex = tt::CBIndex::c_5;
-constexpr auto kRmsAfterReductionCbIndex = tt::CBIndex::c_6;
-constexpr auto kInverseRmsAfterReductionCbIndex = tt::CBIndex::c_7;
-constexpr auto kOutputCbIndex = tt::CBIndex::c_8;
-constexpr auto kRmsOutputCbIndex = tt::CBIndex::c_9;
-constexpr auto kOutputIntermediateCbIndex = tt::CBIndex::c_10;
+// Reader/writer runtime-arg slots holding buffer addresses (refreshed on program-cache hits).
+constexpr uint32_t kReaderInputIdx = 0U;
+constexpr uint32_t kReaderGammaIdx = 1U;
+constexpr uint32_t kReaderPartialsIdx = 2U;
+constexpr uint32_t kWriterOut0Idx = 0U;
+constexpr uint32_t kWriterOut1Idx = 1U;
 
-constexpr uint32_t kNumMaskTiles = 1U;
-constexpr uint32_t kNumScalerTiles = 1U;
-constexpr uint32_t kNumRmsBeforeReductionTiles = 2U;
-constexpr uint32_t kNumRmsAfterReductionTiles = 2U;
-constexpr uint32_t kNumInverseRmsAfterReductionTiles = 2U;
-constexpr uint32_t kNumRmsOutputTiles = 2U;
-constexpr uint32_t kNumEpsTiles = 1U;
+struct Geometry {
+    uint32_t rows = 0;  // B * N * Ht
+    uint32_t Wt = 0;
+    uint32_t mask_w = 0;  // C % 32
+    uint32_t num_inner = 0;
+};
 
-const std::string kMaskWDefineKey = "DO_MASK_W";
-const std::string kReturnRMSDefineKey = "RETURN_RMS";
-const std::string kEverythingFitsInL1DefineKey = "EVERYTHING_FITS_IN_L1";
-const std::string kEverythingExceptGammaFitsInL1DefineKey = "EVERYTHING_EXCEPT_GAMMA_FITS_IN_L1";
+Geometry get_geometry(const ttnn::Tensor& input) {
+    const auto& padded = input.padded_shape();
+    Geometry g;
+    g.rows = padded[0] * padded[1] * (padded[2] / tt::constants::TILE_HEIGHT);
+    g.Wt = padded[3] / tt::constants::TILE_WIDTH;
+    g.num_inner = input.logical_shape()[-1];
+    g.mask_w = g.num_inner % tt::constants::TILE_WIDTH;
+    return g;
+}
+
+struct CoreSplit {
+    uint32_t num_cores = 0;
+    uint32_t num_cores_y = 0;
+    tt::tt_metal::CoreRangeSet all_cores;
+    tt::tt_metal::CoreRangeSet core_group_1;
+    tt::tt_metal::CoreRangeSet core_group_2;
+    uint32_t work_per_core_1 = 0;
+    uint32_t work_per_core_2 = 0;
+};
+
+CoreSplit split_items(ttnn::IDevice* device, uint32_t total_work) {
+    const auto grid = device->compute_with_storage_grid_size();
+    auto [num_cores, all_cores, core_group_1, core_group_2, work_per_core_1, work_per_core_2] =
+        tt::tt_metal::split_work_to_cores(grid, total_work);
+    return CoreSplit{
+        .num_cores = num_cores,
+        .num_cores_y = grid.y,
+        .all_cores = all_cores,
+        .core_group_1 = core_group_1,
+        .core_group_2 = core_group_2,
+        .work_per_core_1 = work_per_core_1,
+        .work_per_core_2 = work_per_core_2};
+}
+
+template <typename ComputeArgsFn>
+std::vector<tt::tt_metal::CoreCoord> create_compute_and_assign_args(
+    tt::tt_metal::Program& program,
+    const CoreSplit& split,
+    const std::map<std::string, std::string>& defines,
+    const char* compute_path,
+    ComputeArgsFn&& compute_args_for,
+    tt::tt_metal::KernelHandle reader,
+    tt::tt_metal::KernelHandle writer,
+    std::vector<uint32_t> reader_addrs,
+    std::vector<uint32_t> writer_addrs) {
+    auto make_compute = [&](const tt::tt_metal::CoreRangeSet& cores, uint32_t work_count) {
+        return create_compute_kernel(
+            program, cores, compute_args_for(work_count), defines, compute_path, /*fp32_dest_acc_en=*/true);
+    };
+    const auto compute_1 = make_compute(split.core_group_1, split.work_per_core_1);
+    const auto compute_2 =
+        split.core_group_2.ranges().empty() ? compute_1 : make_compute(split.core_group_2, split.work_per_core_2);
+
+    std::vector<tt::tt_metal::CoreCoord> cores;
+    cores.reserve(split.num_cores);
+    for (uint32_t i = 0, work_start = 0; i < split.num_cores; ++i) {
+        const tt::tt_metal::CoreCoord core = {i / split.num_cores_y, i % split.num_cores_y};
+        const bool in_group_1 = split.core_group_1.contains(core);
+        const uint32_t work_count = in_group_1 ? split.work_per_core_1 : split.work_per_core_2;
+        // The compute kernel derives each item's slice geometry from its absolute work index.
+        SetRuntimeArgs(program, in_group_1 ? compute_1 : compute_2, core, {work_start});
+        auto r_args = reader_addrs;
+        r_args.push_back(work_start);
+        r_args.push_back(work_count);
+        SetRuntimeArgs(program, reader, core, r_args);
+        auto w_args = writer_addrs;
+        w_args.push_back(work_start);
+        w_args.push_back(work_count);
+        SetRuntimeArgs(program, writer, core, w_args);
+        cores.push_back(core);
+        work_start += work_count;
+    }
+    return cores;
+}
 
 }  // namespace
 
 namespace ttml::metal::ops::rmsnorm_fw::device {
 
-/**
- *   Helper struct to hold references to all kernels we create,
- *        used during runtime argument setup.
- */
-struct RMSNormForwardKernels {
-    tt::tt_metal::KernelHandle reader;
-    tt::tt_metal::KernelHandle writer;
-    tt::tt_metal::KernelHandle compute_group_1;
-    tt::tt_metal::KernelHandle compute_group_2;
-};
+// ---------------------------------------------------------------------------------------------------------------
+// Phase A: partial sums of squares
+// ---------------------------------------------------------------------------------------------------------------
 
-/**
- * Set up the runtime arguments for the 4 relevant kernels (reader, writer, compute G1, compute G2)
- *        for each core in the grid.
- */
-void assign_per_core_runtime_args(
-    tt::tt_metal::Program& program,
-    const RMSNormForwardKernels& kernels,
-    const tt::tt_metal::Buffer* input_buffer,
-    const tt::tt_metal::Buffer* gamma_buffer,
-    const tt::tt_metal::Buffer* output_buffer,
-    const tt::tt_metal::Buffer* rms_output_buffer,
-    uint32_t num_cores,
-    uint32_t num_cores_y,
-    uint32_t num_rows_per_core_group_1,
-    uint32_t num_rows_per_core_group_2,
-    const tt::tt_metal::CoreRangeSet& core_group_1,
-    const tt::tt_metal::CoreRangeSet& core_group_2) {
-    for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
-        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
+RMSNormForwardPartialProgramFactory::cached_program_t RMSNormForwardPartialProgramFactory::create(
+    const partial::operation_attributes_t& args,
+    const partial::tensor_args_t& tensor_args,
+    partial::tensor_return_value_t& output) {
+    namespace cb = rmsnorm_fw_cb;
+    const auto& input = tensor_args.input;
+    auto* device = input.device();
+    tt::tt_metal::Program program{};
 
-        // Determine how many rows this core will process
-        uint32_t num_rows_per_core = 0;
-        if (core_group_1.contains(core)) {
-            num_rows_per_core = num_rows_per_core_group_1;
-        } else if (core_group_2.contains(core)) {
-            num_rows_per_core = num_rows_per_core_group_2;
-        } else {
-            TT_FATAL(false, "Core not in specified core ranges");
-        }
+    const Geometry geo = get_geometry(input);
+    const uint32_t S = args.num_slices;
+    const uint32_t St = args.slice_tiles;
+    const uint32_t block = std::min(kBlockTiles, St);
+    const CoreSplit split = split_items(device, geo.rows * S);
 
-        // Reader kernel: (input_addr, gamma_addr, number_of_rows, offset_in_rows)
-        SetRuntimeArgs(
-            program,
-            kernels.reader,
-            core,
-            {input_buffer->address(), gamma_buffer->address(), num_rows_per_core, num_rows_written});
+    const auto bf16 = tt::DataFormat::Float16_b;
+    const auto f32 = tt::DataFormat::Float32;
+    const uint32_t bf16_tile = tt::tile_size(bf16);
+    const uint32_t f32_tile = tt::tile_size(f32);
 
-        // Writer kernel: (dst_addr, dst_rms_addr number_of_rows, offset_in_rows)
-        SetRuntimeArgs(
-            program,
-            kernels.writer,
-            core,
-            {output_buffer->address(), rms_output_buffer->address(), num_rows_per_core, num_rows_written});
+    create_circular_buffer(program, split.all_cores, cb::x, bf16, bf16_tile, 2U * block);
+    create_circular_buffer(program, split.all_cores, cb::zero, bf16, bf16_tile, 1U);
+    create_circular_buffer(program, split.all_cores, cb::mask, bf16, bf16_tile, 1U);
+    create_circular_buffer(program, split.all_cores, cb::partial_out, f32, f32_tile, 2U);
 
-        num_rows_written += num_rows_per_core;
+    std::map<std::string, std::string> defines;
+    if (geo.mask_w != 0) {
+        defines["DO_MASK_W"] = "1";
+    }
+
+    std::vector<uint32_t> reader_ct_args{geo.Wt, S, St, block, geo.mask_w};
+    tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_ct_args);
+    auto reader = create_reader_kernel(program, split.all_cores, reader_ct_args, defines, kReaderKernelPath);
+
+    std::vector<uint32_t> writer_ct_args{geo.Wt, S, St, block};
+    tt::tt_metal::TensorAccessorArgs(output.buffer()).append_to(writer_ct_args);
+    auto writer = create_writer_kernel(program, split.all_cores, writer_ct_args, defines, kWriterKernelPath);
+
+    auto cores = create_compute_and_assign_args(
+        program,
+        split,
+        defines,
+        kPartialComputeKernelPath,
+        [&](uint32_t work_count) {
+            return std::vector<uint32_t>{work_count, geo.Wt, S, St, block, geo.mask_w, 0U, 0U};
+        },
+        reader,
+        writer,
+        {input.buffer()->address(), /*gamma*/ 0U, /*partials*/ 0U},
+        {output.buffer()->address(), /*rms*/ 0U});
+
+    return cached_program_t{std::move(program), {reader, writer, std::move(cores)}};
+}
+
+void RMSNormForwardPartialProgramFactory::override_runtime_arguments(
+    cached_program_t& cached_program,
+    const partial::operation_attributes_t&,
+    const partial::tensor_args_t& tensor_args,
+    partial::tensor_return_value_t& output) {
+    auto& program = cached_program.program;
+    const auto& shared = cached_program.shared_variables;
+    auto& reader_args = GetRuntimeArgs(program, shared.reader_kernel_id);
+    auto& writer_args = GetRuntimeArgs(program, shared.writer_kernel_id);
+    for (const auto& core : shared.cores) {
+        reader_args[core.x][core.y][kReaderInputIdx] = tensor_args.input.buffer()->address();
+        writer_args[core.x][core.y][kWriterOut0Idx] = output.buffer()->address();
     }
 }
 
+// ---------------------------------------------------------------------------------------------------------------
+// Phase B: rms + normalised output
+// ---------------------------------------------------------------------------------------------------------------
+
 RMSNormForwardProgramFactory::cached_program_t RMSNormForwardProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
-    // -------------------------------------------------------------------------
-    // 1) Setup device, data formats, tile sizes, and compute split
-    // -------------------------------------------------------------------------
+    namespace cb = rmsnorm_fw_cb;
     const auto& input = tensor_args.input;
-    const auto& gamma = tensor_args.gamma;
-
     auto* device = input.device();
-
     tt::tt_metal::Program program{};
 
-    tt::DataFormat input_data_format = datatype_to_dataformat_converter(input.dtype());
-    TT_FATAL(input_data_format == tt::DataFormat::Float16_b, "Input data format must be Float16_b");
+    const Geometry geo = get_geometry(input);
+    const uint32_t S = args.num_slices;
+    const uint32_t St = args.slice_tiles;
+    const uint32_t block = std::min(kBlockTiles, St);
+    const bool return_rms = args.return_intermediates;
+    const CoreSplit split = split_items(device, geo.rows * S);
 
-    uint32_t bfloat16_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float16_b);
-    uint32_t float32_single_tile_size_bytes = tt::tile_size(tt::DataFormat::Float32);
+    const auto bf16 = tt::DataFormat::Float16_b;
+    const auto f32 = tt::DataFormat::Float32;
+    const uint32_t bf16_tile = tt::tile_size(bf16);
+    const uint32_t f32_tile = tt::tile_size(f32);
 
-    auto padded_tensor_shape = input.padded_shape();
-    auto padded_tensor_volume = input.physical_volume();
-    TT_FATAL(
-        padded_tensor_volume % tt::constants::TILE_HW == 0, "Padded input tensor volume must be divisible by TILE_HW");
-    TT_FATAL(padded_tensor_shape.rank() == 4U, "Input tensor must be 4D");
-    uint32_t Wt = padded_tensor_shape[-1] / tt::constants::TILE_WIDTH;
-    uint32_t Ht = padded_tensor_shape[-2] / tt::constants::TILE_HEIGHT;
-    uint32_t NC = padded_tensor_shape[0] * padded_tensor_shape[1];
-    uint32_t total_rows_to_process = NC * Ht;
+    create_circular_buffer(program, split.all_cores, cb::x, bf16, bf16_tile, 2U * block);
+    create_circular_buffer(program, split.all_cores, cb::zero, bf16, bf16_tile, 1U);
+    create_circular_buffer(program, split.all_cores, cb::gamma, bf16, bf16_tile, 2U * block);
+    create_circular_buffer(program, split.all_cores, cb::partials, f32, f32_tile, 2U * S);
+    create_circular_buffer(program, split.all_cores, cb::ones, bf16, bf16_tile, 1U);
+    create_circular_buffer(program, split.all_cores, cb::acc, f32, f32_tile, 1U);
+    create_circular_buffer(program, split.all_cores, cb::rms, f32, f32_tile, 1U);
+    create_circular_buffer(program, split.all_cores, cb::inv, f32, f32_tile, 1U);
+    create_circular_buffer(program, split.all_cores, cb::y, bf16, bf16_tile, 2U * block);
+    if (return_rms) {
+        create_circular_buffer(program, split.all_cores, cb::rms_out, bf16, bf16_tile, 2U);
+    }
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_y = compute_with_storage_grid_size.y;
+    std::map<std::string, std::string> defines{{"APPLY", "1"}};
+    if (return_rms) {
+        defines["RETURN_RMS"] = "1";
+    }
 
-    uint32_t num_inner = input.logical_shape()[-1];
+    std::vector<uint32_t> reader_ct_args{geo.Wt, S, St, block, geo.mask_w};
+    tt::tt_metal::TensorAccessorArgs(input.buffer()).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(tensor_args.gamma.buffer()).append_to(reader_ct_args);
+    tt::tt_metal::TensorAccessorArgs(tensor_args.partials.buffer()).append_to(reader_ct_args);
+    auto reader = create_reader_kernel(program, split.all_cores, reader_ct_args, defines, kReaderKernelPath);
 
-    // compile arguments
-    uint32_t packed_scaler = pack_two_bfloat16_to_uint32(1.F / static_cast<float>(num_inner));
-    uint32_t packed_eps = pack_two_bfloat16_to_uint32(args.epsilon);
-    uint32_t mask_w = num_inner % tt::constants::TILE_WIDTH;
-    uint32_t block_size = get_block_size(Wt, 3U);
+    std::vector<uint32_t> writer_ct_args{geo.Wt, S, St, block};
+    tt::tt_metal::TensorAccessorArgs(output[0].buffer()).append_to(writer_ct_args);
+    if (return_rms) {
+        tt::tt_metal::TensorAccessorArgs(output[1].buffer()).append_to(writer_ct_args);
+    }
+    auto writer = create_writer_kernel(program, split.all_cores, writer_ct_args, defines, kWriterKernelPath);
 
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_per_core_group_1, num_rows_per_core_group_2] =
-        tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, total_rows_to_process);
-
-    // -------------------------------------------------------------------------
-    // 2) Create and configure circular buffers
-    // -------------------------------------------------------------------------
-    uint32_t twice_block_size = 2U * block_size;
-    const uint32_t available_L1_in_bytes =
-        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-
-    // Memory allocation for L1 cache
-    const uint64_t weight_memory = 2U * Wt * bfloat16_single_tile_size_bytes;
-    const uint64_t mask_scaler_eps_memory =
-        (kNumMaskTiles + kNumScalerTiles + kNumEpsTiles) * bfloat16_single_tile_size_bytes;
-    const uint64_t rms_memory =
-        (kNumRmsBeforeReductionTiles + kNumRmsAfterReductionTiles + kNumInverseRmsAfterReductionTiles) *
-        float32_single_tile_size_bytes;
-    const uint64_t block_memory = 2 * twice_block_size * bfloat16_single_tile_size_bytes;
-    const uint64_t rms_output_memory = kNumRmsOutputTiles * bfloat16_single_tile_size_bytes;
-    // Total L1 memory required
-    const uint64_t required_L1_in_bytes =
-        weight_memory + mask_scaler_eps_memory + rms_memory + block_memory + rms_output_memory;
-    const bool everything_fits_in_l1 = required_L1_in_bytes <= available_L1_in_bytes;
-
-    const uint64_t required_L1_in_bytes_except_gamma = required_L1_in_bytes - Wt * bfloat16_single_tile_size_bytes +
-                                                       twice_block_size * bfloat16_single_tile_size_bytes;
-    const bool everything_except_gamma_fits_in_l1 = required_L1_in_bytes_except_gamma <= available_L1_in_bytes;
-
-    const uint32_t num_input_tiles =
-        (everything_fits_in_l1 | everything_except_gamma_fits_in_l1) ? Wt : twice_block_size;
-    const uint32_t num_gamma_tiles = everything_fits_in_l1 ? Wt : twice_block_size;
-
-    auto data_format = input_data_format;
-    auto precise_data_format = tt::DataFormat::Float32;
-
-    [[maybe_unused]] auto cb_input = create_circular_buffer(
-        program, all_cores, kInputCbIndex, data_format, bfloat16_single_tile_size_bytes, num_input_tiles);
-
-    [[maybe_unused]] auto cb_mask = create_circular_buffer(
-        program, all_cores, kMaskCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumMaskTiles);
-
-    [[maybe_unused]] auto cb_scaler = create_circular_buffer(
-        program, all_cores, kScalerCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumScalerTiles);
-
-    [[maybe_unused]] auto cb_eps = create_circular_buffer(
-        program, all_cores, kEpsCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumEpsTiles);
-
-    [[maybe_unused]] auto cb_gamma = create_circular_buffer(
-        program, all_cores, kGammaCbIndex, data_format, bfloat16_single_tile_size_bytes, num_gamma_tiles);
-
-    [[maybe_unused]] auto cb_rms_before_reduction_intermediate = create_circular_buffer(
+    const uint32_t inv_c_bits = std::bit_cast<uint32_t>(1.0F / static_cast<float>(geo.num_inner));
+    const uint32_t eps_bits = std::bit_cast<uint32_t>(args.epsilon);
+    auto cores = create_compute_and_assign_args(
         program,
-        all_cores,
-        kRmsBeforeReductionCbIndex,
-        precise_data_format,
-        float32_single_tile_size_bytes,
-        kNumRmsBeforeReductionTiles);
+        split,
+        defines,
+        kApplyComputeKernelPath,
+        [&](uint32_t work_count) {
+            return std::vector<uint32_t>{work_count, geo.Wt, S, St, block, geo.mask_w, inv_c_bits, eps_bits};
+        },
+        reader,
+        writer,
+        {input.buffer()->address(), tensor_args.gamma.buffer()->address(), tensor_args.partials.buffer()->address()},
+        {output[0].buffer()->address(), return_rms ? output[1].buffer()->address() : 0U});
 
-    [[maybe_unused]] auto cb_rms_after_reduction_intermediate = create_circular_buffer(
-        program,
-        all_cores,
-        kRmsAfterReductionCbIndex,
-        precise_data_format,
-        float32_single_tile_size_bytes,
-        kNumRmsAfterReductionTiles);
-
-    [[maybe_unused]] auto cb_inverse_rms_after_reduction_intermediate = create_circular_buffer(
-        program,
-        all_cores,
-        kInverseRmsAfterReductionCbIndex,
-        precise_data_format,
-        float32_single_tile_size_bytes,
-        kNumInverseRmsAfterReductionTiles);
-
-    [[maybe_unused]] auto cb_output = create_circular_buffer(
-        program, all_cores, kOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-
-    [[maybe_unused]] auto cb_rms_output = create_circular_buffer(
-        program, all_cores, kRmsOutputCbIndex, data_format, bfloat16_single_tile_size_bytes, kNumRmsOutputTiles);
-
-    [[maybe_unused]] auto cb_output_intermediate = create_circular_buffer(
-        program, all_cores, kOutputIntermediateCbIndex, data_format, bfloat16_single_tile_size_bytes, twice_block_size);
-
-    // -------------------------------------------------------------------------
-    // 3) Create reader/writer kernels
-    // -------------------------------------------------------------------------
-    auto* input_buffer = input.buffer();
-    TT_FATAL(
-        input_buffer->buffer_type() == ttnn::BufferType::DRAM,
-        "Input buffer must be in DRAM. Input buffer of type {}",
-        enchantum::to_string(input_buffer->buffer_type()));
-
-    auto* gamma_buffer = gamma.buffer();
-    TT_FATAL(
-        gamma_buffer->buffer_type() == ttnn::BufferType::DRAM,
-        "Gamma buffer must be in DRAM. Gamma buffer of type {}",
-        enchantum::to_string(gamma_buffer->buffer_type()));
-
-    auto* output_buffer = output.front().buffer();
-    TT_FATAL(
-        output_buffer->buffer_type() == ttnn::BufferType::DRAM,
-        "Output buffer must be in DRAM. Output buffer of type {}",
-        enchantum::to_string(output_buffer->buffer_type()));
-
-    auto* rms_output_buffer = output.back().buffer();
-    TT_FATAL(
-        rms_output_buffer->buffer_type() == ttnn::BufferType::DRAM,
-        "RMS output buffer must be in DRAM. RMS output buffer of type {}",
-        enchantum::to_string(rms_output_buffer->buffer_type()));
-
-    // configure defines
-    std::map<std::string, std::string> defines;
-    if (mask_w != 0) {
-        defines[kMaskWDefineKey] = "1";
-    }
-    if (everything_fits_in_l1) {
-        defines[kEverythingFitsInL1DefineKey] = "1";
-    }
-
-    if (everything_except_gamma_fits_in_l1) {
-        defines[kEverythingExceptGammaFitsInL1DefineKey] = "1";
-    }
-
-    if (args.return_intermediates) {
-        defines[kReturnRMSDefineKey] = "1";
-    }
-
-    // setup defines for reduce
-    // Compute kernel does not compile without these defines
-    // LLK reduction uses define values as default template parameters
-    defines["REDUCE_OP"] = "PoolType::SUM";
-    defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
-
-    RMSNormForwardKernels kernels;
-    std::vector<uint32_t> reader_compile_time_args{packed_scaler, packed_eps, mask_w, Wt, block_size};
-    tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(gamma_buffer).append_to(reader_compile_time_args);
-    kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
-
-    std::vector<uint32_t> writer_compile_time_args{Wt, block_size};
-    tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_compile_time_args);
-    if (args.return_intermediates) {
-        tt::tt_metal::TensorAccessorArgs(rms_output_buffer).append_to(writer_compile_time_args);
-    } else {
-        tt::tt_metal::TensorAccessorArgs().append_to(writer_compile_time_args);
-    }
-    kernels.writer = create_writer_kernel(program, all_cores, writer_compile_time_args, defines, kWriterKernelPath);
-
-    // -------------------------------------------------------------------------
-    // 4) Create compute kernels for rmsnorm_fw
-    // -------------------------------------------------------------------------
-
-    // Group 1 compile-time arguments
-    std::vector<uint32_t> compute_group_1_args = {
-        num_rows_per_core_group_1,  // per_core_block_cnt
-        block_size,                 // per_core_block_size
-        Wt                          // num_inner / TILE_W
-    };
-
-    kernels.compute_group_1 = create_compute_kernel(
-        program, core_group_1, compute_group_1_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
-
-    // Group 2 (if present) compile-time arguments
-    if (!core_group_2.ranges().empty()) {
-        std::vector<uint32_t> compute_group_2_args = {
-            num_rows_per_core_group_2,  // per_core_block_cnt
-            block_size,                 // per_core_block_size
-            Wt                          // num_inner / TILE_W
-        };
-
-        kernels.compute_group_2 = create_compute_kernel(
-            program, core_group_2, compute_group_2_args, defines, kComputeKernelPath, /*fp32_dest_acc_en=*/true);
-    }
-
-    // -------------------------------------------------------------------------
-    // 5) Assign runtime args for each core
-    // -------------------------------------------------------------------------
-    assign_per_core_runtime_args(
-        program,
-        kernels,
-        input_buffer,
-        gamma_buffer,
-        output_buffer,
-        rms_output_buffer,
-        num_cores,
-        num_cores_y,
-        num_rows_per_core_group_1,
-        num_rows_per_core_group_2,
-        core_group_1,
-        core_group_2);
-
-    // -------------------------------------------------------------------------
-    // 6) Return the fully configured program & relevant shared variables
-    // -------------------------------------------------------------------------
-    return cached_program_t{
-        std::move(program),
-        {/* rmsnorm_fw_reader_kernel_id  = */ kernels.reader,
-         /* rmsnorm_fw_writer_kernel_id  = */ kernels.writer,
-         /* rmsnorm_fw_kernel_group_1_id = */ kernels.compute_group_1,
-         /* rmsnorm_fw_kernel_group_2_id = */ kernels.compute_group_2,
-         /* core_group_1              = */ core_group_1,
-         /* core_group_2              = */ core_group_2,
-         /* num_cores                 = */ num_cores,
-         /* num_cores_y               = */ num_cores_y}};
+    return cached_program_t{std::move(program), {reader, writer, std::move(cores)}};
 }
 
 void RMSNormForwardProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const operation_attributes_t& operation_attributes,
+    const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output) {
-    auto& shared_vars = cached_program.shared_variables;
-    auto& rmsnorm_fw_reader_kernel = shared_vars.rmsnorm_fw_reader_kernel_id;
-    auto& rmsnorm_fw_writer_kernel = shared_vars.rmsnorm_fw_writer_kernel_id;
-    auto& rmsnorm_fw_group_1_kernel = shared_vars.rmsnorm_fw_kernel_group_1_id;
-    auto& rmsnorm_fw_group_2_kernel = shared_vars.rmsnorm_fw_kernel_group_2_id;
-    auto& core_group_2 = shared_vars.core_group_2;
     auto& program = cached_program.program;
-
-    uint32_t num_cores = shared_vars.num_cores;
-    uint32_t num_cores_y = shared_vars.num_cores_y;
-
-    const auto& input_tensor = tensor_args.input;
-    const auto& gamma_tensor = tensor_args.gamma;
-    auto* input_buffer = input_tensor.buffer();
-    auto* gamma_buffer = gamma_tensor.buffer();
-
-    const auto& output_tensor = output.front();
-    const auto& rms_output_tensor = output.back();
-    auto* output_buffer = output_tensor.buffer();
-    auto* rms_output_buffer = rms_output_tensor.buffer();
-
-    // Only address arguments need updating here; tile counts remain the same as in create().
-    auto& reader_runtime_args = GetRuntimeArgs(program, rmsnorm_fw_reader_kernel);
-    auto& writer_runtime_args = GetRuntimeArgs(program, rmsnorm_fw_writer_kernel);
-    auto& group_1_runtime_args = GetRuntimeArgs(program, rmsnorm_fw_group_1_kernel);
-    // we need to initialize it with something, but if group 2 is  empty it will be used in the loop
-    [[maybe_unused]] auto& group_2_runtime_args =
-        core_group_2.ranges().empty() ? group_1_runtime_args : GetRuntimeArgs(program, rmsnorm_fw_group_2_kernel);
-
-    for (uint32_t i = 0; i < num_cores; i++) {
-        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-        // Update input buffers for the reader kernel
-        {
-            auto& runtime_args = reader_runtime_args[core.x][core.y];
-            runtime_args[kInputBufferIdx] = input_buffer->address();
-            runtime_args[kGammaBufferIdx] = gamma_buffer->address();
-        }
-        // Update destination buffers for the writer kernel
-        {
-            auto& runtime_args = writer_runtime_args[core.x][core.y];
-            runtime_args[kOutputBufferIdx] = output_buffer->address();
-            runtime_args[kRMSOutputBufferIdx] = rms_output_buffer->address();
+    const auto& shared = cached_program.shared_variables;
+    auto& reader_args = GetRuntimeArgs(program, shared.reader_kernel_id);
+    auto& writer_args = GetRuntimeArgs(program, shared.writer_kernel_id);
+    for (const auto& core : shared.cores) {
+        auto& r = reader_args[core.x][core.y];
+        r[kReaderInputIdx] = tensor_args.input.buffer()->address();
+        r[kReaderGammaIdx] = tensor_args.gamma.buffer()->address();
+        r[kReaderPartialsIdx] = tensor_args.partials.buffer()->address();
+        auto& w = writer_args[core.x][core.y];
+        w[kWriterOut0Idx] = output[0].buffer()->address();
+        if (args.return_intermediates) {
+            w[kWriterOut1Idx] = output[1].buffer()->address();
         }
     }
 }

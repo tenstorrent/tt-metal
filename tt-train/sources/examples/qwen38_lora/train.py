@@ -61,7 +61,7 @@ from ttml.common.performance import get_device_peak_tflops_bf16
 from ttml.models.qwen38 import Qwen38Config, Qwen38Transformer
 from ttml.models.qwen38.flops import flops_per_token
 from ttml.models.qwen38.loading import load_from_safetensors
-from ttml.models.qwen38.autograd_ops import autograd_slice
+from ttml.models.qwen38.autograd_ops import autograd_split
 from ttml.models.qwen38.checkpoint import log_dram, recompute
 from ttml.models.qwen38.lora import apply_lora, build_lora_config, trainable_summary
 
@@ -96,6 +96,12 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="recompute every decoder block (mixer + MLP) in backward, keeping only block inputs; "
         "for long sequences",
+    )
+    p.add_argument(
+        "--sequence-parallel",
+        action="store_true",
+        help="Megatron sequence parallelism: split the residual stream, norms and residual adds along "
+        "the sequence across the TP axis (all-gather into each mixer/MLP, reduce-scatter out)",
     )
     p.add_argument(
         "--loss-chunk",
@@ -186,11 +192,14 @@ def chunked_vocab_parallel_loss(hidden, targets, lm_head, chunk: int, tp_axis):
     ever live. Chunk means are weighted by ``chunk / S``, which equals the
     unchunked mean.
     """
-    batch, _, seq, width = [int(d) for d in hidden.shape()]
+    batch, _, seq, _ = [int(d) for d in hidden.shape()]
     targets_val = targets.get_value()
     total = None
-    for start in range(0, seq, chunk):
-        h = autograd_slice(hidden, [0, 0, start, 0], [batch, 1, start + chunk, width])
+    # One autograd_split instead of S/chunk autograd_slice calls: Slice.backward rebuilds a
+    # full [B, 1, S, H] gradient per chunk (host-side zeros + concat), Split.backward is a
+    # single concat of the chunk gradients.
+    chunks = autograd_split(hidden, [chunk] * (seq // chunk), 2)
+    for h, start in zip(chunks, range(0, seq, chunk)):
         t = ttml.autograd.create_tensor(ttnn.slice(targets_val, [0, start], [batch, start + chunk]), False)
         loss = recompute(
             lambda x, t=t: ttml.ops.distributed.vocab_parallel_cross_entropy_loss(lm_head(x), t, cluster_axis=tp_axis),
@@ -234,6 +243,9 @@ def main() -> int:
     config.use_tp = args.tp > 1
     config.recompute_deltanet = args.recompute_deltanet
     config.recompute_layers = args.recompute_layers
+    if args.sequence_parallel and (args.tp == 1 or args.seq_len % (32 * args.tp)):
+        raise ValueError("--sequence-parallel needs --tp > 1 and seq_len divisible by 32 * tp")
+    config.sequence_parallel = args.sequence_parallel
 
     num_full = sum(1 for i in range(config.num_hidden_layers) if config.is_full_attention(i))
     print(
@@ -246,6 +258,8 @@ def main() -> int:
     elif args.recompute_deltanet:
         print("DeltaNet mixer activations are recomputed in backward")
     print(f"delta rule: {config.delta_rule_impl}, conv: {config.conv_impl}")
+    if args.sequence_parallel:
+        print(f"sequence parallel: residual stream split {args.tp} ways along the sequence")
 
     if args.random_data:
         tokens = random_tokens(config.vocab_size, 1 << 20, args.seed)

@@ -98,6 +98,7 @@ CB_VECB = 28  # stage-G column accumulators
 CB_VECC = 29  # column scratch
 CB_EGR = 30  # compute -> writer, f32 scratch blocks
 CB_GEGR = 31  # compute -> writer, gradient blocks (in dtype)
+CB_TINVIN = 32  # caller-supplied T_inv block (f32), only with `tinv`
 
 SEM_PREP = 0
 SEM_SCAN = 1
@@ -351,6 +352,7 @@ def build_program(
     compute_kernel_config,
     memory_config,
     key_head_dim=None,
+    tinv=None,
 ):
     device = q.device()
     qs = [int(d) for d in q.shape]
@@ -375,6 +377,15 @@ def build_program(
         V = vs[3]
         HK, G = H, 1
 
+    has_tinv = tinv is not None
+    if has_tinv:
+        ts = [int(d) for d in tinv.shape]
+        if not flat or tinv.dtype != ttnn.float32 or tinv.layout != ttnn.TILE_LAYOUT or ts != [B, T, H * chunk_size]:
+            raise ValueError(
+                f"tinv must be a float32 TILE [B, T, H * chunk_size] = {[B, T, H * chunk_size]} tensor with flat "
+                f"(rank-3) inputs; got {ts} {tinv.dtype} {tinv.layout}"
+            )
+
     in_dtype = q.dtype
     in_tile = ttnn.tile_size(in_dtype)
     f32_tile = ttnn.tile_size(ttnn.float32)
@@ -386,6 +397,8 @@ def build_program(
     # kernel binaries live in.  Subtract it (plus slack) or the extent solve picks
     # a block_val_tiles that overflows L1 at program build.
     budget = ttnn.get_max_worker_l1_unreserved_size() - L1_KERNEL_CONFIG_RESERVE
+    if has_tinv:
+        budget -= BLOCK_DEPTH * geo.Ct * geo.Ct * f32_tile  # CB_TINVIN, not in _cb_bytes
     Vb = _solve_block_val_tiles(geo, in_tile, f32_tile, budget)
     NVB = geo.Vt // Vb
     smap = _ScratchMap(geo, Vb)
@@ -459,6 +472,8 @@ def build_program(
     # ---------------- circular buffers ------------------------------------
     blocks = _cb_blocks(geo, Vb)
     pages = _cb_pages(geo, Vb)
+    if has_tinv:
+        pages[CB_TINVIN] = BLOCK_DEPTH * geo.Ct * geo.Ct
     cbs = []
     for idx in sorted(pages):
         n = pages[idx]
@@ -531,11 +546,12 @@ def build_program(
             int(flat),  # 50 FLAT: rank-3 token-major inputs/outputs (see build_program)
             HK,  # 51 key-head count (== H unless FLAT with GVA)
             G,  # 52 value heads per key head
+            int(has_tinv),  # 53 HAS_TINV: T_inv supplied by the caller (see gdn_common.hpp)
         ]
     )
 
     reader_ct = list(common_ct)
-    for tensor in (q, k, v, g, beta, do, initial_state, dht, sc, scin):
+    for tensor in (q, k, v, g, beta, do, initial_state, dht, sc, scin, tinv):
         reader_ct.extend(_accessor_args(tensor, q))
 
     writer_ct = list(common_ct)
@@ -558,24 +574,28 @@ def build_program(
         # holds; every group has exactly one owner.
         scan_bh_list = [bh for bh in range(geo.BH) if owner_of[bh] == core]
 
-        reader_rt[core.x][core.y] = [
-            addr(q),
-            addr(k),
-            addr(v),
-            addr(g),
-            addr(beta),
-            addr(do),
-            addr(initial_state),
-            addr(dht),
-            addr(sc),
-            addr(scin),
-            start,
-            n,
-            int(len(scan_bh_list) > 0),
-            len(bhs),
-            scale_bits,
-            len(scan_bh_list),
-        ] + scan_bh_list
+        reader_rt[core.x][core.y] = (
+            [
+                addr(q),
+                addr(k),
+                addr(v),
+                addr(g),
+                addr(beta),
+                addr(do),
+                addr(initial_state),
+                addr(dht),
+                addr(sc),
+                addr(scin),
+                start,
+                n,
+                int(len(scan_bh_list) > 0),
+                len(bhs),
+                scale_bits,
+                len(scan_bh_list),
+            ]
+            + scan_bh_list
+            + [addr(tinv)]
+        )
 
         compute_rt[core.x][core.y] = [
             start,

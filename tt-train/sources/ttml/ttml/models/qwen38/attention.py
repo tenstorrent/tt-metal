@@ -32,7 +32,7 @@ from typing import Optional
 import ttml
 from ttml.modules import AbstractModuleBase, LinearLayer, Parameter
 
-from .autograd_ops import autograd_concat, autograd_slice
+from .autograd_ops import autograd_concat, autograd_slice, autograd_split
 from .parallel import make_column_linear, make_row_linear, tp_size
 
 __all__ = ["Qwen38GatedAttention"]
@@ -130,12 +130,10 @@ class Qwen38GatedAttention(AbstractModuleBase):
         qg = self.q_proj(hidden_states)
         if self.output_gate:
             per_head = _reshape(qg, [batch, seq, self.num_heads, 2 * self.head_dim])
-            query = autograd_slice(per_head, [0, 0, 0, 0], [batch, seq, self.num_heads, self.head_dim])
-            gate = autograd_slice(
-                per_head,
-                [0, 0, 0, self.head_dim],
-                [batch, seq, self.num_heads, 2 * self.head_dim],
-            )
+            # One split rather than two slices: the head axis pads 6 -> 32 in tile layout, so each
+            # slice's backward would build a full padded [B, T, 32, 2D] gradient (512 MB at 16k
+            # tokens) and then add the two; the split's backward is a single concat.
+            query, gate = autograd_split(per_head, [self.head_dim, self.head_dim], 3)
             # The gate is consumed in [B, 1, T, H * D] form, matching the output.
             gate = _reshape(gate, [batch, 1, seq, self.num_heads * self.head_dim])
             query_heads = _transpose(query, 1, 2)  # [B, H, T, D]

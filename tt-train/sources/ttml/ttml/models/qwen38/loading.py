@@ -250,6 +250,9 @@ def load_from_safetensors(model, checkpoint_dir, config, *, strict: bool = True,
                 # Per-channel weights, so they follow the QKV row permutation.
                 arr = arr[qkv_perm]
             base = target[: -len("/conv1d")]
+            if f"{base}/conv_tap_0" not in parameters:
+                unexpected.append(hf_name)
+                continue
             for tap_idx in range(kernel):
                 tap_name = f"{base}/conv_tap_{tap_idx}"
                 tap = arr[:, 0, tap_idx].reshape(1, 1, 1, channels)

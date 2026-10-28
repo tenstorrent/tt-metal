@@ -62,6 +62,9 @@ __all__ = [
     "make_row_linear",
     "make_sharded_parameter",
     "qkv_shard_permutation",
+    "sequence_parallel",
+    "sp_gather",
+    "sp_scatter",
 ]
 
 
@@ -76,6 +79,36 @@ def _axis(config) -> str:
     return getattr(config, "tp_axis_name", "tp")
 
 
+def sequence_parallel(config) -> bool:
+    """Whether the residual stream is split along the sequence across the TP axis."""
+    return tp_size(config) > 1 and getattr(config, "sequence_parallel", False)
+
+
+def sp_gather(config, x):
+    """``[B, 1, S/tp, H]`` -> ``[B, 1, S, H]`` on entry to a TP region (no-op without SP).
+
+    The gathered slices are distinct per device, so the backward reduce-scatters:
+    it sums the partial input gradients of the column-parallel layers inside the
+    region and hands each device its slice. That replaces the broadcast those
+    layers would otherwise issue (see ``ColumnParallelLinear.sequence_parallel``).
+    """
+    if not sequence_parallel(config):
+        return x
+    axis = ttml.mesh().axis_index(_axis(config))
+    return ttml.ops.distributed.all_gather(x, 2, axis, ttml.ops.distributed.GradOutputType.SHARDED)
+
+
+def sp_scatter(config, x):
+    """Replicated ``[B, 1, S, H]`` -> this device's ``[B, 1, S/tp, H]`` slice (no-op without SP).
+
+    Used once, on the embedding output; its backward all-gathers the slices.
+    """
+    if not sequence_parallel(config):
+        return x
+    axis = ttml.mesh().axis_index(_axis(config))
+    return ttml.ops.distributed.scatter(x, 2, axis)
+
+
 def make_column_linear(config, in_features: int, out_features: int, weight_init, *, gather_output: bool = False):
     """Column-parallel linear (output features sharded), or plain linear if TP is off."""
     if not getattr(config, "use_tp", False):
@@ -87,6 +120,7 @@ def make_column_linear(config, in_features: int, out_features: int, weight_init,
         weight_init=weight_init,
         gather_output=gather_output,
         axis_name=_axis(config),
+        sequence_parallel=sequence_parallel(config),
     )
 
 
@@ -105,6 +139,7 @@ def make_row_linear(config, in_features: int, out_features: int, weight_init, *,
         weight_init=weight_init,
         input_is_parallel=input_is_parallel,
         axis_name=_axis(config),
+        sequence_parallel=sequence_parallel(config),
     )
 
 

@@ -37,9 +37,11 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(2);               // sequence length in tiles
     constexpr uint32_t q_heads = get_compile_time_arg_val(3);          // number of query heads
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(4);  // heads per group
+    [[maybe_unused]] constexpr uint32_t heads_per_item =
+        get_compile_time_arg_val(5);  // Q heads per work item (>1 only with GROUPED_HEADS)
 
     // TensorAccessor definitions with chained offsets
-    constexpr auto grad_output_args = TensorAccessorArgs<5>();
+    constexpr auto grad_output_args = TensorAccessorArgs<6>();
     constexpr auto attn_output_args = TensorAccessorArgs<grad_output_args.next_compile_time_args_offset()>();
     constexpr auto query_args = TensorAccessorArgs<attn_output_args.next_compile_time_args_offset()>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
@@ -66,23 +68,16 @@ void kernel_main() {
 #ifdef BALANCED_PARALLELISM
     constexpr uint32_t pairs_per_seq = Ht / 2;
 
-    auto read_row = [&](const uint32_t global_row_idx) {
-        const uint32_t vo_start_idx = global_row_idx * vWt;
+    // Stage O, dO, Q and lse of one (batch, q_head, q_row).
+    auto read_q_side_row = [&](const uint32_t global_q_row_idx) {
+        const uint32_t vo_start_idx = global_q_row_idx * vWt;
         read_tiles_by_row(cb_attn_output, attn_output_addr_generator, vo_start_idx, vWt, tile_bytes, vWt);
         read_tiles_by_row(cb_grad_output, grad_output_addr_generator, vo_start_idx, vWt, tile_bytes, vWt);
 
-        const uint32_t q_start_idx = global_row_idx * qWt;
+        const uint32_t q_start_idx = global_q_row_idx * qWt;
         read_tiles_by_row(cb_query, query_addr_generator, q_start_idx, qWt, tile_bytes, qWt);
 
-        const uint32_t q_head_idx = (global_row_idx / Ht) % q_heads;
-        const uint32_t batch_idx = global_row_idx / (Ht * q_heads);
-        const uint32_t kv_group_idx = q_head_idx / heads_per_group;
-        const uint32_t key_offset = (batch_idx * num_of_groups + kv_group_idx) * Ht * qWt;
-        const uint32_t value_offset = (batch_idx * num_of_groups + kv_group_idx) * Ht * vWt;
-        const uint32_t q_row_tile = global_row_idx % Ht;
-        const uint32_t num_kv_tiles_to_read = q_row_tile + 1;
-
-        const uint32_t intermediates_idx = global_row_idx * num_of_interm_tiles;
+        const uint32_t intermediates_idx = global_q_row_idx * num_of_interm_tiles;
         read_tiles_by_row(
             cb_intermediates,
             intermediates_addr_generator,
@@ -90,6 +85,35 @@ void kernel_main() {
             num_of_interm_tiles,
             interm_tile_bytes,
             num_of_interm_tiles);
+    };
+
+    auto read_row = [&](const uint32_t global_row_idx) {
+        const uint32_t q_row_tile = global_row_idx % Ht;
+#ifdef GROUPED_HEADS
+        // Grouped (GQA) item: global_row_idx enumerates (batch, kv_head, head sub-group, q_row).
+        // Stage the Q-side rows of every head in the sub-group, then stream each K/V row once.
+        constexpr uint32_t items_per_group = heads_per_group / heads_per_item;
+        const uint32_t item_seq_idx = global_row_idx / Ht;
+        const uint32_t kv_seq_idx = item_seq_idx / items_per_group;  // batch_idx * num_of_groups + kv_group_idx
+        const uint32_t sub_group_idx = item_seq_idx % items_per_group;
+        const uint32_t batch_idx = kv_seq_idx / num_of_groups;
+        const uint32_t kv_group_idx = kv_seq_idx % num_of_groups;
+        const uint32_t first_q_head = kv_group_idx * heads_per_group + sub_group_idx * heads_per_item;
+        for (uint32_t j = 0; j < heads_per_item; ++j) {
+            read_q_side_row((batch_idx * q_heads + first_q_head + j) * Ht + q_row_tile);
+        }
+        const uint32_t key_offset = kv_seq_idx * Ht * qWt;
+        const uint32_t value_offset = kv_seq_idx * Ht * vWt;
+#else
+        read_q_side_row(global_row_idx);
+
+        const uint32_t q_head_idx = (global_row_idx / Ht) % q_heads;
+        const uint32_t batch_idx = global_row_idx / (Ht * q_heads);
+        const uint32_t kv_group_idx = q_head_idx / heads_per_group;
+        const uint32_t key_offset = (batch_idx * num_of_groups + kv_group_idx) * Ht * qWt;
+        const uint32_t value_offset = (batch_idx * num_of_groups + kv_group_idx) * Ht * vWt;
+#endif
+        const uint32_t num_kv_tiles_to_read = q_row_tile + 1;
 
         for (uint32_t h = 0; h < num_kv_tiles_to_read; ++h) {
             read_tiles_by_row(cb_key, key_addr_generator, key_offset + h * qWt, qWt, tile_bytes, qWt);

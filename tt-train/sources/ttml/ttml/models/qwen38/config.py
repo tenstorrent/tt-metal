@@ -80,6 +80,11 @@ class Qwen38Config:
     # heads of the attention layers (see models.qwen38.parallel).
     use_tp: bool = False
     tp_axis_name: str = "tp"
+    # Megatron sequence parallelism on top of TP: the residual stream, norms and
+    # residual adds are split along the sequence across the TP axis, with an
+    # all-gather into each mixer/MLP and a reduce-scatter out of it in place of
+    # TP's all-reduce. Cuts the saved block inputs by the TP width.
+    sequence_parallel: bool = False
 
     # Recompute the Gated DeltaNet mixer in the backward pass instead of keeping
     # its activations. The mixer is ~80% of a DeltaNet layer's activation

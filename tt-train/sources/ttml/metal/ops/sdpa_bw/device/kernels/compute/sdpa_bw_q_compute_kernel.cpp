@@ -28,6 +28,9 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose.h"
 #include "sdpa_bw_compute_utils.hpp"
+#ifdef GROUPED_HEADS
+#include "sdpa_bw_grouped_utils.hpp"
+#endif
 
 // ----------------------------------------------------------------------
 // SDPA Backward Compute Kernel for Query Gradient (dQ)
@@ -65,6 +68,9 @@ constexpr uint32_t scaler_bits = get_compile_time_arg_val(4);      // sqrt(Et) -
 constexpr uint32_t minus_one_bits = get_compile_time_arg_val(5);   // used to transform mask from 1/0 to 0/-1
 constexpr uint32_t custom_inf_bits = get_compile_time_arg_val(6);  // used to transform mask from 0/-1 to 0/-inf
 constexpr uint32_t block_size = get_compile_time_arg_val(7);       // block size for update_grad_query (divides qWt)
+#ifdef GROUPED_HEADS
+constexpr uint32_t heads_per_item = get_compile_time_arg_val(8);  // Q heads per work item (sub-group of a GQA group)
+#endif
 
 constexpr uint32_t cb_grad_output = tt::CBIndex::c_0;  // Gradient w.r.t. output
 constexpr uint32_t cb_attn_output = tt::CBIndex::c_1;  // Attention output from forward pass
@@ -196,6 +202,135 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
     cb_pop_front(cb_grad_output, v_tiles);
 }
 
+#ifdef GROUPED_HEADS
+/**
+ * Process one grouped work item: one Q tile-row for heads_per_item Q heads that share a K/V head
+ * (see sdpa_bw_grouped_utils.hpp). dO / O / Q / lse of all heads are staged once by the reader;
+ * every causal K/V row is streamed once and applied to each head, so K/V DRAM traffic drops by
+ * heads_per_item x. Per-head math is identical to process_single_row.
+ */
+FORCE_INLINE void process_grouped_item(uint32_t global_item_idx) {
+    constexpr uint32_t v_tiles_per_item = heads_per_item * v_tiles;
+    constexpr uint32_t q_tiles_per_item = heads_per_item * qk_tiles;
+    constexpr uint32_t interm_tiles_per_item = heads_per_item * num_of_interm_tiles;
+
+    cb_wait_front(cb_attn_output, v_tiles_per_item);
+    cb_wait_front(cb_grad_output, v_tiles_per_item);
+    cb_wait_front(cb_query, q_tiles_per_item);
+    cb_wait_front(cb_intermediates, interm_tiles_per_item);
+
+    // u_j = rowsum(dO_j ⊙ O_j) for every head -> cb_u_scalar_row[j] (+ copy to DRAM for the KV kernel).
+    // cb_grad_attn_weights is free at this point and serves as the single-tile fp32 scratch.
+    for (uint32_t j = 0; j < heads_per_item; ++j) {
+        grouped_compute_u_scalar_row(
+            cb_grad_output,
+            cb_attn_output,
+            /* tile_base */ j * v_tiles,
+            /* cb_tmp */ cb_grad_attn_weights,
+            cb_u_scalar_row,
+            cb_mat_mul_reduction,
+            v_tiles,
+            cb_u_scaler_output);
+    }
+    cb_wait_front(cb_u_scalar_row, heads_per_item);
+
+    const uint32_t q_row_tile = global_item_idx % Ht;
+    const uint32_t num_kv_tiles_to_process = q_row_tile + 1;  // grouped path is causal-only
+
+    // One accumulator region for all heads; pushed once after the K/V loop.
+    cb_reserve_back(cb_grad_query_accum, q_tiles_per_item);
+
+    constexpr uint32_t matmul_accum_reg = 0;
+    for (uint32_t h = 0; h < num_kv_tiles_to_process; ++h) {
+        cb_wait_front(cb_key, qk_tiles);
+        cb_wait_front(cb_value, v_tiles);
+
+        for (uint32_t j = 0; j < heads_per_item; ++j) {
+            const uint32_t q_tile_base = j * qk_tiles;
+
+            reconfig_data_format(cb_query, cb_key);
+            matmul_init(cb_query, cb_key, /*transpose*/ 1);
+            tile_regs_acquire();
+            for (uint32_t tile_idx = 0; tile_idx < qk_tiles; ++tile_idx) {
+                matmul_tiles(
+                    cb_query,
+                    cb_key,
+                    /* tile_idx */ q_tile_base + tile_idx,
+                    /* tile_idx */ tile_idx,
+                    /* dst_reg_idx*/ matmul_accum_reg);
+            }
+
+            if (h == q_row_tile) {
+                apply_mask_on_reg(matmul_accum_reg, cb_attn_mask, scaler_bits, minus_one_bits, custom_inf_bits);
+            } else {
+                binop_with_scalar_tile_init();
+                mul_unary_tile(matmul_accum_reg, scaler_bits);
+            }
+
+            // P = exp(S - lse_j), fused on DST.
+            apply_softmax_statistics_on_dst(matmul_accum_reg, cb_intermediates, /* lse_tile_idx */ j);
+
+            tile_regs_commit();
+            tile_regs_wait();
+            cb_reserve_back(cb_attention_weights, onetile);
+            pack_reconfig_data_format(cb_grad_query_accum, cb_attention_weights);
+            pack_tile(matmul_accum_reg, cb_attention_weights);
+            tile_regs_release();
+            cb_push_back(cb_attention_weights, onetile);
+
+            // dP_j = dO_j @ V^T
+            compute_grad_attn_weights(
+                cb_grad_output,
+                cb_value,
+                v_tiles,
+                cb_grad_attn_weights,
+                cb_attention_weights,
+                scaler_bits,
+                /* grad_output_tile_base */ j * v_tiles);
+
+            // dS_j = P * (dP_j - u_j) * scale
+            compute_grad_scores(
+                cb_grad_attn_weights,
+                cb_attention_weights,
+                cb_u_scalar_row,
+                scaler_bits,
+                cb_grad_scores,
+                /* u_tile_idx */ j);
+
+            // dQ_j (+)= dS_j @ K
+            grouped_accumulate_row_matmul(
+                cb_grad_scores,
+                cb_key,
+                cb_grad_query_accum,
+                qk_tiles,
+                block_size,
+                /* accum_tile_base */ q_tile_base,
+                /* do_accumulate */ (h > 0));
+
+            cb_pop_front(cb_attention_weights, onetile);
+            cb_pop_front(cb_grad_attn_weights, onetile);
+        }
+
+        cb_pop_front(cb_key, qk_tiles);
+        cb_pop_front(cb_value, v_tiles);
+    }
+
+    // Publish the accumulators, then emit dQ_j rows in head order.
+    cb_push_back(cb_grad_query_accum, q_tiles_per_item);
+    cb_wait_front(cb_grad_query_accum, q_tiles_per_item);
+    for (uint32_t j = 0; j < heads_per_item; ++j) {
+        grouped_pack_accum_to_output(cb_grad_query_accum, cb_grad_query, /* tile_base */ j * qk_tiles, qk_tiles);
+    }
+    cb_pop_front(cb_grad_query_accum, q_tiles_per_item);
+
+    cb_pop_front(cb_u_scalar_row, heads_per_item);
+    cb_pop_front(cb_intermediates, interm_tiles_per_item);
+    cb_pop_front(cb_query, q_tiles_per_item);
+    cb_pop_front(cb_attn_output, v_tiles_per_item);
+    cb_pop_front(cb_grad_output, v_tiles_per_item);
+}
+#endif  // GROUPED_HEADS
+
 void kernel_main() {
     // Runtime args
     // For standard mode: arg0 = start_row
@@ -234,8 +369,14 @@ void kernel_main() {
         const uint32_t light_global_row = seq_idx * Ht + light_row_in_seq;
         const uint32_t heavy_global_row = seq_idx * Ht + heavy_row_in_seq;
 
+#ifdef GROUPED_HEADS
+        // Grouped: a "sequence" is one (batch, kv_head, head sub-group); each item covers heads_per_item Q heads.
+        process_grouped_item(heavy_global_row);
+        process_grouped_item(light_global_row);
+#else
         process_single_row(heavy_global_row);
         process_single_row(light_global_row);
+#endif
     }
 #else
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {

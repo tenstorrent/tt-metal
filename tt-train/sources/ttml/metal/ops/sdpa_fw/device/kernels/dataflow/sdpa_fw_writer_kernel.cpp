@@ -22,11 +22,13 @@ void kernel_main() {
     constexpr uint32_t vWt = get_compile_time_arg_val(0);      // number of tiles in output/value inner dimension
     constexpr uint32_t Ht = get_compile_time_arg_val(1);       // number of tiles in sequence dimension
     constexpr uint32_t q_heads = get_compile_time_arg_val(2);  // num of heads in query
+    [[maybe_unused]] constexpr uint32_t heads_per_group = get_compile_time_arg_val(3);  // Q heads per K/V head
+    [[maybe_unused]] constexpr uint32_t heads_per_item = get_compile_time_arg_val(4);   // Q heads per work item
     constexpr uint32_t pairs_per_seq = Ht / 2;
 
     const uint32_t tile_bytes = get_tile_size(cb_output);
 
-    constexpr auto output_args = TensorAccessorArgs<3>();
+    constexpr auto output_args = TensorAccessorArgs<5>();
     const auto output_addr_generator = TensorAccessor(output_args, output_addr);
 
 #ifdef RETURN_INTERMEDIATES
@@ -69,10 +71,8 @@ void kernel_main() {
     // Each pair combines an early-sequence row (few attention tiles) with a late-sequence row (many tiles),
     // so every core writes roughly the same amount of data.
     // Runtime args reuse: num_rows_to_process = num_pairs, start_row = start_pair_idx.
-    auto write_row = [&](const uint32_t r) {
-        const uint32_t s_tile_idx = r % Ht;
-        const uint32_t q_head_idx = (r / Ht) % q_heads;
-        const uint32_t batch_idx = r / (Ht * q_heads);
+    // Write the output row (and LSE tile) of one (batch, q_head, s_tile).
+    auto write_head_row = [&](const uint32_t batch_idx, const uint32_t q_head_idx, const uint32_t s_tile_idx) {
         const uint32_t out_start_idx = ((batch_idx * q_heads + q_head_idx) * Ht + s_tile_idx) * tiles_per_head;
 
         write_tiles_by_row(cb_output, output_addr_generator, out_start_idx, tiles_per_head, tile_bytes, tiles_per_head);
@@ -86,6 +86,29 @@ void kernel_main() {
         noc_async_write_page(intermediate_base_idx, intermediates_addr_generator, l1_intermediates_read_addr);
         noc_async_write_barrier();
         cb_pop_front(cb_intermediates, kIntermediateTilesPerRow);
+#endif
+    };
+
+    auto write_row = [&](const uint32_t r) {
+#ifdef GROUPED_HEADS
+        // Grouped (GQA) item: r enumerates (batch, kv_head, head sub-group, s_tile); compute emits
+        // the output rows of the heads_per_item Q heads of that sub-group in order.
+        constexpr uint32_t num_of_groups = q_heads / heads_per_group;
+        constexpr uint32_t items_per_group = heads_per_group / heads_per_item;
+        const uint32_t s_tile_idx = r % Ht;
+        const uint32_t item_seq_idx = r / Ht;
+        const uint32_t kv_seq_idx = item_seq_idx / items_per_group;
+        const uint32_t sub_group_idx = item_seq_idx % items_per_group;
+        const uint32_t batch_idx = kv_seq_idx / num_of_groups;
+        const uint32_t first_q_head = (kv_seq_idx % num_of_groups) * heads_per_group + sub_group_idx * heads_per_item;
+        for (uint32_t h = 0; h < heads_per_item; ++h) {
+            write_head_row(batch_idx, first_q_head + h, s_tile_idx);
+        }
+#else
+        const uint32_t s_tile_idx = r % Ht;
+        const uint32_t q_head_idx = (r / Ht) % q_heads;
+        const uint32_t batch_idx = r / (Ht * q_heads);
+        write_head_row(batch_idx, q_head_idx, s_tile_idx);
 #endif
     };
 

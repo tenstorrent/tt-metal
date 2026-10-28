@@ -11,6 +11,7 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include "metal/common/program_utils.hpp"
+#include "metal/common/sdpa_grouped_heads.hpp"
 
 namespace {
 
@@ -59,6 +60,7 @@ constexpr uint32_t kNumOfIntermCBTiles = 1U;  // single FP32 logsumexp tile per 
 const std::string kUseAttnMaskDefKey = "USE_ATTN_MASK";
 const std::string kCausalMaskDefKey = "CAUSAL_MASK";
 const std::string kBalancedParallelismDefKey = "BALANCED_PARALLELISM";
+const std::string kGroupedHeadsDefKey = "GROUPED_HEADS";
 
 /**
  * Calculate work-balanced pair distribution for causal SDPA backward.
@@ -286,9 +288,44 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     // Balanced Parallelism Decision
     // -------------------------------------------------------------------------
     const uint32_t pairs_per_seq = St / 2;
-    const uint32_t total_pairs = NC * pairs_per_seq;
+    const uint32_t total_pairs_per_head = NC * pairs_per_seq;
     const bool use_balanced_parallelism = (args.mask_type == AttentionMaskType::Causal) && (St % 2 == 0) &&
                                           (total_rows_to_process > num_available_cores) && (St > 0);
+
+    const auto data_format = input_data_format;
+    const auto precise_data_format = tt::DataFormat::Float32;
+
+    const uint32_t block_size = get_block_size(qWt, 4U);
+
+    // -------------------------------------------------------------------------
+    // GQA head grouping (balanced causal only): one work item covers heads_per_item Q heads that
+    // share a K/V head, so each causal K/V row is streamed from DRAM once per item instead of once
+    // per Q head. See metal/common/sdpa_grouped_heads.hpp for the gate.
+    // -------------------------------------------------------------------------
+    const uint64_t available_L1_in_bytes =
+        device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const auto grouped_fits_in_l1 = [&](uint32_t heads_per_item) {
+        const uint64_t bf16_tile = bfloat16_single_tile_size_bytes;
+        const uint64_t fp32_tile = float32_single_tile_size_bytes;
+        const uint64_t required =
+            /* grad_output, attn_output (2x heads_per_item rows each) */ 4ULL * heads_per_item * vWt * bf16_tile +
+            /* query (2x heads_per_item rows) */ 2ULL * heads_per_item * qWt * bf16_tile +
+            /* key, value (2 rows each) */ 2ULL * (kWt + vWt) * bf16_tile +
+            /* causal mask */ 2ULL * bf16_tile +
+            /* intermediates (2x heads_per_item lse tiles) */ 2ULL * heads_per_item * fp32_tile +
+            /* matmul reduce, attention weights, grad attn, grad scores */ 4ULL * fp32_tile +
+            /* grad_query accumulator (heads_per_item rows) */ uint64_t{heads_per_item} * qWt * fp32_tile +
+            /* u scalar row + u output (heads_per_item each) */ 2ULL * heads_per_item * fp32_tile +
+            /* grad_query output (2 rows) */ 2ULL * qWt * bf16_tile;
+        return required <= available_L1_in_bytes;
+    };
+    const uint32_t heads_per_item =
+        use_balanced_parallelism
+            ? ttml::metal::sdpa::pick_heads_per_item(
+                  heads_per_group, uint64_t{qB} * kv_heads * pairs_per_seq, num_available_cores, grouped_fits_in_l1)
+            : 1U;
+    const bool use_grouped_heads = heads_per_item > 1U;
+    const uint32_t total_pairs = use_grouped_heads ? total_pairs_per_head / heads_per_item : total_pairs_per_head;
 
     uint32_t num_cores = 0;
     tt::tt_metal::CoreRangeSet all_cores{};
@@ -315,11 +352,6 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         num_rows_per_core_group_2 = std::get<5>(work_split);
     }
 
-    const auto data_format = input_data_format;
-    const auto precise_data_format = tt::DataFormat::Float32;
-
-    const uint32_t block_size = get_block_size(qWt, 4U);
-
     // -------------------------------------------------------------------------
     // 2) Create and configure circular buffers
     // -------------------------------------------------------------------------
@@ -330,7 +362,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         kGradOutputCbIndex,
         data_format,
         bfloat16_single_tile_size_bytes,
-        2 * vWt);
+        2 * heads_per_item * vWt);
 
     [[maybe_unused]] auto cb_attn_output = create_circular_buffer(  // CBIndex::c_1
         program,
@@ -338,10 +370,15 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         kAttnOutputCbIndex,
         data_format,
         bfloat16_single_tile_size_bytes,
-        2 * vWt);
+        2 * heads_per_item * vWt);
 
-    [[maybe_unused]] auto cb_query = create_circular_buffer( // CBIndex::c_2
-        program, all_cores, kQueryCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * qWt);
+    [[maybe_unused]] auto cb_query = create_circular_buffer(  // CBIndex::c_2
+        program,
+        all_cores,
+        kQueryCbIndex,
+        data_format,
+        bfloat16_single_tile_size_bytes,
+        2 * heads_per_item * qWt);
 
     [[maybe_unused]] auto cb_key =  // CBIndex::c_3
         create_circular_buffer(program, all_cores, kKeyCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * kWt);
@@ -370,7 +407,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             kIntermediatesCbIndex,
             precise_data_format,
             float32_single_tile_size_bytes,
-            2 * kNumOfIntermCBTiles);
+            2 * heads_per_item * kNumOfIntermCBTiles);
 
     [[maybe_unused]] auto cb_mat_mul_reduce =  // CBIndex::c_7
         create_circular_buffer(
@@ -383,7 +420,12 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
 
     [[maybe_unused]] auto cb_grad_query_accum =  // CBIndex::c_8
         create_circular_buffer(
-            program, all_cores, kGradQueryAccumCbIndex, precise_data_format, float32_single_tile_size_bytes, qWt);
+            program,
+            all_cores,
+            kGradQueryAccumCbIndex,
+            precise_data_format,
+            float32_single_tile_size_bytes,
+            heads_per_item * qWt);
 
     [[maybe_unused]] auto cb_attention_weights =  // CBIndex::c_9
         create_circular_buffer(
@@ -419,7 +461,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             kUScalarRowCbIndex,
             precise_data_format,
             float32_single_tile_size_bytes,
-            kSingleTileBuffer);
+            heads_per_item * kSingleTileBuffer);
 
     [[maybe_unused]] auto cb_grad_query =  // CBIndex::c_13
         create_circular_buffer(
@@ -432,7 +474,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             kUScalerOutputCbIndex,
             precise_data_format,
             float32_single_tile_size_bytes,
-            kSingleTileBuffer);
+            heads_per_item * kSingleTileBuffer);
 
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
@@ -475,6 +517,11 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         writer_defines[kBalancedParallelismDefKey] = "1";
         compute_defines[kBalancedParallelismDefKey] = "1";
     }
+    if (use_grouped_heads) {
+        reader_defines[kGroupedHeadsDefKey] = "1";
+        writer_defines[kGroupedHeadsDefKey] = "1";
+        compute_defines[kGroupedHeadsDefKey] = "1";
+    }
 
     // Per-arch math fidelity. Wormhole has HW bug TT #38306: HiFi4 + fp32_dest_acc + matmul_block
     // corrupts FP32 dest accumulation, so we use HiFi3 there. Blackhole is unaffected and uses HiFi4.
@@ -490,6 +537,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         St,               // 2: sequence length in tiles
         q_heads,          // 3: number of query heads
         heads_per_group,  // 4: heads per group
+        heads_per_item,   // 5: Q heads per work item (1 unless GROUPED_HEADS)
     };
     tt::tt_metal::TensorAccessorArgs(grad_output_buffer).append_to(reader_compile_args);
     tt::tt_metal::TensorAccessorArgs(attn_output_buffer).append_to(reader_compile_args);
@@ -503,8 +551,11 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
 
     // Writer compile-time arguments
     std::vector<uint32_t> writer_compile_args = {
-        qWt,  // 0: query width in tiles
-        St,   // 1: sequence length in tiles
+        qWt,              // 0: query width in tiles
+        St,               // 1: sequence length in tiles
+        q_heads,          // 2: number of query heads
+        heads_per_group,  // 3: heads per group
+        heads_per_item,   // 4: Q heads per work item (1 unless GROUPED_HEADS)
     };
     tt::tt_metal::TensorAccessorArgs(grad_query_buffer).append_to(writer_compile_args);
     tt::tt_metal::TensorAccessorArgs(u_scaler_buffer).append_to(writer_compile_args);
@@ -535,7 +586,8 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
             scaler,              // 4: sqrt(Et) - sdpa scaler factor
             minus_one,           // 5: used to transform mask from 1/0 to 0/-1
             custom_inf,          // 6: used to transform mask from 0/-1 to 0/-inf
-            block_size           // 7: block size
+            block_size,          // 7: block size
+            heads_per_item       // 8: Q heads per work item (used only with GROUPED_HEADS)
         };
 
         kernels.compute_group_1 = tt::tt_metal::CreateKernel(

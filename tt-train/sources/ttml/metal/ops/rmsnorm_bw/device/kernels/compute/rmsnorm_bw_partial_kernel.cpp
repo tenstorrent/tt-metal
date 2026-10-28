@@ -23,9 +23,9 @@ void kernel_main() {
         load_tile(cb::zero, 0, 0);  // accumulator
         for (uint32_t c = 0; c < sl.ncols; c += block) {
             const uint32_t n = (c + block <= sl.ncols) ? block : (sl.ncols - c);
-            cb_wait_front(cb::a, n);
-            cb_wait_front(cb::gamma, n);
-            cb_wait_front(cb::dy, n);
+            cb_wait_front(cb::a, block);
+            cb_wait_front(cb::gamma, block);
+            cb_wait_front(cb::dy, block);
             for (uint32_t i = 0; i < n; ++i) {
                 gamma_times_dy(i, 1);
                 load_tile(cb::a, i, 2);
@@ -41,9 +41,9 @@ void kernel_main() {
                 add_binary_tile_init();
                 add_binary_tile(0, 1, 0);
             }
-            cb_pop_front(cb::a, n);
-            cb_pop_front(cb::gamma, n);
-            cb_pop_front(cb::dy, n);
+            cb_pop_front(cb::a, block);
+            cb_pop_front(cb::gamma, block);
+            cb_pop_front(cb::dy, block);
         }
         tile_regs_commit();
         pack_and_push(0, cb::partial_out);

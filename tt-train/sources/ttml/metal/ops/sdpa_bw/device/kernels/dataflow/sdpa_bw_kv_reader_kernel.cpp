@@ -36,8 +36,10 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(3);               // sequence length in tiles
     constexpr uint32_t q_heads = get_compile_time_arg_val(4);          // number of query heads
     constexpr uint32_t heads_per_group = get_compile_time_arg_val(5);  // heads per group
+    [[maybe_unused]] constexpr uint32_t kv_rows_per_item =
+        get_compile_time_arg_val(6);  // K/V tile-rows per work item (>1 only with GROUPED_KV_ROWS)
 
-    constexpr auto grad_output_args = TensorAccessorArgs<6>();
+    constexpr auto grad_output_args = TensorAccessorArgs<7>();
     constexpr auto query_args = TensorAccessorArgs<grad_output_args.next_compile_time_args_offset()>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
     constexpr auto value_args = TensorAccessorArgs<key_args.next_compile_time_args_offset()>();
@@ -67,23 +69,34 @@ void kernel_main() {
     const uint32_t num_of_groups = q_heads / heads_per_group;
 
 #ifdef BALANCED_PARALLELISM
-    constexpr uint32_t pairs_per_seq = Ht / 2;
+#ifdef GROUPED_KV_ROWS
+    constexpr uint32_t items_per_seq = Ht / kv_rows_per_item;
+#else
+    constexpr uint32_t items_per_seq = Ht;
+#endif
+    constexpr uint32_t pairs_per_seq = items_per_seq / 2;
 
-    auto read_row = [&](const uint32_t global_row_idx) {
-        const uint32_t k_start_idx = global_row_idx * kWt;
-        const uint32_t v_start_idx = global_row_idx * vWt;
+    // One work item: kv_rows_per_item consecutive K/V rows (1 unless GROUPED_KV_ROWS) of one
+    // (batch, kv_head), followed by the causal Q / lse / dO / u suffix from the first K row on,
+    // for every Q head of the group. global_item_idx = seq_idx * items_per_seq + block_in_seq.
+    auto read_row = [&](const uint32_t global_item_idx) {
+        const uint32_t seq_idx = global_item_idx / items_per_seq;  // batch_idx * num_of_groups + group_idx
+        const uint32_t k_row_tile = (global_item_idx % items_per_seq) * kv_rows_per_item;
+        const uint32_t kv_row_idx = seq_idx * Ht + k_row_tile;  // global K/V tile-row of the first row
 
-        read_tiles_by_row(cb_key, key_address_generator, k_start_idx, kWt, tile_bytes, kWt);
-        read_tiles_by_row(cb_value, value_address_generator, v_start_idx, vWt, tile_bytes, vWt);
+        for (uint32_t r = 0; r < kv_rows_per_item; ++r) {
+            read_tiles_by_row(cb_key, key_address_generator, (kv_row_idx + r) * kWt, kWt, tile_bytes, kWt);
+        }
+        for (uint32_t r = 0; r < kv_rows_per_item; ++r) {
+            read_tiles_by_row(cb_value, value_address_generator, (kv_row_idx + r) * vWt, vWt, tile_bytes, vWt);
+        }
 
-        const uint32_t group_idx = (global_row_idx / Ht) % num_of_groups;
-        const uint32_t batch_idx = global_row_idx / (Ht * num_of_groups);
+        const uint32_t group_idx = seq_idx % num_of_groups;
+        const uint32_t batch_idx = seq_idx / num_of_groups;
 
         const uint32_t first_q_head_idx = group_idx * heads_per_group;
         const uint32_t q_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * qWt;
         const uint32_t vo_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * vWt;
-
-        const uint32_t k_row_tile = global_row_idx % Ht;
 
         const uint32_t q_start_tile = k_row_tile;
         const uint32_t num_q_tiles_to_read = Ht - k_row_tile;
@@ -124,10 +137,10 @@ void kernel_main() {
         const uint32_t pair_in_seq = global_pair_idx % pairs_per_seq;
 
         const uint32_t light_row_in_seq = pair_in_seq;
-        const uint32_t heavy_row_in_seq = Ht - 1 - pair_in_seq;
+        const uint32_t heavy_row_in_seq = items_per_seq - 1 - pair_in_seq;
 
-        const uint32_t light_global_row = seq_idx * Ht + light_row_in_seq;
-        const uint32_t heavy_global_row = seq_idx * Ht + heavy_row_in_seq;
+        const uint32_t light_global_row = seq_idx * items_per_seq + light_row_in_seq;
+        const uint32_t heavy_global_row = seq_idx * items_per_seq + heavy_row_in_seq;
 
         read_row(heavy_global_row);
         read_row(light_global_row);

@@ -22,6 +22,9 @@ void kernel_main() {
     // Get compile-time arguments
     constexpr uint32_t qWt = get_compile_time_arg_val(0);  // query width in tiles
     constexpr uint32_t Ht = get_compile_time_arg_val(1);   // sequence length in tiles
+    [[maybe_unused]] constexpr uint32_t q_heads = get_compile_time_arg_val(2);          // number of query heads
+    [[maybe_unused]] constexpr uint32_t heads_per_group = get_compile_time_arg_val(3);  // Q heads per K/V head
+    [[maybe_unused]] constexpr uint32_t heads_per_item = get_compile_time_arg_val(4);   // Q heads per work item
 
     // Generate helper tiles once at the start
     generate_matmul_row_reduce_tile(cb_mat_mul_reduce);  // tile for matmul row reduce
@@ -36,7 +39,7 @@ void kernel_main() {
     const uint32_t u_scaler_tile_bytes = get_tile_size(cb_u_scaler_output);
 
     // TensorAccessor definitions
-    constexpr auto grad_query_args = TensorAccessorArgs<2>();
+    constexpr auto grad_query_args = TensorAccessorArgs<5>();
     constexpr auto u_scaler_args = TensorAccessorArgs<grad_query_args.next_compile_time_args_offset()>();
 
     // Create TensorAccessor generators
@@ -68,6 +71,30 @@ void kernel_main() {
         const uint32_t light_global_row = seq_idx * Ht + light_row_in_seq;
         const uint32_t heavy_global_row = seq_idx * Ht + heavy_row_in_seq;
 
+#ifdef GROUPED_HEADS
+        // Grouped item = (batch, kv_head, head sub-group, q_row). Compute emits the heads_per_item
+        // u tiles at item start and the heads_per_item dQ rows at item end -> write in that order.
+        constexpr uint32_t items_per_group = heads_per_group / heads_per_item;
+        constexpr uint32_t num_of_groups = q_heads / heads_per_group;
+        auto write_item = [&](const uint32_t global_item_idx) {
+            const uint32_t q_row_tile = global_item_idx % Ht;
+            const uint32_t item_seq_idx = global_item_idx / Ht;
+            const uint32_t kv_seq_idx = item_seq_idx / items_per_group;
+            const uint32_t sub_group_idx = item_seq_idx % items_per_group;
+            const uint32_t batch_idx = kv_seq_idx / num_of_groups;
+            const uint32_t kv_group_idx = kv_seq_idx % num_of_groups;
+            const uint32_t first_q_head = kv_group_idx * heads_per_group + sub_group_idx * heads_per_item;
+            for (uint32_t j = 0; j < heads_per_item; ++j) {
+                write_u_scaler_for_row((batch_idx * q_heads + first_q_head + j) * Ht + q_row_tile);
+            }
+            for (uint32_t j = 0; j < heads_per_item; ++j) {
+                const uint32_t global_q_row = (batch_idx * q_heads + first_q_head + j) * Ht + q_row_tile;
+                write_tiles_by_row(cb_grad_query, grad_query_addr_generator, global_q_row * qWt, qWt, tile_bytes, qWt);
+            }
+        };
+        write_item(heavy_global_row);
+        write_item(light_global_row);
+#else
         // Write heavy row grad_query + u_scaler
         const uint32_t heavy_start_idx = heavy_global_row * qWt;
         write_tiles_by_row(cb_grad_query, grad_query_addr_generator, heavy_start_idx, qWt, tile_bytes, qWt);
@@ -77,6 +104,7 @@ void kernel_main() {
         const uint32_t light_start_idx = light_global_row * qWt;
         write_tiles_by_row(cb_grad_query, grad_query_addr_generator, light_start_idx, qWt, tile_bytes, qWt);
         write_u_scaler_for_row(light_global_row);
+#endif
     }
 #else
     const uint32_t end_row = start_row + num_rows_to_process;

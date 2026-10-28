@@ -24,7 +24,7 @@ from ttml.modules import AbstractModuleBase, Embedding, LinearLayer, ModuleList,
 from .attention import Qwen38GatedAttention
 from .gated_deltanet import Qwen38GatedDeltaNet
 from .checkpoint import recompute
-from .parallel import make_column_linear, make_row_linear, tp_size
+from .parallel import make_column_linear, make_row_linear, sequence_parallel, sp_gather, sp_scatter, tp_size
 
 __all__ = [
     "Qwen38RMSNorm",
@@ -71,8 +71,18 @@ class Qwen38MLP(AbstractModuleBase):
         # RowParallelLinear(input_is_parallel=True) would have done.
         self.tp = tp_size(config)
         self.cluster_axis = ttml.mesh().axis_index(config.tp_axis_name) if self.tp > 1 else None
+        # Under SP the input arrives all-gathered and the output leaves reduce-scattered.
+        self.sequence_parallel = sequence_parallel(config)
 
     def forward(self, x):
+        if self.sequence_parallel:
+            out = ttml.ops.swiglu.swiglu(
+                x,
+                self.gate_proj.weight.tensor,
+                self.down_proj.weight.tensor,
+                self.up_proj.weight.tensor,
+            )
+            return ttml.ops.distributed.reduce_scatter(out, 2, self.cluster_axis)
         if self.tp > 1:
             x = ttml.ops.distributed.broadcast(x, self.cluster_axis)
         out = ttml.ops.swiglu.swiglu(
@@ -99,6 +109,7 @@ class Qwen38Block(AbstractModuleBase):
 
     def __init__(self, config, layer_idx: int) -> None:
         super().__init__()
+        self.config = config
         self.layer_idx = layer_idx
         self.is_full_attention = config.is_full_attention(layer_idx)
 
@@ -130,8 +141,11 @@ class Qwen38Block(AbstractModuleBase):
         return self._block_forward(hidden_states, mask, past_key_values, position_offset)
 
     def _block_forward(self, hidden_states, mask, past_key_values, position_offset):
+        # Under sequence parallelism the residual stream, both norms and both
+        # residual adds work on this device's slice of the sequence; the mixer
+        # and MLP see the full sequence via sp_gather and return a slice.
         residual = hidden_states
-        hidden_states = self.input_layernorm(hidden_states)
+        hidden_states = sp_gather(self.config, self.input_layernorm(hidden_states))
         if self.is_full_attention:
             hidden_states = self.self_attn(hidden_states, mask, past_key_values, position_offset)
         elif self.recompute_mixer:
@@ -143,7 +157,7 @@ class Qwen38Block(AbstractModuleBase):
         hidden_states = ttml.ops.binary.add(residual, hidden_states)
 
         residual = hidden_states
-        hidden_states = self.post_attention_layernorm(hidden_states)
+        hidden_states = sp_gather(self.config, self.post_attention_layernorm(hidden_states))
         hidden_states = self.mlp(hidden_states)
         return ttml.ops.binary.add(residual, hidden_states)
 
@@ -181,10 +195,10 @@ class Qwen38Transformer(AbstractModuleBase):
     ):
         """Logits, or with ``return_hidden`` the final-normed hidden states, for callers
         that apply ``lm_head`` themselves (e.g. a token-chunked loss)."""
-        hidden_states = self.embed_tokens(input_ids)
+        hidden_states = sp_scatter(self.config, self.embed_tokens(input_ids))
         for layer in self.layers:
             hidden_states = layer(hidden_states, mask, past_key_values, position_offset)
-        hidden_states = self.norm(hidden_states)
+        hidden_states = sp_gather(self.config, self.norm(hidden_states))
         if return_hidden:
             return hidden_states
         return self.lm_head(hidden_states)

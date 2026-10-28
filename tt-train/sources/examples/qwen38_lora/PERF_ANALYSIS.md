@@ -13,9 +13,10 @@ peak 594 TFLOP/s across the 4 chips.
 | Fused causal conv1d + SiLU fwd, fused conv backward | 1450.8 | 12.47% |
 | + flat/GQA layout in `gated_delta_net_backward` (no head-axis reshapes; L2 norm and GVA sum as 0/1 matmuls) | 1212.6 | 14.92% |
 | **+ grouped gated RMSNorm fw/bw kernel (`gated_rmsnorm_*`), two-phase `rmsnorm_bw` on all cores, no dgamma for frozen gamma** | **1157.8** | **15.62%** |
+| + two-phase `rmsnorm_fw` on all cores (158 → 34 + 82 µs per `[1024,5120]` call; ≈6 ms/step of device time, within step-time noise) | 1158.0 | 15.62% |
 
 Logs: `/localdev/umales/scratch/mfu_fused_conv.log`, `mfu_composite_conv.log`, `mfu_a3_flat.log`,
-`mfu_a3_c_d.log`.
+`mfu_a3_c_d.log`, `mfu_a3_c_d_fw.log`.
 
 ## Where the time goes (Tracy, 4 layers = 3 DeltaNet + 1 attention)
 
@@ -54,7 +55,7 @@ Inside a DeltaNet layer (fwd + bwd = 15.5 ms, ×48 = 744 ms):
 | `ReduceScatter` + `AllGather` on `[1024,5120]` (8 pairs) | 1.34 ms | 64 ms | 95–110 µs + 65–75 µs per pair; RS on 24 cores |
 | `BinaryNg` on `[1024,2560]` (17/layer: residual adds, LoRA scale/add, grad accumulation) | 1.0 ms | 48 ms | 60–70 µs each |
 | `ChunkGdnPrep` + `ChunkGdnScan` (fwd, run twice with recompute) | 0.74 ms | 36 ms | |
-| Block `RMSNormForward` (158 µs, 32 cores) ×3 + `rmsnorm_bw` partial+apply (207 µs) ×2 | 0.9 ms | 43 ms | fwd still limited to 32 cores |
+| Block `RMSNormForward` (158 µs, 32 cores) ×3 + `rmsnorm_bw` partial+apply (207 µs) ×2 | 0.9 ms | 43 ms | fwd since moved to the same two-phase split: 34 + 82 µs (2026-10-07) |
 | `QkvCausalConv1dSilu` (150 µs ×2) + `DepthwiseConv1dK4` bw (188+138 µs) | 0.63 ms | 30 ms | |
 | GDN output plumbing: untilize/permute/reshape/tilize/typecast `[12,16,64,128]→[1024,1536]` (×2) | 0.42 ms | 20 ms | last remaining head-layout cost in DeltaNet |
 | `GatedRmsNorm` fwd ×2 + bwd | 0.29 ms | 14 ms | |

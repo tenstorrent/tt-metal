@@ -225,13 +225,23 @@ class FusedChunkGatedDeltaRuleFlat(Function):
         g3 = ttnn.reshape(g.get_value(), [batch, seq, num_v_heads])
         beta3 = ttnn.reshape(beta.get_value(), [batch, seq, num_v_heads])
 
-        out, _ = ttnn.transformer.chunk_gated_delta_rule(q3, k3, v3, g3, beta3, scale=scale, chunk_size=chunk_size)
+        # The backward needs each chunk's UT inverse T_inv. It cannot rebuild it itself: its Neumann
+        # doubling loses all precision once a chunk's keys are strongly aligned, which real checkpoints
+        # produce (gradients of ~1e9 for true values of ~1e-4). The forward inverts by stable block
+        # substitution, so take its `A` intermediate and drop the others.
+        out, final_state, h, v_new, g_cumsum, tinv = ttnn.transformer.chunk_gated_delta_rule(
+            q3, k3, v3, g3, beta3, scale=scale, chunk_size=chunk_size, output_intermediates=True
+        )
+        for t in (final_state, h, v_new, g_cumsum):
+            ttnn.deallocate(t)
+        # A comes back [B, T, H, C] ROW_MAJOR f32; folding (H, C) is free, as for o.
+        tinv = ttnn.to_layout(ttnn.reshape(tinv, [batch, seq, num_v_heads * chunk_size]), ttnn.TILE_LAYOUT)
         # o comes back [B, T, H, V] ROW_MAJOR; folding (H, V) is free in row-major
         # and the tilize then pads nothing (T and H*V are tile multiples).
         out = ttnn.reshape(out, [batch, 1, seq, v_width])
         out = _as_bf16(ttnn.to_layout(out, ttnn.TILE_LAYOUT))
 
-        ctx.inputs = (q3, k3, v3, g3, beta3, gva_sum)
+        ctx.inputs = (q3, k3, v3, g3, beta3, gva_sum, tinv)
         ctx.chunk_size = chunk_size
         ctx.scale = scale
         ctx.key_dim = key_dim
@@ -239,7 +249,7 @@ class FusedChunkGatedDeltaRuleFlat(Function):
 
     @staticmethod
     def backward(ctx, grad_output):
-        q3, k3, v3, g3, beta3, gva_sum = ctx.inputs
+        q3, k3, v3, g3, beta3, gva_sum, tinv = ctx.inputs
         batch, seq, q_width = [int(d) for d in q3.shape]
         v_width = int(v3.shape[2])
         num_v_heads = int(g3.shape[2])
@@ -254,7 +264,9 @@ class FusedChunkGatedDeltaRuleFlat(Function):
             chunk_size=ctx.chunk_size,
             scale=ctx.scale,
             key_head_dim=ctx.key_dim,
+            tinv=tinv,
         )
+        ttnn.deallocate(tinv)
         _gdn_backward_module._LAST_SCRATCH = {}
         ctx.inputs = None
         # dq/dk are per VALUE head [B, T, H_v*K]; sum the G copies of each key head.
