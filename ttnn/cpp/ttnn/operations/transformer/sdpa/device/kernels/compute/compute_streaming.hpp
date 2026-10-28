@@ -22,6 +22,7 @@
 #include "api/compute/experimental/sdpa_sub_custom.h"
 #endif
 #include "api/compute/eltwise_binary_sfpu.h"
+#include "api/compute/binary_max_min.h"
 #include "api/dataflow/circular_buffer.h"
 #include "api/debug/kernel_profiler.hpp"
 
@@ -208,6 +209,13 @@ constexpr bool kAblateS2b = false;
 constexpr bool kEagerRescale = true;
 #else
 constexpr bool kEagerRescale = false;
+#endif
+// LAZY2: the M7 lazy-rescale test with two PACK_DONE round trips (d packed, column-max-reduced, packed again) instead
+// of the one-round-trip test (d max-folded in DEST, the unpack RISC scans column 0). Same decision; A/B only.
+#ifdef SOL_ABLATE_LAZY2
+constexpr bool kLazyTwoTrips = true;
+#else
+constexpr bool kLazyTwoTrips = false;
 #endif
 
 // --- Outlined out-of-order pack (code-size) ---
@@ -4258,7 +4266,69 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
         if constexpr (kEagerRescale) {
             rescale = n_init > 0 && !kAblateStats;
         }
-        if (n_init > 0 && !kAblateStats && !kAblateS2b && !kEagerRescale) {
+        if (n_init > 0 && !kAblateStats && !kAblateS2b && !kEagerRescale && !kLazyTwoTrips) {
+            // d = new - stored max of every initialized member, in DEST batches of up to kDst tiles; each batch's d
+            // tiles are max-folded in DEST (SFPU) into its tile 0 and only that tile is packed, to alpha scratch page
+            // b. One PACK_DONE round trip, then the unpack RISC scans column 0 (the rows' maxima) of the nb_out tiles
+            // and hands the largest growth to the math and pack threads, so all three take the same branch. d >= 0
+            // (the new max is the eltwise max with the stored one); a negative zero counts as 0.
+            uint32_t nb_out = 0;
+            configure_single_tile_pack(cb_exp_max_diff);
+            for (uint32_t g = 0; g < n_slots;) {
+                uint32_t nb = 0;
+                tile_regs_acquire();
+                sub_init(cb_max_scratch, cb_max_in);
+                for (; g < n_slots && nb + Sq_chunk_t <= kDst; ++g) {
+                    if (!slot_init(g)) {
+                        continue;
+                    }
+                    const uint32_t row0 = slots[g] * Sq_chunk_t;
+                    for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
+                        sub_tiles(cb_max_scratch, cb_max_in, row0 + r, row0 + r, nb++);
+                    }
+                }
+                if (nb > 1) {
+                    binary_max_tile_init();
+                    for (uint32_t i = 1; i < nb; ++i) {
+                        binary_max_tile(0, i, 0);
+                    }
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                if (nb > 0) {
+                    sdpa_pack_tile_ooo(0, cb_exp_max_diff, nb_out);
+                }
+                tile_regs_release();
+                nb_out += nb > 0 ? 1u : 0u;
+            }
+            PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
+            uint32_t growth = 0;
+            UNPACK({
+                ckernel::tensix_sync();
+                while (ckernel::semaphore_read(semaphore::PACK_DONE) == 0) {
+                }
+                t6_semaphore_get<>(semaphore::PACK_DONE);
+                invalidate_l1_cache();
+                const uint32_t op = get_operand_id(cb_exp_max_diff);
+                for (uint32_t t = 0; t < nb_out; ++t) {
+                    const volatile uint16_t* e =
+                        reinterpret_cast<const volatile uint16_t*>(ckernel::get_tile_l1_byte_address(op, t));
+                    for (uint32_t r = 0; r < 32; ++r) {
+                        // bf16 tile, face layout: column 0 of row r is element (r / 16) * 512 + (r % 16) * 16.
+                        const uint32_t v = e[(r >> 4) * 512 + (r & 15) * 16];
+                        if ((v & 0x8000u) == 0 && v > growth) {
+                            growth = v;
+                        }
+                    }
+                }
+                ckernel::mailbox_write(ckernel::ThreadId::MathThreadId, growth);
+                ckernel::mailbox_write(ckernel::ThreadId::PackThreadId, growth);
+            });
+            MATH(growth = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId));
+            PACK(growth = ckernel::mailbox_read(ckernel::ThreadId::UnpackThreadId));
+            rescale = growth > kLazyThrBits;
+        }
+        if (n_init > 0 && !kAblateStats && !kAblateS2b && !kEagerRescale && kLazyTwoTrips) {
             // d = new - stored max of every initialized member, DEST batches of up to kDst tiles, packed to the
             // alpha scratch pages 0..nd-1 (nd <= n_slots * Sq_chunk_t <= stats_cap).
             uint32_t nd = 0;

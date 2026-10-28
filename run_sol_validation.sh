@@ -761,6 +761,37 @@ if want u1; then
     fi
 fi
 
+# D4c (2026-10-28): the one-round-trip lazy-rescale test (compute header only; no rebuild, the kernel compiles on the
+# fly). d4b: the test cost ~0.21 ms (two PACK_DONE round trips per step + a column reduce); now d is max-folded in DEST
+# and the unpack RISC scans one tile per batch. Same decision. TT_SOL_ABLATE=lazy2 = the old test for the A/B.
+# Gate: 5 s parity (256 keys, also the program-size check), 1184 rows, 512 rows, 256-key tau 2. Then traced: the new
+# test and lazy2 at tau 1, tau 2 / 3, dense.
+if want d4c; then
+    if ! python -c "import diffusers.models.transformers.transformer_minimax_h3" > /dev/null 2>&1; then
+        echo "    d4c: diffusers lacks transformer_minimax_h3; install the upgrade first"
+        exit 1
+    fi
+    C="4x8sp1tp0nl2 and resident_matches_compact"
+    ok=1
+    run d4c_parity 600 pytest "$T" -s -k "4x8 and resident_call_parity and r4736k256" || ok=0
+    run d4c_r1184 900 pytest "$T" -s -k "$C and r1184k512" || ok=0
+    run d4c_r512 900 pytest "$T" -s -k "$C and r512k512" || ok=0
+    run d4c_k256 600 pytest "$T" -s -k "$C and r1024k256 and tau2" || ok=0
+    if [ "$ok" != 1 ]; then
+        echo "    d4c: a correctness run failed; the old test for comparison, no timings"
+        run d4c_parity_lazy2 600 env TT_SOL_ABLATE=lazy2 pytest "$T" -s -k "4x8 and resident_call_parity and r4736k256"
+    else
+        S="4x8 and nl2 and 768p_5s and not dense and not agather"
+        TR="SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 SOL_BENCH_MODE=resident SOL_BENCH_PREFIX=off"
+        run d4c_trace_tau1.0 900 env $TR SOL_TAU=1.0 pytest "$B" -s -k "$S"
+        run d4c_trace_lazy2_tau1.0 900 env $TR SOL_TAU=1.0 TT_SOL_ABLATE=lazy2 pytest "$B" -s -k "$S"
+        for tau in 2.0 3.0; do
+            run "d4c_trace_tau${tau}" 900 env $TR SOL_TAU=$tau pytest "$B" -s -k "$S"
+        done
+        run d4c_trace_dense 900 env SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 pytest "$B" -s -k "4x8 and nl2 and 768p_5s and dense"
+    fi
+fi
+
 # D4b (2026-10-28): the stats stage (d4a: skipping it saved >= 0.27 ms, as much as skipping Q@K^T). No rebuild (the
 # new knobs are compute-header defines, compiled on the fly). Per step it reduces the row max, then tests whether any
 # max grew past the lazy threshold (two PACK_DONE round trips plus the unpack RISC polling for the result), then
