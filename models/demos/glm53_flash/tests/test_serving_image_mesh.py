@@ -111,6 +111,24 @@ def _greedy(n):
     return SimpleNamespace(temperature=[0.0] * n, top_k=[1] * n)
 
 
+def _warm_harness(adapter, n_tokens: int, user: int) -> None:
+    """Build the reference path's programs for an ``n_tokens`` prompt BEFORE the trace captures: ``prefill_multimodal``
+    runs the whole prompt single-shot (its padded bucket, e.g. 2048 rows for the straddling prompt), a row count the
+    served warm-up never runs (the adapter chunks at the device chunk), so without this the first reference call
+    compiles under the sealed program cache (EmbeddingsDeviceOperation, 2026-10-28 8x4). Zero features at the image
+    rows; slot ``user``'s state is overwritten by its next prompt."""
+    model = adapter.model
+    n_img = 256
+    ids = torch.full((n_tokens,), 1000, dtype=torch.long)
+    ids[11 : 11 + n_img] = IMAGE_TOKEN_ID
+    streams, logits_last, _ = prefill_multimodal(
+        model, ids.reshape(1, -1), [torch.zeros(n_img, model.embedding.hidden)], user=user
+    )
+    ttnn.deallocate(streams)
+    ttnn.deallocate(logits_last)
+    adapter._sync()
+
+
 def _harness(adapter, ids: torch.Tensor, feats: list[torch.Tensor], user: int) -> tuple[int, torch.Tensor, list[int]]:
     """The demo's path on the adapter's model: ``prefill_multimodal`` into slot ``user`` of every row, the first
     token, the last-token logits, then ``N_DECODE`` replays of the adapter's decode trace reading slot ``user``."""
@@ -215,6 +233,7 @@ def test_served_image_and_video_match_the_harness(mesh_device, monkeypatch):
     t0 = time.perf_counter()
     a.warmup_model_prefill(enable_trace=False, can_sample_on_device=True)
     a.warmup_model_decode(enable_trace=False, max_batch_size=B, num_blocks=1, can_sample_on_device=True)
+    _warm_harness(a, CHUNK + 62, B - 1)  # the reference path's single-shot shape of the straddling prompt
     a.warmup_model_prefill(enable_trace=True, can_sample_on_device=True)
     a.warmup_model_decode(enable_trace=True, max_batch_size=B, num_blocks=1, can_sample_on_device=True)
     logger.info(f"warm-up (text ladder + multimodal + traces) in {time.perf_counter() - t0:.0f} s")
