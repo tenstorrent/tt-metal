@@ -30,7 +30,15 @@ SHAPES = [(b, *df.PAD_TABLE[b]) for b in df.BUCKETS] + [(32768, 1152, 64)]
 # 384: gift_ragged_odd 16. 640: no case reaches it, so 2 and 32 cover the row. 1088: single_long 1, long_context /
 # gift_ragged 32. 1152/64 is the round-1 alternative at long_context's 32. The odd-chunk-count bug shows at B = 16 / 32,
 # not at 2 or 64 (jobs 932/933), so batch is part of the trigger.
-MODEL_BATCHES = {128: (1, 4, 16, 512, 1024), 256: (4, 512), 384: (16,), 640: (2, 32), 1088: (1, 32), 1152: (1, 32)}
+# D2 item 3 (v1.21): the GIFT predictor issues B = 32 at every bucket, and a ragged final batch (7) at any of them.
+MODEL_BATCHES = {
+    128: (1, 4, 7, 16, 32, 512, 1024),
+    256: (4, 7, 32, 512),
+    384: (7, 16, 32),
+    640: (2, 7, 32),
+    1088: (1, 7, 32),
+    1152: (1, 32),
+}
 CASES = [(c, s, k, B) for c, s, k in SHAPES for B in MODEL_BATCHES[s]]
 PRECS = {
     "accuracy": Precision.accuracy(),
@@ -56,11 +64,11 @@ def key_valid(ctx_len: int, s_pad: int, chunk: int, B: int = 2) -> torch.Tensor:
     return kv
 
 
-def run_sdpa(device, q, k, v, bias, chunk, prec: Precision):
+def run_sdpa(device, q, k, v, bias, chunk, prec: Precision, q_chunk: int | None = None):
     up = lambda t: ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     pc = ttnn.SDPAProgramConfig(
         compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
-        q_chunk_size=chunk,
+        q_chunk_size=q_chunk or chunk,
         k_chunk_size=chunk,
         exp_approx_mode=prec.exp_approx,
     )
@@ -94,9 +102,14 @@ def test_sdpa_masked(device, ctx_len, s_pad, chunk, prec, B):
     got, exp = out[:, :, :S], ref[:, :, :S]
     pc = pcc(got, exp)
     err = float((got - exp).abs().max())
-    big = max(c for c in (32, 64, 128, 256, 512) if df.chunk_count_ok(s_pad, c))
-    forced = run_sdpa(device, q, k, v, bias, big, p)[:, :, :S]
-    capped = float((got - forced).abs().max())
+    # the same call at a different valid chunk: chunking must not change the result (n/a when no other chunk is valid)
+    alt = [c for c in (32, 64, 128, 256) if c != chunk and df.chunk_count_ok(s_pad, c)]
+    if alt:
+        other = run_sdpa(device, q, k, v, bias, alt[-1], p)[:, :, :S]
+        chunk_diff = f"|c{chunk}-c{alt[-1]}| {float((got - other).abs().max()):.4f}"
+        assert float((got - other).abs().max()) < 0.1
+    else:
+        chunk_diff = "other chunk n/a"
     # positive control (v1.13): drop the mask on one whole masked key block of row 0
     ctrl = bias.clone()
     blk = (~kv[0]).nonzero().flatten()[: min(chunk, 32)]
@@ -105,8 +118,42 @@ def test_sdpa_masked(device, ctx_len, s_pad, chunk, prec, B):
     ctrl_err = float((bad - exp).abs().max())
     rows = M.row_pccs(exp.reshape(B, -1), got.reshape(B, -1))
     print(
-        f"[sdpa] {s_pad}-c{chunk}-{prec}-B{B}: worst row {float(rows.min()):.6f} pcc {pc:.6f} max_err {err:.4f} |capped-forced{big}| {capped:.4f} "
+        f"[sdpa] {s_pad}-c{chunk}-{prec}-B{B}: worst row {float(rows.min()):.6f} pcc {pc:.6f} max_err {err:.4f} {chunk_diff} "
         f"control max_err {ctrl_err:.4f} lead {int((~kv[0, :S]).sum())} whole_chunks {int((~kv[0, :S]).sum()) // chunk}"
+    )
+    assert pc > 0.999 and err < 0.1 and float(rows.min()) > 0.999
+    assert ctrl_err > 5 * err, "positive control passed: the mask is not being applied"
+
+
+READ_CASES = [(c, s, k, B) for c, s, k in SHAPES[: len(df.BUCKETS)] for B in MODEL_BATCHES[s]]
+
+
+@pytest.mark.parametrize("prec", ["accuracy", "performance"])
+@pytest.mark.parametrize("ctx_len,s_pad,chunk,B", READ_CASES, ids=[f"{s}-c{k}-B{B}" for _, s, k, B in READ_CASES])
+def test_sdpa_readout(device, ctx_len, s_pad, chunk, prec, B):
+    """The last layer's read-out call (tt/model.py layer(last=True)): 32 query rows (the future tokens, one q chunk)
+    against every key, mask ``[B, 1, 32, s_pad]``, k chunk from the table. Same masks and control as above."""
+    from models.experimental.tafsut_forecast.tt.model import NREAD
+
+    p = PRECS[prec]
+    P = ctx_len // df.PATCH
+    g = torch.Generator().manual_seed(s_pad + chunk + B)
+    q = torch.randn(B, NH, NREAD, DH, generator=g) * 0.6
+    k, v = (torch.randn(B, NH, s_pad, DH, generator=g) * 0.6 for _ in range(2))
+    kv = key_valid(ctx_len, s_pad, chunk, B)
+    bias = torch.where(kv, 0.0, MASK_FILL)[:, None, None, :].expand(B, 1, NREAD, s_pad).contiguous()
+    qb, kb, vb = (t.to(torch.bfloat16).float() for t in (q, k, v))
+    exp = torch.nn.functional.scaled_dot_product_attention(qb, kb, vb, attn_mask=bias, scale=1.0)
+    got = run_sdpa(device, q, k, v, bias, chunk, p, q_chunk=NREAD)
+    assert torch.isfinite(got).all()
+    pc, err = pcc(got, exp), float((got - exp).abs().max())
+    rows = M.row_pccs(exp.reshape(B, -1), got.reshape(B, -1))
+    ctrl = bias.clone()
+    ctrl[0, :, :, (~kv[0]).nonzero().flatten()[: min(chunk, 32)]] = 0.0
+    ctrl_err = float((run_sdpa(device, q, k, v, ctrl, chunk, p, q_chunk=NREAD) - exp).abs().max())
+    print(
+        f"[sdpa-read] {s_pad}-c{chunk}-{prec}-B{B} (P {P}): worst row {float(rows.min()):.6f} pcc {pc:.6f} "
+        f"max_err {err:.4f} control max_err {ctrl_err:.4f}"
     )
     assert pc > 0.999 and err < 0.1 and float(rows.min()) > 0.999
     assert ctrl_err > 5 * err, "positive control passed: the mask is not being applied"
