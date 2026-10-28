@@ -151,6 +151,9 @@ SCENARIOS = [
     _s(f"{PROMPTS}/long/needle_1m.json", 4, 1048576, 48, "needle1m_b4", instruct=True, chunk=512),
     # a 1M-context build (tables / pool sized for 1,048,576 tokens, prefill chunk 512) with short GSM8K prompts: decode speed of plain vs speculative decoding at the long-context capacity
     _s(GSM, 4, 1048576, 384, "gsm8k_b4_m1M", instruct=True, stop_at_eos=True, chunk=512),
+    # round-timeline runs (tt/round_timeline.py): no early stop so that every user decodes 640 tokens (>= 100 rounds after the warm-up)
+    _s(GSM, 4, 1048576, 640, "gsm8k_b4_m1M_rt", instruct=True, stop_at_eos=False, chunk=512),
+    _s(GSM, 8, 524288, 640, "gsm8k_b8_m512k_rt", instruct=True, stop_at_eos=False, chunk=512),
     _s(GSM, 8, 512, 384, "gsm8k_b8", instruct=True, stop_at_eos=True),
     # B=8 (2 users per mesh row) at long context (study_b8 / b8_a): GSM8K short prompts at the 512k / 1M builds, 8 distinct needle prompts (mk_needle8.py in dsv4-logs/b8_a/clients)
     _s(GSM, 8, 524288, 384, "gsm8k_b8_m512k", instruct=True, stop_at_eos=True, chunk=512),

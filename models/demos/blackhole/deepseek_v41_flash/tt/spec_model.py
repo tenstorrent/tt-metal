@@ -1156,3 +1156,9 @@ def default_ks(U):
     from models.demos.blackhole.deepseek_v41_flash.tt.spec_policy import default_ks as _dk
 
     return _dk(U, os.environ.get("DSV41_SPEC_ROWS") == "1")
+
+
+if os.environ.get("DSV41_ROUND_TL") == "1":  # round timeline instrumentation (tt/round_timeline.py); not imported, nothing wrapped when unset
+    from models.demos.blackhole.deepseek_v41_flash.tt import round_timeline
+
+    round_timeline.install()
