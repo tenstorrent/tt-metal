@@ -506,6 +506,15 @@ public:
                 shard_layout = TensorMemoryLayout::HEIGHT_SHARDED;
             }
         }
+        // run_sliced_op writes each slice back with the quasar slice_write, which takes only sharded input.
+        // A ROW_MAJOR slice must be height or block sharded: a width-sharded one is moved to interleaved L1
+        // first, which that slice_write rejects. The slices are internal (the result is DRAM interleaved), so
+        // pool width-sharded ROW_MAJOR slices block-sharded instead.
+        if (output_layout == Layout::ROW_MAJOR && shard_layout == TensorMemoryLayout::WIDTH_SHARDED) {
+            log_debug(
+                tt::LogOp, "Pool2D DRAM slicing: ROW_MAJOR output, pooling the width-sharded slices block-sharded");
+            shard_layout = TensorMemoryLayout::BLOCK_SHARDED;
+        }
 
         sliding_window_config = sliding_window::SlidingWindowConfig{
             .batch_size = batch_size,

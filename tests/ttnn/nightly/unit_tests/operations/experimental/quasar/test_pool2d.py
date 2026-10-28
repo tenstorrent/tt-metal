@@ -125,7 +125,7 @@ def _run_case(
         mem_config = ttnn.DRAM_MEMORY_CONFIG
         slice_type = {"height": ttnn.Op2DDRAMSliceHeight, "width": ttnn.Op2DDRAMSliceWidth}[dram_slice[0]]
         dram_slice_config = ttnn.Op2DSliceConfig(num_slices=dram_slice[1], slice_type=slice_type)
-        core_desc = f"DRAM-sliced {'x'.join(map(str, dram_slice))}"
+        core_desc = f"DRAM-sliced {'x'.join(map(str, dram_slice))}" + (f" {shard_scheme}" if shard_scheme else "")
     elif shard == "height":
         height_tiles = tensor_height // 32
         num_cores = cores or max(c for c in range(1, grid.x * grid.y + 1) if height_tiles % c == 0)
@@ -555,6 +555,21 @@ DRAM_SLICED_CASES = [
     (
         "max_k3x3_s2_h2_tile_c36",
         dict(channels=36, in_h=16, in_w=16, tile_input=True, shard_scheme="height", dram_slice=("height", 2)),
+    ),
+    # width-sharded slices: ROW_MAJOR output runs them block-sharded (slice_write takes only sharded input and
+    # no width-sharded ROW_MAJOR one); TILE output keeps them width-sharded
+    ("max_k3x3_s2_h2_width_rm", dict(channels=64, in_h=16, in_w=16, shard_scheme="width", dram_slice=("height", 2))),
+    (
+        "max_k3x3_s2_h2_width_tile_out",
+        dict(
+            channels=64,
+            in_h=16,
+            in_w=16,
+            shard_scheme="width",
+            out_layout="tile",
+            dram_slice=("height", 2),
+            sim_skip="Quasar tiled-output pool bug (see tiled_out_*): the same width-sharded TILE-output pool mismatches identically unsliced in L1 on craq-sim -- not a slicing issue",
+        ),
     ),
     (
         "avg_k2x2_s2_h2_tile",
