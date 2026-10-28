@@ -17,6 +17,8 @@ PYTHON_OPS = {
     # fabric reduce-scatter (Python ProgramDescriptor op, mstaletovic/mimo-v2-dp); its planning code is the Python
     # fabric_all_gather in fabric_all_gather_ttnn/fabric_all_gather_py.py (ttnn.bringup.fabric_all_gather is the C++ op)
     "fabric_reduce_scatter": ("fabric_reduce_scatter_ttnn", "fabric_reduce_scatter"),
+    # bf16 TILE rows -> 288 B bfloat4_b row records, SFPU-rounded to nearest even (deepseek_v41_flash_d_p 4-bit KV)
+    "ckv_bfp4": ("ckv_bfp4_ttnn", "ckv_bfp4"),
 }
 
 
