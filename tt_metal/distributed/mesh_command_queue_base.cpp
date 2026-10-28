@@ -8,7 +8,9 @@
 #include <mesh_device.hpp>
 #include <mesh_event.hpp>
 #include <api/tt-metalium/experimental/pinned_memory.hpp>
+#include <cstdlib>
 #include <optional>
+#include <string>
 
 #include "buffer.hpp"
 #include "mesh_coord.hpp"
@@ -330,27 +332,41 @@ void MeshCommandQueueBase::enqueue_write_batch(const std::vector<BatchedWrite>& 
         }
     }
     std::atomic<bool> any_pinned_used = false;
+    // TT_METAL_MESH_WRITE_INLINE: the per-device writes of a
+    // batch run on the calling thread, in device order, instead of one task per device on the dispatch thread
+    // pool. A served decode step's one batch (a few KB a device) paid ~2 ms for the slowest of the 32 workers to
+    // be scheduled after the step's device wait; the calling thread is already running. Unset
+    // or 0: the pool, as before.
+    static const bool inline_writes = []() {
+        const char* env = std::getenv("TT_METAL_MESH_WRITE_INLINE");
+        return env != nullptr && std::string(env) != "0";
+    }();
     for (uint32_t device_id : device_order) {
         const auto& items = per_device.at(device_id);
-        dispatch_thread_pool_->enqueue(
-            [this, &items, &any_pinned_used]() {
-                for (const auto& item : items) {
-                    bool pinned_used = this->write_shard_to_device(
-                        *item.buffer,
-                        item.transfer.shard_coord(),
-                        item.transfer.host_data(),
-                        item.transfer.region(),
-                        {},
-                        experimental::ShardDataTransferGetPinnedMemory(item.transfer),
-                        nullptr);
-                    if (pinned_used) {
-                        any_pinned_used.store(true, std::memory_order_relaxed);
-                    }
+        auto task = [this, &items, &any_pinned_used]() {
+            for (const auto& item : items) {
+                bool pinned_used = this->write_shard_to_device(
+                    *item.buffer,
+                    item.transfer.shard_coord(),
+                    item.transfer.host_data(),
+                    item.transfer.region(),
+                    {},
+                    experimental::ShardDataTransferGetPinnedMemory(item.transfer),
+                    nullptr);
+                if (pinned_used) {
+                    any_pinned_used.store(true, std::memory_order_relaxed);
                 }
-            },
-            device_id);
+            }
+        };
+        if (inline_writes) {
+            task();
+        } else {
+            dispatch_thread_pool_->enqueue(std::move(task), device_id);
+        }
     }
-    dispatch_thread_pool_->wait();
+    if (!inline_writes) {
+        dispatch_thread_pool_->wait();
+    }
     if (any_pinned_used.load(std::memory_order_relaxed)) {
         this->invalidate_prefetcher_cache_after_pinned_write();
     }
