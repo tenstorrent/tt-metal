@@ -13,7 +13,14 @@ from loguru import logger
 import ttnn
 from models.demos.muse_glimmer_30b.tt.attention import MuseLinear, allocate_kv_cache, heads_memcfg
 from models.demos.muse_glimmer_30b.tt.ccl import MuseCCL
-from models.demos.muse_glimmer_30b.tt.common import RopeTables, as_tt, decode_memcfg, replicate_mapper, shard_mapper
+from models.demos.muse_glimmer_30b.tt.common import (
+    RopeTables,
+    as_tt,
+    decode_memcfg,
+    norm_compute_config,
+    replicate_mapper,
+    shard_mapper,
+)
 from models.demos.muse_glimmer_30b.tt.decoder import MuseGlimmerDecoderLayer
 from models.demos.muse_glimmer_30b.tt.rms_norm import RMSNorm
 from models.demos.muse_glimmer_30b.tt.weight_packing import pack_lm_head
@@ -217,14 +224,39 @@ class MuseGlimmerModel:
             x = nx
         return x, s_real, s
 
+    def _last_row(self, x, s_real):
+        """Row s_real-1 of x [1,1,S,H] as row 0 of [1,1,32,H] (other rows 0). The slice start depends only on S and a
+        one-hot matmul picks the row, so a new prompt length in a known bucket compiles no new program."""
+        s = x.shape[-2]
+        b = min(s, 256)  # s is 128 or a multiple of 256, so row s_real-1 is in the last b rows
+        blk = x if b == s else ttnn.slice(x, (0, 0, s - b, 0), (1, 1, s, x.shape[-1]))
+        sel = torch.zeros(1, 1, 32, b, dtype=torch.bfloat16)
+        sel[0, 0, 0, s_real - 1 - (s - b)] = 1
+        sel_tt = ttnn.from_torch(
+            sel,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=replicate_mapper(self.mesh_device),
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        # HiFi4 + fp32 accumulation: 1.0 * x is exact.
+        out = ttnn.matmul(
+            sel_tt,
+            blk,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=norm_compute_config(self.mesh_device),
+        )
+        ttnn.deallocate(sel_tt)
+        if blk is not x:
+            ttnn.deallocate(blk)
+        return out
+
     def prefill_forward_logits_tt(self, tokens: torch.Tensor, user_id: int, page_table_tt):
         """Prefill one prompt -> softcapped logits [1,1,32,vocab_local] on device; the last real token is row 0."""
-        a = self.args
         x, s_real, _ = self._prefill_hidden(tokens, user_id, page_table_tt)
-        last = ttnn.slice(x, (0, 0, s_real - 1, 0), (1, 1, s_real, a.hidden_size))
+        hs = self._last_row(x, s_real)
         ttnn.deallocate(x)
-        hs = ttnn.pad(last, [(0, 0), (0, 0), (0, 31), (0, 0)], 0.0)
-        ttnn.deallocate(last)
         logits = self.head(hs)
         ttnn.deallocate(hs)
         return logits
@@ -234,12 +266,11 @@ class MuseGlimmerModel:
         x, s_real, s = self._prefill_hidden(tokens, user_id, page_table_tt)
 
         if not return_all_logits:
-            t0 = ((s_real - 1) // 32) * 32  # 32-row tile containing the last real row
-            hs = ttnn.slice(x, (0, 0, t0, 0), (1, 1, t0 + 32, a.hidden_size))
+            hs = self._last_row(x, s_real)
             ttnn.deallocate(x)
             logits = self.head(hs)
             ttnn.deallocate(hs)
-            out = self.logits_to_torch(logits, 32)[(s_real - 1) - t0]
+            out = self.logits_to_torch(logits, 32)[0]
             ttnn.deallocate(logits)
             return out
 

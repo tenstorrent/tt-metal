@@ -175,8 +175,9 @@ def test_muse_glimmer_isl(mesh_device, tp, isl):
     else (lambda f: f)
 )
 def test_muse_glimmer_repeat(mesh_device):
-    """Two generate() calls on one TP4 batch-32 generator: the same greedy tokens, and the second call compiles
-    no new program (prefill program plans depend on free L1, which the first decode step must not change)."""
+    """Repeated generate() calls on one TP4 batch-32 generator compile no new program once the prompt-length buckets
+    are known (prefill program plans depend on free L1, which the first decode step must not change; new prompt
+    lengths must not compile per-length ops), and the same prompts give the same greedy tokens."""
     if mesh_device.get_num_devices() < 4:
         pytest.skip("needs 4 devices")
     sm = dp_submeshes(mesh_device, 1, 4)[0]
@@ -190,7 +191,11 @@ def test_muse_glimmer_repeat(mesh_device):
     stop_ids = list(args.eos_token_ids)
     first = gen.generate(prompts, 32, stop_token_ids=stop_ids)["tokens"]
     n_programs = sm.num_program_cache_entries()
-    second = gen.generate(prompts, 32, stop_token_ids=stop_ids)["tokens"]
+    # Other prompt lengths in the same 128-row bucket.
+    other = [encode_chat(tokenizer, texts[i % len(texts)] + " Be brief.") for i in range(gen.global_batch_size)]
+    assert {len(p) for p in other} - {len(p) for p in prompts} and max(map(len, other)) <= 128
+    gen.generate(other, 32, stop_token_ids=stop_ids)
+    again = gen.generate(prompts, 32, stop_token_ids=stop_ids)["tokens"]
     gen.release_traces()
-    assert sm.num_program_cache_entries() == n_programs, "the second generate() compiled new programs"
-    assert second == first
+    assert sm.num_program_cache_entries() == n_programs, "a later generate() compiled new programs"
+    assert again == first
