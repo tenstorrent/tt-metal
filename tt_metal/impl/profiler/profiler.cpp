@@ -2201,13 +2201,16 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
                 start_marker_stack.push(device_marker_it);
             } else if (marker.marker_type == tracy::TTDeviceMarkerType::ZONE_END) {
                 if (start_marker_stack.empty()) {
-                    // Orphan ZONE_END from a dropped-marker run; skip instead of fatal.
-                    if (!this->had_dropped_markers.load(std::memory_order_relaxed)) {
-                        TT_FATAL(
-                            false,
-                            "End marker found without a corresponding start marker.\nEnd marker: {}",
-                            marker.to_string());
-                    }
+                    // AN UNPAIRABLE END IS ONE LOST ZONE, NOT A LOST RUN. This used to abort unless
+                    // had_dropped_markers was set, which made the amnesty depend on the run ALSO having
+                    // overflowed its buffers -- so a capture that dropped 2,561 markers was written out
+                    // and a clean one was thrown away. Observed repeatedly on a T3K Qwen-Image-Edit
+                    // capture: every stage finished, zero drops, and between one and thirty-one orphans
+                    // out of ~35 million markers aborted the process at device close, destroying the
+                    // device log and with it any ops report. The orphan itself carries no duration and
+                    // nothing else in the set depends on it; the only question this marker can answer is
+                    // "how many". Counted and skipped, reported once at the end of the dump.
+                    this->unpairable_markers.fetch_add(1, std::memory_order_relaxed);
                     device_marker_it = next_device_marker_it;
                     continue;
                 }
@@ -2216,14 +2219,10 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
 
                 if (!env_.get_rtoptions().get_profiler_trace_only()) {
                     if (start_marker_it->marker_id != marker.marker_id) {
-                        if (!this->had_dropped_markers.load(std::memory_order_relaxed)) {
-                            TT_FATAL(
-                                false,
-                                "Start and end marker IDs do not match.\nStart marker: {}\nEnd marker: {}",
-                                start_marker_it->to_string(),
-                                marker.to_string());
-                        }
-                        // Stack is misaligned due to drops; skip this end without popping.
+                        // Same reasoning as the empty-stack case above: a misaligned stack costs the
+                        // zones it misaligns, not the whole capture. Skip without popping, so the start
+                        // still waiting on top keeps its chance to pair with its own end.
+                        this->unpairable_markers.fetch_add(1, std::memory_order_relaxed);
                         device_marker_it = next_device_marker_it;
                         continue;
                     }
@@ -2505,6 +2504,17 @@ void DeviceProfiler::dumpDeviceResults(bool is_mid_run_dump) {
         }
 
         this->thread_pool->wait();
+
+        if (const uint64_t unpairable = this->unpairable_markers.exchange(0, std::memory_order_relaxed);
+            unpairable > 0) {
+            log_warning(
+                tt::LogMetal,
+                "Device {}: {} zone endpoint(s) could not be paired and were left out of the report. The "
+                "rest of the capture is unaffected; this is reported rather than fatal so a finished run "
+                "is not discarded over markers that carry no duration.",
+                device_id,
+                unpairable);
+        }
     }
 
     std::vector<std::reference_wrapper<const tracy::TTDeviceMarker>> device_markers_vec =
