@@ -37,7 +37,10 @@ namespace sfpu {
 // Returns p(u) = erfinv(x) / x, not erfinv(x).
 template <bool APPROXIMATION_MODE>
 sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat x) {
-    sfpi::vFloat u = calculate_log_body<false, false, true>(1.0f - x * x, 0);
+    // FAST_APPROX only skips the log's -0.0/subnormal normalisation (a * 1 + 0): 1 - x^2 comes out of
+    // an SFPMAD, which flushes subnormals and returns +0.0 for the exact cancellation at x = +/-1, so
+    // the normalisation changes no lane.
+    sfpi::vFloat u = calculate_log_body<true, false, true>(1.0f - x * x, 0);
 
     // Central polynomial, u in [-7, 0], degree 7.
     sfpi::vFloat p = -0x1.3p-22f;
