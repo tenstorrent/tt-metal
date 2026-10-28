@@ -26,6 +26,7 @@
 #include <vector>
 #include <array>
 #include <tuple>
+#include "ttnn/dynamic_length.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/config.hpp"
@@ -231,10 +232,21 @@ public:
         } else {
             DeviceOperation::validate_on_program_cache_miss(attrs, tensor_args);
         }
+        validate_dynamic_axes(attrs, tensor_args);
     }
 
     static void validate_on_program_cache_miss(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
         DeviceOperation::validate_on_program_cache_miss(attrs, tensor_args);
+        validate_dynamic_axes(attrs, tensor_args);
+    }
+
+    // On hits as well as misses, so a cached program is held to the capacity it was sized for. After the op's own
+    // validation, whose errors name the misuse more precisely than an exceeded capacity does.
+    static void validate_dynamic_axes(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+        if constexpr (HasDynamicAxes<DeviceOperation>) {
+            const std::vector<dynamic_length::DynamicAxis> axes = DeviceOperation::dynamic_axes(attrs, tensor_args);
+            dynamic_length::validate_axes(axes, get_type_name(attrs));
+        }
     }
 
     static spec_return_value_t compute_output_specs(

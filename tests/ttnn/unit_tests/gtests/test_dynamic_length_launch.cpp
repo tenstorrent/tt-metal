@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <gmock/gmock.h>
 #include <gtest/gtest.h>
 
 #include <cstdint>
 #include <exception>
 #include <optional>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -30,6 +32,7 @@ using dynamic_length::DynamicAxis;
 struct LengthOp {
     struct operation_attributes_t {
         std::size_t length = 0;
+        bool misused = false;
     };
     struct tensor_args_t {
         Tensor input;
@@ -57,8 +60,6 @@ struct LengthOp {
     };
     using program_factory_t = std::variant<Factory>;
 
-    static inline int outputs_created = 0;
-
     static std::vector<DynamicAxis> dynamic_axes(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
         return {DynamicAxis{
@@ -69,7 +70,9 @@ struct LengthOp {
         }};
     }
 
-    static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&) {}
+    static void validate_on_program_cache_miss(const operation_attributes_t& attrs, const tensor_args_t&) {
+        TT_FATAL(!attrs.misused, "LengthOp: misused");
+    }
 
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t& tensor_args) {
         return tensor_args.input.tensor_spec();
@@ -77,7 +80,6 @@ struct LengthOp {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-        ++outputs_created;
         return create_device_tensor(compute_output_specs(attrs, tensor_args), tensor_args.input.device());
     }
 
@@ -97,11 +99,6 @@ static_assert(!HasDynamicAxes<NoAxesOp>);
 class DynamicLengthLaunchTest : public TTNNFixtureWithDevice {
 protected:
     static constexpr std::size_t kCapacity = 64;
-
-    void SetUp() override {
-        TTNNFixtureWithDevice::SetUp();
-        LengthOp::outputs_created = 0;
-    }
 
     Tensor make_input() const {
         return create_device_tensor(
@@ -126,18 +123,30 @@ TEST_F(DynamicLengthLaunchTest, CacheHitIsHeldToCapacity) {
     launch<LengthOp>({.length = 16}, {.input = input});
     EXPECT_NO_THROW(launch<LengthOp>({.length = kCapacity}, {.input = input}));
     EXPECT_EQ(device_->get_program_cache().num_entries(), 1);
-
-    const int outputs_before = LengthOp::outputs_created;
     EXPECT_THROW(launch<LengthOp>({.length = kCapacity + 1}, {.input = input}), std::exception);
-    EXPECT_EQ(LengthOp::outputs_created, outputs_before);
 }
 
 TEST_F(DynamicLengthLaunchTest, PrepareIsHeldToCapacity) {
     const auto input = make_input();
     EXPECT_NO_THROW(prepare<LengthOp>({.length = kCapacity}, {.input = input}));
-    const int outputs_before = LengthOp::outputs_created;
     EXPECT_THROW(prepare<LengthOp>({.length = kCapacity + 1}, {.input = input}), std::exception);
-    EXPECT_EQ(LengthOp::outputs_created, outputs_before);
+}
+
+// An op's own validation names a misuse more precisely than the capacity it also exceeds, on a miss and on a hit.
+TEST_F(DynamicLengthLaunchTest, OpValidationPrecedesCapacity) {
+    const auto input = make_input();
+    const auto error_of = [&](const LengthOp::operation_attributes_t& attrs) -> std::string {
+        try {
+            launch<LengthOp>(attrs, {.input = input});
+        } catch (const std::exception& e) {
+            return e.what();
+        }
+        return {};
+    };
+    EXPECT_THAT(error_of({.length = kCapacity + 1, .misused = true}), ::testing::HasSubstr("LengthOp: misused"));
+    launch<LengthOp>({.length = 16}, {.input = input});
+    EXPECT_THAT(error_of({.length = kCapacity + 1, .misused = true}), ::testing::HasSubstr("LengthOp: misused"));
+    EXPECT_THAT(error_of({.length = kCapacity + 1}), ::testing::HasSubstr("exceeds the capacity"));
 }
 
 TEST_F(DynamicLengthLaunchTest, AcceptsDeviceLengthTensor) {
@@ -148,7 +157,6 @@ TEST_F(DynamicLengthLaunchTest, AcceptsDeviceLengthTensor) {
 TEST_F(DynamicLengthLaunchTest, RejectsMultiValuedLengthTensor) {
     const auto input = make_input();
     EXPECT_THROW(launch<LengthOp>({}, {.input = input, .length_tensor = make_length_tensor(2)}), std::exception);
-    EXPECT_EQ(LengthOp::outputs_created, 0);
 }
 
 }  // namespace
