@@ -44,7 +44,8 @@ WALL_WARM = 10  # F114b: warm-up runs when the mesh cannot count its program cac
 WALL_MAX_WARM = 100  # F196: warm-up runs at most; warm = a run that adds no program-cache entry
 WALL_SETTLE_WINDOW = 5  # F200: the host is warm once the last 5 warm-up walls agree within WALL_SETTLE_PCT
 WALL_SETTLE_PCT = 5.0
-WALL_MAX_SETTLE = 30  # F200: settle runs at most after the cache is warm (a Galaxy chunk takes ~15 s a run)
+WALL_MAX_SETTLE = 60  # F200: settle runs at most after the cache is warm (a Galaxy chunk takes ~15 s a run)
+WALL_TREND_PCT = 2.0  # F205: and the last window's median at most this far below the window before it (no drift)
 
 
 def cache_entries(mesh) -> int | None:
@@ -71,9 +72,15 @@ def record_warm(mesh, before: int | None, what: str) -> None:
 
 
 def settled(walls) -> bool:
-    """F200: the last WALL_SETTLE_WINDOW walls within WALL_SETTLE_PCT of their median."""
-    w = sorted(walls[-WALL_SETTLE_WINDOW:])
-    return len(w) == WALL_SETTLE_WINDOW and w[-1] - w[0] <= WALL_SETTLE_PCT / 100 * w[len(w) // 2]
+    """F200: the last WALL_SETTLE_WINDOW walls within WALL_SETTLE_PCT of their median. F205: and no downward drift:
+    their median at most WALL_TREND_PCT below the median of the window before (a ~1 %-a-run drift passed the band
+    alone: DeepSeek-V4.1 8x4, 200k called settled at 1042 ms after 11 runs while 0k fell to 640 ms over 28)."""
+    n = WALL_SETTLE_WINDOW
+    w = sorted(walls[-n:])
+    if len(w) < n or w[-1] - w[0] > WALL_SETTLE_PCT / 100 * w[n // 2]:
+        return False
+    prev = sorted(walls[-2 * n : -n])
+    return len(prev) == n and w[n // 2] >= (1 - WALL_TREND_PCT / 100) * prev[n // 2]
 
 
 def warm_up(mesh, one_run) -> dict:

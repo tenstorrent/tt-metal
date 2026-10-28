@@ -28,7 +28,7 @@ def test_warm_is_the_first_run_that_adds_no_entry():
     m = _Mesh([50, 7, 3, 0, 5])
     w = profile.warm_up(m, m.run)
     assert w["warm"] and w["cache_warm_runs"] == 4 and w["entries"] == [0, 50, 57, 60, 60]
-    assert w["settled"] and len(w["walls"]) == profile.WALL_SETTLE_WINDOW  # (equal walls: one settle run)
+    assert w["settled"] and len(w["walls"]) == 2 * profile.WALL_SETTLE_WINDOW  # (equal walls: two windows, F205)
 
 
 def test_a_run_that_never_settles_is_not_warm(monkeypatch):
@@ -68,10 +68,14 @@ def test_a_timed_run_that_built_programs_is_reported_not_warm(monkeypatch, capsy
 def test_the_walls_must_settle_after_the_cache_is_warm():
     """F200 (owner 2026-10-27): DeepSeek-V4.1 2x2 flat path, cache warm after 1 run, then walls falling 142 -> 118 ms;
     the timed median was 138.0 where the settled host runs ~119."""
-    flat = iter([142.6, 142.6, 141.3, 148.3, 138.0, 138.9, 123.6, 118.0, 119.0, 118.9, 123.5, 119.0])
+    flat = iter(
+        [142.6, 142.6, 141.3, 148.3, 138.0, 138.9, 123.6, 118.0, 119.0, 118.9, 123.5, 119.0]
+        + [119.2, 118.7, 119.1, 118.8, 119.3]
+    )
     m = _Mesh([40, 0])
     w = profile.warm_up(m, lambda: (m.run(), next(flat))[1])
-    assert w["cache_warm_runs"] == 2 and w["settled"] and w["walls"][-5:] == [123.6, 118.0, 119.0, 118.9, 123.5]
+    # F205: [123.6 .. 123.5] is within the band but 16 % below the window before: settled only on the flat plateau
+    assert w["cache_warm_runs"] == 2 and w["settled"] and w["walls"][-5:] == [123.5, 119.0, 119.2, 118.7, 119.1]
 
 
 def test_walls_that_never_settle_are_flagged_not_refused(monkeypatch):
@@ -84,5 +88,14 @@ def test_walls_that_never_settle_are_flagged_not_refused(monkeypatch):
 
 def test_settled_needs_a_full_window_within_the_percentage():
     assert not profile.settled([100.0] * (profile.WALL_SETTLE_WINDOW - 1))
-    assert profile.settled([200.0, 100.0, 102.0, 101.0, 104.0, 100.5])
+    assert not profile.settled([200.0, 100.0, 102.0, 101.0, 104.0, 100.5])  # F205: no window before it yet
+    assert profile.settled([101.0, 100.0, 102.0, 103.0, 100.0, 100.0, 102.0, 101.0, 104.0, 100.5])
+
+
+def test_a_slow_drift_is_not_settled():
+    """F205: walls falling ~1 % a run pass the 5 % band of 5 runs, but not the trend check (DeepSeek-V4.1 8x4 200k)."""
+    drift = [100.0 - i for i in range(10)]
+    w = sorted(drift[-5:])
+    assert w[-1] - w[0] <= profile.WALL_SETTLE_PCT / 100 * w[2]  # the band alone would call it settled
+    assert not profile.settled(drift)
     assert not profile.settled([100.0, 102.0, 101.0, 104.0, 106.0])

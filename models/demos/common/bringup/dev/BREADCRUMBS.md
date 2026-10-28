@@ -2240,3 +2240,11 @@ of this user runs, before every framework kill: overseer abort, an agent's timeo
 Selftest test_hangdump.py (a three-unit gate whose middle unit hangs and whose next unit rewrites inspector; abort
 waits before it kills). Overseer side (skill): never kill a device run by hand while tt-triage runs; diagnostic runs
 outside a gate go through a serialized wrapper that copies the same dirs before the next run (diag/run.sh on the node).
+
+## F205: a wall is settled only without a downward drift (DeepSeek-V4.1 galaxy_8x4 5-position profile, 2026-10-28)
+Problem: F200's settle test (the last 5 walls within 5 % of their median) passes a slow drift: walls falling ~1 % a run
+stay within a 5 % band of 5 runs. The 8x4 flat series was called settled at 1042 ms (200k, 11 runs) and 842 ms (100k,
+8 runs) while 0k fell to 640 ms over 28 runs and 500k to 721 over 31: the host walls were not comparable.
+Fix: testing/profile.settled also requires the last window's median at most WALL_TREND_PCT (2 %) below the window
+before it (two windows of 5 needed); WALL_MAX_SETTLE 30 -> 60. Selftests test_warm_wall.py (the drift case; the F200
+2x2 sequence now settles on the 119 ms plateau, not on the 123.6 .. 123.5 window still 16 % below its predecessor).
