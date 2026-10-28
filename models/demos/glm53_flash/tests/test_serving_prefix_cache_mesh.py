@@ -7,10 +7,15 @@ and parked at its end), then serves the multi-turn request A + response + new tu
 result is compared with a from-scratch prefill of the whole prompt in the SAME physical slot: the first token
 and the first decode tokens agree (a differing token is accepted only at a near-tie of the reference logits: the
 prefill chunk scan and the decode recurrence of the KDA layers are different op sequences, so the states agree
-to bf16/fp32 rounding, not bit for bit) and the logits correlate above 0.999. The miss path (a prompt that
-differs inside the cached prefix) prefills from 0 in another slot and matches its own from-scratch reference.
-Both snapshot stores run (``device`` ring, ``host`` copies). 1024-token device chunks (512-row slabs: the L1
-hazard of ``test_decode_packed_inputs_mesh.py``), no prefill traces (the eager chunked path is the hit path).
+to bf16/fp32 rounding, not bit for bit) and the logits correlate above 0.999. The hit is served twice: the first
+hit pays any first-time program compile of the tail chunk, the second (warm) hit is the steady-state cost; the
+PERF line reports both. The miss path (a prompt that differs inside the cached prefix) prefills from 0 in another
+slot and matches its own from-scratch reference. Both snapshot stores run (``device`` ring, ``host`` copies).
+1024-token device chunks (512-row slabs: the L1 hazard of ``test_decode_packed_inputs_mesh.py``), no prefill
+traces (the eager chunked path is the hit path). ``GLM53_VLLM_APC_ALLOC_CHECK=1`` is on: the adapter refuses the
+first call site (snapshot save, hit restore, prefill row, release) after which the DRAM footprint differs from the
+post-capture baseline (doc/serving/prefix_caching.md s.6), so a buffer allocated under the live decode trace --
+the 2026-10-28 hang class -- fails the test by name instead of wedging the block later.
 
     GLM53_MESH_SHAPE=2,4 GLM53_MODEL_LAYERS=0-3 GLM53_MODEL_B=4 GLM53_MODEL_TRACE_MB=512 \\
         pytest models/demos/glm53_flash/tests/test_serving_prefix_cache_mesh.py -s
@@ -41,7 +46,7 @@ from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.generator_vllm import GLM53FlashForCausalLM
 from models.demos.glm53_flash.tt.mesh import mesh_device_params
 from models.demos.glm53_flash.tt.mesh_model import GLM53MeshModel
-from models.demos.glm53_flash.tt.vllm_config import ServingGeometry
+from models.demos.glm53_flash.tt.vllm_config import APC_ALLOC_CHECK_ENV, ServingGeometry
 
 MESH = tuple(int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "2,4").split(","))
 B = int(os.environ.get("GLM53_MODEL_B", "4"))  # users per row
@@ -161,6 +166,7 @@ def test_served_prefix_cache_hit_matches_from_scratch(mesh_device, monkeypatch, 
     monkeypatch.setenv("GLM53_PREFILL_PARTITION", "heads2users")
     monkeypatch.setenv("GLM53_VLLM_WARMUP_PREFILL", "128,2048")  # the start-1024 continuation compiles at boot
     monkeypatch.setenv("GLM53_VLLM_APC_TAIL_SPLIT", "0")
+    monkeypatch.setenv(APC_ALLOC_CHECK_ENV, "1")  # every APC call site keeps the post-capture DRAM footprint
     layers = _layer_range()
     cfg = GLM53FlashConfig.from_hf_config_json(default_snapshot_dir() / "config.json")
     model = GLM53MeshModel(
@@ -212,16 +218,28 @@ def test_served_prefix_cache_hit_matches_from_scratch(mesh_device, monkeypatch, 
     srv.generate(1, lb, 200, 3)
     a.release_request(1)
 
-    # ---- pass 2: the multi-turn request, vLLM's hit = 1536 (the content's full blocks); served from the snapshot
+    # ---- pass 2: the multi-turn request, vLLM's hit = 1536 (the content's full blocks); served from the snapshot,
+    # twice: the first hit may compile the tail chunk's programs, the second (warm) hit is the steady-state cost (its
+    # content is the first hit's + 5 decoded tokens, truncated back to 1536 by the hit; entry 0 still holds 1536)
     full = torch.cat([A, torch.tensor(resp, dtype=torch.int32), turn])
     assert full.numel() == LEN_A + N_RESP + LEN_TURN
-    t0 = time.perf_counter()
-    hit_logits = srv.prefill(2, full, 1536)
-    hit_ms = (time.perf_counter() - t0) * 1000
-    s2 = a.slots.physical(2)
-    assert (s2.user, a.apc.stats["hits"], a.apc.stats["downgraded"]) == (user, 1, 0), (s2.user, a.apc.stats)
-    hit_toks, hit_outs = srv.generate(2, hit_logits, full.numel(), N_CHECK)
-    a.release_request(2)
+    hits = []  # (ms, logits, tokens, decode logits) per hit
+    for n_hit in range(2):
+        t0 = time.perf_counter()
+        hit_logits = srv.prefill(2, full, 1536)
+        hit_ms = (time.perf_counter() - t0) * 1000
+        s2 = a.slots.physical(2)
+        assert (s2.user, a.apc.stats["hits"], a.apc.stats["downgraded"]) == (user, n_hit + 1, 0), (s2.user, a.apc.stats)
+        hit_toks, hit_outs = srv.generate(2, hit_logits, full.numel(), N_CHECK)
+        a.release_request(2)
+        hits.append((hit_ms, hit_logits, hit_toks, hit_outs))
+    hit_ms, hit_logits, hit_toks, hit_outs = hits[0]
+    warm_ms, warm_logits, warm_toks, warm_outs = hits[1]
+    _assert_agree(f"[{store}] warm hit vs first hit", [warm_logits] + warm_outs, [hit_logits] + hit_outs)
+    logger.info(
+        f"[{store}] the two hits are {'bit-identical' if torch.equal(warm_logits, hit_logits) else 'not bit-identical'} "
+        f"on the prefill logits; tokens {hit_toks} vs {warm_toks}"
+    )
 
     # ---- pass 3: the from-scratch reference of the whole prompt in the SAME physical slot
     a.apc.forget(s2.row, user)  # drop the resident content so the balance rule picks the same user again
@@ -234,9 +252,11 @@ def test_served_prefix_cache_hit_matches_from_scratch(mesh_device, monkeypatch, 
     ref_toks, ref_outs = srv.generate(3, ref_logits, full.numel(), N_CHECK)
     a.release_request(3)
     _assert_agree(f"[{store}] hit vs from-scratch prefill", [hit_logits] + hit_outs, [ref_logits] + ref_outs)
+    _assert_agree(f"[{store}] warm hit vs from-scratch prefill", [warm_logits] + warm_outs, [ref_logits] + ref_outs)
     logger.info(
-        f"PERF [{store}] hit prefill [1536, {full.numel()}) {hit_ms:.0f} ms vs from-scratch [0, {full.numel()}) "
-        f"{ref_ms:.0f} ms; tokens hit {hit_toks} ref {ref_toks}; apc {a.apc.stats}"
+        f"PERF [{store}] hit prefill [1536, {full.numel()}) first {hit_ms:.0f} ms, warm {warm_ms:.0f} ms vs "
+        f"from-scratch [0, {full.numel()}) {ref_ms:.0f} ms; tokens hit {hit_toks} warm {warm_toks} ref {ref_toks}; "
+        f"apc {a.apc.stats}"
     )
 
     # ---- miss: a stale hit (one token changed inside the "cached" prefix, A resident in `user`): no slot matches,

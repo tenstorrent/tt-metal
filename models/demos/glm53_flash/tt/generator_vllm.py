@@ -80,6 +80,7 @@ import torch
 from loguru import logger
 
 from models.demos.glm53_flash.tt.vllm_config import (
+    APC_ALLOC_CHECK_ENV,
     APC_ENV,
     APC_MAX_SNAPSHOTS,
     APC_SNAPSHOT_STORE_ENV,
@@ -102,10 +103,12 @@ from models.demos.glm53_flash.tt.vllm_config import (
     WaveMember,
     WavePlanner,
     WaveStep,
+    eager_pad_length,
     greedy_rows,
     max_tokens_all_users,
     mm_payload_missing,
     mm_spans_of_row,
+    prefill_buckets,
 )
 
 HF_ARCHITECTURES = ("Glm5NextForConditionalGeneration", "Glm5NextForCausalLM")
@@ -376,6 +379,10 @@ class GLM53FlashForCausalLM:
             self.apc = SlotPrefixCache(geometry, int(prefix_cache_entries))
             if self.apc.entries and not callable(getattr(model, "snapshot_kda", None)):
                 raise NotImplementedError("the prefix cache needs a mesh model with snapshot_kda / restore_kda")
+        # GLM53_VLLM_APC_ALLOC_CHECK: the DRAM footprint right after the decode capture; every later prefix-cache call
+        # site must leave it unchanged (``_apc_alloc_check``, the served-spec audit's GLM53_VLLM_SPEC_ALLOC_CHECK shape)
+        self._apc_alloc_checking = self.apc is not None and self.apc.entries > 0 and _env_flag(APC_ALLOC_CHECK_ENV, "0")
+        self._apc_alloc_baseline: int | None = None
 
     # ================================================================================= construction
     @classmethod
@@ -660,6 +667,12 @@ class GLM53FlashForCausalLM:
             self.model.reset_kda_states()
             self._sync()
             logger.info(f"GLM53 vLLM: decode trace captured in {time.perf_counter() - t0:.1f} s ({U} slots)")
+            if self._apc_alloc_checking:
+                self._apc_alloc_baseline = self._dram_allocated()
+                logger.info(
+                    f"GLM53 vLLM APC: {APC_ALLOC_CHECK_ENV}=1: DRAM footprint baseline {self._apc_alloc_baseline} bytes "
+                    "per bank after the decode capture; every prefix-cache call site is checked against it"
+                )
         self.tt_supported_decode_batch_sizes = (self.geometry.request_capacity,)
         self._decode_warmup_complete = True
         self._seal_program_cache()
@@ -767,6 +780,27 @@ class GLM53FlashForCausalLM:
         out.sort()
         return out or [min(128, self.geometry.max_seq_len)]
 
+    def _warmup_bucket_lengths(self, lengths: list[int]) -> list[int]:
+        """The eager chunk buckets (``GLM53_PREFILL_BUCKETS``, ``eager_pad_length``) the listed prompt lengths do not
+        reach, each walked as a prompt of exactly that length into slot 0 after them: every padded chunk shape the
+        eager prefill can run then has its programs compiled and its per-length ttKDA prefill layer built before
+        any trace capture. A program first compiled after a capture allocates its kernel binaries in DRAM under
+        live traces (tt-metal ``allocate_kernel_bin_buf_on_device``), which the next replay can clobber: the (2, 4)
+        block APC run of 2026-10-28 (``128,2048`` warmed buckets 256 / 1024 only) hung on the 512-bucket tail chunk
+        it had first compiled after the capture. Buckets above the device chunk (never an eager chunk shape) or
+        not a multiple of the row unit are skipped."""
+        g = self.geometry
+        unit = TILE * g.rows
+        covered = set()
+        for n in lengths:
+            for s0, e in PrefillPlanner.walk(0, n, g.device_prefill_chunk):
+                covered.add(eager_pad_length(e - s0, unit))
+        out: list[int] = []
+        for b in prefill_buckets():
+            if b % unit == 0 and b <= min(g.device_prefill_chunk, g.max_seq_len) and b not in covered and b not in out:
+                out.append(b)
+        return out
+
     def _ensure_decode_inputs(self, U: int) -> None:
         if self._decode_inputs_ready:
             return
@@ -838,7 +872,11 @@ class GLM53FlashForCausalLM:
                 if hit is not None:
                     state = self.slots.allocate(logical, at=(hit.row, hit.user))
                     apc.begin(hit.row, hit.user, hit.position)
+                    mark = self._apc_alloc_mark()
                     self.model.restore_kda(state.user, hit.entry, hit.position)
+                    self._apc_alloc_check(
+                        f"the hit's restore of entry {hit.entry} at {hit.position} into user {state.user}", mark
+                    )
                     apc.stats["hits"] += 1
                     logger.info(
                         f"[glm53-apc] hit: slot {logical} -> user {state.user} (row {state.row}) holds [0, {start}), "
@@ -882,10 +920,10 @@ class GLM53FlashForCausalLM:
             else:
                 out_logits[i, 0] = last_logits
 
-        def on_chunk(state):  # a KDA snapshot at every eager chunk end (the ring policy decides which to keep)
+        def on_chunk(state):  # a KDA snapshot at every chunk end (the ring policy decides which to keep)
             if apc is None:
                 return None
-            return lambda pos: self._snapshot(state, pos, "prefill")
+            return lambda pos, traced=False: self._snapshot(state, pos, "prefill", sync=traced)
 
         split_tail = apc is not None and self.apc_tail_split
         if not self.geometry.rows_independent:
@@ -903,6 +941,7 @@ class GLM53FlashForCausalLM:
                     f"{plan.kind} ({len(plan.chunks)} chunk(s)) in {(time.perf_counter() - t0) * 1000:.0f} ms, "
                     f"chunk-end token {first}"
                 )
+                self._apc_alloc_check(f"the prefill [{start}, {end}) of slot {logical} (user {state.user})")
         else:
             by_logical = {logical: (i, state, start, end, ids) for i, logical, state, start, end, ids, _ in items}
             if apc is not None:  # the wave path records content; its snapshots are the decode crossings only
@@ -922,6 +961,7 @@ class GLM53FlashForCausalLM:
                         f"{end}) via {step.plan.kind} ({len(step.plan.chunks)} chunk(s)) in "
                         f"{(time.perf_counter() - t0) * 1000:.0f} ms, chunk-end token {first}"
                     )
+                    self._apc_alloc_check(f"the SP prefill [{start}, {end}) of slot {step.logical}")
                     continue
                 assert isinstance(step, WaveStep), step
                 call = step.call
@@ -943,6 +983,7 @@ class GLM53FlashForCausalLM:
                     f"t_pad {call.t_pad}, slot index {call.user}) rows "
                     f"{[(m.row, m.start, m.end) for m in call.members]} in {(time.perf_counter() - t0) * 1000:.0f} ms"
                 )
+                self._apc_alloc_check(f"the wave {[(m.row, m.start, m.end) for m in call.members]}")
         if wants_tokens:
             return out_tokens, None
         return out_logits
@@ -974,7 +1015,7 @@ class GLM53FlashForCausalLM:
             first = int(self.model.first_token(res))
             logits = self._traced_last_logits(res) if want_logits else None
             if on_chunk is not None:
-                on_chunk(plan.end)
+                on_chunk(plan.end, traced=True)
             return first, logits
         out = None
         mem_log = os.environ.get(MEM_LOG_ENV, "0") == "1"
@@ -1125,16 +1166,18 @@ class GLM53FlashForCausalLM:
             else:
                 _, logits_dev, ids_dev = self.model.decode_step(self.model.ids_dev, self.model.positions)
                 transient = True
+            synced = False
             for i in live:
                 state = self.slots.physical(i)
                 state.position = feed_positions[i] + 1
                 state.phase = "decode"
                 if self.apc is not None:
                     self.apc.record_decode(state.row, state.user, feed_positions[i], feed_tokens[i])
-                    if (
-                        state.position % TILE == 0
-                    ):  # the state now sits on a block boundary: the multi-turn hit position
-                        self._snapshot(state, state.position, "decode")
+                    if state.position % TILE == 0:
+                        # the state now sits on a block boundary: the multi-turn hit position. The step's first save
+                        # drains the device first (the replay just enqueued), the later ones queue behind it
+                        if self._snapshot(state, state.position, "decode", sync=not synced):
+                            synced = True
         except Exception:
             self.slots._phys = snapshot
             raise
@@ -1218,6 +1261,7 @@ class GLM53FlashForCausalLM:
             return
         if self.apc is not None and state is not None:
             self.apc.release(state.row, state.user)  # the content stays resident (parked at its end) until reused
+            self._apc_alloc_check(f"release_request({slot})")
 
     def note_state_slots_moved(self, moves) -> None:
         """The plugin's ``old -> new`` notification of the gather ``decode_forward`` already applied through
@@ -1285,11 +1329,57 @@ class GLM53FlashForCausalLM:
         self.apc.begin(state.row, state.user, 0)
         return state
 
-    def _snapshot(self, state, position: int, kind: str) -> None:
-        """Snapshot slot ``state``'s KDA carries at ``position`` when the ring policy grants an entry."""
+    def _snapshot(self, state, position: int, kind: str, *, sync: bool = False) -> bool:
+        """Snapshot slot ``state``'s KDA carries at ``position`` when the ring policy grants an entry; True when a
+        save ran. ``sync``: the save follows a traced replay (a decode crossing, a traced prefill chunk): the device
+        is drained first (``ttnn.synchronize_device``) so the save's reads of the live state and its scratch writes
+        never overlap the replay. ``GLM53MeshModel.replay`` blocks until the replay finished anyway; the explicit
+        sync keeps the order independent of that default (doc/serving/prefix_caching.md s.6)."""
         entry = self.apc.plan_snapshot(state.row, state.user, position, kind)
-        if entry is not None:
-            self.model.snapshot_kda(state.user, entry)
+        if entry is None:
+            return False
+        if sync:
+            self._sync()
+        mark = self._apc_alloc_mark()
+        self.model.snapshot_kda(state.user, entry)
+        self._apc_alloc_check(
+            f"the {kind} snapshot of user {state.user} (row {state.row}) at {position} into entry {entry}", mark
+        )
+        return True
+
+    # ================================================================================= allocation discipline
+    def _dram_allocated(self) -> int:
+        fn = getattr(self.model, "dram_allocated", None)
+        if fn is None:
+            raise RuntimeError(f"{APC_ALLOC_CHECK_ENV}=1 needs a mesh model with dram_allocated() (GLM53MeshModel)")
+        return int(fn())
+
+    def _apc_alloc_mark(self) -> int | None:
+        """The DRAM footprint before a save / restore (None: the check is off or no decode trace exists yet)."""
+        if not self._apc_alloc_checking or self._apc_alloc_baseline is None:
+            return None
+        return self._dram_allocated()
+
+    def _apc_alloc_check(self, where: str, mark: int | None = None) -> None:
+        """The allocation discipline under live traces (doc/serving/prefix_caching.md s.6): with
+        ``GLM53_VLLM_APC_ALLOC_CHECK=1`` the allocator's footprint must equal ``mark`` (a call that has to leave the
+        footprint as it found it: a snapshot save or a hit's restore, possibly inside a chunk whose transients are
+        live) or, without one, the post-capture baseline (a quiescent point: a prefill row done, a release). A
+        difference means a device buffer allocated under live traces persists (a tensor, or the kernel binaries of
+        a program first compiled after the capture), which the next replay clobbers; the call site is named."""
+        if not self._apc_alloc_checking or self._apc_alloc_baseline is None:
+            return
+        expected = self._apc_alloc_baseline if mark is None else mark
+        now = self._dram_allocated()
+        if now != expected:
+            raise RuntimeError(
+                f"GLM53 vLLM APC: the DRAM footprint changed after {where}: {now} vs {expected} bytes per bank "
+                f"({'before the call' if mark is not None else 'at the decode capture'}): a device buffer allocated "
+                "under live traces persists (a tensor, or the kernel binaries of a program first compiled after the "
+                "capture) and the next replay clobbers it; warm the shape up before the capture or make the buffer "
+                "a preallocated scratch (doc/serving/prefix_caching.md s.6)"
+            )
+        logger.info(f"GLM53 vLLM APC alloc check: unchanged after {where} ({now} bytes per bank)")
 
     def _perf(self, t0: float, live: int) -> None:
         self._perf_steps += 1

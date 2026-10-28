@@ -193,18 +193,52 @@ GLM53_MESH_SHAPE=2,4 GLM53_MODEL_LAYERS=0-3 GLM53_MODEL_B=4 GLM53_MODEL_TRACE_MB
 
 Expected: `2 passed` (device ring, host store), ~10 min warm. Prompt A (1500 tokens, 1024-token chunks ->
 snapshot at 1024), 40 greedy decode steps (crossings 1504, 1536 -> entry 0 at 1536) with a second user decoding
-while A's slot is parked at 1540, then A + response + 50 new tokens with `start_pos = 1536`: the adapter restores
-entry 0 and prefills `[1536, 1590)`; the from-scratch prefill of the same 1590 tokens in the SAME physical slot
-must agree: logits PCC >= 0.999 and equal greedy tokens over the prefill + 5 decode steps (a differing token is
-accepted only at a reference top-2 gap < 0.05: the KDA chunk scan and the decode recurrence are different op
-sequences, so bit identity is not the bar). Miss: one token altered inside the prefix with `start_pos = 1536`
--> downgraded prefill from 0 in a slot without content, bit-identical to its own from-scratch run there.
+while A's slot is parked at 1540, then A + response + 50 new tokens with `start_pos = 1536`, served twice (the
+first hit may compile the tail chunk, the second is the warm cost; the PERF line reports both): the adapter
+restores entry 0 and prefills `[1536, 1590)`; the from-scratch prefill of the same 1590 tokens in the SAME
+physical slot must agree: logits PCC >= 0.999 and equal greedy tokens over the prefill + 5 decode steps (a
+differing token is accepted only at a reference top-2 gap < 0.05: the KDA chunk scan and the decode recurrence
+are different op sequences, so bit identity is not the bar). Miss: one token altered inside the prefix with
+`start_pos = 1536` -> downgraded prefill from 0 in a slot without content, bit-identical to its own from-scratch
+run there. The test runs with `GLM53_VLLM_APC_ALLOC_CHECK=1` (section 6): a call site that changes the DRAM
+footprint after the capture fails the test by name.
 
 First failure candidates, in order: `paged_fill_cache` / `view` shape refusal in `DeviceKdaSnapshotRing.save`
 (the ring view `[E*H*K/32, 1, 32, V]`; compare `_write_user_kda_state_slot`); the conv mask blend on
 `[taps, E, W]` with `E` beyond one tile row; `ttnn.slice` of a ring entry; the parked decode of a retained slot
 (positions > 2050 take the sparse path: not on this test's lengths); a PCC below 0.999 = the restored state is
 wrong (run the host store first: it isolates the paged fill from the copy semantics).
+
+## 6. Allocation discipline after the capture
+
+The rule (tt-metal's own: `allocator.cpp` warns that a buffer allocated while a trace exists "may be corrupted
+once a trace is executed if [it is] not released before then"): after the decode trace is captured, **no device
+buffer the serving path creates may still be allocated when the next replay runs**, because the replay writes its
+transient intermediates at the DRAM addresses they had at capture time, which the allocator has since handed out
+again. Persistent buffers predate the capture; everything else is a transient freed before the next replay. The
+2026-10-27 served hang (`scalar(49152)` allocated after the captures, clobbered by ~1200 replays, ttKDA wedged the
+mesh) and the 2026-10-28 (2, 4) block APC run (correct numerics on the hit, then every NoC of the block wedged in
+the first chunk of a prompt whose 512-bucket tail chunk had first been compiled after the capture; the triage input
+`_logs/mesh/triage/AUTOTRIAGE_INPUT_apc_hang_20261028.md`) are this class. A program compiled for the first time
+after the capture is in it too: tt-metal keeps each program's kernel binaries in a DRAM buffer from the same
+allocator (`ProgramImpl::allocate_kernel_bin_buf_on_device`), so the boot warm-up must compile every shape the
+served eager path can run.
+
+What the serving path does about it:
+
+| where | discipline |
+|---|---|
+| KDA snapshot stores (`tt/kda_snapshot.py`) | one set of persistent scratch / selector / page-table tensors per store (`SnapshotDims.plan`: `rec_row`, `conv_row`, `conv_live_rows`, the one-hot `sel_user` / `user_mask` / `user_keep`, `user_idx`, `live_pt`; the ring adds `conv_ring_rows`, `sel_entry`, `ring_mask` / `ring_keep`, `entry_idx`, `ring_pt`), allocated by `allocate_kda_snapshots` before the first capture. Every save / load writes into them (`ttnn.slice(output_tensor=)`, a one-hot HiFi4 `ttnn.matmul(optional_output_tensor=)` for the conv row, `paged_fill_cache` on the state views, `multiply` / `add` with `output_tensor=`); the per-call selectors are rewritten in place with `copy_host_to_device_tensor` (ordered on the command queue ahead of the ops). No `ttnn.slice` / `to_layout` / `permute` / `concat` temporaries remain; the host store reads the scratch rows to the host and refreshes them from the host. |
+| a save after a traced replay | `GLM53FlashForCausalLM._snapshot(sync=True)` drains the device (`ttnn.synchronize_device`) before the step's first decode-crossing save and before a traced prefill chunk's save; `GLM53MeshModel.replay` is blocking anyway (`FDMeshCommandQueue::enqueue_trace` finishes the queue), the explicit sync keeps the order independent of that default. Eager chunk-end saves need none (same queue, in order). |
+| lazily built device constants on the eager prefill path (`GLMMesh.lazy` / `lazy_const`: the DSA `_cu_window`, Q offsets, dense/sparse row masks, per-user page-table views, the indexer's bounds / tail ids / pool offsets / sentinels, the MoE zeros / iota / pad columns, `mesh.const`) | built before the first capture they are cached for the model's life; built under live traces they are **chunk transients**: handed to the caller, never cached, released at the end of the chunk (`GLM53MeshModel.prefill_streams` / `decode_step` call `release_transients`). The first post-capture build of a key logs once (INFO) which geometry the warm-up missed. The freeze flag and the transient list are per device (`GLMMesh._runtime_state`), so the per-layer meshes `FunctionalDecoder.from_state_dict` builds see the model's capture (before 2026-10-28 the `scalar` / `chrono_scalar` guards in `tt/kda.py` checked a flag the capture never set). |
+| the from-0 chunk's zero KDA state | freed with the chunk's temporaries (`FunctionalDecoder._state_for_prefill`); it was never deallocated before. |
+| the warm-up ladder | `warmup_model_prefill` walks the listed lengths (`GLM53_VLLM_WARMUP_PREFILL`) and then every eager chunk bucket (`GLM53_PREFILL_BUCKETS`) those lengths do not reach, as a prompt of exactly that length into slot 0, so every padded chunk shape has its programs and its per-length ttKDA prefill layer before any capture. |
+| the check | `GLM53_VLLM_APC_ALLOC_CHECK=1` (default off): the adapter records the DRAM allocator's bytes per bank after the decode capture (`GLM53MeshModel.dram_allocated`) and compares after every snapshot save and hit restore (against the footprint just before the call) and after every prefill row and `release_request` (against the baseline); a difference raises with the call site named, equality logs at INFO. `tests/test_serving_prefix_cache_mesh.py` runs with it on. The decode-side persistent buffers (`_top_buf`, `_score_buf`, `_compact`, keyed by the fixed batch) are allocated by the eager decode warm-up, before the capture. |
+
+What stays open: a chunk geometry the warm-up did not cover still compiles its programs after the capture, and
+their kernel-binary buffers are persistent; the check names the chunk, the remedy is the warm-up set (lengths and
+starts), not the model code. The mixed dense/sparse chunk's row mask is keyed by its dense row count (`n_d`), which
+depends on the chunk start: under live traces it is a chunk transient like the rest.
 
 ## 5. Plugin proposal (generic, NOT applied; needs approval)
 

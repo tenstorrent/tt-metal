@@ -5,7 +5,11 @@ per-slot content chains and multimodal spans (``tt/vllm_config.py::SlotContent``
 reused-slot downgrade and the KDA-position rule (``SlotPrefixCache``), the snapshot-ring policy and its planner
 sizing (``tt/memory_plan.py``), the planner's tail split, and the adapter end to end on the fake mesh model of
 ``test_generator_vllm_host.py``: a multi-turn hit restores the decode-crossing snapshot and prefills from it, a
-miss prefills from 0, a stripped multimodal hit is refused, retained slots park at their content end.
+miss prefills from 0, a stripped multimodal hit is refused, retained slots park at their content end. The KDA
+snapshot stores (``tt/kda_snapshot.py``) run on a fake ttnn namespace over torch tensors: the scratch-tensor plan,
+the save / load data flow of both stores (ring entries and live slots compared row by row) and the rule that no
+call allocates after the construction (the fake refuses allocations once frozen). The ``GLM53_VLLM_APC_ALLOC_CHECK``
+accounting runs on the fake mesh model's footprint counter: a leaking save / restore / prefill / release is named.
 
     PYTHONPATH=<worktree>:<tt-metal>/ttnn:<tt-metal> <tt-metal>/python_env/bin/pytest \\
         models/demos/glm53_flash/tests/test_serving_prefix_cache_host.py --noconftest -p no:cacheprovider -q
@@ -14,6 +18,7 @@ miss prefills from 0, a stripped multimodal hit is refused, retained slots park 
 from __future__ import annotations
 
 import os
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -33,8 +38,16 @@ from models.demos.glm53_flash.tests.test_generator_vllm_host import (
 )
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.generator_vllm import GLM53FlashForCausalLM
+from models.demos.glm53_flash.tt.kda_snapshot import (
+    DeviceKdaSnapshotRing,
+    HostKdaSnapshotStore,
+    SnapshotDims,
+    mask_keep,
+    one_hot_row,
+)
 from models.demos.glm53_flash.tt.memory_plan import MemoryPlan, kda_state_bytes_per_user, snapshot_bytes_per_chip
 from models.demos.glm53_flash.tt.vllm_config import (
+    APC_ALLOC_CHECK_ENV,
     APC_ENV,
     MMSpan,
     PrefillPlanner,
@@ -248,24 +261,39 @@ class _FakeApcModel(_FakeMeshModel):
         super().__init__(*a, **kw)
         self.kda_snapshots = SimpleNamespace(release=lambda: self.calls.append(("release_snapshots",)))
         self.next_start = [0] * self.max_batch
+        # the DRAM footprint the adapter's GLM53_VLLM_APC_ALLOC_CHECK reads (``GLM53MeshModel.dram_allocated``); a
+        # call named in ``leak_on`` grows it by one byte (a buffer allocated under live traces that persists)
+        self.dram_bytes = 1 << 20
+        self.leak_on: set[str] = set()
+
+    def dram_allocated(self) -> int:
+        return self.dram_bytes
+
+    def _leak(self, what: str) -> None:
+        if what in self.leak_on:
+            self.dram_bytes += 1
 
     def snapshot_kda(self, user, entry):
         self.calls.append(("snapshot_kda", user, entry))
+        self._leak("snapshot_kda")
 
     def restore_kda(self, user, entry, position):
         self.calls.append(("restore_kda", user, entry, position))
         self.next_start[user] = position
+        self._leak("restore_kda")
 
     def prefill(self, ids, user=0, start=0):
         if start and start != self.next_start[user]:
             raise AssertionError(f"user {user}: chunk start {start} != next_start {self.next_start[user]}")
         out = super().prefill(ids, user, start)
         self.next_start[user] = start + int(ids.numel())
+        self._leak("prefill")
         return out
 
     def prefill_traced(self, ids, user=0):
         out = super().prefill_traced(ids, user)
         self.next_start[user] = int(ids.numel())
+        self._leak("prefill")
         return out
 
     def _step(self):
@@ -495,6 +523,355 @@ def test_apc_off_keeps_the_contiguity_error():
     with expect_error(NotImplementedError, "snapshot_kda"):
         GLM53FlashForCausalLM(_FakeMeshModel(2, 4, 4, 4096), g, prefix_cache_entries=1)
     assert GLM53FlashForCausalLM(_FakeMeshModel(2, 4, 4, 4096), g, prefix_cache_entries=0).apc.entries == 0
+
+
+def test_alloc_check_names_the_call_site_that_changed_the_footprint(monkeypatch):
+    """``GLM53_VLLM_APC_ALLOC_CHECK=1``: the footprint after the decode capture is the baseline; a snapshot save or a
+    hit's restore must leave the footprint as it found it, a prefill row or a release must return to the baseline;
+    the first call site that differs raises with its name. Default off: nothing is read."""
+    monkeypatch.setenv(APC_ALLOC_CHECK_ENV, "1")
+    a, m = _apc_adapter(entries=2)
+    assert a._apc_alloc_checking and a._apc_alloc_baseline == m.dram_bytes
+    L = 300
+    prompt = (torch.arange(L) % 60 + 1).to(torch.int32).reshape(1, L)
+
+    def run_turn(logical: int, start: int = 0, steps: int = 20):
+        ids = prompt if start == 0 else turn
+        a.prefill_forward(
+            ids,
+            prompt_lens=[int(ids.numel())],
+            start_pos=torch.tensor([start]),
+            empty_slots=[logical],
+            sampling_params=_greedy(1),
+        )
+        tok = 5
+        for p in range(int(ids.numel()), int(ids.numel()) + steps):
+            feed = [0] * 4
+            pos = [-1] * 4
+            feed[logical], pos[logical] = tok, p
+            tok = int(_decode(a, feed, pos)[logical, 0])
+        a.release_request(logical)
+
+    run_turn(0)  # prefill, a decode crossing at 320 (a save), release: every check passes
+    content = a.apc.retained_slots()[0]
+    turn = torch.cat([a.apc.content(*content).tokens[:320].clone(), torch.full((40,), 9, dtype=torch.int32)]).reshape(
+        1, 360
+    )
+    run_turn(2, start=320, steps=5)  # the hit's restore + its tail prefill pass too
+    assert a.apc.stats["hits"] == 1 and m.dram_bytes == a._apc_alloc_baseline
+    # a save that leaks: the next decode crossing is refused by name (the delta check: before vs after the save)
+    m.leak_on = {"snapshot_kda"}
+    with expect_error(RuntimeError, "the decode snapshot of user"):
+        run_turn(1)
+    assert m.dram_bytes == a._apc_alloc_baseline + 1
+    with expect_error(RuntimeError, re.escape("release_request(1)")):  # the leak is still there: the release sees it
+        a.release_request(1)
+    m.dram_bytes = a._apc_alloc_baseline
+    # a restore that leaks
+    m.leak_on = {"restore_kda"}
+    with expect_error(RuntimeError, "the hit's restore of entry"):
+        a.prefill_forward(
+            turn, prompt_lens=[360], start_pos=torch.tensor([320]), empty_slots=[3], sampling_params=_greedy(1)
+        )
+    m.dram_bytes = a._apc_alloc_baseline
+    for key in a.apc.retained_slots():
+        a.apc.forget(*key)
+    a.slots.release(3)
+    # a prefill row that leaks (a program compiled after the capture, a constant that was not a chunk transient);
+    # the 300-token prompt takes the fake's traced prefill, the leak hook is on both prefill forms
+    m.leak_on = {"prefill"}
+    with expect_error(RuntimeError, re.escape("the prefill [0, 300) of slot 1")):
+        a.prefill_forward(
+            prompt, prompt_lens=[L], start_pos=torch.tensor([0]), empty_slots=[1], sampling_params=_greedy(1)
+        )
+    m.leak_on = set()
+    m.dram_bytes = a._apc_alloc_baseline
+    # a release after something else grew the footprint
+    m.dram_bytes += 1
+    with expect_error(RuntimeError, re.escape("release_request(1)")):
+        a.release_request(1)
+    # default off: the counter is never consulted
+    monkeypatch.delenv(APC_ALLOC_CHECK_ENV, raising=False)
+    b, mb = _apc_adapter(entries=2)
+    assert not b._apc_alloc_checking and b._apc_alloc_baseline is None
+    mb.leak_on = {"prefill", "snapshot_kda"}
+    b.prefill_forward(prompt, prompt_lens=[L], start_pos=torch.tensor([0]), empty_slots=[0], sampling_params=_greedy(1))
+    assert mb.dram_bytes == (1 << 20) + 1
+
+
+# ------------------------------------------------------------------------- KDA snapshot stores on fake ops
+class _T:
+    """A fake device / host tensor: a torch tensor behind ttnn's attribute surface."""
+
+    def __init__(self, t: torch.Tensor, dtype, layout, device=None):
+        self.t, self.dtype, self.layout, self.device = t, dtype, layout, device
+        self._alloc = True
+
+    @property
+    def shape(self):
+        return tuple(self.t.shape)
+
+    def is_allocated(self) -> bool:
+        return self._alloc
+
+
+class _FakeOps:
+    """The ttnn surface ``tt/kda_snapshot.py`` uses, on torch tensors. Every op that may allocate counts one
+    allocation unless it is given its output (``output_tensor`` / ``optional_output_tensor``); after ``freeze()``
+    (the trace capture) an allocation is an error: the allocation discipline the stores must keep. The one-hot
+    selection matmul and the mask blend are exact in fp32, as HiFi4 makes them on the device."""
+
+    float32, bfloat16, int32 = "float32", "bfloat16", "int32"
+    TILE_LAYOUT, ROW_MAJOR_LAYOUT = "TILE", "ROW_MAJOR"
+    DRAM_MEMORY_CONFIG = "dram"
+    MathFidelity = SimpleNamespace(HiFi4="HiFi4")
+    Shape = tuple
+
+    def __init__(self):
+        self.allocations = 0
+        self.frozen = False
+        self.refreshes = 0
+        self.compute_configs: list = []
+        self.experimental = SimpleNamespace(view=self._view, paged_fill_cache=self._paged_fill_cache)
+
+    def _allocate(self, what: str) -> None:
+        if self.frozen:
+            raise AssertionError(f"{what} allocated a device tensor after the trace capture")
+        self.allocations += 1
+
+    def freeze(self) -> None:
+        self.frozen = True
+
+    def init_device_compute_kernel_config(self, arch, **kw):
+        self.compute_configs.append((arch, kw))
+        return ("ckc", arch, tuple(sorted(kw.items())))
+
+    def zeros(self, shape, dtype, layout, device, memory_config):
+        self._allocate("zeros")
+        return _T(
+            torch.zeros(tuple(shape), dtype=torch.int32 if dtype == "int32" else torch.float32), dtype, layout, device
+        )
+
+    def from_torch(self, t, dtype, layout, device=None, memory_config=None, mesh_mapper=None):
+        if device is not None:
+            self._allocate("from_torch")
+        return _T(t.clone().to(torch.int32 if dtype == "int32" else torch.float32), dtype, layout, device)
+
+    def copy_host_to_device_tensor(self, host, dst) -> None:
+        assert host.device is None and dst.device is not None and host.shape == dst.shape, (host.shape, dst.shape)
+        dst.t.copy_(host.t)
+        self.refreshes += 1
+
+    def deallocate(self, t) -> None:
+        t._alloc = False
+
+    def to_torch(self, t) -> torch.Tensor:
+        return t.t.clone()
+
+    def slice(self, x, starts, ends, output_tensor=None):
+        out = x.t[tuple(slice(a, b) for a, b in zip(starts, ends))]
+        if output_tensor is None:
+            self._allocate("slice")
+            return _T(out.clone(), x.dtype, x.layout, x.device)
+        assert output_tensor.shape == tuple(out.shape), ("slice", output_tensor.shape, tuple(out.shape))
+        output_tensor.t.copy_(out)
+        return output_tensor
+
+    def matmul(self, a, b, compute_kernel_config=None, optional_output_tensor=None):
+        assert compute_kernel_config is not None and "HiFi4" in str(compute_kernel_config), compute_kernel_config
+        out = torch.matmul(a.t.float(), b.t.float())
+        if optional_output_tensor is None:
+            self._allocate("matmul")
+            return _T(out, a.dtype, a.layout, a.device)
+        assert optional_output_tensor.shape == tuple(out.shape), ("matmul", optional_output_tensor.shape, out.shape)
+        optional_output_tensor.t.copy_(out)
+        return optional_output_tensor
+
+    def _binary(self, name, fn, a, b, output_tensor):
+        out = fn(a.t, b.t)  # torch broadcasting = ttnn's
+        if output_tensor is None:
+            self._allocate(name)
+            return _T(out, a.dtype, a.layout, a.device)
+        assert output_tensor.shape == tuple(out.shape), (name, output_tensor.shape, tuple(out.shape))
+        output_tensor.t.copy_(out)
+        return output_tensor
+
+    def multiply(self, a, b, output_tensor=None):
+        return self._binary("multiply", torch.mul, a, b, output_tensor)
+
+    def add(self, a, b, output_tensor=None):
+        return self._binary("add", torch.add, a, b, output_tensor)
+
+    def _view(self, x, shape):
+        return _T(x.t.view(tuple(shape)), x.dtype, x.layout, x.device)  # shares the storage: no allocation
+
+    def _paged_fill_cache(self, cache, inp, page_table, batch_idx_tensor=None):
+        """cache [P, 1, 32, V], input [1, 1, S, V]: 32-row block j of the input -> page page_table[batch][j]."""
+        b = int(batch_idx_tensor.t.reshape(-1)[0])
+        S = inp.t.shape[2]
+        assert S % 32 == 0 and cache.t.shape[1:3] == (1, 32), (inp.shape, cache.shape)
+        for j in range(S // 32):
+            cache.t[int(page_table.t[b, j]), 0] = inp.t[0, 0, j * 32 : (j + 1) * 32]
+        return cache
+
+
+def _fake_kda_model(ops: _FakeOps, B=4, H=2, K=32, V=32, taps=3, W=64, layers=2, tiled=True):
+    """Two KDA layers' batched states on the fake ops (``[B, H, K, V]`` fp32, ``[taps, B, W]`` bf16 tiles)."""
+    device = SimpleNamespace(arch=lambda: "fake-arch")
+    mesh = SimpleNamespace(
+        device=device,
+        is_single=True,
+        replicate=lambda: "replicate",
+        shard_2d=lambda r, c: ("shard", r, c),
+        device_tensors=lambda t: [t],
+    )
+
+    def layer():
+        rec = ops.zeros((B, H, K, V), "float32", "TILE", device, "dram")
+        conv = ops.zeros((taps, B, W), "bfloat16", "TILE", device, "dram")
+        attn = SimpleNamespace(conv_tiled=tiled, kcfg=SimpleNamespace(conv_kernel_size=taps + 1), H=H, K=K, V=V)
+        return SimpleNamespace(
+            kda_batched=SimpleNamespace(recurrent=rec, convolution=conv),
+            _require_weights=lambda: SimpleNamespace(attn=attn),
+        )
+
+    return SimpleNamespace(mesh=mesh, max_batch=B, layers=[layer() for _ in range(layers)])
+
+
+def _randomize(model, seed: int) -> list[tuple[torch.Tensor, torch.Tensor]]:
+    g = torch.Generator().manual_seed(seed)
+    out = []
+    for dec in model.layers:
+        st = dec.kda_batched
+        st.recurrent.t.copy_(torch.randn(st.recurrent.shape, generator=g))
+        st.convolution.t.copy_(torch.randn(st.convolution.shape, generator=g))
+        out.append((st.recurrent.t.clone(), st.convolution.t.clone()))
+    return out
+
+
+def test_snapshot_dims_and_scratch_plan():
+    ops = _FakeOps()
+    d = SnapshotDims.from_model(_fake_kda_model(ops), 2)
+    assert (d.users, d.entries, d.E, d.nblk, d.taps, d.W, d.H, d.K, d.V) == (4, 2, 8, 2, 3, 64, 2, 32, 32)
+    assert d.entry(1, 0) == 2 and d.entry(3, 1) == 7
+    with expect_error(ValueError, "outside"):
+        d.entry(4, 0)
+    with expect_error(ValueError, "outside"):
+        d.entry(0, 2)
+    host = d.plan(ring=False)
+    ring = d.plan(ring=True)
+    assert set(host) == {
+        "rec_row",
+        "conv_row",
+        "conv_live_rows",
+        "sel_user",
+        "user_mask",
+        "user_keep",
+        "user_idx",
+        "live_pt",
+    }
+    assert set(ring) - set(host) == {"conv_ring_rows", "sel_entry", "ring_mask", "ring_keep", "entry_idx", "ring_pt"}
+    assert ring["rec_row"] == ((1, 2, 32, 32), "float32", "TILE")
+    assert ring["conv_row"] == ((3, 1, 64), "bfloat16", "TILE") and ring["conv_live_rows"] == (
+        (3, 4, 64),
+        "bfloat16",
+        "TILE",
+    )
+    assert ring["sel_user"] == ((3, 1, 4), "bfloat16", "TILE") and ring["sel_entry"] == ((3, 1, 8), "bfloat16", "TILE")
+    assert ring["user_mask"] == ((3, 4, 1), "bfloat16", "TILE") and ring["ring_keep"] == ((3, 8, 1), "bfloat16", "TILE")
+    assert ring["live_pt"] == ((4, 2), "int32", "ROW_MAJOR") and ring["ring_pt"] == ((8, 2), "int32", "ROW_MAJOR")
+    assert ring["user_idx"] == ((1,), "int32", "ROW_MAJOR") and ring["conv_ring_rows"] == (
+        (3, 8, 64),
+        "bfloat16",
+        "TILE",
+    )
+    assert d.ring_entry_shapes() == ((8, 2, 32, 32), (3, 8, 64))
+    sel, (mask, keep) = one_hot_row(3, 4, 2), mask_keep(3, 4, 2)
+    assert sel.shape == (3, 1, 4) and sel[:, 0, 2].tolist() == [1.0] * 3 and float(sel.sum()) == 3.0
+    assert torch.equal(mask + keep, torch.ones(3, 4, 1)) and mask[:, 2, 0].tolist() == [1.0] * 3
+    with expect_error(ValueError, "entries"):
+        SnapshotDims.from_model(_fake_kda_model(_FakeOps()), 0)
+    with expect_error(NotImplementedError, "block KDA decode"):
+        SnapshotDims.from_model(_fake_kda_model(_FakeOps(), tiled=False), 1)
+    with expect_error(RuntimeError, "no KDA layer"):
+        SnapshotDims.from_model(SimpleNamespace(layers=[], max_batch=4, mesh=None), 1)
+
+
+def test_device_ring_saves_and_restores_slots_without_allocating():
+    ops = _FakeOps()
+    m = _fake_kda_model(ops)
+    ring = DeviceKdaSnapshotRing(m, 2, ops=ops)
+    assert ops.allocations == 2 * 2 + len(ring.plan) + 2 * 2, "the live states, the plan, the ring entries per layer"
+    assert ops.compute_configs == [
+        ("fake-arch", dict(math_fidelity="HiFi4", math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False))
+    ]
+    assert ring.t["live_pt"].t.tolist() == [[0, 1], [2, 3], [4, 5], [6, 7]] and ring.t["ring_pt"].t.shape == (8, 2)
+    ops.freeze()  # the decode capture: from here on nothing may allocate
+    live = _randomize(m, 1)
+    ring.save(1, 0)  # flat entry 2
+    ring.save(3, 1)  # flat entry 7
+    for k in range(2):
+        rec, conv = live[k]
+        assert torch.equal(ring.rec[k].t[2], rec[1]) and torch.equal(ring.conv[k].t[:, 2, :], conv[:, 1, :])
+        assert torch.equal(ring.rec[k].t[7], rec[3]) and torch.equal(ring.conv[k].t[:, 7, :], conv[:, 3, :])
+        others = [e for e in range(8) if e not in (2, 7)]
+        assert not ring.rec[k].t[others].any() and not ring.conv[k].t[:, others, :].any(), "untouched entries stay zero"
+        st = m.layers[k].kda_batched
+        assert torch.equal(st.recurrent.t, rec) and torch.equal(
+            st.convolution.t, conv
+        ), "a save reads the live state only"
+    # the decode moved every slot; the load restores slot 1 from entry (1, 0) and leaves the other slots alone
+    moved = _randomize(m, 2)
+    ring.load(1, 0)
+    for k in range(2):
+        st = m.layers[k].kda_batched
+        assert torch.equal(st.recurrent.t[1], live[k][0][1]) and torch.equal(
+            st.convolution.t[:, 1, :], live[k][1][:, 1, :]
+        )
+        for u in (0, 2, 3):
+            assert torch.equal(st.recurrent.t[u], moved[k][0][u]) and torch.equal(
+                st.convolution.t[:, u, :], moved[k][1][:, u, :]
+            )
+    # the selectors are rewritten only when the target changes
+    n = ops.refreshes
+    ring.save(1, 0)
+    assert ops.refreshes == n
+    ring.save(2, 1)
+    assert ops.refreshes == n + 8, "user + entry selectors (4 tensors each)"
+    with expect_error(ValueError, "outside"):
+        ring.save(0, 2)
+    ring.release()
+    assert not ring.rec and not ring.t and ops.frozen
+
+
+def test_host_store_round_trips_through_the_scratch_without_allocating():
+    ops = _FakeOps()
+    m = _fake_kda_model(ops)
+    store = HostKdaSnapshotStore(m, 1, ops=ops)
+    assert "ring_pt" not in store.t and ops.allocations == 2 * 2 + len(store.plan)
+    ops.freeze()
+    live = _randomize(m, 3)
+    store.save(2, 0)
+    rec_host, conv_host = store.data[(2, 0)][0]
+    assert rec_host.shape == (1, 1, 2, 32, 32) and conv_host.shape == (1, 3, 1, 64), "per chip: [chips, *row shape]"
+    assert torch.equal(rec_host[0, 0], live[0][0][2]) and torch.equal(conv_host[0, :, 0, :], live[0][1][:, 2, :])
+    moved = _randomize(m, 4)
+    store.load(2, 0)
+    for k in range(2):
+        st = m.layers[k].kda_batched
+        assert torch.equal(st.recurrent.t[2], live[k][0][2]) and torch.equal(
+            st.convolution.t[:, 2, :], live[k][1][:, 2, :]
+        )
+        for u in (0, 1, 3):
+            assert torch.equal(st.recurrent.t[u], moved[k][0][u]) and torch.equal(
+                st.convolution.t[:, u, :], moved[k][1][:, u, :]
+            )
+    with expect_error(KeyError, "no host snapshot"):
+        store.load(1, 0)
+    with expect_error(ValueError, "outside"):
+        store.save(0, 1)
+    store.release()
+    assert not store.data and not store.t
 
 
 def test_zz_no_ttnn_was_imported_by_the_suite():

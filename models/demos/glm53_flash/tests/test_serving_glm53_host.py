@@ -215,6 +215,7 @@ def test_warmup_prefill_ladder_explicit_list_adds_long_chunks(monkeypatch):
     start 16384 are walked into slot 0 before any trace capture (allocation discipline: eager prefills precede the
     captures), and 128 (now the shortest length) goes into every slot."""
     monkeypatch.setenv("GLM53_VLLM_WARMUP_PREFILL", "128, 32768,,128")
+    monkeypatch.delenv("GLM53_PREFILL_BUCKETS", raising=False)
     a, m = _adapter()
     assert a._warmup_prefill_lengths() == sorted(set(_auto_ladder(a)) | {128, 32768})
     a.warmup_model_prefill(enable_trace=False, can_sample_on_device=True)
