@@ -217,7 +217,7 @@ def test_rejects(device, expect_error, dtype, layout, source_shape, destination_
 _K3_LAYERS, _K3_SLOTS, _K3_POSITION = 18, 2, 5
 _PRODUCTION_PERF_MARGIN = 0.05
 # The 1.5 MiB copies are DRAM-bound with reads and writes sharing the channels, and vary about +/-5% run to run on a
-# Blackhole P150 (store 8.39-9.29 us, load 8.55-9.45 us), so their band is wider than the latency-bound tail's.
+# Blackhole P150 (store 9.07-9.46 us, load 9.21-9.53 us), so their band is wider than the latency-bound tail's.
 _RECURRENT_PERF_MARGIN = 0.07
 
 
@@ -241,7 +241,7 @@ _PRODUCTION_CASES = (
         (24, 128, 128),
         [1, 1, 128, 32],
         False,
-        8_840,
+        9_300,
         _RECURRENT_PERF_MARGIN,
     ),
     _ProductionCase(
@@ -251,11 +251,11 @@ _PRODUCTION_CASES = (
         (24, 128, 128),
         [1, 1, 128, 32],
         True,
-        9_000,
+        9_350,
         _RECURRENT_PERF_MARGIN,
     ),
-    _ProductionCase("convolution-store", ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (144, 192), None, False, 1_940),
-    _ProductionCase("convolution-load", ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (144, 192), None, True, 1_950),
+    _ProductionCase("convolution-store", ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (144, 192), None, False, 2_030),
+    _ProductionCase("convolution-load", ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (144, 192), None, True, 2_020),
 )
 
 

@@ -5,7 +5,6 @@
 #include "indexed_entry_copy_program_factory.hpp"
 
 #include <algorithm>
-#include <set>
 
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
@@ -22,9 +21,10 @@ namespace {
 // Pages in flight per core per read/write round: covers a DRAM round trip at the K3 copy sizes, and holds a core's
 // whole share of the 54 KiB tail in one round.
 constexpr uint32_t kBatchPages = 8;
-// Workers sit on shifted diagonals, one per row and column on each, so their routes spread over the grid's links
-// instead of crowding a few rows or columns; three diagonals (30 cores on Blackhole) measured fastest.
-constexpr uint32_t kDiagonals = 3;
+// Workers fill the first full-width rows of the grid as one core range. Dispatch sends a program's binary, config
+// and launch message once per range, so scattered single-core ranges add microseconds per launch under trace; full
+// rows also measured faster than taller blocks of as many cores.
+constexpr uint32_t kWorkerRows = 2;
 
 // Reads go out on NOC_0 and writes on NOC_1 so the two directions do not share links; dynamic NoC mode lets the one
 // kernel drive both.
@@ -33,18 +33,6 @@ DataMovementHardwareConfig copier_hw_config() {
     hw.config_1xx->noc = NOC::NOC_0;
     hw.config_1xx->noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
     return hw;
-}
-
-// Cores on `diagonals` shifted diagonals: core (x = (i + k) % width, y = i) for row i and diagonal k.
-CoreRangeSet diagonal_cores(CoreCoord grid, uint32_t diagonals) {
-    std::set<CoreRange> cores;
-    for (uint32_t k = 0; k < diagonals; ++k) {
-        for (uint32_t i = 0; i < grid.y; ++i) {
-            const CoreCoord core{(i + k) % grid.x, i};
-            cores.insert(CoreRange(core, core));
-        }
-    }
-    return CoreRangeSet(cores);
 }
 
 // Pages of one dim-0 entry: tiles for TILE layout, rows for ROW_MAJOR.
@@ -80,7 +68,7 @@ ttnn::device_operation::ProgramArtifacts IndexedEntryCopyProgramFactory::create_
 
     const auto grid = source.device()->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, pages_per_core_1, pages_per_core_2] =
-        split_work_to_cores(diagonal_cores(grid, kDiagonals), entry_pages);
+        split_work_to_cores(CoreCoord{grid.x, std::min<std::size_t>(kWorkerRows, grid.y)}, entry_pages);
 
     const TensorParamName SOURCE{"source"};
     const TensorParamName DESTINATION{"destination"};
