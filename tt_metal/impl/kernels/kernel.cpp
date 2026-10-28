@@ -222,6 +222,14 @@ std::vector<CoreRange> Kernel::logical_coreranges() const {
     return {crs.begin(), crs.end()};
 }
 
+std::vector<CoreRange> Kernel::cb_table_coreranges() const {
+    if (this->cb_table_core_ranges_.empty()) {
+        return this->logical_coreranges();
+    }
+    auto crs = this->cb_table_core_ranges_.ranges();
+    return {crs.begin(), crs.end()};
+}
+
 bool Kernel::is_on_logical_core(const CoreCoord& logical_core) const {
     return this->core_range_set_.contains(logical_core);
 }

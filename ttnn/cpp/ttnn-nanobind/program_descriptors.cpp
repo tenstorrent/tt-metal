@@ -999,6 +999,10 @@ void py_module_types(nb::module_& mod) {
             &tt::tt_metal::KernelDescriptor::precompiled_header,
             "Header the kernel source includes first, precompiled once for the kernels that share it; see "
             "DataMovementConfig::precompiled_header")
+        .def_rw(
+            "cb_table_core_ranges",
+            &tt::tt_metal::KernelDescriptor::cb_table_core_ranges,
+            "Cores whose CBs the kernel's compile-time CB tables list; empty means the kernel's own cores")
         .def(
             "clear_runtime_args",
             [](tt::tt_metal::KernelDescriptor& self) { self.runtime_args.clear(); },
