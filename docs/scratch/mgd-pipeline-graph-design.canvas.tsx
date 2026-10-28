@@ -1273,7 +1273,7 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
     milestone: "M2 Shared code",
     size: "M",
     deps: [],
-    goal: "The stage graph, the physical graph Tier C solves on, and the footprint solve. The stage graph is part of LogicalMultiMeshGraph, beside today's mesh graph and exit-node graphs: build_logical_multi_mesh_adjacency_graph merges every pipeline of the merged MGD (Tier A has checked them) into that one graph, and adds each mesh's host-rank grid. The descriptors themselves are not copied: the enumerator keeps the merged MGD and passes it to the per-seating code with logical_. Its node is PipelineStageNode (pipeline name, PipelineStageId). The positions are four fields of the seating's PhysicalMultiMeshGraph, filled in pipeline_builder.cpp from the logical graph, the seating's result and the PSD; they store each position's chips as the resolver's ChipTuples and its links as the resolver's DirectLinks. The solve returns the topology solver's own MappingResult<PipelineStageNode, std::size_t>, whose target_to_global is the carve. Replaces the planner port (planner + resolver placed 0 of 132 carve-requiring cases; footprint + resolver decided 127). Library only.",
+    goal: "The stage graph, the physical graph Tier C solves on, and the footprint solve. The stage graph is part of LogicalMultiMeshGraph, beside today's mesh graph and exit-node graphs: build_logical_multi_mesh_adjacency_graph merges every pipeline of the merged MGD (Tier A has checked them) into that one graph, beside each stage's shape (MeshShape) and each mesh's host grid of slice ranges, so C1, the pre-checks and the solve read only the logical graph. The descriptors themselves are not copied: the enumerator keeps the merged MGD for the resolver's edge direction and loopback marks. Its node is PipelineStageNode (pipeline name, PipelineStageId). The positions are four fields of the seating's PhysicalMultiMeshGraph, filled in pipeline_builder.cpp from the logical graph, the seating's result and the PSD; they store each position's chips as the resolver's ChipTuples and its links as the resolver's DirectLinks. The solve returns the topology solver's own MappingResult<PipelineStageNode, std::size_t>, whose target_to_global is the carve. Replaces the planner port (planner + resolver placed 0 of 132 carve-requiring cases; footprint + resolver decided 127). Library only.",
     files: [
       "tt_metal/api/tt-metalium/experimental/fabric/topology_mapper_utils.hpp",
       "tt_metal/fabric/topology_mapper_utils.cpp",
@@ -1284,11 +1284,11 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
     ],
     steps: [
       "Stage node, in topology_mapper_utils.hpp beside LogicalExitNode: PipelineStageNode { std::string pipeline; PipelineStageId stage_id; } with a defaulted operator<=> and an fmt formatter printing <pipeline>/<stage id>. Stage ids are unique only inside a pipeline, so the pair is the identity; the pipeline name is unique across the merged MGD (Tier A).",
-      "Two fields on LogicalMultiMeshGraph: pipeline_stage_graph_ (AdjacencyGraph<PipelineStageNode>) and mesh_host_grids_ (std::map<LogicalMeshNode, MeshContainer<MeshHostRankId>>). build_logical_multi_mesh_adjacency_graph fills them only when the MGD has pipelines. The stage graph is all pipelines merged into one: every stage of every pipeline listed (isolated ones too), both directions of every edge, a repeated edge as a duplicate entry, each pipeline its own component with no edges between pipelines. With several MGD parts, MeshGraphDescriptor::merge has already carried every part's pipelines into the merged MGD and rejected a name declared twice, so they all land in this one graph. The host-rank grid per mesh is get_host_ranks(mesh), shaped as the host grid: a rank's coordinate is its slice's place, and the slice's chips are get_coord_range(mesh, rank). A grid, not an adjacency graph: positions are rectangles of slices, and which slices touch is physical (C1, per seating). Without pipelines both stay empty and the logical graph is today's.",
-      "The enumerator keeps the merged MGD: mesh_graph_descriptor_ (std::unique_ptr<const MeshGraphDescriptor>), set from init_from_parts' return value in each constructor; today it is a local dropped once the SAT session is built. LogicalMultiMeshGraph keeps no copy of the descriptors; Tier C reads stage shapes, edge direction and loopback marks from mesh_graph_descriptor_->pipeline_descriptors().",
-      "Four fields on PhysicalMultiMeshGraph, the twin of the stage graph on LogicalMultiMeshGraph, every one an existing type: pipeline_position_graph_ (AdjacencyGraph<std::size_t>), pipeline_position_chips_ (std::vector<std::vector<ChipTuple>>, slot-local), pipeline_position_slices_ (slice ids for add_resource_constraint) and pipeline_position_links_ (detail::DirectLinks keyed by position pairs). build_hierarchical_from_flat_graph leaves them empty; C1 fills them in the seating's physical graph after intra-mesh success. No new graph struct. Reused, not defined: PipelineDescriptorData for stages and edges, the MGD's host-rank grid (MeshContainer<MeshHostRankId>) for host slices, std::size_t for positions, MappingResult for the carve. pipeline_builder.hpp forward-declares LogicalMultiMeshGraph, PhysicalMultiMeshGraph, PipelineStageNode, TopologyMappingResult and MappingResult (MeshGraphDescriptor comes from mesh_graph.hpp, already included), so the ttnn ops and nanobind module that include it are unchanged.",
+      "Three fields on LogicalMultiMeshGraph: pipeline_stage_graph_ (AdjacencyGraph<PipelineStageNode>), pipeline_stage_shapes_ (std::map<PipelineStageNode, MeshShape>, from each stage's dims) and mesh_host_grids_ (std::map<LogicalMeshNode, MeshContainer<MeshCoordinateRange>>). build_logical_multi_mesh_adjacency_graph fills them only when the MGD has pipelines. The stage graph is all pipelines merged into one: every stage of every pipeline listed (isolated ones too), both directions of every edge, a repeated edge as a duplicate entry, each pipeline its own component with no edges between pipelines. With several MGD parts, MeshGraphDescriptor::merge has already carried every part's pipelines into the merged MGD and rejected a name declared twice, so they all land in this one graph. The host grid per mesh has get_host_ranks(mesh)'s layout, and each cell is that host's slice, get_coord_range(mesh, rank): its start and its shape. The MGD stores each rank's range explicitly and slices of one mesh need not match (pod8 mixes 4x2 and 1x2), so a cell keeps the range, not a shape alone. The rank is not stored: slices are numbered by (mesh, grid coordinate) and P12 reads the rank at a coordinate from get_host_ranks. A grid, not an adjacency graph: positions are rectangles of slices, and which slices touch is physical (C1, per seating). Without pipelines all three stay empty and the logical graph is today's.",
+      "The enumerator keeps the merged MGD: mesh_graph_descriptor_ (std::unique_ptr<const MeshGraphDescriptor>), set from init_from_parts' return value in each constructor; today it is a local dropped once the SAT session is built. LogicalMultiMeshGraph keeps no copy of the descriptors; only check_pipeline_seating takes the MGD, for the resolver's edge direction, loopback marks and node names.",
+      "Four fields on PhysicalMultiMeshGraph, the twin of the stage graph on LogicalMultiMeshGraph, every one an existing type: pipeline_position_graph_ (AdjacencyGraph<std::size_t>), pipeline_position_chips_ (std::vector<std::vector<ChipTuple>>, slot-local), pipeline_position_slices_ (slice ids for add_resource_constraint) and pipeline_position_links_ (detail::DirectLinks keyed by position pairs). build_hierarchical_from_flat_graph leaves them empty; C1 fills them in the seating's physical graph after intra-mesh success. No new graph struct. Reused, not defined: PipelineDescriptorData for stages and edges, MeshShape for stage shapes, MeshContainer<MeshCoordinateRange> for host slices, std::size_t for positions, MappingResult for the carve. pipeline_builder.hpp forward-declares LogicalMultiMeshGraph, PhysicalMultiMeshGraph, PipelineStageNode, TopologyMappingResult and MappingResult (MeshGraphDescriptor comes from mesh_graph.hpp, already included), so the ttnn ops and nanobind module that include it are unchanged.",
       "Cables, file-local inter_mesh_cables(psd, fabric_node_to_asic, mesh_a, mesh_b) in pipeline_builder.cpp: for each ASIC mapped onto mesh_a, psd.get_asic_neighbors + get_eth_connections to ASICs mapped onto mesh_b, one ExitNodeConnection per ETH channel, sorted by (src chip, src chan). Today's gather rules that need no cluster: both ends mapped onto the two meshes; for a device-level connection only requested exit nodes; one destination chip per (source chip, neighbour mesh), else no cable. Not filtered yet: cable type and link state (P16; open question 20).",
-      "Physical graph, detail::build_physical_pipeline_adjacency_graph(mgd, logical, full, psd, physical) in pipeline_builder.cpp, filling physical's pipeline_position_* fields. Slices: logical.mesh_host_grids_, the host-rank grid per mesh, each slice's chips from mgd.get_coord_range(mesh, rank) (the slice Tier B divides out of the declared topology), numbered by (mesh, host rank), ids global across meshes; stage dims from mgd.pipeline_descriptors(); intra-mesh links from logical.mesh_adjacency_graphs_. For each distinct stage dims and each mesh, every rectangle of host slices the dims fill is a position, appended with its index. Positions overlap on purpose: the graph lists every place a stage could go, and the solve's resource constraint keeps the chosen ones apart, as SAT seating does for overlapping seat footprints. An edge joins two disjoint positions that border each other, by grid adjacency or by a cable, one duplicate entry per link. Each position keeps its chips as slot-local ChipTuples and each edge its links as LinkPairs under both (i, j) and (j, i), so C2 only looks them up.",
+      "Physical graph, detail::build_physical_pipeline_adjacency_graph(logical, full, psd, physical) in pipeline_builder.cpp, filling physical's pipeline_position_* fields. Slices: logical.mesh_host_grids_, one coordinate range per host laid out as the host grid (the slice Tier B divides out of the declared topology), numbered by (mesh, grid coordinate), ids global across meshes; stage shapes from logical.pipeline_stage_shapes_; intra-mesh links from logical.mesh_adjacency_graphs_. For each distinct stage dims and each mesh, every rectangle of host slices the dims fill is a position, appended with its index. Positions overlap on purpose: the graph lists every place a stage could go, and the solve's resource constraint keeps the chosen ones apart, as SAT seating does for overlapping seat footprints. An edge joins two disjoint positions that border each other, by grid adjacency or by a cable, one duplicate entry per link. Each position keeps its chips as slot-local ChipTuples and each edge its links as LinkPairs under both (i, j) and (j, i), so C2 only looks them up.",
       "The target is logical.pipeline_stage_graph_ as built: until P11 every edge is a STRICT fabric edge, so no per-seating copy is made. Error messages print the PipelineStageNode as <pipeline>/<stage id>.",
       "Constraints: add_required_constraint(stage, positions it fits on its own): its dims, at least as many core slots on the position's chips as the stage has endpoints, and for the host I/O stage room for H2D and D2H. These are the only failures that depend on one stage and one position, so they are filtered here and never learned from the resolver. add_resource_constraint(position -> covered slices).",
       "Resource completeness with the existing API: when the stage areas add up to exactly the slice count, add_cardinality_constraint(pairs, 1) per slice over every (stage, position) pair covering it. With min_count 1 the encoder emits one plain clause (report 5.4: 66 s to 0.59 s, 170 s to 0.32 s).",
@@ -1321,15 +1321,17 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
 +    // both ways, one entry per declared edge (a repeated edge is another channel). Each pipeline is one
 +    // component; no edges between pipelines.
 +    AdjacencyGraph<PipelineStageNode> pipeline_stage_graph_;
-+    // Per mesh: the host-rank grid (the MGD's get_host_ranks). A rank's coordinate is its slice's place in
-+    // the grid; the slice's chips are get_coord_range(mesh, rank).
-+    std::map<LogicalMeshNode, tt::tt_metal::distributed::MeshContainer<MeshHostRankId>> mesh_host_grids_;
++    // Every stage's shape, from its dims.
++    std::map<PipelineStageNode, tt::tt_metal::distributed::MeshShape> pipeline_stage_shapes_;
++    // Per mesh: the host grid (the MGD's get_host_ranks layout); each cell is that host's slice of device
++    // coordinates, get_coord_range(mesh, rank).
++    std::map<LogicalMeshNode, tt::tt_metal::distributed::MeshContainer<MeshCoordinateRange>> mesh_host_grids_;
  };
 
  class MultiMeshSolutionEnumerator {
      ...
-+    // The merged MGD, kept from init_from_parts (today a local of each constructor). Tier C reads the
-+    // pipelines from it: stage shapes, edge direction and loopback marks.
++    // The merged MGD, kept from init_from_parts (today a local of each constructor). check_pipeline_seating
++    // reads the resolver's edges from it: direction and loopback marks.
 +    std::unique_ptr<const ::tt::tt_fabric::MeshGraphDescriptor> mesh_graph_descriptor_;
  };
 
@@ -1364,7 +1366,9 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
 +        AdjacencyGraph<PipelineStageNode>::AdjacencyMap stages;              // one map for every pipeline
 +        for (const PipelineDescriptorData& pipeline : mesh_graph_descriptor.pipeline_descriptors()) {
 +            for (const PipelineDescriptorData::Stage& stage : pipeline.stages) {
-+                stages[PipelineStageNode{pipeline.name, stage.id}];          // isolated stages stay listed
++                const PipelineStageNode node{pipeline.name, stage.id};
++                stages[node];                                                // isolated stages stay listed
++                logical.pipeline_stage_shapes_.emplace(node, MeshShape(stage.dims[0], stage.dims[1]));   // rank 2 (Tier A)
 +            }
 +            for (const PipelineDescriptorData::Edge& edge : pipeline.edges) {   // P11 later skips needs_fabric == false
 +                const PipelineStageNode src{pipeline.name, edge.src};
@@ -1375,7 +1379,12 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
 +        }
 +        logical.pipeline_stage_graph_ = AdjacencyGraph<PipelineStageNode>(std::move(stages));
 +        for (const auto& [mesh, adjacency] : logical.mesh_adjacency_graphs_) {
-+            logical.mesh_host_grids_.emplace(mesh, mesh_graph_descriptor.get_host_ranks(mesh));
++            const MeshContainer<MeshHostRankId>& ranks = mesh_graph_descriptor.get_host_ranks(mesh);
++            std::vector<MeshCoordinateRange> slices;                         // row-major, as ranks.values()
++            for (const MeshHostRankId rank : ranks.values()) {
++                slices.push_back(mesh_graph_descriptor.get_coord_range(mesh, rank));
++            }
++            logical.mesh_host_grids_.emplace(mesh, MeshContainer<MeshCoordinateRange>(ranks.shape(), std::move(slices)));
 +        }
 +    }
 +    return logical;
@@ -1417,15 +1426,15 @@ std::vector<tt::tt_metal::ExitNodeConnection> inter_mesh_cables(
 // the graph lists every place a stage could go. An edge joins two disjoint positions that border each other,
 // one entry per link.
 void detail::build_physical_pipeline_adjacency_graph(
-    const MeshGraphDescriptor& mgd, const LogicalMultiMeshGraph& logical, const TopologyMappingResult& full,
+    const LogicalMultiMeshGraph& logical, const TopologyMappingResult& full,
     const tt::tt_metal::PhysicalSystemDescriptor& psd, PhysicalMultiMeshGraph& physical) {
     auto& g = physical;                                                        // the pipeline_position_* fields
     g.pipeline_position_chips_.clear();                                        // a P15 retry refills them
     g.pipeline_position_slices_.clear();
     g.pipeline_position_links_.clear();
-    const SliceGrid slices = slice_grid(mgd, logical.mesh_host_grids_, full);   // the host-rank grids, chips per slice
-    for (const auto& dims : distinct_stage_dims(mgd.pipeline_descriptors())) {
-        for (const SliceRect& rect : slices.rectangles(dims)) {              // file-local, per mesh, in slices
+    const SliceGrid slices = slice_grid(logical.mesh_host_grids_, full);      // one range per host, chips per slice
+    for (const MeshShape& shape : distinct_shapes(logical.pipeline_stage_shapes_)) {
+        for (const SliceRect& rect : slices.rectangles(shape)) {              // file-local, per mesh, in slices
             g.pipeline_position_slices_.push_back(slices.covered(rect));
             g.pipeline_position_chips_.push_back(slices.slot_local_chips(rect));      // ChipTuples, origin at the rectangle
         }
@@ -1460,10 +1469,10 @@ void detail::build_physical_pipeline_adjacency_graph(
         src: `
 // Tight carve: every slice must be covered. Existing API: at least one (stage, position) covering it.
 void add_resource_completeness(MappingConstraints<PipelineStageNode, std::size_t>& constraints,
-                               const MeshGraphDescriptor& mgd, const PhysicalMultiMeshGraph& g,
+                               const LogicalMultiMeshGraph& logical, const PhysicalMultiMeshGraph& g,
                                const std::map<PipelineStageNode, std::set<std::size_t>>& fits) {
     const std::uint32_t slice_count = total_slice_count(g);
-    if (total_stage_slices(mgd, g) != slice_count) {
+    if (total_stage_slices(logical.pipeline_stage_shapes_, g) != slice_count) {
         return;                                                                // spare slices: not tight
     }
     for (std::uint32_t s = 0; s < slice_count; ++s) {
@@ -1481,24 +1490,20 @@ void add_resource_completeness(MappingConstraints<PipelineStageNode, std::size_t
 
 // C2: one solve, one carve, returned as the solver's own MappingResult. The caller checks it; no second carve.
 MappingResult<PipelineStageNode, std::size_t> detail::solve_pipeline_footprint(
-    const MeshGraphDescriptor& mgd, const LogicalMultiMeshGraph& logical, const PhysicalMultiMeshGraph& g,
-    std::size_t conflict_cap) {
+    const LogicalMultiMeshGraph& logical, const PhysicalMultiMeshGraph& g, std::size_t conflict_cap) {
     MappingConstraints<PipelineStageNode, std::size_t> constraints;
     std::map<PipelineStageNode, std::set<std::size_t>> fits;
-    for (const PipelineDescriptorData& pipeline : mgd.pipeline_descriptors()) {
-        for (const PipelineDescriptorData::Stage& stage : pipeline.stages) {
-            const PipelineStageNode node{pipeline.name, stage.id};
-            std::set<std::size_t>& fit = fits[node] = positions_that_fit(pipeline, stage, g);   // dims, core slots, host I/O
-            if (fit.empty()) {
-                MappingResult<PipelineStageNode, std::size_t> none;            // success = false
-                none.error_message = fmt::format("stage {} has no position on this seating", node);
-                return none;
-            }
-            constraints.add_required_constraint(node, fit);
+    for (const auto& [node, shape] : logical.pipeline_stage_shapes_) {
+        std::set<std::size_t>& fit = fits[node] = positions_that_fit(node, shape, g);   // shape, core slots, host I/O
+        if (fit.empty()) {
+            MappingResult<PipelineStageNode, std::size_t> none;                // success = false
+            none.error_message = fmt::format("stage {} has no position on this seating", node);
+            return none;
         }
+        constraints.add_required_constraint(node, fit);
     }
     constraints.add_resource_constraint<std::uint32_t>(by_index(g.pipeline_position_slices_));   // chosen positions share no slice
-    add_resource_completeness(constraints, mgd, g, fits);
+    add_resource_completeness(constraints, logical, g, fits);
     TopologyMappingEnumerationSession<PipelineStageNode, std::size_t> session(
         logical.pipeline_stage_graph_, g.pipeline_position_graph_, constraints, ConnectionValidationMode::STRICT,
         /*quiet_mode=*/true, TopologyMappingSolverEngine::Auto, /*unique_shapes=*/false, conflict_cap);
@@ -1510,11 +1515,11 @@ MappingResult<PipelineStageNode, std::size_t> detail::solve_pipeline_footprint(
         mode: "new",
         language: "cpp",
         src: `
-// c.mgd is the merged MGD; c.logical = build_logical_multi_mesh_adjacency_graph(c.mgd), stage graph and host grids included.
+// c.logical = build_logical_multi_mesh_adjacency_graph(c.mgd): stage graph, stage shapes and host grids included.
 TEST(PipelineFootprintTest, OverlappingPositionsAreNeverAdjacent) {
     const auto c = two_by_two_slices_one_by_two_stages();                  // four positions, each slice in two
     PhysicalMultiMeshGraph physical = c.physical;                         // build_hierarchical_from_flat_graph(flat, seating)
-    detail::build_physical_pipeline_adjacency_graph(c.mgd, c.logical, c.full, c.psd, physical);
+    detail::build_physical_pipeline_adjacency_graph(c.logical, c.full, c.psd, physical);
     EXPECT_EQ(physical.pipeline_position_slices_.size(), 4u);
     for (const auto& [p, q] : overlapping_pairs(physical)) {
         EXPECT_FALSE(adjacent(physical, p, q));
@@ -1524,8 +1529,8 @@ TEST(PipelineFootprintTest, OverlappingPositionsAreNeverAdjacent) {
 TEST_P(PipelineFootprintTest, MatchesBruteForceAndVerifies) {
     const FootprintCase c = GetParam();                                    // MGD + PSD + one seating
     PhysicalMultiMeshGraph physical = c.physical;                         // build_hierarchical_from_flat_graph(flat, seating)
-    detail::build_physical_pipeline_adjacency_graph(c.mgd, c.logical, c.full, c.psd, physical);
-    const auto footprint = detail::solve_pipeline_footprint(c.mgd, c.logical, physical, kCap);
+    detail::build_physical_pipeline_adjacency_graph(c.logical, c.full, c.psd, physical);
+    const auto footprint = detail::solve_pipeline_footprint(c.logical, physical, kCap);
     EXPECT_EQ(footprint.success, brute_force_carve_exists(c));             // small cases only
     if (footprint.success) {
         EXPECT_TRUE(is_valid_carve(c, footprint.target_to_global));        // own dims, disjoint, every edge touching
@@ -1535,8 +1540,8 @@ TEST_P(PipelineFootprintTest, MatchesBruteForceAndVerifies) {
 TEST(PipelineFootprintTest, StageThatCannotFitIsFilteredBeforeTheSolve) {
     const auto c = reject_demo_case();       // the host I/O stage (id 0) cannot fit on A0
     PhysicalMultiMeshGraph physical = c.physical;                         // build_hierarchical_from_flat_graph(flat, seating)
-    detail::build_physical_pipeline_adjacency_graph(c.mgd, c.logical, c.full, c.psd, physical);
-    const auto footprint = detail::solve_pipeline_footprint(c.mgd, c.logical, physical, kCap);
+    detail::build_physical_pipeline_adjacency_graph(c.logical, c.full, c.psd, physical);
+    const auto footprint = detail::solve_pipeline_footprint(c.logical, physical, kCap);
     ASSERT_TRUE(footprint.success);
     EXPECT_NE(footprint.target_to_global.at(PipelineStageNode{"reject_demo", 0}), c.a0_position);   // s0 is never put on A0
 }`,
@@ -1555,6 +1560,7 @@ TEST(LogicalMultiMeshGraphTest, PipelineStageGraphOfTwoPipelines) {
                 ::testing::UnorderedElementsAre(PipelineStageNode{"ring", 1}, PipelineStageNode{"ring", 3}));
     EXPECT_THAT(stages.get_neighbors(PipelineStageNode{"pair", 0}), ::testing::ElementsAre(PipelineStageNode{"pair", 1}));
     EXPECT_EQ(fmt::format("{}", PipelineStageNode{"ring", 3}), "ring/3");
+    EXPECT_EQ(logical.pipeline_stage_shapes_.at(PipelineStageNode{"ring", 0}), MeshShape(4, 2));   // its dims
 }
 
 TEST(LogicalMultiMeshGraphTest, PipelinesOfTwoMergedPartsShareOneStageGraph) {
@@ -1569,22 +1575,24 @@ TEST(LogicalMultiMeshGraphTest, HostGridsMatchTheDescriptor) {
     const MeshGraphDescriptor mgd(gpt_oss_galaxy_textproto());            // 8x4 devices over a 2x2 host grid
     const LogicalMultiMeshGraph logical = build_logical_multi_mesh_adjacency_graph(mgd);
     const auto& grid = logical.mesh_host_grids_.at(MeshId{0});
-    EXPECT_EQ(grid, mgd.get_host_ranks(MeshId{0}));
-    EXPECT_EQ(grid.shape(), MeshShape(2, 2));                             // four 4x2 slices
-    for (const auto& [coord, rank] : grid) {
-        EXPECT_EQ(mgd.get_coord_range(MeshId{0}, rank).shape(), MeshShape(4, 2));
+    const auto& ranks = mgd.get_host_ranks(MeshId{0});
+    EXPECT_EQ(grid.shape(), ranks.shape());                               // a 2x2 host grid
+    for (const auto& [coord, slice] : grid) {
+        EXPECT_EQ(slice, mgd.get_coord_range(MeshId{0}, ranks.at(coord)));
+        EXPECT_EQ(slice.shape(), MeshShape(4, 2));                        // four 4x2 slices
     }
 }
 
 TEST(LogicalMultiMeshGraphTest, NoPipelinesLeavesTheFieldsEmpty) {
     const LogicalMultiMeshGraph logical = build_logical_multi_mesh_adjacency_graph(MeshGraphDescriptor(galaxy_mgd_path()));
     EXPECT_TRUE(logical.pipeline_stage_graph_.get_nodes().empty());
+    EXPECT_TRUE(logical.pipeline_stage_shapes_.empty());
     EXPECT_TRUE(logical.mesh_host_grids_.empty());
 }`,
       },
     ],
     tests: [
-      "Logical graph (test_topology_mapper_utils.cpp): the stage graph of the GPT-OSS ring, the dflash fork, two pipelines that both have a stage 0 (two nodes), a repeated edge (two entries) and an isolated stage (listed, no neighbours); two merged MGD parts whose pipelines share one stage graph; PipelineStageNode formats as ring/3; mesh_host_grids_ equals get_host_ranks per mesh; an MGD without pipelines leaves both fields empty.",
+      "Logical graph (test_topology_mapper_utils.cpp): the stage graph of the GPT-OSS ring, the dflash fork, two pipelines that both have a stage 0 (two nodes), a repeated edge (two entries) and an isolated stage (listed, no neighbours); two merged MGD parts whose pipelines share one stage graph; PipelineStageNode formats as ring/3; each stage's shape matches its dims; each mesh_host_grids_ cell equals get_coord_range for the rank at that coordinate; an MGD without pipelines leaves all three fields empty.",
       "Positions and slices from mesh_host_grids_: 4x2-chip and 2x2-chip slices on two meshes; an 8-chip stage is one slice on the first and a 2x2 block on the second.",
       "Overlapping positions: a 2x2 grid of slices gives four 1x2 positions; overlapping pairs are never adjacent, and a carve never picks two of them.",
       "Cables on SC16 revAB/revC and single-galaxy PSD fixtures: the hashes equal the connection_hashes today's gather produces for the same mapping, on every boundary.",
@@ -1610,7 +1618,7 @@ TEST(LogicalMultiMeshGraphTest, NoPipelinesLeavesTheFieldsEmpty) {
     ],
     steps: [
       "Types: the mapping result in topology_mapper_utils.hpp, two small structs of existing types. PipelinePlacement is the resolver's own input and output, submesh_chips (ChipTuple) and GraphLayoutResult; PipelineMappingResult maps pipeline name to placement and holds R (ExitNodeConnection). topology_mapper_utils.hpp includes pipeline_builder.hpp for them, which stays light (fabric_types.hpp, mesh_graph.hpp). The carve is P5's MappingResult::target_to_global.",
-      "Not stored, derived when needed: which R entry an edge uses (R is appended in resolved_edges order, one per crossing edge); each stage's host ranks and the idle ranks (the mesh_host_grids_ entries its position covers, and the rest, computed by P12); the host I/O stage (layout.stage_order.front()).",
+      "Not stored, derived when needed: which R entry an edge uses (R is appended in resolved_edges order, one per crossing edge); each stage's host ranks and the idle ranks (the ranks at the mesh_host_grids_ coordinates its position covers, read from get_host_ranks, and the rest, computed by P12); the host I/O stage (layout.stage_order.front()).",
       "Pre-checks before the solve: area, lattice count, and the colour and segment test on tight 1-cable meshes; cable pairs the segment test rules out are dropped from the graph.",
       "Resolver arguments, one call per pipeline of mgd.pipeline_descriptors(), all lookups: carve_of gives the pipeline's positions in stage order, target_to_global.at(PipelineStageNode{pipeline.name, stage.id}); submesh_chips is pipeline_position_chips_ of each, copied as is (already slot-local); direct_links is pipeline_position_links_ re-keyed from position pairs to submesh indices; node names (the resolver takes strings, so std::to_string of each PipelineStageId), EdgeInputTuple edges with the loopback marks, node_chip_counts and blaze's default core counts come from the pipeline's PipelineDescriptorData. No wrapper struct and no reverse map: a resolved chip is read back from submesh_chips.",
       "The resolver call, resolve_graph_layout_with_connections; a throw rejects the carve with its message (pipeline_layout).",
@@ -1642,9 +1650,9 @@ struct PipelineMappingResult {
         language: "cpp",
         src: `
 +// Forward declarations only, so the ttnn ops and nanobind module that include this header pull in
-+// neither topology_mapper_utils.hpp nor topology_solver.hpp. Everything per run comes in through the
-+// merged MGD (the pipelines; mesh_graph.hpp declares it) and LogicalMultiMeshGraph (the stage graph,
-+// the host-rank grids and the intra-mesh links).
++// neither topology_mapper_utils.hpp nor topology_solver.hpp. Everything per run comes in through
++// LogicalMultiMeshGraph (the stage graph, the stage shapes, the host grids and the intra-mesh links),
++// plus the merged MGD for the resolver's edges (mesh_graph.hpp declares it).
 +// The positions live in the seating's PhysicalMultiMeshGraph.
 +namespace tt::tt_metal::experimental::tt_fabric {
 +struct LogicalMultiMeshGraph;
@@ -1664,20 +1672,19 @@ struct PipelineMappingResult {
 +using ::tt::tt_metal::experimental::tt_fabric::TopologyMappingResult;
  ...
 +void build_physical_pipeline_adjacency_graph(                           // P5: fills physical.pipeline_position_*
-+    const MeshGraphDescriptor& mgd, const LogicalMultiMeshGraph& logical, const TopologyMappingResult& full,
++    const LogicalMultiMeshGraph& logical, const TopologyMappingResult& full,
 +    const tt::tt_metal::PhysicalSystemDescriptor& psd, PhysicalMultiMeshGraph& physical);
 +
 +// P5: the solver's own result on logical.pipeline_stage_graph_; target_to_global is the carve
 +// (stage -> position index).
 +MappingResult<PipelineStageNode, std::size_t> solve_pipeline_footprint(
-+    const MeshGraphDescriptor& mgd, const LogicalMultiMeshGraph& logical,
-+    const PhysicalMultiMeshGraph& physical, std::size_t conflict_cap);
++    const LogicalMultiMeshGraph& logical, const PhysicalMultiMeshGraph& physical, std::size_t conflict_cap);
 +
 +// The one call the mapper makes per seating. Accept: sets full.pipeline, returns true.
 +// Reject: sets full.success = false, full.stats.failure_stage (pipeline_carve | pipeline_layout |
 +// pipeline_binding) and full.error_message, returns false. C4 stays with the caller.
 +bool check_pipeline_seating(
-+    const MeshGraphDescriptor& mgd,                // the merged MGD: pipelines, shapes, edges, loopbacks
++    const MeshGraphDescriptor& mgd,                // the merged MGD: the resolver's edges and loopbacks
 +    const LogicalMultiMeshGraph& logical,          // also the declared channels per mesh pair
 +    PhysicalMultiMeshGraph& physical,              // the seating's graph; C1 fills its pipeline_position_* fields
 +    const tt::tt_metal::PhysicalSystemDescriptor& psd,
@@ -1696,12 +1703,12 @@ bool detail::check_pipeline_seating(
     const tt::tt_metal::PhysicalSystemDescriptor& psd,
     TopologyMappingResult& full) {
     // C1: every position of every stage's dims. Positions overlap; edges join disjoint, bordering ones.
-    build_physical_pipeline_adjacency_graph(mgd, logical, full, psd, physical);
-    if (auto pre = pipeline_pre_checks(mgd, logical, physical)) {                 // area, lattice, colour and segment
+    build_physical_pipeline_adjacency_graph(logical, full, psd, physical);
+    if (auto pre = pipeline_pre_checks(logical, physical)) {                 // area, lattice, colour and segment
         return reject(full, "pipeline_layout", pre->reason);
     }
     // C2: one footprint solve. The resource constraint keeps the chosen positions disjoint.
-    const auto footprint = solve_pipeline_footprint(mgd, logical, physical, kPipelineConflictCap);   // P5
+    const auto footprint = solve_pipeline_footprint(logical, physical, kPipelineConflictCap);   // P5
     if (!footprint.success) {
         return reject(full, "pipeline_carve", footprint.error_message);      // no position, no carve, or the cap
     }
@@ -1776,7 +1783,7 @@ bool reject(TopologyMappingResult& full, std::string_view stage, std::string rea
     milestone: "M3 Tier C (STRICT)",
     size: "M",
     deps: ["P3", "P6"],
-    goal: "Wire P6 into the mapper. The enumerator already holds the merged MGD and logical_, with the stage graph and the host-rank grids (P5), so it copies nothing: it calls detail::check_pipeline_seating(*mesh_graph_descriptor_, logical_, physical, psd, full) after every intra-mesh success, excludes rejected seatings (C4) and returns the accepted pipeline mapping in its result; TopologyMapper saves it on rank 0 and broadcasts R. The mapper side holds no pipeline logic beyond this call.",
+    goal: "Wire P6 into the mapper. The enumerator already holds the merged MGD and logical_, with the stage graph, the stage shapes and the host grids (P5), so it copies nothing: it calls detail::check_pipeline_seating(*mesh_graph_descriptor_, logical_, physical, psd, full) after every intra-mesh success, excludes rejected seatings (C4) and returns the accepted pipeline mapping in its result; TopologyMapper saves it on rank 0 and broadcasts R. The mapper side holds no pipeline logic beyond this call.",
     files: [
       "tt_metal/fabric/topology_mapper_utils.cpp",
       "tt_metal/api/tt-metalium/experimental/fabric/topology_mapper_utils.hpp",
@@ -1786,7 +1793,7 @@ bool reject(TopologyMappingResult& full, std::string_view stage, std::string rea
     ],
     steps: [
       "TopologyMappingConfig::check_pipelines (default true); TopologyMapper sets it false under the kill switch (4.7).",
-      "Enumerator constructor: nothing beyond P5. P5 keeps the merged MGD as mesh_graph_descriptor_, and logical_ = build_logical_multi_mesh_adjacency_graph(merged) already fills pipeline_stage_graph_ and mesh_host_grids_ (P5), so the enumerator needs no other pipeline members. Nothing else goes through the config, so every overload and generate_rank_bindings get it the same way.",
+      "Enumerator constructor: nothing beyond P5. P5 keeps the merged MGD as mesh_graph_descriptor_, and logical_ = build_logical_multi_mesh_adjacency_graph(merged) already fills pipeline_stage_graph_, pipeline_stage_shapes_ and mesh_host_grids_ (P5), so the enumerator needs no other pipeline members. Nothing else goes through the config, so every overload and generate_rank_bindings get it the same way.",
       "next(): after intra-mesh success, when check_pipelines is set and logical_.pipeline_stage_graph_ has nodes (empty by default; nodes exactly when the MGD has pipelines), call detail::check_pipeline_seating(*mesh_graph_descriptor_, logical_, physical, psd, full) (P6). Accept: it has set full.pipeline. Reject (C4): it has set success, failure_stage and error_message on full; then last_failed_, exclude_mapping(seating) on the seat set (never add_forbidden_constraint), and the next seating.",
       "Cap rejections per run (kMaxPipelineRejections, proposed 256, overridable for sweeps) and report the last reason; record rejections and solve time in the placement stats, so the sweep and CI show whether P10 is needed.",
       "Turn unique_shapes off when a pipeline is present (runtime overloads and --all-solutions): swapping meshes between the same seats can change the pipeline answer.",
@@ -1837,7 +1844,7 @@ bool reject(TopologyMappingResult& full, std::string_view stage, std::string rea
  class MultiMeshSolutionEnumerator {
      ...
      std::unique_ptr<SatPlacementEnumerationSession> placement_session_;
-     LogicalMultiMeshGraph logical_;                        // today; with P5 it carries the stage graph and host grids too
+     LogicalMultiMeshGraph logical_;                        // today; with P5 it carries the stage graph, shapes and host grids too
     std::unique_ptr<const MeshGraphDescriptor> mesh_graph_descriptor_;   // P5: the merged MGD, kept
 +    std::size_t pipeline_rejections_ = 0;
  };
@@ -1856,7 +1863,7 @@ bool reject(TopologyMappingResult& full, std::string_view stage, std::string rea
         mode: "diff",
         language: "cpp",
         src: `
- // init_from_parts: today's line, unchanged; with P5 it also fills the stage graph and host grids,
+ // init_from_parts: today's line, unchanged; with P5 it also fills the stage graph, shapes and host grids,
  // and each constructor keeps the merged MGD as mesh_graph_descriptor_ (P5)
      logical_ = build_logical_multi_mesh_adjacency_graph(merged);
 
@@ -2389,8 +2396,8 @@ rank_bindings:
  // layouts fixed by hard constraints, and facts true in every projection. The one below reads only
  // orientation-free facts, so matching seats by ASIC set (as seats_matching does) is sound.
 
-     build_physical_pipeline_adjacency_graph(mgd, logical, full, psd, physical);   // C1
-     if (auto pre = pipeline_pre_checks(mgd, logical, physical)) {
+     build_physical_pipeline_adjacency_graph(logical, full, psd, physical);   // C1
+     if (auto pre = pipeline_pre_checks(logical, physical)) {
 +        // C2 pre-check: mesh m's segment test failed for every projection, m's only MGD neighbour is
 +        // n (so all of m's cables go to n's seat), and m's slice signature is fixed by hard
 +        // constraints (P15's skip test). Then no other seat of any other mesh changes it.
@@ -2723,8 +2730,8 @@ function scrollToId(id: string) {
 }
 
 const TIER_C_FILES: string[][] = [
-  ["topology_mapper_utils.hpp", "PipelineStageNode; two LogicalMultiMeshGraph fields (pipeline_stage_graph_, all pipelines merged, and mesh_host_grids_), the enumerator's mesh_graph_descriptor_ (the merged MGD, kept) and four PhysicalMultiMeshGraph fields (pipeline_position_*) (P5); the mapping result, PipelinePlacement + PipelineMappingResult (P6); TopologyMappingConfig::check_pipelines; TopologyMappingResult::pipeline", "P5, P6, P8"],
-  ["topology_mapper_utils.cpp", "build_logical_multi_mesh_adjacency_graph fills the two logical fields and the constructors keep the merged MGD (P5); the next() hook, exclude_mapping and the rejection cap (P8)", "P5, P8"],
+  ["topology_mapper_utils.hpp", "PipelineStageNode; three LogicalMultiMeshGraph fields (pipeline_stage_graph_, all pipelines merged; pipeline_stage_shapes_; mesh_host_grids_), the enumerator's mesh_graph_descriptor_ (the merged MGD, kept) and four PhysicalMultiMeshGraph fields (pipeline_position_*) (P5); the mapping result, PipelinePlacement + PipelineMappingResult (P6); TopologyMappingConfig::check_pipelines; TopologyMappingResult::pipeline", "P5, P6, P8"],
+  ["topology_mapper_utils.cpp", "build_logical_multi_mesh_adjacency_graph fills the three logical fields and the constructors keep the merged MGD (P5); the next() hook, exclude_mapping and the rejection cap (P8)", "P5, P8"],
   ["pipeline_builder.hpp (detail)", "forward declarations; build_physical_pipeline_adjacency_graph, solve_pipeline_footprint, check_pipeline_seating", "P5, P6"],
   ["pipeline_builder.cpp", "per seating: inter_mesh_cables, the positions in the seating's physical graph, pre-checks, the footprint solve, resolver arguments and one call per pipeline, R, the demand check", "P5, P6"],
   ["topology_mapper.cpp", "kill switch; the mapping saved on rank 0; R broadcast with the chip info", "P8"],
@@ -2733,11 +2740,12 @@ const TIER_C_FILES: string[][] = [
 ];
 
 const TIER_C_REUSED: string[][] = [
-  ["stages, labels, dims, edges, loopback", "PipelineDescriptorData (MGD, Tier A), read from the merged MGD the enumerator keeps"],
+  ["stages, labels, edges, loopback", "PipelineDescriptorData (MGD, Tier A), read from the merged MGD the enumerator keeps"],
+  ["a stage's shape", "MeshShape, from the stage's dims (pipeline_stage_shapes_)"],
   ["a stage's id", "PipelineStageId (fabric_types.hpp), an integer"],
-  ["where the stage graph and host-rank grids live", "LogicalMultiMeshGraph, beside today's mesh graphs; one stage graph for all pipelines"],
+  ["where the stage graph, stage shapes and host grids live", "LogicalMultiMeshGraph, beside today's mesh graphs; one stage graph for all pipelines"],
   ["where the positions live", "PhysicalMultiMeshGraph, the seating's graph next() already builds"],
-  ["host slices per mesh", "MeshContainer<MeshHostRankId>, the MGD's get_host_ranks (the host grid); a slice's chips from get_coord_range"],
+  ["host slices per mesh", "MeshContainer<MeshCoordinateRange>, shaped as the host grid; each cell the MGD's get_coord_range for that host"],
   ["position nodes", "std::size_t indices"],
   ["a position's chips", "std::vector<ChipTuple> (resolver input)"],
   ["links between positions", "detail::DirectLinks (resolver input)"],
@@ -2750,8 +2758,8 @@ const TIER_C_REUSED: string[][] = [
 const TIER_C_FLOW = `
 once per run (topology_mapper_utils.cpp, enumerator constructor)
   logical_ = build_logical_multi_mesh_adjacency_graph(merged)   today; P5: + pipeline_stage_graph_ (all pipelines),
-                                                                mesh_host_grids_
-  mesh_graph_descriptor_ = the merged MGD                        P5: kept, for the pipelines
+                                                                pipeline_stage_shapes_, mesh_host_grids_
+  mesh_graph_descriptor_ = the merged MGD                        P5: kept, for the resolver's edges
 
 per seating (MultiMeshSolutionEnumerator::next; physical = build_hierarchical_from_flat_graph(flat, seating), today)
   after intra-mesh success:
@@ -2792,7 +2800,7 @@ function PlanTab() {
       <Stack gap={8}>
         <H2>Tier C at a glance</H2>
         <Text tone="secondary">
-          One rule: topology_mapper_utils owns the types and what runs once per run (the stage graph and host-rank grids in the logical graph, the kept merged MGD, the enumerator hook, C4);
+          One rule: topology_mapper_utils owns the types and what runs once per run (the stage graph, stage shapes and host grids in the logical graph, the kept merged MGD, the enumerator hook, C4);
           pipeline_builder owns everything that runs per seating, behind one call, detail::check_pipeline_seating. The mapper calls it after
           every intra-mesh success and reads back true or false. pipeline_builder.hpp only forward-declares the graph types, so the ttnn
           ops and nanobind module that include it are unchanged.
@@ -2802,9 +2810,9 @@ function PlanTab() {
           rows={TIER_C_FILES}
         />
         <Text tone="secondary">
-          One node type, PipelineStageNode, and new fields on the two graphs the mapper already has: the merged stage graph and the
-          host-rank grids on LogicalMultiMeshGraph, and the positions on PhysicalMultiMeshGraph (P5). The pipelines
-          themselves are read from the merged MGD, which the enumerator now keeps. Two small new structs,
+          One node type, PipelineStageNode, and new fields on the two graphs the mapper already has: the merged stage graph, the stage
+          shapes and the host grids on LogicalMultiMeshGraph, and the positions on PhysicalMultiMeshGraph (P5). Edge direction
+          and loopback marks are read from the merged MGD, which the enumerator now keeps. Two small new structs,
           PipelinePlacement and PipelineMappingResult (P6), each a bundle of existing types. Everything else already exists:
         </Text>
         <Table
@@ -4692,7 +4700,7 @@ function MapperTab() {
           rows={[
             ["Graph-layout resolver", "resolve_graph_layout_with_connections (C++)", "use as-is; a throw rejects the carve", "P8"],
             ["Submesh links", "discover_submesh_links (C++, asks the control plane)", "not needed: C2 supplies direct_links", "-"],
-            ["Host slices", "the MGD's get_host_ranks (a grid of host ranks) and get_coord_range, the slices Tier B divides out", "the grid copied into LogicalMultiMeshGraph::mesh_host_grids_", "P5"],
+            ["Host slices", "the MGD's get_host_ranks (a grid of host ranks) and get_coord_range, the slices Tier B divides out", "each host's range, laid out as the host grid, in LogicalMultiMeshGraph::mesh_host_grids_", "P5"],
             ["Stages and edges", "PipelineDescriptorData (MGD)", "read from the merged MGD the enumerator keeps; the stage graph beside today's mesh graphs is built from them", "P5"],
             ["Positions", "PhysicalMultiMeshGraph (per seating, today)", "four pipeline_position_* fields on it, filled after intra-mesh success", "P5"],
             ["Carve planner", "carve_planner.py", "replaced by the footprint solve (not ported)", "P5"],
@@ -4782,7 +4790,8 @@ bool has_pipeline_descriptors() const;                                  // proto
 
 // LogicalMultiMeshGraph, filled once per run by build_logical_multi_mesh_adjacency_graph (P5)
 AdjacencyGraph<PipelineStageNode> pipeline_stage_graph_;               // empty by default; the gate: nodes iff pipelines
-std::map<LogicalMeshNode, tt::tt_metal::distributed::MeshContainer<MeshHostRankId>> mesh_host_grids_;   // empty likewise
+std::map<PipelineStageNode, tt::tt_metal::distributed::MeshShape> pipeline_stage_shapes_;   // empty likewise
+std::map<LogicalMeshNode, tt::tt_metal::distributed::MeshContainer<MeshCoordinateRange>> mesh_host_grids_;   // empty likewise
 
 // PhysicalMultiMeshGraph, per seating: pipeline_position_* are empty by default and stay so unless
 // check_pipeline_seating runs, which needs a stage graph with nodes`;
