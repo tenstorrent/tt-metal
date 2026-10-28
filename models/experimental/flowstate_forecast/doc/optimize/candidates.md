@@ -32,3 +32,17 @@ PLAN v1.20, v1.21 and v1.23 do not apply (CONTRACT:403). What applies: F2, F4, F
 | R2-1b | SwiGLU blocks (perf m8 k8 n8 sb1x4; acc auto) | 64aceabce56 | bench 1230 | 239.0 (perf 230.4) | perf -1.5 % | outputs identical to R2-1 | yes |
 | R2-2/3 | MLP residual into layer_norm(residual_input_tensor); g*y + D u as addcmul (bundle) | c4d3f65016d | bench 1232, suite 1233 (119 passed), check_gates 1238, score_broken 1239 (0 pass) | 226.7 (perf 218.1) | -5.1 % (round -16.9 %) | 2 suite drift: single_long/acc abs_err_max 0.0162 > 0.0099; nan_mix/acc pcc_row_min 0.745 < 0.748 | yes (D5: named ceilings suite:single_long/acc abs_err_max <= 0.017, suite:nan_mix/acc pcc_row_min >= 0.74) |
 | R2-1x | control: R2-2/3 with SwiGLU unfused at accuracy | 94c40245fc3 (reverted c54f216b7cc) | bench 1241, suite 1242 (119 passed), check_gates 1254 (failed before checking: r2_23u/all.json not yet written; on 80059b1e789's checker, unstamped CPU job), check_gates 1255 (8 failures: 6 coverage, the bench performance records the control did not re-run, + 2 drift) | 260.2 | -4.6 % vs R1 | 2 suite drift: model16/acc abs_err_max 0.0979 > 0.0862; nan_mix/acc pcc_row_min 0.711 | no. Corrected (D5): the single_long excursion IS from the fused SwiGLU (a precision change, v1.14), not accumulation order; the control's own failures are different ones (iter_02/swiglu_precision.md) |
+
+### D6 notes (item 5)
+
+- CPU job 1268 (`fixed_record_bias_q.json`, D5) started 14:49:13 in the live worktree, before 02dc3337ceb (14:50:34)
+  committed `fixed_record_vectors.py`: evidence from an uncommitted tree. Job 1320 replaces it, on the committed
+  de69ad4802e, from the saved heads (`/home/andy/bringup/goldens/flowstate/fixed_heads/`, manifest
+  `iter_00/fixed_heads.sha256`), with every existing metric matching the fixed record within 2.2e-16.
+- score_broken 1302 ended **failed (rc 1)** because 54 probes passed; the X4 GATE did not say so.
+- 0.0089 (accuracy) / 0.0149 (performance), both on suite:daily, are the bias_q tolerances the record **needs**
+  under the v1.27 interval, not an excess over a bound (the checker's worst excess is 0).
+
+| id | candidate | commit | jobs | paper / accuracy device ms | vs best | check_gates | kept |
+|---|---|---|---|---|---|---|---|
+| D6 | checker: v1.32 (active-row bias_q, saved heads, n/a fails), coded v1.28 toward rule, inactive_bias_drift_max, report-only bias_rq_drift_max; record c4d3f65016d backfilled from its dumps | de69ad4802e, 8cf0bb889a2, ae86573c1a8 | vectors 1320, backfill + unit + check_gates + score_broken 1322 | 226.7 (record unchanged) | 0 | 0 failures; score_broken 0 of 816 pass, 8 toward, 0 n/a misses | checker |
