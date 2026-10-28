@@ -23,6 +23,8 @@
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
 #include "metal2_host_api/program_spec/validation/validate_spec.hpp"
 
+#include "metal2_host_api/test_helpers/dfb_placement_test_helpers.hpp"
+
 namespace tt::tt_metal::experimental {
 namespace {
 
@@ -318,6 +320,16 @@ TEST_F(ProgramSpecTestQuasar, CPU_SRAMArenaDFBAllBankLockstep) {
         const auto collected = CollectSpecData(spec);
         ValidateProgramSpec(spec, collected, mesh_device_->impl().metal_context(), *mesh_device_->allocator());
     });
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementRejectsBorrowedMemory) {
+    // A placement override combined with borrowed memory is rejected.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = test_helpers::MakeBorrowedDFBProgramSpec();
+    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("override_placement")));
 }
 
 }  // namespace
