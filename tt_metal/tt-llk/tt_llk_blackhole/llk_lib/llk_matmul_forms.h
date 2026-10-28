@@ -185,27 +185,33 @@ inline constexpr matmul_main_form_cell matmul_main_form_cells[] = {
     {MathFidelity::LoFi, false, true, DataFormat::Float32, DataFormat::Float32, DataFormat::Float32, false, 4, 4, 1, 2, 4, 2},
 };
 
-// Mixed operand pairs whose keyed forms read slower than main's on the tt-llk mixed sweep (perf_matmul_mix, ABBA against main):
-// Float32 in in1 (the streamed SrcA) against a block float operand (Bfp8_b or Bfp4_b) in in0 at HiFi2, any block, k, DEST, sync and output
-// (the keyed forms read up to 9 percent slower on K 32 rows there), and Bfp8_b in in1 against Float16_b in
-// in0 at HiFi2, half sync, 16-bit DEST, one k step (a single tile, 0.2 cycles). Float32 in in0 keeps the keyed forms, up to 5 percent faster.
+// Mixed operand pairs that keep main's form (perf_matmul_mix and perf_matmul_cov2, ABBA against main). Float32 in in1 (the streamed SrcA) against a
+// block float in0 at HiFi2 on blocks 4 tiles wide or more: the row MOP leaves the SrcA unpacker no bubble and reads up to 9 percent slower. Narrower
+// blocks take the keyed forms, which read up to 5 percent faster, except one tile over two to four k steps at full sync, a 1 by 3 block at
+// half sync over two to four k steps, a 4 by 4 block of one k step and a single tile of one k step at half sync (ct_dim 0, an unknown block, keeps main's form).
+// Float32 in in0 takes the keyed forms. Bfp8_b in in1 against Float16_b in in0 at HiFi2, half sync, 16-bit DEST, one k step also keeps main's form.
 constexpr bool matmul_block_float_format(const DataFormat f)
 {
     return f == DataFormat::Bfp8_b || f == DataFormat::Bfp4_b;
 }
 
-template <MathFidelity math_fidelity, std::uint32_t kt_per_section, bool fp32_dest, DataFormat in0, DataFormat in1, DataFormat out_format, int sync>
+template <MathFidelity math_fidelity, std::uint32_t kt_per_section, bool fp32_dest, DataFormat in0, DataFormat in1, DataFormat out_format, int sync, std::uint32_t ct_dim = 0, std::uint32_t rt_dim = 0>
 constexpr bool matmul_mixed_main_form()
 {
+    constexpr bool f32_in1 = in1 == DataFormat::Float32 && matmul_block_float_format(in0);
+    constexpr bool keyed =
+        ct_dim != 0 &&
+        (kt_per_section > 1 ? (ct_dim < 4 && !(sync == 1 && kt_per_section <= 4 && ct_dim == 1 && rt_dim == 1) && !(sync == 0 && kt_per_section <= 4 && ct_dim == 3 && rt_dim == 1))
+                            : (!(ct_dim >= 4 && rt_dim >= 4) && !(sync == 0 && ct_dim == 1 && rt_dim == 1)));
     return math_fidelity == MathFidelity::HiFi2 &&
-           ((in1 == DataFormat::Float32 && matmul_block_float_format(in0)) ||
+           ((f32_in1 && !keyed) ||
             (!fp32_dest && kt_per_section == 1 && sync == 0 && in1 == DataFormat::Bfp8_b && in0 == DataFormat::Float16_b && out_format == DataFormat::Float32));
 }
 
-template <MathFidelity math_fidelity, std::uint32_t kt_per_section, bool fp32_dest, DataFormat in0, DataFormat in1, DataFormat out_format, DataFormat pack_format, bool several_blocks, std::uint32_t row_tiles = 0, int sync = 0, std::uint32_t min_side = 99>
+template <MathFidelity math_fidelity, std::uint32_t kt_per_section, bool fp32_dest, DataFormat in0, DataFormat in1, DataFormat out_format, DataFormat pack_format, bool several_blocks, std::uint32_t row_tiles = 0, int sync = 0, std::uint32_t min_side = 99, std::uint32_t ct_dim = 0, std::uint32_t rt_dim = 0>
 constexpr bool matmul_main_form_cell_selected()
 {
-    if (matmul_mixed_main_form<math_fidelity, kt_per_section, fp32_dest, in0, in1, out_format, sync>())
+    if (matmul_mixed_main_form<math_fidelity, kt_per_section, fp32_dest, in0, in1, out_format, sync, ct_dim, rt_dim>())
     {
         return true;
     }
