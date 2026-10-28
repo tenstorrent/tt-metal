@@ -4,6 +4,7 @@
 
 #include "sdpa_fw_device_operation.hpp"
 
+#include "metal/common/program_utils.hpp"
 #include "metal/common/tensor_validation.hpp"
 #include "metal/ops/sdpa_fw/device/sdpa_fw_device_operation_types.hpp"
 #include "sdpa_fw_config.hpp"
@@ -212,7 +213,7 @@ void SDPAForwardDeviceOperation::validate_on_program_cache_miss(
     check_chunks(
         args.program_config,
         shape_of(query, key, value, args.mask_type, args.has_gate, args.return_intermediates),
-        l1_budget_bytes(query.device()));
+        available_l1_bytes(*query.device()));
 }
 
 spec_return_value_t SDPAForwardDeviceOperation::compute_output_specs(

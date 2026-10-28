@@ -170,10 +170,6 @@ SDPAForwardShape shape_of(
         .return_intermediates = return_intermediates};
 }
 
-uint64_t l1_budget_bytes(const tt::tt_metal::IDevice* device) {
-    return device->l1_size_per_core() - device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-}
-
 std::vector<CoreItemRuns> split_work(
     const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores) {
     const uint32_t total_units = num_work_units(shape, chunks);
