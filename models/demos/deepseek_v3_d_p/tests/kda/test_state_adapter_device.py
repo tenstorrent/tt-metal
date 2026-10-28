@@ -23,7 +23,6 @@ from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
 from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     KdaContractGeometry,
     KdaStates,
-    allocate_native_state,
     assemble_convolution,
     assemble_recurrent,
     convolution_segment_to_torch,
@@ -184,27 +183,20 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
                     name=f"conv slot{slot} L{layer} ({row},{col})",
                 )
 
+    def host(state):
+        return [ttnn.to_torch(t) for s in (state.recurrent, state.convolution) for t in ttnn.get_device_tensors(s)]
+
+    def imported(slot, layer):
+        back = read_slab_layer(mesh_device, slabs, slot, layer)
+        ttnn.synchronize_device(mesh_device)
+        shards = host(back)
+        deallocate_state(back)
+        return shards
+
     # 2. Import lands the same bytes back in a native carry, through the same device-read slot.
     for (slot, layer), state in natives.items():
-        back = allocate_native_state(mesh_device, geometry)
-        index = device_scalar(mesh_device, slot)
-        slabs.import_layer(back, index, layer)
-        ttnn.synchronize_device(mesh_device)
-        ttnn.deallocate(index)
-        for index, (want, got) in enumerate(
-            zip(ttnn.get_device_tensors(state.recurrent), ttnn.get_device_tensors(back.recurrent))
-        ):
-            assert_bit_identical(
-                ttnn.to_torch(want), ttnn.to_torch(got), name=f"import S slot{slot} L{layer} dev{index}"
-            )
-        for index, (want, got) in enumerate(
-            zip(ttnn.get_device_tensors(state.convolution), ttnn.get_device_tensors(back.convolution))
-        ):
-            assert_bit_identical(
-                ttnn.to_torch(want), ttnn.to_torch(got), name=f"import conv slot{slot} L{layer} dev{index}"
-            )
-        ttnn.deallocate(back.recurrent)
-        ttnn.deallocate(back.convolution)
+        for index, (want, got) in enumerate(zip(host(state), imported(slot, layer), strict=True)):
+            assert_bit_identical(want, got, name=f"import slot{slot} L{layer} shard{index}")
 
     # 3. A captured export follows the carry's contents and the device slot on replay, and touches
     #    nothing else: captured on slot 0, replayed with the last slot written into the slot tensor.
@@ -320,13 +312,6 @@ def test_slabs_round_trip_replay_and_table(mesh_device, device_params, layer_ids
     print(f"host {socket.gethostname()}: table check ok for fabric node {int(fid.mesh_id)}:{int(fid.chip_id)}")
 
     # 7. Zeroing a slot zeroes every layer of that slot and nothing else.
-    def imported(slot, layer):
-        back = read_slab_layer(mesh_device, slabs, slot, layer)
-        ttnn.synchronize_device(mesh_device)
-        host = [ttnn.to_torch(t) for s in (back.recurrent, back.convolution) for t in ttnn.get_device_tensors(s)]
-        deallocate_state(back)
-        return host
-
     others = {(slot, layer): imported(slot, layer) for slot in range(1, num_slots) for layer in layer_ids}
     slabs.zero_slot(0)
     for layer in layer_ids:
