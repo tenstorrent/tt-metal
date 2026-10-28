@@ -175,8 +175,8 @@ tests, the manifest fixtures on several mock clusters (1D and 2D, Wormhole and B
 ranks, torus galaxies, the tensix mux, VC2, channel trimming's capture and profile, and four Blackhole galaxies as
 express meshes on four ranks), the schema check on every manifest they write, and the rank check on each run's
 manifests.
-- On hardware, `Fabric1DManifestFixture.*` and `Fabric2DManifestFixture.*` in `fabric_unit_tests` write and check
-manifests from real devices.
+- The manifest fixtures (`Manifest*Fixture` in `fabric_unit_tests`) are named outside hardware CI's fabric filters, so CI runs them only on mock clusters. On hardware they run by name, for example
+`fabric_unit_tests --gtest_filter='Manifest2DFixture.*'`.
 - `tests/tt_metal/tt_fabric/fabric_manifest/check_manifest_schema.py` checks any manifest against the schema, and checks that `types` holds exactly what its schemas reach. It needs `jsonschema`:
   ```bash
   python3 tests/tt_metal/tt_fabric/fabric_manifest/check_manifest_schema.py generated/fabric
