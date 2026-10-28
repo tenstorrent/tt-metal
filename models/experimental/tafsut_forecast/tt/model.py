@@ -14,16 +14,20 @@ future rows.
 from __future__ import annotations
 
 import math
+import os
 
 import torch
 import ttnn
 
+from models.experimental.tafsut_forecast import ops
+from models.experimental.tafsut_forecast.ops.qkv_heads_rope.op import fits_l1
 from models.experimental.tafsut_forecast.reference import dataflow as df
 from models.experimental.tafsut_forecast.tt.common import MASK_FILL, Precision, ckc
 
 D, NH, DH, DFF, NL = df.D, df.NH, df.DH, df.DFF, df.NL
 NREAD = df.NFUT  # read-out rows: all 32 future tokens (one tile row)
 DRAM = ttnn.DRAM_MEMORY_CONFIG
+FUSED_ROPE = os.environ.get("TAFSUT_FUSED_ROPE", "1") != "0"  # R1-1; 0 = the round-0 matmul RoPE (screening)
 
 
 def sdpa_chunks(s_pad: int, ctx_len: int | None) -> int:
@@ -122,6 +126,7 @@ class TtTafsut:
             c_hid=up(c_hid[None]), c_res=up(c_res[None]),
             tail=up(tail[None].expand(B, -1, -1)),
             cos=up(cos[None, None]), sin=up(sin[None, None]),
+            fused_rope=FUSED_ROPE and fits_l1(s_pad, DH, ttnn.bfloat16, ttnn.bfloat16),
         )
         self._consts[key] = c
         return c
@@ -192,11 +197,16 @@ class TtTafsut:
         x = ttnn.rms_norm(h, epsilon=df.NORM_EPS, weight=L["ln1"], compute_kernel_config=self._norm)
         qkv = self._linear(ttnn.reshape(x, (1, 1, B * S, D)), L["wqkv"], compute_kernel_config=self._qkv)
         ttnn.deallocate(x)
-        q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
-            ttnn.reshape(qkv, (B, S, 3 * D)), num_heads=NH, transpose_key=False, memory_config=DRAM
-        )
-        ttnn.deallocate(qkv)
-        q, k = self.rope(q, c["cos"], c["sin"]), self.rope(k, c["cos"], c["sin"])
+        if c["fused_rope"]:  # R1-1: head split + RoPE in one program (chronos qkv_heads_rope)
+            q, k, v = ops.qkv_heads_rope(ttnn.reshape(qkv, (B, S, 3 * D)), c["cos"], c["sin"], num_heads=NH,
+                                         memory_config=DRAM)
+            ttnn.deallocate(qkv)
+        else:
+            q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(
+                ttnn.reshape(qkv, (B, S, 3 * D)), num_heads=NH, transpose_key=False, memory_config=DRAM
+            )
+            ttnn.deallocate(qkv)
+            q, k = self.rope(q, c["cos"], c["sin"]), self.rope(k, c["cos"], c["sin"])
         mask, q_chunk = inp["mask"], c["chunk"]
         if last:  # read-out cut: queries, O and the FFN only on the 32 future rows
             P = c["P"]
