@@ -1,0 +1,200 @@
+[
+  {
+    "name": "support_ticket",
+    "state": "I was charged TWICE for my order #48211 this month and nobody has answered my emails for three days. Fix this now or I am disputing both charges with my bank!",
+    "questions": {
+      "urgent": {
+        "type": "noul",
+        "instructions": "Does this convey urgency?"
+      },
+      "team": {
+        "type": "choice",
+        "instructions": "Which team should handle this message?",
+        "criteria": {
+          "billing": "payments, invoices, refunds and charges",
+          "sales": "new purchases, quotes and pricing",
+          "retail": "in-store orders, shipping and returns"
+        }
+      },
+      "frustration": {
+        "type": "score",
+        "instructions": "How frustrated is the customer?",
+        "criteria": [
+          "calm",
+          "frustrated",
+          "furious"
+        ]
+      }
+    }
+  },
+  {
+    "name": "order_json",
+    "state": {
+      "order_id": "A-10293",
+      "customer": {
+        "id": 5521,
+        "name": "Dana Whitfield",
+        "tier": "gold"
+      },
+      "items": [
+        {
+          "sku": "KB-77",
+          "name": "Mechanical keyboard",
+          "qty": 1,
+          "price": 129.99
+        },
+        {
+          "sku": "MS-12",
+          "name": "Wireless mouse",
+          "qty": 2,
+          "price": 24.5
+        }
+      ],
+      "status": {
+        "code": "in_transit",
+        "last_update": "2026-10-20T14:03:00Z",
+        "carrier": "UPS"
+      },
+      "shipping": {
+        "method": "ground",
+        "promised_date": "2026-10-22",
+        "estimated_date": "2026-10-27",
+        "address": {
+          "city": "Austin",
+          "state": "TX"
+        }
+      },
+      "payment": {
+        "method": "card",
+        "paid": true
+      }
+    },
+    "questions": {
+      "next_action": {
+        "type": "choice",
+        "instructions": "What should support do next for this order?",
+        "criteria": {
+          "do_nothing": "order is on track",
+          "notify_customer": "send a delay notice to the customer",
+          "expedite": "upgrade shipping to arrive faster",
+          "refund": "refund the order",
+          "escalate": "hand the order to a human manager"
+        }
+      },
+      "late": {
+        "type": "noul",
+        "instructions": "Is the order late?",
+        "criteria": {
+          "false": "the estimated delivery is on or before the promised date",
+          "true": "the estimated delivery is after the promised date"
+        }
+      },
+      "priority": {
+        "type": "score",
+        "instructions": "How high is the priority of this order for support?",
+        "criteria": [
+          "no priority",
+          "low",
+          "medium",
+          "high",
+          "critical"
+        ]
+      }
+    }
+  },
+  {
+    "name": "agent_tool",
+    "state": "User: Hi! I need to fly from Boston to Denver next Friday, the cheapest option is fine. Also, will it rain in Denver that weekend?\nAgent: Sure, let me help with both.\nUser: Oh, and book it for me and my wife.",
+    "questions": {
+      "tool": {
+        "type": "choice",
+        "instructions": "Which tool should the agent call next?",
+        "criteria": {
+          "search_flights": "search flight offers between two cities",
+          "book_flight": "book a chosen flight for passengers",
+          "get_weather": "get the weather forecast for a city and date",
+          "send_email": "send an email message",
+          "calendar_add": "add an event to the calendar",
+          "web_search": "search the web for general information"
+        }
+      },
+      "needs_clarification": {
+        "type": "noul",
+        "instructions": "Does the agent need to ask the user a clarifying question before acting?"
+      }
+    }
+  },
+  {
+    "name": "many_options",
+    "state": "How do I write a fast, memory-safe web server with no garbage collector and fearless concurrency?",
+    "questions": {
+      "language": {
+        "type": "choice",
+        "instructions": "Which programming language is best suited to this question?",
+        "criteria": {
+          "Python": "dynamic, readable, data science and scripting",
+          "JavaScript": "JavaScript programming language",
+          "TypeScript": "TypeScript programming language",
+          "Java": "Java programming language",
+          "C": "low-level systems language",
+          "C++": "C++ programming language",
+          "C#": "C# programming language",
+          "Go": "Go programming language",
+          "Rust": "memory-safe systems language with ownership",
+          "Swift": "Swift programming language",
+          "Kotlin": "Kotlin programming language",
+          "Ruby": "Ruby programming language",
+          "PHP": "PHP programming language",
+          "Perl": "Perl programming language",
+          "R": "statistics and data analysis",
+          "MATLAB": "MATLAB programming language",
+          "Julia": "Julia programming language",
+          "Scala": "Scala programming language",
+          "Haskell": "Haskell programming language",
+          "Elixir": "Elixir programming language",
+          "Erlang": "Erlang programming language",
+          "Clojure": "Clojure programming language",
+          "Lua": "Lua programming language",
+          "Dart": "Dart programming language",
+          "Objective-C": "Objective-C programming language",
+          "Fortran": "Fortran programming language",
+          "COBOL": "COBOL programming language",
+          "Lisp": "Lisp programming language",
+          "OCaml": "OCaml programming language",
+          "F#": "F# programming language",
+          "Bash": "Unix shell scripting",
+          "PowerShell": "PowerShell programming language",
+          "SQL": "declarative query language for relational databases",
+          "Assembly": "Assembly programming language",
+          "Zig": "Zig programming language",
+          "Nim": "Nim programming language",
+          "Crystal": "Crystal programming language",
+          "Prolog": "Prolog programming language",
+          "Ada": "Ada programming language",
+          "Groovy": "Groovy programming language"
+        }
+      }
+    }
+  },
+  {
+    "name": "long_license",
+    "state_file": "LICENSE.md",
+    "questions": {
+      "permissive": {
+        "type": "noul",
+        "instructions": "Is this a permissive license?"
+      },
+      "kind": {
+        "type": "choice",
+        "instructions": "Which kind of license is this?",
+        "criteria": {
+          "apache": "Apache License 2.0",
+          "mit": "MIT license",
+          "gpl": "GNU General Public License",
+          "proprietary": "closed-source commercial license",
+          "other": "any other license"
+        }
+      }
+    }
+  }
+]
