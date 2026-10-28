@@ -338,6 +338,26 @@ def serving_width_for(widths, max_position, k):
     return min(fits) if fits else None
 
 
+def serving_pad_rows(values, B):
+    """``values`` for the live rows, then the first live row's value for every padding row of a ``B``-row record.
+
+    Padding rows MIRROR live row 0 (same anchor, position, seed row and page
+    tables) instead of standing on a zero page table: block 0 is vLLM's null
+    block only in the full-attention pool, while a bounded sliding ring pool
+    gives wire row 0 the blocks ``[0, ring/block_size)`` (the generator's
+    bounded table install), so a padding row writing "block 0" would write into
+    a live request's ring. A mirror row computes bit-identical drafts and K/V
+    from identical inputs and writes identical bytes to the slots row 0 writes
+    itself -- a benign race on the batched cache write.
+    """
+    values = list(values)
+    if not values:
+        raise ValueError("a record needs at least one live row to mirror")
+    if len(values) > int(B):
+        raise ValueError(f"{len(values)} live rows for a {B}-row record")
+    return values + [values[0]] * (int(B) - len(values))
+
+
 def serving_seed_index(shape, rows, seed_cols, previous, seeded):
     """Rows of the 64-row seed-hidden pool that each record row gathers its drafter seed from.
 
@@ -345,7 +365,8 @@ def serving_seed_index(shape, rows, seed_cols, previous, seeded):
     ``seeded`` maps a row id to its row in the last reseed. Live row r with
     ``seed_cols[r] = c`` gathers verify-hidden row ``r' * (K_prev + 1) + c``
     (r' = the row's index in the last replay); with ``None`` it gathers reseed
-    row ``32 + seeded[row]``. Padding rows gather row 0 (unused).
+    row ``32 + seeded[row]``. Padding rows gather row 0's seed row
+    (``serving_pad_rows``: a padding row mirrors live row 0).
     """
     B, _K = shape
     live = len(rows)
@@ -355,13 +376,13 @@ def serving_seed_index(shape, rows, seed_cols, previous, seeded):
         raise ValueError(f"shape {shape}: {len(seed_cols)} seed_cols for {live} live rows")
     if len({int(r) for r in rows}) != live:
         raise ValueError(f"shape {shape}: duplicate rows in {list(rows)}")
-    out = [0] * B
+    out = []
     for r, (slot, col) in enumerate(zip(rows, seed_cols)):
         slot = int(slot)
         if col is None:
             if slot not in seeded:
                 raise ValueError(f"row {slot} has no seed: it was not in the last serving_reseed ({sorted(seeded)})")
-            out[r] = SPEC_ROW_TILE + int(seeded[slot])
+            out.append(SPEC_ROW_TILE + int(seeded[slot]))
             continue
         if previous is None:
             raise ValueError(f"row {slot}: seed_cols[{r}]={col} refers to a previous replay, but none ran")
@@ -371,8 +392,8 @@ def serving_seed_index(shape, rows, seed_cols, previous, seeded):
         col = int(col)
         if not 0 <= col <= int(k_prev):
             raise ValueError(f"row {slot}: seed_cols[{r}]={col} outside 0..{int(k_prev)} (last replay K={k_prev})")
-        out[r] = list(rows_prev).index(slot) * (int(k_prev) + 1) + col
-    return out
+        out.append(list(rows_prev).index(slot) * (int(k_prev) + 1) + col)
+    return serving_pad_rows(out, B)
 
 
 def serving_masks_host(positions, P, window, S_k, ring=None):
@@ -2233,6 +2254,12 @@ class SpeculativeDecoder:
     # at capture: positions, tokens and page-table rows are uploaded before
     # every replay, so one record serves every request.
     #
+    # Padding rows (record rows past the live count) mirror live row 0: the
+    # same anchor, position, seed row and page-table rows, uploaded by this
+    # file, whatever the adapter sends for them (it sends zero table rows,
+    # which this file checks and then replaces). The interface's "block 0 =
+    # null block" holds for the full-attention pool only; see serving_pad_rows.
+    #
     # Masks. The packed verify's additive masks are built IN-TRACE from the
     # uploaded verify positions and a persistent key iota (the dFlash
     # ``pv_iota`` path: sub / gtz / gez / ltz / typecast / multiply in fp32,
@@ -2491,8 +2518,8 @@ class SpeculativeDecoder:
     def serving_reseed(self, shape, rows, anchors, positions, page_tables):
         """Seed the drafter for ``rows`` by a target forward at (anchor, position).
 
-        One batch-dim verify at B_v rows (padding rows: token 0, position 0,
-        block 0) re-writes each live anchor's KV in place and lands the
+        One batch-dim verify at B_v rows (padding rows mirror the first
+        reseeded row) re-writes each live anchor's KV in place and lands the
         post-norm hidden in reseed pool rows 32..63. The NEXT ``serving_step``
         reads it for every row whose ``seed_cols`` entry is None. The pool
         holds the rows of the LAST reseed only: reseed every pending row in
@@ -2508,8 +2535,11 @@ class SpeculativeDecoder:
         B, _K = shape
         live = self._srv_check_rows(shape, rows, anchors, positions)
         self._srv_upload_tables(shape, rows, live, page_tables, None)
-        pad = B - live
-        self._srv_seed_rows(shape, [int(a) for a in anchors] + [0] * pad, [int(p) for p in positions] + [0] * pad)
+        # padding rows mirror the first reseeded row (serving_pad_rows): their
+        # anchor K/V write repeats row 0's, byte for byte, in row 0's slot
+        self._srv_seed_rows(
+            shape, serving_pad_rows([int(a) for a in anchors], B), serving_pad_rows([int(p) for p in positions], B)
+        )
         self._srv_seeded = {int(slot): r for r, slot in enumerate(rows)}
 
     def serving_step(self, shape, rows, anchors, positions, page_tables, seed_cols):
@@ -2952,6 +2982,11 @@ class SpeculativeDecoder:
         pt = page_tables.to(torch.int64)
         if live < B and bool(pt[live:].any()):
             raise ValueError(f"shape {shape}: padding rows {live}..{B - 1} of page_tables must be zero (block 0)")
+        if live < B:
+            # Padding rows mirror live row 0 (serving_pad_rows): their verify
+            # K/V then lands, byte-identical, where row 0 writes its own.
+            pt = pt.clone()
+            pt[live:] = pt[0]
         if self._srv_per_layer is None and any(self._pv_ring.values()):
             raise ValueError(
                 "bounded sliding target: serving_refresh_page_tables(per-layer tables) must run before the first "
@@ -2960,10 +2995,15 @@ class SpeculativeDecoder:
         for lt in self._pv_ring:
             d_host = self._srv_type_table(lt, rows, live, pt, "drafter")
             d_host = serving_select_rows(d_host, list(range(B)), B, self._srv_blocks, allow_clip=False)
+            if live < B:
+                d_host[live:] = d_host[0]
             self._srv_copy_if_changed(("d", shape, lt), d_host.to(torch.int32), S["d_ptl"][lt], ttnn.int32)
             if rec is None:
                 continue
             v_host = self._srv_type_table(lt, rows, live, pt, "verify")
+            if live < B:
+                v_host = v_host.clone()
+                v_host[live:] = v_host[0]
             width = int(rec["v_ptl"][lt].shape[-1])
             # Clipped, not checked: the verify table is width-matched to its
             # mask on purpose, and columns past the mask are never attended.
@@ -2977,9 +3017,8 @@ class SpeculativeDecoder:
         shape = rec["shape"]
         S = self._srv_shape_bufs[shape]
         B, P = S["B"], S["P"]
-        pad = B - live
-        toks = [int(t) for t in anchors] + [0] * pad
-        pos = [int(p) for p in positions] + [0] * pad
+        toks = serving_pad_rows([int(t) for t in anchors], B)
+        pos = serving_pad_rows([int(p) for p in positions], B)
         for host, dev in ((self._host_tokens(toks), S["anchor_tok"]), (self._host_tokens(seed_idx), S["seed_idx"])):
             ttnn.copy_host_to_device_tensor(host, dev)
             host.deallocate(True)

@@ -40,6 +40,7 @@ from models.demos.gemma4.tt.spec_decode import (
     serving_mask_plan,
     serving_masks_from_plan,
     serving_masks_host,
+    serving_pad_rows,
     serving_plan,
     serving_seed_index,
     serving_select_rows,
@@ -1319,7 +1320,7 @@ def test_bad_plans_are_refused(shapes, widths, max_rows, message):
 # Seed index ---------------------------------------------------------------------------------------
 def test_first_step_after_a_reseed_gathers_the_reseed_pool_rows():
     idx = serving_seed_index((5, 5), rows=[7, 3], seed_cols=[None, None], previous=None, seeded={7: 0, 3: 1})
-    assert idx == [32, 33, 0, 0, 0]  # padding rows gather row 0 (never used)
+    assert idx == [32, 33, 32, 32, 32]  # padding rows mirror live row 0 (serving_pad_rows)
 
 
 def test_continuation_in_the_same_record_gathers_verify_row_r_times_p_plus_col():
@@ -1334,7 +1335,7 @@ def test_continuation_across_shapes_uses_the_previous_record_geometry():
     prev = (5, [10, 11, 12])
     idx = serving_seed_index((8, 3), rows=[12, 10], seed_cols=[2, 5], previous=prev, seeded={})
     assert idx[:2] == [2 * 6 + 2, 0 * 6 + 5]
-    assert idx[2:] == [0] * 6
+    assert idx[2:] == [idx[0]] * 6  # padding rows mirror row 0
 
 
 def test_a_reseeded_row_and_a_continuing_row_mix_in_one_step():
@@ -1800,3 +1801,23 @@ def test_packed_kv_groups_refuse_uneven_head_splits():
         packed_verify_kv_groups(6, 4, 2)
     with pytest.raises(ValueError, match="must be >= 1"):  # allow-pytest.raises (pure)
         packed_verify_kv_groups(4, 0, 2)
+
+
+# Padding rows mirror live row 0 (the bounded ring pool has no null block) -------------------------
+def test_padding_rows_mirror_the_first_live_row():
+    assert serving_pad_rows([7, 3], 5) == [7, 3, 7, 7, 7]
+    assert serving_pad_rows([9], 1) == [9]
+    assert serving_pad_rows([4, 2, 1], 3) == [4, 2, 1]
+    with pytest.raises(ValueError, match="at least one live row"):  # allow-pytest.raises (pure)
+        serving_pad_rows([], 5)
+    with pytest.raises(ValueError, match="3 live rows for a 2-row record"):  # allow-pytest.raises (pure)
+        serving_pad_rows([1, 2, 3], 2)
+
+
+def test_seed_index_padding_rows_take_row_zero_whatever_its_source():
+    # row 0 continues from the previous replay: the mirrors gather that same verify row
+    idx = serving_seed_index((8, 3), rows=[5, 6], seed_cols=[2, None], previous=(3, [5]), seeded={6: 0})
+    assert idx == [0 * 4 + 2, 32, 2, 2, 2, 2, 2, 2]
+    # row 0 was reseeded: the mirrors gather its reseed-pool row
+    idx = serving_seed_index((5, 5), rows=[6, 5], seed_cols=[None, 2], previous=(3, [5]), seeded={6: 1})
+    assert idx == [33, 2, 33, 33, 33]

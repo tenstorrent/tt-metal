@@ -3337,14 +3337,15 @@ def _serving_build(mesh_device, max_seq_len, draft_len):
     return generator, tt_kv_cache, tokenizer, spec, page_table
 
 
-def _serving_prefill(generator, tokenizer, tt_kv_cache, page_table, users, n_new, max_seq_len):
-    """Prefill each user into its own blocks; returns (anchors, positions)."""
+def _serving_prefill(generator, tokenizer, tt_kv_cache, page_table, users, n_new, max_seq_len, prompts=None):
+    """Prefill each user into its own blocks; returns (anchors, positions). ``prompts`` overrides the
+    per-user default prompt (``prompts[i]`` for ``users[i]``)."""
     from models.tt_transformers.tt.common import preprocess_inputs_prefill
 
     anchors, positions = [], []
-    for u in users:
+    for i, u in enumerate(users):
         in_pt, encoded, decoding_pos, prefill_lens = preprocess_inputs_prefill(
-            [_SERVING_PROMPTS[u % len(_SERVING_PROMPTS)]],
+            [prompts[i] if prompts else _SERVING_PROMPTS[u % len(_SERVING_PROMPTS)]],
             tokenizer,
             generator.model_args,
             True,
@@ -3479,27 +3480,43 @@ def test_serving_record_matches_plain_greedy(mesh_device, reset_seeds, shape):
     """One serving record per default shape: prepare + capture (masks built in-trace from the uploaded
     positions, no host masks), then per live row greedy parity with the plain decode (up to the first
     target near-tie, the contract of test_spec_decode_batched), the [live, P, V] bf16 readback of the
-    shared logits buffer against the device argmax, a mid-stream exact reseed, and a second pass with one
-    PADDING row (page-table row zero = block 0, position 0, anchor 0) that must leave the live rows'
-    parity intact."""
+    shared logits buffer against the device argmax, a mid-stream exact reseed, a second pass with one
+    PADDING row (the adapter sends a zero table row; the decoder mirrors live row 0 for it) that must
+    leave the live rows' parity intact, and a third pass where row 0 holds a prompt longer than 2048
+    tokens: its first proposal and a mid-run reseed happen past 2048 on the wider rung (2048 -> 4096),
+    where the acceptance floor must still hold."""
     near_tie_gap = float(os.environ.get("GEMMA4_SPEC_NEAR_TIE_GAP", 2.0))
     B, K = shape
-    max_seq_len = 1024
+    max_seq_len = 4096
+    widths = [2048, 4096]
     n_new = int(os.environ.get("GEMMA4_SPEC_TEST_TOKENS", 16))
     generator, tt_kv_cache, tokenizer, spec, page_table = _serving_build(mesh_device, max_seq_len, K)
 
-    spec.serving_prepare([shape], {shape: [1024]}, max_rows=_SERVING_MAX_ROWS)
-    assert set(spec._srv_records) == {(shape, 1024)}
+    spec.serving_prepare([shape], {shape: widths}, max_rows=_SERVING_MAX_ROWS)
+    assert set(spec._srv_records) == {(shape, w) for w in widths}
     spec.serving_capture()
-    assert spec._srv_records[(shape, 1024)]["id"] is not None
+    assert all(spec._srv_records[(shape, w)]["id"] is not None for w in widths)
 
-    for live in sorted({B, max(1, B - 1)}, reverse=True):
+    # a prompt past the 2048 rung: its anchor sits on the 4096 rung from the first proposal on
+    long_ids = tokenizer.encode(" ".join(f"item {i}" for i in range(1500)))[:2300]
+    long_prompt = tokenizer.decode(long_ids)
+    long_len = len(tokenizer.encode(long_prompt))
+    assert 2048 + 8 < long_len < max_seq_len - 4 * n_new, long_len
+
+    passes = [(live, None) for live in sorted({B, max(1, B - 1)}, reverse=True)] + [(1, [long_prompt])]
+    for live, prompts in passes:
         users = list(range(live))
-        # padding rows: zero page-table rows (block 0), which serving_step requires
+        label = f"serving {shape} live={live}" + (" long-prompt" if prompts else "")
+        # padding rows: zero page-table rows, which serving_step requires (it mirrors row 0 for them)
         page_tables = torch.zeros(B, page_table.shape[1], dtype=torch.int32)
         page_tables[:live] = page_table[:live]
 
-        anchors, positions = _serving_prefill(generator, tokenizer, tt_kv_cache, page_table, users, n_new, max_seq_len)
+        anchors, positions = _serving_prefill(
+            generator, tokenizer, tt_kv_cache, page_table, users, n_new, max_seq_len, prompts=prompts
+        )
+        if prompts:
+            assert positions[0] > 2048, positions
+            assert spec.serving_width_for(shape, positions[0] + 4 * n_new) == 4096
         refs, gaps, ref_first = [], [], []
         for r, u in enumerate(users):
             ref, gap, first = _plain_greedy_user(spec, page_table[u], anchors[r], positions[r], n_new)
@@ -3507,11 +3524,15 @@ def test_serving_record_matches_plain_greedy(mesh_device, reset_seeds, shape):
             gaps.append(gap)
             ref_first.append(first)
         # the reference wrote KV past the anchors: re-prefill, then serve
-        anchors, positions = _serving_prefill(generator, tokenizer, tt_kv_cache, page_table, users, n_new, max_seq_len)
+        anchors, positions = _serving_prefill(
+            generator, tokenizer, tt_kv_cache, page_table, users, n_new, max_seq_len, prompts=prompts
+        )
         outs, accepts, results, host_logits = _serving_run(
-            spec, shape, users, anchors, positions, page_tables, n_new, reseed_at=2 if live == B else None
+            spec, shape, users, anchors, positions, page_tables, n_new, reseed_at=2 if (live == B or prompts) else None
         )
         ttnn.synchronize_device(mesh_device)
+        if prompts:
+            assert all(res.width == 4096 for res in results), [res.width for res in results]
 
         # the verify is the target: column 0 of the first step is the plain next token, and its logits
         # match the plain decode's logits for every live row
@@ -3520,9 +3541,9 @@ def test_serving_record_matches_plain_greedy(mesh_device, reset_seeds, shape):
             assert _pcc(host_logits[0][r, 0], ref_first[r]) > 0.99, f"row {r} column-0 logits vs plain decode"
             if first.argmax_ids[r, 0].item() != refs[r][0]:
                 assert gaps[r][0] < near_tie_gap, f"row {r}: first verify token differs at a confident position"
-        _assert_rows_match_reference(outs, refs, gaps, near_tie_gap, f"serving {shape} live={live}")
+        _assert_rows_match_reference(outs, refs, gaps, near_tie_gap, label)
         mean_acc = [sum(a) / len(a) for a in accepts]
-        logger.info(f"[serving {shape} live={live}] accepted/iter per row: {[round(a, 2) for a in mean_acc]}")
+        logger.info(f"[{label}] accepted/iter per row: {[round(a, 2) for a in mean_acc]}")
         for r, u in enumerate(users):
             logger.info(f"  row {r} (user {u}): {tokenizer.decode(outs[r][:n_new])!r}")
         # Committed-token parity alone cannot see a verify that is right in column 0 and wrong in the
@@ -3531,7 +3552,7 @@ def test_serving_record_matches_plain_greedy(mesh_device, reset_seeds, shape):
         min_accept = float(os.environ.get("GEMMA4_SPEC_MIN_ACCEPT", 0.5))
         overall = sum(sum(a) for a in accepts) / max(1, sum(len(a) for a in accepts))
         assert overall >= min(min_accept, K), (
-            f"[serving {shape} live={live}] accepted {overall:.2f} of K={K} per step (floor {min_accept}): "
+            f"[{label}] accepted {overall:.2f} of K={K} per step (floor {min_accept}): "
             "the verify's draft columns or the drafts themselves are wrong while column 0 stays right"
         )
     spec.serving_release()
