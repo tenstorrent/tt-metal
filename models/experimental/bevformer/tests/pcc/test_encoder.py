@@ -118,7 +118,10 @@ def test_bevformer_encoder_forward(
     # Convert tensors to ttnn format for ttnn model
     tt_bev_query = ttnn.from_torch(bev_query, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
     tt_bev_pos = ttnn.from_torch(bev_pos, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
-    tt_camera_features = ttnn.from_torch(camera_features, device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    # The encoder takes the camera features batch-first, [batch_size, num_cams, H*W, embed_dims].
+    tt_camera_features = ttnn.from_torch(
+        camera_features.permute(2, 0, 1, 3), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
+    )
 
     # --------------------------------------------------------------------------- #
     # Models Init                                                                 #

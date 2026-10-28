@@ -412,7 +412,8 @@ class TTBEVFormerEncoder:
 
         Args:
             bev_query: Initial BEV query features [B, num_queries, embed_dims]
-            key: Multi-camera features [num_cams, H*W, B, embed_dims]
+            key: Batch-first multi-camera features [B, num_cams, H*W, embed_dims], as the spatial
+                cross-attention reads them
             value: Same as key (optional); falls back to ``key`` when omitted
             bev_pos: BEV positional encoding [B, num_queries, embed_dims]
             prev_bev: The previous BEV, rotated to this frame, stacked per sample with the encoder's
@@ -451,7 +452,7 @@ class TTBEVFormerEncoder:
         camera_features = value if value is not None else key
         if camera_features is not None:
             expected_L = shapes.prod(dim=1).sum().item()
-            L = camera_features.shape[1]
+            L = camera_features.shape[2]
             assert expected_L == L, (
                 f"Spatial shapes mismatch: spatial_shapes total ({expected_L}) != camera spatial dimension ({L}). "
                 f"spatial_shapes: {shapes.tolist()}, camera features shape: {camera_features.shape}"
@@ -508,11 +509,6 @@ class TTBEVFormerEncoder:
 
         signpost(header="BEVEncoder Reference Points End")
 
-        # Every layer reads the same camera features, so SCA takes them batch-first and this
-        # runs once per forward, not once per layer.
-        if camera_features is not None:
-            camera_features = ttnn.permute(camera_features, (2, 0, 1, 3))
-
         # Process through transformer layers
         for lid, layer in enumerate(self.layers):
             signpost(header=f"BEVEncoder Layer {lid} Start")
@@ -536,9 +532,6 @@ class TTBEVFormerEncoder:
 
         if bev_reference_points is not self._bev_reference_points:
             ttnn.deallocate(bev_reference_points)
-
-        if camera_features is not None:
-            ttnn.deallocate(camera_features)
 
         signpost(header="TTNN BEVFormerEncoder Forward End")
 
