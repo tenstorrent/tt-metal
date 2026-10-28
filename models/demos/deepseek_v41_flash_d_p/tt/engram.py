@@ -101,12 +101,22 @@ def resident_copy(ck, name: str, readers: int = 16) -> torch.Tensor:
 class TtEngramRows:
     """Host hash + table lookup for one engram layer, and the one host -> device transfer of its rows."""
 
-    def __init__(self, mesh, hasher, table, layer: int, mode: str | None = None, threads: int | None = None):
+    def __init__(
+        self,
+        mesh,
+        hasher,
+        table,
+        layer: int,
+        mode: str | None = None,
+        threads: int | None = None,
+        rows_format: str | None = None,
+    ):
         self.mesh, self.hasher, self.table, self.layer = mesh, hasher, table, layer
         self.width = hasher.tail_len * hasher.n_heads * table.dim  # 3 x 8 x 256 = 6144
         self.vocab = int(hasher.token_map.shape[0])
         self.mode = mode or settings.get("ENGRAM_TABLE")
         self.threads = threads or settings.get("ENGRAM_GATHER_THREADS")
+        self.format = rows_format or settings.get("ENGRAM_ROWS")
         self.weight, self.scale = table.weight, table.scale
         ck = getattr(table, "ckpt", None)
         if self.mode == "random":
@@ -115,10 +125,9 @@ class TtEngramRows:
             self.weight, self.scale = (resident_copy(ck, n) for n in _names(layer))
         self.pool = ThreadPoolExecutor(self.threads) if self.threads > 1 else None
 
-    def rows(self, ids: torch.Tensor) -> torch.Tensor:
-        """EngramTable.rows(ids), bit for bit: the uint8 gather split over self.threads, from self.weight / scale."""
-        from models.demos.deepseek_v41_flash_d_p.reference.weights import BLOCK
-
+    def gather(self, ids: torch.Tensor):
+        """The 8-bit table bytes of ids [...] in their order: (e4m3 [n, dim], e8m0 [n, dim / 32]) uint8, the gather
+        split over self.threads, from self.weight / scale."""
         flat = ids.reshape(-1)
         n = flat.numel()
         assert int(flat.min()) >= 0 and int(flat.max()) < self.table.num_rows, "engram row out of range"
@@ -138,6 +147,14 @@ class TtEngramRows:
             part(0) if k == 1 else [part(j) for j in range(k)]
         else:
             list(self.pool.map(part, range(k)))
+        return w, s
+
+    def rows(self, ids: torch.Tensor) -> torch.Tensor:
+        """EngramTable.rows(ids), bit for bit."""
+        from models.demos.deepseek_v41_flash_d_p.reference.weights import BLOCK
+
+        w, s = self.gather(ids)
+        n = w.shape[0]
         v = w.view(torch.float8_e4m3fn).float().view(n, -1, BLOCK)
         v = v * s.view(torch.float8_e8m0fnu).float().unsqueeze(-1)
         return v.view(*ids.shape, self.table.dim)
@@ -145,14 +162,18 @@ class TtEngramRows:
     def new_tail(self) -> torch.Tensor:
         return self.hasher.new_tail()
 
-    def host_rows(self, tokens: torch.Tensor, tail: torch.Tensor, valid: int | None = None):
-        """tokens [S] natural order (pad past ``valid``), tail [3] -> (rows [S, width] bf16, new tail [3])."""
-        ids = tokens.reshape(-1).long()
+    def _valid(self, ids: torch.Tensor, valid: int | None) -> int:
         s = ids.shape[0]
         if valid is None:  # the engine pads past actual_end with 0xFFFFFFFF (or any id outside the vocabulary)
             bad = ((ids < 0) | (ids >= self.vocab)).nonzero()
             valid = int(bad[0]) if bad.numel() else s
-        valid = max(0, min(int(valid), s))
+        return max(0, min(int(valid), s))
+
+    def host_rows(self, tokens: torch.Tensor, tail: torch.Tensor, valid: int | None = None):
+        """tokens [S] natural order (pad past ``valid``), tail [3] -> (rows [S, width] bf16, new tail [3])."""
+        ids = tokens.reshape(-1).long()
+        s = ids.shape[0]
+        valid = self._valid(ids, valid)
         rows = torch.zeros(s, self.width, dtype=torch.bfloat16)
         if valid == 0:
             return rows, tail.clone()
@@ -174,8 +195,45 @@ class TtEngramRows:
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh, mesh_shape=tuple(self.mesh.shape), dims=(2, None)),
         )
 
+    def host_bfp8(self, tokens: torch.Tensor, tail: torch.Tensor, valid: int | None = None):
+        """tokens [S], tail [3] -> (exponents [S, width / 16] uint8, magnitudes [S, width] uint8, new tail): the rows
+        as bfloat8_b (tt/engram_bfp8.py), from the table's bytes by integer operations only; pad rows are 0."""
+        from .engram_bfp8 import pack_rows
+
+        ids = tokens.reshape(-1).long()
+        s = ids.shape[0]
+        valid = self._valid(ids, valid)
+        exps = torch.zeros(s, self.width // 16, dtype=torch.uint8)
+        mags = torch.zeros(s, self.width, dtype=torch.uint8)
+        if valid == 0:
+            return exps, mags, tail.clone()
+        h, new_tail = self.hasher.hashes(ids[:valid], self.layer, tail.long())
+        e, m = pack_rows(*self.gather(h), threads=self.threads)
+        exps[:valid], mags[:valid] = e.view(valid, -1), m.view(valid, -1)
+        return exps, mags, new_tail
+
+    def to_device_bfp8(self, exps: torch.Tensor, mags: torch.Tensor) -> ttnn.Tensor:
+        """bfloat8_b rows -> device [1, 1, S/SP, width] bfloat8_b per chip (rows over axis 0, replicated over 1): each
+        mesh row's TILE bytes wrapped as a host tensor (no float conversion), one upload."""
+        from .engram_bfp8 import tile_bytes
+
+        s, w = mags.shape
+        rows_ax, cols_ax = tuple(self.mesh.shape)
+        assert s % (32 * rows_ax) == 0, f"{s} rows do not split into tiles over {rows_ax} mesh rows"
+        n = s // rows_ax
+        wrap = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes
+        shards = []
+        for r in range(rows_ax):
+            raw = tile_bytes(exps[r * n : (r + 1) * n], mags[r * n : (r + 1) * n]).numpy().tobytes()
+            shards += [wrap(raw, [1, 1, n, w])] * cols_ax
+        host = ttnn.from_host_shards(shards, self.mesh.shape)
+        return ttnn.to_device(host, self.mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
     def __call__(self, tokens: torch.Tensor, tail: torch.Tensor, valid: int | None = None):
-        """begin_chunk work for this layer: (device rows [1, 1, S/SP, width] bf16, new tail)."""
+        """begin_chunk work for this layer: (device rows [1, 1, S/SP, width] in ENGRAM_ROWS' format, new tail)."""
+        if self.format == "bfp8":
+            exps, mags, new_tail = self.host_bfp8(tokens, tail, valid)
+            return self.to_device_bfp8(exps, mags), new_tail
         rows, new_tail = self.host_rows(tokens, tail, valid)
         return self.to_device(rows), new_tail
 
