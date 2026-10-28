@@ -177,6 +177,13 @@ the values, rel L2 3.5e-3 vs the exact rows; a format change, so C (accuracy) an
   do not see the engram output identical. The 2x2 subset has no end-to-end token metric: the Galaxy's 40-layer ladder
   at 56k + K.1 is the confirmation.
 
+**Defaults (owner 2026-10-28):** `ENGRAM_TABLE=random`, `ENGRAM_GATHER_THREADS=8`, `ENGRAM_ROWS=bfp8` (bf16 kept as
+the option). The engram_rows step carries an owner waiver in spec.yaml (its exact-match check fails by the bfp8
+rounding, rel 3.5e-3); its gates also run `tests/test_engram_bfp8.py` (bit-exact vs ttnn's bfp8 of the exact rows).
+F221 passes the waiver on to the next step's vs-golden check (engram_kv, layer 1: 0.00350 vs 0.00335). Checked:
+C.swa_engram.engram_rows, C.enc_source_engram.engram_rows, S.swa_engram.01 / .18, S.enc_source_engram.01 / .03 / .20
+pass; the other swap tests re-run when their gates next run (each is covered by the last of its block type).
+
 **Row reuse on real text and code: would a row cache in RAM pay? (QB, 2026-10-28, CPU only.)** Corpus: text = 16
 Project Gutenberg books + wikitext-103 test (3.1M tokens); code = 10 code bases (redis C, ripgrep and axum Rust, express
 JS, vue core TS, gson Java, cobra Go, flask and the CPython stdlib Python, tt-metal C++; 2.8M tokens); at most 400k
