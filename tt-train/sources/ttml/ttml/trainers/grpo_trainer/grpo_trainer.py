@@ -1570,9 +1570,7 @@ class GRPOTrainer:
             self._lr_scheduler.step()
 
     def _update_rollout_weights(self) -> None:
-        start = time.perf_counter()
-        self.rollout_batch_source.update_weights(self.model, self.global_step)
-        self._weight_sync_time_s = time.perf_counter() - start
+        self._weight_sync_time_s = self.rollout_batch_source.update_weights(self.model, self.global_step)
 
     def _publish_step_metrics(self) -> None:
         """Fire ``on_step_end`` for every non-monitor callback (their timings

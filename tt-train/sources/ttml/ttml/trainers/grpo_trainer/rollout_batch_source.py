@@ -32,7 +32,8 @@ class RolloutBatchSource(ABC):
         ...
 
     @abstractmethod
-    def update_weights(self, model: Any, step: int) -> None:
+    def update_weights(self, model: Any, step: int) -> float:
+        """Push policy weights if due and return push time in seconds (0.0 when no push happened)."""
         ...
 
     def close(self) -> None:
@@ -160,8 +161,9 @@ class InProcessRolloutBatchSource(RolloutBatchSource):
                 generation_time_s=generation_time_s,
             )
 
-    def update_weights(self, model: Any, step: int) -> None:
+    def update_weights(self, model: Any, step: int) -> float:
         self.sampler.update_weights(None, version=step)
+        return 0.0
 
 
 def build_rollout_batch_source(
