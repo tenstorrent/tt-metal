@@ -21,11 +21,22 @@
 
 namespace ttnn::prim {
 
+// Everything that shapes the program is an attribute here and therefore part of the program-cache hash
+// (the device-operation adapter hashes the attribute struct and the tensor specs when an op defines no custom
+// hash). The geometry fields are carried from the start so the v2 stages that use them (V-split units, units
+// looped per core) change the factory, not the hash.
 struct FusedRecurrentGatedDeltaRuleParams {
-    uint32_t BH;       // B * HV  (one Tensix core per head)
-    uint32_t T;        // number of tokens processed sequentially per head
+    uint32_t B;        // sequences in the call (bucket width)
+    uint32_t HV;       // value heads per device
+    uint32_t H;        // key heads per device; HV % H == 0, value head hv reads key head hv / (HV / H)
+    uint32_t BH;       // B * HV: the heads of the call (one Tensix core per head in this build)
+    uint32_t T;        // tokens processed sequentially per head
     uint32_t key_dim;  // K (multiple of 32)
     uint32_t val_dim;  // V (multiple of 32)
+    // Geometry of the v2 plan: NV V-slices per head and the units looped per core. This build runs one whole head
+    // per core, so both are 1; stage 2 of the plan adds NV in {2, 4} and units_per_core > 1.
+    uint32_t num_slices;
+    uint32_t units_per_core;
     bool output_final_state;
     bool output_per_token_state;  // emit S after EVERY token (spec-decode verify slots)
     tt::tt_metal::MemoryConfig output_mem_config;
