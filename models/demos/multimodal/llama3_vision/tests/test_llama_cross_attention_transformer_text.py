@@ -12,11 +12,13 @@ from transformers.models.mllama.modeling_mllama import MllamaForCausalLM
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, hf_cache_layer_kv, nearest_32
-from models.ttt_compat.tests.multimodal.utils import load_partial_weights
+from models.demos.multimodal.llama3_vision.tests.utils import load_partial_weights
+from models.demos.multimodal.llama3_vision.tt.llama_cross_attention_transformer_text import (
+    TtLlamaCrossAttentionTransformerText,
+)
 from models.ttt_compat.tt.ccl import TT_CCL
 from models.ttt_compat.tt.common import Mode, get_single_rot_mat
 from models.ttt_compat.tt.model_config import ModelArgs
-from models.ttt_compat.tt.multimodal.llama_cross_attention_transformer_text import TtLlamaCrossAttentionTransformerText
 from models.ttt_compat.tt.rope import get_rot_mats
 
 

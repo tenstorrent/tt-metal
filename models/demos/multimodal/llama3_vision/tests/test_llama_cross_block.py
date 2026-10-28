@@ -13,11 +13,11 @@ from transformers.models.mllama.modeling_mllama import MllamaCrossAttentionDecod
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, hf_cache_layer_kv, nearest_32
-from models.ttt_compat.tests.multimodal.utils import load_partial_weights
+from models.demos.multimodal.llama3_vision.tests.utils import load_partial_weights
+from models.demos.multimodal.llama3_vision.tt.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
 from models.ttt_compat.tt.ccl import TT_CCL
 from models.ttt_compat.tt.common import Mode
 from models.ttt_compat.tt.model_config import ModelArgs
-from models.ttt_compat.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
 
 
 @pytest.mark.parametrize(

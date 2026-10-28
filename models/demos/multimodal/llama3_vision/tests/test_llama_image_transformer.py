@@ -11,14 +11,14 @@ from transformers import MllamaForConditionalGeneration
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.ttt_compat.tt.ccl import TT_CCL
-from models.ttt_compat.tt.model_config import ModelArgs
-from models.ttt_compat.tt.multimodal.llama_image_transformer import TtLlamaImageTransformer
-from models.ttt_compat.tt.multimodal.llama_vision_encoder import (
+from models.demos.multimodal.llama3_vision.tt.llama_image_transformer import TtLlamaImageTransformer
+from models.demos.multimodal.llama3_vision.tt.llama_vision_encoder import (
     build_encoder_attention_mask,
     mask_tile_padding,
     pad_seq_one_tile,
 )
+from models.ttt_compat.tt.ccl import TT_CCL
+from models.ttt_compat.tt.model_config import ModelArgs
 
 
 @pytest.mark.parametrize(

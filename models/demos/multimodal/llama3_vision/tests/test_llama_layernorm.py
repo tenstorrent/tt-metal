@@ -10,8 +10,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
+from models.demos.multimodal.llama_layernorm import TtLayerNorm  # Updated import for LayerNorm
 from models.ttt_compat.tt.model_config import ModelArgs
-from models.ttt_compat.tt.multimodal.llama_layernorm import TtLayerNorm  # Updated import for LayerNorm
 
 
 @pytest.mark.parametrize(

@@ -8,18 +8,15 @@ import os
 import pytest
 import torch
 from loguru import logger
-from transformers import AutoModelForImageTextToText
-from transformers.models.mllama.image_processing_mllama import (
-    convert_aspect_ratios_to_ids,
-    get_all_supported_aspect_ratios,
-)
-from transformers.models.mllama.modeling_mllama import MllamaPrecomputedAspectRatioEmbedding
+from transformers import AutoConfig, AutoModelForImageTextToText
+from transformers.models.mllama.image_processing_mllama import convert_aspect_ratios_to_ids
+from transformers.models.mllama.modeling_mllama import MllamaPrecomputedPositionEmbedding
 
 import ttnn
-from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
-from models.ttt_compat.tests.multimodal.utils import load_partial_weights
+from models.common.utility_functions import comp_allclose, comp_pcc
+from models.demos.multimodal.llama3_vision.tests.utils import load_partial_weights
+from models.demos.multimodal.llama3_vision.tt.llama_positional_embedding import TtLlamaPositionalEmbedding
 from models.ttt_compat.tt.model_config import ModelArgs
-from models.ttt_compat.tt.multimodal.llama_tile_position_embedding import TtLlamaTilePositionEmbedding
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
@@ -34,45 +31,30 @@ from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 )
 @pytest.mark.parametrize(
     "bsz, num_concurrent_media, num_chunks",
-    [
-        (1, 1, 4),
-        (1, 4, 4),
-    ],
+    [(1, 4, 4)],
 )
-@pytest.mark.parametrize("pre_embed", [False, True])
-def test_tile_position_emb_inference(
+def test_positional_embedding_inference(
     mesh_device,
     reset_seeds,
     # Input params
     bsz,
     num_concurrent_media,
     num_chunks,
-    pre_embed,
     ensure_gc,
 ):
     dtype = ttnn.bfloat16
     layout = ttnn.TILE_LAYOUT
-    gated = True
     pcc_required = 0.9999
 
     model_args = ModelArgs(mesh_device)
     state_dict = model_args.load_state_dict()
+    first_layer_prefix = "vision_model.vision_encoder."
 
-    # TT models use full state dict keys as cached weight names
-    first_layer_prefix = "vision_model.vision_encoder." + (
-        "pre_tile_pos_embed." if pre_embed else "post_tile_pos_embed."
-    )
-    embedding_layer_prefix = (
-        "model.vision_model.pre_tile_positional_embedding."
-        if pre_embed
-        else "model.vision_model.post_tile_positional_embedding."
-    )
-
-    ntok = nearest_32(model_args.vision_chunk_ntok - (0 if pre_embed else 1))
+    ntok = model_args.vision_chunk_ntok
     dim = model_args.vision_dim
-    max_num_tiles = model_args.vision_max_num_tiles
 
     ##### Check parms #####
+    max_num_tiles = model_args.vision_max_num_chunks
     assert num_chunks == max_num_tiles, "num_chunks must be the same value as max_num_tiles!"
 
     ##### Prepare inputs #####
@@ -87,6 +69,10 @@ def test_tile_position_emb_inference(
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ReplicateTensorToMesh(mesh_device),
     )
+
+    tt_input_tensor = ttnn.to_layout(tt_input_tensor, ttnn.ROW_MAJOR_LAYOUT)
+    tt_input_tensor = ttnn.reshape(tt_input_tensor, (bsz * num_concurrent_media, num_chunks, ntok, dim))
+    tt_input_tensor = ttnn.to_layout(tt_input_tensor, ttnn.TILE_LAYOUT)
     logger.info(f"TT Input tensor shape: {tt_input_tensor.shape}")
 
     # Generate all possible aspect ratios (H * W must be less than or equal to max_num_tiles)
@@ -102,28 +88,14 @@ def test_tile_position_emb_inference(
 
     tt_aspect_ratios = aspect_ratios.tolist()
 
-    ##### Perform the torch ops #####
-    supported_aspect_ratios = get_all_supported_aspect_ratios(max_num_tiles)
-
-    # subclass MllamaPrecomputedAspectRatioEmbedding expects parameters in the following format
-    class Config:
-        def __init__(
-            self,
-            max_num_tiles=max_num_tiles,
-            hidden_size=dim,
-            max_aspect_ratio_id=len(supported_aspect_ratios),
-            is_gated=gated,
-        ):
-            self.max_num_tiles = max_num_tiles
-            self.hidden_size = hidden_size
-            self.max_aspect_ratio_id = max_aspect_ratio_id
-            self.is_gated = is_gated
-
+    # config contains parameters for the whole multimodal network the subeset of vision branch is chosen instead
+    model_repo_name = os.getenv("HF_MODEL")
+    config = AutoConfig.from_pretrained(model_repo_name)
+    reference_model = MllamaPrecomputedPositionEmbedding(config.vision_config)
     # partial loading of HF safetensors to match model graph expected dimensionality of the loaded weights
     partial_state_dict = load_partial_weights(
-        AutoModelForImageTextToText, os.getenv("HF_MODEL"), embedding_layer_prefix
+        AutoModelForImageTextToText, model_repo_name, "model.vision_model.gated_positional_embedding."
     )
-    reference_model = MllamaPrecomputedAspectRatioEmbedding(Config())
     reference_model.load_state_dict(partial_state_dict)
     # HF tricky part the aspect ratios are mapped to integer values and these are used to draw the correct embedding vector.
     # transformers 5.x convert_aspect_ratios_to_ids returns a torch.Tensor (4.x returned np.ndarray), so only
@@ -133,21 +105,20 @@ def test_tile_position_emb_inference(
     reference_output = reference_model(input_tensor, aspect_ratios_id)
 
     ##### Perform the TT ops #####
-    tt_model = TtLlamaTilePositionEmbedding(
+    tt_model = TtLlamaPositionalEmbedding(
         mesh_device,
-        state_dict=state_dict,
-        state_dict_prefix=first_layer_prefix,
-        dtype=dtype,
-        num_tiles=max_num_tiles,
-        width=dim,
-        gated=gated,
+        state_dict,
+        first_layer_prefix,
+        None,
+        dtype,
+        model_args,
     )
     tt_output = tt_model(tt_input_tensor, tt_aspect_ratios)
 
     ##### Check the outputs #####
     logger.info("Checking outputs")
     out = ttnn.from_device(tt_output)
-    tt_output_torch = ttnn.to_torch(out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=3))
+    tt_output_torch = ttnn.to_torch(out, mesh_composer=ConcatMeshToTensor(mesh_device, dim=-1))
 
     # Only select output from one device
     tt_output_torch = tt_output_torch[..., :dim]

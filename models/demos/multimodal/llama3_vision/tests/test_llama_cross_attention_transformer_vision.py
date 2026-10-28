@@ -15,12 +15,12 @@ from transformers.models.mllama.modeling_mllama import MllamaPreTrainedModel, Ml
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc
-from models.ttt_compat.tests.multimodal.utils import load_partial_weights
-from models.ttt_compat.tt.ccl import TT_CCL
-from models.ttt_compat.tt.model_config import ModelArgs
-from models.ttt_compat.tt.multimodal.llama_cross_attention_transformer_vision import (
+from models.demos.multimodal.llama3_vision.tests.utils import load_partial_weights
+from models.demos.multimodal.llama3_vision.tt.llama_cross_attention_transformer_vision import (
     TtLlamaCrossAttentionTransformerVision,
 )
+from models.ttt_compat.tt.ccl import TT_CCL
+from models.ttt_compat.tt.model_config import ModelArgs
 
 
 # Meta's lib crossattention vision transformer branch found in :https://github.com/meta-llama/llama-models/blob/0e0b8c519242d5833d8c11bffc1232b77ad7f301/models/llama3/multimodal/model.py#L1027

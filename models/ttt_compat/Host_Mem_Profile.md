@@ -59,7 +59,7 @@ Llama 3 models test as insensitive to attention precision and so we use bfp8 att
 
 
 ## Multimodal Models
-The results are collected using this script [demo/simple_vision_demo.py](demo/simple_vision_demo.py)); with host memory profiler and evaluated on both language and vision branches.
+The results are collected using this script [simple_vision_demo.py](../demos/multimodal/llama3_vision/demo/simple_vision_demo.py)); with host memory profiler and evaluated on both language and vision branches.
 The memory is reported in MB.
 
 | Model             | Device      | batch-1 max mem (MB)  | batch-32 max mem (MB) | Speed (t/s/u) | TTFT (ms) |

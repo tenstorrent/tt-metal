@@ -55,10 +55,10 @@ run_t3000_llama3_70b_tests() {
 #  llama11b=meta-llama/Llama-3.2-11B-Vision-Instruct
 #  tt_cache_llama11b=$TT_CACHE_HOME/$llama11b
 
-#  HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b  pytest models/ttt_compat/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
-#  HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest models/ttt_compat/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
-#  HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest models/ttt_compat/tests/multimodal/test_llama_cross_attention_transformer_text.py ; fail+=$?
-#  HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest models/ttt_compat/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
+#  HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b  pytest models/demos/multimodal/llama3_vision/tests/test_llama_image_transformer.py ; fail+=$?
+#  HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest models/demos/multimodal/llama3_vision/tests/test_llama_vision_encoder.py ; fail+=$?
+#  HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest models/demos/multimodal/llama3_vision/tests/test_llama_cross_attention_transformer_text.py ; fail+=$?
+#  HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest models/demos/multimodal/llama3_vision/tests/test_llama_cross_attention_transformer_vision.py ; fail+=$?
 
 # # Record the end time
 #  end_time=$(date +%s)
@@ -82,10 +82,10 @@ run_t3000_llama3_70b_tests() {
 #   # Use MESH_DEVICE env variable to run on an N300 mesh
 #  mesh_device=N300
 
-#  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest models/ttt_compat/tests/multimodal/test_llama_image_transformer.py ; fail+=$?
-#  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest models/ttt_compat/tests/multimodal/test_llama_vision_encoder.py ; fail+=$?
-#  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest models/ttt_compat/tests/multimodal/test_llama_cross_attention_transformer_text.py ; fail+=$?
-#  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest models/ttt_compat/tests/multimodal/test_llama_cross_attention_transformer_vision.py ; fail+=$?
+#  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest models/demos/multimodal/llama3_vision/tests/test_llama_image_transformer.py ; fail+=$?
+#  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest models/demos/multimodal/llama3_vision/tests/test_llama_vision_encoder.py ; fail+=$?
+#  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest models/demos/multimodal/llama3_vision/tests/test_llama_cross_attention_transformer_text.py ; fail+=$?
+#  MESH_DEVICE=$mesh_device HF_MODEL=$llama11b TT_CACHE_PATH=$tt_cache_llama11b pytest models/demos/multimodal/llama3_vision/tests/test_llama_cross_attention_transformer_vision.py ; fail+=$?
 
 #  # Record the end time
 #  end_time=$(date +%s)

@@ -17,12 +17,14 @@ from torchvision.transforms import functional as F
 
 import ttnn
 from models.common.utility_functions import nearest_32
-from models.ttt_compat.tt.ccl import TT_CCL
-from models.ttt_compat.tt.common import Mode, copy_host_to_device, get_padded_prefill_len
-from models.ttt_compat.tt.multimodal.llama_cross_attention_transformer_text import TtLlamaCrossAttentionTransformerText
-from models.ttt_compat.tt.multimodal.llama_cross_attention_transformer_vision import (
+from models.demos.multimodal.llama3_vision.tt.llama_cross_attention_transformer_text import (
+    TtLlamaCrossAttentionTransformerText,
+)
+from models.demos.multimodal.llama3_vision.tt.llama_cross_attention_transformer_vision import (
     TtLlamaCrossAttentionTransformerVision,
 )
+from models.ttt_compat.tt.ccl import TT_CCL
+from models.ttt_compat.tt.common import Mode, copy_host_to_device, get_padded_prefill_len
 from models.ttt_compat.tt.rope import get_rot_mats
 
 logger = logging.getLogger(__name__)

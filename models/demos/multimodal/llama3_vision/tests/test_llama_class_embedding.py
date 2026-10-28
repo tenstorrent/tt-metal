@@ -11,8 +11,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose, comp_pcc, nearest_32
+from models.demos.multimodal.llama3_vision.tt.llama_class_embedding import TtLlamaClassEmbedding
 from models.ttt_compat.tt.model_config import ModelArgs
-from models.ttt_compat.tt.multimodal.llama_class_embedding import TtLlamaClassEmbedding
 from ttnn import ConcatMeshToTensor, ReplicateTensorToMesh
 
 
