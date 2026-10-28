@@ -2,7 +2,7 @@
 
 Source: read-only analyst (Opus, low effort), working from perf_report.txt.gz, profile_zones.json, bench.json and b0_conv_route.json. Written up by the worker.
 
-The device time is 374.9 ms (bench, traced). The reduced-layer profile estimates 375.9 ms (+0.3 %, within the 3 % limit).
+The device time is 374.9 ms (bench, traced). The reduced-layer profile estimates 375.9 ms (+0.3 %, within PLAN's 2 % limit).
 
 ## Device time by role (ms per forward)
 
