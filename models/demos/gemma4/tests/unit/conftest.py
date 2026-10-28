@@ -53,6 +53,10 @@ from models.demos.gemma4.tt.generator import (  # noqa: E402  - pure helpers the
 
 _ENV_CLEARED = (
     "GEMMA4_CONTRACT_ASYNC",
+    # Read at import by the class bodies (the base's resident-decode declaration and the MTP contract's
+    # deferred-verify declaration); cleared so the shell cannot leak into the capability tests.
+    "GEMMA4_SUPPORTS_ASYNC_DECODE",
+    "GEMMA4_SUPPORTS_ASYNC_SPEC_DECODE",
     "GEMMA4_DFLASH_MAX_SPEC_ISL",
     "GEMMA4_DFLASH_WIDTH_SET",
     "GEMMA4_DFLASH_PACKED",

@@ -18,6 +18,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from models.demos.gemma4.tests.unit.conftest import import_adapter
 from models.demos.gemma4.tests.unit.mtp_contract_harness import (
     DEFAULT_SHAPES,
     VOCAB,
@@ -67,8 +68,9 @@ def test_declares_the_contract_rail(adapter):
     assert caps["supports_sample_on_device"] is True
     assert caps["max_device_top_k"] == 32
     assert caps["supports_device_penalties"] is False
-    assert caps["supports_async_decode"] is False
-    assert caps["supports_async_spec_decode"] is False
+    # The resident decode is the base's env-driven value; the deferred verify is this class's own (below).
+    assert caps["supports_async_decode"] is adapter.Gemma4ForCausalLM.model_capabilities["supports_async_decode"]
+    assert caps["supports_async_decode"] is True and caps["supports_async_spec_decode"] is True
     # Prefix caching is the base's env-driven value: sessions key on slot + generation, not block ids.
     assert caps["supports_prefix_caching"] == adapter.Gemma4ForCausalLM.model_capabilities["supports_prefix_caching"]
     assert adapter.Gemma4MTPContractForCausalLM._SPEC_N == adapter.Gemma4MTPContractForCausalLM._SPEC_DRAFT_LEN + 1
@@ -243,13 +245,36 @@ def test_a_draftless_verify_answers_column_zero_from_the_retained_proposal(mtp):
     assert out.argmax_ids[0, 0].item() == 150 and len(_names(mtp, "decode")) == 1
 
 
-def test_an_ordinary_step_answers_from_the_retained_proposal_when_no_drafts_were_sent(mtp):
+def test_an_ordinary_step_answers_from_the_retained_proposal_when_no_drafts_were_sent(adapter, monkeypatch):
+    """Without the resident decode (the runner reloads every decode's inputs) a greedy row whose retained
+    proposal continues its token is answered from that proposal's column 0."""
+    mtp = build_mtp_model(adapter, monkeypatch, resident=False)
     _start_solo(mtp)
     out = _ordinary(mtp, [150], [3], [10])
     assert out.tolist() == [150] and len(_names(mtp, "decode")) == 1
     proposal = _propose(mtp, [[150, -1, -1, -1, -1, -1]], [[4, -1, -1, -1, -1, -1]])
     assert proposal.num_valid.tolist() == [5]
     assert _steps(mtp)[-1][5] == [0], "the seed column is the verified anchor column"
+
+
+def test_under_the_resident_decode_an_ordinary_step_runs_the_plain_decode_and_drops_the_retained_proposal(mtp):
+    """``supports_async_decode`` (the class default) keeps the plain decode's device-resident token and
+    position across ordinary steps, and the runner reloads them only after a verify, so no ordinary step is
+    answered from the drafter: every live row runs the plain decode, the retained proposal is dropped, and the
+    steady decode that follows (reload_inputs=False, host inputs stale) is accepted with its commands untouched."""
+    assert mtp._spec_resident_decode_declared()
+    _start_solo(mtp)
+    out = _ordinary(mtp, [150], [3], [10], result=_tensor([150]))
+    assert out.tolist() == [150] and mtp._mtp_sessions[0].retained is None
+    assert _names(mtp, "decode")[-1] == ("decode", [150], [3])
+    steady = dict(
+        reload_inputs=False, reload_page_table=False, reload_sampling_params=False, reset_sampling_state=False
+    )
+    out = _ordinary(mtp, [150], [4], [10], result="device", **steady)
+    assert out == "device" and mtp.decode_commands[-1] == steady
+    proposal = _propose(mtp, [[160] + [-1] * 5], [[5] + [-1] * 5])
+    assert proposal.num_valid.tolist() == [5]
+    assert _names(mtp, "reseed")[-1] == ("reseed", (1, 5), [0], [160], [5])
 
 
 def test_a_plain_ordinary_step_drops_the_retained_proposal_and_the_next_proposal_reseeds(mtp):
@@ -627,7 +652,9 @@ def test_release_persistent_capture_drops_sessions_releases_the_decoder_and_reac
 
 
 @pytest.mark.parametrize("step", ["ordinary", "draftless-verify", "retained-verify"])
-def test_retained_answers_apply_sampling_commands_and_remap_once_without_drawing(mtp, step):
+def test_retained_answers_apply_sampling_commands_and_remap_once_without_drawing(adapter, monkeypatch, step):
+    # Without the resident decode, so that the ordinary step too is answered from the retained proposal.
+    mtp = build_mtp_model(adapter, monkeypatch, resident=False)
     sampler = mtp.model[0].sampling
     _start_solo(mtp)
     sampler.seed_manager.events.clear()
@@ -1179,3 +1206,168 @@ def test_a_sampled_request_is_verified_in_logits_mode_from_its_own_columns(mtp):
     assert out.logits[2].float().argmax(dim=-1).tolist() == [150, 151, 152, 153, 154, 155]
     assert out.logits[7].float().argmax(dim=-1).tolist() == [160, 161, 162, 163, 164, 165]
     assert decoder.readbacks == 1
+
+
+# -- asynchronous scheduling: the declarations, the deferred verify readback, overlapped ordinary steps ----
+
+
+def test_the_deferred_verify_declaration_is_inherited_by_the_composed_classes_and_not_by_dflash(adapter):
+    for name in (
+        "Gemma4MTPContractVisionForConditionalGeneration",
+        "Gemma4MTPContractUnifiedVisionForConditionalGeneration",
+    ):
+        caps = getattr(adapter, name).model_capabilities
+        assert caps["supports_async_decode"] is True and caps["supports_async_spec_decode"] is True
+    dflash = adapter.Gemma4DFlashContractForCausalLM.model_capabilities
+    assert dflash["supports_async_decode"] is False and dflash["supports_async_spec_decode"] is False
+
+
+@pytest.mark.parametrize(
+    ("env", "async_decode", "async_spec"),
+    [
+        ({"GEMMA4_SUPPORTS_ASYNC_SPEC_DECODE": "0"}, True, False),
+        ({"GEMMA4_SUPPORTS_ASYNC_DECODE": "0"}, False, True),
+        ({"GEMMA4_SUPPORTS_ASYNC_DECODE": "false", "GEMMA4_SUPPORTS_ASYNC_SPEC_DECODE": "no"}, False, False),
+    ],
+)
+def test_the_async_declarations_follow_their_environment_gates(env, async_decode, async_spec):
+    with pytest.MonkeyPatch.context() as patch:
+        module = import_adapter(patch, env)
+        caps = module.Gemma4MTPContractForCausalLM.model_capabilities
+        assert caps["supports_async_decode"] is async_decode and caps["supports_async_spec_decode"] is async_spec
+        assert module.Gemma4MTPContractVisionForConditionalGeneration.model_capabilities is caps
+        dflash = module.Gemma4DFlashContractForCausalLM.model_capabilities
+        assert dflash["supports_async_decode"] is False and dflash["supports_async_spec_decode"] is False
+
+
+def test_read_decode_output_passes_a_host_tensor_through_and_routes_device_output_to_the_base_reader(mtp):
+    """The runner's async read (``submit_decode`` with ``async_read=True``): a verify's host tensor comes back
+    as ``(tensor, [])``, the plain decode's device output goes to the base reader with the async flag."""
+    ids = torch.tensor([[150, 151]], dtype=torch.int32)
+    host, events = mtp.read_decode_output(ids, async_read=True)
+    assert host is ids and events == []
+    assert mtp.read_decode_output(ids) is ids
+    _prefill(mtp)
+    out = _ordinary(mtp, [3], [2], [10], result="device")
+    assert mtp.read_decode_output(out, async_read=True) == ["device"]
+    assert _names(mtp, "read")[-1] == ("read", True)
+
+
+def _read(model, out):
+    """The deferred read of a verify: the mode's tensor, unwrapped from the VerifyOutput as the runner does,
+    handed to ``read_decode_output`` and waited on later (the host tensor carries no events)."""
+    tensor = out.argmax_ids if out.spec_mode == "argmax_ids" else out.logits
+    host, events = model.read_decode_output(tensor, async_read=True)
+    assert events == []
+    return host
+
+
+def _greedy_walk(block, valid, ids):
+    """The plugin's greedy walk (``accept_greedy_drafts``): every draft the target argmax agrees with, then the
+    argmax at the first disagreeing column (the correction, or the bonus past the last draft)."""
+    accepted = 0
+    while accepted < valid and int(ids[accepted]) == int(block[1 + accepted]):
+        accepted += 1
+    return [int(ids[j]) for j in range(accepted + 1)], accepted + 1
+
+
+def _script_two_replays(model):
+    """Replay 1 agrees with three drafts, replay 2 with two (every id below the stub vocabulary)."""
+    model._mtp_decoder.script = [
+        [([101, 102, 103, 104, 105], [101, 102, 103, 477, 478, 479])],
+        [([201, 202, 203, 204, 205], [201, 202, 488, 489, 490, 491])],
+    ]
+
+
+def _verify_walk_propose(model, anchor, position, drafts, mode, deferred):
+    """One verify of ``drafts`` after ``anchor`` at ``position``, read now (synchronous order) or through the
+    deferred read, walked on the host, committed and proposed from."""
+    block = _block(anchor, drafts)
+    out = _verify(model, [block], [_positions(position, 6)], [5], [10], mode=mode)
+    host = _read(model, out) if deferred else (out.argmax_ids if mode == "argmax_ids" else out.logits)
+    ids = host[0] if mode == "argmax_ids" else host[0].float().argmax(dim=-1)
+    committed, count = _greedy_walk(block, 5, ids)
+    proposal = _propose(model, [committed + [-1] * (6 - count)], [_positions(position + 1, count)], counts=[count])
+    return committed, count, proposal.draft_token_ids[0].tolist()
+
+
+@pytest.mark.parametrize("mode", ["argmax_ids", "logits"])
+def test_a_deferred_verify_readback_commits_what_the_synchronous_order_commits(adapter, monkeypatch, mode):
+    """Two rounds of verify / read / walk / propose: reading the verify's tensor later through
+    ``read_decode_output(async_read=True)`` commits the same tokens, seeds the same columns and drives the
+    decoder with the same calls as reading it with the submission."""
+    runs = {}
+    for deferred in (False, True):
+        model = build_mtp_model(adapter, monkeypatch)
+        _script_two_replays(model)
+        drafts = _start_solo(model).draft_token_ids[0].tolist()
+        committed1, count1, drafts2 = _verify_walk_propose(model, 150, 3, drafts, mode, deferred)
+        committed2, count2, drafts3 = _verify_walk_propose(model, committed1[-1], 3 + count1, drafts2, mode, deferred)
+        runs[deferred] = (
+            committed1,
+            count1,
+            drafts2,
+            committed2,
+            count2,
+            drafts3,
+            _steps(model),
+            _names(model, "reseed"),
+            _names(model, "decode"),
+            model._mtp_decoder.readbacks,
+        )
+    assert runs[True] == runs[False]
+    committed1, count1, drafts2, committed2, count2, drafts3, steps, reseeds, decodes, _ = runs[True]
+    assert (committed1, count1) == ([101, 102, 103, 477], 4) and (committed2, count2) == ([201, 202, 488], 3)
+    assert drafts2 == [201, 202, 203, 204, 205] and drafts3 == [301, 302, 303, 304, 305]
+    assert [step[5] for step in steps] == [[None], [3], [2]], "each proposal seeds from the committed column"
+    assert len(reseeds) == 1 and len(decodes) == 1, "the first plain step only; every verify was answered"
+
+
+def test_the_retained_replay_survives_a_straddle_plain_decode_until_the_deferred_read_and_the_next_proposal(mtp):
+    """A logits verify whose peer row takes the plain decode (a synchronous device read inside the step)
+    answers the drafted row from the retained replay; the deferred read after that straddle returns that same
+    block, and the proposal that follows still seeds the drafted row from the replay's verify hidden."""
+    _start_solo(mtp)
+    _prefill(mtp, slot=1, key=20)
+    decoder = mtp._mtp_decoder
+    replay = mtp._mtp_sessions[0].retained.replay
+    blocks = [_block(150, [101, 102, 103, 104, 105]), _block(9, [])]
+    out = _verify(
+        mtp, blocks, [_positions(3, 6), _positions(2, 1)], [5, 0], [10, 20], mode="logits", result=logits_result(2, 40)
+    )
+    assert _names(mtp, "decode")[-1] == ("decode", [150, 9], [-1, 2]) and _names(mtp, "read")[-1] == ("read", False)
+    assert decoder.readbacks == 1, "the greedy-only replay was read back at the step, before the straddle"
+    host = _read(mtp, out)
+    assert host is out.logits
+    assert host[0].float().argmax(dim=-1).tolist() == [150, 151, 152, 153, 154, 155]
+    assert host[1, 0].float().argmax().item() == 41 and host[1, 1:].eq(0).all()
+    assert mtp._mtp_sessions[0].retained.replay is replay and mtp._mtp_last_replay is replay
+    committed = [[150, 151, 152, 153, 154, 155], [41] + [-1] * 5]
+    proposal = _propose(mtp, committed, [_positions(4, 6), [3] + [-1] * 5], counts=[6, 1])
+    assert proposal.num_valid.tolist() == [5, 5]
+    assert _names(mtp, "reseed")[-1] == ("reseed", (5, 5), [1], [41], [3])
+    assert _steps(mtp)[-1][1:6] == ((5, 5), [0, 1], [155, 41], [9, 3], [5, None])
+
+
+def test_an_ordinary_step_submitted_before_the_proposal_drops_it_and_the_next_proposal_reseeds(mtp, expect_error):
+    """Overlap under asynchronous scheduling: the runner submits ordinary step N+1 before step N's proposal is
+    published, then publishes N's and N+1's proposals at their drains. The adapter sees propose, propose with no
+    verify between: the first proposal is dropped rather than verified (contract s.4d), the row reseeds at the
+    token the overlapped step committed, and the dropped drafts are never accepted by a verify."""
+    _prefill(mtp)
+    _ordinary(mtp, [3], [2], [10], result=_tensor([150]))
+    steady = dict(
+        reload_inputs=False, reload_page_table=False, reload_sampling_params=False, reset_sampling_state=False
+    )
+    _ordinary(mtp, [150], [3], [10], result=_tensor([151]), **steady)
+    first = _propose(mtp, [[150] + [-1] * 5], [[3] + [-1] * 5])
+    assert first.draft_token_ids[0].tolist() == [101, 102, 103, 104, 105]
+    assert mtp._mtp_sessions[0].retained is not None and not mtp._mtp_sessions[0].retained.consumed
+    second = _propose(mtp, [[151] + [-1] * 5], [[4] + [-1] * 5])
+    assert second.draft_token_ids[0].tolist() == [201, 202, 203, 204, 205] and mtp._mtp_dropped_proposals == 1
+    assert _names(mtp, "reseed")[-1] == ("reseed", (1, 5), [0], [151], [4])
+    assert _steps(mtp)[-1][1:6] == ((1, 5), [0], [151], [4], [None])
+    with expect_error(ValueError, "did not propose"):
+        _verify(mtp, [_block(151, [101, 102, 103, 104, 105])], [_positions(4, 6)], [5], [10])
+    out = _verify(mtp, [_block(151, [201, 202, 203, 204, 205])], [_positions(4, 6)], [5], [10])
+    assert out.argmax_ids[0].tolist() == [250, 251, 252, 253, 254, 255]

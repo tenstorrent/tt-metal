@@ -263,14 +263,23 @@ def install_decoder(model, shapes=DEFAULT_SHAPES, max_rows=None, widths=None):
     return decoder
 
 
-def build_mtp_model(adapter, monkeypatch, *, ring=None, max_batch_size=32, max_seq_len=1024, env=None, warm=True):
-    """A contract-rail model over recording stubs; ``warm`` installs a captured decoder."""
+def build_mtp_model(
+    adapter, monkeypatch, *, ring=None, max_batch_size=32, max_seq_len=1024, env=None, warm=True, resident=None
+):
+    """A contract-rail model over recording stubs; ``warm`` installs a captured decoder.
+
+    ``resident`` narrows the instance's ``supports_async_decode`` (the runner's resident-decode
+    mode, which ``plan_decode_reload`` reads off the instance) the way the base narrows it for
+    PLI models; None keeps the class declaration (GEMMA4_SUPPORTS_ASYNC_DECODE, default on).
+    """
     for name in SPEC_ENV:
         monkeypatch.delenv(name, raising=False)
     for key, value in (env or {}).items():
         monkeypatch.setenv(key, value)
     cls = adapter.Gemma4MTPContractForCausalLM
     model = cls.__new__(cls)
+    if resident is not None:
+        model.model_capabilities = {**cls.model_capabilities, "supports_async_decode": bool(resident)}
     model.events = []
     model.model = [Target(model.events, ring=ring)]
     attach_sampling_state(model)
