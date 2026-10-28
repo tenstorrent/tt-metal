@@ -4654,8 +4654,6 @@ def test_resnet50_e2e_graph_capture(
     mesh_device, batch_size, input_loc, imagenet_label_dict, model_location_generator, tmp_path
 ):
     """Run ResNet50 inference, capture graph, import to DB, and validate structural properties."""
-    import shutil
-
     from models.demos.vision.classification.resnet50.ttnn_resnet.demo.demo import run_resnet_inference
 
     report_path = tmp_path / "resnet50_report.json"
@@ -4674,8 +4672,6 @@ def test_resnet50_e2e_graph_capture(
     output_dir = tmp_path / "output"
     db_path = graph_report.import_report(report_path, output_dir)
     assert db_path.exists(), "Imported DB should be created"
-
-    shutil.copy2(db_path, "/tmp/db.sqlite")
 
     conn = sqlite3.connect(db_path)
     c = conn.cursor()
