@@ -19,36 +19,38 @@ namespace ttnn::experimental::deepseek {
 // ``sparse_sdpa`` does from the index list, and returns the selected attention
 // KV rows so a dense SDPA can consume them directly (K == V).
 //
-//     scores[t] = sum_h ReLU(q_h . key_cache[t]) * w_h
-//     indices   = topk_large_indices(scores, k, valid_length_tensor)
-//     out       = kv_cache gathered at indices through page_table        [1, Hkv, k, Dh]
+//     scores[j][t] = sum_h ReLU(q_jh . key_cache[t]) * w_jh
+//     indices[j]   = topk_large_indices(scores[j], k, valid_length_tensor)
+//     out[j]       = kv_cache gathered at indices[j] through page_table   [Sq, Hkv, k, Dh]
 //
-// Decode only: one user (B == 1) and one query token (Sq == 1).
+// One user (B == 1) and Sq in [1, 32] query rows, e.g. the tokens at consecutive positions of a
+// speculative-decode step. Each row j has its own position and selects its own top-k, exactly as
+// Sq single-row calls would, but the key cache is read and scored once for all rows, the rows'
+// top-k selects share every cross-core round, and a kv_cache row selected by several rows is read
+// once.
 //
-// ``query`` ``[num_cores, Hi, 1, D]`` and ``head_weights`` ``[num_cores, 1, 1, Hi]``
+// ``query`` ``[num_cores, Sq * Hi, 1, D]`` and ``head_weights`` ``[num_cores, 1, Sq, Hi]``
 // are ROW_MAJOR HEIGHT_SHARDED in L1 with one full replica per core (shards
-// ``[Hi, D]`` and ``[1, Hi]``), the ``matmul_decode`` rm_hs layout. The op runs on
-// their shared shard grid. ``key_cache`` is the indexer key cache ``[1, 1, T, D]``.
+// ``[Sq * Hi, D]``, row j's heads at shard rows ``[j * Hi, (j + 1) * Hi)``, and ``[Sq, Hi]``),
+// the ``matmul_decode`` rm_hs layout. The op runs on their shared shard grid. ``key_cache`` is
+// the indexer key cache ``[1, 1, T, D]``.
 //
 // ``kv_cache`` is a paged block pool ``[num_blocks, Hkv, block_size, Dh]``, read
 // through ``page_table_tensor`` ``[1, max_blocks_per_user]`` INT32, the same
 // layout ``paged_scaled_dot_product_attention_decode`` takes. ``cur_pos_tensor``
-// ``[1]`` INT32 is the user's current (inclusive) position on that axis; rows
-// past it are never read.
+// ``[Sq]`` INT32 holds each row's current (inclusive) position on that axis; keys past a
+// row's position are never selected for it.
 //
-// The output keeps ``kv_cache``'s dtype and layout; its shape is ``[1, Hkv, k, Dh]``.
-//
-// The device kernel is not implemented. This entry point only fixes the
-// host-side contract (arguments, validation, output spec).
+// The output keeps ``kv_cache``'s dtype and layout; its shape is ``[Sq, Hkv, k, Dh]``.
 //
 // Args:
-//   query:             indexer query, ``[num_cores, Hi, 1, D]`` replicated rm_hs.
+//   query:             indexer query, ``[num_cores, Sq * Hi, 1, D]`` replicated rm_hs.
 //   key_cache:         indexer key cache, ``[1, 1, T, D]``.
-//   head_weights:      folded head scales, ``[num_cores, 1, 1, Hi]`` replicated rm_hs.
+//   head_weights:      folded head scales, ``[num_cores, 1, Sq, Hi]`` replicated rm_hs.
 //   kv_cache:          paged attention KV pool, ``[num_blocks, Hkv, block_size, Dh]``.
 //   page_table_tensor: block ids, ``[1, max_blocks_per_user]`` INT32.
-//   cur_pos_tensor:    current position, ``[1]`` INT32.
-//   k:                 number of selected rows.
+//   cur_pos_tensor:    current position of each query row, ``[Sq]`` INT32.
+//   k:                 number of selected rows per query row.
 //
 // Keyword Args:
 //   valid_length_tensor: optional 1-element uint32 tensor. Score columns at or
@@ -60,22 +62,24 @@ namespace ttnn::experimental::deepseek {
 //                    interleaved, same dtype as ``kv_cache`` (e.g. a CSA layer's combined
 //                    sliding-ring + compressed buffer). Rows outside the selected range are
 //                    left untouched. ``memory_config`` is ignored when it is given.
-//   output_row_offset: output row that selected row 0 is written to, e.g. ``sliding_window``
-//                    to skip the ring. Needs ``output_tensor``; rows
-//                    ``[output_row_offset, output_row_offset + k)`` must fit in it.
-//   new_kv_row:      optional ``[1, 1, 1, Dh]`` row-major row, same dtype as ``kv_cache``,
-//                    written into ``kv_cache`` at logical row ``new_kv_row_index`` (through
-//                    ``page_table_tensor``) before any row is gathered, so a key closing at
+//   output_row_offset: output row that query row 0's first selected row is written to, e.g.
+//                    ``sliding_window`` to skip the ring. Needs ``output_tensor``.
+//   output_row_stride: output rows between consecutive query rows' selections (default ``k``);
+//                    query row j writes rows ``[output_row_offset + j * output_row_stride, ... + k)``,
+//                    which must fit in ``output_tensor``. At least ``k`` when Sq > 1.
+//   new_kv_row:      optional ``[1, 1, n, Dh]`` row-major rows (1 <= n <= 32), same dtype as
+//                    ``kv_cache``, written into ``kv_cache`` at logical rows ``new_kv_row_index``
+//                    (through ``page_table_tensor``) before any row is gathered, so keys closing at
 //                    this step can be selected in the same call.
-//   new_kv_row_index: ``[1]`` INT32 logical row of ``new_kv_row``. Given together with it.
-//   num_keys_tensor: optional ``[1]`` INT32 number of selectable keys, replacing
+//   new_kv_row_index: ``[n]`` INT32 logical rows of ``new_kv_row``. Given together with it.
+//   num_keys_tensor: optional ``[Sq]`` INT32 number of selectable keys of each query row, replacing
 //                    ``(cur_pos + 1) / 4``. A candidate-pool consumer passes the source's pool count.
-//   candidate_topk_blocks, candidate_block_size: candidate source mode when both are > 0. Besides
+//   candidate_topk_blocks, candidate_block_size: candidate source mode when both are > 0 (Sq == 1). Besides
 //                    its own top-k, the op scores each block of ``candidate_block_size`` keys by its
 //                    best key and keeps the ``candidate_topk_blocks`` best blocks, always including
 //                    the block of the newest key.
 //   candidate_blocks_output, pool_count_output: optional preallocated candidate source outputs.
-//   num_parts:       key split across devices when > 1. The page blocks holding the selectable keys
+//   num_parts:       key split across devices when > 1 (Sq == 1). The page blocks holding the selectable keys
 //                    split into ``num_parts`` contiguous ranges; this device scores range
 //                    ``part_index_tensor[0]`` and returns its local top-k as candidates instead of
 //                    gathering rows. Gathering every device's candidates and passing them to
@@ -98,15 +102,16 @@ namespace ttnn::experimental::deepseek {
 //
 // Returns: ``[kv_rows, scores]``, plus ``[candidate_blocks, pool_count]`` in candidate source mode
 // with ``num_parts`` == 1.
-//   kv_rows: selected KV rows, ``[1, Hkv, k, Dh]``, same dtype and layout as ``kv_cache``,
+//   kv_rows: selected KV rows, ``[Sq, Hkv, k, Dh]``, same dtype and layout as ``kv_cache``,
 //            or ``output_tensor`` when given. With ``num_parts`` > 1, the candidates instead:
 //            ``[1, 1, 1, 2k + 16 + 2 * candidate_topk_blocks]`` INT32, the selected keys'
 //            ``kv_cache`` rows in key order, then their order keys (fp32 score bits mapped so
 //            unsigned order is score order), then 16 header words {keys selected, blocks selected,
 //            selectable keys, 0...}; in candidate source mode then the selected blocks in ascending
 //            order and their order keys (the newest block's is 0xFFFFFFFF). Unused entries are zero.
-//   scores:  index scores, ``[1, 1, 1, max_blocks_per_user * block_size]`` fp32 ROW_MAJOR. Only the
-//            first ``div_up((cur_pos + 1) / 4, block_size) * block_size`` entries are written.
+//   scores:  index scores, ``[1, 1, Sq, max_blocks_per_user * block_size]`` fp32 ROW_MAJOR, one row
+//            per query row. Every row's first ``div_up(max_j (cur_pos[j] + 1) / 4, block_size) *
+//            block_size`` entries are written; row j's are valid for its first ``(cur_pos[j] + 1) / 4``.
 //   candidate_blocks: ``[1, candidate_topk_blocks]`` INT32, the kept blocks in ascending order in
 //            the first ``min(candidate_topk_blocks, number of blocks)`` entries, zero after them.
 //   pool_count: ``[1]`` INT32, the keys the kept blocks hold (the newest block may be partial).
@@ -123,6 +128,7 @@ std::vector<Tensor> fused_lightning_select_kv(
     std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     const std::optional<Tensor>& output_tensor = std::nullopt,
     uint32_t output_row_offset = 0,
+    std::optional<uint32_t> output_row_stride = std::nullopt,
     const std::optional<Tensor>& new_kv_row = std::nullopt,
     const std::optional<Tensor>& new_kv_row_index = std::nullopt,
     const std::optional<Tensor>& num_keys_tensor = std::nullopt,

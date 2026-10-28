@@ -23,7 +23,8 @@
 // shared across heads of the same row.
 //
 // With a ROW_MAJOR X the operands no longer share one geometry: X and the intermediates are
-// 1x32 while cos/sin/trans_mat stay 32x32. The per-op *_init_short calls only reprogram the
+// 1x32, cos/sin are 32x32 (TILE) or 1x32 (ROW_MAJOR), and trans_mat is always a 32x32 tile in
+// its CB (the reader tiles a ROW_MAJOR one). The per-op *_init_short calls only reprogram the
 // MOP, so every stage below re-programs the source tile/face geometry it needs via
 // reconfig_full_operand_src{a,b} -- unpacking a 32x32 trans_mat under X's 1-row geometry
 // loads only its top face-row into SrcA and silently drops the B1*A3 product.
@@ -50,6 +51,13 @@ void kernel_main() {
     // TILE: one 32-row tile-row per core (Ht = 1). ROW_MAJOR: one 1x32 face per input row.
     constexpr uint32_t Ht = get_compile_time_arg_val(12);
     constexpr uint32_t n_heads = get_compile_time_arg_val(13);
+    // ROW_MAJOR cos/sin are 1x32 like X, so they multiply elementwise even when broadcast.
+    constexpr bool cos_rm = get_compile_time_arg_val(14) != 0;
+    // cos/sin rows resident on this core: 1 (one tile-row, or one broadcast 1x32 row) or Ht
+    // (ROW_MAJOR, one row per input row).
+    constexpr uint32_t cos_rows = get_compile_time_arg_val(15);
+    constexpr bool bcast_rows = cos_bcast && !cos_rm;
+    constexpr uint32_t cos_sin_tiles = rope_Wt * cos_rows;
     constexpr uint32_t tiles_per_head = nope_Wt + rope_Wt;
     constexpr uint32_t shard_tiles = Ht * Dt;
 
@@ -68,8 +76,8 @@ void kernel_main() {
 
     // trans_mat + cos/sin are streamed in from DRAM by the reader.
     trans_mat_cb_obj.wait_front(onetile);
-    cos_cb_obj.wait_front(rope_Wt);
-    sin_cb_obj.wait_front(rope_Wt);
+    cos_cb_obj.wait_front(cos_sin_tiles);
+    sin_cb_obj.wait_front(cos_sin_tiles);
 
     // X is the resident L1 shard (globally-allocated CB); signal it available.
     in_cb_obj.reserve_back(shard_tiles);
@@ -79,6 +87,7 @@ void kernel_main() {
 
     for (uint32_t rt = 0; rt < Ht; ++rt) {
         const uint32_t row_base = rt * Dt;
+        const uint32_t cos_base = cos_rows > 1 ? rt * rope_Wt : 0;
         for (uint32_t h = 0; h < n_heads; ++h) {
             const uint32_t head_base = row_base + h * tiles_per_head;
 
@@ -118,10 +127,10 @@ void kernel_main() {
             rotated_interm_cb_obj.push_back(rope_Wt);
             rotated_interm_cb_obj.wait_front(rope_Wt);
 
-            // sin_interm = rotated * sin  (broadcast sin's single row across all input rows if cos_bcast)
+            // sin_interm = rotated * sin  (broadcast a TILE sin's single row across all input rows)
             reconfig_full_operand_srca(rotated_interm_cb);
             reconfig_full_operand_srcb(sin_cb);
-            if constexpr (cos_bcast) {
+            if constexpr (bcast_rows) {
                 mul_bcast_rows_init(rotated_interm_cb, sin_cb);
             } else {
                 mul_init(rotated_interm_cb, sin_cb);
@@ -129,10 +138,10 @@ void kernel_main() {
             sin_interm_cb_obj.reserve_back(rope_Wt);
             tile_regs_acquire();
             for (uint32_t j = 0; j < rope_Wt; ++j) {
-                if constexpr (cos_bcast) {
-                    mul_tiles_bcast_rows(rotated_interm_cb, sin_cb, j, j, j);
+                if constexpr (bcast_rows) {
+                    mul_tiles_bcast_rows(rotated_interm_cb, sin_cb, j, cos_base + j, j);
                 } else {
-                    mul_tiles(rotated_interm_cb, sin_cb, j, j, j);
+                    mul_tiles(rotated_interm_cb, sin_cb, j, cos_base + j, j);
                 }
             }
             tile_regs_commit();
@@ -144,10 +153,10 @@ void kernel_main() {
             sin_interm_cb_obj.push_back(rope_Wt);
             rotated_interm_cb_obj.pop_front(rope_Wt);
 
-            // cos_interm = in_rope * cos  (broadcast cos's single row across all input rows if cos_bcast)
+            // cos_interm = in_rope * cos  (broadcast a TILE cos's single row across all input rows)
             reconfig_full_operand_srca(in_cb);
             reconfig_full_operand_srcb(cos_cb);
-            if constexpr (cos_bcast) {
+            if constexpr (bcast_rows) {
                 mul_bcast_rows_init(in_cb, cos_cb);
             } else {
                 mul_init(in_cb, cos_cb);
@@ -155,10 +164,10 @@ void kernel_main() {
             cos_interm_cb_obj.reserve_back(rope_Wt);
             tile_regs_acquire();
             for (uint32_t j = 0; j < rope_Wt; ++j) {
-                if constexpr (cos_bcast) {
-                    mul_tiles_bcast_rows(in_cb, cos_cb, head_base + nope_Wt + j, j, j);
+                if constexpr (bcast_rows) {
+                    mul_tiles_bcast_rows(in_cb, cos_cb, head_base + nope_Wt + j, cos_base + j, j);
                 } else {
-                    mul_tiles(in_cb, cos_cb, head_base + nope_Wt + j, j, j);
+                    mul_tiles(in_cb, cos_cb, head_base + nope_Wt + j, cos_base + j, j);
                 }
             }
             tile_regs_commit();
@@ -191,7 +200,7 @@ void kernel_main() {
     }
 
     out_cb_obj.push_back(shard_tiles);
-    cos_cb_obj.pop_front(rope_Wt);
-    sin_cb_obj.pop_front(rope_Wt);
+    cos_cb_obj.pop_front(cos_sin_tiles);
+    sin_cb_obj.pop_front(cos_sin_tiles);
     trans_mat_cb_obj.pop_front(onetile);
 }

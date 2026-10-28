@@ -25,10 +25,11 @@ namespace ttnn::operations::experimental::transformer::fused_partial_rope {
 //     out[..., b, Hd-Rd:] = x_rope * cos + (x_rope @ trans_mat) * sin   (HiFi4)
 //
 // `cos`/`sin` are `[1, 1, rows, rope_dim]` (or a single broadcast row) DRAM-interleaved
-// TILE tables, shared across every head block of a row; `trans_mat` is a single
-// [32, 32] `rotate_half` tile (replicated). TILE X is processed as 32x32 tiles.
-// ROW_MAJOR X is processed as 1x32 faces (one row of 32 elements per tile) and
-// requires the broadcast cos/sin row. Output layout matches the input.
+// tables, shared across every head block of a row; `trans_mat` is a single
+// [32, 32] `rotate_half` matrix (replicated, TILE or ROW_MAJOR). TILE X is processed as
+// 32x32 tiles with TILE cos/sin. ROW_MAJOR X is processed as 1x32 faces (one row of 32
+// elements per tile) and takes a broadcast TILE cos/sin row or ROW_MAJOR cos/sin (per-row
+// or broadcast). Output layout matches the input.
 ttnn::Tensor fused_partial_rope(
     const ttnn::Tensor& input,
     const ttnn::Tensor& cos,

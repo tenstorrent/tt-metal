@@ -74,6 +74,14 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
         key_cache[-2],
         kv_cache[-2]);
     const auto& weights = tensor_args.head_weights.logical_shape();
+    // head_weights [num_cores, 1, Sq, Hi] fixes the query rows and heads.
+    const uint32_t num_queries = weights[-2];
+    const uint32_t num_heads = weights[-1];
+    TT_FATAL(
+        num_queries >= 1 && num_queries <= kMaxQueryRows,
+        "fused_lightning_select_kv: Sq must be in [1, {}], got {}",
+        kMaxQueryRows,
+        num_queries);
     TT_FATAL(
         query[-1] == key_cache[-1],
         "fused_lightning_select_kv: query D {} must match key_cache D {}",
@@ -109,13 +117,14 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
                 shard_shape);
         }
     }
+    // Row j of the query is shard rows [j * Hi, (j + 1) * Hi).
     TT_FATAL(
-        query[1] == weights[-1] && query[-2] == weights[-2],
-        "fused_lightning_select_kv: head_weights must be [num_cores, 1, 1, Hi] matching query heads {} and Sq {}, got "
-        "{}",
-        query[1],
-        query[-2],
-        weights);
+        query[-2] == 1 && query[1] == num_queries * num_heads,
+        "fused_lightning_select_kv: query must be [num_cores, Sq * Hi, 1, D] = [num_cores, {}, 1, D] for head_weights "
+        "{}, got {}",
+        num_queries * num_heads,
+        weights,
+        query);
     TT_FATAL(weights[1] == 1, "fused_lightning_select_kv: head_weights dim 1 must be 1, got {}", weights[1]);
 
     const auto& page_table = tensor_args.page_table_tensor;
@@ -138,14 +147,14 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
     // this call reads one of them.
     const bool session_page_table = tensor_args.page_table_row_tensor.has_value() && !tensor_args.row_table.has_value();
     const uint32_t batch = session_page_table ? 1 : pt_shape[0];
-    TT_FATAL(
-        pos_shape.rank() == 1 && pos_shape[0] == batch,
-        "fused_lightning_select_kv: cur_pos_tensor must be [B] with B = {}, got {}",
-        batch,
-        pos_shape);
 
-    // Decode only: one user (B == 1) and one query token (Sq == 1).
+    // Decode only: one user (B == 1), Sq query rows of it.
     TT_FATAL(batch == 1, "fused_lightning_select_kv: only B == 1 is supported, got page_table batch {}", batch);
+    TT_FATAL(
+        pos_shape.rank() == 1 && pos_shape[0] == num_queries,
+        "fused_lightning_select_kv: cur_pos_tensor must be [Sq] = [{}], one position per query row, got {}",
+        num_queries,
+        pos_shape);
     if (tensor_args.page_table_row_tensor.has_value()) {
         require_int32_rm_interleaved(
             tensor_args.page_table_row_tensor.value(), ttnn::Shape({1}), "page_table_row_tensor");
@@ -172,15 +181,14 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
             "interleaved device tensor, got {}",
             kv_page_table.logical_shape());
     }
-    TT_FATAL(query[2] == 1, "fused_lightning_select_kv: only Sq == 1 is supported, got query Sq {}", query[2]);
     TT_FATAL(
         tensor_args.row_table.has_value() || key_cache[0] == kv_cache[0],
         "fused_lightning_select_kv: key_cache and kv_cache must have the same number of blocks, got {} and {}",
         key_cache[0],
         kv_cache[0]);
 
-    // query is a ROW_MAJOR HEIGHT_SHARDED L1 tensor with one full [Hi, D] replica per core, stacked
-    // along the batch axis, so its logical shape is [num_cores, Hi, 1, D].
+    // query is a ROW_MAJOR HEIGHT_SHARDED L1 tensor with one full [Sq * Hi, D] replica per core, stacked
+    // along the batch axis, so its logical shape is [num_cores, Sq * Hi, 1, D].
     const auto& query_tensor = tensor_args.query;
     TT_FATAL(
         query_tensor.layout() == Layout::ROW_MAJOR,
@@ -201,7 +209,8 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
         "fused_lightning_select_kv: query requires ROW_MAJOR shard orientation");
     TT_FATAL(
         query_shard.shape[0] == query[1] && query_shard.shape[1] == query[-1],
-        "fused_lightning_select_kv: query shard must be one full [Hi, D] = [{}, {}] replica per core, got [{}, {}]",
+        "fused_lightning_select_kv: query shard must be one full [Sq * Hi, D] = [{}, {}] replica per core, got [{}, "
+        "{}]",
         query[1],
         query[-1],
         query_shard.shape[0],
@@ -211,9 +220,9 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
         "fused_lightning_select_kv: query D {} must be a multiple of the 1x32 tile width",
         query[-1]);
     TT_FATAL(
-        query[1] % 8 == 0,
-        "fused_lightning_select_kv: query Hi {} must be a multiple of 8 (the query is tilized into 8x32 tiles)",
-        query[1]);
+        num_heads % 8 == 0,
+        "fused_lightning_select_kv: Hi {} must be a multiple of 8 (the query is tilized into 8x32 tiles)",
+        num_heads);
     const uint32_t num_query_cores = query_shard.grid.num_cores();
     TT_FATAL(
         query[0] == num_query_cores,
@@ -221,8 +230,8 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
         query[0],
         num_query_cores);
 
-    // head_weights uses the same layout: one full [1, Hi] replica per core on the query's grid, so
-    // its logical shape is [num_cores, 1, 1, Hi].
+    // head_weights uses the same layout: one full [Sq, Hi] replica per core on the query's grid, so
+    // its logical shape is [num_cores, 1, Sq, Hi].
     const auto& weights_tensor = tensor_args.head_weights;
     TT_FATAL(
         weights_tensor.layout() == Layout::ROW_MAJOR,
@@ -248,10 +257,11 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
         weights_shard.grid.str(),
         query_shard.grid.str());
     TT_FATAL(
-        weights_shard.shape[0] == 1 && weights_shard.shape[1] == weights[-1],
-        "fused_lightning_select_kv: head_weights shard must be one full [1, Hi] = [1, {}] replica per core, got "
+        weights_shard.shape[0] == num_queries && weights_shard.shape[1] == num_heads,
+        "fused_lightning_select_kv: head_weights shard must be one full [Sq, Hi] = [{}, {}] replica per core, got "
         "[{}, {}]",
-        weights[-1],
+        num_queries,
+        num_heads,
         weights_shard.shape[0],
         weights_shard.shape[1]);
     TT_FATAL(
@@ -288,24 +298,38 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
             out.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "fused_lightning_select_kv: output_tensor must be interleaved, got {}",
             out.memory_config());
+        // One kv row per page, counted across the leading dims.
         TT_FATAL(
-            out_shape[0] == batch && out_shape[1] == kv_cache[1] && out_shape[-1] == kv_cache[-1],
-            "fused_lightning_select_kv: output_tensor must be [{}, {}, rows, {}], got {}",
-            batch,
+            out_shape[1] == kv_cache[1] && out_shape[-1] == kv_cache[-1],
+            "fused_lightning_select_kv: output_tensor must be [B, {}, rows, {}], got {}",
             kv_cache[1],
             kv_cache[-1],
             out_shape);
+        const uint32_t out_rows = out_shape[0] * out_shape[-2];
+        const uint32_t last_row_end = args.output_row_offset + ((num_queries - 1) * args.output_row_stride) + args.k;
         TT_FATAL(
-            args.output_row_offset + args.k <= out_shape[-2],
-            "fused_lightning_select_kv: output_row_offset {} + k {} exceeds output_tensor rows {}",
+            last_row_end <= out_rows,
+            "fused_lightning_select_kv: output_row_offset {} + (Sq - 1) * output_row_stride {} + k {} exceeds "
+            "output_tensor rows {}",
             args.output_row_offset,
+            args.output_row_stride,
             args.k,
-            out_shape[-2]);
+            out_rows);
+        TT_FATAL(
+            num_queries == 1 || args.output_row_stride >= args.k,
+            "fused_lightning_select_kv: output_row_stride {} must be at least k {} so query rows do not overlap",
+            args.output_row_stride,
+            args.k);
     } else {
         TT_FATAL(
             args.output_row_offset == 0,
             "fused_lightning_select_kv: output_row_offset {} needs an output_tensor",
             args.output_row_offset);
+        TT_FATAL(
+            args.output_row_stride == args.k,
+            "fused_lightning_select_kv: output_row_stride {} needs an output_tensor (the default output is [Sq, 1, k, "
+            "Dh])",
+            args.output_row_stride);
     }
 
     TT_FATAL(
@@ -324,9 +348,16 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
             row.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
                 row.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
             "fused_lightning_select_kv: new_kv_row must be row-major interleaved");
+        const uint32_t num_new_rows = row_index.logical_shape().volume();
         TT_FATAL(
-            row.logical_shape().volume() == kv_cache[-1] && row.logical_shape()[-1] == kv_cache[-1],
-            "fused_lightning_select_kv: new_kv_row must be one [1, 1, 1, {}] row, got {}",
+            num_new_rows >= 1 && num_new_rows <= kMaxNewKvRows,
+            "fused_lightning_select_kv: new_kv_row_index must hold 1 to {} indices, got {}",
+            kMaxNewKvRows,
+            row_index.logical_shape());
+        TT_FATAL(
+            row.logical_shape().volume() == num_new_rows * kv_cache[-1] && row.logical_shape()[-1] == kv_cache[-1],
+            "fused_lightning_select_kv: new_kv_row must be {} [1, 1, 1, {}] rows (one per new_kv_row_index), got {}",
+            num_new_rows,
             kv_cache[-1],
             row.logical_shape());
         TT_FATAL(
@@ -335,10 +366,6 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             row_index.dtype() == DataType::INT32 && row_index.layout() == tt::tt_metal::Layout::ROW_MAJOR,
             "fused_lightning_select_kv: new_kv_row_index must be INT32 row-major");
-        TT_FATAL(
-            row_index.logical_shape().volume() == 1,
-            "fused_lightning_select_kv: new_kv_row_index must hold one index, got {}",
-            row_index.logical_shape());
         TT_FATAL(
             !tensor_args.page_table_tensor.is_sharded(),
             "fused_lightning_select_kv: new_kv_row needs an interleaved page_table_tensor");
@@ -361,11 +388,18 @@ void FusedLightningSelectKvDeviceOperation::validate_on_program_cache_miss(
             "fused_lightning_select_kv: num_keys_tensor must be an interleaved device tensor");
         TT_FATAL(
             num_keys.dtype() == DataType::INT32 && num_keys.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
-                num_keys.logical_shape().volume() == 1,
-            "fused_lightning_select_kv: num_keys_tensor must hold one INT32 row-major count, got {} {}",
+                num_keys.logical_shape().volume() == num_queries,
+            "fused_lightning_select_kv: num_keys_tensor must hold one INT32 row-major count per query row ({}), got "
+            "{} {}",
+            num_queries,
             num_keys.dtype(),
             num_keys.logical_shape());
     }
+    // The two-level candidate source and the key split select for one query row.
+    TT_FATAL(
+        num_queries == 1 || (!is_candidate_source && args.num_parts == 1),
+        "fused_lightning_select_kv: Sq {} > 1 needs num_parts == 1 and no candidate source mode",
+        num_queries);
     if (is_candidate_source) {
         const uint32_t page_block_size = key_cache[-2];
         TT_FATAL(
@@ -418,8 +452,8 @@ FusedLightningSelectKvDeviceOperation::spec_return_value_t FusedLightningSelectK
     const auto& kv = tensor_args.kv_cache;
     const auto& kv_shape = kv.logical_shape();
     const auto& pt_shape = tensor_args.page_table_tensor.logical_shape();
-    const uint32_t batch =
-        tensor_args.page_table_row_tensor.has_value() && !tensor_args.row_table.has_value() ? 1 : pt_shape[0];
+    // One user (B == 1): its Sq query rows take the batch axis of the kv rows.
+    const uint32_t num_queries = tensor_args.head_weights.logical_shape()[-2];
     const uint32_t max_keys = pt_shape[1] * tensor_args.key_cache.logical_shape()[-2];
     spec_return_value_t specs = {
         args.num_parts > 1
@@ -430,12 +464,13 @@ FusedLightningSelectKvDeviceOperation::spec_return_value_t FusedLightningSelectK
         : tensor_args.output_tensor.has_value()
             ? tensor_args.output_tensor->tensor_spec()
             : tt::tt_metal::TensorSpec(
-                  ttnn::Shape({batch, kv_shape[1], args.k, kv_shape[3]}),
+                  ttnn::Shape({num_queries, kv_shape[1], args.k, kv_shape[3]}),
                   tt::tt_metal::TensorLayout(
                       kv.dtype(), tt::tt_metal::PageConfig(kv.layout()), args.output_mem_config)),
-        // One fp32 score per key the page table can address; only the first valid ones are written.
+        // Per query row, one fp32 score per key the page table can address; only the first valid ones
+        // are written.
         tt::tt_metal::TensorSpec(
-            ttnn::Shape({batch, 1, 1, max_keys}),
+            ttnn::Shape({1, 1, num_queries, max_keys}),
             tt::tt_metal::TensorLayout(
                 DataType::FLOAT32, tt::tt_metal::PageConfig(Layout::ROW_MAJOR), tt::tt_metal::MemoryConfig{})),
     };
@@ -495,6 +530,7 @@ std::vector<ttnn::Tensor> fused_lightning_select_kv(
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& output_tensor,
     uint32_t output_row_offset,
+    std::optional<uint32_t> output_row_stride,
     const std::optional<ttnn::Tensor>& new_kv_row,
     const std::optional<ttnn::Tensor>& new_kv_row_index,
     const std::optional<ttnn::Tensor>& num_keys_tensor,
@@ -523,6 +559,8 @@ std::vector<ttnn::Tensor> fused_lightning_select_kv(
     auto attrs = OperationType::operation_attributes_t{
         .k = k,
         .output_row_offset = output_row_offset,
+        // Query rows sit back to back unless the caller lays them out (e.g. ring rows between them).
+        .output_row_stride = output_row_stride.value_or(k),
         .candidate_topk_blocks = candidate_topk_blocks,
         .candidate_block_size = candidate_block_size,
         .num_parts = num_parts,

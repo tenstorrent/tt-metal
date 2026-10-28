@@ -22,8 +22,9 @@
 // rope tile rotates independently of the split. A core may straddle several head-block
 // boundaries; runs are processed without crossing a head.
 //
-// A ROW_MAJOR X is 1x32 while cos/sin/trans_mat stay 32x32, so each stage re-programs the source
-// tile/face geometry it needs (see the height-sharded kernel for why the matmul cannot inherit it).
+// A ROW_MAJOR X is 1x32 while trans_mat (and TILE cos/sin) are 32x32, so each stage re-programs the
+// source tile/face geometry it needs (see the height-sharded kernel for why the matmul cannot
+// inherit it).
 namespace {
 // DST tile budget per acquire/commit batch (safe for fp32 dest-acc mode).
 constexpr uint32_t kDstBatch = 8;
@@ -46,6 +47,9 @@ void kernel_main() {
     constexpr uint32_t tiles_per_head = get_compile_time_arg_val(11);
     constexpr uint32_t nope_Wt = get_compile_time_arg_val(12);
     constexpr uint32_t rope_Wt = get_compile_time_arg_val(13);
+    // ROW_MAJOR cos/sin are 1x32 like X, so they multiply elementwise even when broadcast.
+    constexpr bool cos_rm = get_compile_time_arg_val(14) != 0;
+    constexpr bool bcast_rows = cos_bcast && !cos_rm;
 
     uint32_t argrt = 0;
     const uint32_t g0 = get_arg_val<uint32_t>(argrt++);
@@ -135,7 +139,7 @@ void kernel_main() {
 
             reconfig_full_operand_srca(rotated_interm_cb);
             reconfig_full_operand_srcb(sin_cb);
-            if constexpr (cos_bcast) {
+            if constexpr (bcast_rows) {
                 mul_bcast_rows_init(rotated_interm_cb, sin_cb);
             } else {
                 mul_init(rotated_interm_cb, sin_cb);
@@ -145,7 +149,7 @@ void kernel_main() {
                 const uint32_t g = (run - base) < kDstBatch ? (run - base) : kDstBatch;
                 tile_regs_acquire();
                 for (uint32_t k = 0; k < g; ++k) {
-                    if constexpr (cos_bcast) {
+                    if constexpr (bcast_rows) {
                         mul_tiles_bcast_rows(rotated_interm_cb, sin_cb, base + k, cos_off + base + k, k);
                     } else {
                         mul_tiles(rotated_interm_cb, sin_cb, base + k, cos_off + base + k, k);
@@ -163,7 +167,7 @@ void kernel_main() {
 
             reconfig_full_operand_srca(in_cb);
             reconfig_full_operand_srcb(cos_cb);
-            if constexpr (cos_bcast) {
+            if constexpr (bcast_rows) {
                 mul_bcast_rows_init(in_cb, cos_cb);
             } else {
                 mul_init(in_cb, cos_cb);
@@ -173,7 +177,7 @@ void kernel_main() {
                 const uint32_t g = (run - base) < kDstBatch ? (run - base) : kDstBatch;
                 tile_regs_acquire();
                 for (uint32_t k = 0; k < g; ++k) {
-                    if constexpr (cos_bcast) {
+                    if constexpr (bcast_rows) {
                         mul_tiles_bcast_rows(in_cb, cos_cb, rope_base + base + k, cos_off + base + k, k);
                     } else {
                         mul_tiles(in_cb, cos_cb, rope_base + base + k, cos_off + base + k, k);
