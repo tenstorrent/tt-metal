@@ -3,12 +3,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Contracts: (1) every case the codegen scope or call contract rejects falls back to native and matches
-# reshape_force_native; (2) a demoted case runs native; (3) a routed tile-rows call traces and replays new data;
+# reshape_force_native; (2) a demoted case runs native; (3) routed tile-rows and LCM calls trace and replay new data;
 # (4) a small row-major call keeps its program key when the L1 frontier moves; (5) the row-major cases the merge
 # gate's test_reshape_codegen.py leaves out are bit-exact, route as fitted, and key the CB depth live L1 picks; (6) so
-# are the segment-map TILE cases it leaves out; (7) a routed call runs with the least free L1 native runs with; (8) a
-# segment map over its size caps runs native; (9) a plan chosen under L1 pressure traces when warmed up under that
-# pressure.
+# are the segment-map and LCM TILE cases it leaves out; (7) a routed call runs with the least free L1 native runs
+# with; (8) a segment map over its size caps runs native; (9) a plan chosen under L1 pressure traces when warmed up
+# under that pressure.
 
 import contextlib
 
@@ -144,6 +144,24 @@ def test_reshape_routes_tile_rows_case_under_trace(device):
     ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
     ttnn.release_trace(device, tid)
     assert_equal(fresh.reshape(out_shape), ttnn.to_torch(out))
+
+
+@pytest.mark.parametrize("device_params", [{"trace_region_size": 32768}], indirect=True)
+def test_reshape_routes_lcm_case_under_trace(device):
+    shape, out_shape, dtype = [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.float32
+    xt = _to_device(device, _make_input(shape, dtype), dtype, ttnn.TILE_LAYOUT)
+    _force_codegen(xt, out_shape)
+    entries = device.num_program_cache_entries()
+    tid = ttnn.begin_trace_capture(device, cq_id=0)
+    out = ttnn.reshape(xt, out_shape)
+    ttnn.end_trace_capture(device, tid, cq_id=0)
+    # Auto must reuse the codegen program: trace capture cannot compile a new one.
+    assert device.num_program_cache_entries() == entries
+    fresh = _make_input(shape, dtype, seed=1).float()
+    ttnn.copy_host_to_device_tensor(ttnn.from_torch(fresh, dtype=dtype, layout=ttnn.TILE_LAYOUT), xt)
+    ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
+    ttnn.release_trace(device, tid)
+    _assert_bits(fresh.reshape(out_shape), ttnn.to_torch(out), dtype)
 
 
 @pytest.mark.parametrize("placement", [ttnn.L1_MEMORY_CONFIG, _DRAM], ids=["l1", "dram"])
@@ -307,11 +325,12 @@ def test_reshape_codegen_rm_shrinks_plan_under_l1_pressure(device, case, shapes,
     assert device.num_program_cache_entries() == before
 
 
-# (id, in shape, out shape, dtype): segment-map programs beyond the gate's map cases.
+# (id, in shape, out shape, dtype): segment-map and LCM programs beyond the gate's map and LCM cases.
 _TILE_PATHS = [
     ("tile_mapped_int32", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.int32),
     ("tile_mapped_uint16", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.uint16),
     ("tile_mapped_wide", [1, 8, 64, 1000], [1, 8, 1000, 64], ttnn.bfloat16),
+    ("lcm_many_chunks", [1, 1, 2048, 1024], [1, 1, 4096, 512], ttnn.float32),
 ]
 
 
@@ -340,7 +359,7 @@ def test_reshape_codegen_mapped_edge_shapes(device, case, in_shape, out_shape, d
     _check_edge_shape(device, in_shape, out_shape, dtype)
 
 
-_TILE_KEYED = [p for p in _PATHS if p[0] == "tile_mapped_fp32"]
+_TILE_KEYED = [p for p in _PATHS if p[0] in ("tile_mapped_fp32", "lcm_fp32")]
 
 
 @pytest.mark.parametrize("mem", [_DRAM, _L1], ids=["dram", "l1"])
@@ -349,6 +368,31 @@ def test_reshape_codegen_tile_program_key_stable_while_full_plan_fits(
     device, path, in_shape, out_shape, dtype, layout, mem
 ):
     _check_program_key_stable(device, in_shape, out_shape, dtype, layout, mem)
+
+
+def test_reshape_codegen_lcm_shrinks_write_batch_under_l1_pressure(device):
+    # Three 96 -> 192 fp32 chunks on one core. The full plan takes 144 KiB: 12 in and mid tiles and a 24-tile output CB
+    # for 8-tile write batches. With 120 KiB free only 2-tile batches fit, over a 12-tile output CB.
+    in_shape, out_shape, dtype = [1, 1, 3 * 64, 96], [1, 1, 3 * 32, 192], ttnn.float32
+    one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))])
+    source = _make(in_shape, dtype)
+    expected = source.reshape(out_shape)
+    x = _to_device(device, source, dtype, ttnn.TILE_LAYOUT)
+
+    def run():
+        out = _force_codegen(x, out_shape, memory_config=_DRAM, sub_core_grids=one_core)
+        _assert_bits(expected, ttnn.to_torch(out), dtype)
+
+    run()
+    entries = device.num_program_cache_entries()
+    hog = _l1_hog_leaving(device, 120 * 1024)
+    try:
+        run()
+        assert device.num_program_cache_entries() == entries + 1
+    finally:
+        ttnn.deallocate(hog)
+    run()
+    assert device.num_program_cache_entries() == entries + 1
 
 
 def test_reshape_codegen_mapped_shrinks_input_depth_under_l1_pressure(device):
@@ -374,6 +418,9 @@ def test_reshape_codegen_mapped_shrinks_input_depth_under_l1_pressure(device):
 
 # (id, in shape, out shape, dtype, layout, expected route), as in the gate's _ROUTES.
 _TILE_ROUTES = [
+    # One LCM chunk of two tiles against a native round.
+    ("tile_lcm", [1, 1, 32, 64], [1, 1, 64, 32], ttnn.float32, ttnn.TILE_LAYOUT, "codegen"),
+    ("tile_split_lcm_int32", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.int32, ttnn.TILE_LAYOUT, "codegen"),
     ("tile_unaligned_width_fp32", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.float32, ttnn.TILE_LAYOUT, "codegen"),
     ("tile_unaligned_width_uint16", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.uint16, ttnn.TILE_LAYOUT, "codegen"),
 ]
@@ -429,6 +476,7 @@ def _native_runs_with(device, x, out_shape, free_bytes):
 _L1_FLOOR = [
     ("tile_rows_bf16", [1, 256, 4096], [1, 256, 32, 128], ttnn.bfloat16, ttnn.TILE_LAYOUT, 32 * 1024),
     ("mapped_fp32", [1, 1, 32, 100], [1, 1, 100, 32], ttnn.float32, ttnn.TILE_LAYOUT, 32 * 1024),
+    ("lcm_fp32", [1, 1, 2048, 64], [1, 1, 4096, 32], ttnn.float32, ttnn.TILE_LAYOUT, 32 * 1024),
     ("rm_arbitrary_bf16", [64, 97], [97, 64], ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, 32 * 1024),
 ]
 

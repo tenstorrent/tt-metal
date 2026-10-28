@@ -152,6 +152,24 @@ struct RmArbitraryPlan {
     WorkCounts split;
 };
 
+// LCM TILE plan: tiles are untilized and re-tilized through the compute engine in chunks of lcm(W_in, W_out) datums
+// per row.
+struct LcmPlan {
+    uint32_t wt_in = 0;
+    uint32_t wt_out = 0;
+    uint32_t in_rows = 0;
+    uint32_t out_rows = 0;
+    uint32_t in_tiles = 0;
+    uint32_t out_tiles = 0;
+    uint32_t out_cb_depth = 0;
+    uint32_t write_batch = 0;
+    uint32_t total_chunks = 0;
+    uint32_t tile_bytes = 0;
+    uint32_t out_page_bytes = 0;
+    uint64_t l1_bytes = 0;
+    WorkCounts split;
+};
+
 // A segment map fitted to a budget: the layout and its input CB depth.
 struct TileMappedChoice {
     TileMappedLayout layout;
@@ -160,16 +178,18 @@ struct TileMappedChoice {
 
 WorkSplit split_units(const tt::tt_metal::CoreRangeSet& grid, uint32_t units);
 
-// The TILE program a call runs. Tile rows needs both widths to be multiples of 32; the segment map takes any widths.
-enum class TileRoute : uint32_t { TileRows = 0, TileMapped = 1 };
+// The TILE program a call runs. Tile rows needs both widths to be multiples of 32, the LCM program that too, no tile
+// padding and 32-bit datums (lcm_bit_exact); the segment map takes any widths.
+enum class TileRoute : uint32_t { TileRows = 0, Lcm = 1, TileMapped = 2 };
 
 // What the entry planned for one call. A program-cache miss builds from it instead of planning again; live L1 then
 // picks the plan's size (live_tile_choice, live_rm_choice).
 struct LaunchPlan {
-    // TILE: the route, with the full tile-rows plan when it takes tile rows. The segment map is planned from the
-    // shapes alone.
+    // TILE: the route, with the full tile-rows plan or the unfitted LCM geometry when it takes them. The segment map
+    // is planned from the shapes alone.
     TileRoute tile_route = TileRoute::TileRows;
     TileRowsChoice tile_rows;
+    std::optional<LcmPlan> lcm;
     // ROW_MAJOR: the geometries routing built, not yet fitted to any budget. The slab geometry is only built when the
     // stick program does not fit the static window, or has no geometry.
     uint32_t out_aligned_page = 0;
@@ -181,7 +201,7 @@ struct LaunchPlan {
 using RmChoice = std::variant<RmPlan, RmArbitraryPlan>;
 
 // A TILE program fitted to a budget, one alternative per TileRoute.
-using TileChoice = std::variant<TileRowsChoice, TileMappedChoice>;
+using TileChoice = std::variant<TileRowsChoice, LcmPlan, TileMappedChoice>;
 
 // Cores the op may use: `sub_core_grids` if given, else the device's compute grid.
 tt::tt_metal::CoreRangeSet reshape_core_grid(
@@ -207,11 +227,22 @@ uint64_t static_l1_budget(const Tensor& input, const tt::tt_metal::TensorSpec& o
 std::optional<TileRowsChoice> live_tile_rows_choice(
     const Tensor& input, const ttnn::Shape& logical_output_shape, const TileRowsChoice& planned);
 
-// The program of `planned.tile_route` sized to live L1: the largest tile-rows plan that fits, else the segment map
-// with the deepest input CB that fits; its smallest plan needs no more L1 than native's, so routing need not look at
-// live L1. nullopt when nothing fits. Same contract as live_tile_rows_choice.
+// The program of `planned.tile_route` sized to live L1: the largest tile-rows plan that fits, the LCM plan with the
+// largest write batch and deepest output CB, else the segment map with the deepest input CB that fits; its smallest
+// plan needs no more L1 than native's, so routing need not look at live L1. nullopt when nothing fits. Same contract
+// as live_tile_rows_choice.
 std::optional<TileChoice> live_tile_choice(
     const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t grid_cores, const LaunchPlan& planned);
+
+// The LCM kernel untilizes and re-tilizes through the compute engine, which round-trips only 32-bit datums
+// unchanged: bf16 NaN comes back as Inf.
+bool lcm_bit_exact(tt::tt_metal::DataType dtype);
+
+// The LCM program's geometry, nullopt outside what it handles; fit_lcm sizes its output CB to `l1_budget`.
+std::optional<LcmPlan> lcm_tile_geometry(
+    const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t out_aligned_page, uint32_t grid_cores);
+
+std::optional<LcmPlan> fit_lcm(LcmPlan plan, uint64_t l1_budget);
 
 // The segment map fitted to `l1_budget`, nullopt when it exceeds its size caps or does not fit with one input slot.
 std::optional<TileMappedChoice> fit_tile_mapped(

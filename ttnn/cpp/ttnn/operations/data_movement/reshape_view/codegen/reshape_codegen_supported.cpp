@@ -114,6 +114,28 @@ bool native_faster(const TileRowsChoice& choice, uint32_t num_cores) {
     return !read_cut && !reads_saved && !whole_halves;
 }
 
+// The LCM kernel moves a tile through untilize and tilize about 5.9x faster than native's reader and writer finish an
+// output tile: about 0.85 us against 5 us per round (measured on Blackhole), rounded down for margin.
+constexpr uint64_t kLcmTileSpeedup = 5;
+
+bool lcm_beats_native(const LcmPlan& plan, uint32_t num_cores) {
+    const uint64_t out_tiles = static_cast<uint64_t>(plan.total_chunks) * plan.out_tiles;
+    return static_cast<uint64_t>(plan.in_tiles) * tt::div_up(plan.total_chunks, num_cores) <=
+           kLcmTileSpeedup * tt::div_up(out_tiles, num_cores);
+}
+
+// The LCM geometry for dtypes the compute engine round-trips unchanged, else nullopt.
+std::optional<LcmPlan> lcm_geometry(
+    const Tensor& input,
+    const ttnn::Shape& logical_output_shape,
+    const tt::tt_metal::TensorSpec& spec,
+    uint32_t num_cores) {
+    if (!lcm_bit_exact(input.dtype())) {
+        return std::nullopt;
+    }
+    return lcm_tile_geometry(input, logical_output_shape, output_aligned_page(input, spec), num_cores);
+}
+
 constexpr const char* kTileCapsViolation = "no TILE program takes these shapes within its size caps";
 constexpr const char* kTileStaticFitViolation = "no TILE program fits the static L1 budget even at its smallest plan";
 
@@ -417,17 +439,23 @@ const char* unsupported_reason(
         return geometry.fits_static() ? nullptr : kRmStaticFitViolation;
     }
     const auto& in_shape = input.logical_shape();
+    const auto spec = output_spec(input, logical_output_shape, output_mem_config);
     if (plan == nullptr) {
         const bool within_caps = plan_tile_rows(in_shape, logical_output_shape).has_value() ||
+                                 lcm_geometry(input, logical_output_shape, spec, num_cores).has_value() ||
                                  segment_map_within_caps(input, logical_output_shape, num_cores);
         return within_caps ? kTileStaticFitViolation : kTileCapsViolation;
     }
-    const uint64_t budget = static_l1_budget(input, output_spec(input, logical_output_shape, output_mem_config));
+    const uint64_t budget = static_l1_budget(input, spec);
     if (plan->tile_route == TileRoute::TileRows) {
         const uint32_t tile_bytes =
             input.tensor_spec().tile().get_tile_size(tt::tt_metal::datatype_to_dataformat_converter(input.dtype()));
         const auto fits = [&](const TileRowsChoice& c) { return tile_rows_l1_bytes(c, tile_bytes) <= budget; };
         if (fits(plan->tile_rows) || plan_tile_rows_fitting(in_shape, logical_output_shape, fits).has_value()) {
+            return nullptr;
+        }
+    } else if (plan->tile_route == TileRoute::Lcm) {
+        if (plan->lcm.has_value() && fit_lcm(*plan->lcm, budget).has_value()) {
             return nullptr;
         }
     } else if (fit_tile_mapped(input, logical_output_shape, num_cores, budget).has_value()) {
@@ -462,17 +490,40 @@ std::optional<LaunchPlan> plan_codegen(
         }
         return std::nullopt;
     }
-    if (auto rows = plan_tile_rows(input.logical_shape(), logical_output_shape)) {
-        LaunchPlan plan{.tile_route = TileRoute::TileRows, .tile_rows = std::move(*rows)};
-        if (supported_by_codegen(input, logical_output_shape, output_mem_config, sub_core_grids, plan)) {
-            return plan;
+    // Tile rows and LCM where they beat native, then tile rows, the segment map and LCM where they do not.
+    const uint32_t num_cores = reshape_core_grid(input, sub_core_grids).num_cores();
+    const auto supported = [&](const LaunchPlan& plan) {
+        return supported_by_codegen(input, logical_output_shape, output_mem_config, sub_core_grids, plan);
+    };
+    std::optional<LaunchPlan> rows;
+    if (auto tile_rows = plan_tile_rows(input.logical_shape(), logical_output_shape)) {
+        LaunchPlan plan{.tile_route = TileRoute::TileRows, .tile_rows = std::move(*tile_rows)};
+        if (supported(plan)) {
+            rows = std::move(plan);
         }
     }
+    if (rows.has_value() && !native_faster(rows->tile_rows, num_cores)) {
+        return rows;
+    }
+    std::optional<LaunchPlan> lcm;
+    const auto spec = output_spec(input, logical_output_shape, output_mem_config);
+    if (auto geometry = lcm_geometry(input, logical_output_shape, spec, num_cores)) {
+        LaunchPlan plan{.tile_route = TileRoute::Lcm, .lcm = std::move(geometry)};
+        if (supported(plan)) {
+            lcm = std::move(plan);
+        }
+    }
+    if (lcm.has_value() && lcm_beats_native(*lcm->lcm, num_cores)) {
+        return lcm;
+    }
+    if (rows.has_value()) {
+        return rows;
+    }
     LaunchPlan mapped{.tile_route = TileRoute::TileMapped};
-    if (supported_by_codegen(input, logical_output_shape, output_mem_config, sub_core_grids, mapped)) {
+    if (supported(mapped)) {
         return mapped;
     }
-    return std::nullopt;
+    return lcm;
 }
 
 bool segment_map_within_caps(const Tensor& input, const ttnn::Shape& logical_output_shape, uint32_t num_cores) {
@@ -511,10 +562,14 @@ bool is_demoted(
         return geometry.fit_stick(static_budget).has_value() &&
                native_rm_fits_l1(input, logical_output_shape, output_mem_config, static_budget);
     }
+    // Tile rows and LCM fall back to the segment map under live L1 pressure, so they beat native only while the
+    // segment map is within its size caps.
     if (plan.tile_route == TileRoute::TileRows) {
-        // Tile rows falls back to the segment map under live L1 pressure, so it beats native only while the segment
-        // map is within its size caps.
         return native_faster(plan.tile_rows, num_cores) ||
+               !segment_map_within_caps(input, logical_output_shape, num_cores);
+    }
+    if (plan.tile_route == TileRoute::Lcm) {
+        return !plan.lcm.has_value() || !lcm_beats_native(*plan.lcm, num_cores) ||
                !segment_map_within_caps(input, logical_output_shape, num_cores);
     }
     // The segment map loses to native only on a tile-row permutation: both widths whole tiles.
