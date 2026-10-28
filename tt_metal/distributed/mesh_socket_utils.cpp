@@ -602,8 +602,16 @@ DeviceAddr get_receiver_data_buffer_address(const MeshSocket& receiver_socket) {
         !config.socket_connection_config.empty(),
         "Per-core socket has no connections; cannot resolve receiver data buffer address.");
     const auto& receiver_core = config.socket_connection_config.front().receiver_core;
-    return experimental::per_core_allocation::get_per_core_address(
+    const auto address = experimental::per_core_allocation::get_per_core_address(
         data_buffer, receiver_core.device_coord, receiver_core.core_coord);
+    // Peers get one FIFO address, so every receiving device must share it.
+    for (const auto& connection : config.socket_connection_config) {
+        TT_FATAL(
+            experimental::per_core_allocation::get_per_core_address(
+                data_buffer, connection.receiver_core.device_coord, connection.receiver_core.core_coord) == address,
+            "Per-core socket FIFO address differs across receiving devices.");
+    }
+    return address;
 }
 
 SocketPeerDescriptor generate_local_endpoint_descriptor(
