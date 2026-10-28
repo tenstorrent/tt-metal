@@ -3766,7 +3766,8 @@ TEST(MeshGraphDescriptorTests, EdgePolicyRelaxedIsRejected) {
               edges { src: "s0" dst: "s1" policy: RELAXED }
             }
         )proto",
-        "pipeline 'relaxed_edge': edge s0 -> s1 policy is RELAXED; every edge is STRICT");
+        "pipeline 'relaxed_edge': edge s0 -> s1 has policy RELAXED, which is not supported yet; omit the policy or use "
+        "STRICT");
 }
 
 // An unknown field, a channel policy, and a comment are not pipeline-edge checks.

@@ -2982,9 +2982,11 @@ void MeshGraphDescriptor::validate_pipeline_descriptors(
                 error_messages.push_back(fmt::format("pipeline '{}': self-edge on '{}'", pipeline.name(), edge.src()));
             }
             // An omitted policy means STRICT. An explicit policy other than STRICT is rejected.
+            // TODO: Accept RELAXED once a pipeline edge may go over host MPI (plan P14).
             if (edge.has_policy() && edge.policy() != proto::Policy::STRICT) {
                 error_messages.push_back(fmt::format(
-                    "pipeline '{}': edge {} -> {} policy is {}; every edge is STRICT",
+                    "pipeline '{}': edge {} -> {} has policy {}, which is not supported yet; omit the policy or use "
+                    "STRICT",
                     pipeline.name(),
                     edge.src(),
                     edge.dst(),
