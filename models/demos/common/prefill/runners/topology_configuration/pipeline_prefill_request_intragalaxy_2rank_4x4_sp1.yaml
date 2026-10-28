@@ -21,6 +21,9 @@ global_env:
   PREFILL_SP: "4"
   PREFILL_TP: "4"
   PREFILL_SP_AXIS: "1"
+  # Dense TP dedup of the MLA KV cache (ring_mla split-KV) runs SP on mesh axis 0 only. The model
+  # manifests turn it on for the 8x4 stages, and tt-run's global_env wins over a manifest.
+  PREFILL_TP_SHARD_KV: "0"
   PREFILL_MAX_SEQ_LEN: "10240"
   PREFILL_H2D_SERVICE_ID: "ds_prefill"
   # PREFILL_PP_D2D_FIFO_BYTES stays at the runner's 256 B default. The receiver FIFO is L1 on the
