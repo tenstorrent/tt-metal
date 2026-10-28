@@ -682,6 +682,9 @@ def _run_chunked_prefill(
         pytest.skip("profile needs reference=None (func) -- accuracy is the cpu/trace path's job")
     if profile and not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("realtime profiler inactive (needs Blackhole, WORKER dispatch, fabric-tensix DM off)")
+    assert forward_hook is None or not (
+        profile or trace_time
+    ), "forward_hook runs the forward in place of profile / trace_time"
     sp_axis, tp_axis = 0, 1
     if topology is None:
         topology = per_axis_topology()

@@ -1,9 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Tunes a ring_joint SDPA floater schedule (ring_joint_floater_layout.hpp's kTunedFloaterSchedules) for one Kimi
-MLA shape on the Galaxy 8x4: a coordinate search over the schedule, set per candidate through
-SDPAProgramConfig.floater_schedule (ttMLA.sdpa_floater_schedule), without rebuilding.
+"""Tunes the floater schedule of a ring_joint SDPA layout (ring_joint_floater_layout.hpp's kFloaterLayoutSchedules) on
+one Kimi MLA shape on the Galaxy 8x4: a coordinate search over the schedule, set per candidate through
+SDPAProgramConfig.floater_schedule (ttMLA.sdpa_floater_schedule), without rebuilding. Whether a shape runs floaters
+at all is the op's floater_compute_to_transfer; tune on a shape that does (5k chunks at HiFi2 and above).
 
 Each candidate is the fused ring gather + SDPA program of one MLA forward (realtime profiler, the slowest chip, median
 of 3 after a warm-up), at a short and a long cached prefix, scored as the mean of its time over the no-floater time at
@@ -11,8 +12,9 @@ each prefix. The MLA layers, caches and inputs are built once; a candidate costs
 
 Every measurement is appended to generated/floater_tune/<variant>_c<chunk>.jsonl (one JSON object per line) before
 the next starts, and a rerun skips what is there, so a crash or a hung schedule costs one candidate: a candidate that
-started and never finished is not tried again. The result is printed as a kTunedFloaterSchedules entry, or as "no
-floaters" when the best schedule does not beat none by MIN_GAIN.
+started and never finished is not tried again. Only an error from the forward marks a schedule invalid; a profiler
+error stops the run. The result is printed as a kFloaterLayoutSchedules entry, or as "no floaters" when the best
+schedule does not beat none by MIN_GAIN.
 
     scripts/run_safe_pytest.sh models/demos/deepseek_v3_d_p/tests/perf/test_tune_ring_joint_floaters.py \\
         -m floater_tune -k "k3 and c5k" -s
@@ -30,7 +32,7 @@ from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_p
 from models.demos.deepseek_v3_d_p.tests.sparse_mla.sparse_mla_plugin import is_marker_explicitly_selected
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
-from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program
+from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program, require_realtime_profiler
 
 SDPA_LABEL = "experimental/ccl/ring_attention_all_gather_async + transformer/sdpa"
 RING_SIZE = 8
@@ -44,10 +46,11 @@ NOISE = 0.003
 SAMPLES = 3
 LOG_DIR = Path("generated/floater_tune")
 
-# Kimi's tuned schedules (iter0, iter1, frac0, frac1, donate_tail, merge0..merge4), the search's starting points.
+# The search's starting points: kFloaterLayoutSchedules' entries (iter0, iter1, frac0, frac1, donate_tail,
+# merge0..merge4) for Kimi K3 (24 heads x 2 bands) and K2.7 (16 x 3). Keep them in step with the table.
 SEEDS = {
-    "kimi_k3": (2, 4, 1075, 2765, 0, 3, 3, 3, 3, 3),
-    "kimi_k2_7": (1, 3, 1843, 1536, 1, 3, 4, 5, 6, 6),
+    "kimi_k3": (1, 4, 947, 2765, 0, 4, 4, 4, 4, 4),
+    "kimi_k2_7": (1, 3, 1843, 1664, 1, 2, 3, 4, 5, 5),
 }
 
 pytestmark = pytest.mark.floater_tune
@@ -88,8 +91,12 @@ def _neighbours(schedule, frac_step):
 def _sdpa_ns(mesh_device, forward):
     """Device time of the fused gather + SDPA program in one forward, on its slowest chip. Records of an earlier
     dispatch can arrive late; runtime ids grow, so the newest such program is this forward's."""
-    tt_out, records = profile_realtime_program(mesh_device, forward, collect_all=True)
-    ttnn.deallocate(tt_out)
+    outputs = []
+    try:
+        _, records = profile_realtime_program(mesh_device, lambda: outputs.append(forward()), collect_all=True)
+    finally:
+        for tt_out in outputs:
+            ttnn.deallocate(tt_out)
     per_program = {}
     for record in records:
         if record["runtime_id"] and T._op_label(record["kernel_sources"]) == SDPA_LABEL:
@@ -108,8 +115,14 @@ class _Log:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self.results, started = {}, set()
         if self.path.exists():
-            for line in self.path.read_text().splitlines():
-                entry = json.loads(line)
+            lines = self.path.read_text().splitlines()
+            for n, line in enumerate(lines):
+                try:
+                    entry = json.loads(line)
+                except json.JSONDecodeError:
+                    # A record cut short by a crash mid-append: the last line only.
+                    assert n == len(lines) - 1, f"{self.path}:{n + 1} is not JSON"
+                    continue
                 if entry["key"] != key:
                     continue
                 if entry["status"] == "started":
@@ -186,13 +199,14 @@ def test_tune_ring_joint_floaters(request, mesh_device, device_params, variant, 
                 ns = []
                 for forward, mla in forwards:
                     mla.sdpa_floater_schedule = [] if schedule is None else list(schedule)
-                    ttnn.deallocate(forward())  # compile and warm up
+                    try:
+                        ttnn.deallocate(forward())  # compile and warm up
+                    except RuntimeError as error:  # a schedule the op refuses
+                        reason = str(error).splitlines()[0][:300]
+                        log.write({"schedule": text, "status": "invalid", "reason": reason})
+                        logger.info(f"floater tune: {text} invalid: {reason}")
+                        return None
                     ns.append(sorted(_sdpa_ns(mesh_device, forward) for _ in range(SAMPLES))[SAMPLES // 2])
-            except RuntimeError as error:  # a schedule the layout rejects
-                reason = str(error).splitlines()[0][:300]
-                log.write({"schedule": text, "status": "invalid", "reason": reason})
-                logger.info(f"floater tune: {text} invalid: {reason}")
-                return None
             finally:
                 # Each candidate is its own program; drop them so the cache does not grow with the search.
                 mesh_device.clear_program_cache()
@@ -200,6 +214,7 @@ def test_tune_ring_joint_floaters(request, mesh_device, device_params, variant, 
             logger.info(f"floater tune: {text}: " + ", ".join(f"{n / 1e6:.3f} ms" for n in ns))
             return ns
 
+        require_realtime_profiler("floater tuning")
         off = measure(None)
         assert off is not None, "no-floater baseline failed"
 
@@ -233,7 +248,7 @@ def test_tune_ring_joint_floaters(request, mesh_device, device_params, variant, 
     else:
         i0, i1, f0, f1, tail, *merges = best
         entry = (
-            f"{{{{{heads}, {bands}, {q_chunk}, {k_chunk}}}, {{{{{i0}, {i1}}}, {{{f0}, {f1}}}, "
+            f"{{{{{heads}, {bands}}}, {{{{{i0}, {i1}}}, {{{f0}, {f1}}}, "
             f"{'true' if tail else 'false'}, {{{', '.join(map(str, merges))}}}}}}},"
         )
         logger.info(f"floater tune RESULT {key}: score {best_score:.4f} ({per_prefix})\n    {entry}")
