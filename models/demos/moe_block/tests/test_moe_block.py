@@ -37,7 +37,9 @@ from models.demos.moe_block.moe_block import (
 # (test-only: MOE_MESH "1x4" with MOE_FABRIC "torus_x" - one 2 x 2 square of the LoudBox as a TP ring of 4, the
 # p150_x4_ring_1x4 descriptor and that square's TT_VISIBLE_DEVICES; default the 2 x 4 lines)
 R, C = (int(v) for v in os.environ.get("MOE_MESH", "2x4").split("x"))
-_FABRIC = {"torus_x": "FABRIC_2D_TORUS_X"}.get(os.environ.get("MOE_FABRIC", ""))
+_FABRIC = {"torus_x": "FABRIC_2D_TORUS_X", "torus_xy": "FABRIC_2D_TORUS_XY"}.get(  # (torus_xy: the Galaxy 8x4)
+    os.environ.get("MOE_FABRIC", "torus_xy" if (R, C) == (8, 4) else "")  # (the Galaxy: both axes rings by default)
+)
 
 
 def _fab(**kw):

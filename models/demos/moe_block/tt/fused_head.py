@@ -36,6 +36,7 @@ class RouterSpec:
     # (a row tile's experts over two router cores - the fin and the top-K over half the tiles each, merged on the
     # first: router_stream's split; the logits on the engine, the second cores in the column left of the movers)
     split: bool = False
+    score: str = "sigmoid"  # (the scores: "sigmoid", or "sqrtsoftplus" - DeepSeek-V4's sqrt(softplus), fp32)
 
 
 @dataclass(frozen=True)
@@ -401,6 +402,7 @@ class HeadSE3:
                 ordered=router.ordered,
                 fold=router.fold,
                 split=router.split,
+                score=router.score,
                 arena=(self.eng.arena, self.eng.base, self.eng.arena_bytes),
                 words=int(self.mbox.buffer_address()) + 4 * self.lw_off,
                 port_words=self.port_words,
@@ -569,14 +571,16 @@ class HeadSE3:
         """The cached programs' arena-backed CBs (the engine's, the router cores') onto the arena tensor taken again at
         the same address (a CB binds its buffer: a freed one is no use) - not a rebuild of every chip's program."""
         tmpl = ttnn.cb_descriptor_from_sharded_tensor(0, self.eng.arena)
+        dd = self.eng.arena_delta - self.state.get("delta", 0)  # (onto another tensor: the same L1, offsets shift)
         md = ttnn.MeshProgramDescriptor()
         for (r, c), prog, on in self.state["progs"]:
             cbs = list(prog.cbs)
             for i in on:
                 cbs[i].set_buffer_from_cb(tmpl)
+                cbs[i].address_offset = cbs[i].address_offset + dd
             prog.cbs = cbs
             md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = prog
-        self.state.update(desc=md, arena=self.eng.arena)
+        self.state.update(desc=md, arena=self.eng.arena, delta=self.eng.arena_delta)
 
     def settle_arena(self):
         """Take the arena once more and give it back, filling any free L1 right above its range (see
@@ -584,8 +588,15 @@ class HeadSE3:
         if not self.eng.arena.is_allocated():
             self.eng.realloc_arena(settle=True)
             if self.router is not None:
-                self.router.arena = self.eng.arena
+                self.router.arena, self.router.arena_delta = self.eng.arena, 0
         self.free_arena()
+
+    def use_arena(self, arena, nbytes):
+        """This call on the caller's L1 tensor (nbytes a core) holding the engine's arena range (the MoE block's one
+        arena a forward, the exchange's): no allocation of its own; the caller frees it (not free_arena)."""
+        d = self.eng.use_arena(arena, nbytes)
+        if self.router is not None:
+            self.router.arena, self.router.arena_delta = arena, d
 
     def free_arena(self):
         """Give the arena's L1 back between calls (a caller sharing the L1 left with another op): run() takes it
@@ -609,7 +620,7 @@ class HeadSE3:
         if self.rs_mode == "fused" and not self.eng.arena.is_allocated():
             self.eng.realloc_arena()
             if self.router is not None:  # (its CBs are carved from the arena too)
-                self.router.arena = self.eng.arena
+                self.router.arena, self.router.arena_delta = self.eng.arena, 0
         if self.rs_mode == "fused":
             G = self.plan.G
             self.outputs = {}
@@ -795,16 +806,18 @@ class HeadSE3:
                 prog.kernels = k0 + k1
                 r, c = coord
                 base = self.eng.base  # (which CBs the arena backs: _rebind's - a freed buffer reports no address)
+                ab = int(self.eng.arena.buffer_address())  # (a caller's arena: at base - arena_delta)
                 on = [
                     i
                     for i, cb in enumerate(prog.cbs)
-                    if cb.has_buffer() and base in (cb.buffer_address(), cb.buffer_address() - cb.address_offset)
+                    if cb.has_buffer()
+                    and (base in (cb.buffer_address(), cb.buffer_address() - cb.address_offset) or cb.buffer_address() == ab)
                 ]
                 # (its structural hash once: a cached descriptor is not re-hashed - kernel sources and all - each call)
                 prog.custom_program_hash = ttnn.compute_program_descriptor_hash(prog)
                 md[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = prog
                 progs.append((coord, prog, on))
-            self.state.update(key=key, desc=md, progs=progs, arena=self.eng.arena)
+            self.state.update(key=key, desc=md, progs=progs, arena=self.eng.arena, delta=self.eng.arena_delta)
         self.state.update(pp=ttnn.bringup.prepare_program(self.state["desc"], io), skey=skey)
         ttnn.bringup.run_prepared(self.state["pp"], io)
         return y

@@ -197,6 +197,10 @@ _COMPUTE = r"""
 #include "api/compute/topk.h"
 #include "api/compute/copy_dest_values.h"
 #include "api/compute/eltwise_binary_sfpu.h"
+#ifdef RT_SQRTSOFTPLUS
+#include "api/compute/eltwise_unary/softplus.h"
+#include "api/compute/eltwise_unary/sqrt.h"
+#endif
 #include "api/debug/kernel_profiler.hpp"
 constexpr uint32_t KT = get_compile_time_arg_val(0), ET = get_compile_time_arg_val(1), G = get_compile_time_arg_val(2);
 constexpr uint32_t KBR = get_compile_time_arg_val(3), K = get_compile_time_arg_val(4);
@@ -333,9 +337,16 @@ void kernel_main() {
                 add_binary_tile_init();
                 add_binary_tile(0, 2, 0);
             }
-            {  // the owner: scores = sigmoid(logits), biased = scores + bias (bias^T: per row)
+            {  // the owner: scores = sigmoid(logits) (RT_SQRTSOFTPLUS: sqrt(softplus)), biased = scores + bias (bias^T: per row)
+#ifdef RT_SQRTSOFTPLUS
+                softplus_tile_init();  // (INP_FLOAT32: the fp32 polynomial, as stock ttnn.softplus on fp32; beta 1, threshold 20)
+                softplus_tile(0, 0x3F800000u, 0x3F800000u, 0x41A00000u);
+                sqrt_tile_init();
+                sqrt_tile(0);
+#else
                 sigmoid_tile_init();
                 sigmoid_tile(0);
+#endif
                 reconfig_data_format_srca(ARRF, BIAS);
                 copy_init(BIAS);
                 copy_tile(BIAS, RT_HB + i, 2);
@@ -362,7 +373,9 @@ void kernel_main() {
         // packed until the end
         DeviceZoneScopedN("SE-RTOPK");
         cb_wait_front(SC, ET);
-        constexpr uint32_t LK = K == 8 ? 3 : K == 16 ? 4 : K == 32 ? 5 : 2, NM = 6 - LK;
+        // (the network's run KS: K's power of two, at least 4 - K 6 sorts the top 8, the rows take its first K)
+        constexpr uint32_t KS = K <= 4 ? 4 : K <= 8 ? 8 : K <= 16 ? 16 : 32;
+        constexpr uint32_t LK = KS == 8 ? 3 : KS == 16 ? 4 : KS == 32 ? 5 : 2, NM = 6 - LK;
         constexpr auto TIE = ckernel::TopkTieOrder::Unset;
         tile_regs_acquire();
         reconfig_data_format_srca(SC);
@@ -380,19 +393,19 @@ void kernel_main() {
             }
             ckernel::topk_local_sort<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, LK - 1);
             for (uint32_t m = 0; m + 1 < NM; ++m) {
-                ckernel::topk_merge<false, false, DST_ACCUM_MODE, true, false, TIE>(0, m, K);
-                ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, m, K, LK, false);
+                ckernel::topk_merge<false, false, DST_ACCUM_MODE, true, false, TIE>(0, m, KS);
+                ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, m, KS, LK, false);
             }
             if (!fold) {  // the top K of the 64 a column on top: tile 0's run, descending
-                ckernel::topk_merge<false, false, DST_ACCUM_MODE, true, false, TIE>(0, NM - 1, K);
-                ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, NM - 1, K, LK, true);
+                ckernel::topk_merge<false, false, DST_ACCUM_MODE, true, false, TIE>(0, NM - 1, KS);
+                ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, NM - 1, KS, LK, true);
             } else {  // the pair's top K into tile 1's run, ascending; the running top K (descending) into tile 0 ->
                       // one bitonic merge (max on top) + rebuild of K
-                ckernel::topk_merge<true, false, DST_ACCUM_MODE, true, false, TIE>(0, NM - 1, K);
-                ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, NM - 1, K, LK, false);
+                ckernel::topk_merge<true, false, DST_ACCUM_MODE, true, false, TIE>(0, NM - 1, KS);
+                ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, NM - 1, KS, LK, false);
                 copy_dest_values<DataFormat::Int32>(2, 0);
-                ckernel::topk_merge<false, false, DST_ACCUM_MODE, true, false, TIE>(0, NM - 1, K);
-                ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, NM - 1, K, LK, true);
+                ckernel::topk_merge<false, false, DST_ACCUM_MODE, true, false, TIE>(0, NM - 1, KS);
+                ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, NM - 1, KS, LK, true);
             }
             if (t + 2 < ET) copy_dest_values<DataFormat::Int32>(0, 2);  // (parked in DEST tile 2: fused keys leave the id tiles unused)
         }
@@ -408,11 +421,11 @@ void kernel_main() {
             ckernel::topk_tile_init<true, false>();
             ckernel::topk_local_sort<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, LK - 1);
             for (uint32_t m = 0; m + 1 < NM; ++m) {
-                ckernel::topk_merge<false, false, DST_ACCUM_MODE, true, false, TIE>(0, m, K);
-                ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, m, K, LK, false);
+                ckernel::topk_merge<false, false, DST_ACCUM_MODE, true, false, TIE>(0, m, KS);
+                ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, m, KS, LK, false);
             }
-            ckernel::topk_merge<false, false, DST_ACCUM_MODE, true, false, TIE>(0, NM - 1, K);
-            ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, NM - 1, K, LK, true);
+            ckernel::topk_merge<false, false, DST_ACCUM_MODE, true, false, TIE>(0, NM - 1, KS);
+            ckernel::topk_rebuild<false, DST_ACCUM_MODE, true, false, TIE>(0, 0, NM - 1, KS, LK, true);
             cb_pop_front(RT_PART_CB, 1);
         }
 #endif
@@ -581,7 +594,7 @@ inline void make(uint32_t bv, uint32_t sv, uint32_t o_l1, uint32_t scale_bits, u
                     }
 #endif
             }
-            if (w[q] >> 31) w[q] = 0;  // (sigmoid scores are >= 0)
+            if (w[q] >> 31) w[q] = 0;  // (sigmoid and sqrt(softplus) scores are >= 0)
             const int32_t e = (w[q] >> 23) & 0xFF;
             if (e > emax) emax = e;
         }
@@ -848,11 +861,15 @@ class RouterStream:
         ordered=True,
         fold=1,
         split=False,
+        score="sigmoid",
     ):
         """arena: (tensor, base, bytes) - the engine's arena, also carved on these cores and the ports (lockstep L1);
         words: the port words' address (a zeroed L1 tensor on the ports, 16 B a router core). ordered: the fin sums the
         sources' partials in a fixed order, the predicted landing order (_arrival_order: bit-identical runs), else in
-        landing order (A/B only: the logits' last bits, a near tie's pick and the routing weights vary between runs)."""
+        landing order (A/B only: the logits' last bits, a near tie's pick and the routing weights vary between runs).
+        score: the scores of the logits, "sigmoid" or "sqrtsoftplus" (DeepSeek-V4: sqrt(softplus), fp32 softplus)."""
+        assert score in ("sigmoid", "sqrtsoftplus"), f"router score {score}"
+        self.score = score
         self.mesh, self.xg = mesh_device, xg
         self.ordered = ordered
         self.fold = fold
@@ -1148,7 +1165,7 @@ class RouterStream:
 
         def cb(i, key, size, dt, page):
             dd = ttnn.cb_descriptor_from_sharded_tensor(
-                i, self.arena, address_offset=off[key], total_size=size, core_ranges=self.crs
+                i, self.arena, address_offset=off[key] + getattr(self, "arena_delta", 0), total_size=size, core_ranges=self.crs
             )
             dd.format_descriptors = [ttnn.CBFormatDescriptor(i, dt, page)]
             cbs.append(dd)
@@ -1326,6 +1343,7 @@ class RouterStream:
                 ttnn.KernelDescriptor(
                     kernel_source=eng
                     + sd
+                    + ("#define RT_SQRTSOFTPLUS\n#define INP_FLOAT32 1\n" if self.score == "sqrtsoftplus" else "")
                     + _COMPUTE.replace("#include <cstdint>\n", "#include <cstdint>\n" + _ROWS + hrt_c, 1),
                     source_type=st,
                     core_ranges=hcrs,

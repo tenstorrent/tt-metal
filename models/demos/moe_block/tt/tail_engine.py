@@ -1211,8 +1211,11 @@ class TailEngine:
         # only the CBs on the arena (taken again at its base); rebuilt when any address moves - the runtime args hold
         # addresses inside y / se / out (rows at offsets), which exact-address patching cannot follow
         pkey = (base,) + tuple(int(t.buffer_address()) for t in (y, w, se, out))
-        if self.state.get("pp") is not None and self.state.get("pkey") == pkey:
-            ttnn.bringup.run_prepared(self.state["pp"], io)
+        # (one prepared program per address set: several layers on one tail - each its own latent up / norm, w - would
+        # otherwise rebuild all the chips' programs at every layer switch, ~300 ms a call in K3's 24-layer stack)
+        hit = self.state.setdefault("pps", {}).get(pkey)
+        if hit is not None:
+            ttnn.bringup.run_prepared(hit, io)
             if not self.keep_arena:
                 self.free_arena()
             return out
@@ -1229,6 +1232,10 @@ class TailEngine:
         else:
             self._rebind()
         self.state.update(pp=ttnn.bringup.prepare_program(self.state["md"], io), pkey=pkey)
+        pps = self.state["pps"]
+        if len(pps) >= 64:  # (bounded: a stream of new addresses only cycles it)
+            pps.pop(next(iter(pps)))
+        pps[pkey] = self.state["pp"]
         ttnn.bringup.run_prepared(self.state["pp"], io)
         if not self.keep_arena:  # (keep_arena: a test reads it back)
             self.free_arena()

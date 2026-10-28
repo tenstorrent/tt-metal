@@ -27,8 +27,11 @@ all_to_all_async_generic in one program, the add and tilize under the sends.
            2D unicast injected toward the other neighbour is not delivered - the first ring run hung on it). A ready
            goes the fabric's way back to its sender: on a tie that need not be the side the data arrives on."""
 
+import os
+
 import torch
 from ttnn.bringup.combine_rf import fabric_all_gather_py as fag
+from ttnn.bringup.prepared_program import generic_op as prepared_generic_op
 
 import ttnn
 from models.demos.moe_block.tt.se_engine3 import _ring_pages
@@ -620,5 +623,11 @@ class TailA2A:
             if len(self.cache) >= 16:
                 self.cache.pop(next(iter(self.cache)))
             self.cache[key] = md
-        ttnn.generic_op([y_rm, out, self.z, self.zrw] + ([se] if se is not None else []), md)
+        io = [y_rm, out, self.z, self.zrw] + ([se] if se is not None else [])
+        if os.environ.get("MOE_TAIL_GENERIC") == "1":  # (A/B: the descriptor path, re-hashed and re-applied each call)
+            ttnn.generic_op(io, md)
+        else:
+            # (prepared dispatch: md is kept per address set above, so each call patches nothing; its runtime args hold
+            # only these tensors' base addresses, its CBs no tensor)
+            prepared_generic_op(io, md)
         return out

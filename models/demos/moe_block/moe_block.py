@@ -13,6 +13,7 @@ block's routed-only path. Not built yet: the weight cache, padded chunks, the ex
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -324,7 +325,9 @@ class MoELayer:
         self.experts = experts
         self.parent = parent  # (the layer at another chunk this one shares its weights with)
         self._ops = None
+        self._latent = None
         self.heads = {}  # id(FusedHead) -> that head's layout of this layer's weights
+        self.tails = {}  # id(FusedTail) -> that tail's upload of this layer's latent up / norm (a latent model)
 
     @staticmethod
     def build(mesh, g: Geometry, model: MoEModel, weights, dtypes: MoEDtypes = MoEDtypes(), routed_op=None, drisc=True):
@@ -355,6 +358,13 @@ class MoELayer:
                     sh = SharedExpert(self.mesh, self.g, self.model, w.shared, self.dtypes)
                 self._ops = (Router(self.mesh, self.g, self.model, w.router, self.dtypes), sh)
         return self._ops
+
+    def latent_ops(self):
+        """LatentProjections (the ops path's latent down / norm / up): this layer's, uploaded at the first use."""
+        if self._latent is None:
+            w = self.host()
+            self._latent = LatentProjections(self.mesh, self.g, self.model, w.latent, self.dtypes)
+        return self._latent
 
     def at(self, mesh, g: Geometry, model: MoEModel, drisc=True):
         """This layer at another chunk (geometry): its weights shared - the router's top-k and the flat experts' plan
@@ -424,6 +434,10 @@ class MoEBlock(LightweightModule):
         fits = FusedHead.fits(g, model, dtypes)
         assert options.head != "fused" or fits is True, f"the fused head: {fits}"
         self.head_mode = "fused" if options.head == "fused" or (options.head == "auto" and fits is True) else "ops"
+        # (the fused head plans the combine itself - routing_a2a's planner writes no order table: combine_snap instead)
+        assert not (
+            getattr(options, "combine_deterministic", False) and self.head_mode == "fused"  # (not an option on llk)
+        ), "combine_deterministic: the ops head's planner (the fused head's has no fixed order; combine_snap)"
         assert (
             not options.experts_during_dispatch or self.head_mode == "fused"
         ), "experts_during_dispatch: the fused head (its dispatch prep hands the exchange the dispatch buffer)"
@@ -438,8 +452,11 @@ class MoEBlock(LightweightModule):
                 self.shared = SharedExpert(mesh_device, g, model, weights.shared, dtypes)
         self.latent = None
         if model.latent_dim is not None:  # (the fused head does the latent down: only the up is used then)
-            assert layer is None, "a latent model's MoELayer: not built yet"
-            self.latent = LatentProjections(mesh_device, g, model, weights.latent, dtypes)
+            # (a MoELayer: its own latent pieces - use() swaps them, and the fused tail's latent up / norm, per layer)
+            if layer is not None:
+                self.latent = layer.latent_ops()
+            else:
+                self.latent = LatentProjections(mesh_device, g, model, weights.latent, dtypes)
         if layer is not None:
             self.experts = layer.experts
         else:
@@ -477,7 +494,11 @@ class MoEBlock(LightweightModule):
         self.tail = None
         if options.tail == "fused" or (options.tail == "auto" and tfits is True):
             # (before the tail's warm-up: its persistent words go with the tail's other one-time L1)
-            self.tail = FusedTail(mesh_device, g, model, weights, self._tp_topology(), dtypes)
+            self.tail = FusedTail(
+                mesh_device, g, model, layer.host() if layer is not None else weights, self._tp_topology(), dtypes
+            )
+            if layer is not None and self.tail.a2a is None:  # (a latent model: the layer's latent up / norm)
+                layer.tails[id(self.tail)] = self.tail.w
         if self.head_mode == "fused":
             self._warm_up_tail()
             hole = _l1_hole(mesh_device, FusedHead.HOLE)
@@ -504,7 +525,7 @@ class MoEBlock(LightweightModule):
                 # head; the partial head's buffers go with it)
                 if options.head == "fused":
                     raise
-                fits = "build: " + " ".join(str(e).split())[:160]
+                fits = "build: " + " ".join(str(e).split())[:400]
                 from loguru import logger
 
                 logger.warning(f"MoEBlock: the fused head does not build here ({fits}); the ops head")
@@ -540,8 +561,10 @@ class MoEBlock(LightweightModule):
             f"{g.tokens_per_chip} owned a chip), {g.experts_per_chip} experts a chip, routed width {model.routed_width}; "
             f"{self.summary}; flat layout {self.experts.layout_fields}; dtypes {dtypes}; options {options}"
         )
-        if self.fused is not None:  # (the fused tail frees nothing of the head's: its outputs are reused each forward)
-            self.fused.head.persist = self.tail is not None or owners
+        # (the fused head's outputs reused each forward, either tail: freed, they come back at other addresses between a
+        # model's layers and the prepared program is rebuilt every call, ~90 ms of host)
+        if self.fused is not None:
+            self.fused.head.persist = True
 
     def _mark(self, name):
         if self.stage_hook is not None:
@@ -567,6 +590,13 @@ class MoEBlock(LightweightModule):
         else:
             self.router, self.shared = layer.ops()
         self.experts = self.exchange.experts = layer.experts
+        if self.model.latent_dim is not None:  # (a latent model: the layer's latent down / norm / up, the tail's too)
+            self.latent = layer.latent_ops()
+            if self.tail is not None and self.tail.a2a is None:
+                tw = layer.tails.get(id(self.tail))
+                if tw is None:
+                    tw = layer.tails[id(self.tail)] = self.tail.layer_weights(layer.host())
+                self.tail.w = tw
         self.layer = layer
 
     def forward(self, x: ttnn.Tensor, chunk: ChunkSpan | None = None, layer: MoELayer | None = None) -> ttnn.Tensor:
@@ -584,13 +614,16 @@ class MoEBlock(LightweightModule):
         if layer is not None:
             self.use(layer)
         if self.fused is not None:
+            # (one L1 allocation a forward: the exchange's arena, the head's range inside it - the head runs there first)
+            eng = self.fused.head.eng
+            arena = self.exchange.take_arena(inside=(eng.base, eng.arena_bytes))
             if self.options.residual == "owners":  # (the fused head reads the width split [S/SP, H/TP])
                 xs = self._tp_a2a(x, cat_dim=2, split_dim=3)
                 self._mark("x_a2a")
-                se, out = self.fused(xs)
+                se, out = self.fused(xs, arena)
                 ttnn.deallocate(xs)
             else:
-                se, out = self.fused(x)
+                se, out = self.fused(x, arena)
             self._mark("head")
             if self.keep_taps == "device":
                 self._taps = dict(rows_dev=out.pop("rows"))
@@ -809,8 +842,7 @@ class MoEBlock(LightweightModule):
                 return y_own
             y = ttnn.add(y_own, se)
             ttnn.deallocate(y_own)
-            if not (self.fused is not None and getattr(self.fused.head, "persist", False)):  # (the head's, reused)
-                ttnn.deallocate(se)
+            self._free_se(se)
             mark("add")
             return y
         if self.latent is not None:
@@ -823,20 +855,24 @@ class MoEBlock(LightweightModule):
             if se is not None:
                 y = ttnn.add(out, se)
                 ttnn.deallocate(out)
-                ttnn.deallocate(se)
+                self._free_se(se)
                 out = y
                 mark("add")
             return out
         if se is not None:  # (the shared expert's owner rows, added before the all-to-all carries both)
             y = ttnn.add(y_own, se)
             ttnn.deallocate(y_own)
-            ttnn.deallocate(se)
+            self._free_se(se)
             y_own = y
             mark("add")
         out = self._tp_a2a(y_own, cat_dim=2, split_dim=3)  # back to the width split [S/SP, H/TP]
         ttnn.deallocate(y_own)
         mark("tail_a2a")
         return out
+
+    def _free_se(self, se):
+        if not (self.fused is not None and getattr(self.fused.head, "persist", False)):  # (the head's, reused)
+            ttnn.deallocate(se)
 
     # ---- TP collectives (cluster axis 1: a line, or a ring on a torus that wraps it) ----
     def _tp_topology(self):
@@ -1055,15 +1091,16 @@ class FusedHead:
         if act.kind not in ("silu", "situ", "clamped_silu"):
             return f"shared activation {act.kind}"
         rc = model.router
-        if rc.score_func != "sigmoid" or not rc.normalize_topk or rc.expert_groups != 1:
-            return "router: sigmoid scores, normalized top-K, no expert groups"
+        if rc.score_func not in ("sigmoid", "sqrtsoftplus") or not rc.normalize_topk or rc.expert_groups != 1:
+            return "router: sigmoid / sqrtsoftplus scores, normalized top-K, no expert groups"
         # (lines or rings on either axis - the gather's / RS's / routing exchange's ring schedules; 2 links: the
         # exchange's ports and the tail's K halves are a link each)
         if g.links != 2:
             return f"{g.links} links (built for 2)"
-        hifi = (ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.HiFi3, ttnn.MathFidelity.HiFi4)
-        if dtypes.shared_weights != ttnn.bfloat8_b or dtypes.shared_fidelity not in hifi:
-            return "shared expert: bf8 weights at HiFi2 / 3 / 4"
+        # (LoFi: the engine's own fidelity - DeepSeek-V4.1's choice; the router's logits stay HiFi3 either way)
+        fids = (ttnn.MathFidelity.LoFi, ttnn.MathFidelity.HiFi2, ttnn.MathFidelity.HiFi3, ttnn.MathFidelity.HiFi4)
+        if dtypes.shared_weights != ttnn.bfloat8_b or dtypes.shared_fidelity not in fids:
+            return "shared expert: bf8 weights at LoFi / HiFi2 / 3 / 4"
         return True
 
     def __init__(
@@ -1118,6 +1155,7 @@ class FusedHead:
                 ordered=deterministic,
                 split=split,
                 on_engine={"auto": None, "engine": True, "router_cores": False}[router],
+                score=model.router.score_func,
             ),
             latent=latent,
             # (the planner's row capacity: the head's (2 S K + 32 EPC: the router cores' L1), within the exchange's
@@ -1176,14 +1214,18 @@ class FusedHead:
         self.head.routing.outs = {k: blk.planner.outs[k] for k in ("counts", "regions", "token_index", "table", "plan")}
         self.head.state["key"] = None  # (the programs take the new tensors)
 
-    def __call__(self, x):
+    def __call__(self, x, arena=None):
         """x [1, 1, S/SP, H/TP] -> (the shared expert's output: [S/N, H] the owners' rows, or (latent) [S/SP, H/TP];
-        the outputs: rows, xbuf, route (and latent)). The arena's L1 given back after."""
+        the outputs: rows, xbuf, route (and latent)). The arena's L1 given back after. arena: (an L1 tensor holding the
+        head's arena range, its bytes a core) - the block's one arena a forward: run in it, the caller frees it."""
         if int(x.buffer_address()) != int(self.x.buffer_address()):  # (MoEBlock.input_buffer(): read in place)
             ttnn.copy(x, self.x)
+        if arena is not None:
+            self.head.use_arena(*arena)
         se = self.head.run(self.x, self.w)
         out = dict(self.head.outputs)
-        self.head.free_arena()
+        if arena is None:
+            self.head.free_arena()
         return se, out
 
 
@@ -1230,11 +1272,18 @@ class FusedTail:
             num_links=g.links,
             fidelity=dtypes.tail_fidelity,
         )
+        self.g, self.model = g, model
+        self.w = self.layer_weights(w)
+
+    def layer_weights(self, w: MoEWeights):
+        """A layer's latent up (split by columns over TP) and norm, uploaded in the engine's layout."""
+        g, model = self.g, self.model
+        H, Hr, tp = model.emb_dim, model.latent_dim, g.tp
         up = w.latent["up"].float()  # [H, Hr]
         Ho = H // tp
         assert model.latent_norm, "the fused tail rms-normalizes the latent (FusedTail.fits)"
         gn = w.latent["norm"].float()
-        self.w = self.eng.upload([up.T[:, (d % tp) * Ho : (d % tp + 1) * Ho].contiguous() for d in range(g.chips)], gn)
+        return self.eng.upload([up.T[:, (d % tp) * Ho : (d % tp + 1) * Ho].contiguous() for d in range(g.chips)], gn)
 
     def __call__(self, y_rm, se):
         """y_rm: the combine's row-major output [1, 1, S/N, Hr]; se [1, 1, S/SP, H/TP] TILE (no latent: [1, 1, S/N, H]
@@ -1534,13 +1583,32 @@ class TokenExchange:
         x2 = ttnn.reshape(own, [self.g.tokens_per_chip, self.model.routed_width])
         return self.block.routed(x2, rows, None, self.experts.op, hook=hook, tilize=tilize)
 
+    def take_arena(self, inside=None):
+        """The forward's one L1 allocation (MOE_ONE_ARENA=0 turns it off): the exchange's arena taken ahead for the fused
+        head to run in first -> (tensor, bytes a core), or None - the in-program dispatch (its own), or the head's arena
+        range inside=(base, bytes) not within the exchange's (a head larger than the exchange's arena: K2.7, K3)."""
+        if self.dispatch_in_program or os.environ.get("MOE_ONE_ARENA", "1") == "0":
+            return None
+        a, n = self.block.arena_addr, self.block.arena_bytes
+        if inside is not None and not (a <= inside[0] and inside[0] + inside[1] <= a + n):
+            if not getattr(self, "_two_logged", False):
+                from loguru import logger
+
+                logger.info(f"MoEBlock: two arenas a forward (the head's [{inside[0]}, +{inside[1]}) not in [{a}, +{n})")
+                self._two_logged = True
+            return None
+        if inside is not None and not getattr(self, "_one_logged", False):
+            from loguru import logger
+
+            logger.info(f"MoEBlock: one arena a forward (the head's [{inside[0]}, +{inside[1]}) in [{a}, +{n}))")
+            self._one_logged = True
+        return self.block.take_arena(), n
+
     def prepped(self, prep, hook=None, tilize=True):
         """The fused head did the routing gather, the planner (into this block's plan tensors) and the dispatch prep:
         prep = (the dispatch buffer with each chip's own rows, the route words) -> [S/N, Hr] TILE (tilize False: the
-        combine's row-major output, persistent)."""
-        assert (
-            self.block.arena_fits()
-        ), "MoEBlock exchange: L1 moved the arena (the fused head bakes the plan's tensors)"
+        combine's row-major output, persistent). The arena's address is checked where it is taken (take_arena /
+        alloc_arena), not by allocating it once more here."""
         return self.block.routed_prepped(prep, self.experts.op, hook=hook, tilize=tilize)
 
 

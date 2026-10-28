@@ -679,3 +679,100 @@ def test_router_vs_ops(mesh_device, device_params):
         )
         for t in (lg, own, orow, xt):
             ttnn.deallocate(t)
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [((R, C), _fab(fabric_payload_size=fabric_payload(5120), l1_small_size=24576))],
+    indirect=True,
+)
+def test_router_sqrtsoftplus(mesh_device, device_params):
+    """The fused head's router with DeepSeek-V4.1's scores (RouterSpec score "sqrtsoftplus": sqrt(softplus), the fp32
+    softplus; top 6, route scale 1.5) and its shared expert at LoFi (clamped SiLU 10), on its 2x2 (MOE_MESH=2x2: 1024
+    rows a mesh row, 96 experts) vs float64 on the bf16 x and W_r the device holds: the picks of every token whose 6th /
+    7th biased scores are apart by more than the logits' noise, the weights of the tokens with the same picks; the shared
+    expert's owner rows by PCC."""
+    from ttnn.bringup.combine_rf.lin2d import glu_weight
+
+    from models.demos.moe_block.tt.fused_head import HeadSE3, RouterSpec
+
+    rows, H, I, E, K, scale = R * 512, 5120, 2304 // C, 96, 6, 1.5
+    spec = RouterSpec(E=E, K=K, route_scale=scale, score="sqrtsoftplus")
+    gx = min(11, mesh_device.compute_with_storage_grid_size().x - 1)  # (as moe_block.FusedHead)
+    head = HeadSE3(
+        mesh_device,
+        GX=gx,
+        mover_col=gx,
+        rows=rows,
+        H=H,
+        I=I,
+        glu="clamped_silu",
+        fidelity=ttnn.MathFidelity.LoFi,
+        rs_dim=-2,
+        router=spec,
+    )
+    g = torch.Generator().manual_seed(11)
+    wg = [torch.randn(H, 2 * I, generator=g) * 0.02 for _ in range(R * C)]
+    wd = [torch.randn(I, H, generator=g) * 0.03 for _ in range(R * C)]
+    w = head.upload([glu_weight(t[:, :I], t[:, I:]) for t in wg], wd)
+    w_r, b_r = torch.randn(E, H, generator=g) * 0.02, torch.randn(E, generator=g) * 0.1
+    head.upload_router(w_r, b_r)
+    G, n = C, rows // C
+    act = ExpertActivation("clamped_silu", limit=10.0)
+    wq = w_r.to(torch.bfloat16).double()
+    worst = dict(clear=1.0, all=1.0, werr=0.0, se=1.0)
+    for k in range(2):  # (two calls, each its own x)
+        gk = gen(11, k)
+        xs = [torch.randn(rows, H // C, generator=gk).to(torch.bfloat16) for _ in range(R * C)]
+        xt = ttnn.from_torch(
+            torch.stack(xs).view(R, C, rows, H // C),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(R, C)),
+        )
+        y = head.run(xt, w)
+        ttnn.synchronize_device(mesh_device)
+        got = [ttnn.to_torch(t).reshape(-1) for t in ttnn.get_device_tensors(head.outputs["rows"])]
+        ys = [ttnn.to_torch(t).float().reshape(n, H) for t in ttnn.get_device_tensors(y)]
+        for d in range(R * C):
+            r, c = divmod(d, C)
+            p = head.xg.chips[(r, c)]["rings"][0]["p"]
+            xf = torch.cat([xs[r * C + cc].double() for cc in range(C)], dim=1)[p * n : (p + 1) * n]
+            sc = torch.sqrt(torch.nn.functional.softplus(xf @ wq.T))
+            srt, ids = torch.sort(sc + b_r.double(), dim=-1, descending=True)
+            gap = srt[:, K - 1] - srt[:, K]
+            wts = sc.gather(1, ids[:, :K])
+            wts = wts / (wts.sum(-1, keepdim=True) + 1e-20) * scale
+            u = got[d].to(torch.int64).reshape(n, 2 * K) & 0xFFFF
+            dids, wb = u[:, :K], u[:, K:]
+            dw = torch.where(wb >= 32768, wb - 65536, wb).to(torch.int16).view(torch.bfloat16).double()
+            same = torch.tensor([torch.equal(torch.sort(dids[t])[0], torch.sort(ids[t, :K])[0]) for t in range(n)])
+            clear = gap > 2e-3  # (the logits' noise: HiFi3 bf16 products, fp32 sums; the keys' 9 id bits)
+            o_h, o_d = torch.sort(ids[same, :K], 1)[1], torch.sort(dids[same], 1)[1]
+            werr = (torch.gather(wts[same], 1, o_h) - torch.gather(dw[same], 1, o_d)).abs().max().item()
+            tot = sum(
+                act_host(
+                    act, *(torch.cat([xs[r * C + cc] for cc in range(C)], dim=1).float() @ wg[r * C + q]).split(I, 1)
+                )
+                @ wd[r * C + q]
+                for q in range(C)
+            )
+            se = pcc(ys[d], torch.chunk(tot, C, dim=0)[c])
+            logger.info(
+                f"RTR_SSP call {k} chip {d} (p {p}): picks equal {100 * same.float().mean():.2f}% of tokens, "
+                f"{100 * same[clear].float().mean():.2f}% of the {int(clear.sum())} clear of noise; weights max abs err "
+                f"{werr:.2e} (same picks); shared expert PCC {se:.5f}"
+            )
+            worst = dict(
+                clear=min(worst["clear"], same[clear].float().mean().item()),
+                all=min(worst["all"], same.float().mean().item()),
+                werr=max(worst["werr"], werr),
+                se=min(worst["se"], se),
+            )
+        ttnn.deallocate(xt)
+    logger.info(f"RTR_SSP worst: {worst}")
+    assert worst["clear"] == 1.0, f"picks differ on tokens clear of noise: {worst}"
+    assert worst["all"] > 0.99 and worst["werr"] < 4e-3, worst  # (bf16 weights ~0.25: half an ulp 5e-4)
+    assert worst["se"] > 0.999, worst

@@ -599,6 +599,7 @@ class TtK3TokenSplitMoE:
         )
         self.arena = ttnn.allocate_tensor_on_device(*self._arena_spec)
         self.arena_addr = int(self.arena.buffer_address())
+        self.arena_bytes = a_rows * 64  # (a core)
         # the planner's outputs (allocated once) then the combine (its accumulator count sets the planner's A)
         luts, nps = port_luts(mesh_device, 2, self.torus)
         self.rows_cap = rows_cap
@@ -1081,10 +1082,22 @@ class TtK3TokenSplitMoE:
         ttnn.deallocate(arena)
         return ok
 
+    def take_arena(self):
+        """The call's arena taken ahead (the MoE block's one L1 allocation a forward: its fused head runs in it first);
+        routed_prepped then runs on it (zeroing the combine's state there, after the head) and frees it."""
+        arena = ttnn.allocate_tensor_on_device(*self._arena_spec)
+        assert (
+            int(arena.buffer_address()) == self.arena_addr
+        ), f"the arena landed at {int(arena.buffer_address())}, not {self.arena_addr}: an L1 tensor outlives its op"
+        self._taken = arena
+        return arena
+
     def alloc_arena(self, zero=True):
         """The call's arena (uninitialized) with the combine's state zeroed (zero False: the dispatch's zero gate does
-        it - self.zero_gate)."""
-        arena = ttnn.allocate_tensor_on_device(*self._arena_spec)
+        it - self.zero_gate); take_arena's if taken ahead."""
+        arena, self._taken = getattr(self, "_taken", None), None
+        if arena is None:
+            arena = ttnn.allocate_tensor_on_device(*self._arena_spec)
         assert (
             int(arena.buffer_address()) == self.arena_addr
         ), f"the arena landed at {int(arena.buffer_address())}, not {self.arena_addr}: an L1 tensor outlives its op"
