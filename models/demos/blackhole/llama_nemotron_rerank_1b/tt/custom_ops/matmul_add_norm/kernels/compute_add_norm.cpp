@@ -49,6 +49,11 @@ constexpr auto D2B = EltwiseBinaryReuseDestType::DEST_TO_SRCB;
 // API takes MATH_FIDELITY, the matmul's); these mirror reduce_init / reduce_tile, mul_bcast_cols_init /
 // mul_tiles_bcast_cols and mul_reuse_dest_init / mul_reuse_dest_tiles with the fidelity fixed.
 constexpr auto EPI_FIDELITY = MathFidelity::HiFi4;
+#ifdef ROWSUM_FIDELITY
+constexpr auto RS_FID = MathFidelity::ROWSUM_FIDELITY;
+#else
+constexpr auto RS_FID = MathFidelity::HiFi4;
+#endif
 // The y multiplies (h * inv, * gamma) feed a bfp8 output; their fidelity is a define.
 #ifdef Y_FIDELITY
 constexpr auto Y_FID = MathFidelity::Y_FIDELITY;
@@ -61,11 +66,11 @@ ALWI void row_sum_init(uint32_t icb, uint32_t scaler_cb, uint32_t ocb) {
     reconfig_data_format(scaler_cb, icb);
     state_configure(scaler_cb, icb, ocb, __builtin_LINE());
     UNPACK((llk_unpack_AB_reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW>(icb, scaler_cb)));
-    MATH((llk_math_reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW, DST_ACCUM_MODE, EPI_FIDELITY>(icb, scaler_cb)));
+    MATH((llk_math_reduce_init<PoolType::SUM, ReduceDim::REDUCE_ROW, DST_ACCUM_MODE, RS_FID>(icb, scaler_cb)));
 }
 
 ALWI void row_sum_tile(uint32_t icb, uint32_t scaler_cb, uint32_t itile, uint32_t idst) {
-    MATH((llk_math_reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, DST_ACCUM_MODE, EPI_FIDELITY>(icb, scaler_cb, idst)));
+    MATH((llk_math_reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, DST_ACCUM_MODE, RS_FID>(icb, scaler_cb, idst)));
     UNPACK((llk_unpack_AB_reduce<PoolType::SUM, ReduceDim::REDUCE_ROW>(icb, scaler_cb, itile, 0)));
 }
 
@@ -193,36 +198,33 @@ void pass1(uint32_t blk, uint32_t n_real) {
             DeviceZoneScopedN("P1A");
 #endif
             // res_cb and x2_cb are both bf16: one pack format for the row.
+            // The FPU add and the SFPU square are initialised once per row (the SFPU init does not
+            // touch the FPU's eltwise state).
             reconfig_data_format(acc_cb, res_cb);
             pack_reconfig_data_format(res_cb);
+            add_init(acc_cb, res_cb);
+            mul_binary_tile_init();
             for (uint32_t n = 0; n < N_block_tiles; n += P) {
                 const uint32_t t = m * N_block_tiles + n;
                 const uint32_t cnt = N_block_tiles - n < P ? N_block_tiles - n : P;
-#ifdef INIT_PER_PAIR
-            reconfig_data_format(acc_cb, res_cb);
-#endif
-            add_init(acc_cb, res_cb);
-            tile_regs_acquire();
-            for (uint32_t j = 0; j < cnt; ++j) {
-                add_tiles(acc_cb, res_cb, t + j, row + (n + j < res_w ? n + j : 0), j);
-            }
-#ifndef SKIP_SQ
-            mul_binary_tile_init();
-            for (uint32_t j = 0; j < cnt; ++j) {
-                mul_binary_tile(j, j, P + j);
-            }
-#endif
-            tile_regs_commit();
-            tile_regs_wait();
-            for (uint32_t j = 0; j < cnt; ++j) {
-                if (n + j < res_w) {
-                    pack_tile<true>(j, res_cb, row + n + j);
+                tile_regs_acquire();
+                for (uint32_t j = 0; j < cnt; ++j) {
+                    add_tiles(acc_cb, res_cb, t + j, row + (n + j < res_w ? n + j : 0), j);
                 }
-            }
-            for (uint32_t j = 0; j < cnt; ++j) {
-                pack_tile<true>(P + j, x2_cb, n + j);
-            }
-            tile_regs_release();
+                for (uint32_t j = 0; j < cnt; ++j) {
+                    mul_binary_tile(j, j, P + j);
+                }
+                tile_regs_commit();
+                tile_regs_wait();
+                for (uint32_t j = 0; j < cnt; ++j) {
+                    if (n + j < res_w) {
+                        pack_tile<true>(j, res_cb, row + n + j);
+                    }
+                }
+                for (uint32_t j = 0; j < cnt; ++j) {
+                    pack_tile<true>(P + j, x2_cb, n + j);
+                }
+                tile_regs_release();
             }
         cb_x2.push_back(N_block_tiles);
         }
