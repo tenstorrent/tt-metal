@@ -19,17 +19,7 @@ from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import FastCacheCheck
 
 _CACHE_SCHEMA_VERSION = 2
 # Stored at the caller's `projection_dtype`; every other KDA weight stays bfloat16.
-PROJECTION_ARTIFACTS = (
-    "input_projection_head_major",
-    "decay_output_projection",
-    "output_projection",
-    "output_gate_projection",
-)
-
-
-def _gate_split_suffix(output_gate_split: int | None) -> str:
-    """Artifact-name suffix of an input projection split at ``output_gate_split`` kept output-gate columns."""
-    return "" if output_gate_split is None else f".gate{output_gate_split}"
+PROJECTION_ARTIFACTS = ("input_projection_head_major", "decay_output_projection", "output_projection")
 
 
 def _parallel_geometry(device: ttnn.Device | ttnn.MeshDevice, tensor_parallel_axis: int) -> tuple[tuple[int, int], int]:
@@ -41,12 +31,9 @@ def _parallel_geometry(device: ttnn.Device | ttnn.MeshDevice, tensor_parallel_ax
     return (1, 1), 1
 
 
-def _cache_artifact_names(config: KDAConfig, output_gate_split: int | None = None) -> tuple[str, ...]:
-    suffix = _gate_split_suffix(output_gate_split)
-    split = () if output_gate_split is None else (f"output_gate_projection{suffix}",)
+def _cache_artifact_names(config: KDAConfig) -> tuple[str, ...]:
     fixed = (
-        f"input_projection_head_major{suffix}",
-        *split,
+        "input_projection_head_major",
         "decay_output_projection",
         "output_projection",
         "decay_scale_flat",
@@ -80,7 +67,6 @@ class _KDAHostWeights:
     decay_bias_flat: torch.Tensor
     norm: torch.Tensor
     convolution_taps: tuple[torch.Tensor, ...]
-    output_gate_projection: torch.Tensor | None = None
 
 
 @dataclass(frozen=True)
@@ -109,7 +95,6 @@ class KDAWeights:
         *,
         tensor_parallel_axis: int = 1,
         projection_dtype: ttnn.DataType = ttnn.bfloat16,
-        output_gate_split: int | None = None,
     ) -> bool:
         """Return whether every dtype/layout/placement-specific KDA tensorbin exists."""
         if cache_path is None:
@@ -119,9 +104,9 @@ class KDAWeights:
             return False
         checker = FastCacheChecker(cache_path)
         mesh_shape, _ = _parallel_geometry(mesh_device, tensor_parallel_axis)
-        for name in _cache_artifact_names(config, output_gate_split):
+        for name in _cache_artifact_names(config):
             stem = _cache_stem(cache_name_prefix, name, config, mesh_shape, tensor_parallel_axis)
-            dtype = projection_dtype if name.split(".")[0] in PROJECTION_ARTIFACTS else ttnn.bfloat16
+            dtype = projection_dtype if name in PROJECTION_ARTIFACTS else ttnn.bfloat16
             pattern = f"{stem}_dtype_{dtype.name}_layout_{ttnn.TILE_LAYOUT.name}.tensorbin"
             if not checker.pattern_exists(pattern, "KDA"):
                 return False
@@ -138,7 +123,6 @@ class KDAWeights:
         *,
         tensor_parallel_axis: int = 1,
         projection_dtype: ttnn.DataType = ttnn.bfloat16,
-        output_gate_split: int | None = None,
     ) -> None:
         """Build all KDA tensorbins without copying weights to device memory."""
         if not state_dict:
@@ -148,7 +132,7 @@ class KDAWeights:
             config,
             tensor_parallel_axis,
         )
-        host_weights = _prepare_kda_host_weights(state_dict, config, tensor_parallel_size, output_gate_split)
+        host_weights = _prepare_kda_host_weights(state_dict, config, tensor_parallel_size)
         _materialize_kda_weights(
             host_weights,
             device=mesh_device,
@@ -160,7 +144,6 @@ class KDAWeights:
             tensor_parallel_axis=tensor_parallel_axis,
             projection_dtype=projection_dtype,
             place_on_device=False,
-            output_gate_split=output_gate_split,
         )
 
     @classmethod
@@ -173,7 +156,6 @@ class KDAWeights:
         *,
         tensor_parallel_axis: int = 1,
         projection_dtype: ttnn.DataType = ttnn.bfloat16,
-        output_gate_split: int | None = None,
     ) -> "KDAWeights":
         """Construct device weights exclusively from a complete TTNN cache."""
         return load_kda_weights(
@@ -184,7 +166,6 @@ class KDAWeights:
             cache_name_prefix=cache_name_prefix,
             tensor_parallel_axis=tensor_parallel_axis,
             projection_dtype=projection_dtype,
-            output_gate_split=output_gate_split,
         )
 
 
@@ -224,28 +205,39 @@ def output_gate_columns(config: KDAConfig, tensor_parallel_size: int) -> tuple[i
     return start, start + config.v_dim // tensor_parallel_size
 
 
-def _split_output_gate(
-    input_projection: torch.Tensor, config: KDAConfig, tensor_parallel_size: int, kept: int
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Split the fused [hidden, TP * W] input projection into the projection without each TP rank's output-gate columns
-    past its first ``kept`` and the [hidden, TP * (V - kept)] output gate of those columns, rank by rank."""
+def split_output_gate(
+    input_projection: ttnn.Tensor, config: KDAConfig, tensor_parallel_size: int, kept: int
+) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Split the fused input projection, on each device's TP block, into the projection without the output-gate
+    columns past the first ``kept`` and the output gate of those columns; frees the fused tensor.
+
+    The cut is on whole tiles of the stored (quantized) projection, so the cache keeps one fused tensor whatever the
+    split. Concatenating widens bfloat8_b to bfloat16; casting back requantizes every tile from values its own block
+    exponents represent exactly, so both pieces hold the fused tensor's tiles bit for bit (test_weights checks it).
+    """
     start, end = output_gate_columns(config, tensor_parallel_size)
     if not 0 <= kept <= end - start or kept % ttnn.TILE_SIZE:
         raise ValueError(
             f"output_gate_split must be tile-aligned within the {end - start} output-gate columns, got {kept}"
         )
-    kept_blocks, gate_blocks = [], []
-    for block in input_projection.chunk(tensor_parallel_size, dim=-1):
-        kept_blocks.append(torch.cat([block[:, : start + kept], block[:, end:]], dim=-1))
-        gate_blocks.append(block[:, start + kept : end])
-    return torch.cat(kept_blocks, dim=-1), torch.cat(gate_blocks, dim=-1)
+    hidden, width = tuple(input_projection.shape)[-2:]
+    gate = ttnn.slice(input_projection, [0, start + kept], [hidden, end])
+    leading = ttnn.slice(input_projection, [0, 0], [hidden, start + kept])
+    trailing = ttnn.slice(input_projection, [0, end], [hidden, width])
+    joined = ttnn.concat([leading, trailing], dim=-1)
+    kept_projection = (
+        joined if joined.dtype == input_projection.dtype else ttnn.typecast(joined, input_projection.dtype)
+    )
+    for tensor in (leading, trailing, joined, input_projection):
+        if tensor is not kept_projection and tensor.is_allocated():
+            ttnn.deallocate(tensor)
+    return kept_projection, gate
 
 
 def _prepare_kda_host_weights(
     state_dict: Mapping[str, torch.Tensor],
     config: KDAConfig,
     tensor_parallel_size: int,
-    output_gate_split: int | None = None,
 ) -> _KDAHostWeights:
     state_dict = normalize_kda_state_dict(state_dict, config)
     common_input_weights = (
@@ -299,14 +291,8 @@ def _prepare_kda_host_weights(
         fused_tap = _group_projection_rows_by_tp_rank(tap_weights, tensor_parallel_size).reshape(1, 1, -1)
         convolution_taps.append(fused_tap)
 
-    output_gate_projection = None
-    if output_gate_split is not None:
-        input_projection, output_gate_projection = _split_output_gate(
-            input_projection, config, tensor_parallel_size, output_gate_split
-        )
     return _KDAHostWeights(
         input_projection=input_projection,
-        output_gate_projection=output_gate_projection,
         decay_output_projection=state_dict["f_b_proj.weight"].T,
         output_projection=state_dict["o_proj.weight"].T,
         decay_scale_flat=decay_scale_flat,
@@ -383,16 +369,14 @@ def _materialize_kda_weights(
     tensor_parallel_axis: int,
     projection_dtype: ttnn.DataType,
     place_on_device: bool,
-    output_gate_split: int | None = None,
 ) -> tuple[dict[str, ttnn.Tensor], tuple[ttnn.Tensor, ...]]:
     if tensor_cache_path is not None:
         tensor_cache_path.mkdir(parents=True, exist_ok=True)
 
-    suffix = _gate_split_suffix(output_gate_split)
     materialized = {
         "input_projection": _materialize_kda_tensor(
             None if host_weights is None else host_weights.input_projection,
-            f"input_projection_head_major{suffix}",
+            "input_projection_head_major",
             device=device,
             config=config,
             tensor_cache_path=tensor_cache_path,
@@ -471,21 +455,6 @@ def _materialize_kda_weights(
             place_on_device=place_on_device,
         ),
     }
-    if output_gate_split is not None:
-        materialized["output_gate_projection"] = _materialize_kda_tensor(
-            None if host_weights is None else host_weights.output_gate_projection,
-            f"output_gate_projection{suffix}",
-            device=device,
-            config=config,
-            tensor_cache_path=tensor_cache_path,
-            cache_name_prefix=cache_name_prefix,
-            mesh_shape=mesh_shape,
-            tensor_parallel_size=tensor_parallel_size,
-            tensor_parallel_axis=tensor_parallel_axis,
-            shard_dim=-1,
-            dtype=projection_dtype,
-            place_on_device=place_on_device,
-        )
     host_taps = [None] * config.conv_kernel_size if host_weights is None else host_weights.convolution_taps
     convolution_taps = tuple(
         _materialize_kda_tensor(
@@ -544,7 +513,7 @@ def load_kda_weights(
     """Prepare KDA weights and materialize them on the target device.
 
     With ``output_gate_split`` the input projection keeps only each TP rank's first ``output_gate_split`` output-gate
-    columns and the rest become ``output_gate_projection``, split on the host before quantization (and cached split).
+    columns and the rest become ``output_gate_projection`` (split_output_gate), cut from the stored fused projection.
     """
     if state_dict is not None and not state_dict:
         raise ValueError("state_dict must be non-empty when provided; use None for cache-only loading")
@@ -558,12 +527,11 @@ def load_kda_weights(
             device,
             tensor_parallel_axis=tensor_parallel_axis,
             projection_dtype=projection_dtype,
-            output_gate_split=output_gate_split,
         ):
             raise FileNotFoundError(f"incomplete KDA TTNN cache for {cache_name_prefix!r} at {cache_path!r}")
         host_weights = None
     else:
-        host_weights = _prepare_kda_host_weights(state_dict, config, tensor_parallel_size, output_gate_split)
+        host_weights = _prepare_kda_host_weights(state_dict, config, tensor_parallel_size)
 
     materialized, convolution_taps = _materialize_kda_weights(
         host_weights,
@@ -576,13 +544,16 @@ def load_kda_weights(
         tensor_parallel_axis=tensor_parallel_axis,
         projection_dtype=projection_dtype,
         place_on_device=True,
-        output_gate_split=output_gate_split,
     )
     if config.gate_lower_bound is not None:
         materialized["decay_output_projection"], materialized["decay_bias_flat"] = _fold_decay_scale(
             materialized["decay_output_projection"],
             materialized["decay_bias_flat"],
             materialized["decay_scale_flat"],
+        )
+    if output_gate_split is not None:
+        materialized["input_projection"], materialized["output_gate_projection"] = split_output_gate(
+            materialized["input_projection"], config, tensor_parallel_size, output_gate_split
         )
     return KDAWeights(
         **materialized,
