@@ -509,6 +509,10 @@ struct SDPATestConfig {
     bool use_gate = false;
     float gate_min = -4.0F;  // sigmoid(-4) ~ 0.018
     float gate_max = 4.0F;   // sigmoid(+4) ~ 0.982
+    // V's range. Zero-mean values make the late (long) rows average out to ~0, where an absolute
+    // tolerance hides relative errors; the split tests use [0, 1] so every output is ~0.5.
+    float value_min = -1.0F;
+    float value_max = 1.0F;
     float dropout_prob = 0.0F;
     // 0 = program factory default.
     ttml::metal::SDPAForwardProgramConfig program_config{};
@@ -521,8 +525,13 @@ struct SDPATestConfig {
     std::string test_name = "SDPA Test";
 };
 
-// kernel_output, when given, receives the kernel's output so callers can compare runs with each other.
-void run_sdpa_test(const SDPATestConfig& config, xt::xarray<float>* kernel_output = nullptr) {
+// kernel_output / kernel_lse, when given, receive the kernel's output and logsumexp so callers can compare
+// runs with each other.
+void run_sdpa_test(
+    const SDPATestConfig& config,
+    xt::xarray<float>* kernel_output = nullptr,
+    xt::xarray<float>* kernel_lse = nullptr,
+    xt::xarray<float>* reference_lse = nullptr) {
     using namespace ttml;
 
     ASSERT_GT(config.num_query_heads, 0U) << "num_query_heads must be greater than zero";
@@ -555,7 +564,8 @@ void run_sdpa_test(const SDPATestConfig& config, xt::xarray<float>* kernel_outpu
     const std::array<std::size_t, 4> value_shape{
         config.batch_size, config.num_key_heads, config.sequence_length, head_dim_v};
     xt::xarray<float> value_tensor =
-        round_to_bf16(ttml::test_utils::make_uniform_xarray<float>(value_shape, -1.0F, 1.0F, seed + 2U));
+        round_to_bf16(ttml::test_utils::make_uniform_xarray<float>(
+            value_shape, config.value_min, config.value_max, seed + 2U));
 
     // Optional gate: (B, num_query_heads, S, head_dim_v) - same shape as the kernel output.
     std::optional<xt::xarray<float>> gate_tensor;
@@ -616,6 +626,9 @@ void run_sdpa_test(const SDPATestConfig& config, xt::xarray<float>* kernel_outpu
     if (return_intermediates) {
         ASSERT_TRUE(result[1].has_value()) << "intermediates requested but not returned in " << config.test_name;
         interm_xtensor = core::to_xtensor(result[1].value());
+        if (kernel_lse != nullptr) {
+            *kernel_lse = interm_xtensor;
+        }
     } else {
         ASSERT_FALSE(result[1].has_value()) << "intermediates returned although not requested in " << config.test_name;
     }
@@ -704,6 +717,14 @@ void run_sdpa_test(const SDPATestConfig& config, xt::xarray<float>* kernel_outpu
     if (return_intermediates) {
         ASSERT_EQ(interm_xtensor.shape(), float_intermediates.shape())
             << "Intermediate shape mismatch in " << config.test_name;
+        // The logsumexp is ~log(S), so the relative tolerance below is blind to its absolute error: print it.
+        fmt::print(
+            "{}: logsumexp max abs gap vs float reference {:.3e}\n",
+            config.test_name,
+            xt::amax(xt::abs(interm_xtensor - float_intermediates))());
+        if (reference_lse != nullptr) {
+            *reference_lse = float_intermediates;
+        }
     }
 
     // Compute MSE for validation
@@ -1505,12 +1526,12 @@ ttml::metal::SDPAForwardProgramConfig program_config_of(const ChunkKnobs& knobs)
         .num_cores = knobs.num_cores};
 }
 
-// The schedule the program factory would build for config on this device.
-ttml::metal::ops::sdpa_fw::device::SDPAForwardSchedule host_schedule(const SDPATestConfig& config) {
+// The shape and chunks the program factory would resolve for config on this device.
+std::pair<ttml::metal::ops::sdpa_fw::device::SDPAForwardShape, ttml::metal::ops::sdpa_fw::device::SDPAForwardChunks>
+host_shape_and_chunks(const SDPATestConfig& config) {
     using namespace ttml::metal::ops::sdpa_fw::device;
     auto* device = &ttml::autograd::ctx().get_device();
     const auto grid = device->compute_with_storage_grid_size();
-    const uint32_t grid_cores = grid.x * grid.y;
     const uint32_t value_dim = config.value_dim > 0U ? config.value_dim : config.key_value_dim;
     const SDPAForwardShape shape{
         .batch = config.batch_size,
@@ -1522,50 +1543,109 @@ ttml::metal::ops::sdpa_fw::device::SDPAForwardSchedule host_schedule(const SDPAT
         .mask_type = config.mask_type,
         .has_gate = config.use_gate,
         .return_intermediates = config.return_intermediates};
-    const SDPAForwardChunks chunks =
-        resolve_chunks(config.program_config, shape, ttml::metal::available_l1_bytes(*device), grid_cores);
+    return {
+        shape,
+        resolve_chunks(config.program_config, shape, ttml::metal::available_l1_bytes(*device), grid.x * grid.y)};
+}
+
+// The schedule the program factory would build for config on this device.
+ttml::metal::ops::sdpa_fw::device::SDPAForwardSchedule host_schedule(const SDPATestConfig& config) {
+    using namespace ttml::metal::ops::sdpa_fw::device;
+    auto* device = &ttml::autograd::ctx().get_device();
+    const auto grid = device->compute_with_storage_grid_size();
+    const auto [shape, chunks] = host_shape_and_chunks(config);
     const uint32_t max_pieces = effective_max_pieces(config.program_config);
-    const uint32_t num_cores =
-        std::min(effective_num_cores(config.program_config, grid_cores), num_work_items(shape, chunks) * max_pieces);
+    const uint32_t num_cores = std::min(
+        effective_num_cores(config.program_config, grid.x * grid.y), num_work_items(shape, chunks) * max_pieces);
     return make_schedule(shape, chunks, num_cores, max_pieces);
 }
 
-uint32_t max_partials(const ttml::metal::ops::sdpa_fw::device::SDPAForwardSchedule& schedule) {
-    uint32_t most = 0;
-    for (const auto& units : schedule.per_core) {
+// The terms of the split-vs-unsplit error bounds, from the split schedule: the most partials a merger folds
+// in, and how many more K/V steps the unsplit run's longest item takes than the longest merger piece (each
+// step of the running sum passes the FPU once, so the two runs' sums carry different truncation counts).
+struct FoldErrorTerms {
+    uint32_t partials = 0;
+    uint32_t extra_unsplit_steps = 0;
+};
+
+FoldErrorTerms fold_error_terms(
+    const SDPATestConfig& split_config, const ttml::metal::ops::sdpa_fw::device::SDPAForwardSchedule& split_schedule) {
+    using namespace ttml::metal::ops::sdpa_fw::device;
+    const auto [shape, chunks] = host_shape_and_chunks(split_config);
+    uint32_t unsplit_steps = 0;
+    for (uint32_t item = 0; item < num_work_items(shape, chunks); ++item) {
+        unsplit_steps = std::max(unsplit_steps, num_kv_steps(shape, chunks, item));
+    }
+    FoldErrorTerms terms;
+    uint32_t piece_steps = 0;
+    for (const auto& units : split_schedule.per_core) {
         for (const auto& unit : units) {
-            most = std::max(most, unit.num_partials);
+            if (unit.role == UnitRole::Merger) {
+                terms.partials = std::max(terms.partials, unit.num_partials);
+                piece_steps = std::max(piece_steps, unit.step_end - unit.step_begin);
+            }
         }
     }
-    return most;
+    terms.extra_unsplit_steps = unsplit_steps - std::min(unsplit_steps, piece_steps);
+    return terms;
 }
 
-// Split and unsplit outputs of the same inputs. Each merge pass multiplies the fp32 partials on the FPU,
-// whose inputs are 19-bit (TF32): 2^-11 relative per partial folded in, so the gap grows with the number
-// of partials. With the default four pieces (three partials) it is a few bf16 ULP per element and under
-// 1e-3 on average; the bounds scale with num_partials beyond that.
+// Split and unsplit outputs of the same inputs. Both runs multiply the running sum on the FPU, whose inputs
+// are 19-bit (TF32): a truncation of up to 2^-10 per K/V step and, in the split run, per partial folded in;
+// the merger's own fp32 output accumulator is rescaled in DST and is not truncated. So the two outputs
+// differ by one to two bf16 ULP of rounding plus the steps the runs do not share, each worth the truncation
+// and about as much again from the rescale chain (the weights of a peaked row reach the output through a
+// different product of exps in the two runs; measured, not derived). The callers give V a nonzero mean so
+// that no output sits near zero, where a bf16 ULP of the output would be smaller than the fp32 noise of
+// the fold. The mean gap is held to the mean truncation, 2^-11 per unshared step.
 void expect_split_matches_unsplit(
     const xt::xarray<float>& split_output,
     const xt::xarray<float>& unsplit_output,
-    uint32_t num_partials,
+    const FoldErrorTerms& terms,
     const std::string& name) {
-    constexpr float kUlpRel = 2.0F * 7.8125e-3F;  // two bf16 ULP of the mantissa
-    // Cancellation noise: a row's terms are ~0.1 while its result can be ~0, so an absolute floor.
-    const float atol = 1e-3F * (1.0F + static_cast<float>(num_partials) / 4.0F);
-    const float mean_rel_tol = 1e-3F * (1.0F + static_cast<float>(num_partials));
+    constexpr float kTwoUlpRel = 7.8125e-3F;   // 2^-7: two bf16 ULP in [0.25, 0.5), one in [0.5, 1)
+    constexpr float kTruncRel = 9.765625e-4F;  // 2^-10: one TF32 truncation, worst case
+    const float unshared_steps = static_cast<float>(terms.partials + terms.extra_unsplit_steps);
+    const float rel_tol = kTwoUlpRel + 2.0F * kTruncRel * unshared_steps;
+    const float mean_rel_tol = 1e-3F + 0.5F * kTruncRel * unshared_steps;
     const xt::xarray<float> gap = xt::abs(split_output - unsplit_output);
-    const xt::xarray<float> bound = kUlpRel * xt::abs(unsplit_output) + atol;
-    const float max_excess = xt::amax(gap - bound)();
+    const xt::xarray<float> bound = rel_tol * xt::abs(unsplit_output);
+    const float worst_share = xt::amax(gap / bound)();  // of the bound; V > 0 keeps every output away from 0
     const float mean_rel = xt::mean(gap)() / xt::mean(xt::abs(unsplit_output))();
     fmt::print(
-        "{}: {} partials, split vs unsplit max excess over 2 ULP {:.3e}, mean relative gap {:.3e} (bound {:.1e})\n",
+        "{}: {} partials, {} extra unsplit steps; split vs unsplit worst element at {:.2f} of the {:.2e} relative "
+        "bound, mean relative gap {:.3e} (bound {:.1e})\n",
         name,
-        num_partials,
-        max_excess,
+        terms.partials,
+        terms.extra_unsplit_steps,
+        worst_share,
+        rel_tol,
         mean_rel,
         mean_rel_tol);
-    EXPECT_LE(max_excess, 0.0F) << name << ": a split element is more than two bf16 ULP off the unsplit run";
+    EXPECT_LE(worst_share, 1.0F) << name << ": a split element is off the unsplit run by more than the bound";
     EXPECT_LT(mean_rel, mean_rel_tol) << name << ": split and unsplit runs differ by " << mean_rel << " on average";
+}
+
+// The merger's logsumexp, scale * max + log(sum), is what the backward pass consumes. The max is exact, so
+// merging may move it off the float reference by at most the folds' truncation of the sum (two per partial:
+// the sender's copy and the merge) on top of the unsplit run's own error.
+void expect_split_lse_matches_reference(
+    const xt::xarray<float>& split_lse,
+    const xt::xarray<float>& unsplit_lse,
+    const xt::xarray<float>& reference_lse,
+    const FoldErrorTerms& terms,
+    const std::string& name) {
+    constexpr float kTruncAbs = 9.765625e-4F;  // 2^-10 on log(sum)
+    const float split_gap = xt::amax(xt::abs(split_lse - reference_lse))();
+    const float unsplit_gap = xt::amax(xt::abs(unsplit_lse - reference_lse))();
+    const float bound = unsplit_gap + kTruncAbs * static_cast<float>(2U * terms.partials + 1U);
+    fmt::print(
+        "{}: logsumexp max gap vs reference: split {:.3e}, unsplit {:.3e} (bound {:.1e})\n",
+        name,
+        split_gap,
+        unsplit_gap,
+        bound);
+    EXPECT_LE(split_gap, bound) << name << ": the merged logsumexp is further off the reference than the folds allow";
 }
 
 // A split schedule folds the partials into the merger's running state in fp32, in a different order than one
@@ -1584,6 +1664,8 @@ void run_split_vs_unsplit(SDPATestConfig base, const ChunkKnobs& knobs) {
         config.test_name = base.test_name + tag;
         return config;
     };
+    base.value_min = 0.0F;  // see expect_split_matches_unsplit
+    base.value_max = 1.0F;
     const SDPATestConfig split = arm(knobs.max_pieces, "_split");
     const SDPATestConfig unsplit = arm(1U, "_unsplit");
     // The split arm must really split, or the check proves nothing.
@@ -1593,15 +1675,22 @@ void run_split_vs_unsplit(SDPATestConfig base, const ChunkKnobs& knobs) {
 
     xt::xarray<float> split_output;
     xt::xarray<float> unsplit_output;
+    xt::xarray<float> split_lse;
+    xt::xarray<float> unsplit_lse;
+    xt::xarray<float> reference_lse;
     {
         SCOPED_TRACE(split.test_name);
-        run_sdpa_test(split, &split_output);
+        run_sdpa_test(split, &split_output, &split_lse, &reference_lse);
     }
     {
         SCOPED_TRACE(unsplit.test_name);
-        run_sdpa_test(unsplit, &unsplit_output);
+        run_sdpa_test(unsplit, &unsplit_output, &unsplit_lse);
     }
-    expect_split_matches_unsplit(split_output, unsplit_output, max_partials(split_schedule), base.test_name);
+    const FoldErrorTerms terms = fold_error_terms(split, split_schedule);
+    expect_split_matches_unsplit(split_output, unsplit_output, terms, base.test_name);
+    if (base.return_intermediates) {
+        expect_split_lse_matches_reference(split_lse, unsplit_lse, reference_lse, terms, base.test_name);
+    }
 }
 
 void run_chunk_knob_sweep(SDPATestConfig base, const std::vector<ChunkKnobs>& sweep = kChunkKnobSweep) {
@@ -2315,14 +2404,16 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
         .mask_type = metal::AttentionMaskType::Causal,
         .return_intermediates = false};
     const std::array<std::size_t, 4> shape{1U, 2U, 1024U, 64U};
-    auto make = [&](uint32_t seed) {
-        return core::from_xtensor(test_utils::make_uniform_xarray<float>(shape, -1.0F, 1.0F, seed), device);
+    auto make = [&](uint32_t seed, float lo, float hi) {
+        return core::from_xtensor(test_utils::make_uniform_xarray<float>(shape, lo, hi, seed), device);
     };
     struct Inputs {
         ttnn::Tensor query, key, value;
     };
-    const Inputs first{make(1U), make(2U), make(3U)};
-    const Inputs second{make(4U), make(5U), make(6U)};  // live at the same time: different addresses
+    // V in [0, 1]: see expect_split_matches_unsplit.
+    const Inputs first{make(1U, -1.0F, 1.0F), make(2U, -1.0F, 1.0F), make(3U, 0.0F, 1.0F)};
+    const Inputs second{
+        make(4U, -1.0F, 1.0F), make(5U, -1.0F, 1.0F), make(6U, 0.0F, 1.0F)};  // live at once: other addresses
     auto run = [&](const metal::SDPAForwardProgramConfig& cfg, const Inputs& in) {
         return core::to_xtensor(metal::sdpa_fw(
                                     in.query,
@@ -2359,7 +2450,10 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_ProgramCacheMissAndHit) {
     const xt::xarray<float> out_a_second_unsplit = run(a_unsplit, second);
     EXPECT_FALSE(xt::all(xt::equal(out_a_second, out_a))) << "the hit must read the new inputs";
     expect_split_matches_unsplit(
-        out_a_second, out_a_second_unsplit, max_partials(split_schedule), "ProgramCacheMissAndHit_second_inputs");
+        out_a_second,
+        out_a_second_unsplit,
+        fold_error_terms(split_config, split_schedule),
+        "ProgramCacheMissAndHit_second_inputs");
 
     // The mask address is a reader runtime arg of its own: a hit with a second live mask tensor (same shape,
     // other values and address) must read the new mask, not the first one.
