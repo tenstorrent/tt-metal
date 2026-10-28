@@ -112,6 +112,15 @@ struct UnpackWalk
     Where held; // the operand unpacked once per run (SrcA or SrcB), or None: every operand streams
 };
 
+// Which FPU elementwise function an eltwise binary Plan runs (MathPlan::function). 0 stays "unused".
+enum class BinaryFunction : std::uint32_t
+{
+    None,
+    Add, // in0 + in1
+    Sub, // in0 - in1
+    Mul  // in0 * in1
+};
+
 struct MathPlan
 {
     Exu unit;
