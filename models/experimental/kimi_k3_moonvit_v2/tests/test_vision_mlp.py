@@ -10,8 +10,9 @@ import torch
 
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     assert_pcc,
-    DEVICE_GRIDS,
     device_config,
+    row_grid,
+    ROW_GRIDS,
     NOT_WRITTEN,
     REFERENCE_LAYERS,
     P150_AND_RING,
@@ -24,10 +25,11 @@ from models.experimental.kimi_k3_moonvit_v2.tt.vision_mlp import TT_Vision_MLP
 
 @P150_AND_RING
 @REFERENCE_LAYERS
-@DEVICE_GRIDS
+@ROW_GRIDS
 @NOT_WRITTEN
-def test_vision_mlp(mesh_device, sp_axis, num_links, config, reference, grid, layer):
+def test_vision_mlp(mesh_device, sp_axis, num_links, config, reference, size, layer):
     config = device_config(config, sp_axis)
+    grid = row_grid(size, sp_axis)
     tt = TT_Vision_MLP(config, mesh_device=mesh_device, compute_kernel_config=compute_kernel_config(mesh_device))
     tt.load_torch_state_dict(reference.vision_tower.encoder.blocks[layer].mlp.state_dict())
 

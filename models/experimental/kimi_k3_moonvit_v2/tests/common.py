@@ -60,8 +60,31 @@ GRIDS = {
     "native_table": [(1, 64, 64)],
 }
 
-# Device grids. The CPU golden builds L x L scores per head, which rules out 65,536 patches here.
-DEVICE_GRIDS = pytest.mark.parametrize("grid", [[(1, 64, 64)], [(1, 40, 100)]], ids=["64x64", "40x100"])
+# Device grids for attention, the block and the full model. Their CPU golden builds L x L scores per
+# head, which rules out 65,536 patches here.
+ATTENTION_GRIDS = pytest.mark.parametrize("grid", [[(1, 64, 64)], [(1, 40, 100)]], ids=["64x64", "40x100"])
+
+# Device grids for the parts that work on each row alone (everything but attention). Their CPU golden
+# grows only with the row count, so it runs at the full padded length in seconds. Each size names one
+# (h, w) per mesh, since one P150 runs a quarter of the ring's rows (`device_config`):
+#   full:     fills the padded length exactly; real rows on every ring chip, no padding
+#   max_side: also fills it, with the longest side the processor allows (512)
+#   partial:  nearly full; the real rows end inside a tile (not a multiple of 32)
+#   small:    a small image, almost all padding
+ROW_GRID_SIZES = {
+    "full": {"ring1x4": (256, 256), "p150": (128, 128)},
+    "max_side": {"ring1x4": (512, 128), "p150": (512, 32)},
+    "partial": {"ring1x4": (250, 250), "p150": (122, 130)},
+    "small": {"ring1x4": (40, 100), "p150": (40, 100)},
+}
+ROW_GRIDS = pytest.mark.parametrize("size", list(ROW_GRID_SIZES))
+
+
+def row_grid(size: str, sp_axis: int | None) -> list[tuple[int, int, int]]:
+    """The `size` grid for the mesh under test: `ring1x4` when the sequence is split, else `p150`."""
+    h, w = ROW_GRID_SIZES[size]["p150" if sp_axis is None else "ring1x4"]
+    return [(1, h, w)]
+
 
 # The 4 Blackhole chips of a QuietBox 2 in a ring along mesh axis 1 (the (1, 4) mesh other QB2 models
 # open), 2 links between neighbours.

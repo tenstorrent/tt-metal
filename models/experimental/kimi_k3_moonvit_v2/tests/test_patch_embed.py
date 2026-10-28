@@ -10,8 +10,9 @@ import torch
 
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     assert_pcc,
-    DEVICE_GRIDS,
     device_config,
+    row_grid,
+    ROW_GRIDS,
     NOT_WRITTEN,
     REFERENCE,
     P150_AND_RING,
@@ -26,10 +27,11 @@ from models.experimental.kimi_k3_moonvit_v2.tt.patch_embed import TT_Patch_Embed
 
 @P150_AND_RING
 @REFERENCE
-@DEVICE_GRIDS
+@ROW_GRIDS
 @NOT_WRITTEN
-def test_patch_embed(mesh_device, sp_axis, num_links, config, reference, grid):
+def test_patch_embed(mesh_device, sp_axis, num_links, config, reference, size):
     config = device_config(config, sp_axis)
+    grid = row_grid(size, sp_axis)
     tt = TT_Patch_Embed(config, mesh_device=mesh_device, compute_kernel_config=compute_kernel_config(mesh_device))
     tt.load_torch_state_dict(reference.vision_tower.patch_embed.state_dict())
 

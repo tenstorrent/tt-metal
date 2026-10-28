@@ -15,8 +15,9 @@ import torch
 
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     assert_pcc,
-    DEVICE_GRIDS,
     device_config,
+    row_grid,
+    ROW_GRIDS,
     P150_AND_RING,
     REFERENCE,
     REFERENCE_LAYERS,
@@ -45,10 +46,11 @@ def check_rms_norm(mesh_device, sp_axis, torch_norm, eps: float, n: int, rows: i
 
 @P150_AND_RING
 @REFERENCE_LAYERS
-@DEVICE_GRIDS
+@ROW_GRIDS
 @pytest.mark.parametrize("name", ENCODER_NORMS)
-def test_encoder_rms_norm(mesh_device, sp_axis, num_links, config, reference, grid, layer, name):
+def test_encoder_rms_norm(mesh_device, sp_axis, num_links, config, reference, size, layer, name):
     config = device_config(config, sp_axis)
+    grid = row_grid(size, sp_axis)
     torch_norm = reference.vision_tower.encoder.blocks[layer].get_submodule(name)
     assert torch_norm.eps is None
     _, h, w = grid[0]
@@ -57,9 +59,10 @@ def test_encoder_rms_norm(mesh_device, sp_axis, num_links, config, reference, gr
 
 @P150_AND_RING
 @REFERENCE
-@DEVICE_GRIDS
-def test_final_rms_norm(mesh_device, sp_axis, num_links, config, reference, grid):
+@ROW_GRIDS
+def test_final_rms_norm(mesh_device, sp_axis, num_links, config, reference, size):
     config = device_config(config, sp_axis)
+    grid = row_grid(size, sp_axis)
     torch_norm = reference.vision_tower.encoder.final_layernorm
     assert torch_norm.eps is None
     _, h, w = grid[0]
@@ -68,9 +71,10 @@ def test_final_rms_norm(mesh_device, sp_axis, num_links, config, reference, grid
 
 @P150_AND_RING
 @REFERENCE
-@DEVICE_GRIDS
-def test_projector_rms_norm(mesh_device, sp_axis, num_links, config, reference, grid):
+@ROW_GRIDS
+def test_projector_rms_norm(mesh_device, sp_axis, num_links, config, reference, size):
     config = device_config(config, sp_axis)
+    grid = row_grid(size, sp_axis)
     torch_norm = reference.mm_projector.post_norm
     assert torch_norm.eps == config.projector_norm_eps
     _, h, w = grid[0]

@@ -10,7 +10,7 @@ import torch
 
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     assert_pcc,
-    DEVICE_GRIDS,
+    ATTENTION_GRIDS,
     NOT_WRITTEN,
     SHALLOW_REFERENCE,
     RING,
@@ -39,7 +39,7 @@ def test_load_weights(mesh_device, sp_axis, num_links, shallow_config, shallow_r
 
 @RING
 @SHALLOW_REFERENCE
-@DEVICE_GRIDS
+@ATTENTION_GRIDS
 @NOT_WRITTEN
 def test_vision_model(mesh_device, sp_axis, num_links, shallow_config, shallow_reference, grid):
     tt = build(mesh_device, sp_axis, num_links, shallow_config, shallow_reference)

@@ -11,8 +11,9 @@ import torch
 
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     assert_pcc,
-    DEVICE_GRIDS,
     device_config,
+    row_grid,
+    ROW_GRIDS,
     P150_AND_RING,
     REFERENCE,
     REFERENCE_LAYERS,
@@ -51,10 +52,11 @@ def check_linear(mesh_device, sp_axis, config, torch_linear, n: int, rows: int) 
 
 @P150_AND_RING
 @REFERENCE_LAYERS
-@DEVICE_GRIDS
+@ROW_GRIDS
 @pytest.mark.parametrize("path", ENCODER_LINEARS.values(), ids=ENCODER_LINEARS.keys())
-def test_encoder_linear(mesh_device, sp_axis, num_links, config, reference, grid, layer, path):
+def test_encoder_linear(mesh_device, sp_axis, num_links, config, reference, size, layer, path):
     config = device_config(config, sp_axis)
+    grid = row_grid(size, sp_axis)
     torch_linear = reference.vision_tower.encoder.blocks[layer].get_submodule(path)
     _, h, w = grid[0]
     check_linear(mesh_device, sp_axis, config, torch_linear, h * w, config.max_patches)
@@ -62,10 +64,11 @@ def test_encoder_linear(mesh_device, sp_axis, num_links, config, reference, grid
 
 @P150_AND_RING
 @REFERENCE
-@DEVICE_GRIDS
+@ROW_GRIDS
 @pytest.mark.parametrize("path", PROJECTOR_LINEARS.values(), ids=PROJECTOR_LINEARS.keys())
-def test_projector_linear(mesh_device, sp_axis, num_links, config, reference, grid, path):
+def test_projector_linear(mesh_device, sp_axis, num_links, config, reference, size, path):
     config = device_config(config, sp_axis)
+    grid = row_grid(size, sp_axis)
     _, h, w = grid[0]
     n, rows = h * w // config.merge_area, config.max_patches // config.merge_area
     check_linear(mesh_device, sp_axis, config, reference.get_submodule(path), n, rows)
@@ -73,11 +76,12 @@ def test_projector_linear(mesh_device, sp_axis, num_links, config, reference, gr
 
 @P150_AND_RING
 @REFERENCE
-@DEVICE_GRIDS
-def test_patch_embed_linear(mesh_device, sp_axis, num_links, config, reference, grid):
+@ROW_GRIDS
+def test_patch_embed_linear(mesh_device, sp_axis, num_links, config, reference, size):
     """`patch_embed.proj`, loaded through `TT_Patch_Embed` (conv weight zero-padded to
     `padded_patch_dim`), on zero-padded patch rows, against the reference Conv2d."""
     config = device_config(config, sp_axis)
+    grid = row_grid(size, sp_axis)
     tt = TT_Patch_Embed(config, mesh_device=mesh_device, compute_kernel_config=compute_kernel_config(mesh_device))
     tt.load_torch_state_dict(reference.vision_tower.patch_embed.state_dict())
 

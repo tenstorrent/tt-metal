@@ -13,8 +13,9 @@ from models.experimental.kimi_k3_moonvit_v2.tt import host_prep
 from models.experimental.kimi_k3_moonvit_v2.reference.modeling_kimi_k3 import tpool_patch_merger
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     assert_pcc,
-    DEVICE_GRIDS,
     device_config,
+    row_grid,
+    ROW_GRIDS,
     NOT_WRITTEN,
     P150_AND_RING,
     sp_gather,
@@ -24,10 +25,11 @@ from models.experimental.kimi_k3_moonvit_v2.tt.patch_merger import TT_Patch_Merg
 
 
 @P150_AND_RING
-@DEVICE_GRIDS
+@ROW_GRIDS
 @NOT_WRITTEN
-def test_patch_merger(mesh_device, sp_axis, num_links, config, grid):
+def test_patch_merger(mesh_device, sp_axis, num_links, config, size):
     config = device_config(config, sp_axis)
+    grid = row_grid(size, sp_axis)
     tt = TT_Patch_Merger(config)
 
     _, h, w = grid[0]

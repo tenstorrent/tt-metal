@@ -15,8 +15,9 @@ from models.experimental.kimi_k3_moonvit_v2.tt import host_prep
 from models.experimental.kimi_k3_moonvit_v2.reference.modeling_kimi_k3 import apply_rope
 from models.experimental.kimi_k3_moonvit_v2.tests.common import (
     assert_pcc,
-    DEVICE_GRIDS,
     device_config,
+    row_grid,
+    ROW_GRIDS,
     P150_AND_RING,
     REFERENCE,
     reference_rope,
@@ -34,9 +35,10 @@ def build(mesh_device, sp_axis, num_links, config) -> TT_Rope:
 
 
 @P150_AND_RING
-@DEVICE_GRIDS
-def test_rope_tables(mesh_device, sp_axis, num_links, config, grid):
+@ROW_GRIDS
+def test_rope_tables(mesh_device, sp_axis, num_links, config, size):
     config = device_config(config, sp_axis)
+    grid = row_grid(size, sp_axis)
     h, w = check_grid(torch.tensor(grid), config)
     tt_rope = build(mesh_device, sp_axis, num_links, config)
     previous = tt_rope.write(*host_prep.rope_tables(config, 8, 8))
@@ -50,9 +52,10 @@ def test_rope_tables(mesh_device, sp_axis, num_links, config, grid):
 
 @P150_AND_RING
 @REFERENCE
-@DEVICE_GRIDS
-def test_rope_apply(mesh_device, sp_axis, num_links, config, reference, grid):
+@ROW_GRIDS
+def test_rope_apply(mesh_device, sp_axis, num_links, config, reference, size):
     config = device_config(config, sp_axis)
+    grid = row_grid(size, sp_axis)
     grid_thws = torch.tensor(grid)
     h, w = check_grid(grid_thws, config)
     q = torch.randn(h * w, config.num_attention_heads, config.head_dim, dtype=torch.bfloat16)

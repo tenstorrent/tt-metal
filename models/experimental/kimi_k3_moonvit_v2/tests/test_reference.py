@@ -14,7 +14,14 @@ import torch
 
 from models.experimental.kimi_k3_moonvit_v2.reference.kimi_k3_vision import KimiK3VisionModel, load_vision_config
 from models.experimental.kimi_k3_moonvit_v2.reference.modeling_kimi_k3 import tpool_patch_merger
-from models.experimental.kimi_k3_moonvit_v2.tests.common import GRIDS, SHALLOW_REFERENCE, random_patches
+from models.experimental.kimi_k3_moonvit_v2.tests.common import (
+    GRIDS,
+    ROW_GRIDS,
+    SHALLOW_REFERENCE,
+    device_config,
+    random_patches,
+    row_grid,
+)
 from models.experimental.kimi_k3_moonvit_v2.tt.model_config import MoonViTConfig, check_grid
 
 REFERENCE_CONFIG = Path(__file__).parents[1] / "reference" / "config.json"
@@ -87,3 +94,18 @@ def test_from_hf_config_rejects_null_qkv_hidden_size(expect_error):
 def test_rejects_unsupported_grids(config, expect_error, grid, message):
     with expect_error(ValueError, message):
         check_grid(torch.tensor(grid), config)
+
+
+@pytest.mark.parametrize("sp_axis", [None, 1], ids=["p150", "ring1x4"])
+@ROW_GRIDS
+def test_row_grids_fit_their_mesh(config, sp_axis, size):
+    """Each row-wise device grid is a valid image for its mesh and has the shape its name promises."""
+    config = device_config(config, sp_axis)
+    (grid,) = row_grid(size, sp_axis)
+    h, w = check_grid(torch.tensor([grid]), config)
+    if size in ("full", "max_side"):
+        assert h * w == config.max_patches
+    if size == "max_side":
+        assert max(h, w) == config.max_side_patches
+    if size == "partial":
+        assert (h * w) % 32 and h * w > config.max_patches * 3 // 4
