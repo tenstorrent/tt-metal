@@ -219,8 +219,8 @@ TEST(MetalEnv, DefaultFabricConfigIsDisabled) {
     EXPECT_EQ(env.get_fabric_config_descriptor().fabric_config, tt_fabric::FabricConfig::DISABLED);
 }
 
-// Without configure_fabric, the mesh binding comes from TT_MESH_ID / TT_MESH_HOST_RANK (mesh 0 / host rank 0 when
-// unset).
+// Without configure_fabric, the mesh binding comes from TT_MESH_ID / TT_MESH_HOST_RANK (mesh 0 when unset; host rank
+// MESH_HOST_RANK_UNSET when unset, deferred to the topology mapper).
 TEST(MetalEnv, DefaultMeshBindingComesFromRtOptions) {
     MetalEnv env(wormhole_mock_descriptor());
     const auto& rtoptions = MetalEnvAccessor(env).impl().get_rtoptions();

@@ -152,6 +152,10 @@ using SwitchId = ttsl::StrongType<uint32_t, struct SwitchIdTag>;
 // Sentinel value indicating that TT_MESH_HOST_RANK environment variable is unset
 constexpr MeshHostRankId MESH_HOST_RANK_UNSET{UINT32_MAX};
 
+// Sentinel value indicating that no local mesh id binding was specified (TT_MESH_ID unset). Used only
+// to signal "no explicit binding" into the ControlPlane; it is never consumed as a real mesh id.
+constexpr MeshId MESH_ID_UNSET{UINT32_MAX};
+
 // Mesh-local logical chip id (row-major node within a single mesh), matching FabricNodeId::chip_id. The full
 // FabricNodeId (mesh_id + chip_id) is only known once a logical MeshId is assigned, so pre-assignment contexts
 // carry just the chip id.

@@ -201,7 +201,7 @@ class RunTimeOptions {
     std::string custom_fabric_mesh_graph_desc_path;
 
     tt::tt_fabric::MeshId fabric_mesh_id{0};
-    tt::tt_fabric::MeshHostRankId fabric_mesh_host_rank{0};
+    tt::tt_fabric::MeshHostRankId fabric_mesh_host_rank{tt::tt_fabric::MESH_HOST_RANK_UNSET};
 
     // Path to a Factory System Descriptor (FSD): the "as-built"/expected description of the cluster's
     // topology, as opposed to the Physical System Descriptor (PSD) that tooling discovers live from the

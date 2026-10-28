@@ -407,10 +407,14 @@ private:
 
     void init_control_plane_auto_discovery();
 
-    // Gathers the FabricConfigDescriptor of every rank and checks that each rank's mesh_id / host_rank exist in the
-    // mesh graph descriptor, that ranks of a logical mesh share one FabricConfig, and that all other settings are
-    // identical on every rank (only fabric_config, mesh_id and host_rank may differ). Must run after the mesh graph is
-    // built and before the topology mapper, routing tables or FabricContext use the binding.
+    // Validates this process's own mesh binding (config_.mesh_id / host_rank) against the mesh graph descriptor and
+    // checks the FabricConfigDescriptor of every rank: that each rank's mesh_id / host_rank exist in the mesh graph
+    // descriptor, that ranks of a logical mesh share one FabricConfig, and that all other settings are identical on
+    // every rank (only fabric_config, mesh_id and host_rank may differ). The local-binding checks emit the TT_MESH_ID /
+    // TT_MESH_HOST_RANK diagnostics that tt-run users and tests rely on, and run on every init path. The cross-rank
+    // checks reuse the descriptors gathered in gather_fabric_config_descriptors() and are skipped when none were
+    // gathered (single-host auto-discovery). Must run after the mesh graph is built and before the topology mapper,
+    // routing tables or FabricContext use the binding.
     void validate_fabric_config_compatibility();
 
     // All-gather every rank's FabricConfigDescriptor into gathered_fabric_configs_. Done once, up front in
@@ -431,6 +435,12 @@ private:
     // live: any downed devices/links result in an error. Otherwise the control plane is free to instantiate
     // fewer routing planes according to which links are available.
     tt_metal::FabricConfigDescriptor config_;
+
+    // Whether this process was bound to a concrete mesh id (config_.mesh_id != MESH_ID_UNSET at interpretation time).
+    // When false, no explicit binding was given: the single host owns every mesh and config_.mesh_id was normalized to
+    // 0. Captured before config_.mesh_id is normalized so the sentinel never leaks downstream, and consumed by
+    // validate_fabric_config_compatibility() to apply the single-host constraints.
+    bool local_mesh_binding_explicit_ = false;
 
     // Every rank's FabricConfigDescriptor, gathered once in gather_fabric_config_descriptors(). Indexed by rank.
     // Used to build each mesh's config in MeshGraph and to cross-check compatibility, without a second all-gather.
