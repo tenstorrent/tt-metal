@@ -153,12 +153,16 @@ struct UntilizerCtArgs {
     volatile tt_l1_ptr uint32_t* freed_ptr(uint32_t peer_word) const {
         return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(peer_word));
     }
-    uint32_t produced_slot_addr() const { return get_semaphore(produced_slot); }
+    // One kernel serves the whole group, so this core's position and produced-count semaphore are its runtime
+    // arguments; the compile-time my_index and produced_slot are not set.
+    uint32_t core_index() const { return get_arg_val<uint32_t>(0); }
+    uint32_t produced_slot_addr() const { return get_semaphore(get_arg_val<uint32_t>(1)); }
     void reset_freed_counter(volatile tt_l1_ptr uint32_t*) const {}
 #else
     volatile tt_l1_ptr uint32_t* freed_ptr(uint32_t peer_word) const {
         return reinterpret_cast<volatile tt_l1_ptr uint32_t*>(peer_word);
     }
+    uint32_t core_index() const { return my_index; }
     uint32_t produced_slot_addr() const { return produced_slot; }
     void reset_freed_counter(volatile tt_l1_ptr uint32_t* p) const { noc_semaphore_set(p, 0); }
 #endif
