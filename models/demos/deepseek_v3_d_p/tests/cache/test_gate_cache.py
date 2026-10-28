@@ -13,7 +13,12 @@ import ttnn
 from models.common.utility_functions import profiler
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import create_gate_weights, get_sp_mesh_composer
-from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode, TtMoEGateConfig, TtMoEGatePrefill
+from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import (
+    GateComputeMode,
+    TtMoEGateConfig,
+    TtMoEGatePrefill,
+    centre_gate_bias,
+)
 from models.demos.deepseek_v3_d_p.utils.fast_cache_checker import init_checker, report_and_clear
 from models.demos.deepseek_v3_d_p.utils.test_utils import adjust_shapes_for_testing, get_input_mem_config
 from tests.ttnn.utils_for_testing import comp_pcc
@@ -185,3 +190,58 @@ def test_gate_weights_cold_warm_cache(mesh_device, device_params, gate_mode):
 
     assert passed_cold, f"Cold cache mismatch ({gate_mode}): PCC={pcc_cold}"
     assert passed_warm, f"Warm cache mismatch ({gate_mode}): PCC={pcc_warm}"
+
+
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            (2, 2),
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 2), topology="mesh-2x2"),
+            id="fabric2d-2x2",
+        ),
+        pytest.param(
+            (8, 4),
+            fabric2d_device_params(),
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+            id="fabric2d-8x4",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_gate_bias_centered_cache(mesh_device, device_params, expect_error):
+    """MOE_GATE_BIAS_CENTERED: the bias is cached as bf16(bias - mean) under its own name, the completeness check
+    follows the flag, and a cache-only load refuses an uncentred-only cache instead of dumping a placeholder."""
+    torch.manual_seed(42)
+    config = TtMoEGateConfig(bias_centered=True)
+    adjust_shapes_for_testing(config, mesh_device)
+    gate_w = create_gate_weights(config.n_routed_experts, config.dim)["weight"]
+    # GLM-5.3-like: a large offset with a small spread, which bf16 collapses unless centred.
+    bias = 34.0 + 0.14 * torch.randn(config.n_routed_experts, dtype=torch.float32)
+    assert bias.to(torch.bfloat16).unique().numel() < 16
+
+    # An uncentred-only cache is incomplete for a centred model, and a cache-only load refuses it.
+    legacy_config = TtMoEGateConfig(bias_centered=False)
+    adjust_shapes_for_testing(legacy_config, mesh_device)
+    TtMoEGatePrefill.build_ttnn_cache(gate_w, bias, legacy_config, mesh_device, CACHE_DIR, "gate")
+    init_checker(CACHE_DIR)
+    assert TtMoEGatePrefill.check_cache_complete(CACHE_DIR, "gate", bias_centered=False)
+    assert not TtMoEGatePrefill.check_cache_complete(CACHE_DIR, "gate", bias_centered=True)
+    with expect_error(FileNotFoundError, "mean-centred"):
+        TtMoEGatePrefill(config, mesh_device, weight_cache_path=CACHE_DIR, cache_name_prefix="gate")
+    assert not list(CACHE_DIR.glob("gate.e_score_correction_bias_centered*")), "refused load must not dump a file"
+
+    TtMoEGatePrefill.build_ttnn_cache(gate_w, bias, config, mesh_device, CACHE_DIR, "gate")
+    init_checker(CACHE_DIR)
+    assert TtMoEGatePrefill.check_cache_complete(CACHE_DIR, "gate", bias_centered=True)
+
+    loaded = TtMoEGatePrefill._convert_and_cache_gate_weights(
+        None, None, config, mesh_device, CACHE_DIR, "gate", device=mesh_device
+    )["torch_bias"].reshape(-1)
+    expected = centre_gate_bias(bias).to(torch.bfloat16)
+    assert torch.equal(loaded.to(torch.bfloat16), expected), "cached bias is not bf16(bias - mean(bias))"
+    assert expected.unique().numel() > 4 * bias.to(torch.bfloat16).unique().numel()
+    # Same expert ranking as the fp32 bias wherever bf16 can separate it.
+    order = torch.argsort(bias, descending=True)
+    assert (loaded[order][:-1] >= loaded[order][1:]).all(), "centred bf16 bias reorders experts"
