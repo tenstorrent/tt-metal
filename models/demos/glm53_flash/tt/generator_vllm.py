@@ -927,6 +927,7 @@ class GLM53FlashForCausalLM:
         build + release), the 512-bucket eager prefill and the scatter ops, so the first image request compiles
         nothing. Eager phase only (before every capture); slot 0's state is overwritten by its next prompt."""
         t0 = time.perf_counter()
+        self.vision.warmup()  # the tower at every patch bucket (a clip's 2048-patch call included)
         item = self.vision.dummy_item()
         text = torch.arange(16, dtype=torch.long) % 1000 + 1000
         ids = torch.cat([text, torch.full((item.n_tokens,), IMAGE_TOKEN_ID, dtype=torch.long), text])

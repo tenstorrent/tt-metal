@@ -241,10 +241,22 @@ def _first_shard_to_torch(t: ttnn.Tensor) -> torch.Tensor:
     return ttnn.to_torch(shards[0] if shards else t)
 
 
-def _tower_call(tower: TtVisionTower, pixel_values: torch.Tensor, grid_rows: torch.Tensor) -> list[torch.Tensor]:
+VISION_PATCH_BUCKET = 1024  # tower calls are padded to a multiple of this many patches (the 448x448 image's count)
+
+
+def vision_pad_patches(n_patches: int, bucket: int = VISION_PATCH_BUCKET) -> int:
+    """The padded patch count of a tower call holding ``n_patches``: the next multiple of ``bucket`` (1024, 2048,
+    3072, 4096 for the default 4096-patch batches), so the tower's programs exist at a handful of shapes that
+    the boot warm-up builds (``VisionRuntime.warmup``) and no image or clip geometry compiles at request time."""
+    return max(bucket, -(-int(n_patches) // bucket) * bucket)
+
+
+def _tower_call(
+    tower: TtVisionTower, pixel_values: torch.Tensor, grid_rows: torch.Tensor, pad_to: int | None = None
+) -> list[torch.Tensor]:
     """One tower call over whole windows (``grid_rows`` ``[n, 3]`` with t == 1): per-window ``[h*w/4, 4096]``
     host features (fp32 holding bf16 values). Every device temporary is freed before returning."""
-    inputs = tower.prepare_inputs(pixel_values, grid_rows)
+    inputs = tower.prepare_inputs(pixel_values, grid_rows, pad_to=pad_to)
     out = tower(inputs)
     flat = _first_shard_to_torch(out).float().reshape(-1, tower.cfg.out_hidden_size)[: inputs.num_tokens]
     feats = [f.clone() for f in torch.split(flat, inputs.split_sizes)]
@@ -280,7 +292,7 @@ def vision_features(
     per_window: list[torch.Tensor | None] = [None] * len(windows)
     for lo, hi in vision_batches(grid_flat, max_patches):
         pv = torch.cat([windows[i][1] for i in range(lo, hi)], dim=0)
-        feats = _tower_call(tower, pv, grid_flat[lo:hi])
+        feats = _tower_call(tower, pv, grid_flat[lo:hi], pad_to=vision_pad_patches(int(pv.shape[0])))
         for i, f in zip(range(lo, hi), feats):
             per_window[i] = f
     out: list[torch.Tensor] = []
@@ -550,11 +562,23 @@ class VisionRuntime:
         return MMItem("image", torch.randn(g * g, self.cfg.patch_dim, generator=torch.Generator().manual_seed(0)), grid)
 
     def warmup(self) -> float:
-        """Compile the tower's programs (and, per request mode, exercise the build + release) on the dummy
-        item; returns the seconds taken."""
+        """Compile the tower's programs (and, per request mode, exercise the build + release) at EVERY patch
+        bucket a tower call can take (``vision_pad_patches``: 1024 .. ``max_patches`` in steps of 1024, one
+        dummy item of exactly that many patches each); returns the seconds taken."""
         t0 = time.perf_counter()
-        self.encode([self.dummy_item()])
+        for n in range(VISION_PATCH_BUCKET, self.max_patches + 1, VISION_PATCH_BUCKET):
+            self.encode([self.dummy_item_patches(n)])
         return time.perf_counter() - t0
+
+    def dummy_item_patches(self, n_patches: int) -> MMItem:
+        """A random image item of exactly ``n_patches`` patches (grid ``(1, 32, n / 32)``; ``n`` a multiple of 128,
+        so the 2x2 merge and the 32-row tiles divide it) for the tower warm-up at one patch bucket."""
+        if n_patches % 128:
+            raise ValueError(f"a dummy tower item needs a multiple of 128 patches, got {n_patches}")
+        grid = torch.tensor([[1, 32, n_patches // 32]])
+        return MMItem(
+            "image", torch.randn(n_patches, self.cfg.patch_dim, generator=torch.Generator().manual_seed(1)), grid
+        )
 
     def release(self) -> None:
         if self.tower is not None:

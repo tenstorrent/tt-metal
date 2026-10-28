@@ -379,7 +379,7 @@ class VisionInputs:
     patches: ttnn.Tensor  # [1, 1, S_pad, patch_dim_padded] act_dtype (fp32: bf16 pixels already cost 1e-3 PCC)
     cos: ttnn.Tensor  # [1, 1, S_pad, head_dim] act_dtype
     sin: ttnn.Tensor
-    cu_window: ttnn.Tensor | None  # [n_windows + 1] uint32 ROW_MAJOR, None for a single unpadded image
+    cu_window: ttnn.Tensor | None  # [n_windows + 1] uint32 ROW_MAJOR (always set by prepare_inputs)
     num_patches: int  # real rows of ``patches``
     split_sizes: list[int]  # merged tokens per image (HF ``get_image_features`` split)
 
@@ -439,15 +439,24 @@ class TtVisionTower(LightweightModule):
         self.hifi4 = _compute(device, ttnn.MathFidelity.HiFi4, packer_l1_acc=False)
 
     # ---- host boundary -------------------------------------------------------------------
-    def prepare_inputs(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor) -> VisionInputs:
+    def prepare_inputs(
+        self, pixel_values: torch.Tensor, grid_thw: torch.Tensor, pad_to: int | None = None
+    ) -> VisionInputs:
         """HF processor output (``pixel_values`` [N, patch_dim], ``image_grid_thw`` [n, 3]) -> device
-        tensors. Pads the token axis to a multiple of 32 (pad rows form their own attention window)."""
+        tensors. Pads the token axis to ``pad_to`` rows (a multiple of 32 holding N; default: N's own multiple
+        of 32); the pad rows form their own attention window. The serving path pads every tower call to a patch
+        bucket (``multimodal.vision_pad_patches``) so the tower's programs exist at a few shapes, all built at
+        boot: a 2-group clip (2048 patches) after a 1024-patch warm-up compiled its patch embed at request time
+        under the sealed program cache (2026-10-28 8x4). The window bounds are always a tensor (a single
+        unpadded image included) so the attention runs one program family."""
         cfg = self.cfg
         N = pixel_values.shape[0]
         assert pixel_values.shape[1] == cfg.patch_dim, pixel_values.shape
         lens = vision_seq_lens(grid_thw)
         assert sum(lens) == N, (lens, N)
-        S = -(-N // TILE) * TILE
+        S = -(-N // TILE) * TILE if pad_to is None else int(pad_to)
+        if S < N or S % TILE:
+            raise ValueError(f"pad_to {pad_to} must hold the {N} patches and be a multiple of {TILE}")
         patches = torch.zeros(S, cfg.patch_dim_padded, dtype=torch.float32)
         patches[:N, : cfg.patch_dim] = pixel_values.float()
         cos, sin = vision_rope_cos_sin(grid_thw, cfg)
@@ -455,10 +464,8 @@ class TtVisionTower(LightweightModule):
         sin_p = torch.zeros(S, cfg.head_dim)
         cos_p[:N], sin_p[:N] = cos, sin
         windows = list(lens) + ([S - N] if S > N else [])
-        cu = None
-        if len(windows) > 1:
-            bounds = torch.tensor([0] + list(torch.tensor(windows).cumsum(0).tolist()), dtype=torch.int32)
-            cu = ttnn.from_torch(bounds, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+        bounds = torch.tensor([0] + list(torch.tensor(windows).cumsum(0).tolist()), dtype=torch.int32)
+        cu = ttnn.from_torch(bounds, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
         return VisionInputs(
             patches=_upload(self.device, patches.reshape(1, 1, S, -1), self.act_dtype),
             cos=_upload(self.device, cos_p.reshape(1, 1, S, -1), self.act_dtype),
