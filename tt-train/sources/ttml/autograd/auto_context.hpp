@@ -137,8 +137,6 @@ public:
 
     void initialize_parallelism_context(const DistributedConfig& config);
 
-    void reset_parallelism_context();
-
 private:
     AutoContext();
     uint32_t m_seed = 5489U;
