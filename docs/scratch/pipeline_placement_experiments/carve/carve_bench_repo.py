@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Repo-shaped carve cases for carve_bench.py (DFS vs CaDiCaL).
 
 Grids are the largest slice grids the repo's MGDs declare (host_topology): 4x8, 8x4, 2x16, 8x8.

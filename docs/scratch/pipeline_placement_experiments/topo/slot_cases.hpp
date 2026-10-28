@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Stage-to-slot instances with stages bigger than one slice, shared by topo_solver_bench.cpp and
 // resolver_same_cases.cpp.
 //

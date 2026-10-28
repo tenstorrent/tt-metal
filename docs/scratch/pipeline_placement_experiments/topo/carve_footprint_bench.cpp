@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // The carve as a footprint mapping through tt-metal's own topology solver (solve_topology_mapping),
 // with no solver change: the same pattern the mesh seating uses for seats.
 //

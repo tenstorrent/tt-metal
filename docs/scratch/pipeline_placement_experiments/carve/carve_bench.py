@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Ring-of-rectangles carve on one slice grid: DFS with memo vs CaDiCaL.
 
 Problem: stage k takes a rectangle of its shape (in slices), rectangles are disjoint, stage k touches

@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Follow-ups: designed pipelines on every MGD, and a cheap degree check against the gap."""
 
 import collections

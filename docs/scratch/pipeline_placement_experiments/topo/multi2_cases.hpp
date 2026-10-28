@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // Multi-mesh instances of 32-rank meshes (4x8 host slices each) shared by topo_solver_bench.cpp and resolver_same_cases.cpp.
 //
 // Every mesh is a 4x8 grid of host slices, 32 ranks (the largest host grid a repo MGD declares). Meshes

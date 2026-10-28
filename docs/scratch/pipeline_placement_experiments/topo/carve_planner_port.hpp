@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // A C++ port of tt-blaze's ring carve planner (pipeline_builder/carve_planner.py, plan_ring_carve) for the
 // benchmarks: the design's section 3.2 ("port the carve planner to C++") does not exist in the repo yet, so
 // this is the reference for what that port would cost per solve. Same algorithm, same orders, same budgets:

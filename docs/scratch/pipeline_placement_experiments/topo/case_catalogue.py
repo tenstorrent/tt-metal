@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Every instance in the carve / multi-mesh / slot experiments: what it is, whether it is solvable, and
 which engine decided it fastest.
 

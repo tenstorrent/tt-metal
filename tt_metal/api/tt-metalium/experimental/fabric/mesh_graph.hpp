@@ -5,7 +5,6 @@
 #pragma once
 
 #include <filesystem>
-#include <tt_stl/assert.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tuple>
@@ -14,7 +13,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
-#include <map>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -178,7 +176,7 @@ public:
     // When host_rank is provided, coordinate is treated as submesh-local and is
     // offset by that rank's origin within the parent mesh before the conversion.
     ChipId coordinate_to_chip(
-        MeshId mesh_id, MeshCoordinate coordinate, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
+        MeshId mesh_id, const MeshCoordinate& coordinate, std::optional<MeshHostRankId> host_rank = std::nullopt) const;
 
     // Static functions for mesh graph descriptor management
     static std::filesystem::path get_mesh_graph_descriptor_path_for_cluster_type(

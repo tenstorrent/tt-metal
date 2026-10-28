@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """The carve-requiring comparison: footprint (topology solver, Auto) against the resolver path (carve planner
 then resolver) and the topology solver at slot level, per case. Reads results/<run>/{completeness,
 footprint_then_resolver, planner_then_resolver}. Usage: carve_comparison.py <results dir> [group ...]"""

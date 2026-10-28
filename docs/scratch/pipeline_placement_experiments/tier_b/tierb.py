@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Prototype of Tier B: slim checks vs full search + carve, on the repo's MGDs.
 
 Not production code. Mirrors the plan in docs/scratch/mgd-pipeline-graph-design.md, 2.2.

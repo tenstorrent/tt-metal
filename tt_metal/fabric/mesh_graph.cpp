@@ -815,7 +815,7 @@ MeshCoordinate MeshGraph::chip_to_coordinate(MeshId mesh_id, ChipId chip_id) con
 }
 
 ChipId MeshGraph::coordinate_to_chip(
-    MeshId mesh_id, MeshCoordinate coordinate, std::optional<MeshHostRankId> host_rank) const {
+    MeshId mesh_id, const MeshCoordinate& coordinate, std::optional<MeshHostRankId> host_rank) const {
     return mesh_graph_descriptor_.coordinate_to_chip(mesh_id, coordinate, host_rank);
 }
 

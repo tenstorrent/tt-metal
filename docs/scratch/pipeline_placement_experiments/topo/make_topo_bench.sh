@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Build topo_solver_bench without libtt_metal: compile the topology solver's three source files
 # straight into the benchmark. solve_topology_mapping is header-only (topology_solver.tpp); the
 # non-template helpers live in topology_solver.cpp / topology_solver_sat.cpp /

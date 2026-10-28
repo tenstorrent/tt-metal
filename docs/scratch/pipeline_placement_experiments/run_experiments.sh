@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
+
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 # Handoff runner for the pipeline-placement experiments. See README.md for what each one checks.
 #
 #   ./run_experiments.sh setup       # venv + generated protobuf module + MGD list (once)

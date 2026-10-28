@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Exact feasibility of the tight multi-mesh ring and line cases (multi2_cases.hpp) by the colour test.
 
 Every mesh is a 4x8 grid of host slices, all 32 used (tight), the pipeline a ring or chain of

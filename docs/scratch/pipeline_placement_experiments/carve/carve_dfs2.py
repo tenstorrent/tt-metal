@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """An improved carve DFS: the carve_bench.py search plus what the SAT encodings got for free.
 
 Same problem (stage k is a rectangle of its shape in slices, rectangles disjoint, k touches k+1,

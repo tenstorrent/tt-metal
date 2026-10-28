@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // The carve as a graph-to-graph mapping through tt-metal's own topology solver
 // (solve_topology_mapping, SAT and DFS engines), against the same cases as carve_bench_encodings.py.
 //

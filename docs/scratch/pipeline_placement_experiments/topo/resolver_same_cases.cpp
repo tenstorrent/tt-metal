@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 // The same carve instances as topo_solver_bench.cpp, through the real resolver search of
 // tt_metal/fabric/pipeline_builder.cpp (search_body.inc is copied out of the checkout by
 // run_experiments.sh extract_resolver).

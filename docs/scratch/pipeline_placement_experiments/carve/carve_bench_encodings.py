@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+
 """Carve SAT encodings against the DFS: does a slice-level grouping encoding beat positions?
 
 Same problem as carve_bench.py (stage k is a rectangle of its shape in slices, rectangles are
