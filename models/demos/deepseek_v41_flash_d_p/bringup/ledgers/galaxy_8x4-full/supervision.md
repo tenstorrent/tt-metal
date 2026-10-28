@@ -533,3 +533,9 @@ check (F196 / F197); host times stay hidden until verified warm.
   bringup/ENGRAM_HOST_PATH.md (problem, numbers, staged plan, 2x2 vs Galaxy split and pitfalls).
 - 11:38 OWNER: accept P.1 (GENERIC_OP_PREPARED: warm wall 673.2 -> 594.3 ms, accuracy identical, gate PASS with the change on). SEED-BOX RE-VERIFY += fabric_reduce_scatter prepared (setting on).
 - 12:10 P.2 TAIL_A2A_PREPARED A/B: on 544.4 ms warm wall; off side crashed (Fatal Python error: Bus error in load_tensor_flatbuffer while loading cached expert weights at model build; files re-read cleanly: transient). Off = the accepted P.1 tree: P.1 on 594.3 ms, all 103 accuracy metrics identical to P.2 on -> -49.9 ms. Brought to the owner without a re-run. Framework F207 (A/B side crash retried once, selftest) committed at this pause.
+- 12:49 OWNER DELEGATION: "clean win -> accept yourself". The overseer accepts a perf pick only when ALL hold:
+  gate PASS with the change on; every accuracy metric unchanged, or within its limit and no worse than the old path;
+  warm wall improves and device time does not get worse; diff read (old path selectable, no precision change, no
+  padding, nothing outside its paths). Anything else goes to the owner. One line per delegated accept, here.
+- 12:49 DELEGATED ACCEPT P.2 TAIL_A2A_PREPARED: warm wall 594.3 -> 544.4 ms (-49.9), 103 accuracy metrics
+  identical, gate PASS; diff: TailA2A prepared=False default + setting. SEED-BOX RE-VERIFY += TailA2A prepared.

@@ -163,6 +163,10 @@ class MoEOptions:
     # combine's rows tilized, + the shared expert's owner rows, the TP all-to-all into the output); "ops" its ops;
     # "auto": fused where it is built
     tail: Literal["auto", "fused", "ops"] = "auto"
+    # the fused tail without a latent (tt/tail_a2a.py): its cached descriptors dispatched as prepared programs
+    # (ttnn.bringup.prepare_program once per descriptor, run_prepared each call: no per-call hashing or runtime-argument
+    # re-application; host time only, the same programs); False: plain ttnn.generic_op
+    tail_prepared: bool = False
     # the residual at the block's boundary: "sp_tp" main's layout [S/SP, H/TP] a chip; "owners" each chip's own tokens
     # at full width [S/N, H] (row-major chip order - the owners' rows: a model whose residual is split by tokens over
     # every chip, GLM-5.3-Flash's). The ops head gathers rows instead of width; the fused head (it reads the width
@@ -501,7 +505,9 @@ class MoEBlock(LightweightModule):
         self.tail = None
         if options.tail == "fused" or (options.tail == "auto" and tfits is True):
             # (before the tail's warm-up: its persistent words go with the tail's other one-time L1)
-            self.tail = FusedTail(mesh_device, g, model, weights, self._tp_topology(), dtypes)
+            self.tail = FusedTail(
+                mesh_device, g, model, weights, self._tp_topology(), dtypes, prepared=options.tail_prepared
+            )
         if self.head_mode == "fused":
             self._warm_up_tail()
             hole = _l1_hole(mesh_device, FusedHead.HOLE)
@@ -1249,14 +1255,25 @@ class FusedTail:
             return "whole tiles of H / TP and of each latent K half"
         return True
 
-    def __init__(self, mesh, g: Geometry, model: MoEModel, w: MoEWeights, topology, dtypes: MoEDtypes = MoEDtypes()):
+    def __init__(
+        self,
+        mesh,
+        g: Geometry,
+        model: MoEModel,
+        w: MoEWeights,
+        topology,
+        dtypes: MoEDtypes = MoEDtypes(),
+        prepared: bool = False,
+    ):
         from models.demos.moe_block.tt.tail_engine import TailEngine
 
         self.a2a = None
         if model.latent_dim is None:
             from models.demos.moe_block.tt.tail_a2a import TailA2A
 
-            self.a2a = TailA2A(mesh, rows=g.tokens_per_row, H=model.emb_dim, topology=topology, num_links=g.links)
+            self.a2a = TailA2A(
+                mesh, rows=g.tokens_per_row, H=model.emb_dim, topology=topology, num_links=g.links, prepared=prepared
+            )
             return
         H, Hr, tp = model.emb_dim, model.latent_dim, g.tp
         self.eng = TailEngine(

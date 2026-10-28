@@ -59,3 +59,7 @@ ttnn.bringup.run_prepared(p, [in0, in1, out])             # every call
 - ttnn.bringup.fabric_reduce_scatter(prepared=True) (deepseek_v41_flash_d_p tt/ccl.py, GENERIC_OP_PREPARED, P.1
   galaxy): one PreparedProgram per cached descriptor, called directly (prepare_program / run_prepared), not through
   this module's 512-entry cache.
+- models/demos/moe_block/tt/tail_a2a.py TailA2A(prepared=True) (MoEOptions.tail_prepared; deepseek_v41_flash_d_p
+  tt/moe_block_adapter.py, setting TAIL_A2A_PREPARED, P.2 galaxy): one PreparedProgram per cached descriptor (keyed by
+  the y / se / out addresses, so a hit patches nothing), called directly. 8x4 warm chunk wall 594.3 -> 544.4 ms, ladder
+  metrics identical.

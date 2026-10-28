@@ -3529,3 +3529,25 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   tests), 13 errors are fabric router sync timeouts opening 2x4 sub-meshes on the Galaxy (not this change).
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.orchestrator measure --task P.1`; off side:
   `DS41_GENERIC_OP_PREPARED=off`.
+
+## P.2 (perf, galaxy 8x4): TAIL_A2A_PREPARED, the block MoE's fused tail through prepared programs
+- Block option `MoEOptions.tail_prepared` (default False = the old path) -> `FusedTail(prepared=)` ->
+  `TailA2A(prepared=True)` (models/demos/moe_block/tt/tail_a2a.py `run`): each cache entry, keyed by the y / se / out
+  addresses as before, now holds `(descriptor, ttnn.bringup.prepare_program(descriptor, io))`; a hit calls
+  `ttnn.bringup.run_prepared` (no per-call hashing of the inline kernel sources, no runtime args re-applied over 32
+  chips). Built for exactly those addresses, so a hit patches nothing (same pattern as P.1, DS41-66). io order
+  unchanged: [y, out, z, zrw] (+ se). `TailA2A.misses` counts descriptor builds (diagnostic).
+- tt/settings.py `TAIL_A2A_PREPARED` (default on; off = ttnn.generic_op on the cached descriptor);
+  tt/moe_block_adapter.py `block_options()` passes it.
+- Not done: the persistent `out` of the proposal (optional): the model frees the tail's output downstream, a kept
+  buffer needs lifetime changes in model code; the timed runs show no new program-cache entries (280 -> 280), so the
+  per-call `out` already lands at repeating addresses and the descriptor cache hits.
+- Quick A/B change-on side (`measure --task P.2`): warm chunk wall median 544.4 ms (runs 534.7-574.6, spread 39.9)
+  vs 594.3 at P.1 (the same tree with the tail on generic_op): ~50 ms a chunk host saved (estimate ~36). Every
+  err_layer / err_state within its limit and equal to P.1's to the last digit (L00 0.0247993108407984,
+  pcc_chunk_out 0.6206461212358627): same programs, same args. host_transfers_per_layer 0. Device time not measured
+  here (no device change by construction; the tail's program is 0.079 ms/layer); the orchestrator's A/B profile gives it.
+- No new fork test: prepared_program's model cases (tests/cases.py) build the block with tail_prepared off; a tail case
+  needs its signatures captured (optests).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.orchestrator measure --task P.2`; off side:
+  `DS41_TAIL_A2A_PREPARED=off`.
