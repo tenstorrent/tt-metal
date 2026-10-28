@@ -240,7 +240,6 @@ void MetalContext::initialize(
     rtoptions().resolve_mesh_coords_to_chip_ids(this->get_system_mesh());
     if (rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
         TT_FATAL(!rtoptions().get_profiler_enabled(), "Both DPRINT and Profiler cannot be enabled at the same time.");
-        rtoptions().set_disable_dma_ops(true);  // DMA is not thread-safe
         dprint_server_ = std::make_unique<DPrintServer>(this, *this->env_, num_hw_cqs, dispatch_core_config_);
     }
     // Emulated devices have no firmware for the watcher to poll; skip it. A null
@@ -349,7 +348,6 @@ void MetalContext::teardown() {
             dprint_server_->detach_devices();
         }
         dprint_server_.reset();
-        rtoptions().set_disable_dma_ops(false);
     }
 
     if (!get_cluster().is_mock_or_emulated()) {
