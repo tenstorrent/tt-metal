@@ -1201,6 +1201,8 @@ class FusedTail:
             if (model.emb_dim // g.tp) % 32 or g.tokens_per_chip % 32:
                 return "whole tiles of H / TP and of a chip's owned rows"
             return True
+        if not model.latent_norm:  # ("auto" takes the ops tail, which skips the norm; the summary line says why)
+            return "latent_norm off (the fused tail always rms-normalizes the latent)"
         if g.links != 2:
             return f"{g.links} links (a link a K half)"
         if (model.emb_dim // g.tp) % 32 or model.latent_dim % 64:
@@ -1230,7 +1232,8 @@ class FusedTail:
         )
         up = w.latent["up"].float()  # [H, Hr]
         Ho = H // tp
-        gn = w.latent["norm"].float() if model.latent_norm else torch.ones(Hr)
+        assert model.latent_norm, "the fused tail rms-normalizes the latent (FusedTail.fits)"
+        gn = w.latent["norm"].float()
         self.w = self.eng.upload([up.T[:, (d % tp) * Ho : (d % tp + 1) * Ho].contiguous() for d in range(g.chips)], gn)
 
     def __call__(self, y_rm, se):
