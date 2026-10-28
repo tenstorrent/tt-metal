@@ -21,11 +21,11 @@ GALAXY_DEVICE_PARAMS = {
     "require_exact_physical_num_devices": True,
 }
 
-# (a_shape, w_shape, scatter_dim, fp32_dest_acc_en, weight_dtype)
+# (a_shape, w_shape, scatter_dim, weight_dtype)
 CASES = {
-    "kimi_k27_o_proj": ((1, 1, 640, 2048), (2048, 7168), -1, False, ttnn.bfloat8_b),
-    "mimo_v2_o_proj": ((1, 1, 2048, 2048), (2048, 4096), -2, True, ttnn.bfloat8_b),
-    "chunked_n": ((1, 1, 2048, 1024), (1024, 16384), -1, True, ttnn.bfloat16),
+    "kimi_k27_o_proj": ((1, 1, 640, 2048), (2048, 7168), -1, ttnn.bfloat8_b),
+    "mimo_v2_o_proj": ((1, 1, 2048, 2048), (2048, 4096), -2, ttnn.bfloat8_b),
+    "chunked_n": ((1, 1, 2048, 1024), (1024, 16384), -1, ttnn.bfloat16),
 }
 
 
@@ -36,7 +36,7 @@ CASES = {
 @pytest.mark.parametrize("topology", [ttnn.Topology.Ring, ttnn.Topology.Linear], ids=["ring", "line"])
 @pytest.mark.parametrize("case", CASES.values(), ids=CASES.keys())
 def test_galaxy(mesh_device, cluster_axis, topology, case):
-    a_shape, w_shape, scatter_dim, fp32, weight_dtype = case
+    a_shape, w_shape, scatter_dim, weight_dtype = case
     run_case(
         mesh_device,
         a_shape,
@@ -45,5 +45,4 @@ def test_galaxy(mesh_device, cluster_axis, topology, case):
         scatter_dim=scatter_dim,
         topology=topology,
         weight_dtype=weight_dtype,
-        fp32_dest_acc_en=fp32,
     )

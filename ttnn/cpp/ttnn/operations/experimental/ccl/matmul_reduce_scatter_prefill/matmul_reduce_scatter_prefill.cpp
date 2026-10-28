@@ -41,6 +41,8 @@ bool config_wraps(tt::tt_fabric::FabricConfig fabric_config, int32_t cluster_axi
 
 using Coord = std::pair<uint32_t, uint32_t>;  // (row, col) of the mesh
 
+constexpr size_t kMaxLinks = 2;  // links per hop the op supports (check_support refuses a larger num_links)
+
 // build_groups: the device lines along cluster_axis.
 std::vector<std::vector<Coord>> build_groups(uint32_t rows, uint32_t cols, int32_t cluster_axis) {
     std::vector<std::vector<Coord>> groups;
@@ -63,11 +65,22 @@ std::vector<std::vector<Coord>> build_groups(uint32_t rows, uint32_t cols, int32
 }
 
 // The fewest forwarding links over every hop of the groups along cluster_axis, both directions, ring wrap included.
+// Also refuses a mesh with a device on another host: every chip's program places its neighbours' ports itself (the
+// port cores its packets target), which needs each neighbour's Ethernet cores, so a remote neighbour would be placed
+// differently from its own program and its port would never receive the ready word.
 size_t count_usable_links(tt::tt_metal::distributed::MeshDevice* mesh, int32_t cluster_axis, bool ring) {
     const auto& mesh_shape = mesh->shape();
     auto node = [&](const Coord& c) { return mesh->get_fabric_node_id(ttnn::MeshCoordinate(c.first, c.second)); };
     size_t avail = std::numeric_limits<size_t>::max();
     for (const auto& group : build_groups(mesh_shape[0], mesh_shape[1], cluster_axis)) {
+        for (const Coord& c : group) {
+            TT_FATAL(
+                mesh->is_local(ttnn::MeshCoordinate(c.first, c.second)),
+                "matmul_reduce_scatter_prefill: device ({}, {}) of the mesh is on another host; a multi-host mesh is "
+                "not supported",
+                c.first,
+                c.second);
+        }
         std::vector<std::pair<Coord, Coord>> pairs;
         for (size_t i = 0; i + 1 < group.size(); ++i) {
             pairs.emplace_back(group[i], group[i + 1]);
@@ -128,23 +141,12 @@ Tensor experimental::matmul_reduce_scatter_prefill(
     check_operands(input_tensor, weight, memory_config);
     const MemoryConfig out_mem = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
 
+    const uint32_t G = check_group(input_tensor, weight, cluster_axis, canonical_dim);
     auto* mesh = input_tensor.device();
-    TT_FATAL(mesh != nullptr, "matmul_reduce_scatter_prefill: input_tensor must be on a mesh device");
-    const auto& mesh_shape = mesh->shape();
-    TT_FATAL(mesh_shape.dims() == 2, "matmul_reduce_scatter_prefill: the mesh must be 2D, got {}", mesh_shape);
-    const uint32_t G = mesh_shape[cluster_axis];
-    TT_FATAL(G >= 2, "matmul_reduce_scatter_prefill: cluster_axis {} has {} device(s); need >= 2", cluster_axis, G);
     const auto& a_shape = input_tensor.logical_shape();
     const uint32_t M = a_shape[-2];
     const uint32_t K = a_shape[-1];
     const uint32_t N = weight.logical_shape()[-1];
-    const uint32_t extent = canonical_dim == -2 ? M : N;
-    const uint32_t extent_tile = canonical_dim == -2 ? TILE_HEIGHT : TILE_WIDTH;
-    TT_FATAL(
-        extent % (extent_tile * G) == 0,
-        "matmul_reduce_scatter_prefill: scattered extent {} does not split into {} tile blocks",
-        extent,
-        G);
 
     const bool ring = topology == ttnn::ccl::Topology::Ring && G >= 3;  // a 2-device ring is the line
     const mrs_detail::ScheduleKind kind =
@@ -157,7 +159,7 @@ Tensor experimental::matmul_reduce_scatter_prefill(
         static_cast<uint32_t>(tt::tt_fabric::GetFabricConfig()));
     const size_t avail = usable_links(mesh, cluster_axis, ring);
     TT_FATAL(avail > 0, "matmul_reduce_scatter_prefill: a hop of the group has no usable fabric link (no wrap link?)");
-    uint32_t L = static_cast<uint32_t>(avail);
+    uint32_t L = static_cast<uint32_t>(std::min<size_t>(avail, kMaxLinks));  // the default: every link the op supports
     if (num_links.has_value()) {
         TT_FATAL(
             *num_links > 0 && static_cast<size_t>(*num_links) <= avail,
@@ -202,9 +204,11 @@ Tensor experimental::matmul_reduce_scatter_prefill(
         .plan = mrs_detail::solve_plan(plan_inputs),
     };
     record_last_plan(params);
-    ensure_mesh_resources(mesh, mrs_detail::staging_tiles(params.plan));
+    ensure_mesh_resources(mesh);
+    // freed when this call returns, like any op intermediate (see allocate_staging), so it holds no L1 between calls
+    const Tensor staging = allocate_staging(mesh, mrs_detail::staging_tiles(params.plan));
 
-    return ttnn::prim::matmul_reduce_scatter_prefill(input_tensor, weight, output_tensor, params);
+    return ttnn::prim::matmul_reduce_scatter_prefill(input_tensor, weight, output_tensor, staging, params);
 }
 
 }  // namespace ttnn

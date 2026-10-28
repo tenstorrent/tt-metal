@@ -105,7 +105,6 @@ def run_case(
     topology,
     dtype=ttnn.bfloat16,
     weight_dtype=ttnn.bfloat8_b,
-    fp32_dest_acc_en=False,
     num_links=None,
     output_tensor=False,
     calls=1,
@@ -121,9 +120,7 @@ def run_case(
         scatter_dim=scatter_dim,
         topology=topology,
         num_links=num_links,
-        compute_kernel_config=ttnn.ComputeConfigDescriptor(
-            math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=fp32_dest_acc_en
-        ),
+        compute_kernel_config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi2),
     )
     preallocated = None
     if output_tensor:
@@ -141,17 +138,17 @@ def run_case(
     check(out, expected, mesh_device, weight_dtype)
 
 
-# (a_shape, w_shape, scatter_dim, dtype, weight_dtype, fp32_dest_acc_en)
+# (a_shape, w_shape, scatter_dim, dtype, weight_dtype); the op always accumulates in fp32 DEST
 MODEL_CASES = {
-    "kimi_k27_o_proj": ((1, 1, 640, 2048), (2048, 7168), -1, ttnn.bfloat16, ttnn.bfloat8_b, False),
-    "minimax_m3_o_proj_bf8b_act": ((1, 1, 640, 2048), (2048, 6144), -1, ttnn.bfloat8_b, ttnn.bfloat8_b, False),
-    "mimo_v2_o_proj": ((1, 1, 2048, 2048), (2048, 4096), -2, ttnn.bfloat16, ttnn.bfloat8_b, True),
-    "kimi_k3_dense_ffn_stream": ((1, 1, 640, 8448), (8448, 7168), -1, ttnn.bfloat16, ttnn.bfloat8_b, False),
-    "glm5_indexer_wk_narrow_n": ((1, 1, 640, 1536), (1536, 128), -1, ttnn.bfloat16, ttnn.bfloat8_b, False),
-    "kimi_k27_o_proj_rank2": ((640, 2048), (2048, 7168), -1, ttnn.bfloat16, ttnn.bfloat8_b, False),
+    "kimi_k27_o_proj": ((1, 1, 640, 2048), (2048, 7168), -1, ttnn.bfloat16, ttnn.bfloat8_b),
+    "minimax_m3_o_proj_bf8b_act": ((1, 1, 640, 2048), (2048, 6144), -1, ttnn.bfloat8_b, ttnn.bfloat8_b),
+    "mimo_v2_o_proj": ((1, 1, 2048, 2048), (2048, 4096), -2, ttnn.bfloat16, ttnn.bfloat8_b),
+    "kimi_k3_dense_ffn_stream": ((1, 1, 640, 8448), (8448, 7168), -1, ttnn.bfloat16, ttnn.bfloat8_b),
+    "glm5_indexer_wk_narrow_n": ((1, 1, 640, 1536), (1536, 128), -1, ttnn.bfloat16, ttnn.bfloat8_b),
+    "kimi_k27_o_proj_rank2": ((640, 2048), (2048, 7168), -1, ttnn.bfloat16, ttnn.bfloat8_b),
     # output chunks (the block misses L1): 1 x 6 and 3 x 2 chunks on a 1x4 ring
-    "chunked_n": ((1, 1, 2048, 1024), (1024, 16384), -1, ttnn.bfloat16, ttnn.bfloat16, True),
-    "chunked_mn": ((1, 1, 4096, 1024), (1024, 8192), -1, ttnn.bfloat16, ttnn.bfloat16, True),
+    "chunked_n": ((1, 1, 2048, 1024), (1024, 16384), -1, ttnn.bfloat16, ttnn.bfloat16),
+    "chunked_mn": ((1, 1, 4096, 1024), (1024, 8192), -1, ttnn.bfloat16, ttnn.bfloat16),
 }
 
 
@@ -160,7 +157,7 @@ MODEL_CASES = {
 @pytest.mark.parametrize("mesh_device", [(1, 4)], indirect=True)
 @pytest.mark.parametrize("case", MODEL_CASES.values(), ids=MODEL_CASES.keys())
 def test_ring_model_shapes(mesh_device, case):
-    a_shape, w_shape, scatter_dim, dtype, weight_dtype, fp32 = case
+    a_shape, w_shape, scatter_dim, dtype, weight_dtype = case
     run_case(
         mesh_device,
         a_shape,
@@ -170,7 +167,6 @@ def test_ring_model_shapes(mesh_device, case):
         topology=ttnn.Topology.Ring,
         dtype=dtype,
         weight_dtype=weight_dtype,
-        fp32_dest_acc_en=fp32,
         num_links=2,
     )
 

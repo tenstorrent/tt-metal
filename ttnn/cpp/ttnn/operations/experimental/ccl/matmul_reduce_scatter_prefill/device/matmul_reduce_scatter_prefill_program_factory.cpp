@@ -346,8 +346,7 @@ ProgramDescriptor MatmulReduceScatterPrefillProgramFactory::create_descriptor(
     const Tensor& w = tensor_args.weight;
     distributed::MeshDevice* mesh = a.device();
     MeshResources& res = mesh_resources(mesh);
-    TT_FATAL(res.staging.has_value(), "matmul_reduce_scatter_prefill: the staging tensor is not allocated");
-    const Tensor& staging = *res.staging;
+    const Tensor& staging = tensor_args.staging;
 
     const detail::Plan& plan = attrs.plan;
     const detail::GridChoice& gd = plan.grid;
@@ -915,10 +914,10 @@ void MatmulReduceScatterPrefillProgramFactory::override_runtime_arguments(
     Tensor& output,
     const std::optional<ttnn::MeshCoordinate>& /*mesh_dispatch_coordinate*/) {
     // The key (attributes, plan included, and the tensor specs) pins every compile-time arg and every per-core slot;
-    // a hit rewrites the common-arg addresses and the staging-backed circular buffers (the staging tensor is
-    // reallocated whenever another plan needs a different size).
+    // a hit rewrites the common-arg addresses and the staging-backed circular buffers (every call brings its own
+    // staging tensor).
     MeshResources& res = mesh_resources(tensor_args.input_tensor.device());
-    const Buffer& staging = *res.staging->buffer();
+    const Buffer& staging = *tensor_args.staging.buffer();
     const auto staging_addr = static_cast<uint32_t>(staging.address());
     const auto mailbox_addr = static_cast<uint32_t>(res.mailbox.buffer()->address());
     const auto sem_addr = [&](MeshSem s) {
@@ -960,7 +959,7 @@ void MatmulReduceScatterPrefillProgramFactory::override_runtime_arguments(
     }
 }
 
-MeshResources& ensure_mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh, uint32_t staging_tiles) {
+MeshResources& ensure_mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh) {
     auto& resources = mrs_resource_map();
     const CoreCoord g = mesh->compute_with_storage_grid_size();
     const CoreRangeSet grid(CoreRange(CoreCoord(0, 0), CoreCoord(g.x - 1, g.y - 1)));
@@ -985,26 +984,24 @@ MeshResources& ensure_mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh
             mesh, std::nullopt);  // every counter / mailbox zero before any chip's first call
         it = resources.emplace(mesh->id(), MeshResources{.sems = std::move(sems), .mailbox = std::move(mailbox)}).first;
     }
-    MeshResources& res = it->second;
-    if (!res.staging.has_value() || res.staging_tiles != staging_tiles) {
-        if (res.staging.has_value()) {
-            res.staging->deallocate(true);
-            res.staging.reset();
-        }
-        const MemoryConfig cfg(
-            TensorMemoryLayout::HEIGHT_SHARDED,
-            BufferType::L1,
-            ShardSpec(
-                grid,
-                {staging_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
-                ShardOrientation::ROW_MAJOR));
-        const TensorSpec spec(
-            ttnn::Shape({n * staging_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH}),
-            TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), cfg));
-        res.staging = create_device_tensor(spec, mesh);
-        res.staging_tiles = staging_tiles;
-    }
-    return res;
+    return it->second;
+}
+
+Tensor allocate_staging(tt::tt_metal::distributed::MeshDevice* mesh, uint32_t staging_tiles) {
+    const CoreCoord g = mesh->compute_with_storage_grid_size();
+    const CoreRangeSet grid(CoreRange(CoreCoord(0, 0), CoreCoord(g.x - 1, g.y - 1)));
+    const auto n = static_cast<uint32_t>(g.x * g.y);
+    const MemoryConfig cfg(
+        TensorMemoryLayout::HEIGHT_SHARDED,
+        BufferType::L1,
+        ShardSpec(
+            grid,
+            {staging_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH},
+            ShardOrientation::ROW_MAJOR));
+    const TensorSpec spec(
+        ttnn::Shape({n * staging_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH}),
+        TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), cfg));
+    return create_device_tensor(spec, mesh);
 }
 
 MeshResources& mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh) {
