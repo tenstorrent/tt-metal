@@ -37,7 +37,7 @@ Drift (all against the fixed records, same case and precision; f2_* has the same
 precision (v1.16), a gross single-element check, not a band check.
 
 ## single_long (case-specific floor, D1 ruling 5)
-Measured (job 947): pcc_normalized 0.99782 acc, 0.99433 perf. Proposed: 0.997 acc, 0.99 perf on pcc_normalized,
+Measured (job 947, historical: the D1-era record; the fixed record is now jobs 1061/1062 and the D4 re-record): pcc_normalized 0.99782 acc, 0.99433 perf. Proposed: 0.997 acc, 0.99 perf on pcc_normalized,
 pcc_final, pcc_final_spread and pcc_row_min_active.
 
 Row error in real units (`/home/andy/bringup/scratch/tafsut/single_long_err.py`, H = 64, series scale 148.8):
