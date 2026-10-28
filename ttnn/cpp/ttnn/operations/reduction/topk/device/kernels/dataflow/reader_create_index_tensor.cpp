@@ -54,9 +54,9 @@ void kernel_main() {
             dfb_in0.push_back(onetile);
 #if GENERATE_INDICES
             if (uint16_output) {
-                dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb::index, w);
+                dataflow_kernel_lib::generate_index_tile<uint16_t>(dfb_index, w);
             } else {
-                dataflow_kernel_lib::generate_index_tile<uint32_t>(dfb::index, w);
+                dataflow_kernel_lib::generate_index_tile<uint32_t>(dfb_index, w);
             }
 #else
             // Read precomputed indices to dataflow buffer

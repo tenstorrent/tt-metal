@@ -313,21 +313,23 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
             input_tensor_dtype);
     }
 
-    // On Quasar the sort runs only on BFLOAT16 values with 16-bit indices. The kernels transpose every value
-    // and index tile, and the Quasar compute API does not support a 32-bit transpose yet (tt-llk#1559), which
-    // rules out FLOAT32 values and 32-bit indices. Quasar also has no BFLOAT8_B data format.
+    // On Quasar the sort runs only on BFLOAT16 values with 16-bit indices. On Quasar a 32-bit tile is
+    // transposed only through unpack-to-dest, and the kernels switch the unpacker between the value and the
+    // index buffers with reconfig_data_format_srca, which on Quasar rejects a 32-bit unpack-to-dest buffer.
+    // FLOAT32 values always come with 32-bit indices, so both are ruled out. Quasar also has no BFLOAT8_B
+    // data format.
     if (input_tensor.device()->arch() == tt::ARCH::QUASAR) {
         TT_FATAL(
             input_tensor_dtype == DataType::BFLOAT16,
-            "TopK on Quasar supports only BFLOAT16 input, got: {}. FLOAT32 needs a 32-bit transpose, which the "
-            "Quasar compute API does not support yet (tt-llk#1559), and Quasar has no BFLOAT8_B data format.",
+            "TopK on Quasar supports only BFLOAT16 input, got: {}. FLOAT32 needs 32-bit buffers that the Quasar "
+            "unpacker reconfiguration does not support yet, and Quasar has no BFLOAT8_B data format.",
             input_tensor_dtype);
         const DataType resolved_index_dtype = resolve_index_dtype(args, tensor_args);
         TT_FATAL(
             resolved_index_dtype == DataType::UINT16,
             "TopK on Quasar supports only UINT16 indices, but this call needs {} indices (a padded reduced "
             "dimension wider than 65536, or a 32-bit indices tensor or preallocated indices tensor). 32-bit "
-            "indices need a 32-bit transpose, which the Quasar compute API does not support yet (tt-llk#1559).",
+            "indices need 32-bit buffers that the Quasar unpacker reconfiguration does not support yet.",
             resolved_index_dtype);
     }
 
