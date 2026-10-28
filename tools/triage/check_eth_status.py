@@ -246,8 +246,8 @@ class BlackholeEthCore(EthCore):
         row.mailbox_cmfw = words[self.MAILBOX + 2 * self.MAILBOX_SLOT_SIZE]
         row.mailbox_other = words[self.MAILBOX + 3 * self.MAILBOX_SLOT_SIZE]
         row.err_stat = words[self.ERR_STAT]
-        # Metal writes the stage words, so they don't depend on the base FW version. The second erisc's word is only
-        # written in 2-erisc mode; zero there means it is unused, not that it is in base FW.
+        # Word N is erisc N's, written by metal FW and, on newer base FW, by base FW in word 0. In single-erisc mode
+        # metal runs on erisc1 while base FW keeps erisc0. Zero in the second word means erisc1 hasn't run metal FW.
         stages = [words[self.FW_STAGE], words[self.FW_STAGE + 4]]
         row.fw_stage = " / ".join(
             self.FW_STAGE_NAMES.get(stage, f"0x{stage:08x}") for stage in (stages if stages[1] else stages[:1])

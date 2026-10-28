@@ -14,16 +14,23 @@
 // HalL1MemAddrType::FW_STAGE. See eth_fw_stage_e in the Blackhole eth_fw_api.h and the host-side decoder
 // in tt_metal/llrt/llrt.cpp.
 //
-// One slot is written per ethernet processor (index from get_hw_thread_idx(): 0 = erisc/ierisc,
-// 1 = subordinate erisc/ierisc). Arches that don't define MEM_SYSENG_ETH_FW_STAGE get a no-op.
+// One slot per physical erisc: 0 = erisc0/ierisc, 1 = erisc1/subordinate ierisc. On active eth this is
+// PHYSICAL_AERISC_ID rather than the logical processor index, because in single-erisc mode the only
+// Metal processor runs on erisc1 while base FW keeps running on erisc0 and owns slot 0.
+// Arches that don't define MEM_SYSENG_ETH_FW_STAGE get a no-op.
 
 #include "eth_fw_api.h"
 #include "internal/hw_thread.h"
 
 #if defined(MEM_SYSENG_ETH_FW_STAGE) && (defined(COMPILE_FOR_ERISC) || defined(COMPILE_FOR_IDLE_ERISC))
 inline void set_eth_fw_stage(eth_fw_stage_e stage) {
+#if defined(COMPILE_FOR_AERISC)
+    constexpr uint32_t slot = PHYSICAL_AERISC_ID;
+#else
+    const uint32_t slot = internal_::get_hw_thread_idx();
+#endif
     auto* fw_stage = reinterpret_cast<volatile eth_fw_stage_t*>(MEM_SYSENG_ETH_FW_STAGE);
-    fw_stage->stage[internal_::get_hw_thread_idx()] = static_cast<uint32_t>(stage);
+    fw_stage->stage[slot] = static_cast<uint32_t>(stage);
 }
 #else
 // A macro rather than an empty function: eth_fw_stage_e is only defined on arches that implement the breadcrumb.

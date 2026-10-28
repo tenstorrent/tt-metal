@@ -7,7 +7,6 @@
 #include <fmt/ranges.h>
 #include <tt-logger/tt-logger.hpp>
 #include <unistd.h>
-#include <algorithm>
 #include <cctype>
 #include <chrono>
 #include <condition_variable>
@@ -352,17 +351,26 @@ std::vector<uint32_t> read_eth_fw_stages(
     ChipId device_id,
     const tt::tt_metal::CoreCoord& virtual_core,
     tt_metal::HalProgrammableCoreType core_type) {
-    // Slots past the processor count are never written (e.g. slot 1 in single-erisc mode).
-    const uint32_t num_slots = std::min<uint32_t>(
-        hal.get_dev_size(core_type, tt_metal::HalL1MemAddrType::FW_STAGE) / sizeof(uint32_t),
-        hal.get_num_risc_processors(core_type));
-    std::vector<uint32_t> stages(num_slots, 0);
-    if (num_slots != 0) {
-        cluster.read_core(
-            stages.data(),
-            num_slots * sizeof(uint32_t),
-            tt_cxy_pair(device_id, virtual_core),
-            hal.get_dev_noc_addr(core_type, tt_metal::HalL1MemAddrType::FW_STAGE));
+    const uint32_t num_slots = hal.get_dev_size(core_type, tt_metal::HalL1MemAddrType::FW_STAGE) / sizeof(uint32_t);
+    if (num_slots == 0) {
+        return {};
+    }
+    std::vector<uint32_t> slots(num_slots, 0);
+    cluster.read_core(
+        slots.data(),
+        num_slots * sizeof(uint32_t),
+        tt_cxy_pair(device_id, virtual_core),
+        hal.get_dev_noc_addr(core_type, tt_metal::HalL1MemAddrType::FW_STAGE));
+    // Slots are indexed by physical erisc. On active eth a logical processor need not run on the erisc of the
+    // same index: in single-erisc mode it runs on erisc1, and slot 0 belongs to base FW on erisc0.
+    std::vector<uint32_t> stages;
+    for (uint32_t processor = 0; processor < hal.get_num_risc_processors(core_type); processor++) {
+        const uint32_t slot = core_type == tt_metal::HalProgrammableCoreType::ACTIVE_ETH
+                                  ? hal.get_active_eth_physical_erisc(processor)
+                                  : processor;
+        if (slot < num_slots) {
+            stages.push_back(slots[slot]);
+        }
     }
     return stages;
 }

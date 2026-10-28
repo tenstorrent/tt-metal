@@ -94,8 +94,8 @@ static_assert(sizeof(chip_info_t) == 32, "chip_info_t size is not 32 bytes");
 //
 // It lives in eth_status_t.eth_fw_stage (MEM_SYSENG_ETH_FW_STAGE), so base FW and Metal FW share the
 // same words. It is exposed to the host as HalL1MemAddrType::FW_STAGE, which has size 0 on arches that
-// don't implement it. One 32-bit slot per ethernet processor (index from get_hw_thread_idx():
-// 0 = erisc/ierisc, 1 = subordinate erisc/ierisc).
+// don't implement it. One 32-bit slot per physical erisc (0 = erisc0/ierisc, 1 = erisc1/subordinate
+// ierisc); in single-erisc mode the Metal processor runs on erisc1 and so writes slot 1.
 //
 // The base ethernet firmware is external (tt-firmware) and cannot be instrumented, so it is inferred:
 // the host initializes the slot to ETH_FW_STAGE_UNKNOWN before the application FW starts, and the

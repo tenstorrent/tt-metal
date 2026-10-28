@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <fmt/base.h>
+#include <fmt/format.h>
 #include <gtest/gtest.h>
 #include <array>
 #include <chrono>
@@ -774,6 +775,47 @@ TEST_F(BlackholeSingleCardFixture, EthFwStageIdleInAppFw) {
                 for (size_t processor = 0; processor < stages.size(); processor++) {
                     EXPECT_EQ(stages[processor], STAGE_APP_FW) << "device " << device->id() << " eth core "
                                                                << logical_core.str() << " processor " << processor;
+                }
+            }
+        }
+    }
+}
+
+// Triage reads the raw stage words as one per physical erisc. In single-erisc mode metal FW runs on erisc1 while
+// base FW keeps erisc0, so metal must stamp erisc1's word and leave erisc0's to base FW.
+TEST_F(BlackholeSingleCardFixture, EthFwStageSlotsFollowPhysicalErisc) {
+    using namespace CMAKE_UNIQUE_NAMESPACE;
+    auto& env = MetalEnvAccessor(MetalContext::instance().get_env()).impl();
+    if (const char* reason = eth_fw_stage_skip_reason(env)) {
+        GTEST_SKIP() << reason;
+    }
+    const auto& hal = env.get_hal();
+    constexpr auto core_type = HalProgrammableCoreType::ACTIVE_ETH;
+    const uint32_t num_slots = hal.get_dev_size(core_type, HalL1MemAddrType::FW_STAGE) / sizeof(uint32_t);
+    std::vector<bool> metal_slot(num_slots, false);
+    for (uint32_t processor = 0; processor < hal.get_num_risc_processors(core_type); processor++) {
+        metal_slot.at(hal.get_active_eth_physical_erisc(processor)) = true;
+    }
+
+    for (const auto& mesh_device : devices_) {
+        auto* device = mesh_device->impl().get_devices()[0];
+        for (const auto& logical_core : device->get_active_ethernet_cores(true)) {
+            const CoreCoord virtual_core = device->ethernet_core_from_logical_core(logical_core);
+            std::vector<uint32_t> slots(num_slots, 0);
+            env.get_cluster().read_core(
+                slots.data(),
+                num_slots * sizeof(uint32_t),
+                tt_cxy_pair(device->id(), virtual_core),
+                hal.get_dev_noc_addr(core_type, HalL1MemAddrType::FW_STAGE));
+            for (uint32_t slot = 0; slot < num_slots; slot++) {
+                const std::string stage = llrt::eth_fw_stage_to_string(slots[slot]);
+                const auto where = fmt::format("device {} eth core {} erisc{}", device->id(), logical_core.str(), slot);
+                if (metal_slot[slot]) {
+                    EXPECT_EQ(stage, STAGE_APP_FW) << where;
+                } else {
+                    EXPECT_NE(stage, "APP_FW_INIT") << where;
+                    EXPECT_NE(stage, STAGE_APP_FW) << where;
+                    EXPECT_NE(stage, STAGE_KERNEL) << where;
                 }
             }
         }
