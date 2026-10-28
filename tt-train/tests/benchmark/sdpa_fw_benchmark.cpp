@@ -50,7 +50,8 @@ struct Scenario {
 // TinyLlama 1.1B (32/4 heads, D=64), Llama-3-8B style (32/8, D=128), then the other modes of the shared
 // kernel on the TinyLlama shape: no mask, an explicit (causal) mask tensor, and the output gate. Then the
 // per-chip shapes of tensor-parallel runs: few heads leave the schedule fewer items than cores, which is
-// where cutting the heavy causal items pays.
+// where cutting the heavy causal items pays (pass 0,0,0,1 to time the same rows uncut). Then the model
+// table.
 const std::vector<Scenario> kScenarios = {
     {"tinyllama_s2048_causal", 1U, 32U, 4U, 2048U, 64U, ttml::metal::AttentionMaskType::Causal},
     {"tinyllama_s4096_causal", 1U, 32U, 4U, 4096U, 64U, ttml::metal::AttentionMaskType::Causal},
@@ -63,6 +64,24 @@ const std::vector<Scenario> kScenarios = {
     {"llama8b_tp8_s8192_causal", 1U, 4U, 1U, 8192U, 128U, ttml::metal::AttentionMaskType::Causal},
     {"tinyllama_tp8_s4096_causal", 1U, 4U, 1U, 4096U, 64U, ttml::metal::AttentionMaskType::Causal},
     {"fewhead_2h_s2048_causal", 1U, 2U, 2U, 2048U, 64U, ttml::metal::AttentionMaskType::Causal},
+    // One chip's attention of the models tt-train trains or is asked about, at S=2k, 8k and 16k; the
+    // table in the program factory's PR is this list. None of these cuts an item: with 32 heads there are
+    // more items than cores at every length, and the 6 to 8-head shapes only at S=16k.
+    {"llama3_8b_h32kv8d128_s2k", 1U, 32U, 8U, 2048U, 128U, ttml::metal::AttentionMaskType::Causal},
+    {"llama3_8b_h32kv8d128_s8k", 1U, 32U, 8U, 8192U, 128U, ttml::metal::AttentionMaskType::Causal},
+    {"llama3_8b_h32kv8d128_s16k", 1U, 32U, 8U, 16384U, 128U, ttml::metal::AttentionMaskType::Causal},
+    {"llama3_8b_tp4_h8kv2d128_s8k", 1U, 8U, 2U, 8192U, 128U, ttml::metal::AttentionMaskType::Causal},
+    {"llama3_8b_tp4_h8kv2d128_s16k", 1U, 8U, 2U, 16384U, 128U, ttml::metal::AttentionMaskType::Causal},
+    {"llama70b_tp8_h8kv1d128_s16k", 1U, 8U, 1U, 16384U, 128U, ttml::metal::AttentionMaskType::Causal},
+    {"llama2_7b_h32d128_s8k", 1U, 32U, 32U, 8192U, 128U, ttml::metal::AttentionMaskType::Causal},
+    {"llama32_1b_h32kv8d64_s8k", 1U, 32U, 8U, 8192U, 64U, ttml::metal::AttentionMaskType::Causal},
+    {"llama32_1b_h32kv8d64_s16k", 1U, 32U, 8U, 16384U, 64U, ttml::metal::AttentionMaskType::Causal},
+    {"llama32_3b_h24kv8d128_s8k", 1U, 24U, 8U, 8192U, 128U, ttml::metal::AttentionMaskType::Causal},
+    {"qwen25_7b_h28kv4d128_s8k", 1U, 28U, 4U, 8192U, 128U, ttml::metal::AttentionMaskType::Causal},
+    {"qwen38_h6kv1d256_s16k", 1U, 6U, 1U, 16384U, 256U, ttml::metal::AttentionMaskType::Causal},
+    {"gemma7b_h16d256_s8k", 1U, 16U, 16U, 8192U, 256U, ttml::metal::AttentionMaskType::Causal},
+    {"gpt2s_h12d64_s8k", 1U, 12U, 12U, 8192U, 64U, ttml::metal::AttentionMaskType::Causal},
+    {"gpt2s_h12d64_s16k", 1U, 12U, 12U, 16384U, 64U, ttml::metal::AttentionMaskType::Causal},
 };
 
 // The chunking main ran: one query tile-row per item, four K/V tiles per step, no head stacking, no cuts.
