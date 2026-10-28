@@ -3,6 +3,8 @@
 
 #include "hybrid_routed_expert_ffn_device_operation.hpp"
 
+#include <algorithm>
+
 #include "hybrid_program_factory.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/combine_fabric2d_device_operation.hpp"
 #include "ttnn/operations/experimental/deepseek_prefill/combine_fabric2d/device/kernels/dataflow/combine_fabric2d_kernel_interface.hpp"
@@ -194,12 +196,52 @@ void HybridRoutedExpertFfnDeviceOperation::validate_on_program_cache_hit(
         op.l1_arena_addr);
 }
 
+namespace {
+
+// A per-expert list -- the projections or biases of one kind -- normally holds one spec once per expert. When every
+// tensor in it is a device tensor of its first one's spec, that spec and the list's length are what hashing each
+// tensor would determine (a tensor hashes as its storage kind and spec), found with a comparison per expert rather
+// than a hash. Any other list is hashed whole.
+ttsl::hash::hash_t hash_expert_list(const std::vector<Tensor>& list) {
+    const bool uniform = !list.empty() && std::all_of(list.begin(), list.end(), [&](const Tensor& tensor) {
+        return tensor.storage_type() == StorageType::DEVICE && tensor.tensor_spec() == list.front().tensor_spec();
+    });
+    if (uniform) {
+        return ttsl::hash::hash_objects_with_default_seed(true, list.size(), list.front());
+    }
+    return ttsl::hash::hash_objects_with_default_seed(false, list);
+}
+
+}  // namespace
+
 // The key the framework would derive, with no collision-check companion: that one is a string re-encoding every
 // attribute and the specs of some thirty tensors, rebuilt on every call, and a 64-bit hash that collides with this
-// op's few cache entries is not the risk it is worth paying for.
+// op's few cache entries is not the risk it is worth paying for. Every input is hashed, the per-expert lists as
+// hash_expert_list keys them.
 ttsl::hash::hash_t HybridRoutedExpertFfnDeviceOperation::compute_program_hash(
     const operation_attributes_t& op, const tensor_args_t& t) {
-    return ttsl::hash::hash_objects_with_default_seed(op, t);
+    // Binding every field is what keeps this list complete: an input added to HybridRoutedExpertFfnInputs no
+    // longer compiles here until it is hashed too.
+    const auto& [x, gate_projs, up_projs, down_projs, counts, global_expert_idx_table, output, expert_region_offsets, gate_biases, up_biases, down_biases, l1_arena, dispatched_metadata, expert_offsets, replicated_global_expert_idx_table, forwarding_buffer] =
+        t;
+    return ttsl::hash::hash_objects_with_default_seed(
+        op,
+        x,
+        hash_expert_list(gate_projs),
+        hash_expert_list(up_projs),
+        hash_expert_list(down_projs),
+        counts,
+        global_expert_idx_table,
+        output,
+        expert_region_offsets,
+        hash_expert_list(gate_biases),
+        hash_expert_list(up_biases),
+        hash_expert_list(down_biases),
+        l1_arena,
+        dispatched_metadata,
+        expert_offsets,
+        replicated_global_expert_idx_table,
+        forwarding_buffer);
 }
 
 HybridRoutedExpertFfnDeviceOperation::spec_return_value_t HybridRoutedExpertFfnDeviceOperation::compute_output_specs(
