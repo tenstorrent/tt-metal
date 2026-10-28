@@ -12,7 +12,7 @@ from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 DEVICE_NAMES = ("P150x4", "P300x2")  # four p150, or the two p300 of a QuietBox 2 (the in-tree QB2 models' name)
 
 
-def report(summary, *, device_name):
+def report(summary, *, device_name, mtp_drafts=None):
     if device_name not in DEVICE_NAMES:
         raise ValueError(f"device_name must name the chips the run used, one of {DEVICE_NAMES}, got {device_name!r}")
     if summary["completed_samples"] != summary["requested_samples"]:
@@ -55,7 +55,8 @@ def report(summary, *, device_name):
                 "accuracy_floor",
                 "passed",
             )
-        },
+        }
+        | {"mtp_drafts": mtp_drafts},
     )
 
 
@@ -68,8 +69,9 @@ def main(argv=None):
         choices=DEVICE_NAMES,
         help="the chips the run used; a 1x4 mesh does not tell four p150 from a QuietBox 2",
     )
+    parser.add_argument("--mtp-drafts", type=int, choices=(3, 4, 5), help="the server's --mtp, when it drafted")
     args = parser.parse_args(argv)
-    report(json.loads(args.summary.read_text()), device_name=args.device_name)
+    report(json.loads(args.summary.read_text()), device_name=args.device_name, mtp_drafts=args.mtp_drafts)
 
 
 if __name__ == "__main__":

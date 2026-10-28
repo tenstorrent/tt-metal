@@ -5,9 +5,9 @@ devices as one 1x4 mesh. Routed experts run in BF4, dense weights in BF8, and th
 checkpoint and is read by the host. The port is by Samuel Jett ([sjettTT](https://github.com/sjettTT)); see
 [PROVENANCE.md](PROVENANCE.md). It runs on tt-metal main and calls only public operations.
 
-Validated configuration: one request at a time with a 32,768-token allocation (32,704 usable tokens). The
-standalone server also has MTP drafting, image input and concurrent lanes; their coverage is separate. vLLM serving
-comes in a follow-up PR.
+Validated configuration: one request at a time with a 32,768-token allocation (32,704 usable tokens), served with
+`--mtp 4` MTP drafting. The standalone server also has image input and concurrent lanes; their coverage is separate.
+vLLM serving comes in a follow-up PR.
 
 ## Hardware
 
@@ -59,7 +59,7 @@ bash "$MODEL/tools/run_qwen38_chat_server.sh" --profile tt-quietbox \
   --checkpoint "$CHECKPOINT" --cache-root "$CACHE_ROOT" --prepare-only
 bash "$MODEL/tools/run_qwen38_chat_server.sh" --profile tt-quietbox \
   --checkpoint "$CHECKPOINT" --cache-root "$CACHE_ROOT" \
-  --acceptance --require-json-96 --acceptance-only
+  --mtp 4 --acceptance --require-json-96 --acceptance-only
 ```
 
 The first command converts the missing BF4 expert layers and stops. The second replays the acceptance records,
@@ -73,7 +73,7 @@ Main flags (`run_qwen38_chat_server.sh --help` lists all of them):
 | `--allocated-context N` | 32768 (default), 65536, 131072 or 262144 |
 | `--acceptance`, `--require-json-96` | replay the CPU greedy records at start; refuse to serve unless `json` matches 96/96 |
 | `--prepare-only [--bf4-stage-limit N]` | build the BF4 expert cache, at most N layers per run |
-| `--mtp K` | MTP drafting with K = 3, 4 or 5 drafts (off by default) |
+| `--mtp K` | MTP drafting with K = 3, 4 or 5 drafts; `--mtp 4` is the serving form (off by default) |
 | `--prefill-slab ROWS` | prefill in slabs ahead of the 128-row chunks; where `moe_compute` refuses the slab in one call (as on main), each layer routes it in 128-token calls |
 | `--no-sampling` | greedy requests only (the default server samples when a request asks for it) |
 | `--stall-seconds N` | exit 1 after N seconds without device progress (default 300; 0 disables) |
@@ -102,21 +102,21 @@ against an independent recurrence; set `QWEN38_FUSED_DEVICE_TEST=1` on the held 
 `tools/benchmark.py` scores and times GSM8K through a live OpenAI endpoint (the official 1,319-item test file at
 revision `3101c7d5072418e28b9008a6636bde82a006892c`, hash-checked; `--limit 64` is the fixed smoke subset).
 `tools/report.py` with `CI=true` writes the standard tt-metal benchmark data; `--device-name` names the chips the run
-used (`P150x4`, or `P300x2` for a QuietBox 2).
+used (`P150x4`, or `P300x2` for a QuietBox 2) and `--mtp-drafts` the server's `--mtp`.
 
 ```bash
 python -m models.demos.blackhole.qwen38_flash_next.tools.benchmark \
   --checkpoint "$CHECKPOINT" --dataset "$GSM8K_TEST_JSONL" --output-dir "$RESULTS"
 CI=true python -m models.demos.blackhole.qwen38_flash_next.tools.report "$RESULTS/summary.json" \
-  --device-name P150x4
+  --device-name P150x4 --mtp-drafts 4
 ```
 
 ### End-to-end demo
 
-`demo/chat_demo.py` starts the server through the launcher with `--acceptance --require-json-96`, so it serves only
-after the `json` record matches 96/96. It then runs `tools/benchmark.py` on the GSM8K smoke subset through the
-server's endpoint, requires the benchmark's 0.80 floor, and stops the server. With `CI=true` it also writes the
-benchmark data (`tools/report.py`).
+`demo/chat_demo.py` starts the server through the launcher with `--mtp 4 --acceptance --require-json-96`, so it
+serves only after the `json` record matches 96/96. It then runs `tools/benchmark.py` on the GSM8K smoke subset
+through the server's endpoint, requires the benchmark's 0.80 floor, and stops the server. With `CI=true` it also
+writes the benchmark data (`tools/report.py`).
 
 ```bash
 MODEL_WEIGHTS_DIR="$CHECKPOINT" QWEN38_CACHE_ROOT="$CACHE_ROOT" QWEN38_DEVICE_NODES=4,5,6,7 \

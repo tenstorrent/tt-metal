@@ -4,9 +4,10 @@
 """Qwen3.8-Flash-Next end to end on a 1x4 Blackhole mesh: the chat server's start-up acceptance gate, then the
 GSM8K smoke subset (the first 64 of the 1,319 test items) through its OpenAI endpoint.
 
-The launcher starts the server with ``--acceptance --require-json-96``: the server replays the CPU greedy records and
-serves only when the ``json`` record matches 96/96. ``tools/benchmark.py`` then asks the 64 questions greedily (512
-output tokens at most, natural EOS) and scores the final ``####`` answers; the test needs the benchmark's 0.80 floor.
+The launcher starts the server with ``--mtp 4 --acceptance --require-json-96``: the server drafts with the MTP layer,
+replays the CPU greedy records and serves only when the ``json`` record matches 96/96. ``tools/benchmark.py`` then
+asks the 64 questions greedily (512 output tokens at most, natural EOS) and scores the final ``####`` answers; the
+test needs the benchmark's 0.80 floor.
 Under ``CI=true``, ``tools/report.py`` writes the standard tt-metal benchmark data.
 The server must then stop cleanly on SIGTERM.
 
@@ -43,6 +44,7 @@ GSM8K_URL = (
     f"https://raw.githubusercontent.com/openai/grade-school-math/{DATASET_REVISION}/grade_school_math/data/test.jsonl"
 )
 DEVICE_NAMES = {"p150-line": "P150x4", "tt-quietbox": "P150x4", "qb2": "P300x2"}  # tools/report.py's device names
+MTP_DRAFTS = 4  # the serving form
 # About twice the start-up (cold component and JIT caches) and benchmark times on the 1x4 p150 line.
 READY_SECONDS = 900
 BENCHMARK_SECONDS = 1300
@@ -85,7 +87,8 @@ def chat_server(profile, checkpoint_dir, tmp_path):
         probe.bind(("127.0.0.1", 0))
         port = probe.getsockname()[1]
     command = ["bash", str(LAUNCHER), "--profile", profile, "--checkpoint", str(checkpoint_dir)]
-    command += ["--cache-root", str(cache_root), "--python", sys.executable, "--acceptance", "--require-json-96"]
+    command += ["--cache-root", str(cache_root), "--python", sys.executable, "--mtp", str(MTP_DRAFTS)]
+    command += ["--acceptance", "--require-json-96"]
     command += ["--host", "127.0.0.1", "--port", str(port)]
     if os.environ.get("QWEN38_DEVICE_NODES"):
         command += ["--devices", os.environ["QWEN38_DEVICE_NODES"]]
@@ -174,7 +177,7 @@ def test_chat_demo(chat_server, profile, checkpoint_dir, tmp_path):
     assert summary_path.exists(), f"the benchmark exited {benchmark.returncode} before its summary (captured stdout)"
     summary = json.loads(summary_path.read_text())
     if summary["completed_samples"] == summary["requested_samples"]:
-        report.report(summary, device_name=DEVICE_NAMES[profile])
+        report.report(summary, device_name=DEVICE_NAMES[profile], mtp_drafts=MTP_DRAFTS)
     assert summary["passed"], (
         f"GSM8K {summary['scope']}: {summary['correct']}/{summary['completed_samples']} correct of "
         f"{summary['requested_samples']}, floor {summary['accuracy_floor']}, benchmark exit {benchmark.returncode}"
