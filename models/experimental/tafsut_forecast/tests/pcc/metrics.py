@@ -34,6 +34,8 @@ All head metrics use the head output at the read-out tokens in normalized space,
                     the extremes of that ratio (floor-only, no drift; D3 condition 1b)
     bias_row_p50    median over rows of |mean(h - h_ref)| (normalized units): a level shift of the whole forecast
                     (PLAN v1.22 ``level_shift``) moves it one for one, element noise averages out
+    bias_row_max    the largest of those per-row biases: a shift on a minority of rows, which the median misses
+                    (D3 item 3)
     pcc_step        PCC of the step-to-step differences along the horizon (within each 32-step patch): a forecast
                     delayed by a step (PLAN v1.22 ``lag1``) keeps its values but not its increments
     pcc_final       PCC of the single-pass [targets, 9, H] forecast after inverse scaling and band calibration
@@ -113,6 +115,7 @@ def gate_metrics(head, g_head, q, g_q, scale_targets) -> dict:
     na = lambda ok, f: float(f()) if ok else None  # None prints as "not applicable (n_active=N < M)" (v1.14)
     err = (head.double() - g_head.double()).abs().reshape(g_head.shape[0], -1).amax(1)
     med_err = (q[:, Q // 2] - g_q[:, Q // 2]).abs().amax(-1) / scale_targets.reshape(-1)
+    bias = (head.double() - g_head.double()).reshape(g_head.shape[0], -1).mean(1).abs()
     q_spread = lambda t: t - t.mean(1, keepdim=True)  # [targets, 9, H]: minus the quantile mean
     return {
         "pcc_normalized": pearson(g_head, head),
@@ -133,7 +136,8 @@ def gate_metrics(head, g_head, q, g_q, scale_targets) -> dict:
         "flat_max_err": float(err[flat].max()) if bool(flat.any()) else 0.0,
         "inactive_max_err": float(err[~act].max()) if bool((~act).any()) else 0.0,
         "abs_err_max": float(err.max()),  # gross single-element check, not a band check (v1.16)
-        "bias_row_p50": float((head.double() - g_head.double()).reshape(g_head.shape[0], -1).mean(1).abs().median()),
+        "bias_row_p50": float(bias.median()),
+        "bias_row_max": float(bias.max()),
         "pcc_step": pearson(step_diff(g_head), step_diff(head)),
         "pcc_final": pearson(g_q, q),
         "pcc_final_spread": pearson(q_spread(g_q), q_spread(q)),

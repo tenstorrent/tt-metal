@@ -9,8 +9,9 @@ import pytest
 import torch
 
 from models.experimental.tafsut_forecast.tests.golden.goldens import load_golden
-from models.experimental.tafsut_forecast.tests.helpers import case_metrics, check_floors
-from models.experimental.tafsut_forecast.tests.perf.test_forward_perf import _record
+from models.experimental.tafsut_forecast.tests.helpers import MODULE_FLOORS, case_metrics, check_floors
+from models.experimental.tafsut_forecast.tests.pcc import metrics as M
+from models.experimental.tafsut_forecast.tests.perf.test_forward_perf import _record, forward_inputs, gate_case
 from models.experimental.tafsut_forecast.tt.common import Precision
 from models.experimental.tafsut_forecast.tt.model import TtTafsut
 
@@ -33,10 +34,22 @@ def test_model(device, case, prec):
         f"[pcc] {case}-{prec}: "
         + " ".join(f"{k}={v:.5f}" if isinstance(v, float) else f"{k}={v}" for k, v in met.items())
     )
+    rec = {"test": "suite", "name": case, "precision": prec, "rows": int(g["x"].shape[0]), **met}
+    if g["horizon"] > 1024:  # forward 2, teacher-forced on the reference's forward-1 median, as the bench (D3 item 1)
+        th = m.forward(m.prepare_inputs(forward_inputs(g)[1])).float()
+        met2, _ = gate_case(g, [heads[0], th], q, 1)
+        rec.update({f"f2_{k}": v for k, v in met2.items() if not k.startswith("pcc_final")})
+        print(f"[pcc] {case}-{prec} forward 2 (teacher-forced): {M.fmt(met2)}")
+        assert met2["pcc_normalized"] > MODULE_FLOORS["pcc_normalized"]
+    else:
+        th = None
     # suite record for check_gates (MODEL_PERF_JSON), and the raw outputs for row-level analysis (TAFSUT_DUMP dir)
-    _record({"test": "suite", "name": case, "precision": prec, "rows": int(g["x"].shape[0]), **met})
+    _record(rec)
     if os.environ.get("TAFSUT_DUMP"):
-        torch.save({"heads": heads, "q": q}, os.path.join(os.environ["TAFSUT_DUMP"], f"{case}-{prec}.pt"))
+        torch.save(
+            {"heads": heads, "q": q, "f2_teacher_head": th},
+            os.path.join(os.environ["TAFSUT_DUMP"], f"{case}-{prec}.pt"),
+        )
     check_floors(met, prec, module=True)
 
 

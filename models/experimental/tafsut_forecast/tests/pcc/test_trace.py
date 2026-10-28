@@ -49,10 +49,14 @@ def test_trace_vs_eager(device, capfd):
         (rows, ctx), x = inputs[n]
         got = traced(tt.prepare_inputs(x))
         p, err = pcc(got, eager[n]), float((got - eager[n]).abs().max())
-        print(f"[trace] {rows} x {ctx} input {n}: vs eager pcc {p:.7f} max_err {err:.3e} equal {torch.equal(got, eager[n])}")
+        print(
+            f"[trace] {rows} x {ctx} input {n}: vs eager pcc {p:.7f} max_err {err:.3e} equal {torch.equal(got, eager[n])}"
+        )
         assert torch.isfinite(got).all() and p > 0.99999 and err < 1e-2
     traced.release()
     out = capfd.readouterr()
+    with capfd.disabled():  # the replay-vs-eager lines reach the job log (D3 item 5)
+        print(out.out, end="")
     assert UNSAFE not in out.out + out.err, "an allocation happened while a trace was alive"
 
 
@@ -73,11 +77,13 @@ def test_trace_fresh_inputs(device, capfd):
         assert torch.isfinite(q).all()
     traced.release()
     out = capfd.readouterr()
+    with capfd.disabled():  # the replay-vs-eager lines reach the job log (D3 item 5)
+        print(out.out, end="")
     assert UNSAFE not in out.out + out.err, "an allocation happened while a trace was alive"
 
 
 @pytest.mark.parametrize("device_params", TRACE, indirect=True)
-def test_trace_tracker_control(device):
+def test_trace_tracker_control(device, expect_error):
     """Positive control: a buffer allocated while a trace is alive and still live at replay must make it raise."""
     import ttnn
 
@@ -86,7 +92,7 @@ def test_trace_tracker_control(device):
     prep = tt.prepare_inputs(series(4, 2048, seed=0))
     traced(prep)
     live = ttnn.from_torch(torch.zeros(32, 32), layout=ttnn.TILE_LAYOUT, device=device)  # allocated with a trace alive
-    with pytest.raises(RuntimeError) as e:
+    with expect_error(RuntimeError, "still alive before trace replay") as e:
         traced(prep)
     print(f"[trace-control] {str(e.value).splitlines()[0][:300]}")
     ttnn.deallocate(live)

@@ -35,6 +35,11 @@ if os.environ.get("BENCH_SHAPES"):
 CASES = [pytest.param(s, p, id=f"{s}-{p}") for s in SHAPES for p in ("accuracy", "performance")]
 
 
+from models.experimental.tafsut_forecast.tests.perf.check_gates import session_stamp as _stamp
+
+_stamp()  # git stamp, porcelain and started_at at session start (collection), before any device work
+
+
 def _sync_time(device, fn):
     import ttnn
 
@@ -48,9 +53,9 @@ def _record(entry: dict) -> None:
     path = os.environ.get("MODEL_PERF_JSON")
     if not path:
         return
-    from models.experimental.tafsut_forecast.tests.perf.check_gates import git_stamp
+    from models.experimental.tafsut_forecast.tests.perf.check_gates import session_stamp
 
-    entry.update(git_stamp())
+    entry.update(session_stamp())  # taken once, at the first test module's import (v1.23)
     out = Path(path)
     records = json.loads(out.read_text()) if out.is_file() else []
     records.append(entry)
@@ -158,6 +163,10 @@ def test_forward_perf(device, shape, precision):
             met2, col2 = gate_case(g, heads, q, 1)
             rec.update({f"f2_{k}": v for k, v in met2.items() if not k.startswith("pcc_final")})
             msg += f"\n  forward 2 (teacher-forced): {M.fmt(met2)}"
+        if os.environ.get("TAFSUT_DUMP"):  # raw heads for row-level analysis (D3 item 1)
+            torch.save(
+                {"heads": heads, "q": q}, os.path.join(os.environ["TAFSUT_DUMP"], f"bench-{shape}-{precision}.pt")
+            )
     traced.release()
     print(
         f"\n[PERF] forward {shape} / {precision} ({layers} layers): {rec['rows']} x {rec['context']} -> {H}"
@@ -170,9 +179,11 @@ def test_forward_perf(device, shape, precision):
         from models.experimental.tafsut_forecast.tests.perf.check_gates import DEFAULT_GATES, _floors, passes
 
         floors = _floors(json.loads(DEFAULT_GATES.read_text()), shape, precision)
-        failed = {
-            k: (rec.get(k), f) for k, f in floors.items() if rec.get(k) is not None and not passes(k, rec[k], f)
-        }
+        failed = {k: (rec.get(k), f) for k, f in floors.items() if rec.get(k) is not None and not passes(k, rec[k], f)}
         assert not failed, f"{shape}/{precision}: floors failed {failed}"
-        caught = [k for k, f in floors.items() if rec.get(f"collapsed_{k}") is not None and not passes(k, rec[f"collapsed_{k}"], f)]
+        caught = [
+            k
+            for k, f in floors.items()
+            if rec.get(f"collapsed_{k}") is not None and not passes(k, rec[f"collapsed_{k}"], f)
+        ]
         assert caught, "the collapsed output passes every floor"
