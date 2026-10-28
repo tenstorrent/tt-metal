@@ -571,9 +571,6 @@ class GLM53FlashForCausalLM:
         # Slot-level APC (doc/serving/prefix_caching.md); off until device-validated. Read at import: the plugin
         # snapshots the class attribute in check_and_update_config.
         "supports_prefix_caching": _env_flag(APC_ENV, "0"),
-        # vllm-tt-plugin#260: the scheduler proposes vLLM's hit and commits the adapter's answer
-        # (confirm_prefix_cache_hit); inert on a plugin without the capability
-        "confirms_prefix_cache_hits": _env_flag(APC_ENV, "0"),
         # Every decode reloads tokens / positions from the host (no resident token feedback in the mesh model's
         # decode step yet); the plugin then runs synchronous scheduling. Flip with the device-side feedback.
         "supports_async_decode": False,
