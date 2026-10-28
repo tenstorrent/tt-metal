@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <limits>
+#include <map>
 #include <set>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/overloaded.hpp>
@@ -61,6 +62,7 @@ void McastFamily::attach(
     }
     const auto ct = compile_time_args_(ids);
     const bool chain = wire::transfer_mode(layout_.flags) == TransferMode::ChainUnicast;
+    const bool block_table = (layout_.flags & wire::BLOCK_TABLE) != 0u;
     std::set<const KernelDescriptor*> selected;
     std::vector<KernelDescriptor> kernels;
     kernels.reserve(targets.size());
@@ -68,6 +70,9 @@ void McastFamily::attach(
         TT_FATAL(selected.insert(&target.get()).second, "Duplicate multicast attachment kernel");
         auto kernel = target.get();
         const auto noc = kernel_noc(kernel, prepared_arch_);
+        // block_table: each distinct block once, in first-seen order; a core keeps its block's word offset.
+        std::vector<uint32_t> table;
+        std::map<std::vector<uint32_t>, uint32_t> table_offsets;
         size_t rt_offset = 0;
         std::set<CoreCoord> runtime_cores;
         for (const auto& [core, args] : kernel.runtime_args) {
@@ -105,7 +110,14 @@ void McastFamily::attach(
                 kernel.runtime_args.emplace_back(core, std::vector<uint32_t>{});
                 entry = std::prev(kernel.runtime_args.end());
             }
-            const auto payload = runtime_args_(core);
+            auto payload = runtime_args_(core);
+            if (block_table) {
+                const auto [it, added] = table_offsets.try_emplace(payload, static_cast<uint32_t>(table.size()));
+                if (added) {
+                    table.insert(table.end(), payload.begin(), payload.end());
+                }
+                payload = {it->second};
+            }
             TT_FATAL(
                 rt_offset <= std::numeric_limits<uint32_t>::max() - payload.size(),
                 "Multicast runtime argument positions overflow");
@@ -113,7 +125,16 @@ void McastFamily::attach(
             args.resize(rt_offset, 0);
             args.insert(args.end(), payload.begin(), payload.end());
         }
-        kernel.compile_time_args.insert(kernel.compile_time_args.end(), ct.begin(), ct.end());
+        auto kernel_ct = ct;
+        if (block_table) {
+            TT_FATAL(
+                kernel.common_runtime_args.size() <= std::numeric_limits<uint32_t>::max() - table.size(),
+                "Multicast block table position overflow");
+            kernel_ct[wire::compile_time_words(wire::transfer_mode(layout_.flags)) + wire::TABLE_BASE] =
+                static_cast<uint32_t>(kernel.common_runtime_args.size());
+            kernel.common_runtime_args.insert(kernel.common_runtime_args.end(), table.begin(), table.end());
+        }
+        kernel.compile_time_args.insert(kernel.compile_time_args.end(), kernel_ct.begin(), kernel_ct.end());
         kernels.push_back(std::move(kernel));
     }
     descriptor.semaphores = std::move(semaphores);

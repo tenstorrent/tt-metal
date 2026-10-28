@@ -96,6 +96,10 @@ struct McastConfig {
     // Family-wide delivery policy when any group is irregular. Entirely rectangular
     // families always use Multicast, regardless of this setting.
     dataflow_kernel_lib::TransferMode irregular_receiver_set_mode = dataflow_kernel_lib::TransferMode::Multicast;
+    // Send each distinct per-core block once, as a table in the kernel's common runtime args, and give every
+    // core a one-word pointer to its block. The multicasts are unchanged; the kernel reads its settings through
+    // the pointer. Only the ProgramDescriptor attach supports it.
+    bool block_table = false;
 };
 
 void attach_absent(tt::tt_metal::KernelDescriptor& kernel, std::string_view prefix);
@@ -180,6 +184,7 @@ public:
     template <typename Args>
     void append_compile_time_args_to(Args& destination) const {
         require_program_bound_();
+        require_per_core_blocks_();
         detail::append_args_to(destination, compile_time_args_(program_semaphore_ids_));
     }
 
@@ -187,6 +192,7 @@ public:
     template <typename Args>
     void append_runtime_args_to(Args& destination, const tt::tt_metal::CoreCoord& core) const {
         require_program_bound_();
+        require_per_core_blocks_();
         detail::append_args_to(destination, runtime_args_(core));
     }
 
@@ -248,6 +254,8 @@ private:
 
     void require_arguments_prepared_() const;
     void require_program_bound_() const;
+    // Per-core paths (direct Program, ProgramSpec) cannot hold a block_table family's per-kernel table.
+    void require_per_core_blocks_() const;
     void require_unbound_() const;
     std::array<uint32_t, 3> resolve_semaphore_ids_(std::span<const tt::tt_metal::SemaphoreDescriptor> existing) const;
     void validate_semaphores_present_and_zeroed_(

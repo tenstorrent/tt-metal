@@ -179,6 +179,7 @@ void McastFamily::attach(
     std::span<const m2::SemaphoreSpecName> adopted) const {
     require_arguments_prepared_();
     require_unbound_();
+    require_per_core_blocks_();
     TT_FATAL(!cfg_.base_sem_id && !cfg_.sem_ids, "ProgramSpec multicast attachment uses named semaphore resources");
     const auto indices = validate_targets(spec, prefix, targets);
     const auto count = required_semaphores_();

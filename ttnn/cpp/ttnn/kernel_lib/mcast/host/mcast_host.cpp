@@ -42,6 +42,9 @@ uint32_t mcast_flags(const McastConfig& cfg) {
     if (cfg.noc == tt::tt_metal::NOC::NOC_1) {
         flags |= dataflow_kernel_lib::mcast_wire::NOC1;
     }
+    if (cfg.block_table) {
+        flags |= dataflow_kernel_lib::mcast_wire::BLOCK_TABLE;
+    }
     return flags;
 }
 
@@ -401,6 +404,12 @@ void McastFamily::prepare_arguments() {
     arguments_prepared_ = true;
 }
 
+void McastFamily::require_per_core_blocks_() const {
+    TT_FATAL(
+        (layout_.flags & wire::BLOCK_TABLE) == 0u,
+        "McastFamily: block_table needs the ProgramDescriptor attach(); its table belongs to one kernel");
+}
+
 void McastFamily::require_arguments_prepared_() const {
     TT_FATAL(arguments_prepared_, "McastFamily: call prepare_arguments() before querying the family");
 }
@@ -415,7 +424,8 @@ const McastFamily::Group* McastFamily::group_for_core_(const CoreCoord& core) co
 std::vector<uint32_t> McastFamily::compile_time_args_(const std::array<uint32_t, 3>& ids) const {
     const auto& layout = layout_;
     const auto flags = layout.flags;
-    std::vector<uint32_t> args(wire::compile_time_words(wire::transfer_mode(flags)));
+    // A BLOCK_TABLE family's last word (TABLE_BASE) depends on the kernel; attach() fills it in.
+    std::vector<uint32_t> args(wire::family_compile_time_words(flags));
     args[wire::TAG] = wire::FAMILY;
     args[wire::HAS_RECEIVERS] = layout.has_remote_receivers;
     args[wire::DATA_READY] = ids[0];

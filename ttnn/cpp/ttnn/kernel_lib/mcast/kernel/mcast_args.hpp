@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <type_traits>
 
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/chain_pipe.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_pipe.hpp"
@@ -203,6 +204,23 @@ struct PositionalMcastRuntime {
     }
 };
 
+// BLOCK_TABLE families: the core's one runtime word is the word offset of its block in the family's table, which
+// sits in the kernel's common runtime args. Reads follow that offset; no other arithmetic.
+template <uint32_t CT_BASE, uint32_t RT_BASE>
+struct TableMcastRuntime {
+    static constexpr uint32_t TABLE = get_compile_time_arg_val(
+        CT_BASE +
+        mcast_wire::compile_time_words(
+            mcast_wire::transfer_mode(get_compile_time_arg_val(CT_BASE + mcast_wire::FLAGS))) +
+        mcast_wire::TABLE_BASE);
+    static uint32_t read(uint32_t offset) {
+        return get_common_arg_val<uint32_t>(TABLE + get_arg_val<uint32_t>(RT_BASE) + offset);
+    }
+    static const uint32_t* coordinates(uint32_t offset) {
+        return reinterpret_cast<const uint32_t*>(get_common_arg_addr(TABLE + get_arg_val<uint32_t>(RT_BASE) + offset));
+    }
+};
+
 template <uint32_t CT_BASE>
 constexpr mcast_wire::FamilyMetadata positional_mcast_metadata() {
     if constexpr (get_compile_time_arg_val(CT_BASE + mcast_wire::TAG) == mcast_wire::ABSENT) {
@@ -219,6 +237,12 @@ constexpr mcast_wire::FamilyMetadata positional_mcast_metadata() {
             get_compile_time_arg_val(CT_BASE + mcast_wire::FLAGS)};
     }
 }
+
+template <uint32_t CT_BASE, uint32_t RT_BASE>
+using positional_mcast_runtime = std::conditional_t<
+    (positional_mcast_metadata<CT_BASE>().flags & mcast_wire::BLOCK_TABLE) != 0u,
+    TableMcastRuntime<CT_BASE, RT_BASE>,
+    PositionalMcastRuntime<RT_BASE>>;
 
 template <uint32_t CT_BASE, uint32_t ROLE>
 constexpr uint32_t positional_mcast_semaphore() {
@@ -239,7 +263,7 @@ template <uint32_t CT_BASE, uint32_t RT_BASE>
 struct McastArgs : detail::McastArgsImpl<
                        (get_compile_time_arg_val(CT_BASE + mcast_wire::TAG) == mcast_wire::FAMILY),
                        detail::positional_mcast_metadata<CT_BASE>(),
-                       detail::PositionalMcastRuntime<RT_BASE>,
+                       detail::positional_mcast_runtime<CT_BASE, RT_BASE>,
                        detail::positional_mcast_semaphore<CT_BASE, mcast_wire::DATA_READY>(),
                        detail::positional_mcast_semaphore<CT_BASE, mcast_wire::CONSUMER_READY>(),
                        detail::positional_mcast_semaphore<CT_BASE, mcast_wire::SIGNAL_SOURCE>()> {
@@ -251,16 +275,13 @@ struct McastArgs : detail::McastArgsImpl<
         constexpr auto metadata = detail::positional_mcast_metadata<CT_BASE>();
         return CT_BASE + (get_compile_time_arg_val(CT_BASE + mcast_wire::TAG) == mcast_wire::ABSENT
                               ? mcast_wire::ABSENT_CT_WORDS
-                              : mcast_wire::compile_time_words(mcast_wire::transfer_mode(metadata.flags)));
+                              : mcast_wire::family_compile_time_words(metadata.flags));
     }
     static constexpr uint32_t next_runtime_args_offset() {
         constexpr auto metadata = detail::positional_mcast_metadata<CT_BASE>();
         return RT_BASE + (get_compile_time_arg_val(CT_BASE + mcast_wire::TAG) == mcast_wire::ABSENT
                               ? 0
-                              : mcast_wire::runtime_words(
-                                    metadata.rotating_span,
-                                    metadata.rectangle_capacity,
-                                    mcast_wire::transfer_mode(metadata.flags)));
+                              : mcast_wire::family_runtime_words(metadata));
     }
 };
 

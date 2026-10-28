@@ -71,6 +71,7 @@ def run_family_case(
     mixed_events=False,
     delayed=False,
     min_rectangles=None,
+    block_table=False,
 ):
     """Build a real family, then exercise its attached kernel arguments."""
     specs = [Group(*group) for group in specs]
@@ -94,6 +95,7 @@ def run_family_case(
         ack_count_override=0 if zero_ack else None,
         sem_ids=list(range(semaphore_count)) if adopted else None,
         irregular_receiver_set_mode=(ttnn.TransferMode.ChainUnicast if chain_link else ttnn.TransferMode.Multicast),
+        block_table=block_table,
     )
     family = ttnn.McastFamily(device, config)
     for receivers, senders in specs:
@@ -132,6 +134,7 @@ def run_wrapper_case(
     caller_managed=False,
     handshake=True,
     kind="rectangle",
+    block_table=False,
 ):
     """Use a wrapper's host assembly with the same payload checks as a family."""
 
@@ -146,6 +149,7 @@ def run_wrapper_case(
         noc=ttnn.NOC.NOC_1 if noc else ttnn.NOC.NOC_0,
         handshake=handshake,
         data_ready=ttnn.McastDataReady.Counter if counter else ttnn.McastDataReady.Flag,
+        block_table=block_table,
     )
     if kind == "rectangle":
         sender_config = (

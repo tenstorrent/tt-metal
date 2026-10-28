@@ -99,6 +99,9 @@ constexpr uint32_t COUNTER_SIGNAL = 1u << 1;
 constexpr uint32_t NOC1 = 1u << 2;
 constexpr uint32_t TRANSFER_MODE_SHIFT = 3;
 constexpr uint32_t TRANSFER_MODE_MASK = 3u << TRANSFER_MODE_SHIFT;
+// Each distinct per-core block lives once in a table in the kernel's common args; a core's runtime words are
+// one pointer (the block's word offset in the table).
+constexpr uint32_t BLOCK_TABLE = 1u << 5;
 constexpr TransferMode transfer_mode(uint32_t flags) {
     return static_cast<TransferMode>((flags & TRANSFER_MODE_MASK) >> TRANSFER_MODE_SHIFT);
 }
@@ -125,6 +128,11 @@ constexpr uint32_t compile_time_words(TransferMode mode) {
 }
 static_assert(compile_time_words(TransferMode::Multicast) == 11);
 static_assert(compile_time_words(TransferMode::ChainUnicast) == 12);
+// Appended after the header only for BLOCK_TABLE families: the common-arg index where the family's table starts.
+enum TableCT : uint32_t { TABLE_BASE = 0, TABLE_CT_WORDS };
+constexpr uint32_t family_compile_time_words(uint32_t flags) {
+    return compile_time_words(transfer_mode(flags)) + ((flags & BLOCK_TABLE) != 0u ? TABLE_CT_WORDS : 0u);
+}
 // Every sender descriptor has the same layout, independently of mode/count uniformity.
 enum RectOffset : uint32_t { SX = 0, SY, EX, EY, REMOTE, LOOPBACK, RECT_SENDER_MCAST_MODE, RECT_WORDS };
 enum RuntimeOffset : uint32_t { NUM_RECTANGLES = 0, ACK, HEADER_WORDS };
@@ -154,6 +162,12 @@ constexpr uint32_t roles_offset(uint32_t rotating_span, uint32_t rectangle_capac
 }
 constexpr uint32_t runtime_words(uint32_t rotating_span, uint32_t rectangle_capacity, TransferMode transfer_mode) {
     return roles_offset(rotating_span, rectangle_capacity, transfer_mode) + ROLE_WORDS;
+}
+// Per-core runtime words a family occupies: the full block, or one table pointer for BLOCK_TABLE families.
+constexpr uint32_t family_runtime_words(const FamilyMetadata& metadata) {
+    return (metadata.flags & BLOCK_TABLE) != 0u
+               ? 1u
+               : runtime_words(metadata.rotating_span, metadata.rectangle_capacity, transfer_mode(metadata.flags));
 }
 constexpr SenderMcastMode classify(uint32_t remote_count, bool includes_sender) {
     if (remote_count == 0) {

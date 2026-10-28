@@ -733,7 +733,9 @@ ProgramDescriptor MatmulReduceScatterProgramFactory::create_descriptor(
     writer.emplace_common_runtime_args(mrs_rt_list(writer_common));
 
     // ---- multicast families (after the reader's own args) ----
-    const McastConfig mc_cfg{.noc = NOC::NOC_0, .handshake = true};
+    // Every core's multicast block is one of a few per line: send each distinct block once per kernel (common args)
+    // and give the core a pointer to it, instead of a full copy per core on every call.
+    const McastConfig mc_cfg{.noc = NOC::NOC_0, .handshake = true, .block_table = true};
     for (const McastFamilyPlan& fam : mrs_plan_mcast_senders(
              resident, gd.grid_m, gd.grid_n, a_split < win_m, w_split < kb, a_shape_1d, w_shape_1d)) {
         if (!fam.start.has_value()) {
