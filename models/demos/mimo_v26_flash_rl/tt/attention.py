@@ -312,6 +312,7 @@ class Attention:
         ring: ccl.RingResources,
         meta: ChunkMeta,
         rope: RopeTables,
+        kv: LayerKV | None = None,
     ):
         self.mesh, self.ring, self.meta, self.rope = mesh, ring, meta, rope
         self.sp, self.tp = tuple(mesh.shape)
@@ -394,7 +395,8 @@ class Attention:
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh),
         )
 
-        self.kv = LayerKV(
+        # the served caches: the engine's (allocate_kv_cache, tt/runners/kv_caches.py) when given, else this layer's
+        self.kv = kv or LayerKV(
             mesh,
             slots,
             self.lkv,

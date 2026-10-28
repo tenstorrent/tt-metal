@@ -49,7 +49,7 @@ SLOT = 0  # the slot the bring-up harness runs (the model holds SLOTS)
 class Block:
     """The device modules of one decoder layer, keyed by the reference graph's step names."""
 
-    def __init__(self, mesh, ck, layer: int, cfg: dict, shared: dict, max_seq: int, chunk: int, slots: int):
+    def __init__(self, mesh, ck, layer: int, cfg: dict, shared: dict, max_seq: int, chunk: int, slots: int, kv=None):
         dims = layer_dims(cfg, layer)
         kind = "sliding" if dims["window"] else "full"
         eps = cfg["layernorm_epsilon"]
@@ -69,6 +69,7 @@ class Block:
             ring=shared["ring"],
             meta=shared["meta"][kind],
             rope=shared["rope"][kind],
+            kv=kv,
         )
         self.add = ResidualAdd()
         if self.is_moe:
@@ -134,7 +135,8 @@ class State:
 
 
 class MimoModel:
-    def __init__(self, mesh, spec, layers, lm_head: bool = True, slots: int = 2):
+    def __init__(self, mesh, spec, layers, lm_head: bool = True, slots: int = 2, kv_caches: dict | None = None):
+        """kv_caches: {layer: LayerKV}, the engine-owned served caches (tt/runners/kv_caches.py); None allocates them."""
         t0 = time.time()
         self.mesh = mesh
         self.sp, self.tp = tuple(mesh.shape)
@@ -154,7 +156,11 @@ class MimoModel:
             shared["meta"][kind] = ChunkMeta(mesh, self.chunk, window=dims["window"])
             shared["rope"][kind] = RopeTables(mesh, inv_freq, self.max_seq)
         self.metas = list(shared["meta"].values())
-        self.blocks = {i: Block(mesh, ck, i, cfg, shared, self.max_seq, self.chunk, slots) for i in self.layers}
+        kv_caches = kv_caches or {}
+        self.blocks = {
+            i: Block(mesh, ck, i, cfg, shared, self.max_seq, self.chunk, slots, kv=kv_caches.get(i))
+            for i in self.layers
+        }
 
         rep = ttnn.ReplicateTensorToMesh(mesh)
         self.embed_w = ttnn.from_torch(
@@ -181,15 +187,16 @@ class MimoModel:
                 mesh.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, math_approx_mode=False, fp32_dest_acc_en=True
             )
         self.staged = None  # (start, end) of the metadata on the device
+        self.staged_slot = SLOT
         self.cursor = 0  # the start of the next chunk when embed is not given one
         self.load_seconds = time.time() - t0
 
     # ---- the runtime's per-chunk metadata step (host -> device, outside the layers)
-    def _stage(self, start: int, end: int) -> None:
-        if self.staged != (start, end):
+    def _stage(self, start: int, end: int, slot: int = SLOT) -> None:
+        if self.staged != (start, end) or self.staged_slot != slot:
             for meta in self.metas:
-                meta.stage(SLOT, start, end)
-            self.staged = (start, end)
+                meta.stage(slot, start, end)
+            self.staged, self.staged_slot = (start, end), slot
 
     def _perm(self) -> torch.Tensor:
         """Natural row index of every device row (SP row, then TP column, then local row) of the staged chunk."""
@@ -247,7 +254,8 @@ class MimoModel:
     def layer(self, i: int, h, start: int, state: State, end: int | None = None):
         """Block ``i`` on the device rows ``h`` of the chunk at ``start``; rows at or past ``end`` are pad."""
         if self.staged is None or self.staged[0] != start or (end is not None and self.staged[1] != end):
-            self._stage(start, start + self.chunk if end is None else end)  # a start embed did not stage
+            # a start embed did not stage
+            self._stage(start, start + self.chunk if end is None else end, self.staged_slot)
         b = self.blocks[i]
         inner = []
         ctx = Ctx(layer=i, start=start, length=self.chunk, state=state)

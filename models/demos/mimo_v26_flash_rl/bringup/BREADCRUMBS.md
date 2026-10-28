@@ -309,3 +309,30 @@
   only 31 of 32 Blackhole chips enumerate (`/dev/tenstorrent/30` and PCI `0000:87:00.0` absent from sysfs), so UMD
   topology discovery throws `Query mappings failed on device 0: No such device` before the model runs. The code
   (SDPA_SEGMENTED on) is unchanged and still needs its first gate run on a host with all 32 chips.
+
+## K.1 (contract): prefill adapter, served KV cache, address table, acks, producer read-back
+
+- `tt/runners/adapter.py` (`MimoPrefillAdapter`, ADAPTER_PATHS `mimo_v26_flash_rl`): light import, checkpoint dir from
+  the `SERVE_HF_DIR` setting, eager single rank (SP 8 x TP 4, chunk 5120), `supports_mtp = False`.
+- `tt/runners/kv_caches.py`: `allocate_kv_cache` returns `MimoKvCaches` = {layer: `LayerKV`} (tt/kv_cache.py, unchanged
+  layout). `MimoModel(kv_caches=...)` / `Attention(kv=...)` now take the engine's caches instead of allocating their own,
+  so the served cache is the model's state. Capacity is `max(max_seq, 2 * chunk)`: the sliding ring SDPA fork
+  TT_FATALs "requires chunked prefill" when the cache holds only one chunk (the s5120 rung), as gemma4's
+  `ring_cache_capacity`.
+- `tt/runners/kv_chunk_table.py`: configs `key_h0-7` (6528 B) / `value_h0-7` (4352 B); heads 4-7 only on sliding layers
+  (other layers unset). Address `(shard % banks) << 32 | base + shard // banks * record_bytes` over the ROUND_ROBIN_1D
+  walk of [slots, local_heads, local_seq, width]; device group = (SP row of the position, TP column of the head).
+  Same file: `read_slot_kv_and_check_pcc` (the producer's read-back through the table vs the golden kv_cache).
+- `tt/runners/runtime.py`: per chunk stages the metadata with the slot (`MimoModel._stage(start, end, slot)`), embeds the
+  engine's H2D tokens on the device, runs each layer and acks it right after (D2H `outbound_socket_service_sync` on the
+  same CQ, or host sink after a sync). The table / stages may be built before `compile`.
+- Generic hook in tt-metal: `PrefillModelAdapter.read_slot_kv_and_check_pcc` (default None); `prefill_producer` calls
+  it before its name branches.
+- Results (job-attempt-3): framework contract with a corrected `device_map` (scratch copy): PASS, layout_failures 0,
+  acks_early 0, producer KV PCC key 0.99991 / value 0.99971 (slot 1, [0, 5088), layers 0-5).
+  Blocked: (1) the framework's `contract.device_map` calls `ttnn.cluster.get_chip_unique_id_from_fabric_node_id(mesh_id,
+  chip_id)`; the workspace binding takes `(mesh_device, mesh_id, chip_id)` -> TypeError (bringup_fw, not editable here).
+  (2) test_runner_contract (tt-d-gen engine feeder @ ff5d9d92): the runner fails building `ttnn.H2DStreamService`:
+  "Failed to pin pages for DMA buffer ... Invalid argument"; chip 15's IOMMU group is `identity` (31 others DMA-FQ),
+  UMD logs "IOMMU state mismatch for chip 15: expected enabled, got disabled" on bh-glx-120-b07u08.
+- Re-run: `bfw job check --task K.1 --gate-only`.

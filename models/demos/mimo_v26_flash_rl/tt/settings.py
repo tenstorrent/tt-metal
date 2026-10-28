@@ -178,6 +178,12 @@ TABLE = {
         "fabric topology of the experts' dispatch / combine over SP (axis 0) (C.sliding_moe.experts)",
     ),
     "RING_NUM_LINKS": Setting(2, (1, 2), "fabric links of the ring SDPA gather over SP (gemma4_d_p: 2 on Blackhole)"),
+    "SERVE_HF_DIR": Setting(
+        "/mnt/models/huggingface/hub/models--XiaomiMiMo--MiMo-V2.6-Flash-RL/snapshots/"
+        "dcd3fd83fb181622fbc606fbb1709901982a62c2",
+        None,
+        "checkpoint (config.json + safetensors) the prefill adapter serves (tt/runners/adapter.py, K.1)",
+    ),
 }
 
 MAX_PRECISION = {

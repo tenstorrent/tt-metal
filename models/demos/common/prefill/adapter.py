@@ -171,6 +171,12 @@ class PrefillModelAdapter(ABC):
         issues one call per run of consecutive layers with equal ranges and byte-verifies that range."""
         return 0, real_len
 
+    # The producer's KV read-back through the exported table (prefill_producer._read_slot_kv_and_check_pcc). A model
+    # whose cache layout none of the producer's built-in readers decodes defines
+    #     read_slot_kv_and_check_pcc(table, device_map, slot_id, real_len, trace_dir, num_layers=None) -> {cache: pcc}
+    # on its adapter; the producer calls it before its per-model readers.
+    read_slot_kv_and_check_pcc: Optional[Callable] = None
+
     def pipeline_activation_planes(self, boundary_layer_idx: int) -> int:
         """Planes on dim 1 of the D2D payload at a rank boundary placed before `boundary_layer_idx`.
 
@@ -346,6 +352,8 @@ ADAPTER_PATHS = {
     "kimi_k2_7": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k2_7:KimiK27Adapter",
     "kimi_k3": "models.demos.deepseek_v3_d_p.tt.runners.adapters.kimi_k3:KimiK3Adapter",
     "minimax_m3": "models.demos.minimax_m3.tt.runners.adapters.minimax_m3:MiniMaxM3PrefillAdapter",
+    # MiMo-V2.6-Flash-RL: hybrid full / sliding GQA (per-head key 192 / value 128 records) + MoE; single rank, eager.
+    "mimo_v26_flash_rl": "models.demos.mimo_v26_flash_rl.tt.runners.adapter:MimoPrefillAdapter",
     # Mistral-Small-4-119B: dense MLA + MoE; config hand-built (transformers 5.x rope_parameters).
     "mistral_small_4": "models.demos.deepseek_v3_d_p.tt.runners.adapters.mistral_small_4:MistralSmall4Adapter",
 }
