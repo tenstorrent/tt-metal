@@ -8,7 +8,7 @@ set(LLRT_SRC
     tt_cluster.cpp
     tt_elffile.cpp
     tt_memory.cpp
-    zone_meta.cpp
+    call_sites.cpp
     hal.cpp
     tunnels_from_mmio_device.cpp
     metal_soc_descriptor.cpp
