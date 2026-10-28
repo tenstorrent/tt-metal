@@ -54,6 +54,7 @@ def matmul_qkv_rope(
     rope_fidelity=None,
     defines=(),
     fp32_acc=True,
+    in0_mcast=False,
 ):
     """x ``[1, 1, B * S, K]``, w ``[K, (n_heads + 2 * n_kv_heads) * head_dim]`` (Q, K, V column blocks)
     -> q ``[B, n_heads, S, head_dim]``, k and v ``[B, n_kv_heads, S, head_dim]``; RoPE applied to q, k.
@@ -103,7 +104,7 @@ def matmul_qkv_rope(
         mg.cb(4, 6 * mb, ttnn.bfloat16, all_cores),
     ]
     semaphores = mg.matmul_semaphores(all_cores)
-    kernels = mg.in0_kernels(device, g, x, q)
+    kernels = mg.in0_mcast_kernels(device, g, x) if in0_mcast else mg.in0_kernels(device, g, x, q)
 
     prefix = [g.M, g.padded_M, g.K, g.K, g.N, gy * g.N_per_core, mb, kb, nb, g.M_blocks_per_core]
     prefix += [g.N_blocks_per_core, TILE_BYTES[w.dtype], TILE_BYTES[out_dtype], 3, 4, 5]

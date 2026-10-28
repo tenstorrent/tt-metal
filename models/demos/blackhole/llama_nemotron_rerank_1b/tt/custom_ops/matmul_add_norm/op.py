@@ -116,6 +116,7 @@ def matmul_add_norm(
     norm_only_shape=None,
     acc_cb_fp32=None,
     embed=None,
+    in0_mcast=False,
 ):
     """x ``[1, 1, M, K]``, w ``[K, N]``, residual: the resident stream from ``to_resident`` for [M, N]
     (updated in place to residual + x @ w). Returns y = rmsnorm(residual) * gamma ``[1, 1, M, N]``.
@@ -215,7 +216,12 @@ def matmul_add_norm(
     w_slot = gamma_tiles if norm_only else w  # the writer's in1 accessor slot (unused without a matmul)
     zoned = any(d == "ZONES" for d, _ in defines)
     in0_kernel = os.path.join(_HERE, "kernels", "dm_in0_zoned.cpp") if zoned else mg.IN0_KERNEL
-    kernels = [] if norm_only else mg.in0_kernels(device, g, x, y, kernel=in0_kernel)
+    if norm_only:
+        kernels = []
+    elif in0_mcast:
+        kernels = mg.in0_mcast_kernels(device, g, x)
+    else:
+        kernels = mg.in0_kernels(device, g, x, y, kernel=in0_kernel)
 
     w_bytes = TILE_BYTES[w_slot.dtype]
     writer_prefix = [g.M, g.padded_M, g.K, g.K, g.N, g.n_n * g.N_per_core, mb, kb, nb, g.M_blocks_per_core]

@@ -195,6 +195,10 @@ class RerankConfig:
     # residual shard (instead of ttnn.embedding to DRAM + to_resident + resident_rmsnorm).
     # 32x512: 645 -> 304 us for the three (perf_tools/probe_embed_rmsnorm.py).
     embed_gather: bool = True
+    # Fused kinds ("wo", "ff2") whose activation blocks are multicast down each core column
+    # (tt/custom_ops/kernels/dm_in0_mcast.cpp) instead of relayed core to core.
+    # 16384 rows (perf_tools/probe_mm_add_norm.py --in0-mcast): WO 602 -> 593, FF2 1129 -> 1124 us.
+    in0_mcast_kinds: str = "wo,ff2"
     # Fold every RMSNorm's gamma into the rows of the matmul that consumes it (QKV, FF1+FF3, score head);
     # the norms then skip their gamma multiply. MIRACL Pearson batch 32 0.99963, batch 8 0.99967.
     fold_norm_gamma: bool = True

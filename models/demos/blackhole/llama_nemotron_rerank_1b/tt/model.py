@@ -454,6 +454,7 @@ class NemotronReranker:
             memory_config=self._mem(rows, self.cfg.dim),
             y_fidelity="HiFi2" if kind in self.cfg.y_hifi2_kinds.split(",") else MM_ADD_NORM_Y_FIDELITY,
             skip_gamma=self.cfg.fold_norm_gamma,
+            in0_mcast=kind in self.cfg.in0_mcast_kinds.split(","),
         )
 
     def _padding_mask(self, valid, S):

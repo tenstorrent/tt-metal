@@ -70,6 +70,7 @@ def main():
     ap.add_argument("--acc-cb-fp32", action="store_true")
     ap.add_argument("--flat", action="store_true", help="non-transposed grid: M over y, N over x")
     ap.add_argument("--in1-depth", type=int, default=2)
+    ap.add_argument("--in0-mcast", action="store_true")
     ap.add_argument("--defines", default="", help="comma-separated kernel defines for the fused op")
     args = ap.parse_args()
     K, N, xdt, fid, block, old_block = SHAPES[args.kind]
@@ -113,6 +114,7 @@ def main():
             full_sync=args.full_sync,
             transposed=not args.flat,
             acc_cb_fp32=True if args.acc_cb_fp32 else None,
+            in0_mcast=args.in0_mcast,
         )
 
     def old():

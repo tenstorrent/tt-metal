@@ -19,6 +19,7 @@ the in1 reader / output writer and the compute kernel. This module reproduces wh
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 
 import ttnn
@@ -26,6 +27,7 @@ from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops._common impor
 
 KERNEL_ROOT = "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels"
 IN0_KERNEL = f"{KERNEL_ROOT}/dm_in0_sender.cpp"
+IN0_MCAST_KERNEL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kernels", "dm_in0_mcast.cpp")
 IN0_NOC = ttnn.NOC.NOC_0
 IN1_NOC = ttnn.NOC.NOC_1
 
@@ -171,6 +173,42 @@ def in0_kernels(device, g: Grid, x_tensor, out_tensor, kernel=IN0_KERNEL):
     kernels = [kd(send_ct, send_rt, senders)]
     if g.n_n > 1:
         kernels.append(kd(recv_ct, recv_rt, receivers))
+    return kernels
+
+
+def in0_mcast_kernels(device, g: Grid, x_tensor):
+    """The two in0 KernelDescriptors of ``dm_in0_mcast.cpp`` (transposed grid): the core at N index 0
+    (y = 0) of each column reads in0 and multicasts each block to the rest of its column."""
+    if not g.transposed:
+        raise ValueError("in0 multicast is implemented for the transposed grid only")
+    x_bytes = TILE_BYTES[x_tensor.dtype]
+    prefix = [g.M, g.padded_M, g.K, g.K, g.M_block, g.K_block, g.M_blocks_per_core, g.N_blocks_per_core, x_bytes, 0, 1]
+    send_ct = prefix + [1] + accessor_args(x_tensor)
+    recv_ct = prefix + [0] + accessor_args(x_tensor)
+    send_rt, recv_rt = [], []
+    for x in range(g.gx):
+        s = physical(device, x, 0)
+        near, far = physical(device, x, 1 if g.gy > 1 else 0), physical(device, x, g.gy - 1)
+        for y in range(g.gy):
+            m0, m1 = g.m_range(x, y)
+            rt = [x_tensor.buffer_address(), m0, m1, near.x, near.y, far.x, far.y, g.gy - 1, s.x, s.y]
+            (send_rt if y == 0 else recv_rt).append(((x, y), rt))
+
+    def kd(ct, rt, core_set):
+        return ttnn.KernelDescriptor(
+            kernel_source=IN0_MCAST_KERNEL,
+            source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+            core_ranges=core_set,
+            compile_time_args=ct,
+            runtime_args=rt,
+            defines=[],
+            config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=IN0_NOC),
+            compiler_include_paths=[KERNEL_ROOT],
+        )
+
+    kernels = [kd(send_ct, send_rt, cores(0, 0, g.gx - 1, 0))]
+    if g.gy > 1:
+        kernels.append(kd(recv_ct, recv_rt, cores(0, 1, g.gx - 1, g.gy - 1)))
     return kernels
 
 
