@@ -985,6 +985,9 @@
   },
   "rc": 0,
   "reason": [],
+  "review": [
+   "agent exited rc=143 is_error=False"
+  ],
   "role": "overseer",
   "stamp": {
    "reused": [

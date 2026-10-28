@@ -522,3 +522,12 @@ check (F196 / F197); host times stay hidden until verified warm.
   tonight's cProfile + ops data; the top proposals become perf tasks P.* (step perf, role perf), each behind a
   pre-named tt/settings.py switch (ab.change/ab.env = DS41_<NAME>), judged by the orchestrator's A/B report (frozen
   tests, ladder, profile with chunk_wall_ms), accept/reject per pick = owner.
+- 09:48 FIX.6 PASS 142f265538e: MOE_IMPL default 'block' (fused head + tail) on the torus spec; all 11 gate units
+  reused from the agent's check (W.1, M.1, L.s10240, L.last, L.s56320, L.smoke Paris, K.1 contract tests + runner
+  smoke Paris through tt-d-gen on the torus, 664 s). The agent stalled after its check (no transcript write or child
+  process for 15 min): its process was ended (SIGTERM, review item 'rc=143'); the gate reused the passed check.
+  Paused before X.1 to land the engram hand-off.
+- 09:50 ENGRAM HOST PATH (owner): bench tools/engram_bench.py (CPU/NVMe, byte-equal --check). Cold, today's code:
+  ~4.6 s per engram layer per 5120-token chunk (read-ahead 256 KB x 122,880 random rows ~ 30 GB at the NVMe's
+  ~6.9 GB/s); MADV_RANDOM: 0.79 s, 8 threads 0.48 s; pread+FADV_RANDOM the same. Hand-off for the 2x2 session:
+  bringup/ENGRAM_HOST_PATH.md (problem, numbers, staged plan, 2x2 vs Galaxy split and pitfalls).
