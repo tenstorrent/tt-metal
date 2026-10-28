@@ -116,9 +116,10 @@ void kernel_main() {
 
     uint32_t w_index;
 
-// A DRAM read must start at the same offset within a read granule in DRAM and in L1.
-// The granule is 32 B on Wormhole and 64 B on Blackhole. Every DFB entry starts on a granule.
-#define DRAM_READ_GRANULE (NOC_DRAM_READ_ALIGNMENT_BYTES)
+// A DRAM read must start at the same offset within a read granule in DRAM and in L1. The granule is 32 B
+// on Wormhole and 64 B on Blackhole. On Quasar, the granule is 1 B, but DRAM_ALIGNMENT is 64 B.  A 1 B
+// read would copy only part of a 4 B index. A 64 B read holds the whole index.
+#define DRAM_READ_GRANULE (DRAM_ALIGNMENT)
 // The output is built in 32 B units of num_elements_per_alignment elements.
 #define ALIGNMENT_UNIT_SIZE (32)
 #define INDEX_SIZE (4)
