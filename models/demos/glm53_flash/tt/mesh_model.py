@@ -213,6 +213,46 @@ class GLM53MeshModel:
         logits = self.head.last_token_logits(streams, local_last + 1) if self.head is not None else None
         return streams, logits, owner_row
 
+    # ------------------------------------------------------------- prefill wave (tt-blaze G53F-0250)
+    WAVE_MAX_TOKENS = 2048  # the DSA dense range: start 0, no sparse indexer path
+
+    def prefill_wave_ids(self, prompts, user: int = 0):
+        """A row-local prefill wave: ``prompts`` (one per mesh row, ``len(prompts) == rows``) of the SAME length
+        ``S <= WAVE_MAX_TOKENS``, each through every layer on its own mesh row (KDA row-local, DSA single-row path,
+        MoE token-wise across the rows) in ONE pass, into slot ``user`` of every row (row r's slot holds prompt r).
+        Returns ``(streams, logits_last, S)``: row r's chips hold prompt r's final streams and its last-token logits
+        (``wave_first_tokens`` reads them). Ragged lengths / idle rows are later steps (G53F-0250 S5 / S7)."""
+        rows = self.mesh.rows
+        prompts = [torch.as_tensor(p).reshape(-1) for p in prompts]
+        if len(prompts) != rows:
+            raise ValueError(f"a wave takes one prompt per mesh row ({rows}), got {len(prompts)}")
+        S = int(prompts[0].numel())
+        if any(int(p.numel()) != S for p in prompts):
+            raise ValueError("this wave needs prompts of one length (ragged waves are G53F-0250 S5)")
+        if not 0 < S <= self.WAVE_MAX_TOKENS:
+            raise ValueError(f"wave prompt length {S} outside (0, {self.WAVE_MAX_TOKENS}]")
+        T_pad = -(-S // 32) * 32
+        host = torch.cat(
+            [self.embedding.tokens_to_host(p, pad_to=T_pad) for p in prompts], dim=-1
+        )  # [1,1,1,rows*T_pad]
+        ids_dev = self.mesh.upload(host, ttnn.uint32, rows=3, layout=ttnn.ROW_MAJOR_LAYOUT)  # row r: prompt r
+        streams = self.embedding(ids_dev)  # [1,1,T_pad,16384] per row
+        ttnn.deallocate(ids_dev)
+        for dec in self.layers:
+            out = dec.prefill_forward(streams, user=user, seq_len=S, start=0, row_local=True)
+            ttnn.deallocate(streams)
+            streams = out
+        logits = self.head.last_token_logits(streams, S) if self.head is not None else None
+        return streams, logits, S
+
+    def wave_first_tokens(self, logits) -> list[int]:
+        """The greedy first token of every row's prompt after ``prefill_wave_ids``."""
+        ids = self.head.greedy(logits)
+        devs = self.mesh.device_tensors(ids)
+        return [
+            int(ttnn.to_torch(devs[r * self.mesh.cols]).view(torch.int32).reshape(-1)[0]) for r in range(self.mesh.rows)
+        ]
+
     def prefill_chunked(
         self, prompt_ids: torch.Tensor, user: int = 0, chunk: int = 32768, on_chunk=None, on_streams=None
     ):

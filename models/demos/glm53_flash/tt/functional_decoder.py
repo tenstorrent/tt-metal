@@ -428,16 +428,23 @@ class FunctionalDecoder(LightweightModule):
         seq_len: int | None = None,
         start: int = 0,
         trace: PrefillTraceCall | None = None,
+        row_local: bool = False,
     ) -> ttnn.Tensor:
-        """One chunk of one user's prompt: row i of ``streams`` is the token at absolute position
+        """``row_local`` (tt-blaze G53F-0250, the prefill wave): every mesh row's ``streams`` is its OWN prompt's whole
+        chunk (start 0, T <= 2048, the rows' common valid length ``seq_len``); slot ``user`` of row r ends up holding
+        row r's prompt (KDA carries per row, the DSA cache / index written by each row's single-row path).
+
+        One chunk of one user's prompt: row i of ``streams`` is the token at absolute position
         ``start + i``. ``start == 0`` starts a new prompt; a later chunk must start where the previous
         one ended (``next_start[user]``), on a 32-row boundary, and end within ``max_seq_len`` (see
         the module docstring for the full chunked-prefill contract).
         ``trace`` (``PrefillTraceCall``): the trace-replayable form of a new prompt (start == 0): the
         user slot, the prompt length and the ring rows come from persistent device tensors, so the
         graph is the same for every prompt of the padded length ``T`` (``seq_len`` is then ``T``)."""
-        T = streams.shape[-2] * self.mesh.rows  # multi-row mesh: streams hold this row's slab of the chunk
+        T = streams.shape[-2] * (1 if row_local else self.mesh.rows)  # SP: streams hold this row's slab of the chunk
         seq_len = T if seq_len is None else seq_len
+        if row_local and (trace is not None or start):
+            raise ValueError("row_local (the prefill wave) is an eager new-prompt chunk (start 0, no trace)")
         if trace is not None:
             if start or seq_len != T:
                 raise ValueError("a traced prefill chunk starts a new prompt (start == 0) at its padded length")
@@ -463,7 +470,9 @@ class FunctionalDecoder(LightweightModule):
         # next step; until then a prefilled user is decodable from any row's slot ``user``).
         layer = self._require_weights()
         state, temporaries = self._state_for_prefill(user, start)
-        out, new_state = layer.prefill_forward(streams, state, user=user, seq_len=seq_len, start=start)
+        out, new_state = layer.prefill_forward(
+            streams, state, user=user, seq_len=seq_len, start=start, **({"row_local": True} if row_local else {})
+        )
         for t in temporaries:
             ttnn.deallocate(t)
         if self.is_kda:

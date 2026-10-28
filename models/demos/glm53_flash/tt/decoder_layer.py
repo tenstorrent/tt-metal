@@ -222,15 +222,25 @@ class TtDecoderLayer(LightweightModule):
         actual_end: ttnn.Tensor | None = None,
         slot=None,
         ring_sel: ttnn.Tensor | None = None,
+        row_local: bool = False,
     ) -> tuple[ttnn.Tensor, LayerState]:
-        """streams [1,1,T_pad,4*hidden] fp32 for one user: row i is the token at absolute position
+        """``row_local`` (tt-blaze G53F-0250, the prefill wave): every mesh row holds its OWN prompt's whole chunk
+        ``[1,1,T_pad,4*hidden]`` (start 0, T_pad <= 2048, the DSA dense range); KDA runs row-local (ttKDA
+        sp_axis=None), DSA its single-row path (column collectives only), the MoE row gather / reduce-scatter is
+        token-wise and returns every row its own tokens. ``seq_len`` is the rows' common valid length.
+
+        streams [1,1,T_pad,4*hidden] fp32 for one user: row i is the token at absolute position
         ``start + i`` (``start % 32 == 0``), T_pad % 32 == 0 and rows past ``seq_len`` are padding.
         KDA: ``state.kda`` is the carry after position ``start`` (zeros for a new prompt); DSA: the
         user's cache holds [0, start). Returns the new streams and the layer state after the chunk.
         ``actual_start`` / ``actual_end`` override the KDA device scalars derived from ``start`` and
         ``seq_len`` (global positions, as ttKDA defines them). ``slot`` / ``ring_sel``: the DSA path's
         device-side user slot and ring-row selector (the traced prefill, ``TtDSA.prefill_forward``)."""
-        T = streams.shape[-2] * self.mesh.rows  # the chunk's rows (this chip holds T / rows of them)
+        T = streams.shape[-2] * (
+            1 if row_local else self.mesh.rows
+        )  # the chunk's rows (this chip holds T / rows of them)
+        if row_local and (start or T > 2048 or slot is not None):
+            raise ValueError("row_local (the prefill wave) supports start 0, T <= 2048 (dense DSA), eager only")
         new_state = LayerState(kda=state.kda, cache=state.cache)
 
         def attention(h):  # h: [1,1,T/rows,hidden] bf16, input_layernorm applied
@@ -238,7 +248,10 @@ class TtDecoderLayer(LightweightModule):
                 T_loc = h.shape[-2]
                 # tt-blaze G53F-0226: ttKDA's chronology anchor for the contiguous slab layout (``chrono_anchor``:
                 # the raw start rotates a ragged last chunk at start > 0)
-                k_start = chrono_anchor(start, T_loc, self.mesh.rows) if actual_start is None else start
+                if row_local:
+                    k_start = 0  # every row's prompt starts at 0 (no SP slab layout to anchor)
+                else:
+                    k_start = chrono_anchor(start, T_loc, self.mesh.rows) if actual_start is None else start
                 start_t = actual_start if actual_start is not None else self.attn.scalar(k_start)
                 end = actual_end
                 # the exclusive global valid end; a chunk at start > 0 always carries it so the kernels'
@@ -246,11 +259,11 @@ class TtDecoderLayer(LightweightModule):
                 if end is None and (seq_len != T or start):
                     end = self.attn.scalar(k_start + seq_len)
                 y, new_state.kda = self.attn.prefill_forward(
-                    ttnn.reshape(h, [1, T_loc, self.hidden]), state.kda, start_t, end
+                    ttnn.reshape(h, [1, T_loc, self.hidden]), state.kda, start_t, end, row_local=row_local
                 )
                 return ttnn.reshape(y, [1, 1, T_loc, self.hidden])
             dsa_kw = dict(start=start, slot=slot, ring_sel=ring_sel)
-            if self.mesh.rows == 1:
+            if self.mesh.rows == 1 or row_local:  # row_local: every row is a one-row mesh for DSA
                 return self.attn.prefill_forward(h, state.cache, user, seq_len, **dsa_kw)
             if sp_attention_mode() == "slab" and slot is None:
                 # sequence-parallel rows, slab-local: the row attends its own slab's queries against the

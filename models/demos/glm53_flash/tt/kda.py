@@ -412,8 +412,10 @@ class TtKDA(LightweightModule):
         small = [d for d in fits if d <= 20]
         return max(small) if small else min(fits)
 
-    def prefill_layer(self, active_seq_len: int) -> ttKDA:
-        """ttKDA instance for one physical (32-aligned) chunk length; weights are shared."""
+    def prefill_layer(self, active_seq_len: int, *, row_local: bool = False) -> ttKDA:
+        """ttKDA instance for one physical (32-aligned) chunk length; weights are shared. ``row_local`` (tt-blaze
+        G53F-0250, the prefill wave): every mesh row runs its OWN sequence of ``active_seq_len`` tokens (ttKDA
+        ``sp_axis=None``: no cross-row scan, conv history or carry; TP over the columns as before)."""
         if active_seq_len % ttnn.TILE_SIZE:
             raise ValueError(f"active_seq_len must be a multiple of {ttnn.TILE_SIZE}, got {active_seq_len}")
         # tt-blaze G53F-0220: GLM53_KDA_L1_KB="prep=600,qkv=256,decay=96,norm=..,partial=.." (or "+"-separated) raises ttKDA's per-core L1
@@ -422,10 +424,12 @@ class TtKDA(LightweightModule):
         # only (the same kernels and arithmetic). Read at build time; the knob is part of the cache key.
         l1_knob = os.environ.get("GLM53_KDA_L1_KB", "")
         key = (active_seq_len, l1_knob) if l1_knob else active_seq_len
+        if row_local:
+            key = ("row_local", key)
         layer = self._prefill_layers.get(key)
         if layer is None:
             kw = {}
-            if self.mesh.rows > 1:
+            if self.mesh.rows > 1 and not row_local:
                 # sequence-parallel over the rows: the grouped scan needs summary_group_chunks to divide the
                 # LOCAL chunk count (active_seq_len / rows / 32) and one summary-owner core per (local head,
                 # group): heads * groups <= the worker grid (120 on P150); see summary_group_chunks
@@ -452,7 +456,7 @@ class TtKDA(LightweightModule):
                     layer_idx=self.layer_idx,
                     weights=self.prefill_weights,
                     tt_ccl=tt_ccl,
-                    sp_axis=0,
+                    sp_axis=None if row_local else 0,
                     tp_axis=1,
                     program_config=program_config,
                     active_seq_len=active_seq_len,
@@ -461,14 +465,21 @@ class TtKDA(LightweightModule):
         return layer
 
     def prefill_forward(
-        self, x: ttnn.Tensor, state: KdaState, actual_start: ttnn.Tensor, actual_end: ttnn.Tensor | None = None
+        self,
+        x: ttnn.Tensor,
+        state: KdaState,
+        actual_start: ttnn.Tensor,
+        actual_end: ttnn.Tensor | None = None,
+        *,
+        row_local: bool = False,
     ) -> tuple[ttnn.Tensor, KdaState]:
         """x: [1, T_phys, hidden] bf16 TILE (T_phys % 32 == 0; rows past ``actual_end`` are padding).
         Returns y [1, T_phys, hidden] bf16 and the new state (the old one is only read).
         On a multi-row mesh ttKDA is sequence-parallel over the rows: ``x`` is this row's slab
         (row r holds rows [r*T/rows, (r+1)*T/rows) of the chunk, T = rows * T_phys_local) and the
-        returned carries are replicated over the rows (TP-sharded heads as in decode)."""
-        layer = self.prefill_layer(x.shape[1] * self.mesh.rows)
+        returned carries are replicated over the rows (TP-sharded heads as in decode). ``row_local`` (the prefill
+        wave): ``x`` is row r's WHOLE sequence (its own prompt) and the carries come out per row."""
+        layer = self.prefill_layer(x.shape[1] * (1 if row_local else self.mesh.rows), row_local=row_local)
         tiled_in = state.convolution.layout == ttnn.TILE_LAYOUT
         if tiled_in:  # ttKDA reads / writes the row-major [B, taps, W] history
             conv_rm = self.conv_to_rm(state.convolution)

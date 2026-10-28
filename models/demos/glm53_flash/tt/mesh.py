@@ -219,12 +219,18 @@ class GLMMesh:
         """Per-chip tensors in mesh (row-major) order."""
         return list(ttnn.get_device_tensors(x))
 
-    def to_host(self, x: ttnn.Tensor, *, rows: int | None = None, cols: int | None = None) -> torch.Tensor:
+    def to_host(
+        self, x: ttnn.Tensor, *, rows: int | None = None, cols: int | None = None, row: int = 0
+    ) -> torch.Tensor:
         """Host tensor: chip shards concatenated on ``rows`` / ``cols`` (``None`` = take the first
         replica on that axis). Equal replicas are the caller's assertion, not checked here. Only the shards
-        used are read (a ``None`` axis reads its first replica only: the live seed export read 8x too much)."""
+        used are read (a ``None`` axis reads its first replica only: the live seed export read 8x too much).
+        ``row`` (with ``rows=None``): read mesh row ``row``'s replica instead of row 0's (tt-blaze G53F-0250: after a
+        row-local prefill wave every row holds a different prompt's state)."""
         devs = self.device_tensors(x)
-        rs = range(self.rows) if rows is not None else range(1)
+        if not 0 <= row < self.rows:
+            raise ValueError(f"row {row} outside the mesh's {self.rows} rows")
+        rs = range(self.rows) if rows is not None else range(row, row + 1)
         cs = range(self.cols) if cols is not None else range(1)
         row_parts = []
         for r in rs:
