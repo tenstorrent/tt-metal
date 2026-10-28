@@ -593,7 +593,7 @@ class TPAttention:
             self.tt_ccl,
             cluster_axis=0,
             dim=3,
-            num_reduce_scatter_links=tpc.prefill_rs_links(),
+            num_reduce_scatter_links=tpc.prefill_rs_links(partial.shape[-2]),
             topology=self.args.ccl_topology(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
@@ -1694,7 +1694,7 @@ class TPAttention:
             self.tt_ccl,
             cluster_axis=0,
             dim=3,
-            num_reduce_scatter_links=tpc.prefill_rs_links(),
+            num_reduce_scatter_links=tpc.prefill_rs_links(partial.shape[-2]),
             topology=self.args.ccl_topology(),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )

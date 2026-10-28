@@ -320,6 +320,15 @@ def test_plan_marks_the_end_of_prompt_point(dev):
     assert _plan(30000, 0, force_points=[8192, 12288], nonfinal=True)[2].end == set()
 
 
+def test_end_point_marked_when_it_is_a_learn_point():
+    from models.demos.blackhole.qwen36.tt.prefix_cache import spec_save_points
+
+    # L = 10003: b_end = floor((L - 3) / 128) * 128 = 9984, also a learn position -> still the protected end point.
+    pts = spec_save_points(10003, 0, [4096, 9984])
+    assert 9984 in pts and pts.end == {9984}
+    assert spec_save_points(10003, 0, [4096]).end == {9984}  # unchanged when it is not a learn point
+
+
 def test_plan_end_point_follows_min_len(dev, monkeypatch):
     monkeypatch.setenv("QWEN36_PREFIX_SNAPSHOT_MIN_LEN", "512")
     s, _, pts = _plan(1000, 0)

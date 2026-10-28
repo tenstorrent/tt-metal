@@ -408,7 +408,7 @@ class Qwen36ModelArgs(ModelArgs):
             f"GPTQ-BFP4 checkpoint: targets {self.gptq_meta.get('targets')}, calibrated for TP={self.gptq_meta.get('tp')}, "
             f"{gq.GPTQ_PRESET_ENV}={int(preset)}, tensor cache suffix {gq.cache_suffix(self.gptq_meta)}"
         )
-        if preset and tp is not None and tp > 1 and self.gptq_meta.get("tp") != tp:
+        if preset and tp is not None and self.gptq_meta.get("tp") != tp:
             raise ValueError(f"GPTQ checkpoint calibrated for TP={self.gptq_meta.get('tp')}, running TP={tp}")
 
     def weight_cache_path(self, dtype=None):

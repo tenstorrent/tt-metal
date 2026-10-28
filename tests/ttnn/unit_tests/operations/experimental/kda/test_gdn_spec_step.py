@@ -798,6 +798,9 @@ def test_value_blocks_bit_identical(device, geo, mode, request, vb, B, T, hold, 
     torch.equal, at the parity 1 half of the pair too."""
     skip_if_over_grid(device, geo, B)
     eff = effective_value_blocks(device, geo, B, vb)
+    if geo.Nv == 6 and B == 8:
+        # The qwen36 TP=8 B=8 verify bucket must actually split (2 blocks: 8 * 6 * 4 cores does not fit the grid).
+        assert eff == 2, f"TP=8 B=8 value_blocks={vb} resolved to {eff}, expected 2"
     res = []
     for blocks in (1, vb):
         c = Case(device, geo, B, T, seed=91 + B * 10 + T, hold=hold, par=1, out_dtype=out_dtype, mode=mode)

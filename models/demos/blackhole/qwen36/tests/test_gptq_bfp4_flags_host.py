@@ -99,6 +99,9 @@ def test_preset_guards(clean_env, tmp_path):
         Qwen36ModelArgs._check_gptq_checkpoint(_stub(tmp_path / "g4", 8), mesh_device=object())
     _write_marker(tmp_path / "g8", 8)
     Qwen36ModelArgs._check_gptq_checkpoint(_stub(tmp_path / "g8", 8), mesh_device=object())
+    # TP=1 (single device) is a mismatch too: the TP8 checkpoint's per-shard GPTQ groups do not apply.
+    with pytest.raises(ValueError, match="running TP=1"):
+        Qwen36ModelArgs._check_gptq_checkpoint(_stub(tmp_path / "g8", 1), mesh_device=object())
 
 
 @pytest.mark.parametrize("exp_search", [False, True])

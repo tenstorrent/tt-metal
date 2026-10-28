@@ -153,7 +153,9 @@ def spec_save_points(
     if not end_point:
         pass
     elif prompt_len >= min_len:
-        if b_end > max(s, max(pts, default=0)):
+        if b_end in pts:
+            end.add(b_end)  # already a learn point: it is still the end-of-prompt checkpoint
+        elif b_end > max(s, max(pts, default=0)):
             pts.add(b_end)
             end.add(b_end)
     elif not pts:
