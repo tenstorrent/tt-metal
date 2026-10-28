@@ -86,7 +86,7 @@ jobs:
 
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
-        uses: tenstorrent/tt-metal/.github/actions/prepare-test-matrix@main
+        uses: ./.github/actions/prepare-test-matrix
         with:
           tests-yaml: "${{ env.TESTS_YAML_PATH }}"
           enabled-skus: "${{ inputs.enabled-skus }}"
@@ -134,6 +134,7 @@ jobs:
         with:
           sparse-checkout: |
             .github/actions/download-artifact-with-retry
+            .github/actions/upload-artifact-with-job-uuid
             .github/scripts/ccache_log_filter.sh
           sparse-checkout-cone-mode: false
 
@@ -323,7 +324,7 @@ jobs:
           include_passed: false
           fail_on_failure: false
 
-      - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
+      - uses: ./.github/actions/upload-artifact-with-job-uuid
         if: ${{ !cancelled() }}
         timeout-minutes: 10
         with:
