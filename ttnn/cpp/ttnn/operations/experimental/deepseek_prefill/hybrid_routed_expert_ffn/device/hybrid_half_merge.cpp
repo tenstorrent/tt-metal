@@ -8,6 +8,7 @@
 #include <map>
 #include <stdexcept>
 #include <variant>
+#include <vector>
 
 #include <fmt/format.h>
 
@@ -300,18 +301,21 @@ KernelDescriptor merge_kernel(
         merged.buffer_bindings.push_back(
             tt::tt_metal::BufferBinding{binding.core, binding.arg_idx + fused_block, binding.buffer});
     }
-    // Common runtime args are not rebased: both halves read the same per-expert weight and bias bases from one block
-    // of one layout (expert_weight_common_args), so the merged kernel keeps a single copy -- `merged` already holds the
-    // fused half's. A role that only one half carries (the compute kernels carry none) contributes its own.
+    // Common runtime args are not rebased: both halves read the same buffer bases from one block of one layout
+    // (routed_expert_common_args), so the merged kernel keeps a single copy -- `merged` already holds the fused half's,
+    // which may run on past the shared block with arguments only the fused half reads (the fused reader's sender
+    // list). A role that only one half carries (the compute kernels carry none) contributes its own.
     if (merged.common_runtime_args.empty()) {
         merged.common_runtime_args = unified.common_runtime_args;
         merged.common_buffer_bindings = unified.common_buffer_bindings;
     } else if (!unified.common_runtime_args.empty()) {
+        const auto& shared = unified.common_runtime_args;
         TT_FATAL(
-            unified.common_runtime_args == fused.common_runtime_args,
-            "the two halves carry different common runtime args ({} vs {} words); the merged kernel has one block "
-            "both read unrebased",
-            unified.common_runtime_args.size(),
+            shared.size() <= fused.common_runtime_args.size() &&
+                std::equal(shared.begin(), shared.end(), fused.common_runtime_args.begin()),
+            "the unified half's {} common runtime args are not the head of the fused half's {}; the merged kernel has "
+            "one block both read unrebased",
+            shared.size(),
             fused.common_runtime_args.size());
     }
 
@@ -457,6 +461,76 @@ tt::tt_metal::ProgramDescriptor merge_halves(
     }
     mark_unified_pack_precision(unified, *unified_by_role.at(compute_role()), merged);
     return merged;
+}
+
+void compact_runtime_args(tt::tt_metal::ProgramDescriptor& desc) {
+    for (auto& kernel : desc.kernels) {
+        if (!kernel.kernel_source.ends_with("hybrid_reader.cpp") &&
+            !kernel.kernel_source.ends_with("hybrid_writer.cpp")) {
+            continue;
+        }
+        auto& per_core = kernel.runtime_args;
+        if (per_core.empty()) {
+            continue;
+        }
+        size_t count = 0;
+        for (const auto& [core, args] : per_core) {
+            count = std::max(count, args.size());
+        }
+        // A list shorter than the longest reads nothing past its own end, so padding it does not change what it reads.
+        for (auto& [core, args] : per_core) {
+            args.resize(count, 0);
+        }
+        // A buffer-bound slot is re-patched per core on a program-cache hit, so it stays per core.
+        std::vector<bool> bound(count, false);
+        for (const auto& binding : kernel.buffer_bindings) {
+            bound[binding.arg_idx] = true;
+        }
+
+        constexpr uint32_t kShared = 0x80000000u;
+        const auto table_base = static_cast<uint32_t>(kernel.common_runtime_args.size());
+        const auto shared_base = table_base + static_cast<uint32_t>(count);
+        std::vector<uint32_t> table(count);
+        std::vector<uint32_t> shared;
+        std::vector<int64_t> compact_slot(count, -1);
+        uint32_t next_slot = 0;
+        for (size_t i = 0; i < count; ++i) {
+            const uint32_t value = per_core.front().second[i];
+            const bool same_everywhere =
+                !bound[i] && std::all_of(per_core.begin(), per_core.end(), [&](const auto& entry) {
+                    return entry.second[i] == value;
+                });
+            if (same_everywhere) {
+                table[i] = kShared | (shared_base + static_cast<uint32_t>(shared.size()));
+                shared.push_back(value);
+            } else {
+                compact_slot[i] = next_slot;
+                table[i] = next_slot++;
+            }
+        }
+        TT_FATAL(
+            (shared_base + shared.size()) < kShared,
+            "hybrid routed expert: {} common runtime args do not fit the table",
+            shared_base + shared.size());
+
+        for (auto& [core, args] : per_core) {
+            std::vector<uint32_t> compact;
+            compact.reserve(next_slot);
+            for (size_t i = 0; i < count; ++i) {
+                if (compact_slot[i] >= 0) {
+                    compact.push_back(args[i]);
+                }
+            }
+            args = std::move(compact);
+        }
+        for (auto& binding : kernel.buffer_bindings) {
+            binding.arg_idx = static_cast<uint32_t>(compact_slot[binding.arg_idx]);
+        }
+        kernel.common_runtime_args.insert(kernel.common_runtime_args.end(), table.begin(), table.end());
+        kernel.common_runtime_args.insert(kernel.common_runtime_args.end(), shared.begin(), shared.end());
+        kernel.defines.emplace_back("HYB_RTX_CRT", std::to_string(table_base));
+        kernel.defines.emplace_back("HYB_RTX_COUNT", std::to_string(count));
+    }
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn

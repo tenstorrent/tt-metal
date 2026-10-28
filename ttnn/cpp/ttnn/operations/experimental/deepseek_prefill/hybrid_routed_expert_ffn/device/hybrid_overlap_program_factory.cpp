@@ -11,6 +11,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <ttnn/global_semaphore.hpp>
 
+#include "hybrid_half_merge.hpp"
 #include "hybrid_program_factory.hpp"
 #include "hybrid_routed_expert_ffn_device_operation.hpp"
 #include "combine/combine_fabric2d_program_factory.hpp"
@@ -21,7 +22,9 @@ namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert
 
 tt::tt_metal::ProgramDescriptor HybridSoloProgramFactory::create_descriptor(
     const HybridRoutedExpertFfnParams& op, const HybridRoutedExpertFfnInputs& t, ttnn::Tensor& output) {
-    return create_hybrid_program_descriptor(op, t, output);
+    auto desc = create_hybrid_program_descriptor(op, t, output);
+    compact_runtime_args(desc);
+    return desc;
 }
 
 combine::CombineFabric2dParams combine_attributes(
@@ -150,6 +153,7 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
             append_far_run(
                 re, t.expert_offsets->buffer(), (cf::my_dg_index(combine_args, coord) + extent / 2) % extent);
         }
+        compact_runtime_args(re);
         program.descriptor = tt::tt_metal::merge_program_descriptors({program.descriptor, re});
     }
 

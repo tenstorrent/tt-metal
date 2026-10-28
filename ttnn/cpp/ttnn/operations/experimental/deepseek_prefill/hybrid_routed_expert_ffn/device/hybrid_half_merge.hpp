@@ -82,4 +82,11 @@ tt::tt_metal::ProgramDescriptor merge_halves(
     const PassBarrierPlan& barrier,
     MergeReport& report);
 
+// Leaves each core of the union dataflow kernels only the runtime arguments that differ between cores. Every
+// argument that is the same on all of them moves into the kernel's common arguments, once, with a table of where
+// each original index now lives; the kernel rebuilds its original list from them at entry
+// (device/kernels/hybrid_rt_expand.hpp). Call on the finished descriptor, after the last per-core argument is
+// appended: a value is only known to be shared once every core's list is complete.
+void compact_runtime_args(tt::tt_metal::ProgramDescriptor& desc);
+
 }  // namespace ttnn::operations::experimental::deepseek_prefill::hybrid_routed_expert_ffn
