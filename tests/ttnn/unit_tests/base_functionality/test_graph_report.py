@@ -8544,6 +8544,48 @@ class TestGraphCaptureEndsWhenItsReportFails:
         assert not ttnn.graph.is_graph_capture_active()
 
 
+class TestTensorSummaryMeshCoords:
+    """A tensor argument's summary lists its mesh coordinates in full only for a few: every argument of every operation
+    carries it, and a tensor on a 16x8 multi-host mesh spans 128."""
+
+    @staticmethod
+    def _summary(num_coords, mesh_size):
+        coords = [f"MeshCoordinate([{i // 8}, {i % 8}])" for i in range(num_coords)]
+        device = SimpleNamespace(id=lambda: 0, shape="MeshShape([16, 8])", get_num_devices=lambda: mesh_size)
+        topology = SimpleNamespace(mesh_coords=lambda: coords, distribution_shape=lambda: None, placements=lambda: [])
+        tensor = SimpleNamespace(
+            shape="Shape([32, 32])",
+            dtype="DataType.BFLOAT16",
+            layout="Layout.TILE",
+            memory_config=lambda: "MemoryConfig(...)",
+            storage_type=lambda: "StorageType.DEVICE",
+            tensor_id=1,
+            is_allocated=lambda: True,
+            device=lambda: device,
+            tensor_topology=lambda: topology,
+        )
+        return ttnn.graph._ttnn_tensor_summary(tensor)
+
+    def test_whole_mesh_is_summarized(self):
+        summary = self._summary(128, 128)
+        assert "mesh_coords=all 128" in summary
+        assert "MeshCoordinate" not in summary
+
+    def test_part_of_a_large_mesh_lists_the_first_few_and_a_count(self):
+        summary = self._summary(64, 128)
+        assert "MeshCoordinate([0, 7])" in summary and "MeshCoordinate([1, 0])" not in summary
+        assert "... 64 in all" in summary
+
+    def test_a_few_coordinates_are_listed_in_full(self):
+        summary = self._summary(8, 8)
+        assert summary.count("MeshCoordinate(") == 8
+
+
+def test_tensor_summary_on_one_device_lists_its_coordinate(device):
+    tensor = ttnn.from_torch(torch.rand((32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    assert "mesh_coords=['MeshCoordinate([0, 0])']" in ttnn.graph._ttnn_tensor_summary(tensor)
+
+
 # mesh_device depends on silicon_arch_name, which conftest only parametrizes for tests that name it at collection.
 @pytest.mark.usefixtures("silicon_arch_name")
 def test_multihost_graph_report(request):
