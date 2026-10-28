@@ -132,12 +132,13 @@ def _streams_host(model: GLM53MeshModel, streams: ttnn.Tensor, S: int) -> torch.
     return model.mesh.to_host(streams, rows=2 if model.mesh.rows > 1 else None).float()[0, 0, :S]  # [S, 16384]
 
 
-def _kda_state_host(model: GLM53MeshModel, dec) -> dict[str, torch.Tensor]:
-    """Slot 0's KDA carries, heads gathered over the TP columns (row 0's replica)."""
+def _kda_state_host(model: GLM53MeshModel, dec, row: int = 0) -> dict[str, torch.Tensor]:
+    """Slot 0's KDA carries, heads gathered over the TP columns (mesh row ``row``'s replica: after a row-local prefill
+    wave every row holds its own prompt's state, tt-blaze G53F-0250)."""
     st = dec.kda_batched
-    rec = model.mesh.to_host(st.recurrent, cols=1)[0:1].float()  # [1, 64, 128, 128] (heads column-sharded head-major)
+    rec = model.mesh.to_host(st.recurrent, cols=1, row=row)[0:1].float()  # [1, 64, 128, 128] (heads column-sharded)
     tiled = st.convolution.layout == ttnn.TILE_LAYOUT  # tap-major tiles [taps, B, W_c] vs ttKDA's [B, taps, W_c]
-    conv = model.mesh.to_host(st.convolution, cols=2)
+    conv = model.mesh.to_host(st.convolution, cols=2, row=row)
     if tiled:
         conv = conv.permute(1, 0, 2)
     conv = conv[0:1].float()  # [1, taps, cols * W_c], chip c's block = [q_c | k_c | v_c]
@@ -147,8 +148,10 @@ def _kda_state_host(model: GLM53MeshModel, dec) -> dict[str, torch.Tensor]:
     return {"recurrent_state": rec.contiguous(), "conv_history": conv.contiguous().to(torch.bfloat16)}
 
 
-def _replicated_rows_host(model: GLM53MeshModel, t: ttnn.Tensor, nb: int) -> torch.Tensor:
-    """The first ``nb`` dim-0 rows of a mesh-REPLICATED tensor ``t`` on the host (tt-blaze G53F-0182).
+def _replicated_rows_host(model: GLM53MeshModel, t: ttnn.Tensor, nb: int, row: int | None = None) -> torch.Tensor:
+    """The first ``nb`` dim-0 rows of a mesh-REPLICATED tensor ``t`` on the host (tt-blaze G53F-0182). ``row`` (tt-blaze
+    G53F-0250): ``t`` is replicated only within each mesh row (a prefill wave: row r holds prompt r) -- read row
+    ``row``'s replica, never the all-chip partition.
 
     Default: slice them on device and read one chip's replica (one chip's PCIe read: ~1.5 s per GiB). With
     ``GLM53F_EXPORT_PARTITION=1``: pad ``nb`` up to a multiple of the chip count D, ``ttnn.mesh_partition`` the slice
@@ -159,7 +162,7 @@ def _replicated_rows_host(model: GLM53MeshModel, t: ttnn.Tensor, nb: int) -> tor
     nb = min(nb, int(t.shape[0]))
     rest = [int(t.shape[i]) for i in range(1, len(t.shape))]
     D = model.mesh.rows * model.mesh.cols
-    if os.environ.get("GLM53F_EXPORT_PARTITION", "0") == "1" and D > 1:
+    if row is None and os.environ.get("GLM53F_EXPORT_PARTITION", "0") == "1" and D > 1:
         nbp = -(-nb // D) * D
         if nbp <= int(t.shape[0]):
             part = ttnn.slice(t, [0, 0, 0, 0], [nbp, *rest])
@@ -174,19 +177,22 @@ def _replicated_rows_host(model: GLM53MeshModel, t: ttnn.Tensor, nb: int) -> tor
             ttnn.deallocate(p)
             return out[:nb]
     part = ttnn.slice(t, [0, 0, 0, 0], [nb, *rest])
-    out = model.mesh.to_host(part)  # first replica
+    out = model.mesh.to_host(part, row=row or 0)  # first replica (of mesh row ``row``)
     if part.buffer_address() != t.buffer_address():  # a full-size slice IS t (the live cache): never free it
         ttnn.deallocate(part)
     return out
 
 
-def _dsa_state_host(model: GLM53MeshModel, dec, S: int) -> dict[str, torch.Tensor]:
-    """Slot 0's latent rows [S, 512] (identity page table), plus the indexer pool cache and raw rings."""
+def _dsa_state_host(model: GLM53MeshModel, dec, S: int, row: int | None = None) -> dict[str, torch.Tensor]:
+    """Slot 0's latent rows [S, 512] (identity page table), plus the indexer pool cache and raw rings. ``row``
+    (tt-blaze G53F-0250): mesh row ``row``'s copy, after a row-local prefill wave (no host-side MTP cache there)."""
     c = dec.cache
     if getattr(c, "host_latent", None) is not None:  # HostLatentCache (the server's MTP layer, G53F-0227)
+        if row is not None:
+            raise ValueError("a prefill wave builds no host-side MTP cache")
         lat = c.host_latent[:S]
     else:
-        lat = _replicated_rows_host(model, c.cache, -(-S // 32)).reshape(-1, int(c.cache.shape[-1]))[:S]
+        lat = _replicated_rows_host(model, c.cache, -(-S // 32), row=row).reshape(-1, int(c.cache.shape[-1]))[:S]
     out = {"latent": lat.contiguous().to(torch.bfloat16)}
     idx = getattr(c, "index", None) or getattr(dec, "index", None)
     if idx is None:
@@ -196,10 +202,10 @@ def _dsa_state_host(model: GLM53MeshModel, dec, S: int) -> dict[str, torch.Tenso
         # widens to fp32 itself): the full 1 M allocation is 262 400 rows = 134 MB per layer as fp32 (G53F-0089)
         np_ = -(-S // 4)
         pb = min(-(-np_ // 32), int(idx.pool_blocks))
-        pool = _replicated_rows_host(model, idx.pool_cache, pb)
+        pool = _replicated_rows_host(model, idx.pool_cache, pb, row=row)
         out["index_pool"] = pool.reshape(-1, pool.shape[-1])[:np_].contiguous().to(torch.bfloat16)
-        out["index_ring_k"] = model.mesh.to_host(idx.ring_k)[0, 0].contiguous().float()
-        out["index_ring_g"] = model.mesh.to_host(idx.ring_g)[0, 0].contiguous().float()
+        out["index_ring_k"] = model.mesh.to_host(idx.ring_k, row=row or 0)[0, 0].contiguous().float()
+        out["index_ring_g"] = model.mesh.to_host(idx.ring_g, row=row or 0)[0, 0].contiguous().float()
     return out
 
 

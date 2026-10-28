@@ -305,6 +305,92 @@ def _recv(sock) -> tuple[dict, bytes]:
     "device_params", [mesh_device_params(*MESH, trace_region_size=TRACE_MB * 1_000_000)], indirect=True
 )
 @pytest.mark.parametrize("mesh_device", [MESH], indirect=True)
+def _serve_wave(model, hdr: dict, ranks: dict, decs: dict, push_layers: list, mtp_layer, pool, accept_one, mesh_device):
+    """tt-blaze G53F-0250: ``{"op": "prefill_wave", "members": [{"ids": [...], "slot": s}, ...]}`` -- up to ``rows``
+    prompts of ONE length (S' = POOL * ((len - 1) // POOL) <= ``WAVE_MAX_TOKENS``) through ``prefill_wave_ids`` (prompt
+    m on mesh row m; spare rows repeat member 0 and are not exported), then member m's state is exported from row m and
+    pushed into ring slot ``slot`` of every layer (each layer's members in turn on that rank's socket). Plain rings
+    only: a ring that registered the MTP layer gets ``{"op": "error"}`` (the wave builds no MTP state) and the driver
+    falls back to one ``prefill`` per member. Reply: ``{"op": "wave_done", "S_prime", "members": [{slot, next_token}],
+    prefill_s, export_s, push_ack_s, server_s, ...}``."""
+    members = [dict(ids=[int(t) for t in m["ids"]], slot=int(m.get("slot", 0))) for m in hdr["members"]]
+    rows = model.mesh.rows
+    n = len(members)
+    lens = {len(m["ids"]) for m in members}
+    if not 0 < n <= rows or len(lens) != 1:
+        return {
+            "op": "error",
+            "error": f"a wave takes 1..{rows} members of one length, got {n} of lengths {sorted(lens)}",
+        }
+    sp = POOL * ((lens.pop() - 1) // POOL)
+    if not 0 < sp <= model.WAVE_MAX_TOKENS:
+        return {"op": "error", "error": f"wave S'={sp} outside (0, {model.WAVE_MAX_TOKENS}]"}
+    trunk = [L for L in push_layers if L != mtp_layer]
+    while not all(L in ranks for L in trunk):
+        c, h2, _ = accept_one()
+        if c is not None and h2["op"] == "register":
+            ranks[int(h2["layer"])] = c
+    if mtp_layer is not None and mtp_layer in ranks:
+        return {"op": "error", "error": "prefill_wave: an MTP ring needs the MTP state, which a wave does not build"}
+    prompts = [m["ids"][:sp] for m in members] + [members[0]["ids"][:sp]] * (rows - n)
+    ttnn.synchronize_device(mesh_device)
+    t1 = time.perf_counter()
+    st, lg, _ = model.prefill_wave_ids([torch.tensor(p, dtype=torch.int64) for p in prompts], user=0)
+    nxt = model.wave_first_tokens(lg)
+    ttnn.synchronize_device(mesh_device)
+    t2 = time.perf_counter()
+    ttnn.deallocate(lg)
+    ttnn.deallocate(st)
+    zc = ZERO_COPY
+    # every member's layer bodies first (the ttnn reads stay on this thread), each layer pushed once all its members are
+    # exported: one task per layer sends its members in turn (a rank's socket carries one seed + ack at a time)
+    order = [L for L in trunk if decs[L].cache is not None] + [L for L in trunk if decs[L].cache is None]
+    bodies: dict = {}
+
+    def push_layer(L):
+        tx = time.perf_counter()
+        nb, acks = 0, []
+        for m, mem in enumerate(members):
+            seed_hdr = {"op": "seed", "n": sp, "slot": mem["slot"], "request": f"wave{m}"}
+            b = bodies[(L, m)]
+            if isinstance(b, list):
+                _send_parts(ranks[L], seed_hdr, b)
+            else:
+                _send(ranks[L], seed_hdr, b)
+            ack, _ = _recv(ranks[L])
+            acks.append(ack)
+            nb += parts_len(b)
+        return L, nb, time.perf_counter() - tx, acks
+
+    futs = []
+    for L in order:
+        dec = decs[L]
+        for m in range(n):
+            state = (
+                _dsa_state_host(model, dec, sp, row=m) if dec.cache is not None else _kda_state_host(model, dec, row=m)
+            )
+            bodies[(L, m)] = st_parts(state) if zc else save({k: v.contiguous() for k, v in state.items()})
+        futs.append(pool.submit(push_layer, L))
+    t_exp = time.perf_counter()
+    outs = [f.result() for f in futs]
+    t3 = time.perf_counter()
+    rep = dict(
+        op="wave_done",
+        S_prime=sp,
+        members=[dict(slot=mem["slot"], next_token=int(nxt[m])) for m, mem in enumerate(members)],
+        rows=rows,
+        prefill_s=round(t2 - t1, 4),
+        export_s=round(t_exp - t2, 4),
+        push_ack_s=round(t3 - t_exp, 4),
+        write_s_max=round(max(a.get("write_s", 0) for o in outs for a in o[3]), 4),
+        bytes=sum(o[1] for o in outs),
+        server_s=round(t3 - t1, 4),
+        zerocopy=int(zc),
+    )
+    logger.info(f"[seed-server] wave of {n}: {rep}")
+    return rep
+
+
 def test_prefill_seed_server(mesh_device):
     layers = list(range(45))
     cfg = GLM53FlashConfig.from_hf_config_json(default_snapshot_dir() / "config.json")
@@ -369,6 +455,26 @@ def test_prefill_seed_server(mesh_device):
                 f"({nbytes / 2**20:.1f} MiB)"
             )
     _warm_tails(model, mesh_device)
+    # tt-blaze G53F-0250: GLM53F_SEED_WAVE_WARMUP=S1,S2,... compiles the prefill wave (and the per-row export reads) at
+    # those S' (the ring asks S' = 4 * ((ctx - 1) // 4): 252 / 1020 / 2044 for ctx 256 / 1024 / 2048); two passes each
+    for v in [v for v in os.environ.get("GLM53F_SEED_WAVE_WARMUP", "").split(",") if v.strip()]:
+        n = min(int(v), model.WAVE_MAX_TOKENS)
+        for rep in range(2):
+            ids = torch.tensor(([785, 6722, 315, 9621] * (n // 4 + 1))[:n], dtype=torch.int64)
+            ttnn.synchronize_device(mesh_device)
+            tw = time.perf_counter()
+            st, lg, _ = model.prefill_wave_ids([ids] * model.mesh.rows, user=0)
+            model.wave_first_tokens(lg)
+            ttnn.synchronize_device(mesh_device)
+            tp = time.perf_counter()
+            ttnn.deallocate(st)
+            ttnn.deallocate(lg)
+            for dec in model.layers:
+                _dsa_state_host(model, dec, n, row=1) if dec.cache is not None else _kda_state_host(model, dec, row=1)
+            logger.info(
+                f"[seed-server] wave warm-up {n} tokens x {model.mesh.rows} pass {rep}: prefill {tp - tw:.3f} s, "
+                f"one member's export {time.perf_counter() - tp:.3f} s"
+            )
     decs = {d.layer_idx: d for d in model.layers}
     if _MTP["block"] is not None:  # the MTP layer exports like a DSA layer: its cache + pooled-key index
         decs[push_layers[-1]] = SimpleNamespace(cache=_MTP["block"].cache, layer_idx=push_layers[-1])
@@ -527,6 +633,10 @@ def test_prefill_seed_server(mesh_device):
                 ttnn.deallocate(lg)
                 ttnn.deallocate(st)
                 _send(s, {"op": "verified", "next_token": nt})
+                continue
+            if hdr["op"] == "prefill_wave":  # tt-blaze G53F-0250: up to one prompt per mesh row in ONE row-local pass
+                _send(s, _serve_wave(model, hdr, ranks, decs, push_layers, mtp_layer, pool, _accept_one, mesh_device))
+                resident["key"] = None  # row 0 holds member 0 only; the other rows hold other prompts
                 continue
             assert hdr["op"] == "prefill", hdr
             ids = [int(t) for t in hdr["ids"]]
