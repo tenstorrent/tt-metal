@@ -296,6 +296,7 @@ class TtIndexerBase:
         layer_num: int = 1,
         first_layer_idx: int | None = None,
         output_tp_sequence_sharded: bool = False,
+        fused_mm_rs: bool = False,
     ):
         """Architecture constants are read from the HF config with no defaults (index_n_heads,
         index_head_dim, index_topk, index_rope_interleave — a sparse config that omits any of them
@@ -338,6 +339,7 @@ class TtIndexerBase:
         # under an X-only torus (TP Ring, SP has no physical wrap) — mirrors ttMLA.
         self.sp_ccl_topology = sp_ccl_topology
         self.tp_ccl_topology = tp_ccl_topology
+        self._fused_mm_rs = fused_mm_rs
         # Indexer geometry comes from the config with no defaults: a sparse config that omits any of these
         # fields fails loudly here rather than silently binding a wrong-shaped indexer.
         _required = ("index_n_heads", "index_head_dim", "index_topk", "index_rope_interleave")
@@ -474,21 +476,22 @@ class TtIndexerBase:
             self.tt_ccl.mla_high_bw_all_gather_buffers[key] = output
         return output
 
-    def _tp_rs_ag(self, t, rs_only=False):
-        """All-reduce over TP = reduce-scatter (dim 3) then all-gather; rs_only stops after the RS."""
+    def _tp_rs_ag(self, t, rs_only=False, ag_only=False):
+        """All-reduce over TP = reduce-scatter (dim 3) then all-gather; rs_only stops after the RS, ag_only skips it."""
         if self.tp_factor == 1:
             return t
-        t = ttnn.experimental.reduce_scatter_minimal_async(
-            t,
-            persistent_output_buffers=None,
-            dim=3,
-            multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
-            barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
-            num_links=self.ccl_num_links,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            topology=self.tp_ccl_topology,
-            cluster_axis=self.tp_axis,
-        )
+        if not ag_only:
+            t = ttnn.experimental.reduce_scatter_minimal_async(
+                t,
+                persistent_output_buffers=None,
+                dim=3,
+                multi_device_global_semaphore=self.tt_ccl.get_and_cycle_rs_semaphore_handles(cluster_axis=self.tp_axis),
+                barrier_semaphore=self.tt_ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis=self.tp_axis),
+                num_links=self.ccl_num_links,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                topology=self.tp_ccl_topology,
+                cluster_axis=self.tp_axis,
+            )
         if rs_only:
             return t
         assert tuple(t.shape) == (1, 1, self.active_seq_len_local, self.index_args.index_head_dim // self.tp_factor)
@@ -686,15 +689,26 @@ class TtIndexerBase:
         ``actual_end`` (end of the chunk's real tokens) clamps the write to them, so a chunk padding past
         the cache end needs only its real tokens to fit. forward() reads back the same prefix
         (``valid_pos``)."""
-        wk_cfg = self._resolve_mm_cfg("indexer.wk", seq_len)
-        k = ttnn.linear(
-            hidden_states,
-            self._idx_wk,
-            compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=wk_cfg["out_mem_config"] if wk_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
-            **({"program_config": wk_cfg["program_config"]} if wk_cfg is not None else {}),
-        )  # per-chip partial [1, 1, S/sp, D_idx]
-        k = self._tp_rs_ag(k)  # all-reduce over TP
+        if self._fused_mm_rs:
+            k = ttnn.experimental.matmul_reduce_scatter_prefill(
+                hidden_states,
+                self._idx_wk,
+                cluster_axis=self.tp_axis,
+                scatter_dim=-1,
+                topology=self.tp_ccl_topology,
+                num_links=self.ccl_num_links,
+            )
+            k = self._tp_rs_ag(k, ag_only=True)
+        else:
+            wk_cfg = self._resolve_mm_cfg("indexer.wk", seq_len)
+            k = ttnn.linear(
+                hidden_states,
+                self._idx_wk,
+                compute_kernel_config=self.default_compute_kernel_config,
+                memory_config=wk_cfg["out_mem_config"] if wk_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
+                **({"program_config": wk_cfg["program_config"]} if wk_cfg is not None else {}),
+            )  # per-chip partial [1, 1, S/sp, D_idx]
+            k = self._tp_rs_ag(k)  # all-reduce over TP
         k = ttnn.layer_norm(
             k,
             weight=self._idx_knorm_w,
@@ -859,16 +873,26 @@ class TtIndexerBase:
 
         # weights_proj: device stem -> reduce TP partials and scatter query rows. The static scale is
         # already folded into the persistent projection weight in _upload_weights().
-        wproj_cfg = self._resolve_mm_cfg("indexer.weights_proj", seq_len)
-        weights = ttnn.linear(
-            hidden_states,
-            self._idx_wproj,
-            compute_kernel_config=self.default_compute_kernel_config,
-            memory_config=wproj_cfg["out_mem_config"] if wproj_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
-            **({"program_config": wproj_cfg["program_config"]} if wproj_cfg is not None else {}),
-        )
-        # Sum TP partials and scatter the sequence rows consumed by local scoring.
-        weights = self._tp_reduce_scatter_sequence(weights)
+        if self._fused_mm_rs:
+            weights = ttnn.experimental.matmul_reduce_scatter_prefill(
+                hidden_states,
+                self._idx_wproj,
+                cluster_axis=self.tp_axis,
+                scatter_dim=-2,
+                topology=self.tp_ccl_topology,
+                num_links=self.ccl_num_links,
+            )
+        else:
+            wproj_cfg = self._resolve_mm_cfg("indexer.weights_proj", seq_len)
+            weights = ttnn.linear(
+                hidden_states,
+                self._idx_wproj,
+                compute_kernel_config=self.default_compute_kernel_config,
+                memory_config=wproj_cfg["out_mem_config"] if wproj_cfg is not None else ttnn.DRAM_MEMORY_CONFIG,
+                **({"program_config": wproj_cfg["program_config"]} if wproj_cfg is not None else {}),
+            )
+            # Sum TP partials and scatter the sequence rows consumed by local scoring.
+            weights = self._tp_reduce_scatter_sequence(weights)
         # Q and gate weights now have the same TP×SP query ownership. Scoring still uses the original
         # full-SP cache geometry below; only the input query count and its TP sub-offset are smaller.
         qc = (64 if sq_local % 64 == 0 else 32) if tpsp else 64
