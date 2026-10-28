@@ -178,6 +178,20 @@ def packed_verify_slot_sources(installed, flat, slots):
     return out
 
 
+def packed_verify_k_cache(kv_layers, layer, i):
+    """The K cache handle whose geometry sizes layer ``i``'s packed-verify tables: the served per-layer
+    ``[k, v]`` list the decoder verifies through (vLLM owns the caches, so the attention module's own
+    ``kv_cache`` is None there), else the module's own cache, else None."""
+    if isinstance(kv_layers, (list, tuple)) and i < len(kv_layers):
+        entry = kv_layers[i]
+        if isinstance(entry, (list, tuple)) and entry and entry[0] is not None:
+            return entry[0]
+    own = getattr(getattr(layer, "self_attn", None), "kv_cache", None)
+    if isinstance(own, (list, tuple)) and own and own[0] is not None:
+        return own[0]
+    return None
+
+
 def packed_verify_slot_row(src, width):
     """``src`` zero-padded (never clamped) to ``width`` columns as a [1, width] int32 row: columns past the live
     top sit where the mask is NEG and contribute nothing, while clamping would let a width record created by a
@@ -1563,7 +1577,12 @@ class DFlashFusedDecoder:
             layer = t.layers[i]
             cfg = layer.self_attn.config
             nkv_local = 1 if layer.self_attn.weights.kv_replicated else cfg.num_key_value_heads // tp
-            self._pv_bs_t[lt] = int(effective_block_size(layer.self_attn.kv_cache[0], cfg.head_dim, nkv_local))
+            k_cache = packed_verify_k_cache(self.kv_layers, layer, i)
+            # No cache handle (demo paths that pass caches per forward): the
+            # physical 64-token block the packed tables always assumed.
+            self._pv_bs_t[lt] = (
+                int(effective_block_size(k_cache, cfg.head_dim, nkv_local)) if k_cache is not None else 64
+            )
 
     def _pv_width_install(self, pv_sk):
         """Allocate (or reuse) the WIDTH-DEPENDENT packed-verify buffers for

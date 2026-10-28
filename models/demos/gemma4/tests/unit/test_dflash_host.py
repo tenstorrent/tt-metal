@@ -1936,3 +1936,18 @@ def test_packed_verify_slot_row_pads_and_never_clamps(drafter_module):
     assert padded[0].tolist() == [1, 2, 3, 4, 5, 0, 0, 0]
     clipped = drafter_module.packed_verify_slot_row(src, 3)
     assert clipped[0].tolist() == [1, 2, 3]
+
+
+def test_packed_verify_k_cache_prefers_the_served_caches_and_tolerates_none(drafter_module):
+    """Under vLLM the attention modules' own kv_cache is None and the decoder verifies through the
+    served per-layer [k, v] list; the demo paths hand caches per forward and get None (block 64)."""
+    served = [["k0", "v0"], ["k1", "v1"]]
+    layer_with_own = SimpleNamespace(self_attn=SimpleNamespace(kv_cache=["own_k", "own_v"]))
+    layer_without = SimpleNamespace(self_attn=SimpleNamespace(kv_cache=None))
+    f = drafter_module.packed_verify_k_cache
+    assert f(served, layer_without, 1) == "k1"
+    assert f(served, layer_with_own, 0) == "k0"
+    assert f(None, layer_with_own, 0) == "own_k"
+    assert f(None, layer_without, 0) is None
+    assert f([[None, None]], layer_without, 0) is None
+    assert f(served, layer_without, 5) is None
