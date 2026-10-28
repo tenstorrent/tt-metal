@@ -70,9 +70,9 @@ inline bool floater_layout_supported(uint32_t heads, uint32_t bands) {
 }
 
 // Matmul multiply-adds per Tensix core per cycle at LoFi, as sdpa_perf_model.cpp counts them.
-constexpr double kTensixMacsPerCycle = 4096.0;
+inline constexpr double kTensixMacsPerCycle = 4096.0;
 // One Blackhole Ethernet link's bandwidth per direction (25 GB/s) at the 1.35 GHz AI clock, in bytes per cycle.
-constexpr double kEthLinkBytesPerCycle = 25e9 / 1.35e9;
+inline constexpr double kEthLinkBytesPerCycle = 25e9 / 1.35e9;
 
 // One device's ring-joint SDPA work per K/V token that arrives over the ring, for floater_compute_to_transfer.
 struct FloaterWorkload {
@@ -102,9 +102,9 @@ inline double floater_compute_to_transfer(const FloaterWorkload& w) {
 }
 
 // The floaters run from this floater_compute_to_transfer up. Measured on the Galaxy 8x4 (Kimi K3 and K2.7, 5k and 2k
-// chunks, LoFi to HiFi4): every shape at 0.45 or below runs slower with floaters, every shape at 0.51 or above 13-16%
-// faster at 512k cached tokens. A shape near the boundary gains or loses little either way.
-constexpr double kFloaterMinComputeToTransfer = 0.48;
+// chunks, LoFi to HiFi4): every shape at 0.45 or below runs slower with floaters or no faster, every shape at 0.51 or
+// above 12-16% faster at 512k cached tokens. A shape near the boundary gains or loses little either way.
+inline constexpr double kFloaterMinComputeToTransfer = 0.48;
 
 // Values of a schedule in SDPAProgramConfig::floater_schedule's order: iters, fracs, donate_tail, merge_after.
 constexpr size_t kFloaterScheduleValues = 2 * kDonatedPieces + 1 + kFloaterFirstPieceVisits;

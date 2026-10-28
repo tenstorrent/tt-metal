@@ -223,7 +223,8 @@ double floater_compute_to_transfer(
         return static_cast<double>(tt::tt_metal::tile_size(tensor.dtype())) /
                static_cast<double>(tt::constants::TILE_HW);
     };
-    const auto& q_shape = tensor_args.input_q.padded_shape();
+    // Q's logical shape: the factory schedules Q chunks from it, so padded rows do no work.
+    const auto& q_shape = tensor_args.input_q.logical_shape();
     // k_expand_weight: [1, heads, no-PE width, latent width].
     const auto& wuk_shape = tensor_args.k_expand_weight->logical_shape();
     const uint32_t v_dim = tensor_args.v_head_dim(args.latent_v_head_dim);
