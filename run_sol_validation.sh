@@ -761,6 +761,28 @@ if want u1; then
     fi
 fi
 
+# D4a (2026-10-28): what the resident step's time is made of, to turn D4 into a design. No rebuild.
+#   ablations  traced tau 1 at the 256-key default with each stage of the compact step skipped (TT_SOL_ABLATE; timing
+#              only, results wrong): the drop from the baseline is that stage's share of the op. pv is left out: it
+#              hung once (2026-10-23, unexplained).
+#   tau 3      a 384-key profile at tau 3 (fits the profiler buffer): with d2a's tau 1 profile at 384 keys, its compute
+#              time is the part that does not scale with the kept blocks (fixed cost per step, pooled entries)
+if want d4a; then
+    if ! python -c "import diffusers.models.transformers.transformer_minimax_h3" > /dev/null 2>&1; then
+        echo "    d4a: diffusers lacks transformer_minimax_h3; install the upgrade first"
+        exit 1
+    fi
+    S="4x8 and nl2 and 768p_5s and not dense and not agather"
+    TR="SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 SOL_BENCH_MODE=resident SOL_BENCH_PREFIX=off SOL_TAU=1.0"
+    run d4a_trace_tau1.0 900 env $TR pytest "$B" -s -k "$S"
+    for knob in qk exp pack5 stats pack1; do
+        run "d4a_trace_ablate_${knob}_tau1.0" 900 env $TR TT_SOL_ABLATE=$knob pytest "$B" -s -k "$S"
+    done
+    PR="TT_METAL_DEVICE_PROFILER=1 TT_SOL_STEP_PROFILE=1 SOL_BENCH_PROFILE=1 SOL_BENCH_REPS=1 SOL_BENCH_MODE=resident"
+    run d4a_profile_tau3 900 env $PR SOL_BENCH_PREFIX=off SOL_TAU=3.0 SOL_BENCH_CHUNKS=320x384 pytest "$B" -s -k "$S"
+    summarize_profile d4a_profile_tau3_summary d4a_profile_tau3 log_val_d4a_cores_tau3.txt
+fi
+
 # PC1 (2026-10-28): what the pooled correction costs (the faster full-width pooled step's upper bound). No rebuild.
 # TT_SOL_POOLED_OFF=1 drops the pooled K/V entries (timing only: the results are wrong). Traced tau 1 at the 256-key
 # default with and without, the same at 384 keys, and one 384-key profile without (fits the profiler buffer; compare
