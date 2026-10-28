@@ -12,6 +12,7 @@ import torch
 
 import ttnn
 from models.demos.blackhole.qwen36.tt import tp_common as tpc
+from models.demos.blackhole.qwen36.tt import weight_prefetch
 from models.demos.blackhole.qwen36.tt.attention.rope_tp import (
     apply_partial_rope_decode,
     apply_partial_rope_decode_single,
@@ -95,6 +96,17 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
             cache_path=c(_base + (".il" if _proj1d else ".dramshard")),
             dtype=_attn_dtype,
         )
+        if _proj1d:
+            # QWEN36_WEIGHT_PREFETCH (attn_qkv): receiver-contiguous decode copy for the Tensor prefetcher.
+            _pc = getattr(args, "attn_qkv_decode_1d_progcfg", None)
+            weight_prefetch.attach_twin(
+                mesh,
+                tw["wqkv_fused"],
+                weight_prefetch.load_prefetched(
+                    "attn_qkv", "attn.wqkv_fused", mesh, fused, -1, _attn_dtype, c(_base + ".il"), _pc, args.num_devices
+                ),
+                _pc,
+            )
     else:
         qkv_sharded = getattr(args, "attn_qg_weight_memcfg", None) is not None
         qg_mc = args.attn_qg_weight_memcfg if qkv_sharded else ttnn.DRAM_MEMORY_CONFIG
@@ -137,6 +149,17 @@ def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
         cache_path=c("wo.dramshard" if wo_sharded else "wo"),
         dtype=_attn_dtype,
     )
+    if not wo_sharded and getattr(args, "proj_1d_decode", False):
+        # QWEN36_WEIGHT_PREFETCH (attn_wo): receiver-contiguous decode copy for the Tensor prefetcher.
+        _pc = getattr(args, "attn_wo_decode_1d_progcfg", None)
+        weight_prefetch.attach_twin(
+            mesh,
+            tw["wo"],
+            weight_prefetch.load_prefetched(
+                "attn_wo", "attn.wo", mesh, state_dict["o_proj.weight"], 0, _attn_dtype, c("wo"), _pc, args.num_devices
+            ),
+            _pc,
+        )
     # QK norms: HF-correct zero-centered (1+weight), used uniformly at prefill AND decode
     tw["q_norm"] = tpc.replicate(state_dict["q_norm.weight"].to(torch.float32) + 1.0, mesh, None)
     tw["k_norm"] = tpc.replicate(state_dict["k_norm.weight"].to(torch.float32) + 1.0, mesh, None)

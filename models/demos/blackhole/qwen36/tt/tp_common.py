@@ -14,6 +14,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole
+from models.demos.blackhole.qwen36.tt import weight_prefetch
 
 # Hardware constants
 TILE_SIZE = 32
@@ -900,11 +901,12 @@ def matmul_1d_decode(x, weight, decode_1d_progcfg, compute_cfg, out_memory_confi
     """Small-grid 1D (mcast_in0) decode matmul on an interleaved weight; interleaves the K-sharded
     activation first since mcast_in0 needs the full K per core. See test_mlp_matmul_sweep."""
     x_il = ttnn.to_memory_config(x, ttnn.L1_MEMORY_CONFIG)
-    out = ttnn.linear(
+    # QWEN36_WEIGHT_PREFETCH: a weight registered for this progcfg streams through the Tensor prefetcher; else plain.
+    out = weight_prefetch.linear(
         x_il,
         weight,
+        decode_1d_progcfg,
         compute_kernel_config=compute_cfg,
-        program_config=decode_1d_progcfg,
         memory_config=out_memory_config,
     )
     if x_il is not x:
