@@ -166,10 +166,19 @@ constexpr std::uint32_t replay_ops_per_context(const unpack_params& p)
     return replay_ops_per_stream * ((streams_a(p) ? 1 : 0) + (streams_b(p) ? 1 : 0));
 }
 
-/// The last datum index of a tile along X, for the unpacker's X counter: every face, every row, FACE_C_DIM datums per row.
+/// Faces of a tile the unpacker reads. A row broadcast needs only the top face row, which holds the tile's row 0
+/// (faces 0 and 1 of a 32x32 tile); every other stream reads all faces.
+constexpr std::uint32_t unpacked_faces(const unpack_stream& s)
+{
+    constexpr std::uint32_t faces_per_face_row = ckernel::TILE_C_DIM / ckernel::FACE_C_DIM; // 32x32 tiles only (unpack_configure)
+    return s.broadcast == Broadcast::Row ? faces_per_face_row : s.num_faces;
+}
+
+/// The last datum index of a tile along X, for the unpacker's X counter: every face read, every row, FACE_C_DIM
+/// datums per row.
 constexpr std::uint32_t x_end(const unpack_stream& s)
 {
-    return s.num_faces * s.face_r_dim * ckernel::FACE_C_DIM - 1;
+    return unpacked_faces(s) * s.face_r_dim * ckernel::FACE_C_DIM - 1;
 }
 
 /// Bytes one face takes in Src: how far the unpacker's Src (ch1) address moves per Z step.
@@ -240,11 +249,17 @@ inline __attribute__((always_inline)) void configure_unpacker()
 }
 
 /// Unpacks one tile of a stream. Broadcast and face-by-face variants add their UNPACR sequences here.
+///   None  one UNPACR covers the whole tile (the X counter runs to x_end): faces 0..3 land in Src rows 0..63.
+///   Row   one UNPACR covers the top face row only (x_end stops after faces 0 and 1): Src rows 0..15 hold face 0 and
+///         rows 16..31 face 1, so tile row 0 is Src rows 0 and 16. Math broadcasts those rows down every face.
+///         tt-llk (llk_unpack_AB.h, BroadcastType::ROW) unpacks faces 0, 1, 0, 1 one at a time, one per SrcA face,
+///         because its math takes one face per Src bank; here math takes a whole tile per bank, so faces 0 and 1 once
+///         are enough.
+/// Either way the bank is handed to math with the last datum.
 template <hal::unpack::Engine E, unpack_stream St>
 inline __attribute__((always_inline)) void unpack_tile()
 {
-    static_assert(St.broadcast == Broadcast::None, "broadcast streams are not ported yet");
-    // One UNPACR covers the whole tile (the X counter runs to x_end), then hands the bank to math.
+    static_assert(St.broadcast == Broadcast::None || St.broadcast == Broadcast::Row, "column and scalar broadcast streams are not ported yet");
     hal::unpack::run<hal::unpack::DataTransfer {.engine = E, .handoff = hal::unpack::SourceHandoff::FlipAndSetDataValid}>();
 }
 
