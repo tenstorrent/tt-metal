@@ -31,5 +31,5 @@ One line per candidate, in the order tried. Status: proposed / screening / kept 
 
 Tracking (PLAN v1.12): the performance preset ships only at >= 5 % faster than accuracy; round 0 it is 2.6 %.
 | R1-1 | 1 | fused head split + RoPE (chronos qkv_heads_rope, fp32 DST); matmul rope where the table exceeds L1 | A1 | measured, X-r1b | screen paper 4L -43 % (1186/1187); with R1-2: iter_01/r1_measure.md |
-| R1-2 | 1 | 2D multicast matmul configs, whole grid | A1 | measured, X-r1b | screen -58 % on top of R1-1 (1205); paper acc 1699.2 -> 408.6 ms (1220) |
+| R1-2 | 1 | 2D multicast matmul configs, whole grid | A1 | kept, D7 | screen -58 % on top of R1-1 (1210, dirty dev screen); paper acc 1699.2 -> 408.6 ms (1220) |
 | R1-3 | 1 | relu fused in the ff-up / head-hidden config (with R1-2) | A1 | measured with R1-2 | 1220 |

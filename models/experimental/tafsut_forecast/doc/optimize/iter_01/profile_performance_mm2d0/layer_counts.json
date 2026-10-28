@@ -1,0 +1,25 @@
+{
+  "shape": "paper",
+  "precision": "performance",
+  "test": "forward",
+  "window": [
+    "MODEL_START",
+    "MODEL_END"
+  ],
+  "rows": 1024,
+  "bucket_context": 2048,
+  "s_pad": 128,
+  "sections": [
+    "embed",
+    "layer",
+    "layer_last",
+    "head"
+  ],
+  "counts": {
+    "embed": 1,
+    "layer": 13,
+    "layer_last": 1,
+    "head": 1
+  },
+  "layers": 14
+}
