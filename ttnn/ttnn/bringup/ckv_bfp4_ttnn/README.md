@@ -1,17 +1,22 @@
 # ttnn.bringup.ckv_bfp4 (ckv_bfp4_ttnn)
 
 ## What it does
-New op (Python ProgramDescriptor, no TTNN source). bf16 TILE rows `[1, 1, n, 512]` -> 288-byte bfloat4_b row records
-written in place into a row table `[1, 1, R, 288]` uint8 ROW_MAJOR at rows `[row0, row0 + n)`; optionally also the
+New op (Python ProgramDescriptor, no TTNN source). bf16 TILE rows `[1, 1, n, 512]` -> 320-byte bfloat4_b row records
+written in place into a row table `[1, 1, R, 320]` uint8 ROW_MAJOR at rows `[row0, row0 + n)`; optionally also the
 rounded values as a new bf16 TILE tensor (`rounded=True`).
 - Rounding: tt-metal's host packer rule (round to nearest even on the significand shifted to the group's max exponent,
   clamp at 7), bit-exact. The device packer alone rounds half away to bfloat8_b and then drops 4 bits (truncation in
   effect, row error 0.20 vs 0.11 on DeepSeek-V4.1's compressed KV), so an SFPU pass rounds onto the bfp4 grid first
   (`kernels/ckv_round_bfp4.hpp`) and the pack only copies bits.
-- Row record: 32 shared exponents (one per 16 values), then 256 bytes of sign-magnitude nibbles (value 2i in the low
-  nibble of byte i) = the bytes of a bfloat4_b tile row; 32 records turn back into 16 bfloat4_b tiles by a byte shuffle.
-- Program: bands of 32 rows split over the core grid; reader -> compute (copy, SFPU round, pack bfp4 [+ bf16]) ->
-  writer (each tile's bytes scattered into the band's 32 records in L1, then 32 page writes).
+- Row record: 32 shared exponents (one per 16 values), the same 32 again, then 256 bytes of sign-magnitude nibbles
+  (value 2i in the low nibble of byte i). The second exponent copy lets a reader's 64 B-aligned NoC read put a row's
+  exponents at either half of a 64 B line, so a gathered block of rows is a row-major bfloat4_b tensor the unpacker
+  reads (sparse_sdpa ROW_BFP4).
+- Program: bands of 32 rows split over the core grid; reader -> compute -> writer. Compute: a band's 16 tiles in a
+  full-sync DEST, copy, SFPU round [, pack bf16], then the packer writes the band's 32 records itself: per record, two
+  bfloat4_b pack streams over the tile row (strided DEST read as pack untilize does, with BH's DEST remap on), stream A
+  at +0 with a 64 B exponent section, stream B at +32 with a 32 B section, both putting the values at +64. The writer
+  only NoC-writes the 32 records (and the rounded tiles); no data-movement RISC touches the bytes.
 - Limit: a 16-value group whose max is below 2^-124 comes out 0 (the host rule would keep it).
 
 ## Consider it instead of
@@ -20,7 +25,7 @@ rounded values as a new bf16 TILE tensor (`rounded=True`).
 
 ## Sample
 ```python
-rows = ttnn.zeros([1, 1, R, 288], dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh)
+rows = ttnn.zeros([1, 1, R, 320], dtype=ttnn.uint8, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh)
 rounded = ttnn.bringup.ckv_bfp4(ckv_bf16_tile, rows, row0, rounded=True)  # rows written in place
 ```
 

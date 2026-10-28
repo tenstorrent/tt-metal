@@ -39,8 +39,14 @@ void kernel_main() {
             if constexpr (bfp4) {
                 const uint32_t exps = blk + p * 32;
                 const uint32_t data = blk + n_rows * 32 + p * 256;
+#ifdef PROBE_ONE_EXP_COPY
+                // record [32 exps | 256 nibbles | pad]: needs only 32 B congruence of DRAM source and L1 destination
+                noc_async_read(table.get_noc_addr(id, 0), exps, 32);
+                noc_async_read(table.get_noc_addr(id, 32), data, 256);
+#else
                 noc_async_read(table.get_noc_addr(id, (p & 1) * 32), exps, 32);
                 noc_async_read(table.get_noc_addr(id, 64), data, 256);
+#endif
             } else {
                 noc_async_read(table.get_noc_addr(id), blk + p * 1024, 1024);
             }
