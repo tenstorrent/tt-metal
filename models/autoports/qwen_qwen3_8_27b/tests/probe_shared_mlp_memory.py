@@ -30,6 +30,7 @@ def main():
     import ttnn
     from models.autoports.qwen_qwen3_8_27b.tests.full_model_evidence import runtime_build
     from models.autoports.qwen_qwen3_8_27b.tests.native_fixture_cleanup import finalize_run
+    from models.autoports.qwen_qwen3_8_27b.tests.native_fixture_metadata import capture_linear_calls
     from models.autoports.qwen_qwen3_8_27b.tests.physical_memory_inventory import AllocationLedger, tensor_aliases
     from models.autoports.qwen_qwen3_8_27b.tt.generator import Generator
     from models.autoports.qwen_qwen3_8_27b.tt.model import Model
@@ -49,14 +50,32 @@ def main():
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
     result = dict(
         status="running",
+        throw_exception_on_fallback=bool(ttnn.CONFIG.throw_exception_on_fallback),
         shared=os.environ.get("QWEN38_SHARED_MLP_WEIGHTS", "0"),
         batch=a.batch,
         layers="all64" if a.full_stack else [0, 3],
         native_context=262144,
         physical_pool_tokens_per_row=pool_context,
+        requested_outputs=a.outputs,
         scope="native standalone bounded external pool; not serving retention/capacity or quality",
         runtime=runtime_build(),
         records=[],
+        environment={
+            key: os.environ.get(key)
+            for key in (
+                "TT_METAL_HOME",
+                "TT_METAL_RUNTIME_ROOT",
+                "TT_METAL_CACHE",
+                "TT_METAL_TRACE_ALLOC_TRACKING",
+                "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE",
+                "TT_METAL_DEVICE_PROFILER",
+                "TT_METAL_WATCHER",
+                "QWEN38_PRECISION_CONFIG",
+                "QWEN38_GROUPED_RECURRENCE",
+                "QWEN38_MASKED_RECURRENCE",
+                "QWEN38_FLAT_PREFILL",
+            )
+        },
     )
     root = Path(__file__).resolve().parents[1]
     result["source_sha256"] = {
@@ -65,6 +84,8 @@ def main():
             Path(__file__),
             root / "tests/physical_memory_inventory.py",
             root / "tests/native_fixture_cleanup.py",
+            root / "tests/native_fixture_metadata.py",
+            root / "tt/selected_precision_config.json",
             root / "tests/full_model_evidence.py",
             *sorted((root / "tt").glob("*.py")),
         ]
@@ -90,6 +111,8 @@ def main():
         ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
         try:
             model = Model(a.checkpoint, mesh, layer_indices=None if a.full_stack else [0, 3])
+            result["effective_precision"] = model.precision_config
+            result["layer_types"] = {str(layer.layer_idx): layer.layer_type for layer in model.layers}
             cache = model.allocate_cache(batch_size=a.batch, context_length=pool_context)
             pages = pool_context // 32
             table = torch.zeros(a.batch, 262144 // 32, dtype=torch.int32)
@@ -127,7 +150,8 @@ def main():
         checkpoint("after_construction")
         ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
         try:
-            gen.prepare_decode()
+            with capture_linear_calls(result, ttnn, model):
+                gen.prepare_decode()
             ttnn.synchronize_device(mesh)
         finally:
             graph = ttnn.graph.end_graph_capture()

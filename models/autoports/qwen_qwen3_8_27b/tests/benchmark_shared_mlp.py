@@ -31,6 +31,7 @@ def main():
     import ttnn
     from models.autoports.qwen_qwen3_8_27b.tests.full_model_evidence import runtime_build
     from models.autoports.qwen_qwen3_8_27b.tests.native_fixture_cleanup import finalize_run
+    from models.autoports.qwen_qwen3_8_27b.tests.native_fixture_metadata import capture_linear_calls
     from models.autoports.qwen_qwen3_8_27b.tt.generator import Generator
     from models.autoports.qwen_qwen3_8_27b.tt.model import Model
 
@@ -55,6 +56,7 @@ def main():
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
     result = dict(
         status="running",
+        throw_exception_on_fallback=bool(ttnn.CONFIG.throw_exception_on_fallback),
         shared=os.environ.get("QWEN38_SHARED_MLP_WEIGHTS", "0"),
         batch=args.batch,
         layers=[0, 3] if args.reduced else "all64",
@@ -76,6 +78,8 @@ def main():
                 "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE",
                 "TT_METAL_DEVICE_PROFILER",
                 "TT_METAL_WATCHER",
+                "QWEN38_PRECISION_CONFIG",
+                "TT_METAL_PROFILER_TRACE_TRACKING",
                 "QWEN38_GROUPED_RECURRENCE",
                 "QWEN38_MASKED_RECURRENCE",
                 "QWEN38_FLAT_PREFILL",
@@ -89,6 +93,8 @@ def main():
         for p in [
             Path(__file__),
             root / "tests/native_fixture_cleanup.py",
+            root / "tests/native_fixture_metadata.py",
+            root / "tt/selected_precision_config.json",
             root / "tests/full_model_evidence.py",
             *sorted((root / "tt").glob("*.py")),
         ]
@@ -99,6 +105,8 @@ def main():
     gen = None
     try:
         model = Model(args.checkpoint, mesh, layer_indices=[0, 3] if args.reduced else None)
+        result["effective_precision"] = model.precision_config
+        result["layer_types"] = {str(layer.layer_idx): layer.layer_type for layer in model.layers}
         cache = model.allocate_cache(batch_size=args.batch, context_length=pool_context)
         pages = pool_context // 32
         table = torch.zeros(args.batch, 262144 // 32, dtype=torch.int32)
@@ -112,7 +120,8 @@ def main():
             page_table=table,
             prefill_chunk_size=512,
         )
-        gen.prepare_decode()
+        with capture_linear_calls(result, ttnn, model):
+            gen.prepare_decode()
         gen.set_sampling_params(top_k=1)
         words = gen.tokenizer.encode(
             "The research team records each observation carefully and checks the evidence before drawing conclusions. ",
