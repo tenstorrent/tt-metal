@@ -86,6 +86,24 @@ def test_nd_sharded_zero_width_tensor_spec():
     assert list(spec.shape) == [32, 0]
 
 
+# A legacy shard spec with a 0 in its unsharded dim is valid, and so is reusing the spec built from it,
+# even though that spec carries a derived ND shard shape with a 0.
+@pytest.mark.parametrize(
+    "layout, tensor_shape, shard_shape",
+    [
+        (ttnn.TensorMemoryLayout.WIDTH_SHARDED, (0, 32), (0, 32)),
+        (ttnn.TensorMemoryLayout.HEIGHT_SHARDED, (32, 0), (32, 0)),
+    ],
+    ids=["width_sharded", "height_sharded"],
+)
+def test_legacy_zero_shard_spec_can_be_reused(layout, tensor_shape, shard_shape):
+    spec = ttnn.TensorSpec(
+        tensor_shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, memory_config=_one_core_shard(layout, shard_shape)
+    )
+    reused = ttnn.TensorSpec(spec.shape, ttnn.bfloat16, ttnn.TILE_LAYOUT, memory_config=spec.memory_config)
+    assert list(reused.shape) == list(tensor_shape)
+
+
 # Reshaping a row-major sharded tensor to a zero last dim divided the shard volume by it.
 def test_reshape_sharded_to_zero_last_dim(device, expect_error):
     x = ttnn.from_torch(

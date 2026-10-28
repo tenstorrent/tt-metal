@@ -26,7 +26,7 @@ std::optional<std::string> get_shape_fits_shard_grid_error(
     if (!memory_config.is_sharded()) {
         return std::nullopt;
     }
-    if (memory_config.nd_shard_spec().has_value()) {
+    if (memory_config.created_with_nd_shard_spec() && memory_config.nd_shard_spec().has_value()) {
         const auto& nd_shard_shape = memory_config.nd_shard_spec()->shard_shape;
         for (size_t i = 0; i < nd_shard_shape.rank(); i++) {
             if (nd_shard_shape[i] == 0) {
