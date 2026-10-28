@@ -432,6 +432,12 @@ Tensor linear(
         user_core_coord = CoreCoord(core_grid->x, core_grid->y);
     }
     bool user_run_batched = detail::is_input_batched(input_tensor_b.logical_shape());
+    // like matmul(): a 1-D mcast program config may ask for row-major output
+    const bool untilize_out =
+        program_config.has_value() &&
+                std::holds_alternative<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config.value())
+            ? std::get<MatmulMultiCoreReuseMultiCast1DProgramConfig>(program_config.value()).untilize_out
+            : false;
 
     auto matmul_params = ttnn::prim::MatmulParams{
         program_config,
@@ -439,7 +445,7 @@ Tensor linear(
         memory_config.has_value() ? memory_config.value() : ttnn::DRAM_MEMORY_CONFIG,
         dtype,
         compute_kernel_config,
-        /*untilize_out=*/false,
+        untilize_out,
         user_core_coord,
         get_fused_activation(activation),
         user_run_batched,
