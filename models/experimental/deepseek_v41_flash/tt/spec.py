@@ -12,6 +12,15 @@ rejected rows are undone (:meth:`~.model.DeepSeekV41Model.spec_fixup`) before an
 
 Per round the drafter writes the verified rows' ``main_kv`` into its rings and drafts the next block
 from ``a_m``; the proposals for ``p + m + 2 ..`` become the next round's drafts.
+
+With ``parallel_verify`` the round's ``k + 1`` rows go through every layer in one step instead
+(:meth:`~.model.DeepSeekV41Model.decode_verify`, a model built with ``verify_rows = k + 1``); the
+accept rule, the fixup and the drafter's writes are the same.
+
+``accept_margin > 0`` relaxes the rule, and the output is then no longer the greedy decode's:
+``draft_{j+1}`` is also accepted when its logit in step ``j`` is within ``accept_margin`` of
+``a_j``'s, i.e. ``p(draft) >= p(a_j) * exp(-accept_margin)``. An accepted draft is emitted as is;
+step ``j + 1`` was conditioned on it, so its logits stay valid.
 """
 
 from __future__ import annotations
@@ -62,11 +71,26 @@ class DSparkSpeculator:
     ``propose(token, frontier)`` overrides the drafter: it returns the proposals for positions
     ``frontier + 2 ..`` given ``token`` at ``frontier + 1`` (the exactness test feeds corrupted
     greedy tokens through it, with ``prepare_spec_decode(drafter=False)``).
+
+    ``parallel_verify`` verifies each round in one :meth:`~.model.DeepSeekV41Model.decode_verify` step,
+    which needs ``model.verify_rows == drafts + 1``. ``accept_margin`` (logits, 0 for exact greedy) is
+    the relaxed accept rule of the module docstring.
     """
 
-    def __init__(self, model, drafts: int = 4, propose: Optional[Callable[[int, int], Sequence[int]]] = None) -> None:
+    def __init__(
+        self,
+        model,
+        drafts: int = 4,
+        propose: Optional[Callable[[int, int], Sequence[int]]] = None,
+        parallel_verify: bool = False,
+        accept_margin: float = 0.0,
+    ) -> None:
+        if accept_margin < 0:
+            raise ValueError(f"accept_margin must be >= 0, got {accept_margin}")
         if propose is None and model.dspark is None:
             raise ValueError("the model has no drafter; pass propose or prepare_spec_decode(drafter=True)")
+        if parallel_verify and model.verify_rows != drafts + 1:
+            raise ValueError(f"a round verifies {drafts + 1} rows, but the model was built for {model.verify_rows}")
         if model.dspark is not None:
             if drafts > model.dspark.block:
                 raise ValueError(f"{drafts} drafts per round, but the drafter proposes {model.dspark.block}")
@@ -74,6 +98,8 @@ class DSparkSpeculator:
                 raise ValueError(f"a round verifies {drafts + 1} rows, but write_main takes {model.dspark.main_rows}")
         self.model = model
         self.drafts = drafts
+        self.parallel_verify = parallel_verify
+        self.accept_margin = accept_margin
         self._propose = propose
         self.stats = SpecStats()
         self._next = None
@@ -118,11 +144,20 @@ class DSparkSpeculator:
         inputs = [self._next] + self._proposals
         model.spec_fixup(self._rejected, frontier=p - 1)
         t1 = time.perf_counter()
-        targets: list[int] = []
-        model.decode_prompt_traced(inputs, p, on_output=lambda i, out: targets.append(self._argmax(out)))
+        rows: list[torch.Tensor] = []
+        if self.parallel_verify:
+            rows = [row.reshape(-1).float() for row in model.decode_verify(inputs, p)]
+        else:
+            model.decode_prompt_traced(inputs, p, on_output=lambda i, out: rows.append(out.reshape(-1).float().clone()))
+        targets = [self._argmax(row) for row in rows]
         t2 = time.perf_counter()
         m = 0
-        while m < len(inputs) - 1 and inputs[m + 1] == targets[m]:
+        while m < len(inputs) - 1:
+            draft, row = inputs[m + 1], rows[m]
+            if draft != targets[m] and not (
+                self.accept_margin > 0 and float(row[targets[m]] - row[draft]) <= self.accept_margin
+            ):
+                break
             m += 1
         verified = len(inputs)
         self._rejected = list(range(p + m + 1, p + verified))
@@ -137,7 +172,7 @@ class DSparkSpeculator:
             self.stats.add(phase, seconds)
         self.stats.accepted.append(m)
         self.stats.seconds += t4 - t0
-        return targets[: m + 1]
+        return inputs[1 : m + 1] + [targets[m]]
 
     def generate(self, max_new_tokens: int, stop_ids: Sequence[int] = ()) -> list[int]:
         """Rounds until ``max_new_tokens`` (beyond the first token :meth:`prefill` returned) or a stop id."""

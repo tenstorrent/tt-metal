@@ -5,7 +5,9 @@
 
 Each case decodes random tokens one at a time through one layer's MoE. Layer 39 has the
 largest router bias (~57), so it is the one the bf16 ranking is most likely to get wrong.
-The routed experts are bfloat4_b, the shared expert bfloat8_b.
+The routed experts are bfloat4_b, the shared expert bfloat8_b. ``test_moe_decode_s5`` feeds the same
+kind of tokens as ``S``-row ROW_MAJOR blocks, ``hidden`` ``[1, S, 1, D]`` (DSpark's parallel verify):
+one ``fused_experts`` call over the rows' union of experts, and the shared expert's own projections.
 
 The converted ttnn weights (~8.5 GB per layer) are cached under ``CACHE_DIR`` (``$DEEPSEEK_V4_CACHE_DIR``,
 default ``../cache``, per checkpoint).
@@ -34,6 +36,9 @@ from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4Wei
 
 PCC = 0.95
 NUM_TOKENS = 16
+# DSpark's block: the token plus four drafts.
+S = 5
+NUM_BLOCKS = 3
 
 
 def _snapshot():
@@ -80,5 +85,51 @@ def test_moe_decode(device, layer):
         logger.info(f"layer {layer} token {t}: PCC {pcc}")
 
     passing, pcc = comp_pcc(expected, torch.stack(outs), PCC)
+    logger.info(f"layer {layer}: PCC {pcc}")
+    assert passing, f"layer {layer}: PCC {pcc} < {PCC}"
+
+
+@pytest.mark.skipif(_snapshot() is None, reason=f"V4.1-Flash checkpoint not found under {DEFAULT_MODEL_DIR}")
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize("layer", (2, 39))
+@torch.no_grad()
+def test_moe_decode_s5(device, layer):
+    snapshot = _snapshot()
+    config = load_config(snapshot)
+    loader = DeepseekV4WeightLoader(snapshot)
+    reference = reference_moe(load_reference(snapshot), snapshot, loader, layer)
+
+    cache = WeightCache(CACHE_DIR).sub(f"layers.{layer}.ffn")
+    experts = DeepSeekV41PreloadedExperts(
+        config, expert_provider(loader, layer), device, dtype=ttnn.bfloat4_b, cache=cache
+    )
+    moe = DeepSeekV41SparseMoeBlock(config, moe_weights(loader, layer), device, experts, cache=cache, verify_rows=S)
+
+    torch.manual_seed(0)
+    tokens = NUM_BLOCKS * S
+    hidden = torch.randn(tokens, config.hidden_size)
+    # The MoE is per token, so a block's rows match the same rows decoded one at a time.
+    expected = reference(hidden.reshape(tokens, 1, -1)).reshape(tokens, -1)
+    # The block's rows on every core of one width-sharded L1 row group, as all_gather_for_matmul takes them.
+    hidden_config = width_sharded_l1_config(S, config.hidden_size, device, tile_height=1)
+    outs = []
+    for block in range(NUM_BLOCKS):
+        rows = slice(block * S, (block + 1) * S)
+        out = moe.decode_static(
+            ttnn.from_torch(
+                hidden[rows].reshape(1, S, 1, -1),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=device,
+                memory_config=hidden_config,
+            )
+        )
+        assert list(out.shape) == [1, S, 1, config.hidden_size]
+        outs.append(ttnn.to_torch(out).reshape(S, -1).float())
+        for k in range(S):
+            _, pcc = comp_pcc(expected[rows][k], outs[-1][k], PCC)
+            logger.info(f"layer {layer} block {block} row {k}: PCC {pcc}")
+
+    passing, pcc = comp_pcc(expected, torch.cat(outs), PCC)
     logger.info(f"layer {layer}: PCC {pcc}")
     assert passing, f"layer {layer}: PCC {pcc} < {PCC}"

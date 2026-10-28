@@ -22,6 +22,8 @@ Every step is logged; only the checked ones are asserted.
 
 ``test_decoder_layer_decode`` runs on one chip, ``test_decoder_layer_decode_tp4`` the same cases
 TP4 on a 1x4 submesh of an 8x4 Galaxy; there the outputs are replicated and rank 0's are checked.
+``test_decoder_layer_decode_s5`` feeds the same positions as ``S``-row blocks, streams ``[1, S, hc, D]``
+(DSpark's parallel verify), against the same token-by-token reference, row by row.
 
 The converted ttnn weights are cached under ``CACHE_DIR`` (``$DEEPSEEK_V4_CACHE_DIR``, default ``../cache``, per checkpoint),
 shared with ``test_attention.py``, ``test_moe.py`` and ``test_engram.py``. The routed experts are
@@ -34,6 +36,7 @@ host and across processes: by default the TP4 test's, and with ``--tp-size 1`` t
 
 import contextlib
 import math
+from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 import torch
@@ -82,6 +85,21 @@ CASES = pytest.mark.parametrize(
         ((2, 3), 160),  # ratio 2: kv + index source, consumer
         ((14,), 160),  # ratio 2 kv + index source, Engram
         ((20, 21, 24), 576),  # ratio 1: source, consumer, index-only source; top-k drops 64 of 576
+    ),
+    ids=("window", "window_engram", "ratio2", "ratio2_engram", "ratio1"),
+)
+# DSpark's block: the token plus four drafts.
+S = 5
+CASES_S5 = pytest.mark.parametrize(
+    "layers, seq_len",
+    (
+        # Blocks start at multiples of 5: both ratio-2 parities, one block across the causal
+        # switch (125..129 holds window - 1) and the ring wrap.
+        ((0,), 160),  # window only
+        ((1,), 160),  # window only, Engram
+        ((2, 3), 160),  # ratio 2: kv + index source, consumer
+        ((14,), 160),  # ratio 2 kv + index source, Engram
+        ((20, 21, 24), 580),  # ratio 1: source, consumer, index-only source; top-k drops 68 of 580
     ),
     ids=("window", "window_engram", "ratio2", "ratio2_engram", "ratio1"),
 )
@@ -433,4 +451,151 @@ def _check_decode(device, layers, seq_len, tp_size: int) -> None:
 
     for i, (moe_expected, moe_actual) in moe_outs.items():
         failure = _log_pcc(torch.stack(moe_expected), torch.stack(moe_actual), f"layer {i} MoE, checked steps")
+        assert failure is None, failure
+
+
+@pytest.mark.skipif(_snapshot() is None, reason=f"V4.1-Flash checkpoint not found under {DEFAULT_MODEL_DIR}")
+@pytest.mark.timeout(14400)
+@CASES_S5
+@torch.no_grad()
+def test_decoder_layer_decode_s5(device, layers, seq_len):
+    assert seq_len % S == 0
+    snapshot = _snapshot()
+    config = load_config(snapshot)
+    loader = DeepseekV4WeightLoader(snapshot)
+    engram_layers = [i for i in layers if i in config.engram_layer_ids]
+    tables = _engram_tables(loader, engram_layers)
+
+    model = load_reference(snapshot)
+    reference = reference_blocks(model, snapshot, loader, layers, seq_len)
+    expected_parts = {i: {} for i in layers}
+    for i, block in reference.items():
+        block.attn.register_forward_hook(_keep_output(expected_parts[i], "attn"))
+        block.ffn.register_forward_hook(_keep_output(expected_parts[i], "ffn"))
+
+    cache = WeightCache(CACHE_DIR)
+    prefetch_buffers = None
+    if engram_layers:
+        if not ttnn.experimental.is_tensor_prefetcher_supported(device):
+            pytest.skip("Engram's wkv needs the tensor prefetcher (programmable DRAM cores)")
+        prefetch_buffers = {}
+    decoder_layers, parts = {}, {i: {} for i in layers}
+    for i in layers:
+        layer_cache = cache.sub(f"layers.{i}")
+        experts = DeepSeekV41PreloadedExperts(
+            config, expert_provider(loader, i), device, dtype=ttnn.bfloat4_b, cache=layer_cache.sub("ffn")
+        )
+        layer = DeepSeekV41DecoderLayer(
+            config,
+            i,
+            decoder_layer_weights(loader, i, config),
+            device,
+            experts,
+            cache=layer_cache,
+            weight_dtype=ttnn.bfloat4_b,
+            prefetch_buffers=prefetch_buffers,
+            verify_rows=S,
+        )
+        _spy(layer.self_attn, "decode", parts[i], "attn")
+        _spy(layer.mlp, "decode_static", parts[i], "ffn")
+        decoder_layers[i] = layer
+    caches = build_decode_caches(device, config, layers, seq_len, verify_rows=S)
+    rope = {i: (reference[i].attn.freqs_cis.real, reference[i].attn.freqs_cis.imag) for i in layers}
+
+    torch.manual_seed(0)
+    hc, hidden = config.hc_mult, config.hidden_size
+    streams = torch.randn(len(layers), seq_len, 1, 1, hc, hidden).bfloat16().float()
+    pre_mixes = torch.rand(len(layers), seq_len, 1, 1, hc).bfloat16().float()
+    if engram_layers:
+        tokenizer = AutoTokenizer.from_pretrained(snapshot)
+        input_ids = torch.randint(len(tokenizer), (1, seq_len))
+        reference_hash = reference_engram_hash(model, snapshot, tokenizer, seq_len)
+        reference_engrams = {i: reference_engram(model, snapshot, loader, i, *tables[i]) for i in engram_layers}
+        lookup = EngramHostLookup(config, snapshot, tables, 1, seq_len, tokenizer)
+    # The layer's streams, as the Engram takes a verify block's.
+    streams_config = width_sharded_l1_config(S * hc, hidden, device, num_cores=_HC_COLLAPSE_CORES, tile_height=1)
+
+    window = config.sliding_window
+    checked = {0, 1, window - 2, window - 1, window} | set(range(seq_len - 4, seq_len))
+    moe_outs = {i: ([], []) for i in layers}  # (expected, actual) per checked row
+    writer = ThreadPoolExecutor(max_workers=1)
+    with contextlib.ExitStack() as session:
+        # A failed step can leave a write blocked on the device for good; do not wait on it.
+        session.callback(writer.shutdown, wait=False)
+        if prefetch_buffers is not None:
+            session.enter_context(tensor_prefetcher_session(device))
+            ttnn.experimental.wait_for_cq_on_tensor_prefetcher(device, cq_id=0)
+        for start in range(0, seq_len, S):
+            positions = range(start, start + S)
+            if engram_layers:
+                # One lookup over the block, as a verify step hashes its run of one session.
+                rows = lookup(input_ids[:, start : start + S], start)  # {layer: [1, S, n_hash_cols * head_dim]}
+            # The reference shares the group's compressed state, so it steps position-major, token by token.
+            expected = {i: [] for i in layers}
+            for pos in positions:
+                if engram_layers:
+                    hashes = reference_hash(input_ids[:, pos : pos + 1], pos)
+                for j, i in enumerate(layers):
+                    x, pre_mix = streams[j, pos], pre_mixes[j, pos]
+                    h = x
+                    if i in engram_layers:
+                        h = reference_engrams[i](x, hashes[:, :, reference_hash.layout.layer_ids.index(i)])
+                    out, out_pre = reference[i](h, pos, pre_mix, None)
+                    expected[i].append((out, out_pre, expected_parts[i]["attn"], expected_parts[i]["ffn"]))
+
+            for j, i in enumerate(layers):
+                layer = decoder_layers[i]
+                write = None
+                if layer.engram is not None:
+                    # The block's rows outnumber the socket's pages, so they go in while the step is dispatched.
+                    write = writer.submit(layer.engram.write_rows, rows[i])
+                    layer.engram.wkv.fetch_weights()
+                out, out_pre = layer.decode(
+                    ttnn.from_torch(
+                        streams[j, start : start + S].reshape(1, S, hc, hidden),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        device=device,
+                        memory_config=streams_config,
+                    ),
+                    ttnn.from_torch(
+                        pre_mixes[j, start : start + S].reshape(1, S, 1, hc),
+                        dtype=ttnn.bfloat16,
+                        layout=ttnn.TILE_LAYOUT,
+                        device=device,
+                    ),
+                    caches[i],
+                    **layer.self_attn.decode_inputs(start, *rope[i], rows=S),
+                )
+                if write is not None:
+                    write.result()
+                assert list(out.shape) == [1, S, hc, hidden], list(out.shape)
+                assert list(out_pre.shape) == [1, S, 1, hc], list(out_pre.shape)
+                out_dev, pre_dev = _to_torch(out), _to_torch(out_pre)
+                attn_dev, ffn_dev = (_to_torch(parts[i][k]).reshape(S, -1) for k in ("attn", "ffn"))
+
+                # Every row is logged, then only the checked ones are asserted.
+                pre_atol = ENGRAM_PRE_MIX_ATOL if layer.engram is not None else PRE_MIX_ATOL
+                for k, pos in enumerate(positions):
+                    x = streams[j, pos]
+                    expected_out, expected_pre, expected_attn, expected_ffn = expected[i][k]
+                    what = f"layer {i} (ratio {config.compress_ratios[i]}) pos {pos} (row {k} of the block at {start})"
+                    failures = [
+                        _log_pcc(expected_out - x, out_dev[:, k : k + 1] - x, f"{what} streams (out - x)"),
+                        _log_pcc(expected_attn, attn_dev[k], f"{what} attention"),
+                    ]
+                    pre_error = (pre_dev[:, k].reshape(-1) - expected_pre.reshape(-1)).abs().max().item()
+                    logger.info(f"{what} pre_mix: max abs error {pre_error}")
+                    if pre_error > pre_atol:
+                        failures.append(f"{what} pre_mix: max abs error {pre_error} > {pre_atol}")
+                    _, pcc = comp_pcc(expected_ffn.reshape(-1), ffn_dev[k], PCC)
+                    logger.info(f"{what} MoE: PCC {pcc}")
+                    if pos in checked:
+                        moe_outs[i][0].append(expected_ffn.reshape(-1))
+                        moe_outs[i][1].append(ffn_dev[k])
+                        failures = [f for f in failures if f is not None]
+                        assert not failures, "; ".join(failures)
+
+    for i, (moe_expected, moe_actual) in moe_outs.items():
+        failure = _log_pcc(torch.stack(moe_expected), torch.stack(moe_actual), f"layer {i} MoE, checked rows")
         assert failure is None, failure

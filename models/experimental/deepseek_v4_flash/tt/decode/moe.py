@@ -17,6 +17,7 @@ from typing import NamedTuple, Optional
 
 import ttnn
 import torch
+from loguru import logger
 
 from ..common import CCL_TOPOLOGY, DeepSeekV4Module, _profile, width_sharded_l1_config
 from .decode_prefetch import (
@@ -442,6 +443,17 @@ class DeepSeekV4TopKRouter(DeepSeekV4Module):
         """
         assert x_flat.layout == ttnn.ROW_MAJOR_LAYOUT, "x_flat must be in row-major layout"
         scores = self._scores(x_flat)  # [1, 1, T, E]
+        # A replica's T is its shard height: its shape counts every core's copy of the rows, as the
+        # hub-mode gate's one-row-per-core scores do.
+        mem = x_flat.memory_config()
+        replica = x_flat.is_sharded() and mem.memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        rows = mem.shard_spec.shape[0] if replica and mem.shard_spec is not None else x_flat.shape[-2]
+        if scores.is_sharded() and rows > 1:
+            # The add would shard the one-row bias like these T-row shards, which it cannot fit;
+            # fused_experts reads both rows from DRAM anyway.
+            sharded = scores
+            scores = ttnn.to_memory_config(sharded, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(sharded)
 
         # Ranked on the bias-corrected scores, weighted by the uncorrected ones -- which is why
         # both rows travel to the expert op instead of just the winners' values. The op top-k's
@@ -845,8 +857,9 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
     shard, so a TP-sliced ``I`` (e.g. 512) yields fewer, still-full 16-core groups rather than
     idle cores. With 6 selected experts compute uses a 12x8 grid (16 cores per expert).
 
-    The op is natively single-token (``T == 1``), so **prefill is computed by decode**: the model
-    replays this path once per token, and :meth:`forward` asserts the shard height is 1.
+    Decode steps one token row (``T == 1``), and **prefill is computed by decode**: the model
+    replays this path once per token. A multi-row step (a DSpark verify block) runs its ``T`` rows
+    in one call over the union of their experts (see :meth:`_run_fused`).
 
     Every expert is kept resident on device as DRAM ND-sharded weights (one shard per compute
     core) in low precision (``BFloat4_b`` by default; ~3.5 GB for the 256 experts, a natural match
@@ -1020,22 +1033,24 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         return self._down_fused
 
     def _run_fused(
-        self, x_tok: ttnn.Tensor, routing: SparseRouting, shared: Optional[FusedSharedExpert] = None
+        self, x_tok: ttnn.Tensor, routing: SparseRouting, t: int, shared: Optional[FusedSharedExpert] = None
     ) -> ttnn.Tensor:
-        """Run ``fused_experts`` for one token row; returns ``[1,1,1,D]``.
+        """Run ``fused_experts`` for ``t`` token rows; returns ``[1,1,t,D]``.
 
         ``shared`` (6-expert path only) is the always-active shared expert, which the op then adds
         to the output itself.
 
-        ``x_tok`` is the single-token activation the op accepts -- ROW_MAJOR interleaved
-        ``[1,1,1,D]``, or the ROW_MAJOR HEIGHT_SHARDED L1 replica (``[1,1,cores,D]`` with shard
-        ``[1,D]``) that ``all_gather_for_matmul`` produces and ``matmul_decode`` consumes in place
-        -- and ``routing`` is that token's decision, with ``scores`` ``[1,1,1,E]`` and either
-        ``ranking`` ``[1,1,1,E]`` or ``indices`` ``[1,1,1,k]``. Each routing tensor is then moved
-        to DRAM interleaved, leaving its layout untouched.
+        ``x_tok`` is the activation the op accepts -- ROW_MAJOR interleaved ``[1,1,t,D]``, or the
+        ROW_MAJOR HEIGHT_SHARDED L1 replica (``[1,1,cores*t,D]`` with shard ``[t,D]``) that
+        ``all_gather_for_matmul`` produces and ``matmul_decode`` consumes in place -- and
+        ``routing`` is the rows' decision, with ``scores`` ``[1,1,t,E]`` and either ``ranking``
+        ``[1,1,t,E]`` or ``indices`` ``[1,1,t,k]``. Each routing tensor is then moved to DRAM
+        interleaved, leaving its layout untouched.
 
-        ``num_experts`` is always ``top_k``: one token row selects at most that many distinct
-        experts, so the op's program -- and any trace holding it -- is the same every step.
+        ``num_experts`` is the bound on the rows' union, ``min(t * top_k, E)``: ``top_k`` for one row,
+        so the op's program -- and any trace holding it -- is the same every step. Rows that did not
+        pick an expert of the union add it with a zero weight. Several rows take no fused ``shared``
+        expert (at ``top_k == 6`` their bound leaves the op's 6-expert path) and land in DRAM.
 
         Both routing tensors go in exactly as the router produced them. A ``ranking`` row (the
         learned router) makes the op find the top-k itself; ``indices`` (the hash router's table
@@ -1055,39 +1070,62 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
             ranking = ttnn.to_memory_config(routing.ranking, ttnn.DRAM_MEMORY_CONFIG)
         else:
             indices = ttnn.to_memory_config(routing.indices, ttnn.DRAM_MEMORY_CONFIG)
-        out = ttnn.experimental.deepseek.moe.fused_experts(
-            x_tok,
-            routing_scores=scores,
-            routing_indices=indices,
-            ranking_scores=ranking,
-            gate_up_weights=self._gate_up_fused,
-            down_weights=self._down_fused,
-            num_experts=self.top_k,
-            intermediate_size=self.intermediate,
-            swiglu_limit=self.limit,
-            top_k=self.top_k,
-            routed_scaling_factor=self.routed_scaling_factor,
-            routing_eps=self.routing_eps,
-            experts_block_size=self.experts_block_size,
-            shared_gate_up_weights=None if shared is None else shared.gate_up,
-            shared_down_weights=None if shared is None else shared.down,
-            shared_swiglu_limit=None if shared is None else shared.swiglu_limit,
-            memory_config=self.output_memory_config,
-        )  # [1, 1, D]
-        return ttnn.reshape(out, [1, 1, 1, self.hidden])
+        try:
+            out = ttnn.experimental.deepseek.moe.fused_experts(
+                x_tok,
+                routing_scores=scores,
+                routing_indices=indices,
+                ranking_scores=ranking,
+                gate_up_weights=self._gate_up_fused,
+                down_weights=self._down_fused,
+                num_experts=min(t * self.top_k, self.num_experts),
+                intermediate_size=self.intermediate,
+                swiglu_limit=self.limit,
+                top_k=self.top_k,
+                routed_scaling_factor=self.routed_scaling_factor,
+                routing_eps=self.routing_eps,
+                experts_block_size=self.experts_block_size,
+                shared_gate_up_weights=None if shared is None else shared.gate_up,
+                shared_down_weights=None if shared is None else shared.down,
+                shared_swiglu_limit=None if shared is None else shared.swiglu_limit,
+                memory_config=self.output_memory_config if t == 1 else None,
+            )  # [1, t, D]
+        except RuntimeError as e:
+            if "clash with L1 buffers" in str(e):
+                # TEMP diagnostic: what holds the L1 the op's circular buffers needed.
+                view = ttnn.get_memory_view(self.device, ttnn.BufferType.L1)
+                blocks = sorted(
+                    (int(b["address"]), int(b["size"])) for b in view.block_table if b["allocated"] == "yes"
+                )
+                named = {
+                    "x_tok": x_tok,
+                    "routing.scores": routing.scores,
+                    "routing.ranking": routing.ranking,
+                    "routing.indices": routing.indices,
+                }
+                live = {
+                    k: (v.buffer_address(), list(v.shape), str(v.memory_config().memory_layout))
+                    for k, v in named.items()
+                    if v is not None and v.memory_config().buffer_type == ttnn.BufferType.L1
+                }
+                logger.error(
+                    f"fused_experts L1 clash at t={t}: {view.total_bytes_allocated_per_bank} B allocated per bank, "
+                    f"{len(blocks)} blocks (address, size), lowest first: {blocks}; inputs in L1: {live}"
+                )
+            raise
+        return ttnn.reshape(out, [1, 1, t, self.hidden])
 
     def forward(
         self, x_flat: ttnn.Tensor, routing: SparseRouting, shared: Optional[FusedSharedExpert] = None
     ) -> ttnn.Tensor:
-        """``x_flat`` ``[1,1,T,D]`` plus the token's routing decision -> ``[1,1,1,D]``, plus the
-        ``shared`` expert when given.
+        """``x_flat`` ``[1,1,T,D]`` plus the rows' routing decision -> ``[1,1,T,D]``, plus the
+        ``shared`` expert when given (``T == 1`` only, see :meth:`_run_fused`).
 
         Trace-safe: nothing is read back to host. ``T`` is the activation's *shard height*, not the
-        token axis of the gathered tensor: the decode all-gather replicates the token row onto
-        every core of the destination grid, so ``T`` is 1 while ``x_flat.shape[2]`` is that grid's
-        core count. ``T`` is fixed at capture time, so a captured trace stays a flat op sequence
-        and prefill goes through the same path. (The assert is the op's own requirement: its
-        ROW_MAJOR input is one token row, so a batched MoE is not implemented.)
+        token axis of the gathered tensor: the decode all-gather replicates the token rows onto
+        every core of the destination grid, so ``x_flat.shape[2]`` is that grid's core count times
+        ``T``. ``T`` is fixed at capture time, so a captured trace stays a flat op sequence and
+        prefill goes through the same path. The op computes up to one tile row (32) of tokens.
         """
         mem = x_flat.memory_config()
         if (
@@ -1099,9 +1137,9 @@ class DeepSeekV4PreloadedExperts(DeepSeekV4Module):
         else:
             t = x_flat.shape[2]
         _profile(self.device)
-        assert t == 1, "t must be 1"
-        out = self._run_fused(x_flat, routing, shared)
-        return out
+        assert t <= ttnn.TILE_SIZE, f"fused_experts computes one tile row of tokens, got {t}"
+        assert t == 1 or shared is None, "only the one-row (6-expert) path fuses the shared expert"
+        return self._run_fused(x_flat, routing, t, shared)
 
     # The routed FFN has no host readback and no host-initialised operands, so the traced
     # decode path is just :meth:`forward`.
@@ -1133,6 +1171,7 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         prefetch_buffers: Optional[dict] = None,
         tp_size: int = 1,
         matmul_decode: Optional[bool] = None,
+        verify_rows: int = 1,
     ):
         """``gate`` may be injected (a :class:`DeepSeekV4HashRouter` for the first
         ``num_hash_layers`` MoE layers); otherwise this builds the learned
@@ -1141,6 +1180,11 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         resident on device in BFloat4_b, so it has nothing of its own to prefetch. The shared
         expert is built from ``weights["shared_experts.*"]``. ``matmul_decode`` is passed to the
         router and the shared expert (see :class:`DeepSeekV4MLP`).
+
+        ``verify_rows > 1`` lets :meth:`decode_static` take steps of up to that many token rows.
+        Only the one-row op fuses the shared expert, so when it is fused this also builds it as
+        :class:`DeepSeekV4MLP` projections (``shared_rows``), off the prefetcher rings: their
+        weights are a second copy, read from DRAM on the multi-row steps only.
         """
         self.device = device
         self.hidden = config.hidden_size
@@ -1191,6 +1235,18 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
                 tp_size=tp_size,
                 matmul_decode=matmul_decode,
             )
+        self.shared_rows = self.shared_experts
+        if verify_rows > 1 and self.shared_rows is None:
+            self.shared_rows = self.shared_expert_cls(
+                weights,
+                "shared_experts",
+                device,
+                cache=cache,
+                weight_dtype=weight_dtype,
+                config=config,
+                tp_size=tp_size,
+                matmul_decode=True,
+            )
 
     def prefetch_weights(self):
         """Stage the ``[D, E]`` router gate, then the shared expert's ``[D, I]`` gate/up and
@@ -1207,14 +1263,16 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
     def decode_static(
         self, hidden: ttnn.Tensor, hash_token: ttnn.Tensor | None = None, image_mask: ttnn.Tensor | None = None
     ) -> ttnn.Tensor:
-        """Trace-safe MoE. ``hidden`` ``[B, 1, 1, D]`` -> the same shape.
+        """Trace-safe MoE. ``hidden`` ``[B, S, 1, D]`` -> the same shape.
 
         The one entry point for this block (decode *and* prefill): the model prefill replays the
         decoder layer's decode path one token at a time, so ``B`` is the step's batch and the
         routed path gets a single token row (``T == 1``; see
-        :meth:`DeepSeekV4PreloadedExperts.forward`).
+        :meth:`DeepSeekV4PreloadedExperts.forward`). ``S > 1`` (up to ``verify_rows``, e.g. a DSpark
+        verify block) routes each of the ``T = B * S`` rows on its own and runs the routed experts
+        once over the rows' union, then adds the ``shared_rows`` projections.
 
-        ``hidden`` is flattened to ``[1, 1, B, D]`` -- the token-per-row layout the router and the
+        ``hidden`` is flattened to ``[1, 1, T, D]`` -- the token-per-row layout the router and the
         shared expert work in -- then the activation is multicast onto the fused-expert compute
         cores (12x8 at ``top_k == 6``) as a ROW_MAJOR HEIGHT_SHARDED replica, which
         ``fused_experts`` and the shared expert's :class:`LinearDecode` projections both consume in
@@ -1230,9 +1288,23 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
         ``image_mask`` (``[1, B]`` uint32, 1 for an image token) goes to the learned router's
         :meth:`DeepSeekV4TopKRouter.ranking_bias`.
         """
-        b, h = hidden.shape[0], hidden.shape[-1]
-        x_flat = ttnn.reshape(hidden, [1, 1, b, h])
+        b, s, h = hidden.shape[0], hidden.shape[1], hidden.shape[-1]
+        t = b * s
+        x_flat = ttnn.reshape(hidden, [1, 1, t, h])
+        rows = x_flat
         dest = self.experts.core_grid()
+
+        def _l1(tag):  # TEMP probe
+            if t > 1:
+                import os
+
+                if os.environ.get("DSV_SYNC"):
+                    ttnn.synchronize_device(self.device)
+                v = ttnn.get_memory_view(self.device, ttnn.BufferType.L1)
+                lo = sorted((int(b["address"]), int(b["size"])) for b in v.block_table if b["allocated"] == "yes")[:4]
+                logger.error(f"L1 probe {tag}: {lo}")
+
+        _l1("enter")
         mem = x_flat.memory_config()
         already_replica = (
             x_flat.is_sharded()
@@ -1245,23 +1317,46 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
             # already leaves that; an interleaved tensor is width-sharded over one tile row
             # first, and h must be tile-aligned for that.
             if not x_flat.is_sharded():
-                x_flat = ttnn.to_memory_config(x_flat, width_sharded_l1_config(1, h, self.device))
+                x_flat = ttnn.to_memory_config(x_flat, width_sharded_l1_config(t, h, self.device))
                 x_flat = ttnn.experimental.deepseek.all_gather_for_matmul(x_flat, dest)
             else:
                 x_flat = ttnn.experimental.deepseek.all_gather_for_matmul(x_flat, dest)
+        _l1("gather")
         # The learned router has no separate trace-safe variant: it allocates every operand
         # it uses, so :meth:`DeepSeekV4TopKRouter.forward` is already capture-safe.
         if self.is_hash:
             routing = self.gate.forward_static(x_flat, hash_token)
         else:
             routing = self.gate(x_flat, image_mask)
-        if self.fused_shared is not None:
+        _l1("router")
+        if self.fused_shared is not None and t == 1:
             combined = self.experts.decode_static(x_flat, routing, self.fused_shared)  # [1, 1, 1, D]
-        else:
-            routed = self.experts.decode_static(x_flat, routing)  # [1, 1, 1, D]
-            shared = self.shared_experts(x_flat)  # [1, 1, B, D]
+        elif t > 1 and not already_replica:
+            assert self.shared_rows is not None, f"a {t}-row step needs the block built with verify_rows >= {t}"
+            # The op's CBs at T > 1 (8-row tiles, the input restriped into its own CB) reach past the
+            # replica's L1, so the replica is freed first and the op reads the rows from DRAM. Nothing it
+            # leaves in L1 may sit below the CBs, so the shared expert's output goes to DRAM too.
+            shared = self.shared_rows(x_flat)  # [1, 1, T, D]
+            _l1("shared")
+            if shared.memory_config().buffer_type == ttnn.BufferType.L1:
+                shared_l1 = shared
+                shared = ttnn.to_memory_config(shared_l1, ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(shared_l1)
+            rows_in_l1 = rows.memory_config().buffer_type == ttnn.BufferType.L1
+            if rows_in_l1:
+                rows = ttnn.to_memory_config(rows, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(x_flat)
+            _l1("freed")
+            routed = self.experts.decode_static(rows, routing)  # [1, 1, T, D]
+            if rows_in_l1:
+                ttnn.deallocate(rows)
             combined = ttnn.add(routed, shared)
-        if self.experts.output_memory_config is not None:
+        else:
+            assert self.shared_rows is not None, f"a {t}-row step needs the block built with verify_rows >= {t}"
+            routed = self.experts.decode_static(x_flat, routing)  # [1, 1, T, D]
+            shared = self.shared_rows(x_flat)  # [1, 1, T, D]
+            combined = ttnn.add(routed, shared)
+        if t == 1 and self.experts.output_memory_config is not None:
             partial = combined
             combined = ttnn.experimental.deepseek.width_sharded_all_reduce(
                 partial, cluster_axis=_tp_cluster_axis(self.device), num_links=2, topology=CCL_TOPOLOGY
@@ -1271,4 +1366,4 @@ class DeepSeekV4SparseMoeBlock(DeepSeekV4Module):
             combined = ttnn.to_memory_config(combined, ttnn.DRAM_MEMORY_CONFIG)
             if self.tp_size > 1:
                 combined = _tp_all_reduce(combined, self.device)
-        return ttnn.reshape(combined, [b, 1, 1, h])
+        return ttnn.reshape(combined, [b, s, 1, h])
