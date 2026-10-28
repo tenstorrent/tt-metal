@@ -479,8 +479,7 @@ ttnn::device_operation::ProgramArtifacts FastReduceNCProgramFactory::create_prog
     return ttnn::device_operation::ProgramArtifacts{.spec = std::move(spec), .run_params = std::move(run_args)};
 }
 
-// Per-dispatch state is the tensor bindings (buffer addresses) and post_mul_scaler, which the program hash
-// excludes; every other runtime arg derives from hashed attributes and the TensorSpecs.
+// Cache-hit hook: re-applies the buffer addresses and post_mul_scaler, which compute_program_hash excludes.
 tt::tt_metal::experimental::ProgramRunArgs FastReduceNCProgramFactory::override_runtime_arguments(
     const FastReduceNCParams& operation_attributes,
     const FastReduceNCInputs& tensor_args,

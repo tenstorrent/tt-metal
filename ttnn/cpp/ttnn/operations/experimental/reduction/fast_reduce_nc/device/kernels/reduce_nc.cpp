@@ -13,7 +13,6 @@ void kernel_main() {
     constexpr auto num_output_tiles = get_arg(args::num_output_tiles);
     constexpr auto num_input_tiles = get_arg(args::num_input_tiles);
     constexpr auto input_granularity = get_arg(args::input_granularity);
-    // fp32 bits of the factor applied to each reduced tile before packing; 1.0f skips the multiply.
     const uint32_t post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
     const bool apply_post_mul = post_mul_scaler_bits != 0x3F800000u;
 
