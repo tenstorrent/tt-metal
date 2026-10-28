@@ -329,7 +329,7 @@ class Ideogram4Pipeline(PipelineAPIMixin):
         self._enc_mrope = qcfg.rope_scaling["mrope_section"]
         # transformers >=4.57 moved rope_theta to the top-level config; older versions
         # kept it inside rope_scaling. Accept both.
-        self._enc_rope_theta = qcfg.rope_scaling.get("rope_theta", qcfg.rope_theta)
+        self._enc_rope_theta = qcfg.rope_scaling.get("rope_theta") or qcfg.rope_theta
         self.encoder = Qwen3VlTextEncoder(
             vocab_size=qcfg.vocab_size,
             hidden_size=qcfg.hidden_size,
