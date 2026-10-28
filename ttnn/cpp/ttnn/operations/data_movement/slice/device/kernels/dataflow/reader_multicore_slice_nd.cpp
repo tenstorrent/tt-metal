@@ -133,8 +133,11 @@ void kernel_main() {
             uint32_t last_dim = tensor_rank - 1;
             if (get_vararg(slice_starts_base + last_dim) != 0 || get_vararg(slice_steps_base + last_dim) != 1 ||
                 get_vararg(slice_ends_base + last_dim) != get_vararg(input_dims_base + last_dim)) {
-                // Need to reorganize the data in the buffer. Hold a write lock while this core rewrites
-                // the entry, so its stores are visible before push_back hands the entry to the writer.
+                // Need to reorganize the data in the buffer: move the selected columns to the start of
+                // the entry. On Quasar, this core has a data cache. Taking the lock discards any cached
+                // copy of the entry, so the reads below see the row the NoC just wrote to SRAM. Releasing
+                // the lock, at the end of this block and so before push_back, writes the reorganized row
+                // back to SRAM, where the writer kernel reads it.
                 auto lock = dfb_out.scoped_write_lock(1);
                 auto src_ptr = lock.get_ptr<volatile uint8_t>();
                 auto dst_ptr = lock.get_ptr<volatile uint8_t>();

@@ -47,7 +47,7 @@ void kernel_main() {
     noc.async_read(start_tensor_accessor, staging, tile_size, {.page_id = 0}, {.offset_bytes = 0});
     noc.async_read_barrier();
     {
-        // Read the indices under a lock, so the reads see what the NoC just wrote.
+        // Read the indices under a lock, which discards any cached copy, so the reads see what the NoC just wrote.
         auto staging_lock = staging.scoped_lock(0, num_dims);
         for (uint32_t i = 0; i < num_dims; i++) {
             start_indices[i] = staging[i];

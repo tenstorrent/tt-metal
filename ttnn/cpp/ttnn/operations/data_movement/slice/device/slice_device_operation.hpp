@@ -24,9 +24,10 @@ uint32_t get_rm_start_offset(const Tensor& tensor, const ttnn::Shape& slice_star
 uint32_t get_tiled_start_offset(const Tensor& input_tensor, const ttnn::Shape& slice_start, bool round_up = false);
 uint32_t get_tiled_start_offset(const ttnn::Shape& input_shape, const ttnn::Shape& slice_start, bool round_up = false);
 
-// The data format to declare on a slice DFB that holds elements of `dtype` on a device of `arch`. Use it
-// only for a DFB whose contents data-movement kernels copy without reading its format: on Quasar it
-// declares UInt16 and UInt32 elements as RawUInt16 and RawUInt32, raw formats of the same element size.
+// The data format to declare on a slice DFB that holds elements of `dtype` on a device of `arch`. On
+// Quasar it declares UInt16 and UInt32 elements as RawUInt16 and RawUInt32, raw formats of the same
+// element size. Use it only for a DFB that no compute kernel handles in a way that depends on the element
+// type: compute kernels see the raw formats as Float16 and Float32, not as integers.
 tt::DataFormat get_slice_dfb_data_format(tt::tt_metal::DataType dtype, tt::ARCH arch);
 
 }  // namespace ttnn::operations::data_movement

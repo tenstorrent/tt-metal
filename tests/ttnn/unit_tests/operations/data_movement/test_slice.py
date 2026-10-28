@@ -14,15 +14,20 @@ import math
 
 
 def random_torch_tensor(dtype, shape):
+    # Integer values cover the whole range of the dtype, so every bit of an element is exercised.
     if dtype == ttnn.uint8:
-        return torch.randint(0, 100, shape).to(torch.int16)
+        return torch.randint(0, 2**8, shape, dtype=torch.uint8)
     if dtype == ttnn.uint16:
-        return torch.randint(0, 100, shape).to(torch.int16)
+        return torch.randint(0, 2**16, shape, dtype=torch.uint16)
     if dtype == ttnn.int32:
         return torch.randint(-(2**31), 2**31, shape, dtype=torch.int32)
     if dtype == ttnn.uint32:
-        return torch.randint(0, 2**31, shape, dtype=torch.int32)
-    return torch.rand(shape).bfloat16().float()
+        return torch.randint(0, 2**32, shape, dtype=torch.uint32)
+    if dtype == ttnn.float32:
+        return torch.rand(shape, dtype=torch.float32)
+    if dtype == ttnn.bfloat16:
+        return torch.rand(shape, dtype=torch.bfloat16)
+    raise ValueError(f"random_torch_tensor does not support {dtype}")
 
 
 def height_sharded_l1_mem_config(shard_grid, num_rows, row_width, orientation=ttnn.ShardOrientation.ROW_MAJOR):
@@ -348,13 +353,10 @@ def slice_test(
     dtype,
     slice_step=(1, 1, 1, 1),
 ):
-    if dtype == ttnn.float32:
-        torch_input_tensor = torch.rand(*input_tensor_shape, dtype=torch.float)
-    else:
-        torch_input_tensor = torch.rand(*input_tensor_shape, dtype=torch.bfloat16)
+    torch_input_tensor = random_torch_tensor(dtype, input_tensor_shape)
 
     tt_input_tensor = ttnn.from_torch(
-        torch_input_tensor, layout=input_layout, device=device, memory_config=in_mem_config
+        torch_input_tensor, dtype=dtype, layout=input_layout, device=device, memory_config=in_mem_config
     )
 
     with device.cache_entries_counter.measure():
@@ -393,8 +395,8 @@ def test_slice_rm_program_cache_collison(device):
 
 @pytest.mark.parametrize(
     "dtype",
-    (ttnn.bfloat16, ttnn.float32),
-    ids=["bfloat16", "float"],
+    (ttnn.bfloat16, ttnn.float32, ttnn.uint16, ttnn.uint32),
+    ids=["bfloat16", "float", "uint16", "uint32"],
 )
 @pytest.mark.parametrize(
     "out_mem_config",
@@ -575,7 +577,7 @@ def test_run_slice_rm_multi_core_test(
 
 # slice alternate elements in a given tensor
 @pytest.mark.parametrize("dim", [4, 12, 20, 68])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16, ttnn.uint8])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint32, ttnn.uint16, ttnn.uint8])
 def test_stride_slice_single_dim_skip_2(dim, dtype, device):
     torch.manual_seed(2005)
     torch_input = random_torch_tensor(dtype, (dim,))
@@ -594,7 +596,7 @@ def test_stride_slice_single_dim_skip_2(dim, dtype, device):
 @pytest.mark.parametrize("begins_w", [2])
 @pytest.mark.parametrize("stride_h", [2])
 @pytest.mark.parametrize("stride_w", [2])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16, ttnn.uint8])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint32, ttnn.uint16, ttnn.uint8])
 def test_stride_slice_two_dim(h, w, begins_h, begins_w, stride_h, stride_w, dtype, device):
     torch.manual_seed(2005)
     torch_input = random_torch_tensor(dtype, (h, w))
@@ -616,7 +618,7 @@ def test_stride_slice_two_dim(h, w, begins_h, begins_w, stride_h, stride_w, dtyp
 @pytest.mark.parametrize("stride_c", [2])
 @pytest.mark.parametrize("stride_h", [1])
 @pytest.mark.parametrize("stride_w", [1])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16, ttnn.uint8])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint32, ttnn.uint16, ttnn.uint8])
 def test_stride_slice_three_dim(c, h, w, begins_c, begins_h, begins_w, stride_c, stride_h, stride_w, dtype, device):
     torch.manual_seed(2005)
     torch_input = random_torch_tensor(dtype, (c, h, w))
@@ -634,7 +636,7 @@ def test_stride_slice_three_dim(c, h, w, begins_c, begins_h, begins_w, stride_c,
 @pytest.mark.parametrize("ends", [[18, 16, 16, 18]])
 @pytest.mark.parametrize("strides", [[2, 2, 2, 2]])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16, ttnn.uint8])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint32, ttnn.uint16, ttnn.uint8])
 def test_stride_slice_four_dim(dims, begins, ends, strides, layout, dtype, device):
     # Skip if tiled and uint8/16
     if layout == ttnn.TILE_LAYOUT and (dtype == ttnn.uint16 or dtype == ttnn.uint8):
@@ -659,7 +661,7 @@ def test_stride_slice_four_dim(dims, begins, ends, strides, layout, dtype, devic
 @pytest.mark.parametrize("ends", [[1, -1, 56, 96], [1, 56, 56, 95], [-1, 1, -1, -1]])
 @pytest.mark.parametrize("strides", [[1, 2, 1, 1]])
 @pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16, ttnn.uint8])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint32, ttnn.uint16, ttnn.uint8])
 def test_stride_slice_four_dim_tiled(dims, begins, ends, strides, layout, dtype, device):
     if layout == ttnn.TILE_LAYOUT and (dtype == ttnn.uint16 or dtype == ttnn.uint8):
         pytest.skip("Skipping test for tiled layout with uint8/16 dtype")
@@ -676,57 +678,6 @@ def test_stride_slice_four_dim_tiled(dims, begins, ends, strides, layout, dtype,
     ttnn_output = ttnn.to_torch(ttnn_output)
 
     assert_with_pcc(torch_output, ttnn_output, 0.99)
-
-
-def full_range_unsigned_tensor(dtype, shape):
-    """Random values over the whole range of the unsigned ttnn `dtype`, so the top bit is set in about half of
-    them."""
-    torch_dtype, num_bits = {ttnn.uint16: (torch.uint16, 16), ttnn.uint32: (torch.uint32, 32)}[dtype]
-    return torch.randint(0, 2**num_bits, shape, dtype=torch_dtype)
-
-
-@pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.uint32])
-@pytest.mark.parametrize(
-    "layout, shape, begins, ends, steps",
-    [
-        # TILE slice on tile boundaries: whole tiles are copied.
-        (ttnn.TILE_LAYOUT, [1, 2, 64, 64], [0, 1, 32, 0], [1, 2, 64, 64], [1, 1, 1, 1]),
-        # ROW_MAJOR slice that starts part way into each row.
-        (ttnn.ROW_MAJOR_LAYOUT, [2, 3, 40, 64], [0, 1, 4, 8], [2, 3, 20, 40], [1, 1, 1, 1]),
-        # ROW_MAJOR slices with a step, including along the last dimension, of rank 4 and of rank 5.
-        (ttnn.ROW_MAJOR_LAYOUT, [1, 1, 18, 18], [0, 0, 2, 2], [1, 1, 18, 18], [1, 1, 2, 2]),
-        (ttnn.ROW_MAJOR_LAYOUT, [1, 1, 3, 4, 32], [0, 0, 1, 0, 0], [1, 1, 3, 4, 32], [1, 1, 1, 1, 2]),
-    ],
-)
-def test_slice_unsigned_int(dtype, layout, shape, begins, ends, steps, device):
-    """Slicing copies elements without changing them, so an unsigned integer tensor must come back exactly
-    equal to the same slice taken in torch, in TILE and ROW_MAJOR layout and with or without a step."""
-    torch.manual_seed(2005)
-    torch_input = full_range_unsigned_tensor(dtype, shape)
-    torch_output = torch_input[tuple(slice(b, e, s) for b, e, s in zip(begins, ends, steps))]
-
-    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=layout, dtype=dtype)
-    ttnn_output = ttnn.slice(ttnn_input, begins, ends, steps)
-
-    assert_equal(torch_output, ttnn.to_torch(ttnn_output))
-
-
-@pytest.mark.parametrize("dtype", [ttnn.uint16, ttnn.uint32])
-def test_slice_tensor_args_unsigned_int(dtype, device):
-    """The form of slice that takes its start and end as device tensors also copies elements without changing
-    them, so an unsigned integer TILE tensor must come back exactly equal to the same slice taken in torch."""
-    torch.manual_seed(2005)
-    input_shape, dim, start, end = [1, 1, 128, 64], 2, [0, 0, 64, 0], [1, 1, 96, 64]
-    torch_input = full_range_unsigned_tensor(dtype, input_shape)
-    torch_output = torch_input[tuple(slice(b, e) for b, e in zip(start, end))]
-
-    ttnn_input = ttnn.from_torch(torch_input, device=device, layout=ttnn.TILE_LAYOUT, dtype=dtype)
-    ttnn_start = ttnn.from_torch(torch.tensor(start), device=device)
-    ttnn_end = ttnn.from_torch(torch.tensor(end), device=device)
-    num_devices = input_shape[dim] // (end[dim] - start[dim])
-    ttnn_output = ttnn.slice(ttnn_input, ttnn_start, ttnn_end, slice_dim=dim, num_devices=num_devices)
-
-    assert_equal(torch_output, ttnn.to_torch(ttnn_output))
 
 
 # these tests are copy and paste from the yolo customers #8920
@@ -1337,7 +1288,7 @@ def test_ttnn_slice_whisper(input_shape, input_start, input_ends, input_steps, m
         ([10], 1, [2], [7], 1, ttnn.ROW_MAJOR_LAYOUT),
     ),
 )
-def test_slice_tensor_args(input_shape, dim, start, end, step, layout, device):
+def test_slice_tensor_args_to_list(input_shape, dim, start, end, step, layout, device):
     torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
 
     torch_start_tensor = torch.tensor(start)
@@ -1405,17 +1356,21 @@ def test_slice_tensor_args_mesh_device(mesh_device, input_shape, dim, start, end
 
 
 @pytest.mark.parametrize(
-    "input_shape, dim, start, end, step, layout",
+    "input_shape, dim, start, end, step, layout, dtype",
     (
-        ([1, 1, 128, 2880], 2, [0, 0, 0, 0], [1, 1, 32, 2880], 1, ttnn.TILE_LAYOUT),
-        ([1, 1, 2048, 2880], 2, [0, 0, 512, 0], [1, 1, 1024, 2880], 1, ttnn.TILE_LAYOUT),
-        ([1, 1, 4096, 2880], 2, [0, 0, 2048, 0], [1, 1, 3072, 2880], 1, ttnn.TILE_LAYOUT),
-        ([1, 1, 65536, 2880], 2, [0, 0, 49152, 0], [1, 1, 65536, 2880], 1, ttnn.TILE_LAYOUT),
+        ([1, 1, 128, 2880], 2, [0, 0, 0, 0], [1, 1, 32, 2880], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 128, 2880], 2, [0, 0, 0, 0], [1, 1, 32, 2880], 1, ttnn.TILE_LAYOUT, ttnn.int32),
+        ([1, 1, 128, 2880], 2, [0, 0, 0, 0], [1, 1, 32, 2880], 1, ttnn.TILE_LAYOUT, ttnn.uint16),
+        ([1, 1, 128, 2880], 2, [0, 0, 0, 0], [1, 1, 32, 2880], 1, ttnn.TILE_LAYOUT, ttnn.uint32),
+        ([1, 1, 2048, 2880], 2, [0, 0, 512, 0], [1, 1, 1024, 2880], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 4096, 2880], 2, [0, 0, 2048, 0], [1, 1, 3072, 2880], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
+        ([1, 1, 65536, 2880], 2, [0, 0, 49152, 0], [1, 1, 65536, 2880], 1, ttnn.TILE_LAYOUT, ttnn.bfloat16),
     ),
 )
-def test_slice_tensor_args_device_path(input_shape, dim, start, end, step, layout, device):
-    # Create tensor where each tile has a unique value for easy tile debugging
-    torch_input = torch.randn(input_shape, dtype=torch.bfloat16)
+def test_slice_tensor_args_device_path(input_shape, dim, start, end, step, layout, dtype, device):
+    """A TILE input with all steps equal to 1 takes the device program that reads start and end from device
+    tensors. Slice copies elements without changing them, so the output must be exactly equal to torch."""
+    torch_input = random_torch_tensor(dtype, input_shape)
 
     torch_start_tensor = torch.tensor(start)
     torch_end_tensor = torch.tensor(end)
@@ -1428,7 +1383,7 @@ def test_slice_tensor_args_device_path(input_shape, dim, start, end, step, layou
     ttnn_start_tensor = ttnn.from_torch(torch_start_tensor, device=device)
     ttnn_end_tensor = ttnn.from_torch(torch_end_tensor, device=device)
 
-    ttnn_tensor = ttnn.from_torch(torch_input, layout=layout, dtype=ttnn.bfloat16, device=device)
+    ttnn_tensor = ttnn.from_torch(torch_input, layout=layout, dtype=dtype, device=device)
 
     # Calculate num_devices from the slice pattern
     num_devices_calc = input_shape[dim] // (end[dim] - start[dim])
@@ -1438,14 +1393,14 @@ def test_slice_tensor_args_device_path(input_shape, dim, start, end, step, layou
 
     ttnn_output_tensor = ttnn.to_torch(ttnn_output)
 
-    assert_with_pcc(torch_output_tensor, ttnn_output_tensor, 0.999)
+    assert_equal(torch_output_tensor, ttnn_output_tensor)
 
     entries = device.num_program_cache_entries()
     # Keep the original controls alive while a cache hit binds fresh control buffers.
     next_start = ttnn.from_torch(torch_start_tensor, device=device)
     next_end = ttnn.from_torch(torch_end_tensor, device=device)
     output = ttnn.slice(ttnn_tensor, next_start, next_end, slice_dim=dim, num_devices=num_devices_calc)
-    assert_with_pcc(torch_output_tensor, ttnn.to_torch(output), 0.999)
+    assert_equal(torch_output_tensor, ttnn.to_torch(output))
     assert device.num_program_cache_entries() == entries
 
     # Update these buffers in place; cached work assignments must still read the new bounds.
@@ -1455,7 +1410,7 @@ def test_slice_tensor_args_device_path(input_shape, dim, start, end, step, layou
     ttnn.copy_host_to_device_tensor(ttnn.from_torch(torch_start_tensor), next_start)
     ttnn.copy_host_to_device_tensor(ttnn.from_torch(torch_end_tensor), next_end)
     updated_output = ttnn.slice(ttnn_tensor, next_start, next_end, slice_dim=dim, num_devices=num_devices_calc)
-    assert_with_pcc(torch_input.narrow(dim, offset, length), ttnn.to_torch(updated_output), 0.999)
+    assert_equal(torch_input.narrow(dim, offset, length), ttnn.to_torch(updated_output))
     assert device.num_program_cache_entries() == entries
 
 
