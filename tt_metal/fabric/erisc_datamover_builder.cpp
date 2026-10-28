@@ -1770,6 +1770,14 @@ void FabricEriscDatamoverBuilder::setup_downstream_vc_connection(
 
 size_t FabricEriscDatamoverBuilder::get_configured_risc_count() const { return this->config.risc_configs.size(); }
 
+size_t FabricEriscDatamoverBuilder::get_allocated_l1_end_address() const {
+    const auto* const static_channel_allocator =
+        dynamic_cast<const FabricStaticSizedChannelsAllocator*>(this->config.channel_allocator.get());
+    TT_FATAL(static_channel_allocator != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator.");
+    // The channel buffers are the last allocated item in the router's L1 layout.
+    return static_channel_allocator->get_channel_buffers_end_address();
+}
+
 tt::tt_metal::KernelBuildOptLevel FabricEriscDatamoverBuilder::get_kernel_opt_level() const {
     // User override via TT_METAL_FABRIC_OPT_LEVEL takes priority
     auto opt_level_override = fabric_context_.get_rtoptions().get_fabric_kernel_opt_level();
