@@ -1,0 +1,313 @@
+{
+ "metrics": {
+  "chunk_len": {
+   "t": "2026-10-28T05:41:06",
+   "value": 5120
+  },
+  "chunk_start": {
+   "t": "2026-10-28T05:41:06",
+   "value": 0
+  },
+  "chunk_wall_clean": {
+   "t": "2026-10-28T05:41:06",
+   "value": 0
+  },
+  "chunk_wall_ms": {
+   "t": "2026-10-28T05:41:06",
+   "value": 876.2
+  },
+  "chunk_wall_ms_profiled": {
+   "t": "2026-10-28T05:41:06",
+   "value": 876.2
+  },
+  "deferred_cpu_ms": {
+   "t": "2026-10-28T05:41:01",
+   "value": 0.0
+  },
+  "deferred_cpu_steps": {
+   "t": "2026-10-28T05:41:01",
+   "value": 0
+  },
+  "device_model_hybrid": {
+   "t": "2026-10-28T05:41:06",
+   "value": 0
+  },
+  "device_ms_attention": {
+   "t": "2026-10-28T05:41:06",
+   "value": 71.03
+  },
+  "device_ms_attn_collapse": {
+   "t": "2026-10-28T05:41:06",
+   "value": 0.0
+  },
+  "device_ms_attn_hc": {
+   "t": "2026-10-28T05:41:06",
+   "value": 6.05
+  },
+  "device_ms_attn_norm": {
+   "t": "2026-10-28T05:41:06",
+   "value": 3.48
+  },
+  "device_ms_attn_residual": {
+   "t": "2026-10-28T05:41:06",
+   "value": 3.91
+  },
+  "device_ms_chip0": {
+   "t": "2026-10-28T05:41:06",
+   "value": 170.37
+  },
+  "device_ms_chip1": {
+   "t": "2026-10-28T05:41:06",
+   "value": 182.23
+  },
+  "device_ms_chip10": {
+   "t": "2026-10-28T05:41:06",
+   "value": 204.21
+  },
+  "device_ms_chip11": {
+   "t": "2026-10-28T05:41:06",
+   "value": 200.76
+  },
+  "device_ms_chip12": {
+   "t": "2026-10-28T05:41:06",
+   "value": 202.75
+  },
+  "device_ms_chip13": {
+   "t": "2026-10-28T05:41:06",
+   "value": 204.42
+  },
+  "device_ms_chip14": {
+   "t": "2026-10-28T05:41:06",
+   "value": 180.22
+  },
+  "device_ms_chip15": {
+   "t": "2026-10-28T05:41:06",
+   "value": 184.46
+  },
+  "device_ms_chip16": {
+   "t": "2026-10-28T05:41:06",
+   "value": 188.33
+  },
+  "device_ms_chip17": {
+   "t": "2026-10-28T05:41:06",
+   "value": 181.01
+  },
+  "device_ms_chip18": {
+   "t": "2026-10-28T05:41:06",
+   "value": 176.54
+  },
+  "device_ms_chip19": {
+   "t": "2026-10-28T05:41:06",
+   "value": 201.05
+  },
+  "device_ms_chip2": {
+   "t": "2026-10-28T05:41:06",
+   "value": 187.38
+  },
+  "device_ms_chip20": {
+   "t": "2026-10-28T05:41:06",
+   "value": 172.56
+  },
+  "device_ms_chip21": {
+   "t": "2026-10-28T05:41:06",
+   "value": 173.67
+  },
+  "device_ms_chip22": {
+   "t": "2026-10-28T05:41:06",
+   "value": 179.58
+  },
+  "device_ms_chip23": {
+   "t": "2026-10-28T05:41:06",
+   "value": 170.32
+  },
+  "device_ms_chip24": {
+   "t": "2026-10-28T05:41:06",
+   "value": 166.33
+  },
+  "device_ms_chip25": {
+   "t": "2026-10-28T05:41:06",
+   "value": 191.14
+  },
+  "device_ms_chip26": {
+   "t": "2026-10-28T05:41:06",
+   "value": 177.47
+  },
+  "device_ms_chip27": {
+   "t": "2026-10-28T05:41:06",
+   "value": 170.52
+  },
+  "device_ms_chip28": {
+   "t": "2026-10-28T05:41:06",
+   "value": 167.2
+  },
+  "device_ms_chip29": {
+   "t": "2026-10-28T05:41:06",
+   "value": 195.14
+  },
+  "device_ms_chip3": {
+   "t": "2026-10-28T05:41:06",
+   "value": 192.37
+  },
+  "device_ms_chip30": {
+   "t": "2026-10-28T05:41:06",
+   "value": 218.12
+  },
+  "device_ms_chip31": {
+   "t": "2026-10-28T05:41:06",
+   "value": 203.23
+  },
+  "device_ms_chip4": {
+   "t": "2026-10-28T05:41:06",
+   "value": 169.19
+  },
+  "device_ms_chip5": {
+   "t": "2026-10-28T05:41:06",
+   "value": 209.4
+  },
+  "device_ms_chip6": {
+   "t": "2026-10-28T05:41:06",
+   "value": 210.05
+  },
+  "device_ms_chip7": {
+   "t": "2026-10-28T05:41:06",
+   "value": 175.42
+  },
+  "device_ms_chip8": {
+   "t": "2026-10-28T05:41:06",
+   "value": 173.06
+  },
+  "device_ms_chip9": {
+   "t": "2026-10-28T05:41:06",
+   "value": 194.91
+  },
+  "device_ms_compressor": {
+   "t": "2026-10-28T05:41:06",
+   "value": 2.27
+  },
+  "device_ms_engram_add": {
+   "t": "2026-10-28T05:41:06",
+   "value": 0.76
+  },
+  "device_ms_engram_kv": {
+   "t": "2026-10-28T05:41:06",
+   "value": 0.58
+  },
+  "device_ms_engram_rows": {
+   "t": "2026-10-28T05:41:06",
+   "value": 0.0
+  },
+  "device_ms_experts": {
+   "t": "2026-10-28T05:41:06",
+   "value": 104.52
+  },
+  "device_ms_ffn_collapse": {
+   "t": "2026-10-28T05:41:06",
+   "value": 0.0
+  },
+  "device_ms_ffn_hc": {
+   "t": "2026-10-28T05:41:06",
+   "value": 6.06
+  },
+  "device_ms_ffn_norm": {
+   "t": "2026-10-28T05:41:06",
+   "value": 3.55
+  },
+  "device_ms_ffn_residual": {
+   "t": "2026-10-28T05:41:06",
+   "value": 3.75
+  },
+  "device_ms_indexer": {
+   "t": "2026-10-28T05:41:06",
+   "value": 3.51
+  },
+  "device_ms_kv": {
+   "t": "2026-10-28T05:41:06",
+   "value": 0.86
+  },
+  "device_ms_moe_add": {
+   "t": "2026-10-28T05:41:06",
+   "value": 0.0
+  },
+  "device_ms_q_a": {
+   "t": "2026-10-28T05:41:06",
+   "value": 9.17
+  },
+  "device_ms_router": {
+   "t": "2026-10-28T05:41:06",
+   "value": 0.0
+  },
+  "device_ms_shared_expert": {
+   "t": "2026-10-28T05:41:06",
+   "value": 0.0
+  },
+  "device_ms_total": {
+   "t": "2026-10-28T05:41:06",
+   "value": 219.5
+  },
+  "host_overhead_ms": {
+   "t": "2026-10-28T05:41:06",
+   "value": 656.7
+  },
+  "host_transfers_per_layer": {
+   "t": "2026-10-28T05:41:03",
+   "value": 0
+  },
+  "op_layers": {
+   "t": "2026-10-28T05:41:06",
+   "value": 40
+  },
+  "op_rows": {
+   "t": "2026-10-28T05:41:06",
+   "value": 2012
+  },
+  "pcc_chunk_out": {
+   "t": "2026-10-28T05:41:03",
+   "value": NaN
+  },
+  "plain_new_programs": {
+   "t": "2026-10-28T05:41:01",
+   "value": 0
+  },
+  "profiled_new_programs": {
+   "t": "2026-10-28T05:41:05",
+   "value": 0
+  },
+  "profiled_programs": {
+   "t": "2026-10-28T05:41:06",
+   "value": 66464
+  },
+  "profiler_rt": {
+   "t": "2026-10-28T05:41:06",
+   "value": 1
+  },
+  "scaled_run": {
+   "t": "2026-10-28T05:35:01",
+   "value": 0
+  },
+  "timeline_device_timeline_ms": {
+   "t": "2026-10-28T05:41:06",
+   "value": 1089.619
+  },
+  "timeline_gap_ms": {
+   "t": "2026-10-28T05:41:06",
+   "value": 776.13
+  },
+  "timeline_host_dispatch_ms": {
+   "t": "2026-10-28T05:41:06",
+   "value": 730.56
+  },
+  "timeline_host_wall_ms": {
+   "t": "2026-10-28T05:41:06",
+   "value": 1152.239
+  },
+  "timeline_kernel_ms": {
+   "t": "2026-10-28T05:41:06",
+   "value": 149.998
+  },
+  "timeline_ok": {
+   "t": "2026-10-28T05:41:06",
+   "value": 1
+  }
+ },
+ "task": "TBLOCK0"
+}
