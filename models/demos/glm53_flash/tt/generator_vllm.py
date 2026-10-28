@@ -147,7 +147,6 @@ from models.demos.glm53_flash.tt.vllm_config import (
     max_tokens_all_users,
     mm_payload_missing,
     mm_spans_of_row,
-    prefill_buckets,
 )
 
 HF_ARCHITECTURES = ("Glm5NextForConditionalGeneration", "Glm5NextForCausalLM")
@@ -1352,27 +1351,6 @@ class GLM53FlashForCausalLM:
                 out.append(n)
         out.sort()
         return out or [min(128, self.geometry.max_seq_len)]
-
-    def _warmup_bucket_lengths(self, lengths: list[int]) -> list[int]:
-        """The eager chunk buckets (``GLM53_PREFILL_BUCKETS``, ``eager_pad_length``) the listed prompt lengths do not
-        reach, each walked as a prompt of exactly that length into slot 0 after them: every padded chunk shape the
-        eager prefill can run then has its programs compiled and its per-length ttKDA prefill layer built before
-        any trace capture. A program first compiled after a capture allocates its kernel binaries in DRAM under
-        live traces (tt-metal ``allocate_kernel_bin_buf_on_device``), which the next replay can clobber: the (2, 4)
-        block APC run of 2026-10-28 (``128,2048`` warmed buckets 256 / 1024 only) hung on the 512-bucket tail chunk
-        it had first compiled after the capture. Buckets above the device chunk (never an eager chunk shape) or
-        not a multiple of the row unit are skipped."""
-        g = self.geometry
-        unit = TILE * g.rows
-        covered = set()
-        for n in lengths:
-            for s0, e in PrefillPlanner.walk(0, n, g.device_prefill_chunk):
-                covered.add(eager_pad_length(e - s0, unit))
-        out: list[int] = []
-        for b in prefill_buckets():
-            if b % unit == 0 and b <= min(g.device_prefill_chunk, g.max_seq_len) and b not in covered and b not in out:
-                out.append(b)
-        return out
 
     def _warmup_multimodal(self) -> None:
         """One dummy image prompt (16 text + 256 image + 16 text tokens, the 448x448 geometry) through the tower and
