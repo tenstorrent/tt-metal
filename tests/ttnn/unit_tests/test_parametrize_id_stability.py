@@ -43,10 +43,21 @@ def _make_id(request, val, argname="cfg"):
 
 
 def test_parametrize_id_for_default_repr_object_has_no_memory_address(request):
-    """A default-repr object reduces to its type name, the same for every instance."""
+    """A default-repr object keeps its type name without the address, the same for every instance."""
     first, second = _make_id(request, _Opaque()), _make_id(request, _Opaque())
     assert first == second, (first, second)
-    assert "0x" not in first and first.startswith("cfg=<") and first.endswith("_Opaque>"), first
+    assert "0x" not in first and first.startswith("cfg=<") and first.endswith("_Opaque object>"), first
+
+
+def test_parametrize_id_for_local_class_has_no_memory_address(request):
+    """A class defined in a function has a "<locals>" qualname, e.g. "<mod.f.<locals>.C object at 0x...>"."""
+
+    class _Local:
+        pass
+
+    first, second = _make_id(request, _Local()), _make_id(request, _Local())
+    assert first == second, (first, second)
+    assert "0x" not in first and first.endswith(".<locals>._Local object>"), first
 
 
 def test_parametrize_id_for_nested_default_repr_objects_has_no_memory_address(request):
@@ -54,7 +65,7 @@ def test_parametrize_id_for_nested_default_repr_objects_has_no_memory_address(re
     first = _make_id(request, {"router": _Opaque(), "configs": [_Opaque(), 1]}, argname="device_params")
     second = _make_id(request, {"router": _Opaque(), "configs": [_Opaque(), 1]}, argname="device_params")
     assert first == second, (first, second)
-    assert "0x" not in first and first.count("_Opaque>") == 2, first
+    assert "0x" not in first and first.count("_Opaque object>") == 2, first
     assert first.startswith("device_params={'router': <") and first.endswith(", 1]}"), first
 
 

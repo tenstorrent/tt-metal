@@ -3,7 +3,6 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
-import re
 import copy
 import json
 import dataclasses
@@ -16,6 +15,7 @@ from loguru import logger
 import pytest
 
 import ttnn
+from model_tracer.object_addresses import strip_object_addresses
 
 
 def pytest_addoption(parser):
@@ -37,9 +37,9 @@ def pytest_make_parametrize_id(config, val, argname):
     elif isinstance(val, (BuiltinFunctionType, FunctionType)):
         val = val.__name__
     # Default reprs of bound objects, also when nested in a dict or list (e.g. FabricRouterConfig in
-    # device_params, compute kernel configs), embed a per-process memory address. Keep only the type name
-    # so every xdist worker collects the same IDs.
-    return re.sub(r"<([\w.]+) object at 0x[0-9a-fA-F]+>", r"<\1>", f"{argname}={val}")
+    # device_params, compute kernel configs), embed a per-process memory address. Strip it, as the model
+    # tracer does, so every xdist worker collects the same IDs.
+    return strip_object_addresses(f"{argname}={val}")
 
 
 def pytest_collection_modifyitems(config, items):

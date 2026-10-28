@@ -47,6 +47,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+from model_tracer.object_addresses import strip_object_addresses
+
 # =============================================================================
 # Capture parsing
 # =============================================================================
@@ -325,7 +327,7 @@ def parse_argument(text: str):
         # Object repr (compute_kernel_config, mesh mapper) or a host torch tensor:
         # not reconstructible. Strip the heap address, otherwise two identical
         # calls from different layers look like different cases.
-        return {"k": "skip", "repr": re.sub(r" at 0x[0-9a-f]+", "", text)}
+        return {"k": "skip", "repr": strip_object_addresses(text)}
 
     try:
         return {"k": "lit", "v": parse_literal(text)}
