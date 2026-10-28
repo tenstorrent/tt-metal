@@ -21,36 +21,41 @@ void bind_fused_lightning_select_kv(nb::module_& mod) {
         Scores the indexer key cache, keeps the top-k positions, and gathers those
         rows from the paged attention KV cache::
 
-            scores[t] = sum_h ReLU(q_h . key_cache[t]) * w_h
-            indices   = topk_large_indices(scores, k, valid_length_tensor)
-            out       = kv_cache gathered at indices through page_table_tensor
+            scores[j][t] = sum_h ReLU(q_jh . key_cache[t]) * w_jh
+            indices[j]   = topk_large_indices(scores[j], k, valid_length_tensor)
+            out[j]       = kv_cache gathered at indices[j] through page_table_tensor
 
-        Decode only: one user (``B == 1``) and one query token (``Sq == 1``).
+        One user (``B == 1``) and ``Sq`` in [1, 32] query rows, e.g. consecutive positions of
+        a speculative-decode step. Each row has its own position and top-k, exactly as ``Sq``
+        single-row calls would give, but the key cache is read and scored once for all rows,
+        the rows' selects share every cross-core round, and a ``kv_cache`` row selected by
+        several rows is read once.
 
-        ``query`` ``[num_cores, Hi, 1, D]`` and ``head_weights`` ``[num_cores, 1, 1, Hi]``
+        ``query`` ``[num_cores, Sq * Hi, 1, D]`` and ``head_weights`` ``[num_cores, 1, Sq, Hi]``
         are ROW_MAJOR HEIGHT_SHARDED in L1 with one full replica per core (shards
-        ``[Hi, D]`` and ``[1, Hi]``), the ``matmul_decode`` rm_hs layout; the op runs on
-        their shared shard grid. ``key_cache`` is ``[1, 1, T, D]``. ``kv_cache`` is a
-        block pool ``[num_blocks, Hkv, block_size, Dh]`` read through
-        ``page_table_tensor`` ``[1, max_blocks_per_user]`` INT32, the same layout
-        ``paged_scaled_dot_product_attention_decode`` takes. ``cur_pos_tensor`` ``[1]``
-        INT32 is the current (inclusive) position; rows past it are never read. The
-        result is ``[1, Hkv, k, Dh]`` with the dtype and layout of ``kv_cache``, so it
-        can be passed as K and V to SDPA when K == V. Rows are in ascending key order,
-        not score order (SDPA does not depend on key order).
+        ``[Sq * Hi, D]``, row j's heads at shard rows ``[j * Hi, (j + 1) * Hi)``, and
+        ``[Sq, Hi]``), the ``matmul_decode`` rm_hs layout; the op runs on their shared shard
+        grid. ``key_cache`` is ``[1, 1, T, D]``. ``kv_cache`` is a block pool
+        ``[num_blocks, Hkv, block_size, Dh]`` read through ``page_table_tensor``
+        ``[1, max_blocks_per_user]`` INT32, the same layout
+        ``paged_scaled_dot_product_attention_decode`` takes. ``cur_pos_tensor`` ``[Sq]``
+        INT32 holds each row's current (inclusive) position; keys past it are never selected
+        for that row. The result is ``[Sq, Hkv, k, Dh]`` with the dtype and layout of
+        ``kv_cache``, so each row can be passed as K and V to SDPA when K == V. Rows are in
+        ascending key order, not score order (SDPA does not depend on key order).
 
         Args:
-            query (ttnn.Tensor): indexer query, ``[num_cores, Hi, 1, D]`` ROW_MAJOR
-                HEIGHT_SHARDED in L1, one full ``[Hi, D]`` replica per core. The op runs on
-                the query's shard grid.
+            query (ttnn.Tensor): indexer query, ``[num_cores, Sq * Hi, 1, D]`` ROW_MAJOR
+                HEIGHT_SHARDED in L1, one full ``[Sq * Hi, D]`` replica per core. The op runs
+                on the query's shard grid.
             key_cache (ttnn.Tensor): indexer key cache, ``[1, 1, T, D]``.
-            head_weights (ttnn.Tensor): folded head scales, ``[num_cores, 1, 1, Hi]``
+            head_weights (ttnn.Tensor): folded head scales, ``[num_cores, 1, Sq, Hi]``
                 ROW_MAJOR HEIGHT_SHARDED in L1 on the query's shard grid, one full
-                ``[1, Hi]`` replica per core.
+                ``[Sq, Hi]`` replica per core. Its ``Sq`` sets the number of query rows.
             kv_cache (ttnn.Tensor): paged attention KV pool, ``[num_blocks, Hkv, block_size, Dh]``.
             page_table_tensor (ttnn.Tensor): block ids, ``[1, max_blocks_per_user]`` INT32.
-            cur_pos_tensor (ttnn.Tensor): current position, ``[1]`` INT32.
-            k (int): number of selected rows.
+            cur_pos_tensor (ttnn.Tensor): current position of each query row, ``[Sq]`` INT32.
+            k (int): number of selected rows per query row.
 
         Keyword Args:
             valid_length_tensor (Optional[ttnn.Tensor]): 1-element uint32 tensor.
@@ -61,18 +66,20 @@ void bind_fused_lightning_select_kv(nb::module_& mod) {
                 compute settings. Defaults to HiFi4 / fp32 dest acc.
             output_tensor (Optional[ttnn.Tensor]): preallocated kv output
                 ``[1, Hkv, rows, Dh]``, row-major interleaved, same dtype as ``kv_cache``.
-                Only rows ``[output_row_offset, output_row_offset + k)`` are written.
-                ``memory_config`` is ignored when it is given.
-            output_row_offset (int): output row that selected row 0 is written to, e.g.
-                ``sliding_window`` to keep the ring rows in front. Requires ``output_tensor``.
-            new_kv_row (Optional[ttnn.Tensor]): ``[1, 1, 1, Dh]`` row-major row written into
-                ``kv_cache`` at logical row ``new_kv_row_index`` (through the page table)
-                before the gather, so this step's closing entry is selectable.
-            new_kv_row_index (Optional[ttnn.Tensor]): ``[1]`` INT32 logical row of
+                Only query row j's rows ``[output_row_offset + j * output_row_stride, ... + k)``
+                are written. ``memory_config`` is ignored when it is given.
+            output_row_offset (int): output row that query row 0's first selected row is written
+                to, e.g. ``sliding_window`` to keep the ring rows in front. Requires ``output_tensor``.
+            output_row_stride (Optional[int]): output rows between consecutive query rows'
+                selections, default ``k``; at least ``k`` when ``Sq`` > 1.
+            new_kv_row (Optional[ttnn.Tensor]): ``[1, 1, n, Dh]`` row-major rows (1 <= n <= 32)
+                written into ``kv_cache`` at logical rows ``new_kv_row_index`` (through the page
+                table) before the gather, so this step's closing entries are selectable.
+            new_kv_row_index (Optional[ttnn.Tensor]): ``[n]`` INT32 logical rows of
                 ``new_kv_row``. Given together with it.
-            num_keys_tensor (Optional[ttnn.Tensor]): ``[1]`` INT32 number of selectable keys,
-                replacing ``(cur_pos + 1) // 4``. A candidate-pool consumer passes the source's
-                ``pool_count``.
+            num_keys_tensor (Optional[ttnn.Tensor]): ``[Sq]`` INT32 number of selectable keys of
+                each query row, replacing ``(cur_pos + 1) // 4``. A candidate-pool consumer passes
+                the source's ``pool_count``.
             candidate_topk_blocks (int): candidate source mode when > 0 (with
                 ``candidate_block_size``): besides its own top-k, the op scores each block of
                 ``candidate_block_size`` keys by its best key and keeps the
@@ -111,10 +118,10 @@ void bind_fused_lightning_select_kv(nb::module_& mod) {
             selected keys' ``kv_cache`` rows in key order, their order keys, 16 header words
             {keys selected, blocks selected, selectable keys, 0...}, then in candidate source mode
             the selected blocks in ascending order and their order keys. Otherwise ``kv_rows`` is
-            ``[1, Hkv, k, Dh]`` (or
+            ``[Sq, Hkv, k, Dh]`` (or
             ``output_tensor`` when given);
-            ``scores`` is the fp32 ROW_MAJOR index score ``[1, 1, 1, max_blocks_per_user * block_size]``,
-            valid for the first ``(cur_pos + 1) // 4`` keys. ``candidate_blocks`` holds the kept blocks
+            ``scores`` is the fp32 ROW_MAJOR index score ``[1, 1, Sq, max_blocks_per_user * block_size]``,
+            row j valid for its first ``(cur_pos[j] + 1) // 4`` keys. ``candidate_blocks`` holds the kept blocks
             in ascending order (the first ``min(candidate_topk_blocks, number of blocks)`` entries, zero
             after them) and ``pool_count`` the keys they hold.
         )doc",
@@ -132,6 +139,7 @@ void bind_fused_lightning_select_kv(nb::module_& mod) {
         nb::arg("compute_kernel_config") = std::nullopt,
         nb::arg("output_tensor") = std::nullopt,
         nb::arg("output_row_offset") = 0,
+        nb::arg("output_row_stride") = std::nullopt,
         nb::arg("new_kv_row") = std::nullopt,
         nb::arg("new_kv_row_index") = std::nullopt,
         nb::arg("num_keys_tensor") = std::nullopt,

@@ -18,17 +18,22 @@ namespace {
 tt::tt_metal::TensorSpec make_output_spec(
     const Tensor& input_tensor, const tt::tt_metal::CoreRangeSet& output_core_range_set) {
     const auto& logical_shape = input_tensor.logical_shape();
-    const uint32_t logical_height = logical_shape[-2];
     const uint32_t logical_width = logical_shape[-1];
+    // M covers every logical row, including rows spread over leading dims.
+    const uint32_t logical_rows = logical_shape.volume() / logical_width;
     const uint32_t num_output_cores = output_core_range_set.num_cores();
     const DataType output_dtype =
         input_tensor.dtype() == DataType::BFLOAT8_B ? DataType::BFLOAT16 : input_tensor.dtype();
 
+    // Replicas are stacked core-major along dim -2, so leading dims collapse to 1.
     auto output_logical_shape = logical_shape;
-    output_logical_shape[-2] *= num_output_cores;
+    for (int dim = 0; dim < static_cast<int>(output_logical_shape.rank()) - 2; ++dim) {
+        output_logical_shape[dim] = 1;
+    }
+    output_logical_shape[-2] = logical_rows * num_output_cores;
 
     const ShardSpec output_shard_spec{
-        output_core_range_set, {logical_height, logical_width}, ShardOrientation::ROW_MAJOR};
+        output_core_range_set, {logical_rows, logical_width}, ShardOrientation::ROW_MAJOR};
     const MemoryConfig output_memory_config{TensorMemoryLayout::HEIGHT_SHARDED, BufferType::L1, output_shard_spec};
 
     return tt::tt_metal::TensorSpec(

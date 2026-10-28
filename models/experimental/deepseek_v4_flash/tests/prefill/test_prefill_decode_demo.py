@@ -173,7 +173,7 @@ _DEVICE_PARAMS = {
     # semaphores of decode programs recompiled against the rebuilt rings, are allocated after prefill's capture,
     # so in L1 they could sit under prefill's circular buffers and be overwritten by every replay.
     # It comes out of L1, where prefill's widest stage has only ~7 KB to spare.
-    "l1_small_size": int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", "4096")),
+    "l1_small_size": int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", "8192")),
     # Like the prefill demo: only reserve a trace region when asked (the ttnn default otherwise).
     **(
         {"trace_region_size": int(os.environ["DEEPSEEK_V4_TRACE_REGION_SIZE"])}

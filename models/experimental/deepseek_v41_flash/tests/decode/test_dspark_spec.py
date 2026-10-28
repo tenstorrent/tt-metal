@@ -65,7 +65,7 @@ _ENGRAM_RAM_MARGIN = 1.25
             "num_command_queues": 2,
             # As in test_full_model_decode_demo: without L1_SMALL the CCL semaphores and all-reduce scratch land in
             # L1 and cap fused_experts' circular buffers.
-            "l1_small_size": int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", "4096")),
+            "l1_small_size": int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", "8192")),
         }
     ],
     indirect=["device_params"],

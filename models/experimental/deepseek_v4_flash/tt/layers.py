@@ -1637,7 +1637,9 @@ class BatchedLinearDecode(DeepSeekV4Module):
         """``x [d0, d1, M, K]`` with ``d0*d1 == batch`` -> the ``[d0, d1, M, b_blocks*N]`` result.
 
         ``M`` is the per-user row count. A ROW_MAJOR HEIGHT_SHARDED ``[batch * M, K]`` replica is
-        taken as-is; anything else is resharded to WIDTH(K)-sharded L1 over the input-A cores.
+        taken as-is, its rows ordered ``[M][batch]`` (a row-major ``[M, batch * K]``, e.g. ``M``
+        tokens of grouped attention output); anything else is resharded to WIDTH(K)-sharded L1
+        over the input-A cores.
         The output is DRAM-interleaved, or a HEIGHT_SHARDED replica per destination core once
         :meth:`set_output_core_grid` has been called.
         """

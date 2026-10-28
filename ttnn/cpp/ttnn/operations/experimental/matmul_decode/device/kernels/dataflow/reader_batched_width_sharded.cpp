@@ -12,8 +12,9 @@
 
 // Gathers this core's batch-block rows of width(K)-sharded A into full_in0 (sender-major layout).
 //
-// IN0_REPLICATED: A is ROW_MAJOR HEIGHT_SHARDED and already holds the full [batch * M, K] on this
-// core. Copy the [Bc, M, K] slice at b_idx instead of the width-sharded gather.
+// IN0_REPLICATED: A is ROW_MAJOR HEIGHT_SHARDED and already holds the full [M, batch * K] on this
+// core (row m is every batch's K side by side, so M = 1 is also [batch, K]). Copy this core's Bc
+// batches into full_in0 as [Bc][M][K] instead of the width-sharded gather.
 //
 // in1 (weights) arrive one of three ways:
 //   - default: the in1 CB is globally allocated over the L1-resident weight shard, so the
@@ -42,17 +43,18 @@ void kernel_main() {
     constexpr uint32_t num_senders = get_compile_time_arg_val(2);
     constexpr uint32_t in1_page_tiles = get_compile_time_arg_val(3);
     constexpr uint32_t num_k_blocks = get_compile_time_arg_val(4);
-#ifdef USE_CUSTOM_MM
     constexpr uint32_t Bc = get_compile_time_arg_val(5);
     constexpr uint32_t inA_K_tiles_per_core = get_compile_time_arg_val(6);
+    constexpr uint32_t M_tiles = get_compile_time_arg_val(7);
+    constexpr uint32_t batch = get_compile_time_arg_val(8);
     constexpr uint32_t K_tiles = num_senders * inA_K_tiles_per_core;
+    // One in0 tile row of this core's K slice (the whole K on the replicated path).
     constexpr uint32_t k_slice_bytes = inA_K_tiles_per_core * tile_size_bytes;
-#endif
 
     const uint32_t b_idx = get_arg_val<uint32_t>(0);
 #ifdef IN1_FROM_DRAM
     // Runtime args: [b_idx, weight address, weight shard, sender (x, y)...].
-    constexpr auto in1_args = TensorAccessorArgs<7>();
+    constexpr auto in1_args = TensorAccessorArgs<9>();
     constexpr uint32_t sender_arg_base = 3;
 #else
     // Runtime args: [b_idx, sender (x, y)...].
@@ -73,6 +75,9 @@ void kernel_main() {
     experimental::remote_cb_wait_front(remote_cb_index, 1);
     in1_cb.push_back(in1_page_tiles);
 #elif defined(IN1_FROM_DRAM)
+    // TODO: compute waits for the whole slab, so the matmul does not overlap the DRAM read (o_a:
+    // ~85 us read, then the per-row compute on top). Publishing the slab in K-blocks, as the GCB
+    // path does, would hide the compute and make M > 1 cost about what M = 1 does.
     const auto in1 = TensorAccessor(in1_args, get_arg_val<uint32_t>(1), in1_cb.get_tile_size());
     in1_cb.reserve_back(in1_page_tiles);
     noc_async_read_shard(get_arg_val<uint32_t>(2), in1, in1_cb.get_write_ptr());
@@ -85,23 +90,37 @@ void kernel_main() {
     // in0 shard is at the same L1 offset on every core.
     const uint32_t src_addr = in0_cb.get_read_ptr() + b_idx * block_slice_bytes;
 #ifdef IN0_REPLICATED
-    // A is already the full [batch * M, K] replica on this core (ROW_MAJOR, 1x32 faces).
-    // Copy this core's [Bc, M, K] slice; custom_mm and matmul_block both consume it as
-    // [bc][m][k] when inA_K_tiles_per_core is the full K.
-    noc_async_write(src_addr, get_noc_addr(full_in0_cb.get_write_ptr()), block_slice_bytes);
+    // A is already the full [M, batch * K] replica on this core (ROW_MAJOR, 1x32 faces).
+    // custom_mm and matmul_block both consume full_in0 as [bc][m][k] (inA_K_tiles_per_core is
+    // the full K), so a single row is one contiguous copy and several are transposed row by row.
+    if constexpr (M_tiles == 1) {
+        noc_async_write(src_addr, get_noc_addr(full_in0_cb.get_write_ptr()), block_slice_bytes);
+    } else {
+        const uint32_t in0_base = in0_cb.get_read_ptr();
+        const uint32_t dst_base = full_in0_cb.get_write_ptr();
+        for (uint32_t m = 0; m < M_tiles; ++m) {
+            for (uint32_t bc_i = 0; bc_i < Bc; ++bc_i) {
+                const uint32_t src_row = m * batch + b_idx * Bc + bc_i;
+                noc_async_write(
+                    in0_base + src_row * k_slice_bytes,
+                    get_noc_addr(dst_base + (bc_i * M_tiles + m) * k_slice_bytes),
+                    k_slice_bytes);
+            }
+        }
+    }
 #elif defined(USE_CUSTOM_MM)
-    // Restripe sender-major [sender][bc][k_local] into [bc][k_global] so custom_mm sees
-    // kt_dim consecutive K tiles per batch.
+    // Restripe sender-major [sender][bc][m][k_local] into [bc][m][k_global] so custom_mm sees
+    // kt_dim consecutive K tiles per in0 tile row.
     for (uint32_t s = 0; s < num_senders; ++s) {
         const uint32_t sender_x = get_arg_val<uint32_t>(sender_arg_base + 2 * s);
         const uint32_t sender_y = get_arg_val<uint32_t>(sender_arg_base + 1 + 2 * s);
-        for (uint32_t bc_i = 0; bc_i < Bc; ++bc_i) {
+        for (uint32_t row = 0; row < Bc * M_tiles; ++row) {
             noc.async_read(
                 sender,
                 full_in0_cb,
                 k_slice_bytes,
-                {.noc_x = sender_x, .noc_y = sender_y, .addr = src_addr + bc_i * k_slice_bytes},
-                {.offset_bytes = (bc_i * K_tiles + s * inA_K_tiles_per_core) * tile_size_bytes});
+                {.noc_x = sender_x, .noc_y = sender_y, .addr = src_addr + row * k_slice_bytes},
+                {.offset_bytes = (row * K_tiles + s * inA_K_tiles_per_core) * tile_size_bytes});
         }
     }
 #else

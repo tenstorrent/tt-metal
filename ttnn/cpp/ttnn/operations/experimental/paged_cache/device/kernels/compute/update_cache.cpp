@@ -28,6 +28,8 @@ constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) 
 void kernel_main() {
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto num_heads = get_arg(args::num_heads);
+    // One block per head per group slot; the dataflow kernels pad unused slots.
+    constexpr auto num_rows = get_arg(args::num_rows);
 
     // Build each DataflowBuffer once, at kernel scope, and pass it to the helpers by reference. The id-only
     // helper forms build their own buffers, and on Quasar a DataflowBuffer drains when it goes out of scope
@@ -54,7 +56,7 @@ void kernel_main() {
         compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(in, untilized_in, 1);
 #endif
 
-    for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
+    for (uint32_t block = 0; block < num_rows * num_heads; ++block) {
         compute_kernel_lib::untilize<Wt, dfb::cache, dfb::untilized_cache>(cache, untilized_cache, 1);
 
         // Wait on writer to update block, then tilize back

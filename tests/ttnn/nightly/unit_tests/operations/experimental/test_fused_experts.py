@@ -479,7 +479,7 @@ def _ranking_rows(tokens: int, num_experts: int, top_k: int, share: bool):
 # Ranking on one row and weighting with another is the model's bias-corrected case ("biased_ranking");
 # passing one tensor as both is the aliased read, where the row is fetched once and ranked in place.
 @pytest.mark.parametrize("rank_is_weight", (False, True), ids=("biased_ranking", "rank_is_weight"))
-# ROW_MAJOR scores are the single-token decode stick, so they only pair with batch == 1.
+# ROW_MAJOR scores are one decode stick (page) per token.
 @pytest.mark.parametrize("row_major_scores", (False, True), ids=("tile_scores", "rm_decode_scores"))
 def test_fused_experts_ranking_scores(
     device, hidden, intermediate, num_experts, top_k, batch, share_ranking, rank_is_weight, row_major_scores
@@ -494,9 +494,6 @@ def test_fused_experts_ranking_scores(
     The golden is the op's own normalize-and-scale tail over the selected scores, with every hit
     expert evaluated for every token and masked by that token's weight, exactly as in the ids form.
     """
-    if row_major_scores and batch != 1:
-        pytest.skip("ROW_MAJOR scores are the single-token decode path")
-
     torch.manual_seed(0)
     limit = 7.0
     tokens = batch
@@ -674,14 +671,13 @@ def test_fused_experts_ranking_scores_match_topk_ids(
 
 
 def _replicated_row(device, x_row: torch.Tensor, grid: ttnn.CoreRangeSet) -> ttnn.Tensor:
-    """Replicate one ROW_MAJOR token row onto ``grid`` in the layout ``matmul_decode`` consumes in
-    place: L1 HEIGHT_SHARDED, ROW_MAJOR orientation, shard == the whole ``[1, H]`` row.
+    """Replicate ROW_MAJOR token rows onto ``grid`` in the layout ``matmul_decode`` consumes in
+    place: L1 HEIGHT_SHARDED, ROW_MAJOR orientation, shard == the whole ``[B, H]`` block.
 
-    The row starts life on a single core (the only sharded input ``all_gather_for_matmul`` accepts
-    for the multicast path) and is replicated from there.
+    The rows start life on a single core (the only sharded input ``all_gather_for_matmul`` accepts
+    for the multicast path) and are replicated from there.
     """
     height, width = x_row.shape[-2], x_row.shape[-1]
-    assert height == 1, "the replicated ROW_MAJOR path is the single-token 1x32 decode form"
     one_core = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))])
     shard_spec = ttnn.ShardSpec(one_core, (height, width), ttnn.ShardOrientation.ROW_MAJOR)
     memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
@@ -811,6 +807,117 @@ def _gather_reference(x_dev, scores_dev, ids, gate_up, down, intermediate, limit
         act = _swiglu((x_dev @ gate_up[e]).reshape(tokens, 2 * intermediate), intermediate, limit)
         ref = ref + weights[:, e : e + 1] * (act @ down[e])
     return ref, hit_ids
+
+
+def _compute_grid(hidden: int, intermediate: int, num_active: int) -> ttnn.CoreRangeSet:
+    """The cores ``fused_experts`` computes on, which a replicated input has to cover: 12x8 (12x9 when
+    I/32 does not split over 16 gate_up cores) on the 6-expert path, else H/512 columns of 8."""
+    if num_active == 6:
+        cols, rows = 12, 8 if (intermediate // TILE) % 16 == 0 else 9
+    else:
+        cols, rows = hidden // (DOWN_SHARD_COLS * FUSED_EXPERTS_GRID), FUSED_EXPERTS_GRID
+    return ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cols - 1, rows - 1))])
+
+
+# V4's expert shape, and the V4.1 DSpark drafter's at TP4 (D = 5120, I = 2560 / 4 = 640), whose block
+# is 5 rows of top-3 routing.
+@pytest.mark.parametrize(
+    "hidden, intermediate, num_experts, top_k",
+    [(4096, 2048, 16, 3), (5120, 640, 16, 3)],
+    ids=("v4", "v41_dspark_tp4"),
+)
+@pytest.mark.parametrize("tokens", (2, 5, 8), ids=lambda t: f"rows{t}")
+@pytest.mark.parametrize("share_ranking", (True, False), ids=("shared_ranking", "disjoint_ranking"))
+@pytest.mark.parametrize("source", ("dram", "replicated"))
+@pytest.mark.parametrize("row_major_scores", (False, True), ids=("tile_scores", "rm_scores"))
+def test_fused_experts_row_major_rows(
+    device, hidden, intermediate, num_experts, top_k, tokens, share_ranking, source, row_major_scores
+):
+    """Several ROW_MAJOR token rows in one call, as the DSpark drafter's 5-row block uses it.
+
+    Each core's writer restripes the rows into one ``bit_ceil(B)``-row tile row -- read from DRAM through
+    a staging buffer, or in place from an L1 replica -- and scatters the result back into a ROW_MAJOR
+    ``[1, B, H]`` output. ``num_experts`` is the union's bound ``B * top_k``, as the drafter passes it, so
+    the shared-ranking cases also run redundant zero-weight slots. The result must match the same rows
+    given as a 32x32 TILE input and the torch golden.
+    """
+    num_active = min(tokens * top_k, num_experts)
+    if num_active == 6 and (intermediate // TILE) % 16 != 0 and (intermediate // TILE) % 18 != 0:
+        pytest.skip("the 6-expert path needs I/32 to split over its 16 or 18 gate_up cores per expert")
+    torch.manual_seed(0)
+    limit = 7.0
+    scaling = 2.5
+    eps = 1e-20
+
+    ranking, _, expected_hit_ids = _ranking_rows(tokens, num_experts, top_k, share_ranking)
+    weight_scores = torch.rand((tokens, num_experts), dtype=torch.bfloat16).float() + 0.25
+    x = (torch.rand((1, 1, tokens, hidden), dtype=torch.bfloat16) - 0.5).float()
+
+    scores_layout = ttnn.ROW_MAJOR_LAYOUT if row_major_scores else ttnn.TILE_LAYOUT
+
+    def to_scores_tt(host):
+        return ttnn.from_torch(
+            host.reshape(1, 1, tokens, num_experts),
+            dtype=ttnn.bfloat16,
+            device=device,
+            layout=scores_layout,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    rank_tt = to_scores_tt(ranking)
+    scores_tt = to_scores_tt(weight_scores)
+    gate_up, down, gate_up_tt, down_tt = _expert_weights(device, hidden, intermediate, num_experts)
+
+    def run(x_tt):
+        return ttnn.experimental.deepseek.moe.fused_experts(
+            x_tt,
+            routing_scores=scores_tt,
+            ranking_scores=rank_tt,
+            gate_up_weights=gate_up_tt,
+            down_weights=down_tt,
+            num_experts=num_active,
+            intermediate_size=intermediate,
+            swiglu_limit=limit,
+            top_k=top_k,
+            routed_scaling_factor=scaling,
+            routing_eps=eps,
+            experts_block_size=2,
+        )
+
+    if source == "dram":
+        x_rm = ttnn.from_torch(
+            x, dtype=ttnn.bfloat16, device=device, layout=ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+    else:
+        x_rm = _replicated_row(device, x, _compute_grid(hidden, intermediate, num_active))
+        assert tuple(x_rm.memory_config().shard_spec.shape) == (tokens, hidden)
+    out_rm = run(x_rm)
+    assert out_rm.layout == ttnn.ROW_MAJOR_LAYOUT
+    assert list(out_rm.shape) == [1, tokens, hidden], f"unexpected output shape {out_rm.shape}"
+    got_rm = ttnn.to_torch(out_rm).float().reshape(tokens, hidden)
+
+    x_tile = ttnn.from_torch(
+        x, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    got_tile = ttnn.to_torch(run(x_tile)).float().reshape(tokens, hidden)
+    passing, pcc_msg = comp_pcc(got_tile, got_rm, pcc=0.999)
+    assert passing, f"ROW_MAJOR rows differ from the TILE input: {pcc_msg} | {comp_allclose(got_tile, got_rm)}"
+
+    ids = torch.topk(ttnn.to_torch(rank_tt).float().reshape(tokens, num_experts), top_k, dim=-1).indices
+    ref, hit_ids = _gather_reference(
+        x.reshape(tokens, hidden),
+        ttnn.to_torch(scores_tt).float().reshape(tokens, num_experts),
+        ids,
+        gate_up,
+        down,
+        intermediate,
+        limit,
+        scaling,
+        eps,
+    )
+    assert hit_ids == expected_hit_ids, "the ranking rows must be tie-free"
+    passing, pcc_msg = comp_pcc(ref, got_rm, pcc=0.98)
+    assert passing, f"ROW_MAJOR rows vs torch golden: {pcc_msg} | {comp_allclose(ref, got_rm)}"
 
 
 def _run_both_gather_shapes(device, hidden, intermediate, num_experts, top_k, experts_block_size):

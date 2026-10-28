@@ -127,7 +127,11 @@ void kernel_main() {
     const ActGatherConfig gather{hub_role, hub0_noc_x, hub0_noc_y, hub1_noc_x, hub1_noc_y, split_col, num_hubs};
 
     // Activation: publish it to the compute kernel.
-#ifdef INPUT_REPLICATED
+#if defined(INPUT_RM_ROWS)
+    // Several ROW_MAJOR rows: this core's writer restripes them into cb_input and publishes it.
+    (void)sem_input_id;
+    (void)cb_input_id;
+#elif defined(INPUT_REPLICATED)
     // Already in this core's L1 as a ROW_MAJOR HEIGHT_SHARDED replica, with cb_input aliased over
     // its shard -- nothing was broadcast, so there is nothing to wait for.
     publish_input(cb_input_id, k_tiles);
