@@ -198,6 +198,27 @@ def test_layer_default_call_is_unchanged(monkeypatch):
     assert "kv_only" not in lay.attention.kw and out is not None
 
 
+def test_layer_kv_only_never_leaves_a_residual_armed(monkeypatch):
+    """QWEN36_MTP_KV_ONLY x QWEN36_DECODE_AR_FUSE_RESIDUAL: the kv_only return skips the residual add, so the layer
+    must not arm the decode all-reduce's residual (and disarms on the way out)."""
+    from models.demos.blackhole.qwen36.tt import tp_common as tpc
+
+    monkeypatch.setattr(ttnn, "deallocate", lambda *a, **k: None)
+    dar = tpc.DecodeResidualAllReduce.__new__(tpc.DecodeResidualAllReduce)
+    dar.fuse_residual, dar._fused_out = True, None
+    dar._armed = _Sym("stale")  # left over from an earlier forward: the kv_only exit must clear it
+    armed = []
+    dar.rms_norm = lambda x, norm: _Sym("attn_in")
+    dar.arm_residual = lambda x: armed.append(x)
+    lay = _layer()
+    lay._decode_ar = dar
+    lay.attention_norm = types.SimpleNamespace(norm=None)
+    x = _Sym("x", (1, 1, 32, 5120))  # last dim == args.dim: the replicated-residual (_dar) path
+    assert lay.forward(x, mode="decode", position_tensor="p", page_table="pt", kv_only=True) is None
+    assert armed == [] and dar._armed is None and dar._fused_out is None
+    assert lay.attention.kw["decode_ar"] is dar and lay.attention.kw["kv_only"] is True
+
+
 @pytest.mark.parametrize("full_attention, nd, mode", [(False, 8, "decode"), (True, 1, "decode"), (True, 8, "prefill")])
 def test_layer_kv_only_refuses_unsupported(monkeypatch, full_attention, nd, mode):
     monkeypatch.setattr(ttnn, "deallocate", lambda *a, **k: None)

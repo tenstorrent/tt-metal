@@ -258,7 +258,8 @@ class Qwen36DecoderLayer:
             )
         if _dar is not None:
             attn_input = _dar.rms_norm(x, self.attention_norm.norm)
-            _dar.arm_residual(x)  # QWEN36_DECODE_AR_FUSE_RESIDUAL=1: the out-proj all_reduce adds x (no-op off)
+            if not kv_only:  # kv_only returns before the residual add: nothing may consume an armed residual
+                _dar.arm_residual(x)  # QWEN36_DECODE_AR_FUSE_RESIDUAL=1: the out-proj all_reduce adds x (no-op off)
         else:
             attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
 
@@ -358,6 +359,8 @@ class Qwen36DecoderLayer:
         ttnn.deallocate(attn_input)
         if kv_only:
             # The KV write is the whole effect; the residual, ffn_norm and MLP only fed an output nobody reads.
+            if _dar is not None:
+                _dar.disarm()  # QWEN36_MTP_KV_ONLY x QWEN36_DECODE_AR_FUSE_RESIDUAL: no armed residual outlives this
             return None
 
         h = _dar.add_residual(x, attn_output) if _dar is not None else ttnn.add(x, attn_output)

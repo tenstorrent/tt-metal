@@ -1545,6 +1545,12 @@ class DecodeResidualAllReduce:
         self._armed = x if self.fuse_residual else None
         self._fused_out = None
 
+    def disarm(self):
+        """Drop any armed residual and fused output (a forward that returns before its add_residual, e.g. the
+        MTP kv_only path). No-op when nothing is armed, so always safe with QWEN36_DECODE_AR_FUSE_RESIDUAL=0."""
+        self._armed = None
+        self._fused_out = None
+
     def add_residual(self, x, out):
         """Residual add after an armed module: `out` itself when the all_reduce that produced it already added `x`
         (fused), else add(x, out). Disarms. Callers must not deallocate `out` when the result `is out`."""
