@@ -202,6 +202,11 @@ stream (0.99944). No effect: raising the power limit (the card stays at 150 W).
 * WO with bf16 DST (fp32 partial sums in L1): 147.28 -> 147.20 M cycles, MIRACL batch 32 Pearson 0.99952 (from
   0.99956), batch 8 0.99966: not kept for a 0.05 % gain. Larger M blocks for WO / FF2 (minimal_matmul's best WO
   block is M 8: 506 us bare) do not fit next to the resident residual's 573 KB shard.
+* A virtual 16 x 8 core grid for WO / FF2 (128 cores wired by explicit core lists, 8 columns per core instead of
+  7 over 10 rows, padding 11 % -> 1.6 %): output correct, but WO 893-1478 us and FF2 1657-2374 us against 575 /
+  1116 us. A virtual 13 x 10 grid matches the physical one (580 us), and 13 x 8 costs only its extra work
+  (638 us); 16 x 8 needs 3 row blocks in the 2 leftover physical rows, and those cores run ~40 % slower than
+  the 13 column groups (per-core kernel ends 1.18 M vs 0.85 M cycles), which sets the op's time.
 * bs1 (34 %): the matmuls at 512 rows run at 27-52 % of their limit; FF2 at LoFi is bound by its weight read.
   DRAM-sharded weights are the next step. 1 x 128 / 1 x 512 read ~0.3 ms slower than in the previous README
   (5.97 / 7.50 ms), not yet traced to a change.
