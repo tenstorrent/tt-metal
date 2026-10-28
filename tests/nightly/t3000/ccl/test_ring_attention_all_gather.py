@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import time
+
 import torch
 import pytest
 from loguru import logger
@@ -553,3 +555,122 @@ def test_ring_attention_all_gather_semaphore_realloc_cache_hit(
 
     # Exactly one cache entry created across all dispatches → iterations 1+ were genuine cache HITs.
     assert submesh_device.cache_entries_counter.total == 1
+
+
+def _read_semaphores(mesh_device, sems, cores):
+    """Every core's value of every semaphore in ``sems``, on every device of the mesh."""
+    values = {}
+    for sem_idx, sem in enumerate(sems):
+        addr = ttnn.get_global_semaphore_address(sem)
+        for row in range(mesh_device.shape[0]):
+            for col in range(mesh_device.shape[1]):
+                coord = ttnn.MeshCoordinate(row, col)
+                for core in ttnn.corerange_to_cores(cores, row_wise=True):
+                    word = ttnn.experimental.reload.read_core_l1(mesh_device, core, addr, 4, coord)
+                    values[(sem_idx, row, col, core.x, core.y)] = list(word)[0]
+    return values
+
+
+def _semaphores_settle_to(mesh_device, sems, cores, expected, tries=20):
+    """Polls until every semaphore reads ``expected``; returns the cores that never did."""
+    off = {}
+    for _ in range(tries):
+        off = {k: v for k, v in _read_semaphores(mesh_device, sems, cores).items() if v != expected}
+        if not off:
+            return off
+        time.sleep(0.05)
+    return off
+
+
+@pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True)
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 90112}, ttnn.Topology.Linear),
+    ],
+    ids=["line"],
+    indirect=["device_params"],
+)
+def test_ring_attention_all_gather_semaphore_credit_accounting(mesh_device, all_gather_topology):
+    """
+    The reader ends each launch by subtracting the out_ready credits it waited for, not by zeroing
+    the semaphore. Credits a later launch has already received must survive that cleanup.
+
+    Phase A: three launches back to back on one semaphore set. Each launch must consume exactly the
+    credits its writers sent, so every semaphore core reads 0 afterwards and every output is correct.
+    Any drift (a path that waits for fewer or more credits than it subtracts) leaves a non-zero value.
+
+    Phase B: both semaphores are preloaded with EXTRA credits, standing in for a later launch's
+    increments that land before this launch's cleanup. After one launch every core must still read
+    EXTRA. The old cleanup (noc_semaphore_set to 0) wipes them and the reader cores read 0. The
+    preloaded credits let the reader run ahead of the data, so phase B checks counts only, not output.
+    """
+    rp_axis, rp_factor, up_factor = 1, 4, 1
+    ag_output_shape = [1, 5, 4096, 64]
+    sequence_index = 2
+    extra = 7
+    dram = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+    submesh = create_ring_attention_submesh(mesh_device, rp_axis, rp_factor, up_factor)
+    grid = submesh.compute_with_storage_grid_size()
+    cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - 1))})
+    worker_sub_device_id = ttnn.SubDeviceId(0)
+    stall_group = [worker_sub_device_id]
+    sub_device_manager = submesh.create_sub_device_manager([ttnn.SubDevice([cores])], 0)
+    submesh.load_sub_device_manager(sub_device_manager)
+    submesh.set_sub_device_stall_group(stall_group)
+
+    sems = create_global_semaphores(submesh, cores, 0)
+    input_dims = [None, None]
+    input_dims[rp_axis] = sequence_index
+
+    def launch(torch_input):
+        tt_input = ttnn.from_torch(
+            torch_input,
+            device=submesh,
+            layout=ttnn.TILE_LAYOUT,
+            dtype=ttnn.bfloat16,
+            mesh_mapper=ttnn.ShardTensor2dMesh(submesh, mesh_shape=tuple(submesh.shape), dims=input_dims),
+            memory_config=dram,
+        )
+        out_bufs = create_persistent_buffers(ag_output_shape, 1, submesh, ttnn.bfloat16, dram, rp_axis)
+        outs = ttnn.experimental.ring_attention_all_gather_async(
+            [tt_input],
+            persistent_output_buffer=out_bufs,
+            dim=sequence_index,
+            multi_device_global_semaphore=sems,
+            cluster_axis=rp_axis,
+            mesh_device=submesh,
+            num_links=1,
+            memory_config=dram,
+            topology=all_gather_topology,
+            subdevice_id=worker_sub_device_id,
+        )
+        return outs[0]
+
+    # Phase A: back-to-back launches on one semaphore set.
+    seq_per_device = ag_output_shape[sequence_index] // rp_factor
+    for i in range(3):
+        torch_input = torch.rand(ag_output_shape).bfloat16()
+        out = launch(torch_input)
+        ttnn.synchronize_device(submesh, sub_device_ids=stall_group)
+        for dev_idx, dev_out in enumerate(ttnn.get_device_tensors(out)):
+            # The gather does not write a device's own slice, so compare everything else.
+            got, want = ttnn.to_torch(dev_out).clone(), torch_input.clone()
+            torch.narrow(got, sequence_index, dev_idx * seq_per_device, seq_per_device).zero_()
+            torch.narrow(want, sequence_index, dev_idx * seq_per_device, seq_per_device).zero_()
+            eq, msg = comp_equal(got, want)
+            assert eq, f"launch {i}, device {dev_idx}: {msg}"
+        off = _semaphores_settle_to(submesh, sems, cores, 0)
+        assert not off, f"launch {i}: credits left over or missing (sem, row, col, x, y -> value): {off}"
+
+    # Phase B: credits already on the semaphore before the launch must survive its cleanup.
+    for sem in sems:
+        ttnn.reset_global_semaphore_value(sem, extra)
+    launch(torch.rand(ag_output_shape).bfloat16())
+    ttnn.synchronize_device(submesh, sub_device_ids=stall_group)
+    off = _semaphores_settle_to(submesh, sems, cores, extra)
+    assert not off, f"preloaded credits ({extra}) not kept (sem, row, col, x, y -> value): {off}"
+
+    submesh.reset_sub_device_stall_group()
+    submesh.clear_loaded_sub_device_manager()
