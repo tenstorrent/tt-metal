@@ -16,9 +16,12 @@ import pytest
 import torch
 import ttnn
 
+from models.experimental.flowstate_forecast.tests.perf.check_gates import session_stamp
 from models.experimental.flowstate_forecast.tests.perf.sweep_matmul import _time
 from models.experimental.flowstate_forecast.tt import common
 from models.experimental.flowstate_forecast.tt.common import policy, swiglu_interleave
+
+STAMP = session_stamp()  # v1.23: taken at import, the session start (D5 item 5)
 
 M = 4096 * 64
 K, N = 512, 1024
@@ -30,7 +33,11 @@ def configs():
         if mb % sh or nb % sw or (K // 32) % kb:
             continue
         yield f"m{mb}_k{kb}_n{nb}_sb{sh}x{sw}", ttnn.MinimalMatmulConfig(
-            M_block_size=mb, K_block_size=kb, N_block_size=nb, subblock_h=sh, subblock_w=sw,
+            M_block_size=mb,
+            K_block_size=kb,
+            N_block_size=nb,
+            subblock_h=sh,
+            subblock_w=sw,
             compute_with_storage_grid_size=(11, 10),
         )
 
@@ -48,10 +55,22 @@ def test_sweep_swiglu(device, precision):
     w12, b12 = put(swiglu_interleave(w1, w2), wd), put(swiglu_interleave(b1, b2), wd)
 
     def base():
-        x = ttnn.linear(a, tw1, bias=tb1, program_config=common.mm_config(device, "w1", precision, M, K, N, "silu"),
-                        compute_kernel_config=p.dense, memory_config=p.mem)
-        y = ttnn.linear(a, tw2, bias=tb2, program_config=common.mm_config(device, "w2", precision, M, K, N),
-                        compute_kernel_config=p.dense, memory_config=p.mem)
+        x = ttnn.linear(
+            a,
+            tw1,
+            bias=tb1,
+            program_config=common.mm_config(device, "w1", precision, M, K, N, "silu"),
+            compute_kernel_config=p.dense,
+            memory_config=p.mem,
+        )
+        y = ttnn.linear(
+            a,
+            tw2,
+            bias=tb2,
+            program_config=common.mm_config(device, "w2", precision, M, K, N),
+            compute_kernel_config=p.dense,
+            memory_config=p.mem,
+        )
         out = ttnn.multiply(x, y)
         ttnn.deallocate(x)
         ttnn.deallocate(y)
@@ -65,8 +84,14 @@ def test_sweep_swiglu(device, precision):
 
         def fn():
             return ttnn.experimental.minimal_matmul(
-                a, w12, bias_tensor=b12, config=cfg, compute_kernel_config=p.dense, dtype=ttnn.bfloat16,
-                memory_config=p.mem, fuse_swiglu=True,
+                a,
+                w12,
+                bias_tensor=b12,
+                config=cfg,
+                compute_kernel_config=p.dense,
+                dtype=ttnn.bfloat16,
+                memory_config=p.mem,
+                fuse_swiglu=True,
             )
 
         fn.device = device
@@ -84,4 +109,4 @@ def test_sweep_swiglu(device, precision):
     print(f"BEST swiglu {precision} {best['config']} {best['ms']:.3f} ms vs r1_1 {ok[0]['ms']:.3f}")
     if path := os.environ.get("FLOWSTATE_SWEEP_JSON"):
         with open(path, "a") as f:
-            f.write(json.dumps({"role": "swiglu", "precision": precision, "rows": rows}) + "\n")
+            f.write(json.dumps({"role": "swiglu", "precision": precision, "rows": rows, **STAMP}) + "\n")
