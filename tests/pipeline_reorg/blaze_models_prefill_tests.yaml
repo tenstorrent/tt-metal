@@ -2069,9 +2069,19 @@
       cp -rn /ci/tt-metal/. "${TT_METAL_HOME}/"
     fi
     cd "${TT_METAL_HOME}"
+    # DO NOT MERGE -- hang-injection experiment for the prefill stage hang watcher. TT_-prefixed, so
+    # tt-run passes them to the rank. Wedges the moe_padding_config writer on device (0,0) of rank 0
+    # once a chunk's actual_start reaches 102400 tokens: the 21st chunk of the 256k request, after
+    # the 10 warm-up chunks (actual_start 0..46080) and 20 real ones. The watcher should convict
+    # stage 0 about 30 s later and run the command, which ends the producer so the script cleans up.
+    export TT_INJECT_MOE_HANG_POS=102400
+    export TT_INJECT_MOE_HANG_RANK=0
+    export TT_PREFILL_STAGE_HANG_DETECTION_ENABLED=1
+    export TT_PREFILL_STAGE_HANG_COMMAND_TO_EXECUTE="bash ${TT_METAL_HOME}/models/demos/common/prefill/runners/ci/hang_watcher_test_command.sh"
     exec bash models/demos/common/prefill/runners/ci/run_multirank_pcc.sh kimi27 sc1
   test_type: prefill_runner_kv_pcc
-  test_tags: [kimi_k2_7, runner, kv_cache]
+  # DO NOT MERGE -- `hang_injection` is a unique selector: `test-type: hang_injection` dispatches only this leg.
+  test_tags: [kimi_k2_7, runner, kv_cache, hang_injection]
   test_group: disagg_prefill
   skus:
     bh_sc1_high_power:
