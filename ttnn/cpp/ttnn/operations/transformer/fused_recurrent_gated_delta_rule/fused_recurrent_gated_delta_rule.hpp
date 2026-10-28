@@ -10,6 +10,8 @@
 #include "ttnn/types.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
+#include "fused_recurrent_gated_delta_rule_config.hpp"
+
 namespace ttnn::transformer {
 
 /**
@@ -34,6 +36,9 @@ namespace ttnn::transformer {
  *
  * "Ring" mode (initial_state_block_idx): in-place per-head initial-state select; see the Python binding for the
  * contract.
+ *
+ * program_config pins the geometry (V-slices per head, units per core); absent, the op chooses. This build runs one
+ * whole head per core and accepts only the defaults; see fused_recurrent_gated_delta_rule_config.hpp.
  */
 std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delta_rule(
     const ttnn::Tensor& q,
@@ -48,6 +53,7 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     bool output_per_token_state = false,
     bool use_qk_l2norm = false,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+    const std::optional<FusedRecurrentGdnProgramConfig>& program_config = std::nullopt);
 
 }  // namespace ttnn::transformer

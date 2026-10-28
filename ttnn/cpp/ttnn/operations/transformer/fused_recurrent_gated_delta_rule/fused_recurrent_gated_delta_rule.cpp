@@ -20,6 +20,10 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/device.hpp"
 
+#include <fmt/format.h>
+
+#include <string>
+
 using namespace tt::tt_metal;
 
 namespace ttnn::transformer {
@@ -51,6 +55,17 @@ ttnn::Tensor reshape_rm(const ttnn::Tensor& x, const ttnn::Shape& shape) {
     return ttnn::to_layout(t, Layout::TILE);
 }
 
+// Stage-gated rejection: the signature accepts the argument, this build cannot serve it. One message shape for
+// every such case, so a caller can read which stage of the v2 plan brings the feature.
+void not_in_this_build(const std::string& feature, const char* stage, const char* what) {
+    TT_FATAL(
+        false,
+        "fused_recurrent_gated_delta_rule: {} is not implemented in this build; the v2 plan brings it in stage {} ({})",
+        feature,
+        stage,
+        what);
+}
+
 }  // namespace
 
 std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delta_rule(
@@ -66,7 +81,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     bool output_per_token_state,
     bool use_qk_l2norm,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
+    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
+    const std::optional<FusedRecurrentGdnProgramConfig>& program_config) {
     TT_FATAL(!use_qk_l2norm, "fused_recurrent_gated_delta_rule: use_qk_l2norm not done here; L2-normalize q/k on host");
 
     auto* dev = q_in.device();
@@ -81,6 +97,31 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     TT_FATAL(HV % H == 0, "HV ({}) must be divisible by H ({})", HV, H);
     const uint32_t G = HV / H;
     const uint32_t BH = B * HV;
+
+    // Geometry (program_config): one whole head per core in this build, so only the defaults pass.
+    const uint32_t num_slices = program_config.has_value() ? program_config->num_slices.value_or(1u) : 1u;
+    const uint32_t units_per_core = program_config.has_value() ? program_config->units_per_core.value_or(1u) : 1u;
+    TT_FATAL(
+        num_slices == 1 || num_slices == 2 || num_slices == 4,
+        "fused_recurrent_gated_delta_rule: program_config.num_slices must be 1, 2 or 4, got {}",
+        num_slices);
+    TT_FATAL(
+        units_per_core >= 1,
+        "fused_recurrent_gated_delta_rule: program_config.units_per_core must be at least 1, got {}",
+        units_per_core);
+    if (num_slices != 1 || units_per_core != 1) {
+        not_in_this_build(
+            "a program_config geometry other than one whole head per core",
+            "2",
+            "V-split units and units looped per core, chosen by a cost model");
+    }
+    const CoreCoord grid = dev->compute_with_storage_grid_size();
+    if (BH > grid.x * grid.y) {
+        not_in_this_build(
+            fmt::format("B*HV = {} above the {} compute cores (one core per head)", BH, grid.x * grid.y),
+            "2",
+            "V-split units and units looped per core, chosen by a cost model");
+    }
 
     const float scale = scale_opt.has_value() ? *scale_opt : (1.0f / std::sqrt(static_cast<float>(K)));
 
@@ -153,8 +194,8 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
         HV,
         H,
         T,
-        /*num_slices=*/1,
-        /*units_per_core=*/1,
+        num_slices,
+        units_per_core,
         want_state && !output_per_token_state,
         output_per_token_state,
         out_mem,

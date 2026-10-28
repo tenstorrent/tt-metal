@@ -632,9 +632,11 @@ from ttnn.operations.transformer import (
     ChunkGdnPhasedProgramConfig,
     ChunkGdnFusedProgramConfig,
     ChunkGdnWyInverse,
+    FusedRecurrentGdnProgramConfig,
 )
 
 transformer.SparseKVFormat = SparseKVFormat
+transformer.FusedRecurrentGdnProgramConfig = FusedRecurrentGdnProgramConfig
 
 QkvCausalConv1dSiluProgramConfig = ttnn._ttnn.operations.experimental.kda.QkvCausalConv1dSiluProgramConfig
 

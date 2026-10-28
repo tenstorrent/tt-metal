@@ -3,15 +3,47 @@
 
 #include "fused_recurrent_gated_delta_rule_nanobind.hpp"
 #include "fused_recurrent_gated_delta_rule.hpp"
+#include "fused_recurrent_gated_delta_rule_config.hpp"
 
 #include "ttnn-nanobind/bind_function.hpp"
 
+#include <fmt/format.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/tuple.h>
+
+#include <string>
 
 namespace ttnn::operations::transformer {
 
 void bind_fused_recurrent_gated_delta_rule(nb::module_& mod) {
+    using ttnn::transformer::FusedRecurrentGdnProgramConfig;
+    auto py_opt = [](const std::optional<uint32_t>& v) { return v ? std::to_string(*v) : std::string("None"); };
+
+    nb::class_<FusedRecurrentGdnProgramConfig>(
+        mod,
+        "FusedRecurrentGdnProgramConfig",
+        R"doc(Geometry of ttnn.transformer.fused_recurrent_gated_delta_rule: how the (batch, value head) work is cut
+        into units and placed on the grid. A field left None is chosen by the op. This build runs one whole head
+        per core and accepts only the defaults; stage 2 of the v2 plan fills them from a cost model and accepts
+        the rest.
+
+        Keyword Args:
+            num_slices (int, optional): NV, the V-slices per head: 1, 2 or 4 (V / 32 / NV tile columns per unit).
+            units_per_core (int, optional): units (b, hv, V-slice) looped per core.)doc")
+        .def(
+            nb::init<std::optional<uint32_t>, std::optional<uint32_t>>(),
+            nb::kw_only(),
+            nb::arg("num_slices") = nb::none(),
+            nb::arg("units_per_core") = nb::none())
+        .def_rw("num_slices", &FusedRecurrentGdnProgramConfig::num_slices)
+        .def_rw("units_per_core", &FusedRecurrentGdnProgramConfig::units_per_core)
+        .def("__repr__", [py_opt](const FusedRecurrentGdnProgramConfig& c) {
+            return fmt::format(
+                "FusedRecurrentGdnProgramConfig(num_slices={}, units_per_core={})",
+                py_opt(c.num_slices),
+                py_opt(c.units_per_core));
+        });
+
     const auto* doc =
         R"doc(
         Fused recurrent Gated Delta Rule forward (flash-linear-attention algorithm).
@@ -46,6 +78,8 @@ void bind_fused_recurrent_gated_delta_rule(nb::module_& mod) {
             use_qk_l2norm (bool): must be False (L2-norm is done on host).
             memory_config (ttnn.MemoryConfig, optional).
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
+            program_config (ttnn.transformer.FusedRecurrentGdnProgramConfig, optional): the geometry; absent, the
+                op chooses. This build accepts only the defaults (one whole head per core).
 
         Returns:
             tuple[ttnn.Tensor, Optional[ttnn.Tensor]]:
@@ -70,7 +104,8 @@ void bind_fused_recurrent_gated_delta_rule(nb::module_& mod) {
         nb::arg("output_per_token_state") = false,
         nb::arg("use_qk_l2norm") = false,
         nb::arg("memory_config") = nb::none(),
-        nb::arg("compute_kernel_config") = nb::none());
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("program_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::transformer
