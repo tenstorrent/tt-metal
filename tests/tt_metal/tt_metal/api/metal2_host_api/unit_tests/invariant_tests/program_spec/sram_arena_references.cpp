@@ -35,12 +35,14 @@ TEST_F(ProgramSpecTestQuasar, SRAMArenaDFBUndeclaredName) {
                 .per_bank_size = 2 * alignment,
             },
     }};
-    spec.dataflow_buffers[0].borrowed_from = SRAMArenaParamName{"missing"};
+    spec.dataflow_buffers[0].borrowed_from.reset();
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"missing"}};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("DFB 'dfb' borrows memory from unknown SRAMArenaParameter 'missing'.")));
+            ::testing::HasSubstr("DFB 'dfb' allocates from unknown SRAMArenaParameter 'missing'.")));
 }
 
 TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadUndeclaredName) {
@@ -56,15 +58,15 @@ TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadUndeclaredName) {
             },
     }};
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 2 * alignment}};
-    spec.scratchpads[0].advanced_options.borrowed_from =
-        ScratchpadAdvancedOptions::SRAMArenaBorrowing{.allocation = SRAMArenaParamName{"missing"}, .offset = 0};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"missing"}, .offset = 0};
     spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
-        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(
-            "ScratchpadSpec 'scratch' borrows memory from unknown SRAMArenaParameter 'missing'.")));
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("ScratchpadSpec 'scratch' allocates from unknown SRAMArenaParameter 'missing'.")));
 }
 
 }  // namespace

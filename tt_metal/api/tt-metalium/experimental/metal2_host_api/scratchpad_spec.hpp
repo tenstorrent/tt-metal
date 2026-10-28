@@ -36,8 +36,8 @@ namespace tt::tt_metal::experimental {
 //
 // LIFETIME: Program-scope. The backing memory is allocated for the Program's
 //   execution lifetime, alongside DFBs (and from the same region of SRAM).
-//   (Advanced users may instead place a scratchpad in a user-managed SRAMArena;
-//   see ScratchpadAdvancedOptions.)
+//   Advanced users may override storage allocation through
+//   ScratchpadAdvancedOptions::allocation_override.
 //
 // INSTANCING: Like KernelSpec, a ScratchpadSpec is a *per-node template*. One
 //   independent scratchpad instance is allocated per node where its bound kernel

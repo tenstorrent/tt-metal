@@ -36,7 +36,7 @@ void ValidateScratchpadSpec(
             arch);
     }
 
-    if (const auto& borrowing = scratchpad.advanced_options.borrowed_from) {
+    if (const auto& allocation = scratchpad.advanced_options.allocation_override) {
         NodeRangeSet occupied_nodes;
         if (const auto it = collected.scratchpad_binders.find(scratchpad.unique_id);
             it != collected.scratchpad_binders.end()) {
@@ -44,8 +44,8 @@ void ValidateScratchpadSpec(
                 occupied_nodes = occupied_nodes.merge(collected.kernel_node_set.at(kernel->unique_id));
             }
         }
-        ValidateSRAMArenaBorrowing(
-            SRAMArenaSource{.allocation = borrowing->allocation, .offset = borrowing->offset},
+        ValidateSRAMArenaAllocation(
+            SRAMArenaSource{.arena = allocation->arena, .offset = allocation->offset},
             collected,
             fmt::format("ScratchpadSpec '{}'", scratchpad.unique_id),
             occupied_nodes,

@@ -67,10 +67,10 @@ void ValidatePrefetcherPipeLanesAndRelays(
 
 // sram_arena.cpp
 void ValidateSRAMArenaParameter(const SRAMArenaParameter& parameter);
-void ValidateSRAMArenaBorrowing(
+void ValidateSRAMArenaAllocation(
     const SRAMArenaSource& source,
     const CollectedSpecData& collected,
-    std::string_view borrower,
+    std::string_view resource,
     const NodeRangeSet& occupied_nodes,
     uint64_t size_per_node,
     uint32_t l1_alignment);

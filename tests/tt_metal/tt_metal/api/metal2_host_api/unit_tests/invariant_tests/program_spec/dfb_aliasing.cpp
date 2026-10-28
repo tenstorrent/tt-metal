@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // ProgramSpec structural invariants on DFBAdvancedOptions::alias_with (program_spec.hpp): alias groups
-// are symmetric and agree on total size, node set and borrowed_from.
+// are symmetric and agree on total size, node set, borrowed_from, and arena parameter.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -44,6 +44,18 @@ ProgramSpec MakeAliasProgramSpec(
     spec.kernels = {producer, consumer};
     spec.dataflow_buffers = {dfb_a, dfb_b};
     spec.work_units = {MakeMinimalWorkUnit("wu", node, {"producer_kernel", "consumer_kernel"})};
+    return spec;
+}
+
+ProgramSpec MakeArenaAliasSpecForTest() {
+    auto first = MakeMinimalDFB("first", 512, 8);
+    auto second = MakeMinimalDFB("second", 512, 8);
+    first.advanced_options.alias_with = {DFBSpecName{"second"}};
+    second.advanced_options.alias_with = {DFBSpecName{"first"}};
+    ProgramSpec spec = MakeAliasProgramSpec(NodeCoord{0, 0}, first, second);
+    spec.advanced_options.sram_arena_parameters = {
+        {.unique_id = SRAMArenaParamName{"first_arena"}, .properties = LockstepSRAMArenaProperties{4096}},
+        {.unique_id = SRAMArenaParamName{"second_arena"}, .properties = LockstepSRAMArenaProperties{4096}}};
     return spec;
 }
 }  // anonymous namespace
@@ -178,6 +190,43 @@ TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBFailsOnInconsistentBorrowedFrom) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("inconsistent borrowed_from")));
+}
+
+TEST_F(ProgramSpecTestQuasar, SRAMArenaAliasedDFBsUseSameArena) {
+    // Aliased DFBs can allocate from the same arena parameter.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    ProgramSpec spec = MakeArenaAliasSpecForTest();
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"first_arena"}};
+    spec.dataflow_buffers[1].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"first_arena"}};
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, SRAMArenaAliasedDFBsRejectDifferentArenas) {
+    // Aliased DFBs must allocate from the same arena parameter.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    ProgramSpec spec = MakeArenaAliasSpecForTest();
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"first_arena"}};
+    spec.dataflow_buffers[1].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"second_arena"}};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("inconsistent allocation_override arena parameters")));
+}
+
+TEST_F(ProgramSpecTestQuasar, SRAMArenaAliasedDFBsRejectDefaultAllocation) {
+    // An alias group cannot mix default allocation with an arena allocation override.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    ProgramSpec spec = MakeArenaAliasSpecForTest();
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"first_arena"}};
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("inconsistent allocation_override arena parameters")));
 }
 
 }  // namespace

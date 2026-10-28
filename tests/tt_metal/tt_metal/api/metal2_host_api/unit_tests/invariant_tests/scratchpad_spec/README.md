@@ -1,7 +1,7 @@
 # scratchpad_spec invariant tests
 
 Invariants of `ScratchpadSpec` (`scratchpad_spec.hpp`) and its `ScratchpadAdvancedOptions`
-(`advanced_options.hpp`), including the borrowed-memory constraints below. Binding rules are in `../kernel_spec/`. The rules that
+(`advanced_options.hpp`), including the arena allocation constraints below. Binding rules are in `../kernel_spec/`. The rules that
 every scratchpad is bound and every binding names a declared spec are structural, and the rule of at most one
 binding kernel per node (unless multi-kernel binding is enabled) is local to `WorkUnitSpec`; both live in `../program_spec/`.
 
@@ -31,19 +31,12 @@ struct ScratchpadSpec {
 struct ScratchpadAdvancedOptions {
     bool allow_instance_multi_binding = false;
 
-    struct SRAMArenaBorrowing {
-        // Invariant: Names an SRAMArenaParameter declared in
-        // ProgramAdvancedOptions::sram_arena_parameters.
-        SRAMArenaParamName allocation;
-
-        // Invariant: Must be a multiple of the L1 alignment.
-        uint32_t offset = 0;  // in bytes
-    };
-
     // Invariant: When set:
-    // - The supplied SRAMArena must cover every node occupied by the scratchpad.
-    // - borrowed_from->offset + ScratchpadSpec::size_per_node must not exceed
-    //   the SRAMArena's per-node size on any occupied node.
-    std::optional<SRAMArenaBorrowing> borrowed_from = std::nullopt;
+    // - Names an SRAMArenaParameter declared in ProgramAdvancedOptions::sram_arena_parameters.
+    // - The offset is a multiple of the L1 alignment.
+    // - The arena covers every node occupied by the scratchpad.
+    // - allocation_override->offset + ScratchpadSpec::size_per_node does not exceed
+    //   the arena's declared per-bank size.
+    std::optional<SRAMArenaAllocation> allocation_override = std::nullopt;
 };
 ```

@@ -13,15 +13,15 @@ namespace tt::tt_metal {
 
 // Identifies an allocation parameter and a byte offset within its reservation.
 struct SRAMArenaSource {
-    experimental::SRAMArenaParamName allocation;
+    experimental::SRAMArenaParamName arena;
     uint32_t offset = 0;
 };
 
-// Reject a borrower whose offset and per-node size exceed the declared allocation capacity.
+// Reject a resource allocation whose offset and per-node size exceed the declared allocation capacity.
 void ValidateSRAMArenaCapacity(
     const SRAMArenaSource& source,
     const experimental::SRAMArenaProperties& properties,
-    std::string_view borrower,
+    std::string_view resource,
     uint64_t size_per_node);
 
 }  // namespace tt::tt_metal

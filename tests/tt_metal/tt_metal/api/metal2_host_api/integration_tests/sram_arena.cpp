@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Fast-dispatch acceptance tests for lockstep and range-lockstep SRAMArena borrowing on WH/BH.
-// These expect working borrowed placement; unsupported construction is a test failure.
+// Fast-dispatch acceptance tests for lockstep and range-lockstep SRAMArena allocation overrides on WH/BH.
+// These expect working arena allocation placement; unsupported construction is a test failure.
 
 #include <gtest/gtest.h>
 
@@ -141,7 +141,7 @@ void ExpectReport(distributed::MeshCommandQueue& cq, const MeshTensor& report, s
         offset += row_words;
     }
     EXPECT_EQ(cq.enqueue_read_tensor(report).to_vector<uint32_t>(), expected)
-        << "Kernel-reported borrowed addresses or untouched report fields differ";
+        << "Kernel-reported arena allocation addresses or untouched report fields differ";
 }
 
 KernelSpec ScratchpadWriter() {
@@ -176,8 +176,8 @@ protected:
         spec.advanced_options.sram_arena_parameters = {
             {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
         spec.scratchpads = {{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = 2 * alignment}};
-        spec.scratchpads[0].advanced_options.borrowed_from = ScratchpadAdvancedOptions::SRAMArenaBorrowing{
-            .allocation = SRAMArenaParamName{"arena"}, .offset = alignment};
+        spec.scratchpads[0].advanced_options.allocation_override =
+            SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = alignment};
         spec.tensor_parameters = {{.unique_id = TensorParamName{"report"}, .spec = report_spec}};
         spec.work_units = {MakeMinimalWorkUnit("work", nodes, {"writer"})};
         workload.add_program(
@@ -335,8 +335,8 @@ protected:
             {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
         spec.dataflow_buffers = {MakeMinimalDFB("fifo", fixture_entry_size, kDFBDepth)};
         spec.dataflow_buffers[0].data_format_metadata = tt::DataFormat::Float16_b;
-        spec.dataflow_buffers[0].borrowed_from = SRAMArenaParamName{"arena"};
-        spec.dataflow_buffers[0].advanced_options.borrowed_memory_offset = fixture_offset;
+        spec.dataflow_buffers[0].advanced_options.allocation_override =
+            SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = fixture_offset};
         spec.tensor_parameters = {
             {.unique_id = TensorParamName{"report"}, .spec = report_spec},
             {.unique_id = TensorParamName{"output"}, .spec = output_spec}};
@@ -485,8 +485,8 @@ TEST_F(SRAMArenaRangeLockstep, ScratchpadDefaultOffset) {
     spec.advanced_options.sram_arena_parameters = {
         {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
     spec.scratchpads = {{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = scratch_bytes}};
-    spec.scratchpads[0].advanced_options.borrowed_from =
-        ScratchpadAdvancedOptions::SRAMArenaBorrowing{.allocation = SRAMArenaParamName{"arena"}};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}};
     spec.tensor_parameters = {{.unique_id = TensorParamName{"report"}, .spec = report_spec}};
     spec.work_units = {MakeMinimalWorkUnit("work", node_set, {"writer"})};
 
@@ -534,7 +534,8 @@ TEST_F(SRAMArenaRangeLockstep, DFBDefaultOffset) {
         {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
     spec.dataflow_buffers = {MakeMinimalDFB("fifo", entry_size, kDFBDepth)};
     spec.dataflow_buffers[0].data_format_metadata = tt::DataFormat::Float16_b;
-    spec.dataflow_buffers[0].borrowed_from = SRAMArenaParamName{"arena"};
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}};
     spec.tensor_parameters = {
         {.unique_id = TensorParamName{"report"}, .spec = report_spec},
         {.unique_id = TensorParamName{"output"}, .spec = output_spec}};
@@ -588,8 +589,8 @@ TEST_F(SRAMArenaRangeLockstep, ScratchpadNonzeroOffset) {
     spec.advanced_options.sram_arena_parameters = {
         {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
     spec.scratchpads = {{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = scratch_bytes}};
-    spec.scratchpads[0].advanced_options.borrowed_from =
-        ScratchpadAdvancedOptions::SRAMArenaBorrowing{.allocation = SRAMArenaParamName{"arena"}, .offset = offset};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = offset};
     spec.tensor_parameters = {{.unique_id = TensorParamName{"report"}, .spec = report_spec}};
     spec.work_units = {MakeMinimalWorkUnit("work", node_set, {"writer"})};
 
@@ -637,8 +638,8 @@ TEST_F(SRAMArenaRangeLockstep, DFBNonzeroOffset) {
         {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
     spec.dataflow_buffers = {MakeMinimalDFB("fifo", entry_size, kDFBDepth)};
     spec.dataflow_buffers[0].data_format_metadata = tt::DataFormat::Float16_b;
-    spec.dataflow_buffers[0].borrowed_from = SRAMArenaParamName{"arena"};
-    spec.dataflow_buffers[0].advanced_options.borrowed_memory_offset = offset;
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = offset};
     spec.tensor_parameters = {
         {.unique_id = TensorParamName{"report"}, .spec = report_spec},
         {.unique_id = TensorParamName{"output"}, .spec = output_spec}};
@@ -676,7 +677,7 @@ TEST_F(SRAMArenaRangeLockstep, DFBNonzeroOffset) {
 }
 
 TEST_F(SRAMArenaRangeLockstep, BorrowingAcrossNodes) {
-    // Each selected node receives the correct borrowed addresses and produces its own expected data.
+    // Each selected node receives the correct arena allocation addresses and produces its own expected data.
     const std::vector<NodeCoord> nodes{{0, 0}, {1, 0}};
     const NodeRangeSet node_set{NodeRange{NodeCoord{0, 0}, NodeCoord{1, 0}}};
     const uint32_t scratch_bytes = 2 * alignment;
@@ -692,17 +693,17 @@ TEST_F(SRAMArenaRangeLockstep, BorrowingAcrossNodes) {
     const auto output_spec = OutputSpec(node_set.num_cores(), entry_size);
 
     ProgramSpec spec;
-    spec.name = "SRAMArenaBorrowingAcrossNodes";
+    spec.name = "SRAMArenaAllocationAcrossNodes";
     spec.kernels = {DFBProducer(true), DFBConsumer()};
     spec.advanced_options.sram_arena_parameters = {
         {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
     spec.scratchpads = {{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = scratch_bytes}};
-    spec.scratchpads[0].advanced_options.borrowed_from = ScratchpadAdvancedOptions::SRAMArenaBorrowing{
-        .allocation = SRAMArenaParamName{"arena"}, .offset = scratch_offset};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = scratch_offset};
     spec.dataflow_buffers = {MakeMinimalDFB("fifo", entry_size, kDFBDepth)};
     spec.dataflow_buffers[0].data_format_metadata = tt::DataFormat::Float16_b;
-    spec.dataflow_buffers[0].borrowed_from = SRAMArenaParamName{"arena"};
-    spec.dataflow_buffers[0].advanced_options.borrowed_memory_offset = dfb_offset;
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = dfb_offset};
     spec.tensor_parameters = {
         {.unique_id = TensorParamName{"report"}, .spec = report_spec},
         {.unique_id = TensorParamName{"output"}, .spec = output_spec}};
@@ -777,12 +778,12 @@ TEST_F(SRAMArenaRangeLockstep, SharedByScratchpadAndDFB) {
     spec.advanced_options.sram_arena_parameters = {
         {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
     spec.scratchpads = {{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = scratch_bytes}};
-    spec.scratchpads[0].advanced_options.borrowed_from = ScratchpadAdvancedOptions::SRAMArenaBorrowing{
-        .allocation = SRAMArenaParamName{"arena"}, .offset = scratch_offset};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = scratch_offset};
     spec.dataflow_buffers = {MakeMinimalDFB("fifo", entry_size, kDFBDepth)};
     spec.dataflow_buffers[0].data_format_metadata = tt::DataFormat::Float16_b;
-    spec.dataflow_buffers[0].borrowed_from = SRAMArenaParamName{"arena"};
-    spec.dataflow_buffers[0].advanced_options.borrowed_memory_offset = dfb_offset;
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = dfb_offset};
     spec.tensor_parameters = {
         {.unique_id = TensorParamName{"report"}, .spec = report_spec},
         {.unique_id = TensorParamName{"output"}, .spec = output_spec}};
@@ -840,8 +841,8 @@ TEST_F(SRAMArenaLockstep, ScratchpadDefaultOffset) {
     spec.advanced_options.sram_arena_parameters = {
         {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
     spec.scratchpads = {{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = scratch_bytes}};
-    spec.scratchpads[0].advanced_options.borrowed_from =
-        ScratchpadAdvancedOptions::SRAMArenaBorrowing{.allocation = SRAMArenaParamName{"arena"}};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}};
     spec.tensor_parameters = {{.unique_id = TensorParamName{"report"}, .spec = report_spec}};
     spec.work_units = {MakeMinimalWorkUnit("work", node_set, {"writer"})};
 
@@ -888,7 +889,8 @@ TEST_F(SRAMArenaLockstep, DFBDefaultOffset) {
         {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
     spec.dataflow_buffers = {MakeMinimalDFB("fifo", entry_size, kDFBDepth)};
     spec.dataflow_buffers[0].data_format_metadata = tt::DataFormat::Float16_b;
-    spec.dataflow_buffers[0].borrowed_from = SRAMArenaParamName{"arena"};
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}};
     spec.tensor_parameters = {
         {.unique_id = TensorParamName{"report"}, .spec = report_spec},
         {.unique_id = TensorParamName{"output"}, .spec = output_spec}};
@@ -941,8 +943,8 @@ TEST_F(SRAMArenaLockstep, ScratchpadNonzeroOffset) {
     spec.advanced_options.sram_arena_parameters = {
         {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
     spec.scratchpads = {{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = scratch_bytes}};
-    spec.scratchpads[0].advanced_options.borrowed_from =
-        ScratchpadAdvancedOptions::SRAMArenaBorrowing{.allocation = SRAMArenaParamName{"arena"}, .offset = offset};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = offset};
     spec.tensor_parameters = {{.unique_id = TensorParamName{"report"}, .spec = report_spec}};
     spec.work_units = {MakeMinimalWorkUnit("work", node_set, {"writer"})};
 
@@ -989,8 +991,8 @@ TEST_F(SRAMArenaLockstep, DFBNonzeroOffset) {
         {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
     spec.dataflow_buffers = {MakeMinimalDFB("fifo", entry_size, kDFBDepth)};
     spec.dataflow_buffers[0].data_format_metadata = tt::DataFormat::Float16_b;
-    spec.dataflow_buffers[0].borrowed_from = SRAMArenaParamName{"arena"};
-    spec.dataflow_buffers[0].advanced_options.borrowed_memory_offset = offset;
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = offset};
     spec.tensor_parameters = {
         {.unique_id = TensorParamName{"report"}, .spec = report_spec},
         {.unique_id = TensorParamName{"output"}, .spec = output_spec}};
@@ -1028,7 +1030,7 @@ TEST_F(SRAMArenaLockstep, DFBNonzeroOffset) {
 }
 
 TEST_F(SRAMArenaLockstep, BorrowingAcrossNodes) {
-    // Each selected node receives the correct borrowed addresses and produces its own expected data.
+    // Each selected node receives the correct arena allocation addresses and produces its own expected data.
     const std::vector<NodeCoord> nodes{{0, 0}, {1, 0}};
     const NodeRangeSet node_set{NodeRange{NodeCoord{0, 0}, NodeCoord{1, 0}}};
     const uint32_t scratch_bytes = 2 * alignment;
@@ -1043,17 +1045,17 @@ TEST_F(SRAMArenaLockstep, BorrowingAcrossNodes) {
     const auto output_spec = OutputSpec(node_set.num_cores(), entry_size);
 
     ProgramSpec spec;
-    spec.name = "SRAMArenaLockstepBorrowingAcrossNodes";
+    spec.name = "SRAMArenaLockstepAllocationAcrossNodes";
     spec.kernels = {DFBProducer(true), DFBConsumer()};
     spec.advanced_options.sram_arena_parameters = {
         {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
     spec.scratchpads = {{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = scratch_bytes}};
-    spec.scratchpads[0].advanced_options.borrowed_from = ScratchpadAdvancedOptions::SRAMArenaBorrowing{
-        .allocation = SRAMArenaParamName{"arena"}, .offset = scratch_offset};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = scratch_offset};
     spec.dataflow_buffers = {MakeMinimalDFB("fifo", entry_size, kDFBDepth)};
     spec.dataflow_buffers[0].data_format_metadata = tt::DataFormat::Float16_b;
-    spec.dataflow_buffers[0].borrowed_from = SRAMArenaParamName{"arena"};
-    spec.dataflow_buffers[0].advanced_options.borrowed_memory_offset = dfb_offset;
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = dfb_offset};
     spec.tensor_parameters = {
         {.unique_id = TensorParamName{"report"}, .spec = report_spec},
         {.unique_id = TensorParamName{"output"}, .spec = output_spec}};
@@ -1127,12 +1129,12 @@ TEST_F(SRAMArenaLockstep, SharedByScratchpadAndDFB) {
     spec.advanced_options.sram_arena_parameters = {
         {.unique_id = SRAMArenaParamName{"arena"}, .properties = properties}};
     spec.scratchpads = {{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = scratch_bytes}};
-    spec.scratchpads[0].advanced_options.borrowed_from = ScratchpadAdvancedOptions::SRAMArenaBorrowing{
-        .allocation = SRAMArenaParamName{"arena"}, .offset = scratch_offset};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = scratch_offset};
     spec.dataflow_buffers = {MakeMinimalDFB("fifo", entry_size, kDFBDepth)};
     spec.dataflow_buffers[0].data_format_metadata = tt::DataFormat::Float16_b;
-    spec.dataflow_buffers[0].borrowed_from = SRAMArenaParamName{"arena"};
-    spec.dataflow_buffers[0].advanced_options.borrowed_memory_offset = dfb_offset;
+    spec.dataflow_buffers[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = dfb_offset};
     spec.tensor_parameters = {
         {.unique_id = TensorParamName{"report"}, .spec = report_spec},
         {.unique_id = TensorParamName{"output"}, .spec = output_spec}};
