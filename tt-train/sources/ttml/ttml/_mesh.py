@@ -283,7 +283,6 @@ def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",), reduce_dty
         scaler = prod(m.shape[axis] for axis in axes_for_param)
         if scaler == 1:
             continue
-        inv_scaler = 1.0 / float(scaler)
 
         if reduce_dtype == ttnn.DataType.FLOAT32:
             # The C++ helper picks the cheaper fp32 route for the gradient's size; both routes give the same result.
@@ -294,6 +293,7 @@ def sync_gradients(parameters, axis_names: tuple[str, ...] = ("dp",), reduce_dty
             )
             continue
 
+        inv_scaler = 1.0 / float(scaler)
         grad = param.get_grad()
         for axis in axes_for_param:
             grad = ttml.core.distributed.all_reduce(grad, cluster_axis=axis)

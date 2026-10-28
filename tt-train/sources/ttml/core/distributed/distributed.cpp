@@ -51,25 +51,23 @@ std::optional<int> whole_tile_scatter_dim(const ttnn::Tensor& tensor, uint32_t n
 ttnn::Tensor sum_in_fp32(const ttnn::Tensor& tensor, const ttsl::SmallVector<uint32_t>& cluster_axes, uint32_t scaler) {
     const auto dtype = tensor.dtype();
     const float inv_scaler = 1.0F / static_cast<float>(scaler);
-    const auto to_fp32 = [](const ttnn::Tensor& t) {
-        return t.dtype() == ttnn::DataType::FLOAT32 ? t : ttnn::typecast(t, ttnn::DataType::FLOAT32);
-    };
-    const auto to_dtype = [dtype](const ttnn::Tensor& t) { return t.dtype() == dtype ? t : ttnn::typecast(t, dtype); };
-
+    // Both routes sum in fp32, and the x1/N writes the tensor's dtype directly: one op instead of a multiply and a
+    // typecast, with the same bits.
+    const auto fp32 = dtype == ttnn::DataType::FLOAT32 ? tensor : ttnn::typecast(tensor, ttnn::DataType::FLOAT32);
     const auto scatter_dim = cluster_axes.size() == 1U && tensor.logical_volume() >= kFp32ReduceScatterMinElements
                                  ? whole_tile_scatter_dim(tensor, scaler)
                                  : std::nullopt;
     if (scatter_dim.has_value()) {
         const auto slice = ttnn::multiply(
-            ttml::ttnn_fixed::distributed::reduce_scatter(to_fp32(tensor), *scatter_dim, cluster_axes[0]), inv_scaler);
-        return ttml::ttnn_fixed::distributed::all_gather(to_dtype(slice), *scatter_dim, cluster_axes[0]);
+            ttml::ttnn_fixed::distributed::reduce_scatter(fp32, *scatter_dim, cluster_axes[0]), inv_scaler, dtype);
+        return ttml::ttnn_fixed::distributed::all_gather(slice, *scatter_dim, cluster_axes[0]);
     }
 
-    auto result = to_fp32(tensor);
+    auto result = fp32;
     for (const auto& cluster_axis : cluster_axes) {
         result = ttml::ttnn_fixed::distributed::all_reduce(result, cluster_axis);
     }
-    return to_dtype(ttnn::multiply(result, inv_scaler));
+    return ttnn::multiply(result, inv_scaler, dtype);
 }
 
 }  // namespace

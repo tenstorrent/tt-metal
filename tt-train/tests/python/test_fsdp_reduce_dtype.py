@@ -18,56 +18,21 @@ import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, LinearLayer, ModuleList
 
+from two_device_gradients import device, exact_mean, make_gradients, per_device, per_device_tensor
+
 _FSDP_AXIS = 1
-
-
-def _to_bf16(values: np.ndarray) -> np.ndarray:
-    """Round float32 to the nearest bf16 (ties to even), returned as float32."""
-    bits = np.asarray(values, dtype=np.float32).view(np.uint32)
-    bits = (bits + np.uint32(0x7FFF) + ((bits >> 16) & np.uint32(1))) & np.uint32(0xFFFF0000)
-    return bits.view(np.float32)
-
-
-def _make_gradients(rows: int, cols: int, seed: int) -> np.ndarray:
-    """Two devices' bf16 gradients, stacked on dim 0, scattered around a per-element mean by as much as the mean."""
-    rng = np.random.default_rng(seed)
-    mean = rng.choice([-1.0, 1.0], size=(1, 1, rows, cols)) * 10.0 ** rng.uniform(-3, 0, size=(1, 1, rows, cols))
-    return _to_bf16((mean + np.abs(mean) * rng.standard_normal((2, 1, rows, cols))).astype(np.float32))
-
-
-def _exact_mean(values: np.ndarray) -> np.ndarray:
-    """bf16 of the exact mean of the two devices' values: what a perfect reduction returns."""
-    return _to_bf16((values.astype(np.float64).sum(axis=0, keepdims=True) / 2.0).astype(np.float32))
-
-
-def _device():
-    return ttml.autograd.AutoContext.get_instance().get_device()
-
-
-def _per_device_tensor(values: np.ndarray):
-    """A tensor whose copy on device i is ``values[i]``."""
-    mapper = ttnn.create_mesh_mapper(
-        _device(), ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementShard(0)])
-    )
-    return ttml.autograd.Tensor.from_numpy(values, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
 
 
 def _replicated_tensor(values: np.ndarray):
     mapper = ttnn.create_mesh_mapper(
-        _device(), ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementReplicate()])
+        device(), ttnn.MeshMapperConfig([ttnn.PlacementReplicate(), ttnn.PlacementReplicate()])
     )
     return ttml.autograd.Tensor.from_numpy(values, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16, mapper)
 
 
-def _per_device(tensor) -> np.ndarray:
-    """``tensor`` read back with device i's copy at index i."""
-    composer = ttnn.create_mesh_composer(_device(), ttnn.MeshComposerConfig([1, 0]))
-    return ttml.autograd.create_tensor(tensor).to_numpy(ttnn.DataType.FLOAT32, composer=composer)
-
-
 def _gathered(shard, shard_dim: int) -> np.ndarray:
     """The full tensor of an FSDP shard: the two devices' shards concatenated on ``shard_dim``."""
-    composer = ttnn.create_mesh_composer(_device(), ttnn.MeshComposerConfig([1 if shard_dim == 0 else 0, shard_dim]))
+    composer = ttnn.create_mesh_composer(device(), ttnn.MeshComposerConfig([1 if shard_dim == 0 else 0, shard_dim]))
     return ttml.autograd.create_tensor(shard).to_numpy(ttnn.DataType.FLOAT32, composer=composer)
 
 
@@ -80,7 +45,7 @@ def _reduce_with_backward_post(values: np.ndarray, reduce_dtype) -> tuple:
     ttml.fsdp.fully_shard(layer, reduce_dtype=reduce_dtype)
     layer.unshard()  # backward_post expects the gathered weight and restores the cached shard
     ((parameter, shard_dim),) = layer._fsdp_state.managed
-    parameter.tensor.set_grad(_per_device_tensor(values).get_value())
+    parameter.tensor.set_grad(per_device_tensor(values).get_value())
 
     layer._fsdp_state.backward_post()
 
@@ -92,11 +57,11 @@ def _reduce_with_backward_post(values: np.ndarray, reduce_dtype) -> tuple:
 @pytest.mark.requires_device
 @pytest.mark.parametrize("reduce_dtype", [None, ttnn.DataType.BFLOAT16])
 def test_unset_and_bf16_reduce_dtype_reduce_as_before(fsdp_mesh, reduce_dtype):
-    values = _make_gradients(64, 128, seed=1)
+    values = make_gradients(64, 128, seed=1)
 
     reduced, shard_dim = _reduce_with_backward_post(values, reduce_dtype)
 
-    gradients = _per_device_tensor(values).get_value()
+    gradients = per_device_tensor(values).get_value()
     before = ttnn.multiply(ttml.core.distributed.reduce_scatter(gradients, shard_dim, _FSDP_AXIS), 0.5)
     np.testing.assert_array_equal(reduced, _gathered(before, shard_dim))
 
@@ -104,8 +69,8 @@ def test_unset_and_bf16_reduce_dtype_reduce_as_before(fsdp_mesh, reduce_dtype):
 # Phase 1 of the PR 4 measurements: 99.5% exact for the fp32 sum and 86% for the bf16 sum with two devices.
 @pytest.mark.requires_device
 def test_fp32_reduce_dtype_is_closer_to_the_exact_mean(fsdp_mesh):
-    values = _make_gradients(64, 128, seed=2)
-    expected = _exact_mean(values)
+    values = make_gradients(64, 128, seed=2)
+    expected = exact_mean(values)
 
     fp32, _ = _reduce_with_backward_post(values, ttnn.DataType.FLOAT32)
     bf16, _ = _reduce_with_backward_post(values, None)
@@ -153,12 +118,12 @@ def _model_gradients(reduce_dtype, *, fsdp: bool) -> dict:
 
     inputs = rng.standard_normal((2, 1, 32, features)).astype(np.float32)
     targets = rng.standard_normal((2, 1, 32, features)).astype(np.float32)
-    loss = ttml.ops.loss.mse_loss(model(_per_device_tensor(inputs)), _per_device_tensor(targets))
+    loss = ttml.ops.loss.mse_loss(model(per_device_tensor(inputs)), per_device_tensor(targets))
     loss.backward(False)
 
     # Per device without FSDP; with FSDP, the reduced gradient gathered from its shards.
     return {
-        name: _gathered(tensor.get_grad(), tensor._fsdp_shard_dim) if fsdp else _per_device(tensor.get_grad())
+        name: _gathered(tensor.get_grad(), tensor._fsdp_shard_dim) if fsdp else per_device(tensor.get_grad())
         for name, tensor in model.parameters().items()
     }
 
@@ -170,8 +135,8 @@ def test_blocks_and_root_both_sum_in_fp32(fsdp_mesh):
     bf16 = _model_gradients(None, fsdp=True)
 
     assert len(fp32) == len(local) == 3  # two block weights and the root's head
-    for name, per_device in local.items():
-        expected = _exact_mean(per_device)
+    for name, values in local.items():
+        expected = exact_mean(values)
         fp32_share = np.mean(fp32[name] == expected)
         assert fp32_share >= 0.99, name
         assert fp32_share > np.mean(bf16[name] == expected), name

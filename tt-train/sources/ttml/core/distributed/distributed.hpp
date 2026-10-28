@@ -22,9 +22,10 @@ ttnn::Tensor synchronize_tensor(
     const ttsl::SmallVector<uint32_t>& cluster_axes,
     std::optional<ttnn::DataType> reduce_dtype = std::nullopt);
 
-// Average each initialized gradient over the parallelism context's DDP and CP axes (first overload) or over
-// `cluster_axes`, summing in `reduce_dtype` as synchronize_tensor does. Unset takes the training config's
-// precision.reduce_dtype (autograd::AutoContext::get_gradient_reduce_dtype); a value passed here wins over it.
+// Average each initialized gradient over the parallelism context's DDP and CP axes (first overload; an axis the
+// parameter is sharded on is skipped, FSDP reduces those) or over `cluster_axes`, summing in `reduce_dtype` as
+// synchronize_tensor does. Unset takes the training config's precision.reduce_dtype
+// (autograd::AutoContext::get_gradient_reduce_dtype); a value passed here wins over it.
 void synchronize_gradients(
     const serialization::NamedParameters& parameters, std::optional<ttnn::DataType> reduce_dtype = std::nullopt);
 void synchronize_gradients(

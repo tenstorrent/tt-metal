@@ -267,12 +267,9 @@ class FSDPState:
         shard_fp32 = ttml.core.distributed.reduce_scatter(grad_fp32, shard_dim, self.axis_index)
         if grad_fp32 is not gathered_grad:
             ttnn.deallocate(grad_fp32)
-        mean_fp32 = ttnn.multiply(shard_fp32, 1.0 / float(self.axis_size))
+        # The x1/N writes the grad's dtype directly: one op instead of a multiply and a typecast, with the same bits.
+        mean = ttnn.multiply(shard_fp32, 1.0 / float(self.axis_size), dtype=gathered_grad.dtype)
         ttnn.deallocate(shard_fp32)
-        if gathered_grad.dtype == ttnn.DataType.FLOAT32:
-            return mean_fp32
-        mean = ttnn.typecast(mean_fp32, gathered_grad.dtype)
-        ttnn.deallocate(mean_fp32)
         return mean
 
     def _gather_all_params(self) -> None:
