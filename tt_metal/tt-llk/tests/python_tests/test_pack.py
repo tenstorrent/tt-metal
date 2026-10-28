@@ -104,7 +104,7 @@ def test_pack(
     perf_report=None,
     run_types=None,
     loop_factor: int = 1,
-    pack_block: bool | int = False,
+    pack_block: bool = False,
     block_tiles: int | None = None,
 ):
     if (formats.input_format == DataFormat.Int32) ^ (
@@ -332,4 +332,26 @@ def test_pack_block(
         dest_sync,
         dest_index,
         pack_block=True,
+    )
+
+
+@skip_for_wormhole
+@parametrize(**PACK_BLOCK_SWEEP)
+def test_pack_block_w(
+    formats,
+    dest_acc,
+    input_dimensions,
+    relu_type,
+    dest_sync,
+    dest_index,
+):
+    """The W offset block packs: one output address programmed up front, a call moves it with the packer W counter."""
+    test_pack(
+        formats,
+        dest_acc,
+        input_dimensions,
+        relu_type,
+        dest_sync,
+        dest_index,
+        pack_block=3,
     )

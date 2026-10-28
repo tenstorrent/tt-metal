@@ -100,6 +100,7 @@ __attribute__((noinline)) void _llk_pack_fast_tilize_load_replay_()
     TTI_REPLAY(REPLAY_ADDR_UPDATE_OFFSET, REPLAY_ADDR_UPDATE_LEN, 0, 1);
     TTI_ADDDMAREG(0, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR, p_gpr_pack::OUTPUT_ADDR_OFFSET);
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
+    LLK_PACK_W_INVALIDATE();
     TTI_WRCFG(p_gpr_pack::OUTPUT_ADDR, 0, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
     TTI_NOP;
 }

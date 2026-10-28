@@ -202,9 +202,20 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #if defined(ARCH_BLACKHOLE)
 // The block pack of one block, from the opt-in fast forms or, with pack_block_default, from the calls llk_pack_block makes (default block, closed block for block-float).
 template <DstSync sync, bool fp32>
-inline void pack_block_call(std::uint32_t dst_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, bool bfp)
+inline void pack_block_call(std::uint32_t dst_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, bool bfp, std::uint32_t out_tile = 0)
 {
-    if constexpr (pack_block_default)
+    if constexpr (pack_block_w)
+    {
+        if (bfp)
+        {
+            _llk_pack_block_closed_w_<sync, fp32>(dst_index, out_tile, num_tiles);
+        }
+        else
+        {
+            _llk_pack_block_w_<sync, fp32>(dst_index, out_tile, num_tiles);
+        }
+    }
+    else if constexpr (pack_block_default)
     {
         if (bfp)
         {
@@ -262,6 +273,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (pack_block_en && !pack_block_default)
         {
             _llk_pack_block_fast_init_<false>();
+            if constexpr (pack_block_w)
+            {
+                _llk_pack_block_w_init_(L1_ADDRESS(buffer_Res[0]), (L1_ADDRESS(buffer_Res[1]) - L1_ADDRESS(buffer_Res[0])) << 4);
+            }
         }
 #endif
         PROFILER_SYNC();
@@ -291,7 +306,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                     L1_ADDRESS(buffer_Res[res_tile_idx]),
                                     NUM_TILES_IN_BLOCK,
                                     (L1_ADDRESS(buffer_Res[res_tile_idx + 1]) - L1_ADDRESS(buffer_Res[res_tile_idx])) << 4,
-                                    true);
+                                    true,
+                                    res_tile_idx);
                                 break;
                             }
                             if (NUM_TILES_IN_BLOCK > 1)
@@ -299,7 +315,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 LLK_ASSERT(
                                     ((DST_INDEX + NUM_TILES_IN_BLOCK) <= get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                                     "Block exceeds maximum destination tiles");
-                                pack_block_call<dest_sync, is_fp32_dest_acc_en>(DST_INDEX + tile, L1_ADDRESS(buffer_Res[res_tile_idx]), NUM_TILES_IN_BLOCK, 0, false);
+                                pack_block_call<dest_sync, is_fp32_dest_acc_en>(DST_INDEX + tile, L1_ADDRESS(buffer_Res[res_tile_idx]), NUM_TILES_IN_BLOCK, 0, false, res_tile_idx);
                                 break;
                             }
                         }
@@ -333,7 +349,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                     L1_ADDRESS(buffer_Res[res_tile_idx]),
                                     NUM_TILES_IN_BLOCK,
                                     (L1_ADDRESS(buffer_Res[res_tile_idx + 1]) - L1_ADDRESS(buffer_Res[res_tile_idx])) << 4,
-                                    true);
+                                    true,
+                                    res_tile_idx);
                                 break;
                             }
                             if (NUM_TILES_IN_BLOCK > 1)
@@ -341,7 +358,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                                 LLK_ASSERT(
                                     ((DST_INDEX + NUM_TILES_IN_BLOCK) <= get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                                     "Block exceeds maximum destination tiles");
-                                pack_block_call<dest_sync, is_fp32_dest_acc_en>(DST_INDEX + tile, L1_ADDRESS(buffer_Res[res_tile_idx]), NUM_TILES_IN_BLOCK, 0, false);
+                                pack_block_call<dest_sync, is_fp32_dest_acc_en>(DST_INDEX + tile, L1_ADDRESS(buffer_Res[res_tile_idx]), NUM_TILES_IN_BLOCK, 0, false, res_tile_idx);
                                 break;
                             }
                         }

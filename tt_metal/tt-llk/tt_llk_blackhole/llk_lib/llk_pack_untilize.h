@@ -132,6 +132,7 @@ inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE
             // Scratch slot loaded in _llk_pack_untilize_init_ holds the per-row L1 stride.
             // Replaces ADDDMAREG + STALLWAIT + WRCFG + NOP — saves ~3 cyc + 1 STALLWAIT per row.
             // Mirrors llk_unpack_tilize.h:285 precedent.
+            LLK_PACK_W_INVALIDATE();
             TTI_CFGSHIFTMASK(1, 0b011, 32 - 1, 0, 0b11, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
             TTI_NOP;
         });
