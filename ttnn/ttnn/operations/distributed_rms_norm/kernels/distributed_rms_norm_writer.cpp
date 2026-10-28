@@ -8,7 +8,8 @@
 //     ROW_MAJOR sticks: stick t (32 γ values of tile column t) read to the page start (fills face 0 rows 0-1), then
 //                      elements 16..31 moved L1 -> L1 to face 1 row 0 (BroadcastDim::Row reads row 0 only)
 //   store_wave (interleaved): per wave, per C-chunk, per tile-row: the chunk's valid tiles -> DRAM (TensorAccessor);
-//     sharded: the output CB is backed on the output shard (compute packs in place) — nothing to write.
+//     sharded output: the output CB is backed on the output shard (compute packs in place) — nothing to write.
+//     (a sharded input with an interleaved output streams like the interleaved path, chunk widths from the shard)
 
 #include <stdint.h>
 
@@ -30,7 +31,7 @@ constexpr uint32_t FACE_DIM = 16;
 
 void kernel_main() {
     constexpr bool HAS_GAMMA = get_compile_time_arg_val(0) != 0;
-    constexpr bool SHARDED = get_compile_time_arg_val(1) != 0;
+    constexpr bool OUT_SHARDED = get_compile_time_arg_val(1) != 0;  // output shard-backed: nothing to store
     constexpr uint32_t WS = get_compile_time_arg_val(2);
     constexpr uint32_t C = get_compile_time_arg_val(3);
     constexpr uint32_t NCH = get_compile_time_arg_val(4);
@@ -83,18 +84,19 @@ void kernel_main() {
     }
 
     // ---------------- store_wave ----------------
-    if constexpr (!SHARDED) {
+    if constexpr (!OUT_SHARDED) {
         const auto output_accessor = TensorAccessor(output_args, out_addr);
         for (uint32_t w = 0; w < NW; ++w) {
             const uint32_t r0 = w * Q_W;
             const uint32_t n = r0 >= rows ? 0 : ((rows - r0) < Q_W ? rows - r0 : Q_W);
             for (uint32_t c = 0; c < NCH; ++c) {
                 const uint32_t t0 = c * C;
-                const uint32_t nv = t0 >= V ? 0 : ((V - t0) < C ? V - t0 : C);
+                const uint32_t cw = (c + 1 == NCH) ? WS - c * C : C;  // a shard-backed slice's last chunk is narrower
+                const uint32_t nv = t0 >= V ? 0 : ((V - t0) < cw ? V - t0 : cw);
                 for (uint32_t r = 0; r < n; ++r) {
                     {
                         DRMS_ZONE("wr_wait_out");
-                        cb_wait_front(cb_output, C);
+                        cb_wait_front(cb_output, cw);
                     }
                     DRMS_ZONE("wr_store");
                     const uint32_t l1 = get_read_ptr(cb_output);
@@ -103,7 +105,7 @@ void kernel_main() {
                         noc_async_write_tile(page0 + i, output_accessor, l1 + i * T_OUT);
                     }
                     noc_async_writes_flushed();
-                    cb_pop_front(cb_output, C);
+                    cb_pop_front(cb_output, cw);
                 }
             }
         }

@@ -189,13 +189,13 @@ def validate(
             raise ExcludedCell(f"distributed_rms_norm: unsupported combination (refinement candidate): {exc}")
 
     in_mc = input_tensor.memory_config()
+    out_sharded = memory_config is not None and memory_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
     if in_mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
-        if memory_config is not None and memory_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED:
+        if out_sharded:
             raise NotImplementedError("distributed_rms_norm: interleaved input with a sharded output is not built")
-    elif memory_config is None or not _same_placement(memory_config, in_mc):
+    elif out_sharded and not _same_placement(memory_config, in_mc):
         raise NotImplementedError(
-            "distributed_rms_norm: a sharded input needs memory_config = the input's own memory config "
-            "(SHARD-IN-INTERLEAVED-OUT, deferred)"
+            "distributed_rms_norm: a sharded output must carry the input's own shard spec (resharding is not built)"
         )
     return cfg, links
 

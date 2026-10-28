@@ -28,6 +28,13 @@ CASES = [(1, 1, 640, 1792), (1, 1, 32, 1792), (1, 1, 2048, 1280)]
 CALLS = int(os.environ.get("DRMS_PERF_CALLS", "5"))
 
 
+# Driver / debug file, not a correctness gate: run it with `scripts/run_safe_pytest.sh --no-precompile`. Under the
+# up-front precompile collector (UP_FRONT_COLLECT=1) the real pass of these modules reads their ttnn.from_torch inputs
+# back as zeros (observed with INSTATS prints: the device input itself is zero, before the op runs); the acceptance and
+# golden suites are unaffected.
+pytestmark = pytest.mark.skipif(os.environ.get("UP_FRONT_COLLECT") == "1", reason="run with --no-precompile")
+
+
 @pytest.fixture(scope="module")
 def mesh_cache():
     cache = _FabricMeshCache()

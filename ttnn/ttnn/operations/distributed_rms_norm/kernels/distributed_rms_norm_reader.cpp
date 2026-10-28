@@ -159,6 +159,9 @@ void kernel_main() {
     constexpr uint32_t DTYPE_KIND = get_compile_time_arg_val(14);  // 0 fp32, 1 bf16, 2 bfp8_b
     constexpr uint32_t SEM_GATHER = get_compile_time_arg_val(15);
     constexpr uint32_t SEM_INV = get_compile_time_arg_val(16);
+    // SEM_GATHER holds one GB-bit field per owned wave (ordinal o): a contributor running a wave ahead can never
+    // complete an earlier owned wave's count.
+    constexpr uint32_t GB = get_compile_time_arg_val(22);
     constexpr uint32_t SEM_LANDED_BASE = get_compile_time_arg_val(17);
     constexpr uint32_t SEM_OWN_STATS_BASE = get_compile_time_arg_val(18);  // + wave, on the port cores
     constexpr uint32_t SEG_STRIDE = get_compile_time_arg_val(20);
@@ -318,7 +321,6 @@ void kernel_main() {
     };
 
     // ---------------- service of wave w (Phase A): contribute, gather, publish ----------------
-    uint32_t gather_expected = 0;
     auto publish = [&](uint32_t w, uint32_t k) {
         const uint32_t no = n_own(w, k);
         const uint32_t kp = group * OWNERS + k;
@@ -394,7 +396,7 @@ void kernel_main() {
                 for (uint32_t k = 0; k < OWNERS; ++k) {
                     if (n_own(w, k) > 0) {
                         const uint32_t m = member_of(w, k);
-                        noc_semaphore_inc(get_noc_addr(member_x(m), member_y(m), gsem), 1);
+                        noc_semaphore_inc(get_noc_addr(member_x(m), member_y(m), gsem), 1u << (GB * ordinal(m, w)));
                     }
                 }
                 cb_pop_front(cb_partial_col, n);
@@ -404,10 +406,13 @@ void kernel_main() {
         if (k < OWNERS) {
             if constexpr (G_W > 1) {
                 if (n_own(w, k) > 0) {
-                    gather_expected += G_W;
+                    const uint32_t field = GB * ordinal(my_j, w);
                     DRMS_ZONE("rd_gather_wait");
-                    noc_semaphore_wait_min(
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_GATHER)), gather_expected);
+                    volatile tt_l1_ptr uint32_t* gs =
+                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_GATHER));
+                    do {
+                        invalidate_l1_cache();
+                    } while (((*gs >> field) & ((1u << GB) - 1)) < G_W);
                     cb_reserve_back(cb_gather, G_W * Q);
                     cb_push_back(cb_gather, G_W * Q);
                 }
@@ -519,16 +524,24 @@ void kernel_main() {
             noc_async_write_barrier();
             cb_pop_front(cb_rms_root, no);
         }
+    };
+    // SEM_INV counts owner increments cumulatively over waves, so they must reach every member in wave order: the
+    // owner of wave w increments only once its own SEM_INV shows every earlier wave complete (>= w * OWNERS). Owners
+    // write their rows, barrier, then increment — so any increment observed from wave v implies every wave < v landed
+    // on every member.
+    auto announce = [&](uint32_t /*w*/) {
         for (uint32_t i = 0; i < G_W; ++i) {
             const uint32_t m = rotated(i, my_j, G_W);
             noc_semaphore_inc(get_noc_addr(member_x(m), member_y(m), inv_sem), 1);
         }
     };
-    uint32_t wc = next_owned_rows(0);  // next wave to collect
-    uint32_t wa = next_owned(0);       // next wave to all-gather
+    uint32_t wc = next_owned_rows(0);  // next owned wave (with rows) to collect
+    uint32_t wa = next_owned(0);       // next owned wave whose rows to all-gather
+    uint32_t wn = next_owned(0);       // next owned wave to announce (SEM_INV increments, wave-ordered)
     uint32_t wi = 0;                   // next wave whose inv rows to push
     cb_reserve_back(cb_inv_rms, NW * Q_W);
-    while (wi < NW || wa < NW) {
+    volatile tt_l1_ptr uint32_t* my_inv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inv_sem);
+    while (wi < NW || wn < NW) {
         if (wc < NW) {
             const uint32_t kp = group * OWNERS + my_k(wc);
             if (landed_ok(wc, kp % L) && cb_pages_reservable_at_back(cb_stats, G * Q)) {
@@ -546,13 +559,16 @@ void kernel_main() {
                 continue;
             }
         }
-        if (wi < NW) {
-            invalidate_l1_cache();
-            if (*reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inv_sem) >= (wi + 1) * OWNERS) {
-                cb_push_back(cb_inv_rms, Q_W);
-                ++wi;
-                continue;
-            }
+        invalidate_l1_cache();
+        if (wn < wa && *my_inv >= wn * OWNERS) {
+            announce(wn);
+            wn = next_owned(wn + 1);
+            continue;
+        }
+        if (wi < NW && *my_inv >= (wi + 1) * OWNERS) {
+            cb_push_back(cb_inv_rms, Q_W);
+            ++wi;
+            continue;
         }
     }
     noc_async_atomic_barrier();

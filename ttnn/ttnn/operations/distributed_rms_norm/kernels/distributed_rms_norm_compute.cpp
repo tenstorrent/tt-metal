@@ -102,6 +102,10 @@ void kernel_main() {
     constexpr uint32_t G = get_compile_time_arg_val(11);
     constexpr uint32_t G_W = get_compile_time_arg_val(12);
     constexpr uint32_t SCALE_BLOCK = get_compile_time_arg_val(13);
+    // output placement: shard-backed cb_output (packed in place, strided) or streamed to the writer per tile-row
+    constexpr bool OUT_SHARDED = get_compile_time_arg_val(14) != 0;
+    // γ pass per wave instead of per block (L1 fallback: cb_x_gamma holds Q_W rows instead of the block)
+    constexpr bool GAMMA_PER_WAVE = get_compile_time_arg_val(15) != 0;
     constexpr uint32_t WP = NCH * C;
 
     const uint32_t rows = get_arg_val<uint32_t>(0);
@@ -328,32 +332,40 @@ void kernel_main() {
         }
     }
 
-    // ================= scale_by_gamma_block =================
-    if constexpr (HAS_GAMMA) {
-        {
-            DRMS_ZONE("cmp_wait_gamma");
-            cb_wait_front(cb_gamma_tiles, WP);
+    // ================= scale_by_gamma =================
+    // x * γ for tile-rows [row0, row0 + n) -> cb_x_gamma (WS tiles pushed per row).
+    auto gamma_pass = [&](uint32_t row0, uint32_t n) {
+        if constexpr (HAS_GAMMA) {
+            {
+                DRMS_ZONE("cmp_wait_gamma");
+                cb_wait_front(cb_gamma_tiles, WP);
+            }
+            DRMS_ZONE("cmp_gamma");
+            ckl::eltwise_chain(
+                ckl::IterationShape::grid(n, WS).block_size(SCALE_BLOCK),
+                ckl::BinaryFpu<
+                    ckl::BinaryFpuOp::Mul,
+                    x_strided_input,
+                    ckl::input(
+                        cb_gamma_tiles,
+                        ckl::BroadcastDim::Row,
+                        ckl::WaitPolicy::None,
+                        ckl::PopPolicy::None,
+                        ckl::InputTileMapping::Row,
+                        ckl::DataFormatReconfig::Enabled,
+                        ckl::TileAddressing::Offset)>{ckl::StridedTileRange{row0 * WS, WS}, 0u},
+                ckl::PackTile<row_output(cb_x_gamma)>{});
         }
-        DRMS_ZONE("cmp_gamma");
-        ckl::eltwise_chain(
-            ckl::IterationShape::grid(rows, WS).block_size(SCALE_BLOCK),
-            ckl::BinaryFpu<
-                ckl::BinaryFpuOp::Mul,
-                x_strided_input,
-                ckl::input(
-                    cb_gamma_tiles,
-                    ckl::BroadcastDim::Row,
-                    ckl::WaitPolicy::None,
-                    ckl::PopPolicy::None,
-                    ckl::InputTileMapping::Row,
-                    ckl::DataFormatReconfig::Enabled,
-                    ckl::TileAddressing::Offset)>{ckl::StridedTileRange{0, WS}, 0u},
-            ckl::PackTile<row_output(cb_x_gamma)>{});
+    };
+    // Whole block (default): the γ pass of every wave is the stall shadow of the exchange. Per wave (L1 fallback,
+    // GAMMA_PER_WAVE: cb_x_gamma holds one wave): it runs right before the wave's inv scaling.
+    if constexpr (HAS_GAMMA && !GAMMA_PER_WAVE) {
+        gamma_pass(0, rows);
         cb_wait_front(cb_x_gamma, rows * WS);
     }
 
     // ================= Phase B =================
-    if constexpr (SHARDED) {
+    if constexpr (OUT_SHARDED) {
         cb_reserve_back(cb_output, rows * WS);
     }
     // cross_device_finalize of every owned wave first (in wave order): an owner's fold of wave w+1 never waits
@@ -368,26 +380,35 @@ void kernel_main() {
         }
     }
     for (uint32_t w = 0; w < NW; ++w) {
+        const uint32_t n = n_wave(w);
+        const uint32_t r0 = w * Q_W;
+        if constexpr (HAS_GAMMA && GAMMA_PER_WAVE) {
+            if (n > 0) {
+                gamma_pass(r0, n);
+                cb_wait_front(cb_x_gamma, n * WS);
+            }
+        }
         {
             DRMS_ZONE("cmp_wait_inv");
             cb_wait_front(cb_inv_rms, (w + 1) * Q_W);
         }
         DRMS_ZONE("cmp_scale");
-        const uint32_t n = n_wave(w);
         if (n == 0) {
             continue;
         }
-        const uint32_t r0 = w * Q_W;
+        // x*γ rows: block mode addresses the wave inside the resident block; per-wave mode the wave is the front
+        const uint32_t xg0 = GAMMA_PER_WAVE ? 0 : r0 * WS;
         const ckl::StridedTileRange inv_range{r0, 1};
         for (uint32_t c = 0; c < NCH; ++c) {
             const uint32_t cw = (c + 1 == NCH) ? WS - c * C : C;
             const ckl::StridedTileRange a_range{r0 * WS + c * C, WS};
-            if constexpr (SHARDED) {
+            [[maybe_unused]] const ckl::StridedTileRange xg_range{xg0 + c * C, WS};
+            if constexpr (OUT_SHARDED) {
                 if constexpr (HAS_GAMMA) {
                     ckl::eltwise_chain(
                         ckl::IterationShape::grid(n, cw).block_size(SCALE_BLOCK),
                         ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, x_gamma_strided_input, inv_rms_strided_input>{
-                            a_range, inv_range},
+                            xg_range, inv_range},
                         ckl::PackTile<shard_output>{a_range});
                 } else {
                     ckl::eltwise_chain(
@@ -401,7 +422,7 @@ void kernel_main() {
                     ckl::eltwise_chain(
                         ckl::IterationShape::grid(n, cw).block_size(SCALE_BLOCK),
                         ckl::BinaryFpu<ckl::BinaryFpuOp::Mul, x_gamma_strided_input, inv_rms_strided_input>{
-                            a_range, inv_range},
+                            xg_range, inv_range},
                         ckl::PackTile<row_output(cb_output)>{});
                 } else {
                     ckl::eltwise_chain(
@@ -412,8 +433,11 @@ void kernel_main() {
                 }
             }
         }
+        if constexpr (HAS_GAMMA && GAMMA_PER_WAVE) {
+            cb_pop_front(cb_x_gamma, n * WS);
+        }
     }
-    if constexpr (SHARDED) {
+    if constexpr (OUT_SHARDED) {
         cb_push_back(cb_output, rows * WS);
     }
 
@@ -421,7 +445,9 @@ void kernel_main() {
     cb_pop_front(cb_x_tiles, rows * WS);
     cb_pop_front(cb_inv_rms, NW * Q_W);
     if constexpr (HAS_GAMMA) {
-        cb_pop_front(cb_x_gamma, rows * WS);
+        if constexpr (!GAMMA_PER_WAVE) {
+            cb_pop_front(cb_x_gamma, rows * WS);
+        }
         cb_pop_front(cb_gamma_tiles, WP);
     }
     cb_pop_front(cb_reduce_scaler, MASKED_CFG ? 2 : 1);

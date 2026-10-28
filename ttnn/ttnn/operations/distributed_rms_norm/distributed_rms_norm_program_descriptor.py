@@ -149,19 +149,34 @@ class LocalPlan:
     q: int
     masked: bool
     members: list = field(default_factory=list)  # Member per worker core, in group order
+    gamma_per_wave: bool = False  # L1 fallback: the γ pass per wave (cb_x_gamma holds q_w rows)
 
     @property
     def Wp(self):
         return self.nch * self.C
 
 
+def gather_field_bits(G_w: int) -> int:
+    """Bits per owned-wave field of SEM_GATHER (counts up to G_w contributions)."""
+    return max(1, G_w.bit_length())
+
+
+def max_owned_waves(num_waves: int, owners: int, G_w: int) -> int:
+    """Most waves one member owns (owner k of wave w = member (w * owners + k) mod G_w)."""
+    return math.ceil(num_waves * owners / G_w) if G_w > 1 else 0
+
+
 def wave_params(rows_max: int, G_w: int):
+    """(num_waves, q_w, owners, q). Waves shrink until every member's owned waves fit SEM_GATHER's 32 bits."""
     waves = max(1, min(rows_max, WAVES_MAX))
-    q_w = math.ceil(rows_max / waves)
-    num_waves = math.ceil(rows_max / q_w)
-    owners = max(1, min(G_w, q_w))
-    q = math.ceil(q_w / owners)
-    return num_waves, q_w, owners, q
+    while True:
+        q_w = math.ceil(rows_max / waves)
+        num_waves = math.ceil(rows_max / q_w)
+        owners = max(1, min(G_w, q_w))
+        q = math.ceil(q_w / owners)
+        if waves == 1 or max_owned_waves(num_waves, owners, G_w) * gather_field_bits(G_w) <= 32:
+            return num_waves, q_w, owners, q
+        waves -= 1
 
 
 def chunking(S: int, sharded: bool):
@@ -184,11 +199,13 @@ class Sizes:
     G: int
 
 
-def footprint(sz: Sizes, sharded, masked, S, R, G_w, num_waves, q_w, owners, q) -> int:
+def footprint(
+    sz: Sizes, sharded, masked, S, R, G_w, num_waves, q_w, owners, q, out_sharded=None, gamma_per_wave=False
+) -> int:
     """Per-worker L1 bytes of every CB (l1_ledger.md -> Total per-core footprint)."""
     C, nch, WS = chunking(S, sharded)
     Wp = nch * C
-    max_owned = math.ceil(num_waves * owners / G_w) if G_w > 1 else 0
+    max_owned = max_owned_waves(num_waves, owners, G_w)
     f = 0
     f += 0 if sharded else R * Wp * sz.T_in  # cb_x_tiles
     f += (2 if masked else 1) * ttnn.tile_size(SCALER_FORMAT)
@@ -197,10 +214,11 @@ def footprint(sz: Sizes, sharded, masked, S, R, G_w, num_waves, q_w, owners, q) 
     f += 4096 * sz.G * q  # stats (Float32)
     f += (sz.G * q + q) * RECORD_BYTES
     if sz.has_gamma:
-        f += Wp * sz.T_g + R * WS * sz.T_i
+        f += Wp * sz.T_g + (q_w if gamma_per_wave else R) * WS * sz.T_i  # cb_gamma_tiles + cb_x_gamma
     if masked:
         f += 2 * q_w * sz.T_i
-    f += 0 if sharded else STREAM_DEPTH * C * sz.T_out
+    out_sharded = sharded if out_sharded is None else out_sharded
+    f += 0 if out_sharded else STREAM_DEPTH * C * sz.T_out
     return f
 
 
@@ -216,7 +234,8 @@ def fused_split(T: int, Wt: int, N: int, sz: Sizes, budget: int):
         G_h = min(T, N // G_w)
         rows_max = math.ceil(T / G_h)
         nw, q_w, owners, q = wave_params(rows_max, G_w)
-        if footprint(sz, False, False, S, rows_max, G_w, nw, q_w, owners, q) > budget:
+        # feasibility with the per-wave γ fallback (the smaller cb_x_gamma); local_plan prefers whole-block γ
+        if footprint(sz, False, False, S, rows_max, G_w, nw, q_w, owners, q, gamma_per_wave=True) > budget:
             continue
         key = (rows_max * S, -min(rows_max, WAVES_MAX), G_w)
         if best is None or key < best[0]:
@@ -233,7 +252,7 @@ def _shard_cores(spec, n):
     return list(ttnn.corerange_to_cores(spec.grid, n, row_wise=spec.orientation == ttnn.ShardOrientation.ROW_MAJOR))
 
 
-def local_plan(input_tensor, workers, sz: Sizes, budget: int) -> LocalPlan:
+def local_plan(input_tensor, workers, sz: Sizes, budget: int, out_sharded=None) -> LocalPlan:
     shape = list(input_tensor.shape)
     W = shape[-1]
     Wt = math.ceil(W / TILE_DIM)
@@ -317,7 +336,10 @@ def local_plan(input_tensor, workers, sz: Sizes, budget: int) -> LocalPlan:
         masked=masked,
         members=members,
     )
-    fp = footprint(sz, sharded, masked, S, rows_max, G_w, num_waves, q_w, owners, q)
+    fp = footprint(sz, sharded, masked, S, rows_max, G_w, num_waves, q_w, owners, q, out_sharded)
+    if fp > budget and sz.has_gamma:
+        plan.gamma_per_wave = True  # lamp L4 fallback: x*γ per wave (cb_x_gamma = q_w rows) instead of per block
+        fp = footprint(sz, sharded, masked, S, rows_max, G_w, num_waves, q_w, owners, q, out_sharded, True)
     if fp > budget:
         raise NotImplementedError(f"distributed_rms_norm: per-core footprint {fp} B exceeds L1 budget {budget} B")
     return plan
@@ -539,7 +561,14 @@ def plan_summary(input_tensor, *, cluster_axis, num_links, gamma=None, fp32_dest
     sz = _sizes(input_tensor, gamma, fp32_dest_acc_en, mesh.shape[cluster_axis])
     p = local_plan(input_tensor, workers, sz, l1_budget(mesh))
     return dict(
-        regime=p.regime, S=p.S, G_w=p.G_w, G_h=p.G_h, rows_max=p.rows_max, num_waves=p.num_waves, workers=len(workers)
+        regime=p.regime,
+        gamma_per_wave=p.gamma_per_wave,
+        S=p.S,
+        G_w=p.G_w,
+        G_h=p.G_h,
+        rows_max=p.rows_max,
+        num_waves=p.num_waves,
+        workers=len(workers),
     )
 
 
@@ -591,7 +620,8 @@ def create_mesh_program_descriptor(
     port_list = port_cores(grid, 2 * num_links, taken)
     pset = {(c.x, c.y) for c in port_list}
     workers = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in pset]
-    plan = local_plan(input_tensor, workers, sz, l1_budget(mesh))
+    out_sharded = output_tensor.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
+    plan = local_plan(input_tensor, workers, sz, l1_budget(mesh), out_sharded)
 
     # ---- publishers -> links ----
     P = plan.G_h * plan.owners  # publishers per wave
@@ -635,7 +665,7 @@ def create_mesh_program_descriptor(
 
     # ---- CBs (worker cores) ----
     R = plan.rows_max
-    max_owned = math.ceil(plan.num_waves * plan.owners / plan.G_w) if plan.G_w > 1 else 0
+    max_owned = max_owned_waves(plan.num_waves, plan.owners, plan.G_w)
     cbs = [
         _cb(CB_REDUCE_SCALER, SCALER_FORMAT, ttnn.tile_size(SCALER_FORMAT), 2 if plan.masked else 1, worker_crs),
         _cb(CB_SUMSQ_PARTIAL, interm, sz.T_i, plan.q_w, worker_crs),
@@ -647,16 +677,19 @@ def create_mesh_program_descriptor(
     ]
     if plan.sharded:
         cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_X_TILES, input_tensor))
-        cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output_tensor))
     else:
         cbs.append(_cb(CB_X_TILES, input_tensor.dtype, sz.T_in, R * plan.WS, worker_crs))
+    if out_sharded:
+        cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output_tensor))
+    else:
         cbs.append(_cb(CB_OUTPUT, output_tensor.dtype, sz.T_out, STREAM_DEPTH * plan.C, worker_crs))
     if plan.G_w > 1:
         cbs.append(_cb(CB_PARTIAL_COL, interm, sz.T_i, 2 * plan.q_w, worker_crs))
         cbs.append(_cb(CB_GATHER, interm, sz.T_i, max(1, max_owned) * plan.G_w * plan.q, worker_crs))
     if gamma is not None:
         cbs.append(_cb(CB_GAMMA_TILES, gamma.dtype, sz.T_g, plan.Wp, worker_crs))
-        cbs.append(_cb(CB_X_GAMMA, interm, sz.T_i, R * plan.WS, worker_crs))
+        x_gamma_rows = plan.q_w if plan.gamma_per_wave else R
+        cbs.append(_cb(CB_X_GAMMA, interm, sz.T_i, x_gamma_rows * plan.WS, worker_crs))
     if plan.masked:
         cbs.append(_cb(CB_SUMSQ_LAST, interm, sz.T_i, plan.q_w, worker_crs))
         cbs.append(_cb(CB_SUMSQ_ACC, interm, sz.T_i, plan.q_w, worker_crs))
@@ -685,7 +718,7 @@ def create_mesh_program_descriptor(
         READ_LOOKAHEAD_WAVES,  # 19
         seg_stride,  # 20
         Wt,  # 21
-        plan.G_h,  # 22
+        gather_field_bits(plan.G_w),  # 22
     ]
     reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     compute_ct = [
@@ -703,11 +736,13 @@ def create_mesh_program_descriptor(
         G,  # 11
         plan.G_w,  # 12
         SCALE_BLOCK_TILES,  # 13
+        int(out_sharded),  # 14
+        int(plan.gamma_per_wave),  # 15
     ]
     gamma_is_tile = gamma is not None and gamma.layout == ttnn.TILE_LAYOUT
     writer_ct = [
         int(gamma is not None),  # 0
-        int(plan.sharded),  # 1
+        int(out_sharded),  # 1
         plan.WS,  # 2
         plan.C,  # 3
         plan.nch,  # 4
@@ -912,6 +947,8 @@ def create_mesh_program_descriptor(
                     None if mc.shard_spec is None else (tuple(mc.shard_spec.shape), str(mc.shard_spec.grid)),
                     output_tensor.memory_config().buffer_type,
                     tuple(sorted(pset)),
+                    out_sharded,
+                    plan.gamma_per_wave,
                     res.landing_addr,
                 )
             )
