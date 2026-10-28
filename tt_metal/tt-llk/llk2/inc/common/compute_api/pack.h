@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Compute API: pack. Single thread, arch-independent. Every TRISC runs this same call; llk-lib's per-thread call
-// executes only on the pack thread.
+// executes only on the pack thread. dst's L1 address is read only there; it needs to be valid only on the pack
+// thread (tensor/tensor.h).
 //
 //   pack(src, dst);                                     // dst = src; src: a Dest tensor, dst: an L1 tensor
 //   pack<pack_modifiers{.relu = true}>(src, dst);       // dst = max(src, 0)
@@ -33,8 +34,8 @@ namespace llk2
 {
 
 /// dst = src (with Mods' ReLU, or added into dst with l1_acc): every tile of the Dest tensor src to the L1 tensor dst.
-template <pack_modifiers Mods = pack_modifiers {}, const TensorSpec<tensor_rank>& D, class RD, const TensorSpec<tensor_rank>& O, class RO>
-inline __attribute__((always_inline)) void pack(const Tensor<D, RD>& src, const Tensor<O, RO>& dst)
+template <pack_modifiers Mods = pack_modifiers {}, const TensorSpec<tensor_rank>& D, const TensorSpec<tensor_rank>& O>
+inline __attribute__((always_inline)) void pack(const Tensor<D>& src, const Tensor<O>& dst)
 {
     static_assert(D.storage == Storage::Dest, "pack reads a Dest tensor");
     static_assert(O.storage == Storage::L1, "pack writes an L1 tensor");

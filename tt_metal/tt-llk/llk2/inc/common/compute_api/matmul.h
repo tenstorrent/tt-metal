@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Compute API: matmul. Single thread, arch-independent. Every TRISC runs this same call; llk-lib's per-thread calls
-// execute only on their own thread.
+// execute only on their own thread. in0's and in1's L1 addresses are read only on the unpack thread; they need to
+// be valid only there (tensor/tensor.h).
 //
 //   matmul(in0, in1, acc);                              // acc += in0 * in1; in0: [M, K], in1: [K, N], acc: [M, N] in Dest
 //   matmul<matmul_modifiers{...}>(in0, in1, acc);
@@ -25,15 +26,8 @@ namespace llk2
 {
 
 /// acc += in0 * in1, every K step. in0 [M, K] and in1 [K, N] in L1, acc [M, N] in Dest.
-template <
-    matmul_modifiers Mods = matmul_modifiers {},
-    const TensorSpec<tensor_rank>& A,
-    class RA,
-    const TensorSpec<tensor_rank>& B,
-    class RB,
-    const TensorSpec<tensor_rank>& D,
-    class RD>
-inline __attribute__((always_inline)) void matmul(const Tensor<A, RA>& in0, const Tensor<B, RB>& in1, const Tensor<D, RD>& acc)
+template <matmul_modifiers Mods = matmul_modifiers {}, const TensorSpec<tensor_rank>& A, const TensorSpec<tensor_rank>& B, const TensorSpec<tensor_rank>& D>
+inline __attribute__((always_inline)) void matmul(const Tensor<A>& in0, const Tensor<B>& in1, const Tensor<D>& acc)
 {
     static_assert(D.storage == Storage::Dest, "matmul accumulates into Dest");
     static_assert(
