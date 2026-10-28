@@ -498,3 +498,18 @@ check (F196 / F197); host times stay hidden until verified warm.
   FABRIC_2D (DS41-129) -> measured with DS41_MOE_HEAD=ops. Findings: block -3..-6 % device vs flat; flat -7..-10 %
   vs 10-27; block host overhead ~800 ms/chunk vs flat ~360-670; flat's host wall is position-dependent and not
   monotonic (200k ~1005 ms in both series; 500k 747): a host-side position effect, uninvestigated (perf off).
+- 05:26 OWNER: push. Pushed dnijemcevic/model_bringup_galaxy a681324c835..2dc76a55232 (fast-forward, 25 commits: F204/F202/F205, max_y_writers, payload check, K.1 pass, reconcile merge c9ba76f8618, records).
+- 06:20 TORUS (FABRIC_2D_TORUS_XY, wrap links present): block fused head (its default) + block ops head run; flat HANGS
+  on the first MoE call (as on b06u08; kept /data/dnijemcevic/diag/torus_flat_1028_051322). Block fused on torus:
+  L.s10240 PASS (top5 1.0, final hidden rel 0.192), L.smoke Paris. Profile: device 219.5 / 233.9 / 237.5 / 249.1 /
+  284.4 ms (0/50k/100k/200k/500k; -24..-29 % vs flat 2D), warm wall 615 / 641 / 634 / 644 / 646 ms. At 0k: MoE 104.5 ms
+  (flat 179.1, block-ops 159.8; 160 op calls vs 600/800), ffn_norm 3.6 (9.8), attention 71.0 (77.4), 2029 op calls.
+- 07:00 HOST-TIME ROOT CAUSE (cProfile of 5 warm runs, posprof/hostprof_*.pstats): block-ops' extra ~435 ms/chunk =
+  models/demos/moe_block/moe_block.py:903 _tp_rs_rows (ops head) calls fabric_reduce_scatter WITHOUT
+  cache_descriptors=True -> the mesh program descriptor rebuilt in Python 40x/chunk (366 ms cum). Verified: with
+  cache_descriptors=True the block-ops warm wall 1089.5 -> 841.0 ms. Patch kept at
+  /scratch/dnijemcevic/posprof/moe_block_cache_descriptors.patch (reverted in the tree: owner's code, owner's call).
+  Remaining block-ops vs flat (~200 ms): +840 ttnn calls/chunk (122 ms dispatch; inherent to the ops head),
+  prepared_program.generic_op 21 ms (120 calls), str.replace 13 ms (1170 calls: kernel source templated per call),
+  combine_plan.build_mc 12 ms (3 builds/chunk), begin_chunk +10 ms. Flat itself: ~443 ms/chunk ttnn dispatch
+  (3575 calls, ~124 us each: host dispatch-bound, device 308 ms), engram host rows ~100 ms/chunk on the critical path.
