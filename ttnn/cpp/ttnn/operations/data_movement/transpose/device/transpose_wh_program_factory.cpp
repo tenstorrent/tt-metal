@@ -177,8 +177,10 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
     // Legacy built a ComputeConfigDescriptor directly (no TTNN ComputeKernelConfig feeding it),
     // setting only fp32_dest_acc_en and unpack_to_dest_mode; every other field kept its Metal
     // default, which ComputeHardwareConfig's defaults reproduce.
+    // Int32/UInt32 unpack to Dest as Float32 does: Quasar's tilize and transpose unpack to Dest only
+    // when UnpackToDest is requested, and Quasar rejects a 32-bit integer unpack into SrcA (#59515).
     ComputeHardwareConfig compute_hw{.enable_32_bit_dest = fp32_dest_acc_en};
-    if (src0_dfb_data_format == tt::DataFormat::Float32) {
+    if (fp32_dest_acc_en) {
         compute_hw.unpack_modes.insert({IN0, UnpackMode::UnpackToDest});
         if (row_major) {
             compute_hw.unpack_modes.insert({TILIZE, UnpackMode::UnpackToDest});
