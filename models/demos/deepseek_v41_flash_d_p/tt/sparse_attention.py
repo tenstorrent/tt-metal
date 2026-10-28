@@ -246,7 +246,9 @@ class TtSparseAttention(TtWindowAttention):
         src = ttnn.concat([table.index[cls], mine], dim=-1, memory_config=DRAM)
         if mine is not topk:
             dealloc(mine)
-        if cls == WINDOW:  # every window full: the top-k's own sentinel tail ends the list
+        # every window full: the top-k's own sentinel tail ends the list; CKV_FORMAT=bfp4_rows: ROW_BFP4 takes the
+        # window's and the top-k's sentinel tails apart (no compaction)
+        if cls == WINDOW or table.bfp4:
             return src
         out = ttnn.gather(src, -1, self.sparse.perm[cls])
         dealloc(src)
@@ -272,7 +274,7 @@ class TtSparseAttention(TtWindowAttention):
             if shared:
                 memo.put(("index", sources[1]), ikey, index)
         q_rm = self._q(q_resid, cos, sin)
-        o = self._sdpa(q_rm, table.buf, index)
+        o = self._sdpa(q_rm, table.buf, index, window=table.win)
         dealloc(q_rm)
         if not shared:
             dealloc(index)
