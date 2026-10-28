@@ -52,6 +52,21 @@ class MiniMaxKVCache(KvCaches):
             ttnn.deallocate(t)
 
 
+def cache_memory_config(head_dim):
+    """The DRAM ND-shard memory config of every M3 prefill cache: NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK-token
+    blocks of one head, round-robin over the BH_NUM_DRAM_BANKS banks."""
+    core_ranges = [
+        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(BH_NUM_DRAM_BANKS)
+    ]
+    nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim],
+        grid=ttnn.CoreRangeSet(core_ranges),
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
+    )
+    return ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=nd_shard_spec)
+
+
 def allocate_kv_caches(
     mesh_device,
     *,
@@ -95,16 +110,7 @@ def allocate_kv_caches(
             seq_local % (tp * ttnn.TILE_SIZE) == 0
         ), f"index_k TP dedup needs seq_local ({seq_local}) divisible by tp ({tp}) into whole tiles"
 
-    core_ranges = [
-        ttnn.CoreRange(ttnn.CoreCoord(bank_id, 0), ttnn.CoreCoord(bank_id, 0)) for bank_id in range(BH_NUM_DRAM_BANKS)
-    ]
-    nd_shard_spec = ttnn.NdShardSpec(
-        shard_shape=[1, 1, NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK, head_dim],
-        grid=ttnn.CoreRangeSet(core_ranges),
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        shard_distribution_strategy=ttnn.ShardDistributionStrategy.ROUND_ROBIN_1D,
-    )
-    mem_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.DRAM, nd_shard_spec=nd_shard_spec)
+    mem_config = cache_memory_config(head_dim)
 
     # The topology ReplicateTensorToMesh would give: 1-D Replicate over the physical 2-D coordinates.
     replicated = ttnn.TensorTopology(
