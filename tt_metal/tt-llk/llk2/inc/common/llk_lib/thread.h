@@ -2,9 +2,11 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// The thread split. Every TRISC compiles the same kernel body; a per-thread call takes the thread it runs on (On)
-// as a template parameter and executes only where current_thread == On. Elsewhere the execute branch is discarded
-// and never instantiated (report 4, section 3).
+// llk-lib's thread split, the same on every arch. Every TRISC compiles the same kernel body, so every thread meets
+// every Compute API call. llk-lib's per-thread calls (unpack, matmul, ...) take the thread they run on (On) as a
+// template parameter: they plan on every thread, and configure and execute only where current_thread == On.
+// Elsewhere that branch is discarded and never instantiated, so each TRISC's build carries only its own thread's
+// code (tt-llk-lab llk-tensor, report 4, section 3).
 
 #pragma once
 
