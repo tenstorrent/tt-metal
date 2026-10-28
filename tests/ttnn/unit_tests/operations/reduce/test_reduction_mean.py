@@ -282,3 +282,45 @@ def test_mean_nc(device, shape, dim, dtype, keepdim, scalar):
         assert_with_ulp(expected_result=torch_output, actual_result=output_tensor, ulp_threshold=8)
     else:
         assert_allclose(torch_output, output_tensor.float(), rtol=3e-2 if dtype == ttnn.bfloat8_b else 1e-2, atol=0)
+
+
+@pytest.mark.parametrize("shape, dim", [((8, 16, 64, 64), [0]), ((3, 7, 37, 63), 3), ((2, 3, 32, 64), None)])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+def test_mean_preallocated_output(device, shape, dim, dtype):
+    torch.manual_seed(0)
+    torch_dtype = torch.bfloat16 if dtype == ttnn.bfloat16 else torch.float32
+    input_tensor = ttnn.from_torch(
+        torch.randn(shape).to(torch_dtype), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    expected = ttnn.to_torch(ttnn.mean(input_tensor, dim=dim, keepdim=True))
+
+    output = ttnn.from_torch(
+        torch.zeros(expected.shape, dtype=torch_dtype), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    result = ttnn.mean(input_tensor, dim=dim, keepdim=True, output=output)
+
+    assert result.buffer_address() == output.buffer_address()
+    assert torch.equal(ttnn.to_torch(output), expected.to(torch_dtype))
+
+
+def test_mean_preallocated_output_shape_mismatch(device, expect_error):
+    input_tensor = ttnn.from_torch(
+        torch.zeros(8, 16, 64, 64), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    output = ttnn.from_torch(torch.zeros(1, 16, 64, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    with expect_error(RuntimeError, "does not match the reduced shape"):
+        ttnn.mean(input_tensor, dim=0, keepdim=True, output=output)
+
+
+@pytest.mark.parametrize("shape, dim", [((2, 4, 64, 100), 3), ((2, 4, 64, 768), 3), ((2, 4, 100, 64), 2)])
+def test_mean_bf16_scaler_unbiased(device, shape, dim):
+    torch.manual_seed(0)
+    input_tensor = ttnn.from_torch(
+        (torch.randn(shape) * 0.25 + 1).bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+    )
+    torch_output = ttnn.to_torch(input_tensor).double().mean(dim=dim, keepdim=True)
+
+    output_tensor = ttnn.to_torch(ttnn.mean(input_tensor, dim=dim, keepdim=True)).double()
+
+    # A 1/N truncated to bf16 biases every output by the same relative amount, up to ~5e-3.
+    assert ((output_tensor - torch_output) / torch_output).mean().abs() < 1e-3

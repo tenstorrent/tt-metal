@@ -64,6 +64,25 @@ static Tensor convert_output_layout(const Tensor& tensor, const std::optional<La
     return ttnn::to_layout(tensor, *output_layout);
 }
 
+static Tensor write_to_output(const Tensor& result, const std::optional<Tensor>& output, const char* op_name) {
+    if (!output.has_value()) {
+        return result;
+    }
+    TT_FATAL(
+        output->logical_shape() == result.logical_shape(),
+        "{} output shape {} does not match the reduced shape {}",
+        op_name,
+        output->logical_shape(),
+        result.logical_shape());
+    TT_FATAL(
+        output->layout() == result.layout(),
+        "{} output layout {} does not match the result layout {}",
+        op_name,
+        output->layout(),
+        result.layout());
+    return ttnn::assign(result, *output);
+}
+
 // input_shape has original shape while output_shape has reduction applied and last 2 dims padded.
 // Need to get slice parameters based on the minimum of the two shapes.
 std::tuple<ttsl::SmallVector<int>, ttsl::SmallVector<int>, ttsl::SmallVector<int>> get_slice_parameters(
@@ -797,20 +816,7 @@ Tensor sum(
             fast_and_approximate_mode,
             output_layout),
         output_layout);
-    if (!output.has_value()) {
-        return result;
-    }
-    TT_FATAL(
-        output->logical_shape() == result.logical_shape(),
-        "ttnn.sum output shape {} does not match the reduced shape {}",
-        output->logical_shape(),
-        result.logical_shape());
-    TT_FATAL(
-        output->layout() == result.layout(),
-        "ttnn.sum output layout {} does not match the result layout {}",
-        output->layout(),
-        result.layout());
-    return ttnn::assign(result, *output);
+    return operations::reduction::write_to_output(result, output, "ttnn.sum");
 }
 
 Tensor mean(
@@ -822,19 +828,23 @@ Tensor mean(
     float scalar,
     const std::optional<CoreRangeSet>& sub_core_grids,
     bool fast_and_approximate_mode,
-    const std::optional<Layout>& output_layout) {
-    return operations::reduction::convert_output_layout(
+    const std::optional<Layout>& output_layout,
+    const std::optional<Tensor>& output) {
+    const auto memory_config =
+        output.has_value() ? memory_config_arg.value_or(output->memory_config()) : memory_config_arg;
+    auto result = operations::reduction::convert_output_layout(
         operations::reduction::reduce<reduction_common::ReduceType::Mean>(
             input_tensor_arg,
             dim_arg,
             keepdim,
-            memory_config_arg,
+            memory_config,
             compute_kernel_config,
             scalar,
             sub_core_grids,
             fast_and_approximate_mode,
             output_layout),
         output_layout);
+    return operations::reduction::write_to_output(result, output, "ttnn.mean");
 }
 
 Tensor max(
