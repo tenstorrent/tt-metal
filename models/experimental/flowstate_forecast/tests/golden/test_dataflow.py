@@ -36,8 +36,12 @@ def rel(a, b):
 @pytest.fixture(scope="module")
 def model():
     os.environ["HF_HUB_OFFLINE"] = "1"
-    from models.experimental.flowstate_forecast.tests.golden.make_goldens import load_model
+    try:
+        from models.experimental.flowstate_forecast.tests.golden.make_goldens import load_model
+    except ImportError:  # python_env has no granite-tsfm: the same checkpoint through safetensors
+        from models.experimental.flowstate_forecast.reference import weights
 
+        return weights.load()
     return load_model()
 
 
