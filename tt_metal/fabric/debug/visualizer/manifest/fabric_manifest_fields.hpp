@@ -461,7 +461,7 @@ inline constexpr auto k_sender_channel_fields = [] {
             .key = "producer_credit_return_cmd_buf",
             .source = NamedArg{"SENDER_CH_{}_ACK_CMD_BUF_ID", ArgIndex::COMPACT},
             .category = FLOW_CONTROL,
-            .content = enum_of<NocCmdBuf>(),
+            .content = enum_of<FabricEriscDatamoverConfig::NocCmdBuf>(),
             .description = "The NoC command buffer it returns them through.",
         },
         RouterField{
@@ -541,14 +541,14 @@ inline constexpr auto k_receiver_channel_fields = [] {
             .key = "forward_data_cmd_buf",
             .source = NamedArg{"RX_CH_{}_FWD_DATA_CMD_BUF_ID", ArgIndex::COMPACT},
             .category = KERNEL_PARAMS,
-            .content = enum_of<NocCmdBuf>(),
+            .content = enum_of<FabricEriscDatamoverConfig::NocCmdBuf>(),
             .description = "The NoC command buffer it writes each forwarded packet through.",
         },
         RouterField{
             .key = "forward_sync_cmd_buf",
             .source = NamedArg{"RX_CH_{}_FWD_SYNC_CMD_BUF_ID", ArgIndex::COMPACT},
             .category = KERNEL_PARAMS,
-            .content = enum_of<NocCmdBuf>(),
+            .content = enum_of<FabricEriscDatamoverConfig::NocCmdBuf>(),
             .description = "The NoC command buffer it sends the credit increment that announces a forwarded packet "
                            "through.",
         },
@@ -563,7 +563,7 @@ inline constexpr auto k_receiver_channel_fields = [] {
             .key = "local_write_cmd_buf",
             .source = NamedArg{"RX_CH_{}_LOCAL_WRITE_CMD_BUF_ID", ArgIndex::COMPACT},
             .category = KERNEL_PARAMS,
-            .content = enum_of<NocCmdBuf>(),
+            .content = enum_of<FabricEriscDatamoverConfig::NocCmdBuf>(),
             .description = "The NoC command buffer it delivers them through.",
         },
         RouterField{
