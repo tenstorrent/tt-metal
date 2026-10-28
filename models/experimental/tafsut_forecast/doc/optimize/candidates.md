@@ -22,12 +22,12 @@ One line per candidate, in the order tried. Status: proposed / screening / kept 
 | R1-1 | 1 | RoPE: batch into M for `rot`, then fused `qkv_heads_rope` (model-local generic_op, absolute kernel paths, micro-bench, fresh-input trace test); alt: fold the signed permutation R into Wq/Wk (order-only if bitwise-equal weights, else v1.19) | pre-approved | proposed | |
 | R1-2 | 1 | 2D program configs per role (one sweep job) | pre-approved | proposed | |
 | R1-3 | 1 | relu fused in ff-up program config | pre-approved | proposed | |
-| R1-4 | 1 | residual add in wo / ff-down epilogue, or add_rms_norm | pre-approved | proposed | |
-| R1-5 | 1 | SDPA output_concat_heads | pre-approved | proposed | |
-| R1-6 | 1 | long_context chunk micro-bench 1088/32 vs 1152/64 | pre-approved | proposed | |
-| R1-7a | 1 | fp32_dest_acc_en off, HiFi2 linears | performance preset only; at accuracy needs an X gate | proposed | |
-| R1-7b | 1+ | RMSNorm-gamma fold; exp_approx_mode | v1.19: variance table, full check_gates, device check that can fail | proposed | |
-| R1-8 | 1 | QKV HiFi4 -> HiFi2 at the performance preset | allowed under drift; accuracy keeps HiFi4 | proposed | |
+| R1-4 | 1 | residual add fused into the next norm (chronos add_rms_norm, 810901cc03b) with R1-7b gamma fold | pre-approved; fold is v1.19 | dropped | screen 4L -3.4 % (1274); full -3.6 % paper acc (1298 vs 1297) but paper acc median_err 0.0384->0.0664 and 17 other check_gates failures with R1-7a (1333); knob TAFSUT_ADD_NORM=1 |
+| R1-5 | 1 | SDPA output_concat_heads | pre-approved | kept (b709d5b50fe) | screen 4L -2.0 % (1275); full paper acc 408.5 -> 399.7 ms (-2.2 %, 1297), gated metrics bit-identical to 1256 |
+| R1-6 | 1 | long_context chunk micro-bench 1088/32 vs 1152/64 | pre-approved | deferred to round 2 | not in D7 list |
+| R1-7a | 1 | fp32_dest_acc_en off, LoFi linears (performance preset only) | performance only | dropped | perf -2.2 % (1295 vs 1298); gift_ragged/perf abs_err_max 0.05->0.116, long_horizon/perf floors fail (1333); knob TAFSUT_PERF_BF16_DEST=1 |
+| R1-7b | 1+ | RMSNorm-gamma fold; exp_approx_mode | v1.19 | dropped with R1-4 (fold); exp_approx not tried | 1333 |
+| R1-8 | 1 | QKV HiFi4 -> HiFi2 at the performance preset | allowed under drift | no change needed | Precision.performance already runs QKV at LoFi |
 
 Tracking (PLAN v1.12): the performance preset ships only at >= 5 % faster than accuracy; round 0 it is 2.6 %.
 | R1-1 | 1 | fused head split + RoPE (chronos qkv_heads_rope, fp32 DST); matmul rope where the table exceeds L1 | A1 | measured, X-r1b | screen paper 4L -43 % (1186/1187); with R1-2: iter_01/r1_measure.md |

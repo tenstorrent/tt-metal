@@ -134,3 +134,21 @@ Variance-table row (paper, full bench, isolation of R1-2/3 on top of R1-1; 1265 
 - score_broken 1267 (CPU): **0 broken outputs pass**, the golden fails 0 cases (`broken_job1267.txt`).
   long_horizon/accuracy f2 `inactive_collapsed` (84 inactive rows) fails `f2_flat_max_err` and `f2_inactive_max_err`
   under the 0.06 ceiling (and `f2_pcc_row_min`).
+
+## R1-4, R1-5, R1-7, R1-8 (after D7)
+Screens (BENCH_LAYERS=4, paper acc / perf ms, 4369338e11a-era knobs): base 133.95 / 121.19 (1273); R1-4+7b fused
+add+norm with gamma fold 129.46 / 116.73 (1274); R1-5 SDPA concat heads 131.32 / 118.78 (1275); both 126.70 / 114.48
+(1276); R1-7a perf bf16 DST 133.84 / 118.82 (1277). `test_add_rms_norm` 1293: 3 passed (bound set to one bf16 ulp
+after 1272 failed my first 2^-8 bound at 0.0043; the fused sum equals ttnn.add bit for bit).
+
+Full benches, paper acc / perf ms: 1256 (R1-1..3) 408.5 / 367.3; 1297 (+R1-5) 399.7 / 358.6; 1298 (+R1-4/7b)
+385.3 / 342.6; 1295 (+R1-7a) 385.3 / 335.2. R1-5's gated metrics are bit-identical to 1256.
+check_gates 1333 on 1295 + suite 1311 (176 passed): **18 failures** (`check_gates_1333_r1all.txt`), e.g. paper/acc
+median_err 0.0664 vs drift 0.0509 (R1-4/7b, already in 1298), long_horizon/perf spread_ratio_min 0.525 vs 0.68,
+gift_ragged/perf abs_err_max 0.116 (R1-7a). Both precision changes are **dropped** (3290c26f9ab, knobs kept off);
+R1-5 is **kept**. R1-8: no change, performance QKV is already LoFi. Round-end record: see below.
+
+## Round 1 end record (3290c26f9ab, clean: R1-1 + R1-2/3 + R1-5)
+Bench 1334: paper acc **399.8 ms** (round 0 1699.2, -76.5 %), paper perf 358.6; long_context 573.1 / 560.3;
+long_horizon 697.2 / 629.3; gift_ragged 573.2 / 560.3; gift_ragged_odd 48.5 / 46.3. Suite 1335: 176 passed.
+check_gates 1350: **0 failures** (`check_gates_1350_r1end.txt`). Round 1 total vs round 0: -76.5 % on the target.
