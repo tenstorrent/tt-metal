@@ -1214,23 +1214,18 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
     milestone: "M1 Format",
     size: "M",
     deps: ["P1", "P2"],
-    goal: "Reject pipelines impossible on every mapping of the MGD, before SAT runs. Never pick a split.",
+    goal: "Reject pipelines impossible on every mapping of the MGD, before SAT runs, from counts only: slices per stage and channels per mesh pair. Never pick a split or a placement; the Tier C solve is fast enough to do that.",
     files: [
-      "tt_metal/fabric/pipeline_builder.cpp",
-      "tt_metal/api/tt-metalium/experimental/fabric/pipeline_builder.hpp",
       "tt_metal/fabric/mesh_graph_descriptor.cpp",
       "tt_metal/api/tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp",
     ],
     steps: [
-      "Binding set per stage: meshes whose slice tiles the stage shape exactly and that fit it. The slice is device_topology / host_topology; host_topology.dims is the rank grid already on the descriptor (DeclaredTopology::host_dims). No stage is required to be one slice: the descriptor does not say which stage owns host I/O.",
-      "Capacity in slices, per mesh class.",
-      "Projection exists: depth-first stage -> mesh over every pipeline at once, stopping at the first survivor. Most constrained stage first, then breadth-first along edges; meshes holding a neighbour first. Rules: slices fit, every crossing rides a declared connection within its channel count, look-ahead on free slices and channels, and an empty mesh is used only if it is the lowest empty one among interchangeable meshes.",
-      "Segment carve at each leaf, per mesh: uint64 slice masks, rectangles placed largest first then along edges, no overlap, every edge inside the mesh joins touching rectangles. Memoised on (mesh descriptor, sorted stage ids), failures included.",
-      "No node budget: both searches end in pass or proved impossible, never UNDECIDED. Fail fast instead: an odd grid holds no ring, and a fully used mesh entered and left through fixed slices gets the exact O(1) Hamiltonian-path test (Itai-Papadimitriou-Szwarcfiter) before any search.",
-      "Save PipelineMappingConstraints (binding sets; k_AB, min crossings per mesh, boundary slices per mesh pair), exposed as MeshGraphDescriptor::pipeline_mapping_constraints(). No projection list: any carve Tier C finds already passes Tier B's rules, so a stored list could never reject anything. The Plan 1 facts need every projection and carve, so they come from an optional \"find all\" run of the same searches with a smaller budget (10^5); skipped or over budget, they are the defaults k = 0 and every slice a boundary slice. init_from_parts reads them; it does not run the check.",
-      "No new files: Tier B is one entry point, detail::check_pipeline_feasibility(descriptor), in pipeline_builder.cpp next to the resolver; its searches are helpers in that file's anonymous namespace. PipelineStageKey and PipelineMappingConstraints go in pipeline_builder.hpp, because the descriptor's accessor returns them.",
-      "Includes: mesh_graph.hpp includes mesh_graph_descriptor.hpp, so the descriptor header cannot include pipeline_builder.hpp. It forward-declares PipelineMappingConstraints and holds it in a unique_ptr (the destructor is already out of line); mesh_graph_descriptor.cpp includes pipeline_builder.hpp.",
-      "Run at the end of every MeshGraphDescriptor constructor, after populate(). Loading a part checks that part (before merge). merge() constructs a new descriptor, so the merged meshes and all pipelines are checked again (after merge).",
+      "Binding set per stage: meshes whose slice tiles the stage shape exactly and that fit it. The slice is device_topology / host_topology. A stage that fits no mesh fails here.",
+      "Capacity in slices: all stages against all slices, then the stages that fit only one mesh against that mesh.",
+      "Channel cap per mesh pair, an upper bound read from the declared connections at every graph level: a graph end expands to every mesh under it, and meshes on one switch get the min of their counts.",
+      "Assignment: depth-first stage -> mesh over every pipeline at once, stopping at the first survivor. Most constrained stage first, then breadth-first along edges; meshes holding a neighbour first. Rules: slices fit, and every crossing rides a declared connection within its channel count. A step limit (10^6) ends the search and accepts with a warning, leaving the answer to Tier C.",
+      "Nothing is stored: a private method, MeshGraphDescriptor::check_pipeline_feasibility() const, called in the proto constructor after populate(). It returns at once without pipelines. merge() constructs a new descriptor, so the merged meshes and all pipelines are checked again.",
+      "Backup if the Tier C solve is slow (not implemented): the per-mesh segment carve, interchangeable-mesh symmetry, look-ahead on free slices and channels, the \"find all\" run, and PipelineMappingConstraints (k_AB, boundary slices) exposed through pipeline_mapping_constraints() for Plan 1 and the exit-node constraints.",
     ],
     code: [
       {
@@ -1240,75 +1235,25 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
         src: `
      proto_ = std::move(proto);
      populate();
-+    // Tier B. host_topology already gives each mesh its rank grid, so this does not
-+    // wait for MeshGraph. Every construction runs it: each part before merge, and
-+    // the descriptor merge() returns.
-+    if (proto_->pipeline_descriptors_size() > 0) {
-+        pipeline_mapping_constraints_ =
-+            std::make_unique<const PipelineMappingConstraints>(detail::check_pipeline_feasibility(*this));
-+    }`,
-      },
-      {
-        path: "tt_metal/api/tt-metalium/experimental/fabric/pipeline_builder.hpp",
-        mode: "diff",
-        language: "cpp",
-        src: `
-     const std::map<std::string, uint32_t>& node_pipeline_core_counts = {},
-     std::optional<uint32_t> pipeline_core_count = std::nullopt);
-
-+// ------------------------------------------------------------------
-+// Pipeline feasibility (Tier B, run by the MeshGraphDescriptor constructor)
-+// ------------------------------------------------------------------
-+
-+struct PipelineStageKey {
-+    std::string pipeline;  // PipelineDescriptor.name
-+    std::string stage;     // PipelineStage.id
-+    auto operator<=>(const PipelineStageKey&) const = default;
-+};
-+
-+// Facts true for every surviving projection and every carve, so constraints built from them are safe.
-+struct PipelineMappingConstraints {
-+    std::map<PipelineStageKey, std::set<MeshId>> binding_sets;
-+    bool enumerated = false;                                            // false: "find all" skipped or over budget,
-+                                                                        // so k = 0 and every slice a boundary
-+    std::map<std::pair<MeshId, MeshId>, std::uint32_t> min_crossings;   // k_AB, min over projections
-+    std::map<MeshId, std::uint32_t> min_crossings_out;                  // per mesh, min over projections
-+    std::map<std::pair<MeshId, MeshId>, std::set<MeshHostRankId>> boundary_slices;   // union
-+};
-+
- // Internal placement types and helpers.
- namespace detail {
- ...
-+// Tier B. Throws, naming the pipeline and the rule, when no mapping of the descriptor can hold it.
-+PipelineMappingConstraints check_pipeline_feasibility(const MeshGraphDescriptor& descriptor);
-+
- }  // namespace detail`,
++    check_pipeline_feasibility();`,
       },
       {
         path: "tt_metal/api/tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp",
         mode: "diff",
         language: "cpp",
         src: `
-+struct PipelineMappingConstraints;  // pipeline_builder.hpp (which includes this header through mesh_graph.hpp)
-+
- class MeshGraphDescriptor {
- public:
-     ...
-+    bool has_pipeline_descriptors() const;
-+    const PipelineMappingConstraints* pipeline_mapping_constraints() const;  // null without pipelines
-     ...
  private:
      ...
-+    std::unique_ptr<const PipelineMappingConstraints> pipeline_mapping_constraints_;
++    // Tier B. Throws, naming the pipeline and the rule, when no mapping of the descriptor can hold it.
++    void check_pipeline_feasibility() const;
  };`,
       },
     ],
     tests: [
-      "subtorus_4x4_pipeline_8stage: ring 0..7..0 accepted; drop the 7-0 connection and it is rejected.",
-      "llama_8b_pod: 8 x 4x2 + 32 x 1x2 accepted; 9 x 4x2 rejected on M0 capacity.",
-      "mesh4x4_stage4x2: accepted, k(M0, M1) = 2 (interleaved splits cross 4 times; min is 2).",
-      "mixed4 + mixed4_b in one descriptor: rejected when that descriptor is constructed (12 > 8). Two copies of ring4: rejected with 2 channels (4 crossings), accepted with 4.",
-      "Two parts that each fit: each constructs. merge() constructs the combined descriptor and rejects it when the pipelines together do not fit.",
+      "Stages that only fit one mesh: five 4x2 stages against M0's four slices are rejected, though the total fits.",
+      "Two pods under a CLUSTER with one channel: a pipeline crossing once is accepted, one crossing twice is rejected (needs 2 channels and 1 are declared).",
+      "A 7x7 grid of one-slice meshes and a ring of 49 stages: the search hits the step limit in about 250 ms and accepts.",
+      "Not covered without the backup carve: two copies of ring4 on two line meshes pass Tier B and are rejected by Tier C.",
     ],
     behaviour: "An impossible pipeline fails when its MeshGraphDescriptor is constructed, before MeshGraph and before SAT.",
   },
@@ -1908,7 +1853,7 @@ PipelineCheck detail::check_pipeline_seating(
     milestone: "M4 Pruning",
     size: "M",
     deps: ["P3", "P8"],
-    goal: "Later, optional speed-up, added only if P8's measured rejection counts call for it. Add a generic ExtraMappingConstraints to TopologyMappingConfig so a caller can pass extra hard constraints into the SAT placement and intra-mesh solves; the mapper applies them at its existing build points and knows nothing about pipelines. TopologyMapper fills them from Tier B's PipelineMappingConstraints. Start with the seat-pair (k_AB) drop.",
+    goal: "Later, optional speed-up, added only if P8's measured rejection counts call for it. Add a generic ExtraMappingConstraints to TopologyMappingConfig so a caller can pass extra hard constraints into the SAT placement and intra-mesh solves; the mapper applies them at its existing build points and knows nothing about pipelines. TopologyMapper fills them from Tier B's PipelineMappingConstraints (backup if slow: Tier B saves none in the first version). Start with the seat-pair (k_AB) drop.",
     files: [
       "tt_metal/api/tt-metalium/experimental/fabric/topology_mapper_utils.hpp",
       "tt_metal/fabric/physical_grouping_descriptor_matching.cpp",
@@ -2410,7 +2355,7 @@ rank_bindings:
         src: `
  // pipeline_builder.cpp, check_pipeline_feasibility (Tier B, P3): inputs built once.
  // Every rule reads nbrs and the per-mesh edge lists, so one filter here covers the crossing rule,
- // the channel count, the look-ahead, the carve adjacency and every PipelineMappingConstraints fact.
+ // the channel count and, in the backup plan, the look-ahead, the carve adjacency and the Plan 1 facts.
  for (const PipelineGraph& graph : graphs) {
      for (const PipelineEdgeSpec& e : graph.edges) {
 +        if (!e.needs_fabric) {
@@ -3297,12 +3242,12 @@ function DescriptorExamples() {
           ["RELAXED (later): s1 > s2, s3 > s0 RELAXED", "3, 4", "s0, s1 > M0; s2, s3 > M1 crosses only on RELAXED edges"],
           ["RELAXED (later): only s3 > s0 RELAXED", "3", "a ring crosses a cut at least twice; only one crossing can be RELAXED"],
           ["mixed4 + mixed4_b", "2", "6 + 6 = 12 slices, 8 declared"],
-          ["two copies of ring4, 2 channels", "3, 4", "no 4-cycle on a line of slices, so each ring crosses twice: 4 > 2"],
+          ["two copies of ring4, 2 channels", "passes (backup step 4 would reject)", "no 4-cycle on a line of slices, so each ring crosses twice: 4 > 2; Tier C rejects it today"],
         ]}
       />
-      <H3>Output: mapping constraints for Tier C</H3>
+      <H3>Output: mapping constraints for Tier C (backup if the solve is slow, not implemented)</H3>
       <Text tone="secondary">
-        Tier B saves what it found as PipelineMappingConstraints on the descriptor: binding sets, k_AB and the minimum
+        Not in the first version: Tier B saves nothing. As a backup, it would save what it found as PipelineMappingConstraints on the descriptor: binding sets, k_AB and the minimum
         crossings per mesh, and the boundary slices per mesh pair. No projection list is stored. Every fact holds for every
         surviving projection and carve, so constraints built from it never drop a buildable seating. The MGD library stores plain MGD
         types; pipeline_builder turns them into the mapper's generic ExtraMappingConstraints hooks, which TopologyMapper passes in through TopologyMappingConfig (P10).
@@ -4545,8 +4490,8 @@ function MapperTab() {
         <Text tone="secondary">
           An MGD with no pipeline_descriptors after merge maps, binds and writes rank bindings exactly as today: no extra search,
           no extra SAT clauses, no changed setting. Generated MGDs (generate_mesh_graph_descriptor_of_shape) have no pipelines,
-          so they are always off. One gate, not a proto check per hook: the merged descriptor's has_pipeline_descriptors() and
-          pipeline_mapping_constraints() (null when off), and TopologyMapper's pipeline_ pointer, set once from
+          so they are always off. One gate, not a proto check per hook: the merged descriptor's has_pipeline_descriptors()
+          (and, in the backup plan, pipeline_mapping_constraints(), null when off), and TopologyMapper's pipeline_ pointer, set once from
           mesh_graph_.get_mesh_graph_descriptor(). A null pointer means the hook adds nothing, never "run with defaults".
         </Text>
         <CodeCard path="the gate" mode="plain" language="cpp" src={PIPELINE_GATE} />
@@ -4556,7 +4501,7 @@ function MapperTab() {
             ["schema pipeline_descriptors (1.3)", "MGD proto", "absent field; existing textprotos parse unchanged"],
             ["merge (1.5)", "MeshGraphDescriptor::merge", "merged proto byte-identical to today's"],
             ["Tier A (2.1)", "MGD constructor", "loops over zero pipelines"],
-            ["Tier B (2.2)", "MGD constructor", "check_pipeline_feasibility not called; pipeline_mapping_constraints() is null"],
+            ["Tier B (2.2)", "MGD constructor", "check_pipeline_feasibility returns at once; nothing is stored"],
             ["stage-to-mesh, seat and exit helpers (2.2, 4.3)", "mapper helpers", "return without adding a constraint"],
             ["seat-graph edge drop for k_AB (4.3)", "build_sat_placement_seat_graph", "today's saturated_link_count edges"],
             ["unique_shapes (4.3)", "map_multi_mesh_to_physical, generate_rank_bindings --all-solutions", "true, as today"],
@@ -4594,7 +4539,8 @@ function MapperTab() {
 const PIPELINE_GATE = `
 // MeshGraphDescriptor (merged)
 bool has_pipeline_descriptors() const;                                  // proto_->pipeline_descriptors_size() > 0
-const PipelineMappingConstraints* pipeline_mapping_constraints() const; // null when off
+// Backup if the solve is slow (not implemented):
+// const PipelineMappingConstraints* pipeline_mapping_constraints() const; // null when off
 
 // MultiMeshSolutionEnumerator, built once in the constructor from config.pipelines
 std::unique_ptr<const detail::PipelineProblem> pipeline_;              // null when off`;

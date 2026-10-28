@@ -47,7 +47,7 @@ Two things are easy to mix up:
 |---|---|---|
 | Schema (1.3) | `PipelineEdge` has `src` and `dst`; field 3 is reserved | `optional Policy policy = 3`, the enum `channels` already uses; omitted is STRICT, so first-version files keep their meaning |
 | Tier A (2.1) | ids, edges, shapes, names | reject an explicit `INVALID_POLICY`; RELAXED is allowed on any edge |
-| Tier B (2.2) | every edge counts against `cap(A, B)`; every edge inside a mesh needs touching rectangles | edges with `needs_fabric = false` (RELAXED, other than stage 0's outgoing edge) are skipped |
+| Tier B (2.2) | every edge that crosses meshes counts against `cap(A, B)`; touching rectangles inside a mesh are a backup if the solve is slow | edges with `needs_fabric = false` (RELAXED, other than stage 0's outgoing edge) are skipped |
 | Tier C (2.3, 4) | one footprint solve on the position graph, then the resolver | RELAXED edges become soft target edges in the same solve; one resolver call per fabric chain (3.4) |
 | Plan 1 `k_AB` (4.4; later and optional, P10) | every crossing counts | only `needs_fabric` crossings count, so P10's hooks prune less |
 | blaze | nothing new | `Edge` gets a policy; `--pipeline-builder flexible` marks every edge RELAXED |
@@ -567,7 +567,7 @@ anyway, and P11 only widens what is accepted.
 ```cpp
  // pipeline_builder.cpp, check_pipeline_feasibility (Tier B, P3): inputs built once.
  // Every rule reads nbrs and the per-mesh edge lists, so one filter here covers the crossing rule,
- // the channel count, the look-ahead, the carve adjacency and every PipelineMappingConstraints fact.
+ // the channel count and, in the backup plan, the look-ahead, the carve adjacency and the Plan 1 facts.
  for (const PipelineGraph& graph : graphs) {
      for (const PipelineEdgeSpec& e : graph.edges) {
 +        if (!e.needs_fabric) {
@@ -860,7 +860,7 @@ Both run inside every `MeshGraphDescriptor` constructor, and again on the merged
 |---|---|---|
 | runs in | `static_validate`, on the proto alone | after `populate`, with the meshes, rank grids and connections |
 | asks | is the pipeline text a valid descriptor? | can these stages fit on the meshes this descriptor declares? |
-| checks | ids unique and resolved, no self-edges, positive shapes, unique pipeline names | binding sets, slice capacity, crossings ride declared connections within their channels, per-mesh segment carve |
+| checks | ids unique and resolved, no self-edges, positive shapes, unique pipeline names | binding sets, slice capacity, crossings ride declared connections within their channels (the per-mesh carve is a backup if the solve is slow) |
 | `[2, 4]` stage on 4x2 slices | pass: two positive numbers | reject: no mesh's slice tiles it (no transpose) |
 | two copies of `mixed4` | pass: each is well-formed | reject: 12 slices needed, 8 declared |
 
@@ -961,6 +961,24 @@ quotient. Tier B does not need `MeshGraph` to know how many ranks a mesh has.
 
 These reject pipelines that are impossible on *any* mapping of this MGD.
 
+> **What the first version runs.** Counts and channels only:
+>
+> - **Binding** (step 1): the meshes each stage fits.
+> - **Capacity** (step 2): each stage's smallest slice count, summed, against the declared slices, and the
+>   stages that fit only one mesh against that mesh.
+> - **Projection search** (step 3): some choice of one mesh per stage fits every mesh's slices, and the
+>   crossings fit the declared channels. It stops at a step limit and then accepts.
+>
+> Where a stage sits inside its mesh is left to the SAT solve in Tier C (4.2), which places stages quickly.
+> The check is a private method, `MeshGraphDescriptor::check_pipeline_feasibility` in
+> `mesh_graph_descriptor.cpp`, and it stores nothing.
+>
+> **Backup if the Tier C solve is slow (not implemented).** These stay written below so they can be added
+> later: the per-mesh segment carve (step 4), interchangeable-mesh symmetry and the look-ahead in step 3,
+> the "find all" run, and `PipelineMappingConstraints` with its P10 hooks. Leaving the carve out has one
+> cost: a pipeline whose stages cannot be carved on their meshes passes Tier B and fails in Tier C, after
+> the mapper has tried the seatings.
+
 #### Which meshes a stage can bind to
 
 `host_topology` partitions `device_topology`; the slice is the elementwise quotient. A stage
@@ -1038,7 +1056,10 @@ same MGD, connections 0-1-2-...-7 (no 7-0)                           REJECT
   the loopback crossing has no declared connection
 ```
 
-#### Each mesh's segment can be carved
+#### Each mesh's segment can be carved - backup if the solve is slow
+
+**Not in the first version.** Tier C's solve places stages inside each mesh. Add this to Tier B only if
+that solve is slow on real descriptors.
 
 A projection survives only if, for each mesh in it, the stages it assigns to that mesh can be
 carved on the mesh's logical slices. Reject only when no projection survives. The check
@@ -1066,8 +1087,8 @@ in the descriptor at once, because they share slices and channels.
 | Input | Where it comes from | Notes |
 |---|---|---|
 | slices of mesh `m` | `get_declared_topology(m)`: `dims / host_dims`, count `prod(host_dims)` | grid of slices, in rank order |
-| slice adjacency in `m` | neighbours in the `host_dims` grid; a wrap on axis `i` when `ring_dims[i]` and `host_dims[i] > 2` | with `host_dims[i] == 2` the wrap is the edge already there |
-| `cap(A, B)` | sum of `count` over FABRIC `ConnectionData` with `nodes = [A, B]` | `populate` stores each connection in both directions, so read one direction only. ALL_TO_ALL, RING and manual `connections` all land here |
+| slice adjacency in `m` (backup carve only) | neighbours in the `host_dims` grid; a wrap on axis `i` when `ring_dims[i]` and `host_dims[i] > 2` | with `host_dims[i] == 2` the wrap is the edge already there |
+| `cap(A, B)` | sum of `count` over the `ConnectionData` of every graph, whatever its type (`FABRIC`, `POD`, `CLUSTER`) | `populate` stores each connection in both directions, so read one direction only. ALL_TO_ALL, RING and manual `connections` all land here. An end that is a graph stands for every mesh under it, so each pair gets the channels; meshes joined through one switch get the smaller of their two counts. Both are upper bounds, and Tier C checks the cables |
 | stage `s` | id, shape, and for each mesh `m` the rectangle `shape / slice(m)` in slices, or none | the binding set is the meshes with a rectangle |
 | edge `e` | `src`, `dst`, multiplicity | a repeated edge counts once per copy (Tier A). RELAXED (later): plus its policy |
 
@@ -1108,15 +1129,15 @@ crossing; then the mesh with the most free slices.
 2. **Crossings:** for every edge copy between `s` and an assigned stage `t` on mesh
    `n != m`, `crossings[m][n] + 1 <= cap[m][n]`. If `cap[m][n] == 0` there is no declared
    connection, and the assignment fails at once.
-3. **Symmetry:** see below.
+3. **Symmetry** (backup if slow): see below.
 
-*Look-ahead after each assignment (cheap, sound):*
+*Look-ahead after each assignment (backup if slow; cheap, sound):*
 
 - every unassigned stage still has a mesh in its binding set with room for it and, if it has
   assigned neighbours, enough channels left toward them;
 - the smallest needs of the unassigned stages fit in the free slices left.
 
-*Interchangeable meshes.* Two meshes are interchangeable when they have the same declared
+*Interchangeable meshes (backup if slow).* Two meshes are interchangeable when they have the same declared
 topology (`dims`, `host_dims`, ring axes) and the same `cap` toward every other mesh, so
 swapping them maps every projection to another one. Within such a class, an **empty** mesh may
 be used only when it is the lowest-numbered empty mesh of its class. This is sound, because a
@@ -1125,8 +1146,8 @@ with 8 identical meshes and 8 one-slice stages, it turns 8! = 40320 orderings in
 of meshes `0-1-...-7-0` has no interchangeable pair (only rotations), but the crossing rule
 already prunes it hard.
 
-*Leaf.* When every stage has a mesh, run step 4 on each mesh that holds stages (memoised).
-If any mesh fails, backtrack; at the first full success, Tier B passes.
+*Leaf.* When every stage has a mesh, Tier B passes. (Backup if slow: run step 4 on each mesh
+that holds stages, memoised, and backtrack if any mesh fails.)
 
 ```text
 search(depth):
@@ -1146,7 +1167,8 @@ search(depth):
 RELAXED (later) adds one line: RELAXED edges are skipped in rule 2 and in the look-ahead, so
 they never touch `crossings` or `cap`.
 
-**Step 4: segment carve per mesh** (depth-first, stop at the first carve). For each mesh,
+**Step 4: segment carve per mesh - backup if the solve is slow** (depth-first, stop at the first
+carve). Not in the first version. For each mesh,
 take the stages assigned to it and place each as a rectangle of slices, with no two
 overlapping, so that every **edge between two stages on that mesh** joins rectangles that
 touch (share a slice edge, wraps included). RELAXED (later): a RELAXED edge inside a mesh
@@ -1172,13 +1194,14 @@ rejects, naming the deepest failure the search recorded (for example "s2: M0 ful
 needs a 3rd M0–M1 channel, 2 declared", or "every split crosses M0–M1 on 4 edges, 2
 channels declared"). Tier B stores no projection and no carve.
 
-**No budget; fail fast.** Both searches run to a definite answer: pass or proved
-impossible. There is no node budget and no UNDECIDED result (the same rule as Tier C, 4.2).
-The one slow case is a fully used grid of one-slice stages that must close a ring, a
-Hamiltonian-cycle search that is slow when none exists. Step 4 settles the all-on-one-mesh
-case before searching: an odd grid holds no ring. Tier B leaves crossing endpoints open, so
-the fixed-endpoint segment test (Itai–Papadimitriou–Szwarcfiter) does not apply here; Tier C
-runs it once the cable slices are known (4.2).
+**A step limit.** Step 3 counts search nodes and stops after 10^6. Running out is not a proof,
+so Tier B accepts, logs a warning, and leaves the answer to Tier C; the constructor always
+returns. The slow case is a fully used grid of one-slice meshes that must close a ring, a
+Hamiltonian-cycle search that is slow when none exists: a ring of 49 stages on a 7x7 grid of
+one-slice meshes reaches the limit in about 250 ms. (Backup if slow: with step 4, an odd grid
+of one-slice stages holds no ring and can be rejected before searching. Tier B leaves crossing
+endpoints open, so the fixed-endpoint segment test, Itai–Papadimitriou–Szwarcfiter, does not
+apply here; Tier C runs it once the cable slices are known, 4.2.)
 
 **Cost.** Of the `host_topology` values in the repo's MGDs, about 200 are one slice (nothing
 to search), about 60 are 2 to 4 slices, about 15 are 8 to 16, and 8 are 32 (4x8, 8x4, 2x16).
@@ -1194,7 +1217,7 @@ gives no readable reason. What makes the hard failing carves fail fast is the ex
 test, which works the same in front of either solver. (Tier C does use SAT, 4.2: there the
 positions are fixed by real cables and the solve must also pick the crossings.)
 
-**Optional: facts for Plan 1.** Plan 1 (4.4) needs facts that hold for **every** projection
+**Optional: facts for Plan 1 - backup if the solve is slow.** Not in the first version. Plan 1 (4.4) needs facts that hold for **every** projection
 and carve: the minimum crossings `k_AB` and the union of boundary slices. These need the
 full set, not the first survivor, so they come from a second run of the same two searches in
 "find all" mode: step 3 continues after each survivor, and step 4 enumerates every carve of a
@@ -1206,7 +1229,11 @@ every host rank as a boundary slice, which prune nothing. The first version may 
 run entirely and save the defaults; the exact check (4.2) then catches what Plan 1 would
 have pruned, at the cost of more seatings tried.
 
-#### Output: mapping constraints for Tier C
+#### Output: mapping constraints for Tier C - backup if the solve is slow
+
+**Not in the first version.** Tier B saves nothing, and the descriptor has no
+`pipeline_mapping_constraints()`. The Tier C solve is fast enough without them. The rest of
+this section is the plan if it turns out to be slow on real descriptors.
 
 Tier B already finds facts the mapper can use. It saves them on the descriptor as one
 object, `PipelineMappingConstraints`. Helpers in the topology mapper turn that object into the
@@ -1214,9 +1241,11 @@ object, `PipelineMappingConstraints`. Helpers in the topology mapper turn that o
 surviving projection and every carve of it, so a constraint built from it never removes a seating
 blaze could build on (the "no early elimination" note above).
 
-**Where the code lives.** No new files. Tier B is one entry point beside the resolver in
-`tt_metal/fabric/pipeline_builder.cpp`, with its two searches as helpers in that file's
-anonymous namespace:
+**Where the code lives.** The first version is a private method,
+`MeshGraphDescriptor::check_pipeline_feasibility` in `mesh_graph_descriptor.cpp`, because it
+saves nothing and needs only the descriptor. If the backup is built, Tier B moves to one entry
+point beside the resolver in `tt_metal/fabric/pipeline_builder.cpp`, with its searches as
+helpers in that file's anonymous namespace:
 
 ```cpp
 // pipeline_builder.hpp, namespace detail
@@ -1365,17 +1394,20 @@ budget gives `k = 0` and no added constraint.
 | `k_AB`, boundary slices | counted | not counted |
 | all edges of a pipeline | full search | steps 1, 2 and the no-overlap part of step 4 only |
 
-**Tests** (`test_mesh_graph_descriptor.cpp`): one per edge case in the examples below, plus a nested-graph MGD,
-a RING `host_topology` axis (a ring4 on one mesh passes once A3–A0 wrap), a repeated edge
-counting twice, the fail-fast cases (an odd grid ring rejects
-before the first search node; "find all" over its cap saves the defaults), interchangeable-mesh symmetry (8 identical meshes on ALL_TO_ALL visit one
-ordering), and a merged descriptor in which each part passes alone
-but the merge fails capacity.
+**Tests** (`test_mesh_graph_descriptor.cpp`, first version): a stage that fits no mesh, total
+slice demand, stages that fit only one mesh, a crossing with no connection, too many crossings
+for the channels, a repeated edge counting twice, POD and CLUSTER connections between two pods,
+and the step limit (the 7x7 ring above accepts). Backup if slow: a RING `host_topology` axis (a
+ring4 on one mesh passes once A3–A0 wrap), an odd grid ring rejected before the first search
+node, "find all" over its cap saving the defaults, interchangeable-mesh symmetry (8 identical
+meshes on ALL_TO_ALL visit one ordering). Not tested yet: a merged descriptor in which each
+part passes alone but the merge fails capacity.
 
 **Open points.**
 
 - A connection between two sub-graphs (not two meshes) does not name the meshes it joins. The
-  first version counts only mesh-to-mesh connections and reports the rest as unsupported.
+  first version gives its channels to every pair of meshes under the two sub-graphs, an upper
+  bound that Tier C checks against the cables.
 - If a manual connection and `graph_topology` both cover a pair, step 3 sums them. Check that
   the control plane requests the sum too.
 
@@ -1418,14 +1450,15 @@ cross:     s1→s2, s3→s0                  s0→s1, s1→s2, s2→s3, s3→s0
 ```
 
 How the step 3 search gets there. Every stage binds to both meshes, so the order starts
-with the most slices: s1 (2 slices), on M0, the lowest empty mesh (M1 would be its mirror,
-so it is never tried). Breadth-first from s1 gives s0, s2, then s3. s0 prefers M0, which
+with the most slices: s1 (2 slices), on M0, the first of two meshes with the same free slices
+(with the backup symmetry rule, M1 would be its mirror and never tried). Breadth-first from s1
+gives s0, s2, then s3. s0 prefers M0, which
 holds s1 (used 3 of 4). s2 also prefers M0 but needs 2 slices with 1 free, so it goes to M1
 and uses one of the two channels (`s1 -> s2`). s3 has neighbours on both meshes, so the tie
 goes to the mesh with more free slices, M1; the loopback `s3 -> s0` uses the second channel.
-The leaf runs the step 4 carve: M0's 1 + 2 slices fit a path of three slices in a line of
-four, and M1's 2 + 1 likewise. Tier B passes
-after a handful of nodes and chooses nothing. In the "find all" run, every survivor crosses
+Every stage has a mesh, so Tier B passes after a handful of nodes and chooses nothing. (The
+backup step 4 carve would also pass: M0's 1 + 2 slices fit a path of three slices in a line of
+four, and M1's 2 + 1 likewise.) In the "find all" run, every survivor crosses
 M0–M1, and a ring crosses a cut an even number of times, so Plan 1 (4.4) gets
 `k(M0, M1) = 2`.
 
@@ -1435,11 +1468,11 @@ M0–M1, and a ring crosses a cut an even number of times, so Plan 1 (4.4) gets
   not a whole number of 4x2 slices.
 - So s0..s3 go on M0 (4 of 4 slices) and s4..s7 on M1 (4 of 4). The projection crosses twice
   (`s3 -> s4`, `s7 -> s0`), within the 2 channels.
-- **Segment carve.** M0's four stages fill a line of four slices, so the segment can only
+- **Segment carve (backup if slow).** M0's four stages fill a line of four slices, so the segment can only
   enter and leave at the end slices A0 and A3. M1's four stages are a path through all four
   slices of a 4-cycle.
-- Tier B passes, with `k = 2` and boundary slices {A0, A3} on M0 and any slice on M1 (used
-  by Plan 1).
+- Tier B passes. (The backup "find all" run would give `k = 2` and boundary slices {A0, A3}
+  on M0 and any slice on M1, for Plan 1.)
 
 **Edge cases.**
 
@@ -1453,8 +1486,8 @@ M0–M1, and a ring crosses a cut an even number of times, so Plan 1 (4.4) gets
 | RELAXED (later): the same, with `s1 -> s2` and `s3 -> s0` RELAXED | pass | the projection `s0, s1 -> M0`, `s2, s3 -> M1` crosses only on those two edges, and RELAXED crossings need no connection |
 | RELAXED (later): the same, with only `s3 -> s0` RELAXED | reject | every projection still crosses on a STRICT edge (`s1 -> s2` or `s2 -> s3`) |
 | `mixed4` plus a copy named `mixed4_b` | reject | together they need 6 + 6 = 12 slices and the MGD has 8, although each fits alone (1.5) |
-| two copies of `ring4` (four 4x2 stages each) | reject | 4 + 4 = 8 slices fit, but A0..A3 is a line, so neither ring closes on one mesh. Each splits and crosses at least twice: 4 STRICT crossings against 2 channels |
-| the same, with `channels { count: 4 }` between M0 and M1 | pass | each ring splits 2 + 2; a projection places all eight stages at once |
+| two copies of `ring4` (four 4x2 stages each) | pass here; Tier C rejects | 4 + 4 = 8 slices fit with each ring on its own mesh and no crossing. A0..A3 is a line, so neither ring closes on one mesh; only the backup step 4 carve would see that and force each ring to split, 4 STRICT crossings against 2 channels |
+| the same, with `channels { count: 4 }` between M0 and M1 | pass | a projection places all eight stages at once; Tier C finds the split that crosses 2 + 2 |
 
 ### 2.3 Tier C - inside the topology mapper
 
@@ -2937,7 +2970,7 @@ puts a different host's slice under the corner ASIC. If that brings the two cabl
 to each other along M1's loop, C2 passes on the same seating. With every host rank bound, the
 signature is fixed and C4 goes straight to move 2.
 
-#### Exit-node constraints for every seating, from Tier B (later, optional)
+#### Exit-node constraints for every seating, from Tier B (backup if the solve is slow)
 
 The intra-mesh solve decides which chips sit under each slice, and so where the cables
 land. Today its exit-node constraint (`add_exit_node_constraints`) allows any mesh node. A
@@ -3150,7 +3183,7 @@ different answers. After (P, Q) fails, `exclude_mapping` blocks the key {P, Q}, 
 covers (Q, P), so the swap is never checked. With `unique_shapes` off, (Q, P) is its own
 seating and gets its own check.
 
-#### Pruning before the first solve - Plan 1 (later, optional)
+#### Pruning before the first solve - Plan 1 (backup if the solve is slow)
 
 **Not in the first version** (see the decision above). Plan 1 encodes necessary conditions
 before the master solve, in one solve. It does not
@@ -3382,7 +3415,8 @@ they are always off.
 ```cpp
 // MeshGraphDescriptor (merged)
 bool has_pipeline_descriptors() const;                                 // proto_->pipeline_descriptors_size() > 0
-const PipelineMappingConstraints* pipeline_mapping_constraints() const; // null when off
+// Backup if the solve is slow (not implemented):
+// const PipelineMappingConstraints* pipeline_mapping_constraints() const; // null when off
 
 // MultiMeshSolutionEnumerator, built once in the constructor from config.pipelines
 std::unique_ptr<const detail::PipelineProblem> pipeline_;              // null when off
@@ -3397,7 +3431,7 @@ hook adds nothing; it never means "empty pipeline, run with defaults".
 | schema `pipeline_descriptors` (1.3) | MGD proto | absent field; existing textprotos parse unchanged |
 | merge (1.5) | `MeshGraphDescriptor::merge` | merged proto byte-identical to today's |
 | Tier A (2.1) | MGD constructor | loops over zero pipelines |
-| Tier B (2.2) | MGD constructor | `check_pipeline_feasibility` not called; `pipeline_mapping_constraints()` is null |
+| Tier B (2.2) | MGD constructor | `check_pipeline_feasibility` returns at once; nothing is stored |
 | `ExtraMappingConstraints` (2.2, 4.4) | `TopologyMappingConfig` | empty hooks: no constraint added |
 | seat-graph edge drop for `k_AB` (4.4) | `build_sat_placement_seat_graph` | today's `saturated_link_count` edges |
 | `unique_shapes` (4.4) | `map_multi_mesh_to_physical`, `generate_rank_bindings --all-solutions` | `true`, as today |
