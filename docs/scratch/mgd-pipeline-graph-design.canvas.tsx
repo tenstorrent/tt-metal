@@ -1066,13 +1066,12 @@ const PRS: Pr[] = [
       "tt_metal/fabric/protobuf/mesh_graph_descriptor.proto",
       "tt_metal/fabric/mesh_graph_descriptor.cpp",
       "tt_metal/api/tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp",
-      "tt_metal/api/tt-metalium/experimental/fabric/pipeline_graph.hpp (new)",
     ],
     steps: [
-      "Add messages PipelineDescriptor, PipelineStage, PipelineEdge; field 6 on MeshGraphDescriptor. Every edge is STRICT: PipelineEdge has no policy field, and field 3 is reserved for it (P14).",
+      "Add messages PipelineDescriptor, PipelineStage, PipelineEdge; field 6 on MeshGraphDescriptor. Every edge is STRICT: PipelineEdge has optional Policy policy = 3, omitted or STRICT is accepted, and RELAXED is rejected by validation until P14.",
       "Add validate_pipeline_descriptors to static_validate, after validate_pinnings.",
       "Add accessors has_pipeline_descriptors() and pipeline_descriptors().",
-      "PipelineStageKey, PipelineStageSpec (key, label, shape), PipelineEdgeSpec (src/dst index) and PipelineGraph (name, stages, edges) live on MeshGraphDescriptor. pipeline_graphs() is the conversion Tier A validates.",
+      "Store each pipeline as PipelineDescriptorData (string stage ids, textproto order). The index-based PipelineGraph is built in Tier C (P8), with no loopback marking.",
     ],
     code: [
       {
@@ -1103,7 +1102,7 @@ const PRS: Pr[] = [
 +message PipelineEdge {
 +    string src = 1;
 +    string dst = 2;
-+    reserved 3;              // edge policy (P14, later); every edge rides a fabric link
++    optional Policy policy = 3;  // omitted or STRICT; RELAXED is rejected until P14
 +}`,
       },
       {
@@ -1152,7 +1151,7 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
     ],
     tests: [
       "Golden textprotos: GPT-OSS ring, llama_8b_pod (40 stages), joint 4x4 stage, dflash fork with both returns on fabric, two pipelines in one MGD.",
-      "One negative textproto per rule (duplicate id, unknown stage, self-edge, rank-3 shape, two pipelines with one name). Two in-degree-0 stages, a stage with three outgoing edges, a branch stage with out-degree 2, and a dead-end branch all parse. An edge with policy: RELAXED fails to parse (no such field yet).",
+      "One negative textproto per rule (duplicate id, unknown stage, self-edge, rank-3 shape, two pipelines with one name). Two in-degree-0 stages, a stage with three outgoing edges, a branch stage with out-degree 2, and a dead-end branch all parse. An edge with policy: STRICT parses; policy: RELAXED is rejected.",
       "Every existing MGD in tt_metal/fabric/mesh_graph_descriptors still parses unchanged.",
     ],
     behaviour: "No behaviour change without the new section.",
@@ -1253,6 +1252,9 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
       "Stages that only fit one mesh: five 4x2 stages against M0's four slices are rejected, though the total fits.",
       "Two pods under a CLUSTER with one channel: a pipeline crossing once is accepted, one crossing twice is rejected (needs 2 channels and 1 are declared).",
       "A 7x7 grid of one-slice meshes and a ring of 49 stages: the search hits the step limit in about 250 ms and accepts.",
+      "subtorus_4x4_pipeline_8stage: the 8-stage ring of 4x4 stages is accepted; without the 7-0 connection it is rejected.",
+      "llama_8b_pod with nine 4x2 stages and thirty-one 1x2 stages: the 40 slices fit in total, but only M0 holds 4x2 stages and it has 8 slices.",
+      "Two parts that each fit alone, merged: rejected because the pipelines together need more slices than the merged meshes have.",
       "Not covered without the backup carve: two copies of ring4 on two line meshes pass Tier B and are rejected by Tier C.",
     ],
     behaviour: "An impossible pipeline fails when its MeshGraphDescriptor is constructed, before MeshGraph and before SAT.",
@@ -1477,13 +1479,15 @@ std::vector<tt::tt_metal::ExitNodeConnection> inter_mesh_cables(
       "tt_metal/fabric/topology_mapper_utils.cpp",
       "tt_metal/api/tt-metalium/experimental/fabric/topology_mapper_utils.hpp",
       "tt_metal/api/tt-metalium/experimental/fabric/pipeline_mapping.hpp (new)",
+      "tt_metal/api/tt-metalium/experimental/fabric/pipeline_graph.hpp (new)",
       "tt_metal/fabric/topology_mapper.cpp",
       "tools/scaleout/src/generate_rank_bindings.cpp",
     ],
     steps: [
+      "Conversion (moved here from P1): build_pipeline_graphs turns pipeline_descriptors() into PipelineGraph, with stage and edge indices. It marks no loopbacks; the resolver call marks one edge per cycle (4.2).",
       "Input: TopologyMappingConfig::pipelines (std::vector<PipelineGraph>); empty means off. TopologyMapper fills it with build_pipeline_graphs(mesh_graph_.get_mesh_graph_descriptor()) unless the kill switch is set; generate_rank_bindings fills it from the merged parts.",
       "Tier C sits beside Tier B in pipeline_builder.cpp: two entry points in pipeline_builder.hpp's detail namespace, build_pipeline_problem and check_pipeline_seating, with the pre-checks and R recording as file-local helpers. The header forward-declares PipelineProblem, PlacedMesh, TopologyMappingResult and PhysicalSystemDescriptor, so the ttnn and nanobind files that include it pull in no mapper or solver headers.",
-      "The enumerator constructor merges config.pipelines into one PipelineProblem (detail::build_pipeline_problem), held as unique_ptr<const PipelineProblem> beside placement_session_. The vector of descriptor records becomes one target graph: global stage indices, one component per pipeline, no edges between pipelines, chip counts and core demand, Tier B binding sets. One footprint solve places every component.",
+      "The enumerator constructor merges config.pipelines into one PipelineProblem (detail::build_pipeline_problem), held as unique_ptr<const PipelineProblem> beside placement_session_. The vector of descriptor records becomes one target graph: global stage indices, one component per pipeline, no edges between pipelines, chip counts and core demand, and each stage's binding set (computed here; Tier B stores none). One footprint solve places every component.",
       "Output: TopologyMappingResult::pipeline (PipelineMappingResult: per pipeline the stage slots (mesh, chip rectangle, host ranks, host I/O chips) and edge layouts (exit, entry, crossing), plus idle host ranks); pipeline stats on TopologyMappingStats. split_mapping_to_local_parts remaps it per part.",
       "TopologyMapper stores mapping_result.pipeline on rank 0 (pipeline_mapping_, get_pipeline_mapping()). R is copied to pipeline_required_links_ and broadcast with the chip info, because every rank checks it after the pairing (P9); the rest of the pipeline mapping stays on rank 0.",
       "detail::check_pipeline_seating: candidates -> slices -> pre-checks (area, lattice, colour) -> one position graph (P5) -> one solve_footprint -> the resolver on that carve (a throw is the reason) -> R as exact channels -> demand.",
@@ -1602,7 +1606,7 @@ std::vector<tt::tt_metal::ExitNodeConnection> inter_mesh_cables(
         src: `
 +struct PlacedMesh;                 // physical_grouping_descriptor.hpp
 +struct TopologyMappingResult;      // topology_mapper_utils.hpp
-+struct PipelineGraph;              // pipeline_graph.hpp (P1)
++struct PipelineGraph;              // pipeline_graph.hpp (P8)
 +struct PipelineMappingResult;      // pipeline_mapping.hpp, which includes this header for PipelineStageKey
 +
  namespace detail {
@@ -2235,8 +2239,8 @@ rank_bindings:
       "tests/tt_metal/tt_fabric/fabric_router/test_mesh_graph_descriptor.cpp",
     ],
     steps: [
-      "Proto: un-reserve PipelineEdge field 3 as optional Policy policy = 3, reusing the enum Channels.policy already uses (INVALID_POLICY, STRICT, RELAXED). No new enum. Omitted means STRICT, so every first-version file keeps its meaning; the textproto spelling is the same as on channels.",
-      "Parser: drop the special case that rejects policy on an edge (PipelineEdgePolicyErrorCollector's warning check and its TT_FATAL); keep the first-error collector.",
+      "Proto: the field already exists (optional Policy policy = 3, the enum Channels.policy uses); only its comment changes. Omitted means STRICT, so every first-version file keeps its meaning.",
+      "Tier A: drop the rejection of an explicit policy other than STRICT.",
       "Tier A: reject an explicit INVALID_POLICY. Nothing else: RELAXED is allowed on any edge.",
       "Descriptor data: PipelineDescriptorData::Edge gains bool relaxed (the header only forward-declares proto::Policy). populate_pipeline_descriptors sets it.",
       "Pipeline graph: PipelineEdgeSpec gains relaxed and needs_fabric. needs_fabric = STRICT, or RELAXED out of stage 0, which blaze's host-cut planner never cuts. One rule, computed once in convert_pipeline, read by Tier B, Plan 1 and later Tier C (P11).",
@@ -2251,24 +2255,20 @@ rank_bindings:
         mode: "diff",
         language: "proto",
         src: `
- // Every edge rides a fabric link. There is no policy field yet: PipelineEdge
- // field 3 is reserved for one. A textproto that writes \`policy\` on an edge
- // does not parse.
--//
+ // Every edge rides a fabric link. policy may be omitted or STRICT. RELAXED is
+-// rejected by MeshGraphDescriptor validation.
 +// An edge may set policy: RELAXED to say it may go over host MPI when the
 +// placement has no fabric link for it. Omitted means STRICT.
-+//
  ...
  message PipelineEdge {
      ...
      string dst = 2;
 
--    // Edge policy, added later. Every edge is STRICT until then.
--    reserved 3;
+-    // Omitted means STRICT. RELAXED is rejected during descriptor validation.
 +    // Optional; omitted is STRICT (same enum and default as Channels.policy).
 +    // STRICT: the edge rides a fabric link. RELAXED: fabric where the placement
 +    // allows, otherwise host MPI. INVALID_POLICY is rejected.
-+    optional Policy policy = 3;
+     optional Policy policy = 3;
  }`,
       },
       {
@@ -2276,32 +2276,12 @@ rank_bindings:
         mode: "diff",
         language: "cpp",
         src: `
- // mesh_graph_descriptor.cpp: the policy field exists now, so the parser no longer
- // special-cases it. The collector keeps only the first parse error.
--// Other unknown fields stay legal (MGD textprotos rely on that). \`policy\` on a pipeline
--// edge is not: the field does not exist yet, and ignoring it would look like RELAXED.
--class PipelineEdgePolicyErrorCollector : public google::protobuf::io::ErrorCollector {
-+class FirstErrorCollector : public google::protobuf::io::ErrorCollector {
-     ...
--    void AddWarning(int, ColumnNumber, const std::string& message) override {
--        if (message.find("PipelineEdge") != npos && message.find("\"policy\"") != npos) { rejected_policy_ = true; }
--    }
-+    void AddWarning(int, ColumnNumber, const std::string&) override {}
-     ...
- };
- ...
--    TT_FATAL(
--        !collector.rejected_policy(),
--        "Failed to parse MeshGraphDescriptor textproto: pipeline edge has no field \"policy\"; every edge is STRICT");
-
- // validate_pipeline_descriptors (Tier A), in the edge loop:
-             if (edge.src() == edge.dst()) {
-                 error_messages.push_back(fmt::format("pipeline '{}': self-edge on '{}'", pipeline.name(), edge.src()));
-             }
+ // validate_pipeline_descriptors (Tier A), in the edge loop: RELAXED is allowed now.
+-            // An omitted policy means STRICT. An explicit policy other than STRICT is rejected.
+-            if (edge.has_policy() && edge.policy() != proto::Policy::STRICT) {
 +            if (edge.has_policy() && edge.policy() == proto::Policy::INVALID_POLICY) {
-+                error_messages.push_back(fmt::format(
-+                    "pipeline '{}': edge {} -> {} has policy INVALID_POLICY", pipeline.name(), edge.src(), edge.dst()));
-+            }
+                 ...
+             }
 
  // populate_pipeline_descriptors:
 -            record.edges.push_back(PipelineDescriptorData::Edge{.src = edge.src(), .dst = edge.dst()});
@@ -2311,7 +2291,8 @@ rank_bindings:
 +                .relaxed = edge.has_policy() && edge.policy() == proto::Policy::RELAXED});
 
  // mesh_graph_descriptor.hpp (proto::Policy is only forward-declared there, so a bool):
--// Edges stay directional pairs of stage ids. There is no policy: every edge is STRICT.
+-// Edges stay directional pairs of stage ids. Omitted and explicit STRICT both survive
+-// validation, so a stored edge has no policy of its own.
 +// Edges stay directional pairs of stage ids. relaxed is policy: RELAXED; omitted is STRICT.
  struct PipelineDescriptorData {
      struct Edge {
@@ -2329,7 +2310,6 @@ rank_bindings:
  struct PipelineEdgeSpec {
      std::size_t src = 0;
      std::size_t dst = 0;
-     bool is_loopback = false;
 +    bool relaxed = false;        // policy: RELAXED in the MGD
 +    // STRICT, or RELAXED out of stage 0: blaze's host-cut planner never cuts that
 +    // (_group_walk skips cuts at stage 0). The one rule Tier B, Plan 1 and (P11) Tier C all read.
@@ -2337,12 +2317,10 @@ rank_bindings:
  };
 
  // pipeline_graph.cpp, convert_pipeline
--        graph.edges.push_back(PipelineEdgeSpec{.src = src->second, .dst = dst->second, .is_loopback = false});
-+        graph.edges.push_back(
-+            PipelineEdgeSpec{.src = src->second, .dst = dst->second, .is_loopback = false, .relaxed = edge.relaxed});
+-        graph.edges.push_back(PipelineEdgeSpec{.src = src->second, .dst = dst->second});
++        graph.edges.push_back(PipelineEdgeSpec{.src = src->second, .dst = dst->second, .relaxed = edge.relaxed});
      }
 
-     mark_loopbacks(graph);
 +    for (PipelineEdgeSpec& edge : graph.edges) {
 +        edge.needs_fabric = !edge.relaxed || edge.src == graph.stage0;
 +    }
@@ -3143,7 +3121,7 @@ function DescriptorExamples() {
           ["a stage with three outgoing branches", "pass", "Tier A does not limit stage topology"],
           ["a branch stage with out-degree 2", "pass", "Tier A does not limit stage topology"],
           ["two stages with in-degree 0", "pass", "Tier A does not limit stage topology"],
-          ["mixed4 with policy: RELAXED on s3 > s0", "reject", "no policy field in the first version: does not parse. RELAXED (later): passes"],
+          ["mixed4 with policy: RELAXED on s3 > s0", "reject", "RELAXED is rejected by Tier A in the first version. RELAXED (later): passes"],
           ["RELAXED (later): mixed4 with s0 > s1 RELAXED", "pass", "allowed; Tier C's planner still never cuts stage 0's outgoing edge"],
           ["RELAXED (later): dflash with router > draft0 RELAXED", "pass", "any edge may be RELAXED"],
           ["mixed4 plus a copy named mixed4_b", "pass here", "each is checked on its own; Tier B checks them together"],
@@ -4134,7 +4112,7 @@ stages { id: "s8" shape { dims: [ 1, 2 ] } }
       <Stack gap={8}>
         <H2>Edge policy: STRICT or RELAXED, per edge - RELAXED (later)</H2>
         <Callout tone="warning" title="RELAXED (later)">
-          Not in the first version: every edge is STRICT and there is no policy field. This is the design for M5 (P14, P11).
+          Not in the first version: every edge is STRICT: the policy field exists, but Tier A rejects RELAXED. This is the design for M5 (P14, P11).
         </Callout>
         <Text tone="secondary">
           Each edge says whether it must ride the fabric; the words match channels policy. STRICT is the default (the field is optional, as on
@@ -4396,7 +4374,7 @@ function MapperTab() {
           headers={["Resolver argument", "What C2 builds for the chosen rectangles", "Rule it enforces"]}
           rows={[
             ["nodes", "every stage name, isolated stages included", "every edge endpoint listed, no duplicates"],
-            ["edges", "(src, dst, is_loopback); Tier A's conversion marks one loopback per cycle", "non-loopback edges form a DAG"],
+            ["edges", "(src, dst, is_loopback); C2 marks one edge per cycle here; nothing upstream stores it", "non-loopback edges form a DAG"],
             ["submesh_chips", "per rectangle: (mesh_id, chip_id, row, col)", "(row, col) slot-local, from the rectangle's own origin"],
             ["node_chip_counts", "rows x cols of each stage's shape", "forces each stage onto its own rectangle"],
             ["node_pipeline_core_counts", "blaze's _pipeline_core_defaults, or empty", "empty: 1 slot per chip on 8+ chips, 2 on smaller"],

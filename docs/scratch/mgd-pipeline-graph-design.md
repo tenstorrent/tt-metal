@@ -29,7 +29,7 @@ rework of the topology mapper landed; the Tier C plan (2.3, 4, 5) follows that c
 > with RELAXED below.
 
 > **Decision (fixed for the first version):** every pipeline edge is **STRICT**. The first
-> version has no edge `policy` field, so a pipeline edge always rides a fabric link. RELAXED
+> version accepts an edge `policy` only when it is omitted or `STRICT`, so a pipeline edge always rides a fabric link. RELAXED
 > edges (host MPI) are a separate, later piece of work. Keep this split until it is decided
 > otherwise.
 
@@ -281,7 +281,8 @@ Two fields the builder sets stay out of MGD, since neither changes the shape bei
 
 - **`factory`** - host-side construction (`GenericStage` over the harness list).
 - **`is_loopback`** - a builder conversion mark for which edge closes the ring. The ring is
-  already the `s3 -> s0` edge (2.1).
+  already the `s3 -> s0` edge (2.1). Nothing upstream stores it; Tier C marks one edge per
+  cycle only where it calls the resolver (4.2).
 
 #### A heterogeneous example
 
@@ -359,34 +360,26 @@ message PipelineStage {
 message PipelineEdge {
   string src = 1;            // resolves to a stage id
   string dst = 2;            // resolves to a stage id
-  reserved 3;                // edge policy, RELAXED (later); every edge is STRICT for now
+  optional Policy policy = 3; // omitted or STRICT; RELAXED is rejected until P14
 }
 ```
 
 `shape` is rank 2 because the resolver models a chip as `(row, col)`. Every edge must ride
-the fabric. Edges carry no loopback marking and no channel count (2.1). A file that writes
-`policy` on an edge fails to parse, because the field does not exist yet.
+the fabric. Edges carry no loopback marking and no channel count (2.1). An edge may write
+`policy: STRICT`; `RELAXED` and `INVALID_POLICY` are rejected by `validate_pipeline_descriptors`.
 
-**RELAXED (later, P14)** adds this as field 3. It reuses the `Policy` enum `channels`
-already has (`INVALID_POLICY`, `STRICT`, `RELAXED`), so there is no new enum and the
-textproto spelling is the same. The field is optional and omitted means STRICT, so
-first-version files are unchanged:
-
-```proto
-message PipelineEdge {
-  string src = 1;
-  string dst = 2;
-  optional Policy policy = 3;   // omitted: STRICT (1.4); INVALID_POLICY is rejected
-}
-```
+**RELAXED (later, P14)** keeps this field and stops rejecting `RELAXED`. The field reuses the
+`Policy` enum `channels` already has (`INVALID_POLICY`, `STRICT`, `RELAXED`), so there is no new
+enum and the textproto spelling is the same. Omitted means STRICT, so first-version files are
+unchanged.
 
 None of the comments above are enforced by protobuf. They are obligations on
 `validate_pipeline_descriptors`.
 
 ### 1.4 Edge policy: STRICT or RELAXED, per edge - RELAXED (later)
 
-> **RELAXED (later).** Not in the first version: every edge is STRICT and there is no
-> `policy` field (see "Scope" at the top). This section is the design for when it is added.
+> **RELAXED (later).** Not in the first version: every edge is STRICT: the `policy`
+> field exists, but Tier A rejects `RELAXED` (see "Scope" at the top). This section is the design for when it is added.
 
 Each edge says whether it must ride the fabric. The words match `channels { policy }`:
 STRICT is a requirement, RELAXED a preference. **STRICT is the default:** it is enum value
@@ -446,7 +439,7 @@ on RELAXED edges").
 
 #### Implementation (P14)
 
-P14 adds the field and makes the descriptor-only tiers use it. Tier C does not change
+P14 lets the existing field say RELAXED and makes the descriptor-only tiers use it. Tier C does not change
 until P11.
 
 **One rule for "must stay on fabric".** `PipelineEdgeSpec` gains `relaxed` and
@@ -472,54 +465,30 @@ warning, and a failed run says so. The earlier plan rejected every such pipeline
 anyway, and P11 only widens what is accepted.
 
 ```proto
- // Every edge rides a fabric link. There is no policy field yet: PipelineEdge
- // field 3 is reserved for one. A textproto that writes `policy` on an edge
- // does not parse.
--//
+ // Every edge rides a fabric link. policy may be omitted or STRICT. RELAXED is
+-// rejected by MeshGraphDescriptor validation.
 +// An edge may set policy: RELAXED to say it may go over host MPI when the
 +// placement has no fabric link for it. Omitted means STRICT.
-+//
  ...
  message PipelineEdge {
      ...
      string dst = 2;
 
--    // Edge policy, added later. Every edge is STRICT until then.
--    reserved 3;
+-    // Omitted means STRICT. RELAXED is rejected during descriptor validation.
 +    // Optional; omitted is STRICT (same enum and default as Channels.policy).
 +    // STRICT: the edge rides a fabric link. RELAXED: fabric where the placement
 +    // allows, otherwise host MPI. INVALID_POLICY is rejected.
-+    optional Policy policy = 3;
+     optional Policy policy = 3;
  }
 ```
 
 ```cpp
- // mesh_graph_descriptor.cpp: the policy field exists now, so the parser no longer
- // special-cases it. The collector keeps only the first parse error.
--// Other unknown fields stay legal (MGD textprotos rely on that). `policy` on a pipeline
--// edge is not: the field does not exist yet, and ignoring it would look like RELAXED.
--class PipelineEdgePolicyErrorCollector : public google::protobuf::io::ErrorCollector {
-+class FirstErrorCollector : public google::protobuf::io::ErrorCollector {
-     ...
--    void AddWarning(int, ColumnNumber, const std::string& message) override {
--        if (message.find("PipelineEdge") != npos && message.find(""policy"") != npos) { rejected_policy_ = true; }
--    }
-+    void AddWarning(int, ColumnNumber, const std::string&) override {}
-     ...
- };
- ...
--    TT_FATAL(
--        !collector.rejected_policy(),
--        "Failed to parse MeshGraphDescriptor textproto: pipeline edge has no field "policy"; every edge is STRICT");
-
- // validate_pipeline_descriptors (Tier A), in the edge loop:
-             if (edge.src() == edge.dst()) {
-                 error_messages.push_back(fmt::format("pipeline '{}': self-edge on '{}'", pipeline.name(), edge.src()));
-             }
+ // validate_pipeline_descriptors (Tier A), in the edge loop: RELAXED is allowed now.
+-            // An omitted policy means STRICT. An explicit policy other than STRICT is rejected.
+-            if (edge.has_policy() && edge.policy() != proto::Policy::STRICT) {
 +            if (edge.has_policy() && edge.policy() == proto::Policy::INVALID_POLICY) {
-+                error_messages.push_back(fmt::format(
-+                    "pipeline '{}': edge {} -> {} has policy INVALID_POLICY", pipeline.name(), edge.src(), edge.dst()));
-+            }
+                 ...
+             }
 
  // populate_pipeline_descriptors:
 -            record.edges.push_back(PipelineDescriptorData::Edge{.src = edge.src(), .dst = edge.dst()});
@@ -529,7 +498,8 @@ anyway, and P11 only widens what is accepted.
 +                .relaxed = edge.has_policy() && edge.policy() == proto::Policy::RELAXED});
 
  // mesh_graph_descriptor.hpp (proto::Policy is only forward-declared there, so a bool):
--// Edges stay directional pairs of stage ids. There is no policy: every edge is STRICT.
+-// Edges stay directional pairs of stage ids. Omitted and explicit STRICT both survive
+-// validation, so a stored edge has no policy of its own.
 +// Edges stay directional pairs of stage ids. relaxed is policy: RELAXED; omitted is STRICT.
  struct PipelineDescriptorData {
      struct Edge {
@@ -544,7 +514,6 @@ anyway, and P11 only widens what is accepted.
  struct PipelineEdgeSpec {
      std::size_t src = 0;
      std::size_t dst = 0;
-     bool is_loopback = false;
 +    bool relaxed = false;        // policy: RELAXED in the MGD
 +    // STRICT, or RELAXED out of stage 0: blaze's host-cut planner never cuts that
 +    // (_group_walk skips cuts at stage 0). The one rule Tier B, Plan 1 and (P11) Tier C all read.
@@ -552,12 +521,10 @@ anyway, and P11 only widens what is accepted.
  };
 
  // pipeline_graph.cpp, convert_pipeline
--        graph.edges.push_back(PipelineEdgeSpec{.src = src->second, .dst = dst->second, .is_loopback = false});
-+        graph.edges.push_back(
-+            PipelineEdgeSpec{.src = src->second, .dst = dst->second, .is_loopback = false, .relaxed = edge.relaxed});
+-        graph.edges.push_back(PipelineEdgeSpec{.src = src->second, .dst = dst->second});
++        graph.edges.push_back(PipelineEdgeSpec{.src = src->second, .dst = dst->second, .relaxed = edge.relaxed});
      }
 
-     mark_loopbacks(graph);
 +    for (PipelineEdgeSpec& edge : graph.edges) {
 +        edge.needs_fabric = !edge.relaxed || edge.src == graph.stage0;
 +    }
@@ -694,8 +661,8 @@ and Tier B (after `populate`). Loading a part therefore checks that part against
 before merge. `merge` returns a new `MeshGraphDescriptor`, so both tiers run again on the merged
 meshes and every pipeline together. A pipeline that fits its own part can still fail after merge,
 when the pipelines share the combined slices. A pipeline that does not fit the meshes in its own
-file fails when that file is loaded. `init_from_parts` reads the facts stored on the merged
-descriptor; it does not run Tier B itself, and neither does `MeshGraph`.
+file fails when that file is loaded. Tier B stores nothing for the mapper:
+`init_from_parts` does not run Tier B itself, and neither does `MeshGraph`.
 
 **Tests.**
 - Two parts, a pipeline in one: present after merge, unchanged, and Tier C runs.
@@ -904,20 +871,20 @@ a 4x2 stage never lands on a 2x4 rectangle (3.2).
   channels on that hop, and `s0 -> s1` plus `s1 -> s0` is a two-stage ring. Multiplicity is
   repetition, so edges need no `channels` field. The builder reads one link per edge today;
   that is an implementation limit, not a schema one.
-- **Cycles are allowed.** Conversion marks one edge per cycle as the loopback.
+- **Cycles are allowed.** No edge is marked as a loopback; Tier C marks one per cycle only
+  where it calls the resolver (4.2).
 - **Stage topology is not limited.** In-degree, out-degree, how many stages have
   in-degree 0, and whether a branch is a chain are all accepted. A graph blaze cannot build
   still passes Tier A and fails at build time. A branch may dead-end.
-- **Every edge is STRICT.** There is no `policy` field yet, so Tier A has nothing to check
-  for it. RELAXED (later): any edge may be RELAXED, and Tier A will not restrict where; see
+- **Every edge is STRICT.** `policy` may be omitted or `STRICT`; Tier A rejects anything else. RELAXED (later): any edge may be RELAXED, and Tier A will not restrict where; see
   the note in 1.4 for rules that might be good to add.
 
 #### Examples
 
 | Descriptor | Tier A result | Why |
 |---|---|---|
-| `mixed4` | pass | ids unique, edges name declared stages, every stage has out-degree 1, one cycle (`s3 -> s0` becomes its loopback), shapes positive |
-| `pod8` | pass | a ring of 8; the loopback is `s7 -> s0` |
+| `mixed4` | pass | ids unique, edges name declared stages, every stage has out-degree 1, one cycle (closed by `s3 -> s0`), shapes positive |
+| `pod8` | pass | a ring of 8, closed by `s7 -> s0` |
 | `mixed4` plus `edges { src: "s1" dst: "s1" }` | reject | self-edge |
 | `mixed4` with `s0 -> s1` repeated | pass | two channels on that hop; the builder reads one link per edge, which is a builder limit |
 | dflash: `router -> target0 .. target37 -> router`, `router -> draft0 .. draft10 -> router` | pass | ids unique, edges name declared stages, shapes positive |
@@ -925,7 +892,7 @@ a 4x2 stage never lands on a 2x4 rectangle (3.2).
 | a stage with three outgoing branches | pass | Tier A does not limit stage topology |
 | a branch stage with out-degree 2 (a fork inside a branch) | pass | Tier A does not limit stage topology |
 | two stages with in-degree 0 | pass | Tier A does not limit stage topology |
-| `mixed4` with `policy: RELAXED` on `s3 -> s0` | reject | no `policy` field in the first version; the textproto does not parse |
+| `mixed4` with `policy: RELAXED` on `s3 -> s0` | reject | `RELAXED` is rejected by Tier A in the first version |
 | `mixed4` plus a copy named `mixed4_b` | pass here | each is checked on its own; Tier B checks them together and rejects on capacity (1.5) |
 | `mixed4` plus a copy also named `mixed4` | reject | pipeline names must be unique (1.5) |
 | a stage declared `[2, 4]` where every mesh has 4x2 slices | pass here | shapes are logical and never transposed, so Tier B finds no mesh it binds to |
@@ -956,8 +923,7 @@ quotient. Tier B does not need `MeshGraph` to know how many ranks a mesh has.
   together.
 - **Available:** mesh instances, `device_topology`, `host_topology`, declared `connections`
   with channel counts. **Not** the PSD.
-- **On failure:** the constructor fails. `init_from_parts` only reads the facts the merged
-  descriptor stored.
+- **On failure:** the constructor fails. On success nothing is stored.
 
 These reject pipelines that are impossible on *any* mapping of this MGD.
 
@@ -1053,7 +1019,7 @@ subtorus_4x4_pipeline_8stage: 8 meshes, connections 0-1-2-...-7-0, 8 stages of 4
   s_i on mesh i, crossings s_i -> s_{i+1} ride connection (i, i+1)   OK
 
 same MGD, connections 0-1-2-...-7 (no 7-0)                           REJECT
-  the loopback crossing has no declared connection
+  the s7 -> s0 crossing has no declared connection
 ```
 
 #### Each mesh's segment can be carved - backup if the solve is slow
@@ -1400,8 +1366,9 @@ for the channels, a repeated edge counting twice, POD and CLUSTER connections be
 and the step limit (the 7x7 ring above accepts). Backup if slow: a RING `host_topology` axis (a
 ring4 on one mesh passes once A3–A0 wrap), an odd grid ring rejected before the first search
 node, "find all" over its cap saving the defaults, interchangeable-mesh symmetry (8 identical
-meshes on ALL_TO_ALL visit one ordering). Not tested yet: a merged descriptor in which each
-part passes alone but the merge fails capacity.
+meshes on ALL_TO_ALL visit one ordering). Also: a merged descriptor in which each part passes alone but the merge
+fails capacity, `subtorus_4x4_pipeline_8stage` with and without its 7-0 connection, and
+`llama_8b_pod` with nine 4x2 stages and thirty-one 1x2 stages (the total fits, M0 does not).
 
 **Open points.**
 
@@ -2016,7 +1983,7 @@ pinnings, and returns the pipeline mapping in its result, next to `fabric_node_t
 
 ```
 MGD (pipeline_descriptors)
-   │  build_pipeline_graphs(mgd)                          P1, beside Tier A's conversion
+   │  build_pipeline_graphs(mgd)                          P8 (Tier C), from pipeline_descriptors()
    ▼
 TopologyMappingConfig::pipelines   ── input ──►  map_multi_mesh_to_physical / MultiMeshSolutionEnumerator
                                                     ctor: PipelineProblem (indices, built once)       P8
@@ -2033,10 +2000,10 @@ TopologyMappingConfig::pipelines   ── input ──►  map_multi_mesh_to_phy
 graph without an MGD. Stages are referred to by index; the key is for reporting.
 
 ```cpp
-// tt-metalium/experimental/fabric/pipeline_graph.hpp (new, P1)
+// tt-metalium/experimental/fabric/pipeline_graph.hpp (new, P8)
 using PipelineStageIndex = std::uint32_t;
 
-struct PipelineStageKey {                 // defined once, in pipeline_builder.hpp (Tier B, 2.2)
+struct PipelineStageKey {                 // also names stages in the mapping result (4.3)
     std::string pipeline;                 // PipelineDescriptor.name
     std::string stage;                    // PipelineStage.id
     auto operator<=>(const PipelineStageKey&) const = default;
@@ -2051,7 +2018,6 @@ struct PipelineStageSpec {
 
 struct PipelineEdgeSpec {
     PipelineStageIndex src = 0, dst = 0;
-    bool is_loopback = false;             // one per cycle, marked by Tier A's conversion (2.1)
     // RELAXED (later): EdgePolicy policy = EdgePolicy::STRICT;
 };
 
@@ -2062,7 +2028,8 @@ struct PipelineGraph {                    // one descriptor record. The mapper m
     PipelineStageIndex stage0 = 0;        // owns host I/O
 };
 
-// Built from the (merged) MGD; the same conversion Tier A validates.
+// Built in Tier C from the (merged) MGD's pipeline_descriptors(), which Tier A has validated.
+// Stage ids become indices; no edge is marked as a loopback.
 std::vector<PipelineGraph> build_pipeline_graphs(const MeshGraphDescriptor& mgd);
 ```
 
@@ -2533,7 +2500,7 @@ The six arguments:
 | Argument | What C2 builds | Rule the resolver enforces |
 |---|---|---|
 | `nodes` | every stage name, in declaration order, isolated stages included | every edge endpoint must be listed; no duplicates |
-| `edges` | `(src, dst, is_loopback)` per STRICT fabric edge; one loopback per cycle, marked `true`. The MGD does not mark it; Tier A's conversion does (2.1), and C2 reuses that conversion. RELAXED (later): edges left to host are dropped, and each fabric chain is its own call (`_resolve_chains_separately`) | the non-loopback edges must form a DAG, or the sort throws `cycle detected` |
+| `edges` | `(src, dst, is_loopback)` per STRICT fabric edge; the resolver needs one edge per cycle marked `true`, so C2 marks it here (one back edge per cycle of a depth-first walk); nothing upstream stores it. RELAXED (later): edges left to host are dropped, and each fabric chain is its own call (`_resolve_chains_separately`) | the non-loopback edges must form a DAG, or the sort throws `cycle detected` |
 | `submesh_chips` | one entry per slot: `(mesh_id, chip_id, row, col)` for each chip, `chip_id` from `full.fabric_node_to_asic` | `(row, col)` are **slot-local**: relative to the slot's own origin, recomputed when a slot spans several host slices |
 | `node_chip_counts` | `rows x cols` of each stage's `shape` (already in chips) | a stage only binds to a slot with exactly that many chips, so the placement step is forced to the solve's carve |
 | `node_pipeline_core_counts` | blaze's `_pipeline_core_defaults` per node: ring head 4 with `co_locate_ring_host_io`; chain head and tail 2 | empty means 1 slot per chip on slots of 8 or more chips, 2 on smaller ones |
