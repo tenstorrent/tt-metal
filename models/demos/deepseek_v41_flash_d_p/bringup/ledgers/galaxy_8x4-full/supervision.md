@@ -471,3 +471,17 @@ check (F196 / F197); host times stay hidden until verified warm.
 - 01:46 re-verify on 20e3d9ffa5c (TP sums' new add order): M.1, L.s10240, L.last, L.s56320, L.smoke 5/5 PASS (7-8 min
   each); L.s56320 final hidden rel 0.189 (was 0.189), top5 1.0, top1 0.997; L.smoke '...Capital of France = Paris'.
   Dashboard exported (not republished: the 313 KB framework page must be read whole before a publish; deferred).
+- 02:20 RECONCILE c9ba76f8618 (bringup-engineer, fix role): merge of origin/dnijemcevic/model_bringup d762b21db30 (14
+  commits: Marko flat sync, EXPERTS_LAYOUT=marko, MOE_IMPL=block, fused MoE head/tail, torus allowed for block D14,
+  their F200/F201). 16 conflicts resolved keeping both sides; ours renumbered F200->F203 (engine wait), F201->F204
+  (hangdump); F202 kept. Build OK; selftests 637 pass / 1 fail (xing40 server_rules.py:393 fixed threshold, untouched
+  by either side since the base) / 9 skip. Fork device tests: merge-related all pass (max_y_writers 4/4, with_program
+  patch legacy+marko, hot_experts 6/6 + K.1 capture, fabric payload 2/2, flat_widths 6/6). NOT merge-caused, open
+  (owner): column_planner_mc 15 (L1 overflow forced to 8x4), acc_dtype 3 (2x2-only), flat_routed_expert_op[tp4]
+  (16,1,6,2), NEW from the sync: flat_routed_expert_op[mimo] arena_tiles C++ 604 vs mirror 570, indexed_perf k2 flat
+  +21.7 % / tp4 +8.2 %. Marko layout on this E=7 box = the capped legacy key lay9c3da689dd35 -> cache hit, no rebuild.
+  1 layer: flat (marko) PASS; block fused head FAILS at build (routing_stream.py:612 len(lst) <= 16 on FABRIC_2D lines,
+  DS41-129); block with DS41_MOE_HEAD=ops PASS (same tokens as flat).
+- 03:01 post-merge verify (flat, marko): M.1, L.s10240, L.last, L.s56320, L.smoke 5/5 PASS; L.s56320 final hidden rel
+  0.1899, top5 1.0; smoke Paris. Starting the 5-position profile series (posprof/series.sh: flat device, flat wall,
+  block(ops head) device, block wall; ~2 h).
