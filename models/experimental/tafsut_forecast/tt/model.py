@@ -34,6 +34,10 @@ FUSED_ROPE = os.environ.get("TAFSUT_FUSED_ROPE", "1") != "0"  # R1-1; 0 = the ro
 MM_2D_SKIP_HIFI4 = os.environ.get("TAFSUT_MM_2D_SKIP_HIFI4", "0") == "1"
 ROPE_FP32_TABLE = os.environ.get("TAFSUT_ROPE_FP32_TABLE", "0") == "1"
 ROPE_FP32_DEST = os.environ.get("TAFSUT_ROPE_FP32_DEST", "1") != "0"
+# round 1 candidates (screening knobs, default off until kept)
+ADD_NORM = os.environ.get("TAFSUT_ADD_NORM", "0") == "1"  # R1-4 + R1-7b: residual add fused into the next norm, gamma folded
+SDPA_CONCAT = os.environ.get("TAFSUT_SDPA_CONCAT", "0") == "1"  # R1-5: SDPA writes the heads concatenated
+PERF_BF16_DEST = os.environ.get("TAFSUT_PERF_BF16_DEST", "0") == "1"  # R1-7a: performance linears without fp32 DST
 
 
 def sdpa_chunks(s_pad: int, ctx_len: int | None) -> int:
@@ -62,7 +66,7 @@ class TtTafsut:
         self.n_layers = n_layers
         self.w = df.Weights(sd)
         self._consts: dict = {}
-        self._mm = ckc("LoFi" if self.p.lofi else "HiFi2")
+        self._mm = ckc("LoFi" if self.p.lofi else "HiFi2", fp32_acc=not (self.p.lofi and PERF_BF16_DEST))
         self._hifi4 = ckc("HiFi4")
         self._norm = ckc("HiFi4")
         self._sdpa = ckc(self.p.sdpa_fidelity)
@@ -73,7 +77,10 @@ class TtTafsut:
             return ttnn.from_torch(t.contiguous(), dtype=dtype, layout=layout, device=device, memory_config=DRAM)
 
         def gamma(g):
-            return up(g.view(1, 1, D // 32, 32), layout=ttnn.ROW_MAJOR_LAYOUT)
+            return None if ADD_NORM else up(g.view(1, 1, D // 32, 32), layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        def fold(g, w):  # R1-7b: rms_norm(x) * g @ W = rms_norm(x) @ (g[:, None] * W), folded in fp32
+            return g.float()[:, None] * w.float() if ADD_NORM else w
 
         e = "input_patch_embedding"
         self.emb_hid = up(sd[f"{e}.hidden_layer.weight"][:, 32:].T)  # [64, 3072]: values | mask columns
@@ -84,19 +91,19 @@ class TtTafsut:
             self.layers.append(
                 dict(
                     ln1=gamma(L["ln1"]),
-                    wqkv=up(L["wqkv"], self.p.in_weight_dtype),
+                    wqkv=up(fold(L["ln1"], L["wqkv"]), self.p.in_weight_dtype),
                     wo=up(L["wo"]),
                     ln2=gamma(L["ln2"]),
-                    wi=up(L["wi"], self.p.in_weight_dtype),
+                    wi=up(fold(L["ln2"], L["wi"]), self.p.in_weight_dtype),
                     wo2=up(L["wo2"]),
                 )
             )
         self.final_ln = gamma(self.w.final_ln)
         h = "output_patch_embedding"
-        self.head_hid = up(sd[f"{h}.hidden_layer.weight"].T)
+        self.head_hid = up(fold(self.w.final_ln, sd[f"{h}.hidden_layer.weight"].T))
         self.head_hid_b = up(sd[f"{h}.hidden_layer.bias"][None])
         self.head_out = up(sd[f"{h}.output_layer.weight"].T)
-        self.head_res = up(sd[f"{h}.residual_layer.weight"].T)
+        self.head_res = up(fold(self.w.final_ln, sd[f"{h}.residual_layer.weight"].T))
         self.head_b = up((sd[f"{h}.output_layer.bias"] + sd[f"{h}.residual_layer.bias"])[None], ttnn.float32)
         self.rot = up(rope_matrix())
 
@@ -204,9 +211,25 @@ class TtTafsut:
         ttnn.deallocate(r)
         return y
 
-    def layer(self, h, L, inp, c, last: bool):
+    def norm(self, h, g):
+        if ADD_NORM:
+            return ops.rms_norm(h, epsilon=df.NORM_EPS, memory_config=DRAM)
+        return ttnn.rms_norm(h, epsilon=df.NORM_EPS, weight=g, compute_kernel_config=self._norm)
+
+    def add_norm(self, h, d, g):
+        """(h + d, rms_norm(h + d)); consumes h and d."""
+        if ADD_NORM:  # R1-4: one pass, both outputs
+            y, x = ops.add_rms_norm(h, d, epsilon=df.NORM_EPS, memory_config=DRAM)
+        else:
+            y = ttnn.add(h, d)
+            x = ttnn.rms_norm(y, epsilon=df.NORM_EPS, weight=g, compute_kernel_config=self._norm)
+        ttnn.deallocate(h)
+        ttnn.deallocate(d)
+        return y, x
+
+    def layer(self, h, x, L, inp, c, last: bool, g_next):
+        """h, its ln1 norm x -> h', its next norm (ln1 of the next layer, or the final norm)."""
         B, S = h.shape[0], h.shape[1]
-        x = ttnn.rms_norm(h, epsilon=df.NORM_EPS, weight=L["ln1"], compute_kernel_config=self._norm)
         qkv = self._linear(ttnn.reshape(x, (1, 1, B * S, D)), L["wqkv"], compute_kernel_config=self._qkv)
         ttnn.deallocate(x)
         if c["fused_rope"]:  # R1-1: head split + RoPE in one program (chronos qkv_heads_rope)
@@ -223,8 +246,10 @@ class TtTafsut:
         if last:  # read-out cut: queries, O and the FFN only on the 32 future rows
             P = c["P"]
             q = ttnn.slice(q, (0, 0, P, 0), (B, NH, P + NREAD, DH))
-            h = ttnn.slice(h, (0, P, 0), (B, P + NREAD, D))
             mask, q_chunk, S = inp["mask_read"], NREAD, NREAD
+            hs = ttnn.slice(h, (0, P, 0), (B, P + NREAD, D))
+            ttnn.deallocate(h)
+            h = hs
         pc = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=self.device.compute_with_storage_grid_size(),
             q_chunk_size=q_chunk, k_chunk_size=c["chunk"], exp_approx_mode=self.p.exp_approx,
@@ -232,27 +257,24 @@ class TtTafsut:
         a = ttnn.transformer.scaled_dot_product_attention(
             q, k, v, attn_mask=mask, is_causal=False, scale=1.0, program_config=pc,
             compute_kernel_config=self._sdpa, memory_config=DRAM,
+            **({"output_concat_heads": True} if SDPA_CONCAT else {}),
         )
         for t in (q, k, v):
             ttnn.deallocate(t)
-        a = ttnn.transformer.concatenate_heads(a, memory_config=DRAM)
+        if not SDPA_CONCAT:
+            a = ttnn.transformer.concatenate_heads(a, memory_config=DRAM)
         o = self._linear(ttnn.reshape(a, (1, 1, B * S, D)), L["wo"])
         ttnn.deallocate(a)
-        h = ttnn.add(h, ttnn.reshape(o, (B, S, D)))
-        ttnn.deallocate(o)
-        x = ttnn.rms_norm(h, epsilon=df.NORM_EPS, weight=L["ln2"], compute_kernel_config=self._norm)
+        h, x = self.add_norm(h, ttnn.reshape(o, (B, S, D)), L["ln2"])
         f = self._linear(ttnn.reshape(x, (1, 1, B * S, D)), L["wi"], activation="relu")
         ttnn.deallocate(x)
         f2 = self._linear(f, L["wo2"])
         ttnn.deallocate(f)
-        h2 = ttnn.add(h, ttnn.reshape(f2, (B, S, D)))
-        ttnn.deallocate(f2)
-        ttnn.deallocate(h)
-        return h2
+        return self.add_norm(h, ttnn.reshape(f2, (B, S, D)), g_next)
 
-    def head(self, h):
-        B = h.shape[0]
-        x = ttnn.rms_norm(h, epsilon=df.NORM_EPS, weight=self.final_ln, compute_kernel_config=self._norm)
+    def head(self, x):
+        """The final norm's output [B, 32, D] -> head."""
+        B = x.shape[0]
         x = ttnn.reshape(x, (1, 1, B * NREAD, D))
         hid = self._linear(x, self.head_hid, bias=self.head_hid_b, activation="relu", compute_kernel_config=self._hifi4)
         o = self._linear(hid, self.head_out, compute_kernel_config=self._hifi4, dtype=ttnn.float32)
@@ -268,17 +290,20 @@ class TtTafsut:
         h = self.embed(inp["vm"], c)
         if taps is not None:
             taps.append(ttnn.to_torch(h).float())
+        x = self.norm(h, self.layers[0]["ln1"] if n else self.final_ln)
         for i in range(n):
-            h = self.layer(h, self.layers[i], inp, c, last=(i == n - 1 and n == NL))
+            g_next = self.layers[i + 1]["ln1"] if i + 1 < n else self.final_ln
+            h, x = self.layer(h, x, self.layers[i], inp, c, last=(i == n - 1 and n == NL), g_next=g_next)
             if taps is not None:
                 taps.append(ttnn.to_torch(h).float())
+        ttnn.deallocate(h)
         if n != NL:  # reduced-layer runs (profile / screening): read the future rows without the cut
             P = c["P"]
-            hr = ttnn.slice(h, (0, P, 0), (h.shape[0], P + NREAD, D))
-            ttnn.deallocate(h)
-            h = hr
-        out = self.head(h)
-        ttnn.deallocate(h)
+            xr = ttnn.slice(x, (0, P, 0), (x.shape[0], P + NREAD, D))
+            ttnn.deallocate(x)
+            x = xr
+        out = self.head(x)
+        ttnn.deallocate(x)
         return out
 
     def forward(self, prep: df.Prepared, taps: list | None = None) -> torch.Tensor:
