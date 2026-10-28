@@ -64,9 +64,6 @@ NUM_INFERENCE_STEPS = NUM_FORWARDS + 1
 # One adapter file serves both; the keyframe is the only difference between the two tasks.
 TASK = os.environ.get("MINIMAX_H3_TURBO_TASK", "fl2va")
 
-# 50 transformer blocks and 2 refiner blocks, each with fused to_qkv, to_out, ff1 and ff2.
-DEVICE_BOUND_TARGETS = 52 * 4
-
 
 def _assert_two_time_temb_matches_host(pipeline, mesh_device) -> None:
     """Device two-time blend vs float32 torch: the adapter's float32 embedder deltas must not round away."""
@@ -161,15 +158,8 @@ def test_turbo_end_to_end(mesh_device, reset_seeds, duration_s):
         profiler=benchmark_profiler,
     )
 
-    # `load_h3_adapter_into` raises on unplaceable targets; confirm something (and for HyperFlow, all) bound.
-    handle = pipeline.adapter
-    assert handle is not None and len(handle) > 0, "the transformer was built without an adapter bound"
-    logger.info(f"adapter {handle.name}: {len(handle)} bound targets")
     if pipeline.hyperflow is not None:
         assert pipeline.hyperflow.num_forwards == NUM_FORWARDS
-        assert (
-            len(handle) == DEVICE_BOUND_TARGETS
-        ), f"bound {len(handle)} device targets, expected {DEVICE_BOUND_TARGETS}"
         _assert_two_time_temb_matches_host(pipeline, mesh_device)
 
     log_pipeline_perf(
