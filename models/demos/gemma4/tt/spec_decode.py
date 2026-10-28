@@ -159,6 +159,13 @@ def spec_check_shape(shape):
     return (rows, k)
 
 
+def _same_device_buffer(a, b):
+    """True when two ttnn tensors share one device buffer (ttnn returns the INPUT tensor, under a new Python
+    wrapper, from to_memory_config / pad when nothing changes, so object identity is not enough and a forced
+    deallocate of the "copy" would free the caller's tensor)."""
+    return a is b or int(a.buffer_address()) == int(b.buffer_address())
+
+
 def parse_k_by_rows(text):
     """``"5:5,8:3,16:1"`` -> ((5, 5), (8, 3), (16, 1)): the catalog ``max_rows:k`` table, rows strictly increasing."""
     entries = []
@@ -1551,7 +1558,9 @@ class SpeculativeDecoder:
             padded = ttnn.pad(logits, [(0, 0), (0, 0), (0, R32 - rows), (0, 0)], value=0.0)
             src = padded
         u = ttnn.untilize(src, use_multicore=True)
-        if padded is not None:
+        if padded is not None and not _same_device_buffer(padded, logits):
+            # ttnn.pad returns its input when the TILE padding already covers the
+            # target rows; freeing that would free the caller's logits.
             padded.deallocate(True)
         idx = ttnn.argmax(
             u, dim=-1, keepdim=False
@@ -2450,9 +2459,9 @@ class SpeculativeDecoder:
             else src
         )
         ttnn.assign(padded, pool)
-        if padded is not src:
+        if not _same_device_buffer(padded, src):
             padded.deallocate(True)
-        if src is not hidden:
+        if not _same_device_buffer(src, hidden):
             src.deallocate(True)
 
     def _srv_seed_rows(self, shape, tokens, positions):
@@ -2537,12 +2546,13 @@ class SpeculativeDecoder:
         )
         mask_full.deallocate(True)
         mask_slide.deallocate(True)
-        vidx = self._argmax_last(vlogits, rows=B * P)  # [1, 1, B*P] uint32
-        # 5. publish this replay's verify hidden (next replay's seed gather) and
-        # its logits (the shared readback buffer); the record keeps neither.
+        # 5. publish this replay's logits (the shared readback buffer) and its verify
+        # hidden (next replay's seed gather) before anything consumes them; the
+        # record keeps neither.
+        self._srv_publish_logits(vlogits)
         self._srv_publish_hidden(vhidden, self._srv_pool_v)
         vhidden.deallocate(True)
-        self._srv_publish_logits(vlogits)
+        vidx = self._argmax_last(vlogits, rows=B * P)  # [1, 1, B*P] uint32
         vlogits.deallocate(True)
         return verify_x, vidx
 
