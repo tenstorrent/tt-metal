@@ -35,6 +35,12 @@ enum class PoolType : std::uint8_t
     MIN,
 };
 
+enum class GatherCompressModeSelect : std::uint8_t
+{
+    GATHER   = 0,
+    COMPRESS = 1,
+};
+
 enum class DataCopyType : std::uint8_t
 {
     A2D,
@@ -208,7 +214,9 @@ enum class SfpuType : std::uint32_t
     div_int32_floor,
     div_int32_trunc,
     fmod_int32,
+    gcd,
     isclose,
+    lcm,
     lerp,
     log_with_base,
     mac,

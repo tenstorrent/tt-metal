@@ -16,7 +16,7 @@ from functools import lru_cache
 from pathlib import Path
 
 import torch
-from helpers.chip_architecture import get_chip_architecture
+from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.data_format_inference import (
     _dest_acc_flag,
     effective_dest_acc,
@@ -49,12 +49,12 @@ from helpers.ulp_domains import (
     usable_budget_ceiling,
 )
 from helpers.ulp_table import (
-    MEASURED_ARCH,
     BudgetKey,
     Metric,
     Reading,
     Row,
     load_table,
+    measured_arch,
     write_table_file,
 )
 
@@ -77,13 +77,31 @@ _SWEEP_TENSOR = 2**16
 _INF = float("inf")
 
 
+def fp16_dest_unusable(
+    input_format: DataFormat,
+    output_format: DataFormat,
+    dest_acc: DestAccumulation,
+    arch: ChipArchitecture,
+) -> bool:
+    """Whether the cell holds fp16 in a 16-bit Dest on Blackhole, where the SFPU reads it
+    as garbage (#62654): a ``Float16`` input, or a ``Float16`` output from
+    ``Float32``, at a Dest that stays 16-bit. No functional driver runs such a cell."""
+    return (
+        arch == ChipArchitecture.BLACKHOLE
+        and effective_dest_acc(input_format, output_format, dest_acc, arch)
+        == DestAccumulation.No
+        and DataFormat.Float16 in (input_format, output_format)
+    )
+
+
 def sweep_cells(
     arch=None,
 ) -> list[tuple[DataFormat, DataFormat, ApproximationMode, DestAccumulation]]:
     """Every ``(input, output, approx_mode, dest_acc)`` cell the sweep runs on *arch*
     (default: the chip this session targets), less the cells TestConfig would run as
     another: an exponent-B input packed to Float16 needs a 32-bit Dest, so a
-    ``dest_acc=No`` request runs the ``Yes`` kernel and must not be keyed as ``No``."""
+    ``dest_acc=No`` request runs the ``Yes`` kernel and must not be keyed as ``No``;
+    and less the cells :func:`fp16_dest_unusable` names."""
     if arch is None:
         arch = get_chip_architecture()
     return [
@@ -93,6 +111,7 @@ def sweep_cells(
         for approx in ApproximationMode
         for dest in DestAccumulation
         if effective_dest_acc(in_fmt, out_fmt, dest, arch) == dest
+        and not fp16_dest_unusable(in_fmt, out_fmt, dest, arch)
     ]
 
 
@@ -870,10 +889,10 @@ def finish_emit(arch, clean: bool, path: Path) -> dict[MathOperation, tuple[Row,
     :class:`EmitRefused`. :func:`write_table` can also raise
     :class:`~helpers.ulp_domains.TableError` (a ``ValueError``): the table on disk does
     not load, or the rewrite would not read back, or would not resolve, once written."""
-    if arch != MEASURED_ARCH:
+    if arch != measured_arch():
         raise EmitRefused(
             f"ran on {arch.name}, but the table's unkeyed rows are "
-            f"{MEASURED_ARCH.name} measurements"
+            f"{measured_arch().name} measurements"
         )
     if not clean:
         raise EmitRefused(
@@ -886,7 +905,7 @@ def finish_emit(arch, clean: bool, path: Path) -> dict[MathOperation, tuple[Row,
             "measured only part of an op's grid, and a write would drop the rows of "
             f"the rest: {gaps}"
         )
-    return write_table(path)
+    return write_table(path, arch)
 
 
 def _verdict(measured: int, output_format: DataFormat) -> Metric:
@@ -976,15 +995,26 @@ def _decide(
 _DROPPABLE = ("approx_mode", "dest_acc")
 
 
-def _collapse(decided: dict[BudgetKey, Decision]) -> dict[BudgetKey, Decision]:
+# What a cell :func:`fp16_dest_unusable` leaves out counts as when a collapse is weighed:
+# a decision no measured cell shares, so no row is widened over it.
+_EXCLUDED = object()
+
+
+def _collapse(
+    decided: dict[BudgetKey, Decision], excluded: frozenset[BudgetKey] = frozenset()
+) -> dict[BudgetKey, Decision]:
     """The decided cells as the fewest rows that reproduce them; the formats stay
-    pinned, because a wildcard would answer for any a driver adds later."""
+    pinned, because a wildcard would answer for any a driver adds later. A field is
+    dropped only where it can be on every pair of the op, and dropping it over an
+    *excluded* cell cannot: an op with any pair swept at one Dest because the other
+    holds fp16 keeps ``dest`` on every pair (on Blackhole, every swept op)."""
+    weighed = {**decided, **{key: _EXCLUDED for key in excluded}}
     dropped = [
         name
         for name in _DROPPABLE
         if all(
             len(group) == 1
-            for group in _group(decided, lambda key: replace(key, **{name: None}))
+            for group in _group(weighed, lambda key: replace(key, **{name: None}))
         )
     ]
     merged: dict[BudgetKey, Decision] = {}
@@ -1001,8 +1031,8 @@ def _collapse(decided: dict[BudgetKey, Decision]) -> dict[BudgetKey, Decision]:
     return merged
 
 
-def _group(decided: dict[BudgetKey, Decision], project) -> list[set[Decision]]:
-    groups: dict[BudgetKey, set[Decision]] = {}
+def _group(decided: dict[BudgetKey, object], project) -> list[set[object]]:
+    groups: dict[BudgetKey, set[object]] = {}
     for key, decision in decided.items():
         groups.setdefault(project(key), set()).add(decision)
     return list(groups.values())
@@ -1019,20 +1049,44 @@ def _kept(row: Row, measured: set[tuple[DataFormat, DataFormat]]) -> bool:
     )
 
 
-def write_table(path: Path) -> dict[MathOperation, tuple[Row, ...]]:
+def _excluded_cells(
+    cells: dict[BudgetKey, Recorded], arch: ChipArchitecture
+) -> frozenset[BudgetKey]:
+    """The keys of the cells the sweep leaves out on *arch* because they hold fp16 in a
+    16-bit Dest, at a Dest the run measured no cell of their pair at."""
+    measured = {(key.input_format, key.output_format, key.dest_acc) for key in cells}
+    return frozenset(
+        cell_key(in_fmt, out_fmt, approx, dest)
+        for in_fmt, out_fmt, _ in measured
+        for approx in ApproximationMode
+        for dest in DestAccumulation
+        if fp16_dest_unusable(in_fmt, out_fmt, dest, arch)
+        and (in_fmt, out_fmt, dest) not in measured
+    )
+
+
+def write_table(
+    path: Path, arch: ChipArchitecture | None = None
+) -> dict[MathOperation, tuple[Row, ...]]:
     """Replace, in the table at *path*, every row of each measured ``(input, output)``
-    pair with what the sweep measured, write it back, and return the written ops'
-    rows. A kept row with the key of an emitted row is refused (:class:`EmitRefused`),
-    so an emitted row always outranks a kept row pinning its pair."""
+    pair with what the sweep measured on *arch* (default: the chip this session
+    targets), write it back, and return the written ops' rows. A kept row with the key
+    of an emitted row is refused (:class:`EmitRefused`), so an emitted row always
+    outranks a kept row pinning its pair."""
+    if arch is None:
+        arch = get_chip_architecture()
     table = load_table(path)
     written: dict[MathOperation, tuple[Row, ...]] = {}
     for op, cells in MEASURED.items():
         pairs = {(key.input_format, key.output_format) for key in cells}
         kept = tuple(row for row in table.get(op, ()) if _kept(row, pairs))
         taken = {row.key for row in kept}
+        decided = _decide(cells, DOMAINS.get(op))
         emitted = tuple(
             decision.row(key)
-            for key, decision in _collapse(_decide(cells, DOMAINS.get(op))).items()
+            for key, decision in _collapse(
+                decided, _excluded_cells(cells, arch)
+            ).items()
         )
         for row in emitted:
             if row.key in taken:
