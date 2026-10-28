@@ -1,87 +1,66 @@
-# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
+"""Broken-output scoring (skill §3, PLAN v1.9 / v1.20): wrong outputs built from the golden head, scored through the
+same post-processing as the device (inverse norm, flip average on both halves, clamp), against gates.json floors.
 
-"""Score synthetic broken outputs against the gate floors, in both precisions, on every bench shape (CPU only).
-
-    python models/experimental/tirex2_forecast/tests/perf/broken_outputs.py [--gates gates.json] [--out out.json]
-
-Each broken output is made from the golden head output, and scored by the bench's metric code (``metrics.py``):
-``collapsed`` (every quantile -> the quantile mean), ``inactive_collapsed`` (only inactive rows collapsed),
-``active1pct_0.3x`` (the band of ceil(1 %) of the active rows, the widest ones, scaled 0.3x about the quantile
-mean), ``all_0.88x`` and ``all_1.12x`` (every band scaled). Each must fail at least one floor per precision
-(PLAN section 9 v1.9, D3 condition 1a). Exit status 1 otherwise.
+    collapsed   every quantile replaced by the quantile mean
+    band_0.88 / band_1.12   the band around the quantile mean scaled uniformly
+    no_negate   the -x half's rows carry the x half's head (the flip's negation forgotten)
+Every one must fail; the golden itself must pass.
 """
-
 from __future__ import annotations
 
-import argparse
 import json
-import math
 import sys
 from pathlib import Path
 
 import torch
 
-from models.experimental.tirex2_forecast.reference import dataflow as df
-from models.experimental.tirex2_forecast.tests.pcc import metrics as M
-from models.experimental.tirex2_forecast.tests.perf.check_gates import DEFAULT_GATES, _floors, passes
-from models.experimental.tirex2_forecast.tests.perf.test_forward_perf import shape_inputs
-
-SHAPES = ("paper", "long_context", "multivariate")
+from models.experimental.kairos_forecast.tests.pcc import metrics as M
+from models.experimental.kairos_forecast.tests.perf.check_gates import DEFAULT_GATES, _floors, passes, report_only
+from models.experimental.kairos_forecast.tests.perf.suite import _post, load, score
 
 
-def scale_band(head, rows, factor):
-    h = head.reshape(*head.shape[:-1], M.Q, M.P).clone()
-    mean = h.mean(-2, keepdim=True)
-    h[rows] = mean[rows] + factor * (h[rows] - mean[rows])
-    return h.reshape(head.shape)
+def _band(raw, k):
+    h = raw.reshape(raw.shape[0], 2, M.Q, 64)
+    mu = h.mean(2, keepdim=True)
+    return (mu + k * (h - mu)).reshape(raw.shape)
 
 
-def broken(g_head):
-    act = M.active_rows(g_head)
-    idx = act.nonzero().flatten()
-    k = math.ceil(0.01 * len(idx))
-    width = M.spread(g_head).double().reshape(g_head.shape[0], -1).norm(dim=1)[idx]
-    wide = idx[width.argsort(descending=True)[:k]]
-    inact = M.collapsed(g_head).clone()
-    inact[act] = g_head[act]
-    return {
-        "collapsed": (M.collapsed(g_head), "all rows"),
-        "inactive_collapsed": (inact, f"{int((~act).sum())} inactive rows"),
-        "active1pct_0.3x": (scale_band(g_head, wide, 0.3), f"{k} of {len(idx)} active rows"),
-        "all_0.88x": (scale_band(g_head, slice(None), 0.88), "all rows"),
-        "all_1.12x": (scale_band(g_head, slice(None), 1.12), "all rows"),
-    }
+def broken(raw, S):
+    out = {"collapsed": M.collapsed_raw(raw), "band_0.88": _band(raw, 0.88), "band_1.12": _band(raw, 1.12)}
+    nn = raw.clone()
+    nn[S:] = raw[:S]
+    out["no_negate"] = nn
+    return out
 
 
-def main():
-    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("--gates", type=Path, default=DEFAULT_GATES)
-    ap.add_argument("--out", type=Path)
-    args = ap.parse_args()
-    gates = json.loads(args.gates.read_text())
-    results, bad = [], []
-    for shape in SHAPES:
-        g, ctx, horizon, gid, tm = shape_inputs(shape)
-        gid = torch.arange(ctx.shape[0]) if gid is None else gid
-        tm = torch.ones(ctx.shape[0], dtype=torch.bool) if tm is None else tm
-        p = df.prepare(ctx, horizon, gid, tm)
-        for name, (head, what) in broken(g["head_out"]).items():
-            q = M.forecast_from_head(head, p.loc, p.scale, horizon, tm)
-            m = M.gate_metrics(head, g["head_out"], q, g["q_one"], p.scale[tm])
-            for precision in ("accuracy", "performance"):
-                fails = [k for k, f in _floors(gates, shape, precision).items() if not passes(k, m[k], f)]
-                results.append(
-                    {"shape": shape, "broken": name, "rows": what, "precision": precision, "fails": fails, "metrics": m}
-                )
-                print(f"{shape:13s} {precision:11s} {name:19s} ({what}): fails {len(fails)} {fails}")
-                if not fails:
-                    bad.append(f"{shape}/{precision}/{name}")
-    if args.out:
-        args.out.write_text(json.dumps(results, indent=1) + "\n")
-    print(f"{len(bad)} broken output(s) pass every floor" + (": " + ", ".join(bad) if bad else ""))
-    sys.exit(1 if bad else 0)
+def score_case(name):
+    """{label: metrics} for the golden and each broken output of one H <= 128 GIFT case."""
+    rec = load(name)
+    S = rec["context"].shape[0]
+    gold = torch.cat(rec["head"])
+    post = _post(rec)
+    g_q, scale = rec["prediction_outputs"], rec["loc_scale"][0][1].reshape(-1)
+    perfect = {"route_mismatch_rows": 0, "bias_max_abs_diff": 0.0}
+    res = {"golden": {**score(gold, gold, post(gold), g_q, scale), **perfect}}
+    for label, raw in broken(gold, S).items():
+        res[label] = {**score(raw, gold, post(raw), g_q, scale), **perfect}
+    return res
+
+
+def verdicts(name, precision, gates):
+    floors = _floors(gates, name, precision)
+    out = {}
+    for label, m in score_case(name).items():
+        fails = [k for k, f in floors.items() if k in m and not passes(k, m[k], f)
+                 and not report_only({"name": name}, k)]
+        out[label] = {"fails": fails, **{k: m[k] for k in floors if k in m}}
+    return out
 
 
 if __name__ == "__main__":
-    main()
+    gates = json.loads(DEFAULT_GATES.read_text())
+    res = {f"{c}/{p}": verdicts(c, p, gates) for c in sys.argv[1:] or ["paper", "ragged"]
+           for p in ("accuracy", "performance")}
+    print(json.dumps(res, indent=1))

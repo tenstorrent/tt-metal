@@ -234,28 +234,34 @@ class TtKairos:
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(qkv, num_heads=H, transpose_key=False)
         return self._attend(self._rope(q, cs), self._rope(k, cs), v, mask, B, S)
 
-    def encode(self, inp):
+    def encode(self, inp, mark=None):
         import ttnn
 
+        mark = mark or (lambda _name: None)
         B = inp["B"]
+        mark("embed")
         xs = inp["xs"]
         hid = self._lin(xs, self.emb_h, act="relu", fid=self.p.hifi4())
         e = ttnn.add(self._lin(hid, self.emb_o, bias=self.emb_ob), self._lin(xs, self.emb_r, fid=self.p.hifi4()))
         e = ttnn.concat([ttnn.reshape(e, (B, N_TOK, D)), inp["reg"]], dim=1)  # [B, 96, 512], [REG] at row 64
         h = ttnn.reshape(e, (1, 1, B * S_PAD, D))
         for blk, cs in zip(self.enc, inp["enc_rope"]):
+            mark("enc_block")
             h = ttnn.add(h, self._lin(self._self_attn(self._norm(h, blk["n1"]), blk, cs, inp["enc_mask"], B, S_PAD),
                                       blk["o"]))
             ff = self._lin(self._norm(h, blk["n2"]), blk["wi"], act="relu")
             h = ttnn.add(h, self._lin(ff, blk["wo"]))
+        mark("enc_norm")
         return self._norm(h, self.enc_norm)
 
-    def decode(self, enc, inp):
+    def decode(self, enc, inp, mark=None):
         import ttnn
 
+        mark = mark or (lambda _name: None)
         B = inp["B"]
         h = inp["dec_in"]
         for blk, (cs_self, cs_q, cs_k) in zip(self.dec, inp["dec_rope"]):
+            mark("dec_block")
             h = ttnn.add(h, self._lin(self._self_attn(self._norm(h, blk["n1"]), blk, cs_self, self.causal, B, D_PAD),
                                       blk["o"]))
             q = ttnn.reshape(self._lin(self._norm(h, blk["n2"]), blk["q"]), (B, D_PAD, D))
@@ -266,6 +272,7 @@ class TtKairos:
             h = ttnn.add(h, self._lin(a, blk["co"]))
             ff = self._lin(self._norm(h, blk["n3"]), blk["wi"], act="relu")
             h = ttnn.add(h, self._lin(ff, blk["wo"]))
+        mark("dec_norm")
         return self._norm(h, self.dec_norm)
 
     def head(self, h):
@@ -277,8 +284,11 @@ class TtKairos:
                        self._lin(h, self.head_r, fid=k, dtype=ttnn.float32))
         return ttnn.add(out, self.head_b)
 
-    def forward_device(self, inp):
-        return self.head(self.decode(self.encode(inp), inp))
+    def forward_device(self, inp, mark=None):
+        out = self.decode(self.encode(inp, mark), inp, mark)
+        if mark:
+            mark("head")
+        return self.head(out)
 
     def forward(self, front):
         """front (host_frontend.front_end) -> head output [B, 2, 576] fp32 on the host."""
