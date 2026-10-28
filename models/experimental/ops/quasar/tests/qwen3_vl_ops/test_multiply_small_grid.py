@@ -19,7 +19,10 @@ from models.experimental.ops.quasar.tests.qwen3_vl_ops import graph_case as G
 from models.experimental.ops.quasar.tests.qwen3_vl_ops import small_grid as S
 from models.experimental.ops.quasar.tests.qwen3_vl_ops.small_grid import case, t, out, lit, dtype, mem_arg, acts
 
-_OP = ttnn.multiply
+# The base binary_ng op still builds Gen1 DataMovementKernels, which Quasar rejects; its
+# ttnn.experimental.quasar port takes the same arguments and runs on every arch. _NAME keeps
+# the captured op name, so the golden lookup is unchanged.
+_OP = ttnn.experimental.quasar.multiply
 _NAME = "ttnn.multiply"
 
 CASES = [

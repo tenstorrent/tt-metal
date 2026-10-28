@@ -66,5 +66,8 @@ CASES = [
 @G.with_default_mesh()
 @pytest.mark.parametrize("case_spec", CASES, ids=[c["id"] for c in CASES])
 def test_minimal_matmul_small_grid(ttnn_mesh_device, reset_seeds, case_spec):
+    if not G._is_quasar(ttnn_mesh_device):
+        # minimal_matmul accepts a 1-wide grid axis only on Quasar; Wormhole/Blackhole need at least 2x2.
+        pytest.skip("the 2x1 MinimalMatmulConfig grid is Quasar-only; Wormhole/Blackhole need at least 2x2")
     S.skip_if_grid_too_small(case_spec, ttnn_mesh_device)
     G.run_case(_OP, case_spec, ttnn_mesh_device)

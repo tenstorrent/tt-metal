@@ -1053,6 +1053,17 @@ def _input_elements(case):
     return total
 
 
+# Ops whose inputs include padding the op never reads, so _input_elements overstates the leading
+# region it writes. nlp_concat_heads_decode's input pads the heads dim to a tile row and the op
+# writes only num_heads heads per user; with fewer than 32 heads, the rest of the output's first
+# rows stays unwritten.
+_WRITTEN_ELEMENTS = {
+    "ttnn.experimental.nlp_concat_heads_decode": lambda case: (
+        case["args"][0]["shape"][1] * case["kwargs"]["num_heads"]["v"] * case["args"][0]["shape"][3]
+    ),
+}
+
+
 def _check_finite(host, case, op_name, index):
     """Assert the region the op can actually define is finite.
 
@@ -1073,7 +1084,7 @@ def _check_finite(host, case, op_name, index):
     if n_finite == n_total:
         return
 
-    budget = _input_elements(case)
+    budget = _WRITTEN_ELEMENTS.get(op_name, _input_elements)(case)
     if n_total > budget:
         head = finite.reshape(-1)[:budget]
         bad = int(head.numel() - head.sum())
