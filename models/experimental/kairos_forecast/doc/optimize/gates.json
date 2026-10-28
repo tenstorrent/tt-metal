@@ -1,5 +1,5 @@
 {
- "_doc": "Proposed at G1 (kairos round 0). Floors: CONTRACT v1.1 \u00a73 + D0 (pcc_normalized, pcc_final, routing) on every case (PLAN v1.20); the band / spread / row floors are proposals set after measuring the round-0 suite (job 991) and need the G1 decision. p01 / p99 / p50 band floors only on cases with >= 100 rows (v1.14). Drift is against iter_00/bench.json (v1.14), both precisions, every shape.",
+ "_doc": "G1 re-raise proposal, written by tests/perf/propose_gates.py (its docstring has the rules) from the round-0 suite record of pcc job 1051. Absolute floors on every case and precision (PLAN v1.20); p01 / p99 at >= 100 active rows and p50 at >= 8 (check_gates prints `not applicable` otherwise). Drift is against the fixed records iter_00/bench.json (bench) and iter_00/suite.jsonl (suite).",
  "floors": {
   "*/accuracy": {
    "pcc_normalized": 0.999,
@@ -9,7 +9,18 @@
    "pcc_spread": 0.9995,
    "pcc_row_min": 0.99,
    "route_mismatch_rows": 0,
-   "bias_max_abs_diff": 1e-06
+   "bias_max_abs_diff": 1e-06,
+   "spread_ratio_p01": 0.97,
+   "spread_ratio_p99": [
+    0.0,
+    1.1
+   ],
+   "spread_ratio_p50": [
+    0.97,
+    1.03
+   ],
+   "spread_ratio_min": 0.8,
+   "spread_ratio_max": 1.3
   },
   "*/performance": {
    "pcc_normalized": 0.995,
@@ -19,20 +30,7 @@
    "pcc_spread": 0.998,
    "pcc_row_min": 0.95,
    "route_mismatch_rows": 0,
-   "bias_max_abs_diff": 1e-06
-  },
-  "paper/accuracy": {
-   "spread_ratio_p01": 0.97,
-   "spread_ratio_p99": [
-    0.0,
-    1.1
-   ],
-   "spread_ratio_p50": [
-    0.97,
-    1.03
-   ]
-  },
-  "paper/performance": {
+   "bias_max_abs_diff": 1e-06,
    "spread_ratio_p01": 0.9,
    "spread_ratio_p99": [
     0.0,
@@ -41,76 +39,178 @@
    "spread_ratio_p50": [
     0.93,
     1.07
-   ]
+   ],
+   "spread_ratio_min": 0.7,
+   "spread_ratio_max": 2.0
+  },
+  "single/accuracy": {
+   "bias_row_p50": 0.009000000000000001,
+   "bias_row_max": 0.01,
+   "bias_row_p50_final": 0.005,
+   "inactive_max_err": 0.01,
+   "pcc_step": 0.9986,
+   "pcc_step_final": 0.9993,
+   "spread_ratio_min": 0.95,
+   "spread_ratio_max": 1.05
+  },
+  "single/performance": {
+   "bias_row_p50": 0.045,
+   "bias_row_max": 0.045,
+   "bias_row_p50_final": 0.042,
+   "inactive_max_err": 0.01,
+   "pcc_step": 0.9957,
+   "pcc_step_final": 0.9978,
+   "spread_ratio_min": 0.92,
+   "spread_ratio_max": 1.08
+  },
+  "single_plain/accuracy": {
+   "bias_row_p50": 0.009000000000000001,
+   "bias_row_max": 0.01,
+   "bias_row_p50_final": 0.009000000000000001,
+   "inactive_max_err": 0.01,
+   "pcc_step": 0.9987,
+   "pcc_step_final": 0.9987,
+   "spread_ratio_min": 0.95,
+   "spread_ratio_max": 1.05
+  },
+  "single_plain/performance": {
+   "bias_row_p50": 0.045,
+   "bias_row_max": 0.045,
+   "bias_row_p50_final": 0.045,
+   "inactive_max_err": 0.01,
+   "pcc_step": 0.996,
+   "pcc_step_final": 0.996,
+   "spread_ratio_min": 0.92,
+   "spread_ratio_max": 1.08
+  },
+  "single_short/accuracy": {
+   "bias_row_p50": 0.005,
+   "bias_row_max": 0.01,
+   "bias_row_p50_final": 0.005,
+   "inactive_max_err": 0.01,
+   "pcc_step": 0.997,
+   "pcc_step_final": 0.9987,
+   "spread_ratio_min": 0.95,
+   "spread_ratio_max": 1.05
+  },
+  "single_short/performance": {
+   "bias_row_p50": 0.021,
+   "bias_row_max": 0.021,
+   "bias_row_p50_final": 0.021,
+   "inactive_max_err": 0.01,
+   "pcc_step": 0.9952,
+   "pcc_step_final": 0.9975,
+   "spread_ratio_min": 0.92,
+   "spread_ratio_max": 1.08
   },
   "ragged/accuracy": {
-   "spread_ratio_p01": 0.97,
-   "spread_ratio_p99": [
-    0.0,
-    1.1
-   ],
-   "spread_ratio_p50": [
-    0.97,
-    1.03
-   ]
+   "bias_row_p50": 0.005,
+   "bias_row_max": 0.11,
+   "bias_row_p50_final": 0.005,
+   "inactive_max_err": 0.02,
+   "pcc_step": 0.9995,
+   "pcc_step_final": 0.9992
   },
   "ragged/performance": {
-   "spread_ratio_p01": 0.9,
-   "spread_ratio_p99": [
-    0.0,
-    1.3
-   ],
-   "spread_ratio_p50": [
-    0.93,
-    1.07
-   ]
+   "bias_row_p50": 0.023,
+   "bias_row_max": 0.58,
+   "bias_row_p50_final": 0.019,
+   "inactive_max_err": 0.065,
+   "pcc_step": 0.9952,
+   "pcc_step_final": 0.995
+  },
+  "single_long_horizon/accuracy": {
+   "bias_row_p50": 0.005,
+   "bias_row_max": 0.01,
+   "bias_row_p50_final": 0.005,
+   "inactive_max_err": 0.01,
+   "pcc_step": 0.9081,
+   "pcc_step_final": 0.9624,
+   "spread_ratio_min": 0.95,
+   "spread_ratio_max": 1.05
+  },
+  "single_long_horizon_tf/accuracy": {
+   "bias_row_p50": 0.005,
+   "bias_row_max": 0.013000000000000001,
+   "bias_row_p50_final": 0.005,
+   "inactive_max_err": 0.012,
+   "pcc_step": 0.9205,
+   "pcc_step_final": 0.9412,
+   "spread_ratio_min": 0.95,
+   "spread_ratio_max": 1.05
+  },
+  "single_long_horizon/performance": {
+   "bias_row_p50": 0.023,
+   "bias_row_max": 0.023,
+   "bias_row_p50_final": 0.024,
+   "inactive_max_err": 0.01,
+   "pcc_step": 0.8888,
+   "pcc_step_final": 0.92,
+   "spread_ratio_min": 0.92,
+   "spread_ratio_max": 1.08
+  },
+  "single_long_horizon_tf/performance": {
+   "bias_row_p50": 0.036000000000000004,
+   "bias_row_max": 0.046,
+   "bias_row_p50_final": 0.034,
+   "inactive_max_err": 0.054,
+   "pcc_step": 0.875,
+   "pcc_step_final": 0.8921,
+   "spread_ratio_min": 0.92,
+   "spread_ratio_max": 1.08
   },
   "long_horizon/accuracy": {
-   "spread_ratio_p01": 0.97,
-   "spread_ratio_p99": [
-    0.0,
-    1.1
-   ],
-   "spread_ratio_p50": [
-    0.97,
-    1.03
-   ]
-  },
-  "long_horizon/performance": {
-   "spread_ratio_p01": 0.9,
-   "spread_ratio_p99": [
-    0.0,
-    1.3
-   ],
-   "spread_ratio_p50": [
-    0.93,
-    1.07
-   ]
+   "bias_row_p50": 0.005,
+   "bias_row_max": 0.026000000000000002,
+   "bias_row_p50_final": 0.005,
+   "inactive_max_err": 0.028,
+   "pcc_step": 0.9997,
+   "pcc_step_final": 0.9994,
+   "spread_ratio_min": 0.95,
+   "spread_ratio_max": 1.1
   },
   "long_horizon_tf/accuracy": {
-   "spread_ratio_p01": 0.97,
-   "spread_ratio_p99": [
-    0.0,
-    1.1
-   ],
-   "spread_ratio_p50": [
-    0.97,
-    1.03
-   ]
+   "bias_row_p50": 0.005,
+   "bias_row_max": 0.043000000000000003,
+   "bias_row_p50_final": 0.005,
+   "inactive_max_err": 0.032,
+   "pcc_step": 0.9998,
+   "pcc_step_final": 0.999
+  },
+  "long_horizon/performance": {
+   "bias_row_p50": 0.024,
+   "bias_row_max": 0.14,
+   "bias_row_p50_final": 0.024,
+   "inactive_max_err": 0.07200000000000001,
+   "pcc_step": 0.9987,
+   "pcc_step_final": 0.9937,
+   "spread_ratio_min": 0.9,
+   "spread_ratio_max": 1.2
   },
   "long_horizon_tf/performance": {
-   "spread_ratio_p01": 0.9,
-   "spread_ratio_p99": [
-    0.0,
-    1.3
-   ],
-   "spread_ratio_p50": [
-    0.93,
-    1.07
-   ]
+   "bias_row_p50": 0.02,
+   "bias_row_max": 0.26,
+   "bias_row_p50_final": 0.019,
+   "inactive_max_err": 0.13,
+   "pcc_step": 0.9991,
+   "pcc_step_final": 0.9945
   },
-  "single_long_horizon_tf/accuracy": {},
-  "single_long_horizon_tf/performance": {}
+  "paper/accuracy": {
+   "bias_row_p50": 0.005,
+   "bias_row_max": 0.041,
+   "bias_row_p50_final": 0.005,
+   "inactive_max_err": 0.027,
+   "pcc_step": 0.9997,
+   "pcc_step_final": 0.9993
+  },
+  "paper/performance": {
+   "bias_row_p50": 0.02,
+   "bias_row_max": 0.19,
+   "bias_row_p50_final": 0.022,
+   "inactive_max_err": 0.085,
+   "pcc_step": 0.9986,
+   "pcc_step_final": 0.9978
+  }
  },
  "drift": {
   "pcc_normalized": {
@@ -125,10 +225,35 @@
   "pcc_spread": {
    "abs": 0.0002
   },
-  "pcc_row_min": {
+  "pcc_final_spread": {
+   "abs": 0.0002
+  },
+  "pcc_row_p01_active": {
+   "abs": 0.002
+  },
+  "pcc_row_min_active": {
    "abs": 0.005
   },
+  "spread_ratio_p50": {
+   "two_sided": true,
+   "abs": 0.01
+  },
   "abs_err_max": {
+   "rel": 0.5
+  },
+  "inactive_max_err": {
+   "rel": 0.5
+  },
+  "bias_row_p50": {
+   "rel": 0.5
+  },
+  "bias_row_max": {
+   "rel": 0.5
+  },
+  "bias_row_p50_final": {
+   "rel": 0.5
+  },
+  "bias_row_max_final": {
    "rel": 0.5
   }
  },
@@ -140,59 +265,164 @@
    "pcc_normalized_full": {
     "abs": 0.001
    },
+   "pcc_final": {
+    "abs": 0.001
+   },
    "pcc_spread": {
     "abs": 0.001
    },
-   "pcc_row_min": {
-    "abs": 0.02
-   }
-  },
-  "paper/accuracy": {
-   "spread_ratio_p50": {
-    "two_sided": true,
+   "pcc_final_spread": {
+    "abs": 0.001
+   },
+   "pcc_row_p01_active": {
     "abs": 0.01
+   },
+   "pcc_row_min_active": {
+    "abs": 0.02
    }
   },
-  "paper/performance": {
-   "spread_ratio_p50": {
-    "two_sided": true,
-    "abs": 0.02
+  "single/accuracy": {
+   "pcc_step": {
+    "abs": 0.00046
+   },
+   "pcc_step_final": {
+    "abs": 0.00024000000000000003
+   }
+  },
+  "single/performance": {
+   "pcc_step": {
+    "abs": 0.0015
+   },
+   "pcc_step_final": {
+    "abs": 0.0007300000000000001
+   }
+  },
+  "single_plain/accuracy": {
+   "pcc_step": {
+    "abs": 0.00044
+   },
+   "pcc_step_final": {
+    "abs": 0.00044
+   }
+  },
+  "single_plain/performance": {
+   "pcc_step": {
+    "abs": 0.0014
+   },
+   "pcc_step_final": {
+    "abs": 0.0014
+   }
+  },
+  "single_short/accuracy": {
+   "pcc_step": {
+    "abs": 0.00099
+   },
+   "pcc_step_final": {
+    "abs": 0.00041000000000000005
+   }
+  },
+  "single_short/performance": {
+   "pcc_step": {
+    "abs": 0.0016
+   },
+   "pcc_step_final": {
+    "abs": 0.0008200000000000001
    }
   },
   "ragged/accuracy": {
-   "spread_ratio_p50": {
-    "two_sided": true,
-    "abs": 0.01
+   "pcc_step": {
+    "abs": 0.00014000000000000001
+   },
+   "pcc_step_final": {
+    "abs": 0.00024000000000000003
    }
   },
   "ragged/performance": {
-   "spread_ratio_p50": {
-    "two_sided": true,
+   "pcc_step": {
+    "abs": 0.0016
+   },
+   "pcc_step_final": {
+    "abs": 0.0017000000000000001
+   }
+  },
+  "single_long_horizon/accuracy": {
+   "pcc_step": {
+    "abs": 0.031
+   },
+   "pcc_step_final": {
+    "abs": 0.013000000000000001
+   }
+  },
+  "single_long_horizon_tf/accuracy": {
+   "pcc_step": {
+    "abs": 0.027
+   },
+   "pcc_step_final": {
     "abs": 0.02
+   }
+  },
+  "single_long_horizon/performance": {
+   "pcc_step": {
+    "abs": 0.038
+   },
+   "pcc_step_final": {
+    "abs": 0.027
+   }
+  },
+  "single_long_horizon_tf/performance": {
+   "pcc_step": {
+    "abs": 0.042
+   },
+   "pcc_step_final": {
+    "abs": 0.036000000000000004
    }
   },
   "long_horizon/accuracy": {
-   "spread_ratio_p50": {
-    "two_sided": true,
-    "abs": 0.01
-   }
-  },
-  "long_horizon/performance": {
-   "spread_ratio_p50": {
-    "two_sided": true,
-    "abs": 0.02
+   "pcc_step": {
+    "abs": 0.0001
+   },
+   "pcc_step_final": {
+    "abs": 0.00019
    }
   },
   "long_horizon_tf/accuracy": {
-   "spread_ratio_p50": {
-    "two_sided": true,
-    "abs": 0.01
+   "pcc_step": {
+    "abs": 0.0001
+   },
+   "pcc_step_final": {
+    "abs": 0.00031
+   }
+  },
+  "long_horizon/performance": {
+   "pcc_step": {
+    "abs": 0.00043000000000000004
+   },
+   "pcc_step_final": {
+    "abs": 0.0021000000000000003
    }
   },
   "long_horizon_tf/performance": {
-   "spread_ratio_p50": {
-    "two_sided": true,
-    "abs": 0.02
+   "pcc_step": {
+    "abs": 0.00030000000000000003
+   },
+   "pcc_step_final": {
+    "abs": 0.0019
+   }
+  },
+  "paper/accuracy": {
+   "pcc_step": {
+    "abs": 0.0001
+   },
+   "pcc_step_final": {
+    "abs": 0.00022
+   }
+  },
+  "paper/performance": {
+   "pcc_step": {
+    "abs": 0.00046
+   },
+   "pcc_step_final": {
+    "abs": 0.0007300000000000001
    }
   }
  }

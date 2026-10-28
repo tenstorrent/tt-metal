@@ -97,7 +97,7 @@ def propose(records):
         drift_by[key] = db
     return {
         "_doc": "G1 re-raise proposal, written by tests/perf/propose_gates.py (its docstring has the rules) from the "
-                "round-0 suite record of pcc job 1047. Absolute floors on every case and precision (PLAN v1.20); p01 / "
+                "round-0 suite record of pcc job 1051. Absolute floors on every case and precision (PLAN v1.20); p01 / "
                 "p99 at >= 100 active rows and p50 at >= 8 (check_gates prints `not applicable` otherwise). Drift is "
                 "against the fixed records iter_00/bench.json (bench) and iter_00/suite.jsonl (suite).",
         "floors": floors, "drift": drift, "drift_by": drift_by,
