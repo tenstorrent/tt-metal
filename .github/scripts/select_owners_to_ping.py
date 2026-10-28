@@ -526,6 +526,24 @@ class Selector:
                 extra.extend(m for m in members.split(",") if m)
         return self.by_tier(set(self.unapproved_filtered(extra)) - set(exclude))
 
+    def team_co_owners(self, team_files_csv: str, files_to_members: dict[str, str], exclude: list[str]) -> list[str]:
+        """Owners whose approval alone clears a team rule.
+
+        The team check in select() needs an approved owner on every team file, so
+        only someone who owns each of those files can stop the reminder on their own.
+        """
+        coverers: set[str] | None = None
+        for tfile in (f for f in team_files_csv.split(",") if f):
+            owners_of_file = {
+                m
+                for key, members in files_to_members.items()
+                if tfile in key.split(",")
+                for m in members.split(",")
+                if m
+            }
+            coverers = owners_of_file if coverers is None else coverers & owners_of_file
+        return self.by_tier(set(self.unapproved_filtered(sorted(coverers or ()))) - set(exclude))
+
     def unapproved_filtered(self, candidates: list[str]) -> list[str]:
         """Drop approved reviewers, moreh members, and the PR author."""
         out: list[str] = []
@@ -579,10 +597,11 @@ class Selector:
                 log(f"Added pending Slack group: {team} -> {gid}")
                 # The whole group is mentioned, so there is no per-person order;
                 # members are listed as the team API returned them.
+                members = self.unapproved_filtered(self.team_owners(team))
                 record.append(
                     {
                         "rule": team,
-                        "any_of": self.unapproved_filtered(self.team_owners(team)),
+                        "any_of": members + self.team_co_owners(team_files, files_to_members, members),
                         "pinged": [team],
                     }
                 )
@@ -604,7 +623,7 @@ class Selector:
             pinged, ranked = self.rank(unapproved)
             pinged, ranked = required + pinged, required + ranked
             selected_owners.extend(pinged)
-            any_of = ranked + self.co_owners(team_files, files_to_members, ranked)
+            any_of = ranked + self.team_co_owners(team_files, files_to_members, ranked)
             record.append({"rule": team, "any_of": any_of, "pinged": pinged})
 
         # Individual patterns
