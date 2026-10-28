@@ -235,3 +235,15 @@ byte with CPU rules; each case below matches its rule exactly.
   it share one compiled binary (12 copy configurations gave 6 cache entries, all with the non-precise pack format).
   Stock ops are not hit as far as seen (typecast always sets it for bfp8 outputs, never for bfp4); a fork that toggles
   it would be. Fix proposed (append the flag to the hash only when set, so existing hashes do not change); not made.
+
+## 9. 2x2 result and default (2026-10-28)
+
+Standard measurements, rung `last` (chunk 53248 -> 55296, layers 0 1 2 3 14 20 21 24), same code, DS41_CKV_FORMAT
+bf16 vs bfp4_rows:
+- Profile (test_profile.py): device 61.56 -> 61.79 ms per chunk (+0.4 %), wall 120.9 -> 121.8 ms. Per layer +0.03 to
+  +0.13 ms (L14); sparse_sdpa 0.93-0.95 ms in both; ckv_bfp4 0.04 ms vs slice_write 0.006-0.011 ms.
+- Ladder (test_ladder.py, err vs golden / limit): compress_kv L02 0.039 -> 0.118 / 0.210, L14 0.004 -> 0.111 / 0.192,
+  L20 0.004 -> 0.114 / 0.191; layers L14 0.062 -> 0.069 / 0.138, L21 0.051 -> 0.061 / 0.131, L20 0.030 -> 0.032 /
+  0.051, L24 0.028 -> 0.029 / 0.042, others unchanged; top-k selections identical. Both pass.
+- Table 3.3x smaller (L20: 57472 x 512 bf16 -> 55296 x 320 u8 + a 2176 x 512 bf16 window).
+Owner: a win; CKV_FORMAT default bfp4_rows. Galaxy integration: FIX.8.
