@@ -31,7 +31,6 @@ properties that import lazily.
 from __future__ import annotations
 
 import importlib
-import os
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
@@ -178,11 +177,6 @@ class PrefillModelAdapter(ABC):
     # PCC) lives on the runtime that build_runtime returns — see the runtime
     # contract in docs/ADDING_A_PREFILL_MODEL.md. The engine owns all comms.
     # =====================================================================
-    @property
-    def hf_model_path(self) -> str:
-        """The checkpoint dir: PREFILL_HF_MODEL, else ``hf_model_default`` (what the runner prints)."""
-        return os.environ.get("PREFILL_HF_MODEL") or self.hf_model_default
-
     @abstractmethod
     def load_hf_config(self) -> "PretrainedConfig":
         """Load (and normalize) the HF config from PREFILL_HF_MODEL (falling back

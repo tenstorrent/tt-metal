@@ -41,7 +41,10 @@ class Gemma4A4bGlxPrefillAdapter(PrefillModelAdapter):
     prefill_trace_default = ""
     pipeline_activation_emb_tp_sharded = False
 
-    # hf_model_path (PREFILL_HF_MODEL, else hf_model_default) comes from PrefillModelAdapter.
+    @property
+    def hf_model_path(self) -> str:
+        """The checkpoint dir: PREFILL_HF_MODEL, else ``hf_model_default`` (what the runner prints)."""
+        return os.environ.get("PREFILL_HF_MODEL") or self.hf_model_default
 
     def load_hf_config(self):
         from models.demos.gemma4_a4b_glx.reference.gemma4_ref import Gemma4TextConfig
