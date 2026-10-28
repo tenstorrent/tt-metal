@@ -195,8 +195,6 @@ inline void calculate_tangent() {
         // Shift mantissa bits back; j is now round(v / (PI/2)) in fp32.
         j += -rounding_bias;
 
-        i <<= 31;
-
         // Four-stage Cody-Waite reduction; a = v - j * (PI/2).
         // P0 representable as bf16; generates a single SFPLOADI, filling NOP slot from previous SFPADDI.
         sfpi::vFloat a = v + j * P0;
@@ -204,6 +202,10 @@ inline void calculate_tangent() {
         a = a + j * P1;
         a = a + j * sfpi::vConstFloatPrgm0;
         a = a + j * sfpi::vConstFloatPrgm1;
+
+        // Issued here so the shift fills a NOP slot in the Cody-Waite MAD chain's shadow
+        // instead of sitting after the SFPADDI, where nothing needs a filler.
+        i <<= 31;
 
         a = sfpu_tan<is_fp32_dest_acc_en>(a, i, k0, k1, k2);
 
