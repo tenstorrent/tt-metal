@@ -18,6 +18,7 @@
 // NoC copy from there; only the rows of a partial last block (the last shard) are built in place. Two batches are kept in
 // flight on the NoC (transaction ids 1 and 2) while compute consumes a third: the CBs hold three batches, a batch is
 // pushed only after its own barrier, and a new batch is placed one batch past the write pointer while one is pending.
+// The table is built after the first batch's data pages are issued, so its 7.5 us of RISC work overlaps the DRAM read.
 //
 // Compile-time args: 0 H, 1 RT (tile rows per shard), 2 DT, 3 NBPT (output tile rows per head), 4 R (rows per
 // shard), 5 NX, 6 NY, 7 UNITS, then TensorAccessorArgs of x0, x1, x2, geo.
@@ -113,20 +114,26 @@ void kernel_main() {
 
     // Zero tile (compute's output for empty groups; the P tile of rows past the valid end) and the table of the 32
     // standard pooling tiles: tile r has 1/64 in row r, all 32 columns. Zeroed by the NoC, rows written as 16 words.
+    // Built after the first batch's data pages are on the NoC (7.5 us of RISC work that otherwise delays the first
+    // DRAM read; the pooling tiles of that batch are copied from the table once it exists).
     cbz.reserve_back(1);
     const uint32_t zero_addr = cbz.get_write_ptr();
-    noc.async_write_zeros(CoreLocalMem<uint32_t>(zero_addr), TILE_BYTES);
     cbt.reserve_back(32);
     const uint32_t tab = cbt.get_write_ptr();
-    for (uint32_t r = 0; r < 32; ++r) {
-        noc.async_write_zeros(CoreLocalMem<uint32_t>(tab + r * TILE_BYTES), TILE_BYTES);
-    }
-    noc.write_zeros_l1_barrier();
-    for (uint32_t r = 0; r < 32; ++r) {
-        write_row(tab + r * TILE_BYTES, r, 32, RECIP_BF16[BLOCK]);
-    }
-    cbz.push_back(1);
-    cbt.push_back(32);  // never popped: the table stays resident for the whole program
+    bool table_built = false;
+    auto build_table = [&]() {
+        noc.async_write_zeros(CoreLocalMem<uint32_t>(zero_addr), TILE_BYTES);
+        for (uint32_t r = 0; r < 32; ++r) {
+            noc.async_write_zeros(CoreLocalMem<uint32_t>(tab + r * TILE_BYTES), TILE_BYTES);
+        }
+        noc.write_zeros_l1_barrier();
+        for (uint32_t r = 0; r < 32; ++r) {
+            write_row(tab + r * TILE_BYTES, r, 32, RECIP_BF16[BLOCK]);
+        }
+        cbz.push_back(1);
+        cbt.push_back(32);  // never popped: the table stays resident for the whole program
+        table_built = true;
+    };
 
     constexpr uint32_t NT = ROWS_PER_BATCH * DT;  // data pages per batch
     constexpr uint32_t X_BYTES = BATCHES_IN_CB * NT * TILE_BYTES;
@@ -190,37 +197,49 @@ void kernel_main() {
             // a partial last block (last shard only) are zero-filled now and written after the zero barrier.
             uint32_t tail_rows = 0;
             bool zeros = false;
-            for (uint32_t kk = 0; kk < nk; ++kk) {
-                const uint32_t k = k0 + kk;
-                const uint32_t prow = pa + kk * TILE_BYTES;
-                if (32 * k >= valid_end) {
-                    copy_ptile(zero_addr, prow, trid);
-                } else {
-                    const uint32_t b = k >> 1;
-                    const uint32_t len = min_u(BLOCK, valid_end - b * BLOCK);
-                    const uint32_t ncols = min_u(32, valid_end - 32 * k);
-                    if (len == BLOCK && ncols == 32) {
-                        copy_ptile(tab + (b & 31) * TILE_BYTES, prow, trid);
+            auto issue_ptiles = [&]() {
+                for (uint32_t kk = 0; kk < nk; ++kk) {
+                    const uint32_t k = k0 + kk;
+                    const uint32_t prow = pa + kk * TILE_BYTES;
+                    if (32 * k >= valid_end) {
+                        copy_ptile(zero_addr, prow, trid);
                     } else {
-                        noc.async_write_zeros(CoreLocalMem<uint32_t>(prow), TILE_BYTES);
-                        zeros = true;
-                        tail_rows |= 1u << kk;
+                        const uint32_t b = k >> 1;
+                        const uint32_t len = min_u(BLOCK, valid_end - b * BLOCK);
+                        const uint32_t ncols = min_u(32, valid_end - 32 * k);
+                        if (len == BLOCK && ncols == 32) {
+                            copy_ptile(tab + (b & 31) * TILE_BYTES, prow, trid);
+                        } else {
+                            noc.async_write_zeros(CoreLocalMem<uint32_t>(prow), TILE_BYTES);
+                            zeros = true;
+                            tail_rows |= 1u << kk;
+                        }
                     }
                 }
-            }
+            };
             // Data pages (zero-filled past the valid end, never read from DRAM).
-            uint32_t off = 0;
-            for (uint32_t kk = 0; kk < nk; ++kk) {
-                const uint32_t k = k0 + kk;
-                for (uint32_t n = 0; n < DT; ++n) {
-                    if (32 * k < valid_end) {
-                        read_page((h * RT + k) * DT + n, xa + off, trid);
-                    } else {
-                        noc.async_write_zeros(CoreLocalMem<uint32_t>(xa + off), TILE_BYTES);
-                        zeros = true;
+            auto issue_pages = [&]() {
+                uint32_t off = 0;
+                for (uint32_t kk = 0; kk < nk; ++kk) {
+                    const uint32_t k = k0 + kk;
+                    for (uint32_t n = 0; n < DT; ++n) {
+                        if (32 * k < valid_end) {
+                            read_page((h * RT + k) * DT + n, xa + off, trid);
+                        } else {
+                            noc.async_write_zeros(CoreLocalMem<uint32_t>(xa + off), TILE_BYTES);
+                            zeros = true;
+                        }
+                        off += TILE_BYTES;
                     }
-                    off += TILE_BYTES;
                 }
+            };
+            if (table_built) {
+                issue_ptiles();
+                issue_pages();
+            } else {  // first batch of the core: DRAM reads first, the table while they are in flight
+                issue_pages();
+                build_table();
+                issue_ptiles();
             }
             if (zeros) {
                 noc.write_zeros_l1_barrier();
