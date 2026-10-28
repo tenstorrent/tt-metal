@@ -122,10 +122,10 @@ tt::tt_metal::ProgramDescriptor build_multicast_descriptor_at(
     // Enabled if any axis is an even-sized ring.
     const bool load_balance_across_alt_routes = ew_load_balance || ns_load_balance;
 
-    // We use an init barrier to wait for remote output tensors to be allocated. This only
-    // matters when the output is freshly allocated by the op; a persistent/preallocated
-    // output is guaranteed to already exist on every device before op kernel begins.
-    const bool do_init_barrier = !tensor_args.persistent_output_tensor.has_value();
+    // The init barrier keeps a device from writing into a peer's output before the peer has started this op, and so
+    // finished whatever used that memory before. A preallocated output already exists on every device, but a slower
+    // peer may still be reading what the previous op put there.
+    const bool do_init_barrier = true;
 
     const uint32_t packet_size = operation_attributes.packet_size;
 

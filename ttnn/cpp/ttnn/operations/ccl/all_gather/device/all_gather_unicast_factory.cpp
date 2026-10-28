@@ -127,7 +127,8 @@ AllGatherUnicastFactory::cached_program_t AllGatherUnicastFactory::create_at(
     // Even-sized ring: for load balancing, the antipode device receives the antipode stripe as halves from both
     // forward and backward directions.
     const bool ring_even_split = is_ring && (num_devices % 2 == 0);
-    const bool do_init_barrier = !tensor_args.persistent_output_tensor.has_value();
+    // See all_gather_multicast_factory.cpp: a preallocated output may still be in use on a slower peer.
+    const bool do_init_barrier = true;
 
     const uint32_t packet_size = operation_attributes.packet_size;
 
