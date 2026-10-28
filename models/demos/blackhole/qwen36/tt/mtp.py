@@ -81,6 +81,17 @@ class Qwen36MTP:
         self.embd = parent.embd
         self._lm_head = parent._lm_head
         self.lm_head_weight = parent.lm_head_weight
+        # Head weight the DRAFTER's logits use (all three branches of forward_decode). By default the
+        # shared BFP8 head itself. QWEN36_DRAFT_LMHEAD_BFP4=1 builds a second, bfloat4_b copy with the
+        # same sharding under its own cache name (output.weight[.vshard].draft_bfp4), leaving the
+        # base/verify head and its cache untouched: output stays lossless, only acceptance can move.
+        self.draft_lm_head_weight = self.lm_head_weight
+        from models.demos.blackhole.qwen36.tt.tp_common import draft_lmhead_bfp4_enabled
+
+        if draft_lmhead_bfp4_enabled():
+            self.draft_lm_head_weight = parent._build_lm_head_weight(
+                state_dict["output.weight"], tensor_cache_path, ttnn.bfloat4_b, cache_tag=".draft_bfp4"
+            )
 
         mtp_cache = (tensor_cache_path / "mtp") if tensor_cache_path is not None else None
 
@@ -520,14 +531,16 @@ class Qwen36MTP:
             # turns it into the global id with two 32-lane gathers instead of one 993 KB one. Same
             # matmul math as the _lm_head fp32 branch below (HiFi2 + fp32 dest accumulation), minus
             # the collective, so the drafter keeps the fp32 tie-breaking it was given fp32 for.
-            logits = ttnn.linear(normed, self.lm_head_weight, dtype=ttnn.float32, compute_kernel_config=self._fp32_cfg)
+            logits = ttnn.linear(
+                normed, self.draft_lm_head_weight, dtype=ttnn.float32, compute_kernel_config=self._fp32_cfg
+            )
         elif sharded_lm_head or getattr(self, "_ondev_argmax", False):
-            logits = ttnn.linear(normed, self.lm_head_weight)  # vocab-sharded shard
+            logits = ttnn.linear(normed, self.draft_lm_head_weight)  # vocab-sharded shard
         else:
             # fp32 for the DRAFTER only (the shared base/verify call keeps its default bf16 output —
             # losslessness is defined by the base argmax). The drafter's argmax consumes these
             # directly, so bf16 ties that used to discard a good draft are broken correctly.
-            logits = self._lm_head(normed, out_dtype=ttnn.float32)
+            logits = self._lm_head(normed, out_dtype=ttnn.float32, weight=self.draft_lm_head_weight)
         ttnn.deallocate(normed)
         return logits, next_hidden
 
