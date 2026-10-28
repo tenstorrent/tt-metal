@@ -15,9 +15,12 @@ jobs:
         arch: amd64
         image: {from-job: ci-build-image, image: tt-metal-ci-build}
         resources:
-          # Sized to fit civ2's shared CI nodes; resize from the resource summary.
-          requests: {cpu: '16', memory: 48Gi, ephemeral-storage: 100Gi}
-          limits: {cpu: '16', memory: 64Gi, ephemeral-storage: 150Gi}
+          # Two cold runs (resource-summary, main container): 16 jobs peaked at
+          # 13.2 GiB anon memory, 32 jobs at 22.7 GiB. No CPU limit: a 16-CPU
+          # limit throttled 53% of periods. The renderer passes limits through
+          # as declared and requires none.
+          requests: {cpu: '16', memory: 24Gi, ephemeral-storage: 100Gi}
+          limits: {memory: 32Gi, ephemeral-storage: 150Gi}
     env:
       - {name: CMAKE_BUILD_PARALLEL_LEVEL, value: '16'}
       - {name: CCACHE_DIR, value: /workspace/.cache/ccache}
@@ -56,6 +59,8 @@ jobs:
         shell:
           run:
             - mkdir -p "$CCACHE_DIR" "$CCACHE_TEMPDIR"
+            - echo "restored ccache: $(du -sh "$CCACHE_DIR" | cut -f1), $(find "$CCACHE_DIR" -type f | wc -l) files"
+            - ccache -s
             - ccache -z
             - >-
               ./build_metal.sh --build-dir build --build-type ASan
