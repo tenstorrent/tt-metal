@@ -3,7 +3,8 @@
 """Bench: traced generate() on every bench shape and precision, scored and timed; one record per <shape>-<precision>.
 
     KAIROS_PERF_JSON=<iter_dir>/bench.json pytest models/experimental/kairos_forecast/tests/perf/test_forward_perf.py
-    BENCH_LAYERS=2+2   reduced encoder + decoder layers: timing only (accuracy keys are dropped), for screening
+    BENCH_LAYERS=2+2   reduced encoder + decoder layers: timing only (no accuracy keys), for screening; written to
+                       bench_reduced.json next to $KAIROS_PERF_JSON
     BENCH_RUNS=5       timed generate() runs after one warm-up
 
 Timing per forward (the PLAN G1 split, each part separately, the device part after a 0.3 s idle so no host work
@@ -70,10 +71,14 @@ class TimedTrace(TracedKairos):
 
 
 def _record(entry):
+    """Full-depth records go to $KAIROS_PERF_JSON; reduced-depth (timing only) ones to bench_reduced.json beside it,
+    so check_gates never sees a record without the gate metrics under a gated name."""
     path = os.environ.get("KAIROS_PERF_JSON")
     if not path:
         return
     out = Path(path)
+    if entry.get("layers", [6, 6]) != [6, 6]:
+        out = out.with_name("bench_reduced.json")
     records = json.loads(out.read_text()) if out.is_file() else []
     records.append(entry)
     out.write_text(json.dumps(records, indent=1) + "\n")

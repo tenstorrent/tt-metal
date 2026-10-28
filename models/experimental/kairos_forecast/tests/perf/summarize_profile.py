@@ -73,15 +73,18 @@ def main(iter_dir: Path, csv_path: Path | None = None):
     summary = {"csv": str(csv_path), "shape": meta["shape"], "precision": meta["precision"], "rows": meta["rows"],
                "sections": sec, "reduced_kernel_ms": reduced, "full_estimate_ms": est, "op_to_op_gap_ms": gaps,
                "ops": len(ops), "categories_ms": dict(sorted(cats.items(), key=lambda kv: -kv[1]))}
-    bench = iter_dir / "bench.json"
-    if bench.is_file():
+    for bench in (iter_dir / "bench.json", iter_dir / "bench_reduced.json"):
+        if not bench.is_file():
+            continue
         for r in json.loads(bench.read_text()):
             if r.get("name") == meta["shape"] and r.get("precision") == meta["precision"] and r.get("test") == "generate":
                 key = "measured_full_ms" if r.get("layers") == [6, 6] else "measured_reduced_ms"
-                # the bench times every forward of a generate(); paper (H <= 128) is one forward of both halves
-                summary[key] = r["device_ms"] / max(1, r["forwards"])
-        if "measured_full_ms" in summary:
-            summary["estimate_vs_measured"] = est / summary["measured_full_ms"] - 1
+                # the bench times every device forward of a generate(); paper (H <= 128) is one forward of both halves
+                summary[key] = r["device_ms"] / len(r["rows_per_forward"])
+    if "measured_full_ms" in summary:
+        summary["estimate_vs_measured"] = est / summary["measured_full_ms"] - 1
+    if "measured_reduced_ms" in summary:
+        summary["reduced_vs_measured"] = reduced / summary["measured_reduced_ms"] - 1
     (iter_dir / "summary.json").write_text(json.dumps(summary, indent=1) + "\n")
     lines = [f"# Profile summary: {meta['shape']}/{meta['precision']}, {meta['rows']} rows", "",
              f"- reduced forward kernel time {reduced:.2f} ms over {len(ops)} ops; op-to-op gaps {gaps:.2f} ms "
