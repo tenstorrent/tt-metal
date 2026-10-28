@@ -93,7 +93,6 @@ class _ChainRig(_SampledRig):
             B=B,
             K=K,
             Nv=m._vfy_Nv,
-            rope_delta=m.rope.rope_delta,
             rope_rows=m.rope.max_seq_len,
             ctrl_words=m._vfy_ctrl_words,
         )

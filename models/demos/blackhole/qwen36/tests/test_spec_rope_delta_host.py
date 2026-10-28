@@ -2,7 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """CPU tests (no device) for the per-request M-RoPE delta on the MTP spec path (step 1b): every verify / draft / join host
 index builder takes the row's OWN delta instead of the scalar ``rope.rope_delta`` (the last prefill's); the prefill routes
-record the delta per engine row; fused / chain steps take the common delta of the live rows and decline on mixed deltas.
+record the delta per engine row; fused / chain steps carry one delta word PER ROW (fused aux row 6, chain overlay last row) and
+run on mixed deltas (QWEN36_SPEC_ROW_DELTA=1, default); with the flag 0 they take the common delta of the live rows and
+decline on mixed deltas.
 Text-only batches are compared byte for byte with a HEAD export of the same functions (skipped when the export is absent:
 ``git archive HEAD models/demos/blackhole/qwen36 | tar -x -C $QWEN36_HEAD_EXPORT``).
 
@@ -42,8 +44,24 @@ from models.demos.blackhole.qwen36.tests.test_spec_hostset_host import (
     _step_inputs,
 )
 from models.demos.blackhole.qwen36.tt.model import Qwen36Model
+from models.demos.blackhole.qwen36.tt.spec_chain import (
+    OVR_DELTA,
+    OVR_ROWS,
+    chain_reference,
+    pack_ovr_host,
+    res_c_reference,
+)
 from models.demos.blackhole.qwen36.tt.spec_engine import MTPSpecEngine, _row_vision_of, join_mtp_warm_host
-from models.demos.blackhole.qwen36.tt.spec_fused import AUX_CONSTS, CONST_ROPE_DELTA, FUSED_AUX_ROWS, signed_rope_delta
+from models.demos.blackhole.qwen36.tt.spec_fused import (
+    AUX_CONSTS,
+    AUX_DELTA,
+    CONST_ROPE_DELTA,
+    FUSED_AUX_ROWS,
+    aux_row_deltas,
+    fused_accept_aux_host,
+    fused_greedy_reference,
+    signed_rope_delta,
+)
 from models.demos.blackhole.qwen36.tt.tp_common import rope_row_index
 
 __all__ = ["fake_ttnn"]  # fixture re-export
@@ -373,8 +391,14 @@ def _set_deltas(r, deltas, scalar=None):
     r.m.rope.rope_delta = deltas[0] if scalar is None else scalar
 
 
+def _row6(aux, B):
+    return [int(w) & 0xFFFFFFFF for w in aux[AUX_DELTA, :B]]
+
+
+@pytest.mark.parametrize("flag", ["0", "1"])
 @pytest.mark.parametrize("delta", [0, 4, -3])
-def test_fused_common_delta_word_and_text_equals_head(monkeypatch, delta):
+def test_fused_common_delta_word_and_text_equals_head(monkeypatch, delta, flag):
+    monkeypatch.setenv("QWEN36_SPEC_ROW_DELTA", flag)
     B = 3
     r = _Rig(monkeypatch, B)
     _set_deltas(r, [delta] * B)
@@ -384,6 +408,8 @@ def test_fused_common_delta_word_and_text_equals_head(monkeypatch, delta):
     res = r.step(tok, pos, nvd, torch.ones(B, dtype=torch.int32), _pt(B))
     assert r.e.fused_steps == 1 and not r.e.__dict__.get("fused_fallbacks")
     assert _consts(r.fa.aux_in.data) == delta & 0xFFFFFFFF  # the common delta of the live rows
+    assert _row6(r.fa.aux_in.data, B) == [delta & 0xFFFFFFFF] * B  # every row's own word (all equal here)
+    assert tuple(r.fa.aux_in.data.shape)[0] == FUSED_AUX_ROWS == 7
     committed, counts = _expected_commit(ids, tok, nvd)
     assert torch.equal(res.accepted_token_ids, committed)
     if delta == 0:  # text-only: the very words HEAD builds
@@ -393,10 +419,15 @@ def test_fused_common_delta_word_and_text_equals_head(monkeypatch, delta):
         active = pos[:, 0] >= 0
         reason, aux = e._fused_ineligible(pos[:, 0].clamp(min=0), nv, active)
         h_reason, h_aux = head.MTPSpecEngine._fused_ineligible(e, pos[:, 0].clamp(min=0), nv, active)
-        assert reason is None and h_reason is None and torch.equal(aux, h_aux)
+        assert (
+            reason is None and h_reason is None and torch.equal(aux, h_aux)
+        )  # HEAD engine code, same spec_fused module
+        assert not aux[AUX_DELTA].any()
 
 
-def test_fused_declines_mixed_deltas_counted_and_only_live_rows_count(monkeypatch):
+@pytest.mark.parametrize("flag", ["0", "1"])
+def test_fused_mixed_deltas_flag_declines_or_runs_per_row(monkeypatch, flag):
+    monkeypatch.setenv("QWEN36_SPEC_ROW_DELTA", flag)
     B = 3
     r = _Rig(monkeypatch, B)
     _set_deltas(r, [4, 4, 9])
@@ -404,10 +435,18 @@ def test_fused_declines_mixed_deltas_counted_and_only_live_rows_count(monkeypatc
     ids = _ids_for(tok, nvd, [2] * B)
     r.set_ids(ids)
     res = r.step(tok, pos, nvd, torch.ones(B, dtype=torch.int32), _pt(B))
-    assert r.e.__dict__["fused_fallbacks"] == {"mixed_rope_delta": 1}
-    assert ("trace", 12) not in r.log and ("trace", 11) not in r.log  # no accept / drafter trace: the plain verify
-    committed, counts = _expected_commit(ids, tok, nvd)  # the host walk gives the same commit
+    committed, counts = _expected_commit(ids, tok, nvd)  # the host walk and the device accept give the same commit
     assert torch.equal(res.accepted_token_ids, committed) and torch.equal(res.accepted_counts, counts)
+    if flag == "0":  # today: declined, counted, the plain verify
+        assert r.e.__dict__["fused_fallbacks"] == {"mixed_rope_delta": 1}
+        assert ("trace", 12) not in r.log and ("trace", 11) not in r.log  # no accept / drafter trace
+        assert r.e.__dict__.get("row_delta_mixed_steps", 0) == 0
+    else:  # per-row words: the step runs fused, counted as a mixed-delta step, the counter key stays 0
+        assert not r.e.__dict__.get("fused_fallbacks") and r.e.fused_steps == 1
+        assert r.e.row_delta_mixed_steps == 1
+        aux = r.fa.aux_in.data
+        assert _row6(aux, B) == [4, 4, 9] and _consts(aux) == 0  # row 5 col 1: no common delta
+        assert aux_row_deltas(aux, B) == [4, 4, 9]
     # row 2 leaves the step (padding row): the live rows agree again and the step runs fused with their common delta
     r2 = _Rig(monkeypatch, B)
     _set_deltas(r2, [4, 4, 9])
@@ -415,20 +454,110 @@ def test_fused_declines_mixed_deltas_counted_and_only_live_rows_count(monkeypatc
     r2.set_ids(_ids_for(tok, nvd, [2] * B))
     r2.step(tok, pos, nvd, torch.ones(B, dtype=torch.int32), _pt(B))
     assert not r2.e.__dict__.get("fused_fallbacks") and _consts(r2.fa.aux_in.data) == 4
+    assert r2.e.__dict__.get("row_delta_mixed_steps", 0) == 0
+    # flag 1 keeps every row's own word (the parked row too); flag 0 spreads the common delta over all rows
+    assert _row6(r2.fa.aux_in.data, B) == ([4, 4, 9] if flag == "1" else [4, 4, 4])
 
 
-def test_chain_overlay_word_is_the_common_delta_and_mixed_never_chains(monkeypatch):
+def test_fused_row6_words_and_reference_ridx_b8():
+    """B=8, deltas [0, -1234, 0, 0, 77, 0, 0, 0]: row 6 holds each row's two's complement word, row 5 col 1 the common (0 for
+    different rows), the references give clamp(pos + delta_row) for every drafter-pack ridx position, and a scalar still
+    means 'all rows the same'."""
+    B, K, rows, T = 8, 3, 500, 4
+    deltas = [0, -1234, 0, 0, 77, 0, 0, 0]
+    nv = [3, 2, 1, 0, 3, 3, 2, 1]
+    start0 = [10, 20, 30, 40, 50, 60, 70, 80]
+    act = [1] * B
+    aux = fused_accept_aux_host(nv, start0, act, [False] * B, 10**6, K, 5000, deltas, rows)
+    assert tuple(aux.shape)[0] == FUSED_AUX_ROWS
+    assert [int(w) & 0xFFFFFFFF for w in aux[AUX_DELTA, :B]] == [d & 0xFFFFFFFF for d in deltas]
+    assert int(aux[AUX_DELTA, 1]) == -1234 and not aux[AUX_DELTA, B:].any()  # columns B.. are 0
+    assert int(aux[AUX_CONSTS, CONST_ROPE_DELTA]) == 0  # rows differ: no common delta
+    assert aux_row_deltas(aux, B) == deltas
+    # an explicit common delta (the live rows' common one) goes to row 5 col 1 only
+    aux_c = fused_accept_aux_host(nv, start0, act, [False] * B, 10**6, K, 5000, deltas, rows, common_delta=-7)
+    assert signed_rope_delta(aux_c[AUX_CONSTS, CONST_ROPE_DELTA]) == -7 and torch.equal(
+        aux_c[AUX_DELTA], aux[AUX_DELTA]
+    )
+    # reference: ids make every draft accepted for row 0, rejected at once for the others
+    toks = torch.arange(1, B * T + 1).reshape(B, T)
+    ids = toks.clone()
+    ids[:, :K] = toks[:, 1:]  # every valid draft matches: m = nv
+    pt = torch.arange(B * 4, dtype=torch.int32).reshape(B, 4)
+    out = fused_greedy_reference(ids.reshape(-1), toks.reshape(-1), aux, pt, B=B, K=K)
+    pack = out.pack.to(torch.int64)
+    R = B * T
+    # pack rows: [pending, steps*K, rtok, rpos, anchor, ridx(R), ridx steps*K]
+    rpos, ridx_r = pack[K + 2, :R], pack[K + 4, :R]
+    steps_pos = pack[1 : 1 + K, :B]  # [K, B]
+    ridx_s = pack[K + 5 :, :B]  # [K, B]
+    dl = torch.tensor(deltas)
+    want_r = (rpos.reshape(B, T) + dl[:, None]).clamp(0, rows - 1).reshape(-1)
+    assert torch.equal(ridx_r, want_r)
+    assert torch.equal(ridx_s, (steps_pos + dl[None, :]).clamp(0, rows - 1))
+    assert int(ridx_r.reshape(B, T)[1].max()) == 0 and int(ridx_s[:, 1].max()) == 0  # row 1: clamped at 0
+    # a scalar delta still means "all rows the same"
+    aux_s = fused_accept_aux_host(nv, start0, act, [False] * B, 10**6, K, 5000, -9, rows)
+    assert aux_row_deltas(aux_s, B) == [-9] * B and signed_rope_delta(aux_s[AUX_CONSTS, CONST_ROPE_DELTA]) == -9
+
+
+def test_chain_ovr_last_row_and_reference_per_row_ridx():
+    B, K, Nv, rows, T = 4, 3, 2, 400, 4
+    deltas = [0, -300, 5, 0]
+    committed = torch.tensor([[11, 12, -1, -1], [21, -1, -1, -1], [31, 32, 33, 34], [41, 42, 43, -1]])
+    counts = [2, 1, 4, 3]
+    p0_prev = [10, 20, 30, 40]
+    res = res_c_reference(committed, counts, p0_prev, [0] * B)
+    ovr = pack_ovr_host(
+        [3] * B,
+        [1] * B,
+        [0] * B,
+        [0] * B,
+        p0_prev,
+        [0] * B,
+        None,
+        [0] * B,
+        0,
+        K=K,
+        scratch_block=5000,
+        rope_delta=deltas,
+        rope_rows=rows,
+    )
+    assert tuple(ovr.shape)[0] == OVR_ROWS == 11 and OVR_DELTA == OVR_ROWS - 1
+    assert [int(w) & 0xFFFFFFFF for w in ovr[OVR_DELTA, :B]] == [d & 0xFFFFFFFF for d in deltas]
+    assert int(ovr[AUX_CONSTS, CONST_ROPE_DELTA]) == 0
+    drafts = torch.arange(B * K).reshape(B, K)
+    tok, vaux, nxt = chain_reference(res, drafts, None, ovr, B=B, K=K, Nv=Nv, rope_rows=rows, ctrl_words=64)
+    pos = vaux[0, : B * T].to(torch.int64).reshape(B, T)
+    ridx = vaux[1, : B * T].to(torch.int64).reshape(B, T)
+    assert torch.equal(ridx, (pos + torch.tensor(deltas)[:, None]).clamp(0, rows - 1))
+    assert tuple(nxt.shape)[0] == FUSED_AUX_ROWS and aux_row_deltas(nxt, B) == deltas  # copied into the next aux row 6
+
+
+@pytest.mark.parametrize("flag", ["0", "1"])
+def test_chain_overlay_word_is_the_common_delta_and_mixed_chains_only_with_the_flag(monkeypatch, flag):
+    monkeypatch.setenv("QWEN36_SPEC_ROW_DELTA", flag)
     B, d = 3, 5
     r = _ChainRig(monkeypatch, B)
-    _set_deltas(r, [d] * B)  # the fake chain trace uses the model's scalar: equal to the rows' common delta
+    _set_deltas(r, [d] * B)  # the fake chain trace reads the overlay: the rows' common delta
     f = _Flow(r, B, [3, 2, 1])
     f.step([3, 1, 0])
     f.propose()
     f.next_block()
     f.step([1, 1, 1])  # chained step: overlay + audit (device-built words == _vfy_aux_host with the per-row deltas)
     assert r.e.chain_steps == 1 and r.e.chain_audits == 1 and r.e.chain_breaks == {"first": 1}
+    ovr = r.e._ch_g.ovr_in.data
+    assert [int(w) for w in ovr[OVR_DELTA, :B]] == [d] * B and int(ovr[AUX_CONSTS, CONST_ROPE_DELTA]) == d
     f.propose()
     f.next_block()
     _with_row_deltas(r.m, [d, d, d + 2])  # a mixed batch (a prefill gave row 2 another delta)
     f.step([1, 1, 1])
-    assert r.e.fused_fallbacks == {"mixed_rope_delta": 1} and r.e.chain_steps == 1  # declined before the chain is asked
+    if flag == "0":
+        assert (
+            r.e.fused_fallbacks == {"mixed_rope_delta": 1} and r.e.chain_steps == 1
+        )  # declined before the chain is asked
+    else:
+        assert not r.e.__dict__.get("fused_fallbacks") and r.e.chain_steps == 2 and r.e.chain_audits == 2
+        ovr = r.e._ch_g.ovr_in.data
+        assert [int(w) for w in ovr[OVR_DELTA, :B]] == [d, d, d + 2] and int(ovr[AUX_CONSTS, CONST_ROPE_DELTA]) == 0
+        assert r.e.row_delta_mixed_steps >= 1

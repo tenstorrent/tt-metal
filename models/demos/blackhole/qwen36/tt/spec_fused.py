@@ -18,8 +18,10 @@ Fused aux buffer (what the host stages BEFORE the step; only values known before
   row 2  declined[u]    1 if the propose declines the row whatever m is: inactive | no-draft (skip) | fits_none
   row 3  keep_kv[u]     1 if skip & active (declined row still writes MTP KV slot p: m_kv = m + 1)
   row 4  p0[u]          position of column 0 (start0 = max(start_pos[u,0], 0))
-  row 5  consts         [0] scratch block id, [1] rope_delta as two's complement uint32, [2] rope table rows,
-                        [3] B, [4] K
+  row 5  consts         [0] scratch block id, [1] common rope_delta as two's complement uint32 (kept for the audit and
+                        old readers; the device bodies no longer read it), [2] rope table rows, [3] B, [4] K
+  row 6  row_delta[u]   each ENGINE row's own M-RoPE delta, two's complement uint32, words 0..B-1 (inactive rows too:
+                        the row's own value, like model._vfy_aux_host(rope_delta=None)); the bodies add it per row
 A row whose fit result depends on m ('mixed', see fused_fit_mode) cannot run fused unless it is declined anyway
 (inactive or skip); fused_accept_aux_host raises ValueError then (the step falls back to the host path).
 Host-only decisions that stay outside the fused step: all rows declined (no drafter replay, SE:2043/2060), B == 1 skip_all
@@ -32,8 +34,8 @@ import torch
 
 from models.demos.blackhole.qwen36.tt.tp_common import HOSTSET_PACK_ALIGN, pack_u32_rows, rope_row_index
 
-FUSED_AUX_ROWS = 6
-AUX_NUM_VALID, AUX_ACTIVE, AUX_DECLINED, AUX_KEEP, AUX_P0, AUX_CONSTS = range(6)
+FUSED_AUX_ROWS = 7
+AUX_NUM_VALID, AUX_ACTIVE, AUX_DECLINED, AUX_KEEP, AUX_P0, AUX_CONSTS, AUX_DELTA = range(7)
 CONST_SCRATCH, CONST_ROPE_DELTA, CONST_ROPE_ROWS, CONST_B, CONST_K = range(5)
 
 
@@ -41,6 +43,28 @@ def signed_rope_delta(word):
     """The rope delta back from its fused-aux uint32 word (fused_accept_aux_host stores ``int(delta) & 0xFFFFFFFF``)."""
     w = int(word) & 0xFFFFFFFF
     return w - 2**32 if w >= 2**31 else w
+
+
+def row_delta_list(rope_delta, B):
+    """Per-row rope deltas as B python ints. ``rope_delta``: an int (all rows the same) or a list / tensor of B ints."""
+    if isinstance(rope_delta, (list, tuple, torch.Tensor)):
+        out = [int(v) for v in torch.as_tensor(rope_delta).reshape(-1).tolist()]
+        if len(out) != B:
+            raise ValueError(f"row_delta_list: {len(out)} deltas for {B} rows")
+        return out
+    return [int(rope_delta)] * B
+
+
+def aux_row_deltas(aux, B):
+    """The B signed per-row rope deltas of a fused aux (row AUX_DELTA)."""
+    return [signed_rope_delta(w) for w in torch.as_tensor(aux)[AUX_DELTA, :B].tolist()]
+
+
+def ridx_deltas(deltas, T, K):
+    """Per-position deltas for the drafter pack's ridx rows: the R reseed rows (user-major, T per user) then the
+    K x B step rows (step-major), the order of torch.cat([rpos, steps.reshape(-1)])."""
+    d = [int(x) for x in deltas]
+    return [x for x in d for _ in range(T)] + d * K
 
 
 def fused_fit_mode(start0, capacity, active, K):
@@ -56,9 +80,13 @@ def fused_fit_mode(start0, capacity, active, K):
     return out
 
 
-def fused_accept_aux_host(num_valid, start0, active, skip, capacity, K, scratch_block, rope_delta, rope_rows):
+def fused_accept_aux_host(
+    num_valid, start0, active, skip, capacity, K, scratch_block, rope_delta, rope_rows, common_delta=None
+):
     """The fused aux buffer int32 [FUSED_AUX_ROWS, W] (layout in the module doc). ``skip`` [B] bool = rows in the
-    engine's _no_draft set (propose_skip_plan marked); ``capacity`` = table_capacity(cap_blocks, block_size)."""
+    engine's _no_draft set (propose_skip_plan marked); ``capacity`` = table_capacity(cap_blocks, block_size).
+    ``rope_delta``: an int (every row the same) or B per-row ints (row AUX_DELTA). ``common_delta`` (optional) is the
+    value for row 5 col 1; default: the shared value when all rows agree, else 0."""
     nv = torch.as_tensor(num_valid).reshape(-1).to(torch.int64).tolist()
     B = len(nv)
     st = torch.as_tensor(start0).reshape(-1).to(torch.int64).tolist()
@@ -72,9 +100,11 @@ def fused_accept_aux_host(num_valid, start0, active, skip, capacity, K, scratch_
         declined.append(int((not act[u]) or sk[u] or modes[u] == "fits_none"))
         keep.append(int(sk[u] and act[u]))
     consts = [0] * 5
-    consts[CONST_SCRATCH], consts[CONST_ROPE_DELTA] = int(scratch_block), int(rope_delta) & 0xFFFFFFFF
+    row_d = row_delta_list(rope_delta, B)
+    common = common_delta if common_delta is not None else (row_d[0] if len(set(row_d)) == 1 else 0)
+    consts[CONST_SCRATCH], consts[CONST_ROPE_DELTA] = int(scratch_block), common & 0xFFFFFFFF
     consts[CONST_ROPE_ROWS], consts[CONST_B], consts[CONST_K] = int(rope_rows), B, int(K)
-    rows = [nv, [int(a) for a in act], declined, keep, st, consts]
+    rows = [nv, [int(a) for a in act], declined, keep, st, consts, [d & 0xFFFFFFFF for d in row_d]]
     width = -(-max(len(r) for r in rows) // HOSTSET_PACK_ALIGN) * HOSTSET_PACK_ALIGN
     out = torch.tensor([r + [0] * (width - len(r)) for r in rows], dtype=torch.int64)
     if int(out.min()) < 0:
@@ -117,8 +147,8 @@ def fused_greedy_reference(ids, tok_buf, aux, pt, *, B, K):
     T, R = K + 1, B * (K + 1)
     aux = torch.as_tensor(aux).to(torch.int64) & 0xFFFFFFFF
     nv, act, dec0, keep, p0 = (aux[i, :B] for i in range(5))
-    scratch, delta, rope_rows = (int(aux[AUX_CONSTS, i]) for i in (CONST_SCRATCH, CONST_ROPE_DELTA, CONST_ROPE_ROWS))
-    delta = delta - (1 << 32) if delta >= 1 << 31 else delta
+    scratch, rope_rows = (int(aux[AUX_CONSTS, i]) for i in (CONST_SCRATCH, CONST_ROPE_ROWS))
+    delta = ridx_deltas(aux_row_deltas(aux, B), T, K)
     ids = torch.as_tensor(ids).reshape(-1)[:R].to(torch.int64).reshape(B, T)
     toks = torch.as_tensor(tok_buf).reshape(-1)[:R].to(torch.int64).reshape(B, T)
     # 1. greedy walk (spec_accept._greedy_accept + _counts_from_accepted); a row with no drafts commits 1
@@ -164,7 +194,7 @@ class FusedGreedyDevice:
     trace-capturable op sequence that writes pack_out / rs_pt_out / result_out IN PLACE (their addresses never change).
 
     Inputs : ids_in uint32 RM [1,1,1,32] (verify argmax ids, word r = u*T+j), tok_in uint32 RM [1,R],
-             aux_in int32 RM [6,W] (fused_accept_aux_host output; the rope delta is a true signed int32),
+             aux_in int32 RM [7,W] (fused_accept_aux_host output; the rope delta is a true signed int32),
              pt_rows_in int32 RM [R,nb] (page table row pt[r // T]).
     Outputs: pack_out uint32 RM [2K+5,W] (= fused_greedy_reference .pack), rs_pt_out int32 RM [R,nb] (= .rs_pt),
              result_out int32 RM [2,W]: row 0 = committed flattened r = u*T+j (-1 past the count), row 1 = counts[B];
@@ -291,12 +321,13 @@ class FusedGreedyDevice:
         # ---- inputs -> fp32 TILE
         ids = fl(tl(ttnn.reshape(ttnn.slice(self.ids_in, [0, 0, 0, 0], [1, 1, 1, R]), (B, T))))  # [B,T]
         tok = fl(tl(ttnn.reshape(self.tok_in, (B, T))))  # [B,T]
-        aux = fl(tl(self.aux_in))  # [6,W]
-        auxt = ttnn.transpose(aux, 0, 1)  # [W,6]
+        aux = fl(tl(self.aux_in))  # [7,W]
+        auxt = ttnn.transpose(aux, 0, 1)  # [W,7]
         col = lambda i: ttnn.slice(auxt, [0, i], [B, i + 1])  # [B,1]
         nv, dec, keep, p0 = col(AUX_NUM_VALID), col(AUX_DECLINED), col(AUX_KEEP), col(AUX_P0)
         c = lambda i: ttnn.slice(aux, [AUX_CONSTS, i], [AUX_CONSTS + 1, i + 1])  # [1,1]
-        scratch, delta, rows = c(CONST_SCRATCH), c(CONST_ROPE_DELTA), c(CONST_ROPE_ROWS)
+        scratch, rows = c(CONST_SCRATCH), c(CONST_ROPE_ROWS)
+        delta = col(AUX_DELTA)  # [B,1] per-row rope delta (broadcasts over axis 1 of [B,T] / [B,K])
         rows_m1 = ttnn.subtract(rows, self.c_one)
         # ---- greedy walk: m = length of the valid, matching draft prefix
         eq = fl(ttnn.eq(ttnn.slice(ids, [0, 0], [B, K]), ttnn.slice(tok, [0, 1], [B, T])))  # [B,K]

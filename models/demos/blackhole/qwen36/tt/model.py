@@ -2148,10 +2148,22 @@ class Qwen36Model:
             owned.append(ctrl)
         return kvpos, cos, sin, ctrl, owned
 
+    def _expand_row_deltas(self, rope_delta, n_pos):
+        """``rope_delta`` (an int, or one delta per engine row) as the per-position value rope_row_index takes for a
+        verify-layout vector of ``n_pos`` = users * T rows: an int stays a scalar, a list is repeated T times per user.
+        """
+        if not isinstance(rope_delta, (list, tuple, torch.Tensor)):
+            return int(rope_delta)
+        d = [int(x) for x in torch.as_tensor(rope_delta).reshape(-1).tolist()]
+        T = int(self._vfy_T)
+        assert len(d) * T == int(n_pos), (len(d), T, n_pos)
+        return [x for x in d for _ in range(T)]
+
     def _vfy_aux_host(self, row_positions, mi_prev, parity=None, rope_delta=None):
         """Host form of ``_vfy_aux_buf``: torch.int32 [3 (2 without the fused GDN op), W]. ``parity`` (default: the layers'
         current GDN window parity): the parity word of the ctrl page, for a step whose replay was enqueued earlier.
-        ``rope_delta`` (default: each row's own delta): the scalar is the chain / fused step's common delta, as the device builds it.
+        ``rope_delta`` (default: each row's own delta): an int = every row the same; a list of one delta per engine row
+        (each repeated for the row's T positions, user-major), as the fused / chain device bodies build it.
         """
         from models.demos.blackhole.qwen36.tt.gdn.tp import spec_ctrl_page
 
@@ -2160,7 +2172,11 @@ class Qwen36Model:
             row_positions,
             rope_row_index(
                 row_positions,
-                Qwen36Model._spec_pos_deltas(self, n) if rope_delta is None else int(rope_delta),
+                (
+                    Qwen36Model._spec_pos_deltas(self, n)
+                    if rope_delta is None
+                    else Qwen36Model._expand_row_deltas(self, rope_delta, n)
+                ),
                 self.rope.max_seq_len,
             ),
         ]
