@@ -16,7 +16,8 @@ using DistributedContext = tt::tt_metal::distributed::multihost::DistributedCont
 
 // Averages `tensor` over the devices of `cluster_axes`. `reduce_dtype` is the dtype the values are summed in: unset or
 // BFLOAT16 sums in the tensor's own dtype (bf16 gradients in tt-train), FLOAT32 sums in fp32 and casts the mean back to
-// the tensor's dtype, which keeps the low bits a bf16 sum loses at every hop.
+// the tensor's dtype, which keeps the low bits a bf16 sum loses at every hop. A large tensor reduced over one axis
+// takes an fp32 reduce-scatter and a bf16 all-gather instead of an fp32 all-reduce; both sum in fp32.
 ttnn::Tensor synchronize_tensor(
     const ttnn::Tensor& tensor,
     const ttsl::SmallVector<uint32_t>& cluster_axes,

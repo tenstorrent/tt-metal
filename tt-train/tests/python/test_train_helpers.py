@@ -6,26 +6,13 @@
 
 from __future__ import annotations
 
-import os
-import sys
 import types
 
 import pytest
 
-# Not part of the installed ``ttml`` wheel. examples/qwen3 also ships a top-level ``train`` module and
-# other tests put that dir on sys.path, so force ours to the front and evict a stale cache hit.
-_TRAIN_EXAMPLE_DIR = os.path.realpath(
-    os.path.join(os.path.dirname(__file__), "..", "..", "sources", "examples", "train")
-)
-if _TRAIN_EXAMPLE_DIR in sys.path:
-    sys.path.remove(_TRAIN_EXAMPLE_DIR)
-sys.path.insert(0, _TRAIN_EXAMPLE_DIR)
-for _name in ("train", "callbacks"):
-    _cached = sys.modules.get(_name)
-    if _cached is not None and not os.path.realpath(getattr(_cached, "__file__", "") or "").startswith(
-        _TRAIN_EXAMPLE_DIR
-    ):
-        del sys.modules[_name]
+from train_example import import_train_example
+
+import_train_example()
 
 from callbacks import EpochCallback  # noqa: E402
 from train import (  # noqa: E402
