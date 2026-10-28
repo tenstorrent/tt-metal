@@ -131,12 +131,14 @@ class FlowStateTT:
             ttnn.deallocate(x)
             x = None
         g = self._linear(y, w["gate_w"], "gate", rows, bias=w["gate_b"], act="sigmoid")  # R1-2: sigmoid fused
-        y = ttnn.multiply(g, y)
-        y = ttnn.add(y, ttnn.multiply(u, w["D"]))
-        return y, u, x
+        du = ttnn.multiply(u, w["D"])
+        y_out = ttnn.addcmul(du, g, y)  # R2-3: g * y + D u in one op
+        for t in (du, g, y):
+            ttnn.deallocate(t)
+        return y_out, u, x
 
-    def mlp_block(self, i, y):
-        """z = MLP(rms_norm(y)) + y, bf16 (the reference's ``mlp`` part)."""
+    def mlp_block(self, i, y, residual=True):
+        """z = MLP(rms_norm(y)) + y, bf16 (the reference's ``mlp`` part); without the + y when not residual."""
         p, w = self.p, self.layers[i]
         h = ttnn.rms_norm(y, weight=w["rms_w"], epsilon=1e-6, compute_kernel_config=p.norm)
         rows = y.shape[-2]
@@ -155,21 +157,23 @@ class FlowStateTT:
             ttnn.deallocate(b)
         z = self._linear(ab, w["w3"], "w3", rows, bias=w["b3"])
         ttnn.deallocate(ab)
-        return ttnn.add(z, y)
+        return ttnn.add(z, y) if residual else z
 
     def layer(self, i, u, consts, L, Bp, r0, parts=None):
         """u (1, 1, L * Bp, 512) bf16 -> out (1, 1, rows * Bp, 512) bf16; rows = L for i < 5, L - r0 for the last.
         parts: a dict that receives the device ``ssm`` and ``mlp`` outputs (module tests; kept alive)."""
         w = self.layers[i]
         y, u, _ = self.ssm_block(i, u, consts, L, Bp, r0)
-        z = self.mlp_block(i, y)
-        if parts is None:
+        ln = dict(weight=w["ln_w"], bias=w["ln_b"], epsilon=1e-5, compute_kernel_config=self.p.norm)
+        if parts is None:  # R2-2: the MLP residual + y inside the layer norm
+            z = self.mlp_block(i, y, residual=False)
+            n = ttnn.layer_norm(z, residual_input_tensor=y, **ln)
             ttnn.deallocate(y)
-        else:
-            parts["ssm"], parts["mlp"] = y, z
-        n = ttnn.layer_norm(z, weight=w["ln_w"], bias=w["ln_b"], epsilon=1e-5, compute_kernel_config=self.p.norm)
-        if parts is None:
             ttnn.deallocate(z)
+        else:
+            z = self.mlp_block(i, y)
+            parts["ssm"], parts["mlp"] = y, z
+            n = ttnn.layer_norm(z, **ln)
         return ttnn.add(u, n)
 
     def forward_device(self, tok_dev, s, L, Bp, r0, P, keep=False):
