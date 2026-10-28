@@ -32,7 +32,7 @@
 namespace llk2
 {
 
-template <pack_modifiers Mods = pack_modifiers {}, const TensorSpec<6>& D, class RD, const TensorSpec<6>& O, class RO>
+template <pack_modifiers Mods = pack_modifiers {}, const TensorSpec<tensor_rank>& D, class RD, const TensorSpec<tensor_rank>& O, class RO>
 inline __attribute__((always_inline)) void pack(const Tensor<D, RD>& src, const Tensor<O, RO>& dst)
 {
     static_assert(D.storage == Storage::Dest, "pack reads a Dest tensor");

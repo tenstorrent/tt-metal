@@ -24,7 +24,7 @@
 namespace llk2
 {
 
-template <matmul_modifiers Mods = matmul_modifiers {}, const TensorSpec<6>& A, class RA, const TensorSpec<6>& B, class RB, const TensorSpec<6>& D, class RD>
+template <matmul_modifiers Mods = matmul_modifiers {}, const TensorSpec<tensor_rank>& A, class RA, const TensorSpec<tensor_rank>& B, class RB, const TensorSpec<tensor_rank>& D, class RD>
 inline __attribute__((always_inline)) void matmul(const Tensor<A, RA>& in0, const Tensor<B, RB>& in1, const Tensor<D, RD>& acc)
 {
     static_assert(D.storage == Storage::Dest, "matmul accumulates into Dest");

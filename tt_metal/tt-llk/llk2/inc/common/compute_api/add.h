@@ -30,7 +30,7 @@ namespace llk2
 {
 
 /// Runs one resolved eltwise binary op: checks acc against the Resolver's result, then unpack and math.
-template <const auto& Api, auto Mods, const TensorSpec<6>& A, class RA, const TensorSpec<6>& B, class RB, const TensorSpec<6>& D, class RD>
+template <const auto& Api, auto Mods, const TensorSpec<tensor_rank>& A, class RA, const TensorSpec<tensor_rank>& B, class RB, const TensorSpec<tensor_rank>& D, class RD>
 inline __attribute__((always_inline)) void eltwise_binary(const Tensor<A, RA>& a, const Tensor<B, RB>& b, const Tensor<D, RD>& acc)
 {
     static_assert(D.storage == Storage::Dest, "an eltwise binary op writes Dest");
@@ -48,7 +48,7 @@ inline __attribute__((always_inline)) void eltwise_binary(const Tensor<A, RA>& a
 }
 
 /// acc = a + b (b broadcast as Mods.bcast says).
-template <add_modifiers Mods = add_modifiers {}, const TensorSpec<6>& A, class RA, const TensorSpec<6>& B, class RB, const TensorSpec<6>& D, class RD>
+template <add_modifiers Mods = add_modifiers {}, const TensorSpec<tensor_rank>& A, class RA, const TensorSpec<tensor_rank>& B, class RB, const TensorSpec<tensor_rank>& D, class RD>
 inline __attribute__((always_inline)) void add(const Tensor<A, RA>& a, const Tensor<B, RB>& b, const Tensor<D, RD>& acc)
 {
     eltwise_binary<add_op, Mods>(a, b, acc);

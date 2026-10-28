@@ -65,7 +65,6 @@ using hal::sync::StallTarget;
 
 // ---- constants -----------------------------------------------------------------------------------------------------
 
-inline constexpr std::uint32_t pack_l1_unit_bytes = 16;      ///< L1_Dest_addr and tile sizes count 16-byte words
 inline constexpr std::uint32_t rows_per_pacr      = 4;       ///< one PACR with all four Dest read interfaces reads 4 Dest rows
 inline constexpr std::uint8_t all_read_interfaces = 0;       ///< PACR interface mask 0: all four read interfaces
 inline constexpr std::uint32_t zero_relu          = 1;       ///< STACC_RELU ApplyRelu mode 1: negatives to 0 (Packers/ReLU.md)
@@ -111,7 +110,7 @@ constexpr pack_params pack_params_from(const Plan& p)
         p.pack.face_r_dim,
         p.pack.num_faces,
         p.pack.tiles,
-        p.pack.tile_bytes / pack_l1_unit_bytes,
+        p.pack.tile_bytes / l1_word_bytes,
         p.pack.relu,
         p.pack.l1_acc,
         p.pack.untilize,
@@ -170,7 +169,7 @@ inline __attribute__((always_inline)) void pack_configure()
     using namespace ckernel;
     using namespace hal::counters::adc;
     using cfg::Sec;
-    static_assert(P.num_faces == 4 && P.face_r_dim == FACE_R_DIM, "32x32 tiles only, for now: the MOP and strides assume four 16-row faces");
+    static_assert(P.num_faces == faces_per_full_tile && P.face_r_dim == max_face_rows, "32x32 tiles only, for now: the MOP and strides assume four 16-row faces");
     static_assert(!P.untilize, "untilize is not ported yet");
 
     constexpr std::uint32_t in_format  = packer_in_data_format(P);

@@ -61,6 +61,7 @@
 #include "hal/dst.h"
 #include "hal/sync.h"
 #include "kernel_settings.h"
+#include "llk_lib/semaphores.h"
 #include "llk_lib/thread.h"
 #include "tensix_types.h" // DEST_REGISTER_HALF_SIZE, DEST_REGISTER_FULL_SIZE
 #include "tensor/tensor.h"
@@ -68,12 +69,10 @@
 namespace llk2::llk_lib
 {
 
-using hal::sync::Semaphore;
 using hal::sync::SemaphoreCondition;
 using hal::sync::StallCondition;
 using hal::sync::StallTarget;
 
-inline constexpr Semaphore math_pack           = Semaphore::S1;           ///< ckernel::semaphore::MATH_PACK: sections math has handed to pack
 inline constexpr std::uint32_t dest_sections   = 2;                       ///< SyncHalf: math writes one section while pack reads the other
 inline constexpr std::uint32_t dest_section_rows = DEST_REGISTER_HALF_SIZE; ///< rows from one section's start to the next, in either Dest mode
 static_assert(dest_sections * dest_section_rows == DEST_REGISTER_FULL_SIZE, "the sections split Dest");
@@ -94,13 +93,13 @@ struct dest_params
 };
 
 /// Rows a Dest tensor spans: its offset plus its outermost dim times that dim's stride, in 16-datum rows.
-constexpr std::uint32_t dest_rows(const TensorSpec<6>& t)
+constexpr std::uint32_t dest_rows(const TensorSpec<tensor_rank>& t)
 {
     return (t.shape.offset + t.shape.sizes[TileY] * t.shape.strides[TileY]) / dest_row_datums;
 }
 
 /// The Dest sync parameters for a tensor with spec t, in the kernel's Dest mode.
-constexpr dest_params dest_params_from(const TensorSpec<6>& t, const KernelSettings& s)
+constexpr dest_params dest_params_from(const TensorSpec<tensor_rank>& t, const KernelSettings& s)
 {
     return {dest_rows(t), s.dest_fp32};
 }
@@ -126,10 +125,10 @@ inline __attribute__((always_inline)) void dest_next_section()
 /// Math thread: sets MATH_PACK to value 0, maximum dest_sections, once the packer has freed every section.
 inline __attribute__((always_inline)) void dest_sync_setup()
 {
-    while (hal::sync::semaphore::read<math_pack>() > 0)
+    while (hal::sync::semaphore::read<math_pack_sync>() > 0)
     {
     }
-    hal::sync::semaphore::init<0 /* value */, dest_sections /* maximum */, math_pack>();
+    hal::sync::semaphore::init<0 /* value */, dest_sections /* maximum */, math_pack_sync>();
     dest_sync_ready = true;
 }
 
@@ -146,7 +145,7 @@ inline __attribute__((always_inline)) void dest_acquire()
             dest_sync_setup();
         }
         // Math, SFPU and sync instructions wait here; the next op's Dest writes come after.
-        hal::sync::wait::semaphore<StallTarget::Math | StallTarget::Sfpu | StallTarget::Sync, SemaphoreCondition::WhileMaximum, math_pack>();
+        hal::sync::wait::semaphore<StallTarget::Math | StallTarget::Sfpu | StallTarget::Sync, SemaphoreCondition::WhileMaximum, math_pack_sync>();
     }
 }
 
@@ -158,7 +157,7 @@ inline __attribute__((always_inline)) void dest_commit()
     if constexpr (On == Thread::Math && runs_on<On>)
     {
         hal::sync::wait::stall<StallTarget::Sync, StallCondition::MathIdle | StallCondition::SfpuIdle>();
-        hal::sync::semaphore::post<math_pack>();
+        hal::sync::semaphore::post<math_pack_sync>();
     }
     if constexpr (On == Thread::Pack && runs_on<On>)
     {
@@ -170,7 +169,7 @@ inline __attribute__((always_inline)) void dest_commit()
         // (tt-isa-documentation, BlackholeA0/TensixTile/TensixCoprocessor/SEMWAIT.md, block-mask bits in
         // STALLWAIT.md). RISC-V MMIO writes do not go through the Wait Gate, so pack-thread code after dest_commit
         // must write config through the Tensix config unit, not MMIO, or wait on MATH_PACK itself.
-        hal::sync::wait::semaphore<StallTarget::All, SemaphoreCondition::WhileZero, math_pack>();
+        hal::sync::wait::semaphore<StallTarget::All, SemaphoreCondition::WhileZero, math_pack_sync>();
     }
 }
 
@@ -185,7 +184,7 @@ inline __attribute__((always_inline)) void dest_release()
         hal::sync::wait::stall<StallTarget::Math, StallCondition::PackerIdle>();
         hal::dst::run(hal::dst::Zero {
             .scope = hal::dst::ZeroScope::Half, .index = dest_section, .width = P.dest_fp32 ? hal::dst::DestWidth::Bits32 : hal::dst::DestWidth::Bits16});
-        hal::sync::semaphore::get<math_pack>();
+        hal::sync::semaphore::get<math_pack_sync>();
     }
 }
 

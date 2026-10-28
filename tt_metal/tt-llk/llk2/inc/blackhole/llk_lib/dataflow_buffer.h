@@ -50,6 +50,7 @@
 #include "hal/move.h"
 #include "hal/sync.h"
 #include "llk_lib/thread.h"
+#include "tensor/tensor.h" // l1_word_bytes
 
 // hal/scalar.h has an LLK_ASSERT inside a constexpr function, which C++17 flags under ENABLE_LLK_ASSERT.
 #pragma GCC diagnostic push
@@ -61,8 +62,8 @@ namespace llk2::llk_lib
 {
 
 // ---- constants -----------------------------------------------------------------------------------------------------
-
-inline constexpr std::uint32_t l1_word_bytes = 16; ///< buffer pointers and page sizes count 16-byte words, as in LocalCBInterface
+//
+// Buffer pointers and page sizes count L1 words (l1_word_bytes, tensor/tensor.h), as in LocalCBInterface.
 
 // Stream registers, from tt_metal/hw/inc/internal/tt-1xx/blackhole/noc/noc_overlay_parameters.h (not on the tt-llk
 // include path).

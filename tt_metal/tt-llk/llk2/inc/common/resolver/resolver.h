@@ -27,10 +27,10 @@ namespace llk2
 template <class Mods>
 struct OpApi
 {
-    bool (*accepts)(const TensorSpec<6>& in0, const TensorSpec<6>& in1, const Mods& mods, const KernelSettings& settings);
-    OpConfig (*options)(const TensorSpec<6>& in0, const TensorSpec<6>& in1, const Mods& mods, const KernelSettings& settings);
-    Work (*work)(const TensorSpec<6>& in0, const TensorSpec<6>& in1, const OpConfig& config);
-    Plan (*plan)(const TensorSpec<6>& in0, const TensorSpec<6>& in1, const Mods& mods, const OpConfig& config, const Work& work);
+    bool (*accepts)(const TensorSpec<tensor_rank>& in0, const TensorSpec<tensor_rank>& in1, const Mods& mods, const KernelSettings& settings);
+    OpConfig (*options)(const TensorSpec<tensor_rank>& in0, const TensorSpec<tensor_rank>& in1, const Mods& mods, const KernelSettings& settings);
+    Work (*work)(const TensorSpec<tensor_rank>& in0, const TensorSpec<tensor_rank>& in1, const OpConfig& config);
+    Plan (*plan)(const TensorSpec<tensor_rank>& in0, const TensorSpec<tensor_rank>& in1, const Mods& mods, const OpConfig& config, const Work& work);
 };
 
 struct Resolved
@@ -41,17 +41,17 @@ struct Resolved
 };
 
 template <class Mods>
-constexpr Resolved resolve(const OpApi<Mods>& api, const TensorSpec<6>& in0, const TensorSpec<6>& in1, const Mods& mods, const KernelSettings& settings)
+constexpr Resolved resolve(const OpApi<Mods>& api, const TensorSpec<tensor_rank>& in0, const TensorSpec<tensor_rank>& in1, const Mods& mods, const KernelSettings& settings)
 {
     const OpConfig config = api.options(in0, in1, mods, settings);
     const Work work       = api.work(in0, in1, config);
     return {config, work, api.plan(in0, in1, mods, config, work)};
 }
 
-template <const auto& Api, const TensorSpec<6>& A, const TensorSpec<6>& B, auto Mods>
+template <const auto& Api, const TensorSpec<tensor_rank>& A, const TensorSpec<tensor_rank>& B, auto Mods>
 inline constexpr bool accepted = Api.accepts(A, B, Mods, kernel_settings);
 
-template <const auto& Api, const TensorSpec<6>& A, const TensorSpec<6>& B, auto Mods>
+template <const auto& Api, const TensorSpec<tensor_rank>& A, const TensorSpec<tensor_rank>& B, auto Mods>
 inline constexpr Resolved resolved = resolve(Api, A, B, Mods, kernel_settings);
 
 } // namespace llk2

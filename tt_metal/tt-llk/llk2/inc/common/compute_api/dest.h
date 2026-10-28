@@ -47,7 +47,7 @@ namespace llk2
 
 /// Takes the next Dest section. Math waits until it is free (the packer has released it). Returns, on every thread,
 /// a Dest tensor with spec S starting at the section's first row; the section is zero.
-template <const TensorSpec<6>& S>
+template <const TensorSpec<tensor_rank>& S>
 inline __attribute__((always_inline)) Tensor<S> dest_acquire()
 {
     static_assert(S.storage == Storage::Dest, "dest_acquire returns a Dest tensor: use a dst_spec");
@@ -59,7 +59,7 @@ inline __attribute__((always_inline)) Tensor<S> dest_acquire()
 }
 
 /// Ends the writes to acc's section. Math hands it to the packer once math and the SFPU are done; pack waits for that.
-template <const TensorSpec<6>& S, class R>
+template <const TensorSpec<tensor_rank>& S, class R>
 inline __attribute__((always_inline)) void dest_commit(const Tensor<S, R>&)
 {
     static_assert(S.storage == Storage::Dest, "dest_commit takes the tensor dest_acquire returned");
@@ -70,7 +70,7 @@ inline __attribute__((always_inline)) void dest_commit(const Tensor<S, R>&)
 
 /// Ends the reads of acc's section. Pack zeroes it and hands it back to math once the packer is done; every thread
 /// moves to the other section. acc must not be used after this.
-template <const TensorSpec<6>& S, class R>
+template <const TensorSpec<tensor_rank>& S, class R>
 inline __attribute__((always_inline)) void dest_release(const Tensor<S, R>&)
 {
     static_assert(S.storage == Storage::Dest, "dest_release takes the tensor dest_acquire returned");
