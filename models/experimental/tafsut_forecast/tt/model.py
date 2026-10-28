@@ -30,6 +30,10 @@ NREAD = df.NFUT  # read-out rows: all 32 future tokens (one tile row)
 DRAM = ttnn.DRAM_MEMORY_CONFIG
 MM_2D = os.environ.get("TAFSUT_MM_2D", "1") != "0"  # R1-2; 0 = the auto-config (screening)
 FUSED_ROPE = os.environ.get("TAFSUT_FUSED_ROPE", "1") != "0"  # R1-1; 0 = the round-0 matmul RoPE (screening)
+# screening knobs (D7 (b)), default off: embed + head linears on the auto-config, fp32 cos/sin tables, bf16 RoPE DST
+MM_2D_SKIP_HIFI4 = os.environ.get("TAFSUT_MM_2D_SKIP_HIFI4", "0") == "1"
+ROPE_FP32_TABLE = os.environ.get("TAFSUT_ROPE_FP32_TABLE", "0") == "1"
+ROPE_FP32_DEST = os.environ.get("TAFSUT_ROPE_FP32_DEST", "1") != "0"
 
 
 def sdpa_chunks(s_pad: int, ctx_len: int | None) -> int:
@@ -123,12 +127,13 @@ class TtTafsut:
             return ttnn.from_torch(x.contiguous(), dtype=dtype, layout=ttnn.TILE_LAYOUT, device=self.device,
                                    memory_config=DRAM)
 
+        rope_dt = ttnn.float32 if ROPE_FP32_TABLE else ttnn.bfloat16
         c = dict(
             P=P, S=S, s_pad=s_pad, chunk=sdpa_chunks(s_pad, ctx_len),
             c_hid=up(c_hid[None]), c_res=up(c_res[None]),
             tail=up(tail[None].expand(B, -1, -1)),
-            cos=up(cos[None, None]), sin=up(sin[None, None]),
-            fused_rope=FUSED_ROPE and fits_l1(s_pad, DH, ttnn.bfloat16, ttnn.bfloat16),
+            cos=up(cos[None, None], rope_dt), sin=up(sin[None, None], rope_dt),
+            fused_rope=FUSED_ROPE and fits_l1(s_pad, DH, rope_dt, rope_dt),
         )
         self._consts[key] = c
         return c
@@ -170,7 +175,7 @@ class TtTafsut:
     # -------------------------------------------------------------------------------------------- device
     def _linear(self, x, w, **kw):
         kw.setdefault("compute_kernel_config", self._mm)
-        if MM_2D:  # R1-2: 2D multicast config over the whole grid, relu fused into it (R1-3)
+        if MM_2D and not (MM_2D_SKIP_HIFI4 and kw["compute_kernel_config"] is self._hifi4):  # R1-2: 2D multicast config over the whole grid, relu fused into it (R1-3)
             pc = program_configs.for_linear(x, w, kw["compute_kernel_config"], relu=kw.get("activation") == "relu")
             if pc is not None:
                 kw.pop("activation", None)
@@ -206,7 +211,7 @@ class TtTafsut:
         ttnn.deallocate(x)
         if c["fused_rope"]:  # R1-1: head split + RoPE in one program (chronos qkv_heads_rope)
             q, k, v = ops.qkv_heads_rope(ttnn.reshape(qkv, (B, S, 3 * D)), c["cos"], c["sin"], num_heads=NH,
-                                         memory_config=DRAM)
+                                         memory_config=DRAM, fp32_dest_acc_en=ROPE_FP32_DEST)
             ttnn.deallocate(qkv)
         else:
             q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(

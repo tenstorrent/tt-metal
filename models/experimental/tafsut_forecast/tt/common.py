@@ -15,6 +15,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+import os
+
 import ttnn
 
 MASK_FILL = -1e9  # finite: an all-masked k-chunk must not compute (-inf) - (-inf) (CONTRACT §7 item 1)
@@ -46,10 +48,14 @@ class Precision:
         return ttnn.bfloat8_b if self.bf8_weights else ttnn.bfloat16
 
 
+# screening knob (D7 (b)), default off: packer L1 accumulation in every compute config
+PACKER_L1 = os.environ.get("TAFSUT_PACKER_L1", "0") == "1"
+
+
 def ckc(fidelity="HiFi2", fp32_acc=True, approx=False):
     return ttnn.types.BlackholeComputeKernelConfig(
         math_fidelity=getattr(ttnn.MathFidelity, fidelity),
         math_approx_mode=approx,
         fp32_dest_acc_en=fp32_acc,
-        packer_l1_acc=False,
+        packer_l1_acc=PACKER_L1,
     )
