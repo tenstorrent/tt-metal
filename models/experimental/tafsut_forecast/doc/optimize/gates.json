@@ -1,8 +1,276 @@
 {
-  "_doc": "Round-0 provisional floors (CONTRACT §3, D0 Q3, PLAN v1.20: absolute pcc_normalized / pcc_final floors on every suite and bench case, both precisions). Band, row, inactive and abs_err_max floors and the drift budgets are proposed at G1 from the round-0 record and set by decision.",
+  "_doc": "G1 floors, adopted by D4 from gates_g1_proposed.json (D1 rulings 3/5, PLAN v1.9, v1.16, v1.17, v1.20, v1.25, v1.26). Accuracy floors sit at about the bf16 noise level the round-0 record shows; performance floors allow the LoFi/bf8 spread v1.9 describes. Provisional until D4 item 3 names their rows: the performance f2 floors of long_horizon and the long_horizon/paper/horizon4 bias floors. bias_row_max/p95 are outer bounds only; the row-indexed drifts are the gate (D4 item 1).",
   "floors": {
-    "*/accuracy": {"pcc_normalized": 0.999, "pcc_final": 0.99},
-    "*/performance": {"pcc_normalized": 0.995, "pcc_final": 0.98}
+    "*/accuracy": {
+      "pcc_normalized": 0.999,
+      "pcc_final": 0.99,
+      "pcc_row_min": 0.98,
+      "pcc_final_spread": 0.999,
+      "pcc_row_min_active": 0.998,
+      "spread_ratio_p50": [
+        0.98,
+        1.02
+      ],
+      "spread_ratio_p01": [
+        0.95,
+        1.05
+      ],
+      "spread_ratio_p99": [
+        0.95,
+        1.05
+      ],
+      "spread_ratio_min": 0.92,
+      "spread_ratio_max": 1.08,
+      "inactive_max_err": 0.05,
+      "bias_row_p50": 0.01,
+      "pcc_step": 0.99,
+      "bias_row_max": 0.03,
+      "bias_row_p95": 0.025,
+      "f2_pcc_normalized": 0.999,
+      "f2_pcc_row_min": 0.98,
+      "f2_pcc_row_min_active": 0.998,
+      "f2_spread_ratio_p50": [
+        0.98,
+        1.02
+      ],
+      "f2_spread_ratio_p01": [
+        0.95,
+        1.05
+      ],
+      "f2_spread_ratio_p99": [
+        0.95,
+        1.05
+      ],
+      "f2_spread_ratio_min": 0.92,
+      "f2_spread_ratio_max": 1.08,
+      "f2_inactive_max_err": 0.05,
+      "f2_bias_row_p50": 0.01,
+      "f2_pcc_step": 0.99,
+      "f2_bias_row_max": 0.03,
+      "f2_bias_row_p95": 0.025,
+      "bias_row_drift_max": 0.03,
+      "spread_ratio_row_drift_max": 0.15,
+      "f2_bias_row_drift_max": 0.03,
+      "f2_spread_ratio_row_drift_max": 0.15
+    },
+    "*/performance": {
+      "pcc_normalized": 0.995,
+      "pcc_final": 0.98,
+      "pcc_row_min": 0.78,
+      "pcc_final_spread": 0.995,
+      "pcc_row_min_active": 0.97,
+      "spread_ratio_p50": [
+        0.95,
+        1.05
+      ],
+      "spread_ratio_p01": [
+        0.85,
+        1.15
+      ],
+      "spread_ratio_p99": [
+        0.85,
+        1.15
+      ],
+      "spread_ratio_min": 0.92,
+      "spread_ratio_max": 1.08,
+      "inactive_max_err": 0.3,
+      "bias_row_p50": 0.02,
+      "pcc_step": 0.97,
+      "bias_row_max": 0.04,
+      "bias_row_p95": 0.04,
+      "f2_pcc_normalized": 0.995,
+      "f2_pcc_row_min": 0.78,
+      "f2_pcc_row_min_active": 0.97,
+      "f2_spread_ratio_p50": [
+        0.95,
+        1.05
+      ],
+      "f2_spread_ratio_p01": [
+        0.85,
+        1.15
+      ],
+      "f2_spread_ratio_p99": [
+        0.85,
+        1.15
+      ],
+      "f2_spread_ratio_min": 0.92,
+      "f2_spread_ratio_max": 1.08,
+      "f2_inactive_max_err": 0.3,
+      "f2_bias_row_p50": 0.02,
+      "f2_pcc_step": 0.97,
+      "f2_bias_row_max": 0.04,
+      "f2_bias_row_p95": 0.04,
+      "bias_row_drift_max": 0.03,
+      "spread_ratio_row_drift_max": 0.15,
+      "f2_bias_row_drift_max": 0.03,
+      "f2_spread_ratio_row_drift_max": 0.15
+    },
+    "paper/performance": {
+      "spread_ratio_min": 0.8,
+      "spread_ratio_max": 1.3,
+      "bias_row_max": 0.12
+    },
+    "long_horizon/performance": {
+      "spread_ratio_min": 0.68,
+      "spread_ratio_max": 1.17,
+      "bias_row_max": 0.35,
+      "bias_row_p95": 0.07,
+      "f2_spread_ratio_min": 0.75,
+      "f2_spread_ratio_max": 1.6,
+      "f2_spread_ratio_p99": [
+        0.85,
+        1.35
+      ],
+      "f2_pcc_row_min_active": 0.96,
+      "f2_bias_row_max": 0.17,
+      "f2_bias_row_p95": 0.05
+    },
+    "single_long/accuracy": {
+      "pcc_normalized": 0.997,
+      "pcc_final": 0.997,
+      "pcc_final_spread": 0.997,
+      "pcc_row_min_active": 0.997,
+      "pcc_step": 0.98
+    },
+    "single_long/performance": {
+      "pcc_normalized": 0.99,
+      "pcc_final": 0.99,
+      "pcc_final_spread": 0.99,
+      "pcc_row_min_active": 0.99
+    },
+    "long_horizon/accuracy": {
+      "bias_row_max": 0.12,
+      "f2_spread_ratio_min": 0.7,
+      "f2_spread_ratio_max": 1.2,
+      "f2_spread_ratio_p01": [
+        0.87,
+        1.05
+      ],
+      "f2_spread_ratio_p99": [
+        0.95,
+        1.08
+      ],
+      "f2_pcc_row_min_active": 0.993,
+      "f2_bias_row_max": 0.045
+    },
+    "horizon4/performance": {
+      "bias_row_max": 0.08
+    }
   },
-  "drift": {}
+  "drift": {
+    "pcc_normalized": {
+      "abs": 0.0005
+    },
+    "pcc_spread": {
+      "abs": 0.0005
+    },
+    "pcc_final": {
+      "abs": 0.0005
+    },
+    "pcc_final_spread": {
+      "abs": 0.0005
+    },
+    "pcc_row_p01_active": {
+      "abs": 0.01
+    },
+    "pcc_row_min_active": {
+      "abs": 0.01
+    },
+    "spread_ratio_p01": {
+      "abs": 0.02
+    },
+    "spread_ratio_p99": {
+      "abs": 0.02
+    },
+    "flat_max_err": {
+      "abs": 0.01
+    },
+    "median_err": {
+      "rel": 0.25
+    },
+    "inactive_max_err": {
+      "rel": 0.5
+    },
+    "spread_ratio_p50": {
+      "abs": 0.01,
+      "toward_one": true
+    },
+    "abs_err_max": {
+      "rel": 0.5
+    },
+    "bias_row_p50": {
+      "abs": 0.005
+    },
+    "pcc_step": {
+      "abs": 0.005
+    },
+    "bias_row_max": {
+      "rel": 0.5
+    },
+    "bias_row_p95": {
+      "abs": 0.005
+    },
+    "f2_pcc_normalized": {
+      "abs": 0.0005
+    },
+    "f2_pcc_spread": {
+      "abs": 0.0005
+    },
+    "f2_pcc_row_p01_active": {
+      "abs": 0.01
+    },
+    "f2_pcc_row_min_active": {
+      "abs": 0.01
+    },
+    "f2_spread_ratio_p01": {
+      "abs": 0.02
+    },
+    "f2_spread_ratio_p99": {
+      "abs": 0.02
+    },
+    "f2_flat_max_err": {
+      "abs": 0.01
+    },
+    "f2_median_err": {
+      "rel": 0.25
+    },
+    "f2_inactive_max_err": {
+      "rel": 0.5
+    },
+    "f2_spread_ratio_p50": {
+      "abs": 0.01,
+      "toward_one": true
+    },
+    "f2_abs_err_max": {
+      "rel": 0.5
+    },
+    "f2_bias_row_p50": {
+      "abs": 0.005
+    },
+    "f2_pcc_step": {
+      "abs": 0.005
+    },
+    "f2_bias_row_max": {
+      "rel": 0.5
+    },
+    "f2_bias_row_p95": {
+      "abs": 0.005
+    }
+  },
+  "drift_by": {
+    "*/accuracy": {
+      "spread_ratio_p50": {
+        "abs": 0.005,
+        "toward_one": true
+      },
+      "f2_spread_ratio_p50": {
+        "abs": 0.005,
+        "toward_one": true
+      }
+    }
+  },
+  "_doc_drift": "Drift is against the fixed round-0 records iter_00/bench.json + iter_00/suite.json, same case and precision (v1.14, v1.17). abs_err_max rel 0.5 = at most 1.5x the round-0 record: a gross single-element check, not a band check (v1.16). spread_ratio_p50 toward one (D4 item 5: |p50 - 1| <= |p50_0 - 1| + tol): +-0.005 accuracy, +-0.01 performance (v1.11). Floors set by D2 item 6.",
+  "_doc_f2": "D3 item 1: f2_* is forward 2, teacher-forced on the reference's forward-1 median (long_horizon in the bench, horizon4 in the suite); every forward-1 floor and drift applies with the f2_ prefix, except pcc_final/pcc_final_spread (the bench gates the end-to-end forecast once, as forward 1's). long_horizon gets case floors for its narrower forward-2 bands: iter_00/floors_g1.md 'Forward 2'.",
+  "_doc_bias": "D3 item 3: bias_row_max (any row) and bias_row_p95 (>= 100 rows) catch a shift on a minority of rows; floors at about 1.3-1.5x the round-0 maximum per case, drift x1.5 (max) and +0.005 (p95).",
+  "_doc_row_drift": "D4 items 1-2: bias_row_drift_max = max_i |e_i - e0_i| and spread_ratio_row_drift_max = max_i |r_i - r0_i| over the active rows against the fixed record (same case, precision and forward), derived by check_gates from the per-row vectors. bias: 0.03 absolute at both presets, no relative term (D4). spread ratio: see floors_g1.md 'Row-indexed drift' for the measured bound. A precision candidate over a bound on a named row goes through the v1.14 variance table and an X gate; only a decision re-bases it."
 }

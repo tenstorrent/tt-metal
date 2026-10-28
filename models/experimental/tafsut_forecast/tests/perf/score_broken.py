@@ -12,12 +12,19 @@ of the active rows, the widest ones, scaled 0.3x about the quantile mean), ``all
 band scaled) and ``sign_flip`` (the head negated: the forecast mirrored about the series location, quantile order
 reversed; Tafsut has no sign-flip path of its own, so this is the output-level analog of TiRex-2's D7 case),
 ``level_shift`` (+0.05 on every value in normalized asinh space; also reported in real units against the row std),
-``shift10pct`` (+0.05 on ceil(10 %) of the active rows only, D3 item 3) and ``lag1`` (every quantile track delayed one step: step t takes step t-1's value, step 0 kept; PLAN v1.22).
+``shift10pct`` (+0.05 on ceil(10 %) of the active rows only, D3 item 3), ``level_shift_rows#p`` (+0.05 on 1 active row
+at B <= 16, 2 at B <= 32, 4 at B <= 64, ceil(1 %) of B above; D4 item 1), ``band1.3x_row#p`` (one active row's band
+scaled 1.3x; D4 item 2), each at PLACEMENTS random placements, and ``lag1`` (every quantile track delayed one step: step t takes step t-1's value, step 0 kept; PLAN v1.22).
 Every broken output is also made from forward 2's golden head (teacher-forced) wherever the case has a forward 2,
 and scored as the ``f2_*`` family (D3 item 1). A broken record is the fixed round-0 record of its case and
 precision with the broken forward's family replaced, so the other forward passes as measured. Each must fail at
-least one floor or drift check (against the fixed round-0 records) per case, forward and precision.
-Exit status 1 otherwise.
+least one floor or drift check (against the fixed round-0 records) per case, forward and precision, **beyond the
+checks the golden itself fails** when scored the same way (``golden``, scored first; D4 item 5). Exit status 1 otherwise.
+
+Row vectors (D4 items 1-2): the per-row signed bias and spread ratio of a broken record are the fixed record's device
+rows with the broken output's own row change composed onto them, ``e0_i + e_i`` and ``r0_i x r_i``. This is exact for
+the shift and band-scaling probes (the bias is linear in the output; a band scaled about its quantile mean scales its
+ratio), so a probe is scored as it would land on the device output, not on the golden.
 """
 
 from __future__ import annotations
@@ -68,6 +75,14 @@ def shift_rows(head, rows):
     return h
 
 
+PLACEMENTS = 8
+
+
+def n_shift_rows(rows: int) -> int:
+    """PLAN v1.25 sizes: 1 row at B <= 16, 2 at B <= 32, 4 at B <= 64, ceil(1 %) above."""
+    return 1 if rows <= 16 else 2 if rows <= 32 else 4 if rows <= 64 else math.ceil(0.01 * rows)
+
+
 def broken(g_head):
     act = M.active_rows(g_head)
     idx = act.nonzero().flatten()
@@ -90,6 +105,14 @@ def broken(g_head):
         ),
         "lag1": (lag1(g_head), "all rows"),
     }
+    gen = torch.Generator().manual_seed(0)
+    n = min(n_shift_rows(g_head.shape[0]), len(idx))
+    for p in range(PLACEMENTS):
+        rows = idx[torch.randperm(len(idx), generator=gen)[:n]]
+        out[f"level_shift_rows#{p}"] = (shift_rows(g_head, rows), f"{n} of {len(idx)} active rows {rows.tolist()[:4]}")
+    for p in range(PLACEMENTS):
+        row = idx[torch.randint(len(idx), (1,), generator=gen)]
+        out[f"band1.3x_row#{p}"] = (scale_band(g_head, row, 1.3), f"active row {int(row)}")
     if not bool((~act).any()):  # no inactive rows: the "broken" output is the golden itself
         del out["inactive_collapsed"]
     return out
@@ -102,6 +125,12 @@ def case_inputs(name, k=0):
     gh = g["forwards"][k]["head"][:, : -(-take // df.PATCH)]
     x = g["x"] if k == 0 else torch.cat([g["x"], g["quantiles"][:, :1024, df.MEDIAN_IDX]], -1)[:, -df.MAX_CTX :]
     return g, gh, df.prepare_inputs(x), take
+
+
+def check_id(failure: str) -> str:
+    """``<metric>`` or ``<metric> drift`` of a check_gates failure line (its values stripped)."""
+    rest = failure.split(") ", 1)[-1].split(" ")
+    return rest[0] + (" drift" if len(rest) > 1 and rest[1] == "drift" else "")
 
 
 def score(gates, base, quiet=True):
@@ -118,7 +147,8 @@ def score(gates, base, quiet=True):
             g, gh, prep, take = case_inputs(shape, k)
             gq = g["quantiles"].transpose(1, 2)  # [rows, 9, H]
             fam = "f2_" if k else ""
-            for name, (head, what) in broken(gh).items():
+            golden_fails = {}
+            for name, (head, what) in [("golden", (gh, "none"))] + list(broken(gh).items()):
                 qk = df.postprocess(head.float(), prep, take).transpose(1, 2)
                 if k == 0:  # forward 1: its quantiles are the forecast's first `take` steps
                     m = M.gate_metrics(head, gh, qk, gq[:, :, :take], prep.scale)
@@ -135,12 +165,21 @@ def score(gates, base, quiet=True):
                     m["real_shift_over_row_std_p50"] = float(d.median())
                 for precision in ("accuracy", "performance"):
                     b = base_by.get((shape, precision), {})
+                    mp = dict(m)
+                    if fam + "bias_row_vec" in b:  # the probe composed onto the fixed record's device rows
+                        mp["bias_row_vec"] = [x + y for x, y in zip(b[fam + "bias_row_vec"], m["bias_row_vec"])]
+                        mp["spread_ratio_row_vec"] = [
+                            x * y for x, y in zip(b[fam + "spread_ratio_row_vec"], m["spread_ratio_row_vec"])
+                        ]
                     keep = {
                         kk: v for kk, v in b.items() if (kk.startswith("f2_") if not k else not kk.startswith("f2_"))
                     }
-                    rec = dict(keep, **{fam + kk: v for kk, v in m.items()}, name=shape, precision=precision, **stamp)
+                    rec = dict(keep, **{fam + kk: v for kk, v in mp.items()}, name=shape, precision=precision, **stamp)
                     with contextlib.redirect_stdout(io.StringIO()) if quiet else contextlib.nullcontext():
                         fails = check([rec], base, gates, allow_unstamped=True)  # stamped once, in the output
+                    if name == "golden":
+                        golden_fails[precision] = {check_id(f) for f in fails}
+                    beyond = [f for f in fails if check_id(f) not in golden_fails[precision]]
                     results.append(
                         {
                             "shape": shape,
@@ -148,8 +187,9 @@ def score(gates, base, quiet=True):
                             "broken": name,
                             "rows": what,
                             "precision": precision,
-                            "fails": fails,
-                            "metrics": m,
+                            "fails": beyond,
+                            "golden_also_fails": len(fails) - len(beyond),
+                            "metrics": {kk: v for kk, v in m.items() if not isinstance(v, list)},
                         }
                     )
     return results
@@ -167,8 +207,12 @@ def main():
         f"score_broken at {st['git_head']} dirty={st['git_dirty']!r} started_at {st['started_at']}, gates {args.gates}"
     )
     results = score(gates, load_records(args.baseline))
-    bad = []
+    bad, golden_bad = [], []
     for r in results:
+        if r["broken"] == "golden":
+            if r["golden_also_fails"]:
+                golden_bad.append(f"{r['shape']}/f{r['forward']}/{r['precision']}: {r['golden_also_fails']}")
+            continue
         short = sorted({f.split(" ", 2)[-1].split(" ")[0] + (" drift" if " drift" in f else "") for f in r["fails"]})
         extra = (
             f" real shift/row std p50 {r['metrics']['real_shift_over_row_std_p50']:.3f}"
@@ -182,6 +226,10 @@ def main():
             bad.append(f"{r['shape']}/f{r['forward']}/{r['precision']}/{r['broken']}")
     if args.out:
         args.out.write_text(json.dumps({"stamp": st, "results": results}, indent=1) + "\n")
+    print(
+        f"golden scored as an output fails {len(golden_bad)} case(s)"
+        + (": " + ", ".join(golden_bad) if golden_bad else "")
+    )
     print(f"{len(bad)} broken output(s) pass every floor and drift check" + (": " + ", ".join(bad) if bad else ""))
     sys.exit(1 if bad else 0)
 

@@ -21,6 +21,12 @@ tolerance with ``ref`` (a path relative to gates.json) checks that metric agains
 baseline (D6). A drift metric missing from either record is a FAIL (v1.17). A candidate record must carry
 ``git_head`` and an empty ``git_dirty`` (v1.16); ``--allow-unstamped`` admits records written before that. The stamp
 is taken once per session (``SESSION_STAMP``) with ``started_at``; a record started before its commit fails (v1.23).
+The porcelain covers the floor files too (D4 item 4).
+
+Row-indexed drift (D4 items 1-2): ``bias_row_drift_max`` and ``spread_ratio_row_drift_max`` (and their ``f2_`` forms)
+are derived from the per-row vectors of the candidate and its fixed record and gated by their floors; a record
+without the vectors, or with a different active set, fails them as missing. A drift with ``toward_one`` is
+``|candidate - 1| <= |baseline - 1| + abs`` (D4 item 5: re-centred, so a fixed record off 1 does not fail itself).
 
 Key families (v1.24, D3 item 1): a metric ``f2_<m>`` is forward 2 (teacher-forced) of ``<m>``, same direction. A
 family is gated on a record when the record or its fixed record carries it (single-forward cases skip ``f2_*``);
@@ -45,7 +51,12 @@ LOWER_IS_BETTER = {
     "bias_row_p95",
     "spread_ratio_p99",
     "spread_ratio_max",
+    "bias_row_drift_max",
+    "spread_ratio_row_drift_max",
 }
+# D4 items 1-2: row-indexed drift, max_i |v_i - v0_i| over the active rows against the fixed record of the same case
+# and precision, derived here from the per-row vectors and gated as a lower-is-better floor
+ROW_DRIFT = {"bias_row_drift_max": "bias_row_vec", "spread_ratio_row_drift_max": "spread_ratio_row_vec"}
 DEFAULT_GATES = Path(__file__).resolve().parents[2] / "doc" / "optimize" / "gates.json"
 # drift is always against the fixed round-0 records (both precisions, every bench and suite case; v1.14, v1.17)
 DEFAULT_BASELINES = (DEFAULT_GATES.parent / "iter_00" / "bench.json", DEFAULT_GATES.parent / "iter_00" / "suite.json")
@@ -72,11 +83,12 @@ def git_stamp() -> dict:
 
     return {
         "git_head": _git("rev-parse", "HEAD"),
-        "git_dirty": _git("status", "--porcelain", "--", "tt", "tests", "ops", "reference"),
+        "git_dirty": _git("status", "--porcelain", "--", "tt", "tests", "ops", "reference", *GATE_FILES),
         "started_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
     }
 
 
+GATE_FILES = ("doc/optimize/gates.json", "doc/optimize/gates_g1_proposed.json")  # D4 item 4 (v1.25)
 _SESSION = None
 
 
@@ -121,6 +133,22 @@ def _drift(gates: dict, name: str, precision: str) -> dict:
 
 def _by_key(records: list[dict]) -> dict:
     return {(r["name"], r["precision"]): r for r in records}
+
+
+def row_drift(r: dict, b: dict | None) -> dict:
+    """The row-indexed drift metrics of ``r`` against its fixed record ``b``, with the worst row index of each."""
+    out = {}
+    for fam in {_family(k) for k in r}:
+        idx, idx0 = r.get(fam + "row_active_idx"), (b or {}).get(fam + "row_active_idx")
+        for metric, vec in ROW_DRIFT.items():
+            v, v0 = r.get(fam + vec), (b or {}).get(fam + vec)
+            if v is None or v0 is None or idx != idx0 or len(v) != len(v0):
+                continue
+            d = [abs(x - y) for x, y in zip(v, v0)]
+            i = max(range(len(d)), key=d.__getitem__) if d else None
+            out[fam + metric] = max(d, default=0.0)
+            out[fam + metric + "_row"] = idx[i] if i is not None else None
+    return out
 
 
 def passes(metric: str, v: float, floor) -> bool:
@@ -172,6 +200,7 @@ def check(
     refs = {}
     for r in cand:
         key = (r["name"], r["precision"])
+        r = dict(r, **row_drift(r, base_by.get(key)))
         if not allow_unstamped:
             failures += check_stamp(r, commit_time)
         # a family is gated where the candidate or its fixed record has it: f2_* floors in "*/<precision>" skip
@@ -194,7 +223,8 @@ def check(
                 continue
             ok = passes(metric, v, floor)
             rel = "in" if isinstance(floor, list) else "<=" if _base(metric) in LOWER_IS_BETTER else ">="
-            print(f"{'ok  ' if ok else 'FAIL'} floor {key[0]}/{key[1]} {metric} {v:.6g} {rel} {floor}")
+            at = f" (row {r[metric + '_row']})" if metric + "_row" in r else ""
+            print(f"{'ok  ' if ok else 'FAIL'} floor {key[0]}/{key[1]} {metric} {v:.6g} {rel} {floor}{at}")
             if not ok:
                 failures.append(f"{key} {metric} {v} vs floor {floor}")
         for metric, tol in drift.items():
@@ -221,6 +251,15 @@ def check(
             if v is None or bv is None:
                 print(f"FAIL drift {key[0]}/{key[1]} {metric}: n/a in one record only")
                 failures.append(f"{key} {metric} drift: n/a in one record only")
+                continue
+            if tol.get("toward_one"):
+                limit = abs(bv - 1) + tol["abs"]
+                ok = abs(v - 1) <= limit
+                print(
+                    f"{'ok  ' if ok else 'FAIL'} drift {key[0]}/{key[1]} {metric} |{v:.6g} - 1| <= {limit:.6g} (baseline {bv:.6g})"
+                )
+                if not ok:
+                    failures.append(f"{key} {metric} drift |{v} - 1| vs {limit}")
                 continue
             if tol.get("two_sided"):
                 ok = abs(v - bv) <= tol["abs"]

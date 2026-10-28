@@ -19,7 +19,6 @@ Runs in the reference venv and in tt-metal's python_env (torch + safetensors onl
 
 from __future__ import annotations
 
-import glob
 import math
 import os
 from dataclasses import dataclass
@@ -45,8 +44,7 @@ MASK_FILL = -1e9
 # (fine at B = 2 and 64): 160/32, 384/128, 640/128, 1088/64, 1152/128 all fail (job 933). Every row here has an even
 # count or a single chunk; tests/pcc/test_sdpa_mask.py checks each at the batches the model runs.
 BUCKETS = (2048, 3072, 4096, 8192, 16384, 32768)
-PAD_TABLE = {2048: (128, 128), 3072: (256, 128), 4096: (256, 128), 8192: (384, 64), 16384: (640, 64),
-             32768: (1088, 32)}
+PAD_TABLE = {2048: (128, 128), 3072: (256, 128), 4096: (256, 128), 8192: (384, 64), 16384: (640, 64), 32768: (1088, 32)}
 
 
 def chunk_count_ok(s_pad: int, chunk: int) -> bool:
@@ -200,8 +198,18 @@ def layout(P: int, s_pad: int):
     return pos
 
 
-def forward(w: Weights, prep: Prepared, n_read: int = NFUT, read_cut: bool = True, s_pad: int | None = None):
-    """Device dataflow: ``[B, n_read, 288]`` head output in asinh space (``pcc_normalized``'s tensor)."""
+def forward(
+    w: Weights,
+    prep: Prepared,
+    n_read: int = NFUT,
+    read_cut: bool = True,
+    s_pad: int | None = None,
+    taps: list | None = None,
+):
+    """Device dataflow: ``[B, n_read, 288]`` head output in asinh space (``pcc_normalized``'s tensor).
+
+    ``taps`` collects the residual stream after the embedding and after every block, in the device's tap layout
+    (``TtTafsut.forward_device``): ``[context | future | REG | pad]``, the last block only its read-out rows."""
     tok = prep.tokens
     B, P, _ = tok.shape
     S = P + NFUT + 1
@@ -217,6 +225,8 @@ def forward(w: Weights, prep: Prepared, n_read: int = NFUT, read_cut: bool = Tru
     bias = torch.where(kv, 0.0, MASK_FILL)[:, None, None, :]  # [B, 1, 1, S_pad], keys only
     cos, sin = rope_tables(layout(P, s_pad))
     rd = slice(P, P + n_read)
+    if taps is not None:
+        taps.append(h.clone())
     for i, L in enumerate(w.layers):
         last = read_cut and i == NL - 1
         x = rms(h, L["ln1"])
@@ -228,6 +238,8 @@ def forward(w: Weights, prep: Prepared, n_read: int = NFUT, read_cut: bool = Tru
         a = torch.nn.functional.scaled_dot_product_attention(q, k, v, attn_mask=bias, scale=1.0)
         h = h + a.transpose(1, 2).reshape(B, -1, D) @ L["wo"]
         h = h + torch.relu(rms(h, L["ln2"]) @ L["wi"]) @ L["wo2"]
+        if taps is not None:
+            taps.append(h.clone())
     if not read_cut:
         h = h[:, rd]
     return residual_block(w.sd, "output_patch_embedding", rms(h, w.final_ln))

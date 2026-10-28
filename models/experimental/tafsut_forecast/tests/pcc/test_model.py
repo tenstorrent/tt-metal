@@ -32,7 +32,9 @@ def test_model(device, case, prec):
     met = case_metrics(heads, g, q)
     print(
         f"[pcc] {case}-{prec}: "
-        + " ".join(f"{k}={v:.5f}" if isinstance(v, float) else f"{k}={v}" for k, v in met.items())
+        + " ".join(
+            f"{k}={v:.5f}" if isinstance(v, float) else f"{k}={v}" for k, v in met.items() if not isinstance(v, list)
+        )
     )
     rec = {"test": "suite", "name": case, "precision": prec, "rows": int(g["x"].shape[0]), **met}
     if g["horizon"] > 1024:  # forward 2, teacher-forced on the reference's forward-1 median, as the bench (D3 item 1)

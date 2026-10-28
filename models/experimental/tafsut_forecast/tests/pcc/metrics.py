@@ -40,6 +40,12 @@ All head metrics use the head output at the read-out tokens in normalized space,
                     single rows of the performance preset already exceed the shift (D3 item 3)
     pcc_step        PCC of the step-to-step differences along the horizon (within each 32-step patch): a forecast
                     delayed by a step (PLAN v1.22 ``lag1``) keeps its values but not its increments
+    row_active_idx, bias_row_vec, spread_ratio_row_vec
+                    per active row (golden-defined, so the same rows in every record of a case): its index, its
+                    signed mean error mean(h - h_ref) and its spread ratio. check_gates derives the row-indexed
+                    drifts ``bias_row_drift_max`` and ``spread_ratio_row_drift_max`` against the fixed record from
+                    them (D4 items 1-2): a population statistic cannot tell a +0.05 shift on 1 % of the rows from
+                    rows whose own bias is already 0.05-0.25
     pcc_final       PCC of the single-pass [targets, 9, H] forecast after inverse scaling and band calibration
     pcc_final_spread  PCC of that forecast minus its mean over the quantile axis (data space)
     median_err      worst |median error| / scale over target rows
@@ -117,7 +123,8 @@ def gate_metrics(head, g_head, q, g_q, scale_targets) -> dict:
     na = lambda ok, f: float(f()) if ok else None  # None prints as "not applicable (n_active=N < M)" (v1.14)
     err = (head.double() - g_head.double()).abs().reshape(g_head.shape[0], -1).amax(1)
     med_err = (q[:, Q // 2] - g_q[:, Q // 2]).abs().amax(-1) / scale_targets.reshape(-1)
-    bias = (head.double() - g_head.double()).reshape(g_head.shape[0], -1).mean(1).abs()
+    sbias = (head.double() - g_head.double()).reshape(g_head.shape[0], -1).mean(1)
+    bias = sbias.abs()
     q_spread = lambda t: t - t.mean(1, keepdim=True)  # [targets, 9, H]: minus the quantile mean
     return {
         "pcc_normalized": pearson(g_head, head),
@@ -145,6 +152,9 @@ def gate_metrics(head, g_head, q, g_q, scale_targets) -> dict:
         "pcc_final": pearson(g_q, q),
         "pcc_final_spread": pearson(q_spread(g_q), q_spread(q)),
         "median_err": float(med_err.max()),
+        "row_active_idx": act.nonzero().flatten().tolist(),
+        "bias_row_vec": [round(float(v), 7) for v in sbias[act]],
+        "spread_ratio_row_vec": [round(float(v), 7) for v in ratio],
     }
 
 
@@ -158,8 +168,10 @@ def fmt(m: dict) -> str:
     def one(k, v):
         if v is None:
             return f"{k} n/a"
+        if isinstance(v, list):
+            return ""
         if isinstance(v, int):
             return f"{k} {v}"
         return f"{k} {v:.3e}" if k in ("median_err", "flat_max_err") else f"{k} {v:.6f}"
 
-    return "  ".join(one(k, v) for k, v in m.items())
+    return "  ".join(o for o in (one(k, v) for k, v in m.items()) if o)
