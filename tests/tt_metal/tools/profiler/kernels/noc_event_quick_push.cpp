@@ -25,7 +25,13 @@ void kernel_main() {
     const uint32_t col_b = get_arg_val<uint32_t>(3);
     const uint32_t row_b = get_arg_val<uint32_t>(4);
     const uint32_t other_col = (my_x[0] == col_a) ? col_b : col_a;
-    const uint64_t mcast_noc_addr = get_noc_multicast_addr(other_col, row_a, other_col, row_b, l1_base + page_size);
+    // A multicast rectangle is given in the issuing NoC's traversal order: NOC0 start->end, NOC1 end->start
+    // (DYNAMIC_NOC_X/Y flip the coordinates but do not swap the corners). NCRISC issues on NOC1.
+    const uint32_t row_lo = row_a < row_b ? row_a : row_b;
+    const uint32_t row_hi = row_a < row_b ? row_b : row_a;
+    const uint64_t mcast_noc_addr =
+        (noc_index == 0) ? get_noc_multicast_addr(other_col, row_lo, other_col, row_hi, l1_base + page_size)
+                         : get_noc_multicast_addr(other_col, row_hi, other_col, row_lo, l1_base + page_size);
     constexpr uint32_t mcast_num_dests = 2;
 #endif
     {
