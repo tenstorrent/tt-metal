@@ -5,8 +5,8 @@
 
 **Situation:** a fused CCL op (here distributed_rms_norm) all-gathers a small per-row partial across a 4-chip
 ring inside one program. Its perf rounds stubbed the op's payloads and called the time left over (10–14 µs) a
-floor, against a roofline exchange budget of 1.6 µs. This example measures what the exchange really costs,
-with nothing else running.
+floor. This example measures what the exchange really costs, with nothing else running: a transport
+measurement, not a bound (the op's roofline is a pure resource bound and carries no fixed exchange cost).
 
 ## Variants
 
@@ -45,7 +45,7 @@ No-payload floor, same metric: `empty` 0.19, `fence` 5.04 (1 link) / 4.98 (2 lin
 **1. The floor is the fence, about 5 µs, not the program.** An empty program of the op's size costs 0.19 µs
 of device kernel time: the kernel-duration metric does not include launch, so a program's fixed start-up cost
 is not where the time goes. The minimal correct exchange (connections opened, ready fence, header-only items)
-costs about 5 µs, three times the roofline's 1.6 µs exchange term. Moving the data adds little on top: +0.3 µs
+costs about 5 µs, nearly all of it synchronization rather than data movement. Moving the data adds little on top: +0.3 µs
 at 128 B, +1 µs at 8 KiB, +2.5 µs at 32 KiB (1 link, relay).
 
 **2. Direct sends are slower than relay here, by 1.1–1.6 µs, and the fence is why.** On the same schedule
