@@ -37,7 +37,7 @@ import torch
 import ttnn
 
 from .ccl import dealloc
-from .common import cast
+from .common import cast, gemm_input
 from .norm import TtDistributedRmsNorm
 from .q_a import TtAttnInProj
 from .rope import RopeTable, deinterleave_perm, rope_deinterleaved, rope_deinterleaved_bf16, rope_stock, stock
@@ -95,7 +95,7 @@ class TtWindowKv:
         return out
 
     def __call__(self, x: ttnn.Tensor, start: int) -> ttnn.Tensor:
-        xq = cast(x, ttnn.bfloat16)
+        xq = gemm_input(x)  # GEMM_INPUTS (FIX.7)
         p = self.proj(xq)
         if xq is not x:
             dealloc(xq)

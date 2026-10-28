@@ -7,8 +7,8 @@ cache writes"; plan.md "Attention and cache writes").
 
     attn_out [S, H] = fp8_linear(grouped_wo_a(fp8_qdq(unrope(softmax_sink(q . window) window))), wo_b)
     q = rope(fp8_linear(q_resid, wq_b)) [S, 64 heads x 512]; window of position p = KV rows [p - 127, p]
-    (the released code's fp8 act quant-dequant of the matmul inputs is not emulated: the device casts them to the
-    bf16 its matmuls read, agent rule 17; FIX.8)
+    (the released code's fp8 act quant-dequant of the matmul inputs: GEMM_INPUTS (FIX.7, owner 2026-10-28) feeds
+    wq_b, wo_a and wo_b bfloat8_b, the device's own 8-bit format; bf16 = the path before FIX.7)
 
 Layout per chip (r, c) (mesh axis 0 = SP rows, axis 1 = TP columns, both read from mesh.shape): the inputs are
 row-split, TP-replicated (q_resid [1, 1, S/SP, 1280] fp32, kv [1, 1, S/SP, 512] bf16; row r = positions
@@ -62,7 +62,18 @@ import ttnn
 from . import ccl
 from . import mm_configs as mm
 from .ccl import dealloc
-from .common import DRAM, SP_AXIS, TP_AXIS, attn_compute_config, bf16_activations, cast, dense_dtype, sum_cols
+from .common import (
+    DRAM,
+    SP_AXIS,
+    TP_AXIS,
+    attn_compute_config,
+    bf16_activations,
+    cast,
+    dense_dtype,
+    gemm_dtype,
+    gemm_input,
+    sum_cols,
+)
 from .rope import RopeTable, deinterleave_perm, deinterleave_tail, glue, rope_heads, rope_stock
 from .served import CacheSlab, DeviceScalars, alloc_served
 from .settings import settings
@@ -493,7 +504,7 @@ class TtWindowAttention:
     def _q_heads(self, q_resid: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
         """q_resid -> scaled, roped q of the chip's heads [1, H/TP, S/SP, 512] fp32 (rope tail [even | odd])."""
         rows = q_resid.shape[-2]
-        xq = cast(q_resid, ttnn.bfloat16)
+        xq = gemm_input(q_resid)  # GEMM_INPUTS (FIX.7)
         qf = mm.linear(
             xq, self.wq_b, site="attn.wq_b", dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM
         )
@@ -512,7 +523,7 @@ class TtWindowAttention:
         interleaved (the table's stored order). The values of ``_q_heads`` + the bf16 cast, bit for bit: the heads
         split by nlp_create_q_heads_split (a data move), RoPE on the [.., 64] tail only, the scale's multiply writing
         bf16 (= ttnn.typecast's RNE), the interleave a PairPerm matmul on the bf16 tail."""
-        xq = cast(q_resid, ttnn.bfloat16)
+        xq = gemm_input(q_resid)  # GEMM_INPUTS (FIX.7)
         qf = mm.linear(
             xq, self.wq_b, site="attn.wq_b", dtype=ttnn.float32, compute_kernel_config=self.ckc, memory_config=DRAM
         )
@@ -540,7 +551,8 @@ class TtWindowAttention:
         (interleaved) order: the softmax scale 512^-0.5 folded into the bf16 cast of the input (one rounding, as the
         cast was), wq_b writing bf16, the heads split by nlp_create_q_heads_split, ONE stock rotary op on the [.., 64]
         tails with the nope prepended (tt/rope.rope_stock)."""
-        xq = ttnn.multiply(q_resid, self.scale, dtype=ttnn.bfloat16, memory_config=DRAM)
+        # GEMM_INPUTS (FIX.7): the scale's multiply writes wq_b's input in bfloat8_b (the reference's fp8 act quant)
+        xq = ttnn.multiply(q_resid, self.scale, dtype=gemm_dtype(), memory_config=DRAM)
         qb = mm.linear(
             xq, self.wq_b, site="attn.wq_b", dtype=ttnn.bfloat16, compute_kernel_config=self.ckc, memory_config=DRAM
         )
@@ -648,14 +660,19 @@ class TtWindowAttention:
         )
         dealloc(oq)
         og = ttnn.reshape(og, [1, self.g_l, rows, self.hpg * self.d])
-        # BF16_ACTIVATIONS=on (P.20): wo_a writes bf16 (the GPU code's bf16 einsum), no cast after it
-        ydt = ttnn.bfloat16 if (self.glue and bf16_activations()) else ttnn.float32
-        y = mm.matmul(og, self.wo_a, site="attn.wo_a", dtype=ydt, compute_kernel_config=self.ckc, memory_config=DRAM)
-        dealloc(og)
+        # GEMM_INPUTS (FIX.7): wo_a reads bfloat8_b, the reference's fp8 q-dq of the attention output before wo_a
+        oa = gemm_input(og)
+        if oa is not og:
+            dealloc(og)
+        # BF16_ACTIVATIONS=on (P.20): wo_a writes bf16 (the GPU code's bf16 einsum), no cast after it; GEMM_INPUTS=bfp8
+        # (FIX.7): it writes wo_b's input as bfloat8_b (the reference's fp8 act quant of wo_b's input) directly
+        ydt = gemm_dtype() if (self.glue and bf16_activations()) else ttnn.float32
+        y = mm.matmul(oa, self.wo_a, site="attn.wo_a", dtype=ydt, compute_kernel_config=self.ckc, memory_config=DRAM)
+        dealloc(oa)
         # [1, G/TP, S/SP, rank] -> [1, 1, S/SP, G/TP * rank] (the chip's K range of wo_b, group-major)
         if self.glue:
             # ATTN_GLUE=on: nlp_concat_heads (a data move) in place of G/TP slices + concat, on the bf16 cast
-            yb = cast(y, ttnn.bfloat16)
+            yb = gemm_input(y)
             if yb is not y:
                 dealloc(y)
             yq = ttnn.experimental.nlp_concat_heads(yb, memory_config=DRAM)
@@ -669,8 +686,9 @@ class TtWindowAttention:
             if len(parts) > 1:
                 for t in parts:
                     dealloc(t)
-            yq = cast(yt, ttnn.bfloat16)
-            dealloc(yt)
+            yq = gemm_input(yt)
+            if yq is not yt:
+                dealloc(yt)
         # CCL_IMPL=fabric_bf16 (P.6): the partial written in bf16 for the bf16 reduce-scatter (tt/ccl.py:partial_dtype)
         zdt = ccl.partial_dtype(self.mesh) if self.o_sum == "gather_add" else ttnn.float32
         z = mm.linear(yq, self.wo_b, site="attn.wo_b", dtype=zdt, compute_kernel_config=self.ckc, memory_config=DRAM)

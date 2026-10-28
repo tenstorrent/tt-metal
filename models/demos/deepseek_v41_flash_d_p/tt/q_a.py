@@ -7,8 +7,9 @@ TtV4AttentionBase._q_lora, with an exact exchange.
 
 Per chip (r, c) the input is attn_norm's column split [1, 1, S/SP, H/TP] fp32 TILE (tt/norm.py output):
 
-    bf16 cast                   the device's matmul input (the released fp8_linear's act_quant_dequant(x, 32) is a
-                                rounding the device does not compute in: not emulated, agent rule 17; FIX.8)
+    gemm_input                  the device's matmul input: GEMM_INPUTS (FIX.7, owner 2026-10-28) bfloat8_b, the
+                                device's 8-bit format where fp8_linear's act_quant_dequant(x, 32) rounds to fp8
+                                (bf16 = the path before FIX.7)
     TtAttnInProj                x @ the chip's K rows of [wq_a | wkv]^T [H/TP, 1280 + 512] (DENSE_WEIGHTS), one
                                 ttnn.linear at ATTN_FIDELITY + fp32 accumulation, partial out (CCL_IMPL's dtype)
     tt/common.py:tp_sum         all_gather over axis 1 + SFPU ttnn.add in mesh-column order (K-30: exact fp32 sum,
@@ -31,7 +32,7 @@ import ttnn
 from . import ccl
 from . import mm_configs as mm
 from .ccl import dealloc
-from .common import DRAM, TP_AXIS, act_dtype, attn_compute_config, bf16_activations, cast, dense_dtype, tp_sum
+from .common import DRAM, TP_AXIS, act_dtype, attn_compute_config, bf16_activations, dense_dtype, gemm_input, tp_sum
 from .norm import TtDistributedRmsNorm
 from .settings import settings
 
@@ -100,7 +101,7 @@ class TtQa:
         """(q_resid, the fused projection's output p [1, 1, S/SP, proj.width] fp32): the assembled model's q_a step
         keeps p for the kv step (tt/kv.py:TtWindowKv.from_proj), one matmul and one exchange for both. The caller
         frees p."""
-        xq = cast(x, ttnn.bfloat16)
+        xq = gemm_input(x)  # GEMM_INPUTS (FIX.7): bfloat8_b, the reference's fp8 act quant
         p = self.proj(xq)
         if xq is not x:
             dealloc(xq)

@@ -83,6 +83,22 @@ TABLE = {
         "device total 220.79 -> 220.90 ms (no section moves: these matmuls are compute-bound at 1024 rows a chip); "
         "memory: about half the dense attention / indexer weights (2x2: ~37 MB a layer a chip, + 74 MB an engram layer)",
     ),
+    "GEMM_INPUTS": Setting(
+        "bfp8",
+        ("bfp8", "bf16"),
+        "the device format of every dense GEMM input the reference quantizes to fp8 (tt/common.py:gemm_input). OWNER "
+        "DECISION 2026-10-28 (F208, realistic precision = whatever the reference uses; FIX.7): the released code's fp8 "
+        "act quant-dequant of every fp8 linear's input (reference/ds41_ref.py _q8 / _fp8_linear, lines ~620-630; "
+        "docstring 'native', lines ~89-91) and its fp8 q-dq of the attention output before wo_a (line ~889) are the "
+        "device's own 8-bit format: the matmul reads bfloat8_b, stored and computed in it (agent rule 17: never a "
+        "rounding the device does not compute in). bfp8 (default) = the attention input projection [wq_a | wkv] "
+        "(tt/q_a.py, tt/kv.py), wq_b (the softmax scale's multiply writes bfp8), wo_a (its input heads, one typecast "
+        "after the head concat), wo_b (wo_a writes bfp8), the indexer's wq_b (tt/indexer.py) and the engram wkv "
+        "(tt/engram_kv.py) read bfloat8_b; the routed experts' x / h were bfp8 already (EXPERTS_PRECISION=glm). Not "
+        "covered: the shared expert's x / h in the block MoE's fused head (MOE_HEAD=fused: bf16 tiles inside "
+        "models/demos/moe_block/tt/se_engine3.py, outside the model). Weights, fidelities (ATTN_FIDELITY HiFi2) and "
+        "fp32 accumulation unchanged. bf16 = the path before FIX.7 (bf16 matmul inputs)",
+    ),
     "ATTN_FIDELITY": Setting(
         "HiFi2",
         ("HiFi4", "HiFi2"),

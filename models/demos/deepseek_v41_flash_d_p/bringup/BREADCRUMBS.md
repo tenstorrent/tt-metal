@@ -3583,3 +3583,40 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   step's paths): diagnostics went through measure with temporary logging instead.
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.orchestrator measure --task P.3`; off side:
   `DS41_FUSED_HEAD_PREPARED_PER_LAYER=off`.
+
+## FIX.7 (overseer fix): GEMM_INPUTS, the fp8-quantized GEMM inputs fed as bfloat8_b (owner 2026-10-28, F208)
+- What: tt/settings.py `GEMM_INPUTS` (default bfp8; bf16 = the path before FIX.7), tt/common.py `gemm_dtype()` /
+  `gemm_input(x)`. The reference (ds41_ref.py `_q8` / `_fp8_linear`, ~620-630; the attention output's q8 before wo_a,
+  ~889) rounds these inputs to fp8; the device now stores and multiplies them in its own 8-bit format. Weights,
+  fidelities (ATTN_FIDELITY HiFi2, MATMUL_FIDELITY HiFi2) and fp32 accumulation unchanged.
+- Per matmul (8x4, per chip, input dtype before -> after; how):
+  q_a [wq_a | wkv] 640x1280: bf16 -> bfp8, one typecast of attn_norm (attn_norm stays bf16: the indexer's
+  weights_proj and the compressor read it, both bf16 in the reference); tt/kv.py's standalone path the same.
+  attn wq_b 640x1280: bf16 -> bfp8, the softmax-scale multiply writes bfp8 (ROPE_IMPL=on; other paths gemm_input).
+  attn wo_a 2x640x4096: bf16 -> bfp8, one typecast after nlp_concat_heads (rotary_embedding_indexed has no output
+  dtype; a stock op). attn wo_b 640x2048: bf16 -> bfp8, wo_a writes bfp8 (nlp_concat_heads takes bfp8).
+  indexer wq_b 160x1280: bf16 -> bfp8, one typecast after mesh_partition. engram wkv 640x6144: bf16 -> bfp8, one
+  device typecast of the uploaded rows (host upload stays bf16: no host bfp8 packing per chunk).
+  Routed experts x / h: bfp8 already (flat op, EXPERTS_PRECISION=glm). Shared expert x / h on the default block
+  fused head: still bf16, hard-coded in models/demos/moe_block/tt/se_engine3.py, outside this step (DS41-132).
+- Device time, plain profile, rung last chunk [51200, 56320], 40 layers (X.1 at 10:01 today, same programs bar this
+  change, vs FIX.7): total 223.85 -> 222.75 ms a chunk (attention 78.02 -> 78.71, q_a 9.34 -> 9.54, indexer 9.73 ->
+  9.80, engram_kv 0.58 -> 0.62; the others noise). Per chunk, matmuls bf16 -> bfp8 input: wq_b 3.554 -> 3.065, wo_b
+  3.357 -> 3.203, wo_a 2.777 -> 2.391, q_a 1.116 -> 1.024, indexer wq_b 0.319 -> 0.313, engram 0.584 -> 0.553;
+  added typecasts: wo_a input 1.543 (the one real cost), q_a 0.287, engram 0.073, indexer 0.023. Profile wall 692.7
+  -> 674.8 ms (not a clean wall run). Profile kept in generated/bringup_adhoc/FIX.7_profile.json (+ _ops.json.gz).
+- Accuracy, W.1 (seed rung, per-step; before = W.1's 10-26 record): err_layer L00 0.0249 -> 0.0241, L01 0.0368 ->
+  0.0368, L02 0.0516 -> 0.0516, L03 0.0711 -> 0.0713, L14 0.0320 -> 0.0297, L20 0.0300 -> 0.0299, L21 0.0436 ->
+  0.0429, L24 0.0313 -> 0.0310 (limit 0.0336); window_kv L14 0.0054 -> 0.0112 (limit 0.065); host_transfers 0.
+- Gate (FIX.6 block numbers before -> FIX.7): final hidden rel L.s10240 0.1920 -> 0.1919 (top1 0.9971 -> 1.0, top5
+  1.0), L.last 0.1878 -> 0.1843 (top1 0.9971, top5 1.0), L.s56320 0.1904 -> 0.1877 (limit 0.2586; top5 1.0); s56320
+  err_layer L00 0.0248 -> 0.0248, L14 0.0941 -> 0.0933, L20 0.1639 -> 0.1606, L24 0.1382 -> 0.1362, L39 0.715 ->
+  0.867 (limit 1.49); host_transfers 0; L.smoke Paris; K.1 contract 0 failures, acks_early 0, producer KV PCC window
+  0.9771 -> 0.9783, compress 0.9846 -> 0.9843, index_k 0.9919 -> 0.9916. Every unit PASS. test_runner_smoke failed
+  once with a SIGBUS in the tt-d-gen runner after warm-up ("Non-existent physical address", no IOMMU mismatch; the
+  same intermittent host fault as P.3's measure); test_runner_contract (same engine, same code) passed, and the
+  smoke's re-run passed (unit re-run, unchanged code).
+- Follow-up: a bfp8 output on the inverse rope (a fork of rotary_embedding_indexed) would drop the wo_a typecast
+  (~1.5 ms a chunk); a bfp8 x / h option in se_engine3 for the shared expert (DS41-132).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.7 --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`; old path: DS41_GEMM_INPUTS=bf16.

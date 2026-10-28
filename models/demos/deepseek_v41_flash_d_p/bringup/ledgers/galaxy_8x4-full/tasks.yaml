@@ -578,6 +578,70 @@ tasks:
       top5_overlap: '>= limit'
       chunk_wall_ms: < 692.7
       device_ms_total: <= 230
+- id: FIX.7
+  title: 'OWNER DECISION 2026-10-28 (F208, realistic precision = whatever the reference uses): every GEMM inpu'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - W.1
+  - M.1
+  - L.s10240
+  - L.last
+  - L.s56320
+  - L.smoke
+  - K.1
+  gate:
+    cmd: BRINGUP_TASK=W.1 BRINGUP_RUNG=seed scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=M.1 BRINGUP_RUNG=s10240 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=L.s10240 BRINGUP_RUNG=s10240 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=L.last BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=L.s56320 BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=L.smoke scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_smoke.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      host_transfers_per_layer: == 0
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      smoke_device_ok: == 1
+      contract_checks_failed: == 0
+      acks_early: == 0
+      pcc_producer_kv_*: '>= limit'
+      smoke_runner_ok: == 1
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/contract
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  brief:
+    details: 'OWNER DECISION 2026-10-28 (F208, realistic precision = whatever the reference uses): every GEMM input the reference
+      quantizes to fp8 (reference/ds41_ref.py ''official'' numerics, lines ~89-91: the fp8 act q-dq of every fp8 linear''s
+      input) is fed to the device matmul as bfloat8_b, the device''s own 8-bit format (stored and computed in it: never a
+      parity-only rounding, agents'' rule 17). Inputs: attention q_a, wkv (tt/q_a.py), wq_b, wo_a (its input = the attention
+      output, which the reference rounds to fp8 before wo_a), wo_b (tt/attention.py), the indexer''s wq_b (tt/indexer.py),
+      the engram wkv (tt/engram_kv.py: the engram rows), and the shared expert''s x and h - check them on the BLOCK MoE path
+      (the default since FIX.6: models/demos/moe_block, MOE_HEAD/MOE_TAIL fused; the routed experts'' x/h are already bfp8
+      there?) and fix any that are wider. The producing op writes bfloat8_b TILE where it can (output dtype), else one typecast;
+      the weights stay as they are (bfp8 / bfp4); keep the matmul fidelity settings unchanged (HiFi2; LoFi is a separate later
+      pick). One setting in tt/settings.py, e.g. GEMM_INPUTS ''bfp8'' (default) | ''bf16'' (the old path), with this decision
+      and the reference lines in its text. Out of scope: the KV caches and the index query/keys (step 2, needs the owner''s
+      cache decisions), any limit, golden or frozen test. Report per matmul: the input dtype before/after, the ladder''s err
+      per layer / err_final_hidden / top5 before/after, and the device time per chunk before/after (one plain profile).'
+    gate_tasks:
+    - W.1
+    - M.1
+    - L.s10240
+    - L.last
+    - L.s56320
+    - L.smoke
+    - K.1
 - id: P.4
   title: 'CCL_PERSISTENT_OUT: persistent output buffers for the per-layer all-gathers (262 per chunk) and reduce-scatter'
   step: perf
@@ -585,6 +649,7 @@ tasks:
   device: true
   deps:
   - P.3
+  - FIX.7
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   brief:
