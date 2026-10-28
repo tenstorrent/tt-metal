@@ -118,8 +118,8 @@ def test_row_stages(device, case, k, named, precision):
     assert float(rp.min()) > 0.9999, "the reference does not reproduce the golden rows"
 
 
-# D5 R1-0c: the rows whose error jumps at the last block (283) or at the head (536)
-TAIL = [("long_horizon", 0, [283]), ("paper", 0, [536])]
+# D5 R1-0c: the rows whose error jumps at the last block (283) or at the head (536); D6 R1-0e(b): horizon4 row 1
+TAIL = [("long_horizon", 0, [283]), ("paper", 0, [536]), ("horizon4", 0, [1])]
 
 
 @pytest.mark.parametrize("precision", ["accuracy", "performance"])
@@ -216,3 +216,45 @@ def rows_of_controls(gh, named):
     gen = torch.Generator().manual_seed(1)
     take = min(N_COND_CONTROL, len(act))
     return sorted(act[int(i)] for i in torch.randperm(len(act), generator=gen)[:take]) if take else []
+
+
+N_WIDE = 24
+WIDE_SEED = 50
+
+
+def test_row_conditioning_wide():
+    """D6 R1-0e(b), CPU: horizon4 row 1 under bf16-sized weight noise against its 3 case rows plus 24 extra 2048-step
+    realistic-mix series (seed 50, horizon 1100, reference only). Ranks row 1's |d bias| and its reference-to-noisy
+    head gain among all controls."""
+    from models.experimental.tafsut_forecast.tests.golden.make_goldens import make_series_mix
+
+    g = load_golden("horizon4")
+    gh = g["forwards"][0]["head"]
+    n = min(-(-min(g["horizon"], 1024) // df.PATCH), gh.shape[1])
+    xw, _ = make_series_mix(N_WIDE, g["x"].shape[1], seed=WIDE_SEED)
+    x = torch.cat([g["x"][[1, 0, 2, 3]], xw.to(g["x"].dtype)])
+    prep = df.prepare_inputs(x)
+    sd = df.load_state_dict()
+    base = df.forward(df.Weights(sd), prep)[:, :n]
+    db = []
+    for s in range(SEEDS):
+        gen = torch.Generator().manual_seed(s)
+        noisy = {
+            key: (v * (1 + EPS * torch.randn(v.shape, generator=gen)) if v.is_floating_point() else v)
+            for key, v in sd.items()
+        }
+        b, _, _ = row_head_metrics(df.forward(df.Weights(noisy), prep)[:, :n], base)
+        db.append(b.abs())
+    db = torch.stack(db).amax(0)
+    act = M.active_rows(base)
+    act[0] = True
+    cb = db[1:][act[1:]]
+    pb = float((cb < db[0]).double().mean())
+    rank_med = "above" if db[0] > cb.median() else "at or below"
+    print(
+        f"\n[wide] horizon4 row 1 against {len(cb)} active controls (3 case rows + {N_WIDE} extra, seed {WIDE_SEED}): "
+        f"|d bias| {float(db[0]):.2e}, controls p50 {float(cb.median()):.2e} max {float(cb.max()):.2e}; "
+        f"row 1 above {pb:.0%} of controls ({rank_med} the median)"
+    )
+    print("[wide] json " + json.dumps({"d_bias": float(db[0]), "pct_bias": pb, "controls": len(cb),
+                                       "ctl_p50": float(cb.median()), "ctl_max": float(cb.max())}))
