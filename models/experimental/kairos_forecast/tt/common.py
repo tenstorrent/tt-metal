@@ -119,11 +119,23 @@ def linear_config(M: int, K: int, N: int, relu: bool = False, fp32_dest: bool = 
     if Mt < 8 * grid[1]:
         return None
     dst = 4 if fp32_dest else 8
-    pm, pn = -(-Mt // grid[1]), -(-Nt // grid[0])
+    pn = -(-Nt // grid[0])
     kw = max(d for d in range(1, 9) if Kt % d == 0)
     sw = max(d for d in range(1, min(pn, dst) + 1) if pn % d == 0)
-    sh = max(d for d in range(1, dst // sw + 1) if pm % d == 0)
-    bh = max(d for d in range(1, 27) if pm % d == 0 and d % sh == 0 and d * pn <= 84)  # out block: L1 (sweep)
+
+    def blocks(pm):
+        sh = max(d for d in range(1, dst // sw + 1) if pm % d == 0)
+        return sh, max(d for d in range(1, 27) if pm % d == 0 and d % sh == 0 and d * pn <= 84)  # L1 (sweep)
+
+    pm = -(-Mt // grid[1])
+    sh, bh = blocks(pm)
+    for pad in range(1, 4):  # R2-1: a prime pm (embed: 103) gets out_block_h 1; pad it while the rows still fit
+        if bh >= 4 or -(-Mt // (pm + pad)) > grid[1]:
+            break
+        if blocks(pm + pad)[1] >= 4:
+            pm += pad
+            sh, bh = blocks(pm)
+            break
     return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
         compute_with_storage_grid_size=grid,
         in0_block_w=kw,
