@@ -38,6 +38,8 @@ from models.demos.blackhole.embedding_gemma2.tt.audio.config import SUBSAMPLE, A
 from models.demos.blackhole.embedding_gemma2.tt.config import compute_kernel_config_hifi4, compute_kernel_config_norm
 from models.demos.blackhole.embedding_gemma2.tt.weights import as_weight, linear_weight
 
+CONV0_L1_BYTES_PER_BANK = 256 * 1024
+
 
 def _conv_config():
     return ttnn.Conv2dConfig(weights_dtype=ttnn.bfloat16, output_layout=ttnn.TILE_LAYOUT, config_tensors_in_dram=True)
@@ -164,22 +166,28 @@ class AudioSubsample(LightweightModule):
     def _post_conv(self, i: int, out: ttnn.Tensor, x: "AudioSubsampleInputs", B: int, T: int) -> ttnn.Tensor:
         """LayerNorm over channels + ReLU (+ the layer-1 input mask after conv0)."""
         dram = ttnn.DRAM_MEMORY_CONFIG
+        # conv0's [B*T/2*64, 128] output path (S2I, LayerNorm, ReLU * mask -> conv1 input) in L1 up to
+        # CONV0_L1_BYTES_PER_BANK (193 KB per bank at 1 x 768). conv1's output stays in DRAM: an L1
+        # input_proj input makes the default ttnn.linear pick another config (E5c c20, not bit-identical).
+        mc = dram
+        if i == 0:
+            mc = audio_act_memory_config(self.device, out.shape, bytes_per_bank=CONV0_L1_BYTES_PER_BANK)
         if out.is_sharded():  # an L1 conv input gives a height-sharded output; layer_norm needs interleaved
-            o = ttnn.sharded_to_interleaved(out, dram)
+            o = ttnn.sharded_to_interleaved(out, mc)
             ttnn.deallocate(out)
             out = o
         ln = ttnn.layer_norm(
             out,
             epsilon=self.config.rms_norm_eps,
             weight=self.norm_w[i],
-            memory_config=dram,
+            memory_config=mc,
             compute_kernel_config=self.norm_kernel_config,
         )
         ttnn.deallocate(out)
         if i == 0:
             # relu as the SFPU pre-activation of the layer-1 input mask multiply
             relu = ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU)
-            m = ttnn.multiply(ln, x.mask1, input_tensor_a_activations=[relu], memory_config=dram)
+            m = ttnn.multiply(ln, x.mask1, input_tensor_a_activations=[relu], memory_config=mc)
             ttnn.deallocate(ln)
             return m
         r = ttnn.relu(ln, memory_config=dram)
