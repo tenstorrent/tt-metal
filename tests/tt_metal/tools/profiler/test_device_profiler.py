@@ -1530,25 +1530,65 @@ def test_get_programs_perf_data():
         validate_programs_perf_durations(json.load(f))
 
 
-def test_noc_event_quick_push():
+# Configurations for test_noc_event_quick_push: env for the binary (profiler env is added by set_env_vars) and
+# the per-config knobs of the binary (see test_noc_event_quick_push.cpp). "sd-*" mirrors how a model harness in
+# slow dispatch drives the same path: non-blocking launches, no explicit read (only the one at device close), many
+# earlier programs in the DRAM region, zones around every iteration, a long kernel between pushes.
+NOC_EVENT_QUICK_PUSH_CONFIGS = {
+    "fd-blocking": dict(env={}, loop_count=4000),
+    "sd-blocking": dict(env={"slowDispatch": True}, loop_count=4000),
+    "sd-nonblocking-closeread": dict(
+        env={"slowDispatch": True}, loop_count=4000, knobs={"BLOCKING": 0, "SKIP_READ": 1}
+    ),
+    "sd-warmup": dict(
+        env={"slowDispatch": True},
+        loop_count=4000,
+        knobs={"BLOCKING": 0, "SKIP_READ": 1, "WARMUP": 1000},
+        program_support_count=8000,
+    ),
+    "sd-blaze-env": dict(
+        env={"slowDispatch": True, "do_mid_run_dump": True, "do_cpp_post_process": True},
+        loop_count=4000,
+        knobs={"BLOCKING": 0, "SKIP_READ": 1, "WARMUP": 1000, "ITER_ZONE": 1, "DELAY_NOPS": 2000},
+        program_support_count=8000,
+    ),
+    "sd-sparse": dict(
+        env={"slowDispatch": True, "do_mid_run_dump": True, "do_cpp_post_process": True},
+        loop_count=300,
+        knobs={"BLOCKING": 0, "SKIP_READ": 1, "WARMUP": 200, "ITER_ZONE": 1, "DELAY_NOPS": 20000},
+        program_support_count=8000,
+    ),
+}
+
+
+@pytest.mark.parametrize("config_name", list(NOC_EVENT_QUICK_PUSH_CONFIGS.keys()))
+def test_noc_event_quick_push(config_name):
     """
     One long kernel whose BRISC and NCRISC each record LOOP_COUNT NoC events, so the profiler's L1 marker ring
     quick-pushes to DRAM many times inside a single launch (as a persistent kernel does), with a DRAM region large
     enough that nothing is dropped. The host read must then parse every chunk cleanly: every PROFILER-NOC-QUICK-PUSH
-    zone has both endpoints, the user zone that spans the pushes is intact, all NoC events are present, and the
+    zone has both endpoints, the user zones that span the pushes are intact, all NoC events are present, and the
     NoC trace JSON is written.
     """
-    LOOP_COUNT = 4000
+    config = NOC_EVENT_QUICK_PUSH_CONFIGS[config_name]
+    LOOP_COUNT = config["loop_count"]
+    knobs = config.get("knobs", {})
     CORE_COUNT = 4  # (0,0)-(1,1) in the test binary
     RISCS = ("BRISC", "NCRISC")
     NOC_EVENT_TIMER_ID = 12345  # kernel_profiler::NOC_TRACING_STATIC_ID
+    L1_RING_WORDS = 512  # kernel_profiler::PROFILER_L1_VECTOR_SIZE
     # 48 B of DRAM per RISC per support-count unit; LOOP_COUNT events of 16 B plus chunk headers must fit.
-    PROGRAM_SUPPORT_COUNT = 4000
+    PROGRAM_SUPPORT_COUNT = config.get("program_support_count", 4000)
+    # Each event is 4 words; a push happens roughly every ring-full of them.
+    MIN_PUSHES_PER_LANE = max(1, (LOOP_COUNT * 4) // L1_RING_WORDS - 2)
 
     clear_profiler_runtime_artifacts()
-    envVars = set_env_vars(enable_noc_tracing=True, set_program_support_count=PROGRAM_SUPPORT_COUNT)
+    envVars = set_env_vars(
+        enable_noc_tracing=True, set_program_support_count=PROGRAM_SUPPORT_COUNT, **config["env"]
+    )
+    knobStr = " ".join(f"NOC_EVENT_QUICK_PUSH_{k}={v}" for k, v in knobs.items())
     testCommand = (
-        f"cd {TT_METAL_HOME} && NOC_EVENT_QUICK_PUSH_LOOP_COUNT={LOOP_COUNT} {envVars} "
+        f"cd {TT_METAL_HOME} && NOC_EVENT_QUICK_PUSH_LOOP_COUNT={LOOP_COUNT} {knobStr} {envVars} "
         f"build/test/tt_metal/tools/profiler/test_noc_event_quick_push"
     )
     print()
@@ -1558,7 +1598,8 @@ def test_noc_event_quick_push():
     print(output)
     assert result.returncode == 0, f"test binary exited with {result.returncode}"
     assert "markers were dropped" not in output, "the DRAM profiler region overflowed; raise PROGRAM_SUPPORT_COUNT"
-    assert "tmp-diag" not in output, "a zone endpoint was dropped as a duplicate marker"
+    diag = [l for l in output.splitlines() if "tmp-diag" in l and "QUICK-PUSH" in l]
+    assert not diag, "a quick-push zone endpoint was dropped as a duplicate marker:\n" + "\n".join(diag[:10])
 
     csv_path = f"{PROFILER_LOGS_DIR}/profile_log_device.csv"
     assert os.path.isfile(csv_path), f"device log not written: {csv_path}"
@@ -1567,33 +1608,50 @@ def test_noc_event_quick_push():
     df["RISC processor type"] = df["RISC processor type"].str.strip()
     df["zone name"] = df["zone name"].astype(str).str.strip()
     df["type"] = df["type"].astype(str).str.strip()
+    df["timer_id"] = pd.to_numeric(df["timer_id"], errors="coerce")
     lanes = df.groupby(["core_x", "core_y", "RISC processor type"])
 
     errors = []
-    quick_push_pairs = 0
+    lane_count = 0
+    summary = []
     for (x, y, risc), lane in lanes:
         if risc not in RISCS:
             continue
+        lane_count += 1
         qp = lane[lane["zone name"] == "PROFILER-NOC-QUICK-PUSH"]
         starts = int((qp["type"] == "ZONE_START").sum())
         ends = int((qp["type"] == "ZONE_END").sum())
-        if starts == 0 or starts != ends:
+        # The long program is the run with the most NoC events on this lane (warm-up programs have one each).
+        events = lane[lane["timer_id"] == NOC_EVENT_TIMER_ID]
+        per_run = events.groupby("run host ID").size()
+        main_run = per_run.idxmax() if len(per_run) else None
+        noc_events = int(per_run.max()) if len(per_run) else 0
+        main = lane[lane["run host ID"] == main_run]
+        user = main[main["zone name"] == "TEST-NOC-QUICK-PUSH"]
+        user_starts, user_ends = int((user["type"] == "ZONE_START").sum()), int((user["type"] == "ZONE_END").sum())
+        iters = main[main["zone name"] == "TEST-ITER"]
+        iter_starts, iter_ends = int((iters["type"] == "ZONE_START").sum()), int((iters["type"] == "ZONE_END").sum())
+        summary.append(
+            f"core ({x},{y}) {risc}: quick-push {starts}/{ends}, events {noc_events}, user zone {user_starts}/{user_ends}, "
+            f"iter zones {iter_starts}/{iter_ends}, runs {len(per_run)}"
+        )
+        if starts < MIN_PUSHES_PER_LANE or starts != ends:
             errors.append(f"core ({x},{y}) {risc}: PROFILER-NOC-QUICK-PUSH starts={starts} ends={ends}")
-        quick_push_pairs += min(starts, ends)
-        user = lane[lane["zone name"] == "TEST-NOC-QUICK-PUSH"]
-        if int((user["type"] == "ZONE_START").sum()) != 1 or int((user["type"] == "ZONE_END").sum()) != 1:
-            errors.append(f"core ({x},{y}) {risc}: TEST-NOC-QUICK-PUSH zone not intact: {user['type'].tolist()}")
-        noc_events = int((pd.to_numeric(lane["timer_id"], errors="coerce") == NOC_EVENT_TIMER_ID).sum())
+        if user_starts != 1 or user_ends != 1:
+            errors.append(f"core ({x},{y}) {risc}: TEST-NOC-QUICK-PUSH zone not intact: {user_starts}/{user_ends}")
+        if knobs.get("ITER_ZONE") and (iter_starts != iter_ends or iter_starts == 0):
+            errors.append(f"core ({x},{y}) {risc}: TEST-ITER zones not paired: {iter_starts}/{iter_ends}")
         if noc_events != LOOP_COUNT:
             errors.append(f"core ({x},{y}) {risc}: {noc_events} NoC events, expected {LOOP_COUNT}")
-    lane_count = sum(1 for (_, _, risc), _ in lanes if risc in RISCS)
+    logger.info("\n".join(summary))
     assert lane_count == CORE_COUNT * len(RISCS), f"expected {CORE_COUNT * len(RISCS)} lanes, got {lane_count}"
-    assert quick_push_pairs >= 8 * lane_count, f"too few mid-kernel pushes to exercise the bug: {quick_push_pairs}"
     assert not errors, "\n".join(errors)
 
     noc_trace_files = [f for f in os.listdir(PROFILER_LOGS_DIR) if f.startswith("noc_trace_dev0") and f.endswith(".json")]
     assert noc_trace_files, f"no NoC trace JSON written in {PROFILER_LOGS_DIR}"
-    with open(os.path.join(PROFILER_LOGS_DIR, noc_trace_files[0]), "r") as f:
-        noc_trace = json.load(f)
-    read_events = [e for e in noc_trace if e.get("type") == "READ"]
-    assert len(read_events) == LOOP_COUNT * CORE_COUNT * len(RISCS), f"NoC trace has {len(read_events)} READ events"
+    read_events = 0
+    for fname in noc_trace_files:
+        with open(os.path.join(PROFILER_LOGS_DIR, fname), "r") as f:
+            read_events += sum(1 for e in json.load(f) if e.get("type") == "READ")
+    expected = (LOOP_COUNT + knobs.get("WARMUP", 0)) * CORE_COUNT * len(RISCS)
+    assert read_events == expected, f"NoC trace has {read_events} READ events, expected {expected}"
