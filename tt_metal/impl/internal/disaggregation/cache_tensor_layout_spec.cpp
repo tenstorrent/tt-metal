@@ -4,14 +4,19 @@
 
 #include <internal/disaggregation/cache_tensor_layout_spec.hpp>
 
+#include <map>
+#include <mutex>
+
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt_stl/assert.hpp>
 #include <umd/device/soc_arch_descriptor.hpp>
 
+#include "llrt/hal.hpp"
+
 namespace tt::tt_metal::internal::disaggregation {
 
-constexpr uint32_t kBfp8TileBytes = tt::tile_size(tt::DataFormat::Bfp8_b);
+using tt::constants::TILE_HEIGHT;
 using tt::constants::TILE_WIDTH;
 
 namespace {
@@ -63,12 +68,33 @@ uint64_t feature_width(const TensorSpec& tensor) {
     return f;
 }
 
-uint32_t chunk_size_bytes(const TensorSpec& tensor, uint32_t tokens_per_chunk) {
-    const uint64_t f = feature_width(tensor);
-    if (tensor.data_type() == DataType::BFLOAT8_B) {
-        return static_cast<uint32_t>((tokens_per_chunk / TILE_WIDTH) * (f / TILE_WIDTH) * kBfp8TileBytes);
+uint32_t chunk_size_bytes(const KvLayoutSpec& spec, uint32_t tokens_per_chunk) {
+    const TensorSpec& tensor = spec.tensor;
+    const uint64_t page_bytes = tensor.compute_page_size_bytes();
+    if (tensor.layout() == Layout::ROW_MAJOR) {
+        const uint64_t alignment = dram_alignment(spec.arch);
+        const uint64_t aligned_page_bytes = (page_bytes + alignment - 1) / alignment * alignment;
+        return static_cast<uint32_t>(tokens_per_chunk * aligned_page_bytes);
     }
-    return static_cast<uint32_t>(tokens_per_chunk * f * tt::datum_size(tt::DataFormat::Float16_b));
+    const uint64_t f = feature_width(tensor);
+    return static_cast<uint32_t>((tokens_per_chunk / TILE_HEIGHT) * (f / TILE_WIDTH) * page_bytes);
+}
+
+uint32_t dram_alignment(tt::ARCH arch) {
+    static std::mutex mutex;
+    static std::map<tt::ARCH, uint32_t> alignments;
+    const std::lock_guard<std::mutex> lock(mutex);
+    auto it = alignments.find(arch);
+    if (it == alignments.end()) {
+        const Hal hal(
+            arch,
+            /*is_base_routing_fw_enabled=*/false,
+            /*enable_2_erisc_mode=*/false,
+            /*profiler_dram_bank_size_per_risc_bytes=*/0,
+            /*enable_dram_backed_cq=*/false);
+        it = alignments.emplace(arch, hal.get_alignment(HalMemType::DRAM)).first;
+    }
+    return it->second;
 }
 
 uint32_t num_dram_banks(tt::ARCH arch) {

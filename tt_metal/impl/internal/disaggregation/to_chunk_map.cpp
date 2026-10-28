@@ -166,7 +166,7 @@ Located locate_one(
 
     // ---- MLA_SHARD: CP stride + shard_id stacking + OPTIMAL perm over num_banks ----
     if (scheme == BankScheme::MlaShard) {
-        const uint32_t csb = chunk_size_bytes(spec.tensor, tpc);
+        const uint32_t csb = chunk_size_bytes(spec, tpc);
         const auto [owner, local_pos] = cp_mla_stride(d, position, dcs);
         const uint32_t chunks_per_slot = per_dev_seq / kcs;
         const uint32_t local_chunk = local_pos / kcs;
@@ -226,7 +226,7 @@ Located locate_one(
 
     // ---- NATURAL: GLM-style paged CP; IDENTITY (page%banks) vs OPTIMAL-perm (perm[chunk%blocks]) ----
     const auto [owner, local_pos] = cp_chunk_modulo(d, position, dcs);
-    const uint32_t csb = chunk_size_bytes(spec.tensor, tpc);
+    const uint32_t csb = chunk_size_bytes(spec, tpc);
     const uint32_t tpc_page = kcs;
     if (policy.bank_order == BankOrder::Identity) {
         // The ND-shard ravel: the batch row (slot, or slot and layer when folded), then the chip's local head.
@@ -332,6 +332,20 @@ KvChunkAddressTable to_chunk_map(
             "to_chunk_map: cache '{}' publishes layers that are not ascending and distinct",
             config.name);
 
+        for (const auto& [alias, source] : config.layer_aliases) {
+            const bool source_published =
+                source >= config.first_layer && source < end_layer &&
+                (config.layers.empty() || std::binary_search(config.layers.begin(), config.layers.end(), source));
+            const bool alias_outside_cache = alias < config.first_layer || alias >= end_layer;
+            TT_FATAL(
+                source_published && alias_outside_cache && alias < geometry.num_layers,
+                "to_chunk_map: cache '{}' aliases layer {} to layer {}, which needs a published layer of the cache "
+                "and an alias outside it within the model's {} layers",
+                config.name,
+                alias,
+                source,
+                geometry.num_layers);
+        }
         TT_FATAL(
             !config.holds_only_published_layers || !config.layers.empty(),
             "to_chunk_map: cache '{}' holds only its published layers but lists none",
@@ -369,7 +383,7 @@ KvChunkAddressTable to_chunk_map(
             .max_sequence_length = geometry.max_seq_len,
             .num_slots = config.head.has_value() ? geometry.num_slots : geometry.num_slots * d.n_heads,
             .chunk_n_tokens = d.tpc,
-            .chunk_size_bytes = chunk_size_bytes(config.spec.tensor, d.tpc),
+            .chunk_size_bytes = chunk_size_bytes(config.spec, d.tpc),
         };
         uint32_t id = static_cast<uint32_t>(table_configs.size());
         if (named) {
@@ -435,6 +449,12 @@ KvChunkAddressTable to_chunk_map(
                 continue;
             }
             const uint32_t cache_row_layer = config.holds_only_published_layers ? held_index++ : local_layer;
+            std::vector<uint32_t> aliases;
+            for (const auto& [alias, source] : config.layer_aliases) {
+                if (source == layer) {
+                    aliases.push_back(alias);
+                }
+            }
             const uint32_t first_head = config.head.value_or(0);
             const uint32_t end_head = config.head.has_value() ? *config.head + 1 : d.n_heads;
             for (uint32_t h = first_head; h < end_head; ++h) {
@@ -448,12 +468,12 @@ KvChunkAddressTable to_chunk_map(
                         const uint64_t noc_addr = (static_cast<uint64_t>(loc.bank_id) << 32) | addr_local(loc.offset);
                         const bool fanned = per_head && !config.head.has_value();
                         const uint32_t map_slot = fanned ? (h * geometry.num_slots + slot) : slot;
-                        table.set(
-                            layer,
-                            pos,
-                            map_slot,
-                            KvCacheLocation{.noc_addr = noc_addr, .size_bytes = chunk_bytes, .device_group_index = grp},
-                            table_config);
+                        const KvCacheLocation location{
+                            .noc_addr = noc_addr, .size_bytes = chunk_bytes, .device_group_index = grp};
+                        table.set(layer, pos, map_slot, location, table_config);
+                        for (uint32_t alias : aliases) {
+                            table.set(alias, pos, map_slot, location, table_config);
+                        }
                     }
                 }
             }

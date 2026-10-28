@@ -220,6 +220,9 @@ pb::CacheLayoutModel to_proto_message(const CacheLayoutModel& model) {
             c.set_head(*cache.head);
         }
         c.set_holds_only_published_layers(cache.holds_only_published_layers);
+        for (const auto& [alias, source] : cache.layer_aliases) {
+            (*c.mutable_layer_aliases())[alias] = source;
+        }
     }
     out.set_mesh_id(*model.mesh_id);
     for (size_t i = 0; i < model.mesh_shape.dims(); ++i) {
@@ -257,7 +260,8 @@ CacheLayoutModel from_proto_message(const pb::CacheLayoutModel& in) {
             .mesh_id = c.has_mesh_id() ? std::optional<tt::tt_fabric::MeshId>(tt::tt_fabric::MeshId{c.mesh_id()})
                                        : std::nullopt,
             .head = c.has_head() ? std::optional<uint32_t>(c.head()) : std::nullopt,
-            .holds_only_published_layers = c.holds_only_published_layers()});
+            .holds_only_published_layers = c.holds_only_published_layers(),
+            .layer_aliases = std::map<uint32_t, uint32_t>(c.layer_aliases().begin(), c.layer_aliases().end())});
     }
     model.mesh_id = tt::tt_fabric::MeshId{in.mesh_id()};
     const std::vector<uint32_t> mesh_shape = to_vector(in.mesh_shape());
