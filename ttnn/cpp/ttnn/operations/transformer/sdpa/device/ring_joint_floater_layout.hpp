@@ -59,14 +59,15 @@ struct FloaterShape {
     bool operator==(const FloaterShape&) const = default;
 };
 
-// Schedules measured on the Blackhole 8-chip ring. A shape that is not listed runs without floaters: a floater expands
-// K for every piece it runs, and where the Q chunk is too short to amortize that (Kimi 2k chunks, q128) the floaters
-// cost more than the idle cores give back.
+// Schedules tuned on the Blackhole Galaxy 8x4's 8-chip SP ring (models/demos/deepseek_v3_d_p/tests/perf/
+// test_tune_ring_joint_floaters.py, at 55k and 512k cached tokens). A shape that is not listed runs without floaters:
+// a floater expands K for every piece it runs, and where the Q chunk is too short to amortize that (Kimi 2k chunks,
+// q128, where the best schedule found is 20-26% slower than none) the floaters cost more than the idle cores give back.
 inline constexpr std::array<std::pair<FloaterShape, FloaterSchedule>, 2> kTunedFloaterSchedules = {{
-    // Kimi K3: 0.35 of iteration 2, 0.9 of iteration 4, from the band's start.
-    {{24, 2, 320, 256}, {{2, 4}, {1075, 2765}, false, {3, 3, 3, 3, 3}}},
-    // Kimi K2.7: 0.6 of iteration 1, 0.5 of iteration 3, from the band's end.
-    {{16, 3, 320, 256}, {{1, 3}, {1843, 1536}, true, {3, 4, 5, 6, 6}}},
+    // Kimi K3: 0.31 of iteration 1, 0.9 of iteration 4, from the band's start.
+    {{24, 2, 320, 256}, {{1, 4}, {947, 2765}, false, {4, 4, 4, 4, 4}}},
+    // Kimi K2.7: 0.6 of iteration 1, 0.54 of iteration 3, from the band's end.
+    {{16, 3, 320, 256}, {{1, 3}, {1843, 1664}, true, {2, 3, 4, 5, 5}}},
 }};
 
 // The tuned schedule of `shape`, or nullopt.
