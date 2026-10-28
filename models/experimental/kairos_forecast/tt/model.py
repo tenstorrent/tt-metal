@@ -154,7 +154,7 @@ class TtKairos:
         causal = torch.zeros(D_PAD, D_PAD)
         causal[:, N_SEG:] = NEG
         causal[torch.triu(torch.ones(N_SEG, N_SEG, dtype=torch.bool), 1).nonzero(as_tuple=True)] = NEG
-        self.causal = upload(device, causal.reshape(1, 1, D_PAD, D_PAD), dtype=ttnn.float32)
+        self.causal = upload(device, causal.reshape(1, 1, D_PAD, D_PAD))
         self._const = {}
 
     # ---- host side -------------------------------------------------------------------------------------------
@@ -217,8 +217,8 @@ class TtKairos:
         return {
             "B": B,
             "xs": t(xs.reshape(1, 1, B * N_TOK, K_EMB)),
-            "enc_mask": t(key_add[:, None, None, :].expand(B, 1, S_PAD, S_PAD), ttnn.float32),
-            "cross_mask": t(key_add[:, None, None, :].expand(B, 1, D_PAD, S_PAD), ttnn.float32),
+            "enc_mask": t(key_add[:, None, None, :].expand(B, 1, S_PAD, S_PAD)),  # 0 / NEG: exact in bf16
+            "cross_mask": t(key_add[:, None, None, :].expand(B, 1, D_PAD, S_PAD)),
             "enc_rope": [tuple(map(t, rope_tables(f, pe))) for f in enc_f],
             "dec_rope": [
                 (
@@ -289,7 +289,8 @@ class TtKairos:
             compute_kernel_config=self.p.hifi4(),
             program_config=bmm_config(self.device, Sq, DK, Sk, fp32),
         )  # R1-2b: full grid
-        s = ttnn.softmax(ttnn.add(s, mask), dim=-1, numeric_stable=True, compute_kernel_config=self.p.hifi4())
+        # R1-5a: the mask add fused into the softmax (bf16 mask, fp32 scores)
+        s = ttnn.scale_mask_softmax(s, None, mask, numeric_stable=True, compute_kernel_config=self.p.hifi4())
         o = ttnn.matmul(
             ttnn.typecast(s, ttnn.bfloat16),
             v,
