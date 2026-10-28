@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Compute API test: the SFPU activations (llk2::vec_*) on Tensors, one kernel body for all three threads. The
-// activation is a compile-time parameter (VEC_FUNCTION, the value of llk2::VecFunction; VEC_FAST), and so is the
+// activation is a compile-time parameter (VEC_FUNCTION, an llk2::VecFunction; VEC_FAST), and so is the
 // thread that drives the SFPU (VEC_THREAD: llk2::Thread::Math or, as the target matmul kernel does, Thread::Pack).
 // Only Tensors, the Compute API (copy, vec_*, pack) and the Dest sync API: no LLK, init or per-thread code.
 
@@ -15,7 +15,7 @@
 #include "llk_memory_checks.h"
 #include "params.h"
 
-// Globals
+// ckernel_globals.h declares these extern; unp_cfg_context is the unpack context unpack.h flips.
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
@@ -26,14 +26,13 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "compute_api/pack.h"
 #include "compute_api/vec.h"
 
-constexpr DataFormat in_format   = static_cast<DataFormat>(UNPACK_A_IN);
-constexpr DataFormat out_format  = static_cast<DataFormat>(PACK_OUT);
-constexpr DataFormat dest_format = llk2::kernel_settings.dest_fp32 ? DataFormat::Float32 : DataFormat::Float16_b;
+constexpr DataFormat in_format  = static_cast<DataFormat>(UNPACK_A_IN);
+constexpr DataFormat out_format = static_cast<DataFormat>(PACK_OUT);
 
-inline constexpr auto& in_spec  = llk2::l1_spec<ROWS, COLS, in_format>;
-inline constexpr auto& out_spec = llk2::l1_spec<ROWS, COLS, out_format>;
-inline constexpr auto& acc_spec = llk2::dst_spec<ROWS, COLS, dest_format>; // the whole tensor in Dest
-inline constexpr auto thread    = static_cast<llk2::Thread>(VEC_THREAD);
+inline constexpr auto& in_spec       = llk2::l1_spec<ROWS, COLS, in_format>;
+inline constexpr auto& out_spec      = llk2::l1_spec<ROWS, COLS, out_format>;
+inline constexpr auto& acc_spec      = llk2::dst_spec<ROWS, COLS, llk2::kernel_dest_format>; // the whole tensor in Dest
+inline constexpr llk2::Thread thread = VEC_THREAD;
 
 // The scalars each activation takes, as FP32 bit patterns. The goldens in test_llk2_vec.py use the same values.
 constexpr std::uint32_t relu_max_max        = 0x40a00000u; // 5.0 (RELU_MAX_THRESHOLD)
@@ -50,7 +49,7 @@ inline void apply(const llk2::Tensor<Acc>& acc)
 {
     using llk2::VecFunction;
     constexpr llk2::vec_modifiers mods {.fast = VEC_FAST, .thread = thread};
-    constexpr VecFunction f = static_cast<VecFunction>(VEC_FUNCTION);
+    constexpr VecFunction f = VEC_FUNCTION;
     if constexpr (f == VecFunction::Silu)
     {
         llk2::vec_silu<mods>(acc);

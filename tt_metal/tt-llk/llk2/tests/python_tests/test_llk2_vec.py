@@ -27,19 +27,19 @@ from helpers.test_variant_parameters import DEST_SYNC, TemplateParameter
 from helpers.utils import passed_test
 from llk2_paths import cpp_source, include_dirs
 
-# The value of llk2::VecFunction (resolver/vec_function.h) for each activation, and the harness op whose golden,
+# The llk2::VecFunction enumerator (resolver/vec_function.h) for each activation, and the harness op whose golden,
 # domain and tolerance it uses.
 VEC_FUNCTIONS = {
-    "silu": (1, MathOperation.Silu),
-    "tanh": (2, MathOperation.Tanh),
-    "gelu": (3, MathOperation.Gelu),
-    "gelu_tanh": (4, MathOperation.GeluTanh),
-    "relu_max": (5, MathOperation.ReluMax),
-    "sigmoid": (6, MathOperation.Sigmoid),
-    "hardsigmoid": (7, MathOperation.Hardsigmoid),
-    "hardtanh": (8, MathOperation.Hardtanh),
-    "selu": (9, MathOperation.Selu),
-    "softplus": (10, MathOperation.Softplus),
+    "silu": ("Silu", MathOperation.Silu),
+    "tanh": ("Tanh", MathOperation.Tanh),
+    "gelu": ("Gelu", MathOperation.Gelu),
+    "gelu_tanh": ("GeluTanh", MathOperation.GeluTanh),
+    "relu_max": ("ReluMax", MathOperation.ReluMax),
+    "sigmoid": ("Sigmoid", MathOperation.Sigmoid),
+    "hardsigmoid": ("Hardsigmoid", MathOperation.Hardsigmoid),
+    "hardtanh": ("Hardtanh", MathOperation.Hardtanh),
+    "selu": ("Selu", MathOperation.Selu),
+    "softplus": ("Softplus", MathOperation.Softplus),
 }
 
 # Activations the target kernel also runs in their fast (approximate) form.
@@ -49,23 +49,24 @@ HAS_FAST_FORM = {"tanh", "gelu", "gelu_tanh", "sigmoid"}
 FAST_FORM_OP = {"sigmoid": MathOperation.SigmoidAppx}
 
 
-# The value of llk2::Thread (tensor/tensor.h) for the thread that drives the SFPU.
-VEC_THREADS = {"math": 1, "pack": 2}
+# The llk2::Thread enumerator (tensor/tensor.h) for the thread that drives the SFPU.
+VEC_THREADS = {"math": "Math", "pack": "Pack"}
 
 
 @dataclass
 class LLK2_VEC(TemplateParameter):
-    function: int
+    function: str
     fast: bool
-    thread: int
+    thread: str
     rows: int
     cols: int
 
     def convert_to_cpp(self) -> str:
         return (
-            f"constexpr std::uint32_t VEC_FUNCTION = {self.function};\n"
+            '#include "resolver/vec_function.h"\n'
+            f"constexpr auto VEC_FUNCTION = llk2::VecFunction::{self.function};\n"
             f"constexpr bool VEC_FAST = {str(self.fast).lower()};\n"
-            f"constexpr std::uint32_t VEC_THREAD = {self.thread};\n"
+            f"constexpr auto VEC_THREAD = llk2::Thread::{self.thread};\n"
             f"constexpr std::uint32_t ROWS = {self.rows};\n"
             f"constexpr std::uint32_t COLS = {self.cols};"
         )
