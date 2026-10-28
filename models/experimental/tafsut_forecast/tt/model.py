@@ -34,10 +34,10 @@ FUSED_ROPE = os.environ.get("TAFSUT_FUSED_ROPE", "1") != "0"  # R1-1; 0 = the ro
 MM_2D_SKIP_HIFI4 = os.environ.get("TAFSUT_MM_2D_SKIP_HIFI4", "0") == "1"
 ROPE_FP32_TABLE = os.environ.get("TAFSUT_ROPE_FP32_TABLE", "0") == "1"
 ROPE_FP32_DEST = os.environ.get("TAFSUT_ROPE_FP32_DEST", "1") != "0"
-# round 1 candidates, kept (D7 round 1); each knob = 0 turns its change off for screening
-ADD_NORM = os.environ.get("TAFSUT_ADD_NORM", "1") != "0"  # R1-4 + R1-7b: residual add fused into the next norm, gamma folded; 0 = off
+# round 1 candidates: R1-5 kept (0 = off); R1-4/7b and R1-7a dropped, knobs kept for screening (1 = on)
+ADD_NORM = os.environ.get("TAFSUT_ADD_NORM", "0") == "1"  # R1-4 + R1-7b: fused add+norm, gamma folded; dropped (check_gates 1333)
 SDPA_CONCAT = os.environ.get("TAFSUT_SDPA_CONCAT", "1") != "0"  # R1-5: SDPA writes the heads concatenated; 0 = off
-PERF_BF16_DEST = os.environ.get("TAFSUT_PERF_BF16_DEST", "1") != "0"  # R1-7a: performance linears without fp32 DST; 0 = off
+PERF_BF16_DEST = os.environ.get("TAFSUT_PERF_BF16_DEST", "0") == "1"  # R1-7a: performance linears without fp32 DST; dropped (check_gates 1333)
 
 
 def sdpa_chunks(s_pad: int, ctx_len: int | None) -> int:
