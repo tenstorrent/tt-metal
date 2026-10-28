@@ -1,13 +1,28 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""Build the native/legacy shared KvChunkAddressTable for Llama prefill."""
+"""Build the native/legacy shared KvChunkAddressTable for Llama prefill.
+
+The caches' declared layout (``cache_layout.py``, a ``CacheLayoutModel`` over the same caches) derives the
+same table with ``to_chunk_map``. Until that replaces the walk (``LLAMA_KV_TABLE_FROM_LAYOUT_MODEL=1``), the
+walked table is published and the derived one is checked against it; the model is written next to the table
+(``<path>.cache_layout.pb``), for a consumer that derives the table itself, only when the two agree.
+"""
 
 import socket
 
+from loguru import logger
+
+from models.demos.common.prefill.runners.cache_layout import publish_kv_chunk_table
+
+from .cache_layout import llama_cache_layout_model
 from .kv_layout import PrefillKVLayout
 
+# Set to 1 to publish the table derived from the caches' CacheLayoutModel without walking the classic one.
+LAYOUT_MODEL_ENV = "LLAMA_KV_TABLE_FROM_LAYOUT_MODEL"
 
-def build_kv_chunk_address_table(*, mesh_device, kv_cache, chunk_size):
+
+def _validated_layout(*, mesh_device, kv_cache, chunk_size):
+    """The caches' ``PrefillKVLayout``; raises ValueError for caches the table cannot describe."""
     import ttnn
     from models.demos.common.prefill.runners.migration import get_num_dram_banks
     from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PREFILL_LAYOUT as prefill_layout
@@ -40,6 +55,14 @@ def build_kv_chunk_address_table(*, mesh_device, kv_cache, chunk_size):
         )
         if spec.grid != expected_grid:
             raise ValueError("NdShard DRAM bank grid differs from table bank order")
+    return layout
+
+
+def build_kv_chunk_address_table(*, mesh_device, kv_cache, chunk_size):
+    import ttnn
+    from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PREFILL_LAYOUT as prefill_layout
+
+    layout = _validated_layout(mesh_device=mesh_device, kv_cache=kv_cache, chunk_size=chunk_size)
     nodes = {
         (row, col): mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(row, col))
         for row in range(prefill_layout.sp)
@@ -78,7 +101,32 @@ def build_kv_chunk_address_table(*, mesh_device, kv_cache, chunk_size):
 
 
 def build_and_serialize_kv_chunk_table(*, mesh_device, kv_cache, chunk_size, path):
-    from models.demos.common.prefill.runners.migration import serialize_prebuilt_kv_chunk_table
+    import ttnn
+    from models.demos.llama_3p1_8b_d_p.tt.prefill_geometry import PREFILL_LAYOUT as prefill_layout
 
-    table = build_kv_chunk_address_table(mesh_device=mesh_device, kv_cache=kv_cache, chunk_size=chunk_size)
-    return serialize_prebuilt_kv_chunk_table(table=table, path=path)
+    def walk():
+        return build_kv_chunk_address_table(mesh_device=mesh_device, kv_cache=kv_cache, chunk_size=chunk_size)
+
+    def layout_model():
+        return llama_cache_layout_model(mesh_device=mesh_device, kv_cache=kv_cache, chunk_size=chunk_size)
+
+    # The caches are validated even when the derived table is published without walking.
+    layout = _validated_layout(mesh_device=mesh_device, kv_cache=kv_cache, chunk_size=chunk_size)
+    host_name = socket.gethostname()
+    hosts = [
+        (mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(row, col)), host_name)
+        for row in range(prefill_layout.sp)
+        for col in range(prefill_layout.tp)
+    ]
+    publish_kv_chunk_table(
+        path=path,
+        walk=walk,
+        layout_model=layout_model,
+        hosts=hosts,
+        enable_env=LAYOUT_MODEL_ENV,
+        model_name="Llama-3.1-8B",
+    )
+    num_configs = len(layout.config_names)
+    entries = num_configs * layout.num_slots * layout.num_layers * (layout.max_seq_len // 32)
+    logger.info(f"[migration] KV chunk address table serialized to {path} (configs={num_configs}, entries={entries})")
+    return path
