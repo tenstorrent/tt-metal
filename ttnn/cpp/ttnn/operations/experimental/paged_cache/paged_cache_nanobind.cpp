@@ -87,6 +87,13 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
                 batch_offset (int): Offset for batching updates. Defaults to 0.
                 compute_kernel_config (DeviceComputeKernelConfig, Optional): Optional configuration for the device compute kernel. Defaults to None.
                 mesh_coords (Set[MeshCoordinate], optional): Set of mesh coordinates to execute on.
+                rows_per_user (int): Rows each user writes in this call (default 1). With rows_per_user = T > 1, each
+                    input is [1, users, T*32, head_dim] TILE, height sharded one user per core (shard [T*32, head_dim]);
+                    tile j of user u carries that user's row j (head h on tile row h), written at
+                    update_idxs_tensor[u*T + j] (-1 skips the row). update_idxs_tensor is required and holds users*T
+                    positions. All T rows of a user go out in one program: one read-modify-write per distinct cache
+                    tile they land in (tile and page-block straddles included), and the cache bytes equal T
+                    sequential single-row calls. Rows of DIFFERENT users must not share a cache tile.
 
             Input tensors must be FLOAT32 or BFLOAT16 even when the destination
             caches are BFLOAT8_B/BFLOAT4_B; this op repacks into each cache dtype.
@@ -112,7 +119,8 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
         nb::arg("page_table").noconvert() = nb::none(),
         nb::arg("batch_offset") = 0,
         nb::arg("compute_kernel_config").noconvert() = nb::none(),
-        nb::arg("mesh_coords").noconvert() = nb::none());
+        nb::arg("mesh_coords").noconvert() = nb::none(),
+        nb::arg("rows_per_user") = 1);
 
     const auto* paged_fill_cache_doc =
         R"doc(
