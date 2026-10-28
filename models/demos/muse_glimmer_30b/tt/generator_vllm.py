@@ -19,8 +19,8 @@ from models.common.sampling.generator import SamplingParams, format_sampling_par
 from models.demos.muse_glimmer_30b.tt.model import DECODE_B_PAD, MuseGlimmerModel
 from models.demos.muse_glimmer_30b.tt.model_config import MuseGlimmerModelArgs
 
-# Per-device KV budget when MUSE_VLLM_KV_TOKENS is unset: 52 layers x 1 KV head x 128 x 2 (K,V) x 2 B = 26.6 KB/token
-# per device, so 262144 tokens take ~7 GB of each chip's DRAM next to ~8 GB (TP4) of BFP8 weights.
+# Per-device KV budget when MUSE_VLLM_KV_TOKENS is unset. KV per token per device: 52 layers x 1 KV head x 128 x 2 (K,V),
+# 26.6 KB in bf16 (MUSE_LOW_PRECISION=0) or ~14 KB in the default BFP8; 262144 tokens is ~3.7-7 GB of each chip's DRAM.
 DEFAULT_KV_TOKENS = 262144
 
 # Decode traces are captured per active-slot bucket so paged SDPA splits its cores over the slots in use only, as the
@@ -199,9 +199,12 @@ class MuseGlimmerForConditionalGeneration:
 
     def _prefill_one(self, tokens: torch.Tensor, page_row: torch.Tensor):
         pad_len = self._bucket(tokens.shape[0])
+        # The last real row lies past the previous bucket, so within the last (pad_len - previous bucket) rows.
+        i = self.buckets.index(pad_len)
+        tail = pad_len - self.buckets[i - 1] if i else pad_len
         # Padded rows past the request's blocks map to block 0, vLLM's never-allocated null block.
         pt = self._page_table_tt(page_row, -(-pad_len // self.args.block_size))
-        logits = self.model.prefill_forward_logits_tt(tokens, 0, pt, pad_len=pad_len)
+        logits = self.model.prefill_forward_logits_tt(tokens, 0, pt, pad_len=pad_len, tail=tail)
         ttnn.deallocate(pt)
         return logits
 
