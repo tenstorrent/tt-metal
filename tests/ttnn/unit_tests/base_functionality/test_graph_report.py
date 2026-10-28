@@ -6859,6 +6859,23 @@ class TestReportModesDuringTraceCapture:
         ttnn.synchronize_device(device)
 
 
+def test_interleaved_buffer_pages_report_the_bank_they_are_on(device):
+    """Interleaved pages go round the banks in order, so page i of a buffer with fewer pages than banks is on bank i.
+    The detailed buffer report (buffer_chunks in the visualizer) groups pages by bank."""
+    tensor = ttnn.from_torch(
+        torch.rand((32, 32 * 8), dtype=torch.bfloat16),
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    pages = sorted(
+        (page for page in ttnn._ttnn.reports.get_buffer_pages(device) if page.address == tensor.buffer_address()),
+        key=lambda page: page.page_index,
+    )
+    assert [page.page_index for page in pages] == list(range(8))
+    assert [page.bank_id for page in pages] == list(range(8))
+
+
 # mesh_device depends on silicon_arch_name, which conftest only parametrizes for tests that name it at collection.
 @pytest.mark.usefixtures("silicon_arch_name")
 def test_multihost_graph_report(request):

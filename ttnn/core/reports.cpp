@@ -142,11 +142,13 @@ std::vector<BufferPageInfo> get_buffer_pages(const std::vector<tt::tt_metal::dis
                     });
                 }
             } else {
-                uint32_t bank_id = 0;
+                uint32_t next_bank_id = 0;
                 for (uint32_t page_index = 0; page_index < num_pages; page_index++) {
+                    // Interleaved pages go round the banks in order; record the bank this page is on, not the next.
+                    const uint32_t bank_id = next_bank_id;
+                    next_bank_id = (next_bank_id + 1) % num_banks;
                     auto page_address = buffer->page_address(bank_id, page_index);
                     tt::tt_metal::CoreCoord core = buffer->allocator()->get_logical_core_from_bank_id(bank_id);
-                    bank_id = (bank_id + 1) % num_banks;
 
                     buffer_page_infos.push_back(BufferPageInfo{
                         .device_id = device_id,
