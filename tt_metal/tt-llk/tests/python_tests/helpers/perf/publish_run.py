@@ -101,6 +101,8 @@ def publish(csv_dir, out_path, arch, *, strict=False):
     # column downstream). The docstring promises to log it, so log it.
     for test, cols in sorted(diagnostics.get("coerced_values", {}).items()):
         print(f"  warning: {test} coerced value(s) to NULL (type mismatch): {cols}")
+    for test, cols in sorted(diagnostics.get("renamed_columns", {}).items()):
+        print(f"  note: {test} renamed legacy columns: {cols}")
     return diagnostics
 
 

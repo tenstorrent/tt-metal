@@ -25,7 +25,7 @@ constexpr uint32_t send_cb_id = get_compile_time_arg_val(ct_after_src + 2);
 constexpr uint32_t H_COALESCE = get_compile_time_arg_val(ct_after_src + 3);
 // When set (H-mux path), this reader owns the H->W barrier: it signals the W-reader cores only AFTER its incoming H
 constexpr uint32_t H_SIGNAL_W_RECV = get_compile_time_arg_val(ct_after_src + 4);
-constexpr uint32_t NP_NUM_DRAM_BANKS = 8;
+constexpr uint32_t NP_NUM_DRAM_BANKS = NP_DRAM_BANKS;
 constexpr uint32_t MAX_W_BAR_TARGETS = 16;
 
 void kernel_main() {

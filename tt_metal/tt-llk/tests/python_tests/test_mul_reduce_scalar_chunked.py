@@ -81,9 +81,10 @@ def _num_tiles_for_format(formats):
         "Legacy standalone chunk loop does not use the corrected compute-API "
         "mul_reduce_scalar_chunked_tile sequence (targeted product clears, "
         "separate accumulator, and per-chunk reinitialization). The compute-API "
-        "fix is covered by test_rmsnorm_chunked.cpp; this driver remains unfixed."
+        "fix is covered by test_rmsnorm_chunked.cpp; this driver remains unfixed. "
+        "Not run: the loop hangs the TRISCs and leaves the core dirty for the next test."
     ),
-    strict=False,
+    run=False,
 )
 @parametrize(
     formats=FORMATS,

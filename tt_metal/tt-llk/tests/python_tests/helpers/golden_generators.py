@@ -3575,7 +3575,7 @@ class UnarySFPUGolden:
 
     # Fixed scalar dispatch constants mirrored from sfpu_operations.h. The ones an edge
     # probe has to land on exactly come from sfpu_dispatch_constants, which both this
-    # golden and sfpu_domains._OP_EDGE_POINTS read — see that module for why they are not
+    # golden and sfpu_domains._OP_EDGES read — see that module for why they are not
     # written twice. The rest are local because nothing probes at them.
     _PRELU_SLOPE = PRELU_SLOPE
     _RPOW_BASE = 2.0

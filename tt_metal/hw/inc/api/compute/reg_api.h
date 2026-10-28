@@ -44,13 +44,13 @@ ALWI void acquire_dst() {
  * This is a blocking function, i.e. this function will wait until the lock is acquired.
  *
  * NOTE: On Quasar with unpack-to-dest the UNPACK thread also opens its DST section here. Every unpack-to-dest
- * copy_tile / copy_block of the section must come after this call and before tile_regs_commit, each at its own DST
- * index; MATH does not start on the section before that commit.
+ * copy_tile / copy_block / transpose_tile of the section must come after this call and before tile_regs_commit,
+ * each at its own DST index; MATH does not start on the section before that commit.
  */
 ALWI void tile_regs_acquire() {
     // The UNPACK step is a no-op except where the unpacker writes DEST under a per-section handshake (Quasar
-    // unpack-to-dest). There it opens the unpack thread's DEST section, so every copy_tile / copy_block between
-    // acquire and commit lands in one section.
+    // unpack-to-dest). There it opens the unpack thread's DEST section, so every copy_tile / copy_block /
+    // transpose_tile between acquire and commit lands in one section.
     UNPACK((llk_unpack_wait_for_dest_available()));
     MATH((llk_math_wait_for_dest_available()));
 }

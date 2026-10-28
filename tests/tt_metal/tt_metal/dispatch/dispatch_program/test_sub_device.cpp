@@ -100,9 +100,11 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
             .set_page_size(src0_cb_index, hal::get_l1_alignment());
     auto cb_src0 = tt::tt_metal::CreateCircularBuffer(program, sharded_cores_1, cb_src0_config);
 
+    program.impl().prepare_ephemeral_allocation(mesh_device.get());
     program.impl().allocate_circular_buffers(mesh_device.get());
     program.impl().validate_circular_buffer_region(mesh_device.get());
     UpdateCircularBufferTotalSize(program, cb_src0, k_local_l1_size * 4);
+    program.impl().prepare_ephemeral_allocation(mesh_device.get());
     program.impl().allocate_circular_buffers(mesh_device.get());
     EXPECT_THROW(program.impl().validate_circular_buffer_region(mesh_device.get()), std::exception);
     global_buffer.reset();
@@ -122,6 +124,7 @@ TEST_F(UnitMeshCQSingleCardFixture, TensixTestSubDeviceCBAllocation) {
     EXPECT_THROW(program.impl().validate_circular_buffer_region(mesh_device.get()), std::exception);
     EXPECT_THROW(program.impl().compile_and_allocate(mesh_device.get(), false), std::exception);
     UpdateCircularBufferTotalSize(program, cb_src0, k_local_l1_size / 4);
+    program.impl().prepare_ephemeral_allocation(mesh_device.get());
     program.impl().allocate_circular_buffers(mesh_device.get());
     program.impl().validate_circular_buffer_region(mesh_device.get());
     EXPECT_NO_THROW(program.impl().compile_and_allocate(mesh_device.get(), false));
