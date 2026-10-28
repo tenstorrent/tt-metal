@@ -6862,6 +6862,8 @@ class TestReportModesDuringTraceCapture:
 def test_failed_report_write_still_ends_the_capture(tmp_path, expect_error):
     """A report that can't be written (here the path is a directory) raises, but the capture still ends: left active,
     it would record the caller's later operations and nest the next capture inside it."""
+    if ttnn.graph.is_graph_capture_active():
+        pytest.skip("graph reporting is already on for this run; ending captures here would end the fixture's too")
     ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
     with expect_error(RuntimeError, "Failed to open graph report file for writing"):
         ttnn.graph.end_graph_capture_to_file(tmp_path)
