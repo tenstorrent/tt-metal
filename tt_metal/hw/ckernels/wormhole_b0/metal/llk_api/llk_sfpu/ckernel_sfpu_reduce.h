@@ -586,6 +586,84 @@ inline void horizontal_reduce_max_int32() {
 }
 
 /**
+ * @brief Loads one 8-row group of a tile into LREG0-7 and folds the left/right face columns of each 4-row half:
+ *        LREG0 = extreme(rows r..r+3) and LREG4 = extreme(rows r+4..r+7), per SFPU column (8 columns each).
+ *
+ * The six compare-and-swaps are (0,2) (1,3) (4,6) (5,7) (0,1) (4,5), in that dependency order, on every path.
+ * With SFPLOADMACRO the four first-level ones are scheduled from the loads of LREG2/3/6/7 (macros 0-3, see
+ * init_reduce_max_min), so they cost no issue slot and no stall; only the two second-level swaps are issued.
+ * A macro's SFPSWAP runs on the Simple sub-unit the cycle after its SFPLOADMACRO, and the Simple and Round
+ * sub-units must be idle the cycle after that (tt-isa SFPLOADMACRO.md), so every SFPLOADMACRO is followed by
+ * a plain load, and the last one by two SFPNOP before the next issued SFPSWAP.
+ *
+ * @param first_row  Dest row of the first 4-row half (left face; the right face is ROWS_PER_FACE further).
+ * @param second_row Dest row of the second 4-row half.
+ */
+template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits>
+inline void load_and_reduce_row_group_vertical(std::uint32_t first_row, std::uint32_t second_row) {
+#ifndef DISABLE_SFPLOADMACRO
+    if constexpr (!clear_high_bits) {
+        // SFPLOADMACRO takes VD[1:0] in its first operand and VD[2] in the (unused) low bit of the address.
+        constexpr auto loadmacro_vd = [](std::uint32_t macro, std::uint32_t lreg) { return (macro << 2) | (lreg & 3); };
+        constexpr auto loadmacro_addr_bit = [](std::uint32_t lreg) { return lreg >> 2; };
+
+        TT_SFPLOAD(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_3, first_row);
+        // macro 2: SFPSWAP(LREG0, LREG2)
+        TT_SFPLOADMACRO(
+            loadmacro_vd(2, p_sfpu::LREG2),
+            INSTRUCTION_MODE,
+            ADDR_MOD_3,
+            (first_row + ROWS_PER_FACE) | loadmacro_addr_bit(p_sfpu::LREG2));
+        TT_SFPLOAD(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_3, second_row);
+        // macro 0: SFPSWAP(LREG4, LREG6)
+        TT_SFPLOADMACRO(
+            loadmacro_vd(0, p_sfpu::LREG6),
+            INSTRUCTION_MODE,
+            ADDR_MOD_3,
+            (second_row + ROWS_PER_FACE) | loadmacro_addr_bit(p_sfpu::LREG6));
+        TT_SFPLOAD(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_3, first_row + 2);
+        // macro 3: SFPSWAP(LREG1, LREG3)
+        TT_SFPLOADMACRO(
+            loadmacro_vd(3, p_sfpu::LREG3),
+            INSTRUCTION_MODE,
+            ADDR_MOD_3,
+            (first_row + ROWS_PER_FACE + 2) | loadmacro_addr_bit(p_sfpu::LREG3));
+        TT_SFPLOAD(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_3, second_row + 2);
+        // macro 1: SFPSWAP(LREG5, LREG7)
+        TT_SFPLOADMACRO(
+            loadmacro_vd(1, p_sfpu::LREG7),
+            INSTRUCTION_MODE,
+            ADDR_MOD_3,
+            (second_row + ROWS_PER_FACE + 2) | loadmacro_addr_bit(p_sfpu::LREG7));
+        TTI_SFPNOP;  // macro 1's SFPSWAP executes here
+        TTI_SFPNOP;  // Simple/Round must be idle the cycle after a scheduled SFPSWAP
+
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);
+        TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, 1);
+        return;
+    }
+#endif
+    load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_3, first_row);
+    load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_3, first_row + 2);
+    load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG2, INSTRUCTION_MODE, ADDR_MOD_3, first_row + ROWS_PER_FACE);
+    load_and_clear_high_bits<clear_high_bits>(
+        p_sfpu::LREG3, INSTRUCTION_MODE, ADDR_MOD_3, first_row + ROWS_PER_FACE + 2);
+    load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_3, second_row);
+    load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_3, second_row + 2);
+    load_and_clear_high_bits<clear_high_bits>(p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_3, second_row + ROWS_PER_FACE);
+    load_and_clear_high_bits<clear_high_bits>(
+        p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_3, second_row + ROWS_PER_FACE + 2);
+
+    // Each SFPSWAP costs two cycles on Wormhole (the next cycle stalls); interleaving does not hide it.
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, 1);
+    TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG6, 1);
+    TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, 1);
+    TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG7, 1);
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);
+    TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, 1);
+}
+
+/**
  * @brief Row-wise maximum reduction for a single 32x32 tile.
  *
  * Processes the tile in 2 face-pairs: (f0+f1) for tile rows 0-15, (f2+f3) for tile rows 16-31.
@@ -594,7 +672,7 @@ inline void horizontal_reduce_max_int32() {
  * For each 8-row group:
  * 1. Load 4 rows from left face (even cols) and 4 rows from right face (odd cols) into LREG0-3
  * 2. Load the next 4 rows into LREG4-7
- * 3. Use vertical SFPSWAP to reduce LREG pairs down (keeping max between left/right face columns)
+ * 3. Use vertical SFPSWAP to reduce LREG pairs down (steps 1-3: load_and_reduce_row_group_vertical)
  * 4. Use horizontal_reduce_max to consolidate 8 SFPU columns into column 0
  * 5. Store the per-row max into column 0
  *
@@ -615,45 +693,9 @@ inline void perform_reduce_row_max_tile(std::uint32_t tile_row_offset, std::uint
             std::uint32_t row_offset_first = row_group * 8;
             std::uint32_t row_offset_second = row_offset_first + 4;
 
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_3, tile_row_offset + face_pair_base + row_offset_first);
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_3, tile_row_offset + face_pair_base + row_offset_first + 2);
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG2,
-                INSTRUCTION_MODE,
-                ADDR_MOD_3,
-                tile_row_offset + face_pair_base + ROWS_PER_FACE + row_offset_first);
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG3,
-                INSTRUCTION_MODE,
-                ADDR_MOD_3,
-                tile_row_offset + face_pair_base + ROWS_PER_FACE + row_offset_first + 2);
-
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG4, INSTRUCTION_MODE, ADDR_MOD_3, tile_row_offset + face_pair_base + row_offset_second);
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG5, INSTRUCTION_MODE, ADDR_MOD_3, tile_row_offset + face_pair_base + row_offset_second + 2);
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG6,
-                INSTRUCTION_MODE,
-                ADDR_MOD_3,
-                tile_row_offset + face_pair_base + ROWS_PER_FACE + row_offset_second);
-            load_and_clear_high_bits<clear_high_bits>(
-                p_sfpu::LREG7,
-                INSTRUCTION_MODE,
-                ADDR_MOD_3,
-                tile_row_offset + face_pair_base + ROWS_PER_FACE + row_offset_second + 2);
-
-            // Vertical max: reduce left/right face pairs via compare-and-swap.
-            // Two groups (LREG0-3 and LREG4-7) are interleaved so that each SFPSWAP
-            // on independent registers hides the 2-cycle latency of the previous one.
-            TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG2, 1);
-            TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG6, 1);  // hides LREG0/2 latency
-            TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG3, 1);  // hides LREG4/6 latency
-            TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG7, 1);  // hides LREG1/3 latency
-            TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, 1);  // hides LREG5/7 latency; LREG1 ready
-            TTI_SFPSWAP(0, p_sfpu::LREG4, p_sfpu::LREG5, 1);  // hides LREG0/1 latency; LREG5 ready
+            load_and_reduce_row_group_vertical<INSTRUCTION_MODE, clear_high_bits>(
+                tile_row_offset + face_pair_base + row_offset_first,
+                tile_row_offset + face_pair_base + row_offset_second);
 
             // Horizontal max: consolidate 8 SFPU columns into column 0
             horizontal_reduce_max();
@@ -1266,6 +1308,18 @@ inline void init_reduce_max_min([[maybe_unused]] std::uint32_t num_cols) {
     TTI_SFPLOADI(0, 0xA, 0x0085);
     TTI_SFPLOADI(0, 0x8, 0x0000);
     TTI_SFPCONFIG(0, 5, 0);
+
+    // LOADMACRO sequences 2 and 3, for the row path (load_and_reduce_row_group_vertical): SFPSWAP(LREG0, [VD])
+    // and SFPSWAP(LREG1, [VD]). There, macros 0 and 1 above fold LREG6 into LREG4 and LREG7 into LREG5.
+    TTI_SFPSWAP(0, p_sfpu::LREG0, (0xC | 2), 1);
+    TTI_SFPLOADI(0, 0xA, 0x0086);
+    TTI_SFPLOADI(0, 0x8, 0x0000);
+    TTI_SFPCONFIG(0, 6, 0);
+
+    TTI_SFPSWAP(0, p_sfpu::LREG1, (0xC | 3), 1);
+    TTI_SFPLOADI(0, 0xA, 0x0087);
+    TTI_SFPLOADI(0, 0x8, 0x0000);
+    TTI_SFPCONFIG(0, 7, 0);
 
     configure_addrmod_max_min(num_cols);
 
