@@ -15,6 +15,15 @@
 
 namespace ttml::metal::ops::ring_sdpa_fw {
 
+namespace {
+
+// Ring SDPA keeps the chunking main ran (one query tile-row per item, four K/V tiles per step): its only
+// test is the Galaxy ring test, which the single-chip and QB2 legs do not run. The chunk knobs for ring
+// come with the cost-based scheduler (PR 2), together with the ring CI run that proves them.
+constexpr SDPAForwardProgramConfig kRingChunking{.q_chunk_size = 32U, .k_chunk_size = 128U, .heads_per_item = 1U};
+
+}  // namespace
+
 RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::create_mesh_workload(
     const operation_attributes_t& operation_attributes,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
@@ -58,7 +67,10 @@ RingSDPAFwProgramFactory::cached_mesh_workload_t RingSDPAFwProgramFactory::creat
         // Create SDPA forward operation with the effective mask type
         // No explicit mask tensor needed - SDPA kernel generates causal mask internally
         sdpa_fw::device::operation_attributes_t sdpa_attrs{
-            .return_intermediates = true, .mask_type = effective_mask_type, .dropout_probability = 0.0F};
+            .return_intermediates = true,
+            .mask_type = effective_mask_type,
+            .dropout_probability = 0.0F,
+            .program_config = kRingChunking};
 
         sdpa_fw::device::tensor_args_t sdpa_tensor_args{
             .query = query,
@@ -122,7 +134,10 @@ void RingSDPAFwProgramFactory::override_runtime_arguments(
         std::optional<ttnn::Tensor> mask_opt = std::nullopt;
         std::optional<ttnn::Tensor> gate_opt = std::nullopt;
         sdpa_fw::operation_attributes_t sdpa_attrs{
-            .return_intermediates = true, .mask_type = effective_mask_type, .dropout_probability = 0.0F};
+            .return_intermediates = true,
+            .mask_type = effective_mask_type,
+            .dropout_probability = 0.0F,
+            .program_config = kRingChunking};
 
         sdpa_fw::tensor_args_t sdpa_tensor_args{
             .query = query,
