@@ -151,9 +151,12 @@ def plan(chunk: int, cache: int):
     return n_chunks, cache_aligned, n_chunks * chunk
 
 
-def build_runtime(mesh, chunk, total, num_layers_override, layer_ids=None, stages=1, stage=0):
+def build_runtime(
+    mesh, chunk, total, num_layers_override, layer_ids=None, stages=1, stage=0, forward_tokens_budget=None, num_users=1
+):
     """Build the real-weights model + KV cache for pipeline stage `stage` of `stages` on `mesh` (the
-    whole galaxy or one carved sub-mesh). Returns (runtime, kv_cache, hf_config, global_layer_indices)."""
+    whole galaxy or one carved sub-mesh). `forward_tokens_budget` (default: one chunk) and `num_users` size a
+    packed forward (time_packed_prefill.py). Returns (runtime, kv_cache, hf_config, global_layer_indices)."""
     from models.demos.minimax_m3.tt.attention import allocate_kv_caches
     from models.demos.minimax_m3.tt.model_config import ModelArgs
     from models.demos.minimax_m3.tt.tt_prefill_runtime import TtPrefillRuntime, TtPrefillRuntimeConfig
@@ -240,7 +243,8 @@ def build_runtime(mesh, chunk, total, num_layers_override, layer_ids=None, stage
         max_seq_len=total,
         mesh_shape=tuple(mesh.shape),
         chunk_size=chunk,
-        num_users=1,
+        forward_tokens_budget=forward_tokens_budget,
+        num_users=num_users,
         expert_weight_dtype=expert_dtype,
         weight_cache_path=cache_path,
         first_layer_idx=first_layer_idx,
@@ -253,7 +257,7 @@ def build_runtime(mesh, chunk, total, num_layers_override, layer_ids=None, stage
     del state_dict
 
     kv_cache = allocate_kv_caches(
-        mesh, num_layers=num_layers, max_seq_len=total, num_users=1, head_dim=hf_config.head_dim
+        mesh, num_layers=num_layers, max_seq_len=total, num_users=num_users, head_dim=hf_config.head_dim
     )
     return runtime, kv_cache, hf_config, global_layer_indices
 
@@ -334,7 +338,7 @@ def main():
                 read_profiler(mesh)
                 state["reads"] += 1
 
-        runtime._on_layer_complete = on_layer_complete
+        runtime.set_on_layer_complete(on_layer_complete)
 
         # --- 1. WARMUP: JIT-compiles every op and populates the program cache. Its ops land in the CSV
         # too, but outside the `profiled_chunk` zone, so the parser drops them.

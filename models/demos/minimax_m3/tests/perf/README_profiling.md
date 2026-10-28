@@ -185,6 +185,7 @@ So:
 | [utils/profiler_utils.py](../../utils/profiler_utils.py) | the M3 `ZoneSpec` (signpost prefix, env vars, `dense`/`sparse` classes, comm/memory keys) and the `zone(name, level)` context manager from [common/prefill/profiling/zones.py](../../../common/prefill/profiling/zones.py): emits `M3_ZONE_START/END <name>` Tracy signposts (+ a host Tracy zone). No-op unless `M3_PROFILE_ZONES=1` and `level <= M3_PROFILE_LEVEL`. |
 | [profile_prefill.py](profile_prefill.py) | warmup → fill cache to N tokens (un-profiled) → run ONE chunk inside a `profiled_chunk` zone, with the profiler drained per layer BEFORE the chunk and flushed once after it. |
 | [parse_zone_perf.py](parse_zone_perf.py) | shim over [common/prefill/profiling/parse_zone_perf.py](../../../common/prefill/profiling/parse_zone_perf.py) (shared with GPT-OSS): streams the ops CSV once, rebuilds the zone hierarchy from the signpost rows, rolls up ns / ops / bytes / GB/s per zone per device and per layer class (each layer read on one device, parent-only ops in a `(self)` bucket), flags truncated captures and profiler-buffer overflow. |
+| [time_packed_prefill.py](time_packed_prefill.py) | timing harness (no profiler by default): the host wall of one packed `prefill_forward` forward over a composition of chunks. `PACKED_PROFILE=1` zone-profiles one packed forward under `python3 -m tracy` the way profile_prefill.py does. |
 | [visualize_zones.py](visualize_zones.py) | shim over [common/prefill/profiling/visualize_zones.py](../../../common/prefill/profiling/visualize_zones.py): text table + standalone HTML with the per-layer breakdown, per-chip spread, op-level detail, device-busy accounting and capture warnings. |
 
 Attribution: CSV rows are in host-enqueue order, so the ops between a zone's START and END signposts
@@ -200,6 +201,14 @@ Same mechanism deepseek_v3_d_p uses (`forward_layer_{i}_start` in `tt/tt_prefill
 - **`ms` is the worst device's sum.** With 32 chips the mesh waits for the slowest, so the max is the
   wall-clock-relevant number. `skew ms` (max − min) is what separates a genuinely slow CCL from one
   that is merely waiting on a peer.
+- **`span ms` is the largest firmware wall of the zone over the devices**: last firmware end − first firmware
+  start (from the FW cycle columns), so it also holds every dispatch gap between the zone's ops; under tracy that
+  puts it well above `ms` even for a serial zone. It is the hull over every entry (visit) of the zone within its layer:
+  in a packed forward the per-op zones are entered once per chunk (and `chunk{i}/sparse_sdpa` straddles the
+  window), so only once-entered zones (`attn`, `mlp`, the layer) read as walls and a per-op span covers the
+  chunks in between. The overlap signal is a once-entered zone's span falling between a serial and a pipelined
+  capture while `ms` (the kernel sum, which never shrinks under an overlap) stays put. `-` when the CSV has no FW
+  cycle columns.
 - **`GB/s` is bytes-moved ÷ that zone's device time**, with bytes computed from each op's input+output
   shapes and dtypes (block-float formats include their block scales). Compare against the chip's DRAM
   ceiling to judge whether a zone is bandwidth-bound.
@@ -316,10 +325,12 @@ percent between runs — that variance is real cross-chip skew, not a broken cap
 
 The packed KV cache is one tensor per K/V/index_k of shape
 `[num_users*num_layers, 1, seq_local, head_dim]` ([attention/kv_cache.py](../../tt/attention/kv_cache.py)).
-The MSA cache read ([attention/msa.py](../../tt/attention/msa.py) `msa_sp_attention_cache_read`) gathers the
+The MSA cache read ([attention/msa.py](../../tt/attention/msa.py) `msa_cache_gather`) gathers the
 one selected slot straight out of the ND-sharded cache with `ttnn.experimental.high_bw_all_gather`
 (`input_batch_index`), moving only the written prefix (`gathered_dim_size`) into a persistent worst-case
-buffer, so the whole cache-read cost is the two gather zones. The earlier path converted the **whole** cache
+buffer, so the whole cache-read cost is the two gather zones. In a packed forward with the overlap on
+(`msa_chunks_pipelined`) they re-enter once per chunk under `attn/gather{i}` / `attn/chunk{i}` and run beside the
+previous chunk's attention: read them through the span column (above), not the kernel sums. The earlier path converted the **whole** cache
 from NdShard to DRAM-interleaved on every sparse layer (`cache_read/{deshard,slice}` zones); that path and
 its zones were removed in #55668, and captures from before it show the zone under `attn/cache_read`.
 Numbers for both are in PR #55668.
