@@ -51,11 +51,23 @@ Worktree: `/home/mvasiljev/build/tt-metal-qwen38-swe`, branch
   envelope710.233s includes task setup; agent384.260s. This is integration
   evidence, not C16 qualification or a measured SWE speedup. See
   [audited flat smoke](flat-serving-smoke.json).
-- C16 masked SWE25 candidate is still running.
-  Candidate run40585466415 attempt1 failed before model loading in fabric topology
-  setup; attempt2 uses identical sources on another assigned runner. No task
-  score is inferred from the infrastructure failure. Flat serving-image validation
-  passes; C16 qualification and actual SWE100/500 remain pending.
+- C16 grouped+masked SWE25 candidate40585466415 attempt2: **14/25 solved**,
+  22 normal submissions, three agent timeouts;8194.275s trial envelope versus
+  control16/25,25 normal and9323.502s. The12.11% shorter envelope does not
+  establish an acceptable accuracy/runtime tradeoff. Paired outcomes are12
+  both-solved,4 control-only,2 candidate-only,7 neither. All744 requests are
+  reconciled:741 complete (736 tool_calls,5 capped) and3 incomplete timeout
+  bodies;552462 completed output tokens include81920 omitted capped tokens.
+  All25 isolation checks and stable exports pass. See
+  [audited C16 candidate](isolated-swe25-c16-candidate.json).
+  Attempt1 failed before model loading in fabric topology setup; attempt2 used
+  identical sources on a different runner. No task score comes from attempt1.
+- Hold the prepared C16 SWE100/500 arms. Qualify the combined grouped/masked/flat
+  image at C8 on the same frozen25 tasks and individual budgets. This whole
+  configuration comparison also adds independently validated flat prefill; it
+  cannot isolate concurrency alone. TTI source649c4342d6a1aab5f99c7c6ece672721182a98e9
+  retains resident16/block512, medium, agent6300/request3600/output16384/native262144.
+  Actual SWE100/500 remain pending.
 
 Raw CSV/Tracy, token arrays, logs and archives remain local or in CI. Only code
 and compact documentation are published. Keep the distinct cohorts, resident

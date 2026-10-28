@@ -1,0 +1,231 @@
+{
+  "status": "completed and audited; C16 not selected for large suites",
+  "run": 40585466415,
+  "attempt": 2,
+  "runner": "qb2-120-p05t06",
+  "source_metal": "543bac09167b5ef556cfaf2ab823014d794045ba",
+  "tti_source": "b5d4642b00d4f3cc820b90e591b46a977c32da0f",
+  "image_digest": "5f4e1cb60794ee32df3d409bc6d57a0a0fcd019993273d574c5b56d00f9b85ce",
+  "configuration": "resident16/block512/C16, grouped+masked, flatoff, medium",
+  "native_context": 262144,
+  "all_layers": 64,
+  "solved": 14,
+  "attempted": 25,
+  "normal_submissions": 22,
+  "exceptions": {
+    "AgentTimeoutError": 3
+  },
+  "trial_envelope_seconds": 8194.275268,
+  "control": {
+    "run": 40572176883,
+    "solved": 16,
+    "attempted": 25,
+    "normal_submissions": 25,
+    "trial_envelope_seconds": 9323.501869
+  },
+  "relative_trial_envelope_change_percent": -12.111614464888998,
+  "paired_outcomes": {
+    "both_solved": 12,
+    "baseline_only_solved": 4,
+    "candidate_only_solved": 2,
+    "neither_solved": 7
+  },
+  "http_starts": 744,
+  "http_ends": 744,
+  "complete_responses": 741,
+  "tool_call_responses": 736,
+  "capped_unsaved_responses": 5,
+  "capped_unsaved_output_tokens": 81920,
+  "incomplete_timeout_bodies": 3,
+  "completed_server_output_tokens": 552462,
+  "saved_output_tokens": 470542,
+  "actual_isolation": "all25 pass",
+  "stable_archive_sha256": "1a4d9a53cc55058375476d74bff66e6ce2f9a16315913069cd7c194bd44a8e4e",
+  "owned_cleanup": "no unresolved resources/errors",
+  "retrieval_review": "Inspected linked outputs: GitHub curls return no payload; pip index/install fail DNS or no distributions; repro clone fails DNS. Local git log/show covers historical ancestors and SWE setup commits; pytest2018 patching change predates task base. URL-bearing Requests tests only prepare requests or use local test server. No observed successful later-fix retrieval; no claim about pretraining memorization.",
+  "decision": "Hold prepared C16 SWE100/500 arms. Qualify combined grouped/masked/flat atC8 on identical25 tasks and individual budgets. No parity or general SWE speedup claim.",
+  "limitations": [
+    "One pilot; resident capacity, geometry and optimizations differ from control.",
+    "Trial envelope excludes server startup and artifact collection.",
+    "Incomplete timeout response output tokens are unavailable.",
+    "No matched GPU Verified reference.",
+    "Attempt1 fabric startup failure before model loading retained separately; no scored tasks from that attempt."
+  ],
+  "tasks": [
+    {
+      "task": "astropy__astropy-12907",
+      "checksum": "8c9eaafa26b847f98e579685d56f2162674bb06b11a43086cf0749e220f6189f",
+      "reward": 1.0,
+      "exit_status": "Submitted",
+      "exception": null
+    },
+    {
+      "task": "astropy__astropy-14309",
+      "checksum": "9f200334dcd1bbf887de59eb4e097cb699f3d4c4231f89ea44b643c0bb5c7514",
+      "reward": 1.0,
+      "exit_status": "Submitted",
+      "exception": null
+    },
+    {
+      "task": "django__django-11099",
+      "checksum": "4655c271234c63adeb74998a16d6988d788f1cf2d0cc91ec729b50fcc4404b51",
+      "reward": 1.0,
+      "exit_status": "Submitted",
+      "exception": null
+    },
+    {
+      "task": "django__django-11206",
+      "checksum": "30269588dd390f55db027e675f9ca2710bd4cd3555c88134ed399aecc583727e",
+      "reward": 1.0,
+      "exit_status": "Submitted",
+      "exception": null
+    },
+    {
+      "task": "django__django-11433",
+      "checksum": "26529de6007b0e164f194b16f22f75b87f73d8129d53a8f92a5ee82d7647d65b",
+      "reward": 0.0,
+      "exit_status": "",
+      "exception": "AgentTimeoutError"
+    },
+    {
+      "task": "django__django-11815",
+      "checksum": "53b6b11095771c47b1ac40c8a7e4117e0cef81d4a0429cebed5cc8fb6463ad82",
+      "reward": 1.0,
+      "exit_status": "Submitted",
+      "exception": null
+    },
+    {
+      "task": "django__django-11964",
+      "checksum": "1f7f6587d407a309cbb7eb98ba0680118686ef095eeb3e0668c34bf6b621a198",
+      "reward": 0.0,
+      "exit_status": "Submitted",
+      "exception": null
+    },
+    {
+      "task": "django__django-13344",
+      "checksum": "5e43870d5c408ba7906065208ceff63393cbb4f46ae8263479b798fd69010e05",
+      "reward": 0.0,
+      "exit_status": "",
+      "exception": "AgentTimeoutError"
+    },
+    {
+      "task": "django__django-14238",
+      "checksum": "b7cff70262f91ee9f7cc011da43f044573fcb271761410ec0ffe4591eabe53c3",
+      "reward": 1.0,
+      "exit_status": "Submitted",
+      "exception": null
+    },
+    {
+      "task": "django__django-14771",
+      "checksum": "c2d17bafbcc03c6022e37e8e31a0eea9ab980f99108cf7299474d7611217249c",
+      "reward": 0.0,
+      "exit_status": "Submitted",
+      "exception": null
+    },
+    {
+      "task": "django__django-15104",
+      "checksum": "38287cbbc86ecbdef19d1db56916b7b558620bdb2368d30e682291bc441e5f0d",
+      "reward": 1.0,
+      "exit_status": "Submitted",
+      "exception": null
+    },
+    {
+      "task": "django__django-15814",
+      "checksum": "3ae6aad2175796e7500d960981c07c38af9c64bb8f39b8329395140922deda8a",
+      "reward": 1.0,
+      "exit_status": "Submitted",
+      "exception": null
+    },
+    {
+      "task": "django__django-16642",
+      "checksum": "0d4ac9a4f65302fdc18ba4091e7ffaf16b7dbbea2951d4469aae2c555107f7e0",
+      "reward": 0.0,
+      "exit_status": "Submitted",
+      "exception": null
+    },
+    {
+      "task": "django__django-16901",
+      "checksum": "589f0b75ac8efee6d43801236b332bdc70fa0a9af5f4c27404ca56eee8ca7c99",
+      "reward": 1.0,
+      "exit_status": "Submitted",
+      "exception": null
+    },
+    {
+      "task": "matplotlib__matplotlib-25332",
+      "checksum": "eb297a86d6154ab49a2cffd38e156a563a7049f930da5d07c7587ffc0aeb3642",
+      "reward": 0.0,
+      "exit_status": "Submitted",
+      "exception": null
+    },
+    {
+      "task": "psf__requests-2931",
+      "checksum": "ba1a719d5165600fe237ee225b151f3a6f6e91cec3443c47e7454a367034aef0",
+      "reward": 1.0,
+      "exit_status": "Submitted",
+      "exception": null
+    },
+    {
+      "task": "pydata__xarray-6938",
+      "checksum": "db64228ceb7e0824d65907564ba0cb2a6f5aa12ae6ef22e332431dc00d9cc867",
+      "reward": 0.0,
+      "exit_status": "Submitted",
+      "exception": null
+    },
+    {
+      "task": "pytest-dev__pytest-5631",
+      "checksum": "bb831440405c77368eb9dae6ec01d1b6aa990d56633c5a15dc42df1e10f3d2f8",
+      "reward": 1.0,
+      "exit_status": "Submitted",
+      "exception": null
+    },
+    {
+      "task": "scikit-learn__scikit-learn-10297",
+      "checksum": "55bcbf5914e87937174fb0e7fc0574d07390b2b4e8798c717456e6405b586812",
+      "reward": 1.0,
+      "exit_status": "Submitted",
+      "exception": null
+    },
+    {
+      "task": "scikit-learn__scikit-learn-25931",
+      "checksum": "ccf65b1246e56b3d5ac7dda01728763451ba21fd741157c8d4a922dddbfe8ece",
+      "reward": 1.0,
+      "exit_status": "Submitted",
+      "exception": null
+    },
+    {
+      "task": "sphinx-doc__sphinx-7889",
+      "checksum": "c5031d55fe1f85c779e738511d89f75e615448bb30d5f4f51eaa6334ea18c04e",
+      "reward": 1.0,
+      "exit_status": "Submitted",
+      "exception": null
+    },
+    {
+      "task": "sphinx-doc__sphinx-8638",
+      "checksum": "a1202c4eab730bcbba3501da15e76795fa8a41c29c49d3d49c0b00dd949fe5f2",
+      "reward": 0.0,
+      "exit_status": "Submitted",
+      "exception": null
+    },
+    {
+      "task": "sympy__sympy-13974",
+      "checksum": "034c8845770e5b3169fa4cd2ffd3ca55470f26fad725f5670a027cf378aba8d8",
+      "reward": 0.0,
+      "exit_status": "",
+      "exception": "AgentTimeoutError"
+    },
+    {
+      "task": "sympy__sympy-18763",
+      "checksum": "45168fc3864b43534eec885f0959fdd2bbd1d501383883ba8a68a49683188af2",
+      "reward": 0.0,
+      "exit_status": "Submitted",
+      "exception": null
+    },
+    {
+      "task": "sympy__sympy-20438",
+      "checksum": "de42d2805fffd917428d9dfef69d210c7287e3c20b1541a69c74b5d220f124c2",
+      "reward": 0.0,
+      "exit_status": "Submitted",
+      "exception": null
+    }
+  ]
+}
