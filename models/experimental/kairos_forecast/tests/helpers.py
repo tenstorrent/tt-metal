@@ -30,10 +30,15 @@ LOWER_IS_BETTER = {"route_mismatch_rows", "bias_max_abs_diff", "abs_err_max"}
 REPORT_ONLY_ROUTING_KEYS = {"route_mismatch_rows", "bias_max_abs_diff", "min_top3_margin"}
 
 # Device module tests (tests/pcc/test_modules.py, v1.24: asserted in both precisions). Proposed at the G1 re-raise
-# from the measured minimum over the test goldens; provisional until the decision.
+# by the rule m - 2 (1 - m), rounded down to 4 digits, from the minimum m over the test goldens in pcc job 1047.
 MODULE_FLOORS = {
-    m: {"accuracy": 0.999, "performance": 0.99}
-    for m in ("embed", "rope_qk", "enc_block", "enc_chain", "enc_out", "cross_attn", "dec_self")
+    "cross_attn": {"accuracy": 0.9999, "performance": 0.9992},
+    "dec_self": {"accuracy": 0.9999, "performance": 0.9995},
+    "embed": {"accuracy": 0.9999, "performance": 0.9998},
+    "enc_block": {"accuracy": 0.9999, "performance": 0.9967},
+    "enc_chain": {"accuracy": 0.999, "performance": 0.9655},
+    "enc_out": {"accuracy": 0.9994, "performance": 0.9848},
+    "rope_qk": {"accuracy": 0.9999, "performance": 0.9998},
 }
 
 DRIFT = {}  # set from the fixed round-0 record at G1
