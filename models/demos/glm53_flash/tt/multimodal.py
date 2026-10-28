@@ -59,7 +59,6 @@ from models.demos.glm53_flash.tt.mm_inputs import (
     chunk_scatter,
     feature_rows,
     flatten_grid,
-    vision_batches,
 )
 from models.demos.glm53_flash.tt.vision import GLM53VisionConfig, TtVisionTower, load_vision_weights
 from models.demos.glm53_flash.tt.vllm_config import DEFAULT_VISION_BATCH_PATCHES, eager_pad_length
@@ -245,10 +244,13 @@ VISION_PATCH_BUCKET = 1024  # tower calls are padded to a multiple of this many 
 
 
 def vision_pad_patches(n_patches: int, bucket: int = VISION_PATCH_BUCKET) -> int:
-    """The padded patch count of a tower call holding ``n_patches``: the next multiple of ``bucket`` (1024, 2048,
-    3072, 4096 for the default 4096-patch batches), so the tower's programs exist at a handful of shapes that
-    the boot warm-up builds (``VisionRuntime.warmup``) and no image or clip geometry compiles at request time."""
-    return max(bucket, -(-int(n_patches) // bucket) * bucket)
+    """The padded row count of a tower call holding ONE window of ``n_patches``: the next multiple of ``bucket``
+    (1024, 2048, 3072, 4096 for the default 4096-patch cap) plus one 32-row tile of pad rows, so the call always
+    has exactly two attention windows (the image, the pad) and its window bounds one shape: the tower's programs
+    (patch embed, the windowed SDPA, the merge) exist at a handful of shapes that the boot warm-up builds
+    (``VisionRuntime.warmup``) and no image or clip geometry compiles at request time (a 2-frame clip batched as
+    two windows compiled its SDPA under the sealed cache, 2026-10-28 8x4)."""
+    return max(bucket, -(-int(n_patches) // bucket) * bucket) + TILE
 
 
 def _tower_call(
@@ -290,11 +292,14 @@ def vision_features(
         return []
     grid_flat = torch.stack([w[2] for w in windows])
     per_window: list[torch.Tensor | None] = [None] * len(windows)
-    for lo, hi in vision_batches(grid_flat, max_patches):
-        pv = torch.cat([windows[i][1] for i in range(lo, hi)], dim=0)
-        feats = _tower_call(tower, pv, grid_flat[lo:hi], pad_to=vision_pad_patches(int(pv.shape[0])))
-        for i, f in zip(range(lo, hi), feats):
-            per_window[i] = f
+    # one tower call per window (an image, a clip's temporal group): every call is one window + the pad window,
+    # padded to its patch bucket (``vision_pad_patches``), so the tower runs a fixed, warmed set of shapes whatever
+    # the media mix; ``max_patches`` caps a single window
+    for i, (_, pv, row) in enumerate(windows):
+        n = int(pv.shape[0])
+        if n > max_patches:
+            raise ValueError(f"a vision window of {n} patches exceeds the {max_patches}-patch tower call cap")
+        per_window[i] = _tower_call(tower, pv, grid_flat[i : i + 1], pad_to=vision_pad_patches(n))[0]
     out: list[torch.Tensor] = []
     for k, it in enumerate(items):
         parts = [per_window[i] for i, w in enumerate(windows) if w[0] == k]
