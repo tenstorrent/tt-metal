@@ -273,7 +273,8 @@ void bind_generic_operation_program_spec(nb::module_& mod) {
                 compile or the program does not fit the kernel-configuration buffer.
 
         Example:
-            Refer to tests/ttnn/unit_tests/operations/debug/test_generic_op_program_spec.py for usage examples
+            See the TT-NN guide "Running your own kernels with generic_op and a ProgramSpec", and
+            tests/ttnn/unit_tests/operations/debug/test_generic_op_program_spec.py for more examples.
         )doc";
 
     auto program_spec_overload = ttnn::overload_t(
