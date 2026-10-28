@@ -221,12 +221,13 @@
   # 20 speculative records (4 shapes x the 5-rung x4 ladder) at 22-32 MB each = ~620 MB; the capture
   # pass logs the TRACE region usage per record.
   # MTP drafter on the plugin's speculative contract: vLLM schedules the drafts,
-  # the plugin verifies and accepts them. conc-1 greedy at the client so every
-  # step takes the spec path; batched speculation (k_by_rows) and batched
-  # coherency are tracked by the tt-inference-server release entries.
+  # the plugin verifies and accepts them. The coherence request runs alone (the
+  # (1,5) record); the benchmark runs five greedy requests at once so the (5,5)
+  # record's drafts are verified on a device (read the SpecDecoding metrics in
+  # the server log: acceptance near 1.0 means the batched records draft garbage).
   # --no-async-scheduling: the contract classes ship synchronous.
   additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --no-async-scheduling --speculative-config.method custom_class --speculative-config.model vllm_tt_plugin.model_owned_drafter --speculative-config.num_speculative_tokens 5"
-  additional-benchmark-args: "--max-concurrency 1 --num-prompts 8 --temperature 0"
+  additional-benchmark-args: "--max-concurrency 5 --num-prompts 10 --temperature 0"
   extra-env: "TT_MODEL_CLASS_OVERRIDES=Gemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM,Gemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM,Gemma4UnifiedForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM,TTGemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM,TTGemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM GEMMA4_SPEC_DRAFT_LEN=5 GEMMA4_PAGE_BLOCK_SIZE=64"
   multimodal: false
   skus:
