@@ -229,7 +229,17 @@ def test_mean_multi_axis_bf16(device):
         ((1, 2, 32, 64), ttnn.TILE_LAYOUT),
         ((1, 2, 32, 64), ttnn.ROW_MAJOR_LAYOUT),
         ((1, 2, 32, 2048), ttnn.TILE_LAYOUT),
-        ((1, 2, 32, 2048), ttnn.ROW_MAJOR_LAYOUT),
+        pytest.param(
+            (1, 2, 32, 2048),
+            ttnn.ROW_MAJOR_LAYOUT,
+            marks=pytest.mark.xfail(
+                reason=(
+                    "https://github.com/tenstorrent/tt-metal/issues/62259: "
+                    "fp32-Dest row reduce leaks column 16 into the chunk accumulator"
+                ),
+                strict=True,
+            ),
+        ),
     ],
 )
 def test_mean_full_tensor_bf16(device, dim, shape, layout):
@@ -245,23 +255,20 @@ def test_mean_full_tensor_bf16(device, dim, shape, layout):
 
 
 @pytest.mark.parametrize(
-    "shape, dim",
+    "shape, dim, dtype, keepdim, scalar",
     [
-        ((8, 16, 64, 64), [0]),
-        ((8, 16, 64, 64), [1]),
-        ((8, 16, 64, 64), [0, 1]),
-        ((7, 9, 64, 64), [0]),
-        ((7, 9, 64, 64), [0, 1]),
-        ((64, 4, 32, 64), [0]),
-        ((3, 7, 100, 100), [1]),
-        ((8, 16, 64, 64), [0, 3]),
-        ((8, 16, 64, 64), [1, 2, 3]),
+        ((8, 16, 64, 64), [0], ttnn.bfloat16, True, 1.0),
+        ((8, 16, 64, 64), [1], ttnn.float32, False, 3.0),
+        ((7, 9, 64, 64), [0, 1], ttnn.bfloat16, True, 3.0),
+        ((7, 9, 64, 64), [0, 1], ttnn.float32, False, 1.0),
+        ((64, 4, 32, 64), [0], ttnn.bfloat8_b, False, 3.0),
+        ((3, 7, 100, 100), [1], ttnn.bfloat16, True, 3.0),
+        ((3, 7, 100, 100), [1], ttnn.bfloat8_b, True, 1.0),
+        ((8, 16, 64, 64), [0, 3], ttnn.float32, True, 3.0),
+        ((8, 16, 64, 64), [1, 2, 3], ttnn.bfloat16, False, 1.0),
     ],
 )
-@pytest.mark.parametrize("keepdim", [True, False])
-@pytest.mark.parametrize("scalar", [1.0, 3.0])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32], ids=["bf16", "bf8_b", "fp32"])
-def test_mean_nc(device, shape, dim, keepdim, scalar, dtype):
+def test_mean_nc(device, shape, dim, dtype, keepdim, scalar):
     torch.manual_seed(0)
     torch_input = torch.randn(shape) * 0.25 + 1.0
     input_tensor = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)

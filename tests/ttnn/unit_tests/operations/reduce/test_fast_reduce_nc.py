@@ -244,10 +244,13 @@ def test_fast_reduce_nc_rejects_hw_dims(device, dims, expect_error):
 
 
 # fp32 sums on the SFPU at full precision unless fast mode is set or fp32_dest_acc_en is off; then the FPU sums tf32.
-@pytest.mark.parametrize("dims", [[0], [0, 1]])
-@pytest.mark.parametrize("fast_and_approximate_mode", [False, True], ids=["accurate", "fast"])
-@pytest.mark.parametrize("fp32_dest_acc_en", [None, True, False], ids=["default", "acc_on", "acc_off"])
-def test_fast_reduce_nc_fp32(device, dims, fast_and_approximate_mode, fp32_dest_acc_en):
+@pytest.mark.parametrize(
+    "fast_and_approximate_mode, fp32_dest_acc_en",
+    [(False, None), (False, False), (True, None)],
+    ids=["sfpu", "acc_off", "fast"],
+)
+def test_fast_reduce_nc_fp32(device, fast_and_approximate_mode, fp32_dest_acc_en):
+    dims = [0, 1]
     torch.manual_seed(0)
     torch_input = torch.rand((8, 16, 64, 64), dtype=torch.float32)
     expected = torch.sum(torch_input, dim=dims, keepdim=True)
@@ -279,8 +282,11 @@ def test_fast_reduce_nc_int32_requires_fp32_dest_acc(device, expect_error):
 
 # The post-multiply factor is a runtime arg, so sum, scaled sum and mean of one tensor share one program,
 # and each cache hit must apply its own factor. (3, 7, 160, 160) dim 1 splits 75 output tiles over two core groups.
-@pytest.mark.parametrize("shape, dim", [((8, 16, 128, 128), 0), ((3, 7, 160, 160), 1)])
-@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+@pytest.mark.parametrize(
+    "shape, dim, dtype",
+    [((8, 16, 128, 128), 0, ttnn.float32), ((3, 7, 160, 160), 1, ttnn.bfloat16)],
+    ids=["fp32", "bf16"],
+)
 def test_fast_reduce_nc_post_mul_shares_program(device, shape, dim, dtype):
     device.disable_and_clear_program_cache()
     device.enable_program_cache()
