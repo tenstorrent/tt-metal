@@ -70,7 +70,7 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
     size_t grid_area = available_grid.num_cores();
     auto [ncores, nblocks_per_core] = compute_ncores(grid_area, num_blocks);
     // The default factory tilizes a whole row per block, which the Quasar unpacker cannot complete on
-    // RTL past QUASAR_MAX_TILIZE_BLOCK_TILES; the block-interleaved factory bounds the block width
+    // RTL (or on craq-sim) past QUASAR_MAX_TILIZE_BLOCK_TILES; the block-interleaved factory bounds the block width
     // instead, whenever the grid admits such a split.
     if (device->arch() == tt::ARCH::QUASAR &&
         num_tiles_per_row > operations::data_movement::QUASAR_MAX_TILIZE_BLOCK_TILES) {

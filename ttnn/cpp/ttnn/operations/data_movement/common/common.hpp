@@ -205,8 +205,10 @@ BlockPlan make_block_plan(
 
 // Widest row-major block the Quasar unpacker may tilize in one pass. On the RTL emulator a
 // tilize_with_val_padding block of 191 or more tiles never completes (176 does; emu-quasar-2x3
-// sweep, #56622), so Quasar keeps every tilize block at or under this width.
-constexpr uint32_t QUASAR_MAX_TILIZE_BLOCK_TILES = 128;
+// sweep, #56622), and craq-sim's MOP expander takes at most 64 inner-loop iterations (the tilize
+// unpack runs one MOP per row with the block width as its inner loop), so Quasar keeps every
+// tilize block at or under this width.
+constexpr uint32_t QUASAR_MAX_TILIZE_BLOCK_TILES = 64;
 
 // The buffer set whose block width this core was assigned. Asserts the core belongs to exactly one
 // set: an unmatched core silently defaulting to `full_set` would bind the wrong-width buffers, and
