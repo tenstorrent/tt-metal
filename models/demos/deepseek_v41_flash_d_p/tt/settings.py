@@ -163,6 +163,16 @@ TABLE = {
         "-1.6e-4. off = the P.17 path (fp32 SFPU compositions: mhc_pre_xing_pack + slice + exact tp_sum + scale, eps, "
         "rsqrt, two multiplies; 8-15 calls a norm)",
     ),
+    "GENERIC_OP_PREPARED": Setting(
+        "on",
+        ("on", "off"),
+        "P.1 (galaxy 8x4, owner focus: host time per chunk): on = every fabric_reduce_scatter (tt/ccl.py: the attention "
+        "out sum_cols, the q_a tp_sum, compressor / indexer sums; 92 a chunk on the block MoE path) dispatches its "
+        "cached descriptor as a prepared program (fork option prepared=True: ttnn.bringup.prepare_program once per "
+        "descriptor, ttnn.bringup.run_prepared each call, no runtime argument re-applied); needs GLUE_FOLD=on "
+        "(program_hash). off = ttnn.generic_op on the cached descriptor (the path before P.1). Same programs, same "
+        "runtime arguments: device time and results unchanged",
+    ),
     "GLUE_FOLD": Setting(
         "on",
         ("on", "off"),

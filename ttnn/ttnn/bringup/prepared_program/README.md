@@ -56,3 +56,6 @@ ttnn.bringup.run_prepared(p, [in0, in1, out])             # every call
 - models/demos/deepseek_v3_d_p/tt/moe/tt_k3_token_split_moe.py (Marko's token-split exchange: planner, dispatch prep,
   arena zeroing, sparse dispatch), models/demos/moe_block/tt/fused_head.py and tt/tail_engine.py (Marko's MoE block).
 - deepseek_v41_flash_d_p under MOE_IMPL=block (through the exchange).
+- ttnn.bringup.fabric_reduce_scatter(prepared=True) (deepseek_v41_flash_d_p tt/ccl.py, GENERIC_OP_PREPARED, P.1
+  galaxy): one PreparedProgram per cached descriptor, called directly (prepare_program / run_prepared), not through
+  this module's 512-entry cache.

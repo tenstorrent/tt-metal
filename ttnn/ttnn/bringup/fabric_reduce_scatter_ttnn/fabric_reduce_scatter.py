@@ -951,6 +951,7 @@ def fabric_reduce_scatter(
     exact_fp32_add=False,
     cache_descriptors=False,
     program_hash=False,
+    prepared=False,
 ):
     """Reduce-scatter `input_tensor` ([1, 1, G * Sb, W] TILE, DRAM interleaved, a partial per chip; block i = rows
     i Sb ..) over each group: every chip gets its block of the sum over the group, [1, 1, Sb, W] (the layout
@@ -983,10 +984,21 @@ def fabric_reduce_scatter(
         buffer addresses (the group configuration, dim, exact_fp32_add, dtype, page size, padded shapes, the
         counters' addresses, the chip), so generic_op skips that hashing; and the plan / counters lookup of
         ``prepare`` is one dict hit. Programs, runtime arguments and results are the same as without it (addresses
-        are runtime arguments, which generic_op patches on a program-cache hit either way)."""
+        are runtime arguments, which generic_op patches on a program-cache hit either way).
+    prepared: False (default) = each cached descriptor goes through ttnn.generic_op, which re-applies every runtime
+        argument of every core of every chip on a program-cache hit (~0.5-0.7 ms host a call on an 8x4); True (needs
+        program_hash) = each cached descriptor is prepared once (ttnn.bringup.prepare_program, kept with it in the
+        same LRU entry) and dispatched with ttnn.bringup.run_prepared: a descriptor only ever sees the buffers it was
+        built for, so a call patches no runtime argument unless another descriptor of the same structure ran in
+        between (then only the input / scratch / output address slots). Same programs, same runtime arguments, same
+        results (deepseek_v41_flash_d_p P.1)."""
+    if prepared:
+        assert program_hash, "prepared needs program_hash=True"
     if program_hash:
         assert cache_descriptors, "program_hash needs cache_descriptors=True"
-        return _fast(input_tensor, cluster_axis, topology, num_links, scheme, output, placement, dim, exact_fp32_add)
+        return _fast(
+            input_tensor, cluster_axis, topology, num_links, scheme, output, placement, dim, exact_fp32_add, prepared
+        )
     mesh_device = input_tensor.device()
     plan_entry = prepare(
         mesh_device,
@@ -1069,7 +1081,9 @@ _FAST_PREP = {}  # program_hash=True: (mesh id, group configuration) -> (mesh_de
 _HASH_SALT = "ttnn.bringup.fabric_reduce_scatter.program_hash"
 
 
-def _fast(input_tensor, cluster_axis, topology, num_links, scheme, output, placement, dim, exact_fp32_add):
+def _fast(
+    input_tensor, cluster_axis, topology, num_links, scheme, output, placement, dim, exact_fp32_add, prepared=False
+):
     """program_hash=True: fabric_reduce_scatter(cache_descriptors=True) with the plan lookup memoized and every
     cached program descriptor carrying a custom_program_hash (no per-call hashing of the kernel sources in
     generic_op). The same checks, scratch, descriptor (built by create_mesh_program_descriptor) and generic_op call."""
@@ -1138,8 +1152,10 @@ def _fast(input_tensor, cluster_axis, topology, num_links, scheme, output, place
         tuple(input_tensor.padded_shape),
         tuple(output.padded_shape),
     )
-    # ("hashed",): never the default path's descriptor of the same buffers (that one has no custom hash)
-    dkey = prog + ("hashed",) + tuple(int(t.buffer_address()) for t in (input_tensor, scratch, output))
+    # ("hashed",): never the default path's descriptor of the same buffers (that one has no custom hash);
+    # ("prepared",): an entry (mesh_device, descriptor, its PreparedProgram) of its own
+    io = [input_tensor, scratch, output]
+    dkey = prog + (("hashed", "prepared") if prepared else ("hashed",)) + tuple(int(t.buffer_address()) for t in io)
     hit = _DESC_CACHE.get(dkey)
     if hit is None or hit[0] is not mesh_device:
         extra = {} if dim == 2 and not exact_fp32_add else {"dim": dim, "exact_fp32_add": exact_fp32_add}
@@ -1155,13 +1171,16 @@ def _fast(input_tensor, cluster_axis, topology, num_links, scheme, output, place
             hash_key=prog,
             **extra,
         )
-        hit = (mesh_device, desc)
+        # (looked up on ttnn.bringup at each call: the bring-up capture wraps prepare_program / run_prepared, F201)
+        hit = (mesh_device, desc, ttnn.bringup.prepare_program(desc, io)) if prepared else (mesh_device, desc)
         _DESC_CACHE[dkey] = hit
         while len(_DESC_CACHE) > _DESC_CACHE_SIZE:
             _DESC_CACHE.popitem(last=False)
     else:
         _DESC_CACHE.move_to_end(dkey)
-    return ttnn.generic_op([input_tensor, scratch, output], hit[1])
+    if prepared:
+        return ttnn.bringup.run_prepared(hit[2], io)
+    return ttnn.generic_op(io, hit[1])
 
 
 def prepare(
