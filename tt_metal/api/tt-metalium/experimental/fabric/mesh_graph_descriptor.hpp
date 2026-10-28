@@ -156,7 +156,8 @@ inline DeclaredTopology with_effective_ring_dims(DeclaredTopology topology) {
 
 // One pipeline_descriptors entry after Tier A validation, in textproto order.
 // Edges stay directional pairs of stage ids, each with its loopback mark. Omitted and explicit
-// STRICT both survive validation, so a stored edge has no policy of its own.
+// STRICT both survive validation, so a stored edge has no policy of its own. Exactly one stage
+// has no incoming edge besides loopbacks; it owns host I/O.
 struct PipelineDescriptorData {
     struct Stage {
         std::string id;

@@ -3448,32 +3448,58 @@ TEST(MeshGraphDescriptorTests, RepeatedEdgeDeclaresAnotherChannel) {
     EXPECT_EQ(desc.pipeline_descriptors().front().edges[1].dst, "s1");
 }
 
-// Two roots are accepted. The graph does not have to be one chain.
-TEST(MeshGraphDescriptorTests, TwoRootsParse) {
-    const std::string pipeline = R"proto(
-        pipeline_descriptors {
-          name: "two_roots"
-          stages {
-            id: "s0"
-            shape { dims: [ 4, 2 ] }
-          }
-          stages {
-            id: "s1"
-            shape { dims: [ 4, 2 ] }
-          }
-          stages {
-            id: "s2"
-            shape { dims: [ 4, 2 ] }
-          }
-          stages {
-            id: "s3"
-            shape { dims: [ 4, 2 ] }
-          }
-          edges { src: "s0" dst: "s1" }
-          edges { src: "s2" dst: "s3" }
-        }
-    )proto";
-    EXPECT_NO_THROW(MeshGraphDescriptor desc(mgd_with_pipelines(pipeline)));
+// Exactly one stage has no incoming edge besides loopbacks: the stage that owns host I/O. Two chains have two.
+TEST(MeshGraphDescriptorTests, RejectsTwoRoots) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "two_roots"
+              stages {
+                id: "s0"
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: "s1"
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: "s2"
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: "s3"
+                shape { dims: [ 4, 2 ] }
+              }
+              edges { src: "s0" dst: "s1" }
+              edges { src: "s2" dst: "s3" }
+            }
+        )proto",
+        "pipeline 'two_roots': stages 's0', 's2' have no incoming edge besides loopbacks; exactly one may, the stage "
+        "that owns host I/O");
+}
+
+// A stage with no edges is a second root too.
+TEST(MeshGraphDescriptorTests, RejectsAStageWithNoEdges) {
+    expect_pipeline_rejected(
+        R"proto(
+            pipeline_descriptors {
+              name: "stray"
+              stages {
+                id: "s0"
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: "s1"
+                shape { dims: [ 4, 2 ] }
+              }
+              stages {
+                id: "s2"
+                shape { dims: [ 4, 2 ] }
+              }
+              edges { src: "s0" dst: "s1" }
+            }
+        )proto",
+        "pipeline 'stray': stages 's0', 's2' have no incoming edge besides loopbacks");
 }
 
 // Out-degree is not limited.
@@ -4070,6 +4096,10 @@ TEST(MeshGraphDescriptorTests, TierBRejectsCombinedSliceDemand) {
                 id: "s4"
                 shape { dims: [ 4, 2 ] }
               }
+              edges { src: "s0" dst: "s1" }
+              edges { src: "s1" dst: "s2" }
+              edges { src: "s2" dst: "s3" }
+              edges { src: "s3" dst: "s4" }
             }
         )proto",
         "pipelines need 5 slices and the descriptor declares 4");
@@ -4215,6 +4245,10 @@ TEST(MeshGraphDescriptorTests, TierBRejectsStagesThatOnlyFitOneMesh) {
             id: "s4"
             shape { dims: [ 4, 2 ] }
           }
+          edges { src: "s0" dst: "s1" }
+          edges { src: "s1" dst: "s2" }
+          edges { src: "s2" dst: "s3" }
+          edges { src: "s3" dst: "s4" }
         }
     )proto";
     EXPECT_THAT(
@@ -4225,7 +4259,7 @@ TEST(MeshGraphDescriptorTests, TierBRejectsStagesThatOnlyFitOneMesh) {
 
 namespace {
 
-// Two meshes in one FABRIC graph with no connections, and one pipeline of unconnected stages.
+// Two meshes in one FABRIC graph joined by four channels, and one pipeline that chains its stages in order.
 std::string two_meshes_with_stages(
     const std::string& m0_device,
     const std::string& m0_host,
@@ -4241,11 +4275,16 @@ std::string two_meshes_with_stages(
     mesh("M1", m1_device, m1_host);
     text_proto << "graph_descriptors { name: \"G0\" type: \"FABRIC\" "
                   "instances { mesh { mesh_descriptor: \"M0\" mesh_id: 0 } } "
-                  "instances { mesh { mesh_descriptor: \"M1\" mesh_id: 1 } } }\n";
+                  "instances { mesh { mesh_descriptor: \"M1\" mesh_id: 1 } } "
+                  "connections { nodes { mesh { mesh_descriptor: \"M0\" mesh_id: 0 } } "
+                  "nodes { mesh { mesh_descriptor: \"M1\" mesh_id: 1 } } channels { count: 4 policy: STRICT } } }\n";
     text_proto << "top_level_instance { graph { graph_descriptor: \"G0\" graph_id: 0 } }\n";
     text_proto << "pipeline_descriptors { name: \"packed\"\n";
     for (std::size_t stage = 0; stage < stage_dims.size(); ++stage) {
         text_proto << "  stages { id: \"s" << stage << "\" shape { dims: " << stage_dims[stage] << " } }\n";
+    }
+    for (std::size_t stage = 1; stage < stage_dims.size(); ++stage) {
+        text_proto << "  edges { src: \"s" << stage - 1 << "\" dst: \"s" << stage << "\" }\n";
     }
     text_proto << "}\n";
     return text_proto.str();
@@ -4268,11 +4307,11 @@ TEST(MeshGraphDescriptorTests, TierBRejectsWhenNoCombinationOfMeshesFits) {
         MeshGraphDescriptor desc(two_meshes_with_stages("[ 2, 8 ]", "[ 1, 2 ]", "[ 2, 8 ]", "[ 1, 4 ]", four)));
 }
 
-// Two meshes of six slices and stages of 3, 3, 2, 2, 2 slices that fit either. Largest first onto the emptiest
-// mesh puts a 3 on each and leaves no room for the third 2; only 3 + 3 and 2 + 2 + 2 fits, which the search
-// finds by trying the other mesh.
+// Two meshes of six slices and a chain of stages of 3, 2, 3, 2, 2 slices that fit either. Following the chain
+// puts 3 + 2 on M0 and 3 + 2 on M1 and leaves no room for the last 2; only 3 + 3 and 2 + 2 + 2 fits, which the
+// search finds by undoing choices.
 TEST(MeshGraphDescriptorTests, TierBTriesEveryMeshAStageFits) {
-    const std::vector<std::string> stages = {"[ 2, 12 ]", "[ 2, 12 ]", "[ 2, 8 ]", "[ 2, 8 ]", "[ 2, 8 ]"};
+    const std::vector<std::string> stages = {"[ 2, 12 ]", "[ 2, 8 ]", "[ 2, 12 ]", "[ 2, 8 ]", "[ 2, 8 ]"};
     EXPECT_NO_THROW(
         MeshGraphDescriptor desc(two_meshes_with_stages("[ 2, 24 ]", "[ 1, 6 ]", "[ 2, 24 ]", "[ 1, 6 ]", stages)));
 }
