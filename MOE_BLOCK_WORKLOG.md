@@ -2230,3 +2230,46 @@ Reading: the round protocol is no longer what the K3 head's gate / up waits on -
 the startup (~16 us: the first W blocks land after the router phase; round 2 waits on every row core's pop of round
 0) and the gather's shard arrival (~18.5 us at shard 1). The handshake-only floor is now ~0.64 us a step (41 us).
 x-round credits would only pay with more XIN slots (2 now; the arena has 16 KB free at KB 14, a slot is 56 KB).
+
+## Random stress (2026-10-28, bh-lb-09, HEAD 23ea8fa2d1f)
+Why: hunt hangs and wrong / non-deterministic results in the block and the fused head on the default build before
+the model sees them. One run = one random draw (weights seed, x seed, x scale 0.001-16, x normal / per-row lognormal
+scale spread / sink rows (x50, x20, zero rows) / 90% sparse; routing by router bias: uniform, skewed (bias sigma 0.05-3),
+K hot experts on one chip, K hot spread, K/2 hot, 50-85% experts never picked). Untracked scratch tests
+models/demos/moe_block/tests/zz_scratch_stress_{block,head}.py (block: traced + eager, combine snap 2^-14 on every
+block draw, every same-x repeat compared bitwise, output hashes for cross-process checks; head: test_head_se3's
+setup + traced replays + same-x bitwise check). Drivers, logs, triage: session scratchpad stress/ (draws.log, NOTES.md).
+- 121 runs, ~127 min of device runs; 68 random / long draws: K3 block ring 18 (4 at 1280), K3 block line 8 (3 at 1280),
+  GLM-5.3-Flash 2x4 23 (5120 / 2048 / 1280), K3 head ring 12 (3 at 1280 rows) + line 7. Passing runs: ~67K traced
+  replays (up to 5000 a run, back to back with a check every 25-100) and ~5.5K eager calls (up to 500 a run, fresh x
+  each call). Controls SE_WLA=0, SE_RWL=0, SE_PORT_NOC0=0: 8 runs, clean.
+- Determinism (snap on): K3 ring 0 of 2668 same-x repeats differ, GLM 0 of 958, head ring / line 0 of 1117.
+  Cross-process: the same draw in separate processes is bit-identical (K3 ring 16 / 16 x, GLM 16 / 16, 8 starts x 2 x,
+  head 8 / 8).
+- F1 (wrong results, K3 on the TP line): 680 of 844 same-x repeats differ bitwise, every line draw, snap on or off.
+  Whole rows (every column on every chip) of tokens owned mostly by line chips 0 / 1; the combine output itself differs
+  (tapped before the fused tail): diff rows 0.1-0.27 rel L2 = a whole expert term. Same x every call (NX 1): bit-
+  identical. Several wrong rows match "one pick's term computed on the previous call's x row of the same token"
+  (PCC 0.98, offline vs the ring's bit-exact output): the experts read dispatch rows that have not landed yet. A
+  device sync between the dispatch program and experts + combine removes it (0 of 8, worst row 0.099 as the ring);
+  MOE_TAIL=ops or MOE_HEAD=ops also 0 of 8 (timing or the exchange's config). Present at b8212572997 and in the pre-merge
+  tt-metal-envclean f57131f7774 (no snap: same 0.1-0.2 whole-row diffs) - old, not the merge. The block test's PCC
+  (0.9957 > 0.98) does not see it; per-row error on tiny rows reaches 1500x. MOE_EDD=1 on the line asserts ("dispatch
+  phase: port (0, 1) X- 0 has no stream into (0, 0)"). Suspect: the sparse dispatch's END markers / per-link fused
+  increments vouch for a row's send, not its landing in the destination's DRAM, on multi-hop line paths.
+- F2 (hang, GLM 2x4): the fused head's first call (MoEBlock build) timed out once (d103, 1 of ~18 GLM process starts;
+  the coordinator saw one earlier today on the same cores). The block caught it and fell back to the ops head on a
+  wedged mesh (eager 0 PCC nan). Triage (scratch triage_d103.txt): head op running on all 8; port-column NCRISCs stuck
+  in wait_for_empty_write_slot (EDM full) - x senders on TP positions 1 / 2, router logits senders (LStream) on the two
+  line ends - while BRISCs wait in rs_gather / CB space; 15-11 waits x shard counts. Fabric sender channels at 0 free
+  slots. No closed software cycle found (codex agrees): credits stop coming back. Not reproduced: same draw x 3, ring
+  -> GLM alternation x 3, 8 bare GLM starts. Next: many fresh-process starts per arm with SE_PORT_NOC0=0 vs default.
+- F3 (accuracy, not order): GLM PCC < 0.98 with large-magnitude rows - x16 0.97934, sink rows 0.97243, row spread
+  0.975-0.979 - identical with snap off.
+- F4 (snap range): q = 2^-14 is absolute: x 0.01 -> PCC 0.45 (ring and line, 0.98098 without snap), GLM x 0.01 0.838,
+  x 0.5 0.981-0.985; rows with small norm lose their routed terms (worst row rel err 1.0). An under / overflow counter
+  in the accumulator would flag it.
+- Harness notes: MOE_TAIL=ops traced captures fail ("program not yet in program cache" - the ops tail builds a program
+  in the capture), safe-pytest then reports a HANG. Head HXC_ROWS=1280 with the test defaults (MT 2, GY 10): L1 OOM
+  (arena 1199 KB a bank, largest free block 1178 KB); at b8212572997 it fails earlier (router cores < row blocks);
+  GY 8 / MT 1 (the block's plan) passes at both - not a regression.
