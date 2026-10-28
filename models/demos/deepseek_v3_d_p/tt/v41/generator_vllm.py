@@ -551,6 +551,7 @@ class DeepseekV41ForCausalLM:
         with buffered tokens from its last round hands the next one over without a device step."""
         assert params is not None, "speculative decode samples on device"
         blocks, rows, sampling = {}, {}, {}
+        speculating = False  # a live slot proposes this step (the drafter in the graph: the ``vd:`` variants)
         t0 = time.time()
         for i in range(tokens.shape[0]):
             if int(page_table[i, 0]) == 0:
@@ -575,12 +576,17 @@ class DeepseekV41ForCausalLM:
             ), f"row {i}: vLLM position {p}, slot {slot} at {self.decoder.position(slot)}"
             temperature = float(params.temperature[i])
             greedy = temperature <= 0 or self.spec_greedy_all
-            drafts = self.next_drafts.get(slot, []) if greedy and slot == self.ring_owner else []
+            proposes = greedy and slot == self.ring_owner
+            drafts = self.next_drafts.get(slot, []) if proposes else []
+            speculating = speculating or proposes
             blocks[slot] = [token] + drafts[: self.spec_k]
             rows[slot] = i
             sampling[slot] = (int(params.top_k[i]), float(params.top_p[i]), 0.0 if greedy else temperature)
         if not blocks:
             return out
+        # a step whose live slots all run plain (sampled, or not the rings' owner) is the plain variant (``v:``,
+        # captured at warm-up), not a round proposing drafts nobody verifies
+        self.decoder.draft_plain = speculating
         result = self.decoder.decode(blocks, sampling)
         for slot, i in rows.items():
             block, argmax = blocks[slot], result[slot]
@@ -789,7 +795,9 @@ class DeepseekV41ForCausalLM:
         loop; here, per user index (the tile row a request's slot takes: the capture is per (user, rows), not per
         rank), slot ``u``'s rounds at 1 .. K + 1 rows (``vd:``: the drafter in the graph), each variant run eagerly
         twice, captured and replayed once, the drafts of each step feeding the next (every slot was joined from the
-        warm-up prompt, whose seeding the drafter's rings hold)."""
+        warm-up prompt, whose seeding the drafter's rings hold), then its plain one-slot step (``v:``, the drafter
+        off: a sampled request's, or one whose rings another request holds; captured on its first served call
+        otherwise, 1.3 s)."""
         decoder, K = self.decoder, self.spec_k
         assert any(k.startswith("v:") for k in decoder.captures), "the 32-slot step was not captured"
         assert self.ring_owner == 0, f"the drafter's rings hold slot {self.ring_owner}, not slot 0"
@@ -800,6 +808,7 @@ class DeepseekV41ForCausalLM:
             seen: dict[str, int] = {}
             c1 = "c" if decoder.c1 else ""
             keys = [f"vd:{c1}1:{u}.{n}" for n in range(1, K + 2)]
+            decoder.draft_plain = True
             for step in range(WARMUP_DECODE_STEPS * (K + 1)):
                 # grow the block only once the shorter variants replayed: 1 row, then 2, .. K + 1
                 want = 1 + min(len(drafts), K)
@@ -823,6 +832,25 @@ class DeepseekV41ForCausalLM:
                     break
             missing = [key for key in keys if seen.get(key, 0) < 1]
             assert not missing, f"spec variants not captured and replayed: {missing}"
+            # the plain one-slot step of this user index (the drafter off)
+            decoder.draft_plain = False
+            plain, replayed = f"v:{c1}1:{u}.1", False
+            for step in range(WARMUP_DECODE_STEPS):
+                t0 = time.time()
+                out = decoder.decode({u: [token]}, {u: (1, 0.0, 0.0)})
+                decoder.commit(u, 0)
+                token = out[u][0]
+                variant, mode = decoder.last.get("variant"), decoder.last.get("mode")
+                assert variant == plain, (variant, plain)
+                logger.info(
+                    f"DeepSeek-V4.1-Flash warm-up: plain step {step} {variant} ({mode}) in {time.time() - t0:.2f} s "
+                    f"{decoder.last}"
+                )
+                if mode == "replay":
+                    replayed = True
+                    break
+            assert replayed, f"plain variant not captured and replayed: {plain}"
+            decoder.draft_plain = True
         self.ring_owner = None  # the next joined request's
 
     def _warmup_prompt(self, n: int = WARMUP_PROMPT) -> torch.Tensor:
