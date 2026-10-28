@@ -652,6 +652,7 @@ def _run_chunked_prefill(
     num_cache_layers=1,
     valid_rows=None,
     mla_kwargs=None,
+    forward_hook=None,
 ):
     """Unified chunked-prefill scenario, decoupled from the reference.
 
@@ -667,6 +668,9 @@ def _run_chunked_prefill(
     valid_rows: if a list, gets one [sp, chunk_local] bool mask per forward, in forward order: which chip-local
     rows carry real tokens (the rest are padding, whose outputs are discarded).
     mla_kwargs: extra ttMLA arguments, e.g. expanded_k / tp_latent_prefetch.
+    forward_hook: called as forward_hook(forward, mla) with each iteration's forward (a no-argument function running
+                  it on that iteration's inputs) and the ttMLA, instead of running it once; returns the forward's
+                  output. E.g. to time variants of one forward.
     """
     assert reference in ("cpu", "trace", None), f"reference must be 'cpu'|'trace'|None, got {reference!r}"
     # Mutually exclusive like determinism_check vs pcc_validation in test_prefill_block: a reference
@@ -990,7 +994,9 @@ def _run_chunked_prefill(
                         tp_axis=tp_axis,
                         seed=1000 * u + i,
                     )
-                if profile:
+                if forward_hook is not None:
+                    tt_out = forward_hook(_forward, mla_tt)
+                elif profile:
                     with mla_tt.tt_ccl.tp_latent_prefetch_chain():
                         tt_out, fwd_ns = _rt_profile_forward_ns(mesh_device, _forward)
                     profiled_ns += fwd_ns

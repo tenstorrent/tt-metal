@@ -133,6 +133,11 @@ def pytest_configure(config):
         "uncollect_if(pred): deselect parametrized cases for which pred(**params) returns True. "
         "pred receives the test's collection-time param values as keyword args, plus is_ci_env / is_ci_v2_env.",
     )
+    config.addinivalue_line(
+        "markers",
+        "floater_tune: ring_joint SDPA floater schedule tuning (perf/test_tune_ring_joint_floaters.py); runs only "
+        "when selected with -m floater_tune.",
+    )
 
 
 def _test_defined_uncollection(items, is_ci_env, is_ci_v2_env):

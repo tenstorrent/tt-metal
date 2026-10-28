@@ -461,6 +461,9 @@ class ttMLA:
         )
         sdpa_fidelity = getattr(config, "mla_chunked_sdpa_matmul_fidelity", None)
         self.sdpa_matmul_fidelity = getattr(ttnn.MathFidelity, sdpa_fidelity) if sdpa_fidelity and is_chunked else None
+        # Expanded K's floater schedule (SDPAProgramConfig.floater_schedule): None takes the op's tuned one for the
+        # shape; a list replaces it, an empty one runs without floaters. For tuning.
+        self.sdpa_floater_schedule = None
         self.clamp_attention_to_valid_end = bool(getattr(config, "mla_chunked_clamp_attention_to_valid_end", False))
 
         # Create CCL object for semaphore management
@@ -1544,6 +1547,7 @@ class ttMLA:
             exp_approx_mode=False,
             k_splits=k_splits,
             matmul_math_fidelity=self.sdpa_matmul_fidelity,
+            floater_schedule=self.sdpa_floater_schedule,
         )
 
     def _expand_v(
