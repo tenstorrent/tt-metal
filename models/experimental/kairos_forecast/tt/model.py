@@ -9,13 +9,22 @@ masked pad rows up to 63, [REG] in row 64 with RoPE position N, as the reference
 the encoder and D_PAD (32: 2 tokens, pad) in the decoder, viewed as (B, S, 512) around attention.
 RoPE: the q/k projection rows of each head are permuted at load from pair order (2i, 2i+1) to half order
 (i, i + 32), so the rotation is q * cos + (q @ R) * sin with R the rotate-half matrix (QK^T is unchanged).
-q @ R is not a matmul: its signed-permuted rows are extra projection columns, folded at load (R1-1, rotated_rows).
+q @ R is not a matmul: its signed-permuted columns are extra projection columns, folded at load (R1-1, fold_stored).
 """
 from __future__ import annotations
 
 import torch
 
-from models.experimental.kairos_forecast.tt.common import D_PAD, NEG, S_PAD, TILE, Precision, upload, upload_linear, upload_norm
+from models.experimental.kairos_forecast.tt.common import (
+    D_PAD,
+    NEG,
+    S_PAD,
+    TILE,
+    Precision,
+    upload,
+    upload_linear,
+    upload_norm,
+)
 
 D, H, DK, LAYERS, N_TOK, N_SEG, N_Q, H_SEG = 512, 8, 64, 6, 64, 2, 9, 64
 K_EMB = 800  # 3 x 256 masked expert inputs + 3 coefficient columns (the expert biases), padded to tiles
@@ -27,11 +36,24 @@ def _half_rows(w):
     return w.view(H, DK, -1)[:, HALF].reshape(H * DK, -1)
 
 
-def rotated_rows(w):
-    """Half-order q/k weight (out, in) -> the weight of x @ R (R1-1): per head, row i = -row i + 32, row i + 32 =
-    row i. A signed permutation of whole 32-row halves, so bf16 and bfp8 (16-wide blocks) store it exactly."""
-    h = w.view(H, DK, -1)
-    return torch.cat([-h[:, DK // 2 :], h[:, : DK // 2]], 1).reshape(H * DK, -1)
+def rotate_cols(t):
+    """Stored (in, out) half-order q/k weight -> the weight of x @ R (R1-1): per head, col i = -col i + 32,
+    col i + 32 = col i. A signed permutation of whole 32-column halves."""
+    h = t.reshape(t.shape[0], H, DK)
+    return torch.cat([-h[..., DK // 2 :], h[..., : DK // 2]], -1).reshape(t.shape)
+
+
+def fold_stored(device, w, groups):
+    """w: a stored [g0 | g1 | ...] (in, 512 * n) weight -> the stored weight [f0(g0) | f1(g1) | ...], with f = "r"
+    rotate_cols, "=" the group as is. Built from the stored (already quantized) values and re-uploaded in the same
+    dtype, so the folded columns are bitwise the permuted and negated stored ones (device-side bfp8 conversion is not
+    sign-symmetric; values on the bfp8 grid re-convert exactly)."""
+    import ttnn
+
+    t = ttnn.to_torch(w).float().reshape(-1, w.shape[-1])
+    g = t.split(D, -1)
+    out = torch.cat([rotate_cols(g[i]) if f == "r" else g[i] for i, f in groups], -1)
+    return upload(device, out, dtype=w.dtype)
 
 
 def positions(n_tok, pad, reg_row=None):
@@ -73,23 +95,29 @@ class TtKairos:
         up = lambda t, dt=None: upload_linear(device, t, dt or wd())  # noqa: E731
         bias = lambda t: upload(device, t.reshape(1, -1))  # noqa: E731
         p = "input_patch_embedding"
-        self.emb_h = upload(device, pack_embedding_weight(W[f"{p}.hidden_layer.weight"], W[f"{p}.hidden_layer.bias"]),
-                            dtype=wd())
-        self.emb_r = upload(device, pack_embedding_weight(W[f"{p}.residual_layer.weight"],
-                                                          W[f"{p}.residual_layer.bias"]), dtype=wd())
+        self.emb_h = upload(
+            device, pack_embedding_weight(W[f"{p}.hidden_layer.weight"], W[f"{p}.hidden_layer.bias"]), dtype=wd()
+        )
+        self.emb_r = upload(
+            device, pack_embedding_weight(W[f"{p}.residual_layer.weight"], W[f"{p}.residual_layer.bias"]), dtype=wd()
+        )
         self.emb_o, self.emb_ob = up(W[f"{p}.output_layer.weight"]), bias(W[f"{p}.output_layer.bias"])
         self.enc = []
         for i in range(self.n_enc):
             a = f"encoder.block.{i}.layer.0.SelfAttention"
             f = f"encoder.block.{i}.layer.1"
             q, k, v = _half_rows(W[f"{a}.q.weight"]), _half_rows(W[f"{a}.k.weight"]), W[f"{a}.v.weight"]
-            self.enc.append({
-                "n1": upload_norm(device, W[f"encoder.block.{i}.layer.0.layer_norm.weight"]),
-                "qkv": up(torch.cat([q, k, v])), "qkvr": up(torch.cat([rotated_rows(q), rotated_rows(k), v])), "o": up(W[f"{a}.o.weight"], wd(keep_bf16=True)),
-                "n2": upload_norm(device, W[f"{f}.layer_norm.weight"]),
-                "wi": up(W[f"{f}.DenseReluDense.wi.weight"]),
-                "wo": up(W[f"{f}.DenseReluDense.wo.weight"], wd(keep_bf16=True)),
-            })
+            self.enc.append(
+                {
+                    "n1": upload_norm(device, W[f"encoder.block.{i}.layer.0.layer_norm.weight"]),
+                    "qkv": (qkv := up(torch.cat([q, k, v]))),
+                    "qkvr": fold_stored(device, qkv, ((0, "r"), (1, "r"), (2, "="))),
+                    "o": up(W[f"{a}.o.weight"], wd(keep_bf16=True)),
+                    "n2": upload_norm(device, W[f"{f}.layer_norm.weight"]),
+                    "wi": up(W[f"{f}.DenseReluDense.wi.weight"]),
+                    "wo": up(W[f"{f}.DenseReluDense.wo.weight"], wd(keep_bf16=True)),
+                }
+            )
         self.enc_norm = upload_norm(device, W["encoder.final_layer_norm.weight"])
         self.dec = []
         for i in range(self.n_dec):
@@ -97,24 +125,30 @@ class TtKairos:
             sa, ca = f"{s}.SelfAttention", f"{c}.EncDecAttention"
             q, k, v = _half_rows(W[f"{sa}.q.weight"]), _half_rows(W[f"{sa}.k.weight"]), W[f"{sa}.v.weight"]
             cq, ck = _half_rows(W[f"{ca}.q.weight"]), _half_rows(W[f"{ca}.k.weight"])
-            self.dec.append({
-                "n1": upload_norm(device, W[f"{s}.layer_norm.weight"]), "qkv": up(torch.cat([q, k, v])),
-                "qkvr": up(torch.cat([rotated_rows(q), rotated_rows(k), v])),
-                "o": up(W[f"{sa}.o.weight"], wd(keep_bf16=True)),
-                "n2": upload_norm(device, W[f"{c}.layer_norm.weight"]), "q": up(torch.cat([cq, rotated_rows(cq), cq])),
-                "kv": up(torch.cat([ck, W[f"{ca}.v.weight"], rotated_rows(ck)])), "co": up(W[f"{ca}.o.weight"], wd(keep_bf16=True)),
-                "n3": upload_norm(device, W[f"{f}.layer_norm.weight"]),
-                "wi": up(W[f"{f}.DenseReluDense.wi.weight"]),
-                "wo": up(W[f"{f}.DenseReluDense.wo.weight"], wd(keep_bf16=True)),
-            })
+            self.dec.append(
+                {
+                    "n1": upload_norm(device, W[f"{s}.layer_norm.weight"]),
+                    "qkv": (qkv := up(torch.cat([q, k, v]))),
+                    "qkvr": fold_stored(device, qkv, ((0, "r"), (1, "r"), (2, "="))),
+                    "o": up(W[f"{sa}.o.weight"], wd(keep_bf16=True)),
+                    "n2": upload_norm(device, W[f"{c}.layer_norm.weight"]),
+                    "q": fold_stored(device, up(cq), ((0, "="), (0, "r"), (0, "="))),
+                    "kv": fold_stored(device, up(torch.cat([ck, W[f"{ca}.v.weight"]])), ((0, "="), (1, "="), (0, "r"))),
+                    "co": up(W[f"{ca}.o.weight"], wd(keep_bf16=True)),
+                    "n3": upload_norm(device, W[f"{f}.layer_norm.weight"]),
+                    "wi": up(W[f"{f}.DenseReluDense.wi.weight"]),
+                    "wo": up(W[f"{f}.DenseReluDense.wo.weight"], wd(keep_bf16=True)),
+                }
+            )
         self.dec_norm = upload_norm(device, W["decoder.final_layer_norm.weight"])
         p = "output_patch_embedding"
         hd = ttnn.bfloat16  # the head stays bf16 weights in both precisions, fp32 out
         self.head_h, self.head_hb = up(W[f"{p}.hidden_layer.weight"], hd), bias(W[f"{p}.hidden_layer.bias"])
         self.head_o = up(W[f"{p}.output_layer.weight"], hd)
         self.head_r = up(W[f"{p}.residual_layer.weight"], hd)
-        self.head_b = upload(device, (W[f"{p}.output_layer.bias"] + W[f"{p}.residual_layer.bias"]).reshape(1, -1),
-                             dtype=ttnn.float32)
+        self.head_b = upload(
+            device, (W[f"{p}.output_layer.bias"] + W[f"{p}.residual_layer.bias"]).reshape(1, -1), dtype=ttnn.float32
+        )
         causal = torch.zeros(D_PAD, D_PAD)
         causal[:, N_SEG:] = NEG
         causal[torch.triu(torch.ones(N_SEG, N_SEG, dtype=torch.bool), 1).nonzero(as_tuple=True)] = NEG
@@ -127,13 +161,17 @@ class TtKairos:
         from models.experimental.kairos_forecast.reference.dataflow import rope_freqs
 
         enc = [rope_freqs(self.W, f"encoder.block.{i}.layer.0.SelfAttention", s_features) for i in range(self.n_enc)]
-        dec = [(rope_freqs(self.W, f"decoder.block.{i}.layer.0.SelfAttention", s_features),
-                rope_freqs(self.W, f"decoder.block.{i}.layer.1.EncDecAttention", s_features)) for i in range(self.n_dec)]
+        dec = [
+            (
+                rope_freqs(self.W, f"decoder.block.{i}.layer.0.SelfAttention", s_features),
+                rope_freqs(self.W, f"decoder.block.{i}.layer.1.EncDecAttention", s_features),
+            )
+            for i in range(self.n_dec)
+        ]
         return enc, dec
 
     def prepare(self, front):
         """Host tensors of one forward -> device inputs."""
-        import ttnn
 
         inp = self.build_inputs(front, lambda x, dt: upload(self.device, x, dtype=dt))
         inp.update(self._consts(inp["B"]))
@@ -143,9 +181,14 @@ class TtKairos:
         """The same inputs as host ttnn tensors (tile layout, not on device), for refreshing trace inputs."""
         import ttnn
 
-        return self.build_inputs(front, lambda x, dt: ttnn.from_torch(
-            x.to(torch.float32 if dt == ttnn.float32 else torch.bfloat16).contiguous(), dtype=dt,
-            layout=ttnn.TILE_LAYOUT))
+        return self.build_inputs(
+            front,
+            lambda x, dt: ttnn.from_torch(
+                x.to(torch.float32 if dt == ttnn.float32 else torch.bfloat16).contiguous(),
+                dtype=dt,
+                layout=ttnn.TILE_LAYOUT,
+            ),
+        )
 
     def build_inputs(self, front, leaf):
         """Per-forward inputs; leaf(torch tensor, ttnn dtype) makes each one (device upload or host tensor)."""
@@ -175,12 +218,18 @@ class TtKairos:
             "enc_mask": t(key_add[:, None, None, :].expand(B, 1, S_PAD, S_PAD), ttnn.float32),
             "cross_mask": t(key_add[:, None, None, :].expand(B, 1, D_PAD, S_PAD), ttnn.float32),
             "enc_rope": [tuple(map(t, rope_tables(f, pe))) for f in enc_f],
-            "dec_rope": [(tuple(map(t, rope_tables(fs, pd))), tuple(map(t, rope_tables(fc, pd))),
-                          tuple(map(t, rope_tables(fc, pe)))) for fs, fc in dec_f],
+            "dec_rope": [
+                (
+                    tuple(map(t, rope_tables(fs, pd))),
+                    tuple(map(t, rope_tables(fc, pd))),
+                    tuple(map(t, rope_tables(fc, pe))),
+                )
+                for fs, fc in dec_f
+            ],
         }
 
     def _consts(self, B):
-        import ttnn
+        pass
 
         if B not in self._const:
             reg = torch.zeros(B, TILE, D)
@@ -194,14 +243,22 @@ class TtKairos:
     def _lin(self, x, w, *, bias=None, act=None, fid=None, dtype=None):
         import ttnn
 
-        return ttnn.linear(x, w, bias=bias, activation=act, compute_kernel_config=self.p.mm(fid) if fid is None
-                           else fid, dtype=dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.linear(
+            x,
+            w,
+            bias=bias,
+            activation=act,
+            compute_kernel_config=self.p.mm(fid) if fid is None else fid,
+            dtype=dtype,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
     def _norm(self, x, w):
         import ttnn
 
-        return ttnn.rms_norm(x, epsilon=1e-6, weight=w, compute_kernel_config=self.p.hifi4(),
-                             memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return ttnn.rms_norm(
+            x, epsilon=1e-6, weight=w, compute_kernel_config=self.p.hifi4(), memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
 
     def _rope(self, x, xr, cs):
         """x * cos + (x @ R) * sin; x @ R comes from the folded weight columns (R1-1)."""
@@ -296,7 +353,7 @@ class TtKairos:
         return self._norm(h, self.enc_norm)
 
     def decode(self, enc, inp, mark=None):
-        import ttnn
+        pass
 
         mark = mark or (lambda _name: None)
         B = inp["B"]
@@ -312,8 +369,9 @@ class TtKairos:
 
         k = self.p.hifi4()
         hid = self._lin(h, self.head_h, bias=self.head_hb, act="relu", fid=k)
-        out = ttnn.add(self._lin(hid, self.head_o, fid=k, dtype=ttnn.float32),
-                       self._lin(h, self.head_r, fid=k, dtype=ttnn.float32))
+        out = ttnn.add(
+            self._lin(hid, self.head_o, fid=k, dtype=ttnn.float32), self._lin(h, self.head_r, fid=k, dtype=ttnn.float32)
+        )
         return ttnn.add(out, self.head_b)
 
     def forward_device(self, inp, mark=None):
