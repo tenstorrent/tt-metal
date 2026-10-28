@@ -526,31 +526,33 @@ TABLE = {
     ),
     # ---- engram host path (2x2 session, bringup/ENGRAM_HOST_PATH.md; ENGRAM_TABLE / _GATHER_THREADS: rows bit-identical)
     "ENGRAM_TABLE": Setting(
-        "mmap",
+        "random",
         ("mmap", "random", "resident"),
         "where tt/engram.py reads the engram tables (layers 1, 14; 94.5 GiB each, 8-bit). mmap = the checkpoint "
         "mapping with the kernel's read-ahead (each random 256-byte row faults in up to read_ahead_kb); random = the "
         "same mapping with MADV_RANDOM over the table's bytes; resident = the 8-bit bytes copied into anonymous memory "
         "(huge pages) once at build (~189 GiB of host RAM for both layers). QB 2x2 host (503 GB RAM, 990 EVO Plus "
         "NVMe, read_ahead_kb 128, 32 CPUs), layer 1, 5120 tokens, gather a layer a chunk: cold mmap 7.2 s, cold "
-        "random 0.42 s (8 threads), resident 9-15 ms; load of one layer resident 109 s",
+        "random 0.42 s (8 threads), resident 9-15 ms; load of one layer resident 109 s. Default random (owner 2026-10-28)",
     ),
     "ENGRAM_ROWS": Setting(
-        "bf16",
+        "bfp8",
         ("bf16", "bfp8"),
         "the engram rows' format from the host to engram_kv's matmul. bf16 = exact (e4m3 x 2^k; the host converts "
         "8-bit -> fp32 -> bf16, 2 B a value); bfp8 = bfloat8_b packed from the table's bytes by integer operations "
         "only (tt/engram_bfp8.py, byte-equal to ttnn's packer; 1.0625 B a value), wrapped per mesh row without a "
         "float conversion and read by the matmul as sent. bfp8 is lossy: on 1M table rows a layer it changes 10 % "
         "of the values (1 % to 0), rel 3.5e-3, and the wkv output by rel 3.5e-3, where DeepSeek's own fp8 re-quant "
-        "of the rows changes none (today's device engram_kv: rel 4.1e-3 from the bfp8 weights)",
+        "of the rows changes none (today's device engram_kv: rel 4.1e-3 from the bfp8 weights); 2x2 ladder bf16 vs bfp8: "
+        "every metric within 1.3 %. Host 8 ms pack + 7 ms tiling vs bf16's ~40 ms. Default bfp8 (owner 2026-10-28; "
+        "the Galaxy 40-layer ladder + K.1 is the confirmation)",
     ),
     "ENGRAM_GATHER_THREADS": Setting(
-        1,
+        8,
         None,
         "Python threads the engram row gather is split over (torch indexing releases the GIL). QB: cold random 1 / 8 "
         "/ 32 threads 1265 / 424 / 484 ms; mmap hot 1 / 8 threads 10 / 19 ms; resident 1 / 8 threads 11-15 / 9-13 ms "
-        "(torch intra-op 16 / 8 threads). 1 = today's single gather",
+        "(torch intra-op 16 / 8 threads). Default 8: the cold gather (owner 2026-10-28); also the bfp8 pack's threads",
     ),
 }
 

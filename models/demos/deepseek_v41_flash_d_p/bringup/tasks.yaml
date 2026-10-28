@@ -1114,7 +1114,7 @@ tasks:
   - PL.1
   - G.s4096
   gate:
-    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_engram_rows.py
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_swa_engram_engram_rows.py && scripts/run_safe_pytest.sh --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_engram_bfp8.py
     metrics:
       err_engram_rows_L01: <= limit
   device: true
@@ -3524,7 +3524,7 @@ tasks:
   - G.s4096
   - R.5
   gate:
-    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_engram_rows.py
+    cmd: scripts/run_safe_pytest.sh --run-all models/demos/deepseek_v41_flash_d_p/tests/bringup/test_c_enc_source_engram_engram_rows.py && scripts/run_safe_pytest.sh --no-precompile models/demos/deepseek_v41_flash_d_p/tests/test_engram_bfp8.py
     metrics:
       err_engram_rows_L14: <= limit
   device: true
