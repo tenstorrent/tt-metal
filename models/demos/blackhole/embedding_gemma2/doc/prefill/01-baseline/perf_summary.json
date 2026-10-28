@@ -1,0 +1,651 @@
+{
+ "stage": "01-baseline",
+ "commit": "7ef04f02da (harness; measured on its working tree before black reformatting and the 300 s timeout mark, re-checked on the commit: run 20261028-081422)",
+ "hardware": {
+  "part": "Blackhole P150a (1 chip, grid 13x10)",
+  "power_limit_w": 150,
+  "tdc_limit_a": 200,
+  "aiclk_max_mhz": 1350,
+  "firmware": "fw bundle 19.8.0.0, TT-KMD 2.11.0",
+  "pcie_link": "x16, 32.0 GT/s",
+  "clock_mhz_sustained": 1350.0
+ },
+ "metric": "latency_ms per traced warmed forward (headline: sustained median)",
+ "shapes": {
+  "b1_s128_masked": {
+   "burst_ms": {
+    "avg": 4.813765427097678,
+    "best": 4.813021211884916,
+    "median": 4.813425685279071,
+    "n": 100,
+    "windows": 5
+   },
+   "sustained_ms": {
+    "median": 4.809432562279444,
+    "n": 6240,
+    "windows": 20,
+    "window_replays": 104,
+    "duration_s": 30.01120197819546,
+    "first_window": 4.810019682806272,
+    "mean_all": 4.809487496505683
+   },
+   "sustained_telemetry": {
+    "aiclk_mhz": 1350.0,
+    "power_w": 77.0,
+    "current_a": 96.0,
+    "vcore_v": 0.809,
+    "asic_temp_c": 67.26,
+    "aiclk_min_mhz": 1350.0,
+    "power_max_w": 81.0
+   },
+   "sustained_over_burst": 0.9991704197258431,
+   "latency_ms_headline": 4.809432562279444,
+   "tokens_per_s_per_chip": 26614.366319201294,
+   "device_ms": 4.453977999999994,
+   "floor_ms": 0.31897815099715193,
+   "ops": 645,
+   "eager_op_to_op_gap_ms": 12.99469399999999,
+   "pcc": 0.991699301464447,
+   "embedding_cosine": 0.997473418712616,
+   "replay_vs_eager_bitwise": true,
+   "gate": "pass",
+   "logical_len": 96,
+   "gate_with_trace_alloc_tracking": "pass",
+   "host_ms": {
+    "host_prep": 0.08659528102725744,
+    "h2d": 0.019741058349609375,
+    "d2h_embedding": 0.04372808616608381,
+    "d2h_last_hidden": 0.09324883576482534,
+    "round_trip": 4.934727912768722,
+    "replay_sync": 4.854578524827957,
+    "h2d_bytes": 8704,
+    "d2h_last_hidden_bytes": 196608
+   },
+   "reconciliation_burst": {
+    "wall_ms": 4.813425685279071,
+    "device_kernel_ms": 4.453977999999994,
+    "residual_ms": 0.35944768527907733,
+    "residual_share": 0.07467606415496937
+   }
+  },
+  "b1_s256_masked": {
+   "burst_ms": {
+    "avg": 5.474192532710731,
+    "best": 5.473741400055587,
+    "median": 5.474043940193951,
+    "n": 100,
+    "windows": 5
+   },
+   "sustained_ms": {
+    "median": 5.469913333755635,
+    "n": 5520,
+    "windows": 20,
+    "window_replays": 92,
+    "duration_s": 30.1947006508708,
+    "first_window": 5.470976213236218,
+    "mean_all": 5.470054465737464
+   },
+   "sustained_telemetry": {
+    "aiclk_mhz": 1350.0,
+    "power_w": 86.0,
+    "current_a": 107.0,
+    "vcore_v": 0.808,
+    "asic_temp_c": 68.542,
+    "aiclk_min_mhz": 1350.0,
+    "power_max_w": 92.0
+   },
+   "sustained_over_burst": 0.9992454195685229,
+   "latency_ms_headline": 5.469913333755635,
+   "tokens_per_s_per_chip": 46801.47278023339,
+   "device_ms": 5.119799999999999,
+   "floor_ms": 0.361830188034187,
+   "ops": 645,
+   "eager_op_to_op_gap_ms": 10.744378000000008,
+   "pcc": 0.9887199675014633,
+   "embedding_cosine": 0.9976313710212708,
+   "replay_vs_eager_bitwise": true,
+   "gate": "fail",
+   "logical_len": 192,
+   "gate_with_trace_alloc_tracking": "fail",
+   "host_ms": {
+    "host_prep": 0.07773230317980051,
+    "h2d": 0.016800081357359886,
+    "d2h_embedding": 0.037549110129475594,
+    "d2h_last_hidden": 0.1233838964253664,
+    "round_trip": 5.596039001829922,
+    "replay_sync": 5.512860277667642,
+    "h2d_bytes": 17408,
+    "d2h_last_hidden_bytes": 393216
+   },
+   "reconciliation_burst": {
+    "wall_ms": 5.474043940193951,
+    "device_kernel_ms": 5.119799999999999,
+    "residual_ms": 0.35424394019395233,
+    "residual_share": 0.06471338996621227
+   }
+  },
+  "b1_s512_masked": {
+   "burst_ms": {
+    "avg": 6.833832520060241,
+    "best": 6.833138945512474,
+    "median": 6.833907891996205,
+    "n": 100,
+    "windows": 5
+   },
+   "sustained_ms": {
+    "median": 6.829185921044366,
+    "n": 4440,
+    "windows": 19,
+    "window_replays": 74,
+    "duration_s": 30.322300795000046,
+    "first_window": 6.830408445534271,
+    "mean_all": 6.829347025900911
+   },
+   "sustained_telemetry": {
+    "aiclk_mhz": 1350.0,
+    "power_w": 96.0,
+    "current_a": 120.0,
+    "vcore_v": 0.805,
+    "asic_temp_c": 70.721,
+    "aiclk_min_mhz": 1343.0,
+    "power_max_w": 115.0
+   },
+   "sustained_over_burst": 0.999309037958008,
+   "latency_ms_headline": 6.829185921044366,
+   "tokens_per_s_per_chip": 74972.33285482165,
+   "device_ms": 6.518934999999992,
+   "floor_ms": 0.558431185185185,
+   "ops": 645,
+   "eager_op_to_op_gap_ms": 9.50842500000001,
+   "pcc": 0.9936601558910193,
+   "embedding_cosine": 0.9988232254981995,
+   "replay_vs_eager_bitwise": true,
+   "gate": "pass",
+   "logical_len": 384,
+   "gate_with_trace_alloc_tracking": "pass",
+   "host_ms": {
+    "host_prep": 0.09805827867239714,
+    "h2d": 0.021181139163672924,
+    "d2h_embedding": 0.03645862452685833,
+    "d2h_last_hidden": 0.6829267367720604,
+    "round_trip": 6.967537058517337,
+    "replay_sync": 6.872829259373248,
+    "h2d_bytes": 34816,
+    "d2h_last_hidden_bytes": 786432
+   },
+   "reconciliation_burst": {
+    "wall_ms": 6.833907891996205,
+    "device_kernel_ms": 6.518934999999992,
+    "residual_ms": 0.3149728919962129,
+    "residual_share": 0.04608971864620909
+   }
+  },
+  "b1_s1024_masked": {
+   "burst_ms": {
+    "avg": 10.758357264689709,
+    "best": 10.75793530693964,
+    "median": 10.758238525963144,
+    "n": 95,
+    "windows": 5
+   },
+   "sustained_ms": {
+    "median": 10.753819401910965,
+    "n": 2820,
+    "windows": 19,
+    "window_replays": 47,
+    "duration_s": 30.326593678910285,
+    "first_window": 10.755711482798166,
+    "mean_all": 10.754111233656129
+   },
+   "sustained_telemetry": {
+    "aiclk_mhz": 1350.0,
+    "power_w": 105.0,
+    "current_a": 132.0,
+    "vcore_v": 0.802,
+    "asic_temp_c": 72.643,
+    "aiclk_min_mhz": 1343.0,
+    "power_max_w": 123.0
+   },
+   "sustained_over_burst": 0.9995892334937998,
+   "latency_ms_headline": 10.753819401910965,
+   "tokens_per_s_per_chip": 95221.9822306142,
+   "device_ms": 10.535518000000009,
+   "floor_ms": 1.3798306039886006,
+   "ops": 646,
+   "eager_op_to_op_gap_ms": 5.529737,
+   "pcc": 0.992332671185502,
+   "embedding_cosine": 0.9991075992584229,
+   "replay_vs_eager_bitwise": true,
+   "gate": "pass",
+   "logical_len": 768,
+   "gate_with_trace_alloc_tracking": "pass",
+   "host_ms": {
+    "host_prep": 0.13360350858420134,
+    "h2d": 0.024675671011209488,
+    "d2h_embedding": 0.03606260288506746,
+    "d2h_last_hidden": 0.35456763580441475,
+    "round_trip": 10.876689455471933,
+    "replay_sync": 10.79473071731627,
+    "h2d_bytes": 69632,
+    "d2h_last_hidden_bytes": 1572864
+   },
+   "reconciliation_burst": {
+    "wall_ms": 10.758238525963144,
+    "device_kernel_ms": 10.535518000000009,
+    "residual_ms": 0.22272052596313507,
+    "residual_share": 0.02070232272928674
+   }
+  },
+  "b1_s2048_masked": {
+   "burst_ms": {
+    "avg": 20.06643805652857,
+    "best": 20.061287004500628,
+    "median": 20.065692998468876,
+    "n": 50,
+    "windows": 5
+   },
+   "sustained_ms": {
+    "median": 20.0653013586998,
+    "n": 1500,
+    "windows": 19,
+    "window_replays": 25,
+    "duration_s": 30.098827994894236,
+    "first_window": 20.059206429868937,
+    "mean_all": 20.06588532992949
+   },
+   "sustained_telemetry": {
+    "aiclk_mhz": 1350.0,
+    "power_w": 127.0,
+    "current_a": 160.0,
+    "vcore_v": 0.796,
+    "asic_temp_c": 76.104,
+    "aiclk_min_mhz": 1343.0,
+    "power_max_w": 157.0
+   },
+   "sustained_over_burst": 0.999980482120946,
+   "latency_ms_headline": 20.0653013586998,
+   "tokens_per_s_per_chip": 102066.74514320413,
+   "device_ms": 19.827259000000016,
+   "floor_ms": 2.9912827521367342,
+   "ops": 646,
+   "eager_op_to_op_gap_ms": 0.4572790000000001,
+   "pcc": 0.9932106573144788,
+   "embedding_cosine": 0.9992718696594238,
+   "replay_vs_eager_bitwise": true,
+   "gate": "pass",
+   "logical_len": 1536,
+   "gate_with_trace_alloc_tracking": "pass",
+   "host_ms": {
+    "host_prep": 0.17845560796558857,
+    "h2d": 0.0268296105787158,
+    "d2h_embedding": 0.03676468040794134,
+    "d2h_last_hidden": 0.7920491509139538,
+    "round_trip": 20.214737905189395,
+    "replay_sync": 20.105715934187174,
+    "h2d_bytes": 139264,
+    "d2h_last_hidden_bytes": 3145728
+   },
+   "reconciliation_burst": {
+    "wall_ms": 20.065692998468876,
+    "device_kernel_ms": 19.827259000000016,
+    "residual_ms": 0.23843399846886015,
+    "residual_share": 0.011882669513933757
+   }
+  },
+  "b1_s4096_masked": {
+   "burst_ms": {
+    "avg": 34.04726431084176,
+    "best": 34.03842899327477,
+    "median": 34.047793985034026,
+    "n": 30,
+    "windows": 5
+   },
+   "sustained_ms": {
+    "median": 34.38929840922356,
+    "n": 885,
+    "windows": 19,
+    "window_replays": 15,
+    "duration_s": 30.313248628750443,
+    "first_window": 34.03662300358216,
+    "mean_all": 34.25225833757112
+   },
+   "sustained_telemetry": {
+    "aiclk_mhz": 1337.0,
+    "power_w": 135.0,
+    "current_a": 172.0,
+    "vcore_v": 0.793,
+    "asic_temp_c": 75.72,
+    "aiclk_min_mhz": 1325.0,
+    "power_max_w": 175.0
+   },
+   "sustained_over_burst": 1.0100301483361782,
+   "latency_ms_headline": 34.38929840922356,
+   "tokens_per_s_per_chip": 119106.82071087009,
+   "device_ms": 33.569761,
+   "floor_ms": 8.751929635327619,
+   "ops": 646,
+   "eager_op_to_op_gap_ms": 0.6164750000000004,
+   "pcc": 0.9938661047153732,
+   "embedding_cosine": 0.9994725584983826,
+   "replay_vs_eager_bitwise": true,
+   "gate": "pass",
+   "logical_len": 3072,
+   "gate_with_trace_alloc_tracking": "pass",
+   "host_ms": {
+    "host_prep": 0.28215597849339247,
+    "h2d": 0.036394642665982246,
+    "d2h_embedding": 0.035741180181503296,
+    "d2h_last_hidden": 1.7061431892216206,
+    "round_trip": 34.199906187132,
+    "replay_sync": 34.137848555110395,
+    "h2d_bytes": 278528,
+    "d2h_last_hidden_bytes": 6291456
+   },
+   "reconciliation_burst": {
+    "wall_ms": 34.047793985034026,
+    "device_kernel_ms": 33.569761,
+    "residual_ms": 0.4780329850340266,
+    "residual_share": 0.014040057492246039
+   }
+  },
+  "b1_s8192_masked": {
+   "burst_ms": {
+    "avg": 92.97733263423045,
+    "best": 92.91846693182985,
+    "median": 92.97035401687026,
+    "n": 15,
+    "windows": 5
+   },
+   "sustained_ms": {
+    "median": 93.56795406589906,
+    "n": 324,
+    "windows": 17,
+    "window_replays": 6,
+    "duration_s": 30.25797628518194,
+    "first_window": 92.9559947301944,
+    "mean_all": 93.38881569500599
+   },
+   "sustained_telemetry": {
+    "aiclk_mhz": 1337.0,
+    "power_w": 131.0,
+    "current_a": 165.0,
+    "vcore_v": 0.796,
+    "asic_temp_c": 73.028,
+    "aiclk_min_mhz": 1337.0,
+    "power_max_w": 195.0
+   },
+   "sustained_over_burst": 1.0064278560122548,
+   "latency_ms_headline": 93.56795406589906,
+   "tokens_per_s_per_chip": 87551.34257002616,
+   "device_ms": 92.33340400000013,
+   "floor_ms": 35.80698103133904,
+   "ops": 646,
+   "eager_op_to_op_gap_ms": 0.6024460000000007,
+   "pcc": 0.9944582199563453,
+   "embedding_cosine": 0.9995371103286743,
+   "replay_vs_eager_bitwise": true,
+   "gate": "pass",
+   "logical_len": 6144,
+   "gate_with_trace_alloc_tracking": "pass",
+   "host_ms": {
+    "host_prep": 0.5280942190438509,
+    "h2d": 0.04586861468851566,
+    "d2h_embedding": 0.03625168465077877,
+    "d2h_last_hidden": 3.7036201683804393,
+    "round_trip": 93.47687938716263,
+    "replay_sync": 93.04685003589839,
+    "h2d_bytes": 557056,
+    "d2h_last_hidden_bytes": 12582912
+   },
+   "reconciliation_burst": {
+    "wall_ms": 92.97035401687026,
+    "device_kernel_ms": 92.33340400000013,
+    "residual_ms": 0.6369500168701308,
+    "residual_share": 0.006851108868043579
+   }
+  },
+  "b1_s16384_masked": {
+   "burst_ms": {
+    "avg": 223.34876488894224,
+    "best": 223.2459606602788,
+    "median": 223.3740941931804,
+    "n": 15,
+    "windows": 5
+   },
+   "sustained_ms": {
+    "median": 226.6532724412779,
+    "n": 300,
+    "windows": 33,
+    "window_replays": 3,
+    "duration_s": 67.90230344375595,
+    "first_window": 223.37526874616742,
+    "mean_all": 226.3410114791865
+   },
+   "sustained_telemetry": {
+    "aiclk_mhz": 1325.0,
+    "power_w": 131.0,
+    "current_a": 166.0,
+    "vcore_v": 0.788,
+    "asic_temp_c": 72.643,
+    "aiclk_min_mhz": 1312.0,
+    "power_max_w": 218.0
+   },
+   "sustained_over_burst": 1.0146802083739466,
+   "latency_ms_headline": 226.6532724412779,
+   "tokens_per_s_per_chip": 72286.62451474123,
+   "device_ms": 222.1010579999999,
+   "floor_ms": 86.96686615954435,
+   "ops": 646,
+   "eager_op_to_op_gap_ms": 0.6085110000000007,
+   "pcc": 0.9949623674572118,
+   "embedding_cosine": 0.9995279312133789,
+   "replay_vs_eager_bitwise": true,
+   "gate": "pass",
+   "logical_len": 12288,
+   "gate_with_trace_alloc_tracking": "pass",
+   "host_ms": {
+    "host_prep": 0.879014004021883,
+    "h2d": 0.06255272310227156,
+    "d2h_embedding": 0.03816366661339998,
+    "d2h_last_hidden": 11.39577864004033,
+    "round_trip": 224.29094430325287,
+    "replay_sync": 224.39433996831733,
+    "h2d_bytes": 1114112,
+    "d2h_last_hidden_bytes": 25165824
+   },
+   "reconciliation_burst": {
+    "wall_ms": 223.3740941931804,
+    "device_kernel_ms": 222.1010579999999,
+    "residual_ms": 1.273036193180502,
+    "residual_share": 0.005699121904796818
+   }
+  },
+  "b1_s32768_masked": {
+   "burst_ms": {
+    "avg": 639.5275188920399,
+    "best": 638.9801419960955,
+    "median": 639.6004895990094,
+    "n": 15,
+    "windows": 5
+   },
+   "sustained_ms": {
+    "median": 651.7462711781263,
+    "n": 300,
+    "windows": 99,
+    "window_replays": 1,
+    "duration_s": 195.5260174931027,
+    "first_window": 637.2090270742774,
+    "mean_all": 651.7533916436756
+   },
+   "sustained_telemetry": {
+    "aiclk_mhz": 1312.0,
+    "power_w": 130.0,
+    "current_a": 166.0,
+    "vcore_v": 0.785,
+    "asic_temp_c": 73.925,
+    "aiclk_min_mhz": 1293.0,
+    "power_max_w": 238.0
+   },
+   "sustained_over_burst": 1.018989637713898,
+   "latency_ms_headline": 651.7462711781263,
+   "tokens_per_s_per_chip": 50277.23433041982,
+   "device_ms": 636.3566549999999,
+   "floor_ms": 236.1716185697995,
+   "ops": 646,
+   "eager_op_to_op_gap_ms": 0.5708020000000006,
+   "pcc": 0.9945306501634202,
+   "embedding_cosine": 0.999448299407959,
+   "replay_vs_eager_bitwise": true,
+   "gate": "pass",
+   "logical_len": 24576,
+   "gate_with_trace_alloc_tracking": "pass",
+   "host_ms": {
+    "host_prep": 1.7272498225793242,
+    "h2d": 0.09789837058633566,
+    "d2h_embedding": 0.042584072798490524,
+    "d2h_last_hidden": 51.85487251728773,
+    "round_trip": 641.8324902653694,
+    "replay_sync": 643.3294739574194,
+    "h2d_bytes": 2228224,
+    "d2h_last_hidden_bytes": 50331648
+   },
+   "reconciliation_burst": {
+    "wall_ms": 639.6004895990094,
+    "device_kernel_ms": 636.3566549999999,
+    "residual_ms": 3.2438345990094604,
+    "residual_share": 0.005071657467059082
+   }
+  },
+  "b1_s65536_masked": {
+   "burst_ms": {
+    "avg": 2048.8295848481357,
+    "best": 2041.6188683981698,
+    "median": 2049.7623013022044,
+    "n": 15,
+    "windows": 5
+   },
+   "sustained_ms": {
+    "median": 2079.6771948225796,
+    "n": 300,
+    "windows": 99,
+    "window_replays": 1,
+    "duration_s": 623.6101677529514,
+    "first_window": 2046.885258052498,
+    "mean_all": 2078.7005591765046
+   },
+   "sustained_telemetry": {
+    "aiclk_mhz": 1306.0,
+    "power_w": 138.0,
+    "current_a": 176.0,
+    "vcore_v": 0.782,
+    "asic_temp_c": 75.463,
+    "aiclk_min_mhz": 1268.0,
+    "power_max_w": 233.0
+   },
+   "sustained_over_burst": 1.0145943232058519,
+   "latency_ms_headline": 2079.6771948225796,
+   "tokens_per_s_per_chip": 31512.582896592743,
+   "device_ms": 2013.639610999999,
+   "floor_ms": 722.1154681424472,
+   "ops": 646,
+   "eager_op_to_op_gap_ms": 0.5603540000000004,
+   "pcc": 0.994202477366153,
+   "embedding_cosine": 0.9993748664855957,
+   "replay_vs_eager_bitwise": true,
+   "gate": "pass",
+   "logical_len": 49152,
+   "gate_with_trace_alloc_tracking": "pass",
+   "host_ms": {
+    "host_prep": 3.4781714202836156,
+    "h2d": 0.1819816417992115,
+    "d2h_embedding": 0.043059210292994976,
+    "d2h_last_hidden": 100.4029511474073,
+    "round_trip": 2074.3493425659835,
+    "replay_sync": 2078.049104940146,
+    "h2d_bytes": 4456448,
+    "d2h_last_hidden_bytes": 100663296
+   },
+   "reconciliation_burst": {
+    "wall_ms": 2049.7623013022044,
+    "device_kernel_ms": 2013.639610999999,
+    "residual_ms": 36.122690302205456,
+    "residual_share": 0.01762286791949334
+   }
+  }
+ },
+ "host": {
+  "round_trip_ms": {
+   "b1_s128": 4.934727912768722,
+   "b1_s256": 5.596039001829922,
+   "b1_s512": 6.967537058517337,
+   "b1_s1024": 10.876689455471933,
+   "b1_s2048": 20.214737905189395,
+   "b1_s4096": 34.199906187132,
+   "b1_s8192": 93.47687938716263,
+   "b1_s16384": 224.29094430325287,
+   "b1_s32768": 641.8324902653694,
+   "b1_s65536": 2074.3493425659835
+  },
+  "h2d_ms": {
+   "b1_s128": 0.019741058349609375,
+   "b1_s256": 0.016800081357359886,
+   "b1_s512": 0.021181139163672924,
+   "b1_s1024": 0.024675671011209488,
+   "b1_s2048": 0.0268296105787158,
+   "b1_s4096": 0.036394642665982246,
+   "b1_s8192": 0.04586861468851566,
+   "b1_s16384": 0.06255272310227156,
+   "b1_s32768": 0.09789837058633566,
+   "b1_s65536": 0.1819816417992115
+  },
+  "d2h_ms": {
+   "b1_s128": 0.04372808616608381,
+   "b1_s256": 0.037549110129475594,
+   "b1_s512": 0.03645862452685833,
+   "b1_s1024": 0.03606260288506746,
+   "b1_s2048": 0.03676468040794134,
+   "b1_s4096": 0.035741180181503296,
+   "b1_s8192": 0.03625168465077877,
+   "b1_s16384": 0.03816366661339998,
+   "b1_s32768": 0.042584072798490524,
+   "b1_s65536": 0.043059210292994976
+  },
+  "d2h_last_hidden_ms": {
+   "b1_s128": 0.09324883576482534,
+   "b1_s256": 0.1233838964253664,
+   "b1_s512": 0.6829267367720604,
+   "b1_s1024": 0.35456763580441475,
+   "b1_s2048": 0.7920491509139538,
+   "b1_s4096": 1.7061431892216206,
+   "b1_s8192": 3.7036201683804393,
+   "b1_s16384": 11.39577864004033,
+   "b1_s32768": 51.85487251728773,
+   "b1_s65536": 100.4029511474073
+  },
+  "host_prep_ms": {
+   "b1_s128": 0.08659528102725744,
+   "b1_s256": 0.07773230317980051,
+   "b1_s512": 0.09805827867239714,
+   "b1_s1024": 0.13360350858420134,
+   "b1_s2048": 0.17845560796558857,
+   "b1_s4096": 0.28215597849339247,
+   "b1_s8192": 0.5280942190438509,
+   "b1_s16384": 0.879014004021883,
+   "b1_s32768": 1.7272498225793242,
+   "b1_s65536": 3.4781714202836156
+  }
+ },
+ "named_limitations": [
+  "b1_s256 (masked, logical 192) fails the last-hidden PCC gate under the selected text precision p3_qkv_gu: 0.98872 < 0.99 (embedding cosine 0.99763 passes); the E5a baseline precision gives 0.99692 on the same input. Gate not met; decision with the orchestrator (no gate change here).",
+  "Profiles are of one warmed eager forward per bucket; traced op-to-op gaps are not profiled (skill rule), so the traced dispatch residual is wall - device kernel sum.",
+  "The roofline floor is a model (full 130-core grid, padded tensors read and written once, 512 GB/s DRAM, 64 B/cycle/core for L1 operands); eltwise / norm math is not modelled.",
+  "Sustained = max(30 s, 300 replays); at 65536 that is about 10 minutes, a single run per bucket (no repeat run).",
+  "One card (P150a, default 150 W TDP limit); other power limits, firmware or cards not measured.",
+  "No unmasked path: none exists with a caller contract."
+ ],
+ "sources": {
+  "timing": "/local/ttuser/gtobar/tt-ops/runs/embeddinggemma-2/e9/01-baseline/run/prefill.jsonl",
+  "gate": "/local/ttuser/gtobar/tt-ops/runs/embeddinggemma-2/e9/01-baseline/run_gate/prefill.jsonl",
+  "tables": "/local/ttuser/gtobar/tt-ops/runs/embeddinggemma-2/e9/01-baseline/analysis/tables"
+ }
+}

@@ -1,0 +1,69 @@
+{
+  "model": "google/embeddinggemma-2 text encoder (24-layer Gemma text stack with per-layer inputs, sliding + full attention, mean pool + L2 normalize); HF snapshot 914f7f89142e33e77833254d9c9b90c3cef7303b",
+  "workload": "text-encoder prefill, one forward per request; vision and audio towers out of scope",
+  "checkout": {
+    "repo": "/local/ttuser/gtobar/tt-metal",
+    "branch": "gtobarTT/embedding_gemma2_bringup",
+    "commit": "4624946b1b67f3beb008d02037803a50446857b1",
+    "commit_note": "stage-1 base commit; harness commit 7ef04f02da (tests/perf/prefill*.py, no model code change); baseline docs commit logged in doc/prefill/01-baseline/work_log.md",
+    "model_dir": "models/demos/blackhole/embedding_gemma2",
+    "precision_config": "doc/datatype_sweep/selected_precision_config.json (text p3_qkv_gu)"
+  },
+  "hardware": {
+    "part": "Blackhole P150a (tt-smi board_type p150a, board_id 0000040331911033, bus 0000:01:00.0)",
+    "compute_grid": [13, 10],
+    "chips_used": 1,
+    "power_limit_w": 150,
+    "power_limits_detail": "TDP limit 150 W (tt-smi limits.tdp_limit, TDP_LIMIT_MAX 0x96; hwmon power1_max 150000000 uW), TDC limit 200 A (curr1_max), board power limit 300 W (BOARD_POWER_LIMIT 0x12c), AICLK max 1350 MHz (AICLK_LIMIT_MAX 0x546). Default limits, not changed; optimize at these.",
+    "firmware": "fw bundle 19.8.0.0 (CM fw 0.30.0.0, DM app 0.24.0.0, ETH 1.10.1, GDDR 2.14); TT-KMD 2.11.0",
+    "pcie_link_width": "x16",
+    "pcie_link_speed": "32.0 GT/s (Gen5)",
+    "dram": "GDDR6 16 GT/s (DDR_SPEED 0x3e80), 8 banks",
+    "host": "sjc-snva-tp100, Ubuntu 22.04.5, kernel 6.8.0-138, 24 cores, 61 GB RAM",
+    "evidence": "tt-ops/runs/embeddinggemma-2/e9/01-baseline/logs/tt_smi_snapshot_pre.json; sysfs /sys/class/tenstorrent/tenstorrent!0 and hwmon (tests/perf/prefill_telemetry.py identity())"
+  },
+  "shapes": [
+    {"batch": 1, "seq": 128, "logical_len": 96, "paths": ["masked"]},
+    {"batch": 1, "seq": 256, "logical_len": 192, "paths": ["masked"]},
+    {"batch": 1, "seq": 512, "logical_len": 384, "paths": ["masked"]},
+    {"batch": 1, "seq": 1024, "logical_len": 768, "paths": ["masked"]},
+    {"batch": 1, "seq": 2048, "logical_len": 1536, "paths": ["masked"]},
+    {"batch": 1, "seq": 4096, "logical_len": 3072, "paths": ["masked"]},
+    {"batch": 1, "seq": 8192, "logical_len": 6144, "paths": ["masked"]},
+    {"batch": 1, "seq": 16384, "logical_len": 12288, "paths": ["masked"]},
+    {"batch": 1, "seq": 32768, "logical_len": 24576, "paths": ["masked"]},
+    {"batch": 1, "seq": 65536, "logical_len": 49152, "paths": ["masked"]}
+  ],
+  "shapes_note": "seq is the physical bucket (tt/config.py SEQ_BUCKETS); 65536 is the max-cap bucket (doc/context_contract.json supported_max_seq_len). masked = a real input (tests/common.make_batch corpus, offset 0) of logical_len = 3/4 of the bucket, right-padded into the bucket, so 1/4 of the keys are padding (dense additive masks; device work does not depend on logical_len). No unmasked path exists: there is no no-mask path with an explicit caller contract.",
+  "metric": {
+    "kind": "latency_ms",
+    "definition": "ms per traced warmed forward: execute_trace replays on resident inputs, one trace per bucket (TextEncoder.capture_all), timed per window with one sync per window (tests/perf/prefill.py)",
+    "targets": {},
+    "target_rule": "no absolute targets supplied; the metric is improvement vs the stage-1 sustained baseline in doc/prefill/01-baseline/perf_summary.json",
+    "reference": {
+      "device": "none supplied (no reference-GPU numbers; none are invented)",
+      "settings": "accuracy reference only: HF transformers EmbeddingGemma2TextModel, fp32, CPU, sdpa attention, unpadded [1, logical_len] input (tests/perf/prefill_refs.py)",
+      "numbers": {}
+    }
+  },
+  "accuracy": {
+    "pcc_gate_default": 0.99,
+    "pcc_gate_metric": "last-hidden PCC over the logical_len valid rows of the traced replay output vs HF fp32 (hard)",
+    "embedding_cosine_gate": 0.99,
+    "embedding_cosine_metric": "pooled + normalized embedding cosine of the traced replay output vs HF fp32",
+    "pcc_gate_overrides": {},
+    "open_decisions": {
+      "b1_s256": "measured stage-1 gate failure, no override applied: last-hidden PCC 0.98872 < 0.99 (embedding cosine 0.99763) with the selected text precision p3_qkv_gu on the contract input (logical 192, corpus offset 0); the E5a baseline precision gives 0.99692 on the same input at +6.6 % burst latency for this bucket. Options and evidence: doc/prefill/01-baseline/README.md, 'Gate failure at b1_s256'. Orchestrator decides (stage-7 precision change, precision revert, or a pcc_gate_override with this reason)."
+    },
+    "references": "cached once under tt-ops/runs/embeddinggemma-2/e9/refs/ (host RAM and time per bucket in doc/prefill/01-baseline/README.md)",
+    "existing_tests": "per-layer PCC tests (>= 0.995) and every existing test in MODEL_DIR/tests keep passing unchanged",
+    "task_eval": "none (person's decision: no MTEB / lm-eval / AIME)"
+  },
+  "regime": {
+    "headline": "sustained",
+    "sustained_iterations": 300,
+    "sustained_definition": "back-to-back replays in ~500 ms windows for max(30 s, 300 replays); median of the windows in the last third of the run; AICLK / power / current / vcore / temperature sampled every 100 ms from sysfs in a second process",
+    "burst_definition": "5 windows, each after 3 s idle, of n back-to-back replays (n = 200 ms / forward, clamped to 3 ... 20); median / avg / best of the windows"
+  },
+  "harness": "models/demos/blackhole/embedding_gemma2/tests/perf/prefill.py (EMBEDDING_GEMMA2_PREFILL_ALL=1 for the full stage-1 sweep); profiles: tests/perf/perf.py::test_tracy_forward[b1_s<bucket>]"
+}
