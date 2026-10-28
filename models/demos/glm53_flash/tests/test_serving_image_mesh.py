@@ -86,15 +86,16 @@ def _plugin_kwargs(items, prefix_ids: torch.Tensor) -> dict:
     """The plugin's per-row lists for ONE request of ``items`` (``MMItem`` in prompt order) with the placeholder
     ranges vLLM would attach: the image's replacement run, the video's whole ``<|begin_of_video|>`` ..
     ``<|end_of_video|>`` span."""
-    rows = feature_rows(prefix_ids, items)
+    flat = prefix_ids.reshape(-1)  # a [1, S] prompt: nonzero on 2-D ids would return (row, col) pairs
+    rows = feature_rows(flat, items)
     offs, lens = [], []
     for it, r in zip(items, rows):
         if it.kind == "image":
             offs.append(int(r[0]))
             lens.append(int(r.numel()))
         else:
-            s = int(torch.nonzero(prefix_ids == VIDEO_START_ID).reshape(-1)[0])
-            e = int(torch.nonzero(prefix_ids == VIDEO_END_ID).reshape(-1)[0])
+            s = int(torch.nonzero(flat == VIDEO_START_ID).reshape(-1)[0])
+            e = int(torch.nonzero(flat == VIDEO_END_ID).reshape(-1)[0])
             offs.append(s)
             lens.append(e - s + 1)
     return {
