@@ -193,17 +193,24 @@ def kimi_k3_program_config(*, active_seq_len_local: int, tp_ccl_topology: ttnn.T
         # Scan policy is fixed at construction. Direct scan avoids summary overhead for shorter fixed
         # sequences; grouped scan trades P local scans of N/P chunks plus a log2(P) prefix for summary
         # overhead and requires batch_heads * P worker owners. K3 at T=5120 uses grouped scan.
+        # Scan and affine prefix at HiFi3: HiFi2 truncates the SrcB operand to 6 explicit bits. On the 1M fp64 golden
+        # (layers.0, SP8xTP4) scan HiFi3 cut output NRMSE 1.21% -> 0.97% (+0.2% latency) and prefix HiFi3 cut head 6
+        # state error 0.60% -> 0.42% at no measurable cost (tt_metal_tracker-kxn.9.8/9.13).
         recurrence=KDARecurrenceProgramConfig(
             local_scan_strategy="grouped",
             summary_group_chunks=group_chunks[active_seq_len_local],
             # Galaxy SP8xTP4 at T=5120: 136 us instead of 184 us for the 1.6 MB-per-chip summary gather.
             high_bw_prefix_gather=active_seq_len_local == _TUNED_PROJECTION_ROWS,
+            scan_math_fidelity=ttnn.MathFidelity.HiFi3,
+            affine_prefix_math_fidelity=ttnn.MathFidelity.HiFi3,
         ),
         qkv_channel_chunk_size=64,
         tp_ccl_topology=tp_ccl_topology,
         gated_rms_output_dtype=ttnn.bfloat16,
         input_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
-        output_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
+        # Output projection at HiFi3: on the 1M fp64 golden (layers.0, SP8xTP4) it cut output NRMSE 0.89% -> 0.68% for
+        # +0.015 ms per call; the state path is unaffected (tt_metal_tracker-kxn.9.8/9.13).
+        output_projection_math_fidelity=ttnn.MathFidelity.HiFi3,
         projection_dtype=KIMI_K3_PROJECTION_DTYPE,
         # Galaxy SP8xTP4 at T=5120; other geometries keep the auto-selected projection configs.
         tuned_projection_matmuls=active_seq_len_local == _TUNED_PROJECTION_ROWS,
