@@ -548,6 +548,21 @@ void kernel_main() {
 }
 """
 
+
+def acc_compute_config(fidelity=None):
+    """The accumulator kernel's compute: fp32 DEST, and the fp32 sums (CB_ACC) unpacked straight to DEST. The default
+    unpack narrows a Float32 CB to TF32 on its way to DEST (genfiles: fp32 DEST with every CB fp32 / exponent B), so the
+    copy of a sum rounded it twice - to 10 mantissa bits, then to bf16 - a bf16 ulp off at a midpoint."""
+    comp = ttnn.ComputeConfigDescriptor()
+    if fidelity is not None:
+        comp.math_fidelity = fidelity
+    comp.fp32_dest_acc_en = True
+    modes = [ttnn.UnpackToDestMode.Default] * 64
+    modes[CB_ACC] = ttnn.UnpackToDestMode.UnpackToDestFp32  # (only copy_tile reads it: the out pass)
+    comp.unpack_to_dest_mode = modes
+    return comp
+
+
 _ACC_COMPUTE = r"""
 #include <cstdint>
 #include "api/compute/compute_kernel_api.h"
@@ -933,7 +948,7 @@ def sparse_combine_l1_prepare(
                     core_ranges=aset,
                     compile_time_args=[CB_ROW, CB_META, CB_ACC, CB_OUT, NT, MAXT],
                     runtime_args=ac_rt,
-                    config=ttnn.ComputeConfigDescriptor(fp32_dest_acc_en=True),
+                    config=acc_compute_config(),
                 ),
                 ttnn.KernelDescriptor(
                     kernel_source=srcs["aw"],

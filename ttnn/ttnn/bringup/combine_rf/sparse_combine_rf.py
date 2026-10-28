@@ -36,7 +36,7 @@ import ttnn
 from .fabric_all_gather_py import NOC0, NOC1, _SEM_CACHE
 from .sparse_all_gather_2d import DIRS, OPP, mesh_plan, place_ports
 from .combine_plan import link_of
-from .sparse_combine_l1 import _ACC_COMPUTE, _ACC_WRITER, _PORT_READER, TILE, route
+from .sparse_combine_l1 import _ACC_COMPUTE, _ACC_WRITER, _PORT_READER, TILE, acc_compute_config, route
 
 CB_INJ, CB_ROW, CB_META, CB_TAB, CB_ACC, CB_OUT, CB_W = 0, 1, 2, 3, 4, 5, 6
 DISP_CBS = dict(rows=24, meta=25, plan=26, stage=27, dbg=28)  # (the dispatch phase's, on the port cores)
@@ -2330,7 +2330,7 @@ def sparse_combine_rf_prepare(
                     core_ranges=aset,
                     compile_time_args=[CB_ROW, CB_META, CB_ACC, CB_OUT, NT, MAXT] + ([CB_W] if l1 is not None else []),
                     runtime_args=ac_rt,
-                    config=ttnn.ComputeConfigDescriptor(math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True),
+                    config=acc_compute_config(ttnn.MathFidelity.HiFi4),
                 ),
                 ttnn.KernelDescriptor(
                     kernel_source=srcs["aw"],
