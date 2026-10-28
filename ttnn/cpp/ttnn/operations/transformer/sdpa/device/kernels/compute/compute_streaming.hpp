@@ -843,6 +843,10 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
                 // DST[1] = exp((sink[s] - max[row_offset+s]) * scale); DST[0] += DST[1].
                 // max - sink with a negated scale is equivalent and avoids expanding the sink
                 // scalar to a first-column vector for every Q tile.
+                // The sink can have its own format (e.g. bfloat8_b): unpack from max/sink, then restore
+                // the matmul formats that the next row's folded reconfig assumes. scratch_cb stands in
+                // for cur_max: every caller allocates both in the intermediate format.
+                sdpa_maybe_reconfig_data_format<col_identity_cb, scratch_cb, scratch_cb, cb_attention_sink>();
                 if constexpr (sink_per_row) {
                     // Sparse SDPA packs different heads in each row; both inputs hold a first-column vector.
                     sub_init(cur_max_cb_rt, cb_attention_sink);
@@ -851,6 +855,7 @@ static __attribute__((noinline, noclone)) void normalize_row_streaming(
                     sub_bcast_scalar_init(cur_max_cb_rt, cb_attention_sink);
                     sub_tiles_bcast_scalar(cur_max_cb_rt, cb_attention_sink, sink_row_offset + s, 0, 1);
                 }
+                sdpa_maybe_reconfig_data_format<scratch_cb, col_identity_cb, cb_attention_sink, scratch_cb>();
                 // The custom first-column exp needs generic unary SFPU addrmod state, but not the
                 // Blackhole approximate exp_init macro/replay setup used by exp_tile<true>.
                 MATH((llk_math_eltwise_unary_sfpu_init<SfpuType::exponential, DST_ACCUM_MODE>()));
@@ -1470,7 +1475,10 @@ static void sdpa_inner_loop_step(
     // ring passes, where cb_q_in holds one resident Q chunk per pass and is popped once at the end.
     const uint32_t q_base_tiles = 0,
     // Packed split-KV K chunk: its column layout and mask runs. Contiguous for every other caller.
-    [[maybe_unused]] const ring_joint::PackedKVChunkMask& packed_mask = {}) {
+    [[maybe_unused]] const ring_joint::PackedKVChunkMask& packed_mask = {},
+    // K/V retention: the next Q chunk on this core uses the same K and V, so leave them at the
+    // front of cb_kt_in / cb_v_in; the reader does not push them again.
+    const bool keep_kv = false) {
     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
@@ -1715,7 +1723,9 @@ static void sdpa_inner_loop_step(
     // In-place latent-V reads K^T again in Phase 2, so defer the K^T pop until after the
     // softmax@V matmul (handled where the materialized-V pop would normally fire).
     if constexpr (!kt_inplace_v) {
-        CircularBuffer(cb_kt_in).pop_front(DHt * KT_stride);
+        if (!keep_kv) {
+            CircularBuffer(cb_kt_in).pop_front(DHt * KT_stride);
+        }
     }
 
     // Q is no longer needed after Phase 1. On the last K chunk, pop early so the
@@ -2124,7 +2134,9 @@ static void sdpa_inner_loop_step(
         // For kt_inplace_v this is the deferred K^T pop: cb_v_in aliases cb_kt_in (v_shares_k_buffer),
         // and v_cb_physical_width_t == DHt, so this pops the same Sk_chunk_t*DHt entry that Phase 1
         // skipped. For the materialized path it pops the V entry as usual. Either way: one entry/chunk.
-        CircularBuffer(cb_v_in).pop_front(KT_stride * v_cb_physical_width_t);
+        if (!keep_kv) {
+            CircularBuffer(cb_v_in).pop_front(KT_stride * v_cb_physical_width_t);
+        }
         CircularBuffer(cb_qkt_im).pop_front(Sq_chunk_t * KT_stride);
     }
 }
@@ -2190,7 +2202,10 @@ void sdpa_standard_v2(
     const uint32_t chunked_q_chunk_offset = 0,
     const LightweightMaskContext& lw_mask = {},
     const uint32_t q_num_chunks = 0,
-    const bool use_zigzag_balancing = false) {
+    const bool use_zigzag_balancing = false,
+    // K/V retention (one K chunk): Q heads per retention key, used to tell whether consecutive Q
+    // chunks of this core share (batch, retention key) and so the same K and V. 0 = off.
+    const uint32_t kv_reuse_group = 0) {
     init_sdpa_streaming_semaphores();
 
     // use_padded_mask + is_causal_sdpa is handled at the host level (mutually exclusive).
@@ -2246,6 +2261,11 @@ void sdpa_standard_v2(
         // centered windows, an upper bound around the Q chunk.
         uint32_t q_chunk_local = local_q_start + q;
         uint32_t q_start_tile = 0;
+        // Keep K/V for the next Q chunk when it shares (batch, KV head) with this one (flat index b * NQH *
+        // q_num_chunks + h * q_num_chunks + c, so its KV key is the flat index / (q_num_chunks * group)).
+        const bool keep_kv =
+            kv_reuse_group != 0 && q + 1 < q_chunks_per_core &&
+            q_chunk_local / (q_num_chunks * kv_reuse_group) == (q_chunk_local + 1) / (q_num_chunks * kv_reuse_group);
         uint32_t k_loop_start = 0;
         uint32_t k_loop_end = k_num_chunks;
         if constexpr (is_causal_sdpa || has_sliding_window) {
@@ -2350,7 +2370,13 @@ void sdpa_standard_v2(
                 lw_mask.sliding_leading_prev_tile_idx,
                 lw_mask.sliding_leading_tile_idx,
                 lw_mask.sliding_trailing_next_tile_idx,
-                apply_sliding_window);
+                apply_sliding_window,
+                0,   // mask_straddle_col
+                0,   // mask_straddle_jump
+                {},  // kv_pad_rotation
+                0,   // q_base_tiles
+                {},  // packed_mask
+                keep_kv && is_last);
         };
 
         for (uint32_t k_chunk = k_loop_start; k_chunk < k_loop_end; k_chunk++) {

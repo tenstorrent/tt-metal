@@ -717,9 +717,9 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
     uint32_t total_tc_slots = 0;
     uint32_t total_sig_write = 0;
 
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+#if defined(COMPILE_FOR_TRISC)
     uint8_t compact_dfb_count = 0;
-    uint8_t pack_tc_slot_count = 0;
+    uint8_t trisc_tc_slot_count = 0;
 #endif
 
     // g: capture time before the loop (3 uncached header reads above + blob-offset load)
@@ -775,15 +775,15 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
         WAYPOINT("L1");
 
         // --- Resolve g_dfb_interface slot ---
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
-        ASSERT(compact_dfb_count < dfb::MAX_ACTIVE_DFBS_PACK);
+#if defined(COMPILE_FOR_TRISC)
+        ASSERT(compact_dfb_count < dfb::MAX_ACTIVE_DFBS_TRISC);
         ASSERT(num_tcs <= dfb::MAX_NUM_TILE_COUNTERS_TO_RR);
-        ASSERT(pack_tc_slot_count + num_tcs <= dfb::MAX_PACK_TC_SLOTS);
+        ASSERT(trisc_tc_slot_count + num_tcs <= dfb::MAX_TRISC_TC_SLOTS);
         const uint8_t compact_id = compact_dfb_count++;
         g_dfb_logical_to_compact[eh.logical_dfb_id] = compact_id;
         LocalDFBInterface& iface = g_dfb_interface[compact_id];
-        iface.tc_slots.slot_base = pack_tc_slot_count;
-        pack_tc_slot_count += static_cast<uint8_t>(num_tcs);
+        iface.tc_slots.slot_base = trisc_tc_slot_count;
+        trisc_tc_slot_count += static_cast<uint8_t>(num_tcs);
 #else
         LocalDFBInterface& iface = g_dfb_interface[eh.logical_dfb_id];
 #endif
@@ -849,21 +849,15 @@ FORCE_INLINE DfbPackerRemapperRange setup_local_dfb_interfaces(uint32_t tt_l1_pt
             const uint8_t ptc = static_cast<uint8_t>((t < 4u ? ptc_w0 : ptc_w1) >> ((t & 3u) * 8u));
             iface.tc_slots[t].packed_tile_counter = ptc;
 
-#if defined(COMPILE_FOR_TRISC) && defined(UCK_CHLKC_PACK)
+#if defined(COMPILE_FOR_TRISC)  // pack and unpack
             iface.tc_slots[t].base_addr = base;
             // ring_size is uint32 L1 units (full Quasar L1). Cursor byte-offset is derived
-            // from wr_entry_idx (not stored).
+            // from cursor_entry_idx (not stored).
             iface.tc_slots[t].ring_size = limit - base;
             iface.tc_slots[t].base_entry_idx =
                 static_cast<uint16_t>((base - iface.tc_slots[0].base_addr) / iface.entry_size);
-            iface.tc_slots[t].wr_entry_idx = iface.tc_slots[t].base_entry_idx;
-#elif defined(COMPILE_FOR_TRISC)  // unpack
-            iface.tc_slots[t].base_addr = base;
-            iface.tc_slots[t].ring_size = limit - base;
-            iface.tc_slots[t].base_entry_idx =
-                static_cast<uint16_t>((base - iface.tc_slots[0].base_addr) / iface.entry_size);
-            iface.tc_slots[t].rd_entry_idx = iface.tc_slots[t].base_entry_idx;
-#else                             // DM
+            iface.tc_slots[t].cursor_entry_idx = iface.tc_slots[t].base_entry_idx;
+#else  // DM
             iface.tc_slots[t].base_addr = base;
             iface.tc_slots[t].limit = limit;
             iface.tc_slots[t].ptr = base;

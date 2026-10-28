@@ -14,6 +14,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
+#include "mx_host_packing.hpp"
 #include "tensor_impl.hpp"
 
 #include <tt_stl/span.hpp>
@@ -41,8 +42,8 @@ HostTensor from_span_impl(std::span<const T> buffer, const TensorSpec& spec, T p
 
     TT_FATAL(
         buffer.size() == volume, "Current buffer size is {} different from shape volume {}", buffer.size(), volume);
-    if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B) {
-        TT_FATAL(spec.layout() == Layout::TILE, "Block float types are only supported in TILE layout");
+    if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B || is_mx(spec.data_type())) {
+        TT_FATAL(spec.layout() == Layout::TILE, "Block float and MX types are only supported in TILE layout");
     }
 
     auto host_buffer = HostBuffer(tensor_impl::encode_tensor_data(ttsl::make_const_span(buffer), spec, pad_value));
@@ -94,8 +95,8 @@ HostTensor host_tensor_from_vector_with_pad_value(std::vector<T>&& buffer, Tenso
     size_t volume = spec.logical_shape().volume();
     TT_FATAL(buffer.size() == volume, "Buffer size {} differs from shape volume {}", buffer.size(), volume);
 
-    if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B) {
-        TT_FATAL(spec.layout() == Layout::TILE, "Block float types only supported in TILE layout");
+    if (spec.data_type() == DataType::BFLOAT8_B || spec.data_type() == DataType::BFLOAT4_B || is_mx(spec.data_type())) {
+        TT_FATAL(spec.layout() == Layout::TILE, "Block float and MX types only supported in TILE layout");
     }
 
     auto buffer_dtype = convert_to_data_type<T>();
@@ -169,6 +170,19 @@ std::vector<float> to_vector_float(const HostTensor& tensor) {
                 tensor.dtype() == DataType::BFLOAT8_B
                     ? unpack_bfp8_tiles_into_float_vec(buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
                     : unpack_bfp4_tiles_into_float_vec(buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
+            return tensor_impl::decode_tensor_data(ttsl::make_const_span(unpacked_data), tensor.tensor_spec());
+        }
+        case DataType::MXFP8_E4M3:
+        case DataType::MXFP8_E5M2:
+        case DataType::MXFP6_E2M3:
+        case DataType::MXFP6_E3M2:
+        case DataType::MXFP4:
+        case DataType::MXINT8:
+        case DataType::MXINT4:
+        case DataType::MXINT2: {
+            auto buffer = host_buffer::get_as<uint32_t>(tensor);
+            std::vector<float> unpacked_data = tensor_impl::unpack_mx_tiles_into_float_vec(
+                tensor.dtype(), buffer, /*row_major_output=*/false, tensor.tensor_spec().tile());
             return tensor_impl::decode_tensor_data(ttsl::make_const_span(unpacked_data), tensor.tensor_spec());
         }
         default: {

@@ -126,7 +126,7 @@ unset HF_HUB_OFFLINE     # umt5 fetches the Wan2.2 tokenizer from the hub
 export NO_PROMPT=1
 export TT_DIT_CACHE_DIR="${TT_DIT_CACHE_DIR:-/tmp/TT_DIT_CACHE}"
 if [[ -z "${VBENCH_CACHE_DIR:-}" ]]; then
-    for d in /mnt/MLPerf/vbench /mnt/models/vbench; do
+    for d in /mnt/weka/model-weights/video/vbench /mnt/MLPerf/vbench /mnt/models/vbench; do
         [[ -d "$d" ]] && { export VBENCH_CACHE_DIR="$d" TORCH_HOME="$d/torch_hub"; break; }
     done
 fi

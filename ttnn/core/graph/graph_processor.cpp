@@ -223,7 +223,6 @@ void GraphProcessor::track_device(const tt::tt_metal::IDevice* device) {
     size_t num_x_compute_cores = compute_grid.x;
     size_t num_y_compute_cores = compute_grid.y;
     size_t num_compute_cores = num_x_compute_cores * num_y_compute_cores;
-    size_t num_storage_cores = device->storage_only_cores().size();
     size_t worker_l1_size = allocator->get_worker_l1_size();
     size_t l1_num_banks = allocator->get_num_banks(tt::tt_metal::BufferType::L1);
     size_t l1_bank_size = allocator->get_bank_size(tt::tt_metal::BufferType::L1);
@@ -241,13 +240,10 @@ void GraphProcessor::track_device(const tt::tt_metal::IDevice* device) {
     info[kDeviceAddressAtFirstL1CbBuffer] = allocator->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     info[kDeviceNumBanksPerStorageCore] = l1_bank_size > 0 ? worker_l1_size / l1_bank_size : 0;
     info[kDeviceNumComputeCores] = num_compute_cores;
-    info[kDeviceNumStorageCores] = num_storage_cores;
-    info[kDeviceTotalL1Memory] = (num_storage_cores + num_compute_cores) * worker_l1_size;
+    info[kDeviceNumStorageCores] = 0;
+    info[kDeviceTotalL1Memory] = num_compute_cores * worker_l1_size;
     info[kDeviceTotalL1ForTensors] = 0;  // Not computed in original implementation
-    info[kDeviceTotalL1ForInterleavedBuffers] =
-        (num_storage_cores + num_compute_cores +
-         (l1_bank_size > 0 ? (worker_l1_size / l1_bank_size) * num_storage_cores : 0)) *
-        l1_bank_size;
+    info[kDeviceTotalL1ForInterleavedBuffers] = num_compute_cores * l1_bank_size;
     info[kDeviceTotalL1ForShardedBuffers] = num_compute_cores * l1_bank_size;
     info[kDeviceCbLimit] = worker_l1_size - allocator->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
 

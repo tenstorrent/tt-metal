@@ -736,7 +736,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
                         "kernel reports prior runtime args. Internal invariant violation.",
                         kernel_name,
                         node.str());
-                    rta[s->second] = value;
+                    rta[s->second] = value.to_uint32();
                 }
             }
             for (const auto& [node, vals] : kernel_runtime_varargs(kernel_params)) {
@@ -771,7 +771,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
                         name,
                         kernel_name,
                         node.str());
-                    named_rtas_by_node[node].emplace_back(s->second, value);
+                    named_rtas_by_node[node].emplace_back(s->second, value.to_uint32());
                 }
             }
             std::unordered_map<NodeCoord, const std::vector<uint32_t>*> varargs_by_node;
@@ -829,7 +829,7 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
                 "Internal error: named CRTA '{}' missing for kernel '{}'.",
                 name,
                 kernel_name);
-            combined_crtas.push_back(v_it->second);
+            combined_crtas.push_back(v_it->second.to_uint32());
         }
         append_binding_crtas(binding_handles, combined_crtas);
         append_scratchpad_crtas(kernel->scratchpad_binding_handles(), combined_crtas);
@@ -893,6 +893,9 @@ void SetProgramRunArgs(Program& program, const ProgramRunArgs& params, bool skip
     // Bind PrefetcherPipe objects to their parameters' slots (per node; a relay DFB over them is
     // pointed at the pipe ring here). Sticky across calls.
     BindPrefetcherPipeArgs(program_impl, params.advanced_options.prefetcher_pipe_args);
+    for (const auto& [param_name, tensor] : tensor_by_param) {
+        program_impl.set_bound_tensor_footprint(param_name, detail::make_bound_tensor_footprint(*tensor));
+    }
     program_impl.mark_program_run_args_initialized();
 }
 
@@ -964,6 +967,9 @@ void UpdateTensorArgs(
 
     // Process DFB runtime parameters to update borrowed-memory DFB backing L1 Buffer*s.
     AttachBorrowedDFBBuffers(program_impl, tensor_by_param);
+    for (const auto& [param_name, tensor] : tensor_by_param) {
+        program_impl.set_bound_tensor_footprint(param_name, detail::make_bound_tensor_footprint(*tensor));
+    }
 }
 
 // Union the args of `src` into `dst` for a single kernel (same kernel name). Used by
@@ -1246,7 +1252,7 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
                         kernel_name,
                         node.str());
                     RuntimeArgsData& rta = kernel->runtime_args_data(node);
-                    rta[it->second] = value;
+                    rta[it->second] = value.to_uint32();
                 }
             }
         }
@@ -1288,7 +1294,7 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
                         "Internal error: named CRTA '{}' not in schema for kernel '{}'.",
                         name,
                         kernel_name);
-                    crta[it->second] = value;
+                    crta[it->second] = value.to_uint32();
                 }
             }
             if (!cvarargs.empty()) {
@@ -1366,6 +1372,9 @@ void UpdateProgramRunArgs(Program& program, const ProgramRunArgs& params, bool s
 
         // Re-attach borrowed-memory DFBs for the supplied tensors (skip omitted ones).
         AttachBorrowedDFBBuffers(program_impl, tensor_by_param, /*require_all=*/false);
+        for (const auto& [param_name, tensor] : tensor_by_param) {
+            program_impl.set_bound_tensor_footprint(param_name, detail::make_bound_tensor_footprint(*tensor));
+        }
     }
 
     // ---- PrefetcherPipe args: omitted parameters keep their bound pipe; a supplied one is bound

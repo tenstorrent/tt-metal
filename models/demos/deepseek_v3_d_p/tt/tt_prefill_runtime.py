@@ -88,6 +88,9 @@ class TtPrefillRuntimeConfig:
     dflash_checkpoint_path: str = ""
     # Number of MTP prediction levels K to run after the trunk, 0 = off.
     mtp_levels: int = 0
+    # Decode's MTP level count D, 0 = K. Decode keeps one KV cache for all D levels, so with K = 1 the KV
+    # table publishes levels 2..D as aliases of level 1's rows and each chunk acks them with it.
+    mtp_decode_levels: int = 0
     # Pipeline-parallel rank slicing. first_layer_idx is the global index of this
     # rank's first layer; is_first_rank gates the embedding, is_last_rank marks the
     # final stage (non-last ranks forward the hidden state instead of running a tail).
@@ -117,6 +120,16 @@ class TtPrefillRuntimeConfig:
     @property
     def tp_factor(self) -> int:
         return self.mesh_shape[self.tp_axis]
+
+    @property
+    def mtp_ack_levels(self) -> int:
+        """MTP levels the KV table publishes and each chunk acks: decode's D, or K when unset."""
+        levels = self.mtp_decode_levels or self.mtp_levels
+        assert levels == self.mtp_levels or (self.mtp_levels == 1 and levels > 1), (
+            f"mtp_decode_levels={self.mtp_decode_levels} needs mtp_levels=1 (got {self.mtp_levels}): only "
+            "level 1's rows can stand in for the levels decode runs on its one shared cache"
+        )
+        return levels
 
 
 class TtPrefillRuntime:
@@ -171,6 +184,8 @@ class TtPrefillRuntime:
         # callback. Everything happens before the first request; there is no lazy or repeat capture.
         #   _controller       — SubDeviceTraceController driving the segmented capture/replay
         #   _trace_input      — persistent per-chunk input buffer (captured address; updated in place)
+        #   _input_is_caller_filled — set by claim_persistent_input(); the caller fills _trace_input itself
+        #   _mtp_is_caller_filled — the same for _trace_mtp_tokens and claim_persistent_overhang()
         #   _trace_metadata   — 3 persistent 1-element uint32 tensors (slot_id, actual_start, actual_end)
         #   _trace_metadata_msg — persistent packed uint32 tensor holding the same three words (plus
         #                       provided_levels on a downstream MTP rank);
@@ -185,6 +200,8 @@ class TtPrefillRuntime:
         #                       captured callback reads them.
         self._controller = None
         self._trace_input = None
+        self._input_is_caller_filled = False
+        self._mtp_is_caller_filled = False
         self._trace_metadata = None
         self._trace_metadata_msg = None
         self._trace_d2h_service = None
@@ -340,7 +357,8 @@ class TtPrefillRuntime:
         )
 
         logger.info(
-            f"Building MTP predictor: num_levels={k}, layer_idx={mtp_cfg.mtp_layer_idx}, "
+            f"Building MTP predictor: num_levels={k}, decode_levels={self.config.mtp_ack_levels}, "
+            f"layer_idx={mtp_cfg.mtp_layer_idx}, "
             f"first_cache_slot={self.config.num_layers}, layer_num={self.config.num_layers + k}, "
             f"index_share={mtp_cfg.index_share_for_mtp_iteration}, cache={mtp_cache_path}"
         )
@@ -352,6 +370,7 @@ class TtPrefillRuntime:
             mtp_cfg,
             seq_len=self.config.chunk_size,
             num_levels=k,
+            decode_levels=self.config.mtp_ack_levels,
             layer_idx=mtp_cfg.mtp_layer_idx,
             first_cache_slot=self.config.num_layers,
             kv_only_last_level=self.config.kv_only_last_mtp_level,
@@ -412,7 +431,7 @@ class TtPrefillRuntime:
 
         first = self.config.first_layer_idx
         last_excl = first + self.config.num_layers
-        owned = tuple(t for t in dcfg.target_layer_ids if first <= t < last_excl)
+        owned = tuple(t for t in dcfg.target_layer_ids if first <= self._dflash_tap_layer(t) < last_excl)
         # A kv-only last layer returns before its post-FFN tap fires, so a target layer at that index would
         # be silently dropped. Kimi is safe (targets <= 58); assert so a future layout can't regress it.
         if self.config.kv_only_last_layer and self.config.is_last_rank and self.config.num_layers > 0:
@@ -465,6 +484,11 @@ class TtPrefillRuntime:
                 tp_axis=self.config.tp_axis,
                 num_users=self.config.num_users,  # user-major slots, like the verifier's kvpe cache
             )
+
+    def _dflash_tap_layer(self, target_layer_idx: int) -> int:
+        """The layer whose forward fires the drafter tap for ``target_layer_idx``; the rank holding it owns
+        that target's fc slice. The target's own output by default."""
+        return target_layer_idx
 
     def _pack_activation(self, hidden: ttnn.Tensor, partial: ttnn.Tensor) -> ttnn.Tensor:
         """Fuse this rank's output hidden and finalized drafter FC partial into ONE activation for the D2D
@@ -577,6 +601,11 @@ class TtPrefillRuntime:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
 
+    def _make_partial_placeholder(self) -> ttnn.Tensor:
+        """Trace buffer for the upstream drafter partial: the hidden-only placeholder, which is the partial's
+        shape whenever the hidden is a single plane. A model sending more planes overrides this."""
+        return self.make_placeholder_activation(dflash_packed=False)
+
     def _num_mtp_tokens(self) -> int:
         """MTP lookahead ids the H2D row carries past this chip's trunk shard. Same function the runner
         cuts that row with and the producer builds its rows with. 0 when MTP is off.
@@ -613,6 +642,20 @@ class TtPrefillRuntime:
         if not self.forwards_indexer_indices:
             return None
         return self._trace_indices_out if self._trace_captured else self.model.last_indexer_indices
+
+    def claim_persistent_input(self) -> ttnn.Tensor | None:
+        """Hand the traced forward's input buffer to the caller, which then fills it directly.
+        None when this runtime is not tracing, or keeps no single buffer for the whole input."""
+        if self.config.dflash_enabled and not self.config.is_first_rank:
+            return None
+        self._input_is_caller_filled = self._trace_input is not None
+        return self._trace_input
+
+    def claim_persistent_overhang(self) -> ttnn.Tensor | None:
+        """The MTP counterpart of :meth:`claim_persistent_input`, for the lookahead token buffer.
+        None when this rank keeps no such buffer."""
+        self._mtp_is_caller_filled = self._trace_mtp_tokens is not None
+        return self._trace_mtp_tokens
 
     def make_chunk_input(self, token_ids: list[int]) -> ttnn.Tensor:
         """Build one chunk's device input for `prefill_chunk`: `chunk_size` SP-sharded token ids on the
@@ -796,8 +839,9 @@ class TtPrefillRuntime:
     def _stage_trace_inputs(
         self, input_tensor: ttnn.Tensor, metadata_msg: ttnn.Tensor, mtp_tokens: Optional[ttnn.Tensor] = None
     ) -> None:
-        """Copy one chunk's inputs into the captured persistent buffers and free them before the replay."""
-        if self._trace_mtp_tokens is not None:
+        """Copy one chunk's inputs into the captured persistent buffers before the replay, freeing only
+        the operands this runtime owns."""
+        if self._trace_mtp_tokens is not None and not self._mtp_is_caller_filled:
             assert mtp_tokens is not None, "MTP is on but no lookahead tensor arrived with this chunk"
             ttnn.copy(mtp_tokens, self._trace_mtp_tokens)
             ttnn.deallocate(mtp_tokens)
@@ -807,10 +851,16 @@ class TtPrefillRuntime:
             ttnn.deallocate(input_tensor)
             ttnn.copy(partial, self._trace_partial_in)
             ttnn.deallocate(partial)
-        ttnn.copy(model_input, self._trace_input)
-        ttnn.deallocate(model_input)
+        if not self._input_is_caller_filled:
+            ttnn.copy(model_input, self._trace_input)
+            ttnn.deallocate(model_input)
         self._metadata_from_msg(metadata_msg)
-        ttnn.deallocate(metadata_msg)
+
+    @property
+    def trace_output(self) -> Optional[ttnn.Tensor]:
+        """The activation buffer this rank's traced forward writes, for the driver to send downstream.
+        None before the trace is captured, and on the last rank."""
+        return self._trace_output
 
     @property
     def trace_metadata_msg(self) -> Optional[ttnn.Tensor]:
@@ -960,8 +1010,8 @@ class TtPrefillRuntime:
         chunk = self.config.chunk_size
         if self.config.dflash_enabled and not self.config.is_first_rank:
             self._trace_input = self.make_placeholder_activation(dflash_packed=False)
-            # The capture reads the upstream partial here; same shape as the hidden half.
-            self._trace_partial_in = self.make_placeholder_activation(dflash_packed=False)
+            # The capture reads the upstream partial here.
+            self._trace_partial_in = self._make_partial_placeholder()
         else:
             self._trace_input = self.make_chunk_input([0] * chunk)
         if self.config.mtp_levels and self.config.is_first_rank:
@@ -977,6 +1027,8 @@ class TtPrefillRuntime:
                 num_levels=self.config.mtp_levels,
             )
         self._trace_indices_in = self.make_placeholder_indices() if self.receives_indexer_indices else None
+        self._input_is_caller_filled = False
+        self._mtp_is_caller_filled = False
         # Per-element metadata: (slot_id, actual_start, actual_end), seeded for chunk 0.
         # ChunkMetadata, not a bare tuple: Mistral needs a 4th field (the llama4 query-scale buffer)
         # whose lifetime matches these scalars. None elsewhere, and fields 0-2 are unchanged.
@@ -1006,7 +1058,9 @@ class TtPrefillRuntime:
         warm_mtp_tokens = None
         if self._trace_mtp_tokens is not None:
             warm_mtp_tokens = self.make_mtp_tokens_input([0] * (chunk + self._num_mtp_tokens()))
-        self._stage_trace_inputs(self.make_chunk_input([0] * chunk), self._meta_words_dev(words), warm_mtp_tokens)
+        warm_metadata_msg = self._meta_words_dev(words)
+        self._stage_trace_inputs(self.make_chunk_input([0] * chunk), warm_metadata_msg, warm_mtp_tokens)
+        ttnn.deallocate(warm_metadata_msg)
         # Keep the output: send_warmup_inputs needs its spec.
         self._send_warmup_activation = self._forward_traced(kv_caches)
         ttnn.synchronize_device(self.mesh_device)
@@ -1370,9 +1424,10 @@ class TtPrefillRuntime:
         only the KV-tail rank writes those layers, so only its LOCAL count grows.
 
         MTP widens it the same way: ``kv_migration_stages`` puts its K slots in the last rank's stage, so
-        the consumer needs an ack for each of them too.
+        the consumer needs an ack for each of them too. A decode running D > K levels on one shared cache
+        widens it to D: the table publishes the extra levels as aliases of level 1, and each is acked.
         """
-        extra = self.config.mtp_levels
+        extra = self.config.mtp_ack_levels
         if self.config.dflash_enabled:
             extra += self.drafter.config.num_hidden_layers
         return global_ack_layers + extra, local_ack_layers + (extra if self.config.is_last_rank else 0)
@@ -1412,23 +1467,30 @@ class TtPrefillRuntime:
             stages.append(KvCacheStage(int(index_cache.buffer_address()), first_full, count_full))
 
         if self.config.dflash_enabled:
-            # Two more stages, K then V: they are distinct allocations, so each needs its own gathered
-            # base address. The drafter is built on the KV-tail rank alone, so every other rank
-            # contributes a null stage — the all-gather is collective and must be entered by all ranks,
-            # and merged_num_layers/the populate walk both ignore count == 0. Keep these LAST so the
-            # block-cyclic configs stay at layout indices [0, n_block_cyclic).
-            draft_layers = self.drafter.config.num_hidden_layers
-            if self._dflash_k_cache is not None:
-                # The drafter lives on the KV tail, whose slice ends at the model's global layer count, so
-                # this is where the verifier's layer axis ends and the draft layers continue it. One axis for
-                # both keeps a single (layer, position, slot) key meaningful across every config of the table.
-                draft_first = first_layer_idx + num_my_layers
-                stages.append(KvCacheStage(int(self._dflash_k_cache.buffer_address()), draft_first, draft_layers))
-                stages.append(KvCacheStage(int(self._dflash_v_cache.buffer_address()), draft_first, draft_layers))
-            else:
-                stages.append(KvCacheStage(0, 0, 0))
-                stages.append(KvCacheStage(0, 0, 0))
+            stages.extend(self._dflash_migration_stages(first_layer_idx + num_my_layers))
         return stages
+
+    def _dflash_migration_stages(self, draft_first: int):
+        """The drafter's two stages, K then V, appended LAST to a runtime's stages.
+
+        They are distinct allocations, so each needs its own gathered base address. The drafter is built on
+        the KV-tail rank alone, so every other rank contributes a null stage — the all-gather is collective
+        and must be entered by all ranks, and merged_num_layers/the populate walk both ignore count == 0.
+        Last, so the block-cyclic configs stay at layout indices [0, n_block_cyclic).
+
+        ``draft_first``: where the draft layers start on the table's layer axis, the end of this rank's
+        slice. On the KV tail of a dense stack that is the model's global layer count, so the draft layers
+        continue the verifier's axis -- the axis the layer acks are numbered on.
+        """
+        from models.demos.common.prefill.runners.migration import KvCacheStage
+
+        if self._dflash_k_cache is None:
+            return [KvCacheStage(0, 0, 0), KvCacheStage(0, 0, 0)]
+        draft_layers = self.drafter.config.num_hidden_layers
+        return [
+            KvCacheStage(int(self._dflash_k_cache.buffer_address()), draft_first, draft_layers),
+            KvCacheStage(int(self._dflash_v_cache.buffer_address()), draft_first, draft_layers),
+        ]
 
     def kv_table_layer_rows(self, stage_layouts):
         """Model layer to publish each dense KV slab at, or None when every layer owns one.
@@ -1494,45 +1556,9 @@ class TtPrefillRuntime:
         #     above), so a worker acting on the last ack would migrate drafter chunks the current chunk
         #     has not written yet. Registering it for a reader that never copies is safe; wiring it into
         #     live migration needs that ordering fixed first.
-        dflash_caches = None
-        dflash_spec = None
-        # Where the draft layers sit on the merged table's layer axis. The drafter runs after the last
-        # verifier layer and lives on the KV tail, so on the owning rank this is exactly the model's
-        # global layer count -- the same number the drafter acks under (see layer_ack_layers).
-        dflash_first_layer = self.config.first_layer_idx + self.config.num_layers
-        if self.config.dflash_enabled:
-            if stage_layouts is None:
-                # Inline-gather path (single-rank / tests): this rank owns the drafter, so describe it
-                # straight from the tensors.
-                if self._dflash_k_cache is not None:
-                    dflash_caches = (self._dflash_k_cache, self._dflash_v_cache)
-            else:
-                # kv_migration_stages appends the drafter's K and V stages last, so peel them off here;
-                # what remains is one layout per block-cyclic cache, which is what the builder expects.
-                # Works for any rank count: the drafter is not layer-partitioned, so exactly one gathered
-                # stage carries it (the KV tail) and the rest are count==0 nulls. Under pipeline
-                # parallelism THIS rank generally owns no drafter tensor, which is precisely why the
-                # spec is metadata-only.
-                n_block_cyclic = 1 + (1 if kv_caches.index is not None else 0)
-                if len(stage_layouts) != n_block_cyclic + 2:
-                    raise RuntimeError(
-                        f"dflash is on, so kv_migration_stages emits {n_block_cyclic} block-cyclic stage(s) "
-                        f"plus the drafter's K and V, but {len(stage_layouts)} layouts were gathered. The "
-                        "caller must gather one layout per stage this runtime declares."
-                    )
-                *block_cyclic_layouts, k_layout, v_layout = stage_layouts
-                stage_layouts = block_cyclic_layouts
-                # Read it off the gather: THIS rank is generally not the one that owns the drafter, so its
-                # own layer slice says nothing about where the tail's draft layers begin.
-                dflash_first_layer = next(s["first_layer"] for s in k_layout if s["count"] > 0)
-                dcfg = self.drafter.config
-                dflash_spec = {
-                    "num_kv_heads": dcfg.num_key_value_heads,
-                    "head_dim": dcfg.head_dim,
-                    "num_layers": dcfg.num_hidden_layers,
-                    "k_stage_layout": k_layout,
-                    "v_stage_layout": v_layout,
-                }
+        stage_layouts, dflash_caches, dflash_spec, dflash_first_layer = self._dflash_table_args(
+            stage_layouts, 1 + (1 if kv_caches.index is not None else 0)
+        )
 
         # Dense row -> global layer map, so config 1 is published on the layer axis (see the builder).
         index_layer_ids = None
@@ -1547,6 +1573,19 @@ class TtPrefillRuntime:
             index_layer_ids = [
                 layer for layer in range(total_layers) if not indexer_layer_is_reused(self.hf_config, layer)
             ]
+
+        # Decode's MTP levels past level 1 read level 1's cache rows, so the table publishes them there too.
+        kvpe_alias_rows = None
+        computed_levels, decode_levels = self.config.mtp_levels, self.config.mtp_ack_levels
+        if decode_levels > computed_levels:
+            from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import merged_num_layers
+
+            # From the gathered stages, not this rank's config: rank 0 builds the table and holds no MTP row.
+            physical_rows = (
+                merged_num_layers(stage_layouts[0]) if stage_layouts else self.config.num_layers + computed_levels
+            )
+            level1_row = physical_rows - computed_levels
+            kvpe_alias_rows = {level1_row + level: level1_row for level in range(computed_levels, decode_levels)}
 
         # The table must describe the SAME layout the caches were allocated with and the write op produced.
         return build_and_serialize_kv_chunk_table(
@@ -1569,7 +1608,52 @@ class TtPrefillRuntime:
             stage_layouts=stage_layouts,
             layer_rows=self.kv_table_layer_rows(stage_layouts),
             index_layer_ids=index_layer_ids,
+            kvpe_alias_rows=kvpe_alias_rows,
         )
+
+    def _dflash_table_args(self, stage_layouts, n_block_cyclic: int):
+        """Split the drafter off the gathered layouts for ``build_and_serialize_kv_chunk_table``.
+
+        Returns ``(stage_layouts, dflash_caches, dflash_spec, dflash_first_layer)``: the layouts left once the
+        drafter's K and V are peeled off, and the builder's three drafter arguments (both caches/spec None
+        when DFlash is off). ``n_block_cyclic`` counts the layouts this runtime declares before the drafter's.
+        """
+        # Where the draft layers sit on the merged table's layer axis. The drafter runs after the last
+        # verifier layer and lives on the KV tail, so on the owning rank this is exactly the model's
+        # global layer count -- the same number the drafter acks under (see layer_ack_layers).
+        dflash_first_layer = self.config.first_layer_idx + self.config.num_layers
+        if not self.config.dflash_enabled:
+            return stage_layouts, None, None, dflash_first_layer
+        if stage_layouts is None:
+            # Inline-gather path (single-rank / tests): this rank owns the drafter, so describe it
+            # straight from the tensors.
+            dflash_caches = None
+            if self._dflash_k_cache is not None:
+                dflash_caches = (self._dflash_k_cache, self._dflash_v_cache)
+            return stage_layouts, dflash_caches, None, dflash_first_layer
+        # kv_migration_stages appends the drafter's K and V stages last, so peel them off here. Works for
+        # any rank count: the drafter is not layer-partitioned, so exactly one gathered stage carries it
+        # (the KV tail) and the rest are count==0 nulls. Under pipeline parallelism THIS rank generally
+        # owns no drafter tensor, which is precisely why the spec is metadata-only.
+        if len(stage_layouts) != n_block_cyclic + 2:
+            raise RuntimeError(
+                f"dflash is on, so kv_migration_stages emits {n_block_cyclic} stage(s) plus the drafter's "
+                f"K and V, but {len(stage_layouts)} layouts were gathered. The caller must gather one "
+                "layout per stage this runtime declares."
+            )
+        *stage_layouts, k_layout, v_layout = stage_layouts
+        # Read it off the gather: THIS rank is generally not the one that owns the drafter, so its own
+        # layer slice says nothing about where the tail's draft layers begin.
+        dflash_first_layer = next(s["first_layer"] for s in k_layout if s["count"] > 0)
+        dcfg = self.drafter.config
+        dflash_spec = {
+            "num_kv_heads": dcfg.num_key_value_heads,
+            "head_dim": dcfg.head_dim,
+            "num_layers": dcfg.num_hidden_layers,
+            "k_stage_layout": k_layout,
+            "v_stage_layout": v_layout,
+        }
+        return stage_layouts, None, dflash_spec, dflash_first_layer
 
     def read_slot_kv(self, kv_caches: MlaKvCaches, slot: int):
         """Read one slot's KV cache from device to host: the `.kvpe` block as a single host tensor

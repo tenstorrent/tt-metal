@@ -4,7 +4,7 @@
 
 #include "api/compute/compute_kernel_api.h"
 #include <algorithm>
-#include <tt-metalium/constants.hpp>
+#include "api/tile_constants.h"
 
 #include "api/compute/tilize.h"
 #include "api/compute/matmul.h"

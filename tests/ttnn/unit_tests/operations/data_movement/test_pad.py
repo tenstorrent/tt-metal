@@ -14,9 +14,21 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     TILE_WIDTH,
 )
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose
+from tests.ttnn.utils_for_testing import assert_equal as assert_tensors_equal
 import ttnn
 
 torch.manual_seed(0)
+
+
+def dm_codegen_supported_on_arch(device):
+    # Mirrors codegen_supported_on_arch in data_movement/common: on other arches the ops route to native and the
+    # forced codegen entries raise.
+    return ttnn.device.is_wormhole_b0(device) or ttnn.device.is_blackhole(device)
+
+
+def skip_unless_dm_codegen_arch(device):
+    if not dm_codegen_supported_on_arch(device):
+        pytest.skip(f"data-movement codegen is not supported on {device.arch()}")
 
 
 def random_torch_tensor(dtype, shape):
@@ -179,7 +191,10 @@ def test_pad_with_program_cache(device, n, c, h, w, padding, torch_padding, valu
             device=device,
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
-    expected_cache_entries = 3 if dtype == ttnn.bfloat8_b else 1  # due to composite logic
+    # This bfloat8_b tile pad routes to codegen, which goes through bfloat16 (typecast, pad, typecast) only for a
+    # nonzero value; a zero value pads the block-float tiles directly. Native always takes the bfloat16 round trip.
+    bf16_round_trip = value != 0 or not dm_codegen_supported_on_arch(device)
+    expected_cache_entries = 3 if dtype == ttnn.bfloat8_b and bf16_round_trip else 1
     assert device.cache_entries_counter.total == expected_cache_entries
 
 
@@ -1770,3 +1785,432 @@ def test_pad_rank_gt4_use_multicore(device, shape, padding, use_multicore):
 
     assert output_tensor.shape == torch_output_tensor.shape
     assert torch.equal(torch_output_tensor, output_tensor)
+
+
+# --- Codegen-path coverage ---
+#
+# ttnn.pad routes gate-supported TILE cases to codegen and offers no way to ask for a path, so the
+# verification-only entries below (see pad_force.hpp) pin one. Goldens come from torch: native is
+# the other implementation under test, not a reference.
+_pad_force_native = ttnn._ttnn.operations.data_movement.pad_force_native
+_pad_force_codegen = ttnn._ttnn.operations.data_movement.pad_force_codegen
+
+
+def _codegen_input(shape, dtype):
+    if dtype == ttnn.float32:
+        return torch.rand(shape, dtype=torch.float32)
+    if dtype in (ttnn.int32, ttnn.uint32):
+        return torch.randint(0, 100, shape, dtype=torch.int32)
+    return torch.rand(shape, dtype=torch.bfloat16)
+
+
+def _torch_pad(x, padding, value):
+    if x.dtype == torch.int32:
+        value = int(value)
+    return torch.nn.functional.pad(x, _ttnn_padding_to_torch(padding), mode="constant", value=value)
+
+
+# A nonzero value is what exercises the partial-tile fill: from_torch already zeroes the unused lanes.
+_pad_codegen_cases = [
+    pytest.param(
+        [1, 71, 32, 64],
+        [[0, 0], [0, 25], [0, 0], [0, 0]],
+        0.0,
+        ttnn.bfloat16,
+        ttnn.L1_MEMORY_CONFIG,
+        id="falcon7b_decode_c",
+    ),
+    pytest.param(
+        [1, 2, 32, 63], [[0, 0], [0, 0], [0, 0], [0, 33]], 1.5, ttnn.bfloat16, ttnn.DRAM_MEMORY_CONFIG, id="w_mod_31"
+    ),
+    pytest.param(
+        [1, 3, 33, 64],
+        [[0, 0], [0, 0], [0, 37], [0, 0]],
+        1.5,
+        ttnn.bfloat16,
+        ttnn.L1_MEMORY_CONFIG,
+        id="h_partial_bf16",
+    ),
+    pytest.param(
+        [1, 3, 33, 64],
+        [[0, 0], [0, 0], [0, 37], [0, 0]],
+        0.0,
+        ttnn.bfloat16,
+        ttnn.DRAM_MEMORY_CONFIG,
+        id="h_partial_bf16_zero",
+    ),
+    pytest.param(
+        [1, 1, 45, 70],
+        [[0, 0], [0, 0], [0, 30], [0, 30]],
+        1.5,
+        ttnn.float32,
+        ttnn.DRAM_MEMORY_CONFIG,
+        id="hw_partial_fp32",
+    ),
+    pytest.param(
+        [1, 1, 45, 70],
+        [[0, 0], [0, 0], [0, 30], [0, 30]],
+        -7.0,
+        ttnn.int32,
+        ttnn.DRAM_MEMORY_CONFIG,
+        id="hw_partial_int32",
+    ),
+    pytest.param(
+        [1, 1, 45, 70],
+        [[0, 0], [0, 0], [0, 30], [0, 30]],
+        3.0,
+        ttnn.uint32,
+        ttnn.L1_MEMORY_CONFIG,
+        id="hw_partial_uint32",
+    ),
+    # 128 planes x 3 border tiles spreads the fill over many cores.
+    pytest.param(
+        [8, 16, 40, 40],
+        [[0, 1], [0, 0], [0, 0], [0, 0]],
+        1.5,
+        ttnn.bfloat16,
+        ttnn.DRAM_MEMORY_CONFIG,
+        id="fill_multicore",
+    ),
+    # N > 1 with padding on inner dims, so every batch's planes land at a shifted output offset.
+    pytest.param(
+        [2, 3, 33, 64],
+        [[0, 0], [0, 1], [0, 31], [0, 0]],
+        1.5,
+        ttnn.bfloat16,
+        ttnn.DRAM_MEMORY_CONFIG,
+        id="n2_inner_pad",
+    ),
+    pytest.param([45, 70], [[0, 19], [0, 26]], 1.5, ttnn.bfloat16, ttnn.L1_MEMORY_CONFIG, id="rank2"),
+    # Rank 5 pads its leading dim before the 4D codegen call, so both stages run.
+    pytest.param(
+        [2, 3, 2, 33, 64],
+        [[0, 1], [0, 0], [0, 1], [0, 31], [0, 0]],
+        1.5,
+        ttnn.bfloat16,
+        ttnn.DRAM_MEMORY_CONFIG,
+        id="rank5",
+    ),
+]
+
+
+@pytest.mark.parametrize("shape, padding, value, dtype, memory_config", _pad_codegen_cases)
+def test_pad_codegen(device, shape, padding, value, dtype, memory_config):
+    skip_unless_dm_codegen_arch(device)
+    x = _codegen_input(shape, dtype)
+    xt = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+    output = ttnn.to_torch(_pad_force_codegen(xt, padding, value))
+    assert_tensors_equal(_torch_pad(x, padding, value), output)
+
+
+@pytest.mark.parametrize(
+    "shape, padding, value, dtype, memory_config",
+    [
+        pytest.param(
+            [1, 71, 32, 64],
+            [[0, 0], [0, 25], [0, 0], [0, 0]],
+            0.0,
+            ttnn.bfloat16,
+            ttnn.L1_MEMORY_CONFIG,
+            id="falcon7b_decode_c",
+        ),
+        pytest.param(
+            [1, 1, 45, 70],
+            [[0, 0], [0, 0], [0, 30], [0, 30]],
+            1.5,
+            ttnn.float32,
+            ttnn.DRAM_MEMORY_CONFIG,
+            id="hw_partial_fp32",
+        ),
+    ],
+)
+def test_pad_auto_routes_to_codegen(device, shape, padding, value, dtype, memory_config):
+    skip_unless_dm_codegen_arch(device)
+    x = _codegen_input(shape, dtype)
+    xt = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
+    device.clear_program_cache()
+    # Warm native first so that any program the auto call adds can only be a codegen one.
+    _pad_force_native(xt, padding, value)
+    entries_before = device.num_program_cache_entries()
+    output = ttnn.to_torch(ttnn.pad(xt, padding, value))
+    assert_tensors_equal(_torch_pad(x, padding, value), output)
+    entries_after_auto = device.num_program_cache_entries()
+    assert entries_after_auto > entries_before, "auto added no program over native's; expected the codegen path"
+    _pad_force_codegen(xt, padding, value)
+    msg = "forced codegen compiled new programs, so auto did not run the codegen ones"
+    assert device.num_program_cache_entries() == entries_after_auto, msg
+
+
+def test_pad_codegen_program_cache(device):
+    skip_unless_dm_codegen_arch(device)
+    shape = [1, 2, 45, 70]
+    padding = [[0, 0], [0, 1], [0, 19], [0, 26]]
+    value = 1.5
+    entries = None
+    resident = []
+    outputs = []
+    for _ in range(2):
+        x = _codegen_input(shape, ttnn.bfloat16)
+        xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        resident.append(xt)
+        output = _pad_force_codegen(xt, padding, value)
+        outputs.append((output, _torch_pad(x, padding, value)))
+        assert_tensors_equal(outputs[-1][1], ttnn.to_torch(output))
+        if entries is None:
+            entries = device.num_program_cache_entries()
+        else:
+            assert device.num_program_cache_entries() == entries, "second codegen dispatch missed the program cache"
+        # Keep both dispatches' tensors alive and shift the allocator, so the cached programs must rebind buffers.
+        resident.append(
+            ttnn.from_torch(
+                torch.zeros([1, 1, 32, 32], dtype=torch.bfloat16),
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+        )
+    # The first output is still alive, so the cache hit can only be correct if it rebound the output buffer.
+    (first, first_expected), (second, _) = outputs
+    assert first.buffer_address() != second.buffer_address(), "second output reused the first output's buffer"
+    assert_tensors_equal(first_expected, ttnn.to_torch(first))
+
+
+def test_pad_codegen_program_rekeys_when_l1_frontier_drops(device):
+    skip_unless_dm_codegen_arch(device)
+    # The CB batching is planned against the L1 free at dispatch and is part of the program key, so a tensor landing
+    # inside the full plan's CB region must build a shallower program rather than replay one that overlaps it. The
+    # cost is that a plan cached at warm-up is not the one a trace capture under less L1 needs.
+    shape = [1, 1, 64, 64]
+    padding = [[0, 0], [0, 0], [0, 32], [0, 32]]
+    value = 2.0
+    tile_bytes = 32 * 32 * 2  # one bfloat16 tile
+    # A plan holds a double-buffered output CB of 2 x batch tiles plus one pad tile. The batch starts at 8 and halves
+    # down to 1 as L1 shrinks.
+    full_batch, min_batch = 8, 1
+    full_plan_bytes = (2 * full_batch + 1) * tile_bytes
+    min_plan_bytes = (2 * min_batch + 1) * tile_bytes
+    x = _codegen_input(shape, ttnn.bfloat16)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    expected = _torch_pad(x, padding, value)
+    assert_tensors_equal(expected, ttnn.to_torch(_pad_force_codegen(xt, padding, value)))
+    entries = device.num_program_cache_entries()
+
+    info = ttnn._ttnn.reports.get_device_info(device)
+    tiles_per_bank = (info.cb_limit - full_plan_bytes // 2) // tile_bytes
+    resident = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, 32 * tiles_per_bank, 32 * info.l1_num_banks]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        ttnn.L1_MEMORY_CONFIG,
+    )
+    try:
+        headroom = resident.buffer_address() - info.address_at_first_l1_cb_buffer
+        assert min_plan_bytes <= headroom < full_plan_bytes, f"pinned tensor left {headroom} B of CB headroom"
+        assert_tensors_equal(expected, ttnn.to_torch(_pad_force_codegen(xt, padding, value)))
+        msg = "the dispatch under less L1 hit the program planned for a clear L1"
+        assert device.num_program_cache_entries() == entries + 1, msg
+    finally:
+        ttnn.deallocate(resident)
+
+
+@pytest.mark.parametrize(
+    "dtype, value",
+    [
+        pytest.param(ttnn.int32, 3.0e9, id="int32_above_range"),
+        pytest.param(ttnn.uint32, -1.0, id="uint32_negative"),
+        pytest.param(ttnn.int32, float("nan"), id="int32_nan"),
+    ],
+)
+def test_pad_codegen_out_of_range_integer_value(device, dtype, value):
+    skip_unless_dm_codegen_arch(device)
+    # The partial-tile lanes and the new tiles must hold one word: the value truncated and wrapped to 32 bits, and
+    # zero for NaN.
+    shape = [1, 1, 45, 70]
+    padding = [[0, 0], [0, 0], [0, 30], [0, 30]]
+    x = torch.randint(0, 100, shape, dtype=torch.int32)
+    xt = ttnn.from_torch(x, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.to_torch(_pad_force_codegen(xt, padding, value)).view(torch.int32)
+    word = 0 if math.isnan(value) else (int(value) & 0xFFFFFFFF) - (1 << 32 if int(value) & 0x80000000 else 0)
+    expected = torch.full(list(output.shape), word, dtype=torch.int32)
+    expected[..., : shape[-2], : shape[-1]] = x
+    assert_tensors_equal(expected, output)
+
+
+def test_pad_codegen_matches_native_bitwise_for_unrepresentable_value(device):
+    skip_unless_dm_codegen_arch(device)
+    # 0.1 has no exact bfloat16 form, so both routes must round it the same way in the input's partial-tile lanes
+    # and in the new tiles. Each route fills its input's partial tiles in place, hence one input per route.
+    shape = [1, 2, 45, 70]
+    padding = [[0, 0], [0, 0], [0, 19], [0, 26]]
+    value = 0.1
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    native_input = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    codegen_input = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    native = ttnn.to_torch(_pad_force_native(native_input, padding, value))
+    codegen = ttnn.to_torch(_pad_force_codegen(codegen_input, padding, value))
+    assert_tensors_equal(native.view(torch.int16), codegen.view(torch.int16))
+
+
+def test_pad_codegen_declines_input_padded_past_tile_grid(device, expect_error):
+    # The codegen kernels index tiles from the logical shape, so an input whose padded shape holds extra
+    # tiles must stay on native. Native is the reference here because the contract is the routing.
+    x = torch.rand([1, 1, 32, 32], dtype=torch.bfloat16)
+    rm = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    xt = ttnn.tilize_with_val_padding(rm, [1, 1, 64, 64], 7.0)
+    assert list(xt.padded_shape) == [1, 1, 64, 64], f"padded shape {list(xt.padded_shape)}, expected [1, 1, 64, 64]"
+    padding = [[0, 0], [0, 0], [0, 0], [0, 32]]
+    device.clear_program_cache()
+    golden = ttnn.to_torch(_pad_force_native(xt, padding, 0.0))
+    entries_before = device.num_program_cache_entries()
+    output = ttnn.to_torch(ttnn.pad(xt, padding, 0.0))
+    assert_tensors_equal(golden, output)
+    assert device.num_program_cache_entries() == entries_before, "auto routed the over-padded input to codegen"
+    with expect_error(RuntimeError, "does not support"):
+        _pad_force_codegen(xt, padding, 0.0)
+
+
+def test_pad_codegen_declines_zero_volume_input(device, expect_error):
+    # An empty input gives the codegen program no tiles to split over cores, so the gate must refuse it.
+    x = torch.rand([0, 1, 32, 32], dtype=torch.bfloat16)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    padding = [[0, 0], [0, 0], [0, 0], [0, 32]]
+    auto = ttnn.pad(xt, padding, 0.0)
+    assert list(auto.shape) == list(_torch_pad(x, padding, 0.0).shape)
+    with expect_error(RuntimeError, "does not support"):
+        _pad_force_codegen(xt, padding, 0.0)
+
+
+def test_pad_codegen_partial_tile_input_with_thousands_of_border_tiles_per_core(device):
+    """Every plane has a partial border tile, at least 1365 per core: all must be filled before the pad copies them."""
+    skip_unless_dm_codegen_arch(device)
+    grid = device.compute_with_storage_grid_size()
+    c = 1024
+    n = -(-1365 * grid.x * grid.y // c)
+    shape = [n, c, 30, 30]  # one partial tile per plane
+    padding = [[0, 0], [0, 0], [0, 2], [0, 0]]
+    value = 1.5
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.to_torch(_pad_force_codegen(xt, padding, value))
+    assert_tensors_equal(_torch_pad(x, padding, value), output)
+
+
+def test_pad_codegen_uneven_core_split(device):
+    skip_unless_dm_codegen_arch(device)
+    # One output tile more than twice the core count leaves the work split with a second core group that gets one
+    # tile fewer, so that group's runtime args are exercised.
+    grid = device.compute_with_storage_grid_size()
+    num_cores = grid.x * grid.y
+    shape = [1, 2 * num_cores, 32, 32]
+    padding = [[0, 0], [0, 1], [0, 0], [0, 0]]
+    value = 1.5
+    assert (shape[1] + 1) % num_cores != 0
+    x = _codegen_input(shape, ttnn.bfloat16)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.to_torch(_pad_force_codegen(xt, padding, value))
+    assert_tensors_equal(_torch_pad(x, padding, value), output)
+
+
+@pytest.mark.parametrize("value", [0.0, 2.0], ids=["zero", "nonzero"])
+def test_pad_codegen_bfloat8_b(device, value):
+    skip_unless_dm_codegen_arch(device)
+    # Zero pads the block-float tiles directly; a nonzero value pads a bfloat16 copy and re-encodes it.
+    shape = [1, 3, 64, 96]
+    padding = [[0, 0], [0, 1], [0, 32], [0, 64]]
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
+    output = ttnn.to_torch(_pad_force_codegen(xt, padding, value))
+    assert_allclose(_torch_pad(x, padding, value).float(), output.float(), rtol=0.05, atol=0.025)
+    # The padding is whole tiles, so every shared-exponent block in it holds only the value and encodes it exactly.
+    _assert_pad_fill_regions(output, shape, padding, value)
+
+
+@pytest.mark.parametrize(
+    "input_placement, output_placement",
+    [
+        pytest.param(ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG, id="l1_to_dram"),
+        pytest.param(ttnn.DRAM_MEMORY_CONFIG, ttnn.L1_MEMORY_CONFIG, id="dram_to_l1"),
+    ],
+)
+def test_pad_codegen_mixed_placement(device, input_placement, output_placement):
+    skip_unless_dm_codegen_arch(device)
+    shape = [1, 2, 45, 70]
+    padding = [[0, 0], [0, 1], [0, 19], [0, 26]]
+    value = 1.5
+    x = _codegen_input(shape, ttnn.bfloat16)
+    xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=input_placement)
+    output = _pad_force_codegen(xt, padding, value, memory_config=output_placement)
+    assert output.memory_config().buffer_type == output_placement.buffer_type
+    assert_tensors_equal(_torch_pad(x, padding, value), ttnn.to_torch(output))
+
+
+# The codegen program spreads work over the whole compute grid, so it cannot honour either control.
+_SUB_CORE_GRIDS = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})
+_codegen_execution_controls = [
+    pytest.param({"use_multicore": False}, id="single_core"),
+    pytest.param({"sub_core_grids": _SUB_CORE_GRIDS}, id="sub_core_grids"),
+]
+_CODEGEN_REFUSAL = "codegen path does not support"
+
+
+@pytest.mark.parametrize(
+    "case, controls, message",
+    [
+        pytest.param("row_major", {}, _CODEGEN_REFUSAL, id="row_major"),
+        pytest.param("height_sharded", {}, _CODEGEN_REFUSAL, id="height_sharded"),
+        pytest.param("uint16", {}, _CODEGEN_REFUSAL, id="uint16"),
+        pytest.param("tile_16x32", {}, _CODEGEN_REFUSAL, id="tile_16x32"),
+        pytest.param("bfloat8_b_partial_tile", {}, _CODEGEN_REFUSAL, id="bfloat8_b_partial_tile"),
+        pytest.param("host", {}, "codegen path needs a device tensor", id="host_tensor"),
+        *[pytest.param("tile", p.values[0], _CODEGEN_REFUSAL, id=p.id) for p in _codegen_execution_controls],
+    ],
+)
+def test_pad_codegen_forced_refuses_out_of_scope(device, expect_error, case, controls, message):
+    shape = [1, 1, 64, 64]
+    padding = [[0, 0], [0, 0], [0, 32], [0, 32]]
+    x = torch.rand(shape, dtype=torch.bfloat16)
+    tile_kwargs = {"dtype": ttnn.bfloat16, "layout": ttnn.TILE_LAYOUT, "device": device}
+    if case == "row_major":
+        xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    elif case == "height_sharded":
+        sharded = ttnn.create_sharded_memory_config(
+            shape, core_grid=ttnn.CoreGrid(y=1, x=2), strategy=ttnn.ShardStrategy.HEIGHT
+        )
+        xt = ttnn.from_torch(x, memory_config=sharded, **tile_kwargs)
+    elif case == "uint16":
+        xt = ttnn.from_torch(torch.ones(shape, dtype=torch.bfloat16), **{**tile_kwargs, "dtype": ttnn.uint16})
+    elif case == "tile_16x32":
+        xt = ttnn.from_torch(x, tile=ttnn.Tile((16, 32)), **tile_kwargs)
+    elif case == "bfloat8_b_partial_tile":
+        xt = ttnn.from_torch(
+            torch.rand([1, 1, 45, 70], dtype=torch.bfloat16), **{**tile_kwargs, "dtype": ttnn.bfloat8_b}
+        )
+    elif case == "host":
+        xt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT)
+    else:
+        xt = ttnn.from_torch(x, **tile_kwargs)
+    with expect_error(RuntimeError, message):
+        _pad_force_codegen(xt, padding, 1.5, **controls)
+
+
+@pytest.mark.parametrize("controls", _codegen_execution_controls)
+def test_pad_codegen_auto_keeps_execution_controls_on_native(device, controls):
+    # Without the controls this input routes to codegen (see test_pad_auto_routes_to_codegen).
+    shape = [1, 1, 45, 70]
+    padding = [[0, 0], [0, 0], [0, 30], [0, 30]]
+    value = 1.5
+    x = _codegen_input(shape, ttnn.float32)
+    xt = ttnn.from_torch(
+        x, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+    )
+    device.clear_program_cache()
+    # Warm native first so that any program the auto call adds can only be a codegen one. Compared against native
+    # rather than torch: native's single-core tile pad does not keep float32 exact.
+    expected = ttnn.to_torch(_pad_force_native(xt, padding, value, **controls))
+    entries_before = device.num_program_cache_entries()
+    output = ttnn.to_torch(ttnn.pad(xt, padding, value, **controls))
+    assert torch.equal(output, expected)
+    msg = "auto routed a pad with an execution control to codegen"
+    assert device.num_program_cache_entries() == entries_before, msg
