@@ -227,6 +227,7 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         carry_rows = {src: torch.full((sp, ROWS), SENTINEL32, dtype=torch.int32) for src in pool.carry}
         self.rows, self.live = {}, []
         taken = set()
+        entries = []
         c1sel = torch.full((sp, ROWS), C1_ONEHOT_SENTINEL, dtype=torch.int32)
         c1put = torch.full((sp, ROWS), C1_ONEHOT_SENTINEL, dtype=torch.int32)
         self.live_rows = max((len(block) for block in tokens.values()), default=1)
@@ -244,12 +245,8 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
                 row = block_rows[j]
                 assert (r, row) not in taken, f"slot {slot}: row {row} of rank {r} already live"
                 taken.add((r, row))
-                c1sel[r, j], c1put[r, row] = row, j  # the c1 MoE: rows u .. u + K to 0 .. K and back
-                ids[r, 0, row] = int(token)
-                positions[r, row] = p + j
-                active[r, row] = True
-                user_of[r, row] = u
-                first[r, row] = 1.0 if j == 0 else 0.0
+                # one entry a row, the tensors filled at once below (an element write is microseconds each,: six a row at 96 rows)
+                entries.append((r, row, j, int(token), p + j, u))
                 rows.append(row)
             self.rows[slot] = rows
             self.live += [(row, u) for row in rows if (row, u) not in self.live]  # one selection per tile row
@@ -257,6 +254,15 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
             if committed is not None:
                 for src in carry_rows:
                     carry_rows[src][r, committed] = u  # scratch row ``committed`` -> the slot's carry row u
+        if entries:
+            e = torch.tensor(entries, dtype=torch.int64)  # [rows, 6]: rank, row, j, token, position, user
+            er, erow, ej = e[:, 0], e[:, 1], e[:, 2]
+            c1sel[er, ej], c1put[er, erow] = erow.to(torch.int32), ej.to(torch.int32)  # the c1 MoE's row maps
+            ids[er, 0, erow] = e[:, 3].to(torch.int32)
+            positions[er, erow] = e[:, 4]
+            active[er, erow] = True
+            user_of[er, erow] = e[:, 5]
+            first[er, erow] = (ej == 0).float()
         tick("rows")
         ints = {"token": ids.view(sp, ROWS)}
         if self.c1:
