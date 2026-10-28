@@ -83,9 +83,9 @@ void kernel_main() {
         cb_push_back(cb, heads_per_item * tiles_per_head);
     };
 
-    // Reads one item's Q block and then K/V steps [k_begin, k_end) of Sk_chunk_t tiles each. The push
+    // Reads one item's Q block and then its num_kv_steps K/V steps of Sk_chunk_t tiles each. The push
     // order must match the cb_wait_front order in the compute kernel.
-    auto read_q_chunk = [&](const uint32_t item, const uint32_t k_begin, const uint32_t k_end) {
+    auto read_q_chunk = [&](const uint32_t item, const uint32_t num_kv_steps) {
         const auto w = decode_work_item<q_num_chunks, Sq_chunk_t, q_heads, heads_per_item>(item);
 
         read_stacked_rows(cb_query, query_address_generator, qWt, w);
@@ -96,7 +96,7 @@ void kernel_main() {
 
         // Each step issues all its reads (K, the step's mask tiles, V), then waits once and pushes them in
         // the order the compute kernel waits for them.
-        for (uint32_t k_step = k_begin; k_step < k_end; ++k_step) {
+        for (uint32_t k_step = 0; k_step < num_kv_steps; ++k_step) {
             const uint32_t h_start = k_step * Sk_chunk_t;
             const uint32_t key_start_idx = key_offset + h_start * qWt;
             // K lands feature-major in cb_key (all Sk_chunk_t tiles of feature 0, then feature 1, ...),
@@ -136,6 +136,6 @@ void kernel_main() {
 
     for_each_work_item(work_list_arg_idx, [&](uint32_t item) {
         const uint32_t first_row_tile = sdpa_fw_items::first_row_tile_of(item, q_num_chunks, Sq_chunk_t);
-        read_q_chunk(item, /* k_begin */ 0, num_kv_steps_of_chunk<Ht, Sq_chunk_t, Sk_chunk_t>(first_row_tile));
+        read_q_chunk(item, num_kv_steps_of_chunk<Ht, Sq_chunk_t, Sk_chunk_t>(first_row_tile));
     });
 }

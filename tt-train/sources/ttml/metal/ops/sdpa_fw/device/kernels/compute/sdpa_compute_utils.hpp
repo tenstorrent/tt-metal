@@ -13,9 +13,7 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/exp.h"
-#include "api/compute/eltwise_unary/negative.h"
 #include "api/compute/eltwise_unary/recip.h"
-#include "api/compute/eltwise_unary/softplus.h"
 #include "api/compute/mask.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reconfig_data_format.h"
@@ -313,7 +311,7 @@ void update_cur_exp_sums_inplace(
 }
 
 // Row-reduce tiles [row0, row0 + n) of cb_in_idx in place (matmul with a ones column), n <= 4.
-template <uint32_t cb_identity_scaler, uint32_t cb_matmul_reduce>
+template <uint32_t cb_matmul_reduce>
 void row_reduce_tiles_inplace(uint32_t cb_in_idx, uint32_t row0, uint32_t n) {
     reconfig_data_format(cb_matmul_reduce, cb_in_idx);
     tile_regs_acquire();
@@ -399,39 +397,4 @@ void compute_and_pack_lse(
     pack_reconfig_data_format(cb_out_lse);
     pack_tile</* out_of_order */ true>(lse_reg, cb_out_lse, /* offset */ row);
     tile_regs_release();
-}
-
-// Pack intermediate result with masking to ensure only column 0 has value, rest are zeros.
-// cb_mask_tile should contain 1.0 in column 0 and 0.0 elsewhere (use cb_matmul_reduce).
-// Input tile has reduced value in column 0 after row reduction.
-// Output tile will have value only in column 0, all other columns zeroed out.
-void pack_intermediate_result(
-    uint32_t cb_in_idx, uint32_t cb_out_idx, uint32_t cb_mask_tile, uint32_t tiles_count = 1U) {
-    cb_wait_front(cb_in_idx, tiles_count);
-    cb_reserve_back(cb_out_idx, tiles_count);
-
-    const uint32_t dst_idx = 0;
-
-    for (uint32_t tile_idx = 0; tile_idx < tiles_count; ++tile_idx) {
-        tile_regs_acquire();
-        reconfig_data_format_srca(/* old_cb_idx */ cb_mask_tile, /* new_cb_idx */ cb_in_idx);
-        copy_init(/* new_cb_idx */ cb_in_idx);
-        copy_tile(cb_in_idx, /* tile_idx */ tile_idx, /* register idx */ dst_idx);
-
-        reconfig_data_format_srca(/* old_cb_idx */ cb_in_idx, /* new_cb_idx */ cb_mask_tile);
-        copy_init(/* new_cb_idx */ cb_mask_tile);
-        copy_tile(cb_mask_tile, /* tile_idx */ 0, /* register idx */ dst_idx + 1U);
-
-        mask_tile_init();
-        mask_tile(dst_idx, dst_idx + 1U);
-
-        tile_regs_commit();
-
-        tile_regs_wait();
-        pack_reconfig_data_format(cb_out_idx);
-        pack_tile(dst_idx, cb_out_idx);
-        tile_regs_release();
-    }
-
-    cb_push_back(cb_out_idx, tiles_count);
 }
