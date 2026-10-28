@@ -23,7 +23,7 @@ jobs:
         case: ${{ fromJSON(inputs.cases) }}
     name: "replay ${{ matrix.case }}"
     runs-on: tt-ubuntu-2204-P150b-stable
-    timeout-minutes: 180
+    timeout-minutes: 240
     container:
       image: ${{ needs.build-images.outputs.llk-ci-tag }}
       options: "--rm --device /dev/tenstorrent --ulimit nofile=4096:4096"
@@ -35,7 +35,8 @@ jobs:
         env:
           REPLAY_ROOT: ${{ runner.temp }}/replay
           CASE: ${{ matrix.case }}
-        run: bash .github/replay/replay_case.sh $CASE
+        run: |
+          if [[ $CASE == script\ * ]]; then bash .github/replay/${CASE#script }; else bash .github/replay/replay_case.sh $CASE; fi
       - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f
         if: always()
         with:
