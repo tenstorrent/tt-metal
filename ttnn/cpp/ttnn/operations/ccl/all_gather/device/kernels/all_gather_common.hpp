@@ -447,11 +447,13 @@ FORCE_INLINE uint64_t fabric_frame_addr(uint32_t x, uint32_t y, uint32_t l1) { r
 // wait_front are volatile accesses, which do not order ordinary loads and stores, and BH RISCs cache L1 reads. So the
 // reader calls slot_publish() between building a slot and push_back, and the writer calls slot_acquire() between
 // wait_front and reading the slot.
-FORCE_INLINE void slot_publish() { asm volatile("" ::: "memory"); }
+FORCE_INLINE void slot_publish() {
+    asm volatile("" ::: "memory");  // compiler barrier: keep the slot's record and SlotInfo stores before push_back
+}
 
 FORCE_INLINE void slot_acquire() {
-    invalidate_l1_cache();
-    asm volatile("" ::: "memory");
+    invalidate_l1_cache();          // drop cached L1 lines, so this RISC sees the records the reader RISC just wrote
+    asm volatile("" ::: "memory");  // compiler barrier: keep the slot reads after wait_front and the invalidate
 }
 
 // Waits until the local semaphore reaches `count`, then takes `count` off it. Call Noc::async_atomic_barrier()
