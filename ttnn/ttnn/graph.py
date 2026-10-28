@@ -345,6 +345,23 @@ def end_graph_capture_to_file(report_path):
     return json.loads(result_str)
 
 
+# Mesh coordinates listed one by one in a tensor summary before the rest are counted instead. Every tensor argument of
+# every operation carries the summary, in the Python I/O sidecar and the report DB, so a tensor spread over a
+# 16x8 multi-host mesh would otherwise add 128 coordinates to each.
+_MAX_MESH_COORDS_LISTED = 8
+
+
+def _mesh_coords_summary(mesh_coords, device):
+    """The tensor's mesh coordinates: each one for a few, ``all <n>`` when it spans the whole mesh, else the first few
+    and a count."""
+    if len(mesh_coords) <= _MAX_MESH_COORDS_LISTED:
+        return [str(c) for c in mesh_coords]
+    if device is not None and len(mesh_coords) == device.get_num_devices():
+        return f"all {len(mesh_coords)}"
+    listed = [str(c) for c in mesh_coords[:_MAX_MESH_COORDS_LISTED]]
+    return listed + [f"... {len(mesh_coords)} in all"]
+
+
 def _ttnn_tensor_summary(t) -> str:
     """Build a rich one-line summary of a ttnn.Tensor.
 
@@ -374,7 +391,7 @@ def _ttnn_tensor_summary(t) -> str:
     topology = t.tensor_topology()
     mesh_coords = topology.mesh_coords()
     if mesh_coords:
-        info["mesh_coords"] = [str(c) for c in mesh_coords]
+        info["mesh_coords"] = _mesh_coords_summary(mesh_coords, device)
     dist_shape = topology.distribution_shape()
     if dist_shape is not None:
         info["distribution_shape"] = str(dist_shape)
