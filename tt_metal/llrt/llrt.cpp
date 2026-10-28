@@ -8,11 +8,11 @@
 #include <tt-logger/tt-logger.hpp>
 #include <unistd.h>
 #include <chrono>
-#include <condition_variable>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <functional>
+#include <future>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -52,9 +52,9 @@ struct CachedBinary {
 };
 
 struct BinaryCache {
-    std::unordered_map<std::string, std::unique_ptr<const CachedBinary>> map;
+    // A path's binary, or the error that loading it threw, which every later request for the path throws again.
+    std::unordered_map<std::string, std::shared_future<CachedBinary>> map;
     std::mutex mutex;
-    std::condition_variable cvar;
 };
 
 BinaryCache& binary_cache() {
@@ -70,47 +70,39 @@ const CachedBinary& get_cached_binary(
     ll_api::memory::Loading loading,
     const std::function<void(ll_api::memory&)>& update_callback) {
     BinaryCache& cache = binary_cache();
-
+    // The first request for a path loads it, outside the lock.
+    std::packaged_task<CachedBinary()> load;
     std::unique_lock lock(cache.mutex);
     auto [slot, inserted] = cache.map.try_emplace(path);
-    const CachedBinary* ptr = nullptr;
     if (inserted) {
-        // We're the first with PATH. Create and insert.
-        lock.unlock();
-        // Single ELF open: harvest metadata from the pristine ELF first (from_elf may transform it in
-        // place for XIP), then pack the device image.
-        ll_api::ElfFile elf;
-        elf.ReadImage(path);
-        ll_api::BinaryMetadata metadata = ll_api::parse_binary_metadata(elf);
-        // Every device-executed image, kernel or firmware, passes through here before it can run, so giving it its
-        // block of zone ids and registering their names happens strictly before a zone can reach the host. Not gated
-        // on the streaming profiler: only ELFs built with PROFILE_STREAMING (part of the JIT build key) carry zone
-        // sites, and ingest_elf returns immediately for the rest. Must run before from_elf, which packs the text the
-        // ids are immediates in and may XIP-transform the ELF in place.
-        ZoneMetaRegistry::instance().ingest_elf(path, elf);
-        ll_api::memory image = ll_api::memory::from_elf(elf, path, loading);
-        if (update_callback) {
-            update_callback(image);
-        }
-        auto* mutable_ptr = new CachedBinary{.image = std::move(image), .metadata = std::move(metadata)};
-
-        lock.lock();
-        // maps have iterator stability, so SLOT is still valid.
-        slot->second = decltype(slot->second)(mutable_ptr);
-        ptr = mutable_ptr;
-        // We can't wake just those waiting on this slot, so wake them
-        // all. Should be a rare event anyway.
-        cache.cvar.notify_all();
-    } else {
-        if (!slot->second) {
-            // Someone else is creating the initial entry, wait for them.
-            cache.cvar.wait(lock, [=] { return bool(slot->second); });
-        }
-        ptr = slot->second.get();
-        TT_ASSERT(ptr->image.get_loading() == loading);
+        load = std::packaged_task<CachedBinary()>([&] {
+            // Single ELF open: harvest metadata from the pristine ELF first (from_elf may transform it in
+            // place for XIP), then pack the device image.
+            ll_api::ElfFile elf;
+            elf.ReadImage(path);
+            ll_api::BinaryMetadata metadata = ll_api::parse_binary_metadata(elf);
+            // Every device-executed image, kernel or firmware, passes through here before it can run, so giving it
+            // its block of zone ids and registering their names happens strictly before a zone can reach the host.
+            // Not gated on the streaming profiler: only ELFs built with PROFILE_STREAMING (part of the JIT build key)
+            // carry zone sites, and ingest_elf returns immediately for the rest. Must run before from_elf, which packs
+            // the text the ids are immediates in and may XIP-transform the ELF in place.
+            ZoneMetaRegistry::instance().ingest_elf(path, elf);
+            ll_api::memory image = ll_api::memory::from_elf(elf, path, loading);
+            if (update_callback) {
+                update_callback(image);
+            }
+            return CachedBinary{.image = std::move(image), .metadata = std::move(metadata)};
+        });
+        slot->second = load.get_future().share();
     }
-
-    return *ptr;
+    const std::shared_future<CachedBinary> binary = slot->second;
+    lock.unlock();
+    if (load.valid()) {
+        load();
+    }
+    const CachedBinary& result = binary.get();
+    TT_ASSERT(result.image.get_loading() == loading);
+    return result;
 }
 
 }  // namespace
