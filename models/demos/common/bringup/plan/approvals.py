@@ -48,11 +48,18 @@ def _files(spec, point: str) -> list[str]:
     return [str((d / f).relative_to(spec.repo)) for f in POINTS[point] if (d / f).exists()]
 
 
+KEYS = ("id", "title", "deps", "gate", "paths", "tests", "device")
+
+
 def ledger_signature(spec) -> str:
     # Picked performance items (step: perf) are approved at the perf point, and the overseer's fixes (F77) are
     # reviewed like any gate commit, so adding either keeps the plan approval.
     tasks = [t for t in Ledger(spec.ledger_dir).tasks().values() if t.get("step") not in ("perf", "overseer_fix")]
-    keep = [{k: t.get(k) for k in ("id", "title", "deps", "gate", "paths", "tests", "device")} for t in tasks]
+    fixes = {t["id"] for t in Ledger(spec.ledger_dir).tasks().values() if t.get("step") == "overseer_fix"}
+    # F206: a placed fix becomes a dep of the task after it: that edge is the fix's, not the plan's
+    keep = [
+        {k: ([d for d in t.get(k) or [] if d not in fixes] if k == "deps" else t.get(k)) for k in KEYS} for t in tasks
+    ]
     return hashlib.sha256(json.dumps(keep, sort_keys=True).encode()).hexdigest()
 
 

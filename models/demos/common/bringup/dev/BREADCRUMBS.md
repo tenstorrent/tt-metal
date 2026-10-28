@@ -2248,3 +2248,12 @@ stay within a 5 % band of 5 runs. The 8x4 flat series was called settled at 1042
 Fix: testing/profile.settled also requires the last window's median at most WALL_TREND_PCT (2 %) below the window
 before it (two windows of 5 needed); WALL_MAX_SETTLE 30 -> 60. Selftests test_warm_wall.py (the drift case; the F200
 2x2 sequence now settles on the 119 ms plateau, not on the 123.6 .. 123.5 window still 16 % below its predecessor).
+
+## F206: a fix job runs before the task it is placed before, also under --until (DeepSeek-V4.1 FIX.6, 2026-10-28)
+Problem: _place_fixes inserted the fix before the first unpassed task in tasks.yaml, but with every gate task passed
+nothing depended on it; under `resume --until X.2` the scope is X.2's upstream, so FIX.6 (the MoE default change for
+the new torus spec) was out of scope and X.1 profiled the old default on the torus, where it hangs (stopped by hand).
+Fix: the task a fix is placed before gets the fix as a dep (topo order and --until scope both include it); the plan
+approval's ledger signature ignores deps on overseer fixes (the edge is the fix's, not the plan's). Selftest
+test_overseer.py::test_a_queued_fix_runs_before_the_next_task_under_until; full selftests 639 pass (1 failure from
+before: xing40 server_rules.py:393 fixed threshold).
