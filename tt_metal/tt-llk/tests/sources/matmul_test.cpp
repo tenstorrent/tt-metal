@@ -48,6 +48,25 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const Operand& buffer_B           = params.buffer_B;
 #endif
 
+#ifdef ARCH_BLACKHOLE
+#ifdef MATMUL_UNPACK_TTSYNC
+    constexpr bool unpack_auto_ttsync = true;
+#else
+    constexpr bool unpack_auto_ttsync = false;
+#endif
+    // the test chooses the 8-bit stream at compile time, as a kernel's compile-time formats do
+#ifdef MATMUL_STREAM_NARROW
+    constexpr bool stream_narrow = !is_fp32_dest_acc_en;
+#else
+    constexpr bool stream_narrow = false;
+#endif
+#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, unpack_auto_ttsync, stream_narrow
+#define MATMUL_UNPACK_TEMPLATE_ARGS      0, 0, unpack_auto_ttsync, MAX_TILES_DEST, unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync>()
+#else
+#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS
+#define MATMUL_UNPACK_TEMPLATE_ARGS
+#endif
+
     {
         START_PERF_MEASURE("INIT")
         _llk_unpack_hw_configure_<is_fp32_dest_acc_en>(
@@ -61,7 +80,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
             num_faces_B,
             TILE_SIZE_UNPACK_A,
             TILE_SIZE_UNPACK_B);
-        _llk_unpack_AB_matmul_init_<>(UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM, KT_DIM, FACE_R_DIM, FACE_R_DIM, num_faces_A, num_faces_B, false, false);
+        _llk_unpack_AB_matmul_init_<MATMUL_UNPACK_INIT_TEMPLATE_ARGS>(
+            UNPACK_TRANSPOSE_FACES,
+            CT_DIM,
+            RT_DIM,
+            KT_DIM,
+            FACE_R_DIM,
+            FACE_R_DIM,
+            num_faces_A,
+            num_faces_B,
+            false,
+            false);
         PROFILER_SYNC();
     }
     {
@@ -103,7 +132,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_A[last_a])), "unpack A real-buffer top address is outside L1");
                         LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_B[last_b])), "unpack B real-buffer top address is outside L1");
                     }
-                    _llk_unpack_AB_matmul_<>(
+                    _llk_unpack_AB_matmul_<MATMUL_UNPACK_TEMPLATE_ARGS>(
                         addr_a,
                         addr_b,
                         tile_a,
@@ -129,6 +158,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #include "llk_math_common.h"
 #include "llk_math_matmul.h"
 
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_ROW_MOP)
+#define MATMUL_MATH_TEMPLATE_ARGS MATH_FIDELITY, THROTTLE_LEVEL, true
+#else
+#define MATMUL_MATH_TEMPLATE_ARGS MATH_FIDELITY, THROTTLE_LEVEL
+#endif
+
 void run_kernel(RUNTIME_PARAMETERS params)
 {
 #if defined(RUNTIME_FORMATS) && !defined(SPEED_OF_LIGHT)
@@ -146,7 +181,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     {
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
-        _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(
+        _llk_math_matmul_init_<MATMUL_MATH_TEMPLATE_ARGS>(
             /* tile A */ TILE_R_DIM,
             /* tile A */ TILE_C_DIM,
             /* tile B */ TILE_R_DIM,
@@ -177,7 +212,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
                 for (std::uint32_t j = 0; j < KT_DIM; j++)
                 {
-                    _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(/* dest_index */ 0, CT_DIM, RT_DIM);
+                    _llk_math_matmul_<MATMUL_MATH_TEMPLATE_ARGS>(/* dest_index */ 0, CT_DIM, RT_DIM);
                 }
             }
         }
@@ -192,7 +227,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 _llk_math_wait_for_dest_available_<dest_sync>();
                 for (std::uint32_t j = 0; j < KT_DIM; j++)
                 {
-                    _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(/* dest_index */ 0, CT_DIM, RT_DIM);
+                    _llk_math_matmul_<MATMUL_MATH_TEMPLATE_ARGS>(/* dest_index */ 0, CT_DIM, RT_DIM);
                 }
                 _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
             }
@@ -209,6 +244,40 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
 #include "llk_lib_pack_wrappers.h"
 #include "llk_pack_common.h"
+
+#ifndef MATMUL_PACK_FORM
+#define MATMUL_PACK_FORM 0
+#endif
+
+#if defined(ARCH_BLACKHOLE)
+// MATMUL_PACK_FORM 1 packs the block with one program run, 2 closes every tile (block-float outputs and small tiles).
+inline void matmul_pack_out(std::uint32_t tile_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, std::uint32_t num_faces = 4)
+{
+#if MATMUL_PACK_FORM != 0
+    // The fast forms need four faces of 16 rows. At half sync the pack hides behind math or unpack, where the denser DEST reads only add contention: the closed form stays off and the plain one needs 16-bit DEST.
+    constexpr bool fast_plain = !(is_fp32_dest_acc_en && dest_sync == DstSync::SyncHalf);
+    constexpr bool fast_closed = dest_sync == DstSync::SyncFull;
+    if (MATMUL_PACK_FORM == 1 && fast_plain)
+    {
+        _llk_pack_block_fast_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles);
+        return;
+    }
+    if (MATMUL_PACK_FORM == 2 && fast_closed)
+    {
+        _llk_pack_block_closed_fast_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles, tile_stride);
+        return;
+    }
+#endif
+    if constexpr (MATMUL_PACK_FORM == 1)
+    {
+        _llk_pack_block_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(tile_index, address, num_tiles);
+    }
+    else
+    {
+        _llk_pack_block_closed_<dest_sync, is_fp32_dest_acc_en>(tile_index, address, num_tiles, tile_stride, num_faces);
+    }
+}
+#endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -229,6 +298,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, TILE_SIZE_PACK);
         _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
         _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
+#if defined(ARCH_BLACKHOLE) && MATMUL_PACK_FORM != 0
+        _llk_pack_block_fast_init_();
+#endif
         PROFILER_SYNC();
     }
     {
@@ -244,6 +316,13 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 for (std::uint32_t tile = 0; tile < CT_DIM * RT_DIM; tile++)
                 {
                     const std::uint32_t tile_index = tile % MAX_TILES_DEST;
+#if defined(ARCH_BLACKHOLE)
+                    if constexpr (MATMUL_PACK_FORM != 0)
+                    {
+                        matmul_pack_out(tile_index, PERF_ADDRESS(PERF_OUTPUT, tile_index), CT_DIM * RT_DIM, TILE_SIZE_PACK << 4);
+                        break;
+                    }
+#endif
                     LLK_ASSERT(
                         (tile_index < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                         "Block tile index exceeds maximum destination tiles for matmul");
@@ -267,6 +346,17 @@ void run_kernel(RUNTIME_PARAMETERS params)
                     {
                         LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_Res[i])), "pack result real-buffer address is outside L1");
                     }
+#if defined(ARCH_BLACKHOLE)
+                    if constexpr (MATMUL_PACK_FORM != 0)
+                    {
+                        if (LOOP_FACTOR == 1)
+                        {
+                            LLK_ASSERT(is_valid_L1_address(L1_ADDRESS(buffer_Res[CT_DIM * RT_DIM - 1])), "pack result real-buffer address is outside L1");
+                        }
+                        matmul_pack_out(i, addr, CT_DIM * RT_DIM, TILE_SIZE_PACK << 4);
+                        break;
+                    }
+#endif
                     _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, addr);
                 }
                 _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();

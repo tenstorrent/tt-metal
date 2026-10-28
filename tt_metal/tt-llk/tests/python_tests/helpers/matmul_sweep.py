@@ -12,6 +12,7 @@ from helpers.golden_generators import TILE_DIM
 from helpers.llk_params import (
     DestAccumulation,
     DestSync,
+    MathFidelity,
     StochasticRounding,
     Transpose,
 )
@@ -101,6 +102,37 @@ def mid_fill_rt_ct_pairs(max_tiles: int) -> List[tuple]:
     return [
         (rt, ct) for rt, ct in pairs if rt >= 1 and ct >= 1 and rt * ct <= max_tiles
     ]
+
+
+def matmul_pack_form(
+    formats: FormatConfig,
+    dest_sync: DestSync,
+    math_fidelity: MathFidelity,
+    rt_dim: int,
+    ct_dim: int,
+    kt_dim: int,
+    in0_tile_r_dim: int = 32,
+    in1_tile_c_dim: int = 32,
+    throttle: int = 0,
+) -> int:
+    """Output pack form of the Blackhole matmul kernels, the rule ttnn's matmul kernels apply at compile time
+    (llk_matmul_block_pack): 0 per tile, 1 one block run, 2 the closed block (block-float outputs and small tiles)."""
+    small = in0_tile_r_dim < 32 or in1_tile_c_dim < 32
+    if rt_dim * ct_dim < 2 or (math_fidelity == MathFidelity.LoFi and kt_dim > 1):
+        return 0
+    if dest_sync == DestSync.Half and (
+        math_fidelity != MathFidelity.LoFi
+        or throttle >= 4
+        or (small and formats.output_format == DataFormat.Float32)
+        # Float32 operands bound a full fp32 section on the unpacker, the denser DEST reads of the block pack only slow the math
+        or (
+            formats.input_format == DataFormat.Float32
+            and formats.output_format != DataFormat.Float32
+            and rt_dim * ct_dim >= 4
+        )
+    ):
+        return 0
+    return 2 if small or formats.output_format.is_block_float() else 1
 
 
 def unpack_matmul_fits_perf_ring(
