@@ -4,16 +4,21 @@
 
 """Head layout of the V4.1 attention around ``sparse_sdpa`` (bead 8y7.9.9), one fused op per side.
 
-``sparse_sdpa`` reads its queries and writes its output row-major and head-major, ``[1, H, S, D]``; the projections
-around it are seq-major tiled matmuls. Instead of ``nlp_create_qkv_heads`` / ``nlp_concat_heads`` plus the RoPE-tail
+``sparse_sdpa`` reads its queries and writes its output row-major and head-major, ``[1, H, S, D]``; the
+projections
+around it are seq-major tiled matmuls. Instead of ``nlp_create_qkv_heads`` / ``nlp_concat_heads`` plus the
+RoPE-tail
 slice / rotate / untilize / slice_write / tilize glue, each side is one pass over the heads:
 
-* ``q_heads``: the tiled ``wq_b`` projection ``[1, 1, S, H * D]`` (heads side by side) -> row-major ``[1, H, S, D]``
+* ``q_heads``: the tiled ``wq_b`` projection ``[1, 1, S, H * D]`` (heads side by side) -> row-major ``[1, H,
+S, D]``
   with RoPE on each head's trailing ``rope_dim`` channels;
-* ``o_heads``: the row-major attention ``[1, H, S, D]`` -> tiled ``[1, G, S, (H / G) * D]`` (group g's heads side by
+* ``o_heads``: the row-major attention ``[1, H, S, D]`` -> tiled ``[1, G, S, (H / G) * D]`` (group g's heads
+side by
   side: the grouped ``wo_a`` input) with the inverse RoPE of each tail.
 
-The RoPE is ``rotary_embedding_llama``'s op sequence with its bf16 intermediates (``kernels/heads_rope.hpp``), so
+The RoPE is ``rotary_embedding_llama``'s op sequence with its bf16 intermediates (``kernels/heads_rope.hpp``),
+so
 both ops reproduce the composite path bit for bit (``tests/v41/test_v41_head_layout.py``).
 """
 
@@ -89,19 +94,30 @@ def _program(device, units, kernels, cbs, tensors):
     return ttnn.generic_op(tensors, ttnn.ProgramDescriptor(kernels=descriptors, semaphores=[], cbs=_cbs(cores, cbs)))
 
 
-def q_heads(q, cos, sin, trans, heads: int, rope_dim: int) -> ttnn.Tensor:
-    """Tiled bf16 ``q`` [1, 1, S, heads * D] -> row-major bf16 [1, heads, S, D], RoPE (``cos`` / ``sin`` [1, 1, S,
-    rope_dim] tiled, ``trans`` the 32x32 rotation) on each head's last ``rope_dim`` channels."""
+def q_heads(q, cos, sin, trans, heads: int, rope_dim: int, out_heads: int | None = None) -> ttnn.Tensor:
+    """Tiled bf16 ``q`` [1, 1, S, heads * D] -> row-major bf16 [1, heads, S, D], RoPE (``cos`` / ``sin`` [1,
+    1, S,
+    rope_dim] tiled, ``trans`` the 32x32 rotation) on each head's last ``rope_dim`` channels. ``out_heads``
+    (>=
+    ``heads``): the output holds that many heads, the ones past ``heads`` zero (``sparse_sdpa`` takes 32 heads
+    at
+    least; the decode step's 16 local heads padded to a tile)."""
     assert q.dtype == ttnn.bfloat16 and q.layout == ttnn.TILE_LAYOUT, (q.dtype, q.layout)
     assert not q.memory_config().is_sharded(), "q_heads takes an interleaved q"
     tokens, width = q.shape[-2], q.shape[-1]
     assert q.shape[0] == 1 and q.shape[1] == 1 and width % heads == 0, (tuple(q.shape), heads)
+    out_heads = heads if out_heads is None else out_heads
+    assert heads <= out_heads <= 2 * heads, (heads, out_heads)  # unit (r, h) zeroes head heads + h: pad <= heads
     head_dim = width // heads
     nt, rt = _geometry(head_dim, rope_dim, tokens)
     _check_rope(cos, sin, trans, tokens, rope_dim)
     device = q.device()
     out = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, heads, tokens, head_dim]), ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, device, ttnn.DRAM_MEMORY_CONFIG
+        ttnn.Shape([1, out_heads, tokens, head_dim]),
+        ttnn.bfloat16,
+        ttnn.ROW_MAJOR_LAYOUT,
+        device,
+        ttnn.DRAM_MEMORY_CONFIG,
     )
     units = tokens // _TILE * heads  # (tile row, head), row-major: a core's heads of one row share its cos / sin
     addrs = [q.buffer_address(), cos.buffer_address(), sin.buffer_address(), trans.buffer_address()]
@@ -115,25 +131,34 @@ def q_heads(q, cos, sin, trans, heads: int, rope_dim: int) -> ttnn.Tensor:
         ),
         (
             "heads_q_writer.cpp",
-            [nt, rt, heads, tokens] + _accessor(out),
+            [nt, rt, heads, tokens, out_heads] + _accessor(out),
             lambda s, c: [out.buffer_address(), s, c],
             ttnn.WriterConfigDescriptor(),
         ),
         ("heads_q_compute.cpp", [nt, rt, heads], lambda s, c: [s, c], compute),
     ]
     # cb 0 no-rope / 1 tail tiles, 2 / 3 cos / sin, 4 rotation, 5-7 RoPE intermediates, 8 rotated tail,
-    # 16 / 17 the untilized no-rope / tail rows
+    # 16 / 17 the untilized no-rope / tail rows, 18 the zero row of the padded heads
     cbs = {0: 2 * nt, 1: 2 * rt, 2: 2 * rt, 3: 2 * rt, 4: 1, 5: rt, 6: rt, 7: rt, 8: 2 * rt, 16: 2 * nt, 17: 2 * rt}
+    if out_heads > heads:
+        cbs[18] = -(-head_dim * 2 // _BF16_TILE_BYTES)  # one row of bf16 in tile-sized pages
     return _program(device, units, kernels, cbs, [q, cos, sin, trans, out])
 
 
-def o_heads(attn, cos, sin, trans, groups: int, rope_dim: int) -> ttnn.Tensor:
-    """Row-major bf16 ``attn`` [1, H, S, D] -> tiled bf16 [1, groups, S, (H / groups) * D], RoPE with ``cos`` /
-    ``sin`` (pass -sin for the inverse) on each head's last ``rope_dim`` channels."""
+def o_heads(attn, cos, sin, trans, groups: int, rope_dim: int, heads: int | None = None) -> ttnn.Tensor:
+    """Row-major bf16 ``attn`` [1, H, S, D] -> tiled bf16 [1, groups, S, (H / groups) * D], RoPE with ``cos``
+    /
+    ``sin`` (pass -sin for the inverse) on each head's last ``rope_dim`` channels. ``heads`` (<= H): only the
+    first
+    that many heads are read (the pages of head h are the same whatever H is: the padded heads of
+    ``q_heads``'s
+    output stay behind)."""
     assert attn.dtype == ttnn.bfloat16 and attn.layout == ttnn.ROW_MAJOR_LAYOUT, (attn.dtype, attn.layout)
     assert not attn.memory_config().is_sharded(), "o_heads takes an interleaved attn"
-    _, heads, tokens, head_dim = attn.shape
-    assert attn.shape[0] == 1 and heads % groups == 0, (tuple(attn.shape), groups)
+    _, all_heads, tokens, head_dim = attn.shape
+    heads = all_heads if heads is None else heads
+    assert 0 < heads <= all_heads, (heads, tuple(attn.shape))
+    assert attn.shape[0] == 1 and heads % groups == 0, (tuple(attn.shape), heads, groups)
     nt, rt = _geometry(head_dim, rope_dim, tokens)
     _check_rope(cos, sin, trans, tokens, rope_dim)
     hpg = heads // groups

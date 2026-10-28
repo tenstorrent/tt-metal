@@ -44,6 +44,13 @@ TOPK_ALIGN = 32  # topk_large_indices needs a multiple of 16; sparse_sdpa k chun
 # ``qdq`` (folded into the FP8 QDQ's output shape)
 _CONCAT = os.environ.get("V41_DECODE_CONCAT", "op")
 assert _CONCAT in ("op", "qdq"), _CONCAT
+# the decode step's SDPA: ``gather`` (the queries all-gathered over TP, every chip's sparse_sdpa over all 64 heads and
+# its own groups of the output kept) or ``local`` (each chip's 16 heads padded with zero heads to the 32 sparse_sdpa
+# takes: no all-gather, half the SDPA, no partition). The prefill keeps its head-to-sequence
+# all-to-all.
+_SDPA = os.environ.get("V41_DECODE_SDPA", "gather")
+assert _SDPA in ("gather", "local"), _SDPA
+SDPA_MIN_HEADS = 32  # sparse_sdpa: H a multiple of the tile height
 
 
 def _round_up(x: int, m: int) -> int:
@@ -195,6 +202,19 @@ class TtV41Attention(LightweightModule):
         sink = (weights["attn_sink"].detach().float() / self.scale).reshape(1, 1, 1, self.heads).to(torch.bfloat16)
         self.sink = ttnn.from_torch(
             sink, device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=replicate
+        )
+        # the chip's heads' sinks padded with zeros to the sparse_sdpa minimum (the decode step's local SDPA)
+        self.local_heads = self.heads // self.tp
+        self.sdpa_heads = max(self.local_heads, SDPA_MIN_HEADS)
+        assert self.heads % self.tp == 0 and self.local_heads <= self.sdpa_heads <= 2 * self.local_heads
+        local = sink.view(self.tp, self.local_heads)
+        padded = torch.cat([local, torch.zeros(self.tp, self.sdpa_heads - self.local_heads, dtype=local.dtype)], 1)
+        self.sink_local = ttnn.from_torch(
+            padded.reshape(1, 1, 1, self.tp * self.sdpa_heads),
+            device=mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=tp_mapper(3),
         )
         self.trans_mat = ttnn.from_torch(
             get_rot_transformation_mat(),

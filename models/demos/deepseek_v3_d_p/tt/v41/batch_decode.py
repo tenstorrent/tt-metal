@@ -37,6 +37,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import mhc_expand
+from models.demos.deepseek_v3_d_p.tt.v41 import attention as attention_module
 from models.demos.deepseek_v3_d_p.tt.v41.attention import TOPK_ALIGN, TtV41Attention
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.decode import MOE_ROWS, ROWS, TtV41Decoder
@@ -392,6 +393,8 @@ class TtV41BatchDecoder(TtV41Decoder):
         # as rows of a split layout) and selects by merging the rows' top-k (select_split); no 32-row dense score,
         # no mask round-trip, no per-step mask build
         self.single_query = os.environ.get("V41_DECODE_SINGLE_QUERY", "0") == "1"
+        # V41_DECODE_SDPA=local: the SDPA of both captures on the chip's own heads
+        self.sdpa_local = attention_module._SDPA == "local"
         self.sampler = (
             DeviceSampler(self.mesh_device, self.config, model.blocks[0].attn.ccl, self.pool.gather_sp)
             if sample_on_device
@@ -951,6 +954,24 @@ class TtV41BatchDecoder(TtV41Decoder):
                 compressed = selection["topk"]
         rows = self._index_rows(layer, compressed)
 
+        k_chunk = next(c for c in (128, 64, 32) if rows.shape[-1] % c == 0)
+        if self.sdpa_local and self.tp > 1:
+            # this chip's heads alone (padded with zero heads to sparse_sdpa's 32; their output rows are never read):
+            # no all-gather of the queries, half the SDPA, no partition of the output
+            out = ttnn.transformer.sparse_sdpa(
+                q_heads(q, cos, sin, attn.trans_mat, attn.local_heads, attn.rope_dim, out_heads=attn.sdpa_heads),
+                kv_tensor,
+                rows,
+                attn.head_dim,
+                kv_format=kv_format.sparse_sdpa_format,
+                scale=attn.scale,
+                k_chunk_size=k_chunk,
+                attention_sink=attn.sink_local,
+            )
+            out = o_heads(
+                out, cos, ttnn.neg(sin), attn.trans_mat, attn.o_groups // self.tp, attn.rope_dim, heads=attn.local_heads
+            )
+            return attn._o_proj(out)
         q = attn.ccl.tp_all_gather(q, dim=3)
         out = ttnn.transformer.sparse_sdpa(
             q_heads(q, cos, sin, attn.trans_mat, attn.heads, attn.rope_dim),
@@ -959,7 +980,7 @@ class TtV41BatchDecoder(TtV41Decoder):
             attn.head_dim,
             kv_format=kv_format.sparse_sdpa_format,
             scale=attn.scale,
-            k_chunk_size=next(c for c in (128, 64, 32) if rows.shape[-1] % c == 0),
+            k_chunk_size=k_chunk,
             attention_sink=attn.sink,
         )
         out = o_heads(out, cos, ttnn.neg(sin), attn.trans_mat, attn.o_groups, attn.rope_dim)
