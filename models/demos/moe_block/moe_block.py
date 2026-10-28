@@ -148,6 +148,10 @@ class MoEOptions:
     # routing exchange + planner, dispatch prep, latent; its rows in chunks where one does not fit L1); "ops" a program
     # a stage; "auto": fused where it fits (FusedHead.fits)
     head: Literal["auto", "fused", "ops"] = "auto"
+    # a fused head that FusedHead.fits allows but that then fails to build (a host check, the L1 it needs): False
+    # raises (the default: a shape the fused head should take never silently runs the ops head); True takes the ops
+    # head. The reason is logged either way
+    head_fallback: bool = False
     # the fused head's router logits: on the engine's cores at the start, on their own router cores, or "auto" (the
     # head's cost model: tt/fused_head.py router_placement - the router's FLOPs a core vs the SE path)
     router: Literal["auto", "engine", "router_cores"] = "auto"
@@ -543,14 +547,20 @@ class MoEBlock(LightweightModule):
                 self._warm_up_head()
                 self.fused.head.settle_arena()
             except (AssertionError, ValueError, RuntimeError) as e:
-                # (auto: a fused head that does not build at this shape - its L1 does not fit - falls back to the ops
-                # head; the partial head's buffers go with it)
-                if options.head == "fused":
-                    raise
-                fits = "build: " + " ".join(str(e).split())[:400]
+                # (a fused head that FusedHead.fits allows but does not build raises, unless options.head_fallback:
+                # then the ops head; the partial head's buffers go with it)
                 from loguru import logger
 
-                logger.warning(f"MoEBlock: the fused head does not build here ({fits}); the ops head")
+                fits = "build: " + " ".join(str(e).split())[:400]
+                if options.head == "fused" or not options.head_fallback:
+                    logger.error(
+                        f"MoEBlock: the fused head does not build (mesh {g.sp}x{g.tp}, chunk {g.chunk_tokens}): "
+                        f"{fits}; raising (MoEOptions.head_fallback=True takes the ops head)"
+                    )
+                    raise
+                logger.warning(
+                    f"MoEBlock: the fused head does not build here ({fits}); the ops head (MoEOptions.head_fallback)"
+                )
                 _free_partial_l1([self.fused], e.__traceback__.tb_next)
                 self.fused = None
                 for t in holes:
