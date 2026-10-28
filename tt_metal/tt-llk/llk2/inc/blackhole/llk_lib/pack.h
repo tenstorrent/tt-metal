@@ -123,11 +123,6 @@ constexpr std::uint32_t pack_fmt(DataFormat f)
     return ckernel::masked_data_format(static_cast<std::uint32_t>(f));
 }
 
-constexpr bool is_32bit_format(DataFormat f)
-{
-    return f == DataFormat::Float32 || f == DataFormat::Int32 || f == DataFormat::UInt32;
-}
-
 /// The input format the packer is told: FP8 (E4M3) output goes through the gasket's FP16, so the packer takes FP16
 /// (set_packer_config).
 constexpr std::uint32_t packer_in_data_format(const pack_params& p)
