@@ -2108,8 +2108,10 @@ struct PipelineStageNode {
 // fmt::formatter<PipelineStageNode> prints "<pipeline>/<stage id>", as for LogicalExitNode.
 
 // --- additions to LogicalMultiMeshGraph (P5) ---
-// Filled by build_logical_multi_mesh_adjacency_graph only when the MGD has pipeline_descriptors;
-// otherwise empty, so no-pipeline runs build exactly what they build today.
+// Empty by default (default-constructed). build_logical_multi_mesh_adjacency_graph fills them only when
+// the MGD has pipeline_descriptors, so no-pipeline runs build exactly what they build today. Nothing
+// reads them unless pipeline_stage_graph_ has nodes, which it does exactly when the MGD has pipelines
+// (Tier A rejects a pipeline with no stages).
 struct LogicalMultiMeshGraph {
     // ... mesh_adjacency_graphs_, mesh_level_graph_, mesh_exit_node_graphs_ as today ...
 
@@ -2160,8 +2162,9 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const MeshGraphDe
 
 ```cpp
 // --- additions to PhysicalMultiMeshGraph (P5), the twin of the LogicalMultiMeshGraph fields ---
-// Filled per seating by build_physical_pipeline_adjacency_graph after intra-mesh success, because a
-// position's chips depend on the intra-mesh layout; empty otherwise. Position i is a rectangle of host
+// Empty by default; build_hierarchical_from_flat_graph leaves them so. Filled per seating by
+// build_physical_pipeline_adjacency_graph after intra-mesh success, because a position's chips depend
+// on the intra-mesh layout, and only when the logical stage graph has nodes. Position i is a rectangle of host
 // slices on one mesh that some stage shape fills exactly.
 struct PhysicalMultiMeshGraph {
     // ... mesh_adjacency_graphs_, mesh_level_graph_, mesh_exit_node_graphs_, mesh_pgd_pinnings_ as today ...
@@ -2350,7 +2353,7 @@ Lines without `+` are today's code.
         }
         TopologyMappingResult full = complete_intra_mesh_for_placement(identity, logical_, physical, ...);
         if (full.success) {
-+           if (config_.check_pipelines && mesh_graph_descriptor_->has_pipeline_descriptors() &&   // C4 (4.4) on reject
++           if (config_.check_pipelines && !logical_.pipeline_stage_graph_.get_nodes().empty() &&   // no stage graph: today's loop
 +               !detail::check_pipeline_seating(
 +                   *mesh_graph_descriptor_, logical_, physical, *physical_system_descriptor_, full)) {
 +               last_failed_ = full;
@@ -3571,7 +3574,10 @@ bindings exactly as today, with no extra search, no extra SAT clauses and no cha
 setting. Generated MGDs (`generate_mesh_graph_descriptor_of_shape`) have no pipelines, so
 they are always off.
 
-**One source of truth.** Hooks do not each re-check the proto. There is one gate:
+**One source of truth.** Hooks do not each re-check the proto. The pipeline fields of both graphs
+are empty by default and are only read when `logical_.pipeline_stage_graph_` has nodes, which it
+does exactly when the merged MGD has `pipeline_descriptors` (Tier A rejects a pipeline with no
+stages). Hooks that run before the logical graph exists use `has_pipeline_descriptors()`:
 
 ```cpp
 // MeshGraphDescriptor (merged)
@@ -3580,7 +3586,7 @@ bool has_pipeline_descriptors() const;                                 // proto_
 // const PipelineMappingConstraints* pipeline_mapping_constraints() const; // null when off
 
 // LogicalMultiMeshGraph, filled once per run by build_logical_multi_mesh_adjacency_graph (P5)
-AdjacencyGraph<PipelineStageNode> pipeline_stage_graph_;               // empty when the MGD has no pipelines
+AdjacencyGraph<PipelineStageNode> pipeline_stage_graph_;               // empty by default; the gate: nodes iff pipelines
 std::map<LogicalMeshNode, tt::tt_metal::distributed::MeshContainer<MeshHostRankId>> mesh_host_grids_;   // empty likewise
 ```
 
@@ -3597,8 +3603,8 @@ hook adds nothing; it never means "empty pipeline, run with defaults".
 | `ExtraMappingConstraints` (2.2, 4.4) | `TopologyMappingConfig` | empty hooks: no constraint added |
 | seat-graph edge drop for `k_AB` (4.4) | `build_sat_placement_seat_graph` | today's `saturated_link_count` edges |
 | `unique_shapes` (4.4) | `map_multi_mesh_to_physical`, `generate_rank_bindings --all-solutions` | `true`, as today |
-| `pipeline_stage_graph_`, `mesh_host_grids_` (4.0) | `build_logical_multi_mesh_adjacency_graph` | not filled (no pipelines); the hook in `next()` also skips them when `check_pipelines` is off, and `TopologyMappingResult::pipeline` stays unset |
-| C1 to C4 (section 4) | `MultiMeshSolutionEnumerator::next` | loop is today's; no `pipeline_*` failure stage can be reported |
+| `pipeline_stage_graph_`, `mesh_host_grids_` (4.0) | `build_logical_multi_mesh_adjacency_graph` | stay empty (the default); the hook in `next()` sees an empty stage graph and skips, and also skips when `check_pipelines` is off, and `TopologyMappingResult::pipeline` stays unset |
+| C1 to C4 (section 4) | `MultiMeshSolutionEnumerator::next` | loop is today's; `PhysicalMultiMeshGraph::pipeline_position_*` stay empty; no `pipeline_*` failure stage can be reported |
 | exit-node retry (4.4) | `complete_intra_mesh_for_placement` | never called a second time for one seating; no signature block added |
 | required links `R` and the budget check (4.3) | mapper | `R` empty; no budget check |
 | phase 0 (4.3) | `pair_logical_intermesh_ports` | empty `required_hashes`, so today's phases |

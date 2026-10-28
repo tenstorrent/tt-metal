@@ -1314,7 +1314,9 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
      AdjacencyGraph<LogicalMeshNode> mesh_level_graph_;
      std::map<LogicalMeshNode, AdjacencyGraph<LogicalExitNode>> mesh_exit_node_graphs_;
 +
-+    // The rest is filled only when the MGD has pipeline_descriptors; otherwise empty.
++    // Empty by default. Filled only when the MGD has pipeline_descriptors, and read only when
++    // pipeline_stage_graph_ has nodes (exactly when the MGD has pipelines; Tier A rejects a pipeline
++    // with no stages).
 +    // All pipelines merged into one graph: every stage of every pipeline, isolated ones included. Edges
 +    // both ways, one entry per declared edge (a repeated edge is another channel). Each pipeline is one
 +    // component; no edges between pipelines.
@@ -1390,9 +1392,9 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
      std::map<PhysicalMeshNode, AdjacencyGraph<PhysicalExitNode>> mesh_exit_node_graphs_;
      std::map<PhysicalMeshNode, std::map<LogicalChipId, AsicPosition>> mesh_pgd_pinnings_;
 +
-+    // The twin of LogicalMultiMeshGraph's pipeline fields. Filled per seating by
-+    // build_physical_pipeline_adjacency_graph after intra-mesh success, because a position's chips depend on
-+    // the intra-mesh layout; empty otherwise. Position i is a rectangle of host slices on one mesh that some
++    // The twin of LogicalMultiMeshGraph's pipeline fields. Empty by default; build_hierarchical_from_flat_graph
++    // leaves them so. Filled per seating by build_physical_pipeline_adjacency_graph after intra-mesh success,
++    // because a position's chips depend on the intra-mesh layout, and only when the stage graph has nodes. Position i is a rectangle of host slices on one mesh that some
 +    // stage's dims fill exactly. Every field is an existing type: the resolver's ChipTuple and DirectLinks.
 +    AdjacencyGraph<std::size_t> pipeline_position_graph_;               // disjoint, bordering; one entry per link
 +    std::vector<std::vector<ChipTuple>> pipeline_position_chips_;       // per position: (mesh, chip, row, col), slot-local
@@ -1785,7 +1787,7 @@ bool reject(TopologyMappingResult& full, std::string_view stage, std::string rea
     steps: [
       "TopologyMappingConfig::check_pipelines (default true); TopologyMapper sets it false under the kill switch (4.7).",
       "Enumerator constructor: nothing beyond P5. P5 keeps the merged MGD as mesh_graph_descriptor_, and logical_ = build_logical_multi_mesh_adjacency_graph(merged) already fills pipeline_stage_graph_ and mesh_host_grids_ (P5), so the enumerator needs no other pipeline members. Nothing else goes through the config, so every overload and generate_rank_bindings get it the same way.",
-      "next(): after intra-mesh success, when check_pipelines is set and mesh_graph_descriptor_->has_pipeline_descriptors(), call detail::check_pipeline_seating(*mesh_graph_descriptor_, logical_, physical, psd, full) (P6). Accept: it has set full.pipeline. Reject (C4): it has set success, failure_stage and error_message on full; then last_failed_, exclude_mapping(seating) on the seat set (never add_forbidden_constraint), and the next seating.",
+      "next(): after intra-mesh success, when check_pipelines is set and logical_.pipeline_stage_graph_ has nodes (empty by default; nodes exactly when the MGD has pipelines), call detail::check_pipeline_seating(*mesh_graph_descriptor_, logical_, physical, psd, full) (P6). Accept: it has set full.pipeline. Reject (C4): it has set success, failure_stage and error_message on full; then last_failed_, exclude_mapping(seating) on the seat set (never add_forbidden_constraint), and the next seating.",
       "Cap rejections per run (kMaxPipelineRejections, proposed 256, overridable for sweeps) and report the last reason; record rejections and solve time in the placement stats, so the sweep and CI show whether P10 is needed.",
       "Turn unique_shapes off when a pipeline is present (runtime overloads and --all-solutions): swapping meshes between the same seats can change the pipeline answer.",
       "Result: TopologyMappingResult::pipeline; split_mapping_to_local_parts remaps it per part.",
@@ -1869,7 +1871,7 @@ bool reject(TopologyMappingResult& full, std::string_view stage, std::string rea
              apply_placement_stats(full.stats, *placement_stats_);
          }
          if (full.success) {
-+            if (config_.check_pipelines && mesh_graph_descriptor_->has_pipeline_descriptors() &&   // P6 sets full.pipeline on accept
++            if (config_.check_pipelines && !logical_.pipeline_stage_graph_.get_nodes().empty() &&   // P6 sets full.pipeline on accept
 +                !detail::check_pipeline_seating(*mesh_graph_descriptor_, logical_, physical, *physical_system_descriptor_, full)) {
 +                last_failed_ = full;                                      // C4: success, failure_stage, error_message already set
 +                if (++pipeline_rejections_ > kMaxPipelineRejections ||
@@ -2023,9 +2025,9 @@ bool reject(TopologyMappingResult& full, std::string_view stage, std::string rea
         mode: "diff",
         language: "cpp",
         src: `
--            if (config_.check_pipelines && mesh_graph_descriptor_->has_pipeline_descriptors() &&
+-            if (config_.check_pipelines && !logical_.pipeline_stage_graph_.get_nodes().empty() &&
 -                !detail::check_pipeline_seating(*mesh_graph_descriptor_, logical_, physical, *physical_system_descriptor_, full)) {
-+            bool accepted = !config_.check_pipelines || !mesh_graph_descriptor_->has_pipeline_descriptors() ||
++            bool accepted = !config_.check_pipelines || logical_.pipeline_stage_graph_.get_nodes().empty() ||
 +                detail::check_pipeline_seating(*mesh_graph_descriptor_, logical_, physical, *physical_system_descriptor_, full);
 +            for (int retry = 0; !accepted && retry < kMaxLayoutRetries; ++retry) {
 +                auto blocks = slice_signature_blocks(full, mesh_graph_);   // full's layout; empty when fixed by bindings
@@ -2349,7 +2351,7 @@ rank_bindings:
         src: `
  // topology_mapper_utils.cpp, MultiMeshSolutionEnumerator::next, the pipeline branch (P8)
 +           std::vector<std::pair<MeshId, MeshId>> proofs;
-            if (config_.check_pipelines && mesh_graph_descriptor_->has_pipeline_descriptors() &&
+            if (config_.check_pipelines && !logical_.pipeline_stage_graph_.get_nodes().empty() &&
 -               !detail::check_pipeline_seating(*mesh_graph_descriptor_, logical_, physical, *physical_system_descriptor_, full)) {
 +               !detail::check_pipeline_seating(*mesh_graph_descriptor_, logical_, physical, *physical_system_descriptor_, full, &proofs)) {   // C4
                 last_failed_ = full;
@@ -4724,7 +4726,9 @@ function MapperTab() {
         <Text tone="secondary">
           An MGD with no pipeline_descriptors after merge maps, binds and writes rank bindings exactly as today: no extra search,
           no extra SAT clauses, no changed setting. Generated MGDs (generate_mesh_graph_descriptor_of_shape) have no pipelines,
-          so they are always off. One gate, not a proto check per hook: the merged descriptor's has_pipeline_descriptors()
+          so they are always off. The pipeline fields of both graphs are empty by default and are read only when
+          logical_.pipeline_stage_graph_ has nodes, which it does exactly when the merged MGD has pipelines. Before the
+          logical graph exists, one gate, not a proto check per hook: the merged descriptor's has_pipeline_descriptors()
           (and, in the backup plan, pipeline_mapping_constraints(), null when off), read from the merged descriptor
           the enumerator keeps. No pipelines means the hook adds nothing, never "run with defaults".
         </Text>
@@ -4777,10 +4781,11 @@ bool has_pipeline_descriptors() const;                                  // proto
 // const PipelineMappingConstraints* pipeline_mapping_constraints() const; // null when off
 
 // LogicalMultiMeshGraph, filled once per run by build_logical_multi_mesh_adjacency_graph (P5)
-AdjacencyGraph<PipelineStageNode> pipeline_stage_graph_;               // empty when the MGD has no pipelines
+AdjacencyGraph<PipelineStageNode> pipeline_stage_graph_;               // empty by default; the gate: nodes iff pipelines
 std::map<LogicalMeshNode, tt::tt_metal::distributed::MeshContainer<MeshHostRankId>> mesh_host_grids_;   // empty likewise
 
-// PhysicalMultiMeshGraph, per seating: pipeline_position_* stay empty unless check_pipeline_seating runs`;
+// PhysicalMultiMeshGraph, per seating: pipeline_position_* are empty by default and stay so unless
+// check_pipeline_seating runs, which needs a stage graph with nodes`;
 
 function SatTab() {
   return (
