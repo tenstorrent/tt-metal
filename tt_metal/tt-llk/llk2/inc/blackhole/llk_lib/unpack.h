@@ -28,6 +28,19 @@
 //   unpack<On, Plan>(in0, in1)      the per-thread call the Compute API makes: plans on every thread, configures
 //                                   and executes only when this build is for thread On (the unpack thread)
 //
+// Unpack to Dest. A stream whose Plan says Where::Dest goes through unpacker 0 to Dest instead of SrcA (32-bit
+// formats with a 32-bit Dest; see unpack_tile_to_dest and dest_write_begin below). Its tiles land one after another from a Dest row the math
+// thread names, so unpack and math hand off around the whole call (dest_write_begin / dest_write_end):
+//   math    waits until its earlier Dest writes are done, then sends the absolute Dest row through the mailbox
+//   unpack  takes the row, points both contexts at it, unpacks every tile (each UNPACR moves its Dest address on by
+//           one tile through the channel 1 Z counter), then posts semaphore UNPACK_TO_DEST once the unpacker is idle
+//   math    waits for UNPACK_TO_DEST and takes it; Dest now holds the tiles
+// No Src bank changes hands on the way to Dest: those UNPACRs keep the bank (no data valid).
+//
+// Transpose. A stream with `transpose` set is transposed inside each 16x16 face by unpacker 0 (Haloize_mode). The
+// face order is the consumer's to fix (matmul's address modifiers, copy's MOVA2Ds). Unpacker 0 cannot transpose on
+// the way to Dest.
+//
 // Two config contexts: each unpacker keeps its L1 base address in a config register per context. The unpack thread
 // writes the next run's addresses into one context while the unpackers still work from the other, and flips
 // between them after every run. Semaphore UNPACK_SYNC counts the contexts handed to the unpackers and not yet
@@ -37,7 +50,8 @@
 // compiler (config folding). There is no init, uninit or reconfig.
 //
 // Not HAL yet: the format helpers (masked_data_format, datum_size_in_bytes, canonical_unpA_y_stride, from
-// cunpack_common.h) and the software state ckernel keeps (unp_cfg_context).
+// cunpack_common.h), the software state ckernel keeps (unp_cfg_context), and the thread mailboxes (mailbox_read,
+// ckernel.h) the unpack-to-Dest handoff reads the Dest row from.
 
 #pragma once
 
@@ -80,6 +94,8 @@ inline constexpr std::uint32_t gpr_half_mask          = 0xffff;       ///< scala
 inline constexpr std::uint32_t unpacker_throttle_mode = 2;            ///< Throttle_mode 2: the 512-bit L1 read interface, as configure_unpack_AB
 inline constexpr std::uint32_t src_write_base         = 4 * 16;       ///< Src row the unpackers start writing at, both contexts; the value configure_unpack_AB uses
 inline constexpr std::uint32_t replay_ops_per_stream  = 6;            ///< UNPACR, RDCFG, ADDDMAREG, STALLWAIT, WRCFG, NOP (record_streamed_tile)
+inline constexpr Semaphore unpack_to_dest_sync       = Semaphore::S2; ///< ckernel::semaphore::UNPACK_TO_DEST: tiles unpacked to Dest, not yet taken by math
+inline constexpr std::uint32_t dest_row_bytes_32bit   = dest_row_datums * sizeof(std::uint32_t); ///< one Dest row of 32-bit datums
 
 // ---- parameters ----------------------------------------------------------------------------------------------------
 
@@ -94,10 +110,11 @@ struct unpack_stream
     std::uint32_t tile_size;  ///< one tile in L1
     Layout layout;            ///< how the operand sits in L1
     Broadcast broadcast;      ///< how a smaller operand is spread over the tile
-    bool transpose;           ///< transpose the faces on the way in (unpacker 0 only)
+    bool transpose;           ///< transpose inside each face on the way in (unpacker 0 to SrcA only)
     std::uint32_t tile_step;  ///< address step after each streamed tile, inside a run
     std::uint32_t run_step;   ///< address step from one run to the next
     std::uint32_t step_step;  ///< address step from one walk step to the next
+    bool to_dest;             ///< write Dest instead of SrcA (unpacker 0 only, 32-bit formats)
 };
 
 /// Parameters of one unpack operation, for any op. configure and execute take the same struct.
@@ -123,14 +140,21 @@ constexpr unpack_stream stream_from(const UnpackPlan& u)
         u.tile_step * (u.tile_bytes / l1_address_unit_bytes),
         u.run_step * (u.tile_bytes / l1_address_unit_bytes),
         u.step_step * (u.tile_bytes / l1_address_unit_bytes),
+        u.to == Where::Dest,
     };
+}
+
+/// Unpacker 0 writes SrcA or Dest; unpacker 1 writes SrcB.
+constexpr bool on_unpacker0(Where w)
+{
+    return w == Where::SrcA || w == Where::Dest;
 }
 
 /// The Plan of any op as unpack parameters: each operand goes to the unpacker its Plan names.
 constexpr unpack_params unpack_params_from(const Plan& p)
 {
     const UnpackPlan none {};
-    const UnpackPlan& a = p.in0.to == Where::SrcA ? p.in0 : p.in1.to == Where::SrcA ? p.in1 : none;
+    const UnpackPlan& a = on_unpacker0(p.in0.to) ? p.in0 : on_unpacker0(p.in1.to) ? p.in1 : none;
     const UnpackPlan& b = p.in0.to == Where::SrcB ? p.in0 : p.in1.to == Where::SrcB ? p.in1 : none;
     return {stream_from(a), stream_from(b), p.walk};
 }
@@ -167,15 +191,36 @@ constexpr std::uint32_t replay_ops_per_context(const unpack_params& p)
 }
 
 /// The last datum index of a tile along X, for the unpacker's X counter: every face, every row, FACE_C_DIM datums per row.
+/// 0 for an unused unpacker.
 constexpr std::uint32_t x_end(const unpack_stream& s)
 {
-    return s.num_faces * s.face_r_dim * ckernel::FACE_C_DIM - 1;
+    return s.active ? s.num_faces * s.face_r_dim * ckernel::FACE_C_DIM - 1 : 0;
 }
 
 /// Bytes one face takes in Src: how far the unpacker's Src (ch1) address moves per Z step.
 constexpr std::uint32_t src_face_stride(const unpack_stream& s)
 {
     return ckernel::FACE_C_DIM * ckernel::FACE_R_DIM * ckernel::datum_size_in_bytes(ckernel::masked_data_format(fmt(s.reg_format)));
+}
+
+/// Bytes one tile takes in a 32-bit Dest: how far a Dest stream's output (ch1) address moves per Z step, so the
+/// next UNPACR writes the next tile.
+constexpr std::uint32_t dest_tile_stride(const unpack_stream& s)
+{
+    return s.num_faces * s.face_r_dim * dest_row_bytes_32bit;
+}
+
+/// The channel 1 Z stride of a stream: a tile in Dest (Dest streams step a tile per UNPACR), a face in Src.
+constexpr std::uint32_t output_z_stride(const unpack_stream& s)
+{
+    return s.to_dest ? dest_tile_stride(s) : src_face_stride(s);
+}
+
+/// The unpacker's output address for Dest row `row`. The unpacker counts its output in datums, from the same
+/// src_write_base offset it uses for Src (ISA: UNPACR, "Row -= 4"), so a row is dest_row_datums further on.
+constexpr std::uint32_t dest_write_address(std::uint32_t row)
+{
+    return src_write_base + row * dest_row_datums;
 }
 
 // ---- configure -----------------------------------------------------------------------------------------------------
@@ -203,6 +248,9 @@ inline __attribute__((always_inline)) void configure_unpacker()
 {
     using ckernel::masked_data_format;
     static_assert(St.layout == Layout::Tilized, "row-major (tilize) streams are not ported yet");
+    static_assert(!St.to_dest || S == cfg::Sec::S0, "only unpacker 0 writes Dest");
+    static_assert(!(St.to_dest && St.transpose), "the unpacker cannot transpose on the way to Dest (ISA: undefined)");
+    static_assert(!St.to_dest || datum_bits(St.reg_format) == 32, "only 32-bit formats are unpacked to Dest (dest_tile_stride assumes them)");
     constexpr auto& td = cfg::Thcon[cfg::Reg0].TileDescriptor;
     cfg::write<cfg::Access::MMIO>(
         cfg::set<td.InDataFormat, S, masked_data_format(fmt(St.l1_format))>(),
@@ -236,7 +284,21 @@ inline __attribute__((always_inline)) void configure_unpacker()
         cfg::set<r2::Disable_zero_compress_cntx5, S, 1>(),
         cfg::set<r2::Disable_zero_compress_cntx6, S, 1>(),
         cfg::set<r2::Disable_zero_compress_cntx7, S, 1>(),
+        cfg::set<r2::Unpack_if_sel_cntx0, S, St.to_dest ? 1u : 0u>(), // write Dest (1) or Src (0), per context
+        cfg::set<r2::Unpack_if_sel_cntx1, S, St.to_dest ? 1u : 0u>(),
         cfg::set<r2::Force_shared_exp, S, 0>()); // exponents come from L1, not a fixed shared one
+}
+
+/// Unpacks one tile of a stream to Dest: one UNPACR for the whole tile, then the channel 1 Z counter moves the
+/// output on by one Dest tile (output_z_stride). No bank is handed to math: flipping SrcA after an UNPACR to Dest
+/// is a hardware bug (ISA: SrcASrcB.md, Unpackers[0].WroteDst), and math does not read SrcA here.
+template <hal::unpack::Engine E, unpack_stream St>
+inline __attribute__((always_inline)) void unpack_tile_to_dest()
+{
+    static_assert(E == hal::unpack::Engine::Unpacker0, "only unpacker 0 writes Dest");
+    constexpr std::uint8_t next_dest_tile = 1; // channel 1 Z += 1: one Dest tile further on
+    hal::unpack::run<hal::unpack::DataTransfer {
+        .engine = E, .increments = {.channel1 = {.z = next_dest_tile}}, .handoff = hal::unpack::SourceHandoff::Keep}>();
 }
 
 /// Unpacks one tile of a stream. Broadcast and face-by-face variants add their UNPACR sequences here.
@@ -244,8 +306,16 @@ template <hal::unpack::Engine E, unpack_stream St>
 inline __attribute__((always_inline)) void unpack_tile()
 {
     static_assert(St.broadcast == Broadcast::None, "broadcast streams are not ported yet");
-    // One UNPACR covers the whole tile (the X counter runs to x_end), then hands the bank to math.
-    hal::unpack::run<hal::unpack::DataTransfer {.engine = E, .handoff = hal::unpack::SourceHandoff::FlipAndSetDataValid}>();
+    if constexpr (St.to_dest)
+    {
+        unpack_tile_to_dest<E, St>();
+    }
+    else
+    {
+        // One UNPACR covers the whole tile (the X counter runs to x_end), then hands the bank to math. With
+        // Haloize_mode on, each 16-row face is transposed as it is written.
+        hal::unpack::run<hal::unpack::DataTransfer {.engine = E, .handoff = hal::unpack::SourceHandoff::FlipAndSetDataValid}>();
+    }
 }
 
 /// Replay body for one streamed operand in one context: unpack a tile, then base address += its tile step.
@@ -297,10 +367,10 @@ inline __attribute__((always_inline)) void unpack_configure()
     hal::counters::set<AddrCounter {.channel0 = {.x = 0}, .channel1 = {.x = x_end(P.src_a)}}.for_clients<Client::Unpacker0>()>();
     hal::counters::set<AddrCounter {.channel0 = {.x = 0}, .channel1 = {.x = x_end(P.src_b)}}.for_clients<Client::Unpacker1>()>();
 
-    // Src strides: one face per Z step (W unused); SrcA's Y stride for its register format.
+    // Output strides: one face per Z step (one tile for a Dest stream; W unused); SrcA's Y stride for its register format.
     using cfg::UnpackerReg;
     cfg::write<cfg::Access::MMIO>(
-        cfg::set<cfg::Unpacker[0].AddrCtrl[UnpackerReg::Reg1].Zstride, cfg::Sec::S0, src_face_stride(P.src_a)>(),
+        cfg::set<cfg::Unpacker[0].AddrCtrl[UnpackerReg::Reg1].Zstride, cfg::Sec::S0, output_z_stride(P.src_a)>(),
         cfg::set<cfg::Unpacker[0].AddrCtrl[UnpackerReg::Reg1].Wstride, cfg::Sec::S0, 0>());
     cfg::write<cfg::Access::MMIO>(
         cfg::set<cfg::Unpacker[1].AddrCtrl[UnpackerReg::Reg1].Zstride, cfg::Sec::S0, src_face_stride(P.src_b)>(),
@@ -334,8 +404,9 @@ inline __attribute__((always_inline)) void unpack_configure()
         cfg::set<cfg::Thcon[cfg::Reg5].Tile_x_dim_cntx0, cfg::Sec::S0, src_a_face_datums>(),
         cfg::set<cfg::Thcon[cfg::Reg5].Tile_x_dim_cntx1, cfg::Sec::S0, src_a_face_datums>());
 
-    // SrcA bank select by address, and unpacker 0's Src address counter added to the write base.
-    cfg::write<cfg::Access::TensixCfgUnit, cfg::SrcASet::SetOvrdWithAddr, cfg::Sec::S0, 1>();
+    // SrcA bank select by address (off when unpacking to Dest: ISA, UNPACR to Dest with it set is undefined), and
+    // unpacker 0's Src address counter added to the write base.
+    cfg::write<cfg::Access::TensixCfgUnit, cfg::SrcASet::SetOvrdWithAddr, cfg::Sec::S0, P.src_a.to_dest ? 0u : 1u>();
     // Written as the whole word (enable bit set, ForcedSharedExp 0): a field-wise write would read the register
     // back first, which ttsim does not support for this register.
     constexpr std::uint32_t add_dest_addr_cntr_word = 1u << UNP0_ADD_DEST_ADDR_CNTR_add_dest_addr_cntr_SHAMT;
@@ -431,6 +502,28 @@ inline __attribute__((always_inline)) void unpack_execute(std::uint32_t src_a_ad
     }
 }
 
+// ---- unpack to Dest: the handoff with math ---------------------------------------------------------------------
+
+/// Before the walk of a Dest stream: wait until math has taken the previous call's tiles, take the Dest row math
+/// sends through the mailbox (blocks until it arrives), and point both contexts' output at it.
+inline __attribute__((always_inline)) void dest_write_begin()
+{
+    hal::sync::wait::semaphore<StallTarget::Unpack, hal::sync::SemaphoreCondition::WhileMaximum, unpack_to_dest_sync>();
+    // Not HAL: the thread mailboxes. The row is absolute (math adds its Dest section base).
+    const std::uint32_t row     = ckernel::mailbox_read(ckernel::ThreadId::MathThreadId);
+    const std::uint32_t address = dest_write_address(row);
+    // Both contexts in one whole-word write: no read-back, which ttsim does not support for this register.
+    cfg::write<cfg::Access::MMIO>(
+        cfg::set<cfg::Thcon[cfg::Reg5].Dest_cntx0_address, cfg::Sec::S0>(address), cfg::set<cfg::Thcon[cfg::Reg5].Dest_cntx1_address, cfg::Sec::S0>(address));
+}
+
+/// After the walk of a Dest stream: once unpacker 0 is idle, every tile is in Dest; tell math.
+inline __attribute__((always_inline)) void dest_write_end()
+{
+    hal::sync::wait::stall<StallTarget::Sync, StallCondition::Unpacker0Idle>();
+    hal::sync::semaphore::post<hal::sync::Access::Tensix, unpack_to_dest_sync>();
+}
+
 /// The unpack thread's part of a Compute API call. in0_address and in1_address are the byte addresses of the
 /// call's input tensors (in1_address is ignored when the op has one input).
 template <Thread On, Plan Pl>
@@ -440,12 +533,20 @@ inline __attribute__((always_inline)) void unpack(std::uint32_t in0_address, std
     constexpr unpack_params p = unpack_params_from(Pl);
     if constexpr (runs_on<On>)
     {
-        const std::uint32_t src_a_address = Pl.in0.to == Where::SrcA ? in0_address : in1_address;
+        const std::uint32_t src_a_address = on_unpacker0(Pl.in0.to) ? in0_address : in1_address;
         const std::uint32_t src_b_address = Pl.in0.to == Where::SrcB ? in0_address : in1_address;
         unpack_configure<p>();
+        if constexpr (p.src_a.to_dest)
+        {
+            dest_write_begin();
+        }
         for (std::uint32_t step = 0; step < p.walk.steps; step++)
         {
             unpack_execute<p>(src_a_address, src_b_address, step);
+        }
+        if constexpr (p.src_a.to_dest)
+        {
+            dest_write_end();
         }
     }
 }

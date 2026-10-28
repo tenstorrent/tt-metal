@@ -16,4 +16,9 @@ struct matmul_modifiers
     bool transpose_in1 = false; // transpose the faces of in1 (today's IN1_TRANSPOSE_TILE / UNPACK_TRANSPOSE_FACES)
 };
 
+struct copy_modifiers
+{
+    bool transpose = false; ///< width-height transpose of each tile on the way to Dest (today's transpose_wh_tile)
+};
+
 } // namespace llk2
