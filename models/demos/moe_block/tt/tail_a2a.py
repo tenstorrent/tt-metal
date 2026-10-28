@@ -395,10 +395,19 @@ class TailSchedule:
 
 class TailA2A:
     """The non-latent fused tail (module docstring): rows - a mesh row's tokens (S/SP), H, the TP collective's topology
-    and links. run(y_rm, se) -> [1, 1, rows, H / TP] TILE, DRAM."""
+    and links. run(y_rm, se) -> [1, 1, rows, H / TP] TILE, DRAM.
 
-    def __init__(self, mesh, *, rows, H, topology, num_links, w_max=8):
+    prepared: False (default) = each cached descriptor goes through ttnn.generic_op, which hashes the descriptor (its
+    inline kernel sources) and re-applies every runtime argument of every core of 32 chips per call (~1.05 ms host on
+    an 8x4); True = each cached descriptor (keyed by the y / se / out addresses, so it only ever sees the buffers it was
+    built for) is prepared once (ttnn.bringup.prepare_program, kept in the same cache entry) and dispatched with
+    ttnn.bringup.run_prepared: no hashing, no runtime argument re-applied. Same programs, same arguments, same results
+    (deepseek_v41_flash_d_p P.2, TAIL_A2A_PREPARED)."""
+
+    def __init__(self, mesh, *, rows, H, topology, num_links, w_max=8, prepared=False):
         R, G = tuple(mesh.shape)
+        self.prepared = bool(prepared)
+        self.misses = 0  # (descriptors built: diagnostic)
         self.mesh, self.G, self.rows, self.H, self.L = mesh, G, rows, H, num_links
         self.S = rows // G  # (owned rows a chip)
         assert self.S % 32 == 0 and H % (32 * G) == 0, f"tail_a2a: {rows} rows, H {H} over TP {G}: whole tiles"
@@ -609,8 +618,10 @@ class TailA2A:
                 ttnn.DRAM_MEMORY_CONFIG,
             )
         key = (int(y_rm.buffer_address()), int(se.buffer_address()) if se is not None else 0, int(out.buffer_address()))
-        md = self.cache.get(key)
-        if md is None:
+        io = [y_rm, out, self.z, self.zrw] + ([se] if se is not None else [])
+        entry = self.cache.get(key)
+        if entry is None:
+            self.misses += 1
             md = ttnn.MeshProgramDescriptor()
             for coord in self.chips:
                 r, c = coord
@@ -619,6 +630,11 @@ class TailA2A:
                 )
             if len(self.cache) >= 16:
                 self.cache.pop(next(iter(self.cache)))
-            self.cache[key] = md
-        ttnn.generic_op([y_rm, out, self.z, self.zrw] + ([se] if se is not None else []), md)
+            # (prepared: built for exactly these addresses, so a hit patches nothing)
+            entry = self.cache[key] = (md, ttnn.bringup.prepare_program(md, io) if self.prepared else None)
+        md, pp = entry
+        if pp is not None:
+            ttnn.bringup.run_prepared(pp, io)
+        else:
+            ttnn.generic_op(io, md)
         return out

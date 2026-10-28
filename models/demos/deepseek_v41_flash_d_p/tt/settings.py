@@ -427,6 +427,16 @@ TABLE = {
         "metrics identical): the same three in one program a chip, the tilize and add under the "
         "sends; the same output (bf16 TILE, then GLUE_FOLD's typecast as for ops)",
     ),
+    "TAIL_A2A_PREPARED": Setting(
+        "on",
+        ("on", "off"),
+        "P.2 (galaxy 8x4, owner focus: host time per chunk): MOE_IMPL=block, MOE_TAIL=fused only. on = the fused tail's "
+        "(TailA2A, models/demos/moe_block/tt/tail_a2a.py) cached descriptors, one per (y, se, out) addresses, are each "
+        "prepared once (ttnn.bringup.prepare_program, MoEOptions.tail_prepared) and dispatched with "
+        "ttnn.bringup.run_prepared: no per-call hashing of the inline kernel sources, no runtime argument re-applied "
+        "over 32 chips' programs (was ~1.05 ms host a call, 40 a chunk). off = ttnn.generic_op on the cached descriptor "
+        "(the path before P.2). Same programs, same runtime arguments: device time and results unchanged",
+    ),
     # ---- mHC (tt/mhc.py, tt/residual.py)
     "RESIDUAL_MIX": Setting(
         "fused",
