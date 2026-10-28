@@ -32,16 +32,6 @@ on:
         type: boolean
         default: false
         description: "Export clang-tidy fixes and post inline review suggestions on the PR diff"
-      publish-annotations:
-        required: false
-        type: boolean
-        default: true
-        description: "Emit ::error file annotations for violations on the PR diff / checks tab"
-      clang-tidy-version:
-        required: false
-        type: string
-        default: "20"
-        description: "LLVM major version of clang-tidy. Versions other than 20 are installed from apt.llvm.org at job start."
 
 jobs:
   clang-tidy:
@@ -136,11 +126,9 @@ jobs:
           fi
 
       - name: Print clang-tidy version
-        env:
-          LLVM_VERSION: ${{ inputs.clang-tidy-version }}
         run: |
-          "clang-tidy-${LLVM_VERSION}" --version
-          echo "CLANG_TIDY_BIN=clang-tidy-${LLVM_VERSION}" >> "$GITHUB_ENV"
+          clang-tidy-23 --version
+          echo "CLANG_TIDY_BIN=clang-tidy-23" >> "$GITHUB_ENV"
 
       - name: Configure ctcache
         # Same fork gate as ccache: forks have no secrets so skip silently.
@@ -153,7 +141,7 @@ jobs:
           uv pip install --quiet "ctcache @ git+https://github.com/matus-chochlik/ctcache.git@e33c063ca6e52b48bcefbc45d46d8c150ffa81ca" boto3  # 1.2.0
 
           # Namespace encodes the clang-tidy version so a toolchain upgrade auto-invalidates
-          CT_VERSION=$("${CLANG_TIDY_BIN:-clang-tidy-20}" --version 2>/dev/null | grep -oP 'version \K[0-9]+' || echo "20")
+          CT_VERSION=$("${CLANG_TIDY_BIN:-clang-tidy-23}" --version 2>/dev/null | grep -oP 'version \K[0-9]+' || echo "23")
           {
             echo "CTCACHE_S3_BUCKET=ctcache"
             echo "CTCACHE_S3_FOLDER=ct${CT_VERSION}"
@@ -402,9 +390,7 @@ jobs:
             echo ""
             # One ::error annotation per violation, so they show up on the PR diff /
             # checks tab, not just as a "there were N violations" summary line.
-            if [ "${{ inputs.publish-annotations }}" = "true" ]; then
-              python3 "$REPORT" "$FIXES_DIR" --format annotations --repo-root "$(pwd)"
-            fi
+            python3 "$REPORT" "$FIXES_DIR" --format annotations --repo-root "$(pwd)"
             exit 1
           fi
           # No violations but the build failed: a real compile/link error, not a diagnostic.

@@ -39,12 +39,10 @@
 #   Attempted, but developers rejected auto-fixits due to concerns about
 #   potential flush dependency.
 #
-# === v23-only additions (merged from the former clang-tidy-23 shadow-run
-# skip-list, cmake/clang-tidy.d/.clang-tidy.v23-new-checks.yaml) ===
+# === v23 additions ===
 #
-# Checks clang-tidy 23 enables that weren't enabled under the previous v20
-# config. Kept disabled as part of the version bump itself rather than
-# enabling + fixing in the same change; revisit individually. Diffed via
+# Checks new in clang-tidy 23, kept disabled rather than enabling + fixing
+# as part of the version bump; revisit individually. Diffed via
 # --list-checks on both binaries.
 #
 # Two deliberate exceptions, not caught by (or overridden despite) the diff:

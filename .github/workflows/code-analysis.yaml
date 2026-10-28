@@ -184,8 +184,6 @@ jobs:
       prereq-targets: ''
       scan-targets: ''
       post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
-      publish-annotations: true
-      clang-tidy-version: '23'
 
   # Incremental scan: parallel jobs for different targets
   clang-tidy-incremental-tt-metal:
@@ -207,8 +205,6 @@ jobs:
       prereq-targets: ''
       scan-targets: 'tt_metal'
       post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
-      publish-annotations: true
-      clang-tidy-version: '23'
 
   clang-tidy-incremental-ttnn:
     name: 🤖 Clang Tidy (TTNN)
@@ -229,8 +225,6 @@ jobs:
       prereq-targets: 'tt_metal'
       scan-targets: 'ttnn'
       post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
-      publish-annotations: true
-      clang-tidy-version: '23'
 
   clang-tidy-incremental-tt-train:
     name: 🤖 Clang Tidy (tt-train)
@@ -251,8 +245,6 @@ jobs:
       prereq-targets: 'tt_metal ttnn'
       scan-targets: 'tt-train'
       post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
-      publish-annotations: true
-      clang-tidy-version: '23'
 
   clang-tidy-incremental-catchall:
     name: 🤖 Clang Tidy (catchall)
@@ -273,8 +265,6 @@ jobs:
       prereq-targets: 'tt_metal ttnn'
       scan-targets: ''
       post-pr-suggestions: ${{ inputs.post-pr-suggestions || false }}
-      publish-annotations: true
-      clang-tidy-version: '23'
 
   # Gate: every tt_metal public header must include exactly what it uses
   # (clang-tidy misc-include-cleaner, no missing and no unused includes). Any
