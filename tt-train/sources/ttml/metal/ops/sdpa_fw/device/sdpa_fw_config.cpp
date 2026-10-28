@@ -6,9 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
-#include <functional>
 #include <numeric>
-#include <queue>
 #include <tt-metalium/kernel_types.hpp>
 
 #include "metal/ttnn_all_includes.hpp"
