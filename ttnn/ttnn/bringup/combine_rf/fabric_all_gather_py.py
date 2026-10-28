@@ -406,6 +406,67 @@ def _chunks_per_shard(shard_pages, first_bank, stride, num_banks, run_pages, par
     return total
 
 
+def _walk_idx(shard_pages, first_bank, stride, num_banks, run_pages, rot, part):
+    """The chunk walk's idx values in visit order (replica of for_each_chunk)."""
+    banks = list(range(first_bank, num_banks, stride))
+    nb, out, idx = len(banks), [], 0
+    lo, hi = (nb // 2 if part == 2 else 0), (nb // 2 if part == 1 else nb)
+    max_per_bank = (shard_pages + num_banks - 1) // num_banks
+    for m in range(0, max_per_bank, run_pages):
+        for i in range(nb):
+            slot = (rot + i) % nb
+            b = first_bank + slot * stride
+            per_bank = (shard_pages - b + num_banks - 1) // num_banks if b < shard_pages else 0
+            if m >= per_bank:
+                continue
+            if lo <= slot < hi:
+                out.append(idx)
+            idx += 1
+    return out
+
+
+def _check_progress(ports, group, inc_every):
+    """The port kernels' credit protocol, played on the host: ports {key: (reader waits, downstream key)} - a reader's
+    chunks in order, each None (its own shard) or the arrival count it waits for; it pushes its CB (2 x group chunks)
+    a group at a time (or its last chunks), its sender sends what is pushed and increments the downstream port's arrival
+    counter every inc_every-th chunk and on its last. Raises when the ports stop with chunks left (a cycle of readers
+    holding a part-filled group while waiting on a count that needs the upstream's held chunks)."""
+    st = {k: dict(r=0, batch=0, pushed=0, sent=0, popped=0, unf=0, arr=0) for k in ports}
+    moved = True
+    while moved:
+        moved = False
+        for k, (seq, down) in ports.items():
+            s, n = st[k], len(seq)
+            while s["r"] < n:
+                if s["batch"] == 0 and 2 * group - (s["pushed"] - s["popped"]) < group:
+                    break
+                if seq[s["r"]] is not None and s["arr"] < seq[s["r"]]:
+                    break
+                s["r"] += 1
+                s["batch"] += 1
+                if s["batch"] == group or s["r"] == n:
+                    s["pushed"] += s["batch"]
+                    s["batch"] = 0
+                moved = True
+            while s["sent"] < s["pushed"]:
+                s["sent"] += 1
+                if (s["sent"] % inc_every == 0 or s["sent"] == n) and down in st:
+                    st[down]["arr"] += 1
+                s["unf"] += 1
+                if s["unf"] == group or s["sent"] == n:
+                    s["popped"] += s["unf"]
+                    s["unf"] = 0
+                moved = True
+    stuck = [(k, st[k]["r"], len(ports[k][0])) for k in ports if st[k]["r"] < len(ports[k][0])]
+    if stuck:
+        raise ValueError(
+            f"fabric_all_gather: the ports would deadlock - a reader holds a part-filled CB group ({group} chunks) "
+            f"while it waits for an arrival count (an increment every {inc_every} chunks) that needs its upstream's "
+            f"held chunks; stuck (port, chunks read, of): {stuck[:4]}. Change cb_bytes or inc_every (a group that "
+            f"divides each shard's chunks a link, inc_every dividing the group, is safe)"
+        )
+
+
 _PROBE_CACHE = {}
 
 
@@ -865,7 +926,13 @@ def create_mesh_program_descriptor(
     shape = list(input_tensor.padded_shape)
     # a page is a 32 x 32 tile (TILE) or one row (ROW_MAJOR); the kernels only move whole pages, so any dtype works
     shard_pages = _shard_pages(input_tensor)
-    run_pages = max(1, ttnn.get_tt_fabric_max_payload_size_bytes() // page_bytes)
+    payload = ttnn.get_tt_fabric_max_payload_size_bytes()
+    if page_bytes > payload:  # (a chunk is whole pages, one packet: a larger page would overrun the EDM slot)
+        raise ValueError(
+            f"fabric_all_gather: a page of {page_bytes} B (a {'row' if input_tensor.layout == ttnn.ROW_MAJOR_LAYOUT else 'tile'}) "
+            f"is larger than the fabric payload ({payload} B) - pages are not split; a narrower row or a larger payload"
+        )
+    run_pages = max(1, payload // page_bytes)
     if os.environ.get("FAG_MAX_RUN_PAGES"):  # probe: cap pages per packet
         run_pages = min(run_pages, int(os.environ["FAG_MAX_RUN_PAGES"]))
     chunk_bytes = run_pages * page_bytes
@@ -881,6 +948,7 @@ def create_mesh_program_descriptor(
     )
 
     mesh_desc = ttnn.MeshProgramDescriptor()
+    flow = {}  # (port -> (its reader's waits, the port its sender increments): _check_progress)
     for coord, ch in chips.items():
         n_rings = ch["n_rings"]
         stride = n_rings * num_links  # (ring j, link l) owns DRAM banks j*L + l, then every stride-th bank
@@ -912,6 +980,12 @@ def create_mesh_program_descriptor(
             )
             packed = [out | (part << 16) for out, part in sends]
             full = _chunks_per_shard(shard_pages, first, stride, num_banks, run_pages)
+            if sends and rg.get(f"{d}_links"):
+                waits = []
+                for k, (_, part) in enumerate(sends):
+                    ix = _walk_idx(shard_pages, first, stride, num_banks, run_pages, rot, part)
+                    waits += [None if k == 0 else ((k - 1) * full + i) // inc_every + 1 for i in ix]
+                flow[(coord, j, d, l)] = (waits, (peer, j, d, l))
             mine = sum(_chunks_per_shard(shard_pages, first, stride, num_banks, run_pages, part) for _, part in sends)
             head = [in_addr, out_addr, shard_pages, first, stride, rot, arrival_addr, full, mine]
             reader_rt[core.x][core.y] = head + [len(sends)] + packed
@@ -985,6 +1059,7 @@ def create_mesh_program_descriptor(
             program.cbs = list(program.cbs) + list(cbs_x)
             program.kernels = list(program.kernels) + list(kernels_x)
         mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(r, c), ttnn.MeshCoordinate(r, c))] = program
+    _check_progress(flow, group, inc_every)
     return mesh_desc
 
 

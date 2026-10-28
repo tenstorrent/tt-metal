@@ -1786,6 +1786,12 @@ class SeEngine3:
         assert self.HT % KBD == 0
         self.NSD = self.HT // KBD if down else 0
         self.NB = self.NPG * self.NSG + self.NPD * self.NSD
+        # (the NCRISC's per-block arrays - trid_of / slot_of [64] - index a core's blocks b / GY: ceil(NB / GY) of them)
+        if -(-self.NB // GY) > 64:
+            raise ValueError(
+                f"se_engine3: {self.NB} W blocks a chunk over {GY} rows = {-(-self.NB // GY)} a core > 64 (the "
+                f"NCRISC's trid_of / slot_of): a larger KB ({self.KB}) / KBD ({KBD})"
+            )
         self.WSLOT = max(self.KB * max(sum(self.wg, [])), KBD * max(sum(self.wd, []), default=0))  # (tiles)
         self.fid, self.w_dtype = fidelity, w_dtype
         self.wtb = {ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576, ttnn.bfloat16: 2048}[w_dtype]
@@ -1957,6 +1963,14 @@ class SeEngine3:
             )
         if os.environ.get("SE_BRW") == "1":  # (the W reads on the BRISC's NOC0: its words with the NCRISC, 1 KB a core)
             nw_ = 1024 if os.environ.get("SE_XN1") == "1" else 256
+            # (the NCRISC's table of a core's W blocks: 4 words each from word 16, below SE_XN1's x table at word 512)
+            ng = self.NPG * self.NSG if os.environ.get("SE_BRW_DN1") == "1" else self.NB
+            nmax, cap = -(-ng // GY), (min(nw_, 512) - 16) // 4
+            if nmax > cap:
+                raise ValueError(
+                    f"se_engine3: SE_BRW's table of a core's W blocks holds {cap}, a core has up to {nmax} ({ng} blocks "
+                    f"over {GY} rows): a larger KB ({self.KB}) / KBD ({self.KBD})"
+                )
             self.wsync = ttnn.from_torch(
                 torch.zeros(GX * GY, nw_, dtype=torch.int32),
                 dtype=ttnn.uint32,
