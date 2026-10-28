@@ -140,7 +140,7 @@ def test_v41_flash_sdpa(mesh_device, device_params):
                 live = [u]
             elif pattern.startswith("k"):
                 live = [u] + list(range(ROWS - 4, ROWS - 4 + int(pattern[1:])))
-            elif pattern.startswith("f"):
+            elif pattern != "full" and pattern.startswith("f"):
                 live = list(range(int(pattern[1:])))  # the first K rows live, random valid counts
             else:
                 live = list(range(ROWS))
@@ -159,65 +159,60 @@ def test_v41_flash_sdpa(mesh_device, device_params):
         host["rows"] = rows[0]
         return rm(rows.to(torch.int32), (1, None), ttnn.uint32), live_rows, fs.live_page(live_rows[0])
 
-    def diagnose(qh, out_flash, out_sparse, u: int, chip: int = 0):
-        """The c1 BF16 case on one chip against a torch reference: the flash output, the sparse output, and the
-        partials read back from the scratch (each unit's max, sum tile and acc against the same arithmetic in
-        torch, then the merge in torch) -> a dict of PCCs."""
-        q = ttnn.to_torch(ttnn.get_device_tensors(qh)[chip]).float()[0, :, u, :]  # [32 heads, 512]
-        idx = host["rows"][chip // tp, u]
-        nv = int((idx != SENTINEL).sum())
-        keys = host["cache"][chip // tp][idx[:nv].long()]  # [nv, 512]
-        sink_t = padded[chip % tp].float()  # [32]
-        scores = q @ keys.T  # [32, nv]
-        full = torch.cat([scores * scale, sink_t[:, None]], 1)
-        p = torch.softmax(full, dim=1)[:, :nv]
-        ref = p @ keys  # [32, 512]
-        fl = ttnn.to_torch(ttnn.get_device_tensors(out_flash)[chip]).float()[0, :, u, :]
-        sr = ttnn.to_torch(ttnn.get_device_tensors(out_sparse)[chip]).float()[0, :, u, :]
-        d = {
-            "torch_vs_flash": _pcc(ref[:local_heads], fl[:local_heads]),
-            "torch_vs_sparse": _pcc(ref[:local_heads], sr[:local_heads]),
-        }
-        d["flash_head_pcc"] = [round(_pcc(ref[h], fl[h]), 4) for h in range(local_heads)]
-        # the partials of live rank 0 (slot j at tiles j * slot_tiles ..)
+    def diagnose(qh, out_flash, out_sparse, live_r, chip: int = 0):
+        """The bf16 case on one chip against a torch reference, per live row: the flash and sparse outputs against
+        torch, and the partials read back from the scratch (each unit's max, sum tile and acc against the same
+        arithmetic in torch, then the merge of the device partials in torch against the flash output) -> a list of
+        per-row dicts."""
+        qt = ttnn.to_torch(ttnn.get_device_tensors(qh)[chip]).float()[0]  # [32 heads, 32 rows, 512]
+        fl_all = ttnn.to_torch(ttnn.get_device_tensors(out_flash)[chip]).float()[0]
+        sr_all = ttnn.to_torch(ttnn.get_device_tensors(out_sparse)[chip]).float()[0]
         scratch = ttnn.to_torch(ttnn.get_device_tensors(fs.scratch)[chip]).float()[0, 0]  # [tiles * 32, 32]
-        U = -(-nv // fs.kpu)
-        pm, ps, pa, pr = [], [], [], []
-        M = None
-        merged_num = torch.zeros(32, v_dim)
-        merged_den = torch.zeros(32)
-        ms = []
-        for j in range(U):
-            base = j * fs.slot_tiles
-            tile = lambda t: scratch[(base + t) * 32 : (base + t + 1) * 32]
-            s_j = scores[:, j * fs.kpu : (j + 1) * fs.kpu]
-            m_ref = s_j.max(dim=1).values
-            p_ref = torch.exp((s_j - m_ref[:, None]) * scale)
-            a_ref = p_ref @ keys[j * fs.kpu : (j + 1) * fs.kpu]
-            pm.append(_pcc(m_ref[:local_heads], tile(0)[:local_heads, 0]))
-            n = s_j.shape[1]
-            ps.append(_pcc(p_ref[:local_heads], tile(1)[:local_heads, :n]))
-            acc = torch.cat([tile(2 + v) for v in range(fs.vt)], 1)
-            pa.append(_pcc(a_ref[:local_heads], acc[:local_heads]))
-            ms.append(tile(0)[:, 0])
-        d["partial_max_pcc_min"] = min(pm)
-        d["partial_sum_pcc_min"] = min(ps)
-        d["partial_acc_pcc_min"] = min(pa)
-        # the merge in torch from the device partials
-        ms = torch.stack(ms)  # [U, 32]
-        M = ms.max(dim=0).values
-        w = torch.exp((ms - M[None]) * scale)  # [U, 32]
-        num = torch.zeros(32, v_dim)
-        den = torch.exp((sink_t - M) * scale)
-        for j in range(U):
-            base = j * fs.slot_tiles
-            acc = torch.cat([scratch[(base + 2 + v) * 32 : (base + 3 + v) * 32] for v in range(fs.vt)], 1)
-            num += w[j][:, None] * acc
-            den += w[j] * scratch[(base + 1) * 32 : (base + 2) * 32].sum(dim=1)
-        hm = num / den[:, None]
-        d["torch_merge_of_partials_vs_flash"] = _pcc(hm[:local_heads], fl[:local_heads])
-        d["torch_merge_of_partials_vs_torch"] = _pcc(hm[:local_heads], ref[:local_heads])
-        return d
+        sink_t = padded[chip % tp].float() * scale  # sparse_sdpa scales the sink as it scales the scores
+        out = []
+        for i, u in enumerate(live_r):
+            q = qt[:, u, :]
+            idx = host["rows"][chip // tp, u]
+            nv = int((idx != SENTINEL).sum())
+            keys = host["cache"][chip // tp][idx[:nv].long()]  # [nv, 512]
+            scores = q @ keys.T  # [32, nv]
+            p = torch.softmax(torch.cat([scores * scale, sink_t[:, None]], 1), dim=1)[:, :nv]
+            ref = p @ keys
+            fl, sr = fl_all[:, u, :], sr_all[:, u, :]
+            d = {"row": u, "nv": nv, "torch_vs_flash": round(_pcc(ref[:local_heads], fl[:local_heads]), 5)}
+            d["torch_vs_sparse"] = round(_pcc(ref[:local_heads], sr[:local_heads]), 5)
+            U = -(-nv // fs.kpu)
+            pm, ps, pa, ms = [], [], [], []
+            for j in range(U):
+                base = (i * fs.umax + j) * fs.slot_tiles
+                tile = lambda t: scratch[(base + t) * 32 : (base + t + 1) * 32]
+                s_j = scores[:, j * fs.kpu : (j + 1) * fs.kpu]
+                m_ref = s_j.max(dim=1).values
+                p_ref = torch.exp((s_j - m_ref[:, None]) * scale)
+                a_ref = p_ref @ keys[j * fs.kpu : (j + 1) * fs.kpu]
+                pm.append(_pcc(m_ref[:local_heads], tile(0)[:local_heads, 0]))
+                ps.append(_pcc(p_ref[:local_heads], tile(1)[:local_heads, : s_j.shape[1]]))
+                acc = torch.cat([tile(2 + v) for v in range(fs.vt)], 1)
+                pa.append(_pcc(a_ref[:local_heads], acc[:local_heads]))
+                ms.append(tile(0)[:, 0])
+            d["units"] = U
+            d["partial_pcc_min"] = [round(min(pm), 4), round(min(ps), 4), round(min(pa), 4)]
+            d["bad_units"] = [j for j in range(U) if min(pm[j], ps[j], pa[j]) < 0.99]
+            ms = torch.stack(ms)
+            M = ms.max(dim=0).values
+            w = torch.exp((ms - M[None]) * scale)
+            num = torch.zeros(32, v_dim)
+            den = torch.exp((sink_t / scale - M) * scale)
+            for j in range(U):
+                base = (i * fs.umax + j) * fs.slot_tiles
+                acc = torch.cat([scratch[(base + 2 + v) * 32 : (base + 3 + v) * 32] for v in range(fs.vt)], 1)
+                num += w[j][:, None] * acc
+                den += w[j] * scratch[(base + 1) * 32 : (base + 2) * 32].sum(dim=1)
+            hm = num / den[:, None]
+            d["merge_of_partials_vs_flash"] = round(_pcc(hm[:local_heads], fl[:local_heads]), 5)
+            d["merge_of_partials_vs_torch"] = round(_pcc(hm[:local_heads], ref[:local_heads]), 5)
+            out.append(d)
+        return out
 
     def queries(seed: int):
         gen = torch.Generator().manual_seed(seed)
@@ -279,8 +274,8 @@ def test_v41_flash_sdpa(mesh_device, device_params):
                     "pcc_min": pcc_min,
                     "dead_nonzero": dead_nonzero,
                 }
-                if pattern == "c1" and fmt == MlaKvCacheFormat.BF16_RM and trial == 0:
-                    entry["diag"] = diagnose(qh, out, ref, live_rows[0][0])
+                if fmt == MlaKvCacheFormat.BF16_RM and trial == 0 and os.environ.get("V41_FS_DIAG", "1") == "1":
+                    entry["diag"] = diagnose(qh, out, ref, live_rows[0])
                 result["trials"].append(entry)
                 logger.info(f"flash sdpa trial {json.dumps(entry)}")
                 if pcc_min < PCC_FLOOR or dead_nonzero:

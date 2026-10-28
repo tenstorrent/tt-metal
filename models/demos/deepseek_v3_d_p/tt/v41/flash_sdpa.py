@@ -211,7 +211,7 @@ def flash_sdpa(fs: FlashSdpa, q, kv, rows, scaled: bool, scale: float, sink, liv
         math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=fp32_acc, math_approx_mode=True
     )
     if kv_is_fp8:
-        modes = [ttnn.UnpackToDestMode.Default] * 32
+        modes = [ttnn.UnpackToDestMode.Default] * 64  # one entry per hardware CB slot (NUM_CIRCULAR_BUFFERS)
         modes[CB["k_rm"]] = ttnn.UnpackToDestMode.UnpackToDestFp32
         compute.unpack_to_dest_mode = modes
     kernels = [
