@@ -675,7 +675,8 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             total_l1_for_interleaved_buffers int,
             total_l1_for_sharded_buffers int,
             cb_limit int,
-            rank int NOT NULL DEFAULT 0
+            rank int NOT NULL DEFAULT 0,
+            UNIQUE(device_id, rank)
         )
     """
     )

@@ -480,6 +480,17 @@ class TestImportReportMultiFileOperationIds:
         assert rows == [(1, 0), (stride + 1, 0)]
         conn.close()
 
+    def test_second_json_same_rank_does_not_duplicate_devices(self, tmp_path):
+        """Both files of rank 0 describe device 0: the devices table keeps one row per (device_id, rank)."""
+        devices = [{"device_id": 0, "num_x_cores": 8, "num_y_cores": 8}]
+        r_a = _make_report(self._minimal_single_op_graph("ttnn.op_a"), devices=devices, metadata={"rank": 0})
+        r_b = _make_report(self._minimal_single_op_graph("ttnn.op_b"), devices=devices, metadata={"rank": 0})
+        r_1 = _make_report(self._minimal_single_op_graph("ttnn.op_c"), devices=devices, metadata={"rank": 1})
+        conn, cursor = self._import_report_dir([("a.json", r_a), ("b.json", r_b), ("c.json", r_1)], tmp_path)
+        cursor.execute("SELECT device_id, rank FROM devices ORDER BY rank, device_id")
+        assert cursor.fetchall() == [(0, 0), (0, 1)]
+        conn.close()
+
     def test_mixed_multiple_files_per_rank_and_separate_ranks(self, tmp_path):
         """Rank 0: two files (ids 1 and 10001); rank 1: one file (id 1 again)."""
         r0a = _make_report(self._minimal_single_op_graph("ttnn.r0a"), metadata={"rank": 0})
