@@ -71,7 +71,10 @@ ManifestFacts make_facts() {
 
     return ManifestFacts{
         .run = {},
-        .fabric = {.config = {.fabric_config = FabricConfig::FABRIC_1D}, .routing_1d_extension_words = 0},
+        .fabric =
+            {.config = {.fabric_config = FabricConfig::FABRIC_1D},
+             .packet_header = layout::type_of<LowLatencyPacketHeaderT<0>>(),
+             .routing_1d_extension_words = 0},
         .arch =
             {.arch = tt::ARCH::WORMHOLE_B0,
              .areas =
@@ -156,6 +159,7 @@ TEST(ManifestWriter, TypesHoldExactlyWhatSchemasReach) {
     const auto manifest = make_manifest_json(make_facts());
     const auto& structs = manifest.at("types").at("structs");
     const auto& enums = manifest.at("types").at("enums");
+    const auto& tagged_unions = manifest.at("types").at("tagged_unions");
 
     std::vector<std::string> schemas;
     collect_schemas(manifest, schemas);
@@ -164,10 +168,15 @@ TEST(ManifestWriter, TypesHoldExactlyWhatSchemasReach) {
             EXPECT_TRUE(structs.contains(schema.substr(7))) << schema;
         } else if (schema.starts_with("enum:")) {
             EXPECT_TRUE(enums.contains(schema.substr(5))) << schema;
+        } else if (schema.starts_with("union:")) {
+            EXPECT_TRUE(tagged_unions.contains(schema.substr(6))) << schema;
         }
     }
     EXPECT_TRUE(structs.contains("FabricTelemetry"));
     EXPECT_TRUE(enums.contains("EDMStatus"));
+    // The run's packet header, named outside the meshes, with its template argument.
+    EXPECT_EQ(manifest.at("fabric").at("packet_header").at("schema"), "struct:LowLatencyPacketHeaderT<0>");
+    EXPECT_TRUE(structs.contains("LowLatencyPacketHeaderT<0>"));
     // A described struct no schema reaches.
     EXPECT_FALSE(structs.contains("WorkerXY"));
 
@@ -186,20 +195,25 @@ TEST(ManifestWriter, FailsOnTwoFieldsWithOneKey) {
     EXPECT_ANY_THROW(make_manifest_json(facts));
 }
 
-// The manifest doesn't write tagged unions yet, so a schema that reaches one fails rather than naming a type types
-// can't describe.
-TEST(ManifestWriter, FailsOnATaggedUnion) {
-    auto facts = make_facts();
-    facts.meshes.at(0).chips.at(0).routers.at(0).fields.push_back(Field{
-        .key = "command_fields",
-        .category = FieldCategory::DIAGNOSTICS,
-        .content = content::L1{
-            .address = 0x500,
-            .type = {
-                layout::element::TaggedUnion{&layout::tagged_union_description<NocCommandFields>, "noc_send_type"},
-                sizeof(NocCommandFields),
-                0}}});
-    EXPECT_ANY_THROW(make_manifest_json(facts));
+// A struct member holding a tagged union names the member that holds its tag, and the union lists the enum its tag
+// holds and its cases, each picked by one of that enum's values.
+TEST(ManifestWriter, TaggedUnionNamesItsTag) {
+    const auto manifest = make_manifest_json(make_facts());
+    const auto& types = manifest.at("types");
+    const auto& members = types.at("structs").at("LowLatencyPacketHeaderT<0>").at("members");
+    const auto command =
+        std::find_if(members.begin(), members.end(), [](const json& m) { return m.at("name") == "command_fields"; });
+    ASSERT_NE(command, members.end());
+    EXPECT_EQ(command->at("schema"), "union:NocCommandFields");
+    EXPECT_EQ(command->at("tag_member"), "noc_send_type");
+
+    const auto& command_fields = types.at("tagged_unions").at("NocCommandFields");
+    EXPECT_EQ(command_fields.at("tag").at("schema"), "enum:NocSendType");
+    const auto& tag_values = types.at("enums").at("NocSendType").at("values");
+    ASSERT_FALSE(command_fields.at("cases").empty());
+    for (const auto& union_case : command_fields.at("cases")) {
+        EXPECT_TRUE(tag_values.contains(union_case.at("tag_value").get<std::string>())) << union_case.at("name");
+    }
 }
 
 }  // namespace
