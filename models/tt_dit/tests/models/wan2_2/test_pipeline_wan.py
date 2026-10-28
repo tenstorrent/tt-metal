@@ -11,7 +11,6 @@ import PIL
 import pytest
 import torch
 from loguru import logger
-from PIL import Image
 
 import ttnn
 from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig, VaeHWParallelConfig
@@ -19,8 +18,8 @@ from models.tt_dit.pipelines.events import log_event_section
 from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline, WanPipelineConfig
 from models.tt_dit.pipelines.wan.pipeline_wan_i2v import ImagePrompt, WanPipelineI2V
 from models.tt_dit.pipelines.wan.quant_config import QuantConfig, set_quant_config
-from models.tt_dit.tests.dataset_eval.clip_encoder import CLIPEncoder
 from models.tt_dit.utils.vbench import assert_vbench_quality
+from models.tt_dit.utils.video_quality import assert_clip_alignment, assert_first_frame_matches
 
 from ....utils.test import (
     line_params_req_exact_devices,
@@ -28,7 +27,7 @@ from ....utils.test import (
     ring_params_req_exact_devices,
     skip_if_unsupported_num_links,
 )
-from .common import DEMO_PROMPT, check_first_frame_matches_seed, check_output_sanity, demo_image
+from .common import DEMO_PROMPT, check_output_sanity, demo_image
 
 PROMPTS = {
     "t2v": "Two anthropomorphic cats in comfy boxing gear and bright gloves fight intensely on a spotlighted stage.",
@@ -264,7 +263,7 @@ def test_pipeline_inference(
         if int(ttnn.distributed_context_get_rank()) == 0:
             if model_type == "i2v":
                 check_output_sanity(frames, num_frames=num_frames, height=height, width=width)
-                check_first_frame_matches_seed(frames, seed_image=seed_image, width=width, height=height)
+                assert_first_frame_matches(frames[0], seed_image, pcc_floor=0.3)
             try:
                 from models.tt_dit.utils.video import export_to_video
 
@@ -278,31 +277,8 @@ def test_pipeline_inference(
         return frames
 
     def check_output_with_clip(prompt, frames):
-        clip_threshold = CLIP_THRESHOLDS[model_type]
         if int(ttnn.distributed_context_get_rank()) == 0:
-            # Sample ~8 evenly-spaced frames from the video
-            total_frames = frames.shape[0]
-            indices = np.linspace(0, total_frames - 1, min(8, total_frames), dtype=int)
-            sampled = [frames[i] for i in indices]
-
-            clip_encoder = CLIPEncoder()
-            scores = []
-            for frame_data in sampled:
-                if isinstance(frame_data, torch.Tensor):
-                    frame_data = frame_data.numpy()
-                pil_img = Image.fromarray(frame_data.astype(np.uint8))
-                score = clip_encoder.get_clip_score(prompt, pil_img).item() * 100.0
-                scores.append(score)
-
-            clip_min = min(scores)
-            clip_max = max(scores)
-            clip_mean = sum(scores) / len(scores)
-            logger.info(f"CLIP scores: min={clip_min:.2f}, max={clip_max:.2f}, mean={clip_mean:.2f}")
-
-            assert clip_mean >= clip_threshold, (
-                f"Mean CLIP score {clip_mean:.2f} is below threshold {clip_threshold:.2f}. "
-                f"Per-frame scores: {[f'{s:.2f}' for s in scores]}"
-            )
+            assert_clip_alignment(frames, prompt, CLIP_THRESHOLDS[model_type])
 
     def check_output_with_vbench(prompt, number):
         if os.environ.get("RUN_VBENCH", "1") == "0":
