@@ -17,8 +17,9 @@ This runs in the device model's ``begin_chunk(tokens, start)`` (agent rule 5: a 
 
 Where the table is read from (ENGRAM_TABLE; bringup/ENGRAM_HOST_PATH.md): mmap = the checkpoint mapping with the
 kernel's read-ahead (a random 256-byte row faults in up to read_ahead_kb: ~7 s a 5120-token chunk cold on the QB);
-random = the same mapping with MADV_RANDOM over the table's bytes (one 4 KB page a row); resident = the table's
-8-bit bytes copied once into anonymous memory (huge pages) at build. The gather is split over ENGRAM_GATHER_THREADS
+random = the same mapping with MADV_RANDOM over the table's bytes (one 4 KB page a row); resident = the table held in
+anonymous memory (huge pages) from build on: with ENGRAM_ROWS=bfp8 already as bfloat8_b (272 B a row, exponents next to
+the magnitudes; tt/engram_bfp8.py), the chunk's rows gathered straight into TILE bytes; with bf16 the 8-bit bytes. The gather is split over ENGRAM_GATHER_THREADS
 Python threads (torch indexing releases the GIL). Every mode gives EngramTable.rows' values bit for bit.
 """
 
@@ -50,6 +51,61 @@ def engram_hasher(model_path: str, cfg):
 
         _HASHERS[key] = EngramHasher.build(cfg.raw, AutoTokenizer.from_pretrained(key))
     return _HASHERS[key]
+
+
+def resident_bfp8(ck, layer: int, threads: int = 16, block: int = 1 << 20):
+    """The layer's table as packed bfloat8_b rows [N, 272] uint8 in anonymous memory (MADV_HUGEPAGE), built once a
+    process: blocks of ``block`` rows read with pread (``threads`` ahead) and packed by tt/engram_bfp8.pack_into."""
+    from collections import deque
+
+    import numpy as np
+
+    from .engram_bfp8 import pack_into
+
+    key = (str(ck.path), "bfp8", layer)
+    with _RESIDENT_LOCK:
+        if key in _RESIDENT:
+            return _RESIDENT[key]
+        wname, sname = _names(layer)
+        _, (n, d), woff, _ = ck.info(wname)
+        _, (_, sd), soff, _ = ck.info(sname)
+        width = d // 16 + d
+        buf = mmap.mmap(-1, n * width, flags=mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS)
+        try:
+            buf.madvise(mmap.MADV_HUGEPAGE)
+        except (AttributeError, OSError):
+            pass
+        packed = np.frombuffer(buf, dtype=np.uint8).reshape(n, width)
+        fw = os.open(os.path.join(ck.path, ck.weight_map[wname]), os.O_RDONLY)
+        fs = os.open(os.path.join(ck.path, ck.weight_map[sname]), os.O_RDONLY)
+
+        def read(a):
+            m = min(block, n - a)
+            w, s = torch.empty(m, d, dtype=torch.uint8), torch.empty(m, sd, dtype=torch.uint8)
+            assert os.preadv(fw, [w.numpy()], woff + a * d) == m * d
+            assert os.preadv(fs, [s.numpy()], soff + a * sd) == m * sd
+            return a, w, s
+
+        try:
+            with ThreadPoolExecutor(threads) as ex:
+                starts, todo = iter(range(0, n, block)), deque()
+                for a in starts:
+                    todo.append(ex.submit(read, a))
+                    if len(todo) >= threads:
+                        break
+                while todo:
+                    a, w, s = todo.popleft().result()
+                    nxt = next(starts, None)
+                    if nxt is not None:
+                        todo.append(ex.submit(read, nxt))
+                    pack_into(w, s, packed[a : a + w.shape[0]], threads)
+        finally:
+            os.close(fw)
+            os.close(fs)
+        t = torch.from_numpy(packed)
+        t._engram_buf = buf  # (keeps the mapping alive with the tensor)
+        _RESIDENT[key] = t
+        return t
 
 
 def _names(layer: int):
@@ -117,10 +173,12 @@ class TtEngramRows:
         self.mode = mode or settings.get("ENGRAM_TABLE")
         self.threads = threads or settings.get("ENGRAM_GATHER_THREADS")
         self.format = rows_format or settings.get("ENGRAM_ROWS")
-        self.weight, self.scale = table.weight, table.scale
+        self.weight, self.scale, self.packed = table.weight, table.scale, None
         ck = getattr(table, "ckpt", None)
         if self.mode == "random":
             madvise_random(ck, layer)
+        elif self.mode == "resident" and self.format == "bfp8":
+            self.packed = resident_bfp8(ck, layer, max(self.threads, 16)).numpy()
         elif self.mode == "resident":
             self.weight, self.scale = (resident_copy(ck, n) for n in _names(layer))
         self.pool = ThreadPoolExecutor(self.threads) if self.threads > 1 else None
@@ -229,8 +287,39 @@ class TtEngramRows:
         host = ttnn.from_host_shards(shards, self.mesh.shape)
         return ttnn.to_device(host, self.mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
+    def tiles_from_packed(self, tokens: torch.Tensor, tail: torch.Tensor, valid: int | None = None):
+        """Resident bfp8 table: tokens [S], tail [3] -> (per mesh row the TILE bytes of its [S/SP, width] rows, new
+        tail); the bytes equal tile_bytes(*host_bfp8(...)) of each mesh row's share."""
+        from .engram_bfp8 import tile_rows
+
+        ids = tokens.reshape(-1).long()
+        s = ids.shape[0]
+        valid = self._valid(ids, valid)
+        rows_ax = tuple(self.mesh.shape)[0] if self.mesh is not None else 1
+        assert s % (32 * rows_ax) == 0, f"{s} rows do not split into tiles over {rows_ax} mesh rows"
+        n = s // rows_ax
+        if valid:
+            h, new_tail = self.hasher.hashes(ids[:valid], self.layer, tail.long())
+        else:
+            h, new_tail = torch.empty(0, self.width // self.table.dim, dtype=torch.int64), tail.clone()
+        assert valid == 0 or (int(h.min()) >= 0 and int(h.max()) < self.table.num_rows), "engram row out of range"
+        return [tile_rows(self.packed, h[r * n : (r + 1) * n], n, self.threads) for r in range(rows_ax)], new_tail
+
+    def upload_tiles(self, tiles: list) -> ttnn.Tensor:
+        """Per mesh row TILE bytes -> device [1, 1, S/SP, width] bfloat8_b per chip, replicated over axis 1."""
+        cols_ax = tuple(self.mesh.shape)[1]
+        n = tiles[0].numel() * 16 // 17 // self.width
+        wrap = ttnn.experimental.disaggregation.tensor_from_bfp8_bytes
+        shards = [x for t in tiles for x in [wrap(t.numpy().tobytes(), [1, 1, n, self.width])] * cols_ax]
+        return ttnn.to_device(
+            ttnn.from_host_shards(shards, self.mesh.shape), self.mesh, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
     def __call__(self, tokens: torch.Tensor, tail: torch.Tensor, valid: int | None = None):
         """begin_chunk work for this layer: (device rows [1, 1, S/SP, width] in ENGRAM_ROWS' format, new tail)."""
+        if self.packed is not None:
+            tiles, new_tail = self.tiles_from_packed(tokens, tail, valid)
+            return self.upload_tiles(tiles), new_tail
         if self.format == "bfp8":
             exps, mags, new_tail = self.host_bfp8(tokens, tail, valid)
             return self.to_device_bfp8(exps, mags), new_tail

@@ -526,14 +526,16 @@ TABLE = {
     ),
     # ---- engram host path (2x2 session, bringup/ENGRAM_HOST_PATH.md; ENGRAM_TABLE / _GATHER_THREADS: rows bit-identical)
     "ENGRAM_TABLE": Setting(
-        "random",
+        "resident",
         ("mmap", "random", "resident"),
         "where tt/engram.py reads the engram tables (layers 1, 14; 94.5 GiB each, 8-bit). mmap = the checkpoint "
         "mapping with the kernel's read-ahead (each random 256-byte row faults in up to read_ahead_kb); random = the "
         "same mapping with MADV_RANDOM over the table's bytes; resident = the 8-bit bytes copied into anonymous memory "
         "(huge pages) once at build (~189 GiB of host RAM for both layers). QB 2x2 host (503 GB RAM, 990 EVO Plus "
         "NVMe, read_ahead_kb 128, 32 CPUs), layer 1, 5120 tokens, gather a layer a chunk: cold mmap 7.2 s, cold "
-        "random 0.42 s (8 threads), resident 9-15 ms; load of one layer resident 109 s. Default random (owner 2026-10-28)",
+        "random 0.42 s (8 threads), resident 9-15 ms; load of one layer resident 109 s. With ENGRAM_ROWS=bfp8 resident "
+        "holds the rows already as bfloat8_b (272 B a row, 104.4 GB a layer; built in 84 s at 1.24 GB/s) and a 5120-token "
+        "chunk takes 7.6 ms on 8 threads from hash to TILE bytes. Default resident (owner 2026-10-28; random before)",
     ),
     "ENGRAM_ROWS": Setting(
         "bfp8",
