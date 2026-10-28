@@ -33,8 +33,11 @@ jobs:
           fi
 
           MENTION_RE='(?<![A-Za-z0-9_])@[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9]))*'
+          # GitHub does not notify mentions inside code, so fenced blocks and inline code are dropped first.
+          # Otherwise a pasted `@pytest.mark.parametrize` would ping a GitHub user called pytest.
           extract_mentions() {
-            { grep -oP "$MENTION_RE" || true; } | sed 's/^@//' | sort -u
+            perl -0pe 's/^[ \t]*(`{3,}|~{3,}).*?^[ \t]*\1[^\n]*$//gms; s/(`+).+?\1//gs' |
+              { grep -oP "$MENTION_RE" || true; } | sed 's/^@//' | sort -u
           }
 
           BODY=$(jq -r '(.comment.body // .issue.body // .pull_request.body // "")' "$GITHUB_EVENT_PATH")
@@ -192,13 +195,14 @@ jobs:
 
             SLACK_ID=$(find_slack_user_id "$USER_NAME" "$gh_user" "$SLACK_USERS_FILE")
 
+            # Only people with a Slack account are pinged. A login with no match (a bot such as @copilot,
+            # an outside user, a stray word after @) would only post a line that notifies nobody.
             if [ -n "$SLACK_ID" ]; then
               MENTION_TOKENS+=("<@$SLACK_ID>")
               SLACK_IDS+=("$SLACK_ID")
               echo "Resolved @$gh_user -> Slack <@$SLACK_ID>"
             else
-              MENTION_TOKENS+=("@$gh_user")
-              echo "Could not resolve @$gh_user to Slack, using GitHub username fallback"
+              echo "Skipping @$gh_user: no matching Slack user"
             fi
           done
 
