@@ -52,6 +52,8 @@ def main():
         status="running",
         throw_exception_on_fallback=bool(ttnn.CONFIG.throw_exception_on_fallback),
         shared=os.environ.get("QWEN38_SHARED_MLP_WEIGHTS", "0"),
+        shared_mlp_readers=int(os.environ.get("QWEN38_SHARED_MLP_READERS", "1")),
+        shared_mlp_cores=int(os.environ.get("QWEN38_SHARED_MLP_CORES", "80")),
         batch=a.batch,
         layers="all64" if a.full_stack else [0, 3],
         native_context=262144,

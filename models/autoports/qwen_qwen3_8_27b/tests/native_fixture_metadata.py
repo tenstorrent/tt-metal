@@ -27,6 +27,7 @@ def capture_linear_calls(record, ttnn, model):
                 weight_shape=list(args[1].shape),
                 math_fidelity=str(config.math_fidelity),
                 fp32_dest_acc_en=config.fp32_dest_acc_en,
+                input_memory_config=str(args[0].memory_config()),
                 program_class=type(program).__name__ if program is not None else None,
                 program={
                     name: getattr(program, name, None)

@@ -23,6 +23,19 @@ def compare(control, candidate, expected_lengths=None, require_final_metadata=Fa
             assert arm["environment"]["TT_METAL_TRACE_ALLOC_TRACKING"] == "1"
             assert arm["environment"]["TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE"] == "0"
             assert arm["prepared_linear_calls"], "No actual prepared kernel argument evidence"
+            roles = (".gate", ".up") if arm["shared"] == "1" else (".gateup",)
+            shared_roles = [
+                row
+                for row in arm["prepared_linear_calls"]
+                if row["owner"].endswith(roles) and row["input_shape"] == [1, 1, 32, 5120]
+            ]
+            assert shared_roles, "No actual decode MLP projection evidence"
+            for row in shared_roles:
+                expected_readers = arm.get("shared_mlp_readers", 1) if arm["shared"] == "1" else 2
+                assert row["program"]["in0_block_w"] == 2
+                assert row["program"]["num_workers_per_dram_bank"] == expected_readers
+                assert row["weight_dtype"] == "DataType.BFLOAT4_B"
+                assert row["math_fidelity"] == "MathFidelity.LoFi"
             assert arm["effective_precision"]["weight_groups"]["mlp"] == "bfloat4_b"
             assert arm["effective_precision"]["compute_fidelities"]["projection"] == "LoFi"
             assert all(
@@ -76,12 +89,31 @@ def compare(control, candidate, expected_lengths=None, require_final_metadata=Fa
             remaining_owner_bytes,
         )
         assert delta > 0, ("No net resident allocation reduction", phase, delta)
+
+        def separate_bytes(allocations):
+            return sum(
+                row["physical_bytes_per_device"]
+                for row in allocations
+                if any(alias["path"].endswith((".gate", ".up")) for alias in row["aliases"])
+            )
+
+        extra_separate = separate_bytes(right["allocations"]) - separate_bytes(left["allocations"])
+        expected_extra = (
+            layers * 2 * (5120 // 32) * (256 // 32) * 576 if candidate.get("shared_mlp_readers", 1) == 2 else 0
+        )
+        assert extra_separate == expected_extra, ("Unexpected shared-owner padding", extra_separate, expected_extra)
         if phase == "after_construction":
-            assert delta == expected, ("Unexpected construction allocation delta", delta, expected)
+            assert delta == expected - extra_separate, (
+                "Unexpected construction allocation delta",
+                delta,
+                expected,
+                extra_separate,
+            )
         deltas[phase] = dict(
             net_reduction=delta,
             removed_packed_weight_bytes=removed_owner_bytes,
-            other_allocation_delta=delta - removed_owner_bytes,
+            added_separate_owner_padding_bytes=extra_separate,
+            other_allocation_delta=delta - (removed_owner_bytes - extra_separate),
         )
     return dict(
         status="pass",

@@ -91,9 +91,19 @@ class MultichipDecoder(OptimizedDecoder):
             # Minimal/packed prefill has a different activation-rounding contract.
             if not self.policy.get('separate_prefill') or not self.policy.get('packed_mlp') or self.policy.get('minimal_mlp'):
                 raise ValueError('shared_mlp_weights requires separate_prefill, packed_mlp and no minimal_mlp')
+            readers = self.policy.get('shared_mlp_readers', 1)
+            if readers not in (1, 2):
+                raise ValueError('shared_mlp_readers must be 1 or 2')
+            cores = self.policy.get('shared_mlp_cores', 80)
+            if cores not in (16, 80):
+                raise ValueError('shared_mlp_cores must be 16 or 80')
             for role in ('gate', 'up'):
                 if self.policy[role]['block'] != self.policy['gateup']['block']:
                     raise ValueError('shared MLP decode must retain packed K blocking')
+                # put() pads local N4352 to N4608 for two readers, making each
+                # of eight DRAM banks18 tiles wide. Preserve logical N4352.
+                self.policy[role]['readers'] = readers
+                self.policy[role]['cores'] = cores
         # The inherited BFP4 reader geometry does not fit larger BFP8 tiles.
         # Resolve after dtype overrides and before packing/copying phase views.
         # Preserve explicit legal alternatives used by precision microchecks.

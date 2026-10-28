@@ -94,6 +94,16 @@ def decoder_policy(config, index):
     shared_mlp = os.environ.get("QWEN38_SHARED_MLP_WEIGHTS", "0")
     if shared_mlp not in ("0", "1"):
         raise ValueError("QWEN38_SHARED_MLP_WEIGHTS must be 0 or 1")
+    shared_readers = os.environ.get("QWEN38_SHARED_MLP_READERS", "1")
+    if shared_readers not in ("1", "2"):
+        raise ValueError("QWEN38_SHARED_MLP_READERS must be 1 or 2")
+    shared_cores = os.environ.get("QWEN38_SHARED_MLP_CORES", "80")
+    if shared_cores not in ("16", "80"):
+        raise ValueError("QWEN38_SHARED_MLP_CORES must be 16 or 80")
+    if (shared_readers != "1" or shared_cores != "80") and shared_mlp != "1":
+        raise ValueError("Shared MLP geometry overrides require QWEN38_SHARED_MLP_WEIGHTS=1")
     if shared_mlp == "1":
         policy["shared_mlp_weights"] = True
+        policy["shared_mlp_readers"] = int(shared_readers)
+        policy["shared_mlp_cores"] = int(shared_cores)
     return policy
