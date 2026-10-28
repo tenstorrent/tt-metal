@@ -29,6 +29,12 @@ dims are rotated; the last 2 pass through.
 
     rotate_half(x) = cat(-x[..., d/2:], x[..., :d/2])     # d = 78 -> split 39/39
     q_rot = q[..., :78] * cos + rotate_half(q[..., :78]) * sin
+
+On device, `ttnn.experimental.rotary_embedding_llama` rotates q and k in one op
+per tensor. It pairs lanes (2i, 2i+1) of a head where rotate_half pairs dims i
+and i + 39, so q and k use the head order of `rope_head_permutation` (their
+weight rows are reordered at load, attention.py) and `rope_cos_sin_padded` lays
+out cos/sin in the same order.
 """
 from __future__ import annotations
 
@@ -87,28 +93,19 @@ def rotate_half(x: torch.Tensor) -> torch.Tensor:
     return torch.cat((-x2, x1), dim=-1)
 
 
-def rope_rotate_matrix(head_dim: int, padded_head_dim: int) -> torch.Tensor:
-    """Sign-permutation matrix R s.t. `x @ R == rotate_half(x[:rot]) padded with zeros`.
+def rope_head_permutation(head_dim: int) -> torch.Tensor:
+    """(head_dim,) head order of q and k on device: lane j holds dim perm[j] of the reference head.
 
-    Lets the device apply RoPE as `x*cos + (x @ R)*sin` over the *natural*
-    padded head layout (real dims at [0:head_dim], pad after), avoiding any
-    tile-misaligned slicing. `rotate_half` over the rot_dim block (split
-    h/2 = 3*axis_dim/2) is encoded as:
-        R[d, d + h/2] = +1   for d in [0, h/2)
-        R[d, d - h/2] = -1   for d in [h/2, rot_dim)
-    Pass-through dims [rot_dim:head_dim] and pad [head_dim:padded] get no
-    entries -> `x @ R` is 0 there, so with cos=1/sin=0 padding they are
-    identity. Each output column has a single ±1 entry, so the matmul is
-    exact in bf16.
+    rotary_embedding_llama rotates each pair of lanes (2i, 2i+1) of a head:
+        out[2i] = x[2i] * cos - x[2i+1] * sin,    out[2i+1] = x[2i+1] * cos + x[2i] * sin
+    and rotate_half rotates dims i and i + h (h = rot_dim / 2 = 39) by one angle the same way:
+        out[i] = x[i] * cos - x[i+h] * sin,       out[i+h] = x[i+h] * cos + x[i] * sin
+    So lane 2i holds dim i and lane 2i+1 dim i + h, for i < h; the pass-through dims [rot_dim:head_dim] follow
+    in place. q and k share the order, so q.k is unchanged.
     """
-    rot_dim = 3 * rope_axis_dim(head_dim)  # 78
-    half = rot_dim // 2  # 39
-    R = torch.zeros(padded_head_dim, padded_head_dim, dtype=torch.float32)
-    for d in range(half):
-        R[d, d + half] = 1.0
-    for d in range(half, rot_dim):
-        R[d, d - half] = -1.0
-    return R
+    half = 3 * rope_axis_dim(head_dim) // 2  # 39
+    pairs = [d for i in range(half) for d in (i, i + half)]
+    return torch.tensor(pairs + list(range(2 * half, head_dim)), dtype=torch.long)
 
 
 def rope_cos_sin_padded(
@@ -118,17 +115,18 @@ def rope_cos_sin_padded(
     theta: float = 10000.0,
     spatial_merge_size: int = 2,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """cos/sin padded to (L, padded_head_dim) for the `x*cos + (x@R)*sin` form.
+    """cos/sin (L, padded_head_dim) in the device head order of `rope_head_permutation`, for rotary_embedding_llama.
 
-    Real rotary values fill [0:rot_dim]; the tail (pass-through + pad) is
-    cos=1, sin=0 (identity rotation).
+    Lane j takes the angle of dim perm[j]: both lanes of a rotated pair get the one angle of their two dims. The
+    tail (pass-through + pad) is cos=1, sin=0 (identity rotation).
     """
     cos, sin = rope_cos_sin(grid_thw, head_dim, theta, spatial_merge_size)  # (L, rot_dim)
     L, rot_dim = cos.shape
+    perm = rope_head_permutation(head_dim)[:rot_dim]
     cos_p = torch.ones(L, padded_head_dim, dtype=cos.dtype)
     sin_p = torch.zeros(L, padded_head_dim, dtype=sin.dtype)
-    cos_p[:, :rot_dim] = cos
-    sin_p[:, :rot_dim] = sin
+    cos_p[:, :rot_dim] = cos[:, perm]
+    sin_p[:, :rot_dim] = sin[:, perm]
     return cos_p, sin_p
 
 
