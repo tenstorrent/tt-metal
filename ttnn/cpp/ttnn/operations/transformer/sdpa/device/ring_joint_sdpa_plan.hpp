@@ -82,7 +82,8 @@ bool slice_readiness_enabled(const RingJointSDPAParams& args, const RingJointSDP
 
 // Expanded-K floaters (kernels/ring_joint_floaters.hpp): the schedule of a shape on the 11x10 grid of the 8-chip ring
 // with 2 gather links, or nullopt. The schedule is the tuned one for the shape's heads, bands and Q / K chunk sizes
-// (ring_joint::kTunedFloaterSchedules; a shape without one gets none), or SDPAProgramConfig::floater_schedule. On those
+// (ring_joint::kTunedFloaterSchedules; a shape without one gets none), or SDPAProgramConfig::floater_schedule, which
+// is refused (TT_FATAL) on a call that cannot run floaters. On those
 // shapes the K split's 24 home blocks of 2x2 cores fill a 10x10 sub-grid, leaving the 25th block, the last grid column
 // and the gather column below its workers idle: 20 cores, five floater groups of 4 that take over pieces of the homes'
 // bands. The gather's workers are the top 2 x num_links cores of column grid.x (column-major from (grid.x, 0)). The

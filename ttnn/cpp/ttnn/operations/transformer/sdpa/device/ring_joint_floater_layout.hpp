@@ -43,6 +43,15 @@ struct FloaterSchedule {
     uint32_t merge_after[kFloaterFirstPieceVisits];
 };
 
+// The heads per device x K-split bands the layout runs on, the two the gtest checks it on exactly (Kimi K3 and K2.7).
+// Other shapes that fill the 24 home blocks (12 heads x 4 bands) have never run floaters.
+inline constexpr std::array<std::pair<uint32_t, uint32_t>, 2> kFloaterLayoutHeadsBands = {{{24, 2}, {16, 3}}};
+
+inline bool floater_layout_supported(uint32_t heads, uint32_t bands) {
+    return std::find(kFloaterLayoutHeadsBands.begin(), kFloaterLayoutHeadsBands.end(), std::pair{heads, bands}) !=
+           kFloaterLayoutHeadsBands.end();
+}
+
 // What a schedule is tuned for: heads per device, K-split bands, and the SDPA's Q and K chunk sizes. The layout fixes
 // the rest (the 11x10 grid, the 8-chip ring, 2 gather links).
 struct FloaterShape {
@@ -187,6 +196,18 @@ inline FloaterLayout build_floater_layout(
             "ring_joint floaters: invalid schedule for {} heads x {} bands",
             heads,
             bands);
+    }
+    // A floater runs its first-piece visits back to back, so a later place in its queue never merges earlier.
+    for (uint32_t v = 1; v < kFloaterFirstPieceVisits; ++v) {
+        TT_FATAL(
+            schedule.merge_after[v - 1] <= schedule.merge_after[v],
+            "ring_joint floaters: merge iterations must not decrease along a floater's queue (visit {} merges after "
+            "{}, "
+            "visit {} after {})",
+            v - 1,
+            schedule.merge_after[v - 1],
+            v,
+            schedule.merge_after[v]);
     }
     // Home blocks hold head pairs, so every head is covered only with an even count that fills them exactly.
     TT_FATAL(

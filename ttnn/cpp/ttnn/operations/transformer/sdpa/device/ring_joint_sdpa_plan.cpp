@@ -219,20 +219,39 @@ std::optional<ring_joint::FloaterSchedule> floater_eligibility(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args, const KSplitShape& ksplit) {
     const auto& ag = args.all_gather_operation_attributes;
     const uint32_t NH = tensor_args.input_q.logical_shape()[1];
+    // A schedule given in the config is checked whether or not this call can use it, and one that it cannot use is
+    // refused rather than dropped, so a tuning run never times the program without floaters by mistake.
+    const bool requested = args.program_config.has_value() && args.program_config->floater_schedule.has_value();
+    const std::optional<ring_joint::FloaterSchedule> requested_schedule =
+        requested ? ring_joint::floater_schedule_from_values(args.program_config->floater_schedule.value())
+                  : std::nullopt;
+    const auto refuse = [&](const char* reason) {
+        TT_FATAL(
+            !requested_schedule.has_value(), "floater_schedule is set, but this call cannot run floaters: {}", reason);
+    };
     if (!(tensor_args.has_k_expand() && ksplit.count > 1 && !args.has_sliding_window() &&
           !tensor_args.attention_sink.has_value() && ksplit.num_q_chunks == 2 && args.program_config.has_value() &&
-          NH % 2 == 0 && (NH / 2) * ksplit.count == ring_joint::kFloaterHomeBlocks &&
-          ksplit.grid == CoreCoord(11, 10) && ag.ring_size == 8 &&
-          args.ccl_core_grid_offset == CoreCoord(ksplit.grid.x, 0) && ag.num_links == 2 &&
+          ring_joint::floater_layout_supported(NH, ksplit.count) && ksplit.grid == CoreCoord(11, 10) &&
+          ag.ring_size == 8 && args.ccl_core_grid_offset == CoreCoord(ksplit.grid.x, 0) && ag.num_links == 2 &&
           ag.core_allocation_strategy == ttnn::ccl::CoreAllocationStrategy::COL_MAJOR)) {
+        refuse(
+            "floaters need expanded K, a K split, no sliding window or attention sink, two Q chunks per head, 24 heads "
+            "x 2 bands or 16 x 3, an 11x10 grid and an 8-chip ring with 2 gather links");
         return std::nullopt;
     }
     const auto& config = args.program_config.value();
-    const std::optional<ring_joint::FloaterSchedule> schedule =
-        config.floater_schedule.has_value()
-            ? ring_joint::floater_schedule_from_values(config.floater_schedule.value())
-            : ring_joint::tuned_floater_schedule({NH, ksplit.count, config.q_chunk_size, config.k_chunk_size});
-    if (!schedule.has_value() || !slice_readiness_enabled(args, tensor_args)) {
+    const std::optional<ring_joint::FloaterSchedule> schedule = requested
+                                                                    ? requested_schedule
+                                                                    : ring_joint::tuned_floater_schedule(
+                                                                          {NH,
+                                                                           ksplit.count,
+                                                                           static_cast<uint32_t>(config.q_chunk_size),
+                                                                           static_cast<uint32_t>(config.k_chunk_size)});
+    if (!schedule.has_value()) {
+        return std::nullopt;
+    }
+    if (!slice_readiness_enabled(args, tensor_args)) {
+        refuse("floaters merge at interleaved ring steps, which need the gather's slice readiness");
         return std::nullopt;
     }
     return schedule;

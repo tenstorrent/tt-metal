@@ -302,6 +302,21 @@ TEST(RingJointFloaterLayout, RefusesAShapeItCannotCoverWhole) {
     EXPECT_ANY_THROW(build_floater_layout(k3, kGridX, kGridY, 24, 3, kGatherWorkers, 48, kRingSize));
 }
 
+// 12 heads x 4 bands also fills the 24 home blocks, but has never run floaters.
+TEST(RingJointFloaterLayout, RunsOnlyOnTheCheckedLayouts) {
+    for (uint32_t heads : {8u, 12u, 16u, 24u, 25u, 48u}) {
+        for (uint32_t bands = 1; bands <= kKSplitMaxCount; ++bands) {
+            const bool checked = (heads == 24 && bands == 2) || (heads == 16 && bands == 3);
+            EXPECT_EQ(floater_layout_supported(heads, bands), checked) << "heads=" << heads << " bands=" << bands;
+        }
+    }
+}
+
+TEST(RingJointFloaterLayout, RefusesMergesThatGoBackAlongTheQueue) {
+    const FloaterSchedule decreasing = floater_schedule_from_values({1, 3, 1843, 1536, 1, 3, 4, 5, 6, 5}).value();
+    EXPECT_ANY_THROW(build_floater_layout(decreasing, kGridX, kGridY, 16, 3, kGatherWorkers, 32, kRingSize));
+}
+
 TEST(RingJointFloaterLayout, NoFloaterLayoutKeepsTheDefaults) {
     const FloaterLayout layout = no_floater_layout(kGridX, kGridX * kGridY, 48);
     EXPECT_EQ(layout.num_cores_all, kGridX * kGridY);
