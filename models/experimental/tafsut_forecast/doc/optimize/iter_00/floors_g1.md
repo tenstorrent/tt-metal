@@ -175,15 +175,17 @@ A 1.3x band moves a row by 0.3 x r0 (>= 0.2 for r0 >= 0.67). Reruns are bit-iden
 - How the row vectors are made: the probe's own row change is composed onto the fixed record's device rows (e0 + e,
   r0 x r). This is exact for shifts and band scalings.
 
-**Named rows (item 3; `test_row_stages.py`, job 1109 `row_stages_1109.txt`; conditioning in the same job).** The device
+**Named rows (item 3; re-run in round 1 as job 1145, see `iter_01/row_stages_1145.txt`, which also covers the band
+floors' rows 121, 394, 250, 973 and the tail isolation of rows 283 and 536; `test_row_stages.py`, job 1109 `row_stages_1109.txt`; conditioning in the same job).** The device
 ran each case's forward-k input (forward 2 teacher-forced) on the named rows plus 5 control rows. Every sub-batch row
 reproduces the full-batch metrics (row 16 perf 1.4925 / 0.9695, row 283 +0.2483, row 536 -0.0820, row 1 -0.0561).
-Relative L2 error of the future rows, embedding -> block 11 -> head:
+Relative L2 error of the future rows, embedding -> block 13 (the last; NL = 14) -> head (D5 R1-0c: the old
+text said "block 11", a label error of the test's printout, fixed in c2cb103069a):
 - **row 16** (lh f2): acc 0.0016 -> 0.018 -> 0.036; perf 0.0016 -> 0.090 -> 0.136. Perf controls reach 0.03-0.08
-  at block 11.
+  at block 13.
 - **row 311** (lh f2, perf): 0.0016 -> 0.115 -> 0.257.
 - **row 283** (lh f1): acc 0.034 -> 0.086 at the head; perf 0.106 -> 0.273. Control row 51 also reaches 0.088 at
-  block 11, but only 0.045 at the head.
+  block 13, but only 0.045 at the head.
 - **row 536** (paper, perf): 0.045 -> 0.189.
 - **row 1** (horizon4, perf): 0.050 -> 0.062.
 
