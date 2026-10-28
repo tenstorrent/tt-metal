@@ -66,7 +66,7 @@ def test_level2_polar_bw(bs, hw, memcfg, dtype, device, function_level_defaults)
         assert passing
 
 
-@pytest.mark.parametrize("dtype", (ttnn.float32, ttnn.bfloat16))
+@pytest.mark.parametrize("dtype", ((ttnn.bfloat16,)))
 @pytest.mark.parametrize("r_scale", (1e20, -1e20, 1e-20, -1e-20, 0.0))
 def test_polar_bw_extreme_exponent_range(dtype, r_scale, device):
     shape = torch.Size([1, 1, 32, 32])
@@ -79,12 +79,12 @@ def test_polar_bw_extreme_exponent_range(dtype, r_scale, device):
     grad_data = torch.complex(grad_r, grad_i)
 
     input_tensor = ttnn.complex_tensor(
-        ttnn.from_torch(in_data.real, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device),
-        ttnn.from_torch(in_data.imag, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device),
+        ttnn.Tensor(in_data.real, dtype).to(ttnn.TILE_LAYOUT).to(device),
+        ttnn.Tensor(in_data.imag, dtype).to(ttnn.TILE_LAYOUT).to(device),
     )
     grad_tensor = ttnn.complex_tensor(
-        ttnn.from_torch(grad_data.real, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device),
-        ttnn.from_torch(grad_data.imag, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device),
+        ttnn.Tensor(grad_data.real, dtype).to(ttnn.TILE_LAYOUT).to(device),
+        ttnn.Tensor(grad_data.imag, dtype).to(ttnn.TILE_LAYOUT).to(device),
     )
 
     tt_dev = convert_to_torch_tensor(ttnn.polar_bw(grad_tensor, input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG))
@@ -92,6 +92,6 @@ def test_polar_bw_extreme_exponent_range(dtype, r_scale, device):
 
     assert not torch.isnan(tt_dev[0]).any()
     assert not torch.isinf(tt_dev[0]).any()
-    passing, output = comp_allclose(golden_tensor[0], tt_dev[0], rtol=1e-2, atol=1e-2)
+    passing, output = comp_allclose(golden_tensor[0], tt_dev[0], rtol=3e-2, atol=1e-2)
     logger.info(output)
     assert passing

@@ -4,7 +4,6 @@
 
 #include "complex_unary_backward_op.hpp"
 
-#include <array>
 #include "ttnn/operations/eltwise/complex_binary/device/complex_binary_op.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary_composite_op.hpp"
@@ -22,9 +21,6 @@ namespace ttnn::operations::complex_unary_backward {
 std::vector<ComplexTensor> _polar_bw(
     const ComplexTensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
-    using ttnn::operations::unary::EltwiseUnaryWithParam;
-    using ttnn::operations::unary::UnaryOpType;
-    const std::array sign_it = {EltwiseUnaryWithParam{UnaryOpType::SIGN}};
 
     const Tensor& r = input.real();
     const Tensor& theta = input.imag();
@@ -39,7 +35,9 @@ std::vector<ComplexTensor> _polar_bw(
         ttnn::multiply(grad_i, sin_theta, std::nullopt, output_mem_config),
         std::nullopt,
         output_mem_config);
-    Tensor grad_abs = ttnn::multiply(unit_proj, r, std::nullopt, output_mem_config, std::nullopt, {}, {}, sign_it);
+    Tensor sign_r = ttnn::sign(r, output_mem_config);
+    Tensor grad_abs = ttnn::multiply(unit_proj, sign_r, std::nullopt, output_mem_config);
+    sign_r.deallocate();
     unit_proj.deallocate();
 
     Tensor ortho_proj = ttnn::subtract(
@@ -93,16 +91,20 @@ std::vector<ComplexTensor> _real_bw(
 std::vector<ComplexTensor> _angle_bw(
     const Tensor& grad, const ComplexTensor& input, const MemoryConfig& output_mem_config) {
     std::vector<ComplexTensor> grad_tensor;
-    using ttnn::operations::unary::EltwiseUnaryWithParam;
-    using ttnn::operations::unary::UnaryOpType;
-    const std::array is_zero = {EltwiseUnaryWithParam{UnaryOpType::EQZ}};
-    const std::array abs_it = {EltwiseUnaryWithParam{UnaryOpType::ABS}};
 
     const Tensor& inp_r = input.real();
     const Tensor& inp_i = input.imag();
-    Tensor condition_zero =
-        ttnn::logical_and(inp_r, inp_i, std::nullopt, output_mem_config, std::nullopt, {}, is_zero, is_zero);
-    Tensor r_ge_i = ttnn::ge(inp_r, inp_i, std::nullopt, output_mem_config, std::nullopt, {}, abs_it, abs_it);
+    Tensor condition_zero = ttnn::logical_and(
+        ttnn::eqz(inp_r, output_mem_config),
+        ttnn::eqz(inp_i, output_mem_config),
+        std::nullopt,
+        output_mem_config);
+    Tensor abs_r = ttnn::abs(inp_r, output_mem_config);
+    Tensor abs_i = ttnn::abs(inp_i, output_mem_config);
+    Tensor r_ge_i = ttnn::ge(abs_r, abs_i, std::nullopt, output_mem_config);
+    abs_r.deallocate();
+    abs_i.deallocate();
+
     Tensor big = ttnn::where(r_ge_i, inp_r, inp_i, output_mem_config);
     Tensor small = ttnn::where(r_ge_i, inp_i, inp_r, output_mem_config);
     Tensor ratio = ttnn::divide(small, big, std::nullopt, output_mem_config);

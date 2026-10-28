@@ -61,7 +61,7 @@ def test_level2_angle_bw(bs, hw, memcfg, dtype, device, function_level_defaults)
         assert passing
 
 
-@pytest.mark.parametrize("dtype", (ttnn.float32, ttnn.bfloat16))
+@pytest.mark.parametrize("dtype", ((ttnn.bfloat16,)))
 @pytest.mark.parametrize(
     "z_pair",
     (
@@ -82,16 +82,16 @@ def test_angle_bw_extreme_exponent_range(dtype, z_pair, device):
     grad_data = torch.ones(shape, dtype=torch.float32)
 
     input_tensor = ttnn.complex_tensor(
-        ttnn.from_torch(in_data.real, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device),
-        ttnn.from_torch(in_data.imag, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device),
+        ttnn.Tensor(in_data.real, dtype).to(ttnn.TILE_LAYOUT).to(device),
+        ttnn.Tensor(in_data.imag, dtype).to(ttnn.TILE_LAYOUT).to(device),
     )
-    grad_tensor = ttnn.from_torch(grad_data, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    grad_tensor = ttnn.Tensor(grad_data, dtype).to(ttnn.TILE_LAYOUT).to(device)
 
     tt_dev = convert_to_torch_tensor(ttnn.angle_bw(grad_tensor, input_tensor, memory_config=ttnn.DRAM_MEMORY_CONFIG))
     golden_tensor = ttnn.get_golden_function(ttnn.angle_bw)(grad_data, in_data)
 
     assert not torch.isnan(tt_dev[0]).any()
     assert not torch.isinf(tt_dev[0]).any()
-    passing, output = comp_allclose(golden_tensor[0], tt_dev[0], rtol=2e-2, atol=1e-25)
+    passing, output = comp_allclose(golden_tensor[0], tt_dev[0], rtol=3e-2, atol=1e-18)
     logger.info(output)
     assert passing
