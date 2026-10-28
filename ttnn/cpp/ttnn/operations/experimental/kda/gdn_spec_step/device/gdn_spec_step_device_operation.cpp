@@ -100,6 +100,7 @@ void GdnSpecStepOperation::validate_on_program_cache_miss(const operation_attrib
         T,
         B);
     TT_FATAL(a.hnew_depth == 2 || a.hnew_depth == 4, "{}: hnew_depth must be 2 or 4", kOp);
+    TT_FATAL(a.value_blocks <= 4, "{}: value_blocks must be in [0, 4] (got {})", kOp, a.value_blocks);
     const uint32_t C = 2 * Nk * Dk + Nv * Dv;
     TT_FATAL(
         a.qkvz_dim == C + Nv * Dv && a.qkvz_dim % TW == 0,
@@ -192,7 +193,8 @@ Tensor gdn_spec_step(
     DataType output_dtype,
     bool fast_mode,
     bool fp32_state,
-    uint32_t max_users) {
+    uint32_t max_users,
+    uint32_t value_blocks) {
     TT_FATAL(!fp32_state || fast_mode, "{}: fp32_state needs fast_mode", kOp);
     return ttnn::device_operation::launch<GdnSpecStepOperation>(
         GdnSpecStepParams{
@@ -214,6 +216,7 @@ Tensor gdn_spec_step(
             .compute_kernel_config = compute_kernel_config,
             .fast_mode = fast_mode,
             .fp32_state = fp32_state,
+            .value_blocks = value_blocks,
         },
         GdnSpecStepInputs{
             .qkvzab = qkvzab,

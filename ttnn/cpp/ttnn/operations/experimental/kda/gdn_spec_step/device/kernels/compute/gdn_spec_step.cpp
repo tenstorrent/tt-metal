@@ -17,6 +17,12 @@
 // Per-token arithmetic and helpers are gdn_decode_step_conv.cpp's; a T-step run equals T chained T = 1 runs.
 // GDN_FAST / GDN_FP32_STATE select gdn_decode_step_conv_fast.cpp's arithmetic instead (gates on the reader, hnew
 // packed from the state add's DST tile; fp32_state: SFPU decay / add on UnpackToDest operands, see the factory).
+// VB > 1 (value blocks, GDN_VSPLIT): this core owns the head's state column tiles [v0, v0 + Vs), v0 = s*Vs. A converts
+// only the q / k chunks and its own Vs v chunks (chunk index ci < Chs -> head chunk ci, or 2*Kt + v0 + (ci - 2*Kt));
+// B / C run on Vs value tiles and KVs = Kt*Vs state tiles (tile (i, j) at i*Vs + j) with the same per-tile ops in
+// the same order, so every value is the VB = 1 kernel's. The last token's output accumulator is packed into acc_mine
+// (exact fp32) for the writer, which assembles the head's full pre-norm row in acc_x; D runs on acc_x exactly as on
+// acc_fin and the core packs only its Vs output tiles.
 #include "ttnn/cpp/ttnn/operations/experimental/kda/gdn_decode_step/device/kernels/compute/gdn_step_helpers.hpp"
 #include "api/debug/kernel_profiler.hpp"  // zones compile to nothing unless the build defines PROFILE_KERNEL
 
@@ -25,6 +31,9 @@
 #endif
 #ifndef GDN_FP32_STATE
 #define GDN_FP32_STATE 0
+#endif
+#ifndef GDN_VSPLIT
+#define GDN_VSPLIT 0
 #endif
 
 using namespace gdn_step;
@@ -91,6 +100,23 @@ inline void silu_tiles(uint32_t a, uint32_t out, DataflowBuffer& out_dfb, uint32
         tile_regs_acquire();
         copy_tile(a, i, 0);
         silu_tile(0);
+        tile_regs_commit();
+        tile_regs_wait();
+        pack_tile(0, out, i);
+        tile_regs_release();
+    }
+    out_dfb.push_back(n);
+}
+
+// out[i] = a[first + i] (copy_tiles from tile `first`: the value block's output tiles of the full-row result)
+inline void copy_tiles_from(uint32_t a, uint32_t first, uint32_t out, DataflowBuffer& out_dfb, uint32_t n) {
+    out_dfb.reserve_back(n);
+    pack_reconfig_data_format(out);
+    reconfig_data_format_srca(a);
+    copy_init(a);
+    for (uint32_t i = 0; i < n; ++i) {
+        tile_regs_acquire();
+        copy_tile(a, first + i, 0);
         tile_regs_commit();
         tile_regs_wait();
         pack_tile(0, out, i);
@@ -411,11 +437,26 @@ inline void outer_add_state_sfpu(
 
 }  // namespace
 
-template <uint32_t Kt, uint32_t Vt, uint32_t T, uint32_t K, uint32_t AB2, uint32_t scale_bits, uint32_t inv_dv_bits>
-TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
+template <
+    uint32_t Kt,
+    uint32_t Vt,
+    uint32_t T,
+    uint32_t K,
+    uint32_t AB2,
+    uint32_t scale_bits,
+    uint32_t inv_dv_bits,
+    uint32_t VB>
+TT_KERNEL void compute(uint32_t u, uint32_t b_idx, uint32_t s) {
     (void)u;
-    constexpr uint32_t KV = Kt * Vt;
     constexpr uint32_t Ch = 2 * Kt + Vt;
+    static_assert(VB >= 1 && Vt % VB == 0, "value blocks must divide Vt");
+    static_assert((VB > 1) == (GDN_VSPLIT != 0), "GDN_VSPLIT must be defined exactly when VB > 1");
+    constexpr uint32_t Vs = Vt / VB;       // this block's value (state column) tiles; Vt at VB = 1
+    constexpr uint32_t KVs = Kt * Vs;      // this block's state tiles; Kt*Vt at VB = 1
+    constexpr uint32_t Chs = 2 * Kt + Vs;  // chunks this block convolves: q | k | its own v
+    const uint32_t v0 = s * Vs;            // first value tile of this block (0 at VB = 1)
+    // head chunk of this block's chunk ci (the identity at VB = 1)
+    auto head_chunk = [v0](uint32_t ci) -> uint32_t { return ci < 2 * Kt ? ci : ci + v0; };
     DataflowBuffer src_in(dfb::src_in);
     DataflowBuffer taps(dfb::taps);
     DataflowBuffer z_in(dfb::z_in);
@@ -474,6 +515,10 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
     DataflowBuffer hnew(dfb::hnew);
     DataflowBuffer out(dfb::out);
     DataflowBuffer wout(dfb::wout);
+#if GDN_VSPLIT
+    DataflowBuffer acc_mine(dfb::acc_mine);
+    DataflowBuffer acc_x(dfb::acc_x);
+#endif
     const uint32_t state_in_id = dfb::state_in;
     const uint32_t hn_id = dfb::hn;
     const uint32_t acc_a_id = dfb::acc_a;
@@ -550,16 +595,17 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
         wc.wait_front(Ch);
         // A2: shift[c*K + j] = SH_j @ W_c  (row r0+t = W[t+j]; bf16, exact), one chunk = K DST tiles per acquire
         //     (fp32 DST under the half-DST sync holds 4 tiles: indices >= 4 corrupt the half the packer is draining)
-        shift.reserve_back(Ch * K);
+        shift.reserve_back(Chs * K);
         pack_reconfig_data_format(dfb::shift);
         reconfig_data_format<SrcOrder::Reverse>(dfb::sel, dfb::wc);
         matmul_init(dfb::sel, dfb::wc);
 #pragma GCC unroll 1
-        for (uint32_t c = 0; c < Ch; ++c) {
+        for (uint32_t c = 0; c < Chs; ++c) {
+            const uint32_t hc = head_chunk(c);
             tile_regs_acquire();
 #pragma GCC unroll 1
             for (uint32_t j = 0; j < K; ++j) {
-                matmul_tiles(dfb::sel, dfb::wc, 2 + j, c, j);
+                matmul_tiles(dfb::sel, dfb::wc, 2 + j, hc, j);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -569,22 +615,23 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
             }
             tile_regs_release();
         }
-        shift.push_back(Ch * K);
+        shift.push_back(Chs * K);
         wc.pop_front(Ch);
-        shift.wait_front(Ch * K);
+        shift.wait_front(Chs * K);
         // A3: cv[c] = silu(sum_j shift_j * tap_j) in gdn_decode_step_conv.cpp's causal_conv_silu_packed op order
         //     (DST_j = shift_j * tap_j, DST_0 += DST_1..3 on the SFPU, silu), one chunk per acquire (4 DST tiles)
         taps.wait_front(Ch);
-        cv.reserve_back(Ch);
+        cv.reserve_back(Chs);
         pack_reconfig_data_format(dfb::cv);
         reconfig_data_format(dfb::shift, dfb::taps);
         mul_bcast_rows_init(dfb::shift, dfb::taps);
 #pragma GCC unroll 1
-        for (uint32_t c = 0; c < Ch; ++c) {
+        for (uint32_t c = 0; c < Chs; ++c) {
+            const uint32_t hc = head_chunk(c);
             tile_regs_acquire();
 #pragma GCC unroll 1
             for (uint32_t j = 0; j < K; ++j) {
-                mul_tiles_bcast_rows(dfb::shift, dfb::taps, c * K + j, c, j, j);
+                mul_tiles_bcast_rows(dfb::shift, dfb::taps, c * K + j, hc, j, j);
             }
             // SFPU ops with literal DST indices: loop-variable indices trip the TT GCC SFPU synth pass (ICE in
             // rvtt_synth_renumber) in this body
@@ -605,22 +652,22 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
             pack_tile(0, dfb::cv, c);
             tile_regs_release();
         }
-        cv.push_back(Ch);
-        shift.pop_front(Ch * K);
+        cv.push_back(Chs);
+        shift.pop_front(Chs * K);
         taps.pop_front(Ch);
-        cv.wait_front(Ch);
+        cv.wait_front(Chs);
         // A4: qc | kc | vc [c] = P @ cv[c] -- the conv values cross a one-hot matmul as in the plain kernel's
         // scatter_conv
         //     (same operand roles: bf16 one-hot A, fp32 conv B); required for bit-identity with it
         qc.reserve_back(Kt);
         kc.reserve_back(Kt);
-        vc.reserve_back(Vt);
+        vc.reserve_back(Vs);
         pack_reconfig_data_format(qc_id);
         reconfig_data_format<SrcOrder::Reverse>(dfb::sel, dfb::cv);
         matmul_init(dfb::sel, dfb::cv);
 #pragma GCC unroll 1  // code size: the kernel binaries must fit the 69 KB kernel config buffer
-        for (uint32_t c0 = 0; c0 < Ch; c0 += 4) {
-            const uint32_t n = (Ch - c0) < 4 ? (Ch - c0) : 4;
+        for (uint32_t c0 = 0; c0 < Chs; c0 += 4) {
+            const uint32_t n = (Chs - c0) < 4 ? (Chs - c0) : 4;
             tile_regs_acquire();
 #pragma GCC unroll 1
             for (uint32_t i = 0; i < n; ++i) {
@@ -639,8 +686,8 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
         }
         qc.push_back(Kt);
         kc.push_back(Kt);
-        vc.push_back(Vt);
-        cv.pop_front(Ch);
+        vc.push_back(Vs);
+        cv.pop_front(Chs);
         sel.pop_front(3 + K);
     }
 
@@ -650,20 +697,20 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
         mask_T.wait_front(1);
         qc.wait_front(Kt);
         kc.wait_front(Kt);
-        vc.wait_front(Vt);
+        vc.wait_front(Vs);
         // k, v row-batched; then the q row sums of squares once into `stats` (kept through the token loop): qn_t itself
         // is formed per token with the e_t mask, exactly the plain kernel's inverse_l2(mask) + scale_rows, so o_t =
         // qn_t @ S_t has only the token's row non-zero
         l2norm_rows<Kt>(dfb::kc, dfb::mask_T, dfb::kn, kn, tmp, stats, scratch, inv, kOneBits);
-        scale_rows(dfb::vc, dfb::mask_T, dfb::vm, vm, Vt);
+        scale_rows(dfb::vc, dfb::mask_T, dfb::vm, vm, Vs);
         square_tiles(dfb::qc, dfb::tmp, tmp, Kt);
         reduce_rows(Kt);
         stats.wait_front(1);
         kc.pop_front(Kt);
-        vc.pop_front(Vt);
+        vc.pop_front(Vs);
         mask_T.pop_front(1);
         kn.wait_front(Kt);
-        vm.wait_front(Vt);
+        vm.wait_front(Vs);
         transpose_tiles(dfb::kn, dfb::kt, kt, Kt);
         kt.wait_front(Kt);
     }
@@ -671,7 +718,7 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
     // ---- C. T serial delta-rule steps, state in L1
     {
         DeviceZoneScopedN("c_wait_state");
-        state_in.wait_front(KV);
+        state_in.wait_front(KVs);
     }
 #pragma GCC unroll 1  // code size: the kernel binaries must fit the 69 KB kernel config buffer
     for (uint32_t t = 0; t < T; ++t) {
@@ -699,58 +746,58 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
         const uint32_t cur32_id = first ? state_in_id : hn32_id;
         DataflowBuffer& cur32 = first ? state_in : hn32;
         if (!first) {
-            hn32.wait_front(KV);
+            hn32.wait_front(KVs);
         }
         // hd (FPU operand of vread) = hd32 (SFPU operand of the add) = S_cur * dec, exact fp32 on the SFPU
-        decay_state_sfpu(cur32_id, dfb::dec, hd, hd32, KV);
+        decay_state_sfpu(cur32_id, dfb::dec, hd, hd32, KVs);
         dec.pop_front(1);
-        cur32.pop_front(KV);
-        hd.wait_front(KV);
+        cur32.pop_front(KVs);
+        hd.wait_front(KVs);
 #else
         // S_cur = state_in at t = 0, else the hn produced at t - 1
         const uint32_t cur_id = first ? state_in_id : hn_id;
         DataflowBuffer& cur = first ? state_in : hn;
         // hd = S_cur * dec
-        multiply_tiles<true>(cur_id, dfb::dec, dfb::hd, hd, KV);
+        multiply_tiles<true>(cur_id, dfb::dec, dfb::hd, hd, KVs);
         dec.pop_front(1);
-        cur.pop_front(KV);
-        hd.wait_front(KV);
+        cur.pop_front(KVs);
+        hd.wait_front(KVs);
 #endif
         // vread = kn @ hd ; delta = beta * (vm - vread) on row r0 + t (other rows exactly 0)
-        row_times_matrix_acc(dfb::vread, dfb::kn, dfb::hd, dfb::vread, vread, Kt, Vt, false);
-        vread.wait_front(Vt);
-        subtract_tiles(dfb::vm, dfb::vread, dfb::tmp, tmp, Vt);
-        vread.pop_front(Vt);
-        tmp.wait_front(Vt);
-        scale_rows(dfb::tmp, dfb::eb, dfb::delta, delta, Vt);
-        tmp.pop_front(Vt);
+        row_times_matrix_acc(dfb::vread, dfb::kn, dfb::hd, dfb::vread, vread, Kt, Vs, false);
+        vread.wait_front(Vs);
+        subtract_tiles(dfb::vm, dfb::vread, dfb::tmp, tmp, Vs);
+        vread.pop_front(Vs);
+        tmp.wait_front(Vs);
+        scale_rows(dfb::tmp, dfb::eb, dfb::delta, delta, Vs);
+        tmp.pop_front(Vs);
         eb.pop_front(1);
-        delta.wait_front(Vt);
+        delta.wait_front(Vs);
         // S_next = hd + kt @ delta ; hnew for the writer's ring write
 #if GDN_FP32_STATE
-        hd.pop_front(KV);  // the FPU copy served vread only; the add reads the exact hd32
-        hd32.wait_front(KV);
+        hd.pop_front(KVs);  // the FPU copy served vread only; the add reads the exact hd32
+        hd32.wait_front(KVs);
         // hn (o operand), hnew (writer), hn32 (next token's S_cur) = hd32 + kt @ delta, outer product fused in DST
-        outer_add_state_sfpu(hn, hnew, hn32, Kt, Vt);
-        hd32.pop_front(KV);
-        delta.pop_front(Vt);
+        outer_add_state_sfpu(hn, hnew, hn32, Kt, Vs);
+        hd32.pop_front(KVs);
+        delta.pop_front(Vs);
 #else
-        outer_product4(dfb::kt, dfb::delta, dfb::outer, outer, Kt, Vt);
-        delta.pop_front(Vt);
-        outer.wait_front(KV);
+        outer_product4(dfb::kt, dfb::delta, dfb::outer, outer, Kt, Vs);
+        delta.pop_front(Vs);
+        outer.wait_front(KVs);
 #if GDN_FAST
-        add_tiles_n_dual(dfb::hd, dfb::outer, hn_id, hn, dfb::hnew, hnew, KV);  // hn and hnew from one DST tile
-        hd.pop_front(KV);
-        outer.pop_front(KV);
+        add_tiles_n_dual(dfb::hd, dfb::outer, hn_id, hn, dfb::hnew, hnew, KVs);  // hn and hnew from one DST tile
+        hd.pop_front(KVs);
+        outer.pop_front(KVs);
 #else
-        add_tiles_n(dfb::hd, dfb::outer, hn_id, hn, KV);
-        hd.pop_front(KV);
-        outer.pop_front(KV);
-        hn.wait_front(KV);
-        copy_tiles(hn_id, dfb::hnew, hnew, KV);
+        add_tiles_n(dfb::hd, dfb::outer, hn_id, hn, KVs);
+        hd.pop_front(KVs);
+        outer.pop_front(KVs);
+        hn.wait_front(KVs);
+        copy_tiles(hn_id, dfb::hnew, hnew, KVs);
 #endif
 #endif
-        hn.wait_front(KV);
+        hn.wait_front(KVs);
         // acc[row r0 + t] = qn_t @ S_next: token 0 is the plain kernel's row_times_matrix; later tokens accumulate
         // their row onto the DST-loaded accumulator (other rows unchanged: qn_t is zero there)
         DataflowBuffer& acc_cur = (t & 1u) ? acc_b : acc_a;
@@ -758,21 +805,30 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
         DataflowBuffer& acc_prev = (t & 1u) ? acc_a : acc_b;
         const uint32_t acc_prev_id = (t & 1u) ? acc_a_id : acc_b_id;
         if (!first) {
-            acc_prev.wait_front(Vt);
+            acc_prev.wait_front(Vs);
         }
-        row_times_matrix_acc(acc_prev_id, dfb::qn, hn_id, acc_cur_id, acc_cur, Kt, Vt, !first);
+#if GDN_VSPLIT
+        if (last) {
+            // the last token's accumulator goes to the writer (exact fp32 pack), which assembles the head's full row
+            row_times_matrix_acc(acc_prev_id, dfb::qn, hn_id, dfb::acc_mine, acc_mine, Kt, Vs, !first);
+        } else {
+            row_times_matrix_acc(acc_prev_id, dfb::qn, hn_id, acc_cur_id, acc_cur, Kt, Vs, !first);
+        }
+#else
+        row_times_matrix_acc(acc_prev_id, dfb::qn, hn_id, acc_cur_id, acc_cur, Kt, Vs, !first);
+#endif
         if (!first) {
-            acc_prev.pop_front(Vt);
+            acc_prev.pop_front(Vs);
         }
 #if GDN_FP32_STATE
-        hn.pop_front(KV);  // the next token's S_cur is the exact hn32 copy
+        hn.pop_front(KVs);  // the next token's S_cur is the exact hn32 copy
         if (last) {
-            hn32.wait_front(KV);  // the last token's hn32 has no consumer: drain it
-            hn32.pop_front(KV);
+            hn32.wait_front(KVs);  // the last token's hn32 has no consumer: drain it
+            hn32.pop_front(KVs);
         }
 #else
         if (last) {
-            hn.pop_front(KV);  // otherwise it is consumed as S_cur by the next token
+            hn.pop_front(KVs);  // otherwise it is consumed as S_cur by the next token
         }
 #endif
         qn.pop_front(Kt);
@@ -784,11 +840,18 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
     // ---- D. row-batched post: out = rmsnorm(acc) * w * silu(z)
     DeviceZoneScopedN("c_D");
     w_in.wait_front(Vt);  // only the final gate needs the norm weight (the reader pushes it with the bulk reads)
+#if GDN_VSPLIT
+    // the head's full pre-norm row (every block's last-token tiles, exact bytes), assembled by the writer
+    acc_x.wait_front(Vt);
+    rmsnorm_rows<Vt>(dfb::acc_x, dfb::on, on, tmp, stats, scratch, inv, inv_dv_bits);
+    acc_x.pop_front(Vt);
+#else
     DataflowBuffer& acc_fin = ((T - 1) & 1u) ? acc_b : acc_a;
     const uint32_t acc_fin_id = ((T - 1) & 1u) ? acc_b_id : acc_a_id;
     acc_fin.wait_front(Vt);
     rmsnorm_rows<Vt>(acc_fin_id, dfb::on, on, tmp, stats, scratch, inv, inv_dv_bits);
     acc_fin.pop_front(Vt);
+#endif
     on.wait_front(Vt);
     // gated -> gq (fp32), then one datacopy pass into `out`: gdn_decode_step_conv.cpp routes its gated result through
     // tmp -> out_acc -> out, i.e. through the SrcA unpack, so its stored output is the tf32-rounded product; the same
@@ -796,11 +859,15 @@ TT_KERNEL void compute(uint32_t u, uint32_t b_idx) {
     gated_out(dfb::on, dfb::w_in, dfb::zs, dfb::gq, gq, Vt);
     on.pop_front(Vt);
     gq.wait_front(Vt);
-    copy_tiles(dfb::gq, dfb::out, out, Vt);
+    if constexpr (VB == 1) {
+        copy_tiles(dfb::gq, dfb::out, out, Vt);
+    } else {
+        copy_tiles_from(dfb::gq, v0, dfb::out, out, Vs);  // only this block's output columns
+    }
     gq.pop_front(Vt);
     // (qn is pushed and popped Kt per token inside the token loop: nothing left to pop here)
     kn.pop_front(Kt);
-    vm.pop_front(Vt);
+    vm.pop_front(Vs);
     kt.pop_front(Kt);
     zs.pop_front(Vt);
     w_in.pop_front(Vt);

@@ -43,6 +43,14 @@ struct GdnSpecStepParams {
     // instead of the FPU, whose SrcA path truncates the fp32 state to ~tf32 every token. Costs two extra KV-tile
     // DFBs (hd32, hn32). Part of the program hash.
     bool fp32_state = false;
+    // value_blocks (QWEN36_SPEC_STEP_VALUE_BLOCKS): split each (u, h)'s 128 state columns over up to this many cores
+    // (tt-lab's 4-core GDN head split). Every column's recurrence is independent, so each core runs the T tokens on
+    // its Vt / value_blocks column tiles with the unchanged per-tile arithmetic; the blocks of a head swap their final
+    // pre-norm output tiles (exact fp32 bytes over the NoC) so each one runs the full-row gated RMSNorm as before and
+    // writes only its own output columns. Outputs, ring and window are bit-identical to value_blocks = 1. The factory
+    // takes the largest divisor of Vt <= value_blocks (<= 4) whose B*Nv*blocks cores fit the grid. 0 or 1 = one core
+    // per (u, h) (the original program). Part of the program hash.
+    uint32_t value_blocks = 1;
 };
 
 struct GdnSpecStepInputs {

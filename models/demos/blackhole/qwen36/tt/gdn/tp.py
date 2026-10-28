@@ -61,6 +61,20 @@ def gdn_verify_spec_step_enabled():
     return os.environ.get("QWEN36_VERIFY_SPEC_STEP", "1") == "1"
 
 
+def gdn_spec_step_value_blocks():
+    """QWEN36_SPEC_STEP_VALUE_BLOCKS (default "1" = off): gdn_spec_step's value_blocks -- split each (user, value
+    head)'s recurrent state columns over up to this many cores (tt-lab's 4-core GDN head split). The op takes the
+    largest divisor of Dv/32 <= the value whose B*Nv*blocks cores fit the grid (TP = 8, Nv = 6, >= 96-core grid: 2
+    at the B = 8 bucket, 4 at B <= 4 and the seed of a B <= 4 batch) and stays bit-identical (out, ring, window) to
+    one core per (user, head). Values: 1, 2 or 4; 1 passes nothing to the op, so a ttnn build without the attribute
+    keeps working."""
+    env = os.environ.get("QWEN36_SPEC_STEP_VALUE_BLOCKS", "1").strip() or "1"
+    vb = int(env)
+    if vb not in (1, 2, 4):
+        raise ValueError(f"QWEN36_SPEC_STEP_VALUE_BLOCKS must be 1, 2 or 4, got {env!r}")
+    return vb
+
+
 def pack_head_tiles(rows, Nv, Nk, Dk, Dv, parity=0, both_parities=False):
     """rows: list of 4 torch [C] vectors ([q | k | v] channels of one device) -> [Nv, 4, 32, 32] bf16 packed head
     tiles for gdn_decode_step: tile (h, s) holds rows[s]'s channels [q_hk | k_hk | v_h] (hk = h // rf) as 32-wide
@@ -3319,6 +3333,14 @@ class TPGatedDeltaNet:
         _mu = max_users if max_users is not None else getattr(self, "_spec_max_users", 0)
         if _mu:
             extra["max_users"] = int(_mu)
+        _vb = gdn_spec_step_value_blocks()
+        if _vb > 1:
+            extra["value_blocks"] = _vb
+            _log_spec_step_once(
+                ("value_blocks", _vb),
+                f"[gdn-spec-step] QWEN36_SPEC_STEP_VALUE_BLOCKS={_vb}: state columns split over up to {_vb} cores "
+                "per (user, head) (bit-identical; the op clamps to the grid per (B, T))",
+            )
         return ttnn.experimental.kda.gdn_spec_step(
             qkvzab,
             win_a,
