@@ -4,7 +4,8 @@
 
 #pragma once
 
-// Unused here, but device kernels reach this header and may rely on it.
+// The enums below do not need it. Kept because includers of this header may rely on <cstdint> transitively
+// (preserved from the pre-split shared header).
 #include <cstdint>  // IWYU pragma: keep
 
 // Buffer enums for device (kernel) code.
