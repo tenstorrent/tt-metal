@@ -106,7 +106,17 @@ class SparseRowPlan:
         while True:
             p = object.__new__(cls)
             p._init(
-                COL, out_blocks, src_regions, nc, noc_xy, exchange, bands, pout, stencil, transfer, host_tables,
+                COL,
+                out_blocks,
+                src_regions,
+                nc,
+                noc_xy,
+                exchange,
+                bands,
+                pout,
+                stencil,
+                transfer,
+                host_tables,
                 defer_exchange,
             )
             if not exchange or defer_exchange or int(np.diff(p._nbr_csr[1]).max(initial=0)) <= MAX_NB or nc == 1:
@@ -338,7 +348,24 @@ class SparseRowPlan:
         for maxp in MAX_PIECES:
             plo, pln, pl1 = (np.zeros(nc * maxp, np.int64) for _ in range(3))
             npc = np.zeros(nc, np.int64)
-            args = (nslot, stride, COL, nc, NB, own_f, int(exchange), GRAN, WGAP, ng, empty_lo, maxp, plo, pln, pl1, npc)
+            args = (
+                nslot,
+                stride,
+                COL,
+                nc,
+                NB,
+                own_f,
+                int(exchange),
+                GRAN,
+                WGAP,
+                ng,
+                empty_lo,
+                maxp,
+                plo,
+                pln,
+                pl1,
+                npc,
+            )
             if lib.hpcg_plan_windows(*args) >= 0:
                 break
         else:

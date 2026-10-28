@@ -138,9 +138,7 @@ class Level:
         self.COL_rows = zeros((27, stride), np.int32)
         self.B = zeros(P, np.float32)
         self.nnz = int(
-            lib.hpcg_build_level(
-                *self.geo(), P, stride, self.pos, self.nat_at, self.V_rows, self.COL_rows, self.B
-            )
+            lib.hpcg_build_level(*self.geo(), P, stride, self.pos, self.nat_at, self.V_rows, self.COL_rows, self.B)
         )
         self.V, self.COL = self.V_rows[:, :P], self.COL_rows[:, :P]
 

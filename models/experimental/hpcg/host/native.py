@@ -25,7 +25,6 @@ SRC = pathlib.Path(__file__).with_name("native_setup.cpp")
 _LIB = {}
 
 
-
 def _array(dtype):
     """ctypes argument type of a C-contiguous numpy array of dtype: the checks of np.ctypeslib.ndpointer(dtype,
     flags="C_CONTIGUOUS") at 1.45 instead of 2.47 us per argument (ndpointer builds a ctypes view of each array);

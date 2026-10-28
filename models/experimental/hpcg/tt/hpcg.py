@@ -188,8 +188,19 @@ class HPCG:
             # the coarser levels). It runs the first 16 phases of the pre-smoother's table (one table and upload less)
             pre = phases + ([8 + b for b in range(8)] if l < 3 else [])
             self.ops[("gs", l)] = SparseRowOp(
-                device, d.plan, d.values, d.offsets, "gs", phases, d.z, d.z, b=d.r, tpw=tpw, wsplit=(l == 0),
-                table_phases=pre, **dbg
+                device,
+                d.plan,
+                d.values,
+                d.offsets,
+                "gs",
+                phases,
+                d.z,
+                d.z,
+                b=d.r,
+                tpw=tpw,
+                wsplit=(l == 0),
+                table_phases=pre,
+                **dbg,
             )
             # pre-smoother: z = 0 on entry, then (above the coarsest level) Az = A z with block 0 = r - A z
             self.ops[("gs_pre", l)] = SparseRowOp(
@@ -235,8 +246,17 @@ class HPCG:
         # CG start: A x written straight into r (then r = b - A x): the CG SpMV's binary, on other buffers. HPCG
         # copies x to p and multiplies p; the product of x is the same and saves the copy
         self.ops["spmv_start"] = SparseRowOp(
-            device, d0.plan, d0.values, d0.offsets, "gs", [8 + b for b in range(8)], self.x, self.x, b=self.x,
-            out2=self.r, **dbg
+            device,
+            d0.plan,
+            d0.values,
+            d0.offsets,
+            "gs",
+            [8 + b for b in range(8)],
+            self.x,
+            self.x,
+            b=self.x,
+            out2=self.r,
+            **dbg,
         )
         ncv = min(nc, L0.P // TILE)
         # per-core dot partials, one 64-byte slot per core; zero beyond the slots (the finish adds whole pages).

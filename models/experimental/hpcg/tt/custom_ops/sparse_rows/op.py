@@ -306,6 +306,7 @@ class SparseRowOp:
         aout, ao2 = out.buffer_address(), o2.buffer_address()
         reader_common = [ax, av, aoff, ameta, ab, g.x, adbg, meta_b, ntlv, plan.win_b, flags, nph]
         writer_common = [aout, ameta, g.x, aoff, 0, 0, adbg, av, ao2, ax, meta_b, ntlv, flags, nph]
+
         def accessors(*ts):
             return [a for t in ts for a in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
 
@@ -317,6 +318,7 @@ class SparseRowOp:
 
         # circular buffers; L1 pages hold tpw words (256: one 16x16 face, so unpack / pack move one face)
         pg = tpw * 4
+
         def cb(idx, nbytes, page=4096, tile=False):
             return _cb(plan.nc, g.x, idx, nbytes, page, tile and tpw == 256)
 
