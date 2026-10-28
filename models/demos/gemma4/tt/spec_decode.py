@@ -1649,7 +1649,9 @@ class SpeculativeDecoder:
                 n = min(R32, rows - off)
                 part = ttnn.slice(logits, [0, 0, off, 0], [1, 1, off + n, vocab])
                 chunks.append(self._argmax_last(part, n))  # recurse (≤32 rows)
-                part.deallocate(True)
+                if not _same_device_buffer(part, logits):
+                    # a slice that ttnn served as a view of ``logits`` must not free it
+                    part.deallocate(True)
                 off += n
             out = ttnn.concat(chunks, dim=2)  # [1,1,rows]
             for c in chunks:
@@ -1671,7 +1673,10 @@ class SpeculativeDecoder:
         u.deallocate(True)
         if rows < R32:
             sliced = ttnn.slice(idx, [0, 0, 0], [1, 1, rows])  # [1,1,rows]
-            idx.deallocate(True)
+            if not _same_device_buffer(sliced, idx):
+                # the trimmed ids are a new buffer from prim::slice today; a ttnn that
+                # serves the trim as a view of ``idx`` must keep ``idx`` alive
+                idx.deallocate(True)
             idx = sliced
         return idx
 
@@ -2469,6 +2474,11 @@ class SpeculativeDecoder:
         reads it for every row whose ``seed_cols`` entry is None. The pool
         holds the rows of the LAST reseed only: reseed every pending row in
         one call, then step.
+
+        This is the exact drafter contract (assistant/model.py ``step``: the
+        first step pairs the anchor token with the target's post-norm hidden
+        AT the anchor's own position; ``seed`` in this module): the forward
+        consumes the anchor itself at its position.
         """
         self._srv_require()
         shape = self._srv_shape(shape)
@@ -2486,6 +2496,15 @@ class SpeculativeDecoder:
         ``r' * P_prev + seed_cols[r]`` (r' = the row's index in that replay) or
         the reseed-pool row when ``seed_cols[r]`` is None; then K_v assistant
         steps, one packed verify of [anchor, d1..dK] per row, argmax on device.
+
+        Seed column convention: the adapter passes ``seed_cols[r] = committed
+        count - 1 = accepted drafts``, i.e. the verify hidden of the LAST
+        ACCEPTED token at its own position (column 0 = the anchor, column m =
+        draft m), one position behind the new anchor (the bonus/correction
+        token, whose own hidden no verify column holds). That is the
+        pre-contract B=1 production mode ``_fused_shift_seed_row("current")``;
+        column ``accepted + 1`` ("shift") would sit at the anchor's position
+        but was computed from the REJECTED draft there. A reseed is exact.
         Returns a ServingStepResult; its ``logits`` is the decoder's shared
         verify-logits buffer, valid until the next serving_step or
         serving_reseed of this decoder.
@@ -2666,12 +2685,8 @@ class SpeculativeDecoder:
         """
         S = self._srv_shape_bufs[rec["shape"]]
         B, K, P = rec["B"], rec["K"], rec["P"]
-        # 1. seed gather: [pool_v | pool_s] -> [64, backbone] -> rows seed_idx
-        # ttnn.embedding takes the table as [1, 1, num_rows, width]: the 4D
-        # concat is the table, no reshape (the dFlash ctx merge pattern).
-        table = ttnn.concat([self._srv_pool_v, self._srv_pool_s], dim=2)  # [1, 1, 64, backbone]
-        h = ttnn.unsqueeze_to_4D(ttnn.embedding(S["seed_idx"], table, layout=ttnn.TILE_LAYOUT))  # [1, 1, B, bb]
-        table.deallocate(True)
+        # 1. seed gather from the hidden pools through the uploaded row index
+        h = self._srv_seed_gather(S)  # [1, 1, B, bb]
         # 2. K batched drafter steps, argmax + re-embed on device
         tok = S["anchor_tok"]
         draft_cols = []
@@ -2685,16 +2700,7 @@ class SpeculativeDecoder:
             draft_cols.append(tok)
         h.deallocate(True)
         # 3. user-major verify input [1, B*P] (row b*P+p) from the P columns [1, B]
-        cols4d = [ttnn.reshape(S["anchor_tok"], (1, 1, 1, B))] + [ttnn.reshape(c, (1, 1, 1, B)) for c in draft_cols]
-        stacked = ttnn.concat(cols4d, dim=2)  # [1, 1, P, B]
-        um = ttnn.permute(stacked, (0, 1, 3, 2))  # [1, 1, B, P]
-        stacked.deallocate(True)
-        verify_x = ttnn.reshape(um, (1, B * P))
-        if not _same_device_buffer(verify_x, um):
-            # A same-volume reshape is a view of ``um``: freeing the source would free
-            # the verify input (inside a capture, the replay then reuses the storage
-            # the host reads the drafts from).
-            um.deallocate(True)
+        verify_x = self._srv_assemble_verify_x(S, draft_cols)
         # 4. masks built in-trace at [B, 1, P, S], then ONE packed verify; the
         # H x repeat tiles the P block per head (row h*P+p, the packed layout).
         mask_full, mask_slide = self._srv_masks_device(S, rec)
@@ -2723,6 +2729,37 @@ class SpeculativeDecoder:
         vidx = self._argmax_last(vlogits, rows=B * P)  # [1, 1, B*P] uint32
         vlogits.deallocate(True)
         return verify_x, vidx
+
+    def _srv_seed_gather(self, S):
+        """Stage 1 of the body: the drafter seed [1, 1, B, backbone] = rows ``seed_idx`` of [pool_v | pool_s].
+
+        ``ttnn.embedding`` takes the table as [1, 1, num_rows, width], so the
+        4D concat of the two 32-row pools is the table itself (the dFlash ctx
+        merge pattern); row r of the result is pool row ``seed_idx[r]``, the
+        previous replay's verify hidden ``r' * P_prev + col`` or the reseed
+        hidden ``32 + reseed row`` (serving_seed_index).
+        """
+        table = ttnn.concat([self._srv_pool_v, self._srv_pool_s], dim=2)  # [1, 1, 64, backbone]
+        h = ttnn.unsqueeze_to_4D(ttnn.embedding(S["seed_idx"], table, layout=ttnn.TILE_LAYOUT))  # [1, 1, B, bb]
+        table.deallocate(True)
+        return h
+
+    def _srv_assemble_verify_x(self, S, draft_cols):
+        """Stage 3 of the body: the user-major verify input [1, B*P] (row b*P+p = [anchor_b, d1_b..dK_b])
+        from the anchor column and the K draft columns, each [1, B] uint32."""
+        B = S["B"]
+        P = len(draft_cols) + 1
+        cols4d = [ttnn.reshape(S["anchor_tok"], (1, 1, 1, B))] + [ttnn.reshape(c, (1, 1, 1, B)) for c in draft_cols]
+        stacked = ttnn.concat(cols4d, dim=2)  # [1, 1, P, B]
+        um = ttnn.permute(stacked, (0, 1, 3, 2))  # [1, 1, B, P]
+        stacked.deallocate(True)
+        verify_x = ttnn.reshape(um, (1, B * P))
+        if not _same_device_buffer(verify_x, um):
+            # A same-volume reshape is a view of ``um``: freeing the source would free
+            # the verify input (inside a capture, the replay then reuses the storage
+            # the host reads the drafts from).
+            um.deallocate(True)
+        return verify_x
 
     def _srv_publish_logits(self, vlogits):
         """Copy the [1, 1, B*P, V_padded] verify logits into the shared 32-row logits buffer (allocated on

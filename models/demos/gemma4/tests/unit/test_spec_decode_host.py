@@ -780,6 +780,8 @@ _SERVING_METHODS = [
     "_srv_mask_chunks",
     "_srv_masks_device",
     "_srv_seed_rows",
+    "_srv_seed_gather",
+    "_srv_assemble_verify_x",
     "_srv_body",
     "_srv_upload",
     "_srv_upload_tables",
@@ -1731,3 +1733,44 @@ def test_the_12b_measurement_fits_galaxy_but_not_qb2_at_the_full_ladder():
     assert total > 512 and total < 960
     _shapes, three = serving_plan(_DEFAULT_SHAPES, None, 16, max_context=262144, max_rungs=3)
     assert 87 + sum(len(three[s]) * mb for s, mb in measured.items()) < 512
+
+
+# Alias guards and the seed-column convention -------------------------------------------------------
+def _calls_in(fn_name):
+    tree = _module()
+    fn = next(f for f in _functions(tree) if f.name == fn_name)
+    return [n.func.id for n in ast.walk(fn) if isinstance(n, ast.Call) and isinstance(n.func, ast.Name)]
+
+
+def test_argmax_frees_its_slice_sources_only_when_they_are_copies():
+    """Both partial-slice frees in _argmax_last (the >32-row tile slices and the trimmed ids) are guarded by
+    _same_device_buffer, like the pad above them: a ttnn that serves a slice as a view must not lose its source."""
+    calls = _calls_in("_argmax_last")
+    assert calls.count("_same_device_buffer") >= 3, calls
+
+
+def test_the_body_stages_are_separate_methods_the_device_test_can_run_eagerly():
+    tree = _module()
+    names = {fn.name for fn in _functions(tree)}
+    assert {"_srv_seed_gather", "_srv_assemble_verify_x", "_srv_masks_device"} <= names
+    body_calls = _calls_in("_srv_body")
+    assert "_same_device_buffer" not in body_calls  # the guarded frees moved into the stage methods
+    body = next(f for f in _functions(tree) if f.name == "_srv_body")
+    method_calls = {
+        n.func.attr for n in ast.walk(body) if isinstance(n, ast.Call) and isinstance(n.func, ast.Attribute)
+    }
+    assert {"_srv_seed_gather", "_srv_assemble_verify_x", "_srv_masks_device"} <= method_calls, method_calls
+
+
+def test_the_seed_column_is_the_pre_contract_current_mode():
+    """The adapter passes seed_cols = committed count - 1 = accepted drafts; the pre-contract B=1 production
+    mode picked the same verify row (_fused_shift_seed_row("current") = min(accepted, K)), and the gather
+    index lands on that row of the previous replay's hidden layout."""
+    spec = SpeculativeDecoder.__new__(SpeculativeDecoder)
+    spec._fused_shift_seed = "current"
+    K = 5
+    for accepted in range(K + 1):
+        committed = accepted + 1
+        assert committed - 1 == spec._fused_shift_seed_row(accepted, K)
+        idx = serving_seed_index((5, K), [3], [committed - 1], (K, [9, 3]), {})
+        assert idx[0] == 1 * (K + 1) + accepted

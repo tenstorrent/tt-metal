@@ -3629,3 +3629,135 @@ def test_serving_all_shapes_capture_and_switch(mesh_device, reset_seeds):
     with pytest.raises(ValueError, match="last replay served rows"):  # allow-pytest.raises (contract check)
         spec.serving_step((1, 5), [9], [anchors[0]], [positions[0]], _tables((1, 5), [0]), [0])
     spec.serving_release()
+
+
+def _serving_read(spec, t):
+    return ttnn.to_torch(ttnn.get_device_tensors(t)[0]) if spec._tp > 1 else ttnn.to_torch(t)
+
+
+def _serving_upload(spec, host, dev, dtype, layout):
+    h = ttnn.from_torch(host, layout=layout, dtype=dtype, mesh_mapper=spec._mapper)
+    ttnn.copy_host_to_device_tensor(h, dev)
+    h.deallocate(True)
+
+
+@_needs_assistant
+@pytest.mark.parametrize("shape", _SERVING_SHAPES, ids=lambda s: f"B{s[0]}K{s[1]}")
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [pytest.param((1, 4), {"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 400_000_000}, id="1x4")],
+    indirect=True,
+)
+def test_serving_body_stages_at_batch(mesh_device, reset_seeds, shape):
+    """Every per-row stage of the record body, run EAGERLY at B rows and checked row by row against host
+    truth. A defect that leaves the verify's anchor column right but the draft columns wrong at B > 1 must
+    live in one of them: (a) the seed gather from the hidden pools through the uploaded row index (rows r' != r,
+    a reseeded row); (b) the in-trace masks at per-row positions (equal to serving_masks_host, H-repeated);
+    (c) the user-major verify-input assembly from known columns; (d) the 32-row argmax at B rows;
+    (e) the drafter's first step at B rows against a batch-1 step per row with the same token, seed hidden,
+    position and page-table row (the real reseed -> gather -> assistant.step path)."""
+    from models.demos.gemma4.tt.spec_decode import serving_masks_host, serving_seed_index
+
+    B, K = shape
+    P = K + 1
+    width = 2048
+    generator, tt_kv_cache, tokenizer, spec, page_table = _serving_build(mesh_device, width, K)
+    spec.serving_prepare([shape], {shape: [width]}, max_rows=_SERVING_MAX_ROWS)
+    S = spec._srv_shape_bufs[shape]
+    rec = spec._srv_records[(shape, width)]
+    bb = spec._srv_backbone
+    H = spec._packed_H()
+    rows = list(range(B))
+    page_tables = torch.zeros(B, page_table.shape[1], dtype=torch.int32)
+    page_tables[:B] = page_table[:B]
+
+    # (a) seed gather: pool_v row i holds i + 1, pool_s row i holds 100 + i (bf16-exact), whole rows
+    pool_v_host = (torch.arange(32).float() + 1).reshape(1, 1, 32, 1).expand(1, 1, 32, bb).contiguous()
+    pool_s_host = (torch.arange(32).float() + 100).reshape(1, 1, 32, 1).expand(1, 1, 32, bb).contiguous()
+    _serving_upload(spec, pool_v_host.to(torch.bfloat16), spec._srv_pool_v, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+    _serving_upload(spec, pool_s_host.to(torch.bfloat16), spec._srv_pool_s, ttnn.bfloat16, ttnn.TILE_LAYOUT)
+    # the previous replay served the rows in reverse (r' != r), row r continues from column min(r, K), the
+    # last row was reseeded into reseed-pool row 0
+    seed_cols = [min(r, K) for r in rows]
+    seed_cols[-1] = None
+    idx = serving_seed_index(shape, rows, seed_cols, (K, rows[::-1]), {rows[-1]: 0})
+    _serving_upload(spec, torch.tensor([idx], dtype=torch.int64), S["seed_idx"], ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
+    h = spec._srv_seed_gather(S)
+    got = _serving_read(spec, h).float().reshape(-1, bb)[:B]
+    h.deallocate(True)
+    table_host = torch.cat([pool_v_host, pool_s_host], dim=2).reshape(64, bb)
+    for r in range(B):
+        assert torch.equal(got[r], table_host[idx[r]]), f"gather row {r}: pool row {idx[r]} expected, got {got[r, :3]}"
+
+    # (b) masks: distinct per-row positions, the device build equals the host reference H-repeated
+    positions = [(37 * r + 11) % (width - P - 2) for r in range(B)]
+    anchors = [5 + r for r in range(B)]
+    spec._srv_upload(rec, rows, B, anchors, positions, page_tables, idx)
+    mf, ms = spec._srv_masks_device(S, rec)
+    ring = spec._pv_ring.get("sliding_attention")
+    ref_f, ref_s = serving_masks_host(positions, P, spec._pv_window, width, ring=ring)
+    got_f, got_s = _serving_read(spec, mf), _serving_read(spec, ms)
+    mf.deallocate(True)
+    ms.deallocate(True)
+    assert tuple(got_f.shape) == (B, 1, H * P, width), got_f.shape
+    assert tuple(got_s.shape) == (B, 1, H * P, ring if ring else width), got_s.shape
+    for b in range(B):
+        assert torch.equal(got_f[b], ref_f.repeat(1, 1, H, 1)[b]), f"full mask row {b} (position {positions[b]})"
+        assert torch.equal(got_s[b], ref_s.repeat(1, 1, H, 1)[b]), f"sliding mask row {b} (position {positions[b]})"
+
+    # (c) assembly: known draft columns -> row b = [anchor_b, d1_b, .., dK_b]
+    draft_cols = [spec._tokens_tensor([1000 * p + r for r in range(B)]) for p in range(1, P)]
+    vx = spec._srv_assemble_verify_x(S, draft_cols)
+    got_x = _serving_read(spec, vx).to(torch.int64).reshape(B, P)
+    for r in range(B):
+        expected = [anchors[r]] + [1000 * p + r for p in range(1, P)]
+        assert got_x[r].tolist() == expected, f"verify_x row {r}: {got_x[r].tolist()} != {expected}"
+
+    # (d) the 32-row argmax at B rows: one peak per row
+    Vt = 4096
+    peaks = [(7919 * r + 13) % Vt for r in range(B)]
+    logits_host = torch.full((1, 1, B, Vt), -2.0)
+    for r in range(B):
+        logits_host[0, 0, r, peaks[r]] = 3.0
+    logits_t = ttnn.from_torch(
+        logits_host.to(torch.bfloat16),
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        dtype=ttnn.bfloat16,
+        mesh_mapper=spec._mapper,
+    )
+    ids = spec._argmax_last(logits_t, rows=B)
+    assert _serving_read(spec, ids).to(torch.int64).reshape(-1)[:B].tolist() == peaks
+
+    # (e) the drafter at B rows vs batch 1 per row, through the real reseed -> gather path
+    V = spec.target.vocab_size
+    anchors, positions = _serving_prefill(generator, tokenizer, tt_kv_cache, page_table, rows, 8, width)
+    spec.serving_reseed(shape, rows, anchors, positions, page_tables)
+    idx_rs = [32 + r for r in range(B)]
+    spec._srv_upload(rec, rows, B, anchors, positions, page_tables, idx_rs)
+    h = spec._srv_seed_gather(S)
+    logits_b, h_next = spec.assistant.step(S["anchor_tok"], h, spec._shared_kv, S["d_ptl"], S["d_pu"], S["d_pi"])
+    lb = spec._logits_to_host(logits_b).float().reshape(-1, V)[:B]
+    for t in (logits_b, h_next, h):
+        t.deallocate(True)
+    for r in range(B):
+        tok1 = spec._tokens_tensor([anchors[r]])
+        pu1, pi1 = spec._pos_tensors([positions[r]])
+        h1 = spec._srv_seed_gather({"seed_idx": spec._tokens_tensor([32 + r])})
+        tables1 = {lt: spec._pv_from_torch(page_tables[r : r + 1], ttnn.int32) for lt in spec._pv_ring}
+        logits1, h1_next = spec.assistant.step(tok1, h1, spec._shared_kv, tables1, pu1, pi1)
+        l1 = spec._logits_to_host(logits1).float().reshape(-1)
+        for t in (logits1, h1_next, h1, tok1, pu1, pi1, *tables1.values()):
+            t.deallocate(True)
+        pcc = _pcc(lb[r], l1)
+        top2 = torch.topk(l1, 2)
+        gap = float(top2.values[0] - top2.values[1])
+        logger.info(
+            f"[stages {shape}] drafter row {r}: pcc vs batch-1 {pcc:.5f}, top-1 {int(top2.indices[0])}, gap {gap:.3f}"
+        )
+        assert pcc > 0.99, f"drafter row {r} at B={B} differs from the batch-1 step (pcc {pcc:.4f})"
+        if int(torch.argmax(lb[r])) != int(top2.indices[0]):
+            assert (
+                gap < 0.5
+            ), f"drafter row {r} at B={B}: top-1 {int(torch.argmax(lb[r]))} vs batch-1 {int(top2.indices[0])}"
+    spec.serving_release()
