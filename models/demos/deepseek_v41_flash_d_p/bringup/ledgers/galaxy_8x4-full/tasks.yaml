@@ -652,27 +652,25 @@ tasks:
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   brief:
-    details: 'OWNER DECISION 2026-10-28 (owner assigned this engram task to the Galaxy session; the 2x2 session is told):
-      take the engram host path off the critical path. The engram tables are resident in host RAM as bfp8 (ENGRAM_TABLE=resident,
-      ENGRAM_ROWS=bfp8, commits up to c3d41c620db; bringup/engram_handoff.md, ENGRAM_HOST_PATH.md 3e). STEP 1, measure
-      first, with DS41_ENGRAM_TABLE=resident (pytest defaults to random, F222): per chunk and engram layer (1, 14) the host
-      ms of hash + gather + pack, the upload of the rows to the mesh (from_torch / copy to device, the PCIe part, which has
-      never been measured), and when the device first needs them; report the numbers before changing code. Today begin_chunk (tt/model.py:736) does
-      BOTH layers'' hash + lookup + pack + upload synchronously on the main thread BEFORE embed and layer 0 are
-      dispatched, and the run is host-bound (wall 544 vs device 220 ms), so every ms there adds to the wall. STEP 2: take
-      it off the main thread: begin_chunk starts both lookups on background threads and returns; the main thread keeps
-      dispatching embed, layer 0, ...; take_engram_rows(i) joins layer i''s job (and its upload) just before layer i''s
-      engram op (layer 1 overlaps layer 0, layer 14 overlaps layers 0-13). Measure how much of the lookup releases the
-      GIL (torch indexing does, Python loops do not). A
-      write on the same command queue as the layers runs in queue order (serialized, not hidden): use a second command
-      queue with an event that layer 14''s first engram op waits on, if the mesh has one (check how tt-d-gen opens the
-      mesh: num_command_queues); else say what is possible. Prefetching the NEXT chunk''s rows is better (hides layer 1
-      too) but begin_chunk(tokens, start) only gets the current chunk under the serving contract: check whether the
-      engine exposes later tokens, report, do not change the contract. Behind the setting ENGRAM_ASYNC in tt/settings.py
-      (default on, ''off'' = today''s path); rows bit-identical to today''s (tests/test_engram_bfp8.py,
-      tests/test_engram_table_modes.py must pass). Host threads compete with dispatch for the CPU and the GIL: watch the
-      wall, not only the hidden ms. Report the warm wall before/after (F196 + F205) with the tables resident, and the
-      device time.'
+    details: 'OWNER DECISION 2026-10-28: overlap ALL engram host work with dispatch; nothing to decide, no stop for the
+      owner (the overseer accepts it as a clean win: gate PASS, accuracy unchanged, warm wall better, device not worse).
+      The owner assigned this engram task to the Galaxy session (the 2x2 session is told). Tables are resident in host RAM
+      as bfp8 (ENGRAM_TABLE=resident, ENGRAM_ROWS=bfp8; bringup/engram_handoff.md, ENGRAM_HOST_PATH.md 3e). Today
+      begin_chunk (tt/model.py:736) does both engram layers'' hash + lookup + pack + upload synchronously on the main
+      thread BEFORE embed and layer 0 are dispatched; the run is host-bound (wall ~544 vs device ~220 ms), so all of it
+      adds to the wall. Change: begin_chunk starts both layers'' jobs (hash, lookup, pack AND upload) on background
+      threads and returns at once; the main thread dispatches embed, layer 0, ... meanwhile; take_engram_rows(i) waits
+      for layer i''s job just before layer i''s engram op (layer 1 overlaps layer 0, layer 14 overlaps layers 0-13). The
+      upload must not serialize behind the queued layers: use a second command queue + an event that layer i''s engram
+      op waits on when the mesh has one (check how tt-d-gen opens the mesh), else issue it from the worker so it lands
+      before layer i is dispatched. Keep the GIL-holding parts of the job minimal (torch / numpy work releases it).
+      Rows bit-identical to today''s (tests/test_engram_bfp8.py, tests/test_engram_table_modes.py pass); deterministic.
+      Behind the setting ENGRAM_ASYNC in tt/settings.py (default on, ''off'' = today''s path). Measure with
+      DS41_ENGRAM_TABLE=resident (pytest defaults to random, F222). Report: per engram layer the ms of hash, lookup,
+      pack and upload (the upload / PCIe part was never measured) and how much of it is now hidden; the warm wall
+      before/after (F196 + F205) and the device time. Next-chunk prefetch (hides even the first wait) needs later
+      tokens, which begin_chunk(tokens, start) does not get under the serving contract: say in the report whether the
+      engine has them; do not change the contract.'
   ab:
     env:
       DS41_ENGRAM_ASYNC: 'off'

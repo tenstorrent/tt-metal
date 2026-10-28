@@ -657,3 +657,7 @@ session's argv); a resume clears PAUSE (use --until to stop); watch + cron :07/:
   2x2). Chain ready, NOT launched (waits for dlukic off the node): /scratch/dnijemcevic/run_ds41_chain.sh = Paris
   (resident) -> if PASS the 5-position profile with resident tables (posprof/series_engram.sh, tag ENG) ->
   orchestrator --until P.6. P.6's wall bar (< 544) to be replaced by the ENG profile's position-0 wall before P.6 starts.
+- 18:25 OWNER: P.6 has nothing to decide ("faster by pure logic, my input should not be needed"): overlap ALL engram
+  host work (both layers' hash, lookup, pack and upload) with dispatch; begin_chunk returns at once, take_engram_rows
+  waits per layer. The overseer accepts its A/B on the clean-win rule without asking; anything else (gate fail,
+  accuracy worse, wall not better) is reported.
