@@ -64,10 +64,11 @@ sfpi_inline sfpi::vFloat _sfpu_sqrt_endpoint_(sfpi::vFloat x) {
     return e * (0.5f * xy) + xy;
 }
 
+// Both dest modes route through the fp32 bodies, whose endpoint sqrt reads the
+// seed/refinement constants from vConstIntPrgm0/1/2. sqrt_init also resets the
+// counters. The dest-acc template parameter is unused, kept for the signature.
 template <bool is_fp32_dest_acc_en>
 void asin_acos_init() {
-    // Both dest modes route through the fp32 bodies, whose endpoint sqrt reads the
-    // seed/refinement constants from vConstIntPrgm0/1/2.
     sqrt_init<false>();
 }
 
@@ -433,7 +434,7 @@ inline void calculate_atan() {
             // The fp32 body's copysgn hands a NaN the input's sign; the former 16-bit
             // path returned +qNaN, which a 16-bit Dest stores as +inf. Keep that: |atan|
             // is at most pi/2, so the only non-finite result is a NaN.
-            v_if(!sfpi::is_finite(result)) { result = sfpi::setsgn(result, 0); }
+            v_if(!sfpi::is_finite(result)) { result = sfpi::setsgn(result, 0 /* sgn */); }
             v_endif;
             result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
         }
@@ -563,18 +564,16 @@ inline void calculate_asin() {
 }
 
 // asin/acos route through the endpoint sqrt (_sfpu_sqrt_endpoint_) in both dest modes, which reads
-// the sqrt seed/refinement constants from vConstIntPrgm0/1/2. Prime them via asin_acos_init. The
-// dest-acc template parameter is kept for the bare init path's signature; the counter reset
-// preserves the previous bare-init behavior.
+// the sqrt seed/refinement constants from vConstIntPrgm0/1/2. Prime them (and reset the counters)
+// via asin_acos_init. The dest-acc template parameter is unused, kept for the bare init path's
+// signature.
 template <bool is_fp32_dest_acc_en>
 inline void asin_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
     asin_acos_init<is_fp32_dest_acc_en>();
 }
 
 template <bool is_fp32_dest_acc_en>
 inline void acos_init() {
-    math::reset_counters(p_setrwc::SET_ABD_F);
     asin_acos_init<is_fp32_dest_acc_en>();
 }
 
@@ -817,7 +816,9 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void atan_init() {
     math::reset_counters(p_setrwc::SET_ABD_F);
     // sfpu_atan_fp32 serves both dest modes: the reciprocal seed and the two
-    // highest-order polynomial coefficients live in the program registers.
+    // lowest-order polynomial coefficients (the last two Horner steps) live in the
+    // program registers. The dest-acc template parameter is unused, kept for the
+    // signature.
     sfpi::vConstIntPrgm0 = RECIPROCAL_GT0_MAGIC_SEED;
     sfpi::vConstFloatPrgm1 = 0x1.999384p-3f;
     sfpi::vConstFloatPrgm2 = -0x1.555552p-2f;
