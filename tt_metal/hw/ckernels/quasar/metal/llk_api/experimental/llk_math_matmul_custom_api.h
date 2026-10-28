@@ -155,8 +155,7 @@ inline void llk_math_matmul_reinit_no_mop(
 
     const DataFormat srcA_format = static_cast<DataFormat>(get_operand_dst_format(get_operand_id(operandB)));
     const DataFormat srcB_format = static_cast<DataFormat>(get_operand_dst_format(get_operand_id(operandA)));
-    _configure_default_alu_data_format_state_<false /*EN_IMPLIED_MATH_FORMAT*/, DST_ACCUM_MODE>(
-        srcA_format, srcB_format);
+    _configure_default_alu_data_format_state_<DST_ACCUM_MODE>(srcA_format, srcB_format);
 
     if (operands_use_2x_format(operandA, operandB)) {
         _llk_math_matmul_init_no_mop_<math_fidelity, true /*EN_X2*/>(srcA_format, srcB_format, ct_dim, rt_dim);
