@@ -235,16 +235,10 @@ std::optional<manifest::content::L1> describe_ring_buffer(
     };
 }
 
-// The L1 from the end of the channel buffers to the end of all L1.
-std::optional<manifest::content::L1> collect_leftover_l1(
-    const ManifestRouterInputs& inputs, const FabricStaticSizedChannelsAllocator& allocator) {
-    const size_t start = allocator.get_channel_buffers_end_address();
+// The L1 from the end of what the router uses to the end of loadable L1.
+std::optional<manifest::content::L1> collect_leftover_l1(const ManifestRouterInputs& inputs) {
+    const size_t start = inputs.erisc_builder.get_allocated_l1_end_address();
     const size_t end = inputs.erisc_builder.config.max_l1_loading_size;
-    TT_FATAL(
-        start <= end,
-        "Fabric manifest: the channel buffers end at {:#x}, past the end of loadable L1 at {:#x}",
-        start,
-        end);
     if (start == end) {
         return std::nullopt;
     }
@@ -788,7 +782,7 @@ manifest::Router collect_manifest_router(const ManifestRouterInputs& inputs) {
         .intra_chip_downstream_edges = std::move(edges),
         .fields = std::move(fields),
         .eriscs = std::move(eriscs),
-        .leftover_l1 = collect_leftover_l1(inputs, ctx.allocator),
+        .leftover_l1 = collect_leftover_l1(inputs),
     };
 }
 

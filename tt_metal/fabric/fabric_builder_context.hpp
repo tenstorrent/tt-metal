@@ -165,9 +165,10 @@ public:
     chan_id_t get_fabric_master_router_chan(ChipId chip_id) const;
 
     // ============ Fabric Manifest ============
-    // Each chip's manifest facts, which its FabricBuilder publishes for the manifest's topology pass.
-    manifest::PublishedChips& get_manifest_chips(); // Non-const access for the builder to publish
-    const manifest::PublishedChips& get_manifest_chips() const; // Const access for the topology pass to get information
+    // Each chip's manifest facts, which its FabricBuilder publishes for the manifest's topology pass. The builder
+    // publishes through the non-const getter, and the topology pass reads through the const one.
+    manifest::PublishedChips& get_manifest_chips();
+    const manifest::PublishedChips& get_manifest_chips() const;
 
     // ============ Router Address Info ============
     std::vector<size_t> get_fabric_router_addresses_to_clear() const;

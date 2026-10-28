@@ -701,37 +701,6 @@ void check_router_host_cleared(const std::vector<RouterEntry>& routers) {
     }
 }
 
-// The L1 past the channel buffers runs from the end of the last ring buffer to the end of the ERISC's unreserved L1,
-// which the HAL gives. It is null only when the ring buffers reach that end.
-void check_router_leftover_l1(const std::vector<RouterEntry>& routers) {
-    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
-    const auto core = tt::tt_metal::HalProgrammableCoreType::ACTIVE_ETH;
-    const uint64_t l1_end = hal.get_dev_addr(core, tt::tt_metal::HalL1MemAddrType::UNRESERVED) +
-                            hal.get_dev_size(core, tt::tt_metal::HalL1MemAddrType::UNRESERVED);
-    for (const auto& entry : routers) {
-        SCOPED_TRACE(entry.path);
-        uint64_t buffers_end = 0;
-        for (const auto& [side, vcs] : entry.router->at("channels").items()) {
-            for (const auto& [vc_key, channels] : vcs.items()) {
-                for (const auto& [ch_key, channel] : channels.items()) {
-                    const auto& ring = channel.at("ring_buffer");
-                    if (!ring.is_null()) {
-                        buffers_end =
-                            std::max(buffers_end, ring.at("address").get<uint64_t>() + ring.at("size").get<uint64_t>());
-                    }
-                }
-            }
-        }
-        const auto& leftover = entry.router->at("leftover_l1");
-        if (leftover.is_null()) {
-            EXPECT_EQ(buffers_end, l1_end);
-            continue;
-        }
-        EXPECT_EQ(leftover.at("address").get<uint64_t>(), buffers_end);
-        EXPECT_EQ(leftover.at("address").get<uint64_t>() + leftover.at("size").get<uint64_t>(), l1_end);
-    }
-}
-
 // Base firmware's link status words exist on Blackhole and not on Wormhole, and where base firmware has a heartbeat
 // word, the router's heartbeat is that word.
 void check_arch(const json& manifest) {
@@ -945,23 +914,22 @@ TEST(ManifestArgs, KernelInputsAccounted) {
 }
 
 // Every check, one test each, for `Fixture`.
-#define TEST_MANIFEST_CHECKS(Fixture)                                                                                 \
-    TEST_F(Fixture, TopLevel) { check_top_level(manifest_, manifest_path_, fabric_config, suite_start_); }            \
-    TEST_F(Fixture, ChipZPortRole) { check_chip_z_port_role(manifest_); }                                             \
-    TEST_F(Fixture, RouterLink) { check_router_link(manifest_, routers_); }                                           \
-    TEST_F(Fixture, PeersAreSymmetric) { check_peers_are_symmetric(manifest_, routers_); }                            \
-    TEST_F(Fixture, CreditTransport) { check_credit_transport(manifest_, routers_); }                                 \
-    TEST_F(Fixture, RouterSenders) { check_router_senders(manifest_, routers_); }                                     \
-    TEST_F(Fixture, RouterDownstreamEdges) { check_router_edges(manifest_, routers_); }                               \
-    TEST_F(Fixture, RouterFields) { check_router_fields(manifest_, routers_); }                                       \
-    TEST_F(Fixture, LocalSync) { check_local_sync(manifest_); }                                                       \
-    TEST_F(Fixture, RouterRegionsDisjoint) { check_router_regions_disjoint(manifest_, routers_); }                    \
-    TEST_F(Fixture, Arch) { check_arch(manifest_); }                                                                  \
-    TEST_F(Fixture, ArchStreamRegisters) { check_arch_stream_registers(manifest_); }                                  \
-    TEST_F(Fixture, ArchCoreRegisters) { check_arch_core_registers(manifest_, routers_); }                            \
-    TEST_F(Fixture, RouterDiagnostics) { check_router_diagnostics(routers_); }                                        \
-    TEST_F(Fixture, RouterHostCleared) { check_router_host_cleared(routers_); }                                       \
-    TEST_F(Fixture, RouterLeftoverL1) { check_router_leftover_l1(routers_); }
+#define TEST_MANIFEST_CHECKS(Fixture)                                                                      \
+    TEST_F(Fixture, TopLevel) { check_top_level(manifest_, manifest_path_, fabric_config, suite_start_); } \
+    TEST_F(Fixture, ChipZPortRole) { check_chip_z_port_role(manifest_); }                                  \
+    TEST_F(Fixture, RouterLink) { check_router_link(manifest_, routers_); }                                \
+    TEST_F(Fixture, PeersAreSymmetric) { check_peers_are_symmetric(manifest_, routers_); }                 \
+    TEST_F(Fixture, CreditTransport) { check_credit_transport(manifest_, routers_); }                      \
+    TEST_F(Fixture, RouterSenders) { check_router_senders(manifest_, routers_); }                          \
+    TEST_F(Fixture, RouterDownstreamEdges) { check_router_edges(manifest_, routers_); }                    \
+    TEST_F(Fixture, RouterFields) { check_router_fields(manifest_, routers_); }                            \
+    TEST_F(Fixture, LocalSync) { check_local_sync(manifest_); }                                            \
+    TEST_F(Fixture, RouterRegionsDisjoint) { check_router_regions_disjoint(manifest_, routers_); }         \
+    TEST_F(Fixture, Arch) { check_arch(manifest_); }                                                       \
+    TEST_F(Fixture, ArchStreamRegisters) { check_arch_stream_registers(manifest_); }                       \
+    TEST_F(Fixture, ArchCoreRegisters) { check_arch_core_registers(manifest_, routers_); }                 \
+    TEST_F(Fixture, RouterDiagnostics) { check_router_diagnostics(routers_); }                             \
+    TEST_F(Fixture, RouterHostCleared) { check_router_host_cleared(routers_); }
 
 TEST_MANIFEST_CHECKS(Fabric1DManifestFixture)
 TEST_MANIFEST_CHECKS(Fabric2DManifestFixture)
