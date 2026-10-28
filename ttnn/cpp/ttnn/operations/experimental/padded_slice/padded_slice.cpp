@@ -9,6 +9,7 @@
 #include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/experimental/reshape/view.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -56,9 +57,25 @@ ttnn::Tensor padded_slice(
     TT_FATAL(memory_config.is_sharded(), "Output Memory Config must be sharded. Use slice for non-sharded outputs.");
     TT_FATAL(!input_tensor.memory_config().is_sharded(), " padded_slice does not support sharded inputs.");
 
+    auto can_land_in_preallocated = [&](const ttnn::Tensor& source) {
+        return optional_output_tensor.has_value() && source.storage_type() == StorageType::DEVICE &&
+               source.layout() == optional_output_tensor->layout() &&
+               source.buffer() != optional_output_tensor->buffer();
+    };
+    auto finalize_into_preallocated = [&](const ttnn::Tensor& result) -> ttnn::Tensor {
+        if (!optional_output_tensor.has_value() || result.storage_type() != StorageType::DEVICE) {
+            return result;
+        }
+        const auto& dst = optional_output_tensor.value();
+        if (result.buffer() == dst.buffer()) {
+            return result;
+        }
+        return ttnn::copy(result, dst);
+    };
     auto ret_adjustment([&](const ttnn::Tensor& ret_input_tensor) {
         if (ret_input_tensor.storage_type() == StorageType::DEVICE) {
-            auto tensor = ttnn::to_memory_config(ret_input_tensor, memory_config, std::nullopt);
+            const auto target = can_land_in_preallocated(ret_input_tensor) ? optional_output_tensor : std::nullopt;
+            auto tensor = ttnn::to_memory_config(ret_input_tensor, memory_config, std::nullopt, target);
             tensor = ttnn::to_layout(tensor, input_layout);
             return tensor;
         }
