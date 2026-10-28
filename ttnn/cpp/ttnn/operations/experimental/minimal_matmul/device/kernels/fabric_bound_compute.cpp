@@ -15,7 +15,7 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
 
-#include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/subchunk_bands.hpp"
+#include "ttnn/operations/ccl/kernel_common/subchunk_bands.hpp"
 
 #ifndef IN0_SUB_CHUNKS
 #define IN0_SUB_CHUNKS 1

@@ -8,7 +8,7 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/noc_semaphore.h"
 #include "matmul_dataflow_common.hpp"
-#include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
+#include "ttnn/operations/ccl/kernel_common/fused_receiver_utils.hpp"
 #include "cpp/ttnn/operations/ccl/ccl_host_types.hpp"
 
 using ttnn::ccl::Topology;

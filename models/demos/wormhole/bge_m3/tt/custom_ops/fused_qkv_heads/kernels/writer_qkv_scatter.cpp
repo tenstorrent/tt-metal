@@ -9,7 +9,7 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "matmul_dataflow_common.hpp"
-#include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
+#include "ttnn/operations/ccl/kernel_common/fused_receiver_utils.hpp"
 
 template <uint32_t M_block_tiles, uint32_t N_block_tiles, typename TensorAccessorType>
 void write_scatter_block(

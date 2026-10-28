@@ -22,7 +22,7 @@
 #include "api/tensor/noc_traits.h"
 #include "experimental/kernel_args.h"
 #include "matmul_dataflow_common_metal2.hpp"
-#include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
+#include "ttnn/operations/ccl/kernel_common/fused_receiver_utils.hpp"
 
 void kernel_main() {
     Noc noc;

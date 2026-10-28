@@ -173,7 +173,7 @@ ProgramDescriptor MoeExpertTokenRemapDeviceOperation::Multicore::create_descript
 
     KernelDescriptor reader_desc;
     reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/ccl/all_to_all_combine/device/kernels/dataflow/reader_all_to_all_combine.cpp";
+        "ttnn/cpp/ttnn/operations/data_movement/moe_expert_token_remap/device/kernels/dataflow/reader_all_to_all_combine.cpp";
     reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
     reader_desc.core_ranges = total_cores;
     reader_desc.compile_time_args = std::move(reader_ct_args);

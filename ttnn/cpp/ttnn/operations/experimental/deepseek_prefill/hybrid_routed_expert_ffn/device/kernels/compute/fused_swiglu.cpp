@@ -88,11 +88,10 @@
 #ifdef SWIGLU_OAI
 // Computes (clamp(up,±L)+1) * clamp(gate,max=L) * sigmoid(alpha*clamp(gate,max=L)).
 // Default SwiGLUConfigGPTOSS (alpha=1.702, clamp_limit=7.0) matches M3's config.json.
-// swiglu_sfpu.h lives under the gpt-oss moe_gpt op; this repo-root-relative include
+// swiglu_sfpu.h lives under moe_fused_swiglu; this repo-root-relative include
 // resolves on the kernel include path (same convention as bmm_fused_activation.hpp
-// above). It could later move to a shared kernel-include dir, but the path is valid
-// as-is (verified on Blackhole via test_swigluoai_routed_expert.py).
-#include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
+// above).
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/kernels/swiglu_sfpu.h"
 #endif
 
 #ifdef SITU_GLU

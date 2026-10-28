@@ -11,7 +11,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/circular_buffer.h"
 // split_row_to_noc1: shared row-ownership predicate for the interleaved two-NoC output write.
-#include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/subchunk_bands.hpp"
+#include "ttnn/operations/ccl/kernel_common/subchunk_bands.hpp"
 
 namespace detail {
 template <typename... Args, uint32_t... Indexes>

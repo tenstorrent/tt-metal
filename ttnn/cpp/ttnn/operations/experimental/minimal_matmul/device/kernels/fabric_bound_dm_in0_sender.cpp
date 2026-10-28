@@ -10,8 +10,8 @@
 #include "api/core_local_mem.h"
 #include "api/tensor/noc_traits.h"
 #include "fabric_bound_matmul_dataflow_common.hpp"
-#include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/fused_receiver_utils.hpp"
-#include "ttnn/operations/experimental/ccl/strided_all_gather_async/device/kernels/subchunk_bands.hpp"
+#include "ttnn/operations/ccl/kernel_common/fused_receiver_utils.hpp"
+#include "ttnn/operations/ccl/kernel_common/subchunk_bands.hpp"
 
 // Set by the host only when fusing AG; default to 1 (single whole band per k-block) otherwise.
 #ifndef IN0_SUB_CHUNKS

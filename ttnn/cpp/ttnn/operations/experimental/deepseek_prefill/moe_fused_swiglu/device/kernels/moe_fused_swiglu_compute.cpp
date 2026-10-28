@@ -36,9 +36,9 @@
 #define FUSED_BINARY_ACT 1
 #endif
 #ifdef SWIGLU_OAI
-// swiglu_sfpu.h lives under the gpt-oss moe_gpt op; the repo-root-relative include resolves on the
+// swiglu_sfpu.h lives under moe_fused_swiglu; the repo-root-relative include resolves on the
 // kernel include path, the same convention unified_routed_expert_ffn's compute kernel uses for it.
-#include "ttnn/cpp/ttnn/operations/experimental/ccl/moe_gpt/device/kernels/swiglu_sfpu.h"
+#include "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/moe_fused_swiglu/device/kernels/swiglu_sfpu.h"
 #endif
 #ifdef SITU_GLU
 #include "api/compute/situ_glu.h"
