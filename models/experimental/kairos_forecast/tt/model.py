@@ -154,7 +154,7 @@ class TtKairos:
         causal = torch.zeros(D_PAD, D_PAD)
         causal[:, N_SEG:] = NEG
         causal[torch.triu(torch.ones(N_SEG, N_SEG, dtype=torch.bool), 1).nonzero(as_tuple=True)] = NEG
-        self.causal = upload(device, causal.reshape(1, 1, D_PAD, D_PAD))
+        self._causal = causal  # uploaded per batch size (the fused softmax wants the mask's batch = B)
         self._const = {}
 
     # ---- host side -------------------------------------------------------------------------------------------
@@ -238,7 +238,12 @@ class TtKairos:
             reg[:, 0] = self.W["shared.weight"][1]
             dec_in = torch.zeros(1, 1, B * D_PAD, D)
             dec_in.view(B, D_PAD, D)[:, :N_SEG] = self.W["shared.weight"][0]
-            self._const[B] = {"reg": upload(self.device, reg), "dec_in": upload(self.device, dec_in)}
+            causal = self._causal.reshape(1, 1, D_PAD, D_PAD).expand(B, 1, D_PAD, D_PAD)
+            self._const[B] = {
+                "reg": upload(self.device, reg),
+                "dec_in": upload(self.device, dec_in),
+                "causal": upload(self.device, causal),
+            }
         return self._const[B]
 
     # ---- device side -----------------------------------------------------------------------------------------
@@ -341,7 +346,7 @@ class TtKairos:
         import ttnn
 
         cs_self, cs_q, cs_k = rope
-        h = ttnn.add(h, self.self_attention(h, blk, cs_self, self.causal, B, D_PAD))
+        h = ttnn.add(h, self.self_attention(h, blk, cs_self, self._consts(B)["causal"], B, D_PAD))
         h = ttnn.add(h, self.cross_attention(h, enc, blk, cs_q, cs_k, cross_mask, B))
         return self._ff(h, blk, "n3")
 
