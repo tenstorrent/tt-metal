@@ -26,7 +26,7 @@
 // With HiFi, the MOP repeats the 16 MVMULs once per fidelity phase. After the tile, the streamed Src bank is
 // released; after the last tile of a reused one, the reused bank is.
 //
-// Not HAL yet: the Dest buffer base (get_dest_buffer_base, cmath_common.h). Shared math configure: math_common.h.
+// Not HAL yet: the Src zero-flag rule (requires_disabled_src_zero_flag, cmath_common.h). Shared math configure: math_common.h.
 
 #pragma once
 
@@ -188,7 +188,7 @@ inline __attribute__((always_inline)) void matmul_configure()
     set<MathCounter {.src_a = Set(0), .src_b = Set(0), .dest = Set(0), .clear_fidelity = true}>();
 }
 
-/// One K step into the rt_dim x ct_dim output tiles starting at dest_row (relative to the current Dest section).
+/// One K step into the rt_dim x ct_dim output tiles starting at dest_row (an absolute Dest row: the Dest tensor's address).
 /// Walks the tiles in the order the unpack walk delivers them: for each held (reused) tile, every streamed one.
 template <matmul_params P>
 inline __attribute__((always_inline)) void matmul_execute(std::uint32_t dest_row)
@@ -206,8 +206,7 @@ inline __attribute__((always_inline)) void matmul_execute(std::uint32_t dest_row
         {
             // Output tiles are row-major: (row, column) = (reused, streamed) when x is reused, else swapped.
             const std::uint32_t output_tile = reuse_b ? P.ct_dim * reused_tile + streamed_tile : reused_tile + streamed_tile * P.ct_dim;
-            cfg::write<cfg::Access::TensixCfgUnit, cfg::DestTargetRegCfgMath::Offset, cfg::Sec::S0>(
-                dest_row + output_tile * dest_rows_per_tile(P) + get_dest_buffer_base());
+            cfg::write<cfg::Access::TensixCfgUnit, cfg::DestTargetRegCfgMath::Offset, cfg::Sec::S0>(dest_row + output_tile * dest_rows_per_tile(P));
             hal::mop::Runner<hal::mop::MopTemplate::Template1>::run();
             if (streamed_tile == streamed_tiles - 1)
             {
