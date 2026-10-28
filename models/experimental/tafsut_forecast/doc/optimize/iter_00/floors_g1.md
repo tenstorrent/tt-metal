@@ -149,3 +149,62 @@ preset's own tail.
 Per-row bias at round 0 (all rows; scratch `biasdist.py`): accuracy max 0.013 paper, 0.079 long_horizon f1, 0.029
 f2, <= 0.015 elsewhere; performance max 0.082 paper, 0.248 long_horizon f1, 0.112 f2, 0.056 horizon4, <= 0.021
 elsewhere. Bias relative to the row std does not separate either (performance up to 0.43 x row std on paper).
+
+## D4 (2026-10-28): row-indexed drift, the named rows, the new fixed record
+Commits: `e36066bff49` (checker, metrics, probes, row-stage test; gates.json adopted), `98e205a7d21` (fixed record),
+`dc6d14d9e48` (unit-test fix: the golden control is excluded from the must-fail set and must itself be clean).
+
+**Fixed record:** bench job 1108 (10 passed) and full `tests/pcc/` job 1109 (**159 passed**: 147 + 12 row-stage),
+both at `e36066bff49`, clean, started 11 s after the commit. 1040 gated scalars compared with 1061/1062: **0
+differ** (bit-identical). The new records add `row_active_idx`, `bias_row_vec` and `spread_ratio_row_vec` (f1 and f2).
+Paper/performance device time 1653.7 ms (1697.5 in 1061; metrics identical, a timing difference only).
+
+**Row-indexed drift (items 1-2).** `bias_row_drift_max` floor 0.03 at both presets, f1 and f2, with no relative term.
+`spread_ratio_row_drift_max` floor 0.15 at both presets. The measurement behind 0.15: a whole preset change
+(accuracy -> performance, which is much larger than any one candidate) moves a row's ratio by p99 0.02-0.09 on every
+forward-1 case (max 0.29, long_horizon), and by p99 0.27 on long_horizon f2. The accuracy preset's own distance from
+fp32 reaches 0.24 on f2 (row 393). A tighter bound would trap accuracy candidates that move such rows back toward 1.
+A 1.3x band moves a row by 0.3 x r0 (>= 0.2 for r0 >= 0.67). Reruns are bit-identical: the drift against itself is
+0 on every case.
+
+**Probes (score_broken at `dc6d14d9e48`, CPU job 1129, `broken_g1.txt`).** 642 broken scorings and 22 golden controls.
+- **The golden itself fails 0 checks** in every case, forward and preset (item 5's re-centred p50 drift).
+- **0 broken outputs pass.**
+- The 442 `level_shift_rows#0-7`, `band1.3x_row#0-7` and `shift10pct` scorings are each caught by their own
+  row-indexed drift, on every case, forward and preset. No catch is vacuous.
+- How the row vectors are made: the probe's own row change is composed onto the fixed record's device rows (e0 + e,
+  r0 x r). This is exact for shifts and band scalings.
+
+**Named rows (item 3; `test_row_stages.py`, job 1109 `row_stages_1109.txt`; conditioning in the same job).** The device
+ran each case's forward-k input (forward 2 teacher-forced) on the named rows plus 5 control rows. Every sub-batch row
+reproduces the full-batch metrics (row 16 perf 1.4925 / 0.9695, row 283 +0.2483, row 536 -0.0820, row 1 -0.0561).
+Relative L2 error of the future rows, embedding -> block 11 -> head:
+- **row 16** (lh f2): acc 0.0016 -> 0.018 -> 0.036; perf 0.0016 -> 0.090 -> 0.136. Perf controls reach 0.03-0.08
+  at block 11.
+- **row 311** (lh f2, perf): 0.0016 -> 0.115 -> 0.257.
+- **row 283** (lh f1): acc 0.034 -> 0.086 at the head; perf 0.106 -> 0.273. Control row 51 also reaches 0.088 at
+  block 11, but only 0.045 at the head.
+- **row 536** (paper, perf): 0.045 -> 0.189.
+- **row 1** (horizon4, perf): 0.050 -> 0.062.
+
+In every row the error grows smoothly through the stack, at the same per-block rate as the controls; the performance
+preset's bf8/LoFi step shows from block 0 in every row. No row has a jump at one block. What differs is the head's
+gain on the last block's error. **Verdict: precision, not a defect.** These rows are ill-conditioned: under bf16-sized
+weight noise (2^-9, fp32 reference, 3 seeds), their bias moves more than that of 94-100 % of 48 control rows:
+
+| row | case | d bias, rank | d ratio, rank |
+|---|---|---|---|
+| 16 | lh f2 | 7.0e-3, 94 % | 2.5e-2, 92 % |
+| 311 | lh f2 | 9.1e-3, 96 % | 2.1e-3, 4 % |
+| 393 | lh f2 | 6.2e-3, 94 % | 1.0e-1, 98 % |
+| 283 | lh f1 | 1.1e-2, 100 % | 8.4e-4, 6 % |
+| 536 | paper | 5.5e-3, 100 % | 1.7e-3, 65 % |
+| 1 | horizon4 | 4.2e-3, 67 % of 3 | 1.9e-3, 33 % |
+
+- Row 16 is sensitive in both bias and band. Its |spread| mean is 0.213, so it is not narrow; it is a conditioning
+  row, not a narrow-band row.
+- Rows 311, 283 and 536 are sensitive in bias only, so their band floors are not needed for them.
+- **horizon4 row 1 is not distinguishable from its controls** (4 rows only). Its case floor `bias_row_max` 0.08 is
+  therefore not justified by conditioning: D4 says it reverts to the `*/performance` floor (0.04). Its round-0
+  value of 0.056 then fails that floor, so this is a finding to fix or to take to an X gate. It is listed as an
+  open item in GATE.md and has not been changed here.
