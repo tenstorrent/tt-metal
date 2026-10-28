@@ -302,9 +302,8 @@ class AudioAttention(LightweightModule):
         ttnn.deallocate(probs)
         ttnn.deallocate(v_ctx)
         o = ttnn.reshape(o, (B, H, S, hd))
-        o_t = ttnn.permute(o, (0, 2, 1, 3), memory_config=dram)  # [B, S, H, hd]
+        o_cat = ttnn.experimental.nlp_concat_heads(o, memory_config=dram)  # [B, 1, S, H*hd]
         ttnn.deallocate(o)
-        o_cat = ttnn.reshape(o_t, (B, 1, S, H * hd))
         out = self.post(o_cat)
-        ttnn.deallocate(o_t)
+        ttnn.deallocate(o_cat)
         return out
