@@ -78,9 +78,11 @@ tt::tt_metal::WorkloadDescriptor ReduceScatterDeviceOperation::ReduceScatterProg
             tensor_args.input_tensor, mesh_coordinate, operation_attributes.cluster_axis);
         log_debug(tt::LogOp, "Device index for {} is {}", mesh_coordinate, device_index);
 
-        // Get core and subdevice related information
-        auto bbox = subdevice_core_range_set.bounding_box();
-        auto first_coord = bbox.start_coord;
+        // The builders pick their worker cores from the sub-device and then shift them by this offset, which is for
+        // fused ops that place the collective next to their own cores. Unfused, the sub-device's cores are already
+        // where the kernels go: shifting them again by the sub-device's first core pushes them off any sub-device
+        // that does not start at the grid's origin.
+        const CoreCoord no_offset{0, 0};
 
         std::optional<ttnn::experimental::ccl::ReduceScatterFusedOpSignaler> no_fuse = std::nullopt;
 
@@ -110,7 +112,7 @@ tt::tt_metal::WorkloadDescriptor ReduceScatterDeviceOperation::ReduceScatterProg
                 operation_attributes.chunks_per_sync,
                 operation_attributes.num_workers_per_link,
                 operation_attributes.num_buffers_per_channel,
-                first_coord,  // first core in the subdevice is our offset as we don't use this version for fusions
+                no_offset,
                 operation_attributes.compute_kernel_config);
         } else {
             ttnn::experimental::prim::build_line_reduce_scatter_minimal_async_program_artifacts(
@@ -135,7 +137,7 @@ tt::tt_metal::WorkloadDescriptor ReduceScatterDeviceOperation::ReduceScatterProg
                 operation_attributes.chunks_per_sync,
                 operation_attributes.num_workers_per_link,
                 operation_attributes.num_buffers_per_channel,
-                first_coord,  // first core in the subdevice is our offset as we don't use this version for fusions
+                no_offset,
                 operation_attributes.compute_kernel_config);
         }
         workload_descriptor.programs.push_back({ttnn::MeshCoordinateRange(mesh_coordinate), std::move(program)});
