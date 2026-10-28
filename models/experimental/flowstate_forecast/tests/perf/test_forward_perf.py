@@ -25,6 +25,7 @@ import ttnn
 from models.experimental.flowstate_forecast.reference import weights
 from models.experimental.flowstate_forecast.tests.golden.test_dataflow import GOLDENS
 from models.experimental.flowstate_forecast.tests.pcc import metrics as M
+from models.experimental.flowstate_forecast.tests.perf.check_gates import git_stamp
 from models.experimental.flowstate_forecast.tt.model import FlowStateTT
 from models.experimental.flowstate_forecast.tt.trace import TracedForward
 
