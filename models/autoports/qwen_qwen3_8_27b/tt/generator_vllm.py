@@ -157,7 +157,7 @@ class Qwen38ForCausalLM:
                 states.append(PagedState(allocate(), allocate()))
         self.kv_cache = states
         width = ((self.context_length + 255) // 256) * 8
-        physical_prefill_chunk_size=1024 if self.batch_size>16 else 4096
+        physical_prefill_chunk_size=512 if self.batch_size>16 else 4096
         if getattr(self,'cache_groups',None):
             # Hybrid cache groups are set before this allocation; state_pool is
             # created afterwards. Prefill always splits at checkpoint boundaries,
@@ -166,8 +166,9 @@ class Qwen38ForCausalLM:
         self.generator = Generator(self.model, self.checkpoint,
             batch_size=self.batch_size, context_length=self.context_length,
             kv_cache=states, page_table=torch.zeros(self.batch_size, width, dtype=torch.int32),
-            # B32 prefix snapshots leave insufficient scratch for4096 rows;
-            # measured OOM at1280. Internal chunks preserve logical context.
+            # B32 shared snapshots require bounded512-token physical chunks.
+            # The2048 checkpoint pool measured OOM during1024-token warmup.
+            # Logical context and scheduler checkpoint boundaries stay intact.
             serving_state=True,prefill_chunk_size=physical_prefill_chunk_size)
         return states
 
