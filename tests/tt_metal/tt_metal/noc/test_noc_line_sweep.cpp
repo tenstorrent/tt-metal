@@ -50,6 +50,9 @@
 //                                "flip" (inverted)                                        (default "set")
 //   TT_NOC_SWEEP_INJECT_FLIT_WORD  which 32-bit word of every 64-byte flit receives the injected mask
 //                                (default 15).
+//   TT_NOC_SWEEP_SKIP_ETH_CHANS  comma list of logical Ethernet channels left out of every Ethernet line, or
+//                                "none". Default: 10,11 on Blackhole (their SerDes is shared with PCIe and only
+//                                one of the two can be in use), none elsewhere.
 //
 // Run (slow dispatch recommended so every tensix core and every Ethernet core is available):
 //   TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_noc --gtest_filter='NocLineSweep*'
@@ -138,6 +141,8 @@ struct SweepConfig {
     uint32_t inject_xor = 0;  // checker self-test, see header
     std::string inject_mode = "set";
     uint32_t inject_flit_word = 15;
+    std::vector<uint32_t> skip_eth_chans;  // resolved per architecture in SetUp unless given by the environment
+    bool skip_eth_chans_from_env = false;
 };
 
 // Per (source core, destination core) verification result.
@@ -201,6 +206,11 @@ SweepConfig config_from_env() {
     }
     for (uint32_t d : parse_list(tt::parse_env<std::string>("TT_NOC_SWEEP_DEVICES", ""))) {
         cfg.devices.push_back(static_cast<ChipId>(d));
+    }
+    const std::string skip = tt::parse_env<std::string>("TT_NOC_SWEEP_SKIP_ETH_CHANS", "default");
+    if (skip != "default") {
+        cfg.skip_eth_chans_from_env = true;
+        cfg.skip_eth_chans = skip == "none" ? std::vector<uint32_t>{} : parse_list(skip);
     }
     return cfg;
 }
@@ -275,7 +285,7 @@ std::vector<CoreCoord> sorted(const std::unordered_set<CoreCoord>& cores) {
     return v;
 }
 
-std::vector<Line> tensix_rows(IDevice* device) {
+std::vector<Line> tensix_rows(IDevice* device, const SweepConfig& /*cfg*/) {
     std::vector<Line> lines;
     const CoreCoord grid = device->compute_with_storage_grid_size();
     for (uint32_t y = 0; y < grid.y; y++) {
@@ -288,7 +298,7 @@ std::vector<Line> tensix_rows(IDevice* device) {
     return lines;
 }
 
-std::vector<Line> tensix_cols(IDevice* device) {
+std::vector<Line> tensix_cols(IDevice* device, const SweepConfig& /*cfg*/) {
     std::vector<Line> lines;
     const CoreCoord grid = device->compute_with_storage_grid_size();
     for (uint32_t x = 0; x < grid.x; x++) {
@@ -301,14 +311,39 @@ std::vector<Line> tensix_cols(IDevice* device) {
     return lines;
 }
 
-std::vector<Line> eth_lines(IDevice* device) {
+// The Ethernet cores whose logical channel is in cfg.skip_eth_chans, with their channel, sorted by channel.
+std::vector<std::pair<uint32_t, CoreCoord>> skipped_eth_cores(IDevice* device, const SweepConfig& cfg) {
+    const auto& soc = MetalContext::instance().get_cluster().get_soc_desc(device->id());
+    std::vector<std::pair<uint32_t, CoreCoord>> out;
+    for (const auto& [logical, chan] : soc.logical_eth_core_to_chan_map) {
+        const auto c = static_cast<uint32_t>(chan);
+        if (std::find(cfg.skip_eth_chans.begin(), cfg.skip_eth_chans.end(), c) != cfg.skip_eth_chans.end()) {
+            out.emplace_back(c, logical);
+        }
+    }
+    std::sort(out.begin(), out.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+    return out;
+}
+
+// The active-Ethernet cores and the idle-Ethernet cores as two lines, minus the skipped channels.
+std::vector<Line> eth_lines(IDevice* device, const SweepConfig& cfg) {
+    std::unordered_set<CoreCoord> skipped;
+    for (const auto& [chan, logical] : skipped_eth_cores(device, cfg)) {
+        skipped.insert(logical);
+    }
+    auto without_skipped = [&](std::unordered_set<CoreCoord> cores) {
+        for (const auto& c : skipped) {
+            cores.erase(c);
+        }
+        return sorted(cores);
+    };
     std::vector<Line> lines;
-    auto active = sorted(device->get_active_ethernet_cores(true));
+    auto active = without_skipped(device->get_active_ethernet_cores(true));
     if (!active.empty()) {
         lines.push_back(
             {LineKind::ActiveEth, "active-eth", std::move(active), HalProgrammableCoreType::ACTIVE_ETH, CoreType::ETH});
     }
-    auto idle = sorted(device->get_inactive_ethernet_cores());
+    auto idle = without_skipped(device->get_inactive_ethernet_cores());
     if (!idle.empty()) {
         lines.push_back(
             {LineKind::IdleEth, "idle-eth", std::move(idle), HalProgrammableCoreType::IDLE_ETH, CoreType::ETH});
@@ -317,7 +352,7 @@ std::vector<Line> eth_lines(IDevice* device) {
 }
 
 // Every DRAM bank of the chip as one line. Only ever a passive line (no kernel can run there).
-std::vector<Line> dram_line(IDevice* device) {
+std::vector<Line> dram_line(IDevice* device, const SweepConfig& /*cfg*/) {
     Line l{LineKind::Dram, "dram", {}, HalProgrammableCoreType::TENSIX, CoreType::DRAM};
     const uint32_t num_banks = device->allocator()->get_num_banks(BufferType::DRAM);
     for (uint32_t b = 0; b < num_banks; b++) {
@@ -326,9 +361,9 @@ std::vector<Line> dram_line(IDevice* device) {
     return {std::move(l)};
 }
 
-std::vector<Line> tensix_rows_and_cols(IDevice* device) {
-    auto lines = tensix_rows(device);
-    auto cols = tensix_cols(device);
+std::vector<Line> tensix_rows_and_cols(IDevice* device, const SweepConfig& cfg) {
+    auto lines = tensix_rows(device, cfg);
+    auto cols = tensix_cols(device, cfg);
     lines.insert(lines.end(), cols.begin(), cols.end());
     return lines;
 }
@@ -462,10 +497,19 @@ protected:
     // Time spent in each phase of run_step since the last reset, so a slow platform can be diagnosed from the
     // sweep summary line alone: host writes (payload + poison), program build + launch + wait, readback + compare.
     double t_write_ = 0, t_run_ = 0, t_read_ = 0;
+    // Devices whose skipped Ethernet channels have been logged.
+    std::unordered_set<ChipId> reported_skips_;
 
     void SetUp() override {
         MeshDispatchFixture::SetUp();
         cfg_ = config_from_env();
+        if (!cfg_.skip_eth_chans_from_env && arch_ == tt::ARCH::BLACKHOLE) {
+            cfg_.skip_eth_chans = {10, 11};
+        }
+        std::string skip_list;
+        for (uint32_t c : cfg_.skip_eth_chans) {
+            skip_list += fmt::format("{}{}", skip_list.empty() ? "" : ",", c);
+        }
         std::string noc_list;
         for (NOC n : cfg_.nocs) {
             noc_list += fmt::format("{}{}", noc_list.empty() ? "" : ",", static_cast<int>(n));
@@ -477,7 +521,7 @@ protected:
         log_info(
             tt::LogTest,
             "NOC line sweep config: transfer={}B chunk={}B iters={} seed=0x{:x} nocs={} dispatch={} verbose={} "
-            "inject_xor=0x{:x} inject_flit_word={}",
+            "inject_xor=0x{:x} inject_flit_word={} skip_eth_chans={}",
             size_list,
             cfg_.chunk_bytes,
             cfg_.num_iters,
@@ -486,7 +530,8 @@ protected:
             slow_dispatch_ ? "slow" : "fast",
             cfg_.verbose ? 1 : 0,
             cfg_.inject_xor,
-            cfg_.inject_flit_word);
+            cfg_.inject_flit_word,
+            skip_list.empty() ? "none" : skip_list);
         if (cfg_.inject_xor != 0) {
             log_warning(tt::LogTest, "FAULT INJECTION ENABLED: every pair is expected to be reported bad");
         }
@@ -821,8 +866,8 @@ protected:
     // Full sweep: every active line against every passive line, itself included, every NOC combo.
     void run_sweep(
         const std::string& sweep_name,
-        const std::function<std::vector<Line>(IDevice*)>& active_lines_fn,
-        const std::function<std::vector<Line>(IDevice*)>& passive_lines_fn,
+        const std::function<std::vector<Line>(IDevice*, const SweepConfig&)>& active_lines_fn,
+        const std::function<std::vector<Line>(IDevice*, const SweepConfig&)>& passive_lines_fn,
         bool pull) {
         auto devices = selected_devices();
         ASSERT_FALSE(devices.empty()) << "no devices selected";
@@ -830,8 +875,21 @@ protected:
         uint32_t steps = 0;
         for (const auto& mesh_device : devices) {
             IDevice* device = mesh_device->get_device(distributed::MeshCoordinate(0, 0));
-            auto active_lines = active_lines_fn(device);
-            auto passive_lines = passive_lines_fn(device);
+            auto active_lines = active_lines_fn(device, cfg_);
+            auto passive_lines = passive_lines_fn(device, cfg_);
+            if (reported_skips_.insert(device->id()).second) {
+                std::string skipped;
+                for (const auto& [chan, logical] : skipped_eth_cores(device, cfg_)) {
+                    skipped += fmt::format(" ch{}=log({},{})", chan, logical.x, logical.y);
+                }
+                if (!skipped.empty()) {
+                    log_info(
+                        tt::LogTest,
+                        "[dev {}] Ethernet channels left out of every Ethernet line (TT_NOC_SWEEP_SKIP_ETH_CHANS):{}",
+                        device->id(),
+                        skipped);
+                }
+            }
             if (!slow_dispatch_) {
                 // Under fast dispatch some Ethernet cores host dispatch kernels whose buffers live in the region
                 // this test uses, and kernels cannot be launched on Ethernet cores at all. Keep to tensix.

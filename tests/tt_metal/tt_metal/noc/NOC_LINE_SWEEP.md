@@ -80,6 +80,10 @@ NOC / RISC combinations per line kind:
 * Active Ethernet on Wormhole: ERISC on NOC0 and on NOC1.
 * Idle Ethernet: ERISC0 on NOC0 and on NOC1 (Blackhole only; idle-ERISC kernels on Wormhole are blocked on #14640).
 
+On Blackhole, logical Ethernet channels 10 and 11 share their SerDes with PCIe and only one of the two interfaces
+can be in use, so those channels are left out of every Ethernet line by default. Each chip logs the excluded
+channels and cores once; `TT_NOC_SWEEP_SKIP_ETH_CHANS` overrides the list.
+
 ## Running
 
 Slow dispatch is recommended: every tensix core and every Ethernet core is then available. Under fast dispatch the
@@ -120,6 +124,7 @@ finished; the step named in the last progress line brackets where to look.
 | `TT_NOC_SWEEP_INJECT_XOR` | 0 | checker self-test, see below |
 | `TT_NOC_SWEEP_INJECT_MODE` | `set` | self-test fault type: `set` (stuck-at-1), `clear` (stuck-at-0), `flip` (inverted) |
 | `TT_NOC_SWEEP_INJECT_FLIT_WORD` | 15 | checker self-test, see below |
+| `TT_NOC_SWEEP_SKIP_ETH_CHANS` | `10,11` on Blackhole, none elsewhere | logical Ethernet channels left out of every Ethernet line; `none` to include all |
 
 The transfer size is capped automatically when a sink line cannot hold the slots a step needs (small Ethernet L1
 on some architectures); a warning says so.
