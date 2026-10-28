@@ -105,13 +105,15 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         """
         slabs = getattr(kv_caches, "kda_states", None)
         has_kda_layers = self.model.kda_scratch is not None
-        if (slabs is None) != (not has_kda_layers):
+        if (slabs is not None) != has_kda_layers:
             raise RuntimeError(
                 "Kimi-K3 KDA state is split: the engine allocated "
-                f"{'no' if slabs is None else 'the'} slabs and the model has "
-                f"{'no' if not has_kda_layers else 'its'} KDA layers; allocate_kv_cache and build_runtime "
+                f"{'the' if slabs is not None else 'no'} slabs and the model has "
+                f"{'its' if has_kda_layers else 'no'} KDA layers; allocate_kv_cache and build_runtime "
                 "disagree on which layers are KDA"
             )
+        if slabs is not None:
+            self._check_kda_slabs(slabs, self.model.schedule.rank_kda_layer_ids())
         self.model.kda_states = slabs
         super().compile(kv_caches)
 
@@ -167,16 +169,21 @@ class TtKimiK3Runtime(TtPrefillRuntime):
             if my_kda:
                 raise RuntimeError(f"no KDA state slabs allocated but layers {my_kda} are KDA layers")
             return [kvpe_stage, null_kda, null_kda, *self._dflash_stages(last)]
-        if tuple(kda.layer_ids) != tuple(my_kda):
-            raise RuntimeError(f"KDA slabs cover layers {kda.layer_ids} but this stage owns {my_kda}")
-        if kda.num_slots != self.config.num_users:
-            raise RuntimeError(f"KDA slabs hold {kda.num_slots} slots but the runtime serves {self.config.num_users}")
+        self._check_kda_slabs(kda, my_kda)
         return [
             kvpe_stage,
             KvCacheStage(int(kda.recurrent.buffer_address()), first_kda, len(my_kda)),
             KvCacheStage(int(kda.convolution.buffer_address()), first_kda, len(my_kda)),
             *self._dflash_stages(last),
         ]
+
+    def _check_kda_slabs(self, slabs, layer_ids) -> None:
+        """The slabs must hold exactly `layer_ids` and every slot the runtime admits: the copies skip an
+        out-of-range slot on device without an error."""
+        if tuple(slabs.layer_ids) != tuple(layer_ids):
+            raise RuntimeError(f"KDA slabs cover layers {slabs.layer_ids} but the runtime owns {tuple(layer_ids)}")
+        if slabs.num_slots != self.config.num_users:
+            raise RuntimeError(f"KDA slabs hold {slabs.num_slots} slots but the runtime serves {self.config.num_users}")
 
     def _dflash_stages(self, end_layer: int):
         """The drafter's K and V after the three stages. Their rows continue the model's layer axis (93..97 on

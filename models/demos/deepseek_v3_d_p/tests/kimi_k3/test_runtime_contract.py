@@ -291,6 +291,16 @@ def test_runtime_accepts_unaligned_end(monkeypatch):
     parent_forward.assert_called_once()
 
 
+def _runtime_serving(*, num_users: int, kda_layer_ids: tuple[int, ...], scratch):
+    from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
+
+    runtime = object.__new__(TtKimiK3Runtime)
+    runtime.config = SimpleNamespace(num_users=num_users)
+    schedule = SimpleNamespace(rank_kda_layer_ids=lambda: kda_layer_ids)
+    runtime.model = SimpleNamespace(kda_scratch=scratch, kda_states=None, schedule=schedule)
+    return runtime
+
+
 @pytest.mark.parametrize(
     "has_slabs,scratch",
     [(False, None), (True, object()), (False, object()), (True, None)],
@@ -299,12 +309,10 @@ def test_runtime_accepts_unaligned_end(monkeypatch):
 def test_compile_hands_the_slabs_to_the_model_only_when_the_rank_has_kda_layers(
     monkeypatch, expect_error, has_slabs, scratch
 ):
-    from models.demos.deepseek_v3_d_p.tt.kimi_k3.runtime import TtKimiK3Runtime
     from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
 
-    slabs = Mock() if has_slabs else None
-    runtime = object.__new__(TtKimiK3Runtime)
-    runtime.model = SimpleNamespace(kda_scratch=scratch, kda_states=None)
+    slabs = SimpleNamespace(num_slots=2, layer_ids=(0, 3)) if has_slabs else None
+    runtime = _runtime_serving(num_users=2, kda_layer_ids=(0, 3), scratch=scratch)
     parent_compile = Mock()
     monkeypatch.setattr(TtPrefillRuntime, "compile", parent_compile)
     kv_caches = SimpleNamespace(kda_states=slabs)
@@ -316,6 +324,23 @@ def test_compile_hands_the_slabs_to_the_model_only_when_the_rank_has_kda_layers(
         with expect_error(RuntimeError, "KDA state is split"):
             runtime.compile(kv_caches)
         parent_compile.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "num_slots,layer_ids", [(1, (0, 3)), (2, (0,)), (2, (0, 4))], ids=["fewer-slots", "fewer-layers", "other-layers"]
+)
+def test_compile_rejects_slabs_that_do_not_match_the_runtime(monkeypatch, expect_error, num_slots, layer_ids):
+    from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
+
+    # An out-of-range slot is a silent no-op on device, so a slot count or layer set that disagrees
+    # with the runtime must fail here, before the first forward.
+    runtime = _runtime_serving(num_users=2, kda_layer_ids=(0, 3), scratch=object())
+    parent_compile = Mock()
+    monkeypatch.setattr(TtPrefillRuntime, "compile", parent_compile)
+    with expect_error(RuntimeError, "KDA slabs"):
+        runtime.compile(SimpleNamespace(kda_states=SimpleNamespace(num_slots=num_slots, layer_ids=layer_ids)))
+    assert runtime.model.kda_states is None
+    parent_compile.assert_not_called()
 
 
 def test_reset_streams_zeroes_the_requested_slot_through_the_slabs(expect_error):
