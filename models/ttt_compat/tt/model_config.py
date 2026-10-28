@@ -3738,6 +3738,10 @@ class ModelArgs:
                 state_dict = convert_hf_to_meta_no_qkv_permute(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
             else:
                 # Standard: convert to Meta format
+                if any(k.endswith("mlp.experts.gate_up_proj") for k in state_dict):
+                    from models.demos.mixtral8x7b.tt.load_checkpoints import expand_fused_moe_experts
+
+                    state_dict = expand_fused_moe_experts(state_dict)
                 state_dict = convert_hf_to_meta(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
 
         keys_dict = list(state_dict.keys())[:]

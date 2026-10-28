@@ -13,7 +13,7 @@ from models.ttt_compat.tt.common import Mode, PagedAttentionConfig, sample_host
 from models.ttt_compat.tt.model import Transformer
 from models.ttt_compat.tt.model_config import DecodersPrecision, ModelArgs
 
-# pytest models/ttt_compat/tests/mixtral/test_mixtral_model.py
+# pytest models/demos/mixtral8x7b/tests/test_mixtral_model.py
 
 
 def convert2ref(state_dict):
