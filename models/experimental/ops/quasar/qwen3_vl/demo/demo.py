@@ -25,10 +25,11 @@ from models.experimental.ops.quasar.qwen3_vl.tt.common import (
 )
 from models.experimental.ops.quasar.qwen3_vl.tt.generator import Generator
 from models.experimental.ops.quasar.qwen3_vl.tt.model import DropInVisionTransformer, Transformer
-from models.experimental.ops.quasar.qwen3_vl.tt.model_config import VisionModelArgs
+from models.experimental.ops.quasar.qwen3_vl.tt.quasar_config import model_args_classes, truncate_hf_config
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.demos.utils.model_targets import resolve_perf_targets
 from models.demos.utils.trace_region_sizes import TRACE_MODEL_KEY_PARAM
+from models.common.utility_functions import is_quasar
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, parse_decoder_json
 
@@ -55,14 +56,18 @@ def create_tt_model(
     page_params,
     dtype=ttnn.bfloat8_b,
     use_paged_kv_cache=False,
+    args_cls=ModelArgs,
+    n_layers=None,
 ):
-    tt_model_args = ModelArgs(
+    tt_model_args = args_cls(
         mesh_device,
         instruct=instruct,
         max_batch_size=max_batch_size,
         optimizations=optimizations,
         max_seq_len=max_seq_len,
     )
+    if n_layers is not None:
+        tt_model_args.n_layers = n_layers
     # NOTE: no warm-ttnn-cache skip here -- this fork always loads the real weights.
     # The skip was gated on text_only, but every caller builds the vision tower, so the branch was
     # unreachable and the model never actually saved anything. Enabling it needs the multimodal
@@ -270,6 +275,7 @@ def test_demo(
     ci_only,
     reset_seeds,
     request,
+    monkeypatch,
 ):
     """
     Simple demo with limited dependence on reference code.
@@ -319,6 +325,24 @@ def test_demo(
     else:
         optimizations = request.config.getoption("--optimizations") or optimizations
 
+    on_quasar = is_quasar()
+    num_layers = request.config.getoption("--num_layers")
+    vision_depth = request.config.getoption("--vision_depth")
+    weight_dtype = ttnn.bfloat8_b
+    if on_quasar:
+        # Quasar: bf16 only (no block floats), no trace, host sampling (on-device argmax is unchecked on Quasar),
+        # and the op workarounds the e2e uses (tests/e2e/op_overrides.py). Its 2 GiB of DRAM holds a few layers
+        # only: pass --num_layers / --vision_depth and a small prompt (sample_prompts/demo_tiny.json).
+        from models.experimental.ops.quasar.qwen3_vl.tests.e2e.op_overrides import OverrideSession
+
+        enable_trace = False
+        weight_dtype = ttnn.bfloat16
+        optimizations = None  # QuasarModelArgs fills in its bf16 precision
+        monkeypatch.setenv("TT_QWEN_FORCE_HOST_SAMPLING", "1")
+        page_params = {**page_params, "page_max_num_blocks": -(-max_seq_len // page_params["page_block_size"])}
+        OverrideSession(mesh_device, host_ops=(), disable_wa=()).install(monkeypatch)
+    text_args_cls, vision_args_cls = model_args_classes()
+
     if paged_attention:
         page_cache_max_seq_len = page_params["page_block_size"] * page_params["page_max_num_blocks"] / batch_size
         assert (
@@ -366,8 +390,10 @@ def test_demo(
         optimizations=optimizations,
         max_seq_len=max_seq_len,
         page_params=page_params,
-        dtype=ttnn.bfloat8_b,
+        dtype=weight_dtype,
         use_paged_kv_cache=paged_attention,
+        args_cls=text_args_cls,
+        n_layers=num_layers,
     )
 
     processor = model_args.processor
@@ -385,16 +411,21 @@ def test_demo(
     ref_model_name = model_args.CKPT_DIR  # allows for local model loading as well
     transformers_logging.set_verbosity_error()
     config = Qwen3VLForConditionalGeneration.config_class.from_pretrained(ref_model_name)
+    truncate_hf_config(
+        config,
+        vision_depth or config.vision_config.depth,
+        model_args.n_layers,
+    )
     reference_model = Qwen3VLForConditionalGeneration.from_pretrained(
         ref_model_name, config=config, torch_dtype="auto", device_map="auto"
     )
     if use_tt_vision:
         # Create the TorchVisionTransformer wrapper using the original vision model as reference
-        vision_model_args = VisionModelArgs(
+        vision_model_args = vision_args_cls(
             mesh_device,
             max_batch_size=batch_size,
             max_seq_len=max_seq_len,
-            optimizations=DecodersPrecision.accuracy(config.vision_config.depth, ref_model_name),
+            optimizations=None if on_quasar else DecodersPrecision.accuracy(config.vision_config.depth, ref_model_name),
         )
         vision_model_args.hf_config.vision_config.depth = config.vision_config.depth
         visual_model = DropInVisionTransformer(
@@ -476,7 +507,7 @@ def test_demo(
                 pixel_offset += num_pixels
 
                 # Warmup vision model on first user of first batch
-                if not vision_model_traced:
+                if not vision_model_traced and not on_quasar:  # warmup only; on Quasar it doubles a slow vision run
                     _ = visual_model.forward_single_user(user_pixel_values, grid_thw=user_grid_thw)
                     vision_model_traced = True
 
