@@ -1828,3 +1828,72 @@ def test_a_continuation_whose_restart_the_base_moves_into_a_vision_item_is_not_s
     assert model._spec_pending is None
     assert _names(model, "capture")[-1] == ("capture", None)
     assert _names(model, "prefill")[-1] == ("prefill", 1, [400], False), "the base prefill still runs"
+
+
+# ===== ctx-cache commit: every local KV head is merged (TP8 one head, TP4 two, replicated eight)
+@pytest.mark.parametrize("local_kv", [1, 2, 8])
+def test_commit_ctx_caches_gathers_every_local_kv_head(drafter_module, monkeypatch, local_kv):
+    """TP8 keeps the one-gather graph; TP4 (two local KV heads) and the replicated
+    drafter gather each head through the shared row map, stack the heads on dim 1
+    and write the whole cache (the old graph refused more than one head)."""
+    runtime = sys.modules["ttnn"]
+    calls = []
+
+    class T:
+        def __init__(self, shape, tag):
+            self.shape = tuple(shape)
+            self.tag = tag
+            self.freed = False
+
+        def __getitem__(self, idx):
+            head = idx[1]
+            calls.append(("slice", self.tag, head.start))
+            return T((self.shape[0], 1) + self.shape[2:], f"{self.tag}[{head.start}]")
+
+        def deallocate(self, force=False):
+            self.freed = True
+
+    def concat(ts, dim):
+        calls.append(("concat", dim, tuple(t.tag for t in ts)))
+        shape = list(ts[0].shape)
+        shape[dim] = sum(t.shape[dim] for t in ts)
+        return T(shape, "cat")
+
+    def reshape(t, shape):
+        calls.append(("reshape", tuple(shape)))
+        return T(shape, "view")
+
+    def embedding(idx, table, layout=None):
+        calls.append(("embedding", table.shape))
+        return T((1, idx.shape[1], table.shape[1]), "gathered")
+
+    def assign(src, dst):
+        calls.append(("assign", src.shape, dst.tag))
+
+    for name, fn in (("concat", concat), ("reshape", reshape), ("embedding", embedding), ("assign", assign)):
+        monkeypatch.setattr(runtime, name, fn, raising=False)
+
+    cls = drafter_module.DFlashFusedDecoder
+    dec = cls.__new__(cls)
+    cap, P_v, hd, layers = 2048, 6, 128, 2
+    dec.cap, dec.P_v = cap, P_v
+    dec.drafter = SimpleNamespace(local_kv=local_kv, head_dim=hd)
+    dec.merge_idx = T((1, cap), "merge_idx")
+    dec.ctx_k = [T((1, local_kv, cap, hd), f"k{li}") for li in range(layers)]
+    dec.ctx_v = [T((1, local_kv, cap, hd), f"v{li}") for li in range(layers)]
+    kv_new = [(T((1, local_kv, P_v, hd), f"kn{li}"), T((1, local_kv, P_v, hd), f"vn{li}")) for li in range(layers)]
+
+    dec._commit_ctx_caches(kv_new)
+
+    assigns = [c for c in calls if c[0] == "assign"]
+    assert [c[2] for c in assigns] == ["k0", "v0", "k1", "v1"]
+    assert all(c[1] == (1, local_kv, cap, hd) for c in assigns), "the whole cache is written"
+    gathers = [c for c in calls if c[0] == "embedding"]
+    assert len(gathers) == 2 * layers * local_kv
+    assert all(c[1] == (cap + P_v, hd) for c in gathers), "one head's [cache | new] rows per gather"
+    sliced_heads = sorted({c[2] for c in calls if c[0] == "slice"})
+    assert sliced_heads == list(range(local_kv))
+    head_stacks = [c for c in calls if c[0] == "concat" and c[1] == 1]
+    assert len(head_stacks) == (0 if local_kv == 1 else 2 * layers)
+    assert all(len(c[2]) == local_kv for c in head_stacks)
+    assert all(t.freed for layer in kv_new for t in layer)

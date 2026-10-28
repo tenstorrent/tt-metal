@@ -1178,6 +1178,44 @@ class DFlashFusedDecoder:
 
     # ---------------------------------------------------------------- graph
 
+    def _commit_ctx_caches(self, kv_new):
+        """Gather-merge the committed rows into every layer's roped ctx K/V cache.
+
+        ``kv_new`` is ``project_ctx_kv``'s per-layer ``[(k, v)]`` of
+        ``[1, local_kv, P_v, hd]``. Per cache, one gather per local KV head
+        through the shared ``merge_idx`` row map (the head's ``[cache | new]``
+        rows form one 2-D table), then the heads are stacked back on dim 1 and
+        written over the whole cache. One local head (TP8) keeps the
+        single-gather graph; TP4 (two local heads) and the replicated drafter
+        stack their heads before the assign. Trace-safe: every op is the same
+        tiled concat / view reshape / embedding / assign the one-head graph
+        already replays, plus a dim-1 concat of tile-aligned ``[1, 1, cap, hd]``
+        blocks."""
+        d = self.drafter
+        hd = d.head_dim
+        for li, (k_new, v_new) in enumerate(kv_new):
+            for cache, new in ((self.ctx_k[li], k_new), (self.ctx_v[li], v_new)):
+                heads = []
+                scratch = []
+                for h_i in range(d.local_kv):
+                    src = ttnn.concat([cache[:, h_i : h_i + 1, :, :], new[:, h_i : h_i + 1, :, :]], dim=2)
+                    src2d = ttnn.reshape(src, (self.cap + self.P_v, hd))
+                    m = ttnn.embedding(self.merge_idx, src2d, layout=ttnn.TILE_LAYOUT)
+                    heads.append(ttnn.reshape(m, (1, 1, self.cap, hd)))
+                    scratch.extend((m, src2d, src))
+                merged = heads[0] if d.local_kv == 1 else ttnn.concat(heads, dim=1)
+                ttnn.assign(merged, cache)
+                to_free = heads + scratch
+                if merged is not heads[0]:
+                    to_free.append(merged)
+                for t in to_free:
+                    try:
+                        t.deallocate(True)
+                    except Exception:
+                        pass
+            k_new.deallocate(True)
+            v_new.deallocate(True)
+
     def _body(self):
         d = self.drafter
         K = self.K
@@ -1194,25 +1232,7 @@ class DFlashFusedDecoder:
             kv_new = d.project_ctx_kv(self.fc_prev, cos_c, sin_c)
             cos_c.deallocate(True)
             sin_c.deallocate(True)
-            hd = d.head_dim
-            for li, (k_new, v_new) in enumerate(kv_new):
-                for cache, new in ((self.ctx_k[li], k_new), (self.ctx_v[li], v_new)):
-                    for h_i in range(d.local_kv):
-                        src = ttnn.concat([cache[:, h_i : h_i + 1, :, :], new[:, h_i : h_i + 1, :, :]], dim=2)
-                        src2d = ttnn.reshape(src, (self.cap + self.P_v, hd))
-                        m = ttnn.embedding(self.merge_idx, src2d, layout=ttnn.TILE_LAYOUT)
-                        m4 = ttnn.reshape(m, (1, 1, self.cap, hd))
-                        dst = cache if d.local_kv == 1 else None
-                        if dst is None:
-                            raise NotImplementedError("ctx cache merge assumes local_kv == 1 per device")
-                        ttnn.assign(m4, dst)
-                        for t in (m4, m, src2d, src):
-                            try:
-                                t.deallocate(True)
-                            except Exception:
-                                pass
-                k_new.deallocate(True)
-                v_new.deallocate(True)
+            self._commit_ctx_caches(kv_new)
         else:
             src = ttnn.concat([self.ctx_dev, self.fc_prev], dim=2)  # [1,1,cap+P_v,H]
             src2d = ttnn.reshape(src, (self.cap + self.P_v, d.hidden))
