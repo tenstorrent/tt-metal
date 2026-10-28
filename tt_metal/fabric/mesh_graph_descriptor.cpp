@@ -2974,7 +2974,7 @@ void MeshGraphDescriptor::validate_pipeline_descriptors(
         }
 
         // In-degree, out-degree, roots, forks, and dead ends are not text errors. A repeated edge is another
-        // channel. Feasibility counts the copies and rejects a fork only when the slices cannot touch.
+        // channel, and feasibility counts each copy against the declared channels.
         for (const auto& edge : pipeline.edges()) {
             // An edge must name stages declared in the same pipeline.
             if (!ids.contains(edge.src()) || !ids.contains(edge.dst())) {
