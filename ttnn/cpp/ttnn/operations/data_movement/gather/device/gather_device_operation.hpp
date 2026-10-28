@@ -64,4 +64,19 @@ Tensor gather(
     const std::optional<Tensor>& output_tensors,
     const std::optional<CoreRangeSet>& sub_core_grids);
 
+
+// Element granularity the ROW_MAJOR multi-core gather must split W_index on (#55450).
+//
+// Each core reads its index slice and writes its output slice with a sharded NoC transfer at byte
+// offset w_start*elem_size. Both that offset AND the transfer size have to be a multiple of the
+// buffer's memory alignment, which is a property of the architecture and of where the buffer lives
+// (Wormhole DRAM 16B, Blackhole DRAM 64B, L1 its own alignment) -- not a constant. Measured on a
+// Blackhole p150b: W=4096 and W=2048 are silently corrupt on main and clean once the split lands on
+// 64B, while the same widths are fine on Wormhole.
+//
+// Returned in ELEMENTS, as the smallest count whose byte extent satisfies both the index and the
+// output buffer. The values tensor is not included: its kernel reads the whole row at offset 0.
+uint32_t gather_rm_w_align_elems(
+    uint32_t index_elem_size, bool index_is_dram, uint32_t output_elem_size, bool output_is_dram);
+
 }  // namespace ttnn::prim

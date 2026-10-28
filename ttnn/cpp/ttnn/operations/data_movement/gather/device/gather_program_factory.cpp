@@ -547,13 +547,37 @@ ProgramDescriptor GatherDeviceOperation::RmSingleRowMultiCore::create_descriptor
         core_grid = attributes.sub_core_grids.value();
     }
 
-    // Split W_index across cores; group_1 holds the larger slice when it doesn't divide evenly.
-    const auto [total_number_of_cores, core_range, core_group_1, core_group_2, w_per_core_g1, w_per_core_g2] =
-        tt::tt_metal::split_work_to_cores(core_grid, W_index, true);
-    const auto work_groups = {std::make_pair(core_group_1, w_per_core_g1), std::make_pair(core_group_2, w_per_core_g2)};
+    // Split W_index across cores. The per-core column slice is read/written at byte offset w_start*elem_size via a
+    // sharded NoC transfer, which silently corrupts the tail when that offset is not DRAM-aligned (#55450). The
+    // requirement is architectural, not a constant: Wormhole aligns DRAM to 16B, Blackhole to 64B, so a split that
+    // is safe on one board silently corrupts on the other. Measured on a Blackhole p150 (110 cores, bf16): W=3520
+    // gives 32 elements (64B) per core and is clean, while W=2200 (20 elements, 40B) and W=1980 (18 elements, 36B)
+    // are corrupt -- all three divide evenly into 110 cores, so divisibility is not the property that matters.
+    //
+    // Split W_index in whole alignment units (gather_rm_w_align_elems), so every core's w_start AND its
+    // slice size are aligned for the index and output buffers. Both matter: a slice with an aligned start
+    // but a ragged size is still silently corrupt, which is why the dispatch sends non-multiples to the
+    // single-core factory. group_1 holds the larger slice when the unit count doesn't divide evenly.
+    const uint32_t w_align_elems = gather_rm_w_align_elems(
+        input_index_elem_size,
+        tensor_args.input_index_tensor.buffer()->is_dram(),
+        output_elem_size,
+        output_tensor.buffer()->is_dram());
+    // select_program_factory only routes here when W_index divides evenly, so every slice -- not
+    // just every start -- is a whole number of units. A ragged final slice is silently corrupt.
+    TT_FATAL(
+        W_index % w_align_elems == 0,
+        "Gather RM multi-core requires W_index ({}) to be a multiple of the {}-element alignment unit; "
+        "ragged widths must use the single-core factory (#55450)",
+        W_index,
+        w_align_elems);
+    const uint32_t w_units = W_index / w_align_elems;
+    const auto [total_number_of_cores, core_range, core_group_1, core_group_2, u_per_core_g1, u_per_core_g2] =
+        tt::tt_metal::split_work_to_cores(core_grid, w_units, true);
+    const auto work_groups = {std::make_pair(core_group_1, u_per_core_g1), std::make_pair(core_group_2, u_per_core_g2)};
 
-    // CB sticks sized for the LARGEST per-core slice (group 1); group 2 uses a shorter slice.
-    const uint32_t max_w_per_core = std::max(w_per_core_g1, w_per_core_g2);
+    // CB sticks sized for the LARGEST per-core slice (group 1, in elements); shorter/last slices fit within it.
+    const uint32_t max_w_per_core = std::max(u_per_core_g1, u_per_core_g2) * w_align_elems;
     const uint32_t max_input_index_slice_bytes = max_w_per_core * input_index_elem_size;
     const uint32_t max_output_slice_bytes = max_w_per_core * output_elem_size;
 
@@ -631,11 +655,13 @@ ProgramDescriptor GatherDeviceOperation::RmSingleRowMultiCore::create_descriptor
     const uint32_t output_per_shard_page_size = per_shard_page_size_bytes(output_tensor, W_index * output_elem_size);
 
     uint32_t id = 0;
-    uint32_t w_cursor = 0;  // Cumulative w_start across cores (iterating in group order matches split_work_to_cores).
-    for (const auto& [group, w_per_core] : work_groups) {
+    uint32_t u_cursor = 0;  // Cumulative w_start in alignment units (group order matches split_work_to_cores).
+    for (const auto& [group, u_per_core] : work_groups) {
         for (const auto& range : group.ranges()) {
             for (const auto& core : range) {
-                const uint32_t w_start = w_cursor;
+                const uint32_t w_start = u_cursor * w_align_elems;
+                // W_index is a whole number of units here, so every slice is exact; no clamp is needed.
+                const uint32_t w_per_core = u_per_core * w_align_elems;
                 if (w_per_core > 0) {
                     reader_desc.emplace_runtime_args(
                         core, {input_index_tensor_buffer, w_per_core, w_start, id, input_index_per_shard_page_size});
@@ -653,7 +679,7 @@ ProgramDescriptor GatherDeviceOperation::RmSingleRowMultiCore::create_descriptor
                     writer_desc.emplace_runtime_args(
                         core, {0u, 0u, 0u, w_start, id, input_per_shard_page_size, output_per_shard_page_size});
                 }
-                w_cursor += w_per_core;
+                u_cursor += u_per_core;
                 id++;
             }
         }
