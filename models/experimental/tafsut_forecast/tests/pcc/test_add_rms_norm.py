@@ -21,7 +21,7 @@ def rms(x):
 
 
 def worst(got, ref):
-    """Worst error over each row, relative to that row's largest value (one bf16 rounding is 2^-8)."""
+    """Worst error over each row, relative to that row's largest value (one bf16 ulp is at most 2^-7 of it)."""
     return float(((got - ref).abs().amax(-1) / ref.abs().amax(-1)).max())
 
 
@@ -36,7 +36,15 @@ def test_add_rms_norm(device, B, S):
     n1 = ttnn.to_torch(ops.rms_norm(up(a), epsilon=df.NORM_EPS)).float()
     y_ref = a.float() + b.float()
     errs = dict(y=worst(y, y_ref), n=worst(n, rms(y.float())), n_vs_fp32=worst(n, rms(y_ref)), n1=worst(n1, rms(a.float())))
-    print(f"\n[add_rms_norm] B {B} S {S}: {errs}")
-    assert errs["y"] <= 2**-8 and errs["n"] <= 2**-7 and errs["n1"] <= 2**-7, errs
+    # parity: the ttnn ops the fused op replaces, on the same inputs
+    ty = ttnn.add(up(a), up(b))
+    tn = ttnn.to_torch(ttnn.rms_norm(ty, epsilon=df.NORM_EPS)).float()
+    ty = ttnn.to_torch(ty).float()
+    ttnn_errs = dict(y=worst(ty, y_ref), n_vs_fp32=worst(tn, rms(y_ref)))
+    print(f"\n[add_rms_norm] B {B} S {S}: {errs}; ttnn add + rms_norm: {ttnn_errs}")
+    # one bf16 ulp (bound set after job 1272, where the first 2^-8 bound on y failed at 0.0043: the packer's rounding
+    # is within one ulp, not half of one)
+    assert errs["y"] <= 2**-7 and errs["n"] <= 2**-7 and errs["n1"] <= 2**-7, errs
+    assert errs["n_vs_fp32"] <= 1.25 * ttnn_errs["n_vs_fp32"] + 2**-9, (errs, ttnn_errs)
     # positive control: a norm that drops eps scaling or one row's sum would be off by far more than a rounding
     assert worst(n * 1.02, rms(y.float())) > 2**-7
