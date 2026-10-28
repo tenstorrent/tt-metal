@@ -399,6 +399,7 @@ class TtV41BatchDecoder(TtV41Decoder):
         (``sampling`` keyword: ``{slot: (k, p, temperature)}``; a temperature of 0 is argmax: k 1)."""
         self.users = users_per_rank  # before the decoder builds the MoEs: their decode routing takes the real rows
         super().__init__(model, weight_cache_path, routed_expert_weights_dtype, trace=trace, warmup=warmup)
+        real_rows = self.moe_real_rows()
         self.pool = V41DecodePool(
             self.mesh_device,
             self.config,
@@ -409,12 +410,13 @@ class TtV41BatchDecoder(TtV41Decoder):
             ring_slots=self.POOL_RING_SLOTS,
         )
         self.slots: dict[int, _User] = {}
-        # the MoE's per-rank [real rows, right padding]: the slots' rows of every rank
+        # the MoE's per-rank [real rows, right padding]: the slots' rows of every rank (``moe_real_rows``: a
+        # subclass with verify rows takes more)
         self.padding_config = (
             None
             if os.environ.get("V41_BATCH_MOE_PAD", "1") == "0"
             else ttnn.from_torch(
-                torch.tensor([[users_per_rank, 0]] * self.sp, dtype=torch.int32),
+                torch.tensor([[real_rows, 0]] * self.sp, dtype=torch.int32),
                 device=self.mesh_device,
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -963,7 +965,7 @@ class TtV41BatchDecoder(TtV41Decoder):
         if self.padding_config is None:
             out = moe(x)
         else:
-            out = moe(x, actual_isl=self.users, padding_config=self.padding_config)
+            out = moe(x, actual_isl=self.moe_real_rows(), padding_config=self.padding_config)
         return out if MOE_ROWS == ROWS else ttnn.slice(out, [0, 0, 0, 0], [1, 1, ROWS, out.shape[3]])
 
     # --- attention ------------------------------------------------------------------------------------------------

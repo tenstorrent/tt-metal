@@ -28,12 +28,13 @@ exact against sequential served sampling); the committed text then differs from 
 construction (``matches_plain`` is recorded, not asserted) and the record carries the acceptance under sampling.
 ``V41_VR_LIVE=n`` (default 1; first c32 measurement): ``n`` live slots in lockstep, all
 joined from the one prefill (the same prompt, so one standalone draft call's drafts serve every slot and every slot
-accepts the same count), ``n / sp`` a mesh row at user indices ``0, 1 + Kmax, 2 (1 + Kmax), ..`` so that a slot's
-``1 + K`` rows (``u .. u + K``) are its own within the rank's ``V41_VR_USERS`` real rows (the 32-row MoE dispatches
-the users' rows only: ``V41_VR_USERS`` must be at least ``n / sp x (1 + Kmax)``, and the pool's capacity sized so
-that ``V41_VR_USERS x sp`` slots fit); the drafter is not in the step's graph (``V41_VR_FUSED=0`` is forced: the
+accepts the same count), ``n / sp`` a mesh row at user indices ``0 .. n / sp - 1`` of the rank's ``V41_VR_USERS``
+slots; the MoE tile's real rows are ``V41_VR_USERS x (1 + Kmax)`` a rank (``TtV41VerifyDecoder(real_rows=)``,: decoupled from the pool's slots, so the production 32-slot pool at ``V41_VR_SEQ`` serves 32
+live slots; the earlier geometry realised the rows through ``V41_VR_USERS=12 V41_VR_SEQ=348160``, a 96-slot pool at a third
+of the capacity, with the live slots at user indices ``0, 1 + Kmax, ..``) and a slot's ``1 + K`` rows are
+``u (1 + Kmax) .. u (1 + Kmax) + K``; the drafter is not in the step's graph (``V41_VR_FUSED=0`` is forced: the
 fused call takes one live slot a rank). The round's wall and device time are the step's over all the slots; the
-tokens a round are one slot's.
+tokens a round are one slot's. ``V41_VR_REAL_ROWS`` overrides the real rows (0: the slots are the real rows).
 """
 
 import json
@@ -100,8 +101,15 @@ def test_v41_verify_rows(mesh_device, device_params):
     from transformers import AutoTokenizer
 
     sp, tp = tuple(mesh_device.shape)
-    assert live == 1 or (live % sp == 0 and (live // sp) * (1 + max(ks)) <= users), (live, sp, ks, users)
-    slots = [r * users + u * (1 + max(ks)) for r in range(sp) for u in range(live // sp)] if live > 1 else [0]
+    real_rows = int(os.environ.get("V41_VR_REAL_ROWS", users * (1 + max(ks)) if live > 1 else 0)) or None
+    if live > 1 and real_rows is None:  # geometry: the slots are the real rows
+        assert live % sp == 0 and (live // sp) * (1 + max(ks)) <= users, (live, sp, ks, users)
+        slots = [r * users + u * (1 + max(ks)) for r in range(sp) for u in range(live // sp)]
+    elif live > 1:
+        assert live % sp == 0 and live // sp <= users and real_rows <= 32, (live, sp, users, real_rows)
+        slots = [r * users + u for r in range(sp) for u in range(live // sp)]
+    else:
+        slots = [0]
     max_seq = -(-(prompt_len + n_tokens + max(ks) + 2) // chunk) * chunk  # the prefill state's capacity
     assert cap % chunk == 0 and cap >= max_seq, (cap, chunk, max_seq)
     tokenizer = AutoTokenizer.from_pretrained(orc.HF_SNAPSHOT)
@@ -123,6 +131,7 @@ def test_v41_verify_rows(mesh_device, device_params):
         "capacity": cap,
         "chunk": chunk,
         "users_per_rank": users,
+        "real_rows": real_rows,
         "live_slots": slots,
         "prompt": prompt_len,
         "tokens": n_tokens,
@@ -157,7 +166,14 @@ def test_v41_verify_rows(mesh_device, device_params):
     record["dram_after_model"] = _dram(mesh_device)
     t0 = time.time()
     decoder = TtV41VerifyDecoder(
-        model, root, users_per_rank=users, trace=True, warmup=warmup, sample_on_device=True, max_seq_len=cap
+        model,
+        root,
+        users_per_rank=users,
+        trace=True,
+        warmup=warmup,
+        sample_on_device=True,
+        max_seq_len=cap,
+        real_rows=real_rows,
     )
     record["decoder_build_s"] = round(time.time() - t0, 1)
     record["dram_after_decoder"] = _dram(mesh_device)
@@ -183,7 +199,7 @@ def test_v41_verify_rows(mesh_device, device_params):
         decoder.prepare_merge(
             [
                 tuple(
-                    row for u in range(live // sp) for row in decoder.block_rows(u * (1 + max(ks)), k, one_slot=False)
+                    row for slot in slots[: live // sp] for row in decoder.block_rows(slot % users, k, one_slot=False)
                 )
                 for k in [0] + ks
             ]

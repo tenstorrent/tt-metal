@@ -75,8 +75,15 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
     POOL_RING_SLOTS = RING + ROWS
     C1_ROWS = C1_SELECT_ROWS  # the c1 MoE on 1 + K rows, K <= 3
 
-    def __init__(self, *args, **kwargs):
+    def __init__(self, *args, real_rows: int | None = None, **kwargs):
+        """``real_rows``: the MoE tile's real rows a rank (``padding_config``, the decode routing), decoupled from
+        the pool's slots (``users_per_rank``) so that every slot of a rank can hold a block: ``users_per_rank x
+        (1 + K)`` for ``K`` drafts a slot, at most 32 (the earlier geometry realised the rows through a
+        pool of as many slots). Default: the slots (the c1 geometry: one block a rank, its draft rows past the
+        slots' with the c1 MoE)."""
+        self.real_rows = real_rows
         super().__init__(*args, **kwargs)
+        assert self.real_rows is None or self.users <= self.real_rows <= ROWS, (self.real_rows, self.users)
         assert self.single_query, "verify rows need V41_DECODE_SINGLE_QUERY=1 (one scorer per live row)"
         assert self.packer is not None, "verify rows need V41_DECODE_HOST_INPUTS=packed or one"
         assert self.sample_on_device, "verify rows take every row's argmax on device"
@@ -151,15 +158,28 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
                     idx.view(1, 1, 1, len(rows) * n_rows), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
                 )
 
+    def moe_real_rows(self) -> int:
+        return self.real_rows or self.users
+
+    @property
+    def slot_stride(self) -> int:
+        """The tile rows a slot owns in the multi-slot geometry: ``real_rows / users_per_rank``."""
+        return self.moe_real_rows() // self.users
+
     def block_rows(self, u: int, k: int, one_slot: bool) -> tuple:
         """The tile rows of user ``u``'s block of ``1 + k`` tokens: its own row, then ``k`` rows. With the c1 MoE
         and one live slot the draft rows are the tile's rows past the users' (``users .. users + k - 1``: the c1
-        MoE gathers any rows; the 32-row MoE dispatches the users' rows only), else ``u + 1 .. u + k``."""
+        MoE gathers any rows; the 32-row MoE dispatches the real rows only), else the slot's own rows
+        ``u s .. u s + k`` for the stride ``s = real_rows / users_per_rank`` (``s = 1`` without decoupled real
+        rows: ``u .. u + k``, within the slots' rows)."""
         if k and self.c1 and one_slot:
             rows = (u,) + tuple(range(self.users, self.users + k))
         else:
-            rows = tuple(range(u, u + k + 1))
-            assert u + k < self.users, f"user {u}: {k} drafts need rows {u}..{u + k} within {self.users}"
+            s = self.slot_stride
+            rows = tuple(range(u * s, u * s + k + 1))
+            assert (
+                rows[-1] < self.moe_real_rows()
+            ), f"user {u}: {k} drafts need rows {rows} within {self.moe_real_rows()}"
         assert rows[-1] < ROWS and k < self.C1_ROWS, (rows, k)
         return rows
 
@@ -320,23 +340,27 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         )
         tick("pack")
         if self.model.engram:
+            # the hash of row j of every block at once (one ``step`` call a block row over the live slots, not
+            # one a row), the histories after each of the block's tokens kept per slot
             hash_ = self.model.engram_hash
-            per_row = {}
-            self.histories = {}
-            for slot, block in tokens.items():
-                h = self.slots[slot].engram_history.view(1, -1)
-                self.histories[slot] = []
-                for j, token in enumerate(block):
-                    row_ids, h = hash_.step(torch.tensor([int(token)]), h)
-                    per_row[(slot // users, self.rows[slot][j])] = row_ids[0]
-                    self.histories[slot].append(h[0].clone())
+            order = sorted(tokens)
+            h = torch.stack([self.slots[slot].engram_history.view(-1) for slot in order])  # [U, n - 1]
+            self.histories = {slot: [] for slot in order}
+            flat, ids_rows = [], []
+            for j in range(self.live_rows):
+                row_ids, h = hash_.step(torch.tensor([int(tokens[slot][j]) for slot in order]), h)
+                for i, slot in enumerate(order):
+                    flat.append((slot // users) * ROWS + self.rows[slot][j])
+                    self.histories[slot].append(h[i].clone())
+                ids_rows.append(row_ids)  # [U, n_layers, n_hash_cols]
+            ids_rows = torch.cat(ids_rows, dim=0)
+            flat = torch.tensor(flat, dtype=torch.int64)
             tick("engram_hash")
             inputs["engram"] = {}
             live = active.flatten().nonzero().flatten()
             for l, e in self.model.engram.items():
                 ids_l = torch.zeros(sp * ROWS, hash_.n_hash_cols, dtype=torch.int64)
-                for (r, row), row_ids in per_row.items():
-                    ids_l[r * ROWS + row] = row_ids[hash_.layer_index(l)]
+                ids_l[flat] = ids_rows[:, hash_.layer_index(l)]
                 inputs["engram"][l] = e.prepare_host(ids_l, sp * ROWS, live_rows=live)
             tick("engram_rows")
         return inputs
