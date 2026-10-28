@@ -18,7 +18,7 @@ from typing import Optional, List, Dict, Any
 from .tt_spatial_cross_attention import TTSpatialCrossAttention, build_rebatch_plan
 from .tt_common import layer_norm, signpost
 from .tt_temporal_self_attention import TTTemporalSelfAttention
-from .tt_point_sampling_3d_2d import point_sampling_3d_to_2d_ttnn
+from .tt_point_sampling_3d_2d import point_sampling_3d_to_2d_ttnn, world_points_ttnn
 from ..reference.point_sampling_3d_2d import generate_reference_points
 
 from loguru import logger
@@ -370,6 +370,8 @@ class TTBEVFormerEncoder:
             dtype=ttnn.float32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
+        # The grid in world coordinates, which every frame projects to the cameras.
+        self._world_points = world_points_ttnn(self._reference_points_3d, pc_range, device)
 
         # Build transformer layers
         self.layers = []
@@ -396,6 +398,31 @@ class TTBEVFormerEncoder:
             )
             self.layers.append(layer)
 
+    @staticmethod
+    def _host_lidar2img(img_metas):
+        """The cameras' projections from ``img_metas``, torch [B, num_cams, 4, 4]: each sample's
+        ``lidar2img``, or else the first sample's intrinsics times extrinsics."""
+        if "lidar2img" in img_metas[0]:
+            # Extract precomputed transformation matrices from dataset metadata
+            # lidar2img transforms points from lidar/world coordinates to camera image pixels
+            lidar2img_list = []
+            for meta in img_metas:
+                if isinstance(meta["lidar2img"], torch.Tensor):
+                    lidar2img_list.append(meta["lidar2img"])
+                else:
+                    # Convert numpy arrays or lists to tensors
+                    lidar2img_list.append(torch.tensor(meta["lidar2img"], dtype=torch.float32))
+
+            # Shape: [batch, num_cams, 4, 4] - homogeneous transformation matrices
+            return torch.stack(lidar2img_list).cpu()
+        # Fallback: construct transformation from separate intrinsic and extrinsic matrices
+        # Intrinsic: camera parameters (focal length, principal point)
+        # Extrinsic: camera pose in world coordinates (rotation + translation)
+        camera_intrinsics = torch.tensor(img_metas[0]["camera_intrinsics"], dtype=torch.float32)
+        camera_extrinsics = torch.tensor(img_metas[0]["camera_extrinsics"], dtype=torch.float32)
+        # Combined transformation: world -> camera -> image
+        return camera_intrinsics @ camera_extrinsics  # [num_cams, 4, 4]
+
     def forward(
         self,
         bev_query,
@@ -405,6 +432,7 @@ class TTBEVFormerEncoder:
         prev_bev=None,
         shift=None,
         img_metas: Optional[List[Dict[str, Any]]] = None,
+        lidar2img=None,
         **kwargs,
     ):
         """
@@ -422,6 +450,9 @@ class TTBEVFormerEncoder:
             shift: Ego translation in BEV fractions, float32 ROW_MAJOR [B, 1, 1, 2]; applied only
                 with ``prev_bev``.
             img_metas: Camera metadata for point sampling
+            lidar2img: The cameras' projections on device, float32 TILE [B, num_cams, 4, 4], as
+                ``TTPerceptionTransformer.prepare_frame`` uploads them; None reads them from
+                ``img_metas`` and uploads them here.
 
         Returns:
             Final BEV features [B, num_queries, embed_dims]
@@ -438,10 +469,12 @@ class TTBEVFormerEncoder:
             num_queries == self.bev_h * self.bev_w
         ), f"num_queries {num_queries} != bev_h*bev_w {self.bev_h * self.bev_w}"
 
-        # Batch is a pure broadcast of the stored grid. Widen the host tensor as a
-        # stride-0 view -- from_torch copies it during upload either way -- and widen the
-        # device tensor on device, freeing the copy once the layers are done with it.
-        reference_points_3d = self._reference_points_3d if bs == 1 else self._reference_points_3d.expand(bs, -1, -1, -1)
+        # Batch is a pure broadcast of the stored grids, widened on device and freed once used.
+        world_points = (
+            self._world_points
+            if bs == 1
+            else [ttnn.repeat(coord, ttnn.Shape((bs, 1, 1, 1))) for coord in self._world_points]
+        )
         bev_reference_points = (
             self._bev_reference_points
             if bs == 1
@@ -466,40 +499,19 @@ class TTBEVFormerEncoder:
         bev_mask = None
 
         if img_metas is not None:
-            # Extract camera transformation matrices from metadata
-            # These matrices transform 3D world coordinates to 2D camera pixel coordinates
-            if "lidar2img" in img_metas[0]:
-                # Extract precomputed transformation matrices from dataset metadata
-                # lidar2img transforms points from lidar/world coordinates to camera image pixels
-                lidar2img_list = []
-                for meta in img_metas:
-                    if isinstance(meta["lidar2img"], torch.Tensor):
-                        lidar2img_list.append(meta["lidar2img"])
-                    else:
-                        # Convert numpy arrays or lists to tensors
-                        lidar2img_list.append(torch.tensor(meta["lidar2img"], dtype=torch.float32))
-
-                lidar2img = torch.stack(lidar2img_list)
-                # Shape: [batch, num_cams, 4, 4] - homogeneous transformation matrices
-                lidar2img = lidar2img.cpu()
-            else:
-                # Fallback: construct transformation from separate intrinsic and extrinsic matrices
-                # Intrinsic: camera parameters (focal length, principal point)
-                # Extrinsic: camera pose in world coordinates (rotation + translation)
-                camera_intrinsics = torch.tensor(img_metas[0]["camera_intrinsics"], dtype=torch.float32)
-                camera_extrinsics = torch.tensor(img_metas[0]["camera_extrinsics"], dtype=torch.float32)
-                # Combined transformation: world -> camera -> image
-                lidar2img = camera_intrinsics @ camera_extrinsics  # [num_cams, 4, 4]
+            if lidar2img is None:
+                lidar2img = self._host_lidar2img(img_metas)
             # Project 3D reference points to 2D camera coordinates
             # This determines where each BEV query will sample from in each camera view
             # Returns: reference_points_cam [num_cams, B, num_queries, num_points, 2] (pixel coordinates)
             #          bev_mask [num_cams, B, num_queries, num_points] (validity mask)
             reference_points_cam, bev_mask = point_sampling_3d_to_2d_ttnn(
-                reference_points=reference_points_3d,
+                reference_points=None,
                 pc_range=self.pc_range,
                 lidar2img=lidar2img,
                 img_metas=img_metas,
                 device=self.device,
+                world_points=world_points,
             )
             # Projected in float32; bfloat16 is the only dtype build_rebatch_plan's gather takes.
             reference_points_cam = ttnn.typecast(reference_points_cam, ttnn.bfloat16)
@@ -508,6 +520,10 @@ class TTBEVFormerEncoder:
         rebatch_plan = build_rebatch_plan(reference_points_cam, bev_mask, self.device) if bev_mask is not None else None
 
         signpost(header="BEVEncoder Reference Points End")
+
+        if world_points is not self._world_points:
+            for coord in world_points:
+                ttnn.deallocate(coord)
 
         # Process through transformer layers
         for lid, layer in enumerate(self.layers):
