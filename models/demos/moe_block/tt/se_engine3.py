@@ -51,6 +51,12 @@ ARENA_MAX = (
 # end on a port core) - the arena range is carved on them too - and what the head keeps below it)
 
 
+def dest_tiles():
+    """fp32 DEST tiles a block: 8 with full sync, 4 with half sync (SE_HALFSYNC=1, A/B) - the down passes' width and
+    the reduce-scatter plan's pwmax follow it."""
+    return 4 if os.environ.get("SE_HALFSYNC") == "1" else 8
+
+
 def arena_cap(mesh_device, kb):
     """L1 the arena may take on this mesh now: from where it lands (the top of the free L1 - placed top-down) down to the
     movers' static circular buffers (the x gather's port CB at K step kb: the arena's range is carved on the port cores
@@ -671,7 +677,9 @@ void kernel_main() {
 #endif
             trid_of[b / GY] = t;
             noc_async_read_set_trid(t, WNOC);
-#ifdef SE_PROBE_NOWL
+#if defined(SE_PROBE_NOWREAD)
+            (void)lo;  // (probe: no W DRAM read at all - the block "lands" at once)
+#elif defined(SE_PROBE_NOWL)
             noc_async_read(get_noc_addr_from_bank_id<true>(wbank, w_addr + wbase + o * WTB, WNOC), wown + lo * WTB, 16, WNOC);  // (probe)
 #else
 #ifdef SE_WPKT
@@ -1153,6 +1161,118 @@ void kernel_main() {
         // (unpacked straight to DEST, fp32) under its own matmuls; then the GLU and h. Shard G - 2 pushes each pass's
         // slot as it is done (the write pointer then sits at the next pass's slot); the chunk's tail is pushed and
         // popped as padding, so every chunk starts at the region's start
+#if SE_DT == 4
+        // (half-sync DEST: a pass keeps its width - the same x / W rounds as full sync - but each step's MT x pw block
+        // goes through DEST as sub-blocks of <= 4 tiles (rows), each packed onto the pass's ACC slot with the
+        // packer's L1 accumulation (the first step of shard 0 writes it). The packer, and the last step's GLU, run on
+        // one half while the matmuls fill the other. The last step brings the slot's sum back into DEST first; the
+        // step before it pushes the slot (its sum complete but for the last step's), in pass order)
+        constexpr uint32_t LAST = G * SPS - 1;
+        if (LAST > 0) cb_reserve_back(ACC, SE_ACCP);
+        uint32_t apushed = 0;
+        for (uint32_t k = 0; k < G; ++k) {
+            uint32_t hoff = 0, loff = 0, aoff = 0;
+            for (uint32_t pg = 0; pg < NPG; ++pg) {
+                const uint32_t pw = se_arg(pg), n = MT * pw;
+                const uint32_t sbr = n > 4 ? 1 : MT, nsb = MT / sbr, sbn = sbr * pw;  // (rows a sub-block)
+                matmul_block_init(XIN, WIN, 0, pw, sbr, KB);
+                for (uint32_t st = 0; st < SPS; ++st) {
+                    const uint32_t sx = k * SPS + st;
+#ifdef SE_PROBE_GUWAIT
+                    UNPACK(({
+                        const uint32_t t0_ = *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+                        cb_wait_front(XIN, MT * KB);
+                        const uint32_t t1_ = *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+                        cb_wait_front(WIN, WSLOT);
+                        const uint32_t t2_ = *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+                        gu_wx += t1_ - t0_, gu_ww += t2_ - t1_;
+                        gs_x = t1_ - t0_, gs_w = t2_ - t1_;
+                    }));
+#ifdef SE_PROBE_GUSTEP
+                    UNPACK(({  // (GUSTEP: the first 48 steps' x / W waits - the profiler's buffer)
+                        if (gu_ns++ < 48) {
+                            DeviceTimestampedData("SE-GUSX", gs_x);
+                            DeviceTimestampedData("SE-GUSW", gs_w);
+                        }
+                    }));
+#endif
+#endif
+                    cb_wait_front(XIN, MT * KB);
+                    cb_wait_front(WIN, WSLOT);
+                    const bool fin = sx == LAST;
+                    if (fin && LAST > 0) cb_wait_front(ACC, n);
+                    for (uint32_t sb = 0; sb < nsb; ++sb) {
+                        tile_regs_acquire();
+                        if (fin && LAST > 0) {
+                            reconfig_data_format_srca(WIN, ACC);
+                            copy_init(ACC);
+                            for (uint32_t t = 0; t < sbn; ++t) copy_tile(ACC, sb * sbn + t, t);
+                            reconfig_data_format_srca(ACC, WIN);
+                            matmul_block_init(XIN, WIN, 0, pw, sbr, KB);
+                        }
+#ifndef SE_PROBE_NOMATH
+                        for (uint32_t kk = 0; kk < KB; ++kk)
+                            matmul_block(XIN, WIN, sb * sbr * KB + kk, kk * pw, 0, false, pw, sbr, KB);
+#endif
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        if (!fin) {
+                            pack_reconfig_data_format(ACC);
+                            PACK((llk_pack_reconfig_l1_acc(sx > 0 ? 1 : 0)));
+#ifndef SE_PROBE_NOACCPACK
+                            for (uint32_t t = 0; t < sbn; ++t) pack_tile<true>(t, ACC, aoff + sb * sbn + t - apushed);
+#endif
+                            PACK((llk_pack_reconfig_l1_acc(0)));
+                            tile_regs_release();
+                            continue;
+                        }
+#ifdef SE_LAT
+                        if (pg >= SE_NGU) {  // (a latent-down pass: no GLU, the chip's latent columns packed bf16 to LAT)
+                            pack_reconfig_data_format(SE_LAT);
+                            for (uint32_t r = 0; r < sbr; ++r)
+                                for (uint32_t t = 0; t < pw; ++t)
+                                    pack_tile<true>(r * pw + t, SE_LAT, (sb * sbr + r) * SE_LWMAX + loff + t);
+                            tile_regs_release();
+                            continue;
+                        }
+#endif
+                        pack_reconfig_data_format(HOWN);
+#if defined(SE_GLU) && !defined(SE_PROBE_NOGLU)
+                        PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+#if SE_GLU == 2
+                        for (uint32_t t = 0; t < sbn; t += 2)
+                            PACK((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_situ_glu, (DST_ACCUM_MODE, 8, sfpu::SituGluConfigKimi), t, t + 1, t, VectorMode::RC)));
+#elif SE_GLU == 3  // (silu(min(gate, 10)) x clamp(up, +-10): GLM-5.3's swiglu_limit, DeepSeek V4's)
+                        for (uint32_t t = 0; t < sbn; t += 2)
+                            PACK((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_clamped_silu_glu, (DST_ACCUM_MODE, 8, sfpu::ClampedSiluGluConfigDsV4), t, t + 1, t, VectorMode::RC)));
+#else
+                        for (uint32_t t = 0; t < sbn; t += 2) silu_tile_pack(t);
+                        for (uint32_t t = 0; t < sbn; t += 2)
+                            PACK((SFPU_BINARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, calculate_sfpu_binary_mul, (APPROX, ckernel::BinaryOp::MUL, 8, DST_ACCUM_MODE), t, t + 1, t, VectorMode::RC)));
+#endif
+                        PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+#endif
+                        for (uint32_t r = 0; r < sbr; ++r)
+                            for (uint32_t t = 0; t < pw; t += 2)
+                                pack_tile<true>(r * pw + t, HOWN, (sb * sbr + r) * POMAX + hoff + t / 2);
+                        tile_regs_release();
+                    }
+                    if (fin && LAST > 0) cb_pop_front(ACC, n);
+                    cb_pop_front(XIN, MT * KB);
+                    cb_pop_front(WIN, WSLOT);
+                    if (sx + 1 == LAST) {  // (the slot's sum but for the last step: the last step may read it)
+                        cb_push_back(ACC, n);
+                        apushed += n;
+                    }
+                }
+#ifdef SE_LAT
+                if (pg >= SE_NGU) loff += pw; else
+#endif
+                hoff += pw / 2;
+                aoff += n;
+            }
+        }
+#else
         if (G > 1) cb_reserve_back(ACC, SE_ACCP);
         uint32_t apushed = 0;  // (ACC pages pushed this chunk - the pack offsets are relative to the write pointer)
         for (uint32_t k = 0; k < G; ++k) {
@@ -1202,7 +1322,9 @@ void kernel_main() {
                     tile_regs_wait();
                     pack_reconfig_data_format(ACC);
                     PACK((llk_pack_reconfig_l1_acc(k > 0 ? 1 : 0)));
+#ifndef SE_PROBE_NOACCPACK
                     for (uint32_t t = 0; t < n; ++t) pack_tile<true>(t, ACC, aoff + t - apushed);
+#endif
                     PACK((llk_pack_reconfig_l1_acc(0)));
                     tile_regs_release();
                     aoff += n;
@@ -1245,8 +1367,13 @@ void kernel_main() {
                 hoff += pw / 2;
             }
         }
+#endif
         cb_push_back(HOWN, MT * POMAX);
+#if SE_DT == 4
+        if (G * SPS > 1 && apushed < SE_ACCP) {  // (the region's tail: padding, so the next chunk starts at its start)
+#else
         if (G > 1 && apushed < SE_ACCP) {  // (the region's tail: padding, so the next chunk starts at its start)
+#endif
             cb_push_back(ACC, SE_ACCP - apushed);
             cb_wait_front(ACC, SE_ACCP - apushed);
             cb_pop_front(ACC, SE_ACCP - apushed);
@@ -1369,7 +1496,7 @@ void kernel_main() {
                 const uint32_t ocb = (mode & 4) ? SE_OUTF : SE_FINB;
                 pack_reconfig_data_format(ocb);
                 for (uint32_t i0 = 0, n = 0; i0 < cnt; i0 += n) {
-                    const uint32_t lim = (mode & 4) ? 8 - opos % 8 : 8;
+                    const uint32_t lim = (mode & 4) ? SE_DT - opos % SE_DT : SE_DT;
                     n = cnt - i0 < lim ? cnt - i0 : lim;
                     if (mode & 4) opos += n;
                     tile_regs_acquire();
@@ -1462,8 +1589,9 @@ void kernel_main() {
 def _probes():
     """(timing only) SE_PROBE=NOX,NOW: skip the x / W data multicasts (semaphores kept); NOGLU: no gate / up activation (h = the
     gate tiles); NOXR / NOWR: no x / W rounds at
-    all (no multicast, no handshake / credits: the CB pushed as if the round landed - the bottom-up build's stages); NOMATH: no matmuls; NOWL: no W
-    DRAM reads (16 B a block); NOXWAIT: the x rounds do not wait for a shard's arrival (gate / up at its own pace in the
+    all (no multicast, no handshake / credits: the CB pushed as if the round landed - the bottom-up build's stages); NOMATH: no matmuls;
+    NOACCPACK: gate / up's shard partials not packed (the full-sync pass boundary's pack cost); NOWL: no W
+    DRAM reads (16 B a block); NOWREAD: no W DRAM reads at all; NOXWAIT: the x rounds do not wait for a shard's arrival (gate / up at its own pace in the
     head: GU_ALONE at the head's shapes) - the results are wrong. GUWAIT (results right): gate / up's unpacker cycles
     waiting for x / W a core, SE-GUWX / SE-GUWW; GUSTEP (with GUWAIT): the first 48 steps' waits, one data marker each
     (unnamed in the csv: their source lines sit inside a macro argument)."""
@@ -1595,8 +1723,11 @@ class SeEngine3:
         self.POMAX = max(pairs)
         # (DEST tiles a pass: 8 fp32 with full sync; SE_HALFSYNC=1 (A/B, engine alone): 4 a half - the GLU and pack of
         # one pass overlap the next pass's matmuls)
-        self.DT = 4 if os.environ.get("SE_HALFSYNC") == "1" else 8
-        pwmax = (self.DT // MT) // 2 * 2
+        self.DT = dest_tiles()
+        # (gate / up / latent passes: up to 8 tiles; with half sync they go through DEST as row sub-blocks of <= 4 -
+        # a row at most 4 wide)
+        self.PGW = min(8 // MT, 4) if self.DT == 4 else 8 // MT
+        pwmax = self.PGW // 2 * 2
         self.NPG = max(-(-2 * p // pwmax) for p in pairs)
         self.wg = [_split_pad(2 * p, self.NPG, 2) for p in pairs]
         if os.environ.get("SE_PASSREV") == "1":  # (A/B: the narrow gate / up pass first - under the x load, which binds
@@ -1608,7 +1739,7 @@ class SeEngine3:
             assert min(lw) >= 1
             self.lw, self.l0 = lw, [sum(lw[:c]) for c in range(GX)]
             self.LWMAX = max(lw)
-            npl = -(-self.LWMAX // (self.DT // MT))
+            npl = -(-self.LWMAX // self.PGW)
             self.wg = [wg + _split(lw[c], npl, 1) for c, wg in enumerate(self.wg)]
             self.NPG += npl
         # (the latent's pages a chunk: its LAT block - with chunks its LAT + LATZ, chunk m's at m LATP: no zone reused
@@ -1658,7 +1789,7 @@ class SeEngine3:
         # dispatch prep: a unit = one row tile's run of x own (a K step: KB tiles) or of a latent block (LWMAX)
         self.prep = prep
         self.PFULL = self.LWMAX if latent else self.KB
-        self.PBCT = max(d for d in range(1, 9) if self.PFULL % d == 0)
+        self.PBCT = max(d for d in range(1, self.DT + 1) if self.PFULL % d == 0)
         tries = [(0, 1), (5, 1), (4, 1), (3, 1)] if self.NCH == 1 else [(0, 2), (5, 2), (5, 1), (4, 1), (3, 1)]
         for self.WRING, self.HSL in tries:  # (see wown_t)
             al = lambda v: (v + 63) // 64 * 64  # noqa: E731
@@ -1722,8 +1853,8 @@ class SeEngine3:
                 self.ETC = -(-router["ET"] // GX)
                 MTR = MT * self.NCH
                 # (DEST: ETC x a row group's tiles <= 8 - every chunk's rows at once, else a chunk's MT at a time)
-                self.RG = MTR if self.ETC * MTR <= 8 else MT
-                assert self.ETC * self.RG <= 8, "the router logits on the engine: ETC x MT rows in DEST"
+                self.RG = MTR if self.ETC * MTR <= self.DT else (MT if self.ETC * MT <= self.DT else 1)
+                assert self.ETC * self.RG <= self.DT, "the router logits on the engine: ETC x its row group in DEST"
                 KTO = router["KTO"]
                 # (K chunk: x / W_r^T rounds, two buffers - two rounds (KTO / 2) where the region fits past the
                 # words, else more, smaller rounds behind the receivers' acks: the largest that fits. The region may
@@ -2133,7 +2264,7 @@ class SeEngine3:
             NOUT,
         ]
         nd = "" if self.down else "#define SE_NODOWN\n"
-        nd += f"#define SE_HSL {self.HSL}\n#define SE_ACCP {self.acc_pages}u\n"
+        nd += f"#define SE_HSL {self.HSL}\n#define SE_ACCP {self.acc_pages}u\n#define SE_DT {self.DT}\n"
         if self.NCH > 1 and self.shards > 1:  # (chunk m = block m of every owner: the owners' rows stay contiguous)
             nd += f"#define GROW(m, lr) (((lr) / {self.CR // self.shards}) * {self.rows // 32 // self.shards} + (m) * {self.CR // self.shards} + (lr) % {self.CR // self.shards})\n"
         else:

@@ -2166,3 +2166,17 @@ Why: "engine still seems really slow". Bottom-up in the head (probes, per-step w
   (UnpackToDestFp32 - full fp32; a zero-tile add would go through SrcA / SrcB, ~19 bits) - 1 read-back a pass, not
   G - 1, and no per-shard copy_init / reconfig / matmul re-init. ACC shrinks to one slot a pass (no FIFO straddle
   room). K3 head traced 390.4 -> 384.0 us, PCC 0.99985; GLM-5.3-Flash 2x4 5120 head 966 -> 959.5, PCC 0.98686.
+- Half-sync DEST in the head (SE_HALFSYNC=1, opt-in): gate / up passes keep their width, each step's MT x pw block
+  goes through DEST as <= 4-tile row sub-blocks packed onto the ACC slot with L1 accumulation (the last step reloads
+  the sum, then the GLU on that half); router row groups, latent / prep blocks, the RS fin's add blocks and the RS
+  plan's pwmax follow dest_tiles(). K3 head traced 397.0 vs 384.0 full sync (PCC same): gate / up 225 vs 223, down /
+  RS 93 vs 90 (2-wide down passes). Not the default.
+- One-core microbench (zz_scratch_gu_mm.py, x / W resident): 34.2-34.8 cycles a tile at HiFi2 (93%) for 2x4 / 4x2 /
+  1x8 / 8x1 / 2x2 / 1x4, and the same with half sync + an L1-accumulated pack every step (2x4 as 1x4 halves 34.5,
+  2x2 34.8, 1x4 34.6). The LLK, the unpacker and the L1 accumulation are not the bound.
+- Gate / up build-up in the head (traced K3, KB 14: 64 x + 64 W rounds; median core): handshakes only (NOMATH, NOX,
+  NOW, NOWREAD, NOXWAIT) 66 us (49 without the GLU - ~0.77 us a step of protocol + CB / DEST / ACC bookkeeping); 16 B
+  W reads (NOWL) 69; + the W DRAM reads and shard waits 145; + payloads 182; + math 223. The W stream on NOC1 (~30 MB,
+  ~210 GB/s) is the largest piece; the x round is lock-step (a receiver signals ready for round j only on entering
+  receive(j), after round j - 1 landed) and the owner's loopback fence waits for all 11 acks. New probe NOWREAD (no W
+  DRAM reads at all).

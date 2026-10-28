@@ -141,7 +141,7 @@ class HeadSE3:
         and after it is placed again over the mover column (the L1 this head keeps - the gather's semaphores, mailboxes,
         the router's and the routing's buffers - then sits above the arena, not stranded below it, where a caller that
         frees the arena between calls has other programs' circular buffers)."""
-        from models.demos.moe_block.tt.se_engine3 import SeEngine3
+        from models.demos.moe_block.tt.se_engine3 import SeEngine3, dest_tiles
         from models.demos.moe_block.tt.x_gather3 import XGather3
 
         self.mesh = mesh_device
@@ -205,7 +205,7 @@ class HeadSE3:
                     NTH=H // 32,
                     scatter=rs_dim,
                     nv=num_links,
-                    pwmax=8 // MT,
+                    pwmax=dest_tiles() // MT,
                     compact=self._compact,
                 )
             try:
