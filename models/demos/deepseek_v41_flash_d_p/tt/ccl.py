@@ -68,6 +68,12 @@ def glue_fold() -> bool:
     return settings.get("GLUE_FOLD") == "on"
 
 
+def prepared() -> bool:
+    """GENERIC_OP_PREPARED=on (P.1, galaxy): fabric_reduce_scatter's cached descriptors dispatched as prepared programs
+    (fork option prepared=True; needs GLUE_FOLD's program_hash, off without it)."""
+    return settings.get("GENERIC_OP_PREPARED") == "on" and glue_fold()
+
+
 def fabric() -> bool:
     """The bring-up fabric forks (CCL_IMPL fabric or fabric_bf16)."""
     return settings.get("CCL_IMPL") in ("fabric", "fabric_bf16")
@@ -90,7 +96,13 @@ def _rs_bf16(mesh, t: ttnn.Tensor, dim: int) -> ttnn.Tensor:
     (bf16 output, as GLM-5.3's scatter_rows). Does not consume ``t``."""
     tb = t if t.dtype == ttnn.bfloat16 else ttnn.typecast(t, ttnn.bfloat16, memory_config=DRAM)
     out = ttnn.bringup.fabric_reduce_scatter(
-        tb, cluster_axis=TP_AXIS, num_links=rs_links(mesh), dim=dim, cache_descriptors=True, program_hash=glue_fold()
+        tb,
+        cluster_axis=TP_AXIS,
+        num_links=rs_links(mesh),
+        dim=dim,
+        cache_descriptors=True,
+        program_hash=glue_fold(),
+        prepared=prepared(),
     )
     if tb is not t:
         dealloc(tb)
@@ -259,6 +271,7 @@ def tp_sum(mesh, t: ttnn.Tensor, exact: bool = False, fp32: bool = True) -> ttnn
         exact_fp32_add=True,
         cache_descriptors=True,
         program_hash=glue_fold(),
+        prepared=prepared(),
     )
     out = all_gather(part, dim, TP_AXIS)
     dealloc(part)
@@ -284,6 +297,7 @@ def sum_rows(mesh, t: ttnn.Tensor) -> ttnn.Tensor | None:
         exact_fp32_add=True,
         cache_descriptors=True,
         program_hash=glue_fold(),
+        prepared=prepared(),
     )
 
 
@@ -306,6 +320,7 @@ def sum_cols(mesh, t: ttnn.Tensor, fp32: bool = True) -> ttnn.Tensor:
             exact_fp32_add=True,
             cache_descriptors=True,
             program_hash=glue_fold(),
+            prepared=prepared(),
         )
     tf = _exact_input(t)
     full = _gather_add(mesh, tf)

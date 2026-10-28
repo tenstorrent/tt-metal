@@ -88,3 +88,19 @@
 - Why: both kernels no longer compiled on the new base.
 - Needed by: rebase 2026-10-27
 - Files: `fabric_reduce_scatter.py`
+
+### prepared: cached descriptors dispatched as prepared programs (deepseek_v41_flash_d_p P.1, galaxy 8x4, 2026-10-28)
+- What: option `prepared=False` (needs `program_hash=True`). True = `_fast` keeps each cached descriptor with a
+  `ttnn.bringup.prepare_program(desc, [input, scratch, output])` in its LRU entry (dkey + `"prepared"`, an entry of its
+  own) and dispatches with `ttnn.bringup.run_prepared` instead of `ttnn.generic_op` (looked up on `ttnn.bringup` per
+  call, so the bring-up capture sees them, F201). False = unchanged (the same key tuple and generic_op call).
+- Why: the Galaxy model is host-dispatch bound; generic_op re-applies every runtime arg of 32 programs per call
+  (~760 us a call, 92 calls a chunk). Measured: warm chunk wall 692.7 (X.1) -> 594.3 ms with it on, chunk output
+  bit-identical.
+- Tests: `tests/unit/test_fabric_rs_prepared.py` (bit-identity vs generic_op, the same and fresh buffers, patched back,
+  determinism, refusal without program_hash): 9 passed on 8x4. Regression with the option off, 8x4, whole `tests/unit/`:
+  21 passed, 3 failed + 13 errors; the 3 failures reproduce on the unchanged file (2x2-sized full-mesh tests), the
+  errors are fabric router sync timeouts opening 2x4 sub-meshes on the Galaxy. `tests/test_fabric_reduce_scatter_ttnn.py`
+  passes `prepared` through when a case sets it.
+- Needed by: deepseek_v41_flash_d_p P.1 (tt/ccl.py, setting GENERIC_OP_PREPARED)
+- Files: fabric_reduce_scatter.py, tests/unit/test_fabric_rs_prepared.py, tests/test_fabric_reduce_scatter_ttnn.py

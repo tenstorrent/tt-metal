@@ -26,7 +26,7 @@ New op (no TTNN source on this tree; from `ttnn/ttnn/operations/examples/fabric_
 
 ## Options
 `fabric_reduce_scatter(input_tensor, *, cluster_axis=0, topology=ttnn.Topology.Linear, num_links=1, scheme="ring",
-output=None, placement="auto", dim=2, exact_fp32_add=False, cache_descriptors=False)`
+output=None, placement="auto", dim=2, exact_fp32_add=False, cache_descriptors=False, program_hash=False, prepared=False)`
 
 Realistic (use by default):
 - `cluster_axis=0`: 0 / 1 a mesh axis; `None` the whole mesh (snake; ring where it closes, e.g. 2 x 4).
@@ -41,6 +41,11 @@ Realistic (use by default):
 - `program_hash=False` (opt-in fork addition, CHANGELOG "program_hash"; needs `cache_descriptors`): the cached
   descriptors' programs carry a `custom_program_hash` (everything but the buffer addresses), so generic_op does not
   hash the inline kernel sources per call; the plan lookup memoized. Same programs and results. Realistic (host only).
+- `prepared=False` (opt-in fork addition, CHANGELOG "prepared"; needs `program_hash`): each cached descriptor is
+  prepared once (`ttnn.bringup.prepare_program`, kept in the same LRU entry under a `"prepared"` key) and dispatched
+  with `ttnn.bringup.run_prepared`, so a call re-applies no runtime argument (a descriptor only sees its own buffers;
+  when another descriptor of the same structure ran in between, only the input / scratch / output slots are patched).
+  Same programs, runtime arguments and results. Realistic (host only).
 - `prepare(mesh_device, *, cluster_axis=0, topology=Linear, num_links=1, scheme="ring", placement="auto")` (opt-in fork
   addition): builds and caches the plan and global semaphores (incl. the one-time `synchronize_device`); call at load
   time.
@@ -59,6 +64,10 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7):
   P.5 / P.6): q_a tp_sum [1024, 1792] 0.321 -> 0.106 ms, compressor [1024, 1024] 0.165 -> 0.065.
 - `program_hash`, 2x2 p150, [1024, 10240] bf16 dim 3, host per call (steady state, 300 calls): 0.179 -> 0.134 ms
   (generic_op alone 0.106 -> 0.083); in the DeepSeek-V4.1 model 0.305 -> 0.271 ms a call (P.19, CHANGELOG).
+- `prepared`, DeepSeek-V4.1 on the BH Galaxy 8x4 (92 calls a chunk, block MoE): warm chunk wall median 692.7 (X.1,
+  generic_op) -> 594.3 ms (P.1 quick A/B change-on side), chunk output bit-identical (pcc_chunk_out equal to the
+  last digit); the orchestrator's A/B gives the paired off side and device time. Unit: bit-identical to generic_op on
+  8x4, both axes, rows / cols, bf16 / exact (`tests/unit/test_fabric_rs_prepared.py`, 9 passed).
 - GLM-5.3, LoudBox 2x4 p150b, per chip [5120, 4096] bf16, 2 links, 8192 B payload: one full-mesh ring 427.7 us vs axis 0
   then 1 548.6 us (`models/demos/glm53_flash_d_p_lb/bringup/BREADCRUMBS.md`, "Full-mesh reduce-scatter as one ring";
   `tests/unit/test_fabric_rs_model_shapes.py`). ag MoE block's RS 0.35 ms (same file, "Whole model on the LoudBox").
@@ -81,6 +90,9 @@ Precision only: per-step checks or a measured end-to-end gap (rule 7):
 - `import ttnn.bringup.fabric_reduce_scatter_ttnn.fabric_reduce_scatter as m` yields the function, not the module (use
   `sys.modules`) (same file, P.5).
 - DeepSeek-V4.1's 2x2 calls have model cases in `tests/cases.py` (O.1).
+- On the BH Galaxy 8x4 (BRINGUP_TEST_MESH=8x4) the unit suite gives 3 failures that the unchanged file gives too
+  (`test_fabric_rs_full_mesh` bf16 32-chip error, `test_exact_full_mesh` rows / cols: sizes for a 2x2) and fabric
+  router sync errors on the 2x4 cases; P.1, CHANGELOG "prepared".
 
 ## How to call
 ```python
@@ -92,7 +104,7 @@ y = ttnn.bringup.fabric_reduce_scatter(t, cluster_axis=1, num_links=links, dim=3
 (`models/demos/deepseek_v41_flash_d_p/tt/ccl.py:sum_cols`). Tests: `tests/test_fabric_reduce_scatter_ttnn.py` +
 `tests/cases.py` (model cases); `tests/unit/test_fabric_reduce_scatter.py` (vs ttnn.reduce_scatter),
 `test_fabric_reduce_scatter_topologies.py`, `test_fabric_rs_exact_fp32.py`, `test_fabric_rs_model_shapes.py`,
-`test_fabric_rs_vs_ag.py`, `test_fabric_rs_program_hash.py`.
+`test_fabric_rs_vs_ag.py`, `test_fabric_rs_program_hash.py`, `test_fabric_rs_prepared.py`.
 
 ## Used by
 - glm53_flash_d_p: `tt/common.py:scatter_rows` (GLM_SCATTER_OP=fabric_ring default: one full-mesh Ring call;
@@ -101,7 +113,7 @@ y = ttnn.bringup.fabric_reduce_scatter(t, cluster_axis=1, num_links=links, dim=3
   LoudBox via glm53_flash_d_p_lb.
 - deepseek_v41_flash_d_p: `tt/ccl.py` (CCL_IMPL=fabric, P.5: sum_cols dim 3 + exact, tp_sum dim 2 + exact +
   fabric_all_gather, cache_descriptors, `prepare` at load; CCL_IMPL=fabric_bf16, P.6: default FPU add on bf16;
-  `program_hash=True` under GLUE_FOLD=on, P.19).
+  `program_hash=True` under GLUE_FOLD=on, P.19; `prepared=True` under GENERIC_OP_PREPARED=on, P.1 galaxy).
 
 ## History
 CHANGELOG.md
