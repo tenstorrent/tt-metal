@@ -25,10 +25,10 @@ from helpers.format_config import DataFormat
 from helpers.llk_params import PackerReluType, StochasticRounding
 from helpers.tile_constants import MAX_FACE_R_DIM
 
-#: Datums per row of the edge-mask geometry — each mask is 16 bits wide.
+# Datums per row of the edge-mask geometry, each mask is 16 bits wide.
 EDGE_MASK_WIDTH = 16
 
-#: Number of selectable edge masks the hardware holds.
+# Number of selectable edge masks the hardware holds.
 EDGE_MASK_COUNT = 4
 
 
@@ -37,13 +37,12 @@ class EdgeMaskMode(IntEnum):
 
     An ``IntEnum`` because these are hardware field values, so a caller holding
     a raw 0 or 1 still compares and packs correctly, while the names carry the
-    meaning. Matches how the other mode knobs in :mod:`helpers.llk_params` are
-    declared.
+    meaning.
     """
 
-    #: Masked datums are zeroed.
+    # Masked datums are zeroed.
     ZERO = 0
-    #: Masked datums saturate negative, so they lose a following max-reduce.
+    # Masked datums saturate negative, so they lose a following max-reduce.
     NEG_SATURATE = 1
 
 
@@ -55,7 +54,7 @@ class PackEdgeMask:
         masks: up to ``EDGE_MASK_COUNT`` masks of ``EDGE_MASK_WIDTH`` bits, the raw
             register values. Bit *j* covers datum *j* of a 16-datum row. Whether a
             set bit keeps or masks that datum depends on the architecture, so the
-            caller says which -- see ``masked_when_set`` on :meth:`keep`.
+            caller says which.
             Required, with no pass-everything default, because there isn't one:
             0xFFFF passes a row through on Wormhole/Blackhole but masks it on
             Quasar, whose pass-through is ``EDGE_MASK_ROW_DATUMS_NONE`` (0x0000).
@@ -72,10 +71,10 @@ class PackEdgeMask:
     masks: Sequence[int]
     select: Union[int, Sequence[int]] = 0
     mode: EdgeMaskMode = EdgeMaskMode.ZERO
-    #: Rows the selector pattern covers before it repeats, i.e. one tile's
-    #: worth. The packer reuses EDGE_MASK_SELECT_FACE0..3 for every tile, so a
-    #: multi-tile buffer applies the same pattern again rather than running off
-    #: the end of the list. ``None`` means the pattern is the whole list.
+    # Rows the selector pattern covers before it repeats, i.e. one tile's
+    # worth. The packer reuses EDGE_MASK_SELECT_FACE0..3 for every tile, so a
+    # multi-tile buffer applies the same pattern again rather than running off
+    # the end of the list. ``None`` means the pattern is the whole list.
     select_period: Optional[int] = None
 
     def __post_init__(self):
@@ -273,23 +272,16 @@ STOCH_RND_EFFECTS = {
 
 
 def is_deterministic(stoch_rnd: StochasticRounding) -> bool:
-    """Whether the golden can reproduce this rounding configuration exactly.
+    """Whether this golden can reproduce `stoch_rnd` bit-exactly.
 
-    Only ``No`` can be. Every other mode draws from a pseudo-random sequence
-    seeded on device, so the golden's answer is the round-to-nearest one, which
-    hardware matches only in expectation -- each datum may land one ULP either
-    side. Compare with PCC rather than exactly, as ``test_unpack_matmul`` does.
+    Only ``No``. The others round up or down at random from a device-seeded
+    sequence, so this model can only give the round-to-nearest answer, which
+    hardware matches in expectation rather than datum by datum. ``Fpu`` counts
+    too: there the randomness moves to the FPU's Dest write rather than the
+    packer, and is no more reproducible from here.
 
-    ``Fpu`` counts as nondeterministic even though the packer rounds normally
-    under it: the randomness simply lands a stage earlier, in the FPU's write
-    to Dest, which this golden's ``src_to_dest`` rounds to nearest. It only
-    *diverges* when that write actually has to round -- a 16-bit Dest, or an
-    accumulation long enough for the error to build -- which is why
-    ``matmul_sweep.skip_matmul_combination`` skips only the bf16 /
-    ``DestAccumulation.No`` / ``kt_dim >= 4`` corner rather than every ``Fpu``
-    variant. A yes/no answer has no room for that, so it answers conservatively
-    and leaves the narrower judgement to the caller: a test that knows its
-    Dest write is exact can use an exact compare under ``Fpu`` anyway.
+    Conservative by design -- an exact Dest write has nothing to randomise, so
+    a test that knows its own is exact can still compare exactly under ``Fpu``.
     """
     return stoch_rnd is StochasticRounding.No
 
