@@ -332,9 +332,22 @@ def test_demo(
     if on_quasar:
         # Quasar: bf16 only (no block floats), no trace, host sampling (on-device argmax is unchecked on Quasar),
         # and the op workarounds the e2e uses (tests/e2e/op_overrides.py). Its 2 GiB of DRAM holds a few layers
-        # only: pass --num_layers / --vision_depth and a small prompt (sample_prompts/demo_tiny.json).
+        # only, so unless given on the command line: 2 vision blocks, 2 text layers, the small prompt
+        # (256x256 image, 78 tokens) in one batch, and 4 generated tokens.
         from models.experimental.ops.quasar.qwen3_vl.tests.e2e.op_overrides import OverrideSession
 
+        def cli_or(name, default):
+            value = request.config.getoption(name)
+            return default if value is None else value
+
+        num_layers = cli_or("--num_layers", 2)
+        vision_depth = cli_or("--vision_depth", 2)
+        input_prompts = cli_or(
+            "--input_prompts", "models/experimental/ops/quasar/qwen3_vl/demo/sample_prompts/demo_tiny.json"
+        )
+        max_generated_tokens = cli_or("--max_generated_tokens", 4)
+        max_seq_len = cli_or("--max_seq_len", 256)
+        repeat_batches = cli_or("--repeat_batches", 1)
         enable_trace = False
         weight_dtype = ttnn.bfloat16
         optimizations = None  # QuasarModelArgs fills in its bf16 precision
