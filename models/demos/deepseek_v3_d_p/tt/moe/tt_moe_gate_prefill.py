@@ -398,6 +398,14 @@ class TtMoEGateConfig:
     n_limited_groups: int = DeepSeekV3Config.NUM_LIMITED_GROUPS  # = topk_groups
     route_scale: float = DeepSeekV3Config.ROUTE_SCALE  # PREVIOUS VALUE: 1.0 @ddjekic to check
     score_func: str = "sigmoid"
+    # Precision of the router logits handed to the device gate, matching the golden's (vLLM's) router.
+    # Either way the gate matmul and its TP all-reduce run in fp32, so the logits are rounded at most
+    # once, after the reduction -- never per TP partial:
+    #   "bfloat16": rounded once to bf16, as vLLM's default router does (bf16 gate linear with fp32
+    #               accumulation; DeepSeek-V3, Kimi-K2.x).
+    #   "float32":  kept in fp32, as vLLM does with moe_router_dtype="float32" (GLM-5.x, MiniMax).
+    # The correction bias is fp32 in every checkpoint and in vLLM, and the device gate keeps it so.
+    router_logits_dtype: str = "bfloat16"
 
     # grid_config
     core_grid: ttnn.CoreRangeSet = field(
@@ -444,6 +452,7 @@ class TtMoEGateConfig:
         # Merged under **overrides so an explicit kwarg still wins.
         model_defaults = {
             "score_func": getattr(model_cfg, "SCORE_FUNC", cls.score_func),
+            "router_logits_dtype": getattr(model_cfg, "GATE_ROUTER_LOGITS_DTYPE", cls.router_logits_dtype),
             # Serves as both the default depth and the ceiling an explicit sp_dim cannot exceed.
             "sp_dim": getattr(model_cfg, "MAX_GATE_SEQ_LEN_PER_CHIP", cls.sp_dim),
             "max_sp_dim": getattr(model_cfg, "MAX_GATE_SEQ_LEN_PER_CHIP", None),
@@ -534,13 +543,25 @@ class TtMoEGatePrefill(LightweightModule):
             cache_dump_mode=cache_dump_mode,
         )
 
-        # Cache bias unbroadcasted (required by moe_grouped_topk)
+        # Cache bias unbroadcasted (required by moe_grouped_topk). fp32, as the checkpoints store it and
+        # vLLM adds it. A cache built before that holds only a bf16 file: load it rather than miss, since a
+        # cache-only caller hands in a placeholder tensor that a miss would write out as the bias.
+        bias_dtype = ttnn.float32
+        bias_cache = _cache_name("e_score_correction_bias")
+        if bias_cache is not None:
+            tensorbin = "{}_dtype_{}_layout_TILE.tensorbin"
+            if (
+                not Path(tensorbin.format(bias_cache, "FLOAT32")).exists()
+                and Path(tensorbin.format(bias_cache, "BFLOAT16")).exists()
+            ):
+                logger.warning(f"[MoeGate] {bias_cache}: only a bf16 bias is cached; rebuild the cache for fp32")
+                bias_dtype = ttnn.bfloat16
         bias_tt = ttnn.as_tensor(
-            torch_bias,
+            torch_bias.float(),
             device=None,  # Always load to host first
-            dtype=ttnn.bfloat16,
+            dtype=bias_dtype,
             layout=ttnn.TILE_LAYOUT,
-            cache_file_name=_cache_name("e_score_correction_bias"),
+            cache_file_name=bias_cache,
             cache_dump_mode=cache_dump_mode,
         )
 
@@ -681,14 +702,15 @@ class TtMoEGatePrefill(LightweightModule):
         torch_weight_fallback = weights["torch_weight"]
         torch_bias_fallback = weights["torch_bias"]
 
-        # Broadcast bias for moe_grouped_topk kernel
-        bias_torch = ttnn.to_torch(bias_tt)
+        # Broadcast bias for moe_grouped_topk kernel, which takes it in fp32. The GPT router adds it to
+        # its bf16 logits with ttnn.add, so that mode keeps a bf16 copy.
+        bias_torch = ttnn.to_torch(bias_tt).float()
         del bias_tt
         bias_broadcasted = bias_torch.repeat(config.sp_dim).view(config.sp_dim, -1)
         self.bias = ttnn.from_torch(
             bias_broadcasted,
             device=mesh_device,
-            dtype=ttnn.bfloat16,
+            dtype=ttnn.float32 if fallback_mode == GateComputeMode.DEVICE_FP32 else ttnn.bfloat16,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.TILE_LAYOUT,
         )
@@ -885,12 +907,17 @@ class TtMoEGatePrefill(LightweightModule):
         if program_config is None:
             logger.warning(f"[MoeGate] No matmul program config for {config_key}, using TTNN default")
 
+        # The grouped and hash device gates take fp32 logits: the matmul already accumulates in fp32, so
+        # writing it out (and reducing the TP partials) in fp32 drops the per-partial bf16 rounding. The
+        # GPT router keeps its bf16 logits.
+        fp32_logits = self.fallback_mode in (GateComputeMode.DEVICE_FP32, GateComputeMode.HASH_DEVICE)
         logits = ttnn.matmul(
             x,
             self.weight,
             compute_kernel_config=self.config.mm_configs["COMPUTE_CONFIG"],
             program_config=program_config,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.float32 if fp32_logits else None,
         )
         tp_axis = self.config.ccl_config["TP_AXIS"]
         if self.mesh_device.shape[tp_axis] > 1:
@@ -910,6 +937,11 @@ class TtMoEGatePrefill(LightweightModule):
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 topology=self.config.ccl_config.get("TOPOLOGY", ttnn.Topology.Linear),
             )
+        if fp32_logits and self.config.router_logits_dtype == "bfloat16":
+            # One rounding of the reduced logits, where vLLM's bf16 router rounds them.
+            rounded = ttnn.typecast(logits, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+            ttnn.deallocate(logits)
+            logits = rounded
         return logits
 
     def _host_matmul(self, x: ttnn.Tensor) -> torch.Tensor:
@@ -1157,7 +1189,7 @@ class TtMoEGatePrefill(LightweightModule):
                 self.build_padding_config(actual_isl, padding_side, actual_start) if actual_isl is not None else None
             )
 
-        logits_f32 = ttnn.typecast(logits, ttnn.float32)
+        logits_f32 = logits if logits.dtype == ttnn.float32 else ttnn.typecast(logits, ttnn.float32)
         input_ids_dev = self._input_ids_to_device(input_ids)
         ttnn_scores, ttnn_top_k_experts_indices = ttnn.experimental.deepseek_prefill.moe_hash_gate(
             logits_f32,
@@ -1169,7 +1201,8 @@ class TtMoEGatePrefill(LightweightModule):
             score_func=self.config.score_func,
             padding_config=padding_config,
         )
-        ttnn.deallocate(logits_f32)
+        if logits_f32 is not logits:
+            ttnn.deallocate(logits_f32)
         ttnn.deallocate(input_ids_dev)
         # padding_config is memoized + owned by build_padding_config (reused across forwards/replays). Do
         # NOT deallocate it here even on the owns_padding_config path — freeing it breaks the next cache hit.

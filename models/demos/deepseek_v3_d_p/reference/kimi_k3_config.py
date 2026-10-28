@@ -60,6 +60,9 @@ class KimiK3Config:
     NUM_EXPERT_GROUPS = 1
     NUM_LIMITED_GROUPS = 1
     ROUTE_SCALE = 1.0  # routed_scaling_factor
+    # Router-logit precision the device gate matches (TtMoEGateConfig.router_logits_dtype):
+    # assumed (vLLM has no upstream Kimi-K3 model); confirm against the golden's router logits.
+    GATE_ROUTER_LOGITS_DTYPE = "bfloat16"
     ROUTED_EXPERT_HIDDEN_SIZE = 3584  # LatentMoE: routed experts run at a reduced hidden dim
     # Routed-expert hybrid split: experts with <= this many active tokens go to
     # moe_fused_swiglu, the rest to unified_routed_expert_moe. The two ops cross ONCE on the

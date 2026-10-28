@@ -84,6 +84,9 @@ class DeepSeekV4ProConfig:
     # Other
     RMS_NORM_EPS = 1e-6
     ROUTE_SCALE = 2.5
+    # Router-logit precision the device gate matches (TtMoEGateConfig.router_logits_dtype):
+    # assumed (vLLM has no upstream V4 model); confirm against the golden's router logits.
+    GATE_ROUTER_LOGITS_DTYPE = "bfloat16"
     ROPE_THETA = 10000
     ROUTED_EXPERT_ACTIVATION = "clamped_silu_glu"
     SHARED_EXPERT_ACTIVATION = "clamped_silu_glu"

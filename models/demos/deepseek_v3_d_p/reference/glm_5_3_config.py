@@ -81,6 +81,9 @@ class GLM53Config:
     # Other
     RMS_NORM_EPS = 1e-5
     ROUTE_SCALE = 2.5
+    # Router-logit precision the device gate matches (TtMoEGateConfig.router_logits_dtype):
+    # vLLM routes glm_moe_dsa in fp32.
+    GATE_ROUTER_LOGITS_DTYPE = "float32"
     ROPE_THETA = 8000000  # 5.2: supports 1M context
 
     @classmethod

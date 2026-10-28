@@ -111,6 +111,8 @@ class TtMiniMaxMoE(LightweightModule):
             route_scale=route_scale,
         )
         gate_config.ccl_config["NUM_LINKS"] = num_links
+        # fp32 router logits, as vLLM's MiniMax gate (see TopKRouter).
+        gate_config.router_logits_dtype = "float32"
 
         expert_dispatch_table = ExpertMapping.create_dispatch_table(
             num_routed_experts, dispatch_group_size, num_dispatch_groups

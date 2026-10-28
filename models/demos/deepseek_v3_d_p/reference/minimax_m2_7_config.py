@@ -32,6 +32,9 @@ class MiniMaxM27Config:
     NUM_LIMITED_GROUPS = 1
     # Reference route_tokens_to_experts sum-normalizes with no extra scaling.
     ROUTE_SCALE = 1.0
+    # Router-logit precision the device gate matches (TtMoEGateConfig.router_logits_dtype):
+    # vLLM's MiniMax gate is fp32 (params_dtype and out_dtype float32).
+    GATE_ROUTER_LOGITS_DTYPE = "float32"
 
     # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
     # selected-weight distribution rather than slot alignment; 256 experts, top-8 floors at

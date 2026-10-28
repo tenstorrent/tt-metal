@@ -44,6 +44,9 @@ class KimiK27Config:
     NUM_EXPERT_GROUPS = 1
     NUM_LIMITED_GROUPS = 1
     ROUTE_SCALE = 2.827
+    # Router-logit precision the device gate matches (TtMoEGateConfig.router_logits_dtype):
+    # vLLM serves it as deepseek_v3 with no moe_router_dtype: bf16 router logits.
+    GATE_ROUTER_LOGITS_DTYPE = "bfloat16"
 
     # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
     # selected-weight distribution rather than slot alignment; 384 experts, top-8 floors at

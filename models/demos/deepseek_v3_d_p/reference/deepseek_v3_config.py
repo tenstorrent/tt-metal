@@ -52,3 +52,6 @@ class DeepSeekV3Config:
     # Other
     RMS_NORM_EPS = 1e-6
     ROUTE_SCALE = 2.5
+    # Router-logit precision the device gate matches (TtMoEGateConfig.router_logits_dtype):
+    # vLLM's default router: bf16 gate linear, fp32 accumulation, fp32 bias.
+    GATE_ROUTER_LOGITS_DTYPE = "bfloat16"

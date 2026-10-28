@@ -28,6 +28,7 @@ diverged from the dispatch op's padding contract. A checkpoint without a correct
 bias through the same op rather than a different code path.
 """
 
+import os
 from collections import OrderedDict
 
 import torch
@@ -115,12 +116,20 @@ class TopKRouter:
         # Whether the checkpoint HAS a correction bias can't be known without the source, so the
         # cached file's existence is the signal.
         build_bias = score_bias_torch is not None or (not state_dict and cache_file_exists(bias_cache_file))
+        # fp32, as the checkpoint stores it and vLLM adds it: M3's biases sit in 11.27..11.65, where a bf16
+        # step (0.0625) is as wide as their whole spread. A cache built before that holds only a bf16 file;
+        # a cache-only load (no torch source) takes it rather than missing.
+        bias_dtype = ttnn.float32
+        if score_bias_torch is None and bias_cache_file is not None:
+            if not os.path.exists(f"{bias_cache_file}_dtype_FLOAT32_layout_TILE.tensorbin"):
+                logger.warning(f"[TopKRouter] {bias_cache_file}: only a bf16 bias is cached; rebuild for fp32")
+                bias_dtype = ttnn.bfloat16
         self.score_bias = (
             ttnn.as_tensor(
-                score_bias_torch,
+                score_bias_torch.float() if score_bias_torch is not None else None,
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
+                dtype=bias_dtype,
                 cache_file_name=bias_cache_file,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=(
@@ -139,7 +148,10 @@ class TopKRouter:
         # than a different code path: same selection semantics, still fp32, still one op.
         assert num_tokens, "TopKRouter needs num_tokens: the fused gate's bias is built at that width"
         if self.score_bias is not None:
-            self.score_bias_wide = ttnn.repeat(self.score_bias, ttnn.Shape([num_tokens, 1]))
+            score_bias = self.score_bias
+            if score_bias.dtype != ttnn.float32:
+                score_bias = ttnn.typecast(score_bias, ttnn.float32)
+            self.score_bias_wide = ttnn.repeat(score_bias, ttnn.Shape([num_tokens, 1]))
         else:
             logger.warning(
                 "[TopKRouter] no e_score_correction_bias for this checkpoint — routing on unbiased "
@@ -148,7 +160,7 @@ class TopKRouter:
             )
             self.score_bias_wide = ttnn.zeros(
                 [num_tokens, self.num_experts],
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.float32,
                 layout=ttnn.TILE_LAYOUT,
                 device=mesh_device,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -159,8 +171,14 @@ class TopKRouter:
         self.mesh_device = mesh_device
         self._padding_config_cache = OrderedDict()
 
-        # Custom compute configs can degrade routing quality; keep the default.
-        self.compute_config = None
+        # Router logits in fp32, as vLLM's MiniMax gate computes them (params_dtype and out_dtype float32):
+        # full-fidelity products accumulated and written out in fp32, so the fused gate sees no bf16 rounding.
+        self.compute_config = ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
 
     def build_padding_config(self, chunks):
         """Per-device ``[num_real_tokens, pad_side]`` for a forward over ``chunks`` (common/prefill/prefill_chunk.py), or
@@ -226,6 +244,7 @@ class TopKRouter:
             self.weight,  # no bias (MiniMax-M3)
             memory_config=mem_config,
             compute_kernel_config=self.compute_config,
+            dtype=ttnn.float32,
         )
 
         # ONE routing path. `actual_tokens != num_tokens` cannot happen on the prefill path — a ragged

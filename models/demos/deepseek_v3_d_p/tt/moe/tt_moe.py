@@ -222,6 +222,7 @@ class TtMoe(LightweightModule):
         shared_expert_situ_linear_beta: float | None = None,
         shared_expert_clamped_silu_glu_limit: float | None = None,
         gate_score_func: str | None = None,
+        gate_router_logits_dtype: str = "bfloat16",
         gate_hash_table: torch.Tensor | None = None,
         gate_fallback_mode: GateComputeMode = GateComputeMode.HOST_ALL,
         weight_cache_path: Optional[Path] = None,
@@ -277,6 +278,10 @@ class TtMoe(LightweightModule):
             gate_weights: Dict with "weight" and "e_score_correction_bias" keys for gate
             gate_score_func: Router affinity applied to the raw logits. None keeps
                 TtMoEGateConfig's default. Read by the grouped-topk gate and by both hash gates.
+            gate_router_logits_dtype: Precision of the router logits the device gate receives, matching
+                the golden's router: "bfloat16" (rounded once after an fp32 matmul and all-reduce, as
+                vLLM's default router) or "float32" (vLLM's moe_router_dtype="float32"). See
+                TtMoEGateConfig.router_logits_dtype.
             gate_hash_table: tid2eid table, (vocab_size, num_experts_per_tok). Required by the
                 HASH_HOST / HASH_DEVICE gate modes. Not cached -- the gate replicates it. TtMoe is
                 the lowest layer that takes it: no caller above supplies it yet, so those modes are
@@ -409,6 +414,7 @@ class TtMoe(LightweightModule):
         gate_config.ccl_config["TOPOLOGY"] = self.col_topology
         if gate_score_func is not None:
             gate_config.score_func = gate_score_func
+        gate_config.router_logits_dtype = gate_router_logits_dtype
 
         # Handle cache-only case (gate_weights=None)
         if gate_weights is not None:
