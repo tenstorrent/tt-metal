@@ -95,7 +95,7 @@ def test_vision_perf_traced(batch, bucket, cases, perf_encoder, eg2_snapshot):
     log_result("vision_host_prep_ms", host_ms, 0.0, batch=batch, bucket=bucket)
 
 
-@pytest.mark.parametrize("batch,bucket,cases", [PERF_CASES[0]], ids=["b1_s2560"])
+@pytest.mark.parametrize("batch,bucket,cases", PERF_CASES[:2], ids=["b1_s2560", "b4_s2560"])
 def test_tracy_vision_forward(batch, bucket, cases, eg2_device, tt_vision_model, eg2_snapshot):
     enc = VisionEncoder(tt_vision_model, eg2_device)
     x = enc.to_device(enc.prepare_inputs(*_inputs(eg2_snapshot, cases)))
