@@ -121,9 +121,9 @@ def matmul_qkv_rope(
     send_rt, recv_rt, compute_rt = [], [], []
     for xx in range(gx):
         for yy in range(gy):
-            m0, m1 = g.m_range(xx)
-            n0, n1 = g.n_range(yy)
-            rt = addrs + mg.in1_chain_args(device, g, xx, yy) + [m0, m1, n0, n1, g.defer_write_k_block(yy)]
+            m0, m1 = g.m_range(xx, yy)
+            n0, n1 = g.n_range(xx, yy)
+            rt = addrs + mg.in1_chain_args(device, g, xx, yy) + [m0, m1, n0, n1, g.defer_write_k_block(xx, yy)]
             (send_rt if xx == 0 else recv_rt).append(((xx, yy), rt))
             compute_rt.append(((xx, yy), [m0, m1, n0, n1]))
 
@@ -139,9 +139,9 @@ def matmul_qkv_rope(
             compiler_include_paths=[mg.KERNEL_ROOT],
         )
 
-    kernels.append(dm(send_ct, send_rt, mg.cores(0, 0, 0, gy - 1)))
+    kernels.append(dm(send_ct, send_rt, g.in1_sender_cores()))
     if gx > 1:
-        kernels.append(dm(recv_ct, recv_rt, mg.cores(1, 0, gx - 1, gy - 1)))
+        kernels.append(dm(recv_ct, recv_rt, g.in1_receiver_cores()))
     kernels.append(
         ttnn.KernelDescriptor(
             kernel_source=COMPUTE_KERNEL,

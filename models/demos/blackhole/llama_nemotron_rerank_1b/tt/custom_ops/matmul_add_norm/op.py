@@ -18,7 +18,7 @@ RMSNorm's row statistic needs all columns: each core computes the sum of squares
 sends those 32 values per tile-row to the other cores holding the same rows (one NOC write per
 peer per block, then a semaphore increment), and normalizes once all of them have arrived.
 
-Grid and blocking follow minimal_matmul's transposed layout (``_mm_grid``); one N block per core.
+Grid and blocking follow minimal_matmul's layouts (``_mm_grid``, either orientation); one N block per core.
 """
 
 import os
@@ -49,18 +49,21 @@ def make_matmul_add_norm_constants(gamma: torch.Tensor, device):
     return g, const(1.0 / width), const(1.0)
 
 
-def residual_layout(rows, width, grid):
+def residual_layout(rows, width, grid, transposed=True):
     """(rows, width covered by the core grid, shard rows, shard width) in elements for a [rows, width]
-    residual stream on ``grid``: rows split over x, columns over y, whole tiles per core."""
+    residual stream on ``grid``: rows split over x and columns over y (``transposed``, as
+    minimal_matmul's M > N grid) or rows over y and columns over x; whole tiles per core."""
     gx, gy = int(grid.x), int(grid.y)
+    n_m, n_n = (gx, gy) if transposed else (gy, gx)
     mt, nt = rows // TILE, width // TILE
-    mpc, npc = -(-mt // gx), -(-nt // gy)
-    return gx * mpc * TILE, gy * npc * TILE, mpc * TILE, npc * TILE
+    mpc, npc = -(-mt // n_m), -(-nt // n_n)
+    return n_m * mpc * TILE, n_n * npc * TILE, mpc * TILE, npc * TILE
 
 
-def residual_memory_config(rows, width, grid):
-    """L1 block sharding of the padded residual: shard (r, c) on core (x = r, y = c), i.e. column-major."""
-    _, _, sr, sc = residual_layout(rows, width, grid)
+def residual_memory_config(rows, width, grid, transposed=True):
+    """L1 block sharding of the residual: shard (r, c) on the core holding row block r and column
+    block c, i.e. column-major orientation for the transposed grid, row-major otherwise."""
+    _, _, sr, sc = residual_layout(rows, width, grid, transposed)
     gx, gy = int(grid.x), int(grid.y)
     return ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.BLOCK_SHARDED,
@@ -68,16 +71,16 @@ def residual_memory_config(rows, width, grid):
         ttnn.ShardSpec(
             ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(gx - 1, gy - 1))]),
             [sr, sc],
-            ttnn.ShardOrientation.COL_MAJOR,
+            ttnn.ShardOrientation.COL_MAJOR if transposed else ttnn.ShardOrientation.ROW_MAJOR,
         ),
     )
 
 
-def to_resident(x: ttnn.Tensor, grid) -> ttnn.Tensor:
+def to_resident(x: ttnn.Tensor, grid, transposed=True) -> ttnn.Tensor:
     """[1, 1, rows, width] (TILE, interleaved) -> the L1-resident residual stream. The shards are uneven
     (the last row / column of cores holds fewer real tiles); no padded copy is made."""
     rows, width = int(x.padded_shape[-2]), int(x.padded_shape[-1])
-    return ttnn.to_memory_config(x, residual_memory_config(rows, width, grid))
+    return ttnn.to_memory_config(x, residual_memory_config(rows, width, grid, transposed))
 
 
 def from_resident(res: ttnn.Tensor, rows, width) -> ttnn.Tensor:
@@ -103,6 +106,8 @@ def matmul_add_norm(
     skip_gamma=False,
     in0_depth=2,
     in1_depth=2,
+    full_sync=False,
+    transposed=True,
 ):
     """x ``[1, 1, M, K]``, w ``[K, N]``, residual: the resident stream from ``to_resident`` for [M, N]
     (updated in place to residual + x @ w). Returns y = rmsnorm(residual) * gamma ``[1, 1, M, N]``.
@@ -124,16 +129,16 @@ def matmul_add_norm(
     gxy = grid or device.compute_with_storage_grid_size()
     gx, gy = int(gxy.x), int(gxy.y)
     mb, kb, nb, sh, sw = block
-    g = mg.Grid(gx, gy, M, K, N, mb, kb, nb)
+    g = mg.Grid(gx, gy, M, K, N, mb, kb, nb, transposed=transposed)
     if g.N_blocks_per_core != 1:
         raise ValueError(f"N block {nb} must hold the core's {g.N_per_core} N tiles")
     if g.M_per_core % mb:
         raise ValueError(f"M block {mb} must divide the core's {g.M_per_core} rows")
-    if gy > 16:
+    if g.n_n > 16:
         raise ValueError("the exchange gives each core of a column one row of a 16-wide face: grid y <= 16")
-    if g.N_per_core * (gy - 1) >= N:
-        raise ValueError(f"grid y {gy} leaves the last core row without real columns (N {N} tiles)")
-    if mb % sh or nb % sw or sh * sw > (4 if fp32_acc else 8):
+    if g.N_per_core * (g.n_n - 1) >= N:
+        raise ValueError(f"{g.n_n} cores along N leave the last one without real columns (N {N} tiles)")
+    if mb % sh or nb % sw or sh * sw > (4 if fp32_acc else 8) * (2 if full_sync else 1):
         raise ValueError(f"bad subblock {sh}x{sw} for block {mb}x{nb}")
     spec = residual.memory_config().shard_spec
     if spec is None or list(spec.shape) != [g.M_per_core * TILE, g.N_per_core * TILE]:
@@ -169,9 +174,9 @@ def matmul_add_norm(
     kernels = mg.in0_kernels(device, g, x, y, kernel=in0_kernel)
 
     w_bytes = TILE_BYTES[w.dtype]
-    writer_prefix = [g.M, g.padded_M, g.K, g.K, g.N, gy * g.N_per_core, mb, kb, nb, g.M_blocks_per_core]
+    writer_prefix = [g.M, g.padded_M, g.K, g.K, g.N, g.n_n * g.N_per_core, mb, kb, nb, g.M_blocks_per_core]
     writer_prefix += [w_bytes, res_shard_tiles, TILE_BYTES[y_dtype], 0, 3, 4, 5]
-    tail = [gy, xchg_sem] + mg.accessor_args(w, gamma_tiles, inv_w_tile, one_tile, y)
+    tail = [g.n_n, xchg_sem] + mg.accessor_args(w, gamma_tiles, inv_w_tile, one_tile, y)
     send_ct = writer_prefix + [1] + tail
     recv_ct = writer_prefix + [0] + tail
     eps_bits = struct.unpack("<I", struct.pack("<f", eps))[0]
@@ -185,17 +190,24 @@ def matmul_add_norm(
         one_tile.buffer_address(),
         y.buffer_address(),
     ]
-    for xx in range(gx):
+
+    def core_at(m_idx, n_idx):
+        return (m_idx, n_idx) if transposed else (n_idx, m_idx)
+
+    for mi in range(g.n_m):
+        # Peers: the cores holding the other columns of these rows, in N-index order.
         peers = []
-        for yy in range(gy):
-            p = mg.physical(device, xx, yy)
+        for ni in range(g.n_n):
+            p = mg.physical(device, *core_at(mi, ni))
             peers += [p.x, p.y]
-        for yy in range(gy):
-            m0, m1 = g.m_range(xx)
-            n0, n1 = g.n_range(yy)
-            rt = addrs + mg.in1_chain_args(device, g, xx, yy) + [m0, m1, n0, n1, g.defer_write_k_block(yy), yy]
+        for ni in range(g.n_n):
+            xx, yy = core_at(mi, ni)
+            m0, m1 = g.m_range(xx, yy)
+            n0, n1 = g.n_range(xx, yy)
+            rt = addrs + mg.in1_chain_args(device, g, xx, yy)
+            rt += [m0, m1, n0, n1, g.defer_write_k_block(xx, yy), ni]
             rt += mg.in1_mcast_args(device, g, yy)
-            (send_rt if xx == 0 else recv_rt).append(((xx, yy), rt + peers))
+            (send_rt if mi == 0 else recv_rt).append(((xx, yy), rt + peers))
             compute_rt.append(((xx, yy), [m0, m1, n0, n1, min(n1, N) - n0]))
 
     def dm(ct, rt, core_set):
@@ -210,9 +222,9 @@ def matmul_add_norm(
             compiler_include_paths=[mg.KERNEL_ROOT],
         )
 
-    kernels.append(dm(send_ct, send_rt, mg.cores(0, 0, 0, gy - 1)))
-    if gx > 1:
-        kernels.append(dm(recv_ct, recv_rt, mg.cores(1, 0, gx - 1, gy - 1)))
+    kernels.append(dm(send_ct, send_rt, g.in1_sender_cores()))
+    if g.has_in1_receivers():
+        kernels.append(dm(recv_ct, recv_rt, g.in1_receiver_cores()))
     kernels.append(
         ttnn.KernelDescriptor(
             kernel_source=COMPUTE_KERNEL,
@@ -225,7 +237,7 @@ def matmul_add_norm(
                 math_fidelity=fidelity,
                 math_approx_mode=False,
                 fp32_dest_acc_en=fp32_acc,
-                dst_full_sync_en=False,
+                dst_full_sync_en=full_sync,
                 bfp8_pack_precise=True,
             ),
         )

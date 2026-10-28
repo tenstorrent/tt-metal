@@ -66,6 +66,8 @@ def main():
     ap.add_argument("--no-time-old", action="store_true")
     ap.add_argument("--bf16-acc", action="store_true")
     ap.add_argument("--in0-depth", type=int, default=2)
+    ap.add_argument("--full-sync", action="store_true")
+    ap.add_argument("--flat", action="store_true", help="non-transposed grid: M over y, N over x")
     ap.add_argument("--in1-depth", type=int, default=2)
     ap.add_argument("--defines", default="", help="comma-separated kernel defines for the fused op")
     args = ap.parse_args()
@@ -87,7 +89,7 @@ def main():
     tx = ttnn.from_torch(x, dtype=xdt, layout=ttnn.TILE_LAYOUT, device=device)
     tw = ttnn.from_torch(w, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
     tr = ttnn.from_torch(r, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    res = to_resident(tr, grid)
+    res = to_resident(tr, grid, transposed=not args.flat)
     consts = make_matmul_add_norm_constants(gamma, device)
     old_consts = make_add_norm_constants(gamma, EPS, device)
     ckc = ttnn.init_device_compute_kernel_config(
@@ -107,6 +109,8 @@ def main():
             fp32_acc=not args.bf16_acc,
             in0_depth=args.in0_depth,
             in1_depth=args.in1_depth,
+            full_sync=args.full_sync,
+            transposed=not args.flat,
         )
 
     def old():
