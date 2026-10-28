@@ -26,7 +26,7 @@ import ttnn
 
 from . import mm_configs as mm
 from .ccl import dealloc
-from .common import DRAM, TP_AXIS, act_dtype, cast, compute_config, dense_dtype
+from .common import DRAM, TP_AXIS, act_dtype, compute_config, dense_dtype, gemm_input
 from .layout import streams_cols_to_chip_major
 
 BLOCKS = 5  # hc_mult keys + one value
@@ -61,7 +61,7 @@ class TtEngramKv:
 
     def __call__(self, rows: ttnn.Tensor) -> ttnn.Tensor:
         assert rows.shape[-1] == self.k, (rows.shape, self.k)
-        xq = cast(rows, ttnn.bfloat16)
+        xq = gemm_input(rows)  # GEMM_INPUTS (FIX.7): bfloat8_b, the reference's fp8 act quant of the rows
         # BF16_ACTIVATIONS=on (P.20): written bf16 (the GPU code's fp8 GEMM output), the engram add reads it as is
         out = mm.linear(
             xq, self.weight, site="engram_kv", dtype=act_dtype(), compute_kernel_config=self.ckc, memory_config=DRAM
