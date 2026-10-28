@@ -23,6 +23,7 @@
 #include "impl/allocation/raw_allocation_impl.hpp"
 #include "impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include "impl/kernels/kernel.hpp"
+#include "impl/metal2_host_api/raw_allocation_support.hpp"
 #include "impl/metal2_host_api/tensor_binding_crtas.hpp"
 #include "impl/program/program_impl.hpp"
 
@@ -244,19 +245,19 @@ void BindRawAllocationArgs(
         return;
     }
     for (const auto& binding : program.get_dfb_borrowed_bindings()) {
-        const auto* allocation_name = std::get_if<RawAllocationParamName>(&binding.source);
-        if (allocation_name == nullptr) {
+        const auto* source = std::get_if<RawAllocationSource>(&binding.source);
+        if (source == nullptr) {
             continue;
         }
-        if (const auto argument = args.get(*allocation_name)) {
+        if (const auto argument = args.get(source->allocation)) {
             const auto base = argument->get().impl().address();
-            const uint64_t address = uint64_t{base} + binding.offset;
+            const uint64_t address = uint64_t{base} + source->offset;
             TT_FATAL(
                 address <= std::numeric_limits<uint32_t>::max(),
                 "Borrowed RawAllocation address {} for DFB id {} (RawAllocationParameter '{}') exceeds uint32_t max.",
                 address,
                 binding.dfb_id,
-                *allocation_name);
+                source->allocation);
             program.get_dataflow_buffer(binding.dfb_id)->set_borrowed_memory_base_addr(static_cast<uint32_t>(address));
         }
     }
@@ -333,20 +334,13 @@ void ValidateDFBRunOverrides(const detail::ProgramImpl& program_impl, const Prog
         if (binding == bindings.end()) {
             continue;
         }
-        if (const auto* allocation_name = std::get_if<RawAllocationParamName>(&binding->source)) {
-            const auto& properties = program_impl.get_raw_allocation_parameters().at(allocation_name->get()).properties;
-            const auto per_bank_size = std::visit([](const auto& props) { return props.per_bank_size; }, properties);
+        if (const auto* source = std::get_if<RawAllocationSource>(&binding->source)) {
+            const auto& properties =
+                program_impl.get_raw_allocation_parameters().at(source->allocation.get()).properties;
             const auto& config = program_impl.get_dataflow_buffer(binding->dfb_id)->config;
             const uint64_t size_per_node = uint64_t{dfb_params.entry_size.value_or(config.entry_size)} *
                                            dfb_params.num_entries.value_or(config.num_entries);
-            TT_FATAL(
-                uint64_t{binding->offset} + size_per_node <= per_bank_size,
-                "DFB '{}' borrowing offset {} + size_per_node {} exceeds RawAllocationParameter '{}' per_bank_size {}.",
-                dfb_spec_name,
-                binding->offset,
-                size_per_node,
-                *allocation_name,
-                per_bank_size);
+            ValidateRawAllocationCapacity(*source, properties, fmt::format("DFB '{}'", dfb_spec_name), size_per_node);
         }
         // A partial tensor-backed resize needs its tensor to repeat the per-bank size check.
         if (const auto* tensor_name = std::get_if<TensorParamName>(&binding->source)) {

@@ -276,10 +276,15 @@ DataflowBufferHandles RegisterDataflowBuffers(
         dfb_name_to_is_relay[dfb_name] = created_config.is_relay;
 
         if (dfb_spec.borrowed_from.has_value()) {
-            program_impl.register_dfb_borrowed_binding(
-                {.dfb_id = dfb_id,
-                 .source = *dfb_spec.borrowed_from,
-                 .offset = dfb_spec.advanced_options.borrowed_memory_offset});
+            detail::ProgramImpl::DFBBorrowedBinding binding{.dfb_id = dfb_id};
+            if (const auto* tensor_name = std::get_if<TensorParamName>(&*dfb_spec.borrowed_from)) {
+                binding.source = *tensor_name;
+            } else {
+                binding.source = RawAllocationSource{
+                    .allocation = std::get<RawAllocationParamName>(*dfb_spec.borrowed_from),
+                    .offset = dfb_spec.advanced_options.borrowed_memory_offset};
+            }
+            program_impl.register_dfb_borrowed_binding(std::move(binding));
         }
     }
     return DataflowBufferHandles{

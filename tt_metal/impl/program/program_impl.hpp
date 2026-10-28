@@ -20,6 +20,7 @@
 #include "program_device_map.hpp"          // ProgramTransferInfo
 #include "program_allocation_support.hpp"
 #include "impl/buffers/semaphore.hpp"
+#include "impl/metal2_host_api/raw_allocation_support.hpp"
 #include "tt-metalium/sub_device_types.hpp"
 #include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
 #include "tt-metalium/experimental/metal2_host_api/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
@@ -656,10 +657,8 @@ public:
 
     // Identifies the memory source and byte offset of a borrowed DFB.
     struct DFBBorrowedBinding {
-        // invariant: The offset is zero when the source is a tensor parameter.
         uint32_t dfb_id;
-        std::variant<experimental::TensorParamName, experimental::RawAllocationParamName> source;
-        uint32_t offset = 0;
+        std::variant<experimental::TensorParamName, RawAllocationSource> source;
     };
 
     // Register the memory source and byte offset of a borrowed DFB.

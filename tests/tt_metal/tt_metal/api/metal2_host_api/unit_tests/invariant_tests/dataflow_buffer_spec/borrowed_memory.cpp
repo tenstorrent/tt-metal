@@ -148,7 +148,6 @@ TEST_F(ProgramSpecTestQuasar, RawAllocationDFBExactFitAtZeroOffset) {
             },
     }};
 
-    // Exercise validation without entering the unfinished raw-allocation construction path.
     EXPECT_NO_THROW({
         const auto collected = CollectSpecData(spec);
         ValidateProgramSpec(spec, collected, mesh_device_->impl().metal_context(), *mesh_device_->allocator());
@@ -171,7 +170,6 @@ TEST_F(ProgramSpecTestQuasar, RawAllocationDFBExactFitAtNonzeroOffset) {
             },
     }};
 
-    // Exercise validation without entering the unfinished raw-allocation construction path.
     EXPECT_NO_THROW({
         const auto collected = CollectSpecData(spec);
         ValidateProgramSpec(spec, collected, mesh_device_->impl().metal_context(), *mesh_device_->allocator());
@@ -194,7 +192,6 @@ TEST_F(ProgramSpecTestQuasar, RawAllocationDFBExtraAllocationNodes) {
             },
     }};
 
-    // Exercise validation without entering the unfinished raw-allocation construction path.
     EXPECT_NO_THROW({
         const auto collected = CollectSpecData(spec);
         ValidateProgramSpec(spec, collected, mesh_device_->impl().metal_context(), *mesh_device_->allocator());
@@ -309,7 +306,6 @@ TEST_F(ProgramSpecTestQuasar, RawAllocationDFBAllBankLockstep) {
         .properties = LockstepAllocationProperties{.per_bank_size = 2 * alignment},
     }};
 
-    // Exercise validation without entering the unfinished raw-allocation construction path.
     EXPECT_NO_THROW({
         const auto collected = CollectSpecData(spec);
         ValidateProgramSpec(spec, collected, mesh_device_->impl().metal_context(), *mesh_device_->allocator());

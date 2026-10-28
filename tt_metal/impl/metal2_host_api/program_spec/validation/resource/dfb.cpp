@@ -48,9 +48,7 @@ namespace {
 // Occupied nodes are the union of the producer and consumer kernels' placements. Capacity is
 // checked per node against the requested extent, without counting allocator alignment padding;
 // the entry-size product and offset sum use 64-bit arithmetic to avoid 32-bit overflow.
-// Raw-allocation parameter properties are validated before borrowers. Passing these spec-time
-// checks does not yet enable raw-allocation borrowing: construction and runtime attachment still
-// need to be wired up.
+// Raw-allocation parameter properties are validated before borrowers.
 void ValidateBorrowedMemory(
     const DataflowBufferSpec& dfb,
     const CollectedSpecData& collected,
@@ -64,11 +62,10 @@ void ValidateBorrowedMemory(
     }
     if (const auto* allocation_name = std::get_if<RawAllocationParamName>(&*dfb.borrowed_from)) {
         ValidateRawAllocationBorrowing(
-            *allocation_name,
+            RawAllocationSource{.allocation = *allocation_name, .offset = offset},
             collected,
             fmt::format("DFB '{}'", dfb.unique_id),
             collected.dfb_node_set.at(dfb.unique_id),
-            offset,
             uint64_t{dfb.entry_size} * dfb.num_entries,
             l1_alignment);
         return;
