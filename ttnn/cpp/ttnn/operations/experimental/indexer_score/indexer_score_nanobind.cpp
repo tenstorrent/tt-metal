@@ -189,9 +189,9 @@ void bind_indexer_score(nb::module_& mod) {
                 unchanged. Needs block_cyclic_chunk_local divisible by tp with a tile-aligned
                 quotient.
 
-        sub_core_grids: one rectangle of worker cores the banded schedule is planned over (default: the
-            whole compute grid), e.g. a compute sub-device while a collective runs on the other cores. The
-            scores do not depend on it.
+            sub_core_grids: one rectangle of worker cores the banded schedule is planned
+                over (default: the whole compute grid), e.g. a compute sub-device while a
+                collective runs on the other cores. The scores do not depend on it.
 
         Returns: score [B, num_groups, Sq, T_out] bf16 row-major (T_out = T, or
             T/block_size when block-max-pooling); future/pad columns/blocks -inf.
