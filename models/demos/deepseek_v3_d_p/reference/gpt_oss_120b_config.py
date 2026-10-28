@@ -41,10 +41,12 @@ class GptOss120BConfig:
     # MoE configuration
     NUM_ROUTED_EXPERTS = 128
     NUM_EXPERTS_PER_TOKEN = 4
-    # Divisor on combine_fabric2d's forwarding region -- see DeepSeekV3Config.COMBINE_FWD_REDUCTION for
-    # what it trades. Held at 8: top-4 over a 2880 embedding makes this the shallowest forwarding region
-    # of the eight at 10 MB a chip, and halving it again costs 14.8% on hot_expert traffic to save 5 MB.
-    COMBINE_FWD_REDUCTION = 8
+    # Pages one of combine_fabric2d's forwarding channels holds. The region is split by movement class,
+    # so no depth can deadlock the ring -- this trades DRAM against throughput and nothing else. A channel
+    # is a pipeline buffer, so the figure is a page count rather than anything scaled from the sequence
+    # length. Carried over from what the reduction factor it replaces produced at ring8 / 5k; not yet
+    # swept on its own axis.
+    COMBINE_FWD_VC_PAGES = 67
     # Pages one of dispatch_fabric2d's forwarding channels holds. The region is split by movement class,
     # so no depth can deadlock the ring -- this trades DRAM against throughput and nothing else. A channel
     # is a pipeline buffer, so the figure is a page count rather than anything scaled from the sequence
