@@ -265,7 +265,8 @@ ttnn::experimental::prim::AllReduceAsyncDeviceOperation::tensor_return_value_t a
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama,
-    bool fp32_dest_acc) {
+    bool fp32_dest_acc,
+    bool live_rows_packing) {
     using OperationType = ttnn::experimental::prim::AllReduceAsyncDeviceOperation;
     const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
@@ -284,7 +285,8 @@ ttnn::experimental::prim::AllReduceAsyncDeviceOperation::tensor_return_value_t a
         use_optimal_ccl_for_llama,
         cluster_axis,
         &mesh_device,
-        fp32_dest_acc);
+        fp32_dest_acc,
+        live_rows_packing);
     auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor, .buffer_tensor = buffer_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
