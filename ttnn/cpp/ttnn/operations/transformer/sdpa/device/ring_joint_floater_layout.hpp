@@ -84,7 +84,7 @@ struct FloaterWorkload {
     uint32_t fidelity_multiplier;  // of the QK^T / PV matmuls: LoFi 1 to HiFi4 4
     double bytes_per_token;        // one token's K row and V heads on the ring
     uint32_t cores;                // SDPA compute cores
-    uint32_t ring_links;           // links into a device: both directions
+    uint32_t ring_links;           // links into the busiest device: both directions on a ring, one on a line
 };
 
 // Floaters add compute (20 idle cores beside the 96 working ones) at a fixed cost per piece (K expanded again, the
@@ -102,8 +102,9 @@ inline double floater_compute_to_transfer(const FloaterWorkload& w) {
 }
 
 // The floaters run from this floater_compute_to_transfer up. Measured on the Galaxy 8x4 (Kimi K3 and K2.7, 5k and 2k
-// chunks, LoFi to HiFi4): every shape at 0.45 or below runs slower with floaters or no faster, every shape at 0.51 or
-// above 12-16% faster at 512k cached tokens. A shape near the boundary gains or loses little either way.
+// chunks, LoFi to HiFi4; torus and unwrapped line): every shape at 0.45 or below runs slower with floaters or no
+// faster, every shape at 0.51 or above 12-16% faster at 512k cached tokens. A shape near the boundary gains or loses
+// little either way.
 inline constexpr double kFloaterMinComputeToTransfer = 0.48;
 
 // Values of a schedule in SDPAProgramConfig::floater_schedule's order: iters, fracs, donate_tail, merge_after.

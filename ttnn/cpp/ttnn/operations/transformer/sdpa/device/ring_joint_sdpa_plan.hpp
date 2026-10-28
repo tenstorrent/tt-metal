@@ -80,6 +80,10 @@ std::string single_q_chunk_blocker(
 // payload size (its bank-owned schedule).
 bool slice_readiness_enabled(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args);
 
+// The plain chunked dense gather slice_readiness_enabled builds on, on any topology with more than two devices: what
+// the K split's bands and the floaters' pieces are cut from.
+bool plain_gathered_slices(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args);
+
 // ring_joint::floater_compute_to_transfer of this call: its QK^T / PV and K expansion per arriving K/V token at the
 // matmuls' fidelity, over that token's transfer on the ring. Needs expanded K and a program config.
 double floater_compute_to_transfer(

@@ -262,7 +262,7 @@ void kernel_main() {
     static_assert(!(ksplit_enabled && seg_accum_enabled));
     // The floaters' arg layout and merge points assume these (host: the floaters gate).
     static_assert(!ring_interleave || (ksplit_enabled && single_q));
-    static_assert(!floaters || (ring_interleave && k_expand));
+    static_assert(!floaters || (ksplit_enabled && single_q && k_expand));
     static_assert(
         !(ksplit_enabled || seg_accum_enabled) ||
         (!rotated_q_split_enabled && !(has_sliding_window && seg_accum_enabled) && use_streaming_compute));

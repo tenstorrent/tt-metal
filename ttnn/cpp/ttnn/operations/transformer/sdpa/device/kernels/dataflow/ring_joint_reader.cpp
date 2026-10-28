@@ -559,7 +559,7 @@ void kernel_main() {
     static_assert(!ksplit_enabled || !rotated_q_split_enabled);
     // The floaters' arg layout and merge points assume these (host: the floaters gate).
     static_assert(!ring_interleave || (ksplit_enabled && slice_readiness));
-    static_assert(!floaters || (ring_interleave && k_expand));
+    static_assert(!floaters || (ksplit_enabled && k_expand));
     [[maybe_unused]] const uint32_t ksplit_idx = ksplit_enabled ? get_arg_val<uint32_t>(rotated_args_base) : 0;
     // Expanded K: [W_UK address, rank, peer physical x, peer physical y] are the last runtime args, after the K-split
     // band. Head pairs never run the rotated split (the host refuses it).

@@ -230,27 +230,18 @@ TEST(RingJointFloaterLayout, HoldsTheProtocolsInvariants) {
 // Kimi K3 / K2.7 MLA on the Galaxy 8x4: expanded K at 5k chunks (640 Q rows per device) and 2k (256), every fidelity.
 // The floaters were measured slower or no faster than none at 512k cached tokens on exactly the shapes marked false.
 TEST(RingJointFloaterLayout, ComputeToTransferMatchesTheGalaxyMeasurements) {
+    // ring_links 4: the torus (two links each way); 2: an unwrapped line, whose end devices receive from one side.
     struct Measured {
-        uint32_t heads, q_rows, fidelity_multiplier;
+        uint32_t heads, q_rows, fidelity_multiplier, ring_links;
         bool floaters_faster;
     };
-    const std::array<Measured, 16> measured = {{
-        {24, 640, 1, false},
-        {24, 640, 2, true},
-        {24, 640, 3, true},
-        {24, 640, 4, true},
-        {24, 256, 1, false},
-        {24, 256, 2, false},
-        {24, 256, 3, false},
-        {24, 256, 4, true},
-        {16, 640, 1, false},
-        {16, 640, 2, true},
-        {16, 640, 3, true},
-        {16, 640, 4, true},
-        {16, 256, 1, false},
-        {16, 256, 2, false},
-        {16, 256, 3, false},
-        {16, 256, 4, true},
+    const std::array<Measured, 22> measured = {{
+        {24, 640, 1, 4, false}, {24, 640, 2, 4, true},  {24, 640, 3, 4, true},  {24, 640, 4, 4, true},
+        {24, 256, 1, 4, false}, {24, 256, 2, 4, false}, {24, 256, 3, 4, false}, {24, 256, 4, 4, true},
+        {16, 640, 1, 4, false}, {16, 640, 2, 4, true},  {16, 640, 3, 4, true},  {16, 640, 4, 4, true},
+        {16, 256, 1, 4, false}, {16, 256, 2, 4, false}, {16, 256, 3, 4, false}, {16, 256, 4, 4, true},
+        {24, 640, 2, 2, false}, {24, 640, 4, 2, true},  {24, 256, 4, 2, false}, {16, 640, 2, 2, false},
+        {16, 640, 4, 2, true},  {16, 256, 4, 2, false},
     }};
     constexpr double kBfp8BytesPerElement = 1088.0 / 1024.0;
     for (const Measured& m : measured) {
@@ -264,11 +255,11 @@ TEST(RingJointFloaterLayout, ComputeToTransferMatchesTheGalaxyMeasurements) {
             .fidelity_multiplier = m.fidelity_multiplier,
             .bytes_per_token = (576.0 + m.heads * 128.0) * kBfp8BytesPerElement,
             .cores = kGridX * kGridY,
-            .ring_links = 4,
+            .ring_links = m.ring_links,
         });
         EXPECT_EQ(ratio >= kFloaterMinComputeToTransfer, m.floaters_faster)
             << "heads=" << m.heads << " q_rows=" << m.q_rows << " fidelity x" << m.fidelity_multiplier
-            << " ratio=" << ratio;
+            << " ring_links=" << m.ring_links << " ratio=" << ratio;
     }
 }
 

@@ -3224,12 +3224,18 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const bool single_q = !use_rotated_q_split && std::all_of(core_work.begin(), core_work.end(), [](const auto& work) {
         return work.global_q_count <= 1;
     });
-    // The K split's own gate (streaming, no segmented accumulation, one unit per core) and slice readiness's (no
-    // sliding window, no grouped sources) give the rest; floaters imply both terms.
+    // The K split's own gate (streaming, no segmented accumulation, one unit per core) and the plain gather's (no
+    // sliding window, no grouped sources; ring_joint_plan::plain_gathered_slices) give the rest: interleaving and the
+    // floaters both need the two.
     const bool ring_interleave = slice_readiness && ksplit_count > 1;
-    TT_ASSERT(!ring_interleave || (single_q && grouped_sources == 1 && !seg_accum && use_streaming_compute));
-    // A home merges its first floater piece before the step after its merge iteration's last (in interleaved order).
+    TT_ASSERT(
+        !(ring_interleave || floaters) || (single_q && grouped_sources == 1 && !seg_accum && use_streaming_compute));
+    // A home merges its first floater piece before the step after its merge iteration's last (in interleaved order
+    // when the ring interleaves, else one step per ring iteration).
     auto merge_step_after = [&](uint32_t iter) {
+        if (!ring_interleave) {
+            return iter + 1;
+        }
         uint32_t last = 0;
         for (uint32_t step = 0; step < ring_joint::interleaved_step_count(ring_size); ++step) {
             last = ring_joint::interleaved_step(step, ring_size).ring_iter == iter ? step : last;

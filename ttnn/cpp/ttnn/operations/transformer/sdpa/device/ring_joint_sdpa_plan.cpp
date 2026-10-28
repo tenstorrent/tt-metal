@@ -202,19 +202,23 @@ KSplitShape derive_ksplit(const RingJointSDPAParams& args, const RingJointSDPAIn
     return shape;
 }
 
-bool slice_readiness_enabled(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
+bool plain_gathered_slices(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     const auto& ag = args.all_gather_operation_attributes;
     const RingJointInputParams joint = resolve_ring_joint_input_params(args, tensor_args);
     const Tensor& input_k = tensor_args.input_k;
     const Tensor& input_v = tensor_args.input_v.has_value() ? tensor_args.input_v.value() : input_k;
-    if (!(ag.topology == ttnn::ccl::Topology::Ring && ag.ring_size > 2 && kernel_chunked(args, tensor_args) &&
-          !args.has_sliding_window() && !joint.joint_is_sharded && joint.L == 0 && !args.is_balanced &&
-          args.kv_stripe_split == 1 && !tensor_args.v_shares_k_buffer() &&
-          input_v.padded_shape()[2] == input_k.padded_shape()[2])) {
+    if (!(ag.ring_size > 2 && kernel_chunked(args, tensor_args) && !args.has_sliding_window() &&
+          !joint.joint_is_sharded && joint.L == 0 && !args.is_balanced && args.kv_stripe_split == 1 &&
+          !tensor_args.v_shares_k_buffer() && input_v.padded_shape()[2] == input_k.padded_shape()[2])) {
         return false;
     }
     const auto [inputs, outputs] = fused_gather_kv_tensors(tensor_args);
     return ring_attention_all_gather_async_detail::uses_output_bank_owned_schedule(inputs, outputs, ag.dim);
+}
+
+bool slice_readiness_enabled(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
+    return args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring &&
+           plain_gathered_slices(args, tensor_args);
 }
 
 double floater_compute_to_transfer(
@@ -247,7 +251,9 @@ double floater_compute_to_transfer(
             static_cast<uint32_t>(tt::tt_metal::operation::OpPerformanceModel::fidelity_multiplier(fidelity)),
         .bytes_per_token = bytes_per_token,
         .cores = static_cast<uint32_t>(ksplit.grid.x * ksplit.grid.y),
-        .ring_links = 2 * args.all_gather_operation_attributes.num_links,
+        // A line's end devices receive every slice from one side.
+        .ring_links = (args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring ? 2u : 1u) *
+                      args.all_gather_operation_attributes.num_links,
     });
 }
 
@@ -291,8 +297,8 @@ std::optional<ring_joint::FloaterSchedule> floater_eligibility(
     if (!schedule.has_value()) {
         return std::nullopt;
     }
-    if (!slice_readiness_enabled(args, tensor_args)) {
-        refuse("floaters merge at interleaved ring steps, which need the gather's slice readiness");
+    if (!plain_gathered_slices(args, tensor_args)) {
+        refuse("floaters cut their pieces from the plain chunked dense gather's slices");
         return std::nullopt;
     }
     return schedule;
