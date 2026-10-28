@@ -530,6 +530,62 @@ def packed_verify_kv_groups(h_local, nkv_local, P):
     return [(g, g * rows_per_group, (g + 1) * rows_per_group) for g in range(nkv_local)]
 
 
+def serving_kv_group_slots(layer_types):
+    """vLLM's hybrid KV-cache grouping as one slot index per layer.
+
+    ``_get_kv_cache_groups_uniform_page_size`` buckets layers by type, takes
+    ``group_size = min(count per type)`` and gives group ``g`` of a type the
+    layers ``layers_of_type[g::num_groups]``; every group owns its own block
+    table with DISJOINT block ids. The 12B's (5 sliding, 1 full) x 8 therefore
+    has five sliding groups (layers i, i+6, i+12, ...) and one full group, and
+    a per-layer-TYPE table would hand 32 of the 40 sliding layers another
+    group's blocks. One slot per (type, group), numbered by first appearance
+    of the type then by group; a type whose count is not a multiple of the
+    group size gets one slot per layer (always correct, only bigger). One
+    uniform type is one slot. Returns ``(slot_per_layer, n_slots)``."""
+    types = list(layer_types)
+    if not types:
+        return [], 0
+    order = []
+    for lt in types:
+        if lt not in order:
+            order.append(lt)
+    counts = {lt: types.count(lt) for lt in order}
+    group_size = min(counts.values())
+    slots = [None] * len(types)
+    base = 0
+    for lt in order:
+        idxs = [i for i, t in enumerate(types) if t == lt]
+        if counts[lt] % group_size == 0:
+            num_groups = counts[lt] // group_size
+            for o, i in enumerate(idxs):
+                slots[i] = base + (o % num_groups)
+            base += num_groups
+        else:
+            for o, i in enumerate(idxs):
+                slots[i] = base + o
+            base += counts[lt]
+    return slots, base
+
+
+def serving_check_group_tables(installed, slots):
+    """Raise unless every layer of a KV group slot carries the same installed table (or every layer of the slot
+    has none): the serving records keep one table per slot, which is only lossless under that invariant."""
+    by_slot = {}
+    for i, (pt, slot) in enumerate(zip(installed, slots)):
+        first = by_slot.setdefault(slot, (i, pt))
+        fi, fpt = first
+        same = (pt is None and fpt is None) or (
+            pt is not None and fpt is not None and (pt is fpt or (pt.shape == fpt.shape and torch.equal(pt, fpt)))
+        )
+        if not same:
+            raise ValueError(
+                f"per-layer page tables of layers {fi} and {i} differ inside KV group slot {slot}: the serving "
+                "records keep one table per vLLM KV-cache group (serving_kv_group_slots); the installed tables "
+                "do not follow that grouping"
+            )
+
+
 def serving_verify_table_widths(s_k, block_size_by_type, ring_by_type, blocks):
     """Width (columns) of each layer type's width-matched verify page table at rung ``s_k``.
 
@@ -1229,10 +1285,12 @@ class SpeculativeDecoder:
             self._pv_bs_t[lt] = int(effective_block_size(self.tt_kv_cache[idx][0], cfg.head_dim, nkv_local))
         flat = (self.page_table_torch[0] if self.page_table_torch.dim() > 1 else self.page_table_torch).to(torch.int64)
         self._pv_pages = flat
-        # Per-type page rows. Every layer of a type carries the same block IDs
-        # (build_hybrid_page_tables allocates per-layer pools starting at 0), so
-        # one row per type addresses every layer of that type — the same
-        # assumption the flat ``_pv_pages`` already made for the unbounded case.
+        # Per-type page rows for the demo path: its build_hybrid_page_tables
+        # gives every layer of a type the same block IDs, so one row per type
+        # addresses every layer of that type (the flat ``_pv_pages`` makes the
+        # same assumption for the unbounded case). NOT true of vLLM's hybrid
+        # groups, which the serving records handle per group slot
+        # (serving_kv_group_slots).
         self._pv_pages_t = {lt: flat for lt in self._pv_ring}
         installed = getattr(target, "_active_page_tables_per_layer", None)
         if installed:
@@ -2431,6 +2489,10 @@ class SpeculativeDecoder:
         self._srv_iota = {}
         self._srv_backbone = None
         self._srv_flat_type = "full_attention" if "full_attention" in self._pv_ring else next(iter(self._pv_ring))
+        # One drafter/verify table per vLLM KV-cache group slot (not per layer
+        # type): under hybrid groups the layers of one type are spread over
+        # several groups with disjoint block ids.
+        self._srv_slots, self._srv_n_slots = serving_kv_group_slots(self._srv_layer_types())
         self._srv_uploaded = {}
         self._srv_last = None
         self._srv_seeded = {}
@@ -2561,6 +2623,9 @@ class SpeculativeDecoder:
             if t.dim() != 2:
                 raise ValueError(f"per-layer page table {i} must be [rows, blocks], got shape {tuple(pt.shape)}")
             installed.append(t.to(torch.int64))
+        slots = getattr(self, "_srv_slots", None)
+        if slots is not None and len(slots) == len(installed):
+            serving_check_group_tables(installed, slots)
         self._srv_per_layer = installed
 
     def serving_reseed(self, shape, rows, anchors, positions, page_tables):
@@ -2653,7 +2718,7 @@ class SpeculativeDecoder:
         for rec in recs.values():
             if rec.get("id") is not None:
                 ttnn.release_trace(self.mesh_device, rec["id"])
-            for key in ("v_ptl", "verify_x", "vidx"):
+            for key in ("v_ptl_slots", "verify_x", "vidx"):
                 self._free_tensor_tree(rec.get(key))
         for S in self._srv_shape_bufs.values():
             for key in (
@@ -2661,7 +2726,7 @@ class SpeculativeDecoder:
                 "seed_idx",
                 "d_pu",
                 "d_pi",
-                "d_ptl",
+                "d_ptl_slots",
                 "v_pos",
                 "write_idxs",
                 "ring_base",
@@ -2683,10 +2748,13 @@ class SpeculativeDecoder:
         B, K = shape
         P = K + 1
         pu, pi = self._pos_tensors([0] * B)
-        d_ptl = {
-            lt: self._pv_from_torch(torch.zeros(B, self._srv_blocks, dtype=torch.int32), ttnn.int32)
-            for lt in self._pv_ring
-        }
+        slots = self._srv_slots
+        d_ptl_slots = [
+            self._pv_from_torch(torch.zeros(B, self._srv_blocks, dtype=torch.int32), ttnn.int32)
+            for _ in range(self._srv_n_slots)
+        ]
+        # The assistant reads each type's shared-KV layer: its table is that layer's slot.
+        d_ptl = {lt: d_ptl_slots[slots[self.target.last_kv_layer_by_type[lt]]] for lt in self._pv_ring}
         ring = self._pv_ring.get("sliding_attention")
         ring_scalars = {}
         if ring:
@@ -2704,8 +2772,9 @@ class SpeculativeDecoder:
             "seed_idx": self._tokens_tensor([0] * B),  # [1, B] uint32 rows of the hidden pool
             "d_pu": pu,  # [1, 32] uint32 drafter positions (B filled)
             "d_pi": pi,  # [B] int32
-            "d_ptl": d_ptl,  # {layer_type: [B, blocks] int32} drafter (shared-KV) tables
-            "d_ptl_list": [d_ptl[lt] for lt in self._srv_layer_types()],
+            "d_ptl": d_ptl,  # {layer_type: [B, blocks] int32} the shared-KV layer's slot table per type
+            "d_ptl_slots": d_ptl_slots,  # one [B, blocks] int32 table per KV group slot
+            "d_ptl_list": [d_ptl_slots[slot] for slot in slots],  # per target layer: its slot's table
             "v_pos": self._from_b(torch.zeros(1, B * P, dtype=torch.int64), ttnn.uint32),  # row b*P+p = c_b + p
             "write_idxs": [self._from_b(torch.zeros(B, dtype=torch.int32), ttnn.int32) for _ in range(P)],
         }
@@ -2717,17 +2786,26 @@ class SpeculativeDecoder:
         # serving_verify_table_widths): the packed SDPA attends the TABLE width
         # times that block size, and under hybrid groups the types differ.
         widths = serving_verify_table_widths(s_k, self._pv_bs_t, self._pv_ring, self._srv_blocks)
-        v_ptl = {}
-        for lt, width in widths.items():
-            v_ptl[lt] = self._pv_from_torch(torch.zeros(B, width, dtype=torch.int32), ttnn.int32)
+        slots = self._srv_slots
+        layer_types = self._srv_layer_types()
+        slot_type = {}
+        for i, slot in enumerate(slots):
+            slot_type.setdefault(slot, layer_types[i])
+        v_ptl_slots = [
+            self._pv_from_torch(torch.zeros(B, widths[slot_type[slot]], dtype=torch.int32), ttnn.int32)
+            for slot in range(self._srv_n_slots)
+        ]
+        # The flat-table fallback reads each type's representative pool layer.
+        v_ptl = {lt: v_ptl_slots[slots[self._pv_ring_rep[lt]]] for lt in self._pv_ring}
         return {
             "shape": shape,
             "S_k": int(s_k),
             "B": B,
             "K": K,
             "P": P,
-            "v_ptl": v_ptl,  # {layer_type: [B, width_lt] int32}
-            "v_ptl_list": [v_ptl[lt] for lt in self._srv_layer_types()],
+            "v_ptl": v_ptl,  # {layer_type: [B, width_lt] int32} the representative layer's slot table per type
+            "v_ptl_slots": v_ptl_slots,  # one [B, width of its type] int32 table per KV group slot
+            "v_ptl_list": [v_ptl_slots[slot] for slot in slots],  # per target layer: its slot's table
             "id": None,
         }
 
@@ -3006,14 +3084,14 @@ class SpeculativeDecoder:
         h.deallocate(True)
         self._srv_uploaded[key] = host.clone()
 
-    def _srv_type_table(self, lt, rows, live, page_tables, which):
-        """Host [B, cols] int64 table of one layer type for the step's rows: the installed per-layer table of
-        the layer that type's consumer reads (``which`` = "drafter": the shared-KV layer; "verify": the
-        type's representative pool layer), rows selected; else the flat ``page_tables`` as given."""
+    def _srv_slot_table(self, slot, rows, page_tables):
+        """Host [B, cols] int64 table of one KV group slot for the step's rows: the installed per-layer table of
+        the slot's first layer (every layer of a slot carries the same table, serving_check_group_tables),
+        rows selected; else the flat ``page_tables`` as given."""
         installed = self._srv_per_layer
         src = None
         if installed is not None:
-            idx = self.target.last_kv_layer_by_type[lt] if which == "drafter" else self._pv_ring_rep[lt]
+            idx = self._srv_slots.index(slot)
             src = installed[idx] if idx < len(installed) else None
         if src is None:
             return page_tables
@@ -3021,7 +3099,7 @@ class SpeculativeDecoder:
         return serving_select_rows(src, rows, B, int(src.shape[1]), allow_clip=False)
 
     def _srv_upload_tables(self, shape, rows, live, page_tables, rec):
-        """Upload the drafter tables of ``shape`` (and the verify tables of ``rec`` when given)."""
+        """Upload the drafter tables of ``shape`` (and the verify tables of ``rec`` when given), one per KV group slot."""
         S = self._srv_shape_bufs[shape]
         B = S["B"]
         if not hasattr(page_tables, "dim") or page_tables.dim() != 2 or int(page_tables.shape[0]) != B:
@@ -3040,24 +3118,24 @@ class SpeculativeDecoder:
                 "bounded sliding target: serving_refresh_page_tables(per-layer tables) must run before the first "
                 "reseed/replay, or the sliding layers would read the flat table instead of their ring pool"
             )
-        for lt in self._pv_ring:
-            d_host = self._srv_type_table(lt, rows, live, pt, "drafter")
+        for slot in range(self._srv_n_slots):
+            d_host = self._srv_slot_table(slot, rows, pt)
             d_host = serving_select_rows(d_host, list(range(B)), B, self._srv_blocks, allow_clip=False)
             if live < B:
                 d_host[live:] = d_host[0]
-            self._srv_copy_if_changed(("d", shape, lt), d_host.to(torch.int32), S["d_ptl"][lt], ttnn.int32)
+            self._srv_copy_if_changed(("d", shape, slot), d_host.to(torch.int32), S["d_ptl_slots"][slot], ttnn.int32)
             if rec is None:
                 continue
-            v_host = self._srv_type_table(lt, rows, live, pt, "verify")
+            v_host = self._srv_slot_table(slot, rows, pt)
             if live < B:
                 v_host = v_host.clone()
                 v_host[live:] = v_host[0]
-            width = int(rec["v_ptl"][lt].shape[-1])
+            width = int(rec["v_ptl_slots"][slot].shape[-1])
             # Clipped, not checked: the verify table is width-matched to its
             # mask on purpose, and columns past the mask are never attended.
             v_host = serving_select_rows(v_host, list(range(B)), B, width, allow_clip=True)
             self._srv_copy_if_changed(
-                ("v", shape, rec["S_k"], lt), v_host.to(torch.int32), rec["v_ptl"][lt], ttnn.int32
+                ("v", shape, rec["S_k"], slot), v_host.to(torch.int32), rec["v_ptl_slots"][slot], ttnn.int32
             )
 
     def _srv_upload(self, rec, rows, live, anchors, positions, page_tables, seed_idx):

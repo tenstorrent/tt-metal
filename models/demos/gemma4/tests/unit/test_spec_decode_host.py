@@ -788,7 +788,7 @@ _SERVING_METHODS = [
     "_srv_body",
     "_srv_upload",
     "_srv_upload_tables",
-    "_srv_type_table",
+    "_srv_slot_table",
     "_srv_logits_to_host",
     "refresh_page_tables",
 ]
@@ -1873,3 +1873,111 @@ def test_the_adapter_table_width_caps_every_type():
 def test_misaligned_geometries_are_refused(s_k, bs, ring, blocks, message):
     with pytest.raises(ValueError, match=message):  # allow-pytest.raises (pure)
         serving_verify_table_widths(s_k, bs, ring, blocks)
+
+
+# ===== KV group slots: the serving records follow vLLM's hybrid KV-cache grouping, not the layer type
+from models.demos.gemma4.tt.spec_decode import serving_check_group_tables, serving_kv_group_slots  # noqa: E402
+
+
+def _layer_types(pattern, repeats):
+    return list(pattern) * repeats
+
+
+def test_kv_group_slots_follow_vllm_strided_groups_for_the_12b_and_31b_patterns():
+    """vLLM takes group_size = min(count per type) and gives group g the layers
+    layers_of_type[g::num_groups]: five sliding groups (layers i, i+6, i+12, ...)
+    and one full group for both Gemma 4 dense patterns."""
+    for repeats in (8, 10):  # 12B: 40 sliding + 8 full; 31B: 50 sliding + 10 full
+        types = _layer_types(["sliding_attention"] * 5 + ["full_attention"], repeats)
+        slots, n_slots = serving_kv_group_slots(types)
+        assert n_slots == 6
+        assert slots == [i % 6 for i in range(len(types))]
+        for g in range(5):
+            members = [i for i, s in enumerate(slots) if s == g]
+            assert members == [6 * k + g for k in range(repeats)]
+        assert [i for i, s in enumerate(slots) if s == 5] == [6 * k + 5 for k in range(repeats)]
+
+
+def test_kv_group_slots_collapse_a_uniform_model_to_one_slot():
+    slots, n_slots = serving_kv_group_slots(["full_attention"] * 12)
+    assert (slots, n_slots) == ([0] * 12, 1)
+    assert serving_kv_group_slots([]) == ([], 0)
+
+
+def test_kv_group_slots_fall_back_to_one_slot_per_layer_when_a_count_is_not_a_group_multiple():
+    """7 sliding + 3 full: 7 is not a multiple of 3, so the sliding layers get a slot each (always correct)."""
+    types = ["sliding_attention"] * 7 + ["full_attention"] * 3
+    slots, n_slots = serving_kv_group_slots(types)
+    assert slots[:7] == list(range(7))
+    assert slots[7:] == [7, 7, 7]
+    assert n_slots == 8
+
+
+def test_group_table_check_accepts_identical_tables_per_slot_and_rejects_a_mismatch(expect_error):
+    types = _layer_types(["sliding_attention"] * 5 + ["full_attention"], 2)
+    slots, n_slots = serving_kv_group_slots(types)
+    tables = [torch.arange(8, dtype=torch.int64).reshape(2, 4) + 100 * slots[i] for i in range(len(types))]
+    serving_check_group_tables(tables, slots)  # identical per slot
+    serving_check_group_tables([None] * len(types), slots)  # every layer flat
+    shared = [tables[slots[i]] for i in range(len(types))]
+    serving_check_group_tables(shared, slots)  # the same object per slot
+    bad = list(tables)
+    bad[6] = bad[6] + 1  # layer 6 is slot 0 like layer 0, but differs
+    with expect_error(ValueError, "layers 0 and 6 differ inside KV group slot 0"):
+        serving_check_group_tables(bad, slots)
+    mixed = list(tables)
+    mixed[6] = None
+    with expect_error(ValueError, "slot 0"):
+        serving_check_group_tables(mixed, slots)
+
+
+def test_every_layer_verifies_and_reseeds_through_its_own_group_table(monkeypatch):
+    """vLLM-grouped per-layer tables with DISTINCT block ids per group: after the
+    upload, the table bound to every layer (its slot) holds that layer's own
+    installed rows, for the drafter/reseed tables and the width-clipped verify
+    tables alike; padding rows mirror row 0. The per-type records of the old
+    code gave 32 of the 40 sliding layers another group's block ids."""
+    types = _layer_types(["sliding_attention"] * 5 + ["full_attention"], 8)
+    slots, n_slots = serving_kv_group_slots(types)
+    B, blocks, s_k = 4, 16, 2048
+    bs = {"sliding_attention": 256, "full_attention": 128}
+    widths = {lt: s_k // b for lt, b in bs.items()}  # 8 / 16 columns
+    installed = [torch.arange(8 * blocks, dtype=torch.int64).reshape(8, blocks) + 1000 * slots[i] for i in range(48)]
+
+    spec = _bare_decoder(n_layers=48)
+    spec._srv_slots, spec._srv_n_slots = slots, n_slots
+    spec._srv_blocks = blocks
+    spec._pv_ring = {"sliding_attention": None, "full_attention": None}
+    spec._pv_ring_rep = {"sliding_attention": 0, "full_attention": 5}
+    spec.target.last_kv_layer_by_type = {"sliding_attention": 46, "full_attention": 47}
+    spec.target.hf_config = SimpleNamespace(layer_types=types)
+    spec.serving_refresh_page_tables(installed)  # passes the slot check
+    shape = (B, 5)
+    d_slots = [SimpleNamespace(shape=(B, blocks), tag=("d", s)) for s in range(n_slots)]
+    v_slots = [SimpleNamespace(shape=(B, widths[types[slots.index(s)]]), tag=("v", s)) for s in range(n_slots)]
+    spec._srv_shape_bufs[shape] = {"B": B, "d_ptl_slots": d_slots, "d_ptl_list": [d_slots[s] for s in slots]}
+    rec = {"S_k": s_k, "v_ptl_slots": v_slots, "v_ptl_list": [v_slots[s] for s in slots]}
+    uploads = {}
+    monkeypatch.setattr(
+        spec,
+        "_srv_copy_if_changed",
+        lambda key, host, dev, dtype, layout=None: uploads.__setitem__(dev.tag, host.clone()),
+    )
+
+    rows, live = [2, 7], 2
+    spec._srv_upload_tables(shape, rows, live, torch.zeros(B, blocks, dtype=torch.int64), rec)
+
+    assert len(uploads) == 2 * n_slots
+    for i in range(48):
+        want = installed[i][rows]
+        d = uploads[spec._srv_shape_bufs[shape]["d_ptl_list"][i].tag]
+        assert torch.equal(d[:live], want.to(torch.int32)), f"layer {i} drafter table"
+        assert torch.equal(d[live:], d[0].expand(B - live, -1)), f"layer {i} padding rows"
+        v = uploads[rec["v_ptl_list"][i].tag]
+        w = widths[types[i]]
+        assert v.shape == (B, w), f"layer {i} verify width"
+        assert torch.equal(v[:live], want[:, :w].to(torch.int32)), f"layer {i} verify table"
+    # the old per-type collapse would have given layer 1 (slot 1) layer 0's (slot 0) ids:
+    assert not torch.equal(
+        uploads[rec["v_ptl_list"][1].tag][:live], installed[0][rows][:, : widths["sliding_attention"]].to(torch.int32)
+    )
