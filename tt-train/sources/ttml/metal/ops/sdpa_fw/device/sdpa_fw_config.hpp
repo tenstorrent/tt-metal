@@ -131,6 +131,14 @@ uint32_t effective_max_pieces(const SDPAForwardProgramConfig& config);
 bool may_split(const SDPAForwardProgramConfig& config, const SDPAForwardShape& shape);
 uint32_t effective_num_cores(const SDPAForwardProgramConfig& config, uint32_t grid_cores);
 
+// make_schedule for config on a grid of grid_cores: the config's cores, but no more than the pieces the
+// items can be cut into. What the program factory builds; the tests and the benchmark reproduce it.
+SDPAForwardSchedule schedule_for(
+    const SDPAForwardProgramConfig& config,
+    const SDPAForwardShape& shape,
+    const SDPAForwardChunks& chunks,
+    uint32_t grid_cores);
+
 // Cheap knob checks for validate: each set knob must divide its axis, and the config must fit l1_budget_bytes
 // with every unset chunk size at its one-tile floor (the smallest chunking the pick can reach). Throws otherwise.
 void check_chunks(

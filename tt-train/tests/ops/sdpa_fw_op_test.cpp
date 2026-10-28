@@ -1547,16 +1547,11 @@ host_shape_and_chunks(const SDPATestConfig& config) {
         shape, resolve_chunks(config.program_config, shape, ttml::metal::available_l1_bytes(*device), grid.x * grid.y)};
 }
 
-// The schedule the program factory would build for config on this device.
+// The schedule the program factory builds for config on this device.
 ttml::metal::ops::sdpa_fw::device::SDPAForwardSchedule host_schedule(const SDPATestConfig& config) {
-    using namespace ttml::metal::ops::sdpa_fw::device;
-    auto* device = &ttml::autograd::ctx().get_device();
-    const auto grid = device->compute_with_storage_grid_size();
+    const auto grid = ttml::autograd::ctx().get_device().compute_with_storage_grid_size();
     const auto [shape, chunks] = host_shape_and_chunks(config);
-    const uint32_t max_pieces = effective_max_pieces(config.program_config);
-    const uint32_t num_cores = std::min(
-        effective_num_cores(config.program_config, grid.x * grid.y), num_work_items(shape, chunks) * max_pieces);
-    return make_schedule(shape, chunks, num_cores, max_pieces);
+    return ttml::metal::ops::sdpa_fw::device::schedule_for(config.program_config, shape, chunks, grid.x * grid.y);
 }
 
 // The terms of the split-vs-unsplit error bounds, from the split schedule: the most partials a merger folds

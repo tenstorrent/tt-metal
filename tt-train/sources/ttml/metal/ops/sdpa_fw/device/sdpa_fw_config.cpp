@@ -498,6 +498,17 @@ SDPAForwardSchedule make_schedule(
     return SDPAForwardSchedule{.per_core = split_items_contiguous(total_items, std::min(num_cores, total_items))};
 }
 
+SDPAForwardSchedule schedule_for(
+    const SDPAForwardProgramConfig& config,
+    const SDPAForwardShape& shape,
+    const SDPAForwardChunks& chunks,
+    uint32_t grid_cores) {
+    const uint32_t max_pieces = effective_max_pieces(config);
+    const uint32_t num_cores =
+        std::min(effective_num_cores(config, grid_cores), num_work_items(shape, chunks) * max_pieces);
+    return make_schedule(shape, chunks, num_cores, max_pieces);
+}
+
 namespace {
 
 // The user's knobs in tiles, 0 = unset; throws on an invalid knob.

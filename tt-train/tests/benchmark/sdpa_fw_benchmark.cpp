@@ -115,12 +115,9 @@ std::string schedule_units(const Scenario& sc, const ttml::metal::SDPAForwardPro
         .has_gate = sc.gate,
         .return_intermediates = true};
     const SDPAForwardChunks chunks = resolve_chunks(cfg, shape, ttml::metal::available_l1_bytes(*device), grid_cores);
-    const uint32_t max_pieces = effective_max_pieces(cfg);
-    const uint32_t num_cores =
-        std::min(effective_num_cores(cfg, grid_cores), num_work_items(shape, chunks) * max_pieces);
     uint32_t senders = 0;
     uint32_t mergers = 0;
-    for (const auto& units : make_schedule(shape, chunks, num_cores, max_pieces).per_core) {
+    for (const auto& units : schedule_for(cfg, shape, chunks, grid_cores).per_core) {
         for (const auto& unit : units) {
             senders += unit.role == UnitRole::Sender ? 1U : 0U;
             mergers += unit.role == UnitRole::Merger ? 1U : 0U;

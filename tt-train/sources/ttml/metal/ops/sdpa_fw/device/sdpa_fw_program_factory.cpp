@@ -219,13 +219,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);  // used to transform mask from 1/0 to 0/-1
     const uint32_t custom_inf = std::bit_cast<uint32_t>(1e9F);  // used to transform mask from 0/-1 to 0/-1e9F
 
-    const uint32_t max_pieces = effective_max_pieces(args.program_config);
-    const SDPAForwardSchedule schedule = make_schedule(
-        shape,
-        chunks,
-        std::min(
-            effective_num_cores(args.program_config, num_available_cores), num_work_items(shape, chunks) * max_pieces),
-        max_pieces);
+    const SDPAForwardSchedule schedule = schedule_for(args.program_config, shape, chunks, num_available_cores);
     const auto& per_core_units = schedule.per_core;
     const uint32_t num_cores = static_cast<uint32_t>(per_core_units.size());
     const auto all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size);
