@@ -137,7 +137,9 @@ _MTP_PAD_AS_INT32 = MTP_PAD_TOKEN_ID - (1 << 32)
 CHUNK_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES
 
 D2D_METADATA_SIZE_BYTES = METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
-TP_SHARD_KV = os.environ.get("PREFILL_TP_SHARD_KV", str(int(ADAPTER.tp_shard_kv_default))) == "1"
+# The models that default this on dedup a dense MLA cache, and ring_mla's split-KV path behind that
+# runs SP on mesh axis 0 only, so an SP-axis-1 stage (4x4) defaults to the SP-only cache.
+TP_SHARD_KV = os.environ.get("PREFILL_TP_SHARD_KV", str(int(ADAPTER.tp_shard_kv_default and SP_AXIS == 0))) == "1"
 assert (
     not TP_SHARD_KV or ADAPTER.supports_tp_shard_kv
 ), f"PREFILL_TP_SHARD_KV=1: model {ADAPTER.name!r} does not support a TP-deduped KV cache"
