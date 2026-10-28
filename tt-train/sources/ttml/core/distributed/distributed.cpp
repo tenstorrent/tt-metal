@@ -148,6 +148,11 @@ ttnn::Tensor force_replicate_axes(const ttnn::Tensor& t, const ttsl::SmallVector
     return out;
 }
 
+// The dtype a gradient sync sums in: the one the call passes, else the training config's default.
+std::optional<ttnn::DataType> gradient_reduce_dtype(std::optional<ttnn::DataType> reduce_dtype) {
+    return reduce_dtype.has_value() ? reduce_dtype : autograd::ctx().get_gradient_reduce_dtype();
+}
+
 }  // namespace
 
 void synchronize_gradients(
@@ -163,6 +168,7 @@ void synchronize_gradients(
     if (pctx.is_ddp_enabled()) {
         cluster_axes.push_back(pctx.get_ddp_axis().value());
     }
+    const auto dtype = gradient_reduce_dtype(reduce_dtype);
     for (auto& [name, tensor] : parameters) {
         if (!tensor->is_grad_initialized()) {
             continue;
@@ -180,7 +186,7 @@ void synchronize_gradients(
             continue;
         }
         tensor->set_grad(
-            force_replicate_axes(synchronize_tensor(tensor->get_grad(), axes_for_param, reduce_dtype), axes_for_param));
+            force_replicate_axes(synchronize_tensor(tensor->get_grad(), axes_for_param, dtype), axes_for_param));
     }
 }
 
@@ -189,9 +195,10 @@ void synchronize_gradients(
     const std::vector<uint32_t>& cluster_axes,
     std::optional<ttnn::DataType> reduce_dtype) {
     ttsl::SmallVector<uint32_t> axes(cluster_axes.begin(), cluster_axes.end());
+    const auto dtype = gradient_reduce_dtype(reduce_dtype);
     for (auto& [name, tensor] : parameters) {
         if (tensor->is_grad_initialized()) {
-            tensor->set_grad(force_replicate_axes(synchronize_tensor(tensor->get_grad(), axes, reduce_dtype), axes));
+            tensor->set_grad(force_replicate_axes(synchronize_tensor(tensor->get_grad(), axes, dtype), axes));
         }
     }
 }

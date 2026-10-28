@@ -146,8 +146,18 @@ void py_module(nb::module_& m) {
         },
         nb::arg("training_config"),
         nb::arg("parameters"),
-        "Apply training_config.precision to the parameters (precision.param_dtype) before creating the optimizer. "
-        "Returns the dtype applied, or None.");
+        "Apply training_config.precision before creating the optimizer: precision.param_dtype to the parameters, and "
+        "precision.reduce_dtype, when set, as the dtype the gradient syncs sum in by default. Returns the param dtype "
+        "applied, or None.");
+
+    m.def(
+        "reduce_dtype_from_config",
+        [](nb::dict training_config) {
+            return ttml::core::reduce_dtype_from_config(ttml::nanobind::util::obj_to_yaml(training_config));
+        },
+        nb::arg("training_config"),
+        "The dtype training_config.precision.reduce_dtype names (BFLOAT16 or FLOAT32), or None when unset. Pass it "
+        "to ttml.fsdp.fully_shard(reduce_dtype=...), which runs before the optimizer is created.");
 
     {
         auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));

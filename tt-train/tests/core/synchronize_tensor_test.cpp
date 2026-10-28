@@ -13,6 +13,7 @@
 
 #include "autograd/auto_context.hpp"
 #include "core/distributed/distributed.hpp"
+#include "core/parameter_dtype.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "test_utils/mesh_utils.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
@@ -186,10 +187,38 @@ TEST_F(SynchronizeTensorTest, SynchronizeGradientsOverTheDdpAxisUsesTheReduceDty
             replicate.get()),
         /* requires_grad */ true);
     const auto gradients = upload(make_gradients(64, 128, 8));
+    const auto fp32 = core::distributed::synchronize_tensor(gradients, {kDdpAxis}, ttnn::DataType::FLOAT32);
     parameter->set_grad(gradients);
 
     core::distributed::synchronize_gradients({{"parameter", parameter}}, ttnn::DataType::FLOAT32);
+    expect_same_on_every_device(parameter->get_grad(), fp32);
 
-    expect_same_on_every_device(
-        parameter->get_grad(), core::distributed::synchronize_tensor(gradients, {kDdpAxis}, ttnn::DataType::FLOAT32));
+    // Without an argument it takes the training config's default.
+    parameter->set_grad(gradients);
+    autograd::ctx().set_gradient_reduce_dtype(ttnn::DataType::FLOAT32);
+    core::distributed::synchronize_gradients({{"parameter", parameter}});
+    expect_same_on_every_device(parameter->get_grad(), fp32);
+}
+
+// The runners set the default from precision.reduce_dtype; a dtype the call passes wins over it, both ways.
+TEST_F(SynchronizeTensorTest, SynchronizeGradientsTakesTheConfiguredReduceDtypeUnlessTheCallPassesOne) {
+    const auto gradients = upload(make_gradients(64, 128, 9));
+    const auto fp32 = core::distributed::synchronize_tensor(gradients, {kDdpAxis}, ttnn::DataType::FLOAT32);
+    const auto bf16 = core::distributed::synchronize_tensor(gradients, {kDdpAxis});
+    ASSERT_FALSE(per_device(fp32)[0] == per_device(bf16)[0]);
+    const auto synchronize = [&](std::optional<ttnn::DataType> reduce_dtype) {
+        auto parameter = autograd::create_tensor(gradients, /* requires_grad */ true);
+        parameter->set_grad(gradients);
+        core::distributed::synchronize_gradients({{"parameter", parameter}}, {kDdpAxis}, reduce_dtype);
+        return parameter->get_grad();
+    };
+
+    expect_same_on_every_device(synchronize(std::nullopt), bf16);
+    (void)core::apply_precision_config(YAML::Load("precision: {reduce_dtype: float32}"), {});
+    expect_same_on_every_device(synchronize(std::nullopt), fp32);
+    expect_same_on_every_device(synchronize(ttnn::DataType::BFLOAT16), bf16);
+
+    autograd::ctx().set_gradient_reduce_dtype(ttnn::DataType::BFLOAT16);
+    expect_same_on_every_device(synchronize(std::nullopt), bf16);
+    expect_same_on_every_device(synchronize(ttnn::DataType::FLOAT32), fp32);
 }

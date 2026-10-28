@@ -174,6 +174,18 @@ class CausalLMDataset:
         }
 
 
+def shard_model(model: Any, replicate: list[str], yaml_config: dict) -> None:
+    """Wrap each block, then the root, with FSDP.
+
+    FSDP sums gradients in its own reduce-scatter, so it takes precision.reduce_dtype here; the DDP sync gets the same
+    value from create_optimizer, which runs after sharding.
+    """
+    reduce_dtype = ttml.core.reduce_dtype_from_config(yaml_config.get("training_config", {}))
+    for block in model.blocks:
+        ttml.fsdp.fully_shard(block, replicate=replicate, reduce_dtype=reduce_dtype)
+    ttml.fsdp.fully_shard(model, replicate=replicate, reduce_dtype=reduce_dtype)
+
+
 def _report_fsdp_replicated(model: Any, patterns: list[str]) -> None:
     """Print how many params `fsdp_replicate_params` kept replicated, and any pattern that matched nothing."""
     replicated = ttml.fsdp.replicated_parameters(model)
@@ -492,11 +504,8 @@ def run_training(
     # owns sharding, not the trainer).
     if device_cfg.enable_fsdp:
         print("Sharding model...", flush=True)
-        replicate = device_cfg.fsdp_replicate_params
-        for block in model.blocks:
-            ttml.fsdp.fully_shard(block, replicate=replicate)
-        ttml.fsdp.fully_shard(model, replicate=replicate)
-        _report_fsdp_replicated(model, replicate)
+        shard_model(model, device_cfg.fsdp_replicate_params, yaml_config)
+        _report_fsdp_replicated(model, device_cfg.fsdp_replicate_params)
 
     # Materialize after fully_shard rewrote the mappers, so weights allocate already-sharded.
     if lazy_init:

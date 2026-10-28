@@ -8,6 +8,10 @@ The two devices of the ``[1, 2]`` ``fsdp_mesh`` hold different bf16 gradients, a
 ``test_sync_gradients_reduce_dtype.py`` covers the same setting on the DDP sync.
 """
 
+import importlib
+import os
+import sys
+
 import numpy as np
 import pytest
 import ttnn
@@ -176,3 +180,32 @@ def test_blocks_and_root_both_sum_in_fp32(fsdp_mesh):
 def test_rejects_reduce_dtypes_other_than_bf16_and_fp32(expect_error):
     with expect_error(ValueError, "reduce_dtype"):
         ttml.fsdp.fully_shard(object(), reduce_dtype=ttnn.DataType.UINT32)
+
+
+def _train_example_module():
+    """``examples/train/train.py`` as a module (not part of the installed ``ttml``), as test_train_helpers loads it."""
+    train_dir = os.path.realpath(os.path.join(os.path.dirname(__file__), "..", "..", "sources", "examples", "train"))
+    if train_dir in sys.path:
+        sys.path.remove(train_dir)
+    sys.path.insert(0, train_dir)
+    for name in ("train", "callbacks"):
+        cached = sys.modules.get(name)
+        if cached is not None and not os.path.realpath(getattr(cached, "__file__", "") or "").startswith(train_dir):
+            del sys.modules[name]
+    return importlib.import_module("train")
+
+
+# train.py shards before create_optimizer applies the config, so it reads precision.reduce_dtype for FSDP itself.
+@pytest.mark.requires_device
+@pytest.mark.parametrize(
+    "precision, expected",
+    [({"reduce_dtype": "float32"}, ttnn.DataType.FLOAT32), ({}, None)],
+)
+def test_train_py_passes_the_configured_reduce_dtype_to_fully_shard(fsdp_mesh, precision, expected):
+    train = _train_example_module()
+    model = _Model(64)
+
+    train.shard_model(model, [], {"training_config": {"precision": precision}})
+
+    assert [block._fsdp_state.reduce_dtype for block in model.blocks] == [expected, expected]
+    assert model._fsdp_state.reduce_dtype == expected
