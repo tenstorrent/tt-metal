@@ -215,6 +215,7 @@ def test_away_is_inside_interval():
     assert SB.away("level_shift_rows-#0", [-0.056], [1.0], [-0.05], [1.0])  # away
     assert not SB.away("band0.7x_row#0", [0.0], [1.3], [0.0], [0.7])  # 1.3 -> 0.91: inside [0.85, 1.45]
     assert SB.away("band0.7x_row#0", [0.0], [1.1], [0.0], [0.7])  # 1.1 -> 0.77: crosses 1 and overshoots
+    assert SB.away("bound_row1-", [-0.056], [1.0], [-0.027], [1.0])  # away but inside the interval: required
     assert SB.away("collapsed", [0.0], [1.0], [0.0], [1.0])
 
 

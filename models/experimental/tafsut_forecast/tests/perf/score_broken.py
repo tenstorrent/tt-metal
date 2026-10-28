@@ -161,15 +161,15 @@ BIAS_DRIFT, RATIO_DRIFT = 0.03, 0.15  # the v1.27 row drift bounds (gates.json d
 
 
 def away(name: str, e0: list, r0: list, e: list, r: list) -> bool:
-    """PLAN v1.28: whether a row probe is required to fail. It may pass ("toward") only if every probed row's composed
-    value lands inside the v1.27 interval [min(ref, x0) - d, max(ref, x0) + d] (ref 0 / d 0.03 for bias, 1 / 0.15 for
+    """PLAN v1.28: whether a row probe is required to fail. It may pass ("toward") only if every probed row moves toward
+    the reference and its composed value lands inside the v1.27 interval [min(ref, x0) - d, max(ref, x0) + d] (ref 0 / d 0.03 for bias, 1 / 0.15 for
     the spread ratio); a probe that crosses the reference and overshoots is required to fail. Every other broken
     output is required to fail."""
-    inside = lambda x, x0, ref, d: min(ref, x0) - d <= x <= max(ref, x0) + d
+    toward = lambda x, x0, ref, d: abs(x - ref) < abs(x0 - ref) and min(ref, x0) - d <= x <= max(ref, x0) + d
     if name.startswith(("level_shift_row", "shift10pct", "bound_row")):
-        return any(abs(d) > 1e-9 and not inside(x + d, x, 0.0, BIAS_DRIFT) for x, d in zip(e0, e))
+        return any(abs(d) > 1e-9 and not toward(x + d, x, 0.0, BIAS_DRIFT) for x, d in zip(e0, e))
     if name.startswith("band"):
-        return any(abs(q - 1) > 1e-9 and not inside(x * q, x, 1.0, RATIO_DRIFT) for x, q in zip(r0, r))
+        return any(abs(q - 1) > 1e-9 and not toward(x * q, x, 1.0, RATIO_DRIFT) for x, q in zip(r0, r))
     return True
 
 
