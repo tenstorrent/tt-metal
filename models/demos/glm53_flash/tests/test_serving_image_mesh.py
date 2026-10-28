@@ -150,7 +150,7 @@ def _harness(adapter, ids: torch.Tensor, feats: list[torch.Tensor], user: int) -
             positions[r * B + user] = S + len(gen) - 1
         model.load_decode_inputs(toks, positions)
         model.replay(adapter.trace_id)
-        _, _, ids_tr = adapter._trace_outputs
+        ids_tr = adapter._trace_outputs[-1]  # (logits, ids) of the captured step
         gen.append(int(model.ids_to_host(ids_tr)[user]))
     return first, logits, gen[1:]
 
