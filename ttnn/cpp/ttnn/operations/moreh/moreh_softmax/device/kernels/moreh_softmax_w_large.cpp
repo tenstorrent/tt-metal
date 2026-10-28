@@ -79,6 +79,26 @@ ALWI void find_shift(
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::tmp, dfb::max_scaler, dfb::max>(
                 dfb_tmp_obj, dfb_max_scaler_obj, dfb_max_obj, compute_kernel_lib::ReduceInputBlockShape::single());
         } else {
+#ifdef ARCH_QUASAR
+            // Quasar has no MAX + REDUCE_ROW accumulator reload (it needs a within-face transpose that
+            // copy_tile_to_dst_init_short rejects there; see reduce_helpers_compute.inl). Reduce the leading
+            // tiles and the masked last tile separately, into dfb::add and dfb::exps (both free until the
+            // exp-sum below), and combine the partial maxima into dfb::max, as the min-shift path below does.
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::in0, dfb::max_scaler, dfb::add>(
+                dfb_in0_obj, dfb_max_scaler_obj, dfb_add_obj, compute_kernel_lib::ReduceInputBlockShape::row(Wt - 1));
+            mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
+                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/1, /*popm=*/0);
+            compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::tmp, dfb::max_scaler, dfb::exps>(
+                dfb_tmp_obj, dfb_max_scaler_obj, dfb_exps_obj, compute_kernel_lib::ReduceInputBlockShape::single());
+            moreh_retarget_packer(dfb::max);
+            ckl::binary_sfpu<
+                ckl::BinaryMax<>,
+                ckl::input(dfb::add, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, moreh_data_format_reconfig),
+                ckl::input(dfb::exps, ckl::WaitPolicy::PerTile, ckl::PopPolicy::PerTile, moreh_data_format_reconfig),
+                ckl::output(
+                    dfb::max, ckl::ReservePolicy::PerTile, ckl::PushPolicy::PerTile, moreh_data_format_reconfig)>(
+                ckl::IterationShape::one_tile(), dfb_add_obj, dfb_exps_obj, dfb_max_obj);
+#else
             // Phase 1: reduce Wt-1 full tiles into dfb::max (no accumulation, first call).
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::in0, dfb::max_scaler, dfb::max>(
                 dfb_in0_obj, dfb_max_scaler_obj, dfb_max_obj, compute_kernel_lib::ReduceInputBlockShape::row(Wt - 1));
@@ -93,6 +113,7 @@ ALWI void find_shift(
                 compute_kernel_lib::ReduceInputBlockShape::row(1),
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                 compute_kernel_lib::Accumulate(dfb_max_obj, /*iter=*/1));
+#endif
         }
     } else {
         // find min

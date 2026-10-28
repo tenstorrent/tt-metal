@@ -82,6 +82,19 @@ ALWI void find_shift(
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::tmp, dfb::max_scaler, dfb::max>(
                 dfb_tmp_obj, dfb_max_scaler_obj, dfb_max_obj, compute_kernel_lib::ReduceInputBlockShape::single());
         } else {
+#ifdef ARCH_QUASAR
+            // Quasar has no MAX + REDUCE_ROW accumulator reload (it needs a within-face transpose that
+            // copy_tile_to_dst_init_short rejects there; see reduce_helpers_compute.inl). Stage the row in
+            // dfb::x_minus_max (Wt deep and still free here), the last tile masked, and reduce it in one call,
+            // as the min-shift path below does.
+            for (uint32_t i = 0; i < Wt - 1; ++i) {
+                copy_tile_to_dfb<dfb::in0, dfb::x_minus_max>(dfb_in0_obj, dfb_x_m_max_obj, i, /*pop=*/0);
+            }
+            mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::x_minus_max>(
+                dfb_in0_obj, dfb_mask_obj, dfb_x_m_max_obj, Wt - 1, 0, /*pop=*/0, /*popm=*/0);
+            ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, dfb::x_minus_max, dfb::max_scaler, dfb::max>(
+                dfb_x_m_max_obj, dfb_max_scaler_obj, dfb_max_obj, ckl::ReduceInputBlockShape::row(Wt));
+#else
             // Phase 1: reduce Wt-1 full tiles into dfb::max via the helper.
             // dfb::in0 holds all Wt tiles persistently for later steps, so use
             // WaitUpfrontNoPop — the helper waits for the slice it needs and never pops.
@@ -106,6 +119,7 @@ ALWI void find_shift(
                 compute_kernel_lib::ReduceInputBlockShape::row(1),
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                 compute_kernel_lib::Accumulate(dfb_max_obj, /*iter=*/1));
+#endif
         }
     } else {
         // find min value
