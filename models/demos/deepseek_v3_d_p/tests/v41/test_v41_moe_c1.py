@@ -273,6 +273,35 @@ def test_v41_moe_c1(mesh_device, device_params):
                 exact = _oracle_row(moe, c1, x_rows[t], all_idx[t], all_w[t], tp)
                 per_row["oracle_pcc_full"].append(round(_pcc(exact.float(), ref_row[t]), 5))
                 per_row["oracle_pcc_c1"].append(round(_pcc(exact.float(), out_row[t]), 5))
+            # chip 0's pieces: W's nonzero entries per row, the FFN output rows of its regions against the oracle's
+            # expert FFN of the same row, the local weighted sum and the shared partial
+            W_host = ttnn.to_torch(ttnn.get_device_tensors(c1.debug["W"])[0])[0, 0].float()
+            y_host = ttnn.to_torch(ttnn.get_device_tensors(c1.debug["y"])[0])[0, 0].float()
+            table0 = ttnn.to_torch(ttnn.get_device_tensors(c1.table)[0]).flatten().tolist()
+            counts0 = ttnn.to_torch(ttnn.get_device_tensors(c1.debug["counts"])[0]).flatten().tolist()
+            pieces = {"W_nonzero": [], "y_pcc": [], "counts_mine": [int(counts0[e]) for e in table0]}
+            routed = c1.routed
+            two_d = lambda tt: tt.reshape(*tt.shape[-2:]).double()
+            limit = float(getattr(moe.moe.shared_expert, "_shared", moe.moe.shared_expert).clamped_silu_glu_limit)
+            for t in range(n_rows):
+                nz = [(int(i), round(float(W_host[t, i]), 5)) for i in torch.nonzero(W_host[t]).flatten().tolist()]
+                pieces["W_nonzero"].append(nz)
+                row_pcc = []
+                for l, e in enumerate(table0):
+                    if e in all_idx[t]:
+                        g = two_d(ttnn.to_torch(ttnn.get_device_tensors(routed.gate_projs[l])[0]))
+                        u_ = two_d(ttnn.to_torch(ttnn.get_device_tensors(routed.up_projs[l])[0]))
+                        d = two_d(ttnn.to_torch(ttnn.get_device_tensors(routed.down_projs[l])[0]))
+                        x = x_rows[t]
+                        inter = d.shape[0]
+                        gate_, up_ = x @ g[:, :inter], x @ u_[:, :inter]
+                        act = torch.nn.functional.silu(torch.clamp(gate_, max=limit)) * torch.clamp(up_, -limit, limit)
+                        want = (act @ d[:, : x.shape[0]]).float()
+                        row_pcc.append((l, e, round(_pcc(want, y_host[32 * l + t]), 5)))
+                pieces["y_pcc"].append(row_pcc)
+            per_row["chip0"] = pieces
+            for k in ("W", "y", "part", "shared"):
+                ttnn.deallocate(c1.debug[k])
             logger.info(f"c1 moe rows {n_rows} per row {json.dumps(per_row)}")
             # the same call captured and replayed: the replay's rows must equal the eager call's (the verify
             # step's rounds replay it)

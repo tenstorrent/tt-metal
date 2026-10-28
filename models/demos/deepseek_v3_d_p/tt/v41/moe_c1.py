@@ -701,6 +701,9 @@ class C1Moe:
             ttnn.deallocate(counts)
         # 10: the local weighted sum (row 0)
         part = ttnn.matmul(W, y, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        if self.debug is not None:
+            self.debug["W"], self.debug["y"], self.debug["part"] = ttnn.clone(W), ttnn.clone(y), ttnn.clone(part)
+            self.debug["shared"] = ttnn.clone(shared)
         if not matvec:
             ttnn.deallocate(y)
         if self.W0 is None:
