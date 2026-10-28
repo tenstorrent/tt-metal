@@ -127,7 +127,7 @@ inline void calculate_exp2() {
         // bf16: the raw-TTI replay body of exp, whose range reduction is x * LREG12 + 127 with
         // LREG12 = vConstFloatPrgm0. exp2_init sets it to 1.0f, so fl(x * 1 + 127) == fl(x + 127):
         // the same instruction sequence and constants as _sfpu_exp2_bf16_ (FP32_C0 loads c0 as
-        // the fp32 EXP_21F_BF16_C0), two rows per 31 issue slots instead of sfpi's 24 per row.
+        // the fp32 EXP_21F_BF16_C0), two rows per 30 issue slots instead of sfpi's 24 per row.
         _sfpu_exp_21f_bf16_tti_<
             /*SCALE_EN=*/false,
             /*is_fp32_dest_acc_en=*/false,
@@ -151,6 +151,9 @@ inline void exp2_init() {
         sfpi::vConstFloatPrgm0 = 1.0f;
         sfpi::vConstFloatPrgm1 = EXP_21F_BF16_C2;
         sfpi::vConstFloatPrgm2 = EXP_21F_BF16_C1;
+        // ADDR_MOD_6 = one SFPU row: the body's SFPSTOREs advance the destination (see exp_init).
+        addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = sfpi::SFP_DESTREG_STRIDE}}.set(
+            ADDR_MOD_6);
     }
 }
 

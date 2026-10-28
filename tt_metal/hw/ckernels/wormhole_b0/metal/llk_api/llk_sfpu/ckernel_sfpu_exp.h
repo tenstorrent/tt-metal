@@ -303,14 +303,16 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_base2_(sfpi::vFloat x) {
  * interleaved so that every 2-cycle producer (SFPMAD, SFPSWAP) is followed by
  * the other row's independent instruction instead of an SFPNOP. Each row runs
  * exactly the one-row instruction sequence, so the result is bit-identical to
- * it; the body issues 31 slots per row pair instead of 20 per row.
+ * it; the body issues 30 slots per row pair instead of 20 per row.
  *
  * Requires exp_init (or exp2_init) to have been called to configure
  *   - LREG12 = 1/ln2 (sfpi::vConstFloatPrgm0)
  *   - LREG13 = c2    (sfpi::vConstFloatPrgm1)  — poly coeff 4.791750e-15f
  *   - LREG14 = c1    (sfpi::vConstFloatPrgm2)  — poly coeff 7.839635e-08f
+ *   - ADDR_MOD_6 = {dest.incr = SFP_DESTREG_STRIDE}: each row's SFPSTORE advances
+ *     the destination by one SFPU row, in place of a separate TTI_INCRWC per pair.
  *
- * exp2 runs the same body (exp2_init programs LREG12-14) with LREG12 = 1.0f
+ * exp2 runs the same body (exp2_init programs LREG12-14 and ADDR_MOD_6) with LREG12 = 1.0f
  * (x * 1 + 127 == x + 127 exactly) and FP32_C0 set, which loads c0 as the fp32
  * EXP_21F_BF16_C0 instead of its fp16 rounding: with that, each row is
  * instruction-for-instruction the sfpi _sfpu_exp2_bf16_ with the same constants.
@@ -343,23 +345,16 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // TTI_ instructions emitted between the TTI_REPLAY/record call and the
     // replay loop, or the replay buffer will misalign.
     //
-    //   Base body:                                                29
+    //   Base body:                                                28
     //     2x SFPLOAD, 2x SFPMAD, 2x SFPLOADI, 2x SFPSWAP,
     //     2x SFPEXEXP, 2x SFPEXMAN8, 2x SFPSHFT, 2x SFPEXMAN9, 2x SFPCAST,
     //     2x SFPMAD poly1, 2x SFPMAD poly2, 2x SFPSETEXP, 2x SFP_STOCH_RND,
-    //     2x SFPSTORE, INCRWC
+    //     2x SFPSTORE (each advancing dest by one row through ADDR_MOD_6)
     //   + SCALE_EN ? 2 : 0                  (2x SFPMULI scale)
     //   - is_fp32_dest_acc_en ? 2 : 0       (no SFP_STOCH_RND fp32→bf16)
     //   + CLAMP_NEGATIVE ? 2 : 0            (2x SFPSWAP lower clamp)
-    constexpr unsigned BODY_LEN = 29 + (SCALE_EN ? 2 : 0) - (is_fp32_dest_acc_en ? 2 : 0) + (CLAMP_NEGATIVE ? 2 : 0);
-
-    // The replay buffer holds 32 instructions. The 33-instruction body (SCALE_EN
-    // with CLAMP_NEGATIVE) records its first 32 and issues the trailing INCRWC
-    // inline after every replay instead.
-    constexpr unsigned REPLAY_BUF_LEN = 32;
-    constexpr bool INCRWC_INLINE = BODY_LEN > REPLAY_BUF_LEN;
-    constexpr unsigned RECORD_LEN = INCRWC_INLINE ? REPLAY_BUF_LEN : BODY_LEN;
-    static_assert(BODY_LEN <= REPLAY_BUF_LEN + 1, "only the INCRWC may spill past the replay buffer");
+    constexpr unsigned BODY_LEN = 28 + (SCALE_EN ? 2 : 0) - (is_fp32_dest_acc_en ? 2 : 0) + (CLAMP_NEGATIVE ? 2 : 0);
+    static_assert(BODY_LEN <= 32, "the replay buffer holds 32 instructions");
 
     // Record the loop body into replay buffer slot 0 the first time
     // through. Subsequent iterations replay the recorded sequence, which
@@ -368,14 +363,14 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     //
     // Per-element runtime is unchanged: the recorded instructions execute
     // exactly as if they had been issued inline, and dst_reg is advanced
-    // by the INCRWC inside the body so each replay walks to the next
-    // row pair correctly.
+    // by the two SFPSTOREs inside the body so each replay walks to the
+    // next row pair correctly.
     //
     // The accurate path (APPROXIMATION_MODE=false) does not otherwise use
     // the replay buffer, so slot 0 is free here. Callers that mix this
     // function with other replay-buffer clients should ensure they don't
     // require slot 0 to survive across the call.
-    TTI_REPLAY(0, RECORD_LEN, 1, 1);
+    TTI_REPLAY(0, BODY_LEN, 1, 1);
 
     // val = sfpi::dst_reg[0] (row A) and sfpi::dst_reg[1] (row B)
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
@@ -460,20 +455,20 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
             sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
     }
 
-    // sfpi::dst_reg[0] = y_A; sfpi::dst_reg[1] = y_B; sfpi::dst_reg += 2;
-    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
-    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 2);
-    TTI_INCRWC(0, 4, 0, 0);
+    // sfpi::dst_reg[0] = y_A; sfpi::dst_reg++; sfpi::dst_reg[0] = y_B; sfpi::dst_reg++.
+    // Each store advances the destination by one SFPU row through ADDR_MOD_6 (set in
+    // exp_init / exp2_init), which the two-bit SFPU addr-mod field selects as ADDR_MOD_2,
+    // as the comparison and unary max/min kernels do; this replaces the TTI_INCRWC per
+    // row pair. Row B's store therefore uses offset 0, not 2.
+    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
+    TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::DEFAULT, ADDR_MOD_2, 0);
 
 #pragma GCC unroll 16
     for (std::uint32_t i = 1; i < ITERATIONS / 2; i++) {
         // Replay the recorded body for the remaining ITERATIONS/2 - 1 row pairs.
         // Each replay is one REPLAY-equivalent issue; the body executes as
-        // if it had been issued inline, dst_reg advancing via the INCRWC.
-        TTI_REPLAY(0, RECORD_LEN, 0, 0);
-        if constexpr (INCRWC_INLINE) {
-            TTI_INCRWC(0, 4, 0, 0);
-        }
+        // if it had been issued inline, dst_reg advancing via the stores.
+        TTI_REPLAY(0, BODY_LEN, 0, 0);
     }
 }
 
@@ -758,7 +753,8 @@ template <bool APPROXIMATION_MODE, std::uint32_t scale, bool CLAMP_NEGATIVE, boo
 void exp_init() {
     // Common SFPU init inlined (SFPU config register + ADDR_MOD_7 + counter reset), then the op-specific
     // exp setup below -- one self-contained init, no separate shared-common-init call. Same functionality as
-    // _llk_math_eltwise_unary_sfpu_init_<exponential>() (exp uses only ADDR_MOD_7, no op-specific ADDR_MOD_6).
+    // _llk_math_eltwise_unary_sfpu_init_<exponential>() (ADDR_MOD_7 for the loads; the accurate bf16 path below
+    // also programs ADDR_MOD_6 for its stores).
     sfpu::_init_sfpu_config_reg();
     addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = 0}}.set(ADDR_MOD_7);
     math::reset_counters(p_setrwc::SET_ABD_F);
@@ -1089,6 +1085,11 @@ void exp_init() {
                 // LREG14 = c1 (0x33a85ada), the third coefficient of the TTI body's
                 // polynomial; the approximate no-clamp path uses LREG14 for its own purposes.
                 sfpi::vConstFloatPrgm2 = 7.839635491371155e-08f;
+                // The body's SFPSTOREs advance the destination by one SFPU row each (what dst_reg++
+                // does), under the SFPU addr-mod base (real slot ADDR_MOD_6, selected as ADDR_MOD_2
+                // from the instruction), so each row pair saves a TTI_INCRWC. Loads keep ADDR_MOD_7.
+                addr_mod_t{.srca = {.incr = 0}, .srcb = {.incr = 0}, .dest = {.incr = sfpi::SFP_DESTREG_STRIDE}}.set(
+                    ADDR_MOD_6);
             }
         } else {
             // fp32 scalar path (_sfpu_exp_fp32_accurate_) — uses the scalar
