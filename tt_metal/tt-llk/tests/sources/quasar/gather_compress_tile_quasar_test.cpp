@@ -83,7 +83,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 
     set_up_fpu_to_pack_dest_dvalid_chain<dest_dvalid_client::FPU>();
     const DataFormat src_reg_format = static_cast<DataFormat>(formats.unpack_B_dst);
-    _llk_math_srcAB_hw_configure_<false /*EN_IMPLIED_MATH_FORMAT*/, is_fp32_dest_acc_en>(src_reg_format, src_reg_format);
+    _llk_math_srcAB_hw_configure_<is_fp32_dest_acc_en>(src_reg_format, src_reg_format);
 
     _llk_math_gather_compress_init_<is_fp32_dest_acc_en>(src_reg_format);
 
