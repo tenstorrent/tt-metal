@@ -5,11 +5,11 @@
 the SP x TP mesh. Adapted from tt/q_a.py (bf16 rows -> one ttnn.linear on the weights dequantized at load).
 
 Per chip (r, c) the input is the engram rows [1, 1, S/SP, 6144] (tt/engram.py:TtEngramRows: rows split over axis 0,
-replicated over axis 1; bf16 there, fp32 from the harness):
+replicated over axis 1; bfloat8_b with ENGRAM_ROWS=bfp8, else bf16; fp32 from the harness):
 
-    bf16 cast                   the released fp8_linear's act_quant_dequant(rows, 32) is not emulated (agent rule 17;
-                                FIX.8 deleted ENGRAM_KV_QDQ): the rows are table values, e4m3 x 2^k, bf16-exact
-    ttnn.linear                 rows [S/SP, 6144] bf16 @ the chip's wkv columns [6144, 5 x H/TP] (DENSE_WEIGHTS),
+    gemm_input                  GEMM_INPUTS (FIX.7, F208): bfloat8_b, the device's form of the released fp8_linear's
+                                act quant of the rows; rows that arrive as bfloat8_b are read as they are
+    ttnn.linear                 rows [S/SP, 6144] @ the chip's wkv columns [6144, 5 x H/TP] (DENSE_WEIGHTS),
                                 MATMUL_FIDELITY + fp32 accumulation, fp32 out. wkv is split by
                                 output: chip column c holds its hidden slice [c H/TP, (c+1) H/TP) of each of the five
                                 H-wide blocks (4 stream keys, the value), so engram_add needs no reshard (plan.md)
