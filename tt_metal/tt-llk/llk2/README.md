@@ -12,6 +12,7 @@ Resolver are used by more than one layer. Everything is compile time except addr
 inc/common/                 arch-independent, always on the include path
     kernel_settings.h       Dest mode and math fidelity for the kernel
     tensor/tensor.h         TensorShape, TensorSpec, Tensor
+    tensor/dataflow_buffer.h  Tensors from dataflow buffers: wait_front, reserve_back; release pops / pushes
     compute_api/            one op per file, on Tensors, taking the op's modifier struct
     resolver/               plan structs and the driver (a chain of one call)
     llk_lib/thread.h        current_thread and the per-thread call pattern
@@ -33,6 +34,7 @@ include path.
 | `add`, `sub` (`Broadcast::Row`) | `compute_api/add.h`, `compute_api/sub.h` | `llk_lib/unpack.h`, `llk_lib/eltwise_binary.h` | `test_llk2_add.py` |
 | `copy` | `compute_api/copy.h` | `llk_lib/unpack.h` (incl. unpack to Dest), `llk_lib/copy.h` | `test_llk2_copy.py` |
 | `vec_silu`, `vec_tanh`, `vec_gelu`, `vec_gelu_tanh`, `vec_relu_max`, `vec_sigmoid`, `vec_hardsigmoid`, `vec_hardtanh`, `vec_selu`, `vec_softplus` | `compute_api/vec.h` | `llk_lib/vec.h` | `test_llk2_vec.py` |
+| dataflow buffers (`wait_front`, `reserve_back`, `release`) | `tensor/dataflow_buffer.h` | `llk_lib/dataflow_buffer.h` | `test_llk2_dfb.py` |
 
 Pack and the math-to-pack Dest sync still use today's LLKs in the tests.
 
