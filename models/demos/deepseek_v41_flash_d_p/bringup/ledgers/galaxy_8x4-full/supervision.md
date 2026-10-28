@@ -617,3 +617,10 @@ session's argv); a resume clears PAUSE (use --until to stop); watch + cron :07/:
 - 15:50 OWNER: read-ahead fix done here, not on the 2x2: reference/weights.py EngramTable madvise(MADV_RANDOM) on the
   two table mappings. Cold layer-1 lookup through EngramTable: 4,480 -> 610 ms, disk read ~23 GB -> ~0.95 GB, rows
   byte-equal; 2-layer repro (engram layer 1) passes. ENGRAM_HOST_PATH.md: step 2's MADV_RANDOM part is DONE.
+- 15:55 PUSHED everything: origin dnijemcevic/model_bringup = 5b275cb7622 (F207, P.1, P.2, P.3 reject, F208 + specs,
+  FIX.7, read-ahead fix, hand-off records). Orchestrator stopped after FIX.7 (--until FIX.7); P.4/P.5 held; device idle.
+  NEXT (in order): (1) report FIX.7's per-matmul before/after numbers (accuracy margins, device time per chunk) from
+  its agent report (runs/galaxy_8x4-full/run1/agents/FIX.7.overseer.1.jsonl final message, results/FIX.7.json) - owner
+  asked, not yet done; (2) the bfp4 packer-rounding test on one card (recipe above); (3) move
+  /scratch/dnijemcevic/ckv_derisk/ files into the repo (paths in its report) and run the compressed-KV L1 tests on one
+  card; (4) owner decisions still open (see 14:55 and 14:35 entries).
