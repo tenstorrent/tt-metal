@@ -110,23 +110,27 @@ void run_scenario(
     const double main_us = time_cfg(kMainConfig);
     const xt::xarray<float> main_out = core::to_xtensor(run(kMainConfig));
 
-    std::vector<std::pair<std::string, metal::SDPAForwardProgramConfig>> configs = {{"default (picked)", {}}};
-    for (const auto& cfg : extra_configs) {
-        configs.emplace_back(fmt::format("q{} k{} h{}", cfg.q_chunk_size, cfg.k_chunk_size, cfg.heads_per_item), cfg);
-    }
-    std::vector<Row> rows;
-    for (const auto& [label, cfg] : configs) {
+    auto measure = [&](const std::string& label, const metal::SDPAForwardProgramConfig& cfg) {
         Row row{.label = label};
+        row.device_us = time_cfg(cfg);
+        row.speedup = benchmark_utils::speedup_x(main_us, row.device_us);
+        const xt::xarray<float> out = core::to_xtensor(run(cfg));
+        row.max_abs_diff = static_cast<float>(xt::amax(xt::abs(out - main_out))());
+        return row;
+    };
+
+    // The default pick is what the model runs, so its failure fails the benchmark; the command-line
+    // configs are optional and a config the shape cannot take is reported as skipped.
+    std::vector<Row> rows;
+    rows.push_back(measure("default (picked)", {}));
+    for (const auto& cfg : extra_configs) {
+        const std::string label = fmt::format("q{} k{} h{}", cfg.q_chunk_size, cfg.k_chunk_size, cfg.heads_per_item);
         try {
-            row.device_us = time_cfg(cfg);
-            row.speedup = benchmark_utils::speedup_x(main_us, row.device_us);
-            const xt::xarray<float> out = core::to_xtensor(run(cfg));
-            row.max_abs_diff = static_cast<float>(xt::amax(xt::abs(out - main_out))());
+            rows.push_back(measure(label, cfg));
         } catch (const std::exception& e) {
             std::string_view what = e.what();  // first line only: TT_FATAL messages carry a backtrace
-            row.skipped = std::string(what.substr(0, what.find('\n')));
+            rows.push_back(Row{.label = label, .skipped = std::string(what.substr(0, what.find('\n')))});
         }
-        rows.push_back(std::move(row));
     }
 
     fmt::print(
