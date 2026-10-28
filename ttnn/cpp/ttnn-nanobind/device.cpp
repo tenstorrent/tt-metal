@@ -52,6 +52,7 @@
 #include <tt-metalium/experimental/dispatch_context.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/realtime_profiler.hpp>
+#include <tt-metalium/experimental/reserved_compute_columns.hpp>
 #include <tt-metalium/tt_metal.hpp>
 
 using namespace tt::tt_metal;
@@ -946,6 +947,15 @@ void device_module(nb::module_& m_device) {
 void py_device_module(nb::module_& mod) {
     ttnn_device(mod);
     device_module(mod);
+    mod.def(
+        "set_reserved_compute_columns",
+        &tt::tt_metal::experimental::SetReservedComputeColumns,
+        nb::arg("columns"),
+        R"doc(
+        Experimental: narrows the compute grid every mesh device reports by ``columns`` trailing columns, so that
+        operations sizing themselves from ``compute_with_storage_grid_size()`` stay off them. Set it after loading a
+        sub-device manager that gives those columns to another sub-device, and set it back to 0 before unloading it.
+        )doc");
 }
 
 }  // namespace ttnn::device

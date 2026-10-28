@@ -1,0 +1,458 @@
+<title>Derived Ordering for FSDP</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans+Condensed:wght@500;600&family=IBM+Plex+Sans:ital,wght@0,400;0,500;0,600;1,400&display=swap">
+<style>
+/* Layout: one reading column (~68ch) with figures allowed wider; two semantic hues name the two streams everywhere. */
+:root {
+  --bg: #f3f5f5;
+  --surface: #ffffff;
+  --ink: #161b1e;
+  --muted: #56636b;
+  --rule: #d6dde0;
+  --compute: #2b6a99;      /* command queue 0: compute */
+  --compute-soft: #dce8f1;
+  --collective: #b56d0c;   /* command queue 1: collectives */
+  --collective-soft: #f6e6cf;
+  --accent: #0d6f63;
+  --bad: #b3261e;
+  --bad-soft: #f7dedc;
+  --good: #2d6e33;
+  --font-display: "IBM Plex Sans Condensed", "Arial Narrow", system-ui, sans-serif;
+  --font-body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1315; --surface: #161c1f; --ink: #e5eaed; --muted: #98a5ad; --rule: #2a3338;
+    --compute: #74ade0; --compute-soft: #1b3346; --collective: #e3a24c; --collective-soft: #3d2c14;
+    --accent: #4fc0ad; --bad: #ef7a70; --bad-soft: #3e1f1c; --good: #78c27e;
+    color-scheme: dark;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1315; --surface: #161c1f; --ink: #e5eaed; --muted: #98a5ad; --rule: #2a3338;
+  --compute: #74ade0; --compute-soft: #1b3346; --collective: #e3a24c; --collective-soft: #3d2c14;
+  --accent: #4fc0ad; --bad: #ef7a70; --bad-soft: #3e1f1c; --good: #78c27e;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+body {
+  background: var(--bg); color: var(--ink);
+  font-family: var(--font-body); font-size: 16px; line-height: 1.6;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 40px 72px;
+}
+main { max-width: 980px; margin: 0 auto; display: flex; flex-direction: column; gap: 56px; }
+section, header { display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.prose { max-width: 68ch; }
+h1, h2, h3 { font-family: var(--font-display); text-wrap: balance; margin: 0; line-height: 1.15; }
+h1 { font-size: clamp(2.2rem, 5vw, 3.2rem); font-weight: 600; letter-spacing: -0.01em; }
+h2 { font-size: 1.6rem; font-weight: 600; }
+h3 { font-size: 1.15rem; font-weight: 600; }
+p { margin: 0; }
+.eyebrow { font-family: var(--font-mono); font-size: 0.78rem; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.lede { font-size: 1.15rem; line-height: 1.55; max-width: 64ch; }
+a { color: var(--accent); }
+a:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+code, .mono { font-family: var(--font-mono); font-size: 0.88em; }
+.q0 { color: var(--compute); font-weight: 500; }
+.q1 { color: var(--collective); font-weight: 500; }
+
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1px; background: var(--rule); border: 1px solid var(--rule); border-radius: 6px; overflow: hidden; }
+.fact { background: var(--surface); padding: 16px 18px; display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.fact b { font-family: var(--font-display); font-size: 1.6rem; font-weight: 600; font-variant-numeric: tabular-nums; line-height: 1.1; }
+.fact span { color: var(--muted); font-size: 0.9rem; line-height: 1.4; }
+
+figure { margin: 0; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+figcaption { color: var(--muted); font-size: 0.9rem; max-width: 72ch; }
+.panel { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 16px; overflow-x: auto; }
+svg text { font-family: var(--font-body); fill: var(--ink); }
+svg .small { font-size: 12px; fill: var(--muted); }
+svg .mono { font-family: var(--font-mono); font-size: 12px; }
+
+.table-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 6px; background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: 0.93rem; }
+th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+tr:last-child td { border-bottom: 0; }
+th { font-family: var(--font-mono); font-size: 0.75rem; letter-spacing: 0.05em; text-transform: uppercase; color: var(--muted); font-weight: 500; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.pill { display: inline-block; font-family: var(--font-mono); font-size: 0.75rem; padding: 1px 8px; border-radius: 999px; white-space: nowrap; }
+.pill.ok { color: var(--good); border: 1px solid currentColor; }
+.pill.bad { color: var(--bad); background: var(--bad-soft); }
+
+pre { margin: 0; font-family: var(--font-mono); font-size: 0.82rem; line-height: 1.55; background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: 14px 16px; overflow-x: auto; }
+pre .c { color: var(--muted); }
+pre .k { color: var(--accent); }
+
+.lessons { display: grid; grid-template-columns: 1fr; gap: 0; border-top: 1px solid var(--rule); }
+.lesson { display: grid; grid-template-columns: minmax(0, 15rem) minmax(0, 1fr); gap: 8px 32px; padding: 20px 0; border-bottom: 1px solid var(--rule); }
+.lesson h3 { font-size: 1.05rem; }
+.lesson .body { display: flex; flex-direction: column; gap: 10px; max-width: 64ch; }
+.lesson .ask { font-size: 0.92rem; color: var(--muted); }
+.lesson .ask b { color: var(--ink); font-weight: 600; }
+@media (max-width: 720px) { .lesson { grid-template-columns: minmax(0, 1fr); } }
+
+ul.plain { margin: 0; padding-left: 1.2em; display: flex; flex-direction: column; gap: 6px; }
+.split { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px; }
+@media (max-width: 760px) { .split { grid-template-columns: minmax(0, 1fr); } }
+.note { font-size: 0.9rem; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) { * { transition: none !important; animation: none !important; } }
+</style>
+
+<main>
+<header>
+  <p class="eyebrow">tt-train · ordering experiment · 1×2 Blackhole mesh · 28 Oct 2026</p>
+  <h1>Derived Ordering for FSDP</h1>
+  <p class="lede">Can TTNN work out FSDP's cross-queue ordering by itself, so that the training code never waits by hand?
+  On a real tt-train Llama step, correctness held. Every ordered variant matched the serial run exactly, and without
+  ordering the loss went to 10<sup>20</sup> from the first step. Speed took more work. As first built, the derived waits
+  made the step slower than not overlapping at all. Marking where each block's collectives and compute end, so that waits
+  point at events placed right after their producers, recovers 64 % of the possible overlap at the median and
+  91 % in the best pass. Most of the waits that remain exist because one queue was handed memory the other had just
+  freed.</p>
+  <div class="facts">
+    <div class="fact"><b>0 waits</b><span>written in the training code. Every wait is derived at launch; the fast variants only mark where blocks end</span></div>
+    <div class="fact"><b>identical</b><span>losses at every step, and per-parameter checksums on both chips, against the same schedule run serially</span></div>
+    <div class="fact"><b>~10<sup>20</sup></b><span>loss from the first step with ordering switched off: the races are real</span></div>
+    <div class="fact"><b>50 of 73</b><span>edges in one step come from memory reuse; 23 are data dependencies</span></div>
+  </div>
+</header>
+
+<section>
+  <h2>The question</h2>
+  <div class="prose">
+    <p>FSDP keeps each block's weights sharded and all-gathers them just before use. To hide the gathers, they run on a
+    second command queue one block ahead: <span class="q1">queue 1</span> owns one column of cores for collectives, while
+    <span class="q0">queue 0</span> computes on the other ten. Two kinds of ordering make this correct, and today both
+    have to be written by hand as events.</p>
+  </div>
+  <figure>
+    <div class="panel">
+      <svg viewBox="0 0 900 250" width="900" height="250" role="img" aria-labelledby="edgesTitle">
+        <title id="edgesTitle">Two queues, two kinds of edge: block k reads gather k's output, and gather k+1 may write into memory block k−1 was reading.</title>
+        <defs>
+          <marker id="arrowInk" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--ink)"/></marker>
+          <marker id="arrowAccent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" fill="var(--accent)"/></marker>
+        </defs>
+        <text x="0" y="66" font-size="13" font-weight="600" fill="var(--collective)">queue 1</text>
+        <text x="0" y="84" class="small">collectives, 1 column</text>
+        <text x="0" y="166" font-size="13" font-weight="600" fill="var(--compute)">queue 0</text>
+        <text x="0" y="184" class="small">compute, 10 columns</text>
+        <line x1="165" y1="40" x2="165" y2="210" stroke="var(--rule)"/>
+        <!-- queue 1 -->
+        <rect x="175" y="52" width="125" height="40" rx="3" fill="var(--collective-soft)" stroke="var(--collective)"/>
+        <text x="237" y="77" text-anchor="middle" font-size="13">gather k</text>
+        <rect x="345" y="52" width="140" height="40" rx="3" fill="var(--collective-soft)" stroke="var(--collective)"/>
+        <text x="415" y="77" text-anchor="middle" font-size="13">gather k+1</text>
+        <rect x="540" y="52" width="140" height="40" rx="3" fill="var(--collective-soft)" stroke="var(--collective)"/>
+        <text x="610" y="77" text-anchor="middle" font-size="13">gather k+2</text>
+        <!-- queue 0 -->
+        <rect x="175" y="152" width="160" height="40" rx="3" fill="var(--compute-soft)" stroke="var(--compute)"/>
+        <text x="255" y="177" text-anchor="middle" font-size="13">block k−1</text>
+        <rect x="345" y="152" width="185" height="40" rx="3" fill="var(--compute-soft)" stroke="var(--compute)"/>
+        <text x="437" y="177" text-anchor="middle" font-size="13">block k</text>
+        <rect x="540" y="152" width="185" height="40" rx="3" fill="var(--compute-soft)" stroke="var(--compute)"/>
+        <text x="632" y="177" text-anchor="middle" font-size="13">block k+1</text>
+        <!-- data edges -->
+        <line x1="300" y1="92" x2="347" y2="150" stroke="var(--ink)" stroke-width="1.6" marker-end="url(#arrowInk)"/>
+        <line x1="485" y1="92" x2="542" y2="150" stroke="var(--ink)" stroke-width="1.6" marker-end="url(#arrowInk)"/>
+        <!-- reuse edges -->
+        <line x1="335" y1="152" x2="347" y2="94" stroke="var(--accent)" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrowAccent)"/>
+        <line x1="530" y1="152" x2="542" y2="94" stroke="var(--accent)" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrowAccent)"/>
+        <!-- legend -->
+        <line x1="175" y1="228" x2="205" y2="228" stroke="var(--ink)" stroke-width="1.6" marker-end="url(#arrowInk)"/>
+        <text x="213" y="232" font-size="12.5">data: block k reads what gather k wrote</text>
+        <line x1="520" y1="228" x2="550" y2="228" stroke="var(--accent)" stroke-width="1.6" stroke-dasharray="5 4" marker-end="url(#arrowAccent)"/>
+        <text x="558" y="232" font-size="12.5">reuse: gather k+1 may land in memory block k−1 still reads</text>
+      </svg>
+    </div>
+    <figcaption>The reuse edge exists only because of where the allocator puts gather k+1's output, so code written by hand has to assume the worst every time.</figcaption>
+  </figure>
+  <div class="prose">
+    <p>The ordering ledger prototyped on <code>imichalak/queue-hazards-explore</code> derives both kinds at launch. Each
+    launch's tensor arguments count as reads and its outputs as writes. For every earlier access from another stream that
+    nothing has ordered yet, the launch waits on a <em>queue fence</em>, a position in the other queue's worker count.
+    In an earlier session, on an 8-layer loop shaped like FSDP, that matched carefully placed events:</p>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>8-layer FSDP-shaped loop, 1×2 mesh</th><th class="num">Time</th><th>Result</th></tr></thead>
+      <tbody>
+        <tr><td>Ordering derived at launch, no events in the program</td><td class="num">2.10 ms</td><td><span class="pill ok">correct</span></td></tr>
+        <tr><td>Events recorded right after each producer</td><td class="num">2.11 ms</td><td><span class="pill ok">correct</span></td></tr>
+        <tr><td>Everything on one queue</td><td class="num">2.45 ms</td><td><span class="pill ok">correct</span></td></tr>
+        <tr><td>Events recorded just before each consumer</td><td class="num">3.16 ms</td><td><span class="pill ok">correct</span></td></tr>
+        <tr><td>No ordering</td><td class="num">1.89 ms</td><td><span class="pill bad">wrong</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="prose">The open question was whether that survives a real training step: autograd, many ops per block,
+  reduce-scatters of gradients, an optimizer, and an allocator under pressure.</p>
+</section>
+
+<section>
+  <h2>The real step</h2>
+  <div class="split">
+    <div class="prose" style="display:flex;flex-direction:column;gap:12px">
+      <p>A ttml <code>Llama</code> with 4 blocks (hidden 2048, 16 heads, 4 KV heads, vocabulary 256), sequence 512,
+      batch 8, trained with AdamW. Each block is wrapped in <code>ttml.fsdp.fully_shard</code> across both chips; the
+      embedding, final norm and LM head stay replicated.</p>
+      <p>ttml's FSDP hooks were replaced by the prefetch on the right. Each block's gathers are issued one block ahead, in
+      forward and in backward, and its reduce-scatters as soon as its backward finishes. All collectives run on
+      <span class="q1">queue 1</span>; every other op runs unchanged on <span class="q0">queue 0</span>. No line waits.
+      The faster variants add <code>ttnn.record_event</code> calls in these hooks: markers the ledger can point waits at.</p>
+      <p>Every variant starts from the same weights and data.</p>
+    </div>
+    <pre><span class="k">def</span> pre_forward(state):
+    unshard(state)               <span class="c"># prefetched, or gather now</span>
+    prefetch(next_block(state))  <span class="c"># queue 1, no wait</span>
+
+<span class="k">def</span> backward_pre(state):
+    unshard(state)
+    prefetch(previous_block(state))
+
+<span class="k">def</span> backward_post(state):
+    <span class="k">for</span> param <span class="k">in</span> state.managed:
+        <span class="k">with</span> ttnn.command_queue(1):
+            g = ttnn.reduce_scatter(param.grad, ...)
+            <span class="k">with</span> ttnn.sub_device(1):
+                g = ttnn.multiply(g, 1 / fsdp_size)
+        param.set_value(shard); param.set_grad(g)
+        ttnn.deallocate(gathered_weight)
+        ttnn.deallocate(gathered_grad)</pre>
+  </div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Variant</th><th>Collectives on</th><th>Ordering</th><th>First losses</th><th>Checksums vs serial</th></tr></thead>
+      <tbody>
+        <tr><td>serial</td><td><span class="q0">queue 0</span>, compute cores</td><td>none needed</td><td class="mono">5.719 5.625 6.344 6.031 …</td><td><span class="pill ok">reference</span></td></tr>
+        <tr><td>overlap</td><td><span class="q1">queue 1</span>, own column</td><td>derived at launch</td><td class="mono">5.719 5.625 6.344 6.031 …</td><td><span class="pill ok">identical</span></td></tr>
+        <tr><td>one queue</td><td><span class="q0">queue 0</span>, own column</td><td>derived at launch</td><td class="mono">5.719 5.625 6.344 6.031 …</td><td><span class="pill ok">identical</span></td></tr>
+        <tr><td>racy</td><td><span class="q1">queue 1</span>, own column</td><td>off</td><td class="mono">~1e20 from step 1</td><td><span class="pill bad">diverged</span></td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="prose">In check mode, the first launch that reads another queue's output with nothing ordering it is refused,
+  naming both operations. Memory reuse is ordered silently in both modes. From a smaller run of the same script:</p>
+  <pre>RMSNormForwardDeviceOperation on command queue 0 on sub-device 0 reads DRAM memory [0x865280, 0x865a80) that
+AllGatherDeviceOperation on command queue 1 on sub-device 1 wrote, and nothing orders the two. Call ttnn.wait_for on the
+tensor first, have command queue 0 wait for an event recorded after AllGatherDeviceOperation, or synchronize.</pre>
+</section>
+
+<section>
+  <h2>Where the time went</h2>
+  <div class="prose">
+    <p>The step computes for about 96 ms, which is the serial step minus its collectives. Measured alone, the collectives
+    take about 15 ms on the ten compute columns and about 30 ms on the one column queue 1 gets. Serially the step takes
+    111.3 ms; with ordering switched off it takes 100.0 ms. That 10 % is the most overlap can win here, and
+    the chart measures each variant against it.</p>
+  </div>
+  <figure>
+    <div class="panel"><svg viewBox="0 0 900 340" width="900" height="340" role="img" aria-labelledby="chartTitle">
+<title id="chartTitle">Share of the possible overlap each variant recovers, from serial (0 %) to no ordering (100 %).</title>
+<defs><pattern id="hatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="var(--bad-soft)"/><line x1="0" y1="0" x2="0" y2="6" stroke="var(--bad)" stroke-width="2"/></pattern></defs>
+<line x1="350.0" y1="26" x2="350.0" y2="314" stroke="var(--rule)" stroke-width="1"/>
+<text x="350.0" y="332" text-anchor="middle" class="small">-25 %</text>
+<line x1="436.0" y1="26" x2="436.0" y2="314" stroke="var(--rule)" stroke-width="1.6"/>
+<text x="436.0" y="332" text-anchor="middle" class="small">0 %</text>
+<line x1="522.0" y1="26" x2="522.0" y2="314" stroke="var(--rule)" stroke-width="1"/>
+<text x="522.0" y="332" text-anchor="middle" class="small">25 %</text>
+<line x1="608.0" y1="26" x2="608.0" y2="314" stroke="var(--rule)" stroke-width="1"/>
+<text x="608.0" y="332" text-anchor="middle" class="small">50 %</text>
+<line x1="694.0" y1="26" x2="694.0" y2="314" stroke="var(--rule)" stroke-width="1"/>
+<text x="694.0" y="332" text-anchor="middle" class="small">75 %</text>
+<line x1="780.0" y1="26" x2="780.0" y2="314" stroke="var(--rule)" stroke-width="1"/>
+<text x="780.0" y="332" text-anchor="middle" class="small">100 %</text>
+<text x="350" y="18" class="small">share of the possible overlap recovered</text>
+<text x="0" y="51" font-size="13.5" font-weight="500">Serial</text>
+<text x="0" y="68" class="small">collectives on queue 0's compute cores</text>
+<rect x="435.0" y="42" width="2" height="22" fill="var(--compute)"/>
+<text x="790" y="52" font-size="13" class="mono" style="font-variant-numeric:tabular-nums">111.3 ms</text>
+<text x="790" y="68" class="small">0 %</text>
+<text x="0" y="97" font-size="13.5" font-weight="500">Ordering derived, as first built</text>
+<text x="0" y="114" class="small">events recorded when the consumer asks</text>
+<rect x="366.7" y="88" width="69.3" height="22" rx="2" fill="var(--accent)"/>
+<text x="790" y="98" font-size="13" class="mono" style="font-variant-numeric:tabular-nums">113.6 ms</text>
+<text x="790" y="114" class="small">-20 %</text>
+<text x="0" y="143" font-size="13.5" font-weight="500">+ events after each block's collectives</text>
+<text x="0" y="160" class="small">waits use the earliest event that covers them</text>
+<rect x="436.0" y="134" width="120.0" height="22" rx="2" fill="var(--accent)"/>
+<text x="790" y="144" font-size="13" class="mono" style="font-variant-numeric:tabular-nums">107.4 ms</text>
+<text x="790" y="160" class="small">+35 %</text>
+<text x="0" y="189" font-size="13.5" font-weight="500">+ FSDP's frees parked to the step's end</text>
+<text x="0" y="206" class="small">buffers the collectives touched</text>
+<rect x="436.0" y="180" width="138.7" height="22" rx="2" fill="var(--accent)"/>
+<text x="790" y="190" font-size="13" class="mono" style="font-variant-numeric:tabular-nums">106.8 ms</text>
+<text x="790" y="206" class="small">+40 %</text>
+<text x="0" y="235" font-size="13.5" font-weight="500">+ events where each block's compute ends</text>
+<text x="0" y="252" class="small">for collectives waiting on compute</text>
+<rect x="436.0" y="226" width="221.0" height="22" rx="2" fill="var(--accent)"/>
+<text x="790" y="236" font-size="13" class="mono" style="font-variant-numeric:tabular-nums">104.1 ms</text>
+<text x="790" y="252" class="small">+64 %</text>
+<text x="0" y="281" font-size="13.5" font-weight="500">No ordering</text>
+<text x="0" y="298" class="small">the ceiling; results wrong</text>
+<rect x="436.0" y="272" width="344.0" height="22" rx="2" fill="url(#hatch)"/>
+<text x="790" y="282" font-size="13" class="mono" style="font-variant-numeric:tabular-nums">100.0 ms</text>
+<text x="790" y="298" class="small">100 % · wrong</text>
+</svg></div>
+    <figcaption>Median of three interleaved passes of 6 steps each, all in one process. Per pass: parked frees 106.8, 107.4, 104.0 ms; events where compute ends 104.1, 101.1, 104.1 ms; serial 111.3, 111.6, 111.3 ms. Every bar except the hatched one matched the serial run exactly.</figcaption>
+  </figure>
+</section>
+
+<section>
+  <h2>What the ledger inserted</h2>
+  <div class="prose"><p>One training step after warm-up, with every edge and wait the ledger produced logged
+  (<code>TTNN_QUEUE_ORDERING_LOG</code>). An edge is an earlier access on the other queue that a launch had to follow and
+  that nothing already ordered.</p></div>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Per step</th><th class="num">As first built</th><th class="num">+ events after collectives, parked frees</th><th class="num">+ events where compute ends</th></tr></thead>
+      <tbody>
+        <tr><td>Launches on <span class="q0">queue 0</span> / <span class="q1">queue 1</span></td><td class="num">258 / 120</td><td class="num">258 / 120</td><td class="num">258 / 120</td></tr>
+        <tr><td>Edges</td><td class="num">73</td><td class="num">58</td><td class="num">50</td></tr>
+        <tr><td>… data: reading what the other queue wrote</td><td class="num">23</td><td class="num">9</td><td class="num">9</td></tr>
+        <tr><td>… memory reuse: writing where the other queue had been</td><td class="num">50</td><td class="num">49</td><td class="num">41</td></tr>
+        <tr><td>Waits on <span class="q0">queue 0</span> for <span class="q1">queue 1</span></td><td class="num">25 fences</td><td class="num">8 events</td><td class="num">8 events</td></tr>
+        <tr><td>Waits on <span class="q1">queue 1</span> for <span class="q0">queue 0</span></td><td class="num">15 fences</td><td class="num">16 fences</td><td class="num">6 events, 2 fences</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="prose"><p>The data edges are the ones a person would write: matmuls and RMSNorms reading gathered weights,
+  reduce-scatters reading gradients, and AdamW reading a scaled gradient. Four of the gradient reads go through a reshape
+  view, which is a separate buffer, so the ledger labels them memory reuse; they are counted as data here. Once waits
+  point at a block's event, one wait orders all eight of the block's gathers, and the later reads stop counting as
+  edges.</p></div>
+</section>
+
+<section>
+  <h2>What the step taught</h2>
+  <div class="lessons">
+    <div class="lesson">
+      <h3>A wait must point at an event recorded right after its producer</h3>
+      <div class="body">
+        <p>As first built, a fence on another queue became an event recorded <em>when the consumer asks</em>, at the
+        producer's old count. That record still goes to the back of the producer's queue. FSDP's prefetch enqueues gather
+        k+1 before block k's first consumer, so the record for gather k sits behind the eight gathers of block k+1, and
+        block k waits for them. It is the late-event trap from the toy, rebuilt inside the runtime, and it made the overlap
+        slower than serial in every pass.</p>
+        <div class="panel">
+          <svg viewBox="0 0 600 214" width="600" height="214" role="img" aria-labelledby="lateTitle">
+            <title id="lateTitle">An event recorded when queue 0 asks fires only after gather k+1, so block k waits; an event recorded right after gather k fires in time.</title>
+            <defs>
+              <pattern id="waitHatch" width="6" height="6" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><rect width="6" height="6" fill="var(--bad-soft)"/><line x1="0" y1="0" x2="0" y2="6" stroke="var(--bad)" stroke-width="1.5"/></pattern>
+            </defs>
+            <text x="0" y="14" font-size="12.5" font-weight="600">Recorded when queue 0 asks</text>
+            <text x="0" y="41" class="small" fill="var(--collective)">queue 1</text>
+            <text x="0" y="71" class="small" fill="var(--compute)">queue 0</text>
+            <rect x="70" y="26" width="140" height="24" rx="2" fill="var(--collective-soft)" stroke="var(--collective)"/><text x="140" y="42" text-anchor="middle" font-size="12">gather k</text>
+            <rect x="210" y="26" width="160" height="24" rx="2" fill="var(--collective-soft)" stroke="var(--collective)"/><text x="290" y="42" text-anchor="middle" font-size="12">gather k+1 (queued first)</text>
+            <path d="M370 21 l6 6 l-6 6 l-6 -6 z" fill="var(--ink)"/>
+            <rect x="70" y="56" width="160" height="24" rx="2" fill="var(--compute-soft)" stroke="var(--compute)"/><text x="150" y="72" text-anchor="middle" font-size="12">block k−1</text>
+            <rect x="230" y="56" width="140" height="24" fill="url(#waitHatch)"/><text x="300" y="72" text-anchor="middle" font-size="12">waits</text>
+            <rect x="370" y="56" width="170" height="24" rx="2" fill="var(--compute-soft)" stroke="var(--compute)"/><text x="455" y="72" text-anchor="middle" font-size="12">block k</text>
+
+            <text x="0" y="120" font-size="12.5" font-weight="600">Recorded right after gather k</text>
+            <text x="0" y="147" class="small" fill="var(--collective)">queue 1</text>
+            <text x="0" y="177" class="small" fill="var(--compute)">queue 0</text>
+            <rect x="70" y="132" width="140" height="24" rx="2" fill="var(--collective-soft)" stroke="var(--collective)"/><text x="140" y="148" text-anchor="middle" font-size="12">gather k</text>
+            <path d="M210 127 l6 6 l-6 6 l-6 -6 z" fill="var(--ink)"/>
+            <rect x="214" y="132" width="160" height="24" rx="2" fill="var(--collective-soft)" stroke="var(--collective)"/><text x="294" y="148" text-anchor="middle" font-size="12">gather k+1</text>
+            <rect x="70" y="162" width="160" height="24" rx="2" fill="var(--compute-soft)" stroke="var(--compute)"/><text x="150" y="178" text-anchor="middle" font-size="12">block k−1</text>
+            <rect x="230" y="162" width="170" height="24" rx="2" fill="var(--compute-soft)" stroke="var(--compute)"/><text x="315" y="178" text-anchor="middle" font-size="12">block k</text>
+            <path d="M560 203 l5 5 l-5 5 l-5 -5 z" fill="var(--ink)" transform="translate(-480 -4)"/>
+            <text x="92" y="208" class="small">the event block k waits for</text>
+          </svg>
+        </div>
+        <p>The fix was to record one event after each block's collectives, and let the ledger wait on the earliest event
+        recorded at or after the point it needs. The other direction works the same way: with one event where each block's
+        compute ends on queue 0, 6 of the 8 waits on queue 1, and 14 of the 16 in the step, point at events. With ordering
+        off, adding the records moved the step by less than a millisecond, within noise.</p>
+        <p class="ask"><b>Next:</b> place these markers in the framework rather than in model code, for example in launch
+        after each collective and in FSDP's hooks at block ends. Alternatively, give metal a wait on another queue's worker
+        count that does not travel through that queue's command stream.</p>
+      </div>
+    </div>
+    <div class="lesson">
+      <h3>Memory reuse is most of what is left</h3>
+      <div class="body">
+        <p>With the markers in place, 41 of the step's 50 edges are memory reuse. In 37 of them a gather or reduce-scatter
+        writes into memory that compute had just freed: activations and gradients, not FSDP's own buffers. Each one holds
+        the collective back until compute is done with that address. That also explains why parking the frees FSDP makes
+        changed little (107.4 against 106.8 ms). The passes landing in two modes about 3 ms apart fit the same picture,
+        since where the allocator puts a tensor decides which of these waits exist. This experiment did not isolate that
+        cost; the next one should.</p>
+        <p class="ask"><b>Next:</b> a stream-aware allocator. CUDA's caching allocator keeps a pool per stream and
+        delays cross-stream reuse (<code>record_stream</code>) for this reason. The ledger already knows which freed ranges
+        the other queue may still touch, so it could steer allocation away from them.</p>
+      </div>
+    </div>
+    <div class="lesson">
+      <h3>A column of cores is a slow place for collectives</h3>
+      <div class="body">
+        <p>Moving the collectives from the compute grid to one column doubles their time, from about 15 to about 30 ms.
+        Here that still hides behind 96 ms of compute. On a model with less compute per byte it would not, so the core
+        budget for collectives is a scheduling decision rather than a constant.</p>
+      </div>
+    </div>
+    <div class="lesson">
+      <h3>Defects and gaps found on the way</h3>
+      <div class="body">
+        <ul class="plain">
+          <li><code>ttnn.reduce_scatter(subdevice_id=…)</code> shifts the sub-device's own cores by the sub-device's first
+          core a second time. It fails whenever that pushes them off the sub-device, which a trailing column always does.
+          The bug is still on main (<code>6d8a1032acc</code>); the fix passes a zero offset at the two unfused call sites.
+          Without it this experiment could not run.</li>
+          <li>ttml's initialization is not reproducible under <code>set_seed</code>: two models built after the same seed
+          gave different first losses (5.72 and 5.69 on a small configuration).</li>
+          <li>A reshape view is a separate buffer, so a gradient read through one looks like memory reuse. It is still
+          ordered, but check mode orders it silently instead of refusing.</li>
+          <li>AdamW updates its moments in place without returning them, so the ledger cannot see those writes. That is
+          harmless while only queue 0 touches them, and it is the case for operations declaring what they write.</li>
+          <li>The worker-cores scope from #62762 rejected a sub-device lying outside the narrowed compute grid this
+          experiment uses. Main never narrows the grid, so this only constrains the narrowing approach; the experiment
+          lets the scope accept any sub-device's cores.</li>
+        </ul>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>What it means for FSDP overlap</h2>
+  <div class="prose" style="display:flex;flex-direction:column;gap:12px">
+    <p>The draft overlap (#56901) orders by hand. Its <code>fsdp.py</code> diff adds 684 lines and removes 224. Besides
+    tile-aware sharding and sharded accumulation, the additions hold the ordering machinery: persistent gather slots
+    rotated by a <code>SlotSchedule</code>, release events, and reduce-scatters deferred behind the next prefetch. Some of
+    that machinery depends on peers staying within a lookahead of each other.</p>
+    <p>The prefetch here contains no waits, and each device's ordering is derived from what each op reads and writes.
+    Collectives keep their entry handshake because their outputs are fresh. On this configuration correctness held. Speed
+    needs two more pieces:</p>
+    <ul class="plain">
+      <li>waits that point at events recorded right after their producers, with the markers placed by the framework;</li>
+      <li>allocation that does not hand one queue memory the other has just freed.</li>
+    </ul>
+    <p class="note">Limits: one 1×2 mesh, one model size with a small vocabulary, 4 blocks with only the blocks sharded,
+    resharding after forward, and no tensor parallelism. Parameters were compared by per-device checksums, not element
+    by element. The collectives-alone times gather each block twice, slightly more than the step does.</p>
+  </div>
+</section>
+
+<section>
+  <h2>Reproduce</h2>
+  <div class="prose"><p>Local branch <code>imichalak/fsdp-auto-ordering-exp</code>, on top of
+  <code>imichalak/queue-hazards-explore</code>; the changes are uncommitted and not pushed. The script and every result
+  file are in <code>tt-train/tools/profiling/fsdp_auto_ordering/</code>.</p></div>
+  <pre><span class="c"># build: metal (narrowed compute grid), ttnn (ledger log, event reuse, reduce_scatter fix), ttml (two queues)</span>
+ulimit -Su $(ulimit -Hu); ./build_metal.sh -e --build-tt-train
+<span class="c"># the chart: three interleaved passes of every variant</span>
+V=serial,overlap,eager,eagerpark,marks,dataonly,racy
+python tt-train/tools/profiling/fsdp_auto_ordering/exp_fsdp_step.py --steps 6 --warmup 2 \
+    --variants $V,$V,$V --init init.pt --out final2_h2048_l4.json
+<span class="c"># the edge census of one step</span>
+python tt-train/tools/profiling/fsdp_auto_ordering/exp_fsdp_step.py --steps 1 --warmup 2 \
+    --variants marks --init init.pt --log census_marks.log --out census_marks.json</pre>
+</section>
+</main>

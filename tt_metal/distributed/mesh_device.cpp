@@ -53,6 +53,7 @@
 #include "distributed/fd_mesh_command_queue.hpp"
 #include "distributed/realtime_profiler_manager.hpp"
 #include <tt-metalium/experimental/trace_allocation_tracker.hpp>
+#include <tt-metalium/experimental/reserved_compute_columns.hpp>
 #include "impl/streaming_profiler/receiver.hpp"
 #include "impl/buffers/tensor_prefetcher_manager.hpp"
 #include "impl/buffers/drisc_l1_arena.hpp"
@@ -1009,12 +1010,22 @@ DeviceIds MeshDeviceImpl::get_device_ids() const {
 
 size_t MeshDeviceImpl::num_devices() const { return view_->num_devices(); }
 
+namespace {
+std::atomic<uint32_t> reserved_compute_columns{0};
+}  // namespace
+
 CoreCoord MeshDeviceImpl::compute_with_storage_grid_size() const {
-    if (mesh_properties_.has_value()) {
-        return mesh_properties_->compute_with_storage_grid_size;
+    CoreCoord grid = mesh_properties_.has_value()
+                         ? mesh_properties_->compute_with_storage_grid_size
+                         : validate_and_get_reference_value(local_devices_, [](const auto* device) {
+                               return device->compute_with_storage_grid_size();
+                           });
+    const uint32_t reserved = reserved_compute_columns.load(std::memory_order_relaxed);
+    if (reserved > 0) {
+        TT_FATAL(reserved < grid.x, "Cannot reserve {} of {} compute columns", reserved, grid.x);
+        grid.x -= reserved;
     }
-    return validate_and_get_reference_value(
-        local_devices_, [](const auto* device) { return device->compute_with_storage_grid_size(); });
+    return grid;
 }
 
 // Resolves every MeshProperties member. See MeshProperties for why these are worth establishing.
@@ -2406,3 +2417,10 @@ void MeshDevice::wait_for_thread_pool() { pimpl_->wait_for_thread_pool(); }
 std::ostream& operator<<(std::ostream& os, const MeshDevice& mesh_device) { return os << mesh_device.to_string(); }
 
 }  // namespace tt::tt_metal::distributed
+
+namespace tt::tt_metal::experimental {
+
+void SetReservedComputeColumns(uint32_t columns) { distributed::reserved_compute_columns.store(columns); }
+uint32_t GetReservedComputeColumns() { return distributed::reserved_compute_columns.load(); }
+
+}  // namespace tt::tt_metal::experimental

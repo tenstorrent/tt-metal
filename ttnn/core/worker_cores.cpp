@@ -4,6 +4,8 @@
 
 #include "ttnn/worker_cores.hpp"
 
+#include <algorithm>
+
 #include <utility>
 #include <vector>
 
@@ -67,8 +69,15 @@ std::optional<CoreRangeSet> get_scoped_worker_cores(const tt::tt_metal::distribu
             },
             [](const CoreRangeSet& worker_cores) { return worker_cores; }},
         scopes.back());
+    // A sub-device's cores may lie outside the compute grid the device reports, when that grid is narrowed to another
+    // sub-device (experimental::SetReservedComputeColumns).
+    const auto within_a_sub_device = [&] {
+        return std::ranges::any_of(mesh_device.get_sub_device_ids(), [&](tt::tt_metal::SubDeviceId id) {
+            return mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, id).contains(cores);
+        });
+    };
     TT_FATAL(
-        compute_grid(mesh_device).contains(cores),
+        compute_grid(mesh_device).contains(cores) || within_a_sub_device(),
         "Worker-cores scope {} reaches outside the compute grid {} of mesh device {}",
         cores,
         mesh_device.compute_with_storage_grid_size(),

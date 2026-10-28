@@ -453,6 +453,10 @@ void order(
         if (state.follows(stream, earlier, stall_group)) {
             return;
         }
+        // Experiment (diagnostic, unsafe): TTNN_QUEUE_ORDERING_SKIP_REUSE=1 leaves memory reuse unordered.
+        if (earlier.buffer != range.buffer && std::getenv("TTNN_QUEUE_ORDERING_SKIP_REUSE") != nullptr) {
+            return;
+        }
         if (std::FILE* log = log_file()) {
             fmt::print(
                 log,
