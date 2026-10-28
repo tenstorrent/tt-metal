@@ -29,7 +29,7 @@ constexpr DataFormat vec_dest_format(bool dest_fp32)
     return dest_fp32 ? DataFormat::Float32 : DataFormat::Float16_b;
 }
 
-constexpr bool vec_accepts(const TensorSpec<6>& acc, const TensorSpec<6>&, const vec_call& call, const KernelSettings& s)
+constexpr bool vec_accepts(const TensorSpec<tensor_rank>& acc, const TensorSpec<tensor_rank>&, const vec_call& call, const KernelSettings& s)
 {
     const bool storage = acc.storage == Storage::Dest && acc.format == vec_dest_format(s.dest_fp32);
     const bool tiles   = tile_rows(acc.shape) == vec_tile_dim && tile_cols(acc.shape) == vec_tile_dim;
@@ -37,7 +37,7 @@ constexpr bool vec_accepts(const TensorSpec<6>& acc, const TensorSpec<6>&, const
     return storage && tiles && call.function != VecFunction::None && thread;
 }
 
-constexpr OpConfig vec_options(const TensorSpec<6>& acc, const TensorSpec<6>&, const vec_call&, const KernelSettings& s)
+constexpr OpConfig vec_options(const TensorSpec<tensor_rank>& acc, const TensorSpec<tensor_rank>&, const vec_call&, const KernelSettings& s)
 {
     return {
         Exu::Sfpu,
@@ -48,13 +48,13 @@ constexpr OpConfig vec_options(const TensorSpec<6>& acc, const TensorSpec<6>&, c
     };
 }
 
-constexpr Work vec_work(const TensorSpec<6>& acc, const TensorSpec<6>&, const OpConfig&)
+constexpr Work vec_work(const TensorSpec<tensor_rank>& acc, const TensorSpec<tensor_rank>&, const OpConfig&)
 {
     constexpr std::uint32_t one_step = 1; // nothing is folded into an output tile
     return {acc.shape.sizes[TileY], acc.shape.sizes[TileX], one_step, acc.shape.sizes[DatumY], faces_per_tile(acc.shape)};
 }
 
-constexpr Plan vec_plan(const TensorSpec<6>&, const TensorSpec<6>&, const vec_call& call, const OpConfig& c, const Work& k)
+constexpr Plan vec_plan(const TensorSpec<tensor_rank>&, const TensorSpec<tensor_rank>&, const vec_call& call, const OpConfig& c, const Work& k)
 {
     const UnpackPlan not_unpacked {Where::None, DataFormat::Invalid, DataFormat::Invalid, 0, 0, 0, Layout::Tilized, Broadcast::None, false, 0, 0, 0};
     const UnpackWalk no_walk {0, 0, 0, Where::None};

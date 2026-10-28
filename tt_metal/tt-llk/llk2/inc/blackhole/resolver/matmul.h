@@ -26,7 +26,7 @@ constexpr DataFormat matmul_dest_format(DataFormat in, bool dest_fp32)
 
 inline constexpr std::uint32_t matmul_tile_dim = default_tile_dim; ///< matmul is ported for 32x32 tiles only
 
-constexpr bool matmul_accepts(const TensorSpec<6>& x, const TensorSpec<6>& w, const matmul_modifiers& m, const KernelSettings& s)
+constexpr bool matmul_accepts(const TensorSpec<tensor_rank>& x, const TensorSpec<tensor_rank>& w, const matmul_modifiers& m, const KernelSettings& s)
 {
     const bool shapes = x.storage == Storage::L1 && w.storage == Storage::L1 && x.shape.sizes[TileX] == w.shape.sizes[TileY] &&
                         tile_cols(x.shape) == tile_rows(w.shape) && tile_rows(x.shape) == matmul_tile_dim && tile_cols(x.shape) == matmul_tile_dim && tile_cols(w.shape) == matmul_tile_dim;
@@ -35,7 +35,7 @@ constexpr bool matmul_accepts(const TensorSpec<6>& x, const TensorSpec<6>& w, co
     return shapes && formats && !m.transpose_in1; // 32x32 tiles in L1, no transpose, for now
 }
 
-constexpr OpConfig matmul_options(const TensorSpec<6>& x, const TensorSpec<6>& w, const matmul_modifiers&, const KernelSettings& s)
+constexpr OpConfig matmul_options(const TensorSpec<tensor_rank>& x, const TensorSpec<tensor_rank>& w, const matmul_modifiers&, const KernelSettings& s)
 {
     return {
         Exu::Fpu,
@@ -46,7 +46,7 @@ constexpr OpConfig matmul_options(const TensorSpec<6>& x, const TensorSpec<6>& w
     };
 }
 
-constexpr Work matmul_work(const TensorSpec<6>& x, const TensorSpec<6>&, const OpConfig& c)
+constexpr Work matmul_work(const TensorSpec<tensor_rank>& x, const TensorSpec<tensor_rank>&, const OpConfig& c)
 {
     const Dims& out = c.result.shape.sizes;
     return {out[TileY], out[TileX], x.shape.sizes[TileX], x.shape.sizes[DatumY], faces_per_tile(x.shape)};
@@ -62,7 +62,7 @@ constexpr bool matmul_reuses_x(const Work& k)
     return k.ct_dim >= k.rt_dim;
 }
 
-constexpr Plan matmul_plan(const TensorSpec<6>& x, const TensorSpec<6>& w, const matmul_modifiers& m, const OpConfig& c, const Work& k)
+constexpr Plan matmul_plan(const TensorSpec<tensor_rank>& x, const TensorSpec<tensor_rank>& w, const matmul_modifiers& m, const OpConfig& c, const Work& k)
 {
     const bool reuse_x       = matmul_reuses_x(k);
     const std::uint32_t x_down  = k.kt_dim; // tiles from x(r, k) to x(r + 1, k)

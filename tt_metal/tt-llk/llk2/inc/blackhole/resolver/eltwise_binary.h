@@ -37,20 +37,20 @@ constexpr DataFormat eltwise_binary_dest_format(DataFormat in, bool dest_fp32)
 }
 
 /// in1 is one row of tiles spread over every row of in0's tiles.
-constexpr bool is_eltwise_binary_bias_row(const TensorSpec<6>& in0, const TensorSpec<6>& in1)
+constexpr bool is_eltwise_binary_bias_row(const TensorSpec<tensor_rank>& in0, const TensorSpec<tensor_rank>& in1)
 {
     return in1.shape.sizes[TileY] == 1 && in1.shape.sizes[TileX] == in0.shape.sizes[TileX];
 }
 
 /// t is in L1 in 32x32 tiles.
-constexpr bool is_eltwise_binary_tile(const TensorSpec<6>& t)
+constexpr bool is_eltwise_binary_tile(const TensorSpec<tensor_rank>& t)
 {
     return t.storage == Storage::L1 && tile_rows(t.shape) == eltwise_binary_tile_dim && tile_cols(t.shape) == eltwise_binary_tile_dim;
 }
 
 /// accepts: 32x32 float tiles in L1, in1 shaped as Mods.bcast needs, both operands of one exponent width.
 template <class Mods>
-constexpr bool eltwise_binary_accepts(const TensorSpec<6>& in0, const TensorSpec<6>& in1, const Mods& m, const KernelSettings& s)
+constexpr bool eltwise_binary_accepts(const TensorSpec<tensor_rank>& in0, const TensorSpec<tensor_rank>& in1, const Mods& m, const KernelSettings& s)
 {
     const bool tiles = is_eltwise_binary_tile(in0) && is_eltwise_binary_tile(in1);
     // No broadcast: the same tiles. Row: in1 is one row of tiles, its top row broadcast down each tile.
@@ -64,7 +64,7 @@ constexpr bool eltwise_binary_accepts(const TensorSpec<6>& in0, const TensorSpec
 
 /// options: in0 to SrcA, in1 to SrcB, one fidelity phase, the result in Dest with in0's shape.
 template <class Mods>
-constexpr OpConfig eltwise_binary_options(const TensorSpec<6>& in0, const TensorSpec<6>& in1, const Mods&, const KernelSettings& s)
+constexpr OpConfig eltwise_binary_options(const TensorSpec<tensor_rank>& in0, const TensorSpec<tensor_rank>& in1, const Mods&, const KernelSettings& s)
 {
     return {
         Exu::Fpu,
@@ -76,7 +76,7 @@ constexpr OpConfig eltwise_binary_options(const TensorSpec<6>& in0, const Tensor
 }
 
 /// work: one output tile per in0 tile, rt_dim x ct_dim of them.
-constexpr Work eltwise_binary_work(const TensorSpec<6>& in0, const TensorSpec<6>&, const OpConfig& c)
+constexpr Work eltwise_binary_work(const TensorSpec<tensor_rank>& in0, const TensorSpec<tensor_rank>&, const OpConfig& c)
 {
     const Dims& out = c.result.shape.sizes;
     return {out[TileY], out[TileX], 1 /* no K: one input tile pair per output tile */, in0.shape.sizes[DatumY], faces_per_tile(in0.shape)};
@@ -84,7 +84,7 @@ constexpr Work eltwise_binary_work(const TensorSpec<6>& in0, const TensorSpec<6>
 
 /// plan: the unpack walk described at the top of this file, and math running F.
 template <class Mods, BinaryFunction F>
-constexpr Plan eltwise_binary_plan(const TensorSpec<6>& in0, const TensorSpec<6>& in1, const Mods& m, const OpConfig& c, const Work& k)
+constexpr Plan eltwise_binary_plan(const TensorSpec<tensor_rank>& in0, const TensorSpec<tensor_rank>& in1, const Mods& m, const OpConfig& c, const Work& k)
 {
     const std::uint32_t next_tile     = 1;        // tiles from (r, c) to (r, c + 1)
     const std::uint32_t next_tile_row = k.ct_dim; // tiles from (r, c) to (r + 1, c)

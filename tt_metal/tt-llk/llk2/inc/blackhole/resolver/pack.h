@@ -142,7 +142,7 @@ constexpr bool l1_accumulates(DataFormat out)
     return out == DataFormat::Float32 || out == DataFormat::Float16_b || out == DataFormat::Float16;
 }
 
-constexpr bool pack_accepts(const TensorSpec<6>& d, const TensorSpec<6>& o, const pack_modifiers& m, const KernelSettings& s)
+constexpr bool pack_accepts(const TensorSpec<tensor_rank>& d, const TensorSpec<tensor_rank>& o, const pack_modifiers& m, const KernelSettings& s)
 {
     const bool storage = d.storage == Storage::Dest && o.storage == Storage::L1;
     // The same tile grid and tile geometry; Dest tiles in Dest's layout and the L1 tensor dense, both from offset 0,
@@ -155,7 +155,7 @@ constexpr bool pack_accepts(const TensorSpec<6>& d, const TensorSpec<6>& o, cons
     return storage && shapes && formats && modifiers;
 }
 
-constexpr OpConfig pack_options(const TensorSpec<6>& d, const TensorSpec<6>& o, const pack_modifiers&, const KernelSettings& s)
+constexpr OpConfig pack_options(const TensorSpec<tensor_rank>& d, const TensorSpec<tensor_rank>& o, const pack_modifiers&, const KernelSettings& s)
 {
     return {
         Exu::Packer,
@@ -166,12 +166,12 @@ constexpr OpConfig pack_options(const TensorSpec<6>& d, const TensorSpec<6>& o, 
     };
 }
 
-constexpr Work pack_work(const TensorSpec<6>& d, const TensorSpec<6>&, const OpConfig&)
+constexpr Work pack_work(const TensorSpec<tensor_rank>& d, const TensorSpec<tensor_rank>&, const OpConfig&)
 {
     return {d.shape.sizes[TileY], d.shape.sizes[TileX], 1, d.shape.sizes[DatumY], faces_per_tile(d.shape)};
 }
 
-constexpr Plan pack_plan(const TensorSpec<6>& d, const TensorSpec<6>& o, const pack_modifiers& m, const OpConfig& c, const Work& k)
+constexpr Plan pack_plan(const TensorSpec<tensor_rank>& d, const TensorSpec<tensor_rank>& o, const pack_modifiers& m, const OpConfig& c, const Work& k)
 {
     const PackPlan pack {
         d.format, o.format, k.face_r_dim, k.num_faces, tile_bytes(o), tile_count(d.shape), m.relu, m.l1_acc, m.untilize, c.in0.format,

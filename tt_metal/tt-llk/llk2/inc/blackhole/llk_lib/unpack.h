@@ -66,6 +66,7 @@
 #include "hal/sync.h"
 #include "hal/tensix_counters.h"
 #include "hal/unpack.h"
+#include "llk_lib/semaphores.h"
 #include "llk_lib/thread.h"
 #include "llk_memory_checks.h"
 #include "resolver/plan.h"
@@ -80,21 +81,17 @@ namespace llk2::llk_lib
 {
 
 namespace cfg = hal::cfg;
-using hal::sync::Semaphore;
 using hal::sync::StallCondition;
 using hal::sync::StallTarget;
 
 // ---- constants -----------------------------------------------------------------------------------------------------
 
-inline constexpr std::uint32_t l1_address_unit_bytes = 16; ///< unpacker base addresses and tile sizes count 16-byte words
-inline constexpr Semaphore unpack_sync               = Semaphore::S5; ///< ckernel::semaphore::UNPACK_SYNC: contexts in flight
 inline constexpr std::uint32_t max_contexts_in_flight = 2;            ///< two config contexts
 inline constexpr std::uint32_t mop_zmask_context1     = 0xff;         ///< MOP zmask that selects the shadow (context 1) op on every iteration
 inline constexpr std::uint32_t gpr_half_mask          = 0xffff;       ///< scalar::set_low writes the low 16 bits of a GPR
 inline constexpr std::uint32_t unpacker_throttle_mode = 2;            ///< Throttle_mode 2: the 512-bit L1 read interface, as configure_unpack_AB
 inline constexpr std::uint32_t src_write_base         = 4 * 16;       ///< Src row the unpackers start writing at, both contexts; the value configure_unpack_AB uses
 inline constexpr std::uint32_t replay_ops_per_stream  = 6;            ///< UNPACR, RDCFG, ADDDMAREG, STALLWAIT, WRCFG, NOP (record_streamed_tile)
-inline constexpr Semaphore unpack_to_dest_sync       = Semaphore::S2; ///< ckernel::semaphore::UNPACK_TO_DEST: tiles unpacked to Dest, not yet taken by math
 inline constexpr std::uint32_t dest_row_bytes_32bit   = dest_row_datums * sizeof(std::uint32_t); ///< one Dest row of 32-bit datums
 
 // ---- parameters ----------------------------------------------------------------------------------------------------
@@ -133,13 +130,13 @@ constexpr unpack_stream stream_from(const UnpackPlan& u)
         u.writes,
         u.face_r_dim,
         u.num_faces,
-        u.tile_bytes / l1_address_unit_bytes,
+        u.tile_bytes / l1_word_bytes,
         u.layout,
         u.broadcast,
         u.transpose_faces,
-        u.tile_step * (u.tile_bytes / l1_address_unit_bytes),
-        u.run_step * (u.tile_bytes / l1_address_unit_bytes),
-        u.step_step * (u.tile_bytes / l1_address_unit_bytes),
+        u.tile_step * (u.tile_bytes / l1_word_bytes),
+        u.run_step * (u.tile_bytes / l1_word_bytes),
+        u.step_step * (u.tile_bytes / l1_word_bytes),
         u.to == Where::Dest,
     };
 }
@@ -194,7 +191,6 @@ constexpr std::uint32_t replay_ops_per_context(const unpack_params& p)
 /// (faces 0 and 1 of a 32x32 tile); every other stream reads all faces.
 constexpr std::uint32_t unpacked_faces(const unpack_stream& s)
 {
-    constexpr std::uint32_t faces_per_face_row = ckernel::TILE_C_DIM / ckernel::FACE_C_DIM; // 32x32 tiles only (unpack_configure)
     return s.broadcast == Broadcast::Row ? faces_per_face_row : s.num_faces;
 }
 
@@ -369,8 +365,8 @@ inline __attribute__((always_inline)) void unpack_configure()
     using namespace ckernel;
     using namespace hal::counters::adc;
     using ckernel::p_gpr_unpack;
-    static_assert(!P.src_a.active || (P.src_a.num_faces == 4 && P.src_a.face_r_dim == FACE_R_DIM), "32x32 tiles only, for now");
-    static_assert(!P.src_b.active || (P.src_b.num_faces == 4 && P.src_b.face_r_dim == FACE_R_DIM), "32x32 tiles only, for now");
+    static_assert(!P.src_a.active || (P.src_a.num_faces == faces_per_full_tile && P.src_a.face_r_dim == max_face_rows), "32x32 tiles only, for now");
+    static_assert(!P.src_b.active || (P.src_b.num_faces == faces_per_full_tile && P.src_b.face_r_dim == max_face_rows), "32x32 tiles only, for now");
     static_assert(replay_ops_per_context(P) > 0, "nothing streams: every op streams at least one operand");
 
     // Wait until math has taken every context, then reset the unpackers' address counters.
