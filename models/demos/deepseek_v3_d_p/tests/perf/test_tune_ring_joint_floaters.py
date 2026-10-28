@@ -169,8 +169,16 @@ class _Log:
             logger.warning(f"floater tune: {text} did not finish in an earlier run; not trying it again")
 
     def write(self, entry):
-        with self.path.open("a") as f:
-            f.write(json.dumps({"key": self.key, **entry}) + "\n")
+        size = self.path.stat().st_size if self.path.exists() else 0
+        try:
+            with self.path.open("a") as f:
+                f.write(json.dumps({"key": self.key, **entry}) + "\n")
+        except BaseException:
+            # Cut off whatever part of the record reached the file, so the next record starts on its own line.
+            if self.path.exists():
+                with self.path.open("r+") as f:
+                    f.truncate(size)
+            raise
         if entry["status"] in ("ok", "invalid"):
             self.results[entry["schedule"]] = entry
 
