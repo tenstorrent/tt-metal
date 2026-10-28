@@ -84,3 +84,24 @@ def upload_norm(device, w: torch.Tensor):
     import ttnn
 
     return upload(device, w.reshape(1, 1, -1, TILE), layout=ttnn.ROW_MAJOR_LAYOUT)
+
+
+def bmm_config(device, m: int, k: int, n: int, fp32_dest: bool = True):
+    """Program config for a batched [..., m, k] @ [..., k, n] with small tile-aligned m, k, n (R1-2b, skill pitfall
+    6): one core computes whole batch matrices, and the batch spreads over the full grid. The default path puts
+    these on 1-9 cores. in0_block_w is the whole K, so the accumulation order over K is unchanged."""
+    import ttnn
+
+    grid = device.compute_with_storage_grid_size()
+    mt, kt, nt = m // TILE, k // TILE, n // TILE
+    dst = 4 if fp32_dest else 8
+    sub_w = max(d for d in range(1, min(nt, dst) + 1) if nt % d == 0)
+    sub_h = max(d for d in range(1, mt + 1) if mt % d == 0 and d * sub_w <= dst)
+    return ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=(grid.x, grid.y),
+        in0_block_w=kt,
+        out_subblock_h=sub_h,
+        out_subblock_w=sub_w,
+        per_core_M=mt,
+        per_core_N=nt,
+    )
