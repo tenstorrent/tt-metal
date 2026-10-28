@@ -69,6 +69,12 @@ Worktree: `/home/mvasiljev/build/tt-metal-qwen38-swe`, branch
   retains resident16/block512, medium, agent6300/request3600/output16384/native262144.
   Actual SWE100/500 remain pending.
 
+User steering28October: investigate residentB32 with32 or more task permits
+for SWE100/SWE500 andTerminal89 before selecting final concurrency. The C8
+50-task partitions remain prepared fallback only. See the reconciled
+[C32 memory ledger and optimization targets](C32_MEMORY.md), including
+checkpoint geometry, duplicate MLP owners and a group-exclusive storage design.
+
 Raw CSV/Tracy, token arrays, logs and archives remain local or in CI. Only code
 and compact documentation are published. Keep the distinct cohorts, resident
 batch sizes, HTTP concurrency and policy labels when comparing these rows.

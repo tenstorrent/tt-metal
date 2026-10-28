@@ -1,0 +1,459 @@
+{
+  "units": "bytes per participating TP4 device, never four-device pooled capacity",
+  "cache_source_sha256": "62b3fe93eb3fd6fe4854d070dafc82bc48696d7698fc6596d7092fcf485b699c",
+  "constants": {
+    "STATE_BYTES_PER_LAYER": 801792,
+    "ATTENTION_LAYERS": 16,
+    "RECURRENT_LAYERS": 48,
+    "RECURRENT_GROUPS": 3,
+    "ATTENTION_BYTES_PER_TOKEN": 8704
+  },
+  "measured": [
+    {
+      "label": "flat-smoke-stable-audits",
+      "source_sha256": "71d4629e1320b54a686362391f9be873558753200b48d09f3b039e6f154506f5",
+      "attention_KV_bytes": 6096420864,
+      "recurrent_snapshot_bytes": 17549623296,
+      "active_recurrent_state_bytes": 615776256,
+      "weights_runtime_and_other_unitemized_bytes": 6423233536,
+      "allocator_allocated_bytes": 30685053952,
+      "allocator_free_bytes": 3359459328,
+      "allocator_total_bytes": 34044513280,
+      "preparation_checkpoints": {
+        "before": {
+          "allocated_bytes_per_device": 30685119488,
+          "free_bytes_per_device": 3359393792
+        },
+        "scratch_bound": {
+          "allocated_bytes_per_device": 31147216896,
+          "free_bytes_per_device": 2897296384
+        },
+        "warmed_before_capture": {
+          "allocated_bytes_per_device": 31192130560,
+          "free_bytes_per_device": 2852382720
+        },
+        "after": {
+          "allocated_bytes_per_device": 30730229760,
+          "free_bytes_per_device": 3314283520
+        }
+      },
+      "scope": "Measured allocator checkpoints and exact typed cache backing; not continuous peak or fragmentation proof"
+    }
+  ],
+  "forecasts": [
+    {
+      "resident_batch": 32,
+      "checkpoint_tokens": 512,
+      "cache_budget_bytes_per_device": 23661297664,
+      "global_ids": 1368,
+      "bytes_per_global_id": 17285120,
+      "attention_backing_bytes": 6096420864,
+      "recurrent_snapshot_backing_bytes": 17549623296,
+      "active_recurrent_state_bytes": 1231552512,
+      "worker_reservation_ids": 225,
+      "virtual_token_hook_units": 585216,
+      "single_native_context_admission_floor_ids": 551,
+      "screened_32_private_histories": [
+        {
+          "tokens_each": 16384,
+          "attention_ids_only": 1024,
+          "attention_plus_worker_reservations": 1249
+        },
+        {
+          "tokens_each": 32768,
+          "attention_ids_only": 2048,
+          "attention_plus_worker_reservations": 2273
+        },
+        {
+          "tokens_each": 65536,
+          "attention_ids_only": 4096,
+          "attention_plus_worker_reservations": 4321
+        },
+        {
+          "tokens_each": 131072,
+          "attention_ids_only": 8192,
+          "attention_plus_worker_reservations": 8417
+        },
+        {
+          "tokens_each": 262144,
+          "attention_ids_only": 16384,
+          "attention_plus_worker_reservations": 16609
+        }
+      ]
+    },
+    {
+      "resident_batch": 32,
+      "checkpoint_tokens": 1024,
+      "cache_budget_bytes_per_device": 23661297664,
+      "global_ids": 1088,
+      "bytes_per_global_id": 21741568,
+      "attention_backing_bytes": 9697230848,
+      "recurrent_snapshot_backing_bytes": 13957595136,
+      "active_recurrent_state_bytes": 1231552512,
+      "worker_reservation_ids": 225,
+      "virtual_token_hook_units": 883712,
+      "single_native_context_admission_floor_ids": 295,
+      "screened_32_private_histories": [
+        {
+          "tokens_each": 16384,
+          "attention_ids_only": 512,
+          "attention_plus_worker_reservations": 737
+        },
+        {
+          "tokens_each": 32768,
+          "attention_ids_only": 1024,
+          "attention_plus_worker_reservations": 1249
+        },
+        {
+          "tokens_each": 65536,
+          "attention_ids_only": 2048,
+          "attention_plus_worker_reservations": 2273
+        },
+        {
+          "tokens_each": 131072,
+          "attention_ids_only": 4096,
+          "attention_plus_worker_reservations": 4321
+        },
+        {
+          "tokens_each": 262144,
+          "attention_ids_only": 8192,
+          "attention_plus_worker_reservations": 8417
+        }
+      ]
+    },
+    {
+      "resident_batch": 32,
+      "checkpoint_tokens": 2048,
+      "cache_budget_bytes_per_device": 23661297664,
+      "global_ids": 771,
+      "bytes_per_global_id": 30654464,
+      "attention_backing_bytes": 13743685632,
+      "recurrent_snapshot_backing_bytes": 9890906112,
+      "active_recurrent_state_bytes": 1231552512,
+      "worker_reservation_ids": 225,
+      "virtual_token_hook_units": 1118208,
+      "single_native_context_admission_floor_ids": 167,
+      "screened_32_private_histories": [
+        {
+          "tokens_each": 16384,
+          "attention_ids_only": 256,
+          "attention_plus_worker_reservations": 481
+        },
+        {
+          "tokens_each": 32768,
+          "attention_ids_only": 512,
+          "attention_plus_worker_reservations": 737
+        },
+        {
+          "tokens_each": 65536,
+          "attention_ids_only": 1024,
+          "attention_plus_worker_reservations": 1249
+        },
+        {
+          "tokens_each": 131072,
+          "attention_ids_only": 2048,
+          "attention_plus_worker_reservations": 2273
+        },
+        {
+          "tokens_each": 262144,
+          "attention_ids_only": 4096,
+          "attention_plus_worker_reservations": 4321
+        }
+      ]
+    },
+    {
+      "resident_batch": 32,
+      "checkpoint_tokens": 4096,
+      "cache_budget_bytes_per_device": 23661297664,
+      "global_ids": 488,
+      "bytes_per_global_id": 48480256,
+      "attention_backing_bytes": 17397972992,
+      "recurrent_snapshot_backing_bytes": 6260391936,
+      "active_recurrent_state_bytes": 1231552512,
+      "worker_reservation_ids": 225,
+      "virtual_token_hook_units": 1077248,
+      "single_native_context_admission_floor_ids": 103,
+      "screened_32_private_histories": [
+        {
+          "tokens_each": 16384,
+          "attention_ids_only": 128,
+          "attention_plus_worker_reservations": 353
+        },
+        {
+          "tokens_each": 32768,
+          "attention_ids_only": 256,
+          "attention_plus_worker_reservations": 481
+        },
+        {
+          "tokens_each": 65536,
+          "attention_ids_only": 512,
+          "attention_plus_worker_reservations": 737
+        },
+        {
+          "tokens_each": 131072,
+          "attention_ids_only": 1024,
+          "attention_plus_worker_reservations": 1249
+        },
+        {
+          "tokens_each": 262144,
+          "attention_ids_only": 2048,
+          "attention_plus_worker_reservations": 2273
+        }
+      ]
+    },
+    {
+      "resident_batch": 32,
+      "checkpoint_tokens": 512,
+      "cache_budget_bytes_per_device": 25265618944,
+      "global_ids": 1461,
+      "bytes_per_global_id": 17285120,
+      "attention_backing_bytes": 6510870528,
+      "recurrent_snapshot_backing_bytes": 18742689792,
+      "active_recurrent_state_bytes": 1231552512,
+      "worker_reservation_ids": 225,
+      "virtual_token_hook_units": 632832,
+      "single_native_context_admission_floor_ids": 551,
+      "screened_32_private_histories": [
+        {
+          "tokens_each": 16384,
+          "attention_ids_only": 1024,
+          "attention_plus_worker_reservations": 1249
+        },
+        {
+          "tokens_each": 32768,
+          "attention_ids_only": 2048,
+          "attention_plus_worker_reservations": 2273
+        },
+        {
+          "tokens_each": 65536,
+          "attention_ids_only": 4096,
+          "attention_plus_worker_reservations": 4321
+        },
+        {
+          "tokens_each": 131072,
+          "attention_ids_only": 8192,
+          "attention_plus_worker_reservations": 8417
+        },
+        {
+          "tokens_each": 262144,
+          "attention_ids_only": 16384,
+          "attention_plus_worker_reservations": 16609
+        }
+      ]
+    },
+    {
+      "resident_batch": 32,
+      "checkpoint_tokens": 1024,
+      "cache_budget_bytes_per_device": 25265618944,
+      "global_ids": 1162,
+      "bytes_per_global_id": 21741568,
+      "attention_backing_bytes": 10356785152,
+      "recurrent_snapshot_backing_bytes": 14906916864,
+      "active_recurrent_state_bytes": 1231552512,
+      "worker_reservation_ids": 225,
+      "virtual_token_hook_units": 959488,
+      "single_native_context_admission_floor_ids": 295,
+      "screened_32_private_histories": [
+        {
+          "tokens_each": 16384,
+          "attention_ids_only": 512,
+          "attention_plus_worker_reservations": 737
+        },
+        {
+          "tokens_each": 32768,
+          "attention_ids_only": 1024,
+          "attention_plus_worker_reservations": 1249
+        },
+        {
+          "tokens_each": 65536,
+          "attention_ids_only": 2048,
+          "attention_plus_worker_reservations": 2273
+        },
+        {
+          "tokens_each": 131072,
+          "attention_ids_only": 4096,
+          "attention_plus_worker_reservations": 4321
+        },
+        {
+          "tokens_each": 262144,
+          "attention_ids_only": 8192,
+          "attention_plus_worker_reservations": 8417
+        }
+      ]
+    },
+    {
+      "resident_batch": 32,
+      "checkpoint_tokens": 2048,
+      "cache_budget_bytes_per_device": 25265618944,
+      "global_ids": 824,
+      "bytes_per_global_id": 30654464,
+      "attention_backing_bytes": 14688452608,
+      "recurrent_snapshot_backing_bytes": 10570825728,
+      "active_recurrent_state_bytes": 1231552512,
+      "worker_reservation_ids": 225,
+      "virtual_token_hook_units": 1226752,
+      "single_native_context_admission_floor_ids": 167,
+      "screened_32_private_histories": [
+        {
+          "tokens_each": 16384,
+          "attention_ids_only": 256,
+          "attention_plus_worker_reservations": 481
+        },
+        {
+          "tokens_each": 32768,
+          "attention_ids_only": 512,
+          "attention_plus_worker_reservations": 737
+        },
+        {
+          "tokens_each": 65536,
+          "attention_ids_only": 1024,
+          "attention_plus_worker_reservations": 1249
+        },
+        {
+          "tokens_each": 131072,
+          "attention_ids_only": 2048,
+          "attention_plus_worker_reservations": 2273
+        },
+        {
+          "tokens_each": 262144,
+          "attention_ids_only": 4096,
+          "attention_plus_worker_reservations": 4321
+        }
+      ]
+    },
+    {
+      "resident_batch": 32,
+      "checkpoint_tokens": 4096,
+      "cache_budget_bytes_per_device": 25265618944,
+      "global_ids": 521,
+      "bytes_per_global_id": 48480256,
+      "attention_backing_bytes": 18574475264,
+      "recurrent_snapshot_backing_bytes": 6683738112,
+      "active_recurrent_state_bytes": 1231552512,
+      "worker_reservation_ids": 225,
+      "virtual_token_hook_units": 1212416,
+      "single_native_context_admission_floor_ids": 103,
+      "screened_32_private_histories": [
+        {
+          "tokens_each": 16384,
+          "attention_ids_only": 128,
+          "attention_plus_worker_reservations": 353
+        },
+        {
+          "tokens_each": 32768,
+          "attention_ids_only": 256,
+          "attention_plus_worker_reservations": 481
+        },
+        {
+          "tokens_each": 65536,
+          "attention_ids_only": 512,
+          "attention_plus_worker_reservations": 737
+        },
+        {
+          "tokens_each": 131072,
+          "attention_ids_only": 1024,
+          "attention_plus_worker_reservations": 1249
+        },
+        {
+          "tokens_each": 262144,
+          "attention_ids_only": 2048,
+          "attention_plus_worker_reservations": 2273
+        }
+      ]
+    }
+  ],
+  "duplicate_MLP_candidate": {
+    "potential_payload_saving_bytes": 1604321280,
+    "basis": "64 layers, separate BF4 gate/up plus packed BF4 gateup, TP4; source shape estimate",
+    "measured_saving": false,
+    "constraint": "Second budget is conditional on reclaiming the whole duplicate payload without consuming equivalent new buffers; native correctness/performance/allocation checks required"
+  },
+  "union_backing_design_screen": [
+    {
+      "checkpoint_tokens": 512,
+      "cache_budget_bytes_per_device": 23661297664,
+      "conditional_bytes_per_global_id": 12829696,
+      "conditional_global_ids": 1844,
+      "existing_separate_bytes_per_global_id": 17285120,
+      "backing_saving_at_same_ID_count_fraction": 0.257760663507109,
+      "implemented_or_measured": false,
+      "requirements": [
+        "Prove group-exclusive global-ID ownership and asynchronous lifetimes on exact serving sources.",
+        "Translate per-layer attention tables into shared K/V carriers; preserve native logical context.",
+        "Implement exact raw-byte FP32/BF16 snapshot save/restore into group-exclusive carrier regions.",
+        "Prevent warmup from cloning the full shared carrier; prove scratch bounds and no cache corruption.",
+        "Validate alias lifetimes, null blocks, eviction/reuse, cancellation, traces and all-layer outputs before serving."
+      ]
+    },
+    {
+      "checkpoint_tokens": 1024,
+      "cache_budget_bytes_per_device": 23661297664,
+      "conditional_bytes_per_global_id": 12829696,
+      "conditional_global_ids": 1844,
+      "existing_separate_bytes_per_global_id": 21741568,
+      "backing_saving_at_same_ID_count_fraction": 0.4099001507159006,
+      "implemented_or_measured": false,
+      "requirements": [
+        "Prove group-exclusive global-ID ownership and asynchronous lifetimes on exact serving sources.",
+        "Translate per-layer attention tables into shared K/V carriers; preserve native logical context.",
+        "Implement exact raw-byte FP32/BF16 snapshot save/restore into group-exclusive carrier regions.",
+        "Prevent warmup from cloning the full shared carrier; prove scratch bounds and no cache corruption.",
+        "Validate alias lifetimes, null blocks, eviction/reuse, cancellation, traces and all-layer outputs before serving."
+      ]
+    },
+    {
+      "checkpoint_tokens": 2048,
+      "cache_budget_bytes_per_device": 23661297664,
+      "conditional_bytes_per_global_id": 17825792,
+      "conditional_global_ids": 1327,
+      "existing_separate_bytes_per_global_id": 30654464,
+      "backing_saving_at_same_ID_count_fraction": 0.418492784607162,
+      "implemented_or_measured": false,
+      "requirements": [
+        "Prove group-exclusive global-ID ownership and asynchronous lifetimes on exact serving sources.",
+        "Translate per-layer attention tables into shared K/V carriers; preserve native logical context.",
+        "Implement exact raw-byte FP32/BF16 snapshot save/restore into group-exclusive carrier regions.",
+        "Prevent warmup from cloning the full shared carrier; prove scratch bounds and no cache corruption.",
+        "Validate alias lifetimes, null blocks, eviction/reuse, cancellation, traces and all-layer outputs before serving."
+      ]
+    },
+    {
+      "checkpoint_tokens": 4096,
+      "cache_budget_bytes_per_device": 23661297664,
+      "conditional_bytes_per_global_id": 35651584,
+      "conditional_global_ids": 663,
+      "existing_separate_bytes_per_global_id": 48480256,
+      "backing_saving_at_same_ID_count_fraction": 0.2646164244677256,
+      "implemented_or_measured": false,
+      "requirements": [
+        "Prove group-exclusive global-ID ownership and asynchronous lifetimes on exact serving sources.",
+        "Translate per-layer attention tables into shared K/V carriers; preserve native logical context.",
+        "Implement exact raw-byte FP32/BF16 snapshot save/restore into group-exclusive carrier regions.",
+        "Prevent warmup from cloning the full shared carrier; prove scratch bounds and no cache corruption.",
+        "Validate alias lifetimes, null blocks, eviction/reuse, cancellation, traces and all-layer outputs before serving."
+      ]
+    }
+  ],
+  "limits": [
+    "Virtual hook units are an inversion of pool sizing, not guaranteed usable conversation tokens.",
+    "All attention/recurrent groups draw distinct IDs from one allocator; idle cached prefixes also consume reusable identities.",
+    "32-history rows screen independent equal-length histories plus known worker reservations; they are not scheduler simulation or retention guarantees.",
+    "Scratch, traces, weights, bank alignment and fragmentation must each fit every device.",
+    "Current precision is BFP8 KV, FP32 recurrent state, BF16 convolution; no quantization change assumed.",
+    "Harbor task permits, HTTP requests, scheduler admission and physical resident rows are separate quantities."
+  ],
+  "status": "Capacity analysis; C32/A32+ not qualified",
+  "gemma_reference_files": {
+    "experiment-29/reports/kv-tight-packing/DESIGN.md": "8878921314f8acfce4880baada9d30c94d74a2fcee67c9d5257a211386eef5f8",
+    "experiment-29/PREFIX_CACHE_MECHANICS.md": "40b5eef161f627c235a3bbfb96cbaf4ad513c502edbc030eba882af1d098728d"
+  },
+  "workload_observation": {
+    "source": "audited Qwen frozen25 B8 control40572176883 HTTP ends",
+    "completed_requests": 923,
+    "prompt_tokens_median": 22592,
+    "prompt_tokens_p95": 93891,
+    "prompt_tokens_max": 137737,
+    "scope": "Per-request lengths, not simultaneous working set; do not multiplyp95 by32 as a measured demand."
+  },
+  "terminal_scope": "User requested fullTerminal89. Gemma uses2.0 while old Qwen roster is2.1, both89; clarification pending, no newTerminal dispatch."
+}
