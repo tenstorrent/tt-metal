@@ -3,9 +3,8 @@
 #   - the device-free unit tests
 #   - the manifest fixtures on mock clusters, one rank or several
 #   - the schema check on every manifest the above runs write, and the rank check on each run's manifests
-# CI runs it on a CPU runner, as fabric-cpu-manifest in tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml. The 1D
-# and 2D manifest fixtures also run on hardware, through run_cpp_fabric_tests.sh's Fabric1D/2D fixture filters; the
-# other fixtures are named outside those filters and run only here.
+# CI runs it on a CPU runner, as fabric-cpu-manifest in tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml. The
+# manifest fixtures are named Manifest*Fixture, outside hardware CI's Fabric*Fixture filters, so they run only here.
 #
 # Run from the repository root with a built tree: tests/scripts/run_fabric_manifest_tests.sh
 # BUILD_DIR selects the tree (default ./build). Manifests are written under generated/fabric_manifest_tests/<config>.
@@ -87,40 +86,40 @@ echo "== Device-free tests"
 # ---------------------------------------------------------------------------
 
 # 1D and 2D, on Wormhole and Blackhole.
-run_mock t3k_1d "$T3K" 'Fabric1DManifestFixture.*'
-run_mock t3k_2d "$T3K" 'Fabric2DManifestFixture.*'
-run_mock bh_4xp150_1d "$BH_4XP150" 'Fabric1DManifestFixture.*'
-run_mock bh_4xp150_2d "$BH_4XP150" 'Fabric2DManifestFixture.*'
+run_mock t3k_1d "$T3K" 'Manifest1DFixture.*'
+run_mock t3k_2d "$T3K" 'Manifest2DFixture.*'
+run_mock bh_4xp150_1d "$BH_4XP150" 'Manifest1DFixture.*'
+run_mock bh_4xp150_2d "$BH_4XP150" 'Manifest2DFixture.*'
 
 # Single-ERISC mode, where a router's one processor runs on physical ERISC1.
-TT_METAL_DISABLE_MULTI_AERISC=1 run_mock bh_4xp150_2d_single_erisc "$BH_4XP150" 'Fabric2DManifestFixture.*'
+TT_METAL_DISABLE_MULTI_AERISC=1 run_mock bh_4xp150_2d_single_erisc "$BH_4XP150" 'Manifest2DFixture.*'
 
 # Torus, on galaxies whose cabling wraps.
-run_mock wh_galaxy_torus_y "$WH_GALAXY_Y_WRAP" 'FabricTorusYManifestFixture.*'
-run_mock bh_galaxy_torus_xy "$BH_GALAXY_TORUS_XY" 'FabricTorusXYManifestFixture.*'
+run_mock wh_galaxy_torus_y "$WH_GALAXY_Y_WRAP" 'ManifestTorusYFixture.*'
+run_mock bh_galaxy_torus_xy "$BH_GALAXY_TORUS_XY" 'ManifestTorusXYFixture.*'
 
 # The tensix mux in front of the routers' worker channels.
-run_mock bh_4xp150_mux "$BH_4XP150" 'FabricMuxManifestFixture.*'
+run_mock bh_4xp150_mux "$BH_4XP150" 'ManifestMuxFixture.*'
 
 # VC2's channels.
-TT_METAL_ENABLE_FABRIC_VC2=1 run_mock bh_4xp150_2d_vc2 "$BH_4XP150" 'Fabric2DManifestFixture.*'
+TT_METAL_ENABLE_FABRIC_VC2=1 run_mock bh_4xp150_2d_vc2 "$BH_4XP150" 'Manifest2DFixture.*'
 
 # Channel trimming: the routers' capture, then a profile that trims one chip's channels.
-TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE=1 run_mock t3k_2d_trimming_capture "$T3K" 'Fabric2DManifestFixture.*'
-TT_METAL_FABRIC_TRIMMING_PROFILE="$T3K_TRIMMING_PROFILE" run_mock t3k_2d_trimmed "$T3K" 'Fabric2DManifestFixture.*'
+TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE=1 run_mock t3k_2d_trimming_capture "$T3K" 'Manifest2DFixture.*'
+TT_METAL_FABRIC_TRIMMING_PROFILE="$T3K_TRIMMING_PROFILE" run_mock t3k_2d_trimmed "$T3K" 'Manifest2DFixture.*'
 
 # ---------------------------------------------------------------------------
 # Multi ranks
 # ---------------------------------------------------------------------------
 
 # One T3K mesh split across two ranks: remote chips and cross-host links.
-run_ranks split_t3k 2 'Fabric2DManifestFixture.*' \
+run_ranks split_t3k 2 'Manifest2DFixture.*' \
     --mock-cluster-rank-binding "$T3K_ON_TWO_RANKS" \
     --rank-binding "$SPLIT_T3K_RANK_BINDINGS"
 
 # Four Blackhole galaxies on four ranks, as four meshes joined over N/S links, with express chords: express links,
 # Blackhole multi-mesh and its idle VC1 senders on inter-mesh routers, and cross-host links.
-run_ranks sc4_express 4 'FabricTorusXManifestFixture.*' \
+run_ranks sc4_express 4 'ManifestTorusXFixture.*' \
     --mesh-graph-descriptor "$SC4_EXPRESS_MGD" \
     --mock-cluster-rank-binding "$SC4_SUBTORUS"
 
