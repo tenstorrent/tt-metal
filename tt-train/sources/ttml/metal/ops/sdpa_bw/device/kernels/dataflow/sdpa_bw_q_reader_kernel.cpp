@@ -14,16 +14,14 @@ constexpr bool compute_grad_query = true;
 constexpr bool compute_grad_query = false;
 #endif
 
-// Y is read for u = rowsum(dY * Y) (grad_Q and the u_scaler output) and for grad_gate, not for the gated dO alone.
-#if defined(COMPUTE_GRAD_QUERY) || defined(COMPUTE_U_SCALER) || (defined(HAS_GATE) && defined(COMPUTE_GRAD_GATE))
+// Whether Y and G are read; the program factory derives both from the requested outputs.
+#ifdef READ_ATTN_OUTPUT
 constexpr bool read_attn_output = true;
 #else
 constexpr bool read_attn_output = false;
 #endif
 
-// G is read whenever the compute kernel runs the gate helper (see sdpa_bw_q_compute_kernel.cpp).
-#if defined(HAS_GATE) && \
-    (defined(COMPUTE_GRAD_QUERY) || defined(COMPUTE_GATED_GRAD_OUTPUT) || defined(COMPUTE_GRAD_GATE))
+#ifdef READ_GATE
 constexpr bool read_gate = true;
 #else
 constexpr bool read_gate = false;

@@ -565,7 +565,8 @@ void update_grad_query(
 
 // Computes gradient w.r.t. Value tensor: dV = P^T @ dO
 // P^T is produced in DST and packed to cb_attn_weights_transposed by
-// compute_grad_scores_and_transposes — no transpose roundtrip here.
+// compute_grad_scores_and_transposes, or by compute_attn_weights_transposed without grad_K —
+// no transpose roundtrip here.
 // Uses L1 accumulation to accumulate across sequence blocks and query heads (do_accumulate=true).
 void update_grad_value(
     const uint32_t cb_attn_weights_transposed,
@@ -579,7 +580,7 @@ void update_grad_value(
 
     // 2-arg pack_reconfig: skip reprogram if new PACK format matches the previously-configured one.
     // The previous PACK target is cb_attn_weights_transposed (packed last by
-    // compute_grad_scores_and_transposes).
+    // compute_grad_scores_and_transposes or compute_attn_weights_transposed).
     pack_reconfig_data_format(cb_attn_weights_transposed, cb_grad_value_accum);
     // First iteration: reserve space for result
     // Subsequent iterations: enable L1 accumulation to add to existing values

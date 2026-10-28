@@ -364,15 +364,15 @@ ttml::metal::ops::sdpa_bw::device::SDPABackwardQDeviceOperation::tensor_return_v
     bool compute_gated_grad_output) {
     using OperationType = ttml::metal::ops::sdpa_bw::device::SDPABackwardQDeviceOperation;
 
-    // The gate flags only apply when a gate is given.
+    // A gate flag without a gate is rejected by validation rather than dropped.
     auto operation_attributes = OperationType::operation_attributes_t{
         .mask_type = mask_type,
         .dropout_probability = dropout_probability,
         .has_gate = gate.has_value(),
         .compute_grad_query = compute_grad_query,
         .compute_u_scaler = compute_u_scaler,
-        .compute_grad_gate = gate.has_value() && compute_grad_gate,
-        .compute_gated_grad_output = gate.has_value() && compute_gated_grad_output};
+        .compute_grad_gate = compute_grad_gate,
+        .compute_gated_grad_output = compute_gated_grad_output};
 
     auto tensor_args = OperationType::tensor_args_t{
         .grad_output = grad_output,

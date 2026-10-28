@@ -15,9 +15,15 @@ std::vector<std::optional<ttnn::Tensor>> layernorm_bw(
     const ttnn::Tensor& mean_tensor,
     const ttnn::Tensor& rstd_tensor,
     const ttnn::Tensor& dL_dout_tensor,
-    const bool compute_grad_input,
-    const bool compute_grad_gamma,
-    const bool compute_grad_beta) {
+    const LayerNormBackwardGrads& grads) {
+    // dL_dgamma and dL_dbeta require sum over batches so we cannot perform this sum in the kernel.
+    // Instead we reduce their components here.
+
+    // dbeta_components is a copy of dL_dout, so dbeta alone needs no kernel.
+    if (grads.beta && !grads.input && !grads.gamma) {
+        return {std::nullopt, std::nullopt, ttnn_fixed::sum_over_leading_dims(dL_dout_tensor)};
+    }
+
     // Call the device operation
     // Returns: [dx, dgamma_components, dbeta_components]; a skipped grad is nullopt
     auto result = ttnn::prim::ttml_layernorm_bw(
@@ -29,17 +35,14 @@ std::vector<std::optional<ttnn::Tensor>> layernorm_bw(
         /* preallocated_dx */ std::nullopt,
         /* preallocated_dgamma_components */ std::nullopt,
         /* preallocated_dbeta_components */ std::nullopt,
-        compute_grad_input,
-        compute_grad_gamma,
-        compute_grad_beta);
-
-    // dL_dgamma and dL_dbeta require sum over batches so we cannot perform this sum in the kernel.
-    // Instead we return the components and reduce them here.
+        grads.input,
+        grads.gamma,
+        grads.beta);
 
     return {
         result[0],  // dx - already complete
-        compute_grad_gamma ? std::make_optional(ttnn_fixed::sum_over_leading_dims(result[1].value())) : std::nullopt,
-        compute_grad_beta ? std::make_optional(ttnn_fixed::sum_over_leading_dims(result[2].value())) : std::nullopt};
+        grads.gamma ? std::make_optional(ttnn_fixed::sum_over_leading_dims(result[1].value())) : std::nullopt,
+        grads.beta ? std::make_optional(ttnn_fixed::sum_over_leading_dims(result[2].value())) : std::nullopt};
 }
 
 }  // namespace ttml::metal
