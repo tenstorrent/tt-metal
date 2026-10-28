@@ -22,26 +22,31 @@ jobs:
       - name: Check for @ mentions
         id: check-mention
         env:
+          # Org-read PAT, as in on-community-issue.yaml: it sees private org members too. github.token only
+          # sees public ones, so it is kept as a fallback for events that get no secrets.
+          ORG_READ_GITHUB_TOKEN: ${{ secrets.ORG_READ_GITHUB_TOKEN }}
           GH_TOKEN: ${{ github.token }}
         run: |
           # Org members can reach each other on Slack directly, so only mentions written by someone outside
           # the org, or by a bot, are relayed. The person classified is the sender, who wrote the comment or
-          # made the edit. author_association describes the issue or PR author, so it is used only when the
-          # sender is that author; anyone else editing a description is looked up in the org.
+          # made the edit.
           SENDER=$(jq -r '.sender.login // ""' "$GITHUB_EVENT_PATH")
           SENDER_TYPE=$(jq -r '.sender.type // ""' "$GITHUB_EVENT_PATH")
           if [ "$SENDER_TYPE" != "Bot" ]; then
+            # author_association describes the comment, issue or PR author. It settles a public member
+            # without an API call, but only when the sender is that author.
             AUTHOR=$(jq -r '(.comment.user.login // .issue.user.login // .pull_request.user.login // "")' "$GITHUB_EVENT_PATH")
+            ASSOCIATION=""
             if [ "$SENDER" = "$AUTHOR" ]; then
               ASSOCIATION=$(jq -r '(.comment.author_association // .issue.author_association // .pull_request.author_association // "")' "$GITHUB_EVENT_PATH")
-            else
-              # 204 when the sender is a member visible to this token. A token that cannot list members is
-              # redirected (302) to the public-membership check, which -L follows, so private members read as
-              # outside.
-              MEMBER_STATUS=$(curl -sL -o /dev/null -w '%{http_code}' --max-time 30 \
-                -H "Authorization: Bearer $GH_TOKEN" \
+            fi
+            if [ "$ASSOCIATION" != "MEMBER" ] && [ "$ASSOCIATION" != "OWNER" ]; then
+              # A private member reads as CONTRIBUTOR above, and an editor who is not the author has no
+              # association at all, so ask the org. 204 means member.
+              MEMBER_STATUS=$(curl -s -o /dev/null -w '%{http_code}' --max-time 30 \
+                -H "Authorization: Bearer ${ORG_READ_GITHUB_TOKEN:-$GH_TOKEN}" \
                 "https://api.github.com/orgs/${{ github.repository_owner }}/members/$SENDER" || echo "000")
-              [ "$MEMBER_STATUS" = "204" ] && ASSOCIATION="MEMBER" || ASSOCIATION="NONE"
+              [ "$MEMBER_STATUS" = "204" ] && ASSOCIATION="MEMBER"
             fi
             if [ "$ASSOCIATION" = "MEMBER" ] || [ "$ASSOCIATION" = "OWNER" ]; then
               echo "Skipping: $SENDER is an org $ASSOCIATION"
