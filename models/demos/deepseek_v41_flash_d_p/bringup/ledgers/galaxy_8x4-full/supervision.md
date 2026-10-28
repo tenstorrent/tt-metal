@@ -514,3 +514,11 @@ check (F196 / F197); host times stay hidden until verified warm.
   combine_plan.build_mc 12 ms (3 builds/chunk), begin_chunk +10 ms. Flat itself: ~443 ms/chunk ttnn dispatch
   (3575 calls, ~124 us each: host dispatch-bound, device 308 ms), engram host rows ~100 ms/chunk on the critical path.
 - 07:19 OWNER: A. Fast-forwarded origin dnijemcevic/model_bringup d762b21db30..74c043c800e (= model_bringup_galaxy tip; galaxy pushed 2dc76a55232..74c043c800e). Both branches identical; next owner rebase: git rebase --rebase-merges or rerere trained on c9ba76f8618, else the 16-file fork conflicts recur.
+- 07:26 OWNER: run the perf part; focus: fusions that cut HOST time; see whether agents find model-level improvements;
+  work autonomously (branches pushed first: both at 8ad76bad6bb). Orchestrator resumed --until X.2 (X.1 warm profile
+  on the shipped config: flat, FABRIC_2D; X.2 opportunity list). FRAMEWORK GAP (queued, F206 pending): X.2 ranks
+  device time only and no agent proposes picks; host time (wall - device, ttnn calls per section, host hot spots) is
+  not in the perf review. Interim: a bringup-engineer (perf review, CPU only, no code) writes perf_proposals.md from
+  tonight's cProfile + ops data; the top proposals become perf tasks P.* (step perf, role perf), each behind a
+  pre-named tt/settings.py switch (ab.change/ab.env = DS41_<NAME>), judged by the orchestrator's A/B report (frozen
+  tests, ladder, profile with chunk_wall_ms), accept/reject per pick = owner.

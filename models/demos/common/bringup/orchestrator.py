@@ -2145,6 +2145,10 @@ def _place_fixes(orch: Orchestrator) -> bool:
             at = min([at] + [ids.index(g) for g in open_gates])
         spec["tasks"].insert(at, fix)
         tasks[job["id"]] = spec["tasks"][at]
+        # F206: the task it is placed before depends on it, so it is in --until's scope and runs first (with every
+        # gate task passed nothing else depended on it: DeepSeek-V4.1 FIX.6 was skipped and X.1 ran first)
+        if first in tasks and first != job["id"]:
+            tasks[first]["deps"] = list(dict.fromkeys(list(tasks[first].get("deps") or []) + [job["id"]]))
         orch.echo(
             f"[{job['id']}] placed by the overseer before {first}: {job['title']} (gate: {', '.join(job['gate'])})"
         )

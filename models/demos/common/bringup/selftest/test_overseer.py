@@ -168,6 +168,33 @@ def test_a_queued_fix_runs_next_with_an_agent_and_the_gates_it_names(orch):  # n
     assert A.ledger_signature(o.spec) == sig
 
 
+def test_a_queued_fix_runs_before_the_next_task_under_until(orch):  # noqa: F811
+    """F206: with --until, a fix whose gate tasks all passed was out of scope (nothing depended on it) and the next
+    task ran first (DeepSeek-V4.1 FIX.6, 2026-10-28: X.1 profiled the old default on the new torus spec, where it
+    hangs). The task a fix is placed before now depends on it."""
+    o = orch(
+        [impl_task(), impl_task(id="C.2", deps=["C.1"])],
+        {
+            "C.1.implement.1.md": {"write": {"src/impl.txt": "0.999"}},
+            "FIX.1.overseer.1.md": {"write": {"src/impl.txt": "0.9995"}},
+            "C.2.implement.1.md": {"write": {"src/impl.txt": "0.9995"}},
+        },
+    )
+    real = o.run_agent
+
+    def overseer_queues_meanwhile(task, role, attempt, brief, **kw):
+        if task["id"] == "C.1":
+            led = {t: o.led.task(t) for t in o.led.tasks()}
+            OV.queue_fix(o.spec.bringup_dir, "Change the default.", ["C.1"], tasks=led)
+        return real(task, role, attempt, brief, **kw)
+
+    o.run_agent = overseer_queues_meanwhile
+    assert o.run(until="C.2") == DONE
+    order = [x.split("]")[0].strip("[ ") for x in orch.lines if x.startswith("[")]
+    assert "FIX.1" in order and order.index("FIX.1") < order.index("C.2"), order
+    assert o.led.state()["FIX.1"]["status"] == "PASS" and "FIX.1" in o.led.task("C.2")["deps"]
+
+
 def test_a_fix_needs_known_gate_tasks(tmp_path):
     with pytest.raises(SystemExit):
         OV.queue_fix(tmp_path, "x", [])
