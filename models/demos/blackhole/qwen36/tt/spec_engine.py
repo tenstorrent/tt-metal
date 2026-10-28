@@ -1134,10 +1134,12 @@ class MTPSpecEngine:
             c.bump(name)
 
     def _note_prefill_done(self):
-        """Every 1000 prefills: one INFO line with the chunk / prefix-cache counters (visible without debug)."""
+        """Every QWEN36_PREFIX_SUMMARY_EVERY (default 1000) prefills: one INFO line with the chunk / prefix-cache counters
+        (visible without debug; includes the true resume metrics of GdnPrefixStateCache.record_resume)."""
         n = self.__dict__.get("_n_prefills", 0) + 1
         self.__dict__["_n_prefills"] = n
-        if n % 1000 == 0:
+        every = max(1, int(os.environ.get("QWEN36_PREFIX_SUMMARY_EVERY", "1000")))
+        if n % every == 0:
             c = self._chunk_cache()
             if c is not None and hasattr(c, "summary"):
                 logger.info(
@@ -2682,7 +2684,12 @@ class MTPSpecEngine:
                     return None  # only the first from-0 segment may decline, before any side effect
                 if not final:
                     # the bound scratch = the state after tokens[:b]
-                    model._prefix_cache.save(prompt[0], b, low_prio=b in getattr(points, "low", ()))
+                    model._prefix_cache.save(
+                        prompt[0],
+                        b,
+                        low_prio=b in getattr(points, "low", ()),
+                        protect=b in getattr(points, "end", ()),
+                    )
                     saved.append(b)
                 a = b
             if save_end:
@@ -2923,6 +2930,9 @@ class MTPSpecEngine:
 
         cap = spec_resume_cap(int(start_pos), Tp)
         s = 0 if plan is None else int(plan[0])
+        c = self._chunk_cache()
+        if c is not None and hasattr(c, "record_resume"):
+            c.record_resume(start_pos, cap, s, None if plan is None or plan[1] is None else plan[1][1])
         if s >= cap:
             return
         self.resume_fallbacks = getattr(self, "resume_fallbacks", 0) + 1

@@ -1683,9 +1683,9 @@ class Qwen36Model:
         )
         forced = [int(p) for p in force_points if s < int(p) <= L - 3 and int(p) % 128 == 0]
         if forced:
-            low = points.low - set(forced)
+            low, end = points.low - set(forced), points.end
             points = SpecPoints(sorted(set(points) | set(forced)))
-            points.low = low
+            points.low, points.end = low, end
         if s == 0 and not points and not nonfinal:
             return None
         return s, src, points
@@ -1780,7 +1780,12 @@ class Qwen36Model:
                 tokens, page_table, seg_start, seg_end, on_chunk, want_logits=last and want_logits
             )
             if not last:
-                cache.save(tokens[0], seg_end, low_prio=seg_end in getattr(points, "low", ()))
+                cache.save(
+                    tokens[0],
+                    seg_end,
+                    low_prio=seg_end in getattr(points, "low", ()),
+                    protect=seg_end in getattr(points, "end", ()),
+                )
                 saved.append(seg_end)
             seg_start = seg_end
         if save_end:  # non-final chunk, exact resume: the next chunk starts from the state after tokens[:L]
