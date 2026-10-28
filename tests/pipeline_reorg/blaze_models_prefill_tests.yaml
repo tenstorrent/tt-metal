@@ -1211,7 +1211,7 @@
 
 # Prefill accuracy outside the migration path: one traced runtime prefills each GPU-trace dataset, then
 # checks every KV head and the next-token likelihoods (per context-depth bin) against the trace.
-- name: "(Gemma4-31B-it) D_P prefill KV and next-token likelihood accuracy 256k@8k"
+- name: "(Gemma4-31B-it) D_P prefill KV and next-token likelihood accuracy full@8k"
   fabric_profile: 1d
   artifact_subdir: gemma4_d_p_prefill_accuracy
   cmd: |
@@ -1226,7 +1226,7 @@
     export OMP_NUM_THREADS=16 MKL_NUM_THREADS=16
     mpirun --bind-to none --pernode --tag-output \
       python3 -m pytest \
-        'models/demos/gemma4_d_p/tests/test_prefill_accuracy.py::test_prefill_accuracy[blackhole-256k-8x4]' \
+        'models/demos/gemma4_d_p/tests/test_prefill_accuracy.py::test_prefill_accuracy[blackhole-full-8x4]' \
         -sv --tb=short --junitxml="$PREFILL_SUMMARIES/{artifact_subdir}/junit.xml"
   test_type: gemma4_d_p_prefill_accuracy
   test_tags: [gemma4_d_p, kv_cache, accuracy]
