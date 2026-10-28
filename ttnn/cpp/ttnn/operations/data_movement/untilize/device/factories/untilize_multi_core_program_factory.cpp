@@ -26,6 +26,12 @@ namespace {
 // Interleaved input: the one common runtime word, tile rows of the input. Reader, compute and writer
 // derive their per-core row range from it and a static core index.
 constexpr const char* kLengthArg = "num_tile_rows";
+// Named on program creation and again on cache hits.
+constexpr const char* kReader = "reader";
+constexpr const char* kWriter = "writer";
+constexpr const char* kComputeFull = "compute_full";
+constexpr const char* kInput = "input";
+constexpr const char* kOutput = "output";
 
 uint32_t untilize_num_tile_rows(const Tensor& input) {
     const uint32_t tensor_width = input.padded_shape()[-1];
@@ -43,11 +49,11 @@ ttnn::device_operation::ProgramArtifacts UntilizeMultiCoreProgramFactory::create
 
     const DFBSpecName SRC0{"src0"};
     const DFBSpecName OUT{"out"};
-    const TensorParamName INPUT{"input"};
-    const TensorParamName OUTPUT{"output"};
-    const KernelSpecName READER{"reader"};
-    const KernelSpecName WRITER{"writer"};
-    const KernelSpecName COMPUTE_FULL{"compute_full"};
+    const TensorParamName INPUT{kInput};
+    const TensorParamName OUTPUT{kOutput};
+    const KernelSpecName READER{kReader};
+    const KernelSpecName WRITER{kWriter};
+    const KernelSpecName COMPUTE_FULL{kComputeFull};
     const KernelSpecName COMPUTE_CLIFF{"compute_cliff"};
 
     constexpr const char* READER_BLOCK_SRC =
@@ -476,14 +482,14 @@ tt::tt_metal::experimental::ProgramRunArgs UntilizeMultiCoreProgramFactory::over
     ProgramRunArgs params;
     if (operation_attributes.runtime_rows && !tensor_args.input.is_sharded() && !output.is_sharded()) {
         const uint32_t num_tile_rows = untilize_num_tile_rows(tensor_args.input);
-        for (const char* kernel : {"reader", "writer", "compute_full"}) {
+        for (const char* kernel : {kReader, kWriter, kComputeFull}) {
             params.kernel_run_args.push_back(KernelRunArgs{
                 .kernel = KernelSpecName{kernel}, .common_runtime_arg_values = {{kLengthArg, num_tile_rows}}});
         }
     }
     params.tensor_args = {
-        {TensorParamName{"input"}, TensorArgument{tensor_args.input.mesh_tensor()}},
-        {TensorParamName{"output"}, TensorArgument{output.mesh_tensor()}},
+        {TensorParamName{kInput}, TensorArgument{tensor_args.input.mesh_tensor()}},
+        {TensorParamName{kOutput}, TensorArgument{output.mesh_tensor()}},
     };
     return params;
 }

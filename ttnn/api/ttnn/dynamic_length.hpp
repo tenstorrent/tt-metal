@@ -5,7 +5,6 @@
 #pragma once
 
 #include <algorithm>
-#include <array>
 #include <concepts>
 #include <cstddef>
 #include <cstdint>
@@ -121,8 +120,8 @@ class KeyEncoder {
 public:
     KeyEncoder(const DynamicKey& dynamic_key, std::string_view operation_name);
 
-    // Branch for branch the walk of ttsl::hash::canonical_key, descending wherever it descends, so every value
-    // it encodes can be reached; only a Tensor and a left-out value are encoded differently.
+    // Byte for byte the encoding of ttsl::hash::canonical_key, except for a Tensor and a left-out value: it
+    // descends wherever canonical_key descends, so every attribute and tensor it encodes can be reached.
     template <typename T>
     void append(const T& object) {
         if (is_left_out(&object, ttsl::hash::type_hash<T>)) {
@@ -132,57 +131,11 @@ public:
         }
         if constexpr (std::is_same_v<T, Tensor>) {
             append_tensor(object);
-        } else if constexpr (
-            std::numeric_limits<T>::is_integer || std::is_floating_point_v<T> || std::is_enum_v<T> ||
-            std::is_same_v<T, std::string>) {
-            key_ += ttsl::hash::canonical_key(object);
-        } else if constexpr (ttsl::reflection::detail::supports_compile_time_attributes_v<T>) {
-            std::apply(
-                [this](const auto&... attributes) { (this->append(attributes), ...); }, object.attribute_values());
-        } else if constexpr (ttsl::is_specialization_v<T, std::tuple> || ttsl::is_specialization_v<T, std::pair>) {
-            std::apply([this](const auto&... elements) { (this->append(elements), ...); }, object);
-        } else if constexpr (ttsl::is_specialization_v<T, std::optional>) {
-            key_ += ttsl::hash::canonical_key(object.has_value());
-            if (object.has_value()) {
-                append(*object);
-            }
-        } else if constexpr (ttsl::is_specialization_v<T, std::variant>) {
-            key_ += ttsl::hash::canonical_key(std::uint64_t{object.index()});
-            std::visit([this](const auto& alternative) { this->append(alternative); }, object);
-        } else if constexpr (ttsl::is_specialization_v<T, std::reference_wrapper>) {
-            append(object.get());
-        } else if constexpr (ttsl::reflection::detail::is_reflective_shared_ptr_v<T>) {
-            key_ += ttsl::hash::canonical_key(object != nullptr);
-            if (object != nullptr) {
-                append(*object);
-            }
-        } else if constexpr (
-            !std::is_same_v<T, std::vector<bool>> &&
-            (ttsl::is_specialization_v<T, std::vector> || ttsl::is_specialization_v<T, std::set> ||
-             ttsl::is_span_v<T> || is_std_array_v<T>)) {
-            key_ += ttsl::hash::canonical_key(std::uint64_t{std::size(object)});
-            std::ranges::for_each(object, [this](const auto& element) { this->append(element); });
-        } else if constexpr (ttsl::is_specialization_v<T, std::map>) {
-            key_ += ttsl::hash::canonical_key(std::uint64_t{object.size()});
-            std::ranges::for_each(object, [this](const auto& entry) {
-                this->append(entry.first);
-                this->append(entry.second);
-            });
-        } else if constexpr (ttsl::is_specialization_v<T, std::unordered_map>) {
-            // Sorted by key, as canonical_key does, so the encoding does not depend on bucket order.
-            std::vector<const typename T::value_type*> entries;
-            entries.reserve(object.size());
-            std::ranges::transform(object, std::back_inserter(entries), [](const auto& entry) { return &entry; });
-            std::ranges::sort(entries, {}, [](const auto* entry) -> const auto& { return entry->first; });
-            key_ += ttsl::hash::canonical_key(std::uint64_t{object.size()});
-            std::ranges::for_each(entries, [this](const auto* entry) {
-                this->append(entry->first);
-                this->append(entry->second);
-            });
-        } else if constexpr (!ttsl::reflection::detail::supports_to_hash_v<T> && ttsl::concepts::Reflectable<T>) {
-            reflect::for_each([this, &object](auto I) { this->append(reflect::get<I>(object)); }, object);
+        } else if constexpr (descends_v<T>) {
+            key_ += '\x1f';
+            append_members(object);
         } else {
-            // vector<bool>, to_hash-only and std::hash-only types: leaves, as in canonical_key.
+            // Scalars, strings, vector<bool>, and types canonical_key encodes by their to_hash or std::hash.
             key_ += ttsl::hash::canonical_key(object);
         }
     }
@@ -191,10 +144,71 @@ public:
     std::string finish() &&;
 
 private:
+    // The branches of canonical_key that walk into a value rather than encode it whole, in its order: a type that
+    // is also a scalar or string, or that is to_hash-able before it is reflectable, is a leaf.
     template <typename T>
-    static constexpr bool is_std_array_v = false;
-    template <typename T, std::size_t N>
-    static constexpr bool is_std_array_v<std::array<T, N>> = true;
+    static constexpr bool descends_v =
+        !(std::numeric_limits<T>::is_integer || std::is_floating_point_v<T> || std::is_enum_v<T> ||
+          std::is_same_v<T, std::string>) &&
+        (ttsl::reflection::detail::supports_compile_time_attributes_v<T> || ttsl::is_specialization_v<T, std::tuple> ||
+         ttsl::is_specialization_v<T, std::pair> || ttsl::is_specialization_v<T, std::optional> ||
+         ttsl::is_specialization_v<T, std::variant> || ttsl::is_specialization_v<T, std::reference_wrapper> ||
+         ttsl::reflection::detail::is_reflective_shared_ptr_v<T> ||
+         (!std::is_same_v<T, std::vector<bool>> && (ttsl::is_specialization_v<T, std::vector> ||
+                                                    ttsl::is_specialization_v<T, std::set> || ttsl::is_span_v<T>)) ||
+         ttsl::is_specialization_v<T, std::map> || ttsl::is_specialization_v<T, std::unordered_map> ||
+         (!ttsl::reflection::detail::supports_to_hash_v<T> && ttsl::concepts::Reflectable<T>));
+
+    template <typename T>
+    void append_members(const T& object) {
+        if constexpr (ttsl::reflection::detail::supports_compile_time_attributes_v<T>) {
+            std::apply(
+                [this](const auto&... attributes) { (this->append(attributes), ...); }, object.attribute_values());
+        } else if constexpr (ttsl::is_specialization_v<T, std::tuple> || ttsl::is_specialization_v<T, std::pair>) {
+            std::apply([this](const auto&... elements) { (this->append(elements), ...); }, object);
+        } else if constexpr (ttsl::is_specialization_v<T, std::optional>) {
+            key_ += static_cast<char>(object.has_value());
+            if (object.has_value()) {
+                append(*object);
+            }
+        } else if constexpr (ttsl::is_specialization_v<T, std::variant>) {
+            append_count(object.index());
+            std::visit([this](const auto& alternative) { this->append(alternative); }, object);
+        } else if constexpr (ttsl::is_specialization_v<T, std::reference_wrapper>) {
+            append(object.get());
+        } else if constexpr (ttsl::reflection::detail::is_reflective_shared_ptr_v<T>) {
+            key_ += static_cast<char>(object != nullptr);
+            if (object != nullptr) {
+                append(*object);
+            }
+        } else if constexpr (ttsl::is_specialization_v<T, std::unordered_map>) {
+            // Sorted by key, as canonical_key does, so the encoding does not depend on bucket order.
+            std::vector<const typename T::value_type*> entries;
+            entries.reserve(object.size());
+            std::ranges::transform(object, std::back_inserter(entries), [](const auto& entry) { return &entry; });
+            std::ranges::sort(entries, {}, [](const auto* entry) -> const auto& { return entry->first; });
+            append_count(object.size());
+            std::ranges::for_each(entries, [this](const auto* entry) {
+                this->append(entry->first);
+                this->append(entry->second);
+            });
+        } else if constexpr (ttsl::is_specialization_v<T, std::map>) {
+            append_count(object.size());
+            std::ranges::for_each(object, [this](const auto& entry) {
+                this->append(entry.first);
+                this->append(entry.second);
+            });
+        } else if constexpr (
+            ttsl::is_specialization_v<T, std::vector> || ttsl::is_specialization_v<T, std::set> || ttsl::is_span_v<T>) {
+            append_count(std::size(object));
+            std::ranges::for_each(object, [this](const auto& element) { this->append(element); });
+        } else {
+            reflect::for_each([this, &object](auto I) { this->append(reflect::get<I>(object)); }, object);
+        }
+    }
+
+    // A size or variant index, as canonical_key writes it: raw, without a separator.
+    void append_count(std::uint64_t count);
 
     bool is_left_out(const void* address, int type);
     void append_tensor(const Tensor& tensor);

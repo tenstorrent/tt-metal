@@ -88,6 +88,10 @@ bool KeyEncoder::is_left_out(const void* address, int type) {
 
 // Mirrors the Tensor's own key (storage kind, logical shape, layout), with a declared dim encoded as absent.
 // The padded shape follows from the logical shape and the layout's alignment, so it is left out as well.
+void KeyEncoder::append_count(std::uint64_t count) {
+    key_.append(reinterpret_cast<const char*>(&count), sizeof(count));
+}
+
 void KeyEncoder::append_tensor(const Tensor& tensor) {
     const auto& shape = tensor.logical_shape();
     const int rank = static_cast<int>(shape.rank());

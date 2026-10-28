@@ -25,8 +25,9 @@ namespace ttnn::operations::data_movement::detail {
 // Prefer `ttnn::untilize` everywhere else, including for native-only cases: it already declines to
 // route sharded, non-tile, or execution-control-constrained cases to codegen.
 
-// The native prim, unconditionally. `runtime_rows` opts the multi-core interleaved factory into
-// deriving its per-core rows on device (one program per height class); the default is main's split.
+// The native prim, unconditionally. `runtime_rows` opts the multi-core interleaved factory into deriving its
+// per-core rows on device, so one program serves every height. By default the host splits the rows into per-core
+// runtime args, and each height builds its own program.
 ttnn::Tensor untilize_force_native(
     const ttnn::Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,

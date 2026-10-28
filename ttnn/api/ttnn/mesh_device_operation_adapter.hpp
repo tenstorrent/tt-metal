@@ -295,13 +295,17 @@ public:
         return DeviceOperation::create_output_tensors(attrs, tensor_args);
     }
 
+    static_assert(
+        !(HasDynamicKey<DeviceOperation> &&
+          requires(const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
+              DeviceOperation::compute_program_hash(attrs, tensor_args);
+          }),
+        "Declare dynamic_key or write compute_program_hash, not both: the framework derives the hash from "
+        "dynamic_key");
+
     static ttsl::hash::hash_t compute_program_hash(
         const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
         if constexpr (requires { DeviceOperation::compute_program_hash(attrs, tensor_args); }) {
-            static_assert(
-                !HasDynamicKey<DeviceOperation>,
-                "Declare dynamic_key or write compute_program_hash, not both: the framework derives the hash "
-                "from dynamic_key");
             // Fold type_hash so distinct ops cannot alias on a custom-hash collision
             return ttsl::hash::hash_objects_with_default_seed(
                 ttsl::hash::type_hash<DeviceOperation>, DeviceOperation::compute_program_hash(attrs, tensor_args));
@@ -1214,10 +1218,26 @@ public:
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args) {
         ttsl::hash::hash_t hash = compute_program_hash(attrs, tensor_args);
-        const auto coords = mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device);
-        std::for_each(
-            coords.begin(), coords.end(), [&](const auto& coord) { hash = ttsl::hash::hash_objects(hash, coord); });
+        fold_workload_coordinates(mesh_device, tensor_args, &hash, nullptr);
         return hash;
+    }
+
+    // Folds the mesh coordinates the tensors occupy into the hash and the canonical key, whichever is given; shared
+    // by every key path so the two stay in step.
+    static void fold_workload_coordinates(
+        tt::tt_metal::distributed::MeshDevice* mesh_device,
+        const tensor_args_t& tensor_args,
+        ttsl::hash::hash_t* hash,
+        std::string* canonical) {
+        const auto coords = mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device);
+        std::ranges::for_each(coords, [&](const auto& coord) {
+            if (hash != nullptr) {
+                *hash = ttsl::hash::hash_objects(*hash, coord);
+            }
+            if (canonical != nullptr) {
+                *canonical += ttsl::hash::canonical_key(coord);
+            }
+        });
     }
 
     // Exact, collision-free companion to compute_mesh_workload_hash: the cache compares this on a
@@ -1244,9 +1264,7 @@ public:
             } else {
                 key += ttsl::hash::canonical_key(attrs, tensor_args);
             }
-            const auto coords = mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device);
-            std::for_each(
-                coords.begin(), coords.end(), [&](const auto& coord) { key += ttsl::hash::canonical_key(coord); });
+            fold_workload_coordinates(mesh_device, tensor_args, nullptr, &key);
             return key;
         }
     }
@@ -1263,11 +1281,7 @@ public:
             ttsl::hash::hash_t hash =
                 ttsl::hash::hash_objects_with_default_seed(ttsl::hash::type_hash<DeviceOperation>, program_key);
             std::string canonical = std::string{op_type_name} + program_key;
-            const auto coords = mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device);
-            std::ranges::for_each(coords, [&](const auto& coord) {
-                hash = ttsl::hash::hash_objects(hash, coord);
-                canonical += ttsl::hash::canonical_key(coord);
-            });
+            fold_workload_coordinates(mesh_device, tensor_args, &hash, &canonical);
             return {.hash = hash, .canonical = std::move(canonical)};
         } else {
             return {

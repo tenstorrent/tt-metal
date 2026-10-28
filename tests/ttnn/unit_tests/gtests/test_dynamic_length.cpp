@@ -9,9 +9,14 @@
 #include <exception>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
+#include <tuple>
 #include <unordered_map>
+#include <variant>
 #include <vector>
+
+#include <tt_stl/reflection.hpp>
 
 #include "ttnn/dynamic_length.hpp"
 #include "ttnn/operations/creation/creation.hpp"
@@ -169,6 +174,86 @@ TEST(DynamicKey, RejectsValueOutsideAttributes) {
     DynamicKey dynamic_key;
     dynamic_key.value(copy.length);
     EXPECT_THROW(program_key(attributes, args, dynamic_key, "op"), std::exception);
+}
+
+enum class Mode : uint8_t { A, B };
+
+struct HashedLeaf {
+    uint32_t value = 0;
+    ttsl::hash::hash_t to_hash() const { return value; }
+};
+
+struct Inner {
+    uint32_t first = 0;
+    std::optional<std::string> name;
+};
+
+struct WithAttributes {
+    uint32_t a = 0;
+    float b = 0;
+    static constexpr auto attribute_names = std::forward_as_tuple("a", "b");
+    auto attribute_values() const { return std::forward_as_tuple(a, b); }
+};
+
+struct EveryBranch {
+    int32_t integer = -3;
+    double real = 0.5;
+    Mode mode = Mode::B;
+    std::string text = "text";
+    std::optional<uint32_t> present = 7;
+    std::optional<uint32_t> absent;
+    std::variant<uint32_t, std::string> variant = std::string{"alt"};
+    std::vector<uint32_t> list = {1, 2, 3};
+    std::vector<bool> flags = {true, false};
+    std::set<int> set = {4, 5};
+    std::map<int, std::string> map = {{1, "one"}};
+    std::unordered_map<int, uint32_t> unordered = {{2, 20}, {1, 10}, {3, 30}};
+    std::pair<uint32_t, Mode> pair = {9, Mode::A};
+    std::tuple<uint32_t, std::string> tuple = {8, "t"};
+    std::array<uint32_t, 2> array = {11, 12};
+    Inner inner = {.first = 6, .name = "inner"};
+    WithAttributes attributes = {.a = 1, .b = 2};
+    HashedLeaf hashed = {.value = 42};
+};
+
+struct NoTensors {
+    std::vector<uint32_t> sizes = {32, 64};
+};
+
+// With nothing declared and no tensors, the key is canonical_key's, followed by the empty derived suffix.
+TEST(DynamicKey, MatchesCanonicalKeyWithNothingDeclared) {
+    const EveryBranch attributes;
+    const NoTensors args;
+    EXPECT_EQ(
+        program_key(attributes, args, DynamicKey{}, "op"),
+        ttsl::hash::canonical_key(attributes, args) + ttsl::hash::canonical_key(std::uint64_t{0}));
+}
+
+struct Outer {
+    Inner inner;
+    uint32_t last = 0;
+};
+
+// value() matches by address and type, so a first member does not stand for the aggregates that start with it.
+TEST(DynamicKey, FirstMemberDoesNotAliasItsAggregate) {
+    const NoTensors args;
+    const auto first_free_key = [&](const Outer& attributes) {
+        DynamicKey dynamic_key;
+        dynamic_key.value(attributes.inner.first);
+        return program_key(attributes, args, dynamic_key, "op");
+    };
+    const Outer attributes{.inner = {.first = 1, .name = "a"}, .last = 2};
+    EXPECT_EQ(first_free_key(attributes), first_free_key({.inner = {.first = 5, .name = "a"}, .last = 2}));
+    EXPECT_NE(first_free_key(attributes), first_free_key({.inner = {.first = 1, .name = "b"}, .last = 2}));
+    EXPECT_NE(first_free_key(attributes), first_free_key({.inner = {.first = 1, .name = "a"}, .last = 3}));
+
+    const auto inner_free_key = [&](const Outer& attributes) {
+        DynamicKey dynamic_key;
+        dynamic_key.value(attributes.inner);
+        return program_key(attributes, args, dynamic_key, "op");
+    };
+    EXPECT_EQ(inner_free_key(attributes), inner_free_key({.inner = {.first = 5, .name = "b"}, .last = 2}));
+    EXPECT_NE(inner_free_key(attributes), inner_free_key({.inner = {.first = 1, .name = "a"}, .last = 3}));
 }
 
 }  // namespace ttnn::dynamic_length::test
