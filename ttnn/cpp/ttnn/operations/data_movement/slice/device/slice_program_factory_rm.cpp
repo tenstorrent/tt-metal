@@ -44,7 +44,7 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
     const CoreRangeSet& core_group_2,
     uint32_t num_sticks_per_core_group_1,
     uint32_t num_sticks_per_core_group_2,
-    uint32_t max_read_size,
+    uint32_t dfb_num_read_per_barrier,
     const ChunkingParams& chunking) {
     auto input_shape = input_tensor.padded_shape();
     auto output_shape = output_tensor.padded_shape();
@@ -124,10 +124,16 @@ inline std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_
                 // Match `compute_dfb_size`: nrpb=2 only when num_chunks is even, else 1 to avoid ring-wrap straddle.
                 num_read_per_barrier = (chunking.num_chunks_per_stick % 2 == 0) ? 2 : 1;
             } else {
-                auto num_sticks_per_core_pad32 = round_up_to_mul32(num_sticks_per_core);
-                num_sticks_per_core_read = tt::tt_metal::merge_num_sticks_to_read(
-                    num_sticks_per_core_pad32, unpadded_row_size_bytes_offset, max_read_size);
-                num_read_per_barrier = num_sticks_per_core_pad32 / num_sticks_per_core_read;
+                // compute_dfb_size sizes the DFB ring once, as two windows of the busier core group. The dataflow
+                // push/pop wrap only when a pointer lands exactly on the ring end, so every core must move that same
+                // window. A window derived from this core's own stick count need not divide the ring: it then runs
+                // past the ring end, or asks for more entries than the ring holds.
+                TT_FATAL(
+                    dfb_num_read_per_barrier != 0,
+                    "{} sticks on a core but the dataflow buffer was sized without a window",
+                    num_sticks_per_core);
+                num_read_per_barrier = dfb_num_read_per_barrier;
+                num_sticks_per_core_read = tt::div_up(num_sticks_per_core, num_read_per_barrier);
             }
         }
 
@@ -460,7 +466,7 @@ ttnn::device_operation::ProgramArtifacts SliceRmProgramFactory::create_program_a
         core_group_2,
         num_sticks_per_core_group_1,
         num_sticks_per_core_group_2,
-        ttnn::operations::data_movement::MAX_READ_SIZE,
+        sizing.num_read_per_barrier,
         sizing.chunking);
 
     KernelRunArgs reader_run_args{.kernel = RM_READER};
