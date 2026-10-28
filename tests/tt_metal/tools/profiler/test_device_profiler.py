@@ -979,6 +979,7 @@ def test_dispatch_cores():
 
 @skip_for_blackhole()
 @pytest.mark.skip_post_commit
+@pytest.mark.timeout(600)
 def test_dispatch_cores_extended_worker():
     REF_COUNT_DICT = {
         "Tensix CQ Dispatch*": [9325],
@@ -1527,3 +1528,160 @@ def test_get_programs_perf_data():
         validate_programs_perf_durations(json.load(f))
     with open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_all.json", "r") as f:
         validate_programs_perf_durations(json.load(f))
+
+
+# Configurations for test_noc_event_quick_push: env for the binary (profiler env is added by set_env_vars) and
+# the per-config knobs of the binary (see test_noc_event_quick_push.cpp). "sd-*" mirrors how a model harness in
+# slow dispatch drives the same path: non-blocking launches, no explicit read (only the one at device close), many
+# earlier programs in the DRAM region, zones around every iteration, a long kernel between pushes.
+NOC_EVENT_QUICK_PUSH_CONFIGS = {
+    "fd-blocking": dict(env={}, loop_count=4000),
+    "sd-blocking": dict(env={"slowDispatch": True}, loop_count=4000),
+    "sd-nonblocking-closeread": dict(
+        env={"slowDispatch": True}, loop_count=4000, knobs={"BLOCKING": 0, "SKIP_READ": 1}
+    ),
+    "sd-warmup": dict(
+        env={"slowDispatch": True},
+        loop_count=4000,
+        knobs={"BLOCKING": 0, "SKIP_READ": 1, "WARMUP": 1000},
+        program_support_count=8000,
+    ),
+    "sd-blaze-env": dict(
+        env={"slowDispatch": True, "do_mid_run_dump": True, "do_cpp_post_process": True},
+        loop_count=4000,
+        knobs={"BLOCKING": 0, "SKIP_READ": 1, "WARMUP": 1000, "ITER_ZONE": 1, "DELAY_NOPS": 2000},
+        program_support_count=8000,
+    ),
+    # Back-to-back pushes: the broken pairs in the model capture are always the second of two pushes ~75 cycles
+    # apart (a ring-full push, then the pre-emptive push before a linked multicast, a 16-word chunk). PUSH_EVERY
+    # calls quick_push() twice in a row every n-th read: a chunk of n events, then the 16-word one.
+    "fd-double-push": dict(env={}, loop_count=4000, knobs={"PUSH_EVERY": 100}),
+    "fd-double-push-dense": dict(env={}, loop_count=4000, knobs={"PUSH_EVERY": 25}),
+    "sd-double-push-blaze-env": dict(
+        env={"slowDispatch": True, "do_mid_run_dump": True, "do_cpp_post_process": True},
+        loop_count=4000,
+        knobs={"BLOCKING": 0, "SKIP_READ": 1, "WARMUP": 200, "ITER_ZONE": 1, "PUSH_EVERY": 100},
+        program_support_count=8000,
+    ),
+    "sd-sparse": dict(
+        env={"slowDispatch": True, "do_mid_run_dump": True, "do_cpp_post_process": True},
+        loop_count=300,
+        knobs={"BLOCKING": 0, "SKIP_READ": 1, "WARMUP": 200, "ITER_ZONE": 1, "DELAY_NOPS": 20000},
+        program_support_count=8000,
+    ),
+    # Linked multicasts, the way the model triggers its second push: quick_push_if_linked pushes a 16-word chunk
+    # right before a linked multicast chain on the same NoC command buffer. Last on purpose: a hang here poisons
+    # the chips for every later config (jobs 161289/161385, with the sender inside its own multicast range).
+    "fd-mcast-after-push": dict(env={}, loop_count=4000, knobs={"MCAST_EVERY": 1}, mcast_every=1),
+    "fd-mcast": dict(env={}, loop_count=4000, knobs={"MCAST_EVERY": 97}, mcast_every=97),
+    "sd-mcast-blaze-env": dict(
+        env={"slowDispatch": True, "do_mid_run_dump": True, "do_cpp_post_process": True},
+        loop_count=4000,
+        knobs={"BLOCKING": 0, "SKIP_READ": 1, "WARMUP": 200, "ITER_ZONE": 1, "MCAST_EVERY": 1},
+        mcast_every=1,
+        program_support_count=8000,
+    ),
+}
+
+
+@pytest.mark.parametrize("config_name", list(NOC_EVENT_QUICK_PUSH_CONFIGS.keys()))
+def test_noc_event_quick_push(config_name):
+    """
+    One long kernel whose BRISC and NCRISC each record LOOP_COUNT NoC events, so the profiler's L1 marker ring
+    quick-pushes to DRAM many times inside a single launch (as a persistent kernel does), with a DRAM region large
+    enough that nothing is dropped. The host read must then parse every chunk cleanly: every PROFILER-NOC-QUICK-PUSH
+    zone has both endpoints, the user zones that span the pushes are intact, all NoC events are present, and the
+    NoC trace JSON is written.
+    """
+    config = NOC_EVENT_QUICK_PUSH_CONFIGS[config_name]
+    LOOP_COUNT = config["loop_count"]
+    knobs = config.get("knobs", {})
+    CORE_COUNT = 4  # (0,0)-(1,1) in the test binary
+    RISCS = ("BRISC", "NCRISC")
+    NOC_EVENT_TIMER_ID = 12345  # kernel_profiler::NOC_TRACING_STATIC_ID
+    L1_RING_WORDS = 512  # kernel_profiler::PROFILER_L1_VECTOR_SIZE
+    # 48 B of DRAM per RISC per support-count unit; LOOP_COUNT events of 16 B plus chunk headers must fit.
+    PROGRAM_SUPPORT_COUNT = config.get("program_support_count", 4000)
+    # Each event is 4 words; a push happens roughly every ring-full of them.
+    MIN_PUSHES_PER_LANE = max(1, (LOOP_COUNT * 4) // L1_RING_WORDS - 2)
+    if knobs.get("PUSH_EVERY"):
+        MIN_PUSHES_PER_LANE = 2 * (LOOP_COUNT // knobs["PUSH_EVERY"])
+
+    clear_profiler_runtime_artifacts()
+    envVars = set_env_vars(
+        enable_noc_tracing=True, set_program_support_count=PROGRAM_SUPPORT_COUNT, **config["env"]
+    )
+    knobStr = " ".join(f"NOC_EVENT_QUICK_PUSH_{k}={v}" for k, v in knobs.items())
+    testCommand = (
+        f"cd {TT_METAL_HOME} && NOC_EVENT_QUICK_PUSH_LOOP_COUNT={LOOP_COUNT} {knobStr} {envVars} "
+        f"build/test/tt_metal/tools/profiler/test_noc_event_quick_push"
+    )
+    print()
+    logger.info(f"Running: {testCommand}")
+    result = subprocess.run(testCommand, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    output = result.stdout.decode("UTF-8", errors="replace")
+    print(output)
+    assert result.returncode == 0, f"test binary exited with {result.returncode}"
+    assert "markers were dropped" not in output, "the DRAM profiler region overflowed; raise PROGRAM_SUPPORT_COUNT"
+    diag = [l for l in output.splitlines() if "tmp-diag" in l and "QUICK-PUSH" in l]
+    assert not diag, "a quick-push zone endpoint was dropped as a duplicate marker:\n" + "\n".join(diag[:10])
+
+    csv_path = f"{PROFILER_LOGS_DIR}/profile_log_device.csv"
+    assert os.path.isfile(csv_path), f"device log not written: {csv_path}"
+    df = pd.read_csv(csv_path, skiprows=1, header=0, na_filter=False)
+    df.columns = [c.strip() for c in df.columns]
+    df["RISC processor type"] = df["RISC processor type"].str.strip()
+    df["zone name"] = df["zone name"].astype(str).str.strip()
+    df["type"] = df["type"].astype(str).str.strip()
+    df["timer_id"] = pd.to_numeric(df["timer_id"], errors="coerce")
+    lanes = df.groupby(["core_x", "core_y", "RISC processor type"])
+
+    errors = []
+    lane_count = 0
+    summary = []
+    for (x, y, risc), lane in lanes:
+        if risc not in RISCS:
+            continue
+        lane_count += 1
+        qp = lane[lane["zone name"] == "PROFILER-NOC-QUICK-PUSH"]
+        starts = int((qp["type"] == "ZONE_START").sum())
+        ends = int((qp["type"] == "ZONE_END").sum())
+        warmup = knobs.get("WARMUP", 0)
+        noc_events = int((lane["timer_id"] == NOC_EVENT_TIMER_ID).sum()) - warmup
+        mcast_chains = 0
+        if config.get("mcast_every", 0) > 1:
+            mcast_chains = (LOOP_COUNT + config["mcast_every"] - 1) // config["mcast_every"]
+        elif config.get("mcast_every") == 1:
+            # one chain after every ring-full push: not a fixed number, so only the reads are checked exactly
+            mcast_chains = (noc_events - LOOP_COUNT) // 5
+        noc_events -= 5 * mcast_chains  # the 5 multicast writes per chain (MCAST_WRITES in the kernel) are events too
+        runs = lane["run host ID"].nunique()
+        user = lane[lane["zone name"] == "TEST-NOC-QUICK-PUSH"]
+        user_starts = int((user["type"] == "ZONE_START").sum()) - warmup
+        user_ends = int((user["type"] == "ZONE_END").sum()) - warmup
+        iters = lane[lane["zone name"] == "TEST-ITER"]
+        iter_starts, iter_ends = int((iters["type"] == "ZONE_START").sum()), int((iters["type"] == "ZONE_END").sum())
+        summary.append(
+            f"core ({x},{y}) {risc}: quick-push {starts}/{ends}, events {noc_events}, user zone {user_starts}/{user_ends}, "
+            f"iter zones {iter_starts}/{iter_ends}, runs {runs}, mcast chains {mcast_chains}"
+        )
+        if starts < MIN_PUSHES_PER_LANE or starts != ends:
+            errors.append(f"core ({x},{y}) {risc}: PROFILER-NOC-QUICK-PUSH starts={starts} ends={ends}")
+        if user_starts != 1 or user_ends != 1:
+            errors.append(f"core ({x},{y}) {risc}: TEST-NOC-QUICK-PUSH zone not intact: {user_starts}/{user_ends}")
+        if knobs.get("ITER_ZONE") and (iter_starts != iter_ends or iter_starts == 0):
+            errors.append(f"core ({x},{y}) {risc}: TEST-ITER zones not paired: {iter_starts}/{iter_ends}")
+        if noc_events != LOOP_COUNT:
+            errors.append(f"core ({x},{y}) {risc}: {noc_events} NoC events, expected {LOOP_COUNT}")
+    logger.info("\n".join(summary))
+    assert lane_count == CORE_COUNT * len(RISCS), f"expected {CORE_COUNT * len(RISCS)} lanes, got {lane_count}"
+    assert not errors, "\n".join(errors)
+
+    noc_trace_files = [f for f in os.listdir(PROFILER_LOGS_DIR) if f.startswith("noc_trace_dev0") and f.endswith(".json")]
+    assert noc_trace_files, f"no NoC trace JSON written in {PROFILER_LOGS_DIR}"
+    read_events = 0
+    for fname in noc_trace_files:
+        with open(os.path.join(PROFILER_LOGS_DIR, fname), "r") as f:
+            read_events += sum(1 for e in json.load(f) if e.get("type") == "READ")
+    expected = (LOOP_COUNT + knobs.get("WARMUP", 0)) * CORE_COUNT * len(RISCS)
+    assert read_events == expected, f"NoC trace has {read_events} READ events, expected {expected}"
