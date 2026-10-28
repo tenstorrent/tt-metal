@@ -443,7 +443,7 @@ void bind_sdpa(nb::module_& mod) {
                 output dtype).
             kv_window (ttnn.Tensor, optional): kv_format ROW_BFP4 only (bring-up fork option): [1, 1, Tw, K_DIM] bf16
                 ROW_MAJOR rows read by the first k_chunk of each index row; kv then holds bfloat4_b row records
-                [B, 1, T, K_DIM/16 + K_DIM/2] uint8 (ttnn.bringup.ckv_bfp4) read by the rest.
+                [B, 1, T, 320] uint8 (K_DIM 512; ttnn.bringup.ckv_bfp4) read by the rest.
         Returns:
             ttnn.Tensor: [1, H, S, v_dim] ROW-MAJOR, DRAM interleaved; dtype matches q (bf16->bf16, fp8->fp8), or
             Float32 with fp32_output.

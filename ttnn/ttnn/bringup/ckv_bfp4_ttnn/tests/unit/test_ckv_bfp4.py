@@ -34,10 +34,10 @@ def test_ckv_bfp4_rows(device, n, row0, table_rows):
     x = _inputs(n, n + row0)
     ckv = ttnn.from_torch(x.reshape(1, 1, n, 512), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     rows = ttnn.from_torch(
-        torch.full((1, 1, table_rows, 288), FILL, dtype=torch.uint8), dtype=ttnn.uint8, device=device
+        torch.full((1, 1, table_rows, 320), FILL, dtype=torch.uint8), dtype=ttnn.uint8, device=device
     )
     rounded = ttnn.bringup.ckv_bfp4(ckv, rows, row0, rounded=True)
-    got = ttnn.to_torch(rows).view(torch.uint8).reshape(table_rows, 288)
+    got = ttnn.to_torch(rows).view(torch.uint8).reshape(table_rows, 320)
     exp = ref.encode_rows(x)
     bad = (got[row0 : row0 + n] != exp).any(-1).nonzero().flatten()
     assert not len(bad), f"{len(bad)} rows differ, first {bad[:5].tolist()}"
@@ -59,6 +59,6 @@ def test_ckv_bfp4_rows(device, n, row0, table_rows):
 def test_ckv_bfp4_without_rounded_output(device):
     x = _inputs(64, 7)
     ckv = ttnn.from_torch(x.reshape(1, 1, 64, 512), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    rows = ttnn.from_torch(torch.zeros(1, 1, 64, 288, dtype=torch.uint8), dtype=ttnn.uint8, device=device)
+    rows = ttnn.from_torch(torch.zeros(1, 1, 64, 320, dtype=torch.uint8), dtype=ttnn.uint8, device=device)
     assert ttnn.bringup.ckv_bfp4(ckv, rows) is None
-    assert torch.equal(ttnn.to_torch(rows).view(torch.uint8).reshape(64, 288), ref.encode_rows(x))
+    assert torch.equal(ttnn.to_torch(rows).view(torch.uint8).reshape(64, 320), ref.encode_rows(x))

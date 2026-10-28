@@ -5,9 +5,12 @@
 row0, rounded to nearest even like tt-metal's host packer (an SFPU round before the pack: the packer alone truncates
 bfp4 in effect), plus optionally the same rounded values as bf16 TILE.
 
-Row record (models/demos/deepseek_v41_flash_d_p/tt/ckv_codec.py format B): 32 shared exponents (one per 16 values,
-the group's max fp32 biased exponent), then 256 bytes of sign-magnitude nibbles (value 2i in the low nibble of byte
-i): the bytes of a bfloat4_b tile row, so a reader turns 32 rows back into 16 tiles by a byte shuffle."""
+Row record (320 B): the 32 shared exponents (one per 16 values, the group's max fp32 biased exponent) twice, then 256
+bytes of sign-magnitude nibbles (value 2i in the low nibble of byte i) = tt/ckv_codec.py format B with its exponents
+repeated. The second copy lets a reader's NoC read put a row's exponents at either 32 B half of a 64 B line, so a
+gathered block of rows is a row-major bfloat4_b tensor the unpacker reads (sparse_sdpa ROW_BFP4).
+NOTE: the writer RISC still assembles the records from the packed tiles (to be replaced by the packer).
+"""
 
 from __future__ import annotations
 
@@ -17,7 +20,7 @@ import ttnn
 
 KERNELS = Path(__file__).parent / "kernels"
 _RD = "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp"
-WIDTH, ROW_BYTES, GROUP = 512, 288, 16
+WIDTH, ROW_BYTES, GROUP = 512, 320, 16
 CB_IN, CB_BFP4, CB_ROUNDED, CB_ROWS = 0, 16, 17, 18
 
 

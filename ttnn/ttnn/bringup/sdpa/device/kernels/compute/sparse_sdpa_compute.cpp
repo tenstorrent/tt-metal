@@ -161,6 +161,118 @@ ALWI void tilize_packed_field() {
     tilize_uninit(input_cb, output_cb);
 }
 
+#ifdef SPARSE_SDPA_ROW_BFP4
+#ifdef TRISC_UNPACK
+#include "llk_unpack_common.h"
+#include "ckernel_template.h"
+// ROW_BFP4 (fork option): the gathered staging block [K_CHUNK rows' exponents | their nibbles] is a row-major bfloat4_b
+// tensor; the unpacker reads it by datum index with the tile descriptor x = 16, y = K_DIM / 16 groups, z = K_CHUNK
+// rows: datum ((z y_dim) + y) 16 is group y of row z, its exponent byte z y_dim + y of the section. One UNPACR reads a
+// face row (16 values, 1 exponent) into the next SrcA row (z += 1, SrcA row += 1); the MOP does a face: 16 of them, the
+// last with SrcA valid, then SrcB valid (as the plain copy's MOP). No data-movement RISC touches the bytes.
+namespace row_bfp4_unpack {
+using namespace ckernel;
+using namespace ckernel::unpacker;
+
+template <uint32_t K_DIM, uint32_t K_CHUNK>
+inline void init() {
+    static constexpr uint32_t row = TT_OP_UNPACR(
+        SrcA, 0b01000001 /*SrcA row += 1, z += 1*/, 0, 0, 0, 1, 0, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr uint32_t row_valid =
+        TT_OP_UNPACR(SrcA, 0b01000001, 0, 0, 0, 1, 1, p_unpacr::RAREFYB_DISABLE, 0, 0, 0, 0, 1);
+    static constexpr uint32_t srcb_valid = TT_OP_UNPACR_NOP(
+        SrcB, 0, 0, p_unpacr_nop::SET_DVALID, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
+    TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_0, UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32);
+    TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
+    TTI_RDCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_2, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
+    cfg_reg_rmw_tensix<THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32, 0, 0xFFFFFFFF>(16 | (16 << 16));
+    cfg_reg_rmw_tensix<THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1, 0, 0xFFFFFFFF>((K_DIM / 16) | (K_CHUNK << 16));
+    cfg_reg_rmw_tensix<
+        UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32,
+        UNP0_ADDR_CTRL_XY_REG_1_Ystride_SHAMT,
+        UNP0_ADDR_CTRL_XY_REG_1_Ystride_MASK>(16);  // one SrcA row
+    TTI_SETADCXX(p_setadc::UNP_A, 16 - 1, 0x0);
+    // the matmul's unpack steps tiles through the offset register (InAddr = base + offset): start from the base
+    TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, THCON_SEC0_REG7_Offset_address_ADDR32);
+    TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, THCON_SEC0_REG7_Offset_cntx1_address_ADDR32);
+    TTI_NOP;
+    ckernel_template mop(1, 16, row);
+    // with one outer iteration the last-outer replacement is the one that applies to the 16th UNPACR: set both
+    mop.set_last_inner_loop_instr(row_valid);
+    mop.set_last_outer_loop_instr(row_valid);
+    mop.set_end_op(srcb_valid);
+    mop.program();
+}
+
+inline void uninit() {
+    TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::UNPACK);
+    TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_0, p_cfg::WRCFG_32b, UNP0_ADDR_CTRL_XY_REG_1_Ystride_ADDR32);
+    TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_1, p_cfg::WRCFG_32b, THCON_SEC0_REG5_Tile_x_dim_cntx0_ADDR32);
+    TTI_WRCFG(p_gpr_unpack::SR_UNPACK_UNTILIZER_STATE_2, p_cfg::WRCFG_32b, THCON_SEC0_REG0_TileDescriptor_ADDR32 + 1);
+    TTI_NOP;
+    TTI_SETADCXX(p_setadc::UNP_A, FACE_R_DIM * FACE_C_DIM - 1, 0x0);
+    TTI_SETADCXY(0b001, 0, 0, 0, 0, 0b1010);  // ch0 / ch1 Y
+    TTI_SETADCZW(0b001, 0, 0, 0, 0, 0b1111);
+}
+
+// tile (r0 / 32, g0 / 2): faces (rows r0.., group g0), (r0.., g0 + 1), (r0 + 16.., g0), (r0 + 16.., g0 + 1)
+inline void tile(uint32_t base16, uint32_t r0, uint32_t g0) {
+    volatile uint tt_reg_ptr* cfg = get_cfg_pointer();
+    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    wait_for_next_context(2);
+    _llk_unpack_configure_single_address_(base16, cfg);
+    semaphore_post(semaphore::UNPACK_SYNC);
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+    for (uint32_t f = 0; f < 4; ++f) {
+        TTI_SETADCXY(0b001, 0, 0, 0, 0, 0b1000);  // SrcA row = 0
+        TT_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Z, r0 + (f >> 1) * 16);
+        TT_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Y, g0 + (f & 1));
+        ckernel_template::run();
+    }
+    t6_semaphore_get(semaphore::UNPACK_SYNC);
+    switch_config_context(unp_cfg_context);
+}
+}  // namespace row_bfp4_unpack
+#endif
+
+// The chunk's staging block (cb_k4_rm, one page, 64 B aligned within it) -> its K tiles [Skt, DHt] in cb_k4: the
+// unpacker reads the rows (row_bfp4_unpack), the stock datacopy -> DEST, the pack to bfloat4_b (the values are on the
+// bfp4 grid: the pack copies them).
+template <uint32_t K_DIM, uint32_t Skt, uint32_t DHt>
+ALWI void row_bfp4_to_tiles(uint32_t cb_k4_rm, uint32_t cb_k4, uint32_t cb_k_in) {
+    constexpr uint32_t K_CHUNK = Skt * tt::constants::TILE_HEIGHT;
+    cb_wait_front(cb_k4_rm, 1);
+    cb_reserve_back(cb_k4, Skt * DHt);
+    reconfig_data_format_srca(cb_k4_rm);
+    pack_reconfig_data_format(cb_k4);
+    pack_init(cb_k4);         // the packer's tile geometry (the attention reshapes it for its row packs)
+    pack_reconfig_l1_acc(0);  // plain packs (the attention L1-accumulates its running output)
+    copy_init(cb_k4_rm);
+    UNPACK((row_bfp4_unpack::init<K_DIM, K_CHUNK>()));
+    for (uint32_t tr = 0; tr < Skt; ++tr) {
+        for (uint32_t c = 0; c < DHt; ++c) {
+            tile_regs_acquire();
+            UNPACK((row_bfp4_unpack::tile(
+                (((get_local_cb_interface(cb_k4_rm).fifo_rd_ptr << 4) + 63) & ~63u) / 16 - 1, tr * 32, 2 * c)));
+            MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, DST_ACCUM_MODE, BroadcastType::NONE, false>(
+                0, cb_k4_rm)));
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile(0, cb_k4);
+            tile_regs_release();
+        }
+    }
+    UNPACK((row_bfp4_unpack::uninit()));
+    // leave the packer as the BF16 path's tilize does (tilize_uninit: a default pack init on the bf16 K CB), not in
+    // the bfloat4_b output setup (its exponent section): the attention's packs follow
+    pack_reconfig_data_format(cb_k_in);
+    pack_init(cb_k_in);
+    cb_push_back(cb_k4, Skt * DHt);
+    cb_pop_front(cb_k4_rm, 1);
+}
+#endif
+
 void kernel_main() {
     constexpr bool sink_per_row = true;  // sparse query rows represent different heads
     constexpr bool use_attention_sink = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::USE_ATTENTION_SINK) != 0;
@@ -180,6 +292,7 @@ void kernel_main() {
 #ifdef SPARSE_SDPA_ROW_BFP4
     // ROW_BFP4 (fork option): chunks >= 1 arrive as bfloat4_b tiles the dataflow kernels shuffled from row records
     constexpr uint32_t cb_k4 = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::END);
+    constexpr uint32_t cb_k4_rm = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::END + 1);
 #endif
     constexpr uint32_t cb_neginf = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_NEGINF);
     constexpr uint32_t cb_mask_part = get_compile_time_arg_val(sparse_sdpa::compute_ct_arg::CB_MASK_PART);
@@ -333,7 +446,9 @@ void kernel_main() {
             } else {
                 // tilize K rows -> [Skt, DHt] (waits on reader cb_k_rm -> absorbs the K-read stall)
 #ifdef SPARSE_SDPA_ROW_BFP4
-                if (!bfp4_chunk)
+                if (bfp4_chunk) {
+                    row_bfp4_to_tiles<DHt * tt::constants::TILE_WIDTH, Skt, DHt>(cb_k4_rm, cb_k4, cb_k_in);
+                } else
 #endif
                     compute_kernel_lib::tilize<DHt, cb_k_rm, cb_k_in>(
                         /*num_blocks=*/Skt, /*total_input_pages=*/Skt * tt::constants::TILE_HEIGHT);
