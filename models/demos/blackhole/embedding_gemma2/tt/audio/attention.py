@@ -9,16 +9,21 @@ key valid) that is exactly a band: query q sees keys q-11 .. q. This module eval
 on tile-aligned blocks of 32 queries, each against a 64-key context (previous 32 + own 32 keys),
 which covers the band for every query of the block:
 
-    q = ClippableLinear_q(x) * (head_dim^-0.5 / ln2 * softplus(per_dim_scale))     fp32, per channel
-    k = ClippableLinear_k(x) * ln(1 + e) / ln2;   v = ClippableLinear_v(x)          fp32
-    split 8 heads x 128; blocks of 32 rows: Qb [B, 8*nb, 32, 128]
+    x' = clamp_in(x)  (q / k / v share the input bounds); qkv = x' [Wq | Wk | Wv]      one matmul, fp32
+    split 8 heads x 128 (nlp_create_qkv_heads), then
+    q = clamp_q(.) * (head_dim^-0.5 / ln2 * softplus(per_dim_scale))                 fp32, per channel
+    k = clamp_k(.) * ln(1 + e) / ln2;   v = clamp_v(.)                                fp32
+    blocks of 32 rows: Qb [B, 8*nb, 32, 128]
     Kctx, Vctx = concat(previous block, own block)                                  [B, 8*nb, 64, 128]
     ac = Qb Kctx^T                                                                  [B, 8*nb, 32, 64]
-    bd = rel_shift(Q E^T): X = Q E^T [.., 32, 96], bd[i, j] = X[i, 32 - i + j]       (Transformer-XL shift)
-         E row c = 64 - d holds relative_k_proj(sinusoid(d)) for distance d = q - kv in 0..12, else 0
+    bd = rel_shift(Q E^T): X = Q E^T [.., 32, 32], bd[i, j] = X[i, j - i - 20]       (Transformer-XL shift,
+         one gather); E row c = 12 - d holds relative_k_proj(sinusoid(d)) for distance d = q - kv in 0..12
     logits = tanh((ac + bd) / 50) * 50 + mask          mask: 0 on the band of valid keys, -1e9 elsewhere
     p = softmax(logits) in fp32 (max / exp / sum / reciprocal: the fused ttnn.softmax is less exact)
     out = ClippableLinear_post(concat_heads(p Vctx))
+E5c fuses unary steps into neighbouring ops (clamps into matmuls / binary ops, softcap and exp /
+reciprocal as SFPU activations) without changing the op order; outputs are bit-identical to E3
+except where noted in doc/optimized_audio/README.md.
 
 HF replaces masked logits by -1e9 after the softcap; adding -1e9 to a capped logit (|l| <= 50) gives
 the same fp32 value, so every row with at least one valid key (every valid query: it sees itself)
@@ -28,7 +33,8 @@ Contract
     input   x [B, 1, S, 1024] bf16 TILE DRAM (norm_pre_attn output), S a multiple of 32
             mask [B, 1, S, 64] fp32 TILE DRAM (audio_encoder.attention_mask; 0 keep / -1e9 drop)
     output  [B, 1, S, 1024] bf16 TILE DRAM
-    Constants (load time): qscale [1,1,1,1024] fp32, E^T [1, 8, 128, 96] fp32 per layer.
+    Constants (load time): Wqkv [1,1,1024,3072] bf16, qscale [1,1,1,128] fp32, E^T [1, 8, 128, 32] fp32
+    per layer; the shift index [1,1,32,64] uint16 (shared).
 """
 
 from __future__ import annotations
@@ -49,7 +55,7 @@ from models.demos.blackhole.embedding_gemma2.tt.config import compute_kernel_con
 from models.demos.blackhole.embedding_gemma2.tt.weights import as_weight, linear_weight, substate
 
 CTX = 2 * ATTN_BLOCK  # keys per query block: previous block + own block
-REL_WIDTH = 3 * ATTN_BLOCK  # columns of Q E^T before the shift
+REL_WIDTH = ATTN_BLOCK  # columns of Q E^T before the shift (column c = max_past_horizon - d)
 
 
 def rel_position_table(cfg: AudioAttentionConfig) -> torch.Tensor:
@@ -63,14 +69,29 @@ def rel_position_table(cfg: AudioAttentionConfig) -> torch.Tensor:
 
 
 def rel_key_matrix(rel_k_proj: torch.Tensor, cfg: AudioAttentionConfig) -> torch.Tensor:
-    """E^T [1, H, head_dim, 96] (fp32): column c = 64 - d holds relative_k_proj(sinusoid(d)), d = 0..12."""
+    """E^T [1, H, head_dim, 32] (fp32): column c = 12 - d holds relative_k_proj(sinusoid(d)), d = 0..12
+    (c = max_past_horizon - d; columns 13..31 are zero)."""
+    if cfg.max_past_horizon >= REL_WIDTH:
+        raise ValueError(f"max_past_horizon {cfg.max_past_horizon} must be < {REL_WIDTH}")
     relk = rel_position_table(cfg) @ rel_k_proj.float().t()  # [13, H*hd]; row p <-> distance 12 - p
     relk = relk.view(-1, cfg.num_heads, cfg.head_dim)
     E = torch.zeros(cfg.num_heads, REL_WIDTH, cfg.head_dim)
     for p in range(relk.shape[0]):
         d = cfg.max_past_horizon - p
-        E[:, CTX - d] = relk[p]
+        E[:, cfg.max_past_horizon - d] = relk[p]
     return E.transpose(-1, -2).unsqueeze(0).contiguous()
+
+
+def rel_shift_index(cfg: AudioAttentionConfig) -> torch.Tensor:
+    """Gather index [1, 1, 32, 64] for the relative shift: bd[i, j] = X[i, idx[i, j]].
+
+    Query row i of a block sits at context row 32 + i, so key column j is at distance
+    d = 32 + i - j and X column c = max_past_horizon - d = j - i - 32 + max_past_horizon. Off-band
+    entries (d outside 0..12, masked by the attention mask) read a clamped in-range column."""
+    i = torch.arange(ATTN_BLOCK)[:, None]
+    j = torch.arange(CTX)[None, :]
+    idx = (j - i - ATTN_BLOCK + cfg.max_past_horizon).clamp(0, REL_WIDTH - 1)
+    return idx.to(torch.int32).reshape(1, 1, ATTN_BLOCK, CTX)
 
 
 def attention_mask(num_valid: list[int], seq_len: int, cfg: AudioAttentionConfig) -> torch.Tensor:
@@ -122,6 +143,7 @@ class AudioAttention(LightweightModule):
         post: ClippableLinear,
         qscale: ttnn.Tensor,
         rel_keys_t: ttnn.Tensor,
+        shift_index: ttnn.Tensor,
     ):
         super().__init__()
         self.config = config
@@ -130,6 +152,7 @@ class AudioAttention(LightweightModule):
         self.post = post
         self.qscale = qscale
         self.rel_keys_t = rel_keys_t
+        self.shift_index = shift_index
         self.compute_kernel_config = compute_kernel_config_norm()
         self.proj_kernel_config = compute_kernel_config_hifi4()
 
@@ -177,9 +200,16 @@ class AudioAttention(LightweightModule):
         if tuple(relw.shape) != (H, H):
             raise ValueError(f"{name}.relative_k_proj: expected {(H, H)}, got {tuple(relw.shape)}")
         rel_t = as_weight(
-            rel_key_matrix(relw, config), device, cache_dir=cache_dir, name=f"{name}.rel_keys_t", dtype=f32
+            rel_key_matrix(relw, config), device, cache_dir=cache_dir, name=f"{name}.rel_keys_t32", dtype=f32
         )
-        return cls(config, wqkv, bounds, post, qscale, rel_t)
+        shift_index = as_weight(
+            rel_shift_index(config),
+            device,
+            cache_dir=cache_dir,
+            name=f"audio.rel_shift_index_h{config.max_past_horizon}",
+            dtype=ttnn.uint16,
+        )
+        return cls(config, wqkv, bounds, post, qscale, rel_t, shift_index)
 
     # ------------------------------------------------------------------ helpers
     def _qkv_heads(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
@@ -213,14 +243,13 @@ class AudioAttention(LightweightModule):
         return q, k, v
 
     def _rel_shift(self, X: ttnn.Tensor) -> ttnn.Tensor:
-        """X [B, M, 32, 96] -> [B, M, 32, 64] with out[i, j] = X[i, 32 - i + j] (row-major view trick)."""
-        B, M, R, W = X.shape
-        x = ttnn.to_layout(X, ttnn.ROW_MAJOR_LAYOUT)
-        x = ttnn.reshape(x, (B, M, W, R))
-        x = ttnn.slice(x, (0, 0, 1, 0), (B, M, W, R))
-        x = ttnn.reshape(x, (B, M, R, W - 1))
-        x = ttnn.slice(x, (0, 0, 0, 0), (B, M, R, CTX))
-        return ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+        """X [B, M, 32, 32] -> [B, M, 32, 64] with out[i, j] = X[i, j - i - 20] (rel_shift_index): one
+        tile-layout gather (E5c; was a row-major reshape / slice view trick on a 96-wide X)."""
+        B, M = X.shape[0], X.shape[1]
+        idx = ttnn.repeat(self.shift_index, ttnn.Shape([B, M, 1, 1]))
+        out = ttnn.gather(X, dim=-1, index=idx, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(idx)
+        return out
 
     def _softmax(self, s: ttnn.Tensor) -> ttnn.Tensor:
         dram = ttnn.DRAM_MEMORY_CONFIG
@@ -249,9 +278,18 @@ class AudioAttention(LightweightModule):
 
         q, k, v = self._qkv_heads(x)
 
-        # relative-position term on the [S, 96] layout, then shifted into the 64-key context
+        # relative-position term on the [S, 32] layout (one column per distance), then shifted into
+        # the 64-key context
+        dev = x.device()
         rel_t = self.rel_keys_t if B == 1 else ttnn.repeat(self.rel_keys_t, ttnn.Shape([B, 1, 1, 1]))
-        X = ttnn.matmul(q, rel_t, compute_kernel_config=ckc, memory_config=dram)
+        pm = max(d for d in (1, 2, 4) if nb % d == 0)
+        X = ttnn.matmul(
+            q,
+            rel_t,
+            program_config=block_bmm_config(dev, S, hd, REL_WIDTH, per_core_M=pm),
+            compute_kernel_config=ckc,
+            memory_config=dram,
+        )
         if B != 1:
             ttnn.deallocate(rel_t)
         Xb = ttnn.reshape(X, (B, H * nb, ATTN_BLOCK, REL_WIDTH))
@@ -263,7 +301,6 @@ class AudioAttention(LightweightModule):
         v_ctx = block_context(v)
         ttnn.deallocate(k)
         ttnn.deallocate(v)
-        dev = x.device()
         ac = ttnn.matmul(
             qb,
             k_ctx,
