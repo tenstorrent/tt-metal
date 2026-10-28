@@ -870,7 +870,9 @@ class TTSampling(LightweightModule):
             enable_temperature = torch.zeros_like(temp, dtype=torch.bool)
         else:
             enable_temperature = torch.as_tensor(log_probs_enable_temperature, dtype=torch.bool)
-            if enable_temperature.shape != temp.shape:
+            if enable_temperature.ndim == 0:
+                enable_temperature = torch.full_like(temp, bool(enable_temperature.item()), dtype=torch.bool)
+            elif enable_temperature.shape != temp.shape:
                 raise ValueError(
                     f"log_probs_enable_temperature has shape {tuple(enable_temperature.shape)}, "
                     f"expected {tuple(temp.shape)}"
