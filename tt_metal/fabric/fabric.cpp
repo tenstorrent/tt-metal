@@ -417,7 +417,7 @@ void inject_fabric_kernel_defines(
 // Use inject_fabric_kernel_defines() separately when defines are needed on the kernel.
 template <typename ProgramOrDescriptor>
 void append_routing_plane_connection_manager_rt_args_impl(
-    const FabricContext& fabric_context,
+    const ControlPlane& control_plane,
     const FabricNodeId& src_fabric_node_id,
     const std::vector<FabricNodeId>& dst_nodes,
     const std::vector<uint32_t>& connection_link_indices,
@@ -431,7 +431,7 @@ void append_routing_plane_connection_manager_rt_args_impl(
             (connection_link_indices.size() == 1 || connection_link_indices.size() == dst_nodes.size()),
         "connection_link_indices must be empty or have size 1 or the same size as dst_nodes");
 
-    const auto& control_plane = fabric_context.get_control_plane();
+    const auto& fabric_context = control_plane.get_fabric_context();
     const auto get_eth_direction = [&](const FabricNodeId& dst_node) -> std::optional<eth_chan_directions> {
         const auto routing_direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_node);
         if (!routing_direction.has_value()) {
@@ -521,9 +521,9 @@ void append_routing_plane_connection_manager_rt_args(
     std::vector<uint32_t>& worker_args,
     FabricApiType api_type,
     CoreType core_type) {
-    const auto& fabric_context = mesh_device.impl().metal_env().get_control_plane().get_fabric_context();
+    const auto& control_plane = mesh_device.impl().metal_env().get_control_plane();
     append_routing_plane_connection_manager_rt_args_impl(
-        fabric_context,
+        control_plane,
         src_fabric_node_id,
         dst_nodes,
         connection_link_indices,
@@ -531,7 +531,7 @@ void append_routing_plane_connection_manager_rt_args(
         worker_core,
         worker_args,
         core_type);
-    inject_fabric_kernel_defines(fabric_context, worker_program_or_desc, kernel_id, api_type);
+    inject_fabric_kernel_defines(control_plane.get_fabric_context(), worker_program_or_desc, kernel_id, api_type);
 }
 
 std::vector<uint32_t> get_forwarding_link_indices(
@@ -971,7 +971,7 @@ void append_routing_plane_connection_rt_args_no_defines(
     (void)kernel_id;
     (void)api_type;
     tt::tt_fabric::append_routing_plane_connection_manager_rt_args_impl(
-        mesh_device.impl().metal_env().get_control_plane().get_fabric_context(),
+        mesh_device.impl().metal_env().get_control_plane(),
         src_fabric_node_id,
         dst_nodes,
         connection_link_indices,
