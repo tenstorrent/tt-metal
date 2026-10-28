@@ -2561,6 +2561,7 @@
   "attempt": 1,
   "attempts": 0,
   "duration_s": 0.0,
+  "full_pending": true,
   "history": [
    {
     "s": 0.0,
@@ -2784,6 +2785,39 @@
   "started": "2026-10-28T12:49:39",
   "status": "PASS",
   "units": null,
+  "waiting": null
+ },
+ "P.3": {
+  "agent": {
+   "defs": {
+    "models/demos/common/bringup/agents/bringup-engineer.md": {
+     "blob": "d7a65a9dbd445982889a3148f245429d9f585260",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/brief.md": {
+     "blob": "3a81858569143578c4beac9c613747508e11748f",
+     "dirty": false
+    },
+    "models/demos/common/bringup/briefs/roles.yaml": {
+     "blob": "dcb033c874cea5d21a17080d74e83e95d53bff57",
+     "dirty": false
+    }
+   },
+   "model": "claude-opus-5-5",
+   "session_id": "503411e5-56e6-4ded-9604-82ff4e2353a9"
+  },
+  "attempt": 1,
+  "history": [
+   {
+    "status": "REJECTED",
+    "t": "2026-10-28T13:46:32"
+   }
+  ],
+  "reason": [
+   "rejected by the owner on the A/B report /scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/galaxy_8x4-full/run1/ab/P.3/table.md; reverted 4 files (old path)"
+  ],
+  "role": "perf",
+  "status": "REJECTED",
   "waiting": null
  },
  "W.1": {
