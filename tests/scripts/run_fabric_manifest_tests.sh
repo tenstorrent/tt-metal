@@ -2,7 +2,7 @@
 # Runs the fabric manifest tests that need no fabric hardware:
 #   - the device-free unit tests
 #   - the manifest fixtures on mock clusters, one rank or several
-#   - the schema check on every manifest the above runs write
+#   - the schema check on every manifest the above runs write, and the rank check on each run's manifests
 # CI runs it on a CPU runner, as fabric-cpu-manifest in tests/pipeline_reorg/fabric_cpu_only_unit_tests.yaml. The 1D
 # and 2D manifest fixtures also run on hardware, through run_cpp_fabric_tests.sh's Fabric1D/2D fixture filters; the
 # other fixtures are named outside those filters and run only here.
@@ -18,6 +18,7 @@ BUILD_DIR=${BUILD_DIR:-./build}
 BIN=$BUILD_DIR/test/tt_metal/tt_fabric/fabric_unit_tests
 OUT_DIR=$PWD/generated/fabric_manifest_tests
 CHECK_SCHEMA=tests/tt_metal/tt_fabric/fabric_manifest/check_manifest_schema.py
+CHECK_RANKS=tests/tt_metal/tt_fabric/fabric_manifest/check_manifest_ranks.py
 # tt-run, without needing it installed.
 TT_RUN=ttnn/ttnn/distributed/ttrun.py
 
@@ -124,7 +125,11 @@ run_ranks sc4_express 4 'FabricTorusXManifestFixture.*' \
     --mock-cluster-rank-binding "$SC4_SUBTORUS"
 
 # ---------------------------------------------------------------------------
-# Schema check
+# Manifest checks
 # ---------------------------------------------------------------------------
 echo "== Schema check"
 python3 "$CHECK_SCHEMA" "$OUT_DIR"
+
+# A run's ranks name each other's routers; this checks those names hold across the files.
+echo "== Rank check"
+python3 "$CHECK_RANKS" "$OUT_DIR"
