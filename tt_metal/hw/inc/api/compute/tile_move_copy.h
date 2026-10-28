@@ -127,8 +127,23 @@ ALWI void copy_tile(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::ui
 #ifndef ARCH_QUASAR
     LLK_SAN_FUNCTION();
 #endif
+#if defined(ARCH_BLACKHOLE) && defined(TRISC_UNPACK)
+    // Polling the context semaphore before the address writes only pays for 16-bit input and 16-bit DEST; a CB id known
+    // only at run time keeps the regular call, so no kernel gains a branch
+    const std::uint32_t src_format = unpack_src_format[get_operand_id(in_cb_id)];
+    if (__builtin_constant_p(src_format) && !is_fp32_dest_acc_en &&
+        (src_format == static_cast<std::uint32_t>(DataFormat::Float16_b) ||
+         src_format == static_cast<std::uint32_t>(DataFormat::Float16))) {
+        llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn, true>(
+            in_cb_id, in_tile_index, dst_tile_index);
+    } else {
+        llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
+            in_cb_id, in_tile_index, dst_tile_index);
+    }
+#else
     UNPACK((llk_unpack_A<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
         in_cb_id, in_tile_index, dst_tile_index)));
+#endif
     MATH((llk_math_eltwise_unary_datacopy<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE, UnpackToDestEn>(
         dst_tile_index, in_cb_id)));
 }
@@ -138,7 +153,7 @@ ALWI void copy_tile(std::uint32_t in_cb_id, std::uint32_t in_tile_index, std::ui
  * Copies a block of `ntiles` consecutive tiles from the specified input CB into consecutive DST
  * register slots. This is the uniform block entry point for the copy/datacopy op group. It uses the
  * block unpack/datacopy llk paths and requires the same initialization as `copy_tile`
- * (`copy_init`). The DST register buffer must be in acquired
+ * (`copy_init`, without transpose). The DST register buffer must be in acquired
  * state via *acquire_dst* call, and `cb_wait_front(n)` must have made at least
  * `start_in_tile_index + ntiles` tiles available in the input CB. This call is blocking and is only
  * available on the compute engine.
