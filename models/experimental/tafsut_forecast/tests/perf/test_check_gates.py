@@ -237,5 +237,12 @@ def test_g1_proposal_fails_broken():
     results = SB.score(gates, r0)  # skips when the goldens are missing
     assert {r["broken"] for r in results} >= {"level_shift", "lag1", "sign_flip", "collapsed", "shift10pct"}
     assert {(r["shape"], r["forward"]) for r in results} >= {("long_horizon", 2), ("horizon4", 2)}
-    passed = [f"{r['shape']}/f{r['forward']}/{r['precision']}/{r['broken']}" for r in results if not r["fails"]]
+    assert {r["broken"] for r in results} >= {"level_shift_rows#0", "band1.3x_row#0"}  # D4 items 1-2
+    golden = [r for r in results if r["broken"] == "golden"]
+    assert golden and not [r for r in golden if r["fails"] or r["golden_also_fails"]]  # D4 item 5: no vacuous catch
+    passed = [
+        f"{r['shape']}/f{r['forward']}/{r['precision']}/{r['broken']}"
+        for r in results
+        if not r["fails"] and r["broken"] != "golden"
+    ]
     assert set(passed) <= PENDING_RULING, passed
