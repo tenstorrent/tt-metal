@@ -227,12 +227,57 @@ class TtKairos:
         o = ttnn.transformer.concatenate_heads(o)  # [B, Sq, 512]
         return ttnn.reshape(o, (1, 1, B * Sq, D))
 
-    def _self_attn(self, x, blk, cs, mask, B, S):
+    def _qkv(self, x, blk, cs, B, S):
+        """Normed x -> rotated q, rotated k, v [B, 8, S, 64] (q / k in half order)."""
         import ttnn
 
         qkv = ttnn.reshape(self._lin(x, blk["qkv"]), (B, S, 3 * D))
         q, k, v = ttnn.transformer.split_query_key_value_and_split_heads(qkv, num_heads=H, transpose_key=False)
-        return self._attend(self._rope(q, cs), self._rope(k, cs), v, mask, B, S)
+        return self._rope(q, cs), self._rope(k, cs), v
+
+    def _self_attn(self, x, blk, cs, mask, B, S):
+        return self._attend(*self._qkv(x, blk, cs, B, S), mask, B, S)
+
+    # Block pieces (module tests call each alone; the residual adds stay in the blocks).
+    def self_attention(self, h, blk, cs, mask, B, S):
+        """Self-attention sublayer output, before the residual add: o(attn(norm(h)))."""
+        return self._lin(self._self_attn(self._norm(h, blk["n1"]), blk, cs, mask, B, S), blk["o"])
+
+    def cross_attention(self, h, enc, blk, cs_q, cs_k, mask, B):
+        """Decoder cross-attention sublayer output (q 32 rows x k 96 rows), before the residual add."""
+        import ttnn
+
+        q = ttnn.reshape(self._lin(self._norm(h, blk["n2"]), blk["q"]), (B, D_PAD, D))
+        kv = ttnn.reshape(self._lin(enc, blk["kv"]), (B, S_PAD, 2 * D))
+        q, k, v = _heads(q, B, D_PAD), _heads(ttnn.slice(kv, (0, 0, 0), (B, S_PAD, D)), B, S_PAD), _heads(
+            ttnn.slice(kv, (0, 0, D), (B, S_PAD, 2 * D)), B, S_PAD)
+        return self._lin(self._attend(self._rope(q, cs_q), self._rope(k, cs_k), v, mask, B, D_PAD), blk["co"])
+
+    def _ff(self, h, blk, norm):
+        import ttnn
+
+        return ttnn.add(h, self._lin(self._lin(self._norm(h, blk[norm]), blk["wi"], act="relu"), blk["wo"]))
+
+    def enc_block(self, h, blk, cs, mask, B):
+        import ttnn
+
+        h = ttnn.add(h, self.self_attention(h, blk, cs, mask, B, S_PAD))
+        return self._ff(h, blk, "n2")
+
+    def dec_block(self, h, enc, blk, rope, cross_mask, B):
+        import ttnn
+
+        cs_self, cs_q, cs_k = rope
+        h = ttnn.add(h, self.self_attention(h, blk, cs_self, self.causal, B, D_PAD))
+        h = ttnn.add(h, self.cross_attention(h, enc, blk, cs_q, cs_k, cross_mask, B))
+        return self._ff(h, blk, "n3")
+
+    def embed(self, xs):
+        """Packed patch embedding: (1, 1, B * 64, K_EMB) -> (1, 1, B * 64, 512)."""
+        import ttnn
+
+        hid = self._lin(xs, self.emb_h, act="relu", fid=self.p.hifi4())
+        return ttnn.add(self._lin(hid, self.emb_o, bias=self.emb_ob), self._lin(xs, self.emb_r, fid=self.p.hifi4()))
 
     def encode(self, inp, mark=None):
         import ttnn
@@ -241,16 +286,12 @@ class TtKairos:
         B = inp["B"]
         mark("embed")
         xs = inp["xs"]
-        hid = self._lin(xs, self.emb_h, act="relu", fid=self.p.hifi4())
-        e = ttnn.add(self._lin(hid, self.emb_o, bias=self.emb_ob), self._lin(xs, self.emb_r, fid=self.p.hifi4()))
+        e = self.embed(xs)
         e = ttnn.concat([ttnn.reshape(e, (B, N_TOK, D)), inp["reg"]], dim=1)  # [B, 96, 512], [REG] at row 64
         h = ttnn.reshape(e, (1, 1, B * S_PAD, D))
         for blk, cs in zip(self.enc, inp["enc_rope"]):
             mark("enc_block")
-            h = ttnn.add(h, self._lin(self._self_attn(self._norm(h, blk["n1"]), blk, cs, inp["enc_mask"], B, S_PAD),
-                                      blk["o"]))
-            ff = self._lin(self._norm(h, blk["n2"]), blk["wi"], act="relu")
-            h = ttnn.add(h, self._lin(ff, blk["wo"]))
+            h = self.enc_block(h, blk, cs, inp["enc_mask"], B)
         mark("enc_norm")
         return self._norm(h, self.enc_norm)
 
@@ -260,18 +301,9 @@ class TtKairos:
         mark = mark or (lambda _name: None)
         B = inp["B"]
         h = inp["dec_in"]
-        for blk, (cs_self, cs_q, cs_k) in zip(self.dec, inp["dec_rope"]):
+        for blk, rope in zip(self.dec, inp["dec_rope"]):
             mark("dec_block")
-            h = ttnn.add(h, self._lin(self._self_attn(self._norm(h, blk["n1"]), blk, cs_self, self.causal, B, D_PAD),
-                                      blk["o"]))
-            q = ttnn.reshape(self._lin(self._norm(h, blk["n2"]), blk["q"]), (B, D_PAD, D))
-            kv = ttnn.reshape(self._lin(enc, blk["kv"]), (B, S_PAD, 2 * D))
-            q, k, v = _heads(q, B, D_PAD), _heads(ttnn.slice(kv, (0, 0, 0), (B, S_PAD, D)), B, S_PAD), _heads(
-                ttnn.slice(kv, (0, 0, D), (B, S_PAD, 2 * D)), B, S_PAD)
-            a = self._attend(self._rope(q, cs_q), self._rope(k, cs_k), v, inp["cross_mask"], B, D_PAD)
-            h = ttnn.add(h, self._lin(a, blk["co"]))
-            ff = self._lin(self._norm(h, blk["n3"]), blk["wi"], act="relu")
-            h = ttnn.add(h, self._lin(ff, blk["wo"]))
+            h = self.dec_block(h, enc, blk, rope, inp["cross_mask"], B)
         mark("dec_norm")
         return self._norm(h, self.dec_norm)
 
