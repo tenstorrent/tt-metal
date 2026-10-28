@@ -745,3 +745,6 @@ Open for the owner: dlukic / node access; push; the in-RAM engram slowdown in th
   5-position profile (posprof/series_engram.sh) -> P.6 (bar = the profile's position-0 wall) -> FIX.9 -> P.4 / P.5 ->
   index query fp4; FIX.8 (2x2's 4-bit KV, branch dnijemcevic/model_bringup_bfp4kv) jumps in when ready.
 - Launcher: /scratch/dnijemcevic/run_ds41_chain2.sh (copy in overseer_tools/).
+- 19:45 OWNER: ignore the 4-bit compressed-KV work for now (the 2x2 proposed something very slow). FIX.8 stays HELD and is
+  not integrated; do not watch or pull dnijemcevic/model_bringup_bfp4kv. Galaxy plan unchanged otherwise: FIX.10 ->
+  resident profile -> P.6 -> FIX.9 -> P.4 / P.5 -> index query fp4.
