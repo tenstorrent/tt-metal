@@ -6859,6 +6859,19 @@ class TestReportModesDuringTraceCapture:
         ttnn.synchronize_device(device)
 
 
+def test_failed_report_write_still_ends_the_capture(tmp_path, expect_error):
+    """A report that can't be written (here the path is a directory) raises, but the capture still ends: left active,
+    it would record the caller's later operations and nest the next capture inside it."""
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    with expect_error(RuntimeError, "Failed to open graph report file for writing"):
+        ttnn.graph.end_graph_capture_to_file(tmp_path)
+    still_active = ttnn.graph.is_graph_capture_active()
+    while ttnn.graph.is_graph_capture_active():
+        ttnn.graph.end_graph_capture()
+    assert not still_active
+    assert not ttnn.graph.is_python_io_recording_enabled()
+
+
 # mesh_device depends on silicon_arch_name, which conftest only parametrizes for tests that name it at collection.
 @pytest.mark.usefixtures("silicon_arch_name")
 def test_multihost_graph_report(request):
