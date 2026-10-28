@@ -510,8 +510,10 @@ message TorusTopology {
 //
 // A stage's shape is (rows, cols) in logical mesh orientation. It is not
 // transposed, and it does not name a mesh. Repeating an edge declares another
-// channel on that hop. Cycles are allowed. Stage topology (in-degree,
-// out-degree, number of roots, whether a branch is a chain) is not limited.
+// channel on that hop. Stage topology (in-degree, out-degree, number of roots,
+// whether a branch is a chain) is not limited. A cycle needs one edge marked
+// loopback: the edge back toward the stage that owns host I/O, as in s3 -> s0
+// of a four-stage ring. The edges not marked loopback must have no cycle.
 //
 // Every edge rides a fabric link. policy may be omitted or STRICT. RELAXED is
 // rejected by MeshGraphDescriptor validation.
@@ -522,7 +524,7 @@ message TorusTopology {
 //     stages { id: "s0" label: "Embedding" shape { dims: [ 4, 2 ] } }
 //     stages { id: "s1" label: "Windowed"  shape { dims: [ 4, 2 ] } }
 //     edges { src: "s0" dst: "s1" }
-//     edges { src: "s1" dst: "s0" }
+//     edges { src: "s1" dst: "s0" loopback: true }
 //   }
 message PipelineStage {
     // Non-empty, unique within this pipeline, and referenced by edges.
@@ -544,6 +546,10 @@ message PipelineEdge {
 
     // Omitted means STRICT. RELAXED is rejected during descriptor validation.
     optional Policy policy = 3;
+
+    // True on the edge that closes a cycle. It must close one: dst reaches src
+    // over the edges not marked loopback.
+    bool loopback = 4;
 }
 
 message PipelineDescriptor {
