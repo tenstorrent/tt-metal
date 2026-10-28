@@ -9,6 +9,7 @@ other module >= 0.999 (CONTRACT §3, the doc's numbers).
                 non-aligned), the last layer at its read rows; MLP 0; the folded decoder (s = 1, P = 6)
     single.pt   a real series (L = 2106, s = 1): every layer on the golden output of the layer before (the stacked
                 PCCs of the full forward are in test_model.py, report-only), and the S5 block and MLP of layers 0, 5
+Every layer test also runs on the forward's own path (``_fused``: residual_input_tensor, D5 item 4).
 Results go to FLOWSTATE_PCC_OUT/modules_<precision>.json.
 """
 
@@ -42,13 +43,16 @@ def down(t, B, C=512):
     return x.reshape(-1, -(-B // TILE) * TILE, x.shape[-1])[:, :B, :C]
 
 
-def run_layer(tt, i, u, s, rows, P=6):
-    """Layer i on u (L, B, 512): the S5 block, MLP and layer outputs over the last `rows` rows."""
+def run_layer(tt, i, u, s, rows, P=6, fused=False):
+    """Layer i on u (L, B, 512): the S5 block, MLP and layer outputs over the last `rows` rows. fused: the forward's
+    own path (the MLP residual in the layer norm's residual_input_tensor, R2-2; D5 item 4), the layer output only."""
     L, B, _ = u.shape
     Bp = -(-B // TILE) * TILE
     consts = tt.constants(s, L, P)[0][i]
-    parts = {}
+    parts = None if fused else {}
     out = tt.layer(i, up(tt.device, u), consts, L, Bp, L - rows if i == len(tt.layers) - 1 else 0, parts=parts)
+    if fused:
+        return {"layer": down(out, B)}
     return {"ssm": down(parts["ssm"], B), "mlp": down(parts["mlp"], B), "layer": down(out, B)}
 
 
@@ -102,6 +106,15 @@ def test_random_layer(tt, results, L, s, i):
     _assert(results, tt, f"layer{i}_L{L}", o["layer"], g[f"layer{i}_L{L}"])
 
 
+@pytest.mark.parametrize("L,s", [(96, 1.0), (70, 6.0)])
+@pytest.mark.parametrize("i", [0, 5])
+def test_random_layer_fused(tt, results, L, s, i):
+    """D5 item 4: the forward's residual_input_tensor path, which the parts= tests above do not run."""
+    g = torch.load(GOLDENS / "modules.pt", weights_only=True)
+    o = run_layer(tt, i, g[f"u_L{L}"], s, g[f"layer{i}_L{L}"].shape[0], fused=True)
+    _assert(results, tt, f"layer{i}_L{L}_fused", o["layer"], g[f"layer{i}_L{L}"])
+
+
 @pytest.mark.parametrize("L", [96, 70])
 def test_random_mlp(tt, results, L):
     g = torch.load(GOLDENS / "modules.pt", weights_only=True)
@@ -129,3 +142,12 @@ def test_single_layer(tt, results, i):
     if f"ssm{i}" in g:
         _assert(results, tt, f"single_ssm{i}", o["ssm"], g[f"ssm{i}"])
         _assert(results, tt, f"single_mlp{i}", o["mlp"], g[f"mlp{i}"])
+
+
+@pytest.mark.parametrize("i", range(6))
+def test_single_layer_fused(tt, results, i):
+    """test_single_layer on the forward's residual_input_tensor path (D5 item 4)."""
+    g = torch.load(GOLDENS / "single.pt", weights_only=True)
+    u = g["embed"] if i == 0 else g[f"layer{i - 1}"]
+    o = run_layer(tt, i, u, g["s"], g[f"layer{i}"].shape[0], g["fl"], fused=True)
+    _assert(results, tt, f"single_layer{i}_fused", o["layer"], g[f"layer{i}"])
