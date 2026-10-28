@@ -1,0 +1,5 @@
+# d1-3B ships its own remote code (prompt.py / api.py / modeling_d1.py); the golden reference needs a
+# transformers that can load it. The TT model itself only needs the tokenizer and the checkpoint weights.
+transformers>=5.14
+huggingface_hub
+pillow

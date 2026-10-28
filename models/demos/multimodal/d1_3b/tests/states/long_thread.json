@@ -1,0 +1,206 @@
+{
+  "ticket": "T-55120",
+  "channel": "email",
+  "messages": [
+    {
+      "turn": 1,
+      "from": "customer",
+      "text": "Can you check with the courier again? It says 'in transit' since the 3rd."
+    },
+    {
+      "turn": 2,
+      "from": "agent",
+      "text": "I can see the parcel left our warehouse on the 2nd. Let me open an investigation."
+    },
+    {
+      "turn": 3,
+      "from": "customer",
+      "text": "Can you check with the courier again? It says 'in transit' since the 3rd."
+    },
+    {
+      "turn": 4,
+      "from": "agent",
+      "text": "Thanks for your patience, I have escalated this to our shipping partner."
+    },
+    {
+      "turn": 5,
+      "from": "customer",
+      "text": "This is the fourth time I am contacting you about the same missing parcel."
+    },
+    {
+      "turn": 6,
+      "from": "agent",
+      "text": "Thanks for your patience, I have escalated this to our shipping partner."
+    },
+    {
+      "turn": 7,
+      "from": "customer",
+      "text": "Can you check with the courier again? It says 'in transit' since the 3rd."
+    },
+    {
+      "turn": 8,
+      "from": "agent",
+      "text": "Thanks for your patience, I have escalated this to our shipping partner."
+    },
+    {
+      "turn": 9,
+      "from": "customer",
+      "text": "I still have not received my order, the tracking page has not updated for six days."
+    },
+    {
+      "turn": 10,
+      "from": "agent",
+      "text": "I can see the parcel left our warehouse on the 2nd. Let me open an investigation."
+    },
+    {
+      "turn": 11,
+      "from": "customer",
+      "text": "This is the fourth time I am contacting you about the same missing parcel."
+    },
+    {
+      "turn": 12,
+      "from": "agent",
+      "text": "Thanks for your patience, I have escalated this to our shipping partner."
+    },
+    {
+      "turn": 13,
+      "from": "customer",
+      "text": "Order #88213 was supposed to arrive last Tuesday. Where is it?"
+    },
+    {
+      "turn": 14,
+      "from": "agent",
+      "text": "Apologies for the delay. Could you confirm your delivery address?"
+    },
+    {
+      "turn": 15,
+      "from": "customer",
+      "text": "I still have not received my order, the tracking page has not updated for six days."
+    },
+    {
+      "turn": 16,
+      "from": "agent",
+      "text": "I can see the parcel left our warehouse on the 2nd. Let me open an investigation."
+    },
+    {
+      "turn": 17,
+      "from": "customer",
+      "text": "Order #88213 was supposed to arrive last Tuesday. Where is it?"
+    },
+    {
+      "turn": 18,
+      "from": "agent",
+      "text": "I can see the parcel left our warehouse on the 2nd. Let me open an investigation."
+    },
+    {
+      "turn": 19,
+      "from": "customer",
+      "text": "This is the fourth time I am contacting you about the same missing parcel."
+    },
+    {
+      "turn": 20,
+      "from": "agent",
+      "text": "I can see the parcel left our warehouse on the 2nd. Let me open an investigation."
+    },
+    {
+      "turn": 21,
+      "from": "customer",
+      "text": "This is the fourth time I am contacting you about the same missing parcel."
+    },
+    {
+      "turn": 22,
+      "from": "agent",
+      "text": "Apologies for the delay. Could you confirm your delivery address?"
+    },
+    {
+      "turn": 23,
+      "from": "customer",
+      "text": "Order #88213 was supposed to arrive last Tuesday. Where is it?"
+    },
+    {
+      "turn": 24,
+      "from": "agent",
+      "text": "Apologies for the delay. Could you confirm your delivery address?"
+    },
+    {
+      "turn": 25,
+      "from": "customer",
+      "text": "Can you check with the courier again? It says 'in transit' since the 3rd."
+    },
+    {
+      "turn": 26,
+      "from": "agent",
+      "text": "I can see the parcel left our warehouse on the 2nd. Let me open an investigation."
+    },
+    {
+      "turn": 27,
+      "from": "customer",
+      "text": "Order #88213 was supposed to arrive last Tuesday. Where is it?"
+    },
+    {
+      "turn": 28,
+      "from": "agent",
+      "text": "The courier has not responded yet; I will update you within 24 hours."
+    },
+    {
+      "turn": 29,
+      "from": "customer",
+      "text": "Can you check with the courier again? It says 'in transit' since the 3rd."
+    },
+    {
+      "turn": 30,
+      "from": "agent",
+      "text": "I can see the parcel left our warehouse on the 2nd. Let me open an investigation."
+    },
+    {
+      "turn": 31,
+      "from": "customer",
+      "text": "Can you check with the courier again? It says 'in transit' since the 3rd."
+    },
+    {
+      "turn": 32,
+      "from": "agent",
+      "text": "Thanks for your patience, I have escalated this to our shipping partner."
+    },
+    {
+      "turn": 33,
+      "from": "customer",
+      "text": "I still have not received my order, the tracking page has not updated for six days."
+    },
+    {
+      "turn": 34,
+      "from": "agent",
+      "text": "Apologies for the delay. Could you confirm your delivery address?"
+    },
+    {
+      "turn": 35,
+      "from": "customer",
+      "text": "Can you check with the courier again? It says 'in transit' since the 3rd."
+    },
+    {
+      "turn": 36,
+      "from": "agent",
+      "text": "Apologies for the delay. Could you confirm your delivery address?"
+    },
+    {
+      "turn": 37,
+      "from": "customer",
+      "text": "I still have not received my order, the tracking page has not updated for six days."
+    },
+    {
+      "turn": 38,
+      "from": "agent",
+      "text": "Thanks for your patience, I have escalated this to our shipping partner."
+    },
+    {
+      "turn": 39,
+      "from": "customer",
+      "text": "I still have not received my order, the tracking page has not updated for six days."
+    },
+    {
+      "turn": 40,
+      "from": "agent",
+      "text": "Apologies for the delay. Could you confirm your delivery address?"
+    }
+  ]
+}

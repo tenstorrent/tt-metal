@@ -51,6 +51,9 @@ class TtLfm2ShortConv(LightweightModule):
         self.has_bias = args.conv_bias
         self.max_batch_size = args.max_batch_size
         self.layer_num = layer_num
+        # Prefill-only users (decision models) skip seeding the host decode state: that is a device-to-host read
+        # per layer per prefill, and it cannot be traced.
+        self.prefill_only = getattr(args, "prefill_only", False)
 
         # Prefix is typically "layers.N.conv" (no trailing dot); normalize once.
         prefix = state_dict_prefix if state_dict_prefix.endswith(".") else f"{state_dict_prefix}."
@@ -176,7 +179,8 @@ class TtLfm2ShortConv(LightweightModule):
 
         if mode == Mode.PREFILL:
             conv_out = self._conv_prefill(Bx)
-            self._update_state_from_prefill(Bx, user_id)
+            if not self.prefill_only:
+                self._update_state_from_prefill(Bx, user_id)
         else:
             conv_out = self._conv_decode(Bx)
 

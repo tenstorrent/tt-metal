@@ -1,0 +1,112 @@
+2026-10-01T12:00:07Z INFO  [payments] job 471 completed in 26s
+2026-10-01T12:00:11Z INFO  [search] cache hit ratio 89%
+2026-10-01T12:00:16Z WARN  [api-gw] slow query 523ms on table orders
+2026-10-01T12:00:20Z INFO  [search] GET /v1/orders/9541 200 38ms
+2026-10-01T12:00:27Z WARN  [worker] job 424 completed in 28s
+2026-10-01T12:00:29Z ERROR [auth] GET /v1/orders/4632 200 35ms
+2026-10-01T12:00:31Z WARN  [orders] slow query 327ms on table orders
+2026-10-01T12:00:37Z INFO  [search] job 228 completed in 3s
+2026-10-01T12:00:41Z INFO  [orders] GET /v1/orders/4059 200 9ms
+2026-10-01T12:00:44Z ERROR [auth] job 201 completed in 27s
+2026-10-01T12:00:53Z WARN  [auth] job 231 completed in 16s
+2026-10-01T12:00:55Z INFO  [orders] GET /v1/orders/8969 200 80ms
+2026-10-01T12:01:00Z INFO  [api-gw] cache hit ratio 80%
+2026-10-01T12:01:04Z WARN  [api-gw] cache hit ratio 91%
+2026-10-01T12:01:06Z INFO  [payments] retrying upstream call attempt=1
+2026-10-01T12:01:10Z WARN  [worker] cache hit ratio 83%
+2026-10-01T12:01:12Z INFO  [worker] GET /v1/orders/8144 200 28ms
+2026-10-01T12:01:19Z INFO  [auth] cache hit ratio 75%
+2026-10-01T12:01:22Z INFO  [orders] retrying upstream call attempt=1
+2026-10-01T12:01:29Z WARN  [search] cache hit ratio 81%
+2026-10-01T12:01:38Z INFO  [worker] cache hit ratio 93%
+2026-10-01T12:01:46Z INFO  [orders] job 325 completed in 28s
+2026-10-01T12:01:53Z INFO  [worker] cache hit ratio 89%
+2026-10-01T12:01:57Z INFO  [worker] GET /v1/orders/7789 200 9ms
+2026-10-01T12:02:00Z INFO  [payments] GET /v1/orders/3583 200 62ms
+2026-10-01T12:02:01Z INFO  [payments] slow query 392ms on table orders
+2026-10-01T12:02:03Z INFO  [worker] GET /v1/orders/1241 200 56ms
+2026-10-01T12:02:04Z INFO  [worker] job 312 completed in 21s
+2026-10-01T12:02:07Z INFO  [api-gw] job 12 completed in 9s
+2026-10-01T12:02:10Z INFO  [worker] GET /v1/orders/6686 200 19ms
+2026-10-01T12:02:14Z INFO  [worker] retrying upstream call attempt=1
+2026-10-01T12:02:22Z INFO  [worker] cache hit ratio 76%
+2026-10-01T12:02:25Z INFO  [orders] job 400 completed in 20s
+2026-10-01T12:02:28Z ERROR [auth] retrying upstream call attempt=2
+2026-10-01T12:02:32Z INFO  [api-gw] retrying upstream call attempt=2
+2026-10-01T12:02:34Z INFO  [api-gw] retrying upstream call attempt=2
+2026-10-01T12:02:36Z INFO  [worker] slow query 370ms on table orders
+2026-10-01T12:02:43Z INFO  [worker] GET /v1/orders/2387 200 30ms
+2026-10-01T12:02:50Z INFO  [search] retrying upstream call attempt=3
+2026-10-01T12:02:52Z INFO  [orders] GET /v1/orders/5274 200 79ms
+2026-10-01T12:02:54Z INFO  [worker] retrying upstream call attempt=1
+2026-10-01T12:02:59Z INFO  [auth] job 54 completed in 7s
+2026-10-01T12:03:08Z INFO  [auth] slow query 633ms on table orders
+2026-10-01T12:03:16Z ERROR [worker] slow query 755ms on table orders
+2026-10-01T12:03:20Z INFO  [api-gw] cache hit ratio 71%
+2026-10-01T12:03:27Z INFO  [search] cache hit ratio 95%
+2026-10-01T12:03:30Z INFO  [api-gw] retrying upstream call attempt=1
+2026-10-01T12:03:36Z INFO  [search] slow query 730ms on table orders
+2026-10-01T12:03:38Z INFO  [worker] retrying upstream call attempt=2
+2026-10-01T12:03:42Z INFO  [api-gw] GET /v1/orders/1003 200 28ms
+2026-10-01T12:03:50Z ERROR [orders] cache hit ratio 82%
+2026-10-01T12:03:54Z WARN  [orders] slow query 703ms on table orders
+2026-10-01T12:03:56Z INFO  [worker] GET /v1/orders/6779 200 57ms
+2026-10-01T12:03:58Z WARN  [payments] GET /v1/orders/1331 200 9ms
+2026-10-01T12:04:07Z INFO  [worker] slow query 678ms on table orders
+2026-10-01T12:04:13Z INFO  [worker] GET /v1/orders/5855 200 21ms
+2026-10-01T12:04:22Z INFO  [auth] GET /v1/orders/7422 200 61ms
+2026-10-01T12:04:23Z INFO  [api-gw] GET /v1/orders/1436 200 71ms
+2026-10-01T12:04:32Z INFO  [worker] GET /v1/orders/9308 200 44ms
+2026-10-01T12:04:34Z INFO  [payments] retrying upstream call attempt=2
+2026-10-01T12:04:35Z ERROR [payments] GET /v1/orders/6316 200 37ms
+2026-10-01T12:04:41Z INFO  [orders] GET /v1/orders/4776 200 51ms
+2026-10-01T12:04:45Z INFO  [worker] cache hit ratio 79%
+2026-10-01T12:04:48Z INFO  [auth] cache hit ratio 92%
+2026-10-01T12:04:54Z INFO  [orders] cache hit ratio 99%
+2026-10-01T12:04:56Z INFO  [api-gw] job 460 completed in 5s
+2026-10-01T12:05:05Z INFO  [auth] slow query 335ms on table orders
+2026-10-01T12:05:06Z INFO  [payments] slow query 345ms on table orders
+2026-10-01T12:05:13Z INFO  [orders] GET /v1/orders/2385 200 36ms
+2026-10-01T12:05:20Z INFO  [payments] cache hit ratio 76%
+2026-10-01T12:05:22Z INFO  [orders] cache hit ratio 99%
+2026-10-01T12:05:26Z INFO  [payments] retrying upstream call attempt=3
+2026-10-01T12:05:30Z INFO  [orders] job 4 completed in 7s
+2026-10-01T12:05:39Z INFO  [search] retrying upstream call attempt=1
+2026-10-01T12:05:44Z ERROR [worker] retrying upstream call attempt=1
+2026-10-01T12:05:53Z INFO  [search] cache hit ratio 93%
+2026-10-01T12:05:55Z INFO  [api-gw] cache hit ratio 87%
+2026-10-01T12:05:57Z ERROR [payments] psycopg2.OperationalError: FATAL: remaining connection slots are reserved (pool 95/100 in use)
+2026-10-01T12:06:04Z INFO  [worker] cache hit ratio 84%
+2026-10-01T12:06:06Z INFO  [worker] job 72 completed in 18s
+2026-10-01T12:06:14Z INFO  [worker] GET /v1/orders/8810 200 67ms
+2026-10-01T12:06:22Z ERROR [orders] psycopg2.OperationalError: FATAL: remaining connection slots are reserved (pool 98/100 in use)
+2026-10-01T12:06:23Z ERROR [search] slow query 318ms on table orders
+2026-10-01T12:06:24Z ERROR [orders] psycopg2.OperationalError: FATAL: remaining connection slots are reserved (pool 98/100 in use)
+2026-10-01T12:06:32Z INFO  [worker] cache hit ratio 83%
+2026-10-01T12:06:40Z INFO  [worker] retrying upstream call attempt=2
+2026-10-01T12:06:47Z ERROR [payments] psycopg2.OperationalError: FATAL: remaining connection slots are reserved (pool 95/100 in use)
+2026-10-01T12:06:51Z INFO  [worker] cache hit ratio 71%
+2026-10-01T12:06:56Z INFO  [search] retrying upstream call attempt=2
+2026-10-01T12:06:57Z INFO  [worker] cache hit ratio 88%
+2026-10-01T12:07:03Z INFO  [orders] cache hit ratio 81%
+2026-10-01T12:07:05Z INFO  [payments] slow query 547ms on table orders
+2026-10-01T12:07:07Z WARN  [search] GET /v1/orders/6226 200 46ms
+2026-10-01T12:07:16Z INFO  [api-gw] job 269 completed in 12s
+2026-10-01T12:07:21Z INFO  [orders] GET /v1/orders/7302 200 37ms
+2026-10-01T12:07:26Z INFO  [search] retrying upstream call attempt=2
+2026-10-01T12:07:34Z INFO  [api-gw] retrying upstream call attempt=2
+2026-10-01T12:07:36Z INFO  [payments] job 128 completed in 16s
+2026-10-01T12:07:42Z ERROR [orders] job 147 completed in 20s
+2026-10-01T12:07:50Z INFO  [search] slow query 321ms on table orders
+2026-10-01T12:07:52Z WARN  [auth] slow query 206ms on table orders
+2026-10-01T12:08:01Z WARN  [payments] job 140 completed in 4s
+2026-10-01T12:08:05Z INFO  [worker] slow query 266ms on table orders
+2026-10-01T12:08:10Z INFO  [worker] GET /v1/orders/7114 200 85ms
+2026-10-01T12:08:19Z INFO  [search] GET /v1/orders/1414 200 21ms
+2026-10-01T12:08:22Z WARN  [auth] cache hit ratio 94%
+2026-10-01T12:08:29Z INFO  [orders] GET /v1/orders/3171 200 85ms
+2026-10-01T12:08:38Z INFO  [search] cache hit ratio 70%
+2026-10-01T12:08:46Z INFO  [worker] job 71 completed in 20s
+2026-10-01T12:08:51Z ERROR [payments] retrying upstream call attempt=1
+2026-10-01T12:08:55Z INFO  [orders] cache hit ratio 70%
+2026-10-01T12:09:01Z INFO  [api-gw] job 24 completed in 1s
