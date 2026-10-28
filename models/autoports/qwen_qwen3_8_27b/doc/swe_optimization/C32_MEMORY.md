@@ -136,5 +136,7 @@ legacy cache-spec test run on the shared host produced five passes and one
 schema failure: installed vLLM0.26 lacks the0.30 MambaSpec checkpoint argument
 used by the real CI image. This is not a measured model failure or a passed
 0.30 schema test. The host environment was not changed to mask it.
-See [compact numeric plan](C32_MEMORY_PLAN.json). Native savings and C32 selection
-remain unproven until the proposed implementations and measurements pass.
+See [compact numeric plan](C32_MEMORY_PLAN.json). The optional shared MLP path
+now has a [measured full64 native result](SHARED_MLP_FULL64.md):1.483GiB/device
+prepared saving, exact paired outputs, and a3.67% decode regression. It remains
+disabled by default. Actual serving retention and C32 selection remain open.
