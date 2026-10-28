@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <cstring>
+#include <cstdlib>
 #include "unary_op_utils.hpp"
 
 #include <optional>
@@ -949,6 +951,27 @@ std::map<std::string, std::string> get_defines_impl(
     return defines;
 }
 }  // namespace
+
+bool is_pack_relu_threshold_activation(const UnaryWithParam& activation) {
+    if (std::getenv("TT_NO_PACK_RELU6") != nullptr) {
+        return false;
+    }
+    return activation.op_type == UnaryOpType::RELU6;
+}
+
+std::string pack_relu_threshold_define(const UnaryWithParam& activation) {
+    const float threshold = 6.0f;  // RELU6 (the only activation routed here)
+    (void)activation;
+    uint32_t bits = 0;
+    std::memcpy(&bits, &threshold, sizeof(bits));
+    uint32_t bf16 = (bits + 0x7FFFu + ((bits >> 16) & 1u)) >> 16;  // round to nearest even
+    if (std::getenv("TT_PACK_RELU_THR_FP16") != nullptr) {        // prototype switch: IEEE fp16 encoding
+        const uint32_t sign = (bits >> 16) & 0x8000u;
+        const int32_t exp = static_cast<int32_t>((bits >> 23) & 0xFFu) - 127 + 15;
+        bf16 = sign | (static_cast<uint32_t>(exp) << 10) | ((bits >> 13) & 0x3FFu);
+    }
+    return fmt::format("0x{:04X}u", bf16);
+}
 
 UnaryWithParam string_to_unary_with_param(const std::string& name) {
     if (name == "relu") {

@@ -264,4 +264,13 @@ ALWI void pack_rows_uninit() {
  */
 ALWI void pack_relu_config(const ReluConfig& config) { PACK((llk_pack_relu_config(config))); }
 
+// Packer relu configuration a fused RELU / RELU6 (RELU_MAX) output pack uses: PACK_RELU_THRESHOLD is the 16-bit
+// threshold the op's program factory defines for RELU6 / RELU_MAX (MAX_THRESHOLD_RELU zeroes negatives and clamps
+// values above the threshold); without it the plain ZERO_RELU is used.
+#ifdef PACK_RELU_THRESHOLD
+#define PACK_RELU_FINAL_CFG ckernel::ReluConfig::max_threshold(PACK_RELU_THRESHOLD)
+#else
+#define PACK_RELU_FINAL_CFG ckernel::ReluConfig::zero()
+#endif
+
 }  // namespace ckernel

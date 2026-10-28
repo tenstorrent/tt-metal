@@ -918,7 +918,14 @@ tt::tt_metal::ProgramDescriptor build_program_descriptor_sharded(
     if (skip_weights_mcast) {
         writer_mcast_sender_defines["SKIP_MCAST"] = "1";
     }
-    bool pack_relu = fused_activation.has_value() && fused_activation.value().op_type == unary::UnaryOpType::RELU;
+    const bool pack_relu_threshold =
+        fused_activation.has_value() && unary::utils::is_pack_relu_threshold_activation(fused_activation.value());
+    bool pack_relu =
+        fused_activation.has_value() &&
+        (fused_activation.value().op_type == unary::UnaryOpType::RELU || pack_relu_threshold);
+    if (pack_relu_threshold) {
+        compute_defines["PACK_RELU_THRESHOLD"] = unary::utils::pack_relu_threshold_define(fused_activation.value());
+    }
     if (fused_activation.has_value() && !pack_relu) {
         compute_defines.merge(ttnn::operations::unary::utils::get_defines(
             fused_activation.value().op_type, fused_activation.value().params, "ACTIVATION", "i"));

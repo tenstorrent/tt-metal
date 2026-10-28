@@ -6,6 +6,7 @@
 
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
+#include "api/compute/pack.h"
 #include "api/compute/pack_untilize.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/transpose.h"
@@ -299,7 +300,7 @@ void kernel_main() {
 #if not defined FUSE_BIAS and defined PACK_RELU
                     if (last_out) {
                         // if last block we pack the final result with relu enabled
-                        PACK((llk_pack_relu_config(ReluConfig::zero())));
+                        PACK((llk_pack_relu_config(PACK_RELU_FINAL_CFG)));
                     }
 #endif
 
@@ -480,7 +481,7 @@ void kernel_main() {
 #ifdef FUSE_BIAS
 #ifdef PACK_RELU
                 // if last block we pack the final result with relu enabled
-                PACK((llk_pack_relu_config(ReluConfig::zero())));
+                PACK((llk_pack_relu_config(PACK_RELU_FINAL_CFG)));
 #endif
 #if defined FP32_DEST_ACC_EN or defined PACKER_L1_ACC
                 PACK((pack_reconfig_data_format(out_dfb_id)));

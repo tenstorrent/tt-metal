@@ -14,6 +14,12 @@ namespace ttnn::operations::unary::utils {
 
 UnaryWithParam string_to_unary_with_param(const std::string& name);
 
+// Packer-side RELU6: true when the activation can be done by the packer's MAX_THRESHOLD_RELU mode (zero below 0,
+// clamp above the threshold) instead of an SFPU pass over every output tile (TT_NO_PACK_RELU6 disables it).
+bool is_pack_relu_threshold_activation(const UnaryWithParam& activation);
+// Value for the PACK_RELU_THRESHOLD compile-time define: the 16-bit (bfloat16) encoding of the threshold.
+std::string pack_relu_threshold_define(const UnaryWithParam& activation);
+
 using DataType = tt::tt_metal::DataType;
 
 template <typename T = float>

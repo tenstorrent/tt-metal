@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "api/compute/pack.h"
 
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
@@ -100,7 +101,7 @@ void kernel_main() {
 
     unary_op_init_common(cb_post_lhs_id, cb_out_id);
 #ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluConfig::zero())));
+    PACK((llk_pack_relu_config(PACK_RELU_FINAL_CFG)));
 #endif
 
 #if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))

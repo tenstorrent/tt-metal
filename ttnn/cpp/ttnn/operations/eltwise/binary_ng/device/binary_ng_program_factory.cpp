@@ -974,6 +974,12 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
             if (post_activations[0].type() == unary::UnaryOpType::RELU && !is_subtile_broadcast) {
                 compute_kernel_defines["PACK_RELU"] = "1";
                 unary::utils::update_macro_defines(unary::UnaryOpType::RELU, compute_kernel_defines);
+            } else if (!is_subtile_broadcast && post_activations[0].type() == unary::UnaryOpType::RELU6) {
+                // RELU6 as the packer's MAX_THRESHOLD_RELU (same fast path as RELU, threshold 6.0)
+                compute_kernel_defines["PACK_RELU"] = "1";
+                compute_kernel_defines["PACK_RELU_THRESHOLD"] =
+                    unary::utils::pack_relu_threshold_define(unary::UnaryWithParam(unary::UnaryOpType::RELU6));
+                unary::utils::update_macro_defines(unary::UnaryOpType::RELU, compute_kernel_defines);
             } else if (post_activations[0].type() == unary::UnaryOpType::ZERO_POINT) {
                 // Zero-point is passed as the 4th run-time kernel argument
                 compute_kernel_defines["QUANT_ZERO_POINT_RT_ARGS_IDX"] = "3";

@@ -512,6 +512,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
     if (fused_activation.has_value()) {
         if (fused_activation.value().op_type == UnaryOpType::RELU) {
             mm_kernel_defines["PACK_RELU"] = "1";
+        } else if (ttnn::operations::unary::utils::is_pack_relu_threshold_activation(fused_activation.value())) {
+            mm_kernel_defines["PACK_RELU"] = "1";
+            mm_kernel_defines["PACK_RELU_THRESHOLD"] =
+                ttnn::operations::unary::utils::pack_relu_threshold_define(fused_activation.value());
         } else {
             mm_kernel_defines["SFPU_ACTIVATION"] = "1";
         }
@@ -730,7 +734,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in0_
         {"bias_ntiles", in1_per_core_w},
     };
 
-    if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
+    if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU &&
+        !ttnn::operations::unary::utils::is_pack_relu_threshold_activation(fused_activation.value())) {
         using ttnn::operations::matmul::utilities::get_activation_params;
         const auto& activation = fused_activation.value();
         const auto params = get_activation_params(activation);
@@ -1508,6 +1513,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     if (fused_activation.has_value()) {
         if (fused_activation.value().op_type == UnaryOpType::RELU) {
             mm_kernel_defines["PACK_RELU"] = "1";
+        } else if (ttnn::operations::unary::utils::is_pack_relu_threshold_activation(fused_activation.value())) {
+            mm_kernel_defines["PACK_RELU"] = "1";
+            mm_kernel_defines["PACK_RELU_THRESHOLD"] =
+                ttnn::operations::unary::utils::pack_relu_threshold_define(fused_activation.value());
         } else {
             mm_kernel_defines["SFPU_ACTIVATION"] = "1";
         }
@@ -1670,7 +1679,8 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_mcast_in1_
     };
 
     // Add activation type if needed
-    if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
+    if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU &&
+        !ttnn::operations::unary::utils::is_pack_relu_threshold_activation(fused_activation.value())) {
         using ttnn::operations::matmul::utilities::get_activation_params;
         const auto& activation = fused_activation.value();
         const auto params = get_activation_params(activation);
@@ -2448,6 +2458,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t process_gather_in0
         const auto& op_type = activation.op_type;
         if (op_type == UnaryOpType::RELU) {
             mm_kernel_defines["PACK_RELU"] = "1";
+        } else if (ttnn::operations::unary::utils::is_pack_relu_threshold_activation(activation)) {
+            mm_kernel_defines["PACK_RELU"] = "1";
+            mm_kernel_defines["PACK_RELU_THRESHOLD"] =
+                ttnn::operations::unary::utils::pack_relu_threshold_define(activation);
         } else {
             mm_kernel_defines["SFPU_ACTIVATION"] = "1";
             using ttnn::operations::matmul::utilities::get_activation_params;
@@ -3469,6 +3483,10 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
     if (fused_activation.has_value()) {
         if (fused_activation.value().op_type == UnaryOpType::RELU) {
             mm_kernel_defines["PACK_RELU"] = "1";
+        } else if (ttnn::operations::unary::utils::is_pack_relu_threshold_activation(fused_activation.value())) {
+            mm_kernel_defines["PACK_RELU"] = "1";
+            mm_kernel_defines["PACK_RELU_THRESHOLD"] =
+                ttnn::operations::unary::utils::pack_relu_threshold_define(fused_activation.value());
         } else {
             mm_kernel_defines["SFPU_ACTIVATION"] = "1";
         }
@@ -3701,7 +3719,8 @@ static ProgramDescriptor create_program_mcast_in0_descriptor(
             {"cb_in0_transposed", tt::CBIndex::c_10},
             {"bias_ntiles", in1_per_core_w},
         };
-        if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
+        if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU &&
+        !ttnn::operations::unary::utils::is_pack_relu_threshold_activation(fused_activation.value())) {
             using ttnn::operations::matmul::utilities::get_activation_params;
             const auto params = get_activation_params(fused_activation.value());
             named_compile_args.push_back({"activation_type", static_cast<uint32_t>(params.type)});
@@ -4461,6 +4480,10 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
     if (fused_activation.has_value()) {
         if (fused_activation.value().op_type == UnaryOpType::RELU) {
             mm_kernel_defines["PACK_RELU"] = "1";
+        } else if (ttnn::operations::unary::utils::is_pack_relu_threshold_activation(fused_activation.value())) {
+            mm_kernel_defines["PACK_RELU"] = "1";
+            mm_kernel_defines["PACK_RELU_THRESHOLD"] =
+                ttnn::operations::unary::utils::pack_relu_threshold_define(fused_activation.value());
         } else {
             mm_kernel_defines["SFPU_ACTIVATION"] = "1";
         }
@@ -4632,7 +4655,8 @@ static ProgramDescriptor create_program_mcast_in1_descriptor(
             {"cb_in0_transposed", tt::CBIndex::c_10},
             {"bias_ntiles", in1_per_core_w},
         };
-        if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU) {
+        if (fused_activation.has_value() && fused_activation.value().op_type != UnaryOpType::RELU &&
+        !ttnn::operations::unary::utils::is_pack_relu_threshold_activation(fused_activation.value())) {
             using ttnn::operations::matmul::utilities::get_activation_params;
             const auto params = get_activation_params(fused_activation.value());
             named_compile_args.push_back({"activation_type", static_cast<uint32_t>(params.type)});

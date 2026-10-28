@@ -6,6 +6,7 @@
 
 #include "internal/mod_div_lib.h"
 #include "api/compute/bcast.h"
+#include "api/compute/pack.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
@@ -403,7 +404,7 @@ void kernel_main() {
                     if constexpr (!fuse_bias) {
                         if constexpr (pack_relu) {
                             // if last block we pack the final result with relu enabled
-                            PACK((llk_pack_relu_config(ReluConfig::zero())));
+                            PACK((llk_pack_relu_config(PACK_RELU_FINAL_CFG)));
                         }
                         curr_matmul_out_cb = mm_out_cb_id;
                     }
@@ -566,7 +567,7 @@ void kernel_main() {
             if constexpr (fuse_bias) {
                 if constexpr (pack_relu) {
                     // if last block we pack the final result with relu enabled
-                    PACK((llk_pack_relu_config(ReluConfig::zero())));
+                    PACK((llk_pack_relu_config(PACK_RELU_FINAL_CFG)));
                 }
                 pack_reconfig_data_format(matmul_partials_cb, untilize_mode_out_cb_id);
                 if constexpr (packer_l1_acc) {
