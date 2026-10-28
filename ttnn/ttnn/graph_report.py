@@ -433,7 +433,17 @@ def _tensor_row_from_params(tensor_id, params: dict, rank: int) -> _TensorRow:
     )
 
 
-def _add_live_tensor(live_tensors: dict, device_id, address: int, buffer_type, tensor_id: int) -> None:
+# Tensors whose buffers are live during an import: (device_id, address) -> [(buffer_type, tensor_id), ...].
+_LiveTensors = dict[tuple[Optional[int], int], list[tuple[Optional[int], int]]]
+
+
+def _add_live_tensor(
+    live_tensors: _LiveTensors,
+    device_id: Optional[int],
+    address: int,
+    buffer_type: Optional[int],
+    tensor_id: int,
+) -> None:
     """Record that ``tensor_id`` now lives at ``address`` on ``device_id``.
 
     ``live_tensors`` maps (device_id, address) to [(buffer_type, tensor_id), ...], most recent last. DRAM and L1
@@ -446,7 +456,9 @@ def _add_live_tensor(live_tensors: dict, device_id, address: int, buffer_type, t
     entries.append((buffer_type, tensor_id))
 
 
-def _take_live_tensor(live_tensors: dict, device_id, address: int, buffer_type) -> Optional[int]:
+def _take_live_tensor(
+    live_tensors: _LiveTensors, device_id: Optional[int], address: int, buffer_type: Optional[int]
+) -> Optional[int]:
     """Return the tensor whose buffer at ``address`` on ``device_id`` is being freed, and forget it, or None.
 
     Each owning buffer records one deallocation, so once freed the tensor can't own a later buffer at that address,
@@ -464,7 +476,10 @@ def _take_live_tensor(live_tensors: dict, device_id, address: int, buffer_type) 
             index = next((i for i, entry in enumerate(entries) if entry[0] is None), None)
         if index is None:
             return None
-    return entries.pop(index)[1]
+    tensor_id = entries.pop(index)[1]
+    if not entries:
+        del live_tensors[(device_id, address)]
+    return tensor_id
 
 
 def _tid_int(tid):
@@ -1326,7 +1341,7 @@ def import_graph(
     active_buffers = []
     # Tensors whose buffers are live, so a buffer_deallocate is credited to the tensor living at the freed address,
     # not to whichever one first used it. See _take_live_tensor.
-    live_tensors: dict[tuple[Optional[int], int], list[tuple[Optional[int], int]]] = {}
+    live_tensors: _LiveTensors = {}
     current_op_nodes = []
     op_nesting_depth = 0
     # Counts only non-filtered, non-nested ops so filtered wrappers are transparent
@@ -1807,17 +1822,25 @@ def import_graph(
                         dealloc_params = graph[conn_id].get("params", {})
                         dealloc_address = int(dealloc_params.get("address", 0))
                         break
-            if dealloc_address is not None:
-                active_buffers = [b for b in active_buffers if b[1] != dealloc_address]
+            dealloc_device_id = _int_param(dealloc_params, "device_id")
+            dealloc_buffer_type = _int_param(dealloc_params, "buffer_type")
 
-            # Find the tensor that owns the deallocated address
             dealloc_tensor_id = None
             if dealloc_address is not None:
+                # Only the freed buffer: not a buffer of another type, or on another device, at the same address. A
+                # free that doesn't say which device or type matches any.
+                active_buffers = [
+                    b
+                    for b in active_buffers
+                    if not (
+                        b[1] == dealloc_address
+                        and dealloc_device_id in (None, b[0])
+                        and dealloc_buffer_type in (None, b[3])
+                    )
+                ]
+                # The tensor that owns the deallocated address
                 dealloc_tensor_id = _take_live_tensor(
-                    live_tensors,
-                    _int_param(dealloc_params, "device_id"),
-                    dealloc_address,
-                    _int_param(dealloc_params, "buffer_type"),
+                    live_tensors, dealloc_device_id, dealloc_address, dealloc_buffer_type
                 )
 
             if not function_stack:
