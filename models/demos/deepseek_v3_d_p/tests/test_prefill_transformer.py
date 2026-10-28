@@ -1210,10 +1210,9 @@ def test_glm_prefill_transformer(
         12,
         pytest.param(
             78,
-            marks=[
-                pytest.mark.skipif(not is_galaxy(), reason="Full 78-layer cache only on Galaxy"),
-                pytest.mark.uncollect_if(pred=is_4x4),
-            ],
+            # Collects on 4x4 as well: a build runs no forward, so the whole model's cache fits
+            # one stage, and the runner's stages each read their layers from it.
+            marks=pytest.mark.skipif(not is_galaxy(), reason="Full 78-layer cache only on Galaxy"),
         ),
     ],
     ids=["5_layers", "12_layers", "78_layers"],
