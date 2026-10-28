@@ -28,7 +28,7 @@ public:
         CoreRangeSet cores,
         std::optional<uint32_t> initial_value,
         BufferType buffer_type,
-        uint8_t cq_id = 0);
+        uint8_t cq_id);
 
     // Dedicated constructor for creating a global semaphore **without allocation**.
     // The instantiation of GlobalSemphore will be emplaced onto the address specified.
@@ -37,7 +37,8 @@ public:
         CoreRangeSet cores,
         std::optional<uint32_t> initial_value,
         BufferType buffer_type,
-        uint64_t address);
+        uint64_t address,
+        uint8_t cq_id);
 
     // Copy/move semantics
     GlobalSemaphoreImpl(const GlobalSemaphoreImpl&) = default;
@@ -54,14 +55,11 @@ public:
     DeviceAddr address() const;
 
     // `cq_id` is only used (and only looked up) with fast dispatch; it is ignored on slow dispatch / simulator.
-    void reset_semaphore_value(uint32_t reset_value, uint8_t cq_id = 0) const;
+    void reset_semaphore_value(uint32_t reset_value, uint8_t cq_id) const;
 
 private:
     void setup_buffer(
-        std::optional<uint32_t> initial_value,
-        BufferType buffer_type,
-        std::optional<uint64_t> address,
-        uint8_t cq_id = 0);
+        std::optional<uint32_t> initial_value, BufferType buffer_type, std::optional<uint64_t> address, uint8_t cq_id);
 
     std::shared_ptr<distributed::MeshBuffer> buffer_;
     distributed::MeshDevice* device_;

@@ -14,6 +14,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/distributed.hpp>
+#include <tt-metalium/experimental/forge_backdoor/global_semaphore.hpp>
 #include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
 #include <tt-metalium/global_circular_buffer.hpp>
@@ -64,6 +65,24 @@ TEST_F(ExplicitCqIdTest, GlobalSemaphoreRejectsOutOfRangeQueue) {
 
     GlobalSemaphore semaphore(*mesh_device, cores, /*initial_value=*/1);
     EXPECT_ANY_THROW(semaphore.reset_semaphore_value(2, kOutOfRangeCqId));
+}
+
+TEST_F(ExplicitCqIdTest, AddressBackedGlobalSemaphoreInitOnRequestedQueue) {
+    auto mesh_device = get_mesh_device();
+    const CoreCoord core(0, 0);
+    const CoreRangeSet cores(CoreRange(core, core));
+
+    // Borrow the address of a regular semaphore as the caller-owned backing memory.
+    GlobalSemaphore backing(*mesh_device, cores, /*initial_value=*/0);
+    const DeviceAddr address = backing.address();
+
+    auto at_address = experimental::CreateGlobalSemaphore(
+        *mesh_device, cores, /*initial_value=*/5, BufferType::L1, address, /*cq_id=*/1);
+    Synchronize(mesh_device.get(), std::nullopt);
+    EXPECT_EQ(read_semaphore(*mesh_device, core, address), 5u);
+
+    EXPECT_ANY_THROW(experimental::CreateGlobalSemaphore(
+        *mesh_device, cores, /*initial_value=*/6, BufferType::L1, address, kOutOfRangeCqId));
 }
 
 TEST_F(ExplicitCqIdTest, GlobalCircularBufferConfigWriteOnSecondQueue) {

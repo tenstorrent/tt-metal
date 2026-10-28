@@ -45,9 +45,10 @@ GlobalSemaphoreImpl::GlobalSemaphoreImpl(
     CoreRangeSet cores,
     std::optional<uint32_t> initial_value,
     BufferType buffer_type,
-    uint64_t address) :
+    uint64_t address,
+    uint8_t cq_id) :
     device_{&device}, cores_{std::move(cores)} {
-    this->setup_buffer(initial_value, buffer_type, address);
+    this->setup_buffer(initial_value, buffer_type, address, cq_id);
 }
 
 distributed::MeshDevice& GlobalSemaphoreImpl::device() const { return *device_; }
@@ -112,14 +113,15 @@ GlobalSemaphore CreateGlobalSemaphore(
     const CoreRangeSet& cores,
     std::optional<uint32_t> initial_value,
     BufferType buffer_type,
-    uint64_t address) {
+    uint64_t address,
+    uint8_t cq_id) {
     // Validate every destination in its selected SRAM region before any constructor can write.
     for (auto* local_device : device.get_devices()) {
         const auto& allocator = local_device->allocator_impl();
         const auto footprint = tt::align(sizeof(uint32_t), allocator->get_alignment(BufferType::L1));
         allocator->validate_l1_range(address, footprint, buffer_type);
     }
-    return GlobalSemaphore{GlobalSemaphoreImpl{device, cores, initial_value, buffer_type, address}};
+    return GlobalSemaphore{GlobalSemaphoreImpl{device, cores, initial_value, buffer_type, address, cq_id}};
 }
 }  // namespace experimental
 
