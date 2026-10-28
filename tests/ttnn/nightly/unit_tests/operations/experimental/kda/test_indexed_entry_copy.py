@@ -227,8 +227,26 @@ class _ProductionCase:
 
 
 _PRODUCTION_CASES = (
-    _ProductionCase("recurrent-store", ttnn.float32, ttnn.TILE_LAYOUT, (24, 128, 128), [1, 1, 128, 32], False, 8_800, _RECURRENT_PERF_MARGIN),
-    _ProductionCase("recurrent-load", ttnn.float32, ttnn.TILE_LAYOUT, (24, 128, 128), [1, 1, 128, 32], True, 8_940, _RECURRENT_PERF_MARGIN),
+    _ProductionCase(
+        "recurrent-store",
+        ttnn.float32,
+        ttnn.TILE_LAYOUT,
+        (24, 128, 128),
+        [1, 1, 128, 32],
+        False,
+        8_800,
+        _RECURRENT_PERF_MARGIN,
+    ),
+    _ProductionCase(
+        "recurrent-load",
+        ttnn.float32,
+        ttnn.TILE_LAYOUT,
+        (24, 128, 128),
+        [1, 1, 128, 32],
+        True,
+        8_940,
+        _RECURRENT_PERF_MARGIN,
+    ),
     _ProductionCase("convolution-store", ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (144, 192), None, False, 1_940),
     _ProductionCase("convolution-load", ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (144, 192), None, True, 1_950),
 )
