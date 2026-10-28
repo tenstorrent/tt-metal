@@ -1,0 +1,7 @@
+{
+  "job": 955,
+  "started": "2026-10-28 10:28 PDT",
+  "git_head": "28c48e19a68",
+  "git_dirty": "",
+  "_note": "Recorded after the fact (D2 item 7): the profile script writes no stamp. HEAD at job start was 28c48e19a68; the next commit, 4c16126ea97, only adds doc/ files (git diff 28c48e19a68 4c16126ea97 -- tt tests reference is empty), and the unit-3 wrap-up left the tree clean. The session started at 10:28 and had made no edits before submitting."
+}
