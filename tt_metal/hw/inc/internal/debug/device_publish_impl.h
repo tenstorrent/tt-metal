@@ -300,8 +300,7 @@ template <auto kLocation, auto kMetadata, typename Payload>
 
 // A call site's records go on its RISC's ring, through the encoding's writer. Elsewhere a call checks its types by the
 // same rules and compiles to nothing.
-#if defined(DEVICE_OBSERVABILITY) && defined(PROFILE_KERNEL) && !defined(DISPATCH_KERNEL) && \
-    !defined(DEVICE_OBSERVABILITY_RELAY_KERNEL)
+#if defined(DEVICE_OBSERVABILITY) && defined(PROFILE_KERNEL) && !defined(DEVICE_OBSERVABILITY_RELAY_KERNEL)
 
 namespace device_observability {
 
