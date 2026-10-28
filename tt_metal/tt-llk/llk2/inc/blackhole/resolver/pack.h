@@ -146,7 +146,7 @@ constexpr bool pack_accepts(const TensorSpec<tensor_rank>& d, const TensorSpec<t
                         d.shape.offset == 0 && o.shape.offset == 0 && tile_rows(d.shape) == pack_tile_dim && tile_cols(d.shape) == pack_tile_dim;
     const DataFormat in  = pack_in_format(d.format, o.format, s.dest_fp32);
     const bool formats   = fits_dest_mode(d.format, s.dest_fp32) && datum_bits(o.format) != 0 && packer_converts(in, o.format);
-    const bool modifiers = (!m.l1_acc || l1_accumulates(o.format)) && !m.untilize;
+    const bool modifiers = (m.l1_acc == Toggle::Off || l1_accumulates(o.format)) && !m.untilize;
     return storage && shapes && formats && modifiers;
 }
 

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""LLK 2.0 pack modifiers through the Compute API: ReLU and L1 accumulation, behind a matmul.
+"""LLK 2.0 pack modifiers through the Compute API: ReLU and L1 accumulation (Off, On, Runtime), behind a matmul.
 
 The kernel runs the matmul and packs it PASSES times, one Dest section per pass: the first pack overwrites, later
 ones add into L1 (l1_acc). Goldens: the harness's MatmulGolden, then PackGolden's ReLU and L1 accumulation.
@@ -45,6 +45,7 @@ class LLK2_PACK_TEST(TemplateParameter):
     kt_dim: int
     relu: bool
     passes: int
+    l1_acc_runtime: bool  # every pass packs with l1_acc = Toggle::Runtime, accumulating from pass 1 on
 
     def convert_to_cpp(self) -> str:
         return (
@@ -52,7 +53,8 @@ class LLK2_PACK_TEST(TemplateParameter):
             f"constexpr std::uint32_t CT_DIM = {self.ct_dim};\n"
             f"constexpr std::uint32_t KT_DIM = {self.kt_dim};\n"
             f"constexpr bool PACK_RELU = {'true' if self.relu else 'false'};\n"
-            f"constexpr std::uint32_t PASSES = {self.passes};"
+            f"constexpr std::uint32_t PASSES = {self.passes};\n"
+            f"constexpr bool L1_ACC_RUNTIME = {'true' if self.l1_acc_runtime else 'false'};"
         )
 
 
@@ -65,21 +67,29 @@ def _combinations():
             if fmt.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
                 continue
             for relu in (False, True):
-                for l1_acc in (False, True):
-                    # L1 adds Float32, Float16_b and Float16 only (Packers/Accumulation.md).
-                    if l1_acc and fmt.output_format == DataFormat.Bfp8_b:
+                # (l1_acc, passes): Off packs once; On overwrites in pass 0 and accumulates after (two packs, Off and
+                # On); Runtime is one pack whose run-time value is false in pass 0 and true after, so Runtime with one
+                # pass checks the false value against Off and with ACCUMULATING_PASSES both values against On.
+                for l1_acc, passes in (
+                    ("Off", 1),
+                    ("On", ACCUMULATING_PASSES),
+                    ("Runtime", 1),
+                    ("Runtime", ACCUMULATING_PASSES),
+                ):
+                    # L1 adds Float32, Float16_b and Float16 only (Packers/Accumulation.md); the Resolver rejects
+                    # On and Runtime into Bfp8_b.
+                    if l1_acc != "Off" and fmt.output_format == DataFormat.Bfp8_b:
                         continue
                     for dims in generate_matmul_dimension_combinations(DEST_HALF_TILES[DestAccumulation.Yes], kt_dims=[1, 2]):
-                        combos.append((fmt, dest_acc, relu, l1_acc, dims))
+                        combos.append((fmt, dest_acc, relu, l1_acc, passes, dims))
     return combos
 
 
 @parametrize(case=_combinations())
 def test_llk2_pack(case):
-    formats, dest_acc, relu, l1_acc, (dims_A, dims_B) = unwrap_case(case)
+    formats, dest_acc, relu, l1_acc, passes, (dims_A, dims_B) = unwrap_case(case)
     torch_format = format_dict[formats.output_format]
     math_fidelity = MathFidelity.LoFi
-    passes = ACCUMULATING_PASSES if l1_acc else 1
 
     # With ReLU, negative values so it has something to clamp. Otherwise [0, 1] as test_llk2_matmul.py: signed sums
     # near 0, added up PASSES times in BF16, can miss the relative tolerance by one rounding step.
@@ -126,7 +136,7 @@ def test_llk2_pack(case):
         templates=[
             MATH_FIDELITY(math_fidelity),
             DEST_SYNC(),
-            LLK2_PACK_TEST(matmul_dims.rt_dim, matmul_dims.ct_dim, matmul_dims.kt_dim, relu, passes),
+            LLK2_PACK_TEST(matmul_dims.rt_dim, matmul_dims.ct_dim, matmul_dims.kt_dim, relu, passes, l1_acc == "Runtime"),
         ],
         runtimes=[],
         variant_stimuli=StimuliConfig(
