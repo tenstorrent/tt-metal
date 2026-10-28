@@ -43,7 +43,7 @@ from .operations import apply_qk_norm_per_head, apply_rope
 # is identical either way. Not the model's DRAM KV cache.
 MSA_KV_BLOCK_CACHE = True
 
-# Packed forwards (TtPrefillRuntime.prefill_forward, tt/prefill_chunk.py): gather the next warm chunk's K/V/index_k
+# Packed forwards (TtPrefillRuntime.prefill_forward, models/demos/common/prefill/prefill_chunk.py): gather the next warm chunk's K/V/index_k
 # prefix on a strip of cores while this chunk's block selection and sparse_sdpa_msa run on the rest
 # (CCLManager.get_msa_overlap). A warm chunk has cached_len > 0: it attends a cache prefix and needs the gather; a
 # cold one (cached_len == 0) attends only itself. Output is identical to the serial chain. Needs at least two warm
