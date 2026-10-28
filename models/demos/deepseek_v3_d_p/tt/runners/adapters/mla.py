@@ -111,6 +111,7 @@ class MLAPrefillAdapter(PrefillModelAdapter):
                 num_layers=params.num_layers,
                 num_users=params.num_users,
                 tp_axis=params.tp_axis if self._dense_tp_shard_kv(params) else None,
+                bank_aligned=True,
             )
         )
 

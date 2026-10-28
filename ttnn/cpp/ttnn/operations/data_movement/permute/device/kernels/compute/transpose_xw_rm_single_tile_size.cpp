@@ -25,6 +25,12 @@ void kernel_main() {
     constexpr auto cb_tilize = dfb::cb_tilize;
     constexpr auto cb_out = dfb::cb_out;
 
+    // Build each DataflowBuffer once, at kernel scope, and pass the tilize helper the kernel's own buffers. The
+    // id-only helper form builds a second owner of cb_in / cb_tilize per block, and on Quasar a DataflowBuffer
+    // drains when it goes out of scope (#60848): the packer would wait at helper return for cb_tilize to be popped
+    // (by this kernel, after the transpose below) while the unpacker waited for cb_in to empty (the reader has
+    // already pushed the next block).
+    DataflowBuffer dfb_in_exp(cb_in);
     DataflowBuffer dfb_tilize_exp(cb_tilize);
     DataflowBuffer dfb_out_exp(cb_out);
 
@@ -47,7 +53,8 @@ void kernel_main() {
             cb_tilize,
             compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
             compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
-            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1, x_block_size);
+            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
+            dfb_in_exp, dfb_tilize_exp, 1, x_block_size);
 
         // transpose input
         dfb_tilize_exp.wait_front(1);

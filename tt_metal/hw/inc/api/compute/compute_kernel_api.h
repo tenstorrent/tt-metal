@@ -32,8 +32,8 @@
 #include "llk_math_reduce_api.h"
 // SFPU op kernels invoked directly via the unary macros below. The macros
 // themselves come from llk_math_eltwise_unary_sfpu_macros.h. The Quasar
-// branch below includes the subset Quasar implements (Quasar has no signbit,
-// unary max/min or pack-thread SFPU).
+// branch below includes the subset Quasar implements (Quasar has no pack-thread
+// SFPU).
 #include "ckernel_sfpu_sigmoid.h"
 #include "ckernel_sfpu_silu.h"
 #include "ckernel_sfpu_log.h"
@@ -57,7 +57,9 @@
 #include "ckernel_sfpu_square.h"
 // Ported SFPI kernels behind the log, abs, sign, tiled_prod, power, exp2, heaviside, expm1,
 // add_top_row and alt_complex_rotate90 entry points below.
+// Codegen SFPU kernels behind the signbit (SFPLOADMACRO, SFPI fallback) and unary max/min entry points.
 #include "ckernel_sfpu_log.h"
+#include "ckernel_sfpu_signbit.h"
 #include "ckernel_sfpu_abs.h"
 #include "ckernel_sfpu_sign.h"
 #include "ckernel_sfpu_tiled_prod.h"
@@ -67,6 +69,7 @@
 #include "ckernel_sfpu_expm1.h"
 #include "ckernel_sfpu_add_top_row.h"
 #include "ckernel_sfpu_alt_complex_rotate90.h"
+#include "llk_math_unary_max_min_sfpu_entry.h"
 #include "llk_math_eltwise_unary_sfpu_macros.h"
 #include "ckernel_sfpu_binary.h"
 #include "llk_math_eltwise_binary_sfpu_macros.h"
@@ -372,7 +375,7 @@ ALWI void log_with_base_tile(uint32_t idst, uint32_t base_scale) {
         base_scale));
 }
 
-#ifndef ARCH_QUASAR  // pack-thread SFPU and signbit are BH/WH only
+#ifndef ARCH_QUASAR  // pack-thread SFPU is BH/WH only
 template <bool fast_and_approx = false, bool is_fp32_dest_acc_en = DST_ACCUM_MODE>
 ALWI void tanh_tile_init_pack() {
     PACK(SFPU_UNARY_INIT_FN(tanh, sfpu::tanh_init, (fast_and_approx, is_fp32_dest_acc_en)));
@@ -388,6 +391,8 @@ ALWI void tanh_tile_pack(uint32_t idst) {
         idst,
         VectorMode::RC));
 }
+
+#endif  // !ARCH_QUASAR
 
 /**
  * Please refer to documentation for any_init.
@@ -440,8 +445,6 @@ ALWI void signbit_tile_int32(uint32_t idst) {
     MATH(SFPU_UNARY_CALL(
         DST_SYNC_MODE, DST_ACCUM_MODE, calculate_signbit_int32, (APPROX, 8 /* ITERATIONS */), idst, VectorMode::RC));
 }
-
-#endif  // !ARCH_QUASAR
 
 // clang-format off
 /**
@@ -906,7 +909,7 @@ ALWI void sfpu_add_top_row(uint32_t dst_tile_0, uint32_t dst_tile_1, uint32_t ds
  */
 ALWI void sfpu_add_top_row_init() { MATH((SFPU_BINARY_INIT_FN_NO_ARGS(add_top_row, sfpu::init_add_top_row))); }
 
-#ifndef ARCH_QUASAR  // BH/WH-only ops below
+#ifndef ARCH_QUASAR  // debug halt and Dest readback are BH/WH only
 /**
  * Pauses the cores so that the debug interface can be used to inspect the value of the registers.
  *
@@ -945,6 +948,8 @@ ALWI void dbg_read_dest_acc_row(int row_addr, uint32_t* rd_data) {
     MATH((dbg_get_array_row(dbg_array_id::DEST, row_addr, rd_data)));
 }
 
+#endif  // !ARCH_QUASAR
+
 // unary_max : if x > value --> x, else value
 // clang-format off
 /**
@@ -979,6 +984,18 @@ ALWI void unary_max_int32_tile_init() {
     MATH(SFPU_UNARY_INIT_FN(unary_max_int32, sfpu::unary_max_min_int32_init, (true /* IS_MAX */, false /* IS_UINT */)));
 }
 
+#ifdef ARCH_QUASAR
+// Quasar has no UInt32 data format. The wrappers are templates so the static_assert fires only when called.
+template <bool quasar_unsupported = false>
+ALWI void unary_max_uint32_tile([[maybe_unused]] uint32_t idst, [[maybe_unused]] uint32_t param0) {
+    static_assert(quasar_unsupported, "unary_max_uint32_tile is not supported on Quasar");
+}
+
+template <bool quasar_unsupported = false>
+ALWI void unary_max_uint32_tile_init() {
+    static_assert(quasar_unsupported, "unary_max_uint32_tile_init is not supported on Quasar");
+}
+#else
 // unary_max : if x > value --> x, else value
 // clang-format off
 /**
@@ -1012,6 +1029,7 @@ ALWI void unary_max_uint32_tile(uint32_t idst, uint32_t param0) {
 ALWI void unary_max_uint32_tile_init() {
     MATH(SFPU_UNARY_INIT_FN(unary_max_uint32, sfpu::unary_max_min_int32_init, (true /* IS_MAX */, true /* IS_UINT */)));
 }
+#endif  // !ARCH_QUASAR
 
 // unary_max : if x > value --> x, else value
 // clang-format off
@@ -1045,8 +1063,6 @@ ALWI void unary_max_tile(uint32_t idst, uint32_t param0) {
  */
 ALWI void unary_max_tile_init() { MATH(SFPU_UNARY_INIT_FN(unary_max, sfpu::unary_max_min_init, (true /* IS_MAX */))); }
 
-#endif  // !ARCH_QUASAR
-
 // clang-format off
 /**
  * Treats pairs of numbers as complex numbers and rotates them 90 degrees
@@ -1071,8 +1087,6 @@ ALWI void alt_complex_rotate90_tile(uint32_t idst) {
  * Please refer to documentation for any_init.
  */
 ALWI void alt_complex_rotate90_tile_init() { MATH(SFPU_UNARY_INIT(alt_complex_rotate90)); }
-
-#ifndef ARCH_QUASAR  // BH/WH-only ops below
 
 // unary_min : if x < value --> x, else value
 // clang-format off
@@ -1109,6 +1123,18 @@ ALWI void unary_min_int32_tile_init() {
         SFPU_UNARY_INIT_FN(unary_min_int32, sfpu::unary_max_min_int32_init, (false /* IS_MAX */, false /* IS_UINT */)));
 }
 
+#ifdef ARCH_QUASAR
+// Quasar has no UInt32 data format. The wrappers are templates so the static_assert fires only when called.
+template <bool quasar_unsupported = false>
+ALWI void unary_min_uint32_tile([[maybe_unused]] uint32_t idst, [[maybe_unused]] uint32_t param0) {
+    static_assert(quasar_unsupported, "unary_min_uint32_tile is not supported on Quasar");
+}
+
+template <bool quasar_unsupported = false>
+ALWI void unary_min_uint32_tile_init() {
+    static_assert(quasar_unsupported, "unary_min_uint32_tile_init is not supported on Quasar");
+}
+#else
 // unary_min : if x < value --> x, else value
 // clang-format off
 /**
@@ -1143,6 +1169,7 @@ ALWI void unary_min_uint32_tile_init() {
     MATH(
         SFPU_UNARY_INIT_FN(unary_min_uint32, sfpu::unary_max_min_int32_init, (false /* IS_MAX */, true /* IS_UINT */)));
 }
+#endif  // !ARCH_QUASAR
 
 // unary_min : if x < value --> x, else value
 // clang-format off
@@ -1196,8 +1223,6 @@ ALWI uint32_t get_compute_special_value_flags_sfpu(uint32_t special_value_flags_
 }
 
 ALWI void clear_compute_special_value_flags() { MATH((llk_math_clear_compute_special_value_flags())); }
-#endif
-
 #endif
 
 }  // namespace ckernel

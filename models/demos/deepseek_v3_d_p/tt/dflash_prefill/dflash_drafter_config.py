@@ -45,6 +45,8 @@ class DFlashDrafterConfig:
     rope_mscale: float = 1.0
     rope_mscale_all_dim: float = 1.0
     rope_convention: str = "interleaved"
+    # Kimi-K3-DSpark (architectures DSparkDraftModel): the DFlash context-KV path plus its yarn cos/sin amplitude.
+    is_dspark: bool = False
 
     @property
     def kv_dim(self) -> int:
@@ -79,6 +81,7 @@ class DFlashDrafterConfig:
             rope_orig_max_pos=int(rs.get("original_max_position_embeddings", d.rope_orig_max_pos)),
             rope_mscale=float(rs.get("mscale", d.rope_mscale)),
             rope_mscale_all_dim=float(rs.get("mscale_all_dim", d.rope_mscale_all_dim)),
+            is_dspark="DSparkDraftModel" in (getattr(c, "architectures", None) or ()),
         )
 
     @classmethod

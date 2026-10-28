@@ -65,6 +65,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/inspector.hpp
     api/tt-metalium/experimental/inspector_config.hpp
     api/tt-metalium/experimental/kernel_cache.hpp
+    api/tt-metalium/experimental/operation_timeout.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_api.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_binary.hpp
     api/tt-metalium/experimental/lightmetal/lightmetal_capture_utils.hpp
@@ -73,6 +74,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/blaze/named_kernel_args.hpp
     api/tt-metalium/experimental/command_list.hpp
     api/tt-metalium/experimental/metal2_host_api/advanced_options.hpp
+    api/tt-metalium/experimental/metal2_host_api/arg_value.hpp
     api/tt-metalium/experimental/metal2_host_api/compute_hardware_config.hpp
     api/tt-metalium/experimental/metal2_host_api/data_movement_hardware_config.hpp
     api/tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp
@@ -96,6 +98,7 @@ set(TT_METAL_PUBLIC_API
     api/tt-metalium/experimental/per_core_allocation/allocator_mode.hpp
     api/tt-metalium/experimental/per_core_allocation/allocator_state.hpp
     api/tt-metalium/experimental/per_core_allocation/buffer.hpp
+    api/tt-metalium/experimental/per_core_allocation/device_memory_span.hpp
     api/tt-metalium/experimental/per_core_allocation/memory_config.hpp
     api/tt-metalium/experimental/per_core_allocation/mesh_buffer.hpp
     api/tt-metalium/experimental/range_lockstep_allocation/buffer.hpp

@@ -183,6 +183,9 @@ void kernel_main() {
                 dfb::max_scaler,
                 dfb::max,
                 compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
+                dfb_in0_obj,
+                dfb_max_scaler_obj,
+                dfb_max_obj,
                 compute_kernel_lib::ReduceInputBlockShape::row(block_w_unpadded));
         }
         ckl::eltwise_chain(
@@ -209,9 +212,12 @@ void kernel_main() {
                 dfb::max_scaler,
                 dfb::max,
                 compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
+                dfb_x_obj,
+                dfb_max_scaler_obj,
+                dfb_max_obj,
                 compute_kernel_lib::ReduceInputBlockShape::row(1),
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
-                compute_kernel_lib::Accumulate::at(dfb::max, /*iter=*/1));
+                compute_kernel_lib::Accumulate(dfb_max_obj, /*iter=*/1));
         } else {
             compute_kernel_lib::reduce<
                 PoolType::MAX,
@@ -219,7 +225,8 @@ void kernel_main() {
                 dfb::x,
                 dfb::max_scaler,
                 dfb::max,
-                compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(compute_kernel_lib::ReduceInputBlockShape::row(1));
+                compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop>(
+                dfb_x_obj, dfb_max_scaler_obj, dfb_max_obj, compute_kernel_lib::ReduceInputBlockShape::row(1));
         }
         // exp(x - max): the unpadded tiles from in0 (keeping the max), then the masked tile from x.
         if constexpr (block_w_unpadded > 0) {

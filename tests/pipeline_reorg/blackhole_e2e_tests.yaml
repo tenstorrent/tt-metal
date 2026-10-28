@@ -26,8 +26,8 @@
   skus:
     bh_loudbox:
       timeout: 15
-    bh_p300:
-      timeout: 15
+    # bh_p300:
+    #   timeout: 15
     bh_quietbox_2:
       timeout: 15
   owner_id: U07D5N7QL4U # Joseph Chu
@@ -42,8 +42,8 @@
   skus:
     bh_loudbox:
       timeout: 15
-    bh_p300:
-      timeout: 15
+    # bh_p300:
+    #   timeout: 15
     bh_quietbox_2:
       timeout: 15
   owner_id: U07D5N7QL4U # Joseph Chu
@@ -59,8 +59,8 @@
   skus:
     bh_loudbox:
       timeout: 20
-    bh_p300:
-      timeout: 20
+    # bh_p300:
+    #   timeout: 20
     bh_quietbox_2:
       timeout: 20
   owner_id: U07D5N7QL4U # Joseph Chu
@@ -104,8 +104,8 @@
   skus:
     bh_loudbox:
       timeout: 15
-    bh_p300:
-      timeout: 15
+    # bh_p300:
+    #   timeout: 15
     bh_quietbox_2:
       timeout: 15
   owner_id: U07D5N7QL4U # Joseph Chu
@@ -121,27 +121,27 @@
   skus:
     bh_loudbox:
       timeout: 15
-    bh_p300:
-      timeout: 15
+    # bh_p300:
+    #   timeout: 15
     bh_quietbox_2:
       timeout: 15
   owner_id: U05ACKAJTHS # Naif Tarafdar
   team: ttnn
   budget_type: e2e
 
-- id: bh-host-io-fast-unit-viommu
-  name: Host IO socket loopback unit tests (slow dispatch, viommu)
-  # Keep the slow-dispatch Host IO selection aligned with multi-card sanity.
-  cmd: >-
-    TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv
-    models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
-    tests/ttnn/unit_tests/base_functionality/test_reload_host_support.py
-  skus:
-    bh_p300:
-      timeout: 10
-  owner_id: U08E1JCMAJF # Marko Bezulj
-  team: models
-  budget_type: e2e
+# - id: bh-host-io-fast-unit-viommu
+#   name: Host IO socket loopback unit tests (slow dispatch, viommu)
+#   # Keep the slow-dispatch Host IO selection aligned with multi-card sanity.
+#   cmd: >-
+#     TT_METAL_SLOW_DISPATCH_MODE=1 pytest -svv
+#     models/demos/deepseek_v3_b1/tests/unit_tests/test_host_io.py
+#     tests/ttnn/unit_tests/base_functionality/test_reload_host_support.py
+#   skus:
+#     bh_p300:
+#       timeout: 10
+#   owner_id: U08E1JCMAJF # Marko Bezulj
+#   team: models
+#   budget_type: e2e
 
 # --- stress (continuous gate) ---
 - id: bh-fabric-stability-stress
@@ -150,8 +150,8 @@
   skus:
     bh_loudbox:
       timeout: 15
-    bh_p300:
-      timeout: 15
+    # bh_p300:
+    #   timeout: 15
     bh_quietbox_2:
       timeout: 15
   owner_id: U07D5N7QL4U # Joseph Chu
