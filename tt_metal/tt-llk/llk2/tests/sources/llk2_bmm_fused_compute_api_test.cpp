@@ -30,7 +30,7 @@
 #include "llk_memory_checks.h"
 #include "params.h"
 
-// Globals
+// ckernel_globals.h declares these extern; unp_cfg_context is the unpack context unpack.h flips.
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
@@ -41,8 +41,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 
 constexpr DataFormat in_format      = static_cast<DataFormat>(UNPACK_A_IN);
 constexpr DataFormat out_format     = static_cast<DataFormat>(PACK_OUT);
-constexpr DataFormat dest_format    = llk2::kernel_settings.dest_fp32 ? DataFormat::Float32 : DataFormat::Float16_b;
-constexpr DataFormat partial_format = dest_format; // mm_partials and bias: the intermediate format, as the host picks it
+constexpr DataFormat partial_format = llk2::kernel_dest_format; // mm_partials and bias: the intermediate format, as the host picks it
 
 inline constexpr llk2::bmm_fused_config config {
     .rt_dim        = RT_DIM,
@@ -53,25 +52,24 @@ inline constexpr llk2::bmm_fused_config config {
     .l1_acc        = L1_ACC,
     .fuse_bias     = FUSE_BIAS,
     .pack_relu     = PACK_RELU,
-    .activation    = static_cast<llk2::VecFunction>(ACTIVATION),
+    .activation    = ACTIVATION,
     .activation_p0 = ACTIVATION_P0,
     .activation_p1 = ACTIVATION_P1,
 };
 
-constexpr std::uint32_t tile_datums     = llk2::default_tile_dim * llk2::default_tile_dim; // one 32x32 tile
 constexpr std::uint32_t out_block_tiles = RT_DIM * CT_DIM;
 
 // Pages of one tile. Ids as the tt-metal host names the CBs: c_0 in0, c_1 in1, c_2 bias, c_16 out, c_24 intermed0.
 inline constexpr llk2::DataflowBufferSpec in0_buf {
-    .id = 0, .format = in_format, .page_bytes = llk2::tile_bytes(in_format, tile_datums), .pages = OUT_BLOCKS * K_BLOCKS * RT_DIM * KB_DIM};
+    .id = 0, .format = in_format, .page_bytes = llk2::tile_bytes(in_format, llk2::default_tile_datums), .pages = OUT_BLOCKS * K_BLOCKS * RT_DIM * KB_DIM};
 inline constexpr llk2::DataflowBufferSpec in1_buf {
-    .id = 1, .format = in_format, .page_bytes = llk2::tile_bytes(in_format, tile_datums), .pages = OUT_BLOCKS * K_BLOCKS * KB_DIM * CT_DIM};
+    .id = 1, .format = in_format, .page_bytes = llk2::tile_bytes(in_format, llk2::default_tile_datums), .pages = OUT_BLOCKS * K_BLOCKS * KB_DIM * CT_DIM};
 inline constexpr llk2::DataflowBufferSpec bias_buf {
-    .id = 2, .format = partial_format, .page_bytes = llk2::tile_bytes(partial_format, tile_datums), .pages = CT_DIM};
+    .id = 2, .format = partial_format, .page_bytes = llk2::tile_bytes(partial_format, llk2::default_tile_datums), .pages = CT_DIM};
 inline constexpr llk2::DataflowBufferSpec out_buf {
-    .id = 16, .format = out_format, .page_bytes = llk2::tile_bytes(out_format, tile_datums), .pages = OUT_BLOCKS * out_block_tiles};
+    .id = 16, .format = out_format, .page_bytes = llk2::tile_bytes(out_format, llk2::default_tile_datums), .pages = OUT_BLOCKS * out_block_tiles};
 inline constexpr llk2::DataflowBufferSpec partials_buf {
-    .id = 24, .format = partial_format, .page_bytes = llk2::tile_bytes(partial_format, tile_datums), .pages = out_block_tiles};
+    .id = 24, .format = partial_format, .page_bytes = llk2::tile_bytes(partial_format, llk2::default_tile_datums), .pages = out_block_tiles};
 
 /// TEST ONLY: what tt-metal's firmware and reader kernels do before the compute kernel runs (see the top of the file).
 /// buffer_C holds the bias (CT_DIM tiles) and then the partials buffer's pages.
@@ -89,5 +87,5 @@ void run_kernel(RUNTIME_PARAMETERS params)
 {
     harness_setup_buffers(params);
 
-    llk2::bmm_large_block_zm_fused_bias_activation<config, dest_format, in0_buf, in1_buf, bias_buf, partials_buf, out_buf>();
+    llk2::bmm_large_block_zm_fused_bias_activation<config, llk2::kernel_dest_format, in0_buf, in1_buf, bias_buf, partials_buf, out_buf>();
 }

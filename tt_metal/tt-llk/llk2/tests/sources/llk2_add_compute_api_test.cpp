@@ -16,7 +16,7 @@
 #include "llk_memory_checks.h"
 #include "params.h"
 
-// Globals
+// ckernel_globals.h declares these extern; unp_cfg_context is the unpack context unpack.h flips.
 std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
@@ -31,18 +31,18 @@ std::uint32_t math_sync_tile_dst_index = 0;
 constexpr DataFormat in0_format  = static_cast<DataFormat>(UNPACK_A_IN);
 constexpr DataFormat in1_format  = static_cast<DataFormat>(UNPACK_B_IN);
 constexpr DataFormat out_format  = static_cast<DataFormat>(PACK_OUT);
-constexpr DataFormat dest_format = llk2::kernel_settings.dest_fp32 ? DataFormat::Float32 : DataFormat::Float16_b;
 constexpr llk2::Broadcast bcast  = BCAST_ROW ? llk2::Broadcast::Row : llk2::Broadcast::None;
 constexpr std::uint32_t in1_rows = BCAST_ROW ? 1 : RT_DIM; // tile rows of b
 
 inline constexpr auto& in0_spec = llk2::l1_spec<RT_DIM * llk2::default_tile_dim, CT_DIM * llk2::default_tile_dim, in0_format>;
 inline constexpr auto& in1_spec = llk2::l1_spec<in1_rows * llk2::default_tile_dim, CT_DIM * llk2::default_tile_dim, in1_format>;
 inline constexpr auto& out_spec = llk2::l1_spec<RT_DIM * llk2::default_tile_dim, CT_DIM * llk2::default_tile_dim, out_format>;
-inline constexpr auto& acc_spec = llk2::dst_spec<RT_DIM * llk2::default_tile_dim, CT_DIM * llk2::default_tile_dim, dest_format>; // a's shape in Dest
+inline constexpr auto& acc_spec =
+    llk2::dst_spec<RT_DIM * llk2::default_tile_dim, CT_DIM * llk2::default_tile_dim, llk2::kernel_dest_format>; // a's shape in Dest
 
 // The Resolver must pick the register formats the harness picked for the same test.
-static_assert(llk2::resolved<llk2::add_op, in0_spec, in1_spec, llk2::add_modifiers {bcast}>.plan.in0.writes == static_cast<DataFormat>(UNPACK_A_OUT));
-static_assert(llk2::resolved<llk2::add_op, in0_spec, in1_spec, llk2::add_modifiers {bcast}>.plan.in1.writes == static_cast<DataFormat>(UNPACK_B_OUT));
+static_assert(llk2::resolved<llk2::add_op, in0_spec, in1_spec, llk2::add_modifiers {.bcast = bcast}>.plan.in0.writes == static_cast<DataFormat>(UNPACK_A_OUT));
+static_assert(llk2::resolved<llk2::add_op, in0_spec, in1_spec, llk2::add_modifiers {.bcast = bcast}>.plan.in1.writes == static_cast<DataFormat>(UNPACK_B_OUT));
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {

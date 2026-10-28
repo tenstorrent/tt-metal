@@ -25,8 +25,8 @@ from helpers.test_variant_parameters import (
     MATH_FIDELITY,
     TemplateParameter,
 )
-from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
+from llk2_common import DEST_HALF_TILES, tilize_operands
 from llk2_paths import cpp_source, include_dirs
 
 
@@ -52,8 +52,7 @@ def _combinations():
         for dest_acc in (DestAccumulation.No, DestAccumulation.Yes):
             if fmt.input_format == DataFormat.Float32 and dest_acc == DestAccumulation.No:
                 continue
-            max_tiles = 4 if dest_acc == DestAccumulation.Yes else 8
-            for dims in generate_matmul_dimension_combinations(max_tiles):
+            for dims in generate_matmul_dimension_combinations(DEST_HALF_TILES[dest_acc]):
                 combos.append((fmt, dest_acc, dims))
     return combos
 
@@ -94,11 +93,7 @@ def test_llk2_matmul(math_fidelity, format_dest_acc_and_dims):
         input_B_format=formats.input_format,
     )
 
-    if formats.input_format != DataFormat.Bfp8_b:
-        tilized_A = tilize_block(src_A, dimensions=dims_A, stimuli_format=formats.input_format)
-        tilized_B = tilize_block(src_B, dimensions=dims_B, stimuli_format=formats.input_format)
-    else:
-        tilized_A, tilized_B = src_A, src_B
+    tilized_A, tilized_B = tilize_operands(src_A, dims_A, src_B, dims_B, formats.input_format)
 
     configuration = TestConfig(
         cpp_source("llk2_matmul_compute_api_test.cpp"),
@@ -110,9 +105,9 @@ def test_llk2_matmul(math_fidelity, format_dest_acc_and_dims):
         ],
         runtimes=[],
         variant_stimuli=StimuliConfig(
-            tilized_A.flatten(),
+            tilized_A,
             formats.input_format,
-            tilized_B.flatten(),
+            tilized_B,
             formats.input_format,
             formats.output_format,
             tile_count_A=tile_cnt_A,

@@ -43,18 +43,17 @@ from helpers.test_variant_parameters import (
 )
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
+from llk2_common import TILE_DATUMS, TILE_DIM, blocks_in_pop_order, tilize_operands, unwrap_case
 from llk2_paths import LLK2_ROOT, cpp_source, include_dirs
 
-TILE_DIM = 32
-TILE_DATUMS = TILE_DIM * TILE_DIM
 HARDTANH_MIN, HARDTANH_MAX = -1.0, 1.0  # the harness golden's CLAMP_MIN / CLAMP_MAX
 
-# Activation: (llk2::VecFunction value, harness op, param0, param1); params as FP32 values.
+# Activation: (llk2::VecFunction enumerator, harness op, param0, param1); params as FP32 values.
 ACTIVATIONS = {
-    "none": (0, None, 0.0, 0.0),
-    "silu": (1, MathOperation.Silu, 0.0, 0.0),
-    "relu_max": (5, MathOperation.ReluMax, RELU_MAX_THRESHOLD, 0.0),
-    "hardtanh": (8, MathOperation.Hardtanh, HARDTANH_MIN, HARDTANH_MAX),
+    "none": ("None", None, 0.0, 0.0),
+    "silu": ("Silu", MathOperation.Silu, 0.0, 0.0),
+    "relu_max": ("ReluMax", MathOperation.ReluMax, RELU_MAX_THRESHOLD, 0.0),
+    "hardtanh": ("Hardtanh", MathOperation.Hardtanh, HARDTANH_MIN, HARDTANH_MAX),
 }
 
 
@@ -85,7 +84,8 @@ class LLK2_BMM_FUSED(TemplateParameter):
             f"constexpr bool L1_ACC = {str(self.l1_acc).lower()};\n"
             f"constexpr bool FUSE_BIAS = {str(self.fuse_bias).lower()};\n"
             f"constexpr bool PACK_RELU = {str(self.pack_relu).lower()};\n"
-            f"constexpr std::uint32_t ACTIVATION = {function};\n"
+            '#include "resolver/vec_function.h"\n'
+            f"constexpr auto ACTIVATION = llk2::VecFunction::{function};\n"
             f"constexpr std::uint32_t ACTIVATION_P0 = {hex(_fp32_bits(p0))};\n"
             f"constexpr std::uint32_t ACTIVATION_P1 = {hex(_fp32_bits(p1))};"
         )
@@ -121,8 +121,12 @@ BLOCKINGS = [
 ]
 
 
+BLOCKINGS_PER_VARIANT = 2  # each variant runs on this many blockings
+
+
 def _cases():
-    """Every (l1_acc, bias, activation, relu) variant per format, each on two blockings, rotating through BLOCKINGS."""
+    """Every (l1_acc, bias, activation, relu) variant per format, each on BLOCKINGS_PER_VARIANT blockings, rotating
+    through BLOCKINGS."""
     cases = []
     variants = [
         (l1_acc, bias, act, relu)
@@ -133,32 +137,19 @@ def _cases():
     ]
     for f, fmt in enumerate(FORMATS):
         for v, variant in enumerate(variants):
-            for b in range(2):
-                blocking = BLOCKINGS[(2 * v + b + f) % len(BLOCKINGS)]
+            for b in range(BLOCKINGS_PER_VARIANT):
+                blocking = BLOCKINGS[(BLOCKINGS_PER_VARIANT * v + b + f) % len(BLOCKINGS)]
                 cases.append((fmt, blocking, variant))
     return cases
 
 
-def _blocks_in_pop_order(tiles, tiles_y, tiles_x, rows, cols, order):
-    """The [tiles_y, tiles_x] tile grid cut into [rows, cols] blocks, taken in the given (block row, block col) order."""
-    grid = tiles.view(tiles_y, tiles_x, TILE_DATUMS)
-    return torch.cat(
-        [
-            grid[r * rows : (r + 1) * rows, c * cols : (c + 1) * cols].flatten()
-            for r, c in order
-        ]
-    )
-
-
 @parametrize(case=_cases())
 def test_llk2_bmm_fused(case):
-    if len(case) == 1:  # parametrize hands a lone parameter over wrapped in a tuple
-        (case,) = case
     (
         (formats, dest_acc, fidelity),
         (rt, ct, kb, k_blocks, out_blocks),
         (l1_acc, bias, act, relu),
-    ) = case
+    ) = unwrap_case(case)
     inter = (
         DataFormat.Float32 if dest_acc == DestAccumulation.Yes else DataFormat.Float16_b
     )  # partials and bias
@@ -237,20 +228,12 @@ def test_llk2_bmm_fused(case):
         golden = PackGolden.apply_relu(golden, relu_config, inter)
     golden = torch.as_tensor(golden).to(format_dict[formats.output_format])
 
-    if formats.input_format != DataFormat.Bfp8_b:  # as test_llk2_matmul.py
-        tilized_A = tilize_block(
-            src_A, dimensions=dims_A, stimuli_format=formats.input_format
-        ).flatten()
-        tilized_B = tilize_block(
-            src_B, dimensions=dims_B, stimuli_format=formats.input_format
-        ).flatten()
-    else:
-        tilized_A, tilized_B = src_A.flatten(), src_B.flatten()
+    tilized_A, tilized_B = tilize_operands(src_A, dims_A, src_B, dims_B, formats.input_format)
 
     # The reader kernels' job: in0 block (o, k), and in1 block k again for every o.
     order = [(o, k) for o in range(out_blocks) for k in range(k_blocks)]
-    in0 = _blocks_in_pop_order(tilized_A, out_blocks * rt, kt, rt, kb, order)
-    in1 = _blocks_in_pop_order(tilized_B, kt, ct, kb, ct, [(k, 0) for _, k in order])
+    in0 = blocks_in_pop_order(tilized_A, out_blocks * rt, kt, rt, kb, order)
+    in1 = blocks_in_pop_order(tilized_B, kt, ct, kb, ct, [(k, 0) for _, k in order])
     # buffer_C: the bias tiles, then the partials buffer's pages (one output block).
     buffer_C = torch.cat([tilized_bias.float(), torch.zeros(rt * ct * TILE_DATUMS)])
 

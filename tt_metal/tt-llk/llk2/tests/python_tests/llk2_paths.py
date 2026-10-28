@@ -11,10 +11,9 @@ from helpers.test_config import TestConfig
 
 LLK2_ROOT = Path(__file__).resolve().parents[2]  # tt-llk/llk2
 
+# LLK 2.0 is ported to Blackhole only: inc/blackhole is the one arch folder.
 _ARCH_DIR = {
     ChipArchitecture.BLACKHOLE: "blackhole",
-    ChipArchitecture.WORMHOLE: "wormhole_b0",
-    ChipArchitecture.QUASAR: "quasar",
 }
 
 
@@ -28,6 +27,8 @@ def cpp_source(name: str) -> str:
 
 def include_dirs() -> list[str]:
     """inc/common plus the arch's folder, for TestConfig(include_dirs=...)."""
+    if TestConfig.CHIP_ARCH not in _ARCH_DIR:
+        raise NotImplementedError(f"LLK 2.0 is not ported to {TestConfig.CHIP_ARCH} yet")
     return [
         str(LLK2_ROOT / "inc" / "common"),
         str(LLK2_ROOT / "inc" / _ARCH_DIR[TestConfig.CHIP_ARCH]),

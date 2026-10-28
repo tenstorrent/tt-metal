@@ -24,9 +24,9 @@ from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import DEST_SYNC, TemplateParameter
 from helpers.utils import passed_test
+from llk2_common import DEST_HALF_TILES, FACES_PER_TILE, TILE_DIM
 from llk2_paths import cpp_source, include_dirs
 
-TILE_DIM = 32
 SECTIONS = 2  # copy into both Dest sections, one acquire/commit/pack/release round each
 
 
@@ -52,11 +52,9 @@ def _combinations():
     ):
         for dest_acc in (DestAccumulation.No, DestAccumulation.Yes):
             # A Dest half holds 8 tiles of 16 bits or 4 of 32 bits.
-            shapes = [(1, 1), (2, 2), (1, 4)]
-            if dest_acc == DestAccumulation.No:
-                shapes.append((2, 4))
-            for shape in shapes:
-                combos.append((fmt, dest_acc, shape))
+            for shape in [(1, 1), (2, 2), (1, 4), (2, 4)]:
+                if shape[0] * shape[1] <= DEST_HALF_TILES[dest_acc]:
+                    combos.append((fmt, dest_acc, shape))
     return combos
 
 
@@ -82,7 +80,7 @@ def test_llk2_copy(transpose, format_dest_acc_and_shape):
 
     # The stimuli are laid out tile by tile already: copy and transpose work per tile.
     golden = get_golden_generator(DataCopyGolden)(
-        src_A, formats.output_format, num_faces=4, input_dimensions=input_dimensions
+        src_A, formats.output_format, num_faces=FACES_PER_TILE, input_dimensions=input_dimensions
     )
     if transpose == Transpose.Yes:
         t_matrix = get_golden_generator(TransposeGolden)
