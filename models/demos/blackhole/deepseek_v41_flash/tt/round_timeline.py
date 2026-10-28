@@ -159,7 +159,7 @@ def _device_only(runners):
             from models.demos.blackhole.deepseek_v41_flash.tt.device_sampler import sampling_rows
 
             Bn = r.B * r.n
-            for tag, (tt_, kk_, pp_) in {"greedy": (0.0, 0, 1.0), "sampled": (1.0, 0, 0.95)}.items():
+            for tag, (tt_, kk_, pp_) in {"greedy": (0.0, 0, 1.0), "sampled": (1.0, 0, 0.95), "topk20": (1.0, 20, 0.95)}.items():
                 r.samp.set_params(*sampling_rows([tt_] * Bn, [kk_] * Bn, [pp_] * Bn, torch.Generator().manual_seed(1), Bn))
                 d[f"S_{tag}_ms"] = _rep(md, lambda: t["tid_s"].replay(), nrep)
             d["B_tail_ms"] = _rep(md, lambda: ex(t["tid_b"]), nrep)

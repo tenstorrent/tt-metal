@@ -68,7 +68,7 @@ for f in sorted(glob.glob(os.path.join(d, "rounds_pass*.json"))):
         ex = J.get("extra", {}).get("dev_only", {})
         if f"k{k}" in ex and dr:
             e = ex[f"k{k}"]
-            print(f"\ndevice-only back-to-back replays (bucket {e['bucket']}): " + ", ".join(f"{a} {e[a]:.2f}" for a in ("mono_ms", "A_verify_ms", "S_greedy_ms", "S_sampled_ms", "B_tail_ms", "ASB_ms") if a in e) + " ms")
+            print(f"\ndevice-only back-to-back replays (bucket {e['bucket']}): " + ", ".join(f"{a} {e[a]:.2f}" for a in ("mono_ms", "A_verify_ms", "S_greedy_ms", "S_sampled_ms", "S_topk20_ms", "B_tail_ms", "ASB_ms") if a in e) + " ms")
     # per position bucket (the traced attention / indexer length grows with the bucket the block falls into)
     print("\n| k | rows | pos bucket | rounds | round ms | device wait ms | period ms | host-only ms (period - wait) |\n|---|---|---|---|---|---|---|---|")
     for k, dr, rw in ks:
