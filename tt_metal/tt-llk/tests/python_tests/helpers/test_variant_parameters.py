@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import math
+import os
 import struct
 from abc import ABC, abstractmethod
 from ctypes import c_uint32
@@ -1017,10 +1018,10 @@ class PACK_BLOCK(TemplateParameter):
 
 
 class PACK_RMW_DEST(TemplateParameter):
-    """Opt-in byte-wise destination write of the default packs (Blackhole), see _llk_pack_rmw_dest_init_."""
+    """Opt-in byte-wise destination write of the default packs (Blackhole), see _llk_pack_rmw_dest_init_; on when LLK_PACK_RMW=1."""
 
     def convert_to_cpp(self) -> str:
-        return "#define PACK_RMW_DEST"
+        return "#define PACK_RMW_DEST" if os.environ.get("LLK_PACK_RMW") == "1" else ""
 
 
 class MATMUL_PACK_BLOCK(TemplateParameter):
