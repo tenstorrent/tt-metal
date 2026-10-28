@@ -531,7 +531,7 @@ TABLE = {
         "where tt/engram.py reads the engram tables (layers 1, 14; 94.5 GiB each, 8-bit). mmap = the checkpoint "
         "mapping with the kernel's read-ahead (each random 256-byte row faults in up to read_ahead_kb); random = the "
         "same mapping with MADV_RANDOM over the table's bytes; resident = the 8-bit bytes copied into anonymous memory "
-        "(huge pages) once at build (~189 GiB of host RAM for both layers). QB 2x2 host (503 GB RAM, 990 EVO Plus "
+        "once at build (ENGRAM_HUGEPAGES, ENGRAM_BUILD) (~189 GiB of host RAM for both layers). QB 2x2 host (503 GB RAM, 990 EVO Plus "
         "NVMe, read_ahead_kb 128, 32 CPUs), layer 1, 5120 tokens, gather a layer a chunk: cold mmap 7.2 s, cold "
         "random 0.42 s (8 threads), resident 9-15 ms; load of one layer resident 109 s. With ENGRAM_ROWS=bfp8 resident "
         "holds the rows already as bfloat8_b (272 B a row, 104.4 GB a layer; built in 84 s at 1.24 GB/s) and a 5120-token "
@@ -539,6 +539,25 @@ TABLE = {
         "Tests: random (owner 2026-10-28: no table build at every test's start; rows bit-identical, "
         "tests/test_engram_table_modes.py)",
         test="random",
+    ),
+    "ENGRAM_HUGEPAGES": Setting(
+        "off",
+        ("off", "on"),
+        "FIX.10 (DS41-133): MADV_HUGEPAGE on the resident engram rows (ENGRAM_TABLE=resident). The Galaxy host's THP "
+        "defrag is 'madvise', so every 2 MB fault of a MADV_HUGEPAGE region compacts memory in the faulting thread. "
+        "Both bfp8 tables, page cache full of the weight cache, the thread fix in: on = 171 s build (layer 14 alone 130 s, "
+        "sys 1480 s, compact_stall 125k, 22k fallbacks to 4 KB anyway) and direct reclaim dropped 95 GB of the page "
+        "cache (the weight cache the load reads next); off = 74 s, no compaction, page cache kept. on gathers faster: "
+        "hash + gather + TILE bytes of a 5120-token chunk 6.3 vs 8.5 ms a layer (8 threads; ~4 ms a chunk on the host "
+        "for both layers, off the critical path with ENGRAM_ASYNC). Default off (no load time)",
+    ),
+    "ENGRAM_BUILD": Setting(
+        "background",
+        ("background", "load"),
+        "FIX.10: when ENGRAM_TABLE=resident builds its tables. background = on one thread started when the model's "
+        "engram layers are created (before the decoder layers load), so the ~74 s build (2 x 104 GB read at ~2.7 GB/s and "
+        "packed by numba, nogil) overlaps the weight load; the first chunk's begin_chunk waits for whatever is left. "
+        "load = in the constructor, blocking (the path before FIX.10). Same bytes either way",
     ),
     "ENGRAM_ROWS": Setting(
         "bfp8",
