@@ -22,10 +22,9 @@ import pytest
 import torch
 import ttnn
 
-from models.experimental.flowstate_forecast.reference import metrics as M
 from models.experimental.flowstate_forecast.reference import weights
 from models.experimental.flowstate_forecast.tests.golden.test_dataflow import GOLDENS
-from models.experimental.flowstate_forecast.tests.pcc.test_model import MEDIAN, as_rows
+from models.experimental.flowstate_forecast.tests.pcc import metrics as M
 from models.experimental.flowstate_forecast.tt.model import FlowStateTT
 from models.experimental.flowstate_forecast.tt.trace import TracedForward
 
@@ -84,29 +83,25 @@ def test_forward_perf(device, shape, precision):
         splits.append((prepare_s, upload_s, device_s, post_s))
     prepare_s, upload_s, device_s, post_s = (statistics.median(c) for c in zip(*splits))
     met = M.gate_metrics(
-        as_rows(g["combined_normalized"]),
-        as_rows(out["combined_normalized"]),
-        as_rows(g["quantile_outputs"]),
-        as_rows(out["quantile_outputs"]),
-        MEDIAN,
+        out["combined_normalized"],
+        g["combined_normalized"],
+        out["quantile_outputs"],
+        g["quantile_outputs"],
+        out["prediction_outputs"],
+        g["prediction_outputs"],
     )
-    col = M.gate_metrics(
-        as_rows(g["combined_normalized"]),
-        M.collapsed(as_rows(out["combined_normalized"])),
-        as_rows(g["quantile_outputs"]),
-        M.collapsed(as_rows(out["quantile_outputs"])),
-        MEDIAN,
-    )
+    gh = M.head(g["combined_normalized"])
+    gq = M.head(g["quantile_outputs"])
+    col = M.gate_metrics(M.collapsed(gh), gh, M.collapsed(gq), gq)
     if dump := os.environ.get("MODEL_PERF_DUMP"):
         Path(dump).mkdir(parents=True, exist_ok=True)
         torch.save(out, Path(dump) / f"{shape}-{precision}.pt")
     traced.release()
-    fmt = lambda d: " ".join(f"{k}={v:.5f}" for k, v in d.items())  # noqa: E731
     print(
         f"\n[PERF] {shape} / {precision}: {meta['B']} x {x.shape[1]} -> {H}, s={s}, L={meta['L']}, Bp={meta['Bp']}"
         f"\n  device_s {device_s:.4f}  steady_s {statistics.median(steady):.4f}  cold_s {cold_s:.2f}"
         f"\n  split: prepare {prepare_s:.4f} upload {upload_s:.4f} post {post_s:.4f}  cpu_s {g['cpu_s']:.1f}"
-        f"\n  metrics: {fmt(met)}\n  collapsed: {fmt(col)}"
+        f"\n  metrics: {M.fmt(met)}\n  collapsed: {M.fmt(col)}"
     )
     _record(
         {
