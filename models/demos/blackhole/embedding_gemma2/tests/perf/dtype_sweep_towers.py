@@ -1068,12 +1068,30 @@ def cmd_report(args) -> None:
     pj = doc / "sweep_results.json"
     old = json.loads(pj.read_text()) if pj.exists() else []
     keep = [r for r in old if r.get("tower", "text") != tower]
+    # summary rows (the repo's 500 KB file limit): worst metrics, perf medians, probe summary; the
+    # policy and construction evidence for the selected config and the base. Full records (per-case
+    # values, windows, per-input probe rows): the run's jsonl files.
     new = []
     for r in recs:
         c = _compact(r)
-        if c.get("probe"):
-            c["probe"] = {k: c["probe"][k] for k in ("summary", "retrieval", "rows", "full_items") if k in c["probe"]}
-        new.append(c)
+        a, p = c.get("accuracy", {}), c.get("perf", {})
+        s = {k: c[k] for k in ("id", "tower", "description", "delta", "commit", "error") if k in c}
+        if a:
+            keys = ("layer_pcc", "module_pcc", "stack_pcc", "soft_pcc", "token_cos_min", "screen_pass", "failing")
+            s["accuracy"] = {k: a[k] for k in keys if k in a}
+        if p:
+            s["perf"] = {"rank_ms": p["rank_ms"], "regime": p.get("regime")}
+            for k, v in p.items():
+                if isinstance(v, dict):
+                    s["perf"][k] = {
+                        "burst_ms_median": v["burst_ms_median"],
+                        "sustained_ms_median": v["sustained_ms_median"],
+                    }
+        if c.get("probe") and "summary" in c["probe"]:
+            s["probe"] = {"summary": c["probe"]["summary"], "retrieval": c["probe"]["retrieval"]}
+        if c["id"] in (args.selected, "base"):
+            s["precision"], s["construction"] = c.get("precision"), c.get("construction")
+        new.append(s)
     pj.write_text(json.dumps(keep + new, indent=1) + "\n")
     # sweep_results.csv: the text columns plus `tower` and the tower metrics
     pc = doc / "sweep_results.csv"

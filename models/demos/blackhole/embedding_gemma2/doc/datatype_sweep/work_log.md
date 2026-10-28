@@ -186,3 +186,83 @@ replays, 0 mismatches, with and without tracking; post-selection bench `post_ben
 (selected 4.813 / 6.833 / 20.054 / 24.243 / 93.054 ms burst vs baseline override 4.923 / 7.314 /
 22.042 / 29.393 / 105.688). Report-only change after the gates: chart label placement and the
 left-panel y range in `dtype_sweep.py` `_chart` (no runtime or test path).
+
+# E6b: vision and audio towers
+
+Same host and card, branch head `1ea3591cc5` at the start. Run artifacts:
+`tt-ops/runs/embeddinggemma-2/e6b/` (`sweep_vision.jsonl`, `sweep_audio.jsonl`,
+`sweep_audio_bfp4_acc.jsonl`, `probe_{vision,audio}.jsonl`, `audio_sensitivity.json`,
+`audio_token_trace.json`, `logs/`, `scripts/`, `refs/` = cached HF fp32 probe references).
+
+## 10. Carry-over (commit `c1efa1a330`)
+
+§8 / §9 and the README "Not done" bullet cited `logs/selected_soak_1x2048.log` as the shipped
+default's soak; that run was `p3_qkv_gu_exp`. They now cite `review_soak_p3_qkv_gu_1x2048.log`
+(p3_qkv_gu, 5000 replays, `SOAK_DONE 5000`, run on `1ea3591cc5`) and keep the other run labelled.
+
+## 11. Wiring (commit `68f46d1f16`)
+
+- `tt/precision.py`: `VisionPrecision` / `AudioPrecision` with the same strictness as text (every
+  key required, unknown keys rejected; a free-text `note` allowed); tower `out_dtype` may be fp32;
+  `audio.norms.sharded`; `E5_VISION_POLICY` / `E5_AUDIO_POLICY` are the old hard-coded policies.
+  `TextPrecision` parsing is unchanged; `MatmulPolicy.from_dict` / `LayerException.from_dict` take
+  the allowed groups / output dtypes as arguments with the text values as defaults.
+- `tt/vision/*`, `tt/audio/*`: every weight dtype, compute kernel config, projection output dtype,
+  SDPA config (incl. `exp_approx_mode`), norm config and the mask dtype come from the policy;
+  `from_state_dict(..., precision=None)` loads the default file at every level (so the unit tests
+  of single modules build with the default too). `tt/audio/norm.py`: the E5c c21 block-sharded
+  RMSNorm (`e5c/scripts/rejected_norm.py`) behind `audio.norms.sharded`. `audio/linear.py` CB
+  budget learned the bfp8 / bfp4 tile sizes. `AudioModel(act_dtype=float32)` still overrides the
+  activation-stream output dtypes (the fp32-activation tests).
+- `tt/embedding_model.py` (one line outside the brief's file list, needed for the policy to reach
+  the towers through the public API): `EmbeddingGemma2.from_pretrained(precision=...)` resolves the
+  policy once and passes it to all three towers (it used to reach the text tower only).
+- Bit-identity check (`scripts/wire_check.sh`, before any selection): vision + audio suites on the
+  wired code with the E5 policies in the file: 482 metric records, all equal to `e6/results_gates_r1.jsonl`.
+
+## 12. Screens (phase 1, phase 2)
+
+`scripts/sweep_p1.sh` (vision 22 + audio 27 single levers), `sweep_p2v.sh` (vision combos on the
+SDPA exp lever + bfp4 twins), `sweep_p2a.sh` (audio combos + bfp4 twins as an accuracy screen
+first), `sweep_p3a.sh` (audio bfp4 combo). One device session per candidate (accuracy then perf);
+the screen reproduces the tests' own logged minima on the base configs (vision soft 0.99653 video8
+f3, worst token 0.8638 portrait; audio soft 0.99769 tone3). Per-candidate rows: README tables and
+`sweep_results.csv` (`tower` column).
+
+Vision: the only large lever is SDPA (`exp_approx` -32.2 ms, passes; fp32 acc off -32.4 ms, fails
+on video frames). Weights and fidelity move 0-4 ms. Blocked: bfp8 QKV output, because
+`rotary_embedding_llama` requires bf16 inputs and `rms_norm` keeps the input dtype.
+Audio: HiFi2 projections (-3.5 ms), fused QKV output bf16 (-2.1 ms), shift HiFi2 (-0.13 ms),
+sharded norms (-0.3 ms), bfp8 weights (-0.2 to -0.4 ms) add up to -6.6 ms. bfp4 fails for the FFN
+alone and for the combination; LoFi FFN fails.
+
+## 13. Probe and selection
+
+`scripts/probe_v.sh`, `probe_a.sh`: the finalists, the next slower passing configs and the base
+through `EmbeddingGemma2.from_pretrained(precision=...)` on 18 / 17 probe inputs plus the tower's
+full-model items and retrieval. The two fastest vision combos (bfp8 gate/up outputs) fail on 3-frame
+video (soft 0.98857 / 0.98394); `v_exp_bfp8w4` holds (0.99479). Audio: the bfp4 combo fails, the
+bfp8 + HiFi2 + QKV-bf16 + shift + sharded combo holds (0.99114 on a synthetic tone); `hifi2_all`
+alone flips the near-tie retrieval row. Selected file = those two tower sections, checked equal to
+the measured candidates' policies (`PrecisionConfig` comparison) before the code commit.
+
+## 14. Audio worst-token sensitivity
+
+`scripts/audio_sensitivity.py` (CPU, HF fp32), `scripts/audio_token_trace.py` (device, default
+path at the time of the run: E5c audio policy). Result and tables: README "Audio worst-token
+sensitivity". The functional-audio README's `[guess]` line now points to it.
+
+## 15. Planted pass / fail / pass
+
+`logs/pfp_e6b_1.log` (7 passed), `pfp_e6b_2_planted.log` (`bfp5`: 2 failed, ValueError),
+`pfp_e6b_2b_planted_valid.log` (`bfp4`: 2 passed, models hold BFLOAT4_B), reverted: gate run.
+
+## 16. Gates, soak, post-selection bench (code commit `68f46d1f16`)
+
+`scripts/gates.sh g1` then `scripts/post_bench.sh g1` (`logs/chain_final.log`): precision 7, vision
+91, audio 109 (7 deselected), full model + full-model trace 41, demo 2, `tests/pcc -k "not s32768"`
+361 passed; watcher over vision + audio 190 passed, 0 error lines; alloc tracking over the two
+trace tests 19 passed, no "still alive"; joint vision + audio soak 2052 replays, 0 mismatches
+(tracking on; a second run without tracking: `logs/soak_g1_notrk.log`). Post-selection bench and
+baseline override: README Gates table. Text gate metrics equal to E6a r1 except one value E6a r1
+logged both ways (README).

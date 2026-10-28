@@ -165,7 +165,7 @@ soft = venc.encode(vid["pixel_values_videos"], vid["video_position_ids"])  # one
 | `tt/vision/rope.py` | host `axial_cos_sin`; device `AxialRope` (fused `rotary_embedding_llama`) |
 | `tt/vision/attention.py` | `VisionAttention` (12 x 64 MHA, q/k/v norms, scaling 1.0; SDPA table, windowed path) |
 | `tt/vision/linear.py` | `vision_linear` (vision program-config rule over `tt/linear.py`) |
-| `tt/vision/mlp.py` | `VisionMLP` (bf16 weights, gelu as the multiply's pre-activation) |
+| `tt/vision/mlp.py` | `VisionMLP` (weights per the precision policy, gelu as the multiply's pre-activation) |
 | `tt/vision/encoder_layer.py` | `VisionEncoderLayer` (sandwich norms, L1 residual for one image) |
 | `tt/vision/pooler.py` | host `pooling_matrix`; device `VisionPooler` (one batched matmul) |
 | `tt/vision/embedder.py` | `VisionEmbedder` (`embed_vision`) |
@@ -219,6 +219,16 @@ the QKV and MLP up / gate outputs and the residual stream in L1 for one image, a
 image / frame at a time for batches so it reuses that L1 path. bfp8 weights and SDPA without fp32
 accumulation were measured and left for E6 (accuracy). Details: `doc/optimized_vision/README.md`.
 
+### Vision tower precision (E6b default)
+
+`doc/datatype_sweep/selected_precision_config.json`, config `v_exp_bfp8w4`: SDPA `exp_approx` on,
+bfp8 weights for the q/k/v, o, gate/up and down projections (HiFi2 + fp32 accumulation, bf16
+outputs), patch embedder and `embed_vision` bf16 HiFi4, HiFi4 norms, bfp4 mask. Traced device ms,
+normal construction path, burst / sustained **[M]** (`doc/datatype_sweep/README.md`, Gates):
+1 x 2560 17.36 / 18.24, 4 x 2560 88.57 / 89.62, 8 x 1280 69.20 / 69.22 (E5b policy in the same
+session: 26.12 / 115.06 / 87.20 burst). Soft-token PCC on the tests >= 0.99477 (bar 0.99). Back to
+E5b: `EMBEDDING_GEMMA2_PRECISION=<doc/datatype_sweep/baseline_precision_config.json>`.
+
 ## Audio tower
 
 `tt/audio/` implements HF `Gemma4AudioModel` + `embed_audio`:
@@ -250,6 +260,7 @@ soft = aenc.encode(feats, mask, traced=True)
 | `tt/audio/weights.py` | audio / embed_audio tensor loading; clip bounds |
 | `tt/audio/clippable_linear.py` | `ClippableLinear` (clamp -> linear with the output clamp fused, bounds folded) |
 | `tt/audio/linear.py` | `audio_linear`: 2D-multicast program configs, fused activation (E5c) |
+| `tt/audio/norm.py` | `AudioRMSNorm`: RMSNorm with the policy's norm options (block-sharded for short inputs, E6b) |
 | `tt/audio/program_configs.py` | block-matmul configs for the batched attention / lconv matmuls (E5c) |
 | `tt/audio/subsample.py` | `AudioSubsample` (2 x conv2d + LN + ReLU + masks, input_proj) |
 | `tt/audio/feed_forward.py` | `AudioFeedForward` (Macaron half-step FFN) |
@@ -264,6 +275,7 @@ soft = aenc.encode(feats, mask, traced=True)
 | `doc/functional_audio/` | E3 stage report, work log, tt-perf-report artifacts |
 | `doc/optimized_audio/` | E5c stage report, work log, tt-perf-report before / after |
 | `tests/perf/bench_audio.py` | traced burst / sustained latency per (batch, bucket) |
+| `tests/perf/dtype_sweep_towers.py` | E6b vision / audio datatype sweep: screen, probe, report |
 
 ```bash
 pytest models/demos/blackhole/embedding_gemma2/tests/pcc/audio -q -k "not tracy"          # PCC + trace + audit + perf
@@ -301,6 +313,17 @@ in tile layout, and intermediates in L1 when they fit (64 KB per bank; 96 KB for
 output). All but two changes are bit-identical to E3; those two (projection and output-head
 program configs) change only the accumulation order. HiFi2 projections (-1.4 ms at 1 x 768),
 LoFi shift matmuls and a block-sharded RMSNorm were measured and left for E6 (accuracy).
+
+### Audio tower precision (E6b default)
+
+`doc/datatype_sweep/selected_precision_config.json`, config `a_h2b8_qkvbf16_shift2_sharded`: bfp8
+weights for every projection with HiFi2 + fp32 accumulation, fused QKV output bf16 (was fp32),
+lconv shift matmuls HiFi2, block-sharded RMSNorm for <= 24 tile rows; subsampling convs, band
+attention and norms HiFi4. Traced device ms, normal construction path, burst / sustained **[M]**:
+1 x 256 7.31 / 7.31, 1 x 768 11.95 / 11.95, 4 x 256 15.38 / 15.38 (E5c policy in the same session:
+8.72 / 14.92 / 19.07 burst). Soft-token PCC on the tests >= 0.99665 (bar 0.99). The low worst-token
+cosines of s10 token 126 / s30 token 267 are a property of the model (measured,
+`doc/datatype_sweep/README.md`, "Audio worst-token sensitivity").
 
 ## Full model
 

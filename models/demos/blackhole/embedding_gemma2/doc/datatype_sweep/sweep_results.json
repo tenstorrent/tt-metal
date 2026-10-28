@@ -16780,5 +16780,7071 @@
    "bee33e5b42",
    "bee33e5b42"
   ]
+ },
+ {
+  "id": "v_exp_gu8out_lofi_mlp",
+  "tower": "vision",
+  "description": "SDPA exp_approx + gate_up outputs bfp8 + MLP LoFi",
+  "delta": {
+   "sdpa": {
+    "fidelity": "HiFi2",
+    "fp32_acc": true,
+    "exp_approx": true
+   },
+   "weights": {
+    "mlp_gate_up": {
+     "dtype": "bf16",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bfp8"
+    },
+    "mlp_down": {
+     "dtype": "bf16",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.99962954581465,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9998375973836144,
+    "where": [
+     "video8",
+     "mlp15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9874421460752518,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9847117875885978,
+    "where": [
+     "video8",
+     3
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.48459967970848083,
+    "where": [
+     "video8",
+     3,
+     31
+    ]
+   },
+   "screen_pass": false,
+   "failing": [
+    "stack_pcc 0.98744 < 0.99 at ['video8']",
+    "soft_pcc 0.98471 < 0.99 at ['video8', 3]"
+   ]
+  },
+  "perf": {
+   "rank_ms": 100.78161500860006,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 15.928517165593803,
+    "sustained_ms_median": 16.438336780374037
+   },
+   "4x2560": {
+    "burst_ms_median": 84.85309784300625,
+    "sustained_ms_median": 85.20615752786398
+   },
+   "8x1280": {
+    "burst_ms_median": 67.77887288480997,
+    "sustained_ms_median": 67.78729939833283
+   }
+  }
+ },
+ {
+  "id": "v_exp_bfp8w4_gu8out",
+  "tower": "vision",
+  "description": "SDPA exp_approx + bfp8 weights on the 4 layer groups + gate_up outputs bfp8",
+  "delta": {
+   "sdpa": {
+    "fidelity": "HiFi2",
+    "fp32_acc": true,
+    "exp_approx": true
+   },
+   "weights": {
+    "attn_qkv": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "attn_o": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "mlp_gate_up": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bfp8"
+    },
+    "mlp_down": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9996604247982069,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9998754851228283,
+    "where": [
+     "video8",
+     "attn15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.992021059325261,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9920703745689773,
+    "where": [
+     "video8",
+     5
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.8233950138092041,
+    "where": [
+     "portrait",
+     0,
+     45
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 102.72290762513876,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 16.728497436270118,
+    "sustained_ms_median": 17.39505085612783
+   },
+   "4x2560": {
+    "burst_ms_median": 85.99441018886864,
+    "sustained_ms_median": 86.56301094657358
+   },
+   "8x1280": {
+    "burst_ms_median": 66.34604029823095,
+    "sustained_ms_median": 66.34501581588252
+   }
+  },
+  "probe": {
+   "summary": {
+    "min_soft_pcc": 0.9885700045542763,
+    "min_soft_pcc_at": "video_3f_t10",
+    "min_token_cos": 0.32579919695854187,
+    "min_token_cos_at": "img_chart_png",
+    "min_embedding_cos": 0.9983513355255127,
+    "min_embedding_cos_at": "video_5f_t5_half",
+    "full_min_embedding_cos": 0.9988371133804321,
+    "n_probe": 18,
+    "pass": false
+   },
+   "retrieval": {
+    "agree": true,
+    "tt_margin_min": 0.08871525526046753,
+    "max_abs_diff": 0.003428161144256592
+   }
+  }
+ },
+ {
+  "id": "v_exp_lofi_mlp",
+  "tower": "vision",
+  "description": "SDPA exp_approx + MLP LoFi",
+  "delta": {
+   "sdpa": {
+    "fidelity": "HiFi2",
+    "fp32_acc": true,
+    "exp_approx": true
+   },
+   "weights": {
+    "mlp_gate_up": {
+     "dtype": "bf16",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "mlp_down": {
+     "dtype": "bf16",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9997308956441251,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9998833279973102,
+    "where": [
+     "video8",
+     "mlp15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9906595499626741,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9864231432926365,
+    "where": [
+     "video8",
+     3
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.5147455930709839,
+    "where": [
+     "video8",
+     3,
+     31
+    ]
+   },
+   "screen_pass": false,
+   "failing": [
+    "soft_pcc 0.98642 < 0.99 at ['video8', 3]"
+   ]
+  },
+  "perf": {
+   "rank_ms": 104.95624288450927,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 16.75678153987974,
+    "sustained_ms_median": 17.33929433681992
+   },
+   "4x2560": {
+    "burst_ms_median": 88.19946134462953,
+    "sustained_ms_median": 88.27039733638658
+   },
+   "8x1280": {
+    "burst_ms_median": 70.9961143322289,
+    "sustained_ms_median": 70.97894685076815
+   }
+  }
+ },
+ {
+  "id": "v_exp_gu8out",
+  "tower": "vision",
+  "description": "SDPA exp_approx + mlp_gate_up outputs bfp8",
+  "delta": {
+   "sdpa": {
+    "fidelity": "HiFi2",
+    "fp32_acc": true,
+    "exp_approx": true
+   },
+   "weights": {
+    "mlp_gate_up": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bfp8"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9997988306870083,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999247945849776,
+    "where": [
+     "video8",
+     "attn15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9929243785483421,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9933960967560883,
+    "where": [
+     "video8",
+     7
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7806354761123657,
+    "where": [
+     "video8",
+     3,
+     25
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 105.7933539384976,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 16.84725375380367,
+    "sustained_ms_median": 17.859139819786456
+   },
+   "4x2560": {
+    "burst_ms_median": 88.94610018469393,
+    "sustained_ms_median": 90.47453713719733
+   },
+   "8x1280": {
+    "burst_ms_median": 69.21655458863825,
+    "sustained_ms_median": 69.31635180843018
+   }
+  },
+  "probe": {
+   "summary": {
+    "min_soft_pcc": 0.9839407149871723,
+    "min_soft_pcc_at": "video_3f_t10",
+    "min_token_cos": 0.25448596477508545,
+    "min_token_cos_at": "img_chart_png",
+    "min_embedding_cos": 0.9982258081436157,
+    "min_embedding_cos_at": "video_1f_t20",
+    "full_min_embedding_cos": 0.9988957643508911,
+    "n_probe": 18,
+    "pass": false
+   },
+   "retrieval": {
+    "agree": true,
+    "tt_margin_min": 0.08893299102783203,
+    "max_abs_diff": 0.002555251121520996
+   }
+  }
+ },
+ {
+  "id": "v_exp_bfp8w4",
+  "tower": "vision",
+  "description": "SDPA exp_approx + bfp8 weights on qkv/o/gate_up/down",
+  "delta": {
+   "sdpa": {
+    "fidelity": "HiFi2",
+    "fp32_acc": true,
+    "exp_approx": true
+   },
+   "weights": {
+    "attn_qkv": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "attn_o": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "mlp_gate_up": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "mlp_down": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9997639034658833,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9998754851228283,
+    "where": [
+     "video8",
+     "attn15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9946778727672607,
+    "where": [
+     "landscape"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9947716176896784,
+    "where": [
+     "video8",
+     5
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7080175876617432,
+    "where": [
+     "landscape",
+     0,
+     191
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 105.86428430397063,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 17.352764448150992,
+    "sustained_ms_median": 18.109496996932943
+   },
+   "4x2560": {
+    "burst_ms_median": 88.51151985581964,
+    "sustained_ms_median": 89.4314820470754
+   },
+   "8x1280": {
+    "burst_ms_median": 69.2021359456703,
+    "sustained_ms_median": 69.19161008582229
+   }
+  },
+  "probe": {
+   "summary": {
+    "min_soft_pcc": 0.9947899914586578,
+    "min_soft_pcc_at": "video_5f_t5_half",
+    "min_token_cos": 0.7039347887039185,
+    "min_token_cos_at": "video_3f_t10",
+    "min_embedding_cos": 0.9985400438308716,
+    "min_embedding_cos_at": "video_1f_t20",
+    "full_min_embedding_cos": 0.9988663792610168,
+    "n_probe": 18,
+    "pass": true
+   },
+   "retrieval": {
+    "agree": true,
+    "tt_margin_min": 0.089252769947052,
+    "max_abs_diff": 0.0020295381546020508
+   }
+  },
+  "precision": {
+   "weights": {
+    "attn_qkv": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "attn_o": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "mlp_gate_up": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "mlp_down": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "patch_embed": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "projector": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   },
+   "layer_exceptions": [],
+   "sdpa": {
+    "fidelity": "HiFi2",
+    "fp32_acc": true,
+    "exp_approx": true
+   },
+   "norms": {
+    "fidelity": "HiFi4",
+    "fp32_acc": true
+   },
+   "mask_dtype": "bfp4"
+  },
+  "construction": {
+   "layers": [
+    {
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+     ],
+     "down_policy": {
+      "dtype": "bfp8",
+      "fidelity": "HiFi2",
+      "fp32_acc": true,
+      "out_dtype": "bf16"
+     },
+     "gate_up_policy": {
+      "dtype": "bfp8",
+      "fidelity": "HiFi2",
+      "fp32_acc": true,
+      "out_dtype": "bf16"
+     },
+     "norm_fidelity": "HiFi4",
+     "norm_fp32_acc": true,
+     "o_policy": {
+      "dtype": "bfp8",
+      "fidelity": "HiFi2",
+      "fp32_acc": true,
+      "out_dtype": "bf16"
+     },
+     "qkv_policy": {
+      "dtype": "bfp8",
+      "fidelity": "HiFi2",
+      "fp32_acc": true,
+      "out_dtype": "bf16"
+     },
+     "sdpa": {
+      "exp_approx": true,
+      "fidelity": "HiFi2",
+      "fp32_acc": true
+     },
+     "w_down": "BFLOAT8_B",
+     "w_gate": "BFLOAT8_B",
+     "w_up": "BFLOAT8_B",
+     "wo": "BFLOAT8_B",
+     "wqkv": "BFLOAT8_B"
+    }
+   ],
+   "patch_embed": {
+    "weight": "BFLOAT16",
+    "dtype": "bf16",
+    "fidelity": "HiFi4",
+    "fp32_acc": true,
+    "out_dtype": "bf16"
+   },
+   "projector": {
+    "weight": "BFLOAT16",
+    "dtype": "bf16",
+    "fidelity": "HiFi4",
+    "fp32_acc": true,
+    "out_dtype": "bf16"
+   },
+   "mask_dtype": "BFLOAT4_B"
+  }
+ },
+ {
+  "id": "sdpa_fast",
+  "tower": "vision",
+  "description": "SDPA fp32 acc off + exp_approx",
+  "delta": {
+   "sdpa": {
+    "fidelity": "HiFi2",
+    "fp32_acc": false,
+    "exp_approx": true
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9996569175921084,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9996833174280191,
+    "where": [
+     "video8",
+     "attn15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9901909008519221,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9861697819980549,
+    "where": [
+     "video8",
+     3
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.40565845370292664,
+    "where": [
+     "video8",
+     3,
+     25
+    ]
+   },
+   "screen_pass": false,
+   "failing": [
+    "soft_pcc 0.98617 < 0.99 at ['video8', 3]"
+   ]
+  },
+  "perf": {
+   "rank_ms": 108.66008475422859,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 17.35544519033283,
+    "sustained_ms_median": 18.197689903900027
+   },
+   "4x2560": {
+    "burst_ms_median": 91.30463956389576,
+    "sustained_ms_median": 91.942389117321
+   },
+   "8x1280": {
+    "burst_ms_median": 71.1633519968018,
+    "sustained_ms_median": 71.17630361712405
+   }
+  }
+ },
+ {
+  "id": "sdpa_nofp32acc",
+  "tower": "vision",
+  "description": "SDPA fp32_dest_acc off",
+  "delta": {
+   "sdpa": {
+    "fidelity": "HiFi2",
+    "fp32_acc": false,
+    "exp_approx": false
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9996567969672802,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9996830847591358,
+    "where": [
+     "video8",
+     "attn15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.990533085165095,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9865612993277862,
+    "where": [
+     "video8",
+     3
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.3337925672531128,
+    "where": [
+     "video8",
+     3,
+     31
+    ]
+   },
+   "screen_pass": false,
+   "failing": [
+    "soft_pcc 0.98656 < 0.99 at ['video8', 3]"
+   ]
+  },
+  "perf": {
+   "rank_ms": 108.68580255191773,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 17.354966001585126,
+    "sustained_ms_median": 18.202901011072967
+   },
+   "4x2560": {
+    "burst_ms_median": 91.3308365503326,
+    "sustained_ms_median": 92.34121951158158
+   },
+   "8x1280": {
+    "burst_ms_median": 71.17117198649794,
+    "sustained_ms_median": 71.20988234168007
+   }
+  }
+ },
+ {
+  "id": "sdpa_exp_approx",
+  "tower": "vision",
+  "description": "SDPA exp_approx_mode on",
+  "delta": {
+   "sdpa": {
+    "fidelity": "HiFi2",
+    "fp32_acc": true,
+    "exp_approx": true
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.999899998290671,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999247945849776,
+    "where": [
+     "video8",
+     "attn15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9957929290699038,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9949947292254716,
+    "where": [
+     "video8",
+     5
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7265192270278931,
+    "where": [
+     "video8",
+     2,
+     21
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 108.9520743349567,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 17.48067333828658,
+    "sustained_ms_median": 18.72050833395299
+   },
+   "4x2560": {
+    "burst_ms_median": 91.47140099667013,
+    "sustained_ms_median": 93.48857586155646
+   },
+   "8x1280": {
+    "burst_ms_median": 71.93712359294295,
+    "sustained_ms_median": 72.01133428607136
+   }
+  },
+  "probe": {
+   "summary": {
+    "min_soft_pcc": 0.993466783527348,
+    "min_soft_pcc_at": "video_5f_t5_half",
+    "min_token_cos": 0.6891778707504272,
+    "min_token_cos_at": "video_5f_t5_half",
+    "min_embedding_cos": 0.9983696937561035,
+    "min_embedding_cos_at": "video_1f_t20",
+    "full_min_embedding_cos": 0.9990692734718323,
+    "n_probe": 18,
+    "pass": true
+   },
+   "retrieval": {
+    "agree": true,
+    "tt_margin_min": 0.08936381340026855,
+    "max_abs_diff": 0.0032328367233276367
+   }
+  }
+ },
+ {
+  "id": "lofi_all",
+  "tower": "vision",
+  "description": "every layer matmul LoFi (bf16 weights)",
+  "delta": {
+   "weights": {
+    "attn_qkv": {
+     "dtype": "bf16",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "attn_o": {
+     "dtype": "bf16",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "mlp_gate_up": {
+     "dtype": "bf16",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "mlp_down": {
+     "dtype": "bf16",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9996121460536873,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9998197379706021,
+    "where": [
+     "video8",
+     "attn15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9896384007639232,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9860728772765174,
+    "where": [
+     "video8",
+     3
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.48311901092529297,
+    "where": [
+     "video8",
+     3,
+     31
+    ]
+   },
+   "screen_pass": false,
+   "failing": [
+    "stack_pcc 0.98964 < 0.99 at ['video8']",
+    "soft_pcc 0.98607 < 0.99 at ['video8', 3]"
+   ]
+  },
+  "perf": {
+   "rank_ms": 137.1166623895988,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 25.217344891279936,
+    "sustained_ms_median": 25.22233361378312
+   },
+   "4x2560": {
+    "burst_ms_median": 111.89931749831885,
+    "sustained_ms_median": 111.9033619045065
+   },
+   "8x1280": {
+    "burst_ms_median": 86.18613020516932,
+    "sustained_ms_median": 86.17518236860633
+   }
+  }
+ },
+ {
+  "id": "lofi_mlp",
+  "tower": "vision",
+  "description": "mlp_gate_up + mlp_down LoFi (bf16 weights)",
+  "delta": {
+   "weights": {
+    "mlp_gate_up": {
+     "dtype": "bf16",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "mlp_down": {
+     "dtype": "bf16",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9997642262674057,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9998833279973102,
+    "where": [
+     "video8",
+     "mlp15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9918902307284375,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9903317900251698,
+    "where": [
+     "video8",
+     3
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.8192667365074158,
+    "where": [
+     "video8",
+     1,
+     81
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 137.52036809455603,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 25.405264482833445,
+    "sustained_ms_median": 25.4124050991515
+   },
+   "4x2560": {
+    "burst_ms_median": 112.11510361172259,
+    "sustained_ms_median": 112.10700436137043
+   },
+   "8x1280": {
+    "burst_ms_median": 86.31662894040346,
+    "sustained_ms_median": 86.3060291911311
+   }
+  }
+ },
+ {
+  "id": "bfp4_qkv_lofi",
+  "tower": "vision",
+  "description": "attn_qkv bfp4 weights, LoFi",
+  "delta": {
+   "weights": {
+    "attn_qkv": {
+     "dtype": "bfp4",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9915453700584019,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9933073069616083,
+    "where": [
+     "video8",
+     "attn15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9292540647651676,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9376878948417364,
+    "where": [
+     "video8",
+     5
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.05179986357688904,
+    "where": [
+     "video8",
+     2,
+     21
+    ]
+   },
+   "screen_pass": false,
+   "failing": [
+    "layer_pcc 0.99155 < 0.995 at ['video8', 15]",
+    "module_pcc 0.99331 < 0.995 at ['video8', 'attn15']",
+    "stack_pcc 0.92925 < 0.99 at ['video8']",
+    "soft_pcc 0.93769 < 0.99 at ['video8', 5]"
+   ]
+  },
+  "perf": {
+   "rank_ms": 137.98747442197055,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 25.926624005660415,
+    "sustained_ms_median": 25.940835345209692
+   },
+   "4x2560": {
+    "burst_ms_median": 112.06085041631013,
+    "sustained_ms_median": 112.24951953268967
+   },
+   "8x1280": {
+    "burst_ms_median": 84.22145759686828,
+    "sustained_ms_median": 84.20562927665956
+   }
+  }
+ },
+ {
+  "id": "act_bfp8_gu",
+  "tower": "vision",
+  "description": "mlp_gate_up outputs bfp8",
+  "delta": {
+   "weights": {
+    "mlp_gate_up": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bfp8"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9998327963306353,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999390330599479,
+    "where": [
+     "b2_square_small",
+     "mlp7"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9945064578546278,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.99471951237885,
+    "where": [
+     "video8",
+     7
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.8620163202285767,
+    "where": [
+     "video8",
+     1,
+     28
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 137.991545163095,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 25.490187597461045,
+    "sustained_ms_median": 25.507363651333183
+   },
+   "4x2560": {
+    "burst_ms_median": 112.50135756563395,
+    "sustained_ms_median": 112.50372273990742
+   },
+   "8x1280": {
+    "burst_ms_median": 84.4583245459944,
+    "sustained_ms_median": 84.4526541802813
+   }
+  }
+ },
+ {
+  "id": "bfp4_qkv",
+  "tower": "vision",
+  "description": "attn_qkv bfp4 weights",
+  "delta": {
+   "weights": {
+    "attn_qkv": {
+     "dtype": "bfp4",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9915453700584019,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9933073069616083,
+    "where": [
+     "video8",
+     "attn15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9292540647651676,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9376878948417364,
+    "where": [
+     "video8",
+     5
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.05179986357688904,
+    "where": [
+     "video8",
+     2,
+     21
+    ]
+   },
+   "screen_pass": false,
+   "failing": [
+    "layer_pcc 0.99155 < 0.995 at ['video8', 15]",
+    "module_pcc 0.99331 < 0.995 at ['video8', 'attn15']",
+    "stack_pcc 0.92925 < 0.99 at ['video8']",
+    "soft_pcc 0.93769 < 0.99 at ['video8', 5]"
+   ]
+  },
+  "perf": {
+   "rank_ms": 138.30237856600434,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 26.113842357881367,
+    "sustained_ms_median": 26.134545473675978
+   },
+   "4x2560": {
+    "burst_ms_median": 112.18853620812297,
+    "sustained_ms_median": 112.24996893165203
+   },
+   "8x1280": {
+    "burst_ms_median": 84.31649205740541,
+    "sustained_ms_median": 84.31915152708397
+   }
+  }
+ },
+ {
+  "id": "bfp8w_all",
+  "tower": "vision",
+  "description": "every vision weight bfp8 (same fidelities)",
+  "delta": {
+   "weights": {
+    "attn_qkv": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "attn_o": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "mlp_gate_up": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "mlp_down": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "patch_embed": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "projector": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9998000742406015,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999098580162975,
+    "where": [
+     "video8",
+     "attn15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9838803784049052,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9751999330148089,
+    "where": [
+     "video8",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.16101109981536865,
+    "where": [
+     "video8",
+     2,
+     21
+    ]
+   },
+   "screen_pass": false,
+   "failing": [
+    "stack_pcc 0.98388 < 0.99 at ['video8']",
+    "soft_pcc 0.97520 < 0.99 at ['video8', 0]"
+   ]
+  },
+  "perf": {
+   "rank_ms": 138.33902426995337,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 26.000872487202287,
+    "sustained_ms_median": 26.00395105158289
+   },
+   "4x2560": {
+    "burst_ms_median": 112.33815178275108,
+    "sustained_ms_median": 112.35245399606916
+   },
+   "8x1280": {
+    "burst_ms_median": 84.49266580864787,
+    "sustained_ms_median": 84.48626544764814
+   }
+  }
+ },
+ {
+  "id": "bfp4_gu_lofi",
+  "tower": "vision",
+  "description": "mlp_gate_up bfp4 weights, LoFi",
+  "delta": {
+   "weights": {
+    "mlp_gate_up": {
+     "dtype": "bfp4",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9940343864683142,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9969109318442505,
+    "where": [
+     "video8",
+     "mlp15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.94500121460398,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9504855660498156,
+    "where": [
+     "video8",
+     5
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.127145916223526,
+    "where": [
+     "video8",
+     5,
+     56
+    ]
+   },
+   "screen_pass": false,
+   "failing": [
+    "layer_pcc 0.99403 < 0.995 at ['video8', 15]",
+    "stack_pcc 0.94500 < 0.99 at ['video8']",
+    "soft_pcc 0.95049 < 0.99 at ['video8', 5]"
+   ]
+  },
+  "perf": {
+   "rank_ms": 138.54082715697587,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 25.60915839858353,
+    "sustained_ms_median": 25.614857858303807
+   },
+   "4x2560": {
+    "burst_ms_median": 112.93166875839233,
+    "sustained_ms_median": 112.97400306480435
+   },
+   "8x1280": {
+    "burst_ms_median": 84.66935311444104,
+    "sustained_ms_median": 84.64680288863532
+   }
+  }
+ },
+ {
+  "id": "bfp4_down_lofi",
+  "tower": "vision",
+  "description": "mlp_down bfp4 weights, LoFi",
+  "delta": {
+   "weights": {
+    "mlp_down": {
+     "dtype": "bfp4",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.993024171374673,
+    "where": [
+     "landscape",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9959731296270157,
+    "where": [
+     "video8",
+     "mlp15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9506239411651566,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9580945815742348,
+    "where": [
+     "video8",
+     3
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.26738959550857544,
+    "where": [
+     "video8",
+     3,
+     25
+    ]
+   },
+   "screen_pass": false,
+   "failing": [
+    "layer_pcc 0.99302 < 0.995 at ['landscape', 15]",
+    "stack_pcc 0.95062 < 0.99 at ['video8']",
+    "soft_pcc 0.95809 < 0.99 at ['video8', 3]"
+   ]
+  },
+  "perf": {
+   "rank_ms": 138.94250714220107,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 25.685739400796592,
+    "sustained_ms_median": 25.69330152092052
+   },
+   "4x2560": {
+    "burst_ms_median": 113.25676774140447,
+    "sustained_ms_median": 113.29676655049508
+   },
+   "8x1280": {
+    "burst_ms_median": 87.35449810046703,
+    "sustained_ms_median": 87.34727270134232
+   }
+  }
+ },
+ {
+  "id": "sdpa_lofi",
+  "tower": "vision",
+  "description": "SDPA LoFi",
+  "delta": {
+   "sdpa": {
+    "fidelity": "LoFi",
+    "fp32_acc": true,
+    "exp_approx": false
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9993080557935072,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9993810976084792,
+    "where": [
+     "video8",
+     "attn15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9778544425062304,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9767256319949903,
+    "where": [
+     "video8",
+     1
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.23919162154197693,
+    "where": [
+     "video8",
+     1,
+     30
+    ]
+   },
+   "screen_pass": false,
+   "failing": [
+    "stack_pcc 0.97785 < 0.99 at ['video8']",
+    "soft_pcc 0.97673 < 0.99 at ['video8', 1]"
+   ]
+  },
+  "perf": {
+   "rank_ms": 139.2208852339536,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 25.726237730123103,
+    "sustained_ms_median": 25.734719081685462
+   },
+   "4x2560": {
+    "burst_ms_median": 113.49464750383049,
+    "sustained_ms_median": 113.7521777373667
+   },
+   "8x1280": {
+    "burst_ms_median": 86.59139759838581,
+    "sustained_ms_median": 86.58328778384363
+   }
+  }
+ },
+ {
+  "id": "bfp8_qkv",
+  "tower": "vision",
+  "description": "attn_qkv bfp8 weights",
+  "delta": {
+   "weights": {
+    "attn_qkv": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999034254575274,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999313619298972,
+    "where": [
+     "video8",
+     "attn15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9963986697180308,
+    "where": [
+     "landscape"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9964769713385417,
+    "where": [
+     "video8",
+     3
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.8410318493843079,
+    "where": [
+     "video8",
+     3,
+     56
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 139.26665193866938,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 26.117561431601644,
+    "sustained_ms_median": 26.13597962057643
+   },
+   "4x2560": {
+    "burst_ms_median": 113.14909050706774,
+    "sustained_ms_median": 113.30839382627836
+   },
+   "8x1280": {
+    "burst_ms_median": 85.28449654113501,
+    "sustained_ms_median": 85.29441280509619
+   }
+  }
+ },
+ {
+  "id": "act_bfp8_o",
+  "tower": "vision",
+  "description": "attn_o output bfp8",
+  "delta": {
+   "weights": {
+    "attn_o": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bfp8"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9998883345520129,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999079016484194,
+    "where": [
+     "video8",
+     "attn0"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9847517472549041,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9773236150658222,
+    "where": [
+     "video8",
+     3
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.43907225131988525,
+    "where": [
+     "video8",
+     3,
+     25
+    ]
+   },
+   "screen_pass": false,
+   "failing": [
+    "stack_pcc 0.98475 < 0.99 at ['video8']",
+    "soft_pcc 0.97732 < 0.99 at ['video8', 3]"
+   ]
+  },
+  "perf": {
+   "rank_ms": 139.79965425096452,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 26.069055451080203,
+    "sustained_ms_median": 26.083768492466525
+   },
+   "4x2560": {
+    "burst_ms_median": 113.73059879988432,
+    "sustained_ms_median": 113.7209884607448
+   },
+   "8x1280": {
+    "burst_ms_median": 85.9124529408291,
+    "sustained_ms_median": 85.9070747049854
+   }
+  }
+ },
+ {
+  "id": "act_bfp8_down",
+  "tower": "vision",
+  "description": "mlp_down output bfp8",
+  "delta": {
+   "weights": {
+    "mlp_down": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bfp8"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9998197724328403,
+    "where": [
+     "landscape",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999243370619741,
+    "where": [
+     "landscape",
+     "mlp15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9637847984123424,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9694693706509523,
+    "where": [
+     "video8",
+     2
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.0699463039636612,
+    "where": [
+     "video8",
+     0,
+     21
+    ]
+   },
+   "screen_pass": false,
+   "failing": [
+    "stack_pcc 0.96378 < 0.99 at ['video8']",
+    "soft_pcc 0.96947 < 0.99 at ['video8', 2]"
+   ]
+  },
+  "perf": {
+   "rank_ms": 139.94895878713578,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 26.07175058219582,
+    "sustained_ms_median": 26.094562856055667
+   },
+   "4x2560": {
+    "burst_ms_median": 113.87720820493996,
+    "sustained_ms_median": 113.89019587435402
+   },
+   "8x1280": {
+    "burst_ms_median": 85.99315234459937,
+    "sustained_ms_median": 85.98823319463169
+   }
+  }
+ },
+ {
+  "id": "nofp32acc",
+  "tower": "vision",
+  "description": "layer matmuls without fp32 accumulation",
+  "delta": {
+   "weights": {
+    "attn_qkv": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": false,
+     "out_dtype": "bf16"
+    },
+    "attn_o": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": false,
+     "out_dtype": "bf16"
+    },
+    "mlp_gate_up": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": false,
+     "out_dtype": "bf16"
+    },
+    "mlp_down": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": false,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9997971320411645,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9998818956406812,
+    "where": [
+     "video8",
+     "mlp15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9938223028057889,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9906600336154856,
+    "where": [
+     "video8",
+     2
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.39110538363456726,
+    "where": [
+     "video8",
+     2,
+     21
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 140.44013395905495,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 25.999952293932438,
+    "sustained_ms_median": 26.00402061484362
+   },
+   "4x2560": {
+    "burst_ms_median": 114.44018166512251,
+    "sustained_ms_median": 114.45105408963103
+   },
+   "8x1280": {
+    "burst_ms_median": 87.07265846896917,
+    "sustained_ms_median": 87.06379169598222
+   }
+  }
+ },
+ {
+  "id": "bfp4_o_lofi",
+  "tower": "vision",
+  "description": "attn_o bfp4 weights, LoFi",
+  "delta": {
+   "weights": {
+    "attn_o": {
+     "dtype": "bfp4",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9931841763715946,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9953047775146836,
+    "where": [
+     "video8",
+     "attn15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.955294692971257,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9600346119263056,
+    "where": [
+     "video8",
+     3
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.24512219429016113,
+    "where": [
+     "video8",
+     0,
+     11
+    ]
+   },
+   "screen_pass": false,
+   "failing": [
+    "layer_pcc 0.99318 < 0.995 at ['video8', 15]",
+    "stack_pcc 0.95529 < 0.99 at ['video8']",
+    "soft_pcc 0.96003 < 0.99 at ['video8', 3]"
+   ]
+  },
+  "perf": {
+   "rank_ms": 140.53685450926423,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 26.100533665157855,
+    "sustained_ms_median": 26.13583820659602
+   },
+   "4x2560": {
+    "burst_ms_median": 114.43632084410638,
+    "sustained_ms_median": 114.45834605882948
+   },
+   "8x1280": {
+    "burst_ms_median": 86.64238909259439,
+    "sustained_ms_median": 86.63550687625127
+   }
+  }
+ },
+ {
+  "id": "bfp4_down",
+  "tower": "vision",
+  "description": "mlp_down bfp4 weights",
+  "delta": {
+   "weights": {
+    "mlp_down": {
+     "dtype": "bfp4",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.993024171374673,
+    "where": [
+     "landscape",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9959731296270157,
+    "where": [
+     "video8",
+     "mlp15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9506239411651566,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9580945815742348,
+    "where": [
+     "video8",
+     3
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.26738959550857544,
+    "where": [
+     "video8",
+     3,
+     25
+    ]
+   },
+   "screen_pass": false,
+   "failing": [
+    "layer_pcc 0.99302 < 0.995 at ['landscape', 15]",
+    "stack_pcc 0.95062 < 0.99 at ['video8']",
+    "soft_pcc 0.95809 < 0.99 at ['video8', 3]"
+   ]
+  },
+  "perf": {
+   "rank_ms": 140.60011729598045,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 26.01869273930788,
+    "sustained_ms_median": 26.023132105668385
+   },
+   "4x2560": {
+    "burst_ms_median": 114.58142455667257,
+    "sustained_ms_median": 114.60372870071576
+   },
+   "8x1280": {
+    "burst_ms_median": 87.1361821424216,
+    "sustained_ms_median": 87.14188183383907
+   }
+  }
+ },
+ {
+  "id": "bfp4_o",
+  "tower": "vision",
+  "description": "attn_o bfp4 weights",
+  "delta": {
+   "weights": {
+    "attn_o": {
+     "dtype": "bfp4",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9931841763715946,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9953047775146836,
+    "where": [
+     "video8",
+     "attn15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.955294692971257,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9600346119263056,
+    "where": [
+     "video8",
+     3
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.24512219429016113,
+    "where": [
+     "video8",
+     0,
+     11
+    ]
+   },
+   "screen_pass": false,
+   "failing": [
+    "layer_pcc 0.99318 < 0.995 at ['video8', 15]",
+    "stack_pcc 0.95529 < 0.99 at ['video8']",
+    "soft_pcc 0.96003 < 0.99 at ['video8', 3]"
+   ]
+  },
+  "perf": {
+   "rank_ms": 140.65523121971637,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 26.111430837772787,
+    "sustained_ms_median": 26.15214471721597
+   },
+   "4x2560": {
+    "burst_ms_median": 114.54380038194358,
+    "sustained_ms_median": 114.5416869996832
+   },
+   "8x1280": {
+    "burst_ms_median": 86.74261090345681,
+    "sustained_ms_median": 86.73123023746645
+   }
+  }
+ },
+ {
+  "id": "bfp8_down",
+  "tower": "vision",
+  "description": "mlp_down bfp8 weights",
+  "delta": {
+   "weights": {
+    "mlp_down": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9998857243733149,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999536761770341,
+    "where": [
+     "video8",
+     "mlp15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9967644360801116,
+    "where": [
+     "tiny"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9970849387383717,
+    "where": [
+     "video8",
+     5
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.9171044826507568,
+    "where": [
+     "video8",
+     1,
+     26
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 140.70003293454647,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 26.037704898044467,
+    "sustained_ms_median": 26.04889112377637
+   },
+   "4x2560": {
+    "burst_ms_median": 114.662328036502,
+    "sustained_ms_median": 114.71659908644281
+   },
+   "8x1280": {
+    "burst_ms_median": 87.13660140056163,
+    "sustained_ms_median": 87.12232027969816
+   }
+  }
+ },
+ {
+  "id": "lofi_attn",
+  "tower": "vision",
+  "description": "attn_qkv + attn_o LoFi (bf16 weights)",
+  "delta": {
+   "weights": {
+    "attn_qkv": {
+     "dtype": "bf16",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "attn_o": {
+     "dtype": "bf16",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9997787432612714,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9998197379706021,
+    "where": [
+     "video8",
+     "attn15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9950516576968257,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9945201737793432,
+    "where": [
+     "video8",
+     5
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7860838174819946,
+    "where": [
+     "video8",
+     2,
+     21
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 140.77243378851563,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 25.939908204600215,
+    "sustained_ms_median": 25.950313194475154
+   },
+   "4x2560": {
+    "burst_ms_median": 114.83252558391541,
+    "sustained_ms_median": 114.88074669614434
+   },
+   "8x1280": {
+    "burst_ms_median": 87.04070544335991,
+    "sustained_ms_median": 87.02803718145279
+   }
+  }
+ },
+ {
+  "id": "bfp8_o",
+  "tower": "vision",
+  "description": "attn_o bfp8 weights",
+  "delta": {
+   "weights": {
+    "attn_o": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999056669275019,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999369368392175,
+    "where": [
+     "video8",
+     "attn15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9968459584603441,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9965397926473081,
+    "where": [
+     "video8",
+     3
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.9073799848556519,
+    "where": [
+     "video8",
+     3,
+     56
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 140.79472455196083,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 26.114542898721993,
+    "sustained_ms_median": 26.13904582859393
+   },
+   "4x2560": {
+    "burst_ms_median": 114.68018165323883,
+    "sustained_ms_median": 114.74144222358099
+   },
+   "8x1280": {
+    "burst_ms_median": 86.83169090654701,
+    "sustained_ms_median": 86.82563725639793
+   }
+  }
+ },
+ {
+  "id": "norms_hifi2",
+  "tower": "vision",
+  "description": "norms HiFi2",
+  "delta": {
+   "norms": {
+    "fidelity": "HiFi2",
+    "fp32_acc": true
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9996387561858022,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9996608356800709,
+    "where": [
+     "video8",
+     "attn15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9870928453251071,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9872429786715686,
+    "where": [
+     "video8",
+     2
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.5711677670478821,
+    "where": [
+     "video8",
+     2,
+     21
+    ]
+   },
+   "screen_pass": false,
+   "failing": [
+    "stack_pcc 0.98709 < 0.99 at ['video8']",
+    "soft_pcc 0.98724 < 0.99 at ['video8', 2]"
+   ]
+  },
+  "perf": {
+   "rank_ms": 140.8313165185973,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 26.03359075728804,
+    "sustained_ms_median": 26.047126406378915
+   },
+   "4x2560": {
+    "burst_ms_median": 114.79772576130927,
+    "sustained_ms_median": 114.89823836689958
+   },
+   "8x1280": {
+    "burst_ms_median": 86.92911833059043,
+    "sustained_ms_median": 86.9273397633258
+   }
+  }
+ },
+ {
+  "id": "bfp4_gu",
+  "tower": "vision",
+  "description": "mlp_gate_up bfp4 weights",
+  "delta": {
+   "weights": {
+    "mlp_gate_up": {
+     "dtype": "bfp4",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9940343864683142,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9969109318442505,
+    "where": [
+     "video8",
+     "mlp15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.94500121460398,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9504855660498156,
+    "where": [
+     "video8",
+     5
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.127145916223526,
+    "where": [
+     "video8",
+     5,
+     56
+    ]
+   },
+   "screen_pass": false,
+   "failing": [
+    "layer_pcc 0.99403 < 0.995 at ['video8', 15]",
+    "stack_pcc 0.94500 < 0.99 at ['video8']",
+    "soft_pcc 0.95049 < 0.99 at ['video8', 5]"
+   ]
+  },
+  "perf": {
+   "rank_ms": 140.87536029983312,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 26.07044985052198,
+    "sustained_ms_median": 26.08015710128504
+   },
+   "4x2560": {
+    "burst_ms_median": 114.80491044931114,
+    "sustained_ms_median": 114.8422728650845
+   },
+   "8x1280": {
+    "burst_ms_median": 86.54670084360987,
+    "sustained_ms_median": 86.54220021494172
+   }
+  }
+ },
+ {
+  "id": "bfp8_gu",
+  "tower": "vision",
+  "description": "mlp_gate_up bfp8 weights",
+  "delta": {
+   "weights": {
+    "mlp_gate_up": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.999910655634228,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999589297472431,
+    "where": [
+     "video8",
+     "attn15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9963760373738636,
+    "where": [
+     "portrait"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9960250870655857,
+    "where": [
+     "video8",
+     6
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.8923642635345459,
+    "where": [
+     "video8",
+     6,
+     113
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 140.92649531085044,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 26.080160960555077,
+    "sustained_ms_median": 26.092499363840673
+   },
+   "4x2560": {
+    "burst_ms_median": 114.84633435029536,
+    "sustained_ms_median": 114.92414084764627
+   },
+   "8x1280": {
+    "burst_ms_median": 86.71381070744246,
+    "sustained_ms_median": 86.69260713983985
+   }
+  }
+ },
+ {
+  "id": "base",
+  "tower": "vision",
+  "description": "E5b vision policy: bf16 weights, HiFi2 + fp32 acc (patch / projector HiFi4)",
+  "delta": {},
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999349767512993,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999589297472431,
+    "where": [
+     "video8",
+     "attn15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9969382065080457,
+    "where": [
+     "portrait"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9965348921523657,
+    "where": [
+     "video8",
+     3
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.8638322353363037,
+    "where": [
+     "portrait",
+     0,
+     45
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 141.11521893646568,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 26.113987644203007,
+    "sustained_ms_median": 26.129434914573242
+   },
+   "4x2560": {
+    "burst_ms_median": 115.00123129226267,
+    "sustained_ms_median": 115.11173328528038
+   },
+   "8x1280": {
+    "burst_ms_median": 87.19102963805199,
+    "sustained_ms_median": 87.17611686819616
+   }
+  },
+  "probe": {
+   "summary": {
+    "min_soft_pcc": 0.9930098971209019,
+    "min_soft_pcc_at": "video_3f_t10",
+    "min_token_cos": 0.49295222759246826,
+    "min_token_cos_at": "video_3f_t10",
+    "min_embedding_cos": 0.9986932873725891,
+    "min_embedding_cos_at": "video_1f_t20",
+    "full_min_embedding_cos": 0.9989885687828064,
+    "n_probe": 18,
+    "pass": true
+   },
+   "retrieval": {
+    "agree": true,
+    "tt_margin_min": 0.08870196342468262,
+    "max_abs_diff": 0.003546774387359619
+   }
+  },
+  "precision": {
+   "weights": {
+    "attn_qkv": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "attn_o": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "mlp_gate_up": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "mlp_down": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "patch_embed": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "projector": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   },
+   "layer_exceptions": [],
+   "sdpa": {
+    "fidelity": "HiFi2",
+    "fp32_acc": true,
+    "exp_approx": false
+   },
+   "norms": {
+    "fidelity": "HiFi4",
+    "fp32_acc": true
+   },
+   "mask_dtype": "bfp4"
+  },
+  "construction": {
+   "layers": [
+    {
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11,
+      12,
+      13,
+      14,
+      15
+     ],
+     "down_policy": {
+      "dtype": "bf16",
+      "fidelity": "HiFi2",
+      "fp32_acc": true,
+      "out_dtype": "bf16"
+     },
+     "gate_up_policy": {
+      "dtype": "bf16",
+      "fidelity": "HiFi2",
+      "fp32_acc": true,
+      "out_dtype": "bf16"
+     },
+     "norm_fidelity": "HiFi4",
+     "norm_fp32_acc": true,
+     "o_policy": {
+      "dtype": "bf16",
+      "fidelity": "HiFi2",
+      "fp32_acc": true,
+      "out_dtype": "bf16"
+     },
+     "qkv_policy": {
+      "dtype": "bf16",
+      "fidelity": "HiFi2",
+      "fp32_acc": true,
+      "out_dtype": "bf16"
+     },
+     "sdpa": {
+      "exp_approx": false,
+      "fidelity": "HiFi2",
+      "fp32_acc": true
+     },
+     "w_down": "BFLOAT16",
+     "w_gate": "BFLOAT16",
+     "w_up": "BFLOAT16",
+     "wo": "BFLOAT16",
+     "wqkv": "BFLOAT16"
+    }
+   ],
+   "patch_embed": {
+    "weight": "BFLOAT16",
+    "dtype": "bf16",
+    "fidelity": "HiFi4",
+    "fp32_acc": true,
+    "out_dtype": "bf16"
+   },
+   "projector": {
+    "weight": "BFLOAT16",
+    "dtype": "bf16",
+    "fidelity": "HiFi4",
+    "fp32_acc": true,
+    "out_dtype": "bf16"
+   },
+   "mask_dtype": "BFLOAT4_B"
+  }
+ },
+ {
+  "id": "hifi2_patch_proj",
+  "tower": "vision",
+  "description": "patch_embed + projector HiFi2",
+  "delta": {
+   "weights": {
+    "patch_embed": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "projector": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999349767512993,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999589297472431,
+    "where": [
+     "video8",
+     "attn15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.8995765740549689,
+    "where": [
+     "tiny"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9551896554109561,
+    "where": [
+     "tiny",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.6115344166755676,
+    "where": [
+     "tiny",
+     0,
+     135
+    ]
+   },
+   "screen_pass": false,
+   "failing": [
+    "stack_pcc 0.89958 < 0.99 at ['tiny']",
+    "soft_pcc 0.95519 < 0.99 at ['tiny', 0]"
+   ]
+  },
+  "perf": {
+   "rank_ms": 141.14968464709818,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 26.111562945879996,
+    "sustained_ms_median": 26.13899789815932
+   },
+   "4x2560": {
+    "burst_ms_median": 115.03812170121819,
+    "sustained_ms_median": 115.11935028605737
+   },
+   "8x1280": {
+    "burst_ms_median": 87.17773240059614,
+    "sustained_ms_median": 87.17152394135209
+   }
+  }
+ },
+ {
+  "id": "bfp8_patch",
+  "tower": "vision",
+  "description": "patch_embed bfp8 weights",
+  "delta": {
+   "weights": {
+    "patch_embed": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999349767512993,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999589297472431,
+    "where": [
+     "video8",
+     "attn15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9860405748472114,
+    "where": [
+     "video8"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9810181657197776,
+    "where": [
+     "video8",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.29645320773124695,
+    "where": [
+     "video8",
+     2,
+     21
+    ]
+   },
+   "screen_pass": false,
+   "failing": [
+    "stack_pcc 0.98604 < 0.99 at ['video8']",
+    "soft_pcc 0.98102 < 0.99 at ['video8', 0]"
+   ]
+  },
+  "perf": {
+   "rank_ms": 141.16310309618711,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 26.11955504398793,
+    "sustained_ms_median": 26.147069924167898
+   },
+   "4x2560": {
+    "burst_ms_median": 115.04354805219918,
+    "sustained_ms_median": 115.15107167025025
+   },
+   "8x1280": {
+    "burst_ms_median": 87.16931424569339,
+    "sustained_ms_median": 87.16884165016167
+   }
+  }
+ },
+ {
+  "id": "bfp4_proj",
+  "tower": "vision",
+  "description": "projector bfp4 weights",
+  "delta": {
+   "weights": {
+    "projector": {
+     "dtype": "bfp4",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999349767512993,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999589297472431,
+    "where": [
+     "video8",
+     "attn15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9969382065080457,
+    "where": [
+     "portrait"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9916466497048788,
+    "where": [
+     "video8",
+     3
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.8602888584136963,
+    "where": [
+     "video8",
+     3,
+     29
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 141.22155860532075,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 26.11455984879285,
+    "sustained_ms_median": 26.148083350180013
+   },
+   "4x2560": {
+    "burst_ms_median": 115.1069987565279,
+    "sustained_ms_median": 115.23493522634872
+   },
+   "8x1280": {
+    "burst_ms_median": 87.2255471535027,
+    "sustained_ms_median": 87.22306911230964
+   }
+  }
+ },
+ {
+  "id": "bfp8_proj",
+  "tower": "vision",
+  "description": "projector bfp8 weights",
+  "delta": {
+   "weights": {
+    "projector": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999349767512993,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999589297472431,
+    "where": [
+     "video8",
+     "attn15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9969382065080457,
+    "where": [
+     "portrait"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9965127612286293,
+    "where": [
+     "video8",
+     3
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.8638637661933899,
+    "where": [
+     "portrait",
+     0,
+     45
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 141.25181899871677,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 26.11557214986533,
+    "sustained_ms_median": 26.156262404759204
+   },
+   "4x2560": {
+    "burst_ms_median": 115.13624684885144,
+    "sustained_ms_median": 115.18057306798605
+   },
+   "8x1280": {
+    "burst_ms_median": 87.23990134894848,
+    "sustained_ms_median": 87.23337411442223
+   }
+  }
+ },
+ {
+  "id": "bfp4_proj_lofi",
+  "tower": "vision",
+  "description": "projector bfp4 weights, LoFi",
+  "delta": {
+   "weights": {
+    "projector": {
+     "dtype": "bfp4",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999349767512993,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999589297472431,
+    "where": [
+     "video8",
+     "attn15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9969382065080457,
+    "where": [
+     "portrait"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9916425880434149,
+    "where": [
+     "video8",
+     3
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.8602399230003357,
+    "where": [
+     "video8",
+     3,
+     29
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 141.28034117165953,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 26.115341600961983,
+    "sustained_ms_median": 26.151980175391625
+   },
+   "4x2560": {
+    "burst_ms_median": 115.16499957069755,
+    "sustained_ms_median": 115.19502766000537
+   },
+   "8x1280": {
+    "burst_ms_median": 87.23310313653201,
+    "sustained_ms_median": 87.2182968784781
+   }
+  }
+ },
+ {
+  "id": "hifi4_all",
+  "tower": "vision",
+  "description": "every matmul HiFi4 (accuracy-up option)",
+  "delta": {
+   "weights": {
+    "attn_qkv": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "attn_o": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "mlp_gate_up": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "mlp_down": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "patch_embed": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "projector": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999480873126859,
+    "where": [
+     "video8",
+     15
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999637068834515,
+    "where": [
+     "video8",
+     "attn15"
+    ]
+   },
+   "stack_pcc": {
+    "value": 0.9974869618181801,
+    "where": [
+     "tiny"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.997931086182936,
+    "where": [
+     "video8",
+     3
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.9104595184326172,
+    "where": [
+     "portrait",
+     0,
+     45
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 155.21319408435374,
+   "regime": "3 traces captured in one process: 1x2560,4x2560,8x1280",
+   "1x2560": {
+    "burst_ms_median": 28.904702491126955,
+    "sustained_ms_median": 29.152178196419104
+   },
+   "4x2560": {
+    "burst_ms_median": 126.30849159322679,
+    "sustained_ms_median": 128.11401727694002
+   },
+   "8x1280": {
+    "burst_ms_median": 94.4152487674728,
+    "sustained_ms_median": 94.76951286196709
+   }
+  }
+ },
+ {
+  "id": "act_bfp8_qkv",
+  "tower": "vision",
+  "description": "attn_qkv output bfp8",
+  "delta": {
+   "weights": {
+    "attn_qkv": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bfp8"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "error": "RuntimeError: TT_FATAL @ /local/ttuser/gtobar/tt-metal/ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/rotary_embedding_llama_device_operation.cpp:76: input_tensor.dtype() == cos.dtype() && cos.dtype() == sin.dtype() && sin.dtype() == trans_mat.dtype() && trans_mat.dtype() == DataType::BFLOAT16\ninfo:\nAll input tensors must have dtype = bfloat16\nbacktrace:\n --- /local/ttuser/gtobar/tt-metal/ttnn/ttnn/_ttnn.so(+0x818cf2) [0x7c05f1218cf2]\n --- ttnn::experimental::prim::RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(ttnn::experimental::prim::RotaryEmbeddingLlamaParams const&, ttnn::experimental::prim::RotaryEmbeddingLlamaInputs const&)\n --- /local/ttuser/gtobar/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_12experimental4prim35RotaryEmbeddingLlamaDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES7_EEvRKNT_22operation_attributes_tERKNS9_13tensor_args_tERNS9_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSK_12MeshWorkloadEE_EEvSC_SF_SH_SM_RNSJ_13program_cache6detail12ProgramCacheERKNSR_15ProgramCacheKeyERKT0_+0x29) [0x7c05f0291c09]\n --- /local/ttuser/gtobar/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim35RotaryEmbeddingLlamaDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0xcb) [0x7c05f028eb8b]\n --- /local/ttuser/gtobar/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim35RotaryEmbeddingLlamaDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0xe8) [0x7c05f0286fe8]\n --- ttnn::prim::rotary_embedding_llama(ttnn::Tensor const&, ttnn::Tensor const&, ttnn::Tensor const&, ttnn::Tensor const&, bool, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<ttnn::ComputeKernelConfig const> const&)\n --- ttnn::experimental::rotary_embedding_llama(ttnn::Tensor const&, ttnn::Tensor const&, ttnn::Tensor const&, ttnn::Tensor const&, bool, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<ttnn::ComputeKernelConfig const>)\n --- /local/ttuser/gtobar/tt-metal/ttnn/ttnn/_ttnn.so(+0x477dd1) [0x7c05f0e77dd1]\n --- /local/ttuser/gtobar/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d9f4d) [0x7c05f0dd9f4d]\n --- python_env/bin/python(_PyObject_Call_Prepend+0x115) [0x63f7df219705]\n --- python_env/bin/python(+0x3a2496) [0x63f7df24d496]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0xa16b) [0x63f7df17b28b]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x63f7df11c372]\n --- python_env/bin/python(_PyObject_Call_Prepend+0x115) [0x63f7df219705]\n --- python_env/bin/python(+0x3a2496) [0x63f7df24d496]\n --- python_env/bin/python(+0x2fcdc2) [0x63f7df1a7dc2]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x3d6c) [0x63f7df174e8c]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x63f7df11c372]\n --- python_env/bin/python(+0x273370) [0x63f7df11e370]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x36859) [0x63f7df1a7979]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x63f7df11c372]\n --- python_env/bin/python(_PyObject_Call_Prepend+0x115) [0x63f7df219705]\n --- python_env/bin/python(+0x3a2496) [0x63f7df24d496]\n --- python_env/bin/python(+0x2fcdc2) [0x63f7df1a7dc2]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x3d6c) [0x63f7df174e8c]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x63f7df11c372]\n --- python_env/bin/python(+0x273370) [0x63f7df11e370]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x36859) [0x63f7df1a7979]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x63f7df11c372]\n --- python_env/bin/python(_PyObject_Call_Prepend+0x115) [0x63f7df219705]\n --- python_env/bin/python(+0x3a2496) [0x63f7df24d496]\n --- python_env/bin/python(+0x2fcdc2) [0x63f7df1a7dc2]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x3d6c) [0x63f7df174e8c]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x63f7df11c372]\n --- python_env/bin/python(+0x27340f) [0x63f7df11e40f]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x8507) [0x63f7df179627]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x63f7df11c372]\n --- python_env/bin/python(_PyObject_Call_Prepend+0x96) [0x63f7df219686]\n --- python_env/bin/python(+0x3a2496) [0x63f7df24d496]\n --- python_env/bin/python(+0x2fcdc2) [0x63f7df1a7dc2]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x443a) [0x63f7df17555a]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x63f7df11c372]\n --- python_env/bin/python(+0x2fcbd9) [0x63f7df1a7bd9]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x443a) [0x63f7df17555a]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x63f7df11c372]\n --- python_env/bin/python(+0x2fcbd9) [0x63f7df1a7bd9]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x443a) [0x63f7df17555a]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x63f7df11c372]\n --- python_env/bin/python(+0x2fcbd9) [0x63f7df1a7bd9]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x443a) [0x63f7df17555a]\n --- python_env/bin/python(+0x3d43a4) [0x63f7df27f3a4]\n --- python_env/bin/python(+0x409fc3) [0x63f7df2b4fc3]\n --- python_env/bin/python(+0x1b35a2) [0x63f7df05e5a2]\n --- python_env/bin/python(_PyRun_SimpleFileObject+0x109) [0x63f7df05e0d9]\n --- python_env/bin/python(_PyRun_AnyFileObject+0xa5) [0x63f7df05dad5]\n --- python_env/bin/python(+0x1bcd89) [0x63f7df067d89]\n --- python_env/bin/python(+0x1bc8f2) [0x63f7df0678f2]\n --- python_env/bin/python(Py_RunMain+0x680) [0x63f7df2c09b0]\n --- python_env/bin/python(+0x148028) [0x63f7deff3028]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7c0635029d90]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7c0635029e40]\n --- python_env/bin/python(+0x345c2b) [0x63f7df1f0c2b]\n"
+ },
+ {
+  "id": "act_bfp8_layers",
+  "tower": "vision",
+  "description": "every layer projection output bfp8",
+  "delta": {
+   "weights": {
+    "attn_qkv": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bfp8"
+    },
+    "attn_o": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bfp8"
+    },
+    "mlp_gate_up": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bfp8"
+    },
+    "mlp_down": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bfp8"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "error": "RuntimeError: TT_FATAL @ /local/ttuser/gtobar/tt-metal/ttnn/cpp/ttnn/operations/experimental/transformer/rotary_embedding_llama/device/rotary_embedding_llama_device_operation.cpp:76: input_tensor.dtype() == cos.dtype() && cos.dtype() == sin.dtype() && sin.dtype() == trans_mat.dtype() && trans_mat.dtype() == DataType::BFLOAT16\ninfo:\nAll input tensors must have dtype = bfloat16\nbacktrace:\n --- /local/ttuser/gtobar/tt-metal/ttnn/ttnn/_ttnn.so(+0x818cf2) [0x7c05f1218cf2]\n --- ttnn::experimental::prim::RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(ttnn::experimental::prim::RotaryEmbeddingLlamaParams const&, ttnn::experimental::prim::RotaryEmbeddingLlamaInputs const&)\n --- /local/ttuser/gtobar/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail30create_and_cache_mesh_workloadITkNS0_22DeviceOperationConceptENS0_26MeshDeviceOperationAdapterINS_12experimental4prim35RotaryEmbeddingLlamaDeviceOperationEEEZNS1_29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterES7_EEvRKNT_22operation_attributes_tERKNS9_13tensor_args_tERNS9_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceEEUlRNSK_12MeshWorkloadEE_EEvSC_SF_SH_SM_RNSJ_13program_cache6detail12ProgramCacheERKNSR_15ProgramCacheKeyERKT0_+0x29) [0x7c05f0291c09]\n --- /local/ttuser/gtobar/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail29launch_operation_with_adapterITkNS0_36DeviceOperationWithMeshDeviceAdapterENS0_26MeshDeviceOperationAdapterINS_12experimental4prim35RotaryEmbeddingLlamaDeviceOperationEEEEEvRKNT_22operation_attributes_tERKNS8_13tensor_args_tERNS8_21tensor_return_value_tEPN2tt8tt_metal11distributed10MeshDeviceE+0xcb) [0x7c05f028eb8b]\n --- /local/ttuser/gtobar/tt-metal/ttnn/ttnn/../../build/lib/_ttnncpp.so(_ZN4ttnn16device_operation6detail6launchITkNS0_22DeviceOperationConceptENS_12experimental4prim35RotaryEmbeddingLlamaDeviceOperationEEENT_21tensor_return_value_tERKNS6_22operation_attributes_tERKNS6_13tensor_args_tE+0xe8) [0x7c05f0286fe8]\n --- ttnn::prim::rotary_embedding_llama(ttnn::Tensor const&, ttnn::Tensor const&, ttnn::Tensor const&, ttnn::Tensor const&, bool, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<ttnn::ComputeKernelConfig const> const&)\n --- ttnn::experimental::rotary_embedding_llama(ttnn::Tensor const&, ttnn::Tensor const&, ttnn::Tensor const&, ttnn::Tensor const&, bool, std::optional<tt::tt_metal::MemoryConfig> const&, std::optional<ttnn::ComputeKernelConfig const>)\n --- /local/ttuser/gtobar/tt-metal/ttnn/ttnn/_ttnn.so(+0x477dd1) [0x7c05f0e77dd1]\n --- /local/ttuser/gtobar/tt-metal/ttnn/ttnn/_ttnn.so(+0x3d9f4d) [0x7c05f0dd9f4d]\n --- python_env/bin/python(_PyObject_Call_Prepend+0x115) [0x63f7df219705]\n --- python_env/bin/python(+0x3a2496) [0x63f7df24d496]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0xa16b) [0x63f7df17b28b]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x63f7df11c372]\n --- python_env/bin/python(_PyObject_Call_Prepend+0x115) [0x63f7df219705]\n --- python_env/bin/python(+0x3a2496) [0x63f7df24d496]\n --- python_env/bin/python(+0x2fcdc2) [0x63f7df1a7dc2]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x3d6c) [0x63f7df174e8c]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x63f7df11c372]\n --- python_env/bin/python(+0x273370) [0x63f7df11e370]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x36859) [0x63f7df1a7979]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x63f7df11c372]\n --- python_env/bin/python(_PyObject_Call_Prepend+0x115) [0x63f7df219705]\n --- python_env/bin/python(+0x3a2496) [0x63f7df24d496]\n --- python_env/bin/python(+0x2fcdc2) [0x63f7df1a7dc2]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x3d6c) [0x63f7df174e8c]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x63f7df11c372]\n --- python_env/bin/python(+0x273370) [0x63f7df11e370]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x36859) [0x63f7df1a7979]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x63f7df11c372]\n --- python_env/bin/python(_PyObject_Call_Prepend+0x115) [0x63f7df219705]\n --- python_env/bin/python(+0x3a2496) [0x63f7df24d496]\n --- python_env/bin/python(+0x2fcdc2) [0x63f7df1a7dc2]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x3d6c) [0x63f7df174e8c]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x63f7df11c372]\n --- python_env/bin/python(+0x27340f) [0x63f7df11e40f]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x8507) [0x63f7df179627]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x63f7df11c372]\n --- python_env/bin/python(_PyObject_Call_Prepend+0x96) [0x63f7df219686]\n --- python_env/bin/python(+0x3a2496) [0x63f7df24d496]\n --- python_env/bin/python(+0x2fcdc2) [0x63f7df1a7dc2]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x443a) [0x63f7df17555a]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x63f7df11c372]\n --- python_env/bin/python(+0x2fcbd9) [0x63f7df1a7bd9]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x443a) [0x63f7df17555a]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x63f7df11c372]\n --- python_env/bin/python(+0x2fcbd9) [0x63f7df1a7bd9]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x443a) [0x63f7df17555a]\n --- python_env/bin/python(_PyFunction_Vectorcall+0x202) [0x63f7df11c372]\n --- python_env/bin/python(+0x2fcbd9) [0x63f7df1a7bd9]\n --- python_env/bin/python(_PyEval_EvalFrameDefault+0x443a) [0x63f7df17555a]\n --- python_env/bin/python(+0x3d43a4) [0x63f7df27f3a4]\n --- python_env/bin/python(+0x409fc3) [0x63f7df2b4fc3]\n --- python_env/bin/python(+0x1b35a2) [0x63f7df05e5a2]\n --- python_env/bin/python(_PyRun_SimpleFileObject+0x109) [0x63f7df05e0d9]\n --- python_env/bin/python(_PyRun_AnyFileObject+0xa5) [0x63f7df05dad5]\n --- python_env/bin/python(+0x1bcd89) [0x63f7df067d89]\n --- python_env/bin/python(+0x1bc8f2) [0x63f7df0678f2]\n --- python_env/bin/python(Py_RunMain+0x680) [0x63f7df2c09b0]\n --- python_env/bin/python(+0x148028) [0x63f7deff3028]\n --- /lib/x86_64-linux-gnu/libc.so.6(+0x29d90) [0x7c0635029d90]\n --- /lib/x86_64-linux-gnu/libc.so.6(__libc_start_main+0x80) [0x7c0635029e40]\n --- python_env/bin/python(+0x345c2b) [0x63f7df1f0c2b]\n"
+ },
+ {
+  "id": "a_h2b4lofi_qkvbf16_shift2_sharded",
+  "tower": "audio",
+  "description": "bfp4 + LoFi on every group whose bfp4 screen passed (qkv, o, lconv, subsample_proj, output_proj, projector), FFN bfp8 HiFi2, QKV output bf16, shift HiFi2, sharded RMSNorm",
+  "delta": {
+   "weights": {
+    "subsample_proj": {
+     "dtype": "bfp4",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "attn_qkv": {
+     "dtype": "bfp4",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "attn_o": {
+     "dtype": "bfp4",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_up": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_down": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "lconv_start": {
+     "dtype": "bfp4",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "lconv_end": {
+     "dtype": "bfp4",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "output_proj": {
+     "dtype": "bfp4",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    },
+    "projector": {
+     "dtype": "bfp4",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   },
+   "lconv_shift": {
+    "fidelity": "HiFi2",
+    "fp32_acc": true
+   },
+   "norms": {
+    "fidelity": "HiFi4",
+    "fp32_acc": true,
+    "sharded": true
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.999131401132909,
+    "where": [
+     "short",
+     11
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9958053724708908,
+    "where": [
+     "s30",
+     "output_proj"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9792725735270377,
+    "where": [
+     "s30",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.4620938003063202,
+    "where": [
+     "s10",
+     0,
+     117
+    ]
+   },
+   "screen_pass": false,
+   "failing": [
+    "soft_pcc 0.97927 < 0.99 at ['s30', 0]"
+   ]
+  },
+  "perf": {
+   "rank_ms": 26.940188114531338,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 7.292430102825165,
+    "sustained_ms_median": 7.2886820382824755
+   },
+   "1x768": {
+    "burst_ms_median": 11.798476264812052,
+    "sustained_ms_median": 11.795399582204153
+   },
+   "4x256": {
+    "burst_ms_median": 15.141711849719286,
+    "sustained_ms_median": 15.137258239767768
+   }
+  },
+  "probe": {
+   "summary": {
+    "min_soft_pcc": 0.9731542847616027,
+    "min_soft_pcc_at": "brown_noise_4s",
+    "min_token_cos": 0.4611439108848572,
+    "min_token_cos_at": "brown_noise_4s",
+    "min_embedding_cos": 0.9798457622528076,
+    "min_embedding_cos_at": "clip3_full",
+    "full_min_embedding_cos": 0.9914957284927368,
+    "n_probe": 17,
+    "pass": false
+   },
+   "retrieval": {
+    "agree": true,
+    "tt_margin_min": 0.002634406089782715,
+    "max_abs_diff": 0.00869452953338623
+   }
+  }
+ },
+ {
+  "id": "a_h2b8_qkvbf16_shift2_sharded",
+  "tower": "audio",
+  "description": "bfp8 weights + HiFi2 projections + QKV output bf16 + shift HiFi2 + sharded RMSNorm",
+  "delta": {
+   "weights": {
+    "subsample_proj": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "attn_qkv": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "attn_o": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_up": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_down": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "lconv_start": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "lconv_end": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "output_proj": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    },
+    "projector": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   },
+   "lconv_shift": {
+    "fidelity": "HiFi2",
+    "fp32_acc": true
+   },
+   "norms": {
+    "fidelity": "HiFi4",
+    "fp32_acc": true,
+    "sharded": true
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.999961904397917,
+    "where": [
+     "b2_s10_s2",
+     11
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9998554328838437,
+    "where": [
+     "b2_s10_s2",
+     "attn11"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9966538090580058,
+    "where": [
+     "short",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.6969078183174133,
+    "where": [
+     "s30",
+     0,
+     559
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 27.33965429943055,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 7.311294111423194,
+    "sustained_ms_median": 7.306587262215411
+   },
+   "1x768": {
+    "burst_ms_median": 11.954008904285729,
+    "sustained_ms_median": 11.950116783380508
+   },
+   "4x256": {
+    "burst_ms_median": 15.38564539514482,
+    "sustained_ms_median": 15.379125617214084
+   }
+  },
+  "probe": {
+   "summary": {
+    "min_soft_pcc": 0.9911420236875926,
+    "min_soft_pcc_at": "tone_1khz_1.5s",
+    "min_token_cos": 0.6459596157073975,
+    "min_token_cos_at": "concat_rev_20s",
+    "min_embedding_cos": 0.9970199465751648,
+    "min_embedding_cos_at": "tone_1khz_1.5s",
+    "full_min_embedding_cos": 0.9986699223518372,
+    "n_probe": 17,
+    "pass": true
+   },
+   "retrieval": {
+    "agree": true,
+    "tt_margin_min": 0.003064870834350586,
+    "max_abs_diff": 0.0046730637550354
+   }
+  },
+  "precision": {
+   "weights": {
+    "subsample_conv": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "subsample_proj": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "attn_qkv": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "attn_o": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_up": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_down": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "lconv_start": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "lconv_end": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "output_proj": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    },
+    "projector": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   },
+   "layer_exceptions": [],
+   "attention": {
+    "fidelity": "HiFi4",
+    "fp32_acc": true
+   },
+   "lconv_shift": {
+    "fidelity": "HiFi2",
+    "fp32_acc": true
+   },
+   "norms": {
+    "fidelity": "HiFi4",
+    "fp32_acc": true,
+    "sharded": true
+   }
+  },
+  "construction": {
+   "layers": [
+    {
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     "attention_fidelity": "HiFi4",
+     "attn_o": {
+      "dtype": "bfp8",
+      "fidelity": "HiFi2",
+      "fp32_acc": true,
+      "out": "BFLOAT16",
+      "out_dtype": "bf16",
+      "weight": "BFLOAT8_B"
+     },
+     "attn_qkv": {
+      "dtype": "bfp8",
+      "fidelity": "HiFi2",
+      "fp32_acc": true,
+      "out_dtype": "bf16",
+      "weight": "BFLOAT8_B"
+     },
+     "ffn_down": {
+      "dtype": "bfp8",
+      "fidelity": "HiFi2",
+      "fp32_acc": true,
+      "out": "BFLOAT16",
+      "out_dtype": "bf16",
+      "weight": "BFLOAT8_B"
+     },
+     "ffn_up": {
+      "dtype": "bfp8",
+      "fidelity": "HiFi2",
+      "fp32_acc": true,
+      "out": "BFLOAT16",
+      "out_dtype": "bf16",
+      "weight": "BFLOAT8_B"
+     },
+     "lconv_end": {
+      "dtype": "bfp8",
+      "fidelity": "HiFi2",
+      "fp32_acc": true,
+      "out": "BFLOAT16",
+      "out_dtype": "bf16",
+      "weight": "BFLOAT8_B"
+     },
+     "lconv_shift_fidelity": "HiFi2",
+     "lconv_start": {
+      "dtype": "bfp8",
+      "fidelity": "HiFi2",
+      "fp32_acc": true,
+      "out": "BFLOAT16",
+      "out_dtype": "bf16",
+      "weight": "BFLOAT8_B"
+     },
+     "norm_fidelity": "HiFi4",
+     "norm_sharded": true
+    }
+   ],
+   "subsample": {
+    "conv": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "proj_weight": "BFLOAT8_B",
+    "proj": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "act_dtype": "BFLOAT16"
+   },
+   "output_proj": {
+    "weight": "BFLOAT8_B",
+    "dtype": "bfp8",
+    "fidelity": "HiFi2",
+    "fp32_acc": true,
+    "out_dtype": "fp32"
+   },
+   "projector": {
+    "weight": "BFLOAT8_B",
+    "dtype": "bfp8",
+    "fidelity": "HiFi2",
+    "fp32_acc": true,
+    "out_dtype": "bf16"
+   }
+  }
+ },
+ {
+  "id": "a_h2_qkvbf16_shift2_sharded",
+  "tower": "audio",
+  "description": "HiFi2 projections + QKV output bf16 + shift HiFi2 + sharded RMSNorm",
+  "delta": {
+   "weights": {
+    "subsample_proj": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "attn_qkv": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "attn_o": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_up": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_down": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "lconv_start": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "lconv_end": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "output_proj": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    },
+    "projector": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   },
+   "lconv_shift": {
+    "fidelity": "HiFi2",
+    "fp32_acc": true
+   },
+   "norms": {
+    "fidelity": "HiFi4",
+    "fp32_acc": true,
+    "sharded": true
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999704015425094,
+    "where": [
+     "short",
+     4
+    ]
+   },
+   "module_pcc": {
+    "value": 0.999871013748432,
+    "where": [
+     "b2_s10_s2",
+     "attn11"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.996650774324924,
+    "where": [
+     "short",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.8038824796676636,
+    "where": [
+     "s10",
+     0,
+     126
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 27.703344100154936,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 7.814930845052004,
+    "sustained_ms_median": 7.8112735334998336
+   },
+   "1x768": {
+    "burst_ms_median": 12.207752000540495,
+    "sustained_ms_median": 12.204277928399502
+   },
+   "4x256": {
+    "burst_ms_median": 15.495592099614441,
+    "sustained_ms_median": 15.496520437106179
+   }
+  },
+  "probe": {
+   "summary": {
+    "min_soft_pcc": 0.9964481826580821,
+    "min_soft_pcc_at": "silence1s_speech2s",
+    "min_token_cos": 0.7035727500915527,
+    "min_token_cos_at": "concat_rev_20s",
+    "min_embedding_cos": 0.9963333010673523,
+    "min_embedding_cos_at": "tone_1khz_1.5s",
+    "full_min_embedding_cos": 0.9987243413925171,
+    "n_probe": 17,
+    "pass": true
+   },
+   "retrieval": {
+    "agree": true,
+    "tt_margin_min": 0.0004157423973083496,
+    "max_abs_diff": 0.006110012531280518
+   }
+  }
+ },
+ {
+  "id": "a_h2_qkvbf16_shift2",
+  "tower": "audio",
+  "description": "HiFi2 projections + QKV output bf16 + lconv shift HiFi2",
+  "delta": {
+   "weights": {
+    "subsample_proj": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "attn_qkv": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "attn_o": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_up": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_down": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "lconv_start": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "lconv_end": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "output_proj": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    },
+    "projector": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   },
+   "lconv_shift": {
+    "fidelity": "HiFi2",
+    "fp32_acc": true
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999722646115811,
+    "where": [
+     "b2_s10_s2",
+     11
+    ]
+   },
+   "module_pcc": {
+    "value": 0.999871013748432,
+    "where": [
+     "b2_s10_s2",
+     "attn11"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9968731340044281,
+    "where": [
+     "short",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.8075171709060669,
+    "where": [
+     "s30",
+     0,
+     267
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 27.928899344988167,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.055771864019334,
+    "sustained_ms_median": 8.051610031034997
+   },
+   "1x768": {
+    "burst_ms_median": 12.431908445432782,
+    "sustained_ms_median": 12.428492975110808
+   },
+   "4x256": {
+    "burst_ms_median": 15.496990899555385,
+    "sustained_ms_median": 15.494240438177561
+   }
+  },
+  "probe": {
+   "summary": {
+    "min_soft_pcc": 0.9937264156130337,
+    "min_soft_pcc_at": "silence1s_speech2s",
+    "min_token_cos": 0.6665588021278381,
+    "min_token_cos_at": "concat_rev_20s",
+    "min_embedding_cos": 0.9967554807662964,
+    "min_embedding_cos_at": "tone_1khz_1.5s",
+    "full_min_embedding_cos": 0.9986246228218079,
+    "n_probe": 17,
+    "pass": true
+   },
+   "retrieval": {
+    "agree": true,
+    "tt_margin_min": 0.00021886825561523438,
+    "max_abs_diff": 0.004496097564697266
+   }
+  }
+ },
+ {
+  "id": "a_h2_qkvbf16",
+  "tower": "audio",
+  "description": "every projection HiFi2 + fused QKV output bf16",
+  "delta": {
+   "weights": {
+    "subsample_proj": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "attn_qkv": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "attn_o": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_up": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_down": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "lconv_start": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "lconv_end": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "output_proj": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    },
+    "projector": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999722646115811,
+    "where": [
+     "b2_s10_s2",
+     11
+    ]
+   },
+   "module_pcc": {
+    "value": 0.999871013748432,
+    "where": [
+     "b2_s10_s2",
+     "attn11"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9968731340044281,
+    "where": [
+     "short",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.8075171709060669,
+    "where": [
+     "s30",
+     0,
+     267
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 28.080258588306606,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.074317616410553,
+    "sustained_ms_median": 8.06997850335933
+   },
+   "1x768": {
+    "burst_ms_median": 12.58261224720627,
+    "sustained_ms_median": 12.58108373183538
+   },
+   "4x256": {
+    "burst_ms_median": 15.497646341100335,
+    "sustained_ms_median": 15.499219177096771
+   }
+  },
+  "probe": {
+   "summary": {
+    "min_soft_pcc": 0.9937264156130337,
+    "min_soft_pcc_at": "silence1s_speech2s",
+    "min_token_cos": 0.6665588021278381,
+    "min_token_cos_at": "concat_rev_20s",
+    "min_embedding_cos": 0.9967554807662964,
+    "min_embedding_cos_at": "tone_1khz_1.5s",
+    "full_min_embedding_cos": 0.9986246228218079,
+    "n_probe": 17,
+    "pass": true
+   },
+   "retrieval": {
+    "agree": true,
+    "tt_margin_min": 0.00021886825561523438,
+    "max_abs_diff": 0.004496097564697266
+   }
+  }
+ },
+ {
+  "id": "a_h2_shift2_sharded",
+  "tower": "audio",
+  "description": "HiFi2 projections + shift HiFi2 + sharded RMSNorm (QKV output fp32)",
+  "delta": {
+   "weights": {
+    "subsample_proj": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "attn_qkv": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    },
+    "attn_o": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_up": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_down": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "lconv_start": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "lconv_end": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "output_proj": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    },
+    "projector": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   },
+   "lconv_shift": {
+    "fidelity": "HiFi2",
+    "fp32_acc": true
+   },
+   "norms": {
+    "fidelity": "HiFi4",
+    "fp32_acc": true,
+    "sharded": true
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999822272673131,
+    "where": [
+     "s30",
+     11
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999204820157572,
+    "where": [
+     "s10",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9961543231681882,
+    "where": [
+     "short",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7540438175201416,
+    "where": [
+     "s30",
+     0,
+     560
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 29.981816094368696,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.343654149211943,
+    "sustained_ms_median": 8.339806155473326
+   },
+   "1x768": {
+    "burst_ms_median": 13.01162550225854,
+    "sustained_ms_median": 13.003939341591751
+   },
+   "4x256": {
+    "burst_ms_median": 16.970190592110157,
+    "sustained_ms_median": 16.969630341257222
+   }
+  },
+  "probe": {
+   "summary": {
+    "min_soft_pcc": 0.9913911823872401,
+    "min_soft_pcc_at": "tone_1khz_1.5s",
+    "min_token_cos": 0.7095357179641724,
+    "min_token_cos_at": "concat_rev_20s",
+    "min_embedding_cos": 0.995993435382843,
+    "min_embedding_cos_at": "tone_1khz_1.5s",
+    "full_min_embedding_cos": 0.9984612464904785,
+    "n_probe": 17,
+    "pass": true
+   },
+   "retrieval": {
+    "agree": true,
+    "tt_margin_min": 0.0009045004844665527,
+    "max_abs_diff": 0.005213141441345215
+   }
+  }
+ },
+ {
+  "id": "hifi2_bfp8_all",
+  "tower": "audio",
+  "description": "every projection bfp8 + HiFi2",
+  "delta": {
+   "weights": {
+    "subsample_proj": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "attn_qkv": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    },
+    "attn_o": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_up": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_down": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "lconv_start": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "lconv_end": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "output_proj": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    },
+    "projector": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999715477789952,
+    "where": [
+     "s30",
+     11
+    ]
+   },
+   "module_pcc": {
+    "value": 0.999913993596347,
+    "where": [
+     "s10",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9952557222187071,
+    "where": [
+     "short",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7709895372390747,
+    "where": [
+     "s30",
+     0,
+     267
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 30.0679347012192,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.057970996014774,
+    "sustained_ms_median": 8.054625010117888
+   },
+   "1x768": {
+    "burst_ms_median": 13.234405242837965,
+    "sustained_ms_median": 13.230835380181011
+   },
+   "4x256": {
+    "burst_ms_median": 16.833529458381236,
+    "sustained_ms_median": 16.834800953066416
+   }
+  },
+  "probe": {
+   "summary": {
+    "min_soft_pcc": 0.9970780246906524,
+    "min_soft_pcc_at": "tone_1khz_1.5s",
+    "min_token_cos": 0.740532398223877,
+    "min_token_cos_at": "clip0_x3_clipped",
+    "min_embedding_cos": 0.9970723390579224,
+    "min_embedding_cos_at": "tone_1khz_1.5s",
+    "full_min_embedding_cos": 0.9987586736679077,
+    "n_probe": 17,
+    "pass": true
+   },
+   "retrieval": {
+    "agree": true,
+    "tt_margin_min": 0.004085838794708252,
+    "max_abs_diff": 0.005105078220367432
+   }
+  }
+ },
+ {
+  "id": "hifi2_all",
+  "tower": "audio",
+  "description": "every audio projection HiFi2 (E5c E6 screen)",
+  "delta": {
+   "weights": {
+    "subsample_proj": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "attn_qkv": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    },
+    "attn_o": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_up": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_down": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "lconv_start": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "lconv_end": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "output_proj": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    },
+    "projector": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.999981681691826,
+    "where": [
+     "s30",
+     11
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999204820157572,
+    "where": [
+     "s10",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.997436958367172,
+    "where": [
+     "short",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7996358275413513,
+    "where": [
+     "s30",
+     0,
+     267
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 30.436074058525264,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.620183914899826,
+    "sustained_ms_median": 8.616600051048518
+   },
+   "1x768": {
+    "burst_ms_median": 13.469759398140013,
+    "sustained_ms_median": 13.463320487455741
+   },
+   "4x256": {
+    "burst_ms_median": 16.96631466038525,
+    "sustained_ms_median": 16.970608282876626
+   }
+  },
+  "probe": {
+   "summary": {
+    "min_soft_pcc": 0.9941829238321632,
+    "min_soft_pcc_at": "tone_1khz_1.5s",
+    "min_token_cos": 0.716578483581543,
+    "min_token_cos_at": "clip0_x3_clipped",
+    "min_embedding_cos": 0.9976809024810791,
+    "min_embedding_cos_at": "tone_1khz_1.5s",
+    "full_min_embedding_cos": 0.9986779689788818,
+    "n_probe": 17,
+    "pass": false
+   },
+   "retrieval": {
+    "agree": false,
+    "tt_margin_min": 0.0006971359252929688,
+    "max_abs_diff": 0.004479587078094482
+   }
+  }
+ },
+ {
+  "id": "lofi_ffn",
+  "tower": "audio",
+  "description": "ffn_up + ffn_down LoFi",
+  "delta": {
+   "weights": {
+    "ffn_up": {
+     "dtype": "bf16",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_down": {
+     "dtype": "bf16",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9998586781916616,
+    "where": [
+     "s30",
+     11
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9998376318628142,
+    "where": [
+     "short",
+     "ffn10"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9850355339514406,
+    "where": [
+     "short",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.8959369659423828,
+    "where": [
+     "s30",
+     0,
+     559
+    ]
+   },
+   "screen_pass": false,
+   "failing": [
+    "soft_pcc 0.98504 < 0.99 at ['short', 0]"
+   ]
+  },
+  "perf": {
+   "rank_ms": 30.887458380311728,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.634783490560949,
+    "sustained_ms_median": 8.630785283584126
+   },
+   "1x768": {
+    "burst_ms_median": 13.676718482747674,
+    "sustained_ms_median": 13.669277541339397
+   },
+   "4x256": {
+    "burst_ms_median": 17.210739897564054,
+    "sustained_ms_median": 17.200790527651364
+   }
+  }
+ },
+ {
+  "id": "hifi2_ffn",
+  "tower": "audio",
+  "description": "ffn_up+ffn_down HiFi2",
+  "delta": {
+   "weights": {
+    "ffn_up": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_down": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999858506195253,
+    "where": [
+     "s30",
+     11
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999212627981203,
+    "where": [
+     "s10",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9981272503210078,
+    "where": [
+     "s10",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7399137020111084,
+    "where": [
+     "s10",
+     0,
+     126
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 31.293832580558956,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.658348768949509,
+    "sustained_ms_median": 8.65539569795304
+   },
+   "1x768": {
+    "burst_ms_median": 13.824856537394226,
+    "sustained_ms_median": 13.822401899637448
+   },
+   "4x256": {
+    "burst_ms_median": 17.46897604316473,
+    "sustained_ms_median": 17.469107326777543
+   }
+  }
+ },
+ {
+  "id": "qkv_out_bf16",
+  "tower": "audio",
+  "description": "fused QKV output bf16 (was fp32)",
+  "delta": {
+   "weights": {
+    "attn_qkv": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999796477864406,
+    "where": [
+     "b2_s10_s2",
+     11
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9998727047125086,
+    "where": [
+     "b2_s10_s2",
+     "attn11"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9972664379489738,
+    "where": [
+     "short",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7374238967895508,
+    "where": [
+     "s10",
+     0,
+     126
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 31.847066525369883,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.175889914855361,
+    "sustained_ms_median": 8.171934252757518
+   },
+   "1x768": {
+    "burst_ms_median": 14.104108116589487,
+    "sustained_ms_median": 14.102763821423617
+   },
+   "4x256": {
+    "burst_ms_median": 17.742958408780396,
+    "sustained_ms_median": 17.745582519897393
+   }
+  }
+ },
+ {
+  "id": "act_bfp8_lconv_start",
+  "tower": "audio",
+  "description": "lconv_start output bfp8",
+  "delta": {
+   "weights": {
+    "lconv_start": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bfp8"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.999975642869765,
+    "where": [
+     "s30",
+     11
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999212627981203,
+    "where": [
+     "s10",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9954508140590679,
+    "where": [
+     "tone3",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7632341980934143,
+    "where": [
+     "s30",
+     0,
+     267
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 33.434838452376425,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.68343694601208,
+    "sustained_ms_median": 8.680522644913994
+   },
+   "1x768": {
+    "burst_ms_median": 14.850087999366224,
+    "sustained_ms_median": 14.844415709376335
+   },
+   "4x256": {
+    "burst_ms_median": 18.5847504530102,
+    "sustained_ms_median": 18.58604924636893
+   }
+  }
+ },
+ {
+  "id": "hifi2_qkv",
+  "tower": "audio",
+  "description": "attn_qkv HiFi2",
+  "delta": {
+   "weights": {
+    "attn_qkv": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999862859575147,
+    "where": [
+     "short",
+     2
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999212627981203,
+    "where": [
+     "s10",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9976616001133803,
+    "where": [
+     "short",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.747904360294342,
+    "where": [
+     "s10",
+     0,
+     126
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 33.592725242488086,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.705402095802128,
+    "sustained_ms_median": 8.700831725565326
+   },
+   "1x768": {
+    "burst_ms_median": 14.750865451060236,
+    "sustained_ms_median": 14.75283709622108
+   },
+   "4x256": {
+    "burst_ms_median": 18.84185979142785,
+    "sustained_ms_median": 18.84337292418261
+   }
+  }
+ },
+ {
+  "id": "hifi2_lconv",
+  "tower": "audio",
+  "description": "lconv_start+lconv_end HiFi2",
+  "delta": {
+   "weights": {
+    "lconv_start": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "lconv_end": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999856834084403,
+    "where": [
+     "short",
+     2
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999212627981203,
+    "where": [
+     "s10",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9979700893847644,
+    "where": [
+     "tone3",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7701987624168396,
+    "where": [
+     "s30",
+     0,
+     560
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 33.600024809129536,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.695365255698562,
+    "sustained_ms_median": 8.691992534887651
+   },
+   "1x768": {
+    "burst_ms_median": 14.76746485568583,
+    "sustained_ms_median": 14.76435411703026
+   },
+   "4x256": {
+    "burst_ms_median": 18.832559953443706,
+    "sustained_ms_median": 18.82858238406951
+   }
+  }
+ },
+ {
+  "id": "norms_sharded",
+  "tower": "audio",
+  "description": "block-sharded RMSNorm for <= 24 tile rows (E5c c21)",
+  "delta": {
+   "norms": {
+    "fidelity": "HiFi4",
+    "fp32_acc": true,
+    "sharded": true
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999862338745372,
+    "where": [
+     "short",
+     2
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999212627981203,
+    "where": [
+     "s10",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9982273678343879,
+    "where": [
+     "s30",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.749354362487793,
+    "where": [
+     "s30",
+     0,
+     559
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 33.679277705959976,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.416616404429078,
+    "sustained_ms_median": 8.412016090005636
+   },
+   "1x768": {
+    "burst_ms_median": 14.617586205713451,
+    "sustained_ms_median": 14.61903827593607
+   },
+   "4x256": {
+    "burst_ms_median": 19.061691500246525,
+    "sustained_ms_median": 19.065552641852545
+   }
+  }
+ },
+ {
+  "id": "bfp8w_all",
+  "tower": "audio",
+  "description": "every audio projection weight bfp8 (HiFi4)",
+  "delta": {
+   "weights": {
+    "subsample_proj": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "attn_qkv": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    },
+    "attn_o": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_up": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_down": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "lconv_start": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "lconv_end": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "output_proj": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    },
+    "projector": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999782722566496,
+    "where": [
+     "b2_s10_s2",
+     11
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999149256278321,
+    "where": [
+     "s10",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9989160447413489,
+    "where": [
+     "s30",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.767982542514801,
+    "where": [
+     "s30",
+     0,
+     267
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 33.78866303246468,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.146451460197568,
+    "sustained_ms_median": 8.142936281333474
+   },
+   "1x768": {
+    "burst_ms_median": 14.813978248275816,
+    "sustained_ms_median": 14.8144729509212
+   },
+   "4x256": {
+    "burst_ms_median": 18.974684784188867,
+    "sustained_ms_median": 18.973485295531116
+   }
+  }
+ },
+ {
+  "id": "shift_lofi",
+  "tower": "audio",
+  "description": "lconv shift matmuls LoFi (E5c c25)",
+  "delta": {
+   "lconv_shift": {
+    "fidelity": "LoFi",
+    "fp32_acc": true
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999799269619605,
+    "where": [
+     "s30",
+     11
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999212627981203,
+    "where": [
+     "s10",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9956159326319678,
+    "where": [
+     "short",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7023727297782898,
+    "where": [
+     "s30",
+     0,
+     559
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 33.79816764499992,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.681688993237913,
+    "sustained_ms_median": 8.67787589113293
+   },
+   "1x768": {
+    "burst_ms_median": 14.716719905845821,
+    "sustained_ms_median": 14.716049384251974
+   },
+   "4x256": {
+    "burst_ms_median": 19.0814477391541,
+    "sustained_ms_median": 19.081673131157192
+   }
+  }
+ },
+ {
+  "id": "shift_hifi2",
+  "tower": "audio",
+  "description": "lconv shift matmuls HiFi2",
+  "delta": {
+   "lconv_shift": {
+    "fidelity": "HiFi2",
+    "fp32_acc": true
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999862928251025,
+    "where": [
+     "short",
+     2
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999212627981203,
+    "where": [
+     "s10",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9976869320991747,
+    "where": [
+     "tone3",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7726108431816101,
+    "where": [
+     "s30",
+     0,
+     267
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 33.83820450399071,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.689229865558445,
+    "sustained_ms_median": 8.686986616487767
+   },
+   "1x768": {
+    "burst_ms_median": 14.769667549990118,
+    "sustained_ms_median": 14.76633651550896
+   },
+   "4x256": {
+    "burst_ms_median": 19.068536954000592,
+    "sustained_ms_median": 19.069851817897497
+   }
+  }
+ },
+ {
+  "id": "bfp8_ffn",
+  "tower": "audio",
+  "description": "ffn_up+ffn_down bfp8 weights",
+  "delta": {
+   "weights": {
+    "ffn_up": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_down": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999821273106456,
+    "where": [
+     "s30",
+     11
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999212627981203,
+    "where": [
+     "s10",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.997863193703479,
+    "where": [
+     "short",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7595455646514893,
+    "where": [
+     "s10",
+     0,
+     126
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 33.85842186398804,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.32503754645586,
+    "sustained_ms_median": 8.322710344671375
+   },
+   "1x768": {
+    "burst_ms_median": 14.851684169843793,
+    "sustained_ms_median": 14.847791930660605
+   },
+   "4x256": {
+    "burst_ms_median": 19.00673769414425,
+    "sustained_ms_median": 19.009570089670326
+   }
+  }
+ },
+ {
+  "id": "hifi2_o",
+  "tower": "audio",
+  "description": "attn_o HiFi2",
+  "delta": {
+   "weights": {
+    "attn_o": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999862757288277,
+    "where": [
+     "short",
+     2
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999212627981203,
+    "where": [
+     "s10",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9980252000679487,
+    "where": [
+     "tone3",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7466015815734863,
+    "where": [
+     "s10",
+     0,
+     126
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 33.89941551722586,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.7105892598629,
+    "sustained_ms_median": 8.70685838162899
+   },
+   "1x768": {
+    "burst_ms_median": 14.881650963798165,
+    "sustained_ms_median": 14.879364129155874
+   },
+   "4x256": {
+    "burst_ms_median": 19.017764553427696,
+    "sustained_ms_median": 19.014923075118507
+   }
+  }
+ },
+ {
+  "id": "norms_hifi2",
+  "tower": "audio",
+  "description": "norms HiFi2",
+  "delta": {
+   "norms": {
+    "fidelity": "HiFi2",
+    "fp32_acc": true,
+    "sharded": false
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999629967753261,
+    "where": [
+     "s30",
+     11
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9984132077832054,
+    "where": [
+     "s10",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9934206673419346,
+    "where": [
+     "s10",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.4354283809661865,
+    "where": [
+     "s30",
+     0,
+     266
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 33.932343358173966,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.696887851692736,
+    "sustained_ms_median": 8.693617202753071
+   },
+   "1x768": {
+    "burst_ms_median": 14.887742302380502,
+    "sustained_ms_median": 14.889509631320834
+   },
+   "4x256": {
+    "burst_ms_median": 19.044601055793464,
+    "sustained_ms_median": 19.040020242428934
+   }
+  }
+ },
+ {
+  "id": "bfp8_qkv",
+  "tower": "audio",
+  "description": "attn_qkv bfp8 weights",
+  "delta": {
+   "weights": {
+    "attn_qkv": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999862810430042,
+    "where": [
+     "short",
+     2
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999212627981203,
+    "where": [
+     "s10",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9981704949504133,
+    "where": [
+     "s10",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7440764307975769,
+    "where": [
+     "s10",
+     0,
+     126
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 33.94796806387603,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.632936351932585,
+    "sustained_ms_median": 8.62945927134742
+   },
+   "1x768": {
+    "burst_ms_median": 14.89601000212133,
+    "sustained_ms_median": 14.895631107501686
+   },
+   "4x256": {
+    "burst_ms_median": 19.051958061754704,
+    "sustained_ms_median": 19.051040086942987
+   }
+  }
+ },
+ {
+  "id": "bfp8_lconv",
+  "tower": "audio",
+  "description": "lconv_start+lconv_end bfp8 weights",
+  "delta": {
+   "weights": {
+    "lconv_start": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "lconv_end": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999847977831232,
+    "where": [
+     "short",
+     2
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999212627981203,
+    "where": [
+     "s10",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9968459980793927,
+    "where": [
+     "short",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7580192685127258,
+    "where": [
+     "s10",
+     0,
+     126
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 33.9524338953197,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.638507220894098,
+    "sustained_ms_median": 8.634278241200427
+   },
+   "1x768": {
+    "burst_ms_median": 14.900034596212208,
+    "sustained_ms_median": 14.901017197407782
+   },
+   "4x256": {
+    "burst_ms_median": 19.052399299107492,
+    "sustained_ms_median": 19.058196256176018
+   }
+  }
+ },
+ {
+  "id": "hifi2_proj",
+  "tower": "audio",
+  "description": "output_proj+projector HiFi2",
+  "delta": {
+   "weights": {
+    "output_proj": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    },
+    "projector": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999862928251025,
+    "where": [
+     "short",
+     2
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999212627981203,
+    "where": [
+     "s10",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9976819870176131,
+    "where": [
+     "tone3",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7723408937454224,
+    "where": [
+     "s30",
+     0,
+     267
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 33.95704615395516,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.715655002743006,
+    "sustained_ms_median": 8.711271697308781
+   },
+   "1x768": {
+    "burst_ms_median": 14.905886352062225,
+    "sustained_ms_median": 14.903924376703799
+   },
+   "4x256": {
+    "burst_ms_median": 19.051159801892936,
+    "sustained_ms_median": 19.05322352495904
+   }
+  }
+ },
+ {
+  "id": "bfp8_sub",
+  "tower": "audio",
+  "description": "subsample_proj bfp8 weights",
+  "delta": {
+   "weights": {
+    "subsample_proj": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999862928251025,
+    "where": [
+     "short",
+     2
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999149256278321,
+    "where": [
+     "s10",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9978253158193431,
+    "where": [
+     "tone3",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.764404833316803,
+    "where": [
+     "s10",
+     0,
+     126
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 33.96519615780562,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.715181448496878,
+    "sustained_ms_median": 8.712717505215211
+   },
+   "1x768": {
+    "burst_ms_median": 14.910470810718834,
+    "sustained_ms_median": 14.91458673030138
+   },
+   "4x256": {
+    "burst_ms_median": 19.054725347086787,
+    "sustained_ms_median": 19.060948254683844
+   }
+  }
+ },
+ {
+  "id": "bfp8_proj",
+  "tower": "audio",
+  "description": "output_proj+projector bfp8 weights",
+  "delta": {
+   "weights": {
+    "output_proj": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    },
+    "projector": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999862928251025,
+    "where": [
+     "short",
+     2
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999212627981203,
+    "where": [
+     "s10",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9976686777832259,
+    "where": [
+     "tone3",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7730427384376526,
+    "where": [
+     "s30",
+     0,
+     267
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 33.968265377916396,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.713159407489002,
+    "sustained_ms_median": 8.709006701855985
+   },
+   "1x768": {
+    "burst_ms_median": 14.912228845059872,
+    "sustained_ms_median": 14.912711530923843
+   },
+   "4x256": {
+    "burst_ms_median": 19.056036532856524,
+    "sustained_ms_median": 19.063498926325103
+   }
+  }
+ },
+ {
+  "id": "act_bfp8_ffn_up",
+  "tower": "audio",
+  "description": "ffn_up output bfp8",
+  "delta": {
+   "weights": {
+    "ffn_up": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bfp8"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999646066460728,
+    "where": [
+     "s30",
+     11
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999212627981203,
+    "where": [
+     "s10",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.995139659420761,
+    "where": [
+     "tone3",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7313410043716431,
+    "where": [
+     "s30",
+     0,
+     267
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 33.96871087606996,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.715246059000492,
+    "sustained_ms_median": 8.711504081242479
+   },
+   "1x768": {
+    "burst_ms_median": 14.91100094281137,
+    "sustained_ms_median": 14.918085429817438
+   },
+   "4x256": {
+    "burst_ms_median": 19.057709933258593,
+    "sustained_ms_median": 19.055010840440026
+   }
+  }
+ },
+ {
+  "id": "attn_hifi2",
+  "tower": "audio",
+  "description": "band-attention block matmuls HiFi2",
+  "delta": {
+   "attention": {
+    "fidelity": "HiFi2",
+    "fp32_acc": true
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999884143372368,
+    "where": [
+     "short",
+     2
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999212627981203,
+    "where": [
+     "s10",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9976017389372457,
+    "where": [
+     "s10",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7172671556472778,
+    "where": [
+     "s10",
+     0,
+     117
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 33.97202349733561,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.710389584302902,
+    "sustained_ms_median": 8.706446284926388
+   },
+   "1x768": {
+    "burst_ms_median": 14.911981206387281,
+    "sustained_ms_median": 14.91047223098576
+   },
+   "4x256": {
+    "burst_ms_median": 19.06004229094833,
+    "sustained_ms_median": 19.062776757308686
+   }
+  }
+ },
+ {
+  "id": "base",
+  "tower": "audio",
+  "description": "E5c audio policy: bf16 weights, HiFi4 + fp32 acc, q/k/v fp32",
+  "delta": {},
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999862928251025,
+    "where": [
+     "short",
+     2
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999212627981203,
+    "where": [
+     "s10",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9976869320991747,
+    "where": [
+     "tone3",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7726108431816101,
+    "where": [
+     "s30",
+     0,
+     267
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 33.97382381372154,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.717855694703758,
+    "sustained_ms_median": 8.713280624159944
+   },
+   "1x768": {
+    "burst_ms_median": 14.9129111552611,
+    "sustained_ms_median": 14.913424327969551
+   },
+   "4x256": {
+    "burst_ms_median": 19.06091265846044,
+    "sustained_ms_median": 19.069487915541497
+   }
+  },
+  "probe": {
+   "summary": {
+    "min_soft_pcc": 0.9949950122295143,
+    "min_soft_pcc_at": "tone_1khz_1.5s",
+    "min_token_cos": 0.7705181837081909,
+    "min_token_cos_at": "concat_rev_20s",
+    "min_embedding_cos": 0.9960068464279175,
+    "min_embedding_cos_at": "tone_1khz_1.5s",
+    "full_min_embedding_cos": 0.9983880519866943,
+    "n_probe": 17,
+    "pass": true
+   },
+   "retrieval": {
+    "agree": true,
+    "tt_margin_min": 0.0019757747650146484,
+    "max_abs_diff": 0.005073666572570801
+   }
+  },
+  "precision": {
+   "weights": {
+    "subsample_conv": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "subsample_proj": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "attn_qkv": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    },
+    "attn_o": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_up": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_down": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "lconv_start": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "lconv_end": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "output_proj": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    },
+    "projector": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   },
+   "layer_exceptions": [],
+   "attention": {
+    "fidelity": "HiFi4",
+    "fp32_acc": true
+   },
+   "lconv_shift": {
+    "fidelity": "HiFi4",
+    "fp32_acc": true
+   },
+   "norms": {
+    "fidelity": "HiFi4",
+    "fp32_acc": true,
+    "sharded": false
+   }
+  },
+  "construction": {
+   "layers": [
+    {
+     "layers": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9,
+      10,
+      11
+     ],
+     "attention_fidelity": "HiFi4",
+     "attn_o": {
+      "dtype": "bf16",
+      "fidelity": "HiFi4",
+      "fp32_acc": true,
+      "out": "BFLOAT16",
+      "out_dtype": "bf16",
+      "weight": "BFLOAT16"
+     },
+     "attn_qkv": {
+      "dtype": "bf16",
+      "fidelity": "HiFi4",
+      "fp32_acc": true,
+      "out_dtype": "fp32",
+      "weight": "BFLOAT16"
+     },
+     "ffn_down": {
+      "dtype": "bf16",
+      "fidelity": "HiFi4",
+      "fp32_acc": true,
+      "out": "BFLOAT16",
+      "out_dtype": "bf16",
+      "weight": "BFLOAT16"
+     },
+     "ffn_up": {
+      "dtype": "bf16",
+      "fidelity": "HiFi4",
+      "fp32_acc": true,
+      "out": "BFLOAT16",
+      "out_dtype": "bf16",
+      "weight": "BFLOAT16"
+     },
+     "lconv_end": {
+      "dtype": "bf16",
+      "fidelity": "HiFi4",
+      "fp32_acc": true,
+      "out": "BFLOAT16",
+      "out_dtype": "bf16",
+      "weight": "BFLOAT16"
+     },
+     "lconv_shift_fidelity": "HiFi4",
+     "lconv_start": {
+      "dtype": "bf16",
+      "fidelity": "HiFi4",
+      "fp32_acc": true,
+      "out": "BFLOAT16",
+      "out_dtype": "bf16",
+      "weight": "BFLOAT16"
+     },
+     "norm_fidelity": "HiFi4",
+     "norm_sharded": false
+    }
+   ],
+   "subsample": {
+    "conv": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "proj_weight": "BFLOAT16",
+    "proj": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "act_dtype": "BFLOAT16"
+   },
+   "output_proj": {
+    "weight": "BFLOAT16",
+    "dtype": "bf16",
+    "fidelity": "HiFi4",
+    "fp32_acc": true,
+    "out_dtype": "fp32"
+   },
+   "projector": {
+    "weight": "BFLOAT16",
+    "dtype": "bf16",
+    "fidelity": "HiFi4",
+    "fp32_acc": true,
+    "out_dtype": "bf16"
+   }
+  }
+ },
+ {
+  "id": "bfp8_o",
+  "tower": "audio",
+  "description": "attn_o bfp8 weights",
+  "delta": {
+   "weights": {
+    "attn_o": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.999984953091408,
+    "where": [
+     "b2_s10_s2",
+     0
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999212627981203,
+    "where": [
+     "s10",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9981085342119356,
+    "where": [
+     "tone3",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7538034915924072,
+    "where": [
+     "s30",
+     0,
+     267
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 33.977027144283056,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.690903545357287,
+    "sustained_ms_median": 8.688197958521371
+   },
+   "1x768": {
+    "burst_ms_median": 14.915525051765144,
+    "sustained_ms_median": 14.915617881342769
+   },
+   "4x256": {
+    "burst_ms_median": 19.061502092517912,
+    "sustained_ms_median": 19.064504115913923
+   }
+  }
+ },
+ {
+  "id": "bfp8_conv",
+  "tower": "audio",
+  "description": "subsample conv weights bfp8",
+  "delta": {
+   "weights": {
+    "subsample_conv": {
+     "dtype": "bfp8",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999862928251025,
+    "where": [
+     "short",
+     2
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9953608000060814,
+    "where": [
+     "s10",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9870279531184023,
+    "where": [
+     "s10",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.42651045322418213,
+    "where": [
+     "s10",
+     0,
+     117
+    ]
+   },
+   "screen_pass": false,
+   "failing": [
+    "soft_pcc 0.98703 < 0.99 at ['s10', 0]"
+   ]
+  },
+  "perf": {
+   "rank_ms": 33.98069960530847,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.715193695388734,
+    "sustained_ms_median": 8.711992040124917
+   },
+   "1x768": {
+    "burst_ms_median": 14.915149891749024,
+    "sustained_ms_median": 14.914946439675987
+   },
+   "4x256": {
+    "burst_ms_median": 19.06554971355945,
+    "sustained_ms_median": 19.062244834808205
+   }
+  }
+ },
+ {
+  "id": "hifi2_sub",
+  "tower": "audio",
+  "description": "subsample_proj HiFi2",
+  "delta": {
+   "weights": {
+    "subsample_proj": {
+     "dtype": "bf16",
+     "fidelity": "HiFi2",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999862928251025,
+    "where": [
+     "short",
+     2
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9999204820157572,
+    "where": [
+     "s10",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9980686971829985,
+    "where": [
+     "short",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7669612765312195,
+    "where": [
+     "s10",
+     0,
+     126
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 34.003518149256706,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 8.716569049283862,
+    "sustained_ms_median": 8.713044155778926
+   },
+   "1x768": {
+    "burst_ms_median": 14.919749298132956,
+    "sustained_ms_median": 14.913066010922194
+   },
+   "4x256": {
+    "burst_ms_median": 19.08376885112375,
+    "sustained_ms_median": 19.08561780762214
+   }
+  }
+ },
+ {
+  "id": "act_fp32",
+  "tower": "audio",
+  "description": "fp32 activations (accuracy-up, E3 act_dtype=float32)",
+  "delta": {
+   "weights": {
+    "subsample_proj": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    },
+    "attn_o": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    },
+    "ffn_up": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    },
+    "ffn_down": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    },
+    "lconv_start": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    },
+    "lconv_end": {
+     "dtype": "bf16",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999847119534154,
+    "where": [
+     "short",
+     2
+    ]
+   },
+   "module_pcc": {
+    "value": 0.999922746221801,
+    "where": [
+     "s10",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9991756333366053,
+    "where": [
+     "s30",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7562223076820374,
+    "where": [
+     "s30",
+     0,
+     267
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  },
+  "perf": {
+   "rank_ms": 42.338368482887745,
+   "regime": "3 traces captured in one process: 1x256,1x768,4x256",
+   "1x256": {
+    "burst_ms_median": 9.14016671013087,
+    "sustained_ms_median": 9.13659537142915
+   },
+   "1x768": {
+    "burst_ms_median": 18.15170261543244,
+    "sustained_ms_median": 18.15750068280755
+   },
+   "4x256": {
+    "burst_ms_median": 24.186665867455304,
+    "sustained_ms_median": 24.189920966192837
+   }
+  }
+ },
+ {
+  "id": "bfp4_qkv",
+  "tower": "audio",
+  "description": "attn_qkv bfp4 weights",
+  "delta": {
+   "weights": {
+    "attn_qkv": {
+     "dtype": "bfp4",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.999910780884173,
+    "where": [
+     "b2_s10_s2",
+     11
+    ]
+   },
+   "module_pcc": {
+    "value": 0.999146477175858,
+    "where": [
+     "b2_s10_s2",
+     "attn11"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9965205357219488,
+    "where": [
+     "short",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.6894437670707703,
+    "where": [
+     "s30",
+     0,
+     559
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  }
+ },
+ {
+  "id": "bfp4_qkv_lofi",
+  "tower": "audio",
+  "description": "attn_qkv bfp4 weights, LoFi",
+  "delta": {
+   "weights": {
+    "attn_qkv": {
+     "dtype": "bfp4",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999103581529161,
+    "where": [
+     "b2_s10_s2",
+     11
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9991363936898224,
+    "where": [
+     "b2_s10_s2",
+     "attn11"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9959149642933127,
+    "where": [
+     "short",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.6909854412078857,
+    "where": [
+     "s30",
+     0,
+     559
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  }
+ },
+ {
+  "id": "bfp4_o",
+  "tower": "audio",
+  "description": "attn_o bfp4 weights",
+  "delta": {
+   "weights": {
+    "attn_o": {
+     "dtype": "bfp4",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9993879073094765,
+    "where": [
+     "s10",
+     0
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9974188172620687,
+    "where": [
+     "s30",
+     "attn0"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.992594939908683,
+    "where": [
+     "s10",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.4646037817001343,
+    "where": [
+     "s10",
+     0,
+     117
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  }
+ },
+ {
+  "id": "bfp4_o_lofi",
+  "tower": "audio",
+  "description": "attn_o bfp4 weights, LoFi",
+  "delta": {
+   "weights": {
+    "attn_o": {
+     "dtype": "bfp4",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9993792046898784,
+    "where": [
+     "s10",
+     0
+    ]
+   },
+   "module_pcc": {
+    "value": 0.997419730940382,
+    "where": [
+     "s30",
+     "attn0"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9908149823383253,
+    "where": [
+     "s10",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.4688357710838318,
+    "where": [
+     "s10",
+     0,
+     117
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  }
+ },
+ {
+  "id": "bfp4_ffn",
+  "tower": "audio",
+  "description": "ffn_up+ffn_down bfp4 weights",
+  "delta": {
+   "weights": {
+    "ffn_up": {
+     "dtype": "bfp4",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_down": {
+     "dtype": "bfp4",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9988794599858327,
+    "where": [
+     "s30",
+     11
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9988813500882053,
+    "where": [
+     "short",
+     "ffn20"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9797853057854999,
+    "where": [
+     "tone3",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.43681442737579346,
+    "where": [
+     "s30",
+     0,
+     266
+    ]
+   },
+   "screen_pass": false,
+   "failing": [
+    "soft_pcc 0.97979 < 0.99 at ['tone3', 0]"
+   ]
+  }
+ },
+ {
+  "id": "bfp4_ffn_lofi",
+  "tower": "audio",
+  "description": "ffn_up+ffn_down bfp4 weights, LoFi",
+  "delta": {
+   "weights": {
+    "ffn_up": {
+     "dtype": "bfp4",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "ffn_down": {
+     "dtype": "bfp4",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9988665063792841,
+    "where": [
+     "s30",
+     11
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9988889184671651,
+    "where": [
+     "short",
+     "ffn20"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9778930996239504,
+    "where": [
+     "tone3",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.43660640716552734,
+    "where": [
+     "s30",
+     0,
+     266
+    ]
+   },
+   "screen_pass": false,
+   "failing": [
+    "soft_pcc 0.97789 < 0.99 at ['tone3', 0]"
+   ]
+  }
+ },
+ {
+  "id": "bfp4_lconv",
+  "tower": "audio",
+  "description": "lconv_start+lconv_end bfp4 weights",
+  "delta": {
+   "weights": {
+    "lconv_start": {
+     "dtype": "bfp4",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "lconv_end": {
+     "dtype": "bfp4",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9992621848239639,
+    "where": [
+     "short",
+     11
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9994841608735597,
+    "where": [
+     "short",
+     "lconv11"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9926089540304626,
+    "where": [
+     "s30",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.6770221590995789,
+    "where": [
+     "s30",
+     0,
+     559
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  }
+ },
+ {
+  "id": "bfp4_lconv_lofi",
+  "tower": "audio",
+  "description": "lconv_start+lconv_end bfp4 weights, LoFi",
+  "delta": {
+   "weights": {
+    "lconv_start": {
+     "dtype": "bfp4",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    },
+    "lconv_end": {
+     "dtype": "bfp4",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9992452308146214,
+    "where": [
+     "short",
+     11
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9994822734957802,
+    "where": [
+     "short",
+     "lconv11"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9924262229548921,
+    "where": [
+     "short",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.6774029731750488,
+    "where": [
+     "s30",
+     0,
+     559
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  }
+ },
+ {
+  "id": "bfp4_sub",
+  "tower": "audio",
+  "description": "subsample_proj bfp4 weights",
+  "delta": {
+   "weights": {
+    "subsample_proj": {
+     "dtype": "bfp4",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999862928251025,
+    "where": [
+     "short",
+     2
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9979216805482444,
+    "where": [
+     "tone3",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9922568250427664,
+    "where": [
+     "short",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.46859753131866455,
+    "where": [
+     "s10",
+     0,
+     117
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  }
+ },
+ {
+  "id": "bfp4_sub_lofi",
+  "tower": "audio",
+  "description": "subsample_proj bfp4 weights, LoFi",
+  "delta": {
+   "weights": {
+    "subsample_proj": {
+     "dtype": "bfp4",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999862928251025,
+    "where": [
+     "short",
+     2
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9979222888053797,
+    "where": [
+     "tone3",
+     "subsample"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9915874043129378,
+    "where": [
+     "short",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.46772336959838867,
+    "where": [
+     "s10",
+     0,
+     117
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  }
+ },
+ {
+  "id": "bfp4_proj",
+  "tower": "audio",
+  "description": "output_proj+projector bfp4 weights",
+  "delta": {
+   "weights": {
+    "output_proj": {
+     "dtype": "bfp4",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    },
+    "projector": {
+     "dtype": "bfp4",
+     "fidelity": "HiFi4",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999862928251025,
+    "where": [
+     "short",
+     2
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9958075981264956,
+    "where": [
+     "s30",
+     "output_proj"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9924220310356652,
+    "where": [
+     "tone3",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7684322595596313,
+    "where": [
+     "s30",
+     0,
+     267
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  }
+ },
+ {
+  "id": "bfp4_proj_lofi",
+  "tower": "audio",
+  "description": "output_proj+projector bfp4 weights, LoFi",
+  "delta": {
+   "weights": {
+    "output_proj": {
+     "dtype": "bfp4",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "fp32"
+    },
+    "projector": {
+     "dtype": "bfp4",
+     "fidelity": "LoFi",
+     "fp32_acc": true,
+     "out_dtype": "bf16"
+    }
+   }
+  },
+  "commit": "c1efa1a330",
+  "accuracy": {
+   "layer_pcc": {
+    "value": 0.9999862928251025,
+    "where": [
+     "short",
+     2
+    ]
+   },
+   "module_pcc": {
+    "value": 0.9958053724708908,
+    "where": [
+     "s30",
+     "output_proj"
+    ]
+   },
+   "soft_pcc": {
+    "value": 0.9924097496420831,
+    "where": [
+     "tone3",
+     0
+    ]
+   },
+   "token_cos_min": {
+    "value": 0.7681517004966736,
+    "where": [
+     "s30",
+     0,
+     267
+    ]
+   },
+   "screen_pass": true,
+   "failing": []
+  }
  }
 ]

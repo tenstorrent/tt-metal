@@ -1,4 +1,8 @@
-# EmbeddingGemma 2 text tower: datatype sweep (E6a)
+# EmbeddingGemma 2: datatype sweep (E6a text tower, E6b vision and audio towers)
+
+Selected defaults (`selected_precision_config.json`): text `p3_qkv_gu` (E6a, below), vision
+`v_exp_bfp8w4` and audio `a_h2b8_qkvbf16_shift2_sharded` (E6b,
+[Vision and audio towers (E6b)](#vision-and-audio-towers-e6b)).
 
 ## Selected config: `p3_qkv_gu`
 
@@ -223,9 +227,9 @@ no soak (128 replays): the full loop (about 600 replays) hangs with one trace to
   selected config; `p3_qkv_gu_exp_ple_exc` in `sweep_results.json` shows one).
 - `text.sdpa`: fidelity, fp32_acc, exp_approx. `text.norms`: fidelity, fp32_acc (every text
   RMSNorm). `text.residual_dtype`, `text.mask_dtype`.
-- `vision`, `audio`: the current tower policies, recorded only; E6b wires them. The two towers keep
-  their hard-coded E5b / E5c policies in E6a (the shared `tt/linear.py` / `tt/rms_norm.py`
-  arguments default to the old behaviour).
+- `vision`, `audio`: the tower policies, consumed by the tower construction paths since E6b
+  (schema and results: [Vision and audio towers (E6b)](#vision-and-audio-towers-e6b)). In E6a they
+  were recorded only.
 - `kv_cache_dtype`, `ccl_dtype`, `logits_dtype`, `sampling`: "n/a: encoder, single chip".
 - Fixed, not swept: token-embedding table bf16 (row-major `ttnn.embedding`), pooler matmul HiFi4
   with fp32 output.
@@ -317,4 +321,318 @@ On code commit `9adacfe162`, default construction path, `e6/scripts/trace_robust
 - The probe draws from the same two documents as the tests (model card + tech report) and the
   demo strings; other languages, code and very long padded batches (> 2048 + short rows) were not
   probed.
-- Vision / audio precision: E6b, with this machinery.
+- Vision / audio precision: E6b, below.
+
+# Vision and audio towers (E6b)
+
+E6b wires the `vision` and `audio` sections of the precision file into the tower construction
+paths and runs the same sweep per tower. Labels: **[M]** measured, **[I]** inferred. Run artifacts:
+`tt-ops/runs/embeddinggemma-2/e6b/` (`sweep_vision.jsonl`, `sweep_audio*.jsonl`, `probe_*.jsonl`,
+`logs/`, `scripts/`). Harness: `tests/perf/dtype_sweep_towers.py` (`run` screen, `probe`, `report`).
+
+## Selected tower configs
+
+| tower | selected | ranking aggregate, burst ms (E5 policy -> selected) | per shape, burst ms (E5 -> selected) |
+|---|---|---|---|
+| vision | **`v_exp_bfp8w4`**: SDPA `exp_approx` on; attn_qkv / attn_o / mlp_gate_up / mlp_down weights bfp8 (HiFi2 + fp32 acc, bf16 outputs); patch_embed / projector bf16 HiFi4; norms HiFi4; bfp4 mask | 1x2560 + 4x2560: 141.12 -> **105.86 (-25.0 %)** | 1x2560 26.11 -> 17.35; 4x2560 115.00 -> 88.51; 8x1280 87.19 -> 69.20 |
+| audio | **`a_h2b8_qkvbf16_shift2_sharded`**: every projection bfp8 with HiFi2 + fp32 acc; fused QKV output bf16 (was fp32); lconv shift matmuls HiFi2; block-sharded RMSNorm round trip for <= 24 tile rows; conv, band attention and norms HiFi4 | 1x768 + 4x256: 33.97 -> **27.34 (-19.5 %)** | 1x256 8.72 -> 7.31; 1x768 14.91 -> 11.95; 4x256 19.06 -> 15.39 |
+
+Sweep regime **[M]**: traced device time per forward, burst median of 5 windows of 20 replays after
+3 s idle, the three perf traces of the tower captured in one process, inputs resident (the bench
+inputs of `bench_vision.py` / `bench_audio.py`). Rankings fixed before the sweep: vision burst
+1x2560 + 4x2560, audio burst 1x768 + 4x256. Post-selection, normal construction path: Gates.
+
+Selection policy (brief E6b): the fastest config on the ranking aggregate that (1) passes every bar
+of the tower's tests on the test cases (screen; the bars of `tests/pcc/vision` / `tests/pcc/audio`:
+per-layer and module PCC >= 0.995, encoder-stack PCC >= 0.99, soft-token PCC >= 0.99 per image /
+clip), (2) keeps soft-token PCC >= 0.99 and end-to-end embedding cosine >= 0.99 on >= 15 probe inputs
+outside the test set plus the tower's `test_full_model.py` items, with `test_retrieval` argmax equal
+to HF, and (3) passes every gate as the default (Gates). Worst-token cosine is reported, not gated
+(the tests log it with bar 0.0).
+
+| vision candidate | ms (rank) | screen: soft PCC min (case) | probe: soft PCC min / embedding cos min / full-model items min | result |
+|---|---|---|---|---|
+| `v_exp_bfp8w4_gu8out` (+ gate/up outputs bfp8) | 102.72 | 0.99207 (video8 f5) | **0.98857** (3-frame video) / 0.99835 / 0.99884 | fails the probe |
+| `v_exp_gu8out` | 105.79 | 0.99340 (video8 f7) | **0.98394** (3-frame video) / 0.99823 / 0.99890 | fails the probe |
+| **`v_exp_bfp8w4`** | **105.86** | 0.99477 (video8 f5) | 0.99479 (5-frame video) / 0.99854 / 0.99887 | **selected** |
+| `sdpa_exp_approx` | 108.95 | 0.99499 (video8 f5) | 0.99347 / 0.99837 / 0.99907 | holds, slower |
+| `base` (E5b) | 141.12 | 0.99653 (video8 f3) | 0.99301 / 0.99869 / 0.99899 | holds, slower |
+
+| audio candidate | ms (rank) | screen: soft PCC min (case) | probe: soft PCC min / embedding cos min / full-model items min / retrieval TT margin | result |
+|---|---|---|---|---|
+| `a_h2b4lofi_qkvbf16_shift2_sharded` (bfp4 + LoFi on every group whose single bfp4 screen passed) | 26.94 | **0.97927** (s30) | 0.97315 / 0.97985 / 0.99150 / 0.00263 | fails |
+| **`a_h2b8_qkvbf16_shift2_sharded`** | **27.34** | 0.99665 (short) | 0.99114 (1 kHz tone) / 0.99702 / 0.99867 / 0.00306 | **selected** |
+| `a_h2_qkvbf16_shift2_sharded` (bf16 weights) | 27.70 | 0.99665 (short) | 0.99645 / 0.99633 / 0.99872 / 0.00042 | holds, slower |
+| `a_h2_qkvbf16_shift2` | 27.93 | 0.99687 (short) | 0.99373 / 0.99676 / 0.99862 / 0.00022 | holds, slower |
+| `a_h2_qkvbf16` | 28.08 | 0.99687 (short) | 0.99373 / 0.99676 / 0.99862 / 0.00022 | holds, slower |
+| `a_h2_shift2_sharded` (QKV output fp32) | 29.98 | 0.99615 (short) | 0.99139 / 0.99599 / 0.99846 / 0.00090 | holds, slower |
+| `hifi2_bfp8_all` | 30.07 | 0.99526 (short) | 0.99708 / 0.99707 / 0.99876 / 0.00409 | holds, slower |
+| `hifi2_all` (E5c "E6 screen") | 30.44 | 0.99744 (short) | 0.99418 / 0.99768 / 0.99868 / **flips** the speech2s row | fails the probe |
+| `base` (E5c) | 33.97 | 0.99769 (tone3) | 0.99500 / 0.99601 / 0.99839 / 0.00198 | holds, slower |
+
+The audio retrieval row "a short clip of a person speaking" is the HF near tie found in E6a
+(speech10s vs tone3s, HF margin 0.00463): `hifi2_all` flips it in the probe. The selected config
+keeps it at a TT margin of 0.00306; `test_full_model.py` and the demo pass with it as the default
+(Gates).
+
+Margins of the selected configs **[M]**: vision soft-token PCC 0.99477 on the test cases and 0.99479
+on the probe (bar 0.99; 4.8e-3), embedding cosine 0.99854 on the probe and 0.99887 on the full-model
+items (8.5e-3); audio soft-token PCC 0.99665 on the test cases and 0.99114 on the probe (1.1e-3, a
+synthetic 1.5 s 1 kHz tone; speech probe inputs >= 0.99732), embedding cosine 0.99702 (probe, the same
+tone) and 0.99867 (full-model items). The weakest probe inputs are synthetic for both towers and for
+the E5 baselines too (audio base: 0.99500 on the same tone; vision base: 0.99301 on a 3-frame video).
+
+Worst soft-token cosine (reported, not gated): vision 0.7080 (test cases) and 0.7039 (probe; E5b base
+0.8638 / 0.4930); audio 0.6969 (test cases, s30 token 559) and 0.6460 (probe, a 20 s speech
+concatenation; E5c base 0.7726 at s30 token 267 / 0.7705). For s10 token 126 and s30 token 267 the
+low cosine is a property of the model (Audio worst-token sensitivity, below); s30 token 559 under
+the selected config was not put through that check **[I: same pattern, not measured]**.
+
+### Probe inputs
+
+`dtype_sweep_towers.py probe`, eager forward of the full model built with the candidate
+(`EmbeddingGemma2.from_pretrained(precision=...)`), against HF fp32 (tower: `Gemma4VisionModel` /
+`Gemma4AudioModel` + embedder; end to end: `EmbeddingGemma2Model` + sentence-transformers pooling).
+
+- vision (18 inputs): six repo images outside the test set (`models/sample_data/demo.jpeg`,
+  `ILSVRC2012_val_00048736.JPEG`, `huggingface_cat_image.jpg`, an efficientdet street frame, a yunet
+  group photo, a perf-report chart PNG); eight synthetic images (noise 224x224 and 48x48, gradient
+  1024x256, checkerboard 256x1024, gaussian blobs 640x480, 2000x100, 100x1500, a 3000x2000 ramp);
+  videos of 1, 3 and 5 frames from other offsets of the repo screen recording (5 frames at 0.5 s
+  steps) and a 4-frame synthetic moving pattern. Plus the 9 vision / video items of
+  `test_full_model.py` and `test_retrieval[image]`.
+- audio (17 inputs): each of the five in-tree speech clips whole (4-7.6 s); cuts of 0.3 s, 1.3 s and
+  5 s at other offsets; 20 s and 25 s concatenations in reverse order; speech scaled x0.1 and x3
+  (clipped); white noise 2 s; brown noise 4 s; 1 s silence + 2 s speech; a 1 kHz tone 1.5 s; an 8 s
+  chirp. Plus the 5 audio items of `test_full_model.py` and `test_retrieval[audio]`.
+
+Selected configs per input: `e6b/probe_vision.jsonl`, `e6b/probe_audio.jsonl` (`rows`).
+
+## Pareto charts (vision, audio)
+
+x: traced device ms (burst median, ranking aggregate); blue passes the screen, grey fails the
+screen or the probe; line: non-dominated frontier over every plotted config; red: selected; dotted:
+gate bar; hollow purple ring below a point: its minimum over the probe inputs. The soft-token PCC
+charts plot every evaluated config with a perf measurement; the embedding-cosine charts plot the
+probed configs (the end-to-end cosine needs the full model, measured for the finalists and the
+baseline only).
+
+![vision soft-token PCC vs traced ms](vision_softpcc_perf_pareto.png)
+
+![vision embedding cosine vs traced ms](vision_cosine_perf_pareto.png)
+
+![audio soft-token PCC vs traced ms](audio_softpcc_perf_pareto.png)
+
+![audio embedding cosine vs traced ms](audio_cosine_perf_pareto.png)
+
+## What was swept (vision 39 configs, audio 45; `sweep_results.{json,csv}`, `tower` column)
+
+Vision, ranking aggregate (base 141.12 ms); screen = the test bars on the test cases **[M]**:
+
+| lever | configs | result | decision |
+|---|---|---|---|
+| bfp8 weights, per group | `bfp8_{qkv,o,gu,down,patch,proj}`, `bfp8w_all` | qkv -1.9, o -0.3, gate_up -0.2, down -0.4, patch / projector 0 ms; all pass except `bfp8_patch` (soft 0.98102, video) and so `bfp8w_all` (0.97520) | qkv / o / gate_up / down kept in combination (-3.1 ms on top of exp_approx) |
+| bfp4 weights + LoFi twins (groups where bfp8 passes) | `bfp4_{qkv,o,gu,down,proj}{,_lofi}` | layer groups fail (soft 0.938-0.960, layer PCC 0.9916-0.9940); projector passes (0.99165), +0.1 ms | rejected; bfp4 LoFi == bfp4 HiFi2 accuracy |
+| LoFi (bf16 weights) | `lofi_attn`, `lofi_mlp`, `lofi_all` | -0.3 / -3.6 / -4.0 ms; `lofi_mlp` 0.99033, `lofi_all` fails | fails in combination (`v_exp_lofi_mlp` 0.98642) |
+| HiFi2 for patch_embed / projector | `hifi2_patch_proj` | encoder stack 0.89958 on the 28x28 grayscale image | rejected |
+| HiFi4 everywhere (accuracy up) | `hifi4_all` | +14.1 ms (+10 %), soft 0.99793, worst token 0.9105 | not needed |
+| matmul fp32 accumulation off | `nofp32acc` | -0.7 ms, soft 0.99066, worst token 0.39 | not kept |
+| SDPA fp32_dest_acc off | `sdpa_nofp32acc` | -32.4 ms, **fails** (soft 0.98656, video) | rejected (the E5b screen measured one image only) |
+| SDPA exp_approx | `sdpa_exp_approx` | **-32.2 ms**, soft 0.99499 | **kept** |
+| SDPA exp_approx + fp32 acc off | `sdpa_fast` | -32.5 ms, fails (0.98617) | rejected |
+| SDPA LoFi | `sdpa_lofi` | -1.9 ms, fails (0.97673) | rejected |
+| norms HiFi2 | `norms_hifi2` | -0.3 ms, fails (0.98724) | rejected |
+| projection outputs bfp8 | `act_bfp8_gu` / `_o` / `_down` | gate/up -3.1 ms pass (0.99472); o and down fail (0.977 / 0.969) | gate/up tried in combination: fails the probe |
+| projection outputs bfp8 into RoPE | `act_bfp8_qkv`, `act_bfp8_layers` | blocked: `TT_FATAL rotary_embedding_llama_device_operation.cpp:76: All input tensors must have dtype = bfloat16` (the q / k norms keep the bfp8 dtype; `ttnn.rms_norm` has no output dtype argument) | not run; would need a typecast op |
+| mask dtype | (bfp4 in E5b; text E6a: bit-identical accuracy for bfp4 / bfp8 / bf16) | | bfp4 kept |
+| combinations | `v_exp_*` | see the candidate table | `v_exp_bfp8w4` selected |
+
+Audio, ranking aggregate (base 33.97 ms) **[M]**:
+
+| lever | configs | result | decision |
+|---|---|---|---|
+| bfp8 weights, per group | `bfp8_{qkv,o,ffn,lconv,sub,proj}`, `bfp8w_all` | 0 to -0.2 ms each, -0.19 ms all; all pass | kept in combination (-0.36 ms on top of HiFi2) |
+| bfp8 subsampling conv weights | `bfp8_conv` | fails (soft 0.98703, conv-stack module 0.99536) | rejected |
+| bfp4 weights + LoFi twins | `bfp4_{qkv,o,ffn,lconv,sub,proj}{,_lofi}` (accuracy screen only) | FFN fails (0.97979); the others pass alone (soft 0.9908-0.9965) | combined (`a_h2b4lofi_...`, -0.4 ms): fails (0.97927) |
+| HiFi2 per projection group | `hifi2_{qkv,o,ffn,lconv,sub,proj}`, `hifi2_all` | FFN -2.7 ms, all -3.5 ms, all pass the screen | kept; `hifi2_all` alone flips the retrieval row in the probe |
+| LoFi FFN | `lofi_ffn` | -3.1 ms, fails (0.98504) | rejected |
+| fused QKV output bf16 (was fp32) | `qkv_out_bf16` | **-2.1 ms**, pass (0.99727) | **kept** |
+| band-attention block matmuls HiFi2 | `attn_hifi2` | 0.0 ms | not kept |
+| lconv shift matmuls HiFi2 / LoFi | `shift_hifi2`, `shift_lofi` | HiFi2 -0.13 ms, soft-token PCC equal to HiFi4 on every test case to 6 digits; LoFi -0.17 ms, not exact (0.99562) | HiFi2 kept |
+| block-sharded RMSNorm (E5c c21) | `norms_sharded` | -0.3 ms (1x256 -0.30, 1x768 -0.29), pass (0.99823) | kept |
+| norms HiFi2 | `norms_hifi2` | 0.0 ms, worst token 0.44 | rejected |
+| projection outputs bfp8 | `act_bfp8_ffn_up`, `act_bfp8_lconv_start` | 0.0 / -0.5 ms | not kept |
+| fp32 activations (accuracy up) | `act_fp32` | +8.4 ms (+24.6 %), soft 0.99918, worst token 0.756 | not needed |
+| combinations | `a_h2*` | see the candidate table | `a_h2b8_qkvbf16_shift2_sharded` selected |
+
+Why weights barely matter **[I]**: both towers run large-M matmuls (2560-10240 patch rows, 256-768
+audio rows), compute-bound at HiFi2 / HiFi4; bfp8 halves weight bytes, which are a small part of the
+traffic. Fidelity (audio HiFi4 -> HiFi2), the SDPA exp (vision; SDPA is the largest op at 2560
+patches) and the fp32 QKV output (audio) are what the time depends on.
+
+## Proof the towers consume the policy
+
+`tests/pcc/test_precision_config.py` (E6b additions):
+
+- `test_default_vision_loads_selected_file` / `test_default_audio_loads_selected_file`: build
+  `VisionModel` / `AudioModel` with no `precision=`, check the source is the selected file, run one
+  forward (the 28x28 image; the 2 s clip) with spies on `ttnn.linear`, `minimal_matmul`, `ttnn.matmul`,
+  SDPA, `rms_norm`, `layer_norm` and `conv2d`, and check every weight dtype, matmul fidelity / fp32 acc /
+  output dtype (layer exceptions applied), SDPA fidelity / fp32 acc / exp_approx and the mask dtype it
+  receives, every norm config, the band-attention and lconv-shift matmul configs, the conv weight dtype
+  and compute config, and whether sharded norms ran, against the file read with plain `json`:
+  619 checks (vision), 863 (audio) on the selected file.
+- `test_override_changes_vision_runtime` / `..._audio_runtime`: an override (vision attn_o bfp4 LoFi
+  bfp8-output + a layer-0 mlp_down exception + flipped exp_approx + another mask dtype; audio ffn_down
+  bfp8 HiFi2 + a layer-0 LoFi exception + attention / shift / conv fidelity + flipped sharded norms)
+  changes the built tensors and the configs the forward passes.
+- `test_invalid_value_rejected`: also rejects an invalid vision / audio fidelity, a missing group and
+  a non-boolean `sharded`.
+
+Pass / fail / pass on a planted value **[M]** (logs `e6b/logs/`): selected file as committed: 7 passed
+(`pfp_e6b_1.log`); `vision.weights.mlp_down.dtype` planted to `bfp5`: both tower tests fail with
+`ValueError: vision.weights.mlp_down.dtype: 'bfp5' not in ['bf16', 'bfp8', 'bfp4']`
+(`pfp_e6b_2_planted.log`); planted to the valid `bfp4` (and `audio.weights.ffn_down.dtype` to `bfp4`):
+both pass and the default-built models hold `BFLOAT4_B` `w_down` / `ffw2` weights
+(`pfp_e6b_2b_planted_valid.log`); reverted: passes (the gate run, `gate_g1_precision.log`).
+
+Bit-identity of the wiring **[M]**: with the E5 policies in the file (before the selection), the
+vision and audio suites logged 482 metric records equal value for value to the E6a gate run r1
+(`e6b/results_wire.jsonl` vs `e6/results_gates_r1.jsonl`, 0 differences). The text section and
+text parsing are unchanged (text gate results: Gates).
+
+Return to the safe baseline: `EMBEDDING_GEMMA2_PRECISION=<.../doc/datatype_sweep/baseline_precision_config.json>`
+(E5a text, E5b vision, E5c audio), or `precision=` in `VisionEncoder.from_pretrained`,
+`AudioEncoder.from_pretrained`, `EmbeddingGemma2.from_pretrained` (one policy for all three towers).
+
+## Gates (E6b final code commit)
+
+All on code commit `68f46d1f16` (selected file as the default, no `EMBEDDING_GEMMA2_PRECISION`),
+`e6b/scripts/gates.sh g1`, logs `e6b/logs/gate_g1_*.log`, chain log `e6b/logs/chain_final.log`,
+metrics `e6b/results_gates_g1.jsonl` **[M]**:
+
+| gate | result | worst metric |
+|---|---|---|
+| `tests/pcc/test_precision_config.py` | 7 passed | 1211 text, 619 vision, 863 audio checks |
+| `pytest tests/pcc/vision -q` | 91 passed | soft-token PCC 0.99477 (video8 f5), encoder out 0.99468 (landscape), layer 0.99976, attention 0.99988 |
+| `pytest tests/pcc/audio -q -k "not perf"` | 109 passed, 7 deselected | soft-token PCC 0.99665 (short), layer 0.99996, attention 0.99986, trace == eager (max abs 0.0) |
+| `test_full_model.py` + `test_full_model_trace.py` | 41 passed | cosine: image / video / mixed items >= 0.99887 (video_text), audio items >= 0.99867 (tone3s), text items >= 0.99948; retrieval argmax TT == HF for images and audio (speech2s row TT margin 0.00307, E6a 0.00198) |
+| `demo/demo.py -s` | 2 passed | |
+| `pytest tests/pcc -q -k "not s32768"` | 361 passed, 1 deselected | text records equal to E6a gate r1 (246 of 247; `full_model_cosine` / `full_trace_cosine` of text_long 0.99947506 vs 0.99947500, a value E6a r1 itself logged both ways across its runs) |
+| watcher (`TT_METAL_WATCHER=10`, `tests/pcc/vision` + `tests/pcc/audio`, `-k "not perf and not reference_matches"`) | 190 passed, 17 deselected | `watcher.log` 653 lines, 0 lines matching `error|assert|sanitiz|overflow|hang|exception|fault` |
+| `TT_METAL_TRACE_ALLOC_TRACKING=1` over `test_vision_trace.py` + `test_audio_trace.py` | 19 passed | no "still alive" |
+| interleaved replay soak (`e6b/scripts/tower_soak.py 170`), with and without alloc tracking | 2052 replays each, 0 mismatches, no hang, no "still alive" | `soak_g1_trk.log`, `soak_g1_notrk.log` |
+
+Soak: both encoders on one device, vision 1x2560 / 4x2560 / 8x1280 and audio 1x256 / 1x768 / 4x256
+captured jointly (inputs and conv preparation for all six, then compile, then capture: no tower
+allocates after the other's captures), each fed its bench input; 170 rounds over the six traces with
+every replay read back and compared bit for bit with the first replay of its shape, 170 rounds back
+to back, a final read-back: 2052 replays (`e6b/logs/soak_g1_trk.log`). The selected audio policy
+changes a norm path (block-sharded RMSNorm, L1 sharded) and the selected vision policy the SDPA
+program; the E6a K/V-norm hang hazard (bf16 text weights) did not appear.
+
+Post-selection traced bench through the normal construction path (`VisionEncoder` /
+`AudioEncoder.from_pretrained`, no override; `tests/perf/bench_{vision,audio}.py`, burst 5 x 20
+replays after 3 s idle, sustained 5 x 40 replays after a 10 s soak), then the safe baseline in the
+same session through `EMBEDDING_GEMMA2_PRECISION=baseline_precision_config.json`
+(`e6b/scripts/post_bench.sh`, `e6b/post_bench_g1.jsonl`) **[M]**:
+
+| tower, batch x bucket | selected burst / sustained ms | E5 baseline burst / sustained ms | burst change |
+|---|---|---|---|
+| vision 1 x 2560 | 17.355 / 18.242 | 26.115 / 26.161 | -33.5 % |
+| vision 4 x 2560 | 88.565 / 89.620 | 115.064 / 115.255 | -23.0 % |
+| vision 8 x 1280 | 69.204 / 69.218 | 87.199 / 87.187 | -20.6 % |
+| audio 1 x 256 | 7.311 / 7.307 | 8.718 / 8.714 | -16.1 % |
+| audio 1 x 768 | 11.953 / 11.951 | 14.915 / 14.916 | -19.9 % |
+| audio 4 x 256 | 15.381 / 15.377 | 19.066 / 19.073 | -19.3 % |
+
+Sustained rises over burst for the selected vision policy at 1 x 2560 (+5.1 %) and 4 x 2560
+(+1.2 %); the baseline does not (within 0.2 %). The P150a current-limit throttle seen in E5a
+**[I]**: the faster SDPA draws more power; not investigated.
+
+## Not done / caveats (E6b)
+
+- The embedding-cosine Pareto charts plot only the probed configs (full-model runs); every other
+  config has the screen metrics only.
+- The audio bfp4 single-group candidates were screened for accuracy only (no perf run); the weight
+  dtype is worth at most 0.4 ms in the audio tower (bfp8 measured), and their combination fails.
+- Vision bfp8 QKV outputs are blocked by `rotary_embedding_llama` (bf16 inputs only); not fixed
+  (a typecast op would eat most of the 2-3 % such outputs gave in text).
+- The weakest probe inputs are synthetic (1 kHz tone 0.99114, 3- and 5-frame video 0.995): margins
+  to the 0.99 bar of 1.1e-3 (audio) and 4.8e-3 (vision). Real-speech probe clips are >= 0.99732.
+- The worst-token cosine is lower than the E5 baselines (vision 0.708 vs 0.864, audio 0.697 vs
+  0.773) and is not a gate; the audio tokens checked are ill-conditioned in the model (below), the
+  vision ones were not analysed.
+- `doc/context_contract.json` unchanged: no capacity change (bfp8 weights only shrink DRAM use).
+- `sweep_results.json` holds summary rows for the tower configs (worst metrics, perf medians, probe
+  summary; policy and construction evidence for the selected configs and the bases) to stay under
+  the repository's 500 KB file limit; the full records (per-case values, perf windows, per-input
+  probe rows, construction per candidate) are `e6b/sweep_*.jsonl` and `e6b/probe_*.jsonl`. That
+  report-only change to `dtype_sweep_towers.py` (`cmd_report`) came after the gate run; no runtime
+  or test path changed.
+
+## Audio worst-token sensitivity (s10 token 126, s30 token 267)
+
+Question (open since E3): s10 token 126 and s30 token 267 score a low soft-token cosine against HF
+fp32 in TT (0.76-0.86 across E3-E6) and in HF bf16 (0.851 / 0.820). Is that the TT numerics or are
+the tokens ill-conditioned in the model itself?
+
+**Answer [M]: the tokens are ill-conditioned in the model itself.** Perturbations of the HF fp32
+reference at bf16 rounding scale move these two tokens' outputs by up to four orders of magnitude
+more than the median token; the error grows in the last two conformer layers; teacher-forced, TT's
+per-layer error on these tokens is ordinary.
+
+HF fp32 tower + `embed_audio` with one perturbation at a time (CPU, `e6b/scripts/audio_sensitivity.py`,
+`e6b/audio_sensitivity.json`, log `e6b/logs/audio_sensitivity.log`). Each cell: 1 - cosine of the
+token's soft token vs the unperturbed fp32 output, target / median token (ratio, rank of the target
+among all tokens, 1 = moved the most):
+
+| perturbation | s10 token 126 / median | s30 token 267 / median |
+|---|---|---|
+| input features rounded to bf16 | 3.78e-05 / 8.5e-06 (4x, rank 32/250) | 2.07e-03 / 5.8e-06 (354x, rank 4/750) |
+| features + uniform noise within +-0.5 bf16 ulp, seed 0 | 3.52e-02 / 8.7e-06 (4041x, rank 1) | 1.05e-03 / 5.7e-06 (186x, rank 10) |
+| same, seed 1 | 4.03e-02 / 8.3e-06 (4861x, rank 1) | 1.78e-02 / 5.6e-06 (3172x, rank 4) |
+| same, seed 2 | 4.89e-04 / 5.5e-06 (88x, rank 3) | **1.58e-01** / 4.7e-06 (33660x, rank 1) |
+| subsampling weights + 0.5-ulp noise | 2.34e-02 / 1.5e-05 (1517x, rank 1) | 1.84e-03 / 1.5e-05 (119x, rank 13) |
+| FFN weights + 0.5-ulp noise | 1.25e-05 / 1.5e-06 (8x, rank 4) | 3.59e-05 / 2.1e-06 (17x, rank 7) |
+| attention weights + 0.5-ulp noise | 2.21e-06 / 1.8e-07 (12x, rank 2) | 6.56e-07 / 2.4e-07 (3x, rank 70) |
+| lconv weights + 0.5-ulp noise | 3.22e-05 / 1.2e-06 (27x, rank 1) | 7.57e-06 / 1.6e-06 (5x, rank 29) |
+| norm weights + 0.5-ulp noise | 8.90e-05 / 8.0e-06 (11x, rank 5) | 1.60e-05 / 1.1e-05 (1x, rank 206) |
+| output_proj weights + 0.5-ulp noise | 4.17e-07 / 3.6e-07 (1x, rank 42) | 3.58e-07 / 3.6e-07 (1x, rank 233) |
+| subsampling output rounded to bf16 | 6.79e-06 / 1.8e-07 (38x, rank 3) | 8.34e-05 / 3.6e-07 (233x, rank 5) |
+| FFN outputs rounded to bf16 | 2.62e-04 / 1.0e-05 (26x, rank 2) | 3.22e-04 / 1.5e-05 (22x, rank 8) |
+| attention outputs rounded to bf16 | 1.92e-04 / 4.2e-07 (460x, rank 1) | 1.61e-05 / 4.8e-07 (34x, rank 12) |
+| lconv outputs rounded to bf16 | 8.12e-03 / 6.0e-06 (1362x, rank 1) | 3.50e-04 / 7.7e-06 (45x, rank 14) |
+| norm outputs rounded to bf16 | 3.91e-03 / 7.0e-06 (556x, rank 1) | 3.32e-04 / 9.5e-06 (35x, rank 11) |
+| every module output above rounded to bf16 | 5.75e-02 / 2.7e-05 (2168x, rank 1) | 5.77e-04 / 3.4e-05 (17x, rank 14) |
+| HF bf16 (whole tower + embed in bf16) | 1.49e-01 / 5.9e-05 (2512x, rank 1) | 1.80e-01 / 6.2e-05 (2915x, rank 1) |
+
+Rounding the weights to bf16 is a no-op (the checkpoint is bf16: max abs change 0.0 for every
+group), so the weight rows use noise of the same size instead. The response is erratic: the same
+size of perturbation moves token 267 by 1e-3 or by 0.16 depending on the noise draw, while the
+median token moves by about 5e-6 every time. That is the signature of an ill-conditioned output,
+not of one bad op. Where it grows (HF fp32 reference, features + 0.5-ulp noise, seed 0, per-layer
+output 1 - cos): token 126 sits at 2e-6 to 1.2e-5 (rank 26-144 of 250) through layer 10, then
+2.1e-02 at layer 11 (rank 1); token 267 at 5e-6 to 1.8e-5 through layer 9, 3.3e-4 at layer 10
+(rank 2), 6.4e-4 at layer 11.
+
+TT, default construction path of the wired code with the E5c audio policy (run before the
+selection; `e6b/scripts/audio_token_trace.py`,
+`e6b/audio_token_trace.json`, log `e6b/logs/audio_token_trace.log`), 1 - cos vs HF fp32 per layer:
+
+| | s10 token 126 / median (rank of 250) | s30 token 267 / median (rank of 750) |
+|---|---|---|
+| teacher forced, layers 0-11 (worst layer) | <= 1.1e-05 / 3.6e-06 (rank >= 15) | <= 6.5e-06 / 9.1e-06 (rank >= 172) |
+| teacher forced, layer 11 sublayers (FFN1 / attention / lconv / FFN2) | 2.3e-6 / 1.4e-6 / 2.9e-6 / 4.7e-6 (ranks 104 / 225 / 52 / 20) | 3.6e-6 / 1.7e-6 / 4.1e-6 / 4.2e-6 (ranks 61 / 410 / 26 / 123) |
+| free running, layers 0-9 | 2.4e-5 to 1.0e-4 (rank 25-59) | 2.7e-5 to 2.0e-4 (rank 14-99) |
+| free running, layer 10 | 1.6e-3 (rank 1) | 2.0e-3 (rank 2) |
+| free running, layer 11 | 8.2e-2 (rank 1), median 8.8e-5 | 1.13e-1 (rank 1), median 9.1e-5 |
+| soft tokens | 0.166 (cos 0.834) | 0.227 (cos 0.773) |
+
+So TT computes every layer on these tokens as accurately as on any other token (teacher forced),
+and its free-running error on them is ordinary until layer 9; layers 10 and 11 amplify the small
+upstream difference by 1-2 orders of magnitude per layer, exactly as they amplify a 0.5-ulp input
+perturbation in the fp32 reference. No precision setting fixes this: the worst-token cosine is 0.773 with the
+HiFi4 E5c baseline and 0.756 with fp32 activations (`act_fp32`) in the audio sweep table.
+The low cosine of these tokens is a property of the model, not a TT defect. Soft-token PCC (the
+gate) is not affected (both clips >= 0.998).
