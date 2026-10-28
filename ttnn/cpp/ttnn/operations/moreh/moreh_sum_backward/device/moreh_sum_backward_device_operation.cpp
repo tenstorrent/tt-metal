@@ -23,6 +23,9 @@ void MorehSumBackwardOperation::validate_inputs(
     check_tensor(output_grad, "moreh_sum_backward", "output_grad");
     check_tensor(input_grad, "moreh_sum_backward", " input_grad");
 
+    const auto logical_rank = input.has_value() ? input->logical_shape().rank() : input_grad->logical_shape().rank();
+    TT_FATAL(logical_rank >= 1, "moreh_sum_backward needs a tensor of rank >= 1, got rank {}", logical_rank);
+
     if (!input.has_value()) {
         return;
     }
