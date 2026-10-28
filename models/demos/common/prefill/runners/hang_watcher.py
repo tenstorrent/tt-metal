@@ -3,9 +3,10 @@
 
 """Out-of-process watcher for one prefill stage: python hang_watcher.py <probe.json>
 
-Poll the stage's counters on device (0,0); if none has moved for timeout_s, read every device and classify.
-On a verdict of culprit it prints the verdict and a stuck device's counts to stderr, runs handoff.command,
-and SIGKILLs the rank. With no command it exits instead and leaves the rank hung for inspection.
+Poll the stage's counters on device (0,0); if none has moved for the timeout, read every device and classify.
+On a verdict of culprit it prints the verdict and a stuck device's counts to stderr, runs the command, and
+SIGKILLs the rank. With no command it exits instead and leaves the rank hung for inspection. The timeouts,
+poll interval and command come from the TT_PREFILL_STAGE_HANG_* environment inherited from the rank.
 
 A chunk goes into a device through its inputs and out through its outputs. Five counts in chunks follow it:
 
@@ -48,6 +49,14 @@ from dataclasses import dataclass
 from enum import Enum, auto
 
 from ttexalens import tt_exalens_lib as lib
+
+TIMEOUT_ENV = "TT_PREFILL_STAGE_HANG_TIMEOUT_SECONDS"
+FIRST_CHUNK_TIMEOUT_ENV = "TT_PREFILL_STAGE_HANG_FIRST_CHUNK_TIMEOUT_SECONDS"
+POLL_ENV = "TT_PREFILL_STAGE_HANG_POLL_SECONDS"
+COMMAND_ENV = "TT_PREFILL_STAGE_HANG_COMMAND_TO_EXECUTE"
+DEFAULT_TIMEOUT_S = 30.0
+DEFAULT_FIRST_CHUNK_TIMEOUT_S = 600.0  # covers trace capture and cold first-chunk compiles
+DEFAULT_POLL_S = 1.0
 
 MASK32 = 0xFFFFFFFF
 
@@ -189,10 +198,6 @@ class Handoff:
     pid: int
     layers: str
     dummy: int
-    timeout_s: float
-    first_chunk_timeout_s: float
-    poll_s: float
-    command: str
     devices: list[Device]
 
 
@@ -228,10 +233,10 @@ def culprits(devices: list[Device]) -> list[Device]:
     return []
 
 
-def run_command(handoff: Handoff, detail: str, lines: str) -> None:
+def run_command(command: str, handoff: Handoff, detail: str, lines: str) -> None:
     """Hand the verdict to the configured command. Its environment is the only output channel."""
     subprocess.run(
-        handoff.command,
+        command,
         shell=True,
         env={
             **os.environ,
@@ -246,6 +251,10 @@ def run_command(handoff: Handoff, detail: str, lines: str) -> None:
 def main(probe_path: str) -> int:
     handoff = load(probe_path)
     os.unlink(probe_path)
+    timeout_s = float(os.environ.get(TIMEOUT_ENV, DEFAULT_TIMEOUT_S))
+    first_chunk_timeout_s = float(os.environ.get(FIRST_CHUNK_TIMEOUT_ENV, DEFAULT_FIRST_CHUNK_TIMEOUT_S))
+    poll_s = float(os.environ.get(POLL_ENV, DEFAULT_POLL_S))
+    command = os.environ.get(COMMAND_ENV, "")
     dev00 = handoff.devices[0]
     frozen_since: float | None = None
     left_out: list[str] = []
@@ -261,14 +270,14 @@ def main(probe_path: str) -> int:
         except Exception:
             return 1
         # Until the first real chunk is out, trace capture and cold compiles can take minutes.
-        timeout_s = handoff.timeout_s if dev00.produced >= 1 + handoff.dummy else handoff.first_chunk_timeout_s
+        limit_s = timeout_s if dev00.produced >= 1 + handoff.dummy else first_chunk_timeout_s
 
         now = time.monotonic()
         if moved:
             frozen_since = None
         elif frozen_since is None:
             frozen_since = now
-        elif now - frozen_since >= timeout_s:
+        elif now - frozen_since >= limit_s:
             frozen_since = now
             # The rest of the stage stopped with device (0,0), so one read of each device shows where it stands.
             for device in handoff.devices[1:]:
@@ -298,14 +307,14 @@ def main(probe_path: str) -> int:
                     file=sys.stderr,
                     flush=True,
                 )
-                if not handoff.command:
+                if not command:
                     return 0
-                run_command(handoff, detail, lines)
+                run_command(command, handoff, detail, lines)
                 with contextlib.suppress(ProcessLookupError):
                     os.kill(handoff.pid, signal.SIGKILL)
                 return 1
 
-        time.sleep(handoff.poll_s)
+        time.sleep(poll_s)
 
 
 if __name__ == "__main__":

@@ -5,11 +5,10 @@
 
 Lists, for every device of the stage, the counters that follow a chunk through it: where each lives (core and
 L1 address) and how far it moves per chunk. hang_watcher.py polls them out of process; nothing here touches
-them after arming. The hand-off is one line of JSON. Spread out, with one device of a GLM-5.3 middle rank
-(addresses made up):
+them after arming. The watcher reads its timeouts and command from the environment it inherits from the rank.
+The hand-off is one line of JSON. Spread out, with one device of a GLM-5.3 middle rank (addresses made up):
 
-    {"stage_idx": 1, "pid": 4242, "layers": "20-39", "dummy": 0, "timeout_s": 30.0,
-     "first_chunk_timeout_s": 600.0, "poll_s": 1.0, "command": "",
+    {"stage_idx": 1, "pid": 4242, "layers": "20-39", "dummy": 0,
      "devices": [
        {"uid": 81985529, "r": 0, "c": 0,
         "inputs": [{"name": "activation",
@@ -37,13 +36,6 @@ import tempfile
 import ttnn
 
 ENABLED_ENV = "TT_PREFILL_STAGE_HANG_DETECTION_ENABLED"
-TIMEOUT_ENV = "TT_PREFILL_STAGE_HANG_TIMEOUT_SECONDS"
-FIRST_CHUNK_TIMEOUT_ENV = "TT_PREFILL_STAGE_HANG_FIRST_CHUNK_TIMEOUT_SECONDS"
-POLL_ENV = "TT_PREFILL_STAGE_HANG_POLL_SECONDS"
-COMMAND_ENV = "TT_PREFILL_STAGE_HANG_COMMAND_TO_EXECUTE"
-DEFAULT_TIMEOUT_S = 30.0
-DEFAULT_FIRST_CHUNK_TIMEOUT_S = 600.0  # covers trace capture and cold first-chunk compiles
-DEFAULT_POLL_S = 1.0
 
 BYTES_SENT_OFFSET = 0
 _SENDER_MD_WORDS = 7  # bytes_acked_array[] follows, at the next L1-aligned offset
@@ -161,10 +153,6 @@ class HangDetector:
             "layers": layers,
             # Other ranks take in a dummy for each they send, so theirs cancels.
             "dummy": dummy if rank == 0 else 0,
-            "timeout_s": float(os.environ.get(TIMEOUT_ENV, DEFAULT_TIMEOUT_S)),
-            "first_chunk_timeout_s": float(os.environ.get(FIRST_CHUNK_TIMEOUT_ENV, DEFAULT_FIRST_CHUNK_TIMEOUT_S)),
-            "poll_s": float(os.environ.get(POLL_ENV, DEFAULT_POLL_S)),
-            "command": os.environ.get(COMMAND_ENV, ""),
             "devices": devices,
         }
         fd, probe_path = tempfile.mkstemp(prefix=f"prefill_hang_stage{rank}_", suffix=".json")
