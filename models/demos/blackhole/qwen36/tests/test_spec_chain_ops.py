@@ -18,6 +18,7 @@ import ttnn
 from models.demos.blackhole.qwen36.tests.test_spec_chain_host import SCRATCH, K, _case
 from models.demos.blackhole.qwen36.tt.gdn.tp import spec_ctrl_words
 from models.demos.blackhole.qwen36.tt.spec_chain import ChainDevice, chain_reference, pack_ovr_host, res_c_reference
+from models.demos.blackhole.qwen36.tt.spec_fused import FUSED_AUX_ROWS
 
 N_EAGER, N_TRACE = 30, 8
 
@@ -29,9 +30,9 @@ def mesh():
     ttnn.close_mesh_device(m)
 
 
-def _make(g, B, Nv, parity):
-    c = _case(g, B, Nv, parity)
-    prev_aux = torch.randint(0, 1000, (6, 32), generator=g, dtype=torch.int32)  # junk except the p0 row
+def _make(g, B, Nv, parity, mixed=False):
+    c = _case(g, B, Nv, parity, per_row=mixed)  # mixed: one rope delta per engine row (overlay last row)
+    prev_aux = torch.randint(0, 1000, (FUSED_AUX_ROWS, 32), generator=g, dtype=torch.int32)  # junk except the p0 row
     prev_aux[4, :B] = c["p0_prev"].to(torch.int32)
     res = res_c_reference(c["committed"], c["counts"], c["p0_prev"], torch.randint(0, 2, (B,), generator=g))
     ovr = pack_ovr_host(
@@ -57,9 +58,9 @@ def _make(g, B, Nv, parity):
         B=B,
         K=K,
         Nv=Nv,
-        rope_delta=c["delta"],
         rope_rows=c["rope_rows"],
         ctrl_words=spec_ctrl_words(B, Nv),
+        **({} if mixed else {"rope_delta": c["delta"]}),
     )
     return res, prev_aux, c["drafts"].to(torch.int32), ovr, ref
 
@@ -124,15 +125,16 @@ def _count_ops(cd):
     return n[0]
 
 
-def test_chain_ops_eager_and_trace(mesh):
+@pytest.mark.parametrize("mixed", [False, True], ids=["common_delta", "row_deltas"])
+def test_chain_ops_eager_and_trace(mesh, mixed):
     """B in {1,2,4,8} x Nv in {2,6}: 30 eager + 8 trace cases each (240 / 64 in all); S1 [2,W] and S2 [3,W] result."""
     for i, (B, Nv) in enumerate([(b, nv) for b in (1, 2, 4, 8) for nv in (2, 6)]):
-        _run(mesh, B, Nv, result_rows=2 + i % 2)
+        _run(mesh, B, Nv, result_rows=2 + i % 2, mixed=mixed)
 
 
-def _run(mesh, B, Nv, result_rows):
+def _run(mesh, B, Nv, result_rows, mixed=False):
     g = torch.Generator().manual_seed(1000 * B + Nv)
-    gen = lambda n, off: [_make(g, B, Nv, (off + i) % 2) for i in range(n)]
+    gen = lambda n, off: [_make(g, B, Nv, (off + i) % 2, mixed) for i in range(n)]
     eager, traced = gen(N_EAGER, 0), gen(N_TRACE, 1)
     cd = ChainDevice.allocate(mesh, B, K, Nv, result_rows=result_rows)
     for i, case in enumerate(eager):

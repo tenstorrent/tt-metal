@@ -64,16 +64,14 @@ from models.demos.blackhole.qwen36.tt.spec_chain import (
 )
 from models.demos.blackhole.qwen36.tt.spec_fused import (
     AUX_ACTIVE,
-    AUX_CONSTS,
     AUX_DECLINED,
     AUX_KEEP,
     AUX_P0,
-    CONST_ROPE_DELTA,
     FUSED_AUX_ROWS,
     FusedGreedyDevice,
+    aux_row_deltas,
     fused_accept_aux_host,
     fused_greedy_walk,
-    signed_rope_delta,
 )
 from models.demos.blackhole.qwen36.tt.spec_fused_sampled import (
     FusedSampledDevice,
@@ -102,6 +100,7 @@ from models.demos.blackhole.qwen36.tt.tp_common import (
     spec_hostset_trace_enabled,
     spec_join_fast_enabled,
     spec_join_trace_enabled,
+    spec_row_delta_enabled,
     verify_device_topk_m,
 )
 
@@ -920,6 +919,10 @@ class MTPSpecEngine:
         self.fused_boundary_diffs = 0
         self.fused_fallbacks = {}  # reason -> count of fused_sample steps that ran the argmax path
         self.fused_steps = 0  # fused_sample verify steps (eligible + fallback)
+        self.row_delta_on = (
+            spec_row_delta_enabled()
+        )  # QWEN36_SPEC_ROW_DELTA: per-row rope delta words, no mixed decline
+        self.row_delta_mixed_steps = 0  # fused steps that ran with different live-row deltas (flag on)
         # QWEN36_SPEC_CHAIN (stage S3c): two ChainDevice instances (the S1 / S2 result buffer they read), their traces, the state of
         # the last fused step a chain step may continue (_chain_prev), counters
         self._ch_g = self._ch_s = self._ch_trace_g = self._ch_trace_s = None
@@ -1312,6 +1315,22 @@ class MTPSpecEngine:
         if len(live) > 1:
             return 0, True
         return (live.pop() if live else 0), False
+
+    def _row_delta_flag(self):
+        """QWEN36_SPEC_ROW_DELTA, read once (engine init; an engine built without __init__ reads it on first use)."""
+        v = self.__dict__.get("row_delta_on")
+        if v is None:
+            v = self.__dict__["row_delta_on"] = spec_row_delta_enabled()
+        return v
+
+    def _step_rope_delta(self, active):
+        """(rope_delta, common, mixed) for a fused / chain step. ``rope_delta`` is what the aux / overlay builders get:
+        flag on and a per-row model: the B own deltas of every engine row (live or not); else the common delta (an int).
+        ``common`` goes to row 5 col 1; ``mixed`` = the live rows differ."""
+        common, mixed = self._live_rope_delta(active)
+        if self._row_delta_flag() and self._has_row_deltas():
+            return [int(x) for x in self._row_deltas()], common, mixed
+        return common, common, mixed
 
     def _warm_mtp_last_rows(self, fresh_now, tokens, pt):
         """QWEN36_SPEC_JOIN_FAST: _warm_mtp_last for every fresh row. One row: the old single-row call. Two or more:
@@ -3623,6 +3642,7 @@ class MTPSpecEngine:
                 f"[spec_engine] fused steps {self.fused_steps}, fallbacks {sum(fb.values())}: "
                 + (", ".join(f"{k}={v}" for k, v in sorted(fb.items())) or "none")
                 + f"; audited {self.fused_audited_steps}, boundary_diffs {self.fused_boundary_diffs}"
+                + f", row_delta_mixed_steps {self.__dict__.get('row_delta_mixed_steps', 0)}"
                 + (
                     f"; chain steps {self.chain_steps}, breaks "
                     + (
@@ -3698,10 +3718,10 @@ class MTPSpecEngine:
         skip, skip_all = propose_skip_plan(self._no_draft, B)
         if skip_all and B == 1:
             return "skip_all", None
-        delta, mixed = self._live_rope_delta(active)
+        delta, common, mixed = self._step_rope_delta(active)
         if (
-            mixed
-        ):  # live rows of different M-RoPE deltas: the host-built verify has a delta per row, the device words one
+            mixed and not self._row_delta_flag()
+        ):  # flag 0: the device words carry one delta, the host verify one per row
             return "mixed_rope_delta", None
         try:
             aux = fused_accept_aux_host(
@@ -3714,11 +3734,14 @@ class MTPSpecEngine:
                 int(self._scratch_block),
                 delta,
                 self.model.rope.max_seq_len,
+                common_delta=common,
             )
         except ValueError:
             return "mixed_fit", None
         if bool(aux[2, :B].all()):
             return "all_declined", None
+        if mixed:
+            self.row_delta_mixed_steps = self.__dict__.get("row_delta_mixed_steps", 0) + 1
         return None, aux
 
     def _verify_fused(self, tokens, start_pos, pt, active, num_valid, args, kw, sampling=None):
@@ -3907,7 +3930,7 @@ class MTPSpecEngine:
         """
         B, K, model = self.B, self.K, self.model
         cont = active & prev["active"]
-        rope_delta = self._live_rope_delta(active)[0]
+        rope_delta, common_delta, _ = self._step_rope_delta(active)
         ovr = pack_ovr_host(
             aux[0, :B],
             aux[1, :B],
@@ -3922,6 +3945,7 @@ class MTPSpecEngine:
             scratch_block=int(self._scratch_block),
             rope_delta=rope_delta,
             rope_rows=model.rope.max_seq_len,
+            common_delta=common_delta,
         )
         (self._ch_g if prev["kind"] == "g" else self._ch_s).stage_ovr(ovr)
         n = self.chain_steps
@@ -3929,7 +3953,7 @@ class MTPSpecEngine:
         if not (spec_chain_audit_enabled() and n % spec_chain_audit_every() == 0):
             return None
         exp_tok = torch.as_tensor(args[0]).to(torch.int64).reshape(-1)
-        # at the parity the replay reads, with the common delta the trace reads (inactive rows too)
+        # at the parity the replay reads, with the per-row deltas the trace reads (the common delta with the flag off; inactive rows too)
         exp_aux = model._vfy_aux_host(model._vfy_row_positions(args[1]), args[2], rope_delta=rope_delta)
         return exp_tok, exp_aux, torch.as_tensor(aux).clone()
 
@@ -4096,8 +4120,8 @@ class MTPSpecEngine:
         if skip_all and B == 1:
             return "skip_all", None, lo, hi
         host_act = active & ~cmask
-        delta, mixed = self._live_rope_delta(active)
-        if mixed:
+        delta, common, mixed = self._step_rope_delta(active)
+        if mixed and not self._row_delta_flag():
             return "mixed_rope_delta", None, lo, hi
         try:
             aux = fused_accept_aux_host(
@@ -4110,6 +4134,7 @@ class MTPSpecEngine:
                 int(self._scratch_block),
                 delta,
                 self.model.rope.max_seq_len,
+                common_delta=common,
             )
         except ValueError:
             return "mixed_fit", None, lo, hi
@@ -4126,6 +4151,8 @@ class MTPSpecEngine:
             aux[AUX_P0, u] = int(hi[u])
         if bool(aux[2, :B].all()):
             return "all_declined", None, lo, hi
+        if mixed:
+            self.row_delta_mixed_steps = self.__dict__.get("row_delta_mixed_steps", 0) + 1
         return None, aux, lo, hi
 
     def _def_count_break(self, reason):
@@ -4318,6 +4345,7 @@ class MTPSpecEngine:
             prev, cmask = None, None
         else:
             prev, cmask = chain["prev"], chain["cmask"]
+            ovr_delta, ovr_common, _ = self._step_rope_delta(active)
             ovr = pack_ovr_host(
                 aux[0, :B],
                 aux[1, :B],
@@ -4330,8 +4358,9 @@ class MTPSpecEngine:
                 parity,
                 K=K,
                 scratch_block=int(self._scratch_block),
-                rope_delta=self._live_rope_delta(active)[0],
+                rope_delta=ovr_delta,
                 rope_rows=model.rope.max_seq_len,
+                common_delta=ovr_common,
             )
             (self._ch_g if prev.kind == "g" else self._ch_s).stage_ovr(ovr)
             n = self.chain_steps
@@ -4548,7 +4577,7 @@ class MTPSpecEngine:
         p0n = torch.where(cm, pd["p0"] + pd["counts"], h.start_host) * act
         min_ = torch.where(cm, pd["counts"] - 1, h.mi_host) * act
         exp_tok = self._def_tokens(h, pd).reshape(-1)
-        delta = signed_rope_delta(h.aux[AUX_CONSTS, CONST_ROPE_DELTA])  # the common delta this step's fused aux carries
+        delta = aux_row_deltas(h.aux, B)  # the per-row deltas this step's fused aux carries (row AUX_DELTA)
         exp_aux = model._vfy_aux_host(
             model._vfy_row_positions(p0n.tolist()), min_.tolist(), parity=h.parity, rope_delta=delta
         )

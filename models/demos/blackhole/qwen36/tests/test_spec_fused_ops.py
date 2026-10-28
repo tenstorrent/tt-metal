@@ -31,10 +31,12 @@ def mesh():
     ttnn.close_mesh_device(m)
 
 
-def _make(g, B, nb, edge):
+def _make(g, B, nb, edge, mixed=False):
     """One staged-input case -> (ids [R], tok [R], aux, pt_rows, reference) or None (a 'mixed' row: host fallback)."""
     pad, skip, nv, start_pos, tokens, ids, pt = _case(g, B, nb, edge)
     delta, S = ROPE[int(torch.randint(0, len(ROPE), (1,), generator=g))]
+    if mixed:  # one delta per engine row (aux row 6): rows differ, the table clamps still hit
+        delta = [delta + int(x) for x in torch.randint(-30, 30, (B,), generator=g)]
     clean, start0, active = sanitize_verify_block(tokens, start_pos, nv, K)
     try:
         aux = fused_accept_aux_host(nv, start0, active, skip, table_capacity(nb, BS), K, SCRATCH, delta, S)
@@ -58,25 +60,26 @@ def _check(fd, ref, tag):
     assert torch.equal(res, want), f"{tag}: result"
 
 
-def _gen(g, n, B, nb):
+def _gen(g, n, B, nb, mixed=False):
     out = []
     while len(out) < n:
-        c = _make(g, B, nb, edge=len(out) % 3 == 2)
+        c = _make(g, B, nb, edge=len(out) % 3 == 2, mixed=mixed)
         if c is not None:
             out.append(c)
     return out
 
 
-def test_fused_ops_eager_and_trace(mesh):
+@pytest.mark.parametrize("mixed", [False, True], ids=["common_delta", "row_deltas"])
+def test_fused_ops_eager_and_trace(mesh, mixed):
     """B in {1,2,4,8} x nb in {4,64}: 30 eager + 8 trace cases each (240 eager, 64 trace in all), one device open."""
     for B in (1, 2, 4, 8):
         for nb in (4, 64):
-            _run(mesh, B, nb)
+            _run(mesh, B, nb, mixed)
 
 
-def _run(mesh, B, nb):
+def _run(mesh, B, nb, mixed=False):
     g = torch.Generator().manual_seed(100 * B + nb)
-    eager, traced = _gen(g, 30, B, nb), _gen(g, 8, B, nb)
+    eager, traced = _gen(g, 30, B, nb, mixed), _gen(g, 8, B, nb, mixed)
     fd = FusedGreedyDevice.allocate(mesh, B, K, nb, 32)
     seen_m, n_dec = set(), 0
     for i, (ids, tok, aux, ptr, ref) in enumerate(eager):  # the first call also compiles every program

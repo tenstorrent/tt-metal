@@ -116,6 +116,14 @@ def spec_fused_sampled_enabled():
     return os.environ.get("QWEN36_SPEC_FUSED_SAMPLED", "1") != "0"
 
 
+def spec_row_delta_enabled():
+    """QWEN36_SPEC_ROW_DELTA (default "1"; "0" = today's decline): the fused / sampled / chain device bodies add a PER-ROW M-RoPE
+    delta (fused aux row 6, chain overlay last row), so a batch of rows with different deltas (an image row plus text rows)
+    stays on the fused path. "0" keeps the "mixed_rope_delta" fallback for such a batch (the words are still laid out the
+    same way). Read once when the engine is built."""
+    return os.environ.get("QWEN36_SPEC_ROW_DELTA", "1") != "0"
+
+
 def spec_chain_sampled_enabled():
     """QWEN36_SPEC_CHAIN_SAMPLED (default "0"): a deferred (defer_read=True) fused step may carry a non-greedy row in
     ``spec_sampling``. Off, decode_forward raises ValueError for it: sampled overflow is not handled for deferred steps yet, so

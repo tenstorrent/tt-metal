@@ -6,6 +6,7 @@ models/demos/blackhole/qwen36/tests/test_spec_chain_host.py"""
 
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 from models.demos.blackhole.qwen36.tt.gdn.tp import spec_ctrl_words
@@ -17,16 +18,19 @@ from models.demos.blackhole.qwen36.tt.spec_chain import (
     res_c_reference,
 )
 from models.demos.blackhole.qwen36.tt.spec_engine import sanitize_verify_block
-from models.demos.blackhole.qwen36.tt.spec_fused import fused_accept_aux_host, fused_fit_mode
+from models.demos.blackhole.qwen36.tt.spec_fused import FUSED_AUX_ROWS, fused_accept_aux_host, fused_fit_mode
 
 K, T, SCRATCH = 3, 4, 5000
 
 
-def _case(g, B, Nv, parity):
+def _case(g, B, Nv, parity, per_row=False):
     ri = lambda lo, hi, *s: torch.randint(lo, hi, s, generator=g)
     cap = int(ri(40, 200, 1)) if torch.rand(1, generator=g) < 0.7 else 100000
     rope_rows = int(ri(30, 90, 1))  # small: exercises the clamp
     delta = int(ri(-40, 40, 1))
+    if per_row:  # one delta per engine row (some rows equal, some not)
+        delta = [int(x) for x in ri(-40, 40, B)]
+        delta = [delta[0] if u % 2 else delta[u] for u in range(B)]
     counts = ri(1, T + 1, B)
     committed = ri(0, 248320, B, T)
     committed[torch.arange(T)[None, :] >= counts[:, None]] = -1
@@ -83,16 +87,17 @@ def _fake_model(B, Nv, rope_rows, delta, parity):
     )
 
 
-def test_chain_reference_equals_host_builders():
+@pytest.mark.parametrize("per_row", [False, True])
+def test_chain_reference_equals_host_builders(per_row):
     g = torch.Generator().manual_seed(1234)
     n_checked = 0
     for it in range(400):
         B = int(torch.randint(1, 9, (1,), generator=g))
         Nv, parity = int(torch.randint(1, 5, (1,), generator=g)) * 2, it % 2
-        c = _case(g, B, Nv, parity)
+        c = _case(g, B, Nv, parity, per_row)
         R = B * T
         # previous step's result and aux (consistent p0)
-        prev_aux = torch.zeros(6, 32, dtype=torch.int32)
+        prev_aux = torch.zeros(FUSED_AUX_ROWS, 32, dtype=torch.int32)
         prev_aux[4, :B] = c["p0_prev"].to(torch.int32)
         res = res_c_reference(c["committed"], c["counts"], c["p0_prev"], torch.zeros(B))
         ovr = pack_ovr_host(
@@ -119,9 +124,9 @@ def test_chain_reference_equals_host_builders():
             B=B,
             K=K,
             Nv=Nv,
-            rope_delta=c["delta"],
             rope_rows=c["rope_rows"],
             ctrl_words=ctrl_words,
+            **({} if per_row else {"rope_delta": c["delta"]}),  # per row: read from the overlay's last row
         )
         # ---- host composition: what the plugin + engine build today for the next verify ----
         m = c["counts"] - 1
@@ -144,7 +149,7 @@ def test_chain_reference_equals_host_builders():
         clean, start0, active = sanitize_verify_block(tokens, start_pos, c["nv"], K)
         fake = _fake_model(B, Nv, c["rope_rows"], c["delta"], parity)
         rp = Qwen36Model._vfy_row_positions(fake, start0)
-        host_aux = Qwen36Model._vfy_aux_host(fake, rp, mi)
+        host_aux = Qwen36Model._vfy_aux_host(fake, rp, mi, rope_delta=c["delta"])
         host_fa = fused_accept_aux_host(
             c["nv"], start0, active, c["skip"], c["cap"], K, SCRATCH, c["delta"], c["rope_rows"]
         )

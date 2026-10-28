@@ -153,12 +153,13 @@ def test_aux_layout_and_padding(expect_error):
         -7,
         4096,
     )
-    assert aux.shape == (6, 32) and aux.dtype == torch.int32
+    assert aux.shape == (7, 32) and aux.dtype == torch.int32
     w = aux.to(torch.int64) & 0xFFFFFFFF
     assert w[0, :2].tolist() == [3, 0] and w[1, :2].tolist() == [1, 0] and w[2, :2].tolist() == [0, 1]
     assert w[3, :2].tolist() == [0, 0] and w[4, :2].tolist() == [10, 0]
     assert w[5, :5].tolist() == [SCRATCH, 2**32 - 7, 4096, 2, 3]
     assert int(w[5, 5:].sum()) == 0
+    assert w[6, :2].tolist() == [2**32 - 7] * 2 and int(w[6, 2:].sum()) == 0  # row 6: each row's own delta word
     with expect_error(ValueError, "draft_rows_fit depends on m"):  # mixed row, not skip
         fused_accept_aux_host(
             torch.tensor([3]), torch.tensor([192 - 3 - 1 - 1]), torch.tensor([True]), [False], 192, 3, 0, 0, 10

@@ -24,14 +24,16 @@ from models.demos.blackhole.qwen36.tt.spec_fused import (
     AUX_ACTIVE,
     AUX_CONSTS,
     AUX_DECLINED,
+    AUX_DELTA,
     AUX_KEEP,
     AUX_NUM_VALID,
     AUX_P0,
-    CONST_ROPE_DELTA,
     CONST_ROPE_ROWS,
     CONST_SCRATCH,
     FUSED_AUX_ROWS,
     FusedGreedyDevice,
+    aux_row_deltas,
+    ridx_deltas,
 )
 from models.demos.blackhole.qwen36.tt.tp_common import pack_u32_rows, rope_row_index
 
@@ -93,8 +95,8 @@ def fused_drafter_reference(committed, counts, aux, pt, *, B, K):
     T = K + 1
     aux = torch.as_tensor(aux).to(torch.int64) & 0xFFFFFFFF
     dec0, keep, p0 = aux[AUX_DECLINED, :B], aux[AUX_KEEP, :B], aux[AUX_P0, :B]
-    scratch, delta, rope_rows = (int(aux[AUX_CONSTS, i]) for i in (CONST_SCRATCH, CONST_ROPE_DELTA, CONST_ROPE_ROWS))
-    delta = delta - (1 << 32) if delta >= 1 << 31 else delta
+    scratch, rope_rows = (int(aux[AUX_CONSTS, i]) for i in (CONST_SCRATCH, CONST_ROPE_ROWS))
+    delta = ridx_deltas(aux_row_deltas(aux, B), T, K)
     committed = torch.as_tensor(committed).to(torch.int64)
     m = torch.as_tensor(counts).to(torch.int64) - 1
     anchor_pos = p0 + m
@@ -305,7 +307,7 @@ class FusedSampledDevice(FusedGreedyDevice):
 
     Inputs : union_vals_in bf16 [1,1,32,TP*M] and union_ids_in uint32 [1,1,32,TP*M] (TILE; the model binds the topk trace's
              _vfy_topk_vals_out / _vfy_topk_ids_out: block d at columns d*M.., ids local to shard d; rows >= R are ignored),
-             ids_in uint32 RM [1,1,1,32] (argmax ids, greedy rows), tok_in uint32 RM [1,R], aux_in int32 RM [6,W] (S1),
+             ids_in uint32 RM [1,1,1,32] (argmax ids, greedy rows), tok_in uint32 RM [1,R], aux_in int32 RM [7,W] (S1),
              samp_in fp32 RM [4+B, W] (pack_samp_host), pt_rows_in int32 RM [R,nb].
     Outputs: pack_out uint32 RM [2K+5,W], rs_pt_out int32 RM [R,nb] (as S1, computed from the sampled committed/counts),
              result_out int32 RM [3,W]: row 0 committed flattened r = u*T+j (-1 past the count), row 1 counts[B],
@@ -470,12 +472,13 @@ class FusedSampledDevice(FusedGreedyDevice):
         # ---- inputs -> fp32 TILE
         ids = fl(tl(ttnn.reshape(ttnn.slice(self.ids_in, [0, 0, 0, 0], [1, 1, 1, R]), (B, T))))  # [B,T]
         tok = fl(tl(ttnn.reshape(self.tok_in, (B, T))))  # [B,T]
-        aux = fl(tl(self.aux_in))  # [6,W]
+        aux = fl(tl(self.aux_in))  # [7,W]
         auxt = ttnn.transpose(aux, 0, 1)
         col = lambda i: ttnn.slice(auxt, [0, i], [B, i + 1])
         nv, act, dec, keep, p0 = col(AUX_NUM_VALID), col(AUX_ACTIVE), col(AUX_DECLINED), col(AUX_KEEP), col(AUX_P0)
         c = lambda i: ttnn.slice(aux, [AUX_CONSTS, i], [AUX_CONSTS + 1, i + 1])
-        scratch, delta, rows = c(CONST_SCRATCH), c(CONST_ROPE_DELTA), c(CONST_ROPE_ROWS)
+        scratch, rows = c(CONST_SCRATCH), c(CONST_ROPE_ROWS)
+        delta = col(AUX_DELTA)  # [B,1] per-row rope delta
         rows_m1 = sub(rows, self.c_one)
         samp = fl(tl(self.samp_in))  # [4+B,W]
         sampt = ttnn.transpose(samp, 0, 1)  # [W,4+B]
