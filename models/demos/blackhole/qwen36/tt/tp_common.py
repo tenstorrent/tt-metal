@@ -402,6 +402,215 @@ def draft_lmhead_bfp4_enabled():
     return on
 
 
+# DRAM-sharded LM head for the decode-shaped (<= 32 rows) head calls, after the qwen38_27b_qb2 head
+# (nstamatovic/qwen38-27b-qb2-opts, Qwen38Model._dram_logits). The plain head is an auto-configured
+# 1D mcast matmul on an interleaved weight; this streams a second, DRAM-width-sharded copy of the same
+# vocab-sharded weight from bank-adjacent readers. Each device's 970 vocab tiles (Qwen3.8 TP8) sit in
+# 8 banks x 122 = 976 tiles; the 6 pad tiles exist only in the last bank's shard, past the tensor's
+# logical width, so they never reach the logits (no -inf fill, no slice, no argmax change).
+LMHEAD_DSHARD_ENV = "QWEN36_LMHEAD_DSHARD"
+LMHEAD_DSHARD_READERS_ENV = "QWEN36_LMHEAD_DSHARD_READERS"
+
+
+def lm_head_dshard_mode():
+    """QWEN36_LMHEAD_DSHARD (default "0" = off): "1" / "exact" runs the single-reader DRAM-sharded program with the
+    plain head's K blocking (in0_block_w 2), Dest mode and packer L1 accumulation, so every logit is meant to be the
+    plain head's bits; "mc" runs the qb2 multi-core pipeline, which accumulates 8 K tiles per Dest pass and is
+    therefore NOT bit-identical (A/B only). Returns None, "exact" or "mc"."""
+    mode = os.environ.get(LMHEAD_DSHARD_ENV, "0").strip().lower()
+    if mode in ("", "0", "off"):
+        return None
+    if mode in ("1", "exact"):
+        return "exact"
+    if mode == "mc":
+        return "mc"
+    raise ValueError(f"{LMHEAD_DSHARD_ENV}={mode!r} invalid (0|1|exact|mc)")
+
+
+def lm_head_dshard_readers():
+    """QWEN36_LMHEAD_DSHARD_READERS: DRAM readers per bank. Unset = 2 for "exact", the qb2 rule for "mc"."""
+    raw = os.environ.get(LMHEAD_DSHARD_READERS_ENV, "").strip()
+    return int(raw) if raw else None
+
+
+def dram_multicore_workers(bank_tiles):
+    """qb2's workers per DRAM bank for the multi-core pipeline: about one per 8 tiles of a bank, 2 to 4."""
+    return min(4, max(2, (bank_tiles + 7) // 8))
+
+
+# L1 the single-reader ("exact") program may take on one storage core (Blackhole: 1.5 MB per Tensix). The rest is
+# left for l1_small, the kernel config buffer and whatever the decode trace already holds in L1.
+LMHEAD_DSHARD_L1_BUDGET = 1400 * 1024
+_TILE_BYTES = {"bfloat16": 2048, "float32": 4096, "bfloat8_b": 1088, "bfloat4_b": 576}
+
+
+class LMHeadDShardPlan:
+    """Shapes of the DRAM-sharded head (pure arithmetic, no device). k / n: the per-device weight [k, n]."""
+
+    def __init__(self, k, n, banks, mode="exact", readers=None):
+        if mode not in ("exact", "mc"):
+            raise ValueError(f"LM-head DRAM-shard mode {mode!r} invalid (exact|mc)")
+        if k % TILE_SIZE:
+            raise ValueError(f"LM-head K {k} is not a whole number of tiles")
+        self.mode = mode
+        self.multicore = mode == "mc"
+        self.banks = banks
+        self.k_tiles = k // TILE_SIZE
+        self.n_tiles = math.ceil(n / TILE_SIZE)
+        # The plain head's auto 1D-mcast config streams K in 2-tile blocks when K is even (get_mcast_1d_config);
+        # the same blocking keeps the per-tile accumulation order, which "exact" relies on.
+        self.in0_block_w = 2 if self.k_tiles % 2 == 0 else 1
+        if self.multicore:
+            self.bank_tiles = math.ceil(self.n_tiles / banks)
+            self.readers = dram_multicore_workers(self.bank_tiles) if readers is None else readers
+            if self.readers < 2:
+                raise ValueError("the multi-core pipeline needs at least 2 readers per bank")
+        else:
+            # 2 readers per bank by default: one reader per bank needs ~1.85 MB of L1 per storage core for the
+            # drafter's fp32 head (in1 triple buffer 732 bfp8 tiles + 124 fp32 out tiles + the 122-tile fp32 shard),
+            # more than a Blackhole core has. The bank shard stays 122 tiles (2 x 61) and the per-tile K order
+            # does not change, so the result is the same bits.
+            self.readers = 2 if readers is None else readers
+            if not 1 <= self.readers <= 3:
+                raise ValueError(f"single-reader DRAM-sharded head takes 1-3 readers per bank, got {self.readers}")
+            # Several readers per bank need the bank's shard to be readers x ceil(N / (banks x readers)) tiles.
+            self.bank_tiles = self.readers * math.ceil(self.n_tiles / (banks * self.readers))
+        self.padded_tiles = self.bank_tiles * banks
+        if self.padded_tiles - self.n_tiles >= self.bank_tiles:
+            raise ValueError(f"{self.n_tiles} vocab tiles leave a padding-only bank of {self.bank_tiles}")
+        # Activation: width-sharded over one core per bank (the qb2 layout: output cores == activation cores),
+        # each shard a whole number of K blocks.
+        self.act_cores = banks
+        if self.k_tiles % (self.act_cores * self.in0_block_w):
+            raise ValueError(
+                f"K {self.k_tiles} tiles do not split into {banks} shards of {self.in0_block_w}-tile blocks"
+            )
+        self.act_shard_w = self.k_tiles // self.act_cores * TILE_SIZE
+        self.per_core_N = self.bank_tiles
+
+    def l1_bytes_per_core(self, out_dtype="float32", act_dtype="bfloat16", weight_dtype="bfloat8_b"):
+        """Upper bound on one storage core's L1 for the single-reader program (matmul_multicore_reuse_mcast_dram_
+        sharded_program_factory): its buffers sit on every core of the worker/storage bounding box, and a storage
+        core also holds its input shard and its L1 output shard. Out/interm share one buffer (same format for the
+        fp32 head and for the bf16 head with packer L1 acc). Dtypes are ttnn dtype names."""
+        if self.multicore:
+            raise ValueError("the L1 bound models the single-reader program only")
+        out_b, act_b, w_b = _TILE_BYTES[out_dtype], _TILE_BYTES[act_dtype], _TILE_BYTES[weight_dtype]
+        per_worker = math.ceil(self.n_tiles / (self.banks * self.readers))
+        max_subblock_w = 4 if out_dtype == "float32" else 8
+        out_tiles = math.ceil(per_worker / max_subblock_w) * max_subblock_w  # subblock widening pads per_core_N
+        in1 = per_worker * self.in0_block_w * 3 * w_b  # triple-buffered K block
+        in0 = self.in0_block_w * 2 * act_b  # double-buffered K block
+        act_shard = (self.act_shard_w // TILE_SIZE) * act_b
+        out_shard = self.per_core_N * out_b
+        return in1 + out_tiles * out_b + in0 + act_shard + out_shard
+
+    def check_l1(self, weight_dtype="bfloat8_b", budget=LMHEAD_DSHARD_L1_BUDGET):
+        """Raise at init (not inside the decode trace) when the fp32 drafter head would not fit in L1."""
+        if self.multicore:
+            return
+        need = self.l1_bytes_per_core("float32", "bfloat16", weight_dtype)
+        if need > budget:
+            raise ValueError(
+                f"LM-head DRAM-shard with {self.readers} reader(s)/bank needs ~{need // 1024} KB of L1 per storage "
+                f"core for the fp32 head (budget {budget // 1024} KB); use {LMHEAD_DSHARD_READERS_ENV}=2 or 3"
+            )
+
+
+def lm_head_default_fidelity(a_dtype, b_dtype):
+    """The fidelity ttnn.linear picks with no program config and no compute config (matmul_device_operation):
+    LoFi when both operands are block-float, else HiFi2. A program config switches that default to LoFi, so the
+    DRAM-sharded head passes it explicitly."""
+    low = (ttnn.bfloat8_b, ttnn.bfloat4_b)
+    return ttnn.MathFidelity.LoFi if (a_dtype in low and b_dtype in low) else ttnn.MathFidelity.HiFi2
+
+
+class LMHeadDShard:
+    """DRAM-width-sharded copy of the (vocab-sharded) LM-head weight + the program that reads it.
+
+    linear(x, ...) takes the same arguments the plain head call does and returns the same DRAM-interleaved
+    [.., rows, vocab/TP] logits. ``applies(x)`` says whether x is decode-shaped (one tile of rows)."""
+
+    def __init__(self, weight, mesh_device, mode, readers=None):
+        k, n = weight.shape[-2], weight.shape[-1]
+        self.mesh_device = mesh_device
+        self.plan = p = LMHeadDShardPlan(k, n, mesh_device.dram_grid_size().x, mode, readers)
+        _w_names = {ttnn.bfloat8_b: "bfloat8_b", ttnn.bfloat4_b: "bfloat4_b", ttnn.bfloat16: "bfloat16"}
+        p.check_l1(_w_names.get(weight.dtype, "bfloat16"))  # unknown dtype: assume the largest weight tile
+        self.k = k
+        self.weight_dtype = weight.dtype
+        bank_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(p.banks - 1, 0))})
+        memory = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(bank_grid, [k, p.bank_tiles * TILE_SIZE], ttnn.ShardOrientation.ROW_MAJOR),
+        )
+        self.weight = ttnn.to_memory_config(weight, memory)
+        self.act_memcfg = ttnn.create_sharded_memory_config(
+            shape=(TILE_SIZE, p.act_shard_w),
+            core_grid=ttnn.CoreGrid(x=p.act_cores, y=1),
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.progcfg = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+            in0_block_w=p.in0_block_w,
+            per_core_M=1,
+            per_core_N=p.per_core_N,
+            fused_activation=None,
+            num_workers_per_dram_bank=p.readers,
+            use_multicore_pipeline=p.multicore,
+        )
+        logger.info(
+            f"LM head DRAM-sharded ({LMHEAD_DSHARD_ENV}={mode}): K {p.k_tiles} x N {p.n_tiles} tiles in "
+            f"{p.banks} banks x {p.bank_tiles} (= {p.padded_tiles}), in0_block_w {p.in0_block_w}, "
+            f"{p.readers} reader(s)/bank, multicore={p.multicore}"
+        )
+
+    def applies(self, x):
+        shape = x.shape
+        return (
+            len(shape) == 4
+            and shape[0] == 1
+            and shape[1] == 1
+            and shape[-2] <= TILE_SIZE
+            and shape[-1] == self.k
+            and x.layout == ttnn.TILE_LAYOUT
+        )
+
+    def compute_config(self, x_dtype, out_dtype):
+        """The compute config the plain head call ends up with when it passes none (matmul_device_operation):
+        default fidelity, no approximation, fp32 Dest only for a float32 output, packer L1 acc otherwise."""
+        fp32 = out_dtype == ttnn.float32
+        return ttnn.init_device_compute_kernel_config(
+            self.mesh_device.arch(),
+            math_fidelity=lm_head_default_fidelity(x_dtype, self.weight_dtype),
+            math_approx_mode=False,
+            fp32_dest_acc_en=fp32,
+            packer_l1_acc=not fp32,
+        )
+
+    def linear(self, x, dtype=None, compute_kernel_config=None):
+        out_dtype = x.dtype if dtype is None else dtype
+        cfg = compute_kernel_config if compute_kernel_config is not None else self.compute_config(x.dtype, out_dtype)
+        already = x.memory_config() == self.act_memcfg
+        x_sh = x if already else ttnn.to_memory_config(x, self.act_memcfg)
+        kw = {} if dtype is None else {"dtype": dtype}
+        out = ttnn.linear(
+            x_sh,
+            self.weight,
+            program_config=self.progcfg,
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            compute_kernel_config=cfg,
+            **kw,
+        )
+        if not already:
+            ttnn.deallocate(x_sh)
+        logits = ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(out)
+        return logits
+
+
 BFP4_GDN_IN_ENV = "QWEN36_BFP4_GDN_IN"
 _BFP4_GDN_IN_LOGGED = False
 

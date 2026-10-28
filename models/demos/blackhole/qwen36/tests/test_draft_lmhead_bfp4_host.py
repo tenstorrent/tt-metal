@@ -85,6 +85,7 @@ def test_lm_head_weight_kwarg(monkeypatch):
         _lmhead_vocab_sharded=False,
         device=types.SimpleNamespace(arch=lambda: "bh"),
     )
+    fake._lm_head_linear = lambda x, **kw: Qwen36Model._lm_head_linear(fake, x, **kw)
     Qwen36Model._lm_head(fake, "x")
     Qwen36Model._lm_head(fake, "x", out_dtype=ttnn.float32)
     Qwen36Model._lm_head(fake, "x", out_dtype=ttnn.float32, weight=DRAFT_W)
@@ -109,6 +110,9 @@ def _fake_mtp(monkeypatch, sharded_argmax, ondev_argmax=False):
     m._sharded_argmax = sharded_argmax
     m._ondev_argmax = ondev_argmax
     m._fp32_cfg = "fp32cfg"
+    # Parent's routing (QWEN36_LMHEAD_DSHARD off): the bound parent method Qwen36MTP.__init__ shares.
+    parent = types.SimpleNamespace(lm_head_weight=BASE_W)
+    m._lm_head_linear = lambda x, **kw: Qwen36Model._lm_head_linear(parent, x, **kw)
     m._lm_head = lambda x, out_dtype=None, gather=True, weight=None: seen.append(
         (BASE_W if weight is None else weight, {"dtype": out_dtype})
     )
@@ -130,3 +134,30 @@ def test_forward_decode_flag_off_is_shared_head(monkeypatch):
     m.draft_lm_head_weight = m.lm_head_weight  # what __init__ does with the flag off
     m.forward_decode("h", "tok", "pos", "cos", "sin", "pt")
     assert seen[0][0] is BASE_W
+
+
+class _FakeDShard:
+    """QWEN36_LMHEAD_DSHARD stand-in: applies to every x, records the calls it serves."""
+
+    def __init__(self):
+        self.calls = []
+
+    def applies(self, x):
+        return True
+
+    def linear(self, x, **kw):
+        self.calls.append(kw)
+        return "dshard_logits"
+
+
+def test_lm_head_linear_dshard_only_for_base_weight(monkeypatch):
+    """QWEN36_LMHEAD_DSHARD x QWEN36_DRAFT_LMHEAD_BFP4: the DRAM-sharded copy serves only the base BFP8 weight
+    (weight None or lm_head_weight itself); the drafter's BFP4 copy always takes the plain interleaved linear."""
+    seen = _record_linear(monkeypatch)
+    d = _FakeDShard()
+    fake = types.SimpleNamespace(lm_head_weight=BASE_W, _lm_head_dshard=d)
+    assert Qwen36Model._lm_head_linear(fake, "x") == "dshard_logits"
+    assert Qwen36Model._lm_head_linear(fake, "x", weight=BASE_W, dtype=ttnn.float32) == "dshard_logits"
+    assert Qwen36Model._lm_head_linear(fake, "x", weight=DRAFT_W, dtype=ttnn.float32) == "logits"
+    assert len(d.calls) == 2 and d.calls[1]["dtype"] == ttnn.float32
+    assert [w for w, _ in seen] == [DRAFT_W]

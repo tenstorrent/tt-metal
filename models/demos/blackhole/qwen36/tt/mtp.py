@@ -80,6 +80,7 @@ class Qwen36MTP:
         # Shared (no new weights): the main embedding + LM head + final-norm reuse.
         self.embd = parent.embd
         self._lm_head = parent._lm_head
+        self._lm_head_linear = parent._lm_head_linear  # QWEN36_LMHEAD_DSHARD routing (plain linear when off)
         self.lm_head_weight = parent.lm_head_weight
         # Head weight the DRAFTER's logits use (all three branches of forward_decode). By default the
         # shared BFP8 head itself. QWEN36_DRAFT_LMHEAD_BFP4=1 builds a second, bfloat4_b copy with the
@@ -531,11 +532,14 @@ class Qwen36MTP:
             # turns it into the global id with two 32-lane gathers instead of one 993 KB one. Same
             # matmul math as the _lm_head fp32 branch below (HiFi2 + fp32 dest accumulation), minus
             # the collective, so the drafter keeps the fp32 tie-breaking it was given fp32 for.
-            logits = ttnn.linear(
-                normed, self.draft_lm_head_weight, dtype=ttnn.float32, compute_kernel_config=self._fp32_cfg
+            logits = self._lm_head_linear(
+                normed,
+                weight=self.draft_lm_head_weight,
+                dtype=ttnn.float32,
+                compute_kernel_config=self._fp32_cfg,
             )
         elif sharded_lm_head or getattr(self, "_ondev_argmax", False):
-            logits = ttnn.linear(normed, self.draft_lm_head_weight)  # vocab-sharded shard
+            logits = self._lm_head_linear(normed, weight=self.draft_lm_head_weight)  # vocab-sharded shard
         else:
             # fp32 for the DRAFTER only (the shared base/verify call keeps its default bf16 output —
             # losslessness is defined by the base argmax). The drafter's argmax consumes these
