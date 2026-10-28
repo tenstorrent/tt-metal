@@ -220,8 +220,10 @@ void check_l1(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, ui
 }  // namespace
 
 void check_chunks(const SDPAForwardProgramConfig& config, const SDPAForwardShape& shape, uint64_t l1_budget_bytes) {
-    const SDPAForwardChunks user = user_chunks(config, shape);
-    if (user.Sq_chunk_t != 0U && user.Sk_chunk_t != 0U && user.heads_per_item != 0U) {
+    SDPAForwardChunks user = user_chunks(config, shape);
+    // With both chunk sizes pinned nothing can shrink, so the L1 check is final here (heads_per_item 0 = 1).
+    if (user.Sq_chunk_t != 0U && user.Sk_chunk_t != 0U) {
+        user.heads_per_item = std::max(user.heads_per_item, 1U);
         check_l1(shape, user, l1_budget_bytes);
     }
 }

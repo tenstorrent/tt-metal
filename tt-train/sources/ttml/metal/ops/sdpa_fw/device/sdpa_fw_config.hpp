@@ -95,8 +95,8 @@ uint32_t num_work_units(const SDPAForwardShape& shape, const SDPAForwardChunks& 
 std::vector<CoreItemRuns> split_work(
     const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores);
 
-// Cheap knob checks for validate: each set knob must divide its axis, and a fully specified config must
-// fit l1_budget_bytes. Throws otherwise.
+// Cheap knob checks for validate: each set knob must divide its axis, and pinned chunk sizes must fit
+// l1_budget_bytes. Throws otherwise.
 void check_chunks(const SDPAForwardProgramConfig& config, const SDPAForwardShape& shape, uint64_t l1_budget_bytes);
 
 // check_chunks, then picks the unset knobs by a shape rule, shrinking them until they fit l1_budget_bytes
