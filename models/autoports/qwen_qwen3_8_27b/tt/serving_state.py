@@ -7,6 +7,7 @@ No saved row aliases live request state, and restore never mutates the pool.
 """
 import math
 import operator
+import os
 from pathlib import Path
 
 import torch
@@ -77,6 +78,15 @@ class ServingStatePool:
         self.allocated_bytes_per_device = sum(
             int(pool.conv.shape[0]) * (3*2560*2 + 12*128*128*4)
             for pool in unique_pools.values())
+        # Keep historical payload metadata separate from bank-padded owners.
+        self.physical_memory=None
+        self.bank_padding_bytes_per_device=None
+        if os.environ.get('QWEN38_MEMORY_ATTESTATION')=='1':
+            from .serving_memory_metadata import interleaved_owner_bytes
+            banks=ttnn.get_memory_view(self.mesh,ttnn.BufferType.DRAM).num_banks
+            self.physical_memory=interleaved_owner_bytes(
+                [tensor for pool in unique_pools.values() for tensor in (pool.conv,pool.recurrent)],banks)
+            self.bank_padding_bytes_per_device=self.physical_memory['bytes_per_device']-self.allocated_bytes_per_device
 
     def _copy_tensor(self, source, destination, layer_row):
         if source.buffer_address() == destination.buffer_address():

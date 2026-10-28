@@ -25,8 +25,15 @@ Regular DRAM matches the observed allocator exactly at both checkpoints. Three
 TRACE buffers account for the entire25,624,576-byte former excess. Preserve
 the original failed receipt; this is a corrected accounting interpretation,
 not a changed model run or an unexplained-residual exemption. TRACE occupancy
-from this replay is not independently verified against a TRACE allocator view;
-the next diagnostic supplies that view explicitly.
+from this control replay is not independently verified against a TRACE view.
+A subsequent source-matched B1 candidate supplies both views:8,865,866,752bytes
+regular DRAM and24,117,248bytes used TRACE match events exactly, with110,100,480
+bytes free in the configured134,217,728-byte arena. All named model
+weight/cache/workspace categories equal the control. The candidate changes only
+the unitemized regular-DRAM remainder by+98,304bytes and used TRACE allocation
+by-1,507,328bytes; the reserved arena stays fixed. Per-device/per-bank category
+tables and source hashes are in `B1_PHYSICAL_OWNER_CATEGORIES{,-candidate}.json`
+and `B1_PHYSICAL_OWNER_COMPARISON.json` under the same external directory.
 
 Evidence outside Git:
 `/home/mvasiljev/build/qwen38-swe/memory-prefix/B1_TRACE_DOMAIN_REPLAY.json`.

@@ -129,6 +129,8 @@ class Qwen38ForCausalLM:
         self.allocation_evidence=dict(
             scheduler_blocks=config.num_blocks,scheduler_block_size=self.scheduler_block_size,
             physical_cache_budget_bytes_per_device=budget,
+            shared_mlp_weights=os.environ.get('QWEN38_SHARED_MLP_WEIGHTS','0'),
+            retained_packed_mlp_owners=sum(getattr(layer,'gateup',None) is not None for layer in self.model.layers),
             group_count=len(config.kv_cache_groups),
             recurrent_snapshot_bytes_per_device=self.state_pool.allocated_bytes_per_device,
             recurrent_unique_snapshot_pools=self.state_pool.unique_pool_count,
@@ -141,6 +143,20 @@ class Qwen38ForCausalLM:
             basis='Physical selected BFP8 attention, FP32 recurrence, BF16 convolution; allocator checkpoint, not peak',
             selected_layers=self.model.layer_indices,
             precision_config=self.model.precision_config)
+        if os.environ.get('QWEN38_MEMORY_ATTESTATION')=='1':
+            from .serving_memory_metadata import allocator_views,interleaved_owner_bytes
+            banks=memory.num_banks
+            attention=interleaved_owner_bytes([tensor for state in states if hasattr(state,'key')
+                                              for tensor in (state.key,state.value)],banks)
+            active=interleaved_owner_bytes([tensor for state in states if hasattr(state,'conv')
+                                           for tensor in (state.conv,state.recurrent)],banks)
+            self.allocation_evidence.update(
+                attention_physical_buffer_metadata=attention,
+                recurrent_snapshot_physical_buffer_metadata=self.state_pool.physical_memory,
+                recurrent_snapshot_bank_padding_bytes_per_device=self.state_pool.bank_padding_bytes_per_device,
+                active_recurrent_physical_buffer_metadata=active,
+                physical_cache_bytes_per_device=attention['bytes_per_device']+self.state_pool.physical_memory['bytes_per_device'],
+                allocator_domains_after_allocation=allocator_views(self.mesh))
         return states
 
     def allocate_kv_cache(self, shape, dtype, num_layers):
@@ -182,6 +198,10 @@ class Qwen38ForCausalLM:
             self.state_pool.warmup()
         self.generator.prepare_decode()
         if first:
+            if os.environ.get('QWEN38_MEMORY_ATTESTATION')=='1':
+                from .serving_memory_metadata import allocator_views
+                self.allocation_evidence['allocator_domains_after_preparation']=allocator_views(self.mesh)
+                print('QWEN38_MEMORY_ATTESTATION '+json.dumps(self.allocation_evidence),flush=True)
             self._event('prepared',duration_s=time.perf_counter()-started,
                 execution_signatures={
                     **{f'decode:B{self.batch_size}:masked={masked}':str(trace)
@@ -206,16 +226,24 @@ class Qwen38ForCausalLM:
 
     def _event(self,kind,**fields):
         path=getattr(self,'event_path',None)
-        if not path:
+        checkpoints=os.environ.get('QWEN38_MEMORY_CHECKPOINTS')=='1'
+        if not path and not checkpoints:
             return
         event=dict(event=kind,time=time.time(),pid=os.getpid(),batch=self.batch_size,
             counters=dict(self.generator.counters),host_logits_reads=self.host_logits_reads,
             retirement_count=self.trace_retirements,
             **fields)
+        if checkpoints:
+            from .serving_memory_metadata import allocator_views
+            event['allocator_domains']=allocator_views(self.mesh)
+            event['allocator_scope']='Host allocator checkpoint only, not a continuous transient peak or live profiler'
         if self.state_pool is not None:
             event['state_pool']=dict(self.state_pool.counters)
-        with open(path,'a') as output:
-            output.write(json.dumps(event)+'\n')
+        if path:
+            with open(path,'a') as output:
+                output.write(json.dumps(event)+'\n')
+        else:
+            print('QWEN38_MEMORY_CHECKPOINT '+json.dumps(event),flush=True)
 
     def _page_table(self, table):
         if self.scheduler_block_size != 32:
