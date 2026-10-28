@@ -429,14 +429,23 @@ class TtKDA(LightweightModule):
         layer = self._prefill_layers.get(key)
         if layer is None:
             kw = {}
+            build_knob = l1_knob
             if self.mesh.rows > 1 and not row_local:
                 # sequence-parallel over the rows: the grouped scan needs summary_group_chunks to divide the
                 # LOCAL chunk count (active_seq_len / rows / 32) and one summary-owner core per (local head,
                 # group): heads * groups <= the worker grid (120 on P150); see summary_group_chunks
                 local_chunks = active_seq_len // self.mesh.rows // ttnn.TILE_SIZE
-                kw["recurrence"] = KDARecurrenceProgramConfig(
-                    summary_group_chunks=self.summary_group_chunks(local_chunks)
-                )
+                group_chunks = self.summary_group_chunks(local_chunks)
+                kw["recurrence"] = KDARecurrenceProgramConfig(summary_group_chunks=group_chunks)
+                # tt-blaze G53F-0254: with more than one summary group the recurrence runs affine_exclusive_scan, whose
+                # ~1 MB of static circular buffers (region end 1029280) cannot sit beside the chunk terms in L1. Those
+                # fit the 320 KiB preparation budget only for 21-37 local chunks (5.4 k-9.5 k-token chunks: 8192 =
+                # 273 KiB per core), so every such length crashed at its first compile ("Statically allocated
+                # dataflow buffers ... clash with L1 buffers", 8188 twice). Keep the chunk terms in DRAM whenever the
+                # scan is grouped -- placement only, the same kernels and arithmetic, as 16 K chunks (546 KiB) already
+                # run. An explicit GLM53_KDA_L1_KB prep= still wins.
+                if local_chunks // group_chunks > 1 and "prep=" not in l1_knob:
+                    build_knob = ",".join(k for k in (l1_knob, "prep=0") if k)
             program_config = KDAProgramConfig(
                 gated_rms_output_dtype=ttnn.bfloat16,
                 input_projection_math_fidelity=ttnn.MathFidelity.HiFi2,
@@ -448,7 +457,7 @@ class TtKDA(LightweightModule):
                 from models.common.modules.tt_ccl import get_tt_ccl
 
                 tt_ccl = get_tt_ccl(self.device)  # ttKDA's TP reduce-scatter semaphores (one set per mesh)
-            with _kda_l1_budgets(l1_knob):
+            with _kda_l1_budgets(build_knob):
                 layer = ttKDA(
                     self.device,
                     self.kcfg,
