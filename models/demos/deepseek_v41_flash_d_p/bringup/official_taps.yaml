@@ -1,7 +1,8 @@
 # F80: the dtypes DeepSeek's inference/model.py (bf16 default dtype, the GPU configuration of generate.py) holds each
 # block step's inputs and output in (testing/noise_floor.py). Inputs in the framework step's input order
 # (reference/ds41_ref.py:block_steps); `fixed` = a quantizer's output (fp8 / fp4 values, an exact model value: not
-# nudged); integer inputs (topk) are never nudged. The capture: reference/official_taps.py (hook official_taps).
+# nudged); `fp4/<block>` = an fp4 quantizer's output nudged inside its e2m1 cell (F223); integer inputs (topk) are
+# never nudged. The capture: reference/official_taps.py (hook official_taps).
 #
 # Packed boundaries (in / x / out [S, 4H + 4]) hold bf16 streams and the fp32 pending pre weights in model.py; one
 # dtype per input, so they are marked bf16 (the streams: 4H of the 4H + 4 columns).
@@ -30,7 +31,9 @@ steps:
       for bit (equal fraction 1.000000) at L2 (ratio 2), L14 (ratio 2) and L20 (ratio 1); official vs the plain fp32
       step rel 0.0373 / 0.0366 / 0.0371. DS41-38.
   indexer: {inputs: [bf16, bf16, fixed]}                  # attn_norm, q_resid, compressed; output int32 top-k
-  attention: {inputs: [bf16, fixed, fixed, fixed], out: bf16}  # q_resid, kv, (compressed), (topk: int); wo_b -> bf16
+  # compressed: fp4 (e2m1, e4m3 scale per 16) values; nudged inside their fp4 cell so the limit counts the reference's
+  # own 4-bit rounding of the cache (F223, owner 2026-10-28: CKV_FORMAT=bfp4_rows is judged against it)
+  attention: {inputs: [bf16, fixed, fp4/16, fixed], out: bf16}  # q_resid, kv, (compressed), (topk: int); wo_b -> bf16
   attn_residual: {inputs: [bf16, fp32, bf16], out: bf16}  # hc_post(attn_out, residual, post, comb).type_as(attn_out)
   ffn_hc: {inputs: [bf16], out: fp32}
   ffn_collapse: {inputs: [bf16, fp32], out: bf16}         # h_mid bf16, the attention mixes fp32

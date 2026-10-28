@@ -13,7 +13,8 @@ larger of
 - the reference arithmetic: the official code at its own dtypes on the same inputs vs the fp32 step (tapped per step
   from the official model and cached with the goldens: official_floor.json; testing/official_floor.py), and
 - the input nudge: the fp32 step on its inputs moved uniformly inside their rounding cell, in the dtype the official
-  code holds each input (official_taps.yaml; default bf16; quantizer outputs `fixed`), SEEDS seeds, the worst.
+  code holds each input (official_taps.yaml; default bf16; an fp4 quantizer's output `fp4/<block>`, F223; other
+  quantizer outputs `fixed`), SEEDS seeds, the worst.
 A limit is calib (component_calib) x that floor on the same
 comparison (vs the CPU step on the same inputs, or vs the golden), never below what one rounding of the output to
 its official dtype shows (F133: bf16, or fp32 for an fp32 output) (an exact step) or one element of an integer output. For a correlation the miss is 1 - pcc ~ rel^2 / 2, so calib
@@ -96,29 +97,58 @@ def bf16_res(mode: str, ref: torch.Tensor, dtype: str = "bf16") -> float:
 
 
 # ---------------------------------------------------------------- the input nudge (F80)
+FP4_GRID_STEP = ((2.0, 0.5), (4.0, 1.0), (math.inf, 2.0))  # e2m1 magnitudes 0..6: the step below each bound
+
+
+def _fp4_block(dtype: str) -> int | None:
+    """``fp4/<block>``: an fp4 (e2m1) quantizer output with a scale per <block> values of the last dim; else None."""
+    if not dtype.startswith("fp4/"):
+        return None
+    b = dtype[4:]
+    if not b.isdigit() or int(b) < 1:
+        raise ValueError(f"input dtype {dtype!r}: fp4/<block>, e.g. fp4/16")
+    return int(b)
+
+
 def nudge(t, seed: int, dtype: str = "bf16"):
-    """t moved uniformly inside its rounding cell in ``dtype`` (bf16 / fp32); `fixed` (a quantizer's output) and
-    integer tensors stay as they are."""
+    """t moved uniformly inside its rounding cell in ``dtype`` (bf16 / fp32, or fp4/<block>: the e2m1 grid step at
+    |t| / s, s = the block's amax / 6, the official fp4 quantizer's rounding, F223); `fixed` (a quantizer's output whose
+    rounding the step does not repeat) and integer tensors stay as they are."""
     if not isinstance(t, torch.Tensor) or not t.is_floating_point() or dtype == "fixed":
         return t
     g = torch.Generator().manual_seed(seed)
     x = t.double()
-    cell = torch.pow(2.0, torch.floor(torch.log2(x.abs().clamp_min(1e-38))) - MANT[dtype])
+    block = _fp4_block(dtype)
+    if block is not None:
+        if x.shape[-1] % block:
+            raise ValueError(f"input dtype {dtype}: last dim {x.shape[-1]} is not a multiple of {block}")
+        xg = x.reshape(*x.shape[:-1], -1, block)
+        s = (xg.abs().amax(-1, keepdim=True) / 6.0).clamp_min(1e-38)
+        m = xg.abs() / s
+        step = torch.full_like(m, FP4_GRID_STEP[-1][1])
+        for bound, st in reversed(FP4_GRID_STEP[:-1]):
+            step = torch.where(m < bound, torch.full_like(m, st), step)
+        cell = (step * s).reshape(x.shape)
+    else:
+        cell = torch.pow(2.0, torch.floor(torch.log2(x.abs().clamp_min(1e-38))) - MANT[dtype])
     return (x + (torch.rand(t.shape, generator=g, dtype=torch.float64) - 0.5) * cell).to(t.dtype)
 
 
 def input_dtypes(s, block_type: str | None, step: str, n: int) -> list[str]:
     """The dtype the official code holds each of a step's n inputs in (official_taps.yaml: steps.<step> or
-    <block type>.<step>, inputs: [bf16 | fp32 | fixed, ...]); bf16 when not mapped."""
+    <block type>.<step>, inputs: [bf16 | fp32 | fp4/<block> | fixed, ...]); bf16 when not mapped."""
     import yaml
 
     p = s.bringup_dir / TAPS_FILE
     steps = ((yaml.safe_load(p.read_text()) if p.exists() else None) or {}).get("steps") or {}
     e = steps.get(f"{block_type}.{step}") or steps.get(step) or {}
     got = list(e.get("inputs") or [])
-    bad = [d for d in got if d not in ("bf16", "fp32", "fixed")]
+    bad = [d for d in got if d not in ("bf16", "fp32", "fixed") and not str(d).startswith("fp4/")]
     if bad:
-        raise ValueError(f"{p}: {step}: input dtypes {bad} not in bf16 / fp32 / fixed")
+        raise ValueError(f"{p}: {step}: input dtypes {bad} not in bf16 / fp32 / fp4/<block> / fixed")
+    for d in got:
+        if str(d).startswith("fp4/"):
+            _fp4_block(d)
     return (got + ["bf16"] * n)[:n]
 
 
