@@ -101,10 +101,13 @@ same full-length inputs, so it is the upper bound for a padded batch of that sha
 | batch x tokens | after bring-up | now, sustained | now, best | padded, sustained | speed of light (kernel cycles) |
 |---|---|---|---|---|---|
 | 1 x 128 | 12.8 ms | 6.26 ms | 6.24 ms | 6.43 ms | |
+| 1 x 256 | | 6.45 ms | 6.44 ms | 6.72 ms | |
 | 1 x 512 | 15.6 ms | 7.70 ms | 7.68 ms | 8.05 ms | 33.7 % |
+| 1 x 1024 | | 15.2 ms | 15.1 ms | 16.6 ms | |
 | 8 x 512 | 76.2 ms | 38.8 ms | 35.4 ms | 41.6 ms | 58.6 % |
 | 32 x 512 | 329 ms | 175 ms | 109 ms | 180 ms | **75.9 %** (147.0 M cycles) |
 | 1 x 2048 | 46.5 ms | 24.9 ms | 24.3 ms | 27.7 ms | 51.9 % |
+| 1 x 4096 | | 63.8 ms | 51.9 ms | 74.8 ms | |
 | 1 x 8192 | 362 ms | 188 ms | 135 ms | 220 ms | 64.1 % |
 
 Speed of light: ideal cycles for the matmuls and attention at the precision each op runs at
