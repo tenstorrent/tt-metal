@@ -30,6 +30,13 @@ All head metrics use the head output at the read-out tokens in normalized space,
                     the median ratio: a uniform band scaling (0.88x, 1.12x) moves it, row noise does not
     spread_ratio_min, spread_ratio_max
                     the extremes of that ratio (floor-only, no drift; D3 condition 1b)
+    bias_row_p50, bias_row_max
+                    median and max over rows of the row's |mean error| (normalized units, head space; each flip
+                    half is its own row): a level shift (PLAN v1.24). No n_active gate.
+    pcc_step        PCC of the step differences (along the horizon, per quantile): a one-step lag (v1.24)
+    bias_row_p50_final, bias_row_max_final, pcc_step_final
+                    the same on the data-space forecast, row bias over the target's scale (after the flip average,
+                    where a shift common to both halves cancels)
     pcc_final       PCC of the single-pass [targets, 9, H] forecast after inverse scaling and band calibration
     pcc_final_spread  PCC of that forecast minus its mean over the quantile axis (data space)
     median_err      worst |median error| / scale over target rows
@@ -93,6 +100,12 @@ def spread_ratios(exp: torch.Tensor, got: torch.Tensor) -> torch.Tensor:
     return g / e.clamp_min(1e-300)
 
 
+def step_diff(t: torch.Tensor) -> torch.Tensor:
+    """[rows, Q * steps] or [targets, Q, H] -> differences along the horizon, per quantile."""
+    t = t.reshape(t.shape[0], Q, -1).double()
+    return t[..., 1:] - t[..., :-1]
+
+
 def gate_metrics(head, g_head, q, g_q, scale_targets) -> dict:
     rows = row_pccs(g_head, head)
     std = g_head.double().reshape(g_head.shape[0], -1).std(1)
@@ -102,6 +115,8 @@ def gate_metrics(head, g_head, q, g_q, scale_targets) -> dict:
     err = (head.double() - g_head.double()).abs().reshape(g_head.shape[0], -1).amax(1)
     med_err = (q[:, Q // 2] - g_q[:, Q // 2]).abs().amax(-1) / scale_targets.reshape(-1)
     q_spread = lambda t: t - t.mean(1, keepdim=True)  # [targets, 9, H]: minus the quantile mean
+    bias = (head.double() - g_head.double()).reshape(g_head.shape[0], -1).mean(1).abs()
+    bias_f = (q.double() - g_q.double()).reshape(g_q.shape[0], -1).mean(1).abs() / scale_targets.double().reshape(-1)
     return {
         "pcc_normalized": pearson(g_head, head),
         "pcc_spread": pearson(spread(g_head), spread(head)),
@@ -121,6 +136,12 @@ def gate_metrics(head, g_head, q, g_q, scale_targets) -> dict:
         "flat_max_err": float(err[flat].max()) if bool(flat.any()) else 0.0,
         "inactive_max_err": float(err[~act].max()) if bool((~act).any()) else 0.0,
         "abs_err_max": float(err.max()),  # gross single-element check, not a band check (v1.16)
+        "bias_row_p50": float(bias.median()),
+        "bias_row_max": float(bias.max()),
+        "pcc_step": pearson(step_diff(g_head), step_diff(head)),
+        "bias_row_p50_final": float(bias_f.median()),
+        "bias_row_max_final": float(bias_f.max()),
+        "pcc_step_final": pearson(step_diff(g_q), step_diff(q)),
         "pcc_final": pearson(g_q, q),
         "pcc_final_spread": pearson(q_spread(g_q), q_spread(q)),
         "median_err": float(med_err.max()),
