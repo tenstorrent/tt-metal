@@ -6897,7 +6897,6 @@ def test_capture_survives_a_device_opened_and_closed_inside_it(tmp_path, detaile
         finally:
             ttnn.close_mesh_device(mesh_device)
         del tensor
-        gc.collect()
         ttnn.graph.end_graph_capture_to_file(tmp_path / "report.json")
     finally:
         if detailed_buffer_tracing:
