@@ -21,6 +21,7 @@ from types import SimpleNamespace
 
 import torch
 
+from models.demos.gemma4.tests.unit.conftest import install_base_stubs
 from models.demos.gemma4.tests.unit.dflash_contract_harness import DeviceResult, _sampling, _table, _tensor
 from models.demos.gemma4.tests.unit.dflash_sampling_harness import attach_sampling_state
 from models.demos.gemma4.tt.spec_policy import SPEC_POLICY_ENV, CostLine
@@ -382,11 +383,11 @@ def build_mtp_model(
     def base_warmup(self, *args, **kwargs):
         model.events.append(("base_warmup", kwargs.get("enable_trace")))
 
-    base = adapter.Gemma4ForCausalLM
-    monkeypatch.setattr(base, "prefill_forward", prefill)
-    monkeypatch.setattr(base, "decode_forward", decode)
-    monkeypatch.setattr(base, "read_decode_output", read, raising=False)
-    monkeypatch.setattr(base, "warmup_model_decode", base_warmup)
+    install_base_stubs(adapter, monkeypatch)
+    model._harness_prefill_forward = prefill
+    model._harness_decode_forward = decode
+    model._harness_read_decode_output = read
+    model._harness_warmup_model_decode = base_warmup
     if warm:
         install_decoder(model)
     return model
@@ -525,6 +526,77 @@ def _names(model, kind):
     return [event for event in model.events if event[0] == kind]
 
 
+def _steps(model):
+    return _names(model, "step")
+
+
+def _wire(model, live_rows, anchors, positions, keys, total, result, **kwargs):
+    """An ordinary step over ``total`` wire rows with the given live rows (-1 positions elsewhere)."""
+    toks = [0] * total
+    poss = [-1] * total
+    ks = [0] * total
+    for r, a, p, key in zip(live_rows, anchors, positions, keys):
+        toks[r], poss[r], ks[r] = a, p, key
+    return _ordinary(model, toks, poss, ks, result=result, **kwargs)
+
+
+def _committed(total, live_rows, anchors, positions):
+    """The committed-token and position blocks of a proposal: one anchor per live row, -1 elsewhere."""
+    committed = [[-1] * 6 for _ in range(total)]
+    posits = [[-1] * 6 for _ in range(total)]
+    for r, a, p in zip(live_rows, anchors, positions):
+        committed[r] = [a] + [-1] * 5
+        posits[r] = [p] + [-1] * 5
+    return committed, posits
+
+
+def _warmup(model, enable_trace):
+    model.warmup_model_decode(
+        kv_cache=model.kv_cache, enable_trace=enable_trace, max_batch_size=32, num_blocks=8, can_sample_on_device=True
+    )
+
+
+# -- asynchronous scheduling: the deferred verify readback walked on the host ------------------
+
+
+def _read(model, out):
+    """The deferred read of a verify: the mode's tensor, unwrapped from the VerifyOutput as the runner does,
+    handed to ``read_decode_output`` and waited on later (the host tensor carries no events)."""
+    tensor = out.argmax_ids if out.spec_mode == "argmax_ids" else out.logits
+    host, events = model.read_decode_output(tensor, async_read=True)
+    assert events == []
+    return host
+
+
+def _greedy_walk(block, valid, ids):
+    """The plugin's greedy walk (``accept_greedy_drafts``): every draft the target argmax agrees with, then the
+    argmax at the first disagreeing column (the correction, or the bonus past the last draft)."""
+    accepted = 0
+    while accepted < valid and int(ids[accepted]) == int(block[1 + accepted]):
+        accepted += 1
+    return [int(ids[j]) for j in range(accepted + 1)], accepted + 1
+
+
+def _script_two_replays(model):
+    """Replay 1 agrees with three drafts, replay 2 with two (every id below the stub vocabulary)."""
+    model._mtp_decoder.script = [
+        [([101, 102, 103, 104, 105], [101, 102, 103, 477, 478, 479])],
+        [([201, 202, 203, 204, 205], [201, 202, 488, 489, 490, 491])],
+    ]
+
+
+def _verify_walk_propose(model, anchor, position, drafts, mode, deferred):
+    """One verify of ``drafts`` after ``anchor`` at ``position``, read now (synchronous order) or through the
+    deferred read, walked on the host, committed and proposed from."""
+    block = _block(anchor, drafts)
+    out = _verify(model, [block], [_positions(position, 6)], [5], [10], mode=mode)
+    host = _read(model, out) if deferred else (out.argmax_ids if mode == "argmax_ids" else out.logits)
+    ids = host[0] if mode == "argmax_ids" else host[0].float().argmax(dim=-1)
+    committed, count = _greedy_walk(block, 5, ids)
+    proposal = _propose(model, [committed + [-1] * (6 - count)], [_positions(position + 1, count)], counts=[count])
+    return committed, count, proposal.draft_token_ids[0].tolist()
+
+
 __all__ = [
     "DEFAULT_SHAPES",
     "Decoder",
@@ -536,17 +608,25 @@ __all__ = [
     "VOCAB",
     "_block",
     "_commands",
+    "_committed",
+    "_greedy_walk",
     "_ladder",
     "_names",
     "_ordinary",
     "_positions",
     "_prefill",
     "_propose",
+    "_read",
     "_sampling",
+    "_script_two_replays",
     "_start_solo",
+    "_steps",
     "_table",
     "_tensor",
     "_verify",
+    "_verify_walk_propose",
+    "_warmup",
+    "_wire",
     "build_mtp_model",
     "install_decoder",
     "logits_result",
