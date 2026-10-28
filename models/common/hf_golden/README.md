@@ -27,6 +27,7 @@ the dtype, the layers it exists on and what it is.
 | `generate_golden_mimo_v2_6_pro_rl.py` | XiaomiMiMo/MiMo-V2.6-Pro-RL | Flash-RL's class on the Pro repo (8 qkv TP shards) |
 | `generate_golden_glm_5_3_flash.py` | zai-org/GLM-5.3-Flash-BF16 | transformers `glm5_next` (KDA + DSA + mHC), needs transformers >= 5.17 |
 | `generate_golden_muse_glimmer_30b.py` | meta-models/Muse-Glimmer-30B | transformers `muse_glimmer` (text backbone), needs transformers >= 5.17 |
+| `generate_golden_muse_spark_open.py` | meta-models/Muse-Spark-Open-816B-A42B | transformers `muse_spark` (text backbone, latent MoE), needs transformers >= 5.20 |
 | `generate_golden_hy3.py` | tencent/Hy3 | transformers `hy_v3` (GQA + MoE) |
 | `generate_golden_hy4_preview.py` | tencent/Hy4-preview | transformers `hy_v4` (DSA + sinks + IHC), needs transformers >= 5.17 |
 | `generate_golden_kimi_k2_7_code.py` | moonshotai/Kimi-K2.7-Code | transformers `kimi_k25` (DeepseekV3 text model), INT4 experts dequantized, needs transformers >= 5.17 |
@@ -164,6 +165,18 @@ raw, 7.15 chat; score PPL with the multiplier and softcap applied, or it reads i
 `--attn-chunk 4096`: 0.9 min from cached weights, 18 GB GPU peak, 41 GB on disk. Its K/V on
 sliding layers keep every position (make_cache: DynamicCache(config) would keep only the last 2047), and the first
 10240 positions of that trace are bit-identical to a bare isl 10240 run (hidden states and K/V, all 52 layers).
+
+**Muse-Spark-Open-816B-A42B:** Muse-Glimmer's attention, embedding and logits (plus a weightless o_norm before the
+output gate), fp32 residual gates instead of residual adds, and MoE on all 62 layers: 256 experts, top 8, run in a
+4096 latent with a norm after each expert. bf16 checkpoint (1.64 TB; gated, manual approval), ~27 GB per layer, so
+an H100 needs no expert offload. BOS prefix borrowed from Glimmer, not yet measured. The selftest runs on CPU (no
+remote code, no Triton):
+
+```
+uv run --no-project --python python_env/bin/python --with transformers==5.20.2 \
+    python generate_golden_muse_spark_open.py --selftest
+uv run ... python generate_golden_muse_spark_open.py --isl 56320 --attn-chunk 1024
+```
 
 **Llama-3.1-8B-Instruct:** `<|begin_of_text|>` prefix, the BOS its tokenizer prepends (wikitext ppl at isl 10240
 over the same 10100 tokens: 8.358 BOS, 8.428 raw, 8.623 chat). isl 56320 on CPU (64-core EPYC 9354P) with
