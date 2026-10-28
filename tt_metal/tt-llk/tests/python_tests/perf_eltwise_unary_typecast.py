@@ -5,7 +5,8 @@
 On-silicon perf benchmark for the SFPU typecast op (issue #46751).
 
 Measures cycles/tile for the typecast variants whose SFPLOADMACRO fast path was
-re-introduced for Blackhole. The macro fast path in the calculate_typecast_*
+re-introduced for Blackhole, plus the plain-loop 8/16-bit-output arms
+(_TYPECAST_PLAIN_LOOP_PERF_CASES). The macro fast path in the calculate_typecast_*
 primitives is gated `#ifndef DISABLE_SFPLOADMACRO`; compiling with
 TT_METAL_DISABLE_SFPLOADMACRO=1 selects the plain-loop fallback.
 Running this module twice -- once without the env (macro ON,
@@ -47,6 +48,7 @@ from helpers.test_variant_parameters import (
     UNPACK_TRANS_FACES,
     UNPACK_TRANS_WITHIN_FACE,
 )
+from test_eltwise_unary_typecast import _preserve_fp32_precision
 
 # The (IN, OUT, dest_acc) typecast cases that exercise the SFPLOADMACRO path,
 # including the paths re-introduced by issue #46751.
@@ -71,10 +73,21 @@ _TYPECAST_PERF_CASES = [
     (DataFormat.Int32, DataFormat.UInt16, DestAccumulation.Yes),
 ]
 
+# The plain-loop 8/16-bit-output typecasts, one row per calculate_typecast_* input, at dest_acc=Yes:
+# ttnn.typecast forces a 32-bit Dest for 32-bit and UInt8 endpoints (preserve_fp32_precision).
+_TYPECAST_PLAIN_LOOP_PERF_CASES = [
+    (DataFormat.Float32, DataFormat.UInt8, DestAccumulation.Yes),
+    (DataFormat.Int32, DataFormat.UInt8, DestAccumulation.Yes),
+    (DataFormat.UInt32, DataFormat.UInt8, DestAccumulation.Yes),
+    (DataFormat.UInt16, DataFormat.UInt8, DestAccumulation.Yes),
+    (DataFormat.UInt32, DataFormat.UInt16, DestAccumulation.Yes),
+    (DataFormat.UInt8, DataFormat.UInt16, DestAccumulation.Yes),
+]
+
 
 @pytest.mark.perf
 @parametrize(
-    typecast_case=_TYPECAST_PERF_CASES,
+    typecast_case=_TYPECAST_PERF_CASES + _TYPECAST_PLAIN_LOOP_PERF_CASES,
     approx_mode=[ApproximationMode.No],
     loop_factor=[
         16,
@@ -108,7 +121,8 @@ def test_perf_eltwise_unary_typecast(
     # kernel keeps the unpack-A acc_to_dest template arg false so this is legal
     # even when dest_acc=Yes. For 16-bit inputs the data is copied SrcA -> Dest
     # by the math datacopy A2D before the SFPU typecast runs.
-    unpack_to_dest = input_format.is_32_bit()
+    # UInt8 endpoints also unpack to Dest, as the functional test's _preserve_fp32_precision rule says.
+    unpack_to_dest = input_format.is_32_bit() or _preserve_fp32_precision(formats)
 
     configuration = PerfConfig(
         "sources/eltwise_unary_typecast_perf.cpp",

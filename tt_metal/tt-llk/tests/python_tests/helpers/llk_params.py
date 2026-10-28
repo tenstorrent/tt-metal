@@ -317,6 +317,21 @@ class MathOperation(Enum):
     SfpuQuant = OpSpec("QUANT", MathOpType.SFPU_BINARY)
     SfpuRequant = OpSpec("REQUANT", MathOpType.SFPU_BINARY)
     SfpuDequant = OpSpec("DEQUANT", MathOpType.SFPU_BINARY)
+    # The 8-bit quant entry points of quantization.h: uint8 / int8 output and int8 input.
+    # Named after the compute-API *_tile_init wrapper each one mirrors.
+    SfpuQuantUint8 = OpSpec("QUANT_UINT8", MathOpType.SFPU_BINARY)
+    SfpuQuantInt8 = OpSpec("QUANT_INT8", MathOpType.SFPU_BINARY)
+    SfpuRequantUint8 = OpSpec("REQUANT_UINT8", MathOpType.SFPU_BINARY)
+    SfpuRequantInt8 = OpSpec("REQUANT_INT8", MathOpType.SFPU_BINARY)
+    SfpuRequantInt8In = OpSpec("REQUANT_INT8_IN", MathOpType.SFPU_BINARY)
+    SfpuRequantInt8InUint8Out = OpSpec(
+        "REQUANT_INT8_IN_UINT8_OUT", MathOpType.SFPU_BINARY
+    )
+    SfpuRequantInt8InInt8Out = OpSpec(
+        "REQUANT_INT8_IN_INT8_OUT", MathOpType.SFPU_BINARY
+    )
+    SfpuDequantInt8 = OpSpec("DEQUANT_INT8", MathOpType.SFPU_BINARY)
+    SfpuFloatToInt32Positive = OpSpec("FLOAT_TO_INT32_POSITIVE", MathOpType.SFPU_BINARY)
     # Integer / format-typed binary SFPU ops. cpp_enum_value matches the BinaryOp
     # enumerator (and, lowercased, the SfpuType) so both the dispatch and the coverage
     # guard resolve.

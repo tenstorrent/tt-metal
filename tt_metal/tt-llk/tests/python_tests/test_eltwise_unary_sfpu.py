@@ -974,6 +974,37 @@ def test_eltwise_unary_sfpu_int_shift(
     )
 
 
+# Negative two's-complement operands, which the positive-only sweep above never shifts: they pin that
+# `vInt >> n` is the arithmetic SFPSHFT. Amounts 32 and 63 clamp to 31 (-1 for every negative lane).
+_RIGHT_SHIFT_SIGNED_VALUES = [
+    -1, -2, -3, -255, -256, -65536, -(2**30), -(2**31 - 2**7), 0, 1, 7, 2**30
+]  # fmt: skip
+_RIGHT_SHIFT_SIGNED_AMOUNTS = [0, 1, 7, 31, 32, 63]
+
+
+@parametrize(
+    mathop=[MathOperation.RightShift],
+    shift_amount=_RIGHT_SHIFT_SIGNED_AMOUNTS,
+)
+def test_eltwise_unary_sfpu_int_right_shift_signed(
+    mathop: MathOperation, shift_amount: int
+):
+    eltwise_unary_sfpu(
+        "sources/eltwise_unary_sfpu_test.cpp",
+        InputOutputFormat(DataFormat.Int32, DataFormat.Int32),
+        DestAccumulation.Yes,
+        ApproximationMode.No,
+        mathop,
+        FastMode.No,
+        [64, 64],
+        spec_A=StimuliSpec.custom(
+            values=[float(v) for v in _RIGHT_SHIFT_SIGNED_VALUES], seed=0
+        ),
+        shift_amount=shift_amount,
+        twos_complement=True,
+    )
+
+
 # Every polygamma order ttnn accepts. psi^(n)(x) ~ (n-1)! / x^n for large x, so each order is
 # swept from 0.5 up to where the result is 2^-125, just inside the normal range. The bottom of
 # that range is where the unscaled partial sums sit n! below the result, and atol is 0 because

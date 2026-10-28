@@ -288,6 +288,33 @@ def test_perf_eltwise_unary_sfpu_int32(perf_report, formats, mathop, input_dimen
     )
 
 
+# The Int32 unary shifts in their production configuration (32-bit Dest, unpacked to Dest); the
+# instruction stream does not depend on the shift amount.
+_INT32_SHIFT_OPS = [
+    MathOperation.LeftShift,
+    MathOperation.RightShift,
+]
+
+
+@pytest.mark.perf
+@parametrize(
+    formats=input_output_formats([DataFormat.Int32], same=True),
+    mathop=_INT32_SHIFT_OPS,
+    input_dimensions=_EXTRA_SLICE_DIMS,
+)
+def test_perf_eltwise_unary_sfpu_int_shift(
+    perf_report, formats, mathop, input_dimensions
+):
+    _extra_slice_run(
+        perf_report,
+        formats,
+        mathop,
+        dest_acc=DestAccumulation.Yes,
+        unpack_to_dest=True,
+        input_dimensions=input_dimensions,
+    )
+
+
 def _comp_dest_acc(formats):
     # 32-bit inputs (UInt32) are unpacked straight into DEST and the uint32 kernels do
     # full-word DataLayout::U32 accesses, so they require a 32-bit DEST. Mirror the
