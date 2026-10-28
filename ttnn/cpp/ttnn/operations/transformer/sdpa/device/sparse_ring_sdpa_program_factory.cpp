@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/transformer/sdpa/device/sparse_ring_attention_program_factory.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sparse_ring_sdpa_program_factory.hpp"
 
 #include <cstdlib>
 #include <string>
@@ -97,7 +97,7 @@ constexpr uint32_t kRingJointChainSemaphoreCompileArgCount = ring_joint::kChainS
 constexpr uint32_t kRingJointChainMcastEnabledCompileArgOffset = ring_joint::kChainMcastEnabledCompileArgOffset;
 constexpr uint32_t kReaderBatchChainExtraArgCount = 1;
 constexpr uint32_t kReaderGQAChainExtraArgCount = 1;
-constexpr uint32_t kWriterBaseArgCount = 5;
+constexpr uint32_t kWriterBaseArgCount = 3;  // output address, Q range
 constexpr uint32_t kComputeRingSequencerArgCount = 6;
 
 struct CheckedRuntimeArgList {
@@ -119,7 +119,7 @@ struct CheckedRuntimeArgList {
     void push_checked(uint32_t expected_index, const T& value, const char* name) {
         TT_FATAL(
             size == expected_index,
-            "SparseRingAttention runtime arg {} expected index {}, got {} before append",
+            "SparseRingSDPA runtime arg {} expected index {}, got {} before append",
             name,
             expected_index,
             size);
@@ -130,13 +130,13 @@ struct CheckedRuntimeArgList {
 // Build the per-device ring-loop masks passed to reader/compute/writer. This mirrors the kernel ring-id order and
 // marks the ring_iter entries whose shard has K/V inside logical_n.
 RingWorkMasks build_ring_work_masks(
-    const ttnn::prim::SparseRingAttentionParams& args,
-    const ttnn::prim::SparseRingAttentionInputs& tensor_args,
+    const ttnn::prim::SparseRingSDPAParams& args,
+    const ttnn::prim::SparseRingSDPAInputs& tensor_args,
     const RingWritePlan& ring_write_plan) {
     const uint32_t ring_size = static_cast<uint32_t>(args.all_gather_operation_attributes.ring_size);
     TT_FATAL(
         ring_size <= std::numeric_limits<uint32_t>::digits,
-        "SparseRingAttention host ring-work masks support up to {} ring iterations. Got ring_size={}",
+        "SparseRingSDPA host ring-work masks support up to {} ring iterations. Got ring_size={}",
         std::numeric_limits<uint32_t>::digits,
         ring_size);
     const uint32_t logical_nt = tt::div_up(static_cast<uint32_t>(args.logical_n), tt::constants::TILE_HEIGHT);
@@ -175,8 +175,8 @@ RingWorkMasks build_ring_work_masks(
 }
 
 RingWritePlan build_ring_write_plan(
-    const ttnn::prim::SparseRingAttentionParams& args,
-    const ttnn::prim::SparseRingAttentionInputs& tensor_args,
+    const ttnn::prim::SparseRingSDPAParams& args,
+    const ttnn::prim::SparseRingSDPAInputs& tensor_args,
     const ttnn::MeshCoordinate& coord) {
     RingWritePlan plan;
     const auto& ag = args.all_gather_operation_attributes;
@@ -241,14 +241,14 @@ namespace {
 // op never uses (joint tokens, KV cache, causal, sliding window, latent V) are still emitted, as constants, so every
 // index the kernels read stays where it was.
 // NOLINTNEXTLINE(readability-function-cognitive-complexity)
-tt::tt_metal::ProgramDescriptor build_sparse_ring_attention_program_descriptor(
-    const SparseRingAttentionParams& args,
-    const SparseRingAttentionInputs& tensor_args,
-    SparseRingAttentionResult& output_tensors,
+tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
+    const SparseRingSDPAParams& args,
+    const SparseRingSDPAInputs& tensor_args,
+    SparseRingSDPAResult& output_tensors,
     const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
     TT_FATAL(
         mesh_dispatch_coordinate.has_value(),
-        "build_sparse_ring_attention_program_descriptor requires mesh_dispatch_coordinate");
+        "build_sparse_ring_sdpa_program_descriptor requires mesh_dispatch_coordinate");
     const auto& coord = mesh_dispatch_coordinate.value();
     /*
     Q, K, V are sequence-sharded across the ring (local_N = padded_N / ring_size rows per device).
@@ -267,7 +267,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_attention_program_descriptor(
     bias) are applied too. After the last ring iteration each Q block is normalized and written out.
     */
 
-    log_debug(tt::LogOp, "SparseRingAttention create_descriptor");
+    log_debug(tt::LogOp, "SparseRingSDPA create_descriptor");
 
     const auto& input_tensor_q = tensor_args.input_q;
     const auto& input_tensor_k = tensor_args.input_k;
@@ -275,9 +275,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_attention_program_descriptor(
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
     const auto& gathered_input_tensor_v = tensor_args.gathered_v;
 
-    auto& output_tensor = output_tensors[SPARSE_RING_ATTENTION_OUTPUT_IDX];
-    auto& joint_output_tensor = output_tensors[SPARSE_RING_ATTENTION_JOINT_OUTPUT_IDX];
-    auto& stats_output_tensor = output_tensors[SPARSE_RING_ATTENTION_STATS_OUTPUT_IDX];
+    auto& output_tensor = output_tensors[SPARSE_RING_SDPA_OUTPUT_IDX];
 
     std::size_t q_chunk_size = args.get_q_chunk_size();
     std::size_t k_chunk_size = args.get_k_chunk_size();
@@ -362,24 +360,15 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_attention_program_descriptor(
     const uint32_t sol_pooled_last_tiles = sol_pooled_tiles - (sol_pooled_chunks - 1) * Sk_chunk_t;
     // The reader reads whole mask rows.
     const uint32_t sol_mask_row_bytes = tensor_args.block_mask.logical_shape()[3] * sizeof(uint32_t);
-    TT_FATAL(sol_nkc <= 64, "SparseRingAttention: at most 64 K pieces per shard");
-    TT_FATAL(
-        sol_nb <= sol_nb_pad, "SparseRingAttention: {} blocks per shard exceed the pooled row {}", sol_nb, sol_nb_pad);
-    TT_FATAL(Sk_chunk_t % kSolBlockTiles == 0, "SparseRingAttention: k chunk must hold whole blocks");
+    TT_FATAL(sol_nkc <= 64, "SparseRingSDPA: at most 64 K pieces per shard");
+    TT_FATAL(sol_nb <= sol_nb_pad, "SparseRingSDPA: {} blocks per shard exceed the pooled row {}", sol_nb, sol_nb_pad);
+    TT_FATAL(Sk_chunk_t % kSolBlockTiles == 0, "SparseRingSDPA: k chunk must hold whole blocks");
 
     // Global chunk width the kernels divide by the ring size (one Q slab per device).
     const uint32_t q_chunk_group_tile_count = q_local_padded_Nt * ring_size;
 
-    // Lightweight mask: needed when a K chunk holds padding.
-    const bool local_n_has_padding = (kv_local_padded_Nt % Sk_chunk_t) != 0;
     const uint32_t compile_time_logical_n = static_cast<uint32_t>(args.logical_n);
     const uint32_t compile_time_global_n_partial_col = compile_time_logical_n % tt::constants::TILE_HEIGHT;
-    const bool global_n_has_padding = (compile_time_logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT)) != 0;
-    const bool needs_lightweight_mask = local_n_has_padding || global_n_has_padding;
-    const bool has_global_n_partial_tile =
-        ring_joint::partial_tile_present(compile_time_global_n_partial_col, /*has_length_tensor=*/false);
-    // Single CB holds neginf and the partial mask.
-    const uint32_t total_lightweight_mask_tiles = 1 + (has_global_n_partial_tile ? 1 : 0);
 
     const uint32_t num_local_q_chunks = tt::div_up(q_local_padded_N, q_chunk_size);
     const uint32_t num_q_chunks = num_local_q_chunks;
@@ -468,14 +457,14 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_attention_program_descriptor(
     // Every Q block the core owns stays fronted in cb_q_in for the whole op (read once).
     TT_FATAL(
         max_q_per_core <= kSolResidentMaxSlots,
-        "SparseRingAttention holds at most {} Q blocks per core, this split needs {}",
+        "SparseRingSDPA holds at most {} Q blocks per core, this split needs {}",
         kSolResidentMaxSlots,
         max_q_per_core);
     // The plan page's 16-word header carries the shard's kept-block bits (one word per 32 blocks) plus the union
     // piece bits (2 words) and the pooled flag.
     TT_FATAL(
         tt::div_up(sol_nb, 32u) + 3 <= 16,
-        "SparseRingAttention: {} blocks per shard exceed the plan header (at most 416)",
+        "SparseRingSDPA: {} blocks per shard exceed the plan header (at most 416)",
         sol_nb);
     uint32_t q_tiles = Sq_chunk_t * DHt * max_q_per_core;
     // Group delivery: one producer per head group multicasts each piece (see sol_res_mcast in the reader) over a
@@ -520,7 +509,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_attention_program_descriptor(
 
     // Validated: fp32_dest_acc_en is off, so compute takes the streaming path.
     const bool use_streaming_compute = !fp32_dest_acc_en;
-    TT_FATAL(use_streaming_compute, "SparseRingAttention requires streaming compute (fp32_dest_acc_en=false)");
+    TT_FATAL(use_streaming_compute, "SparseRingSDPA requires streaming compute (fp32_dest_acc_en=false)");
 
     auto [out_out_subblock_h, out_out_subblock_w] = detail::determine_largest_subblock_size(
         Sq_chunk_t,
@@ -786,8 +775,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_attention_program_descriptor(
     };
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(stats_output_tensor.buffer()).append_to(writer_compile_time_args);
 
     std::vector<uint32_t> compute_compile_time_args = {
         NH,
@@ -857,10 +844,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_attention_program_descriptor(
     if (math_fidelity == MathFidelity::LoFi) {
         defines["SDPA_COMPUTE_LOFI"] = "1";
     }
-    // No sliding window; the shared kernel headers still expect these defined.
-    defines["SLIDING_HALO_SLOT_COUNT"] = "0";
-    defines["SLIDING_MAX_SOURCE_RANGES"] = "1";
-    defines["SLIDING_LOCAL_FIRST"] = "0";
 
     // NOTE: KernelDescriptors are built after chain construction.
 
@@ -870,7 +853,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_attention_program_descriptor(
     tt::DataFormat k_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_k.dtype());
     tt::DataFormat v_df = tt::tt_metal::datatype_to_dataformat_converter(gathered_input_tensor_v.dtype());
 
-    // Lightweight mask uses Float16_b to support L1-accumulation and avoid Bfp4_b precision loss.
+    // The pooled-column bias tiles are Float16_b: the step adds them into the scores by L1 accumulation.
     tt::DataFormat mask_df = tt::DataFormat::Float16_b;
     tt::DataFormat out_df = tt::tt_metal::datatype_to_dataformat_converter(output_tensor.dtype());
     tt::DataFormat scalar_df =
@@ -878,7 +861,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_attention_program_descriptor(
     // Intermediates stay in bf16 to save L1 (fp32 dest accumulation is off).
     tt::DataFormat im_df = tt::DataFormat::Float16_b;
     tt::DataFormat stats_df = im_df;
-    tt::DataFormat sum_df = tt::DataFormat::Float16_b;
     tt::DataFormat qk_im_df = tt::DataFormat::Float16_b;
 
     uint32_t q_tile_size = tt::tile_size(q_df);
@@ -889,7 +871,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_attention_program_descriptor(
     uint32_t scalar_tile_size = tt::tile_size(scalar_df);
     uint32_t im_tile_size = tt::tile_size(im_df);
     uint32_t stats_tile_size = tt::tile_size(stats_df);
-    uint32_t sum_tile_size = tt::tile_size(sum_df);
     uint32_t qk_im_tile_size = tt::tile_size(qk_im_df);
 
     log_debug(tt::LogOp, "data formats: q {}, k {}, v {}, out {}, scalar {}", q_df, k_df, v_df, out_df, scalar_df);
@@ -916,15 +897,15 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_attention_program_descriptor(
     const uint32_t cb_k_in = allocate_tile_cb(k_tiles, k_tile_size, k_df);
     const uint32_t cb_v_in = allocate_tile_cb(v_tiles, v_tile_size, v_df);
 
-    // Lightweight mask CB: neginf + the optional partial tile (padding masks).
+    // The dense op's padding-mask and scale CBs: the resident step masks padding by narrowing its K width and applies
+    // the scale inside its exp, so neither is allocated. Their slots in the shared CB argument block stay.
     constexpr uint32_t inactive_cb = std::numeric_limits<uint32_t>::max();
-    const uint32_t cb_mask_in =
-        needs_lightweight_mask ? allocate_tile_cb(total_lightweight_mask_tiles, mask_tile_size, mask_df) : inactive_cb;
+    const uint32_t cb_mask_in = inactive_cb;
 
     // No attention sink: alias a valid CB so compile-time tile-size queries remain valid.
     const uint32_t cb_attention_sink = cb_q_in;
 
-    const uint32_t cb_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
+    const uint32_t cb_scale_in = inactive_cb;
     const uint32_t cb_identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
     const uint32_t cb_col_identity = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
 
@@ -938,12 +919,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_attention_program_descriptor(
         std::max(qk_tiles, std::min(max_q_per_core, kSolResidentGroup) * Sq_chunk_t * Sk_chunk_t);
     const uint32_t res_stats_tiles = statistics_tiles * max_q_per_core;
     const uint32_t cb_qk_im = allocate_tile_cb(qk_im_cb_tiles, qk_im_tile_size, qk_im_df);
-    const uint32_t cb_out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
-    const uint32_t cb_out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
     const uint32_t cb_max_A = allocate_tile_cb(res_stats_tiles, stats_tile_size, stats_df);
-    const uint32_t cb_max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
-    const uint32_t cb_sum_A = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
-    const uint32_t cb_sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
     const uint32_t cb_exp_max_diff = allocate_tile_cb(res_stats_tiles, stats_tile_size, stats_df);
 
     const uint32_t cb_out = allocate_tile_cb(out0_t, out_tile_size, out_df);
@@ -955,20 +931,23 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_attention_program_descriptor(
     const uint32_t fifo_entries = max_q_per_core;
     const uint32_t cb_stats_in = allocate_tile_cb(statistics_tiles * fifo_entries, im_tile_size, im_df);
     const uint32_t cb_prev_out = allocate_tile_cb(out_im_tiles * fifo_entries, out_tile_size, out_df);
-    const uint32_t cb_stats_out = allocate_tile_cb(statistics_tiles, im_tile_size, im_df);
 
     // 1-tile recip scratch CB for normalize_row_streaming.
     const uint32_t cb_recip_scratch = allocate_tile_cb(1, im_tile_size, im_df);
 
-    // Sum save/restore CBs (compute -> writer, writer -> compute).
-    const uint32_t cb_sum_out = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     const uint32_t cb_sum_in = allocate_tile_cb(statistics_tiles * fifo_entries, stats_tile_size, stats_df);
 
-    // Signal CB: compute signals writer when last K-chunk starts.
-    constexpr uint32_t signal_page_size = 16;
-    const uint32_t cb_signal = allocate_cb(signal_page_size, 1, tt::DataFormat::UInt16);
-    // Reader-to-compute mailbox of the shared layout (metadata-derived geometry); unused here but kept allocated.
-    const uint32_t cb_kv_pad_derived = allocate_cb(64, 1, tt::DataFormat::UInt32);
+    // Slots of the dense op's CB argument block no kernel of this op reads: the second accumulator set, the
+    // save / restore and signal CBs, and the metadata mailbox. Not allocated; the slots stay so the indices hold.
+    const uint32_t cb_out_im_A = inactive_cb;
+    const uint32_t cb_out_im_B = inactive_cb;
+    const uint32_t cb_max_B = inactive_cb;
+    const uint32_t cb_sum_A = inactive_cb;
+    const uint32_t cb_sum_B = inactive_cb;
+    const uint32_t cb_stats_out = inactive_cb;
+    const uint32_t cb_sum_out = inactive_cb;
+    const uint32_t cb_signal = inactive_cb;
+    const uint32_t cb_kv_pad_derived = inactive_cb;
     // Reader->compute plan words per ring iteration, and the pooled-chunk column bias tiles.
     // Plan page: 16 summary words, then the Q block's full mask row (scratch the reader scans in place). The summary
     // is [kept-block words (sol_res_block_words)][union piece bits lo, hi][do_pooled].
@@ -994,7 +973,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_attention_program_descriptor(
         }
         log_debug(
             tt::LogOp,
-            "SparseRingAttention CBs: {} buffers, {} bytes (q {} t, k {} t, v {} t, qk {} t, out_im {} t, stats {} t; "
+            "SparseRingSDPA CBs: {} buffers, {} bytes (q {} t, k {} t, v {} t, qk {} t, out_im {} t, stats {} t; "
             "im tile {} B)",
             desc.cbs.size(),
             cb_bytes,
@@ -1029,8 +1008,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_attention_program_descriptor(
     auto* const gathered_k_buf = gathered_input_tensor_k.buffer();
     auto* const gathered_v_buf = gathered_input_tensor_v.buffer();
     auto* const out_buf = output_tensor.buffer();
-    auto* const joint_out_buf = joint_output_tensor.buffer();
-    auto* const stats_buf = stats_output_tensor.buffer();
 
     /**
      * Build chain selection for store-and-forward across cores per head.
@@ -1547,53 +1524,30 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_attention_program_descriptor(
 
     KernelDescriptor compute_kernel{};
     compute_kernel.kernel_source =
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sparse_ring_compute.cpp";
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/sparse_ring_sdpa.cpp";
     compute_kernel.source_type = KernelDescriptor::SourceType::FILE_PATH;
     compute_kernel.core_ranges = core_grid_set;
     compute_kernel.compile_time_args = compute_compile_time_args;
-    // Named compile-time args shared by the three kernels. Several are fixed for this op (constants below); they
-    // stay until the kernels stop reading them.
+    // Named compile-time args shared by the three kernels.
     const KernelDescriptor::NamedCompileTimeArgs named_args = {
-        {"ksplit_count", 1u},
-        {"ksplit_sem_id", 0u},
-        {"dense_causal_skip", 0u},
-        {"seg_accum", 0u},
+        // The kernels share the dense op's chain and ring helpers, which take a KV split factor; no split here.
         {"kv_stripe_split", 1u},
-        // K/V CB depth in pieces (see kv_cb_pages above); the chain's end-of-iteration phase alignment uses it.
-        {"kv_cb_pages", kv_cb_pages},
-        {"sol_enabled", 1u},
-        {"sol_chunk_mode", 1u},
-        {"sol_compact", 0u},
-        {"sol_pack", 0u},
         // Resident Q blocks: the slot count every core sizes its state arrays by, and the words of per-shard
         // kept-block bits the reader puts in every plan page (block b: word b/32, bit b%32).
-        {"sol_resident", 1u},
         {"sol_resident_slots", max_q_per_core},
         {"sol_res_block_words", tt::div_up(sol_nb, 32u)},
         // Group delivery by multicast (see sol_res_mcast above).
         {"sol_res_mcast", sol_res_mcast ? 1u : 0u},
-        // Iteration boundary (see sol_res_plan_rec_base above): the one-page plan's record base word (0 = a page per
-        // block) and no phase-alignment dummies.
+        // The one-page plan's record base word (0 = a page per block); see sol_res_plan_rec_base above.
         {"sol_res_plan_rec_base", sol_res_plan_rec_base},
-        {"sol_res_no_dummies", 1u},
-        {"sol_static_max", 0u},
-        {"cb_k_stage", inactive_cb},
-        {"cb_v_stage", inactive_cb},
-        {"sol_blocks_per_page", Sk_chunk_t / kSolBlockTiles},
-        {"sol_even_up", 0u},
-        {"sol_even_up_all", 0u},
-        {"sol_nkc", sol_nkc},
         {"sol_nb", sol_nb},
         {"sol_nb_pad", sol_nb_pad},
         {"sol_n_blocks_pad", sol_n_blocks_pad},
         {"sol_nqc_pad", sol_nqc_pad},
         {"sol_pooled_chunks", sol_pooled_chunks},
         {"sol_pooled_last_tiles", sol_pooled_last_tiles},
-        {"sol_pooled_off", 0u},
-        {"sol_drain_all", 0u},
         {"sol_mask_row_bytes", sol_mask_row_bytes},
-        // The pooled-column bias is generated on device; sol_logical_n is the logical length in tokens.
-        {"sol_gen_bias", 1u},
+        // Logical length in tokens, for the on-device pooled-column bias.
         {"sol_logical_n", static_cast<uint32_t>(args.logical_n)},
         {"cb_sol_plan", cb_sol_plan},
         {"cb_sol_bias", cb_sol_bias},
@@ -1673,7 +1627,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_attention_program_descriptor(
                 }
                 TT_FATAL(
                     core_work[seg.core_idx].head_work.size() == 1,
-                    "SparseRingAttention group delivery: core {} of head {} spans two heads",
+                    "SparseRingSDPA group delivery: core {} of head {} spans two heads",
                     seg.core_idx,
                     h);
                 members.push_back(seg.core_idx);
@@ -1702,7 +1656,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_attention_program_descriptor(
             }
             TT_FATAL(
                 rects.size() <= kSolGroupMaxRects,
-                "SparseRingAttention group delivery: head {} needs {} multicast rectangles (at most {})",
+                "SparseRingSDPA group delivery: head {} needs {} multicast rectangles (at most {})",
                 h,
                 rects.size(),
                 kSolGroupMaxRects);
@@ -1724,7 +1678,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_attention_program_descriptor(
             }
             log_debug(
                 tt::LogOp,
-                "SparseRingAttention group: head {} producer core {} -> {} receivers in {} rectangles",
+                "SparseRingSDPA group: head {} producer core {} -> {} receivers in {} rectangles",
                 h,
                 producer,
                 n_receivers,
@@ -1818,9 +1772,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_attention_program_descriptor(
                 sol_members.emplace_back(start_in_head, count);
             }
             TT_FATAL(
-                sol_members.size() <= 64,
-                "SparseRingAttention: head chain of {} members is too long",
-                sol_members.size());
+                sol_members.size() <= 64, "SparseRingSDPA: head chain of {} members is too long", sol_members.size());
         }
         reader_args.push_back(static_cast<uint32_t>(sol_members.size()));
         reader_args.push_back(sol_my_start);
@@ -1844,8 +1796,6 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_attention_program_descriptor(
         // Writer args
         CheckedRuntimeArgList writer_args;
         writer_args.push_back(out_buf);
-        writer_args.push_back(joint_out_buf);
-        writer_args.push_back(stats_buf);
         writer_args.push_back(global_q_start);
         writer_args.push_back(global_q_end);
         writer_args.push_checked(runtime_arg_layout.writer_logical_nt, logical_nt, "writer.logical_nt");
@@ -1938,35 +1888,34 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_attention_program_descriptor(
 // One ProgramDescriptor per coord: transport rank / forward_coord / backward_coord (used by the all-gather portion)
 // depend on the mesh coordinate, so descriptors cannot be shared across coords. Returning a WorkloadDescriptor keeps
 // the framework on its no-rebuild cache-hit fast path.
-tt::tt_metal::WorkloadDescriptor SparseRingAttentionProgramFactory::create_workload_descriptor(
-    const SparseRingAttentionParams& args,
-    const SparseRingAttentionInputs& tensor_args,
-    SparseRingAttentionResult& output_tensors,
+tt::tt_metal::WorkloadDescriptor SparseRingSDPAProgramFactory::create_workload_descriptor(
+    const SparseRingSDPAParams& args,
+    const SparseRingSDPAInputs& tensor_args,
+    SparseRingSDPAResult& output_tensors,
     const ttnn::MeshCoordinateRangeSet& tensor_coords) {
     tt::tt_metal::WorkloadDescriptor wd;
     const auto coords = tensor_coords.coords();
     wd.programs.reserve(coords.size());
     for (const auto& coord : coords) {
-        auto desc = build_sparse_ring_attention_program_descriptor(args, tensor_args, output_tensors, coord);
+        auto desc = build_sparse_ring_sdpa_program_descriptor(args, tensor_args, output_tensors, coord);
         wd.programs.push_back({ttnn::MeshCoordinateRange(coord), std::move(desc)});
     }
     return wd;
 }
 
-SparseRingAttentionMeshWorkloadFactory::cached_mesh_workload_t
-SparseRingAttentionMeshWorkloadFactory::create_mesh_workload(
-    const SparseRingAttentionParams& args,
+SparseRingSDPAMeshWorkloadFactory::cached_mesh_workload_t SparseRingSDPAMeshWorkloadFactory::create_mesh_workload(
+    const SparseRingSDPAParams& args,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const SparseRingAttentionInputs& tensor_args,
-    SparseRingAttentionResult& output_tensors) {
+    const SparseRingSDPAInputs& tensor_args,
+    SparseRingSDPAResult& output_tensors) {
     return descriptor_adapter_t::create_mesh_workload(args, tensor_coords, tensor_args, output_tensors);
 }
 
-void SparseRingAttentionMeshWorkloadFactory::override_runtime_arguments(
+void SparseRingSDPAMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const SparseRingAttentionParams& args,
-    const SparseRingAttentionInputs& tensor_args,
-    SparseRingAttentionResult& output_tensors) {
+    const SparseRingSDPAParams& args,
+    const SparseRingSDPAInputs& tensor_args,
+    SparseRingSDPAResult& output_tensors) {
     descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, output_tensors);
 
     // The fused all-gather's GlobalSemaphore addresses are excluded from the program hash and baked into the
@@ -1983,7 +1932,7 @@ void SparseRingAttentionMeshWorkloadFactory::override_runtime_arguments(
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         TT_FATAL(
             coordinate_range.start_coord() == coordinate_range.end_coord(),
-            "Expected SparseRingAttention cached programs to cover a single coordinate, got range {} to {}",
+            "Expected SparseRingSDPA cached programs to cover a single coordinate, got range {} to {}",
             coordinate_range.start_coord(),
             coordinate_range.end_coord());
         // The all-gather always appends its four kernels at kFirstAllGatherKernelIndex.

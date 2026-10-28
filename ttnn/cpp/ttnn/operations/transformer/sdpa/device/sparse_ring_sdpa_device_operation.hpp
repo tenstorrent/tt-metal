@@ -10,19 +10,19 @@
 
 #include "ttnn/tensor/tensor.hpp"
 
-#include "ttnn/operations/transformer/sdpa/device/sparse_ring_attention_device_operation_types.hpp"
-#include "ttnn/operations/transformer/sdpa/device/sparse_ring_attention_program_factory.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sparse_ring_sdpa_device_operation_types.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sparse_ring_sdpa_program_factory.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/operation.hpp"
 
 namespace ttnn::prim {
 
-struct SparseRingAttentionDeviceOperation {
-    using operation_attributes_t = SparseRingAttentionParams;
-    using tensor_args_t = SparseRingAttentionInputs;
-    using spec_return_value_t = SparseRingAttentionResultSpec;
-    using tensor_return_value_t = SparseRingAttentionResult;
-    using program_factory_t = std::variant<SparseRingAttentionMeshWorkloadFactory>;
+struct SparseRingSDPADeviceOperation {
+    using operation_attributes_t = SparseRingSDPAParams;
+    using tensor_args_t = SparseRingSDPAInputs;
+    using spec_return_value_t = SparseRingSDPAResultSpec;
+    using tensor_return_value_t = SparseRingSDPAResult;
+    using program_factory_t = std::variant<SparseRingSDPAMeshWorkloadFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
@@ -33,7 +33,7 @@ struct SparseRingAttentionDeviceOperation {
         const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors);
 };
 
-SparseRingAttentionResult sparse_ring_attention(
+SparseRingSDPAResult sparse_ring_sdpa(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,

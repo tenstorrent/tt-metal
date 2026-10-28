@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Compute helpers of sparse ring attention (sparse_ring_compute.cpp): the per-piece step over the resident Q
+// Compute helpers of sparse ring attention (sparse_ring_sdpa.cpp): the per-piece step over the resident Q
 // chunks and the ring-iteration driver. Depends on primitives from compute_common.hpp (must be included first).
 // The generic helpers at the top are copies of the ones in compute_streaming.hpp.
 

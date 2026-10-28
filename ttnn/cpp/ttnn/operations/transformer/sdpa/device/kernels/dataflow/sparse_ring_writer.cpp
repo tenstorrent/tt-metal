@@ -38,8 +38,8 @@ inline Slice q_chunk_out_slice(uint32_t q_chunk, uint32_t nb, uint32_t nq, uint3
 }
 
 // Sparse ring attention writer. Compute keeps every resident Q chunk's accumulators in L1 for the whole op, so there
-// is no save / restore between ring iterations: this kernel generates the constant tiles (scale, identity, reduce
-// scaler, padding masks), follows the ring sequence to stay aligned with the reader and the all-gather, and on the
+// is no save / restore between ring iterations: this kernel generates the constant tiles (column identity and
+// reduce scaler), follows the ring sequence to stay aligned with the reader and the all-gather, and on the
 // last active ring iteration writes each resident chunk's normalized output, in Q-chunk order.
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
@@ -49,14 +49,10 @@ void kernel_main() {
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(5);
     constexpr uint32_t q_local_padded_Nt = get_compile_time_arg_val(6);
     constexpr uint32_t kv_local_padded_Nt = get_compile_time_arg_val(7);
-    constexpr uint32_t logical_n = get_compile_time_arg_val(8);
     constexpr uint32_t L = get_compile_time_arg_val(10);
     constexpr uint32_t num_q_chunks = get_compile_time_arg_val(15);
     constexpr uint32_t identity_scalar_packed = get_compile_time_arg_val(16);
-    constexpr uint32_t scale_val = get_compile_time_arg_val(17);
     constexpr uint32_t ring_size = get_compile_time_arg_val(18);
-    constexpr uint32_t global_n_partial_col = get_compile_time_arg_val(19);
-    constexpr uint32_t joint_l_partial_col = get_compile_time_arg_val(20);
     constexpr bool use_streaming_compute = get_compile_time_arg_val(21) == 1;
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(24) == 1;
     constexpr uint32_t out_subblock_h = get_compile_time_arg_val(25);
@@ -73,24 +69,17 @@ void kernel_main() {
     constexpr uint32_t mesh_rows = get_compile_time_arg_val(34);
     constexpr uint32_t mesh_cols = get_compile_time_arg_val(35);
 
-    // Slots 28-37 hold scalars; the output accessors start at slot 38 (joint output and stats accessors follow, unused
-    // here but still emitted, so the CB block starts after them).
+    // Slots 28-37 hold scalars; the output accessor starts at slot 38 and the CB block follows it.
     constexpr uint32_t kFirstAccessorArgOffset = 38;
     constexpr auto out_args = TensorAccessorArgs<kFirstAccessorArgOffset>();
-    constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
-    constexpr auto stats_args = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
-    constexpr uint32_t cb_arg_offset = stats_args.next_compile_time_args_offset();
+    constexpr uint32_t cb_arg_offset = out_args.next_compile_time_args_offset();
 
-    // No Q rotation, K split or segmented accumulation (compute asserts the same).
+    // No Q rotation and no grouped K/V sources.
     static_assert(get_ct_arg<kernel_compile_time_args.size() - 1>() == 0, "no rotated Q split");
-    static_assert(get_named_compile_time_arg_val("ksplit_count") == 1, "no K split");
-    static_assert(get_named_compile_time_arg_val("seg_accum") == 0, "no segmented accumulation");
     static_assert(GROUPED_KV_SOURCE_COUNT == 1, "no grouped K/V sources");
 
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
-    argidx++;  // joint output address (no joint tokens)
-    argidx++;  // stats address (not written)
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
     const uint32_t logical_nt = get_arg_val<uint32_t>(argidx++);
@@ -100,8 +89,6 @@ void kernel_main() {
         false, /* wait_for_op_signal */
         argidx);
 
-    constexpr uint32_t cb_mask_in = get_compile_time_arg_val(cb_arg_offset + 3);
-    constexpr uint32_t cb_scale_in = get_compile_time_arg_val(cb_arg_offset + 4);
     constexpr uint32_t cb_identity_scale_in = get_compile_time_arg_val(cb_arg_offset + 5);
     constexpr uint32_t cb_col_identity = get_compile_time_arg_val(cb_arg_offset + 8);
     constexpr uint32_t cb_out = get_compile_time_arg_val(cb_arg_offset + 13);
@@ -117,7 +104,6 @@ void kernel_main() {
     const auto output_tile_logical = OutputTileShape(B, NH, q_local_padded_Nt, vDHt);
     const auto out_generator = PaddedAddrGenerator(out_writer, output_tile_logical);
 
-    generate_bcast_unary_scalar(CircularBuffer(cb_scale_in), scale_val);
     {
         // Zero the identity tile first: generate_bcast_col_scalar writes column 0 only, and the compute step
         // multiplies its probabilities by this tile to get row sums, which reads every column of it.
@@ -130,28 +116,6 @@ void kernel_main() {
         ckernel::PoolType::MAX,
         ckernel::ReduceDim::REDUCE_ROW,
         dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
-
-    // Padding mask tiles, generated once before the ring loop, when the last K chunk of a shard or of the sequence
-    // is partial.
-    constexpr bool local_n_has_padding = kv_local_padded_Nt % Sk_chunk_t != 0;
-    constexpr bool global_n_has_padding = logical_n % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
-    // partial_tile_present keeps tile presence in lock-step with the factory's CB sizing and compute's tile
-    // indices. A present tile needs a non-zero template column (fall back to 1) so generate_lightweight_mask_tiles
-    // allocates the slot.
-    constexpr uint32_t global_n_partial_col_layout = ring_joint::partial_tile_present(global_n_partial_col, false)
-                                                         ? (global_n_partial_col > 0 ? global_n_partial_col : 1u)
-                                                         : 0u;
-    constexpr uint32_t joint_l_partial_col_layout = ring_joint::partial_tile_present(joint_l_partial_col, false)
-                                                        ? (joint_l_partial_col > 0 ? joint_l_partial_col : 1u)
-                                                        : 0u;
-    if constexpr (local_n_has_padding || global_n_has_padding) {
-        generate_lightweight_mask_tiles<
-            global_n_partial_col_layout,
-            joint_l_partial_col_layout,
-            cb_mask_in,
-            /*causal=*/false,
-            /*sliding_window_size=*/0>(noc, global_n_partial_col, joint_l_partial_col);
-    }
 
     auto arrival_preview = fused_op_receiver.seq;
     const ring_joint::PackedKVSchedule packed_schedule = ring_joint::packed_kv_schedule(

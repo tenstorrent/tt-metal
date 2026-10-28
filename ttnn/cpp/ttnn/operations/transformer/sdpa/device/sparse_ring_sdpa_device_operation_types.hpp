@@ -18,7 +18,7 @@
 
 namespace ttnn::prim {
 
-struct SparseRingAttentionParams {
+struct SparseRingSDPAParams {
     std::optional<float> scale;
     std::size_t logical_n = 0;
     std::size_t ring_size = 0;
@@ -30,7 +30,7 @@ struct SparseRingAttentionParams {
     CoreCoord ccl_core_grid_offset;
 
     // We need a constructor, because all_gather_struct is not default initializable.
-    SparseRingAttentionParams(
+    SparseRingSDPAParams(
         std::optional<float> scale,
         std::size_t logical_n,
         std::size_t ring_size,
@@ -77,13 +77,13 @@ struct SparseRingAttentionParams {
 };
 
 // Q / K / V are sequence-sharded along the ring; the fused all-gather fills gathered_k / gathered_v. The block
-// mask and pooled K / V come from the routing pre-pass (see ttnn::transformer::sparse_ring_attention):
+// mask and pooled K / V come from the routing pre-pass (see ttnn::transformer::sparse_ring_sdpa):
 //   block_mask  uint32 row-major [1, NH, nb_pad, n_blocks_pad]: != 0 computes (local 64-row Q block, global
 //               64-token K block) exactly; global block s * nb_pad + b is block b of shard s.
 //   pooled_k/v  bf16 tile [1, NH, n_blocks_pad, DH]: per-block mean K / mean V over the valid tokens, whole
 //               sequence. Every block the mask drops enters the softmax as one pooled entry weighted by its
 //               token count, through the column bias the reader generates (sol_bias_gen.hpp).
-struct SparseRingAttentionInputs {
+struct SparseRingSDPAInputs {
     Tensor input_q;
     Tensor input_k;
     Tensor input_v;
@@ -96,16 +96,9 @@ struct SparseRingAttentionInputs {
     uint32_t local_kv_seq_len() const { return static_cast<uint32_t>(input_k.logical_shape()[2]); }
 };
 
-// Index constants for SparseRingAttentionResult vector
-constexpr size_t SPARSE_RING_ATTENTION_OUTPUT_IDX = 0;
-constexpr size_t SPARSE_RING_ATTENTION_JOINT_OUTPUT_IDX = 1;
-constexpr size_t SPARSE_RING_ATTENTION_STATS_OUTPUT_IDX = 2;
-
-// SparseRingAttentionResult is a vector of 3 tensors: [output, joint_output (empty), stats_output]. The writer kernel
-// takes accessors for all three, so the two unused outputs stay.
-using SparseRingAttentionResult = Tensors;
-
-// SparseRingAttentionResultSpec is a vector of 3 TensorSpecs: [output, joint_output, stats_output]
-using SparseRingAttentionResultSpec = std::vector<tt::tt_metal::TensorSpec>;
+// SparseRingSDPAResult holds one tensor, the attention output.
+constexpr size_t SPARSE_RING_SDPA_OUTPUT_IDX = 0;
+using SparseRingSDPAResult = Tensors;
+using SparseRingSDPAResultSpec = std::vector<tt::tt_metal::TensorSpec>;
 
 }  // namespace ttnn::prim

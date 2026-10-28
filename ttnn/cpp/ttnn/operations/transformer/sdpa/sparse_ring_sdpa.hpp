@@ -25,7 +25,7 @@ namespace ttnn::transformer {
 //   pooled_k   [1, H, ring_size * nb_pad, D]  bf16 TILE; per-block mean K over the valid tokens, zero padding
 //   pooled_v   [1, H, ring_size * nb_pad, D]  bf16 TILE; per-block mean V
 // Returns the attention output, [1, H, N/ring_size, D], same layout as q.
-ttnn::Tensor sparse_ring_attention(
+ttnn::Tensor sparse_ring_sdpa(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,

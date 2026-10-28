@@ -17,7 +17,7 @@
 #include "sdpa.hpp"
 #include "sparse_sdpa.hpp"
 #include "sparse_sdpa_msa.hpp"
-#include "sparse_ring_attention.hpp"
+#include "sparse_ring_sdpa.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -162,7 +162,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla_wrapper(
         kv_cache_layer_idx);
 }
 
-ttnn::Tensor sparse_ring_attention_wrapper(
+ttnn::Tensor sparse_ring_sdpa_wrapper(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -184,7 +184,7 @@ ttnn::Tensor sparse_ring_attention_wrapper(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     CoreCoord ccl_core_grid_offset,
     bool use_column_major_ccl) {
-    return ttnn::transformer::sparse_ring_attention(
+    return ttnn::transformer::sparse_ring_sdpa(
         input_tensor_q,
         input_tensor_k,
         input_tensor_v,
@@ -828,7 +828,7 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
         nb::arg("kv_cache_layer_idx").noconvert() = nb::none());
 
-    ttnn::bind_function<"sparse_ring_attention", "ttnn.transformer.">(
+    ttnn::bind_function<"sparse_ring_sdpa", "ttnn.transformer.">(
         mod,
         R"doc(
         Block-sparse ring attention (Sol-Attn) with the ring all-gather of K/V fused, non-causal, no joint tokens.
@@ -862,7 +862,7 @@ void bind_sdpa(nb::module_& mod) {
         Returns:
             ttnn.Tensor: [1, H, N/ring_size, D], same layout as input_tensor_q.
         )doc",
-        &sparse_ring_attention_wrapper,
+        &sparse_ring_sdpa_wrapper,
         nb::arg("input_tensor_q").noconvert(),
         nb::arg("input_tensor_k").noconvert(),
         nb::arg("input_tensor_v").noconvert(),

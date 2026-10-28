@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/transformer/sdpa/sparse_ring_attention.hpp"
+#include "ttnn/operations/transformer/sdpa/sparse_ring_sdpa.hpp"
 
 #include <utility>
 
-#include "ttnn/operations/transformer/sdpa/device/sparse_ring_attention_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sparse_ring_sdpa_device_operation.hpp"
 
 namespace ttnn::transformer {
 
-ttnn::Tensor sparse_ring_attention(
+ttnn::Tensor sparse_ring_sdpa(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -32,7 +32,7 @@ ttnn::Tensor sparse_ring_attention(
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
-    auto output_tensors = ttnn::prim::sparse_ring_attention(
+    auto output_tensors = ttnn::prim::sparse_ring_sdpa(
         input_tensor_q,
         input_tensor_k,  // AllGather input
         input_tensor_v,  // AllGather input
@@ -54,7 +54,7 @@ ttnn::Tensor sparse_ring_attention(
         scale,
         compute_kernel_config,
         core_allocation_strategy);
-    return output_tensors[prim::SPARSE_RING_ATTENTION_OUTPUT_IDX];
+    return output_tensors[prim::SPARSE_RING_SDPA_OUTPUT_IDX];
 }
 
 }  // namespace ttnn::transformer

@@ -12,7 +12,7 @@
 // for blocks it computes exactly (no double counting) or padding. The pre-pass used to upload these as a
 // [1, NH, nqc_pad*32, n_blocks_pad] bf16 tensor (~100 MB/layer at 15 s); every row of a Q chunk's tile row
 // is identical and fully determined by (mask row, block geometry, logical_n), so the reader builds them in
-// L1 instead. Inputs: see ttnn::transformer::sparse_ring_attention (sparse_ring_attention.hpp).
+// L1 instead. Inputs: see ttnn::transformer::sparse_ring_sdpa (sparse_ring_sdpa.hpp).
 //
 // Tile format: Float16_b, 4 row-major 16x16 faces (face 0: rows 0-15 x cols 0-15, face 1: rows 0-15 x
 // cols 16-31, faces 2/3 the same for rows 16-31). Faces 0/1 are written by the RISC (16 identical rows),

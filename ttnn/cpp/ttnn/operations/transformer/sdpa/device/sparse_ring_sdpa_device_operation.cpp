@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/transformer/sdpa/device/sparse_ring_attention_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sparse_ring_sdpa_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -19,8 +19,8 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
-#include "ttnn/operations/transformer/sdpa/device/sparse_ring_attention_device_operation_types.hpp"
-#include "ttnn/operations/transformer/sdpa/device/sparse_ring_attention_program_factory.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sparse_ring_sdpa_device_operation_types.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sparse_ring_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
 #include "ttnn/tensor/types.hpp"
 
@@ -80,8 +80,7 @@ void validate_all_gather_on_program_cache_miss(
         output_tensors.size(),
         input_tensors.size());
     for (size_t i = 0; i < output_tensors.size(); ++i) {
-        TT_FATAL(
-            output_tensors[i].has_value(), "SparseRingAttention requires persistent all-gather output tensor {}", i);
+        TT_FATAL(output_tensors[i].has_value(), "SparseRingSDPA requires persistent all-gather output tensor {}", i);
         const auto& output_tensor = output_tensors[i].value();
 
         TT_FATAL(output_tensor.layout() == Layout::TILE, "Output tensor {} must be tiled", i);
@@ -129,8 +128,8 @@ void validate_all_gather_on_program_cache_miss(
 
 }  // namespace
 
-void SparseRingAttentionDeviceOperation::validate_on_program_cache_miss(
-    const SparseRingAttentionParams& args, const SparseRingAttentionInputs& tensor_args) {
+void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
+    const SparseRingSDPAParams& args, const SparseRingSDPAInputs& tensor_args) {
     const auto& input_tensor_q = tensor_args.input_q;
     const auto& gathered_k = tensor_args.gathered_k;
     const auto& gathered_v = tensor_args.gathered_v;
@@ -138,7 +137,7 @@ void SparseRingAttentionDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(args.program_config.has_value(), "Program config must be provided");
     TT_FATAL(
         args.get_q_chunk_size() == kSparseQChunkSize,
-        "SparseRingAttention computes one 64-row query block per mask row: q_chunk_size must be {}, got {}",
+        "SparseRingSDPA computes one 64-row query block per mask row: q_chunk_size must be {}, got {}",
         kSparseQChunkSize,
         args.get_q_chunk_size());
     TT_FATAL(
@@ -148,10 +147,10 @@ void SparseRingAttentionDeviceOperation::validate_on_program_cache_miss(
         args.get_k_chunk_size());
     TT_FATAL(
         !get_fp32_dest_acc_en(args.compute_kernel_config),
-        "SparseRingAttention requires streaming compute; set fp32_dest_acc_en=false");
+        "SparseRingSDPA requires streaming compute; set fp32_dest_acc_en=false");
 
     validate_all_gather_on_program_cache_miss(args.all_gather_operation_attributes, args.all_gather_tensor_args);
-    TT_FATAL(!args.all_gather_operation_attributes.full_mesh, "SparseRingAttention gathers along one mesh axis");
+    TT_FATAL(!args.all_gather_operation_attributes.full_mesh, "SparseRingSDPA gathers along one mesh axis");
 
     // Check that SDPA coregrid does not overlap with AllGather coregrid
     const auto strategy = args.all_gather_operation_attributes.core_allocation_strategy;
@@ -173,17 +172,16 @@ void SparseRingAttentionDeviceOperation::validate_on_program_cache_miss(
             "All tensors must have the same dtype. Expected {}, got {}",
             dtype,
             tensor.dtype());
-        TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands to SparseRingAttention need to be on device");
-        TT_FATAL(
-            tensor.buffer() != nullptr, "Operands to SparseRingAttention need to be allocated in buffers on device");
-        TT_FATAL(tensor.layout() == Layout::TILE, "Inputs to SparseRingAttention must be tilized");
+        TT_FATAL(tensor.storage_type() == StorageType::DEVICE, "Operands to SparseRingSDPA need to be on device");
+        TT_FATAL(tensor.buffer() != nullptr, "Operands to SparseRingSDPA need to be allocated in buffers on device");
+        TT_FATAL(tensor.layout() == Layout::TILE, "Inputs to SparseRingSDPA must be tilized");
         TT_FATAL(
             tensor.dtype() == DataType::BFLOAT16 || tensor.dtype() == DataType::BFLOAT8_B ||
                 tensor.dtype() == DataType::BFLOAT4_B,
-            "Inputs to SparseRingAttention must be BF16 or BF8 or BF4");
+            "Inputs to SparseRingSDPA must be BF16 or BF8 or BF4");
         TT_FATAL(
             tensor.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
-            "Operands to SparseRingAttention need to be in DRAM");
+            "Operands to SparseRingSDPA need to be in DRAM");
         // Only the sequence dimension may be padded.
         const auto& logical_shape = tensor.logical_shape();
         const auto& padded_shape = tensor.padded_shape();
@@ -298,7 +296,7 @@ void SparseRingAttentionDeviceOperation::validate_on_program_cache_miss(
         n_blocks_pad,
         mask.logical_shape());
     const uint32_t nkc_local = tt::div_up(N_local_kv, args.get_k_chunk_size());
-    TT_FATAL(nkc_local <= 64, "SparseRingAttention: at most 64 K pieces per shard ({} given)", nkc_local);
+    TT_FATAL(nkc_local <= 64, "SparseRingSDPA: at most 64 K pieces per shard ({} given)", nkc_local);
     // Every shard inside logical_n must hold at least one full 64-token block. Only full blocks are ever computed
     // exactly; a shard with a 1..63-token live tail has none, so its ring iteration streams nothing, compute runs no
     // step for it, and the writer waits forever. Pad logical_n up or re-shard so no shard has a sub-block tail.
@@ -308,55 +306,37 @@ void SparseRingAttentionDeviceOperation::validate_on_program_cache_miss(
             static_cast<int64_t>(args.logical_n) - static_cast<int64_t>(s) * static_cast<int64_t>(N_local_kv));
         TT_FATAL(
             valid <= 0 || valid >= kSparseBlockTokens,
-            "SparseRingAttention: shard {} holds {} valid tokens; every shard inside logical_n needs a full 64-token "
+            "SparseRingSDPA: shard {} holds {} valid tokens; every shard inside logical_n needs a full 64-token "
             "block",
             s,
             valid);
     }
 }
 
-void SparseRingAttentionDeviceOperation::validate_on_program_cache_hit(
-    const SparseRingAttentionParams& /*args*/, const SparseRingAttentionInputs& /*tensor_args*/) {
+void SparseRingSDPADeviceOperation::validate_on_program_cache_hit(
+    const SparseRingSDPAParams& /*args*/, const SparseRingSDPAInputs& /*tensor_args*/) {
     // Every attribute the miss path checks is part of the program hash.
 }
 
-SparseRingAttentionResultSpec SparseRingAttentionDeviceOperation::compute_output_specs(
-    const SparseRingAttentionParams& args, const SparseRingAttentionInputs& tensor_args) {
+SparseRingSDPAResultSpec SparseRingSDPADeviceOperation::compute_output_specs(
+    const SparseRingSDPAParams& args, const SparseRingSDPAInputs& tensor_args) {
     const auto& input = tensor_args.input_q;
     const auto v_head_dim = tensor_args.input_v.logical_shape()[3];
-    auto joint_output_shape = input.logical_shape();
-    joint_output_shape[2] = 0;
-    joint_output_shape[3] = v_head_dim;
-
-    auto stats_shape = input.logical_shape();
-    stats_shape[3] = 1;
-    // 2x the sequence length: first half running max, second half running sum (writer DRAM scratch).
-    stats_shape[2] = input.padded_shape()[2] * 2;
-
     auto out_shape = input.logical_shape();
     out_shape[3] = v_head_dim;
 
-    return {
-        tt::tt_metal::TensorSpec(
-            out_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
-        tt::tt_metal::TensorSpec(
-            joint_output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
-        tt::tt_metal::TensorSpec(
-            stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
+    return {tt::tt_metal::TensorSpec(
+        out_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
 }
 
-SparseRingAttentionResult SparseRingAttentionDeviceOperation::create_output_tensors(
-    const SparseRingAttentionParams& args, const SparseRingAttentionInputs& tensor_args) {
+SparseRingSDPAResult SparseRingSDPADeviceOperation::create_output_tensors(
+    const SparseRingSDPAParams& args, const SparseRingSDPAInputs& tensor_args) {
     auto output_specs = compute_output_specs(args, tensor_args);
-    return {
-        create_device_tensor(output_specs[SPARSE_RING_ATTENTION_OUTPUT_IDX], tensor_args.input_q.device()),
-        create_device_tensor(output_specs[SPARSE_RING_ATTENTION_JOINT_OUTPUT_IDX], tensor_args.input_q.device()),
-        create_device_tensor(output_specs[SPARSE_RING_ATTENTION_STATS_OUTPUT_IDX], tensor_args.input_q.device()),
-    };
+    return {create_device_tensor(output_specs[SPARSE_RING_SDPA_OUTPUT_IDX], tensor_args.input_q.device())};
 }
 
-ttsl::hash::hash_t SparseRingAttentionDeviceOperation::compute_program_hash(
-    const SparseRingAttentionParams& args, const SparseRingAttentionInputs& tensor_args) {
+ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
+    const SparseRingSDPAParams& args, const SparseRingSDPAInputs& tensor_args) {
     const std::vector<Tensor> input_tensors = {
         tensor_args.input_q,
         tensor_args.input_k,
@@ -367,7 +347,7 @@ ttsl::hash::hash_t SparseRingAttentionDeviceOperation::compute_program_hash(
         tensor_args.pooled_k,
         tensor_args.pooled_v};
     // logical_n is baked into the kernels (compile-time args and the bias generator), so it is keyed.
-    return tt::tt_metal::operation::hash_operation<SparseRingAttentionDeviceOperation>(
+    return tt::tt_metal::operation::hash_operation<SparseRingSDPADeviceOperation>(
         input_tensors,
         args.scale,
         args.logical_n,
@@ -379,20 +359,17 @@ ttsl::hash::hash_t SparseRingAttentionDeviceOperation::compute_program_hash(
         args.all_gather_tensor_args);
 }
 
-tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors>
-SparseRingAttentionDeviceOperation::create_op_performance_model(
-    const SparseRingAttentionParams& args,
-    const SparseRingAttentionInputs& tensor_args,
-    SparseRingAttentionResult& output_tensors) {
+tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> SparseRingSDPADeviceOperation::create_op_performance_model(
+    const SparseRingSDPAParams& args, const SparseRingSDPAInputs& tensor_args, SparseRingSDPAResult& output_tensors) {
     Tensors input_tensors = {
         tensor_args.input_q, tensor_args.input_k, tensor_args.input_v, tensor_args.gathered_k, tensor_args.gathered_v};
 
-    auto& output_tensor = output_tensors[SPARSE_RING_ATTENTION_OUTPUT_IDX];
+    auto& output_tensor = output_tensors[SPARSE_RING_SDPA_OUTPUT_IDX];
     auto arch = output_tensor.storage_type() == StorageType::DEVICE ? output_tensor.device()->arch()
                                                                     : ttnn::GetDefaultDevice()->arch();
 
     if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
-        log_warning(tt::LogOp, "SparseRingAttention perf model does not support arch '{}'", enchantum::to_string(arch));
+        log_warning(tt::LogOp, "SparseRingSDPA perf model does not support arch '{}'", enchantum::to_string(arch));
         return operation::OpPerformanceModelGeneral<Tensors>(input_tensors, output_tensors, 0);
     }
 
@@ -421,7 +398,7 @@ SparseRingAttentionDeviceOperation::create_op_performance_model(
     return operation::OpPerformanceModelGeneral<Tensors>(input_tensors, output_tensors, ideal_cycles);
 }
 
-SparseRingAttentionResult sparse_ring_attention(
+SparseRingSDPAResult sparse_ring_sdpa(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
@@ -443,14 +420,14 @@ SparseRingAttentionResult sparse_ring_attention(
     const std::optional<float> scale,
     const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
-    using OperationType = ttnn::prim::SparseRingAttentionDeviceOperation;
+    using OperationType = ttnn::prim::SparseRingSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
         input_tensor_q.device()->arch(), compute_kernel_config, tt::tt_metal::MathFidelity::HiFi2, true, false, false);
 
     log_debug(
         tt::LogOp,
-        "Launching SparseRingAttention with core_allocation_strategy {}",
+        "Launching SparseRingSDPA with core_allocation_strategy {}",
         enchantum::to_string(core_allocation_strategy));
 
     // The fused ring all-gather of K and V; a member of the op's attributes.
@@ -469,7 +446,7 @@ SparseRingAttentionResult sparse_ring_attention(
     const auto& mesh_shape = mesh_device.shape();
     TT_FATAL(
         cluster_axis < mesh_shape.dims(),
-        "SparseRingAttention cluster_axis must be an in-range mesh axis; got {} for mesh {}",
+        "SparseRingSDPA cluster_axis must be an in-range mesh axis; got {} for mesh {}",
         cluster_axis,
         mesh_shape);
     const std::size_t num_devices = cluster_axis == 0 ? mesh_view.num_rows() : mesh_view.num_cols();
