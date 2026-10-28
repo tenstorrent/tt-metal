@@ -1195,7 +1195,9 @@
     export TT_METAL_WATCHER=30
     unset HF_HUB_OFFLINE  # umt5 fetches the Wan2.2 tokenizer from the hub
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
-    export DIT_UNIT_TEST=1  # read at collection time by t5/test_t5_full, umt5/test_umt5, clip/test_clip_full_projection
+    # Read at collection time by t5/test_t5_full, umt5/test_umt5, clip/test_clip_full_projection and the
+    # qwen25vl tests, which leave out their slowest cases (~13 min of the new Qwen2.5-VL tests' ~19).
+    export DIT_UNIT_TEST=1
     # No -k: params needing more than 8 devices skip themselves in the mesh_device fixture.
     # -rs keeps those skip reasons visible so a green leg can be told from one that ran nothing.
     # mistral3 is excluded: it loads black-forest-labs/FLUX.2-dev, a manually gated repo that CI's
@@ -1221,9 +1223,7 @@
     wh_llmbox:
       # 37m26s of pytest on run 39317745110 (10-19), plus ~11.5 min of tests added by #57208 (FIBO-vlm,
       # smollm3, vision injection; timed on job 118869109132), so ~49 min. +~22% margin.
-      # The Qwen2.5-VL vision tower and the edit text encoder add ~17 min (job 122427949493 against
-      # 122484092124, 10-27), so ~66 min.
-      timeout: 80
+      timeout: 60
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
@@ -1564,8 +1564,8 @@
   model_family: Qwen
   skus:
     bh_quietbox_2:
-      # 16 min on job 122484280884 (10-27), plus ~11 min per edit checkpoint (job 122427488829).
-      timeout: 60
+      # 38 min on job 122853963781 (10-28), with one edit case per checkpoint.
+      timeout: 55
       tier: 2
   owner_id: U0ATR08RCQ0 # James Lee
   team: models

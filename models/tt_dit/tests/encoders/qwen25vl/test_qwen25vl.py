@@ -31,7 +31,7 @@ from models.tt_dit.pipelines.qwenimage.text_encoder import (
     PromptFormat,
     TextEncoder,
 )
-from models.tt_dit.tests.encoders.qwen25vl.test_qwen25vl_vision import EDIT_CHECKPOINT, photo
+from models.tt_dit.tests.encoders.qwen25vl.test_qwen25vl_vision import EDIT_CHECKPOINT, SKIP_IN_CI, photo
 from models.tt_dit.utils import tensor
 from models.tt_dit.utils.check import assert_quality
 from models.tt_dit.utils.test import line_params_req_exact_devices
@@ -142,7 +142,7 @@ EDIT_PROMPT_TEMPLATE = EDIT_FORMAT.template.format(f"{EDIT_FORMAT.image_prompt}{
     [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}],
     indirect=True,
 )
-@pytest.mark.parametrize("size", [1024, 384])
+@pytest.mark.parametrize("size", [pytest.param(1024, marks=SKIP_IN_CI), 384])
 def test_image_prompt_forward(*, mesh_device: ttnn.MeshDevice, tp: tuple[int, int], size: int) -> None:
     """An edit prompt with a photo, through the vision tower and the encoder, against `transformers`.
 
@@ -316,7 +316,9 @@ def test_qwen25vl_encoder_pair(*, mesh_device: ttnn.MeshDevice, submesh_shape: t
     [
         # Qwen-Image-Edit shows the image at the size of its latents. The image rows are sensitive
         # to rounding at 1024² (see `test_image_prompt_forward`).
-        pytest.param(EDIT_CHECKPOINT, EDIT_FORMAT, [(1024, 1024)], (1408, 1536, 1920), 0.88, id="edit"),
+        pytest.param(
+            EDIT_CHECKPOINT, EDIT_FORMAT, [(1024, 1024)], (1408, 1536, 1920), 0.88, id="edit", marks=SKIP_IN_CI
+        ),
         # Edit-2509 and 2511 show each image at about 384². Torch at bfloat16 reaches 0.945 against
         # float32 on this input, and 0.90 on the one above.
         pytest.param(

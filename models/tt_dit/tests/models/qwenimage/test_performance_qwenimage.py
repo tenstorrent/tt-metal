@@ -235,10 +235,12 @@ def test_qwenimage_pipeline_performance(
     if key not in EXPECTED_METRICS:
         pytest.fail(f"Unknown mesh device for performance comparison: {mesh_device}")
 
-    # The pipeline warms up every resolution of its preset while it is constructed.
-    pipeline = QwenImagePipeline.create_pipeline(mesh_device=mesh_device)
-    # The configuration create_pipeline uses, for the report.
-    config = QwenImagePipelineConfig.default(mesh_shape=mesh_device.shape)
+    # The pipeline warms up every resolution of its config while it is constructed, so the 1024² case
+    # only configures that one.
+    config = QwenImagePipelineConfig.default(
+        mesh_shape=mesh_device.shape, resolutions=None if all_resolutions else [(1024, 1024)]
+    )
+    pipeline = QwenImagePipeline(device=mesh_device, config=config)
 
     resolutions = [r for r in BENCHMARK_RESOLUTIONS if r in config.resolutions] if all_resolutions else [(1024, 1024)]
     cases = [

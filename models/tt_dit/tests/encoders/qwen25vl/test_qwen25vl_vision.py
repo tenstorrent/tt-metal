@@ -11,6 +11,7 @@ patches on the grids the edit pipelines produce.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 import huggingface_hub
@@ -34,6 +35,9 @@ SUBFOLDER = "text_encoder"
 PREFIX = "visual."
 EDIT_CHECKPOINT = "Qwen/Qwen-Image-Edit"
 PHOTO = Path(__file__).parents[4] / "experimental/retinanet/resources/dog_800x800.jpg"
+
+# Cases CI's encoder unit job (DIT_UNIT_TEST=1) leaves out to stay within its time budget.
+SKIP_IN_CI = pytest.mark.skipif(os.environ.get("DIT_UNIT_TEST") == "1", reason="left out of CI (DIT_UNIT_TEST=1)")
 
 # (t, h, w) in patches of 14 px.
 GRIDS = {
@@ -97,9 +101,9 @@ def test_window_index(hf_config: Qwen2_5_VLVisionConfig, grid: list[list[int]]) 
 @pytest.mark.parametrize(
     ("mesh_device", "tp", "device_params"),
     [
-        pytest.param((1, 1), 1, {}, id="1x1"),
+        pytest.param((1, 1), 1, {}, id="1x1", marks=SKIP_IN_CI),
         pytest.param((1, 4), 4, {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="1x4tp4"),
-        pytest.param((1, 8), 8, {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="1x8tp8"),
+        pytest.param((1, 8), 8, {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="1x8tp8", marks=SKIP_IN_CI),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -133,7 +137,7 @@ def test_tower(
 @pytest.mark.parametrize(
     ("mesh_device", "tp", "device_params"),
     [
-        pytest.param((1, 1), 1, {}, id="1x1"),
+        pytest.param((1, 1), 1, {}, id="1x1", marks=SKIP_IN_CI),
         pytest.param((1, 4), 4, {"fabric_config": ttnn.FabricConfig.FABRIC_1D}, id="1x4tp4"),
     ],
     indirect=["mesh_device", "device_params"],
