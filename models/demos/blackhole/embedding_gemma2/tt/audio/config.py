@@ -35,6 +35,9 @@ TOKEN_BUCKETS = (32, 64, 128, 256, 512, 768)
 # intermediates take so matmul circular buffers (<= 900 KB per core, audio/linear.py) never clash
 # with them. 0 puts everything in DRAM (A/B switch).
 AUDIO_L1_BYTES_PER_BANK = int(os.environ.get("EG2_AUDIO_L1_BYTES_PER_BANK", str(64 * 1024)))
+# A named wide intermediate (the fp32 fused QKV output, 72 KB per bank at 1 x 768) gets a wider
+# cap, as the vision tower's (E5b).
+WIDE_L1_BYTES_PER_BANK = 96 * 1024
 
 
 def audio_act_memory_config(device, shape, dtype=None, bytes_per_bank: int | None = None) -> "ttnn.MemoryConfig":
