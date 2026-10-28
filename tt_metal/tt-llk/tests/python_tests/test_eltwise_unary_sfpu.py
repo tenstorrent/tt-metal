@@ -1052,6 +1052,7 @@ def test_eltwise_unary_sfpu_mode_strict_specials(
         input_dimensions,
         spec_A=_sfpu_mode_strict_probe_spec(mathop, formats, dest_acc),
         sfpu_mode=sfpu_mode,
+        return_golden=True,
     )
 
     torch_format = format_dict[formats.output_format]

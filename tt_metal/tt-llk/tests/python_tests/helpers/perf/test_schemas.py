@@ -333,6 +333,7 @@ PERF_TEST_SCHEMAS = {
             "approx_mode",
             "clamp_negative",
             "dest_acc",
+            "dest_sync",
             "fast_mode",
             "formats.input_A",
             "formats.input_B",
