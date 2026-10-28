@@ -238,31 +238,59 @@ soft = aenc.encode(feats, mask, traced=True)
 |---|---|
 | `tt/audio/config.py` | `AudioConfig` from the HF audio config; token buckets |
 | `tt/audio/weights.py` | audio / embed_audio tensor loading; clip bounds |
-| `tt/audio/clippable_linear.py` | `ClippableLinear` (clamp -> linear -> clamp, bounds folded) |
+| `tt/audio/clippable_linear.py` | `ClippableLinear` (clamp -> linear with the output clamp fused, bounds folded) |
+| `tt/audio/linear.py` | `audio_linear`: 2D-multicast program configs, fused activation (E5c) |
+| `tt/audio/program_configs.py` | block-matmul configs for the batched attention / lconv matmuls (E5c) |
 | `tt/audio/subsample.py` | `AudioSubsample` (2 x conv2d + LN + ReLU + masks, input_proj) |
 | `tt/audio/feed_forward.py` | `AudioFeedForward` (Macaron half-step FFN) |
-| `tt/audio/attention.py` | `AudioAttention` (band attention on 32-row blocks, rel-pos shift, softcap); host `attention_mask` |
-| `tt/audio/light_conv.py` | `AudioLightConv1d` (GLU, causal depthwise conv by selection matmul) |
+| `tt/audio/attention.py` | `AudioAttention` (fused QKV, band attention on 32-row blocks, rel-pos gather shift, softcap); host `attention_mask` |
+| `tt/audio/light_conv.py` | `AudioLightConv1d` (GLU, causal depthwise conv by exact 0/1 shift matmuls) |
 | `tt/audio/conformer_layer.py` | `AudioConformerLayer` |
 | `tt/audio/embedder.py` | `AudioOutputProj`, `AudioEmbedder` (`embed_audio`) |
 | `tt/audio/audio_model.py` | `AudioModel` (device-only forward; `prepare` lays out conv weights per shape) |
 | `tt/audio/audio_encoder.py` | `AudioEncoder` (host: features, masks, upload, trace capture/replay, readback) |
 | `reference/hf_audio_reference.py` | HF fp32 audio reference + activation hooks |
 | `tests/pcc/audio/` | PCC per layer kind, crops around the 12-token chunk, 12-layer stack, soft tokens, trace, determinism, audit, perf |
-| `doc/functional_audio/` | stage report, work log, tt-perf-report artifacts |
+| `doc/functional_audio/` | E3 stage report, work log, tt-perf-report artifacts |
+| `doc/optimized_audio/` | E5c stage report, work log, tt-perf-report before / after |
+| `tests/perf/bench_audio.py` | traced burst / sustained latency per (batch, bucket) |
 
 ```bash
 pytest models/demos/blackhole/embedding_gemma2/tests/pcc/audio -q -k "not tracy"          # PCC + trace + audit + perf
 pytest models/demos/blackhole/embedding_gemma2/tests/pcc/audio/test_audio_perf.py -k traced -s
+python models/demos/blackhole/embedding_gemma2/tests/perf/bench_audio.py --cases 1x256,1x768,4x256
 ```
 
-Measured on real in-tree speech (0.64 s to 30 s, and a padded batch of 2): per-layer-kind PCC
->= 0.9997, and soft-token PCC 0.9984-0.9999 per clip vs the HF fp32 reference. HF's own bf16 run
-scores 0.9985-0.9999 against the same reference. The worst single soft token is much lower:
-per-token cosine 0.764 (s10 token 126) and 0.773 (s30 token 267), against 0.851 and 0.820 for
-HF-bf16 on the same tokens. Traced latency is 23.7 ms for a 10 s clip,
-47.8 ms for 30 s, and 80.5 ms for 4 x 10 s. Details, the fp32-activation precision lever and
-limitations are in `doc/functional_audio/README.md`.
+Measured on real in-tree speech (0.64 s to 30 s, and a padded batch of 2), E5c path: per-layer
+PCC >= 0.99998, and soft-token PCC 0.9986-0.9999 per clip vs the HF fp32 reference (bar 0.99;
+E3: 0.9984-0.9999). HF's own bf16 run scores 0.9985-0.9999 against the same reference. The worst
+single soft token is much lower: per-token cosine 0.834 (s10 token 126; E3 0.764) and 0.773 (s30
+token 267), against 0.851 and 0.820 for HF-bf16 on the same tokens. The synthetic tone clip
+scores 0.99769 (E3 0.99806). Details, the fp32-activation precision lever and limitations are in
+`doc/functional_audio/README.md` and `doc/optimized_audio/README.md`.
+
+### Audio tower performance (E5c, optimized)
+
+Traced device ms per forward (`tests/perf/bench_audio.py`, burst median of 5 windows; sustained
+after a 10 s soak is within 0.01 ms). "E3 code today" was re-measured on the same day and card.
+Like the E2 vision code in E5b, it is slower than its own report (the default-config HiFi4 bf16
+matmuls; cause unexplained). See `doc/optimized_audio/README.md`.
+
+| batch x bucket | E3 code today ms | E3 published ms | E5c ms | speedup vs today / vs published | ms per clip |
+|---|---|---|---|---|---|
+| 1 x 256 (10 s) | 25.78 | 23.67 | 8.74 | 2.95x / 2.71x | 8.74 |
+| 1 x 768 (30 s) | 54.28 | 47.79 | 15.02 | 3.61x / 3.18x | 15.02 |
+| 4 x 256 (4 x 10 s) | 88.34 | 80.48 | 19.15 | 4.61x / 4.20x | 4.79 |
+
+Policy (precision unchanged from E3: bf16 weights, HiFi4 + fp32 accumulation, fp32 q / k / v /
+logits / softmax / taps): block-matmul configs for the batched band-attention and lconv matmuls,
+2D-multicast configs for the projections with the clip clamp fused into the matmul, fused QKV with
+`nlp_create_qkv_heads` / `nlp_concat_heads`, unary steps fused into neighbouring ops, the rel-pos
+shift as one gather, the lconv causal shift as exact 0/1 shift matmuls at batch 1, the mel input
+in tile layout, and intermediates in L1 when they fit (64 KB per bank; 96 KB for the fused QKV
+output). All but two changes are bit-identical to E3; those two (projection and output-head
+program configs) change only the accumulation order. HiFi2 projections (-1.4 ms at 1 x 768),
+LoFi shift matmuls and a block-sharded RMSNorm were measured and left for E6 (accuracy).
 
 ## Full model
 

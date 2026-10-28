@@ -95,7 +95,23 @@
     "largest_tested_batch": {"pcc": 2, "perf_traced": 4},
     "reduction": "none: the feature extractor bounds a clip at 750 tokens and the largest bucket (768) runs it",
     "untested": "batch > 4; act_dtype=float32 traced beyond batch 1",
-    "decode": "not applicable: one-pass causal-local encoder per clip; no streaming cache"
+    "decode": "not applicable: one-pass causal-local encoder per clip; no streaming cache",
+    "optimized_e5c": {
+      "summary": "E5c keeps every capability (buckets 32-768, 750 tokens per clip, batch). Precision unchanged from E3 (bf16 weights, HiFi4 + fp32 acc; fp32 q/k/v, logits, softmax, depthwise taps). Block-matmul configs for the batched band attention / lconv, 2D-multicast projection configs with the clip clamp fused, fused QKV + nlp_create_qkv_heads / nlp_concat_heads, fused unary steps, gather rel shift, exact 0/1 shift matmuls for the lconv at batch 1, intermediates in L1 when they fit.",
+      "mel_input": "AudioDeviceInputs.mel is now [B, 1, 4S, 128] fp32 TILE (was [B, 4S, 128, 1] ROW_MAJOR); same values",
+      "new_persistent_constants": "lconv shift matrices: 4 x [1, 1, S, S] bf16 per token bucket (7.5 MB in all, shared by the 12 layers, created at load time); rel-shift gather index [1, 1, 32, 64] uint16; per layer: fused Wqkv [1, 1, 1024, 3072] bf16 (replaces Wq/Wk/Wv), E^T [1, 8, 128, 32] fp32 (was 96 wide), qscale [1, 1, 1, 128] fp32",
+      "l1_activations": "intermediates in L1 interleaved when <= 64 KB per bank (audio/config.py audio_act_memory_config; EG2_AUDIO_L1_BYTES_PER_BANK=0 for all-DRAM); fused QKV fp32 output <= 96 KB per bank; subsampling conv0 output path <= 256 KB per bank; inputs, trace outputs, weights and constants in DRAM",
+      "precondition": "q / k / v input clip bounds equal per layer (true for all 12 layers of google/embeddinggemma-2); AudioAttention.from_state_dict raises otherwise",
+      "traced_device_ms_burst": {"1x256": 8.739, "1x768": 15.021, "4x256": 19.154},
+      "traced_device_ms_sustained": {"1x256": 8.737, "1x768": 15.016, "4x256": 19.154},
+      "traced_device_ms_e3_code_same_day": {"1x256": 25.775, "1x768": 54.284, "4x256": 88.338},
+      "traced_device_ms_e3_published": {"1x256": 23.67, "1x768": 47.79, "4x256": 80.48},
+      "speedup_vs_e3_same_day": {"1x256": 2.95, "1x768": 3.61, "4x256": 4.61},
+      "speedup_vs_e3_published": {"1x256": 2.71, "1x768": 3.18, "4x256": 4.20},
+      "accuracy_vs_e3": "soft-token PCC per clip s10 0.99841 -> 0.99900, s30 0.99905 -> 0.99900, s2 0.99990 -> 0.99990, short 0.99853 -> 0.99858, tone3 (synthetic) 0.99806 -> 0.99769; per-layer PCC min 0.999986; full-model audio cosine min 0.99895 (tone 3 s, was 0.99926); only the projection / output-head program configs change values (accumulation order)",
+      "left_for_e6": "HiFi2 projections (-1.44 ms at 1x768, s30 soft PCC 0.99836), block-sharded RMSNorm (-0.3 ms, s30 0.99823), LoFi shift matmuls (inexact)",
+      "evidence": "doc/optimized_audio/README.md; tt-ops/runs/embeddinggemma-2/e5c/bench.jsonl (labels baseline_E3, final_E5c), results_gates.jsonl"
+    }
   },
   "full_model": {
     "component": "EmbeddingGemma2Model (vision + audio towers, on-device soft-token merge, text encoder) + ST mean pooling + L2 normalize (+ MRL 512/256/128)",
