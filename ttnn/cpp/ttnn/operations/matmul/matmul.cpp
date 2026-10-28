@@ -64,6 +64,19 @@ Tensor handle_zero_volume_matmul(
     const bool transpose_a,
     const bool transpose_b,
     const std::optional<const ttnn::Tensor>& bias = std::nullopt) {
+    // An empty operand skips the device op and its validation, so check the inner dimensions here (torch raises too).
+    const auto& a_shape = input_tensor_a.logical_shape();
+    const auto& b_shape = input_tensor_b.logical_shape();
+    const uint32_t a_inner = a_shape.rank() == 1 ? a_shape[0] : (transpose_a ? a_shape[-2] : a_shape[-1]);
+    const uint32_t b_inner = b_shape.rank() == 1 ? b_shape[0] : (transpose_b ? b_shape[-1] : b_shape[-2]);
+    TT_FATAL(
+        a_inner == b_inner,
+        "ttnn.matmul: the inner dimensions must match, but got shapes {} and {} (inner sizes {} and {})",
+        a_shape,
+        b_shape,
+        a_inner,
+        b_inner);
+
     // Calculate the expected output shape
     ttnn::Shape output_shape =
         utilities::compute_matmul_output_shape(input_tensor_a, input_tensor_b, transpose_a, transpose_b);
