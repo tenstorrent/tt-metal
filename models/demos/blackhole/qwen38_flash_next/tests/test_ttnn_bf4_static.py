@@ -7,7 +7,7 @@ import json
 import os
 import re
 from contextlib import contextmanager
-from dataclasses import asdict, replace
+from dataclasses import asdict, dataclass, replace
 from functools import reduce
 from operator import getitem
 from pathlib import Path
@@ -286,6 +286,23 @@ def layer0(tmp_path):
     return layer
 
 
+@dataclass(frozen=True)
+class _RetainedFD:
+    """A verification FD a load retained and the (device, inode) it was opened on.  A closed FD's number goes to the
+    process's next open, so the FD is open only while its number still refers to that file."""
+
+    descriptor: int
+    file: tuple[int, int]
+
+    @property
+    def open(self) -> bool:
+        try:
+            status = os.fstat(self.descriptor)
+        except OSError:
+            return False
+        return (status.st_dev, status.st_ino) == self.file
+
+
 @contextmanager
 def _patched_load(layer, load_tensor=None, *, deallocate_error=None):
     """The native side of a cache load on fakes (the live ring, the slot memory configs, ``load_tensor``); the
@@ -297,7 +314,8 @@ def _patched_load(layer, load_tensor=None, *, deallocate_error=None):
     def record(path, artifact, *, expected_signature=None):
         with original(path, artifact, expected_signature=expected_signature) as verified:
             if expected_signature is not None:
-                layer.retained.append(Path(f"/proc/self/fd/{verified.descriptor}"))
+                status = os.fstat(verified.descriptor)
+                layer.retained.append(_RetainedFD(verified.descriptor, (status.st_dev, status.st_ino)))
             yield verified
 
     with (
@@ -558,14 +576,14 @@ def test_complete_backbone_hashes_once_then_streams_by_verified_identity(expect_
         assert bf4_module.ttnn.load_tensor.call_count == deallocate.call_count == 4 * BACKBONE_LAYERS
         assert contract.mesh_validations == 1 + 2 * BACKBONE_LAYERS
         assert contract.tensor_validations == len(layer0.retained) == 4 * BACKBONE_LAYERS
-        assert all(not path.exists() for path in layer0.retained)
+        assert not any(fd.open for fd in layer0.retained)
 
 
 def test_bf4_load_retains_verified_fds_through_topology_validation(layer0):
     original_validate = layer0.contract.validate_tensor
 
     def validate_while_retained(tensor, *, placement, shard_dim):
-        assert len(layer0.retained) == 2 and all(path.exists() for path in layer0.retained)
+        assert len(layer0.retained) == 2 and all(fd.open for fd in layer0.retained)
         return original_validate(tensor, placement=placement, shard_dim=shard_dim)
 
     with _patched_load(layer0) as deallocate, mock.patch.object(
@@ -573,7 +591,7 @@ def test_bf4_load_retains_verified_fds_through_topology_validation(layer0):
     ):
         tensors = layer0.cache.load_layer(layer0.mesh, layer_index=0)
     assert len(tensors) == 2
-    assert all(not path.exists() for path in layer0.retained)
+    assert not any(fd.open for fd in layer0.retained)
     deallocate.assert_not_called()
 
 
@@ -613,7 +631,7 @@ def test_bf4_load_rejects_path_replacement_after_native_reads_and_closes_fds(exp
         layer0.cache.load_layer(layer0.mesh, layer_index=0)
     assert len(layer0.loaded) == 2
     assert [call.args[0] for call in deallocate.call_args_list] == layer0.loaded
-    assert all(not path.exists() for path in layer0.retained)
+    assert not any(fd.open for fd in layer0.retained)
 
 
 def test_bf4_load_rechecks_in_place_mutation_after_topology_validation(expect_error, layer0):
@@ -621,7 +639,7 @@ def test_bf4_load_rechecks_in_place_mutation_after_topology_validation(expect_er
     original_validate = contract.validate_tensor
 
     def mutate_during_topology(tensor, *, placement, shard_dim):
-        assert all(path.exists() for path in layer0.retained)
+        assert all(fd.open for fd in layer0.retained)
         if contract.tensor_validations == 0:
             with layer0.paths["w2"].open("ab") as stream:
                 stream.write(b"mutation")
@@ -635,7 +653,7 @@ def test_bf4_load_rechecks_in_place_mutation_after_topology_validation(expect_er
         layer0.cache.load_layer(layer0.mesh, layer_index=0)
     assert contract.tensor_validations == 2
     assert [call.args[0] for call in deallocate.call_args_list] == layer0.loaded
-    assert all(not path.exists() for path in layer0.retained)
+    assert not any(fd.open for fd in layer0.retained)
 
 
 def test_bf4_load_failure_closes_both_fds_and_releases_first_tensor(expect_error, layer0):
@@ -645,7 +663,7 @@ def test_bf4_load_failure_closes_both_fds_and_releases_first_tensor(expect_error
         layer0.cache.load_layer(layer0.mesh, layer_index=0)
     deallocate.assert_called_once_with(layer0.loaded[0])
     assert len(layer0.retained) == 2
-    assert all(not path.exists() for path in layer0.retained)
+    assert not any(fd.open for fd in layer0.retained)
 
 
 def test_bf4_cache_load_aggregates_load_and_cleanup_failures(layer0):
@@ -675,7 +693,7 @@ def test_bf4_cache_load_aggregates_load_and_cleanup_failures(layer0):
     assert first_outcome.release_attempted and not first_outcome.released and first_outcome.tensor is first
     assert second_outcome.tensor is None
     deallocate.assert_called_once_with(first)
-    assert all(not path.exists() for path in layer0.retained)
+    assert not any(fd.open for fd in layer0.retained)
 
 
 def test_bf4_verification_rejects_symlink_artifact_without_loading(expect_error, layer0):
