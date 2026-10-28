@@ -12,8 +12,8 @@ each prefix. The MLA layers, caches and inputs are built once; a candidate costs
 
 Every measurement is appended to generated/floater_tune/<variant>_c<chunk>.jsonl (one JSON object per line) before
 the next starts, and a rerun skips what is there, so a crash or a hung schedule costs one candidate: a candidate that
-started and never finished is not tried again. Only an error from the forward marks a schedule invalid; a profiler
-error stops the run. The result is printed as a kFloaterLayoutSchedules entry, or as "no floaters" when the best
+started and never finished is not tried again. Only the op refusing a schedule marks it invalid; any other error stops
+the run, and that candidate is retried by the next one. The result is printed as a kFloaterLayoutSchedules entry, or as "no floaters" when the best
 schedule does not beat none by MIN_GAIN.
 
     scripts/run_safe_pytest.sh models/demos/deepseek_v3_d_p/tests/perf/test_tune_ring_joint_floaters.py \\
@@ -107,37 +107,43 @@ def _sdpa_ns(mesh_device, forward):
 
 
 class _Log:
-    """The JSON-lines record of every measurement: {"key", "schedule": text, "status": "started" | "ok" | "invalid",
-    "ns": [per prefix]}."""
+    """The JSON-lines record of every measurement: {"key", "schedule": text, "status", "ns": [per prefix]}. A
+    measurement writes "started", then "ok" or "invalid" (the op refused the schedule), or "aborted" when something else
+    stopped it (it is retried). A "started" left without either crashed or hung the device and is not retried."""
 
     def __init__(self, path, key):
         self.path, self.key = Path(path), key
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        self.results, started = {}, set()
+        self.results, pending = {}, set()
         if self.path.exists():
-            lines = self.path.read_text().splitlines()
-            for n, line in enumerate(lines):
+            text = self.path.read_text()
+            if text and not text.endswith("\n"):
+                # A record cut short by a crash mid-append: drop it, so the next record starts on its own line.
+                text = text[: text.rfind("\n") + 1]
+                self.path.write_text(text)
+                logger.warning(f"floater tune: dropped a record cut short at the end of {self.path}")
+            for n, line in enumerate(text.splitlines()):
                 try:
                     entry = json.loads(line)
-                except json.JSONDecodeError:
-                    # A record cut short by a crash mid-append: the last line only.
-                    assert n == len(lines) - 1, f"{self.path}:{n + 1} is not JSON"
-                    continue
+                except json.JSONDecodeError as error:
+                    raise AssertionError(f"{self.path}:{n + 1} is not JSON") from error
                 if entry["key"] != key:
                     continue
                 if entry["status"] == "started":
-                    started.add(entry["schedule"])
+                    pending.add(entry["schedule"])
+                elif entry["status"] == "aborted":
+                    pending.discard(entry["schedule"])
                 else:
+                    pending.discard(entry["schedule"])
                     self.results[entry["schedule"]] = entry
-        # Started and never finished: it crashed or hung the device.
-        for text in started - self.results.keys():
+        for text in pending - self.results.keys():
             self.results[text] = {"schedule": text, "status": "invalid", "reason": "did not finish"}
             logger.warning(f"floater tune: {text} did not finish in an earlier run; not trying it again")
 
     def write(self, entry):
         with self.path.open("a") as f:
             f.write(json.dumps({"key": self.key, **entry}) + "\n")
-        if entry["status"] != "started":
+        if entry["status"] in ("ok", "invalid"):
             self.results[entry["schedule"]] = entry
 
 
@@ -185,6 +191,7 @@ def test_tune_ring_joint_floaters(request, mesh_device, device_params, variant, 
     qk_head_dim = config_only.qk_nope_head_dim + config_only.qk_rope_head_dim
     q_chunk, k_chunk, bands = ttMLA._EXPANDED_K_SDPA_CHUNKS[(kvpe, qk_head_dim, heads, chunk // sp)]
     key = f"{variant.name} heads={heads} bands={bands} q={q_chunk} k={k_chunk} prefixes={list(PREFIXES)}"
+    require_realtime_profiler("floater tuning")
     log = _Log(LOG_DIR / f"{variant.name}_c{chunk}.jsonl", key)
     logger.info(f"floater tune: {key}, log {log.path}")
 
@@ -200,13 +207,20 @@ def test_tune_ring_joint_floaters(request, mesh_device, device_params, variant, 
                 for forward, mla in forwards:
                     mla.sdpa_floater_schedule = [] if schedule is None else list(schedule)
                     try:
-                        ttnn.deallocate(forward())  # compile and warm up
-                    except RuntimeError as error:  # a schedule the op refuses
+                        tt_out = forward()  # compiles: the op checks the schedule here
+                    except RuntimeError as error:
+                        if "floater" not in str(error):  # not the op refusing the schedule
+                            raise
                         reason = str(error).splitlines()[0][:300]
                         log.write({"schedule": text, "status": "invalid", "reason": reason})
                         logger.info(f"floater tune: {text} invalid: {reason}")
                         return None
+                    ttnn.deallocate(tt_out)
                     ns.append(sorted(_sdpa_ns(mesh_device, forward) for _ in range(SAMPLES))[SAMPLES // 2])
+            except BaseException:
+                # Stopped by something other than the schedule (the profiler, the device, an interrupt): retry it.
+                log.write({"schedule": text, "status": "aborted"})
+                raise
             finally:
                 # Each candidate is its own program; drop them so the cache does not grow with the search.
                 mesh_device.clear_program_cache()
@@ -214,7 +228,6 @@ def test_tune_ring_joint_floaters(request, mesh_device, device_params, variant, 
             logger.info(f"floater tune: {text}: " + ", ".join(f"{n / 1e6:.3f} ms" for n in ns))
             return ns
 
-        require_realtime_profiler("floater tuning")
         off = measure(None)
         assert off is not None, "no-floater baseline failed"
 
