@@ -26,6 +26,28 @@
   "single": 48092377,
   "single_long": 407941
  },
+ "golden_sha256": {
+  "b0_s0.25_L16384": "587c52a2ff9d9cbb3b05b47c43861ac3ab1900ec02e86981ff41cf38ce5071c5",
+  "b0_s1_12_L16384": "663f5ffa39f72d7e51b63572625adeaaf6a8fe03f590f55e38d99f54469e6abb",
+  "b0_s1_L4096": "889501a0cc29cd43ae3fe5e68c8b5107547be96917854a90788433f473cfaa02",
+  "b0_s6_L682": "68b38aaa2f7710cd3c1c75c2119894e1276d460ed5eed768f9db4d99b8efc49f",
+  "bench_long_context": "2318596b242e9300fa019358cadd907ab9a9b638370a50680e04e64fd2b6f83e",
+  "bench_long_horizon": "3f78fdf8128ed19e151f3c5c3b4ead00a591ecb29cf357ddbadec84f1955848b",
+  "bench_paper": "71e2d3175f12263b19f9c7f96547b8503286797e93ee1d03cf8957c19d69fb92",
+  "bench_scale_q": "567109f9a2823e8a42240cd88daaf53533e6399765e3e6d850976f3f8d392d5b",
+  "bench_single": "d0f42cedabf7beb9982415efbcfe2f4cb2b66851c0563ef2e46945b91fc3b7a2",
+  "bench_single_long": "10c1f25dda5c5ea2c090f22b444d9bdc226291408143be9f4409a7eaf5e7004c",
+  "cpm_edge": "830ce1d22ddb0c8401114eba45d162117819929cb64c161ed36b1d94abcc497a",
+  "daily": "3ec6dbcbaf1b695204516a35643a78cb98c2b19a9e044f733dd1fcaa66bfa467",
+  "fivemin": "e6dce08014d9b733c13ce6f53fcdafccf2e31e809a928c52bce870fd56dac6d3",
+  "mask0": "d3ed0cdcc96f014e2edf9756fe0724ef58d39d2561cf98730d4af76fa93b7e5f",
+  "model16": "7838008cc4c5704ebbb4c3f33fd9230855e6798bb37cd912ba9c4abf500e8f25",
+  "modules": "507c2b20f1609068235231f3daec24554ff20a7a1317ff6fe3bcbf34cbcf3e9a",
+  "monthly": "9265de372af60915a6b2422cb24f445d99e0bd60387f9af2c6b6c3350a399887",
+  "nan_mix": "b0208e02ac3bd1ef9cfcc0b24f11e73573a79394e0e72b34054bbacd56711dda",
+  "single": "aa15de96cd7e1d85cb89f75171a85d1a690b81dcabdc4e4e1fc9b9e9fef76bde",
+  "single_long": "5a230ab6ee2899b408174371390a35878ebdba0131398378dfd249d73c1f3af4"
+ },
  "golden_total_bytes": 521970846,
  "hf_repo": "ibm-granite/granite-timeseries-flowstate-r1",
  "hf_revision": "b80e0f1b1c2d90edebe3d4f243ad046a3f935daa",
@@ -244,6 +266,31 @@
   "nan_mix": 4,
   "single": 1,
   "single_long": 3
+ },
+ "stamp": {
+  "git_dirty": "",
+  "git_head": "f15cc92082f85be07525a8efbb40e423d4fff2d6",
+  "made_by": [
+   {
+    "argv": "test",
+    "git_head": "fae9a1ea287e405a9949a953a3fd1ad792eada97",
+    "job": 957,
+    "started_at": 1793208532.32974
+   },
+   {
+    "argv": "b0",
+    "git_head": "fae9a1ea287e405a9949a953a3fd1ad792eada97",
+    "job": 959,
+    "started_at": 1793208578.4744656
+   },
+   {
+    "argv": "bench",
+    "git_head": "816c42ae1f97f3bd12623d06f3b1523ad48c3a16",
+    "job": 971,
+    "started_at": 1793209174.8080456
+   }
+  ],
+  "started_at": 1793218090.277367
  },
  "threads": 8,
  "torch": "2.11.0+cpu"
