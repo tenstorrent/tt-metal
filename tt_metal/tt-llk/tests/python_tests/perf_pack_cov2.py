@@ -104,7 +104,7 @@ def test_perf_pack_cov2_block_idx(
     perf_report, formats, dest_acc, input_dimensions, relu_type, dest_sync, dest_index, block_tiles, pack_block, run_types, loop_factor, is_perf
 ):
     if pack_block == 2 and formats.output_format.is_block_float() and block_tiles == 2 and dest_index % 4 == 3:
-        pytest.skip("llk_pack_block packs two block-float tiles that straddle a four tile boundary of DEST one by one: the per-tile rows are those cells")
+        pytest.skip("two block-float tiles that straddle a four tile boundary of DEST: slower as a closed block than per tile (llk_pack_block guard_dest_straddle takes the per-tile path), not run as block rows")
     run_pack(
         formats,
         dest_acc,
