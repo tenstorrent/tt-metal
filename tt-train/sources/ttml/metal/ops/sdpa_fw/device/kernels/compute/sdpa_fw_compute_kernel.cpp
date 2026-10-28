@@ -7,7 +7,6 @@
 #include <api/compute/reconfig_data_format.h>
 #include <api/compute/reg_api.h>
 #include <hostdevcommon/kernel_structs.h>
-#include <tensix.h>
 
 #include <cstdint>
 
@@ -21,12 +20,10 @@
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/recip.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/eltwise_unary/sqrt.h"
 #include "api/compute/mask.h"
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/compute/transpose.h"
 #include "sdpa_compute_utils.hpp"
 #include "tt-train/sources/ttml/metal/ops/sdpa_fw/device/kernels/sdpa_fw_work_list.hpp"
 
@@ -101,7 +98,7 @@ FORCE_INLINE void finalize_chunk(uint32_t cb_mm_out, uint32_t cb_max, uint32_t c
     cb_pop_front(cb_sum_exp, rows);
     cb_reserve_back(cb_sum_exp, rows);
     for (uint32_t r0 = 0; r0 < rows; r0 += kRowsPerPass) {
-        row_reduce_tiles_inplace<cb_reduction_scaler, cb_matmul_reduce>(cb_sum_exp, r0, rows_in_pass(r0, kRowsPerPass));
+        row_reduce_tiles_inplace<cb_matmul_reduce>(cb_sum_exp, r0, rows_in_pass(r0, kRowsPerPass));
     }
     cb_push_back(cb_sum_exp, rows);
     cb_wait_front(cb_sum_exp, rows);
@@ -183,8 +180,8 @@ FORCE_INLINE void finalize_chunk(uint32_t cb_mm_out, uint32_t cb_max, uint32_t c
 // Layouts used below. Score CB (cb_attention_weights): the rows x Sk_chunk_t score tiles of one
 // step, row-major: row r, K tile n sits at r * Sk_chunk_t + n. Per-row state CBs (max, sum,
 // exp_max_diff): row r sits in slot r. Output accumulators: row r starts at r * vWt.
-// Runs K/V steps [k_begin, k_end) of the chunk; the softmax state starts fresh at k_begin.
-FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t k_begin, uint32_t k_end) {
+// Runs the chunk's num_kv_steps K/V steps; the softmax state starts fresh at step 0.
+FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t num_kv_steps) {
     cb_wait_front(cb_query, q_tiles);
 
     const uint32_t first_row_tile = sdpa_fw_items::first_row_tile_of(item, q_num_chunks, Sq_chunk_t);
@@ -201,8 +198,8 @@ FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t k_begin, uint32_t k_en
     uint32_t alias_cb_prev_mm_out = cb_prev_mm_out;
     uint32_t alias_cb_cur_mm_out = cb_cur_mm_out;
 
-    for (uint32_t k_step = k_begin; k_step < k_end; ++k_step) {
-        const bool first_step = (k_step == k_begin);
+    for (uint32_t k_step = 0; k_step < num_kv_steps; ++k_step) {
+        const bool first_step = (k_step == 0U);
         cb_wait_front(cb_key, k_tiles);
 
         reconfig_data_format(cb_query, cb_key);
@@ -413,11 +410,9 @@ FORCE_INLINE void process_q_chunk(uint32_t item, uint32_t k_begin, uint32_t k_en
 }
 
 void kernel_main() {
+    // One-time HW config; each matmul site sets its own state with reconfig_data_format +
+    // matmul_block_init (or matmul_init for the per-tile paths).
     compute_kernel_hw_startup(cb_query, cb_key, cb_value);
-    copy_init(cb_query);
-    // compute_kernel_hw_startup above does the one-time HW config; each matmul site below sets its
-    // own state with reconfig_data_format + matmul_block_init (or matmul_init for the per-tile paths).
-    matmul_init(cb_query, cb_key);
 
     cb_wait_front(cb_reduction_scaler, onetile);
 
@@ -429,7 +424,7 @@ void kernel_main() {
 
     for_each_work_item(/* arg_idx */ 0, [](uint32_t item) {
         const uint32_t first_row_tile = sdpa_fw_items::first_row_tile_of(item, q_num_chunks, Sq_chunk_t);
-        process_q_chunk(item, /* k_begin */ 0, num_kv_steps_of_chunk<Ht, Sq_chunk_t, Sk_chunk_t>(first_row_tile));
+        process_q_chunk(item, num_kv_steps_of_chunk<Ht, Sq_chunk_t, Sk_chunk_t>(first_row_tile));
     });
 
 #ifdef CAUSAL_MASK
