@@ -26,7 +26,7 @@ import torch
 from models.experimental.flowstate_forecast.reference import dataflow as dfl
 from models.experimental.flowstate_forecast.tests.golden.test_dataflow import GOLDENS, TEST_CASES
 from models.experimental.flowstate_forecast.tests.pcc import metrics as M
-from models.experimental.flowstate_forecast.tests.perf.check_gates import DEFAULT_GATES, _floors, passes
+from models.experimental.flowstate_forecast.tests.perf.check_gates import DEFAULT_GATES, MIN_ACTIVE, _floors, passes
 
 BENCH = ("paper", "long_context", "long_horizon", "scale_q", "single", "single_long")
 
@@ -64,7 +64,7 @@ def main():
     for name in [f"bench_{s}" for s in BENCH] + list(TEST_CASES):
         g = torch.load(GOLDENS / f"{name}.pt", weights_only=True)
         mean, stdev = g["revin_mean"][..., :1], g["revin_stdev"][..., :1]
-        key = name.removeprefix("bench_")
+        key = name.removeprefix("bench_") if name.startswith("bench_") else f"suite:{name}"
         for kind, (dec, what) in broken(g).items():
             q, pt = dfl.back_end(dec, mean, stdev, g["horizon"])
             m = M.gate_metrics(
@@ -75,9 +75,13 @@ def main():
                 pt,
                 g["prediction_outputs"],
             )
+            if kind == "inactive_collapsed" and m["excluded_rows"] == 0:
+                print(f"{key:13s} {kind:19s}: not applicable (no inactive series; identical to the golden)")
+                continue
             for precision in ("accuracy", "performance"):
                 fl = _floors(gates, key, precision)
-                fails = [k for k, f in fl.items() if k in m and not passes(k, m[k], f)]
+                gated = {k: f for k, f in fl.items() if k in m and m["active_rows"] >= MIN_ACTIVE.get(k, 0)}
+                fails = [k for k, f in gated.items() if not passes(k, m[k], f)]
                 results.append(
                     {"case": key, "broken": kind, "rows": what, "precision": precision, "fails": fails, "metrics": m}
                 )

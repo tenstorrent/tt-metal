@@ -1,0 +1,83 @@
+{
+ "zone_ms_once": {
+  "embed": 1.700902,
+  "layer_mid": 71.520655,
+  "layer_last": 16.578009,
+  "decoder": 0.030375
+ },
+ "counts": {
+  "embed": 1,
+  "layer_mid": 5,
+  "layer_last": 1,
+  "decoder": 1
+ },
+ "zone_ms_total": {
+  "embed": 1.700902,
+  "layer_mid": 357.603275,
+  "layer_last": 16.578009,
+  "decoder": 0.030375
+ },
+ "estimate_ms": 375.912561,
+ "top_ops": {
+  "embed": [
+   [
+    "MatmulDeviceOperation",
+    1.700902
+   ]
+  ],
+  "layer_mid": [
+   [
+    "MatmulDeviceOperation",
+    45.25933
+   ],
+   [
+    "BinaryNgDeviceOperation",
+    12.633942
+   ],
+   [
+    "UnaryDeviceOperation",
+    5.785389
+   ],
+   [
+    "GenericOpDeviceOperation",
+    5.051713
+   ],
+   [
+    "LayerNormDeviceOperation",
+    2.790281
+   ]
+  ],
+  "layer_last": [
+   [
+    "MatmulDeviceOperation",
+    11.129023
+   ],
+   [
+    "GenericOpDeviceOperation",
+    5.005539
+   ],
+   [
+    "BinaryNgDeviceOperation",
+    0.190055
+   ],
+   [
+    "SliceDeviceOperation",
+    0.100143
+   ],
+   [
+    "LayerNormDeviceOperation",
+    0.078349
+   ],
+   [
+    "UnaryDeviceOperation",
+    0.0749
+   ]
+  ],
+  "decoder": [
+   [
+    "MatmulDeviceOperation",
+    0.030375
+   ]
+  ]
+ }
+}

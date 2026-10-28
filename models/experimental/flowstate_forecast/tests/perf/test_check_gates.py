@@ -1,43 +1,47 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""CPU unit check of check_gates.py (PLAN section 9 v1.17, D6 a): the measured record passes, broken ones fail."""
+"""CPU unit check of check_gates.py (PLAN §9 v1.17; copied from TiRex-2 651e8c4af93, adapted to FlowState's
+round-0 records): the measured record passes, broken ones fail, missing or unstamped ones fail."""
 
 import copy
 import json
 
-from models.experimental.flowstate_forecast.tests.perf.check_gates import DEFAULT_GATES, LOWER_IS_BETTER, check
-
-OPT = DEFAULT_GATES.parent
-MEASURED = OPT / "iter_01" / "r1_2f" / "variance" / "base.json"  # pre-R1-2f, carries inactive_max_err
-BASE = OPT / "iter_01" / "r1_1" / "b2b_base.json"
+from models.experimental.flowstate_forecast.tests.perf.check_gates import (
+    DEFAULT_BASELINE,
+    DEFAULT_GATES,
+    LOWER_IS_BETTER,
+    check,
+)
 
 
 def _load():
     gates = json.loads(DEFAULT_GATES.read_text())
-    gates["drift_by"] = {k: {m: t for m, t in v.items() if m != "abs_err_max"} for k, v in gates["drift_by"].items()}
-    gates["drift"].pop("abs_err_max", None)  # its fixed record postdates these records
-    cand = [dict(r, git_head="x", git_dirty="") for r in json.loads(MEASURED.read_text())]
-    return gates, cand, json.loads(BASE.read_text())
+    base = json.loads(DEFAULT_BASELINE.read_text())
+    return gates, copy.deepcopy(base), base
 
 
 def test_lower_is_better_set():
-    assert {"inactive_max_err", "abs_err_max", "flat_max_err", "median_err"} <= LOWER_IS_BETTER
+    assert {"inactive_max_err", "abs_err_max", "spread_ratio_p99", "spread_ratio_max"} <= LOWER_IS_BETTER
 
 
-def test_measured_passes_floors():
+def test_measured_passes():
     gates, cand, base = _load()
-    fails = [f for f in check(cand, base, gates) if "inactive_max_err" in f]
-    assert not fails, fails
+    assert not check(cand, base, gates)
 
 
 def test_inactive_collapsed_fails():
-    """An inactive row off by the collapsed-output error (D6: 0.469 / 0.1116 / 0.349) fails every shape."""
+    """An inactive-row error at the collapsed level (0.5 normalized units) fails every record."""
     gates, cand, base = _load()
-    for r, err in zip(cand, [0.469, 0.469, 0.1116, 0.1116, 0.349, 0.349]):
-        broken = copy.deepcopy(r)
-        broken["inactive_max_err"] = err
+    for r in cand:
+        broken = dict(r, inactive_max_err=0.5)
         assert any("inactive_max_err" in f for f in check([broken], base, gates)), (r["name"], r["precision"])
+
+
+def test_gross_element_fails():
+    gates, cand, base = _load()
+    r = dict(cand[0], abs_err_max=cand[0]["abs_err_max"] * 1.6)
+    assert any("abs_err_max" in f for f in check([r], base, gates))
 
 
 def test_missing_drift_metric_fails():

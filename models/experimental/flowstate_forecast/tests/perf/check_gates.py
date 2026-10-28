@@ -37,9 +37,11 @@ LOWER_IS_BETTER = {
     "spread_ratio_p99",
     "spread_ratio_max",
 }
+# v1.14: band-ratio percentiles are gated only with enough active rows; below that they print "not applicable"
+MIN_ACTIVE = {"spread_ratio_p50": 8, "spread_ratio_p01": 100, "spread_ratio_p99": 100}
 DEFAULT_GATES = Path(__file__).resolve().parents[2] / "doc" / "optimize" / "gates.json"
 # PLAN v1.14: drift is always against the fixed round-0 record (both precisions, all shapes)
-DEFAULT_BASELINE = DEFAULT_GATES.parent / "iter_00" / "bench.json"
+DEFAULT_BASELINE = DEFAULT_GATES.parent / "iter_00" / "round0_all.json"  # bench + suite records
 
 
 def git_stamp() -> dict:
@@ -92,6 +94,12 @@ def check(
             print(f"FAIL tree {key[0]}/{key[1]} dirty at {r.get('git_head')}: {r['git_dirty']!r}")
             failures.append(f"{key}: dirty tree")
         for metric, floor in _floors(gates, *key).items():
+            need = MIN_ACTIVE.get(metric)
+            if need is not None and r.get("active_rows", 0) < need:
+                print(
+                    f"n/a  floor {key[0]}/{key[1]} {metric}: not applicable (n_active={r.get('active_rows')} < {need})"
+                )
+                continue
             v = r.get(metric)
             if v is None:
                 failures.append(f"{key} {metric}: missing")
@@ -102,6 +110,12 @@ def check(
             if not ok:
                 failures.append(f"{key} {metric} {v} vs floor {floor}")
         for metric, tol in _drift(gates, *key).items():
+            need = MIN_ACTIVE.get(metric)
+            if need is not None and r.get("active_rows", 0) < need:
+                print(
+                    f"n/a  drift {key[0]}/{key[1]} {metric}: not applicable (n_active={r.get('active_rows')} < {need})"
+                )
+                continue
             if "ref" in tol:
                 path = (gates_dir or DEFAULT_GATES.parent) / tol["ref"]
                 if path not in refs:

@@ -1,0 +1,8 @@
+fresh-input trace test at d215050e153 (ttq pcc job, chip 0, 2026-10-28 11:59); 'potentially unsafe' warnings in log: 0
+trace model16 golden: pcc vs eager 1.00000000 max abs 0.000e+00
+trace model16 fresh: pcc vs eager 1.00000000 max abs 0.000e+00
+trace model16 control (stale input): max abs 4.902e+00
+trace monthly golden: pcc vs eager 1.00000000 max abs 0.000e+00
+trace monthly fresh: pcc vs eager 1.00000000 max abs 0.000e+00
+trace monthly control (stale input): max abs 1.998e+00
+============================== 1 passed in 2.21s ===============================

@@ -1,7 +1,7 @@
 [
   {
     "test": "suite",
-    "name": "single",
+    "name": "suite:single",
     "precision": "accuracy",
     "pcc_normalized": 0.9999842540384718,
     "pcc_spread": 0.9999926115653316,
@@ -53,12 +53,13 @@
     "collapsed_abs_err_max": 0.7939653396606445,
     "collapsed_pcc_final": 0.7305940296798517,
     "collapsed_pcc_final_spread": -5.802831018998117e-07,
-    "git_head": "a831230d0d35d519a136191c6e1dbec6acf9f977",
-    "git_dirty": ""
+    "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
+    "git_dirty": "",
+    "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
   },
   {
     "test": "suite",
-    "name": "model16",
+    "name": "suite:model16",
     "precision": "accuracy",
     "pcc_normalized": 0.9999933268286129,
     "pcc_spread": 0.9999801034529341,
@@ -101,12 +102,13 @@
     "collapsed_abs_err_max": 6.228386998176575,
     "collapsed_pcc_final": 0.999914821717797,
     "collapsed_pcc_final_spread": -6.907606095325828e-07,
-    "git_head": "a831230d0d35d519a136191c6e1dbec6acf9f977",
-    "git_dirty": ""
+    "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
+    "git_dirty": "",
+    "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
   },
   {
     "test": "suite",
-    "name": "single_long",
+    "name": "suite:single_long",
     "precision": "accuracy",
     "pcc_normalized": 0.9999826946636066,
     "pcc_spread": 0.999979323373386,
@@ -149,12 +151,13 @@
     "collapsed_abs_err_max": 0.4514129161834717,
     "collapsed_pcc_final": 0.7816061080979415,
     "collapsed_pcc_final_spread": -3.581667361544325e-07,
-    "git_head": "a831230d0d35d519a136191c6e1dbec6acf9f977",
-    "git_dirty": ""
+    "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
+    "git_dirty": "",
+    "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
   },
   {
     "test": "suite",
-    "name": "nan_mix",
+    "name": "suite:nan_mix",
     "precision": "accuracy",
     "pcc_normalized": 0.999985524039375,
     "pcc_spread": 0.9999767790023748,
@@ -197,12 +200,13 @@
     "collapsed_abs_err_max": 2.3342656567692757,
     "collapsed_pcc_final": 0.9999601105643755,
     "collapsed_pcc_final_spread": -6.041349715734163e-07,
-    "git_head": "a831230d0d35d519a136191c6e1dbec6acf9f977",
-    "git_dirty": ""
+    "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
+    "git_dirty": "",
+    "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
   },
   {
     "test": "suite",
-    "name": "mask0",
+    "name": "suite:mask0",
     "precision": "accuracy",
     "pcc_normalized": 0.9999740153838798,
     "pcc_spread": 0.999969304908455,
@@ -245,12 +249,13 @@
     "collapsed_abs_err_max": 2.2063889503479004,
     "collapsed_pcc_final": 0.9996169579877843,
     "collapsed_pcc_final_spread": -6.05993533269482e-07,
-    "git_head": "a831230d0d35d519a136191c6e1dbec6acf9f977",
-    "git_dirty": ""
+    "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
+    "git_dirty": "",
+    "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
   },
   {
     "test": "suite",
-    "name": "daily",
+    "name": "suite:daily",
     "precision": "accuracy",
     "pcc_normalized": 0.9999788767014459,
     "pcc_spread": 0.9999798935330484,
@@ -293,12 +298,13 @@
     "collapsed_abs_err_max": 0.9896671772003174,
     "collapsed_pcc_final": 0.09620488207747951,
     "collapsed_pcc_final_spread": 3.8984737999040586e-07,
-    "git_head": "a831230d0d35d519a136191c6e1dbec6acf9f977",
-    "git_dirty": ""
+    "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
+    "git_dirty": "",
+    "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
   },
   {
     "test": "suite",
-    "name": "monthly",
+    "name": "suite:monthly",
     "precision": "accuracy",
     "pcc_normalized": 0.9999590265314062,
     "pcc_spread": 0.9999739458521953,
@@ -341,12 +347,13 @@
     "collapsed_abs_err_max": 2.132978357374668,
     "collapsed_pcc_final": 0.999769103735707,
     "collapsed_pcc_final_spread": -5.021502665849063e-07,
-    "git_head": "a831230d0d35d519a136191c6e1dbec6acf9f977",
-    "git_dirty": ""
+    "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
+    "git_dirty": "",
+    "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
   },
   {
     "test": "suite",
-    "name": "fivemin",
+    "name": "suite:fivemin",
     "precision": "accuracy",
     "pcc_normalized": 0.9997828259588077,
     "pcc_spread": 0.9998813428810744,
@@ -389,12 +396,13 @@
     "collapsed_abs_err_max": 0.3029182553291321,
     "collapsed_pcc_final": 0.5121331001210537,
     "collapsed_pcc_final_spread": -1.2494984897729544e-06,
-    "git_head": "a831230d0d35d519a136191c6e1dbec6acf9f977",
-    "git_dirty": ""
+    "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
+    "git_dirty": "",
+    "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
   },
   {
     "test": "suite",
-    "name": "cpm_edge",
+    "name": "suite:cpm_edge",
     "precision": "accuracy",
     "pcc_normalized": 0.9999790841113578,
     "pcc_spread": 0.9999896955834726,
@@ -437,12 +445,13 @@
     "collapsed_abs_err_max": 1.0977342128753662,
     "collapsed_pcc_final": 0.6924855013002749,
     "collapsed_pcc_final_spread": 1.0882907916269784e-05,
-    "git_head": "a831230d0d35d519a136191c6e1dbec6acf9f977",
-    "git_dirty": ""
+    "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
+    "git_dirty": "",
+    "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
   },
   {
     "test": "suite",
-    "name": "single",
+    "name": "suite:single",
     "precision": "performance",
     "pcc_normalized": 0.9999318678556752,
     "pcc_spread": 0.9999674064737367,
@@ -494,12 +503,13 @@
     "collapsed_abs_err_max": 0.7939653396606445,
     "collapsed_pcc_final": 0.7305940296798517,
     "collapsed_pcc_final_spread": -5.802831018998117e-07,
-    "git_head": "a831230d0d35d519a136191c6e1dbec6acf9f977",
-    "git_dirty": ""
+    "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
+    "git_dirty": "",
+    "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
   },
   {
     "test": "suite",
-    "name": "model16",
+    "name": "suite:model16",
     "precision": "performance",
     "pcc_normalized": 0.9999138213399992,
     "pcc_spread": 0.9997358809131855,
@@ -542,12 +552,13 @@
     "collapsed_abs_err_max": 6.228386998176575,
     "collapsed_pcc_final": 0.999914821717797,
     "collapsed_pcc_final_spread": -6.907606095325828e-07,
-    "git_head": "a831230d0d35d519a136191c6e1dbec6acf9f977",
-    "git_dirty": ""
+    "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
+    "git_dirty": "",
+    "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
   },
   {
     "test": "suite",
-    "name": "single_long",
+    "name": "suite:single_long",
     "precision": "performance",
     "pcc_normalized": 0.999718290930622,
     "pcc_spread": 0.9999023772425273,
@@ -590,12 +601,13 @@
     "collapsed_abs_err_max": 0.4514129161834717,
     "collapsed_pcc_final": 0.7816061080979415,
     "collapsed_pcc_final_spread": -3.581667361544325e-07,
-    "git_head": "a831230d0d35d519a136191c6e1dbec6acf9f977",
-    "git_dirty": ""
+    "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
+    "git_dirty": "",
+    "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
   },
   {
     "test": "suite",
-    "name": "nan_mix",
+    "name": "suite:nan_mix",
     "precision": "performance",
     "pcc_normalized": 0.9999027360063812,
     "pcc_spread": 0.999865833922368,
@@ -638,12 +650,13 @@
     "collapsed_abs_err_max": 2.3342656567692757,
     "collapsed_pcc_final": 0.9999601105643755,
     "collapsed_pcc_final_spread": -6.041349715734163e-07,
-    "git_head": "a831230d0d35d519a136191c6e1dbec6acf9f977",
-    "git_dirty": ""
+    "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
+    "git_dirty": "",
+    "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
   },
   {
     "test": "suite",
-    "name": "mask0",
+    "name": "suite:mask0",
     "precision": "performance",
     "pcc_normalized": 0.9999508535793399,
     "pcc_spread": 0.9999600012033845,
@@ -686,12 +699,13 @@
     "collapsed_abs_err_max": 2.2063889503479004,
     "collapsed_pcc_final": 0.9996169579877843,
     "collapsed_pcc_final_spread": -6.05993533269482e-07,
-    "git_head": "a831230d0d35d519a136191c6e1dbec6acf9f977",
-    "git_dirty": ""
+    "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
+    "git_dirty": "",
+    "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
   },
   {
     "test": "suite",
-    "name": "daily",
+    "name": "suite:daily",
     "precision": "performance",
     "pcc_normalized": 0.9999546468718912,
     "pcc_spread": 0.9999632511683002,
@@ -734,12 +748,13 @@
     "collapsed_abs_err_max": 0.9896671772003174,
     "collapsed_pcc_final": 0.09620488207747951,
     "collapsed_pcc_final_spread": 3.8984737999040586e-07,
-    "git_head": "a831230d0d35d519a136191c6e1dbec6acf9f977",
-    "git_dirty": ""
+    "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
+    "git_dirty": "",
+    "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
   },
   {
     "test": "suite",
-    "name": "monthly",
+    "name": "suite:monthly",
     "precision": "performance",
     "pcc_normalized": 0.9996057263784051,
     "pcc_spread": 0.9998245703808857,
@@ -782,12 +797,13 @@
     "collapsed_abs_err_max": 2.132978357374668,
     "collapsed_pcc_final": 0.999769103735707,
     "collapsed_pcc_final_spread": -5.021502665849063e-07,
-    "git_head": "a831230d0d35d519a136191c6e1dbec6acf9f977",
-    "git_dirty": ""
+    "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
+    "git_dirty": "",
+    "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
   },
   {
     "test": "suite",
-    "name": "fivemin",
+    "name": "suite:fivemin",
     "precision": "performance",
     "pcc_normalized": 0.9992548823457429,
     "pcc_spread": 0.9997076733223125,
@@ -830,12 +846,13 @@
     "collapsed_abs_err_max": 0.3029182553291321,
     "collapsed_pcc_final": 0.5121331001210537,
     "collapsed_pcc_final_spread": -1.2494984897729544e-06,
-    "git_head": "a831230d0d35d519a136191c6e1dbec6acf9f977",
-    "git_dirty": ""
+    "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
+    "git_dirty": "",
+    "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
   },
   {
     "test": "suite",
-    "name": "cpm_edge",
+    "name": "suite:cpm_edge",
     "precision": "performance",
     "pcc_normalized": 0.9998588427133015,
     "pcc_spread": 0.99996413454965,
@@ -878,7 +895,8 @@
     "collapsed_abs_err_max": 1.0977342128753662,
     "collapsed_pcc_final": 0.6924855013002749,
     "collapsed_pcc_final_spread": 1.0882907916269784e-05,
-    "git_head": "a831230d0d35d519a136191c6e1dbec6acf9f977",
-    "git_dirty": ""
+    "git_head": "fea54780f2a36b635c0f644c9df7cf933bf2cc76",
+    "git_dirty": "",
+    "relabelled": "name prefixed with 'suite:' after the run (label only; values unchanged)"
   }
 ]

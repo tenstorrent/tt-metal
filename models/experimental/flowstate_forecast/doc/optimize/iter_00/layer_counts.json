@@ -1,0 +1,10 @@
+{
+ "shape": "paper",
+ "precision": "accuracy",
+ "counts": {
+  "embed": 1,
+  "layer_mid": 5,
+  "layer_last": 1,
+  "decoder": 1
+ }
+}

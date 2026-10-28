@@ -70,7 +70,7 @@ def test_model_case(tt_model, case):
     _record(
         {
             "test": "suite",
-            "name": case,
+            "name": f"suite:{case}",
             "precision": tt_model.p.name,
             **m,
             **{f"collapsed_{k}": v for k, v in col.items()},

@@ -1,0 +1,120 @@
+{
+ "_comment": "PROPOSED at G1 from round-0 (iter_00, fea54780f2a); set only by decision. Floors per <case>/<precision> or */<precision>; drift against iter_00/bench.json + suite.json (the fixed round-0 records). Applicability (v1.14): spread_ratio_p50 needs >= 8 active rows, spread_ratio_p01/p99 >= 100 (check_gates.MIN_ACTIVE). Cases with < 8 active rows (no p50) carry spread_ratio_min/max [0.9, 1.1] in performance too, so a uniform 0.88x / 1.12x band fails there.",
+ "floors": {
+  "*/accuracy": {
+   "pcc_normalized": 0.999,
+   "pcc_final": 0.99,
+   "pcc_mean": 0.995,
+   "pcc_spread": 0.9995,
+   "pcc_row_p01_active": 0.995,
+   "pcc_row_min_active": 0.99,
+   "pcc_row_min": 0.4,
+   "spread_ratio_p50": [
+    0.97,
+    1.03
+   ],
+   "spread_ratio_p01": 0.93,
+   "spread_ratio_p99": 1.07,
+   "spread_ratio_min": 0.9,
+   "spread_ratio_max": 1.1,
+   "inactive_max_err": 0.05,
+   "pcc_final_spread": 0.9995
+  },
+  "*/performance": {
+   "pcc_normalized": 0.995,
+   "pcc_final": 0.98,
+   "pcc_mean": 0.99,
+   "pcc_spread": 0.998,
+   "pcc_row_p01_active": 0.99,
+   "pcc_row_min_active": 0.98,
+   "pcc_row_min": 0.3,
+   "spread_ratio_p50": [
+    0.95,
+    1.05
+   ],
+   "spread_ratio_p01": 0.9,
+   "spread_ratio_p99": 1.1,
+   "spread_ratio_min": 0.8,
+   "spread_ratio_max": 1.25,
+   "inactive_max_err": 0.1,
+   "pcc_final_spread": 0.998
+  },
+  "single/performance": {
+   "spread_ratio_min": 0.9,
+   "spread_ratio_max": 1.1
+  },
+  "single_long/performance": {
+   "spread_ratio_min": 0.9,
+   "spread_ratio_max": 1.1
+  },
+  "suite:single/performance": {
+   "spread_ratio_min": 0.9,
+   "spread_ratio_max": 1.1
+  },
+  "suite:single_long/performance": {
+   "spread_ratio_min": 0.9,
+   "spread_ratio_max": 1.1
+  },
+  "suite:daily/performance": {
+   "spread_ratio_min": 0.9,
+   "spread_ratio_max": 1.1
+  },
+  "suite:monthly/performance": {
+   "spread_ratio_min": 0.9,
+   "spread_ratio_max": 1.1
+  },
+  "suite:fivemin/performance": {
+   "spread_ratio_min": 0.9,
+   "spread_ratio_max": 1.1
+  },
+  "suite:cpm_edge/performance": {
+   "spread_ratio_min": 0.9,
+   "spread_ratio_max": 1.1
+  },
+  "suite:mask0/performance": {
+   "spread_ratio_min": 0.9,
+   "spread_ratio_max": 1.1
+  },
+  "suite:nan_mix/performance": {
+   "spread_ratio_min": 0.9,
+   "spread_ratio_max": 1.1
+  }
+ },
+ "drift": {
+  "pcc_normalized": {
+   "abs": 0.0002
+  },
+  "pcc_final": {
+   "abs": 0.0002
+  },
+  "pcc_spread": {
+   "abs": 0.0005
+  },
+  "pcc_row_p01_active": {
+   "abs": 0.003
+  },
+  "spread_ratio_p50": {
+   "abs": 0.01,
+   "two_sided": true
+  },
+  "abs_err_max": {
+   "rel": 0.5
+  }
+ },
+ "drift_by": {
+  "*/performance": {
+   "pcc_normalized": {
+    "abs": 0.001
+   },
+   "pcc_final": {
+    "abs": 0.001
+   },
+   "pcc_spread": {
+    "abs": 0.002
+   },
+   "pcc_row_p01_active": {
+    "abs": 0.008
+   }
+  }
+ }
+}
