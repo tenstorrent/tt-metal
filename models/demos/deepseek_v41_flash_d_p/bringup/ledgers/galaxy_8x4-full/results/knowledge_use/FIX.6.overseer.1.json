@@ -1,0 +1,64 @@
+{
+ "used": [
+  {
+   "id": "DS41-129",
+   "how": "block's fused head does not build on 8x4 FABRIC_2D lines: the default flip is only valid with the torus spec; cited in the MOE_IMPL text",
+   "traced": false,
+   "cited": true
+  },
+  {
+   "id": "DS41-127",
+   "how": "checked the stand-in decode opens via harness.open_mesh (router_config with the 10880 B payload) rather than a hand-rolled open",
+   "traced": false,
+   "cited": false
+  },
+  {
+   "id": "K-79",
+   "how": "checked the runner's payload comes from DS41Config.FABRIC_PAYLOAD_SIZE (10880, in [4352, 15232]) and its fabric from PREFILL_FABRIC_MODE",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "flat MoE hangs on the 8x4 torus (added as DS41-130)"
+ ],
+ "overseer": [
+  {
+   "id": "FIX.6",
+   "answer": "done",
+   "evidence": "tt/settings.py MOE_IMPL default block; gate PASS FIX.6 (W.1, M.1, L.s10240, L.last, L.s56320, L.smoke, K.1 x5); runner.log FABRIC_2D_TORUS_XY via PREFILL_FABRIC_MODE=2d_torus_xy; numbers in BREADCRUMBS FIX.6"
+  },
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or inflated work: only a settings default and docs changed"
+  }
+ ],
+ "cited_only": [
+  "DS41-120",
+  "DS41-125",
+  "DS41-130"
+ ],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "FIX.6",
+  "role": "overseer",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-28T09:47:30",
+  "head": "26a830f60d1",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/known_issues.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.6.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.6_runner_smoke.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/FIX.6_smoke.json",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/FIX.6.overseer.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/MOE_BLOCK.md",
+   "models/demos/deepseek_v41_flash_d_p/tt/runners/adapter.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py"
+  ]
+ }
+}
