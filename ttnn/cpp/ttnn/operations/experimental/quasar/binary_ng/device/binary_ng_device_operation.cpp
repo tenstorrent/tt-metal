@@ -662,8 +662,22 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     if (attributes.is_where_op || attributes.is_quant_op) {
         return false;
     }
-    if (attributes.subtile_broadcast_type != SubtileBroadcastType::NONE) {
-        return false;
+    // Subtile broadcast. ROW expands with unary_bcast, which takes no 32-bit operand on Quasar, so it runs in bf16
+    // only.
+    switch (attributes.subtile_broadcast_type) {
+        case SubtileBroadcastType::NONE: break;
+        case SubtileBroadcastType::ROW_A:
+        case SubtileBroadcastType::ROW_B:
+            if (a.dtype() != DataType::BFLOAT16) {
+                return false;
+            }
+            break;
+        case SubtileBroadcastType::COL_A:
+        case SubtileBroadcastType::COL_B:
+        case SubtileBroadcastType::SCALAR_A:
+        case SubtileBroadcastType::SCALAR_B:
+        case SubtileBroadcastType::ROW_A_COL_B:
+        case SubtileBroadcastType::ROW_B_COL_A: return false;
     }
     // In bf16, add and subtract run the FPU kernel, multiply and divide run the SFPU kernel, and multiply runs the FPU
     // kernel in fast and approximate mode. In fp32 all four run the SFPU kernel. The SFPU kernel runs no other op here:

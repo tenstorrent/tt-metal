@@ -159,8 +159,8 @@ std::array<OperandMode, 2> operand_modes(SubtileBroadcastType subtile_broadcast_
     TT_FATAL(!is_scalar, "binary_ng Quasar-native: tensor-scalar does not run native; the gate refuses it");
     switch (subtile_broadcast_type) {
         case SubtileBroadcastType::NONE: return {OperandMode::FULL, OperandMode::FULL};
-        case SubtileBroadcastType::ROW_A:
-        case SubtileBroadcastType::ROW_B:
+        case SubtileBroadcastType::ROW_A: return {OperandMode::ROW, OperandMode::FULL};
+        case SubtileBroadcastType::ROW_B: return {OperandMode::FULL, OperandMode::ROW};
         case SubtileBroadcastType::COL_A:
         case SubtileBroadcastType::COL_B:
         case SubtileBroadcastType::SCALAR_A:
@@ -632,9 +632,8 @@ ProgramArtifacts create_native_artifacts(
 
         // The descriptor disables the PACK_RELU fast path under subtile broadcast: a broadcast compute
         // kernel does a per-iteration intermediate pack + pack_reconfig that clears the packer's ZERO_RELU
-        // state, silently dropping the RELU clip on the final pack. This factory mirrors that guard; the
-        // no-broadcast slice admits only NONE, so is_subtile_broadcast is always false and the guard is a
-        // safe no-op unless broadcast types are added.
+        // state, silently dropping the RELU clip on the final pack. The native expansions pack into their own
+        // rings in the same way, so this factory keeps the guard: there, RELU runs in the SFPU post chain.
         const bool is_subtile_broadcast = op.subtile_broadcast_type != SubtileBroadcastType::NONE;
 
         // PACK_RELU fast path (no-broadcast only). Other single post-acts expand to the SFPU post chain
@@ -815,6 +814,8 @@ ProgramArtifacts create_native_artifacts(
     const m2::DFBSpecName OUT{"binary_ng_out_dfb"};                    // CBIndex::c_2
     const m2::DFBSpecName POST_LHS{"binary_ng_post_lhs_dfb"};          // CBIndex::c_3 (LHS activations)
     const m2::DFBSpecName POST_RHS{"binary_ng_post_rhs_dfb"};          // CBIndex::c_4 (RHS activations)
+    const m2::DFBSpecName STAGE_LHS{"binary_ng_stage_lhs_dfb"};        // a ROW a, expanded on the FPU kernel
+    const m2::DFBSpecName STAGE_RHS{"binary_ng_stage_rhs_dfb"};        // a ROW b, expanded on the FPU kernel
     const m2::DFBSpecName IN0_TAIL{"binary_ng_in0_tail_dfb"};          // borrowed shard tiles past the ring
     const m2::DFBSpecName IN1_TAIL{"binary_ng_in1_tail_dfb"};
     const m2::DFBSpecName OUT_TAIL{"binary_ng_out_tail_dfb"};
@@ -874,12 +875,16 @@ ProgramArtifacts create_native_artifacts(
     const uint32_t b_entries = is_scalar ? 1u : (b_borrowed ? c_main_tiles : in_entries);
     const uint32_t c_entries = c_borrowed ? c_main_tiles : out_entries;
 
+    // The FPU kernel expands a ROW operand into its staging ring; the SFPU kernel expands it straight into DST.
+    const bool stage_a = !is_sfpu && modes[0] == OperandMode::ROW;
+    const bool stage_b = !is_sfpu && modes[1] == OperandMode::ROW;
+
     std::vector<m2::DataflowBufferSpec> dfbs;
     constexpr uint32_t num_main_dfbs = 3;  // in0, in1, out
     constexpr uint32_t num_tail_dfbs = 3;  // in0_tail, in1_tail, out_tail
     dfbs.reserve(
         (has_main_ring ? num_main_dfbs : 0) + (tail_tiles > 0 ? num_tail_dfbs : 0) + (has_lhs_act ? 1 : 0) +
-        (has_rhs_act ? 1 : 0));
+        (has_rhs_act ? 1 : 0) + (stage_a ? 1 : 0) + (stage_b ? 1 : 0));
     if (has_main_ring) {
         dfbs.push_back(
             make_dfb(IN0, a_tile_bytes, a_entries, a_df, a_tile, a_borrowed ? std::optional{T_A} : std::nullopt));
@@ -918,6 +923,16 @@ ProgramArtifacts create_native_artifacts(
             b_inter_df,
             b_tile,
             std::nullopt));
+    }
+    // A staging ring, like a post ring, holds one batch per compute thread: each thread expands a batch into its own
+    // tile counter, and the binary op reads it.
+    if (stage_a) {
+        dfbs.push_back(
+            make_dfb(STAGE_LHS, a_tile_bytes, compute_threads * num_tiles_per_cycle, a_df, a_tile, std::nullopt));
+    }
+    if (stage_b) {
+        dfbs.push_back(
+            make_dfb(STAGE_RHS, b_tile_bytes, compute_threads * num_tiles_per_cycle, b_df, b_tile, std::nullopt));
     }
 
     // --- Dataflow defines. SRC_SHARDED[_B]/DST_SHARDED select the BORROWED (publish/drain a resident
@@ -1137,6 +1152,15 @@ ProgramArtifacts create_native_artifacts(
     if (has_rhs_act) {
         compute_dfb_bindings.push_back(m2::ProducerOf(POST_RHS, "post_rhs"));
         compute_dfb_bindings.push_back(m2::ConsumerOf(POST_RHS, "post_rhs"));
+    }
+    // A staging ring is the same kind of self-loop pair.
+    if (stage_a) {
+        compute_dfb_bindings.push_back(m2::ProducerOf(STAGE_LHS, "stage_lhs"));
+        compute_dfb_bindings.push_back(m2::ConsumerOf(STAGE_LHS, "stage_lhs"));
+    }
+    if (stage_b) {
+        compute_dfb_bindings.push_back(m2::ProducerOf(STAGE_RHS, "stage_rhs"));
+        compute_dfb_bindings.push_back(m2::ConsumerOf(STAGE_RHS, "stage_rhs"));
     }
 
     m2::Group<std::string> compute_rt_names = {"num_tiles"};

@@ -2092,6 +2092,83 @@ def test_native_outer_broadcast_matches_the_oracle(name, knobs):
     _check_arm(p, f"outer-dim broadcast, {name}")
 
 
+# A full-width height shard on 2 clusters. Beside a COL or SCALAR b, production borrows a and the output, and so does
+# the native anchor: each cluster walks its 16 rows in order, and a Neo meets 3 or 4 tiles of each row.
+_H2_14 = ("height", [16 * 32, 14 * 32], (0, 0, 1, 0))  # on [1, 1, 1024, 448]: 2 shards of 16 x 14 tiles
+
+# ROW: a or b of one logical row. Its Map has no tile-row stride, so every tile of a column reads the same page, and
+# each kernel expands it: the FPU kernel into a staging ring per compute batch, the SFPU kernel straight into the
+# operand's DST slot. bf16 only. Add and subtract run the FPU kernel, multiply and divide the SFPU kernel. In L1 the
+# bank walk gives a cluster at most 2 tiles of _OUTER_SHAPE. Production borrows no shard beside a ROW operand, so
+# row_b_full_batches runs on 32 clusters, 14 tiles each: FPU add batches 8 at R1C1W1, and the SFPU kernel 4. SQUARE
+# runs on the row tiles before the broadcast; a lone RELU on the result runs in the SFPU post chain, as the factory
+# keeps PACK_RELU off beside a broadcast.
+_ROW = [
+    _bcast("row_b", _OUTER_SHAPE, [1, 3, 1, 160], _modes(b="ROW", b_outer=True)),
+    _bcast("row_a", [1, 3, 1, 160], _OUTER_SHAPE, _modes(a="ROW", a_outer=True), op="subtract"),
+    _bcast("row_a_act", [1, 3, 1, 160], _OUTER_SHAPE, _modes(a="ROW", a_outer=True), act="lhs", op="subtract"),
+    _bcast("row_b/multiply", _OUTER_SHAPE, [2, 3, 1, 160], _modes(b="ROW"), op="multiply"),
+    _bcast("row_a/divide", [2, 3, 1, 160], _OUTER_SHAPE, _modes(a="ROW"), op="divide"),
+    _bcast("row_b_L1", _OUTER_SHAPE, [1, 3, 1, 160], _modes(b="ROW", b_outer=True), a=_IL1, b=_IL1, out=_IL1),
+    _bcast(
+        "row_b_L1/multiply",
+        _OUTER_SHAPE,
+        [1, 3, 1, 160],
+        _modes(b="ROW", b_outer=True),
+        a=_IL1,
+        b=_IL1,
+        out=_IL1,
+        op="multiply",
+    ),
+    _bcast(
+        "row_b_shard_walk",
+        [2, 1, 256, 1024],
+        [1, 1, 1, 1024],
+        _modes(b="ROW", b_outer=True),
+        a=_B32_WALK,
+        out=_B32_WALK,
+    ),
+    _bcast(
+        "row_b_bank_walk",
+        [2, 1, 64, 1024],
+        [1, 1, 1, 1024],
+        _modes(b="ROW", b_outer=True),
+        a=_IL1,
+        out=_IL1,
+        op="multiply",
+    ),
+    _bcast("row_b_act", _OUTER_SHAPE, [1, 3, 1, 160], _modes(b="ROW", b_outer=True), act="rhs"),
+    _bcast("row_b_act/multiply", _OUTER_SHAPE, [1, 3, 1, 160], _modes(b="ROW", b_outer=True), act="rhs", op="multiply"),
+    _bcast("row_b/relu", _OUTER_SHAPE, [1, 3, 1, 160], _modes(b="ROW", b_outer=True), act="relu"),
+    _bcast(
+        "row_b/relu/multiply", _OUTER_SHAPE, [1, 3, 1, 160], _modes(b="ROW", b_outer=True), act="relu", op="multiply"
+    ),
+    _bcast("row_b_full_batches", [1, 1, 1024, 448], [1, 1, 1, 448], _modes(b="ROW"), a=_H2_14, b=_IL1, out=_H2_14),
+    _bcast(
+        "row_b_full_batches/multiply",
+        [1, 1, 1024, 448],
+        [1, 1, 1, 448],
+        _modes(b="ROW"),
+        a=_H2_14,
+        b=_IL1,
+        out=_H2_14,
+        op="multiply",
+    ),
+]
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+@pytest.mark.parametrize("name, knobs", list(_BCAST_CONFIGS.items()), ids=list(_BCAST_CONFIGS))
+def test_native_row_broadcast_matches_the_oracle(name, knobs):
+    """A ROW operand, on a or on b, must run native on both kernels and give the oracle's bits.
+
+    An expansion that missed a tile, a staging ring read at the wrong index, or an init left over from the expansion
+    gives the binary op another row, and fails the exact comparison.
+    """
+    p = _run_shard_arm(_ROW, expect="qsr", timeout=1800, knobs=knobs)
+    _check_arm(p, f"row broadcast, {name}")
+
+
 # One case per child, as above, and one case of each kind of anchor and walk. The thread counts tell the
 # programs apart where the clusters do not, as both bind the same kernel sources.
 _MIXED_ROUTED = (
@@ -2326,7 +2403,7 @@ def test_native_illegal_thread_knobs_fall_back():
 
 
 # Every broadcast table, for the no-device checks below.
-_BCAST_TABLES = {"outer": _OUTER + _OUTER_FP32}
+_BCAST_TABLES = {"outer": _OUTER + _OUTER_FP32, "row": _ROW}
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
