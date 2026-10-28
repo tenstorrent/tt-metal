@@ -43,6 +43,10 @@ struct AllGatherParams {
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id;
     std::optional<CoreRangeSet> sub_core_grid;
 
+    // Whether each device waits for its peers to start before writing into their outputs. Peers may still be using
+    // that memory, so only launch drops it, when it can prove they are done (ttnn::queue_hazards).
+    bool entry_handshake = true;
+
     static constexpr auto attribute_names = std::forward_as_tuple(
         "dim_from_end",
         "output_spec",
@@ -55,7 +59,8 @@ struct AllGatherParams {
         "num_devices",
         "packet_size",
         "subdevice_id",
-        "sub_core_grid");
+        "sub_core_grid",
+        "entry_handshake");
     auto attribute_values() const {
         return std::forward_as_tuple(
             dim_from_end,
@@ -69,7 +74,8 @@ struct AllGatherParams {
             num_devices,
             packet_size,
             subdevice_id,
-            sub_core_grid);
+            sub_core_grid,
+            entry_handshake);
     }
 
     // "true 2D" = a 2D fabric config with both axes active

@@ -76,6 +76,32 @@ void transfer(
 // Makes `queue` wait for every access to `tensor` on another stream, so what it enqueues next may read or write it.
 void wait_for(const Tensor& tensor, QueueId queue);
 
+// Collectives whose completion on any member proves that every member has started them ("full" collectives), across a
+// group: a mesh axis, or the whole mesh (nullopt).
+//
+// Whether a full collective about to run on (`queue`, `sub_device`) across `group` may write into its peers' copies of
+// `targets` without an entry handshake: true when every earlier access to them is ordered before the start of an
+// earlier full collective on the same group and stream. That collective has completed on the writer before it starts
+// this one, which proves every peer had started it, and so had finished those accesses. False while ordering is off,
+// since nothing is known then.
+bool peers_may_write_without_handshake(
+    tt::tt_metal::distributed::MeshDevice& device,
+    QueueId queue,
+    tt::tt_metal::SubDeviceId sub_device,
+    std::optional<uint32_t> group,
+    std::span<const Tensor* const> targets);
+
+// Runs `launch`, which enqueues a full collective on (`queue`, `sub_device`) across `group`, and records it. If the
+// previous collective on the same links ran on another stream, this one waits for it first: collectives from two
+// streams over the same fabric links at once deadlock. A mesh axis's collectives share its links; a whole-mesh
+// collective shares every axis's.
+void full_collective(
+    tt::tt_metal::distributed::MeshDevice& device,
+    QueueId queue,
+    tt::tt_metal::SubDeviceId sub_device,
+    std::optional<uint32_t> group,
+    const std::function<void()>& launch);
+
 // `sub_device_ids` as passed to the record: empty means the stall group.
 void on_record_event(
     const tt::tt_metal::distributed::MeshEvent& event, std::span<const tt::tt_metal::SubDeviceId> sub_device_ids);

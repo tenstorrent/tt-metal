@@ -140,8 +140,21 @@ struct QueueState {
     }
 };
 
+// The latest full collective on a group and stream: the stream's point before it, and what its queue had waited for
+// then. What the host has seen finish is left out: blocking reads and event synchronizes can differ between the hosts
+// of a multi-host mesh, and every rank must decide a handshake the same way.
+struct Rendezvous {
+    Point start;
+    Clock followed;
+};
+
 struct MeshState {
     std::array<QueueState, kMaxQueues> queues;
+    std::map<std::pair<int64_t, uint32_t>, Rendezvous> rendezvous;  // by (group, stream)
+    // The latest collective per group. Collectives from two streams over the same fabric links at once deadlock
+    // (measured on one axis), so each waits for the previous one on its links when that ran on another stream. A
+    // collective on a mesh axis uses that axis's links; one across the whole mesh (group -1) uses every axis's.
+    std::map<int64_t, Access> last_collective;
     Clock host{};  // what the host has seen finish: everything enqueued from now on follows it
     // (queue, event id) -> the event and what it covers. A wait for a point on another queue uses the earliest event
     // recorded at or after it: one recorded when the wait is needed sits behind everything that queue was given since.
@@ -490,6 +503,8 @@ void record(MeshState& state, const Footprint& footprint, Access access) {
 
 bool capturing(MeshCommandQueue& cq) { return cq.trace_id().has_value(); }
 
+int64_t group_key(std::optional<uint32_t> group) { return group.has_value() ? static_cast<int64_t>(*group) : -1; }
+
 }  // namespace
 
 Mode mode() { return mode_flag().load(std::memory_order_relaxed); }
@@ -607,6 +622,87 @@ void wait_for(const Tensor& tensor, QueueId queue) {
     if (!waits.empty()) {
         wait_for_accesses(state, *device, stream, waits);
     }
+}
+
+bool peers_may_write_without_handshake(
+    MeshDevice& device,
+    QueueId queue,
+    SubDeviceId sub_device,
+    std::optional<uint32_t> group,
+    std::span<const Tensor* const> targets) {
+    // A captured collective runs at every replay, after whatever ran in between, which this does not track.
+    if (!enabled() || capturing(device.mesh_command_queue(static_cast<uint8_t>(queue.get())))) {
+        return false;
+    }
+    std::lock_guard lock(mutex);
+    auto& state = states[device.id()];
+    const Stream stream{queue.get(), *sub_device};
+    const auto last = state.rendezvous.find({group_key(group), stream.index()});
+    if (last == state.rendezvous.end()) {
+        return false;
+    }
+    const Rendezvous& rendezvous = last->second;
+    // On every member, an access on this stream before the rendezvous ran before it; an access on another stream did if
+    // this stream had followed it by then.
+    auto before = [&](const Access& access) {
+        return access.stream.index() == stream.index() ? access.point <= rendezvous.start
+                                                       : rendezvous.followed[access.stream.index()] >= access.point;
+    };
+    bool proven = true;
+    for (const Tensor* target : targets) {
+        const auto range = range_of(*target);
+        if (!range.has_value()) {
+            continue;
+        }
+        for_each_overlap(state.regions[range->type], *range, [&](const Region& region) {
+            proven = proven && (!region.last_write.has_value() || before(*region.last_write)) &&
+                     std::ranges::all_of(region.reads, before);
+        });
+    }
+    return proven;
+}
+
+void full_collective(
+    MeshDevice& device,
+    QueueId queue,
+    SubDeviceId sub_device,
+    std::optional<uint32_t> group,
+    const std::function<void()>& launch) {
+    auto& cq = device.mesh_command_queue(static_cast<uint8_t>(queue.get()));
+    if (!enabled() || capturing(cq)) {
+        launch();
+        return;
+    }
+    const Stream stream{queue.get(), *sub_device};
+    Rendezvous rendezvous;
+    {
+        std::lock_guard lock(mutex);
+        auto& state = states[device.id()];
+        std::vector<const Access*> sharing_links;
+        for (const auto& [other_group, access] : state.last_collective) {
+            const bool shares_links = other_group == group_key(group) || other_group == -1 || group_key(group) == -1;
+            if (shares_links && !state.follows(stream, access, {})) {
+                sharing_links.push_back(&access);
+            }
+        }
+        if (!sharing_links.empty()) {
+            wait_for_accesses(state, device, stream, sharing_links);
+        }
+        rendezvous.start = program_point(cq, sub_device);
+        rendezvous.followed = state.queues[stream.queue].waited();
+        // The queue runs the collective after its earlier transfers.
+        auto& transfers = rendezvous.followed[Stream{stream.queue, kTransferLane}.index()];
+        transfers = std::max(transfers, Point{0, state.queues[stream.queue].transfers});
+    }
+    launch();
+    std::lock_guard lock(mutex);
+    auto& state = states[device.id()];
+    state.rendezvous[{group_key(group), stream.index()}] = rendezvous;
+    state.last_collective[group_key(group)] = Access{
+        .stream = stream,
+        .point = program_point(cq, sub_device),
+        .operation = "a collective",
+        .version = state.queues[stream.queue].version()};
 }
 
 void on_record_event(const MeshEvent& event, std::span<const SubDeviceId> sub_device_ids) {

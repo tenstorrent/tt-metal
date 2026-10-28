@@ -6,6 +6,8 @@
 #include "all_gather_device_operation_types.hpp"
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/core.hpp"
+#include "ttnn/queue_hazards.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
@@ -369,7 +371,23 @@ Tensor all_gather(
     const std::optional<CoreRangeSet>& sub_core_grid) {
     auto [params, inputs] = ttnn::operations::ccl::all_gather_build_operation_args(
         input_tensor, persistent_output_tensor, dim, memory_config, cluster_axis, subdevice_id, sub_core_grid);
-    return ttnn::device_operation::launch<ttnn::operations::ccl::AllGatherDeviceOperation>(params, inputs);
+    auto& device = *input_tensor.device();
+    const auto queue = ttnn::get_current_command_queue_id_for_thread();
+    const auto sub_device = subdevice_id.value_or(device.get_sub_device_ids().at(0));
+    // A caller-supplied output can still be in use on a lagging peer (#58399): drop the handshake only when every
+    // earlier access to it on every device is proven done. An output the op allocates is new, but its memory may not
+    // be, so it keeps the handshake.
+    if (persistent_output_tensor.has_value()) {
+        const Tensor* const targets[] = {&*persistent_output_tensor};
+        params.entry_handshake =
+            !ttnn::queue_hazards::peers_may_write_without_handshake(device, queue, sub_device, cluster_axis, targets);
+    }
+    // Completing on any device takes every peer's shard, so every peer has started it.
+    Tensor output;
+    ttnn::queue_hazards::full_collective(device, queue, sub_device, cluster_axis, [&] {
+        output = ttnn::device_operation::launch<ttnn::operations::ccl::AllGatherDeviceOperation>(params, inputs);
+    });
+    return output;
 }
 
 }  // namespace ttnn::prim

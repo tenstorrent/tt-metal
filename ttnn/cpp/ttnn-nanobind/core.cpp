@@ -240,6 +240,31 @@ void py_module(nb::module_& mod) {
         tensor is refused) or "order" (both are ordered).
         )doc");
     mod.def(
+        "peers_may_write_without_handshake",
+        [](tt::tt_metal::distributed::MeshDevice& device,
+           const std::vector<ttnn::Tensor>& targets,
+           std::optional<uint32_t> cluster_axis,
+           std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+           std::optional<QueueId> cq_id) {
+            std::vector<const ttnn::Tensor*> pointers;
+            for (const auto& target : targets) {
+                pointers.push_back(&target);
+            }
+            return ttnn::queue_hazards::peers_may_write_without_handshake(
+                device,
+                cq_id.value_or(ttnn::get_current_command_queue_id_for_thread()),
+                sub_device_id.value_or(device.get_sub_device_ids().at(0)),
+                cluster_axis,
+                pointers);
+        },
+        nb::arg("mesh_device"),
+        nb::arg("targets"),
+        nb::arg("cluster_axis") = nb::none(),
+        nb::arg("sub_device_id") = nb::none(),
+        nb::arg("cq_id") = nb::none(),
+        "Experimental: whether a full collective could write into its peers' copies of `targets` without an entry "
+        "handshake now.");
+    mod.def(
         "wait_for",
         [](const ttnn::Tensor& tensor, std::optional<QueueId> cq_id) {
             ttnn::queue_hazards::wait_for(tensor, cq_id.value_or(ttnn::get_current_command_queue_id_for_thread()));
