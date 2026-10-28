@@ -381,7 +381,7 @@ class Qwen36Model:
         if _dshard_mode is not None:
             if self._lmhead_vocab_sharded:
                 self._lm_head_dshard = _tpc.LMHeadDShard(
-                    self.lm_head_weight, mesh_device, _dshard_mode, _tpc.lm_head_dshard_readers()
+                    self.lm_head_weight, mesh_device, _dshard_mode, _tpc.lm_head_dshard_readers(_dshard_mode)
                 )
             else:
                 logger.warning("QWEN36_LMHEAD_DSHARD ignored: the LM head is not vocab-sharded")

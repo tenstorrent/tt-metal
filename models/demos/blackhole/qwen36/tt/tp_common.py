@@ -437,10 +437,22 @@ def lm_head_dshard_mode():
     raise ValueError(f"{LMHEAD_DSHARD_ENV}={mode!r} invalid (0|1|exact|mc)")
 
 
-def lm_head_dshard_readers():
-    """QWEN36_LMHEAD_DSHARD_READERS: DRAM readers per bank. Unset = 2 for "exact", the qb2 rule for "mc"."""
+def lm_head_dshard_readers(mode=None):
+    """QWEN36_LMHEAD_DSHARD_READERS: DRAM readers per bank. Unset = 2 for "exact", the qb2 rule for "mc".
+
+    mode "exact" with QWEN36_WEIGHT_PREFETCH on and the variable unset: 3 readers. Each prefetch GCB takes about
+    70 KB of L1 on every worker core (about 350 KB at "all"), and the fp32 drafter head needs about 1180 KB of the
+    1400 KB storage-core budget at 2 readers but about 977 KB at 3. An explicit value always wins."""
     raw = os.environ.get(LMHEAD_DSHARD_READERS_ENV, "").strip()
-    return int(raw) if raw else None
+    if raw:
+        return int(raw)
+    if mode == "exact" and weight_prefetch.enabled_targets():
+        logger.info(
+            f"{LMHEAD_DSHARD_ENV}: {weight_prefetch.ENV} is on, so the DRAM-sharded LM head uses 3 readers/bank "
+            f"(its GCBs share L1; set {LMHEAD_DSHARD_READERS_ENV} to override)"
+        )
+        return 3
+    return None
 
 
 def dram_multicore_workers(bank_tiles):

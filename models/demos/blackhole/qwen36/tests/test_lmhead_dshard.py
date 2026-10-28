@@ -47,6 +47,27 @@ def test_host_mode_parsing(monkeypatch):
     assert tpc.lm_head_dshard_readers() == 2
 
 
+def test_host_readers_with_weight_prefetch(monkeypatch):
+    """QWEN36_WEIGHT_PREFETCH on (its GCBs share L1) and READERS unset: "exact" takes 3 readers/bank; prefetch off,
+    "mc", or an explicit READERS keep their old values."""
+    from models.demos.blackhole.qwen36.tt import weight_prefetch
+
+    monkeypatch.delenv(tpc.LMHEAD_DSHARD_READERS_ENV, raising=False)
+    monkeypatch.delenv(weight_prefetch.ENV, raising=False)
+    assert tpc.lm_head_dshard_readers("exact") is None
+    for pf in ("1", "all", "gdn_in,down"):
+        monkeypatch.setenv(weight_prefetch.ENV, pf)
+        assert tpc.lm_head_dshard_readers("exact") == 3
+        assert tpc.lm_head_dshard_readers("mc") is None
+        assert tpc.lm_head_dshard_readers() is None
+    monkeypatch.setenv(tpc.LMHEAD_DSHARD_READERS_ENV, "2")
+    assert tpc.lm_head_dshard_readers("exact") == 2
+    monkeypatch.setenv(weight_prefetch.ENV, "0")
+    monkeypatch.delenv(tpc.LMHEAD_DSHARD_READERS_ENV)
+    assert tpc.lm_head_dshard_readers("exact") is None
+    tpc.LMHeadDShardPlan(K, N_TP8, 8, "exact", readers=3).check_l1()  # 3 readers fits the fp32 head
+
+
 def test_host_plan_tp8_exact():
     p = tpc.LMHeadDShardPlan(K, N_TP8, 8, "exact")
     assert (p.k_tiles, p.n_tiles) == (160, 970)
