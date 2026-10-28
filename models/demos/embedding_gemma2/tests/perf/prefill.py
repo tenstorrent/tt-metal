@@ -59,7 +59,10 @@ read once per process: run this file in its own pytest process.
 Other env: EMBEDDING_GEMMA2_PREFILL_BUCKETS (comma list, overrides the bucket selection),
 EMBEDDING_GEMMA2_PREFILL_REFS (reference cache, default generated/embedding_gemma2_prefill/refs),
 EMBEDDING_GEMMA2_PREFILL_TRACE_MB (trace region, default 128), EMBEDDING_GEMMA2_SUSTAINED_S (30),
-EMBEDDING_GEMMA2_PREFILL_SUSTAINED_REPLAYS (300), EMBEDDING_GEMMA2_PREFILL_BURST_IDLE_S (3).
+EMBEDDING_GEMMA2_PREFILL_SUSTAINED_REPLAYS (300), EMBEDDING_GEMMA2_PREFILL_BURST_IDLE_S (3),
+EMBEDDING_GEMMA2_PREFILL_DUMP (dir: the gate phase saves the replay outputs per bucket, +0 min).
+Model switches (EG2_*, e.g. the E9.2 topology A/B switches in tt/masks.py, tt/per_layer_input.py,
+tt/pooler.py) are recorded in run_info `model_env`.
 Profiling (one warmed eager forward per bucket between signposts) is perf.py::test_tracy_forward.
 
     pytest models/demos/embedding_gemma2/tests/perf/prefill.py -s                    # quick
@@ -110,6 +113,10 @@ SUSTAINED_REPLAYS = int(os.environ.get("EMBEDDING_GEMMA2_PREFILL_SUSTAINED_REPLA
 SUSTAINED_WINDOW_MS = 500.0
 HOST_N, HOST_BUDGET_MS = 20, 3000.0
 TRACE_MB = int(os.environ.get("EMBEDDING_GEMMA2_PREFILL_TRACE_MB", "128"))
+# Gate phase only: save the traced replay outputs (embedding, valid last-hidden rows) per bucket to
+# <dir>/b1_s<bucket>.pt, for bitwise comparisons between code paths (E9.2 A/B).
+_dump = os.environ.get("EMBEDDING_GEMMA2_PREFILL_DUMP", "").strip()
+DUMP_DIR = Path(_dump) if _dump else None
 RUN_ID = time.strftime("%Y%m%d-%H%M%S")
 # Compute grid (contract compute_grid [12, 10], the Galaxy target): EMBEDDING_GEMMA2_GRID overrides
 # (e.g. 13x10 for the P150 grid). The device is opened on it and checked (conftest.open_eg2_device).
@@ -194,6 +201,9 @@ def prefill_run_info():
         "torch": torch.__version__,
         "hostname": platform.node(),
         "env": {k: os.environ.get(k, "") for k in ("TT_VISIBLE_DEVICES", "HF_HUB_OFFLINE", "OMP_NUM_THREADS")},
+        # model switches (EG2_*, e.g. the E9.2 topology A/B switches); empty = code defaults
+        "model_env": {k: v for k, v in sorted(os.environ.items()) if k.startswith("EG2_")},
+        "dump_dir": str(DUMP_DIR) if DUMP_DIR else "",
     }
     OUT_DIR.mkdir(parents=True, exist_ok=True)
     (OUT_DIR / f"run_info_{RUN_ID}.json").write_text(json.dumps(info, indent=2) + "\n")
@@ -323,6 +333,9 @@ def phase_gate(s: Session, b: int):
     cos_eager = float(torch.nn.functional.cosine_similarity(emb[0], e_emb[0].float(), dim=0))
     finite = bool(torch.isfinite(last).all() and torch.isfinite(emb).all())
     good = finite and p_last >= PCC_LAST_HIDDEN and cos >= COSINE_EMBEDDING
+    if DUMP_DIR is not None:
+        DUMP_DIR.mkdir(parents=True, exist_ok=True)
+        torch.save({"embedding": emb, "last_hidden": last, "run_id": RUN_ID}, DUMP_DIR / f"b1_s{b}.pt")
     _emit(
         {
             **_base(b),

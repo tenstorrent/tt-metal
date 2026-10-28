@@ -143,14 +143,32 @@ class TextModel(LightweightModule):
         """Embedding + PLE + encoder stack, before the final norm. [B,1,S,hidden]."""
         masks = self.masks(keep)
         h = self.embedding(input_ids)
-        ple = self.per_layer_input(h)
+        return self.encode_embeds(h, masks)
+
+    def encode_embeds(self, embeds: ttnn.Tensor, masks: dict[str, ttnn.Tensor]) -> ttnn.Tensor:
+        """PLE + encoder stack from input embeddings (consumed) and `self.masks(keep)` (consumed).
+
+        Every intermediate is freed at its last use: the PLE source (the wide projection, or the
+        embeddings in the narrowed per-layer mode) after the last layer input is built, each mask
+        after the last layer of its kind, each layer's input after that layer."""
+        n = len(self.layers)
+        kinds = [self.config.layer_types[i] for i in range(n)]
+        last_use = {kind: max(i for i in range(n) if kinds[i] == kind) for kind in set(kinds)}
+        ple = self.per_layer_input(embeds)  # `embeds` itself in the per-layer mode
+        h = embeds
         for i, layer in enumerate(self.layers):
             pli = self.per_layer_input.layer_input(ple, i)
-            h_next = layer(h, pli, masks[self.config.layer_types[i]])
+            if i == n - 1 and ple is not h:
+                ttnn.deallocate(ple)
+            h_next = layer(h, pli, masks[kinds[i]])
             ttnn.deallocate(pli)
-            ttnn.deallocate(h)
+            if h is not ple or i == n - 1:
+                ttnn.deallocate(h)
             h = h_next
-        ttnn.deallocate(ple)
+            for kind, mask in list(masks.items()):
+                if last_use.get(kind, -1) == i and all(m is not mask for k, m in masks.items() if k != kind):
+                    ttnn.deallocate(mask)
+                    del masks[kind]
         for m in {id(v): v for v in masks.values()}.values():
             ttnn.deallocate(m)
         return h

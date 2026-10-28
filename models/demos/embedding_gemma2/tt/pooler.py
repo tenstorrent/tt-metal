@@ -6,6 +6,11 @@
     pooled = sum_s keep[b, s] * h[b, s, :] / max(sum_s keep[b, s], 1)
     emb    = pooled / max(||pooled||_2, 1e-12)
 
+The device computes emb = summed / max(||summed||_2, 1e-12) with summed = keep @ h: dividing by
+the positive token count does not change the L2-normalized direction, so the count (typecast, sum,
+clip, divide: 4 ops plus the reduce's fill / clone) is not computed (E9.2 topology). Results equal
+up to fp32 rounding; a row with no valid token gives 0 either way.
+
 Contract
     input   last_hidden [B, 1, S, D] bf16 TILE DRAM (D = 768, after the 512->768 projection)
             keep        [B, 1, 1, S] bf16 TILE (1 = valid token, 0 = padding)
@@ -14,9 +19,14 @@ Contract
 
 from __future__ import annotations
 
+import os
+
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.embedding_gemma2.tt.config import compute_kernel_config_hifi4
+
+# 1 restores the stage-1 masked mean before the L2 normalize (E9.2 same-session A/B control).
+POOL_MEAN_DIVIDE = os.environ.get("EG2_POOL_MEAN_DIVIDE", "0") == "1"
 
 
 class Pooler(LightweightModule):
@@ -35,15 +45,34 @@ class Pooler(LightweightModule):
             compute_kernel_config=self.compute_kernel_config,
             memory_config=dram,
         )  # [B, 1, 1, D]
+        if not POOL_MEAN_DIVIDE:
+            out = l2_normalize(summed, self.normalize_eps)
+            ttnn.deallocate(summed)
+            return out
+        # stage-1 topology (A/B control): masked mean before the L2 normalize
         keep32 = ttnn.typecast(keep, ttnn.float32)
         counts = ttnn.sum(keep32, dim=-1, keepdim=True)  # [B, 1, 1, 1]
-        counts = ttnn.clip(counts, 1.0, 1.0e9)
-        mean = ttnn.divide(summed, counts, memory_config=dram)
-        sq = ttnn.multiply(mean, mean)
-        ss = ttnn.sum(sq, dim=-1, keepdim=True)
-        norm = ttnn.sqrt(ss)
-        norm = ttnn.clip(norm, self.normalize_eps, 1.0e30)
-        out = ttnn.divide(mean, norm, memory_config=dram)
-        for t in (summed, keep32, counts, mean, sq, ss, norm):
+        ttnn.deallocate(keep32)
+        counts_c = ttnn.clip(counts, 1.0, 1.0e9)
+        ttnn.deallocate(counts)
+        mean = ttnn.divide(summed, counts_c, memory_config=dram)
+        for t in (summed, counts_c):
             ttnn.deallocate(t)
+        out = l2_normalize(mean, self.normalize_eps)
+        ttnn.deallocate(mean)
         return out
+
+
+def l2_normalize(x: ttnn.Tensor, eps: float = 1e-12) -> ttnn.Tensor:
+    """x / max(||x||_2, eps) over the last dim, DRAM output; every intermediate freed."""
+    dram = ttnn.DRAM_MEMORY_CONFIG
+    sq = ttnn.multiply(x, x)
+    ss = ttnn.sum(sq, dim=-1, keepdim=True)
+    ttnn.deallocate(sq)
+    norm = ttnn.sqrt(ss)
+    ttnn.deallocate(ss)
+    norm_c = ttnn.clip(norm, eps, 1.0e30)
+    ttnn.deallocate(norm)
+    out = ttnn.divide(x, norm_c, memory_config=dram)
+    ttnn.deallocate(norm_c)
+    return out

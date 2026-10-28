@@ -10,6 +10,14 @@ PerLayerInput (HF `EmbeddingGemma2TextPLE`)
     forward(inputs_embeds [B,1,S,hidden])  -> proj [B,1,S,L*P]    bf16 TILE
     layer_input(proj, i)                   -> pli_i [B,1,S,P]     bf16 TILE
 
+    Narrowed per-layer projection (E9.2 topology): from PER_LAYER_MIN_TOKENS tokens (B x S) up,
+    `forward` returns `inputs_embeds` itself (no device op) and `layer_input` runs one
+    [hidden, P] matmul per layer with that layer's weight columns, instead of slicing layer i out of
+    the [B,1,S,L*P] projection. Same values per layer; 24 small matmuls replace one wide matmul and
+    24 slices, which costs less at >= 8192 tokens (stage-1 profiles, doc/prefill/02-topology/), and
+    the [B,1,S,L*P] tensor (1.6 GB at 65536) is never materialized. The caller must keep
+    `inputs_embeds` alive until the last `layer_input` call (TextModel.encode_embeds does).
+
 PerLayerInputBlock (HF `EmbeddingGemma2TextPLEBlock`, third residual block of every layer)
     h = h + post_norm( W_proj( gelu_tanh(W_gate h) * pli_i ) )
 
@@ -18,6 +26,7 @@ PerLayerInputBlock (HF `EmbeddingGemma2TextPLEBlock`, third residual block of ev
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import torch
@@ -36,6 +45,11 @@ from models.demos.embedding_gemma2.tt.precision import TextPrecision, resolve_pr
 from models.demos.embedding_gemma2.tt.rms_norm import RMSNorm
 from models.demos.embedding_gemma2.tt.weights import as_weight, linear_weight, substate
 
+# Tokens per forward (batch x bucket) from which each layer projects its own input (see module doc).
+# Stage-1 profiles at 12 x 10 (wide matmul + 24 slices vs 24 x [S,512]x[512,512]): 4096 0.81 vs
+# 1.03 ms (wide wins), 8192 2.13 vs 1.52 ms, 65536 16.2 vs 10.7 ms. Set a large value to disable.
+PER_LAYER_MIN_TOKENS = int(os.environ.get("EG2_PLE_PER_LAYER_MIN_TOKENS", "8192"))
+
 
 class PerLayerInput(LightweightModule):
     def __init__(
@@ -44,10 +58,12 @@ class PerLayerInput(LightweightModule):
         proj_weight: ttnn.Tensor,
         norm: RMSNorm,
         precision: TextPrecision | None = None,
+        layer_weights: list[ttnn.Tensor] | None = None,
     ):
         super().__init__()
         self.config = config
         self.proj_weight = proj_weight
+        self.layer_weights = layer_weights  # per-layer [hidden, P] columns of proj_weight
         self.norm = norm
         self.compute_kernel_config = compute_kernel_config_hifi4()
         precision = precision or resolve_precision(None).text
@@ -70,13 +86,21 @@ class PerLayerInput(LightweightModule):
         if tuple(w.shape) != expected:
             raise ValueError(f"per_layer_model_projection: expected {expected}, got {tuple(w.shape)}")
         w_scaled = (w.float() * config.projection_scale).to(torch.bfloat16)
+        wdt = precision.matmul("ple_proj").ttnn_dtype
         proj_weight = as_weight(
-            linear_weight(w_scaled),
-            device,
-            cache_dir=cache_dir,
-            name="ple.proj.scaled.weight",
-            dtype=precision.matmul("ple_proj").ttnn_dtype,
+            linear_weight(w_scaled), device, cache_dir=cache_dir, name="ple.proj.scaled.weight", dtype=wdt
         )
+        P = config.per_layer_dim
+        layer_weights = [
+            as_weight(
+                linear_weight(w_scaled[i * P : (i + 1) * P]),
+                device,
+                cache_dir=cache_dir,
+                name=f"ple.proj.scaled.layer{i}.weight",
+                dtype=wdt,
+            )
+            for i in range(config.num_layers)
+        ]
         norm = RMSNorm.from_state_dict(
             substate(state_dict, "per_layer_projection_norm"),
             RMSNormConfig(dim=config.per_layer_dim, eps=config.rms_norm_eps),
@@ -85,9 +109,16 @@ class PerLayerInput(LightweightModule):
             name="ple.norm",
             compute_kernel_config=precision.norms.compute_kernel_config,
         )
-        return cls(config, proj_weight, norm, precision)
+        return cls(config, proj_weight, norm, precision, layer_weights)
+
+    def per_layer(self, x: ttnn.Tensor) -> bool:
+        """True when each layer projects its own input for this activation's token count."""
+        return self.layer_weights is not None and x.shape[0] * x.shape[2] >= PER_LAYER_MIN_TOKENS
 
     def forward(self, inputs_embeds: ttnn.Tensor) -> ttnn.Tensor:
+        """[B,1,S,L*P] projection, or `inputs_embeds` itself in the narrowed per-layer mode."""
+        if self.per_layer(inputs_embeds):
+            return inputs_embeds
         return linear(
             inputs_embeds,
             self.proj_weight,
@@ -97,10 +128,22 @@ class PerLayerInput(LightweightModule):
         )
 
     def layer_input(self, projection: ttnn.Tensor, layer_idx: int) -> ttnn.Tensor:
+        """`projection`: what `forward` returned (the wide projection, or the embeddings)."""
         P = self.config.per_layer_dim
-        B, _, S, _ = projection.shape
+        B, _, S, W = projection.shape
         mem = act_memory_config(projection.device(), B, S, P)
-        piece = ttnn.slice(projection, (0, 0, 0, layer_idx * P), (B, 1, S, (layer_idx + 1) * P), memory_config=mem)
+        if W == self.config.num_layers * P:
+            piece = ttnn.slice(projection, (0, 0, 0, layer_idx * P), (B, 1, S, (layer_idx + 1) * P), memory_config=mem)
+        else:
+            if W != self.config.hidden_size or self.layer_weights is None:
+                raise ValueError(f"layer_input: expected [.., {self.config.num_layers * P}] or embeddings, got {W}")
+            piece = linear(
+                projection,
+                self.layer_weights[layer_idx],
+                memory_config=mem,
+                policy=self.policy,
+                dtype=self.policy.out_ttnn_dtype,
+            )
         out = self.norm(piece, memory_config=mem)
         ttnn.deallocate(piece)
         return out

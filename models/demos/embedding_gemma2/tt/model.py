@@ -40,6 +40,7 @@ from dataclasses import dataclass
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.embedding_gemma2.tt.audio.audio_model import AudioDeviceInputs, AudioModel
+from models.demos.embedding_gemma2.tt.pooler import l2_normalize
 from models.demos.embedding_gemma2.tt.text_model import TextModel
 from models.demos.embedding_gemma2.tt.vision.vision_model import VisionDeviceInputs, VisionModel
 
@@ -92,19 +93,6 @@ class FullDeviceInputs:
             if m is not None:
                 out.extend(m.tensors())
         return tuple(out)
-
-
-def l2_normalize(x: ttnn.Tensor, eps: float = 1e-12) -> ttnn.Tensor:
-    """x / max(||x||_2, eps) over the last dim (same ops as Pooler)."""
-    dram = ttnn.DRAM_MEMORY_CONFIG
-    sq = ttnn.multiply(x, x)
-    ss = ttnn.sum(sq, dim=-1, keepdim=True)
-    norm = ttnn.sqrt(ss)
-    norm = ttnn.clip(norm, eps, 1.0e30)
-    out = ttnn.divide(x, norm, memory_config=dram)
-    for t in (sq, ss, norm):
-        ttnn.deallocate(t)
-    return out
 
 
 class EmbeddingGemma2Model(LightweightModule):
@@ -173,19 +161,7 @@ class EmbeddingGemma2Model(LightweightModule):
     def encoder(self, embeds: ttnn.Tensor, keep: ttnn.Tensor) -> ttnn.Tensor:
         """PLE + 24 encoder layers from merged input embeddings (TextModel.forward_hidden after the lookup)."""
         tm = self.text
-        masks = tm.masks(keep)
-        ple = tm.per_layer_input(embeds)
-        h = embeds
-        for i, layer in enumerate(tm.layers):
-            pli = tm.per_layer_input.layer_input(ple, i)
-            h_next = layer(h, pli, masks[tm.config.layer_types[i]])
-            ttnn.deallocate(pli)
-            ttnn.deallocate(h)
-            h = h_next
-        ttnn.deallocate(ple)
-        for m in {id(v): v for v in masks.values()}.values():
-            ttnn.deallocate(m)
-        return h
+        return tm.encode_embeds(embeds, tm.masks(keep))
 
     def forward(self, x: FullDeviceInputs, truncate_dim: int | None = None) -> ttnn.Tensor:
         embeds = self.merge(x)

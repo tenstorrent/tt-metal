@@ -8,12 +8,18 @@ HF semantics (`masking_utils`):
     sliding layers  keep (q, k)  iff  key k is valid  and  |q - k| <= sliding_window (512, inclusive)
 
 TT SDPA cannot combine its `sliding_window_size` argument with an `attn_mask`
-(`sdpa_device_operation.cpp:141`), so both rules are baked into one dense additive mask:
+(`sdpa_device_operation.cpp:141`), so both rules are baked into one dense additive mask, built per
+forward in two device ops (E9.2 topology):
 
-    key_bias [B, 1, 1, S] = (keep - 1) * 1e9              built per forward from the `keep` input
     band     [1, 1, S, S] = 0 if |q - k| <= W else -1e9   constant per bucket, built at setup
-    sliding  [B, 1, S, S] = band + key_bias               (row-broadcast add)
-    full     [B, 1, S, S] = zeros[1, 1, S, 1] + key_bias  (row + column broadcast add)
+    full     [B, 1, S, S] = zeros[1, 1, S, 1] + (keep - 1) * 1e9
+                            (row + column broadcast add; the key bias (keep - 1) * 1e9 is an SFPU
+                            pre-activation of the add's second input, not two separate ops)
+    sliding  [B, 1, S, S] = band + full                   (dense + dense, no broadcast)
+
+`sliding` reads the already built `full` instead of row-broadcasting the key bias: the same
+values bit for bit, and 4.3x faster per build at 8192 / 16384 than `band + key_bias` (E9.2
+probe_mask, doc/prefill/02-topology/).
 
 Both masks are bfloat4_b (E5a): SDPA reads them at the same speed as bf16 (sweep at 512-8192) with
 identical outputs, and they take 3.6x less DRAM, which is what bounds the longest bucket. In
@@ -48,6 +54,10 @@ from models.demos.embedding_gemma2.tt.config import FULL, MASK_NEG, SLIDING, com
 # E5a default; the text model passes its precision policy's `mask_dtype`
 MASK_DTYPE = ttnn.bfloat4_b
 BLOCK_MAP_MIN_SEQ = int(os.environ.get("EG2_BLOCK_MAP_MIN_SEQ", "4096"))
+# E9.2 topology switches (default on; 0 restores the stage-1 ops for same-session A/B controls):
+# key bias as pre-activations of the full-mask add (2 ops fewer), sliding mask = band + full.
+MASK_BIAS_FUSED = os.environ.get("EG2_MASK_BIAS_FUSED", "1") == "1"
+MASK_SLIDING_FROM_FULL = os.environ.get("EG2_MASK_SLIDING_FROM_FULL", "1") == "1"
 
 
 def band_mask(seq_len: int, radius: int) -> torch.Tensor:
@@ -121,21 +131,40 @@ class AttentionMasks(LightweightModule):
     def block_map(self, seq_len: int, batch: int) -> ttnn.Tensor | None:
         return self.block_maps.get(seq_len) if batch == 1 else None
 
-    def key_bias(self, keep: ttnn.Tensor) -> ttnn.Tensor:
-        # (keep - 1) * 1e9 : 0 for valid keys, -1e9 for padding
-        return ttnn.multiply(ttnn.subtract(keep, 1.0), -MASK_NEG, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    @staticmethod
+    def key_bias_activations() -> list:
+        """(keep - 1) * 1e9 as SFPU pre-activations of a binary op's keep input: 0 valid, -1e9 padding."""
+        return [
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.SUB_UNARY_SFPU, 1.0),
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, -MASK_NEG),
+        ]
 
     def forward(self, keep: ttnn.Tensor) -> dict[str, ttnn.Tensor]:
         B, _, _, S = keep.shape
         if S not in self.bands:
             raise RuntimeError(f"AttentionMasks.prepare({S}) must run before forward (setup-time upload)")
-        bias = self.key_bias(keep)
         dram = ttnn.DRAM_MEMORY_CONFIG
-        full = ttnn.add(self.zero_cols[S], bias, dtype=self.dtype, memory_config=dram)
         band = self.bands[S]
+        bias = None
+        if MASK_BIAS_FUSED:
+            full = ttnn.add(
+                self.zero_cols[S],
+                keep,
+                dtype=self.dtype,
+                memory_config=dram,
+                input_tensor_b_activations=self.key_bias_activations(),
+            )
+        else:  # stage-1 topology (A/B control): two ops for the key bias
+            bias = ttnn.multiply(ttnn.subtract(keep, 1.0), -MASK_NEG, memory_config=dram)
+            full = ttnn.add(self.zero_cols[S], bias, dtype=self.dtype, memory_config=dram)
         if band is None:
             sliding = full
-        else:
+        elif MASK_SLIDING_FROM_FULL:
+            sliding = ttnn.add(band, full, dtype=self.dtype, memory_config=dram)
+        else:  # stage-1 topology (A/B control): row-broadcast add of the key bias
+            if bias is None:
+                bias = ttnn.multiply(ttnn.subtract(keep, 1.0), -MASK_NEG, memory_config=dram)
             sliding = ttnn.add(band, bias, dtype=self.dtype, memory_config=dram)
-        ttnn.deallocate(bias)
+        if bias is not None:
+            ttnn.deallocate(bias)
         return {SLIDING: sliding, FULL: full}
