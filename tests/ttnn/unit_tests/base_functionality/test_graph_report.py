@@ -520,8 +520,17 @@ class TestImportReportRankCompleteness:
     """
 
     def test_all_ranks_present_imports_every_rank(self, tmp_path):
+        """With the python_io sidecars real runs write beside each capture, which must not count as captures."""
         report_dir = tmp_path / "reports_in"
-        _write_reports(report_dir, [_rank_capture(0, 2), _rank_capture(1, 2)])
+        _write_reports(
+            report_dir,
+            [
+                _rank_capture(0, 2),
+                _rank_capture(1, 2),
+                ("graph_capture_1_of_2.python_io.json", []),
+                ("graph_capture_2_of_2.python_io.json", []),
+            ],
+        )
         db_path = graph_report.import_report(report_dir, tmp_path / "output")
         assert _query_db(db_path, "SELECT DISTINCT rank FROM operations ORDER BY rank") == [(0,), (1,)]
 
@@ -546,14 +555,19 @@ class TestImportReportRankCompleteness:
         assert f"{db_path} was not updated" in str(excinfo.value)
         assert db_path.read_bytes() == before
 
-    def test_missing_ranks_listed_are_capped(self, tmp_path, expect_error):
-        """A bogus world size in a file name gives a short error, without enumerating every missing rank."""
-        world_size = 10**12
+    @pytest.mark.parametrize("unlisted", [0, 1, 2])
+    def test_missing_ranks_listed_are_capped(self, tmp_path, expect_error, unlisted):
+        """Missing names are listed up to the cap and counted past it, so a bogus world size in a file name can't
+        build a huge message."""
+        listed = graph_report._MAX_MISSING_CAPTURES_LISTED
+        world_size = 1 + listed + unlisted
         report_dir = tmp_path / "reports_in"
         _write_reports(report_dir, [_rank_capture(0, world_size)])
-        listed = graph_report._MAX_MISSING_CAPTURES_LISTED
-        with expect_error(ValueError, rf"and {world_size - 1 - listed} more\."):
+        with expect_error(ValueError, rf"{listed + unlisted} of {world_size} ranks are missing") as excinfo:
             graph_report.import_report(report_dir, tmp_path / "output")
+        message = str(excinfo.value)
+        assert message.count(f"_of_{world_size}.json") == listed
+        assert (f"and {unlisted} more" in message) == (unlisted > 0)
 
     def test_mixed_world_sizes_raises(self, tmp_path, expect_error):
         """A stale capture from an earlier run with a different world size is left in the directory."""
@@ -595,11 +609,36 @@ class TestImportReportRankCompleteness:
             _minimal_single_op_graph(), metadata={"rank": metadata_rank, "world_size": metadata_world_size}
         )
         _write_reports(report_dir, [_rank_capture(0, 2), ("graph_capture_2_of_2.json", copied)])
+        expected_name = f"graph_capture_{metadata_rank + 1}_of_{metadata_world_size}\\.json"
         with expect_error(
             ValueError,
-            rf"holds rank {metadata_rank} of world size {metadata_world_size} in its metadata, but its name says "
-            r"rank 1 of 2",
+            rf"graph_capture_2_of_2\.json holds the capture of {expected_name} according to its metadata "
+            rf"\(rank {metadata_rank} of world size {metadata_world_size}\)",
         ):
+            graph_report.import_report(report_dir, tmp_path / "output")
+        assert not (tmp_path / "output" / "db.sqlite").exists()
+
+    def test_failure_during_the_import_leaves_an_existing_db_unchanged(self, tmp_path, expect_error):
+        """The mismatch is found after the import has opened the existing DB and imported the first capture into it;
+        nothing is committed, so the DB is left as it was, and the error says so."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, 2), _rank_capture(1, 2)])
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        before = db_path.read_bytes()
+        copied = _make_report(_minimal_single_op_graph("ttnn.other"), metadata={"rank": 0, "world_size": 2})
+        _write_reports(report_dir, [("graph_capture_2_of_2.json", copied)])
+        with expect_error(ValueError, "according to its metadata") as excinfo:
+            graph_report.import_report(report_dir, tmp_path / "output")
+        assert f"{db_path} was not updated" in str(excinfo.value)
+        assert db_path.read_bytes() == before
+
+    def test_unsupported_version_of_a_rank_capture_raises(self, tmp_path, expect_error):
+        """Skipping it, as a loose capture is skipped, would leave that rank out of a merge that passed the check."""
+        report_dir = tmp_path / "reports_in"
+        name, report = _rank_capture(1, 2)
+        report["version"] = 99
+        _write_reports(report_dir, [_rank_capture(0, 2), (name, report)])
+        with expect_error(ValueError, r"graph_capture_2_of_2\.json has version 99"):
             graph_report.import_report(report_dir, tmp_path / "output")
         assert not (tmp_path / "output" / "db.sqlite").exists()
 
@@ -645,7 +684,7 @@ class TestGraphReportFixtureMultiRankTeardown:
     replaced by recorders. Every rank must reach both barriers, even when rank 0's import raises."""
 
     @staticmethod
-    def _stub_ttnn(monkeypatch, tmp_path, rank, world_size):
+    def _stub_ttnn(monkeypatch, tmp_path, rank, world_size, distributed=True):
         calls = []
         capture_active = [False]
 
@@ -655,6 +694,7 @@ class TestGraphReportFixtureMultiRankTeardown:
         def end_graph_capture_to_file(path):
             capture_active[0] = False
             calls.append(("end", Path(path).name))
+            Path(path).write_text("{}")
 
         config = SimpleNamespace(
             enable_graph_report=True,
@@ -668,7 +708,7 @@ class TestGraphReportFixtureMultiRankTeardown:
         monkeypatch.setattr(ttnn.graph, "end_graph_capture_to_file", end_graph_capture_to_file)
         monkeypatch.setattr(ttnn.graph, "enable_detailed_buffer_tracing", lambda: calls.append("enable_tracing"))
         monkeypatch.setattr(ttnn.graph, "disable_detailed_buffer_tracing", lambda: calls.append("disable_tracing"))
-        monkeypatch.setattr(ttnn, "distributed_context_is_initialized", lambda: True)
+        monkeypatch.setattr(ttnn, "distributed_context_is_initialized", lambda: distributed)
         monkeypatch.setattr(ttnn, "distributed_context_get_rank", lambda: rank)
         monkeypatch.setattr(ttnn, "distributed_context_get_size", lambda: world_size)
         monkeypatch.setattr(ttnn, "distributed_context_barrier", lambda: calls.append("barrier"))
@@ -701,6 +741,43 @@ class TestGraphReportFixtureMultiRankTeardown:
             "barrier",
             "disable_tracing",
             ("config", "config_1_of_2.json"),
+        ]
+        # Left for diagnosing the failed import.
+        assert (tmp_path / "report" / "graph_capture_1_of_2.json").exists()
+
+    def test_rank_0_imports_then_removes_the_captures(self, monkeypatch, tmp_path):
+        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=0, world_size=2)
+        (tmp_path / "report").mkdir()
+        (tmp_path / "report" / "graph_capture_2_of_2.json").write_text("{}")
+        monkeypatch.setattr(graph_report, "import_report", lambda report_path, output_dir: calls.append("import"))
+        self._run_fixture()
+        assert calls == [
+            "enable_tracing",
+            ("end", "graph_capture_1_of_2.json"),
+            "barrier",
+            "import",
+            "barrier",
+            "disable_tracing",
+            ("config", "config_1_of_2.json"),
+        ]
+        assert not list((tmp_path / "report").glob("graph_capture_*_of_*.json"))
+
+    def test_single_process_needs_no_barriers(self, monkeypatch, tmp_path, expect_error):
+        calls = self._stub_ttnn(monkeypatch, tmp_path, rank=0, world_size=1, distributed=False)
+
+        def failing_import_report(report_path, output_dir):
+            calls.append("import")
+            raise ValueError("import failed")
+
+        monkeypatch.setattr(graph_report, "import_report", failing_import_report)
+        with expect_error(ValueError, "import failed"):
+            self._run_fixture()
+        assert calls == [
+            "enable_tracing",
+            ("end", "graph_capture.json"),
+            "import",
+            "disable_tracing",
+            ("config", "config.json"),
         ]
 
     def test_other_ranks_skip_the_import_and_reach_both_barriers(self, monkeypatch, tmp_path):
