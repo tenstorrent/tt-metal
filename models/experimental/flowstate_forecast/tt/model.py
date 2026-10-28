@@ -94,8 +94,9 @@ class FlowStateTT:
 
     # ------------------------------------------------------------------ device forward
 
-    def layer(self, i, u, consts, L, Bp, r0):
-        """u (1, 1, L * Bp, 512) bf16 -> out (1, 1, rows * Bp, 512) bf16; rows = L for i < 5, L - r0 for the last."""
+    def ssm_block(self, i, u, consts, L, Bp, r0, keep_x=False):
+        """The S5 block: u (1, 1, L * Bp, 512) bf16 -> (y, u_read, x): y = gate(C x) * C x + D u over the rows from
+        r0 (bf16), u_read the matching rows of u, x the fp32 [x_re | x_im] state when keep_x (else None)."""
         p, w = self.p, self.layers[i]
         bu = ttnn.linear(u, consts["B"], dtype=ttnn.float32, compute_kernel_config=p.b_proj, memory_config=p.mem)
         x = lti.lti_scan_fused(bu, consts["lbar"], L)
@@ -106,16 +107,24 @@ class FlowStateTT:
             ttnn.deallocate(x)
             x = x_rows
             u = ttnn.slice(u, (0, 0, r0 * Bp, 0), (1, 1, M, 512))
+        xc = x
         if p.c_input_dtype != ttnn.float32:
-            x16 = ttnn.typecast(x, p.c_input_dtype)
+            xc = ttnn.typecast(x, p.c_input_dtype)
+        y = ttnn.linear(xc, w["C"], dtype=ttnn.bfloat16, compute_kernel_config=p.c_proj, memory_config=p.mem)
+        if xc is not x:
+            ttnn.deallocate(xc)
+        if not keep_x:
             ttnn.deallocate(x)
-            x = x16
-        y = ttnn.linear(x, w["C"], dtype=ttnn.bfloat16, compute_kernel_config=p.c_proj, memory_config=p.mem)
-        ttnn.deallocate(x)
+            x = None
         g = ttnn.linear(y, w["gate_w"], bias=w["gate_b"], compute_kernel_config=p.dense, memory_config=p.mem)
         g = ttnn.sigmoid(g)
         y = ttnn.multiply(g, y)
         y = ttnn.add(y, ttnn.multiply(u, w["D"]))
+        return y, u, x
+
+    def mlp_block(self, i, y):
+        """z = MLP(rms_norm(y)) + y, bf16 (the reference's ``mlp`` part)."""
+        p, w = self.p, self.layers[i]
         h = ttnn.rms_norm(y, weight=w["rms_w"], epsilon=1e-6, compute_kernel_config=p.norm)
         a = ttnn.linear(h, w["w1"], bias=w["b1"], activation="silu", compute_kernel_config=p.dense, memory_config=p.mem)
         b = ttnn.linear(h, w["w2"], bias=w["b2"], compute_kernel_config=p.dense, memory_config=p.mem)
@@ -125,10 +134,21 @@ class FlowStateTT:
         ttnn.deallocate(b)
         z = ttnn.linear(ab, w["w3"], bias=w["b3"], compute_kernel_config=p.dense, memory_config=p.mem)
         ttnn.deallocate(ab)
-        z = ttnn.add(z, y)
-        ttnn.deallocate(y)
-        n = ttnn.layer_norm(z, weight=w["ln_w"], bias=w["ln_b"], epsilon=1e-5, compute_kernel_config=p.norm)
-        ttnn.deallocate(z)
+        return ttnn.add(z, y)
+
+    def layer(self, i, u, consts, L, Bp, r0, parts=None):
+        """u (1, 1, L * Bp, 512) bf16 -> out (1, 1, rows * Bp, 512) bf16; rows = L for i < 5, L - r0 for the last.
+        parts: a dict that receives the device ``ssm`` and ``mlp`` outputs (module tests; kept alive)."""
+        w = self.layers[i]
+        y, u, _ = self.ssm_block(i, u, consts, L, Bp, r0)
+        z = self.mlp_block(i, y)
+        if parts is None:
+            ttnn.deallocate(y)
+        else:
+            parts["ssm"], parts["mlp"] = y, z
+        n = ttnn.layer_norm(z, weight=w["ln_w"], bias=w["ln_b"], epsilon=1e-5, compute_kernel_config=self.p.norm)
+        if parts is None:
+            ttnn.deallocate(z)
         return ttnn.add(u, n)
 
     def forward_device(self, tok_dev, s, L, Bp, r0, P, keep=False):
