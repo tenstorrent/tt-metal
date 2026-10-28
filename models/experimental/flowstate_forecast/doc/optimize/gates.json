@@ -1,5 +1,5 @@
 {
- "_comment": "G1 floors (D3: adopted with items 2-4 and 11). Floors per <case>/<precision> or */<precision>; drift against iter_00/fixed_record.json (the D3 item-12 bench + suite records). Applicability (v1.14): spread_ratio_p50 needs >= 8 active rows, spread_ratio_p01/p99 >= 100 (check_gates.MIN_ACTIVE); inactive_max_err applies only with inactive rows. bias_row_p50 / bias_row_max / pcc_step are outer bounds set from the item-12 measurement; the row gates are bias_row_drift_max (0.03 abs, both presets) and spread_ratio_row_drift_max (0.15). spread_ratio_p50 drift is centred on 1 (v1.26). performance inactive_max_err 0.045 (D3 item 11): round-0 max 0.0327 (long_context), the collapsed value 0.0575; nan_mix's inactive row is near-flat (collapsed error 0.0032, under its own device error), so its inactive collapse is caught by pcc_row_min.",
+ "_comment": "G1 floors (D3: adopted with items 2-4 and 11). Floors per <case>/<precision> or */<precision>; drift against iter_00/fixed_record.json (the D3 item-12 bench + suite records). Applicability (v1.14): spread_ratio_p50 needs >= 8 active rows, spread_ratio_p01/p99 >= 100 (check_gates.MIN_ACTIVE); inactive_max_err applies only with inactive rows. bias_row_p50 / bias_row_max / pcc_step are outer bounds set from the item-12 measurement; the row gates are bias_row_drift_max (0.03 abs, both presets) and spread_ratio_row_drift_max (0.15). spread_ratio_p50 drift is centred on 1 (v1.26). performance inactive_max_err 0.045 (D3 item 11): round-0 max 0.0327 (long_context), the collapsed value 0.0575; nan_mix's inactive row is near-flat (collapsed error 0.0032, under its own device error), so its inactive collapse is caught by pcc_row_min. Outer bounds from the item-12 record (jobs 1122/1123 @ 40e7529f66f): accuracy max bias_row_p50 0.0068, bias_row_max 0.0207, min pcc_step 0.99856; performance 0.0343, 0.1073, 0.99260.",
  "floors": {
   "*/accuracy": {
    "pcc_normalized": 0.999,
@@ -21,7 +21,7 @@
    "pcc_final_spread": 0.9995,
    "bias_row_p50": 0.02,
    "bias_row_max": 0.05,
-   "pcc_step": 0.998
+   "pcc_step": 0.997
   },
   "*/performance": {
    "pcc_normalized": 0.995,
@@ -43,7 +43,7 @@
    "pcc_final_spread": 0.998,
    "bias_row_p50": 0.05,
    "bias_row_max": 0.15,
-   "pcc_step": 0.99
+   "pcc_step": 0.985
   },
   "single/performance": {
    "spread_ratio_min": 0.9,
