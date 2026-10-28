@@ -63,3 +63,16 @@ quasar:
   - tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_unary_sfpu_quasar.py::test_dropout_reseed_quasar
   - "tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_unary_sfpu_quasar.py::test_eltwise_unary_sfpu_quasar[mathop_formats_dest_acc_sync_input_dims:(<MathOperation.Dropout:"
   - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_dropout_
+
+  # --- Sanity ttnn sim_quasar tests ---
+  - models/experimental/llama32_1b_quasar/tests/graph_ops/test_paged_update_cache.py::test_paged_update_cache[00_128x8x32x64_bf8_int-dram-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/yolo_ops/test_softmax.py::test_softmax[l_s-640-dfl-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/qwen3_vl_ops/test_nlp_concat_heads_decode.py::test_nlp_concat_heads_decode[00_32x128_bf16_hs-l1-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/qwen3_vl_ops/test_plus_one.py::test_plus_one[01_1_u32_int-dram-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/yolo_ops/test_concat.py::test_concat_channel[detect_out-640-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/yolo_ops/test_concat.py::test_concat_channel[dist2bbox-640-ttnn_mesh_device0]
+  - models/experimental/ops/quasar/tests/yolo_ops/test_concat.py::test_concat_detect_cv2cv3[hw20-ttnn_mesh_device0]  # #62417: hang in tilize kernel
+  - models/experimental/ops/quasar/tests/yolo_ops/test_concat.py::test_concat_detect_cv2cv3[hw40-ttnn_mesh_device0]  # #62417
+  - models/experimental/ops/quasar/tests/yolo_ops/test_permute.py::test_permute_detect[dfl_nhwc_to_nchw-ttnn_mesh_device0]  # #62417
+  - models/experimental/ops/quasar/tests/yolo_ops/test_permute.py::test_permute_detect[dfl_transpose-ttnn_mesh_device0]  # #62417
+  - models/experimental/ops/quasar/tests/qwen3_vl_ops/test_plus_one.py::test_plus_one[00_1_i32_int-dram-ttnn_mesh_device0]  # #55526: DM self-loop DFB

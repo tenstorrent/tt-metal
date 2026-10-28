@@ -189,16 +189,19 @@ public:
 
 private:
     friend class detail::CommandListBuilderImpl;
-    friend void EnqueueCommandList(MeshCommandQueue& cq, CommandList& command_list, bool blocking);
+    friend void EnqueueCommandList(
+        MeshCommandQueue& cq, CommandList& command_list, bool blocking, bool check_dram_overlap);
 
     /**
      * @brief Replays on the command queue used by build().
      * Use EnqueueCommandList() to replay a command list.
      * The recorded sub-device manager must be active.
      *
-     * @param blocking  If true, waits for completion.
+     * @param blocking              If true, waits for completion.
+     * @param check_dram_overlap    If true, checks recorded tensor ranges against live DRAM allocations before
+     *                              enqueueing. See EnqueueCommandList().
      */
-    void replay(bool blocking) const;
+    void replay(bool blocking, bool check_dram_overlap) const;
 
     class Impl;
     explicit CommandList(std::unique_ptr<Impl> impl);
@@ -209,10 +212,28 @@ private:
  * @brief Replays @p command_list on @p cq.
  * @p cq must match the device and queue used to build the list.
  *
- * @param cq            Command queue to replay on.
- * @param command_list  Command list to replay.
- * @param blocking      If true, waits for completion.
+ * A tensor range is the DRAM footprint of a tensor bound to a recorded program, recorded when SetProgramRunArgs() or
+ * UpdateProgramRunArgs() binds it, or when CommandList::update_args() patches it.
+ *
+ * @param cq                    Command queue to replay on.
+ * @param command_list          Command list to replay.
+ * @param blocking              If true, waits for completion.
+ * @param check_dram_overlap    If true, checks every tensor range against live DRAM allocations before enqueueing:
+ *                              - A free range passes.
+ *                              - A range exactly filled by one allocation, with the same address and size, passes,
+ *                                and replay reads or overwrites that allocation. A warning is logged unless it is the
+ *                                bound tensor's own allocation, so a tensor that does not own its allocation, such as
+ *                                a view, always warns.
+ *                              - Any other overlap fails and nothing is enqueued. This includes a view of part of an
+ *                                allocation.
+ *
+ *                              Use the check while developing and leave it off in production, where it would scan
+ *                              every live DRAM allocation on each replay. DRAM placement is deterministic, so once the
+ *                              check passes, turning it off adds no overlaps, as long as allocations and frees happen
+ *                              in the same order under the same build, device configuration, and debug features
+ *                              (watcher and DPRINT change kernel binary sizes).
  */
-void EnqueueCommandList(MeshCommandQueue& cq, CommandList& command_list, bool blocking);
+void EnqueueCommandList(
+    MeshCommandQueue& cq, CommandList& command_list, bool blocking, bool check_dram_overlap = false);
 
 }  // namespace tt::tt_metal::experimental

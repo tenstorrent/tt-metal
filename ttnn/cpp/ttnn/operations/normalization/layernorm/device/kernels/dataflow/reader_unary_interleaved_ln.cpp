@@ -108,6 +108,9 @@ void kernel_main() {
 
     // Generate constant tiles for layernorm compute
 #ifndef USE_WELFORD
+    // Kernel-scope object: on Quasar a DataflowBuffer drains when it goes out of scope, and compute
+    // pops the scaler only at the end of the kernel, so a helper-owned one would deadlock here.
+    DataflowBuffer dfb_scaler(dfb::scaler);
     {
         constexpr uint32_t partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
         // Push count shared with the compute kernel's dfb_scaler pop count (issue #48487).
@@ -117,14 +120,14 @@ void kernel_main() {
             dfb::scaler,
             ckernel::PoolType::SUM,
             ckernel::ReduceDim::REDUCE_ROW,
-            dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>();
+            dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(dfb_scaler);
 
         if constexpr (num_scaler_tiles == 2) {
             dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
                 dfb::scaler,
                 ckernel::PoolType::SUM,
                 ckernel::ReduceDim::REDUCE_ROW,
-                dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(partial_last_tile_cols);
+                dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR>(dfb_scaler, partial_last_tile_cols);
         }
     }
 #endif

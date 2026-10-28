@@ -26,14 +26,12 @@ x 4 tile-cols (16 tiles); [1,2,1,128] = 2 (N*C) batch/channel slabs x one (padde
 
 Run on the Quasar simulator:
     unset TT_METAL_DISABLE_SFPLOADMACRO
-    TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 ARCH_NAME=quasar CHIP_ARCH=quasar \
-        TT_METAL_SLOW_DISPATCH_MODE=1 \
+    TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 TT_METAL_SLOW_DISPATCH_MODE=1 \
         pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_bcast.py
 """
 import pytest
 import ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
-    _on_quasar,
     _run,
     _run_mixed,
     _block_sharded_config,
@@ -41,6 +39,7 @@ from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quas
     _dram_height_sharded_config,
     _width_sharded_config,
 )
+from tt_py_test_utils_common.utility_functions import is_quasar
 
 
 # a is the full [H,W]; the other operand broadcasts. ROW_B: b has one (logical) row. ROW_A: a has one.
@@ -296,7 +295,7 @@ _COL_B_ROUTER_BLOCK_2X2 = _block_sharded_config([64, 128], _COL_B_ROUTER_GRID_2X
 _COL_B_ROUTER_DRAM = _dram_height_sharded_config([32, 128], ttnn.CoreRangeSet({ttnn.CoreRange((0, 0), (3, 0))}))
 
 
-@pytest.mark.skipif(_on_quasar(), reason="these configs route to the descriptor path, which Quasar lacks")
+@pytest.mark.skipif(is_quasar(), reason="these configs route to the descriptor path, which Quasar lacks")
 @pytest.mark.parametrize(
     "dtype,a_mem,out_mem",
     [
