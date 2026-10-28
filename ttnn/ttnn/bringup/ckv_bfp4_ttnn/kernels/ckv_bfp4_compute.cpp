@@ -21,11 +21,11 @@
 #endif
 
 void kernel_main() {
-    constexpr uint32_t n_tiles = get_compile_time_arg_val(0);
-    constexpr uint32_t cb_in = get_compile_time_arg_val(1);
-    constexpr uint32_t cb_out = get_compile_time_arg_val(2);
+    const uint32_t n_tiles = get_arg_val<uint32_t>(0);
+    constexpr uint32_t cb_in = get_compile_time_arg_val(0);
+    constexpr uint32_t cb_out = get_compile_time_arg_val(1);
 #ifdef CKV_ROUNDED_OUT
-    constexpr uint32_t cb_rounded = get_compile_time_arg_val(3);
+    constexpr uint32_t cb_rounded = get_compile_time_arg_val(2);
 #endif
 
     compute_kernel_hw_startup(cb_in, cb_out);
