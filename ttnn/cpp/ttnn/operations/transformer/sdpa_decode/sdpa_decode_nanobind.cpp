@@ -34,7 +34,7 @@ std::variant<ttnn::Tensor, std::tuple<ttnn::Tensor, ttnn::Tensor>> paged_flash_m
     std::optional<float> scale,
     std::optional<uint32_t> sliding_window_size,
     const std::optional<MemoryConfig>& memory_config,
-    std::optional<SDPAProgramConfig> program_config,
+    const std::optional<SDPAProgramConfig>& program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     bool return_lse) {
     if (return_lse) {
