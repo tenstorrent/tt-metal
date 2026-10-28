@@ -132,6 +132,9 @@ class RerankConfig:
     bf16_acc_kinds: str = "ff2,ff13s"
     # HiFi2 SDPA raised the MIRACL mean score error 0.23 -> 0.30 at no measurable speed gain.
     sdpa_fidelity: object = ttnn.MathFidelity.HiFi4
+    # SDPA q / k chunk sizes; 0 = the sdpa_chunks table.
+    sdpa_q_chunk: int = 0
+    sdpa_k_chunk: int = 0
     # Padding mask dtype. The mask holds only 0 and a large negative value, which bfp4 stores exactly;
     # SDPA reads it once per (head, q chunk, k chunk), so its size is SDPA's main data movement.
     mask_dtype: object = ttnn.bfloat4_b
@@ -152,6 +155,9 @@ class RerankConfig:
     # the stock add + rms_norm spread wider and win (1x512: 8.8 vs 9.7 ms; 1x2048: 33.4 vs 42.2 ms).
     # 8x512: 49.9 -> 50.9 % of SoL with the fused op; 32x512: 238 -> 226 ms.
     fuse_add_norm_min_rows: int = 4096
+    # Math fidelity of the fused add + RMSNorm's multiplies (x^2, x * inv, * gamma). HiFi2: op 561 -> 533 us
+    # but MIRACL Pearson 0.99951, at the 0.9995 gate; kept HiFi4.
+    add_norm_fidelity: object = ttnn.MathFidelity.HiFi4
     # dtype of the residual stream written by the fused add + RMSNorm.
     residual_dtype: object = ttnn.bfloat16
     # Fused path: keep the residual stream in L1 (one buffer, updated in place by the fused add + norm).

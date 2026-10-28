@@ -36,8 +36,10 @@ void kernel_main() {
         for (uint32_t j = 0; j < Wt; ++j) {
             noc.async_write(co, so, o_tile, {.offset_bytes = j * o_tile}, {.page_id = base + j});
         }
-        noc.async_write_barrier();
+        // Freeing the CBs only needs the data out of L1 (flush), not DRAM's acknowledgement.
+        noc.async_writes_flushed();
         cs.pop_front(Wt);
         co.pop_front(Wt);
     }
+    noc.async_write_barrier();
 }

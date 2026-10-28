@@ -109,10 +109,11 @@ cores than the next lets the idle cores start the next op's firmware early, so f
 and double count. The kernel-cycle totals match wall time at the measured clock (32x512: 187.8 M cycles
 in 140 ms = 1.34 GHz).
 
-The latency columns predate matmul_qkv_rope (they were not re-measured after it). With it, 32 x 512 is
-175.1 M kernel cycles (was 185.2 M). Per op (share of cycles, % of that op's compute speed of light):
-FF1+FF3 fused SwiGLU 45 % (84 %), residual add + RMSNorm 14 % (DRAM bound, ~364 GB/s), FF2 14 % (68 %),
-QKV + head split + RoPE 11 % (62 %), SDPA 8 % (58 %), WO 7 % (67 %).
+The latency columns predate matmul_qkv_rope and the bf16-accumulation configs (not re-measured). Now
+32 x 512 is 169.7 M kernel cycles = 65.7 % of speed of light (was 185.2 M). Per op (share of cycles, % of
+that op's compute speed of light): FF1+FF3 fused SwiGLU 46 % (85 %), residual add + RMSNorm 14 % (366 GB/s;
+plain streaming ops reach 417-437 GB/s, perf_tools/probe_dram_bw.py), FF2 12 % (78 %), QKV + head split +
+RoPE 11 % (65 %), SDPA 8 % (58 %), WO 7 % (70 %).
 
 ## What was done
 
@@ -146,7 +147,7 @@ stream (0.99944). No effect: raising the power limit (the card stays at 150 W).
 
 ## Open items toward 75 % of speed of light
 
-* 32x512 needs 26 M fewer cycles (175 -> 149 M). The matmuls and SDPA alone take ~147 M, so 75 % needs both
+* 32x512 needs 21 M fewer cycles (170 -> 149 M). The matmuls and SDPA alone take ~147 M, so 75 % needs both
   the residual add + RMSNorm (24 M) hidden inside the matmuls and every compute op near 80 % of its limit
   (FF1+FF3, the largest, is at 84 %; the plain matmul of that shape tops out near 86 %).
 * `tt/custom_ops/matmul_add_norm` fuses WO / FF2 with the residual add and RMSNorm (cores sharing rows exchange

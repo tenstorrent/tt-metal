@@ -124,6 +124,10 @@ class NemotronReranker:
                 ]
         return self._rot[seq_len]
 
+    def sdpa_chunks(self, B, S):
+        qc, kc = sdpa_chunks(B, S)
+        return min(S, self.cfg.sdpa_q_chunk or qc), min(S, self.cfg.sdpa_k_chunk or kc)
+
     @staticmethod
     def bucket(n):
         return next(b for b in SEQ_BUCKETS if b >= n)
@@ -138,7 +142,7 @@ class NemotronReranker:
         lens = [len(x) for x in batch_ids]
         S = seq_len or self.bucket(max(lens))
         B = len(batch_ids)
-        qc, kc = sdpa_chunks(B, S)
+        qc, kc = self.sdpa_chunks(B, S)
         tokens = torch.full((B, S), PAD_TOKEN_ID, dtype=torch.int32)
         valid = torch.zeros(B, 1, 32, S, dtype=torch.bfloat16)
         # (q chunk, k chunk) blocks: 0 = no real query row or no real key (skipped), 1 = partly padded keys,
@@ -275,6 +279,7 @@ class NemotronReranker:
                 delta,
                 consts,
                 out_dtype=out_dtype or self.cfg.norm_out_dtype,
+                fidelity=self.cfg.add_norm_fidelity,
                 sum_dtype=x.dtype,
                 memory_config=ttnn.L1_MEMORY_CONFIG,
                 out_memory_config=self._mem(rows, width),
@@ -287,6 +292,7 @@ class NemotronReranker:
             delta,
             consts,
             out_dtype=out_dtype or self.cfg.norm_out_dtype,
+            fidelity=self.cfg.add_norm_fidelity,
             sum_dtype=self.cfg.residual_dtype,
             memory_config=self._mem(rows, width),
         )
@@ -294,7 +300,7 @@ class NemotronReranker:
     def _attention(self, layer, xn, B, S, mask, block_map, rope):
         """xn: the attention-normed residual [1, 1, B * S, dim]."""
         cfg = self.cfg
-        qc, kc = sdpa_chunks(B, S)
+        qc, kc = self.sdpa_chunks(B, S)
         if cfg.fuse_qkv_rope:
             rows = B * S
             keys = [m for m in sorted(QKV_ROPE_CONFIGS) if m <= rows] or [min(QKV_ROPE_CONFIGS)]
