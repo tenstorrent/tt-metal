@@ -28,8 +28,7 @@ from callstack_provider import (
 )
 from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from run_checks import run as get_run_checks
-from rich.errors import MarkupError
-from rich.markup import escape, render
+from rich.markup import escape
 from ttexalens.hardware.risc_debug import RiscDebug
 from ttexalens.context import Context
 from ttexalens.tt_exalens_lib import read_word_from_device
@@ -249,16 +248,11 @@ def dump_lightweight_asserts(
                 for var in (*assert_frame.template_parameters, *assert_frame.arguments, *assert_frame.locals)
                 if var.name
             }
-            highlighted = re.sub(
-                r"\w+",
+            assert_code = re.sub(
+                r"(?<!\\)\b\w+",  # whole words that don't start with a backslash
                 lambda word: f"[info]{word.group()}[/]" if word.group() in names else word.group(),
                 escape(assert_code),  # so brackets in the source (buf[i]) are not read as Rich tags
             )
-            try:
-                render(highlighted)  # the parser console.print uses; broken markup would abort all of tt-triage
-                assert_code = highlighted
-            except MarkupError:
-                assert_code = escape(assert_code)  # print this ASSERT line uncolored instead
             if arguments_and_locals:
 
                 def _any_value_missing(vs: list[CallstackEntryVariable]) -> bool:
