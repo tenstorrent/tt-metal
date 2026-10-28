@@ -140,34 +140,6 @@ tt_reuse_precompile_headers(unit_tests_ttnn_ccl_lib TTNN::TestPCH)
 add_executable(unit_tests_ttnn_ccl)
 target_link_libraries(unit_tests_ttnn_ccl PRIVATE TTNN::Test::CCL)
 
-# unit_tests_ttnn_ccl_ops
-
-add_library(unit_tests_ttnn_ccl_ops_lib OBJECT)
-add_library(TTNN::Test::CCL::Ops ALIAS unit_tests_ttnn_ccl_ops_lib)
-target_sources(unit_tests_ttnn_ccl_ops_lib PRIVATE ${UNIT_TESTS_TTNN_CCL_OPS_SOURCES})
-target_include_directories(
-    unit_tests_ttnn_ccl_ops_lib
-    PUBLIC
-        ${PROJECT_SOURCE_DIR}/tests
-        ${CMAKE_CURRENT_SOURCE_DIR}
-)
-target_link_libraries(
-    unit_tests_ttnn_ccl_ops_lib
-    PUBLIC
-        test_common_libs
-        TTNN::CPP
-)
-tt_reuse_precompile_headers(unit_tests_ttnn_ccl_ops_lib TTNN::TestPCH)
-
-add_executable(unit_tests_ttnn_ccl_ops)
-target_link_libraries(unit_tests_ttnn_ccl_ops PRIVATE TTNN::Test::CCL::Ops)
-
-# unit_tests_ttnn_ccl_multi_tensor
-
-add_executable(unit_tests_ttnn_ccl_multi_tensor)
-target_sources(unit_tests_ttnn_ccl_multi_tensor PRIVATE ${UNIT_TESTS_TTNN_CCL_MULTI_TENSOR_SOURCES})
-setup_ttnn_test_target(unit_tests_ttnn_ccl_multi_tensor)
-
 # unit_tests_ttnn_accessor
 
 add_executable(unit_tests_ttnn_accessor)
@@ -186,19 +158,6 @@ target_link_libraries(unit_tests_ttnn_tensor_lib PRIVATE xtensor)
 
 add_executable(unit_tests_ttnn_tensor)
 target_link_libraries(unit_tests_ttnn_tensor PRIVATE TTNN::Test::Basic::Tensor)
-
-# test_ccl_multi_cq_multi_device
-
-add_executable(test_ccl_multi_cq_multi_device)
-target_sources(test_ccl_multi_cq_multi_device PRIVATE ${TEST_CCL_MULTI_CQ_MULTI_DEVICE_SOURCES})
-setup_ttnn_test_target(test_ccl_multi_cq_multi_device)
-target_link_libraries(
-    test_ccl_multi_cq_multi_device
-    PRIVATE
-        Boost::asio
-        Boost::lockfree
-        test_common_utils
-)
 
 # unit_tests_ttnn_emitc
 

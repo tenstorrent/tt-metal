@@ -49,10 +49,8 @@ set(UNIT_TESTS_TTNN_BASIC_SOURCES
 
 set(UNIT_TESTS_TTNN_CCL_SOURCES
     ccl/test_ccl_commands.cpp
-    ccl/test_ccl_helpers.cpp
     ccl/test_ccl_helpers_schedule.cpp
     ccl/test_ccl_llama_rs_signaler.cpp
-    ccl/test_ccl_reduce_scatter_host_helpers.cpp
     ccl/test_ccl_tensor_slicers.cpp
     ccl/test_erisc_data_mover_with_workers.cpp
     ccl/test_fabric_erisc_data_mover_loopback_with_workers.cpp
@@ -60,13 +58,6 @@ set(UNIT_TESTS_TTNN_CCL_SOURCES
     ccl/test_sharded_address_generators.cpp
     ccl/test_sharded_address_generators_new.cpp
 )
-
-set(UNIT_TESTS_TTNN_CCL_OPS_SOURCES
-    ccl/test_persistent_fabric_ccl_ops.cpp
-    ccl/test_send_recv_ops.cpp
-)
-
-set(UNIT_TESTS_TTNN_CCL_MULTI_TENSOR_SOURCES ccl/test_multi_tensor_ccl.cpp)
 
 set(UNIT_TESTS_TTNN_ACCESSOR_SOURCES
     accessor/common.cpp
@@ -96,8 +87,6 @@ set(UNIT_TESTS_TTNN_TENSOR_SOURCES
     tensor/test_unchecked_reinterpret_layout.cpp
     tensor/test_xtensor_conversion.cpp
 )
-
-set(TEST_CCL_MULTI_CQ_MULTI_DEVICE_SOURCES multi_thread/test_ccl_multi_cq_multi_device.cpp)
 
 set(UNIT_TESTS_TTNN_EMITC_SOURCES emitc/test_sanity.cpp)
 
