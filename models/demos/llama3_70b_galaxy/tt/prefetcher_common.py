@@ -146,10 +146,10 @@ class TtLlamaPrefetcherSetup(LightweightModule):
                 buffer_address=buffer_address,
                 config_address=config_address,
             )
-            # Decode traces are captured with these ranges reserved for the GCB.
-            # Reconstruction reserves the same ranges before other decode allocations.
-            # The tracker still flags the new buffer IDs while traces exist; it does
-            # not recognize that they restore the original GCB allocations.
+            # We know these wont be overwritten by trace, because the original
+            # allocation happens before any traces are captured, and the address
+            # is always occupied whenever the decode SubDeviceManager is loaded.
+            # The trace checker does not know we reuse the address.
             self.global_circular_buffer.acknowledge_corruptible()
 
     def release_global_cb(self):
