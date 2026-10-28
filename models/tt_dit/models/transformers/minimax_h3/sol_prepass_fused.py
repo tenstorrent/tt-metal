@@ -18,6 +18,7 @@ args on a program-cache hit).
 
 from __future__ import annotations
 
+import json
 import os
 import struct
 import time
@@ -40,6 +41,9 @@ from .sol_prepass import (
 
 KERNEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sol_kernels")
 TILE_BYTES = 2048
+# Defaults of the pooled all-gather configuration (see SolPrepassFused.__init__): overridden per instance / by env.
+DEFAULT_GATHER_KWARGS: dict = {"num_workers_per_link": 1}
+DEFAULT_GATHER_PERSISTENT = False
 L1_CB_BUDGET = 1_200_000  # circular-buffer bytes per core the route program may use (Blackhole L1 = 1.5 MB)
 SCRATCH_PAGES = 8
 
@@ -163,6 +167,8 @@ class SolPrepassFused:
         row_max: bool = False,
         units_per_shard: bool | None = None,
         mask_reuse: int = 1,
+        gather_kwargs: dict | None = None,
+        gather_persistent: bool = False,
     ):
         # "compact" consumes the gather-form block mask: same outputs as "gather".
         # emit_chunk_union=True additionally writes the (Q chunk x K chunk) union row as "chunk_union" (optional).
@@ -212,6 +218,17 @@ class SolPrepassFused:
         # N-1 calls, skipping the route program; the pool program and the two gathers still run every call because the
         # ring op's correction term needs the current block means. 1 (default) = route every call.
         self.mask_reuse = int(mask_reuse)
+        # Configuration of the two pooled all-gathers (ttnn.experimental.all_gather_async over the SP ring).
+        # gather_kwargs: extra keyword args for all_gather_async (num_links, num_workers_per_link,
+        # num_buffers_per_channel, chunks_per_sync, topology as "ring" | "linear", barrier False to skip the ring-wide
+        # barrier semaphore the manager adds before a non-persistent gather); SOL_AG_KW (a JSON dict) overrides.
+        # gather_persistent (SOL_AG_PERSISTENT=1): gather into the CCL manager's ping-pong buffers, no barrier
+        # semaphore and no per-call allocation; the caller must then not deallocate pooled_k / pooled_v.
+        # Empty / False = the manager's defaults (CCLManager.all_gather, use_hyperparams=False).
+        self.gather_kwargs = dict(DEFAULT_GATHER_KWARGS if gather_kwargs is None else gather_kwargs)
+        if os.environ.get("SOL_AG_KW"):
+            self.gather_kwargs.update(json.loads(os.environ["SOL_AG_KW"]))
+        self.gather_persistent = bool(gather_persistent or DEFAULT_GATHER_PERSISTENT)
         self._held_route: tuple | None = None  # (mask, bias, union) of the last routed call, while mask_reuse > 1
         self._reuse_left = 0  # calls the held route may still serve
         self.last_mask_reused = False  # whether the last call reused the held mask (diagnostics)
@@ -612,6 +629,30 @@ class SolPrepassFused:
         self.host_times["route"] = {"alloc": t1 - t0, "patch": t2 - t1, "launch": t3 - t2}
         return mask, (bias if self.emit_bias else None), (union if self.emit_chunk_union else None)
 
+    def _gather(self, t: ttnn.Tensor) -> ttnn.Tensor:
+        """All-gather a pooled [1, H, nb_pad, D] tensor along dim 2 over the SP axis with the configured arguments."""
+        ccl = self.ccl_manager
+        if not self.gather_kwargs and not self.gather_persistent:
+            return ccl.all_gather(t, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)
+        kw = dict(self.gather_kwargs)
+        topo = kw.pop("topology", None)
+        barrier = kw.pop("barrier", True) and not self.gather_persistent  # "barrier": False drops the ring-wide barrier
+        if isinstance(topo, str):
+            topo = {"ring": ttnn.Topology.Ring, "linear": ttnn.Topology.Linear}[topo.lower()]
+        return ttnn.experimental.all_gather_async(
+            t,
+            persistent_output_buffer=(
+                ccl.get_ag_ping_pong_buffer(t.shape, 2, self.sp_axis, dtype=t.get_dtype()) if self.gather_persistent else None
+            ),
+            dim=2,
+            multi_device_global_semaphore=ccl.get_ag_ping_pong_semaphore(self.sp_axis),
+            num_links=kw.pop("num_links", ccl.num_links),
+            topology=topo if topo is not None else ccl.topology,
+            cluster_axis=self.sp_axis,
+            barrier_semaphore=ccl.get_barrier_semaphore(self.sp_axis) if barrier else None,
+            **kw,
+        )
+
     # ------------------------------------------------------------------ forward
 
     def pool(self, q, k, v) -> dict:
@@ -639,8 +680,8 @@ class SolPrepassFused:
                 compute_kernel_config=self._row_max_ckc,
             )
         q_bar, kc_local, vc_local = self._run_pool(q, k, v)
-        kc = self.ccl_manager.all_gather(kc_local, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)
-        vc = self.ccl_manager.all_gather(vc_local, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)
+        kc = self._gather(kc_local)
+        vc = self._gather(vc_local)
         ttnn.deallocate(kc_local)
         ttnn.deallocate(vc_local)
         reuse = self.mask_reuse > 1 and self._held_route is not None and self._reuse_left > 0
