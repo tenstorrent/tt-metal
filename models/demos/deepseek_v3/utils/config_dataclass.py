@@ -135,7 +135,8 @@ class AllGatherAsyncConfig(OpConfigBase):
     cluster_axis: int | None = None
     mesh_device: ttnn._ttnn.multi_device.MeshDevice | None = None
     topology: ttnn._ttnn.operations.ccl.Topology | None = optimal_topology
-    multi_device_global_semaphore: ttnn._ttnn.operations.experimental.ccl_experimental.GlobalSemaphoreArg | None = None
+    # TODO(nuked-op all_gather_async): was ttnn.experimental's GlobalSemaphoreArg, bound by the removed op
+    multi_device_global_semaphore: Any | None = None
     persistent_output_tensor: ttnn._ttnn.tensor.Tensor | None = None
     num_links: int | None = 4
     memory_config: ttnn._ttnn.tensor.MemoryConfig | None = None
