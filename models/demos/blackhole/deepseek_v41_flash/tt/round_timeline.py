@@ -130,24 +130,48 @@ def _dump(tag, extra=None):
     print(f"ROUND_TL wrote {len(_REC)} rounds -> {path}", flush=True)
 
 
+def _rep(md, fn, nrep):
+    fn()
+    fn()
+    ttnn.synchronize_device(md)
+    t = pc()
+    for _ in range(nrep):
+        fn()
+    ttnn.synchronize_device(md)
+    return _ms(t) / nrep
+
+
 def _device_only(runners):
-    """Back-to-back replays of the traced round of every used runner, no host work in between (end of a pass; destroys the state)."""
+    """Back-to-back replays of the traced round of every used runner, no host work in between (end of a pass; destroys the state). The monolithic (greedy) trace, and when the runner has
+    the three traces of the sampled round: A (verify: embedding, 40 layers, head, hidden taps), S (sampler, with the params of the last round), B (accept, commit, drafter), alone and as A+S+B."""
     res = {}
     nrep = int(os.environ.get("DSV41_ROUND_TL_NREP", "40"))
     for r in runners:
         P = getattr(r, "_tl_last_bucket", "none")
         if P == "none" or r.tr.get(P) is None or r.tr[P].get("tid") is None:
             continue
-        tid = r.tr[P]["tid"]
-        ttnn.synchronize_device(r.md)
-        for _ in range(3):
-            ttnn.execute_trace(r.md, tid, cq_id=0, blocking=False)
-        ttnn.synchronize_device(r.md)
-        t = pc()
-        for _ in range(nrep):
-            ttnn.execute_trace(r.md, tid, cq_id=0, blocking=False)
-        ttnn.synchronize_device(r.md)
-        res[f"k{r.k}" + ("" if r.draft else "_nodraft")] = {"ms": _ms(t) / nrep, "bucket": P, "nrep": nrep}
+        t = r.tr[P]
+        md = r.md
+        ex = lambda tid: ttnn.execute_trace(md, tid, cq_id=0, blocking=False)
+        d = {"bucket": P, "nrep": nrep, "mono_ms": _rep(md, lambda: ex(t["tid"]), nrep)}
+        if r.sampled and t.get("tid_a") is not None:
+            d["A_verify_ms"] = _rep(md, lambda: ex(t["tid_a"]), nrep)
+            from models.demos.blackhole.deepseek_v41_flash.tt.device_sampler import sampling_rows
+
+            Bn = r.B * r.n
+            for tag, (tt_, kk_, pp_) in {"greedy": (0.0, 0, 1.0), "sampled": (1.0, 0, 0.95)}.items():
+                r.samp.set_params(*sampling_rows([tt_] * Bn, [kk_] * Bn, [pp_] * Bn, torch.Generator().manual_seed(1), Bn))
+                d[f"S_{tag}_ms"] = _rep(md, lambda: t["tid_s"].replay(), nrep)
+            d["B_tail_ms"] = _rep(md, lambda: ex(t["tid_b"]), nrep)
+
+            def asb():
+                ex(t["tid_a"])
+                t["tid_s"].replay()
+                ex(t["tid_b"])
+
+            d["ASB_ms"] = _rep(md, asb, nrep)
+            d["sampler_fast"] = bool(getattr(r.samp, "fast", False))
+        res[f"k{r.k}" + ("" if r.draft else "_nodraft")] = d
     return res
 
 
@@ -164,6 +188,8 @@ def install():
     SR, AD = sm.SpecRunner, sm.AdaptiveSpec
     prof_on = os.environ.get("DSV41_ROUND_TL_PROF") == "1"
     prof_at = int(os.environ.get("DSV41_ROUND_TL_PROF_AT", "12"))
+    sample_win = int(os.environ.get("DSV41_ROUND_TL_SAMPLE_WIN", "0"))
+    _STATE["gen"] = torch.Generator().manual_seed(1234)
 
     # ---- named phase timers (accumulate into the round in flight) ----
     for cls, attr, name in (
@@ -171,6 +197,7 @@ def install():
         (SR, "_use", "use"),
         (SR, "_feed", "feed"),
         (SR, "_readback", "readback"),
+        (SR, "_set_sample_params", "samp_params"),
         (SpecDecoder, "set_force", "force"),
         (DSV41Decoder, "prepare_packed_inputs", "pack_prep"),
         (DSV41Decoder, "upload_packed_inputs", "upload"),
@@ -221,7 +248,17 @@ def install():
         if do_prof:
             ttnn.synchronize_device(self.md)
             ttnn.ReadDeviceProfiler(self.md)
-        cur = {"k": self.k, "n": self.n, "T": self.T, "B": self.B, "draft": self.draft, "calib": _STATE["calib"], "t0": t0}
+        smode = "g"
+        if sample_win and not _STATE["calib"] and self.samp is not None:
+            # greedy rows for sample_win rounds, then sampled rows (DSV41_ROUND_TL_SAMPLE=T:top_k:top_p) for sample_win rounds, alternating (same stream, same process)
+            smode = "s" if (_STATE["nr_pass"] // sample_win) % 2 else "g"
+            if smode == "s":
+                t_, k_, p_ = os.environ.get("DSV41_ROUND_TL_SAMPLE", "1.0:0:0.95").split(":")
+                self.sample_cfg = dict(temperature=float(t_), top_k=int(k_), top_p=float(p_), gens=_STATE["gen"])
+            else:
+                self.sample_cfg = None
+            _STATE["nr_pass"] += 1
+        cur = {"k": self.k, "n": self.n, "T": self.T, "B": self.B, "draft": self.draft, "calib": _STATE["calib"], "t0": t0, "rows": smode}
         _CUR[0] = cur
         try:
             out = orig_round(self, X, base, force)
@@ -253,7 +290,9 @@ def install():
             _STATE["pass"] += 1
             _STATE["last_end"], _STATE["nround"] = None, {}
             _REC.clear()
-            _STATE["label"] = f"{cls.__name__} B={getattr(self, 'B', '?')} policy={k.get('policy') or getattr(self, 'policy', '-')}"
+            _STATE["mode"] = "gs" if os.environ.get("DSV41_ROUND_TL_SAMPLE_WIN") else "g"
+            _STATE["label"] = f"{cls.__name__} B={getattr(self, 'B', '?')} policy={k.get('policy') or getattr(self, 'policy', '-')} sample_win={os.environ.get('DSV41_ROUND_TL_SAMPLE_WIN', '-')}"
+            _STATE["nr_pass"] = 0
             try:
                 return orig(self, X, base, max_new, *a, **k)
             finally:
@@ -262,7 +301,7 @@ def install():
                     extra["dev_only"] = _device_only(runners_of(self))
                 except Exception as e:  # noqa: BLE001 (instrumentation must never break the run)
                     extra["dev_only_error"] = repr(e)
-                _dump(f"p{getattr(self, 'policy', 'x')}", extra)
+                _dump(f"{getattr(self, 'policy', 'x')}_{_STATE['mode']}", extra)
 
         cls.run = run
 
