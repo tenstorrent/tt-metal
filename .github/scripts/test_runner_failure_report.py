@@ -1,7 +1,15 @@
 from datetime import datetime, timezone
+import subprocess
 
-from runner_failure_common import JobScanResult, job_from_dict
-from runner_failure_report import LiveGithubPopulationMetrics, build_runner_markdown_report, runner_report_results
+import pytest
+
+from runner_failure_common import JobScanResult, job_from_dict, scan_job
+from runner_failure_report import (
+    LiveGithubPopulationMetrics,
+    build_runner_markdown_report,
+    recent_job_from_runner_api_row,
+    runner_report_results,
+)
 
 
 def test_runner_report_preserves_triggering_disconnect_without_logs(monkeypatch) -> None:
@@ -50,3 +58,44 @@ def test_runner_report_shows_leftover_process_in_table_and_summary() -> None:
 
     assert "- Failure summary: `1x Leftover process`" in report
     assert "| Leftover process |" in report
+
+
+@pytest.mark.parametrize(
+    ("status", "success", "expected"),
+    [
+        ("FAILED", False, True),
+        ("failure", False, True),
+        ("timed_out", False, True),
+        ("timed out", False, True),
+        ("Completed", False, True),
+        ("", False, True),
+        ("success", True, False),
+        ("cancelled", False, False),
+        ("canceled", False, False),
+        ("skipped", False, False),
+        ("in_progress", False, False),
+    ],
+)
+def test_runner_api_status_allows_leftover_process_only_for_failed_jobs(monkeypatch, status, success, expected) -> None:
+    def download(command, **kwargs):
+        kwargs["stdout"].write(
+            b"Waiting for KMD lock 20 on /dev/tenstorrent/16, which is currently held by another handle\n"
+        )
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr("runner_failure_common.subprocess.run", download)
+    monkeypatch.setattr("runner_failure_common.gh_api_json", lambda *_args, **_kwargs: {})
+    job = recent_job_from_runner_api_row(
+        {
+            "GITHUB_JOB_LINK": "https://github.com/tenstorrent/tt-metal/actions/runs/1/job/2",
+            "JOB_STATUS": status,
+            "JOB_SUCCESS": success,
+        },
+        fallback_runner_name="runner",
+        fallback_owner_repo="tenstorrent/tt-metal",
+    )
+
+    result = scan_job(job, timeout=120)
+
+    assert job.status == ("in_progress" if status == "in_progress" else "completed")
+    assert ("Leftover process" in result.signature_labels) is expected

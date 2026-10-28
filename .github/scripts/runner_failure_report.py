@@ -520,6 +520,10 @@ def normalize_conclusion(row: dict[str, Any]) -> str:
     if explicit_conclusion:
         return explicit_conclusion
 
+    status = clean_string(row_value(row, "JOB_STATUS", "status", "job_status")).lower()
+    if status in {"cancelled", "canceled", "skipped", "timed_out", "timed out"}:
+        return {"canceled": "cancelled", "timed out": "timed_out"}.get(status, status)
+
     job_success = row_value(row, "JOB_SUCCESS", "job_success", "success")
     if job_success is not None:
         if isinstance(job_success, bool):
@@ -530,7 +534,6 @@ def normalize_conclusion(row: dict[str, Any]) -> str:
         if normalized in {"0", "false", "f", "no", "n"}:
             return "failure"
 
-    status = clean_string(row_value(row, "JOB_STATUS", "status", "job_status")).lower()
     if status in {
         "success",
         "failure",
@@ -588,6 +591,10 @@ def recent_job_from_runner_api_row(
     )
     workflow_id = clean_string(row_value(row, "WORKFLOW_ID", "workflow_id"))
     job_name = clean_string(row_value(row, "JOB_NAME", "NAME", "job_name", "name"))
+    conclusion = normalize_conclusion(row)
+    status = clean_string(row_value(row, "STATUS", "JOB_STATUS", "status", "job_status")).lower()
+    if status in {"success", "failure", "failed", "cancelled", "canceled", "skipped", "timed_out", "timed out"}:
+        status = "completed"
 
     return RecentJob(
         owner_repo=owner_repo,
@@ -600,9 +607,8 @@ def recent_job_from_runner_api_row(
         name=job_name,
         runner_name=clean_string(row_value(row, "RUNNER", "RUNNER_NAME", "runner", "runner_name", "HOST_NAME"))
         or fallback_runner_name,
-        status=clean_string(row_value(row, "STATUS", "JOB_STATUS", "status", "job_status"))
-        or ("completed" if normalize_conclusion(row) else ""),
-        conclusion=normalize_conclusion(row),
+        status=status or ("completed" if conclusion else ""),
+        conclusion=conclusion,
         html_url=html_url,
         started_at=normalize_timestamp(row_value(row, "JOB_START_TS", "STARTED_AT", "started_at", "start_time")),
         completed_at=normalize_timestamp(row_value(row, "JOB_END_TS", "COMPLETED_AT", "completed_at", "end_time")),
