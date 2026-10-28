@@ -27,5 +27,5 @@ typedef struct __attribute__((aligned(X280_HART_RECORD_STRIDE))) {
 
 typedef struct __attribute__((aligned(X280_HART_RECORD_STRIDE))) {
     TableHeader header;
-    TableRow rows[64];
+    TableRow rows[128];
 } TelemetryTable;

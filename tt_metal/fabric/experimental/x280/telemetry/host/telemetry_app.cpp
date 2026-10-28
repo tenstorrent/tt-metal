@@ -43,7 +43,7 @@ bool get_telemetry_table(const std::shared_ptr<tt::tt_metal::distributed::MeshDe
 
     TelemetryTable table;
     std::memcpy(&table, bytes.data(), sizeof(table));
-    std::cout << "Version: " << std::hex << table.header.table_version << "\n";
+    std::cout << "Version: " << std::hex << "0x" << table.header.table_version << "\n";
     std::cout << "Num rows: " << table.header.num_rows << "\n";
     std::cout << std::left;
     for (int i = 0; i < table.header.num_rows; ++i) {
@@ -53,7 +53,7 @@ bool get_telemetry_table(const std::shared_ptr<tt::tt_metal::distributed::MeshDe
             std::cout << std::setw(64) << table.rows[i].str_data << " | ";
         } else {
             std::cout << " number | ";
-            std::cout << std::setw(64) << table.rows[i].num_data << " | ";
+            std::cout << "0x" << std::setw(62) << table.rows[i].num_data << " | ";
         }
         std::cout << "\n";
     }
