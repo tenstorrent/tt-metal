@@ -1913,7 +1913,9 @@ struct SfpuConfig {
     bool unpack_to_dest =
         false;  // route input DFB to Dest (unpack_modes=UnpackToDest); pair with en_32bit_dest for 32-bit Dest
     bool en_32bit_dest = false;
-    size_t out_dfb_entries = 0;  // 0 = num_tiles; fewer entries make the packer wait on the writer (pack back-pressure)
+    // 0 = num_output_tiles if set, else num_tiles; fewer entries make the packer wait on the writer (pack
+    // back-pressure)
+    size_t out_dfb_entries = 0;
     // DEST placement (unary path of eltwise_sfpu_2_0.cpp). dst_tile_start: DEST index the tile(s) land at and are
     // packed back from. section_ntiles > 0: one DEST section of that many tiles per tile_regs_acquire instead of one
     // tile, placed with one copy_block, or with one copy_tile per tile when section_use_copy_tile is set. Section
@@ -1955,6 +1957,7 @@ experimental::KernelSpec::CompilerOptions::Defines to_kernel_defines(const std::
 /// data-conversion ops like typecast (in != out, differing tile widths) share one harness. Cross-arch:
 /// keeps the Gen1+Gen2 data-movement config and the MeshWorkload dispatch path. Callers supply the
 /// compute `defines` (op selection / chain) and the packed SRC bytes, and verify the returned DST bytes.
+/// `compute_kernel` swaps in another compute kernel, and `num_output_tiles` sets how many tiles it writes.
 std::vector<uint32_t> run_sfpu_pipeline(
     distributed::MeshDevice& mesh_device,
     const SfpuConfig& test_config,
@@ -2536,24 +2539,27 @@ bool run_sfpu_ema(distributed::MeshDevice& mesh_device, const SfpuConfig& test_c
 // the shifted two-pass kernels.
 bool run_sfpu_welford(distributed::MeshDevice& mesh_device, SfpuConfig test_config) {
     const size_t num_tiles = test_config.num_tiles;
-    const size_t numel = num_tiles * 1024;
-    // Offset from zero, so a shift-free sum of squares would lose the variance to cancellation.
+    using tt::constants::TILE_HEIGHT;
+    using tt::constants::TILE_HW;
+    using tt::constants::TILE_WIDTH;
+    const size_t numel = num_tiles * TILE_HW;
+    // Non-zero mean, so the anchor add-back and the running mean are exercised away from zero.
     const auto packed_input =
         generate_packed_uniform_random_vector<uint32_t, bfloat16>(6.0f, 10.0f, numel, sfpu_test_seed);
     const auto input = unpack_vector<bfloat16, uint32_t>(packed_input);
 
-    std::array<double, 32> mean{};
-    std::array<double, 32> variance{};
-    const double rows = 32.0 * num_tiles;
-    for (size_t col = 0; col < 32; ++col) {
-        for (size_t base = 0; base < numel; base += 1024) {
-            for (size_t row = 0; row < 32; ++row) {
+    std::array<double, TILE_WIDTH> mean{};
+    std::array<double, TILE_WIDTH> variance{};
+    const double rows = static_cast<double>(TILE_HEIGHT * num_tiles);
+    for (size_t col = 0; col < TILE_WIDTH; ++col) {
+        for (size_t base = 0; base < numel; base += TILE_HW) {
+            for (size_t row = 0; row < TILE_HEIGHT; ++row) {
                 mean[col] += static_cast<float>(input[base + sfpu_util::tile_order_index(row, col)]);
             }
         }
         mean[col] /= rows;
-        for (size_t base = 0; base < numel; base += 1024) {
-            for (size_t row = 0; row < 32; ++row) {
+        for (size_t base = 0; base < numel; base += TILE_HW) {
+            for (size_t row = 0; row < TILE_HEIGHT; ++row) {
                 const double d = static_cast<float>(input[base + sfpu_util::tile_order_index(row, col)]) - mean[col];
                 variance[col] += d * d;
             }
@@ -2574,11 +2580,11 @@ bool run_sfpu_welford(distributed::MeshDevice& mesh_device, SfpuConfig test_conf
 
     // Only row 0 of each output tile is written.
     bool ok = true;
-    for (size_t col = 0; col < 32; ++col) {
-        const float got_mean = static_cast<float>(out[sfpu_util::tile_order_index(0, col)]);
-        const float got_variance = static_cast<float>(out[1024 + sfpu_util::tile_order_index(0, col)]);
-        if (!is_close(got_mean, static_cast<float>(mean[col]), 0.01f, 0.01f) ||
-            !is_close(got_variance, static_cast<float>(variance[col]), 0.02f, 0.01f)) {
+    for (size_t col = 0; col < TILE_WIDTH; ++col) {
+        const float got_mean = static_cast<float>(out[sfpu_util::tile_order_index(0 /*row*/, col)]);
+        const float got_variance = static_cast<float>(out[TILE_HW + sfpu_util::tile_order_index(0 /*row*/, col)]);
+        if (!is_close(got_mean, static_cast<float>(mean[col]), 0.01f /*rtol*/, 0.01f /*atol*/) ||
+            !is_close(got_variance, static_cast<float>(variance[col]), 0.02f /*rtol*/, 0.01f /*atol*/)) {
             log_error(
                 tt::LogTest,
                 "{}: column {} mean {} (expected {}), variance {} (expected {})",
