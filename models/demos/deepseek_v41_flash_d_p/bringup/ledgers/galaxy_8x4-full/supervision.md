@@ -731,3 +731,17 @@ Open for the owner: dlukic / node access; push; the in-RAM engram slowdown in th
 - 19:25 OWNER: work autonomously; PUSH after each major milestone (Paris pass, profile published, P.6 accepted, each fix
   job) together with a hand-off-quality entry here, in case something interrupts. Replaces "push only on my word" for
   this branch and this plan.
+
+## 2026-10-28 19:35 MILESTONE + HAND-OFF: the 2x2 engram commits pass on the Galaxy (rows), the in-RAM tables do not
+- L.s56320 PASS (16:50, 582 s) and K.1 runner smoke = Paris through tt-d-gen PASS (19:12, 968 s) with ENGRAM_ROWS=bfp8,
+  tables read from disk (DS41_ENGRAM_TABLE=random). The bfp8 rows are correct end to end at full size.
+- ENGRAM_TABLE=resident (the default outside pytest) breaks the runner on this host: the 18:39 run (dlukic NOT on the
+  device) ran ~2 min a layer in the first forward (py-spy: torch.cat in se_engine3 upload, ~59 cores user; 496 GB read
+  from disk; swap full; THP compact_stall 611k) and was stopped at 19:11; the 17:00 run (same pattern) died SIGBUS -
+  dlukic's 17:38 job may not have been its cause after all. The Galaxy spec's owner rules still say "never hold the
+  203 GB of tables in host RAM" / "Host RAM is shared (503 GB)": for the owner (wording vs the owner's RAM decision).
+- QUEUED FIX.10 (gate L.s56320 + K.1): make resident coexist with the full model on this host (root cause by
+  measurement, fix at the cause, rows bit-identical). Runs NOW (orchestrator --until FIX.10). Plan after it: the resident
+  5-position profile (posprof/series_engram.sh) -> P.6 (bar = the profile's position-0 wall) -> FIX.9 -> P.4 / P.5 ->
+  index query fp4; FIX.8 (2x2's 4-bit KV, branch dnijemcevic/model_bringup_bfp4kv) jumps in when ready.
+- Launcher: /scratch/dnijemcevic/run_ds41_chain2.sh (copy in overseer_tools/).

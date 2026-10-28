@@ -397,6 +397,31 @@ fixes:
   - models/demos/moe_block
   - models/demos/deepseek_v41_flash_d_p
   - ttnn/ttnn/bringup
+- id: FIX.10
+  title: 'ENGRAM_TABLE=resident must coexist with the full model on the Galaxy host (runner thrashes: ~2 min a layer, SIGBUS)'
+  gate:
+  - L.s56320
+  - K.1
+  status: queued
+  t: '2026-10-28T19:29:49'
+  text: 'OWNER 2026-10-28 (the engram tables in host RAM are the owner''s choice for the Galaxy; the engram code is the
+    Galaxy''s for this and P.6). Evidence: K.1 runner smoke with the default ENGRAM_TABLE=resident (the runner, runner_case.py,
+    is not under pytest, so it builds both tables, 209 GB anonymous, MADV_HUGEPAGE) ran ~2 min a layer in the first forward
+    and died SIGBUS once (17:00 run) / was stopped at layer ~15 (18:39 run). py-spy: main thread in torch.cat inside moe_block/tt/se_engine3.py:1604-1607
+    upload -> flat_expert.py:316 _bank_sharded (the fused head''s per-layer weight upload, lazy at first use), ~59 cores
+    of user time; the process read 496 GB from disk in 30 min; RSS 218 GB; swap 7.8 of 8 GB full; /proc/vmstat compact_stall
+    611k, compact_fail 549k, thp_fault_fallback 147k. Host: 566 GB RAM, tt_cache 285 GB, checkpoint 476 GB. The same smoke
+    with DS41_ENGRAM_TABLE=random PASSES in 968 s (19:12 run), FIX.7''s in ~6 min of runner time. Find the cause (page-cache
+    eviction of the weight cache while it streams, THP compaction from MADV_HUGEPAGE on 209 GB, thread oversubscription
+    between numba''s pool, torch''s OpenMP and the gather pools, or swap) with measurements, and fix it at the cause so
+    that resident mode costs no load or serving time on this host: e.g. build the tables after the weights are on the device,
+    release host copies the model no longer needs, no MADV_HUGEPAGE if compaction is the cost, cap or release numba / gather
+    threads after the build. Rows stay bit-identical (tests/test_engram_bfp8.py, tests/test_engram_table_modes.py). Report:
+    model load time and K.1 runner smoke time, resident vs random; peak RSS, disk read, swap. Note: the Galaxy spec''s owner
+    rules still say ''never hold the 203 GB of tables in host RAM'' and ''Host RAM is shared (503 GB)'': the overseer raises
+    the spec wording with the owner; do not edit the spec.'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
 classified:
   L.smoke:
     kind: framework
