@@ -22,6 +22,14 @@ also carries the DRAM a chip (allocated and free) after the model, the decoder a
 ``V41_VR_FUSED=1`` (default): the drafter runs inside the verify step's capture on every accept outcome (one
 replay and one readback a round; the first round's drafts come from one standalone draft call after the join);
 ``0``: a standalone (traced) draft call before every verify step, the taps selected from the step's tile.
+``V41_VR_LIVE=n`` (default 1; first c32 measurement): ``n`` live slots in lockstep, all
+joined from the one prefill (the same prompt, so one standalone draft call's drafts serve every slot and every slot
+accepts the same count), ``n / sp`` a mesh row at user indices ``0, 1 + Kmax, 2 (1 + Kmax), ..`` so that a slot's
+``1 + K`` rows (``u .. u + K``) are its own within the rank's ``V41_VR_USERS`` real rows (the 32-row MoE dispatches
+the users' rows only: ``V41_VR_USERS`` must be at least ``n / sp x (1 + Kmax)``, and the pool's capacity sized so
+that ``V41_VR_USERS x sp`` slots fit); the drafter is not in the step's graph (``V41_VR_FUSED=0`` is forced: the
+fused call takes one live slot a rank). The round's wall and device time are the step's over all the slots; the
+tokens a round are one slot's.
 """
 
 import json
@@ -73,12 +81,17 @@ def test_v41_verify_rows(mesh_device, device_params):
     ks = [int(k) for k in os.environ.get("V41_VR_KS", "1,2,3").split(",") if k]
     warmup = int(os.environ.get("V41_VR_WARMUP", 2))
     fused = os.environ.get("V41_VR_FUSED", "1") == "1"
+    live = int(os.environ.get("V41_VR_LIVE", 1))
+    if live > 1:
+        fused = False
     ckpt = resolve_checkpoint()
     if ckpt is None:
         pytest.skip("V4.1 checkpoint shards not downloaded")
     from transformers import AutoTokenizer
 
     sp, tp = tuple(mesh_device.shape)
+    assert live == 1 or (live % sp == 0 and (live // sp) * (1 + max(ks)) <= users), (live, sp, ks, users)
+    slots = [r * users + u * (1 + max(ks)) for r in range(sp) for u in range(live // sp)] if live > 1 else [0]
     max_seq = -(-(prompt_len + n_tokens + max(ks) + 2) // chunk) * chunk  # the prefill state's capacity
     assert cap % chunk == 0 and cap >= max_seq, (cap, chunk, max_seq)
     tokenizer = AutoTokenizer.from_pretrained(orc.HF_SNAPSHOT)
@@ -100,6 +113,7 @@ def test_v41_verify_rows(mesh_device, device_params):
         "capacity": cap,
         "chunk": chunk,
         "users_per_rank": users,
+        "live_slots": slots,
         "prompt": prompt_len,
         "tokens": n_tokens,
         "ks": ks,
@@ -153,6 +167,18 @@ def test_v41_verify_rows(mesh_device, device_params):
     )
     if fused:
         decoder.attach_drafter(drafter)
+    elif live > 1:
+        # the merged index selection's index pages for the live rows' layouts (attach_drafter builds the one-slot ones)
+        decoder.prepare_merge(
+            [
+                tuple(
+                    row
+                    for u in range(live // sp)
+                    for row in decoder.block_rows(u * (1 + max(ks)), k, one_slot=False)
+                )
+                for k in [0] + ks
+            ]
+        )
     record["drafter_build_s"] = round(time.time() - t0, 1)
     record["drafter_build_detail_s"] = drafter.build_s
     record["dram_after_drafter"] = _dram(mesh_device)
@@ -180,8 +206,16 @@ def test_v41_verify_rows(mesh_device, device_params):
         decoder.on_block = lambda layer, x: streams.__setitem__(layer, x) if layer in stream_layers else None
 
     def rejoin():
-        decoder.join(0, prompt, state)
+        for slot in slots:
+            decoder.join(slot, prompt, state)
         drafter.load_rings_from_device(state.dspark_rings, start=prompt_len)
+
+    def step(block):
+        """The step over every live slot with the same block -> slot 0's argmaxes (every slot's must be the same:
+        the slots are in lockstep on one prompt)."""
+        out = decoder.decode({slot: list(block) for slot in slots})
+        assert all(out[slot] == out[0] for slot in slots), {slot: out[slot] for slot in slots}
+        return out[0]
 
     # --- plain: one row a step ---
     rejoin()
@@ -189,10 +223,11 @@ def test_v41_verify_rows(mesh_device, device_params):
     tok = first
     for i in range(n_tokens):
         t0 = time.time()
-        out = decoder.decode({0: [tok]})
+        out = step([tok])
         wall = time.time() - t0
-        decoder.commit(0, 0)
-        tok = out[0][0]
+        for slot in slots:
+            decoder.commit(slot, 0)
+        tok = out[0]
         plain.append(tok)
         entry = {"i": i, "wall_s": round(wall, 4), **{k: v for k, v in decoder.last.items() if k != "items"}}
         plain_steps.append(entry)
@@ -246,10 +281,11 @@ def test_v41_verify_rows(mesh_device, device_params):
                 t2 = time.time()
                 t3 = time.time()
             block = [tok] + drafts
-            argmax = decoder.decode({0: block})[0]
+            argmax = step(block)
             t4 = time.time()
             a, emitted = decoder.accept(block, argmax)
-            decoder.commit(0, a)
+            for slot in slots:
+                decoder.commit(slot, a)
             committed += emitted
             tok = emitted[-1]
             tap, tap_row = True, decoder.rows[0][a]
