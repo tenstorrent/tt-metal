@@ -303,7 +303,9 @@ On code commit `9adacfe162`, default construction path, `e6/scripts/trace_robust
 
 - `bf16w_hifi2`: the 1x2048 forward hangs after a few hundred iterations, traced or eager
   (classification above). Not root-caused; in one run the firmware mailboxes of six worker cores
-  held float-looking words **[M]**, which suggests a stray NoC write into worker L1 **[I]**.
+  held float-looking words **[M]**, which suggests a stray NoC write into worker L1 **[I]**; with
+  the watcher on, 1500 single-trace replays complete with 0 watcher errors **[M]** (timing
+  dependent, so a race in the op is as likely **[I]**).
   bf16 weights are slower than bfp8 on every measured shape, so this does not affect selection;
   the vision tower (bf16 weights, E5b) is a place to check in E6b.
 - 1x8192 burst of the baseline is 109.7 ms when it is the first candidate of a sweep process and

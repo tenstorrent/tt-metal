@@ -165,8 +165,12 @@ compute kernel stalls on every core of the op (unpacker waiting for a context, p
 worker cores held float-looking words **[M]**, which points at a stray NoC write of tensor data
 into worker L1 rather than a kernel deadlock **[I]**. Why bf16 weights trigger it is not known
 **[I: bf16 projection weights change L1 / DRAM allocation and matmul program configs upstream;
-the norm has the same shape and dtype in both policies]**; the next step would be a watcher run
-(`TT_METAL_WATCHER`, NoC sanitization) of `bf16w_repro.py ... eager 1500`. The selected and
+the norm has the same shape and dtype in both policies]**. With the watcher on
+(`TT_METAL_WATCHER=10`, NoC sanitization; `scripts/bf16w_watcher.sh`, `logs/r_bf16w_watcher.log`)
+the single-trace repro completes all 1500 replays with 0 error lines in `watcher_bf16w/.../watcher.log`
+**[M]**: the hang does not reproduce under the watcher's timing, and the sanitizer flags no
+out-of-range NoC access in that run. Timing-dependent, so a race in the op is as likely as a stray
+write **[I]**; not pursued further (bf16w is not a selection candidate). The selected and
 earlier bfp8 configs ran 2000+ replays at 1x2048 without a hang (`selected_soak_1x2048.log`,
 soak below). Each hang: tt-triage, kill, `tt-smi -r`, device listed OK.
 
