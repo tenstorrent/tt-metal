@@ -25,8 +25,6 @@
 // face 0, rows 16..31 face 1) and the instruction reads the one SrcB row its counter selects and repeats it down all
 // 8 rows. So SrcB stays on row 0 through face 0, moves to row 16 (face 1's row 0) for face 1, and back to row 0 and
 // 16 for faces 2 and 3. The last instruction of the tile releases both Src banks to the unpackers.
-//
-// Not HAL yet: the Dest buffer base (get_dest_buffer_base, cmath_common.h).
 
 #pragma once
 
@@ -63,7 +61,7 @@ struct eltwise_binary_params
 };
 
 /// The operand of a Plan that the unpackers write to `where`.
-constexpr const UnpackPlan& operand_in(const Plan& p, Where where)
+constexpr const UnpackPlan& eltwise_binary_operand_in(const Plan& p, Where where)
 {
     return p.in0.to == where ? p.in0 : p.in1;
 }
@@ -77,10 +75,10 @@ constexpr eltwise_binary_params eltwise_binary_params_from(const Plan& p)
         p.work.rt_dim,
         p.work.ct_dim,
         static_cast<BinaryFunction>(p.math.function),
-        operand_in(p, Where::SrcB).broadcast,
+        eltwise_binary_operand_in(p, Where::SrcB).broadcast,
         p.math.dest_fp32,
-        operand_in(p, Where::SrcA).writes,
-        operand_in(p, Where::SrcB).writes,
+        eltwise_binary_operand_in(p, Where::SrcA).writes,
+        eltwise_binary_operand_in(p, Where::SrcB).writes,
     };
 }
 
@@ -96,13 +94,13 @@ constexpr std::uint32_t elw_dest_rows_per_tile(const eltwise_binary_params& p)
 }
 
 /// The FPU instruction for a BinaryFunction: ELWADD or ELWSUB.
-constexpr hal::fpu::ElementwiseOperation fpu_operation(BinaryFunction f)
+constexpr hal::fpu::ElementwiseOperation elw_fpu_operation(BinaryFunction f)
 {
     return f == BinaryFunction::Sub ? hal::fpu::ElementwiseOperation::Subtract : hal::fpu::ElementwiseOperation::Add;
 }
 
 /// The FPU's SrcB broadcast for an operand's Broadcast.
-constexpr hal::fpu::SrcBBroadcast fpu_broadcast(Broadcast b)
+constexpr hal::fpu::SrcBBroadcast elw_fpu_broadcast(Broadcast b)
 {
     return b == Broadcast::Row ? hal::fpu::SrcBBroadcast::Row : hal::fpu::SrcBBroadcast::None;
 }
@@ -115,11 +113,11 @@ inline constexpr std::uint8_t elw_done     = 3;
 
 /// One ELWADD or ELWSUB of P, then the counters move by address modifier AddrMod.
 template <eltwise_binary_params P, std::uint8_t AddrMod, hal::fpu::SourceRelease Release = hal::fpu::SourceRelease::None>
-inline __attribute__((always_inline)) void elementwise()
+inline __attribute__((always_inline)) void elw_instruction()
 {
     hal::fpu::run<hal::fpu::Elementwise {
-        .operation        = fpu_operation(P.function),
-        .broadcast        = fpu_broadcast(P.broadcast),
+        .operation        = elw_fpu_operation(P.function),
+        .broadcast        = elw_fpu_broadcast(P.broadcast),
         .dest_write       = hal::fpu::DestWriteMode::Overwrite, // Dest = SrcA op SrcB, not +=
         .address_modifier = AddrMod,
         .dest_row_offset  = 0, // the row comes from DEST_TARGET_REG_CFG_MATH_Offset and the Dest counter
@@ -163,14 +161,14 @@ inline __attribute__((always_inline)) void eltwise_binary_configure()
     hal::replay::record<tile_replay>(
         []
         {
-            elementwise<P, elw_rows>();
-            elementwise<P, elw_face_col>();
-            elementwise<P, elw_rows>();
-            elementwise<P, elw_face_row>();
-            elementwise<P, elw_rows>();
-            elementwise<P, elw_face_col>();
-            elementwise<P, elw_rows>();
-            elementwise<P, elw_done, hal::fpu::SourceRelease::Both>();
+            elw_instruction<P, elw_rows>();
+            elw_instruction<P, elw_face_col>();
+            elw_instruction<P, elw_rows>();
+            elw_instruction<P, elw_face_row>();
+            elw_instruction<P, elw_rows>();
+            elw_instruction<P, elw_face_col>();
+            elw_instruction<P, elw_rows>();
+            elw_instruction<P, elw_done, hal::fpu::SourceRelease::Both>();
         });
     static_assert(
         elw_ops_per_tile == elw_faces_per_face_row * elw_faces_per_face_row * (FACE_R_DIM / elw_rows_per_op), "the replay above covers 4 faces of 16 rows");
@@ -181,16 +179,14 @@ inline __attribute__((always_inline)) void eltwise_binary_configure()
     set<MathCounter {.src_a = Set(0), .src_b = Set(0), .dest = Set(0), .clear_fidelity = true}>();
 }
 
-/// Every output tile, in the order the unpack walk delivers them (row-major), from dest_row (relative to the current
-/// Dest section).
+/// Every output tile, in the order the unpack walk delivers them (row-major), from dest_row (the absolute Dest row
+/// the acc tensor starts at; compute_api/dest.h).
 template <eltwise_binary_params P>
 inline __attribute__((always_inline)) void eltwise_binary_execute(std::uint32_t dest_row)
 {
-    using namespace ckernel;
     for (std::uint32_t tile = 0; tile < P.rt_dim * P.ct_dim; tile++)
     {
-        cfg::write<cfg::Access::TensixCfgUnit, cfg::DestTargetRegCfgMath::Offset, cfg::Sec::S0>(
-            dest_row + tile * elw_dest_rows_per_tile(P) + get_dest_buffer_base());
+        cfg::write<cfg::Access::TensixCfgUnit, cfg::DestTargetRegCfgMath::Offset, cfg::Sec::S0>(dest_row + tile * elw_dest_rows_per_tile(P));
         hal::mop::Runner<hal::mop::MopTemplate::Template1>::run();
     }
 }
