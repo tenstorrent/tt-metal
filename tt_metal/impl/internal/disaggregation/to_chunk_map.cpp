@@ -7,12 +7,15 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <span>
+#include <string>
 #include <utility>
 #include <variant>
 #include <vector>
 
+#include <fmt/format.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
@@ -48,6 +51,7 @@ struct Derived {
     uint32_t n_heads_per_dev = 1;
     uint32_t num_banks = 0;             // set from num_dram_banks(arch) in derive()
     std::vector<uint32_t> banks;        // resolved bank permutation (arch + bank_order), size num_banks
+    uint32_t fold_layers = 0;           // layers folded into the batch axis, user-major; 0 => not folded
 };
 
 // The active bank ordering resolved for the cache's arch: the OPTIMAL permutation or the identity
@@ -142,6 +146,7 @@ Located locate_one(
     const GenerationPolicy& policy,
     const Derived& d,
     std::optional<uint32_t> head,
+    uint32_t layer,
     uint32_t position,
     uint32_t slot,
     uint64_t base,
@@ -224,13 +229,14 @@ Located locate_one(
     const uint32_t csb = chunk_size_bytes(spec.tensor, tpc);
     const uint32_t tpc_page = kcs;
     if (policy.bank_order == BankOrder::Identity) {
-        const uint32_t pages_per_slot = geom.num_slots > 1 ? (per_dev_seq / tpc_page) : 0;
-        const uint32_t eff_slot = pages_per_slot > 0 ? slot : 0;
-        const uint32_t page_id = eff_slot * pages_per_slot + local_pos / tpc_page;
+        // The ND-shard ravel: the batch row (slot, or slot and layer when folded), then the chip's local head.
+        const uint32_t batch_row = d.fold_layers > 0 ? slot * d.fold_layers + layer : slot;
+        const uint32_t row = head.has_value() ? batch_row * d.n_heads_per_dev + *head % d.n_heads_per_dev : batch_row;
+        const uint32_t page_id = row * (per_dev_seq / tpc_page) + local_pos / tpc_page;
         const uint32_t in_page_offset = (local_pos % tpc_page) * (csb / tpc_page);
         const uint32_t bank_id = page_id % d.num_banks;
         const uint64_t off = base + static_cast<uint64_t>(page_id / d.num_banks) * csb + in_page_offset;
-        return {bank_id, off, owner, 0};
+        return {bank_id, off, owner, head.has_value() ? *head / d.n_heads_per_dev : 0};
     }
     // OPTIMAL indexer: fixed permutation over num_blocks; per-bank slot stacking (ND-shard). `banks` is
     // the OPTIMAL perm here (this branch is the bank_order == Optimal case).
@@ -286,23 +292,101 @@ KvChunkAddressTable to_chunk_map(
     const MeshShape& mesh_shape,
     const MapGeometry& geometry) {
     TT_FATAL(!configs.empty(), "to_chunk_map requires at least one cache config");
+    const bool named = !configs.front().name.empty();
 
     std::vector<Derived> derived;
     derived.reserve(configs.size());
+    // One entry per table config; caches sharing a name share one.
     std::vector<KvChunkAddressTableConfig> table_configs;
-    for (const auto& config : configs) {
-        const Derived d = derive(config);
+    std::vector<std::vector<std::pair<uint32_t, uint32_t>>> held_layers;
+    std::map<std::string, uint32_t> table_config_of_name;
+    std::vector<uint32_t> table_config_of(configs.size());
+    for (uint32_t cfg = 0; cfg < configs.size(); ++cfg) {
+        const CacheConfig& config = configs[cfg];
+        TT_FATAL(config.name.empty() != named, "to_chunk_map: cache config names must be all empty or all set");
+        TT_FATAL(
+            config.first_layer < geometry.num_layers,
+            "to_chunk_map: cache '{}' starts at layer {}, past the model's {} layers",
+            config.name,
+            config.first_layer,
+            geometry.num_layers);
+        const uint32_t cache_layers =
+            config.num_layers > 0 ? config.num_layers : geometry.num_layers - config.first_layer;
+        const uint32_t end_layer = config.first_layer + cache_layers;
+        TT_FATAL(
+            end_layer <= geometry.num_layers,
+            "to_chunk_map: cache '{}' holds layers [{}, {}), past the model's {} layers",
+            config.name,
+            config.first_layer,
+            end_layer,
+            geometry.num_layers);
+        TT_FATAL(
+            std::is_sorted(config.layers.begin(), config.layers.end()) &&
+                std::adjacent_find(config.layers.begin(), config.layers.end()) == config.layers.end(),
+            "to_chunk_map: cache '{}' publishes layers that are not ascending and distinct",
+            config.name);
+
+        Derived d = derive(config);
+        const bool layers_folded =
+            cache_layers > 1 && config.spec.tensor.logical_shape()[0] == geometry.num_slots * cache_layers;
+        d.fold_layers = layers_folded ? cache_layers : 0;
+        const bool identity_natural =
+            config.policy.bank_scheme == BankScheme::Natural && config.policy.bank_order == BankOrder::Identity;
+        TT_FATAL(
+            !layers_folded || identity_natural,
+            "to_chunk_map: cache '{}' folds its layers into the batch axis, which only the Natural scheme with "
+            "the Identity bank order addresses",
+            config.name);
+        TT_FATAL(
+            !config.head.has_value() || (d.head_axis.has_value() && *config.head < d.n_heads),
+            "to_chunk_map: cache '{}' selects head {} of {} heads, but its topology shards no head axis or has fewer",
+            config.name,
+            config.head.value_or(0),
+            d.n_heads);
         derived.push_back(d);
-        table_configs.push_back(KvChunkAddressTableConfig{
+
+        const KvChunkAddressTableConfig table_config{
             .num_layers = geometry.num_layers,
             .max_sequence_length = geometry.max_seq_len,
-            .num_slots = geometry.num_slots * d.n_heads,
+            .num_slots = config.head.has_value() ? geometry.num_slots : geometry.num_slots * d.n_heads,
             .chunk_n_tokens = d.tpc,
             .chunk_size_bytes = chunk_size_bytes(config.spec.tensor, d.tpc),
-        });
+        };
+        uint32_t id = static_cast<uint32_t>(table_configs.size());
+        if (named) {
+            const auto [it, inserted] = table_config_of_name.emplace(config.name, id);
+            id = it->second;
+            if (!inserted) {
+                const KvChunkAddressTableConfig& first = table_configs[id];
+                TT_FATAL(
+                    first.num_slots == table_config.num_slots && first.chunk_n_tokens == table_config.chunk_n_tokens &&
+                        first.chunk_size_bytes == table_config.chunk_size_bytes,
+                    "to_chunk_map: the caches named '{}' differ in slots or chunk size",
+                    config.name);
+            }
+        }
+        if (id == table_configs.size()) {
+            table_configs.push_back(table_config);
+            held_layers.emplace_back();
+        }
+        for (const auto& [first, end] : held_layers[id]) {
+            TT_FATAL(
+                end_layer <= first || config.first_layer >= end,
+                "to_chunk_map: two caches named '{}' both hold layers in [{}, {})",
+                config.name,
+                std::max(first, config.first_layer),
+                std::min(end, end_layer));
+        }
+        held_layers[id].emplace_back(config.first_layer, end_layer);
+        table_config_of[cfg] = id;
     }
 
-    KvChunkAddressTable table{std::span<const KvChunkAddressTableConfig>(table_configs)};
+    std::map<std::string, KvChunkAddressTableConfig> by_name;
+    for (const auto& [name, id] : table_config_of_name) {
+        by_name.emplace(name, table_configs[id]);
+    }
+    KvChunkAddressTable table = named ? KvChunkAddressTable{by_name}
+                                      : KvChunkAddressTable{std::span<const KvChunkAddressTableConfig>(table_configs)};
 
     for (uint32_t cfg = 0; cfg < configs.size(); ++cfg) {
         const CacheConfig& config = configs[cfg];
@@ -310,6 +394,11 @@ KvChunkAddressTable to_chunk_map(
         const GenerationPolicy& policy = config.policy;
         const Derived& d = derived[cfg];
         const bool per_head = d.head_axis.has_value();
+        const uint32_t table_config = named ? table.config_id_of(config.name) : table_config_of[cfg];
+        const uint32_t chunk_bytes = table_configs[table_config_of[cfg]].chunk_size_bytes;
+        const tt::tt_fabric::MeshId cache_mesh = config.mesh_id.value_or(mesh_id);
+        const uint32_t cache_layers =
+            config.num_layers > 0 ? config.num_layers : geometry.num_layers - config.first_layer;
 
         uint32_t extent = geometry.max_seq_len;
         if (const auto* w = std::get_if<temporal::Window>(&spec.temporal)) {
@@ -318,25 +407,32 @@ KvChunkAddressTable to_chunk_map(
             }
         }
 
-        for (uint32_t layer = 0; layer < geometry.num_layers; ++layer) {
-            for (uint32_t h = 0; h < d.n_heads; ++h) {
+        for (uint32_t local_layer = 0; local_layer < cache_layers; ++local_layer) {
+            const uint32_t layer = config.first_layer + local_layer;
+            const bool published =
+                config.layers.empty() || std::binary_search(config.layers.begin(), config.layers.end(), layer);
+            if (!published) {
+                continue;
+            }
+            const uint32_t first_head = config.head.value_or(0);
+            const uint32_t end_head = config.head.has_value() ? *config.head + 1 : d.n_heads;
+            for (uint32_t h = first_head; h < end_head; ++h) {
                 const std::optional<uint32_t> head = per_head ? std::optional<uint32_t>(h) : std::nullopt;
                 for (uint32_t slot = 0; slot < geometry.num_slots; ++slot) {
                     for (uint32_t pos = 0; pos < extent && pos < geometry.max_seq_len; pos += geometry.position_step) {
-                        const Located loc = locate_one(spec, policy, d, head, pos, slot, config.base_addr, geometry);
+                        const Located loc =
+                            locate_one(spec, policy, d, head, local_layer, pos, slot, config.base_addr, geometry);
                         const DeviceGroupIndex grp =
-                            table.add_device_group(device_group(config.topology, d, loc, mesh_id, mesh_shape));
+                            table.add_device_group(device_group(config.topology, d, loc, cache_mesh, mesh_shape));
                         const uint64_t noc_addr = (static_cast<uint64_t>(loc.bank_id) << 32) | addr_local(loc.offset);
-                        const uint32_t map_slot = per_head ? (h * geometry.num_slots + slot) : slot;
+                        const bool fanned = per_head && !config.head.has_value();
+                        const uint32_t map_slot = fanned ? (h * geometry.num_slots + slot) : slot;
                         table.set(
                             layer,
                             pos,
                             map_slot,
-                            KvCacheLocation{
-                                .noc_addr = noc_addr,
-                                .size_bytes = table_configs[cfg].chunk_size_bytes,
-                                .device_group_index = grp},
-                            cfg);
+                            KvCacheLocation{.noc_addr = noc_addr, .size_bytes = chunk_bytes, .device_group_index = grp},
+                            table_config);
                     }
                 }
             }
@@ -344,6 +440,67 @@ KvChunkAddressTable to_chunk_map(
     }
 
     return table;
+}
+
+KvChunkAddressTable to_chunk_map(const CacheLayoutModel& model) {
+    return to_chunk_map(model.caches, model.mesh_id, model.mesh_shape, model.geometry);
+}
+
+std::optional<std::string> first_table_difference(
+    const KvChunkAddressTable& expected, const KvChunkAddressTable& actual) {
+    if (expected.num_configs() != actual.num_configs()) {
+        return fmt::format("{} configs, not {}", actual.num_configs(), expected.num_configs());
+    }
+    for (uint32_t c = 0; c < expected.num_configs(); ++c) {
+        const std::string& name = expected.config_name(c);
+        if (actual.config_name(c) != name) {
+            return fmt::format("config {} is named '{}', not '{}'", c, actual.config_name(c), name);
+        }
+        const KvChunkAddressTableConfig& want = expected.config(c);
+        const KvChunkAddressTableConfig& got = actual.config(c);
+        const bool same_config = want.num_layers == got.num_layers &&
+                                 want.max_sequence_length == got.max_sequence_length &&
+                                 want.num_slots == got.num_slots && want.chunk_n_tokens == got.chunk_n_tokens &&
+                                 want.chunk_size_bytes == got.chunk_size_bytes && want.tensor_type == got.tensor_type;
+        if (!same_config) {
+            return fmt::format("config '{}' differs in its extents, chunk size or tensor type", name);
+        }
+        for (uint32_t layer = 0; layer < want.num_layers; ++layer) {
+            for (uint32_t slot = 0; slot < want.num_slots; ++slot) {
+                for (uint32_t pos = 0; pos < want.max_sequence_length; pos += want.chunk_n_tokens) {
+                    const KvCacheLocation a = expected.lookup(layer, pos, slot, c);
+                    const KvCacheLocation b = actual.lookup(layer, pos, slot, c);
+                    const auto where = [&] {
+                        return fmt::format("config '{}' layer {} slot {} position {}", name, layer, slot, pos);
+                    };
+                    if (a.size_bytes != b.size_bytes) {
+                        return fmt::format("{}: {} bytes, not {}", where(), b.size_bytes, a.size_bytes);
+                    }
+                    if (a.size_bytes == 0) {
+                        continue;
+                    }
+                    if (a.noc_addr != b.noc_addr) {
+                        return fmt::format("{}: noc_addr {:#x}, not {:#x}", where(), b.noc_addr, a.noc_addr);
+                    }
+                    const auto& want_nodes = expected.get_device_group(a.device_group_index).fabric_node_ids;
+                    const auto& got_nodes = actual.get_device_group(b.device_group_index).fabric_node_ids;
+                    if (want_nodes != got_nodes) {
+                        return fmt::format("{}: a different device group", where());
+                    }
+                    for (const auto& node : want_nodes) {
+                        const bool want_host = expected.has_host(node);
+                        const bool same_host = want_host == actual.has_host(node) &&
+                                               (!want_host || expected.get_host(node) == actual.get_host(node));
+                        if (!same_host) {
+                            return fmt::format(
+                                "{}: chip {} of mesh {} has a different host", where(), node.chip_id, *node.mesh_id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return std::nullopt;
 }
 
 }  // namespace tt::tt_metal::internal::disaggregation

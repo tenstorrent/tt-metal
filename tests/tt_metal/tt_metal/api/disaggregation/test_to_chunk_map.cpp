@@ -7,8 +7,13 @@
 #include <algorithm>
 #include <array>
 #include <cstdint>
+#include <map>
+#include <string>
+#include <tuple>
+#include <variant>
 #include <vector>
 
+#include <fmt/format.h>
 #include <tt_stl/small_vector.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -22,6 +27,7 @@
 #include "internal/disaggregation/cache_tensor_layout_spec.hpp"
 #include "internal/disaggregation/noc_addr.hpp"
 #include "internal/disaggregation/to_chunk_map.hpp"
+#include "impl/internal/disaggregation/cache_layout_model_protobuf.hpp"
 
 namespace tt::tt_metal::internal::disaggregation {
 namespace {
@@ -409,6 +415,402 @@ TEST(ToChunkMap, CPU_GqaCyclicMatchesReference) {
         }
     }
     EXPECT_GT(checked, 0u);
+}
+
+// --- MiniMax-M3 prefill write layout (models/demos/minimax_m3/tt/runners/kv_chunk_table.py) ---
+// Each pipeline stage's caches are [num_users * stage_layers, 1, seq_len, head_dim] per chip, user-major, on
+// the stage's own mesh at the stage's own base addresses. SP row r owns tokens [n * chunk + r * chunk_local,
+// + chunk_local) of each prefill chunk n; K/V head h lives on TP column h, and index_k is replicated over
+// the columns.
+constexpr uint32_t kPrefillSp = 2;
+constexpr uint32_t kPrefillCols = 4;  // == num_kv_heads
+constexpr uint32_t kPrefillHeadDim = 128;
+constexpr uint32_t kPrefillChunk = 128;  // chunk_local = 64 tokens: two DRAM blocks per row per chunk
+constexpr uint32_t kPrefillSeqLen = 256;
+constexpr uint32_t kPrefillUsers = 2;
+constexpr uint32_t kPrefillConfigs = 2 * kPrefillCols + 1;
+constexpr uint32_t kPrefillChunkBytes = (kPrefillHeadDim / kTileLocal) * kBfp8TileBytesLocal;
+
+struct PrefillStage {
+    uint32_t mesh = 0;
+    uint32_t first_layer = 0;
+    uint32_t num_layers = 0;
+    std::array<uint64_t, 3> bases{};  // k, v, index_k
+};
+
+struct PrefillLayout {
+    std::vector<PrefillStage> stages;
+    std::vector<uint32_t> index_k_layers;  // model layers; empty => every layer
+    uint32_t num_layers() const { return stages.back().first_layer + stages.back().num_layers; }
+};
+
+// One mesh holding all three layers; index_k on layers 0 and 2.
+const PrefillLayout kOneMesh = {
+    .stages = {{.mesh = 0, .first_layer = 0, .num_layers = 3, .bases = {0x10000, 0x80000, 0xF0000}}},
+    .index_k_layers = {0, 2}};
+// Two pipeline stages on meshes 0 and 1 holding layers [0, 2) and [2, 5); index_k on layers 1, 2 and 4.
+const PrefillLayout kTwoStages = {
+    .stages =
+        {{.mesh = 0, .first_layer = 0, .num_layers = 2, .bases = {0x10000, 0x80000, 0xF0000}},
+         {.mesh = 1, .first_layer = 2, .num_layers = 3, .bases = {0x20000, 0x90000, 0xE0000}}},
+    .index_k_layers = {1, 2, 4}};
+
+uint32_t cache_of(uint32_t cfg) { return cfg < kPrefillCols ? 0 : (cfg < 2 * kPrefillCols ? 1 : 2); }
+
+CacheLayoutModel m3_prefill_model(const PrefillLayout& layout) {
+    GenerationPolicy policy;
+    policy.bank_scheme = BankScheme::Natural;
+    policy.bank_order = BankOrder::Identity;
+    policy.k_chunk_size = KChunkSize{kTileLocal};
+    policy.device_chunk_size = DeviceChunkSize{kPrefillChunk / kPrefillSp};
+
+    CacheLayoutModel model;
+    for (const PrefillStage& stage : layout.stages) {
+        const KvLayoutSpec spec{
+            .tensor = make_bfp8_ndshard_spec(
+                Shape{kPrefillUsers * stage.num_layers, 1, kPrefillSeqLen, kPrefillHeadDim},
+                Shape{1, 1, kTileLocal, kPrefillHeadDim}),
+            .temporal = temporal::Dense{},
+            .arch = tt::ARCH::BLACKHOLE};
+        for (uint32_t cfg = 0; cfg < kPrefillConfigs; ++cfg) {
+            const bool index_k = cache_of(cfg) == 2;
+            std::vector<MeshCoordinate> coords;
+            for (uint32_t r = 0; r < kPrefillSp; ++r) {
+                for (uint32_t c = 0; c < kPrefillCols; ++c) {
+                    if (index_k || c == cfg % kPrefillCols) {
+                        coords.emplace_back(r, c);
+                    }
+                }
+            }
+            const TensorTopology topology =
+                index_k ? TensorTopology(
+                              MeshShape{kPrefillSp, kPrefillCols},
+                              {MeshMapperConfig::Shard{.dim = 2}, MeshMapperConfig::Replicate{}},
+                              coords)
+                        : TensorTopology(MeshShape{kPrefillSp}, {MeshMapperConfig::Shard{.dim = 2}}, coords);
+            model.caches.push_back(CacheConfig{
+                .spec = spec,
+                .topology = topology,
+                .policy = policy,
+                .base_addr = stage.bases[cache_of(cfg)],
+                .name = fmt::format("{:02d}", cfg),
+                .layers = index_k ? layout.index_k_layers : std::vector<uint32_t>{},
+                .first_layer = stage.first_layer,
+                .num_layers = stage.num_layers,
+                .mesh_id = tt::tt_fabric::MeshId{stage.mesh}});
+        }
+    }
+    model.mesh_shape = MeshShape{kPrefillSp, kPrefillCols};
+    model.geometry = MapGeometry{
+        .num_layers = layout.num_layers(),
+        .num_slots = kPrefillUsers,
+        .max_seq_len = kPrefillSeqLen,
+        .position_step = kTileLocal};
+    return model;
+}
+
+// The prefill writer's walk for one stage's SP row: 32-token blocks round-robin over the banks, the
+// per-bank offset advancing after each full sweep, in slot -> stage layer -> chunk -> block order. Keyed
+// by (model layer, position, slot); the value is (bank, per-bank offset).
+std::map<std::tuple<uint32_t, uint32_t, uint32_t>, std::pair<uint32_t, uint64_t>> m3_prefill_walk(
+    const PrefillStage& stage, uint32_t row, uint64_t base) {
+    const uint32_t chunk_local = kPrefillChunk / kPrefillSp;
+    std::map<std::tuple<uint32_t, uint32_t, uint32_t>, std::pair<uint32_t, uint64_t>> walk;
+    uint32_t bank = 0;
+    uint64_t offset = 0;
+    for (uint32_t slot = 0; slot < kPrefillUsers; ++slot) {
+        for (uint32_t local = 0; local < stage.num_layers; ++local) {
+            for (uint32_t n = 0; n < kPrefillSeqLen / kPrefillChunk; ++n) {
+                const uint32_t start = n * kPrefillChunk + row * chunk_local;
+                for (uint32_t pos = start; pos < start + chunk_local; pos += kTileLocal) {
+                    walk[{stage.first_layer + local, pos, slot}] = {bank, base + offset};
+                    bank = (bank + 1) % kNumBanks;
+                    if (bank == 0) {
+                        offset += kPrefillChunkBytes;
+                    }
+                }
+            }
+        }
+    }
+    return walk;
+}
+
+void expect_m3_prefill_table(const PrefillLayout& layout, const KvChunkAddressTable& table) {
+    ASSERT_EQ(table.num_configs(), kPrefillConfigs);
+    for (uint32_t cfg = 0; cfg < kPrefillConfigs; ++cfg) {
+        EXPECT_EQ(table.config_name(cfg), fmt::format("{:02d}", cfg));
+        EXPECT_EQ(table.config(cfg).num_layers, layout.num_layers());
+    }
+    const auto publishes = [&](uint32_t layer) {
+        return layout.index_k_layers.empty() ||
+               std::binary_search(layout.index_k_layers.begin(), layout.index_k_layers.end(), layer);
+    };
+
+    uint32_t checked = 0;
+    uint32_t published_index_k_layers = 0;
+    for (uint32_t layer = 0; layer < layout.num_layers(); ++layer) {
+        published_index_k_layers += publishes(layer) ? 1 : 0;
+    }
+    for (uint32_t cfg = 0; cfg < kPrefillConfigs; ++cfg) {
+        const bool index_k = cache_of(cfg) == 2;
+        const uint32_t head = cfg % kPrefillCols;
+        for (const PrefillStage& stage : layout.stages) {
+            for (uint32_t row = 0; row < kPrefillSp; ++row) {
+                for (const auto& [key, expected] : m3_prefill_walk(stage, row, stage.bases[cache_of(cfg)])) {
+                    const auto& [layer, pos, slot] = key;
+                    const KvCacheLocation loc = table.lookup(layer, pos, slot, cfg);
+                    if (index_k && !publishes(layer)) {
+                        EXPECT_EQ(loc.size_bytes, 0u) << "unpublished index_k layer " << layer << " has a row";
+                        continue;
+                    }
+                    EXPECT_EQ(loc.size_bytes, kPrefillChunkBytes);
+                    EXPECT_EQ(addr_channel(loc.noc_addr), expected.first) << "cfg=" << cfg << " pos=" << pos;
+                    EXPECT_EQ(addr_local(loc.noc_addr), static_cast<uint32_t>(expected.second))
+                        << "cfg=" << cfg << " layer=" << layer << " slot=" << slot << " pos=" << pos;
+                    const auto& group = table.get_device_group(loc.device_group_index);
+                    ASSERT_EQ(group.fabric_node_ids.size(), index_k ? kPrefillCols : 1u);
+                    for (uint32_t i = 0; i < group.fabric_node_ids.size(); ++i) {
+                        const uint32_t col = index_k ? i : head;
+                        EXPECT_EQ(*group.fabric_node_ids[i].mesh_id, stage.mesh);
+                        EXPECT_EQ(group.fabric_node_ids[i].chip_id, row * kPrefillCols + col);
+                    }
+                    ++checked;
+                }
+            }
+        }
+    }
+    const uint32_t positions = kPrefillSeqLen / kTileLocal;
+    EXPECT_EQ(checked, (2 * kPrefillCols * layout.num_layers() + published_index_k_layers) * kPrefillUsers * positions);
+}
+
+TEST(ToChunkMap, CPU_M3PrefillMatchesTheWritersBankWalk) {
+    expect_m3_prefill_table(kOneMesh, to_chunk_map(m3_prefill_model(kOneMesh)));
+}
+
+TEST(ToChunkMap, CPU_M3PipelinedPrefillMatchesEachStagesBankWalk) {
+    expect_m3_prefill_table(kTwoStages, to_chunk_map(m3_prefill_model(kTwoStages)));
+}
+
+TEST(ToChunkMap, CPU_FoldedLayersNeedTheNaturalIdentityLayout) {
+    CacheLayoutModel model = m3_prefill_model(kOneMesh);
+    model.caches.front().policy.bank_order = BankOrder::Optimal;
+    EXPECT_ANY_THROW(to_chunk_map(model));
+}
+
+TEST(ToChunkMap, CPU_ConfigNamesAreAllSetOrAllEmpty) {
+    CacheLayoutModel model = m3_prefill_model(kOneMesh);
+    model.caches.back().name.clear();
+    EXPECT_ANY_THROW(to_chunk_map(model));
+}
+
+TEST(ToChunkMap, CPU_PublishedLayersMustBeAscending) {
+    CacheLayoutModel model = m3_prefill_model(kOneMesh);
+    model.caches.back().layers = {2, 0};
+    EXPECT_ANY_THROW(to_chunk_map(model));
+}
+
+TEST(ToChunkMap, CPU_StagesOfOneConfigMustNotOverlap) {
+    CacheLayoutModel model = m3_prefill_model(kTwoStages);
+    model.caches[kPrefillConfigs].first_layer = 1;  // stage 1's k head 0 now holds [1, 4)
+    EXPECT_ANY_THROW(to_chunk_map(model));
+}
+
+TEST(ToChunkMap, CPU_ACacheMustEndWithinTheModel) {
+    CacheLayoutModel model = m3_prefill_model(kTwoStages);
+    model.caches[kPrefillConfigs].num_layers = 4;  // [2, 6) of 5 layers
+    EXPECT_ANY_THROW(to_chunk_map(model));
+}
+
+TEST(ToChunkMap, CPU_StagesOfOneConfigMustShareAChunkSize) {
+    CacheLayoutModel model = m3_prefill_model(kTwoStages);
+    CacheConfig& stage_one = model.caches[kPrefillConfigs];
+    stage_one.spec.tensor = make_bfp8_ndshard_spec(
+        Shape{kPrefillUsers * 3, 1, kPrefillSeqLen, 2 * kPrefillHeadDim}, Shape{1, 1, kTileLocal, 2 * kPrefillHeadDim});
+    EXPECT_ANY_THROW(to_chunk_map(model));
+}
+
+TEST(ToChunkMap, CPU_FirstTableDifferenceNamesTheFirstDifferingCell) {
+    const KvChunkAddressTable table = to_chunk_map(m3_prefill_model(kTwoStages));
+    EXPECT_EQ(first_table_difference(table, to_chunk_map(m3_prefill_model(kTwoStages))), std::nullopt);
+
+    PrefillLayout moved = kTwoStages;
+    moved.stages[1].bases[0] += 0x1000;
+    const auto difference = first_table_difference(table, to_chunk_map(m3_prefill_model(moved)));
+    ASSERT_TRUE(difference.has_value());
+    EXPECT_NE(difference->find("config '00' layer 2 slot 0 position 0: noc_addr"), std::string::npos) << *difference;
+
+    PrefillLayout fewer = kTwoStages;
+    fewer.index_k_layers = {1, 2};
+    const auto missing = first_table_difference(table, to_chunk_map(m3_prefill_model(fewer)));
+    ASSERT_TRUE(missing.has_value());
+    EXPECT_NE(missing->find("config '08' layer 4"), std::string::npos) << *missing;
+}
+
+// --- Gemma-4 sliding K/V (models/demos/gemma4_d_p/tt/runners/kv_chunk_table.py) ---
+// One tensor per layer, per chip [num_users, heads_per_chip, seq_len / cp, 256]; head h on TP column
+// h / heads_per_chip. Each head is its own named config. The writer's shard ravel is user-major, then the
+// chip's local head: shard = (slot * heads_per_chip + local_head) * blocks + local_row / 32.
+constexpr uint32_t kGemmaCp = 2;
+constexpr uint32_t kGemmaTp = 2;
+constexpr uint32_t kGemmaHeads = 4;  // two per chip
+constexpr uint32_t kGemmaHeadsPerChip = kGemmaHeads / kGemmaTp;
+constexpr uint32_t kGemmaHeadDim = 256;
+constexpr uint32_t kGemmaSeqLen = 256;
+constexpr uint32_t kGemmaChunk = 128;
+constexpr uint32_t kGemmaUsers = 2;
+constexpr uint32_t kGemmaLayers = 2;
+constexpr uint32_t kGemmaChunkBytes = (kGemmaHeadDim / kTileLocal) * kBfp8TileBytesLocal;
+
+uint64_t gemma_base(uint32_t layer) { return 0x100000ull * (layer + 1); }
+
+CacheLayoutModel gemma_sliding_model() {
+    GenerationPolicy policy;
+    policy.bank_scheme = BankScheme::Natural;
+    policy.bank_order = BankOrder::Identity;
+    policy.k_chunk_size = KChunkSize{kTileLocal};
+    policy.device_chunk_size = DeviceChunkSize{kGemmaChunk / kGemmaCp};
+    const KvLayoutSpec spec{
+        .tensor = make_bfp8_ndshard_spec(
+            Shape{kGemmaUsers, kGemmaHeads, kGemmaSeqLen, kGemmaHeadDim}, Shape{1, 1, kTileLocal, kGemmaHeadDim}),
+        .temporal = temporal::Dense{},
+        .arch = tt::ARCH::BLACKHOLE};
+    const TensorTopology topology(
+        MeshShape{kGemmaCp, kGemmaTp},
+        {MeshMapperConfig::Shard{.dim = 2}, MeshMapperConfig::Shard{.dim = 1}},
+        row_major_coords(kGemmaCp, kGemmaTp));
+
+    CacheLayoutModel model;
+    for (uint32_t layer = 0; layer < kGemmaLayers; ++layer) {
+        for (uint32_t h = 0; h < kGemmaHeads; ++h) {
+            model.caches.push_back(CacheConfig{
+                .spec = spec,
+                .topology = topology,
+                .policy = policy,
+                .base_addr = gemma_base(layer),
+                .name = fmt::format("sliding_k_h{:02d}", h),
+                .first_layer = layer,
+                .num_layers = 1,
+                .head = h});
+        }
+    }
+    model.mesh_shape = MeshShape{kGemmaCp, kGemmaTp};
+    model.geometry = MapGeometry{
+        .num_layers = kGemmaLayers, .num_slots = kGemmaUsers, .max_seq_len = kGemmaSeqLen, .position_step = kTileLocal};
+    return model;
+}
+
+TEST(ToChunkMap, CPU_GemmaSlidingHeadsMatchTheWritersShardRavel) {
+    const KvChunkAddressTable table = to_chunk_map(gemma_sliding_model());
+    ASSERT_EQ(table.num_configs(), kGemmaHeads);
+    const uint32_t local_tokens = kGemmaChunk / kGemmaCp;
+    const uint32_t blocks = kGemmaSeqLen / kGemmaCp / kTileLocal;
+    uint32_t checked = 0;
+    for (uint32_t h = 0; h < kGemmaHeads; ++h) {
+        const uint32_t cfg = table.config_id_of(fmt::format("sliding_k_h{:02d}", h));
+        EXPECT_EQ(table.config(cfg).num_slots, kGemmaUsers);
+        for (uint32_t layer = 0; layer < kGemmaLayers; ++layer) {
+            for (uint32_t slot = 0; slot < kGemmaUsers; ++slot) {
+                for (uint32_t pos = 0; pos < kGemmaSeqLen; pos += kTileLocal) {
+                    const uint32_t in_chunk = pos % kGemmaChunk;
+                    const uint32_t cp_row = in_chunk / local_tokens;
+                    const uint32_t local_row = (pos / kGemmaChunk) * local_tokens + in_chunk % local_tokens;
+                    const uint32_t shard =
+                        (slot * kGemmaHeadsPerChip + h % kGemmaHeadsPerChip) * blocks + local_row / kTileLocal;
+                    const KvCacheLocation loc = table.lookup(layer, pos, slot, cfg);
+                    EXPECT_EQ(loc.size_bytes, kGemmaChunkBytes);
+                    EXPECT_EQ(addr_channel(loc.noc_addr), shard % kNumBanks) << "h=" << h << " pos=" << pos;
+                    EXPECT_EQ(
+                        addr_local(loc.noc_addr),
+                        static_cast<uint32_t>(gemma_base(layer) + (shard / kNumBanks) * kGemmaChunkBytes))
+                        << "h=" << h << " layer=" << layer << " slot=" << slot << " pos=" << pos;
+                    const auto& group = table.get_device_group(loc.device_group_index);
+                    ASSERT_EQ(group.fabric_node_ids.size(), 1u);
+                    EXPECT_EQ(group.fabric_node_ids[0].chip_id, cp_row * kGemmaTp + h / kGemmaHeadsPerChip);
+                    ++checked;
+                }
+            }
+        }
+    }
+    EXPECT_EQ(checked, kGemmaHeads * kGemmaLayers * kGemmaUsers * (kGemmaSeqLen / kTileLocal));
+}
+
+TEST(ToChunkMap, CPU_AHeadSelectorNeedsAHeadShardedTopology) {
+    CacheLayoutModel model = m3_prefill_model(kOneMesh);
+    model.caches.front().head = 0;  // M3's K head config shards no head axis
+    EXPECT_ANY_THROW(to_chunk_map(model));
+    model = gemma_sliding_model();
+    model.caches.front().head = kGemmaHeads;
+    EXPECT_ANY_THROW(to_chunk_map(model));
+}
+
+TEST(CacheLayoutModel, CPU_AHeadSelectorRoundTrips) {
+    const CacheLayoutModel model = gemma_sliding_model();
+    const CacheLayoutModel imported = import_cache_layout_model_from_protobuf(export_to_protobuf(model));
+    for (size_t i = 0; i < model.caches.size(); ++i) {
+        EXPECT_EQ(imported.caches[i].head, model.caches[i].head);
+    }
+    EXPECT_EQ(first_table_difference(to_chunk_map(model), to_chunk_map(imported)), std::nullopt);
+}
+
+TEST(CacheLayoutModel, CPU_RoundTripsThroughProtobufToTheSameTable) {
+    for (const PrefillLayout& layout : {kOneMesh, kTwoStages}) {
+        const CacheLayoutModel model = m3_prefill_model(layout);
+        const CacheLayoutModel imported = import_cache_layout_model_from_protobuf(export_to_protobuf(model));
+
+        ASSERT_EQ(imported.caches.size(), model.caches.size());
+        for (size_t i = 0; i < model.caches.size(); ++i) {
+            const CacheConfig& want = model.caches[i];
+            const CacheConfig& got = imported.caches[i];
+            EXPECT_EQ(got.name, want.name);
+            EXPECT_EQ(got.layers, want.layers);
+            EXPECT_EQ(got.first_layer, want.first_layer);
+            EXPECT_EQ(got.num_layers, want.num_layers);
+            EXPECT_EQ(got.mesh_id, want.mesh_id);
+            EXPECT_EQ(got.base_addr, want.base_addr);
+            EXPECT_EQ(got.spec.tensor, want.spec.tensor);
+            EXPECT_EQ(got.spec.arch, want.spec.arch);
+            EXPECT_TRUE(std::holds_alternative<temporal::Dense>(got.spec.temporal));
+            EXPECT_EQ(got.topology, want.topology);
+            EXPECT_EQ(got.policy.bank_scheme, want.policy.bank_scheme);
+            EXPECT_EQ(got.policy.bank_order, want.policy.bank_order);
+            EXPECT_EQ(got.policy.k_chunk_size, want.policy.k_chunk_size);
+            EXPECT_EQ(got.policy.device_chunk_size, want.policy.device_chunk_size);
+        }
+        EXPECT_EQ(*imported.mesh_id, *model.mesh_id);
+        EXPECT_EQ(imported.mesh_shape, model.mesh_shape);
+        EXPECT_EQ(imported.geometry.num_layers, model.geometry.num_layers);
+        EXPECT_EQ(imported.geometry.num_slots, model.geometry.num_slots);
+        EXPECT_EQ(imported.geometry.max_seq_len, model.geometry.max_seq_len);
+        EXPECT_EQ(imported.geometry.position_step, model.geometry.position_step);
+        expect_m3_prefill_table(layout, to_chunk_map(imported));
+    }
+}
+
+TEST(CacheLayoutModel, CPU_EveryTemporalPolicyRoundTrips) {
+    const std::vector<TemporalPolicy> policies = {
+        temporal::Dense{},
+        temporal::Window{WindowTokens{128}},
+        temporal::BlockLocal{BlockLocalSpan{8192}},
+        temporal::Rolling{},
+        temporal::Static{},
+        temporal::None{}};
+    for (const TemporalPolicy& policy : policies) {
+        CacheLayoutModel model = m3_prefill_model(kOneMesh);
+        model.caches.front().spec.temporal = policy;
+        const TemporalPolicy got =
+            import_cache_layout_model_from_protobuf(export_to_protobuf(model)).caches.front().spec.temporal;
+        ASSERT_EQ(got.index(), policy.index());
+        if (const auto* window = std::get_if<temporal::Window>(&policy)) {
+            EXPECT_EQ(std::get<temporal::Window>(got).width, window->width);
+        }
+        if (const auto* local = std::get_if<temporal::BlockLocal>(&policy)) {
+            EXPECT_EQ(std::get<temporal::BlockLocal>(got).span, local->span);
+        }
+    }
+}
+
+TEST(CacheLayoutModel, CPU_RejectsBytesThatAreNotAModel) {
+    EXPECT_ANY_THROW(import_cache_layout_model_from_protobuf(std::string("\xff\xff\xff", 3)));
 }
 
 // --- Kimi TP-deduped kvpe: the sequence sharded over both mesh axes, one chip per sub-slice ---
