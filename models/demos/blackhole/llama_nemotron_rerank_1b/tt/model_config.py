@@ -53,6 +53,8 @@ MM_CONFIGS = {
 # matmul_qkv_rope blocks (M_block, K_block, N_block, subblock_h, subblock_w) per rows, from
 # perf_tools/probe_qkv_rope.py; N_block must be even (whole heads).
 QKV_ROPE_CONFIGS = {512: (2, 8, 2, 1, 2), 2048: (4, 8, 4, 1, 4), 4096: (8, 8, 4, 1, 4), 16384: (8, 16, 2, 4, 1)}
+# Weight CB depth in K blocks for matmul_qkv_rope: 32x512 861 -> 851 us (4).
+QKV_ROPE_IN1_DEPTH = 4
 # Fidelity of the rotation's multiplies: HiFi2 keeps Q / K PCC at 0.999996 (HiFi4 0.999998), 32x512 910 -> 887 us.
 QKV_ROPE_FIDELITY = "HiFi2"
 
@@ -62,6 +64,9 @@ QKV_ROPE_FIDELITY = "HiFi2"
 # rows, so no padding column is computed. 16384 rows (perf_tools/probe_mm_add_norm.py, gamma folded):
 # WO 681 us, FF2 1216 us, against 1131 / 1547 us for the matmul plus fused_add_rmsnorm.
 MM_ADD_NORM_CONFIGS = {"wo": (4, 8, 7, 4, 1), "ff2": (8, 8, 7, 4, 1)}
+# Weight (in1) CB depth in K blocks: the x = 0 core reads ahead while the row multicasts.
+# 16384 rows: WO 593 -> 574 us (4), FF2 1124 -> 1116 us (3; 4 does not fit next to the residual).
+MM_ADD_NORM_IN1_DEPTH = {"wo": 4, "ff2": 3}
 # Fidelity of matmul_add_norm's y multiplies (h * inv, * gamma). HiFi2 for both fused ops dropped MIRACL
 # batch 32 Pearson to 0.99947 before gamma folding; with it folded it passes (RerankConfig.y_hifi2_kinds).
 MM_ADD_NORM_Y_FIDELITY = "HiFi4"

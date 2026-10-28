@@ -71,6 +71,7 @@ def main():
     ap.add_argument("--flat", action="store_true", help="non-transposed grid: M over y, N over x")
     ap.add_argument("--in1-depth", type=int, default=2)
     ap.add_argument("--in0-mcast", action="store_true")
+    ap.add_argument("--x-l1", action="store_true", help="x (the matmul input) in L1, interleaved")
     ap.add_argument("--defines", default="", help="comma-separated kernel defines for the fused op")
     args = ap.parse_args()
     K, N, xdt, fid, block, old_block = SHAPES[args.kind]
@@ -88,7 +89,13 @@ def main():
     r[..., 7] *= 40  # an outlier channel, as in Llama's residual stream
     gamma = torch.rand(N) + 0.5
 
-    tx = ttnn.from_torch(x, dtype=xdt, layout=ttnn.TILE_LAYOUT, device=device)
+    tx = ttnn.from_torch(
+        x,
+        dtype=xdt,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG if args.x_l1 else ttnn.DRAM_MEMORY_CONFIG,
+    )
     tw = ttnn.from_torch(w, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
     tr = ttnn.from_torch(r, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
     res = to_resident(tr, grid, transposed=not args.flat)

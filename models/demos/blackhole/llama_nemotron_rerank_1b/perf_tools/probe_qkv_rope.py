@@ -63,6 +63,8 @@ def main():
         "--bf16-acc", action="store_true", help="bf16 DST (8-tile subblocks); the L1 accumulator stays fp32"
     )
     ap.add_argument("--in0-mcast", action="store_true")
+    ap.add_argument("--in0-depth", type=int, default=2)
+    ap.add_argument("--in1-depth", type=int, default=2)
     ap.add_argument("--defines", default="", help="comma-separated kernel defines (NAME or NAME=VAL)")
     args = ap.parse_args()
     block = tuple(int(v) for v in args.block.split(","))
@@ -94,6 +96,8 @@ def main():
             defines=defines,
             fp32_acc=not args.bf16_acc,
             in0_mcast=args.in0_mcast,
+            in0_depth=args.in0_depth,
+            in1_depth=args.in1_depth,
         )
 
     q, k, v = new()

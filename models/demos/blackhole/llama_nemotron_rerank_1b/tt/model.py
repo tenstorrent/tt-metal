@@ -35,11 +35,13 @@ from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops.matmul_qkv_ro
 )
 from models.demos.blackhole.llama_nemotron_rerank_1b.tt.model_config import (
     MM_ADD_NORM_CONFIGS,
+    MM_ADD_NORM_IN1_DEPTH,
     MM_ADD_NORM_Y_FIDELITY,
     MM_CONFIGS,
     PAD_TOKEN_ID,
     QKV_ROPE_CONFIGS,
     QKV_ROPE_FIDELITY,
+    QKV_ROPE_IN1_DEPTH,
     SEQ_BUCKETS,
     RerankConfig,
     mm_block_config,
@@ -337,6 +339,7 @@ class NemotronReranker:
                 grid=self.grid,
                 fidelity=cfg.mm_fidelity,
                 rope_fidelity=QKV_ROPE_FIDELITY,
+                in1_depth=QKV_ROPE_IN1_DEPTH,
                 out_dtype=cfg.heads_out_dtype,
                 memory_config=self._mem(rows, (cfg.n_heads + 2 * cfg.n_kv_heads) * cfg.head_dim),
             )
@@ -455,6 +458,7 @@ class NemotronReranker:
             y_fidelity="HiFi2" if kind in self.cfg.y_hifi2_kinds.split(",") else MM_ADD_NORM_Y_FIDELITY,
             skip_gamma=self.cfg.fold_norm_gamma,
             in0_mcast=kind in self.cfg.in0_mcast_kinds.split(","),
+            in1_depth=MM_ADD_NORM_IN1_DEPTH[kind],
         )
 
     def _padding_mask(self, valid, S):

@@ -55,6 +55,8 @@ def matmul_qkv_rope(
     defines=(),
     fp32_acc=True,
     in0_mcast=False,
+    in0_depth=2,
+    in1_depth=2,
 ):
     """x ``[1, 1, B * S, K]``, w ``[K, (n_heads + 2 * n_kv_heads) * head_dim]`` (Q, K, V column blocks)
     -> q ``[B, n_heads, S, head_dim]``, k and v ``[B, n_kv_heads, S, head_dim]``; RoPE applied to q, k.
@@ -97,8 +99,8 @@ def matmul_qkv_rope(
 
     all_cores = g.all_cores()
     cbs = [
-        mg.cb(0, mb * kb * 2, x.dtype, all_cores),
-        mg.cb(1, kb * nb * 2, w.dtype, all_cores),
+        mg.cb(0, mb * kb * in0_depth, x.dtype, all_cores),
+        mg.cb(1, kb * nb * in1_depth, w.dtype, all_cores),
         mg.cb(2, mb * nb * 2, out_dtype, all_cores),
         mg.cb(3, mb * nb, ttnn.float32, all_cores),
         mg.cb(4, 6 * mb, ttnn.bfloat16, all_cores),
