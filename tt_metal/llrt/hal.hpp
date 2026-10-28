@@ -910,22 +910,6 @@ inline uint32_t Hal::get_dma_alignment() const {
     }
 }
 
-inline uint32_t Hal::get_dma_write_min_bytes(tt::umd::IoOrdering ordering) const {
-    // DMA writes go through a Relaxed window, so writes that ask for Strict ordering stay on MMIO. Below 64 KiB the
-    // fixed cost of a DMA call makes it slower than a Relaxed MMIO write, per UMD's single-core write microbenchmark
-    // on a Wormhole Galaxy and a Blackhole P150 (see #60793).
-    const bool strict = ordering == tt::umd::IoOrdering::Strict;
-    switch (arch_) {
-        // Wormhole has always sent Strict writes of 32 B or more through its Relaxed DMA window. That stays until
-        // buffer data moves to Relaxed writes.
-        case tt::ARCH::WORMHOLE_B0: return strict ? 32 : 64 * 1024;
-        case tt::ARCH::BLACKHOLE: return strict ? UINT32_MAX : 64 * 1024;
-        default: return UINT32_MAX;
-    }
-}
-
-inline bool Hal::supports_dma_reads() const { return arch_ == tt::ARCH::WORMHOLE_B0; }
-
 inline uint32_t Hal::get_common_alignment_with_pcie(HalMemType memory_type) const {
     uint32_t index = ttsl::as_underlying_type<HalMemType>(memory_type);
     TT_ASSERT(index < this->mem_alignments_with_pcie_.size());
