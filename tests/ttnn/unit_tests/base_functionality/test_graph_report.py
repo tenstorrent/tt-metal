@@ -640,6 +640,55 @@ class TestImportReportRankCompleteness:
         assert _query_db(db_path, "SELECT DISTINCT rank FROM operations") == [(3,)]
 
 
+class TestImportReportFreshDatabase:
+    """Each import writes a new database: nothing is left over from an earlier import into the same directory, and a
+    failed import leaves the earlier database as it was."""
+
+    @staticmethod
+    def _row_counts(db_path):
+        conn = sqlite3.connect(db_path)
+        try:
+            tables = [
+                row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name")
+            ]
+            return {table: conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] for table in tables}
+        finally:
+            conn.close()
+
+    def test_importing_again_into_the_same_directory_does_not_duplicate_rows(self, tmp_path):
+        """Rerunning a test within the same minute imports into the same report directory again (#2148)."""
+        report_path = tmp_path / "report.json"
+        report = _make_report(TestResNet50Patterns.MOCK_RESNET_GRAPH, devices=TestResNet50Patterns.MOCK_DEVICE_INFO)
+        report_path.write_text(json.dumps(report))
+        db_path = graph_report.import_report(report_path, tmp_path / "output")
+        once = self._row_counts(db_path)
+        assert once["input_tensors"] and once["buffers"]
+        graph_report.import_report(report_path, tmp_path / "output")
+        assert self._row_counts(db_path) == once
+
+    def test_no_temporary_database_is_left_behind(self, tmp_path, expect_error):
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, 2), _rank_capture(1, 2)])
+        graph_report.import_report(report_dir, tmp_path / "output")
+        copied = _make_report(_minimal_single_op_graph(), metadata={"rank": 0, "world_size": 2})
+        _write_reports(report_dir, [("graph_capture_2_of_2.json", copied)])
+        with expect_error(ValueError, "in its metadata, but its name says"):
+            graph_report.import_report(report_dir, tmp_path / "output")
+        assert sorted(p.name for p in (tmp_path / "output").iterdir() if "sqlite" in p.name) == ["db.sqlite"]
+
+    def test_failure_partway_through_leaves_the_existing_db_unchanged(self, tmp_path, expect_error):
+        """The second capture fails its metadata check after the first has been imported: none of it is kept."""
+        report_dir = tmp_path / "reports_in"
+        _write_reports(report_dir, [_rank_capture(0, 2), _rank_capture(1, 2)])
+        db_path = graph_report.import_report(report_dir, tmp_path / "output")
+        before = db_path.read_bytes()
+        copied = _make_report(_minimal_single_op_graph("ttnn.other"), metadata={"rank": 0, "world_size": 2})
+        _write_reports(report_dir, [("graph_capture_2_of_2.json", copied)])
+        with expect_error(ValueError, "in its metadata, but its name says"):
+            graph_report.import_report(report_dir, tmp_path / "output")
+        assert db_path.read_bytes() == before
+
+
 class TestGraphReportFixtureMultiRankTeardown:
     """Teardown of the graph report pytest fixture on a two-rank run, with ttnn's capture and distributed calls
     replaced by recorders. Every rank must reach both barriers, even when rank 0's import raises."""
