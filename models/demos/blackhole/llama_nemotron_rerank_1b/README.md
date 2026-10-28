@@ -100,7 +100,7 @@ loaded server sees; "best" is at full clock.
 | 1 x 128 | 12.8 ms | 6.31 ms | 6.31 ms | |
 | 1 x 512 | 15.6 ms | 7.80 ms | 7.80 ms | 33.7 % |
 | 8 x 512 | 76.2 ms | 39.0 ms | 35.5 ms | 58.6 % |
-| 32 x 512 | 329 ms | 174 ms | 110 ms | **75.1 %** (148.4 M cycles) |
+| 32 x 512 | 329 ms | 174 ms | 110 ms | **75.3 %** (148.1 M cycles) |
 | 1 x 2048 | 46.5 ms | 25.0 ms | 24.5 ms | 51.9 % |
 | 1 x 8192 | 362 ms | 187 ms | 137 ms | 64.1 % |
 
@@ -117,10 +117,10 @@ shape the board is still throttled and "best" can read 20-40 % higher.
 | op | M cycles | share | of its SoL |
 |---|---|---|---|
 | FF1 + FF3 + SwiGLU (`minimal_matmul`, HiFi2) | 77.8 | 52 % | 85 % |
-| FF2 + residual add + RMSNorm (`matmul_add_norm`, LoFi) | 24.3 | 16 % | 68 % |
+| FF2 + residual add + RMSNorm (`matmul_add_norm`, LoFi) | 24.2 | 16 % | 68 % |
 | QKV + head split + RoPE (`matmul_qkv_rope`, HiFi2) | 18.6 | 13 % | 67 % |
 | SDPA (HiFi4) | 14.3 | 10 % | 58 % |
-| WO + residual add + RMSNorm (`matmul_add_norm`, HiFi2) | 13.0 | 9 % | 64 % |
+| WO + residual add + RMSNorm (`matmul_add_norm`, HiFi2) | 12.7 | 9 % | 65 % |
 | embedding + first RMSNorm (`embed_rmsnorm`), score head, mask | 0.7 | 0.5 % | |
 
 ## What was done
@@ -150,6 +150,7 @@ Data movement, in the order they landed (32x512 unless noted):
 | RMSNorm gammas folded into the next matmul's weight rows (QKV, FF1+FF3, score head) | the fused norms skip the gamma multiply | part of 160.1 -> 151.6 M cycles |
 | `embed_rmsnorm`: the embedding gathered straight into the resident residual, then the first RMSNorm | replaces `ttnn.embedding` (tiles to DRAM), the copy into the L1 shards and the norm: the 10 cores holding a row block split each 32-token tile-row, read whole 4 KB embedding rows (32 slices of 448 B per core ran DRAM at ~175 GB/s) and write each peer's column slice into its staging; the compute tilizes and normalizes block by block as rows arrive | 645 -> 304 us; 150.4 -> 149.9 M cycles |
 | fused norm statistic on the FPU | the epilogue squared each h tile on the SFPU (~200 cycles a tile) and row-summed 7 packed x^2 tiles; now the FPU multiplies each packed h tile by itself into one accumulating DST tile per row (HiFi2) and row-sums that one tile, with one pack -> unpack handoff per block instead of per row | FF2 1209 -> 1150 us, WO 664 -> 612 us per layer; 149.8 -> 148.4 M cycles |
+| activation blocks multicast down each core column in the fused WO / FF2 ops (`tt/custom_ops/kernels/dm_in0_mcast.cpp`) | minimal_matmul's in0 reader relays each block core to core (each core waits for its upstream neighbour, then for its downstream one, then writes); the column's first core now reads the block once and multicasts it | WO 602 -> 593 us, FF2 1129 -> 1124 us; 148.4 -> 148.1 M cycles (QKV got slower, 865 -> 884 us, left on the relay) |
 
 Knobs on compute ops: `minimal_matmul` block sizes swept per weight and row count (`perf_tools/sweep_mm.py`,
 FF1+FF3 at 512 rows 210 -> 108 us); FF2 at LoFi (accuracy unchanged); SDPA q / k chunks per shape
@@ -159,18 +160,26 @@ stream (0.99944). No effect: raising the power limit (the card stays at 150 W).
 
 ## Open items
 
-* 32 x 512 is at 75.1 % of speed of light. The rest is spread over the ops: FF1 + FF3 is at 85 % (every
+* 32 x 512 is at 75.3 % of speed of light. The rest is spread over the ops: FF1 + FF3 is at 85 % (every
   `minimal_matmul` block config of that shape lands within 1 %, `perf_tools/sweep_mm.py`); the fused
   WO / FF2 matmuls run at ~76-84 % of their limit inside their K loops (FF2 at LoFi with 4 x 1 subblocks, which
   the 7-tile N slice per core forces) plus ~8 % of epilogue; QKV + RoPE's matmul runs at ~80 % of HiFi2 peak and
   waits ~10 % on its inputs (the rotation itself is ~1.5 %); SDPA's softmax bounds it (HiFi2 matmuls are no
   faster). The 13 x 10 grid costs 3 % (FF1 + FF3) to 10 % (WO / FF2: 64 output columns over 10 core rows)
   in padding.
+* The matmul loop itself caps the achievable fraction: minimal_matmul's compute loop on tiles already in L1,
+  with no data movement (`perf_tools/probe_mm_loop.py`, profiler cycles), runs at 93.5 % of FPU peak at HiFi2,
+  96.5 % at HiFi4 and ~91-92 % at LoFi (about 2 cycles per tile-multiply for the source-register handoff
+  between tiles). With every op at that ceiling, no epilogue, no input waits and the 13 x 10 grid's padding,
+  32 x 512 would be at ~88.5 % (~90 % with WO / FF2 re-gridded to 5 columns per core, which does not fit next
+  to the resident residual: 2.3 MB of CBs).
 * Measured and rejected: bf16 DST with 8-tile subblocks inside the fused ops (slower), full-sync DST, the
   non-transposed grid (WO 823 vs 628 us), K block 16 for FF2 (does not fit next to the resident residual),
   interleaving the norm's second pass into the next K loop, LoFi y / RoPE multiplies (no faster; RoPE loses
   Q / K PCC), a 1D row-split score head (160 vs 149 us), bfp8 Q / K / V into SDPA (Pearson 0.99927), bfp4
-  SwiGLU product, approximate SiLU.
+  SwiGLU product, approximate SiLU, bfp8 Q into SDPA (its output takes Q's dtype: 657 -> 614 us, Pearson 0.99943),
+  deeper (3- / 4-block) input buffers for FF1 + FF3 (no change), QKV with a core's whole N slice per block
+  (1206 vs 861 us), SDPA q chunk 256 (does not fit next to the resident residual).
 * bs1 (34 %): the matmuls at 512 rows run at 27-52 % of their limit; FF2 at LoFi is bound by its weight read.
   DRAM-sharded weights are the next step. 1 x 128 / 1 x 512 read ~0.3 ms slower than in the previous README
   (5.97 / 7.50 ms), not yet traced to a change.
