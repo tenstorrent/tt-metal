@@ -833,19 +833,20 @@
     section_end 0
 
     # Production-width chunked CSA with the real sparse top-k: 5120+5120+3000 actual tokens, fixed
-    # 5120 device width, and the variant's stock index_topk.
+    # 5120 device width, and the variant's stock index_topk. Measured 1.7 min x 1.25 + 1.
     section_start 4
     (
-      timeout -k 2m 15m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 4m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_csa.py::test_csa_chunked_prefill_mesh -k "flash and 3chunk-production and torus-xy-8x4" -vvv --tb=short
       '
     ) || { rc=$?; section_end "$rc"; finish; exit "$rc"; }
     section_end 0
 
+    # Measured 1.9 min x 1.25 + 1.
     section_start 5
     (
-      timeout -k 2m 25m mpirun --bind-to none --pernode --tag-output bash -lc '
+      timeout -k 2m 4m mpirun --bind-to none --pernode --tag-output bash -lc '
         export OMP_NUM_THREADS=$(nproc)
         python3 -m pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_csa.py::test_csa_chunked_prefill_mesh -k "pro and 3chunk-production and torus-xy-8x4" -vvv --tb=short
       '
@@ -877,8 +878,8 @@
   test_group: module
   skus:
     bh_sc1:
-      # Sum of the section timeouts (6+8+12+15+25+2+3 = 71).
-      timeout: 71
+      # Sum of the section timeouts (6+8+12+4+4+2+3 = 39).
+      timeout: 39
       tier: 2
       release_ready: false
   owner_id: U08SXRPCTJ5  # Janko Mitrovic
