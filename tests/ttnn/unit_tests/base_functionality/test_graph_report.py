@@ -17,6 +17,7 @@ import json
 import sqlite3
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -489,6 +490,72 @@ class TestImportReportMultiFileOperationIds:
         stride = graph_report._OPERATION_ID_STRIDE_PER_RANK_FILE
         cursor.execute("SELECT operation_id, rank FROM operations ORDER BY rank, operation_id")
         assert cursor.fetchall() == [(1, 0), (stride + 1, 0), (1, 1)]
+
+
+class TestComparisonOnlyMultiRank:
+    """Comparison-only mode on a multi-rank run: each rank writes its own sidecar, rank 0 merges them into db.sqlite,
+    instead of every rank opening the shared database at once."""
+
+    @staticmethod
+    def _records(tensor_id):
+        record = {
+            "tensor_id": tensor_id,
+            "golden_tensor_id": tensor_id + 100,
+            "matches": True,
+            "desired_pcc": 0.99,
+            "actual_pcc": 0.995,
+        }
+        return {"local_tensor_comparison_records": [record], "global_tensor_comparison_records": [], "tensors": []}
+
+    def test_flush_on_a_multi_rank_run_writes_only_this_ranks_sidecar(self, monkeypatch, tmp_path):
+        monkeypatch.setattr(ttnn.graph, "_distributed_rank_and_size", lambda: (1, 2))
+        monkeypatch.setattr(ttnn.graph, "_comparison_records_data", self._records(7))
+        ttnn.graph.flush_comparison_records_to_db(tmp_path)
+        assert sorted(path.name for path in tmp_path.iterdir()) == ["comparison_records_2_of_2.json"]
+        assert not ttnn.graph.has_comparison_records()
+
+    def test_rank_0_merges_every_ranks_records(self, tmp_path):
+        for rank, tensor_id in ((0, 7), (1, 8)):
+            sidecar = tmp_path / graph_report.rank_comparison_records_name(rank, 2)
+            sidecar.write_text(json.dumps(self._records(tensor_id)))
+        db_path = graph_report.import_rank_comparison_records(tmp_path)
+        conn = sqlite3.connect(db_path)
+        try:
+            rows = conn.execute("SELECT tensor_id, rank FROM local_tensor_comparison_records ORDER BY rank").fetchall()
+        finally:
+            conn.close()
+        assert rows == [(7, 0), (8, 1)]
+
+    @pytest.mark.parametrize(
+        "rank, has_records, expected_calls",
+        [(0, True, ["flush", "barrier", "merge", "barrier"]), (1, False, ["barrier", "barrier"])],
+        ids=["rank_0_with_records", "rank_1_without_records"],
+    )
+    def test_fixture_merges_on_rank_0_between_barriers(self, monkeypatch, tmp_path, rank, has_records, expected_calls):
+        """Every rank reaches both barriers, records or not; only rank 0 merges."""
+        calls = []
+        config = SimpleNamespace(
+            enable_graph_report=False,
+            enable_comparison_mode=True,
+            enable_detailed_buffer_report=False,
+            report_path=str(tmp_path),
+        )
+        monkeypatch.setattr(ttnn, "CONFIG", config)
+        monkeypatch.setattr(ttnn.graph, "is_graph_capture_active", lambda: False)
+        monkeypatch.setattr(ttnn.graph, "has_comparison_records", lambda: has_records)
+        monkeypatch.setattr(ttnn.graph, "flush_comparison_records_to_db", lambda path: calls.append("flush"))
+        monkeypatch.setattr(ttnn, "distributed_context_is_initialized", lambda: True)
+        monkeypatch.setattr(ttnn, "distributed_context_get_rank", lambda: rank)
+        monkeypatch.setattr(ttnn, "distributed_context_get_size", lambda: 2)
+        monkeypatch.setattr(ttnn, "distributed_context_barrier", lambda: calls.append("barrier"))
+        monkeypatch.setattr(ttnn, "save_config_to_json_file", lambda path: None)
+        monkeypatch.setattr(graph_report, "import_rank_comparison_records", lambda path: calls.append("merge"))
+        fixture = graph_report._run_pytest_graph_report_fixture(
+            SimpleNamespace(fixturenames=[], getfixturevalue=lambda name: None)
+        )
+        next(fixture)
+        next(fixture, None)
+        assert calls == expected_calls
 
 
 @pytest.fixture

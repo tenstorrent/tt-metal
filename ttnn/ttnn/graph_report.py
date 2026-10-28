@@ -167,8 +167,20 @@ def _run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
 
             if enable_detailed_buffer_report:
                 ttnn.graph.disable_detailed_buffer_tracing()
-        elif enable_comparison_mode and ttnn.graph.has_comparison_records():
-            ttnn.graph.flush_comparison_records_to_db(report_path)
+        elif enable_comparison_mode:
+            if ttnn.distributed_context_is_initialized() and int(ttnn.distributed_context_get_size()) > 1:
+                # Every rank writes its records to its own sidecar, and rank 0 merges them, rather than each rank
+                # opening db.sqlite at once. Collective: every rank takes part, with or without records of its own.
+                if ttnn.graph.has_comparison_records():
+                    ttnn.graph.flush_comparison_records_to_db(report_path)
+                ttnn.distributed_context_barrier()
+                try:
+                    if int(ttnn.distributed_context_get_rank()) == 0:
+                        import_rank_comparison_records(report_path)
+                finally:
+                    ttnn.distributed_context_barrier()
+            elif ttnn.graph.has_comparison_records():
+                ttnn.graph.flush_comparison_records_to_db(report_path)
 
         if ttnn.distributed_context_is_initialized():
             rank = int(ttnn.distributed_context_get_rank())
@@ -269,6 +281,14 @@ DATABASE_SCHEMA_VERSION = "3.5"
 PYTHON_IO_SIDECAR_SUFFIX = ".python_io.json"
 COMPARISON_RECORDS_SIDECAR_SUFFIX = ".comparison_records.json"
 COMPARISON_RECORDS_FALLBACK_NAME = "comparison_records.json"
+# Comparison-only mode on a multi-rank run: each rank's records, merged into db.sqlite by rank 0.
+_RANK_COMPARISON_RECORDS_NAME_RE = re.compile(r"^comparison_records_(\d+)_of_(\d+)\.json$")
+
+
+def rank_comparison_records_name(rank: int, world_size: int) -> str:
+    """Sidecar a rank writes its comparison records to in comparison-only mode; ``rank`` is 0-based."""
+    return f"comparison_records_{rank + 1}_of_{world_size}.json"
+
 
 # Second and later JSON files for the same rank get operation ids shifted by this stride
 # so they do not collide (each capture must have fewer than this many ops).
@@ -345,6 +365,7 @@ def _discover_report_json_files(report_path: Path) -> list[Path]:
         and not p.name.endswith(PYTHON_IO_SIDECAR_SUFFIX)
         and not p.name.endswith(COMPARISON_RECORDS_SIDECAR_SUFFIX)
         and p.name != COMPARISON_RECORDS_FALLBACK_NAME
+        and not _RANK_COMPARISON_RECORDS_NAME_RE.match(p.name)
     )
 
 
@@ -2198,6 +2219,34 @@ def _load_comparison_records_sidecar(report_file: Path) -> dict | None:
             with open(sidecar_path, "r") as f:
                 return json.load(f)
     return None
+
+
+def import_rank_comparison_records(report_dir: Union[str, Path], db_name: str = "db.sqlite") -> Path:
+    """Merge every rank's comparison-only sidecar (``comparison_records_<r>_of_<N>.json``) into ``db_name``.
+
+    In comparison-only mode on a multi-rank run each rank writes its records to its own sidecar instead of the shared
+    database, which the ranks would otherwise all open and write at once; rank 0 merges them here, tagging each
+    rank's rows with its rank.
+    """
+    report_dir = Path(report_dir)
+    db_path = report_dir / db_name
+    sidecars = []
+    for path in report_dir.glob("comparison_records_*_of_*.json"):
+        m = _RANK_COMPARISON_RECORDS_NAME_RE.match(path.name)
+        if m:
+            sidecars.append((int(m.group(1)) - 1, path))
+    conn = sqlite3.connect(db_path)
+    try:
+        cursor = conn.cursor()
+        create_database_schema(cursor)
+        save_database_schema_version(cursor)
+        for rank, path in sorted(sidecars):
+            with open(path, "r") as f:
+                import_tensor_comparison_records(cursor, json.load(f), rank=rank)
+        conn.commit()
+    finally:
+        conn.close()
+    return db_path
 
 
 def import_metadata(cursor: sqlite3.Cursor, metadata: dict) -> None:

@@ -604,12 +604,28 @@ def _write_comparison_records_sidecar(report_path):
         json.dump(_comparison_records_data, f)
 
 
+def _distributed_rank_and_size():
+    """(rank, world_size) of this process in the distributed context, or (0, 1) without one."""
+    try:
+        from ttnn._ttnn.multi_device import get_rank, get_size, is_initialized
+
+        if is_initialized():
+            return int(get_rank()), int(get_size())
+    except (ImportError, OSError):
+        pass
+    return 0, 1
+
+
 def flush_comparison_records_to_db(report_dir):
     """Write accumulated comparison-mode records into report_dir/db.sqlite.
 
     Used when enable_comparison_mode is on without a full graph report import
     (enable_graph_report=false). PCC still runs during the model; this persists
     local/global_tensor_comparison_records for the visualizer.
+
+    On a multi-rank run every rank would open the same db.sqlite at once, so each rank writes only its own
+    ``comparison_records_<rank>_of_<world_size>.json`` sidecar instead, and rank 0 merges them with
+    ``graph_report.import_rank_comparison_records``.
     """
     global _comparison_records_data
 
@@ -622,24 +638,25 @@ def flush_comparison_records_to_db(report_dir):
         COMPARISON_RECORDS_FALLBACK_NAME,
         create_database_schema,
         import_tensor_comparison_records,
+        rank_comparison_records_name,
         save_database_schema_version,
     )
 
     report_dir = pathlib.Path(report_dir)
     report_dir.mkdir(parents=True, exist_ok=True)
 
+    rank, world_size = _distributed_rank_and_size()
+    if world_size > 1:
+        try:
+            with open(report_dir / rank_comparison_records_name(rank, world_size), "w") as f:
+                json.dump(_comparison_records_data, f)
+        finally:
+            reset_comparison_records_data()
+        return
+
     sidecar_path = report_dir / COMPARISON_RECORDS_FALLBACK_NAME
     with open(sidecar_path, "w") as f:
         json.dump(_comparison_records_data, f)
-
-    rank = 0
-    try:
-        from ttnn._ttnn.multi_device import get_rank, is_initialized
-
-        if is_initialized():
-            rank = int(get_rank())
-    except (ImportError, OSError):
-        pass
 
     conn = sqlite3.connect(report_dir / "db.sqlite")
     cursor = conn.cursor()
