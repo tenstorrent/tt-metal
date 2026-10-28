@@ -94,11 +94,22 @@ class FlowStateTT:
 
     # ------------------------------------------------------------------ device forward
 
+    def _linear(self, x, w, role, rows, bias=None, act=None, dtype=None, cfg=None):
+        """ttnn.linear with the R1-1 program config of ``role`` (x: rows x K)."""
+        p = self.p
+        pc = None
+        if p.program_configs:
+            pc = common.mm_config(self.device, role, p.name, rows, w.shape[-2], w.shape[-1], act)
+        return ttnn.linear(
+            x, w, bias=bias, activation=None if pc is not None else act, dtype=dtype, program_config=pc,
+            compute_kernel_config=cfg or p.dense, memory_config=p.mem,
+        )
+
     def ssm_block(self, i, u, consts, L, Bp, r0, keep_x=False):
         """The S5 block: u (1, 1, L * Bp, 512) bf16 -> (y, u_read, x): y = gate(C x) * C x + D u over the rows from
         r0 (bf16), u_read the matching rows of u, x the fp32 [x_re | x_im] state when keep_x (else None)."""
         p, w = self.p, self.layers[i]
-        bu = ttnn.linear(u, consts["B"], dtype=ttnn.float32, compute_kernel_config=p.b_proj, memory_config=p.mem)
+        bu = self._linear(u, consts["B"], "b_proj", L * Bp, dtype=ttnn.float32, cfg=p.b_proj)
         x = lti.lti_scan_fused(bu, consts["lbar"], L)
         ttnn.deallocate(bu)
         if r0:
@@ -107,16 +118,16 @@ class FlowStateTT:
             ttnn.deallocate(x)
             x = x_rows
             u = ttnn.slice(u, (0, 0, r0 * Bp, 0), (1, 1, M, 512))
-        xc = x
+        xc, rows = x, (L - r0) * Bp
         if p.c_input_dtype != ttnn.float32:
             xc = ttnn.typecast(x, p.c_input_dtype)
-        y = ttnn.linear(xc, w["C"], dtype=ttnn.bfloat16, compute_kernel_config=p.c_proj, memory_config=p.mem)
+        y = self._linear(xc, w["C"], "c_proj", rows, dtype=ttnn.bfloat16, cfg=p.c_proj)
         if xc is not x:
             ttnn.deallocate(xc)
         if not keep_x:
             ttnn.deallocate(x)
             x = None
-        g = ttnn.linear(y, w["gate_w"], bias=w["gate_b"], compute_kernel_config=p.dense, memory_config=p.mem)
+        g = self._linear(y, w["gate_w"], "gate", rows, bias=w["gate_b"])
         g = ttnn.sigmoid(g)
         y = ttnn.multiply(g, y)
         y = ttnn.add(y, ttnn.multiply(u, w["D"]))
@@ -126,13 +137,14 @@ class FlowStateTT:
         """z = MLP(rms_norm(y)) + y, bf16 (the reference's ``mlp`` part)."""
         p, w = self.p, self.layers[i]
         h = ttnn.rms_norm(y, weight=w["rms_w"], epsilon=1e-6, compute_kernel_config=p.norm)
-        a = ttnn.linear(h, w["w1"], bias=w["b1"], activation="silu", compute_kernel_config=p.dense, memory_config=p.mem)
-        b = ttnn.linear(h, w["w2"], bias=w["b2"], compute_kernel_config=p.dense, memory_config=p.mem)
+        rows = y.shape[-2]
+        a = self._linear(h, w["w1"], "w1", rows, bias=w["b1"], act="silu")
+        b = self._linear(h, w["w2"], "w2", rows, bias=w["b2"])
         ttnn.deallocate(h)
         ab = ttnn.multiply(a, b)
         ttnn.deallocate(a)
         ttnn.deallocate(b)
-        z = ttnn.linear(ab, w["w3"], bias=w["b3"], compute_kernel_config=p.dense, memory_config=p.mem)
+        z = self._linear(ab, w["w3"], "w3", rows, bias=w["b3"])
         ttnn.deallocate(ab)
         return ttnn.add(z, y)
 

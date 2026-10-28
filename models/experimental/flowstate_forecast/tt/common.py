@@ -27,6 +27,41 @@ def _cfg(device, fidelity, fp32_acc=True):
     )
 
 
+# R1-1 (sweep job 1156, paper): in0_block_w per role and precision; out_subblock 1x4, out_block_h <= 5
+IN0_BLOCK_W = {
+    "accuracy": {"b_proj": 2, "c_proj": 2, "gate": 4, "w1": 2, "w2": 2, "w3": 8},
+    "performance": {"b_proj": 2, "c_proj": 2, "gate": 4, "w1": 4, "w2": 4, "w3": 8},
+}
+
+
+def mm_config(device, role, precision, M, K, N, act=None):
+    """The 1D (in1-mcast) program config of a (M, K) x (K, N) matmul over the whole grid, rows split across cores.
+    None (the auto config) when N is not a multiple of 4 tiles or the rows do not fill the grid."""
+    grid = device.compute_with_storage_grid_size()
+    cores = grid.x * grid.y
+    Mt, Kt, Nt = -(-M // 32), K // 32, N // 32
+    if Nt % 4 or Mt < cores:
+        return None
+    per_core_M = -(-Mt // cores)
+    kw = IN0_BLOCK_W[precision][role]
+    while Kt % kw:
+        kw //= 2
+    bh = next(b for b in (5, 4, 3, 2, 1) if per_core_M % b == 0)
+    return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+        compute_with_storage_grid_size=(grid.x, grid.y),
+        in0_block_w=kw,
+        out_subblock_h=1,
+        out_subblock_w=4,
+        out_block_h=bh,
+        out_block_w=Nt,
+        per_core_M=per_core_M,
+        per_core_N=Nt,
+        fuse_batch=True,
+        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU) if act == "silu" else None,
+        mcast_in0=False,
+    )
+
+
 def policy(device, precision="accuracy"):
     hifi4 = _cfg(device, ttnn.MathFidelity.HiFi4)
     hifi2 = _cfg(device, ttnn.MathFidelity.HiFi2)
@@ -46,4 +81,5 @@ def policy(device, precision="accuracy"):
         dense_weight_dtype=ttnn.bfloat8_b if perf else ttnn.bfloat16,
         decoder_weight_dtype=ttnn.float32,
         mem=ttnn.DRAM_MEMORY_CONFIG,
+        program_configs=True,  # R1-1
     )
