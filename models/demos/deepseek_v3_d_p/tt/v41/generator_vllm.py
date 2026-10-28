@@ -36,13 +36,13 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.v41.weight_cache import weight_cache_dir
 from models.demos.deepseek_v3_d_p.tt.v41.batch_decode import TtV41BatchDecoder
-from models.demos.deepseek_v3_d_p.tt.v41.dspark_drafter import TtDSparkDrafter
-from models.demos.deepseek_v3_d_p.tt.v41.dspark_weights import seeding_weights
-from models.demos.deepseek_v3_d_p.tt.v41.spec_verify import TtV41VerifyDecoder
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41ChunkTables, V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.decode import ROWS
+from models.demos.deepseek_v3_d_p.tt.v41.dspark_drafter import TtDSparkDrafter
+from models.demos.deepseek_v3_d_p.tt.v41.dspark_weights import seeding_weights
 from models.demos.deepseek_v3_d_p.tt.v41.engram import V41EngramTable
 from models.demos.deepseek_v3_d_p.tt.v41.engram_checkpoint import build_engram_modules, unswap
+from models.demos.deepseek_v3_d_p.tt.v41.spec_verify import TtV41VerifyDecoder
 from models.demos.deepseek_v3_d_p.tt.v41.transformer import (
     TtV41Transformer,
     V41GenericPrefillTrace,
@@ -53,13 +53,18 @@ from models.demos.deepseek_v3_d_p.tt.v41.weights import load_layer, load_layer_d
 
 WARMUP_PROMPT = 255  # tokens of the warm-up prompt (a full window; odd, so the ratio-2 carry path runs first)
 # TT_V41_SPEC=K (speculative decode): the decode step is the verify decoder (tt/v41/spec_verify)
-# with the DSpark drafter in its capture; a greedy request's step verifies K drafts and the round's accepted tokens
-# are handed to the plugin one per decode_forward call (the pool is ahead of the plugin's position by the buffered
-# tokens; the plugin's contract is unchanged, the calls that drain the buffer touch no device). Speculation needs
-# one live slot a mesh row and the drafter's rings hold one request's state (the last joined): the other slots'
-# rows run plain. TT_V41_SPEC_GREEDY_ALL=1 (a smoke's knob): every request is verified greedily whatever it asked.
+# with the DSpark drafter in its capture; a greedy request's step verifies K drafts and the round's
+# accepted tokens are handed to the plugin one per decode_forward call (the pool is ahead of the
+# plugin's position by the buffered tokens; the plugin's contract is unchanged, the calls that drain
+# the buffer touch no device). Speculation needs one live slot a mesh row and the drafter's rings
+# hold one request's state (the last joined): the other slots' rows run plain. A sampling request's
+# round draws the served sampler on every verify row and accepts while the draw equals the next
+# draft (the match rule preserves the sequential served sampler's law); TT_V41_SPEC_SAMPLED=0 makes
+# such a request run plain instead (the greedy-only path). TT_V41_SPEC_GREEDY_ALL=1 (a smoke's
+# knob): every request is verified greedily whatever it asked.
 SPEC = "TT_V41_SPEC"
 SPEC_GREEDY_ALL = "TT_V41_SPEC_GREEDY_ALL"
+SPEC_SAMPLED = "TT_V41_SPEC_SAMPLED"
 WARMUP_DECODE_STEPS = 8  # at most; done once the step is captured and replayed once
 PREFILL_SLOTS = "TT_V41_PREFILL_SLOTS"  # prefill states (default 2): requests prefill through them into the pool
 # Traced prefill: ``TT_V41_TRACE_PREFILL_LENGTHS`` lists prompt lengths (tokens, comma-separated) whose prefill is
@@ -194,6 +199,7 @@ class DeepseekV41ForCausalLM:
         # handed to the plugin
         self.spec_k = int(os.environ.get(SPEC, "0"))
         self.spec_greedy_all = os.environ.get(SPEC_GREEDY_ALL, "0") == "1"
+        self.spec_sampled = os.environ.get(SPEC_SAMPLED, "1") == "1"
         self.drafter: TtDSparkDrafter | None = None
         self.ring_owner: int | None = None
         self.next_drafts: dict[int, list[int]] = {}
@@ -548,7 +554,9 @@ class DeepseekV41ForCausalLM:
 
     def _decode_forward_spec(self, tokens, positions, page_table, params, out) -> torch.Tensor:
         """``decode_forward`` under ``TT_V41_SPEC``: the verify decoder's round for the slot whose rows the
-        drafter holds (greedy, or every slot under ``TT_V41_SPEC_GREEDY_ALL``), plain rows for the others. Two
+        drafter holds (greedy or sampled: the request's ``(top_k, top_p, temperature)`` on every one of its rows
+        and the match rule; under ``TT_V41_SPEC_SAMPLED=0`` greedy requests only), plain rows for the
+        others (every slot under ``TT_V41_SPEC_GREEDY_ALL`` is verified greedily). Two
         contracts, told apart by the tokens' width: ``[B, 1]`` (the plugin unchanged): the
         round's tokens are handed over one per call, a slot with buffered tokens from its last round hands the
         next one over without a device step; ``[B, 1 + K]`` (the plugin's ragged contract): column 0 is
@@ -588,7 +596,7 @@ class DeepseekV41ForCausalLM:
             ), f"row {i}: vLLM position {p}, slot {slot} at {self.decoder.position(slot)}"
             temperature = float(params.temperature[i])
             greedy = temperature <= 0 or self.spec_greedy_all
-            proposes = greedy and slot == self.ring_owner
+            proposes = slot == self.ring_owner and (greedy or self.spec_sampled)
             if ragged:
                 given = [int(t) for t in tokens[i, 1:].tolist() if t >= 0]
                 drafts = given if proposes else []

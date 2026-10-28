@@ -22,6 +22,10 @@ also carries the DRAM a chip (allocated and free) after the model, the decoder a
 ``V41_VR_FUSED=1`` (default): the drafter runs inside the verify step's capture on every accept outcome (one
 replay and one readback a round; the first round's drafts come from one standalone draft call after the join);
 ``0``: a standalone (traced) draft call before every verify step, the taps selected from the step's tile.
+``V41_VR_TEMP=T`` (default 0: greedy), ``V41_VR_TOPP`` (default 1.0) and ``V41_VR_TOPK`` (default 0: the device's
+32) sample the plain steps and the rounds with that triple on every live row (the match rule
+exact against sequential served sampling); the committed text then differs from the plain text by
+construction (``matches_plain`` is recorded, not asserted) and the record carries the acceptance under sampling.
 ``V41_VR_LIVE=n`` (default 1; first c32 measurement): ``n`` live slots in lockstep, all
 joined from the one prefill (the same prompt, so one standalone draft call's drafts serve every slot and every slot
 accepts the same count), ``n / sp`` a mesh row at user indices ``0, 1 + Kmax, 2 (1 + Kmax), ..`` so that a slot's
@@ -84,6 +88,12 @@ def test_v41_verify_rows(mesh_device, device_params):
     live = int(os.environ.get("V41_VR_LIVE", 1))
     if live > 1:
         fused = False
+    temperature = float(os.environ.get("V41_VR_TEMP", 0))
+    sampling = (
+        {"k": int(os.environ.get("V41_VR_TOPK", 0)), "p": float(os.environ.get("V41_VR_TOPP", 1.0)), "t": temperature}
+        if temperature > 0
+        else None
+    )
     ckpt = resolve_checkpoint()
     if ckpt is None:
         pytest.skip("V4.1 checkpoint shards not downloaded")
@@ -117,6 +127,7 @@ def test_v41_verify_rows(mesh_device, device_params):
         "prompt": prompt_len,
         "tokens": n_tokens,
         "ks": ks,
+        "sampling": sampling,
         "mesh": [sp, tp],
         "expert_dtype": routed_expert_dtype().name,
         "flags": {k: v for k, v in os.environ.items() if k.startswith(("V41_", "TT_V41_"))},
@@ -172,9 +183,7 @@ def test_v41_verify_rows(mesh_device, device_params):
         decoder.prepare_merge(
             [
                 tuple(
-                    row
-                    for u in range(live // sp)
-                    for row in decoder.block_rows(u * (1 + max(ks)), k, one_slot=False)
+                    row for u in range(live // sp) for row in decoder.block_rows(u * (1 + max(ks)), k, one_slot=False)
                 )
                 for k in [0] + ks
             ]
@@ -212,9 +221,13 @@ def test_v41_verify_rows(mesh_device, device_params):
 
     def step(block):
         """The step over every live slot with the same block -> slot 0's argmaxes (every slot's must be the same:
-        the slots are in lockstep on one prompt)."""
-        out = decoder.decode({slot: list(block) for slot in slots})
-        assert all(out[slot] == out[0] for slot in slots), {slot: out[slot] for slot in slots}
+        the slots are in lockstep on one prompt; under sampling every slot draws its own and slot 0's are taken,
+        the slots stay in lockstep because the block and the committed count are slot 0's for every slot)."""
+        out = decoder.decode(
+            {slot: list(block) for slot in slots},
+            {slot: (sampling["k"], sampling["p"], sampling["t"]) for slot in slots} if sampling else None,
+        )
+        assert sampling or all(out[slot] == out[0] for slot in slots), {slot: out[slot] for slot in slots}
         return out[0]
 
     # --- plain: one row a step ---
@@ -326,6 +339,7 @@ def test_v41_verify_rows(mesh_device, device_params):
             "rounds": rounds,
             "n_rounds": len(rounds),
             "accepted_per_round": round(sum(r["accepted"] for r in rounds) / len(rounds), 3),
+            "accepted_hist": {a: sum(r["accepted"] == a for r in rounds) for a in range(k + 1)},
             "tokens_per_round": round(sum(len(r["emitted"]) for r in rounds) / len(rounds), 3),
             "steady_rounds": len(steady),
             "steady_wall_s_per_round": round(sum(r["wall_s"] for r in steady) / len(steady), 4) if steady else None,
@@ -344,7 +358,7 @@ def test_v41_verify_rows(mesh_device, device_params):
         }
         if fused:
             summary["first_draft_s"] = first_draft_s
-        if committed != plain:
+        if committed != plain and not sampling:
             n = next((i for i, (x, y) in enumerate(zip(committed, plain)) if x != y), min(len(committed), len(plain)))
             mismatches.append(f"K={k}: committed text differs from the plain text at token {n}")
         record["rounds"][str(k)] = summary

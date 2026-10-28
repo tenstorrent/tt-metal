@@ -24,9 +24,10 @@ inputs instead of the tile row = pool slot rule:
   scorer with the row's pin and blocks);
 * the Engram ids of row ``j`` come from the slot's history extended by the block's first ``j`` tokens.
 
-The sampler takes every row's argmax; ``decode`` returns each slot's rows' argmaxes and leaves the slot where it
-was; ``commit(slot, accepted)`` advances it (the drafts up to the first mismatch and the
-bonus token are the step's output). A slot stepping with ``K = 0`` is a plain row of the same graph. One live slot
+The sampler takes every row's argmax (or, for a slot with sampling parameters, the served sampler's draw on every
+one of its rows: the match rule, exact for greedy drafts); ``decode`` returns each slot's rows'
+tokens and leaves the slot where it was; ``commit(slot, accepted)`` advances it (the drafts
+up to the first mismatch and the bonus token are the step's output). A slot stepping with ``K = 0`` is a plain row of the same graph. One live slot
 per rank at most (its rows are ``u .. u + K`` of its rank's tile, within the MoE's real rows), the captures keyed by
 the live rows' layout.
 
@@ -243,18 +244,21 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
             ints["c1sel"], ints["c1put"] = c1sel, c1put
         floats, rope, visible_cols = {}, {}, {}
         if self.sample_on_device:
-            # every row the argmax (greedy drafts need greedy verification); a slot of one token with sampling
-            # parameters (``sampling``: slot -> (k, p, temperature), temperature 0 greedy) samples as the batched
-            # step does
+            # the argmax on every row by default; a slot with sampling parameters (``sampling``: slot -> (k, p,
+            # temperature), temperature 0 greedy) samples on every one of its rows as the batched step does on
+            # one: the served sampler's draw on row j given the block's first j + 1 tokens, and ``accept``'s
+            # "the draw equals the next draft" is the exact match rule for greedy drafts (the committed stream has the sequential served sampler's law; at temperature 0 it is the greedy
+            # longest prefix)
             ints["k"] = torch.ones(sp, ROWS, dtype=torch.int32)
             floats["p"] = torch.zeros(sp, ROWS, dtype=torch.float32)
             floats["temp"] = torch.ones(sp, ROWS, dtype=torch.float32)
             for slot, (sk, sp_, st) in (sampling or {}).items():
-                if slot not in tokens or len(tokens[slot]) > 1 or st <= 0:
+                if slot not in tokens or st <= 0:
                     continue
-                r, u = divmod(slot, users)
-                ints["k"][r, u] = max(1, min(int(sk), 32)) if sk > 0 else 32
-                floats["p"][r, u], floats["temp"][r, u] = float(sp_), 1.0 / float(st)
+                r = slot // users
+                for row in self.rows[slot]:
+                    ints["k"][r, row] = max(1, min(int(sk), 32)) if sk > 0 else 32
+                    floats["p"][r, row], floats["temp"][r, row] = float(sp_), 1.0 / float(st)
         rope["rope0"] = self.rope_tables.rows(False, positions)
         rope["ropec"] = self.rope_tables.rows(True, positions)
         rope["ropeg"] = self.rope_tables.rows(True, positions // 2 * 2)
@@ -420,9 +424,10 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
 
     @staticmethod
     def accept(block: list[int], argmax: list[int]) -> tuple[int, list[int]]:
-        """``spec_state``'s rule on a block ``[x, d_1 .. d_K]`` and its rows' argmaxes: the accepted count ``a`` (the
-        drafts ``d_1 .. d_a`` equal the argmaxes of rows ``0 .. a - 1``) and the emitted tokens ``argmax[0 .. a]``
-        (the accepted drafts and the bonus)."""
+        """The acceptance rule on a block ``[x, d_1 .. d_K]`` and its rows' tokens (the argmaxes, or the sampled
+        draws): the accepted count ``a`` (the drafts ``d_1 .. d_a`` equal the tokens of rows ``0 .. a - 1``) and
+        the emitted tokens ``argmax[0 .. a]`` (the accepted drafts and the bonus). With sampled rows this is the
+        match rule (``round_match``): exact against sequential served sampling."""
         a = 0
         while a < len(block) - 1 and block[a + 1] == argmax[a]:
             a += 1

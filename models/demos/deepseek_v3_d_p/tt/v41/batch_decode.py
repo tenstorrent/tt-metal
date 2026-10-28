@@ -280,11 +280,15 @@ class StepPacker:
 class DeviceSampler:
     """The step's sampling on device: each TP chip's top-32 of its vocabulary shard, gathered over TP into every
     row's top-128 candidates, ``ttnn.sampling`` with per-row top-k (1..32), top-p and temperature, the sampled ids
-    gathered over SP. The cores' random generators are seeded once (``ttnn.manual_seed``); the captured sampling
-    (seed None) leaves them running, so replays draw fresh numbers."""
+    gathered over SP. The cores' random generators are seeded once (``ttnn.manual_seed``; random seeds, or the
+    per-row seeds derived from ``seed`` / ``V41_SAMPLE_SEED`` so that two processes draw the same stream); the captured sampling (seed None) leaves them running, so replays draw fresh numbers.
+    The seeds are replicated over the mesh: the same row index on every rank draws the same uniform."""
 
-    def __init__(self, mesh_device, config, ccl, gather_sp):
+    SEED = "V41_SAMPLE_SEED"  # an integer: reproducible draws (unset or 0: random seeds)
+
+    def __init__(self, mesh_device, config, ccl, gather_sp, seed: int | None = None):
         self.mesh_device, self.ccl, self.gather_sp = mesh_device, ccl, gather_sp
+        self.seed = int(os.environ.get(self.SEED, "0")) if seed is None else seed
         self.sp, self.tp = tuple(mesh_device.shape)
         per_chip = config.VOCAB_SIZE // self.tp
         offsets = torch.arange(self.tp, dtype=torch.int32).view(self.tp, 1, 1, 1).expand(self.tp, 1, ROWS, 32)
@@ -332,7 +336,12 @@ class DeviceSampler:
         if self.debug is not None:
             self.debug["values"], self.debug["indices"] = values, indices
         if not self.seeded:
-            seeds = torch.randint(1, 2**31 - 1, (ROWS,), dtype=torch.int32)
+            if self.seed:
+                seeds = torch.randint(
+                    1, 2**31 - 1, (ROWS,), dtype=torch.int32, generator=torch.Generator().manual_seed(self.seed)
+                )
+            else:
+                seeds = torch.randint(1, 2**31 - 1, (ROWS,), dtype=torch.int32)
             mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
             ttnn.manual_seed(
                 seeds=ttnn.from_torch(seeds, device=self.mesh_device, dtype=ttnn.uint32, mesh_mapper=mapper),
