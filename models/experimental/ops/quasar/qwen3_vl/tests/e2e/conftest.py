@@ -34,23 +34,6 @@ def pytest_addoption(parser):
     g.addoption("--qwen-run-dir", default="generated/qwen3_vl_quasar/adhoc")
     g.addoption("--qwen-dump-stages", action="store_true", default=False, help="Save golden and TT stage tensors.")
     g.addoption(
-        "--qwen-clear-program-cache-before-decode",
-        action="store_true",
-        default=False,
-        help="Debug: clear the program cache between prefill and decode.",
-    )
-    g.addoption(
-        "--qwen-probe-before-decode",
-        default="",
-        help="Debug: comma-separated probes (tests/e2e/probes.py) to run on dummy tensors right before decode.",
-    )
-    g.addoption(
-        "--qwen-check-tensor-integrity",
-        action="store_true",
-        default=False,
-        help="Debug: report model device tensors (KV cache excluded) whose contents change between model build and decode.",
-    )
-    g.addoption(
         "--qwen-capture-ops",
         default=None,
         metavar="STAGE_PREFIX",

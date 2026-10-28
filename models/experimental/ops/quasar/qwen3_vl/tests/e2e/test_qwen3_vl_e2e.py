@@ -71,9 +71,6 @@ def test_qwen3_vl_e2e(mesh_device, qwen_run_config, monkeypatch, request):
             monkeypatch,
             snapshot_out=None if resume else cfg.run_dir / S.SNAPSHOT_NAME,
             resume=resume,
-            clear_program_cache_before_decode=request.config.getoption("--qwen-clear-program-cache-before-decode"),
-            probes=[p for p in request.config.getoption("--qwen-probe-before-decode").split(",") if p],
-            check_integrity=request.config.getoption("--qwen-check-tensor-integrity"),
             vision_only=vision_only,
         )
     host_ops, hits = session.host_ops_active, dict(session.hits)

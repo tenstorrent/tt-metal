@@ -5,7 +5,6 @@
 import torch
 
 import ttnn
-from models.experimental.ops.quasar.qwen3_vl.tests.e2e import probes as PR
 from models.experimental.ops.quasar.qwen3_vl.tests.e2e import snapshot as S
 from models.experimental.ops.quasar.qwen3_vl.tt.common import (
     PagedAttentionConfig,
@@ -70,9 +69,6 @@ def run_tt(
     monkeypatch,
     snapshot_out=None,
     resume=None,
-    clear_program_cache_before_decode=False,
-    probes=(),
-    check_integrity=False,
     vision_only=False,
 ):
     """Run vision, prefill and teacher-forced decode. After prefill, save a snapshot to `snapshot_out` (if given);
@@ -89,11 +85,6 @@ def run_tt(
     if resume is None:
         visual = _build_vision(vision_cls, preset, hf_model, mesh_device, recorder, monkeypatch, n_patches, n_img)
     if vision_only:
-        if check_integrity:  # debug: block 0 attention weights as they sit on device right before the forward
-            found = PR.device_tensors(visual.tt_model)
-            weights = {n: recorder.to_host(t) for n, t in found.items() if "blocks[0].attention" in n}
-            torch.save(weights, cfg.run_dir / "block0_attention_weights.pt")
-            print(f"[integrity] saved {sorted(weights)}", flush=True)
         visual.forward_single_user(inputs["pixel_values"], grid_thw=inputs["image_grid_thw"][0])
         return
 
@@ -121,8 +112,6 @@ def run_tt(
     recorder.wrap(monkeypatch, model.norm, "text.norm", lambda t: t.reshape(-1, t.shape[-1])[row], when=_is_prefill)
     args.use_qk_fused = False
     gen = Generator(model, args, mesh_device, processor=args.processor, tokenizer=args.tokenizer)
-    kv_flat = [t for layer in kv_cache for t in layer]
-    before = PR.checksums(PR.device_tensors(model, skip=kv_flat)) if check_integrity else None
 
     if resume:
         S.restore_kv(kv_cache, resume)
@@ -146,15 +135,6 @@ def run_tt(
                 recorder.to_host,
             )
 
-    if clear_program_cache_before_decode:
-        mesh_device.clear_program_cache()
-    if probes:
-        PR.run(probes, mesh_device)
-    if check_integrity:
-        after = PR.checksums(PR.device_tensors(model, skip=kv_flat))
-        changed = sorted(n for n in before if n in after and before[n] != after[n])
-        recorder.integrity = {"checked": len(before), "changed": {n: (before[n], after.get(n)) for n in changed}}
-        print(f"[integrity] {len(before)} device tensors checked, {len(changed)} changed: {changed[:40]}", flush=True)
     gen.update_rope_deltas([rope_delta])
     pos = torch.tensor([decoding_pos])
     for k, tok in enumerate(goldens.teacher_tokens):
