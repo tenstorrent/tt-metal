@@ -20,7 +20,15 @@ class MLPWeights:
     w_gate_up: ttnn.Tensor = None  # TP prefill: tile-pair-interleaved packed [gate|up] for fused-swiglu AGMM
 
 
-def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
+def _gateup_dtype(args):
+    """Gate/up weight dtype (args.mlp_gateup_dtype, default bfloat4_b) and a cache-name tag: empty for
+    bfloat4_b so existing caches stay valid, else e.g. `.bfp8` so a dtype change never reuses stale files."""
+    dtype = getattr(args, "mlp_gateup_dtype", None) or ttnn.bfloat4_b
+    tag = {ttnn.bfloat4_b: "", ttnn.bfloat8_b: ".bfp8", ttnn.bfloat16: ".bf16"}[dtype]
+    return dtype, tag
+
+
+def _build_gate_up(gate_w, up_w, mesh, tp, cache_path, dtype=ttnn.bfloat4_b):
     """Packed [gate|up] weight for all_gather_swiglu_prefill: prepare_for_fused_swiglu tile-pair
     interleave, then column-parallel shard on the 2N dim so each device holds its interleaved slice."""
     import torch
@@ -39,7 +47,7 @@ def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
     return ttnn.as_tensor(
         gate_w,
         preprocess=pack,
-        dtype=ttnn.bfloat4_b,
+        dtype=dtype,
         device=mesh,
         mesh_mapper=tpc.tp_shard_mapper(mesh, -1),
         layout=ttnn.TILE_LAYOUT,
@@ -51,6 +59,7 @@ def _build_gate_up(gate_w, up_w, mesh, tp, cache_path):
 def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None, use_gateup_agmm=True) -> MLPWeights:
     """Per-layer MLP state: gate_proj, down_proj, up_proj weights."""
     tp = getattr(args, "num_devices", 1) if args is not None else 1
+    gu_dtype, gu_tag = _gateup_dtype(args)
 
     if tp > 1:
         # TP: w1/w3 column-parallel (shard out dim), w2 row-parallel (shard in dim).
@@ -77,7 +86,8 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
                 state_dict["up_proj.weight"],
                 mesh_device,
                 tp,
-                cache("gate_up", ".swiglu"),
+                cache("gate_up", ".swiglu" + gu_tag),
+                gu_dtype,
             )
             if tpc.mlp_gateup_agmm_enabled(tp) and use_gateup_agmm
             else None
@@ -90,16 +100,16 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
                     mesh_device,
                     dim=-1,
                     memory_config=args.mlp_w1_weight_memcfg,
-                    cache_path=cache("gate_proj", ".dramshard"),
-                    dtype=ttnn.bfloat4_b,
+                    cache_path=cache("gate_proj", ".dramshard" + gu_tag),
+                    dtype=gu_dtype,
                 ),
                 w3=tpc.shard_w(
                     state_dict["up_proj.weight"],
                     mesh_device,
                     dim=-1,
                     memory_config=args.mlp_w3_weight_memcfg,
-                    cache_path=cache("up_proj", ".dramshard"),
-                    dtype=ttnn.bfloat4_b,
+                    cache_path=cache("up_proj", ".dramshard" + gu_tag),
+                    dtype=gu_dtype,
                 ),
                 w2=tpc.shard_w(
                     state_dict["down_proj.weight"],
@@ -119,16 +129,16 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
                 mesh_device,
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                cache_path=cache("gate_proj"),
-                dtype=ttnn.bfloat4_b,
+                cache_path=cache("gate_proj", gu_tag),
+                dtype=gu_dtype,
             ),
             w3=tpc.shard_w(
                 state_dict["up_proj.weight"],
                 mesh_device,
                 dim=-1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                cache_path=cache("up_proj"),
-                dtype=ttnn.bfloat4_b,
+                cache_path=cache("up_proj", gu_tag),
+                dtype=gu_dtype,
             ),
             w2=tpc.shard_w(
                 state_dict["down_proj.weight"],
@@ -141,7 +151,7 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
             w_gate_up=wgu,
         )
 
-    def load(name, dtype):
+    def load(name, dtype, tag=""):
         return ttnn.as_tensor(
             state_dict[f"{name}.weight"],
             preprocess=lambda t: t.T.contiguous(),  # [in, out] for ttnn.linear; cache-miss only
@@ -149,14 +159,14 @@ def load_mlp_weights(mesh_device, state_dict, tensor_cache_path=None, args=None,
             layout=ttnn.TILE_LAYOUT,
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=(tensor_cache_path / f"mlp.{name}.weight") if tensor_cache_path else None,
+            cache_file_name=(tensor_cache_path / f"mlp.{name}.weight{tag}") if tensor_cache_path else None,
         )
 
-    # gate/up: bfloat4_b (bandwidth); down: bfloat8_b (accuracy).
+    # gate/up: bfloat4_b default (bandwidth; args.mlp_gateup_dtype); down: bfloat8_b (accuracy).
     return MLPWeights(
-        w1=load("gate_proj", ttnn.bfloat4_b),
+        w1=load("gate_proj", gu_dtype, gu_tag),
         w2=load("down_proj", ttnn.bfloat8_b),
-        w3=load("up_proj", ttnn.bfloat4_b),
+        w3=load("up_proj", gu_dtype, gu_tag),
     )
 
 

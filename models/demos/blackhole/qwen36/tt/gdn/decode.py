@@ -77,6 +77,7 @@ def recurrent_forward(gdn, x, mode="recurrent", chunk_size=None, valid_len=None)
         use_inplace_state=True,
         chunk_seq_masks=seq_masks,
         valid_len=valid_len,
+        chunk_delta_rule_fn=gdn.fused_prefill_fn,
     )
 
     if new_state is not gdn.recurrent_state:
