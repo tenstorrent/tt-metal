@@ -18,9 +18,10 @@ void check(const Tensor& t, const char* name, DataType dt) {
     TT_FATAL(t.buffer() != nullptr, "chunk_gdn: {} must be on device", name);
 }
 
+// Uniquely named (vs chunk_gdn_device_operation.cpp's `check_gdn_gate`) so it does not clash under unity builds.
 // A gate, g or beta: the token-major [B, T, HV] tensor the model produces, fp32 or bf16, TILE, with B * HV heads and
 // num_chunks chunks of chunk_size tokens (the reader zeroes the rows past T).
-void check_gdn_gate(
+void check_gdn_phased_gate(
     const Tensor& t, const char* name, uint32_t BH, uint32_t HV, uint32_t num_chunks, uint32_t chunk_size) {
     TT_FATAL(t.layout() == Layout::TILE, "chunk_gdn: {} must be TILE layout", name);
     TT_FATAL(
@@ -68,8 +69,8 @@ void ChunkGdnPrepOperation::validate_on_program_cache_miss(
             qsf[2] == attrs.Hk * attrs.key_dim, "qk_flat width {} != Hk*K ({}*{})", qsf[2], attrs.Hk, attrs.key_dim);
         TT_FATAL(attrs.qk_norm, "qk_flat requires qk_norm (flat q/k are unnormalized; norm is in-kernel)");
     }
-    check_gdn_gate(in.g, "g", attrs.BH, attrs.HV, attrs.num_chunks, attrs.chunk_size);
-    check_gdn_gate(in.beta, "beta", attrs.BH, attrs.HV, attrs.num_chunks, attrs.chunk_size);
+    check_gdn_phased_gate(in.g, "g", attrs.BH, attrs.HV, attrs.num_chunks, attrs.chunk_size);
+    check_gdn_phased_gate(in.beta, "beta", attrs.BH, attrs.HV, attrs.num_chunks, attrs.chunk_size);
     // The factory reads both gates with g's T: a beta of the same chunk count but fewer tokens reads past its end.
     TT_FATAL(
         in.g.logical_shape()[1] == in.beta.logical_shape()[1],
