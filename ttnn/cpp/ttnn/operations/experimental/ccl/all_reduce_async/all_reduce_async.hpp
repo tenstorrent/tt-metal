@@ -61,6 +61,7 @@ ttnn::Tensor all_reduce_async(
     std::optional<tt::tt_metal::SubDeviceId> worker_subdevice_id_opt,
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama,
-    bool fp32_dest_acc = false);
+    bool fp32_dest_acc = false,
+    const std::optional<ttnn::Tensor>& residual_tensor = std::nullopt);
 
 }  // namespace ttnn::experimental

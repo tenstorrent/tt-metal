@@ -431,6 +431,24 @@ tt::tt_metal::ProgramDescriptor AllReduceAsyncMeshWorkloadFactory::create_descri
         .buffer = output_tensor.buffer(),  // TODO: Remove once new cb attached for output
     });
 
+    /* fused residual cb: the residual tensor's own L1 shards (same shard spec as the output), read in place */
+    const bool fuse_residual = tensor_args.residual_tensor.has_value();
+    uint32_t residual_cb_index = tt::CBIndex::c_4;
+    if (fuse_residual) {
+        const auto& residual_tensor = tensor_args.residual_tensor.value();
+        const uint32_t residual_CB_single_tile_size = residual_tensor.tensor_spec().tile().get_tile_size(df);
+        desc.cbs.push_back(tt::tt_metal::CBDescriptor{
+            .total_size = output_tensor_shard_num_pages * residual_CB_single_tile_size,
+            .core_ranges = output_tensor_cores,
+            .format_descriptors = {{tt::tt_metal::CBFormatDescriptor{
+                .buffer_index = static_cast<uint8_t>(residual_cb_index),
+                .data_format = df,
+                .page_size = residual_CB_single_tile_size,
+            }}},
+            .buffer = residual_tensor.buffer(),
+        });
+    }
+
     const std::vector<uint32_t> no_work_rt_args = {static_cast<uint32_t>(!has_work), 0u, 0u};
 
     // Create reduction dataflow kernel
@@ -441,8 +459,11 @@ tt::tt_metal::ProgramDescriptor AllReduceAsyncMeshWorkloadFactory::create_descri
     reduction_reader_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     reduction_reader_kernel_desc.core_ranges = output_cores_all;
     reduction_reader_kernel_desc.compile_time_args = {
-        reduction_cb_index,  // reduction_cb_index
-        reduction_CB_tiles,  // total_num_reduction_tiles
+        reduction_cb_index,                                  // reduction_cb_index
+        reduction_CB_tiles,                                  // total_num_reduction_tiles
+        static_cast<uint32_t>(fuse_residual),                // fuse_residual
+        residual_cb_index,                                   // residual_cb_index
+        fuse_residual ? output_tensor_shard_num_pages : 0u,  // num_residual_tiles
     };
     reduction_reader_kernel_desc.config = tt::tt_metal::DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
@@ -462,8 +483,10 @@ tt::tt_metal::ProgramDescriptor AllReduceAsyncMeshWorkloadFactory::create_descri
     reduction_compute_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     reduction_compute_kernel_desc.core_ranges = output_cores_all;
     reduction_compute_kernel_desc.compile_time_args = {
-        reduction_cb_index,  // reduction_cb_index
-        out_cb_index,        // out_cb_index
+        reduction_cb_index,                    // reduction_cb_index
+        out_cb_index,                          // out_cb_index
+        static_cast<uint32_t>(fuse_residual),  // fuse_residual
+        residual_cb_index,                     // residual_cb_index
     };
     tt::tt_metal::ComputeConfigDescriptor reduction_compute_config{
         .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
@@ -697,6 +720,10 @@ void AllReduceAsyncMeshWorkloadFactory::override_runtime_arguments(
             tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), *tensor_args.buffer_tensor.buffer());
         } else if (indices.contains(static_cast<uint8_t>(tt::CBIndex::c_2))) {
             tt::tt_metal::UpdateDynamicCircularBufferAddress(program, cb->id(), *output_tensor.buffer());
+        } else if (
+            indices.contains(static_cast<uint8_t>(tt::CBIndex::c_4)) && tensor_args.residual_tensor.has_value()) {
+            tt::tt_metal::UpdateDynamicCircularBufferAddress(
+                program, cb->id(), *tensor_args.residual_tensor.value().buffer());
         }
     }
 }

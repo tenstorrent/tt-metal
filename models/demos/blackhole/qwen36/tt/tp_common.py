@@ -1074,6 +1074,14 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
 #   QWEN36_DECODE_AR_GDN_FP32=1          GDN partial all-reduced in fp32 (fp32 persistent buffer,
 #                                        fp32 dest accumulation); the residual add then mixes bf16 + fp32
 #                                        exactly like the reduce-scatter path does today.
+#   QWEN36_DECODE_AR_FUSE_RESIDUAL=0 (default) all_reduce_async, then a separate RES40 ttnn.add of the residual.
+#   QWEN36_DECODE_AR_FUSE_RESIDUAL=1     the residual add runs inside all_reduce_async's reduction kernel
+#                                        (residual_tensor=: the residual's RES40 shard is a CB the kernel adds onto
+#                                        the reduced tile in DST before packing). Removes the 2 RES40 adds per layer
+#                                        and their L1 output. bf16 partials only (an fp32 GDN partial under
+#                                        QWEN36_DECODE_AR_GDN_FP32=1 keeps the separate add). The layer arms the
+#                                        residual (arm_residual) before attention / MLP and takes the sum with
+#                                        add_residual; any other all_reduce caller is unaffected.
 #
 # Prefill never reads these flags: it keeps the fractured residual and produces only KV / GDN state,
 # so the residual format is private to each forward. Dispatch inside the layer / final norm is on
@@ -1081,6 +1089,7 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
 # ---------------------------------------------------------------------------------------------
 DECODE_AR_ENV = "QWEN36_DECODE_ALLREDUCE"
 DECODE_AR_GDN_FP32_ENV = "QWEN36_DECODE_AR_GDN_FP32"
+DECODE_AR_FUSE_ENV = "QWEN36_DECODE_AR_FUSE_RESIDUAL"
 _DAR_GRID = (10, 4)  # RES40 core grid (x, y)
 _DAR_UNSET = object()
 
@@ -1092,7 +1101,7 @@ class DecodeResidualAllReduce:
     persistent all-reduce buffer is allocated exactly once, at construction (never inside a trace).
     """
 
-    def __init__(self, mesh_device, args, tt_ccl, gdn_fp32=False):
+    def __init__(self, mesh_device, args, tt_ccl, gdn_fp32=False, fuse_residual=False):
         self.mesh = mesh_device
         self.tt_ccl = tt_ccl
         self.dim = args.dim
@@ -1101,6 +1110,11 @@ class DecodeResidualAllReduce:
         # Same link count the fractured path's AG/RS use on this mesh (tt_ccl.get_num_links(axis)).
         self.num_links = tt_ccl.get_num_links(1)
         self.gdn_fp32 = gdn_fp32
+        # QWEN36_DECODE_AR_FUSE_RESIDUAL: residual armed by the layer for the next all_reduce, and the output of the
+        # all_reduce that consumed it (add_residual returns that output instead of adding again).
+        self.fuse_residual = fuse_residual
+        self._armed = None
+        self._fused_out = None
 
         ncores = _DAR_GRID[0] * _DAR_GRID[1]
         grid = ttnn.CoreRangeSet(
@@ -1186,11 +1200,47 @@ class DecodeResidualAllReduce:
         """Residual add; both operands (and the result) live in RES40."""
         return ttnn.add(a, b, memory_config=self.res_mem)
 
+    def arm_residual(self, x):
+        """QWEN36_DECODE_AR_FUSE_RESIDUAL=1: the next all_reduce adds `x` (the RES40 residual) in its reduction
+        kernel. No-op with the flag off. Pair with add_residual(x, out) on the module's output."""
+        self._armed = x if self.fuse_residual else None
+        self._fused_out = None
+
+    def add_residual(self, x, out):
+        """Residual add after an armed module: `out` itself when the all_reduce that produced it already added `x`
+        (fused), else add(x, out). Disarms. Callers must not deallocate `out` when the result `is out`."""
+        fused, self._fused_out, self._armed = self._fused_out, None, None
+        if fused is None:
+            return self.add(x, out)
+        if out is not fused:
+            raise RuntimeError(
+                f"{DECODE_AR_FUSE_ENV}=1: the module output is not the residual-fused all_reduce output "
+                "(an op ran on it after the all-reduce, or the module all-reduced twice); set the flag to 0"
+            )
+        return out
+
+    def _take_armed(self, packed, dtype):
+        """The armed residual if it can be fused into this all_reduce (same dtype / shape / RES40 layout), else
+        None. Disarms either way: one armed residual feeds at most one all_reduce."""
+        res, self._armed = self._armed, None
+        if res is None:
+            return None
+        if (
+            dtype != ttnn.bfloat16
+            or res.dtype != dtype
+            or list(res.shape) != list(packed.shape)
+            or res.memory_config() != self.res_mem
+        ):
+            return None
+        return res
+
     def all_reduce(self, partial, keep_fp32=False):
         """Sum the per-device row-parallel partial [1,1,B,dim] across the TP axis -> replicated RES40.
 
         keep_fp32: the caller's partial is fp32 (GDN out-proj); honoured only when QWEN36_DECODE_AR_GDN_FP32=1,
         otherwise it is cast to bf16 (the persistent buffer / CCL dtype) after the reshard to RES40.
+        QWEN36_DECODE_AR_FUSE_RESIDUAL=1 with a residual armed (arm_residual): returns residual + sum, computed in
+        the reduction kernel; add_residual then hands this tensor back instead of adding again.
         """
         use_fp32 = keep_fp32 and self.gdn_fp32
         dtype = ttnn.float32 if use_fp32 else ttnn.bfloat16
@@ -1205,6 +1255,9 @@ class DecodeResidualAllReduce:
             ttnn.deallocate(packed)
             packed = cast
         extra = dict(fp32_dest_acc=True) if use_fp32 else {}
+        residual = self._take_armed(packed, dtype)
+        if residual is not None:
+            extra["residual_tensor"] = residual
         out = ttnn.experimental.all_reduce_async(
             packed,
             self.buffer_fp32 if use_fp32 else self.buffer,
@@ -1217,6 +1270,8 @@ class DecodeResidualAllReduce:
             **extra,
         )
         ttnn.deallocate(packed)
+        if residual is not None:
+            self._fused_out = out
         return out
 
 
@@ -1253,11 +1308,16 @@ def get_decode_allreduce(args, tt_ccl):
             logger.warning(f"{DECODE_AR_ENV}=1 ignored ({reason}); keeping the fractured-residual decode path")
         else:
             inst = DecodeResidualAllReduce(
-                mesh, args, tt_ccl, gdn_fp32=os.environ.get(DECODE_AR_GDN_FP32_ENV, "0") == "1"
+                mesh,
+                args,
+                tt_ccl,
+                gdn_fp32=os.environ.get(DECODE_AR_GDN_FP32_ENV, "0") == "1",
+                fuse_residual=os.environ.get(DECODE_AR_FUSE_ENV, "0") == "1",
             )
             logger.info(
                 f"{DECODE_AR_ENV}=1: decode uses the replicated 40-core L1 residual + all_reduce_async "
-                f"(gdn_fp32={inst.gdn_fp32}, num_links={inst.num_links}, topology={inst.topology})"
+                f"(gdn_fp32={inst.gdn_fp32}, fuse_residual={inst.fuse_residual}, num_links={inst.num_links}, "
+                f"topology={inst.topology})"
             )
     tt_ccl._qwen36_decode_ar = inst
     return inst
