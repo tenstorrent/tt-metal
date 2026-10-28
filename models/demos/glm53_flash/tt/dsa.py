@@ -1462,6 +1462,21 @@ class TtDSA(LightweightModule):
         self._mark("out_proj")
         return y
 
+    def _owner_entry(self, t: ttnn.Tensor, owner: int) -> ttnn.Tensor:
+        """Entry ``owner`` of a ``[cols, ...]`` TILE tensor as ``[1, ...]`` through the tensor-argument slice (the
+        start as a device tensor): ONE program for every owner. A slice at a host offset keys its program on the
+        owner, so the sealed program cache missed on the first sparse block of a user whose owning column the
+        warm-up had not walked at that block size (the 2026-10-28 served 64K needles, SliceDeviceOperation)."""
+        dims = [int(d) for d in t.shape]
+        rm = lambda v: ttnn.from_torch(
+            torch.tensor(v, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+        )
+        start, end = rm([owner] + [0] * (len(dims) - 1)), rm([owner + 1] + dims[1:])
+        out = ttnn.slice(input_tensor=t, starts=start, ends=end, slice_dim=0, num_devices=dims[0])
+        ttnn.deallocate(start)
+        ttnn.deallocate(end)
+        return out
+
     def _prefix_rows(self, cache: TtLatentCache, user: int, start: int) -> ttnn.Tensor:
         """The cached latent rows [0, start) of ``user`` as a fresh TILE [1,1,start,L] tensor on every column (the
         dense rows' K/V prefix). With the heads2users layout only the owner column holds them: its rows are
@@ -1473,7 +1488,7 @@ class TtDSA(LightweightModule):
             return rows
         g = self.mesh.all_gather_cols(rows, dim=0)  # [cols,1,start,L]: entry c = column c's slot rows
         ttnn.deallocate(rows)
-        prefix = ttnn.slice(g, [owner, 0, 0, 0], [owner + 1, 1, start, self.L])
+        prefix = self._owner_entry(g, owner)  # [1,1,start,L]
         ttnn.deallocate(g)
         return prefix
 
@@ -1495,7 +1510,7 @@ class TtDSA(LightweightModule):
             return rows
         g = self.mesh.all_gather_cols(rows, dim=0)  # [cols,1,P,L]
         ttnn.deallocate(rows)
-        keys = ttnn.slice(g, [owner, 0, 0, 0], [owner + 1, 1, P, self.L])
+        keys = self._owner_entry(g, owner)  # [1,1,P,L]
         ttnn.deallocate(g)
         return keys
 
@@ -1807,7 +1822,7 @@ class TtDSA(LightweightModule):
             ttnn.deallocate(o_rm)
             o_x = self.mesh.all_to_all_cols(o, in_dim=1, out_dim=0)  # [cols,H,n,L]: entry s = column s's result
             ttnn.deallocate(o)
-            o_lat = ttnn.slice(o_x, [owner, 0, 0, 0], [owner + 1, H, n, self.L])  # the owner's, my head shard
+            o_lat = self._owner_entry(o_x, owner)  # [1,H,n,L]: the owner's result, my head shard (one program per n)
             ttnn.deallocate(o_x)
             self._mark("a2a_owner_to_heads")
             return o_lat
