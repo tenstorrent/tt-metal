@@ -2319,3 +2319,19 @@ only for a choice proven to give the default's numbers bit for bit (here `random
 off; tests/test_engram_table_modes.py). The environment variable still overrides both; a process without pytest (the
 server) gets the default. Selftest `test_model_settings.py::test_a_test_value_applies_only_under_pytest_and_the_
 environment_still_wins`; full selftests 651 pass (1 failure from before: xing40 fixed threshold).
+
+## F223: an fp4 quantizer's output is nudged inside its fp4 cell, so a 4-bit cache is judged against the reference's own 4-bit rounding (DeepSeek-V4.1 2x2 CKV_FORMAT=bfp4_rows, owner 2026-10-28)
+
+With the compressed KV stored as bfloat4_b rows, the attention step failed one check: chunk0 rel 0.0321 > 0.03. The
+golden check passed (0.029 <= 0.148), because its floor includes the official arithmetic, whose fp4 cache moves the
+output by 0.025-0.047. The synthetic inputs (chunk0, layer14, mixed) have no official arithmetic. Their floor was the
+input nudge alone, and the compressed input was `fixed` (a quantizer output, not nudged). So the floor was 0.0033 and
+the structural minimum of 0.03 applied: a bar the reference's own 4-bit cache would not clear. Owner: count the
+reference's fp4 in the limit. `noise_floor.nudge` takes the input dtype `fp4/<block>`. The value moves uniformly
+inside its e2m1 cell: the grid step at |x| / s, with s = the block's amax / 6 along the last dim. This is the size of
+the official quantizer's rounding, which the selftest checks against an fp4 quant-dequant (0.5-2x). `input_dtypes`
+accepts it and refuses `fp4/<non-number>`. DeepSeek-V4.1's official_taps.yaml marks the attention step's compressed
+input `fp4/16` (e2m1, e4m3 scale per 16). The indexer's compressed input stays `fixed`, since the device does not
+re-round it. Result: chunk0 limit 0.0493 (was 0.03), pass; layer14 / mixed stay at 0.03 (their floor is lower).
+Selftest `test_noise_floor.py::test_an_fp4_input_is_nudged_by_the_size_of_its_quantizers_rounding`;
+noise_floor + swap_checks selftests 56 pass.
