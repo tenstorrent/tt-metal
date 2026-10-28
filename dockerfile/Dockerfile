@@ -190,15 +190,9 @@ RUN git config --global --add safe.directory '*'
 
 # Install extra ci apt requirements
 # Note: llvm-20 is required for llvm-ar-20, which CMake needs for LTO support detection
-# clang-tidy-23's llvm-23 apt repo is added here, not in install_dependencies.sh:
-# adding it that early (base stage) made apt resolve libc++-20-dev/libc++abi-20-dev's
-# libc++1 dependency against the newer v23 candidate instead of v20, breaking the build.
-RUN . /etc/os-release && \
-    keyring=/usr/share/keyrings/llvm-snapshot.asc && \
-    curl -fsSL -o "$keyring" https://apt.llvm.org/llvm-snapshot.gpg.key && \
-    echo "deb [signed-by=$keyring] https://apt.llvm.org/${VERSION_CODENAME}/ llvm-toolchain-${VERSION_CODENAME}-23 main" \
-        > /etc/apt/sources.list.d/llvm-23.list && \
-    apt-get update && apt-get install -y --no-install-recommends \
+# clang-tidy-23 comes from the llvm-23 apt repo added (and pinned below the v17/v20
+# default priority) in install_dependencies.sh.
+RUN apt-get update && apt-get install -y --no-install-recommends \
     apt-utils \
     bc \
     libclang-20-dev \
