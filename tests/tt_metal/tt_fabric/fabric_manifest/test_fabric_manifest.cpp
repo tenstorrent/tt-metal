@@ -164,15 +164,12 @@ protected:
     std::vector<RouterEntry> routers_;
 };
 
-using Fabric1DManifestFixture = FabricManifestFixture<FabricConfig::FABRIC_1D>;
-using Fabric2DManifestFixture = FabricManifestFixture<FabricConfig::FABRIC_2D>;
-// We use mock cluster descriptors for torus and mux fabric configs, so we can test the manifest generation for these
-// configs without needing physical hardware. These names intentionally don't hit the hardware CI filters so that they
-// don't run on hardware CI as they are meant to be host-only.
-using FabricTorusXManifestFixture = FabricManifestFixture<FabricConfig::FABRIC_2D_TORUS_X>;
-using FabricTorusYManifestFixture = FabricManifestFixture<FabricConfig::FABRIC_2D_TORUS_Y>;
-using FabricTorusXYManifestFixture = FabricManifestFixture<FabricConfig::FABRIC_2D_TORUS_XY>;
-using FabricMuxManifestFixture = FabricManifestFixture<FabricConfig::FABRIC_2D, FabricTensixConfig::MUX>;
+using Manifest1DFixture = FabricManifestFixture<FabricConfig::FABRIC_1D>;
+using Manifest2DFixture = FabricManifestFixture<FabricConfig::FABRIC_2D>;
+using ManifestTorusXFixture = FabricManifestFixture<FabricConfig::FABRIC_2D_TORUS_X>;
+using ManifestTorusYFixture = FabricManifestFixture<FabricConfig::FABRIC_2D_TORUS_Y>;
+using ManifestTorusXYFixture = FabricManifestFixture<FabricConfig::FABRIC_2D_TORUS_XY>;
+using ManifestMuxFixture = FabricManifestFixture<FabricConfig::FABRIC_2D, FabricTensixConfig::MUX>;
 
 // ============ Checks ============
 //
@@ -931,11 +928,11 @@ TEST(ManifestArgs, KernelInputsAccounted) {
     TEST_F(Fixture, RouterDiagnostics) { check_router_diagnostics(routers_); }                             \
     TEST_F(Fixture, RouterHostCleared) { check_router_host_cleared(routers_); }
 
-TEST_MANIFEST_CHECKS(Fabric1DManifestFixture)
-TEST_MANIFEST_CHECKS(Fabric2DManifestFixture)
-TEST_MANIFEST_CHECKS(FabricTorusXManifestFixture)
-TEST_MANIFEST_CHECKS(FabricTorusYManifestFixture)
-TEST_MANIFEST_CHECKS(FabricTorusXYManifestFixture)
-TEST_MANIFEST_CHECKS(FabricMuxManifestFixture)
+TEST_MANIFEST_CHECKS(Manifest1DFixture)
+TEST_MANIFEST_CHECKS(Manifest2DFixture)
+TEST_MANIFEST_CHECKS(ManifestTorusXFixture)
+TEST_MANIFEST_CHECKS(ManifestTorusYFixture)
+TEST_MANIFEST_CHECKS(ManifestTorusXYFixture)
+TEST_MANIFEST_CHECKS(ManifestMuxFixture)
 
 }  // namespace tt::tt_fabric::fabric_router_tests
