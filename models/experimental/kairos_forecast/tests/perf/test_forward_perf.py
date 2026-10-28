@@ -53,7 +53,7 @@ class TimedTrace(TracedKairos):
         self._switch(front)
         host = self.model.prepare_host(front)
         t1 = time.perf_counter()
-        dev = {k: v for k, v in self.inputs[self.B].items() if k not in ("reg", "dec_in")}
+        dev = {k: v for k, v in self.inputs[self.B].items() if k not in ("reg", "dec_in", "causal")}
         for h, d in zip(_leaves(host), _leaves(dev), strict=True):
             ttnn.copy_host_to_device_tensor(h, d)
         ttnn.synchronize_device(self.device)

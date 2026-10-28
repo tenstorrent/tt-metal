@@ -80,7 +80,7 @@ def dev_taps(model, front):
     taps["enc_norm"] = host(enc, S_PAD)
     h = inp["dec_in"]
     for i, (blk, rope) in enumerate(zip(model.dec, inp["dec_rope"])):
-        h = model.dec_block(h, enc, blk, rope, inp["cross_mask"], B)
+        h = model.dec_block(h, enc, blk, rope, inp["cross_mask"], B, inp["causal"])
         taps[f"dec{i}"] = host(h, D_PAD)
     out = model._norm(h, model.dec_norm)
     taps["dec_norm"] = host(out, D_PAD)
