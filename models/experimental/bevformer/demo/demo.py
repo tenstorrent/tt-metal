@@ -164,6 +164,17 @@ def _serialize_detection(boxes, scores, labels, class_names):
     return result
 
 
+def _latency_summary(device_latencies, end_to_end_latencies):
+    mean_device_latency = statistics.mean(device_latencies)
+    return {
+        "mean_device_latency_ms": mean_device_latency * 1e3,
+        "p50_device_latency_ms": statistics.median(device_latencies) * 1e3,
+        "mean_end_to_end_latency_ms": statistics.mean(end_to_end_latencies) * 1e3,
+        "p50_end_to_end_latency_ms": statistics.median(end_to_end_latencies) * 1e3,
+        "device_fps": 1.0 / mean_device_latency,
+    }
+
+
 def run_demo(args):
     if args.num_frames < 1:
         raise ValueError("--num-frames must be positive")
@@ -313,14 +324,16 @@ def run_demo(args):
         "score_threshold": parameter_model.bbox_coder.score_threshold,
         "preparation_frame": first_token,
         "num_frames": len(results),
-        "mean_device_latency_ms": statistics.mean(device_latencies) * 1e3,
-        "mean_end_to_end_latency_ms": statistics.mean(end_to_end_latencies) * 1e3,
-        "device_fps": 1.0 / statistics.mean(device_latencies),
+        **_latency_summary(device_latencies, end_to_end_latencies),
     }
     output = {"summary": summary, "frames": results}
     output_path = output_dir / "detections.json"
     output_path.write_text(json.dumps(output, indent=2), encoding="utf-8")
     logger.info(f"Mean device latency: {summary['mean_device_latency_ms']:.1f} ms ({summary['device_fps']:.2f} FPS)")
+    logger.info(
+        f"P50 latency: device {summary['p50_device_latency_ms']:.1f} ms, "
+        f"end-to-end {summary['p50_end_to_end_latency_ms']:.1f} ms"
+    )
     logger.info(f"Results saved to {output_path}")
     return output_path
 

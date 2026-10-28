@@ -205,5 +205,33 @@ match the order used while training the camera embeddings. Use `--dataset-root` 
 to resolve the converted relative paths. Because pickle loading can execute code, only convert
 metadata from a trusted source.
 
+## Output
+
 The demo writes `detections.json`, containing per-frame boxes, scores, numeric labels, optional
-class names, device latency, end-to-end latency, and a run summary.
+class names, device latency, end-to-end latency, and a run summary. The preparation invocation and
+the initial temporal cold-start/warmup invocation are excluded from all reported metrics. The
+warmup input is rerun as measured frame 0, so all reported latencies describe warmed executions.
+
+`device_latency_ms` measures host wall-clock time around the TT model forward, device-side
+detection, synchronization, and input deallocation. `end_to_end_latency_ms` additionally includes
+image loading, preprocessing, transfer preparation, and host box readback.
+
+The `summary` object contains:
+
+| Field | Meaning |
+| --- | --- |
+| `variant` | Selected model variant. |
+| `checkpoint` | Checkpoint path, or `random`. |
+| `dataset_format` | `synthetic` or `manifest`. |
+| `score_threshold` | Device-side minimum detection score. |
+| `preparation_frame` | Unmeasured temporal-state frame token. |
+| `num_frames` | Number of measured output frames. |
+| `mean_device_latency_ms` | Arithmetic mean of device latency samples. |
+| `p50_device_latency_ms` | Median device latency sample. |
+| `mean_end_to_end_latency_ms` | Arithmetic mean of end-to-end samples. |
+| `p50_end_to_end_latency_ms` | Median end-to-end latency sample. |
+| `device_fps` | Estimated steady-state device-path throughput: `1000 / mean_device_latency_ms`. |
+
+The p50 fields use the standard median. `device_fps` remains mean-based, so its value accounts for
+every measured frame. It excludes image loading, preprocessing, host box readback, preparation,
+and cold-start warmup.

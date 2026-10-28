@@ -4,17 +4,36 @@
 import hashlib
 import json
 
+import pytest
+
 from models.experimental.bevformer.config import builtin_config_path, load_builtin_config, load_model_config
 from models.experimental.bevformer.config.convert_upstream import convert_upstream_config, variant_from_source
 from models.experimental.bevformer.config.loader import _github_raw_url
 from models.experimental.bevformer.demo.checkpoint import _mmdet3d_key
 from models.experimental.bevformer.demo.dataset import SequenceManifest
-from models.experimental.bevformer.demo.demo import _parse_args
+from models.experimental.bevformer.demo.demo import _latency_summary, _parse_args
 
 
 def test_checkpoint_cli_argument():
     assert _parse_args([]).checkpoint == "random"
     assert _parse_args(["--checkpoint", "model.pth"]).checkpoint == "model.pth"
+
+
+def test_latency_summary_reports_means_p50_and_mean_based_fps():
+    summary = _latency_summary(
+        device_latencies=[0.5, 0.6, 0.7, 19.6],
+        end_to_end_latencies=[0.9, 1.0, 1.1, 20.0],
+    )
+
+    assert summary == pytest.approx(
+        {
+            "mean_device_latency_ms": 5350.0,
+            "p50_device_latency_ms": 650.0,
+            "mean_end_to_end_latency_ms": 5750.0,
+            "p50_end_to_end_latency_ms": 1050.0,
+            "device_fps": 1.0 / 5.35,
+        }
+    )
 
 
 def test_normalized_config(tmp_path, expect_error):
