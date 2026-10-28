@@ -81,11 +81,14 @@ struct RotaryEmbeddingIndexedDeviceOperation {
 
         // Build this device's named-arg ProgramSpec (my_sp_coord baked from `coord`), compile it via
         // MakeProgramFromSpec, and set its initial run args.
+        // `coord_from_fabric`: the program reads its chip's coordinate on device instead of baking `coord`'s,
+        // so one program serves every chip (see mesh_coord_from_fabric_available).
         static cached_program_t create_at(
             const operation_attributes_t& args,
             const ttnn::MeshCoordinate& coord,
             const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
+            tensor_return_value_t& output,
+            bool coord_from_fabric);
     };
 
     using program_factory_t = std::variant<MeshWorkloadFactory>;

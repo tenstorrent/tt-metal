@@ -77,11 +77,21 @@ struct UpdatePaddedKvCacheDeviceOperation {
     using topology_return_value_t = std::vector<tt::tt_metal::TensorTopology>;
 
     struct ProgramFactory {
-        static tt::tt_metal::ProgramDescriptor create_descriptor(
+        // One program for every chip where the kernels can read each chip's mesh coordinate on device
+        // (mesh_coord_from_fabric_available, with a cluster_axis), else one per chip.
+        static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
             const operation_attributes_t& args,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output,
-            const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
+            const ttnn::MeshCoordinateRangeSet& tensor_coords);
+
+        // The program for `coord`'s chip, or with `linear_coord_from_fabric` for any chip: the kernels then
+        // derive the chip's linear_coord from its mesh coordinate instead of reading the baked one.
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
+            const operation_attributes_t& args,
+            const tensor_args_t& tensor_args,
+            const ttnn::MeshCoordinate& coord,
+            bool linear_coord_from_fabric);
     };
 
     // Minimal operation-shaped helper so the descriptor factory can be adapted into a mesh workload.

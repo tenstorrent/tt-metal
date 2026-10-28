@@ -58,7 +58,7 @@ static void run_writer() {
 
     // Common runtime args (same for all cores on this chip). Indices 0-7 are structural; index 8 (and
     // 9, scalar path) carry the per-request values resolved below.
-    const uint32_t my_sp_coord = get_common_arg_val<uint32_t>(0);
+    const uint32_t my_sp_coord = kv_cache_dataflow::chip_linear_coord();
     const uint32_t sp_factor = get_common_arg_val<uint32_t>(1);
     const uint32_t chunk_local_t = get_common_arg_val<uint32_t>(2);
     const uint32_t layer_idx = get_common_arg_val<uint32_t>(3);

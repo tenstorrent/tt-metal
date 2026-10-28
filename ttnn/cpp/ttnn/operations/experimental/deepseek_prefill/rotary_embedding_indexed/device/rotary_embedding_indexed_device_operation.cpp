@@ -18,6 +18,7 @@
 #include "ttnn/device.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/common/mesh_coord_from_fabric.hpp"
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/experimental/transformer/rotary_embedding_llama/device/rotary_embedding_llama_metal2_common.hpp"
 #include "ttnn/tensor/tensor.hpp"
@@ -355,7 +356,8 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
     const operation_attributes_t& args,
     const ttnn::MeshCoordinate& coord,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& output) {
+    tensor_return_value_t& output,
+    bool coord_from_fabric) {
     const auto& input = tensor_args.input.mesh_tensor();
     const auto& cos = tensor_args.cos.mesh_tensor();
     const auto& sin = tensor_args.sin.mesh_tensor();
@@ -569,10 +571,17 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_at(
              {"sin_Ht", sin_seq_len_t},
              {"rotary_Ht", rotary_seq_len_t},
              {"tile_height", TILE_HEIGHT},  // reader divides kv_actual_global (tokens) into tiles
-             {"my_sp_coord", my_sp_coord},
+             // With coord_from_fabric the reader derives these two from its chip's coordinate on device, so
+             // the program is the same on every chip; the baked values are then unused.
+             {"my_sp_coord", coord_from_fabric ? 0 : my_sp_coord},
              {"sp_factor", sp_factor},
              {"chunk_local_t", full_sp_slab_tiles(tensor_args.input, mesh_view, args.seq_subshard_axis)},
-             {"query_offset_t", seq_len_t * subshard_coord}},
+             {"query_offset_t", coord_from_fabric ? 0 : seq_len_t * subshard_coord},
+             {"coord_from_fabric", static_cast<uint32_t>(coord_from_fabric)},
+             {"sp_axis", args.cluster_axis},
+             {"has_subshard", static_cast<uint32_t>(args.seq_subshard_axis.has_value())},
+             {"subshard_axis", args.seq_subshard_axis.value_or(0)},
+             {"mesh_cols", static_cast<uint32_t>(mesh_view.num_cols())}},
         .runtime_arg_schema = reader_schema,
         .hw_config = create_reader_datamovement_config()};
 
@@ -753,8 +762,19 @@ RotaryEmbeddingIndexedDeviceOperation::MeshWorkloadFactory::create_mesh_workload
     tensor_return_value_t& output) {
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    // Each chip's program differs only in my_sp_coord / query_offset_t, from its coordinate. Where the reader
+    // can read that coordinate on device, one program per range serves every chip, and a dispatch costs the host
+    // one program instead of one per chip.
+    if (mesh_coord_from_fabric_available(*tensor_args.input.device(), tensor_coords)) {
+        for (const auto& range : tensor_coords.ranges()) {
+            auto cached_program = create_at(args, range.start_coord(), tensor_args, output, /*coord_from_fabric=*/true);
+            workload.add_program(range, std::move(cached_program.program));
+            shared_variables.emplace(range, cached_program.shared_variables);
+        }
+        return cached_mesh_workload_t{std::move(workload), std::move(shared_variables)};
+    }
     for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program = create_at(args, coord, tensor_args, output);
+        auto cached_program = create_at(args, coord, tensor_args, output, /*coord_from_fabric=*/false);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(ttnn::MeshCoordinateRange(coord), cached_program.shared_variables);
     }

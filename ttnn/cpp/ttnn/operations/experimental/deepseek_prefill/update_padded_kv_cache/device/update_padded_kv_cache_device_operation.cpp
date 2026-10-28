@@ -8,6 +8,7 @@
 #include <algorithm>
 #include <cstdint>
 #include <iterator>
+#include <string>
 #include <utility>
 
 #include <tt-metalium/constants.hpp>
@@ -18,6 +19,7 @@
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/common/host/mesh_ring_plan.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/common/mesh_coord_from_fabric.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::experimental::deepseek_prefill::update_padded_kv_cache {
@@ -579,16 +581,36 @@ ttsl::hash::hash_t UpdatePaddedKvCacheDeviceOperation::compute_program_hash(
         written_input_rows(args, input.padded_shape()[-2]));
 }
 
-tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFactory::create_descriptor(
+tt::tt_metal::WorkloadDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFactory::create_workload_descriptor(
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& /*output*/,
-    const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate) {
-    TT_FATAL(
-        mesh_dispatch_coordinate.has_value(),
-        "UpdatePaddedKvCache::create_descriptor requires a mesh dispatch coordinate");
-    const auto& coord = mesh_dispatch_coordinate.value();
+    const ttnn::MeshCoordinateRangeSet& tensor_coords) {
+    // Each chip's program differs only in its linear_coord, from its coordinate along cluster_axis and tp_axis.
+    // Where the kernels can read that coordinate on device, one program per range serves every chip, and a
+    // dispatch costs the host one program instead of one per chip. Without a cluster_axis the chip's position
+    // follows the cache's topology order instead, so that case keeps a program per chip.
+    tt::tt_metal::WorkloadDescriptor workload_descriptor;
+    if (args.cluster_axis.has_value() && mesh_coord_from_fabric_available(*tensor_args.input.device(), tensor_coords)) {
+        for (const auto& range : tensor_coords.ranges()) {
+            workload_descriptor.programs.push_back(
+                {range, create_descriptor(args, tensor_args, range.start_coord(), /*linear_coord_from_fabric=*/true)});
+        }
+        return workload_descriptor;
+    }
+    for (const auto& coord : tensor_coords.coords()) {
+        workload_descriptor.programs.push_back(
+            {ttnn::MeshCoordinateRange(coord),
+             create_descriptor(args, tensor_args, coord, /*linear_coord_from_fabric=*/false)});
+    }
+    return workload_descriptor;
+}
 
+tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFactory::create_descriptor(
+    const operation_attributes_t& args,
+    const tensor_args_t& tensor_args,
+    const ttnn::MeshCoordinate& coord,
+    bool linear_coord_from_fabric) {
     const auto& cache = tensor_args.cache;
     const auto& input = tensor_args.input;
     auto* device = input.device();
@@ -678,7 +700,9 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
                                   ? ::ttnn::ccl::get_linearized_index_from_physical_coord(cache, coord, args.tp_axis)
                                   : 0;
     const uint32_t linear_factor = sp_factor * tp_factor;           // effective block-cyclic chip count
-    const uint32_t linear_coord = sp_coord * tp_factor + tp_coord;  // this chip's position in that order
+    // This chip's position in that order; with linear_coord_from_fabric the kernels derive it on device
+    // (chip_linear_coord in cache_dataflow_helpers.hpp) and the baked 0 is unused.
+    const uint32_t linear_coord = linear_coord_from_fabric ? 0 : sp_coord * tp_factor + tp_coord;
     const uint32_t chunk_local_t = window_Ht / tp_factor;           // tile-rows THIS chip actually writes
 
     // Work split: one tile per "block", over the rows this chip WRITES (chunk_local_t == window_Ht at tp=1).
@@ -811,6 +835,18 @@ tt::tt_metal::ProgramDescriptor UpdatePaddedKvCacheDeviceOperation::ProgramFacto
     writer_kernel.core_ranges = all_cores;
     writer_kernel.compile_time_args = std::move(writer_compile_args);
     writer_kernel.config = WriterConfigDescriptor{};
+
+    if (linear_coord_from_fabric) {
+        for (auto* kernel : {&reader_kernel, &writer_kernel}) {
+            kernel->defines.emplace_back("LINEAR_COORD_FROM_FABRIC", "1");
+            kernel->defines.emplace_back("LINEAR_COORD_SP_AXIS", std::to_string(*args.cluster_axis));
+            if (args.tp_axis.has_value()) {
+                kernel->defines.emplace_back("LINEAR_COORD_TP_AXIS", std::to_string(*args.tp_axis));
+            }
+            kernel->defines.emplace_back("LINEAR_COORD_TP_FACTOR", std::to_string(tp_factor));
+            kernel->defines.emplace_back("LINEAR_COORD_MESH_COLS", std::to_string(mesh_view.num_cols()));
+        }
+    }
 
     // Common rt-args: per-chip kernel inputs for on-device update_idxt + start_id derivation. Indices
     // 0-7 are structural (constant for this cached program): linear_coord/linear_factor/chunk_local_t are

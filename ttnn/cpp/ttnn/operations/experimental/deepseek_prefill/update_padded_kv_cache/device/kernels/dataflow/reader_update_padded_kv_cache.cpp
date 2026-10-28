@@ -59,7 +59,7 @@ static void run_reader() {
     const uint32_t input_row_offset_t = get_common_arg_val<uint32_t>(9);
 #endif
 
-    const uint32_t linear_coord = get_common_arg_val<uint32_t>(0);
+    const uint32_t linear_coord = kv_cache_dataflow::chip_linear_coord();
     const uint32_t linear_factor = get_common_arg_val<uint32_t>(1);
     const uint32_t chunk_local_t = get_common_arg_val<uint32_t>(2);  // stripe: page-rows THIS chip writes
     const uint32_t input_Ht = get_common_arg_val<uint32_t>(3);       // page-rows per head this call writes
