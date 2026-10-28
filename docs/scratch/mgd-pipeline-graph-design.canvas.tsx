@@ -1409,16 +1409,16 @@ TEST(PipelineFootprintTest, OverlappingPositionsAreNeverAdjacent) {
       "tests/tt_metal/tt_fabric/fabric_router/test_pipeline_builder.cpp",
     ],
     steps: [
-      "Types: PipelineCarve and the mapping result (PipelineStageSlot, PipelineEdgeLayout, PipelinePlacement, PipelineMappingResult) in topology_mapper_utils.hpp; PipelineFootprint and PipelineCheck in pipeline_builder.hpp.",
+      "Types: PipelineCarve and the mapping result (PipelinePlacement, PipelineMappingResult) in topology_mapper_utils.hpp; PipelineFootprint and PipelineCheck in pipeline_builder.hpp. No new placement types: PipelinePlacement stores the resolver's own submesh_chips (ChipTuple) and GraphLayoutResult, so topology_mapper_utils.hpp includes pipeline_builder.hpp, which stays light (fabric_types.hpp, mesh_graph.hpp).",
       "Pre-checks before the solve: area, lattice count, and the colour and segment test on tight 1-cable meshes; cable pairs the segment test rules out are dropped from the graph.",
       "Constraints for solve_pipeline_footprint: add_required_constraint(stage, positions it fits on its own): its shape, at least as many core slots on the position's chips as the stage has endpoints, and for the host I/O stage room for H2D and D2H. These are the only failures that depend on one stage and one position, so they are filtered here and never learned from the resolver. add_resource_constraint(position -> covered slices).",
       "Resource completeness with the existing API: when the stage areas add up to exactly the slice count, add_cardinality_constraint(pairs, 1) per slice over every (stage, position) pair covering it. With min_count 1 the encoder emits one plain clause (report 5.4: 66 s to 0.59 s, 170 s to 0.32 s).",
       "One solve: a TopologyMappingEnumerationSession<PipelineStageNode, PipelinePositionNode> with STRICT validation, the SAT engine (Auto picks it) and conflict_cap, and one next(). A capped solve reads as no carve with today's API (open question 13). One carve, no loop: the resolver accepted the first carve on 101 of 101 benchmark cases; a second carve, if ever needed, is exclude_mapping(carve) and next() on the same session (open question 24).",
-      "Resolver inputs (file-local resolver_inputs): slots_to_submesh_chips(carve, positions) gives (mesh_id, chip_id, row, col) per chip, slot-local, and keeps (slot, row, col) -> FabricNodeId for R; links_to_direct_links(slots, positions.links_) puts every link between two slots under {i, j} and mirrored under {j, i}, ordered by chip id; nodes, edges with the loopback marks, node_chip_counts and blaze's default core counts come from LogicalPipelineGraph.",
+      "Resolver arguments, one call per pipeline, all in the resolver's existing types: submesh_chips -> std::vector<std::vector<ChipTuple>> (mesh_id, chip_id, row, col) per chip of each stage's position, slot-local; direct_links -> DirectLinks, every link between two submeshes under {i, j} and mirrored under {j, i}, ordered by chip id; stage ids, EdgeInputTuple edges with the loopback marks, node_chip_counts and blaze's default core counts from LogicalPipelineGraph. No wrapper struct and no reverse map: a resolved chip is read back from submesh_chips.",
       "The resolver call, resolve_graph_layout_with_connections; a throw rejects the carve with its message (pipeline_layout).",
       "IMPORTANT: R from the layout's resolved_edges, one channel per crossing edge (loopback included, deduplicated): the PSD ExitNodeConnection between the exit and entry ASIC from inter_mesh_cables (lowest src_chan; best tier first after P16), stored as is; its std::hash is the pairing's connection_hash. Intra-mesh edges are not in it.",
       "Demand check right after R: channels in R per mesh pair <= strict + relaxed from get_inter_mesh_channel_demand; over demand rejects with pipeline_binding and the mesh pair.",
-      "to_pipeline_mapping: stage slots (mesh, chip rectangle, host ranks, host I/O chips), edge layouts (exit, entry, crossing, index into R), R, idle host ranks.",
+      "Fill PipelinePlacement per pipeline: submesh_chips, the GraphLayoutResult as returned, required_link per resolved edge (index into R), stage_host_ranks; then idle_host_ranks. The mapping is written only on accept.",
     ],
     code: [
       {
@@ -1479,21 +1479,30 @@ PipelineCheck detail::check_pipeline_seating(
     if (!footprint.carve) {
         return PipelineCheck::reject("pipeline_carve", footprint.reason);     // no position, no carve, or the cap
     }
-    // The resolver on that one carve: the runtime's own chip-level check.
-    const ResolverInputs in = resolver_inputs(pipelines, positions, *footprint.carve);
-    GraphLayoutResult layout;
-    try {
-        layout = resolve_graph_layout_with_connections(in.nodes, in.edges, in.submesh_chips, in.chip_counts,
-                                                       in.core_counts, std::nullopt, &in.direct_links);
-    } catch (const std::runtime_error& e) {
-        return PipelineCheck::reject("pipeline_layout", e.what());            // no layout on this carve
+    // The resolver on that carve, one call per pipeline, in the resolver's own types.
+    PipelineMappingResult result;
+    for (const std::string& name : pipeline_names(pipelines)) {
+        PipelinePlacement placement{.pipeline = name};
+        placement.submesh_chips = submesh_chips(pipelines, name, positions, *footprint.carve);   // slot-local (row, col)
+        const DirectLinks links = direct_links(placement.submesh_chips, positions);   // every candidate link, both ways
+        try {
+            placement.layout = resolve_graph_layout_with_connections(
+                stage_ids(pipelines, name), edge_tuples(pipelines, name), placement.submesh_chips,
+                chip_counts(pipelines, name), core_counts(pipelines, name), std::nullopt, &links);
+        } catch (const std::runtime_error& e) {
+            return PipelineCheck::reject("pipeline_layout", fmt::format("pipeline '{}': {}", name, e.what()));
+        }
+        // IMPORTANT: R is the exact channel of every crossing, so phase 0 binds the cable the check used.
+        // Chips come back through submesh_chips: node_to_submesh + (row, col) -> (mesh, chip).
+        placement.required_link = record_required_links(placement, positions, result.required_links);
+        placement.stage_host_ranks = stage_host_ranks(pipelines, name, *footprint.carve);
+        result.pipelines.push_back(std::move(placement));
     }
-    // IMPORTANT: R is the exact channel of every crossing, so phase 0 binds the cable the check used.
-    std::vector<ExitNodeConnection> R = record_required_links(layout, in, positions);   // lowest tier, then src_chan
-    if (auto over = first_over_demand(logical, R)) {                         // strict + relaxed per mesh pair
+    if (auto over = first_over_demand(logical, result.required_links)) {   // strict + relaxed per mesh pair
         return PipelineCheck::reject("pipeline_binding", over->reason);
     }
-    mapping = to_pipeline_mapping(pipelines, *footprint.carve, layout, std::move(R));   // slots, edges, R, idle ranks
+    result.idle_host_ranks = idle_host_ranks(pipelines, *footprint.carve);
+    mapping = std::move(result);
     return PipelineCheck::accept();
 }`,
       },
@@ -1547,20 +1556,24 @@ PipelineFootprint detail::solve_pipeline_footprint(const LogicalPipelineGraph& p
 }`,
       },
       {
-        path: "tt_metal/fabric/pipeline_builder.cpp  (anonymous namespace: resolver inputs from a carve)",
+        path: "tt_metal/fabric/pipeline_builder.cpp  (anonymous namespace: the resolver's arguments from a carve)",
         mode: "new",
         language: "cpp",
         src: `
-struct CarveSlots {
-    std::vector<SubmeshChips> submesh_chips;                         // one per stage, slot-local (row, col)
-    std::map<std::tuple<std::size_t, int, int>, FabricNodeId> back;  // (slot, row, col) -> chip, for R
-};
-CarveSlots slots_to_submesh_chips(const PipelineCarve& carve, const PhysicalPipelineGraph& positions);
-DirectLinks links_to_direct_links(
-    const CarveSlots& slots,
-    const std::map<std::pair<PipelinePositionNode, PipelinePositionNode>, std::vector<PipelinePositionLink>>& links);
-ResolverInputs resolver_inputs(const LogicalPipelineGraph& pipelines, const PhysicalPipelineGraph& positions,
-                               const PipelineCarve& carve);              // nodes, edges, chips, counts, links`,
+// Each returns a type the resolver already takes; there is no wrapper struct.
+std::vector<std::vector<ChipTuple>> submesh_chips(const LogicalPipelineGraph& pipelines, const std::string& pipeline,
+                                                  const PhysicalPipelineGraph& positions, const PipelineCarve& carve);
+DirectLinks direct_links(const std::vector<std::vector<ChipTuple>>& submesh_chips, const PhysicalPipelineGraph& positions);
+std::vector<std::string> stage_ids(const LogicalPipelineGraph& pipelines, const std::string& pipeline);
+std::vector<EdgeInputTuple> edge_tuples(const LogicalPipelineGraph& pipelines, const std::string& pipeline);
+std::map<std::string, uint32_t> chip_counts(const LogicalPipelineGraph& pipelines, const std::string& pipeline);
+std::map<std::string, uint32_t> core_counts(const LogicalPipelineGraph& pipelines, const std::string& pipeline);
+
+// Reads each crossing's chips back through submesh_chips, appends its exact channel to R, and
+// returns, per layout.resolved_edges entry, its index into R (empty inside a mesh).
+std::vector<std::optional<std::size_t>> record_required_links(
+    const PipelinePlacement& placement, const PhysicalPipelineGraph& positions,
+    std::vector<tt::tt_metal::ExitNodeConnection>& required_links);`,
       },
       {
         path: "tests/tt_metal/tt_fabric/fabric_router/test_pipeline_builder.cpp  (CPU; MGD textprotos and PSD fixtures)",
@@ -1595,7 +1608,7 @@ TEST(PipelineFootprintTest, StageThatCannotFitIsFilteredBeforeTheSolve) {
       "Position filter: a stage never lands on a position it cannot fit; verdicts with and without the filter are equal on every case.",
       "First carve passes the resolver on every benchmark case (the 101 of footprint_then_resolver).",
       "Resource completeness: same verdicts with and without on every designed, repo, ring and mixed-cable case, and the tight-case speed-up of report 5.4.",
-      "A slot spanning two host slices gets slot-local (row, col) starting at (0, 0); every resolved edge maps back to a FabricNodeId pair with a cable from inter_mesh_cables.",
+      "A slot spanning two host slices gets slot-local (row, col) starting at (0, 0); every resolved edge reads back, through submesh_chips, to a FabricNodeId pair with a cable from inter_mesh_cables.",
       "Each R channel's connection_hash equals std::hash<ExitNodeConnection> of the PSD entry.",
       "A ring across two meshes over a count-1 connection: R needs 2, rejected with pipeline_binding.",
       "No change to topology_solver_sat.cpp or topology_solver.hpp.",
@@ -2044,7 +2057,7 @@ for (const auto& chain : fabric_chains(edges_minus(pipelines.edges_, carve.host_
     goal: "Record each rank's stage in rank_bindings.yaml. Not consumed yet.",
     files: ["tools/scaleout/src/generate_rank_bindings.cpp"],
     steps: [
-      "Read TopologyMappingResult::pipeline from the enumerator: each PipelineStageSlot's host_ranks get its stage id; idle_host_ranks get idle.",
+      "Read TopologyMappingResult::pipeline from the enumerator: each PipelinePlacement's stage_host_ranks give each rank its stage id; idle_host_ranks get idle.",
       "Co-owners of a joint stage get the same id.",
     ],
     code: [
@@ -2596,7 +2609,7 @@ const TIER_C_FILES: string[][] = [
   ["topology_mapper_utils.hpp", "every Tier C type: LogicalPipelineGraph, PhysicalPipelineGraph, PipelineCarve, PipelineMappingResult; TopologyMappingConfig::check_pipelines; TopologyMappingResult::pipeline", "P5, P6, P8"],
   ["topology_mapper_utils.cpp", "build_logical_pipeline_adjacency_graph; the enumerator's pipelines_, the next() hook, exclude_mapping and the rejection cap", "P5, P8"],
   ["pipeline_builder.hpp (detail)", "forward declarations; build_physical_pipeline_adjacency_graph, solve_pipeline_footprint, PipelineCheck, check_pipeline_seating", "P5, P6"],
-  ["pipeline_builder.cpp", "per seating: inter_mesh_cables, the physical graph, pre-checks, the footprint solve, resolver inputs and call, R, the demand check, to_pipeline_mapping", "P5, P6"],
+  ["pipeline_builder.cpp", "per seating: inter_mesh_cables, the physical graph, pre-checks, the footprint solve, resolver arguments and one call per pipeline, R, the demand check", "P5, P6"],
   ["topology_mapper.cpp", "kill switch; the mapping saved on rank 0; R broadcast with the chip info", "P8"],
   ["control_plane.cpp", "phase 0 binds R; every rank checks it was bound", "P9"],
   ["test_topology_mapper_utils.cpp / test_pipeline_builder.cpp", "logical graph and the hook / physical graph, solve and check on CPU PSD fixtures", "P5, P6, P8"],
@@ -2614,7 +2627,7 @@ per seating (MultiMeshSolutionEnumerator::next, after intra-mesh success)
         resolver on the carve                      a throw rejects
         record_required_links -> R                 exact channels
         first_over_demand(logical, R)              strict + relaxed per mesh pair
-        to_pipeline_mapping
+        PipelinePlacement per pipeline             submesh_chips + GraphLayoutResult, as returned
   reject: exclude_mapping(seating), next seating                                  P8 (C4); P15 retries first
   accept: full.pipeline = mapping; TopologyMapper saves it, broadcasts R          P8
           control plane phase 0 binds R                                           P9 (C3)`;
@@ -4758,7 +4771,7 @@ const REQUIRED_LINKS_SRC = `
 // No new type: R is the PSD's own ExitNodeConnection entries, one per crossing.
 // ExitNodeConnection = {src_exit_node, dst_exit_node (AsicID), eth_conn {src_chan, dst_chan, is_local, port_type}};
 // std::hash<ExitNodeConnection> is the connection_hash the pairing and the broadcast use.
-// FabricNodeIds come from the mapping; the pipeline edge is in PipelineEdgeLayout.
+// FabricNodeIds come from the mapping; the pipeline edge is PipelinePlacement::required_link, per resolved edge.
 
 // PipelineMappingResult
 std::vector<tt::tt_metal::ExitNodeConnection> required_links;   // R
