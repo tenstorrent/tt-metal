@@ -124,8 +124,9 @@ constexpr uint32_t kL1Headroom = 64 * 1024;  // bytes kept free per core beyond 
 
 // The entry's plan: 1x1, else the auto (model) search over chunk_candidates. TT_THROWs when no plan fits L1 or the
 // geometry cannot be laid out. A solved plan is remembered per input, so a repeated call looks it up instead of
-// re-planning.
-Plan solve_plan(const PlanInputs& in);
+// re-planning. The memo is never erased, so the reference stays valid for the process: callers keep the inputs and
+// look the plan up, never copy it.
+const Plan& solve_plan(const PlanInputs& in);
 
 // The schedule pieces the factory walks.
 Transport plan_transport(uint32_t G, ScheduleKind kind, bool mirror, uint32_t waves);

@@ -170,7 +170,7 @@ void MatmulReduceScatterPrefillDeviceOperation::validate_on_program_cache_miss(
         std::nullopt);
     check_operands(t.input_tensor, t.weight, attrs.output_memory_config);
     check_group(t.input_tensor, t.weight, static_cast<int32_t>(attrs.cluster_axis), attrs.scatter_dim);
-    const uint32_t staging_tiles = detail::staging_tiles(attrs.plan);
+    const uint32_t staging_tiles = detail::staging_tiles(attrs.plan());
     const auto& staging_shard = t.staging.memory_config().shard_spec();
     TT_FATAL(
         t.staging.memory_config().buffer_type() == BufferType::L1 && staging_shard.has_value() &&

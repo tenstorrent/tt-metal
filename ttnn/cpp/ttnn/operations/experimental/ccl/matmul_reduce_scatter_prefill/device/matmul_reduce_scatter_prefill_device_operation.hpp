@@ -14,7 +14,7 @@
 
 namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill {
 
-// The framework calls: create_output_tensors, then the cache key (the default: every attribute, the solved plan
+// The framework calls: create_output_tensors, then the cache key (the default: every attribute, the plan's inputs
 // included, plus the tensor specs), then on a hit validate_on_program_cache_hit + override_runtime_arguments, on a
 // miss validate_on_program_cache_miss + create_descriptor once per mesh coordinate.
 struct MatmulReduceScatterPrefillDeviceOperation {

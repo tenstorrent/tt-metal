@@ -201,12 +201,12 @@ Tensor experimental::matmul_reduce_scatter_prefill(
                                                            : tt::tt_metal::MathFidelity::HiFi2,
         .math_approx_mode = compute_kernel_config.has_value() && compute_kernel_config->math_approx_mode,
         .output_memory_config = out_mem,
-        .plan = mrs_detail::solve_plan(plan_inputs),
+        .plan_inputs = plan_inputs,
     };
     record_last_plan(params);
     ensure_mesh_resources(mesh);
     // freed when this call returns, like any op intermediate (see allocate_staging), so it holds no L1 between calls
-    const Tensor staging = allocate_staging(mesh, mrs_detail::staging_tiles(params.plan));
+    const Tensor staging = allocate_staging(mesh, mrs_detail::staging_tiles(params.plan()));
 
     return ttnn::prim::matmul_reduce_scatter_prefill(input_tensor, weight, output_tensor, staging, params);
 }
