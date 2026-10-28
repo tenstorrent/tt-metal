@@ -109,6 +109,7 @@ def matmul_add_norm(
     full_sync=False,
     transposed=True,
     norm_only_shape=None,
+    acc_cb_fp32=None,
 ):
     """x ``[1, 1, M, K]``, w ``[K, N]``, residual: the resident stream from ``to_resident`` for [M, N]
     (updated in place to residual + x @ w). Returns y = rmsnorm(residual) * gamma ``[1, 1, M, N]``.
@@ -164,7 +165,12 @@ def matmul_add_norm(
         else [
             mg.cb(0, mb * kb * in0_depth, x.dtype, all_cores),
             mg.cb(1, kb * nb * in1_depth, w.dtype, all_cores),
-            mg.cb(3, out_tiles, ttnn.float32 if fp32_acc else ttnn.bfloat16, all_cores),
+            mg.cb(
+                3,
+                out_tiles,
+                ttnn.float32 if (fp32_acc if acc_cb_fp32 is None else acc_cb_fp32) else ttnn.bfloat16,
+                all_cores,
+            ),
         ]
     )
     cbs = (

@@ -67,6 +67,7 @@ def main():
     ap.add_argument("--bf16-acc", action="store_true")
     ap.add_argument("--in0-depth", type=int, default=2)
     ap.add_argument("--full-sync", action="store_true")
+    ap.add_argument("--acc-cb-fp32", action="store_true")
     ap.add_argument("--flat", action="store_true", help="non-transposed grid: M over y, N over x")
     ap.add_argument("--in1-depth", type=int, default=2)
     ap.add_argument("--defines", default="", help="comma-separated kernel defines for the fused op")
@@ -111,6 +112,7 @@ def main():
             in1_depth=args.in1_depth,
             full_sync=args.full_sync,
             transposed=not args.flat,
+            acc_cb_fp32=True if args.acc_cb_fp32 else None,
         )
 
     def old():

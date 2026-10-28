@@ -41,7 +41,7 @@ MM_CONFIGS = {
         8192: (4, 16, 4, 1, 4),
         16384: (8, 16, 8, 1, 4),
     },
-    "score": {512: (4, 8, 1, 4, 1)},
+    "score": {512: (4, 8, 1, 4, 1), 16384: (16, 8, 1, 4, 1)},  # 16384 rows: 176 -> 151 us
     # bf16 DST accumulation (see RerankConfig.bf16_acc_kinds): 8-tile subblocks. FF2 at LoFi, 16384 rows:
     # (8,16,8,1,4) fp32 ~1118 -> (8,8,8,1,8) bf16 986 us (perf_tools/sweep_mm.py).
     "ff2_bf16acc": {16384: (8, 8, 8, 1, 8)},

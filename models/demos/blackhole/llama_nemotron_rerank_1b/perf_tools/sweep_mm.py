@@ -26,6 +26,7 @@ SHAPES = {
     "ff2": (8192, 2048),
     "ff13s": (2048, 16384),
     "ff13w": (2048, 16384),
+    "score": (2048, 32),
 }
 REPS = 10
 
@@ -98,7 +99,7 @@ def main():
                 for (f, acc), c in ckc.items():
                     tag = f"{str(f).split('.')[-1]}{'/fp32' if acc else ''}"
                     try:
-                        if name in ("ff13s", "ff13w"):
+                        if name in ("ff13s", "ff13w", "score"):
                             raise ValueError("no linear-auto for the fused SwiGLU shape")
                         us = timed(
                             dev,
