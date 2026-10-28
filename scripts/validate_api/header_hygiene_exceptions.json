@@ -29,7 +29,7 @@
   },
   {
     "source": "tt-metalium/experimental/disaggregation/kv_chunk_address_table.hpp",
-    "include": "internal/disaggregation/kv_chunk_address_table.hpp",
+    "include": "internal/disaggregation/cache_address_table.hpp",
     "owner": "@tenstorrent/metalium-api-owners",
     "reason": "Deprecated forwarding header retained during the disaggregation move into internal APIs.",
     "remove_when": "tt-llm-engine and tt-blaze have migrated and the deprecated experimental forwarding header is removed."

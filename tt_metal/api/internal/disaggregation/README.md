@@ -1,6 +1,6 @@
 This directory contains utilities and datastructures to facilitate disaggregated inference.
 
-A tensor chunk location table (`KvChunkAddressTable`) is included. The table is used as a "common language" interface so various components that are particants in KV Cache lifecycle management (in the future weights management) can understand where given pieces of data are located.
+A tensor chunk location table (`CacheAddressTable`) is included. The table is used as a "common language" interface so various components that are particants in KV Cache lifecycle management (in the future weights management) can understand where given pieces of data are located.
 
 The table is intended to be used to have a representation for where data (KV chunks) in a tensor are located. The tensor may be distributed across multiple hosts and devices.
 
