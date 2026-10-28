@@ -10,11 +10,13 @@ set -euo pipefail
 tier=${1:?tier: test | b0 | bench}
 here=models/experimental/flowstate_forecast/tests/golden
 py=/home/andy/bringup/venvs/flowstate/bin/python
-out=/home/andy/bringup/goldens/flowstate
+out=${FLOWSTATE_GOLDEN_OUT:-/home/andy/bringup/goldens/flowstate}
+# a re-make (D3 item 6) writes into its own directory and its own copy of the manifest
+manifest=${FLOWSTATE_GOLDEN_MANIFEST:-$here/MANIFEST.json}
 export HF_HUB_OFFLINE=1
 mkdir -p "$out"
 run() { env -u PYTHONPATH -u VIRTUAL_ENV "$py" "$@"; }
 if [ "$tier" = test ]; then
     run "$here/weight_facts.py" --out "$out/weight_facts.json"
 fi
-run "$here/make_goldens.py" --tier "$tier" --out "$out" --manifest "$here/MANIFEST.json"
+run "$here/make_goldens.py" --tier "$tier" --out "$out" --manifest "$manifest"
