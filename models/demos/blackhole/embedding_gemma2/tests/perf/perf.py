@@ -7,18 +7,19 @@ tower (text, vision, audio) and of the full multimodal model, with the selected 
 Report: doc/benchmark/REPORT.md. Layout follows models/demos/wormhole/bge_m3/tests/perf/perf.py.
 
 A plain run is quick: headline shapes, `forward` mode only (text 1 x 512, vision 1 x 2560, audio 1 x 768,
-full text 472 tokens), finite-output asserts, no HF check. Everything else is opt-in (env, "1" = on);
-costs are from the full-sweep run 20261028-063930 (doc/benchmark/REPORT.md, model loads included):
+full text 472 tokens), finite-output asserts, no HF check. Everything else is opt-in (env, "1" = on).
+Rough costs with a warm weight / kernel cache: (none) and ALL measured as whole runs; the per-option
+deltas are estimated from the per-class log timestamps of the full-sweep run 20261028-063930:
 
     option (env)                        adds                                                    ~min
-    (none)                              headline shapes x forward                                1.5
+    (none)                              headline shapes x forward                                0.3
     EMBEDDING_GEMMA2_PERF_SHAPES=1      every shape of TEXT / VISION / AUDIO / FULL_CASES        +0.5
     EMBEDDING_GEMMA2_PERF_MODES=1       h2d_d2h, api (full), 2cq (records "not supported")      +0.3
     EMBEDDING_GEMMA2_PERF_LONG=1        text 1 x 32768, own device session                      +0.8
     EMBEDDING_GEMMA2_PERF_PROBE=1       text batch-capacity probe at 128 tokens                  +0.8
     EMBEDDING_GEMMA2_PERF_SUSTAINED=1   30 s sustained vs burst per tower (text, vision, audio)  +2.5
-    EMBEDDING_GEMMA2_PERF_HF_CHECK=1    HF fp32 comparison on the timed output (CPU reference)  +0.5
-    EMBEDDING_GEMMA2_PERF_ALL=1         all of the above: the full sweep of REPORT.md            5.5
+    EMBEDDING_GEMMA2_PERF_HF_CHECK=1    HF fp32 comparison on the timed output (CPU reference)  +0.3
+    EMBEDDING_GEMMA2_PERF_ALL=1         all of the above: the full sweep of REPORT.md            5.3
 
 Options combine (e.g. SHAPES=1 MODES=1 gives every shape in every mode); `-k` picks single cases
 among the collected ones. The selection decides collection, so `--collect-only` shows what will run.
