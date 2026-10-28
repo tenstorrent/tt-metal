@@ -637,3 +637,9 @@ session's argv); a resume clears PAUSE (use --until to stop); watch + cron :07/:
   key 256 B). Fit with our plan: window KV bfp8 tiles matches only the SWA layers (CSA2 window is bf16 RM);
   compressed KV bfp4 rows and index keys bfp4 tiles are NOT directly consumable (decode: bf16 RM / e4m3+fp32 rows);
   a prefill->decode loader is needed either way. Bears on the cache decisions (owner).
+- 16:10 OWNER: the decode finding may change what to work on next. The NEXT list of the 15:55 entry is SUSPENDED: the
+  session after the compact absorbs the state only (read these entries, the run's files, the de-risk report) and takes
+  NO action - no device runs, no agents, no orchestrator, no edits, no pushes - until the owner says what to do. Open
+  questions for the owner's reconsideration: prefill KV at the reference's width (with a conversion at the
+  prefill->decode hand-over, which needs a loader anyway) vs matching decode's formats (bf16 rows for CSA2 KV, e4m3 +
+  fp32 rows for index keys); whether the compressed-KV 4-bit work continues; FIX.7's per-matmul numbers still to report.
