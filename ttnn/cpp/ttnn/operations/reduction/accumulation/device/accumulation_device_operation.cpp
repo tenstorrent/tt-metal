@@ -77,8 +77,8 @@ void AccumulationDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             acc_dim < logical_rank - 2 ||
                 is_tile_axis_accumulation(input_tensor, acc_dim, attributes.dtype, attributes.flip, attributes.op),
-            "Accumulation along tile axis {} of a rank-{} tensor is only supported for forward bf16 cumsum and "
-            "forward bf16/fp32 cumprod on 32x32 tiles",
+            "Accumulation along tile axis {} of a rank-{} tensor is only supported for forward bf16/fp32 cumsum "
+            "and cumprod on 32x32 tiles (only bf16 cumsum on Quasar)",
             acc_dim,
             logical_rank);
     }
@@ -96,14 +96,14 @@ bool is_tile_axis_accumulation(
         tile.get_height() != tt::constants::TILE_HEIGHT || tile.get_width() != tt::constants::TILE_WIDTH) {
         return false;
     }
+    // cumprod_tile and the compensated cumsum scan have no Quasar port.
+    // preprocess_input_tensor also calls this on host tensors, which have no device.
+    const bool not_quasar = input_tensor.device() != nullptr && input_tensor.device()->arch() != tt::ARCH::QUASAR;
     switch (op) {
-        // fp32 cumsum keeps the permuted path for its compensated (Kahan) sum from #56811.
-        case AccumulationOp::CUMSUM: return output_dtype == DataType::BFLOAT16;
-        // There is no Quasar cumprod_tile. preprocess_input_tensor also calls this on host tensors,
-        // which have no device.
+        case AccumulationOp::CUMSUM:
+            return output_dtype == DataType::BFLOAT16 || (output_dtype == DataType::FLOAT32 && not_quasar);
         case AccumulationOp::CUMPROD:
-            return (output_dtype == DataType::BFLOAT16 || output_dtype == DataType::FLOAT32) &&
-                   input_tensor.device() != nullptr && input_tensor.device()->arch() != tt::ARCH::QUASAR;
+            return (output_dtype == DataType::BFLOAT16 || output_dtype == DataType::FLOAT32) && not_quasar;
     }
     return false;
 }

@@ -20,7 +20,6 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/tensor_prefetcher.hpp>
-#include <tt-metalium/experimental/global_circular_buffer.hpp>
 #include <tt-metalium/experimental/prefetcher_pipe.hpp>
 #include <tt-metalium/experimental/sockets/h2d_socket.hpp>
 #include <tt-metalium/mesh_coord.hpp>
@@ -44,8 +43,8 @@ class MeshDevice;
 // Long-lived Tensor prefetcher (DRISC) for a single MeshDevice. Holds the
 // per-device Programs, the per-(device, sender) H2D sockets, and the host worker
 // thread that drains the request queue. It does NOT own or hold the queued tensors
-// or GCBs alive — queue() serializes each request into socket pages and keeps only
-// those bytes, so the caller must keep the tensors and GCB alive until stop() (see
+// or pipes alive — queue() serializes each request into socket pages and keeps only
+// those bytes, so the caller must keep the tensors and pipes alive until stop() (see
 // the public tensor_prefetcher.hpp note).
 //
 // Single-prefetcher-at-a-time invariant: start() asserts is_active() is false.
@@ -55,12 +54,12 @@ class MeshDevice;
 //     kernel on every DRAM sender core. Allocates one H2D socket per (device,
 //     sender). Launches the programs (non-blocking — kernels park on
 //     socket_wait_for_pages) and spawns the host worker thread.
-//   * queue(gcb, subset, tensors) serializes the request into one or more
+//   * queue(pipes, subset, tensors) serializes the request into one or more
 //     fixed-size socket pages (splitting when the tensor list overflows a page)
 //     and pushes them onto the internal queue in order. The host worker thread
 //     fans each page out to every socket whose mesh coord is in `subset` via
 //     non-blocking try_stage / publish_staged so one slow socket can't starve
-//     the others. The caller is responsible for keeping tensors and the GCB
+//     the others. The caller is responsible for keeping tensors and the pipes
 //     alive until stop() (see the public tensor_prefetcher.hpp note).
 //   * stop() pushes DRAIN requests naming every target still in memory, then an
 //     all-zero STOP page to the full mesh, joins the worker thread, WaitProgramDone
@@ -84,20 +83,15 @@ public:
 
     void start(const experimental::TensorPrefetcherConfig& config);
 
+    // Receiver-contiguous tensors support batched delivery and streaming rotation; K-row-major
+    // tensors need one pipe per bank. Block sizes may vary per tensor and need not match the initial
+    // applied size or divide the fixed ring; the ring must hold at least one block (consumers may
+    // require more for lookahead). `prefetcher_pipes` must be every pipe of one
+    // CreatePrefetcherPipesForTensorPrefetcher result, in any order.
+    //
     // Capture-vs-send contract, and the `trace_capture_cq` precondition: see
     // QueueTensorPrefetcherRequest. Captured pages live in trace_requests_ keyed by the
     // recording trace's MeshTraceId, and are re-queued by replay_trace().
-    void queue(
-        const experimental::GlobalCircularBuffer& gcb,
-        ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset,
-        const std::vector<experimental::TensorPrefetcherInput>& tensors,
-        MeshCommandQueue* trace_capture_cq);
-
-    // PrefetcherPipe delivery. Receiver-contiguous tensors support batched delivery and streaming
-    // rotation. Block sizes may vary per tensor and need not match the initial applied size or divide
-    // the fixed ring; the ring must hold at least one block (consumers may require more for lookahead).
-    // `prefetcher_pipes` must be every pipe of one CreatePrefetcherPipesForTensorPrefetcher result, in
-    // any order.
     void queue(
         const std::vector<std::reference_wrapper<const experimental::PrefetcherPipe>>& prefetcher_pipes,
         ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset,
@@ -164,10 +158,9 @@ private:
         bool dynamic;
     };
 
-    // Everything the request path needs to know about a delivery target, so serialization does not
-    // have to name the target's type. Built by target_for() from either a DRAM-sender
-    // GlobalCircularBuffer or the per-bank groups of DRAM-sender PrefetcherPipes. Owns its mapping
-    // by value: the pipes' mapping is assembled at queue time and has no home on the pipe objects.
+    // Everything the request path needs to know about a delivery target, built by target_for() from
+    // the DRAM-sender PrefetcherPipes of one factory call. Owns its mapping by value: the pipes'
+    // mapping is assembled at queue time and has no home on the pipe objects.
     //
     // It holds no reference to the target itself, and must not start to. The queue call only borrows
     // the target, and the worker thread that later sends the pages needs nothing but addresses and a
@@ -175,26 +168,25 @@ private:
     struct RequestTarget {
         // Sender core -> receivers, in the order that fixes bank-local slab numbering.
         std::vector<std::pair<CoreCoord, CoreRangeSet>> mapping;
-        // DRISC L1 base of each sender's target state (header field target_state_addr), in mapping
-        // order. A GCB plants every sender's block at one uniform offset and so repeats it; the
-        // pipes hold one address each.
-        std::vector<uint32_t> state_addr_per_sender;
+        // DRISC L1 address of each sender's pipe config page (header field target_config_page_addr), in
+        // mapping order.
+        std::vector<uint32_t> config_page_addr_per_sender;
         // The DRISC L1 range each of those addresses lies in, in mapping order. Weak, like the rest of
         // this struct: it only tells stop whether that range still belongs to the target.
-        std::vector<std::weak_ptr<DriscL1Allocation>> state_alloc_per_sender;
+        std::vector<std::weak_ptr<DriscL1Allocation>> config_page_alloc_per_sender;
         // Bank-local slab index of each sender's first receiver, in mapping order: local receiver
         // r of sender s reads slab recv_index_base_per_sender[s] + r. Stamped into every layout
         // slot of that sender's page.
         std::vector<uint32_t> recv_index_base_per_sender;
-        // Transport for every tensor in the request.
-        TensorPrefetcherTransport transport = TENSOR_PREFETCHER_TRANSPORT_GLOBAL_CB;
         // Per-receiver ring capacity in bytes; a tensor's page_bytes_per_recv must fit.
         uint32_t per_recv_capacity_bytes = 0;
     };
 
     void worker_loop();
-    // Add `word` to sender slot `sender`'s drain targets, dropping the ones whose memory is gone.
-    void record_drain_target(uint32_t sender, uint32_t word, const std::weak_ptr<DriscL1Allocation>& state);
+    // Add the pipe config page at `config_page_addr` to sender slot `sender`'s drain targets, dropping
+    // the ones whose memory is gone.
+    void record_drain_target(
+        uint32_t sender, uint32_t config_page_addr, const std::weak_ptr<DriscL1Allocation>& allocation);
     // One DRAIN request per page's worth of every sender's live drain targets, for stop to send ahead
     // of STOP.
     std::vector<Request> build_drain_requests();
@@ -203,7 +195,6 @@ private:
     // the process.
     void validate_request_pages(const std::vector<std::vector<uint8_t>>& sender_pages) const;
     void enumerate_dram_senders();
-    RequestTarget target_for(const experimental::GlobalCircularBuffer& gcb) const;
     RequestTarget target_for(
         const std::vector<std::reference_wrapper<const experimental::PrefetcherPipe>>& prefetcher_pipes) const;
     std::vector<uint32_t> sender_indices_for_target(const RequestTarget& target) const;
@@ -213,17 +204,11 @@ private:
     // Serialize a Queue call's tensors into one or more socket pages, deduplicating
     // tensor layouts within each page and splitting when a page fills. Returns one entry per
     // logical page, each a vector in target sender-mapping order. The entry and geometry bytes
-    // are identical across senders, while the header carries that sender's state address and slab
+    // are identical across senders, while the header carries that sender's config page address and slab
     // base, and a streaming page carries only that sender's slice of the per-receiver rotation
     // table.
     std::vector<std::vector<std::vector<uint8_t>>> serialize_request_pages(
         const RequestTarget& target, const std::vector<experimental::TensorPrefetcherInput>& data_tensors) const;
-    // Shared body of the two public queue() overloads.
-    void queue_to_target(
-        const RequestTarget& target,
-        ttsl::optional_reference<const MeshCoordinateRangeSet> device_subset,
-        const std::vector<experimental::TensorPrefetcherInput>& tensors,
-        MeshCommandQueue* trace_capture_cq);
     MeshCoordinateRangeSet full_mesh_subset() const;
 
     MeshDevice* mesh_device_;
@@ -252,13 +237,13 @@ private:
     // apart, every slot but the first would be misaligned and its write would go nowhere,
     // leaving the kernel spinning on a WAIT_CQ that is never satisfied.
     uint32_t cq_signal_slot_stride_ = 0;
-    // A target stop must drain on one sender: its DRAIN word (state address | kDrainTargetPipeBit for a
-    // pipe) and the DRISC L1 range that address lies in. The range expiring means the target is gone
-    // and its memory may already hold something else, so stop skips it rather than read that memory
-    // as counters.
+    // A pipe stop must drain on one sender: the address of its config page on that sender, which the
+    // DRAIN request carries, and the DRISC L1 range that address lies in. The range expiring means the
+    // pipe is gone and its memory may already hold something else, so stop skips it rather than read
+    // that memory as counters.
     struct DrainTarget {
-        uint32_t word = 0;
-        std::weak_ptr<DriscL1Allocation> state;
+        uint32_t config_page_addr = 0;
+        std::weak_ptr<DriscL1Allocation> allocation;
     };
     // drain_targets_per_sender_[s]: every target sender slot s has been queued for since start.
     std::vector<std::vector<DrainTarget>> drain_targets_per_sender_;
@@ -272,7 +257,7 @@ private:
 
     // sender_logical_cores_[s] is the logical DRAM core for sender slot s, a (bank,
     // primary/secondary role) pair. Both sender cores per bank are provisioned at start; each
-    // queued GCB may map the primary only or both, and PREFETCH requests target that subset.
+    // queued pipe set may map the primary only or both, and PREFETCH requests target that subset.
     // One list covers the whole mesh (see metal_SocDescriptor::dram_bank_endpoint_coords);
     // enumerate_dram_senders TT_FATALs if a device disagrees.
     std::vector<CoreCoord> sender_logical_cores_;

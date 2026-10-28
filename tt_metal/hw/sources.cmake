@@ -187,6 +187,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/logsigmoid.h
     inc/api/compute/mask.h
     inc/api/compute/matmul.h
+    inc/api/compute/moe_gate_sqrt_softplus.h
     inc/api/compute/mul_int_sfpu.h
     inc/api/compute/nextafter.h
     inc/api/compute/pack.h

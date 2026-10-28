@@ -99,7 +99,7 @@ class Attention:
             rope_mats: Tuple of (cos, sin) matrices for RoPE
             kv_cache: Externally-owned :class:`MiniMaxKVCache` (packed K/V/index_k), written at
                 ``self.local_layer_idx`` (the local layer).
-            chunks: the forward's PrefillChunks (tt/prefill_chunk.py), each a slot_id and its
+            chunks: the forward's PrefillChunks (common/prefill/prefill_chunk.py), each a slot_id and its
                 [actual_start, actual_end) token range; None = one full chunk in slot 0 at position 0.
 
         Returns:

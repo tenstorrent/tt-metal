@@ -1396,26 +1396,40 @@ void validate_prefetcher_pipes_gather_in0_geometry(
     // slab has to be ring_size shard widths deep, padded past the weight's K when the shards are. (A
     // worker-sender pipe's producer is the caller's, and lays out its entries itself.) Checked ahead of
     // the shared weight checks, whose K-blocking rule a padded ring with an unpadded slab would trip
-    // first; a weight that is not a 2D receiver-contiguous one is left to them.
+    // first; a weight that is neither legacy nor 2D receiver-contiguous is left to them. A legacy
+    // K-row-major weight's slab is its bank shard, which holds exactly the weight's K and so cannot be
+    // padded: its K has to fill the ring.
     const auto pipes = ttnn::prefetcher_pipe_refs(prefetcher_pipes);
     const tt::tt_metal::experimental::PrefetcherPipe& first_pipe = pipes.front();
-    const auto& weight_nd_shard_spec = input_tensor_b.nd_shard_spec();
-    const bool tensor_prefetcher_2d_slab =
-        first_pipe.sender_core_type() == tt::tt_metal::experimental::SenderCoreType::Dram &&
-        weight_nd_shard_spec.has_value() && weight_nd_shard_spec->shard_shape.rank() == 2;
-    if (tensor_prefetcher_2d_slab) {
-        const uint32_t slab_K_tiles = weight_nd_shard_spec->shard_shape[0] / in1_tile.get_height();
+    if (first_pipe.sender_core_type() == tt::tt_metal::experimental::SenderCoreType::Dram) {
         const uint32_t weight_K_tiles = b_shape_padded[-2] / in1_tile.get_height();
-        TT_FATAL(
-            slab_K_tiles == ring_size * in0_shard_width_tiles,
-            "gather_in0 prefetcher_pipes reads in1 K-blocks one in0 shard ({} tiles) deep, but the Tensor prefetcher "
-            "cuts each receiver's {}-tile slab of the weight into {} K-blocks of a different depth. Give the weight's "
-            "NdShardSpec a K of {} tiles (ring_size * shard width), padded past the weight's K of {} tiles if need be.",
-            in0_shard_width_tiles,
-            slab_K_tiles,
-            ring_size,
-            ring_size * in0_shard_width_tiles,
-            weight_K_tiles);
+        const auto& weight_nd_shard_spec = input_tensor_b.nd_shard_spec();
+        if (input_tensor_b.buffer()->has_shard_spec()) {
+            TT_FATAL(
+                weight_K_tiles == ring_size * in0_shard_width_tiles,
+                "gather_in0 prefetcher_pipes reads in1 K-blocks one in0 shard ({} tiles) deep, so the Tensor "
+                "prefetcher has to cut {} K-blocks of that depth, {} tiles in all, but a legacy WIDTH_SHARDED weight's "
+                "bank shard holds exactly its K of {} tiles and cannot be padded to fill the ring. Use a "
+                "receiver-contiguous (NdShardSpec) weight with a K of {} tiles.",
+                in0_shard_width_tiles,
+                ring_size,
+                ring_size * in0_shard_width_tiles,
+                weight_K_tiles,
+                ring_size * in0_shard_width_tiles);
+        } else if (weight_nd_shard_spec.has_value() && weight_nd_shard_spec->shard_shape.rank() == 2) {
+            const uint32_t slab_K_tiles = weight_nd_shard_spec->shard_shape[0] / in1_tile.get_height();
+            TT_FATAL(
+                slab_K_tiles == ring_size * in0_shard_width_tiles,
+                "gather_in0 prefetcher_pipes reads in1 K-blocks one in0 shard ({} tiles) deep, but the Tensor "
+                "prefetcher cuts each receiver's {}-tile slab of the weight into {} K-blocks of a different depth. "
+                "Give the weight's NdShardSpec a K of {} tiles (ring_size * shard width), padded past the weight's K "
+                "of {} tiles if need be.",
+                in0_shard_width_tiles,
+                slab_K_tiles,
+                ring_size,
+                ring_size * in0_shard_width_tiles,
+                weight_K_tiles);
+        }
     }
 
     const uint32_t in1_block_size_bytes =
