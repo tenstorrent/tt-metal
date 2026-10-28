@@ -49,6 +49,13 @@ void kernel_main() {
     // vector (group base = cur_batch*Tg). 0 = off.
     constexpr uint32_t spec_multi_pos_T = get_compile_time_arg_val(22);
     constexpr bool spec_multi_pos = spec_multi_pos_T > 0;
+    // Candidates per compute row-tile: 1, or 2 packed (spec_multi_pos_packed, PNHt == Tg / 2): candidate 2t + h's
+    // heads in rows 16h .. 16h + 15 of row-tile t (faces 2h and 2h + 1). The output and lse keep a tile per
+    // candidate (out_row_tiles per batch row): this writer scatters each half to its candidate's rows 0..15.
+    constexpr uint32_t spec_cands_per_tile = spec_multi_pos ? spec_multi_pos_T / PNHt : 1;
+    static_assert(spec_cands_per_tile == 1 || spec_cands_per_tile == 2, "one or two spec candidates per Q tile");
+    constexpr bool spec_packed = spec_cands_per_tile == 2;
+    constexpr uint32_t out_row_tiles = spec_multi_pos ? spec_multi_pos_T : PNHt;
 
     constexpr auto out_args = TensorAccessorArgs<23>();
 #ifdef SDPA_DECODE_RETURN_LSE
@@ -164,33 +171,33 @@ void kernel_main() {
             // -1 candidates only gets output 0, as the -1 candidates of a group with others do (below).
             if constexpr (zero_skipped) {
                 if (is_tree_root) {
-                    constexpr uint32_t skip_out_tiles = PNHt * vDHt;
+                    constexpr uint32_t zero_tiles = PNHt * vDHt;               // cb_out's capacity
+                    constexpr uint32_t skip_out_tiles = out_row_tiles * vDHt;  // this row's output pages
                     constexpr uint32_t skip_out_tile_bytes = get_tile_size(cb_out);
                     CircularBuffer cb_out_zero(cb_out);
-                    cb_out_zero.reserve_back(skip_out_tiles);
-                    for (uint32_t t = 0; t < skip_out_tiles; ++t) {
+                    cb_out_zero.reserve_back(zero_tiles);
+                    for (uint32_t t = 0; t < zero_tiles; ++t) {
                         fill_tile<skip_out_tile_bytes>(cb_out, t, 0);
                     }
                     // Sharded output: cb_out is this user's output shard, now zero. Interleaved: write the zeros.
                     if constexpr (!is_out_sharded) {
                         const auto zero_out_writer = TensorAccessor(out_args, out_addr);
-                        uint32_t zero_addr = cb_out_zero.get_write_ptr();
+                        const uint32_t zero_addr = cb_out_zero.get_write_ptr();
                         for (uint32_t t = 0; t < skip_out_tiles; ++t) {
                             noc.async_write(
-                                CoreLocalMem<uint32_t>(zero_addr),
+                                CoreLocalMem<uint32_t>(zero_addr + (t % zero_tiles) * skip_out_tile_bytes),
                                 zero_out_writer,
                                 skip_out_tile_bytes,
                                 {},
                                 {.page_id = cur_batch * skip_out_tiles + t});
-                            zero_addr += skip_out_tile_bytes;
                         }
                     }
 #ifdef SDPA_DECODE_RETURN_LSE
                     constexpr uint32_t lse_tile_bytes = get_tile_size(cb_lse_out);
                     const auto lse_writer = TensorAccessor(lse_args, get_arg_val<uint32_t>(lse_arg_idx));
                     CircularBuffer cb_lse(cb_lse_out);
-                    cb_lse.reserve_back(PNHt);
-                    for (uint32_t t = 0; t < PNHt; ++t) {
+                    cb_lse.reserve_back(out_row_tiles);
+                    for (uint32_t t = 0; t < out_row_tiles; ++t) {
                         const uint32_t lse_tile_addr = cb_lse.get_write_ptr() + t * lse_tile_bytes;
                         fill_tile<lse_tile_bytes>(cb_lse_out, t, 0);
                         sdpa_lse::fill_no_key_lse_tile(lse_tile_addr);
@@ -199,7 +206,7 @@ void kernel_main() {
                             lse_writer,
                             lse_tile_bytes,
                             {},
-                            {.page_id = cur_batch * PNHt + t});
+                            {.page_id = cur_batch * out_row_tiles + t});
                     }
 #endif
                     noc.async_write_barrier();
@@ -304,7 +311,8 @@ void kernel_main() {
             const uint32_t chunk_start_pos = k_chunk * k_chunk_size_dynamic;
             const uint32_t chunk_last_pos = chunk_start_pos + k_chunk_size_dynamic - 1;
             if (chunk_last_pos > spec_pos_min) {
-                generate_mask_spec_multi_pos<cb_mask_in, PNHt>(Sk_chunk_t_dynamic, chunk_start_pos, spec_pos);
+                generate_mask_spec_multi_pos<cb_mask_in, PNHt, spec_cands_per_tile>(
+                    Sk_chunk_t_dynamic, chunk_start_pos, spec_pos);
             }
         }
     } else if constexpr (is_causal) {
@@ -493,16 +501,30 @@ void kernel_main() {
             CircularBuffer cb_lse(cb_lse_out);
             cb_m.wait_front(PNHt);
             cb_l.wait_front(PNHt);
-            cb_lse.reserve_back(PNHt);
-            for (uint32_t t = 0; t < PNHt; ++t) {
+            cb_lse.reserve_back(out_row_tiles);
+            for (uint32_t t = 0; t < out_row_tiles; ++t) {
                 const uint32_t lse_tile_addr = cb_lse.get_write_ptr() + t * lse_tile_bytes;
                 fill_tile<lse_tile_bytes>(cb_lse_out, t, 0);  // column 0 is set below, the rest stays 0
-                bool candidate_sees_no_key = false;
-                if constexpr (spec_multi_pos) {
-                    candidate_sees_no_key = spec_pos[t] == UINT32_MAX;  // row-tile t is candidate t
-                }
-                if (candidate_sees_no_key) {
-                    sdpa_lse::fill_no_key_lse_tile(lse_tile_addr);
+                if constexpr (spec_packed) {
+                    // Candidate t: rows 16 * (t % 2) .. of compute row-tile t / 2, into rows 0..15 of its own tile
+                    // (-1e30 throughout for a candidate at -1).
+                    sdpa_lse::fill_lse_tile_rows<false>(
+                        lse_tile_addr,
+                        cb_m.get_read_ptr() + (t / 2) * stats_tile_bytes,
+                        cb_l.get_read_ptr() + (t / 2) * stats_tile_bytes,
+                        16 * (t % 2),
+                        16,
+                        lse_scale_bits,
+                        spec_pos[t] == UINT32_MAX);
+                } else if constexpr (spec_multi_pos) {
+                    // Row-tile t is candidate t: lse -1e30 throughout for a candidate at -1.
+                    sdpa_lse::fill_lse_tile<false>(
+                        lse_tile_addr,
+                        cb_m.get_read_ptr() + t * stats_tile_bytes,
+                        cb_l.get_read_ptr() + t * stats_tile_bytes,
+                        stats_rows,
+                        lse_scale_bits,
+                        [&](uint32_t) { return spec_pos[t] == UINT32_MAX; });
                 } else {
                     sdpa_lse::fill_lse_tile<false>(
                         lse_tile_addr,
@@ -517,7 +539,7 @@ void kernel_main() {
                     lse_writer,
                     lse_tile_bytes,
                     {},
-                    {.page_id = cur_batch * PNHt + t});
+                    {.page_id = cur_batch * out_row_tiles + t});
             }
             noc.async_write_barrier();
             cb_m.pop_front(PNHt);
@@ -533,16 +555,21 @@ void kernel_main() {
         }
         if constexpr (spec_multi_pos && !is_out_sharded) {
             // A candidate at -1 saw no mask (spec_group_bounds): its rows are not attention, so it gets output 0,
-            // as a skipped row does (an interleaved output: the tiles are fronted above).
+            // as a skipped row does (an interleaved output: the tiles are fronted above). Packed, a candidate is
+            // half of each of its row-tile's bf16 tiles (faces 2h and 2h + 1, contiguous).
+            static_assert(spec_cands_per_tile == 1 || tile_bytes == 32 * 32 * 2, "packed spec output must be bf16");
+            constexpr uint32_t cand_bytes = tile_bytes / spec_cands_per_tile;
             for (uint32_t j = 0; j < spec_multi_pos_T; ++j) {
                 if (spec_pos[j] != UINT32_MAX) {
                     continue;
                 }
+                const uint32_t row_tile = j / spec_cands_per_tile;
+                const uint32_t half = j % spec_cands_per_tile;
                 for (uint32_t c = 0; c < vDHt; ++c) {
-                    volatile tt_l1_ptr uint32_t* tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
-                        cb_out_buf.get_read_ptr() + (j * vDHt + c) * tile_bytes);
-                    for (uint32_t w = 0; w < tile_bytes / sizeof(uint32_t); ++w) {
-                        tile[w] = 0;
+                    volatile tt_l1_ptr uint32_t* rows = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                        cb_out_buf.get_read_ptr() + (row_tile * vDHt + c) * tile_bytes + half * cand_bytes);
+                    for (uint32_t w = 0; w < cand_bytes / sizeof(uint32_t); ++w) {
+                        rows[w] = 0;
                     }
                 }
             }
@@ -626,8 +653,32 @@ void kernel_main() {
             // MQA (Multi Query Attention):  we don't need to gather outputs for other heads so we can just write entire
             // tiles to memory
             if (!is_out_sharded) {
-                barrier_count = write_tiles_to_memory<cb_out, out_chunk_tiles, barrier_threshold>(
-                    out_tile_id, out_writer, barrier_count);
+                if constexpr (spec_packed) {
+                    // Half h of compute row-tile t is candidate 2t + h: write it to rows 0..15 of that candidate's
+                    // output tiles, and again to their rows 16..31 (padding, so it holds finite values).
+                    constexpr uint32_t half_bytes = tile_bytes / 2;
+                    const uint32_t page_base = cur_batch * out_row_tiles * vDHt;
+                    uint32_t l1_addr = cb_out_buf.get_read_ptr();
+                    for (uint32_t t = 0; t < PNHt; ++t) {
+                        for (uint32_t c = 0; c < vDHt; ++c, l1_addr += tile_bytes) {
+                            for (uint32_t h = 0; h < 2; ++h) {
+                                const uint32_t page = page_base + (2 * t + h) * vDHt + c;
+                                for (uint32_t dst = 0; dst < 2; ++dst) {
+                                    noc.async_write(
+                                        CoreLocalMem<uint32_t>(l1_addr + h * half_bytes),
+                                        out_writer,
+                                        half_bytes,
+                                        {},
+                                        {.page_id = page, .offset_bytes = dst * half_bytes});
+                                }
+                            }
+                        }
+                        noc.async_writes_flushed();
+                    }
+                } else {
+                    barrier_count = write_tiles_to_memory<cb_out, out_chunk_tiles, barrier_threshold>(
+                        out_tile_id, out_writer, barrier_count);
+                }
             }
         }
         if constexpr (num_kv_heads > 1 || !is_out_sharded) {

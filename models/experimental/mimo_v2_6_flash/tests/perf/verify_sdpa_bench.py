@@ -3,7 +3,8 @@
 
 """One chip's global-layer verify SDPA at long context (tt/attention.py VERIFY_GROUPED): the per-slot verify (each
 candidate a decode row: _paged_mla_decode_lse over the pass's slots), the grouped verify (_verify_grouped:
-spec_multi_pos_tiles, one KV scan per request) and a plain decode step (one row per request, the floor). MiMo's
+spec_multi_pos_tiles, one KV scan per request; ``packed``: spec_multi_pos_packed, two candidates per compute tile) and a
+plain decode step (one row per request, the floor). MiMo's
 shapes: 16 heads, K 192 / V 128, BFP8 caches in 64-token blocks, ``--local`` keys per request (a pair-split chip holds
 half the context). Prints one ``VERIFY_SDPA`` line.
 
@@ -141,6 +142,22 @@ def main():
                 **common,
             )
 
+        packed_ok = cands % 2 == 0 and "spec_multi_pos_packed" in (mla.__doc__ or "")
+
+        def packed():
+            return mla(
+                q_grouped,
+                k_cache,
+                v_cache,
+                page_table_tensor=group_table,
+                cur_pos_tensor=slot_pos,
+                program_config=program(reqs, tokens, cands, a.grouped_k_chunk),
+                spec_multi_pos_tiles=cands,
+                spec_multi_pos_packed=True,
+                compute_kernel_config=cfg_grouped,
+                **common,
+            )
+
         def decode():
             return mla(
                 q_decode,
@@ -153,14 +170,15 @@ def main():
                 **common,
             )
 
-        res = {
-            name: timed(device, fn, a.iters)
-            for name, fn in (("per_slot", per_slot), ("grouped", grouped), ("decode", decode))
-        }
+        fns = [("per_slot", per_slot), ("grouped", grouped), ("decode", decode)]
+        if packed_ok:
+            fns.append(("packed", packed))
+        res = {name: timed(device, fn, a.iters) for name, fn in fns}
         kv_gb = reqs * n_local * (DK + DV) * 1088 / 1024 / 1e9
+        packed_ms = f"{res['packed']:.3f} ms" if packed_ok else "n/a"
         print(
             f"VERIFY_SDPA local {n_local} reqs {reqs} cands {cands} grouped {a.grouped_fidelity}: per-slot {res['per_slot']:.3f} ms, grouped "
-            f"{res['grouped']:.3f} ms, plain decode {res['decode']:.3f} ms (KV {kv_gb:.2f} GB per scan: "
+            f"{res['grouped']:.3f} ms, packed {packed_ms}, plain decode {res['decode']:.3f} ms (KV {kv_gb:.2f} GB per scan: "
             f"{kv_gb / res['decode'] * 1e3:.0f} GB/s at the decode's time)",
             flush=True,
         )

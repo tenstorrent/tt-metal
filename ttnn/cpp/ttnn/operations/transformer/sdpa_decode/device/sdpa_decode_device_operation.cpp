@@ -81,6 +81,10 @@ void SdpaDecodeDeviceOperation::validate_on_program_cache_miss(
             q_shape[3]);
     }
 
+    TT_FATAL(
+        !operation_attributes.spec_multi_pos_packed || (spec_multi_pos && spec_T % 2 == 0),
+        "spec_multi_pos_packed needs spec_multi_pos_tiles even, got {}",
+        spec_T);
     if (spec_multi_pos) {
         // Speculative multi-position mode: spec_T candidates folded onto EACH batch row, so
         // every row scans its KV cache once instead of spec_T times. With B batch rows the
@@ -691,7 +695,8 @@ SdpaDecodeParams make_sdpa_decode_params(
     std::optional<uint32_t> head_dim_v,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     std::optional<uint32_t> cache_position_modulo,
-    uint32_t spec_multi_pos_tiles) {
+    uint32_t spec_multi_pos_tiles,
+    bool spec_multi_pos_packed) {
     return SdpaDecodeParams{
         .is_causal = is_causal,
         .paged_attention = paged_attention,
@@ -709,6 +714,7 @@ SdpaDecodeParams make_sdpa_decode_params(
             paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
         .cache_position_modulo = cache_position_modulo,
         .spec_multi_pos_tiles = spec_multi_pos_tiles,
+        .spec_multi_pos_packed = spec_multi_pos_packed,
     };
 }
 }  // namespace
@@ -733,7 +739,8 @@ std::tuple<Tensor, Tensor> sdpa_decode_with_lse(
     std::optional<bool> share_cache,
     std::optional<bool> use_mla,
     std::optional<uint32_t> head_dim_v,
-    uint32_t spec_multi_pos_tiles) {
+    uint32_t spec_multi_pos_tiles,
+    bool spec_multi_pos_packed) {
     using OperationType = SdpaDecodeDeviceOperation;
     auto operation_attributes = make_sdpa_decode_params(
         is_causal,
@@ -750,7 +757,8 @@ std::tuple<Tensor, Tensor> sdpa_decode_with_lse(
         head_dim_v,
         std::nullopt,
         std::nullopt,
-        spec_multi_pos_tiles);
+        spec_multi_pos_tiles,
+        spec_multi_pos_packed);
     auto tensor_args = OperationType::tensor_args_t{
         .q = input_tensor_q,
         .k = input_tensor_k,
@@ -797,7 +805,8 @@ Tensor sdpa_decode(
     std::optional<uint32_t> head_dim_v,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry,
     std::optional<uint32_t> cache_position_modulo,
-    uint32_t spec_multi_pos_tiles) {
+    uint32_t spec_multi_pos_tiles,
+    bool spec_multi_pos_packed) {
     using OperationType = SdpaDecodeDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{
         .is_causal = is_causal,
@@ -816,6 +825,7 @@ Tensor sdpa_decode(
             paged_cache_geometry.value_or(ttnn::operations::transformer::PagedCacheGeometryOverride{}),
         .cache_position_modulo = cache_position_modulo,
         .spec_multi_pos_tiles = spec_multi_pos_tiles,
+        .spec_multi_pos_packed = spec_multi_pos_packed,
     };
 
     auto tensor_args = OperationType::tensor_args_t{

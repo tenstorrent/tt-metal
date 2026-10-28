@@ -53,6 +53,11 @@ struct SdpaDecodeParams {
     // unsharded bf16 TILE Q with Tg*32 padded rows per batch, an interleaved output and cache
     // blocks of whole tiles.
     uint32_t spec_multi_pos_tiles = 0;
+    // Spec mode, Tg even: candidates of at most 16 heads (rows 0..15 of their Q tiles) are computed two
+    // per tile (candidate 2t + h in rows 16h .. 16h + 15 of compute row-tile t), half the QK / PV work;
+    // Q, the output and lse keep a tile per candidate (output rows 16..31 repeat rows 0..15, lse rows
+    // 16..31 are -1e30).
+    bool spec_multi_pos_packed = false;
 };
 
 struct SdpaDecodeInputs {
