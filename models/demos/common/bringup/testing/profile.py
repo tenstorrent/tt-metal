@@ -6,7 +6,7 @@
 Runs the last chunk of the profile rung (spec ``perf.rung``, default the last rung with ``prefix_from_golden``) after
 loading the golden state prefix: once to compile, once unsynced for the real wall time, once with section profiling.
 F114: the gate first runs it with the device profiler off and BRINGUP_PROFILE_WALL=1 (compile, then WALL_RUNS timed
-runs: chunk_wall_ms = the median after WALL_WARM warm-up runs (F114b), chunk_wall_clean = 1; F119: the harness's
+runs: chunk_wall_ms = the median after the warm-up (F196: no new program; F200: the walls settled), chunk_wall_clean = 1; F119: the harness's
 golden-input uploads at layer gaps are timed apart, chunk_wall_gap_ms, and not counted); the profiled run then keeps that chunk_wall_ms and records
 its own as chunk_wall_ms_profiled (instrumented kernels and buffer dumps make it slower and noisier).
 F155 (owner 2026-10-22): device time comes from the program real-time profiler (testing/profiler.py ``backend()``,
@@ -42,6 +42,9 @@ from models.demos.common.bringup.testing.ladder import check_states, rel
 WALL_RUNS = 10  # F114: timed runs of the clean wall measurement (F196: every one with program-cache misses refused)
 WALL_WARM = 10  # F114b: warm-up runs when the mesh cannot count its program cache (selftests); else F196 below
 WALL_MAX_WARM = 100  # F196: warm-up runs at most; warm = a run that adds no program-cache entry
+WALL_SETTLE_WINDOW = 5  # F200: the host is warm once the last 5 warm-up walls agree within WALL_SETTLE_PCT
+WALL_SETTLE_PCT = 5.0
+WALL_MAX_SETTLE = 30  # F200: settle runs at most after the cache is warm (a Galaxy chunk takes ~15 s a run)
 
 
 def cache_entries(mesh) -> int | None:
@@ -67,12 +70,21 @@ def record_warm(mesh, before: int | None, what: str) -> None:
         print(f"NOT WARM: the {what} run built {new} programs (program-cache misses); its host time is not a warm time")
 
 
+def settled(walls) -> bool:
+    """F200: the last WALL_SETTLE_WINDOW walls within WALL_SETTLE_PCT of their median."""
+    w = sorted(walls[-WALL_SETTLE_WINDOW:])
+    return len(w) == WALL_SETTLE_WINDOW and w[-1] - w[0] <= WALL_SETTLE_PCT / 100 * w[len(w) // 2]
+
+
 def warm_up(mesh, one_run) -> dict:
     """F196 (owner 2026-10-27): run until a run adds no program-cache entry (new buffer-address combinations miss the
-    cache for a while; the fixed 10 of F114b was a guess), at most WALL_MAX_WARM. Returns the runs' walls and entries.
+    cache for a while; the fixed 10 of F114b was a guess), at most WALL_MAX_WARM. F200 (owner 2026-10-27): then keep
+    running until the walls settle (host time kept falling 10-25% over 5-6 cache-warm runs), at most WALL_MAX_SETTLE.
+    Returns the runs' walls and entries, cache_warm_runs, and settled.
     """
     entries, walls = [cache_entries(mesh)], []
     limit = WALL_MAX_WARM if entries[0] is not None else WALL_WARM
+    warm = entries[0] is None
     for _ in range(limit):
         walls.append(one_run())
         entries.append(cache_entries(mesh))
@@ -81,8 +93,18 @@ def warm_up(mesh, one_run) -> dict:
             f"F196 warm-up run {len(walls)}: {walls[-1]} ms, program cache {entries[-1]} entries (+{new})", flush=True
         )
         if entries[-1] is not None and entries[-1] == entries[-2]:
-            return {"walls": walls, "entries": entries, "warm": True}
-    return {"walls": walls, "entries": entries, "warm": entries[0] is None}
+            warm = True
+            break
+    out = {"walls": walls, "entries": entries, "warm": warm, "cache_warm_runs": len(walls), "settled": False}
+    if not warm:
+        return out
+    for _ in range(WALL_MAX_SETTLE):
+        if settled(walls):
+            break
+        walls.append(one_run())
+        print(f"F200 settle run {len(walls)}: {walls[-1]} ms", flush=True)
+    out["settled"] = settled(walls)
+    return out
 
 
 def profile_rung(s) -> str:
@@ -396,6 +418,13 @@ def run_profile(s, mesh, rung_name: str | None = None) -> dict:
         w = warm_up(mesh, one_run)
         metrics.record("chunk_wall_warm_runs", len(w["walls"]))
         metrics.record("chunk_wall_warm_ms", w["walls"])
+        metrics.record("chunk_wall_cache_warm_runs", w["cache_warm_runs"])
+        metrics.record("chunk_wall_settled", int(w["settled"]))  # F200: 0 = the timed runs may still be falling
+        metrics.record("chunk_wall_loadavg", round(os.getloadavg()[0], 2))  # F200: other host load skews a wall
+        if not w["settled"]:
+            print(
+                f"F200 NOT SETTLED: the last {WALL_SETTLE_WINDOW} warm-up walls differ by more than {WALL_SETTLE_PCT}%"
+            )
         if w["entries"][0] is not None:
             metrics.record("program_cache_entries", w["entries"][-1])
             metrics.record("program_cache_entries_runs", w["entries"])

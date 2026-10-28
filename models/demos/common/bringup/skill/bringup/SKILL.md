@@ -204,6 +204,8 @@ code, the forks, ttnn / tt_metal, the framework's measuring code, the spec witho
 waivers its own tests read (a component test: its step's; a swap test: all). Records, docs, knowledge, the skill,
 selftests, approvals, tasks.yaml and other models' bring-up files never re-run it; edit them freely.
 
+**Estimates in agent and device time, never human time (owner, 2026-10-27).** Say how long a piece of work takes as what actually runs: agent hours (writing and fixing code) and device minutes (each test, ladder, profile), e.g. "about 2 agent-hours plus 30 device-minutes". Never "a day of kernel work" or "3 working days": agents did the MoE-block port, estimated at 3-4 agent-days, in a few hours. Base the number on comparable work already done in this run.
+
 ### Always be watching
 
 While a run is live, a watch is always armed: the run must never sit at a stop (an approval, a STOPPED task, a pause,

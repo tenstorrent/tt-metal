@@ -115,6 +115,7 @@ set(TTNN_SRC_PYBIND
     cpp/ttnn/operations/experimental/experimental_nanobind.cpp
     cpp/ttnn/operations/experimental/fusion/fusion_dispatch_op_nanobind.cpp
     cpp/ttnn/operations/generic/generic_op_nanobind.cpp
+    cpp/ttnn/operations/generic/freeze_program_hashes_nanobind.cpp
     # ttnn-nanobind core files (appended in original CMakeLists.txt)
     cpp/ttnn-nanobind/__init__.cpp
     cpp/ttnn-nanobind/activation.cpp

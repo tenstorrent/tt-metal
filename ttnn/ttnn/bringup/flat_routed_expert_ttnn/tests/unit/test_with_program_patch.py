@@ -7,7 +7,9 @@ weighted combine appended), on the box's mesh (BRINGUP_TEST_MESH=RxC, default 2x
 (DeepSeek-V4.1: 384 experts on 32 chips, 12 a chip, 640 home tokens a chip, top 6; the 2x2 seed's 96 experts, 24 a
 chip, 1024 tokens), one random expert (bfp4-exact values) in every slot (cheap to build; only bit-identity between the
 two modes is checked). On 8x4 this needed the model's column-barrier fix (DS41-118) in weighted_case.py: without it the
-harness hung on its first, address-keyed call.
+harness hung on its first, address-keyed call. Run at flat_layouts.LEGACY and at the model's EXPERTS_LAYOUT=marko
+default (DRISC-only gate/up readers, DRISC inside _with_program, even split; since the 2026-10-27 merge with the Marko
+sync).
 
   1. the address-keyed op (patch_addresses=False, the default) on inputs A: the reference output;
   2. patch_addresses=True on A: bit-identical to 1;
@@ -30,6 +32,7 @@ from loguru import logger
 import ttnn
 from ttnn.bringup.combine_rf.sparse_combine_rf import L1_MAX_WRITERS
 from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
+from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import LEGACY
 
 _TESTS = Path(__file__).resolve().parents[1]
 
@@ -45,6 +48,12 @@ def _load(name):
 
 _MESH = tuple(int(v) for v in os.environ.get("BRINGUP_TEST_MESH", "2x2").split("x"))
 H, I, K = 5120, 2304, 6
+
+
+def _layout(name, R, S, E):
+    """The flat op's layout: LEGACY (the plan before Marko's defaults) or the model's EXPERTS_LAYOUT=marko default
+    (tt/experts.py flat_op: rows_hint = round(chunk K / experts), x_helpers 1)."""
+    return dict(LEGACY) if name == "legacy" else dict(rows_hint=round(R * S * K / E), x_helpers=1)
 
 
 def _device_params():
@@ -71,7 +80,8 @@ def _bits(t):
     ids=["x".join(map(str, _MESH))],
     indirect=True,
 )
-def test_with_program_patch_addresses(mesh_device, device_params):
+@pytest.mark.parametrize("lay", ["legacy", "marko"])
+def test_with_program_patch_addresses(mesh_device, device_params, lay):
     wcase = _load("weighted_case")
     R, C = tuple(mesh_device.shape)
     E = 384 if R * C == 32 else 96  # (the model's experts on 8x4; the 2x2 seed's scaled 96)
@@ -95,6 +105,7 @@ def test_with_program_patch_addresses(mesh_device, device_params):
         pin=1,
         weights_nk=True,
         check_exact=True,
+        layout=_layout(lay, R, S, E),
         max_y_writers=L1_MAX_WRITERS,  # (the model's cap: 32 y writers on any Galaxy chip, CHANGELOG 2026-10-27)
     )
     wc = wcase.WeightedCase(

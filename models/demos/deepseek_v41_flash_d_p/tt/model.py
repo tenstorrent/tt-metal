@@ -15,7 +15,7 @@ Resting layout between steps (components.yaml header, tt/layout.py): per chip (r
     attn_in / attn_norm / ffn_in   [1, 1, S/SP, H/TP] (hidden split; bf16 under BF16_ACTIVATIONS=on, else fp32)
     q_resid / kv                   [1, 1, S/SP, 1280] (bf16 under BF16_ACTIVATIONS=on, else fp32) / [1, 1, S/SP, 512]
                                    bf16 (row-split, TP-replicated)
-    ffn_norm                       [1, 1, S/SP, H] fp32 (whole rows, replicated over TP)
+    ffn_norm                       [1, 1, S/SP, H] fp32 (whole rows, replicated over TP; MOE_HEAD=fused: [S/SP, H/TP])
     experts_out / shared_out       the fp32 partials [1, 1, S/SP, H] before the one MoE exchange (moe_add sums them,
                                    then one exact all_gather + SFPU add over TP: components.yaml moe_add notes)
 
@@ -327,7 +327,9 @@ class TtDS41Block:
         self.fused = model.fused  # MHC_FUSED=on (P.14): hc + collapse in one program, residuals emit the next hc row
         self.fold = ccl.glue_fold()  # GLUE_FOLD=on (P.19)
         self.attn_norm = build_norm(mesh, ck, cfg, i, "attn_norm")
-        self.ffn_norm = build_norm(mesh, ck, cfg, i, "ffn_norm")
+        # (MOE_IMPL=block, MOE_HEAD=fused: the fused head gathers x over TP itself - ffn_norm keeps the column split)
+        fused_head = settings.get("MOE_IMPL") == "block" and settings.get("MOE_HEAD") == "fused"
+        self.ffn_norm = build_norm(mesh, ck, cfg, i, "ffn_norm", gather=False if fused_head else None)
         self.attn_res = build_residual(cfg)
         self.ffn_res = build_residual(cfg, step="ffn_residual")
         # attention input: one fused [wq_a | wkv] projection for q_a and kv
@@ -354,15 +356,23 @@ class TtDS41Block:
             self.engram_kv = build_engram_kv(mesh, ck, cfg, i)
             self.engram_add = build_engram_add(mesh, ck, cfg, i, rows=model.chunk // model.sp)
         # MoE
-        self.router = build_router(mesh, ck, cfg, i, model.chunk)
-        self.experts = build_experts(mesh, ck, cfg, i, model.chunk, cache_dir=model.weight_cache)
-        self.shared = build_shared_expert(mesh, ck, cfg, i, chunk=model.chunk)
-        # P.12: the shared expert reads its x rows from the routed experts' gathered row-major q(x) (experts runs first
-        # in the block graph)
-        self.experts.keep_rows = bool(self.shared.reads_rows)
+        self.moe_block = None
+        if settings.get("MOE_IMPL") == "block":  # (tt/MOE_BLOCK.md: one MoEBlock call in the experts step)
+            from .moe_block_adapter import build_moe_block_layer
+
+            self.moe_block = build_moe_block_layer(mesh, ck, cfg, i, model.chunk, cache_dir=model.weight_cache)
+            self.router = self.experts = self.shared = None
+        else:
+            self.router = build_router(mesh, ck, cfg, i, model.chunk)
+            self.experts = build_experts(mesh, ck, cfg, i, model.chunk, cache_dir=model.weight_cache)
+            self.shared = build_shared_expert(mesh, ck, cfg, i, chunk=model.chunk)
+            # P.12: the shared expert reads its x rows from the routed experts' gathered row-major q(x) (experts runs
+            # first in the block graph)
+            self.experts.keep_rows = bool(self.shared.reads_rows)
         # INDEXER_GLUE=on (P.16): the experts take the router's own weights (no dense scatter, no gather)
         self.router_wts = indexer_glue()
-        self.router.dense = not self.router_wts
+        if self.router is not None:
+            self.router.dense = not self.router_wts
         self.fns = self._fns()
         # boundaries freed after their last reader (never "in": the caller owns it; never "out")
         last = {}
@@ -483,6 +493,22 @@ class TtDS41Block:
         def ffn_residual(ctx, h, mix, y):
             o, pre = self.ffn_res(h, mix, y)
             return DevH(o, pre)
+
+        if self.moe_block is not None:
+            # MOE_IMPL=block (tt/MOE_BLOCK.md): the step names stay; the experts step runs the whole MoE layer (router,
+            # routed + shared experts, the TP exchange) and its output is moe_add's: [S/SP, H/TP], ffn_residual's y.
+            # router / shared_expert do no work, moe_add hands the block's output on.
+            def router(ctx, x):  # noqa: F811
+                return Keep()
+
+            def experts(ctx, x, routing):  # noqa: F811
+                return self.moe_block(x)
+
+            def shared_expert(ctx, x):  # noqa: F811
+                return Keep()
+
+            def moe_add(ctx, a, b):  # noqa: F811
+                return a
 
         if self.fused:
             # MHC_FUSED=on (P.14): the hc steps compute their coefficients and collapse the streams with the given pre

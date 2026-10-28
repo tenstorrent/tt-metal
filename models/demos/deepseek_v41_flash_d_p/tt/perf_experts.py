@@ -311,6 +311,7 @@ def _wc_setup(mesh_device, route, S, **wc_kw):
     """test_weighted_combine_routes' harness: fake-weight flat expert, WeightedCombine(**wc_kw), the routing forced
     by ``route``, gathered x / ids / weights. Returns (wc, fe, xg, ids_g, wts_g)."""
     from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
+    from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import LEGACY
 
     from models.demos.deepseek_v41_flash_d_p.tt.weighted_combine import WeightedCombine
 
@@ -333,6 +334,7 @@ def _wc_setup(mesh_device, route, S, **wc_kw):
         act="clamped_silu",
         pin=1,
         weights_nk=True,
+        layout=LEGACY,  # (the model's plan: tt/experts.py)
     )
     wc = WeightedCombine(
         mesh_device,

@@ -1,0 +1,8332 @@
+{
+ "device": {
+  "device_params": {
+   "fabric_config": "FabricConfig.FABRIC_2D",
+   "l1_small_size": 24576,
+   "fabric_router_config": "<ttnn._ttnn.fabric.FabricRouterConfig object at 0x7f5ca67ecbd0>"
+  },
+  "fabric_config": "FABRIC_2D"
+ },
+ "calls": [
+  {
+   "sig": "0350cd2422",
+   "sig_full": "0350cd2422",
+   "count": 16,
+   "op": "ttnn.bringup.fabric_all_gather",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      64
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    3,
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 1,
+    "data_valid_semaphore": "global_semaphore",
+    "num_links": null,
+    "ready_semaphore": "global_semaphore"
+   }
+  },
+  {
+   "sig": "2f761f8778",
+   "sig_full": "2f761f8778",
+   "count": 8,
+   "op": "ttnn.bringup.fabric_all_gather",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      512,
+      1792
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    2,
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      1792
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 1,
+    "data_valid_semaphore": "global_semaphore",
+    "num_links": null,
+    "ready_semaphore": "global_semaphore"
+   }
+  },
+  {
+   "sig": "3ed44796fc",
+   "sig_full": "3ed44796fc",
+   "count": 4,
+   "op": "ttnn.bringup.fabric_all_gather",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      512,
+      512
+     ],
+     "dtype": "UINT32",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    2,
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "UINT32",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 1,
+    "data_valid_semaphore": "global_semaphore",
+    "num_links": null,
+    "ready_semaphore": "global_semaphore"
+   }
+  },
+  {
+   "sig": "43f469cea2",
+   "sig_full": "43f469cea2",
+   "count": 2,
+   "op": "ttnn.bringup.fabric_all_gather",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      512,
+      32
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    2,
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      32
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 1,
+    "data_valid_semaphore": "global_semaphore",
+    "num_links": null,
+    "ready_semaphore": "global_semaphore"
+   }
+  },
+  {
+   "sig": "5215b10576",
+   "sig_full": "5215b10576",
+   "count": 16,
+   "op": "ttnn.bringup.fabric_all_gather",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      32
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    1,
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      2,
+      1024,
+      32
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 1,
+    "data_valid_semaphore": "global_semaphore",
+    "num_links": null,
+    "ready_semaphore": "global_semaphore"
+   }
+  },
+  {
+   "sig": "6d75743894",
+   "sig_full": "6d75743894",
+   "count": 8,
+   "op": "ttnn.bringup.fabric_all_gather",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      256,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    2,
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      512,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "data_valid_semaphore": "global_semaphore",
+    "num_links": null,
+    "ready_semaphore": "global_semaphore"
+   }
+  },
+  {
+   "sig": "743a405dcd",
+   "sig_full": "743a405dcd",
+   "count": 2,
+   "op": "ttnn.bringup.fabric_all_gather",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      512,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    2,
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "data_valid_semaphore": "global_semaphore",
+    "num_links": null,
+    "ready_semaphore": "global_semaphore"
+   }
+  },
+  {
+   "sig": "a8b1f5026d",
+   "sig_full": "a8b1f5026d",
+   "count": 1,
+   "op": "ttnn.bringup.fabric_all_gather",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    2,
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      2048,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "data_valid_semaphore": "global_semaphore",
+    "num_links": null,
+    "ready_semaphore": "global_semaphore"
+   }
+  },
+  {
+   "sig": "ad4aac6edc",
+   "sig_full": "ad4aac6edc",
+   "count": 2,
+   "op": "ttnn.bringup.fabric_all_gather",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      512,
+      1024
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    2,
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      1024
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 1,
+    "data_valid_semaphore": "global_semaphore",
+    "num_links": null,
+    "ready_semaphore": "global_semaphore"
+   }
+  },
+  {
+   "sig": "bc9fc305e3",
+   "sig_full": "bc9fc305e3",
+   "count": 8,
+   "op": "ttnn.bringup.fabric_all_gather",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      128,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    2,
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      256,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 1,
+    "data_valid_semaphore": "global_semaphore",
+    "num_links": null,
+    "ready_semaphore": "global_semaphore"
+   }
+  },
+  {
+   "sig": "d5f476e647",
+   "sig_full": "d5f476e647",
+   "count": 1,
+   "op": "ttnn.bringup.fabric_all_gather",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      512,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    2,
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 1,
+    "data_valid_semaphore": "global_semaphore",
+    "num_links": null,
+    "ready_semaphore": "global_semaphore"
+   }
+  },
+  {
+   "sig": "e109e2154a",
+   "sig_full": "e109e2154a",
+   "count": 9,
+   "op": "ttnn.bringup.fabric_all_gather",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    2,
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      2048,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "data_valid_semaphore": "global_semaphore",
+    "num_links": null,
+    "ready_semaphore": "global_semaphore"
+   }
+  },
+  {
+   "sig": "ffe3863107",
+   "sig_full": "ffe3863107",
+   "count": 2,
+   "op": "ttnn.bringup.fabric_all_gather",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      512,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    2,
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "data_valid_semaphore": "global_semaphore",
+    "num_links": null,
+    "ready_semaphore": "global_semaphore"
+   }
+  },
+  {
+   "sig": "157a7d9203",
+   "sig_full": "157a7d9203",
+   "count": 2,
+   "op": "ttnn.bringup.fabric_reduce_scatter",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      1024
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cache_descriptors": true,
+    "cluster_axis": 1,
+    "dim": 2,
+    "num_links": 4,
+    "program_hash": true
+   }
+  },
+  {
+   "sig": "70660b85fb",
+   "sig_full": "70660b85fb",
+   "count": 2,
+   "op": "ttnn.bringup.fabric_reduce_scatter",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      32
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cache_descriptors": true,
+    "cluster_axis": 1,
+    "dim": 2,
+    "exact_fp32_add": true,
+    "num_links": 4,
+    "program_hash": true
+   }
+  },
+  {
+   "sig": "ce83980f2a",
+   "sig_full": "ce83980f2a",
+   "count": 4,
+   "op": "ttnn.bringup.fabric_reduce_scatter",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      32
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cache_descriptors": true,
+    "cluster_axis": 1,
+    "dim": 2,
+    "num_links": 4,
+    "program_hash": true
+   }
+  },
+  {
+   "sig": "d1558b96a4",
+   "sig_full": "d1558b96a4",
+   "count": 8,
+   "op": "ttnn.bringup.fabric_reduce_scatter",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      5120
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cache_descriptors": true,
+    "cluster_axis": 1,
+    "dim": 3,
+    "num_links": 4,
+    "program_hash": true
+   }
+  },
+  {
+   "sig": "e65fcadf31",
+   "sig_full": "e65fcadf31",
+   "count": 1,
+   "op": "ttnn.bringup.fabric_reduce_scatter",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cache_descriptors": true,
+    "cluster_axis": 1,
+    "dim": 2,
+    "num_links": 4,
+    "program_hash": true
+   }
+  },
+  {
+   "sig": "f5544db011",
+   "sig_full": "f5544db011",
+   "count": 8,
+   "op": "ttnn.bringup.fabric_reduce_scatter",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      1792
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cache_descriptors": true,
+    "cluster_axis": 1,
+    "dim": 2,
+    "num_links": 4,
+    "program_hash": true
+   }
+  },
+  {
+   "sig": "03f82eaff0",
+   "sig_full": "6b87363ba8",
+   "count": 8,
+   "op": "ttnn.bringup.flat_routed_expert_with_program",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      2048,
+      5120
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1,
+      96
+     ],
+     "dtype": "UINT32",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1,
+      96
+     ],
+     "dtype": "UINT32",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      24
+     ],
+     "dtype": "UINT32",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      2211840,
+      256
+     ],
+     "dtype": "BFLOAT4_B",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "WIDTH_SHARDED",
+     "shard_shape": [
+      2211840,
+      32
+     ],
+     "shard_cores": 8,
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1105920,
+      256
+     ],
+     "dtype": "BFLOAT4_B",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "WIDTH_SHARDED",
+     "shard_shape": [
+      1105920,
+      32
+     ],
+     "shard_cores": 8,
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "activation": 3,
+    "arena": {
+     "tensor": true,
+     "shape": [
+      2256320,
+      16
+     ],
+     "dtype": "UINT32",
+     "layout": "ROW_MAJOR",
+     "buffer": "L1",
+     "memory_layout": "HEIGHT_SHARDED",
+     "shard_shape": [
+      20512,
+      16
+     ],
+     "shard_cores": 110,
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "collector": "0-0",
+    "counts_addr": 191808,
+    "done_words": {
+     "tensor": true,
+     "shape": [
+      32,
+      32
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "L1",
+     "memory_layout": "HEIGHT_SHARDED",
+     "shard_shape": [
+      32,
+      32
+     ],
+     "shard_cores": 1,
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "down_fp32": true,
+    "extra": "MeshProgramDescriptor(kernels=[5, 5, 5, 5])",
+    "extra_key": 7974048,
+    "h_bf16": false,
+    "intermediate": 2304,
+    "l1_args": [
+     [
+      20,
+      10304,
+      681835136,
+      1528896,
+      0,
+      0,
+      0,
+      0,
+      7,
+      3,
+      198976,
+      64,
+      192832,
+      10,
+      3,
+      198976,
+      64,
+      192832,
+      3,
+      11,
+      198976,
+      64,
+      192832,
+      4,
+      11,
+      198976,
+      64,
+      192832,
+      1,
+      2,
+      1148928,
+      16,
+      192832,
+      2,
+      2,
+      1148928,
+      16,
+      192832,
+      1,
+      5,
+      1148928,
+      16,
+      192832,
+      2,
+      5,
+      1148928,
+      16,
+      192832,
+      7,
+      6,
+      1148928,
+      16,
+      192832,
+      7,
+      8,
+      1148928,
+      16,
+      192832,
+      10,
+      8,
+      1148928,
+      16,
+      192832,
+      1,
+      9,
+      1148928,
+      16,
+      192832,
+      2,
+      9,
+      1148928,
+      16,
+      192832,
+      10,
+      10,
+      1148928,
+      16,
+      192832,
+      11,
+      10,
+      1148928,
+      16,
+      192832,
+      12,
+      10,
+      1148928,
+      16,
+      192832,
+      13,
+      10,
+      1148928,
+      16,
+      192832,
+      2,
+      11,
+      1148928,
+      16,
+      192832,
+      5,
+      11,
+      1148928,
+      16,
+      192832,
+      6,
+      11,
+      1148928,
+      16,
+      192832
+     ],
+     [
+      20,
+      10304,
+      681835136,
+      1528896,
+      0,
+      0,
+      0,
+      0,
+      7,
+      3,
+      198976,
+      64,
+      192832,
+      10,
+      3,
+      198976,
+      64,
+      192832,
+      3,
+      11,
+      198976,
+      64,
+      192832,
+      4,
+      11,
+      198976,
+      64,
+      192832,
+      1,
+      2,
+      1148928,
+      16,
+      192832,
+      2,
+      2,
+      1148928,
+      16,
+      192832,
+      1,
+      5,
+      1148928,
+      16,
+      192832,
+      2,
+      5,
+      1148928,
+      16,
+      192832,
+      7,
+      6,
+      1148928,
+      16,
+      192832,
+      7,
+      8,
+      1148928,
+      16,
+      192832,
+      10,
+      8,
+      1148928,
+      16,
+      192832,
+      1,
+      9,
+      1148928,
+      16,
+      192832,
+      2,
+      9,
+      1148928,
+      16,
+      192832,
+      10,
+      10,
+      1148928,
+      16,
+      192832,
+      11,
+      10,
+      1148928,
+      16,
+      192832,
+      12,
+      10,
+      1148928,
+      16,
+      192832,
+      13,
+      10,
+      1148928,
+      16,
+      192832,
+      2,
+      11,
+      1148928,
+      16,
+      192832,
+      5,
+      11,
+      1148928,
+      16,
+      192832,
+      6,
+      11,
+      1148928,
+      16,
+      192832
+     ],
+     [
+      20,
+      10304,
+      681835136,
+      1528896,
+      0,
+      0,
+      0,
+      0,
+      7,
+      3,
+      198976,
+      64,
+      192832,
+      10,
+      3,
+      198976,
+      64,
+      192832,
+      3,
+      11,
+      198976,
+      64,
+      192832,
+      4,
+      11,
+      198976,
+      64,
+      192832,
+      1,
+      2,
+      1148928,
+      16,
+      192832,
+      2,
+      2,
+      1148928,
+      16,
+      192832,
+      1,
+      5,
+      1148928,
+      16,
+      192832,
+      2,
+      5,
+      1148928,
+      16,
+      192832,
+      7,
+      6,
+      1148928,
+      16,
+      192832,
+      7,
+      8,
+      1148928,
+      16,
+      192832,
+      10,
+      8,
+      1148928,
+      16,
+      192832,
+      1,
+      9,
+      1148928,
+      16,
+      192832,
+      2,
+      9,
+      1148928,
+      16,
+      192832,
+      10,
+      10,
+      1148928,
+      16,
+      192832,
+      11,
+      10,
+      1148928,
+      16,
+      192832,
+      12,
+      10,
+      1148928,
+      16,
+      192832,
+      13,
+      10,
+      1148928,
+      16,
+      192832,
+      2,
+      11,
+      1148928,
+      16,
+      192832,
+      5,
+      11,
+      1148928,
+      16,
+      192832,
+      6,
+      11,
+      1148928,
+      16,
+      192832
+     ],
+     [
+      20,
+      10304,
+      681835136,
+      1528896,
+      0,
+      0,
+      0,
+      0,
+      7,
+      3,
+      198976,
+      64,
+      192832,
+      10,
+      3,
+      198976,
+      64,
+      192832,
+      3,
+      11,
+      198976,
+      64,
+      192832,
+      4,
+      11,
+      198976,
+      64,
+      192832,
+      1,
+      2,
+      1148928,
+      16,
+      192832,
+      2,
+      2,
+      1148928,
+      16,
+      192832,
+      1,
+      5,
+      1148928,
+      16,
+      192832,
+      2,
+      5,
+      1148928,
+      16,
+      192832,
+      7,
+      6,
+      1148928,
+      16,
+      192832,
+      7,
+      8,
+      1148928,
+      16,
+      192832,
+      10,
+      8,
+      1148928,
+      16,
+      192832,
+      1,
+      9,
+      1148928,
+      16,
+      192832,
+      2,
+      9,
+      1148928,
+      16,
+      192832,
+      10,
+      10,
+      1148928,
+      16,
+      192832,
+      11,
+      10,
+      1148928,
+      16,
+      192832,
+      12,
+      10,
+      1148928,
+      16,
+      192832,
+      13,
+      10,
+      1148928,
+      16,
+      192832,
+      2,
+      11,
+      1148928,
+      16,
+      192832,
+      5,
+      11,
+      1148928,
+      16,
+      192832,
+      6,
+      11,
+      1148928,
+      16,
+      192832
+     ]
+    ],
+    "layout": "FlatLayoutOptions(drisc true dual false in_overlap true pure 1 max_down -1 x_helpers 1 half_width false hg_units -1 rows -1..-1 x_path -1 snakes -1 pieces -1 fwd_ncrisc -1 fwd_noc -1 fwd_depth -1 relay_depth -1 x_once -1 dw_batch -1 pin_ratio 8 single_subgrid false even_split true rows_hint 128 gu_kgroup -1 x_ready -1)",
+    "max_tokens_per_expert": 2048,
+    "pin": 1,
+    "reader_down_weights": null,
+    "relay_words": {
+     "tensor": true,
+     "shape": [
+      128,
+      32
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "L1",
+     "memory_layout": "HEIGHT_SHARDED",
+     "shard_shape": [
+      32,
+      32
+     ],
+     "shard_cores": 4,
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "token_index": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1,
+      13056
+     ],
+     "dtype": "UINT32",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "weights_nk": true,
+    "writers": 32,
+    "x_bf16": false,
+    "y": {
+     "tensor": true,
+     "shape": [
+      1,
+      13056,
+      5120
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "y_l1": true
+   }
+  },
+  {
+   "sig": "2cc390f6ee",
+   "sig_full": "2cc390f6ee",
+   "count": 2,
+   "op": "ttnn.bringup.mhc_post",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      2560
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      10240
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      4
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      16
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "compute_kernel_config": {
+     "type": "ComputeConfigDescriptor",
+     "math_fidelity": "MathFidelity.HiFi2",
+     "math_approx_mode": false,
+     "fp32_dest_acc_en": true,
+     "dst_full_sync_en": false
+    },
+    "stats_weight": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      10240,
+      32
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   }
+  },
+  {
+   "sig": "6c75d98045",
+   "sig_full": "6c75d98045",
+   "count": 5,
+   "op": "ttnn.bringup.mhc_post",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      2560
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      10240
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      24
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      24
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "comb_col": 8,
+    "post_col": 4
+   }
+  },
+  {
+   "sig": "6f9d9f69a4",
+   "sig_full": "6f9d9f69a4",
+   "count": 11,
+   "op": "ttnn.bringup.mhc_post",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      2560
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      10240
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      24
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      24
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "comb_col": 8,
+    "compute_kernel_config": {
+     "type": "ComputeConfigDescriptor",
+     "math_fidelity": "MathFidelity.HiFi2",
+     "math_approx_mode": false,
+     "fp32_dest_acc_en": true,
+     "dst_full_sync_en": false
+    },
+    "post_col": 4,
+    "stats_weight": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      10240,
+      32
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   }
+  },
+  {
+   "sig": "1461efdafe",
+   "sig_full": "1461efdafe",
+   "count": 1,
+   "op": "ttnn.bringup.mhc_pre_xing",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      2,
+      1024,
+      32
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      10240
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "base": [
+     2.5737972259521484,
+     -3.30047607421875,
+     -2.8645379543304443,
+     -3.3245863914489746,
+     0.058400556445121765,
+     -1.3627738952636719,
+     -0.34718042612075806,
+     -0.3566497564315796,
+     2.784613609313965,
+     -2.995515823364258,
+     -2.4058778285980225,
+     -3.187370538711548,
+     -2.7501230239868164,
+     2.8222463130950928,
+     -2.9054911136627197,
+     -2.8994507789611816,
+     -2.796457529067993,
+     -2.891704559326172,
+     2.914504051208496,
+     -3.5339114665985107,
+     -2.852158308029175,
+     -3.4394328594207764,
+     -2.8071787357330322,
+     2.9154205322265625
+    ],
+    "collapse_pre": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      24
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "deepseek": true,
+    "hc_eps": 1e-06,
+    "n": 4,
+    "norm_eps": 1e-20,
+    "norm_width": 20480.0,
+    "partials": 2,
+    "scale": [
+     0.18756601214408875,
+     0.09715763479471207,
+     0.31381502747535706
+    ],
+    "sinkhorn_iters": 20
+   }
+  },
+  {
+   "sig": "22d1f066a7",
+   "sig_full": "22d1f066a7",
+   "count": 1,
+   "op": "ttnn.bringup.mhc_pre_xing",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      2,
+      1024,
+      32
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      10240
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "base": [
+     2.5303964614868164,
+     -2.808842420578003,
+     -3.796247720718384,
+     -2.9474382400512695,
+     -0.8908677101135254,
+     -0.9178763628005981,
+     -1.3224202394485474,
+     -1.0169854164123535,
+     3.1036429405212402,
+     -3.1192898750305176,
+     -3.422170877456665,
+     -2.748783826828003,
+     -3.3068554401397705,
+     2.5105178356170654,
+     -2.7960875034332275,
+     -2.4750115871429443,
+     -2.756087303161621,
+     -3.256061553955078,
+     2.8738837242126465,
+     -3.134188652038574,
+     -2.764878749847412,
+     -2.5372726917266846,
+     -3.9398000240325928,
+     2.5517778396606445
+    ],
+    "collapse_pre": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      24
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "deepseek": true,
+    "hc_eps": 1e-06,
+    "n": 4,
+    "norm_eps": 1e-20,
+    "norm_width": 20480.0,
+    "partials": 2,
+    "scale": [
+     0.030164729803800583,
+     0.018300803378224373,
+     0.038966283202171326
+    ],
+    "sinkhorn_iters": 20
+   }
+  },
+  {
+   "sig": "324473251f",
+   "sig_full": "324473251f",
+   "count": 1,
+   "op": "ttnn.bringup.mhc_pre_xing",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      2,
+      1024,
+      32
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      10240
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "base": [
+     -2.3966190814971924,
+     1.7140592336654663,
+     -3.1825501918792725,
+     -2.466496229171753,
+     -0.5154521465301514,
+     -0.3193238079547882,
+     -0.08966710418462753,
+     -0.8454540371894836,
+     2.342071533203125,
+     -2.998408794403076,
+     -1.9790083169937134,
+     -3.1612751483917236,
+     -2.7952277660369873,
+     2.4984397888183594,
+     -2.460653305053711,
+     -41.43254852294922,
+     -3.1330511569976807,
+     -2.605762243270874,
+     3.2189152240753174,
+     -3.2420268058776855,
+     -2.2465600967407227,
+     -2.7751755714416504,
+     -2.613640785217285,
+     2.2692694664001465
+    ],
+    "collapse_pre": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      24
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "deepseek": true,
+    "hc_eps": 1e-06,
+    "n": 4,
+    "norm_eps": 1e-20,
+    "norm_width": 20480.0,
+    "partials": 2,
+    "scale": [
+     0.1417829841375351,
+     0.08514827489852905,
+     0.35515686869621277
+    ],
+    "sinkhorn_iters": 20
+   }
+  },
+  {
+   "sig": "37533bb2a4",
+   "sig_full": "37533bb2a4",
+   "count": 1,
+   "op": "ttnn.bringup.mhc_pre_xing",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      2,
+      1024,
+      32
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      10240
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "base": [
+     -2.339596748352051,
+     2.6025614738464355,
+     -2.9130806922912598,
+     -3.0337605476379395,
+     -0.5034747123718262,
+     -0.577825129032135,
+     -3.4920620918273926,
+     -2.4854674339294434,
+     2.7512764930725098,
+     -2.4591612815856934,
+     -3.3046436309814453,
+     -3.223912000656128,
+     -2.936877727508545,
+     2.832200288772583,
+     -0.9322531819343567,
+     -2.659066677093506,
+     -2.6555073261260986,
+     -1.2777374982833862,
+     2.1526682376861572,
+     -3.2717068195343018,
+     -2.5508439540863037,
+     -2.5558223724365234,
+     -2.5870790481567383,
+     2.6056246757507324
+    ],
+    "collapse_pre": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      24
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "deepseek": true,
+    "hc_eps": 1e-06,
+    "n": 4,
+    "norm_eps": 1e-20,
+    "norm_width": 20480.0,
+    "partials": 2,
+    "scale": [
+     0.06933597475290298,
+     0.01893402449786663,
+     0.1714521050453186
+    ],
+    "sinkhorn_iters": 20
+   }
+  },
+  {
+   "sig": "478e6af871",
+   "sig_full": "478e6af871",
+   "count": 1,
+   "op": "ttnn.bringup.mhc_pre_xing",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      2,
+      1024,
+      32
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      10240
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "base": [
+     2.208982467651367,
+     -2.3941826820373535,
+     -3.2885754108428955,
+     -2.649951219558716,
+     0.877744197845459,
+     -0.20572631061077118,
+     0.27899590134620667,
+     -0.24386614561080933,
+     2.0129482746124268,
+     -3.119912624359131,
+     -1.9245465993881226,
+     -3.2322962284088135,
+     -2.3752405643463135,
+     2.4586093425750732,
+     -2.5805306434631348,
+     -3.202937364578247,
+     -3.312967300415039,
+     -2.573408603668213,
+     3.313894510269165,
+     -21.827903747558594,
+     -2.1072776317596436,
+     -3.1815414428710938,
+     -2.8634185791015625,
+     2.2227046489715576
+    ],
+    "collapse_pre": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      24
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "deepseek": true,
+    "hc_eps": 1e-06,
+    "n": 4,
+    "norm_eps": 1e-20,
+    "norm_width": 20480.0,
+    "partials": 2,
+    "scale": [
+     0.10770329087972641,
+     0.1547520011663437,
+     0.3611161708831787
+    ],
+    "sinkhorn_iters": 20
+   }
+  },
+  {
+   "sig": "47cc1fb37f",
+   "sig_full": "47cc1fb37f",
+   "count": 1,
+   "op": "ttnn.bringup.mhc_pre_xing",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      2,
+      1024,
+      32
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      10240
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "base": [
+     -3.079899311065674,
+     -2.6003928184509277,
+     -2.815624713897705,
+     2.668290615081787,
+     -1.2075326442718506,
+     -0.5490450859069824,
+     -1.8457483053207397,
+     -1.494014024734497,
+     2.828545331954956,
+     -1.7075031995773315,
+     -3.7222557067871094,
+     -3.0913734436035156,
+     -1.6444147825241089,
+     2.239942789077759,
+     -3.096787929534912,
+     -3.161038875579834,
+     -3.1922924518585205,
+     -3.2961699962615967,
+     2.5081357955932617,
+     -2.10129451751709,
+     -3.590677499771118,
+     -2.3490262031555176,
+     -3.4165191650390625,
+     2.7477738857269287
+    ],
+    "collapse_pre": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      24
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "deepseek": true,
+    "hc_eps": 1e-06,
+    "n": 4,
+    "norm_eps": 1e-20,
+    "norm_width": 20480.0,
+    "partials": 2,
+    "scale": [
+     0.06732572615146637,
+     0.03669089823961258,
+     0.17947308719158173
+    ],
+    "sinkhorn_iters": 20
+   }
+  },
+  {
+   "sig": "4f77ad3d9f",
+   "sig_full": "4f77ad3d9f",
+   "count": 1,
+   "op": "ttnn.bringup.mhc_pre_xing",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      2,
+      1024,
+      32
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      10240
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "base": [
+     -3.0010757446289062,
+     -2.410503625869751,
+     1.7927623987197876,
+     -3.0285651683807373,
+     -0.1778670698404312,
+     -0.5953949093818665,
+     0.9426217675209045,
+     -0.5825802087783813,
+     1.8539170026779175,
+     -2.2383832931518555,
+     -1.8577916622161865,
+     -4.365795612335205,
+     -3.1404080390930176,
+     2.2869956493377686,
+     -1.9803048372268677,
+     -2.786741256713867,
+     -1.4733244180679321,
+     -1.9617598056793213,
+     1.559558391571045,
+     -43.127662658691406,
+     -3.448845148086548,
+     -2.7536518573760986,
+     -2.422804594039917,
+     2.49908185005188
+    ],
+    "collapse_pre": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      24
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "deepseek": true,
+    "hc_eps": 1e-06,
+    "n": 4,
+    "norm_eps": 1e-20,
+    "norm_width": 20480.0,
+    "partials": 2,
+    "scale": [
+     0.17198944091796875,
+     0.06834753602743149,
+     0.2365148663520813
+    ],
+    "sinkhorn_iters": 20
+   }
+  },
+  {
+   "sig": "96589e1d33",
+   "sig_full": "96589e1d33",
+   "count": 1,
+   "op": "ttnn.bringup.mhc_pre_xing",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      2,
+      1024,
+      32
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      10240
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "base": [
+     2.608116388320923,
+     -2.675873279571533,
+     -3.3808164596557617,
+     -2.5379691123962402,
+     -0.42113420367240906,
+     -0.8592575192451477,
+     -0.7398103475570679,
+     -0.6991727352142334,
+     2.4057908058166504,
+     -2.625016689300537,
+     -2.612506151199341,
+     -3.207993984222412,
+     -2.5645387172698975,
+     2.1959006786346436,
+     -2.089205503463745,
+     -41.90348434448242,
+     -3.534785747528076,
+     -2.799470901489258,
+     3.4849870204925537,
+     -3.220860481262207,
+     -2.3387582302093506,
+     -2.8728673458099365,
+     -3.0009851455688477,
+     2.3142566680908203
+    ],
+    "collapse_pre": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      24
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "deepseek": true,
+    "hc_eps": 1e-06,
+    "n": 4,
+    "norm_eps": 1e-20,
+    "norm_width": 20480.0,
+    "partials": 2,
+    "scale": [
+     0.12886154651641846,
+     0.07885566353797913,
+     0.29508456587791443
+    ],
+    "sinkhorn_iters": 20
+   }
+  },
+  {
+   "sig": "aa9b2c0edd",
+   "sig_full": "aa9b2c0edd",
+   "count": 1,
+   "op": "ttnn.bringup.mhc_pre_xing",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      2,
+      1024,
+      32
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      10240
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "base": [
+     -2.841531991958618,
+     -3.1348679065704346,
+     2.831233263015747,
+     -2.89864444732666,
+     -0.8034984469413757,
+     -1.151362657546997,
+     -3.314321517944336,
+     -2.5667805671691895,
+     2.5110585689544678,
+     -2.4545886516571045,
+     -42.231048583984375,
+     -2.832671880722046,
+     -2.4412620067596436,
+     3.223085641860962,
+     -3.535517930984497,
+     -2.8512282371520996,
+     -3.296694040298462,
+     -2.7511024475097656,
+     2.3981704711914062,
+     -2.359066963195801,
+     -2.48266863822937,
+     -3.095393180847168,
+     -2.794081687927246,
+     2.3455653190612793
+    ],
+    "collapse_pre": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      24
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "deepseek": true,
+    "hc_eps": 1e-06,
+    "n": 4,
+    "norm_eps": 1e-20,
+    "norm_width": 20480.0,
+    "partials": 2,
+    "scale": [
+     0.09773390740156174,
+     0.022383572533726692,
+     0.15568765997886658
+    ],
+    "sinkhorn_iters": 20
+   }
+  },
+  {
+   "sig": "b15f2d08c4",
+   "sig_full": "b15f2d08c4",
+   "count": 1,
+   "op": "ttnn.bringup.mhc_pre_xing",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      2,
+      1024,
+      32
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      10240
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "base": [
+     -2.968381881713867,
+     -2.6831705570220947,
+     2.727386951446533,
+     -2.82780385017395,
+     -1.0409770011901855,
+     -0.9254982471466064,
+     -1.9738751649856567,
+     -2.1249144077301025,
+     3.055403709411621,
+     -3.1450092792510986,
+     -4.996497631072998,
+     -2.707206964492798,
+     -2.634842872619629,
+     1.890122652053833,
+     -3.6537346839904785,
+     -2.342069149017334,
+     -3.42643404006958,
+     -3.3084635734558105,
+     3.321089506149292,
+     -2.888960123062134,
+     -2.8845105171203613,
+     -2.8365139961242676,
+     -3.2334601879119873,
+     2.8715450763702393
+    ],
+    "collapse_pre": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      24
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "deepseek": true,
+    "hc_eps": 1e-06,
+    "n": 4,
+    "norm_eps": 1e-20,
+    "norm_width": 20480.0,
+    "partials": 2,
+    "scale": [
+     0.07786208391189575,
+     0.029087698087096214,
+     0.07938863337039948
+    ],
+    "sinkhorn_iters": 20
+   }
+  },
+  {
+   "sig": "b36c6a63a6",
+   "sig_full": "b36c6a63a6",
+   "count": 1,
+   "op": "ttnn.bringup.mhc_pre_xing",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      2,
+      1024,
+      32
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      10240
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "base": [
+     -2.3308207988739014,
+     2.4367988109588623,
+     -2.865492343902588,
+     -2.65087628364563,
+     -0.34200331568717957,
+     -0.2710455358028412,
+     -2.0386710166931152,
+     -1.887595295906067,
+     2.4349048137664795,
+     -2.7146966457366943,
+     -3.085996389389038,
+     -2.3898158073425293,
+     -2.679088830947876,
+     3.104151487350464,
+     -3.372213363647461,
+     -2.4822559356689453,
+     -2.5664825439453125,
+     -2.592603921890259,
+     2.5915379524230957,
+     -3.0160787105560303,
+     -2.4984190464019775,
+     -2.3829801082611084,
+     -3.0895345211029053,
+     2.3448643684387207
+    ],
+    "collapse_pre": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      24
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "deepseek": true,
+    "hc_eps": 1e-06,
+    "n": 4,
+    "norm_eps": 1e-20,
+    "norm_width": 20480.0,
+    "partials": 2,
+    "scale": [
+     0.061708055436611176,
+     0.02910027839243412,
+     0.06742262840270996
+    ],
+    "sinkhorn_iters": 20
+   }
+  },
+  {
+   "sig": "b9f1e119a6",
+   "sig_full": "b9f1e119a6",
+   "count": 1,
+   "op": "ttnn.bringup.mhc_pre_xing",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      2,
+      1024,
+      32
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      10240
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "base": [
+     -2.7790005207061768,
+     -3.167161464691162,
+     2.6235458850860596,
+     -3.0441133975982666,
+     -1.2696843147277832,
+     -1.0763343572616577,
+     -0.9372820854187012,
+     -2.1784520149230957,
+     1.8550443649291992,
+     -1.8516504764556885,
+     -2.566009759902954,
+     -3.3939015865325928,
+     -2.7379486560821533,
+     2.037773609161377,
+     -2.00837779045105,
+     -9.391302108764648,
+     -1.7114076614379883,
+     -2.806230306625366,
+     1.9057058095932007,
+     -8.874881744384766,
+     -2.796534776687622,
+     -3.228247880935669,
+     -3.04225754737854,
+     2.9919989109039307
+    ],
+    "collapse_pre": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      24
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "deepseek": true,
+    "hc_eps": 1e-06,
+    "n": 4,
+    "norm_eps": 1e-20,
+    "norm_width": 20480.0,
+    "partials": 2,
+    "scale": [
+     0.18909592926502228,
+     0.03946864977478981,
+     0.14526724815368652
+    ],
+    "sinkhorn_iters": 20
+   }
+  },
+  {
+   "sig": "bf00d186a9",
+   "sig_full": "bf00d186a9",
+   "count": 1,
+   "op": "ttnn.bringup.mhc_pre_xing",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      2,
+      1024,
+      32
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      10240
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "base": [
+     1.5628927946090698,
+     -2.261469841003418,
+     -2.6390655040740967,
+     -3.1362431049346924,
+     0.814987063407898,
+     -0.35566502809524536,
+     0.03622439503669739,
+     -0.06515105068683624,
+     2.574366569519043,
+     -2.9305429458618164,
+     -2.222890615463257,
+     -3.1372601985931396,
+     -2.2726027965545654,
+     2.69146466255188,
+     -3.223954200744629,
+     -3.202782392501831,
+     -2.725612163543701,
+     -2.3119709491729736,
+     2.7763259410858154,
+     -19.546173095703125,
+     -2.719977855682373,
+     -3.294085741043091,
+     -2.8509674072265625,
+     3.0138278007507324
+    ],
+    "collapse_pre": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      24
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "deepseek": true,
+    "hc_eps": 1e-06,
+    "n": 4,
+    "norm_eps": 1e-20,
+    "norm_width": 20480.0,
+    "partials": 2,
+    "scale": [
+     0.17856088280677795,
+     0.12699733674526215,
+     0.3113393187522888
+    ],
+    "sinkhorn_iters": 20
+   }
+  },
+  {
+   "sig": "e47c9d2acb",
+   "sig_full": "e47c9d2acb",
+   "count": 1,
+   "op": "ttnn.bringup.mhc_pre_xing",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      2,
+      1024,
+      32
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      10240
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "base": [
+     -3.075462818145752,
+     -2.792785167694092,
+     -2.3009448051452637,
+     2.4924488067626953,
+     -3.1690242290496826,
+     -1.1565083265304565,
+     -2.8912105560302734,
+     -1.4818568229675293,
+     2.537663698196411,
+     -1.955989122390747,
+     -3.440965414047241,
+     -3.175123453140259,
+     -1.2705950736999512,
+     1.798486351966858,
+     -3.6787242889404297,
+     -2.3709967136383057,
+     -3.4985032081604004,
+     -2.814527750015259,
+     2.575535535812378,
+     -2.157050848007202,
+     -3.0880813598632812,
+     -2.069228172302246,
+     -3.3888463973999023,
+     2.333871364593506
+    ],
+    "collapse_pre": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      24
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "deepseek": true,
+    "hc_eps": 1e-06,
+    "n": 4,
+    "norm_eps": 1e-20,
+    "norm_width": 20480.0,
+    "partials": 2,
+    "scale": [
+     0.09044945985078812,
+     0.018969552591443062,
+     0.13819387555122375
+    ],
+    "sinkhorn_iters": 20
+   }
+  },
+  {
+   "sig": "f35095ddd7",
+   "sig_full": "f35095ddd7",
+   "count": 1,
+   "op": "ttnn.bringup.mhc_pre_xing",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      2,
+      1024,
+      32
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      10240
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "base": [
+     -2.3752052783966064,
+     1.9678921699523926,
+     -3.9473624229431152,
+     -2.2555103302001953,
+     0.6168498396873474,
+     0.04521798714995384,
+     0.38841512799263,
+     -0.11515834182500839,
+     2.5742483139038086,
+     -2.9576001167297363,
+     -2.330639600753784,
+     -3.3243114948272705,
+     -2.7547781467437744,
+     2.7394962310791016,
+     -2.4838249683380127,
+     -3.205505132675171,
+     -3.4037039279937744,
+     -2.804508686065674,
+     3.4231581687927246,
+     -41.379005432128906,
+     -2.539881467819214,
+     -2.861185312271118,
+     -2.886131525039673,
+     2.5901012420654297
+    ],
+    "collapse_pre": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      24
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "deepseek": true,
+    "hc_eps": 1e-06,
+    "n": 4,
+    "norm_eps": 1e-20,
+    "norm_width": 20480.0,
+    "partials": 2,
+    "scale": [
+     0.14275899529457092,
+     0.13950273394584656,
+     0.3633839786052704
+    ],
+    "sinkhorn_iters": 20
+   }
+  },
+  {
+   "sig": "f920f592fd",
+   "sig_full": "f920f592fd",
+   "count": 1,
+   "op": "ttnn.bringup.mhc_pre_xing",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      2,
+      1024,
+      32
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      10240
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "base": [
+     2.845095157623291,
+     -3.343229293823242,
+     -3.233515501022339,
+     -2.217123031616211,
+     -4.17180871963501,
+     -3.9524407386779785,
+     -19.57306671142578,
+     -1.4172816276550293,
+     0.20820771157741547,
+     -25.451234817504883,
+     -5.102978229522705,
+     0.09652144461870193,
+     0.5044570565223694,
+     -0.4407903552055359,
+     -25.251018524169922,
+     -21.587751388549805,
+     -25.49090003967285,
+     0.1881018877029419,
+     -0.11225703358650208,
+     -22.04298973083496,
+     -19.504518508911133,
+     -21.67133140563965,
+     -22.463973999023438,
+     13.438657760620117
+    ],
+    "collapse_pre": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      24
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "deepseek": true,
+    "hc_eps": 1e-06,
+    "n": 4,
+    "norm_eps": 1e-20,
+    "norm_width": 20480.0,
+    "partials": 2,
+    "scale": [
+     0.06304993480443954,
+     0.011977050453424454,
+     0.06153993308544159
+    ],
+    "sinkhorn_iters": 20
+   }
+  },
+  {
+   "sig": "72985a8cbd",
+   "sig_full": "72985a8cbd",
+   "count": 3,
+   "op": "ttnn.bringup.mhc_pre_xing_pack",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      32
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      10240
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "n": 4
+   }
+  },
+  {
+   "sig": "b9e0eaa916",
+   "sig_full": "b9e0eaa916",
+   "count": 2,
+   "op": "ttnn.bringup.mhc_pre_xing_pack",
+   "args": [
+    null,
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      10240
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "engram_keys": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      12800
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "engram_weight": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      32,
+      10240
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "n": 4
+   }
+  },
+  {
+   "sig": "54aa3bbe0e",
+   "sig_full": "54aa3bbe0e",
+   "count": 1,
+   "op": "ttnn.bringup.prepare_program",
+   "args": [
+    {
+     "type": "MeshProgramDescriptor",
+     "programs": 4,
+     "kernels": [
+      "inline:34a9bf72ec76",
+      "inline:372dff9dde09",
+      "inline:525e32a467fe"
+     ],
+     "digest": "befea287463f"
+    },
+    [
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1,
+       512
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       2048,
+       5120
+      ],
+      "dtype": "BFLOAT16",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     }
+    ]
+   ],
+   "kwargs": {}
+  },
+  {
+   "sig": "f0e39b029d",
+   "sig_full": "f0e39b029d",
+   "count": 2,
+   "op": "ttnn.bringup.prepare_program",
+   "args": [
+    {
+     "type": "MeshProgramDescriptor",
+     "programs": 4,
+     "kernels": [
+      "inline:0dc3b7014769",
+      "inline:0f622a8dda3f",
+      "inline:17fa31b1e484",
+      "inline:211235f2c3fa",
+      "inline:41e48a659406",
+      "inline:4366e2256d1c",
+      "inline:4d0c03d17e33",
+      "inline:51ed3454839b",
+      "inline:5ea73fd1bdb3",
+      "inline:635b20cc9c0d",
+      "inline:6efc0df89f63",
+      "inline:73ab0f0dd54e",
+      "inline:7559b8e5b577",
+      "inline:7a613957fd03",
+      "inline:85115a20454f",
+      "inline:8a42526022c8",
+      "inline:9608e0a2d753",
+      "inline:9a44195acf96",
+      "inline:a5c1f95bc39b",
+      "inline:a8bc0ca79e80",
+      "inline:aa37ad469fb4",
+      "inline:abefebbf93f4",
+      "inline:bbcb6683da7f",
+      "inline:dbbdfcd74c82",
+      "inline:efdf131e75ac"
+     ],
+     "digest": "dfe7d6fa1d59"
+    },
+    [
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1024,
+       2560
+      ],
+      "dtype": "BFLOAT16",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       74240,
+       256
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "WIDTH_SHARDED",
+      "shard_shape": [
+       74240,
+       32
+      ],
+      "shard_cores": 8,
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       512,
+       5120
+      ],
+      "dtype": "BFLOAT16",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       101,
+       321680
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "L1",
+      "memory_layout": "HEIGHT_SHARDED",
+      "shard_shape": [
+       1,
+       321680
+      ],
+      "shard_cores": 101,
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       16,
+       384
+      ],
+      "dtype": "UINT16",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       2048,
+       5120
+      ],
+      "dtype": "BFLOAT16",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1,
+       512
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       96,
+       2560
+      ],
+      "dtype": "BFLOAT16",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       96,
+       32
+      ],
+      "dtype": "FLOAT32",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       96,
+       32
+      ],
+      "dtype": "UINT16",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       8,
+       3328
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1,
+       96
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1,
+       96
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1,
+       13056
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       408,
+       64
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1,
+       1024
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     }
+    ]
+   ],
+   "kwargs": {}
+  },
+  {
+   "sig": "377a477700",
+   "sig_full": "377a477700",
+   "count": 2,
+   "op": "ttnn.bringup.ring_indexer_score_dsa",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      32,
+      512,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      512,
+      32
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    [
+     "global_semaphore",
+     "global_semaphore"
+    ]
+   ],
+   "kwargs": {
+    "block_cyclic_chunk_local": 1024,
+    "block_cyclic_sp_axis": 0,
+    "chunk_start_idx": 53248,
+    "cluster_axis": 0,
+    "compute_kernel_config": {
+     "type": "WormholeComputeKernelConfig",
+     "math_fidelity": "MathFidelity.HiFi2",
+     "math_approx_mode": false,
+     "fp32_dest_acc_en": true,
+     "packer_l1_acc": false,
+     "dst_full_sync_en": false
+    },
+    "key_compression_ratio": 2,
+    "kv_len": 27648,
+    "natural_query_blocks": true,
+    "num_links": 2,
+    "program_config": "IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=32, head_group_size=0)",
+    "seq_subshard_axis": 1,
+    "topology": "Topology.Linear"
+   }
+  },
+  {
+   "sig": "f064b9bda3",
+   "sig_full": "f064b9bda3",
+   "count": 1,
+   "op": "ttnn.bringup.ring_indexer_score_dsa",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      32,
+      512,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      55296,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      512,
+      32
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    [
+     "global_semaphore",
+     "global_semaphore"
+    ]
+   ],
+   "kwargs": {
+    "block_bias": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      512,
+      6912
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "block_cyclic_chunk_local": 1024,
+    "block_cyclic_sp_axis": 0,
+    "block_keys": 8,
+    "chunk_start_idx": 53248,
+    "cluster_axis": 0,
+    "compute_kernel_config": {
+     "type": "WormholeComputeKernelConfig",
+     "math_fidelity": "MathFidelity.HiFi2",
+     "math_approx_mode": false,
+     "fp32_dest_acc_en": true,
+     "packer_l1_acc": false,
+     "dst_full_sync_en": false
+    },
+    "key_compression_ratio": 1,
+    "kv_len": 55296,
+    "natural_query_blocks": true,
+    "num_links": 2,
+    "program_config": "IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=32, head_group_size=0)",
+    "seq_subshard_axis": 1,
+    "topology": "Topology.Linear"
+   }
+  },
+  {
+   "sig": "f5914547b9",
+   "sig_full": "f5914547b9",
+   "count": 1,
+   "op": "ttnn.bringup.ring_indexer_score_dsa",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      32,
+      512,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      55296,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      512,
+      32
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    [
+     "global_semaphore",
+     "global_semaphore"
+    ]
+   ],
+   "kwargs": {
+    "block_cyclic_chunk_local": 1024,
+    "block_cyclic_sp_axis": 0,
+    "block_keys": 8,
+    "block_max_out": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      512,
+      6912
+     ],
+     "dtype": "FLOAT32",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "block_max_pin": true,
+    "chunk_start_idx": 53248,
+    "cluster_axis": 0,
+    "compute_kernel_config": {
+     "type": "WormholeComputeKernelConfig",
+     "math_fidelity": "MathFidelity.HiFi2",
+     "math_approx_mode": false,
+     "fp32_dest_acc_en": true,
+     "packer_l1_acc": false,
+     "dst_full_sync_en": false
+    },
+    "key_compression_ratio": 1,
+    "kv_len": 55296,
+    "natural_query_blocks": true,
+    "num_links": 2,
+    "program_config": "IndexerScoreProgramConfig(q_chunk_size=64, k_chunk_size=32, head_group_size=0)",
+    "seq_subshard_axis": 1,
+    "topology": "Topology.Linear"
+   }
+  },
+  {
+   "sig": "516a31a79d",
+   "sig_full": "516a31a79d",
+   "count": 1,
+   "op": "ttnn.bringup.rms_norm",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "compute_kernel_config": {
+     "type": "WormholeComputeKernelConfig",
+     "math_fidelity": "MathFidelity.HiFi4",
+     "math_approx_mode": false,
+     "fp32_dest_acc_en": true,
+     "packer_l1_acc": false,
+     "dst_full_sync_en": false
+    },
+    "dtype": "DataType.BFLOAT16",
+    "epsilon": 1e-20,
+    "memory_config": {
+     "type": "MemoryConfig",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED"
+    },
+    "weight": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1,
+      512
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   }
+  },
+  {
+   "sig": "5f7e0b4ad1",
+   "sig_full": "5f7e0b4ad1",
+   "count": 2,
+   "op": "ttnn.bringup.rms_norm",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      512,
+      512
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "compute_kernel_config": {
+     "type": "WormholeComputeKernelConfig",
+     "math_fidelity": "MathFidelity.HiFi4",
+     "math_approx_mode": false,
+     "fp32_dest_acc_en": true,
+     "packer_l1_acc": false,
+     "dst_full_sync_en": false
+    },
+    "dtype": "DataType.BFLOAT16",
+    "epsilon": 1e-20,
+    "memory_config": {
+     "type": "MemoryConfig",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED"
+    },
+    "weight": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1,
+      512
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   }
+  },
+  {
+   "sig": "68a871de3d",
+   "sig_full": "68a871de3d",
+   "count": 1,
+   "op": "ttnn.bringup.rms_norm",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "compute_kernel_config": {
+     "type": "WormholeComputeKernelConfig",
+     "math_fidelity": "MathFidelity.HiFi4",
+     "math_approx_mode": false,
+     "fp32_dest_acc_en": true,
+     "packer_l1_acc": false,
+     "dst_full_sync_en": false
+    },
+    "epsilon": 1e-20,
+    "memory_config": {
+     "type": "MemoryConfig",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED"
+    },
+    "weight": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1,
+      128
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   }
+  },
+  {
+   "sig": "73aa2d360c",
+   "sig_full": "73aa2d360c",
+   "count": 16,
+   "op": "ttnn.bringup.rms_norm",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      2560
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "compute_kernel_config": {
+     "type": "WormholeComputeKernelConfig",
+     "math_fidelity": "MathFidelity.HiFi4",
+     "math_approx_mode": false,
+     "fp32_dest_acc_en": true,
+     "packer_l1_acc": false,
+     "dst_full_sync_en": false
+    },
+    "epsilon": 1e-20,
+    "memory_config": {
+     "type": "MemoryConfig",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED"
+    },
+    "partial_stats": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    "stats_width": 5120,
+    "weight": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1,
+      2560
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   }
+  },
+  {
+   "sig": "826864a291",
+   "sig_full": "826864a291",
+   "count": 16,
+   "op": "ttnn.bringup.rms_norm",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      2560
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "compute_kernel_config": {
+     "type": "WormholeComputeKernelConfig",
+     "math_fidelity": "MathFidelity.HiFi4",
+     "math_approx_mode": false,
+     "fp32_dest_acc_en": true,
+     "packer_l1_acc": false,
+     "dst_full_sync_en": false
+    },
+    "memory_config": {
+     "type": "MemoryConfig",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED"
+    },
+    "stats_out": true
+   }
+  },
+  {
+   "sig": "9166a4be85",
+   "sig_full": "9166a4be85",
+   "count": 8,
+   "op": "ttnn.bringup.rms_norm",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      1792
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "compute_kernel_config": {
+     "type": "WormholeComputeKernelConfig",
+     "math_fidelity": "MathFidelity.HiFi4",
+     "math_approx_mode": false,
+     "fp32_dest_acc_en": true,
+     "packer_l1_acc": false,
+     "dst_full_sync_en": false
+    },
+    "epsilon": 1e-20,
+    "input_window": [
+     1280,
+     1792
+    ],
+    "memory_config": {
+     "type": "MemoryConfig",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED"
+    },
+    "weight": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1,
+      512
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   }
+  },
+  {
+   "sig": "a4b71ffddb",
+   "sig_full": "a4b71ffddb",
+   "count": 2,
+   "op": "ttnn.bringup.rms_norm",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      512,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "compute_kernel_config": {
+     "type": "WormholeComputeKernelConfig",
+     "math_fidelity": "MathFidelity.HiFi4",
+     "math_approx_mode": false,
+     "fp32_dest_acc_en": true,
+     "packer_l1_acc": false,
+     "dst_full_sync_en": false
+    },
+    "epsilon": 1e-20,
+    "memory_config": {
+     "type": "MemoryConfig",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED"
+    },
+    "weight": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1,
+      128
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   }
+  },
+  {
+   "sig": "f3058f954f",
+   "sig_full": "f3058f954f",
+   "count": 8,
+   "op": "ttnn.bringup.rms_norm",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      1792
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "compute_kernel_config": {
+     "type": "WormholeComputeKernelConfig",
+     "math_fidelity": "MathFidelity.HiFi4",
+     "math_approx_mode": false,
+     "fp32_dest_acc_en": true,
+     "packer_l1_acc": false,
+     "dst_full_sync_en": false
+    },
+    "epsilon": 1e-20,
+    "input_window": [
+     0,
+     1280
+    ],
+    "memory_config": {
+     "type": "MemoryConfig",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED"
+    },
+    "weight": {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1,
+      1280
+     ],
+     "dtype": "FLOAT32",
+     "layout": "TILE",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   }
+  },
+  {
+   "sig": "bef5e0fc64",
+   "sig_full": "bef5e0fc64",
+   "count": 7,
+   "op": "ttnn.bringup.run_prepared",
+   "args": [
+    {
+     "type": "MeshProgramDescriptor",
+     "programs": 4,
+     "kernels": [
+      "inline:34a9bf72ec76",
+      "inline:372dff9dde09",
+      "inline:525e32a467fe"
+     ],
+     "digest": "befea287463f"
+    },
+    [
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1,
+       512
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       2048,
+       5120
+      ],
+      "dtype": "BFLOAT16",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     }
+    ]
+   ],
+   "kwargs": {}
+  },
+  {
+   "sig": "ef9baff5aa",
+   "sig_full": "ef9baff5aa",
+   "count": 9,
+   "op": "ttnn.bringup.run_prepared",
+   "args": [
+    {
+     "type": "MeshProgramDescriptor",
+     "programs": 4,
+     "kernels": [
+      "inline:0dc3b7014769",
+      "inline:0f622a8dda3f",
+      "inline:17fa31b1e484",
+      "inline:211235f2c3fa",
+      "inline:41e48a659406",
+      "inline:4366e2256d1c",
+      "inline:4d0c03d17e33",
+      "inline:51ed3454839b",
+      "inline:5ea73fd1bdb3",
+      "inline:635b20cc9c0d",
+      "inline:6efc0df89f63",
+      "inline:73ab0f0dd54e",
+      "inline:7559b8e5b577",
+      "inline:7a613957fd03",
+      "inline:85115a20454f",
+      "inline:8a42526022c8",
+      "inline:9608e0a2d753",
+      "inline:9a44195acf96",
+      "inline:a5c1f95bc39b",
+      "inline:a8bc0ca79e80",
+      "inline:aa37ad469fb4",
+      "inline:abefebbf93f4",
+      "inline:bbcb6683da7f",
+      "inline:dbbdfcd74c82",
+      "inline:efdf131e75ac"
+     ],
+     "digest": "dfe7d6fa1d59"
+    },
+    [
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1024,
+       2560
+      ],
+      "dtype": "BFLOAT16",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       74240,
+       256
+      ],
+      "dtype": "BFLOAT8_B",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "WIDTH_SHARDED",
+      "shard_shape": [
+       74240,
+       32
+      ],
+      "shard_cores": 8,
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       512,
+       5120
+      ],
+      "dtype": "BFLOAT16",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       101,
+       321680
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "L1",
+      "memory_layout": "HEIGHT_SHARDED",
+      "shard_shape": [
+       1,
+       321680
+      ],
+      "shard_cores": 101,
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       16,
+       384
+      ],
+      "dtype": "UINT16",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       2048,
+       5120
+      ],
+      "dtype": "BFLOAT16",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1,
+       512
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       96,
+       2560
+      ],
+      "dtype": "BFLOAT16",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       96,
+       32
+      ],
+      "dtype": "FLOAT32",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       96,
+       32
+      ],
+      "dtype": "UINT16",
+      "layout": "TILE",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       8,
+       3328
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1,
+       96
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1,
+       96
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1,
+       13056
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       408,
+       64
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     },
+     {
+      "tensor": true,
+      "shape": [
+       1,
+       1,
+       1,
+       1024
+      ],
+      "dtype": "UINT32",
+      "layout": "ROW_MAJOR",
+      "buffer": "DRAM",
+      "memory_layout": "INTERLEAVED",
+      "mesh": [
+       2,
+       2
+      ],
+      "devices": 4
+     }
+    ]
+   ],
+   "kwargs": {}
+  },
+  {
+   "sig": "09a0901c6f",
+   "sig_full": "09a0901c6f",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 14336,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 16384
+   }
+  },
+  {
+   "sig": "0bb231744d",
+   "sig_full": "0bb231744d",
+   "count": 54,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      6912,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      512,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1
+     ],
+     "dtype": "UINT32",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1
+     ],
+     "dtype": "UINT32",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "tp_axis": 1,
+    "valid_global": {
+     "tensor": true,
+     "shape": [
+      1,
+      1
+     ],
+     "dtype": "UINT32",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   }
+  },
+  {
+   "sig": "0bd5f49e12",
+   "sig_full": "0bd5f49e12",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 45056,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 47104
+   }
+  },
+  {
+   "sig": "13b4ed2c72",
+   "sig_full": "13b4ed2c72",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 28672,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 30720
+   }
+  },
+  {
+   "sig": "154e56fe48",
+   "sig_full": "154e56fe48",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 49152,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 51200
+   }
+  },
+  {
+   "sig": "21d5269989",
+   "sig_full": "21d5269989",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 20480,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 22528
+   }
+  },
+  {
+   "sig": "2e7de1563d",
+   "sig_full": "2e7de1563d",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 43008,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 45056
+   }
+  },
+  {
+   "sig": "2f30af7fbb",
+   "sig_full": "2f30af7fbb",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 4096,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 6144
+   }
+  },
+  {
+   "sig": "3060c5e5c0",
+   "sig_full": "3060c5e5c0",
+   "count": 54,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      512,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1
+     ],
+     "dtype": "UINT32",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1
+     ],
+     "dtype": "UINT32",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "tp_axis": null,
+    "valid_global": {
+     "tensor": true,
+     "shape": [
+      1,
+      1
+     ],
+     "dtype": "UINT32",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   }
+  },
+  {
+   "sig": "323f432ac6",
+   "sig_full": "323f432ac6",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 30720,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 32768
+   }
+  },
+  {
+   "sig": "326396972c",
+   "sig_full": "326396972c",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 8192,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 10240
+   }
+  },
+  {
+   "sig": "38c48fda5d",
+   "sig_full": "38c48fda5d",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 38912,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 40960
+   }
+  },
+  {
+   "sig": "3fb58fa69b",
+   "sig_full": "3fb58fa69b",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 47104,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 49152
+   }
+  },
+  {
+   "sig": "3fb5b44e12",
+   "sig_full": "3fb5b44e12",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 22528,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 24576
+   }
+  },
+  {
+   "sig": "434760527d",
+   "sig_full": "434760527d",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 26624,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 28672
+   }
+  },
+  {
+   "sig": "47e6b437ae",
+   "sig_full": "47e6b437ae",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 6144,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 8192
+   }
+  },
+  {
+   "sig": "49ea6fba63",
+   "sig_full": "49ea6fba63",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 26624,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 28672
+   }
+  },
+  {
+   "sig": "4ffbfe5765",
+   "sig_full": "4ffbfe5765",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 10240,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 12288
+   }
+  },
+  {
+   "sig": "519e40bc05",
+   "sig_full": "519e40bc05",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 34816,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 36864
+   }
+  },
+  {
+   "sig": "52ea6200be",
+   "sig_full": "52ea6200be",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 0,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 2048
+   }
+  },
+  {
+   "sig": "61f95ca744",
+   "sig_full": "61f95ca744",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 53248,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 55296
+   }
+  },
+  {
+   "sig": "65944b5dba",
+   "sig_full": "65944b5dba",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 34816,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 36864
+   }
+  },
+  {
+   "sig": "68249e5812",
+   "sig_full": "68249e5812",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 0,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 2048
+   }
+  },
+  {
+   "sig": "6df26f6d01",
+   "sig_full": "6df26f6d01",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 14336,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 16384
+   }
+  },
+  {
+   "sig": "6e7149ad1d",
+   "sig_full": "6e7149ad1d",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 51200,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 53248
+   }
+  },
+  {
+   "sig": "70d94d4399",
+   "sig_full": "70d94d4399",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 22528,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 24576
+   }
+  },
+  {
+   "sig": "71130923ec",
+   "sig_full": "71130923ec",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 4096,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 6144
+   }
+  },
+  {
+   "sig": "7692784720",
+   "sig_full": "7692784720",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 47104,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 49152
+   }
+  },
+  {
+   "sig": "8901eca48a",
+   "sig_full": "8901eca48a",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 12288,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 14336
+   }
+  },
+  {
+   "sig": "89c856865f",
+   "sig_full": "89c856865f",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 43008,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 45056
+   }
+  },
+  {
+   "sig": "98225c66e9",
+   "sig_full": "98225c66e9",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 16384,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 18432
+   }
+  },
+  {
+   "sig": "98ed43fb15",
+   "sig_full": "98ed43fb15",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 28672,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 30720
+   }
+  },
+  {
+   "sig": "9a8ffaa5de",
+   "sig_full": "9a8ffaa5de",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 40960,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 43008
+   }
+  },
+  {
+   "sig": "9b5c178c23",
+   "sig_full": "9b5c178c23",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 36864,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 38912
+   }
+  },
+  {
+   "sig": "a80dc628a8",
+   "sig_full": "a80dc628a8",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 24576,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 26624
+   }
+  },
+  {
+   "sig": "ae8e6d3b6d",
+   "sig_full": "ae8e6d3b6d",
+   "count": 9,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 53248,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 55296
+   }
+  },
+  {
+   "sig": "b6824d5fc1",
+   "sig_full": "b6824d5fc1",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 32768,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 34816
+   }
+  },
+  {
+   "sig": "b7d1382051",
+   "sig_full": "b7d1382051",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 6144,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 8192
+   }
+  },
+  {
+   "sig": "b85c0a4b63",
+   "sig_full": "b85c0a4b63",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 16384,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 18432
+   }
+  },
+  {
+   "sig": "b8c000ffb3",
+   "sig_full": "b8c000ffb3",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 40960,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 43008
+   }
+  },
+  {
+   "sig": "bb660aaece",
+   "sig_full": "bb660aaece",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 20480,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 22528
+   }
+  },
+  {
+   "sig": "bcc83e2268",
+   "sig_full": "bcc83e2268",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 30720,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 32768
+   }
+  },
+  {
+   "sig": "c4a243616f",
+   "sig_full": "c4a243616f",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 2048,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 4096
+   }
+  },
+  {
+   "sig": "c8655090e4",
+   "sig_full": "c8655090e4",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 10240,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 12288
+   }
+  },
+  {
+   "sig": "c9538c2977",
+   "sig_full": "c9538c2977",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 2048,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 4096
+   }
+  },
+  {
+   "sig": "d204137fd4",
+   "sig_full": "d204137fd4",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 51200,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 53248
+   }
+  },
+  {
+   "sig": "d427c81ecd",
+   "sig_full": "d427c81ecd",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 18432,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 20480
+   }
+  },
+  {
+   "sig": "e8c465d6d2",
+   "sig_full": "e8c465d6d2",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 18432,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 20480
+   }
+  },
+  {
+   "sig": "ed25109c8e",
+   "sig_full": "ed25109c8e",
+   "count": 8,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 53120,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 53248
+   }
+  },
+  {
+   "sig": "f0dfc5d5da",
+   "sig_full": "f0dfc5d5da",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 45056,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 47104
+   }
+  },
+  {
+   "sig": "f165bdb517",
+   "sig_full": "f165bdb517",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 32768,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 34816
+   }
+  },
+  {
+   "sig": "f39007ffe1",
+   "sig_full": "f39007ffe1",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 38912,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 40960
+   }
+  },
+  {
+   "sig": "f3f349bccf",
+   "sig_full": "f3f349bccf",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 36864,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 38912
+   }
+  },
+  {
+   "sig": "f4d5ed161f",
+   "sig_full": "f4d5ed161f",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 49152,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 51200
+   }
+  },
+  {
+   "sig": "f77910dfa7",
+   "sig_full": "f77910dfa7",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 12288,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 14336
+   }
+  },
+  {
+   "sig": "f994267b58",
+   "sig_full": "f994267b58",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      27648,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      128
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 8192,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": null,
+    "valid_global": 10240
+   }
+  },
+  {
+   "sig": "fd9c770cd0",
+   "sig_full": "fd9c770cd0",
+   "count": 1,
+   "op": "ttnn.bringup.update_padded_kv_cache",
+   "args": [
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      13824,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "ND_SHARDED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    },
+    {
+     "tensor": true,
+     "shape": [
+      1,
+      1,
+      1024,
+      512
+     ],
+     "dtype": "BFLOAT16",
+     "layout": "ROW_MAJOR",
+     "buffer": "DRAM",
+     "memory_layout": "INTERLEAVED",
+     "mesh": [
+      2,
+      2
+     ],
+     "devices": 4
+    }
+   ],
+   "kwargs": {
+    "cluster_axis": 0,
+    "kv_actual_global": 24576,
+    "layer_idx": 0,
+    "num_layers": 1,
+    "slot_idx": 0,
+    "tp_axis": 1,
+    "valid_global": 26624
+   }
+  }
+ ]
+}

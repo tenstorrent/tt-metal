@@ -372,8 +372,11 @@ def outputs_in(results: Path, task: dict) -> list[Path]:
     out += sorted(results.glob(f"{tid}_*.json.gz"))  # F148: a profile's gzipped per-op rows
     if task.get("step") == "optests":
         out.append(results / "fork_calls.json")
-        if "fork_calls_scaled.json" in (task.get("gate") or {}).get("cmd", ""):  # F64: the scaled run's calls
-            out.append(results / "fork_calls_scaled.json")
+        # F64 / F201: every other capture file the gate writes (the scaled run's, a settings variant's)
+        import re
+
+        for name in sorted(set(re.findall(r"\b(fork_calls_[\w-]+\.json)", (task.get("gate") or {}).get("cmd", "")))):
+            out.append(results / name)
     return out
 
 
@@ -659,7 +662,7 @@ def run_units(
             seen = {p: p.stat().st_mtime_ns for p in outputs_in(results, task) if p.exists()}
             t0 = time.time()
             rc = subprocess.run(cmd, shell=True, cwd=spec.repo, env=uenv, stdout=f, stderr=subprocess.STDOUT).returncode
-            if rc == SAFE_HANG_RC and _uses_safe_runner(cmd):  # F201: before the next unit's mesh open wipes it
+            if rc == SAFE_HANG_RC and _uses_safe_runner(cmd):  # F204: before the next unit's mesh open wipes it
                 kept = hangdump.keep(spec.repo, hangdump.dest_for(log, u))
                 f.write(f"\n# {u}: HANG; triage + inspector kept in {kept}\n")
                 f.flush()
@@ -853,10 +856,10 @@ def run_gate(
         shutil.copy(spec.repo / TRIAGE, log.with_suffix(".triage.txt"))
         head.append(f"  triage: {log.with_suffix('.triage.txt')}")
     kept = sorted(log.parent.glob(f"{log.stem}.hang-*"), key=lambda p: p.stat().st_mtime) if hang else []
-    if hang and not kept:  # F201: a single-command gate (no unit loop) keeps its dump here
+    if hang and not kept:  # F204: a single-command gate (no unit loop) keeps its dump here
         kept = [hangdump.keep(spec.repo, hangdump.dest_for(log, tid))]
     if kept and kept[-1]:
-        head.append(f"  hang dump (triage + inspector, F201): {kept[-1]}")
+        head.append(f"  hang dump (triage + inspector, F204): {kept[-1]}")
     if record and reuse is None and verdict != "PASS":  # F169: where the gate stopped, for --continue and the overseer
         head += progress_lines(spec, ledger, tid)
     res = GateResult(tid, verdict, rc, head + lines + [f"  MISSING artifact {a}" for a in missing], log, None, dur)

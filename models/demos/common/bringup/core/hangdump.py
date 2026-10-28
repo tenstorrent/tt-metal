@@ -1,4 +1,4 @@
-"""F201: a device hang's evidence survives the next run and the overseer.
+"""F204: a device hang's evidence survives the next run and the overseer.
 
 A hang's evidence is run_safe_pytest's tt-triage report dir (generated/tt-triage) and Metal's Inspector logs
 (generated/inspector, rewritten by every mesh open). Both live at fixed repo paths, so the next unit, gate or re-run
@@ -48,7 +48,7 @@ def wait_triage(timeout_s: float = TRIAGE_WAIT_S, running=triage_running, sleep=
     t0, told = time.time(), False
     while running():
         if not told:
-            say(f"tt-triage is writing a hang dump: waiting for it (up to {timeout_s:.0f} s) before the kill (F201)")
+            say(f"tt-triage is writing a hang dump: waiting for it (up to {timeout_s:.0f} s) before the kill (F204)")
             told = True
         if time.time() - t0 > timeout_s:
             return False

@@ -12,6 +12,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
+from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import LEGACY
 
 # (tag, H, I, local experts, capacity m, global experts, activation[, FlatRoutedExpert kwargs])
 CASES = [
@@ -48,7 +49,8 @@ def _act(g, u, act):
 @pytest.mark.parametrize("case", CASES, ids=[c[0] for c in CASES])
 def test_flat_uneven_split(device, case):
     tag, H, I, E, m, NG, act = case[:7]
-    kw = {"pin": 1, **(case[7] if len(case) > 7 else {})}
+    # (LEGACY: the uneven split is the old first-fit rule; the default even split plans these shapes evenly)
+    kw = {"pin": 1, "layout": LEGACY, **(case[7] if len(case) > 7 else {})}
     torch.manual_seed(0)
     weights = [[(torch.randn(H, I) * 0.02, torch.randn(H, I) * 0.02, torch.randn(I, H) * 0.02) for _ in range(E)]]
     gids = [[(NG // E) * e + 1 for e in range(E)]]

@@ -4,9 +4,14 @@
 
 #include "flat_routed_expert_nanobind.hpp"
 
+#include <map>
+#include <set>
+
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 #include <nanobind/stl/vector.h>
+#include <nanobind/stl/map.h>
+#include <nanobind/stl/string.h>
 
 #include <tt-metalium/mesh_device.hpp>
 
@@ -40,6 +45,7 @@ nb::dict plan_dict(
     uint32_t pin,
     bool x_bf16,
     bool h_bf16,
+    const fre::FlatLayoutOptions& layout,
     uint32_t max_y_writers) {
     const auto p = fre::flat_routed_expert_plan(
         device,
@@ -54,6 +60,7 @@ nb::dict plan_dict(
             .pin = pin,
             .x_bf16 = x_bf16,
             .h_bf16 = h_bf16,
+            .layout = layout,
             .max_y_writers = max_y_writers});
     nb::dict d;
     d["nsg"] = p->nsg;
@@ -88,6 +95,20 @@ nb::dict plan_dict(
     d["gu_rp"] = p->gu_rp;
     d["gu_l1acc"] = p->gu_l1acc;
     d["arena_tiles"] = p->arena_tiles;
+    d["static_l1_bytes"] = p->static_l1_bytes;  // (the program's static CBs: leave this much L1 below the arena)
+    d["even_split"] = p->even_gu;               // (the gate/up split is the even one)
+    // (per-role arena offsets, bytes: gate/up x ring at x_off .. h_local at hl_off; down h at h_off, out at o_off;
+    // Tensix readers' rings end at rd_off; relays' staging ends at ti_off)
+    d["role_offsets"] = std::map<std::string, uint32_t>{
+        {"x_off", p->x_off},
+        {"p_off", p->p_off},
+        {"hl_off", p->hl_off},
+        {"rd_off", p->rd_off},
+        {"h_off", p->h_off},
+        {"o_off", p->o_off},
+        {"ti_off", p->ti_off}};
+    d["role_bytes"] = std::map<std::string, uint32_t>{
+        {"gu", p->gu_bytes}, {"down", p->dn_bytes}, {"relay", p->relay_bytes}, {"reader", p->rd_off}};
     d["coords"] = cores(p->coords);
     d["readers"] = cores(p->readers);
     d["gu"] = cores(p->gu);
@@ -128,11 +149,73 @@ nb::dict plan_dict(
         d["d_succ"] = succ;
         d["col0s"] = p->col0s;
     }
+    {  // the y writers in the program factory's order (a writer's index in the combine's L1 hand-off): the reader
+       // tails (by pair-set count, then non-DRISC / DRISC slots), then the down cores grouped by column width
+        std::vector<tt::tt_metal::CoreCoord> yw;
+        const auto rg_at = [&](uint32_t r) { return p->rgs.empty() ? p->rg : p->rgs[r]; };
+        if (p->rdown) {
+            std::set<uint32_t> rgk;
+            for (const auto& [r, t] : p->rdn) {
+                rgk.insert(rg_at(r));
+            }
+            for (const uint32_t k : rgk) {
+                for (const bool dual_set : {false, true}) {
+                    for (const auto& [r, t] : p->rdn) {
+                        if ((p->dual && p->drisc_slot(r)) == dual_set && rg_at(r) == k) {
+                            yw.push_back(p->readers[r]);
+                        }
+                    }
+                }
+            }
+        }
+        std::map<uint32_t, std::vector<uint32_t>> dgroups;
+        for (uint32_t i = 0; i < p->down.size(); ++i) {
+            dgroups[p->pcds[i]].push_back(i);
+        }
+        for (const auto& [pw, ds] : dgroups) {
+            for (const uint32_t i : ds) {
+                yw.push_back(p->down[i]);
+            }
+        }
+        d["y_writers"] = cores(yw);
+    }
     return d;
 }
 }  // namespace
 
 void bind_flat_routed_expert(nb::module_& mod) {
+    // the layout / program choices (FlatLayoutOptions: typed, in the plan key and the program hashes); presets in
+    // ttnn/ttnn/bringup/flat_routed_expert_ttnn/flat_layouts.py
+    nb::class_<fre::FlatLayoutOptions>(mod, "FlatLayoutOptions")
+        .def(nb::init<>())
+        .def_rw("drisc", &fre::FlatLayoutOptions::drisc)
+        .def_rw("drisc_dual", &fre::FlatLayoutOptions::drisc_dual)
+        .def_rw("drisc_in_overlap", &fre::FlatLayoutOptions::drisc_in_overlap)
+        .def_rw("drisc_pure", &fre::FlatLayoutOptions::drisc_pure)
+        .def_rw("max_down", &fre::FlatLayoutOptions::max_down)
+        .def_rw("x_helpers", &fre::FlatLayoutOptions::x_helpers)
+        .def_rw("half_width", &fre::FlatLayoutOptions::half_width)
+        .def_rw("hg_units", &fre::FlatLayoutOptions::hg_units)
+        .def_rw("single_subgrid", &fre::FlatLayoutOptions::single_subgrid)
+        .def_rw("even_split", &fre::FlatLayoutOptions::even_split)
+        .def_rw("rows_hint", &fre::FlatLayoutOptions::rows_hint)
+        .def_rw("gu_kgroup", &fre::FlatLayoutOptions::gu_kgroup)
+        .def_rw("x_ready", &fre::FlatLayoutOptions::x_ready)
+        .def_rw("row0", &fre::FlatLayoutOptions::row0)
+        .def_rw("row1", &fre::FlatLayoutOptions::row1)
+        .def_rw("x_path", &fre::FlatLayoutOptions::x_path)
+        .def_rw("x_snakes", &fre::FlatLayoutOptions::x_snakes)
+        .def_rw("x_pieces", &fre::FlatLayoutOptions::x_pieces)
+        .def_rw("x_fwd_ncrisc", &fre::FlatLayoutOptions::x_fwd_ncrisc)
+        .def_rw("x_fwd_noc", &fre::FlatLayoutOptions::x_fwd_noc)
+        .def_rw("x_fwd_depth", &fre::FlatLayoutOptions::x_fwd_depth)
+        .def_rw("x_relay_depth", &fre::FlatLayoutOptions::x_relay_depth)
+        .def_rw("x_once", &fre::FlatLayoutOptions::x_once)
+        .def_rw("dw_batch", &fre::FlatLayoutOptions::dw_batch)
+        .def_rw("pin_ratio", &fre::FlatLayoutOptions::pin_ratio)
+        .def("key", &fre::FlatLayoutOptions::key)
+        .def("__repr__", [](const fre::FlatLayoutOptions& o) { return "FlatLayoutOptions(" + o.str() + ")"; })
+        .def("__eq__", [](const fre::FlatLayoutOptions& a, const fre::FlatLayoutOptions& b) { return a == b; });
     ttnn::bind_function<"flat_routed_expert", "ttnn.bringup.">(
         mod,
         R"doc(
@@ -173,6 +256,8 @@ void bind_flat_routed_expert(nb::module_& mod) {
             h_bf16 (bool): h (gate/up -> down) as bf16 tiles (else bfp8); as x_bf16.
             y_bf16 (bool): y as bf16 tiles (else bfp8; tiled y only): no bfp8 rounding of the output.
             math_fidelity (int): the expert matmuls' fidelity (0 LoFi: exact for bfp4 weights; 2 HiFi2 for bfp8).
+            layout (FlatLayoutOptions): the layout / program choices (presets: flat_layouts.py); must match the
+                plan the weights were laid out with (flat_routed_expert_plan(..., layout)).
             weights_nk (bool): the weights were laid out from nn.Linear's [N, K] matrices (flat_weight_regions(...,
                 nk=True): each tile the transpose of the x @ W tile, so a bfp8 tile shares its exponents along K) and
                 every weight matmul transposes its in1 tile back.
@@ -208,6 +293,8 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("h_bf16") = false,
         nb::arg("y_bf16") = false,
         nb::arg("math_fidelity") = 0,
+        nb::arg("layout") = fre::FlatLayoutOptions{},
+        nb::arg("output") = nb::none(),
         nb::arg("weights_nk") = false,
         nb::arg("hidden") = 0,
         nb::arg("max_y_writers") = 0);
@@ -255,6 +342,8 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("h_bf16") = false,
         nb::arg("l1_args") = std::vector<std::vector<uint32_t>>{},
         nb::arg("relay_words") = nb::none(),
+        nb::arg("y_l1") = nb::none(),
+        nb::arg("layout") = fre::FlatLayoutOptions{},
         nb::arg("math_fidelity") = 0,
         nb::arg("weights_nk") = false,
         nb::arg("patch_addresses") = false,
@@ -273,6 +362,7 @@ void bind_flat_routed_expert(nb::module_& mod) {
         nb::arg("pin") = 1,
         nb::arg("x_bf16") = false,
         nb::arg("h_bf16") = false,
+        nb::arg("layout") = fre::FlatLayoutOptions{},
         nb::arg("max_y_writers") = 0,
         "The flat_routed_expert layout plan (weight bank layout, coordinator cores for the done words). "
         "max_y_writers (0: off): at most this many y writers (down cores + reader tails), the rest of the down cells "
@@ -283,7 +373,7 @@ void bind_flat_routed_expert(nb::module_& mod) {
             ttnn::operations::bringup::flat_routed_expert::flat_drisc_stop(device);
         },
         nb::arg("device"),
-        "Stops the flat expert's persistent DRISC gate/up senders on this mesh device (MIMO_FL_DRISC); call before "
+        "Stops the flat expert's persistent DRISC gate/up senders on this mesh device (layout.drisc); call before "
         "closing it.");
     mod.def(
         "flat_drisc_dump",

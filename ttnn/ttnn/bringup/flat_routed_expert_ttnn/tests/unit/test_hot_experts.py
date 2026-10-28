@@ -15,7 +15,8 @@ test that every routing completes and sums right, up to every token of a column 
 Checked against the CPU model: with one expert in every slot, chip (r, c)'s combine output for its home token t is
 (sum of t's routing weights on column c's experts) x ffn(x_t).
 
-  - test_hot_experts[<case>]: synthetic routings (pad6: the model's pattern; one_chip: every token on 6 experts of
+  - test_hot_experts[<layout>-<case>]: the flat op at LEGACY and at the model's EXPERTS_LAYOUT=marko default;
+    synthetic routings (pad6: the model's pattern; one_chip: every token on 6 experts of
     one chip, its rows at rows_cap; full_column: every token of every column on the same expert of that column);
   - test_hot_capture: a model's captured routing (HOT_CAPTURE=<moe dump .pt: idx / wts per chip, mesh>; skipped
     without it).
@@ -36,6 +37,7 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 from ttnn.bringup.combine_rf.sparse_combine_rf import L1_MAX_WRITERS
 from ttnn.bringup.flat_routed_expert_ttnn.flat_expert import FlatRoutedExpert
+from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import LEGACY
 
 _TESTS = Path(__file__).resolve().parents[1]
 
@@ -51,6 +53,12 @@ def _load(name):
 
 _MESH = tuple(int(v) for v in os.environ.get("BRINGUP_TEST_MESH", "2x2").split("x"))
 H, I, K = 5120, 2304, 6
+
+
+def _layout(name, R, S, E):
+    """The flat op's layout: LEGACY (the plan before Marko's defaults) or the model's EXPERTS_LAYOUT=marko default
+    (tt/experts.py flat_op: rows_hint = round(chunk K / experts), x_helpers 1)."""
+    return dict(LEGACY) if name == "legacy" else dict(rows_hint=round(R * S * K / E), x_helpers=1)
 
 
 def _device_params():
@@ -69,7 +77,7 @@ pytestmark = pytest.mark.skipif(not ttnn.device.is_blackhole(), reason="the flat
 class _Setup:
     """The op (FlatRoutedExpert) and the model's wiring (WeightedCase) on this mesh, built per test (the mesh fixture is per test)."""
 
-    def __init__(self, mesh_device):
+    def __init__(self, mesh_device, lay="marko"):
         wcase = _load("weighted_case")
         self.ref = _load("reference")
         R, C = tuple(mesh_device.shape)
@@ -96,6 +104,7 @@ class _Setup:
             pin=1,
             weights_nk=True,
             check_exact=True,
+            layout=_layout(lay, R, self.S, self.E),
             max_y_writers=L1_MAX_WRITERS,  # (the model's cap)
         )
         self.wc = wcase.WeightedCase(
@@ -223,8 +232,9 @@ def _case(st, name):
     indirect=True,
 )
 @pytest.mark.parametrize("case", ["pad6", "one_chip", "full_column"])
-def test_hot_experts(mesh_device, device_params, case):
-    setup = _Setup(mesh_device)
+@pytest.mark.parametrize("lay", ["legacy", "marko"])
+def test_hot_experts(mesh_device, device_params, case, lay):
+    setup = _Setup(mesh_device, lay)
     ids, wts = _case(setup, case)
     setup.run(ids, wts, case)
 

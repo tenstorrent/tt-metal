@@ -487,6 +487,7 @@ class WeightedCase:
                 relay_words=relay_words,
                 math_fidelity=fidelity,
                 weights_nk=fe.weights_nk,
+                layout=fe.layout,  # (the plan the weights were laid out with)
                 patch_addresses=self.patch_addresses,
                 extra_addrs=extra_addrs,
                 max_y_writers=fe.max_y_writers,

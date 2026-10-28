@@ -1380,3 +1380,595 @@ Whole model, warm 56k prefill: ag 5.85 s; ts 8.51 -> 6.54-6.70 s (8406-8608 tok/
 of host per chunk): ~5 ms of host per MoE call, 2.2 of it the fused op's enqueue (a flat + combine program per chip),
 the rest seven small ops. Last-chunk top1 / top5 ts 0.6482-0.6831 / 0.8650-0.8849 (run-to-run). K3 block: untraced back to
 back 6.7 -> 4.8 ms per call, traced 3320 us, PCC 0.99622, CI replays bit-exact.
+
+### Combine: where the senders' time goes, and ring depth (2026-10-19, 2 x 4, pure DRISC flat, unicast x)
+Per-sender timelines (SPC_TPROF; new counters: bookkeeping per pass, passes spent blocked on a full home ring, passes),
+GLM-5.3-Flash S 640, separate layout (7 ports + 12 accumulators), the 16 busiest senders (~1280 rows each):
+- Combine alone, uniform: end ~1230 us, ~960 ns a row against ~350 ns of wire time. Real work only ~300 us sending
+  (router backpressure ~130) + ~200 us credit packets; the rest is waiting: ~570 us of passes blocked on a full home
+  ring, ~170 us with no row ready, the stall passes' bookkeeping (~300 us). The earlier "unaccounted 530 us" was those
+  stall passes, not sender work.
+- Lean loop (bookkeeping every k = 4 / 8 / 16 rows, else only on a stall): no change (1206-1237 us) - nearly every pass
+  is a stall pass. Reverted.
+- Not the accumulators: SPC_ABL=1 (no accumulation) 1277 us, SPC_ABL=3 (no ring read either) 1259 vs 1269.
+- Eager credits (SPC_CREDTHR 4 / 2 / 1 vs 8): 1202-1241 us - blocked time falls, credit packet time rises.
+- Ring depth (rows in flight per source ring; the credit round trip needs more than 3), combine alone, S 256:
+  depth 3 / 6 / 8 uniform 516 / 428 / 416 us (66 / 80 / 82% of the 342 us link floor), spread 556 / 414 / 407 (69 / 93 /
+  95% of 385). At S 640 the depth was capped at 3 by L1 (each accumulator's fp32 rows ~880 KB).
+- Arena = all free L1 (harness: the allocator's largest free block less 48 KB for the flat's few static CBs and later
+  L1 tensors; was the flat plan's arena): 1376 KB / core -> depth 7 at S 640, 8 elsewhere. The old ~1.29 MB "cap" was the
+  harness's own determinism check (ttnn.sum / ne between calls: static CBs to 225 KB) - perf runs: FC_DET_REPEAT=0.
+| combine alone, us (u / s / p) | depth 3 | full-L1 arena | fused before -> after |
+| GLM-Flash S 640 | 1269 / 1445 / 2855 | 1113 / 1270 / 2713 | 1359 / 1700 / 4743 -> 1359 / 1714 / 4741 |
+| GLM-Flash S 256 | 517 / 580 / 1154 | 452 / 499 / 1098 | 1228 / 1350 / 2217 -> 1228 / 1351 / 2216 |
+| K3 | 1083 / 1121 / 2476 | 966 / 1026 / 2330 | 2306 / 2515 / 5334 -> 2303 / 2512 / 5330 |
+| V4.1-Flash | 642 / 657 / 1290 | 589 / 664 / 1248 | 1099 / 1249 / 2513 -> 1100 / 1246 / 2513 |
+  The combine is 5-14% faster (S 640 uniform 66 -> 76% of link rate; the busy senders now mostly wait on the router),
+  fused unchanged: uniform was already hidden, and the skewed routings' remaining fused cost is the hot chip - its own
+  flat finishes ~630 us later fused than alone (packed S 640: rows landed by 4729 vs flat alone 4096). Next: why.
+- Model: the block allocates its arena per call; the ops between that and the fused op (planner, dispatch prep,
+  dispatch) must fit their static CBs below it - allocate the arena right before the fused op, then size it to all of L1.
+
+### Landing pool: per-call demand-sized rings (2026-10-19, for Galaxy stages)
+Why: the rings were (N - 1) x D slots per accumulator. On 8 x 4 (31 sources) the depth the credit round trip needs
+(above: 6-8 on 2 x 4) is 1.8 MB per accumulator at K3's 7 KB rows - it cannot fit; and equal rings waste slots on cold
+sources under skew. Now each accumulator has a pool of PSL slots (what the arena leaves, capped at depth x (N - 1)),
+carved per call: every source with rows here gets 1 slot (the per-ring deadlock argument holds), half the rest in equal
+shares, half in proportion to its rows (at most its rows; largest remainders). The accumulators publish each source's
+(base, depth, call tag) to the home port that returns that source's credits; the port forwards it with the same path as
+the credit snapshots; a source's rows wait for their ring's layout (rings restart each call - every call drains).
+Pool L1 no longer grows with N; the planner is unchanged (the accumulators carve from want[], already in the plan).
+| combine alone / fused, us (u / s / p) | fixed rings | landing pool |
+| S 256, avg 2 per source | 556 / 1230, 645 / 1354, 1345 / 2223 | 554 / 1231, 637 / 1351, 1168 / 2217 |
+| S 640, avg 2 | 1335 / 1468, 1567 / 1734, 3288 / 4753 | 1343 / 1464, 1517 / 1703, 2926 / 4744 |
+| S 640, avg 7 (full L1) | 1113 / 1359, 1270 / 1714, 2713 / 4741 | 1136 / 1356, 1271 / 1707, 2726 / 4745 |
+Carving: all-proportional made Zipf-spread worse (S 256 avg 3: 682 vs 585 us; the hot rings deepened past their links'
+rate while the rest starved); capped proportional 667; half equal 621 (kept); floors without largest remainders left
+near-equal shares at 1 slot (S 640 avg 2 uniform 1658 vs 1335). Rel err unchanged (2.4e-3), K3 / V4.1 / acc-on-ports
+unchanged or better (acc on ports S 640: fused 1366 / 1736 / 4811 vs 1522 / 1784 / 4823 with the plan-sized arena).
+Bug found on the way (pre-existing): the accumulator granted its local ring (rows homed on its own chip) in batches of
+4, so a local ring under 4 slots never refilled - the first call deadlocked once the pool left exactly the 2 reserved
+slots. Batches now min(4, QL), and the separate layout reserves 8 local slots (the fused one already did).
+
+### Block host time, untraced (2026-10-19, GLM-5.3-Flash on the token-split block, 2 x 4, uniform)
+Why: untraced, the block's host enqueue has to stay under its device time. Measured (zz_scratch_experts_ts.py
+GLM_TS_PROF=1 GLM_TS_HOST=1): host enqueue with an idle device (sync before each call), back-to-back untraced, traced.
+cProfile's "4.2 ms" was its own overhead; the real host time was 2.42 ms against 2.54 ms of device at chunk 5120 and
+1.71 ms at chunk 2048 (host bound there). py-spy --native: the fused flat + combine op was 0.2 ms of it (a hit passes an
+empty descriptor; every address is in its cache key, so nothing is patched - common runtime args would not help); the
+rest was the six small generic_ops around it and ttnn's routing ops:
+- generic_op copied the caller's MeshProgramDescriptor into its attributes (every kernel's source text and per-core
+  runtime args, 8 chips), re-hashed it all (sources, compile-time args, ranges) every call, and on a hit copied each
+  chip's descriptor again (create_descriptor by value) only to apply its runtime args. Now the attributes reference the
+  caller's descriptor, a hit applies the args from it in place (GenericMeshDescriptorFactory::find_descriptor), and the
+  cached descriptors store their hash once (ttnn.freeze_program_hashes at each cache insert).
+- gather_routing ran to_layout x 2, bitcast and concat (which transposes): one routing_pack generic_op now.
+| host ms per call | before | generic_op fix | + routing_pack |
+| enqueue, idle device | 2.42 | 1.64 | 1.32 |
+| routing gather / planner / dispatch prep / arena + zero | 0.5 / 0.2 / 0.5 / 0.2 | 0.4 / 0.1 / 0.1 / 0.1 | 0.14 / 0.08 / 0.13 / 0.12 |
+| dispatch / experts + combine / tilize | 0.35 / 0.2 / 0.3 | 0.3 / 0.2 / 0.2 | 0.26 / 0.15 / 0.16 |
+Device unchanged (traced 2.54 ms at 5120, 1.71 at 2048); untraced back-to-back = traced at both chunks now. Outputs
+identical (rel L2 vs CPU / vs ag to 4 digits). Left: ~70-150 us per program on 8 chips (enqueue + per-core args) - the
+next step is fewer programs, not cheaper ones. Tried: keeping arena_fits()'s allocation for alloc_arena (one arena
+allocation a call, 2 -> 1): the routing ops' static CBs then clash with the arena - reverted.
+Whole model (test_layer_perf.py::test_chunk_perf, real weights, ts experts, 45 layers; eager = one sync per chunk):
+| ms per chunk | eager before | + block host fix | + collective descriptor caches | traced |
+| chunk 2048 (S 256) | 580 | 501 | 357 | 243 |
+| chunk 5120 (S 640) | 583 | 493 | 477 | 476 |
+py-spy of the eager chunk after the block fix: the bringup fabric_reduce_scatter (scatter_rows: attention / shared
+expert outputs) rebuilt its plan and whole mesh descriptor in Python every call (~23% of the eager chunk), and
+fabric_all_gather_ttnn the same. Both now cache the plan and the descriptor per buffer-address set (bounded, hash
+frozen). S 640 eager = traced now; S 256 still host bound by ~2.5 ms a layer: plain ttnn op calls (59% of samples),
+mostly KDA attention's many small ops (~27%).
+
+### Fused flat + combine vs the DRAM floor (2026-10-19, 2 x 4, pure DRISC, unicast x, full-L1 arena + landing pool)
+Floor of the busiest chip (lean_sender/floor.py, the harness's routings): DRAM = its active experts' bfp4 weights + x
+row reads (M_total x H bf16) + combine's output writes (S K rows: y reaches combine in L1) at 512 GB/s; math = LoFi
+4096 FLOP / cycle / core at 1.35 GHz (assumed, not measured) on the 90 compute cores. Harness FC_DET_REPEAT=0 (the
+full-L1 arena leaves no room for its sum check).
+| config | routing | M_total | flat alone | fused | DRAM floor | math floor | fused / floor | DRAM % | math % 90 / 110 | us / expert |
+| GLM-Flash S 640 | uniform | 5206 | 1331 | 1362 | 1161 | 579 | 1.17x | 85% | 43 / 35% | 38 |
+| GLM-Flash S 640 | zipf spread | 8071 | 1607 | 1700 | 1206 | 874 | 1.41x | 71% | 51 / 42% | 47 |
+| GLM-Flash S 640 | zipf packed | 29579 | 4097 | 4741 | 1551 | 3052 | 1.55x | 33% | 64 / 53% | 132 |
+| GLM-Flash S 256 | uniform | 2083 | 1208 | 1229 | 1061 | 252 | 1.16x | 86% | 21 / 17% | 34 |
+| GLM-Flash S 256 | zipf spread | 3216 | 1327 | 1349 | 1080 | 392 | 1.25x | 80% | 29 / 24% | 37 |
+| GLM-Flash S 256 | zipf packed | 11801 | 2049 | 2215 | 1217 | 1259 | 1.76x | 55% | 57 / 47% | 62 |
+| K3 (S 320, K 16) | uniform | 5246 | 2285 | 2305 | 2177 | 786 | 1.06x | 94% | 34 / 28% | 41 |
+| K3 | zipf spread | 6369 | 2493 | 2515 | 2193 | 956 | 1.15x | 87% | 38 / 31% | 45 |
+| K3 | zipf packed | 28854 | 5228 | 5321 | 2508 | 3955 | 1.35x | 47% | 74 / 61% | 95 |
+| V4.1-Flash (S 320) | uniform | 1967 | 1093 | 1100 | 1011 | 332 | 1.09x | 92% | 30 / 25% | 46 |
+| V4.1-Flash | zipf spread | 3281 | 1237 | 1248 | 1037 | 528 | 1.20x | 83% | 42 / 35% | 52 |
+| V4.1-Flash | zipf packed | 10718 | 2493 | 2509 | 1186 | 1579 | 1.59x | 47% | 63 / 51% | 105 |
+The combine costs 0.6-2.3% on uniform and spread (fused / flat) except GLM-Flash S 640 spread (5.8%) and packed S 640
+/ S 256 (16% / 8%): the gap to the floor is the flat expert's own. GLM-Flash spread S 640: flat alone 1.33x the floor
+(the hot experts' 4738 rows on one chip's grid).
+
+### GLM-Flash uniform: why the flat expert is at ~82-86% of the floor (2026-10-19, one chip, pure DRISC 64 gate/up + 32 down)
+test_flat_balanced_sweep.py (now takes layout_from_env(): the harness's MIMO_FL_CMB_DRISC=1 DRISC_DUAL=0 DRISC_PURE=1
+ND=32 NH=1; the plan: 64 gate/up, 32 down, 4 relays), M 58 / 145 (S 256 / 640 uniform), E 36, us per call; floor
+weights 996 + x 33 / 84 + y 33 / 84. Recipe: /localdev/mstaletovic/flat90/run.sh <tag> [probes].
+| variant | M 58 | M 145 |
+| base (y to DRAM) | 1208 | 1436 |
+| NO_MATH | 1210 | 1430 |
+| YRM_NOWRITE (no y: the fused case, floor 1029 / 1080) | 1199 | 1322 |
+| + XRD_SKIP (weights only) | 1198 | 1288 |
+| XRD_SKIP | 1202 | 1289 |
+| W_NOREAD (weights forwarded, not read) | 1044 | 1285 |
+| W_NOFWD (read, not forwarded) | 1182 | 1433 |
+| read only (W_NOFWD + XRD_SKIP + YRM_NOWRITE) | 1036 | 1089 |
+| H_NODATA | 1201 | 1417 |
+| E 18 (base / no y) | 621 / 606 | 744 / 693 |
+| no y + DRISC_DMA_MAX 4 / 8 | 1199 / 1200 | 1356 / 1367 |
+| no y + DRISC_UB 2 / 4 (blocks per DMA unit) | 1122 / 1158 | 1394 / 1385 |
+| no y + DRISC_ALT_DMA_MAX 1 / ALT_BURST 4 / XHELP_NOC0 | 1389 / 1288 / 1199 | 1485 / 1418 / 1320 |
+| X_RESIDENT | hang (triage: flat90/xres_triage.txt) | |
+- Not compute (NO_MATH unchanged). No y: 14 / 65 us fixed + 32.9 / 34.9 us an expert (floor 28.6 / 30.0): ~87% of 512 GB/s
+  in steady state at both M, plus a pipeline tail at M 145.
+- The DRAM reads alone run at 96% (read only 1036); forwarding alone near the floor too (W_NOREAD 1044); both on one
+  tile: 1198 = 16 tiles x ~26.6 GB/s - the per-tile DMA-in + NoC-write-out loop (~600 of ~830 cycles a 13.8 KB block
+  fixed), the "one tile ~28 GB/s" ceiling. Single-block units (pure DRISC: one job per tile) pay it per block: UB 2
+  takes M 58 to 1122 (92% of the fused floor), but M 145 to 1394 (+5%: half the slots in flight, NS = room / (UB blk)).
+- M 145 also: x reads cost 147 us against 84 of floor (the x relays' NOC1 reads vs each bank's NOC1-endpoint DRISC
+  tile), and the 65 us tail (the last experts' gate/up -> down after their weights).
+Options: UB chosen per call from the rows (runtime, like the ALT_MAXCNT switch), or UB 2 with the slot room kept; the
+bank's third tile as a forwarder (if free); the tail / x port at M 145.
+
+### Block layouts re-costed with measured efficiencies: 2D vs 1D, shared expert placement (2026-10-20, model only)
+Why: decide whether to go 1D (x all-gather over TP, column dispatch / combine along SP, one reduce-scatter shared with
+the TP-split shared expert) before more combine work. Model `/localdev/mstaletovic/moe_model/global_block.py`: link
+loads from a uniform-routing simulation per stage, every op at its LoudBox-measured efficiency (combine 0.70-0.81 of
+link rate with the full-L1 arena, sparse dispatch 0.82, TP AG / RS 0.87 / 0.74, lin2d SE 338 GB/s); K3 block check
+~3.5 ms modelled vs 3.32 ms traced. Results (Residual Layouts page, "With measured efficiencies"):
+- 1D loses everywhere (3-39% behind the best 2D): combine no cheaper (8x4 equal once ties are split; 4x4 both hot
+  links mid-SP-line), dispatch 1.4-2x link load, AG + RS on the critical path. Stay 2D.
+- Shared expert: replication is ruled out (user); TP-split only. Serially the TP SE costs 17-41% (K3 4x4: 3852 vs
+  3163 us); overlapped (AG + matmuls under router / gather / planner / dispatch, RS beside the combine) it is free in
+  the model. Gather -> 2D owners = token-split within 0-4% once overlapped.
+- Combine levers at 16K (link-bound nearly everywhere): ties split -11..-16% on 8x4, fp8 rows -34..-43%.
+
+### GLM-5.3-Flash MoE block, every op (2026-10-20, L4 real weights, 2 x 4 bh-lb-09, eager, busiest chip per op)
+`/localdev/mstaletovic/blockops/run.sh <chunk>` (test_layer_perf GLM_LP_CALLS; calls in c<chunk>.L4.json). us, chunk 5120 / 2048:
+router linear 35 / 24, moe_grouped_topk 89 / 88 | SE x full-mesh all-gather (tiles) 421 / 186 | routing_pack 16 / 8,
+routing gather 38 / 38, planner 96 / 50, dispatch prep 31 / 13, arena zero 3 / 4, sparse dispatch 457 / 206, flat +
+combine 1638 / 1264, tilize 35 / 14 | SE (8-way I split over the mesh, all S tokens, HiFi4): gate/up linear 257 / 114,
+slice x2 + minimum + silu + clamp + multiply 182 / 102, down linear 252 / 97, fabric reduce-scatter (Ring) 471 / 196 |
+add 37 / 20. Total 4058 / 2423 us. x crosses the links twice (the SE's dense gather and the sparse dispatch).
+
+### GLM-5.3-Flash: the shared expert folded into the token-split block, v0 (2026-10-20, 2 x 4 bh-lb-09, L4 real weights)
+Design (no separate shared-expert collectives; nothing beside the fused op, which holds 119 / 120 cores and every
+link's single worker channel): dispatch_prep ORs the shared expert's group-mates into each own token's mask (the
+group's tokens land in the dispatch buffer); the chip's I_s / G slice runs between the dispatch and the fused op on
+those rows (TtSharedTpRow, stock ttnn ops sized to the L1 below the arena, per <= 320-row piece); the combine sends
+each partial row to its owner from a DRAM staging buffer before the flat's rows (shared_rows: static per-port rows,
+credits and expected counts on top of the device plan); the own block is added after the routed tilize. Spec
+device.shared_expert: separate | folded (group = mesh row, G 4) | folded_sp (group = mesh column, G 2).
+Accuracy (zz_scratch_experts_ts.py GLM_TS_SHARED=1, random weights): the shared part (folded - routed only) vs CPU fp32
+rel L2 0.6%, PCC 0.99998, both axes, 2048 / 5120, uniform / hot; routed-only path unchanged (ts vs ag 0.0037).
+MoE block device time (busiest chip per op, sum; /localdev/mstaletovic/blockops/run.sh, TAG=fold / foldsp), us:
+| chunk | today (8-way SE, x gathered over the mesh) | folded (rows, G 4) | folded_sp (columns, G 2) |
+| 5120 | 4058 | 4131 (fused 1638 -> 2148: the partials on the TP line) | **3497** (fused 1784, dispatch 480) |
+| 2048 | 2423 | 2245 | **2130** |
+On the LoudBox the TP axis is the line of 4 that already holds the combine's busiest link; the SP pairs' Y links have
+room (as the link model said). folded_sp keeps 2x the per-chip shared weights of folded (a 2-way, not 4-way, split).
+Left in folded_sp at 5120: the shared expert itself 854 us (linears 507 HiFi4 fp32, six eltwise ops 188, tilize /
+untilize per piece 160) - next: one custom op (fused activation, in-op tilize / row-major out, HiFi2), est. ~150 us.
+
+### Folded shared expert, round 2 + the router's fused top-k (2026-10-20, 2 x 4 bh-lb-09, L4 real weights, folded_sp)
+- The arena does not have to live through the shared expert: it was zeroed before the dispatch only because the
+  dispatch was the "every chip zeroed" barrier. The fused op now starts with its own barrier (combine barrier=: each
+  chip's port facing a chip atomically increments every port core there, cumulative persistent words; nothing remote
+  is sent before N - 1 increments of this call), so the block runs dispatch -> shared expert (all of L1) -> arena zero
+  -> fused op. Barrier cost ~19 us (SPC_SE=off probe: fused 1657 vs 1638 without the barrier).
+- Shared expert: one call over the group's G S rows (no 320-row pieces), bf8 weights / HiFi2 / bf16 gate-up (owner:
+  OK), the clamped SiLU GLU as one op (combine_rf/glu_act.py, the SFPU's clamped_silu_glu), the own block added by
+  the accumulators (an extra local row from DRAM: no tilize + add), tilize / untilize with 1 KB row pieces (cw 16).
+  Shared part vs CPU fp32: rel L2 1.7% (bf8 / HiFi2; 0.6% at bf16 / HiFi4).
+- Tried, not kept: the flat op as the shared expert (FlatLayoutOptions.single_subgrid for I <= 1024, flat_routed_expert
+  output=): works (1.9%) but 424 vs 338 us - one I 1024 expert has too few gate/up cores; a row-major down output via the
+  1D config's untilize_out: rows written but the tensor is labelled TILE, NaNs in an interleaved row-major buffer.
+- The shared rows in the fused op (SPC_SE probes): ~136 us at S640 (sender DRAM reads 43, own rows 9).
+- Router: TtRouter.joint - logits, one add with a sigmoid input activation, combine_rf/router_topk (now any even K <= 16,
+  automatic core split) writing the block's joint routing rows in 32-token pages (the planner and dispatch_prep read
+  32 B rows at any 32 B offset now); the same picks and bit-identical weights as moe_grouped_topk (640 / 640 tokens).
+  top-k + routing_pack 89 + 16 -> 9 + 48 us, planner 96 -> 73 us (32-token pages).
+| L4 MoE block, us | today (separate SE) | folded_sp v0 | + barrier, one SE call, glu_act | + own rows, cw 16 | + router top-k |
+| chunk 5120 | 4058 | 3497 | 3037 | 2884 | **2811** |
+| chunk 2048 | 2423 | 2130 | 1903 | 1885 | **1791** |
+Chunk 5120 now: router 35 + 9 + 48 | gather 39 | planner 73 | prep 30 | dispatch 482 | SE tilize 50 + gu 106 + glu 30 +
+down 78 + untilize 52 | zero 3 | fused 1751 | tilize 25.
+
+### Folded shared expert: accuracy isolation (2026-10-20, real weights, layer golden; zz_scratch_se_fold_golden.py)
+Shared expert alone (deterministic, golden ffn_norm in, vs golden shared_out; rel L2 / scale), L4 | L44:
+model MLP (8-way bf16 HiFi4) 0.0030 / 0.9991 | 0.0032 / 0.9996; folded bf16 HiFi4 0.0036 / 0.9999 | 0.0045 / 1.0004;
+folded bf8 HiFi2 (default) 0.0114 / 0.9915 | 0.0164 / 0.9900; bf8 HiFi3 0.0070 / 0.9988 | 0.0129 / 0.9979; bf8 HiFi4
+= HiFi3; bf16 HiFi2 0.0088 / 0.9926 | 0.0095 / 0.9925; bf8 LoFi 0.034 / 0.97. HiFi2 shrinks the output ~0.8% (with either
+weight dtype); HiFi3 removes it (+46 us at chunk 5120: gate/up 106 -> 139, down 78 -> 91). The fold itself is exact
+(bf16 HiFi4 folded = the model MLP). MoE block (routed + shared, golden routing) vs golden mlp_out: folded and separate
+equal in rel L2 (L3 0.081, L4 0.146, L20 0.134, L44 0.070 - the bfp4 routed part dominates), folded scale 0.3-1% lower.
+Whole model, 56k last chunk top1 / top5 per run: separate 0.667 0.684 0.674 0.677 0.652 (mean 0.670 / 0.881); folded
+bf8 HiFi2 0.647 0.664 0.655 0.658 0.667 0.688 (0.663 / 0.873); bf8 HiFi3 0.663 0.636 0.656 (0.651); bf16 HiFi4 0.687
+0.649. Run-to-run sd ~1.3 points (arrival-order fp32 sums): no difference resolvable at these counts.
+Default set to bf8 HiFi3 (owner, 2026-10-20): L4 shared expert 0.0070 / 0.9988 vs golden; MoE block scale 1.0199 vs separate 1.0203 (was 1.0191 with HiFi2); GLM_SE_PREC=bf8_hifi2 / bf16_hifi4 probes.
+Shared expert on the bring-up unified op (ttnn.bringup.unified_routed_expert_moe, high_precision, ClampedSiluGlu,
+HiFi3 + fp32 dest, bf8 weights): G "experts" sharing the slice weights, one per owner block, each reading its S rows at
+the block's slot of the dispatch buffer; the TILE bf16 output's blocks untilized into y_se (layout_ops untilize with a
+per-chip source map). Correct (shared part 1.4% rel L2, random weights). L4 block (us): chunk 5120 366 + 51 untilize vs
+the matmul path's 363 (tilize 50 + gate/up 140 + glu 30 + down 91 + untilize 52); chunk 2048 174 vs 181. At 5120 it
+runs ~54% of the HiFi3 peak of its 88-core grid (the 11 x 8 grid; each block re-streams the weights): not kept as the
+default (GLM_SE_IMPL=unified probe).
+
+### Combine on the wire, and piggybacked credits (2026-10-20, LoudBox 2 x 4, 200G)
+Wire ceiling (zz_scratch_fabric_wire.py: a sender per link, headers routed once, FABRIC_2D): per flow 11.4 / 22.0 / 23.8
+/ 23.9 GB/s at 2048 / 4096 / 8224 (a combine row + trailer) / 8704 B packets - 95% of 25 at our rows, ~180 ns a packet
+minimum; two links one way free, both ways -2%, a forwarded hop free, a forwarded + a local flow share a link 50/50.
+Busiest-link load of the harness's routings (device link rule): uniform 2574 rows (889 us at 23.8 GB/s), spread 2967
+(1025), packed 7415 (2562, one port). Combine alone S640 (pool depth 7): uniform 1133 us = the busiest link busy 78%,
+spread 80%, packed 94%. Of uniform's loss vs 25 GB/s: framing ~5%, credit packets on the data links ~5% (~320 a busy
+port x >= 180 ns), the feeding flows' gaps ~17% (the busiest link carries its port's rows and forwarded ones, 50/50;
+busy senders 868 ns a row against ~690 needed: credits 115, bookkeeping 173, ring-full 90, empty 83 us).
+Piggybacked credits (piggyback_credits / SPC_PIGGY=1): a row to home k carries this port's consumed counts of k's
+rows on its link class (<= 8 accumulators x 16 bits) in the trailer's spare words; k's accumulator copies them to its
+port facing me on that link, a slot per (source chip, receiving accumulator) - each slot only moves forward (one path,
+one ring) - and the port merges them into a monotonic count (SHW) with the snapshots, scanning the slots only when a
+ring looks full or at the drain. Bugs found on the way: decoding the other link class's rings (the drain never closed),
+a staged slot keeping the previous row's trailer flag, one slot per source (an older copy overwrote a newer one).
+Also a harness bug the larger state block exposed: the alone build's pool (depth x (N - 1)) was smaller than the
+fused build's (what the arena leaves), so its CBs sat on the fused rings' last slots and the next fused call took
+their garbage trailer flags as landed rows (hang) - the alone build now takes pool_slots=fused.pool.
+Combine alone (fused) us, off -> on: GLM-Flash S640 uniform 1126 -> 1087, spread 1279 -> 1224, packed 2730 -> 2734;
+S256 464 -> 457, 517 -> 513; K3 986 -> 955, 1057 -> 1041, packed 2337 -> 2393; V4.1 603 -> 596. Fused within +-1.5%
+(the combine is hidden there). Credit packets per busy port 318 -> 124, their time 116 -> 34 us. A modest win: kept
+as an option (default off); the feeding flows' gaps are the larger loss.
+Piggybacked credits on by default where they apply (owner): harness S640 uniform alone 1092 us; GLM ts block test exact as before; K3 block PCC 0.99622, traced 3346 us (3333 before); GLM L4 block chunk 5120 2793 us (fused 1686; 1751-1812 run to run before); whole model 56k 4.79-4.80 s (unchanged), top1 0.659 / 0.650.
+
+## Run-to-run spread of the whole model (2026-10-20)
+
+test_perf's last-chunk top-1 vs text moved 0.64-0.69 between runs of one config. Measured (zz_scratch_determ_model.py:
+the full 56k prefill twice in one process, every (chunk, layer) output compared; test_perf GLM_PERF_SAVE):
+- experts ag: bit-identical, all 45 layers, every chunk. ts with the separate shared expert and the deterministic
+  combine: bit-identical too. So every difference comes from the ts block's arrival-order sums.
+- The seed is what one expects of the combine: ~1 element in 21M of a MoE layer's output differs by one bf16 ulp
+  (fp32 sums in arrival order, one rounding). It first shows at L3 / L4 in every chunk.
+- The model amplifies it. KDA's recurrence spreads one element to every later token of the chunk, then bf16 roundings
+  flip: rel 1e-3 one layer later. Chunk 0, no context, ends at L44 ~1.7e-2. Chunks with context grow ~100x within 15
+  layers (KDA and DSA layers alike; the KDA carries and the caches of earlier chunks already differ): 9% at chunk
+  5120, 17-22% at chunk 51200, L44.
+- Last chunk, two runs: final hidden 22-26% apart, top-1 argmax agreement 86-89% (half of the rows have a top-1 /
+  top-2 logit margin < 2.2): top-1 vs text +-1.5 pts. Single top-1 numbers can't rank configs below ~3 pts.
+- The deterministic option does not cover the folded shared rows (its order table has no entries for them: the table
+  check fails and the accumulators fall back to arrival order), so folded + deterministic still diverges.
+- Bug found on the way: piggybacked credits + deterministic order deadlocked (separate SE, 2 of 2 runs hung in the
+  fused op). A port counts piggybacked credits as returned when it sends the row, but they reach the home's port only
+  when its accumulator takes the row, and the deterministic order leaves landed rows in their ring until their
+  token's turn. Fix: no piggybacking with the deterministic order (it is a debug / A/B mode).
+
+## Long-context accuracy is the KDA state (2026-10-20)
+
+Follow-up to the run-to-run spread. The fp32 CPU golden (s56320) has top-1 vs text 0.89-0.97 per chunk (0.908 on the
+last); the device 0.70 (test_perf fixed: it re-ran the last chunk on KDA carries that already held it - 0.65 before).
+- Run to run vs the reference, last chunk (zz_scratch_determ_state.py): layer outputs 1e-3 (L4) -> 17% (L44) apart
+  between runs, but 7% (L3) -> 64% (L44) from the golden. Routing sets differ between runs for 0.2% (L4) -> 60%
+  (L25+) of the tokens. States vs golden: KDA recurrent 4% (L0), 18% (L1) ... 53% (L44); MLA latent 4-31%.
+- Ladder: golden context + device last chunk: final hidden PCC 0.938, top-1 vs reference 0.897; device context
+  0.790 / 0.703. Swapping one kind of state to the golden before the last chunk (zz_scratch_ctx_swap.py): golden
+  KDA states alone 0.937 / top-1 vs text 0.870 (= all golden); golden MLA + indexer caches alone 0.800 / 0.716 (=
+  device). The long-context loss is the KDA recurrent state.
+- Layers 0-2 alone (dense KDA, the embedding in, zz_scratch_kda_drift.py): most heads 0.7-4% off, the slowest-decay
+  heads far off and biased: L2 h56 rel 70% with norm 1.52x, L1 h45 33% / 1.17x (steady from 51200 to 56320). The
+  decay gate is exact (zz_scratch_kda_gate.py: device / fp32 0.9997-1.0001 per head).
+- Cause: the per-chunk decay factor alpha = exp(G_last) of a slow channel is ~0.998. (1) chunk preparation stores it
+  in bf16 (KDA_PREP_OUTPUT_BF16_MASK bit 5): rounds to 1.0, no decay; (2) recurrent_chunk_scan applies it with
+  mul_tiles_bcast_cols and adds the update with an FPU add: fp32 operands read at TF32 (truncated), the state twice
+  per chunk: effective 1 - alpha + ~1e-3. Both: steady state ~1/(1e-3) instead of 1/(1.6e-3): 1.6x (measured 1.52x);
+  fp32 final_decay alone (mask 0x6 / 0): the TF32 bias left, states 0.92-0.98x too small (L1 18 -> 12%, L2 19 ->
+  16%). Also in the prep: alpha = square(exp(G_last / 2)) and a row-to-column transpose, both on the FPU.
+- Fix (not done yet): alpha exactly (G_last as a mask matmul of the transposed bf16 gate, all 32 columns, exp in
+  DST, fp32 out) and the scan's decay multiply + add as SFPU ops on fp32 in DST (unpack to dest). Kimi K3 uses the
+  same KDA ops.
+- The fp32 CPU reference's own sensitivity (/localdev/mstaletovic/determ/ref_perturb.py: s4096 prompt, 2 x 2048, the
+  residual after L4 of chunk 0 rounded to bf16, rel 1.7e-3): chunk 0 grows to 1.7e-2 at L44 (device chunk 0: 1.7e-2),
+  chunk 1 to 5.8e-2 at L44 (device chunk 5120: ~9e-2); routing sets differ for 18-33% of tokens in the deep layers.
+  The amplification is the model's (routing flips, context), not our numerics. But the reference's argmax agrees
+  99.7% between the two runs (top-1 vs text 0.964 / 0.965, 0.970 / 0.971): its predictions have margin. The
+  device's flip 11-14% because its degraded (KDA state) predictions have little margin.
+
+### dispatch_prep's route rule on Iva's sparse KV push shape (2026-10-21, bh-lb-09, one chip; zz_scratch_kv_route_plan.py)
+Why: would our sparse 2D dispatch's planner fit the GLM-5.3 sparse KV push (8x4 torus, 1M prefix)? Owner-side step
+only: 32 requester want-bitmaps over the owner's 32640 rows (owner-major, 4 KB each) -> per-row 32-bit masks (bit
+scatter) -> dispatch_prep's order (fewer tree links, 8x4 torus span tables) + link -> compacted (mask, row | flags)
+list per core. Synthetic bitmaps with her statistics (~5.5k wanted rows per owner, ~5.5 requesters per row; heavy
+~7.9k / 6.5; runs = clustered rows). Exact vs a host reference in every case. Device kernel us, 32 / 64 cores:
+| case | dispatch_prep code | + route by nibble arithmetic | masks only (stateless order) |
+| median | 115 / 63 | 69 / 39 | 29 / 18 |
+| clustered | 190 / 118 | 109 / 68 | 34 / 22 |
+| heavy | 218 / 151 | 126 / 87 | 39 / 26 |
+| every row, every requester | 780 / 393 | 550 / 278 | 232 / 119 |
+Reading: the 32 strided L1 loads per 32-row word (~10 cycles each) set a floor of 333 us on one core with nothing
+wanted (13 us on 32 cores); the fewer-links order rule costs ~630 cycles per row as written, ~290 with nibble
+arithmetic. On 100x the rows of a MoE dispatch the order rule dominates; a stateless order (hash / fixed) leaves
+the mask pass. Clustered rows load the word-range split unevenly (round-robin blocks would fix it).
+
+### Full sparse-KV-push planning on device, 8x4 shape (2026-10-21, bh-lb-09; combine_rf/kv_push_plan.py, zz_scratch_kv_plan.py)
+Why: the owner-side step alone (above) is not the plan; this is the whole chain in the 2D dispatch's style for GLM-5.3
+(1,044,480-row prefix, chunk 5120, top-k 2048, Iva's TP-deduped block-cyclic cache: stripes of 160 rows on 8x4).
+1. want (both RISCs of up to 120 cores): top-k -> owner-major want bitmap. Producers bucket bit addresses by consumer
+   slice into the consumers' L1 inboxes (NoC writes, inline counts, one semaphore); consumers (288-word slices in
+   local memory, ~114 cores, each RISC half the inboxes) write the slices straight into the exchange buffer.
+2. exchange: sparse_all_gather_2d, each 4 KB page to its owner (static route words).
+3. route: the step above (masks, fewer-links order, link), on the delivered pages.
+Exact vs host references (bitmaps, every delivered slice, every owner's (row, mask, flags) list). Synthetic top-k
+with her 1M stats (real trace not on this box): ~30k distinct rows per Galaxy chip, ~6 requesters per pushed row.
+| | 8x4, one chip as chip 13 | LoudBox 2x4, whole chain (slowest chip) |
+| want | 88 us (120 cores x 2 RISCs) | 287 us (4x the indices per chip) |
+| exchange | not run (no Galaxy) | 60 us |
+| route | 51 us (64 cores) | 83 us |
+Fixes on the way: one RISC per core -> both (bucket 120 -> 42 us); 64 -> ~114 consumers (consumer 36 -> 26 us);
+exchange buffer S = N PPO + 1 pages per chip (S = 32 put all of an owner's requester pages on one DRAM bank: route
+masks 45 -> 23 us). No gain: unrolling the bucket loop (~27 instructions per index, issue bound). Open: route
+imbalance from clustered rows (max / mean rows per core 1.9 at 64 cores), the bucket loop's instruction count.
+Her plan for comparison: sparse_push_plan 0.73-0.80 ms on 120 cores + table gather 0.06 ms per full layer.
+
+### GLM-5.3 in the fused flat + combine harness (2026-10-21, LoudBox 2 x 4, bh-lb-09 12 x 10, 200G, uniform, fake weights)
+Shape: E 256 (32 per chip), top-8, H 6144, I 2048, SiLU, bf4 weights. Recipe (scratch_flat_combine_rf.py):
+`FC_H=6144 FC_I=2048 FC_EPC=32 FC_K=8 FC_ACT=silu FC_L1=1 FC_DEVPLAN=1 FC_PIPE=1 SPC_PIECE=12288 FC_PAYLOAD=12352
+MIMO_FL_CMB_DRISC=1 MIMO_FL_DRISC_DUAL=0 MIMO_FL_DRISC_PURE=1 MIMO_FL_ND=32 MIMO_FL_RDOWN=0 FC_DET_REPEAT=0` + the
+device profiler (TT_METAL_DEVICE_PROFILER / PROFILER_MID_RUN_DUMP / PROFILER_CPP_POST_PROCESS, needed for the timings).
+What it took (each a setup failure, nothing hung):
+- **One piece per row:** the L1 hand-off needs a whole row per fabric packet; 12288 B rows -> piece 12288, payload
+  12352 (BH max 15232: K2.7's 14336 B rows fit too).
+- **Cells:** the default plan for this shape (dual DRISC, reader down columns) is 64 gate/up + 36 down + 16 Tensix
+  readers + 4 relays = all 120 cells, none left for the combine. Pure DRISC, no reader down columns, 32 down: 64 + 32
+  + 1 launcher + 4 relays = 101, 19 cells for the combine.
+- **Accumulator L1:** each accumulator keeps its home tokens' fp32 sums resident (tokens / A x row tiles x 4 KB): at
+  S 640 with 15 accumulators 43 x 6 x 4 KB = 1.06 MB of the 1376 KB arena, no room for one landing slot per source.
+  The ring knobs (ring_depth / pool_slots, inj_slots, n_acc, acc_on_ports) do not shrink that; the planner caps A at
+  16. S 320: separate layout (7 ports + FC_NACC=12) fits at ring depth 4.
+- The harness's determinism repeat (ttnn.sum, ~225 KB static CBs) clashes with the arena: FC_DET_REPEAT=0.
+| S / chip | layout | ring depth | flat alone | combine alone | fused | fused / flat |
+| 320 | 7 ports + 12 accumulators | 4 | 1665 | 908 | 1680 | 1.009 (98% hidden) |
+| 640 | 16 accumulators on ports, inj_slots 8 | 1 | 1807 | - | 2769 | 1.533 |
+First fused call exact (worst per-token rel err 0) at both. Flat alone at S 320: 32 x 21.2 MB of bf4 weights = 680 MB,
+floor 1328 us at 512 GB/s: 80%. Next for S 640 (LoudBox only; a Galaxy chip at chunk 5120 holds 160 tokens, ~270 KB
+of sums per accumulator): bf16 sums or flushing finished tokens, so the rings get the L1; and the combine sizing its
+accumulators / rings from the shape instead of harness knobs (consolidation).
+
+### Close-out planner: the combine sized from the cells and the arena (2026-10-22, LoudBox 2 x 4, bh-lb-09 12 x 10, 200G)
+`combine_auto` / `combine_l1_layout` (combine_rf/sparse_combine_rf.py, pure host functions mirroring
+sparse_combine_rf_prepare's arena layout): from the free cells the flat plan leaves, the port cells (union over the
+chips) and the arena, pick ports on their own cells with A = cells - ports accumulators (<= 16), or accumulators on the
+ports' cells (acc_on_ports, A = cells, <= 16), whichever leaves the deeper landing pool (ties: separate ports); then
+shallower injection rings (64 -> 8 slots) and a 2-slot local ring kept instead of 8 (new `local_keep` argument of
+sparse_combine_rf_prepare) only when nothing else fits. Ring depth capped at 8 (the prepare default). The harness
+(scratch_flat_combine_rf.py) now takes a typed `FC` config: `_env_cfg()` keeps the FC_* / SPC_* recipes (FC_NACC unset
+with the device planner: combine_auto), `closeout_cfg(model, chunk)` is the close-out case. The arena is sized before
+the device planner runs and allocated after it; the planner and the combine get the same A (the old "combine has N
+accumulators, the planner M: set FC_NACC" mismatch cannot happen); the combine's pool is asserted equal to the plan's.
+Fabric payload = row + 32 B rounded to 64 (one piece a row), piece_max = the row.
+
+test_flat_combine_closeout (correctness, real weights - one expert on every chip): Galaxy 8x4 per-chip load (experts
+and 160 / 512 home tokens a chip) on the 2 x 4, GLM-5.3, GLM-5.3-Flash, K3, K2.7, M3 x chunks 5120 / 16384, uniform and
+zipf spread / packed 1.2: all pass, flat y PCC >= 0.998 against the reference expert on every chip, combine worst
+per-token rel err <= 2.4e-3. Plans picked (arena 1376 KB a core): ports apart, 7 port cells, A 12 (A 16 for K3's 23
+cells), ring depth 8 except GLM-5.3 / M3 at 16384 (fp32 sums 1032 KB: depth 2) and K2.7 at 16384 (896 KB sums: A 16 on
+the ports, injection ring 8, depth 1). Legacy recipe (K3 env defaults, FC_DEVPLAN=1 FC_L1=1, combine_auto) still runs.
+
+Host table (tests/unit/test_closeout_plans.py, ports estimated: 8 cells on the 8x4 / 4x4 tori): the Galaxy 8x4 fits
+everything but K2.7 at 16384; at 16384 the 4x4 does not fit GLM-5.3, K2.7, M3, V4.1-Flash, and the 2x4 (the LoudBox
+model stage: 2048 tokens a chip) nothing; K2.7 2x4 5120 neither. Cause in every case: fp32 sums of S tokens x H over at
+most 16 accumulators (K2.7 8x4 16384: 896 KB each) leave less than one landing slot per source chip. Levers: bf16 sums,
+more than 16 accumulators (the state layout and the device planner cap A at 16), or the combine's cells' leftover L1
+on the flat roles' cores.
+
+### Close-out planner, codex review fixes; accumulators on the ports A/B (2026-10-22, LoudBox 2 x 4, bh-lb-09)
+Codex review of d045c20acbf: five findings, all fixed here.
+- **combine_auto took the first fitting ring size** (finding 4). It now tries every injection ring (64 / 32 / 16 / 8)
+  and kept local ring (8 / 2) per mode and keeps the deepest landing pool (ring depth D), ties to the deeper injection
+  ring, then the larger kept local ring. With the old arena (1379 KB) this alone moved: 4x4 GLM-5.3 / M3 5120 D 2 -> 3,
+  8x4 GLM-5.3-Flash 5120 3 -> 4 and 16384 1 -> 2, 4x4 GLM-5.3-Flash 5120 6 -> 7, 8x4 K3 5120 4 -> 5, 4x4 K3 16384
+  1 -> 2, 4x4 K2.7 5120 1 -> 2, 2x4 GLM-5.3 / M3 5120 1 -> 2, 2x4 V4.1 5120 6 -> 7; the 2x4 mesh at Galaxy load
+  GLM-5.3 / M3 16384 2 -> 4 (on the ports). Most gains come from keeping a 2-slot local ring when that buys a depth
+  step (ports apart: the injection ring is on the port cells and does not touch the accumulators' arena).
+- **One piece a row with the L1 hand-off** (finding 2): combine_l1_layout reports no fit when piece_max < the row
+  (sparse_combine_rf_prepare asserts it), so combine_auto can no longer report a two-piece plan.
+- **The arena reserve is computed** (finding 1): the flat plan exports `static_l1_bytes` (its static CBs: meta, counts /
+  regions / ids, the schedule inputs, gate/up CB 16, h_local when not in the arena; the program factory asserts its
+  CBs stay within it) and `fused_arena_reserve` = that + the writers' words (192 x 64 B) + 2 KB. Was a fixed 48 KB; now
+  ~25-35 KB, so the arena is 1378-1394 KB a core instead of 1379 (K3, 896 global experts, has the biggest counts CB).
+  The device planner still runs before the arena is allocated (its static CBs are not in the reserve).
+- **No silent uneven split** (finding 3): the plan exports `even_split` (the gate/up split came from the even search)
+  and logs a warning when layout.even_split asked for one and none exists (I 1056: 66 tiles); the close-out tests
+  assert it. Not fatal: other callers keep the older split rules.
+- **No silent Tensix readers** (finding 5): with drisc_pure 1 (the default) and layout.drisc on, a plan that cannot
+  use the DRAM cores (no DRISC firmware, 2-3 subgrids, a combine overlap without drisc_in_overlap, MIMO_FL_HG_DRISC=0)
+  is a TT_FATAL naming the reason; layout drisc false or drisc_pure -1 (LEGACY) allows Tensix readers. The tp4 cases
+  of test_flat_expert_yrm / test_flat_expert_indexed_shapes now stop there (they could not run on this 12 x 10 grid
+  before either: the factory no longer builds 2-3 subgrids).
+
+Accumulators on the ports, A/B (test_flat_combine_closeout_perf: close-out case at chunk 5120, pipelined fused calls,
+uniform routing, median of 11; GLM-5.3 three runs each):
+
+| case | mode | A | inj ring | D | fused us |
+|---|---|---|---|---|---|
+| GLM-5.3 (E8, S160) | ports apart | 12 | 64 | 8 | 584 / 582 / 588 |
+| GLM-5.3 | on the ports | 12 | 16 | 8 | 593 / 592 / 600 (+1.5%) |
+| GLM-5.3 | on the ports (combine_auto preferring more A) | 16 | 16 | 8 | 613 / 597 / 598 (+2.4%) |
+| K3 (E28, S160) | ports apart | 16 | 64 | 8 | 1200 |
+| K3 | on the ports | 16 | 64 | 8 | 1201 (+0.1%) |
+
+At the same A the ports' double duty costs 0-1.5%; more accumulators at the same depth buy nothing (the 2x4 rings are
+at depth 8 already) and cost 2.4% on GLM-5.3. So combine_auto keeps ports apart unless the accumulators on the ports give
+a deeper landing pool (or ports apart does not fit): on the ports for the 2x4 mesh at Galaxy load GLM-5.3 / M3 16384
+(D 5 vs 3), 4x4 GLM-5.3-Flash 5120 (7 vs 6), 4x4 K3 16384 (2 vs 1), and where only they fit (8x4 GLM-5.3 / M3 16384,
+4x4 GLM-5.3-Flash 16384, 2x4 GLM-5.3 / M3 5120).
+
+Correctness after the changes: test_flat_combine_closeout (GLM-5.3, GLM-5.3-Flash, K3, M3 at 5120 / 16384, K2.7 at
+5120 - K2.7 is being deprecated and stays at 5120, its 16384 cases are dropped) with uniform, zipf spread and packed
+routing: all pass, combine worst per-token rel err 2.43e-3. test_closeout_flat: 9 pass. test_flat_uneven_split: 6
+pass. test_closeout_plans passes (CANNOT_FIT unchanged but for K2.7 16384, which is no longer planned).
+Still not fitting (fp32 sums over <= 16 accumulators): 4x4 at 16384 GLM-5.3, M3, V4.1-Flash; the LoudBox stage 2x4 at
+16384 GLM-5.3, GLM-5.3-Flash, M3, V4.1-Flash, and K2.7 at 5120. K3 on the 2x4 stage: 112 experts a chip > 64.
+
+### Routing all-to-all + local planner (2026-10-22, LoudBox 2 x 4, bh-lb-09 12 x 10, 200G; combine_rf/routing_a2a.py)
+Why: the head's routing all-gather gives every chip the whole mesh's routing, and the planner scans all of it (N S K
+entries a chip) though only ~1/N points at its experts. Only "every entry that points at my experts" has to cross
+chips; the combine's n_local / want / n_ret (my home tokens) and the dispatch's route words come from my own top-k.
+Built: `routing_a2a_planner_prepare` (+ `routing_a2a_reserve`: its global semaphores, before any per-call L1;
+`routing_a2a_sizes`: pure sizing). One program a chip: M = min(8, EPC, A) planner cores (BRISC) + the fabric port
+cores (BRISC). Planner core q owns accumulators q, q + M, ... (their home tokens): counts its entries per global
+expert (local memory), one exchange of per-destination totals between planner cores, then writes its entries sorted
+by expert straight into the packet buffer of the port core that serves each destination (destination d on the port
+of its first hop, link d % L). Port cores send EXACTLY one packet per (source, destination) - empty ones too - as a
+direct 2D unicast (plain writes, the last a fused write + increment of the destination's arrival counter; my own
+chip's packet a local write + increment). Receivers: a DRAM slot per source, double-buffered by the call's parity;
+arrival counters per parity (wait N, subtract N). Then each planner core takes a contiguous expert range balanced by
+the call's rows, counts its entries per (expert, token), prefixes, and writes each entry's row (token index, table)
+directly; core 0 writes counts / regions / plan words 0..31 and 600 / 601 (want rows go straight to the plan by their
+owners). An entry: token (11 bits) | local expert (6) | gate weight bf16 bits without the sign (15) - weights >= 0.
+dispatch_prep gained `own_routing=True`: route words from the chip's own [S, 2 K] rows (no replicated rows).
+The fused harness: `FC.routing_exchange` "a2a" (default) / "gather" (the deterministic combine, per-direction ports
+and home-major rows keep the gather path).
+Bit-exact (scratch_routing_a2a.py): counts, regions, plan, token index and table (rows below plan[600]) vs the current
+multi-core planner and its host model, and the route words vs the replicated path - K3 and GLM-5.3 at the Galaxy 8x4
+per-chip load (160 / 512 home tokens, 28 / 8 experts a chip), uniform, Zipf spread and packed 1.2: 12 / 12, on all 8
+chips, two calls each (both parities). Fused close-out test (test_flat_combine_closeout) on the new tables: GLM-5.3
+and K3 at 5120 and 16384, all three routings pass (flat PCC >= 0.9984, combine worst per-token rel err <= 2.4e-3).
+Time per call (us, slowest / median chip, 8 calls queued, device profiler; today = fabric_all_gather of the joint rows
++ combine_plan on 32 cores):
+| case | today: gather + planner | all-to-all + local planner |
+| K3 5120 uniform / spread / packed | 75.8 / 74.4 / 86.5 | 59.5 / 90.5 / 147.3 |
+| K3 16384 uniform / spread / packed | 119.1 / 123.6 / 172.7 | 142.2 / 243.6 / 419.0 |
+| GLM-5.3 5120 uniform / spread / packed | 64.2 / 61.1 / 62.7 | 46.5 / 83.6 / 84.0 |
+| GLM-5.3 16384 uniform / spread / packed | 90.3 / 93.7 / 114.1 | 98.2 / 231.4 / 231.9 |
+What bounds it: (1) the RISC: ~40 cycles an entry to count, ~55 to place (about 25 instructions at IPC ~0.5; the L1
+data cache, enabled for these kernels with set_l1_data_cache, gave ~10%; skipping the stores ~15%); 8 cores is about
+right (4: 95 us, 2: 166 us, 16: no gain - per-(source, slice) run overhead doubles). (2) Skew: a hot expert's rows
+all go to one planner core (expert granularity) - the 2-2.5x losses under Zipf. (3) Launch skew between chips
+(~16-37 us here) shows up as arrival waits, as it does for any exchange. On this 2 x 4 the old path is cheap: its
+planner scans N S K = 8 x S x K entries; on an 8x4 it scans 4x more (K3 5120: 81,920 entries a chip) and the snake
+gather crosses 31 chips, while the new path's per-chip work stays S K (plus N x M header runs per core) - a Galaxy
+estimate is ~300 us today vs ~70 us new (uniform, K3 5120), not measured.
+Sizes (host only, test_routing_a2a_sizes, rows_cap = 2 S K + 32 EPC): every close-out model on 8x4 and 4x4 at both
+chunks fits - worst K3 4x4 16384: planner core 748 KB L1, port core 456 KB, slots 2 MB DRAM; local counters <= 2.8 KB.
+Left: hot experts split over planner cores (by token residue, with a per-(expert, token block) exchange); the NCRISC
+(or the TRISCs, for the pure-L1 count / place passes) on the planner cores; merging into the head program; the
+K3 token-split block still gathers.
+
+## 2026-10-25: landing ring depth D vs the overlap (test_flat_combine_depth, bh-lb-09 2x4)
+Hypothesis to test: the Galaxy's poor overlap (GLM-5.3-Flash 4x4: fused 695 vs flat alone 392 us) comes from its
+shallower landing rings (Galaxy 8x4 5120 plans D: GLM-5.3 2, GLM-Flash 4, M3 2, K3 5, V4.1 3). Each model at its Galaxy
+8x4 per-chip load (chunk 5120) on the 2x4, pure DRISC flat (the plan default), A / everything else the planners'
+defaults, D forced through FC.ring_depth (pool = D (N - 1) slots); pipelined, uniform routing.
+
+| model | D | combine alone | flat alone | fused | hidden | combine / floor |
+|---|---|---|---|---|---|---|
+| K3 (floor 378) | 1 / 2 / 3 / 4 / 6 / 8 | 885 / 565 / 511 / 499 / 495 / 503 | 1178 | 1220 / 1202 / 1202 / 1202 / 1201 / 1203 | 95-96 % | 2.34 / 1.49 / 1.35 / 1.32 / 1.31 / 1.33 |
+| GLM-5.3-Flash (223) | 1 / 2 / 3 / 4 / 6 / 8 | 531 / 358 / 331 / 316 / 305 / 305 | 363 | 607 / 425 / 398 / 396 / 394 / 394 | 54 / 83 / 90 / 89 / 90 / 90 % | 2.38 / 1.60 / 1.48 / 1.42 / 1.37 / 1.37 |
+| GLM-5.3 (319) | 1 / 2 / 3 / 4 / 6 / 8 | 644 / 525 / 475 / 458 / 461 / 459 | 494-502 | 760 / 626 / 581 / 564 / 561 / 557 | 60 / 75 / 83 / 86 / 86 / 86 % | 2.02 / 1.65 / 1.49 / 1.44 / 1.45 / 1.44 |
+| M3 (171) | 1 / 2 / 3 / 4 / 6 / 8 | 356 / 291 / 270 / 258 / 257 / 256 | 388 | 501 / 437 / 419 / 418 / 421 / 421 | 68 / 83 / 88 / 88 / 88 / 87 % | 2.09 / 1.70 / 1.59 / 1.51 / 1.50 / 1.50 |
+| DSv4.1-Flash (205) | 1 / 2 / 3 / 4 / 6 / 8 | 433 / 369 / 334 / 326 / 319 / 318 | 574 | 627 / 604 / 602 / 604 / 603 / 601 | 88-92 % | 2.11 / 1.80 / 1.63 / 1.59 / 1.56 / 1.55 |
+
+(the planner's own D here: 8 for every model - 7 sources.) Per sender (SPC_TPROF, one call, mean over 40 senders):
+fused, the senders are idle 140-660 us (waiting for the flat's rows) and wait 23-85 us on landing credits (full home
+rings) at any D; alone, credit waits fall with D (GLM-5.3 38 -> 17 us at D 2 -> 8, V4.1 23 -> 14 at 3 -> 8) while
+fabric-slot waits rise (36 -> 120: more in flight). Conclusion: D alone does not reproduce the Galaxy's loss - at the
+Galaxy's D the 2x4 hides 75-95 % (fused / flat: K3 1.02, GLM-Flash 1.09 at D 4, GLM-5.3 1.26 at D 2, M3 1.13 at D 2,
+V4.1 1.05 at D 3); only D 1 comes near GLM-Flash's 1.77 (1.67). Each model is fully hidden from D 3; D 2 costs GLM-5.3 /
+M3 / GLM-Flash 10-15 % of the combine, D 1 30-45 %; K3 and V4.1 stay hidden at any D (their flat is the long pole).
+The Galaxy's other factors (31 sources, torus multi-hop forwarding on each link, possibly 14 Gbps GDDR) are next.
+
+### Bookkeeping load x 4 (CombineProbes.bk, SPC_BK=4: every credit snapshot / ring-layout packet sent 4 times - idempotent
+copies - and every ring polled 4 times a pass; the Galaxy's 31 sources' bookkeeping from the LoudBox's 7, data path
+unchanged), each model at its Galaxy D on the 2x4, pipelined:
+
+| model (D) | combine alone off -> x4 | fused off -> x4 (flat) | hidden off -> x4 | combine / floor off -> x4 |
+|---|---|---|---|---|
+| K3 (5) | 500 -> 517 | 1203 -> 1204 (1179) | 95 -> 95 % | 1.32 -> 1.37 |
+| GLM-5.3-Flash (4) | 316 -> 371 | 395 -> 442 (363) | 90 -> 79 % | 1.42 -> 1.66 |
+| GLM-5.3 (2) | 528 -> 673 | 620 -> 836 (497) | 77 -> 50 % | 1.66 -> 2.11 |
+| M3 (2) | 289 -> 375 | 436 -> 544 (387) | 83 -> 59 % | 1.69 -> 2.20 |
+| DSv4.1-Flash (3) | 335 -> 429 | 603 -> 641 (574) | 91 -> 84 % | 1.64 -> 2.09 |
+
+Per sender (SPC_TPROF, mean of 40): the credit-return time triples (fused GLM-5.3 42 -> 159 us, K3 84 -> 185, V4.1 36
+-> 113) and the fabric-slot waits double (25 -> 54): the copies take EDM slots on the same senders that inject the
+rows. So the per-source bookkeeping - mostly credit / layout packets sharing the senders' fabric slots - is a real part
+of the Galaxy's loss: fused / flat GLM-Flash 1.09 -> 1.22, GLM-5.3 1.25 -> 1.68, M3 1.13 -> 1.41 (the Galaxy's
+GLM-Flash: 1.77). Not all of it: multi-hop forwarding and per-link load are still not emulated.
+
+### Cutting the bookkeeping cost (bk 4 = the Galaxy's source count)
+- The credit threshold (SPC_CREDTHR 8 / 16 / 32 / 64) changes nothing: the snapshots go out from idle passes (give_back(all)),
+  one per source with anything pending - not threshold sends.
+- Idle batching (CombineProbes.credidle / credage): an idle pass sends a source's snapshot only with >= CRED_IDLE rows
+  pending or the oldest CRED_AGE cycles old (bounded delay: every credit still returns; what is sent is unchanged).
+  bk 4, fused: idle 4 / 1 us: GLM-5.3 836 -> 796, 8 / 3 us 765, 8 / 6 us 753-762, 16 / 10 us 756, 32 / 20 us 794;
+  8 / 6 us kept. Snapshot packets -30-40 %, credit time halved (GLM-5.3 159 -> 90 us a sender, K3 185 -> 102).
+- At each model's Galaxy D, bk 4, fused (alone): K3 1204 -> 1209 (517 -> 508), GLM-Flash 442 -> 415 (371 -> 342), GLM-5.3
+  836 -> 762 (673 -> 638), M3 544 -> 497 (375 -> 355), V4.1 641 -> 624 (429 -> 392). bk 1 with the same batching: +-5 us
+  (K3 +5, GLM-Flash +5, M3 -6): so the default batches only with >= 16 sources (N x bk: the Galaxy, or bk emulation);
+  the LoudBox's 7 keep sending at once (unchanged).
+- Soak (test_flat_combine_depth_soak, bk 4, batching on): GLM-5.3 D 2, GLM-Flash D 4, K3 D 5 - 20000 fused calls each,
+  every 500th checked: worst rel err 2.4e-3, clean.
+- Moving credits / layouts off the row senders: each link's router has one worker sender channel - a second fabric
+  connection on another core needs the fabric mux; not attempted. What stays: GLM-5.3 at D 2 senders blocked on full
+  rings (279 passes vs 239 at bk 1) - the depth, not the packets.
+
+### Per-link load (b): the Galaxy's link loads on the 2x4 (CombineProbes.fill_y / SPC_FILLY)
+Combine bytes per directed edge, uniform routing, routes Y first then X (ties Y- / X+), in a chip's rows (S K):
+8x4 torus XY: X max 0.75 / mean 0.50, Y max 1.25 / mean 1.00; 4x4 (torus X, line Y): X 0.75 / 0.50, Y 1.00 / 0.83;
+2x4 line: X 1.00 / 0.83, Y 0.50 / 0.50. So the busiest link is 1.25 x the 2x4's on the 8x4, the same on the 4x4; the
+Galaxy's extra load is on Y. Probe: every Y-bound row is followed by fill_y x its bytes of filler to the Y neighbour's
+sink (16 KB L1 on every core, allocated before the arena), on the row's own connection (so it also contends at the
+worker channel - more than real forwarding, which enters the routers from other links).
+- 8x4 emulation (bk 4, each model's Galaxy D, batching on), fill 1.0 (mean Y) / 1.5 (busiest Y), fused (alone):
+  K3 1210 / 1216 (609 / 699), GLM-Flash 453 / 496 (356 / 394), GLM-5.3 767 / 794 (677 / 699), M3 508 / 529, V4.1
+  623 / 626. GLM-Flash fused / flat 1.25 / 1.36.
+- The quoted Galaxy number (GLM-Flash fused 695 / flat 392 = 1.77) is a 4x4 run at the 8x4 per-chip load: 16 sources
+  (bk 2), D 8 there (15 x 8 slots fit), Y filler 1.0 (its busiest Y edge is 2 x the 2x4's): fused 443 / flat 363 = 1.22
+  (bk 2 alone 401, filler alone 437). Not reproduced: source-count bookkeeping and link load together explain about a
+  third of the Galaxy's loss (1.09 -> 1.22 of 1.77). Left: the Galaxy's flat itself (392 alone vs 363 here - GDDR speed
+  / DRISC), multi-hop router forwarding (the filler is single-hop, from the worker channel) and the credits' multi-hop
+  round trip (650 ns a hop).
+
+### The Galaxy 4x4 run's layout on the 2x4 (test_flat_combine_layout)
+That run (GLM-Flash fused 695 / flat 392) had combine_auto put A 16 accumulators on the ports (4x4 torus: 12 port
+cells of 19; host combine_auto at N 16: acc_on_ports D 8 vs ports apart D 7). On the 2x4, GLM-Flash, acc_on_ports A 16,
+D 8 (planner), pipelined, fused / flat (flat 362):
+- bk 1, no filler: port per link 402 (1.11), port per (direction, link) 453 (1.25).
+- bk 2 + Y filler 1.0 (+ credit batching): per link 498 (1.37), per (direction, link) 540 (1.49) - closest to 1.77 yet.
+TPROF (bk 2, filler, per link): every chip's local rows (the flat's own output) are done by 356-411 us - the flat is not
+slowed inside the fused call - while the senders end at 400-565 (the second mesh row last): the tail is the senders,
+whose bookkeeping (hand-off grants + output writes with the accumulators on their cells) takes 86-194 us of each.
+
+## 2026-10-25: shared landing pool with slot grants (landing='shared', test_flat_combine_landing, bh-lb-09 2x4)
+Why: on the Galaxy each accumulator's pool (~50 slots) is split into 31 rings, so a source owns ~1-2 slots and a
+burst from one source stalls while other sources' rings sit empty. Shared: the accumulator keeps a free list of its
+pool and grants specific slot ids to sources; the ids travel on the existing credit snapshot (count + a ring of G 8
+ids per source, each tagged 0x80 | seq & 0x7F so a stale or zeroed entry never matches). The home port validates the
+count up to the last tag-matching id before forwarding; a source writes its u-th row into grant u's slot only when the
+tag matches. The accumulator scans its owned slots, frees taken ones and regrants (fewest outstanding first, then most
+rows pending; at most G outstanding per source). Every row in flight has a reserved slot. Protocol model with negative
+tests: models/demos/moe_block/tests/test_combine_landing_model.py. Rings stay the default, unchanged.
+Restrictions: accumulators apart, non-deterministic, pool < 255 slots; piggyback off.
+
+Ports apart, pipelined, rings vs shared at the same pool, combine alone / fused (us), bk 4 + credit batching (Galaxy's
+source count); pool 11 = the Galaxy's slots per source (50 x 7 / 31), auto = the planner's 2x4 pool:
+| model | chunk | routing | pool | combine rings / shared | fused rings / shared | hidden rings / shared |
+|---|---|---|---|---|---|---|
+| GLM-5.3 | 8192 | uniform | 11 | 1130 / 1084 (0.96) | 1245 / 1233 | 46% / 45% |
+| GLM-5.3 | 8192 | zipf_spread 1.2 | 11 | 1098 / 1033 (0.94) | 1216 / 1147 | 64% / 68% |
+| GLM-5.3 | 16384 | uniform | 11 | 2368 / 2170 (0.92) | 2447 / 2400 | 40% / 37% |
+| M3 | 8192 | uniform | 11 | 597 / 561 (0.94) | 734 / 716 | 55% / 55% |
+| M3 | 8192 | zipf_spread 1.2 | 11 | 590 / 574 (0.97) | 786 / 752 | 87% / 92% |
+| M3 | 16384 | uniform | 11 | 1197 / 1109 (0.93) | 1314 / 1269 | 47% / 47% |
+| GLM-5.3 | 8192 | uniform | auto | 788 / 843 (1.07) | 906 / 932 | 65% / 64% |
+| GLM-5.3 | 16384 | uniform | auto | 1609 / 1789 (1.11) | 1831 / 2003 | 51% / 46% |
+| M3 | 8192 | uniform | auto | 423 / 474 (1.12) | 570 / 558 | 75% / 80% |
+| M3 | 16384 | uniform | auto | 840 / 912 (1.09) | 1014 / 1082 | 61% / 56% |
+- At the Galaxy's slots per source shared wins 3-8% on the combine, 1-6% fused. With deep pools it loses 7-12% on the
+  combine: grants cost a snapshot per batch of 8 and the accumulator's scan, while rings already never starve.
+- 5120 no-regression (bk 1, auto pool): rings GLM-5.3 456 / fused 563, M3 254 / 418 (as before); shared 495 / 559,
+  264 / 406.
+- TPROF mean per sender, GLM-5.3 8192 uniform pool 11, fused (alone), rings -> shared: idle 396 -> 274 (273 -> 182),
+  bookkeeping 388 -> 335, waiting on grants / credits 135 -> 313 (119 -> 283), sends equal. The senders stop idling on
+  one full ring and wait on the pool instead.
+- Soak, bk 4, pool 11, shared: GLM-5.3 8192 uniform and zipf, M3 16384 uniform, 20000 fused calls each, rel err
+  <= 2.4e-3, no hang; GLM-5.3 8192 zipf 1,000,000 fused calls clean (2.36e-3, 20 min) (test_flat_combine_landing_soak).

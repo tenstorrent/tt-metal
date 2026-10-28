@@ -56,14 +56,32 @@ void kernel_main() {
     const uint64_t prim_land = get_noc_addr(pxy >> 16, pxy & 0xFFFF, land);
     const uint64_t prim_data = get_noc_addr(pxy >> 16, pxy & 0xFFFF, get_semaphore(data_sem));
     volatile tt_l1_ptr uint32_t* credit = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(credit_sem));
+#ifdef SE_XDUAL
+    // x read once by the helpers (MIMO_FL_XDUAL): every super-block also goes into the second primary's landing ring
+    // (same ring, same arrival semaphore there; RT after the X2 args: its xy), its freed slots counted on semaphore
+    // SE_XDUAL here
+    const uint32_t p2xy = get_arg_val<uint32_t>(7 + SE_DYN_NARGS);
+    const uint64_t prim2_land = get_noc_addr(p2xy >> 16, p2xy & 0xFFFF, land);
+    const uint64_t prim2_data = get_noc_addr(p2xy >> 16, p2xy & 0xFFFF, get_semaphore(data_sem));
+    volatile tt_l1_ptr uint32_t* credit2 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SE_XDUAL));
+#endif
     for (uint32_t b = 0; b < num_sb; ++b) {
         cb_wait_front(sb_cb, sb_tiles);
         if (b >= land_slots) {
             noc_semaphore_wait_min(credit, b + 1 - land_slots);  // the slot's previous super-block has been sent
+#ifdef SE_XDUAL
+            noc_semaphore_wait_min(credit2, b + 1 - land_slots);
+#endif
         }
         noc_async_write(get_read_ptr(sb_cb), prim_land + (b % land_slots) * sb_bytes, sb_bytes);
+#ifdef SE_XDUAL
+        noc_async_write(get_read_ptr(sb_cb), prim2_land + (b % land_slots) * sb_bytes, sb_bytes);
+#endif
         noc_async_write_barrier();
         noc_semaphore_inc(prim_data, 1);
+#ifdef SE_XDUAL
+        noc_semaphore_inc(prim2_data, 1);
+#endif
         cb_pop_front(sb_cb, sb_tiles);
     }
     noc_async_atomic_barrier();

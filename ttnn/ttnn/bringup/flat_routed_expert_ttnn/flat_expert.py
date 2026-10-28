@@ -26,6 +26,7 @@ from loguru import logger
 import ttnn
 from ttnn.bringup.flat_routed_expert_ttnn._helpers import BF8_TILE, noc_hops
 from ttnn.bringup.flat_routed_expert_ttnn._helpers import crs_single as _crs_single
+from ttnn.bringup.flat_routed_expert_ttnn.flat_layouts import flat_layout
 
 
 def _drisc_close_hook():
@@ -1919,6 +1920,23 @@ class FlatExpert:
         logger.info(f"KERNELS {len(program.kernels)} total rt words {tot_rt}, cbs {len(program.cbs)}")
 
 
+def _weight_packing(lay, nk=False):
+    """What decides where a weight tile goes (flat_weight_regions, _bank_sharded): the weight cache's key, and what two
+    plans must share to share one weight set. The capacity, sub-block size, h buffers or x / h formats' L1 choices
+    change the plan, not the packing (dw_rot only when on: existing caches keep their keys). ``nk``: the [N, K] tile
+    layout (weights_nk)."""
+    layout = {k: lay[k] for k in WEIGHT_LAYOUT_KEYS if k in lay and (k != "dw_rot" or lay[k])}
+    if lay.get("rgs"):  # (uneven split only: even plans keep their keys)
+        layout["rgs"] = tuple(lay["rgs"])
+    if lay.get("hg"):
+        layout["hg"] = True
+    if lay.get("nu"):
+        layout["nu"] = lay["nu"]
+    if nk:
+        layout["nk"] = True
+    return sorted(layout.items())
+
+
 class FlatRoutedExpert:
     """The C++ op ``ttnn.bringup.flat_routed_expert`` (the model path of FlatExpert: dynamic
     counts, row-major x): the plan comes from C++, the weights are laid out by flat_weight_regions from it, and the
@@ -1941,6 +1959,7 @@ class FlatRoutedExpert:
         cache_prefix=None,
         x_bf16=False,
         h_bf16=False,
+        layout=None,
         weights_nk=False,
         check_exact=False,
         max_y_writers=0,
@@ -1949,17 +1968,20 @@ class FlatRoutedExpert:
         (only called when the weight cache misses), or ``"fake"``: uninitialised weight tensors in the right layout
         (perf only: no host packing / upload; outputs are garbage). ``cache_prefix``: path stem of the laid-out weight
         cache; the file names carry the dtype and a hash of the C++ plan, so a layout change never loads a stale
-        layout. ``weights_nk``: the weights are given as nn.Linear stores them, (W1 [I, H], W3 [I, H], W2 [H, I]),
-        laid out tile by tile transposed (flat_weight_regions nk) and every call passes weights_nk (the matmuls
-        transpose them back): a bfp8 tile then shares its exponents along K. ``check_exact``: assert the block-float dtype
-        holds every weight value exactly (each 16-value group of a tile row: integer multiples of 2^(E - 6) for bfp8,
-        E the group's largest exponent). ``max_y_writers`` (0: off, the plan unchanged): at most this many y writers
-        (down cores + reader tails; DeepSeek-V4.1: the appended combine's L1 hand-off limit, combine_rf
-        sparse_combine_rf.L1_MAX_WRITERS); every call and flat_routed_expert_with_program must pass ``self.max_y_writers``.
-        """
+        layout. ``layout``: the layout / program choices (flat_layouts.py presets, a dict of FlatLayoutOptions fields,
+        or a FlatLayoutOptions; None: the plan's defaults) - every call of this op uses it. ``weights_nk``: the weights
+        are given as nn.Linear stores them, (W1 [I, H], W3 [I, H], W2 [H, I]), laid out tile by tile transposed
+        (flat_weight_regions nk) and every call passes weights_nk (the matmuls transpose them back): a bfp8 tile then
+        shares its exponents along K. ``check_exact``: assert the block-float dtype holds every weight value exactly
+        (each 16-value group of a tile row: integer multiples of 2^(E - 6) for bfp8, E the group's largest exponent).
+        ``max_y_writers`` (0: off, the plan unchanged): at most this many y writers (down cores + reader tails;
+        DeepSeek-V4.1: the appended combine's L1 hand-off limit, combine_rf sparse_combine_rf.L1_MAX_WRITERS); every
+        call, replanned() and flat_routed_expert_with_program must pass ``self.max_y_writers``."""
         E, n_dev = len(gids[0]), len(gids)
         self.device, self.H, self.I, self.m, self.act, self.pin = device, H, I, m, ACTS[act], pin
+        self._n_global, self._wdtype = n_global, wdtype  # (replanned)
         self.x_bf16, self.h_bf16 = x_bf16, h_bf16  # x / h tile formats (else bfp8): part of the plan
+        self.layout = flat_layout(layout)
         self.weights_nk = weights_nk
         self.max_y_writers = int(max_y_writers)
         self.plan = ttnn._ttnn.operations.bringup.flat_routed_expert_plan(
@@ -1973,6 +1995,7 @@ class FlatRoutedExpert:
             pin=pin,
             x_bf16=x_bf16,
             h_bf16=h_bf16,
+            layout=self.layout,
             max_y_writers=self.max_y_writers,
         )
         lay = dict(self.plan)
@@ -1981,19 +2004,7 @@ class FlatRoutedExpert:
         names = ("w_gu", "w_d", "w_rd") if lay["rdown"] else ("w_gu", "w_d")
         files = dict.fromkeys(names)
         if cache_prefix is not None:
-            # keyed on what decides the packing (flat_weight_regions, _bank_sharded) only: the capacity, sub-block
-            # size, h buffers or x / h formats' L1 choices change the plan, not where a weight tile goes
-            # (dw_rot only when on: existing caches keep their keys)
-            layout = {k: lay[k] for k in WEIGHT_LAYOUT_KEYS if k in lay and (k != "dw_rot" or lay[k])}
-            if lay.get("rgs"):  # (uneven split only: even plans keep their keys)
-                layout["rgs"] = tuple(lay["rgs"])
-            if lay.get("hg"):
-                layout["hg"] = True
-            if lay.get("nu"):
-                layout["nu"] = lay["nu"]
-            if weights_nk:
-                layout["nk"] = True
-            key = hashlib.sha1(repr((sorted(layout.items()), gids, n_dev)).encode()).hexdigest()[:12]
+            key = hashlib.sha1(repr((_weight_packing(lay, nk=weights_nk), gids, n_dev)).encode()).hexdigest()[:12]
             files = {n: f"{cache_prefix}.flat.{wdtype}.lay{key}.{n}.tensorbin" for n in names}
             _adopt_legacy(cache_prefix, wdtype, files)
         if isinstance(weights, str):
@@ -2052,6 +2063,37 @@ class FlatRoutedExpert:
             ),
         )
 
+    def replanned(self, m, layout=None):
+        """This op at another per-expert capacity m (another chunk) on the same device weights: a plan of its own, the
+        weights, expert ids and done words shared. The two plans must pack the weights the same way (asserted)."""
+        import copy
+
+        lay = flat_layout(layout if layout is not None else self.layout)
+        E = int(self.gidx.shape[-1])
+        plan = ttnn._ttnn.operations.bringup.flat_routed_expert_plan(
+            self.device,
+            self.H,
+            self.I,
+            E,
+            self._n_global,
+            m,
+            weights_bf8=self._wdtype == "bf8",
+            pin=self.pin,
+            x_bf16=self.x_bf16,
+            h_bf16=self.h_bf16,
+            layout=lay,
+            max_y_writers=self.max_y_writers,
+        )
+        assert _weight_packing(dict(plan)) == _weight_packing(
+            dict(self.plan)
+        ), f"flat expert at m {m}: another weight packing than at m {self.m} - cannot share the weights"
+        assert list(dict(plan)["coords"]) == list(
+            dict(self.plan)["coords"]
+        ), f"flat expert at m {m}: other down coordinators than at m {self.m} - cannot share the done words"
+        out = copy.copy(self)
+        out.m, out.layout, out.plan = m, lay, plan
+        return out
+
     def __call__(
         self,
         x,
@@ -2064,10 +2106,12 @@ class FlatRoutedExpert:
         pack_stochastic_rounding=False,
         y_bf16=False,
         math_fidelity=0,
+        output=None,
         hidden=0,
     ):
         """x: the row-major bf16 dispatch buffer [rows, H] (``hidden``: [rows, W >= H], each row's first H values);
         counts / regions: the routing's [1, n_global] uint32 rows.
+        output: a caller's y tensor (its spec as the returned y's), e.g. a persistent buffer read at a fixed address.
         token_index ([1, rows] uint32): indexed mode, x is then e.g. the all-gathered tokens and flat row r reads x row
         token_index[r]. x_pages_per_row P: x is [rows * P, H / P] (P = 8: every row spread over the 8 DRAM banks).
         Returns y [rows, H] bfp8 TILE (the active experts' rows); ``y_row_major``: bf16 ROW_MAJOR (pack-untilized on
@@ -2096,6 +2140,8 @@ class FlatRoutedExpert:
             h_bf16=self.h_bf16,
             y_bf16=y_bf16,
             math_fidelity=math_fidelity,
+            layout=self.layout,
+            output=output,
             weights_nk=self.weights_nk,
             hidden=hidden,
             max_y_writers=self.max_y_writers,

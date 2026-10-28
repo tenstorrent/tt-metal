@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// DRISC mode of the flat expert (MIMO_FL_DRISC, kernels/se_drisc.hpp): the persistent gate/up senders on the
+// DRISC mode of the flat expert (layout.drisc, kernels/se_drisc.hpp): the persistent gate/up senders on the
 // Blackhole programmable DRAM cores. They run outside the flat programs (DRAM-core kernels launch by slow dispatch,
 // next to fast dispatch, as the tensor prefetcher's), launched once per mesh device and left running until
 // flat_drisc_stop.
@@ -29,8 +29,8 @@ uint32_t flat_drisc_base();
 uint32_t flat_drisc_size();
 // MIMO_FL_DRISC_TILES (1, 2, or 3 = switch): DRISC tiles used per bank
 uint32_t flat_drisc_tiles();
-// MIMO_FL_DRISC_PURE: every slot on DRISC (switch tiles; reader cells keep only reader down columns). Default: the
-// plan's choice (flat_drisc_set_auto_pure: plans without reader down columns), else dual slots
+// layout.drisc_pure (FlatLayoutOptions): every slot on DRISC (switch tiles; reader cells keep only reader down
+// columns). Default: the plan's choice (flat_drisc_set_auto_pure: plans without reader down columns), else dual slots
 bool flat_drisc_pure();
 // set by the plan before the DRISC senders start (process-wide, as the senders: one mode per process)
 void flat_drisc_set_auto_pure(bool pure);
@@ -46,6 +46,9 @@ uint32_t flat_drisc_mpfe(bool reader_down);
 uint32_t flat_drisc_job(uint32_t r, uint32_t banks);
 // NOC0 (physical) coordinates of that tile / of a worker core
 tt::tt_metal::CoreCoord flat_drisc_physical(tt::tt_metal::IDevice* device, uint32_t r, uint32_t banks);
+// slot r's sending tile (NOC0 coordinates) and NoC on the calls with small counts (switch mode: the alternate tile)
+std::pair<tt::tt_metal::CoreCoord, uint32_t> flat_drisc_sender(
+    tt::tt_metal::IDevice* device, uint32_t r, uint32_t banks, bool reader_down);
 // the NoC slot r's sender writes on (0 or 1)
 uint32_t flat_drisc_noc(tt::tt_metal::IDevice* device, uint32_t r, uint32_t banks, bool reader_down);
 tt::tt_metal::CoreCoord flat_worker_noc0(tt::tt_metal::IDevice* device, const tt::tt_metal::CoreCoord& logical);

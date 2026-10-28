@@ -3473,3 +3473,20 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   (DS41-128). New Setting TP_SUM_BLOCKS (default cols): tt/ccl.py:tp_sum splits by column blocks (dim 3) + column
   gather, or the fixed-order gather_add where the width does not split (mHC [S/SP, 32] row). Same volume, same bf16
   precision; rows keeps the old path. After it: test_runner_contract PASS (0 failures, tt-d-gen engine).
+
+## Merge of origin/dnijemcevic/model_bringup (owner's MoE work, d762b21db30) into the galaxy branch (2026-10-28)
+- Kept both sides: theirs (Marko sync of flat_routed_expert_ttnn / combine_rf, EXPERTS_LAYOUT=marko, MOE_IMPL=block,
+  MOE_HEAD / MOE_TAIL fused, matmul_reduce_scatter, D14 torus for the block, framework F200 / F201, O.1 cases); ours
+  (FIX.5 patch_addresses, max_y_writers, combine_rf payload check, test_hot_experts, TP_SUM_BLOCKS, contract work,
+  framework F202 open_mesh). Our framework F200 (engine wait) -> F203, F201 (hangdump) -> F204; F202 kept (free).
+- tt/experts.py: their flat_op() split (shared with the block) carries max_y_writers=L1_MAX_WRITERS; the block's
+  exchange (deepseek_v3_d_p tt_k3_token_split_moe.py) passes the op's max_y_writers to flat_routed_expert_with_program.
+  tt/weighted_combine.py passes layout + patch_addresses + extra_addrs + max_y_writers.
+- Weight cache: on this box the marko plan packs the routed weights exactly as the capped legacy plan (32 down x 5
+  columns, 16 readers, no tails; key lay9c3da689dd35): layer 0 loads cache=hit under marko, flat and block. No rebuild.
+- 1-layer repro (smoke prompt, prefill [0, 128) + tail [128, 160)): flat (defaults) PASS; block + fused head FAIL at
+  build (DS41-129, assertion, no hang); block + MOE_HEAD=ops PASS, same tokens as flat.
+- Re-run: `cd /scratch/dnijemcevic/diag && [DS41_MOE_IMPL=block [DS41_MOE_HEAD=ops]] REPRO_LAYERS=1 ./run.sh <name>
+  --no-precompile /scratch/dnijemcevic/diag/test_repro_tail.py -s`; fork: `BRINGUP_TEST_MESH=8x4 scripts/run_safe_pytest.sh
+  --run-all ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/unit/test_with_program_patch.py` (and test_hot_experts.py,
+  test_max_y_writers.py, combine_rf/tests/unit/test_fabric_payload.py).

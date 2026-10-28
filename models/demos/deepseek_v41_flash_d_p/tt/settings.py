@@ -295,7 +295,16 @@ TABLE = {
         "combine's arena CBs; the combine's runtime args when its extra_addrs change) patched on a hit, so the 40 "
         "layers share one program per pass and a new gather buffer (xg) never rebuilds it; addresses (the op before) "
         "= every baked address in the key: a new xg address a call is a miss (+20..40 programs a 40-layer chunk, ~0.5 "
-        "s of host each, never warm under F196). Bit-identical outputs (tt/perf_flat_program_key.py)",
+        "s of host each, never warm under F196). Bit-identical outputs (tt/perf_flat_program_key.py). MOE_IMPL=flat "
+        "only: the block's exchange calls the op address-keyed (it pins its buffers instead)",
+    ),
+    "EXPERTS_LAYOUT": Setting(
+        "marko",
+        ("legacy", "marko"),
+        "the flat expert op's work layout (owner 2026-10-27: Marko's by default after the 2x2 A/B, device 65.74 vs 68.10 ms / chunk on our layout, experts 15.88 vs 17.85, L.last within limits): legacy = the plan before "
+        "his DRISC-only / even-split defaults (the cached weights and numbers so far); marko = his defaults plus what his "
+        "MoE block passes per model (rows_hint = expected rows an expert, one x helper; moe_block.layout_of). marko "
+        "re-lays out the cached weights (new cache files)",
     ),
     "EXPERTS_WEIGHT_CACHE": Setting(
         "on",
@@ -359,6 +368,46 @@ TABLE = {
         "summed over axis 1: gather_add = all_gather + SFPU "
         "ttnn.add, then the chip's hidden slice (exact fp32, K-30); reduce_scatter = one CCL whose FPU add reads fp32 "
         "at about TF32",
+    ),
+    "MOE_IMPL": Setting(
+        "flat",
+        ("flat", "block"),
+        "the MoE layer (tt/MOE_BLOCK.md; owner decisions 2026-10-27, reports/moe_block_decisions_2026-10-27.md, an A/B "
+        "on the 2x2, the Galaxy keeps flat meanwhile). flat = today's steps: router (ROUTER_IMPL), routed experts "
+        "(flat op + weighted combine), shared expert (flat op), moe_add. block = Marko Staletovic's MoE block "
+        "(models/demos/moe_block, tt/moe_block_adapter.py) for all four, in the experts step: x as ffn_norm gathers it "
+        "(D2: the block's x_gathered input, ffn_norm unchanged); the block's ops router (D3: partial logits over H/TP, "
+        "reduce-scatter, softplus + sqrt, router_topk) with this model's gate weight, recentred selection bias, route "
+        "scale 1.5, top 6; the ops head (D4); the shared expert as ttnn matmuls at LoFi with bfp8 weights (D5); the "
+        "routed experts as our FlatRoutedExpert (bfp4, weights_nk, our weight cache, EXPERTS_LAYOUT: D6, marko = the "
+        "block's own layout_of) in the block's "
+        "token exchange (owner dispatch, flat experts + combine in one program) with the fixed combine order (D7: the "
+        "exchange's deterministic planner); EXPERTS_PRECISION=glm only (D8); lines or a torus (D10 lines on the 2x2; D14 torus allowed, untested on DS41). MOE_HEAD picks the "
+        "head",
+    ),
+    "MOE_HEAD": Setting(
+        "fused",
+        ("ops", "fused"),
+        "MOE_IMPL=block only (tt/MOE_BLOCK.md): the MoE block's head. ops = a program a stage (D4): ffn_norm gathers x, "
+        "the block's ops router and ttnn shared expert, the exchange's fixed combine order (D7). fused (default: owner "
+        "decision 2026-10-27, after the 2x2 A/B - device 61.97 vs 66.9 ms a chunk, MoE section 17.45 vs 22.03, clean "
+        "wall 102.2 vs 160.6; flat 65.74 / 138.0; the ladder at the ops head's metrics) = Marko Staletovic's fused head "
+        '(owner decision 2026-10-27 "go with fused head"): one program a chip - x gathered over TP on its ports (ffn_norm then does not gather), the '
+        "shared expert engine (bfp8, LoFi as D5, clamped SiLU 10) with its row reduce-scatter, the router (logits HiFi3, "
+        "fp32 sums, sqrt(softplus) with the fp32 softplus, + bias, top 6, weights / sum x 1.5), the routing exchange, "
+        "the combine planner and dispatch prep; its planner has no fixed combine order, so the combine snaps each term to "
+        "2^-19 (owner decision 2026-10-27: keep the snap - it supersedes D7 for the fused head; order-independent fp32 "
+        "sums: bit-identical runs; DS41's routed sums peak at 5.4, under 2^24 x 2^-19 = 32)",
+    ),
+    "MOE_TAIL": Setting(
+        "fused",
+        ("ops", "fused"),
+        "MOE_IMPL=block only (tt/MOE_BLOCK.md): the MoE block's tail, the combine's owner rows back to [S/SP, H/TP]. ops "
+        "= a program a stage: tilize, + the shared expert's owner rows, all_to_all_async_generic over TP. fused = Marko "
+        "Staletovic's TailA2A (models/demos/moe_block/tt/tail_a2a.py; the default, owner decision 2026-10-27 after the 2x2 "
+        "A/B: device 61.2 vs 61.97 ms / chunk, alternating clean walls 110.8 / 110.8 vs 120.0 / 125.2, ladder "
+        "metrics identical): the same three in one program a chip, the tilize and add under the "
+        "sends; the same output (bf16 TILE, then GLUE_FOLD's typecast as for ops)",
     ),
     # ---- mHC (tt/mhc.py, tt/residual.py)
     "RESIDUAL_MIX": Setting(

@@ -28,6 +28,8 @@ struct SeYRmWriter {
 #else
     static constexpr uint8_t yvc = 2;
 #endif
+    // the y writes' NoC: this RISC's
+    static constexpr uint8_t ynoc = noc_index;
     static_assert(rows >= 1 && trid0 + rows <= 16);
     InterleavedAddrGen<true> yg;
     uint32_t col_off;
@@ -51,7 +53,7 @@ struct SeYRmWriter {
     static constexpr uint32_t L1_MAXD = 32;
     uint32_t nd = 0, islot = 0, words = 0, widx = 0, tab_tile = 0xFFFFFFFF, tab_base = 0;
     uint32_t dx[L1_MAXD], dy[L1_MAXD], dbase[L1_MAXD], dq[L1_MAXD], dland[L1_MAXD];
-    uint32_t cnt[L1_MAXD];               // rows issued per destination this call
+    uint32_t cnt[L1_MAXD];  // rows issued per destination this call
     // A row tile goes out in one or more parts (units): as many leading rows as the destinations have granted slots
     // for, the rest once they grant more - so a ring smaller than one tile's rows for it (e.g. an accumulator's local
     // ring of a few slots) never blocks the writer for good. Each unit has its own transaction id and landed counts;
@@ -181,20 +183,20 @@ struct SeYRmWriter {
                 ++cnt[d];
                 noc_async_write_one_packet_with_trid(
                     src + i * seg,
-                    get_noc_addr(dx[d], dy[d], slot + col_off),
+                    get_noc_addr(dx[d], dy[d], slot + col_off, ynoc),
                     seg,
                     trid,
                     write_cmd_buf,
-                    noc_index,
+                    ynoc,
                     yvc);
                 if (col_off == 0) {  // (its trailer, staged above)
                     noc_async_write_one_packet_with_trid(
                         stage + i * 32,
-                        get_noc_addr(dx[d], dy[d], slot + ht * 64),
+                        get_noc_addr(dx[d], dy[d], slot + ht * 64, ynoc),
                         32,
                         trid,
                         write_cmd_buf,
-                        noc_index,
+                        ynoc,
                         yvc);
                 }
             }
@@ -212,18 +214,18 @@ struct SeYRmWriter {
         for (uint32_t i = 0; i < n; ++i) {
             noc_async_write_one_packet_with_trid(
                 src + i * seg,
-                get_noc_addr(my_x[noc_index], my_y[noc_index], src + i * seg),
+                get_noc_addr(my_x[ynoc], my_y[ynoc], src + i * seg, ynoc),
                 seg,
                 trid,
                 write_cmd_buf,
-                noc_index,
+                ynoc,
                 yvc);
         }
         (void)row0;
 #elif !defined(SE_YRM_NOWRITE)  // (perf probe: no y writes)
         for (uint32_t i = 0; i < n; ++i) {
             noc_async_write_one_packet_with_trid(
-                src + i * seg, get_noc_addr(row0 + i, yg, col_off), seg, trid, write_cmd_buf, noc_index, yvc);
+                src + i * seg, get_noc_addr(row0 + i, yg, col_off, ynoc), seg, trid, write_cmd_buf, ynoc, yvc);
         }
 #else
         (void)src, (void)n, (void)row0, (void)trid;
@@ -246,14 +248,14 @@ struct SeYRmWriter {
     // experts completed by it (0 or 1).
     uint32_t retire(const SeDyn& dyn) {
 #ifdef SE_Y_L1
-        if (uret == uiss || !ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, trid0 + uret % rows)) {
+        if (uret == uiss || !ncrisc_noc_nonposted_write_with_transaction_id_flushed(ynoc, trid0 + uret % rows)) {
             return 0;
         }
         {
             const uint8_t* tc = tcnt[uret % rows];
             for (uint32_t d = 0; d < nd; ++d) {
                 if (tc[d]) {
-                    noc_semaphore_inc(get_noc_addr(dx[d], dy[d], dland[d] + 4 * widx), tc[d]);
+                    noc_semaphore_inc(get_noc_addr(dx[d], dy[d], dland[d] + 4 * widx, ynoc), tc[d], ynoc);
                 }
             }
         }
@@ -265,7 +267,7 @@ struct SeYRmWriter {
         cb_pop_front(out_cb, pcd);
 #else
         if (retired == issued ||
-            !ncrisc_noc_nonposted_write_with_transaction_id_flushed(noc_index, trid0 + retired % rows)) {
+            !ncrisc_noc_nonposted_write_with_transaction_id_flushed(ynoc, trid0 + retired % rows)) {
             return 0;
         }
         cb_pop_front(out_cb, pcd);

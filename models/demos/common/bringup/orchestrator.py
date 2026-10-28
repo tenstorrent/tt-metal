@@ -286,7 +286,7 @@ def agents_json(run_dir: Path, agent: str = "bringup-engineer") -> Path:
 def _killpg(pgid: int, sig) -> None:
     from models.demos.common.bringup.core.hangdump import wait_triage
 
-    wait_triage()  # F201: an agent's device run that hung is writing its triage: never cut it off
+    wait_triage()  # F204: an agent's device run that hung is writing its triage: never cut it off
     try:
         os.killpg(pgid, sig)
     except ProcessLookupError:
@@ -1924,7 +1924,7 @@ class Orchestrator:
                 self.stop_task(task, f"not started: {why}")
                 return STOPPED
         why = engine_missing(self.spec, gate_command(task, self.led.tasks()))
-        if why:  # F200: no gate and no agent for a runner test without its engine; independent work goes on (F109)
+        if why:  # F203: no gate and no agent for a runner test without its engine; independent work goes on (F109)
             return self._human(task, why)
         if self.perf_pick(task):  # F57: no gate before or after the agent; the owner decides on the A/B report
             return self.perf_step(task)
@@ -2096,7 +2096,7 @@ class Orchestrator:
             if str(state[t]["waiting"]).startswith(ENGINE_WAIT) and not engine_missing(
                 self.spec, gate_command(self.led.task(t), self.led.tasks())
             ):
-                continue  # F200: its build has appeared; it runs at its turn
+                continue  # F203: its build has appeared; it runs at its turn
             dirty_here = set(self.changed_under(self.led.task(t)))
             rec = state.get(t, {}).get("ab")
             if (
@@ -2241,7 +2241,7 @@ ENGINE_MARKS = ("dgen_engine", "use_engine")  # the runner tests that tt-d-gen's
 
 
 def engine_tests(repo, cmd: str) -> list[str]:
-    """F200: the gate's test files that tt-d-gen's engine drives (they name dgen_engine or use_engine)."""
+    """F203: the gate's test files that tt-d-gen's engine drives (they name dgen_engine or use_engine)."""
     out = []
     for word in shlex.split(cmd.replace("&&", " ")):
         p = Path(repo) / word.split("::")[0]
@@ -2251,7 +2251,7 @@ def engine_tests(repo, cmd: str) -> list[str]:
 
 
 def engine_missing(spec, cmd: str) -> str | None:
-    """F200: why a gate that runs a runner test cannot pass (serving.require_engine and no tt-d-gen build), else None.
+    """F203: why a gate that runs a runner test cannot pass (serving.require_engine and no tt-d-gen build), else None.
     The gate would fail on the missing build and start an agent attempt that cannot succeed (DeepSeek-V4.1 8x4 K.1,
     2026-10-27: the engine was built in parallel with the run)."""
     from models.demos.common.bringup.testing import dgen_engine

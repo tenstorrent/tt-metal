@@ -65,6 +65,7 @@
 #include "ttnn/operations/full/full_nanobind.hpp"
 #include "ttnn/operations/full_like/full_like_nanobind.hpp"
 #include "ttnn/operations/generic/generic_op_nanobind.hpp"
+#include "ttnn/operations/generic/freeze_program_hashes_nanobind.hpp"
 #include "ttnn/operations/index_fill/index_fill_nanobind.hpp"
 #include "ttnn/operations/index_fill_new/index_fill_new_nanobind.hpp"
 #include "ttnn/operations/kv_cache/kv_cache_nanobind.hpp"
@@ -228,6 +229,7 @@ void py_module(nb::module_& mod) {
 
     auto m_generic = mod.def_submodule("generic", "ttnn generic operation interface");
     generic::bind_generic_operation(m_generic);
+    generic::bind_freeze_program_hashes(m_generic);
 
     auto m_rand = mod.def_submodule("rand", "ttnn rand operation");
     rand::bind_rand_operation(m_rand);

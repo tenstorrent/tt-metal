@@ -20,6 +20,9 @@ _DS41 = {
     "h_bf16": False,
     "down_fp32": True,
     "math_fidelity": 0,  # LoFi (EXPERTS_PRECISION glm)
+    # the FlatRoutedExpert's layout: a flat_layouts preset name or a dict of FlatLayoutOptions fields. LEGACY (the plan
+    # before the DRISC-only / even-split defaults) for the calls made before settings.EXPERTS_LAYOUT=marko (2026-10-27)
+    "layout": "LEGACY",
 }
 
 CASES = [
@@ -56,8 +59,11 @@ CASES = [
         # F179 stable sig (extra_key, an id()-derived program-cache key, left out; DS41-110). Same call as the
         # pre-F179 sigs 284a4a9ead / 31755c8401, which differ only in extra_key, and as 3fc158f72b before the rebase
         # onto llk_helper_library 6b80daf43e3, whose l1_args list the same cores in another order.
-        "sig": "2aefb66a5a",
+        # EXPERTS_LAYOUT=marko (2026-10-27): the same call on the op's default layout plus the model's rows_hint
+        # (round(chunk 2048 x top 6 / 96 experts)) and one x helper; was sig 2aefb66a5a on LEGACY.
+        "sig": "c6e50c3022",
         "op": "flat_routed_expert_with_program",
+        "layout": {"rows_hint": 128, "x_helpers": 1},
         "I": 2304,
         "epc": 24,
         "E": 96,
@@ -77,8 +83,11 @@ CASES = [
         # tiles, down weights [6912, 256] per bank shard), no zero padding to a 256-column down block.
         **_DS41,
         "id": "deepseek_v41_flash_d_p-2x2-shared-expert-s1024-i1152-bfp8-lofi",
-        "sig": "a274529a9f",
+        # EXPERTS_LAYOUT=marko (2026-10-27): the same call on the op's default layout plus rows_hint = the chip's 1024
+        # rows and one x helper (no reader down weights on that plan); was sig a274529a9f on LEGACY.
+        "sig": "e2065c8d71",
         "op": "flat_routed_expert",
+        "layout": {"rows_hint": 1024, "x_helpers": 1},
         "I": 1152,
         "epc": 1,
         "n_global": 1,
@@ -89,5 +98,35 @@ CASES = [
         "y_bf16": True,
         "seed": 2,
         "noise": {"inputs": ["bf16"], "out": "bf16"},
+    },
+    {
+        # deepseek_v41_flash_d_p MOE_IMPL=block (tt/moe_block_adapter.py, Marko's MoE block; MOE_HEAD / MOE_TAIL fused,
+        # EXPERTS_LAYOUT marko): the block's token exchange (models/demos/moe_block TokenExchange ->
+        # tt_k3_token_split_moe.py routed_only) calls the op with its own fused weighted combine (sparse_combine_rf,
+        # fp32 sums, each term snapped to 2^-19, accumulators planned from the experts' free cells) over the 2x2's
+        # 96 experts, 24 a chip in row-major chip order (block ids), capacity 2048 rows an expert, y rows bf16 in L1,
+        # no math_fidelity argument (LoFi). Built as the block builds it: TokenExchange on a FlatRoutedExpert with the
+        # block's ids; the routing gather, planner and dispatch are the exchange's ops path (the fused head does the
+        # same three in its own program; the experts' call is the same). Per chip 512 own tokens, x ~ 0.3 N(0, 1) bf16,
+        # top 6 distinct random experts a token, weights U(0.5, 1.5) normalised to sum 1.5 (route_scale), bf16, as
+        # the joint routing rows; expert weights random, exact bfloat4_b values (check_exact).
+        **_DS41,
+        "id": "deepseek_v41_flash_d_p-2x2-block-exchange-s512-e96-top6-i2304-bfp4-lofi",
+        "sig": "03f82eaff0",
+        "op": "flat_routed_expert_with_program",
+        "via": "moe_block_exchange",
+        "layout": {"rows_hint": 128, "x_helpers": 1},
+        "I": 2304,
+        "E": 96,
+        "K": 6,
+        "chunk": 2048,
+        "links": 2,
+        "route_scale": 1.5,
+        "combine_snap": 2.0**-19,
+        "wdtype": "bf4",
+        "w_std": 0.02,
+        "x_std": 0.3,
+        "seed": 3,
+        "noise": {"inputs": ["bf16", "bf16"], "out": "bf16"},
     },
 ]

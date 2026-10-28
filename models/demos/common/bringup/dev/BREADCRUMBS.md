@@ -2160,7 +2160,51 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   only.
 - Selftests: test_fork_cases.py (the suite's waivers and totals; the skills name the rule).
 
-## F200: a runner test waits for its engine build instead of failing into an agent (DeepSeek-V4.1 galaxy_8x4, 2026-10-27)
+## F200: the clean wall is timed once the walls settle, not only once the program cache is warm (owner, 2026-10-27)
+- Symptom: DeepSeek-V4.1 2x2 MoE-block A/B: F196 called every run warm after 1 warm-up run (no new program), but the
+  host walls kept falling 10-25% over the next 5-6 runs (flat 142 -> 118 ms, the median 138.0 came mostly from the
+  falling part), and one configuration measured 102.2 / 120.0 / 125.2 ms in three processes.
+- testing/profile.py warm_up: after the cache is warm, it keeps running until the last WALL_SETTLE_WINDOW (5) walls
+  are within WALL_SETTLE_PCT (5%) of their median, at most WALL_MAX_SETTLE (30) runs; not settled is flagged
+  (chunk_wall_settled 0, "F200 NOT SETTLED"), not refused. Also records chunk_wall_cache_warm_runs and
+  chunk_wall_loadavg (other host load skews a wall).
+- Left: the spread between processes (the same setup 102 vs 120 ms) is not a warm-up effect; compare walls only from
+  back-to-back alternating runs (A, B, A, B) until that is understood.
+- Selftests: test_warm_wall.py (the flat path's real walls settle at run 12; never-settling walls are flagged; the
+  window rule).
+
+## F201: the generic program runners' calls are recorded and tested, by program, never by address (owner, 2026-10-27)
+- Symptom: DeepSeek-V4.1 O.1 under MOE_IMPL=block passed with 0 uncovered calls while Marko's fused MoE head and the
+  exchange's sparse dispatch ran through ttnn.bringup.prepare_program / run_prepared: plain nanobind functions, not
+  ttnn operations, so fork_capture never saw them (and their program argument printed as an object address).
+- testing/fork_capture.py: patch() also wraps ttnn.bringup.prepare_program / run_prepared (PROGRAM_RUNNERS). The
+  program is recorded as program_summary(desc): per (mesh range, program) its kernels (a file's path, or the inline
+  source's hash with integer literals >= 2^16 masked as addresses), defines and compile-time args (masked the same way),
+  core ranges, config, how many cores take runtime args (never their values), CBs (size, cores, formats, buffer-backed)
+  and semaphores; `digest` names it. run_prepared carries the summary of the descriptor it was prepared from. Shapes
+  and dtypes of the io tensors as for any call.
+- testing/fork_cases.py: op_to_fork also maps a fork's plain `mod.def` functions; a case may cover several captured
+  calls (`sigs`, e.g. one program's prepare_program and run_prepared).
+- core/gate.py outputs_in: every `fork_calls_<name>.json` an optests gate names is a gate output (deleted before the
+  gate, committed by it), not only fork_calls_scaled.json (DS41's O.1 now also records MOE_IMPL=block).
+- prepared_program/tests: one case per distinct program; the program built as the model builds it, run by the plain
+  generic_op and prepared with the call site's moved tensors at other addresses (bit-identical), and the determinism check.
+- Selftests: test_fork_capture_programs.py (the same program at two addresses -> one summary and one signature; another
+  define -> another program; masking keeps shapes).
+
+## F202: a mesh a test opens itself carries every device param (DeepSeek-V4.1 galaxy_8x4 K.1 decode hang, 2026-10-27)
+Problem: the K.1 runner smoke's stand-in decode opens a fresh mesh by hand (test_runner_smoke.open_mesh: set_fabric_config
++ open_mesh_device) and dropped the spec's fabric_router_config (hooks.device_params: 10880 B payload for the weighted
+combine's 10272 B packets). Every combine packet exceeded the router default 4352 B: the first MoE call hung (2/2 on
+b06u08, every run here), while the runner (sets the payload itself) and the fixture-based tests passed. Hours went into
+a "flat_routed_expert decode hang" that was a test's mesh setup. xing40's copy of the test had the same latent bug.
+Fix: testing/harness.open_mesh(spec) / close_mesh: every device_params entry applied as the repo fixture applies it
+(conftest set_fabric: STRICT_INIT, tensix extension off, router config passed; the rest to open_mesh_device). Both
+smoke tests use it. Selftest test_open_mesh.py: the helper's calls, and a lint that refuses ttnn.set_fabric_config /
+ttnn.open_mesh_device in any models/demos/*/tests/bringup file. The fork side (combine_rf) now refuses a payload too
+small for its packets at build time, so this can never be a silent hang again.
+
+## F203: a runner test waits for its engine build instead of failing into an agent (DeepSeek-V4.1 galaxy_8x4, 2026-10-27; F200 on the galaxy branch before the merge)
 - Seen: the owner turned on serving.require_engine for the 8x4 full run while tt-d-gen was still being built (dgen-build
   in parallel); K.1's gate would have failed on the missing build and started an agent attempt that cannot succeed.
 - orchestrator.engine_missing: a task whose gate names a test file that tt-d-gen's engine drives (it names dgen_engine
@@ -2184,7 +2228,7 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   waited for its first chunk. Selftest test_the_engine_attaches_to_the_runners_completion_ring. Other models' plans
   (xing40 serve/server.py, contract test) still name the old channel: fix at their next run.
 
-## F201: a hang's triage and Inspector dump survive the next run and every framework kill (DeepSeek-V4.1 galaxy_8x4, 2026-10-27)
+## F204: a hang's triage and Inspector dump survive the next run and every framework kill (DeepSeek-V4.1 galaxy_8x4, 2026-10-27; F201 on the galaxy branch before the merge)
 Problem: the K.1 runner-smoke decode hang lost its evidence twice in a row: run 2's generated/tt-triage was wiped by
 run 3, and run 3's was cut off by a kill while tt-triage was still writing. Both dirs (generated/tt-triage, rewritten by
 the next hang; generated/inspector, rewritten by every mesh open) live at fixed repo paths; the gate kept only
@@ -2196,15 +2240,3 @@ of this user runs, before every framework kill: overseer abort, an agent's timeo
 Selftest test_hangdump.py (a three-unit gate whose middle unit hangs and whose next unit rewrites inspector; abort
 waits before it kills). Overseer side (skill): never kill a device run by hand while tt-triage runs; diagnostic runs
 outside a gate go through a serialized wrapper that copies the same dirs before the next run (diag/run.sh on the node).
-
-## F202: a mesh a test opens itself carries every device param (DeepSeek-V4.1 galaxy_8x4 K.1 decode hang, 2026-10-27)
-Problem: the K.1 runner smoke's stand-in decode opens a fresh mesh by hand (test_runner_smoke.open_mesh: set_fabric_config
-+ open_mesh_device) and dropped the spec's fabric_router_config (hooks.device_params: 10880 B payload for the weighted
-combine's 10272 B packets). Every combine packet exceeded the router default 4352 B: the first MoE call hung (2/2 on
-b06u08, every run here), while the runner (sets the payload itself) and the fixture-based tests passed. Hours went into
-a "flat_routed_expert decode hang" that was a test's mesh setup. xing40's copy of the test had the same latent bug.
-Fix: testing/harness.open_mesh(spec) / close_mesh: every device_params entry applied as the repo fixture applies it
-(conftest set_fabric: STRICT_INIT, tensix extension off, router config passed; the rest to open_mesh_device). Both
-smoke tests use it. Selftest test_open_mesh.py: the helper's calls, and a lint that refuses ttnn.set_fabric_config /
-ttnn.open_mesh_device in any models/demos/*/tests/bringup file. The fork side (combine_rf) now refuses a payload too
-small for its packets at build time, so this can never be a silent hang again.

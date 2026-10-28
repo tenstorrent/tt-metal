@@ -85,7 +85,7 @@ def _setting(spec, key: str):
 
 
 def server_repo(spec=None) -> Path:
-    """F200: $USER / ~ expanded as the spec's own paths are (core/spec._expand): the template's default names $USER."""
+    """F203: $USER / ~ expanded as the spec's own paths are (core/spec._expand): the template's default names $USER."""
     from models.demos.common.bringup.core.spec import _expand
 
     r = os.environ.get("BRINGUP_SERVER_REPO") or _setting(spec, "serving.server_repo")
@@ -93,7 +93,7 @@ def server_repo(spec=None) -> Path:
 
 
 def ack_shm_name(service_id: str) -> str:
-    """F200: the layer-completion ring tt-d-gen's prefill pipeline attaches to (its ack_shm_name): the runner's own name
+    """F203: the layer-completion ring tt-d-gen's prefill pipeline attaches to (its ack_shm_name): the runner's own name
     (layer_completion_ring_reader.scheduler_shm_name). Before upstream's layer-completion interface it was the counter
     channel /tt_prefill_layer_acks_<id>; a plan naming that left the engine waiting for a ring nobody publishes."""
     from models.demos.common.prefill.runners.layer_completion_ring_reader import scheduler_shm_name

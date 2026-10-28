@@ -79,6 +79,7 @@ def _prep(mesh, S, arena, acc_dtype):
         axis=0,
         out_dtype=ttnn.bfloat16,
         acc_dtype=acc_dtype,
+        local_keep=2,  # (as deepseek_v41's tt/weighted_combine.py calls it)
     )
 
 

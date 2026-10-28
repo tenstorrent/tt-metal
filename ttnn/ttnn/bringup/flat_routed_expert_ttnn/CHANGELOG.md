@@ -1,6 +1,6 @@
 # flat_routed_expert_ttnn (ttnn.bringup.flat_routed_expert, ttnn.bringup.flat_routed_expert_plan)
 
-- Current source: `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/flat_routed_expert` on `mstaletovic/galaxy-unified-k3-v41-combine` @ `f080c8df021` (imported 2026-10-17 in 9003c0fd2ca for deepseek_v41_flash_d_p P.3), synced to `e4d239c6d81` in dc556fa6726 (with combine_rf); was `mstaletovic/mimo-v2-dp` @ `b45a923d73c` (below).
+- Current source: this same folder, `ttnn/ttnn/bringup/flat_routed_expert_ttnn`, on Marko Staletovic's `mstaletovic/combine-lean-sender-llk` @ `856d97d5864` (he develops the op here, same namespace and CMake target; synced 2026-10-27, below). Earlier syncs: `mstaletovic/galaxy-unified-k3-v41-combine` @ `f080c8df021` (imported 2026-10-17 in 9003c0fd2ca for deepseek_v41_flash_d_p P.3) and `e4d239c6d81` (dc556fa6726, with combine_rf); `mstaletovic/mimo-v2-dp` @ `b45a923d73c` (below). (Until 2026-10-27 this line named `ttnn/cpp/.../deepseek_prefill/flat_routed_expert`, which does not exist on his branches.)
 - Source: `ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/flat_routed_expert` on `mstaletovic/mimo-v2-dp` @ `b45a923d73c`. New op: it exists on that branch only, not in ttnn/cpp on this tree (no source op to keep in sync,
   no upstream tests to carry: `tests/source.yaml` is empty).
 - Python: `ttnn.bringup.*` (was `ttnn.experimental.*` on the source branch)
@@ -342,6 +342,90 @@ shapes, mesh, row-major y).
   32 err metrics bit-identical to before.
 - Files: device/kernels/se_yrm.hpp (applied by hand: our copy uses noc_index where Marko's has ynoc)
 
+### Sync with Marko @ 856d97d5864 (2026-10-27)
+- What: a three-way merge of this folder, base `e4d239c6d81` (the last sync point, an ancestor of his branch), ours
+  `bab52a1a844`, theirs `origin/mstaletovic/combine-lean-sender-llk` @ `856d97d5864` (87 commits on the folder, 42
+  not worklog-only). Per file `git merge-file`; files only in his tree added; `flat_combine_overlap` stays deleted
+  (owner, 2026-10-27, although his tree keeps and ports it).
+- Taken from Marko:
+  - The typed layout options: `FlatLayoutOptions` (`device/flat_routed_expert_options.{hpp,cpp}`, in the plan key and
+    every program hash) and `flat_layouts.py` (presets `LEGACY`, `DRISC_ONLY`, `GLM_FLASH`, `GLM_FLASH_AG`,
+    `k3_gu64()`; `flat_layout`, `layout_from_env` for test harnesses). The layout `MIMO_FL_*` variables are no longer
+    read by the op; perf / debug probes are read in one place (`FlatProbes`). `layout=` on `flat_routed_expert`,
+    `flat_routed_expert_with_program`, `flat_routed_expert_plan` and `FlatRoutedExpert`; `FlatRoutedExpert.replanned(m)`.
+  - New defaults (`FlatLayoutOptions{}`; `layout=None`): DRISC-only gate/up readers (no Tensix fallback; plans that
+    cannot use DRISC, e.g. 2 / 3 subgrids, TT_FATAL), DRISC inside `_with_program`, even splits (gate/up on <= 64
+    cores, down on <= 32, no reader down columns). Preset `LEGACY` = the plan before these (dual / hybrid DRISC, no
+    DRISC inside `_with_program`, first-fitting split, reader tails). Not a pure revert: what `LEGACY` leaves unset
+    applies under every layout where the plan allows it: x delivery (`x_path` -1: unicast snakes; `x_once` -1: x
+    read from DRAM once), two K blocks per gate/up handshake (`gu_kgroup` -1 = 2, bit-exact by his tests), the
+    "most sub-blocks first" expert order (also in `se_dyn_from_counts`), the DRISC slot placement by hops.
+  - `output=` (a caller's y), `single_subgrid`, `rows_hint`; `_with_program(y_l1=)`, `x_ready`; the plan dict's
+    `static_l1_bytes`, `even_split`, `role_offsets`, `role_bytes`, `y_writers`.
+  - The se_yrm trailer fix `9fef7b00dd1` (stage the combine trailers, fence, then let the NoC read them; ~1 in 10 GLM
+    prefills hung on stale trailer words), on the L1 hand-off DeepSeek-V4.1's weighted combine uses.
+  - Kernels: `se5_xfwd.cpp` (new), `se13_xhelp`, `se_drisc_go`, `se_drisc_gu` (off-by-default "lean" sender probe),
+    `se_drisc_post`, `se_glu_faces`, `se11_xrd` / `se11_xmc`, the review fixes (relay chain credit wait, one-snake
+    join guard, FW_SLOTS range); the off-by-default probes (DRISC x emulation, units in flight, x through the DRISC,
+    half-bytes x, weights after x, zones).
+  - Tests: `tests/unit/test_closeout_plans.py`, `tests/unit/test_closeout_flat.py` (his defaults, on device),
+    `tests/microbench/`; `test_flat_routed_expert_op.py` with `LEGACY`; `test_flat_bench.py` with `layout_from_env`.
+    Docs: the two worklogs, `TS_HANG_WORKLOG.md`, `closeout_models.py`.
+- Kept from ours: `weights_nk` / `hidden` / `check_exact` / `block_float_exact`, `_with_program(math_fidelity,
+  weights_nk)`, `down_fp32`, the x / h / y bf16 options, FIX.1 (narrow widths on one subgrid, se6 down K of any tile
+  count), FIX.2 (schedule leader by logical coordinate; `_layout` parity for a 12 x 10 grid; `flat_schedule_defines`
+  takes subgrid plans), the weight-cache key (FIX.4: `nk` added to the packing key as before, so a `LEGACY` plan
+  keeps its cache file names), the kernel include port (`api/debug/kernel_profiler.hpp`), the removal of
+  `flat_combine_overlap`, our tests and model cases.
+- Conflicts (40 hunks in 10 files) and their resolution:
+  - `flat_routed_expert.hpp` (2): his arguments first, ours appended: `flat_routed_expert(..., layout, output,
+    weights_nk, hidden)`, `_with_program(..., y_l1, layout, math_fidelity, weights_nk)`; his `flat_combine_overlap`
+    declaration dropped.
+  - `flat_routed_expert.cpp` (6): the same argument order; config `.layout` then `.weights_nk`; his
+    `flat_combine_overlap` body dropped; `_with_program`'s program key = his fields + `layout.key()`, then ours
+    (`math_fidelity`, `weights_nk`).
+  - `flat_routed_expert_nanobind.cpp` (3): his `layout` / `output` / `y_l1` bindings and docs plus ours; his
+    `flat_combine_overlap` binding dropped.
+  - `device/flat_routed_expert_plan.hpp` (3): his config fields (`y_l1`, `cmb_no_go`, `cmb_slot_order`, `layout`)
+    then `weights_nk`; the same order in `attribute_names` / `attribute_values`.
+  - `device/flat_routed_expert_plan.cpp` (4): `nsg = layout.single_subgrid ? 1 : <old rule>`, then FIX.1's
+    automatic one-subgrid fallback, its `std::getenv("MIMO_FL_GU_SPLIT" / "_GU_BF16")` ported to
+    `cstr(pr.gu_split)` / `cstr(pr.gu_bf16)`; the DRISC-pure choice and two probe reads (`FlatProbes`): his.
+  - `device/flat_routed_expert_program_factory.cpp` (5): MathFidelity spelling and the x multicast / snake args
+    (`xswap` gone) and the x-forwarder kernel: his; the writers' report order: ours (`if (cfg.cmb_rt)` -> slot order;
+    `flat_with_program` always sets `cmb_slot_order`, `SE_CMB_STEPS` belonged to the removed overlap); one duplicated
+    `add_rt` of the gate/up readers removed (both sides had moved it).
+  - `flat_expert.py` (7): `FlatRoutedExpert(..., layout=None, weights_nk=False, check_exact=False)` and
+    `__call__(..., output=None, hidden=0)`; the cache key = his `_weight_packing(lay, nk=weights_nk)` (an `nk`
+    argument added to it: the same key our inline code built).
+  - `device/flat_drisc.cpp` (2), `device/kernels/se_drisc.hpp` (1), `device/kernels/se_drisc_gu.cpp` (2): our side
+    was only the repo formatter's reflow: his file taken whole, then clang-format.
+- Merge fix (no textual conflict): his new K-group loop in `se3_compute.cpp` (`SE_GU_KG > 1`, on by default in every
+  layout) called `matmul_block(..., false, ...)`; now `SE_WT`, as every other weight matmul (without it a
+  `weights_nk` plan with gate/up row passes multiplies untransposed [N, K] tiles).
+- After the merge: clang-format (repo style file) on every changed C++ file, black 23.10.1 on the Python files. No
+  `tools/profiler/kernel_profiler.hpp`, `fabric/fabric_edm_packet_header.hpp` or `<tt-metalium/...>` include left in
+  the kernels; every compute init the kernels call exists on this base. No `SE_DYN_LPX`, `routing_weights`,
+  `fp8_act_quant`, `AddrSrc::RoutingWeights` or `flat_combine_overlap` code left.
+- Who keeps the old plan (`layout=LEGACY`): deepseek_v41_flash_d_p `tt/experts.py`, `tt/shared_expert.py`,
+  `tt/perf_experts.py`; `tt/weighted_combine.py` passes `layout=fe.layout` to `flat_routed_expert_with_program` (the
+  op re-plans per call: the plan the weights were laid out with). glm53_flash_d_p `tt/experts_ag.py` and the
+  glm53_flash_d_p_lb flat tests (`test_flat_{scale_probe,stress,stage_probe,balanced_sweep,vs_unified_accuracy,
+  xpath_probe,plan}.py`): no record says GLM-5.3 follows the new defaults. In this folder: the model cases
+  (`tests/cases.py` `"layout": "LEGACY"`, `test_flat_routed_expert_ttnn.py`, `weighted_case.py`) and the unit tests
+  with recorded baselines (`test_flat_expert_indexed_shapes` / `_yrm` / `_mesh`, `test_flat_uneven_split`,
+  `test_flat_widths`, `test_weights_nk`). `test_flat_bench.py`: `FLAT_BENCH_LAYOUT=LEGACY` for the recorded GLM-5.3
+  numbers (default: his defaults). His closeout tests run his defaults.
+- Option-off behaviour: `layout` defaults to his new defaults (`FlatLayoutOptions{}`), so a caller that passes no
+  layout changes plan; every caller in the repo passes one (above). The program-cache keys change (new fields), so
+  every program recompiles once. The model cases' captured sigs gain `layout`: re-capture at the next O.1.
+- Not done here (no build, no device): the build; the plan identity check (`flat_routed_expert_plan` with `LEGACY` vs
+  the previous build's plan dict and `_weight_packing` for each DeepSeek-V4.1 call); every test.
+- Needed by: deepseek_v41_flash_d_p (the se_yrm fix; keep the fork on the source), owner 2026-10-27
+- Files: the whole folder; `../../../models/demos/deepseek_v41_flash_d_p/tt/{experts,shared_expert,weighted_combine,
+  perf_experts}.py`, `../../../models/demos/glm53_flash_d_p/tt/experts_ag.py`,
+  `../../../models/demos/glm53_flash_d_p_lb/tests/test_flat_*.py`
+
 ### flat_routed_expert_with_program: patch_addresses (address-free program-cache key), 2026-10-27
 - What: new options `patch_addresses=False` / `extra_addrs=[]`. With patch_addresses the program hash holds no buffer
   address (plan key, extra_key, writers, collector, l1_args sizes, every tensor's spec, the optional tensors'
@@ -410,3 +494,28 @@ shapes, mesh, row-major y).
   case; with the mesh at the router default payload the captured replay hangs with the model's triage signature.
 - Needed by: deepseek_v41_flash_d_p K.1
 - Files: tests/unit/test_hot_experts.py, README.md
+
+### Merge: patch_addresses (FIX.5), max_y_writers and the hot-expert tests on the Marko sync (2026-10-28, deepseek_v41_flash_d_p galaxy_8x4-full)
+- What: the galaxy branch's three entries above, ported onto the 856d97d5864 sync (typed layout, y_l1, DRISC):
+  patch_addresses / extra_addrs and max_y_writers after `layout` in flat_routed_expert_with_program (C++, nanobind;
+  `y_l1` and `layout.key()` stay in flat_key, max_y_writers appended); max_y_writers after `layout` in the plan config,
+  its attributes and the plan cache key; `FlatRoutedExpert.replanned` passes `max_y_writers` too. The sync's
+  setenv-free y_l1 replaces the old `MIMO_FL_Y_L1` setenv; patch mode still keeps every address out of the key (the
+  synced factory's DRISC job args go through AddrSrc as before). The non-owning `extra` view (FIX.5) replaces the
+  sync's copy. tests: test_with_program_patch.py and test_hot_experts.py run at `LEGACY` and at the model's marko
+  layout; test_max_y_writers.py pins `LEGACY` for the 40-core case and adds test_plan_cap_marko.
+- Why: keep both sides' features (owner, 2026-10-28).
+- Found: under the marko layout (even split, one subgrid) the down cores are at most 32 and the reader tails off, so the
+  y-writer cap of 32 is a no-op (plan bit-identical, test_plan_cap_marko); on this east-column-7 Galaxy chip the
+  marko plan packs the weights exactly as the capped LEGACY plan (weight key lay9c3da689dd35): no new weight cache.
+- Results (Galaxy 8x4, east column 7): test_max_y_writers 4 / 4, test_with_program_patch legacy + marko (bit-identical,
+  +0 program-cache entries on a moved x / arena), test_hot_experts 6 / 6 + the captured K.1 routing (min PCC 0.99989
+  on 32 chips), test_flat_widths 6 / 6, test_closeout_flat / plans 10 / 10. Not from the merge (the merged plain op is
+  origin's plus max_y_writers off): test_flat_routed_expert_op[mimo] (arena_tiles C++ 604 vs the Python builder 570)
+  and [tp4] ((16, 1, 6, 2), before the merge too); test_flat_expert_indexed_perf k2 / tp4 "flat" +21.7% / +8.2% at
+  LEGACY (the pre-merge run on this node: k2 indexed_rm +4.7% only).
+- Needed by: deepseek_v41_flash_d_p (flat and MOE_IMPL=block)
+- Files: device/flat_routed_expert_plan.{hpp,cpp}, device/flat_with_program_device_operation.cpp,
+  device/flat_routed_expert_program_factory.cpp, flat_routed_expert.cpp, flat_routed_expert_nanobind.cpp,
+  flat_expert.py, tests/test_flat_routed_expert_ttnn.py, tests/weighted_case.py, tests/unit/test_with_program_patch.py,
+  tests/unit/test_hot_experts.py, tests/unit/test_max_y_writers.py, README.md

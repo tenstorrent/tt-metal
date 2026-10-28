@@ -434,6 +434,15 @@ void kernel_main() {
 
     uint32_t ends = 0;
     bool done = false;
+#ifdef SA_ZGATE_CTR
+    // (the zero gate: the call's scratch zeroing (other kernels of this program) counts in here, SA_ZGATE_N a call -
+    // the counter only grows, my call count after it; no END leaves before it: a chip that has not zeroed holds every
+    // other chip's dispatch from completing, so no combine writes into its L1 before)
+    volatile tt_l1_ptr uint32_t* zep = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SA_ZGATE_EP);
+    const uint32_t zneed = (*zep + 1) * SA_ZGATE_N;
+    *zep = *zep + 1;
+    bool zok = false;
+#endif
     while (!done) {
         if (!cb_pages_available_at_front(cb_meta, group)) {
             for (uint32_t s = 0; s < 3; ++s) send_manifest(s);  // about to wait: nothing may sit staged
@@ -446,6 +455,15 @@ void kernel_main() {
         for (uint32_t i = 0; i < group; ++i) {
             const uint32_t w0 = meta[i * META_WORDS], m = meta[i * META_WORDS + 1];
             if (w0 & END) {
+#ifdef SA_ZGATE_CTR
+                if (!zok) {
+                    volatile tt_l1_ptr uint32_t* zc = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(SA_ZGATE_CTR);
+                    do {
+                        invalidate_l1_cache();
+                    } while (*zc < zneed);
+                    zok = true;
+                }
+#endif
                 for (uint32_t s = 0; s < 3; ++s) {
                     if (s_on[s]) stage(s, w0, 0);
                 }
@@ -493,8 +511,22 @@ def route_words(N):
     return 1 if N <= 16 else 2
 
 
+_PLAN_CACHE = {}  # mesh_plan / manifest_spec by (mesh, its shape, options); the mesh kept alive so its id stays its own
+
+
 def mesh_plan(mesh_device, num_links, torus=(False, False)):
-    """Ports of every chip: {coord: {dir: dict(peer, links)}}; torus = (wrap X, wrap Y) where cabled."""
+    """Ports of every chip: {coord: {dir: dict(peer, links)}}; torus = (wrap X, wrap Y) where cabled. Memoized per mesh
+    and options (the fabric's links do not change; ~120 us of host a call otherwise)."""
+    key = ("plan", id(mesh_device), tuple(mesh_device.shape), num_links, tuple(torus))
+    hit = _PLAN_CACHE.get(key)
+    if hit is not None and hit[0] is mesh_device:
+        return hit[1]
+    out = _mesh_plan(mesh_device, num_links, torus)
+    _PLAN_CACHE[key] = (mesh_device, out)
+    return out
+
+
+def _mesh_plan(mesh_device, num_links, torus):
     R, C = tuple(mesh_device.shape)
     node = lambda coord: mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coord))
     wrap_x = torus[0] and C > 2
@@ -568,6 +600,9 @@ def _place_ports(mesh_device, chips, allowed=None):
             for li, l in enumerate(p["links"]):
                 exy = eth_noc_coord(mesh_device, coord, eth[(coord, p["peer"], l)])
                 core = _worker_nearest_noc1(mesh_device, coord, exy, taken, allowed)
+                if core is None:  # (no Ethernet core reported - the mock cluster runs no probe: the first free core)
+                    x, y = min((xy for xy in allowed if xy not in taken), key=lambda xy: (xy[1], xy[0]))
+                    core = ttnn.CoreCoord(x, y)
                 taken.add((core.x, core.y))
                 port_core[(coord, d, li)] = core
     return port_core
@@ -649,7 +684,11 @@ def manifest_spec(mesh_device, S, *, num_links=2, torus=(False, False)):
     """(shape, dtype, layout, device, memory config) of the port cores' manifest rings for S own rows per chip:
     allocate it per call (ttnn.allocate_tensor_on_device) and pass it as ``manifest`` (its contents need no zeroing:
     the rings are consumed by count, and the counters are global semaphores the reader resets), instead of the
-    persistent one (~123 KB of every core's L1 at K3's 2560 rows)."""
+    persistent one (~123 KB of every core's L1 at K3's 2560 rows). Memoized per mesh, S and options."""
+    key = ("manifest", id(mesh_device), tuple(mesh_device.shape), S, num_links, tuple(torus))
+    hit = _PLAN_CACHE.get(key)
+    if hit is not None and hit[0] is mesh_device:
+        return hit[1]
     R, C = tuple(mesh_device.shape)
     chips, _, (wrap_x, wrap_y) = mesh_plan(mesh_device, num_links, torus)
     cores = sorted({(c.x, c.y) for c in place_ports(mesh_device, chips).values()})
@@ -660,7 +699,20 @@ def manifest_spec(mesh_device, S, *, num_links=2, torus=(False, False)):
         ttnn.BufferType.L1,
         ttnn.ShardSpec(crs, [1, man_words], ttnn.ShardOrientation.ROW_MAJOR),
     )
-    return ttnn.Shape([1, 1, len(cores), man_words]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_device, mc
+    out = (ttnn.Shape([1, 1, len(cores), man_words]), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT, mesh_device, mc)
+    _PLAN_CACHE[key] = (mesh_device, out)
+    return out
+
+
+def static_cb_bytes(N, S, row_width, *, group=8, manifest_batch=16, dtype_bytes=2):
+    """L1 the port cores' circular buffers take (sparse_all_gather_2d's descriptor, no extra op): N chips, S own rows,
+    rows row_width wide. Each CB rounded to 64 B; for sizing the L1 below a buffer that stays allocated over the call.
+    """
+    al = lambda v: (v + 63) // 64 * 64  # noqa: E731
+    row_bytes = al(row_width * dtype_bytes)
+    plan_bytes = al(S * route_words(N) * 4)
+    cbs = (2 * group * row_bytes, 2 * group * META_PAGE, plan_bytes, 3 * 2 * manifest_batch * 16, 64)
+    return sum(al(v) for v in cbs)
 
 
 def sparse_all_gather_2d(
@@ -676,6 +728,7 @@ def sparse_all_gather_2d(
     debug=None,
     spin_limit=0,
     extra=None,
+    zero=None,
 ):
     """output: [1, 1, N * S, W] ROW_MAJOR, DRAM interleaved, replicated layout per chip (each chip's own rows already at
     slots idx * S + t, idx = r * C + c); plan_tensor: [1, 1, 1, S] uint32 per chip, the route words of its own rows.
@@ -699,10 +752,18 @@ def sparse_all_gather_2d(
             pack,
             spin_limit,
             ttnn.get_tt_fabric_max_payload_size_bytes(),
+            None if zero is None else zero["key"],
         )
         hit = _DESC_CACHE.get(dkey)
         if hit is not None and hit[0] is output.device():
-            return ttnn.generic_op([plan_tensor, output], hit[1])
+            # (prepared dispatch: only the io tensors' address slots patched per call, not every runtime arg; the
+            # prepared_program fork is not on this tree: the plain generic_op on the same cached descriptor)
+            try:
+                from ttnn.bringup.prepared_program import generic_op as prepared_generic_op
+            except ImportError:
+                prepared_generic_op = ttnn.generic_op
+
+            return prepared_generic_op([plan_tensor, output], hit[1])
     mesh_device = output.device()
     R, C = tuple(mesh_device.shape)
     N = R * C
@@ -772,6 +833,11 @@ def sparse_all_gather_2d(
     for k, v in common.items():
         reader_src = reader_src.replace(k, v)
         sender_src = sender_src.replace(k, v)
+    if zero is not None:  # (the zero gate's counter / call-count words: persistent, on every port core)
+        sender_src = (
+            f"#define SA_ZGATE_CTR {zero['ctr']}u\n#define SA_ZGATE_EP {zero['ep']}u\n#define SA_ZGATE_N {zero['n']}u\n"
+            + sender_src
+        )
     src = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
 
     def axis_dirs(d):
@@ -870,10 +936,13 @@ def sparse_all_gather_2d(
             cbs_x, kernels_x = extra[1](coord)
             program.cbs = list(program.cbs) + list(cbs_x)
             program.kernels = list(program.kernels) + list(kernels_x)
+        if zero is not None:
+            program.kernels = list(program.kernels) + list(zero["kernels"](coord))
         mesh_desc[ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(*coord), ttnn.MeshCoordinate(*coord))] = program
     if dkey is not None:
         if len(_DESC_CACHE) >= 256:  # (bounded: callers with per-call buffers at ever new addresses)
             _DESC_CACHE.pop(next(iter(_DESC_CACHE)))
+        ttnn.freeze_program_hashes(mesh_desc)  # (hash stored once: not re-hashed per call)
         _DESC_CACHE[dkey] = (mesh_device, mesh_desc)
     return ttnn.generic_op(([] if extra is None else list(extra[0])) + [plan_tensor, output], mesh_desc)
 
@@ -882,3 +951,182 @@ def port_cores_all(mesh_device, *, num_links=2, torus=(False, False)):
     """Every chip's port cores (logical CoreCoords, the union): the cores an extra op must stay off."""
     chips, _, _ = mesh_plan(mesh_device, num_links, torus)
     return sorted({(c.x, c.y) for c in place_ports(mesh_device, chips).values()})
+
+
+# ---- the dispatch as a phase of another op's port kernels (the MoE exchange: the combine's ports) ----
+# The reader's and the sender's bodies become functions in namespace sa (sa::read_phase(a0), sa::send_phase(a0, conn))
+# that the host kernel calls first: their runtime args at [a0, a0 + n), their compile-time args from ct0, their CBs at
+# the given indices; the sender phase sends on the host kernel's open fabric connection (one sender a link). After the
+# reader phase every row sent to this chip has landed (each incoming link delivers END(GMAX) to one of its ports after
+# its rows): the reader then counts in on each x relay's ready word (+1, the first port also the pad to XREADY_N).
+XREADY_N = 8  # (ports a chip at most: 4 directions x 2 links - each chip's count is padded to it)
+
+
+def _phase_src(src, name, ct0, cbs, fabric):
+    """A kernel source as a phase function in namespace sa (see above)."""
+    import re
+
+    head, body = src.split("void kernel_main() {", 1)
+    inc = "\n".join(l for l in head.splitlines() if l.startswith("#include")) + "\n"
+    rest = "\n".join(l for l in head.splitlines() if not l.startswith("#include"))
+    rest = re.sub(
+        r"get_compile_time_arg_val\((\d+)\)", lambda m: f"get_compile_time_arg_val({int(m.group(1)) + ct0})", rest
+    )
+    rest = re.sub(r"TensorAccessorArgs<(\d+)>", lambda m: f"TensorAccessorArgs<{int(m.group(1)) + ct0}>", rest)
+    rest = rest.replace("using namespace tt::tt_fabric;", "")
+    if fabric:
+        body = body.replace(
+            "    auto conn = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(a);\n", ""
+        )
+        body = body.replace("    conn.open();\n", "").replace("    conn.close();\n", "")
+        sig = f"template <typename CONN>\nvoid {name}(size_t a, CONN& conn) {{"
+    else:
+        sig = f"void {name}(size_t a) {{"
+    body = body.replace("    size_t a = 0;\n", "", 1)
+    body = body.replace("cb_reserve_back(4, 1)", f"cb_reserve_back({cbs['dbg']}, 1)").replace(
+        "get_write_ptr(4)", f"get_write_ptr({cbs['dbg']})"
+    )
+    pre = "using namespace tt::tt_fabric;\n" if fabric else ""
+    return inc, pre + "namespace sa {\n" + rest + "\n" + sig + body + "\n}  // namespace sa\n"
+
+
+def dispatch_phase(
+    mesh_device,
+    output,
+    plan_tensor,
+    manifest,
+    port_core,
+    sems,
+    *,
+    rd_ct0,
+    sd_ct0,
+    cbs,
+    relays,
+    words_addr,
+    ready_off,
+    num_links=2,
+    torus=(False, False),
+    group=8,
+    manifest_batch=16,
+    pack=None,
+):
+    """The dispatch's pieces for the host op's port kernels (see above), its ports at port_core ({(coord, dir, link):
+    logical core}, as place_ports): per chip coord dict(cbs, rd={(x, y): args}, sd=...), and the sources:
+    (reader includes, reader phase, sender includes, sender phase, reader CT, sender CT). sems: the four global
+    semaphores on those cores (the rings' three counters, the fence's ready word); cbs: dict(rows, meta, plan, stage, dbg)
+    CB indices; relays: logical cores whose ready word (words_addr + ready_off) the readers count in on."""
+    R, C = tuple(mesh_device.shape)
+    N = R * C
+    RW = route_words(N)
+    S = int(plan_tensor.shape[-1]) // RW
+    assert int(output.shape[-2]) == N * S and N * S < (1 << 16) and N <= 32
+    row_bytes = int(output.buffer_aligned_page_size())
+    plan_bytes = int(plan_tensor.buffer_aligned_page_size())
+    if pack is None:
+        pack = 2 if 2 * row_bytes <= ttnn.get_tt_fabric_max_payload_size_bytes() else 1
+    chips, nb, (wrap_x, wrap_y) = mesh_plan(mesh_device, num_links, torus)
+    GMAX = (C - 1) + (R - 1) - 1
+    node = lambda coord: mesh_device.get_fabric_node_id(ttnn.MeshCoordinate(*coord))  # noqa: E731
+    off1, off2, man_entries = manifest_layout(R, C, wrap_x, wrap_y, S)
+    assert int(manifest.memory_config().shard_spec.shape[1]) >= man_entries * 4, "manifest: too small"
+    ring_offs = off1 | off2 << 16
+    cnt_addrs = [int(ttnn.get_global_semaphore_address(x)) for x in sems[:3]]
+    ready_addr = int(ttnn.get_global_semaphore_address(sems[3]))
+    man_addr, out_addr, plan_addr = (
+        int(manifest.buffer_address()),
+        int(output.buffer_address()),
+        int(plan_tensor.buffer_address()),
+    )
+    out_ct = list(ttnn.TensorAccessorArgs(output).get_compile_time_args())
+    plan_ct = list(ttnn.TensorAccessorArgs(plan_tensor).get_compile_time_args())
+    virt = lambda c: mesh_device.worker_core_from_logical_core(c)  # noqa: E731
+    subs = {"__R__": str(R), "__C__": str(C), "__S__": str(S), "__GMAX__": str(GMAX), "__RW__": str(RW),
+            **span_subs(R, C, wrap_x, wrap_y)}  # fmt: skip
+    rsrc, ssrc = _READER, _SENDER
+    for k, v in subs.items():
+        rsrc, ssrc = rsrc.replace(k, v), ssrc.replace(k, v)
+    # (the reader phase ends counting in on the relays: after its last ring was consumed and re-armed)
+    rsrc = rsrc.replace(
+        "    noc_async_atomic_barrier();\n}\n",
+        "    noc_async_atomic_barrier();\n"
+        "    {  // every row this port's inputs brought has landed: count in on each x relay's ready word\n"
+        "        const uint32_t nrel = get_arg_val<uint32_t>(a++), inc = get_arg_val<uint32_t>(a++);\n"
+        "        const uint32_t rw = get_arg_val<uint32_t>(a++);\n"
+        "        for (uint32_t i = 0; i < nrel; ++i, a += 2)\n"
+        "            noc_semaphore_inc(get_noc_addr(get_arg_val<uint32_t>(a), get_arg_val<uint32_t>(a + 1), rw), inc);\n"
+        "        noc_async_atomic_barrier();\n"
+        "    }\n}\n",
+    )
+    rinc, rph = _phase_src(rsrc, "read_phase", rd_ct0, cbs, False)
+    sinc, sph = _phase_src(ssrc, "send_phase", sd_ct0, cbs, True)
+    rd_ct = [cbs["rows"], cbs["meta"], cbs["plan"], row_bytes, group, plan_bytes] + out_ct + plan_ct + plan_ct
+    sd_ct = [cbs["rows"], cbs["meta"], cbs["stage"], row_bytes, group, manifest_batch, pack] + out_ct
+
+    def axis_dirs(d):
+        return ("Y+", "Y-") if d[0] == "X" else ("X+", "X-")
+
+    rel = [virt(c) for c in relays]
+    out = {}
+    for coord, ports in chips.items():
+        r, c = coord
+        my_ports = [(d, li, port_core[(coord, d, li)]) for d, p in ports.items() for li in range(len(p["links"]))]
+        assert len(my_ports) <= XREADY_N
+        port_set = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for _, _, core in my_ports])
+        mk = lambda i, size, dt, page: ttnn.CBDescriptor(  # noqa: E731
+            total_size=size, core_ranges=port_set, format_descriptors=[ttnn.CBFormatDescriptor(i, dt, page)]
+        )
+        pieces = dict(
+            cbs=[
+                mk(cbs["rows"], 2 * group * row_bytes, output.dtype, row_bytes),
+                mk(cbs["meta"], 2 * group * META_PAGE, ttnn.uint32, META_PAGE),
+                mk(cbs["plan"], plan_bytes, ttnn.uint32, plan_bytes),
+                mk(cbs["stage"], 3 * 2 * manifest_batch * 16, ttnn.uint32, 3 * 2 * manifest_batch * 16),
+                mk(cbs["dbg"], 64, ttnn.uint32, 64),
+            ],
+            rd={},
+            sd={},
+        )
+        for i, (d, li, core) in enumerate(my_ports):
+            behind = nb(coord, OPP[d])
+            pa, ma = axis_dirs(d)
+            ring_mask = 0
+            if behind is not None and d in chips[behind]:
+                ring_mask |= 1
+            src_plus = nb(coord, ma)
+            if src_plus is not None and pa in chips[src_plus]:
+                ring_mask |= 2
+            src_minus = nb(coord, pa)
+            if src_minus is not None and ma in chips[src_minus]:
+                ring_mask |= 4
+            port_idx = (r * C + c) * 8 + DIRS.index(d) * 2 + li
+            inc = 1 + (XREADY_N - len(my_ports) if i == 0 else 0)
+            pieces["rd"][(core.x, core.y)] = (
+                [out_addr, plan_addr, man_addr, ring_offs]
+                + cnt_addrs
+                + [ring_mask, r, c, DIRS.index(d), li, plan_addr, port_idx, 0]
+                + [len(rel), inc, words_addr + ready_off]
+                + [v for x_ in rel for v in (x_.x, x_.y)]
+            )
+            peer = ports[d]["peer"]
+            rc = virt(port_core[(peer, OPP[d], li)])
+            pn = node(peer)
+            streams = []
+            k_turn = 1 if d[1] == "+" else 2
+            on = 0
+            for target, k in ((d, 0), (pa, k_turn), (ma, k_turn)):
+                if target in chips[peer]:
+                    v = virt(port_core[(peer, target, li)])
+                    streams += [1, v.x, v.y, k]
+                    on += 1
+                else:
+                    streams += [0, 0, 0, 0]
+            # (x landed rests on every link's END reaching a port of the chip it leads to)
+            assert on, f"dispatch phase: port {coord} {d} {li} has no stream into {peer}"
+            pieces["sd"][(core.x, core.y)] = (
+                [out_addr, ready_addr, rc.x, rc.y, int(pn.mesh_id), int(pn.chip_id), man_addr, ring_offs]
+                + cnt_addrs
+                + streams
+                + [peer[0], peer[1], DIRS.index(d)]
+            )
+        out[coord] = pieces
+    return out, (rinc, rph, sinc, sph, rd_ct, sd_ct)
