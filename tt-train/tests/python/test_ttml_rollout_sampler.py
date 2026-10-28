@@ -115,7 +115,7 @@ def _reuse_open_device(monkeypatch):
     does at the Python level minus the ``open_device`` call.
     """
 
-    def _open_current_device(model_kind, device_config):
+    def _open_current_device(model_kind, device_config, num_command_queues=1):
         if model_kind == "qwen3":
             from ttml.common.utils import build_mesh
             import ttml._mesh as _mesh_module
