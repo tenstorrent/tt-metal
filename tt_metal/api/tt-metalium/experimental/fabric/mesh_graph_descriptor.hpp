@@ -477,6 +477,9 @@ private:
     // Copy pipeline_descriptors into pipeline_descriptors_. Tier A has already accepted them.
     void populate_pipeline_descriptors();
 
+    // Tier B. After populate, reject a pipeline that cannot fit the meshes and connections this descriptor declares.
+    void check_pipeline_feasibility() const;
+
     // Populate Instances
     void populate_top_level_instance();
     GlobalNodeId populate_instance(const proto::NodeRef& node_ref, std::vector<GlobalNodeId>& hierarchy);

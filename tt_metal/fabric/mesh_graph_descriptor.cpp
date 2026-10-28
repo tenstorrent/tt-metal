@@ -187,6 +187,7 @@ MeshGraphDescriptor::MeshGraphDescriptor(
     TT_FATAL(errors.empty(), "Failed to validate MeshGraphDescriptor textproto: \n{}", get_validation_report(errors));
     proto_ = std::move(proto);
     populate();
+    check_pipeline_feasibility();
 
     if (const auto sid = subcontext_id_for_instance_name_uniquify(); sid.has_value()) {
         const std::string prefix = "mgd" + std::to_string(*sid) + "_";
@@ -977,6 +978,448 @@ std::vector<std::string> MeshGraphDescriptor::static_validate(
     }
 
     return all_errors;
+}
+
+void MeshGraphDescriptor::check_pipeline_feasibility() const {
+    // No pipeline section: the descriptor is unchanged. Tier B never looks at chips or cables.
+    if (pipeline_descriptors_.empty()) {
+        return;
+    }
+
+    struct MeshInfo {
+        GlobalNodeId global_id = 0;
+        std::string name;
+        int rows = 0;
+        int cols = 0;
+        int slice_rows = 0;
+        int slice_cols = 0;
+        int slices = 0;
+        bool ring_rows = false;
+        bool ring_cols = false;
+    };
+    std::vector<MeshInfo> meshes;
+    std::unordered_map<GlobalNodeId, int> mesh_index;
+    for (const GlobalNodeId mesh_gid : mesh_instances_) {
+        const InstanceData& instance = get_instance(mesh_gid);
+        if (instance.kind != NodeKind::Mesh) {
+            continue;
+        }
+        const DeclaredTopology topology = get_declared_topology(instance);
+        if (topology.dims.size() != 2 || topology.host_dims.size() != 2) {
+            continue;
+        }
+        if (topology.host_dims[0] <= 0 || topology.host_dims[1] <= 0 || topology.dims[0] % topology.host_dims[0] != 0 ||
+            topology.dims[1] % topology.host_dims[1] != 0) {
+            continue;
+        }
+        MeshInfo mesh;
+        mesh.global_id = mesh_gid;
+        mesh.name = instance.name;
+        mesh.rows = topology.host_dims[0];
+        mesh.cols = topology.host_dims[1];
+        mesh.slice_rows = topology.dims[0] / topology.host_dims[0];
+        mesh.slice_cols = topology.dims[1] / topology.host_dims[1];
+        mesh.slices = mesh.rows * mesh.cols;
+        // A wrap on a host axis of 2 is the edge already there, so it adds no neighbour.
+        mesh.ring_rows = !topology.ring_dims.empty() && topology.ring_dims[0] && mesh.rows > 2;
+        mesh.ring_cols = topology.ring_dims.size() > 1 && topology.ring_dims[1] && mesh.cols > 2;
+        TT_FATAL(
+            mesh.slices <= 64,
+            "pipeline feasibility: mesh '{}' has {} host slices; this check supports at most 64",
+            mesh.name,
+            mesh.slices);
+        mesh_index.emplace(mesh_gid, static_cast<int>(meshes.size()));
+        meshes.push_back(std::move(mesh));
+    }
+
+    const int mesh_count = static_cast<int>(meshes.size());
+    std::vector<std::vector<int>> cap(mesh_count, std::vector<int>(mesh_count, 0));
+    if (has_connections_of_type("FABRIC")) {
+        for (const ConnectionId connection_id : connections_by_type("FABRIC")) {
+            const ConnectionData& connection = get_connection(connection_id);
+            if (connection.nodes.size() < 2) {
+                continue;
+            }
+            // Both directions are stored. Count the pair once.
+            if (connection.nodes[0] > connection.nodes[1]) {
+                continue;
+            }
+            const auto src = mesh_index.find(connection.nodes[0]);
+            const auto dst = mesh_index.find(connection.nodes[1]);
+            if (src == mesh_index.end() || dst == mesh_index.end() || src->second == dst->second) {
+                continue;
+            }
+            cap[src->second][dst->second] += static_cast<int>(connection.count);
+            cap[dst->second][src->second] += static_cast<int>(connection.count);
+        }
+    }
+
+    struct StageInfo {
+        std::string pipeline;
+        std::string id;
+        int chip_rows = 0;
+        int chip_cols = 0;
+        std::vector<int> need;
+        std::vector<int> rect_rows;
+        std::vector<int> rect_cols;
+        int min_need = 0;
+        std::vector<std::pair<int, int>> neighbours;
+    };
+    std::vector<StageInfo> stages;
+    std::unordered_map<std::string, int> stage_index;
+    auto stage_key = [](const std::string& pipeline, const std::string& id) { return pipeline + "\n" + id; };
+    for (const PipelineDescriptorData& pipeline : pipeline_descriptors_) {
+        for (const PipelineDescriptorData::Stage& stage : pipeline.stages) {
+            StageInfo info;
+            info.pipeline = pipeline.name;
+            info.id = stage.id;
+            info.chip_rows = stage.dims[0];
+            info.chip_cols = stage.dims[1];
+            info.need.assign(mesh_count, -1);
+            info.rect_rows.assign(mesh_count, 0);
+            info.rect_cols.assign(mesh_count, 0);
+            info.min_need = 0;
+            bool any = false;
+            for (int mesh = 0; mesh < mesh_count; ++mesh) {
+                const MeshInfo& grid = meshes[mesh];
+                if (info.chip_rows % grid.slice_rows != 0 || info.chip_cols % grid.slice_cols != 0) {
+                    continue;
+                }
+                const int rect_rows = info.chip_rows / grid.slice_rows;
+                const int rect_cols = info.chip_cols / grid.slice_cols;
+                if (rect_rows > grid.rows || rect_cols > grid.cols) {
+                    continue;
+                }
+                info.need[mesh] = rect_rows * rect_cols;
+                info.rect_rows[mesh] = rect_rows;
+                info.rect_cols[mesh] = rect_cols;
+                if (!any || info.need[mesh] < info.min_need) {
+                    info.min_need = info.need[mesh];
+                    any = true;
+                }
+            }
+            TT_FATAL(any, "pipeline '{}': stage '{}' fits no declared mesh", info.pipeline, info.id);
+            stage_index.emplace(stage_key(info.pipeline, info.id), static_cast<int>(stages.size()));
+            stages.push_back(std::move(info));
+        }
+    }
+
+    std::vector<std::vector<int>> copies(stages.size(), std::vector<int>(stages.size(), 0));
+    for (const PipelineDescriptorData& pipeline : pipeline_descriptors_) {
+        for (const PipelineDescriptorData::Edge& edge : pipeline.edges) {
+            const int src = stage_index.at(stage_key(pipeline.name, edge.src));
+            const int dst = stage_index.at(stage_key(pipeline.name, edge.dst));
+            ++copies[src][dst];
+        }
+    }
+    for (int src = 0; src < static_cast<int>(stages.size()); ++src) {
+        for (int dst = src + 1; dst < static_cast<int>(stages.size()); ++dst) {
+            const int between = copies[src][dst] + copies[dst][src];
+            if (between == 0) {
+                continue;
+            }
+            stages[src].neighbours.emplace_back(dst, between);
+            stages[dst].neighbours.emplace_back(src, between);
+        }
+    }
+
+    int declared_slices = 0;
+    int needed_slices = 0;
+    for (const MeshInfo& mesh : meshes) {
+        declared_slices += mesh.slices;
+    }
+    for (const StageInfo& stage : stages) {
+        needed_slices += stage.min_need;
+    }
+    TT_FATAL(
+        needed_slices <= declared_slices,
+        "pipelines need {} slices and the descriptor declares {}",
+        needed_slices,
+        declared_slices);
+
+    // One search over every pipeline. Stop at the first assignment whose per-mesh carves succeed.
+    const int stage_count = static_cast<int>(stages.size());
+    std::vector<int> order;
+    std::vector<bool> queued(stage_count, false);
+    auto enqueue_from = [&](const int start) {
+        std::vector<int> wave{start};
+        queued[start] = true;
+        for (std::size_t head = 0; head < wave.size(); ++head) {
+            for (const auto& [neighbour, ignored_copies] : stages[wave[head]].neighbours) {
+                (void)ignored_copies;
+                if (!queued[neighbour]) {
+                    queued[neighbour] = true;
+                    wave.push_back(neighbour);
+                }
+            }
+        }
+        order.insert(order.end(), wave.begin(), wave.end());
+    };
+    while (static_cast<int>(order.size()) < stage_count) {
+        int start = -1;
+        for (int stage = 0; stage < stage_count; ++stage) {
+            if (queued[stage]) {
+                continue;
+            }
+            const int bindings = static_cast<int>(std::count_if(
+                stages[stage].need.begin(), stages[stage].need.end(), [](const int need) { return need >= 0; }));
+            const int start_bindings = start < 0 ? 0
+                                                 : static_cast<int>(std::count_if(
+                                                       stages[start].need.begin(),
+                                                       stages[start].need.end(),
+                                                       [](const int need) { return need >= 0; }));
+            if (start < 0 || bindings < start_bindings ||
+                (bindings == start_bindings && stages[stage].min_need > stages[start].min_need)) {
+                start = stage;
+            }
+        }
+        enqueue_from(start);
+    }
+
+    std::vector<int> assigned(stage_count, -1);
+    std::vector<int> used(mesh_count, 0);
+    std::vector<std::vector<int>> crossings(mesh_count, std::vector<int>(mesh_count, 0));
+    std::unordered_map<std::string, bool> carve_memo;
+
+    auto cell = [](const MeshInfo& mesh, const int row, const int col) { return row * mesh.cols + col; };
+    auto neighbour_bit = [&](const MeshInfo& mesh, const int row, const int col, const int d_row, const int d_col) {
+        int next_row = row + d_row;
+        int next_col = col + d_col;
+        if (d_row != 0) {
+            if (next_row < 0 || next_row >= mesh.rows) {
+                if (!mesh.ring_rows) {
+                    return -1;
+                }
+                next_row = (next_row + mesh.rows) % mesh.rows;
+            }
+        }
+        if (d_col != 0) {
+            if (next_col < 0 || next_col >= mesh.cols) {
+                if (!mesh.ring_cols) {
+                    return -1;
+                }
+                next_col = (next_col + mesh.cols) % mesh.cols;
+            }
+        }
+        return cell(mesh, next_row, next_col);
+    };
+
+    auto carve_ok = [&](const int mesh, const std::vector<int>& on_mesh) {
+        if (on_mesh.empty()) {
+            return true;
+        }
+        std::vector<int> key_stages = on_mesh;
+        std::sort(key_stages.begin(), key_stages.end());
+        std::string key = std::to_string(meshes[mesh].global_id);
+        for (const int stage : key_stages) {
+            key.push_back(',');
+            key += std::to_string(stage);
+        }
+        const auto memo = carve_memo.find(key);
+        if (memo != carve_memo.end()) {
+            return memo->second;
+        }
+
+        struct Placement {
+            std::uint64_t mask = 0;
+            std::uint64_t border = 0;
+        };
+        std::vector<std::vector<Placement>> positions(stage_count);
+        const MeshInfo& grid = meshes[mesh];
+        for (const int stage : on_mesh) {
+            const int rect_rows = stages[stage].rect_rows[mesh];
+            const int rect_cols = stages[stage].rect_cols[mesh];
+            for (int top = 0; top + rect_rows <= grid.rows; ++top) {
+                for (int left = 0; left + rect_cols <= grid.cols; ++left) {
+                    Placement placement;
+                    constexpr std::pair<int, int> kSteps[] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+                    for (int row = top; row < top + rect_rows; ++row) {
+                        for (int col = left; col < left + rect_cols; ++col) {
+                            placement.mask |= std::uint64_t{1} << cell(grid, row, col);
+                            for (const auto& [d_row, d_col] : kSteps) {
+                                const int bit = neighbour_bit(grid, row, col, d_row, d_col);
+                                if (bit >= 0) {
+                                    placement.border |= std::uint64_t{1} << bit;
+                                }
+                            }
+                        }
+                    }
+                    placement.border &= ~placement.mask;
+                    positions[stage].push_back(placement);
+                }
+            }
+        }
+
+        // Largest rectangle first, then along edges, so a path is laid down from one end.
+        std::vector<int> carve_order;
+        std::vector<bool> carved_queued(stage_count, false);
+        std::vector<int> remaining = on_mesh;
+        while (!remaining.empty()) {
+            int seed = remaining.front();
+            for (const int candidate : remaining) {
+                if (stages[candidate].need[mesh] > stages[seed].need[mesh]) {
+                    seed = candidate;
+                }
+            }
+            std::vector<int> wave{seed};
+            carved_queued[seed] = true;
+            for (std::size_t head = 0; head < wave.size(); ++head) {
+                for (const auto& [neighbour, ignored_copies] : stages[wave[head]].neighbours) {
+                    (void)ignored_copies;
+                    if (carved_queued[neighbour]) {
+                        continue;
+                    }
+                    if (std::find(on_mesh.begin(), on_mesh.end(), neighbour) == on_mesh.end()) {
+                        continue;
+                    }
+                    carved_queued[neighbour] = true;
+                    wave.push_back(neighbour);
+                }
+            }
+            carve_order.insert(carve_order.end(), wave.begin(), wave.end());
+            remaining.erase(
+                std::remove_if(
+                    remaining.begin(), remaining.end(), [&](const int stage) { return carved_queued[stage]; }),
+                remaining.end());
+        }
+        std::vector<std::uint64_t> placed(stage_count, 0);
+        std::uint64_t occupied = 0;
+        const auto fits_carved = [&](auto&& self, const std::size_t depth) -> bool {
+            if (depth == carve_order.size()) {
+                return true;
+            }
+            const int stage = carve_order[depth];
+            for (const Placement& placement : positions[stage]) {
+                if ((placement.mask & occupied) != 0) {
+                    continue;
+                }
+                bool touches = true;
+                for (const auto& [neighbour, ignored_copies] : stages[stage].neighbours) {
+                    (void)ignored_copies;
+                    if (placed[neighbour] == 0) {
+                        continue;
+                    }
+                    if ((placement.border & placed[neighbour]) == 0) {
+                        touches = false;
+                        break;
+                    }
+                }
+                if (!touches) {
+                    continue;
+                }
+                placed[stage] = placement.mask;
+                occupied |= placement.mask;
+                if (self(self, depth + 1)) {
+                    return true;
+                }
+                occupied &= ~placement.mask;
+                placed[stage] = 0;
+            }
+            return false;
+        };
+        const bool ok = fits_carved(fits_carved, 0);
+        carve_memo.emplace(std::move(key), ok);
+        return ok;
+    };
+
+    std::string failure = "no assignment of stages to meshes fits the declared slices and channels";
+    const auto search = [&](auto&& self, const int depth) -> bool {
+        if (depth == stage_count) {
+            std::vector<std::vector<int>> on_mesh(mesh_count);
+            for (int stage = 0; stage < stage_count; ++stage) {
+                on_mesh[assigned[stage]].push_back(stage);
+            }
+            for (int mesh = 0; mesh < mesh_count; ++mesh) {
+                if (!carve_ok(mesh, on_mesh[mesh])) {
+                    failure = fmt::format(
+                        "pipeline '{}': stages on mesh '{}' cannot be carved on its host slices",
+                        stages[on_mesh[mesh].front()].pipeline,
+                        meshes[mesh].name);
+                    return false;
+                }
+            }
+            return true;
+        }
+
+        const int stage = order[depth];
+        std::vector<int> mesh_order;
+        mesh_order.reserve(mesh_count);
+        for (int mesh = 0; mesh < mesh_count; ++mesh) {
+            if (stages[stage].need[mesh] >= 0) {
+                mesh_order.push_back(mesh);
+            }
+        }
+        std::stable_sort(mesh_order.begin(), mesh_order.end(), [&](const int lhs, const int rhs) {
+            const auto holds_neighbour = [&](const int mesh) {
+                for (const auto& [neighbour, ignored_copies] : stages[stage].neighbours) {
+                    (void)ignored_copies;
+                    if (assigned[neighbour] == mesh) {
+                        return true;
+                    }
+                }
+                return false;
+            };
+            if (holds_neighbour(lhs) != holds_neighbour(rhs)) {
+                return holds_neighbour(lhs);
+            }
+            return (meshes[lhs].slices - used[lhs]) > (meshes[rhs].slices - used[rhs]);
+        });
+
+        for (const int mesh : mesh_order) {
+            if (used[mesh] + stages[stage].need[mesh] > meshes[mesh].slices) {
+                continue;
+            }
+            bool channels_ok = true;
+            std::vector<std::pair<int, int>> added;
+            for (const auto& [neighbour, between] : stages[stage].neighbours) {
+                if (assigned[neighbour] < 0 || assigned[neighbour] == mesh) {
+                    continue;
+                }
+                const int other = assigned[neighbour];
+                if (crossings[mesh][other] + between > cap[mesh][other]) {
+                    channels_ok = false;
+                    if (cap[mesh][other] == 0) {
+                        failure = fmt::format(
+                            "pipeline '{}': edge between '{}' and '{}' has no declared connection",
+                            stages[stage].pipeline,
+                            stages[stage].id,
+                            stages[neighbour].id);
+                    } else {
+                        failure = fmt::format(
+                            "pipeline '{}': edge between '{}' and '{}' needs {} channels and {} are declared",
+                            stages[stage].pipeline,
+                            stages[stage].id,
+                            stages[neighbour].id,
+                            crossings[mesh][other] + between,
+                            cap[mesh][other]);
+                    }
+                    break;
+                }
+                added.emplace_back(other, between);
+            }
+            if (!channels_ok) {
+                continue;
+            }
+            for (const auto& [other, between] : added) {
+                crossings[mesh][other] += between;
+                crossings[other][mesh] += between;
+            }
+            used[mesh] += stages[stage].need[mesh];
+            assigned[stage] = mesh;
+            if (self(self, depth + 1)) {
+                return true;
+            }
+            assigned[stage] = -1;
+            used[mesh] -= stages[stage].need[mesh];
+            for (const auto& [other, between] : added) {
+                crossings[mesh][other] -= between;
+                crossings[other][mesh] -= between;
+            }
+        }
+        return false;
+    };
+
+    TT_FATAL(search(search, 0), "{}", failure);
 }
 
 void MeshGraphDescriptor::populate() {
