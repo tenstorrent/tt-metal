@@ -322,7 +322,7 @@
       timeout: 40
   team: ttnn
   budget_type: sanity
-  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  owner_id: U09AWQGLN77 # Konstantinos Fragkiadakis
 
 - name: "trace allocation tracker"
   cmd: |

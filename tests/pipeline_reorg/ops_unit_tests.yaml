@@ -480,7 +480,7 @@
       timeout: 20
     bh_p150b_civ2_viommu:
       timeout: 20
-  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  owner_id: U09AWQGLN77 # Konstantinos Fragkiadakis
   team: ttnn
   budget_type: unit
   category: docs_examples
@@ -514,7 +514,7 @@
       timeout: 45
     bh_p150b_civ2_viommu:
       timeout: 45
-  owner_id: U076Z1JJUQZ # Artem Yerofieiev
+  owner_id: U09AWQGLN77 # Konstantinos Fragkiadakis
   team: ttnn
   budget_type: unit
   category: cpp_lab_examples
