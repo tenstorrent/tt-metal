@@ -889,3 +889,60 @@ inline void _llk_pack_block_closed_fast_(
 
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
 }
+
+/**
+ * Opt-in W offset block packs: the output address is programmed once and each call moves it with the packer W counter of channel 1 (SETADC), so a call
+ * writes no L1_Dest_addr. A config write waits for the packer behind it to drain, which costs a call of a few tiles 10 to 30 cycles.
+ * Call after _llk_pack_block_fast_init_ (the closed form replays its tile).
+ * @param address: L1 address (16 byte units) of the first output tile of the buffer.
+ * @param tile_stride: Bytes from one output tile to the next, a multiple of 16 below 64 KB.
+ */
+inline void _llk_pack_block_w_init_(const std::uint32_t address, const std::uint32_t tile_stride)
+{
+    LLK_ASSERT((tile_stride & 0xF) == 0 && tile_stride < 0x10000, "tile_stride must be a multiple of 16 below 64 KB");
+    program_packer_destination<false>(address);
+    cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(tile_stride);
+    pack_ch1_w_stride = tile_stride;
+}
+
+/**
+ * Same as _llk_pack_block_fast_ with the output at out_tile tiles from the address of _llk_pack_block_w_init_.
+ */
+template <DstSync Dst, bool is_fp32_dest_acc_en>
+inline void _llk_pack_block_w_(const std::uint32_t start_tile_index, const std::uint32_t out_tile, const std::uint32_t num_tiles)
+{
+    LLK_ASSERT(num_tiles >= 1, "num_tiles must be at least 1");
+    LLK_ASSERT(
+        ((start_tile_index + num_tiles) <= get_dest_max_tiles<Dst, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+        "The block exceeds the destination register sync region");
+
+    set_dst_write_addr(start_tile_index);
+    TT_SETADC(p_setadc::PAC, p_setadc::CH_1, p_setadc::SET_W, out_tile);
+
+    // Template 1 MOP: non-zero bits 19:10 override the programmed outer loop count for this run only.
+    const std::uint32_t outer_loop_len = TILE_NUM_FACES * num_tiles;
+    TT_MOP(1, outer_loop_len >> 6, (outer_loop_len & 0x3F) << 10);
+}
+
+/**
+ * Same as _llk_pack_block_closed_fast_ with the output at out_tile tiles from the address of _llk_pack_block_w_init_ (its tile stride is the closed one).
+ */
+template <DstSync Dst, bool is_fp32_dest_acc_en>
+inline void _llk_pack_block_closed_w_(const std::uint32_t start_tile_index, const std::uint32_t out_tile, const std::uint32_t num_tiles)
+{
+    LLK_ASSERT(num_tiles >= 1, "num_tiles must be at least 1");
+    LLK_ASSERT(
+        ((start_tile_index + num_tiles) <= get_dest_max_tiles<Dst, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+        "The block exceeds the destination register sync region");
+
+    set_dst_write_addr(start_tile_index);
+    TT_SETADC(p_setadc::PAC, p_setadc::CH_1, p_setadc::SET_W, out_tile);
+
+    for (std::uint32_t tile = 0; tile < num_tiles; tile++)
+    {
+        lltt::replay(0, 17);
+    }
+
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
+}
+
