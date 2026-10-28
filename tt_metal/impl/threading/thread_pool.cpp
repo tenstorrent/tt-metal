@@ -440,7 +440,11 @@ public:
     const Participants& participants() const { return participants_; }
 
     // Caller: counts the planned calls in; workers may take part from now on.
-    void start() noexcept { remaining_.add(static_cast<int64_t>(next_call_.size())); }
+    void start() noexcept {
+        // Publishes the plan also to a worker that holds this job through a wrapped generation.
+        std::atomic_thread_fence(std::memory_order_release);
+        remaining_.add(static_cast<int64_t>(next_call_.size()));
+    }
 
     // What the pool publishes for this use of the job: (generation << 32) | slot.
     uint64_t published() const { return (static_cast<uint64_t>(generation_) << 32) | slot_; }
