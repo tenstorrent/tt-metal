@@ -18,6 +18,7 @@ sys.path.insert(0, str(_PERF))
 from placement_check import (  # noqa: E402
     POSITIONS,
     _value,
+    blocks,
     decide,
     main,
     nodes,
@@ -197,7 +198,7 @@ def test_report_shows_every_outcome(tmp_path):
 
     report = render([confirmed] + others, "wormhole")
 
-    assert report.startswith("## Wormhole stage 2: ❌ 1 confirmed regression(s)")
+    assert report.startswith("## Wormhole stage 2: ❌ 2 slower at every code position")
     assert "### Confirmed regressions: all 1" in report
     assert (
         "### Slower at every position, loop code unchanged: needs a look: all 1"
@@ -228,7 +229,7 @@ def test_nothing_measured_is_not_called_clean(tmp_path):
 
     report = render(_decide(tmp_path, base, cur), "wormhole")
 
-    assert "⚠️ no confirmed regression, 1 not re-measured" in report
+    assert "❌ 1 not re-measured" in report
 
 
 def test_over_the_limit_makes_the_count_a_lower_bound(tmp_path):
@@ -270,5 +271,36 @@ def test_render_joins_the_legs(tmp_path):
     assert (
         (tmp_path / "r.md")
         .read_text()
-        .startswith("## Blackhole stage 2: ❌ 2 confirmed regression(s)")
+        .startswith("## Blackhole stage 2: ❌ 2 slower at every code position")
     )
+
+
+def test_what_blocks(tmp_path):
+    base = _side(tmp_path / "base", [_BASE] * 5, window="aaa")
+    cur = _side(tmp_path / "cur", [_BASE * 1.2] * 5, window="bbb")
+    [row] = _decide(tmp_path, base, cur)
+
+    for outcome, blocking in (
+        ("regression", True),
+        ("review", True),
+        ("unmeasured", True),
+        ("partial", False),
+        ("placement", False),
+        ("not-reproduced", False),
+    ):
+        assert blocks([dict(row, outcome=outcome)]) is blocking
+
+
+def test_other_markers_are_not_re_measured(tmp_path):
+    base = _side(tmp_path / "base", [_BASE] * 5, window="aaa")
+    cur = _side(tmp_path / "cur", [_BASE] * 5, window="aaa")
+    candidates = _candidates(tmp_path)
+    others = read_candidates(tmp_path / "s1.regressions.csv", tile_loop=False)
+
+    results = decide(candidates, base, cur, 0.05, 30, {}, (), others)
+
+    assert [(r["outcome"], r["why"]) for r in results] == [
+        ("not-reproduced", ""),
+        ("unmeasured", "not a TILE_LOOP point"),
+    ]
+    assert blocks(results)

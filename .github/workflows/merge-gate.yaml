@@ -674,8 +674,8 @@ jobs:
         ${{ format('{{"blackhole": {0}}}', toJSON(fromJSON(needs.llk-perf-merge-gate-changes.outputs.thresholds).blackhole)) }}
     secrets: inherit
 
-  # Blocks the merge on a regression that stage 2 confirms; stage-1 points stage 2 does not confirm
-  # stay in the report. An incomplete measurement also fails it.
+  # Blocks the merge when stage 2 finds a stage-1 regression slower at every code position, or cannot
+  # re-measure all of them. Placement effects stay in the report. An incomplete measurement also fails it.
   llk-perf-merge-gate-blackhole:
     name: LLK perf merge gate (blackhole)
     needs: [llk-perf-merge-gate-changes, llk-perf-merge-gate-measure]
