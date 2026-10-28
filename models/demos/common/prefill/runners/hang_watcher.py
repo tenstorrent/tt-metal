@@ -258,6 +258,14 @@ def main(probe_path: str) -> int:
     dev00 = handoff.devices[0]
     frozen_since: float | None = None
     left_out: list[str] = []
+    # DO NOT MERGE -- experiment: say the watcher is up, and show device (0,0)'s counts once a minute.
+    print(
+        f"PREFILL HANG WATCHER: stage {handoff.stage_idx} up, {len(handoff.devices)} devices, "
+        f"{len(dev00.words())} words on device (0,0), timeout {timeout_s}s, first chunk {first_chunk_timeout_s}s",
+        file=sys.stderr,
+        flush=True,
+    )
+    shown = 0.0
     while True:
         try:
             # kill 0 is just a liveness probe badly named
@@ -267,12 +275,16 @@ def main(probe_path: str) -> int:
 
         try:
             moved = dev00.read()
-        except Exception:
+        except Exception as e:
+            print(f"PREFILL HANG WATCHER: read failed: {e!r}", file=sys.stderr, flush=True)  # DO NOT MERGE
             return 1
         # Until the first real chunk is out, trace capture and cold compiles can take minutes.
         limit_s = timeout_s if dev00.produced >= 1 + handoff.dummy else first_chunk_timeout_s
 
         now = time.monotonic()
+        if now - shown >= 60:  # DO NOT MERGE
+            print(f"PREFILL HANG WATCHER: progress\n{dev00.counts()}", file=sys.stderr, flush=True)
+            shown = now
         if moved:
             frozen_since = None
         elif frozen_since is None:
