@@ -450,7 +450,6 @@ class KdaStates:
     ``recurrent`` and ``convolution`` are the two slabs described in the module docstring; both are
     single allocations so a ``KvCacheStage`` can name each by one base address. ``layer_ids`` are
     this rank's GLOBAL KDA layer indices in ascending order and fix the layer axis of both slabs.
-    ``zeros`` is one native zero carry kept for ``zero_slot``.
     """
 
     recurrent: ttnn.Tensor
@@ -458,7 +457,6 @@ class KdaStates:
     geometry: KdaContractGeometry
     layer_ids: tuple[int, ...]
     num_slots: int
-    zeros: KdaState
 
     def __post_init__(self) -> None:
         if not self.layer_ids or list(self.layer_ids) != sorted(set(self.layer_ids)):
@@ -522,16 +520,12 @@ class KdaStates:
             device=mesh_device,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-        zeros = allocate_native_state(mesh_device, geometry)
-        _zero_fill(zeros.recurrent)
-        _zero_fill(zeros.convolution)
         states = cls(
             recurrent=recurrent,
             convolution=convolution,
             geometry=geometry,
             layer_ids=tuple(layer_ids),
             num_slots=num_slots,
-            zeros=zeros,
         )
         states.validate_physical_layout()
         return states
@@ -569,15 +563,19 @@ class KdaStates:
         previous one's. Outside any capture: a trace replays every chunk and would re-zero each time.
         """
         self._check_slot(slot)
-        index = device_scalar(self.recurrent.device(), slot)
+        device = self.recurrent.device()
+        zeros = allocate_native_state(device, self.geometry)
+        _zero_fill(zeros.recurrent)
+        _zero_fill(zeros.convolution)
+        index = device_scalar(device, slot)
         for layer_idx in self.layer_ids:
-            self.export_layer(self.zeros, index, layer_idx)
+            self.export_layer(zeros, index, layer_idx)
         ttnn.deallocate(index)
+        deallocate_state(zeros)
 
     def deallocate(self) -> None:
         ttnn.deallocate(self.recurrent)
         ttnn.deallocate(self.convolution)
-        deallocate_state(self.zeros)
 
 
 # --- host-side decoding of raw segments (read-back through the address table) ---

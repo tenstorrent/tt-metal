@@ -307,9 +307,9 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         """Reset the KDA carries at the start of a request, then defer to the shared runtime.
 
         `actual_start == 0` is the head of a request, and it is the only safe moment to zero: the
-        reset is a device copy from a held zero tensor rather than a reallocation, so it must not
-        land inside a captured region, which would re-zero on every replay and destroy the carry
-        the trace exists to advance.
+        reset allocates a transient zero carry and uploads the slot scalar, both of which a capture
+        rejects, and it must not land inside a captured region anyway, which would re-zero on every
+        replay and destroy the carry the trace exists to advance.
         """
         # Bound from the real signature rather than by counting positions: `actual_start` is the
         # fourth positional parameter, and reading the third instead would take `slot_id` — which is
