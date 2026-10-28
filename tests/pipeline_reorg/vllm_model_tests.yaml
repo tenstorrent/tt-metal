@@ -216,9 +216,10 @@
   benchmark-timeout: 5
   mesh-device: P150x8
   arch: arch-blackhole
-  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 3000000000}'
-  # trace_region_size 3 GB: measurement budget for the speculative records (the capture pass logs the TRACE
-  # region usage per record); the production entries carry the measured size.
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 768000000}'
+  # trace_region_size 768 MB: measured on this leg (3 GB probe run): 87 MB of plain decode traces plus
+  # 20 speculative records (4 shapes x the 5-rung x4 ladder) at 22-32 MB each = ~620 MB; the capture
+  # pass logs the TRACE region usage per record.
   # MTP drafter on the plugin's speculative contract: vLLM schedules the drafts,
   # the plugin verifies and accepts them. conc-1 greedy at the client so every
   # step takes the spec path; batched speculation (k_by_rows) and batched

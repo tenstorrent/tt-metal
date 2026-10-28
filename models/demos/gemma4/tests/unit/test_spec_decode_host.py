@@ -29,6 +29,7 @@ from models.demos.gemma4.tt.dflash_drafter import DFlashFusedDecoder
 from models.demos.gemma4.tt.spec_decode import (
     SPEC_K_BY_ROWS_DEFAULT,
     SPEC_MASK_NEG,
+    SPEC_RECORD_MB_DEFAULT,
     ServingStepResult,
     SpeculativeDecoder,
     auto_draft_len,
@@ -41,7 +42,9 @@ from models.demos.gemma4.tt.spec_decode import (
     serving_plan,
     serving_seed_index,
     serving_select_rows,
+    serving_trace_projection,
     serving_width_for,
+    serving_width_ladder,
     spec_capture_shapes,
     spec_check_shape,
 )
@@ -771,6 +774,8 @@ _SERVING_METHODS = [
     "_srv_alloc_width",
     "_srv_publish_hidden",
     "_srv_publish_logits",
+    "_srv_trace_region_mb",
+    "_srv_trace_region_size_mb",
     "_srv_iota_for",
     "_srv_mask_chunks",
     "_srv_masks_device",
@@ -1631,3 +1636,98 @@ def test_the_packed_write_probe_follows_the_fallback_loop(kv_staging, embed_idx,
     from models.demos.gemma4.tt.attention.decode import packed_write_takes_fallback_loop
 
     assert packed_write_takes_fallback_loop(kv_staging, embed_idx, is_kv_shared) is expected
+
+
+# Default width ladder (x4 from 2048) and the trace-region projection -------------------------------
+_DEFAULT_SHAPES = [(1, 5), (5, 5), (8, 3), (16, 1)]
+
+
+def test_default_ladder_is_x4_from_2048_up_to_the_top_rung():
+    assert serving_width_ladder(262144, 5) == [2048, 8192, 32768, 131072, 263168]
+    assert serving_width_ladder(131072, 5) == [2048, 8192, 32768, 131072, 132096]
+    assert serving_width_ladder(8192, 1) == [2048, 8192, 9216]
+    assert serving_width_ladder(1024, 5) == [2048]  # the top rung alone when it is the smallest
+    # the top rung is independent of K across the default table (every tail rounds to 263168)
+    assert {serving_width_ladder(262144, k)[-1] for _rows, k in _DEFAULT_SHAPES} == {263168}
+
+
+@pytest.mark.parametrize("max_context", [1024, 4096, 8192, 65536, 131072, 262144, 300000])
+@pytest.mark.parametrize("k", [1, 3, 5])
+def test_every_ladder_is_x4_spaced_and_ends_at_a_covering_top_rung(max_context, k):
+    ladder = serving_width_ladder(max_context, k)
+    assert ladder == sorted(set(ladder))
+    for a, b in zip(ladder, ladder[1:]):
+        assert b == 4 * a or b == ladder[-1], (a, b)
+    assert all(w % 1024 == 0 for w in ladder)
+    # the last position of the context gets a rung, and the rung count stays logarithmic
+    assert serving_width_for(ladder, max_context - 1, k) == ladder[-1]
+    assert len(ladder) <= 6
+
+
+def test_below_the_smallest_rung_the_record_still_serves():
+    ladder = serving_width_ladder(262144, 5)
+    assert serving_width_for(ladder, 0, 5) == 2048
+    assert serving_width_for(ladder, 2048 - 7, 5) == 2048
+    assert serving_width_for(ladder, 2048 - 6, 5) == 8192
+
+
+def test_the_rung_override_keeps_the_largest_rungs():
+    ladder = serving_width_ladder(262144, 5)
+    assert serving_width_ladder(262144, 5, max_rungs=2) == ladder[-2:] == [131072, 263168]
+    assert serving_width_ladder(262144, 5, max_rungs=1) == [263168]
+    assert serving_width_ladder(262144, 5, max_rungs=99) == ladder
+    with pytest.raises(ValueError, match="max_rungs must be >= 1"):  # allow-pytest.raises (pure)
+        serving_width_ladder(262144, 5, max_rungs=0)
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"max_context": 0, "draft_len": 5}, "must be >= 1"),
+        ({"max_context": 1024, "draft_len": 0}, "must be >= 1"),
+        ({"max_context": 1024, "draft_len": 5, "bucket": 100}, "multiple of 64"),
+        ({"max_context": 1024, "draft_len": 5, "factor": 1}, "factor >= 2"),
+        ({"max_context": 1024, "draft_len": 5, "smallest": 64}, "smallest >= bucket"),
+    ],
+)
+def test_bad_ladder_parameters_are_refused(kwargs, message):
+    with pytest.raises(ValueError, match=message):  # allow-pytest.raises (pure)
+        serving_width_ladder(**kwargs)
+
+
+def test_the_plan_takes_the_default_ladder_per_shape():
+    shapes, widths = serving_plan(_DEFAULT_SHAPES, None, 16, max_context=262144)
+    assert shapes == _DEFAULT_SHAPES
+    assert all(len(ws) == 5 for ws in widths.values())
+    assert widths[(16, 1)] == [2048, 8192, 32768, 131072, 263168]
+    _shapes, capped = serving_plan(_DEFAULT_SHAPES, None, 16, max_context=262144, max_rungs=2)
+    assert all(ws == [131072, 263168] for ws in capped.values())
+    with pytest.raises(ValueError, match="needs max_context"):  # allow-pytest.raises (pure)
+        serving_plan(_DEFAULT_SHAPES, None, 16)
+
+
+def test_the_projection_counts_records_per_shape_and_adds_the_base():
+    shapes, widths = serving_plan(_DEFAULT_SHAPES, None, 16, max_context=262144)
+    proj = serving_trace_projection(shapes, widths, record_mb=32.0, region_mb=512, base_mb=87)
+    assert proj.records == 20
+    assert proj.per_shape == {shape: 5 for shape in _DEFAULT_SHAPES}
+    assert proj.projected_mb == 87 + 20 * 32.0
+    assert proj.fits is False
+    assert "EXCEEDS" in proj.describe()
+    assert serving_trace_projection(shapes, widths, record_mb=32.0, region_mb=960, base_mb=87).fits is True
+    unknown = serving_trace_projection(shapes, widths, record_mb=32.0, base_mb=87)
+    assert unknown.fits is None and "not readable" in unknown.describe()
+    assert SPEC_RECORD_MB_DEFAULT == 32.0
+    with pytest.raises(ValueError, match="record_mb must be > 0"):  # allow-pytest.raises (pure)
+        serving_trace_projection(shapes, widths, record_mb=0)
+
+
+def test_the_12b_measurement_fits_galaxy_but_not_qb2_at_the_full_ladder():
+    """Measured per-record trace sizes (12B TP8, width-independent) on top of the 87 MB plain traces."""
+    measured = {(1, 5): 27.1, (5, 5): 31.9, (8, 3): 25.5, (16, 1): 21.9}
+    shapes, widths = serving_plan(_DEFAULT_SHAPES, None, 16, max_context=262144)
+    total = 87 + sum(len(widths[s]) * mb for s, mb in measured.items())
+    assert round(total, 1) == 619.0
+    assert total > 512 and total < 960
+    _shapes, three = serving_plan(_DEFAULT_SHAPES, None, 16, max_context=262144, max_rungs=3)
+    assert 87 + sum(len(three[s]) * mb for s, mb in measured.items()) < 512

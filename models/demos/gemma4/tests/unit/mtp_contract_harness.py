@@ -132,13 +132,31 @@ class Decoder:
         self.readbacks = 0
 
     # -- warmup --------------------------------------------------------------
-    def serving_prepare(self, shapes, widths_by_shape, max_rows):
+    def serving_prepare(self, shapes, widths_by_shape, max_rows, max_context=None, max_rungs=None):
         if self.shapes is not None:
             raise RuntimeError("serving_prepare called twice")
         self.shapes = [tuple(s) for s in shapes]
+        if widths_by_shape is None:
+            # The decoder resolves its budgeted default ladder; the stub keeps its doubling
+            # rungs and applies max_rungs the same way (the largest rungs survive).
+            if max_context is None:
+                raise ValueError("serving_prepare without widths needs max_context")
+            widths_by_shape = {}
+            for s_ in self.shapes:
+                rungs = _ladder(int(max_context), int(s_[1]))
+                if max_rungs is not None and len(rungs) > int(max_rungs):
+                    rungs = rungs[-int(max_rungs) :]
+                widths_by_shape[s_] = rungs
         self.widths = {tuple(s): list(w) for s, w in widths_by_shape.items()}
         self.max_rows = int(max_rows)
+        self.max_context = max_context
+        self.max_rungs = max_rungs
         self.events.append(("prepare", list(self.shapes), self.max_rows))
+
+    def serving_widths(self):
+        if self.shapes is None:
+            raise RuntimeError("serving_widths before serving_prepare")
+        return {shape: list(ws) for shape, ws in self.widths.items()}
 
     def serving_capture(self):
         if self.shapes is None:

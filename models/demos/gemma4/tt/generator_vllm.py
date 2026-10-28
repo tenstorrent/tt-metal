@@ -6354,16 +6354,18 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         if max_isl > 0:
             ladder_context = min(max_seq_len, max_isl)
         max_rungs = int(os.environ.get(SPEC_WIDTH_RUNGS_ENV, "0") or 0) or None
-        widths = {shape: mtp_pv_width_ladder(ladder_context, shape[1], max_rungs=max_rungs) for shape in shapes}
+        # The decoder's budgeted default ladder (geometric x4 from 2048 to the top rung, 5 rungs
+        # at 262144): records cost ~22-32 MB of trace region each, width-independent.
+        widths = None
         t0 = time.time()
-        decoder.serving_prepare(list(shapes), widths, max_rows)
+        decoder.serving_prepare(list(shapes), widths, max_rows, max_context=ladder_context, max_rungs=max_rungs)
         self._mtp_decoder = decoder
         self._mtp_shapes = shapes
-        self._mtp_widths = widths
+        self._mtp_widths = decoder.serving_widths()
         self._mtp_max_rows = max_rows
         logger.info(
             f"Gemma4MTP speculative contract: prepared {len(shapes)} records in {time.time() - t0:.1f}s "
-            f"(max_rows={max_rows}, records={list(shapes)}, widths={ {s: w for s, w in widths.items()} })"
+            f"(max_rows={max_rows}, records={list(shapes)}, widths={self._mtp_widths})"
         )
 
     def _mtp_capture(self):

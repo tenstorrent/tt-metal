@@ -3547,8 +3547,16 @@ def test_serving_all_shapes_capture_and_switch(mesh_device, reset_seeds):
 
     spec.serving_prepare(_SERVING_SHAPES, {s: widths for s in _SERVING_SHAPES}, max_rows=_SERVING_MAX_ROWS)
     assert len(spec._srv_records) == len(_SERVING_SHAPES) * len(widths)
+    projection = spec._srv_projection
+    assert projection.records == len(_SERVING_SHAPES) * len(widths)
+    assert projection.base_mb >= 0.0  # the plain traces already in the region
+    logger.info(f"[serving all shapes] {projection.describe()}")
     spec.serving_capture()
     assert all(rec["id"] is not None for rec in spec._srv_records.values())
+    # every capture reports its measured trace bytes (the budget the ladder is sized against)
+    measured = {key: rec["trace_mb"] for key, rec in spec._srv_records.items()}
+    assert all(mb > 0.0 for mb in measured.values()), measured
+    logger.info(f"[serving all shapes] measured trace MB per record: { {k: round(v, 1) for k, v in measured.items()} }")
     assert spec.serving_width_for((5, 5), 1024 - 7) == 1024
     assert spec.serving_width_for((5, 5), 1024 - 6) == 2048
     assert spec.serving_width_for((16, 1), 2048 - 3) == 2048

@@ -58,6 +58,14 @@ SPEC_MASK_NEG = -1e9
 # chunk costs B * 32 * chunk * 4 bytes (67 MB at B=16) instead of the full
 # S_k (539 MB at 263168). Rungs and chunks are multiples of 1024 (tile-aligned).
 SPEC_MASK_KEY_CHUNK = 32768
+# Default verify-width ladder: x4 rungs from 2048 up to the top rung (one
+# captured record per shape and rung). GEMMA4_SPEC_WIDTH_RUNGS (read by the
+# adapter, passed as ``max_rungs``) keeps the LARGEST rungs.
+SPEC_WIDTH_RUNG_SMALLEST = 2048
+SPEC_WIDTH_RUNG_FACTOR = 4
+SPEC_WIDTH_RUNGS_ENV = "GEMMA4_SPEC_WIDTH_RUNGS"
+# Measured 12B TP8 (3 GB region): 21.9-31.9 MB per captured record, width-independent.
+SPEC_RECORD_MB_DEFAULT = 32.0
 
 
 def _to_probs(logits_row, temperature, top_p, top_k):
@@ -196,12 +204,102 @@ def spec_capture_shapes(k_by_rows, k_max):
     return sorted(shapes)
 
 
-def serving_plan(shapes, widths_by_shape, max_rows):
+def serving_width_ladder(
+    max_context,
+    draft_len,
+    bucket=1024,
+    max_rungs=None,
+    factor=SPEC_WIDTH_RUNG_FACTOR,
+    smallest=SPEC_WIDTH_RUNG_SMALLEST,
+):
+    """The default verify-width ladder of one shape: ``smallest``, x``factor``, ... below the top rung, then
+    the top rung ``round_up(max_context + draft_len + 2, bucket)`` (always present; the largest covering
+    verify block for the last position).
+
+    262144 context at K=5: 2048, 8192, 32768, 131072, 263168 (5 records per
+    shape). A position below the smallest rung is still served: the rung just
+    covers it. ``max_rungs`` keeps the LARGEST rungs (the adapter passes
+    ``GEMMA4_SPEC_WIDTH_RUNGS`` here): dropping a small rung only widens short
+    prompts, while dropping the largest would leave long ones uncovered.
+    Pure: config-time arithmetic.
+    """
+    bucket, factor, smallest = int(bucket), int(factor), int(smallest)
+    if int(max_context) < 1 or int(draft_len) < 1:
+        raise ValueError(f"max_context and draft_len must be >= 1, got {max_context}, {draft_len}")
+    if bucket < 64 or bucket % 64:
+        raise ValueError(f"the width bucket must be a positive multiple of 64, got {bucket}")
+    if factor < 2 or smallest < bucket:
+        raise ValueError(f"the ladder needs factor >= 2 and smallest >= bucket, got {factor}, {smallest}")
+
+    def _r(n):
+        return ((int(n) + bucket - 1) // bucket) * bucket
+
+    top = _r(int(max_context) + int(draft_len) + 2)
+    ladder, rung = [], _r(smallest)
+    while rung < top:
+        ladder.append(rung)
+        rung = _r(rung * factor)
+    ladder.append(top)
+    if max_rungs is not None:
+        if int(max_rungs) < 1:
+            raise ValueError(f"max_rungs must be >= 1, got {max_rungs}")
+        ladder = ladder[-int(max_rungs) :]
+    return ladder
+
+
+@dataclass
+class ServingTraceProjection:
+    """Trace-region budget of a serving plan: ``records`` captures of ~``record_mb`` each on top of ``base_mb``
+    (the traces already in the region), against ``region_mb`` when the device's region size is readable."""
+
+    records: int
+    per_shape: dict
+    record_mb: float
+    base_mb: float
+    projected_mb: float
+    region_mb: object  # float, or None when the region size is not readable
+
+    @property
+    def fits(self):
+        """True/False against the region size; None when it is unknown."""
+        return None if self.region_mb is None else self.projected_mb <= float(self.region_mb)
+
+    def describe(self):
+        per_shape = ", ".join(f"{shape}: {n}" for shape, n in self.per_shape.items())
+        text = (
+            f"{self.records} records ({per_shape}) x ~{self.record_mb:.1f} MB + {self.base_mb:.1f} MB in use "
+            f"-> ~{self.projected_mb:.0f} MB of trace region"
+        )
+        if self.region_mb is None:
+            return text + " (device region size not readable)"
+        return text + f" of {float(self.region_mb):.0f} MB ({'fits' if self.fits else 'EXCEEDS the region'})"
+
+
+def serving_trace_projection(shapes, widths_by_shape, record_mb=SPEC_RECORD_MB_DEFAULT, region_mb=None, base_mb=0.0):
+    """Pure budget arithmetic for a validated plan (``serving_plan`` output)."""
+    record_mb = float(record_mb)
+    if record_mb <= 0:
+        raise ValueError(f"record_mb must be > 0, got {record_mb}")
+    per_shape = {shape: len(widths_by_shape[shape]) for shape in shapes}
+    records = sum(per_shape.values())
+    return ServingTraceProjection(
+        records=records,
+        per_shape=per_shape,
+        record_mb=record_mb,
+        base_mb=float(base_mb),
+        projected_mb=float(base_mb) + records * record_mb,
+        region_mb=None if region_mb is None else float(region_mb),
+    )
+
+
+def serving_plan(shapes, widths_by_shape, max_rows, max_context=None, max_rungs=None):
     """Validate a serving plan; returns ``(sorted shapes, {shape: sorted widths})``.
 
     Every shape fits ``max_rows`` rows and the tile rule; every shape has a
     non-empty width list of positive multiples of 64 (the SDPA key chunk);
-    ``widths_by_shape`` names no other shape.
+    ``widths_by_shape`` names no other shape. With ``widths_by_shape=None``
+    every shape gets the default ``serving_width_ladder(max_context, k,
+    max_rungs=max_rungs)``.
     """
     max_rows = int(max_rows)
     if max_rows < 1:
@@ -212,6 +310,10 @@ def serving_plan(shapes, widths_by_shape, max_rows):
     for rows, _k in plan:
         if rows > max_rows:
             raise ValueError(f"shape {(rows, _k)} has more rows than max_rows={max_rows}")
+    if widths_by_shape is None:
+        if max_context is None:
+            raise ValueError("the default width ladder needs max_context (the ladder context in tokens)")
+        widths_by_shape = {shape: serving_width_ladder(max_context, shape[1], max_rungs=max_rungs) for shape in plan}
     widths = {}
     for shape in plan:
         got = widths_by_shape.get(shape) if hasattr(widths_by_shape, "get") else None
@@ -537,6 +639,7 @@ class SpeculativeDecoder:
         self._srv_uploaded = {}  # last uploaded small inputs, by key
         self._srv_last = None  # {"shape", "rows", "K"} of the last replay
         self._srv_seeded = {}  # row id -> reseed-pool row
+        self._srv_projection = None  # ServingTraceProjection of the prepared plan
 
     def _fused_shift_seed_row(self, accepted, K):
         if self._fused_shift_seed == "current":
@@ -2161,8 +2264,17 @@ class SpeculativeDecoder:
     def _srv_layer_types(self):
         return list(self.target.hf_config.layer_types[: len(self.target.layers)])
 
-    def serving_prepare(self, shapes, widths_by_shape, max_rows):
+    def serving_prepare(
+        self, shapes, widths_by_shape, max_rows, record_mb=SPEC_RECORD_MB_DEFAULT, max_context=None, max_rungs=None
+    ):
         """Allocate and compile every (shape, width) record; captures nothing.
+
+        ``widths_by_shape=None`` takes the default x4 ladder per shape from
+        ``max_context`` (``max_rungs`` keeps the largest rungs). The planned
+        record count and the projected trace bytes (``record_mb`` per record,
+        default the measured 32 MB, on top of what the region already holds)
+        are logged against the device's trace region size when
+        ``ttnn.get_memory_view`` reports it, as a projection only otherwise.
 
         Runs, eagerly and in this order: ``_pv_setup`` (ring detection; its
         one-slot staging is not consumed by the records, whose verify writes
@@ -2180,8 +2292,17 @@ class SpeculativeDecoder:
 
         if self._srv_records is not None:
             raise RuntimeError("serving_prepare already ran; serving_release before preparing again")
-        shapes, widths = serving_plan(shapes, widths_by_shape, max_rows)
+        shapes, widths = serving_plan(shapes, widths_by_shape, max_rows, max_context=max_context, max_rungs=max_rungs)
         max_rows = int(max_rows)
+        projection = serving_trace_projection(
+            shapes,
+            widths,
+            record_mb=record_mb,
+            region_mb=self._srv_trace_region_size_mb(),
+            base_mb=self._srv_trace_region_mb(),
+        )
+        self._srv_projection = projection
+        (_lg.warning if projection.fits is False else _lg.info)(f"[spec-serving] plan: {projection.describe()}")
         cap = getattr(self.assistant, "max_local_batch_size", None)
         if cap is None or int(cap) < max_rows:
             raise ValueError(
@@ -2240,6 +2361,15 @@ class SpeculativeDecoder:
         view = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.TRACE)
         return float(view.total_bytes_allocated_per_bank) * float(view.num_banks) / 1e6
 
+    def _srv_trace_region_size_mb(self):
+        """The device's TRACE region size in MB (``MemoryView.total_bytes_per_bank`` x banks), or None when this
+        ttnn's memory view does not expose the per-bank total (the projection is then logged on its own)."""
+        view = ttnn.get_memory_view(self.mesh_device, ttnn.BufferType.TRACE)
+        total = getattr(view, "total_bytes_per_bank", None)
+        if total is None:
+            return None
+        return float(total) * float(view.num_banks) / 1e6
+
     def serving_capture(self):
         """Capture one trace per prepared record (call once, after serving_prepare)."""
         from loguru import logger as _lg
@@ -2248,17 +2378,33 @@ class SpeculativeDecoder:
         t_all = time.perf_counter()
         cost = {}
         used = self._srv_trace_region_mb()
+        region = self._srv_trace_region_size_mb()
         _lg.info(f"[spec-serving] trace region before the record captures: {used:.1f} MB in use")
+        captured = []  # (key, measured MB) in capture order
         for key, rec in self._srv_records.items():
             t0 = time.perf_counter()
-            tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
-            verify_x, vidx = self._srv_body(rec)
-            ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
+            try:
+                tid = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+                verify_x, vidx = self._srv_body(rec)
+                ttnn.end_trace_capture(self.mesh_device, tid, cq_id=0)
+            except RuntimeError as exc:
+                # The TT_FATAL of a full trace region surfaces as a RuntimeError;
+                # re-raise it with the budget context (never swallowed: chained).
+                last = f"last captured {captured[-1][0]} at {captured[-1][1]:.1f} MB" if captured else "none captured"
+                region_text = f"{region:.0f} MB" if region is not None else "not readable"
+                raise RuntimeError(
+                    f"serving_capture failed on record shape={rec['shape']} S_k={rec['S_k']} after "
+                    f"{len(captured)} of {len(self._srv_records)} records ({[k for k, _ in captured]}); {last}; "
+                    f"trace region {used:.1f} MB in use of {region_text}; plan: {self._srv_projection.describe()}; "
+                    f"fewer rungs ({SPEC_WIDTH_RUNGS_ENV}) or shapes shrink the record set. Device error: {exc}"
+                ) from exc
             rec["id"] = tid
             rec["verify_x"] = verify_x
             rec["vidx"] = vidx
             cost[key] = round(time.perf_counter() - t0, 2)
             now = self._srv_trace_region_mb()
+            rec["trace_mb"] = now - used
+            captured.append((key, now - used))
             _lg.info(
                 f"[spec-serving] captured record shape={rec['shape']} S_k={rec['S_k']}: "
                 f"+{now - used:.1f} MB trace, {now:.1f} MB in use"
@@ -2269,6 +2415,11 @@ class SpeculativeDecoder:
         self._srv_last = None
         self._srv_seeded = {}
         _lg.info(f"[spec-serving] captured {len(cost)} records in {time.perf_counter() - t_all:.1f}s: {cost}")
+
+    def serving_widths(self):
+        """The resolved width ladder per prepared shape ({shape: [rungs]}), after serving_prepare."""
+        self._srv_require()
+        return {shape: list(ws) for shape, ws in self._srv_widths.items()}
 
     def serving_width_for(self, shape, max_position):
         """Narrowest prepared rung of ``shape`` covering a verify block at ``max_position``; None if none does."""
@@ -2699,8 +2850,11 @@ class SpeculativeDecoder:
             if len(parts) > 1:
                 for part in parts:
                     part.deallocate(True)
-            outs.append(ttnn.repeat(mask, ttnn.Shape([1, 1, _H, 1])))
-            mask.deallocate(True)
+            repeated = ttnn.repeat(mask, ttnn.Shape([1, 1, _H, 1]))
+            if not _same_device_buffer(repeated, mask):
+                # a one-head repeat may hand back its input under a new wrapper
+                mask.deallocate(True)
+            outs.append(repeated)
         return outs[0], outs[1]
 
     def _srv_copy_if_changed(self, key, host, dev, dtype, layout=ttnn.ROW_MAJOR_LAYOUT):
