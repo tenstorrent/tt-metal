@@ -33,6 +33,15 @@ The decoded channel selects the pipe implementation from the host-configured `Tr
 hardware multicast uses `SenderPipe` and `ReceiverPipe`. `TransferMode::ChainUnicast` uses `ChainSenderPipe` and
 `ChainReceiverPipe`; a chain receiver calls `receive_and_forward()` so intermediate receivers relay the payload.
 
+### Per-core argument size
+
+Each core normally receives its own copy of the channel's runtime block. Cores on one receiver line usually share a
+block (the receivers' copies are identical; only the sender's differs), so a cached program resends the same words to
+many cores on every enqueue. `McastConfig{.block_table = true}` sends each distinct block once, as a table in the
+kernel's common runtime arguments, and gives every core a one-word pointer to its block. Kernels are unchanged:
+`McastArgs` reads through the pointer when the compile-time control word says so. ProgramDescriptor attachment only.
+In a loop that signals the sender, take `sender_coordinates()` once and read through it.
+
 ## File map
 
 ### Host

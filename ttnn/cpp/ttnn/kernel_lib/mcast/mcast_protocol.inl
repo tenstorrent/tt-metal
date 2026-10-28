@@ -65,6 +65,10 @@ constexpr uint32_t RuntimeLayout::reserve(uint32_t& end, bool present, uint32_t 
     return offset;
 }
 
+constexpr uint32_t per_core_runtime_words(ArgumentMetadata metadata) {
+    return metadata.mcast.block_table ? 1u : RuntimeLayout(metadata).words;
+}
+
 template <typename Ranges>
 constexpr uint32_t range_coordinate(const Ranges& ranges, uint32_t first, uint32_t count, uint32_t index) {
     for (uint32_t range = 0; range < count; ++range) {
@@ -107,6 +111,7 @@ constexpr uint32_t COORD_ENCODING_SHIFT = 16, COORD_ENCODING_MASK = 3u;
 constexpr uint32_t REMOTE_KNOWN = 1u << 18;
 constexpr uint32_t ROTATING = 1u << 19;
 constexpr uint32_t ACK_SHIFT = 20, ACK_MASK = 3u;
+constexpr uint32_t BLOCK_TABLE = 1u << 22;
 enum class Ack : uint32_t { None, Constant, RemoteCount, Runtime };
 constexpr Ack ack(uint32_t control) { return Ack((control >> ACK_SHIFT) & ACK_MASK); }
 }  // namespace ct_control
@@ -130,6 +135,9 @@ constexpr ArgumentMetadata compact_compile_time_metadata(ArgumentMetadata metada
     }
     if (metadata.kernel.capabilities == 0) {
         mcast.rotating_span = 0;
+    }
+    if (RuntimeLayout(metadata).words == 0) {
+        mcast.block_table = false;  // nothing per core to share
     }
     return metadata;
 }
@@ -157,7 +165,7 @@ constexpr uint32_t compile_time_control(ArgumentMetadata input) {
            (metadata.kernel.capabilities << CAPABILITIES_SHIFT) |
            (uint32_t(metadata.coordinates.encoding) << COORD_ENCODING_SHIFT) |
            (mcast.remote_count_known ? REMOTE_KNOWN : 0u) | (mcast.rotating_span ? ROTATING : 0u) |
-           (uint32_t(ack_encoding) << ACK_SHIFT);
+           (uint32_t(ack_encoding) << ACK_SHIFT) | (mcast.block_table ? BLOCK_TABLE : 0u);
 }
 
 constexpr ArgumentMetadata compile_time_control_metadata(uint32_t control) {
@@ -171,6 +179,7 @@ constexpr ArgumentMetadata compile_time_control_metadata(uint32_t control) {
     metadata.kernel.roles = (control & DYNAMIC) ? DYNAMIC_ROLES : (control >> ROLES_SHIFT) & ROLES_MASK;
     metadata.kernel.capabilities = (control >> CAPABILITIES_SHIFT) & CAPABILITIES_MASK;
     metadata.coordinates.encoding = SenderCoordinateEncoding((control >> COORD_ENCODING_SHIFT) & COORD_ENCODING_MASK);
+    metadata.mcast.block_table = (control & BLOCK_TABLE) != 0;
     return metadata;
 }
 
@@ -200,6 +209,9 @@ constexpr CompileTimeLayout::CompileTimeLayout(uint32_t control, bool semaphore_
     if (metadata.coordinates.encoding != SenderCoordinateEncoding::ExplicitPairs) {
         coordinates = words;
         words += 4;  // Columns, rows, X ranges, Y ranges; no dimension/count truncation.
+    }
+    if (control & ct_control::BLOCK_TABLE) {
+        table_base = words++;  // filled per kernel by the attaching adapter
     }
 }
 

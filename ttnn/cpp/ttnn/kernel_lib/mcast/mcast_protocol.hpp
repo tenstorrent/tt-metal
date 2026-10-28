@@ -57,6 +57,9 @@ struct McastMetadata {
     dataflow_kernel_lib::SenderMcastMode sender_mcast_mode = dataflow_kernel_lib::SenderMcastMode::Unknown;
     bool has_remote_receivers = false;
     uint32_t flags = 0;
+    // Each distinct per-core block is sent once, in a table in the kernel's common runtime args; a core's
+    // runtime words are one pointer (its block's word offset in the table). Blocks keep RuntimeLayout.
+    bool block_table = false;
 };
 
 constexpr uint32_t ABSENT = 0;
@@ -140,6 +143,9 @@ private:
     static constexpr uint32_t reserve(uint32_t& end, bool present, uint32_t count = 1);
 };
 
+// Per-core runtime words a channel occupies on this placement: its RuntimeLayout block, or one table pointer.
+constexpr uint32_t per_core_runtime_words(ArgumentMetadata metadata);
+
 // Common host/device range decoding; views can be pointers or native vararg views.
 template <typename Ranges>
 constexpr uint32_t range_coordinate(const Ranges& ranges, uint32_t first, uint32_t count, uint32_t index);
@@ -156,6 +162,7 @@ struct CompileTimeLayout {
     uint32_t data_ready = OMITTED, consumer_ready = OMITTED, signal_source = OMITTED;
     uint32_t remote_count = OMITTED, ack_count = OMITTED, rotating_span = OMITTED;
     uint32_t coordinates = OMITTED;
+    uint32_t table_base = OMITTED;  // common-arg index of the block table (block_table channels)
     uint32_t words = 1;
 
     constexpr explicit CompileTimeLayout(uint32_t control, bool semaphore_ids = true);

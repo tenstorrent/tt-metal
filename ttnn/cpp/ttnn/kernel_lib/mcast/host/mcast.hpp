@@ -92,6 +92,11 @@ struct McastConfig {
     std::optional<tt::tt_metal::CoreRangeSet> handshake_cores = std::nullopt;
     dataflow_kernel_lib::DataReadySignal data_ready = dataflow_kernel_lib::DataReadySignal::Flag;
     dataflow_kernel_lib::TransferMode irregular_receiver_set_mode = dataflow_kernel_lib::TransferMode::Multicast;
+    // Send each distinct per-core argument block once, as a table in the kernel's common runtime args, and give
+    // every core a one-word pointer to its block. Cores on one receiver line usually share a block, so this cuts
+    // the per-core arguments a cached program resends on every enqueue. The multicasts are unchanged.
+    // ProgramDescriptor attachment only.
+    bool block_table = false;
 };
 
 // One in-group sender per receiver group, optionally staggered across groups.

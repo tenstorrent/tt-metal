@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <iterator>
 #include <limits>
+#include <map>
 #include <set>
 #include <string>
 #include <utility>
@@ -81,7 +82,12 @@ void McastImpl::attach(
         auto kernel = target.get();
         const auto noc = kernel_noc(kernel, prepared_arch_);
         const auto metadata = argument_metadata_(&kernel.core_ranges);
-        const auto ct = compile_time_args_(ids, metadata);
+        auto ct = compile_time_args_(ids, metadata);
+        // block_table (decided from the encoded control, which drops it when no core carries words): each
+        // distinct block once, in first-seen order; a core keeps its block's word offset.
+        const bool block_table = (ct[0] & wire::ct_control::BLOCK_TABLE) != 0u;
+        std::vector<uint32_t> table;
+        std::map<std::vector<uint32_t>, uint32_t> table_offsets;
         size_t rt_offset = 0;
         std::set<CoreCoord> runtime_cores;
         for (const auto& [core, args] : kernel.runtime_args) {
@@ -121,13 +127,27 @@ void McastImpl::attach(
                 kernel.runtime_args.emplace_back(core, std::vector<uint32_t>{});
                 entry = std::prev(kernel.runtime_args.end());
             }
-            const auto payload = runtime_args_(core, metadata);
+            auto payload = runtime_args_(core, metadata);
+            if (block_table) {
+                const auto [it, added] = table_offsets.try_emplace(payload, static_cast<uint32_t>(table.size()));
+                if (added) {
+                    table.insert(table.end(), payload.begin(), payload.end());
+                }
+                payload = {it->second};
+            }
             TT_FATAL(
                 rt_offset <= std::numeric_limits<uint32_t>::max() - payload.size(),
                 "Multicast runtime argument positions overflow");
             auto& args = entry->second;
             args.resize(rt_offset, 0);
             args.insert(args.end(), payload.begin(), payload.end());
+        }
+        if (block_table) {
+            TT_FATAL(
+                kernel.common_runtime_args.size() <= std::numeric_limits<uint32_t>::max() - table.size(),
+                "Multicast block table position overflow");
+            ct[wire::CompileTimeLayout(ct[0]).table_base] = static_cast<uint32_t>(kernel.common_runtime_args.size());
+            kernel.common_runtime_args.insert(kernel.common_runtime_args.end(), table.begin(), table.end());
         }
         kernel.compile_time_args.insert(kernel.compile_time_args.end(), ct.begin(), ct.end());
         kernels.push_back(std::move(kernel));

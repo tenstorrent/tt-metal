@@ -88,25 +88,29 @@ void py_module(nb::module_& mod) {
                bool handshake,
                std::optional<CoreRangeSet> handshake_cores,
                dataflow_kernel_lib::DataReadySignal data_ready,
-               dataflow_kernel_lib::TransferMode irregular_receiver_set_mode) {
+               dataflow_kernel_lib::TransferMode irregular_receiver_set_mode,
+               bool block_table) {
                 new (self) kh::McastConfig{
                     .noc = noc,
                     .handshake = handshake,
                     .handshake_cores = std::move(handshake_cores),
                     .data_ready = data_ready,
-                    .irregular_receiver_set_mode = irregular_receiver_set_mode};
+                    .irregular_receiver_set_mode = irregular_receiver_set_mode,
+                    .block_table = block_table};
             },
             nb::kw_only(),
             nb::arg("noc") = NOC::NOC_0,
             nb::arg("handshake") = true,
             nb::arg("handshake_cores") = std::optional<CoreRangeSet>{},
             nb::arg("data_ready") = dataflow_kernel_lib::DataReadySignal::Flag,
-            nb::arg("irregular_receiver_set_mode") = dataflow_kernel_lib::TransferMode::Multicast)
+            nb::arg("irregular_receiver_set_mode") = dataflow_kernel_lib::TransferMode::Multicast,
+            nb::arg("block_table") = false)
         .def_rw("noc", &kh::McastConfig::noc)
         .def_rw("handshake", &kh::McastConfig::handshake)
         .def_rw("handshake_cores", &kh::McastConfig::handshake_cores)
         .def_rw("data_ready", &kh::McastConfig::data_ready)
-        .def_rw("irregular_receiver_set_mode", &kh::McastConfig::irregular_receiver_set_mode);
+        .def_rw("irregular_receiver_set_mode", &kh::McastConfig::irregular_receiver_set_mode)
+        .def_rw("block_table", &kh::McastConfig::block_table);
 
     static_cast<nb::class_<kh::McastFixedSenderConfig>>(mod.attr("McastFixedSenderConfig"))
         .def(

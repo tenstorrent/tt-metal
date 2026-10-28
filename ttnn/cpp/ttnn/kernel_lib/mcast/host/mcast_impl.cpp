@@ -460,6 +460,7 @@ void McastImpl::prepare_arguments_() const {
         "Mcast: rotating senders with Flag signaling require handshaking");
     layout_.rotating_span = rotating ? groups_.front().num_senders() : 0;
     layout_.flags = detail::mcast_flags(cfg_);
+    layout_.block_table = cfg_.block_table;
     std::optional<uint32_t> first_ack, first_remote;
     std::optional<SenderMcastMode> first_sender_mcast_mode;
     bool uniform_ack = true, uniform_remote = true, uniform_sender_mcast_mode = true;

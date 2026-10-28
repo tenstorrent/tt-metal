@@ -186,6 +186,7 @@ void McastImpl::attach(
     std::span<const m2::KernelSpecName> targets) const {
     prepare_arguments_();
     require_unbound_();
+    TT_FATAL(!cfg_.block_table, "Mcast: block_table is not supported on the ProgramSpec path yet");
     const auto indices = validate_targets(spec, prefix, targets);
     const auto count = required_semaphores_();
     // Native value objects provide the transaction boundary; no retained invocation state.

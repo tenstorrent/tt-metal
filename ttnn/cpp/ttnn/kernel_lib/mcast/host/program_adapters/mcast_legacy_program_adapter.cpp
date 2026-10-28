@@ -24,6 +24,8 @@ void McastImpl::require_unbound_() const {
 void McastImpl::append_semaphores(Program& program) {
     prepare_arguments_();
     TT_FATAL(!program_bound_, "Multicast semaphores have already been appended");
+    TT_FATAL(
+        !cfg_.block_table, "Mcast: block_table needs ProgramDescriptor attachment; its table belongs to one kernel");
     std::array<uint32_t, 3> ids{UNUSED_SEM_ID, UNUSED_SEM_ID, UNUSED_SEM_ID};
     for (uint32_t role = 0; role < required_semaphores_(); ++role) {
         ids[role] = CreateSemaphore(program, participating_, 0);

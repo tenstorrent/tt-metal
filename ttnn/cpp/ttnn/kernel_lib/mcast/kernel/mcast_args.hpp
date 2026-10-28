@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+#include <type_traits>
 
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/mcast_protocol.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/pipes/chain_pipe.hpp"
@@ -233,6 +234,14 @@ struct McastArgsImpl<true, METADATA, Runtime, DataReadyBinding, ConsumerReadyBin
         return mcast_wire::sender_coordinate(
             Runtime::coordinates(runtime_layout.sender_coordinates), METADATA.coordinates, 0, mcast_wire::SENDER_Y);
     }
+    // The sender coordinates as an indexable view ([SENDER_X, SENDER_Y] per sender phase), resolved once: hold it
+    // across a loop that signals the sender instead of calling sender_x()/sender_y() on every iteration.
+    SenderCoordinates sender_coordinates() const {
+        static_assert(
+            runtime_layout.sender_coordinates != mcast_wire::OMITTED,
+            "Sender coordinates are unavailable on this placement");
+        return SenderCoordinates(Runtime::coordinates(runtime_layout.sender_coordinates));
+    }
 
 private:
     uint32_t roles_() const {
@@ -261,6 +270,7 @@ struct McastArgsImpl<false, METADATA, Runtime, DataReadyBinding, ConsumerReadyBi
     bool can_send() const { return false; }
     bool can_receive() const { return false; }
     bool should_send(uint32_t) const { return false; }
+    const uint32_t* sender_coordinates() const { return nullptr; }
 
     void sender(const Noc&) const {
         static_assert(always_false_for_metadata<METADATA>, "No multicast on this core; a sender pipe cannot be built");
@@ -284,6 +294,20 @@ struct PositionalMcastRuntime {
     }
 };
 
+// block_table channels: the core's one runtime word is its block's word offset in the table, which sits in the
+// kernel's common runtime args at the compile-time TABLE_BASE. Reads follow that offset; no other arithmetic.
+template <uint32_t CT_BASE, uint32_t RT_BASE>
+struct TableMcastRuntime {
+    static constexpr uint32_t TABLE =
+        get_compile_time_arg_val(CT_BASE + mcast_wire::CompileTimeLayout(get_compile_time_arg_val(CT_BASE)).table_base);
+    static uint32_t read(uint32_t offset) {
+        return get_common_arg_val<uint32_t>(TABLE + get_arg_val<uint32_t>(RT_BASE) + offset);
+    }
+    static const uint32_t* coordinates(uint32_t offset) {
+        return reinterpret_cast<const uint32_t*>(get_common_arg_addr(TABLE + get_arg_val<uint32_t>(RT_BASE) + offset));
+    }
+};
+
 template <uint32_t CT_BASE>
 struct PositionalMcastCompileTime {
     constexpr uint32_t operator[](uint32_t index) const { return kernel_compile_time_args[CT_BASE + index]; }
@@ -304,13 +328,19 @@ constexpr uint32_t positional_mcast_semaphore() {
     }
 }
 
+template <uint32_t CT_BASE, uint32_t RT_BASE>
+using positional_mcast_runtime = std::conditional_t<
+    mcast_metadata<PositionalMcastCompileTime<CT_BASE>>().mcast.block_table,
+    TableMcastRuntime<CT_BASE, RT_BASE>,
+    PositionalMcastRuntime<RT_BASE>>;
+
 }  // namespace detail
 
 template <uint32_t CT_BASE, uint32_t RT_BASE>
 struct McastArgs : detail::McastArgsImpl<
                        (get_compile_time_arg_val(CT_BASE) != mcast_wire::ABSENT),
                        detail::mcast_metadata<detail::PositionalMcastCompileTime<CT_BASE>>(),
-                       detail::PositionalMcastRuntime<RT_BASE>,
+                       detail::positional_mcast_runtime<CT_BASE, RT_BASE>,
                        detail::McastSemaphoreToken<McastSemaphoreBinding{
                            detail::positional_mcast_semaphore<CT_BASE, mcast_wire::DATA_READY>()}>,
                        detail::McastSemaphoreToken<McastSemaphoreBinding{
@@ -324,7 +354,7 @@ struct McastArgs : detail::McastArgsImpl<
         constexpr auto metadata = detail::mcast_metadata<detail::PositionalMcastCompileTime<CT_BASE>>();
         return RT_BASE + (get_compile_time_arg_val(CT_BASE) == mcast_wire::ABSENT
                               ? 0
-                              : mcast_wire::RuntimeLayout(metadata).words);
+                              : mcast_wire::per_core_runtime_words(metadata));
     }
 };
 

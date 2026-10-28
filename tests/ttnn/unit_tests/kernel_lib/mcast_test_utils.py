@@ -141,6 +141,8 @@ def inspect_mcast_ct(kernel, prefix="mcast"):
     if fields["encoding"]:
         for name in ("columns", "rows", "x_ranges", "y_ranges"):
             fields[name] = take()
+    # block_table: the per-core word is a pointer into a table in the kernel's common runtime args.
+    fields["table"] = take() if control & (1 << 22) else None
     fields["words"] = offset
     return fields
 
@@ -150,6 +152,8 @@ def inspect_mcast(kernel, core, prefix="mcast"):
     named = dict(kernel.named_compile_time_args)
     ct = inspect_mcast_ct(kernel, prefix)
     rt = kernel.runtime_args[core.x][core.y][named[prefix + "_rt_offset"] :]
+    if ct["table"] is not None:
+        rt = list(kernel.common_runtime_args)[ct["table"] + rt[0] :]
     offset = 0
     roles = ct["roles"]
     if roles == 0xFFFFFFFF:
@@ -216,6 +220,7 @@ def run_mcast_groups_case(
     mixed_events=False,
     delayed=False,
     min_rectangles=None,
+    block_table=False,
 ):
     """Build a unified multicast channel, then exercise its attached kernel arguments."""
     specs = [Group(*group) for group in specs]
@@ -239,6 +244,7 @@ def run_mcast_groups_case(
                 mixed_events=mixed_events,
                 delayed=delayed,
                 min_rectangles=min_rectangles,
+                block_table=block_table,
             )
         return
     chained = chain_link and any(
@@ -252,6 +258,7 @@ def run_mcast_groups_case(
         handshake=handshake,
         data_ready=ttnn.McastDataReady.Counter if counter else ttnn.McastDataReady.Flag,
         irregular_receiver_set_mode=(ttnn.TransferMode.ChainUnicast if chain_link else ttnn.TransferMode.Multicast),
+        block_table=block_table,
     )
     mcast = make_mcast(device, specs, config)
     _run_channel(
@@ -289,6 +296,7 @@ def run_positional_mcast_case(
     suppress_round_output=False,
     stress_flag_source_lifetime=False,
     delay_receiver_construction=False,
+    block_table=False,
 ):
     """Use unified host assembly with the same payload checks as a mcast."""
 
@@ -303,6 +311,7 @@ def run_positional_mcast_case(
         noc=ttnn.NOC.NOC_1 if noc else ttnn.NOC.NOC_0,
         handshake=handshake,
         data_ready=ttnn.McastDataReady.Counter if counter else ttnn.McastDataReady.Flag,
+        block_table=block_table,
     )
     sender_config = (
         ttnn.McastExplicitFixedSenderConfig([ttnn.CoreCoord(*group.senders[0])])
