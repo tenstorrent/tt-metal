@@ -453,7 +453,9 @@ def test_sp_affine_rectangular_live_slots(mesh_device, axis, dtype):
             eye = torch.eye(key_dim, dtype=host_dtype)
             packed = torch.cat(
                 [
-                    torch.stack([torch.cat([rank[0] - eye, rank[1]], dim=-1), torch.cat([rank[2] - eye, rank[3]], dim=-1)])
+                    torch.stack(
+                        [torch.cat([rank[0] - eye, rank[1]], dim=-1), torch.cat([rank[2] - eye, rank[3]], dim=-1)]
+                    )
                     for rank in ranks
                 ],
                 dim=1,

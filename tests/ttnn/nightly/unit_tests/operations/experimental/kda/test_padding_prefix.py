@@ -112,7 +112,9 @@ def test_single_group_reduction_publishes_the_summary_unchanged(mesh_device, dim
         for device_index, (want, got) in enumerate(
             zip(ttnn.get_device_tensors(summary), ttnn.get_device_tensors(reduced), strict=True)
         ):
-            assert_bit_identical(ttnn.to_torch(want), ttnn.to_torch(got), name=f"single-group head on device {device_index}")
+            assert_bit_identical(
+                ttnn.to_torch(want), ttnn.to_torch(got), name=f"single-group head on device {device_index}"
+            )
     finally:
         for tensor in (*protocol, *outputs, start_tt, end_tt):
             if tensor is not None:
