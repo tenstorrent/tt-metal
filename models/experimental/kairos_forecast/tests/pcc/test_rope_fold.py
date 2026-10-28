@@ -1,7 +1,8 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 """D3 R1-1: the folded q @ R / k @ R weight columns, as the model stores them on the device, are bitwise the permuted
-and negated stored q / k columns, in both presets (bf16 and bfp8), so RoPE stays order-only."""
+and negated stored q / k columns, in both presets (bf16 and bfp8), so RoPE stays order-only
+(a -0 stored as +0 is the one allowed bit difference)."""
 import pytest
 import torch
 
@@ -32,5 +33,7 @@ def test_folded_columns_bitwise(device, prec):
     ck, cv, ckr = _groups(dec["kv"])
     pairs += [(cqr, rotate_cols(cq)), (cq2, cq), (ckr, rotate_cols(ck))]
     for i, (got, exp) in enumerate(pairs):
-        assert torch.equal(_bits(got), _bits(exp)), (prec, i)
+        # bitwise, except that a negated zero is stored as +0 (bfp8 has no -0); x * +-0 adds nothing either way
+        diff = _bits(got) != _bits(exp)
+        assert torch.equal(got, exp) and bool((exp[diff] == 0).all()), (prec, i, int(diff.sum()))
     assert enc["qkvr"].dtype == enc["qkv"].dtype and dec["kv"].dtype == m.dec[0]["qkv"].dtype
