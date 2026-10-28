@@ -2273,3 +2273,30 @@ setup + traced replays + same-x bitwise check). Drivers, logs, triage: session s
   in the capture), safe-pytest then reports a HANG. Head HXC_ROWS=1280 with the test defaults (MT 2, GY 10): L1 OOM
   (arena 1199 KB a bank, largest free block 1178 KB); at b8212572997 it fails earlier (router cores < row blocks);
   GY 8 / MT 1 (the block's plan) passes at both - not a regression.
+
+### F1 fixed: every dispatch link ends in a ring of the chip it leads to (2026-10-28, bh-lb-09)
+Why: the random stress's F1 (K3 on the TP line: same-x replays differ by whole expert terms; stale x rows).
+- Mechanism (sparse_all_gather_2d): the dispatch is its own program; a chip's experts start when its port kernels are
+  done, and a port is done when every input ring delivered END(GMAX) - END follows the link's rows on the same link,
+  so a chip is done only after the rows of every link that leads into one of its rings landed. On a 1-D line the end
+  chip's only port has no input (nothing behind it, no other axis): the link from its neighbour's port toward it
+  (rows on their last hop) has no continue / turn stream there, so no END - the end chip's dispatch finished on its own
+  rows and its experts read x rows still in flight (the previous call's rows at those slots). Mid chips and every 2-D
+  mesh (2x4, Galaxy 4x4 / 8x4, rings or lines) always have a port to continue or turn into: covered already. The same
+  hole made MOE_EDD=1 on the line assert ("port (0, 1) X- 0 has no stream into (0, 0)").
+- Fix: such a link carries a terminal stream - only END(GMAX), staged after its last row, into ring 0 of the receiving
+  port of the same link (free: no chip behind it). It gates that port's completion, not its END order (ring_mask bit
+  3 + k; no new dependency chain). One wiring helper (_wiring) for the standalone op and dispatch_phase. Checked offline
+  on 1x2 / 1x4 / 1x8 / 4x1 lines, 1x4 ring, 2x4, 4x4 (ring x line both ways), 8x4 torus: every link ends in a ring,
+  every sender stream matches an input ring; terminal streams only on the 1-D lines (2 a line).
+- Result (snap 2^-14, same-x replays bitwise): line 0 of 1199 (before: 222 of 299), line 1280 hot_mix 0 of 399, ring
+  0 of 999, GLM-5.3-Flash 2x4 0 of 299; MOE_EDD=1 on the line now runs, 0 of 199. Line worst row rel err 0.129 -> 0.098
+  (= ring); PCC min 0.99611 -> 0.99618; ring 0.99619-0.99628.
+- Perf (test_moe_block_traced device timing, 100 replays, slowest chip): ring dispatch 55.4 -> 55.3 us, span 1702 ->
+  1700; line dispatch 82.3 -> 87.4 (+5: the end chips now wait for their incoming rows), experts + combine 1215 -> 1163,
+  span 1863 -> 1865 (+0.1%); GLM 2x4 dispatch 464.8 -> 462.9, span 2981 -> 2987 (experts + combine 1380 -> 1389: the
+  combine accumulator's fp32 unpack change landed in the tree between the runs; the 2x4's dispatch wiring is unchanged).
+- Also: the dispatch descriptor cache key (dkey) held buffer addresses and options only - an output of another width
+  at a freed one's address reused the old program (row bytes, CBs, accessors). Scratch repro on the line: W 3584 then
+  3072 at the same address -> every chip wrong; with shape / dtype / layout / page size / memory config in the key, 4 of
+  4 calls right.

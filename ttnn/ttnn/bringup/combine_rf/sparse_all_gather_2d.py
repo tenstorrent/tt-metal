@@ -22,6 +22,10 @@ write + increment vouches for the rows sent before it on the same link. END(g) =
 hops before leaving; a port emits END(0) after its own rows, END(g) after every input delivered END(g - 1), and is done
 when END(GMAX) is out and every input delivered END(GMAX). Rings hold a whole call (no credits, nothing waits for
 space): ring k holds S entries per origin chip whose trees can reach a ring k of some port (manifest_layout), not N S.
+Every link ends in a ring of the chip it leads to, so a chip's ports are done only after every incoming link's rows
+landed: a link into a chip with no port to continue or turn into (a 1-D line's end chip) carries a terminal stream
+instead - only its END(GMAX), into ring 0 of the receiving port of that link (free there: nothing is behind it), which
+gates that port's completion but not its END order (_wiring).
 """
 
 import functools
@@ -171,7 +175,9 @@ void kernel_main() {
     const uint32_t ring_offs = get_arg_val<uint32_t>(a++);
     uint32_t cnt_addr[3];
     for (uint32_t k = 0; k < 3; ++k) cnt_addr[k] = get_arg_val<uint32_t>(a++);
-    const uint32_t ring_mask = get_arg_val<uint32_t>(a++);  // which inputs exist
+    // which inputs exist (bit k: ring k); bit 3 + k: ring k is a terminal stream (only the link's END(GMAX): it gates
+    // this port's completion - the link's rows landed - not its END order)
+    const uint32_t ring_mask = get_arg_val<uint32_t>(a++);
     const uint32_t my_r = get_arg_val<uint32_t>(a++);
     const uint32_t my_c = get_arg_val<uint32_t>(a++);
     const uint32_t dir = get_arg_val<uint32_t>(a++);  // 0 X+, 1 X-, 2 Y+, 3 Y-
@@ -250,12 +256,13 @@ void kernel_main() {
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(meta_w)[batch * META_WORDS] = END | (g << 20);
         if (++batch == group) flush();
     };
-    auto inputs_reached = [&](int32_t g) {
+    auto inputs_reached = [&](int32_t g, uint32_t mask) {
         for (uint32_t k = 0; k < 3; ++k) {
-            if (((ring_mask >> k) & 1) && end_in[k] < g) return false;
+            if (((mask >> k) & 1) && end_in[k] < g) return false;
         }
         return true;
     };
+    const uint32_t order_mask = ring_mask & ~(ring_mask >> 3) & 7;  // the inputs END(g) waits on
 
     uint32_t idle = 0;
     bool bailed = false;
@@ -289,11 +296,11 @@ void kernel_main() {
         }
         if (!did && own_t >= S) {
             const int32_t g = end_out + 1;
-            if (g <= static_cast<int32_t>(GMAX) && (g == 0 || inputs_reached(g - 1))) {
+            if (g <= static_cast<int32_t>(GMAX) && (g == 0 || inputs_reached(g - 1, order_mask))) {
                 put_end(g);
                 end_out = g;
                 did = true;
-            } else if (g > static_cast<int32_t>(GMAX) && inputs_reached(GMAX)) {
+            } else if (g > static_cast<int32_t>(GMAX) && inputs_reached(GMAX, ring_mask)) {
                 break;
             }
         }
@@ -464,10 +471,11 @@ void kernel_main() {
                     zok = true;
                 }
 #endif
-                for (uint32_t s = 0; s < 3; ++s) {
-                    if (s_on[s]) stage(s, w0, 0);
+                const bool last = ((w0 >> 20) & 0xF) == GMAX;
+                for (uint32_t s = 0; s < 3; ++s) {  // (s_on 2: a terminal stream - END(GMAX) only)
+                    if (s_on[s] == 1 || (s_on[s] == 2 && last)) stage(s, w0, 0);
                 }
-                if (((w0 >> 20) & 0xF) == GMAX) done = true;
+                if (last) done = true;
                 ++ends;
                 continue;
             }
@@ -504,6 +512,41 @@ void kernel_main() {
 }
 """
 )
+
+
+def _axis_dirs(d):
+    """The other axis's directions (+, -) of direction d."""
+    return ("Y+", "Y-") if d[0] == "X" else ("X+", "X-")
+
+
+def _wiring(chips, nb, coord, d):
+    """Port (coord, d)'s inputs and output streams: (ring_mask, streams). ring_mask bit k: input ring k exists (0: rows
+    continuing in d from the chip behind, its port d; 1 / 2: rows turning into d's axis that arrived moving + / - along
+    the other axis, from the chips on either side, their ports + / -); bit 3 + k: ring k is a terminal stream.
+    streams: per output stream s (0: continue, 1 / 2: turn + / -) (on, target port's direction at the neighbour, ring);
+    on 2 = terminal. A link into a chip that has no port in d nor on the other axis (a 1-D line's end) would deliver no
+    END there, and that chip's dispatch could finish (and its experts read x) before the link's rows land: it carries
+    a terminal stream instead - END(GMAX) only, into ring 0 of the neighbour's port OPP[d] (the port of the same link;
+    its ring 0 is free: no chip is behind it)."""
+    pa, ma = _axis_dirs(d)
+    behind = nb(coord, OPP[d])
+    ring_mask = 0
+    if behind is not None and d in chips[behind]:
+        ring_mask |= 1
+    elif d in chips[coord] and not any(x in chips[coord] for x in (OPP[d], pa, ma)):
+        ring_mask |= 1 | 8  # (the link from the port d's neighbour ends here)
+    src_plus = nb(coord, ma)  # a row moving + arrives from the - side
+    if src_plus is not None and pa in chips[src_plus]:
+        ring_mask |= 2
+    src_minus = nb(coord, pa)
+    if src_minus is not None and ma in chips[src_minus]:
+        ring_mask |= 4
+    peer = chips[coord][d]["peer"]
+    k_turn = 1 if d[1] == "+" else 2  # (ring 1 at the neighbour if this port moves rows +, else ring 2)
+    streams = [(1 if t in chips[peer] else 0, t, k) for t, k in ((d, 0), (pa, k_turn), (ma, k_turn))]
+    if not any(on for on, _, _ in streams):
+        streams[0] = (2, OPP[d], 0)
+    return ring_mask, streams
 
 
 def route_words(N):
@@ -836,9 +879,6 @@ def sparse_all_gather_2d(
         )
     src = ttnn.KernelDescriptor.SourceType.SOURCE_CODE
 
-    def axis_dirs(d):
-        return ("Y+", "Y-") if d[0] == "X" else ("X+", "X-")
-
     mesh_desc = ttnn.MeshProgramDescriptor()
     for coord, ports in chips.items():
         r, c = coord
@@ -874,19 +914,7 @@ def sparse_all_gather_2d(
         ]
         reader_rt, sender_rt = ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
         for d, li, core in my_ports:
-            # inputs: 0 = rows continuing in d (from the chip behind, its port d); 1 / 2 = rows turning into d's axis
-            # that arrived moving + / - along the other axis (from the chips on either side, their ports + / -)
-            behind = nb(coord, OPP[d])
-            pa, ma = axis_dirs(d)
-            ring_mask = 0
-            if behind is not None and d in chips[behind]:
-                ring_mask |= 1
-            src_plus = nb(coord, ma)  # a row moving + arrives from the - side
-            if src_plus is not None and pa in chips[src_plus]:
-                ring_mask |= 2
-            src_minus = nb(coord, pa)
-            if src_minus is not None and ma in chips[src_minus]:
-                ring_mask |= 4
+            ring_mask, wiring = _wiring(chips, nb, coord, d)
             port_idx = (r * C + c) * 8 + DIRS.index(d) * 2 + li
             reader_rt[core.x][core.y] = (
                 [out_addr, plan_addr, man_addr, ring_offs]
@@ -897,15 +925,9 @@ def sparse_all_gather_2d(
             rc = virt(port_core[(peer, OPP[d], li)])
             pn = node(peer)
             streams = []
-            # stream 0: the neighbour's port d (ring 0); 1 / 2: its ports + / - of the other axis (ring 1 if this
-            # port moves rows +, else ring 2)
-            k_turn = 1 if d[1] == "+" else 2
-            for target, k in ((d, 0), (pa, k_turn), (ma, k_turn)):
-                if target in chips[peer]:
-                    v = virt(port_core[(peer, target, li)])
-                    streams += [1, v.x, v.y, k]
-                else:
-                    streams += [0, 0, 0, 0]
+            for on, target, k in wiring:
+                v = virt(port_core[(peer, target, li)]) if on else None
+                streams += [on, v.x, v.y, k] if on else [0, 0, 0, 0]
             args = [out_addr, ready_addr, rc.x, rc.y, int(pn.mesh_id), int(pn.chip_id), man_addr, ring_offs]
             args += cnt_addrs + streams + [peer[0], peer[1], DIRS.index(d)]
             args += list(ttnn.setup_fabric_connection(node(coord), pn, ports[d]["links"][li], program, core))
@@ -1058,9 +1080,6 @@ def dispatch_phase(
     rd_ct = [cbs["rows"], cbs["meta"], cbs["plan"], row_bytes, group, plan_bytes] + out_ct + plan_ct + plan_ct
     sd_ct = [cbs["rows"], cbs["meta"], cbs["stage"], row_bytes, group, manifest_batch, pack] + out_ct
 
-    def axis_dirs(d):
-        return ("Y+", "Y-") if d[0] == "X" else ("X+", "X-")
-
     rel = [virt(c) for c in relays]
     out = {}
     for coord, ports in chips.items():
@@ -1083,17 +1102,7 @@ def dispatch_phase(
             sd={},
         )
         for i, (d, li, core) in enumerate(my_ports):
-            behind = nb(coord, OPP[d])
-            pa, ma = axis_dirs(d)
-            ring_mask = 0
-            if behind is not None and d in chips[behind]:
-                ring_mask |= 1
-            src_plus = nb(coord, ma)
-            if src_plus is not None and pa in chips[src_plus]:
-                ring_mask |= 2
-            src_minus = nb(coord, pa)
-            if src_minus is not None and ma in chips[src_minus]:
-                ring_mask |= 4
+            ring_mask, wiring = _wiring(chips, nb, coord, d)
             port_idx = (r * C + c) * 8 + DIRS.index(d) * 2 + li
             inc = 1 + (XREADY_N - len(my_ports) if i == 0 else 0)
             pieces["rd"][(core.x, core.y)] = (
@@ -1106,18 +1115,12 @@ def dispatch_phase(
             peer = ports[d]["peer"]
             rc = virt(port_core[(peer, OPP[d], li)])
             pn = node(peer)
+            # (x landed rests on every link's END reaching a port of the chip it leads to: _wiring's terminal stream
+            # where the link's rows go no further)
             streams = []
-            k_turn = 1 if d[1] == "+" else 2
-            on = 0
-            for target, k in ((d, 0), (pa, k_turn), (ma, k_turn)):
-                if target in chips[peer]:
-                    v = virt(port_core[(peer, target, li)])
-                    streams += [1, v.x, v.y, k]
-                    on += 1
-                else:
-                    streams += [0, 0, 0, 0]
-            # (x landed rests on every link's END reaching a port of the chip it leads to)
-            assert on, f"dispatch phase: port {coord} {d} {li} has no stream into {peer}"
+            for on, target, k in wiring:
+                v = virt(port_core[(peer, target, li)]) if on else None
+                streams += [on, v.x, v.y, k] if on else [0, 0, 0, 0]
             pieces["sd"][(core.x, core.y)] = (
                 [out_addr, ready_addr, rc.x, rc.y, int(pn.mesh_id), int(pn.chip_id), man_addr, ring_offs]
                 + cnt_addrs
