@@ -226,6 +226,29 @@ def main(path):
                 )
             )
 
+    # Optional second argument: every compute core's row, for offline work-split studies (d2_assign_sim.py).
+    if len(sys.argv) > 2:
+        with open(sys.argv[2], "w") as out:
+            out.write("dev x y span busy steps prologue stalls tail fetch group_rx group_tx\n")
+            for k in compute_cores:
+                r = per[k]
+                out.write(
+                    "%s %s %s %.1f %.1f %d %.1f %.1f %.1f %.1f %.1f %.1f\n"
+                    % (
+                        k[1],
+                        k[2],
+                        k[3],
+                        r["span"],
+                        r["busy"],
+                        r["steps"],
+                        r["prologue"],
+                        r["stalls"],
+                        r["tail"],
+                        r["RD_FETCH_K"],
+                        r["RD_GROUP_RX"],
+                        r["RD_GROUP_TX"],
+                    )
+                )
     by_busy = sorted(compute_cores, key=lambda k: -per[k]["busy"])
     show(by_busy[:12], "busiest compute cores")
     show(by_busy[-12:], "least busy compute cores")

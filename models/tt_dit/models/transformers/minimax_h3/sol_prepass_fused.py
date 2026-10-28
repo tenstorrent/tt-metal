@@ -35,6 +35,7 @@ from .sol_prepass import (
     _pad32,
     build_constants,
     compute_row_max,
+    dump_block_mask,
     row_max_constants,
 )
 
@@ -533,6 +534,7 @@ class SolPrepassFused:
                 cols = torch.cat([torch.arange(s * geo.nb_pad, s * geo.nb_pad + geo.nb) for s in range(geo.shards)])
             self.last_density = float(sub[..., cols].mean())
             self.last_block_density = None if self.mode == "chunk" else self.last_density
+            dump_block_mask(host, geo, self.sp_axis, tuple(self.mesh_device.shape), self.tau)  # SOL_DUMP_MASK_DIR
         ttnn.deallocate(q_bar)
         out = {"block_mask": mask, "pooled_k": kc, "pooled_v": vc, "bias": bias, "row_max": row_max}
         if union is not None:

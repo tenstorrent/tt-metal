@@ -51,7 +51,7 @@ want() { [ "$ONLY" = all ] || [ "$ONLY" = "$1" ]; }
 # $TT_METAL_HOME/generated/profiler/.logs/ -- on the cluster TT_METAL_HOME is the node-local /tmp copy, not this
 # directory, which is why earlier jobs found no CSV to copy. Summarize it to log_val_<name>.txt with
 # sol_profile_summary.py (the CSV never needs copying) and log which file was read, or what was found instead.
-summarize_profile() {
+summarize_profile() {  # name, profiled run's name, [per-core table file]
     local name=$1 csv="" d
     for d in "${TT_METAL_PROFILER_DIR:-}" "${TT_METAL_HOME:+$TT_METAL_HOME/generated/profiler}" generated/profiler; do
         if [ -n "$d" ] && [ -f "$d/.logs/profile_log_device.csv" ]; then
@@ -68,7 +68,7 @@ summarize_profile() {
         return 1
     fi
     echo "csv: $csv ($(du -h "$csv" | cut -f1), $(date -r "$csv"))" > "log_val_$name.txt"
-    run "${name}_tmp" 1200 python3 sol_profile_summary.py "$csv"
+    run "${name}_tmp" 1200 python3 sol_profile_summary.py "$csv" ${3:+"$3"}
     cat "log_val_${name}_tmp.txt" >> "log_val_$name.txt" && rm -f "log_val_${name}_tmp.txt"
 }
 
@@ -759,6 +759,34 @@ if want u1; then
         run u1_profile_m8_union 900 env $PR $M8 TT_SOL_MEMBER_UNION=1 pytest "$B" -s -k "$S"
         summarize_profile u1_profile_m8_union_summary u1_profile_m8_union
     fi
+fi
+
+# D2a (2026-10-27): which work split D2 should be, from the real mask. No rebuild (Python + script only).
+#   mask       one tau 1 call at 5 s with SOL_DUMP_MASK_DIR: the composed block mask -> d2_masks/mask_tau1_r4736.npz
+#   profile    tau 1 at 384-key pieces (256-key pieces overflow the profiler's ~125 zones per core), with the per-core
+#              table (log_val_d2a_cores.txt) the simulation fits its work model to
+#   sim        d2_assign_sim.py on the machine: max / mean core work per device for today's split and the candidates
+#   u3 A/B     traced tau 1 at the 256-key default, U3 on and off
+if want d2a; then
+    if ! python -c "import diffusers.models.transformers.transformer_minimax_h3" > /dev/null 2>&1; then
+        echo "    d2a: diffusers lacks transformer_minimax_h3; install the upgrade first"
+        exit 1
+    fi
+    S="4x8 and nl2 and 768p_5s and not dense and not agather"
+    TR="SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 SOL_BENCH_MODE=resident SOL_BENCH_PREFIX=off SOL_TAU=1.0"
+    run d2a_mask 900 env SOL_DUMP_MASK_DIR=d2_masks SOL_BENCH_REPS=1 SOL_BENCH_MODE=resident SOL_BENCH_PREFIX=off \
+        SOL_TAU=1.0 pytest "$B" -s -k "$S"
+    PR="TT_METAL_DEVICE_PROFILER=1 TT_SOL_STEP_PROFILE=1 SOL_BENCH_PROFILE=1 SOL_BENCH_REPS=1 SOL_BENCH_MODE=resident"
+    run d2a_profile 900 env $PR SOL_BENCH_PREFIX=off SOL_TAU=1.0 SOL_BENCH_CHUNKS=320x384 pytest "$B" -s -k "$S"
+    summarize_profile d2a_profile_summary d2a_profile log_val_d2a_cores.txt
+    if [ -f d2_masks/mask_tau1_r4736.npz ]; then
+        run d2a_sim 600 python3 d2_assign_sim.py d2_masks/mask_tau1_r4736.npz log_val_d2a_cores.txt
+        run d2a_sim_nofit 600 python3 d2_assign_sim.py d2_masks/mask_tau1_r4736.npz
+    else
+        echo "    d2a: no mask dump (see log_val_d2a_mask.txt)"
+    fi
+    run d2a_trace_tau1.0 900 env $TR pytest "$B" -s -k "$S"
+    run d2a_trace_u3off_tau1.0 900 env $TR TT_SOL_RES_PLAN1=0 TT_SOL_RES_DUMMIES=1 pytest "$B" -s -k "$S"
 fi
 
 # G1 (2026-10-27): where the gather's time goes inside the op, and 256-key resident pieces as the 5 s default
