@@ -615,9 +615,21 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
             ++down_stride_tiles;
         }
     }
-    const uint32_t weights_cb_bytes = lcm_fits ? lcm_weights_cb_bytes : 2u * weight_slot_tiles * weight_tile_bytes;
-    const uint32_t gate_up_reserve_tiles = uniform_stride ? weight_slot_tiles : weight_slice_tiles;
-    const uint32_t down_reserve_tiles = uniform_stride ? weight_slot_tiles : down_stride_tiles;
+    // Serial path: an expert's gate_up slice streams in two K-halves through three half-slice slots,
+    // which the down slices share at the same stride. That is 3/4 of two whole slices (at V4.1,
+    // D = 5120, a whole slice is 180 KB, and the multi-row decode's L1 buffers sit right above the
+    // CBs) and keeps the reader 1.5 slices ahead rather than one. The kernels read the split off
+    // the reserve: a gate_up reserve below the slice is one of slice / reserve pieces.
+    const uint32_t half_slice_tiles = weight_slice_tiles / 2u;
+    const bool split_gate_up = !parallel_experts && k_tiles % 2u == 0u && half_slice_tiles >= down_slice_tiles;
+    constexpr uint32_t kSplitWeightSlots = 3;
+    const uint32_t weights_cb_bytes =
+        split_gate_up ? kSplitWeightSlots * half_slice_tiles * weight_tile_bytes
+                      : (lcm_fits ? lcm_weights_cb_bytes : 2u * weight_slot_tiles * weight_tile_bytes);
+    const uint32_t gate_up_reserve_tiles =
+        split_gate_up ? half_slice_tiles : (uniform_stride ? weight_slot_tiles : weight_slice_tiles);
+    const uint32_t down_reserve_tiles =
+        split_gate_up ? half_slice_tiles : (uniform_stride ? weight_slot_tiles : down_stride_tiles);
 
     // Only the current block's down slices can be prefetched: compute consumes them in block order,
     // so going past the block would stall the reader before its next gather.

@@ -135,6 +135,14 @@ void kernel_main() {
     // slice itself so both phases advance the shared CB by the same stride (see the program factory).
     // The matmuls index tiles from the front of a slot, so any pad is simply never read.
     constexpr uint32_t kNumBlocks = (num_active + experts_block - 1) / experts_block;
+    // A gate_up reserve below the slice splits it into K-pieces of reserve tiles (the serial path's
+    // halves; see fetch_weight_one), whose partial sums accumulate in DST across the pieces.
+    constexpr uint32_t kGateUpSliceTiles = k_tiles * kShardTileCols;
+    constexpr uint32_t kGateUpPieces =
+        gate_up_reserve_tiles < kGateUpSliceTiles ? kGateUpSliceTiles / gate_up_reserve_tiles : 1;
+    constexpr uint32_t kPieceK = k_tiles / kGateUpPieces;
+    // Gate and up then share one DST acquire: 4 fp32 tiles at half sync.
+    static_assert(kGateUpPieces == 1 || kShardTileCols <= 4, "a split gate_up slice holds gate and up in DST at once");
 
     // gate: clamp(min = -inf, max = limit); up: clamp(min = -limit, max = limit).
     constexpr uint32_t kNegInfBits = 0xFF800000u;
@@ -454,51 +462,84 @@ void kernel_main() {
             // ===============================================================================
             if (swiglu_core) {
                 for (uint32_t j = 0; j < block_experts; ++j) {
-                    w_cb.wait_front(gate_up_reserve_tiles);
+                    if constexpr (kGateUpPieces > 1) {
+                        // gate -> dst n, up -> dst swiglu_tiles + n, summed over the slice's K-pieces.
+                        matmul_init(cb_input_id, cb_weights_id);
+                        reconfig_full_operand(cb_weights_id, cb_input_id);
+                        pack_reconfig_data_format(cb_mm_id);
+                        mm_cb.reserve_back(kShardTileCols);
 
-                    // ---- gate + up matmul -> cb_mm (gate tiles 0,1; up tiles 2,3). ----
-                    matmul_init(cb_input_id, cb_weights_id);
-                    // reconfig_full_operand (not reconfig_data_format): iteration j>0 leaves SrcA
-                    // configured for cb_mm (face_r_dim = input_tile_h, tiny for tile_h < 16) after
-                    // SwiGLU's srca reload, so we must reprogram face geometry AND format when we
-                    // put SrcA back on cb_weights (face_r_dim = 16). reconfig_data_format alone
-                    // leaves face geometry unchanged and would silently unpack the 32x32 weight
-                    // tile as if it were 1x32.
-                    reconfig_full_operand(cb_weights_id, cb_input_id);
-                    pack_reconfig_data_format(cb_mm_id);
-                    mm_cb.reserve_back(kShardTileCols);
-
-                    // gate (weight tile (k, n) at k*kShardTileCols + n) -> dst n -> cb_mm n
-                    tile_regs_acquire();
-                    for (uint32_t n = 0; n < swiglu_tiles; ++n) {
-                        for (uint32_t k = 0; k < k_tiles; ++k) {
-                            matmul_tiles(cb_input_id, cb_weights_id, k, k * kShardTileCols + n, n);
+                        tile_regs_acquire();
+                        for (uint32_t p = 0; p < kGateUpPieces; ++p) {
+                            w_cb.wait_front(gate_up_reserve_tiles);
+                            for (uint32_t k = 0; k < kPieceK; ++k) {
+                                for (uint32_t n = 0; n < swiglu_tiles; ++n) {
+                                    matmul_tiles(
+                                        cb_input_id, cb_weights_id, p * kPieceK + k, k * kShardTileCols + n, n);
+                                    matmul_tiles(
+                                        cb_input_id,
+                                        cb_weights_id,
+                                        p * kPieceK + k,
+                                        k * kShardTileCols + swiglu_tiles + n,
+                                        swiglu_tiles + n);
+                                }
+                            }
+                            w_cb.pop_front(gate_up_reserve_tiles);
                         }
-                    }
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    for (uint32_t n = 0; n < swiglu_tiles; ++n) {
-                        pack_tile<true>(n, cb_mm_id, n);
-                    }
-                    tile_regs_release();
-
-                    // up (weight tile (k, n) at k*kShardTileCols + swiglu_tiles + n) -> dst n
-                    //    -> cb_mm swiglu_tiles + n
-                    tile_regs_acquire();
-                    for (uint32_t n = 0; n < swiglu_tiles; ++n) {
-                        for (uint32_t k = 0; k < k_tiles; ++k) {
-                            matmul_tiles(cb_input_id, cb_weights_id, k, k * kShardTileCols + swiglu_tiles + n, n);
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        for (uint32_t n = 0; n < kShardTileCols; ++n) {
+                            pack_tile<true>(n, cb_mm_id, n);
                         }
-                    }
-                    tile_regs_commit();
-                    tile_regs_wait();
-                    for (uint32_t n = 0; n < swiglu_tiles; ++n) {
-                        pack_tile<true>(n, cb_mm_id, swiglu_tiles + n);
-                    }
-                    tile_regs_release();
+                        tile_regs_release();
+                        mm_cb.push_back(kShardTileCols);
+                    } else {
+                        w_cb.wait_front(gate_up_reserve_tiles);
 
-                    mm_cb.push_back(kShardTileCols);
-                    w_cb.pop_front(gate_up_reserve_tiles);
+                        // ---- gate + up matmul -> cb_mm (gate tiles 0,1; up tiles 2,3). ----
+                        matmul_init(cb_input_id, cb_weights_id);
+                        // reconfig_full_operand (not reconfig_data_format): iteration j>0 leaves SrcA
+                        // configured for cb_mm (face_r_dim = input_tile_h, tiny for tile_h < 16) after
+                        // SwiGLU's srca reload, so we must reprogram face geometry AND format when we
+                        // put SrcA back on cb_weights (face_r_dim = 16). reconfig_data_format alone
+                        // leaves face geometry unchanged and would silently unpack the 32x32 weight
+                        // tile as if it were 1x32.
+                        reconfig_full_operand(cb_weights_id, cb_input_id);
+                        pack_reconfig_data_format(cb_mm_id);
+                        mm_cb.reserve_back(kShardTileCols);
+
+                        // gate (weight tile (k, n) at k*kShardTileCols + n) -> dst n -> cb_mm n
+                        tile_regs_acquire();
+                        for (uint32_t n = 0; n < swiglu_tiles; ++n) {
+                            for (uint32_t k = 0; k < k_tiles; ++k) {
+                                matmul_tiles(cb_input_id, cb_weights_id, k, k * kShardTileCols + n, n);
+                            }
+                        }
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        for (uint32_t n = 0; n < swiglu_tiles; ++n) {
+                            pack_tile<true>(n, cb_mm_id, n);
+                        }
+                        tile_regs_release();
+
+                        // up (weight tile (k, n) at k*kShardTileCols + swiglu_tiles + n) -> dst n
+                        //    -> cb_mm swiglu_tiles + n
+                        tile_regs_acquire();
+                        for (uint32_t n = 0; n < swiglu_tiles; ++n) {
+                            for (uint32_t k = 0; k < k_tiles; ++k) {
+                                matmul_tiles(cb_input_id, cb_weights_id, k, k * kShardTileCols + swiglu_tiles + n, n);
+                            }
+                        }
+                        tile_regs_commit();
+                        tile_regs_wait();
+                        for (uint32_t n = 0; n < swiglu_tiles; ++n) {
+                            pack_tile<true>(n, cb_mm_id, swiglu_tiles + n);
+                        }
+                        tile_regs_release();
+
+                        mm_cb.push_back(kShardTileCols);
+                        w_cb.pop_front(gate_up_reserve_tiles);
+                    }
 
                     // ---- SwiGLU: cb_mm (gate | up) -> cb_out (swiglu_tiles tiles). ----
                     mm_cb.wait_front(kShardTileCols);

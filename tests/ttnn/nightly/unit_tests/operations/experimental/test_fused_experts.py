@@ -206,7 +206,8 @@ def test_fused_experts_gate_up(
         dtype=ttnn.bfloat16,
         device=device,
         layout=ttnn.TILE_LAYOUT,
-        tile=ttnn.Tile((1, 32)),
+        # The token rows share one tile row: the smallest power-of-two tile height that holds them.
+        tile=ttnn.Tile((1 << (tokens - 1).bit_length(), 32)),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
     ids_tt = to_tt(ids.to(torch.int32).reshape(1, 1, tokens, top_k), ttnn.TILE_LAYOUT, dtype=ttnn.uint16)

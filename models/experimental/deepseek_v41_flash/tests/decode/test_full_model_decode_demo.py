@@ -158,8 +158,9 @@ def _construct_model(
     submeshes=None,
     use_prefetcher=None,
     layer_submesh_ids=None,
+    verify_rows: int = 1,
 ):
-    """Build ``DeepSeekV41Model`` + ``lm_head`` and attach the prefetcher session."""
+    """Build ``DeepSeekV41Model`` + ``lm_head`` and attach the prefetcher session (``verify_rows``: see the model)."""
     if loader is None:
         loader = DeepseekV4WeightLoader(DEFAULT_MODEL_DIR)
     if config is None:
@@ -183,6 +184,7 @@ def _construct_model(
         submeshes=submeshes,
         use_prefetcher=use_prefetcher,
         layer_submesh_ids=layer_submesh_ids,
+        verify_rows=verify_rows,
     )
     lm_head = DeepSeekV41LMHead(
         dequantized(loader, "lm_head.weight", translate=True),

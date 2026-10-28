@@ -14,6 +14,14 @@ One model serves three runs of the demo prompt, each from position 0:
 3. speculative decode with the DSpark drafter -- again equal to the baseline, and its acceptance
    and throughput are logged.
 
+Runs 2 and 3 verify a round's ``DRAFTS + 1`` rows as pipelined single-token steps, then again with the
+parallel verify, all rows through every layer in one step (``DSparkSpeculator(parallel_verify=True)``,
+see ``DSPARK_PARALLEL_VERIFY.md``); both must equal the baseline, and both rounds' splits are logged.
+``DEEPSEEK_V4_SPEC_VERIFY`` (``pipelined`` / ``parallel`` / ``both``, the default) picks the modes.
+``DEEPSEEK_V4_SPEC_EXACT=0`` logs a divergence from the baseline instead of failing.
+``DEEPSEEK_V4_SPEC_ACCEPT_MARGIN`` (logits, default 0) relaxes the DSpark run's accept rule
+(``DSparkSpeculator.accept_margin``); its output is then not checked against the baseline.
+
 The DSpark experts come from ``tools/fill_expert_cache.py --dspark``.
 
     DEEPSEEK_V4_SPEC_TOKENS=64 pytest -s models/experimental/deepseek_v41_flash/tests/decode/test_dspark_spec.py
@@ -49,6 +57,11 @@ from tests.ttnn.unit_tests.operations.prefetcher_common import tensor_prefetcher
 
 DRAFTS = 4
 CORRUPT = 1 / 3
+VERIFY = os.environ.get("DEEPSEEK_V4_SPEC_VERIFY", "both")
+# 0: log a divergence from the baseline instead of failing (for throughput runs).
+EXACT = os.environ.get("DEEPSEEK_V4_SPEC_EXACT", "1") != "0"
+# The DSpark run's relaxed accept rule, in logits (DSparkSpeculator.accept_margin); 0 is exact greedy.
+ACCEPT_MARGIN = float(os.environ.get("DEEPSEEK_V4_SPEC_ACCEPT_MARGIN", "0"))
 # Decode rows; the eighth row is the drafter's.
 DECODE_STAGES = 7
 _ENGRAM_RAM_MARGIN = 1.25
@@ -64,8 +77,9 @@ _ENGRAM_RAM_MARGIN = 1.25
             "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
             "num_command_queues": 2,
             # As in test_full_model_decode_demo: without L1_SMALL the CCL semaphores and all-reduce scratch land in
-            # L1 and cap fused_experts' circular buffers.
-            "l1_small_size": int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", "8192")),
+            # L1 and cap fused_experts' circular buffers. The parallel verify's S-row all-reduces add scratch the
+            # demo's 8 KB cannot hold.
+            "l1_small_size": int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", "16384")),
         }
     ],
     indirect=["device_params"],
@@ -86,7 +100,7 @@ def test_dspark_spec_decode(mesh_device):
 
     with contextlib.ExitStack() as stack:
         model, lm_head, loader, config = _construct_model(
-            mesh_device, stack, loader=loader, config=config, num_stages=DECODE_STAGES
+            mesh_device, stack, loader=loader, config=config, num_stages=DECODE_STAGES, verify_rows=DRAFTS + 1
         )
         model.prepare_static_decode(rope, max_seq, lm_head=lm_head)
         model.prepare_spec_decode(rope["main"])
@@ -98,36 +112,63 @@ def test_dspark_spec_decode(mesh_device):
         # 1. Plain greedy decode.
         out = model.decode_prompt_traced(prompt, 0)
         baseline = [int(out.reshape(-1).float().argmax())]
+        # Greedy's top1 - top2 logit gap per token: a divergence at a near-tie is bf16 / bfp8 reduction
+        # order, not a wrong row (DSPARK_PARALLEL_VERIFY.md, Numerics).
+        gaps = [_top2_gap(out)]
         t0 = time.perf_counter()
         for i in range(n_tokens):
             out = model.decode_traced(baseline[-1], len(prompt) + i)
             baseline.append(int(out.reshape(-1).float().argmax()))
+            gaps.append(_top2_gap(out))
         plain_seconds = time.perf_counter() - t0
         logger.info(f"greedy: {n_tokens / plain_seconds:.2f} tok/s; {tokenizer.decode(baseline)!r}")
         stream = prompt + baseline  # stream[q] is the token at position q
 
-        # 2. Corrupted oracle drafts: exactness under rejection.
-        rng = random.Random(0)
+        def check(run: str, got: list[int], exact: bool) -> None:
+            if got == baseline[: len(got)]:
+                return
+            diff = _first_diff(got, baseline)
+            message = (
+                f"{run} diverged at token {diff}: {got[diff]} vs greedy {baseline[diff]}, "
+                f"greedy top1 - top2 gap {gaps[diff]:.4f}"
+            )
+            assert not exact, message
+            logger.warning(message)
 
-        def propose(token, frontier):
-            return [
-                stream[q] if q < len(stream) and rng.random() > CORRUPT else rng.randrange(config.vocab_size)
-                for q in range(frontier + 2, frontier + 2 + DRAFTS)
-            ]
+        modes = {"pipelined": (False,), "parallel": (True,), "both": (False, True)}[VERIFY]
+        for parallel_verify in modes:
+            verify = "parallel verify" if parallel_verify else "pipelined verify"
 
-        oracle = DSparkSpeculator(model, DRAFTS, propose=propose)
-        first = oracle.prefill(prompt)
-        got = [first] + oracle.generate(n_tokens)
-        logger.info(f"oracle: {oracle.stats.summary(DRAFTS)}")
-        assert got == baseline[: len(got)], f"oracle spec diverged at token {_first_diff(got, baseline)}"
+            # 2. Corrupted oracle drafts: exactness under rejection. The same corruptions in both modes.
+            rng = random.Random(0)
 
-        # 3. The DSpark drafter.
-        spec = DSparkSpeculator(model, DRAFTS)
-        first = spec.prefill(prompt)
-        got = [first] + spec.generate(n_tokens)
-        logger.info(f"DSpark: {spec.stats.summary(DRAFTS)} (greedy {n_tokens / plain_seconds:.2f} tok/s)")
-        logger.info(f"DSpark output: {tokenizer.decode(got)!r}")
-        assert got == baseline[: len(got)], f"DSpark spec diverged at token {_first_diff(got, baseline)}"
+            def propose(token, frontier):
+                return [
+                    stream[q] if q < len(stream) and rng.random() > CORRUPT else rng.randrange(config.vocab_size)
+                    for q in range(frontier + 2, frontier + 2 + DRAFTS)
+                ]
+
+            oracle = DSparkSpeculator(model, DRAFTS, propose=propose, parallel_verify=parallel_verify)
+            first = oracle.prefill(prompt)
+            got = [first] + oracle.generate(n_tokens)
+            logger.info(f"oracle, {verify}: {oracle.stats.summary(DRAFTS)}")
+            check(f"oracle spec ({verify})", got, EXACT)
+
+            # 3. The DSpark drafter. A relaxed accept rule gives up equality with the baseline.
+            spec = DSparkSpeculator(model, DRAFTS, parallel_verify=parallel_verify, accept_margin=ACCEPT_MARGIN)
+            first = spec.prefill(prompt)
+            got = [first] + spec.generate(n_tokens)
+            logger.info(
+                f"DSpark, {verify}, accept margin {ACCEPT_MARGIN}: {spec.stats.summary(DRAFTS)} "
+                f"(greedy {n_tokens / plain_seconds:.2f} tok/s)"
+            )
+            logger.info(f"DSpark output ({verify}): {tokenizer.decode(got)!r}")
+            check(f"DSpark spec ({verify})", got, EXACT and ACCEPT_MARGIN == 0)
+
+
+def _top2_gap(logits) -> float:
+    top = logits.reshape(-1).float().topk(2).values
+    return float(top[0] - top[1])
 
 
 def _first_diff(a, b) -> int:
