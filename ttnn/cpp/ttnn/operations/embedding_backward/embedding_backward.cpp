@@ -33,21 +33,17 @@ Tensor embedding_bw(
 
     // The op adds each index's gradient rows into its partial output one chunk at a time. Kept in bfloat16 or
     // bfloat8_b, that running sum stops absorbing small terms once it grows, so a row that many indices hit loses
-    // most of its gradient. Accumulate in FLOAT32 and round to the requested dtype once at the end.
-    const auto& grad_arg = output_gradient_tensor_arg;
-    auto grad = grad_arg.dtype() == DataType::FLOAT32 ? grad_arg : ttnn::typecast(grad_arg, DataType::FLOAT32);
+    // most of its gradient. Accumulate in FLOAT32 (the kernel reads the gradient in its own dtype) and round to the
+    // requested dtype once at the end.
     const bool fp32_output = out_dtype == DataType::FLOAT32 || (optional_output_tensor.has_value() &&
                                                                 optional_output_tensor->dtype() == DataType::FLOAT32);
     auto accumulated = ttnn::prim::embedding_backward(
         input_tensor,
-        grad,
+        output_gradient_tensor_arg,
         output_mem_config,
         DataType::FLOAT32,
         num_embeddings,
         fp32_output ? optional_output_tensor : std::nullopt);
-    if (grad_arg.dtype() != DataType::FLOAT32) {
-        grad.deallocate();
-    }
     if (fp32_output) {
         return accumulated;
     }

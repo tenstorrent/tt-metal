@@ -44,8 +44,8 @@ void EmbeddingBackwardDeviceOperation::validate_on_program_cache_miss(
             grad_tensor.dtype() == DataType::FLOAT32,
         "Output gradient tensor must be BFLOAT16, BFLOAT8_B or FLOAT32");
     TT_FATAL(
-        grad_tensor.dtype() == operation_attributes.output_dtype,
-        "Output and input gradient tensors must have the same dtype");
+        grad_tensor.dtype() == operation_attributes.output_dtype or operation_attributes.output_dtype == DataType::FLOAT32,
+        "Output and input gradient tensors must have the same dtype unless the output is FLOAT32");
 
     TT_FATAL(
         grad_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,

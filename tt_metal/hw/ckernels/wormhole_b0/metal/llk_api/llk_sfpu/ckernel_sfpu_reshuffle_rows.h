@@ -43,8 +43,9 @@ inline void reshuffle_rows_init() { math::reset_counters(p_setrwc::SET_ABD_F); }
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en = false>
 inline void calculate_reshuffle_rows(uint idx_addr) {
     constexpr std::uint32_t output_tile_offset = 64;
-    // With 32-bit DEST entries the rows have to be loaded and stored as FP32; the default mode treats them as
-    // 16-bit and drops the low mantissa bits of the running sum on every store.
+    // With 32-bit DEST entries the rows are loaded and stored as FP32 explicitly, so the running sum keeps all 24
+    // mantissa bits whatever format the default mode resolves to. Covered by the Float32 reshuffle_rows case in
+    // tests/tt_metal/tt_metal/llk/test_sfpu_compute.cpp.
     constexpr InstrModLoadStore load_store_mode =
         is_fp32_dest_acc_en ? InstrModLoadStore::FP32 : InstrModLoadStore::DEFAULT;
 

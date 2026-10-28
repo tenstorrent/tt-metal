@@ -141,6 +141,23 @@ void kernel_main() {
     uint32_t chunk_count_l1_addr = cb_chunk_count_scratch.get_read_ptr();
     auto chunk_count_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chunk_count_l1_addr);
 
+    // Reads the partial output tiles of one output tile row into the space reserved in cb_out_intermed.
+    auto issue_partial_output_read = [&](uint32_t chunk_idx) {
+        uint32_t out_write_ptr = cb_out_intermed.get_write_ptr();
+        const uint32_t first_tile = chunk_idx * tiles_per_hidden + hidden_offset;
+        for (uint32_t hidden_dim = 0; hidden_dim < tiles_per_core; hidden_dim++) {
+            noc.async_read(
+                out_s, CoreLocalMem<uint32_t>(out_write_ptr), out_page_size, {.page_id = first_tile + hidden_dim}, {});
+            out_write_ptr += out_page_size;
+        }
+    };
+    // Builds and pushes the mask that tells compute where this chunk's gradient rows go.
+    auto push_mask = [&](uint32_t chunk_idx) {
+        cb_mask.reserve_back(1);
+        generate_mask(index_l1_addr, chunk_idx, cb_mask.get_write_ptr());
+        cb_mask.push_back(1);
+    };
+
     uint32_t grad_tile_idx = hidden_offset;
     for (uint32_t b = 0; b < batch_size; ++b) {
         uint32_t index_seq_offset = 0;
@@ -176,38 +193,24 @@ void kernel_main() {
             cb_grad.push_back(max_tiles_per_core);
             grad_tile_idx += tiles_per_hidden;
 
-            for (uint32_t chunk = 0; chunk < chunk_count; ++chunk) {
-                uint32_t chunk_idx = chunk_indexes[chunk];
-
-                cb_mask.reserve_back(1);
-                uint32_t mask_l1_addr = cb_mask.get_write_ptr();
-                generate_mask(index_l1_addr, chunk_idx, mask_l1_addr);
-
-// TODO: Remove debug prints
-#if 0
-                for (uint32_t i = 0; i < INPUT_SIZE; ++i) {
-                    uint32_t idx = get_index(index_l1_addr, i);
-                    uint32_t msk = get_mask(mask_l1_addr, i);
-                    DPRINT("{}: {} -> {}\n", chunk, idx, msk);
-                }
-#endif
-                cb_mask.push_back(1);
-
+            // The chunks of one index tile hit distinct output tile rows, so while chunk is written back the partial
+            // output of chunk + 1 can already be read and computed. cb_out_intermed and cb_id_out0 hold two sets of
+            // tiles for this.
+            if (chunk_count > 0) {
                 cb_out_intermed.reserve_back(max_tiles_per_core);
-                uint32_t out_write_ptr = cb_out_intermed.get_write_ptr();
-                out_tile_idx = chunk_idx * tiles_per_hidden + hidden_offset;
-                for (uint32_t hidden_dim = 0; hidden_dim < tiles_per_core; hidden_dim++) {
-                    noc.async_read(
-                        out_s,
-                        CoreLocalMem<uint32_t>(out_write_ptr),
-                        out_page_size,
-                        {.page_id = out_tile_idx + hidden_dim},
-                        {});
-                    out_write_ptr += out_page_size;
-                }
+                issue_partial_output_read(chunk_indexes[0]);
                 noc.async_read_barrier();
+                push_mask(chunk_indexes[0]);
                 cb_out_intermed.push_back(max_tiles_per_core);
+            }
+            for (uint32_t chunk = 0; chunk < chunk_count; ++chunk) {
+                const bool has_next = chunk + 1 < chunk_count;
+                if (has_next) {
+                    cb_out_intermed.reserve_back(max_tiles_per_core);
+                    issue_partial_output_read(chunk_indexes[chunk + 1]);
+                }
 
+                out_tile_idx = chunk_indexes[chunk] * tiles_per_hidden + hidden_offset;
                 cb_id_out0.wait_front(max_tiles_per_core);
                 uint32_t out0_read_ptr = cb_id_out0.get_read_ptr();
                 for (uint32_t hidden_dim = 0; hidden_dim < tiles_per_core; hidden_dim++) {
@@ -218,6 +221,12 @@ void kernel_main() {
                         {},
                         {.page_id = out_tile_idx + hidden_dim});
                     out0_read_ptr += out_page_size;
+                }
+                if (has_next) {
+                    // Hand the next chunk to compute while this one's write is still in flight.
+                    noc.async_read_barrier();
+                    push_mask(chunk_indexes[chunk + 1]);
+                    cb_out_intermed.push_back(max_tiles_per_core);
                 }
                 noc.async_write_barrier();
                 cb_id_out0.pop_front(max_tiles_per_core);

@@ -173,9 +173,9 @@ def test_embedding_bw_with_program_cache(
         logger.debug(comp_out)
         assert comp_pass
 
-    # One program each for the gradient typecast to FLOAT32, the accumulation and the typecast back to the output
-    # dtype; the second iteration must reuse all three.
-    assert device.cache_entries_counter.total == 3
+    # One program each for the FLOAT32 accumulation and the typecast back to the output dtype; the second iteration
+    # must reuse both.
+    assert device.cache_entries_counter.total == 2
 
 
 @pytest.mark.parametrize(
@@ -220,6 +220,7 @@ def test_embedding_bw_repeated_indices(seq_len, embedding_dim, num_embeddings, h
     worst_row_error = float(((out - reference).abs() / row_scale).max())
     tolerance = {ttnn.float32: 1e-5, ttnn.bfloat16: 1e-2, ttnn.bfloat8_b: 2e-2}[output_dtype]
     assert worst_row_error < tolerance, f"worst row error {worst_row_error} relative to the row's largest gradient"
+
 
 def test_embedding_bw_rejects_sharded_index(device, expect_error):
     # Regression: the sharding checks were OR'd, so a sharded index was accepted.
