@@ -27,6 +27,7 @@ from models.experimental.bevformer.model_config import CAN_BUS_DIMS, GRID_DTYPE
 from models.experimental.bevformer.tt.model_preprocessing import bev_grid_length, ego_shift
 from models.experimental.bevformer.tt.tt_common import layer_norm, signpost
 from models.experimental.bevformer.tt.tt_encoder import TTBEVFormerEncoder
+from models.experimental.bevformer.tt.tt_point_sampling_3d_2d import camera_rows, image_size
 
 
 @dataclass
@@ -36,8 +37,8 @@ class PerceptionFrame:
 
     Attributes:
         img_metas: The frame's per-sample metas; the encoder reads the images' size from them.
-        lidar2img: ``(bs, num_cams, 4, 4)`` float32, the cameras' projections, which the encoder
-            projects its reference points with.
+        projection: ``(bs, num_cams, 9, width)`` float32, the cameras' projections as rows that
+            weigh the encoder's reference grid (``tt_point_sampling_3d_2d.camera_rows``).
         can_bus: ``(bs, 1, CAN_BUS_DIMS)`` bfloat16, the relative CAN bus.
         shift: ``(bs, 1, 1, 2)`` float32 ROW_MAJOR, the ego translation in BEV-grid fractions.
         rotation_index: ``(1, 1, 1, bs * num_query)`` uint32 ROW_MAJOR, the stacked previous-BEV row each
@@ -47,7 +48,7 @@ class PerceptionFrame:
     """
 
     img_metas: list
-    lidar2img: ttnn.Tensor
+    projection: ttnn.Tensor
     can_bus: ttnn.Tensor
     shift: ttnn.Tensor
     rotation_index: ttnn.Tensor
@@ -96,10 +97,12 @@ class TTPerceptionTransformer:
         grid_length = bev_grid_length(self.encoder.pc_range, self.bev_h, self.bev_w)
         shift = ego_shift(img_metas, self.bev_h, self.bev_w, grid_length).view(len(img_metas), 1, 1, 2)
         rotation_index, rotation_mask = rotation_gather(img_metas, self.bev_h, self.bev_w, self.rotate_center)
-        # float32: in bfloat16 the projection moves the points by several pixels on average.
         lidar2img = torch.stack([torch.as_tensor(meta["lidar2img"], dtype=torch.float32) for meta in img_metas])
+        grid = self.encoder.world_points
+        projection = camera_rows(lidar2img, image_size(img_metas), grid.num_queries, grid.num_points)
         return dict(
-            lidar2img=(lidar2img, ttnn.float32, ttnn.TILE_LAYOUT),
+            # float32: in bfloat16 the projection moves the points by several pixels on average.
+            projection=(projection, ttnn.float32, ttnn.TILE_LAYOUT),
             can_bus=(can_bus, ttnn.bfloat16, ttnn.TILE_LAYOUT),
             shift=(shift, GRID_DTYPE, ttnn.ROW_MAJOR_LAYOUT),
             rotation_index=(rotation_index, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
@@ -183,7 +186,7 @@ class TTPerceptionTransformer:
             prev_bev=prev_bev,
             shift=shift,
             img_metas=frame.img_metas,
-            lidar2img=frame.lidar2img,
+            projection=frame.projection,
         )
         ttnn.deallocate(value)
         signpost(header="TTNN PerceptionTransformer Forward End")

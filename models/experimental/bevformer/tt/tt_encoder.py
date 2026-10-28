@@ -18,7 +18,7 @@ from typing import Optional, List, Dict, Any
 from .tt_spatial_cross_attention import TTSpatialCrossAttention, build_rebatch_plan
 from .tt_common import layer_norm, signpost
 from .tt_temporal_self_attention import TTTemporalSelfAttention
-from .tt_point_sampling_3d_2d import point_sampling_3d_to_2d_ttnn, world_points_ttnn
+from .tt_point_sampling_3d_2d import camera_rows, image_size, point_sampling_3d_to_2d_ttnn, world_points_ttnn
 from ..reference.point_sampling_3d_2d import generate_reference_points
 
 from loguru import logger
@@ -371,7 +371,7 @@ class TTBEVFormerEncoder:
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         # The grid in world coordinates, which every frame projects to the cameras.
-        self._world_points = world_points_ttnn(self._reference_points_3d, pc_range, device)
+        self.world_points = world_points_ttnn(self._reference_points_3d, pc_range, device)
 
         # Build transformer layers
         self.layers = []
@@ -432,7 +432,7 @@ class TTBEVFormerEncoder:
         prev_bev=None,
         shift=None,
         img_metas: Optional[List[Dict[str, Any]]] = None,
-        lidar2img=None,
+        projection=None,
         **kwargs,
     ):
         """
@@ -450,9 +450,9 @@ class TTBEVFormerEncoder:
             shift: Ego translation in BEV fractions, float32 ROW_MAJOR [B, 1, 1, 2]; applied only
                 with ``prev_bev``.
             img_metas: Camera metadata for point sampling
-            lidar2img: The cameras' projections on device, float32 TILE [B, num_cams, 4, 4], as
-                ``TTPerceptionTransformer.prepare_frame`` uploads them; None reads them from
-                ``img_metas`` and uploads them here.
+            projection: The cameras' projection rows (``tt_point_sampling_3d_2d.camera_rows``) on
+                device, float32 TILE, as ``TTPerceptionTransformer.prepare_frame`` uploads them;
+                None builds them from ``img_metas`` and uploads them here.
 
         Returns:
             Final BEV features [B, num_queries, embed_dims]
@@ -469,12 +469,7 @@ class TTBEVFormerEncoder:
             num_queries == self.bev_h * self.bev_w
         ), f"num_queries {num_queries} != bev_h*bev_w {self.bev_h * self.bev_w}"
 
-        # Batch is a pure broadcast of the stored grids, widened on device and freed once used.
-        world_points = (
-            self._world_points
-            if bs == 1
-            else [ttnn.repeat(coord, ttnn.Shape((bs, 1, 1, 1))) for coord in self._world_points]
-        )
+        # Batch is a pure broadcast of the stored grid, widened on device and freed once used.
         bev_reference_points = (
             self._bev_reference_points
             if bs == 1
@@ -499,8 +494,14 @@ class TTBEVFormerEncoder:
         bev_mask = None
 
         if img_metas is not None:
-            if lidar2img is None:
-                lidar2img = self._host_lidar2img(img_metas)
+            if projection is None:
+                rows = camera_rows(
+                    self._host_lidar2img(img_metas),
+                    image_size(img_metas),
+                    self.world_points.num_queries,
+                    self.world_points.num_points,
+                )
+                projection = ttnn.from_torch(rows, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
             # Project 3D reference points to 2D camera coordinates
             # This determines where each BEV query will sample from in each camera view
             # Returns: reference_points_cam [num_cams, B, num_queries, num_points, 2] (pixel coordinates)
@@ -508,22 +509,19 @@ class TTBEVFormerEncoder:
             reference_points_cam, bev_mask = point_sampling_3d_to_2d_ttnn(
                 reference_points=None,
                 pc_range=self.pc_range,
-                lidar2img=lidar2img,
-                img_metas=img_metas,
+                lidar2img=None,
                 device=self.device,
-                world_points=world_points,
+                # The grid broadcasts over the batch.
+                world_points=self.world_points,
+                projection=projection,
+                # Projected in float32; bfloat16 is the only dtype build_rebatch_plan's gather takes.
+                output_dtype=ttnn.bfloat16,
             )
-            # Projected in float32; bfloat16 is the only dtype build_rebatch_plan's gather takes.
-            reference_points_cam = ttnn.typecast(reference_points_cam, ttnn.bfloat16)
 
         # Camera projection is per-frame, so the SCA rebatch plan is too. Layers only gather query.
         rebatch_plan = build_rebatch_plan(reference_points_cam, bev_mask, self.device) if bev_mask is not None else None
 
         signpost(header="BEVEncoder Reference Points End")
-
-        if world_points is not self._world_points:
-            for coord in world_points:
-                ttnn.deallocate(coord)
 
         # Process through transformer layers
         for lid, layer in enumerate(self.layers):
