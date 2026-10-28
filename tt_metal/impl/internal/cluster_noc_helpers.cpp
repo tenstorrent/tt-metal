@@ -7,7 +7,6 @@
 #include <tt_stl/assert.hpp>
 #include <umd/device/cluster_descriptor.hpp>
 
-#include "impl/allocator/allocator.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/device/device_manager.hpp"
 #include "tt_metal/api/tt-metalium/allocator.hpp"
@@ -101,48 +100,6 @@ std::vector<DramBankInfo> get_dram_bank_table(std::uint32_t device_id) {
         });
     }
     return out;
-}
-
-// Mirrors RiscFirmwareInitializer::generate_device_bank_to_noc_tables for every NOC, packing included.
-DramBankNocXyTable get_dram_bank_to_noc_xy_table(std::uint32_t device_id) {
-    auto& mctx = MetalContext::instance();
-    auto& dm = mctx.device_manager();
-    TT_FATAL(
-        dm != nullptr, "DeviceManager is not initialised; open a device before calling get_dram_bank_to_noc_xy_table");
-    auto* dev = dm->get_active_device(static_cast<ChipId>(device_id));
-    TT_FATAL(
-        dev != nullptr, "Device {} is not opened; open it before calling get_dram_bank_to_noc_xy_table", device_id);
-
-    const auto& allocator = *dev->allocator();
-    const auto& cluster = mctx.get_cluster();
-    const auto& soc_d = cluster.get_soc_desc(static_cast<ChipId>(device_id));
-    const auto& hal = mctx.hal();
-
-    const bool noc_translation_enabled =
-        !cluster.is_mock_or_emulated() && cluster.get_cluster_desc()->get_noc_translation_table_en().at(device_id);
-    const bool dram_is_virtualized =
-        noc_translation_enabled && hal.get_virtualized_core_types().contains(dev_msgs::AddressableCoreType::DRAM);
-
-    DramBankNocXyTable table;
-    table.num_nocs = hal.get_num_nocs();
-    table.num_banks = allocator.get_num_banks(BufferType::DRAM);
-    table.packed_xy.reserve(static_cast<std::size_t>(table.num_nocs) * table.num_banks);
-    for (std::uint32_t noc = 0; noc < table.num_nocs; ++noc) {
-        for (std::uint32_t bank_id = 0; bank_id < table.num_banks; ++bank_id) {
-            const auto dram_view = static_cast<int>(allocator.impl().get_dram_channel_from_bank_id(bank_id));
-            const CoreCoord dram_noc_coord =
-                soc_d.get_preferred_worker_core_for_dram_view(dram_view, static_cast<std::uint8_t>(noc));
-            std::uint32_t noc_x = static_cast<std::uint32_t>(dram_noc_coord.x);
-            std::uint32_t noc_y = static_cast<std::uint32_t>(dram_noc_coord.y);
-            if (!dram_is_virtualized) {
-                noc_x = static_cast<std::uint32_t>(hal.noc_coordinate(noc, soc_d.grid_size.x, dram_noc_coord.x));
-                noc_y = static_cast<std::uint32_t>(hal.noc_coordinate(noc, soc_d.grid_size.y, dram_noc_coord.y));
-            }
-            table.packed_xy.push_back(
-                ((noc_y << hal.get_noc_addr_node_id_bits()) | noc_x) << hal.get_noc_coord_reg_offset());
-        }
-    }
-    return table;
 }
 
 }  // namespace tt::tt_metal::internal

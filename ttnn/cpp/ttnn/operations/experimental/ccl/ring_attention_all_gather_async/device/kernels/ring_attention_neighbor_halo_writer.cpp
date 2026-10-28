@@ -13,7 +13,6 @@
 #include "cpp/ttnn/operations/ccl/common/kernels/minimal_ccl_common.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
 #include "ring_attention_all_gather_metadata.hpp"
-#include "ring_attention_remote_dram_addrgen.hpp"
 
 #include <algorithm>
 #include <array>
@@ -145,6 +144,17 @@ void kernel_main() {
     auto outputs_tuple = make_tensor_accessor_tuple(outputs_args, arg_idx);
     arg_idx += num_inputs;
     auto output_addrgens = make_abstract_tensor_accessor_wrappers(outputs_tuple);
+    // Concrete accessors for 1 or 2 inputs avoid the abstract wrapper's indirect call per page.
+    const auto output_noc_addr = [&](uint32_t input_idx, uint32_t page) -> uint64_t {
+        if constexpr (num_inputs == 1) {
+            return std::get<0>(outputs_tuple).get_noc_addr(page);
+        } else if constexpr (num_inputs == 2) {
+            return input_idx == 0 ? std::get<0>(outputs_tuple).get_noc_addr(page)
+                                  : std::get<num_inputs - 1>(outputs_tuple).get_noc_addr(page);
+        } else {
+            return output_addrgens[input_idx].get_noc_addr(page);
+        }
+    };
     size_t fabric_args_idx = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(fabric_args_idx);
 
@@ -158,25 +168,6 @@ void kernel_main() {
     const uint32_t chain_successor_noc_x = get_arg_val<uint32_t>(chain_arg_idx++);
     const uint32_t chain_successor_noc_y = get_arg_val<uint32_t>(chain_arg_idx++);
     const uintptr_t chain_semaphore_addr = get_semaphore(chain_semaphore_id);
-
-    // Receiving chip's DRAM bank placement, appended by the host after the link hand-off args; see
-    // RemoteDramBankTable. The host only sets it for a unicast exchange whose receiver differs.
-    const auto remote_dram_table = ring_attention_all_gather::RemoteDramBankTable::from_args(chain_arg_idx);
-
-    // Concrete accessors for 1 or 2 inputs avoid the abstract wrapper's indirect call per page.
-    const auto output_noc_addr = [&](uint32_t input_idx, uint32_t page) -> uint64_t {
-        uint64_t noc_addr;
-        if constexpr (num_inputs == 1) {
-            noc_addr = std::get<0>(outputs_tuple).get_noc_addr(page);
-        } else if constexpr (num_inputs == 2) {
-            noc_addr = input_idx == 0 ? std::get<0>(outputs_tuple).get_noc_addr(page)
-                                      : std::get<num_inputs - 1>(outputs_tuple).get_noc_addr(page);
-        } else {
-            noc_addr = output_addrgens[input_idx].get_noc_addr(page);
-        }
-        // The accessors above default to noc_index, so remap with the same NOC's table.
-        return remote_dram_table.remap(noc_addr, page, noc_index);
-    };
 
     if (chain_waits) {
         noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(chain_semaphore_addr), 1);

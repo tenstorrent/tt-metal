@@ -19,7 +19,6 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
-#include <internal/cluster_noc_helpers.hpp>
 #include "cpp/ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
 #include "cpp/ttnn/operations/ccl/common/host/ccl_command_stream_builders.hpp"
 #include "cpp/ttnn/operations/ccl/common/uops/command_lowering.hpp"
@@ -177,67 +176,6 @@ bool supports_output_bank_owned_schedule(
                           tensor.buffer()->aligned_page_size() == transport_page_size;
                }) &&
            tt::tt_fabric::get_tt_fabric_max_payload_size_bytes() / transport_page_size >= kMaxScatterPagesPerPacket;
-}
-
-// Runtime args handing a fabric writer the RECEIVING chip's DRAM bank -> NOC xy table (see
-// RemoteDramBankTable in kernels/ring_attention_remote_dram_addrgen.hpp): [flag, num_nocs * num_banks
-// packed words], always the same length. A writer ships NOC addresses built from its own chip's table,
-// and on Blackhole a logical DRAM bank's translated coordinate depends on which bank the chip has
-// harvested, so when the neighbour's table differs the flag is set and the kernel rewrites every
-// destination (x, y) with the neighbour's placement. Only interleaved DRAM outputs can be remapped.
-struct RemoteDramBankTableArgs {
-    std::vector<uint32_t> args;
-    bool remapped = false;
-};
-
-RemoteDramBankTableArgs make_remote_dram_bank_table_args(
-    tt::tt_metal::distributed::MeshDevice* mesh_device,
-    const MeshCoordinate& local_coord,
-    const std::optional<MeshCoordinate>& neighbor_coord,
-    const std::vector<Tensor>& output_tensors) {
-    const auto local_device_id = static_cast<uint32_t>(mesh_device->get_device(local_coord)->id());
-    const auto local_table = tt::tt_metal::internal::get_dram_bank_to_noc_xy_table(local_device_id);
-    RemoteDramBankTableArgs result;
-    result.args.reserve(1 + local_table.packed_xy.size());
-    if (neighbor_coord.has_value()) {
-        const auto neighbor_device_id = static_cast<uint32_t>(mesh_device->get_device(*neighbor_coord)->id());
-        const auto neighbor_table = tt::tt_metal::internal::get_dram_bank_to_noc_xy_table(neighbor_device_id);
-        TT_FATAL(
-            neighbor_table.num_nocs == local_table.num_nocs && neighbor_table.num_banks == local_table.num_banks,
-            "Ring attention: device {} has a {}x{} DRAM bank table but neighbour device {} has {}x{}",
-            local_device_id,
-            local_table.num_nocs,
-            local_table.num_banks,
-            neighbor_device_id,
-            neighbor_table.num_nocs,
-            neighbor_table.num_banks);
-        if (neighbor_table.packed_xy != local_table.packed_xy) {
-            TT_FATAL(
-                std::all_of(
-                    output_tensors.begin(),
-                    output_tensors.end(),
-                    [](const Tensor& tensor) {
-                        return tensor.buffer()->is_dram() &&
-                               tensor.buffer()->buffer_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED;
-                    }),
-                "Ring attention writer on device {} must remap DRAM bank coordinates for neighbour device {} (the "
-                "chips have different harvested DRAM banks), which requires interleaved DRAM outputs",
-                local_device_id,
-                neighbor_device_id);
-            log_debug(
-                tt::LogOp,
-                "Ring attention writer on device {} remaps DRAM bank coordinates for neighbour device {}",
-                local_device_id,
-                neighbor_device_id);
-            result.remapped = true;
-            result.args.push_back(1u);
-            result.args.insert(result.args.end(), neighbor_table.packed_xy.begin(), neighbor_table.packed_xy.end());
-            return result;
-        }
-    }
-    result.args.push_back(0u);
-    result.args.insert(result.args.end(), local_table.packed_xy.size(), 0u);
-    return result;
 }
 
 }  // namespace CMAKE_UNIQUE_NAMESPACE
@@ -426,17 +364,6 @@ void ring_attention_neighbor_halo_exchange_helper(
         halo_signaler.all_gather_worker_cores_noc.push_back(mesh_device->worker_core_from_logical_core(worker));
     }
     halo_signaler.initialized_all_gather = true;
-
-    // The halo writer ships NOC addresses to unicast_destination_coord (for a multicast run, its nearest
-    // receiver). A multicast packet carries ONE address for every hop, so it cannot address receivers that
-    // place the same DRAM bank differently.
-    const auto remote_dram =
-        make_remote_dram_bank_table_args(mesh_device, target_device_coord, unicast_destination_coord, output_tensors);
-    TT_FATAL(
-        !(remote_dram.remapped && halo.multicast()),
-        "Multicast neighbor halo from device {} cannot address receivers whose DRAM bank placement differs "
-        "(different harvested DRAM banks)",
-        mesh_device->get_device(target_device_coord)->id());
 
     // semaphores[0]/[1] coordinate the backward/forward all-gather directions. Keep halo
     // arrivals on semaphores[2] so the protocols cannot consume each other's signals.
@@ -643,8 +570,6 @@ void ring_attention_neighbor_halo_exchange_helper(
         writer_args.push_back(halo.chain_semaphore_id);
         writer_args.push_back(halo.successor_noc_x);
         writer_args.push_back(halo.successor_noc_y);
-        // Receiver DRAM bank table: appended LAST so fused consumers' fixed-offset patches stay valid.
-        writer_args.append(remote_dram.args);
         writer_kernel.emplace_runtime_args(worker_cores[link], writer_args);
     }
 
@@ -1243,11 +1168,6 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
 
     const auto forward_signaler_cores = corerange_to_cores(sender_forward_core_ranges, std::nullopt, true);
     const auto backward_signaler_cores = corerange_to_cores(sender_backward_core_ranges, std::nullopt, true);
-    // Forward-direction writers send to the backward neighbour and vice versa (neighbor_coord below).
-    const auto remote_dram_forward =
-        make_remote_dram_bank_table_args(mesh_device, target_device_coord, backward_device_coord, output_tensor);
-    const auto remote_dram_backward =
-        make_remote_dram_bank_table_args(mesh_device, target_device_coord, forward_device_coord, output_tensor);
     const auto signaler_index = [](const std::vector<CoreCoord>& cores, const CoreCoord& core) {
         const auto it = std::find(cores.begin(), cores.end(), core);
         TT_FATAL(it != cores.end(), "Ring attention worker core is missing from its signaler core range");
@@ -1340,23 +1260,11 @@ void ring_attention_all_gather_async_multi_core_with_workers_helper(
                 fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(
                     writer_extra_args, static_cast<uint32_t>(forward_signaler_cores.size()), worker_signaler_index, 1);
             } else {
-                // Backward writers never issue the local-slice signal, but retain the writer ABI. The worker
-                // count MUST equal the signaler's worker-core list length (one forward worker per link): the
-                // kernel's OpSignaler skips num_workers_to_sync * 2 coordinate words, while
-                // push_all_gather_fused_op_rt_args emits one pair per listed core. A count of 1 left the
-                // backward writer's arg cursor 2 * (num_links - 1) words short, so everything parsed after the
-                // signaler block (the neighbour DRAM bank table, 2026-10-21) was read from inside the
-                // receiver-core coordinates: the table came up "enabled" with Tensix coordinates and every
-                // backward payload write was redirected off DRAM while the arrival signal still landed
-                // (fused dense op at PCC 0.71 with the backward half of the ring never written).
-                fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(
-                    writer_extra_args, static_cast<uint32_t>(forward_signaler_cores.size()), 0, 0);
+                // Backward writers never issue the local-slice signal, but retain the writer ABI.
+                fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(writer_extra_args, 1, 0, 0);
             }
         }
         writer_args.append(writer_extra_args);
-        // Neighbour DRAM bank table: appended LAST (after fabric and op-signaler args) so fused consumers'
-        // fixed-offset patches of the header/descriptor fields stay valid.
-        writer_args.append((is_forward ? remote_dram_forward : remote_dram_backward).args);
         auto& writer_kernel = is_forward ? sender_writer_forward_kernel : sender_writer_backward_kernel;
         writer_kernel.emplace_runtime_args(placement.core, writer_args);
     };

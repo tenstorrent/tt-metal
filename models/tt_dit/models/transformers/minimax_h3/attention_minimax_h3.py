@@ -66,16 +66,6 @@ def prepare_rope_tables(cos: torch.Tensor, sin: torch.Tensor, head_dim: int) -> 
     return cos, sin
 
 
-def _binding_has_sol_mode() -> bool:
-    """True if the installed ring_joint SDPA binding accepts the `sol_mode` keyword (probed from its TypeError text)."""
-    raw = ttnn._ttnn.operations.transformer.ring_joint_scaled_dot_product_attention
-    try:
-        raw()
-    except TypeError as e:
-        return "sol_mode" in str(e)
-    return False
-
-
 class MiniMaxH3Attention(Module):
     """Full self-attention over one packed sequence. MiniMax-H3 has no cross-attention.
 
@@ -103,10 +93,10 @@ class MiniMaxH3Attention(Module):
         9184: (256, 512),
         13664: (256, 512),
     }
-    # Sol resident mode's K/V piece size per sequence length (its query unit is always the 64-row block). 256-key
+    # The sparse op's K/V piece size per sequence length (its query unit is always the 64-row block). 256-key
     # pieces measured 4.13-4.15 ms against 4.22 for 384 at 5 s tau 1 (2026-10-27, traced): less work left at each
     # ring-iteration boundary and in the tail after the last shard. 10 s / 15 s keep the dense k until measured.
-    measured_resident_k_chunks = {
+    measured_sparse_k_chunks = {
         4736: 256,
     }
 
@@ -131,7 +121,6 @@ class MiniMaxH3Attention(Module):
         sol_band: int = 1,
         sol_prefix_mode: str = "separate",
         sol_dense_prefix: bool | None = None,
-        sol_mode: str = "gather",
         sol_fused: bool = False,
     ) -> None:
         super().__init__()
@@ -161,7 +150,6 @@ class MiniMaxH3Attention(Module):
         # ring, instead of an all-gather; SOL_PREFIX_BROADCAST=0 forces the all-gather for an A/B.
         self.sol_prefix_broadcast = os.environ.get("SOL_PREFIX_BROADCAST", "1") != "0"
         self._sol_prefix_cache: dict = {}
-        self.sol_mode = sol_mode  # "gather" (block gathering, chains off) or "chunk" (compute skip, chains on)
         self.sol_fused = (
             sol_fused  # fused pre-pass (sol_prepass_fused.SolPrepassFused) instead of the ttnn-op SolPrepass
         )
@@ -170,9 +158,6 @@ class MiniMaxH3Attention(Module):
         self.sol_sink_tokens = 0
         self.sol_report_density = False
         self.sol_last_density: float | None = None
-        # Same mask before the K-chunk union: (q_chunk x 64-key) blocks, 64x64 in resident mode. Equal to
-        # `sol_last_density` in the block-form modes (gather / compact / pack).
-        self.sol_last_block_density: float | None = None
         self._sol_prepass: SolPrepass | None = None
 
         self.kv_gather_capacity = kv_gather_capacity
@@ -375,8 +360,8 @@ class MiniMaxH3Attention(Module):
                 q_chunk = max(tile, min(256, (seq_local // tile) * tile))
                 k_chunk = max(tile, min(512, (seq_local // tile) * tile))
             if q_override is not None:
-                q_chunk = q_override  # Sol resident mode: the 64-row query block is the compute unit
-                k_chunk = self.measured_resident_k_chunks.get(seq_local, k_chunk)
+                q_chunk = q_override  # sparse op: the 64-row query block is the compute unit
+                k_chunk = self.measured_sparse_k_chunks.get(seq_local, k_chunk)
             if windowed:
                 k_chunk = min(k_chunk, 256)
             grid = (
@@ -529,11 +514,11 @@ class MiniMaxH3Attention(Module):
     # ------------------------------------------------------------------ Sol-Attn
 
     def _sol_tensors(self, q_BHNE: ttnn.Tensor, k_BHNE: ttnn.Tensor, v_BHNE: ttnn.Tensor) -> dict:
-        """Run the routing pre-pass and return the ring op's `sol_*` keyword tensors."""
+        """Run the routing pre-pass and return the sparse op's block mask and pooled K / V."""
         assert self.sol_logical_n is not None, "set sol_logical_n (host int) before a sparse forward"
         rows = q_BHNE.shape[2]
         sp_factor = self.parallel_config.sequence_parallel.factor
-        cfg = self._sdpa_program_config(rows, ring=True, q_chunk=self._sol_q_chunk)
+        cfg = self._sdpa_program_config(rows, ring=True, q_chunk=self._SOL_Q_CHUNK)
         geo = SolGeometry(
             shards=sp_factor,
             rows=rows,
@@ -551,41 +536,15 @@ class MiniMaxH3Attention(Module):
                 thresh_type=self.sol_thresh_type,
                 band=self.sol_band,
                 dense_prefix_queries=self.sol_prefix_mode == "fused",
-                mode=self._sol_prepass_mode,
-                # compact / pack / resident generate the pooled-column bias on device: skip the ~87 MB bias write
-                emit_bias=not (self._sol_compact_family or self.sol_mode == "resident"),
-                # resident runs its own (lazy) running row max on device; the pre-pass's a-priori per-row bound
-                # (row_max=True -> sol_row_max) is deprecated: accepted by the op but ignored.
-                row_max=False,
+                mode="compact",  # the block-form mask; the op generates the pooled-column bias itself
+                emit_bias=False,
             )
         scale = self.head_dim**-0.5
         self._sol_prepass.prepare(geo, self.sol_sink_tokens, scale)
         out = self._sol_prepass(q_BHNE, k_BHNE, v_BHNE, scale=scale, report_density=self.sol_report_density)
         if self.sol_report_density:
             self.sol_last_density = self._sol_prepass.last_density
-            self.sol_last_block_density = getattr(self._sol_prepass, "last_block_density", None)
-        kwargs = {
-            "sol_block_mask": out["block_mask"],
-            "sol_pooled_k": out["pooled_k"],
-            "sol_pooled_v": out["pooled_v"],
-        }
-        if (
-            out.get("bias") is not None and not self._sol_compact_family and self.sol_mode != "resident"
-        ):  # compact / pack / resident generate the bias on device and reject a tensor
-            kwargs["sol_bias"] = out["bias"]
-        if self.sol_mode == "resident" and out.get("row_max") is not None:
-            kwargs["sol_row_max"] = out["row_max"]  # deprecated: resident only, accepted but ignored by the op
-        if self._sol_compact_family or self.sol_mode == "resident":
-            # Explicit op mode (sol-vid2's `sol_mode` keyword). The docstring never lists keyword names, so probe the raw
-            # binding: calling it with no arguments raises a TypeError whose text lists the accepted keywords. Compact
-            # must not silently fall back to gather (2026-10-16: every "compact" measurement before this fix was gather).
-            # "pack" is compact plus the op's Q2 cross-chunk packing (needs the 64-row Q chunk).
-            if not _binding_has_sol_mode():
-                raise RuntimeError(
-                    f"sol_mode={self.sol_mode!r} requested but the installed ring_joint SDPA binding has no sol_mode keyword"
-                )
-            kwargs["sol_mode"] = self.sol_mode
-        return kwargs
+        return {"block_mask": out["block_mask"], "pooled_k": out["pooled_k"], "pooled_v": out["pooled_v"]}
 
     @property
     def sol_dense_prefix(self) -> bool:
@@ -757,25 +716,8 @@ class MiniMaxH3Attention(Module):
         ttnn.deallocate(out_BHNE)
         return new_out
 
-    # Resident mode (sol_attn_status_2026-10-21.md 4a, M1 + M2): the op streams each K/V piece once per core and
-    # applies it to every resident 64-row query chunk, so the query chunk is the 64-token block (no union over
-    # blocks). Since M2 the exact set is per 64-token block: the mask is the block-form one the "compact" pre-pass
-    # produces (block 0 of every shard forced), and the bias is generated on device.
-    # SOL_RESIDENT_Q_CHUNK overrides it (128 while the base kernel's 64-row path is under investigation, 2026-10-21).
-    _SOL_RESIDENT_Q_CHUNK = int(os.environ.get("SOL_RESIDENT_Q_CHUNK", "64"))
-
-    @property
-    def _sol_prepass_mode(self) -> str:
-        return "compact" if self.sol_mode == "resident" else self.sol_mode
-
-    @property
-    def _sol_q_chunk(self) -> int | None:
-        return self._SOL_RESIDENT_Q_CHUNK if self.sol_mode == "resident" else None
-
-    @property
-    def _sol_compact_family(self) -> bool:
-        """compact and pack: block mask streamed through the chains, bias generated on device."""
-        return self.sol_mode in ("compact", "pack")
+    # The sparse op's compute unit is the 64-row query block (one mask row per block).
+    _SOL_Q_CHUNK = 64
 
     # ------------------------------------------------------------------ forward
 
@@ -897,27 +839,15 @@ class MiniMaxH3Attention(Module):
                 num_buffers_per_channel=32,
             )
         elif self.use_ring:
-            sol_kwargs = {}
-            if self.sol_attn and self.sol_active:
-                sol_kwargs = self._sol_tensors(q_BHNE, k_BHNE, v_BHNE)
-            spatial_BHNE, _prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
-                q_BHNE,
-                k_BHNE,
-                v_BHNE,
-                self.dummy_joint_input,
-                self.dummy_joint_input,
-                self.dummy_joint_input,
-                persistent_output_buffer_k=self.ccl_manager.get_ag_ping_pong_buffer(
-                    k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype, capacity=self.kv_gather_capacity
-                ),
-                persistent_output_buffer_v=self.ccl_manager.get_ag_ping_pong_buffer(
-                    v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype, capacity=self.kv_gather_capacity
-                ),
-                joint_strategy="rear",
-                logical_n=logical_n,
-                program_config=self._sdpa_program_config(
-                    q_BHNE.shape[2], ring=True, q_chunk=self._sol_q_chunk if sol_kwargs else None
-                ),
+            pk = self.ccl_manager.get_ag_ping_pong_buffer(
+                k_BHNE.shape, 2, self.sp_mesh_axis, dtype=k_BHNE.dtype, capacity=self.kv_gather_capacity
+            )
+            pv = self.ccl_manager.get_ag_ping_pong_buffer(
+                v_BHNE.shape, 2, self.sp_mesh_axis, dtype=v_BHNE.dtype, capacity=self.kv_gather_capacity
+            )
+            ring_kwargs = dict(
+                persistent_output_buffer_k=pk,
+                persistent_output_buffer_v=pv,
                 compute_kernel_config=self.sdpa_compute_kernel_config,
                 dim=2,
                 multi_device_global_semaphore=self.ccl_manager.get_ag_ping_pong_semaphore(self.sp_mesh_axis),
@@ -928,10 +858,35 @@ class MiniMaxH3Attention(Module):
                 subdevice_id=self.ccl_manager.ccl_sub_device_id,
                 ccl_core_grid_offset=(self.sdpa_worker_grid[0], 0),
                 use_column_major_ccl=True,
-                **sol_kwargs,
             )
-            if sol_kwargs and self.sol_prefix_mode == "separate":
-                spatial_BHNE = self._sol_prefix_dense_rows(q_BHNE, k_BHNE, v_BHNE, spatial_BHNE)
+            if self.sol_attn and self.sol_active:
+                sol = self._sol_tensors(q_BHNE, k_BHNE, v_BHNE)
+                spatial_BHNE = ttnn.transformer.sparse_ring_attention(
+                    q_BHNE,
+                    k_BHNE,
+                    v_BHNE,
+                    sol["block_mask"],
+                    sol["pooled_k"],
+                    sol["pooled_v"],
+                    logical_n=self.sol_logical_n,
+                    program_config=self._sdpa_program_config(q_BHNE.shape[2], ring=True, q_chunk=self._SOL_Q_CHUNK),
+                    **ring_kwargs,
+                )
+                if self.sol_prefix_mode == "separate":
+                    spatial_BHNE = self._sol_prefix_dense_rows(q_BHNE, k_BHNE, v_BHNE, spatial_BHNE)
+            else:
+                spatial_BHNE, _prompt, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+                    q_BHNE,
+                    k_BHNE,
+                    v_BHNE,
+                    self.dummy_joint_input,
+                    self.dummy_joint_input,
+                    self.dummy_joint_input,
+                    joint_strategy="rear",
+                    logical_n=logical_n,
+                    program_config=self._sdpa_program_config(q_BHNE.shape[2], ring=True),
+                    **ring_kwargs,
+                )
         else:
             spatial_BHNE = ttnn.transformer.scaled_dot_product_attention(
                 q_BHNE,

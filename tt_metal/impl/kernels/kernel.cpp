@@ -653,12 +653,6 @@ std::string ComputeKernel::config_hash() const {
     if (this->config_.enable_trisc2_rvv) {
         hash += "_rvv";
     }
-    // The optimization level changes the binary (and its size against the kernel config buffer), so a kernel
-    // built at a non-default level must not share a cache entry with the default build. Appended only when it
-    // differs from the compute default (O3), so existing hashes are unchanged.
-    if (this->config_.opt_level != KernelBuildOptLevel::O3) {
-        hash += fmt::format("_{}", enchantum::to_string(this->config_.opt_level));
-    }
     return hash;
 }
 

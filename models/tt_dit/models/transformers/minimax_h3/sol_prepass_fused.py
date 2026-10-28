@@ -26,17 +26,7 @@ import torch
 
 import ttnn
 
-from .sol_prepass import (
-    LOG2E,
-    NEG,
-    TILE,
-    VAR_EPS,
-    SolGeometry,
-    _pad32,
-    build_constants,
-    compute_row_max,
-    row_max_constants,
-)
+from .sol_prepass import LOG2E, NEG, TILE, VAR_EPS, SolGeometry, _pad32, build_constants
 
 KERNEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sol_kernels")
 TILE_BYTES = 2048
@@ -139,7 +129,6 @@ class SolPrepassFused:
         math_fidelity=None,
         emit_chunk_union: bool = False,
         debug_moments: bool = False,
-        row_max: bool = False,
     ):
         # "compact" (tier 3, DESIGN_BLOCK_COMPACT.md) consumes the gather-form block mask: same outputs as "gather".
         # emit_chunk_union=True additionally writes the (Q chunk x K chunk) union row as "chunk_union" (dormant option).
@@ -162,17 +151,6 @@ class SolPrepassFused:
         self.emit_chunk_union = bool(emit_chunk_union) and mode != "chunk"
         self.debug_moments = bool(debug_moments)  # route program writes mean/E2/var tiles into the bias tensor (tests)
         self.math_fidelity = math_fidelity if math_fidelity is not None else ttnn.MathFidelity.HiFi4
-        # row_max=True (resident mode, M4): also return "row_max" from sol_prepass.compute_row_max, the same ttnn-op
-        # chain SolPrepass uses (not fused; it is a handful of small ops on top of one tile-sized all-gather).
-        self.row_max = bool(row_max)
-        self._row_max_consts: dict | None = None
-        self._row_max_ckc = (
-            ttnn.init_device_compute_kernel_config(
-                mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi4, fp32_dest_acc_en=True, packer_l1_acc=True
-            )
-            if self.row_max
-            else None
-        )
         self._state: dict | None = None
         self._key = None
         self.last_density: float | None = None
@@ -497,20 +475,6 @@ class SolPrepassFused:
     ) -> dict:
         assert abs(scale - self._state["scale"]) < 1e-12, "scale is baked into the prepared constants"
         geo = self.geo
-        row_max = None
-        if self.row_max:
-            if self._row_max_consts is None:
-                self._row_max_consts = {
-                    name: self._upload(t, shard=False) for name, t in row_max_constants(int(q.shape[3]), scale).items()
-                }
-            row_max = compute_row_max(
-                q,
-                k,
-                consts=self._row_max_consts,
-                ccl_manager=self.ccl_manager,
-                sp_axis=self.sp_axis,
-                compute_kernel_config=self._row_max_ckc,
-            )
         q_bar, kc_local, vc_local = self._run_pool(q, k, v)
         kc = self.ccl_manager.all_gather(kc_local, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)
         vc = self.ccl_manager.all_gather(vc_local, dim=2, mesh_axis=self.sp_axis, use_hyperparams=False)
@@ -534,7 +498,7 @@ class SolPrepassFused:
             self.last_density = float(sub[..., cols].mean())
             self.last_block_density = None if self.mode == "chunk" else self.last_density
         ttnn.deallocate(q_bar)
-        out = {"block_mask": mask, "pooled_k": kc, "pooled_v": vc, "bias": bias, "row_max": row_max}
+        out = {"block_mask": mask, "pooled_k": kc, "pooled_v": vc, "bias": bias}
         if union is not None:
             out["chunk_union"] = union
         return out

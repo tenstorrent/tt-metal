@@ -17,6 +17,7 @@
 #include "sdpa.hpp"
 #include "sparse_sdpa.hpp"
 #include "sparse_sdpa_msa.hpp"
+#include "sparse_ring_attention.hpp"
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
@@ -62,13 +63,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& slot_id,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
-    std::optional<uint32_t> kv_cache_layer_idx,
-    const std::optional<ttnn::Tensor>& sol_block_mask,
-    const std::optional<ttnn::Tensor>& sol_pooled_k,
-    const std::optional<ttnn::Tensor>& sol_pooled_v,
-    const std::optional<ttnn::Tensor>& sol_bias,
-    const std::optional<ttnn::Tensor>& sol_row_max,
-    const std::string& sol_mode) {
+    std::optional<uint32_t> kv_cache_layer_idx) {
     auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                          : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
 
@@ -109,13 +104,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         slot_id,
         kv_actual_isl_tensor,
         kv_cache_num_layers,
-        kv_cache_layer_idx,
-        sol_block_mask,
-        sol_pooled_k,
-        sol_pooled_v,
-        sol_bias,
-        sol_row_max,
-        sol_mode);
+        kv_cache_layer_idx);
     return outputs;
 }
 
@@ -171,6 +160,53 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla_wrapper(
         kv_actual_isl_tensor,
         kv_cache_num_layers,
         kv_cache_layer_idx);
+}
+
+ttnn::Tensor sparse_ring_attention_wrapper(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    const ttnn::Tensor& block_mask,
+    const ttnn::Tensor& pooled_k,
+    const ttnn::Tensor& pooled_v,
+    ttnn::Tensor& persistent_output_buffer_k,
+    ttnn::Tensor& persistent_output_buffer_v,
+    std::size_t logical_n,
+    const SDPAProgramConfig& program_config,
+    std::optional<float> scale,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    int32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    uint32_t num_links,
+    uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    CoreCoord ccl_core_grid_offset,
+    bool use_column_major_ccl) {
+    return ttnn::transformer::sparse_ring_attention(
+        input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
+        block_mask,
+        pooled_k,
+        pooled_v,
+        persistent_output_buffer_k,
+        persistent_output_buffer_v,
+        logical_n,
+        program_config,
+        dim,
+        multi_device_global_semaphore,
+        num_links,
+        cluster_axis,
+        mesh_device,
+        topology,
+        subdevice_id,
+        ccl_core_grid_offset,
+        scale,
+        compute_kernel_config,
+        use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
+                             : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_product_attention_wrapper(
@@ -790,13 +826,65 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("slot_id").noconvert() = nb::none(),
         nb::arg("kv_actual_isl_tensor").noconvert() = nb::none(),
         nb::arg("kv_cache_num_layers").noconvert() = nb::none(),
-        nb::arg("kv_cache_layer_idx").noconvert() = nb::none(),
-        nb::arg("sol_block_mask").noconvert() = nb::none(),
-        nb::arg("sol_pooled_k").noconvert() = nb::none(),
-        nb::arg("sol_pooled_v").noconvert() = nb::none(),
-        nb::arg("sol_bias").noconvert() = nb::none(),
-        nb::arg("sol_row_max").noconvert() = nb::none(),
-        nb::arg("sol_mode") = "auto");
+        nb::arg("kv_cache_layer_idx").noconvert() = nb::none());
+
+    ttnn::bind_function<"sparse_ring_attention", "ttnn.transformer.">(
+        mod,
+        R"doc(
+        Block-sparse ring attention (Sol-Attn) with the ring all-gather of K/V fused, non-causal, no joint tokens.
+
+        Per head and local 64-row Q block, `block_mask` names the global 64-token K/V blocks computed exactly.
+        Every other block enters the same softmax through one pooled entry: score q * mean(k), value mean(v),
+        weighted by the block's token count. The pooled-entry column bias is generated on device.
+
+        Args:
+            input_tensor_q (ttnn.Tensor): [1, H, N/ring_size, D] bf16 TILE, sequence-sharded on cluster_axis.
+            input_tensor_k (ttnn.Tensor): [1, H, N/ring_size, D] bf16 TILE, all-gather input.
+            input_tensor_v (ttnn.Tensor): [1, H, N/ring_size, D] bf16 TILE, all-gather input.
+            block_mask (ttnn.Tensor): [1, H, nqb_pad, ring_size * nb_pad] uint32 ROW_MAJOR. Entry
+                [0, h, qb, s * nb_pad + b] != 0 computes block b of shard s exactly for local Q block qb.
+            pooled_k (ttnn.Tensor): [1, H, ring_size * nb_pad, D] bf16 TILE, mean K per block (zero padding).
+            pooled_v (ttnn.Tensor): [1, H, ring_size * nb_pad, D] bf16 TILE, mean V per block.
+
+        Keyword args:
+            persistent_output_buffer_k (ttnn.Tensor): gathered K buffer.
+            persistent_output_buffer_v (ttnn.Tensor): gathered V buffer.
+            logical_n (int): logical (unpadded) global sequence length.
+            program_config (ttnn.SDPAProgramConfig): k_chunk_size sets the K/V piece size.
+            scale (float, optional): defaults to D to the power of -0.5.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
+            dim (int): all-gather dimension (2).
+            multi_device_global_semaphore (List[ttnn.GlobalSemaphore]): all-gather semaphores.
+            num_links (int), cluster_axis (int), mesh_device (ttnn.MeshDevice), topology (ttnn.Topology),
+            subdevice_id (optional), ccl_core_grid_offset (ttnn.CoreCoord), use_column_major_ccl (bool):
+                as ring_joint_scaled_dot_product_attention.
+
+        Returns:
+            ttnn.Tensor: [1, H, N/ring_size, D], same layout as input_tensor_q.
+        )doc",
+        &sparse_ring_attention_wrapper,
+        nb::arg("input_tensor_q").noconvert(),
+        nb::arg("input_tensor_k").noconvert(),
+        nb::arg("input_tensor_v").noconvert(),
+        nb::arg("block_mask").noconvert(),
+        nb::arg("pooled_k").noconvert(),
+        nb::arg("pooled_v").noconvert(),
+        nb::kw_only(),
+        nb::arg("persistent_output_buffer_k").noconvert(),
+        nb::arg("persistent_output_buffer_v").noconvert(),
+        nb::arg("logical_n"),
+        nb::arg("program_config").noconvert(),
+        nb::arg("scale") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("dim"),
+        nb::arg("multi_device_global_semaphore"),
+        nb::arg("num_links"),
+        nb::arg("cluster_axis"),
+        nb::arg("mesh_device"),
+        nb::arg("topology"),
+        nb::arg("subdevice_id") = nb::none(),
+        nb::arg("ccl_core_grid_offset"),
+        nb::arg("use_column_major_ccl") = false);
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.

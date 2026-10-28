@@ -354,8 +354,8 @@ def test_partial_tail_block_accuracy(rows, label):
 
     That is 32/1184 = 2.7 % of keys approximated. If the reference -- which shares no device code -- shows the
     same collapse against the aligned geometry, the cost is inherent to pooling a partial block. If the
-    reference holds up, the device has a bug in partial-block handling and the xfail in
-    test_sol_compact_minimax_h3.py is hiding it.
+    reference holds up, the device has a bug in partial-block handling (the device side is
+    test_sparse_ring_attention_minimax_h3.py::test_ragged_shards).
     """
     geo = SolGeometry(shards=2, rows=rows, logical_n=2 * rows, q_chunk=128, k_chunk=256)
     consts = build_constants(geo, band=1, sink_tokens=0, force_first_chunk=True, scale=SCALE)

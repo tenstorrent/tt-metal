@@ -241,13 +241,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
     const std::optional<ttnn::Tensor>& slot_id,
     const std::optional<ttnn::Tensor>& kv_actual_isl_tensor,
     std::optional<uint32_t> kv_cache_num_layers,
-    std::optional<uint32_t> kv_cache_layer_idx,
-    const std::optional<ttnn::Tensor>& sol_block_mask,
-    const std::optional<ttnn::Tensor>& sol_pooled_k,
-    const std::optional<ttnn::Tensor>& sol_pooled_v,
-    const std::optional<ttnn::Tensor>& sol_bias,
-    const std::optional<ttnn::Tensor>& sol_row_max,
-    const std::string& sol_mode) {
+    std::optional<uint32_t> kv_cache_layer_idx) {
     // Normalize empty joints to nullopt (see drop_if_empty).
     const std::optional<ttnn::Tensor> joint_q = drop_if_empty(joint_tensor_q);
     const std::optional<ttnn::Tensor> joint_k = drop_if_empty(joint_tensor_k);
@@ -314,13 +308,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         sliding_window_size,
         circular_kv_cache,
         logical_n_tensor,
-        logical_l_tensor,
-        sol_block_mask,
-        sol_pooled_k,
-        sol_pooled_v,
-        sol_bias,
-        sol_row_max,
-        sol_mode);
+        logical_l_tensor);
     return {
         output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[prim::RING_JOINT_SDPA_JOINT_OUTPUT_IDX],

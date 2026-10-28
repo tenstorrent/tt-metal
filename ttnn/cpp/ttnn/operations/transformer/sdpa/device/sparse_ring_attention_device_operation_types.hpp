@@ -1,0 +1,111 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <functional>
+#include <optional>
+#include <tuple>
+#include <utility>
+
+#include "ttnn/core.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_device_operation_types.hpp"
+#include "ttnn/operations/transformer/sdpa_config.hpp"
+#include "ttnn/operations/transformer/sdpa/device/ring_fusion.hpp"
+
+namespace ttnn::prim {
+
+struct SparseRingAttentionParams {
+    std::optional<float> scale;
+    std::size_t logical_n = 0;
+    std::size_t ring_size = 0;
+    tt::tt_metal::MemoryConfig output_memory_config;
+    std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config;
+    DeviceComputeKernelConfig compute_kernel_config;
+    experimental::prim::RingAttentionAllGatherAsyncParams all_gather_operation_attributes;
+    experimental::prim::RingAttentionAllGatherAsyncInputs all_gather_tensor_args;
+    CoreCoord ccl_core_grid_offset;
+
+    // We need a constructor, because all_gather_struct is not default initializable.
+    SparseRingAttentionParams(
+        std::optional<float> scale,
+        std::size_t logical_n,
+        std::size_t ring_size,
+        tt::tt_metal::MemoryConfig output_memory_config,
+        std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
+        DeviceComputeKernelConfig compute_kernel_config,
+        experimental::prim::RingAttentionAllGatherAsyncParams all_gather_operation_attributes,
+        experimental::prim::RingAttentionAllGatherAsyncInputs all_gather_tensor_args,
+        CoreCoord ccl_core_grid_offset) :
+        scale(scale),
+        logical_n(logical_n),
+        ring_size(ring_size),
+        output_memory_config(std::move(output_memory_config)),
+        program_config(std::move(program_config)),
+        compute_kernel_config(compute_kernel_config),
+        all_gather_operation_attributes(std::move(all_gather_operation_attributes)),
+        all_gather_tensor_args(std::move(all_gather_tensor_args)),
+        ccl_core_grid_offset(ccl_core_grid_offset) {}
+
+    std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
+
+    std::uint32_t get_k_chunk_size() const { return program_config.has_value() ? program_config->k_chunk_size : 32; }
+
+    static constexpr auto attribute_names = std::forward_as_tuple(
+        "scale",
+        "logical_n",
+        "ring_size",
+        "compute_kernel_config",
+        "program_config",
+        "ccl_core_grid_offset",
+        "all_gather_operation_attributes",
+        "all_gather_tensor_args");
+    auto attribute_values() const {
+        return std::make_tuple(
+            std::cref(scale),
+            std::cref(logical_n),
+            std::cref(ring_size),
+            std::cref(compute_kernel_config),
+            std::cref(program_config),
+            std::cref(ccl_core_grid_offset),
+            std::cref(all_gather_operation_attributes),
+            std::cref(all_gather_tensor_args));
+    }
+};
+
+// Q / K / V are sequence-sharded along the ring; the fused all-gather fills gathered_k / gathered_v. The block
+// mask and pooled K / V come from the routing pre-pass (see ttnn::transformer::sparse_ring_attention):
+//   block_mask  uint32 row-major [1, NH, nb_pad, n_blocks_pad]: != 0 computes (local 64-row Q block, global
+//               64-token K block) exactly; global block s * nb_pad + b is block b of shard s.
+//   pooled_k/v  bf16 tile [1, NH, n_blocks_pad, DH]: per-block mean K / mean V over the valid tokens, whole
+//               sequence. Every block the mask drops enters the softmax as one pooled entry weighted by its
+//               token count, through the column bias the reader generates (sol_bias_gen.hpp).
+struct SparseRingAttentionInputs {
+    Tensor input_q;
+    Tensor input_k;
+    Tensor input_v;
+    Tensor gathered_k;
+    Tensor gathered_v;
+    Tensor block_mask;
+    Tensor pooled_k;
+    Tensor pooled_v;
+
+    uint32_t local_kv_seq_len() const { return static_cast<uint32_t>(input_k.logical_shape()[2]); }
+};
+
+// Index constants for SparseRingAttentionResult vector
+constexpr size_t SPARSE_RING_ATTENTION_OUTPUT_IDX = 0;
+constexpr size_t SPARSE_RING_ATTENTION_JOINT_OUTPUT_IDX = 1;
+constexpr size_t SPARSE_RING_ATTENTION_STATS_OUTPUT_IDX = 2;
+
+// SparseRingAttentionResult is a vector of 3 tensors: [output, joint_output (empty), stats_output]. The writer kernel
+// takes accessors for all three, so the two unused outputs stay.
+using SparseRingAttentionResult = Tensors;
+
+// SparseRingAttentionResultSpec is a vector of 3 TensorSpecs: [output, joint_output, stats_output]
+using SparseRingAttentionResultSpec = std::vector<tt::tt_metal::TensorSpec>;
+
+}  // namespace ttnn::prim

@@ -9,6 +9,8 @@ set(TTNN_OP_TRANSFORMER_SRCS
     sdpa/device/joint_sdpa_program_factory.cpp
     sdpa/device/ring_joint_sdpa_device_operation.cpp
     sdpa/device/ring_joint_sdpa_program_factory.cpp
+    sdpa/device/sparse_ring_attention_device_operation.cpp
+    sdpa/device/sparse_ring_attention_program_factory.cpp
     sdpa/device/sliding_halo_layout.cpp
     sdpa/device/exp_ring_joint_sdpa_device_operation.cpp
     sdpa/device/exp_ring_joint_sdpa_program_factory.cpp
@@ -24,6 +26,7 @@ set(TTNN_OP_TRANSFORMER_SRCS
     sdpa/device/sparse_sdpa_msa_device_operation.cpp
     sdpa/device/sparse_sdpa_msa_program_factory.cpp
     sdpa/sparse_sdpa_msa.cpp
+    sdpa/sparse_ring_attention.cpp
     sdpa_decode/device/sdpa_decode_device_operation.cpp
     sdpa_decode/device/sdpa_decode_program_factory.cpp
     sdpa_decode/sdpa_decode.cpp

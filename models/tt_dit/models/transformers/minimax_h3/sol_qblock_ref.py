@@ -235,7 +235,7 @@ def sol_attention(q, k, v, mask, pooled_k, pooled_v, geo: SolGeometry, *, scale:
     """
     S, H, rows, D = q.shape
     NQ = mask.shape[2]
-    per_unit = rows // (geo.nb if NQ == geo.nb_pad else geo.nqc)  # 64 for Q-block form, q_chunk for Q-chunk form
+    per_unit = geo.block if NQ == geo.nb_pad else geo.q_chunk  # 64 for Q-block form, q_chunk for Q-chunk form
     kb, lens = _blockify(k, geo)  # [H,nbg,block,D], [nbg]
     vb, _ = _blockify(v, geo)
     valid = lens > 0
@@ -243,7 +243,7 @@ def sol_attention(q, k, v, mask, pooled_k, pooled_v, geo: SolGeometry, *, scale:
 
     out = torch.zeros_like(q, dtype=torch.float32)
     for s in range(S):
-        for u in range(rows // per_unit):
+        for u in range(-(-rows // per_unit)):  # the last unit may be partial (rows not a multiple of per_unit)
             rsl = slice(u * per_unit, (u + 1) * per_unit)
             qu = q[s, :, rsl].float()  # [H,m,D]
             keep = mask[s, :, u] > 0.5  # [H,nbg] -- per head, masks are not shared across heads

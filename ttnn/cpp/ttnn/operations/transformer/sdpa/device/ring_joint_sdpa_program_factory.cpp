@@ -3,9 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
-
-#include <cstdlib>
-#include <string>
 #include "kernels/chunked_q_mapping.hpp"
 #include "kernels/dataflow/chunked_prefill_utils.hpp"
 #include "kernels/ring_joint_ksplit.hpp"
@@ -47,7 +44,6 @@ using ttnn::Tensor;
 namespace {
 
 namespace ag_rt = ttnn::ring_attention_all_gather_async_detail;
-namespace ag_dyn = ttnn::experimental::prim::ring_attention_all_gather_async_dynamic;
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
 // Circular sliding KV slab count (0 = unbounded); validation already required whole slabs and >= 2.
@@ -195,8 +191,6 @@ RingJointInputParams resolve_ring_joint_input_params(
 constexpr uint32_t kReaderKernelIndex = 0;
 constexpr uint32_t kWriterKernelIndex = 1;
 constexpr uint32_t kComputeKernelIndex = 2;
-// Sol resident mode: Q chunks a core may hold in L1 at once (the kernels' per-chunk state is a 32-bit bitmask).
-constexpr uint32_t kSolResidentMaxSlots = 32;
 
 // Dense all-gather appends reader-forward, writer-forward, reader-backward, writer-backward.
 // Compact sliding appends only its predecessor reader/writer pair at indices 3 and 4.
@@ -559,9 +553,7 @@ RingJointRuntimeArgLayout get_runtime_arg_layout(
     const uint32_t joint_buffer_args = (joint_input_params.L != 0) ? kReaderJointBufferArgCount : 0;
     // 2 extra buffer slots for gathered_joint_k/v when the sharded-joint path is active
     const uint32_t gathered_joint_buffer_args = joint_input_params.joint_is_sharded ? 2 : 0;
-    // Sol-Attn gathers a different K/V chunk content per Q chunk, so nothing can be forwarded between cores.
-    const bool enable_kv_chains =
-        !args.has_sliding_window() && !(tensor_args.sol_enabled() && !tensor_args.sol_streams_chunks(args.sol_mode));
+    const bool enable_kv_chains = !args.has_sliding_window();
     const bool use_head_chain = ring_joint::uses_v_head_chain(enable_kv_chains, gqa_grouped_kv, v_shares_k_buffer);
     const uint32_t head_chain_args = use_head_chain ? kRingJointChainConfigArgCount : 0;
     const uint32_t batch_chain_args =
@@ -1102,69 +1094,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // (validated divisible with >= 2 slabs). Wraps the local-slab derivation in
     // sliding_window_work_plan.hpp for the host halo layout, the reader, and the compute kernel.
     const uint32_t circular_kv_slab_count = derived_kv_slab_count(args, tensor_args);
-    // Sol-Attn block gathering: every core reads its own gathered K/V, no store-and-forward chains.
-    // Chunk mode keeps the chains (dense streaming) and skips in compute.
-    const bool sol_enabled = tensor_args.sol_enabled();
-    // Streaming modes (chunk, compact) keep the chains and the dense chunk loop; the kernels' "sol_chunk_mode" flag
-    // means exactly that, and "sol_compact" selects the block-mask / in-place compaction variant on top.
-    const bool sol_compact = tensor_args.sol_compact_mode(args.sol_mode);
-    const bool sol_chunk_mode = tensor_args.sol_streams_chunks(args.sol_mode);
-    // Q2: cross-chunk block packing. Compact mode compacts kept blocks to the front of their OWN chunk's page and
-    // still pays one visit per kept chunk, so at 33 % density a visited page carries ~2.6 of 8 blocks and the
-    // ~8 us fixed per-step cost is paid on a third-full matmul. Packing accumulates kept blocks across K-chunk
-    // boundaries into full pages, so the visit count scales with density instead of with chunk occupancy.
-    //
-    // A page cannot span ring iterations: shard r's K/V is only resident while that iteration streams. Within an
-    // iteration the reader sees blocks in chunk order, so it fills a page and flushes a partial one at the end.
-    // Both sides walk the same kept bitmask, so no plan words are added -- compute derives page count and fill
-    // exactly as the reader does.
-    // Selected with sol_mode="pack" (implies compact). It used to be the TT_SOL_PACK env var, which the program
-    // hash could not see: a cache hit silently reused the pack-off program.
-    const bool sol_pack = tensor_args.sol_pack_mode(args.sol_mode);
-    // Resident mode (sol_attn_status_2026-10-21.md §4a, M1): chunk-mode semantics with the K/V-once loop order.
-    // Each piece is streamed through a core once per ring iteration and applied to every resident Q chunk; the
-    // per-chunk accumulators live in an L1 FIFO (the staging CBs, max_q_per_core + 1 entries deep) for the whole
-    // op, so there is no per-chunk DRAM save/restore and the chain streams each shard once per core.
-    const bool sol_resident = tensor_args.sol_resident_mode(args.sol_mode);
-    // sol_static_max: the deprecated sol_row_max tensor is present (resident only); it is plumbed to the reader
-    // (accessor + address) but not used by compute: its a-priori bound was too loose for bf16 (0.992 at 1184
-    // rows), and a frozen first-step max is wrong outright (the pack-thread approximate exp saturates for inputs
-    // above +0.72, so the subtracted max must be an upper bound of the scores). Resident compute therefore always
-    // runs the running max (row max merged with the stored max once per chunk per piece).
-    const bool sol_static_max = tensor_args.sol_static_max();
-    if (tensor_args.sol_enabled()) {
-        // Emitted once per program creation (the kernels are created with these named args). The Sol tests read this
-        // line back from stderr and fail when a requested mode did not resolve (a docstring-gated keyword once made
-        // every "compact" run a silent gather run; DESIGN_BLOCK_COMPACT.md section 11).
-        log_info(
-            tt::LogOp,
-            "RingJointSDPA sol mode resolved: {} (requested '{}', compact={}, chunk={}, even_up={}, even_up_all={}, "
-            "gen_bias={}, static_max={})",
-            sol_resident ? "resident"
-                         : (sol_pack ? "pack" : (sol_compact ? "compact" : (sol_chunk_mode ? "chunk" : "gather"))),
-            args.sol_mode,
-            sol_compact ? 1 : 0,
-            sol_chunk_mode && !sol_compact ? 1 : 0,
-            (sol_compact &&
-             ((std::getenv("TT_SOL_EVENUP") && std::string(std::getenv("TT_SOL_EVENUP")) == "1") ||
-              (std::getenv("TT_SOL_EVENUP_ALL") && std::string(std::getenv("TT_SOL_EVENUP_ALL")) == "1")))
-                ? 1
-                : 0,
-            (sol_compact && std::getenv("TT_SOL_EVENUP_ALL") && std::string(std::getenv("TT_SOL_EVENUP_ALL")) == "1")
-                ? 1
-                : 0,
-            !tensor_args.sol_bias.has_value() ? 1 : 0,
-            sol_static_max ? 1 : 0);
-    }
-    // No sol_bias tensor: the reader generates the pooled-chunk column-bias tiles (sol_bias_gen.hpp).
-    const bool sol_gen_bias = tensor_args.sol_bias_generated();
-    // Measurement knob (BIG_IDEAS_ATTENTION.md item 4): TT_SOL_CHAIN_LEN=L splits every head chain into linear chains
-    // of at most L cores (each with its own DRAM injector), shrinking the Sol chain union at the cost of 8/L x the
-    // K/V DRAM reads; applies to dense too; multicast chains are disabled when set. 0 / unset = unchanged. Not hashed:
-    // set it for the whole process.
-    const uint32_t sol_chain_len =
-        std::getenv("TT_SOL_CHAIN_LEN") ? static_cast<uint32_t>(std::atoi(std::getenv("TT_SOL_CHAIN_LEN"))) : 0u;
-    const bool enable_kv_chains = !has_sliding_window && !(sol_enabled && !sol_chunk_mode);
+    const bool enable_kv_chains = !has_sliding_window;
     const uint32_t kv_cache_batch_idx = args.cache_batch_idx().value_or(0);
     // L / L_local resolved once in resolve_ring_joint_input_params (full vs per-device joint seq).
     const uint32_t L = joint_input_params.L;
@@ -1179,11 +1109,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // The store-and-forward chains are scheduled per head, not per (batch, head).
     // Until their batch-aware scheduling is restored, multi-batch requests read K/V
     // independently on each core. This preserves the established B>1 functional path.
-    // Debug A/B (not hashed; set for the whole process, clear the program cache between A and B): TT_SOL_NO_CHAIN=1
-    // builds no store-and-forward chains at all, so every core reads its own K/V from DRAM. Correctness only: it
-    // multiplies the K/V DRAM reads by the chain length. Separates a chain-protocol fault from a compute fault.
-    const bool sol_no_chain = std::getenv("TT_SOL_NO_CHAIN") && std::string(std::getenv("TT_SOL_NO_CHAIN")) == "1";
-    const bool build_kv_chains = enable_kv_chains && B == 1 && !sol_no_chain;
+    const bool build_kv_chains = enable_kv_chains && B == 1;
 
     const uint32_t q_local_padded_Nt = q_local_padded_N / tt::constants::TILE_HEIGHT;
     const uint32_t kv_local_padded_Nt = kv_local_padded_N / tt::constants::TILE_HEIGHT;
@@ -1212,29 +1138,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
     const uint32_t Sq_chunk_t = q_chunk_size / tt::constants::TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / tt::constants::TILE_HEIGHT;
-
-    // Sol-Attn geometry (DESIGN.md §3.1b). Blocks are 64 tokens (2 tiles) inside each shard; the pooled
-    // tensors hold ring_size x sol_nb_pad blocks; a pooled "chunk" is Sk_chunk_t pooled rows.
-    constexpr uint32_t kSolBlockTiles = 2;
-    uint32_t sol_nb = 0, sol_nb_pad = 0, sol_n_blocks_pad = 0, sol_nqc_pad = 0, sol_pooled_chunks = 0,
-             sol_pooled_last_tiles = 0, sol_mask_row_bytes = 0, sol_nkc = 0;
-    if (sol_enabled) {
-        // Chunk mode: mask rows are nkc_pad words, one per global K chunk (per-shard stride num_local_k_chunks).
-        sol_nkc = tt::div_up(kv_local_padded_Nt, Sk_chunk_t);
-        sol_n_blocks_pad = tensor_args.sol_pooled_k->logical_shape()[2];
-        sol_nb_pad = sol_n_blocks_pad / args.all_gather_operation_attributes.ring_size;
-        sol_nb = tt::div_up(kv_local_padded_Nt, kSolBlockTiles);
-        sol_nqc_pad = tensor_args.sol_block_mask->logical_shape()[2];
-        const uint32_t pooled_tiles = sol_n_blocks_pad / tt::constants::TILE_HEIGHT;
-        sol_pooled_chunks = tt::div_up(pooled_tiles, Sk_chunk_t);
-        sol_pooled_last_tiles = pooled_tiles - (sol_pooled_chunks - 1) * Sk_chunk_t;
-        // Compact mode reads per-shard slices of the block row (nb_pad words); the other modes read whole rows.
-        sol_mask_row_bytes =
-            (sol_compact ? sol_nb_pad : tensor_args.sol_block_mask->logical_shape()[3]) * sizeof(uint32_t);
-        TT_FATAL(!sol_chunk_mode || sol_nkc <= 64, "sol chunk mode: at most 64 K chunks per shard");
-        TT_FATAL(sol_nb <= sol_nb_pad, "sol: {} blocks per shard exceed the pooled row {}", sol_nb, sol_nb_pad);
-        TT_FATAL(Sk_chunk_t % kSolBlockTiles == 0, "sol: k chunk must hold whole blocks");
-    }
 
     // Global chunk has S Q slabs and R KV regions, with R/S extra KV stripes.
     // Kernels recover the region from this width divided by transport ring size.
@@ -1446,39 +1349,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const bool kt_inplace_v = kt_inplace_v_enabled(v_shares_k_buffer, Sq_chunk_t);
 
     // These tile capacity counts for CBs need to match the number of tiles expected by the kernel (softmax.cpp)
-    // Resident mode keeps every Q chunk the core owns fronted in cb_q_in for the whole op (read once).
-    TT_FATAL(
-        !sol_resident || max_q_per_core <= kSolResidentMaxSlots,
-        "sol_mode=resident holds at most {} Q chunks per core, this split needs {}",
-        kSolResidentMaxSlots,
-        max_q_per_core);
-    // M2: the plan page's 16-word header carries the shard's kept-block bits (one word per 32 blocks) plus the
-    // union piece bits (2 words) and the pooled flag.
-    TT_FATAL(
-        !sol_resident || tt::div_up(sol_nb, 32u) + 3 <= 16,
-        "sol_mode=resident: {} blocks per shard exceed the plan header (at most 416)",
-        sol_nb);
-    uint32_t q_tiles = Sq_chunk_t * DHt * (sol_resident ? max_q_per_core : q_buffer_factor);
+    uint32_t q_tiles = Sq_chunk_t * DHt * q_buffer_factor;
     // Latent-V keeps the K CB triple-buffered. With V rematerialized, the 3rd slot let the reader
     // build the next V while compute consumed the current one; with in-place latent V (kt_inplace_v)
     // there is no V entry, but the 3rd K^T slot still buys prefetch slack that hides the reader's
     // NoC latency tail — measured ~+3pt math util on the dv512 q32 shape vs double-buffering.
-    // K/V CB depth in chunks. Default 2 (double buffer). TT_SOL_KV_PAGES=3|4 is a measurement knob (not hashed:
-    // set it for the whole process): the store-and-forward chain is ~10 cores deep and the sparse op's time per
-    // chunk visit measures as reader time PLUS compute time rather than the larger of the two, which a 2-deep
-    // buffer cannot decouple across that many hops. Costs Sk_chunk_t * (DHt + vDHt) tiles of L1 per extra page.
-    // Resident mode delivers each head chain's pieces by multicast from one producer per group instead of
-    // forwarding them core to core (see sol_res_mcast in the reader), over a 3-deep K/V CB: the producer can send the
-    // next piece while every member computes on the previous ones.
-    const bool sol_res_mcast = sol_resident && build_kv_chains && use_head_chain && sol_chain_len == 0;
-    const uint32_t kv_cb_pages = [&]() -> uint32_t {
-        const char* env = std::getenv("TT_SOL_KV_PAGES");
-        const uint32_t default_pages = sol_res_mcast ? 3u : 2u;
-        const uint32_t pages = env ? static_cast<uint32_t>(std::atoi(env)) : default_pages;
-        return (pages >= 2 && pages <= 8 && !v_shares_k_buffer) ? pages : default_pages;
-    }();
-    uint32_t k_tiles = Sk_chunk_t * DHt * (v_shares_k_buffer ? 3 : kv_cb_pages);
-    uint32_t v_tiles = Sk_chunk_t * vDHt * kv_cb_pages;
+    uint32_t k_tiles = Sk_chunk_t * DHt * (v_shares_k_buffer ? 3 : 2);
+    uint32_t v_tiles = Sk_chunk_t * vDHt * 2;  // double buffer
     uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
     uint32_t out_im_tiles = Sq_chunk_t * vDHt;
@@ -1801,24 +1678,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             .append_to(reader_compile_time_args);
         TensorAccessorArgs(has_logical_l_tensor ? tensor_args.logical_l_tensor->buffer() : nullptr)
             .append_to(reader_compile_time_args);
-    }
-    // Sol-Attn accessors (mask, pooled K, pooled V, [row max], [bias]) follow the logical-length pair; the reader
-    // places chains_base_offset after them when sol_enabled.
-    // Order: sol_mask, sol_pk, sol_pv, then sol_row_max iff the named arg sol_static_max == 1 (resident, M4), then
-    // sol_bias iff !sol_gen_bias. Resident requires the generated bias, so row max and bias never coexist, but the
-    // reader should still chain them: sol_rm_args_offset = sol_static_max ? sol_pv_args.next_compile_time_args_offset()
-    // : kFirstAccessorArgOffset; sol_bias_args_offset / chains_base_offset continue from sol_rm_args when present,
-    // from sol_pv_args otherwise.
-    if (sol_enabled) {
-        TensorAccessorArgs(tensor_args.sol_block_mask->buffer()).append_to(reader_compile_time_args);
-        TensorAccessorArgs(tensor_args.sol_pooled_k->buffer()).append_to(reader_compile_time_args);
-        TensorAccessorArgs(tensor_args.sol_pooled_v->buffer()).append_to(reader_compile_time_args);
-        if (sol_static_max) {
-            TensorAccessorArgs(tensor_args.sol_row_max->buffer()).append_to(reader_compile_time_args);
-        }
-        if (!sol_gen_bias) {
-            TensorAccessorArgs(tensor_args.sol_bias->buffer()).append_to(reader_compile_time_args);
-        }
     }
 
     /**
@@ -2166,27 +2025,14 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t cb_identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
     const uint32_t cb_col_identity = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
 
-    // Resident mode (M3, block-major steps): one step covers one 64-key block for every resident chunk that keeps
-    // it, so the score scratch holds (chunks x Sq_chunk_t) rows of kSolBlockTiles columns (a pooled entry still
-    // steps one chunk at full width: at least qk_tiles), and the new-max / alpha scratches hold one tile row per
-    // resident chunk.
-    // M5: one step covers one piece for a sub-group of up to kSolResidentGroup resident chunks, each with its own
-    // kept blocks; the scores of every member use the full piece width as their row stride, so the scratch holds
-    // kSolResidentGroup x Sq_chunk_t rows of Sk_chunk_t tiles. The compute kernel derives the same capacity
-    // (sdpa_ring_resident, kGroupCap) and ASSERTs the page count.
-    constexpr uint32_t kSolResidentGroup = 4;
-    const uint32_t qk_im_cb_tiles =
-        sol_resident ? std::max(qk_tiles, std::min(max_q_per_core, kSolResidentGroup) * Sq_chunk_t * Sk_chunk_t)
-                     : qk_tiles;
-    const uint32_t res_stats_tiles = statistics_tiles * (sol_resident ? max_q_per_core : 1u);
-    const uint32_t cb_qk_im = allocate_tile_cb(qk_im_cb_tiles, qk_im_tile_size, qk_im_df);
+    const uint32_t cb_qk_im = allocate_tile_cb(qk_tiles, qk_im_tile_size, qk_im_df);
     const uint32_t cb_out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
     const uint32_t cb_out_im_B = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
-    const uint32_t cb_max_A = allocate_tile_cb(res_stats_tiles, stats_tile_size, stats_df);
+    const uint32_t cb_max_A = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     const uint32_t cb_max_B = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
     const uint32_t cb_sum_A = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
     const uint32_t cb_sum_B = allocate_tile_cb(statistics_tiles, sum_tile_size, sum_df);
-    const uint32_t cb_exp_max_diff = allocate_tile_cb(res_stats_tiles, stats_tile_size, stats_df);
+    const uint32_t cb_exp_max_diff = allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df);
 
     const uint32_t cb_out = allocate_tile_cb(out0_t, out_tile_size, out_df);
 
@@ -2194,17 +2040,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // reducer's partial results from the other bands. Unsplit sliding attention folds every K/V range into one pass per
     // Q and uses neither, so it aliases them to existing CBs to keep the compile-time ABI without reserving L1.
     const bool needs_accumulator_staging_cbs = !has_sliding_window || ksplit_count > 1;
-    // Resident mode: the staging CBs (max, out, sum) hold one accumulator set per resident Q chunk, addressed by
-    // chunk slot and updated in place (M3): exactly max_q_per_core entries, filled once on the first active ring
-    // iteration and neither pushed nor popped until the final normalization, so the unpacker's read index and the
-    // packer's write index name the same tile (the buffer is exactly full, the write pointer wrapped to its base).
-    // (M1/M2 used a FIFO one entry deeper, rotated by copies.)
-    const uint32_t fifo_entries = sol_resident ? max_q_per_core : 1;
-    const uint32_t cb_stats_in = needs_accumulator_staging_cbs
-                                     ? allocate_tile_cb(statistics_tiles * fifo_entries, im_tile_size, im_df)
-                                     : cb_max_A;
+    const uint32_t cb_stats_in =
+        needs_accumulator_staging_cbs ? allocate_tile_cb(statistics_tiles, im_tile_size, im_df) : cb_max_A;
     const uint32_t cb_prev_out =
-        needs_accumulator_staging_cbs ? allocate_tile_cb(out_im_tiles * fifo_entries, out_tile_size, out_df) : cb_out;
+        needs_accumulator_staging_cbs ? allocate_tile_cb(out_im_tiles, out_tile_size, out_df) : cb_out;
     const uint32_t cb_stats_out =
         needs_accumulator_staging_cbs ? allocate_tile_cb(statistics_tiles, im_tile_size, im_df) : cb_max_B;
 
@@ -2219,11 +2058,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         use_streaming_compute
             ? (needs_accumulator_staging_cbs ? allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df) : cb_sum_A)
             : inactive_cb;
-    const uint32_t cb_sum_in = use_streaming_compute
-                                   ? (needs_accumulator_staging_cbs
-                                          ? allocate_tile_cb(statistics_tiles * fifo_entries, stats_tile_size, stats_df)
-                                          : cb_sum_B)
-                                   : inactive_cb;
+    const uint32_t cb_sum_in =
+        use_streaming_compute
+            ? (needs_accumulator_staging_cbs ? allocate_tile_cb(statistics_tiles, stats_tile_size, stats_df) : cb_sum_B)
+            : inactive_cb;
 
     // Signal CB: compute signals writer when last K-chunk starts.
     // 1 page suffices: writer pops during SALAD before compute pushes the next Q's signal.
@@ -2232,62 +2070,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         use_streaming_compute ? allocate_cb(signal_page_size, 1, tt::DataFormat::UInt16) : inactive_cb;
     // Reader-to-compute mailbox for the metadata-derived logical geometry.
     const uint32_t cb_kv_pad_derived = allocate_cb(64, 1, tt::DataFormat::UInt32);
-    // Sol-Attn: reader->compute per-(ring iter, Q chunk) plan words, and the pooled-chunk column bias tiles.
-    // Plan page: 16 summary words, then the Q chunk's full mask row (scratch the reader scans in place). Resident
-    // mode's summary is [kept-block words (sol_res_block_words)][union piece bits lo, hi][do_pooled].
-    // Single page: compute pops the plan at the start of each Q chunk, before any K chunk, and the two-deep
-    // K/V CBs throttle the reader harder than this does. A second page pushed the static CB region past the
-    // L1 buffers the full pipeline's CCL manager pins (clash by 1792 B at the 10 s shape).
-    const uint32_t cb_sol_plan =
-        sol_enabled ? allocate_cb((sol_compact ? 128 : 64) + sol_mask_row_bytes, 1, tt::DataFormat::UInt32)
-                    : inactive_cb;
-    // Resident mode puts every chunk's plan record in one page per ring iteration, after the header (16 words) and
-    // the shard slice the reader scans (sol_nb_pad words), so the reader does not wait for compute to pop a page per
-    // chunk at each iteration boundary. The records fit in the scratch the whole-row reads already need; a short row
-    // (one shard: the slice is the whole row) leaves no room for them, and then each chunk gets its own page. And no
-    // phase-alignment dummies: every chain / group member pushes the same sequence, so the pointers stay in step.
-    const uint32_t sol_res_rec_words = sol_resident ? tt::div_up(sol_nb, 32u) + 3 : 0;
-    const bool sol_res_plan_fits =
-        (16 + sol_nb_pad + max_q_per_core * sol_res_rec_words) * sizeof(uint32_t) <= 64 + sol_mask_row_bytes;
-    const uint32_t sol_res_plan_rec_base = (sol_resident && sol_res_plan_fits) ? 16 + sol_nb_pad : 0;
-    const bool sol_res_no_dummies = sol_resident;
-    // One pooled chunk of bias tiles in flight (bias is read once per pooled chunk, 4 pooled chunks per Q chunk per
-    // layer); 2*Sk_chunk_t pushed the static CB region past the L1 buffers at the 10 s / 15 s shapes.
-    const uint32_t cb_sol_bias = sol_enabled ? allocate_tile_cb(Sk_chunk_t, mask_tile_size, mask_df) : inactive_cb;
-    // Q2 staging pages. Under sol_pack the roles invert: these hold the raw downloaded chunk and are the chain's
-    // forward source, while cb_k_in / cb_v_in carry PACKED pages to compute.
-    //
-    // The inversion is what makes Q2 pay. If compute still received every raw chunk it would have to wait_front
-    // and pop each one -- today it drains only the chunks it dropped, so draining all of them would add ~440
-    // drains per layer at 10 s against a measured 2.2 ms drain bucket, eating most of what fewer steps buys. The
-    // staging pages are never pushed (the reserve-and-reuse idiom the padded-mcast path already uses), so compute
-    // does no drains at all, and `sdpa_inner_loop_step` keeps reading cb_k_in / cb_v_in unchanged.
-    //
-    // Backpressure is preserved: the reader cannot reserve its next packed page until compute pops one.
-    // Single-buffered -- the static CB region is tight (see cb_sol_plan above), and Q1's 64-row compute unit is
-    // what affords these at all: every Sq-dependent CB shrinks 4x, freeing ~222 tiles against the ~128 here.
-    const uint32_t cb_k_stage = sol_pack ? allocate_tile_cb(Sk_chunk_t * DHt, k_tile_size, k_df) : inactive_cb;
-    const uint32_t cb_v_stage = sol_pack ? allocate_tile_cb(Sk_chunk_t * vDHt, v_tile_size, v_df) : inactive_cb;
-    {
-        // L1 budget line for the Sol work (Q-batching needs a second accumulator set; DESIGN_BLOCK_COMPACT.md 12).
-        uint64_t cb_bytes = 0;
-        for (const auto& cb : desc.cbs) {
-            cb_bytes += cb.total_size;
-        }
-        log_info(
-            tt::LogOp,
-            "RingJointSDPA CBs: {} buffers, {} bytes (q {} t, k {} t, v {} t, qk {} t, out_im {} t, stats {} t; im "
-            "tile {} B)",
-            desc.cbs.size(),
-            cb_bytes,
-            q_tiles,
-            k_tiles,
-            v_tiles,
-            qk_tiles,
-            out_im_tiles,
-            statistics_tiles,
-            im_tile_size);
-    }
 
     const std::vector<uint32_t> cb_compile_time_args = {
         cb_q_in,     cb_k_in,     cb_v_in,         cb_mask_in,       cb_scale_in,     cb_identity_scale_in,
@@ -2349,9 +2131,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         CoreCoord prev_physical = CoreCoord{0, 0};
         CoreCoord next_physical = CoreCoord{0, 0};
         uint32_t next_core_q_chunks = 0;
-        // Which linear chain of the head this core belongs to when head chains are split (TT_SOL_CHAIN_LEN); the
-        // Sol chain union only spans cores of the same group.
-        uint32_t chain_group = 0;
 
         // Multicast configuration (1D for V, 2D for K)
         CoreCoord mcast_start = CoreCoord{0, 0};        // Rectangle start (physical)
@@ -2498,8 +2277,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                                  uint32_t head,
                                  std::vector<ChainConfig>& chain_configs,
                                  const std::vector<CoreWork>& core_work,
-                                 bool require_single_head_injector = true,
-                                 uint32_t chain_group = 0) -> bool {
+                                 bool require_single_head_injector = true) -> bool {
         if (chain_segs.size() < 2) {
             return false;
         }
@@ -2522,7 +2300,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             auto& cfg = chain_configs[ci];
             cfg.participates = true;
             cfg.head = head;
-            cfg.chain_group = chain_group;
             cfg.is_injector = (idx == start);
             cfg.is_sink = (idx == chain_segs.size() - 1);
             if (idx > start) {
@@ -3014,30 +2791,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 chain_segs.emplace_back(
                     seg.core_idx, core_work[seg.core_idx].head_work[seg.head_work_index].q_chunk_count);
             }
-            // Resident mode: a core whose resident chunks span two heads streams the second head's pieces into
-            // the same K/V CBs between this head's pieces, so its CB write pointer drifts from the chain's. The
-            // chain forward writes to the sender's own CB address on the next core (ChainLink::forward), which
-            // needs every member's pointer in lockstep; a drifted sink receives the forward over the entry its
-            // compute is reading (2026-10-21: head-boundary cores wrong at 1184 rows, NaN at 4736; chains off
-            // exact). Such cores read their own K/V for both heads instead: drop them from the chain's tail (the
-            // injector rule already skips them at the head).
-            if (sol_resident) {
-                while (!chain_segs.empty() && core_work[chain_segs.back().first].head_work.size() > 1) {
-                    chain_segs.pop_back();
-                }
-            }
-            if (sol_chain_len >= 2 && chain_segs.size() > sol_chain_len) {
-                // Split into consecutive groups of at most sol_chain_len cores; each group picks its own injector
-                // (first single-head core of the group) and cores before it read their own K/V.
-                uint32_t group = 0;
-                for (size_t start = 0; start < chain_segs.size(); start += sol_chain_len, ++group) {
-                    const size_t stop = std::min(chain_segs.size(), start + sol_chain_len);
-                    std::vector<ChainSegment> sub(chain_segs.begin() + start, chain_segs.begin() + stop);
-                    build_linear_chain(sub, head_id, head_chain_configs, core_work, true, group);
-                }
-            } else {
-                build_linear_chain(chain_segs, head_id, head_chain_configs, core_work);
-            }
+            build_linear_chain(chain_segs, head_id, head_chain_configs, core_work);
         }
     }
 
@@ -3050,10 +2804,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         };
         std::vector<McastCandidate> candidates;
         candidates.reserve(head_segments.size());
-        // Split chains are never multicast. Neither are the Sol streaming modes (chunk / compact / pack): the
-        // chain-wide kept union that keeps every member streaming the same chunks is only built for unicast
-        // chains (sol_members below), so a multicast injector would wait for a receiver that skipped the chunk.
-        bool all_eligible = sol_chain_len == 0 && !sol_chunk_mode;
+        bool all_eligible = true;
 
         for (uint32_t head_id = 0; head_id < head_segments.size(); ++head_id) {
             const auto& segments = head_segments[head_id];
@@ -3368,75 +3119,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         {"dense_causal_skip", dense_causal_skip ? 1u : 0u},
         {"seg_accum", seg_accum ? 1u : 0u},
         {"kv_stripe_split", args.kv_stripe_split},
-        // K/V CB depth in chunks (see kv_cb_pages above); the chain's end-of-iteration phase alignment uses it.
-        {"kv_cb_pages", kv_cb_pages},
-        // Sol-Attn block-sparse mode (all zero / inactive CB ids when off).
-        {"sol_enabled", sol_enabled ? 1u : 0u},
-        {"sol_chunk_mode", sol_chunk_mode ? 1u : 0u},
-        {"sol_compact", sol_compact ? 1u : 0u},
-        // Q2 cross-chunk packing: kept blocks are accumulated into full pages instead of compacted per chunk, so
-        // visits scale with density rather than chunk occupancy. Raw chunks land in the staging CBs (reader-only)
-        // and compute sees only packed pages, on cb_k_in / cb_v_in as before.
-        {"sol_pack", sol_pack ? 1u : 0u},
-        // Resident mode (see sol_resident above): the FIFO depth every core sizes its state arrays by, and (M2) the
-        // words of per-shard kept-block bits the reader puts in every plan page (block b: word b/32, bit b%32).
-        {"sol_resident", sol_resident ? 1u : 0u},
-        {"sol_resident_slots", sol_resident ? max_q_per_core : 0u},
-        {"sol_res_block_words", sol_resident ? tt::div_up(sol_nb, 32u) : 0u},
-        // Resident group delivery by multicast (see sol_res_mcast above).
-        {"sol_res_mcast", sol_res_mcast ? 1u : 0u},
-        // Resident iteration boundary (see sol_res_plan_rec_base above): the one-page plan's record base word
-        // (0 = a page per chunk) and no phase-alignment dummies.
-        {"sol_res_plan_rec_base", sol_res_plan_rec_base},
-        {"sol_res_no_dummies", sol_res_no_dummies ? 1u : 0u},
-        // M4 static row max (see sol_static_max above): 1 iff sol_row_max is present (resident only). The reader
-        // then has a sol_row_max accessor right after sol_pv's and its address at rotated_args_base + 3, with the
-        // bias / n_members / my_start / table / member words shifted up by one (no slot otherwise, so every other
-        // mode keeps its offsets); compute ignores the tensor and keeps the running max.
-        {"sol_static_max", sol_static_max ? 1u : 0u},
-        {"cb_k_stage", cb_k_stage},
-        {"cb_v_stage", cb_v_stage},
-        // Blocks per packed page = blocks per K chunk, so a full page is exactly one chunk's worth of tiles and
-        // every CB stays its existing size.
-        {"sol_blocks_per_page", Sk_chunk_t / kSolBlockTiles},
-        // Compact-mode even-up rule, OFF by default since 2026-10-16: measured 8-14 ms slower than plain selection at
-        // 15 s (DESIGN_BLOCK_COMPACT.md 11.3) and the plain path is numerically right. TT_SOL_EVENUP=1 enables it
-        // (A/B); TT_SOL_EVENUP_ALL=1 is the debug probe (every full block exact; implies the rule on).
-        {"sol_even_up",
-         (sol_compact && ((std::getenv("TT_SOL_EVENUP") && std::string(std::getenv("TT_SOL_EVENUP")) == "1") ||
-                          (std::getenv("TT_SOL_EVENUP_ALL") && std::string(std::getenv("TT_SOL_EVENUP_ALL")) == "1")))
-             ? 1u
-             : 0u},
-        {"sol_even_up_all",
-         (sol_compact && std::getenv("TT_SOL_EVENUP_ALL") && std::string(std::getenv("TT_SOL_EVENUP_ALL")) == "1")
-             ? 1u
-             : 0u},
-        {"sol_nkc", sol_nkc},
-        {"sol_nb", sol_nb},
-        {"sol_nb_pad", sol_nb_pad},
-        {"sol_n_blocks_pad", sol_n_blocks_pad},
-        {"sol_nqc_pad", sol_nqc_pad},
-        {"sol_pooled_chunks", sol_pooled_chunks},
-        {"sol_pooled_last_tiles", sol_pooled_last_tiles},
-        // Debug/profiling only: TT_SOL_POOLED_OFF=1 drops the pooled correction chunks (wrong numerics; isolates their
-        // cost).
-        {"sol_pooled_off",
-         (sol_enabled && std::getenv("TT_SOL_POOLED_OFF") && std::string(std::getenv("TT_SOL_POOLED_OFF")) == "1")
-             ? 1u
-             : 0u},
-        // Debug/profiling only: TT_SOL_DRAIN_ALL=1 makes compute drain every streamed chunk in chunk mode (own kept
-        // bits treated as 0, chain union unchanged; wrong numerics). Its op time is the reader/chain floor of the
-        // streaming path.
-        {"sol_drain_all",
-         (sol_enabled && std::getenv("TT_SOL_DRAIN_ALL") && std::string(std::getenv("TT_SOL_DRAIN_ALL")) == "1") ? 1u
-                                                                                                                 : 0u},
-        {"sol_mask_row_bytes", sol_mask_row_bytes},
-        // Bias tiles generated on device (no sol_bias tensor). sol_logical_n is the host logical length (tokens);
-        // the reader prefers the live logical_n tensor when one is present (same rule as logical_nt).
-        {"sol_gen_bias", sol_gen_bias ? 1u : 0u},
-        {"sol_logical_n", static_cast<uint32_t>(args.logical_n)},
-        {"cb_sol_plan", sol_enabled ? cb_sol_plan : cb_kv_pad_derived},
-        {"cb_sol_bias", sol_enabled ? cb_sol_bias : cb_q_in},
     };
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
         kernel->named_compile_time_args = ksplit_named_args;
@@ -3446,49 +3128,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     reader_kernel.named_compile_time_args.emplace_back(
         "v_row_Wt", input_tensor_v.padded_shape()[3] / tt::constants::TILE_WIDTH);
     compute_kernel.defines = kernel_defines;
-    // Q2 diagnostic: TT_SOL_PACK_DEBUG=1 makes the reader print pages pushed and compute print pages expected
-    // per (ring iter, Q chunk). A mismatch is the page-accounting divergence; equal counts exonerate it.
-    if (sol_pack && std::getenv("TT_SOL_PACK_DEBUG") && std::string(std::getenv("TT_SOL_PACK_DEBUG")) == "1") {
-        reader_kernel.defines.emplace_back("SOL_PACK_DEBUG", "1");
-        compute_kernel.defines.emplace_back("SOL_PACK_DEBUG", "1");
-    }
-    // Resident-mode diagnostic: TT_SOL_DEBUG=1 makes the reader print one line per (core, ring iteration) with the
-    // kept / union bits and the number of K/V entries it pushed (select cores and chips with TT_METAL_DPRINT_*).
-    // Any mode: also the per-ring-iteration arrival-semaphore trace ("SYNC ...") in the reader.
-    if (std::getenv("TT_SOL_DEBUG") && std::string(std::getenv("TT_SOL_DEBUG")) == "1") {
-        reader_kernel.defines.emplace_back("SOL_DEBUG", "1");
-    }
-    // Per-phase device-profiler zones inside sdpa_inner_loop_step (Q@KT, reduce, exp, V matmul, SALAD, ...). They
-    // only emit under TT_METAL_DEVICE_PROFILER=1 (PROFILE_KERNEL); this define flips the template gate that is
-    // otherwise false at the two call sites. Measurement knob, not hashed: set it for the whole process.
-    // =1: one zone per visit (RING_STEP / RING_DRAIN), so the per-core profiler buffer holds ~10 visits and the
-    // gaps between them are measurable. =2: plus the two phase zones per Q subblock / row group. =3: plus the
-    // per-key-subblock zones (~6 KB of TRISC code; pushed the sparse build past the 70,656 B kernel config buffer).
-    if (std::getenv("TT_SOL_STEP_PROFILE") && std::string(std::getenv("TT_SOL_STEP_PROFILE")) != "0" &&
-        std::string(std::getenv("TT_SOL_STEP_PROFILE")) != "") {
-        const std::string level = std::getenv("TT_SOL_STEP_PROFILE");
-        compute_kernel.defines.emplace_back("SOL_STEP_PROFILE", "1");
-        // The reader's and writer's wait zones (SOL_ZONE in ring_joint_reader.cpp / ring_joint_writer.cpp).
-        reader_kernel.defines.emplace_back("SOL_STEP_PROFILE", "1");
-        writer_kernel.defines.emplace_back("SOL_STEP_PROFILE", "1");
-        if (level == "2" || level == "3") {
-            compute_kernel.defines.emplace_back("SOL_STEP_PROFILE_PHASES", "1");
-        }
-        if (level == "3") {
-            compute_kernel.defines.emplace_back("SOL_STEP_PROFILE_FINE", "1");
-        }
-        compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
-    }
-    // Resident mode builds the compute kernel at O2 unconditionally: at the default level the 5 s program sits at
-    // the 70,656 B kernel config buffer (M9's and M10's first builds overflowed it; M10 with its flushes outlined
-    // was still 336 B over), and O2 cuts the three TRISC binaries by ~30 %. Every profiled resident run (which set
-    // O2 through TT_SOL_STEP_PROFILE) showed the same per-piece compute as the unprofiled timings, so O2 costs no
-    // measurable step time here: the step is bound by Tensix instruction throughput, not by RISC issue. The
-    // kernel's build hash carries the level (ComputeKernel::config_hash), so the JIT cache cannot serve the O3
-    // binary for it.
-    if (sol_resident) {
-        compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
-    }
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -3498,102 +3137,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         // Code size, not correctness: at O3 the merge epilogue grows the q128 compute binaries past the 70,656 B
         // kernel config buffer ("Program size too large"). O2 cuts the three TRISC binaries by ~30%.
         compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
-    }
-
-    // Sol-Attn on-device bias generator table (see the reader arg layout below). bf16 round-to-nearest-even of
-    // the same fp32 values the Python pre-pass uploads (ln(len) / scale; -30000 for len 0).
-    constexpr uint32_t kSolLenBiasTableWords = 33;  // 66 bf16 entries, len 0..65 (65 unused)
-    std::array<uint32_t, kSolLenBiasTableWords> sol_len_bias_table{};
-    if (sol_enabled) {
-        const auto f2bf = [](float f) -> uint32_t {
-            uint32_t u = std::bit_cast<uint32_t>(f);
-            const uint32_t lsb = (u >> 16) & 1u;
-            u += 0x7FFFu + lsb;
-            return u >> 16;
-        };
-        constexpr float kSolBiasNeg = -30000.0f;  // sol_prepass.NEG
-        for (uint32_t len = 0; len <= 65; ++len) {
-            const float v = (len == 0 || len > 64) ? kSolBiasNeg : std::log(static_cast<float>(len)) / scale_value;
-            sol_len_bias_table[len / 2] |= f2bf(v) << (16 * (len % 2));
-        }
-    }
-
-    // D1 group delivery: per core [role, producer x, producer y, receivers, rectangles, (x0, y0, x1, y1, cores)...].
-    // A group is a head chain's members (resident chains hold single-head cores only); the producer reads every piece
-    // from DRAM. The receivers are covered by rectangles of consecutive NoC x on one row each, so a multicast never
-    // lands on a core outside the group. The producer is the first member in core order (not the chain's injector,
-    // which the chain setup may move to the middle of a row): it starts its row, so it does not split a rectangle,
-    // and a group of consecutive cores spanning two rows needs two rectangles.
-    constexpr uint32_t kSolGroupMaxRects = 8;
-    std::vector<std::vector<uint32_t>> sol_group_args(num_cores, std::vector<uint32_t>{0u, 0u, 0u, 0u, 0u});
-    if (sol_res_mcast) {
-        for (uint32_t h = 0; h < static_cast<uint32_t>(head_segments.size()); ++h) {
-            std::vector<uint32_t> members;
-            for (const auto& seg : head_segments[h]) {
-                const auto& cfg = head_chain_configs.at(seg.core_idx);
-                if (!cfg.participates || cfg.head != h ||
-                    std::find(members.begin(), members.end(), seg.core_idx) != members.end()) {
-                    continue;
-                }
-                TT_FATAL(
-                    core_work[seg.core_idx].head_work.size() == 1,
-                    "sol resident group delivery: core {} of head {} spans two heads",
-                    seg.core_idx,
-                    h);
-                members.push_back(seg.core_idx);
-            }
-            if (members.size() < 2) {
-                continue;
-            }
-            const uint32_t producer = *std::min_element(members.begin(), members.end());
-            const CoreCoord prod_phys = core_work[producer].physical_core;
-            std::map<uint32_t, std::vector<uint32_t>> receiver_xs_by_row;
-            for (const uint32_t ci : members) {
-                if (ci != producer) {
-                    receiver_xs_by_row[core_work[ci].physical_core.y].push_back(core_work[ci].physical_core.x);
-                }
-            }
-            std::vector<std::array<uint32_t, 5>> rects;
-            for (auto& [y, xs] : receiver_xs_by_row) {
-                std::sort(xs.begin(), xs.end());
-                size_t run_start = 0;
-                for (size_t k = 1; k <= xs.size(); ++k) {
-                    if (k == xs.size() || xs[k] != xs[k - 1] + 1) {
-                        rects.push_back({xs[run_start], y, xs[k - 1], y, static_cast<uint32_t>(k - run_start)});
-                        run_start = k;
-                    }
-                }
-            }
-            TT_FATAL(
-                rects.size() <= kSolGroupMaxRects,
-                "sol resident group delivery: head {} needs {} multicast rectangles (at most {})",
-                h,
-                rects.size(),
-                kSolGroupMaxRects);
-            const uint32_t n_receivers = static_cast<uint32_t>(members.size() - 1);
-            for (const uint32_t ci : members) {
-                auto& a = sol_group_args[ci];
-                a = {
-                    ci == producer ? 1u : 2u,
-                    static_cast<uint32_t>(prod_phys.x),
-                    static_cast<uint32_t>(prod_phys.y),
-                    n_receivers,
-                    0u};
-                if (ci == producer) {
-                    a[4] = static_cast<uint32_t>(rects.size());
-                    for (const auto& r : rects) {
-                        a.insert(a.end(), r.begin(), r.end());
-                    }
-                }
-            }
-            log_debug(
-                tt::LogOp,
-                "sol resident group: head {} producer core {} -> {} receivers in {} rectangles",
-                h,
-                producer,
-                n_receivers,
-                rects.size());
-        }
     }
 
     // Set reader rt args
@@ -3698,79 +3241,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
 
         if (ksplit_count > 1) {
             reader_args.push_back(ksplit_band(i));
-        }
-        if (sol_enabled) {
-            // Read by the kernel at rotated_args_base (sol excludes the rotated split and the K split).
-            // Layout (word offsets from rotated_args_base), with RM = sol_static_max ? 1 : 0:
-            //   +0 mask, +1 pooled K, +2 pooled V, [+3 row max, only when sol_static_max (resident, M4)],
-            //   +3+RM bias (0 when generated), +4+RM n_members, +5+RM my_start, then (generated bias only)
-            //   kSolLenBiasTableWords packed bf16 table, then members (start, count)...
-            // The row-max slot exists only with sol_static_max so every other mode keeps today's offsets; the
-            // reader derives RM from the named compile-time arg. Buffer entries are registered as bindings and
-            // re-patched on cache hits by the descriptor adapter (the same path as pooled K/V).
-            reader_args.push_back(tensor_args.sol_block_mask->buffer());
-            reader_args.push_back(tensor_args.sol_pooled_k->buffer());
-            reader_args.push_back(tensor_args.sol_pooled_v->buffer());
-            if (sol_static_max) {
-                reader_args.push_back(tensor_args.sol_row_max->buffer());
-            }
-            if (sol_gen_bias) {
-                reader_args.push_back(0u);
-            } else {
-                reader_args.push_back(tensor_args.sol_bias->buffer());
-            }
-            // Chunk mode, linear head chains: the chain's members as (q_chunk start within the head, count) plus
-            // this core's own start. At stream position j every member is on Q chunk start_m + j, so each core
-            // derives the same chain-wide kept set and the chain skips a chunk nobody needs in lockstep.
-            // Non-participants (head-boundary cores before the injector) get no members and skip on their own
-            // mask. Multicast chains and padded iterations are not covered: no union there (still correct).
-            std::vector<std::pair<uint32_t, uint32_t>> sol_members;
-            uint32_t sol_my_start = 0;
-            if (sol_chunk_mode && use_head_chain && !head_mcast_enabled && head_chain_configs[i].participates) {
-                const uint32_t h = head_chain_configs[i].head;
-                for (const auto& seg : head_segments[h]) {
-                    const auto& cfg = head_chain_configs[seg.core_idx];
-                    if (!cfg.participates || cfg.head != h || cfg.chain_group != head_chain_configs[i].chain_group) {
-                        continue;
-                    }
-                    const auto& w = core_work[seg.core_idx];
-                    uint32_t flat = w.global_q_start;
-                    for (uint32_t s = 0; s < seg.head_work_index; ++s) {
-                        flat += w.head_work[s].q_chunk_count;
-                    }
-                    const uint32_t start_in_head = flat % num_q_chunks;
-                    const uint32_t count = w.head_work[seg.head_work_index].q_chunk_count;
-                    if (seg.core_idx == i) {
-                        sol_my_start = start_in_head;
-                    }
-                    sol_members.emplace_back(start_in_head, count);
-                }
-                TT_FATAL(
-                    sol_members.size() <= 64,
-                    "sol chunk mode: head chain of {} members is too long",
-                    sol_members.size());
-            }
-            reader_args.push_back(static_cast<uint32_t>(sol_members.size()));
-            reader_args.push_back(sol_my_start);
-            // Generated bias only: column-bias value per block token count, bf16, two per word: entry[len] for
-            // len in [0, 64] (entry[0] = the "exact / padding" large negative). The generator weights each pooled
-            // column by its token count through exp((QK + ln(len)/scale - max) * scale) = len * exp(...), so this
-            // is the only place the bias values are defined (the Python pre-pass mirrors it). With a sol_bias
-            // tensor the layout is unchanged from before (members follow my_start directly).
-            if (sol_gen_bias) {
-                for (uint32_t w = 0; w < kSolLenBiasTableWords; ++w) {
-                    reader_args.push_back(sol_len_bias_table[w]);
-                }
-            }
-            for (const auto& [start, count] : sol_members) {
-                reader_args.push_back(start);
-                reader_args.push_back(count);
-            }
-            if (sol_res_mcast) {
-                for (const uint32_t w : sol_group_args[i]) {
-                    reader_args.push_back(w);
-                }
-            }
         }
         reader_kernel.emplace_runtime_args(core, reader_args.args);
 
@@ -4221,17 +3691,6 @@ void RingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
     RingJointSDPAResult& output_tensors) {
     descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, output_tensors);
 
-    // The fused all-gather's GlobalSemaphore addresses are excluded from the program hash and baked into the
-    // all-gather reader/writer runtime args at creation ("smuggled-rta-ok: re-applied via
-    // override_runtime_arguments()" in the shared builder). The standalone all-gather op re-applies them on
-    // every cache hit; this op did not, so a cached program kept signalling the ping-pong semaphore it was
-    // created with while the host believed it alternated. Mirror the standalone patch here (dense gather
-    // kernels only; the sliding-window halo path uses a persistent halo semaphore).
-    const auto& ag_semaphores = args.all_gather_operation_attributes.semaphore;
-    const bool patch_ag_semaphores =
-        !args.has_sliding_window() &&
-        ag_semaphores.size() > std::max(ag_dyn::kForwardSemaphoreIdx, ag_dyn::kBackwardSemaphoreIdx);
-
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         const ttnn::MeshCoordinate coord = coordinate_range.start_coord();
         TT_FATAL(
@@ -4239,27 +3698,6 @@ void RingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
             "Expected RingJointSDPA cached programs to cover a single coordinate, got range {} to {}",
             coord,
             coordinate_range.end_coord());
-        // The non-sliding path always appends the four dense gather kernels at kFirstAllGatherKernelIndex.
-        if (patch_ag_semaphores) {
-            const auto patch_semaphore_arg = [&program](uint32_t kernel_idx, uint32_t arg_idx, uint32_t address) {
-                auto& args_by_core = tt::tt_metal::GetRuntimeArgs(program, kernel_idx);
-                for (auto& args_by_y : args_by_core) {
-                    for (auto& core_args : args_by_y) {
-                        if (arg_idx < core_args.size()) {
-                            core_args[arg_idx] = address;
-                        }
-                    }
-                }
-            };
-            const auto forward_sem_addr =
-                static_cast<uint32_t>(ag_semaphores.at(ag_dyn::kForwardSemaphoreIdx).address());
-            const auto backward_sem_addr =
-                static_cast<uint32_t>(ag_semaphores.at(ag_dyn::kBackwardSemaphoreIdx).address());
-            patch_semaphore_arg(kAllGatherReaderForwardKernelIndex, ag_dyn::kReaderSemaphoreArg, forward_sem_addr);
-            patch_semaphore_arg(kAllGatherWriterForwardKernelIndex, ag_dyn::kWriterSemaphoreArg, forward_sem_addr);
-            patch_semaphore_arg(kAllGatherReaderBackwardKernelIndex, ag_dyn::kReaderSemaphoreArg, backward_sem_addr);
-            patch_semaphore_arg(kAllGatherWriterBackwardKernelIndex, ag_dyn::kWriterSemaphoreArg, backward_sem_addr);
-        }
         apply_ring_joint_scalar_runtime_args(program, args, tensor_args, coord);
     }
 }

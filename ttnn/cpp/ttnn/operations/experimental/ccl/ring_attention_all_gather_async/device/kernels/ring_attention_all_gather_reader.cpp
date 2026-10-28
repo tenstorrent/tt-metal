@@ -18,13 +18,6 @@
 #include <cstdint>
 #include <utility>
 
-// Device-profiler zones around the slab wait and the fused-op signal; compiled out without the profiler.
-#if defined(PROFILE_KERNEL)
-#define AG_ZONE(name) DeviceZoneScopedN(name)
-#else
-#define AG_ZONE(name)
-#endif
-
 using ttnn::ccl::Topology;
 
 ///////////////////////////////////////////////////
@@ -374,16 +367,10 @@ void kernel_main() {
         // Semaphore<> binds to per-program ids via get_semaphore<>(id), so it cannot wrap a
         // GlobalSemaphore.
         const uint32_t next_slice = slices_received + 1;
-        {
-            // Device-profiler zone (TT_METAL_DEVICE_PROFILER=1): the wait for this slab to land from the neighbour.
-            // Lets a fused consumer's profile show when each slab actually arrived.
-            AG_ZONE("AG_SLAB_WAIT");
-            if constexpr (partial_readiness_enabled) {
-                noc_semaphore_wait_min(
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), next_slice * 2 - 1);
-            } else {
-                noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), next_slice);
-            }
+        if constexpr (partial_readiness_enabled) {
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), next_slice * 2 - 1);
+        } else {
+            noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_ready_sem), next_slice);
         }
 
         int sender_transport_rank_signed;
@@ -404,7 +391,6 @@ void kernel_main() {
 
         if constexpr (fuse_op) {
             // In partial mode this first signal exposes the completed prefix of the shard.
-            AG_ZONE("AG_SIGNAL");
             op_signaler.synchronize_workers_and_signal_op(sender_transport_rank);
         }
         if constexpr (partial_readiness_enabled) {

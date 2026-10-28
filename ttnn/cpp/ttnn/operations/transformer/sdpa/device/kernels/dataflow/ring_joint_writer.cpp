@@ -12,13 +12,6 @@
 #include "api/core_local_mem.h"
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
-
-// Device-profiler zones around the writer's waits (TT_SOL_STEP_PROFILE=1 under TT_METAL_DEVICE_PROFILER=1).
-#if defined(PROFILE_KERNEL) && defined(SOL_STEP_PROFILE)
-#define SOL_ZONE(name) DeviceZoneScopedN(name)
-#else
-#define SOL_ZONE(name)
-#endif
 #include "dataflow_common.hpp"
 #include "chunked_prefill_utils.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_mla_packing_plan.hpp"
@@ -761,13 +754,6 @@ void kernel_main() {
     const auto joint_out_generator = PaddedAddrGenerator(joint_out_writer, joint_tile_logical);
 
     generate_bcast_unary_scalar(CircularBuffer(cb_scale_in), scale_val);
-    {
-        // Zero the identity tile first: generate_bcast_col_scalar writes column 0 only, and the Sol resident step
-        // (M5) multiplies its probabilities by this tile to get row sums, which reads every column of it. The
-        // dense path only ever reduced against column 0, so the other columns were never relied on before.
-        Noc noc_zero;
-        fill_tile_zeros<get_tile_size(cb_col_identity)>(noc_zero, cb_col_identity, 0);
-    }
     generate_bcast_col_scalar(CircularBuffer(cb_col_identity), identity_scalar_packed);
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         cb_identity_scale_in,
@@ -924,41 +910,6 @@ void kernel_main() {
                     noc, gen, qi.out_slice, end_seq_tile, cb_out, tile_bytes, out_subblock_h, /*flush_trid=*/0);
             }
             noc.async_write_barrier();
-        } else if constexpr (get_named_compile_time_arg_val("sol_resident") == 1) {
-            // Sol resident mode: compute keeps every resident Q chunk's accumulators in L1 for the whole op, so
-            // there is no save/restore and no per-chunk signal. On the last active ring iteration compute leaves
-            // the normalized output of each resident chunk in cb_out, in Q-chunk order; write them out.
-            const bool resident_last_ring_iter = packed_sources
-                                                     ? ring_iter + 1 == sdpa_ring_iterations
-                                                     : is_last_active_ring_iter(active_ring_iter_mask, ring_iter);
-            if (resident_last_ring_iter) {
-                SOL_ZONE("WR_RES_OUT");  // cb_out waits (compute's final normalization) plus the output writes
-                for (uint32_t q_index = 0; q_index + global_q_start < global_q_end; ++q_index) {
-                    const auto decoded_q =
-                        decompose_global_q_index(global_q_start + q_index, num_q_chunks, NH, use_zigzag_balancing);
-                    const auto qi = get_q_chunk_info<has_joint_q>(
-                        decoded_q.q_chunk,
-                        decoded_q.nb,
-                        decoded_q.nq,
-                        num_local_q_chunks,
-                        Sq_chunk_t,
-                        vDHt,
-                        Lt,
-                        q_local_padded_Nt);
-                    const uint32_t end_seq_tile =
-                        get_end_seq_tile<has_joint_q>(qi, ring_id / kv_stripe_split, Lt, q_local_padded_Nt);
-                    write_block_row_grouped_trid<output_has_no_padding>(
-                        noc,
-                        out_generator,
-                        qi.out_slice,
-                        end_seq_tile,
-                        cb_out,
-                        tile_bytes,
-                        out_subblock_h,
-                        /*flush_trid=*/0);
-                }
-                noc.async_write_barrier();
-            }
         } else if constexpr (use_streaming_compute) {
             // Deferred norm: accumulates across ring iterations with exponential rescaling.
             // Single Q-chunk: accumulators persist in L1, write final output on last ring_iter.
@@ -1000,10 +951,7 @@ void kernel_main() {
                 rotated_args_base, rotated_iter_stride, rotated_ordinal, global_q_start, global_q_end - global_q_start};
 
             const uint32_t last_q_index = q_per_core - 1;
-            // Sol-Attn: a Q chunk can have a single gathered chunk on any iteration, so take the conservative
-            // ordering (flush the deferred save before the prefetch) unconditionally.
-            constexpr bool sol_enabled = get_named_compile_time_arg_val("sol_enabled") == 1;
-            const bool flush_before_prefetch = single_valid_kv_chunk || q_per_core == 2 || sol_enabled;
+            const bool flush_before_prefetch = single_valid_kv_chunk || q_per_core == 2;
 
             // Saves use this iteration's chunk count. Restores must use the previous executed
             // iteration's count: gaining a float changes the last fixed slot from LAST to INNER,

@@ -4,7 +4,7 @@
 
 """End-to-end dense vs Sol-Attn generation with the paper's step/layer gating, same seed and prompt.
 
-Configs come from SOL_E2E_CONFIGS, ';'-separated: `dense` or `sol:<tau>:<dense_steps>:<dense_layers>[:<end_step>[:dp0[:chunk]]]`
+Configs come from SOL_E2E_CONFIGS, ';'-separated: `dense` or `sol:<tau>:<dense_steps>:<dense_layers>[:<end_step>[:dp0[:fused]]]`
 (`dp0` = prefix query rows sparse like kijai's default instead of dense like NVlabs).
 `dense_steps` = number of leading denoising forwards run dense (paper: first 20 % of steps -> 10 of 49),
 `dense_layers` = number of leading transformer layers kept dense at every step (NVlabs H3 policy: 2),
@@ -31,7 +31,6 @@ from loguru import logger
 
 import ttnn
 
-from ....models.transformers.minimax_h3 import attention_minimax_h3 as A
 from ....models.transformers.minimax_h3 import transformer_minimax_h3 as T
 from ....pipelines.minimax_h3 import pipeline_minimax_h3 as P
 from ....pipelines.minimax_h3.packing import resolve_canvas_size
@@ -56,13 +55,11 @@ def _parse(cfg: str) -> dict:
     tau, dense_steps, dense_layers = float(parts[1]), int(parts[2]), int(parts[3])
     end_step = int(parts[4]) if len(parts) > 4 and parts[4] else 10**9
     dense_prefix = parts[5] != "dp0" if len(parts) > 5 and parts[5] else True
-    mode = parts[6] if len(parts) > 6 and parts[6] else "gather"
-    fused = len(parts) > 7 and parts[7] == "fused"  # sol-video's fused scoring step instead of the ttnn pre-pass
+    fused = len(parts) > 6 and parts[6] == "fused"  # sol-video's fused scoring step instead of the ttnn pre-pass
     label = (
         f"sol_tau{tau:g}_ds{dense_steps}_dl{dense_layers}"
         + (f"_end{end_step}" if end_step < 10**9 else "")
         + ("" if dense_prefix else "_dp0")
-        + ("" if mode == "gather" else f"_{mode}")
         + ("_fused" if fused else "")
     )
     return {
@@ -73,7 +70,6 @@ def _parse(cfg: str) -> dict:
         "dense_layers": dense_layers,
         "end_step": end_step,
         "dense_prefix": dense_prefix,
-        "mode": mode,
         "fused": fused,
     }
 
@@ -122,12 +118,6 @@ def test_sol_e2e(mesh_device, reset_seeds):
         if state["time_steps"]:
             ttnn.synchronize_device(mesh_device)
             state["step_times"].append((state["step"], sparse, time.perf_counter() - t0))
-        if state.get("sem_log"):
-            logger.info(
-                f"SEMLOG gen={state['gen']} step={state['step']} calls={len(state['sem_log'])} "
-                + " ".join(state["sem_log"])
-            )
-            state["sem_log"] = []
         if density_step:
             dens = [
                 (i, attn.sol_last_density)
@@ -156,87 +146,8 @@ def test_sol_e2e(mesh_device, reset_seeds):
     T.MiniMaxH3Transformer3DModel.forward = forward
     P.MiniMaxH3Pipeline._denoise = denoise
 
-    # Diagnostic: at forward SOL_E2E_DUMP_STEP, read back the pre-pass outputs of layers SOL_E2E_DUMP_LAYERS
-    # (before the ring op consumes them) and log checksums/stats, so two generations can be compared.
-    dump_step = int(os.environ.get("SOL_E2E_DUMP_STEP", "-1"))
     density_steps = {int(x) for x in os.environ.get("SOL_E2E_DENSITY_STEPS", "").split(",") if x}
-    dump_layers = [int(x) for x in os.environ.get("SOL_E2E_DUMP_LAYERS", "2,25").split(",") if x]
-    orig_sol_tensors = A.MiniMaxH3Attention._sol_tensors
 
-    drop_held = os.environ.get("SOL_E2E_DROP_HELD_POOLED", "0") == "1"
-    post_check = os.environ.get("SOL_E2E_POSTOP_CHECK", "0") == "1"
-
-    def _mask_sum(t):
-        import torch
-
-        h = ttnn.to_torch(t, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0)).to(torch.int64)
-        return int(h.sum()), int(
-            (h.flatten()[::31] * torch.arange(1, h.flatten()[::31].numel() + 1)).sum() & 0xFFFFFFFF
-        )
-
-    def sol_tensors(self, q, k, v):
-        # E2 (sol-vid2): free the pooled K/V held from the previous call before the pre-pass reallocates them,
-        # restoring the generation-1 DRAM placement without recreating the instance.
-        if drop_held and self._sol_prepass is not None:
-            self._sol_prepass._pooled_k = None
-            self._sol_prepass._pooled_v = None
-        out = orig_sol_tensors(self, q, k, v)
-        layer = attns.index(self) if self in attns else -1
-        if post_check and state["step"] in (dump_step, dump_step + 1) and layer in dump_layers:
-            ttnn.synchronize_device(mesh_device)
-            state["post_check"] = (layer, out["sol_block_mask"], _mask_sum(out["sol_block_mask"]))
-        if state["step"] == dump_step and layer in dump_layers:
-            import torch
-
-            stats = {}
-            for name in ("sol_block_mask", "sol_pooled_k", "sol_pooled_v", "sol_bias"):
-                t = ttnn.to_torch(out[name], mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0))
-                tf = t.float()
-                stats[name] = dict(
-                    shape=tuple(t.shape),
-                    sum=float(tf.sum()),
-                    absum=float(tf.abs().sum()),
-                    nan=int(torch.isnan(tf).sum()),
-                    hash=int(torch.sum(tf.flatten()[::97] * torch.arange(1, tf.flatten()[::97].numel() + 1)).item())
-                    & 0xFFFFFFFF,
-                )
-                if name == "sol_block_mask":
-                    stats[name]["kept_bits"] = int(
-                        sum(bin(int(x) & 0xFFFFFFFF).count("1") for x in t.flatten().tolist())
-                    )
-            logger.info(f"SOLDUMP gen={state['gen']} step={state['step']} layer={layer} {json.dumps(stats)}")
-        return out
-
-    A.MiniMaxH3Attention._sol_tensors = sol_tensors
-
-    # E1 (sol-vid2): checksum the mask again after the ring op completes; a difference means its DRAM was
-    # overwritten while the op was still reading it.
-    orig_ring = ttnn.transformer.ring_joint_scaled_dot_product_attention
-
-    sem_log_steps = {int(x) for x in os.environ.get("SOL_E2E_SEM_LOG_STEPS", "").split(",") if x}
-
-    def ring_wrapped(*a, **kw):
-        if state["step"] in sem_log_steps:
-            sems = kw.get("multi_device_global_semaphore")
-            addr = ttnn.get_global_semaphore_address(sems[0]) if sems else -1
-            state.setdefault("sem_log", []).append(("s" if "sol_block_mask" in kw else "d") + f"{addr:x}")
-            if state["gen"] >= 1:  # this forward may hang before the batched line prints: log each call immediately
-                logger.info(
-                    f"SEMCALL gen={state['gen']} step={state['step']} call={len(state['sem_log']) - 1} {state['sem_log'][-1]}"
-                )
-        res = orig_ring(*a, **kw)
-        pc = state.pop("post_check", None)
-        if pc is not None:
-            ttnn.synchronize_device(mesh_device)
-            layer, mask_t, before = pc
-            after = _mask_sum(mask_t)
-            logger.info(
-                f"POSTOP gen={state['gen']} step={state['step']} layer={layer} mask before={before} after={after} same={before == after}"
-            )
-        return res
-
-    if post_check or sem_log_steps:
-        ttnn.transformer.ring_joint_scaled_dot_product_attention = ring_wrapped
     gen_kwargs = dict(num_frames=num_frames, height=height, width=width, seed=SEED)
     results = []
     dense_npy = os.environ.get("SOL_E2E_DENSE_NPY")
@@ -251,7 +162,6 @@ def test_sol_e2e(mesh_device, reset_seeds):
                     attn.sol_thresh_type = "diag"
                     attn.sol_band = 1
                     attn.sol_dense_prefix = cfg["dense_prefix"]
-                    attn.sol_mode = cfg["mode"]
                     attn._sol_prepass = None  # rebuild with this tau
                     attn.sol_fused = cfg.get("fused", False)
                     attn.sol_report_density = False
@@ -276,17 +186,6 @@ def test_sol_e2e(mesh_device, reset_seeds):
                 t_total = time.perf_counter() - t0
                 if gen + 1 < n_gens:
                     logger.info(f"GEN {gen} of {cfg['label']} done in {t_total:.1f} s; steps {state['step'] + 1}")
-                    # Bisect knobs for the cross-generation hang: drop the pre-pass instances (fresh constants) and/or
-                    # clear the program cache (fresh ring program + workload-scoped resources) between generations.
-                    if os.environ.get("SOL_E2E_GEN_RESET_PREPASS", "0") == "1":
-                        for attn in attns:
-                            attn._sol_prepass = None
-                        logger.info("GEN knob: pre-pass instances dropped")
-                    if os.environ.get("SOL_E2E_GEN_CLEAR_CACHE", "0") == "1":
-                        ttnn.synchronize_device(mesh_device)
-                        mesh_device.disable_and_clear_program_cache()
-                        mesh_device.enable_program_cache()
-                        logger.info("GEN knob: program cache cleared")
             state["time_steps"] = False
             steps_seen = state["step"] + 1
             st = state["step_times"]
@@ -330,8 +229,6 @@ def test_sol_e2e(mesh_device, reset_seeds):
     finally:
         T.MiniMaxH3Transformer3DModel.forward = orig_forward
         P.MiniMaxH3Pipeline._denoise = orig_denoise
-        A.MiniMaxH3Attention._sol_tensors = orig_sol_tensors
-        ttnn.transformer.ring_joint_scaled_dot_product_attention = orig_ring
         for attn in attns:
             attn.sol_attn = False
             attn.sol_active = False

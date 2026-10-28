@@ -97,9 +97,7 @@ def test_sol_prefix_rows(mesh_device, sp_axis, tp_axis, num_links, topology, is_
             ccl_manager=ccl_manager,
             parallel_config=parallel_config,
             is_fsdp=is_fsdp,
-            **(
-                {"sol_attn": True, "sol_tau": tau, "sol_mode": "compact", "sol_prefix_mode": prefix_mode} if sol else {}
-            ),
+            **({"sol_attn": True, "sol_tau": tau, "sol_prefix_mode": prefix_mode} if sol else {}),
         )
         tt_model.load_torch_state_dict(torch_model.state_dict())
         if sol:

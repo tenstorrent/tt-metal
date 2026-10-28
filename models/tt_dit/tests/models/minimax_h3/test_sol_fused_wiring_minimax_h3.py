@@ -3,7 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """End-to-end wiring check of the fused scoring step: one MiniMaxH3Attention module (random weights) run NUM_LAYERS
-times with sol_fused=False (ttnn pre-pass) and sol_fused=True (fused programs); the ring op's sol_block_mask of every
+times with sol_fused=False (ttnn pre-pass) and sol_fused=True (fused programs); the sparse op's block mask of every
 forward is captured and compared on host, as are the module outputs. Synthetic inputs, 5 s geometry by default.
 
   pytest models/tt_dit/tests/models/minimax_h3/test_sol_fused_wiring_minimax_h3.py -k 4x8sp1tp0nl2_ring_is_fsdp0 -s
@@ -74,7 +74,7 @@ def test_sol_fused_wiring(mesh_device, sp_axis, tp_axis, num_links, topology, is
     )
 
     runs = {}
-    orig_ring = ttnn.transformer.ring_joint_scaled_dot_product_attention
+    orig_ring = ttnn.transformer.sparse_ring_attention
     for fused in (False, True):
         tt_model = MiniMaxH3Attention(
             hidden_size=HIDDEN_SIZE,
@@ -88,7 +88,6 @@ def test_sol_fused_wiring(mesh_device, sp_axis, tp_axis, num_links, topology, is
             is_fsdp=is_fsdp,
             sol_attn=True,
             sol_tau=1.0,
-            sol_mode="chunk",
             sol_fused=fused,
         )
         tt_model.load_torch_state_dict(torch_model.state_dict())
@@ -98,10 +97,10 @@ def test_sol_fused_wiring(mesh_device, sp_axis, tp_axis, num_links, topology, is
         masks, outs, times = [], [], []
 
         def capture_ring(*args, **kwargs):
-            masks.append(to_host(kwargs["sol_block_mask"]).float())
+            masks.append(to_host(args[3]).float())  # block_mask
             return orig_ring(*args, **kwargs)
 
-        ttnn.transformer.ring_joint_scaled_dot_product_attention = capture_ring
+        ttnn.transformer.sparse_ring_attention = capture_ring
         try:
             for layer in range(
                 n_layers
@@ -114,7 +113,7 @@ def test_sol_fused_wiring(mesh_device, sp_axis, tp_axis, num_links, topology, is
                 outs.append(to_host(out).float())
                 ttnn.deallocate(out)
         finally:
-            ttnn.transformer.ring_joint_scaled_dot_product_attention = orig_ring
+            ttnn.transformer.sparse_ring_attention = orig_ring
         runs[fused] = (masks, outs, times)
         logger.info(
             f"sol_fused={fused}: {n_layers} forwards, module wall ms (first / median): {times[0]:.1f} / {sorted(times)[len(times) // 2]:.1f}; mask shape {tuple(masks[0].shape)}"

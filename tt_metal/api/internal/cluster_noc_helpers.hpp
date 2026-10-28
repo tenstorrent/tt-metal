@@ -101,31 +101,4 @@ struct DramBankInfo {
  */
 std::vector<DramBankInfo> get_dram_bank_table(std::uint32_t device_id);
 
-/**
- * @brief Packed per-NOC DRAM bank -> NOC xy table for an opened device.
- *
- * Word for word what @c RiscFirmwareInitializer::generate_device_bank_to_noc_tables programs
- * into every core's L1 @c dram_bank_to_noc_xy[noc][bank] table, i.e. what @c InterleavedAddrGen
- * and the interleaved @c TensorAccessor use to build DRAM NOC addresses on that chip:
- * @c ((noc_y << noc_addr_node_id_bits) | noc_x) << noc_coord_reg_offset. Coordinates are
- * TRANSLATED on virtualized-DRAM architectures and per-NOC physical elsewhere.
- *
- * On Blackhole the TRANSLATED coordinate of a logical DRAM bank depends on WHICH bank the chip
- * has harvested, so two chips with different harvested banks have different tables. A fabric
- * writer that ships a NOC address built from its own table to such a chip lands in the wrong
- * bank; it has to build the address from the receiving chip's table instead.
- */
-struct DramBankNocXyTable {
-    std::uint32_t num_nocs = 0;
-    std::uint32_t num_banks = 0;
-    /// Entry for (noc, bank_id) is packed_xy[noc * num_banks + bank_id].
-    std::vector<std::uint32_t> packed_xy;
-};
-
-/**
- * @param device_id Logical chip id (matches @c IDevice::id()). The device must already be
- *                  open, otherwise this throws.
- */
-DramBankNocXyTable get_dram_bank_to_noc_xy_table(std::uint32_t device_id);
-
 }  // namespace tt::tt_metal::internal

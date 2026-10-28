@@ -7,14 +7,14 @@
 Method (from h3_attention_timing_main_4x8.md): one `MiniMaxH3Attention` layer with random norm
 weights, 4x8 Blackhole Galaxy, TP=4 / SP=8, `CCLManager(num_links=2, topology=Ring)`, `seq_local` in
 {4736, 9184, 13664}; wall clock with `ttnn.synchronize_device` before/after; 1 compile run then
-REPS timed runs; the module time covers QKV projection + fused norm/RoPE + ring-joint SDPA (incl. the
-K/V all-gather) + output projection; the op-only time wraps the monkey-patched
-`ttnn.transformer.ring_joint_scaled_dot_product_attention` call in two host syncs.
+REPS timed runs; the module time covers QKV projection + fused norm/RoPE + ring attention (incl. the
+K/V all-gather) + output projection; the op-only time wraps the monkey-patched attention op
+(`ring_joint_scaled_dot_product_attention` for dense, `sparse_ring_attention` for sol) in two host syncs.
 
 Modes:
   dense           -- the production path (baseline).
   sol             -- Sol-Attn path (`sol_attn=True`), tau from SOL_TAU (comma list), using the pre-pass
-                     and sparse kernel; reports achieved chunk density next to every number.
+                     and sparse kernel; reports achieved block density next to every number.
   agather         -- the ring K/V all-gather alone (comm floor), via ring_attention_all_gather_async.
 
 SOL_BENCH_PROFILE=1 runs the timed loop under the device profiler (TT_METAL_DEVICE_PROFILER=1 must be
@@ -136,7 +136,7 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
         MiniMaxH3Attention.measured_sdpa_chunk_sizes = {
             k: (qc, kc) for k in MiniMaxH3Attention.measured_sdpa_chunk_sizes
         }
-        MiniMaxH3Attention.measured_resident_k_chunks = {}  # the override sets resident's k too
+        MiniMaxH3Attention.measured_sparse_k_chunks = {}  # the override sets the sparse op's k too
     taus = [float(t) for t in os.environ.get("SOL_TAU", "1.0").split(",")] if mode == "sol" else [None]
     results = []
     for tau in taus:
@@ -158,9 +158,6 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
             tt_model.sol_logical_n = seq_len
             tt_model.sol_sink_tokens = int(os.environ.get("SOL_SINK_TOKENS", "1245"))
             tt_model.sol_report_density = True
-            # SOL_BENCH_MODE: gather | chunk | compact | pack (pack = compact + Q2 packing; pair it with
-            # SOL_BENCH_CHUNKS=64xK, the 64-row Q chunk Q1 needs and the only size whose L1 fits the staging).
-            tt_model.sol_mode = os.environ.get("SOL_BENCH_MODE", "compact")
             # SOL_BENCH_PREFIX: how the prefix (text + condition) query rows get their exact attention.
             #   separate (default): the sparse op treats them like any row; a separate dense op recomputes them
             #                       (MiniMaxH3Attention._sol_prefix_dense_rows). Its cost is in the module time
@@ -178,7 +175,8 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
             tt_model.sol_prefix_mode = prefix
 
         op_times = []
-        orig_ring = ttnn.transformer.ring_joint_scaled_dot_product_attention
+        op_name = "sparse_ring_attention" if mode == "sol" else "ring_joint_scaled_dot_product_attention"
+        orig_ring = getattr(ttnn.transformer, op_name)
 
         # The "op" time wraps the ring op and, in prefix mode "separate", the prefix recompute that follows it
         # (both are the attention proper; everything else in the module is projections and norms).
@@ -245,7 +243,7 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
                     subdevice_id=ccl_manager.ccl_sub_device_id,
                 )
 
-        ttnn.transformer.ring_joint_scaled_dot_product_attention = timed_ring
+        setattr(ttnn.transformer, op_name, timed_ring)
         MiniMaxH3Attention._sol_prefix_dense_rows = timed_prefix
         try:
             compile_ms, _ = _timed(module_call, mesh_device, 1)
@@ -254,14 +252,10 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
             trace_armed = True
             # density comes from the compile run; the host readback must not be inside the timed reps
             density = getattr(tt_model, "sol_last_density", None)
-            # 64x64-block density of the same mask (resident / chunk modes skip at the coarser K-chunk level, so
-            # the two differ there; identical in the block-form modes). This is the sparsity the model requires.
-            block_density = getattr(tt_model, "sol_last_block_density", None)
-            # Keep the per-call density readback on during the timed reps (2026-10-21): the resident op's time
+            # Keep the per-call density readback on during the timed reps (2026-10-21): the sparse op's time
             # tracks the mask density call by call, and on a machine whose pre-pass gathers are corrupted the mask
             # changes between calls. The readback sits in the module time, never in the op time.
             densities = []
-            block_densities = []
             profile = os.environ.get("SOL_BENCH_PROFILE") == "1" and not TRACE
             if profile:
                 ttnn.ReadDeviceProfiler(mesh_device)
@@ -285,11 +279,10 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
                     ms, out = _timed(module_call, mesh_device, 1)
                     module_ms.append(ms)
                     densities.append(getattr(tt_model, "sol_last_density", None))
-                    block_densities.append(getattr(tt_model, "sol_last_block_density", None))
             if profile:
                 ttnn.ReadDeviceProfiler(mesh_device)
         finally:
-            ttnn.transformer.ring_joint_scaled_dot_product_attention = orig_ring
+            setattr(ttnn.transformer, op_name, orig_ring)
             MiniMaxH3Attention._sol_prefix_dense_rows = orig_prefix
 
         rec = {
@@ -303,29 +296,21 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
             "op_ms": op_times,
             "prefix_ms": prefix_times,
             "prefix_mode": tt_model.sol_prefix_mode if mode == "sol" else None,
-            "chunk_density": density,
-            "chunk_density_per_rep": densities,
-            "block_density": block_density,
-            "block_density_per_rep": block_densities,
+            "block_density": density,
+            "block_density_per_rep": densities,
         }
         results.append(rec)
         prefix_note = (
             f" (incl. prefix recompute {' / '.join(f'{m:.2f}' for m in prefix_times)} ms)" if prefix_times else ""
         )
         logger.info(
-            f"[{WORKING_POINTS[seq_local]}]{' [trace]' if TRACE else ''} {mode}{'/' + tt_model.sol_mode + '/prefix=' + tt_model.sol_prefix_mode if mode == 'sol' else ''} "
+            f"[{WORKING_POINTS[seq_local]}]{' [trace]' if TRACE else ''} {mode}{'/prefix=' + tt_model.sol_prefix_mode if mode == 'sol' else ''} "
             f"chunks={chunks_env or 'measured'} tau={tau}: compile {compile_ms:.0f} ms; "
             f"module {' / '.join(f'{m:.2f}' for m in module_ms)} ms; op {' / '.join(f'{m:.2f}' for m in op_times)} ms"
-            f"{prefix_note}; density {density}"
+            f"{prefix_note}; block density (64x64) {density}"
             + (
                 f"; density per rep {' / '.join('-' if d is None else f'{d:.3f}' for d in densities)}"
                 if any(d is not None for d in densities)
-                else ""
-            )
-            + (f"; block density (64x64) {block_density:.4f}" if block_density is not None else "")
-            + (
-                f"; block density per rep {' / '.join('-' if d is None else f'{d:.3f}' for d in block_densities)}"
-                if any(d is not None for d in block_densities)
                 else ""
             )
         )

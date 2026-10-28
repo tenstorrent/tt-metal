@@ -17,7 +17,6 @@
 #include "cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
 #include "ring_attention_all_gather_metadata.hpp"
 #include "ring_attention_rank_mapping.hpp"
-#include "ring_attention_remote_dram_addrgen.hpp"
 #include <algorithm>
 #include <cstdint>
 #include <utility>
@@ -193,7 +192,7 @@ void kernel_main() {
 
     auto outputs_tuple = make_tensor_accessor_tuple(outputs_args, arg_idx);
     arg_idx += num_inputs;
-    const auto local_output_addrgens = make_abstract_tensor_accessor_wrappers(outputs_tuple);
+    auto output_addrgens = make_abstract_tensor_accessor_wrappers(outputs_tuple);
 
     // Trace-safe metadata path: recompute the gather extent (valid_pages) on-device from kv_actual_isl[0]
     // so it matches the reader's recompute even when the host logical_n is a placeholder. The
@@ -238,19 +237,6 @@ void kernel_main() {
     if constexpr (fuse_op) {
         arg_idx = arg_for_fab;
         op_signaler_sender = OpSignaler(arg_idx);
-    } else {
-        arg_idx = arg_for_fab;
-    }
-
-    // Receiving chip's DRAM bank placement. Appended by the host after every other writer arg (fabric
-    // and op-signaler args included) so fused consumers' fixed-offset patches stay valid; see
-    // RemoteDramBankTable. Every cross-chip write below goes through output_addrgens, so all three
-    // write paths (bank-owned, plain, scatter) are covered.
-    const auto remote_dram_table = ring_attention_all_gather::RemoteDramBankTable::from_args(arg_idx);
-    std::array<ring_attention_all_gather::RemoteDramAddrGen, num_inputs> output_addrgens;
-    for (uint32_t input_idx = 0; input_idx < num_inputs; ++input_idx) {
-        output_addrgens[input_idx] =
-            ring_attention_all_gather::RemoteDramAddrGen{local_output_addrgens[input_idx], &remote_dram_table};
     }
 
     Noc noc_obj;
