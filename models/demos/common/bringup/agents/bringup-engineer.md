@@ -55,7 +55,12 @@ You start with no memory of earlier steps. Everything you need is in the brief a
    option off: the results must match the recorded baseline (the recipe in the skill, section 3).
 7. Precision (owner rule, 2026-10-20: realistic from the start; F123). The model's shipped defaults (tt/settings.py)
    are realistic precision from the first step, never "maximum then tuned down": weights in the device format of the
-   checkpoint's own width (fp4 -> bfp4, fp8 -> bfp8, 16-bit -> bf16; never wider, never narrower); matmuls at HiFi2,
+   checkpoint's own width (fp4 -> bfp4, fp8 -> bfp8, 16-bit -> bf16; never wider, never narrower), and the same for
+   every tensor the reference rounds (F208, owner 2026-10-28: realistic = whatever the reference uses): a cache the
+   reference stores at 8 or 4 bits (KV, compressed KV, index keys) is stored in the device's 8- or 4-bit format, a GEMM
+   input the reference quantizes to fp8 is fed as bfp8; a bf16 cache or input where the reference is narrower is
+   "above the reference" and wrong, also when a contract, a spec line or a test was written that way (report it);
+   matmuls at HiFi2,
    LoFi where the weights are bfp4 / bfp8 and the step's end-to-end check holds; fp32 accumulation only where you
    measured it to matter (a long reduction, softmax statistics), off elsewhere; stock TTNN kernels or the bring-up ops
    at their normal settings, a high-precision variant only when a measured end-to-end gap needs it; cross-chip sums

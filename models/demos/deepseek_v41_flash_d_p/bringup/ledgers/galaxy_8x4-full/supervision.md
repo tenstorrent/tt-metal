@@ -539,3 +539,15 @@ check (F196 / F197); host times stay hidden until verified warm.
   padding, nothing outside its paths). Anything else goes to the owner. One line per delegated accept, here.
 - 12:49 DELEGATED ACCEPT P.2 TAIL_A2A_PREPARED: warm wall 594.3 -> 544.4 ms (-49.9), 103 accuracy metrics
   identical, gate PASS; diff: TailA2A prepared=False default + setting. SEED-BOX RE-VERIFY += TailA2A prepared.
+- 13:39 PRECISION (owner: 'major fuckup', realistic = whatever the reference uses): KV caches bf16 vs reference fp8 window / fp4 compressed + index keys; GEMM activation inputs bf16 vs fp8; attention output before wo_a bf16 vs fp8. Cause: rule 7 spells out weights only, rule 17 only permits low-bit caches, SC.1 recorded 'decode-side cache bf16 lossless'; overseer did not flag it. Proposed: framework (rule 7 for every stored/GEMM-input tensor + automated precision audit vs the reference's rounding list, F208) + fix jobs (activations -> bfp8; caches need a served-format decision with tt-d-gen). Pause requested so P.4/P.5 wait for the precision fix (P.3's A/B finishes first).
+- 13:45 OWNER: reject P.3 (FUSED_HEAD_PREPARED_PER_LAYER: 40 per-layer programs, warm wall 538.2 -> 552.6 ms, no gain;
+  the agent's diagnostic: 7520 patch slots a call, kept as DS41-131). The reject left the fork changes in the tree
+  (F209 pending): reverted by hand, patch at /scratch/dnijemcevic/posprof/P3_rejected_leftovers.patch; notes kept.
+  Overseer error: the resume that applied the reject cleared PAUSE and started P.4 (should have been --until P.3);
+  P.4 aborted within a minute (OV-17), orchestrator stopped. Overseer error: `pgrep -f "bringup.orchestrator resume"`
+  matched this Claude session's own argv: some "orchestrator alive" heartbeat lines today may be false; exact checks
+  from now on.
+- 13:48 OWNER: specs fixed (both 2x2 and Galaxy): the stale "Precision during bring-up: HiFi4, fp32 accumulation, bf16
+  KV cache" line replaced by "realistic = whatever the reference uses" (every weight, cache and GEMM input); intakes
+  re-approved. F208 framework (rule 7 + spec check + selftest; suite 641 pass / 1 known failure). Next: the fix plan
+  for the KV caches and GEMM activation inputs (owner discussion). P.4, P.5 held until then.

@@ -43,6 +43,7 @@ from __future__ import annotations
 import getpass
 import importlib
 import os
+import re
 from pathlib import Path
 
 import yaml
@@ -71,6 +72,31 @@ REQUIRED = {
     "block_types": dict,
     "state": dict,
 }
+
+
+# F208: owner rules in agents.rules that contradict realistic precision (agents' rule 7, F123). A stale bring-up line
+# ("HiFi4, fp32 accumulation, bf16 KV cache", 2026-10-14) survived F123 in DeepSeek-V4.1's specs and the serving
+# contract followed it: KV caches bf16 where the reference stores fp8 / fp4. A deliberate exception says so.
+STALE_PRECISION = re.compile(
+    r"\bHiFi4\b|fp32 accumulation(?! only)|\bbf16 (KV|kv)[ -]cache|\b(full|max(imum)?)[ -]precision\b|"
+    r"precision during bring-?up",
+    re.I,
+)
+
+
+def stale_precision_rules(data: dict) -> list[str]:
+    """agents.rules entries that contradict rule 7 (realistic = the reference's widths), unless marked 'owner exception'."""
+    rules = ((data.get("agents") or {}).get("rules")) or []
+    out = []
+    for i, r in enumerate(rules):
+        text = str(r)
+        m = STALE_PRECISION.search(text)
+        if m and "owner exception" not in text.lower() and not re.search(r"replaces|superseded", text, re.I):
+            out.append(
+                f"agents.rules[{i}] contradicts realistic precision (agents' rule 7, F123): '{m.group(0)}' "
+                "(say 'owner exception' in the rule if it is deliberate)"
+            )
+    return out
 
 
 class SpecError(ValueError):
@@ -494,7 +520,7 @@ class Spec:
     # ---- validation
     def validate(self) -> list[str]:
         """Schema errors for a model spec (empty list = valid)."""
-        errs = self._validate_boxes()
+        errs = self._validate_boxes() + stale_precision_rules(self.data)
         if getattr(self, "scaled_problem", None):  # F75: a scaled run is written in this box's units
             errs.append(self.scaled_problem)
         if errs:
