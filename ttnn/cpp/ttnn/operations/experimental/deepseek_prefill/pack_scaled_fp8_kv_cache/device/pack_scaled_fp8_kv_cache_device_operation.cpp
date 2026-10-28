@@ -99,10 +99,11 @@ ttsl::hash::hash_t PackScaledFp8KvCacheDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& args) {
     return tt::tt_metal::operation::hash_operation<PackScaledFp8KvCacheDeviceOperation>(
         attrs,
-        args.latent.memory_config(),
-        args.scales.memory_config(),
-        args.rope.memory_config(),
-        args.latent.logical_shape());
+        // Whole specs: all three inputs are row-major, and each accessor bakes in an aligned page size that
+        // follows the padded width (untilize's fromPaddedShape output records over-padding as Alignment).
+        args.latent.tensor_spec(),
+        args.scales.tensor_spec(),
+        args.rope.tensor_spec());
 }
 
 }  // namespace ttnn::experimental::prim::pack_scaled_fp8_kv_cache
