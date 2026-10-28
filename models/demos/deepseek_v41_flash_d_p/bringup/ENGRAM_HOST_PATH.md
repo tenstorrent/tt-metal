@@ -172,6 +172,60 @@ dequant via the lookup-table trick, or host dequant first? (3) next-chunk prefet
 - The real combined saving exists only after the port, measured on the Galaxy: an engram worker competes for CPU and
   the GIL with the main dispatch thread the picks speed up.
 
+## 4b. Formats today, the RAM path, and the revised order (2026-10-28, supersedes the stage order of 4 / 4a)
+
+### Where 8 -> 16 bit happens today (per chunk, per engram layer, all before layer 0 is dispatched)
+1. Host, `EngramHasher.hashes`: token ids -> 24 row ids per token (122,880).
+2. Host, `EngramTable.rows`: gather 256 fp8 (e4m3) bytes + 8 e8m0 scale bytes per row (~32 MB, still 8-bit).
+3. Host, `EngramTable.rows` + `host_rows`: fp8 -> **fp32** (`.float()`), x 2^scale in fp32, -> **bf16** into a
+   fresh `[5120, 6144]` buffer (63 MB). Exact (bf16 holds e4m3 x 2^k).
+4. Host, `to_device` (`ttnn.from_torch`): tilize + PCIe, split over mesh rows, replicated over the TP columns.
+5. Device, `tt/engram_kv.py`: one `ttnn.linear`, bf16 rows x `wkv` (already **bfp8_b** on the device: setting
+   `DENSE_WEIGHTS=bfp8`, converted once at load), fp32 accumulation, fp32 out (4 keys + 1 value).
+6. Device, `tt/engram_add.py`: gate + residual add into the 4 streams, all fp32.
+The only 8 -> 16 conversion is step 3, on the CPU, every chunk.
+
+### Why the rows are bf16 and not 8-bit
+DeepSeek's `fp8_linear` feeds e4m3 into FP8 tensor cores (H800). Tenstorrent's matrix engine has no e4m3 input; its
+8-bit format is `bfloat8_b` (one exponent per 16 values, 7 magnitude bits): exact only for values within ~3 binades
+of their group's largest. bf16 reproduces the table values exactly, which is why the agents chose it. `bfp8_b` rows
+would be fp8-class precision (DeepSeek itself re-quantizes this activation to 8-bit), so they may be within the
+reference's own margin; only the ladder decides. The `engram_kv` matmul is 0.58 ms of device time per chunk, so the
+format matters for host time and PCIe bytes, not for device time.
+
+### The RAM path: what is in host RAM
+- Persistent (loaded once at model load): the table in its **8-bit checkpoint format**, fp8 bytes 91.6 GiB + e8m0
+  2.9 GiB per engram layer, ~189 GiB for layers 1 and 14. Never 16-bit. (`engram_bench.load_resident`: byte copy into
+  anonymous memory with `MADV_HUGEPAGE`.)
+- Transient per chunk and layer, freed after the upload: gathered rows ~32 MB (8-bit); today's fp32 intermediate
+  ~126 MB; the bf16 rows 63 MB.
+- Per-chunk conversion variants, increasingly lean: (a) today: 8-bit -> fp32 -> bf16 on the host; (b) host
+  fp8 -> bf16 directly through a 256-entry lookup table, no fp32 intermediate (63 MB transient); (c) no host
+  conversion: upload the ~32 MB of 8-bit bytes and dequant on the device (two `ttnn.embedding` lookup tables + one
+  multiply, exact), or pre-packed `bfp8_b` if the API probe below passes.
+
+### Revised order on the QB
+| order | step | why | size |
+|---|---|---|---|
+| 1 | baseline the QB host with the bench: RAM, disk model, `read_ahead_kb`, cold and hot | everything is judged against it | 30 min |
+| 2 | fix the I/O: `MADV_RANDOM` + threaded gather, then the resident table if RAM allows | the real serving cost: ~4.5 s per layer per chunk cold today | seconds -> ~10 ms per layer |
+| 3 | async: worker at `begin_chunk`, poll between layers, non-blocking write, deadline fallback | takes what remains off the critical path (layer 14 fully, layer 1 partly) | most of ~145 ms per chunk |
+| 4 | shrink the conversion and upload: decide by the bfp8 probe between pre-packed `bfp8` and fp8 bytes + device dequant | what async cannot hide (layer 1 is needed ~10 ms in), half the PCIe bytes, less host CPU competing with the dispatch thread for the GIL | ~45-80 ms of host work per chunk |
+| 5 | upload split over TP, all-gather on the device | 1/4 of the bytes on the Galaxy (1/2 on the QB) | small; the effect shows on the Galaxy |
+
+### The bfp8 probe (step 4's decision), stop at the first "no"
+Storage idea: `bfp8_b` groups are 16 consecutive values of a row and a table row is 256 values, so a row can be stored
+pre-packed as 256 mantissa bytes + 16 exponent bytes (272 B, ~ today's 264 B) and a device tile built from gathered
+rows by a byte shuffle only (no float math).
+| # | experiment | QB? | what the Galaxy adds |
+|---|---|---|---|
+| A | **API probe** (first): build a `bfp8_b` TILE host tensor from raw pre-packed bytes and upload it, no float conversion. If ttnn cannot, stop here and use fp8 bytes + device dequant | yes (ttnn + one device) | nothing |
+| B | offline error stats: pack ~1M random table rows into 16-value groups; fraction of values changed, relative L2 error, vs DeepSeek's own fp8 activation quantization of the same rows | yes (CPU) | nothing |
+| C | accuracy: env-switched `typecast(rows -> bfp8_b)` on the device before `engram_kv`; the ladder + smoke vs the baseline; then once with host packing (`from_torch(dtype=bfloat8_b)`) to rule out a rounding-mode difference | yes, indicative: the 2x2 subset (0-3, 14, 20, 21, 24) holds both engram layers | the full 40-layer ladder at the 56k target (error through 40 layers, unscaled model): a short confirmation |
+| D | convert the table offline to row-packed bfp8 (~97 GiB per layer), byte-shuffle assembly, timing vs today's ~80 ms of dequant + assembly + upload | yes (disk for ~2 x 97 GiB, ideally the RAM) | final timing: Galaxy host CPU, TP 4, chunk 5120 in the model |
+QB notes: benchmark at 5120 tokens (the Galaxy chunk); the full engram tables of rev 5254448; after pulling, the
+block-MoE default may not build on the QB's FABRIC_2D (env fallback in section 5).
+
 ## 5. 2x2 vs Galaxy: what can differ, and where each piece belongs
 
 ### Do on the 2x2 (QuietBox)
