@@ -366,9 +366,13 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
                         tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::DRAM))),
             device);
     }
-    std::vector<uint32_t> semaphore_ids;
-    for (uint32_t i = 0; i < kMaxMergersPerCore; ++i) {
-        semaphore_ids.push_back(tt::tt_metal::CreateSemaphore(program, all_cores, 0));
+    // The mergers' semaphores, one per merger a core may hold; the kernels take their ids at fixed
+    // compile-arg positions, so a program without split units passes zeros there.
+    std::vector<uint32_t> semaphore_ids(kMaxMergersPerCore, 0U);
+    if (split_units) {
+        for (uint32_t& id : semaphore_ids) {
+            id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+        }
     }
 
     // -------------------------------------------------------------------------
