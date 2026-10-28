@@ -297,14 +297,16 @@ def _pcc(a, b):
 
 def _check_head(c, head, io, x_dev, w, label):
     """The fused head's outputs vs float64 on the inputs the device held (x bf16, the router's bf16 W_r and fp32 bias,
-    the shared expert's fp32 weights - the device holds them as bfp8), as Marko's test_router_sqrtsoftplus and
-    test_head_se3 (models/demos/moe_block/tests/test_fused_head_parts.py) compare them:
-    - y, the shared expert's owner rows (chip (r, c): rows [c n, (c + 1) n) of mesh row r's sum over its TP slices of
-      silu(min(x W1^T, 10)) clamp(x W3^T, +-10) W2^T): rel L2 and PCC;
-    - the joint routing rows (chip (r, c): its ring position p's n tokens): scores sqrt(softplus(x W_r^T)), top 6 by
-      score + bias; the picks equal on every token whose 6th / 7th biased scores are apart by more than the logits'
-      noise (2e-3: HiFi3 bf16 products, fp32 sums - Marko's), on almost all tokens; the weights (unbiased scores of the
-      picks / their sum x 1.5, bf16) on the tokens with the same picks: max abs error;
+    the shared expert's fp32 weights - stored bfp8), what Marko's test_router_sqrtsoftplus / test_head_se3
+    (models/demos/moe_block/tests/test_fused_head_parts.py) compare, with F139's limits (reference.py; no number read
+    off the device's own error):
+    - y, the shared expert's owner rows (chip (r, c): rows [c n, (c + 1) n) of mesh row r's shared expert, its TP slices
+      summed): rel L2 <= noise_limit's (calib x the formats run - bfp8 weights, the fidelity's operand bits, h bf16,
+      fp32 sums, bf16 out - vs float64, over the mesh row); PCC a diagnostic;
+    - the joint routing rows (chip (r, c): its ring position p's n tokens): the picks equal float64's top 6 of score +
+      bias on every token whose 6th / 7th keys are apart by more than calib x twice the formats run's largest key error
+      (fp32 scores, the key's 15 mantissa bits); the share of all tokens equal is a diagnostic; the weights (the picks'
+      scores / their sum x 1.5, bf16) of the tokens with float64's picks: rel L2 <= noise_limit's;
     - xbuf's own slots (chip d: rows [d n, (d + 1) n)) = x's rows of p, bit for bit;
     - the route words' destination masks (bits 0-15) = the chips holding the device's picks (expert e on chip e // epc),
       the own chip excluded (the order / link bits are the dispatch tree's choice: not modelled);
@@ -312,53 +314,62 @@ def _check_head(c, head, io, x_dev, w, label):
       routing rows, bit for bit."""
     from ttnn.bringup.combine_rf.combine_plan import plan_reference
 
+    from models.demos.common.bringup.testing.fork_cases import CALIB, noise_limit
     from models.demos.moe_block.moe_block import split_gate_up
 
+    ref = _load("reference")
     R, C = c["mesh"]
     N, H, E, K, lim, scale = R * C, c["H"], c["E"], c["K"], c["limit"], c["route_scale"]
     n = c["chunk"] // N  # (tokens a chip owns; mesh row r's c["chunk"] / R rows, column-split into C slices)
     epc = E // N
-    gate, up = (t.double() for t in split_gate_up(w.shared["gate_up"].float()))
-    down = w.shared["down"].double()
-    wr, br = w.router["weight"].double(), w.router["bias"].double()
+    ns, nr = c["noise"]["shared"], c["noise"]["router"]
+    gate, up = split_gate_up(w.shared["gate_up"].float())
+    se_w = [gate.T.contiguous(), up.T.contiguous(), w.shared["down"].float().T.contiguous()]  # (the engine's [K, N])
+    wr, br = w.router["weight"].float(), w.router["bias"].float()
     ys = [t.double().reshape(n, H) for t in _rows(io[2])]
     jr = [t.to(torch.int64).reshape(n, 2 * K) & 0xFFFF for t in _rows(io[4])]
     xb = [t.reshape(N * n, H) for t in _rows(io[5])]
     rw = [t.to(torch.int64).reshape(-1) & 0xFFFFFFFF for t in _rows(io[6])]
-    lim_ = c["ref_limits"]
-    worst = dict(se_rel=0.0, se_pcc=1.0, picks_clear=1.0, picks_all=1.0, w_err=0.0)
-    for d in range(N):
-        r, cc = divmod(d, C)
-        p = head.xg.chips[(r, cc)]["rings"][0]["p"]
+    fn_se = lambda x, g, u, d: ref.shared_expert(x, g, u, d, lim, ns["fidelity"])  # noqa: E731
+    out = {}
+    for r in range(R):
         xf = torch.cat([x_dev[r * C + q].reshape(-1, H // C) for q in range(C)], dim=1)  # [c["chunk"] / R, H] bf16
-        xd = xf.double()
-        se = torch.nn.functional.silu((xd @ gate.T).clamp(max=lim)) * (xd @ up.T).clamp(-lim, lim) @ down.T
-        want = se[cc * n : (cc + 1) * n]
-        worst["se_rel"] = max(worst["se_rel"], float((ys[d] - want).norm() / want.norm()))
-        worst["se_pcc"] = min(worst["se_pcc"], _pcc(ys[d], want))
-        xo = xd[p * n : (p + 1) * n]
-        sc = torch.sqrt(torch.nn.functional.softplus(xo @ wr.T))
-        srt, ids = torch.sort(sc + br, dim=-1, descending=True)
-        gap = srt[:, K - 1] - srt[:, K]
-        wts = sc.gather(1, ids[:, :K])
-        wts = wts / wts.sum(-1, keepdim=True) * scale
-        dids, wb = jr[d][:, :K], jr[d][:, K:]
-        dw = torch.where(wb >= 32768, wb - 65536, wb).to(torch.int16).view(torch.bfloat16).double()
-        same = (torch.sort(dids, 1)[0] == torch.sort(ids[:, :K], 1)[0]).all(1)
-        clear = gap > 2e-3
-        worst["picks_clear"] = min(worst["picks_clear"], same[clear].float().mean().item())
-        worst["picks_all"] = min(worst["picks_all"], same.float().mean().item())
-        o_h, o_d = torch.sort(ids[same, :K], 1)[1], torch.sort(dids[same], 1)[1]
-        werr = (torch.gather(wts[same], 1, o_h) - torch.gather(dw[same], 1, o_d)).abs().max().item()
-        worst["w_err"] = max(worst["w_err"], werr)
-        bad = (xb[d][d * n : (d + 1) * n] != xf[p * n : (p + 1) * n]).any(1).nonzero().flatten()
-        assert bad.numel() == 0, f"{label} chip {d} xbuf own rows: {bad.numel()} rows differ, first {bad[:8].tolist()}"
-        mask = torch.zeros(n, dtype=torch.int64)
-        for k in range(K):
-            mask |= 1 << (dids[:, k] // epc)
-        mask &= ~(1 << d)
-        bad = ((rw[d][:n] & 0xFFFF) != mask).nonzero().flatten()
-        assert bad.numel() == 0, f"{label} chip {d} route masks: {bad.numel()} differ, first {bad[:8].tolist()}"
+        se_l = noise_limit(fn_se, [xf.float()] + se_w, ns["inputs"], ns["out"])
+        want = fn_se(xf.double(), *(t.double() for t in se_w))
+        for cc in range(C):
+            d = r * C + cc
+            p = head.xg.chips[(r, cc)]["rings"][0]["p"]
+            wd = want[cc * n : (cc + 1) * n]
+            o = dict(se_rel=float((ys[d] - wd).norm() / wd.norm()), se_lim=se_l["rel"], se_pcc=_pcc(ys[d], wd))
+            # the router on my ring position's tokens
+            xo = xf[p * n : (p + 1) * n]
+            key64 = ref.topk_keys(ref.router_scores(xo.double(), wr.double()), br.double(), nr["key_bits"])
+            keyf = ref.topk_keys(ref.router_scores(xo.float(), wr), br, nr["key_bits"])
+            srt, ids = torch.sort(key64, dim=-1, descending=True)
+            gap = srt[:, K - 1] - srt[:, K]
+            o["gap"] = CALIB * 2 * float((keyf.double() - key64).abs().max())
+            dids, wb = jr[d][:, :K], jr[d][:, K:]
+            dw = torch.where(wb >= 32768, wb - 65536, wb).to(torch.int16).view(torch.bfloat16).double()
+            same = (torch.sort(dids, 1)[0] == torch.sort(ids[:, :K], 1)[0]).all(1)
+            clear = gap > o["gap"]
+            o.update(
+                clear=int(clear.sum()), clear_differ=int((~same & clear).sum()), picks_all=same.float().mean().item()
+            )
+            sid = torch.sort(ids[same, :K], 1)[0]  # (float64's picks, by id: the device's of the same tokens, by id)
+            fn_w = lambda x, w_, i=sid: ref.route_weights(x, w_, i, scale)  # noqa: E731
+            w_l = noise_limit(fn_w, [xo[same].float(), wr], nr["inputs"], nr["out"])
+            ww = fn_w(xo[same].double(), wr.double())
+            gw = torch.gather(dw[same], 1, torch.sort(dids[same], 1)[1])
+            o.update(w_rel=float((gw - ww).norm() / ww.norm()), w_lim=w_l["rel"])
+            out[d] = o
+            bad = (xb[d][d * n : (d + 1) * n] != xo).any(1).nonzero().flatten()
+            assert bad.numel() == 0, f"{label} chip {d} xbuf own rows: {bad.numel()} differ, first {bad[:8].tolist()}"
+            mask = torch.zeros(n, dtype=torch.int64)
+            for k in range(K):
+                mask |= 1 << (dids[:, k] // epc)
+            mask &= ~(1 << d)
+            bad = ((rw[d][:n] & 0xFFFF) != mask).nonzero().flatten()
+            assert bad.numel() == 0, f"{label} chip {d} route masks: {bad.numel()} differ, first {bad[:8].tolist()}"
     rt = head.routing
     ids_all = torch.stack([j[:, :K] for j in jr])
     wb_all = torch.stack([j[:, K:] for j in jr])
@@ -393,11 +404,17 @@ def _check_head(c, head, io, x_dev, w, label):
             assert (
                 bad.numel() == 0
             ), f"{label} chip {d} planner {k}: {bad.numel()} words differ, first {bad[:8].tolist()}"
-    logger.info(f"{c['id']} {label} vs float64: {worst} (limits {lim_}); xbuf own rows, route masks, planner exact")
-    assert worst["picks_clear"] == 1.0, f"{label}: picks differ on tokens clear of noise: {worst}"
-    assert worst["picks_all"] >= lim_["picks_all"], (label, worst, lim_)
-    assert worst["w_err"] <= lim_["w_err"], (label, worst, lim_)
-    assert worst["se_rel"] <= lim_["se_rel"] and worst["se_pcc"] >= lim_["se_pcc"], (label, worst, lim_)
+    for d, o in out.items():
+        logger.info(
+            f"{c['id']} {label} chip {d}: shared rows rel {o['se_rel']:.3e} (limit {o['se_lim']:.3e}) pcc "
+            f"{o['se_pcc']:.6f}; picks: {o['clear']} tokens clear of the {o['gap']:.2e} gap, {o['clear_differ']} differ, "
+            f"{100 * o['picks_all']:.2f}% of all equal (a diagnostic); weights rel {o['w_rel']:.3e} (limit {o['w_lim']:.3e})"
+        )
+    logger.info(f"{c['id']} {label}: xbuf own rows, route masks, planner tables bit-exact")
+    for d, o in out.items():
+        assert o["clear_differ"] == 0, f"{label} chip {d}: picks differ on {o['clear_differ']} tokens clear of noise"
+        assert o["se_rel"] <= o["se_lim"], f"{label} chip {d}: shared rows rel {o['se_rel']:.3e} > {o['se_lim']:.3e}"
+        assert o["w_rel"] <= o["w_lim"], f"{label} chip {d}: weights rel {o['w_rel']:.3e} > {o['w_lim']:.3e}"
 
 
 def _touched(R, C, s_, mask, order):
