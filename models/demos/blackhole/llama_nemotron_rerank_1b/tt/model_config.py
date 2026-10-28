@@ -30,7 +30,7 @@ MM_CONFIGS = {
         2048: (8, 8, 8, 2, 2),
         4096: (16, 8, 4, 2, 2),
         8192: (4, 8, 8, 1, 4),
-        16384: (8, 8, 8, 1, 4),
+        16384: (8, 8, 4, 1, 4),
     },
     "ff13s": {512: (8, 16, 8, 1, 4), 2048: (4, 16, 8, 1, 4), 4096: (4, 16, 8, 1, 4), 16384: (4, 32, 8, 1, 4)},
     "ff13": {512: (4, 8, 8, 1, 4), 4096: (4, 16, 16, 1, 4), 16384: (8, 16, 8, 1, 4)},
@@ -42,6 +42,11 @@ MM_CONFIGS = {
         16384: (8, 16, 8, 1, 4),
     },
     "score": {512: (4, 8, 1, 4, 1)},
+    # bf16 DST accumulation (see RerankConfig.bf16_acc_kinds): 8-tile subblocks. FF2 at LoFi, 16384 rows:
+    # (8,16,8,1,4) fp32 ~1118 -> (8,8,8,1,8) bf16 986 us (perf_tools/sweep_mm.py).
+    "ff2_bf16acc": {16384: (8, 8, 8, 1, 8)},
+    # FF1+FF3 fused SwiGLU, 16384 rows: (4,32,8,1,4) fp32 3677 -> (4,16,8,1,8) bf16 3611 us.
+    "ff13s_bf16acc": {16384: (4, 16, 8, 1, 8)},
 }
 
 
@@ -123,7 +128,8 @@ class RerankConfig:
     # MIRACL Pearson vs fp32: ff2 0.99959 (baseline 0.99962), ff13s 0.99928, qkv+wo 0.99920, all 0.99918.
     lofi_kinds: str = "ff2"
     # Matmul kinds that accumulate in bf16 DST (8-tile subblocks) instead of fp32 (4-tile), comma separated.
-    bf16_acc_kinds: str = ""
+    # 32x512: FF2 24.25 -> 21.13, FF1+FF3 78.93 -> 77.75 M cycles; MIRACL batch 32 Pearson 0.99958, nDCG@10 0.6834.
+    bf16_acc_kinds: str = "ff2,ff13s"
     # HiFi2 SDPA raised the MIRACL mean score error 0.23 -> 0.30 at no measurable speed gain.
     sdpa_fidelity: object = ttnn.MathFidelity.HiFi4
     # Padding mask dtype. The mask holds only 0 and a large negative value, which bfp4 stores exactly;
