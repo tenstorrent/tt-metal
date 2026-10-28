@@ -18,7 +18,7 @@
 // format established by startup and restored at the end of each binary chunk.
 template <typename DFBPre, typename DFBPost, typename DFBOut, typename ActivationFn>
 ALWI void preprocess_sfpu_impl(
-    DFBPre cb_pre, DFBPost cb_post, DFBOut cb_out, uint32_t per_core_block_size, ActivationFn&& process_activations) {
+    DFBPre& cb_pre, DFBPost& cb_post, DFBOut& cb_out, uint32_t per_core_block_size, ActivationFn&& process_activations) {
     using namespace ckernel;
 
     reconfig_data_format_srca(/*old*/ QSR_BINARY_SRCA_FORMAT_CB, /*new*/ cb_pre.get_id());

@@ -24,6 +24,7 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_pcc
+from models.demos.common.prefill.prefill_chunk import PrefillChunk
 from models.demos.minimax_m3.config import MeshConfig
 from models.demos.minimax_m3.tt.attention import Attention, AttentionConfig, allocate_kv_caches
 from models.demos.minimax_m3.tt.attention_configs import MiniMaxM3AttentionProgramConfig
@@ -148,7 +149,8 @@ def test_attention_chunked(mesh_device, device_params, layer_kind, chunk_local, 
     def run(x_chunk, a, b, cached_len, kv_cache):
         L = b - a
         x_tt = shard_seq(x_chunk.reshape(1, 1, L, HIDDEN))
-        return attn(x_tt, rope_mats=rope_range(a, b), kv_cache=kv_cache, user_id=0, cached_len=cached_len)
+        pc = PrefillChunk(slot_id=0, actual_start=cached_len, actual_end=b)
+        return attn(x_tt, rope_mats=rope_range(a, b), kv_cache=kv_cache, chunks=[pc])
 
     def gather_seq(out):
         # out: SP-sharded on rows (seq). Hidden is full-emb on each TP col (replicated residual) or
@@ -317,7 +319,8 @@ def test_attention_chunked_vs_cpu_ref(mesh_device, device_params, layer_kind, ch
 
     def run(x_chunk, a, b, cached_len, kv_cache):
         x_tt = shard_seq(x_chunk.reshape(1, 1, b - a, HIDDEN))
-        return attn(x_tt, rope_mats=rope_range(a, b), kv_cache=kv_cache, user_id=0, cached_len=cached_len)
+        pc = PrefillChunk(slot_id=0, actual_start=cached_len, actual_end=b)
+        return attn(x_tt, rope_mats=rope_range(a, b), kv_cache=kv_cache, chunks=[pc])
 
     def gather_seq(out):
         dts = ttnn.get_device_tensors(out)

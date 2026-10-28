@@ -29,6 +29,8 @@
 #include "tt_metal/test_utils/env_vars.hpp"
 
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/fabric_builder_context.hpp"
+#include "tt_metal/fabric/channel_trimming_io.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_fabric_test_interfaces.hpp"
 #include "tt_fabric_test_common_types.hpp"
@@ -149,25 +151,90 @@ public:
             local_mesh_id_, MeshScope::LOCAL);
     }
 
-    void setup_channel_trimming_rtoptions(ChannelTrimmingMode channel_trimming_mode) {
-        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
-        switch (channel_trimming_mode) {
-            case ChannelTrimmingMode::CAPTURE:
-                rtoptions.set_enable_channel_trimming_capture(true);
-                rtoptions.set_fabric_trimming_profile_path("");
-                break;
-            case ChannelTrimmingMode::REPLAY: {
-                rtoptions.set_enable_channel_trimming_capture(false);
-                auto path = std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "reports" /
-                            "channel_trimming_capture.yaml";
-                rtoptions.set_fabric_trimming_profile_path(path.string());
-                break;
-            }
-            case ChannelTrimmingMode::NONE:
-                rtoptions.set_enable_channel_trimming_capture(false);
-                rtoptions.set_fabric_trimming_profile_path("");
-                break;
+    // Snapshot the env-derived trimming rtoptions (captured once, before any test-driven
+    // modification) so that tests without an explicit yaml `enable_channel_trimming` key obey
+    // TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE / TT_METAL_FABRIC_TRIMMING_PROFILE /
+    // TT_METAL_FABRIC_TRIMMING_OVERRIDE instead of clobbering them.
+    void snapshot_trimming_rtoptions() {
+        if (trimming_rtoptions_snapshot_.has_value()) {
+            return;
         }
+        const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        trimming_rtoptions_snapshot_ = TrimmingRtOptionsSnapshot{
+            .capture_enabled = rtoptions.get_enable_channel_trimming_capture(),
+            .profile_path = rtoptions.has_fabric_trimming_profile() ? rtoptions.get_fabric_trimming_profile_path() : "",
+            .override_path =
+                rtoptions.has_fabric_trimming_override() ? rtoptions.get_fabric_trimming_override_path() : ""};
+    }
+
+    // The trimming settings a test group runs with, without touching rtoptions. The whole struct
+    // is the device-reuse key: two groups in the same mode can still replay different profiles.
+    //
+    // Precedence (yaml key is per-test intent, env vars are launch-time intent; explicit wins):
+    //   - yaml enable_channel_trimming: true  → expanded_mode drives (CAPTURE or REPLAY phase)
+    //   - yaml enable_channel_trimming: false → capture off, profile cleared (overrides env; logged)
+    //   - yaml key absent                     → the env-derived snapshot unchanged
+    ChannelTrimmingSettings resolve_channel_trimming_settings(
+        const TestFabricSetup& fabric_setup, ChannelTrimmingMode expanded_mode) {
+        snapshot_trimming_rtoptions();
+        const auto& snapshot = trimming_rtoptions_snapshot_.value();
+
+        if (fabric_setup.enable_channel_trimming.has_value()) {
+            if (!*fabric_setup.enable_channel_trimming) {
+                return {};
+            }
+            // enable_channel_trimming: true → CAPTURE/REPLAY phase from expansion
+            switch (expanded_mode) {
+                case ChannelTrimmingMode::CAPTURE:
+                    return {.mode = ChannelTrimmingMode::CAPTURE, .capture_enabled = true};
+                case ChannelTrimmingMode::REPLAY: {
+                    // Directory form: each rank resolves its own rank_<N>.yaml at import time
+                    const auto dir = tt::tt_fabric::get_channel_trimming_capture_dir(
+                        tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir());
+                    return {.mode = ChannelTrimmingMode::REPLAY, .profile_path = dir.string()};
+                }
+                case ChannelTrimmingMode::NONE:
+                    TT_THROW(
+                        "enable_channel_trimming=true but channel_trimming_mode is NONE "
+                        "(expected CAPTURE or REPLAY from expansion)");
+            }
+        }
+
+        // Yaml key absent → obey the env-derived snapshot.
+        ChannelTrimmingMode mode = ChannelTrimmingMode::NONE;
+        if (snapshot.capture_enabled) {
+            mode = ChannelTrimmingMode::CAPTURE;
+        } else if (!snapshot.profile_path.empty()) {
+            mode = ChannelTrimmingMode::REPLAY;
+        }
+        return {.mode = mode, .capture_enabled = snapshot.capture_enabled, .profile_path = snapshot.profile_path};
+    }
+
+    // Apply resolved trimming settings to rtoptions. Call only once the previous fabric is closed,
+    // since closing a capture fabric exports with the options it was opened with.
+    void apply_channel_trimming_settings(const TestFabricSetup& fabric_setup, const ChannelTrimmingSettings& settings) {
+        const auto& snapshot = trimming_rtoptions_snapshot_.value();
+        const bool env_trimming_set = snapshot.capture_enabled || !snapshot.profile_path.empty();
+        if (fabric_setup.enable_channel_trimming == false && env_trimming_set) {
+            log_warning(
+                tt::LogTest,
+                "enable_channel_trimming=false overrides trimming env vars "
+                "(TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE={}TT_METAL_FABRIC_TRIMMING_PROFILE={})",
+                snapshot.capture_enabled ? "1 " : "",
+                snapshot.profile_path.empty() ? "<unset>" : snapshot.profile_path);
+        } else if (
+            !fabric_setup.enable_channel_trimming.has_value() && env_trimming_set && !env_trimming_honor_logged_) {
+            env_trimming_honor_logged_ = true;
+            log_info(
+                tt::LogTest,
+                "No enable_channel_trimming key - honoring trimming env vars "
+                "(TT_METAL_ENABLE_CHANNEL_TRIMMING_CAPTURE={}TT_METAL_FABRIC_TRIMMING_PROFILE={})",
+                snapshot.capture_enabled ? "1 " : "0 ",
+                snapshot.profile_path.empty() ? "<unset>" : snapshot.profile_path);
+        }
+        auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
+        rtoptions.set_enable_channel_trimming_capture(settings.capture_enabled);
+        rtoptions.set_fabric_trimming_profile_path(settings.profile_path);
     }
 
     bool open_devices(
@@ -217,22 +284,60 @@ public:
             return false;
         }
 
+        // Resolve trimming settings considering both the yaml key and the env-derived rtoptions state
+        const ChannelTrimmingSettings trimming = resolve_channel_trimming_settings(fabric_setup, channel_trimming_mode);
+        const ChannelTrimmingMode effective_trimming_mode = trimming.mode;
+
         if (new_fabric_config != current_fabric_config_ || fabric_tensix_config != current_fabric_tensix_config_ ||
             reliability_mode != current_fabric_reliability_mode_ ||
-            fabric_setup.max_packet_size != current_max_packet_size_ ||
-            channel_trimming_mode != current_channel_trimming_mode_ || fabric_setup.use_vc2 != current_use_vc2_) {
+            fabric_setup.max_packet_size != current_max_packet_size_ || trimming != current_channel_trimming_ ||
+            fabric_setup.use_vc2 != current_use_vc2_) {
             if (are_devices_open_) {
                 log_info(tt::LogTest, "Closing devices and switching to new fabric config: {}", new_fabric_config);
                 close_devices();
             }
 
-            setup_channel_trimming_rtoptions(channel_trimming_mode);
+            // Fabric is now closed, which exports a capture if we are in capture mode.
+            apply_channel_trimming_settings(fabric_setup, trimming);
+
+            // A yaml-driven capture/replay test produces a capture yaml, builds a trimmed fabric kernel,
+            // and then replays the workload using this profile. For captures, remove any existing capture yaml
+            // from previous runs. For replays, check that the capture yaml is present and not empty.
+            if (fabric_setup.enable_channel_trimming.value_or(false)) {
+                const auto capture_path = tt::tt_fabric::get_channel_trimming_capture_path(
+                    tt::tt_metal::MetalContext::instance().rtoptions().get_logs_dir());
+                if (effective_trimming_mode == ChannelTrimmingMode::CAPTURE) {
+                    std::filesystem::remove(capture_path);
+                } else if (effective_trimming_mode == ChannelTrimmingMode::REPLAY) {
+                    std::error_code error;
+                    const auto capture_size = std::filesystem::file_size(capture_path, error);
+                    TT_FATAL(
+                        !error && capture_size > 0,
+                        "Channel trimming replay needs this rank's capture from the capture phase, but {} is {}",
+                        capture_path.string(),
+                        error ? "missing" : "empty");
+                }
+            }
 
             log_info(tt::LogTest, "Opening devices with fabric reliability mode: {}", reliability_mode);
             open_devices_internal(new_fabric_config, fabric_tensix_config, reliability_mode, fabric_setup);
 
+            // Assert that channel trimming replay's fabric was actually built from the capture
+            if (fabric_setup.enable_channel_trimming.value_or(false) &&
+                effective_trimming_mode == ChannelTrimmingMode::REPLAY) {
+                const auto& overrides = tt::tt_metal::MetalContext::instance()
+                                            .get_control_plane()
+                                            .get_fabric_context()
+                                            .get_builder_context()
+                                            .get_channel_trimming_overrides();
+                TT_FATAL(
+                    overrides.has_value() && !overrides->empty(),
+                    "Channel trimming replay loaded no overrides from profile {}",
+                    tt::tt_metal::MetalContext::instance().rtoptions().get_fabric_trimming_profile_path());
+            }
+
             topology_ = topology;
-            current_channel_trimming_mode_ = channel_trimming_mode;
+            current_channel_trimming_ = trimming;
         } else {
             log_info(tt::LogTest, "Reusing existing device setup with fabric config: {}", current_fabric_config_);
         }
@@ -277,7 +382,7 @@ public:
         current_fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
         current_fabric_reliability_mode_ = tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
         current_max_packet_size_ = std::nullopt;
-        current_channel_trimming_mode_ = ChannelTrimmingMode::NONE;
+        current_channel_trimming_ = {};
         current_use_vc2_ = false;
         are_devices_open_ = false;
     }
@@ -355,6 +460,14 @@ public:
             .get_control_plane()
             .get_fabric_context()
             .get_fabric_max_payload_size_bytes();
+    }
+
+    size_t get_channel_buffer_size_bytes() const override {
+        return tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device_);
+    }
+
+    tt::tt_fabric::Topology get_fabric_topology() const override {
+        return tt::tt_fabric::get_fabric_topology(*mesh_device_);
     }
 
     bool is_2D_routing_enabled() const override {
@@ -1906,8 +2019,17 @@ private:
     tt_fabric::FabricReliabilityMode current_fabric_reliability_mode_{
         tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE};
     std::optional<uint32_t> current_max_packet_size_{std::nullopt};
-    ChannelTrimmingMode current_channel_trimming_mode_{ChannelTrimmingMode::NONE};
+    ChannelTrimmingSettings current_channel_trimming_{};
     bool current_use_vc2_{false};
+    // Env-derived trimming rtoptions state, captured once before any test-driven modification
+    // (see snapshot_trimming_rtoptions / resolve_channel_trimming_settings).
+    struct TrimmingRtOptionsSnapshot {
+        bool capture_enabled;
+        std::string profile_path;
+        std::string override_path;
+    };
+    std::optional<TrimmingRtOptionsSnapshot> trimming_rtoptions_snapshot_{std::nullopt};
+    bool env_trimming_honor_logged_ = false;
     std::shared_ptr<MeshDevice> mesh_device_;
     std::shared_ptr<MeshWorkload> mesh_workload_;
     MeshId local_mesh_id_;

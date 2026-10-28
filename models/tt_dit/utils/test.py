@@ -33,6 +33,7 @@ line_params_8k = {**line_params, "fabric_router_config": create_fabric_router_co
 ring_params_8k = {**ring_params, "fabric_router_config": create_fabric_router_config()}
 ring_params_4k = {**ring_params, "fabric_router_config": create_fabric_router_config(4096)}
 line_params_req_exact_devices = {**line_params, "require_exact_physical_num_devices": True}
+line_params_8k_req_exact_devices = {**line_params_8k, "require_exact_physical_num_devices": True}
 ring_params_req_exact_devices = {**ring_params, "require_exact_physical_num_devices": True}
 ring_params_4k_req_exact_devices = {**ring_params_4k, "require_exact_physical_num_devices": True}
 ring_params_8k_req_exact_devices = {**ring_params_8k, "require_exact_physical_num_devices": True}
@@ -51,7 +52,7 @@ def is_global_rank_zero():
 
 def skip_if_unsupported_num_links(mesh_device, num_links):
     """Skip the test if the mesh device does not support the requested number of links."""
-    from models.common.modules.tt_ccl import get_num_links
+    from models.common.tt_ccl import get_num_links
 
     available_links = get_num_links(mesh_device)
 

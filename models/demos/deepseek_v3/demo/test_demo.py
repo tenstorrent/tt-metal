@@ -11,6 +11,7 @@ import pytest
 
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json, run_demo
 from models.demos.deepseek_v3.utils.test_utils import create_prompt_of_length, system_name_to_mesh_shape
+from models.demos.utils.common_demo_utils import report_e2e_metrics
 
 MODEL_PATH = Path(
     os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized-stacked")
@@ -419,6 +420,18 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
     expected_generations = min(len(prompts), case["max_users_per_row"] * int(mesh_shape[0]))
 
     assert len(results["generations"]) == expected_generations
+
+    # Report-only perf for the CI dashboard (#58596): surface the measured decode rate.
+    # No-op outside CI; emit from the primary host rank only to avoid multi-host races.
+    if _is_primary_artifact_writer():
+        decode_tps_u = results.get("statistics", {}).get(FINAL_DECODE_TPS_PER_USER)
+        if decode_tps_u is not None:
+            report_e2e_metrics(
+                "deepseek-v3-tg",
+                {"decode_t/s/u": float(decode_tps_u)},
+                batch_size=case["max_users_per_row"] * int(mesh_shape[0]),
+                model_type="llm",
+            )
 
     # Full-demo cases can stop early on EOS; stress/profile cases disable EOS and
     # should always produce the requested token count.

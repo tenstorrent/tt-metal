@@ -113,6 +113,7 @@ tt::tt_metal::WorkloadDescriptor HybridOverlapProgramFactory::create_workload_de
         combine::CombineL1{
             .fwd_arrived = &*op.fwd_arrived,
             .final_arrived = &*op.final_arrived,
+            .channels = &op.channel_semaphores,
             .arena = arena,
             .forwarding = t.forwarding_buffer.has_value() ? t.forwarding_buffer->buffer() : nullptr},
         &collectors);

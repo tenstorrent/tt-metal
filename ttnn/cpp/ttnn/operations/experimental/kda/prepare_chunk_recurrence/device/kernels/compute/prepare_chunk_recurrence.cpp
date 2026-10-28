@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/operations/experimental/kda/chronological_selections/device/kernels/chronology.hpp"
+#include "ttnn/cpp/ttnn/operations/experimental/kda/device/kernels/chronology.hpp"
 //
 // Chunk-parallel KDA prep. For cumulative vector gate G [C,K], factor
 // exp(G_i-G_j) inside each q/k dot as exp(G_i)*exp(-G_j):

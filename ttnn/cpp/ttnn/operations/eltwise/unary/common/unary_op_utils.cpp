@@ -1226,6 +1226,11 @@ bool uses_dedicated_compute_kernel(UnaryOpType op_type, std::optional<DataType> 
     return get_compute_kernel_path(op_type, input_dtype) != kGenericChainKernel;
 }
 
+bool compute_kernel_supports_work_queue(UnaryOpType op_type, std::optional<DataType> input_dtype) {
+    const std::string_view kernel = get_compute_kernel_path(op_type, input_dtype);
+    return kernel == kGenericChainKernel || kernel == "eltwise_identity_kernel.cpp" || kernel == "hardswish_kernel.cpp";
+}
+
 std::uint32_t pack_scalar_runtime_arg_impl(float param, DataType dtype) {
     if (dtype == DataType::UINT32 || dtype == DataType::INT32) {
         return std::bit_cast<std::uint32_t>(static_cast<std::int32_t>(param));

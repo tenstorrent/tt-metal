@@ -121,7 +121,7 @@ inline void calculate_lcm_init() {
     TTI_SFP_STOCH_RND(
         p_sfpu::sfp_stochrnd_rnd_mod::NearEven,
         0 /* imm8 */,
-        0 /* lreg_b */,
+        p_sfpu::LCONST_0 /* lreg_b, unused on the fp32 path */,
         p_sfpu::LREG6,
         p_sfpu::LREG6,
         p_sfpu::sfp_stochrnd_mod::FP32_TO_UINT16);  // lreg6 = q, exact integer < 2^15

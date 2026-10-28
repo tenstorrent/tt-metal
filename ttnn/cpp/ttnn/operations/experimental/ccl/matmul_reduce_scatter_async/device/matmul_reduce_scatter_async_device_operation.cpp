@@ -8,6 +8,8 @@
 #include "ttnn/operations/math.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
+#include "ttnn/device_operation_detail.hpp"
 
 /* Reduce Scatter Matmul fusion includes */
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/device/reduce_scatter_minimal_async_op_device_operation_types.hpp"
@@ -79,6 +81,38 @@ MatmulReduceScatterAsyncDeviceOperation::create_output_tensors(
     return {.mm = matmul_output_tensor, .reduce_scatter = tensor_args.persistent_output};
 }
 
+std::vector<tt::tt_metal::TensorTopology> MatmulReduceScatterAsyncDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    using tt::tt_metal::TensorTopology;
+    // {mm, reduce_scatter}. The matmul output takes the union label of input, weight and bias, as launch() would give
+    // a plain matmul. The reduce_scatter consumes that matmul output, so its label is the reduce_scatter of the matmul
+    // label (not of any tensor in tensor_args) along reduce_scatter_params.cluster_axis for reduce_scatter_params.dim;
+    // the caller's persistent output buffer is that result. The host prim always passes cluster_axis = nullopt and the
+    // program factory ranks that whole-mesh ring by `tensor_args.input`'s device-storage coordinates
+    // (get_linearized_index_from_physical_coord), so the label is spelled over them (over_storage_ring_order). With
+    // no honest label (nullopt, already reported) the reduce_scatter output keeps the matmul label, the label of the
+    // tensor it scatters.
+    const auto& input_topology = tensor_args.input.tensor_topology();
+    std::vector<std::reference_wrapper<const TensorTopology>> operands{
+        std::cref(input_topology), std::cref(tensor_args.weight.tensor_topology())};
+    if (tensor_args.bias.has_value()) {
+        operands.emplace_back(tensor_args.bias->tensor_topology());
+    }
+    TensorTopology mm_topology = ttnn::operations::ccl::common::union_topology(operands, input_topology.mesh_coords());
+
+    auto reduce_scatter_topology = ttnn::operations::ccl::common::over_storage_ring_order(
+        ttnn::operations::ccl::common::reduce_scatter_output_topology(
+            mm_topology,
+            args.reduce_scatter_params.cluster_axis,
+            tensor_args.input.device()->shape(),
+            static_cast<uint32_t>(tensor_args.input.logical_shape().rank()),
+            static_cast<int32_t>(args.reduce_scatter_params.dim)),
+        tensor_args.input,
+        args.reduce_scatter_params.cluster_axis);
+    TensorTopology output_topology = std::move(reduce_scatter_topology).value_or(mm_topology);
+    return {std::move(mm_topology), std::move(output_topology)};
+}
+
 ttsl::hash::hash_t MatmulReduceScatterAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "MatmulReduceScatterAsyncDeviceOperation::compute_program_hash is called");
@@ -143,7 +177,6 @@ ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation::tensor_return
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const ttnn::CoreGrid> core_grid) {
     using OperationType = ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation;
-    std::vector<IDevice*> devices = ttnn::ccl::get_active_physical_devices(input_tensor);
 
     /* Matmul setup */
     bool user_run_batched = ttnn::operations::matmul::detail::is_input_batched(weight_tensor.logical_shape());
@@ -180,7 +213,7 @@ ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation::tensor_return
     ttnn::experimental::prim::ReduceScatterMinimalAsyncParams reduce_scatter_params{
         .dim = dim,
         .num_links = num_links,
-        .ring_size = static_cast<uint32_t>(devices.size()),
+        .ring_size = static_cast<uint32_t>(input_tensor.device_storage().get_coords().size()),
         .output_mem_config = memory_config_rs.value_or(input_tensor.memory_config()),
         .optional_intermediate_mem_config = intermediate_memory_config_rs.value_or(input_tensor.memory_config()),
         .topology = topology,
@@ -194,8 +227,8 @@ ttnn::experimental::prim::MatmulReduceScatterAsyncDeviceOperation::tensor_return
         .num_buffers_per_channel = std::nullopt,
     };
 
-    auto operation_attributes = OperationType::operation_attributes_t(
-        reduce_scatter_params, matmul_struct, reduce_scatter_core_grid_offset, devices);
+    auto operation_attributes =
+        OperationType::operation_attributes_t(reduce_scatter_params, matmul_struct, reduce_scatter_core_grid_offset);
     auto tensor_args = OperationType::tensor_args_t{
         .input = input_tensor,
         .weight = weight_tensor,

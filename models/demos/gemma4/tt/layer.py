@@ -37,13 +37,30 @@ Forward flow (matching HF exactly):
   x = post_feedforward_layernorm(x)
   x = residual + x
   x *= layer_scalar
+
+GEMMA4_LAYER_NORM_FUSED=1 (decode rows, with GEMMA4_NORM_FUSED=2 and GEMMA4_MOE_FUSED=1): the same arithmetic
+as five ``custom_ops/fused_norm_decode`` programs per layer instead of 8 norms + 3 adds + 1 multiply:
+``post_attention_layernorm + residual``, ``[pre_feedforward_layernorm, pre_feedforward_layernorm_2, the router's
+norm * scale * hidden**-0.5]`` from one row-sum exchange, ``post_feedforward_layernorm_1(mlp) +
+post_feedforward_layernorm_2(experts)``, ``post_feedforward_layernorm + residual, * layer_scalar``, and the next
+layer's ``input_layernorm``.
+
+On the dense variants (31B / 12B, no MoE block) the same flags fuse the layer tail into three programs instead of
+4 norms (one program each under GEMMA4_NORM_FUSED=2) + 2 residual adds + 1 scalar multiply:
+``post_attention_layernorm + residual``, ``pre_feedforward_layernorm``, ``post_feedforward_layernorm + residual,
+* layer_scalar`` (plus the ``input_layernorm`` program at the top of the layer).
 """
+
 
 import torch
 
 import ttnn
+from models.demos.gemma4.custom_ops.fused_norm_decode import FusedNormDecode
 from models.demos.gemma4.tt.attention import Gemma4Attention, Gemma4AttentionConfig
+from models.demos.gemma4.tt.decode_matmul import flag, is_decode_rows
+from models.demos.gemma4.tt.dram_sharded import DramShardedLinear
 from models.demos.gemma4.tt.gemma4_attention_config import get_attention_program_config
+from models.demos.gemma4.tt.mesh_orientation import decode_flag
 from models.demos.gemma4.tt.moe import MoEBlock
 from models.demos.gemma4.tt.rms_norm import RMSNorm
 from models.demos.gemma4.tt.shared_mlp import SharedMLP
@@ -163,7 +180,15 @@ class Gemma4DecoderLayer:
                 dtype=experts_dtype,
                 router_dtype=router_dtype,
                 tensor_cache_path=f"{tensor_cache_path}/layer_{layer_idx}/moe" if tensor_cache_path else None,
+                layer_idx=layer_idx,
             )
+
+        # GEMMA4_NORM_FUSED=2: the router's scale as the row-replicated gamma of the layer's fused norm program
+        self._router_scale_full = (
+            FusedNormDecode.full_gamma(self.moe.router.scale)
+            if self.enable_moe_block and decode_flag("GEMMA4_NORM_FUSED") == "2" and self.moe.router.scale is not None
+            else None
+        )
 
         # Per-layer input embeddings (E2B/E4B feature)
         if self.hidden_size_per_layer_input:
@@ -194,6 +219,123 @@ class Gemma4DecoderLayer:
             )
             self.post_per_layer_input_norm = _norm("post_per_layer_input_norm")
 
+    def _fused_layer_norms_ok(self, rows):
+        """GEMMA4_LAYER_NORM_FUSED=1 on tp-only decode rows: the fused norm op (GEMMA4_NORM_FUSED=2) and the fused
+        MoE path (GEMMA4_MOE_FUSED=1, whole experts, no lanes, no decode kernel) are both in use, so the layer can
+        hand the router its pre-normed input."""
+        if not (flag("GEMMA4_LAYER_NORM_FUSED") and decode_flag("GEMMA4_NORM_FUSED") == "2"):
+            return False
+        if not self.enable_moe_block:
+            return False
+        moe = self.moe
+        return (
+            moe.fused_decode_ok()
+            and self.post_attention_layernorm.tt_weight_full is not None
+            and self._router_scale_full is not None
+            and not self.hidden_size_per_layer_input
+            and int(rows.shape[-1]) == self.hidden_size
+        )
+
+    def _fused_dense_layer_norms_ok(self, rows):
+        """GEMMA4_LAYER_NORM_FUSED=1 on the decode rows of a dense layer (no MoE block): the fused norm op
+        (GEMMA4_NORM_FUSED=2) carries the residual adds and the layer scalar, so the tail is three programs."""
+        if not (flag("GEMMA4_LAYER_NORM_FUSED") and decode_flag("GEMMA4_NORM_FUSED") == "2"):
+            return False
+        return (
+            not self.enable_moe_block
+            and not self.hidden_size_per_layer_input
+            and self.post_attention_layernorm.tt_weight_full is not None
+            and self.pre_feedforward_layernorm.tt_weight_full is not None
+            and self.post_feedforward_layernorm.tt_weight_full is not None
+            and int(rows.shape[-1]) == self.hidden_size
+            and not rows.is_sharded()
+        )
+
+    def _sharded_act_layout(self, proj, rows, is_decode):
+        """The L1 width-sharded activation layout of a DRAM-sharded decode matmul for the norm before it to write
+        (GEMMA4_NORM_SHARDED_OUT=1 on dense decode rows: the fused norm with GEMMA4_NORM_FUSED=2, the native
+        width-sharded LayerNorm on the matmul's grid otherwise; a path that cannot honour it returns interleaved
+        rows and the matmul reshards as before), else None."""
+        if not (is_decode and not self.enable_moe_block and decode_flag("GEMMA4_NORM_SHARDED_OUT") == "1"):
+            return None
+        if not is_decode_rows(rows) or rows.is_sharded():
+            return None
+        if not isinstance(proj, DramShardedLinear) or not proj.accepts_sharded_rows():
+            return None
+        return proj.act_memory_config
+
+    def _forward_tail_fused_dense(self, residual, attn_output):
+        """The dense layer after attention as three fused norm programs (see the module docstring)."""
+        eps = self.post_attention_layernorm.eps
+        gate_up_act = self._sharded_act_layout(self.shared_mlp.gate_up_proj, attn_output, True)
+        # post_attention_layernorm(attn) + residual
+        hidden = FusedNormDecode.op(
+            attn_output, [self.post_attention_layernorm.tt_weight_full], eps, residual=residual
+        )[0]
+        residual.deallocate(True)
+        attn_output.deallocate(True)
+        normed = FusedNormDecode.op(
+            hidden, [self.pre_feedforward_layernorm.tt_weight_full], eps, out_memory_configs=[gate_up_act]
+        )[0]
+        mlp_output = self.shared_mlp(normed)
+        normed.deallocate(True)
+        # post_feedforward_layernorm + residual, times the layer scalar
+        out = FusedNormDecode.op(
+            mlp_output,
+            [self.post_feedforward_layernorm.tt_weight_full],
+            eps,
+            residual=hidden,
+            scalars=[self.layer_scalar],
+        )[0]
+        mlp_output.deallocate(True)
+        hidden.deallocate(True)
+        return out
+
+    def _forward_tail_fused(self, residual, attn_output):
+        """The layer after attention as five fused norm programs (see the module docstring)."""
+        eps = self.post_attention_layernorm.eps
+        router = self.moe.router
+        # post_attention_layernorm(attn) + residual
+        hidden = FusedNormDecode.op(
+            attn_output, [self.post_attention_layernorm.tt_weight_full], eps, residual=residual
+        )[0]
+        residual.deallocate(True)
+        attn_output.deallocate(True)
+        # pre_feedforward_layernorm / pre_feedforward_layernorm_2 / the router norm from one exchange
+        normed, expert_input, router_in = FusedNormDecode.op(
+            hidden,
+            [
+                self.pre_feedforward_layernorm.tt_weight_full,
+                self.pre_feedforward_layernorm_2.tt_weight_full,
+                self._router_scale_full,
+            ],
+            eps,
+            scalars=[1.0, 1.0, router.scalar_root_size],
+        )
+        mlp_output = self.shared_mlp(normed)
+        normed.deallocate(True)
+        routing = router.fused_routing(router_in, self.moe.experts.weights, self.moe.mesh_config, prenormed=True)
+        router_in.deallocate(True)
+        expert_output = self.moe.experts(expert_input, routing)
+        expert_input.deallocate(True)
+        # post_feedforward_layernorm_1(mlp) + post_feedforward_layernorm_2(experts)
+        summed = FusedNormDecode.op(
+            mlp_output,
+            [self.post_feedforward_layernorm_1.tt_weight_full],
+            eps,
+            x2=expert_output,
+            gamma2=self.post_feedforward_layernorm_2.tt_weight_full,
+        )[0]
+        mlp_output.deallocate(True)
+        expert_output.deallocate(True)
+        # post_feedforward_layernorm + residual, times the layer scalar
+        out = FusedNormDecode.op(
+            summed, [self.post_feedforward_layernorm.tt_weight_full], eps, residual=hidden, scalars=[self.layer_scalar]
+        )[0]
+        summed.deallocate(True)
+        hidden.deallocate(True)
+        return out
+
     def __call__(
         self,
         hidden_states,
@@ -213,9 +355,12 @@ class Gemma4DecoderLayer:
         valid_seq_len=None,
         sequential_kv_write=False,
         rope_presliced=False,
+        rope_prepared=None,
         packed=None,
         chunk_start_idx=None,
         chunk_page_table=None,
+        mm_attn_mask=None,
+        traced_short_bucket=False,
     ):
         """
         Decoder layer forward pass.
@@ -236,7 +381,14 @@ class Gemma4DecoderLayer:
         """
         # 1. Attention block: norm -> attn -> post_attn_norm -> residual add
         residual = hidden_states
-        normed = self.input_layernorm.forward(hidden_states)
+        # GEMMA4_NORM_SHARDED_OUT=1 (dense decode rows, fused norm): the normed rows land in the DRAM-sharded wqkv
+        # matmul's L1 activation layout, so that matmul skips its interleaved -> sharded copy.
+        wqkv_act = self._sharded_act_layout(self.self_attn.weights.wqkv, hidden_states, is_decode)
+        normed = (
+            self.input_layernorm.forward(hidden_states, out_memory_config=wqkv_act)
+            if wqkv_act is not None
+            else self.input_layernorm.forward(hidden_states)
+        )
         if not is_decode and batch_size > 1:
             attn_in = ttnn.reshape(normed, [batch_size, 1, normed.shape[-2] // batch_size, -1])
         else:
@@ -258,10 +410,30 @@ class Gemma4DecoderLayer:
             valid_seq_len=valid_seq_len,
             sequential_kv_write=sequential_kv_write,
             rope_presliced=rope_presliced,
+            rope_prepared=rope_prepared,
             packed=packed,
             chunk_start_idx=chunk_start_idx,
             chunk_page_table=chunk_page_table,
+            mm_attn_mask=mm_attn_mask,
+            traced_short_bucket=traced_short_bucket,
         )
+
+        if (
+            not isinstance(attn_output, torch.Tensor)
+            and is_decode
+            and self.enable_moe_block
+            and is_decode_rows(attn_output)
+            and self._fused_layer_norms_ok(attn_output)
+        ):
+            return self._forward_tail_fused(residual, attn_output)
+        if (
+            not isinstance(attn_output, torch.Tensor)
+            and is_decode
+            and not self.enable_moe_block
+            and is_decode_rows(attn_output)
+            and self._fused_dense_layer_norms_ok(attn_output)
+        ):
+            return self._forward_tail_fused_dense(residual, attn_output)
 
         if isinstance(attn_output, torch.Tensor):
             hidden_states = residual
@@ -277,7 +449,14 @@ class Gemma4DecoderLayer:
 
         # 2. MLP + MoE block
         residual = hidden_states
-        normed = self.pre_feedforward_layernorm.forward(hidden_states)
+        # GEMMA4_NORM_SHARDED_OUT=1 (dense decode rows): the normed rows land in the DRAM-sharded gate_up matmul's
+        # L1 activation layout (the fused tail above does the same for its pre-FF norm)
+        gate_up_act = self._sharded_act_layout(self.shared_mlp.gate_up_proj, hidden_states, is_decode)
+        normed = (
+            self.pre_feedforward_layernorm.forward(hidden_states, out_memory_config=gate_up_act)
+            if gate_up_act is not None
+            else self.pre_feedforward_layernorm.forward(hidden_states)
+        )
         mlp_output = self.shared_mlp(normed)
         normed.deallocate(True)
 

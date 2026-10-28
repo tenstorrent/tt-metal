@@ -20,8 +20,12 @@
 #include "api/compute/experimental/custom_mm.h"
 #include "api/compute/pack.h"
 
-// SFPU ops over the result rows only: a 1x32 matmul result occupies the first rows of DST faces 0 and 1.
-constexpr uint32_t kRowIters = 2;
+// SFPU ops over the result rows only: a [ROWS, 32] matmul result occupies the first ROWS rows of DST faces 0 and 1
+// (one SFPU iteration covers two face rows; ROWS = 1: 2 iterations as for tile heights <= 4).
+#ifndef ROWS
+#define ROWS 1
+#endif
+constexpr uint32_t kRowIters = ROWS <= 4 ? 2 : ROWS / 2;
 ALWI void mul_rows(uint32_t a, uint32_t b, uint32_t out) {
     MATH((SFPU_BINARY_CALL(
         DST_SYNC_MODE,
@@ -60,9 +64,8 @@ void kernel_main() {
     constexpr uint32_t head_tiles = get_compile_time_arg_val(10);
 
     constexpr bool transpose = false;
-    constexpr bool split_acc = true;
-    constexpr bool dense_packing = false;
-    custom_mm_block_init<transpose, split_acc, dense_packing>(cb_in0, cb_w, cb_out);
+    constexpr auto dest_layout = CustomMmDestLayout::DefaultSplitAcc;
+    custom_mm_block_init<transpose, dest_layout>(cb_in0, cb_w, cb_out);
 
     bool rope_inputs = false;
     cb_wait_front(cb_in0, kt);
@@ -71,7 +74,7 @@ void kernel_main() {
         const bool rope = n < rope_cols;
         tile_regs_acquire();
         cb_wait_front(cb_w, kt);
-        custom_mm_block<true>(cb_in0, cb_w, 0, 0, 0, kt);
+        custom_mm_block<dest_layout>(cb_in0, cb_w, 0, 0, 0, kt);
         cb_pop_front(cb_w, kt);
         tile_regs_commit();
         const uint32_t cb_dst = rope ? cb_y : cb_out;
@@ -90,12 +93,12 @@ void kernel_main() {
         }
         const uint32_t t = (n < q_cols ? n : n - q_cols) % head_tiles;
         cb_wait_front(cb_y, 1);
-        custom_mm_block_init_short<transpose, split_acc, dense_packing>(cb_y, cb_rot, cb_out);
+        custom_mm_block_init_short<transpose, dest_layout>(cb_y, cb_rot, cb_out);
         tile_regs_acquire();
-        custom_mm_block<true>(cb_y, cb_rot, 0, 0, 0, 1);                // y
-        custom_mm_block<true>(cb_y, cb_rot, 0, 1, 1, 1);                // y @ T
-        custom_mm_block<true>(cb_cs, cb_rot, t, 0, 2, 1);               // cos_t
-        custom_mm_block<true>(cb_cs, cb_rot, head_tiles + t, 0, 3, 1);  // sin_t
+        custom_mm_block<dest_layout>(cb_y, cb_rot, 0, 0, 0, 1);                // y
+        custom_mm_block<dest_layout>(cb_y, cb_rot, 0, 1, 1, 1);                // y @ T
+        custom_mm_block<dest_layout>(cb_cs, cb_rot, t, 0, 2, 1);               // cos_t
+        custom_mm_block<dest_layout>(cb_cs, cb_rot, head_tiles + t, 0, 3, 1);  // sin_t
         mul_binary_tile_init();
         mul_rows(0, 2, 0);
         mul_rows(1, 3, 1);
@@ -108,8 +111,8 @@ void kernel_main() {
         pack_tile(0, cb_out);
         tile_regs_release();
         cb_push_back(cb_out, 1);
-        custom_mm_block_init_short<transpose, split_acc, dense_packing>(cb_in0, cb_w, cb_out);
+        custom_mm_block_init_short<transpose, dest_layout>(cb_in0, cb_w, cb_out);
     }
     cb_pop_front(cb_in0, kt);
-    custom_mm_block_uninit<dense_packing>();
+    custom_mm_block_uninit<dest_layout>(cb_out);
 }

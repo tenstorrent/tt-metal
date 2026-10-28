@@ -5,6 +5,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/mcast/kernel/mcast_args_metal2.hpp"
+#include "internal/local_mem/address_access.h"
 
 void kernel_main() {
     using namespace dataflow_kernel_lib;
@@ -15,7 +16,8 @@ void kernel_main() {
     const uint32_t seed = get_arg(args::seed);
     const bool acknowledges = get_arg(args::acknowledges) != 0;
     auto pad = Scratchpad<uint32_t>(scratch::pad);
-    const uint32_t source = pad.get_base_address();
+    // Raw address: the mcast helpers take uint32_t L1 addresses and the host checks the reported base.
+    const uint32_t source = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(pad.local_mem()));
     auto words = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(source);
     Noc noc;
     auto sender = channel.optional_sender(noc);

@@ -1,7 +1,7 @@
 import json
 import pytest
 import pathlib
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from infra.data_collection.github import workflows
 from infra.data_collection.cicd import create_cicd_json_for_data_analysis
@@ -17,6 +17,7 @@ from infra.data_collection.github.utils import (
 )
 from infra.data_collection.pydantic_models import JobStatus
 from infra.data_collection.pydantic_models import Step
+from infra.data_collection.pydantic_models import Test
 from loguru import logger
 
 INFRA_TESTS_DIR = pathlib.Path(__file__).parent.parent
@@ -174,6 +175,30 @@ def test_create_pipeline_json_for_gtest_testcases(
     assert job.job_status == JobStatus.success if job_success else JobStatus.failure
     if check_failing_tests:
         assert len([x for x in job.tests if not x.success]) > 0
+
+
+@pytest.mark.parametrize("hang_first", [False, True])
+def test_dedupe_keeps_hang_tag_on_timed_winner(hang_first):
+    start = datetime(2026, 10, 20, 12, 0, 0)
+    row = dict(
+        test_start_ts=start,
+        test_case_name="test_x",
+        filepath="tests/a.py",
+        category="other",
+        success=False,
+        skipped=False,
+        full_test_name="tests/a.py::test_x",
+    )
+    timed = Test(
+        **row, test_end_ts=start + timedelta(seconds=5), error_message="TT_THROW timeout", tags={"other": "kept"}
+    )
+    hang = Test(**row, test_end_ts=start, error_message="[HANG DETECTED]", tags={"failure_type": "hang"})
+
+    [result] = workflows.deduplicate_tests_by_full_name([hang, timed] if hang_first else [timed, hang])
+
+    # Same winner as before; only the hang tag is added.
+    assert result.model_dump(exclude={"tags"}) == timed.model_dump(exclude={"tags"})
+    assert result.tags == {"other": "kept", "failure_type": "hang"}
 
 
 def test_gtest_disabled_tests_do_not_get_epoch_timestamp():

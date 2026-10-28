@@ -24,6 +24,26 @@ constexpr uint32_t data_cbuf_index = get_compile_time_arg_val(2);
 constexpr uint32_t metadata_enabled = get_compile_time_arg_val(3);
 constexpr uint32_t metadata_l1_addr = get_compile_time_arg_val(4);
 constexpr uint32_t metadata_size_bytes = get_compile_time_arg_val(5);
+// Metadata region layout. Ring (metadata_ring_slots > 1, a power of two): header words records sent (+0,
+// written here) and records claimed (+L1_ALIGNMENT, written by the ack op), then metadata_ring_slots record
+// slots of metadata_slot_stride bytes from metadata_data_offset. Record k lives in slot k % metadata_ring_slots;
+// the ack op compares the two counts to avoid overrunning unsent slots. Otherwise: one record at
+// metadata_l1_addr and no header.
+constexpr uint32_t metadata_ring_slots = get_compile_time_arg_val(6);
+constexpr uint32_t metadata_slot_stride = get_compile_time_arg_val(7);
+constexpr uint32_t metadata_data_offset = get_compile_time_arg_val(8);
+
+bool all_sent_acked(const SocketSenderInterface& socket) {
+    invalidate_l1_cache();
+    for (uint32_t i = 0; i < socket.num_downstreams; ++i) {
+        const auto* bytes_acked =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(socket.bytes_acked_base_addr + i * bytes_acked_size_bytes);
+        if (*bytes_acked != socket.bytes_sent) {
+            return false;
+        }
+    }
+    return true;
+}
 
 void kernel_main() {
     Noc noc;
@@ -45,6 +65,9 @@ void kernel_main() {
     // (noc_write_init_state + noc_async_wide_write_any_len_with_state, used below to drain into the
     // host-pinned socket FIFO) has no Device 2.0 equivalent; Noc::inline_dw_write is single-DW only.
     noc_write_init_state<write_cmd_buf>(NOC_INDEX, NOC_UNICAST_WRITE_VC);
+
+    uint32_t metadata_sent = 0;
+    volatile tt_l1_ptr uint32_t* metadata_sent_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(metadata_l1_addr);
 
     bool terminated = false;
     while (!terminated) {
@@ -116,9 +139,11 @@ void kernel_main() {
             // is the atomic unit for push/notify, but the PCIe write only needs to transfer the
             // actual metadata — the rest of the FIFO page is stale/zero and the host only copies
             // metadata_size_bytes out of it.
+            const uint32_t record_l1_addr =
+                metadata_l1_addr + metadata_data_offset + (metadata_sent % metadata_ring_slots) * metadata_slot_stride;
             noc_async_wide_write_any_len_with_state(
                 NOC_INDEX,
-                metadata_l1_addr,
+                record_l1_addr,
                 pcie_xy_enc,
                 ((static_cast<uint64_t>(write_addr_hi) << 32) | sender_socket.downstream_fifo_addr) +
                     sender_socket.write_ptr,
@@ -127,6 +152,11 @@ void kernel_main() {
 
             socket_push_pages(sender_socket, 1);
             socket_notify_receiver(sender_socket);
+            ++metadata_sent;
+            if constexpr (metadata_ring_slots > 1) {
+                // Published only after the slot's bytes left L1, so the ack op may reuse it.
+                *metadata_sent_ptr = metadata_sent;
+            }
         }
     }
 
@@ -135,5 +165,9 @@ void kernel_main() {
     // PCIe writes. Firmware does not reset MID before the next kernel on this core.
     noc_async_write_clear_pcie_state(NOC_INDEX, write_cmd_buf);
     update_socket_config(sender_socket);
-    socket_barrier(sender_socket);
+    // socket_barrier, except teardown can abandon data the host never read (control word at +L1_ALIGNMENT).
+    volatile tt_l1_ptr uint32_t* abandon =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_semaphore_addr + L1_ALIGNMENT);
+    while (!all_sent_acked(sender_socket) && *abandon != 1) {
+    }
 }
