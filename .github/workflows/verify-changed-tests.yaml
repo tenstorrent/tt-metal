@@ -70,6 +70,8 @@ env:
   #                                  which installs SFPI and runs the cmd from
   #                                  tt_metal/tt-llk in the LLK CI image. From /work
   #                                  the relative ./tests/run_hardware_free.sh misses.
+  #   llk_perf_placement_tests.yaml  runs only through llk-perf-impl.yaml, which sets
+  #                                  LLK_PERF_NODE_LIST to the tests stage 1 flagged.
   UNSUPPORTED_YAMLS: >-
     vllm_model_tests.yaml
     ttnn_sweep_tests.yaml
@@ -78,6 +80,7 @@ env:
     llk_ttnop_tests.yaml
     llk_sfpu_report_tests.yaml
     llk_hardware_free_tests.yaml
+    llk_perf_placement_tests.yaml
 
   # TEMPORARY. Unlike UNSUPPORTED_YAMLS, the gate can dispatch these fine -- this is
   # not a compatibility exemption, and an edit to one of these yamls still scopes

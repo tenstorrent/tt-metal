@@ -4,7 +4,7 @@
 
 """Tests for stage 2 of the perf gate (tt_metal/tt-llk/perf/placement_check.py).
 
-Run: pytest test_perf_placement_check.py
+Run: pytest tests/hardware_free/perf/test_perf_placement_check.py
 """
 
 import json
@@ -13,7 +13,7 @@ import sys
 
 import pandas as pd
 
-_PERF = pathlib.Path(__file__).parents[2] / "perf"
+_PERF = pathlib.Path(__file__).parents[3] / "perf"
 sys.path.insert(0, str(_PERF))
 from placement_check import (  # noqa: E402
     POSITIONS,
@@ -78,7 +78,15 @@ def _candidates(tmp_path, delta_pct=20.0):
 
 
 def _decide(tmp_path, base, cur, over_cap=()):
-    return decide(_candidates(tmp_path), base, cur, 0.05, 30, {}, over_cap)
+    return decide(
+        _candidates(tmp_path),
+        base,
+        cur,
+        threshold=0.05,
+        min_cycles=30,
+        module_thresholds={},
+        over_cap=over_cap,
+    )
 
 
 def test_values_match_across_csv_and_typed_forms():
@@ -297,7 +305,15 @@ def test_other_markers_are_not_re_measured(tmp_path):
     candidates = _candidates(tmp_path)
     others = read_candidates(tmp_path / "s1.regressions.csv", tile_loop=False)
 
-    results = decide(candidates, base, cur, 0.05, 30, {}, (), others)
+    results = decide(
+        candidates,
+        base,
+        cur,
+        threshold=0.05,
+        min_cycles=30,
+        module_thresholds={},
+        others=others,
+    )
 
     assert [(r["outcome"], r["why"]) for r in results] == [
         ("not-reproduced", ""),

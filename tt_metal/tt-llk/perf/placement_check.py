@@ -239,7 +239,14 @@ def decide(
         results.append(row)
     for c in others:
         results.append(
-            dict(c, deltas=[], threads=[], slower=0, outcome="unmeasured", why="not a TILE_LOOP point")
+            dict(
+                c,
+                deltas=[],
+                threads=[],
+                slower=0,
+                outcome="unmeasured",
+                why="not a TILE_LOOP point",
+            )
         )
     return results
 

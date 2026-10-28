@@ -4,8 +4,8 @@
 """Fingerprint of the code a TILE_LOOP zone executes, independent of the address it is linked at.
 
 The window is every instruction of run_kernel reachable from the start of the TILE_LOOP zone up to its end, plus the
-functions those instructions call. The zone is found by its id: either the zone_reserve/zone_record calls or the
-inline lui of its START/END entry word. Branch targets inside the window are written as
+functions those instructions call. The zone is found by its id in the inline lui of its START/END entry word
+(profiler.h zone_scoped). Branch targets inside the window are written as
 positions in the window and jumps out of it as "out", so moving code leaves the fingerprint unchanged and a change
 to an executed instruction changes it.
 """
@@ -42,6 +42,7 @@ def _functions(text):
     return funcs
 
 
+# Mirrors hashString16 in tests/helpers/include/profiler.h: if that changes, every window becomes "no-window".
 def _hash16(text):
     h = 2166136261
     for c in text:
@@ -49,28 +50,11 @@ def _hash16(text):
     return (h ^ (h >> 16)) & 0xFFFF
 
 
-def _is_call(mnemonic, operands, symbol):
-    return (mnemonic in _CALLS or mnemonic.startswith("jal")) and symbol in operands
-
-
-def _a0_before(insns, i):
-    hi = lo = None
-    for _, mnemonic, operands in reversed(insns[max(0, i - 6) : i]):
-        args = [a.strip() for a in operands.split(",")]
-        if not args or args[0] != "a0":
-            continue
-        if mnemonic == "addi" and len(args) == 3 and args[1] == "a0" and lo is None:
-            lo = int(args[2], 0)
-        elif mnemonic == "lui" and hi is None:
-            hi = int(args[1], 0) << 12
-            break
-        elif mnemonic == "li":
-            return int(args[1], 0) & 0xFFFF
-    return None if hi is None else (hi + (lo or 0)) & 0xFFFF
-
-
 def _zone_lui(mnemonic, operands):
-    """(kind, id) for the inline zone entry word: lui of (0xA or 0xB) << 16 | id, else None."""
+    """(kind, id) for the inline zone entry word: lui of (0xA or 0xB) << 16 | id, else None.
+
+    0xA / 0xB and the shift of 16 mirror the zone START / END entry types in tests/helpers/include/profiler.h.
+    """
     if mnemonic not in ("lui", "c.lui"):
         return None
     try:
@@ -83,13 +67,11 @@ def _zone_lui(mnemonic, operands):
 def _starts(insns, k):
     _, mnemonic, operands = insns[k]
     lui = _zone_lui(mnemonic, operands)
-    return _is_call(mnemonic, operands, "zone_reserve") or (lui and lui[0] == "start")
+    return lui is not None and lui[0] == "start"
 
 
 def _ends(insns, k, ids):
     _, mnemonic, operands = insns[k]
-    if _is_call(mnemonic, operands, "zone_record"):
-        return _a0_before(insns, k) in ids
     lui = _zone_lui(mnemonic, operands)
     return lui is not None and lui[0] == "end" and lui[1] in ids
 
