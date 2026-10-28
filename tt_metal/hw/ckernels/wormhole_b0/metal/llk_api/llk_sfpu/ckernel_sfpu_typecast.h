@@ -96,7 +96,7 @@ inline void calculate_typecast_fp32_to_uint16() {
         // mode, so this case uses the plain loop. The init still armed the macro Misc word, so
         // disarm the leftover state first (WH hangs otherwise running a plain loop with it, #46751).
         disarm_sfploadmacro_misc();
-#pragma GCC unroll 0
+#pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
             TTI_SFPSWAP(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 9);
@@ -280,7 +280,7 @@ inline void calculate_typecast_fp32_to_fp16b() {
     // low 16 bits (&0xFFFF0000), and store FP32 for 32-bit-Dest correctness. The historical
     // macro relied on a FP16B store to truncate and does not reproduce the masked-FP32 result,
     // so it is not equivalent and is not restored here. See #46751.
-#pragma GCC unroll 0
+#pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
         TTI_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0);
@@ -330,7 +330,7 @@ inline void calculate_typecast_uint16_to_fp32() {
         // this case uses the plain loop. The init still armed the macro Misc word, so disarm the
         // leftover state first (WH hangs otherwise running a plain loop with it, #46751).
         disarm_sfploadmacro_misc();
-#pragma GCC unroll 0
+#pragma GCC unroll 8
         for (int d = 0; d < ITERATIONS; d++) {
             TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_3, 0);
             TTI_SFPAND(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
