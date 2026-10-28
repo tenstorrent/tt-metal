@@ -709,6 +709,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         # in-progress prompt, bind the continuations of a call before claiming users for its new prompts (the plugin shifts state slots when the first finisher starts decoding), and tell the
         # plugin how many prompts the rows can still hold (``prefill_row_capacity``). Off = the shipped placement, unchanged.
         self.row_aware = os.environ.get("DSV41_PREFILL_ROW_AWARE", "0") == "1"
+        self.final_seen = False  # the plugin sent prefill_final flags at least once
         self.pf_done = (
             set()
         )  # users whose last prefill piece ended their prompt (decoding / about to decode): their prefill slot holds nothing to protect
@@ -971,6 +972,10 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         U, Up = getattr(self.m, "U", None), getattr(self.m, "Up", None)
         if not (self.row_aware and U and Up and Up < U):
             return None
+        if (
+            not self.final_seen
+        ):  # (without the plugin's prefill_final flags a finished prompt cannot be told from one in progress: no limit rather than a wrong one)
+            return None
         busy = self._busy_rows()
         free_rows = {p // U for p in range(self.B) if p not in self.slots.live}
         return len(free_rows - busy)
@@ -989,13 +994,13 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             if st <= 0:
                 continue
             p = self.inprog.find(st, toks[i, :st], exclude=[c for c in chosen if c is not None])
-            if p is not None and resume.get(p) != st:
-                p = None
             if p is not None:
-                self.slots.bind(empty_slots[i], p)
+                self.slots.bind(
+                    empty_slots[i], p
+                )  # (also when its carried state is gone: it recomputes in its own user, no second user is claimed)
                 self.slots.live.add(p)
                 chosen[i] = p
-            else:
+            if p is None or resume.get(p) != st:
                 (logger.info if getattr(self.m, "apc", None) is not None else logger.warning)(
                     f"DSV4.1 chunk continuation at {st} without carried state: recomputing from position 0"
                 )
@@ -1210,6 +1215,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             self.book.set_prompt(p, toks[i, : ends[i]].reshape(-1))
             self.inprog.update(p, ends[i], toks[i])
             if self.row_aware:
+                self.final_seen = self.final_seen or final_map is not None
                 if final_map is not None and final_map.get(p):
                     self.pf_done.add(p)
                 else:

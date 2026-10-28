@@ -24,8 +24,11 @@ import os
 import sys
 from types import SimpleNamespace
 
+import pytest
 import torch
 from loguru import logger
+
+from models.demos.blackhole.deepseek_v41_flash.tt import vllm_state as VS
 
 CHUNK = 512
 BUDGET = 16384  # max_num_batched_tokens
@@ -49,7 +52,7 @@ def _real_model_methods():
 
 
 # ---- the fake device model ------------------------------------------------------------------------------------------------------
-def make_fake_model(B=8, U=2):
+def make_fake_model():
     from models.demos.blackhole.deepseek_v41_flash.tests.test_vllm_interface import FakeInterleaveModel
 
     Model = _real_model_methods()
@@ -217,15 +220,19 @@ class PluginSim:
         return None if fn is None else fn()
 
     def _admit(self):
-        """port of scheduler._hold_back_beyond_partial_cap (the split regime: the budget cannot hold a whole prompt)"""
+        """port of scheduler._hold_back_beyond_partial_cap (the split regime: the budget cannot hold a whole prompt) + the row-aware cap: with ``row_cap`` every prompt that is admitted
+        (a split one, which keeps its row, or one that fits the budget left and finishes in this step, which still prefills in a row) takes one of the ``prefill_row_capacity()`` clean rows
+        """
         slots = self.cap - len(self.partial)
+        rows_left = None
         if self.row_cap:
-            c = self._model_capacity()
-            if c is not None:
-                slots = min(slots, c)
+            rows_left = self._model_capacity()
         left = self.budget - sum(self.reqs[r].L - self.reqs[r].computed for r in self.partial)
         adm = []
+        room = self.n_slots - len(self.partial) - len(self.decoders)  # max_num_seqs
         for rid in list(self.waiting):
+            if len(adm) >= room or (rows_left is not None and rows_left <= 0):
+                break
             q = self.reqs[rid]
             need = q.L - q.computed
             if need <= left:
@@ -237,6 +244,8 @@ class PluginSim:
                 left = 0
             else:
                 break
+            if rows_left is not None:
+                rows_left -= 1
         return adm
 
     def arrive(self):
@@ -357,7 +366,19 @@ class PluginSim:
         return n
 
 
-def build(monkeypatch=None, row_aware=False, up=1, n_req=8, prompt=131076, skew=0.4, closed_loop_total=None, **kw):
+def build(
+    row_aware=False,
+    row_cap=None,
+    B=8,
+    U=2,
+    up=1,
+    n_req=8,
+    prompt=131076,
+    skew=0.4,
+    closed_loop_total=None,
+    lengths=None,
+    **kw,
+):
     os.environ["DSV41_VLLM_INTERLEAVE"] = "1"
     os.environ["DSV41_VLLM_CHUNK"] = str(CHUNK)
     if row_aware:
@@ -367,16 +388,17 @@ def build(monkeypatch=None, row_aware=False, up=1, n_req=8, prompt=131076, skew=
     from models.demos.blackhole.deepseek_v41_flash.tt.generator_vllm import DeepseekV41ForCausalLM
 
     RowModel = make_fake_model()
-    m = RowModel(8, 2, up)
-    gen = DeepseekV41ForCausalLM(SimpleNamespace(m=m, prefill_chunk=None, auto_chunk=lambda n: 256), 8, prompt + 4096)
-    sim = PluginSim(gen, m, row_cap=row_aware, **kw)
-    sim.future = [Req(i, prompt, 100 + i, i * skew) for i in range(n_req)]
+    m = RowModel(B, U, up)
+    gen = DeepseekV41ForCausalLM(SimpleNamespace(m=m, prefill_chunk=None, auto_chunk=lambda n: 256), B, prompt + 4096)
+    sim = PluginSim(gen, m, n_slots=B, row_cap=row_aware if row_cap is None else row_cap, **kw)
+    ln = (lambda i: prompt) if lengths is None else (lambda i: lengths[i % len(lengths)])
+    sim.future = [Req(i, ln(i), 100 + i, i * skew) for i in range(n_req)]
     nxt = [n_req]
     if closed_loop_total:  # closed loop: a finished request is replaced by the next one (c8, n = closed_loop_total)
 
         def on_finish(q):
             if nxt[0] < closed_loop_total:
-                sim.future.append(Req(nxt[0], prompt, 100 + nxt[0], sim.t))
+                sim.future.append(Req(nxt[0], ln(nxt[0]), 100 + nxt[0], sim.t))
                 nxt[0] += 1
 
         sim.on_finish = on_finish
@@ -421,10 +443,105 @@ def timeline(sim, n=45):
 
 
 # ---- tests ---------------------------------------------------------------------------------------------------------------------------
+def _stats(sim, m, c, ttft):
+    v = sorted(ttft.values())
+    return {
+        "lost": c.n,
+        "recomputed_frac": sim.recomp_tokens / max(m.computed, 1),
+        "conflicts": getattr(sim.gen, "row_stats", {}).get("conflicts", 0),
+        "ttft_mean": sum(v) / len(v),
+        "ttft_max": v[-1],
+    }
+
+
 def test_baseline_reproduces_the_carried_state_loss():
+    """the 131072 c8 pattern (8 prompts 0.4 s apart): the first finisher's decode shifts the state slots of the continuing prompts, the cascade starts, then two prompts share a row"""
     sim, m, c, ttft = run_case(row_aware=False, n_req=8, prompt=131076)
     assert c.n > 0, "the collision must reproduce with the switch off"
     assert sim.recomp_tokens / max(m.computed, 1) > 0.15
+    # the cascade at the first step after the first finisher: the new prompt (batch row 0) takes the user of a continuation, every continuation recomputes from 0
+    first = next(
+        k for k, e in enumerate(sim.log) if e[0] == "prefill" and any(x[1] == 0 and x[2] > 64 * CHUNK for x in e[1])
+    )
+    lost = [x for x in sim.log[first][1] if x[1] == 0 and x[2] > 64 * CHUNK]
+    assert (
+        sim.log[first - 1][0] == "decode" and len(lost) == 3
+    )  # right after the first finisher decoded: all 3 continuations recompute
+
+
+def test_row_aware_placement_keeps_every_carried_state():
+    base = _stats(*run_case(row_aware=False, n_req=8, prompt=131076))
+    fix = _stats(*run_case(row_aware=True, n_req=8, prompt=131076))
+    assert fix["lost"] == 0 and fix["recomputed_frac"] == 0 and fix["conflicts"] == 0
+    assert fix["ttft_max"] < 0.5 * base["ttft_max"] and fix["ttft_mean"] < 0.6 * base["ttft_mean"]
+
+
+@pytest.mark.parametrize("row_cap", [False, True])
+def test_closed_loop_c8_n16(row_cap):
+    """the benchmark pattern: closed loop c8, 16 requests; the model-side placement alone, and with the plugin cap on the clean rows (scheduler asks ``prefill_row_capacity``)"""
+    base = _stats(*run_case(row_aware=False, n_req=8, closed_loop_total=16, prompt=65540))
+    fix = _stats(*run_case(row_aware=True, row_cap=row_cap, n_req=8, closed_loop_total=16, prompt=65540))
+    assert base["lost"] > 0
+    assert fix["lost"] == 0 and fix["recomputed_frac"] == 0
+    if row_cap:
+        assert fix["conflicts"] == 0
+    assert fix["ttft_mean"] < base["ttft_mean"]
+
+
+def test_b4_is_unchanged_by_the_switch():
+    """B=4 (U=1): no prefill slot sharing; the switch must not change one placement (same users, slots, chunks per step)"""
+    runs = []
+    for ra in (False, True):
+        sim, m, c, ttft = run_case(row_aware=ra, row_cap=False, B=4, U=1, n_req=8, closed_loop_total=12, prompt=32772)
+        assert c.n == 0
+        runs.append([(e[0], [(x[0], x[1], x[2], x[3], x[4]) for x in e[1]]) for e in sim.log])
+    assert runs[0] == runs[1]
+
+
+def test_prefill_row_capacity_unit():
+    sim, gen, m = build(row_aware=True)
+    assert gen.prefill_row_capacity() is None  # no prefill_final flag seen yet: no limit
+    gen.final_seen = True
+    assert gen.prefill_row_capacity() == 4  # nothing live: every row can take a prompt
+    # decoders on both users of row 3, prompts in progress in rows 0, 1, 2 (carried state intact)
+    gen.slots.live.update({6, 7, 0, 2, 4})
+    for p in (0, 2, 4):
+        gen.inprog.update(p, 4096, torch.arange(4096))
+        m.pf_resume[p] = 4096
+    assert gen.prefill_row_capacity() == 0  # row 3 is full, rows 0-2 hold a prompt each
+    m.pf_resume.pop(4)  # the prompt of row 2 lost its state (nothing to protect any more)
+    assert gen.prefill_row_capacity() == 1
+    gen.pf_done.add(2)  # the prompt of row 1 finished: decoding
+    assert gen.prefill_row_capacity() == 2
+    gen.row_aware = False
+    assert gen.prefill_row_capacity() is None  # switch off: no answer for the plugin
+    sim, gen, m = build(row_aware=True, B=4, U=1)
+    gen.final_seen = True
+    assert gen.prefill_row_capacity() is None  # U == Up (B=4): not applicable
+
+
+def test_claim_rowaware_unit():
+    st = VS.SlotTable(8, 8)
+    U = 2
+    # users 0 (row 0) decoding, 2 (row 1) in progress: a new prompt goes to a row without in-progress prompt and the fewest live users: row 2 or 3, not row 0 / 1
+    st.live.update({0, 2})
+    p, clean = st.claim_rowaware(5, {1}, U)
+    assert clean and p // U in (2, 3) and p in st.live and sorted(st.phys) == list(range(8))
+    # the logical slot's own user is not offered while it is live (a continuation of the call may be bound to it)
+    st = VS.SlotTable(8, 8)
+    st.live.update({1})
+    p, _ = st.claim_rowaware(1, set(), U)
+    assert p != 1
+    # no clean row left: a busy row is the last resort and says so
+    st = VS.SlotTable(8, 8)
+    st.live.update({0, 2, 4, 6})
+    p, clean = st.claim_rowaware(3, {0, 1, 2, 3}, U)
+    assert not clean and p in (1, 3, 5, 7)
+    # decoders spread: the row with fewer live users first
+    st = VS.SlotTable(8, 8)
+    st.live.update({0, 1, 2})  # rows 0 (2 live), 1 (1 live)
+    p, clean = st.claim_rowaware(7, set(), U)
+    assert clean and p // U in (2, 3)
 
 
 if __name__ == "__main__":

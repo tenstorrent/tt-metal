@@ -155,8 +155,12 @@ class SlotTable:
         for q in self.live:
             live_row[q // U] = live_row.get(q // U, 0) + 1
         free = [j for j in range(self.n_logical) if self.phys[j] not in self.live]
-        if not free:
-            raise ValueError(f"no free model user for the prefill of slot {logical}")
+        if (
+            not free
+        ):  # (cannot happen while the plugin keeps to max_num_seqs): the legacy answer, the user of the logical slot
+            p = self.phys[logical]
+            self.live.add(p)
+            return p, False
         best = min(
             free,
             key=lambda j: (
