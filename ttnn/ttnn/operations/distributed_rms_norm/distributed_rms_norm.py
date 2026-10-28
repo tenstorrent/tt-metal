@@ -91,7 +91,9 @@ SUPPORTED = {
     ],
     "cluster_axis": [0, 1],
     "topology": [Topology.Linear, Topology.Ring],
-    "num_links": [1, 2],
+    # None = "every usable link": validate() canonicalizes it (discovered_links) and gates on the canonical value, but
+    # callers that omit num_links are tagged with the raw None (golden axes.py classify_call), so it is listed too.
+    "num_links": [1, 2, None],
 }
 
 

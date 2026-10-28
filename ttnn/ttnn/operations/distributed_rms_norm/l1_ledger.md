@@ -28,7 +28,7 @@ Per **worker** core. Port cores hold no CBs: their only L1 is the landing shard 
 > `cb_inv_rms` = `num_waves · q_w`, `cb_partial_col` 2 waves deep, `cb_chip_partial` 2 deep, `cb_gather` per owned
 > wave, `cb_stats` always Float32, `cb_record_scratch` `(G + 1) · q`, `cb_x_gamma` with a per-wave fallback,
 > `cb_output` keyed on the output placement. `x_depth = 2` (blocks) is **not built**: a shape whose whole block does
-> not fit is refused (`NotImplementedError`): 128×8192 HEIGHT_SHARDED, 4096×1024 WIDTH_SHARDED, prefill ≥ 8192 rows ×
+> not fit is refused (verifier: filed as Refinement 1, a port of the base op's L1 fallbacks) (`NotImplementedError`): 128×8192 HEIGHT_SHARDED, 4096×1024 WIDTH_SHARDED, prefill ≥ 8192 rows ×
 > 3584. Single source: `footprint()` in `distributed_rms_norm_program_descriptor.py` mirrors this table.
 
 ## Symbol table
@@ -48,21 +48,28 @@ Per **worker** core. Port cores hold no CBs: their only L1 is the landing shard 
 
 ## Total per-core footprint
 
+Mirrors `footprint()` in `distributed_rms_norm_program_descriptor.py` term for term (verifier: re-derived from the
+code; the Phase 0 formula had drifted — `cb_chip_partial` / `cb_partial_col` are two deep, the record scratch is
+`(G + 1)·q`, and the combine CBs exist only when `G_w > 1`).
+
 ```
-F = x_depth·R·Wp·T_in                          [interleaved only]          scales with R, S
-  + 2048·(1 + masked)                                                      constant
-  + T_i·( q_w + R + q_w + G_w·q + q + G·q + q )   sumsq, inv, partial_col, gather, chip, stats, root
-  + has_gamma·( Wp·T_g + R·Wp·T_i )                                         scales with S (and R)
-  + masked·2·q_w·T_i                                [sharded masked only]
-  + stream_depth·C·T_out                            [interleaved only]     scales with C
-  + G·q·128                                                                 scales with G
+F = R·Wp·T_in                                         [interleaved input only; x_depth = 1]   scales with R, S
+  + 2048·(1 + masked)                                 cb_reduce_scaler                         constant
+  + T_i·( q_w + NW·q_w + 2·q + q )                    sumsq, inv, chip_partial, rms_root
+  + [G_w > 1] T_i·( 2·q_w + max(1, max_owned)·G_w·q ) partial_col, gather                      scales with G_w
+  + 4096·G·q                                          cb_stats (Float32 always)                scales with G
+  + (G + 1)·q·128                                     cb_record_scratch                        scales with G
+  + has_gamma·( Wp·T_g + (R | q_w)·WS·T_i )           gamma_tiles, x_gamma (block | per-wave)  scales with S, R
+  + masked·2·q_w·T_i                                  sumsq_last, sumsq_acc [sharded masked]
+  + STREAM_DEPTH·C·T_out                              cb_output [interleaved output only]      scales with C
 ```
 
-Focus case (640×1792 bf16, fp32 DEST, bf16 TILE γ; R 3, Wp 4, C 4, q_w 1, q 1, G_w 14, G 4):
-x 24,576 + scaler 2,048 + sumsq 4,096 + inv 12,288 + γ 8,192 + x·γ 49,152 + partial 4,096 + gather 57,344
-+ chip 4,096 + stats 16,384 + root 4,096 + output 16,384 + records 512 = **203,264 B (≈ 199 KiB)** of ~1.4 MiB.
-The two largest terms are `cb_gather` (`G_w`-scaled, lamp L5 would cut it to 128 B rows) and `cb_x_gamma`
-(`R·Wp`-scaled, lamp L4).
+Focus case (640×1792 bf16, fp32 DEST, bf16 TILE γ; R 3, Wp 4, C 4, NW 3, q_w 1, q 1, G_w 14, max_owned 1, G 4):
+x 24,576 + scaler 2,048 + sumsq 4,096 + inv 12,288 + chip 8,192 + root 4,096 + partial_col 8,192 + gather 57,344
++ stats 16,384 + records 640 + γ 8,192 + x·γ 49,152 + output 16,384 = **211,584 B (≈ 207 KiB)** of ~1.4 MiB
+(`footprint()` returns the same number). Decode 32×1792: 154,240 B. 2048×1280 (R 5, S 5, G_w 8, NW 5): 281,216 B.
+The two largest terms are `cb_gather` (`G_w`-scaled; lamp L5 would cut it to 128 B rows) and `cb_x_gamma`
+(`R·WS`-scaled; lamp L4 / the per-wave fallback).
 
 **Port core:** landing shard `num_waves · G · seg_stride` bytes, `seg_stride = align_up(max_l n_pub(l) · q · 128, 64)`.
 Focus: 3 · 4 · 512 = 6 KiB. No CBs.

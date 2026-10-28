@@ -297,7 +297,7 @@ void kernel_main() {
         reconfig_data_format_srca(cb_stats);
         pack_reconfig_data_format(cb_rms_root);
         cb_reserve_back(cb_rms_root, no);
-        copy_tile_to_dst_init_short(cb_stats);
+        copy_init(cb_stats);
         add_binary_tile_init();
         rsqrt_tile_init();  // the sqrt body's programmable constants
         for (uint32_t r = 0; r < no; ++r) {

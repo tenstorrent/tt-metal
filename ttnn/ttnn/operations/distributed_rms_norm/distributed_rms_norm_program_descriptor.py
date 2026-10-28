@@ -61,6 +61,7 @@ FWD, BWD = 0, 1
 _OPP = {FWD: BWD, BWD: FWD}
 
 SCALER_FORMAT = ttnn.bfloat16
+STATS_FORMAT = ttnn.float32  # cb_stats / cb_record_scratch: the exchanged records are exact fp32 (wire format)
 
 # ---- CB indices (the kernels declare the same slots) ----
 CB_X_TILES = 1
@@ -209,10 +210,11 @@ def footprint(
     f = 0
     f += 0 if sharded else R * Wp * sz.T_in  # cb_x_tiles
     f += (2 if masked else 1) * ttnn.tile_size(SCALER_FORMAT)
-    f += sz.T_i * (q_w + num_waves * q_w + 2 * q_w + 2 * q + q)  # sumsq, inv, partial_col, chip, root
-    f += sz.T_i * (max_owned * G_w * q)  # gather
-    f += 4096 * sz.G * q  # stats (Float32)
-    f += (sz.G * q + q) * RECORD_BYTES
+    f += sz.T_i * (q_w + num_waves * q_w + 2 * q + q)  # sumsq, inv, chip, root
+    if G_w > 1:  # the on-chip combine CBs exist only on D3 / D3-WS (create_mesh_program_descriptor)
+        f += sz.T_i * (2 * q_w + max(1, max_owned) * G_w * q)  # partial_col, gather
+    f += ttnn.tile_size(STATS_FORMAT) * sz.G * q  # stats
+    f += (sz.G + 1) * q * RECORD_BYTES  # record scratch
     if sz.has_gamma:
         f += Wp * sz.T_g + (q_w if gamma_per_wave else R) * WS * sz.T_i  # cb_gamma_tiles + cb_x_gamma
     if masked:
@@ -295,7 +297,7 @@ def local_plan(input_tensor, workers, sz: Sizes, budget: int, out_sharded=None) 
             for i in range(n):
                 rows = min(Hsh, T - i * Hsh)
                 members.append(Member(cores[i], i, 0, i * Hsh, rows, 0, Wt))
-            G_w, G_h, rows_max = 1, n, Hsh if n > 1 else T
+            G_w = 1
             rows_max = max(m.rows for m in members)
             regime = "D1-HS"
         elif ml == ttnn.TensorMemoryLayout.WIDTH_SHARDED:
@@ -307,7 +309,7 @@ def local_plan(input_tensor, workers, sz: Sizes, budget: int, out_sharded=None) 
             cores = _shard_cores(spec, n)
             for j in range(n):
                 members.append(Member(cores[j], 0, j, 0, T, j * S, min(S, Wt - j * S)))
-            G_w, G_h, rows_max = n, 1, T
+            G_w, rows_max = n, T
             regime = "D3-WS"
         else:
             raise NotImplementedError(f"distributed_rms_norm: memory layout {ml} is not built")
@@ -672,8 +674,8 @@ def create_mesh_program_descriptor(
         _cb(CB_INV_RMS, interm, sz.T_i, plan.num_waves * plan.q_w, worker_crs),
         _cb(CB_CHIP_PARTIAL, interm, sz.T_i, 2 * plan.q, worker_crs),
         _cb(CB_RMS_ROOT, interm, sz.T_i, plan.q, worker_crs),
-        _cb(CB_STATS, ttnn.float32, ttnn.tile_size(ttnn.float32), G * plan.q, worker_crs),
-        _cb(CB_RECORD_SCRATCH, ttnn.float32, RECORD_BYTES, (G + 1) * plan.q, worker_crs),
+        _cb(CB_STATS, STATS_FORMAT, ttnn.tile_size(STATS_FORMAT), G * plan.q, worker_crs),
+        _cb(CB_RECORD_SCRATCH, STATS_FORMAT, RECORD_BYTES, (G + 1) * plan.q, worker_crs),
     ]
     if plan.sharded:
         cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_X_TILES, input_tensor))
