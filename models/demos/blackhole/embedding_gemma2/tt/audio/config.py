@@ -37,14 +37,15 @@ TOKEN_BUCKETS = (32, 64, 128, 256, 512, 768)
 AUDIO_L1_BYTES_PER_BANK = int(os.environ.get("EG2_AUDIO_L1_BYTES_PER_BANK", str(64 * 1024)))
 
 
-def audio_act_memory_config(device, shape, dtype=None) -> "ttnn.MemoryConfig":
+def audio_act_memory_config(device, shape, dtype=None, bytes_per_bank: int | None = None) -> "ttnn.MemoryConfig":
     """L1 interleaved for a tile tensor of `shape` / `dtype` (bf16 when None) if it fits the per-bank
-    cap, else DRAM interleaved."""
+    cap (`bytes_per_bank`, default AUDIO_L1_BYTES_PER_BANK), else DRAM interleaved."""
     import ttnn
 
+    cap = AUDIO_L1_BYTES_PER_BANK if bytes_per_bank is None or AUDIO_L1_BYTES_PER_BANK == 0 else bytes_per_bank
     n = math.prod(int(s) for s in shape) * (4 if dtype == ttnn.float32 else 2)
     grid = device.compute_with_storage_grid_size()
-    if n <= AUDIO_L1_BYTES_PER_BANK * grid.x * grid.y:
+    if n <= cap * grid.x * grid.y:
         return ttnn.L1_MEMORY_CONFIG
     return ttnn.DRAM_MEMORY_CONFIG
 

@@ -60,6 +60,7 @@ from models.demos.blackhole.embedding_gemma2.tt.config import compute_kernel_con
 from models.demos.blackhole.embedding_gemma2.tt.weights import as_weight, linear_weight, substate
 
 CTX = 2 * ATTN_BLOCK  # keys per query block: previous block + own block
+QKV_L1_BYTES_PER_BANK = 96 * 1024
 REL_WIDTH = ATTN_BLOCK  # columns of Q E^T before the shift (column c = max_past_horizon - d)
 
 
@@ -231,7 +232,13 @@ class AudioAttention(LightweightModule):
         xc = ttnn.clamp(
             x, min=bq.input_min, max=bq.input_max, memory_config=audio_act_memory_config(dev, x.shape, x.dtype)
         )
-        qkv = audio_linear(xc, self.wqkv, dtype=ttnn.float32, compute_kernel_config=self.proj_kernel_config)
+        # the fp32 fused QKV output gets a wider L1 cap (72 KB per bank at 1 x 768), like the named
+        # wide intermediates of the vision tower (E5b)
+        qkv_shape = (x.shape[0], x.shape[2], 3 * cfg.hidden_size)
+        qkv_mc = audio_act_memory_config(dev, qkv_shape, ttnn.float32, bytes_per_bank=QKV_L1_BYTES_PER_BANK)
+        qkv = audio_linear(
+            xc, self.wqkv, dtype=ttnn.float32, compute_kernel_config=self.proj_kernel_config, memory_config=qkv_mc
+        )
         ttnn.deallocate(xc)
         mc = audio_act_memory_config(dev, (x.shape[0], x.shape[2], cfg.hidden_size), ttnn.float32)  # one of q/k/v
         q_r, k_r, v_r = ttnn.experimental.nlp_create_qkv_heads(
