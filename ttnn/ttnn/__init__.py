@@ -629,6 +629,14 @@ experimental.PrefetcherPipeSpace = _prefetcher_pipe.PrefetcherPipeSpace
 experimental.PrefetcherPipe = _prefetcher_pipe.PrefetcherPipe
 experimental.create_prefetcher_pipe_space = _prefetcher_pipe.create_prefetcher_pipe_space
 
+# Metal 2.0 ProgramSpec, ProgramRunArgs and the types they use. Experimental-only surface.
+from ttnn._ttnn import program_spec as _program_spec
+
+for _name in dir(_program_spec):
+    if not _name.startswith("_"):
+        setattr(experimental, _name, getattr(_program_spec, _name))
+del _name
+
 Conv1dConfig = ttnn._ttnn.operations.conv.Conv2dConfig
 
 from ttnn.operations.transformer import (

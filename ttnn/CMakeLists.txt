@@ -321,6 +321,15 @@ if(WITH_PYTHON_BINDINGS)
             ${SRC_PYBIND}
             ${TTNN_SRC_PYBIND}
     )
+    # program_spec.cpp converts std::vector<uint32_t> to and from Python lists, while program_descriptors.cpp binds it
+    # as the opaque VectorUInt32. Building it on its own keeps it out of that unity batch and leaves the other files'
+    # batches as they were.
+    set_source_files_properties(
+        cpp/ttnn-nanobind/program_spec.cpp
+        PROPERTIES
+            SKIP_UNITY_BUILD_INCLUSION
+                ON
+    )
     target_include_directories(
         ttnn
         PUBLIC
