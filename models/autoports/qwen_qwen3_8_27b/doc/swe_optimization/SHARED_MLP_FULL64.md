@@ -46,6 +46,8 @@ check, not a scored accuracy qualification.
 
 Canonical artifacts: `full64-{control,shared,comparison}.json`,
 `full64-clean-{control,shared,comparison}.json`, and `FULL64_PAIR_HANDOFF.json`.
+The [compact physical-owner ledger](SHARED_MLP_FULL64.json) contains both
+checkpoint inventories, explicit unnamed residuals and raw artifact hashes.
 The earlier `SHARED_MLP_REDUCED.json` records the initial reduced checkpoint;
 its full64-pending status is historical.
 
@@ -53,8 +55,13 @@ Next experiments preserve K2, precision and activation rounding while testing
 reader/core layouts. Two readers require local N4352 padding to4608; forecast
 extra separate-owner bytes are94,371,840/device at64layers, giving a forecast
 constructor saving1,509,949,440bytes. Cores16 versus80 changes activation
-sharding. Neither variant is measured yet; reduced state/logit/token exactness
-and physical allocation checks must pass before full64 timing. Separate watcher
-validation, independent final review, actual CI B32 ownership/retention and
+sharding. All three R2/C80, R1/C16 and R2/C16 variants now pass reduced257/513
+exact state/logit/token and physical allocation checks at source809ffc6b3d1.
+Clean reduced4096/128/three-repeat timing still loses2.26% for R1/C16 and2.54%
+for R2/C16; outputs remain exact. These variants were not expanded to full64.
+A separate reduced R1/C80 watcher10/NOINLINE run passed with all features
+enabled and no profiler. See [compact geometry evidence](SHARED_MLP_GEOMETRY.json).
+Independent review rederived the measured full64 evidence and retained a
+more-work-needed/default-off verdict. Independent final review, actual CI B32 ownership/retention and
 matched multi-turn cached-prompt measurements remain open. No current B32
 serving hit-rate or higher-concurrency acceptance follows from these results.

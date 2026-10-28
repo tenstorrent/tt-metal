@@ -1,0 +1,170 @@
+{
+  "status": "reduced_exact_all_layouts_clean_C16_slow_default_off",
+  "source_commit": "809ffc6b3d1",
+  "scope": "Layers0/3 B32 native262144 logicalcontext, bounded8192tok/row pool; notfull64variantperformance orservingretention.",
+  "tracked_boundary_lengths": [
+    257,
+    513
+  ],
+  "tracked_variants": {
+    "R2C80": {
+      "status": "pass",
+      "batch": 32,
+      "layers": [
+        0,
+        3
+      ],
+      "all_devices_tokens_logits_and_complete_logical_states_exact": true,
+      "expected_removed_weight_payload_bytes_per_device": 50135040,
+      "measured_allocator_reduction_bytes_per_device": {
+        "after_construction": {
+          "net_reduction": 47185920,
+          "removed_packed_weight_bytes": 50135040,
+          "added_separate_owner_padding_bytes": 2949120,
+          "other_allocation_delta": 0
+        },
+        "after_preparation": {
+          "net_reduction": 46546944,
+          "removed_packed_weight_bytes": 50135040,
+          "added_separate_owner_padding_bytes": 2949120,
+          "other_allocation_delta": -638976
+        }
+      },
+      "limitations": [
+        "Diagnostic tracked timing is not clean headline performance.",
+        "Bounded external request pool does not establish serving B32 retention/capacity.",
+        "Raw allocator deltas include any changed persistent runtime/program allocations."
+      ]
+    },
+    "R1C16": {
+      "status": "pass",
+      "batch": 32,
+      "layers": [
+        0,
+        3
+      ],
+      "all_devices_tokens_logits_and_complete_logical_states_exact": true,
+      "expected_removed_weight_payload_bytes_per_device": 50135040,
+      "measured_allocator_reduction_bytes_per_device": {
+        "after_construction": {
+          "net_reduction": 50135040,
+          "removed_packed_weight_bytes": 50135040,
+          "added_separate_owner_padding_bytes": 0,
+          "other_allocation_delta": 0
+        },
+        "after_preparation": {
+          "net_reduction": 50364416,
+          "removed_packed_weight_bytes": 50135040,
+          "added_separate_owner_padding_bytes": 0,
+          "other_allocation_delta": 229376
+        }
+      },
+      "limitations": [
+        "Diagnostic tracked timing is not clean headline performance.",
+        "Bounded external request pool does not establish serving B32 retention/capacity.",
+        "Raw allocator deltas include any changed persistent runtime/program allocations."
+      ]
+    },
+    "R2C16": {
+      "status": "pass",
+      "batch": 32,
+      "layers": [
+        0,
+        3
+      ],
+      "all_devices_tokens_logits_and_complete_logical_states_exact": true,
+      "expected_removed_weight_payload_bytes_per_device": 50135040,
+      "measured_allocator_reduction_bytes_per_device": {
+        "after_construction": {
+          "net_reduction": 47185920,
+          "removed_packed_weight_bytes": 50135040,
+          "added_separate_owner_padding_bytes": 2949120,
+          "other_allocation_delta": 0
+        },
+        "after_preparation": {
+          "net_reduction": 47136768,
+          "removed_packed_weight_bytes": 50135040,
+          "added_separate_owner_padding_bytes": 2949120,
+          "other_allocation_delta": -49152
+        }
+      },
+      "limitations": [
+        "Diagnostic tracked timing is not clean headline performance.",
+        "Bounded external request pool does not establish serving B32 retention/capacity.",
+        "Raw allocator deltas include any changed persistent runtime/program allocations."
+      ]
+    }
+  },
+  "clean": {
+    "control": {
+      "median_ttft_ms": 508.95067816600204,
+      "median_decode_tps_per_user": 246.88380629891068,
+      "decode_change_percent": 0.0,
+      "exact_32x128_greedy_tokens_vs_control": true,
+      "repeats": 3,
+      "tracking": 0,
+      "profiler": false,
+      "watcher": false,
+      "input_tokens": 4096,
+      "output_tokens": 128
+    },
+    "R1C16": {
+      "median_ttft_ms": 509.51984198763967,
+      "median_decode_tps_per_user": 241.29253198702318,
+      "decode_change_percent": -2.264739188733167,
+      "exact_32x128_greedy_tokens_vs_control": true,
+      "repeats": 3,
+      "tracking": 0,
+      "profiler": false,
+      "watcher": false,
+      "input_tokens": 4096,
+      "output_tokens": 128
+    },
+    "R2C16": {
+      "median_ttft_ms": 537.1663440018892,
+      "median_decode_tps_per_user": 240.6086657162476,
+      "decode_change_percent": -2.5417384302093726,
+      "exact_32x128_greedy_tokens_vs_control": true,
+      "repeats": 3,
+      "tracking": 0,
+      "profiler": false,
+      "watcher": false,
+      "input_tokens": 4096,
+      "output_tokens": 128
+    }
+  },
+  "watcher": {
+    "variant": "R1C80",
+    "interval_ms": 10,
+    "all_features_enabled": true,
+    "noinline": true,
+    "profiler": false,
+    "tracking": 1,
+    "reduced_257_513_states_logits_tokens_exact": true,
+    "close_mesh_device_returned": true,
+    "raw_watcher_log_sha256": "af2596bd45c0eb4e14efd2d2a758a617f3ec0a5cb76110907707e14c565f6f4b",
+    "raw_watcher_log_path": "/home/mvasiljev/build/qwen38-swe/memory-prefix/watcher-logs/generated/watcher/watcher.log",
+    "limits": "Reduced watcher only; actual full64 serving stillopen."
+  },
+  "raw_artifact_sha256": {
+    "geometry-R1C16-comparison.json": "d693077eac0ed59f6c8238d17b6a851eef5c97f8a99bccc1dcaa036f876d944b",
+    "geometry-R1C16.json": "1cf6ddb7c4951dc97a5178c648c39ae88f9e03ca857737a06a51d4a13cd88fca",
+    "geometry-R2C16-comparison.json": "787efaf8f7b76296dfa75a75356ab10bd5ac8fea269a7cd1596d0567bdfd4826",
+    "geometry-R2C16.json": "ac2beb7fd2e5e081c22b78da8ce9d937e96259bb26b59058dcfaa6caa3222b5f",
+    "geometry-R2C80-comparison.json": "db6dfd9949b8500bf7aab0d9c81f38d68cae9eec56e34eda535dac498f112148",
+    "geometry-R2C80.json": "731006e211d9595c33edae607d894eb557437a37f0492532e70d35db0942aadd",
+    "geometry-clean-R1C16.json": "a48b29d739f5086175efe7b67bca2887b6af5ef50714feadde25ac15bf9f312e",
+    "geometry-clean-R2C16.json": "5fd325182bb901b85a210a36659539af4dd755183a59eda706e977f0833fd4a8",
+    "geometry-clean-control.json": "0de562973dc19b9baabe0d3347ecb0366da270b1ca3960ff3b2aac1f8c528fc3",
+    "geometry-control.json": "762e6458e8e297138a2b001fa39054121b761794241e0e3cd7d81ec7852aa95e",
+    "geometry-watcher-R1C80.json": "79574508d3223241af5aef1ed2c08ec55b02d029c1e0408f6a9153dfb8b0e7a1",
+    "geometry-R1C16.log": "be39a9378e4dff3c84a0f6655e249abbbe12417f0e26870a3f995dc94d277954",
+    "geometry-R2C16.log": "53e28785805754861677c3e77109d7538013f08d82a12e6b949896aa41a19665",
+    "geometry-R2C80.log": "3c6767bbb6e161f8595a13808b7e355305773a4c2cbeec4c86930cc9e6f3050d",
+    "geometry-clean-R1C16.log": "9f91d7e855898b798222ccad1e32007a640b0410e182d230fbd5b431a75f8287",
+    "geometry-clean-R2C16.log": "45cdbddc5c7284ea2881786f36b032189e3c5cdef076e03f5e234bf4424a5ffd",
+    "geometry-clean-control.log": "a7415b32b08a687ee495b2663b4406a4925ffa0108e05ff1d9a447587896c31e",
+    "geometry-control.log": "5e0a1e270c564cc6845aedbc96669bae4917efd7f6d5f5ecb6508404e26a5248",
+    "geometry-watcher-R1C80.log": "5e4b347b7ac6bd788f5e7cec77e1883c4ff60df45aa14cc30c66d55529353a37"
+  }
+}
