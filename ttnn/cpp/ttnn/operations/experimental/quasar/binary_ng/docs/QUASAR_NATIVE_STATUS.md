@@ -2128,7 +2128,7 @@ columns stay. (`F#` in the review-findings doc is an unrelated namespace.)
 | 1.5 | F5 | fp32 + SFPU (divide) | **bit-exact oracle expires here** |
 | 1.6 | F7 | activations (lhs/rhs/post) | re-measure cyc/tile; `binary_tiles_init` added cost since our branch point |
 | **2.0** | — | **milestone 2 — once F7 lands** | dtype/layout/memory/activation-complete for whole-tile operands |
-| 2.1 | F13 | **outer-dim broadcast** | **a regression, not a feature** — `kernels_dfb/` has it, `kernels_qsr/` lost it; until it lands every broadcast `add` falls back |
+| 2.1 | F13 | **outer-dim broadcast — done** | each operand is read through its Map, a cursor per tile counter, in bf16 and fp32; a dense program keeps its kernels byte for byte |
 | 2.2 | F8 | subtile broadcast ROW/COL/SCALAR | gated on `#51291` |
 | 2.3 | F9 | mixed broadcast | keep the ROW-via-LLK / COL-via-reader-fill hybrid |
 | 2.4 | F10 | tensor-scalar | writer fills `in1` once |
@@ -2149,10 +2149,10 @@ layout, op families with their own kernels, and a format TTNN cannot represent y
 **F13 opens Milestone 2 because it is a regression, not a feature.** `SubtileBroadcastType::NONE` compares H
 and W only, so outer dims are a separate axis that a `no_bcast` kernel still has to carry — the shared
 `kernels_dfb/` path does, and `kernels_qsr/` lost it when Task 4 collapsed the stride cascade (an
-unmandated narrowing of the copy; design §3.4.1). Correctness is safe today — the gate rejects those
-shapes, the fallback runs, verified bit-exact — but **every broadcast `add` gets zero benefit from the
+unmandated narrowing of the copy; design §3.4.1). Correctness was safe — the gate rejected those
+shapes, the fallback ran, verified bit-exact — but **every broadcast `add` got zero benefit from the
 native path**, and leading-dim broadcast is common (bias add, residual with a unit batch dim). That
-caps the reachable model-level win. It sits with the other broadcast work rather than being ranked
+capped the reachable model-level win. It sits with the other broadcast work rather than being ranked
 against it — which is also what makes Milestone 3's "broadcast-complete" literally true.
 
 **Cross-cutting, before any of this is production-ready:** validate fast dispatch for DFB-bearing specs,

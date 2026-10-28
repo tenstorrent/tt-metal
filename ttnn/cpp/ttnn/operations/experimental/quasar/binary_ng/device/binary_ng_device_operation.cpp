@@ -639,7 +639,7 @@ bool BinaryNgDeviceOperation::matches_metal_v2_slice(
 bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // Narrower than matches_metal_v2_slice in op, dtype and broadcast, but it also admits DRAM shards. The broadcast
-    // and tensor-scalar rejections are also preconditions of create_no_bcast_artifacts, which asserts them. The others
+    // and tensor-scalar rejections are also preconditions of create_native_artifacts, which asserts them. The others
     // keep the slice to what has been validated on Quasar.
     // Cheap checks first: this predicate runs on EVERY dispatch, cache hits included. The arch goes before
     // native_tuning(), so that off Quasar the knobs are never parsed and the settings line is never logged.
@@ -718,10 +718,8 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
         return false;
     }
 
-    // NONE covers H/W only, so a leading-dim broadcast also reads as NONE. Require full-rank equality.
-    if (a.padded_shape() != b.padded_shape() || a.padded_shape() != out_spec.padded_shape()) {
-        return false;
-    }
+    // NONE covers H and W only, so it also holds an outer-dim broadcast, which the kernels read through each operand's
+    // Map. Every dim through -6 is a digit of the walk, and the op's validation makes the dims past it equal.
     // Each operand on its own is interleaved (L1 or DRAM), an L1 shard or a DRAM shard with a 2D spec, in any
     // mix. The factory borrows each operand that sits in its anchor, an L1 shard config or the L1 banks, and
     // moves the rest over the NoC through each operand's sharding-aware TensorAccessor. out_spec is the supplied

@@ -857,10 +857,13 @@ def _config_params(configs, cases):
 # result ("relu_chain"). "out" may also be None, so that the op derives the output's memory config, or
 # "height_specless", an L1 height-sharded config without a shard spec, which the op completes; then "resolved_out" names
 # the placement the output must take. A placement in an option may add a fourth element, "col", for column-major shard
-# order. An entry's tensors stay alive to the end when a later entry repeats its spec, so the repeat lands at new
-# addresses and must hit the program cache; the other entries' tensors are freed, so that many cases fit in L1 one after
-# another. With ARM_EXPECT_NEOS or ARM_EXPECT_DMS (and the device profiler on), every core must show that many Neos
-# running the compute, or DM cores running a reader or writer thread; ARM_EXPECT_CORES names how many cores must report.
+# order. For a broadcast, "a_shape" and "b_shape" give a or b its own shape, and the entry's shape is the output's;
+# "modes" lists the [A_MODE, B_MODE, A_OUTER_BCAST, B_OUTER_BCAST] that the op's compute kernel must be built with,
+# all 0 for a dense program, read from the kernel's JIT defines. An entry's tensors stay alive to the end when a later
+# entry repeats its spec, so the repeat lands at new addresses and must hit the program cache; the other entries'
+# tensors are freed, so that many cases fit in L1 one after another. With ARM_EXPECT_NEOS or ARM_EXPECT_DMS (and the
+# device profiler on), every core must show that many Neos running the compute, or DM cores running a reader or writer
+# thread; ARM_EXPECT_CORES names how many cores must report.
 _SHARD_ARM_SRC = """
 import collections, csv, json, os, pathlib, sys
 import torch, ttnn
@@ -947,6 +950,28 @@ if (EXPECT_NEOS or EXPECT_DMS) and profile_csv.exists():
     profile_csv.unlink()
 
 
+def kernels_logged():
+    # (JIT directory, source) of each kernel this process has compiled, in order. The inspector flushes after each one.
+    lines = [ln.strip() for ln in (root / "generated" / "inspector" / "kernels.yaml").read_text().splitlines()]
+    paths = [ln.split(":", 1)[1].strip() for ln in lines if ln.startswith("path:")]
+    sources = [ln.split(":", 1)[1].strip() for ln in lines if ln.startswith("source:")]
+    return list(zip(paths, sources))
+
+
+def compute_modes(kernels):
+    # [A_MODE, B_MODE, A_OUTER_BCAST, B_OUTER_BCAST] of the one binary_ng compute kernel among `kernels`, from its JIT
+    # defines. A dense program defines none of them, which reads as all 0.
+    computes = [path for path, source in kernels if "/binary_ng/device/kernels" in source and "/compute/" in source]
+    if len(computes) != 1:
+        return "{} binary_ng compute kernels".format(len(computes))
+    defines = {}
+    for line in (pathlib.Path(computes[0]) / "defines_generated.h").read_text().splitlines():
+        words = line.split(None, 2)
+        if len(words) == 3 and words[0] == "#define":
+            defines[words[1]] = words[2]
+    return [int(defines.get(k, "0")) for k in ("A_MODE", "B_MODE", "A_OUTER_BCAST", "B_OUTER_BCAST")]
+
+
 def memory_config(strategy, shard_shape, rng, orientation="row"):
     if strategy in INTERLEAVED:
         return INTERLEAVED[strategy]
@@ -987,12 +1012,14 @@ try:
         fp32 = opts.get("dtype") == "float32"
         dtype = DTYPES[opts.get("dtype", "bfloat16")]
         cfg = dict(dtype=dtype, device=device, layout=ttnn.TILE_LAYOUT)
-        ta = ttnn.from_torch(torch.randn(shape, dtype=torch.float32), memory_config=mem, **cfg)
-        tb = ttnn.from_torch(torch.randn(shape, dtype=torch.float32), memory_config=b_mem, **cfg)
+        # a and b take the output's shape unless a broadcast option gives them their own.
+        ta = ttnn.from_torch(torch.randn(opts.get("a_shape", shape), dtype=torch.float32), memory_config=mem, **cfg)
+        tb = ttnn.from_torch(torch.randn(opts.get("b_shape", shape), dtype=torch.float32), memory_config=b_mem, **cfg)
         op_fn, op_extra, exact, rounding = (OPS_FP32 if fp32 else OPS)[opts.get("op", "add")]
         act_kwargs, model = (ACTS_FP32 if fp32 else ACTS)[opts.get("act")]
         golden = model(ttnn.to_torch(ta).float(), ttnn.to_torch(tb).float(), exact, rounding)
         cached = device.num_program_cache_entries()
+        logged = len(kernels_logged())
         op_kwargs = {}
         if "grid" in opts:
             x0, y0, x1, y1 = opts["grid"]
@@ -1013,6 +1040,11 @@ try:
         spec = json.dumps(entry[1:])
         if spec in seen and device.num_program_cache_entries() != cached:
             failures.append("{}: repeats an earlier spec but missed the program cache".format(name))
+        # A repeat hits the program cache and compiles nothing, so only a first run shows its modes.
+        if "modes" in opts and spec not in seen:
+            modes = compute_modes(kernels_logged()[logged:])
+            if modes != opts["modes"]:
+                failures.append("{}: the compute ran with {}, the case expects {}".format(name, modes, opts["modes"]))
         seen.add(spec)
         if spec in specs[i + 1:]:
             keep.extend([ta, tb, out])
@@ -1966,6 +1998,100 @@ def test_native_fp32_activations_match_the_prediction(name, knobs):
     _check_arm(p, f"fp32 activations, {name}", expect_wrong=_expect_wrong(_FP32_ACT_CASES, knobs))
 
 
+# Broadcast on the native path. Each operand has a mode, FULL, ROW, COL, SCALAR or VALUE (the values of A_MODE and
+# B_MODE, kernels_qsr/common/operand_walk.hpp), and an outer-dim broadcast flag. Every case names the modes that its
+# compute kernel must be built with, and its output must equal the oracle exactly. The broadcast configurations batch
+# the FPU kernel only at R = C = W = 1, so no case predicts wrong tiles, before or after llk_unpack_AB steps a batch by
+# the ring stride. Beside a broadcast operand the rule runs R = C = 4; R1C4W1 sets one reader thread on four tile
+# counters, which a held page's change and a VALUE ring's entries must survive.
+_MODE = {"FULL": 0, "ROW": 1, "COL": 2, "SCALAR": 3, "VALUE": 4}
+_BCAST_CONFIGS = {"rule": {}, "rule-n1": _COMPUTE_BATCH_1, "R1C1W1": _threads(1, 1, 1), "R1C4W1": _threads(1, 4, 1)}
+
+
+def _modes(a="FULL", b="FULL", a_outer=False, b_outer=False):
+    """The [A_MODE, B_MODE, A_OUTER_BCAST, B_OUTER_BCAST] that the compute kernel of a case is built with."""
+    return [_MODE[a], _MODE[b], int(a_outer), int(b_outer)]
+
+
+def _bcast(name, a_shape, b_shape, modes, a=_IDRAM, b=_IDRAM, out=_IDRAM, **opts):
+    """A _SHARD_ARM_SRC entry for a broadcast: a, b and the output each in their own placement, the output in the
+    shape of a and b broadcast."""
+    shape = list(torch.broadcast_shapes(tuple(a_shape), tuple(b_shape)))
+    return (
+        name,
+        *a,
+        shape,
+        {"a_shape": list(a_shape), "b_shape": list(b_shape), "b": b, "out": out, "modes": modes, **opts},
+    )
+
+
+# Outer-dim broadcast: FULL operands with a unit outer dim. Wt = 5 is not a multiple of 4 and Ht = 2; a unit outer dim
+# on a, on b, and on both. On the NoC path in DRAM and in L1; beside a borrowed a and output in the shard walk
+# (w = 4 < Wt = 32) and in the bank walk; with SQUARE on the broadcast operand. In outer_b_same_config, b has the
+# anchor's memory config but a broadcast shape, so its shards hold other tiles: the anchor borrows a and the output, and
+# b moves. outer_b_rank7 broadcasts dim -6 of a rank-7 output whose dim -7 is 2: the walk's digit for dim -6.
+# outer_b_wide_shard puts a and the output in block shards 3 tiles wider than the tensor, on the 4 clusters of a
+# sub-grid. The cursor's step across a shard row's edge needs w <= Wt, so no anchor may take this program. outer_b_rank2
+# has a b of lower rank. outer_rank6 has rank 6, D = 2 and dim -6 = 3: a broadcasts dim -6, and b broadcasts D and C.
+_OUTER_SHAPE = [2, 3, 64, 160]
+_B32_WALK = ("block", [4 * 32, 4 * 32], (0, 0, 7, 3))  # on [2, 1, 256, 1024]: 32 shards of 4x4 tiles
+_H32_4 = ("height", [4 * 32, 32], (0, 0, 7, 3))  # on [2, 1, 2048, 32]: 32 shards of 4 tiles; b's 16 shards
+_BLOCK_WIDE = ("block", [3 * 32, 4 * 32], (0, 0, 0, 3))  # on [2, 3, 64, 32]: 4 shards of 3x4 tiles, 1 tile wide
+_OUTER = [
+    _bcast("outer_b", _OUTER_SHAPE, [1, 3, 64, 160], _modes(b_outer=True)),
+    _bcast("outer_a", [1, 3, 64, 160], _OUTER_SHAPE, _modes(a_outer=True), op="subtract"),
+    _bcast("outer_both", [2, 1, 64, 160], [1, 3, 64, 160], _modes(a_outer=True, b_outer=True), op="multiply"),
+    _bcast("outer_b_L1", _OUTER_SHAPE, [1, 3, 64, 160], _modes(b_outer=True), a=_IL1, b=_IL1, out=_IL1, op="divide"),
+    _bcast(
+        "outer_b_shard_walk", [2, 1, 256, 1024], [1, 1, 256, 1024], _modes(b_outer=True), a=_B32_WALK, out=_B32_WALK
+    ),
+    _bcast("outer_b_bank_walk", [2, 1, 64, 1024], [1, 1, 64, 1024], _modes(b_outer=True), a=_IL1, out=_IL1),
+    _bcast("outer_b_act", _OUTER_SHAPE, [1, 3, 64, 160], _modes(b_outer=True), act="rhs"),
+    _bcast(
+        "outer_b_same_config", [2, 1, 2048, 32], [1, 1, 2048, 32], _modes(b_outer=True), a=_H32_4, b=_H32_4, out=_H32_4
+    ),
+    _bcast("outer_b_rank7", [2, 3, 1, 1, 2, 64, 64], [2, 1, 1, 1, 2, 64, 64], _modes(b_outer=True)),
+    _bcast(
+        "outer_b_wide_shard",
+        [2, 3, 64, 32],
+        [2, 1, 64, 32],
+        _modes(b_outer=True),
+        a=_BLOCK_WIDE,
+        out=_BLOCK_WIDE,
+        grid=(0, 0, 0, 3),
+    ),
+    _bcast("outer_b_rank2", _OUTER_SHAPE, [64, 160], _modes(b_outer=True)),
+    _bcast("outer_rank6", [1, 2, 1, 2, 64, 64], [3, 1, 1, 1, 64, 64], _modes(a_outer=True, b_outer=True)),
+]
+# fp32: all four ops run the SFPU kernel, in L1, at the rule's batch of 2.
+_OUTER_FP32 = [
+    _bcast(
+        f"outer_b/fp32/{op}",
+        _OUTER_SHAPE,
+        [1, 3, 64, 160],
+        _modes(b_outer=True),
+        a=_IL1,
+        b=_IL1,
+        out=_IL1,
+        op=op,
+        dtype="float32",
+    )
+    for op in _FP32_OPS
+] + [_bcast("outer_both/fp32", [2, 1, 64, 160], [1, 3, 64, 160], _modes(a_outer=True, b_outer=True), dtype="float32")]
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+@pytest.mark.parametrize("name, knobs", list(_BCAST_CONFIGS.items()), ids=list(_BCAST_CONFIGS))
+def test_native_outer_broadcast_matches_the_oracle(name, knobs):
+    """An operand with a unit outer dim must run native, read through its Map in every walk, and give the oracle's bits.
+
+    A wrong stride or a cursor that drifts reads another tile and fails the exact comparison. A broadcast operand that
+    the anchor borrowed for its memory config would read its own shards in place of the output's tiles.
+    """
+    p = _run_shard_arm(_OUTER + _OUTER_FP32, expect="qsr", timeout=1800, knobs=knobs)
+    _check_arm(p, f"outer-dim broadcast, {name}")
+
+
 # One case per child, as above, and one case of each kind of anchor and walk. The thread counts tell the
 # programs apart where the clusters do not, as both bind the same kernel sources.
 _MIXED_ROUTED = (
@@ -2197,6 +2323,31 @@ def test_native_illegal_thread_knobs_fall_back():
     """
     p = _run_shard_arm([_DRAM_128], expect="dfb", timeout=900, knobs=_threads(3, 4, 2))
     _check_arm(p, "R=3 beside C=4")
+
+
+# Every broadcast table, for the no-device checks below.
+_BCAST_TABLES = {"outer": _OUTER + _OUTER_FP32}
+
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+def test_native_broadcast_tables_predict_exact_output():
+    """No device. Each broadcast case must be exact in each broadcast configuration, and name its modes once.
+
+    A broadcast operand is never borrowed, so an input always moves; a configuration that batched the FPU kernel above
+    ring stride 1 would make a case a strict expected failure, which the broadcast tables do not carry.
+    """
+    for table, entries in _BCAST_TABLES.items():
+        names = [entry[0] for entry in entries]
+        assert len(names) == len(set(names)), f"{table}: a case name repeats"
+        for entry in entries:
+            assert "modes" in entry[5], f"{table}/{entry[0]}: no modes to check"
+            for config, knobs in _BCAST_CONFIGS.items():
+                for output_moves in (True, False):
+                    _, c, w, batch = _resolve(knobs, (True, output_moves), _runs_sfpu(entry))
+                    exact = _runs_sfpu(entry) or batch == 1 or max(c, w) == 1
+                    assert (
+                        exact
+                    ), f"{table}/{entry[0]} under {config}: the FPU kernel batches {batch} at stride {max(c, w)}"
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")

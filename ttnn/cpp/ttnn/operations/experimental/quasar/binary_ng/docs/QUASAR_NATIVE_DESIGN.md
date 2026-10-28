@@ -413,6 +413,10 @@ production.*
   `next_c_shift`/`next_n_shift` are nonzero (`reader_no_bcast_dfb.cpp:88-98`), and the tile count below is
   read from the wrong tensor. The `no_bcast` suite cannot catch it — it passes one shape for *both* operands
   everywhere — so add a leading-dim-broadcast case asserting rejection.
+  **Dropped with F13 (§3.4.1).** The reader reads each operand through its Map, so the gate refuses no outer-dim
+  broadcast: every dim through -6 is a digit of the walk, and the op's validation makes the dims past it equal. The
+  descriptor factory's walk collapses dims -6 and beyond into one, so it reads past b for a broadcast of dim -6 at
+  rank 7 or more, which its validation admits.
 - `SubtileBroadcastType::NONE`, tensor-tensor, no scalar
 - `Layout::TILE` on both inputs and the output; 32×32 tile
 - both operand dtypes `BFLOAT16`; `op_type == BinaryOpType::ADD`
@@ -723,12 +727,12 @@ than making it native. It is scheduled as **F13, opening the broadcast milestone
 close, not a capability ranked by value. Sequencing it there is what makes "Milestone 3 = broadcast-
 complete" literally true: outer-dim, subtile and mixed broadcast all land in the same milestone.
 
-**Consequence today.** Correctness is safe — the native gate's full-rank shape-equality check
-(`:716`) rejects these shapes, the fallback runs, results are bit-exact (verified). But **every
-broadcast `add` gets zero benefit from the native path**, and leading-dim broadcast is common (bias add,
-residual with a unit batch dim). So this caps the reachable win on real models. The native path is on by default
-since 2026-10-20 all the same: a broadcast `add` runs the Metal 2.0 factory as before, so it loses nothing, and
-F13 is what lets it gain.
+**Consequence, before F13.** Correctness was safe — the native gate's full-rank shape-equality check
+(`:716`) rejected these shapes, the fallback ran, results were bit-exact (verified). But **every
+broadcast `add` got zero benefit from the native path**, and leading-dim broadcast is common (bias add,
+residual with a unit batch dim). So this capped the reachable win on real models. The native path has been on by
+default since 2026-10-20 all the same: a broadcast `add` ran the Metal 2.0 factory as before, so it lost nothing,
+and F13 let it gain.
 
 **The fix, and why the obvious one is wrong.** Restoring the 6-deep odometer verbatim does not work: it
 is inherently sequential, and each thread must advance by `num_threads`, not 1. Two viable shapes:
@@ -743,6 +747,14 @@ zeroed) so the dense case keeps today's measured 165 cyc/tile untouched and only
 
 **Guard until then:** `a_dims_are_output_dims` `TT_FATAL` in the factory, so widening the gate without
 doing the kernel work is fatal at dispatch rather than silently wrong pages. Proven to fire.
+
+**Closed by F13.** The second row of the table above, shared by the reader and both compute kernels:
+`kernels_qsr/common/operand_walk.hpp` keeps a cursor per tile counter, the output position as mixed-radix digits,
+which a step advances with adds and one compare per digit, and each operand's page through its Map. No kernel divides
+per tile. The factory sets `A_MODE`, `B_MODE`, `A_OUTER_BCAST` and `B_OUTER_BCAST` only where a Map is not the
+identity, so a dense program compiles to the same instructions as before. The `a_dims_are_output_dims` guard and the
+gate's full-rank shape check are gone. The kernels now carry mode names: `reader_binary_dfb.cpp`,
+`eltwise_binary_dfb.cpp` and `eltwise_binary_sfpu_dfb.cpp`.
 
 Scope:
 - **Factory: copy whole** (`binary_ng_metal_v2_factory.cpp`, 1092 lines →
@@ -812,7 +824,7 @@ this section does not cover.
 | Ops | every binary op | ADD, SUB, MUL and DIV; in bf16, DIV out of fast and approximate mode |
 | Dtypes | every supported dtype, and mixes | a, b and the output in one format, bf16 or fp32 |
 | Layout | TILE and ROW_MAJOR | TILE, 32×32 tiles |
-| Broadcast | every subtile and outer-dim broadcast | none: a, b and the output have one padded shape |
+| Broadcast | every subtile and outer-dim broadcast | outer-dim broadcast in every dim through −6; no subtile broadcast |
 | Operand b | a tensor or a scalar | a tensor |
 | Activations | on a, on b and on the result | the same |
 | Where-ops, quantization | yes | no |
@@ -1609,7 +1621,7 @@ conflate them.
 | 1.6 | F7 | **Activations (lhs/rhs/post) — DONE 2026-10-14** | The native gate admits activations on a, on b and on the result, which the Metal 2.0 factory already runs. The compute-side self-loop DFBs hold one compute batch per compute thread, because each Neo fills and empties its own tile counter. The FPU preprocess helper takes the kernel's DataflowBuffer objects, as on main since #60207, so no object drains when a call returns. The tail rings carry no activation: beside one, an anchor that borrows all three operands must divide by the compute count, as a slice must, else the op takes the NoC path. RELU on a or b, or beside a chain, runs on the SFPU; craq-sim runs it from build `b9d8e2f4` on, which decodes SFPGT. Oracles in §6.1. Not re-measured (dchen 2026-10-13), so this cost stays a prior: since #52762 `binary_tiles_init` inside `process_tiles` does 2 × `llk_unpack_program_bfd` per tile, burning 2 of 16 unpack partition ids per tile (wraps every 8). |
 | **2.0** | — | **Milestone 2 — reached 2026-10-19 with F5** | The op is dtype-, layout-, memory- and activation-complete for whole-tile operands in one data format, bf16 or fp32. Everything above is "the same op, wider"; everything below changes how a tile is *addressed*. Since 2026-10-20 the native factory is the default on Quasar; `TTNN_QSR_NATIVE=0` runs the Metal 2.0 factory. |
 | 2.0a | F19 | **FPU compute batch above ring stride 1 — TODO, blocked on #61774** | `llk_unpack_AB` steps one ring entry per tile of a batch, not one stride, so the rule runs the FPU kernel at a compute batch of 1 above ring stride 1 (§3.3). A two-line fix, mirroring `llk_unpack_A`, measured exact on craq-sim (7 of 8 tiles wrong per batch before, 0 after). When it lands: `native_compute_batch_exact` returns true for the FPU kernel, the rule batches it at 8 at 4,4,2 and 1,4,1, and the two batching-defect tests become plain passes. The prize on craq-sim: 46.50 → 11.69 cycles per tile on a borrowed shard at 1,4,1. |
-| 2.1 | F13 | **Outer-dim broadcast** (leading dims, `N`/`C`/`D`/`nD`) | **First in this milestone, because it is a regression rather than new capability** — `kernels_dfb/` already does this and `kernels_qsr/` lost it (§3.4.1). `SubtileBroadcastType::NONE` compares H and W only, so outer dims are a separate axis that `no_bcast` still has to carry. Until it lands every broadcast `add` falls back and gets none of the multi-thread win, which caps the reachable model-level gain. Not a revert: the odometer is sequential and each thread must advance by `num_threads`; put it behind a factory-set compile-time flag so dense shapes keep the measured 165 cyc/tile. |
+| 2.1 | F13 | **Outer-dim broadcast** (leading dims, `N`/`C`/`D`/`nD`) **— DONE** | **Done:** each operand is read through its Map, a cursor per tile counter (§3.4.1), in bf16 and fp32; a dense program keeps its kernels byte for byte. The plan as written: **First in this milestone, because it is a regression rather than new capability** — `kernels_dfb/` already does this and `kernels_qsr/` lost it (§3.4.1). `SubtileBroadcastType::NONE` compares H and W only, so outer dims are a separate axis that `no_bcast` still has to carry. Until it lands every broadcast `add` falls back and gets none of the multi-thread win, which caps the reachable model-level gain. Not a revert: the odometer is sequential and each thread must advance by `num_threads`; put it behind a factory-set compile-time flag so dense shapes keep the measured 165 cyc/tile. |
 | 2.2 | F8 | **Subtile broadcast ROW/COL/SCALAR** | `ALL` consumer access + remapper fan-out. **Gated on `#51291`** or its stopgap. |
 | 2.3 | F9 | **Mixed broadcast** | Preserve the ROW-via-LLK / COL-via-reader-fill hybrid; do not collapse to a third LLK pass. |
 | 2.4 | F10 | **Tensor-scalar** | Writer fills `in1` once. Same fence dependency as F8. |

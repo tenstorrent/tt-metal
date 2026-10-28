@@ -2,23 +2,21 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Metal 2.0 / DataflowBuffer (DFB) reader for binary_ng's no-broadcast binary op, Quasar-native.
+// Metal 2.0 / DataflowBuffer (DFB) reader for binary_ng, Quasar-native. It produces in0 and in1 for every operand mode
+// (operand_walk.hpp).
 //
-// Diverges from kernels_dfb/dataflow/reader_no_bcast_dfb.cpp in three ways, all licensed by
+// Diverges from kernels_dfb/dataflow/reader_no_bcast_dfb.cpp in four ways, all licensed by
 // matches_quasar_native_slice:
 //   - the nD stride cascade is gone: page = start_tile_id + k, or, beside a borrowed operand, the tile order of
 //     the program's anchor (SHARD_WALK_WIDTH, BANK_WALK_STRIDE).
+//   - where an operand's Map is not the identity (QSR_MAPPED), each tile counter keeps a cursor, which steps the output
+//     position with adds and gives each operand's page through its Map.
 //   - the tile loop is per-thread. Thread t of N takes the STRIDED share {t, t+N, t+2N, ...}, which
 //     is the slot assignment the DFB gives producer thread t.
 //   - a borrowed input is published once per tile counter, and a shard's tiles past the borrowed rings are
 //     copied into the tail rings.
 // Each input is read over the NoC or borrowed from this core's L1 on its own (SRC_SHARDED, SRC_SHARDED_B): its
-// shard, or its slice of an L1-interleaved tensor.
-//
-// "no_bcast" means no SUBTILE broadcast. The cascade this replaces also carried OUTER-dim broadcast,
-// indexing each operand through strides the factory zeroes for unit input dims, so the linear form here
-// is the identity only while every input dim equals the output's. The gate enforces that, and the
-// factory's a_dims_are_output_dims TT_FATAL fires if it is relaxed without restoring the cascade.
+// shard, or its slice of an L1-interleaved tensor. Only an operand whose Map is the identity is borrowed.
 
 #include <cstdint>
 
@@ -30,6 +28,7 @@
 #include "api/tensor/noc_traits.h"
 #include "api/tensor/tensor_accessor.h"
 #include "experimental/kernel_args.h"
+#include "ttnn/operations/experimental/quasar/binary_ng/device/kernels_qsr/common/operand_walk.hpp"
 
 void kernel_main() {
     // A borrowed ring drains when its object leaves scope, so it lives to kernel exit: the compute pops a borrowed
@@ -148,6 +147,135 @@ void kernel_main() {
     const uint32_t in1_stride = dfb_in1.get_stride_size();
 #endif
 
+#if QSR_MAPPED
+    // An operand's Map is not the identity. Counter c of this thread holds the tiles thread_id + c*num_threads, spaced
+    // tile_step apart, and keeps a cursor on its next tile: the output position, and each operand's page there. A step
+    // is adds and compares (operand_walk.hpp), so no tile costs a divide.
+    constexpr uint32_t num_tcs = get_arg(args::num_tcs);
+    const uint32_t tile_step = num_tcs * num_threads;
+    const uint32_t row_tiles = get_arg(args::Wt);
+    const binary_ng_qsr::OutputDims dims{
+        {get_arg(args::Wt), get_arg(args::Ht), get_arg(args::C), get_arg(args::N), get_arg(args::D), get_arg(args::E)}};
+    const binary_ng_qsr::OperandMap map_a{
+        {get_arg(args::wt_stride),
+         get_arg(args::ht_stride),
+         get_arg(args::c_stride),
+         get_arg(args::n_stride),
+         get_arg(args::d_stride),
+         get_arg(args::e_stride),
+         get_arg(args::nD_stride)}};
+    const binary_ng_qsr::OperandMap map_b{
+        {get_arg(args::wt_stride_b),
+         get_arg(args::ht_stride_b),
+         get_arg(args::c_stride_b),
+         get_arg(args::n_stride_b),
+         get_arg(args::d_stride_b),
+         get_arg(args::e_stride_b),
+         get_arg(args::nD_stride_b)}};
+    const binary_ng_qsr::WalkStep step =
+        binary_ng_qsr::make_walk_step(dims, tile_step, SHARD_WALK_WIDTH, row_tiles, BANK_WALK_STRIDE, map_a, map_b);
+    binary_ng_qsr::Cursor cursors[num_tcs];
+    for (uint32_t c = 0; c < num_tcs; ++c) {
+        const uint32_t k = thread_id + c * num_threads;
+#if SHARD_WALK_WIDTH
+        const uint32_t col = k % SHARD_WALK_WIDTH;
+#else
+        const uint32_t col = 0;
+#endif
+        cursors[c] = binary_ng_qsr::make_cursor(
+            binary_ng_qsr::walk_page(start_tile_id, k, SHARD_WALK_WIDTH, row_tiles, BANK_WALK_STRIDE),
+            col,
+            dims,
+            map_a,
+            map_b);
+    }
+#if WALK_PADS
+    // An uneven anchor gives this core pad slots: tiles past the tensor's last row or column. A pad slot moves
+    // nothing; its ring entry keeps stale data, and its result is never read back. A bank slice is a column of
+    // pages, one tile wide.
+    const uint32_t valid_rows = get_arg(args::valid_rows);
+#if SHARD_WALK_WIDTH
+    const uint32_t valid_cols = get_arg(args::valid_cols);
+    auto in_tensor = [&](uint32_t k) { return k / SHARD_WALK_WIDTH < valid_rows && k % SHARD_WALK_WIDTH < valid_cols; };
+#else
+    auto in_tensor = [&](uint32_t k) { return k < valid_rows; };
+#endif
+#else
+    auto in_tensor = [](uint32_t) { return true; };
+#endif
+
+    // n tiles of one counter from its cursor, the first at core-local tile k: a read per operand that moves, then one
+    // barrier and one push_back per ring.
+    auto read_mapped = [&](binary_ng_qsr::Cursor& cursor, uint32_t k, uint32_t n) {
+#if !SRC_SHARDED
+        {
+            DeviceZoneScopedSumN1("RD_RSV");
+            dfb_in0.reserve_back(n);
+        }
+        uint32_t offset = 0;
+#endif
+#if !SRC_SHARDED_B
+        {
+            DeviceZoneScopedSumN1("RD_RSV");
+            dfb_in1.reserve_back(n);
+        }
+        uint32_t offset_b = 0;
+#endif
+        for (uint32_t i = 0; i < n; ++i) {
+            if (in_tensor(k)) {
+#if !SRC_SHARDED
+                noc.async_read(src, dfb_in0, src_tile_bytes, {.page_id = cursor.page[0]}, {.offset_bytes = offset});
+#endif
+#if !SRC_SHARDED_B
+                noc.async_read(
+                    src_b, dfb_in1, src_tile_bytes_b, {.page_id = cursor.page[1]}, {.offset_bytes = offset_b});
+#endif
+            }
+            binary_ng_qsr::advance(cursor, step);
+            k += tile_step;
+#if !SRC_SHARDED
+            offset += in0_stride;
+#endif
+#if !SRC_SHARDED_B
+            offset_b += in1_stride;
+#endif
+        }
+        {
+            DeviceZoneScopedSumN2("RD_BAR");
+            noc.async_read_barrier();
+        }
+#if !SRC_SHARDED
+        dfb_in0.push_back(n);
+#endif
+#if !SRC_SHARDED_B
+        dfb_in1.push_back(n);
+#endif
+    };
+
+    // The same visit order as the identity path below: push_back rotates the tile counter, so tile j of this thread
+    // goes to counter j % num_tcs, and a batch fills one counter.
+    if constexpr (dm_batch == 1) {
+        uint32_t c = 0;
+        for (uint32_t k = thread_id; k < dst_num_tiles; k += num_threads) {
+            read_mapped(cursors[c], k, 1);
+            c = c + 1 == num_tcs ? 0 : c + 1;
+        }
+    } else {
+        const uint32_t round_span = dm_batch * tile_step;
+        const uint32_t batch_span = (dm_batch - 1) * tile_step;
+        const uint32_t full_limit = dst_num_tiles > batch_span ? dst_num_tiles - batch_span : 0;
+        for (uint32_t round_base = thread_id; round_base < dst_num_tiles; round_base += round_span) {
+            uint32_t first = round_base;
+            for (uint32_t c = 0; c < num_tcs && first < dst_num_tiles; ++c, first += num_threads) {
+                uint32_t n = dm_batch;
+                if (first >= full_limit) {
+                    n = (dst_num_tiles - first + tile_step - 1) / tile_step;
+                }
+                read_mapped(cursors[c], first, n);
+            }
+        }
+    }
+#else
 #if SHARD_WALK_WIDTH
     // Beside a borrowed shard, this core computes the anchor's shard: tile k of the shard is page
     // start_tile_id + (k / w) * Wt + k % w, with w = SHARD_WALK_WIDTH, a constant, so the divide is cheap.
@@ -290,6 +418,7 @@ void kernel_main() {
             }
         }
     }
+#endif
     // Each ring's destructor drains this thread's credits at kernel exit. Keep explicit sync here: the implicit-sync
     // overloads (NocOptions::TXN_ID with a DataflowBuffer endpoint) put a thread barrier in that drain,
     // which deadlocks a thread with zero tiles.
