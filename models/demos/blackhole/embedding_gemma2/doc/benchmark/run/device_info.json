@@ -1,0 +1,11 @@
+{
+  "arch": "Arch.BLACKHOLE",
+  "compute_grid": [
+    13,
+    10
+  ],
+  "dram_grid": [
+    8,
+    1
+  ]
+}

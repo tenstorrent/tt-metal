@@ -1,0 +1,35 @@
+{
+  "run_id": "20261028-063930",
+  "commit": "1bcb04d2f046a4a6698104d06b67954a40941377",
+  "branch": "gtobarTT/embedding_gemma2_bringup",
+  "dirty_files": [],
+  "model_id": "/local/ttuser/.cache/huggingface/hub/models--google--embeddinggemma-2/snapshots/914f7f89142e33e77833254d9c9b90c3cef7303b",
+  "snapshot": "/local/ttuser/.cache/huggingface/hub/models--google--embeddinggemma-2/snapshots/914f7f89142e33e77833254d9c9b90c3cef7303b",
+  "precision_file": "/local/ttuser/gtobar/tt-metal/models/demos/blackhole/embedding_gemma2/doc/datatype_sweep/selected_precision_config.json",
+  "precision_env": "",
+  "precision_sha256": "704e3f15081d2c5ae7b4f80c9434e6b5cc4390ce70b678b094224f6bb8882b44",
+  "precision_config_id": "p3_qkv_gu",
+  "precision_sections": {
+    "text": "p3_qkv_gu",
+    "vision": "E6b selected vision policy v_exp_bfp8w4",
+    "audio": "E6b selected audio policy a_h2b8_qkvbf16_shift2_sharded"
+  },
+  "device_params": {
+    "l1_small_size": 0,
+    "trace_region_size": 134217728,
+    "num_command_queues": 1
+  },
+  "n_warmup": 3,
+  "n_iters": 20,
+  "sustained_s": 30.0,
+  "python": "3.10.19",
+  "torch": "2.11.0+cpu",
+  "ttnn": "",
+  "transformers": "5.20.2",
+  "hostname": "sjc-snva-tp100",
+  "env": {
+    "TT_VISIBLE_DEVICES": "0",
+    "HF_HUB_OFFLINE": "1",
+    "OMP_NUM_THREADS": "16"
+  }
+}

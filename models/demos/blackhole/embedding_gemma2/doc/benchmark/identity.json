@@ -1,0 +1,63 @@
+{
+  "stage": "E8 benchmark (final)",
+  "benchmark_run_id": "20261028-063930",
+  "tt_metal": {
+    "commit": "1bcb04d2f046a4a6698104d06b67954a40941377",
+    "describe": "v0.80.0-dev20260921-2004-g1bcb04d2f0",
+    "branch": "gtobarTT/embedding_gemma2_bringup",
+    "stage_base_commit": "119d0ba4c7",
+    "working_tree_at_run_start": "clean (run/run_info.json dirty_files = [])"
+  },
+  "model": {
+    "id": "google/embeddinggemma-2",
+    "hf_revision": "914f7f89142e33e77833254d9c9b90c3cef7303b",
+    "local_snapshot": "/local/ttuser/.cache/huggingface/hub/models--google--embeddinggemma-2/snapshots/914f7f89142e33e77833254d9c9b90c3cef7303b",
+    "hf_hub_offline": true,
+    "implementation": "models/demos/blackhole/embedding_gemma2 (TextEncoder, VisionEncoder, AudioEncoder, EmbeddingGemma2)"
+  },
+  "precision": {
+    "file": "models/demos/blackhole/embedding_gemma2/doc/datatype_sweep/selected_precision_config.json",
+    "sha256": "704e3f15081d2c5ae7b4f80c9434e6b5cc4390ce70b678b094224f6bb8882b44",
+    "config_id": "p3_qkv_gu",
+    "sections": {
+      "text": "p3_qkv_gu (E6a)",
+      "vision": "v_exp_bfp8w4 (E6b)",
+      "audio": "a_h2b8_qkvbf16_shift2_sharded (E6b)"
+    },
+    "override_env_EMBEDDING_GEMMA2_PRECISION": "unset (default file used)"
+  },
+  "card": {
+    "board_type": "p150a",
+    "board_id": "0000040331911033",
+    "bus_id": "0000:01:00.0",
+    "arch": "Arch.BLACKHOLE",
+    "compute_grid": [13, 10],
+    "dram_grid": [8, 1],
+    "dram_speed": "16G",
+    "pcie": "gen5 x16",
+    "limits": {"tdp_w": 150, "tdc_a": 200, "asic_fmax_mhz": 1350, "vdd_min": 0.70, "vdd_max": 0.90},
+    "source": "tt-smi -s snapshot before the run (tt-ops/runs/embeddinggemma-2/e8/logs/tt_smi_snapshot.json) and ttnn device info (run/device_info.json)"
+  },
+  "firmware": {
+    "fw_bundle_version": "19.8.0.0",
+    "cm_fw": "0.30.0.0",
+    "eth_fw": "1.10.1",
+    "dm_app_fw": "0.24.0.0",
+    "gddr_fw": "2.14"
+  },
+  "kmd": "TT-KMD 2.11.0",
+  "host": {
+    "hostname": "sjc-snva-tp100",
+    "os": "Ubuntu 22.04.5 LTS, kernel 6.8.0-138-generic, x86_64",
+    "memory": "61.75 GB",
+    "tt_smi": "5.2.0",
+    "tt_umd": "0.9.5"
+  },
+  "software": {
+    "python": "3.10.19 (tt-metal python_env)",
+    "torch": "2.11.0+cpu",
+    "ttnn": "built from the tt-metal commit above (ttnn.__version__ empty)",
+    "transformers": "5.20.2 (overlay /local/ttuser/gtobar/venvs/tf_overlay, needed by the HF reference)"
+  },
+  "device_open": {"l1_small_size": 0, "trace_region_size": 134217728, "num_command_queues": 1}
+}

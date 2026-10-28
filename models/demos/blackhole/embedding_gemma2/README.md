@@ -87,7 +87,7 @@ padded into 65536 give the same embedding, cosine 1.000000).
 | `tt/text_encoder.py` | `TextEncoder` (host: bucketing, upload, trace capture/replay, readback) |
 | `reference/hf_reference.py` | HF fp32 reference loader + activation capture |
 | `tests/pcc/` | PCC tests per layer kind, full stack, trace, determinism, fallback audit |
-| `tests/perf/perf.py` | traced latency + Tracy forward |
+| `tests/perf/perf.py` | benchmark: traced latency / throughput of every tower and the full model (Benchmark below) + Tracy forward |
 | `demo/demo.py` | retrieval demo |
 | `doc/` | `context_contract.json`, `functional_text/` (stage report, work log, perf artifacts) |
 
@@ -99,10 +99,59 @@ in each module docstring and in `doc/functional_text/README.md`.
 
 ```bash
 pytest models/demos/blackhole/embedding_gemma2/tests/pcc -q          # all PCC / trace / audit tests
-pytest models/demos/blackhole/embedding_gemma2/tests/perf/perf.py -k traced -s
+pytest models/demos/blackhole/embedding_gemma2/tests/perf/perf.py -s             # quick benchmark (Benchmark below)
 pytest models/demos/blackhole/embedding_gemma2/demo/demo.py -s
 python models/demos/blackhole/embedding_gemma2/tests/perf/bench_sustained.py   # burst + sustained
 ```
+
+## Benchmark (E8)
+
+Full report: `doc/benchmark/REPORT.md` (tables per tower and shape, protocol, comparison with the
+earlier stages, limitations); identity of the run: `doc/benchmark/identity.json`; raw records:
+`doc/benchmark/run/`. One P150a, selected precision config, traced, run `20261028-063930` on
+commit `1bcb04d2f0` **[M]**:
+
+| workload | shape | forward p50 ms | request (h2d_d2h) p50 ms | public API p50 ms |
+|---|---|---|---|---|
+| text | 1 x 512 tokens | 6.869 (146 emb/s) | 6.951 | |
+| text | 32 x 128 tokens | 22.227 (1,440 emb/s) | 22.756 | |
+| text | 1 x 8192 tokens | 93.041 | 93.178 | |
+| image (vision tower) | 1 x 2560 patches | 17.395 (57.5 images/s) | 18.151 | |
+| audio 30 s (audio tower) | 1 x 768 tokens | 11.961 (83.6 clips/s) | 12.775 | |
+| full model, image + text | 267 tokens + 1 image | 24.229 | 24.698 | 33.730 |
+| full model, audio 10 s + text | 260 tokens + 1 clip | 14.170 | 14.353 | 46.994 |
+
+`forward` = trace replay + one sync per iteration (inputs resident); `h2d_d2h` = input upload +
+replay + output readback; public API = `EmbeddingGemma2.encode([item], traced=True)` including the
+HF processor. 2cq is not supported (one command queue). Vision sustains 5.4 % slower than burst
+after 30 s back to back; text and audio do not throttle.
+
+How to run `tests/perf/perf.py` (from the tt-metal root, environment as in Setup). A plain run is
+quick; every extra is an opt-in env switch (`"1"` = on). They combine, and `-k` picks single cases.
+Costs with a warm weight / kernel cache: the plain run and the all-on run are measured whole
+(16 s and 318 s wall); the per-option deltas are estimated from the per-class log timestamps of the
+full-sweep run:
+
+| option | adds | about |
+|---|---|---|
+| (none) | headline shapes, `forward` mode: text 1 x 512, vision 1 x 2560, audio 1 x 768, full model text 472 tokens; finite-output asserts | 0.3 min |
+| `EMBEDDING_GEMMA2_PERF_SHAPES=1` | every shape: text 1 x 128 / 512 / 2048 / 8192, 8 x 512, 32 x 128; vision 1 x 2560, 4 x 2560, 8 x 1280; audio 1 x 256, 1 x 768, 4 x 256; full text, image + text, audio + text | +0.5 min |
+| `EMBEDDING_GEMMA2_PERF_MODES=1` | `h2d_d2h`, `api` (full model) and `2cq` (records "not supported") besides `forward` | +0.3 min |
+| `EMBEDDING_GEMMA2_PERF_LONG=1` | text 1 x 32768 in its own device session | +0.8 min |
+| `EMBEDDING_GEMMA2_PERF_PROBE=1` | text batch-capacity probe at 128 tokens (32 ... 8192, stops at the first OOM) | +0.8 min |
+| `EMBEDDING_GEMMA2_PERF_SUSTAINED=1` | 30 s sustained vs burst per tower at its headline shape | +2.5 min |
+| `EMBEDDING_GEMMA2_PERF_HF_CHECK=1` | HF fp32 comparison of the timed output (one shape per tower, every selected full case) | +0.3 min |
+| `EMBEDDING_GEMMA2_PERF_ALL=1` | all of the above: the full sweep of `doc/benchmark/REPORT.md` | 5.3 min |
+
+```bash
+pytest models/demos/blackhole/embedding_gemma2/tests/perf/perf.py -s                                   # quick
+EMBEDDING_GEMMA2_PERF_ALL=1 pytest models/demos/blackhole/embedding_gemma2/tests/perf/perf.py -s       # full sweep
+EMBEDDING_GEMMA2_PERF_SHAPES=1 pytest models/demos/blackhole/embedding_gemma2/tests/perf/perf.py -k "TestVision and b4x2560" -s
+```
+
+Other env: `EMBEDDING_GEMMA2_PERF_ITERS` (20 timed iterations), `EMBEDDING_GEMMA2_PERF_WARMUP` (3,
+minimum 3), `EMBEDDING_GEMMA2_SUSTAINED_S` (30), `EMBEDDING_GEMMA2_BENCH_DIR` (where `perf.jsonl` /
+`perf.csv` are appended; default `doc/benchmark/run`).
 
 ## Text tower performance (E5a optimized, E6a precision)
 
