@@ -2,21 +2,17 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Metal 2.0 fork of transpose_wh_rm.cpp (see the legacy copy alongside).
-// Compute logic is unchanged; resource access uses Metal 2.0 named handles:
-//   - legacy magic buffer indices -> dfb::in0 / dfb::tilize / dfb::out: the tilize input, the tilize
-//     output that feeds the transpose, and the pack destination (c_0 / c_24 / c_16 on the
-//     non-sharded path, c_24 / c_25 / c_16 under SHARDED); plus dfb::out_staging for the sharded
-//     path's staging destination (c_27), bound — and OUT_STAGING defined — only when Ht > 8
-//   - Ht / Wt / HtWt (legacy CTAs 0-2)            -> named compile-time args
-//   - num_hw_blocks_per_core                        -> named arg: a runtime arg on the non-sharded
-//                                                     path, a compile-time arg under SHARDED
-//   - the sharded path's CTAs 3-8                   -> named compile-time args
+// Row-major WH transpose: each block of Ht x Wt tiles is tilized, transposed tile by tile, and
+// pack-untilized back to rows.
+//   - dfb::in0 / dfb::tilize / dfb::out: the tilize input, the tilized tiles the transpose reads,
+//     and the pack destination. With OUT_STAGING (sharded path, Ht > 8) the pack destination is
+//     dfb::out_staging instead.
+//   - Ht / Wt / HtWt are compile-time args. num_hw_blocks_per_core is a runtime arg on the
+//     non-sharded path; under SHARDED it is a compile-time arg, as are the output-row and
+//     pack-page settings.
 //
-// Both paths of the legacy kernel live here, selected by the SHARDED define exactly as in the
-// legacy copy: TransposeWHProgramFactory binds this source without SHARDED,
-// TransposeWHShardedRMProgramFactory binds it with SHARDED (the pack_untilize narrow-row path and
-// the yolov4/PCC note on its use_narrow_row conditions are part of that path).
+// TransposeWHProgramFactory binds this source without SHARDED; TransposeWHShardedRMProgramFactory
+// binds it with SHARDED.
 
 #include <cstdint>
 

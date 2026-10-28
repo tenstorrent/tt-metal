@@ -285,9 +285,8 @@ ttnn::device_operation::ProgramArtifacts TransposeWHShardedRMProgramFactory::cre
         compute_hw.unpack_modes.insert({TILIZE, UnpackMode::UnpackToDest});
     }
 
-    // The compute kernel is the shared transpose_wh_rm fork, compiled with SHARDED; its role names
-    // for the tilize input / tilize output / pack destination are in0 / tilize / out, and the
-    // staging destination is out_staging.
+    // The compute kernel is shared with TransposeWHProgramFactory; this factory compiles it with
+    // SHARDED.
     Group<DFBBinding> compute_dfb_bindings = {
         DFBBinding{
             .dfb_spec_name = IN,
