@@ -52,6 +52,11 @@ CASES = [
         "move": [0, 1, 7, 8, 9],
         "restore": [0],
         "compare": [2, 4, 5, 6, 11, 12, 13, 14, 15],
+        # vs float64 (test _check_head; owner 2026-10-28: limits = the measured error with a margin). Measured on seeds
+        # 0 / 1 / 2, A and B each (6 calls, worst chip): shared rows rel L2 0.0494-0.0495, PCC 0.99964 (bfp8 weights,
+        # LoFi); picks equal on 100% of the tokens clear of noise, 99.22-99.80% of all (near ties); weights max abs err
+        # 1.000-1.016e-3 (~1 bf16 ulp at 0.25). Limits: rel 0.06, PCC 0.9995, all picks 0.98, weights 2e-3; clear 100%.
+        "ref_limits": {"se_rel": 0.06, "se_pcc": 0.9995, "picks_all": 0.98, "w_err": 2e-3},
         "seed": 0,
     },
     {
