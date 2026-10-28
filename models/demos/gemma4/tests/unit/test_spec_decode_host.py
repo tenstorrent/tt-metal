@@ -646,13 +646,13 @@ def test_ladder_doubles_and_covers_the_whole_context():
 
 
 @pytest.mark.skipif(not _HAS_VLLM, reason="needs vLLM (vllm_tt_plugin)")
-@pytest.mark.parametrize("shape", [(1, 5), (5, 5), (8, 3), (16, 1)])
-def test_every_position_in_the_context_has_a_rung_per_shape(shape):
-    k = shape[1]
-    ladder = mtp_pv_width_ladder(262144, draft_len=k)
-    spec = _records({shape: ladder})
-    for pos in (0, 1, 1000, 2048, 4096, 131072, 262143):
-        assert spec.serving_width_for(shape, pos) is not None, (shape, pos)
+def test_every_position_in_the_context_has_a_rung_per_shape():
+    for shape in [(1, 5), (5, 5), (8, 3), (16, 1)]:
+        k = shape[1]
+        ladder = mtp_pv_width_ladder(262144, draft_len=k)
+        spec = _records({shape: ladder})
+        for pos in (0, 1, 1000, 2048, 4096, 131072, 262143):
+            assert spec.serving_width_for(shape, pos) is not None, (shape, pos)
 
 
 def test_selection_is_the_narrowest_covering_width():
@@ -794,16 +794,14 @@ _SERVING_METHODS = [
 ]
 
 
-@pytest.mark.parametrize("name", _SERVING_METHODS)
-def test_serving_path_methods_bind_every_name_they_read(name):
+def test_serving_path_methods_bind_every_name_they_read():
     tree = _module()
     module_names = _bound_at_module_level(tree)
-    for fn in _functions(tree):
-        if fn.name == name:
-            free = _free_names(fn, module_names)
-            assert free == set(), f"{name} reads unbound name(s): {sorted(free)}"
-            return
-    raise AssertionError(f"{name} is not defined in spec_decode.py")
+    defined = {fn.name: fn for fn in _functions(tree)}
+    for name in _SERVING_METHODS:
+        assert name in defined, f"{name} is not defined in spec_decode.py"
+        free = _free_names(defined[name], module_names)
+        assert free == set(), f"{name} reads unbound name(s): {sorted(free)}"
 
 
 # ===== merged from tests/unit/test_spec_draft_len.py: Host-only tests for the pure speculative draft-length policies.
@@ -1258,18 +1256,13 @@ def test_unknown_native_stays_permissive(monkeypatch):
 def test_default_k_by_rows_table_parses_to_the_catalog_entries():
     assert parse_k_by_rows(SPEC_K_BY_ROWS_DEFAULT) == ((5, 5), (8, 3), (16, 1))
     assert parse_k_by_rows(" 5:5 , 8:3,16:1, ") == ((5, 5), (8, 3), (16, 1))
-
-
-def test_default_capture_shapes_are_one_k_max_plus_one_per_entry():
+    # the default capture shapes are one (1, k_max) record plus one per entry
     table = parse_k_by_rows(SPEC_K_BY_ROWS_DEFAULT)
     assert spec_capture_shapes(table, 5) == [(1, 5), (5, 5), (8, 3), (16, 1)]
     # a table that already names (1, k_max) does not duplicate it
     assert spec_capture_shapes(((1, 5), (8, 3)), 5) == [(1, 5), (8, 3)]
-
-
-@pytest.mark.parametrize(
-    ("text", "message"),
-    [
+    # bad tables are refused with the reason
+    for text, message in [
         ("5:5,4:3", "max_rows must increase"),
         ("5-5", "is not max_rows:k"),
         ("5:x", "is not max_rows:k"),
@@ -1277,14 +1270,10 @@ def test_default_capture_shapes_are_one_k_max_plus_one_per_entry():
         ("16:2", "above the 32-row argmax tile"),  # 16 * 3 = 48 rows
         ("0:5", "must be >= 1"),
         ("5:0", "must be >= 1"),
-    ],
-)
-def test_bad_k_by_rows_tables_are_refused_with_the_reason(text, message):
-    with pytest.raises(ValueError, match=message):  # allow-pytest.raises (pure parser)
-        parse_k_by_rows(text)
-
-
-def test_the_tile_rule_is_the_only_shape_rule():
+    ]:
+        with pytest.raises(ValueError, match=message):  # allow-pytest.raises (pure parser)
+            parse_k_by_rows(text)
+    # the tile rule is the only shape rule
     assert spec_check_shape((16, 1)) == (16, 1)  # 32 rows exactly
     assert spec_check_shape([1, 31]) == (1, 31)  # any (rows, drafts) pair, returned as an int tuple
     for shape in [(32, 1), (11, 2), (1, 32)]:
@@ -1299,11 +1288,8 @@ def test_a_plan_sorts_shapes_and_widths_and_drops_duplicates():
     shapes, widths = serving_plan([(8, 3), (1, 5), (8, 3)], {(1, 5): [2048, 1024, 1024], (8, 3): (4096,)}, max_rows=16)
     assert shapes == [(1, 5), (8, 3)]
     assert widths == {(1, 5): [1024, 2048], (8, 3): [4096]}
-
-
-@pytest.mark.parametrize(
-    ("shapes", "widths", "max_rows", "message"),
-    [
+    # bad plans are refused
+    for shapes, widths, max_rows, message in [
         ([(1, 5)], {}, 16, "no verify widths for shape"),
         ([(1, 5)], {(1, 5): [1024], (5, 5): [1024]}, 16, "not prepared"),
         ([(1, 5)], {(1, 5): [1000]}, 16, "multiples of 64"),
@@ -1311,43 +1297,50 @@ def test_a_plan_sorts_shapes_and_widths_and_drops_duplicates():
         ([(16, 1)], {(16, 1): [1024]}, 8, "more rows than max_rows"),
         ([], {}, 16, "at least one shape"),
         ([(1, 5)], {(1, 5): [1024]}, 0, "max_rows must be >= 1"),
-    ],
-)
-def test_bad_plans_are_refused(shapes, widths, max_rows, message):
-    with pytest.raises(ValueError, match=message):  # allow-pytest.raises (pure)
-        serving_plan(shapes, widths, max_rows)
+    ]:
+        with pytest.raises(ValueError, match=message):  # allow-pytest.raises (pure)
+            serving_plan(shapes, widths, max_rows)
 
 
 # Seed index ---------------------------------------------------------------------------------------
-def test_first_step_after_a_reseed_gathers_the_reseed_pool_rows():
+def test_seed_index_gathers_reseed_pool_rows_and_previous_verify_rows_per_record():
+    # the first step after a reseed gathers the reseed-pool rows
     idx = serving_seed_index((5, 5), rows=[7, 3], seed_cols=[None, None], previous=None, seeded={7: 0, 3: 1})
     assert idx == [32, 33, 32, 32, 32]  # padding rows mirror live row 0 (serving_pad_rows)
-
-
-def test_continuation_in_the_same_record_gathers_verify_row_r_times_p_plus_col():
+    # a continuation in the same record gathers verify row r * P + col
     prev = (5, [7, 3, 9])
     idx = serving_seed_index((5, 5), rows=[7, 3, 9], seed_cols=[0, 5, 2], previous=prev, seeded={})
     assert idx == [0 * 6 + 0, 1 * 6 + 5, 2 * 6 + 2, 0, 0]
-
-
-def test_continuation_across_shapes_uses_the_previous_record_geometry():
-    """(5,5) replayed rows [a, b, c]; the next step is (8,3) with rows [c, a]: the gather
-    still indexes the 6-column layout of the replay that produced the hidden."""
+    # a continuation across shapes uses the previous record's geometry: (5,5) replayed rows [a, b, c]; the
+    # next step is (8,3) with rows [c, a]: the gather still indexes the 6-column layout of the replay that
+    # produced the hidden.
     prev = (5, [10, 11, 12])
     idx = serving_seed_index((8, 3), rows=[12, 10], seed_cols=[2, 5], previous=prev, seeded={})
     assert idx[:2] == [2 * 6 + 2, 0 * 6 + 5]
     assert idx[2:] == [idx[0]] * 6  # padding rows mirror row 0
-
-
-def test_a_reseeded_row_and_a_continuing_row_mix_in_one_step():
+    # a reseeded row and a continuing row mix in one step
     prev = (3, [1, 2])
     idx = serving_seed_index((8, 3), rows=[2, 5], seed_cols=[3, None], previous=prev, seeded={5: 1})
     assert idx[:2] == [1 * 4 + 3, 32 + 1]
+    # padding rows take row zero whatever its source: row 0 continues from the previous replay, so the
+    # mirrors gather that same verify row
+    idx = serving_seed_index((8, 3), rows=[5, 6], seed_cols=[2, None], previous=(3, [5]), seeded={6: 0})
+    assert idx == [0 * 4 + 2, 32, 2, 2, 2, 2, 2, 2]
+    # row 0 was reseeded: the mirrors gather its reseed-pool row
+    idx = serving_seed_index((5, 5), rows=[6, 5], seed_cols=[None, 2], previous=(3, [5]), seeded={6: 1})
+    assert idx == [33, 2, 33, 33, 33]
+    # padding rows mirror the first live row (the bounded ring pool has no null block)
+    assert serving_pad_rows([7, 3], 5) == [7, 3, 7, 7, 7]
+    assert serving_pad_rows([9], 1) == [9]
+    assert serving_pad_rows([4, 2, 1], 3) == [4, 2, 1]
+    with pytest.raises(ValueError, match="at least one live row"):  # allow-pytest.raises (pure)
+        serving_pad_rows([], 5)
+    with pytest.raises(ValueError, match="3 live rows for a 2-row record"):  # allow-pytest.raises (pure)
+        serving_pad_rows([1, 2, 3], 2)
 
 
-@pytest.mark.parametrize(
-    ("rows", "seed_cols", "previous", "seeded", "message"),
-    [
+def test_seed_index_refuses_inconsistent_histories():
+    for rows, seed_cols, previous, seeded, message in [
         ([1], [6], (5, [1]), {}, "outside 0..5"),
         ([1], [-1], (5, [1]), {}, "outside 0..5"),
         ([4], [0], (5, [1, 2]), {}, "last replay served rows"),
@@ -1356,11 +1349,9 @@ def test_a_reseeded_row_and_a_continuing_row_mix_in_one_step():
         ([4, 4], [0, 0], (5, [4]), {}, "duplicate rows"),
         ([1, 2, 3, 4, 5, 6], [0] * 6, (5, [1, 2, 3, 4, 5, 6]), {}, "expected 1..5"),
         ([1], [0, 0], (5, [1]), {}, "seed_cols for 1 live rows"),
-    ],
-)
-def test_seed_index_refuses_inconsistent_histories(rows, seed_cols, previous, seeded, message):
-    with pytest.raises(ValueError, match=message):  # allow-pytest.raises (pure)
-        serving_seed_index((5, 5), rows, seed_cols, previous, seeded)
+    ]:
+        with pytest.raises(ValueError, match=message):  # allow-pytest.raises (pure)
+            serving_seed_index((5, 5), rows, seed_cols, previous, seeded)
 
 
 # Masks --------------------------------------------------------------------------------------------
@@ -1374,29 +1365,22 @@ def test_serving_masks_are_p_row_per_batch_and_bf16():
     neg = torch.tensor(SPEC_MASK_NEG, dtype=torch.bfloat16)
     for m in (mf, ms):
         assert set(m.float().unique().tolist()) <= {0.0, float(neg)}
-
-
-def test_serving_masks_match_the_batched_host_builder_row_for_row():
-    """The old batched builder made [B, 1, H*P, S_k] on the host; the new one makes the
-    P-row block and the in-trace H repeat tiles it. With H=1 they must agree exactly."""
+    # They match the batched host builder row for row: the old batched builder made [B, 1, H*P, S_k] on
+    # the host; the new one makes the P-row block and the in-trace H repeat tiles it. With H=1 they must
+    # agree exactly.
     cs, B, P, S_k = [100, 7, 2000], 3, 6, 2048
     ref_f, ref_s = SpeculativeDecoder._packed_mask_host(None, cs, B, P, 1, _W, S_k)
     mf, ms = serving_masks_host(cs, P, _W, S_k)
     assert torch.equal(mf, ref_f)
     assert torch.equal(ms, ref_s)
-
-
-def test_the_head_repeat_reproduces_the_head_major_layout():
-    """ttnn.repeat([1, 1, H, 1]) on [B, 1, P, S_k] tiles the whole P block per head, i.e.
-    row h*P+p -- the packed SDPA layout the host builder produced directly."""
+    # The head repeat reproduces the head-major layout: ttnn.repeat([1, 1, H, 1]) on [B, 1, P, S_k] tiles
+    # the whole P block per head, i.e. row h*P+p -- the packed SDPA layout the host builder produced directly.
     cs, B, P, H, S_k = [5, 300], 2, 4, 3, 1024
     ref_f, ref_s = SpeculativeDecoder._packed_mask_host(None, cs, B, P, H, _W, S_k)
     mf, ms = serving_masks_host(cs, P, _W, S_k)
     assert torch.equal(mf.repeat(1, 1, H, 1), ref_f)
     assert torch.equal(ms.repeat(1, 1, H, 1), ref_s)
-
-
-def test_the_full_mask_is_causal_per_row_and_the_sliding_mask_adds_the_window():
+    # the full mask is causal per row and the sliding mask adds the window
     mf, ms = serving_masks_host([1500], P=3, window=_W, S_k=2048)
     for p in range(3):
         upper = 1500 + p
@@ -1404,6 +1388,18 @@ def test_the_full_mask_is_causal_per_row_and_the_sliding_mask_adds_the_window():
         assert full_ok.min() == 0 and full_ok.max() == upper and full_ok.numel() == upper + 1
         slide_ok = (ms[0, 0, p] == 0).nonzero().reshape(-1)
         assert slide_ok.min() == upper - _W + 1 and slide_ok.max() == upper and slide_ok.numel() == _W
+    # The padded bytes count the 32-row tile, not the logical rows: a [B, 1, P, S_k] TILE tensor pads P to
+    # 32 rows, so the device footprint of one mask (or one fp32 intermediate of the in-trace builder) is
+    # B * 32 * S_k * elem, whatever P is.
+    top = 263168
+    assert serving_mask_padded_bytes((1, 5), top) == 32 * top * 2
+    assert serving_mask_padded_bytes((16, 1), top) == 16 * 32 * top * 2
+    assert serving_mask_padded_bytes((16, 1), 32768, elem_bytes=4) == 16 * 32 * 32768 * 4  # one fp32 chunk, 67 MB
+    # P does not enter: (8, 1) and (8, 3) cost the same tile-padded bytes
+    assert serving_mask_padded_bytes((8, 1), top) == serving_mask_padded_bytes((8, 3), top) == 8 * 32 * top * 2
+    # the helper applies the tile rule like every other shape consumer
+    with pytest.raises(ValueError, match="argmax tile"):  # allow-pytest.raises (pure)
+        serving_mask_padded_bytes((16, 2), top)
 
 
 def test_the_ring_mask_spans_ring_slots_with_the_pv_host_inputs_rule():
@@ -1426,68 +1422,46 @@ def test_the_ring_mask_spans_ring_slots_with_the_pv_host_inputs_rule():
             assert torch.equal(ms[b, 0, p], ref), (b, p)
 
 
-def test_mask_padded_bytes_count_the_32_row_tile_not_the_logical_rows():
-    """A [B, 1, P, S_k] TILE tensor pads P to 32 rows: the device footprint of one mask (or one fp32
-    intermediate of the in-trace builder) is B * 32 * S_k * elem, whatever P is."""
-    top = 263168
-    assert serving_mask_padded_bytes((1, 5), top) == 32 * top * 2
-    assert serving_mask_padded_bytes((16, 1), top) == 16 * 32 * top * 2
-    assert serving_mask_padded_bytes((16, 1), 32768, elem_bytes=4) == 16 * 32 * 32768 * 4  # one fp32 chunk, 67 MB
-    # P does not enter: (8, 1) and (8, 3) cost the same tile-padded bytes
-    assert serving_mask_padded_bytes((8, 1), top) == serving_mask_padded_bytes((8, 3), top) == 8 * 32 * top * 2
-    # the helper applies the tile rule like every other shape consumer
-    with pytest.raises(ValueError, match="argmax tile"):  # allow-pytest.raises (pure)
-        serving_mask_padded_bytes((16, 2), top)
-
-
 # In-trace mask builder: its plan + op-for-op emulation must equal the host reference --------------
-@pytest.mark.parametrize(
-    ("positions", "P", "S_k"),
-    [
+def test_device_mask_plan_equals_the_host_masks_unbounded():
+    for positions, P, S_k in [
         ([100, 7, 2000], 6, 2048),
         ([0], 6, 1024),  # anchor at position 0: only key 0 visible on row 0
         ([1023, 1018], 6, 2048),  # rows straddle the window and the first rung
         ([5000, 11, 300], 2, 8192),
         ([40000], 4, 65536 + 1024),  # more than one SPEC_MASK_KEY_CHUNK of keys
-    ],
-)
-def test_device_mask_plan_equals_the_host_masks_unbounded(positions, P, S_k):
-    plan = serving_mask_plan(positions, P)
-    assert plan["q"].tolist() == [[c + p for p in range(P)] for c in positions]
-    assert "tm" not in plan and "base" not in plan
-    got_f, got_s = serving_masks_from_plan(plan, S_k, _W)
-    ref_f, ref_s = serving_masks_host(positions, P, _W, S_k)
-    assert got_f.shape == ref_f.shape and got_s.shape == ref_s.shape
-    assert got_f.dtype == torch.bfloat16 and got_s.dtype == torch.bfloat16
-    assert torch.equal(got_f, ref_f)
-    assert torch.equal(got_s, ref_s)
+    ]:
+        plan = serving_mask_plan(positions, P)
+        assert plan["q"].tolist() == [[c + p for p in range(P)] for c in positions]
+        assert "tm" not in plan and "base" not in plan
+        got_f, got_s = serving_masks_from_plan(plan, S_k, _W)
+        ref_f, ref_s = serving_masks_host(positions, P, _W, S_k)
+        assert got_f.shape == ref_f.shape and got_s.shape == ref_s.shape
+        assert got_f.dtype == torch.bfloat16 and got_s.dtype == torch.bfloat16
+        assert torch.equal(got_f, ref_f), (positions, P, S_k)
+        assert torch.equal(got_s, ref_s), (positions, P, S_k)
 
 
-@pytest.mark.parametrize(
-    ("positions", "P", "S_k", "ring"),
-    [
+def test_device_mask_plan_equals_the_host_masks_under_a_ring():
+    for positions, P, S_k, ring in [
         ([3000, 10], 6, 4096, 2048),
         ([2047, 2048, 2049], 6, 4096, 2048),  # the wrap boundary
         ([0, 1], 2, 1024, 2048),  # early context: the ring's untouched tail is masked
         ([70000, 1500], 4, 71680, 2048),
         ([5, 4100], 6, 8192, 4096),
-    ],
-)
-def test_device_mask_plan_equals_the_host_masks_under_a_ring(positions, P, S_k, ring):
-    plan = serving_mask_plan(positions, P, ring=ring)
-    for b, c in enumerate(positions):
-        top = c + P - 1
-        assert int(plan["tm"][b]) == top % ring
-        assert int(plan["base"][b]) == top - top % ring
-    got_f, got_s = serving_masks_from_plan(plan, S_k, _W, ring=ring)
-    ref_f, ref_s = serving_masks_host(positions, P, _W, S_k, ring=ring)
-    assert got_s.shape == (len(positions), 1, P, ring)
-    assert torch.equal(got_f, ref_f)
-    assert torch.equal(got_s, ref_s)
-
-
-def test_the_ring_slot_position_rule_matches_the_modulo_form():
-    """base + j - ring * [j > tm] is top - ((top - j) mod ring) for every slot: the device form needs no modulo."""
+    ]:
+        plan = serving_mask_plan(positions, P, ring=ring)
+        for b, c in enumerate(positions):
+            top = c + P - 1
+            assert int(plan["tm"][b]) == top % ring
+            assert int(plan["base"][b]) == top - top % ring
+        got_f, got_s = serving_masks_from_plan(plan, S_k, _W, ring=ring)
+        ref_f, ref_s = serving_masks_host(positions, P, _W, S_k, ring=ring)
+        assert got_s.shape == (len(positions), 1, P, ring)
+        assert torch.equal(got_f, ref_f), (positions, P, S_k, ring)
+        assert torch.equal(got_s, ref_s), (positions, P, S_k, ring)
+    # The ring-slot position rule matches the modulo form: base + j - ring * [j > tm] is
+    # top - ((top - j) mod ring) for every slot, so the device form needs no modulo.
     ring, P = 2048, 6
     for c in (0, 7, 2042, 2043, 2048, 5000, 100000):
         plan = serving_mask_plan([c], P, ring=ring)
@@ -1506,18 +1480,14 @@ def test_select_rows_picks_rows_zero_pads_padding_rows_and_narrow_sources():
     assert out[0].tolist() == [9, 10, 11, 12, 0, 0]
     assert out[1].tolist() == [1, 2, 3, 4, 0, 0]
     assert out[2:].abs().sum() == 0
-
-
-def test_select_rows_clips_a_wider_source_only_when_allowed():
+    # a wider source is clipped only when allowed
     table = torch.tensor([[1, 2, 3, 0], [5, 6, 7, 8]])
     # zeros past the width are not live blocks: fine either way
     assert serving_select_rows(table, [0], 1, 3, allow_clip=False).tolist() == [[1, 2, 3]]
     assert serving_select_rows(table, [1], 1, 3, allow_clip=True).tolist() == [[5, 6, 7]]
     with pytest.raises(ValueError, match="live blocks past column 3"):  # allow-pytest.raises (pure)
         serving_select_rows(table, [1], 1, 3, allow_clip=False)
-
-
-def test_select_rows_refuses_bad_rows_and_shapes():
+    # bad rows and shapes are refused
     table = torch.tensor([[1, 2], [3, 4]])
     with pytest.raises(ValueError, match="outside the 2-row page table"):  # allow-pytest.raises (pure)
         serving_select_rows(table, [2], 1, 2, allow_clip=True)
@@ -1546,6 +1516,8 @@ def _bare_decoder(n_layers=3):
 
 def test_capture_and_step_refuse_to_run_out_of_order():
     spec = _bare_decoder()
+    spec.serving_release()  # a no-op before prepare
+    assert spec._srv_records is None
     with pytest.raises(RuntimeError, match="serving_prepare has not run"):  # allow-pytest.raises (pure)
         spec.serving_capture()
     spec._srv_records = {}
@@ -1558,12 +1530,6 @@ def test_capture_and_step_refuse_to_run_out_of_order():
         spec.serving_capture()
 
 
-def test_release_is_a_no_op_before_prepare():
-    spec = _bare_decoder()
-    spec.serving_release()
-    assert spec._srv_records is None
-
-
 def test_refresh_installs_one_host_table_per_layer_as_int64_rows():
     spec = _bare_decoder(n_layers=3)
     spec.serving_refresh_page_tables(None)  # no-op, like refresh_page_tables
@@ -1573,40 +1539,28 @@ def test_refresh_installs_one_host_table_per_layer_as_int64_rows():
     assert spec._srv_per_layer[0].dtype == torch.int64 and spec._srv_per_layer[0].shape == (2, 2)
     assert spec._srv_per_layer[1] is None
     assert spec._srv_per_layer[2].shape == (1, 2)  # a 1-D row is a one-row table
-
-
-@pytest.mark.parametrize(
-    ("tables", "error", "message"),
-    [
+    # tables that do not match the target are refused
+    for tables, error, message in [
         ([torch.zeros(1, 2)] * 2, ValueError, "one table per target layer \\(3\\)"),
         (torch.zeros(1, 2), ValueError, "one table per target layer"),
         ([torch.zeros(1, 2), "x", None], TypeError, "must be a host torch tensor"),
         ([torch.zeros(1, 2, 2), None, None], ValueError, "must be \\[rows, blocks\\]"),
-    ],
-)
-def test_refresh_refuses_tables_that_do_not_match_the_target(tables, error, message):
-    spec = _bare_decoder(n_layers=3)
-    with pytest.raises(error, match=message):  # allow-pytest.raises (pure)
-        spec.serving_refresh_page_tables(tables)
-
-
-@pytest.mark.parametrize(
-    ("rows", "anchors", "positions", "message"),
-    [
+    ]:
+        spec = _bare_decoder(n_layers=3)
+        with pytest.raises(error, match=message):  # allow-pytest.raises (pure)
+            spec.serving_refresh_page_tables(tables)
+    # the step inputs are validated per row
+    for rows, anchors, positions, message in [
         ([], [], [], "expected 1..5"),
         ([0, 1, 2, 3, 4, 5], [1] * 6, [0] * 6, "expected 1..5"),
         ([0, 1], [1], [0, 0], "lengths differ"),
         ([0, 0], [1, 1], [0, 0], "duplicate rows"),
         ([-1], [1], [0], "negative row"),
         ([0], [1], [-3], "negative anchor/position"),
-    ],
-)
-def test_step_inputs_are_validated_per_row(rows, anchors, positions, message):
-    with pytest.raises(ValueError, match=message):  # allow-pytest.raises (pure)
-        SpeculativeDecoder._srv_check_rows((5, 5), rows, anchors, positions)
-
-
-def test_step_result_reads_logits_through_its_reader():
+    ]:
+        with pytest.raises(ValueError, match=message):  # allow-pytest.raises (pure)
+            SpeculativeDecoder._srv_check_rows((5, 5), rows, anchors, positions)
+    # the step result reads its logits through its reader
     seen = []
     result = ServingStepResult(
         shape=(5, 5),
@@ -1627,20 +1581,21 @@ def test_step_result_reads_logits_through_its_reader():
 # --- packed verify KV write: the sharded-layout probe must run whenever the per-position loop runs ---
 
 
-@pytest.mark.parametrize(
-    "kv_staging, embed_idx, is_kv_shared, expected",
-    [
+def test_the_packed_write_probe_follows_the_fallback_loop():
+    from models.demos.gemma4.tt.attention.decode import packed_write_takes_fallback_loop
+
+    for kv_staging, embed_idx, is_kv_shared, expected in [
         (None, None, False, True),  # no staging: the loop, probe needed
         ("staging", None, False, True),  # staging attached but a positional write: still the loop
         ("staging", "embed", False, False),  # loop-free staging fill: no probe
         (None, "embed", False, True),  # embed index without staging cannot fill loop-free
         ("staging", None, True, False),  # shared-KV layers write nothing
-    ],
-)
-def test_the_packed_write_probe_follows_the_fallback_loop(kv_staging, embed_idx, is_kv_shared, expected):
-    from models.demos.gemma4.tt.attention.decode import packed_write_takes_fallback_loop
-
-    assert packed_write_takes_fallback_loop(kv_staging, embed_idx, is_kv_shared) is expected
+    ]:
+        assert packed_write_takes_fallback_loop(kv_staging, embed_idx, is_kv_shared) is expected, (
+            kv_staging,
+            embed_idx,
+            is_kv_shared,
+        )
 
 
 # Default width ladder (x4 from 2048) and the trace-region projection -------------------------------
@@ -1654,53 +1609,43 @@ def test_default_ladder_is_x4_from_2048_up_to_the_top_rung():
     assert serving_width_ladder(1024, 5) == [2048]  # the top rung alone when it is the smallest
     # the top rung is independent of K across the default table (every tail rounds to 263168)
     assert {serving_width_ladder(262144, k)[-1] for _rows, k in _DEFAULT_SHAPES} == {263168}
-
-
-@pytest.mark.parametrize("max_context", [1024, 4096, 8192, 65536, 131072, 262144, 300000])
-@pytest.mark.parametrize("k", [1, 3, 5])
-def test_every_ladder_is_x4_spaced_and_ends_at_a_covering_top_rung(max_context, k):
-    ladder = serving_width_ladder(max_context, k)
-    assert ladder == sorted(set(ladder))
-    for a, b in zip(ladder, ladder[1:]):
-        assert b == 4 * a or b == ladder[-1], (a, b)
-    assert all(w % 1024 == 0 for w in ladder)
-    # the last position of the context gets a rung, and the rung count stays logarithmic
-    assert serving_width_for(ladder, max_context - 1, k) == ladder[-1]
-    assert len(ladder) <= 6
-
-
-def test_below_the_smallest_rung_the_record_still_serves():
+    # below the smallest rung the record still serves
     ladder = serving_width_ladder(262144, 5)
     assert serving_width_for(ladder, 0, 5) == 2048
     assert serving_width_for(ladder, 2048 - 7, 5) == 2048
     assert serving_width_for(ladder, 2048 - 6, 5) == 8192
-
-
-def test_the_rung_override_keeps_the_largest_rungs():
-    ladder = serving_width_ladder(262144, 5)
+    # the rung override keeps the largest rungs
     assert serving_width_ladder(262144, 5, max_rungs=2) == ladder[-2:] == [131072, 263168]
     assert serving_width_ladder(262144, 5, max_rungs=1) == [263168]
     assert serving_width_ladder(262144, 5, max_rungs=99) == ladder
     with pytest.raises(ValueError, match="max_rungs must be >= 1"):  # allow-pytest.raises (pure)
         serving_width_ladder(262144, 5, max_rungs=0)
-
-
-@pytest.mark.parametrize(
-    ("kwargs", "message"),
-    [
+    # bad ladder parameters are refused
+    for kwargs, message in [
         ({"max_context": 0, "draft_len": 5}, "must be >= 1"),
         ({"max_context": 1024, "draft_len": 0}, "must be >= 1"),
         ({"max_context": 1024, "draft_len": 5, "bucket": 100}, "multiple of 64"),
         ({"max_context": 1024, "draft_len": 5, "factor": 1}, "factor >= 2"),
         ({"max_context": 1024, "draft_len": 5, "smallest": 64}, "smallest >= bucket"),
-    ],
-)
-def test_bad_ladder_parameters_are_refused(kwargs, message):
-    with pytest.raises(ValueError, match=message):  # allow-pytest.raises (pure)
-        serving_width_ladder(**kwargs)
+    ]:
+        with pytest.raises(ValueError, match=message):  # allow-pytest.raises (pure)
+            serving_width_ladder(**kwargs)
 
 
-def test_the_plan_takes_the_default_ladder_per_shape():
+def test_every_ladder_is_x4_spaced_and_ends_at_a_covering_top_rung():
+    for max_context in (1024, 4096, 8192, 65536, 131072, 262144, 300000):
+        for k in (1, 3, 5):
+            ladder = serving_width_ladder(max_context, k)
+            assert ladder == sorted(set(ladder)), (max_context, k)
+            for a, b in zip(ladder, ladder[1:]):
+                assert b == 4 * a or b == ladder[-1], (max_context, k, a, b)
+            assert all(w % 1024 == 0 for w in ladder), (max_context, k)
+            # the last position of the context gets a rung, and the rung count stays logarithmic
+            assert serving_width_for(ladder, max_context - 1, k) == ladder[-1], (max_context, k)
+            assert len(ladder) <= 6, (max_context, k)
+
+
+def test_the_plan_takes_the_default_ladder_per_shape_and_the_projection_counts_its_records():
     shapes, widths = serving_plan(_DEFAULT_SHAPES, None, 16, max_context=262144)
     assert shapes == _DEFAULT_SHAPES
     assert all(len(ws) == 5 for ws in widths.values())
@@ -1709,10 +1654,7 @@ def test_the_plan_takes_the_default_ladder_per_shape():
     assert all(ws == [131072, 263168] for ws in capped.values())
     with pytest.raises(ValueError, match="needs max_context"):  # allow-pytest.raises (pure)
         serving_plan(_DEFAULT_SHAPES, None, 16)
-
-
-def test_the_projection_counts_records_per_shape_and_adds_the_base():
-    shapes, widths = serving_plan(_DEFAULT_SHAPES, None, 16, max_context=262144)
+    # the projection counts records per shape and adds the base
     proj = serving_trace_projection(shapes, widths, record_mb=32.0, region_mb=512, base_mb=87)
     assert proj.records == 20
     assert proj.per_shape == {shape: 5 for shape in _DEFAULT_SHAPES}
@@ -1725,12 +1667,9 @@ def test_the_projection_counts_records_per_shape_and_adds_the_base():
     assert SPEC_RECORD_MB_DEFAULT == 32.0
     with pytest.raises(ValueError, match="record_mb must be > 0"):  # allow-pytest.raises (pure)
         serving_trace_projection(shapes, widths, record_mb=0)
-
-
-def test_the_12b_measurement_fits_galaxy_but_not_qb2_at_the_full_ladder():
-    """Measured per-record trace sizes (12B TP8, width-independent) on top of the 87 MB plain traces."""
+    # The 12B measurement fits the Galaxy but not QB2 at the full ladder: measured per-record trace sizes
+    # (12B TP8, width-independent) on top of the 87 MB plain traces.
     measured = {(1, 5): 27.1, (5, 5): 31.9, (8, 3): 25.5, (16, 1): 21.9}
-    shapes, widths = serving_plan(_DEFAULT_SHAPES, None, 16, max_context=262144)
     total = 87 + sum(len(widths[s]) * mb for s, mb in measured.items())
     assert round(total, 1) == 619.0
     assert total > 512 and total < 960
@@ -1747,12 +1686,10 @@ def _calls_in(fn_name):
 
 def test_argmax_frees_its_slice_sources_only_when_they_are_copies():
     """Both partial-slice frees in _argmax_last (the >32-row tile slices and the trimmed ids) are guarded by
-    _same_device_buffer, like the pad above them: a ttnn that serves a slice as a view must not lose its source."""
+    _same_device_buffer, like the pad above them: a ttnn that serves a slice as a view must not lose its source.
+    The body stages are separate methods the device test can run eagerly, with the guarded frees inside them."""
     calls = _calls_in("_argmax_last")
     assert calls.count("_same_device_buffer") >= 3, calls
-
-
-def test_the_body_stages_are_separate_methods_the_device_test_can_run_eagerly():
     tree = _module()
     names = {fn.name for fn in _functions(tree)}
     assert {"_srv_seed_gather", "_srv_assemble_verify_x", "_srv_masks_device"} <= names
@@ -1780,48 +1717,26 @@ def test_the_seed_column_is_the_pre_contract_current_mode():
 
 
 # Packed-verify GQA groups at nkv_local >= 2 (the TP4 column) --------------------------------------
-@pytest.mark.parametrize(("h_local", "nkv_local"), [(2, 1), (4, 1), (4, 2), (8, 4), (8, 2)])
-@pytest.mark.parametrize("P", [2, 4, 6])
-def test_packed_kv_groups_are_contiguous_head_blocks_in_the_head_major_order(h_local, nkv_local, P):
+def test_packed_kv_groups_are_contiguous_head_blocks_in_the_head_major_order():
     """Row h*P+p of the packed Q (and of the [B,1,H*P,S_k] mask the body H-repeats) lands in the KV group the
     head-sharded GQA map gives its head, so the kernel's row-range grouping by num_q_heads/num_kv_heads on the
     logical head count is the right one for every TP (nkv_local = 1 on TP8, 2 on TP4 for the 12B)."""
-    groups = packed_verify_kv_groups(h_local, nkv_local, P)
-    assert [g for g, _a, _b in groups] == list(range(nkv_local))
-    assert groups[0][1] == 0 and groups[-1][2] == h_local * P
-    heads_per_kv = h_local // nkv_local
-    for g, first, last in groups:
-        assert last - first == (h_local * P) // nkv_local  # num_q_heads / num_kv_heads, rows per KV head
-        for row in range(first, last):
-            head, _p = divmod(row, P)
-            assert head // heads_per_kv == g, (row, head, g)
-
-
-def test_packed_kv_groups_refuse_uneven_head_splits():
+    for h_local, nkv_local in [(2, 1), (4, 1), (4, 2), (8, 4), (8, 2)]:
+        for P in (2, 4, 6):
+            groups = packed_verify_kv_groups(h_local, nkv_local, P)
+            assert [g for g, _a, _b in groups] == list(range(nkv_local)), (h_local, nkv_local, P)
+            assert groups[0][1] == 0 and groups[-1][2] == h_local * P, (h_local, nkv_local, P)
+            heads_per_kv = h_local // nkv_local
+            for g, first, last in groups:
+                assert last - first == (h_local * P) // nkv_local  # num_q_heads / num_kv_heads, rows per KV head
+                for row in range(first, last):
+                    head, _p = divmod(row, P)
+                    assert head // heads_per_kv == g, (row, head, g)
+    # uneven head splits are refused
     with pytest.raises(ValueError, match="do not split evenly"):  # allow-pytest.raises (pure)
         packed_verify_kv_groups(6, 4, 2)
     with pytest.raises(ValueError, match="must be >= 1"):  # allow-pytest.raises (pure)
         packed_verify_kv_groups(4, 0, 2)
-
-
-# Padding rows mirror live row 0 (the bounded ring pool has no null block) -------------------------
-def test_padding_rows_mirror_the_first_live_row():
-    assert serving_pad_rows([7, 3], 5) == [7, 3, 7, 7, 7]
-    assert serving_pad_rows([9], 1) == [9]
-    assert serving_pad_rows([4, 2, 1], 3) == [4, 2, 1]
-    with pytest.raises(ValueError, match="at least one live row"):  # allow-pytest.raises (pure)
-        serving_pad_rows([], 5)
-    with pytest.raises(ValueError, match="3 live rows for a 2-row record"):  # allow-pytest.raises (pure)
-        serving_pad_rows([1, 2, 3], 2)
-
-
-def test_seed_index_padding_rows_take_row_zero_whatever_its_source():
-    # row 0 continues from the previous replay: the mirrors gather that same verify row
-    idx = serving_seed_index((8, 3), rows=[5, 6], seed_cols=[2, None], previous=(3, [5]), seeded={6: 0})
-    assert idx == [0 * 4 + 2, 32, 2, 2, 2, 2, 2, 2]
-    # row 0 was reseeded: the mirrors gather its reseed-pool row
-    idx = serving_seed_index((5, 5), rows=[6, 5], seed_cols=[None, 2], previous=(3, [5]), seeded={6: 1})
-    assert idx == [33, 2, 33, 33, 33]
 
 
 # Width-matched verify tables per layer type (hybrid kv-cache groups) ------------------------------
@@ -1830,49 +1745,38 @@ _SINGLE_POOL = {"sliding_attention": 64, "full_attention": 64}
 _NO_RING = {"sliding_attention": None, "full_attention": None}
 
 
-@pytest.mark.parametrize(("s_k", "sliding", "full"), [(2048, 8, 16), (8192, 32, 64), (263168, 1028, 2056)])
-def test_hybrid_pools_get_one_width_per_type_spanning_the_same_mask(s_k, sliding, full):
+def test_hybrid_pools_get_one_width_per_type_spanning_the_same_mask():
     """Each type's table times its own block size spans the rung: one block size for both types would
     give the full-attention table half the mask (the packed SDPA then attends 1024 tokens under a
     2048-wide mask and reads the mask rows at the wrong pitch for every batch row past the first)."""
-    widths = serving_verify_table_widths(s_k, _HYBRID_12B, _NO_RING, blocks=4096)
-    assert widths == {"sliding_attention": sliding, "full_attention": full}
-    assert all(widths[lt] * _HYBRID_12B[lt] == s_k for lt in widths)
-
-
-def test_a_single_pool_is_the_control():
+    for s_k, sliding, full in [(2048, 8, 16), (8192, 32, 64), (263168, 1028, 2056)]:
+        widths = serving_verify_table_widths(s_k, _HYBRID_12B, _NO_RING, blocks=4096)
+        assert widths == {"sliding_attention": sliding, "full_attention": full}, s_k
+        assert all(widths[lt] * _HYBRID_12B[lt] == s_k for lt in widths), s_k
+    # a single pool is the control
     assert serving_verify_table_widths(2048, _SINGLE_POOL, _NO_RING, blocks=4096) == {
         "sliding_attention": 32,
         "full_attention": 32,
     }
-
-
-def test_a_bounded_ring_sizes_the_sliding_table_from_the_ring():
+    # a bounded ring sizes the sliding table from the ring
     ring = {"sliding_attention": 2048, "full_attention": None}
     widths = serving_verify_table_widths(8192, _SINGLE_POOL, ring, blocks=4096)
     assert widths == {"sliding_attention": 32, "full_attention": 128}
     # a hybrid ring pool: the ring in tokens over the sliding type's own block size
     widths = serving_verify_table_widths(8192, _HYBRID_12B, ring, blocks=4096)
     assert widths == {"sliding_attention": 8, "full_attention": 64}
-
-
-def test_the_adapter_table_width_caps_every_type():
+    # the adapter's table width caps every type
     widths = serving_verify_table_widths(263168, _HYBRID_12B, _NO_RING, blocks=1500)
     assert widths == {"sliding_attention": 1028, "full_attention": 1500}
-
-
-@pytest.mark.parametrize(
-    ("s_k", "bs", "ring", "blocks", "message"),
-    [
+    # misaligned geometries are refused
+    for s_k, bs, ring, blocks, message in [
         (2048, {"full_attention": 96}, {}, 64, "rung 2048 is not a multiple"),
         (8192, {"sliding_attention": 96}, {"sliding_attention": 2048}, 64, "ring 2048 is not a multiple"),
         (2048, {"full_attention": 0}, {}, 64, "block size must be >= 1"),
         (0, {"full_attention": 64}, {}, 64, "must be >= 1"),
-    ],
-)
-def test_misaligned_geometries_are_refused(s_k, bs, ring, blocks, message):
-    with pytest.raises(ValueError, match=message):  # allow-pytest.raises (pure)
-        serving_verify_table_widths(s_k, bs, ring, blocks)
+    ]:
+        with pytest.raises(ValueError, match=message):  # allow-pytest.raises (pure)
+            serving_verify_table_widths(s_k, bs, ring, blocks)
 
 
 # ===== KV group slots: the serving records follow vLLM's hybrid KV-cache grouping, not the layer type
@@ -1896,16 +1800,11 @@ def test_kv_group_slots_follow_vllm_strided_groups_for_the_12b_and_31b_patterns(
             members = [i for i, s in enumerate(slots) if s == g]
             assert members == [6 * k + g for k in range(repeats)]
         assert [i for i, s in enumerate(slots) if s == 5] == [6 * k + 5 for k in range(repeats)]
-
-
-def test_kv_group_slots_collapse_a_uniform_model_to_one_slot():
+    # a uniform model collapses to one slot
     slots, n_slots = serving_kv_group_slots(["full_attention"] * 12)
     assert (slots, n_slots) == ([0] * 12, 1)
     assert serving_kv_group_slots([]) == ([], 0)
-
-
-def test_kv_group_slots_fall_back_to_one_slot_per_layer_when_a_count_is_not_a_group_multiple():
-    """7 sliding + 3 full: 7 is not a multiple of 3, so the sliding layers get a slot each (always correct)."""
+    # 7 sliding + 3 full: 7 is not a multiple of 3, so the sliding layers get a slot each (always correct)
     types = ["sliding_attention"] * 7 + ["full_attention"] * 3
     slots, n_slots = serving_kv_group_slots(types)
     assert slots[:7] == list(range(7))
