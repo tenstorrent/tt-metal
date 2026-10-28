@@ -41,11 +41,14 @@ constexpr uint64_t kTornLowWindow = 1ull << 16;
 
 }  // namespace
 
-StreamDecoder::StreamDecoder(const CaptureContext::Device& dev, RecordRoutes& routes) :
+StreamDecoder::StreamDecoder(
+    const CaptureContext::Device& dev, RecordRoutes& routes, const ClockMap* clocks, uint32_t dev_index) :
     lanes_(dev.lanes.size()),
     copies_(dev.lanes.size()),
     heads_(dev.lanes.size() / profiler::kSpscNRiscDecode),
     dev_(dev),
+    clocks_(clocks),
+    dev_index_(dev_index),
     routes_(routes),
     site_routes_(routes.routes_.data()),
     short_run_types_(routes.short_run_types_.data()),
@@ -54,6 +57,7 @@ StreamDecoder::StreamDecoder(const CaptureContext::Device& dev, RecordRoutes& ro
     writes_order_(routes.type_count() > 1) {
     for (size_t lane = 0; lane < dev.lanes.size(); lane++) {
         lanes_[lane].consts = lane_consts(dev.lanes[lane], dev.clock_offsets[lane / profiler::kSpscNRiscDecode]);
+        profiler::spsc_lane_consts_th(lanes_[lane].consts, dev.start_timer_hi);
     }
 }
 
@@ -174,6 +178,18 @@ void write_direct(
     return true;
 }
 
+// The high word a restarted lane's 16-bit timer slot is widened around: the chip's clock sync's, which stays within
+// seconds of the lane's for however long the capture runs, or the lane's last before the sync has a node.
+uint32_t StreamDecoder::timer_reference(const SpscLane& lane) const {
+    if (clocks_ != nullptr) {
+        const int64_t wall = clocks_->covered(dev_index_);
+        if (wall > 0) {
+            return static_cast<uint32_t>(static_cast<uint64_t>(wall) >> 32);
+        }
+    }
+    return static_cast<uint32_t>(lane.consts.th_hi >> 32);
+}
+
 StreamDecoder::Produced StreamDecoder::decode_frames(
     size_t undelivered, const uint32_t* frames, std::span<const uint32_t> frame_words, Out out) {
     return writes_order_ ? decode<true>(undelivered, frames, frame_words, out)
@@ -182,13 +198,15 @@ StreamDecoder::Produced StreamDecoder::decode_frames(
 
 namespace {
 
-// The control block holds the lane's timer high word and runtime id as of the run's end. Words before a sticky packet
-// in the run used an older value that the frame doesn't carry, so decoding starts just past the run's last sticky
-// packet, whose end this returns.
+// The control block holds the low 16 bits of the lane's timer high word, and its runtime id, as of the run's end. The
+// high word is the one with those bits nearest `near`. Words before a sticky packet in the run used an older value that
+// the frame doesn't carry, so decoding starts just past the run's last sticky packet, whose end this returns.
 [[gnu::always_inline]] inline uint32_t resume(
-    SpscLane& lane, const uint32_t* ctrl, uint32_t risc, const uint32_t* words, uint32_t run) {
+    SpscLane& lane, const uint32_t* ctrl, uint32_t risc, const uint32_t* words, uint32_t run, uint32_t near) {
     using namespace profiler;
-    uint32_t timer_hi = ctrl[kernel_profiler::SPSC_WIRE_TIMER_0 + risc];
+    uint16_t timer_low;
+    std::memcpy(&timer_low, reinterpret_cast<const uint16_t*>(ctrl + kernel_profiler::SPSC_WIRE_TIMER_0) + risc, 2);
+    uint32_t timer_hi = near + static_cast<int16_t>(timer_low - static_cast<uint16_t>(near));
     uint32_t runtime_id = ctrl[kernel_profiler::spsc_wire_prog_word(risc)];
     uint32_t pos = 0;
     for (uint32_t k = 0; k < run;) {
@@ -301,7 +319,7 @@ StreamDecoder::Produced StreamDecoder::decode(
                 words += extent - run;
             }
             const uint32_t* const readable_end = ring_ordered ? words + run : frame + frame_len;
-            uint32_t pos = lane.need_state ? resume(lane, ctrl, risc, words, run) : 0;
+            uint32_t pos = lane.need_state ? resume(lane, ctrl, risc, words, run, timer_reference(lane)) : 0;
             if (lane.last_time_seq <= delivered_seq) {
                 lane.last_time = nullptr;
             }

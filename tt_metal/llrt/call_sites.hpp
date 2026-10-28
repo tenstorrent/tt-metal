@@ -69,6 +69,10 @@ struct CallSite {
 // contradict another showing of its name.
 void load_call_sites(const std::string& elf_path, ll_api::ElfFile& elf);
 
+// Gives a call site another process described the next id, and returns it. The site's strings may point at the
+// caller's memory; the registry keeps its own copies.
+uint32_t add_call_site(CallSite site);
+
 // The call site with id `id`, or null when no loaded image holds it. A call site lives for the process.
 const CallSite* find_call_site(uint32_t id);
 

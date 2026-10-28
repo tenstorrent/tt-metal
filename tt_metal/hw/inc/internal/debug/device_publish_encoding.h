@@ -698,18 +698,14 @@ struct WordStore {
 
 // The writer of every record. Source is where it reads the record's arguments, as record_source gives them or as
 // RegisterWords. A payload with Timestamps writes the shortest form they fit; any other payload is always medium.
-template <typename Payload, typename Source>
+template <typename Payload, typename Source, bool kWholeTime = false>
 struct RecordWriter {
     using Form = detail::TimeForm;
 
     // The longest packet: a full one, or a medium one with the timer's high word ahead of it.
-    static constexpr uint32_t kMaxWords = [] {
-        if constexpr (kSendsDistances<Payload>) {
-            return 1 + kLayout<Payload, Form::Full>.body_words;
-        } else {
-            return 2 + kLayout<Payload, Form::Medium>.body_words;
-        }
-    }();
+    static constexpr uint32_t kMaxWords = kWholeTime || kSendsDistances<Payload>
+                                              ? 1 + kLayout<Payload, Form::Full>.body_words
+                                              : 2 + kLayout<Payload, Form::Medium>.body_words;
 
     // `inputs` are the record's register words, or the address of its source.
     template <typename... Inputs>
@@ -742,7 +738,9 @@ private:
     static FORCE_INLINE void write_record(
         uint32_t header, uint32_t time_hi, uint32_t time_lo, const Source& source, std::index_sequence<K...>) {
         const OutgoingRecord record{source, time_hi, time_lo, {timestamp_bits<K>(source)...}};
-        if constexpr (kSendsDistances<Payload>) {
+        if constexpr (kWholeTime) {
+            write_form<Form::Full>(header, record);
+        } else if constexpr (kSendsDistances<Payload>) {
             write_shortest_form(header, record, kSliceIndices);
         } else {
             write_form<Form::Medium>(header, record);
@@ -840,14 +838,14 @@ private:
     }
 
     // A record stores as one block when it fits before the ring's end and is long enough for the check to pay for
-    // itself: a medium record with payload, or one with a run. A short record is otherwise a word or two, cheaper word
-    // by word.
+    // itself: a medium or full record with payload, or one with a run. A short record is otherwise a word or two,
+    // cheaper word by word. Only a call site whose records all take the full form writes it here.
     template <Form F, typename Record>
     static FORCE_INLINE void write_form(uint32_t header, const Record& record) {
         constexpr auto& payload = kPayloadLayout<Payload, F, kCopyRuns>;
-        constexpr uint32_t kHeadWords = F == Form::Short ? 1 : 2;
+        constexpr uint32_t kHeadWords = F == Form::Short ? 1 : (F == Form::Medium ? 2 : 3);
         constexpr uint32_t kWords = kHeadWords + kPayloadWords<Payload, F>;
-        constexpr bool kBlock = kWords > 2 && (F == Form::Medium || payload.has_run);
+        constexpr bool kBlock = kWords > 2 && (F != Form::Short || payload.has_run);
         constexpr auto parts = std::make_index_sequence<payload.count>{};
         // The short form keeps the time's distance from the cursor in the top half of its first payload word.
         const uint32_t short_time = F == Form::Short ? (record.time_lo - g_cursor_lo) << 16 : 0;
@@ -859,8 +857,11 @@ private:
             if (__builtin_expect(ring_fits_before_end(index, kWords), 1)) {
                 volatile tt_l1_ptr uint32_t* const slots = ring_slots(index);
                 slots[0] = header + length_change<F>();
-                if constexpr (F == Form::Medium) {
+                if constexpr (F != Form::Short) {
                     slots[1] = record.time_lo;
+                }
+                if constexpr (F == Form::Full) {
+                    slots[2] = record.time_hi;
                 }
                 store_payload<F>(SlotStore{slots + kHeadWords}, short_time, record, parts);
                 wIndex = index + kWords;
@@ -868,8 +869,11 @@ private:
             }
         }
         ring_write_word(header + length_change<F>());
-        if constexpr (F == Form::Medium) {
+        if constexpr (F != Form::Short) {
             ring_write_word(record.time_lo);
+        }
+        if constexpr (F == Form::Full) {
+            ring_write_word(record.time_hi);
         }
         store_payload<F>(WordStore{}, short_time, record, parts);
     }
@@ -924,14 +928,20 @@ FORCE_INLINE uint32_t register_word(const Source& source, std::index_sequence<K.
 
 // A record with a run crosses the writer's call by its source's address, which the run copies from; any other record
 // as its register words, so a small record stays in registers when the writer isn't inlined.
-template <bool kImmediately, bool kNoInline, typename Payload, typename Source, size_t... A>
+template <bool kImmediately, bool kRouted, bool kNoInline, typename Payload, typename Source, size_t... A>
 FORCE_INLINE void publish_record(uint32_t header, const Source& source, std::index_sequence<A...>) {
+    // A record for the external process takes the full form and is published at once, with its RISC's SPSC_ROUTED_AT_0
+    // halfword changed ahead of its tail (publish_with), so a relay never ships it without seeing the change.
     if constexpr (kHasRun<Payload>) {
-        publish_with<RecordWriter<Payload, Source>, kImmediately, kNoInline>(header, &source);
+        publish_with<RecordWriter<Payload, Source, kRouted>, kImmediately || kRouted, kRouted, kNoInline>(
+            header, &source);
     } else {
         constexpr auto slices = std::make_index_sequence<kSlices<Payload>.size()>{};
-        publish_with<RecordWriter<Payload, RegisterWords<Payload>>, kImmediately, kNoInline>(
-            header, register_word<Payload, A>(source, slices)...);
+        publish_with<
+            RecordWriter<Payload, RegisterWords<Payload>, kRouted>,
+            kImmediately || kRouted,
+            kRouted,
+            kNoInline>(header, register_word<Payload, A>(source, slices)...);
     }
 }
 

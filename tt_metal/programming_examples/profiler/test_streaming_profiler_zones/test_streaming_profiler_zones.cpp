@@ -10,7 +10,8 @@
 // --bench K prices one marker kind on the device instead: K = 0 spin only, 1 empty DeviceZoneScopedN,
 // 2 DeviceRecordEvent, 3 DeviceTimestampedData, 4 / 5 DeviceZoneScopedNIf with an opaque runtime true / false,
 // 6 DeviceZoneSetCounter on the data-movement RISCs, and DevicePublish of 7 a plain struct, 8 a bit-field struct, 9 a
-// struct with a bit-field after a smaller field, 10 a struct with padding between its fields beside another value.
+// struct with a bit-field after a smaller field, 10 a struct with padding between its fields beside another value, and
+// 7's struct 11 routed to the external process and 12 published batched.
 // Each RISC times bursts against its wall clock and the host prints cycles per marker; the K = 0 run with the
 // same --benchdelay is the loop's own cost to subtract. Measure on a 1x1 grid with a paced --benchdelay (20 is
 // enough) and no "profiler stalls" or "FAILED TO START" in the log, or the number is the stall.
@@ -21,9 +22,11 @@
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <map>
 #include <memory>
 #include <string>
+#include <thread>
 #include <vector>
 
 #include <tt-metalium/host_api.hpp>
@@ -46,9 +49,18 @@ int main(int argc, char** argv) {
     uint32_t emit_markers = 0;  // --markers 1: emit the point-marker trio (Flag/Data/Iter) per iteration
     bool bench = false;         // --bench K: the marker-cost microbench, K the marker kind
     uint32_t bench_kind = 0, bench_delay = 0;
+    uint32_t external_every = 0;     // --external-every N: a record for the external process every N iterations
+    uint32_t external_to_metal = 0;  // --external-to-metal 1: those records stay in this process instead
+    uint32_t external_phase = 0;     // --external-phase P: on the iterations P past each multiple of N
+    std::string wait_for;  // --wait-for PATH: open the device once PATH exists, e.g. once an external process listens
+    uint32_t repeat = 1;   // --repeat N: N launches of the workload, each reporting its own stalls
     constexpr uint32_t kBenchAddr = 0x170000;  // L1 scratch the bench kernels leave {cycles, markers} per RISC in
     for (int i = 1; i + 1 < argc; i += 2) {
         std::string a = argv[i];
+        if (a == "--wait-for") {
+            wait_for = argv[i + 1];
+            continue;
+        }
         uint32_t v = (uint32_t)std::strtoul(argv[i + 1], nullptr, 10);
         if (a == "--gx") {
             gx = v;
@@ -66,6 +78,14 @@ int main(int argc, char** argv) {
             bench_kind = v;
         } else if (a == "--benchdelay") {
             bench_delay = v;
+        } else if (a == "--external-every") {
+            external_every = v;
+        } else if (a == "--external-to-metal") {
+            external_to_metal = v;
+        } else if (a == "--external-phase") {
+            external_phase = v;
+        } else if (a == "--repeat") {
+            repeat = v;
         }
     }
 
@@ -106,6 +126,9 @@ int main(int argc, char** argv) {
         "zones-example");
 
     int device_id = 0;
+    while (!wait_for.empty() && !std::filesystem::exists(wait_for)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
     // TT_METAL_STREAMING_PROFILER_FULL_MESH=RxC opens the whole mesh in one process: N devices, one profiler boot.
     std::shared_ptr<distributed::MeshDevice> mesh_device;
     if (const char* fm = std::getenv("TT_METAL_STREAMING_PROFILER_FULL_MESH"); fm != nullptr && *fm != '\0') {
@@ -147,7 +170,10 @@ int main(int argc, char** argv) {
         {"ZONE_CYC", std::to_string(zone_cyc) + "u"},
         {"BENCH_KIND", std::to_string(bench_kind)},
         {"BENCH_DELAY", std::to_string(bench_delay)},
-        {"BENCH_ADDR", std::to_string(kBenchAddr) + "u"}};
+        {"BENCH_ADDR", std::to_string(kBenchAddr) + "u"},
+        {"EXTERNAL_EVERY", std::to_string(external_every) + "u"},
+        {"EXTERNAL_TO_METAL", external_to_metal != 0 ? "1" : "0"},
+        {"EXTERNAL_PHASE", std::to_string(external_phase) + "u"}};
     const std::string kdir = "tt_metal/programming_examples/profiler/test_streaming_profiler_zones/kernels/";
 
     CreateKernel(
@@ -193,8 +219,23 @@ int main(int argc, char** argv) {
         distributed::MeshWorkload workload;
         distributed::MeshCoordinateRange device_range(mesh_device->shape());
         workload.add_program(device_range, std::move(program));
-        distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
-        distributed::Finish(cq);
+        for (uint32_t launch = 0; launch < repeat; launch++) {
+            const uint64_t stalls_before = totals.stalls;
+            const auto t_start = std::chrono::steady_clock::now();
+            distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+            distributed::Finish(cq);
+            if (repeat > 1) {
+                const double ms =
+                    std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_start).count();
+                // The capture reaches the callback within a few ms of the workload's end.
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                printf(
+                    "[streaming profiler zones] launch %u: %.1f ms, %llu stalls\n",
+                    launch,
+                    ms,
+                    (unsigned long long)(totals.stalls - stalls_before));
+            }
+        }
     }
     printf(
         "[streaming profiler zones] workload done in %.1f ms; closing device.\n",

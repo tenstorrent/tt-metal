@@ -262,6 +262,7 @@ class RunTimeOptions {
     uint32_t device_observability_fifo_mb = DEVICE_OBSERVABILITY_FIFO_MB_DEFAULT;
     std::string streaming_profiler_ops_csv_path;
     std::string streaming_profiler_zone_csv_path;
+    bool device_observability_external_process_disabled = false;
     bool experimental_noc_debug_dump_enabled = false;
     // Tuning for the NOC-debug-dump background thread (see ProfilerStateManager::start_debug_dump_thread).
     std::chrono::milliseconds noc_debug_poll_interval{500};
@@ -751,6 +752,9 @@ public:
     uint32_t get_device_observability_fifo_mb() const { return device_observability_fifo_mb; }
     const std::string& get_streaming_profiler_ops_csv_path() const { return streaming_profiler_ops_csv_path; }
     const std::string& get_streaming_profiler_zone_csv_path() const { return streaming_profiler_zone_csv_path; }
+    bool get_device_observability_external_process_disabled() const {
+        return device_observability_external_process_disabled;
+    }
     void set_experimental_noc_debug_dump_enabled(bool enabled);
     bool get_experimental_noc_debug_dump_enabled() const { return experimental_noc_debug_dump_enabled; }
     // How often the NOC-debug-dump background thread polls for stalled cores (light, unblocking poll).
