@@ -1,0 +1,70 @@
+---
+# The PR Gate "Build ASan ubuntu 24.04" compile (build-artifact.yaml with
+# build-type ASan, the clang-20 libstdc++ toolchain, tracy off, system SFPI,
+# skip-tt-train false => --build-all), in the image ci-build-image builds.
+# Not yet here: the package target and artifact uploads, the S3 ccache and
+# CPM caches (a TorrentCI cache of the local ccache directory instead), and
+# triggers (run it by hand).
+jobs:
+  - id: asan-build
+    description: Configure and compile tt-metal (ASan, --build-all) in the CI build image
+    timeout: 4h
+    runs-on:
+      kubernetes:
+        os: linux
+        arch: amd64
+        image: {from-job: ci-build-image, image: tt-metal-ci-build}
+        resources:
+          # First-run guess; resize from the resource summary.
+          requests: {cpu: '32', memory: 96Gi, ephemeral-storage: 100Gi}
+          limits: {cpu: '32', memory: 128Gi, ephemeral-storage: 150Gi}
+    env:
+      - {name: CMAKE_BUILD_PARALLEL_LEVEL, value: '32'}
+      - {name: CCACHE_DIR, value: /workspace/.cache/ccache}
+      - {name: CCACHE_BASEDIR, value: /workspace}
+      - {name: CCACHE_TEMPDIR, value: /tmp/ccache}
+      - {name: CCACHE_COMPRESS, value: 'true'}
+      - {name: CCACHE_COMPRESSLEVEL, value: '3'}
+      # TorrentCI's cache archive is capped at 5 GiB compressed.
+      - {name: CCACHE_MAXSIZE, value: 4G}
+      - {name: TRACY_NO_INVARIANT_CHECK, value: '1'}
+      - {name: TRACY_NO_ISA_EXTENSIONS, value: '1'}
+    cache:
+      key: ccache-v1-asan-${ref_name}-${commit_sha}
+      restore-keys:
+        - ccache-v1-asan-${ref_name}-
+        - ccache-v1-asan-main-
+        - ccache-v1-asan-
+      save-paths: [.cache/ccache]
+    steps:
+      - id: check-image
+        kind: shell
+        shell:
+          run:
+            - . tt_metal/sfpi-version
+            - echo "repo sfpi ${sfpi_version} ${sfpi_x86_64_debian_deb_hash}"
+            - echo "image sfpi $(cat /opt/tenstorrent/sfpi/.torrentci-sfpi-version)"
+            - test "$(cat /opt/tenstorrent/sfpi/.torrentci-sfpi-version)" = "${sfpi_version} ${sfpi_x86_64_debian_deb_hash}"
+      - id: submodules
+        kind: shell
+        shell:
+          run:
+            - git submodule sync --recursive
+            - git submodule update --init --recursive --depth 1 --jobs 4
+      - id: configure
+        kind: shell
+        shell:
+          run:
+            - mkdir -p "$CCACHE_DIR" "$CCACHE_TEMPDIR"
+            - ccache -z
+            - >-
+              ./build_metal.sh --build-dir build --build-type ASan
+              --toolchain-path cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
+              --build-all --enable-ccache --configure-only
+              --use-system-sfpi --disable-profiler
+      - id: compile
+        kind: shell
+        shell:
+          run:
+            - cmake --build build --target install
+            - ccache -s

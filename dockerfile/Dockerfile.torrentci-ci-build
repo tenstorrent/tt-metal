@@ -1,0 +1,124 @@
+# TT-Metalium CI build image for TorrentCI (standalone, no bake).
+#
+# A single-file equivalent of the ci-build image in dockerfile/Dockerfile
+# (stages base -> ci-build-light -> ci-build) for Ubuntu 24.04 / Python 3.12,
+# reduced to what the compile jobs use. It builds with plain BuildKit:
+# - no custom `# syntax=` frontend;
+# - no bake named contexts: the tool layers from Dockerfile.tools are
+#   replaced by pinned, sha256-checked upstream downloads (cmake, ccache,
+#   mold, sfpi, OpenMPI ULFM);
+# - every base pinned by digest;
+# - no files from the build context (see the .dockerignore beside this file).
+#
+# Left out on purpose (not needed to compile): doxygen, ClangBuildAnalyzer,
+# yq, the curl 8.x and zstd source builds (Garage/S3 helpers; apt curl and
+# zstd are installed), the ccache S3 storage helper, uv-managed Python.
+# OpenMPI comes from tenstorrent/ompi's ULFM .deb (what install_dependencies.sh
+# installs on bare metal) instead of the Dockerfile.tools source build.
+#
+# Keep in sync by hand:
+# - SFPI_VERSION / SFPI_SHA256 with tt_metal/sfpi-version (x86_64 debian deb).
+#   The TorrentCI compile job checks this and fails on drift.
+# - CMAKE/CCACHE/MOLD versions with dockerfile/Dockerfile.tools.
+#
+# Network: TorrentCI passes http_proxy pointing at its per-cluster mirror,
+# whose apt allowlist does not include Ubuntu's archive. apt therefore runs
+# with the proxy unset; every other download is HTTPS (never proxied) and
+# checked by sha256 or by apt signatures.
+
+FROM docker.io/library/ubuntu:24.04@sha256:24737cef17f4e22b1977df7d9a05e77c4e28b7da5b8911f8d8ccda136bf3573c AS ci-build
+
+ARG CMAKE_VERSION=4.2.3
+ARG CMAKE_SHA256=5bb505d5e0cca0480a330f7f27ccf52c2b8b5214c5bba97df08899f5ef650c23
+ARG CCACHE_VERSION=4.14
+ARG CCACHE_SHA256=45a91165db7092e67c6208ada03f54700e684c4cd3735f9031de95669ed9272c
+ARG MOLD_VERSION=2.42.0
+ARG MOLD_SHA256=f5ed2f6e31d1ada4f07fe766fe0de7a73104d1c5cdc59086fcecc16a43720b6d
+ARG SFPI_VERSION=7.91.0
+ARG SFPI_SHA256=08a2ad3a876d6cbf72f20b1e03293e68fef983945153c1bcffcca8dbf63256b4
+ARG OMPI_DEB_SHA256=954e872d9105e8bf8c31368ff7a5db8670a3d549e2e7eb1ab6072cffcae7984d
+ARG LLVM_KEY_SHA256=8b2a587ffd672c4687e7581dad4b2f6c1bb2ad6b480cd9771ba2ff48e0b8c75d
+
+LABEL org.opencontainers.image.source="https://github.com/tenstorrent/tt-metal"
+LABEL org.opencontainers.image.description="TT-Metalium CI build environment (TorrentCI standalone build)"
+LABEL org.opencontainers.image.licenses="Apache-2.0"
+
+SHELL ["/bin/bash", "-euo", "pipefail", "-c"]
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV OMPI_VERSION=v5.0.7
+ENV OMPI_PREFIX=/opt/openmpi-v5.0.7-ulfm
+ENV PATH="/opt/openmpi-v5.0.7-ulfm/bin:/usr/local/bin:$PATH"
+ENV LD_LIBRARY_PATH=/opt/openmpi-v5.0.7-ulfm/lib
+ENV CPATH=/opt/openmpi-v5.0.7-ulfm/include
+ENV PKG_CONFIG_PATH=/opt/openmpi-v5.0.7-ulfm/lib/pkgconfig
+ENV CCACHE_TEMPDIR=/tmp/ccache
+
+# Bootstrap, then the LLVM 20 apt repository (install_dependencies.sh
+# prep_ubuntu_system; the signing key is checked by sha256).
+RUN unset http_proxy HTTP_PROXY && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends ca-certificates gpg gnupg lsb-release wget curl jq && \
+    curl -fsSL --proto =https -o /tmp/llvm.key https://apt.llvm.org/llvm-snapshot.gpg.key && \
+    echo "${LLVM_KEY_SHA256}  /tmp/llvm.key" | sha256sum -c - && \
+    gpg --dearmor --batch --yes --no-tty -o /usr/share/keyrings/llvm-snapshot.gpg /tmp/llvm.key && \
+    chmod 0644 /usr/share/keyrings/llvm-snapshot.gpg && \
+    rm -f /tmp/llvm.key && \
+    echo "deb [signed-by=/usr/share/keyrings/llvm-snapshot.gpg] https://apt.llvm.org/noble/ llvm-toolchain-noble-20 main" > /etc/apt/sources.list.d/llvm-20.list && \
+    rm -rf /var/lib/apt/lists/*
+
+# install_dependencies.sh --docker package set for noble, the LLVM 20
+# packages llvm.sh installs, the base stage's UCX runtime libraries and the
+# ci-build-light extras.
+RUN unset http_proxy HTTP_PROXY && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends \
+    git build-essential ninja-build pkg-config g++-14 pandoc xz-utils openssl libssl-dev \
+    python3-dev python3-pip python3-venv python3-pkg-resources \
+    libhwloc-dev libnuma-dev libatomic1 libstdc++6 libtbb-dev libcapstone-dev \
+    libc++-20-dev libc++abi-20-dev wget curl xxd \
+    clang-20 lldb-20 lld-20 clangd-20 \
+    libibverbs1 librdmacm1 libnuma1 \
+    apt-utils bc libclang-20-dev libclang-rt-20-dev clang-tidy-20 llvm-20 \
+    dialog file graphviz jq sudo uuid-runtime unzip zstd \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# configure_compiler_alternatives (24.04) plus the ci-build-light clang links.
+RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-14 140 && \
+    update-alternatives --install /usr/bin/g++ g++ /usr/bin/g++-14 140 && \
+    for tool in clang clang++ clang-tidy; do \
+    update-alternatives --install "/usr/bin/$tool" "$tool" "/usr/bin/${tool}-20" 100; \
+    done && \
+    clang --version && clang-tidy --version && g++ --version
+
+# cmake, ccache, mold: the Dockerfile.tools release tarballs.
+RUN cd /tmp && \
+    curl -fsSL --proto =https -o cmake.tar.gz "https://github.com/Kitware/CMake/releases/download/v${CMAKE_VERSION}/cmake-${CMAKE_VERSION}-linux-x86_64.tar.gz" && \
+    echo "${CMAKE_SHA256}  cmake.tar.gz" | sha256sum -c - && \
+    mkdir cmake && tar -xzf cmake.tar.gz -C cmake --strip-components=1 && \
+    cp -a cmake/bin/. /usr/local/bin/ && cp -a cmake/share/. /usr/local/share/ && \
+    curl -fsSL --proto =https -o ccache.tar.xz "https://github.com/ccache/ccache/releases/download/v${CCACHE_VERSION}/ccache-${CCACHE_VERSION}-linux-x86_64-glibc.tar.xz" && \
+    echo "${CCACHE_SHA256}  ccache.tar.xz" | sha256sum -c - && \
+    mkdir ccache && tar -xf ccache.tar.xz -C ccache --strip-components=1 && \
+    install -m 0755 ccache/ccache /usr/local/bin/ccache && \
+    curl -fsSL --proto =https -o mold.tar.gz "https://github.com/rui314/mold/releases/download/v${MOLD_VERSION}/mold-${MOLD_VERSION}-x86_64-linux.tar.gz" && \
+    echo "${MOLD_SHA256}  mold.tar.gz" | sha256sum -c - && \
+    tar -xzf mold.tar.gz -C /usr/local --strip-components=1 && \
+    rm -rf /tmp/cmake.tar.gz /tmp/cmake /tmp/ccache.tar.xz /tmp/ccache /tmp/mold.tar.gz && \
+    cmake --version && ccache --version && mold --version
+
+# SFPI (Dockerfile.tools sfpi stage) and OpenMPI ULFM, both as .deb.
+RUN unset http_proxy HTTP_PROXY && \
+    cd /tmp && \
+    curl -fsSL --proto =https -o sfpi.deb "https://github.com/tenstorrent/sfpi/releases/download/${SFPI_VERSION}/sfpi_${SFPI_VERSION}_x86_64_debian.deb" && \
+    echo "${SFPI_SHA256}  sfpi.deb" | sha256sum -c - && \
+    curl -fsSL --proto =https -o openmpi-ulfm.deb "https://github.com/tenstorrent/ompi/releases/download/v5.0.7/openmpi-ulfm_5.0.7-1_amd64.deb" && \
+    echo "${OMPI_DEB_SHA256}  openmpi-ulfm.deb" | sha256sum -c - && \
+    apt-get update && \
+    apt-get install -y --no-install-recommends ./sfpi.deb ./openmpi-ulfm.deb && \
+    apt-get clean && rm -rf /var/lib/apt/lists/* /tmp/sfpi.deb /tmp/openmpi-ulfm.deb && \
+    test -d /opt/tenstorrent/sfpi && \
+    test -e /opt/openmpi-v5.0.7-ulfm/lib/libmpi.so.40 && \
+    echo "${SFPI_VERSION} ${SFPI_SHA256}" > /opt/tenstorrent/sfpi/.torrentci-sfpi-version
+
+RUN git config --system --add safe.directory '*'
