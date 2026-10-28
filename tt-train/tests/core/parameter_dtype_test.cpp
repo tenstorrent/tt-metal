@@ -169,7 +169,6 @@ TEST_F(ParameterDtypeTest, AppliesReduceDtypeAsTheGradientSyncDefault) {
     EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), ttnn::DataType::BFLOAT16);
 
     // A wrong name changes nothing.
-    (void)apply("precision: {reduce_dtype: bfloat16}");
     EXPECT_ANY_THROW(apply("precision: {reduce_dtype: float32, master_dtype: float16}"));
     EXPECT_ANY_THROW(apply("precision: {reduce_dtype: float16}"));
     EXPECT_EQ(autograd::ctx().get_gradient_reduce_dtype(), ttnn::DataType::BFLOAT16);
