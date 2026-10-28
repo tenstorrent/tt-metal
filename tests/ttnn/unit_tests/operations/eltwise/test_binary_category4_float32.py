@@ -241,10 +241,14 @@ def test_ldexp(device, ttnn_op):
     Unlike bfloat16 there is no overflow-to-zero or overflow-to-inf mask:
     both saturations follow IEEE.
     """
-    input_a, input_b = pairwise_from_values(
-        binary_grid_values(dtype=torch.float32),
-        binary_grid_values(LDEXP_MIN_EXPONENT, LDEXP_MAX_EXPONENT, dtype=torch.float32),
+    # The grid's b values stop at ±68, so the EXP2 endpoints are appended.
+    exponents = torch.cat(
+        [
+            binary_grid_values(LDEXP_MIN_EXPONENT, LDEXP_MAX_EXPONENT, dtype=torch.float32),
+            torch.tensor([LDEXP_MIN_EXPONENT, LDEXP_MAX_EXPONENT]),
+        ]
     )
+    input_a, input_b = pairwise_from_values(binary_grid_values(dtype=torch.float32), exponents)
     golden, reference, result = _run_f64(device, ttnn_op, _ldexp_f64, input_a, input_b)
 
     assert ((reference != 0) & (reference.abs() < FLOAT32_TINY)).any(), "expected the flush band in this sweep"
@@ -355,6 +359,9 @@ def test_squared_difference(device, ttnn_op):
     The golden is torch float32 rather than float64, because the device
     rounds a - b to float32 before squaring it; against float64 the sweep is
     within 2 ULP.
+
+    A square is never negative, and on this grid the device returns +0
+    for every zero result.
     """
     input_a, input_b = pairwise_from_values(binary_grid_values(dtype=torch.float32))
     golden, result = run_binary(device, ttnn_op, input_a, input_b, input_dtype=ttnn.float32)
@@ -508,6 +515,18 @@ def test_prelu(device):
     | a < 0            | float32 a * w, RNE                   | exact           |
     | subnormal a * w  | flushed to 0 on device               | flush both      |
     | overflow         | signed inf on both sides             | allow_nonfinite |
+
+    The device's zero signs differ from torch's:
+
+    | Input                 | torch               | device                        |
+    |-----------------------|---------------------|-------------------------------|
+    | a < 0, a * w flushed  | -0 (if sign kept)   | +0                            |
+    | a = -0, w = -1        | +0                  | -0                            |
+    | a = +0, w = -1        | -0                  | +0                            |
+    | a = -0, w = 0.5       | -0                  | -0 with a weight tensor,      |
+    |                       |                     | +0 with a scalar weight       |
+
+    The grid carries no -0, so only the first row arises here.
     """
     weight = binary_grid_values(dtype=torch.float32)
     input_a, _ = pairwise_from_values(weight)
