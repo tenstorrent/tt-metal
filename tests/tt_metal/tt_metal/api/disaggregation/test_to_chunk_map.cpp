@@ -956,5 +956,23 @@ TEST(CacheLayoutModel, CPU_HoldingOnlyPublishedLayersRoundTrips) {
     EXPECT_EQ(first_table_difference(to_chunk_map(model), to_chunk_map(imported)), std::nullopt);
 }
 
+TEST(ToChunkMap, CPU_ATableOfSomeConfigsIsComparedByName) {
+    const KvChunkAddressTable all = to_chunk_map(m3_prefill_model(kTwoStages));
+    CacheLayoutModel some = m3_prefill_model(kTwoStages);
+    std::erase_if(some.caches, [](const CacheConfig& cache) { return cache.name != "05" && cache.name != "08"; });
+    const KvChunkAddressTable derived = to_chunk_map(some);
+
+    EXPECT_NE(first_table_difference(all, derived), std::nullopt);
+    EXPECT_EQ(first_table_difference(all, derived, /*only_actual_configs=*/true), std::nullopt);
+
+    some.caches.back().base_addr += 0x1000;
+    const auto difference = first_table_difference(all, to_chunk_map(some), /*only_actual_configs=*/true);
+    ASSERT_TRUE(difference.has_value());
+    EXPECT_NE(difference->find("config '08'"), std::string::npos) << *difference;
+
+    some.caches.back().name = "09";
+    EXPECT_NE(first_table_difference(all, to_chunk_map(some), /*only_actual_configs=*/true), std::nullopt);
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::internal::disaggregation

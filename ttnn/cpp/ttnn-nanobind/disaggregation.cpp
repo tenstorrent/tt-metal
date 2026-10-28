@@ -250,10 +250,12 @@ void bind_cache_layout_api(nb::module_& mod) {
         &first_table_difference,
         nb::arg("expected"),
         nb::arg("actual"),
+        nb::arg("only_actual_configs") = false,
         R"(
         The first way `actual` differs from `expected` as a description, or None when they agree: the same
         configs and, at every (config, layer, slot, position), the same address, size, device-group members
-        and members' hosts. Device-group indices are not compared.
+        and members' hosts. Device-group indices are not compared. With only_actual_configs, `actual` may
+        hold just some of `expected`'s configs, each compared to the config of the same name.
         )");
     mod.def(
         "export_cache_layout_model_to_protobuf_file",

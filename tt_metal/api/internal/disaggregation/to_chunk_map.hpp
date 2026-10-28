@@ -95,8 +95,9 @@ KvChunkAddressTable to_chunk_map(const CacheLayoutModel& model);
 // The first way `actual` differs from `expected`, or nullopt when they agree: the same configs (name,
 // extents, chunk size, tensor type) and, at every (config, layer, slot, position), the same address, size,
 // device-group members and those members' hosts. Device-group indices are not compared, since builders
-// register groups in different orders.
+// register groups in different orders. With `only_actual_configs`, `actual` may hold just some of
+// `expected`'s configs (a model that declares only some of its caches), each compared by name.
 std::optional<std::string> first_table_difference(
-    const KvChunkAddressTable& expected, const KvChunkAddressTable& actual);
+    const KvChunkAddressTable& expected, const KvChunkAddressTable& actual, bool only_actual_configs = false);
 
 }  // namespace tt::tt_metal::internal::disaggregation

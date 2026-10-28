@@ -9,6 +9,10 @@ A model declares its caches as a ``CacheLayoutModel`` (the cache tensor layout s
 ``first_table_difference``; the model is written next to the table (``<path>.cache_layout.pb``), for a
 consumer that derives the table itself, only when the two agree. With ``enable_env=1`` the derived table is
 published without walking.
+
+A model may declare only some of its caches (``declares_every_config=False``), for configs whose table is
+not a cache layout (e.g. Kimi-K3's KDA states). The declared configs are checked by name against the
+walked table, which is always the one published.
 """
 
 import os
@@ -52,12 +56,13 @@ def _derived_table(model, hosts):
     return table
 
 
-def publish_kv_chunk_table(*, path, walk, layout_model, hosts, enable_env, model_name):
+def publish_kv_chunk_table(*, path, walk, layout_model, hosts, enable_env, model_name, declares_every_config=True):
     """Publishes the KV chunk table to ``path`` and returns ``path``.
 
     ``walk()`` builds the classic table. ``layout_model()`` declares the caches as a ``CacheLayoutModel``, or
     raises ``CacheLayoutNotDerivable`` for a layout it cannot declare. ``hosts`` are (fabric node id, host
-    name) pairs naming the host of every chip the table uses. ``model_name`` names the model in the log."""
+    name) pairs naming the host of every chip the table uses. ``model_name`` names the model in the log.
+    ``declares_every_config`` is False for a model that declares only some of the table's configs."""
     model, not_derivable = None, None
     try:
         model = layout_model()
@@ -66,6 +71,10 @@ def publish_kv_chunk_table(*, path, walk, layout_model, hosts, enable_env, model
     model_path = path + LAYOUT_MODEL_SUFFIX
 
     if os.getenv(enable_env) == "1":
+        if not declares_every_config:
+            raise RuntimeError(
+                f"{enable_env}=1, but the {model_name} cache layout model declares only some of its table's configs"
+            )
         if model is None:
             raise RuntimeError(
                 f"{enable_env}=1, but the {model_name} cache layout model is not derivable: {not_derivable}"
@@ -85,7 +94,9 @@ def publish_kv_chunk_table(*, path, walk, layout_model, hosts, enable_env, model
             f"[migration] {model_name} cache layout model not derived ({not_derivable}); the walked table stands alone"
         )
     else:
-        difference = disaggregation.first_table_difference(walked, _derived_table(model, hosts))
+        difference = disaggregation.first_table_difference(
+            walked, _derived_table(model, hosts), only_actual_configs=not declares_every_config
+        )
         if difference is None:
             _export(disaggregation.export_cache_layout_model_to_protobuf_file, model, model_path)
             logger.info(

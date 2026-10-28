@@ -467,8 +467,82 @@ KvChunkAddressTable to_chunk_map(const CacheLayoutModel& model) {
     return to_chunk_map(model.caches, model.mesh_id, model.mesh_shape, model.geometry);
 }
 
+namespace {
+
+// The first way config `ac` of `actual` differs from config `ec` of `expected` (both named `name`).
+std::optional<std::string> config_difference(
+    const KvChunkAddressTable& expected,
+    uint32_t ec,
+    const KvChunkAddressTable& actual,
+    uint32_t ac,
+    const std::string& name) {
+    const KvChunkAddressTableConfig& want = expected.config(ec);
+    const KvChunkAddressTableConfig& got = actual.config(ac);
+    const bool same_config = want.num_layers == got.num_layers && want.max_sequence_length == got.max_sequence_length &&
+                             want.num_slots == got.num_slots && want.chunk_n_tokens == got.chunk_n_tokens &&
+                             want.chunk_size_bytes == got.chunk_size_bytes && want.tensor_type == got.tensor_type;
+    if (!same_config) {
+        return fmt::format("config '{}' differs in its extents, chunk size or tensor type", name);
+    }
+    for (uint32_t layer = 0; layer < want.num_layers; ++layer) {
+        for (uint32_t slot = 0; slot < want.num_slots; ++slot) {
+            for (uint32_t pos = 0; pos < want.max_sequence_length; pos += want.chunk_n_tokens) {
+                const KvCacheLocation a = expected.lookup(layer, pos, slot, ec);
+                const KvCacheLocation b = actual.lookup(layer, pos, slot, ac);
+                const auto where = [&] {
+                    return fmt::format("config '{}' layer {} slot {} position {}", name, layer, slot, pos);
+                };
+                if (a.size_bytes != b.size_bytes) {
+                    return fmt::format("{}: {} bytes, not {}", where(), b.size_bytes, a.size_bytes);
+                }
+                if (a.size_bytes == 0) {
+                    continue;
+                }
+                if (a.noc_addr != b.noc_addr) {
+                    return fmt::format("{}: noc_addr {:#x}, not {:#x}", where(), b.noc_addr, a.noc_addr);
+                }
+                const auto& want_nodes = expected.get_device_group(a.device_group_index).fabric_node_ids;
+                const auto& got_nodes = actual.get_device_group(b.device_group_index).fabric_node_ids;
+                if (want_nodes != got_nodes) {
+                    return fmt::format("{}: a different device group", where());
+                }
+                for (const auto& node : want_nodes) {
+                    const bool want_host = expected.has_host(node);
+                    const bool same_host = want_host == actual.has_host(node) &&
+                                           (!want_host || expected.get_host(node) == actual.get_host(node));
+                    if (!same_host) {
+                        return fmt::format(
+                            "{}: chip {} of mesh {} has a different host", where(), node.chip_id, *node.mesh_id);
+                    }
+                }
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+}  // namespace
+
 std::optional<std::string> first_table_difference(
-    const KvChunkAddressTable& expected, const KvChunkAddressTable& actual) {
+    const KvChunkAddressTable& expected, const KvChunkAddressTable& actual, bool only_actual_configs) {
+    if (only_actual_configs) {
+        for (uint32_t ac = 0; ac < actual.num_configs(); ++ac) {
+            const std::string& name = actual.config_name(ac);
+            std::optional<uint32_t> ec;
+            for (uint32_t c = 0; c < expected.num_configs() && !ec.has_value(); ++c) {
+                if (expected.config_name(c) == name) {
+                    ec = c;
+                }
+            }
+            if (!ec.has_value()) {
+                return fmt::format("config '{}' is not in the expected table", name);
+            }
+            if (auto difference = config_difference(expected, *ec, actual, ac, name)) {
+                return difference;
+            }
+        }
+        return std::nullopt;
+    }
     if (expected.num_configs() != actual.num_configs()) {
         return fmt::format("{} configs, not {}", actual.num_configs(), expected.num_configs());
     }
@@ -477,48 +551,8 @@ std::optional<std::string> first_table_difference(
         if (actual.config_name(c) != name) {
             return fmt::format("config {} is named '{}', not '{}'", c, actual.config_name(c), name);
         }
-        const KvChunkAddressTableConfig& want = expected.config(c);
-        const KvChunkAddressTableConfig& got = actual.config(c);
-        const bool same_config = want.num_layers == got.num_layers &&
-                                 want.max_sequence_length == got.max_sequence_length &&
-                                 want.num_slots == got.num_slots && want.chunk_n_tokens == got.chunk_n_tokens &&
-                                 want.chunk_size_bytes == got.chunk_size_bytes && want.tensor_type == got.tensor_type;
-        if (!same_config) {
-            return fmt::format("config '{}' differs in its extents, chunk size or tensor type", name);
-        }
-        for (uint32_t layer = 0; layer < want.num_layers; ++layer) {
-            for (uint32_t slot = 0; slot < want.num_slots; ++slot) {
-                for (uint32_t pos = 0; pos < want.max_sequence_length; pos += want.chunk_n_tokens) {
-                    const KvCacheLocation a = expected.lookup(layer, pos, slot, c);
-                    const KvCacheLocation b = actual.lookup(layer, pos, slot, c);
-                    const auto where = [&] {
-                        return fmt::format("config '{}' layer {} slot {} position {}", name, layer, slot, pos);
-                    };
-                    if (a.size_bytes != b.size_bytes) {
-                        return fmt::format("{}: {} bytes, not {}", where(), b.size_bytes, a.size_bytes);
-                    }
-                    if (a.size_bytes == 0) {
-                        continue;
-                    }
-                    if (a.noc_addr != b.noc_addr) {
-                        return fmt::format("{}: noc_addr {:#x}, not {:#x}", where(), b.noc_addr, a.noc_addr);
-                    }
-                    const auto& want_nodes = expected.get_device_group(a.device_group_index).fabric_node_ids;
-                    const auto& got_nodes = actual.get_device_group(b.device_group_index).fabric_node_ids;
-                    if (want_nodes != got_nodes) {
-                        return fmt::format("{}: a different device group", where());
-                    }
-                    for (const auto& node : want_nodes) {
-                        const bool want_host = expected.has_host(node);
-                        const bool same_host = want_host == actual.has_host(node) &&
-                                               (!want_host || expected.get_host(node) == actual.get_host(node));
-                        if (!same_host) {
-                            return fmt::format(
-                                "{}: chip {} of mesh {} has a different host", where(), node.chip_id, *node.mesh_id);
-                        }
-                    }
-                }
-            }
+        if (auto difference = config_difference(expected, c, actual, c, name)) {
+            return difference;
         }
     }
     return std::nullopt;
