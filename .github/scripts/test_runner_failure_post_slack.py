@@ -1,6 +1,6 @@
 import pytest
 
-from runner_failure_common import JobScanResult, RecentJob
+from runner_failure_common import JobScanResult, RecentJob, job_from_dict
 from runner_failure_post_slack import (
     failure_summary_for_slack_cell,
     format_scan_health_alert,
@@ -36,6 +36,18 @@ def test_failure_summary_shows_metadata_signature_when_log_not_checked(signature
     )
 
     assert failure_summary_for_slack_cell(result) == signature
+
+
+def test_failure_summary_shows_leftover_process_after_log_scan() -> None:
+    result = JobScanResult(
+        job=job_from_dict({"status": "completed", "conclusion": "failure"}),
+        log_status="fetched",
+        log_checked=True,
+        signature_labels=("Leftover process",),
+        fabric_missing_links="",
+    )
+
+    assert failure_summary_for_slack_cell(result) == "Leftover process"
 
 
 def test_scan_health_alerts_above_ten_percent() -> None:
