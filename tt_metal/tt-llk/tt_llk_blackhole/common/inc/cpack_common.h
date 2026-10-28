@@ -301,6 +301,20 @@ __attribute__((noinline)) bool is_packer_to_L1_conversion_supported(const DataFo
 // Internal linkage lets a kernel without a closed block drop the store.
 static std::uint32_t pack_ch1_w_stride = 0;
 
+#ifdef LLK_PACK_W_OFFSET
+// W offset block packs (llk_pack_block under LLK_PACK_W_OFFSET): the output buffer base and tile stride last programmed, and the tile the next sequential block starts at.
+// Anything that writes L1_Dest_addr or the channel-1 W stride makes the state stale (LLK_PACK_W_INVALIDATE), the next block call programs the base again.
+static bool pack_w_valid               = false;
+static std::uint8_t pack_w_out         = 0;
+static std::uint32_t pack_w_page       = 0;
+static std::uint32_t pack_w_next       = 0;
+static std::uint32_t pack_w_tiles      = 0;
+static std::uint8_t pack_w_last        = 0xff;
+#define LLK_PACK_W_INVALIDATE() (pack_w_valid = false)
+#else
+#define LLK_PACK_W_INVALIDATE() ((void)0)
+#endif
+
 template <PackMode pack_mode = PackMode::Default>
 inline void set_packer_strides(const std::uint32_t pack_src_format, const std::uint32_t tile_c_dim)
 {
@@ -325,6 +339,7 @@ inline void set_packer_strides(const std::uint32_t pack_src_format, const std::u
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_XY_REG_1_Xstride_ADDR32);
     TTI_WRCFG(p_gpr::ZERO, p_cfg::WRCFG_32b, PCK0_ADDR_CTRL_ZW_REG_1_Zstride_ADDR32);
     pack_ch1_w_stride = 0;
+    LLK_PACK_W_INVALIDATE();
     TTI_NOP;
     TTI_NOP;
 }
@@ -700,6 +715,7 @@ template <bool keep_output_addr = true>
 inline void program_packer_destination(std::uint32_t addr)
 {
     LLK_ASSERT(is_valid_L1_address(addr), "L1 address must be in valid L1 memory region");
+    LLK_PACK_W_INVALIDATE();
     // No packer-drain STALLWAIT is needed before reprogramming the destination: the pack thread issues its
     // instruction stream in order, so each tile's PACR has already started -- and latched L1_Dest_addr,
     // sampled at PACR start -- before the next call's WRCFG reprograms it, and the Last=1 PACR that ends each
