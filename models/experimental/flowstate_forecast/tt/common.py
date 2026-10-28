@@ -60,15 +60,6 @@ def swiglu_config(device, precision):
     )
 
 
-def c_proj_config(device):
-    """R2-4 (sweep job 1326, paper): the C projection's minimal_matmul blocks (m4 k4 n8, subblock 4x1)."""
-    grid = device.compute_with_storage_grid_size()
-    return ttnn.MinimalMatmulConfig(
-        M_block_size=4, K_block_size=4, N_block_size=8, subblock_h=4, subblock_w=1,
-        compute_with_storage_grid_size=(grid.x, grid.y),
-    )
-
-
 def mm_config(device, role, precision, M, K, N, act=None):
     """The 1D (in1-mcast) program config of a (M, K) x (K, N) matmul over the whole grid, rows split across cores.
     None (the auto config) when N is not a multiple of 4 tiles or the rows do not fill the grid."""
