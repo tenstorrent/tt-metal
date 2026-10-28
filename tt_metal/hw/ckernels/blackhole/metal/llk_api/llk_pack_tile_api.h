@@ -207,6 +207,41 @@ inline bool llk_pack_block_is_closable(const std::uint32_t output_id) {
     return get_local_cb_interface(output_id).fifo_page_size < 0x1000;
 }
 
+#ifdef LLK_PACK_W_OFFSET
+// W offset block packs: program the output base and the tile stride once per output and move the output of each block call with the packer W counter of channel 1.
+// The base is programmed again when the output changes, the CB write pointer does not continue the last block (wrap, other packs into the CB), another pack wrote
+// L1_Dest_addr or the channel-1 W stride in between (LLK_PACK_W_INVALIDATE), or the offset would pass LLK_PACK_W_MAX_TILES.
+#ifndef LLK_PACK_W_MAX_TILES
+#define LLK_PACK_W_MAX_TILES 127
+#endif
+// Returns whether this block takes the W offset path (out_tile is its tile offset). The first block of an output after another output packs as before: the base is
+// programmed from the second block in a row on, so an output that alternates with another (partials and out of a spilled matmul) never pays the programming.
+inline bool llk_pack_w_take(const std::uint8_t output_id, const std::uint32_t addr, const std::uint32_t page, const std::uint32_t ntiles, std::uint32_t& out_tile) {
+    if (pack_w_last != output_id) {
+        pack_w_last = output_id;
+        return false;
+    }
+    const bool cont = pack_w_valid && pack_w_out == output_id && pack_w_page == page && pack_w_next == addr && pack_w_tiles + ntiles <= LLK_PACK_W_MAX_TILES;
+    if (!cont) {
+        program_packer_destination(addr);
+        const std::uint32_t stride = page << 4;
+        if (stride != pack_ch1_w_stride) {
+            cfg_reg_rmw_tensix<PCK0_ADDR_CTRL_ZW_REG_1_Wstride_RMW>(stride);
+            pack_ch1_w_stride = stride;
+        }
+        pack_w_valid = true;
+        pack_w_out   = output_id;
+        pack_w_page  = page;
+        pack_w_next  = addr;
+        pack_w_tiles = 0;
+    }
+    out_tile = pack_w_tiles;
+    pack_w_tiles += ntiles;
+    pack_w_next += page * ntiles;
+    return true;
+}
+#endif
+
 // Small tiles: one to four faces of 1 to 16 rows, at most eight PACRs, full tile width.
 inline bool llk_pack_block_is_small(const std::uint32_t output_id) {
     const std::uint32_t num_faces = get_output_num_faces(output_id);
@@ -261,8 +296,17 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output,
             get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
         get_local_cb_interface(output_id).fifo_wr_tile_ptr +=
             get_local_cb_interface(output_id).fifo_page_size * ntiles;
+#ifdef LLK_PACK_W_OFFSET
+        std::uint32_t out_tile = 0;
+        if (llk_pack_w_take(output_id, pack_tile_addr, get_local_cb_interface(output_id).fifo_page_size, ntiles, out_tile)) {
+            _llk_pack_block_w_<DST_SYNC_MODE, is_fp32_dest_acc_en>(start_tile_index, out_tile, ntiles);
+        } else {
+            _llk_pack_block_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default, llk_pack_rmw_dest>(start_tile_index, pack_tile_addr, ntiles);
+        }
+#else
         _llk_pack_block_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default, llk_pack_rmw_dest>(
             start_tile_index, pack_tile_addr, ntiles);
+#endif
     } else if (dense_small && ntiles > 1 && llk_pack_block_is_dense(output_id)) {
         std::uint32_t pack_tile_addr =
             get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
@@ -277,8 +321,18 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output,
         std::uint32_t pack_tile_addr =
             get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
         get_local_cb_interface(output_id).fifo_wr_tile_ptr += page_size * ntiles;
+#ifdef LLK_PACK_W_OFFSET
+        std::uint32_t out_tile = 0;
+        if (llk_pack_w_take(output_id, pack_tile_addr, page_size, ntiles, out_tile)) {
+            _llk_pack_block_closed_w_mop_<DST_SYNC_MODE, is_fp32_dest_acc_en>(start_tile_index, out_tile, ntiles, get_output_num_faces(output_id));
+        } else {
+            _llk_pack_block_closed_<DST_SYNC_MODE, is_fp32_dest_acc_en, llk_pack_rmw_dest>(
+                start_tile_index, pack_tile_addr, ntiles, page_size << 4, get_output_num_faces(output_id));
+        }
+#else
         _llk_pack_block_closed_<DST_SYNC_MODE, is_fp32_dest_acc_en, llk_pack_rmw_dest>(
             start_tile_index, pack_tile_addr, ntiles, page_size << 4, get_output_num_faces(output_id));
+#endif
     } else {
         for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
             std::uint32_t pack_tile_addr = get_output_tile_address<false, PackMode::Default>(output_id, 0);

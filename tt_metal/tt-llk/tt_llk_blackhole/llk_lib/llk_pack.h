@@ -922,6 +922,8 @@ inline void _llk_pack_block_w_(const std::uint32_t start_tile_index, const std::
     // Template 1 MOP: non-zero bits 19:10 override the programmed outer loop count for this run only.
     const std::uint32_t outer_loop_len = TILE_NUM_FACES * num_tiles;
     TT_MOP(1, outer_loop_len >> 6, (outer_loop_len & 0x3F) << 10);
+    // Back to W 0 so that packs without the W offset write where they program
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
 }
 
 /**
@@ -941,6 +943,31 @@ inline void _llk_pack_block_closed_w_(const std::uint32_t start_tile_index, cons
     for (std::uint32_t tile = 0; tile < num_tiles; tile++)
     {
         lltt::replay(0, 17);
+    }
+
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
+}
+
+/**
+ * Same as _llk_pack_block_closed_ (one MOP run per tile, any tile shape) with the output at out_tile tiles from the address of _llk_pack_block_w_init_.
+ */
+template <DstSync Dst, bool is_fp32_dest_acc_en>
+inline void _llk_pack_block_closed_w_mop_(
+    const std::uint32_t start_tile_index, const std::uint32_t out_tile, const std::uint32_t num_tiles, const std::uint32_t num_faces = TILE_NUM_FACES)
+{
+    LLK_ASSERT(num_tiles >= 1, "num_tiles must be at least 1");
+    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
+    LLK_ASSERT(
+        ((start_tile_index + num_tiles) <= get_dest_max_tiles<Dst, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+        "The block exceeds the destination register sync region");
+
+    set_dst_write_addr(start_tile_index);
+    TT_SETADC(p_setadc::PAC, p_setadc::CH_1, p_setadc::SET_W, out_tile);
+
+    for (std::uint32_t tile = 0; tile < num_tiles; tile++)
+    {
+        TT_MOP(1, 0, num_faces << 10);
+        TTI_INCADCZW(p_setadc::PAC, 1, 0, 1, 0);
     }
 
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
