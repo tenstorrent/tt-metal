@@ -170,6 +170,43 @@ def test_r4097_chunked_vs_dump_and_single_shot(mesh_device, layer_idx, chunks):
 
 
 @pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+@pytest.mark.parametrize(
+    "chunks",
+    [(1024, 1024, 1024, 1025), (320, 2048, 1729), (320, 704, 1024, 2049)],
+    ids=["aligned-1024x3+1025", "unaligned-320+2048mixed+1729", "unaligned-320+704+1024+2049"],
+)
+def test_dense_prefix_static_matches_dynamic(mesh_device, chunks):
+    """``GLM53_DENSE_PREFIX_STATIC=1`` (the shape-static dense prefix of ``TtDSA``: the keys are the user's first
+    2048 cached rows whatever the start, the dense query rows a superset masked by position) against the exact-prefix
+    path on the same DSA layer (3) and chunk plan, the plans including chunks that start at a 32-aligned position
+    inside the dense range (320: a prefix-cache restore at a decode crossing) and a mixed chunk from there
+    (320 + 2048 > 2048) and an all-sparse chunk (from 2048 / 2368). Both paths run in the same decoder on their own
+    user slot (0: dynamic, 1: static). Gate: PCC between the paths > 0.9999 (the key set only grows by rows the
+    causal mask excludes) and PCC vs HF within 1e-4 of the dynamic path's."""
+    layer_idx = 3
+    raw, cfg = _load(layer_idx)
+    dump = REF / "R4097"
+    pre = torch.load(dump / f"layer{layer_idx}_prefill.pt")
+    x_in, x_out = pre["x_in"], pre["x_out"]
+    S = x_in.shape[1]
+    dec = _decoder(mesh_device, raw, cfg, layer_idx, S + 64, max_batch=2)
+    assert not dec.layer.is_kda, "layer 3 is a DSA layer"
+    attn = dec.layer.attn
+    attn.dense_prefix_static = False
+    dyn, _ = prefill_chunked(dec, x_in, chunks, mesh_device, user=0)
+    attn.dense_prefix_static = True
+    static, _ = prefill_chunked(dec, x_in, chunks, mesh_device, user=1)
+    attn.dense_prefix_static = False
+    p_dyn, p_static, p_vs = pcc(x_out, dyn), pcc(x_out, static), pcc(dyn, static)
+    logger.info(
+        f"layer {layer_idx} chunks {list(chunks)}: dynamic pcc vs HF {p_dyn:.6f}, static {p_static:.6f}, static vs dynamic "
+        f"{p_vs:.6f} ({_equality(dyn, static)})"
+    )
+    assert p_vs > 0.9999, f"static vs dynamic pcc {p_vs}"
+    assert p_static > p_dyn - 1e-4, f"static pcc vs HF {p_static} below the dynamic path's {p_dyn}"
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("dump_name, chunks", [("R2042", (512, 512, 512, 506)), ("R2040", (512, 512, 512, 504))])
 def test_512_chunks_then_decode(mesh_device, dump_name, chunks):
     """Layer 3, dense-only region: 512-token chunks + a non-aligned last chunk, 12 decode steps through

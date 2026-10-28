@@ -134,6 +134,14 @@ PREFILL_STEMS = os.environ.get("GLM53_PREFILL_STEMS", "fixed")
 # is why the default stays 0, doc: _agents/prefill_ttft/STATUS.md); "auto" = "1" when the arenas of every DSA layer
 # of the config fit ``GLM53_PREFIX_INCREMENTAL_BUDGET_MB`` (default 1024).
 PREFIX_INCREMENTAL = os.environ.get("GLM53_PREFIX_INCREMENTAL", "0")
+# "1": the dense-range prefix attention is shape-static (``TtDSA._prefill_static`` / ``_prefill_slab_static``): the keys
+# are the user's first P (= 2048, the dense range) cached latent rows whatever the chunk start (the windowed SDPA masks
+# at the global positions; rows past the prompt are unwritten and causally masked), the dense query rows are the
+# chunk's first min(T, P) rows (a superset: rows at positions >= P are dropped by a per-call position mask), so no
+# program keys on the chunk's start: a prefix-cache restore at any 32-aligned snapshot and a wave's per-row starts
+# run the warm-up's programs (doc/mesh/galaxy_throughput_plan.md, A3). "0" (the default until the 8x4 A/B): the
+# exact-prefix path (``_prefix_rows``: one program per start, the 2026-10-28 unaligned-restore seal miss).
+DENSE_PREFIX_STATIC_ENV = "GLM53_DENSE_PREFIX_STATIC"
 PREFIX_INCREMENTAL_BUDGET_MB = int(os.environ.get("GLM53_PREFIX_INCREMENTAL_BUDGET_MB", "1024"))
 
 
@@ -986,6 +994,7 @@ class TtDSA(LightweightModule):
         self._pad_cache: dict[tuple, ttnn.Tensor] = {}
         self._cu_windows: dict[int, ttnn.Tensor] = {}  # chunked-prefill SDPA window bounds per key length
         self._slab_consts: dict[tuple, ttnn.Tensor] = {}  # slab-local prefill: per-row Q offsets / select masks
+        self.dense_prefix_static = os.environ.get(DENSE_PREFIX_STATIC_ENV, "0") == "1"
         self.sdpa_compute = ttnn.init_device_compute_kernel_config(
             device.arch(),
             math_fidelity=ttnn.MathFidelity.HiFi4,
@@ -1178,6 +1187,7 @@ class TtDSA(LightweightModule):
         start: int = 0,
         *,
         q_offset: ttnn.Tensor | None = None,
+        keys_only: bool = False,
     ) -> ttnn.Tensor:
         """Causal attention of q [1,1,T,H*Dq] (rows at absolute positions ``start + i``) over the latent
         of the full prefix: ``prefix`` [1,1,start,L] (the user's cached rows before this chunk, None
@@ -1188,7 +1198,9 @@ class TtDSA(LightweightModule):
         [start, start + T). ``q_offset``: the per-device form of the Q offset (a 1-element int32
         ROW_MAJOR device tensor, row-sharded over a sequence-parallel mesh: the slab-local prefill), which
         overrides ``start`` for the mask and forces the windowed mode. Returns concat-heads v-space
-        [1,1,T,H*Dv]."""
+        [1,1,T,H*Dv]. ``keys_only``: ``c`` already holds EVERY key (the shape-static dense prefix:
+        the user's first P cached rows, this chunk's rows included), no prefix concat, windowed mode always.
+        The caller frees ``c`` then."""
         T = q.shape[-2]
         H, Dq, Dv = self.H, self.Dq, self.Dv
         if prefix is not None:
@@ -1204,7 +1216,7 @@ class TtDSA(LightweightModule):
         ttnn.deallocate(k)
         ttnn.deallocate(v)
         windowed = {}
-        if start or q_offset is not None:
+        if start or q_offset is not None or keys_only:
             windowed = {"cu_window_seqlens": self._cu_window(S), "windowed_q_token_offset": start}
             if q_offset is not None:
                 windowed["windowed_q_token_offset_tensor"] = q_offset
@@ -1286,6 +1298,8 @@ class TtDSA(LightweightModule):
         self._mark("cache_fill")
         self.indexer.maintain_prefill(x, cache.index, user, seq_len, start=start, slot=slot, ring_sel=ring_sel)
         self._mark("index_maintain")
+        if self.dense_prefix_static and slot is None:  # one program set per T, none per start
+            return self._prefill_static(x, q_resid, q, c, cache, user, seq_len, start, end)
         prefix = self._prefix_rows(cache, user, start) if start and split else None  # [1,1,start,L]
         if split == T:
             ttnn.deallocate(q_resid)
@@ -1386,6 +1400,8 @@ class TtDSA(LightweightModule):
             None, cache.index, user, seq_len, start=start, slot=slot, ring_sel=ring_sel, kg=(k_idx, g_idx)
         )
         self._mark("index_maintain")
+        if self.dense_prefix_static and slot is None:  # one program set per T, none per start
+            return self._prefill_slab_static(x, q_resid, q, c, cache, user, seq_len, start, end, T_loc)
         o_dense = None
         if n_d:
             # keys: the cached prefix [0, start) ++ the chunk's latent up to the last key any slab's dense (or
@@ -1460,6 +1476,167 @@ class TtDSA(LightweightModule):
         prefix = ttnn.slice(g, [owner, 0, 0, 0], [owner + 1, 1, start, self.L])
         ttnn.deallocate(g)
         return prefix
+
+    # ------------------------------------------------ shape-static dense prefix (GLM53_DENSE_PREFIX_STATIC)
+    def _dense_rows(self, cache: TtLatentCache) -> int:
+        """P: the dense range (2048 positions) or the slot's whole length when shorter (small test caches)."""
+        return min(self.sparse_row_start, cache.rows_per_user)
+
+    def _dense_keys_static(self, cache: TtLatentCache, user: int) -> ttnn.Tensor:
+        """The dense attention's keys with a FIXED shape for every chunk start: the user's first ``P`` cached latent
+        rows [1,1,P,L] = the prefix AND this chunk's rows below P (``cache.fill`` ran before the attention); the rows
+        past the prompt are unwritten and the windowed SDPA's causal mask at the global positions never reads them
+        (every query position is below them). With the heads2users layout the owner column's rows are gathered
+        over the columns and sliced out, as in ``_prefix_rows``."""
+        P = self._dense_rows(cache)
+        rows = cache.user_rows(user, P)
+        owner = cache.owner_of(user)
+        if owner is None:
+            return rows
+        g = self.mesh.all_gather_cols(rows, dim=0)  # [cols,1,P,L]
+        ttnn.deallocate(rows)
+        keys = ttnn.slice(g, [owner, 0, 0, 0], [owner + 1, 1, P, self.L])
+        ttnn.deallocate(g)
+        return keys
+
+    def _q_offset_tensor(self, starts: tuple[int, ...]) -> ttnn.Tensor:
+        """The windowed SDPA's per-device Q offset for THIS call (mesh row r reads ``starts[r]``): built per call
+        and freed by the caller, never cached (``_row_offsets`` caches per geometry: a new start under live traces
+        would allocate a persistent constant)."""
+        t = torch.tensor(starts, dtype=torch.int32).reshape(len(starts), 1)
+        return self.mesh.upload(t, ttnn.int32, rows=0, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+    def _position_mask(self, starts: tuple[int, ...], n_q: int, P: int) -> ttnn.Tensor:
+        """[rows,1,n_q,1] bf16 row-sharded 0/1 mask of the dense rows: mesh row r's query i is dense iff
+        ``starts[r] + i < P``. Built on the host per call (a few KB; the host layout under live traces), freed by
+        the caller."""
+        m = torch.zeros(len(starts), 1, n_q, 1)
+        for r, s0 in enumerate(starts):
+            m[r, 0, : max(0, min(n_q, P - s0))] = 1.0
+        return self.mesh.upload(m, ttnn.bfloat16, rows=0)
+
+    def _select_rows_mask(self, o_dense: ttnn.Tensor, o_sparse: ttnn.Tensor, mask: ttnn.Tensor) -> ttnn.Tensor:
+        """``_select_rows`` with a per-call position mask [rows,1,n_d,1]: output rows [0, n_d) =
+        where(mask, o_dense, o_sparse[:n_d]), the rest o_sparse; the inputs stay the caller's to free."""
+        n_d, N = o_dense.shape[-2], o_dense.shape[-1]
+        T_loc = o_sparse.shape[-2]
+        head_sparse = o_sparse if n_d == T_loc else ttnn.slice(o_sparse, [0, 0, 0, 0], [1, 1, n_d, N])
+        head = ttnn.where(mask, o_dense, head_sparse)
+        if n_d == T_loc:
+            return head
+        ttnn.deallocate(head_sparse)
+        tail = ttnn.slice(o_sparse, [0, 0, n_d, 0], [1, 1, T_loc, N])
+        out = ttnn.concat([head, tail], dim=-2)
+        ttnn.deallocate(head)
+        ttnn.deallocate(tail)
+        return out
+
+    def _prefill_static(self, x, q_resid, q, c, cache: TtLatentCache, user: int, seq_len: int, start: int, end: int):
+        """``prefill_forward`` past the stems / fill / index maintenance with the shape-static dense prefix
+        (``GLM53_DENSE_PREFIX_STATIC=1``): the dense SDPA over the user's first P cached rows for the chunk's first
+        min(T, P) rows (superset), the sparse path over EVERY chunk row (rows below P scored at the clamped position
+        P as in the slab path), a per-call position mask keeping the dense result below P. The program set depends
+        on T only: an all-dense chunk (start + T <= P) runs one dense program per T, every other chunk the dense
+        program of min(T, P) rows plus the sparse programs of T rows (the warm-up ladder's lone and continued
+        chunks build both). Replaces the exact-prefix path's ``split`` (host int) branches."""
+        T = q.shape[-2]
+        rows = self.mesh.rows
+        P = self._dense_rows(cache)
+        all_dense = start + T <= P
+        n_q = T if all_dense else min(T, P)
+        keys = self._dense_keys_static(cache, user)
+        q_d = q if n_q == T else ttnn.slice(q, [0, 0, 0, 0], [1, 1, n_q, self.H * self.Dq])
+        q_off = self._q_offset_tensor((start,) * rows)
+        o_dense = self._dense_attention(q_d, keys, None, 0, q_offset=q_off, keys_only=True)
+        for t in (keys, q_off, None if q_d is q else q_d):
+            if t is not None:
+                ttnn.deallocate(t)
+        self._mark("dense_attention")
+        if all_dense:
+            for t in (q_resid, q, c):
+                ttnn.deallocate(t)
+            y = self._o_proj(o_dense)
+            ttnn.deallocate(o_dense)
+            self._mark("out_proj")
+            return y
+        kv_rm, kv_owned = cache.prefix_rows_rm(user, start, T, chunk_c=c)
+        ttnn.deallocate(c)
+        self._mark("kv_copy")
+        o_sparse = self._sparse_rows(
+            x, q_resid, q, cache, user, kv_rm, start=start, end=end, r0=0, r1=T, pos_floor=self.sparse_row_start
+        )
+        ttnn.deallocate(q_resid)
+        ttnn.deallocate(q)
+        if kv_owned:
+            ttnn.deallocate(kv_rm)
+        if seq_len % cache.block_size:  # a ragged chunk is the prompt's last: the arena has nothing more to serve
+            cache.release_prefix(user)
+        mask = self._position_mask((start,) * rows, n_q, P)
+        o = self._select_rows_mask(o_dense, o_sparse, mask)
+        for t in (mask, o_dense, o_sparse):
+            ttnn.deallocate(t)
+        y = self._o_proj(o)
+        ttnn.deallocate(o)
+        self._mark("out_proj")
+        return y
+
+    def _prefill_slab_static(
+        self, x, q_resid, q, c, cache: TtLatentCache, user: int, seq_len: int, start: int, end: int, T_loc: int
+    ):
+        """``_prefill_slab`` past the stems / gathers / fill / index maintenance with the shape-static dense prefix:
+        every slab row through the dense SDPA over the user's first P cached rows (the per-row Q offsets as a
+        per-call tensor), the sparse path over all T_loc slab rows (as today), the per-row position mask keeping
+        the dense result for the rows below P. ``x`` / ``q_resid`` / ``q`` are the slab's [1,1,T_loc,*], ``c`` the
+        chunk's gathered latent [1,1,T,L]."""
+        rows = self.mesh.rows
+        T = T_loc * rows
+        P = self._dense_rows(cache)
+        all_dense = start + T <= P
+        offsets = tuple(start + r * T_loc for r in range(rows))
+        keys = self._dense_keys_static(cache, user)
+        q_off = self._q_offset_tensor(offsets)
+        o_dense = self._dense_attention(q, keys, None, 0, q_offset=q_off, keys_only=True)  # all T_loc slab rows
+        ttnn.deallocate(keys)
+        ttnn.deallocate(q_off)
+        self._mark("dense_attention")
+        if all_dense:
+            for t in (q_resid, q, c):
+                ttnn.deallocate(t)
+            y = self._o_proj(o_dense)
+            ttnn.deallocate(o_dense)
+            self._mark("out_proj")
+            return y
+        kv_rm, kv_owned = cache.prefix_rows_rm(user, start, T, chunk_c=c)
+        ttnn.deallocate(c)
+        self._mark("kv_copy")
+        o_sparse = self._sparse_rows(
+            x,
+            q_resid,
+            q,
+            cache,
+            user,
+            kv_rm,
+            start=start,
+            end=end,
+            r0=0,
+            r1=T_loc,
+            row_starts_of=lambda q0: tuple(start + r * T_loc + q0 for r in range(rows)),
+            pos_floor=self.sparse_row_start,
+        )
+        ttnn.deallocate(q_resid)
+        ttnn.deallocate(q)
+        if kv_owned:
+            ttnn.deallocate(kv_rm)
+        if seq_len % cache.block_size:
+            cache.release_prefix(user)
+        mask = self._position_mask(offsets, T_loc, P)
+        o = self._select_rows_mask(o_dense, o_sparse, mask)
+        for t in (mask, o_dense, o_sparse):
+            ttnn.deallocate(t)
+        y = self._o_proj(o)
+        ttnn.deallocate(o)
+        self._mark("out_proj")
+        return y
 
     def _sparse_rows(
         self,
