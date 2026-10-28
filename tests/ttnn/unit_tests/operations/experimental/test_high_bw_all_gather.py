@@ -1583,12 +1583,13 @@ def _stage_mesh(mesh_device):
 
 
 def _msa_overlap_grids(mesh_device):
-    """The MiniMax-M3 packed-prefill carve: the bottom two rows gather, the rows above compute. Mirrors
-    models/demos/minimax_m3/tt/ccl.py (MSA_GATHER_ROWS, msa_gather_strip_cores) without importing the model package:
-    an import error there must not fail this module's collection."""
+    """The MiniMax-M3 packed-prefill carve: the fewest bottom rows that hold the gather's cores, the rows above
+    compute. Mirrors models/demos/minimax_m3/tt/ccl.py (msa_gather_strip_cores) without importing the model
+    package: an import error there must not fail this module's collection."""
     grid = mesh_device.compute_with_storage_grid_size()
-    gather_rows = 2
-    strip_cores = _NUM_LINKS * 2 * (4 + 1)  # the 4-worker tier: 4 workers + 1 mux per direction per link
+    # link workers (the full-mesh snake's two rings x 2 directions x links) + 2 local copy cores per link
+    strip_cores = _NUM_LINKS * (2 * 2 + 2)
+    gather_rows = -(-strip_cores // grid.x)
     compute_grid = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(grid.x - 1, grid.y - gather_rows - 1))}
     )
@@ -1596,7 +1597,7 @@ def _msa_overlap_grids(mesh_device):
         {ttnn.CoreRange(ttnn.CoreCoord(0, grid.y - gather_rows), ttnn.CoreCoord(grid.x - 1, grid.y - 1))}
     )
     if gather_grid.num_cores() < strip_cores:
-        pytest.skip(f"a {gather_rows}-row strip of {gather_grid.num_cores()} cores holds no 4-worker tier")
+        pytest.skip(f"a {gather_rows}-row strip of {gather_grid.num_cores()} cores holds no {strip_cores}-core gather")
     return compute_grid, gather_grid
 
 

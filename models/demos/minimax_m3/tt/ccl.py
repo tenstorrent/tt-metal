@@ -16,22 +16,14 @@ from models.demos.minimax_m3.tt.moe import shared_overlap
 # (deepseek_v3_d_p/tests/test_mla.py). Same size the DeepSeek/GLM/Kimi adapters reserve.
 L1_SMALL_SIZE = 1152
 
-# Packed-forward MSA overlap (tt/attention/msa.py msa_chunks_pipelined): the bottom rows of the grid carry the
-# K/V/index_k gather workers, the rows above run the block selection and sparse attention. Two rows (22-24 cores on
-# the galaxy grids) hold high_bw_all_gather's 4-worker tier at 2 links (get_msa_overlap checks it). Bottom rather
-# than top keeps the compute rectangle at its (0, 0) origin; a top strip measured 1-2% slower per packed chunk on
-# both stages. The op test of the schedule carves the same strip (tests/ttnn/.../test_high_bw_all_gather.py
-# _msa_overlap_grids).
-MSA_GATHER_ROWS = 2
-
 
 def msa_gather_strip_cores(num_links: int) -> int:
-    """Cores high_bw_all_gather's 4-worker tier needs on a strip: 4 workers + 1 mux per direction per link, the
-    op's own rule (scheduler::worker_count_fits, high_bw_all_gather_scheduler.hpp; the Blackhole worker tiers are
-    in high_bw_all_gather_unicast_factory.cpp). The op snaps a larger preferred tier down to 4 with a one-time
-    warning; a strip below this count trips get_msa_overlap's assertion at the first pipelined forward, not at
-    mesh open."""
-    return num_links * 2 * (4 + 1)
+    """Cores high_bw_all_gather needs per chip for the MSA cache gathers, the op's own placement rule
+    (build_gather_plan, high_bw_all_gather_fabric_factory.cpp): one link worker per ring x direction x link, plus
+    two local copy cores per link for the non-interleaved cache. The full-mesh snake that rebuilds a TP-deduped
+    index_k runs over two rings, the SP and TP line gathers over one, so this is the two-ring count: 12 at 2 links,
+    one row of the 12-wide galaxy grids. A strip with fewer cores makes the op throw at its first program."""
+    return num_links * (2 * 2 + 2)
 
 
 @dataclass
@@ -257,23 +249,21 @@ class CCLManager:
         return self._high_bw_gather_buffers[cache_key]
 
     def get_msa_overlap(self) -> MsaOverlap:
-        """The MSA overlap resources (MSA_GATHER_ROWS), created once per mesh: a second sub-device manager next to
-        the MoE's (tt/moe/shared_overlap.py; managers coexist, one is loaded at a time) plus the gather's two
+        """The MSA overlap resources, created once per mesh: a second sub-device manager (the gather strip sized by
+        msa_gather_strip_cores) next to the MoE's (tt/moe/shared_overlap.py; managers coexist, one is loaded at a time) plus the gather's two
         global semaphores on the gather strip. Semaphores go to L1_SMALL like the op's own, so the window adds
         nothing to the L1 the compute ops see. release_msa_overlap() must run before the mesh is closed."""
         if self._msa_overlap is None:
             mesh = self.mesh_device
             grid = self.compute_grid_size
-            compute_rows = grid.y - MSA_GATHER_ROWS
-            assert compute_rows > 0, f"grid {grid.x}x{grid.y} too small for a {MSA_GATHER_ROWS}-row gather strip"
+            # The fewest whole bottom rows that hold the gather's cores; the rows above run the block selection and
+            # sparse attention. Bottom rather than top keeps the compute rectangle at its (0, 0) origin; a top strip
+            # measured 1-2% slower per packed chunk on both stages. The op test of the schedule carves the same strip
+            # (tests/ttnn/.../test_high_bw_all_gather.py _msa_overlap_grids).
+            gather_rows = -(-msa_gather_strip_cores(self.num_links) // grid.x)
+            compute_rows = grid.y - gather_rows
+            assert compute_rows > 0, f"grid {grid.x}x{grid.y} too small for a {gather_rows}-row gather strip"
             compute, gather = shared_overlap.split_grid(grid.x, grid.y, compute_rows)
-            # high_bw_all_gather's worker tier is picked from the gather bytes and snapped down to what the strip
-            # holds (a performance floor: the op accepts smaller strips with a warning, down to one worker). The
-            # strip must fit the 4-worker tier.
-            needed = msa_gather_strip_cores(self.num_links)
-            assert (
-                gather.num_cores() >= needed
-            ), f"gather strip of {gather.num_cores()} cores holds no 4-worker tier ({needed} needed)"
             # local_l1_size 0: no per-sub-device allocator, every buffer stays in the mesh's global allocator (as
             # the MoE manager, tt/moe/shared_overlap.py).
             manager_id = mesh.create_sub_device_manager([ttnn.SubDevice([compute]), ttnn.SubDevice([gather])], 0)
