@@ -11,6 +11,11 @@ by ``metrics.gate_metrics`` on the same device outputs the fixed record was scor
 record already has (scalars, bias_rows, spread_ratio_rows) is recomputed too and must match it within 1e-12, so the
 heads are known to be those outputs; exit status 1 otherwise. check_gates reads the file through a ``ref``
 tolerance; the fixed record is unchanged.
+
+    ... fixed_record_vectors.py --baseline <record.json> --heads <dump dir> --flat --full --out <record.json>
+
+backfills a later record (v1.32) from its own job's dumps (``<shape>-<precision>.pt``, ``suite_<case>-...``): the
+same check, and the record is written whole with the new vectors and its original session stamp.
 """
 
 from __future__ import annotations
@@ -52,6 +57,8 @@ def compare(m: dict, r: dict) -> dict:
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--heads", type=Path, default=FIXED_HEADS)
+    ap.add_argument("--flat", action="store_true", help="one dump dir (a job's MODEL_PERF_DUMP / FLOWSTATE_SUITE_DUMP)")
+    ap.add_argument("--full", action="store_true", help="write the whole record with the new vectors (backfill)")
     ap.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
     ap.add_argument("--out", type=Path, required=True)
     args = ap.parse_args()
@@ -60,7 +67,10 @@ def main():
         name, p = r["name"], r["precision"]
         case = name[6:] if name.startswith("suite:") else None
         g = torch.load(GOLDENS / f"{case or 'bench_' + name}.pt", weights_only=True)
-        f = args.heads / (f"pcc_1135/suite_{case}-{p}.pt" if case else f"bench_1123/{name}-{p}.pt")
+        if args.flat:
+            f = args.heads / (f"suite_{case}-{p}.pt" if case else f"{name}-{p}.pt")
+        else:
+            f = args.heads / (f"pcc_1135/suite_{case}-{p}.pt" if case else f"bench_1123/{name}-{p}.pt")
         h = torch.load(f, weights_only=True)["combined_normalized"]
         q, pt, _ = to_data(g, h)
         m = M.gate_metrics(h, g["combined_normalized"], q, g["quantile_outputs"], pt, g["prediction_outputs"])
@@ -72,7 +82,11 @@ def main():
             f"{name:20s} {p:11s} bias_quantiles {bq} {len(diffs)} metrics, max |recomputed - record| {diffs[k]:.3g} ({k})"
         )
         stamp = {k: r[k] for k in ("git_head", "git_dirty", "started_at") if k in r}
-        out.append({"name": name, "precision": p, **{v: m[v] for v in VECTORS}, "source": str(f), **stamp})
+        new = {v: m[v] for v in VECTORS} | {"row_info": m["row_info"]}
+        if args.full:
+            out.append(r | new | {"backfilled_from": str(f)})
+        else:
+            out.append({"name": name, "precision": p, **{v: m[v] for v in VECTORS}, "source": str(f), **stamp})
     args.out.write_text(json.dumps(out, indent=1) + "\n")
     print(f"{len(out)} records; worst |recomputed - fixed record| {worst[0]:.3g} ({worst[1]}); tolerance {TOL}")
     sys.exit(0 if worst[0] <= TOL else 1)
