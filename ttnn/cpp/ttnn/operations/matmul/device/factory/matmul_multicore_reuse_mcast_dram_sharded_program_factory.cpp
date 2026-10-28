@@ -1958,7 +1958,7 @@ MatmulMultiCoreReuseMultiCastDRAMShardedProgramFactory::create_mesh_workload_art
     const auto& device = *tensor_args.input_tensors.at(0).device();
     if (same_dram_bank_workers(device, tensor_coords)) {
         for (const auto& range : tensor_coords.ranges()) {
-            const auto coord = range.start_coord();
+            const auto& coord = range.start_coord();
             auto shared = create_dram_sharded_artifacts(operation_attributes, tensor_args, tensor_return_value, &coord);
             artifacts.programs.push_back({
                 .range = range,
