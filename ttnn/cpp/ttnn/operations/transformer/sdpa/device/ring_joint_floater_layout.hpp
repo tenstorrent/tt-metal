@@ -171,6 +171,11 @@ struct FloaterLayout {
     std::vector<std::array<uint32_t, kFloaterGroupCores>> groups;
     // Per group, in run order: first pieces, then second pieces.
     std::vector<std::vector<FloaterVisit>> visits;
+    // The homes' K multicast groups, cores ascending: per block row and band, that band's blocks in the row. Every home
+    // of a band reads the same K chunks, so one injector (the first core) reads each chunk once for the strip. Each
+    // strip fills a 2-row rectangle (the multicast writes all of it), and its homes merge their first floater piece at
+    // the same iteration, so the strip stalls at one merge iteration rather than at each home's.
+    std::vector<std::vector<uint32_t>> home_strips;
 
     // Home block g is the 2x2 block at (2 (g % cols), 2 (g / cols)) of the sub-grid left of the last grid column.
     uint32_t block_core(uint32_t g, uint32_t k) const {
@@ -322,6 +327,41 @@ inline FloaterLayout build_floater_layout(
                     layout.home_merge_iter[home] = schedule.merge_after[v];
                 }
             }
+        }
+    }
+    const uint32_t cols = (grid_x - 1) / 2;
+    for (uint32_t g = 0; g < kFloaterHomeBlocks; ++g) {
+        const uint32_t row = g / cols;
+        const uint32_t band = layout.home_band[layout.block_core(g, 0)];
+        if (g == 0 || row != (g - 1) / cols || band != layout.home_band[layout.block_core(g - 1, 0)]) {
+            layout.home_strips.emplace_back();
+        }
+        for (uint32_t k = 0; k < kFloaterGroupCores; ++k) {
+            layout.home_strips.back().push_back(layout.block_core(g, k));
+        }
+    }
+    for (auto& strip : layout.home_strips) {
+        std::sort(strip.begin(), strip.end());
+        uint32_t x0 = grid_x, y0 = grid_y, x1 = 0, y1 = 0;
+        for (const uint32_t core : strip) {
+            const auto [x, y] = layout.logical_xy(core);
+            x0 = std::min(x0, x), y0 = std::min(y0, y), x1 = std::max(x1, x), y1 = std::max(y1, y);
+        }
+        TT_FATAL(
+            (x1 - x0 + 1) * (y1 - y0 + 1) == strip.size(),
+            "ring_joint floaters: a K multicast strip of {} cores does not fill ({}, {})..({}, {})",
+            strip.size(),
+            x0,
+            y0,
+            x1,
+            y1);
+        for (const uint32_t core : strip) {
+            TT_FATAL(
+                layout.home_merge_iter[core] == layout.home_merge_iter[strip.front()],
+                "ring_joint floaters: the homes of a K multicast strip merge their first piece at different iterations "
+                "({} and {})",
+                layout.home_merge_iter[core],
+                layout.home_merge_iter[strip.front()]);
         }
     }
     return layout;

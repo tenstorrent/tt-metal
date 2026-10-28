@@ -5,10 +5,12 @@
 // Host-side checks of the expanded-K floater layout (ring_joint_floater_layout.hpp): exact tables for the two tuned
 // shapes, so a change to the layout is a deliberate one, and the invariants the kernels' protocol relies on.
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <optional>
 #include <set>
+#include <utility>
 #include <vector>
 
 #include "gtest/gtest.h"
@@ -224,6 +226,34 @@ TEST(RingJointFloaterLayout, HoldsTheProtocolsInvariants) {
             }
         }
         EXPECT_EQ(homes, kFloaterHomeBlocks * kFloaterGroupCores);
+    }
+}
+
+// The homes' K multicast strips: every home in exactly one, one band and one first-merge iteration per strip, each
+// a full rectangle (the multicast writes all of it).
+TEST(RingJointFloaterLayout, StripsShareTheirHomesKStream) {
+    for (const Golden& golden : kGoldens) {
+        SCOPED_TRACE(::testing::Message() << "heads=" << golden.heads << " bands=" << golden.bands);
+        const FloaterLayout layout = layout_of(golden);
+        const uint32_t total_q_chunks = golden.heads * 2;
+        std::set<uint32_t> covered;
+        for (const auto& strip : layout.home_strips) {
+            ASSERT_FALSE(strip.empty());
+            EXPECT_TRUE(std::is_sorted(strip.begin(), strip.end()));
+            uint32_t x0 = kGridX, y0 = kGridY, x1 = 0, y1 = 0;
+            for (const uint32_t core : strip) {
+                EXPECT_TRUE(covered.insert(core).second) << "core " << core << " in two strips";
+                EXPECT_LT(layout.home_unit[core], total_q_chunks) << "core " << core << " is not a home";
+                EXPECT_EQ(layout.home_band[core], layout.home_band[strip.front()]);
+                EXPECT_EQ(layout.home_merge_iter[core], layout.home_merge_iter[strip.front()]);
+                const auto [x, y] = layout.logical_xy(core);
+                x0 = std::min(x0, x), y0 = std::min(y0, y), x1 = std::max(x1, x), y1 = std::max(y1, y);
+            }
+            EXPECT_EQ((x1 - x0 + 1) * (y1 - y0 + 1), strip.size());
+            EXPECT_EQ(layout.logical_xy(strip.front()), std::make_pair(x0, y0)) << "the injector is the top-left core";
+        }
+        EXPECT_EQ(covered.size(), kFloaterHomeBlocks * kFloaterGroupCores);
+        EXPECT_EQ(layout.home_strips.size(), golden.bands == 2 ? 6u : 7u);
     }
 }
 

@@ -2748,9 +2748,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         std::vector<RowWideChainMcastSelection> row_mcast_selections;
         row_mcast_selections.reserve(grid_size.y);
         std::deque<uint32_t> recent_cols;  // FIFO of <= grid.x-1 most-recent claimed phys_x
-        // Floaters: one K multicast per home block and per floater group instead of per row; a floater group's injector
-        // forwards on every visit (several Q slots per step).
-        auto configure_group_mcast = [&](const std::array<uint32_t, 4>& group, uint32_t forwarded_q_slots) {
+        // Floaters: one K multicast per strip of same-band home blocks (FloaterLayout::home_strips) and per floater
+        // group instead of per row; a floater group's injector forwards on every visit (several Q slots per step). The
+        // multicast writes its whole rectangle, so a group must fill it.
+        auto configure_group_mcast = [&](const std::vector<uint32_t>& group, uint32_t forwarded_q_slots) {
             CoreCoord lo = logical_core(group[0]);
             CoreCoord hi = lo;
             for (uint32_t ci : group) {
@@ -2758,6 +2759,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 lo = CoreCoord{std::min(lo.x, c.x), std::min(lo.y, c.y)};
                 hi = CoreCoord{std::max(hi.x, c.x), std::max(hi.y, c.y)};
             }
+            TT_FATAL(
+                (hi.x - lo.x + 1) * (hi.y - lo.y + 1) == group.size(),
+                "ring_joint floaters: a K multicast group of {} cores does not fill its {}..{} rectangle",
+                group.size(),
+                lo,
+                hi);
             for (uint32_t ci : group) {
                 auto& cfg = batch_chain_configs[ci];
                 cfg = ChainConfig{};
@@ -2773,11 +2780,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             }
         };
         if (floaters) {
-            for (uint32_t g = 0; g < ring_joint::kFloaterHomeBlocks; ++g) {
-                configure_group_mcast({block_core(g, 0), block_core(g, 1), block_core(g, 2), block_core(g, 3)}, 1);
+            for (const auto& strip : floater_layout.home_strips) {
+                configure_group_mcast(strip, 1);
             }
             for (const auto& group : floater_groups) {
-                configure_group_mcast(group, std::numeric_limits<uint32_t>::max());
+                configure_group_mcast(
+                    std::vector<uint32_t>(group.begin(), group.end()), std::numeric_limits<uint32_t>::max());
             }
             k_mcast_enabled = true;
         }
