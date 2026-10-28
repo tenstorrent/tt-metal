@@ -52,20 +52,22 @@ def test_profile_forward(device):
 
         mark("embed_start")
         h = tt.embed(inp["vm"], c)
+        x = tt.norm(h, tt.layers[0]["ln1"])
         mark("embed_end")
         ttnn.ReadDeviceProfiler(device)
         mark("layer_start")
-        h = tt.layer(h, tt.layers[0], inp, c, last=False)
+        h, x = tt.layer(h, x, tt.layers[0], inp, c, last=False, g_next=tt.layers[1]["ln1"])
         mark("layer_end")
         ttnn.ReadDeviceProfiler(device)
         mark("layer_last_start")
-        h = tt.layer(h, tt.layers[1], inp, c, last=True)
+        h, x = tt.layer(h, x, tt.layers[1], inp, c, last=True, g_next=tt.final_ln)
         mark("layer_last_end")
         ttnn.ReadDeviceProfiler(device)
         mark("head_start")
-        out = tt.head(h)
+        out = tt.head(x)
         mark("head_end")
         ttnn.deallocate(h)
+        ttnn.deallocate(x)
         return out
 
     ttnn.deallocate(forward(marked=False))  # warm-up: compile every program

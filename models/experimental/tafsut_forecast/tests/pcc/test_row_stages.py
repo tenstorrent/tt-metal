@@ -142,13 +142,16 @@ def test_tail_isolation(device, case, k, named, precision):
     c = tt.constants(len(rows), prep.ctx_len)
     inp = tt.upload_inputs(tt.host_inputs(prep))
     up = lambda t: ttnn.from_torch(t.bfloat16(), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-    h13 = tt.layer(up(rtaps[df.NL - 1]), tt.layers[df.NL - 1], inp, c, last=True)
+    h12 = up(rtaps[df.NL - 1])
+    h13, x13 = tt.layer(h12, tt.norm(h12, tt.layers[df.NL - 1]["ln1"]), tt.layers[df.NL - 1], inp, c, last=True,
+                        g_next=tt.final_ln)
     b13 = ttnn.to_torch(h13).float()
-    o13 = tt.head(h13)
+    o13 = tt.head(x13)
     head13 = ttnn.to_torch(o13).float()
-    oh = tt.head(up(rtaps[df.NL]))
+    xh = tt.norm(up(rtaps[df.NL]), tt.final_ln)
+    oh = tt.head(xh)
     headh = ttnn.to_torch(oh).float()
-    for t in (h13, o13, oh):
+    for t in (h13, x13, o13, xh, oh):
         ttnn.deallocate(t)
     tt.deallocate_inputs(inp)
     fut = slice(0, df.NFUT)
