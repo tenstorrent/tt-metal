@@ -32,7 +32,7 @@
 // `Buffer` is used by value-of-reference in a declaration below; include the
 // real header (it is core, safe in any build) rather than forward-declaring, so
 // includers that were getting it transitively keep compiling.
-#include <buffer.hpp>
+#include <tt-metalium/buffer.hpp>
 
 namespace tt::tt_metal {
 class Program;

@@ -16,7 +16,7 @@
 #include "profiler_state.hpp"
 #include <tt_stl/indestructible.hpp>
 #include "context/metal_env_accessor.hpp"
-#include "math.hpp"
+#include <tt-metalium/math.hpp>
 #include "tt_cluster.hpp"
 #include <tt-metalium/device.hpp>
 

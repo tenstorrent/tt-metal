@@ -10,7 +10,7 @@
 #include "impl/context/metal_context.hpp"
 
 #include <llrt/tt_cluster.hpp>
-#include <mesh_device.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-umd/firmware_telemetry/firmware_telemetry_reader.hpp>
 #include <tt-umd-workload/cluster.hpp>

@@ -4,7 +4,7 @@
 
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 
-#include "tt_metal.hpp"
+#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/fabric/fabric_context.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_builder.hpp"
@@ -15,7 +15,7 @@
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "impl/program/program_impl.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
-#include "distributed_context.hpp"
+#include <tt-metalium/distributed_context.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <string>
 

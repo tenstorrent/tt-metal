@@ -5,7 +5,7 @@
 #include <algorithm>
 #include <vector>
 
-#include "shape_base.hpp"
+#include <tt-metalium/shape_base.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
 

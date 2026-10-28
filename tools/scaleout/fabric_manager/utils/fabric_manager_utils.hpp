@@ -10,8 +10,8 @@
 #include <unordered_map>
 #include <memory>
 #include <filesystem>
-#include "tt_metal/api/tt-metalium/experimental/fabric/control_plane.hpp"
-#include "tt_metal/api/tt-metalium/experimental/fabric/fabric_types.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "tt_metal/impl/context/metal_context.hpp"
 #include <tt-metalium/mesh_coord.hpp>

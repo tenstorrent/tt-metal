@@ -12,7 +12,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "impl/context/metal_env_impl.hpp"
 #include "impl/kernels/kernel.hpp"
-#include "tt-metalium/program.hpp"
+#include <tt-metalium/program.hpp>
 
 using tt::tt_metal::detail::ProgramImpl;
 namespace tt::tt_metal {

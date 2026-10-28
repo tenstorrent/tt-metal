@@ -46,7 +46,7 @@
 #include <tt-metalium/mesh_workload.hpp>
 #include <tt-metalium/workload/specification/program_spec.hpp>
 
-#include "buffer_types.hpp"
+#include <tt-metalium/buffer_types.hpp>
 #include "command_queue_fixture.hpp"
 #include "dispatch_test_utils.hpp"
 #include "common/env_lib.hpp"

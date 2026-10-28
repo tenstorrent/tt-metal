@@ -8,8 +8,8 @@
 
 #include <tracy/Tracy.hpp>
 
-#include <mesh_device.hpp>
-#include <mesh_event.hpp>
+#include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/mesh_event.hpp>
 #include "mesh_event_impl.hpp"
 #include <tt-metalium/allocator.hpp>
 #include <algorithm>
@@ -21,8 +21,8 @@
 #include <utility>
 
 #include <tt_stl/assert.hpp>
-#include "buffer.hpp"
-#include "device.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/device.hpp>
 #include "impl/device/device_impl.hpp"
 #include "llrt.hpp"
 #include "impl/context/metal_context.hpp"
@@ -32,13 +32,13 @@
 #include "dispatch/device_command_calculator.hpp"
 #include "event/dispatch.hpp"
 #include <tt-metalium/hal_types.hpp>
-#include "mesh_config.hpp"
-#include "mesh_coord.hpp"
+#include <tt-metalium/mesh_config.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include "mesh_coord_utils.hpp"
-#include "mesh_workload.hpp"
+#include <tt-metalium/mesh_workload.hpp>
 #include "mesh_workload_impl.hpp"
 #include "sub_device/sub_device_manager_tracker.hpp"
-#include "tt-metalium/program.hpp"
+#include <tt-metalium/program.hpp>
 #include "dispatch/system_memory_manager.hpp"
 #include "trace/trace_buffer.hpp"
 #include "trace/trace_capture_buffer.hpp"

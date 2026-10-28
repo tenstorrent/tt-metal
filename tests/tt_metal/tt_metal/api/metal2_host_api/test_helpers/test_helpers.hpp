@@ -23,7 +23,7 @@
 #include <tt-metalium/tensor/spec/layout/tensor_layout.hpp>
 #include <tt-metalium/work_split.hpp>
 #include <tt-metalium/workload/specification/data_movement_hardware_config.hpp>
-#include "kernel_types.hpp"
+#include <tt-metalium/kernel_types.hpp>
 
 // This file contains shortcut helper functions to create minimal valid ProgramSpec
 // objects for unit tests. This cuts boilerplate in a unit testing context.

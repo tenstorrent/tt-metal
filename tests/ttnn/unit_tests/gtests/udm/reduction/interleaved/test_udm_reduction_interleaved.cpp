@@ -8,7 +8,7 @@
 #include "tests/tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "tests/ttnn/unit_tests/gtests/udm/test_udm_utils.hpp"
 #include "tt_metal/programming_examples/matmul/matmul_common/bmm_op.hpp"
-#include "tt_metal/api/tt-metalium/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 
 #include <tt-metalium/experimental/udm/mesh_kernel.hpp>
 #include <tt-metalium/experimental/udm/mesh_utils.hpp>

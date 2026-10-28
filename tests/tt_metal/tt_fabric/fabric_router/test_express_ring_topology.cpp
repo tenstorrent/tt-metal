@@ -21,7 +21,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 
-#include "cluster.hpp"
+#include <tt-metalium/cluster.hpp>
 #include "fabric_fixture.hpp"
 #include "utils.hpp"
 #include "impl/context/metal_context.hpp"

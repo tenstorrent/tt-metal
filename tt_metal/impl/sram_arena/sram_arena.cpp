@@ -8,7 +8,7 @@
 
 #include <tt_stl/assert.hpp>
 
-#include "experimental/sram_arena/sram_arena_properties.hpp"
+#include <tt-metalium/experimental/sram_arena/sram_arena_properties.hpp>
 #include "impl/metal2_host_api/helpers.hpp"
 #include "impl/sram_arena/sram_arena_impl.hpp"
 

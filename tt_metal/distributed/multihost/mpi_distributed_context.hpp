@@ -6,7 +6,7 @@
 
 #include <mpi.h>
 #include <optional>
-#include "api/tt-metalium/distributed_context.hpp"
+#include <tt-metalium/distributed_context.hpp>
 
 namespace tt::tt_metal::distributed::multihost {
 

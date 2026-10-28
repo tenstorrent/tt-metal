@@ -13,7 +13,7 @@
 
 #include "allocator/algorithms/allocator_algorithm.hpp"
 #include <tt_stl/assert.hpp>
-#include "buffer_types.hpp"
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "tt_metal/impl/allocator/algorithms/free_list_opt.hpp"
 #include "tt_metal/impl/allocator/algorithms/address_ranges.hpp"

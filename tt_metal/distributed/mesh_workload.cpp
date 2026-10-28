@@ -2,13 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <mesh_buffer.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/experimental/allocation_context.hpp>
 #include <tt-metalium/experimental/mesh_workload_runtime_args.hpp>
 #include <tt-metalium/experimental/program_preparation.hpp>
 #include <tt_stl/fmt.hpp>
-#include <mesh_command_queue.hpp>
-#include <mesh_workload.hpp>
+#include <tt-metalium/mesh_command_queue.hpp>
+#include <tt-metalium/mesh_workload.hpp>
 #include <cstdint>
 #include "impl/buffers/buffer_impl.hpp"
 #include <tt_metal/impl/program/program_command_sequence.hpp>
@@ -31,24 +31,24 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/small_vector.hpp>
-#include "buffer.hpp"
-#include "buffer_types.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/hal.hpp>
-#include "kernel_types.hpp"
-#include "mesh_coord.hpp"
-#include "mesh_device.hpp"
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/mesh_coord.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include "mesh_workload_impl.hpp"
 #include "program/program_device_map.hpp"
 #include "program/program_impl.hpp"
-#include "tt-metalium/program.hpp"
+#include <tt-metalium/program.hpp>
 #include "tt_metal/impl/program/program_impl.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/lightmetal/host_api_capture_helpers.hpp"
 #include <tt-metalium/workload/run_args/program_run_args.hpp>
 #include "llrt/tt_cluster.hpp"
-#include "sub_device_types.hpp"
+#include <tt-metalium/sub_device_types.hpp>
 #include "tt_metal/impl/dispatch/device_command.hpp"
 
 #include <tt-umd/types/core_coordinates.hpp>

@@ -10,7 +10,7 @@
 
 #include <tt-metalium/shape.hpp>
 #include <tt-metalium/distributed.hpp>
-#include "tt_metal/api/tt-metalium/bfloat16.hpp"
+#include <tt-metalium/bfloat16.hpp>
 
 #include "ttnn/tensor/tensor.hpp"
 #include <tt_metal/impl/tensor/spec/layout/tensor_layout_impl.hpp>

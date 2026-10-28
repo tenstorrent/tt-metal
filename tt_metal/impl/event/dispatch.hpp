@@ -5,7 +5,7 @@
 #pragma once
 
 #include <stdint.h>
-#include <sub_device_types.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/device.hpp>
 
 #include <tt_stl/span.hpp>

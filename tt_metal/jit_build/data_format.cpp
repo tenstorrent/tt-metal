@@ -5,7 +5,7 @@
 #include "data_format.hpp"
 
 #include <tt_stl/assert.hpp>  // for tt_throw, TT_FATAL
-#include <base_types.hpp>     // for tt::tt_metal::UnpackToDestMode
+#include <tt-metalium/base_types.hpp>  // for tt::tt_metal::UnpackToDestMode
 #include <set>            // for set
 #include <unordered_map>  // for unordered_map
 

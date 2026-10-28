@@ -7,7 +7,7 @@
 #include <cstdint>
 #include <optional>
 
-#include "sub_device_types.hpp"
+#include <tt-metalium/sub_device_types.hpp>
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"
 

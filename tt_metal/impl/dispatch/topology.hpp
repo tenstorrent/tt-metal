@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <device.hpp>
+#include <tt-metalium/device.hpp>
 #include <memory>
 #include <set>
 #include <unordered_map>
@@ -13,7 +13,7 @@
 
 #include <tt-metalium/core_coord.hpp>
 #include "device/device_impl.hpp"
-#include "tt-metalium/program.hpp"
+#include <tt-metalium/program.hpp>
 #include "tt_metal/impl/dispatch/kernel_config/fd_kernel.hpp"
 #include "tt_metal/impl/dispatch/dispatch_core_common.hpp"
 #include "tt_metal/impl/context/context_descriptor.hpp"

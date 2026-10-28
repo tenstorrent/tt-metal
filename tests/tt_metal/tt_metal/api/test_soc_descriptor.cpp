@@ -17,7 +17,7 @@
 #include "llrt/metal_soc_descriptor.hpp"
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include "impl/context/metal_context.hpp"
-#include "tt_metal.hpp"
+#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/test_utils/env_vars.hpp"
 #include <tt-umd/coordinates/coordinate_manager.hpp>
 #include <tt-umd/types/arch.hpp>

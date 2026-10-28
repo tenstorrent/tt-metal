@@ -5,15 +5,15 @@
 #include <tt_stl/fmt.hpp>
 #include "mesh_command_queue_base.hpp"
 
-#include <mesh_event.hpp>
+#include <tt-metalium/mesh_event.hpp>
 #include <api/tt-metalium/experimental/pinned_memory.hpp>
 #include <algorithm>
 #include <optional>
 #include <tt-logger/tt-logger.hpp>
 #include <utility>
 
-#include "buffer.hpp"
-#include "mesh_coord.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/mesh_coord.hpp>
 #include "tt_metal/distributed/mesh_workload_utils.hpp"
 #include "tt_metal/impl/buffers/dispatch.hpp"
 #include "tt_metal/impl/program/dispatch.hpp"

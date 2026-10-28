@@ -14,7 +14,7 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/allocator.hpp>
 
-#include "tt_metal.hpp"
+#include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
 #include "tt_metal/impl/dispatch/command_queue_common.hpp"
 

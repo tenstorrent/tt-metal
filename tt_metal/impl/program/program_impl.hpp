@@ -6,29 +6,29 @@
 
 #include "program_command_sequence.hpp"
 
-#include "tt-metalium/buffer.hpp"
-#include "tt-metalium/circular_buffer.hpp"
-#include "tt-metalium/circular_buffer_constants.h"
-#include "tt-metalium/circular_buffer_config.hpp"
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/circular_buffer.hpp>
+#include <tt-metalium/circular_buffer_constants.h>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt_stl/optional_reference.hpp>
-#include "tt-metalium/core_coord.hpp"
-#include "tt-metalium/hal_types.hpp"     // HalProgrammableCoreType
-#include "tt-metalium/kernel_types.hpp"  // KernelHandle
-#include "tt-metalium/program.hpp"       // KernelGroup
-#include "tt-metalium/mesh_workload.hpp"
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal_types.hpp>     // HalProgrammableCoreType
+#include <tt-metalium/kernel_types.hpp>  // KernelHandle
+#include <tt-metalium/program.hpp>       // KernelGroup
+#include <tt-metalium/mesh_workload.hpp>
 #include "hostdev/remote_dfb_constants.h"  // REMOTE_DFB_OFFSET_NONE
 #include "program_device_map.hpp"          // ProgramTransferInfo
 #include "program_allocation_support.hpp"
 #include "impl/buffers/semaphore.hpp"
 #include "impl/metal2_host_api/sram_arena_support.hpp"
-#include "tt-metalium/sub_device_types.hpp"
-#include "tt-metalium/tensor/spec/tensor_spec.hpp"                               // Metal 2.0 TensorParameter registry
-#include "tt-metalium/workload/specification/tensor_spec_relaxations.hpp"  // Metal 2.0 TensorParameter relaxations
-#include "tt-metalium/experimental/sram_arena/sram_arena_properties.hpp"
-#include "tt-metalium/experimental/metal2_host_api/sram_arena_parameter.hpp"
-#include "tt-metalium/workload/specification/tensor_parameter.hpp"
-#include "tt-metalium/experimental/prefetcher_pipe.hpp"                          // PrefetcherPipeIdentity
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/tensor/spec/tensor_spec.hpp>                         // Metal 2.0 TensorParameter registry
+#include <tt-metalium/workload/specification/tensor_spec_relaxations.hpp>  // Metal 2.0 TensorParameter relaxations
+#include <tt-metalium/experimental/sram_arena/sram_arena_properties.hpp>
+#include <tt-metalium/experimental/metal2_host_api/sram_arena_parameter.hpp>
+#include <tt-metalium/workload/specification/tensor_parameter.hpp>
+#include <tt-metalium/experimental/prefetcher_pipe.hpp>  // PrefetcherPipeIdentity
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 #include <impl/context/context_types.hpp>
 

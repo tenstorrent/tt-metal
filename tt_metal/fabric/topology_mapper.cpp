@@ -29,7 +29,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
 #include "tt_metal/fabric/fabric_host_utils.hpp"
-#include "experimental/fabric/routing_table_generator.hpp"
+#include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <cmath>
 #include <chrono>
 #include <thread>

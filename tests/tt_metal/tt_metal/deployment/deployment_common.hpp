@@ -5,9 +5,9 @@
 #ifndef DEPLOYMENT_COMMON_H
 #define DEPLOYMENT_COMMON_H
 
-#include "tt_metal/api/tt-metalium/hal.hpp"
+#include <tt-metalium/hal.hpp>
 #include "command_queue_fixture.hpp"
-#include "tt_metal/api/tt-metalium/experimental/fabric/control_plane.hpp"
+#include <tt-metalium/experimental/fabric/control_plane.hpp>
 
 #define TEST_PARAM(type, var, initial, envvar) \
     type var = (initial);                      \

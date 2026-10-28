@@ -9,7 +9,7 @@
 
 #include <flatbuffers/flatbuffers.h>
 #include <tt_stl/span.hpp>
-#include <sub_device_types.hpp>
+#include <tt-metalium/sub_device_types.hpp>
 
 #include "flatbuffer/program_types_to_flatbuffer.hpp"
 #include "flatbuffer/program_types_from_flatbuffer.hpp"

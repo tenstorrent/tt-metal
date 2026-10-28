@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "mesh_coord.hpp"
+#include <tt-metalium/mesh_coord.hpp>
 #include "ttnn_test_fixtures.hpp"
 
 #include <cmath>

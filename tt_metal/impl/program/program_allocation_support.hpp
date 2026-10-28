@@ -9,8 +9,8 @@
 #include <utility>
 #include <vector>
 
-#include "tt-metalium/core_coord.hpp"
-#include "tt-metalium/hal_types.hpp"  // DeviceAddr
+#include <tt-metalium/core_coord.hpp>
+#include <tt-metalium/hal_types.hpp>  // DeviceAddr
 #include "impl/allocator/persistent_l1_arena.hpp"
 
 namespace tt::tt_metal::detail {

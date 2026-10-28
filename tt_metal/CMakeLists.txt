@@ -138,8 +138,6 @@ target_include_directories(
     PUBLIC
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/api>"
         "$<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/api>"
-    PRIVATE
-        api/tt-metalium # FIXME: Re-home the tests and remove this
 )
 target_compile_options(tt_metal PUBLIC -Wno-int-to-pointer-cast)
 
@@ -172,7 +170,6 @@ endif()
 # scoping that external consumers must use.  Scoping may still be used if desired.
 include_directories(
     api
-    api/tt-metalium
     ${CMAKE_CURRENT_BINARY_DIR}/api
 )
 

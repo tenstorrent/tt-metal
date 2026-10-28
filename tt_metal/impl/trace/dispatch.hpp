@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include <device.hpp>
+#include <tt-metalium/device.hpp>
 #include <cstdint>
 #include <cstddef>
 #include <unordered_map>
@@ -13,7 +13,7 @@
 #include "dispatch/dispatch_settings.hpp"
 #include "dispatch/worker_config_buffer.hpp"
 #include "impl/context/context_types.hpp"
-#include "sub_device_types.hpp"
+#include <tt-metalium/sub_device_types.hpp>
 #include "trace_buffer.hpp"
 
 namespace tt::tt_metal {

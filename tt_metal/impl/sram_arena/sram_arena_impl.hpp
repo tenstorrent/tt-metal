@@ -20,7 +20,7 @@
 #include <tt-metalium/tt_backend_api_types.hpp>
 
 #include <tt_stl/assert.hpp>
-#include "buffer.hpp"
+#include <tt-metalium/buffer.hpp>
 
 namespace tt::tt_metal::experimental {
 

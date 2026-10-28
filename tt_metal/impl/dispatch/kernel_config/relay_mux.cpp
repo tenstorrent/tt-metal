@@ -11,7 +11,7 @@
 #include <bit>
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/math.hpp>
-#include "tt_metal.hpp"
+#include <tt-metalium/tt_metal.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <algorithm>
 #include <tt-metalium/experimental/fabric/fabric.hpp>

@@ -8,9 +8,9 @@
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "program_types_generated.h"
 #include <tt-metalium/core_coord.hpp>
-#include <kernel_types.hpp>
-#include <sub_device_types.hpp>
-#include <buffer.hpp>
+#include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/sub_device_types.hpp>
+#include <tt-metalium/buffer.hpp>
 #include "kernels/kernel.hpp"
 
 namespace tt::tt_metal {

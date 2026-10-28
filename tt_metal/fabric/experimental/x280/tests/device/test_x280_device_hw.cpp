@@ -32,7 +32,7 @@
 #include "rt/x280_noc_map.h"
 
 #include <gtest/gtest.h>
-#include <mesh_device.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-umd/types/noc_id.hpp>
 

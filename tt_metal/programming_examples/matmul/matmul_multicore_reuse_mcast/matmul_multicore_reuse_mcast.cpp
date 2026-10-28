@@ -12,7 +12,7 @@
 #include <tt-metalium/distributed.hpp>
 #include <bmm_op.hpp>
 #include <algorithm>
-#include "tt-metalium/core_coord.hpp"
+#include <tt-metalium/core_coord.hpp>
 
 using namespace tt::constants;
 using namespace std;

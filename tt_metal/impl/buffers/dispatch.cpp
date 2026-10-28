@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/span.hpp>
-#include <device.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/allocator.hpp>
 #include "impl/buffers/buffer_impl.hpp"
 #include <algorithm>
@@ -15,7 +15,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "allocator/allocator.hpp"
-#include "buffer_types.hpp"
+#include <tt-metalium/buffer_types.hpp>
 #include "dispatch.hpp"
 #include "device/device_manager.hpp"
 #include "distributed/mesh_device_impl.hpp"
@@ -25,9 +25,9 @@
 #include "dispatch/dispatch_settings.hpp"
 #include <tt-metalium/hal_types.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include "math.hpp"
+#include <tt-metalium/math.hpp>
 #include <tt_stl/strong_type.hpp>
-#include "sub_device_types.hpp"
+#include <tt-metalium/sub_device_types.hpp>
 #include "tt_metal/impl/dispatch/device_command.hpp"
 #include "tt_metal/impl/dispatch/device_command_calculator.hpp"
 #include "tt_metal/impl/dispatch/topology.hpp"
@@ -36,7 +36,7 @@
 #include <tt-metalium/graph_tracking.hpp>
 #include "tt_metal/tools/profiler/tracy_debug_zones.hpp"
 #include <tt_stl/overloaded.hpp>
-#include "tt_metal/api/tt-metalium/experimental/pinned_memory.hpp"
+#include <tt-metalium/experimental/pinned_memory.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>

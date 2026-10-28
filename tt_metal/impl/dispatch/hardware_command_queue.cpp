@@ -5,7 +5,7 @@
 #include <tt_stl/fmt.hpp>
 #include "hardware_command_queue.hpp"
 
-#include <device.hpp>
+#include <tt-metalium/device.hpp>
 #include "dispatch_settings.hpp"
 #include "impl/context/metal_context.hpp"
 #include "system_memory_manager.hpp"

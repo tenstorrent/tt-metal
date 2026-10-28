@@ -8,7 +8,7 @@
 
 #include <tt-metalium/hal_types.hpp>
 #include "impl/context/metal_context.hpp"
-#include "math.hpp"
+#include <tt-metalium/math.hpp>
 
 namespace tt::tt_metal::mx {
 

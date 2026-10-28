@@ -2,15 +2,15 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <allocator.hpp>
+#include <tt-metalium/allocator.hpp>
 #include <tt_stl/assert.hpp>
-#include <buffer.hpp>
-#include <buffer_types.hpp>
+#include <tt-metalium/buffer.hpp>
+#include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <device.hpp>
-#include <graph_tracking.hpp>
+#include <tt-metalium/device.hpp>
+#include <tt-metalium/graph_tracking.hpp>
 #include <enchantum/enchantum.hpp>
-#include <math.hpp>
+#include <tt-metalium/math.hpp>
 #include <tt_stl/reflection.hpp>
 #include <algorithm>
 #include <atomic>
@@ -26,7 +26,7 @@
 #include "impl/allocator/allocator.hpp"
 #include "impl/internal/service/service_core_manager_impl.hpp"
 #include <internal/service/service_core_manager.hpp>
-#include "tt-metalium/mesh_device.hpp"
+#include <tt-metalium/mesh_device.hpp>
 #include "llrt/tt_cluster.hpp"
 #include "tracy/Tracy.hpp"
 #include <tt-metalium/allocator.hpp>

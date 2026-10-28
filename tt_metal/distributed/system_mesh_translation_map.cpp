@@ -12,7 +12,7 @@
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include "mesh_coord.hpp"
+#include <tt-metalium/mesh_coord.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 
 namespace tt::tt_metal::distributed {

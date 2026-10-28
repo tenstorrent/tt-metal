@@ -12,7 +12,7 @@
 #include <variant>
 #include <vector>
 
-#include "base_types.hpp"
+#include <tt-metalium/base_types.hpp>
 #include "compile_program_with_kernel_path_env_var_fixture.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include "impl/dispatch/dispatch_core_common.hpp"

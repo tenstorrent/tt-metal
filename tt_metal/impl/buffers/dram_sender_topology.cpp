@@ -11,7 +11,7 @@
 #include <unordered_set>
 
 #include <tt_stl/assert.hpp>
-#include <device.hpp>
+#include <tt-metalium/device.hpp>
 
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
@@ -21,7 +21,7 @@
 #include "llrt/metal_soc_descriptor.hpp"
 #include "llrt/tt_cluster.hpp"
 #include "distributed/mesh_device_impl.hpp"
-#include "mesh_device.hpp"
+#include <tt-metalium/mesh_device.hpp>
 
 namespace tt::tt_metal {
 

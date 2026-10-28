@@ -19,7 +19,7 @@
 #include "tt_metal/fabric/physical_system_discovery.hpp"
 #include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
-#include "distributed_context.hpp"
+#include <tt-metalium/distributed_context.hpp>
 #include "impl/context/metal_context.hpp"
 #include "tests/tt_metal/test_utils/test_common.hpp"
 #include <llrt/tt_cluster.hpp>

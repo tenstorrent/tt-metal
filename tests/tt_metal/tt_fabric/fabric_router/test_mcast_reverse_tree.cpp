@@ -23,7 +23,7 @@
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 
 // mesh_graph.hpp only forward-declares ClusterType; the MeshGraph constructor takes it by value.
-#include "cluster.hpp"
+#include <tt-metalium/cluster.hpp>
 #include "hostdevcommon/fabric_common.h"
 #include "llrt/rtoptions.hpp"
 #include "tt_metal/fabric/axis_route_topology.hpp"

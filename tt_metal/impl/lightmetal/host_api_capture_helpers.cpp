@@ -4,13 +4,13 @@
 
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/fmt.hpp>
-#include <circular_buffer_config.hpp>
+#include <tt-metalium/circular_buffer_config.hpp>
 #include "impl/dispatch/hardware_command_queue.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program.hpp>
 
-#include <kernel_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "lightmetal/host_api_capture_helpers.hpp"
 #include "command_generated.h"
 #include "lightmetal/lightmetal_capture.hpp"

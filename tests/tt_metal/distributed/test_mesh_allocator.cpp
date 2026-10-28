@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <gtest/gtest.h>
-#include <mesh_device.hpp>
+#include <tt-metalium/mesh_device.hpp>
 #include <cstddef>
 #include <memory>
 
