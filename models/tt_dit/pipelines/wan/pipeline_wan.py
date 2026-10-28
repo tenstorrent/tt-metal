@@ -170,7 +170,7 @@ class WanPipelineConfig:
         dit_parallel_config: DiTParallelConfig | None = None,
         encoder_parallel_config: EncoderParallelConfig | None = None,
         vae_parallel_config: VaeHWParallelConfig | None = None,
-        boundary_ratio: float | None = 0.875,
+        boundary_ratio: float | None = None,
         expand_timesteps: bool = False,
         dynamic_load: bool | None = None,
         is_fsdp: bool | None = None,
@@ -222,6 +222,10 @@ class WanPipelineConfig:
             # unless the caller passes a cache_config explicitly.
             i2v_single_host = model_type == "i2v" and not ttnn.using_distributed_env()
             cache_config = WanDBCacheConfig.default() if i2v_single_host else None
+
+        if boundary_ratio is None:
+            # The checkpoints' own, from their model_index.json.
+            boundary_ratio = 0.9 if model_type == "i2v" else 0.875
 
         if dit_parallel_config is None or vae_parallel_config is None or encoder_parallel_config is None:
             sp_axis = preset["sp_axis"]
@@ -300,7 +304,7 @@ class WanPipeline(PipelineAPIMixin):
         scheduler (`SchedulerMixin`, *optional*):
             Scheduler to use for denoising; it also selects the solver family. Defaults to
             `UniPCMultistepScheduler` loaded from the checkpoint.
-        boundary_ratio (`float`, *optional*, defaults to `0.875`):
+        boundary_ratio (`float`, *optional*, defaults to `0.875` for T2V and `0.9` for I2V):
             Ratio of total timesteps used as the boundary for switching between the two transformers in two-stage
             denoising. `transformer` handles timesteps >= boundary_timestep and `transformer_2` handles timesteps <
             boundary_timestep. If `None`, only `transformer` is used for the entire denoising process.
