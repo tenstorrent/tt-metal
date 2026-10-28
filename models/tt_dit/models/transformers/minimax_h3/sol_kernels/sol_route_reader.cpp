@@ -32,7 +32,7 @@
 //
 // Compile-time args: 0 H, 1 S, 2 NBPT, 3 DT, 4 NQCT, 5 NKCLT, 6 NQC, 7 NKC, 8 NKCP, 9 MODE, 10 EMIT_BIAS, 11 TAU,
 // 12 EPS2, 13 NEG, 14 INV_NV, 15 TQ, 16 DEBUG, 17 NX, 18 NY, 19 UNITS, 20 UNITS_PER_SHARD, then TensorAccessorArgs of
-// q_bar, kc, const_or, colconst, qsel, ksel, erow, ones, mask, shsel.
+// q_bar, kc, const_or, colconst, qsel, ksel, erow, ones, mask, shsel, then Q_SHARED (see below).
 // Common runtime args: 0..7 the buffer addresses in the same order, 8 the mask address, 9 the shsel address;
 // 10..10+NX*NY-1 the NoC coordinates of every logical core ((head, shard) units only). Per-core: none.
 
@@ -77,6 +77,9 @@ void kernel_main() {
     constexpr auto on_args = TensorAccessorArgs<er_args.next_compile_time_args_offset()>();
     constexpr auto mk_args = TensorAccessorArgs<on_args.next_compile_time_args_offset()>();
     constexpr auto sl_args = TensorAccessorArgs<mk_args.next_compile_time_args_offset()>();
+    // Q_SHARED ((head, shard) units): the shard-0 core of each head reads the head's pooled Q from DRAM and ships it to
+    // the head's other S-1 cores by NoC unicast (semaphore 2), instead of all S cores reading the same 12 tiles.
+    constexpr uint32_t Q_SHARED = get_compile_time_arg_val(sl_args.next_compile_time_args_offset());
 
     constexpr uint32_t NX = get_compile_time_arg_val(17);
     constexpr uint32_t NY = get_compile_time_arg_val(18);
@@ -238,6 +241,14 @@ void kernel_main() {
         }
     }
 
+    // Logical core index holding unit pu under the [ci*U/N, (ci+1)*U/N) rule.
+    auto core_of_unit = [](uint32_t pu) {
+        uint32_t pc = 0;
+        while (!((pc * UNITS / NCORES <= pu) && (pu < (pc + 1) * UNITS / NCORES))) {
+            ++pc;
+        }
+        return pc;
+    };
     CircularBuffer cbkc(cb_kc), cbq(cb_q), cbco(cb_constor), cbcc(cb_colc);
     for (uint32_t u = unit_start; u < unit_start + unit_count; ++u) {
         // Unit decode: one of the two ranges below is a singleton, the loops run the same code either way.
@@ -251,6 +262,9 @@ void kernel_main() {
         // tile c, dims tile n): every column's reads carry their own transaction id and are pushed as soon as they
         // land, so compute's moment sums start on column 0 while the rest is in flight. Q is issued right behind K
         // (its own id) instead of after K's barrier.
+        cbq.reserve_back(Q_T);
+        const uint32_t q_addr = cbq.get_write_ptr();  // the same on every core (one CB configuration, one unit per core)
+        const bool q_from_dram = !(Q_SHARED && UNITS_PER_SHARD) || sp_lo == 0;
         cbkc.reserve_back(KC_T);
         {
             const uint32_t cg0 = UNITS_PER_SHARD ? sp_lo * NBPT : 0;
@@ -266,10 +280,11 @@ void kernel_main() {
                 }
             }
         }
-        cbq.reserve_back(Q_T);
-        for (uint32_t i = 0; i < Q_T; ++i) {
-            noc.async_read<NocOptions::TXN_ID>(
-                qb, cbq, TILE_BYTES, {.page_id = h * NBPT * DT + i}, {.offset_bytes = i * TILE_BYTES}, {.trid = 8});
+        if (q_from_dram) {
+            for (uint32_t i = 0; i < Q_T; ++i) {
+                noc.async_read<NocOptions::TXN_ID>(
+                    qb, cbq, TILE_BYTES, {.page_id = h * NBPT * DT + i}, {.offset_bytes = i * TILE_BYTES}, {.trid = 8});
+            }
         }
         for (uint32_t c = 0; c < KCT; ++c) {
             if (c >= 7) {  // ids wrap every 7 columns (never at the 5 s..15 s geometries, KCT = NBPT <= 7)
@@ -279,8 +294,20 @@ void kernel_main() {
             }
             cbkc.push_back(DT);
         }
-        noc.async_read_barrier<NocOptions::TXN_ID>({.trid = 8});
-        cbq.push_back(Q_T);
+        if (q_from_dram) {
+            noc.async_read_barrier<NocOptions::TXN_ID>({.trid = 8});
+            cbq.push_back(Q_T);
+            if constexpr (Q_SHARED && UNITS_PER_SHARD) {  // ship the head's Q to its other cores: one 24 KB write per
+                const UnicastEndpoint remote;              // peer, no barrier here; the partial-moment exchange below
+                for (uint32_t ps = 1; ps < S; ++ps) {      // barriers all writes and then bumps their semaphore 2
+                    const uint32_t pxy = get_common_arg_val<uint32_t>(10 + core_of_unit(h * S + ps));
+                    noc.async_write(
+                        CoreLocalMem<uint32_t>(q_addr), remote, Q_T * TILE_BYTES, {},
+                        {.noc_x = pxy & 0xFF, .noc_y = (pxy >> 8) & 0xFF, .addr = q_addr});
+                }
+            }
+        }
+        // Receivers take Q after the exchange below (compute needs it only from phase E on, ~25 us into the unit).
 
         // Per-core constants (ones, qsel, ksel, [erow], [shsel]): the same tiles on every core. With (head, shard)
         // units they are read from DRAM once by the idle sender core and multicast into every core's CBs (see
@@ -328,28 +355,36 @@ void kernel_main() {
                     peer_xy[ps] = 0;
                     continue;
                 }
-                const uint32_t pu = h * S + ps;  // the peer's unit; its core is the one whose unit range holds pu
-                uint32_t pc = 0;
-                while (!((pc * UNITS / NCORES <= pu) && (pu < (pc + 1) * UNITS / NCORES))) {
-                    ++pc;
-                }
-                peer_xy[ps] = get_common_arg_val<uint32_t>(10 + pc);
+                peer_xy[ps] = get_common_arg_val<uint32_t>(10 + core_of_unit(h * S + ps));  // the peer's core
                 const uint32_t px = peer_xy[ps] & 0xFF, py = (peer_xy[ps] >> 8) & 0xFF;
                 for (uint32_t run : {run_l, run_r}) {
                     noc.async_write(
                         CoreLocalMem<uint32_t>(run), remote, 256, {}, {.noc_x = px, .noc_y = py, .addr = run});
                 }
             }
-            noc.async_write_barrier();  // every peer's rows have landed before any peer's semaphore moves
+            noc.async_write_barrier();  // every peer's rows (and the sender's Q tiles) have landed before any semaphore moves
             for (uint32_t ps = 0; ps < S; ++ps) {
                 if (ps != sp) {
                     noc_semaphore_inc(get_noc_addr(peer_xy[ps] & 0xFF, (peer_xy[ps] >> 8) & 0xFF, sem_addr), 1);
+                    if constexpr (Q_SHARED) {
+                        if (sp == 0) {
+                            noc_semaphore_inc(get_noc_addr(peer_xy[ps] & 0xFF, (peer_xy[ps] >> 8) & 0xFF, get_semaphore(2)), 1);
+                        }
+                    }
                 }
             }
             noc_async_atomic_barrier();
             noc_semaphore_wait(sem, S - 1);
             noc_semaphore_set(sem, 0);  // quiescent: every peer's increment has landed; ready for the next launch
             cbrecv.push_back(GT);
+            if constexpr (Q_SHARED) {
+                if (!q_from_dram) {  // Q from the head's shard-0 core (semaphore 2); its tiles landed before the increment
+                    volatile tt_l1_ptr uint32_t* sem2 = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(2));
+                    noc_semaphore_wait(sem2, 1);
+                    noc_semaphore_set(sem2, 0);
+                    cbq.push_back(Q_T);
+                }
+            }
         }
 
         for (uint32_t it = it_lo; it < it_hi; ++it) {

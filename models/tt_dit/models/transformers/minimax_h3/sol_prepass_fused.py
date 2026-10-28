@@ -202,6 +202,9 @@ class SolPrepassFused:
             if units_per_shard is None
             else bool(units_per_shard)
         )
+        # (head, shard) units: the pooled Q of a head is read from DRAM by its shard-0 core and shipped to the other
+        # S-1 cores over the NoC (reader semaphore 2) instead of 8 identical DRAM reads. SOL_ROUTE_Q_SHARED (default 1).
+        self.route_q_shared = os.environ.get("SOL_ROUTE_Q_SHARED", "1") == "1"
         self.route_units: tuple[int, int] | None = None  # (unit count, units_per_shard) of the last built route program
         self.math_fidelity = math_fidelity if math_fidelity is not None else ttnn.MathFidelity.HiFi4
         # row_max=True (resident mode): also return "row_max" from sol_prepass.compute_row_max, the same ttnn-op
@@ -556,14 +559,14 @@ class SolPrepassFused:
             raise ValueError(f"sol_route circular buffers need {total} B of L1 (> {L1_CB_BUDGET}); geometry too large")
         acc_extra = [a for t in (mask, st["shsel"]) for a in ttnn.TensorAccessorArgs(t).get_compile_time_args()]
         reader = self._kernel(
-            "sol_route_reader.cpp", cores, ct + acc_in + acc_extra, [],
+            "sol_route_reader.cpp", cores, ct + acc_in + acc_extra + [int(units_per_shard and self.route_q_shared)], [],
             [0] * 10 + core_xy + rects,
             ttnn.ReaderConfigDescriptor(),
         )
         writer = self._kernel("sol_route_writer.cpp", cores, ct + acc_out, [], [0, 0, 0], ttnn.WriterConfigDescriptor())
         compute = self._kernel("sol_route_compute.cpp", cores, ct, [], [], self._compute_config(full_sync=True))
         sems = (
-            [ttnn.SemaphoreDescriptor(id=i, core_ranges=cores, initial_value=0) for i in (0, 1)]
+            [ttnn.SemaphoreDescriptor(id=i, core_ranges=cores, initial_value=0) for i in (0, 1, 2)]
             if units_per_shard
             else []
         )
