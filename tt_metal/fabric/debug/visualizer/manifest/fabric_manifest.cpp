@@ -52,6 +52,56 @@ using manifest::mesh_key;
 using manifest::router_key;
 using manifest::TypeCollector;
 
+// ============ Contents ============
+
+// The schema of a type the manifest uses outside types. Every such schema is written through here, which adds its type
+// to `types`, so types describes every struct, enum and tagged union a schema names.
+json make_schema_json(const layout::Type& type, TypeCollector& types) {
+    types.add(type);
+    return manifest::schema_name(type);
+}
+
+// A type's size and schema. An array also gets its element count and the size of one element, and a tagged union the
+// name of the enclosing struct's member that holds its tag.
+void add_type_json(json& out, const layout::Type& type, json schema) {
+    out["size"] = type.size;
+    if (type.count > 0) {
+        out["num_elements"] = type.count;
+        out["size_per_element"] = manifest::element_size(type);
+    }
+    out["schema"] = std::move(schema);
+    if (const auto* tagged_union = std::get_if<layout::element::TaggedUnion>(&type.element)) {
+        out["tag_member"] = std::string(tagged_union->tag_member_name);
+    }
+}
+
+json make_l1_json(const manifest::content::L1& l1, TypeCollector& types) {
+    json out;
+    out["address"] = l1.address;
+    add_type_json(out, l1.type, make_schema_json(l1.type, types));
+    out["cleared_by_host"] = l1.cleared_by_host;
+    return out;
+}
+
+json make_optional_l1_json(const std::optional<manifest::content::L1>& l1, TypeCollector& types) {
+    return l1.has_value() ? make_l1_json(*l1, types) : json(nullptr);
+}
+
+json make_stream_json(const manifest::content::Stream& stream, TypeCollector& types) {
+    TT_FATAL(
+        stream.stream_id < StreamRegAssignments::num_eth_stream_registers,
+        "Fabric manifest: stream id {} is not one of the {} stream registers",
+        stream.stream_id,
+        StreamRegAssignments::num_eth_stream_registers);
+    json out;
+    out["stream_id"] = stream.stream_id;
+    out["register"] = lower_enum_name(stream.reg);
+    out["schema"] = make_schema_json(stream.type, types);
+    return out;
+}
+
+// ============ Run and fabric ============
+
 // This process and the build it runs: ranks, when the manifest was written, and the commit built from.
 json make_run_json(const manifest::RunInfo& run) {
     json out;
@@ -68,7 +118,7 @@ json make_run_json(const manifest::RunInfo& run) {
 
 // This run's fabric: the settings it was set up with (config, SetFabricConfig's arguments), and what FabricContext
 // derived from them.
-json make_fabric_json(const manifest::FabricInfo& fabric) {
+json make_fabric_json(const manifest::FabricInfo& fabric, TypeCollector& types) {
     json block;
     json config;
     config["fabric_config"] = lower_enum_name(fabric.config.fabric_config);
@@ -85,7 +135,9 @@ json make_fabric_json(const manifest::FabricInfo& fabric) {
     block["config"] = std::move(config);
     block["topology"] = lower_enum_name(fabric.topology);
     block["is_2d_routing"] = fabric.is_2d_routing;
-    block["packet_header_size_bytes"] = fabric.packet_header_size_bytes;
+    json packet_header;
+    add_type_json(packet_header, fabric.packet_header, make_schema_json(fabric.packet_header, types));
+    block["packet_header"] = std::move(packet_header);
     block["max_payload_size_bytes"] = fabric.max_payload_size_bytes;
     block["channel_buffer_size_bytes"] = fabric.channel_buffer_size_bytes;
     if (fabric.routing_2d_route_buffer_size.has_value()) {
@@ -113,50 +165,6 @@ json make_credit_transport_json(const std::vector<manifest::VcCreditTransport>& 
         entry["reasons"] = std::move(reasons);
         out[fmt::format("vc{}", vc_transport.vc)] = std::move(entry);
     }
-    return out;
-}
-
-// ============ Contents ============
-
-// The schema of a type the manifest uses outside types. Every such schema is written through here, which adds its type
-// to `types`, so types describes every struct, enum and tagged union a schema names.
-json make_schema_json(const layout::Type& type, TypeCollector& types) {
-    types.add(type);
-    return manifest::schema_name(type);
-}
-
-// A type's size and schema. An array also gets its element count and the size of one element.
-void add_type_json(json& out, const layout::Type& type, json schema) {
-    out["size"] = type.size;
-    if (type.count > 0) {
-        out["num_elements"] = type.count;
-        out["size_per_element"] = manifest::element_size(type);
-    }
-    out["schema"] = std::move(schema);
-}
-
-json make_l1_json(const manifest::content::L1& l1, TypeCollector& types) {
-    json out;
-    out["address"] = l1.address;
-    add_type_json(out, l1.type, make_schema_json(l1.type, types));
-    out["cleared_by_host"] = l1.cleared_by_host;
-    return out;
-}
-
-json make_optional_l1_json(const std::optional<manifest::content::L1>& l1, TypeCollector& types) {
-    return l1.has_value() ? make_l1_json(*l1, types) : json(nullptr);
-}
-
-json make_stream_json(const manifest::content::Stream& stream, TypeCollector& types) {
-    TT_FATAL(
-        stream.stream_id < StreamRegAssignments::num_eth_stream_registers,
-        "Fabric manifest: stream id {} is not one of the {} stream registers",
-        stream.stream_id,
-        StreamRegAssignments::num_eth_stream_registers);
-    json out;
-    out["stream_id"] = stream.stream_id;
-    out["register"] = lower_enum_name(stream.reg);
-    out["schema"] = make_schema_json(stream.type, types);
     return out;
 }
 
@@ -204,17 +212,22 @@ json make_core_registers_json(const manifest::CoreRegisters& registers, TypeColl
          entry("wall_clock_high", registers.wall_clock_high)});
 }
 
+// A struct member or tagged union case: its name, its offset in the struct or union, and its type.
+json make_member_json(const layout::Member& member) {
+    json out;
+    out["name"] = std::string(member.name);
+    out["offset"] = member.offset;
+    add_type_json(out, member.type, manifest::schema_name(member.type));
+    return out;
+}
+
 // Each struct by name, with its members in order. Every type a member names was collected with its struct.
 json make_structs_json(const std::map<std::string_view, const layout::StructDescription*>& structs) {
     json out = json::object();
     for (const auto& [name, description] : structs) {
         json members = json::array();
         for (const auto& member : description->members) {
-            json entry;
-            entry["name"] = std::string(member.name);
-            entry["offset"] = member.offset;
-            add_type_json(entry, member.type, manifest::schema_name(member.type));
-            members.push_back(std::move(entry));
+            members.push_back(make_member_json(member));
         }
         json& entry = out[std::string(name)];
         entry["size"] = description->size;
@@ -259,15 +272,31 @@ json make_enums_json(const std::map<std::string_view, const layout::EnumDescript
     return out;
 }
 
-// Every struct and enum a schema names (struct:<Name>, enum:<Name>), and every one those name in turn.
+// Each tagged union by name: its size, the enum its tag holds, and its cases, each with the tag value that picks it.
+json make_tagged_unions_json(const std::map<std::string_view, const layout::TaggedUnionDescription*>& tagged_unions) {
+    json out = json::object();
+    for (const auto& [name, description] : tagged_unions) {
+        json cases = json::array();
+        for (const auto& union_case : description->cases) {
+            json entry = make_member_json(union_case.member);
+            entry["tag_value"] = manifest::lower_name(union_case.tag_value);
+            cases.push_back(std::move(entry));
+        }
+        json& entry = out[std::string(name)];
+        entry["size"] = description->size;
+        entry["tag"]["schema"] = fmt::format("{}{}", manifest::k_enum_schema, description->tag->name);
+        entry["cases"] = std::move(cases);
+    }
+    return out;
+}
+
+// Every struct, enum and tagged union a schema names (struct:<Name>, enum:<Name>, union:<Name>), and every one those
+// name in turn.
 json make_types_json(const TypeCollector& types) {
-    TT_FATAL(
-        types.get_tagged_unions().empty(),
-        "Fabric manifest: a schema names the tagged union {}, but the manifest doesn't write tagged unions yet",
-        types.get_tagged_unions().empty() ? std::string_view{} : types.get_tagged_unions().begin()->first);
     json out;
     out["structs"] = make_structs_json(types.get_structs());
     out["enums"] = make_enums_json(types.get_enums());
+    out["tagged_unions"] = make_tagged_unions_json(types.get_tagged_unions());
     return out;
 }
 
@@ -668,7 +697,7 @@ json make_manifest_json(const manifest::ManifestFacts& facts) {
     out["manifest_version"] = FABRIC_MANIFEST_VERSION;
     out["file_kind"] = "fabric_manifest";
     out["run"] = make_run_json(facts.run);
-    out["fabric"] = make_fabric_json(facts.fabric);
+    out["fabric"] = make_fabric_json(facts.fabric, types);
     out["arch"] = std::move(arch);
     out["types"] = make_types_json(types);
     out["vocabulary"] = make_vocabulary_json();

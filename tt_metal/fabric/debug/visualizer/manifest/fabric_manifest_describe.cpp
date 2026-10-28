@@ -11,6 +11,7 @@
 #include <limits>
 #include <optional>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include <enchantum/enchantum.hpp>
@@ -24,6 +25,7 @@
 #include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
 #include "tt_metal/fabric/fabric_context.hpp"
+#include "tt_metal/fabric/packet_header_types.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_build_identity.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_manifest_names.hpp"
 #include "tt_metal/fabric/debug/visualizer/manifest/fabric_struct_layouts.hpp"
@@ -169,6 +171,26 @@ CoreRegisters describe_core_registers(const tt::tt_metal::Hal& hal) {
     return out;
 }
 
+// The packet header type the run's routers use: the one the routing mode and its template argument pick, as
+// FabricContext picked it.
+layout::Type describe_packet_header(const FabricContext& fabric_context, FabricUDMMode udm_mode) {
+    const bool is_2d = fabric_context.is_2D_routing_enabled();
+    const PacketHeaderConfig config{
+        .is_2d = is_2d,
+        .extension_words = is_2d ? 0 : fabric_context.get_1d_pkt_hdr_extension_words(),
+        .route_buffer_size = is_2d ? fabric_context.get_2d_pkt_hdr_route_buffer_size() : 0,
+    };
+    const layout::Type header = visit_packet_header_type(
+        config, []<typename Header>(std::type_identity<Header>) { return layout::type_of<Header>(); });
+    const size_t header_size_bytes = compute_pkt_hdr_size_bytes(header.size, udm_mode == FabricUDMMode::ENABLED);
+    TT_FATAL(
+        header_size_bytes == fabric_context.get_fabric_packet_header_size_bytes(),
+        "Fabric manifest: the packet header the routing mode picks takes {} B, but FabricContext's takes {} B",
+        header_size_bytes,
+        fabric_context.get_fabric_packet_header_size_bytes());
+    return header;
+}
+
 }  // namespace
 
 RunInfo describe_run(const ControlPlane& control_plane) {
@@ -198,7 +220,7 @@ FabricInfo describe_fabric(const ControlPlane& control_plane) {
             },
         .topology = fabric_context.get_fabric_topology(),
         .is_2d_routing = is_2d_routing,
-        .packet_header_size_bytes = fabric_context.get_fabric_packet_header_size_bytes(),
+        .packet_header = describe_packet_header(fabric_context, control_plane.get_fabric_udm_mode()),
         .max_payload_size_bytes = fabric_context.get_fabric_max_payload_size_bytes(),
         .channel_buffer_size_bytes = fabric_context.get_fabric_channel_buffer_size_bytes(),
         .routing_2d_route_buffer_size =
