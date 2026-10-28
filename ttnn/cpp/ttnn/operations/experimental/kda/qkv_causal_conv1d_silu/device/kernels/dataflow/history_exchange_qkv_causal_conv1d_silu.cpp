@@ -53,6 +53,10 @@ template <
 TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore, uint32_t carry_semaphore) {
     constexpr uint32_t row_bytes = channel_tiles * tile_row_bytes;
     static_assert(max_payload % read_alignment == 0, "row chunks must stay aligned in DRAM");
+    // `history` and `final_history` hold the tail per 64-channel segment (one page each); the exchange buffer and
+    // the L1 scratch keep full rows.
+    static_assert(channel_tiles % tiles_per_segment == 0, "the convolution tail is stored in whole 64-channel segments");
+    constexpr uint32_t segments = channel_tiles / tiles_per_segment;
     Noc noc;
     Scratchpad<uint32_t> scratch(scratch::exchange_scratch);
     const auto history = TensorAccessor(tensor::history);
@@ -87,13 +91,20 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
         for (uint32_t row = 0; row < history_rows; ++row) {
             const uint32_t position = carried + row;
             const bool from_layer_history = position < history_rows && interval.carry_continues_layer_history();
-            const uint32_t page = position >= history_rows ? end_page + position - history_rows
-                                  : from_layer_history     ? position
-                                                           : predecessor_page + position;
             const uint32_t destination = offset_of(carry) + row * row_bytes;
             if (from_layer_history) {
-                noc.async_read(history, scratch, row_bytes, {.page_id = page}, {.offset_bytes = destination});
+                // Row `position` of the layer's tail: one `segment_row_bytes` piece from every segment page.
+                for (uint32_t segment = 0; segment < segments; ++segment) {
+                    noc.async_read(
+                        history,
+                        scratch,
+                        segment_row_bytes,
+                        {.page_id = segment, .offset_bytes = position * segment_row_bytes},
+                        {.offset_bytes = destination + segment * segment_row_bytes});
+                }
             } else {
+                const uint32_t page =
+                    position >= history_rows ? end_page + position - history_rows : predecessor_page + position;
                 noc.async_read(exchange_buffer, scratch, row_bytes, {.page_id = page}, {.offset_bytes = destination});
             }
         }
@@ -235,9 +246,17 @@ TT_KERNEL void exchange(uint32_t entry_semaphore, uint32_t predecessor_semaphore
         noc_async_atomic_barrier();
         close_connections(connections);
     }
-    for (uint32_t row = 0; row < history_rows; ++row) {
-        noc.async_write(
-            scratch, final_history, row_bytes, {.offset_bytes = offset_of(carry) + row * row_bytes}, {.page_id = row});
+    // The replacement carry, three full rows in scratch, goes out as segment pages: row `row` of segment `segment`
+    // is the piece at byte `row * segment_row_bytes` of page `segment`.
+    for (uint32_t segment = 0; segment < segments; ++segment) {
+        for (uint32_t row = 0; row < history_rows; ++row) {
+            noc.async_write(
+                scratch,
+                final_history,
+                segment_row_bytes,
+                {.offset_bytes = offset_of(carry) + row * row_bytes + segment * segment_row_bytes},
+                {.page_id = segment, .offset_bytes = row * segment_row_bytes});
+        }
     }
     noc.async_write_barrier();
 }

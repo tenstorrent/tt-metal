@@ -12,6 +12,7 @@ from pathlib import Path
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_d_p.tt.kda.kda import convolution_tail_from_device_layout
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState, kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
@@ -168,8 +169,8 @@ def reconstruct_convolution_at_sp_rank(
     sp_rank: int,
     local_width: int,
 ) -> torch.Tensor:
-    """Reconstruct grouped Q/K/V convolution state at one sequence rank."""
-    shards = _device_shards(tensor)
+    """Reconstruct grouped Q/K/V convolution state at one sequence rank, as ``[1, K-1, W]`` rows."""
+    shards = [convolution_tail_from_device_layout(shard) for shard in _device_shards(tensor)]
     columns = tuple(mesh_device.shape)[1]
     tp_size = tuple(mesh_device.shape)[tp_axis]
     physical = []

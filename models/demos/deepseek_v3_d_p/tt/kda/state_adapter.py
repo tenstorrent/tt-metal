@@ -3,9 +3,9 @@
 """The KDA state migration contract: segment geometry, contract layouts, per-layer export/import.
 
 ``ttKDA`` reads and writes its state in the *native* form: ``recurrent`` ``[1, H_local, D, D]`` FP32
-TILE and ``convolution`` ``[1, K-1, 3*H_local*D]`` BF16 ROW_MAJOR, both interleaved DRAM, heads
-sharded across TP and the complete state replicated across SP. The kernels accept nothing else, so
-the native carries stay as they are and migration reads a second copy in the *contract* form.
+TILE and ``convolution`` ``[1, 3*H_local*D/64, (K-1)*64]`` BF16 ROW_MAJOR (one 64-channel segment per
+row, ``kda.convolution_tail_shape``), both interleaved DRAM, heads sharded across TP and the complete
+state replicated across SP. Migration reads a second copy in the *contract* form.
 
 The contract fixes what one migration segment is and requires every segment to be one contiguous
 DRAM span, round-robin over the DRAM banks exactly like the kvpe cache:
@@ -26,6 +26,8 @@ them apart:
   384-byte pages are the segments (``row0[64c:64c+64] | row1[...] | row2[...]``). Interleaved page
   ``p`` lives at bank ``p % N``, offset ``(p // N) * 384``, which is where ND shard ``s = p`` would
   live, so the bytes and the table math are the same while the write becomes a plain whole-row copy.
+  The native convolution tail has the same ``[SEG, (K-1)*64]`` rows, so a slab batch is a byte copy
+  of the native tensor: the per-layer convolution export and import are one ``indexed_entry_copy``.
 
 Exports take the slot as a replicated one-element UINT32 device tensor (``device_scalar``, or the traced
 metadata's slot word) and write slab batch ``slot * L + layer_position`` with ``indexed_entry_copy``, which
@@ -56,10 +58,9 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
-from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
+from models.demos.deepseek_v3_d_p.tt.kda.kda import KDA_CONVOLUTION_SEGMENT_CHANNELS, KdaState, convolution_tail_shape
 
 KDA_RECURRENT_BAND_WIDTH = 32
-KDA_CONVOLUTION_HALF_WIDTH = 64
 KDA_RECURRENT_DTYPE = ttnn.float32
 KDA_CONVOLUTION_DTYPE = ttnn.bfloat16
 _RECURRENT_ELEMENT_BYTES = 4
@@ -85,8 +86,8 @@ class KdaContractGeometry:
             raise ValueError("KDA contract geometry needs positive SP and TP sizes")
         if self.num_heads % self.tensor_parallel_size != 0:
             raise ValueError(f"{self.num_heads} heads cannot be divided over TP{self.tensor_parallel_size}")
-        if self.head_dim % KDA_CONVOLUTION_HALF_WIDTH != 0:
-            raise ValueError(f"head_dim {self.head_dim} must be a multiple of {KDA_CONVOLUTION_HALF_WIDTH}")
+        if self.head_dim % KDA_CONVOLUTION_SEGMENT_CHANNELS != 0:
+            raise ValueError(f"head_dim {self.head_dim} must be a multiple of {KDA_CONVOLUTION_SEGMENT_CHANNELS}")
 
     @classmethod
     def from_kda_config(
@@ -120,7 +121,8 @@ class KdaContractGeometry:
 
     @property
     def convolution_shape(self) -> tuple[int, int, int]:
-        return (1, self.conv_history, self.convolution_width)
+        """The native tail: one 64-channel segment per row (``kda.convolution_tail_shape``)."""
+        return convolution_tail_shape(self.conv_history, self.convolution_width)
 
     # --- segments ---
     @property
@@ -129,7 +131,7 @@ class KdaContractGeometry:
 
     @property
     def halves(self) -> int:
-        return self.head_dim // KDA_CONVOLUTION_HALF_WIDTH
+        return self.head_dim // KDA_CONVOLUTION_SEGMENT_CHANNELS
 
     @property
     def recurrent_segment_bytes(self) -> int:
@@ -137,7 +139,7 @@ class KdaContractGeometry:
 
     @property
     def convolution_segment_bytes(self) -> int:
-        return self.conv_history * KDA_CONVOLUTION_HALF_WIDTH * _CONVOLUTION_ELEMENT_BYTES
+        return self.conv_history * KDA_CONVOLUTION_SEGMENT_CHANNELS * _CONVOLUTION_ELEMENT_BYTES
 
     @property
     def recurrent_segments_per_layer(self) -> int:
@@ -159,8 +161,8 @@ class KdaContractGeometry:
 
     @property
     def convolution_slab_row_width(self) -> int:
-        """Elements per convolution slab row: one segment, ``conv_history`` history rows of 64."""
-        return self.conv_history * KDA_CONVOLUTION_HALF_WIDTH
+        """Elements per convolution slab row: one segment, the native tail's page."""
+        return self.convolution_shape[-1]
 
     # --- segment maps ---
     def recurrent_segment(self, tp_col: int, h_local: int, band: int) -> int:
@@ -238,7 +240,7 @@ def contract_memory_configs(
     """ND-DRAM layouts whose shards are exactly the migration segments (single-layer tensors)."""
     return KdaContractMemoryConfigs(
         recurrent=nd_dram_memory_config(device, [1, 1, geometry.head_dim, KDA_RECURRENT_BAND_WIDTH]),
-        convolution=nd_dram_memory_config(device, [1, geometry.conv_history, KDA_CONVOLUTION_HALF_WIDTH]),
+        convolution=nd_dram_memory_config(device, [1, 1, geometry.convolution_slab_row_width]),
     )
 
 
@@ -341,34 +343,6 @@ def deallocate_state(state: KdaState) -> None:
 # --- consolidated slabs and the per-layer adapter ---
 
 
-def _free_unless_shared(tensor: ttnn.Tensor, *keep: ttnn.Tensor) -> None:
-    """Free an intermediate unless a reshape handed back a view over the same buffer."""
-    if all(tensor.buffer_address() != other.buffer_address() for other in keep):
-        ttnn.deallocate(tensor)
-
-
-def convolution_to_slab_rows(convolution: ttnn.Tensor, geometry: KdaContractGeometry) -> ttnn.Tensor:
-    """``[1, K-1, W]`` -> ``[1, SEG, (K-1)*64]``: row ``j`` is segment ``j`` in contract byte order."""
-    history, width, half = geometry.conv_history, geometry.convolution_width, KDA_CONVOLUTION_HALF_WIDTH
-    split = ttnn.reshape(convolution, (1, history, width // half, half))
-    swapped = ttnn.permute(split, (0, 2, 1, 3))
-    _free_unless_shared(split, convolution, swapped)
-    rows = ttnn.reshape(swapped, (1, width // half, history * half))
-    _free_unless_shared(swapped, rows)
-    return rows
-
-
-def slab_rows_to_convolution(rows: ttnn.Tensor, geometry: KdaContractGeometry) -> ttnn.Tensor:
-    """Inverse of :func:`convolution_to_slab_rows`."""
-    history, width, half = geometry.conv_history, geometry.convolution_width, KDA_CONVOLUTION_HALF_WIDTH
-    split = ttnn.reshape(rows, (1, width // half, history, half))
-    swapped = ttnn.permute(split, (0, 2, 1, 3))
-    _free_unless_shared(split, rows, swapped)
-    convolution = ttnn.reshape(swapped, (1, history, width))
-    _free_unless_shared(swapped, convolution)
-    return convolution
-
-
 def device_scalar(device: ttnn.Device | ttnn.MeshDevice, value: int) -> ttnn.Tensor:
     """A host integer as the replicated one-element UINT32 row-major DRAM tensor the KDA ops and copies read on device."""
     return ttnn.from_torch(
@@ -392,17 +366,10 @@ def export_recurrent(
 
 
 def export_convolution(
-    slab: ttnn.Tensor,
-    convolution: ttnn.Tensor,
-    slot: ttnn.Tensor,
-    num_layers: int,
-    position: int,
-    geometry: KdaContractGeometry,
+    slab: ttnn.Tensor, convolution: ttnn.Tensor, slot: ttnn.Tensor, num_layers: int, position: int
 ) -> None:
     """Write one layer's native convolution tail into slab batch ``slot * num_layers + position`` (captured)."""
-    rows = convolution_to_slab_rows(convolution, geometry)
-    ttnn.experimental.kda.indexed_entry_copy(rows, slab, slot, index_scale=num_layers, index_offset=position)
-    _free_unless_shared(rows, convolution)
+    ttnn.experimental.kda.indexed_entry_copy(convolution, slab, slot, index_scale=num_layers, index_offset=position)
 
 
 def import_recurrent(
@@ -413,26 +380,10 @@ def import_recurrent(
 
 
 def import_convolution(
-    slab: ttnn.Tensor,
-    convolution: ttnn.Tensor,
-    slot: ttnn.Tensor,
-    num_layers: int,
-    position: int,
-    geometry: KdaContractGeometry,
+    slab: ttnn.Tensor, convolution: ttnn.Tensor, slot: ttnn.Tensor, num_layers: int, position: int
 ) -> None:
     """Read slab batch ``slot * num_layers + position`` into a native convolution tail (captured)."""
-    rows = ttnn.allocate_tensor_on_device(
-        ttnn.Shape([1, *tuple(slab.shape)[1:]]),
-        KDA_CONVOLUTION_DTYPE,
-        ttnn.ROW_MAJOR_LAYOUT,
-        slab.device(),
-        ttnn.DRAM_MEMORY_CONFIG,
-    )
-    ttnn.experimental.kda.indexed_entry_copy(slab, rows, slot, index_scale=num_layers, index_offset=position)
-    native = slab_rows_to_convolution(rows, geometry)
-    ttnn.copy(native, convolution)
-    _free_unless_shared(native, rows)
-    ttnn.deallocate(rows)
+    ttnn.experimental.kda.indexed_entry_copy(slab, convolution, slot, index_scale=num_layers, index_offset=position)
 
 
 def _zero_fill(tensor: ttnn.Tensor) -> None:
@@ -547,13 +498,13 @@ class KdaStates:
         """Write one layer's native state into its slot's batch; ``slot`` is read on device (see ``device_scalar``)."""
         position = self.layer_position(layer_idx)
         export_recurrent(self.recurrent, state.recurrent, slot, self.num_layers, position)
-        export_convolution(self.convolution, state.convolution, slot, self.num_layers, position, self.geometry)
+        export_convolution(self.convolution, state.convolution, slot, self.num_layers, position)
 
     def import_layer(self, destination: KdaState, slot: ttnn.Tensor, layer_idx: int) -> None:
         """Read one layer's state at ``slot`` into a native carry; ``slot`` is read on device (see ``device_scalar``)."""
         position = self.layer_position(layer_idx)
         import_recurrent(self.recurrent, destination.recurrent, slot, self.num_layers, position)
-        import_convolution(self.convolution, destination.convolution, slot, self.num_layers, position, self.geometry)
+        import_convolution(self.convolution, destination.convolution, slot, self.num_layers, position)
 
     def zero_slot(self, slot: int) -> None:
         """Zero every layer's state at a host ``slot``, ending whatever stream was in flight there.
@@ -595,7 +546,7 @@ def convolution_segment_to_torch(raw: bytes, geometry: KdaContractGeometry) -> t
     if len(raw) != geometry.convolution_segment_bytes:
         raise ValueError(f"expected {geometry.convolution_segment_bytes} bytes, got {len(raw)}")
     return torch.frombuffer(bytearray(raw), dtype=torch.bfloat16).reshape(
-        geometry.conv_history, KDA_CONVOLUTION_HALF_WIDTH
+        geometry.conv_history, KDA_CONVOLUTION_SEGMENT_CHANNELS
     )
 
 
@@ -616,6 +567,6 @@ def assemble_convolution(segments: Mapping[int, torch.Tensor], geometry: KdaCont
     for segment, rectangle in segments.items():
         branch, tp_col, h_local, half = geometry.decompose_convolution(segment)
         head = tp_col * geometry.local_heads + h_local
-        start = (branch * geometry.num_heads + head) * geometry.head_dim + half * KDA_CONVOLUTION_HALF_WIDTH
-        out[:, start : start + KDA_CONVOLUTION_HALF_WIDTH] = rectangle
+        start = (branch * geometry.num_heads + head) * geometry.head_dim + half * KDA_CONVOLUTION_SEGMENT_CHANNELS
+        out[:, start : start + KDA_CONVOLUTION_SEGMENT_CHANNELS] = rectangle
     return out

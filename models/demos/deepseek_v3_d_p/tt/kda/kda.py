@@ -121,14 +121,53 @@ class _HistoryExchange:
 _history_exchanges: dict[tuple[int, int], _HistoryExchange] = {}
 
 
+# The convolution tail (`KdaState.convolution`) is stored per 64-channel segment, the KDA state migration contract's
+# convolution segment: shape `[1, W / 64, (K-1) * 64]` ROW_MAJOR BF16, page `c // 64` holding the `K-1` history rows of
+# channels `[64c, 64c + 64)`, row `r` at element `64 r`. A page is exactly one slab segment, so the engine's per-slot
+# copy is a plain page copy with no relayout. `qkv_causal_conv1d_silu` reads and writes this layout directly.
+KDA_CONVOLUTION_SEGMENT_CHANNELS = 64
+
+
+def convolution_tail_shape(history_rows: int, width: int) -> tuple[int, int, int]:
+    """Device shape of a `[K-1, W]` convolution tail: one 64-channel segment per row."""
+    if width % KDA_CONVOLUTION_SEGMENT_CHANNELS != 0:
+        raise ValueError(f"convolution width {width} is not a multiple of {KDA_CONVOLUTION_SEGMENT_CHANNELS}")
+    return (1, width // KDA_CONVOLUTION_SEGMENT_CHANNELS, history_rows * KDA_CONVOLUTION_SEGMENT_CHANNELS)
+
+
+def convolution_tail_to_device_layout(tail: torch.Tensor) -> torch.Tensor:
+    """`[..., K-1, W]` host rows -> `[..., W/64, (K-1)*64]`, the device layout."""
+    *lead, history_rows, width = tail.shape
+    _, segments, row = convolution_tail_shape(history_rows, width)
+    return (
+        tail.reshape(*lead, history_rows, segments, KDA_CONVOLUTION_SEGMENT_CHANNELS)
+        .transpose(-3, -2)
+        .reshape(*lead, segments, row)
+    )
+
+
+def convolution_tail_from_device_layout(tail: torch.Tensor) -> torch.Tensor:
+    """`[..., W/64, (K-1)*64]` device layout -> `[..., K-1, W]` host rows. The input must be the device layout."""
+    *lead, segments, row = tail.shape
+    if row % KDA_CONVOLUTION_SEGMENT_CHANNELS != 0:
+        raise ValueError(f"segment row {row} is not a multiple of {KDA_CONVOLUTION_SEGMENT_CHANNELS}; not a device-layout tail")
+    history_rows = row // KDA_CONVOLUTION_SEGMENT_CHANNELS
+    return (
+        tail.reshape(*lead, segments, history_rows, KDA_CONVOLUTION_SEGMENT_CHANNELS)
+        .transpose(-3, -2)
+        .reshape(*lead, history_rows, segments * KDA_CONVOLUTION_SEGMENT_CHANNELS)
+    )
+
+
 @dataclass(frozen=True)
 class KdaState:
     """Caller-owned KDA carries.
 
     ``recurrent`` is TP-local and must be replicated across the SP axis.
-    ``convolution`` is the BF16 row-major DRAM stream tail with shape
-    ``[B, kernel_size - 1, Q_local + K_local + V_local]``. Its channels are
-    sharded across TP and the complete tail is replicated across SP. This history
+    ``convolution`` is the BF16 row-major DRAM stream tail in the device layout
+    ``[B, W / 64, (kernel_size - 1) * 64]`` (:func:`convolution_tail_shape`, one
+    64-channel segment of ``W = Q_local + K_local + V_local`` per page). Its channels
+    are sharded across TP and the complete tail is replicated across SP. This history
     seeds the logical sequence start; the halo exchange supplies predecessor
     histories from projected tokens for the other segments. Construct state with
     :meth:`ttKDA.allocate_state` or reuse a state returned by :meth:`ttKDA.forward`.
@@ -324,7 +363,7 @@ class ttKDA:
                 memory_config=KDA_OUTPUT_MEMORY_CONFIG,
             ),
             convolution=ttnn.zeros(
-                (batch_size, self.config.conv_kernel_size - 1, self._convolution_width),
+                convolution_tail_shape(self.config.conv_kernel_size - 1, self._convolution_width),
                 dtype=ttnn.bfloat16,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
@@ -368,7 +407,7 @@ class ttKDA:
                 f"hidden_states local T={sequence} does not match constructed T={self.active_seq_len_local}"
             )
         expected_recurrent = (batch, self.config.num_heads, self.config.head_k_dim, self.config.head_v_dim)
-        expected_convolution = (batch, self.config.conv_kernel_size - 1, self._convolution_width)
+        expected_convolution = convolution_tail_shape(self.config.conv_kernel_size - 1, self._convolution_width)
         if tuple(state.recurrent.shape) != expected_recurrent:
             raise ValueError(f"recurrent state shape {tuple(state.recurrent.shape)} != {expected_recurrent}")
         if tuple(state.convolution.shape) != expected_convolution:
@@ -376,7 +415,7 @@ class ttKDA:
         if state.recurrent.dtype != KDA_RECURRENT_STATE_DTYPE:
             raise ValueError(f"recurrent state dtype {state.recurrent.dtype} != {KDA_RECURRENT_STATE_DTYPE}")
         if state.convolution.dtype != ttnn.bfloat16 or state.convolution.layout != ttnn.ROW_MAJOR_LAYOUT:
-            raise ValueError("convolution state must be BF16 row-major")
+            raise ValueError("convolution state must be BF16 row-major (one 64-channel segment per row)")
 
     def _project_inputs(
         self,

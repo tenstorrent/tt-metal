@@ -26,7 +26,8 @@ def test_k3_contract_counts_and_bytes(sp: int, tp: int) -> None:
 
     assert geometry.local_heads == 96 // tp
     assert geometry.recurrent_shape == (1, 96 // tp, 128, 128)
-    assert geometry.convolution_shape == (1, 3, 3 * (96 // tp) * 128)
+    # One 64-channel segment per row: 3 branches x local heads x 128 channels / 64 segments of 3 x 64 elements.
+    assert geometry.convolution_shape == (1, 3 * (96 // tp) * 128 // 64, 3 * 64)
     assert geometry.recurrent_segments_per_layer == 384
     assert geometry.convolution_segments_per_layer == 576
     assert geometry.recurrent_segment_bytes == 16_384
