@@ -38,9 +38,15 @@ as an exact measured weight subtotal.
 Attention K/V costs8704 bytes per token per device:16 full-attention layers,
 one local KV head, head dimension256, K and V, eight1088-byte BFP8 tiles per32
 tokens. This includes tile format overhead. Active recurrent state adds
-48*(3*2560*2 +12*128*128*4)=38,486,016 bytes, or36.70 MiB per user.
+48*(3*2560*2 +12*128*128*4)=38,486,016 payload bytes, or36.70 MiB per user.
 Each retained all-layer recurrent checkpoint also needs36.70 MiB, before
 pool alignment and the allocation policy's current/previous/cache history.
+BF16 convolution pages round independently across eight DRAM banks. At B1,
+active-state padding adds1,228,800bytes/device across48layers; B8/B16/B32 align.
+The proposed771-ID/block2048 shape adds573,440bytes/device across16 snapshot
+pools. The historical1571-ID/block256 B8 metadata also omitted573,440bytes of
+convolution padding. Its measured allocator total is unchanged; the corrected
+layout-derived split moves these bytes out of the unitemized remainder.
 
 | History including generated tokens | Attention K/V per user/device |
 |---|---:|
@@ -131,7 +137,9 @@ Reproduce the CPU ledger from the compact prepared observations:
 `python3 models/autoports/qwen_qwen3_8_27b/tests/plan_serving_memory.py --prepared-observations <prepared-observations.json> --output <ledger.json>`.
 The planner reads arithmetic constants from the actual cache source, validates
 typed backing against collected checkpoints and never imports TTNN/vLLM.
-It reconciled all three collected B8/B16 serving ledgers exactly. A separate
+It retains all three collected B8/B16 allocator totals and distinguishes their
+reported payloads from source-layout-derived bank-padded backing. Those derived
+components are not fresh independent allocator measurements. A separate
 legacy cache-spec test run on the shared host produced five passes and one
 schema failure: installed vLLM0.26 lacks the0.30 MambaSpec checkpoint argument
 used by the real CI image. This is not a measured model failure or a passed

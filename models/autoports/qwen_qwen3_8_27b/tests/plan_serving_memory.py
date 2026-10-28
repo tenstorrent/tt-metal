@@ -19,6 +19,8 @@ def constants(path):
         "RECURRENT_LAYERS",
         "RECURRENT_GROUPS",
         "ATTENTION_BYTES_PER_TOKEN",
+        "CONV_SHAPE",
+        "RECURRENT_SHAPE",
     }
     operations = {ast.Add: operator.add, ast.Sub: operator.sub, ast.Mult: operator.mul, ast.FloorDiv: operator.floordiv}
 
@@ -27,6 +29,8 @@ def constants(path):
             return node.value
         if isinstance(node, ast.Name):
             return values[node.id]
+        if isinstance(node, ast.Tuple):
+            return tuple(number(item) for item in node.elts)
         if isinstance(node, ast.BinOp) and type(node.op) in operations:
             return operations[type(node.op)](number(node.left), number(node.right))
         raise ValueError("Unsupported cache constant expression")
@@ -41,21 +45,49 @@ def constants(path):
     return values
 
 
+def state_backing(c, rows, pools):
+    """BH BF16 row-major conv and FP32 tiled recurrence: eight DRAM banks.
+
+    This is a shape forecast, not a fresh allocator measurement. Each pool is
+    allocated independently, so bank padding cannot be shared across pools.
+    """
+    banks, alignment = 8, 64
+    conv = c["CONV_SHAPE"]
+    pages = rows * math.prod(conv[:-1])
+    page_bytes = math.ceil(conv[-1] * 2 / alignment) * alignment
+    physical = math.ceil(pages / banks) * banks * page_bytes * pools
+    recurrent = c["RECURRENT_SHAPE"]
+    tiles = rows * math.prod(recurrent[:-2]) * math.ceil(recurrent[-2] / 32) * math.ceil(recurrent[-1] / 32)
+    physical += math.ceil(tiles / banks) * banks * (32 * 32 * 4) * pools
+    payload = rows * pools * c["STATE_BYTES_PER_LAYER"]
+    return dict(payload_bytes=payload, physical_bytes=physical, bank_padding_bytes=physical - payload)
+
+
 def forecast(c, budget, batch, block):
     groups = c["RECURRENT_GROUPS"]
     pools = c["RECURRENT_LAYERS"] // groups
     per_id = block * c["ATTENTION_BYTES_PER_TOKEN"] + pools * c["STATE_BYTES_PER_LAYER"]
     ids = budget // per_id
     reserved = batch * (1 + 2 * groups) + 1
+    snapshots = state_backing(c, ids, pools)
+    active = state_backing(c, batch, c["RECURRENT_LAYERS"])
+    attention = ids * block * c["ATTENTION_BYTES_PER_TOKEN"]
     return {
         "resident_batch": batch,
         "checkpoint_tokens": block,
         "cache_budget_bytes_per_device": budget,
         "global_ids": ids,
         "bytes_per_global_id": per_id,
-        "attention_backing_bytes": ids * block * c["ATTENTION_BYTES_PER_TOKEN"],
-        "recurrent_snapshot_backing_bytes": ids * pools * c["STATE_BYTES_PER_LAYER"],
-        "active_recurrent_state_bytes": batch * c["RECURRENT_LAYERS"] * c["STATE_BYTES_PER_LAYER"],
+        "attention_backing_bytes": attention,
+        "recurrent_snapshot_backing_bytes": snapshots["physical_bytes"],
+        "recurrent_snapshot_payload_bytes": snapshots["payload_bytes"],
+        "recurrent_snapshot_bank_padding_bytes": snapshots["bank_padding_bytes"],
+        "active_recurrent_state_bytes": active["physical_bytes"],
+        "active_recurrent_state_payload_bytes": active["payload_bytes"],
+        "active_recurrent_state_bank_padding_bytes": active["bank_padding_bytes"],
+        "physical_cache_backing_bytes": attention + snapshots["physical_bytes"],
+        "physical_cache_over_budget_bytes": max(0, attention + snapshots["physical_bytes"] - budget),
+        "global_ids_scope": "Source hook payload inversion; physical bank padding is itemized separately.",
         "worker_reservation_ids": reserved,
         "virtual_token_hook_units": (ids - reserved) * block,
         "single_native_context_admission_floor_ids": math.ceil(262144 / block) + 2 * groups + 1 + batch,
@@ -83,17 +115,27 @@ def measured_rows(observations, c):
         assert a["selected_layers"] == list(range(64))
         assert a["attention_bytes_per_device"] == ids * block * c["ATTENTION_BYTES_PER_TOKEN"]
         assert a["recurrent_snapshot_bytes_per_device"] == ids * 16 * c["STATE_BYTES_PER_LAYER"]
-        cache = a["attention_bytes_per_device"] + a["recurrent_snapshot_bytes_per_device"]
+        snapshots = state_backing(c, ids, 16)
+        batch, remainder = divmod(
+            a["active_recurrent_bytes_per_device"], c["RECURRENT_LAYERS"] * c["STATE_BYTES_PER_LAYER"]
+        )
+        assert remainder == 0 and batch > 0
+        active = state_backing(c, batch, c["RECURRENT_LAYERS"])
+        cache = a["attention_bytes_per_device"] + snapshots["physical_bytes"]
         rows.append(
             {
                 "label": label,
                 "source_sha256": observed["source_sha256"],
                 "attention_KV_bytes": a["attention_bytes_per_device"],
-                "recurrent_snapshot_bytes": a["recurrent_snapshot_bytes_per_device"],
-                "active_recurrent_state_bytes": a["active_recurrent_bytes_per_device"],
+                "recurrent_snapshot_payload_bytes_reported": a["recurrent_snapshot_bytes_per_device"],
+                "recurrent_snapshot_bytes_from_layout": snapshots["physical_bytes"],
+                "recurrent_snapshot_bank_padding_bytes_from_layout": snapshots["bank_padding_bytes"],
+                "active_recurrent_payload_bytes_reported": a["active_recurrent_bytes_per_device"],
+                "active_recurrent_bytes_from_layout": active["physical_bytes"],
+                "active_recurrent_bank_padding_bytes_from_layout": active["bank_padding_bytes"],
                 "weights_runtime_and_other_unitemized_bytes": a["allocated_bytes_per_device"]
                 - cache
-                - a["active_recurrent_bytes_per_device"],
+                - active["physical_bytes"],
                 "allocator_allocated_bytes": a["allocated_bytes_per_device"],
                 "allocator_free_bytes": a["free_bytes_per_device"],
                 "allocator_total_bytes": a["allocated_bytes_per_device"] + a["free_bytes_per_device"],
@@ -102,7 +144,7 @@ def measured_rows(observations, c):
                     for k, v in observed["preparation_memory"].items()
                     if k in ("before", "scratch_bound", "warmed_before_capture", "after")
                 },
-                "scope": "Measured allocator checkpoints and exact typed cache backing; not continuous peak or fragmentation proof",
+                "scope": "Measured allocator totals; payload metadata plus source-layout-derived bank-padded cache components. Not fresh per-component allocator measurements, continuous peak, fragmentation or retention proof.",
             }
         )
     return rows
@@ -151,7 +193,14 @@ def main():
     report = {
         "units": "bytes per participating TP4 device, never four-device pooled capacity",
         "cache_source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "planner_source_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         "constants": c,
+        "state_layout_forecast_contract": {
+            "device": "Blackhole eight-bank DRAM; no cross-device pooling",
+            "conv": "BF16 row-major, last dimension is page, each page aligned64bytes",
+            "recurrent": "FP32 tiled,32x32 tile is4096bytes",
+            "pools": "Each physical ordinal pool pads independently across banks",
+        },
         "measured": (
             measured_rows(json.loads(args.prepared_observations.read_text()), c) if args.prepared_observations else []
         ),
@@ -164,8 +213,9 @@ def main():
         "duplicate_MLP_candidate": {
             "potential_payload_saving_bytes": duplicate,
             "basis": "64 layers, separate BF4 gate/up plus packed BF4 gateup, TP4; source shape estimate",
-            "measured_saving": False,
-            "constraint": "Second budget is conditional on reclaiming the whole duplicate payload without consuming equivalent new buffers; native correctness/performance/allocation checks required",
+            "this_capacity_forecast_is_measured": False,
+            "native_measurement_reference": "SHARED_MLP_FULL64.json records native prepared net saving, extra runtime overhead and clean slowdown; it is not a serving capacity measurement.",
+            "constraint": "Second budget is an upper-bound counterfactual reclaiming the whole duplicate payload. It excludes changed runtime/trace buffers and does not select a serving budget.",
         },
         "union_backing_design_screen": [
             union_screen(c, args.cache_budget_bytes, block) for block in (512, 1024, 2048, 4096)
