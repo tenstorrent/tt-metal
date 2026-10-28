@@ -125,6 +125,9 @@ class RerankConfig:
     # dtype of the RMSNorm outputs that feed QKV and FF1/FF3 (the final norm, feeding the score head, stays bf16).
     # bfp8: 32x512 256.5 -> 251.7 M cycles; MIRACL Pearson 0.99956 (b1, b8) / 0.99963 (b32).
     norm_out_dtype: object = ttnn.bfloat8_b
+    # dtype of the final RMSNorm output (the score head's input) on the resident-residual path. bfp8: 32x512
+    # 151.6 -> 151.4 M cycles; MIRACL batch 32 Pearson 0.99962 (unchanged).
+    final_norm_dtype: object = ttnn.bfloat8_b
     # Output dtypes of the tensors between ops (each is written once and read once).
     # bfp8 into / out of fused_heads_rope gives garbage K / V (Q correct): open issue, kept bf16.
     qkv_out_dtype: object = ttnn.bfloat16  # QKV matmul -> head split + RoPE

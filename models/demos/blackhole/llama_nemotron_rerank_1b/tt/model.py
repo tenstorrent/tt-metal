@@ -484,7 +484,7 @@ class NemotronReranker:
                 ttnn.deallocate(h)
                 last = i + 1 == len(self.layers)
                 nxt = self.final_norm_consts if last else self.layers[i + 1].attn_norm_consts
-                xn = self._mm_add_norm(a, layer.w2, res, nxt, "ff2", self.cfg.act_dtype if last else None)
+                xn = self._mm_add_norm(a, layer.w2, res, nxt, "ff2", self.cfg.final_norm_dtype if last else None)
                 ttnn.deallocate(a)
             ttnn.deallocate(res)
         elif fused:
