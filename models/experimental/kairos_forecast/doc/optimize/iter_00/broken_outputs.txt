@@ -1,0 +1,5 @@
+0 problem(s); wrote models/experimental/kairos_forecast/doc/optimize/iter_00/broken_outputs.json
+rc=0
+PASSED models/experimental/kairos_forecast/tests/perf/test_broken_outputs.py::test_broken_outputs_caught[single_short]
+PASSED models/experimental/kairos_forecast/tests/perf/test_broken_outputs.py::test_broken_outputs_caught[single_long_horizon]
+============================== 7 passed in 8.07s ===============================

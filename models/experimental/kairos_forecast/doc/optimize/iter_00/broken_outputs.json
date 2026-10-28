@@ -1,0 +1,5749 @@
+{
+ "started_at": 1793213684.8237944,
+ "git_head": "2741f2940cf18b682dec50ab0469576c983160a9",
+ "git_dirty": "",
+ "fixed": {
+  "suite": "/home/andy/bringup/kairos/models/experimental/kairos_forecast/doc/optimize/iter_00/suite.jsonl",
+  "bench": "/home/andy/bringup/kairos/models/experimental/kairos_forecast/doc/optimize/iter_00/bench.json"
+ },
+ "level_shift_real_units": {
+  "paper": {
+   "shift_over_row_std_p50": 0.04998779296875,
+   "min": 0.04998742789030075,
+   "max": 0.0499878004193306
+  },
+  "long_horizon": {
+   "shift_over_row_std_p50": 0.04998779296875,
+   "min": 0.04998745396733284,
+   "max": 0.0499877966940403
+  },
+  "ragged": {
+   "shift_over_row_std_p50": 0.049975816160440445,
+   "min": 0.04965156689286232,
+   "max": 0.04998770356178284
+  },
+  "single": {
+   "shift_over_row_std_p50": 0.04998761788010597,
+   "min": 0.04998761788010597,
+   "max": 0.04998761788010597
+  },
+  "single_plain": {
+   "shift_over_row_std_p50": 0.04998761788010597,
+   "min": 0.04998761788010597,
+   "max": 0.04998761788010597
+  },
+  "single_short": {
+   "shift_over_row_std_p50": 0.049916598945856094,
+   "min": 0.049916598945856094,
+   "max": 0.049916598945856094
+  },
+  "single_long_horizon": {
+   "shift_over_row_std_p50": 0.0499877892434597,
+   "min": 0.0499877892434597,
+   "max": 0.0499877892434597
+  }
+ },
+ "verdicts": {
+  "paper/accuracy": {
+   "suite": {
+    "golden": {
+     "paper": []
+    },
+    "collapsed": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:bias_row_max_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_0.88": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:spread_ratio_p01",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_1.12": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50",
+      "floor:spread_ratio_p99"
+     ]
+    },
+    "band_0.3_1pct": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01"
+     ]
+    },
+    "inactive_collapsed": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final_spread",
+      "floor:pcc_row_min",
+      "drift:pcc_spread",
+      "floor:pcc_spread"
+     ]
+    },
+    "level_shift": {
+     "paper": [
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err"
+     ]
+    },
+    "lag1": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:inactive_max_err",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h0": {
+     "paper": [
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full"
+     ]
+    },
+    "lag1_h0": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:inactive_max_err",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h1": {
+     "paper": [
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full"
+     ]
+    },
+    "lag1_h1": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "no_negate": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_max",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01",
+      "floor:spread_ratio_p99"
+     ]
+    },
+    "level_shift_final": {
+     "paper": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_final": {
+     "paper": [
+      "drift:bias_row_max_final",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    }
+   },
+   "bench": {
+    "golden": {
+     "paper": []
+    },
+    "collapsed": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:bias_row_max_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_0.88": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:spread_ratio_p01",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_1.12": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50",
+      "floor:spread_ratio_p99"
+     ]
+    },
+    "band_0.3_1pct": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01"
+     ]
+    },
+    "inactive_collapsed": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final_spread",
+      "floor:pcc_row_min",
+      "drift:pcc_spread",
+      "floor:pcc_spread"
+     ]
+    },
+    "level_shift": {
+     "paper": [
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err"
+     ]
+    },
+    "lag1": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:inactive_max_err",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h0": {
+     "paper": [
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full"
+     ]
+    },
+    "lag1_h0": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:inactive_max_err",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h1": {
+     "paper": [
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full"
+     ]
+    },
+    "lag1_h1": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "no_negate": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_max",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01",
+      "floor:spread_ratio_p99"
+     ]
+    },
+    "level_shift_final": {
+     "paper": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_final": {
+     "paper": [
+      "drift:bias_row_max_final",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    }
+   }
+  },
+  "paper/performance": {
+   "suite": {
+    "golden": {
+     "paper": [
+      [
+       "spread_ratio_p50",
+       "drift"
+      ]
+     ]
+    },
+    "collapsed": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_0.88": {
+     "paper": [
+      "drift:abs_err_max",
+      "floor:spread_ratio_p01",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_1.12": {
+     "paper": [
+      "drift:abs_err_max",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_0.3_1pct": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:pcc_final_spread",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01"
+     ]
+    },
+    "inactive_collapsed": {
+     "paper": [
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "floor:pcc_row_min"
+     ]
+    },
+    "level_shift": {
+     "paper": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
+    "lag1": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h0": {
+     "paper": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_h0": {
+     "paper": [
+      "drift:abs_err_max",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h1": {
+     "paper": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_h1": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "no_negate": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01"
+     ]
+    },
+    "level_shift_final": {
+     "paper": [
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_final": {
+     "paper": [
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    }
+   },
+   "bench": {
+    "golden": {
+     "paper": [
+      [
+       "spread_ratio_p50",
+       "drift"
+      ]
+     ]
+    },
+    "collapsed": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_0.88": {
+     "paper": [
+      "drift:abs_err_max",
+      "floor:spread_ratio_p01",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_1.12": {
+     "paper": [
+      "drift:abs_err_max",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_0.3_1pct": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:pcc_final_spread",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01"
+     ]
+    },
+    "inactive_collapsed": {
+     "paper": [
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "floor:pcc_row_min"
+     ]
+    },
+    "level_shift": {
+     "paper": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
+    "lag1": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h0": {
+     "paper": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_h0": {
+     "paper": [
+      "drift:abs_err_max",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h1": {
+     "paper": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_h1": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "no_negate": {
+     "paper": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01"
+     ]
+    },
+    "level_shift_final": {
+     "paper": [
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_final": {
+     "paper": [
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    }
+   }
+  },
+  "long_horizon/accuracy": {
+   "suite": {
+    "golden": {
+     "long_horizon": [],
+     "long_horizon_tf": []
+    },
+    "collapsed": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_max_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_0.88": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:spread_ratio_min",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:spread_ratio_p01",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_1.12": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_max_final",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:spread_ratio_max",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50",
+      "floor:spread_ratio_p99"
+     ]
+    },
+    "band_0.3_1pct": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "floor:spread_ratio_min"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01"
+     ]
+    },
+    "inactive_collapsed": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "floor:pcc_row_min",
+      "drift:pcc_spread"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "level_shift": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err"
+     ],
+     "long_horizon_tf": [
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err"
+     ]
+    },
+    "lag1": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "drift:spread_ratio_p50"
+     ]
+    },
+    "level_shift_h0": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err"
+     ],
+     "long_horizon_tf": [
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full"
+     ]
+    },
+    "lag1_h0": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h1": {
+     "long_horizon": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "long_horizon_tf": [
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full"
+     ]
+    },
+    "lag1_h1": {
+     "long_horizon": [
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "no_negate": {
+     "long_horizon": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_max",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01",
+      "floor:spread_ratio_p99"
+     ]
+    },
+    "level_shift_final": {
+     "long_horizon": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "long_horizon_tf": "not applicable (identical to the golden)"
+    },
+    "lag1_final": {
+     "long_horizon": [
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "long_horizon_tf": "not applicable (identical to the golden)"
+    }
+   },
+   "bench": {
+    "golden": {
+     "long_horizon": [],
+     "long_horizon_tf": []
+    },
+    "collapsed": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_max_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_0.88": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:spread_ratio_min",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:spread_ratio_p01",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_1.12": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_max_final",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:spread_ratio_max",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50",
+      "floor:spread_ratio_p99"
+     ]
+    },
+    "band_0.3_1pct": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "floor:spread_ratio_min"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01"
+     ]
+    },
+    "inactive_collapsed": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "floor:pcc_row_min",
+      "drift:pcc_spread"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "level_shift": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err"
+     ],
+     "long_horizon_tf": [
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err"
+     ]
+    },
+    "lag1": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "drift:spread_ratio_p50"
+     ]
+    },
+    "level_shift_h0": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err"
+     ],
+     "long_horizon_tf": [
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full"
+     ]
+    },
+    "lag1_h0": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h1": {
+     "long_horizon": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "long_horizon_tf": [
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full"
+     ]
+    },
+    "lag1_h1": {
+     "long_horizon": [
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "no_negate": {
+     "long_horizon": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_max",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01",
+      "floor:spread_ratio_p99"
+     ]
+    },
+    "level_shift_final": {
+     "long_horizon": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "long_horizon_tf": "not applicable (identical to the golden)"
+    },
+    "lag1_final": {
+     "long_horizon": [
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "long_horizon_tf": "not applicable (identical to the golden)"
+    }
+   }
+  },
+  "long_horizon/performance": {
+   "suite": {
+    "golden": {
+     "long_horizon": [
+      [
+       "spread_ratio_p50",
+       "drift"
+      ]
+     ],
+     "long_horizon_tf": [
+      [
+       "spread_ratio_p50",
+       "drift"
+      ]
+     ]
+    },
+    "collapsed": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p50"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_0.88": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p50"
+     ],
+     "long_horizon_tf": [
+      "floor:spread_ratio_p01",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_1.12": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "floor:spread_ratio_p50"
+     ],
+     "long_horizon_tf": [
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_0.3_1pct": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:pcc_final_spread",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "floor:spread_ratio_min"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:pcc_final_spread",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01"
+     ]
+    },
+    "inactive_collapsed": {
+     "long_horizon": [
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final_spread",
+      "floor:pcc_row_min"
+     ],
+     "long_horizon_tf": [
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final_spread",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "level_shift": {
+     "long_horizon": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ],
+     "long_horizon_tf": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h0": {
+     "long_horizon": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "long_horizon_tf": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
+    "lag1_h0": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h1": {
+     "long_horizon": [
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "long_horizon_tf": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
+    "lag1_h1": {
+     "long_horizon": [
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "no_negate": {
+     "long_horizon": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_max",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01",
+      "floor:spread_ratio_p99"
+     ]
+    },
+    "level_shift_final": {
+     "long_horizon": [
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "long_horizon_tf": "not applicable (identical to the golden)"
+    },
+    "lag1_final": {
+     "long_horizon": [
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "long_horizon_tf": "not applicable (identical to the golden)"
+    }
+   },
+   "bench": {
+    "golden": {
+     "long_horizon": [
+      [
+       "spread_ratio_p50",
+       "drift"
+      ]
+     ],
+     "long_horizon_tf": [
+      [
+       "spread_ratio_p50",
+       "drift"
+      ]
+     ]
+    },
+    "collapsed": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p50"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_0.88": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p50"
+     ],
+     "long_horizon_tf": [
+      "floor:spread_ratio_p01",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_1.12": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "floor:spread_ratio_p50"
+     ],
+     "long_horizon_tf": [
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_0.3_1pct": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:pcc_final_spread",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "floor:spread_ratio_min"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:pcc_final_spread",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01"
+     ]
+    },
+    "inactive_collapsed": {
+     "long_horizon": [
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final_spread",
+      "floor:pcc_row_min"
+     ],
+     "long_horizon_tf": [
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final_spread",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "level_shift": {
+     "long_horizon": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ],
+     "long_horizon_tf": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h0": {
+     "long_horizon": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "long_horizon_tf": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
+    "lag1_h0": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h1": {
+     "long_horizon": [
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "long_horizon_tf": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
+    "lag1_h1": {
+     "long_horizon": [
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "no_negate": {
+     "long_horizon": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_max",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01",
+      "floor:spread_ratio_p99"
+     ]
+    },
+    "level_shift_final": {
+     "long_horizon": [
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "long_horizon_tf": "not applicable (identical to the golden)"
+    },
+    "lag1_final": {
+     "long_horizon": [
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "long_horizon_tf": "not applicable (identical to the golden)"
+    }
+   }
+  },
+  "ragged/accuracy": {
+   "suite": {
+    "golden": {
+     "ragged": []
+    },
+    "collapsed": {
+     "ragged": [
+      "drift:abs_err_max",
+      "drift:bias_row_max_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_0.88": {
+     "ragged": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "drift:pcc_step_final",
+      "floor:spread_ratio_p01",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_1.12": {
+     "ragged": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "drift:pcc_step_final",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50",
+      "floor:spread_ratio_p99"
+     ]
+    },
+    "band_0.3_1pct": {
+     "ragged": [
+      "drift:abs_err_max",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01"
+     ]
+    },
+    "inactive_collapsed": {
+     "ragged": [
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "floor:pcc_row_min"
+     ]
+    },
+    "level_shift": {
+     "ragged": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err"
+     ]
+    },
+    "lag1": {
+     "ragged": [
+      "drift:abs_err_max",
+      "drift:bias_row_p50",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h0": {
+     "ragged": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err"
+     ]
+    },
+    "lag1_h0": {
+     "ragged": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h1": {
+     "ragged": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err"
+     ]
+    },
+    "lag1_h1": {
+     "ragged": [
+      "drift:abs_err_max",
+      "drift:bias_row_p50",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "no_negate": {
+     "ragged": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_max",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01",
+      "floor:spread_ratio_p99"
+     ]
+    },
+    "level_shift_final": {
+     "ragged": [
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_final": {
+     "ragged": [
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    }
+   },
+   "bench": {
+    "golden": {
+     "ragged": []
+    },
+    "collapsed": {
+     "ragged": [
+      "drift:abs_err_max",
+      "drift:bias_row_max_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_0.88": {
+     "ragged": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "drift:pcc_step_final",
+      "floor:spread_ratio_p01",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_1.12": {
+     "ragged": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "drift:pcc_step_final",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50",
+      "floor:spread_ratio_p99"
+     ]
+    },
+    "band_0.3_1pct": {
+     "ragged": [
+      "drift:abs_err_max",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01"
+     ]
+    },
+    "inactive_collapsed": {
+     "ragged": [
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "floor:pcc_row_min"
+     ]
+    },
+    "level_shift": {
+     "ragged": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err"
+     ]
+    },
+    "lag1": {
+     "ragged": [
+      "drift:abs_err_max",
+      "drift:bias_row_p50",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h0": {
+     "ragged": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err"
+     ]
+    },
+    "lag1_h0": {
+     "ragged": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h1": {
+     "ragged": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err"
+     ]
+    },
+    "lag1_h1": {
+     "ragged": [
+      "drift:abs_err_max",
+      "drift:bias_row_p50",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "no_negate": {
+     "ragged": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_max",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01",
+      "floor:spread_ratio_p99"
+     ]
+    },
+    "level_shift_final": {
+     "ragged": [
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_final": {
+     "ragged": [
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    }
+   }
+  },
+  "ragged/performance": {
+   "suite": {
+    "golden": {
+     "ragged": [
+      [
+       "spread_ratio_p50",
+       "drift"
+      ]
+     ]
+    },
+    "collapsed": {
+     "ragged": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_0.88": {
+     "ragged": [
+      "floor:spread_ratio_p01",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_1.12": {
+     "ragged": [
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_0.3_1pct": {
+     "ragged": [
+      "drift:abs_err_max",
+      "drift:pcc_final_spread",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01"
+     ]
+    },
+    "inactive_collapsed": {
+     "ragged": [
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "floor:pcc_row_min"
+     ]
+    },
+    "level_shift": {
+     "ragged": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err"
+     ]
+    },
+    "lag1": {
+     "ragged": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h0": {
+     "ragged": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err"
+     ]
+    },
+    "lag1_h0": {
+     "ragged": [
+      "drift:abs_err_max",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h1": {
+     "ragged": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err"
+     ]
+    },
+    "lag1_h1": {
+     "ragged": [
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "no_negate": {
+     "ragged": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01",
+      "floor:spread_ratio_p99"
+     ]
+    },
+    "level_shift_final": {
+     "ragged": [
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_final": {
+     "ragged": [
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    }
+   },
+   "bench": {
+    "golden": {
+     "ragged": [
+      [
+       "spread_ratio_p50",
+       "drift"
+      ]
+     ]
+    },
+    "collapsed": {
+     "ragged": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_0.88": {
+     "ragged": [
+      "floor:spread_ratio_p01",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_1.12": {
+     "ragged": [
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_0.3_1pct": {
+     "ragged": [
+      "drift:abs_err_max",
+      "drift:pcc_final_spread",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01"
+     ]
+    },
+    "inactive_collapsed": {
+     "ragged": [
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "floor:pcc_row_min"
+     ]
+    },
+    "level_shift": {
+     "ragged": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err"
+     ]
+    },
+    "lag1": {
+     "ragged": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h0": {
+     "ragged": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err"
+     ]
+    },
+    "lag1_h0": {
+     "ragged": [
+      "drift:abs_err_max",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h1": {
+     "ragged": [
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err"
+     ]
+    },
+    "lag1_h1": {
+     "ragged": [
+      "drift:pcc_row_p01_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "no_negate": {
+     "ragged": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_row_p01_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "floor:spread_ratio_p01",
+      "floor:spread_ratio_p99"
+     ]
+    },
+    "level_shift_final": {
+     "ragged": [
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_final": {
+     "ragged": [
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    }
+   }
+  },
+  "single/accuracy": {
+   "suite": {
+    "golden": {
+     "single": []
+    },
+    "collapsed": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "band_0.88": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "drift:pcc_normalized_full",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "band_1.12": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "drift:pcc_normalized_full",
+      "floor:spread_ratio_max"
+     ]
+    },
+    "band_0.3_1pct": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "inactive_collapsed": {
+     "single": "not applicable (identical to the golden)"
+    },
+    "level_shift": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
+    "lag1": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:pcc_final",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h0": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_h0": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "drift:pcc_final",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h1": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_h1": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "drift:pcc_final",
+      "drift:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "no_negate": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "level_shift_final": {
+     "single": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_final": {
+     "single": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:pcc_final",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    }
+   },
+   "bench": {
+    "golden": {
+     "single": []
+    },
+    "collapsed": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "band_0.88": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "drift:pcc_normalized_full",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "band_1.12": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "drift:pcc_normalized_full",
+      "floor:spread_ratio_max"
+     ]
+    },
+    "band_0.3_1pct": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "inactive_collapsed": {
+     "single": "not applicable (identical to the golden)"
+    },
+    "level_shift": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
+    "lag1": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:pcc_final",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h0": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_h0": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "drift:pcc_final",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h1": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_h1": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "drift:pcc_final",
+      "drift:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "no_negate": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "level_shift_final": {
+     "single": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_final": {
+     "single": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:pcc_final",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    }
+   }
+  },
+  "single/performance": {
+   "suite": {
+    "golden": {
+     "single": []
+    },
+    "collapsed": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "band_0.88": {
+     "single": [
+      "drift:pcc_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "band_1.12": {
+     "single": [
+      "floor:spread_ratio_max"
+     ]
+    },
+    "band_0.3_1pct": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "inactive_collapsed": {
+     "single": "not applicable (identical to the golden)"
+    },
+    "level_shift": {
+     "single": [
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
+    "lag1": {
+     "single": [
+      "drift:pcc_final",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h0": {
+     "single": [
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
+    "lag1_h0": {
+     "single": [
+      "drift:pcc_final",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h1": {
+     "single": [
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
+    "lag1_h1": {
+     "single": [
+      "drift:pcc_final",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "no_negate": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "level_shift_final": {
+     "single": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_final": {
+     "single": [
+      "drift:pcc_final",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    }
+   },
+   "bench": {
+    "golden": {
+     "single": []
+    },
+    "collapsed": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "band_0.88": {
+     "single": [
+      "drift:pcc_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "band_1.12": {
+     "single": [
+      "floor:spread_ratio_max"
+     ]
+    },
+    "band_0.3_1pct": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "inactive_collapsed": {
+     "single": "not applicable (identical to the golden)"
+    },
+    "level_shift": {
+     "single": [
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
+    "lag1": {
+     "single": [
+      "drift:pcc_final",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h0": {
+     "single": [
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
+    "lag1_h0": {
+     "single": [
+      "drift:pcc_final",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h1": {
+     "single": [
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
+    "lag1_h1": {
+     "single": [
+      "drift:pcc_final",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "no_negate": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "level_shift_final": {
+     "single": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_final": {
+     "single": [
+      "drift:pcc_final",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    }
+   }
+  },
+  "single_plain/accuracy": {
+   "suite": {
+    "golden": {
+     "single_plain": []
+    },
+    "collapsed": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "band_0.88": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "band_1.12": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:spread_ratio_max"
+     ]
+    },
+    "band_0.3_1pct": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "inactive_collapsed": {
+     "single_plain": "not applicable (identical to the golden)"
+    },
+    "level_shift": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_final": {
+     "single_plain": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_final": {
+     "single_plain": [
+      "drift:pcc_final",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    }
+   },
+   "bench": {
+    "golden": {
+     "single_plain": []
+    },
+    "collapsed": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "band_0.88": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "band_1.12": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:spread_ratio_max"
+     ]
+    },
+    "band_0.3_1pct": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "inactive_collapsed": {
+     "single_plain": "not applicable (identical to the golden)"
+    },
+    "level_shift": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_final": {
+     "single_plain": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_final": {
+     "single_plain": [
+      "drift:pcc_final",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    }
+   }
+  },
+  "single_plain/performance": {
+   "suite": {
+    "golden": {
+     "single_plain": []
+    },
+    "collapsed": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "band_0.88": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "band_1.12": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "floor:spread_ratio_max"
+     ]
+    },
+    "band_0.3_1pct": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "inactive_collapsed": {
+     "single_plain": "not applicable (identical to the golden)"
+    },
+    "level_shift": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_final": {
+     "single_plain": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_final": {
+     "single_plain": [
+      "drift:pcc_final",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    }
+   },
+   "bench": {
+    "golden": {
+     "single_plain": []
+    },
+    "collapsed": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "band_0.88": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "band_1.12": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "floor:spread_ratio_max"
+     ]
+    },
+    "band_0.3_1pct": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "inactive_collapsed": {
+     "single_plain": "not applicable (identical to the golden)"
+    },
+    "level_shift": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_final": {
+     "single_plain": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_final": {
+     "single_plain": [
+      "drift:pcc_final",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    }
+   }
+  },
+  "single_short/accuracy": {
+   "suite": {
+    "golden": {
+     "single_short": []
+    },
+    "collapsed": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "band_0.88": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "drift:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "band_1.12": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:spread_ratio_max"
+     ]
+    },
+    "band_0.3_1pct": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "inactive_collapsed": {
+     "single_short": "not applicable (identical to the golden)"
+    },
+    "level_shift": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
+    "lag1": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h0": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:pcc_normalized"
+     ]
+    },
+    "lag1_h0": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h1": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:pcc_normalized"
+     ]
+    },
+    "lag1_h1": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "no_negate": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:pcc_final",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "drift:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_final": {
+     "single_short": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_final": {
+     "single_short": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    }
+   },
+   "bench": {
+    "golden": {
+     "single_short": []
+    },
+    "collapsed": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "band_0.88": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "drift:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "band_1.12": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:spread_ratio_max"
+     ]
+    },
+    "band_0.3_1pct": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "inactive_collapsed": {
+     "single_short": "not applicable (identical to the golden)"
+    },
+    "level_shift": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
+    "lag1": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h0": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:pcc_normalized"
+     ]
+    },
+    "lag1_h0": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h1": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:pcc_normalized"
+     ]
+    },
+    "lag1_h1": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "no_negate": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:pcc_final",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "drift:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_final": {
+     "single_short": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_final": {
+     "single_short": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    }
+   }
+  },
+  "single_short/performance": {
+   "suite": {
+    "golden": {
+     "single_short": []
+    },
+    "collapsed": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "band_0.88": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "band_1.12": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:spread_ratio_max"
+     ]
+    },
+    "band_0.3_1pct": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "inactive_collapsed": {
+     "single_short": "not applicable (identical to the golden)"
+    },
+    "level_shift": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
+    "lag1": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h0": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_h0": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h1": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_h1": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "no_negate": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:pcc_final",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_final": {
+     "single_short": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_final": {
+     "single_short": [
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    }
+   },
+   "bench": {
+    "golden": {
+     "single_short": []
+    },
+    "collapsed": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "band_0.88": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "band_1.12": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:spread_ratio_max"
+     ]
+    },
+    "band_0.3_1pct": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ]
+    },
+    "inactive_collapsed": {
+     "single_short": "not applicable (identical to the golden)"
+    },
+    "level_shift": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
+    "lag1": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h0": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_h0": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h1": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_h1": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "no_negate": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:pcc_final",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_final": {
+     "single_short": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ]
+    },
+    "lag1_final": {
+     "single_short": [
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    }
+   }
+  },
+  "single_long_horizon/accuracy": {
+   "suite": {
+    "golden": {
+     "single_long_horizon": [],
+     "single_long_horizon_tf": []
+    },
+    "collapsed": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_0.88": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "drift:pcc_normalized_full",
+      "floor:spread_ratio_min"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "floor:spread_ratio_min",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_1.12": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:spread_ratio_max"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "floor:spread_ratio_max",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_0.3_1pct": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "inactive_collapsed": {
+     "single_long_horizon": "not applicable (identical to the golden)",
+     "single_long_horizon_tf": "not applicable (identical to the golden)"
+    },
+    "level_shift": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err"
+     ]
+    },
+    "lag1": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized_full",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "drift:spread_ratio_p50"
+     ]
+    },
+    "level_shift_h0": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err"
+     ]
+    },
+    "lag1_h0": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized_full",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:inactive_max_err",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h1": {
+     "single_long_horizon": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err"
+     ]
+    },
+    "lag1_h1": {
+     "single_long_horizon": [
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "drift:spread_ratio_p50"
+     ]
+    },
+    "no_negate": {
+     "single_long_horizon": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "level_shift_final": {
+     "single_long_horizon": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "single_long_horizon_tf": "not applicable (identical to the golden)"
+    },
+    "lag1_final": {
+     "single_long_horizon": [
+      "drift:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "single_long_horizon_tf": "not applicable (identical to the golden)"
+    }
+   },
+   "bench": {
+    "golden": {
+     "single_long_horizon": [],
+     "single_long_horizon_tf": []
+    },
+    "collapsed": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_0.88": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "drift:pcc_normalized_full",
+      "floor:spread_ratio_min"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "floor:spread_ratio_min",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_1.12": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:spread_ratio_max"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "floor:spread_ratio_max",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_0.3_1pct": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "inactive_collapsed": {
+     "single_long_horizon": "not applicable (identical to the golden)",
+     "single_long_horizon_tf": "not applicable (identical to the golden)"
+    },
+    "level_shift": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err"
+     ]
+    },
+    "lag1": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized_full",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "drift:spread_ratio_p50"
+     ]
+    },
+    "level_shift_h0": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err"
+     ]
+    },
+    "lag1_h0": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:pcc_normalized_full",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:inactive_max_err",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h1": {
+     "single_long_horizon": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err"
+     ]
+    },
+    "lag1_h1": {
+     "single_long_horizon": [
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "drift:spread_ratio_p50"
+     ]
+    },
+    "no_negate": {
+     "single_long_horizon": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "level_shift_final": {
+     "single_long_horizon": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "single_long_horizon_tf": "not applicable (identical to the golden)"
+    },
+    "lag1_final": {
+     "single_long_horizon": [
+      "drift:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "single_long_horizon_tf": "not applicable (identical to the golden)"
+    }
+   }
+  },
+  "single_long_horizon/performance": {
+   "suite": {
+    "golden": {
+     "single_long_horizon": [],
+     "single_long_horizon_tf": []
+    },
+    "collapsed": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_0.88": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "floor:spread_ratio_min"
+     ],
+     "single_long_horizon_tf": [
+      "floor:spread_ratio_min",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_1.12": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "floor:spread_ratio_max"
+     ],
+     "single_long_horizon_tf": [
+      "floor:spread_ratio_max",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_0.3_1pct": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "drift:pcc_step_final",
+      "floor:spread_ratio_min",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "inactive_collapsed": {
+     "single_long_horizon": "not applicable (identical to the golden)",
+     "single_long_horizon_tf": "not applicable (identical to the golden)"
+    },
+    "level_shift": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ],
+     "single_long_horizon_tf": [
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err"
+     ]
+    },
+    "lag1": {
+     "single_long_horizon": [
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h0": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err"
+     ]
+    },
+    "lag1_h0": {
+     "single_long_horizon": [
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h1": {
+     "single_long_horizon": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err"
+     ]
+    },
+    "lag1_h1": {
+     "single_long_horizon": [
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "no_negate": {
+     "single_long_horizon": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "drift:spread_ratio_p50"
+     ]
+    },
+    "level_shift_final": {
+     "single_long_horizon": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "single_long_horizon_tf": "not applicable (identical to the golden)"
+    },
+    "lag1_final": {
+     "single_long_horizon": [
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "single_long_horizon_tf": "not applicable (identical to the golden)"
+    }
+   },
+   "bench": {
+    "golden": {
+     "single_long_horizon": [],
+     "single_long_horizon_tf": []
+    },
+    "collapsed": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_0.88": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "floor:spread_ratio_min"
+     ],
+     "single_long_horizon_tf": [
+      "floor:spread_ratio_min",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_1.12": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "floor:spread_ratio_max"
+     ],
+     "single_long_horizon_tf": [
+      "floor:spread_ratio_max",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "band_0.3_1pct": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_step",
+      "drift:pcc_step_final",
+      "floor:spread_ratio_min",
+      "drift:spread_ratio_p50",
+      "floor:spread_ratio_p50"
+     ]
+    },
+    "inactive_collapsed": {
+     "single_long_horizon": "not applicable (identical to the golden)",
+     "single_long_horizon_tf": "not applicable (identical to the golden)"
+    },
+    "level_shift": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ],
+     "single_long_horizon_tf": [
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:inactive_max_err"
+     ]
+    },
+    "lag1": {
+     "single_long_horizon": [
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h0": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err"
+     ]
+    },
+    "lag1_h0": {
+     "single_long_horizon": [
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_h1": {
+     "single_long_horizon": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err"
+     ]
+    },
+    "lag1_h1": {
+     "single_long_horizon": [
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ]
+    },
+    "no_negate": {
+     "single_long_horizon": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:pcc_final",
+      "floor:pcc_final",
+      "drift:pcc_final_spread",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:pcc_final",
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_normalized",
+      "floor:pcc_normalized",
+      "drift:pcc_normalized_full",
+      "floor:pcc_normalized_full",
+      "floor:pcc_row_min",
+      "drift:pcc_row_min_active",
+      "drift:pcc_spread",
+      "floor:pcc_spread",
+      "drift:pcc_step",
+      "floor:pcc_step",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final",
+      "floor:spread_ratio_min",
+      "drift:spread_ratio_p50"
+     ]
+    },
+    "level_shift_final": {
+     "single_long_horizon": [
+      "drift:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "single_long_horizon_tf": "not applicable (identical to the golden)"
+    },
+    "lag1_final": {
+     "single_long_horizon": [
+      "drift:pcc_final_spread",
+      "floor:pcc_final_spread",
+      "drift:pcc_step_final",
+      "floor:pcc_step_final"
+     ],
+     "single_long_horizon_tf": "not applicable (identical to the golden)"
+    }
+   }
+  }
+ },
+ "problems": []
+}

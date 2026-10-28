@@ -1,0 +1,35 @@
+# Broken-output scoring, G1 re-raise (D3 item 1)
+
+CPU job 1076 on 2741f2940cf (clean: True), started_at 1793213685. Fixed records: iter_00/suite.jsonl (pcc job 1063) and iter_00/bench.json (bench job 1064). Full detail: broken_outputs.json. Problems: 0.
+
+Each cell: the first floor that fails (or else the first drift check that the golden itself passes), and how many more checks fail. `_tf` = the teacher-forced record of a rollout case. n/a = the scoring equals the golden there (no inactive rows, no flip, or a final-only scoring on a teacher-forced record). A cell marked [suite differs] has a different catch list against the suite record.
+
+level_shift = +0.05 normalized = 0.0500 of the row's context std (p50 over paper rows; Kairos' scale is about the row std).
+
+| case/precision | record | collapsed | band_0.88 | band_1.12 | band_0.3_1pct | inactive_collapsed | level_shift | lag1 | level_shift_h0 | lag1_h0 | level_shift_h1 | lag1_h1 | no_negate | level_shift_final | lag1_final |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| paper/accuracy | paper | inactive_max_err (+23) | spread_ratio_p01 (+5) | spread_ratio_p50 (+5) | pcc_final_spread (+11) | inactive_max_err (+6) | bias_row_max (+5) | bias_row_max (+15) | bias_row_max (+10) | bias_row_max (+13) | bias_row_max (+10) | bias_row_max (+12) | bias_row_max (+30) | bias_row_p50_final (+2) | pcc_step_final (+2) |
+| paper/performance | paper | inactive_max_err (+21) | spread_ratio_p01 (+2) | spread_ratio_p50 (+1) | pcc_row_min (+7) | inactive_max_err (+2) | bias_row_p50 (+1) | pcc_row_min (+9) | bias_row_p50 (+3) | pcc_row_min (+7) | bias_row_p50 (+3) | pcc_step (+6) | bias_row_max (+27) | bias_row_p50_final (+1) | pcc_step_final (+1) |
+| long_horizon/accuracy | long_horizon | inactive_max_err (+21) | spread_ratio_min (+5) | spread_ratio_max (+6) | pcc_final_spread (+9) | inactive_max_err (+6) | bias_row_max (+6) | bias_row_max (+12) | bias_row_max (+9) | bias_row_max (+12) | bias_row_p50_final (+2) | pcc_step_final (+1) | bias_row_p50_final (+8) | bias_row_p50_final (+2) | pcc_final_spread (+3) |
+| long_horizon/accuracy | long_horizon_tf | inactive_max_err (+22) | spread_ratio_p01 (+6) | spread_ratio_p50 (+6) | pcc_final_spread (+11) | inactive_max_err (+10) | bias_row_max (+8) | inactive_max_err (+15) | bias_row_max (+8) | inactive_max_err (+14) | bias_row_max (+8) | pcc_normalized (+12) | bias_row_max (+28) | n/a | n/a |
+| long_horizon/performance | long_horizon | inactive_max_err (+19) | spread_ratio_min (+2) | spread_ratio_p50 (+1) | pcc_row_min (+6) | inactive_max_err (+3) | bias_row_p50 (+1) | pcc_step (+7) | bias_row_p50 (+3) | pcc_step (+7) | bias_row_p50_final (+1) | pcc_step_final (+1) | bias_row_p50_final (+8) | bias_row_p50_final (+1) | pcc_final_spread (+3) |
+| long_horizon/performance | long_horizon_tf | inactive_max_err (+21) | spread_ratio_p01 (+1) | spread_ratio_p50 | pcc_row_min (+8) | inactive_max_err (+7) | bias_row_p50 (+3) | pcc_row_min (+9) | bias_row_p50 (+1) | pcc_row_min (+8) | bias_row_p50 (+1) | pcc_step (+7) | bias_row_max (+28) | n/a | n/a |
+| ragged/accuracy | ragged | inactive_max_err (+23) | pcc_normalized_full (+7) | pcc_normalized_full (+7) | pcc_final_spread (+11) | inactive_max_err (+2) | bias_row_p50 (+3) | pcc_normalized (+13) | bias_row_p50 (+5) | pcc_row_min (+9) | bias_row_p50 (+5) | pcc_row_min (+10) | bias_row_max (+30) | bias_row_p50_final (+1) | pcc_step_final (+1) |
+| ragged/performance | ragged | inactive_max_err (+21) | spread_ratio_p01 (+1) | spread_ratio_p50 | pcc_row_min (+8) | inactive_max_err (+2) | bias_row_p50 (+2) | pcc_row_min (+9) | bias_row_p50 (+4) | pcc_row_min (+7) | bias_row_p50 (+4) | pcc_step (+4) | bias_row_max (+29) | bias_row_p50_final (+1) | pcc_step_final (+1) |
+| single/accuracy | single | pcc_final (+17) | spread_ratio_min (+3) | spread_ratio_max (+3) | pcc_final (+13) | n/a | bias_row_max (+4) | bias_row_p50_final (+10) | bias_row_max (+7) | pcc_step (+8) | bias_row_max (+7) | pcc_step (+8) | bias_row_max (+24) | bias_row_p50_final (+2) | bias_row_p50_final (+5) |
+| single/performance | single | pcc_final (+17) | spread_ratio_min (+1) | spread_ratio_max | pcc_final (+12) | n/a | bias_row_max (+3) | pcc_step (+4) | bias_row_max (+3) | pcc_step (+4) | bias_row_max (+3) | pcc_step (+4) | bias_row_max (+23) | bias_row_p50_final (+2) | pcc_step_final (+2) |
+| single_plain/accuracy | single_plain | pcc_final (+17) | pcc_normalized (+6) | pcc_normalized (+6) | pcc_final (+13) | n/a | bias_row_max (+7) | pcc_normalized (+10) | n/a | n/a | n/a | n/a | n/a | bias_row_p50_final (+2) | pcc_step_final (+2) |
+| single_plain/performance | single_plain | pcc_final (+17) | spread_ratio_min (+4) | spread_ratio_max (+1) | pcc_final (+13) | n/a | bias_row_max (+7) | pcc_normalized (+8) | n/a | n/a | n/a | n/a | n/a | bias_row_p50_final (+2) | pcc_step_final (+2) |
+| single_short/accuracy | single_short | pcc_final (+17) | pcc_normalized (+6) | pcc_normalized (+5) | pcc_normalized (+12) | n/a | bias_row_max (+4) | pcc_step (+6) | bias_row_max (+8) | pcc_step (+4) | bias_row_max (+8) | pcc_step (+6) | bias_row_max (+17) | bias_row_p50_final (+2) | pcc_step_final (+3) |
+| single_short/performance | single_short | pcc_final (+17) | spread_ratio_min (+3) | spread_ratio_max (+3) | pcc_normalized (+10) | n/a | bias_row_max (+4) | pcc_step (+4) | bias_row_max (+7) | pcc_step (+4) | bias_row_max (+7) | pcc_step (+4) | bias_row_max (+16) | bias_row_p50_final (+2) | pcc_step_final (+1) |
+| single_long_horizon/accuracy | single_long_horizon | pcc_final (+17) | spread_ratio_min (+3) | spread_ratio_max (+2) | pcc_final (+13) | n/a | bias_row_max (+4) | pcc_step (+5) | bias_row_max (+7) | pcc_step (+5) | bias_row_p50_final (+2) | pcc_step_final (+1) | bias_row_p50_final (+8) | bias_row_p50_final (+2) | pcc_final_spread (+4) |
+| single_long_horizon/accuracy | single_long_horizon_tf | inactive_max_err (+20) | inactive_max_err (+5) | inactive_max_err (+5) | inactive_max_err (+15) | n/a | bias_row_max (+9) | pcc_step (+6) | bias_row_max (+7) | pcc_step (+4) | bias_row_max (+7) | pcc_step (+5) | bias_row_max (+26) | n/a | n/a |
+| single_long_horizon/performance | single_long_horizon | pcc_final (+17) | spread_ratio_min (+1) | spread_ratio_max (+1) | pcc_final (+12) | n/a | bias_row_max (+4) | pcc_step (+3) | bias_row_max (+7) | pcc_step (+3) | bias_row_p50_final (+2) | pcc_step_final (+1) | bias_row_p50_final (+7) | bias_row_p50_final (+2) | pcc_final_spread (+3) |
+| single_long_horizon/performance | single_long_horizon_tf | inactive_max_err (+17) | spread_ratio_min (+2) | spread_ratio_max (+2) | inactive_max_err (+11) | n/a | bias_row_max (+7) | pcc_step (+3) | bias_row_max (+5) | pcc_step (+3) | bias_row_max (+5) | pcc_step (+3) | bias_row_max (+24) | n/a | n/a |
+
+Drift checks the golden fails itself (excluded from the catches; the golden is not a device output):
+
+- paper/performance paper: drift spread_ratio_p50
+- long_horizon/performance long_horizon: drift spread_ratio_p50
+- long_horizon/performance long_horizon_tf: drift spread_ratio_p50
+- ragged/performance ragged: drift spread_ratio_p50
