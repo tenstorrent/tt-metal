@@ -17,7 +17,8 @@ inc/common/                 arch-independent, always on the include path
     llk_lib/thread.h        current_thread and the per-thread call pattern
 inc/blackhole/              one arch; the build adds inc/common and one inc/<arch>
     resolver/               each op's OpApi: accepts, options, work, plan
-    llk_lib/                one header per thread or op: unpack.h (every unpack op), matmul.h (math)
+    llk_lib/                one header per thread or op: unpack.h (every unpack op), matmul.h (math),
+                            pack.h (pack), dest.h (Dest sync)
 tests/                      an out-of-tree consumer of the tt-llk test harness
 ```
 
@@ -29,8 +30,11 @@ include path.
 | Op | Compute API | Blackhole llk-lib | Tests |
 |---|---|---|---|
 | `matmul` | `compute_api/matmul.h` | `llk_lib/unpack.h`, `llk_lib/matmul.h` | `test_llk2_matmul.py` |
+| `pack` (`relu`, `l1_acc`) | `compute_api/pack.h` | `llk_lib/pack.h` | `test_llk2_pack.py`, `test_llk2_matmul.py` |
+| Dest sync | `compute_api/dest.h` | `llk_lib/dest.h` | every test |
 
-Pack and the math-to-pack Dest sync still use today's LLKs in the tests.
+A test kernel takes a Dest section, runs ops into it and packs it with the Dest sync API (`compute_api/dest.h`):
+`dest_acquire`, `dest_commit`, `pack`, `dest_release`. No init call.
 
 ## Running the tests
 
