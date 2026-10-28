@@ -21,8 +21,9 @@ llama_nemotron_rerank_1b/
   tt/model_config.py           shapes, precisions, matmul / SDPA block tables (every knob documented with its measurement)
   tt/weights.py                checkpoint -> device tensors (Q/K row permutation for RoPE, attention scale folded into Wq)
   tt/runner.py                 TracedReranker: one trace per (batch {1,8,32}) x (length bucket), batching by bucket
-  tt/custom_ops/               generic_op kernels: matmul_qkv_rope (QKV matmul + head split + RoPE), fused_add_rmsnorm
-                               (from pplx_embed_4b), matmul_add_norm (experimental), fused_heads_rope (previous path)
+  tt/custom_ops/               generic_op kernels: matmul_qkv_rope (QKV matmul + head split + RoPE), matmul_add_norm
+                               (WO / FF2 + residual add + RMSNorm on the L1-resident residual; embed_rmsnorm),
+                               fused_add_rmsnorm (from pplx_embed_4b, < 4096 rows), fused_heads_rope (previous path)
   reference/hf_reference.py    HF CPU reference
   demo/serve.py                FastAPI rerank server
   demo/generator_vllm.py       NemotronRerankForScoring (same interface as bge_m3's BgeM3ForEmbedding)
@@ -73,7 +74,8 @@ token ids; the worker packs pairs by length bucket into traced batches of 1 / 8 
 | `GET /health`, `/v1/models`, `/metrics` | | readiness, model id, per-request tokenize / device / wall ms |
 
 `relevance_score` is sigmoid(logit) (`--score raw` returns the logit); `logit` is always included.
-One P150, MIRACL-en through the server at concurrency 4: 132 pairs/s, nDCG@10 0.6840 (HF 0.6840).
+One P150, MIRACL-en through the server at concurrency 4: 172 pairs/s, nDCG@10 0.6844 (HF 0.6840),
+Pearson 0.99960 vs HF fp32.
 
 ## Accuracy
 
@@ -83,8 +85,8 @@ and nDCG@10 within 0.015 of HF.
 | | mean abs logit error | Pearson | nDCG@10 | MRR@10 |
 |---|---|---|---|---|
 | HF bf16 (CPU) | 0.064 | 0.99997 | 0.6845 | 0.6486 |
-| this model, batch 8 | 0.207 | 0.99962 | 0.6835 | 0.6486 |
-| this model, batch 32 | 0.212 | 0.99962 | 0.6859 | 0.6486 |
+| this model, batch 8 | 0.205 | 0.99966 | 0.6745 | 0.6361 |
+| this model, batch 32 | 0.235 | 0.99956 | 0.6841 | 0.6486 |
 | HF fp32 (reference) | 0 | 1 | 0.6840 | 0.6486 |
 
 ## Performance (one P150)
@@ -93,27 +95,33 @@ Traced forward, inputs on device. "Sustained" is the median of the second half o
 board holds its 150 W limit by lowering the clock from 1.35 GHz to about 0.95 GHz, so it is the number a
 loaded server sees; "best" is at full clock.
 
-| batch x tokens | after bring-up | now, sustained | now, best | speed of light (cycles) |
+| batch x tokens | after bring-up | now, sustained | now, best | speed of light (kernel cycles) |
 |---|---|---|---|---|
-| 1 x 128 | 12.8 ms | 5.97 ms | 5.96 ms | |
-| 1 x 512 | 15.6 ms | 7.50 ms | 7.47 ms | 35.0 % |
-| 8 x 512 | 76.2 ms | 48.8 ms | 40.5 ms | 50.9 % |
-| 32 x 512 | 329 ms | 192 ms | 140 ms | 59.4 % (63.7 % with matmul_qkv_rope) |
-| 1 x 2048 | 46.5 ms | 27.4 ms | 25.5 ms | 49.9 % |
-| 1 x 8192 | 362 ms | 197 ms | 150 ms | 58.4 % |
+| 1 x 128 | 12.8 ms | 6.31 ms | 6.31 ms | |
+| 1 x 512 | 15.6 ms | 7.80 ms | 7.80 ms | 33.7 % |
+| 8 x 512 | 76.2 ms | 39.0 ms | 35.5 ms | 58.6 % |
+| 32 x 512 | 329 ms | 174 ms | 110 ms | **75.1 %** (148.4 M cycles) |
+| 1 x 2048 | 46.5 ms | 25.0 ms | 24.5 ms | 51.9 % |
+| 1 x 8192 | 362 ms | 187 ms | 137 ms | 64.1 % |
 
 Speed of light: ideal cycles for the matmuls and attention at the precision each op runs at
 (130 cores x 4096 FLOP/cycle LoFi, / 2 for HiFi2, / 4 for HiFi4), divided by the sum of the ops' device
 kernel cycles (`perf_tools/opsol.py`). Kernel durations, not firmware windows: an op that runs on fewer
 cores than the next lets the idle cores start the next op's firmware early, so firmware windows overlap
-and double count. The kernel-cycle totals match wall time at the measured clock (32x512: 187.8 M cycles
-in 140 ms = 1.34 GHz).
+and double count. The kernel-cycle totals match wall time at full clock (32x512: 148.4 M cycles in
+110 ms = 1.35 GHz). Each shape was benchmarked in its own process on an idle board; right after a large
+shape the board is still throttled and "best" can read 20-40 % higher.
 
-The latency columns predate matmul_qkv_rope and the bf16-accumulation configs (not re-measured). Now
-32 x 512 is 169.7 M kernel cycles = 65.7 % of speed of light (was 185.2 M). Per op (share of cycles, % of
-that op's compute speed of light): FF1+FF3 fused SwiGLU 46 % (85 %), residual add + RMSNorm 14 % (366 GB/s;
-plain streaming ops reach 417-437 GB/s, perf_tools/probe_dram_bw.py), FF2 12 % (78 %), QKV + head split +
-RoPE 11 % (65 %), SDPA 8 % (58 %), WO 7 % (70 %).
+32 x 512 per op (share of cycles, % of that op's compute speed of light):
+
+| op | M cycles | share | of its SoL |
+|---|---|---|---|
+| FF1 + FF3 + SwiGLU (`minimal_matmul`, HiFi2) | 77.8 | 52 % | 85 % |
+| FF2 + residual add + RMSNorm (`matmul_add_norm`, LoFi) | 24.3 | 16 % | 68 % |
+| QKV + head split + RoPE (`matmul_qkv_rope`, HiFi2) | 18.6 | 13 % | 67 % |
+| SDPA (HiFi4) | 14.3 | 10 % | 58 % |
+| WO + residual add + RMSNorm (`matmul_add_norm`, HiFi2) | 13.0 | 9 % | 64 % |
+| embedding + first RMSNorm (`embed_rmsnorm`), score head, mask | 0.7 | 0.5 % | |
 
 ## What was done
 
@@ -138,6 +146,10 @@ Data movement, in the order they landed (32x512 unless noted):
 | activations up to 8.5 MB in L1 | bs1 intermediates never touch DRAM | 1x512 10.1 -> 8.9 ms |
 | block-sharded RMSNorm up to 512 rows | stock rms_norm gives each core whole tile rows (16 cores at 512 rows) | 1x128 7.03 -> 6.27 ms |
 | bfp8 matmul inputs (norm outputs, SwiGLU product) and bfp8 WO / FF2 outputs | half the bytes between ops; `minimal_matmul` runs best with in0 and weight in one dtype | FF2 38.7 -> 28.0 M cycles |
+| L1-resident residual stream; WO and FF2 fused with the residual add + RMSNorm (`matmul_add_norm`) | the residual lives in L1 for the whole forward, block-sharded like the fused matmul's 13 x 10 grid (uneven shards, no padded copy); the matmul's output block never leaves L1, the epilogue adds it to the core's residual slice in place and writes only the normed output. The cores sharing rows swap partial sums of squares over the NoC. With the residual read from and written to DRAM in the epilogue, the matmul itself ran ~40 % slower | 169.7 -> 160.1 M cycles |
+| RMSNorm gammas folded into the next matmul's weight rows (QKV, FF1+FF3, score head) | the fused norms skip the gamma multiply | part of 160.1 -> 151.6 M cycles |
+| `embed_rmsnorm`: the embedding gathered straight into the resident residual, then the first RMSNorm | replaces `ttnn.embedding` (tiles to DRAM), the copy into the L1 shards and the norm: the 10 cores holding a row block split each 32-token tile-row, read whole 4 KB embedding rows (32 slices of 448 B per core ran DRAM at ~175 GB/s) and write each peer's column slice into its staging; the compute tilizes and normalizes block by block as rows arrive | 645 -> 304 us; 150.4 -> 149.9 M cycles |
+| fused norm statistic on the FPU | the epilogue squared each h tile on the SFPU (~200 cycles a tile) and row-summed 7 packed x^2 tiles; now the FPU multiplies each packed h tile by itself into one accumulating DST tile per row (HiFi2) and row-sums that one tile, with one pack -> unpack handoff per block instead of per row | FF2 1209 -> 1150 us, WO 664 -> 612 us per layer; 149.8 -> 148.4 M cycles |
 
 Knobs on compute ops: `minimal_matmul` block sizes swept per weight and row count (`perf_tools/sweep_mm.py`,
 FF1+FF3 at 512 rows 210 -> 108 us); FF2 at LoFi (accuracy unchanged); SDPA q / k chunks per shape
@@ -145,18 +157,20 @@ FF1+FF3 at 512 rows 210 -> 108 us); FF2 at LoFi (accuracy unchanged); SDPA q / k
 (Pearson 0.9992-0.9993), bfp4 weights (0.987), HiFi2 SDPA (mean error 0.23 -> 0.30), bfp8 residual
 stream (0.99944). No effect: raising the power limit (the card stays at 150 W).
 
-## Open items toward 75 % of speed of light
+## Open items
 
-* 32x512 needs 21 M fewer cycles (170 -> 149 M). The matmuls and SDPA alone take ~147 M, so 75 % needs both
-  the residual add + RMSNorm (24 M) hidden inside the matmuls and every compute op near 80 % of its limit
-  (FF1+FF3, the largest, is at 84 %; the plain matmul of that shape tops out near 86 %).
-* `tt/custom_ops/matmul_add_norm` fuses WO / FF2 with the residual add and RMSNorm (cores sharing rows exchange
-  partial sums of squares over the NoC). It is correct (y PCC 0.99996 vs torch) but slower than the two ops it
-  replaces (WO 1110-1135 vs 1135 us, FF2 1745-1789 vs 1686 us at 16384 rows): the matmul starves once the
-  epilogue's residual / output traffic runs. Not the cause: flush coupling, in0 / in1 buffer depth, DRAM
-  locality, posted writes, y in L1, issuing the traffic only while the weight relay waits. Multicasting in1 from
-  the x = 0 column instead of relaying it core to core (`IN1_MCAST`, correct) does not help either (WO 1110 us, FF2 1734 us).
-* Tried and rejected: bfp8 Q / K / V into SDPA (Pearson 0.99927), approximate silu in the SwiGLU (no change),
-  bf16 accumulation with 8-tile subblocks on FF1+FF3 (-1.8 %).
-* bs1 (35 %): the matmuls at 512 rows run at 27-52 % of their limit; FF2 at LoFi is bound by its weight
-  read. DRAM-sharded weights are the next step.
+* 32 x 512 is at 75.1 % of speed of light. The rest is spread over the ops: FF1 + FF3 is at 85 % (every
+  `minimal_matmul` block config of that shape lands within 1 %, `perf_tools/sweep_mm.py`); the fused
+  WO / FF2 matmuls run at ~76-84 % of their limit inside their K loops (FF2 at LoFi with 4 x 1 subblocks, which
+  the 7-tile N slice per core forces) plus ~8 % of epilogue; QKV + RoPE's matmul runs at ~80 % of HiFi2 peak and
+  waits ~10 % on its inputs (the rotation itself is ~1.5 %); SDPA's softmax bounds it (HiFi2 matmuls are no
+  faster). The 13 x 10 grid costs 3 % (FF1 + FF3) to 10 % (WO / FF2: 64 output columns over 10 core rows)
+  in padding.
+* Measured and rejected: bf16 DST with 8-tile subblocks inside the fused ops (slower), full-sync DST, the
+  non-transposed grid (WO 823 vs 628 us), K block 16 for FF2 (does not fit next to the resident residual),
+  interleaving the norm's second pass into the next K loop, LoFi y / RoPE multiplies (no faster; RoPE loses
+  Q / K PCC), a 1D row-split score head (160 vs 149 us), bfp8 Q / K / V into SDPA (Pearson 0.99927), bfp4
+  SwiGLU product, approximate SiLU.
+* bs1 (34 %): the matmuls at 512 rows run at 27-52 % of their limit; FF2 at LoFi is bound by its weight read.
+  DRAM-sharded weights are the next step. 1 x 128 / 1 x 512 read ~0.3 ms slower than in the previous README
+  (5.97 / 7.50 ms), not yet traced to a change.
