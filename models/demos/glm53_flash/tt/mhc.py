@@ -65,7 +65,12 @@ MHC_DECODE_EXACT = os.environ.get("GLM53_MHC_DECODE_EXACT", "1") == "1"
 # program replaces the projection, Sinkhorn, mix and norm ops and hands the post-block its lane-layout
 # coefficients (needs GLM53_MHC_POST_KERNEL=2)
 # (2: the exact SFPU projection variant of the op)
-MHC_PRE_BLOCK = int(os.environ.get("GLM53_MHC_PRE_BLOCK", "0"))
+# Defaults since 2026-10-28: the fused pre-block (PRE_BLOCK=1) with the fused Sinkhorn and the "extras" splits passed
+# the 45-layer 8x4 logits gate (pcc 0.9952, top-1 93.0 %, top-5 95.5 % vs 0.9946 / 93.0 / 93.1 for the former defaults;
+# PRE_BLOCK=1 alone failed it at 0.8455) and one e2e run: traced decode 61.5 ms (16.3 tok/s per user at 32 users, 520
+# aggregate) vs 70.35 ms, warm 128-token prefill 866 vs 905 ms, chain pcc 0.947 vs 0.862 (_logs/mesh/sched_validate.log,
+# logits_8x4_mhcknobs + e2e_8x4_B4_mhcknobs). The former values stay selectable through the same variables.
+MHC_PRE_BLOCK = int(os.environ.get("GLM53_MHC_PRE_BLOCK", "1"))
 # GLM53_MHC_PREFILL_IMPL=wrap (with GLM53_MHC_IMPL=fast): the composite wrap serves the prefill rows, the fast path
 # the decode tile (A/B of the prefill numerics; see TtMHCSplit)
 MHC_PREFILL_IMPL = os.environ.get("GLM53_MHC_PREFILL_IMPL", "wrap" if MHC_IMPL == "fast" else "")
@@ -127,19 +132,19 @@ assert MHC_KSUM in ("exact", "fast"), MHC_KSUM
 # ops on the coordinator core, ~52 us per wrap); "fused" = one dest pass per normalisation (matmul, [+eps], recip,
 # m copied in, SFPU multiply: 2*iters + 3 passes, ~20 us expected). A bounded rounding change (fp32 SFPU products where
 # the LLK sequence multiplied through 19-bit FPU operands): logits gate required before it becomes the default.
-MHC_PRE_SINKHORN = os.environ.get("GLM53_MHC_PRE_SINKHORN", "llk")
+MHC_PRE_SINKHORN = os.environ.get("GLM53_MHC_PRE_SINKHORN", "fused")
 assert MHC_PRE_SINKHORN in ("llk", "fused"), MHC_PRE_SINKHORN
 # the fused pre-block's work split: "cols" = 128 column tiles over the grid (two on each of the first 8 cores of a 12x10
 # grid: they bound the projection phase); "extras" = a two-column core projects only its first column, the second's 4
 # stream tiles are projected by 4 single-column non-leader cores (12x10: critical path 10 -> 7 cost units; 13x10 / 8x8
 # unchanged by construction). Same partial sums, grouped differently: bit-level agreement is not guaranteed (fp32 adds
 # in a different order), PCC-level is.
-MHC_PRE_SPLIT = os.environ.get("GLM53_MHC_PRE_SPLIT", "cols")
+MHC_PRE_SPLIT = os.environ.get("GLM53_MHC_PRE_SPLIT", "extras")
 assert MHC_PRE_SPLIT in ("cols", "extras"), MHC_PRE_SPLIT
 # the post-mix kernel's work split: "tile" = one (token-tile, column-tile) position per unit (128 over 120 cores: 8
 # cores take two); "extras" = those 8 cores' second positions split by output stream over 32 one-position cores
 # (critical path 12 -> 9 cost units; every output tile is still computed by exactly one core: bit-identical)
-MHC_POST_SPLIT = os.environ.get("GLM53_MHC_POST_SPLIT", "tile")
+MHC_POST_SPLIT = os.environ.get("GLM53_MHC_POST_SPLIT", "extras")
 assert MHC_POST_SPLIT in ("tile", "extras"), MHC_POST_SPLIT
 # D13: the residual-stream layout over the TP columns. "replicated" = every column chip holds the packed [B, 4*C]
 # streams (today); "colsharded" = each column chip holds its C/4 columns of every stream (design only: see

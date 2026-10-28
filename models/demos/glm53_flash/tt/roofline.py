@@ -154,7 +154,7 @@ class Layout:
     link_gbs: float = chip("eth_link_gbs")
     links: int = chip("links_per_axis")
     topology: str = "line"  # line | ring (CCL fits)
-    mhc_pre_block: bool = False  # A1 fused pre-block (GLM53_MHC_PRE_BLOCK=1, off by default)
+    mhc_pre_block: bool = True  # A1 fused pre-block (GLM53_MHC_PRE_BLOCK, on by default since 2026-10-28)
     dsa_state_fused: bool = False  # B5 (GLM53_DSA_DECODE_STATE=1, off by default)
     # speculative decode (tt/spec_decode.py): K drafts per user, R = B (K + 1) candidate rows per chip in the verify
     spec_k: int = 0
