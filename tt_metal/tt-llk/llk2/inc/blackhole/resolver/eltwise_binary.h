@@ -37,7 +37,7 @@ constexpr DataFormat eltwise_binary_dest_format(DataFormat in, bool dest_fp32)
 }
 
 /// in1 is one row of tiles spread over every row of in0's tiles.
-constexpr bool is_single_tile_row(const TensorSpec<6>& in0, const TensorSpec<6>& in1)
+constexpr bool is_eltwise_binary_bias_row(const TensorSpec<6>& in0, const TensorSpec<6>& in1)
 {
     return in1.shape.sizes[TileY] == 1 && in1.shape.sizes[TileX] == in0.shape.sizes[TileX];
 }
@@ -54,7 +54,7 @@ constexpr bool eltwise_binary_accepts(const TensorSpec<6>& in0, const TensorSpec
 {
     const bool tiles = is_eltwise_binary_tile(in0) && is_eltwise_binary_tile(in1);
     // No broadcast: the same tiles. Row: in1 is one row of tiles, its top row broadcast down each tile.
-    const bool shapes = m.bcast == Broadcast::None ? equal(in0.shape.sizes, in1.shape.sizes) : m.bcast == Broadcast::Row && is_single_tile_row(in0, in1);
+    const bool shapes = m.bcast == Broadcast::None ? equal(in0.shape.sizes, in1.shape.sizes) : m.bcast == Broadcast::Row && is_eltwise_binary_bias_row(in0, in1);
     // Both operands are read in SrcA's style (ELWADD.md): same exponent width, floats only for now.
     const bool formats = src_register_format(in0.format, s.dest_fp32) != DataFormat::Invalid &&
                          src_register_format(in1.format, s.dest_fp32) != DataFormat::Invalid && !is_integer_format(in0.format) &&
