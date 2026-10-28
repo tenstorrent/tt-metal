@@ -9,6 +9,7 @@
 #include <tt-metalium/constants.hpp>
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/kda/factory/kda_factory_utils.hpp"
 #include "ttnn/operations/experimental/kda/kda_performance_model.hpp"
 
@@ -44,6 +45,10 @@ void AffineExclusiveScanOperation::validate_on_program_cache_miss(
     kda_factory_detail::check_same_device(in.summaries, in.initial_state, operation_name, "initial_state");
     kda_factory_detail::check_output_interleaved(attrs.output_mem_config, operation_name);
     kda_factory_detail::check_compute_config(attrs.compute_kernel_config, operation_name);
+    TT_FATAL(
+        std::get<2>(get_compute_kernel_config_args(in.summaries.device()->arch(), attrs.compute_kernel_config)),
+        "{}: fp32_dest_acc_en=false is unsupported because A = E + I is formed in FP32 DST",
+        operation_name);
 
     TT_FATAL(
         summary.transforms == attrs.batch_heads * attrs.groups_per_head && summary.key_dim == attrs.key_dim &&
@@ -148,7 +153,7 @@ Tensor affine_exclusive_scan(
     TT_FATAL(shape.rank() == 4, "affine_exclusive_scan: summaries must be rank 4 [S, N, K, K+V]");
     TT_FATAL(shape[1] > 0, "affine_exclusive_scan: summaries must hold at least one transform");
     TT_FATAL(shape[1] % groups == 0, "affine_exclusive_scan: transforms per slot must be divisible by groups_per_head");
-    TT_FATAL(shape[3] > shape[2], "affine_exclusive_scan: summary rows must be [A | B]");
+    TT_FATAL(shape[3] > shape[2], "affine_exclusive_scan: summary rows must be [E | B]");
     auto outputs = ::ttnn::device_operation::launch<AffineExclusiveScanOperation>(
         AffineExclusiveScanParams{
             .batch_heads = static_cast<uint32_t>(shape[1]) / groups,

@@ -8,7 +8,7 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_xy_device_params
-from models.demos.deepseek_v3_d_p.tt.kda.recurrence import AffineTransform, distributed_prefix, pack_transform
+from models.demos.deepseek_v3_d_p.tt.kda.recurrence import distributed_prefix
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
     assert_bit_identical,
@@ -52,15 +52,6 @@ def test_chain_affine_transforms_matches_reference(mesh_device, start):
     initial = 0.1 * torch.randn(_HEADS, _KEY, _VALUE, generator=generator)
     mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=(sp_size, tp_size))
 
-    def per_rank(host):
-        return ttnn.from_torch(
-            host.reshape((-1,) + host.shape[2:]),
-            dtype=ttnn.float32,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            mesh_mapper=mapper,
-        )
-
     def replicated(host, dtype, memory_config=ttnn.DRAM_MEMORY_CONFIG):
         return ttnn.from_torch(
             host,
@@ -74,8 +65,14 @@ def test_chain_affine_transforms_matches_reference(mesh_device, start):
     compute_config = ttnn.init_device_compute_kernel_config(
         mesh_device.arch(), math_fidelity=ttnn.MathFidelity.HiFi2, fp32_dest_acc_en=True, packer_l1_acc=False
     )
+    # The prefix chains each rank's complement form [E | B], E = A - I, packed in BF16 as reduce_affine_transforms
+    # and the packed summary head publish it.
+    packed_host = torch.cat([a - torch.eye(_KEY), b], dim=-1).bfloat16()
+    packed = ttnn.from_torch(
+        packed_host, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device, mesh_mapper=mapper
+    )
     entry, final = distributed_prefix(
-        pack_transform(AffineTransform(per_rank(a), per_rank(b))),
+        packed,
         replicated(initial, ttnn.float32),
         sequence_parallel_axis=0,
         compute_config=compute_config,
@@ -84,19 +81,26 @@ def test_chain_affine_transforms_matches_reference(mesh_device, start):
     )
 
     first_rank = (start // _ROWS) % sp_size
-    # The op-by-op chain the kernel replaced: per rank a BF16 -> FP32 typecast, an FP32 matmul and an FP32 add.
+    # The op-by-op chain the kernel replaced: per rank a BF16 -> FP32 typecast of the packed E and B, an FP32 matmul
+    # and the FP32 adds carry + (E @ carry + B).
     working = ttnn.L1_MEMORY_CONFIG
     op_by_op_carry = replicated(initial.reshape(1, _HEADS, _KEY, _VALUE), ttnn.float32, working)
     op_by_op_entries = {}
     for step in range(sp_size):
         rank = (first_rank + step) % sp_size
         op_by_op_entries[rank] = op_by_op_carry
-        transform_a = ttnn.typecast(replicated(a[rank : rank + 1], ttnn.bfloat16, working), ttnn.float32)
-        transform_b = ttnn.typecast(replicated(b[rank : rank + 1], ttnn.bfloat16, working), ttnn.float32)
-        product = ttnn.matmul(
-            transform_a, op_by_op_carry, memory_config=working, dtype=ttnn.float32, compute_kernel_config=compute_config
+        transform_e = ttnn.typecast(
+            replicated(packed_host[rank][None, :, :, :_KEY], ttnn.bfloat16, working), ttnn.float32
         )
-        op_by_op_carry = ttnn.add(product, transform_b, memory_config=working)
+        transform_b = ttnn.typecast(
+            replicated(packed_host[rank][None, :, :, _KEY:], ttnn.bfloat16, working), ttnn.float32
+        )
+        product = ttnn.matmul(
+            transform_e, op_by_op_carry, memory_config=working, dtype=ttnn.float32, compute_kernel_config=compute_config
+        )
+        op_by_op_carry = ttnn.add(
+            op_by_op_carry, ttnn.add(product, transform_b, memory_config=working), memory_config=working
+        )
 
     carry = initial
     entries = {}

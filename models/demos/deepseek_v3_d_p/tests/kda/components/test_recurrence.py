@@ -530,8 +530,16 @@ def test_distributed_prefix_preserves_noncommuting_order_and_tp_lines(
         )
         return ttnn.reshape(tensor, (1, 32, 32))
 
+    # Each rank's packed complement form [E | B], E = A - I (exact in BF16 here), as the reduction publishes it.
+    packed = ttnn.from_torch(
+        torch.cat([a - torch.eye(32), b], dim=-1),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, 1), mesh_shape=(2, 4)),
+    )
     entry, final = recurrence.distributed_prefix(
-        recurrence.pack_transform(recurrence.AffineTransform(to_mesh(a, (0, 1)), to_mesh(b, (0, 1)))),
+        packed,
         to_mesh(initial, (None, 1)),
         sequence_parallel_axis=0,
         compute_config=ttnn.init_device_compute_kernel_config(
