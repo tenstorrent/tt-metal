@@ -464,6 +464,9 @@ public:
 
     size_t get_configured_risc_count() const;
 
+    // One past the last byte of L1 the router uses.
+    size_t get_allocated_l1_end_address() const;
+
     // Returns the resolved kernel build optimization level for this router.
     // This opt-level is per-builder/router, and should not be shared across builders.
     [[nodiscard]] tt::tt_metal::KernelBuildOptLevel get_kernel_opt_level() const;
