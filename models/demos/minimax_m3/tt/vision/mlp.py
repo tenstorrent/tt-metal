@@ -29,7 +29,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.minimax_m3.tt.vision.common import as_linear_bias, as_linear_weight, hifi4_compute_config
+from models.demos.minimax_m3.tt.vision.common import as_linear_bias, as_linear_weight, linear_compute_config
 
 
 class M3VLMLP(LightweightModule):
@@ -69,8 +69,8 @@ class M3VLMLP(LightweightModule):
         self.fc2_weight = as_linear_weight(mesh_device, fc2_weight, dtype)
         self.fc2_bias = as_linear_bias(mesh_device, fc2_bias, dtype)
 
-        # HiFi4 + FP32 dst accum for the matmuls (small accuracy boost).
-        self.compute_kernel_config = hifi4_compute_config()
+        # HiFi4 + FP32 dst accum for the matmuls (small accuracy boost), partial sums accumulated in L1.
+        self.compute_kernel_config = linear_compute_config()
 
     @classmethod
     def from_torch(

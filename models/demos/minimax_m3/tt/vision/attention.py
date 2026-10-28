@@ -39,6 +39,7 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.minimax_m3.tt.vision.common import (
     hifi4_compute_config,
+    linear_compute_config,
     mesh_mapper,
     next_tile_multiple,
     sdpa_program_config,
@@ -176,7 +177,10 @@ class M3VLAttention(LightweightModule):
             mesh_mapper=mm,
         )
 
-        self.compute_kernel_config = hifi4_compute_config()
+        # QKV and the output projection accumulate in L1; RoPE's x @ R and SDPA keep the plain HiFi4 config.
+        self.compute_kernel_config = linear_compute_config()
+        self.rope_compute_kernel_config = hifi4_compute_config()
+        self.sdpa_compute_kernel_config = hifi4_compute_config()
         self.sdpa_program_config = sdpa_program_config(mesh_device)
 
     @classmethod
@@ -257,7 +261,7 @@ class M3VLAttention(LightweightModule):
 
     def _apply_rope(self, x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
         """x*cos + (x @ R)*sin, broadcasting cos/sin over the head axis."""
-        x_rot = ttnn.matmul(x, self.rotate_mat, compute_kernel_config=self.compute_kernel_config)
+        x_rot = ttnn.matmul(x, self.rotate_mat, compute_kernel_config=self.rope_compute_kernel_config)
         out = ttnn.add(ttnn.mul(x, cos), ttnn.mul(x_rot, sin))
         ttnn.deallocate(x_rot)
         return out
@@ -298,7 +302,7 @@ class M3VLAttention(LightweightModule):
             is_causal=False,
             scale=self.scale,
             program_config=self.sdpa_program_config,
-            compute_kernel_config=self.compute_kernel_config,
+            compute_kernel_config=self.sdpa_compute_kernel_config,
         )
         ttnn.deallocate(q_heads)
         ttnn.deallocate(k_heads)
