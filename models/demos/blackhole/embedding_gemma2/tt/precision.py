@@ -12,12 +12,13 @@ or from the file named by `EMBEDDING_GEMMA2_PRECISION` when that variable is set
 Schema (`text` section; every key is required, unknown keys are rejected):
 
     weights           {group: {"dtype": bf16|bfp8|bfp4, "fidelity": LoFi|HiFi2|HiFi3|HiFi4,
-                               "fp32_acc": bool}} for the groups in TEXT_WEIGHT_GROUPS
+                               "fp32_acc": bool, "out_dtype": bf16|bfp8}} for the groups in
+                      TEXT_WEIGHT_GROUPS; `out_dtype` is the dtype of the projection's output
+                      activation (the activation dtype, per group)
     layer_exceptions  [{"layers": [i, ...], "weights": {group: {...}}, "sdpa": {...}}]  later
                       entries win; a key left out keeps the global value
     sdpa              {"fidelity", "fp32_acc", "exp_approx"}
     norms             {"fidelity", "fp32_acc"}             every text RMSNorm
-    activation_dtype  bf16|bfp8   dtype of every text projection output
     residual_dtype    bf16|bfp8   dtype of the residual stream (h1, h2, layer output)
     mask_dtype        bf16|bfp8|bfp4   additive attention masks
 
@@ -101,14 +102,16 @@ class MatmulPolicy:
     dtype: str
     fidelity: str
     fp32_acc: bool
+    out_dtype: str
 
     @classmethod
     def from_dict(cls, d: dict, where: str) -> "MatmulPolicy":
-        _require(d, ("dtype", "fidelity", "fp32_acc"), where)
+        _require(d, ("dtype", "fidelity", "fp32_acc", "out_dtype"), where)
         return cls(
             _check(d["dtype"], _DTYPES, f"{where}.dtype"),
             _check(d["fidelity"], _FIDELITIES, f"{where}.fidelity"),
             _bool(d["fp32_acc"], f"{where}.fp32_acc"),
+            _check(d["out_dtype"], _ACT_DTYPES, f"{where}.out_dtype"),
         )
 
     @property
@@ -116,11 +119,15 @@ class MatmulPolicy:
         return _DTYPES[self.dtype]
 
     @property
+    def out_ttnn_dtype(self):
+        return _DTYPES[self.out_dtype]
+
+    @property
     def compute_kernel_config(self):
         return compute_kernel_config(self.fidelity, self.fp32_acc, True)
 
     def to_dict(self) -> dict:
-        return {"dtype": self.dtype, "fidelity": self.fidelity, "fp32_acc": self.fp32_acc}
+        return {"dtype": self.dtype, "fidelity": self.fidelity, "fp32_acc": self.fp32_acc, "out_dtype": self.out_dtype}
 
 
 @dataclass(frozen=True)
@@ -191,7 +198,6 @@ _TEXT_KEYS = (
     "layer_exceptions",
     "sdpa",
     "norms",
-    "activation_dtype",
     "residual_dtype",
     "mask_dtype",
 )
@@ -203,7 +209,6 @@ class TextPrecision:
     layer_exceptions: tuple[LayerException, ...]
     sdpa: SDPAPolicy
     norms: NormPolicy
-    activation_dtype: str
     residual_dtype: str
     mask_dtype: str
 
@@ -222,7 +227,6 @@ class TextPrecision:
             layer_exceptions=exceptions,
             sdpa=SDPAPolicy.from_dict(d["sdpa"], "text.sdpa"),
             norms=NormPolicy.from_dict(d["norms"], "text.norms"),
-            activation_dtype=_check(d["activation_dtype"], _ACT_DTYPES, "text.activation_dtype"),
             residual_dtype=_check(d["residual_dtype"], _ACT_DTYPES, "text.residual_dtype"),
             mask_dtype=_check(d["mask_dtype"], _MASK_DTYPES, "text.mask_dtype"),
         )
@@ -242,10 +246,6 @@ class TextPrecision:
             if layer_idx in exc.layers and exc.sdpa is not None:
                 policy = exc.sdpa
         return policy
-
-    @property
-    def activation_ttnn_dtype(self):
-        return _DTYPES[self.activation_dtype]
 
     @property
     def residual_ttnn_dtype(self):

@@ -52,7 +52,6 @@ class PerLayerInput(LightweightModule):
         self.compute_kernel_config = compute_kernel_config_hifi4()
         precision = precision or resolve_precision(None).text
         self.policy = precision.matmul("ple_proj")
-        self.act_dtype = precision.activation_ttnn_dtype
 
     @classmethod
     def from_state_dict(
@@ -94,7 +93,7 @@ class PerLayerInput(LightweightModule):
             self.proj_weight,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             policy=self.policy,
-            dtype=self.act_dtype,
+            dtype=self.policy.out_ttnn_dtype,
         )
 
     def layer_input(self, projection: ttnn.Tensor, layer_idx: int) -> ttnn.Tensor:
@@ -124,7 +123,6 @@ class PerLayerInputBlock(LightweightModule):
         self.compute_kernel_config = compute_kernel_config_hifi4()
         precision = precision or resolve_precision(None).text
         self.policy = precision.matmul("ple_block", config.layer_idx)
-        self.act_dtype = precision.activation_ttnn_dtype
         self.residual_dtype = precision.residual_ttnn_dtype
 
     @classmethod
@@ -169,7 +167,8 @@ class PerLayerInputBlock(LightweightModule):
         (SFPU post-activation), so the sum is rounded to bf16 once instead of twice."""
         B, S = hidden_states.shape[0], hidden_states.shape[2]
         mem = act_memory_config(hidden_states.device(), B, S, self.config.hidden_size)
-        p, dt = self.policy, self.act_dtype
+        p = self.policy
+        dt = p.out_ttnn_dtype
         gated = gated_product(hidden_states, self.w_gate, per_layer_input, memory_config=mem, policy=p, dtype=dt)
         proj = linear(gated, self.w_proj, memory_config=mem, policy=p, dtype=dt)
         ttnn.deallocate(gated)

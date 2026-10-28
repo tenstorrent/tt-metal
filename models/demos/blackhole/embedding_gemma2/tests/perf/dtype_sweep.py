@@ -44,8 +44,8 @@ GROUPS = ("attn_qkv", "attn_o", "mlp_gate_up", "mlp_down", "ple_proj", "ple_bloc
 FULL_LAYERS = [5, 11, 17, 23]
 
 
-def _mm(dtype="bfp8", fidelity="HiFi2", fp32_acc=True):
-    return {"dtype": dtype, "fidelity": fidelity, "fp32_acc": fp32_acc}
+def _mm(dtype="bfp8", fidelity="HiFi2", fp32_acc=True, out_dtype="bf16"):
+    return {"dtype": dtype, "fidelity": fidelity, "fp32_acc": fp32_acc, "out_dtype": out_dtype}
 
 
 BASELINE = {
@@ -57,7 +57,6 @@ BASELINE = {
         "layer_exceptions": [],
         "sdpa": {"fidelity": "HiFi2", "fp32_acc": True, "exp_approx": False},
         "norms": {"fidelity": "HiFi4", "fp32_acc": True},
-        "activation_dtype": "bf16",
         "residual_dtype": "bf16",
         "mask_dtype": "bfp4",
     },
@@ -93,7 +92,14 @@ def _candidates() -> dict[str, tuple[str, dict]]:
         "norms without fp32 accumulation",
         {"text": {"norms": {"fidelity": "HiFi4", "fp32_acc": False}}},
     )
-    c["act_bfp8"] = ("projection outputs bfp8", {"text": {"activation_dtype": "bfp8"}})
+    # activation dtype = projection output dtype, per group (`out_dtype`)
+    c["act_bfp8"] = ("every projection output bfp8", _weights(GROUPS, out_dtype="bfp8"))
+    c["act_bfp8_nofinal"] = (
+        "every projection output bfp8 except final_proj",
+        _weights([g for g in GROUPS if g != "final_proj"], out_dtype="bfp8"),
+    )
+    for g in GROUPS[:-1]:
+        c[f"act_bfp8_{g}"] = (f"{g} output bfp8", _weights([g], out_dtype="bfp8"))
     c["resid_bfp8"] = ("residual stream bfp8", {"text": {"residual_dtype": "bfp8"}})
     c["mask_bfp8"] = ("masks bfp8", {"text": {"mask_dtype": "bfp8"}})
     c["mask_bf16"] = ("masks bf16", {"text": {"mask_dtype": "bf16"}})
@@ -345,7 +351,7 @@ def construction_evidence(model) -> dict:
         return str(ckc.math_fidelity).split(".")[-1]
 
     def mm(p):
-        return {"dtype": p.dtype, "fidelity": p.fidelity, "fp32_acc": p.fp32_acc}
+        return p.to_dict()
 
     ev = {"layers": {}}
     for i, layer in enumerate(model.layers):
@@ -375,7 +381,8 @@ def construction_evidence(model) -> dict:
     ev["ple_proj"] = str(model.per_layer_input.proj_weight.dtype).split(".")[-1]
     ev["final_proj"] = str(model.w_out.dtype).split(".")[-1]
     ev["mask_dtype"] = str(model.masks.dtype).split(".")[-1]
-    ev["activation_dtype"] = str(model.precision.text.activation_ttnn_dtype).split(".")[-1]
+    ev["final_proj_policy"] = model.out_policy.to_dict()
+    ev["ple_proj_policy"] = model.per_layer_input.policy.to_dict()
     return ev
 
 

@@ -4,18 +4,17 @@
   "description": "E5a text policy (pre-sweep baseline): bfp8 weights, HiFi2 + fp32 accumulation matmuls, HiFi2 + fp32 SDPA, HiFi4 norms, bf16 activations and residual, bfp4 masks.",
   "text": {
     "weights": {
-      "attn_qkv": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true},
-      "attn_o": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true},
-      "mlp_gate_up": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true},
-      "mlp_down": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true},
-      "ple_proj": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true},
-      "ple_block": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true},
-      "final_proj": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true}
+      "attn_qkv": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
+      "attn_o": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
+      "mlp_gate_up": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
+      "mlp_down": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
+      "ple_proj": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
+      "ple_block": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
+      "final_proj": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"}
     },
     "layer_exceptions": [],
     "sdpa": {"fidelity": "HiFi2", "fp32_acc": true, "exp_approx": false},
     "norms": {"fidelity": "HiFi4", "fp32_acc": true},
-    "activation_dtype": "bf16",
     "residual_dtype": "bf16",
     "mask_dtype": "bfp4"
   },

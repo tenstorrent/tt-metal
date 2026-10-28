@@ -108,7 +108,7 @@ def _check_model(model, raw: dict, spy: _Spy) -> int:
         kind, ckc, _pc, out_dtype = spy.mm[weight.buffer_address()]
         assert ckc.math_fidelity == _FID[exp["fidelity"]], f"{group} layer {layer}: {ckc.math_fidelity}"
         assert bool(ckc.fp32_dest_acc_en) == exp["fp32_acc"], f"{group} layer {layer}: fp32 acc"
-        assert out_dtype == _DT[t["activation_dtype"]], f"{group} layer {layer}: output dtype {out_dtype}"
+        assert out_dtype == _DT[exp["out_dtype"]], f"{group} layer {layer}: output dtype {out_dtype}"
         n += 4
 
     for i, layer in enumerate(model.layers):
@@ -155,7 +155,7 @@ def test_override_changes_runtime(eg2_device, eg2_state_dict, eg2_config, eg2_ca
     sdpa = dict(base["text"]["sdpa"], exp_approx=not base["text"]["sdpa"]["exp_approx"])
     down = _expected(base["text"], "mlp_down", 1)
     new_down = {"dtype": "bfp4" if down["dtype"] != "bfp4" else "bfp8", "fidelity": "LoFi", "fp32_acc": False}
-    exc_down = {"dtype": "bf16", "fidelity": "HiFi4", "fp32_acc": True}
+    exc_down = {"dtype": "bf16", "fidelity": "HiFi4", "fp32_acc": True, "out_dtype": "bfp8"}
     mask = "bfp8" if base["text"]["mask_dtype"] != "bfp8" else "bf16"
     override = deep_merge(
         base,
@@ -180,6 +180,7 @@ def test_override_changes_runtime(eg2_device, eg2_state_dict, eg2_config, eg2_ca
     assert model.layers[0].mlp.w_down.dtype == ttnn.bfloat16
     assert spy.mm[model.layers[1].mlp.w_down.buffer_address()][1].math_fidelity == ttnn.MathFidelity.LoFi
     assert spy.mm[model.layers[0].mlp.w_down.buffer_address()][1].math_fidelity == ttnn.MathFidelity.HiFi4
+    assert spy.mm[model.layers[0].mlp.w_down.buffer_address()][3] == ttnn.bfloat8_b  # exception out_dtype
     assert bool(spy.sdpa[0][1].exp_approx_mode) == sdpa["exp_approx"]
     assert model.masks.dtype == _DT[mask]
 

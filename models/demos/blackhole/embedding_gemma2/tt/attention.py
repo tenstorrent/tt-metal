@@ -115,7 +115,6 @@ class Attention(LightweightModule):
         i = config.layer_idx
         self.qkv_policy = precision.matmul("attn_qkv", i)
         self.o_policy = precision.matmul("attn_o", i)
-        self.act_dtype = precision.activation_ttnn_dtype
         # E5a default: HiFi2 + fp32 accumulation, 2.0-2.3x faster than HiFi4 at the tuned chunks,
         # PCC vs an fp32 golden 0.99990+ (sdpa_sweep). Fidelity / fp32 acc / exp_approx: policy.
         self.sdpa_policy = precision.sdpa_for(i)
@@ -191,7 +190,8 @@ class Attention(LightweightModule):
         # intermediates in L1 when they fit (config.act_memory_config); the q tensor is the largest
         mem_qkv = act_memory_config(dev, B, S, cfg.q_width + 2 * cfg.kv_width)
         mem_q = mem_kv = act_memory_config(dev, B, S, cfg.q_width)  # one config for the q/k/v heads
-        xqkv = linear(x, self.wqkv, memory_config=mem_qkv, policy=self.qkv_policy, dtype=self.act_dtype)
+        p = self.qkv_policy
+        xqkv = linear(x, self.wqkv, memory_config=mem_qkv, policy=p, dtype=p.out_ttnn_dtype)
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
             xqkv,
             num_heads=cfg.num_heads,
@@ -243,6 +243,7 @@ class Attention(LightweightModule):
 
         if out_memory_config is None:
             out_memory_config = act_memory_config(dev, B, S, cfg.hidden_size)
-        out = linear(o_cat, self.wo, memory_config=out_memory_config, policy=self.o_policy, dtype=self.act_dtype)
+        p = self.o_policy
+        out = linear(o_cat, self.wo, memory_config=out_memory_config, policy=p, dtype=p.out_ttnn_dtype)
         ttnn.deallocate(o_cat)
         return out

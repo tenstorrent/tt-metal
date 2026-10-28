@@ -51,7 +51,6 @@ class MLP(LightweightModule):
             precision = precision or resolve_precision(None).text
             self.gate_up_policy = precision.matmul("mlp_gate_up", layer_idx)
             self.down_policy = precision.matmul("mlp_down", layer_idx)
-            self.act_dtype = precision.activation_ttnn_dtype
 
     @classmethod
     def from_state_dict(
@@ -116,10 +115,10 @@ class MLP(LightweightModule):
     def _forward_optimized(self, x: ttnn.Tensor, out_memory_config) -> ttnn.Tensor:
         B, S = x.shape[0], x.shape[2]
         mem = act_memory_config(x.device(), B, S, self.config.intermediate_size)
-        gu, dt = self.gate_up_policy, self.act_dtype
-        up = linear(x, self.w_up, memory_config=mem, policy=gu, dtype=dt)
-        h = gated_product(x, self.w_gate, up, memory_config=mem, policy=gu, dtype=dt)
+        gu, dn = self.gate_up_policy, self.down_policy
+        up = linear(x, self.w_up, memory_config=mem, policy=gu, dtype=gu.out_ttnn_dtype)
+        h = gated_product(x, self.w_gate, up, memory_config=mem, policy=gu, dtype=gu.out_ttnn_dtype)
         ttnn.deallocate(up)
-        out = linear(h, self.w_down, memory_config=out_memory_config, policy=self.down_policy, dtype=dt)
+        out = linear(h, self.w_down, memory_config=out_memory_config, policy=dn, dtype=dn.out_ttnn_dtype)
         ttnn.deallocate(h)
         return out
