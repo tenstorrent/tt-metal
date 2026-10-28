@@ -352,9 +352,8 @@ private:
     std::exception_ptr stored_exception_;
 };
 
-// State of one parallel_for call. Jobs live in their pool's ring and are reused: workers find the published job
-// through the pool and may still hold it after its call has returned, so each use is a generation and a job is
-// reused only once nobody holds it.
+// State of one parallel_for call, reused from the pool's ring. Workers may still hold a job after its call returns,
+// so each use is a generation and a job is reused only once nobody holds it.
 class ParallelJob {
 public:
     // Each worker that takes part wakes this many others before running its own calls, so that the caller
