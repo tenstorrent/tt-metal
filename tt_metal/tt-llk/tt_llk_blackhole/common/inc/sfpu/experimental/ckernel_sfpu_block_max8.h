@@ -77,31 +77,22 @@ inline sfpi::vFloat load_masked(std::uint32_t band, std::uint32_t valid_scores)
  *
  * These pairs represent two four-row bands from each of the left and right faces.
  * SFPSWAP leaves maxima in the even registers and minima in the odd scratch
- * registers. Each swap is followed immediately by SFPNOP: Blackhole auto-stalls
- * if another SFPU instruction follows, even for independent registers. Keeping
- * each NOP takes two cycles instead of three; it is a scheduling optimization,
- * not a correctness requirement for this non-macro sequence.
+ * registers. Blackhole auto-stalls the next SFPU instruction, so no SFPNOP is needed:
  * https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/TensixTile/TensixCoprocessor/SFPSWAP.md#instruction-scheduling
  */
 inline void max_four_pairs()
 {
     TTI_SFPSWAP(0, 0, 1, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPNOP;
     TTI_SFPSWAP(0, 2, 3, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPNOP;
     TTI_SFPSWAP(0, 4, 5, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPNOP;
     TTI_SFPSWAP(0, 6, 7, p_sfpswap::ALL_ROWS_MAX);
-    TTI_SFPNOP;
 }
 
 /**
  * @brief Rotate all four independent reductions into their odd-numbered scratch LREGs.
  *
  * Each SHFLROR1 rotates right by one instance without mixing physical lanes.
- * Each shuffle is followed immediately by SFPNOP: Blackhole auto-stalls if
- * another SFPU instruction follows. Keeping each NOP takes two cycles instead
- * of three, as described in the Blackhole ISA instruction-scheduling section:
+ * Blackhole auto-stalls the next SFPU instruction, so no SFPNOP is needed:
  * https://github.com/tenstorrent/tt-isa-documentation/blob/main/BlackholeA0/TensixTile/TensixCoprocessor/SFPSHFT2.md#instruction-scheduling
  * @tparam FROM_MAX Select even-numbered maxima as sources; otherwise rotate scratch in place.
  */
@@ -109,13 +100,9 @@ template <bool FROM_MAX>
 inline void shuffle_four_pairs()
 {
     TTI_SFPSHFT2(0, FROM_MAX ? 0 : 1, 1, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPNOP;
     TTI_SFPSHFT2(0, FROM_MAX ? 2 : 3, 3, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPNOP;
     TTI_SFPSHFT2(0, FROM_MAX ? 4 : 5, 5, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPNOP;
     TTI_SFPSHFT2(0, FROM_MAX ? 6 : 7, 7, sfpi::SFPSHFT2_MOD1_SUBVEC_SHFLROR1);
-    TTI_SFPNOP;
 }
 
 /**
@@ -161,28 +148,28 @@ __attribute__((noinline)) inline void reduce_eight_rows(std::uint32_t address)
  *
  * The first/second block resides in instance 3/7, corresponding to even face
  * column 6/14. The two gathered values form one parity of the final four-score
- * row; other instances are zeroed for the later bitwise merge.
+ * row; other instances are zeroed for the later bitwise merge. Selecting
+ * before the shared rotation needs fewer shuffles than rotating each face.
  * @tparam BLOCK Select the first or second eight-score block within each face.
  * @param src_address Left-face physical DST row address for four logical rows.
  */
 template <std::uint32_t BLOCK>
 inline sfpi::vFloat gather_face_blocks(std::uint32_t src_address)
 {
-    constexpr std::uint32_t instance = 3 + 4 * BLOCK;
-    sfpi::vFloat left                = rotate_right<8 - instance>(sfpi::dst_reg[src_address / 2]);
-    sfpi::vFloat right               = rotate_right<9 - instance>(sfpi::dst_reg[(src_address + FACE_R_DIM) / 2]);
-    sfpi::vFloat blocks              = 0.0f;
-    v_if ((sfpi::vConstTileId & static_cast<int>(FACE_C_DIM - 2)) == 0)
+    constexpr int instance = 3 + 4 * BLOCK;
+    sfpi::vFloat right     = rotate_right<1>(sfpi::dst_reg[(src_address + FACE_R_DIM) / 2]);
+    sfpi::vFloat blocks    = 0.0f;
+    v_if ((sfpi::vConstTileId & static_cast<int>(FACE_C_DIM - 2)) == 2 * instance)
     {
-        blocks = left;
+        blocks = sfpi::dst_reg[src_address / 2];
     }
     v_endif;
-    v_if ((sfpi::vConstTileId & static_cast<int>(FACE_C_DIM - 2)) == 2)
+    v_if ((sfpi::vConstTileId & static_cast<int>(FACE_C_DIM - 2)) == (2 * (instance + 1)) % FACE_C_DIM)
     {
         blocks = right;
     }
     v_endif;
-    return blocks;
+    return rotate_right<8 - instance>(blocks);
 }
 
 /**
@@ -206,11 +193,10 @@ __attribute__((noinline)) inline void compact_row_band(std::uint32_t src_address
     sfpi::vFloat row0 = gather_face_blocks<BLOCK>(src_address);
     sfpi::vFloat row1 = row0, row2 = row0, row3 = row0;
     sfpi::subvec_transp(row0, row1, row2, row3);
-    row1 = rotate_right<2>(row1);
-    row2 = rotate_right<4>(row2);
-    row3 = rotate_right<6>(row3);
-    sfpi::vFloat packed =
-        sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(row0) | sfpi::as<sfpi::vUInt>(row1) | sfpi::as<sfpi::vUInt>(row2) | sfpi::as<sfpi::vUInt>(row3));
+    // row0 | rot2(row1) | rot4(row2) | rot6(row3), nested so it takes 6 shuffles instead of 12.
+    sfpi::vFloat packed = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(rotate_right<2>(row3)) | sfpi::as<sfpi::vUInt>(row2));
+    packed              = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(rotate_right<2>(packed)) | sfpi::as<sfpi::vUInt>(row1));
+    packed              = sfpi::as<sfpi::vFloat>(sfpi::as<sfpi::vUInt>(rotate_right<2>(packed)) | sfpi::as<sfpi::vUInt>(row0));
     v_if ((sfpi::vConstTileId >> __builtin_ctz(FACE_C_DIM)) == static_cast<int>(output_row))
     {
         sfpi::dst_reg[dst_address / 2] = packed;
