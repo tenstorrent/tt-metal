@@ -69,6 +69,17 @@ assert len(_MESH_CONFIGS) == len(_MESH_IDS), "combine_fabric2d mesh configs miss
 _PRODUCTION_MESH = [param for param in _MESH_CONFIGS if param.id == "fabric2d-torus-xy-8x4-2link"]
 
 
+def _ring_sp_axis(mesh_device, device_params) -> int:
+    """The SP axis a mesh config runs combine on: axis 0 when it has extent and wraps, else axis 1.
+
+    For the tests that cover one layout per mesh rather than both SP axes: the 8x4 and 8x1 rows ring on
+    axis 0, the 4x4 tray half and the 1x8 row on axis 1.
+    """
+    if mesh_device.shape[0] > 1 and per_axis_topology(device_params["fabric_config"])[0] == ttnn.Topology.Ring:
+        return 0
+    return 1
+
+
 def _expert_dispatch_table(num_routed_experts: int, dispatch_group_size: int, num_dispatch_groups: int):
     """expert -> chip within its own dispatch group, -1 for experts of other groups.
 
@@ -468,7 +479,7 @@ def test_combine_fabric2d_relaunch(mesh_device, device_params, num_links, emb_di
     - Handshake counters: they outlive the launch and only the kernels zero them. A stale one makes the
       next launch read or overwrite slots early; a new draw per launch turns that into wrong slots.
     """
-    cfg = extract_mesh_config(mesh_device)
+    cfg = extract_mesh_config(mesh_device, _ring_sp_axis(mesh_device, device_params))
     plan = [
         ("row-major", ttnn.ROW_MAJOR_LAYOUT, ttnn.bfloat16),
         ("tile", ttnn.TILE_LAYOUT, ttnn.bfloat16),
@@ -479,7 +490,14 @@ def test_combine_fabric2d_relaunch(mesh_device, device_params, num_links, emb_di
     ]
     added = []
     for seed, (label, layout, dtype) in enumerate(plan):
-        fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, emb_dim=emb_dim, seed=20 + seed)
+        fx = _Fixture(
+            mesh_device,
+            cfg.dispatch_group_size,
+            cfg.num_dispatch_groups,
+            emb_dim=emb_dim,
+            seed=20 + seed,
+            sp_axis=cfg.sp_axis,
+        )
         fx.tt_payload(layout, dtype)  # uploaded first, so its tilize program is not counted below
         before = mesh_device.num_program_cache_entries()
         output = fx.run(cfg.sp_axis, num_links, layout=layout, dtype=dtype)
@@ -610,8 +628,8 @@ def test_combine_fabric2d_unsupported_dtype(
     Tokens are sized as BFLOAT16 whatever the input, so a float32 TILE buffer would otherwise pass every
     size check and be moved as the wrong bytes.
     """
-    cfg = extract_mesh_config(mesh_device)
-    fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups)
+    cfg = extract_mesh_config(mesh_device, _ring_sp_axis(mesh_device, device_params))
+    fx = _Fixture(mesh_device, cfg.dispatch_group_size, cfg.num_dispatch_groups, sp_axis=cfg.sp_axis)
     fx.tt_payload(input_layout, input_dtype)
     with expect_error(RuntimeError, "dispatched_buffer must be BFLOAT16"):
         fx.run(cfg.sp_axis, num_links, layout=input_layout, dtype=input_dtype)
@@ -786,11 +804,14 @@ def test_combine_fabric2d_overlapped_skew(mesh_device, device_params, num_links)
     Four payloads in rotation over one routing. A stale page then carries the right destination and fails as
     wrong bytes, rather than as a misrouted token that could hang the ring.
     """
-    cfg = extract_mesh_config(mesh_device)
+    cfg = extract_mesh_config(mesh_device, _ring_sp_axis(mesh_device, device_params))
     H, G = cfg.dispatch_group_size, cfg.num_dispatch_groups
     launches = 8
     indices = _starved_relay_indices(G, H, SEQ_LEN_PER_CHIP, topk=8, num_routed_experts=256)
-    draws = [_Fixture(mesh_device, H, G, routing=indices, capacity="exact", seed=40 + i) for i in range(4)]
+    draws = [
+        _Fixture(mesh_device, H, G, routing=indices, capacity="exact", seed=40 + i, sp_axis=cfg.sp_axis)
+        for i in range(4)
+    ]
     # Uploaded first, so no upload sits between the queued launches.
     for fx in draws:
         fx.tt_payload(ttnn.ROW_MAJOR_LAYOUT)
