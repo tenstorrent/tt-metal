@@ -474,11 +474,18 @@ void MeshGraph::initialize_from_mgd(
         } else {
             requested_fabric_config = fabric_config;
         }
+        // The config that actually governs this mesh, after resolving MGD_DEFAULT to the mesh's own declared
+        // topology. Unlike the single process-wide fabric_config, this honors a per-mesh entry from
+        // per_mesh_fabric_config, so heterogeneous meshes reserve torus edge ports and enable patterned
+        // express links based on their own effective config rather than the process-wide override. When no
+        // config governs this mesh (nullopt here), behavior matches the previous process-wide nullopt path.
+        std::optional<FabricConfig> effective_fabric_config;
         if (requested_fabric_config.has_value()) {
             // MGD_DEFAULT means "this mesh keeps its own declared dim_types"; resolve it from the descriptor.
             const FabricConfig mesh_fabric_config = (*requested_fabric_config == FabricConfig::MGD_DEFAULT)
                                                         ? mgd.default_fabric_config_from_dim_types(mesh_id)
                                                         : *requested_fabric_config;
+            effective_fabric_config = mesh_fabric_config;
             effective_fabric_type = get_fabric_type(mesh_fabric_config, is_ubb_galaxy);
             // Validate that FabricConfig doesn't try to create connections that don't exist
             if (requires_more_connectivity(effective_fabric_type, mgd_fabric_type, mesh_shape)) {
@@ -517,8 +524,9 @@ void MeshGraph::initialize_from_mgd(
         // express links belong to the 2D torus configurations; explicit plain FABRIC_2D (and non-2D
         // configurations) deliberately downgrades an express-capable MGD to its N/S/E/W mesh.
         const bool enable_patterned_express_links =
-            !fabric_config.has_value() || *fabric_config == FabricConfig::FABRIC_2D_TORUS_X ||
-            *fabric_config == FabricConfig::FABRIC_2D_TORUS_Y || *fabric_config == FabricConfig::FABRIC_2D_TORUS_XY;
+            !effective_fabric_config.has_value() || *effective_fabric_config == FabricConfig::FABRIC_2D_TORUS_X ||
+            *effective_fabric_config == FabricConfig::FABRIC_2D_TORUS_Y ||
+            *effective_fabric_config == FabricConfig::FABRIC_2D_TORUS_XY;
         if (enable_patterned_express_links) {
             // Layer declared express links on top of the fully-populated base grid. Each pattern expands to
             // intra-mesh endpoint pairs, added as bidirectional edges with RoutingDirection::Z (so their
@@ -596,7 +604,7 @@ void MeshGraph::initialize_from_mgd(
         // (see axis_ports_reserved_for_torus, issue #54650).
         std::uint32_t chan_id = 0;
         if (!axis_ports_reserved_for_torus(
-                effective_fabric_type, mgd_fabric_type, fabric_config, mesh_shape, *mesh_id, "mesh", 0)) {
+                effective_fabric_type, mgd_fabric_type, effective_fabric_config, mesh_shape, *mesh_id, "mesh", 0)) {
             // North, start from NW corner
             for (std::uint32_t chip_id = 0; chip_id < mesh_shape[1]; chip_id++) {
                 for (std::uint32_t i = 0; i < chip_spec_.num_eth_ports_per_direction; i++) {
@@ -614,7 +622,7 @@ void MeshGraph::initialize_from_mgd(
             }
         }
         if (!axis_ports_reserved_for_torus(
-                effective_fabric_type, mgd_fabric_type, fabric_config, mesh_shape, *mesh_id, "mesh", 1)) {
+                effective_fabric_type, mgd_fabric_type, effective_fabric_config, mesh_shape, *mesh_id, "mesh", 1)) {
             // East, start from NE corner
             chan_id = 0;
             for (std::uint32_t chip_id = (mesh_shape[1] - 1); chip_id < (mesh_shape[0] * mesh_shape[1]);
