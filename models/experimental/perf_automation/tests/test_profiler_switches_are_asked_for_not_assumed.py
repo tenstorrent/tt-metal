@@ -26,7 +26,6 @@ from __future__ import annotations
 
 from agent.probes import (
     build_tracy_command,
-    memory_killed,
     mid_run_dump_default,
     push_device_to_tracy_default,
 )
@@ -48,27 +47,6 @@ def test_an_operator_can_force_it_either_way():
 def test_forcing_it_on_still_requires_the_drain():
     """The dump releases what the drain reads; without a drain there are no reads to release."""
     assert mid_run_dump_default(False, {"PERF_MCP_PROFILER_MID_RUN_DUMP": "1"}) is False
-
-
-def test_a_cgroup_kill_counts_as_memory_even_with_an_empty_log():
-    """A memory kill takes the process before it can explain itself, so the code is the evidence."""
-    assert memory_killed(137, "") is True
-
-
-def test_the_kernels_own_words_count_too():
-    for text in ("Out of memory: Killed process 123", "oom-kill:constraint=CONSTRAINT_NONE", "std::bad_alloc"):
-        assert memory_killed(1, text) is True, text
-
-
-def test_an_ordinary_failure_is_not_a_memory_kill():
-    """Otherwise every failed profile would be re-run with the slow flag for no reason."""
-    assert memory_killed(1, "E   assert 88.1 < 85.0  # perf regression") is False
-    assert memory_killed(0, "") is False
-    assert memory_killed(1, "Segmentation fault (core dumped)") is False
-    # The nearest neighbour in the log, and a different cure: a capture-tool crash is healed by a
-    # board reset further down, not by turning the slow dump on.
-    assert memory_killed(1, "Tracy capture tool (tracy-capture) was killed by SIGSEGV (signal 11)") is False
-    # And our OWN stall kill never reaches here as a code: it is raised as TracyHangError.
 
 
 def test_the_flag_reaches_the_command_only_when_asked_for():

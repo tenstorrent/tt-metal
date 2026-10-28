@@ -567,14 +567,6 @@ _CRASH_RE = re.compile(
     r"|loc\([^\n]*\):\s*error:[^\n]*|ttmlir[^\n]*?error[^\n]*)"
 )
 _DEVICE_CRASH_RE = re.compile(r"Segmentation fault|core dumped|Aborted|terminate called|libc\+\+abi")
-# The kernel or the cgroup took the run out for memory. Distinct from a device crash: nothing is
-# wedged and no reset helps -- the capture simply needs to stop holding its markers (see
-# mid_run_dump_default).
-_MEMORY_KILL_RE = re.compile(
-    r"Out of memory|out-of-memory|oom[-_]kill|Killed process|MemoryError|std::bad_alloc", re.IGNORECASE
-)
-# 128+SIGKILL: what a cgroup memory kill leaves as the exit code when nothing was logged.
-_SIGKILL_EXIT = 137
 _MID_RUN_DUMP_ENV = "PERF_MCP_PROFILER_MID_RUN_DUMP"
 _PUSH_DEVICE_TO_TRACY_ENV = "PERF_MCP_PROFILER_PUSH_DEVICE_TO_TRACY"
 _FLAG_OFF_WORDS = ("0", "false", "no", "off")
@@ -2139,10 +2131,6 @@ def _execute(
             if _disk_low:
                 _kill_and_raise(f"stopped before it filled the disk: {_disk_low}", DiskFullError)
             now = time.monotonic()
-            try:
-                size = log_path.stat().st_size
-            except OSError:
-                size = last_size
             if _watch.moved(now, last_progress, proc.pid):
                 _watch.note_progress(now, last_progress)
                 last_progress = now
@@ -2335,17 +2323,6 @@ def preflight_collect(
     return n
 
 
-def memory_killed(code, log_text: str) -> bool:
-    """Did this attempt die because the host ran out of memory, rather than because anything broke?
-
-    A cgroup kill leaves 137 and often no message at all -- the process is gone before it can log --
-    so the exit code counts as evidence on its own. Everything else about the attempt looks like a
-    clean failure, which is why this needs asking separately."""
-    if code == _SIGKILL_EXIT:
-        return True
-    return bool(_MEMORY_KILL_RE.search(log_text or ""))
-
-
 def mid_run_dump_default(drain_loaded: bool, env=None) -> bool:
     """Should each profiler read be written out mid-run instead of held in host memory until exit?
 
@@ -2361,13 +2338,16 @@ def mid_run_dump_default(drain_loaded: bool, env=None) -> bool:
     baseline. That box has 503 GB and the capture peaked well inside it, so it was paying the
     slowdown to prevent an overflow that could not happen.
 
-    SO: ASK THE MACHINE, DO NOT PREDICT IT. Start without the dump and let the run tell us -- if the
-    host really cannot hold the markers, the attempt dies with a memory kill and the caller retries
-    with the dump on (see memory_killed). A wrong guess costs one attempt; the previous behaviour
-    cost every run on every box that did not need it. Galaxy still gets the dump, on its second
-    attempt, without a threshold anyone had to pick.
-
-    PERF_MCP_PROFILER_MID_RUN_DUMP forces it either way for an operator who already knows.
+    BEHAVIOUR CHANGE, AND IT IS NOT FREE EITHER WAY. A host that genuinely cannot hold its markers
+    -- the 32-chip Galaxy above -- used to get the dump without asking and now has to ask, with
+    PERF_MCP_PROFILER_MID_RUN_DUMP=1. That is deliberate. The first version of this shipped an
+    automatic retry that turned the dump on after a "memory kill", and it could not work: _execute
+    returns Popen.wait(), which is -9 for any signal, so the 137 it tested for is unreachable, and a
+    cgroup kill -- the case the retry existed for -- leaves no log text either. What remained was a
+    mechanism that fires on nothing, guarded by a test asserting an exit code production cannot
+    produce. Making it fire on -9 instead would be worse: -9 is equally what a peer test's reaper
+    leaves behind, and guessing wrong costs ten hours of capture. An exit code cannot tell those
+    apart, so the operator decides.
     """
     if not drain_loaded:
         return False
@@ -2377,17 +2357,19 @@ def mid_run_dump_default(drain_loaded: bool, env=None) -> bool:
 def push_device_to_tracy_default(env=None) -> bool:
     """Should device markers be pushed into the tracy stream as well as the device log?
 
-    SAME WIRING MISTAKE AS ABOVE, SAME CORRECTION. This was `push_device_to_tracy=not _drain`, so
-    the one fact "the tool's own tree is importable" decided a question about tracy-capture's
-    appetite for device markers. It is not evidence about that, and the two parted company exactly
-    where it mattered: with no drain the push came back on.
+    SAME WIRING MISTAKE AS ABOVE, BUT READ THE NEXT PARAGRAPH BEFORE CREDITING IT WITH ANYTHING.
+    This was `push_device_to_tracy=not _drain`, so the one fact "the tool's own tree is importable"
+    decided a question about tracy-capture's appetite for device markers. It is not evidence about
+    that, and the two parted company exactly where it mattered: with no drain the push came back on.
 
-    It loses captures. Measured here 2026-10-27: a run that pushed device markers finished 31
-    minutes of device work and then tracy-capture died of SIGSEGV before writing a trace, so there
-    was no .tracy at all. The same pipeline with the push disabled wrote a 41 MB device perf report
-    of 167,888 rows.
+    THIS CHANGED NO BEHAVIOUR ON ANY BOX THE TOOL RUNS ON, and the first version of this docstring
+    was wrong to imply otherwise. The drain plugin loads everywhere, so `not _drain` was already
+    False and the tool was already passing --disable-device-data-push-to-tracy. The 31-minute
+    tracy-capture SIGSEGV that got written up here as proof came from a HAND-WRITTEN A/B script
+    that simply omitted the flag -- a command the tool never builds. Keep this function because a
+    switch should not be decided by an unrelated fact, not because it rescued a capture.
 
-    And it buys nothing the report needs. Device markers reach the device log either way, and the
+    It also buys nothing the report needs. Device markers reach the device log either way, and the
     ops report is built from that log; the tracy stream carries the host side. The push is only
     worth having when a person wants device zones in the tracy GUI, so that person asks for it with
     PERF_MCP_PROFILER_PUSH_DEVICE_TO_TRACY.
@@ -2504,11 +2486,9 @@ def make_run_profiled(
         # device markers out of the tracy stream: every marker held until exit was 320 GB and
         # climbing, and pushed into tracy it segfaulted tracy-capture (WH Galaxy, 2026-09-28).
         _drain = profiler_drain_plugin(root)
-        # The dump is the one of the three that is NOT free -- see mid_run_dump_default. It starts
-        # off and is turned on by a memory kill, so a box that needs it gets it and a box that does
-        # not keeps its speed.
+        # The dump is the one of the three that is NOT free -- see mid_run_dump_default. Off unless
+        # the operator asks for it, so a box that does not need it keeps its speed.
         mid_run_dump = mid_run_dump_default(bool(_drain), env)
-        mem_retry = 0
 
         def _build_cmd():
             return build_tracy_command(
@@ -2660,22 +2640,6 @@ def make_run_profiled(
                 break
             if code != 0:
                 log_text = log_path.read_text(errors="ignore") if log_path.is_file() else ""
-                # THE HOST COULD NOT HOLD THE MARKERS -- the one failure the mid-run dump exists to
-                # prevent, and the reason it no longer runs on every box by default. Turn it on and
-                # profile again. Once only: with the dump already on, memory is not what this
-                # attempt is about, and a second flip would loop.
-                if not mid_run_dump and mem_retry < 1 and memory_killed(code, log_text):
-                    mem_retry += 1
-                    mid_run_dump = True
-                    cmd = _build_cmd()
-                    with open(log_path, "a") as fh:
-                        fh.write(
-                            "\n[harness] the host ran out of memory holding profiler markers; "
-                            "re-profiling with --dump-device-data-mid-run (each read released)\n"
-                        )
-                    _set_aside_log()
-                    _reset_before_retry(log_text)
-                    continue
                 # A device or capture-tool crash (the tracy capture tool segfaulting at shutdown
                 # after "1 passed", WH Galaxy 2026-09-28) leaves no CSV and a dirty board: reset
                 # and run again. Any other non-zero exit is tracy's own verdict, raised as before.
@@ -2794,8 +2758,7 @@ def make_run_profiled(
             newest = kept["csv"]
         elif newest is None:
             raise TracyRunError(
-                f"no ops_perf_results_*.csv produced (checked {out_dir}, stdout, "
-                f"generated/profiler); log: {log_path}"
+                f"no ops_perf_results_*.csv produced (checked {out_dir}, stdout, generated/profiler); log: {log_path}"
             )
         _validate_csv(newest, log_path)
         dest = profiles_dir / f"run{i}_raw.csv"
@@ -3117,9 +3080,7 @@ def match_input_to_case(user_input: str, params: list[str]) -> str:
             f"{[p for p in params if p]} — pick one of these dimensions, or use -k."
         )
     if len(matched) > 1:
-        raise InputMatchError(
-            f"input {user_input!r} is ambiguous — matches {matched}. " f"Use -k with the exact case id."
-        )
+        raise InputMatchError(f"input {user_input!r} is ambiguous — matches {matched}. Use -k with the exact case id.")
     return matched[0]
 
 
