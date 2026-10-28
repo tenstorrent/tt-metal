@@ -124,8 +124,8 @@ MODEL_WEIGHTS_DIR="$CHECKPOINT" QWEN38_CACHE_ROOT="$CACHE_ROOT" QWEN38_DEVICE_NO
 ```
 
 `QWEN38_PROFILE` picks the launcher profile (`p150-line` by default) and `QWEN38_DEVICE_NODES` the four chips of a
-larger host. The BF4 expert cache must be in place (`--prepare-only`). On the 1x4 p150 line the demo took 18.5 min:
-start-up 443 s with cold component and JIT caches, GSM8K 58/64 in 632 s. No CI pipeline runs the demo or the device
+larger host. The BF4 expert cache must be in place (`--prepare-only`). On the 1x4 p150 line the demo took 13.5 min:
+start-up 486 s with cold component and JIT caches, GSM8K 58/64 in 296 s. No CI pipeline runs the demo or the device
 tests yet; run them on a held 1x4 mesh.
 
 ## Validation
