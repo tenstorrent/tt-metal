@@ -13,6 +13,7 @@
 #include "ckernel_template.h"
 #include "cunpack_common.h"
 #include "llk_assert.h"
+#include "llk_matmul_forms.h"
 #include "llk_unpack_common.h"
 
 using namespace ckernel;
@@ -84,15 +85,25 @@ inline constexpr bool _llk_unpack_AB_matmul_narrow_format_(const std::uint32_t u
  * @param dest_max_tiles: The 32x32 tiles DEST holds in the kernel's sync and accumulation mode (get_dest_max_tiles); only
  *                        a full-sync 16-bit DEST (16 tiles) takes the 8-bit body, since at half sync it costs about two
  *                        cycles per DEST section wherever the math thread bounds the matmul.
+ * @param unpB_face_r_dim: Face rows of in0; a tile of 4 rows or fewer with fewer than 8 tiles in a row runs the math thread
+ *                         at its floor on the default body, which the 8-bit body only delays, and a tile of 8 rows keeps the
+ *                         default body, which streams it faster.
+ * @param hifi4: A single tile at HiFi4 is bound by the math thread, which the 8-bit body only delays.
+ * @param lofi: A column of tiles streamed through SrcB at LoFi reads 0.2 to 0.6 cycles slower on the 8-bit body than on main's (tt-llk dyn sweep).
  */
 inline constexpr bool _llk_unpack_AB_matmul_stream_narrow_(
     const std::uint32_t ct_dim,
     const std::uint32_t rt_dim,
     const std::uint32_t unpA_src_format,
     const std::uint32_t unpB_src_format,
-    const std::uint32_t dest_max_tiles)
+    const std::uint32_t dest_max_tiles,
+    const std::uint32_t unpB_face_r_dim = 16,
+    const bool hifi4                    = false,
+    const bool lofi                     = false)
 {
-    return dest_max_tiles > 8 && ((ct_dim >= rt_dim) ? _llk_unpack_AB_matmul_narrow_format_(unpA_src_format) : _llk_unpack_AB_matmul_narrow_format_(unpB_src_format));
+    return dest_max_tiles > 8 && (unpB_face_r_dim > 8 || (unpB_face_r_dim <= 4 && ct_dim >= 8)) && !(hifi4 && ct_dim == 1 && rt_dim == 1) &&
+           !(lofi && ct_dim == 1 && rt_dim > 1) &&
+           ((ct_dim >= rt_dim) ? _llk_unpack_AB_matmul_narrow_format_(unpA_src_format) : _llk_unpack_AB_matmul_narrow_format_(unpB_src_format));
 }
 
 /**
@@ -201,14 +212,34 @@ inline void _llk_unpack_AB_matmul_narrow_mop_config_(
  * @param unpA_partial_face: Whether operand A is unpacked face-by-face (partial faces).
  * @param unpB_partial_face: Whether operand B is unpacked face-by-face (partial faces).
  */
-template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0>
+template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0, std::uint32_t stream_z = 0, std::uint32_t reuse_dir = 0>
 inline void _llk_unpack_AB_matmul_mop_config_(
     const std::uint32_t ct_dim, const std::uint32_t rt_dim, const bool unpA_partial_face, const bool unpB_partial_face)
 {
     // in0/inA - loaded to SrcB
     // in1/inB - loaded to SrcA
 
-    const bool reuse_a                      = ct_dim >= rt_dim;
+    const bool reuse_a                      = matmul_reuse_a<reuse_dir>(ct_dim, rt_dim);
+    if constexpr (stream_z != 0 && kernel_broadcast_b != 1)
+    {
+        if (reuse_a && !unpA_partial_face)
+        {
+            // dense in1 tiles back to back: the Z counter steps one tile (stream_z faces) per UNPACR, no config read and write
+            load_replay_buf(
+                0,
+                4,
+                []
+                {
+                    TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    TTI_INCADCZW(p_setadc::UNP_A, 0, 0, 0, stream_z);
+                    TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    TTI_INCADCZW(p_setadc::UNP_A, 0, 0, 0, stream_z);
+                });
+            ckernel_unpack_template z_tmp = ckernel_unpack_template(false, false, lltt::replay_insn(0, 2), 0, 0, 0, lltt::replay_insn(2, 2), 0, 0);
+            z_tmp.program();
+            return;
+        }
+    }
     const std::uint32_t replay_buf_prog_len = (reuse_a && unpA_partial_face) ? 18 : ((!reuse_a && unpB_partial_face) ? 18 : 12);
     const std::uint32_t replay_buf_run_len  = replay_buf_prog_len / 2;
 
@@ -396,7 +427,13 @@ inline void _llk_unpack_AB_matmul_mop_config_(
  * @ref _llk_unpack_AB_matmul_ is the matching execute call.
  * @ref _llk_math_matmul_init_ is the matching init on the math thread (consumes SrcA/SrcB).
  */
-template <std::uint32_t kernel_broadcast_a = 0, std::uint32_t kernel_broadcast_b = 0, bool auto_ttsync = false, bool stream_narrow = false>
+template <
+    std::uint32_t kernel_broadcast_a = 0,
+    std::uint32_t kernel_broadcast_b = 0,
+    std::uint32_t auto_ttsync                 = false,
+    bool stream_narrow               = false,
+    std::uint32_t stream_z           = 0,
+    std::uint32_t reuse_dir          = 0>
 __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
     const std::uint32_t transpose       = 0,
     const std::uint32_t ct_dim          = 1,
@@ -450,14 +487,15 @@ __attribute__((always_inline)) inline void _llk_unpack_AB_matmul_init_(
 
     TT_SETDMAREG(0, LOWER_HALFWORD(kt_dim), 0, LO_16(p_gpr_unpack::KT_DIM)); // store kt_dim to gpr for scaling tile size
 
-    LLK_ASSERT_BLOCK(unpack_matmul_init_reuse_a = (ct_dim >= rt_dim));
+    static_assert(reuse_dir == 0 || (!stream_narrow && stream_z == 0 && !auto_ttsync), "a forced reuse direction runs on the per-row unpack with the default stream");
+    LLK_ASSERT_BLOCK(unpack_matmul_init_reuse_a = matmul_reuse_a<reuse_dir>(ct_dim, rt_dim));
     if constexpr (stream_narrow)
     {
         _llk_unpack_AB_matmul_narrow_mop_config_<kernel_broadcast_a, kernel_broadcast_b>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face);
     }
     else
     {
-        _llk_unpack_AB_matmul_mop_config_<kernel_broadcast_a, kernel_broadcast_b>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face);
+        _llk_unpack_AB_matmul_mop_config_<kernel_broadcast_a, kernel_broadcast_b, stream_z, reuse_dir>(ct_dim, rt_dim, unpA_partial_face, unpB_partial_face);
     }
 
     if constexpr (auto_ttsync)
@@ -491,15 +529,16 @@ inline void _llk_unpack_AB_matmul_uninit_()
 }
 
 /**
- * @brief The hoist_rows argument of @ref _llk_unpack_AB_matmul_ for a kernel's fidelity and sync mode.
+ * @brief The hoist_rows argument of @ref _llk_unpack_AB_matmul_ for the keys a kernel fixes at compile time.
  *
- * With HiFi4 and one DEST section the math and pack bound every block, so a shorter unpack call only moves their
- * hand-off; those kernels keep the per-row form.
+ * Where the composed run is bound by the pack, a shorter unpack call only moves the hand-off between the threads and
+ * can lose; @ref matmul_default_form holds the measured choice.
  */
-template <MathFidelity math_fidelity, DstSync dst_sync>
+template <MathFidelity math_fidelity, DstSync dst_sync, bool fp32_dest = false, std::uint32_t kt_per_section = 0, DataFormat out_format = DataFormat::Invalid>
 constexpr bool unpack_AB_matmul_hoist_rows()
 {
-    return !(math_fidelity == MathFidelity::HiFi4 && dst_sync == DstSync::SyncFull);
+    constexpr char form = matmul_default_form<math_fidelity, dst_sync, fp32_dest, kt_per_section, out_format>();
+    return form == 'h' || form == 'R';
 }
 
 /**
@@ -515,6 +554,7 @@ constexpr bool unpack_AB_matmul_hoist_rows()
  * @tparam dest_max_tiles: The 32x32 tiles DEST holds in the kernel's sync and accumulation mode (get_dest_max_tiles), which
  *                         bounds the tiles of a row.
  * @tparam hoist_rows: Compute the row invariants once per call on the poll path; see @ref unpack_AB_matmul_hoist_rows.
+ * @tparam max_row_tiles: The most tiles a row of the call can have; 8 or fewer needs only the low byte of the context 1 zmask.
  * @param base_address_a: L1 base address of operand A's tile buffer.
  * @param base_address_b: L1 base address of operand B's tile buffer.
  * @param tile_index_a: Starting tile index into operand A.
@@ -533,9 +573,12 @@ constexpr bool unpack_AB_matmul_hoist_rows()
 template <
     std::uint32_t kernel_broadcast_a = 0,
     std::uint32_t kernel_broadcast_b = 0,
-    bool auto_ttsync                 = false,
+    std::uint32_t auto_ttsync                 = false,
     std::uint32_t dest_max_tiles     = 16,
-    bool hoist_rows                  = true>
+    bool hoist_rows                  = true,
+    std::uint32_t max_row_tiles      = dest_max_tiles,
+    std::uint32_t stream_z           = 0,
+    std::uint32_t reuse_dir          = 0>
 inline void _llk_unpack_AB_matmul_(
     const std::uint32_t base_address_a,
     const std::uint32_t base_address_b,
@@ -554,12 +597,13 @@ inline void _llk_unpack_AB_matmul_(
 
     volatile std::uint32_t *cfg = get_cfg_pointer(); // get pointer to registers for current state ID
 
-    const bool reuse_a        = ct_dim >= rt_dim;
+    static_assert(reuse_dir == 0 || (!auto_ttsync && stream_z == 0), "a forced reuse direction runs on the per-row unpack with the default stream");
+    const bool reuse_a        = matmul_reuse_a<reuse_dir>(ct_dim, rt_dim);
     const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
     LLK_ASSERT(reuse_a == unpack_matmul_init_reuse_a, "matmul: ct_dim >= rt_dim differs from the init's; re-init for a block of the other reuse direction");
     LLK_ASSERT((reuse_a ? ct_dim : rt_dim) <= dest_max_tiles, "matmul: a row has more tiles than DEST holds");
-    // the context 1 zmask needs a bit per tile of the row only when a row can be longer than 8 tiles
-    constexpr std::uint32_t context_1_zmask = (dest_max_tiles > 8) ? 0xffff : 0xff;
+    // a bit per tile of the row, which the 0xff form of main's code covers up to 8 tiles
+    constexpr std::uint32_t context_1_zmask = (max_row_tiles > 8) ? 0xffff : 0xff;
 
     if (!reuse_a)
     {
@@ -570,10 +614,8 @@ inline void _llk_unpack_AB_matmul_(
     constexpr bool hoisted     = hoist_rows && !auto_ttsync && kernel_broadcast_a == 0 && kernel_broadcast_b == 0;
     std::uint32_t address_a    = base_address_a + tile_size_a * tile_index_a;
     std::uint32_t address_b    = base_address_b + tile_size_b * tile_index_b;
-    const std::uint32_t step_a = reuse_a ? tile_size_a * kt_dim : 0;
-    const std::uint32_t step_b = reuse_a ? 0 : tile_size_b;
     const std::uint32_t mop_0  = TT_OP_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, 0);
-    const std::uint32_t mop_1  = TT_OP_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, context_1_zmask);
+    const std::uint32_t mop_1  = mop_0 | context_1_zmask;
 
     for (std::uint32_t t = 0; t < t_dim; t++)
     {
@@ -599,7 +641,10 @@ inline void _llk_unpack_AB_matmul_(
             LLK_ASSERT(is_valid_L1_address(address_a), "L1 address_a must be in valid L1 memory region");
             LLK_ASSERT(is_valid_L1_address(address_b), "L1 address_b must be in valid L1 memory region");
             // still counted for the context poll of the kernel's other unpack calls; the SEMGET below releases it
-            semaphore_post(semaphore::UNPACK_SYNC);
+            if constexpr (auto_ttsync != 2)
+            {
+                semaphore_post(semaphore::UNPACK_SYNC);
+            }
             // Auto TTSync holds these stores until the previous row's WRCFGs have read the GPRs
             regfile[p_gpr_unpack::MATMUL_ROW_ADDR_B] = address_b;
             regfile[p_gpr_unpack::MATMUL_ROW_ADDR_A] = address_a;
@@ -673,14 +718,141 @@ inline void _llk_unpack_AB_matmul_(
             TT_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, unp_cfg_context == 0 ? 0 : context_1_zmask);
         }
 
+        if constexpr (stream_z != 0 && kernel_broadcast_b != 1)
+        {
+            if (reuse_a && !unpA_partial_face)
+            {
+                TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0001); // the next row starts at Z = 0
+            }
+        }
+
         // T6::SEMGET for context release
-        t6_semaphore_get(semaphore::UNPACK_SYNC);
+        if constexpr (auto_ttsync != 2)
+        {
+            t6_semaphore_get(semaphore::UNPACK_SYNC);
+        }
 
         // Switch unpacker config context
         switch_config_context(unp_cfg_context);
 
         if constexpr (hoisted)
         {
+            address_a += reuse_a ? tile_size_a * kt_dim : 0;
+            address_b += reuse_a ? 0 : tile_size_b;
+        }
+    }
+}
+
+/**
+ * @brief @ref _llk_unpack_AB_matmul_ for num_k consecutive k steps in one call.
+ *
+ * Step k unpacks the rt_dim x ct_dim block of @ref _llk_unpack_AB_matmul_ with operand A advanced by k tiles and operand B by
+ * k * in1_k_stride tiles; the row invariants are computed once for all steps. Poll path without kernel broadcast only.
+ *
+ * @param num_k: The k steps to unpack.
+ * @param in1_k_stride: The tiles between the operand B tiles of consecutive k steps.
+ * @note Same init and uninit as @ref _llk_unpack_AB_matmul_.
+ */
+template <std::uint32_t dest_max_tiles = 16, std::uint32_t stream_z = 0>
+inline void _llk_unpack_AB_matmul_k_(
+    const std::uint32_t base_address_a,
+    const std::uint32_t base_address_b,
+    const std::uint32_t tile_index_a,
+    const std::uint32_t tile_index_b,
+    const std::uint32_t tile_size_a,
+    const std::uint32_t tile_size_b,
+    const bool unpA_partial_face,
+    const bool unpB_partial_face,
+    const std::uint32_t ct_dim,
+    const std::uint32_t rt_dim,
+    const std::uint32_t kt_dim,
+    const std::uint32_t num_k,
+    const std::uint32_t in1_k_stride)
+{
+    volatile std::uint32_t *cfg = get_cfg_pointer();
+
+    const bool reuse_a        = ct_dim >= rt_dim;
+    const std::uint32_t t_dim = reuse_a ? rt_dim : ct_dim;
+    LLK_ASSERT(reuse_a == unpack_matmul_init_reuse_a, "matmul: ct_dim >= rt_dim differs from the init's; re-init for a block of the other reuse direction");
+    LLK_ASSERT((reuse_a ? ct_dim : rt_dim) <= dest_max_tiles, "matmul: a row has more tiles than DEST holds");
+    constexpr std::uint32_t context_1_zmask = (dest_max_tiles > 8) ? 0xffff : 0xff;
+
+    if (!reuse_a)
+    {
+        TTI_MULDMAREG(0, p_gpr_unpack::TMP_LO, p_gpr_unpack::TILE_SIZE_B, p_gpr_unpack::KT_DIM);
+    }
+
+    const std::uint32_t step_a = reuse_a ? tile_size_a * kt_dim : 0;
+    const std::uint32_t step_b = reuse_a ? 0 : tile_size_b;
+    const std::uint32_t mop_0  = TT_OP_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, 0);
+    const std::uint32_t mop_1  = TT_OP_MOP(0, (reuse_a ? ct_dim : rt_dim) - 1, context_1_zmask);
+
+    for (std::uint32_t k = 0; k < num_k; k++)
+    {
+        std::uint32_t address_a = base_address_a + tile_size_a * (tile_index_a + k);
+        std::uint32_t address_b = base_address_b + tile_size_b * (tile_index_b + k * in1_k_stride);
+
+        for (std::uint32_t t = 0; t < t_dim; t++)
+        {
+            // Wait for free context
+            wait_for_next_context(2);
+
+            _llk_unpack_configure_addresses_(address_b, address_a, cfg);
+
+            semaphore_post(semaphore::UNPACK_SYNC); // Trisc::SEMPOST for context acquire
+
+            // Stall unpacker until pending CFG writes from Trisc have completed
+            TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
+
+            if (reuse_a)
+            {
+                if (unpB_partial_face)
+                {
+                    TTI_UNPACR_NOP(SrcB, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                    TTI_UNPACR(
+                        SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    TTI_UNPACR(
+                        SrcB, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    TTI_SETADCZW(p_setadc::UNP_B, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
+                }
+                else
+                {
+                    TTI_UNPACR(SrcB, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                }
+            }
+            else
+            {
+                if (unpA_partial_face)
+                {
+                    TTI_UNPACR_NOP(SrcA, 0, 0, 0 /*Set Dvalid*/, 0, p_unpacr_nop::WAIT_LIKE_UNPACR, 0, 0, p_unpacr_nop::UNP_ZEROSRC);
+                    TTI_UNPACR(
+                        SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 0 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    TTI_UNPACR(
+                        SrcA, 0b00010001, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                    TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0101); // Set ch0_z=0, ch1_z=0
+                }
+                else
+                {
+                    TTI_UNPACR(SrcA, 0, 0, 0, 0, 1 /*Set OvrdThreadId*/, 1 /*Set Dvalid*/, p_unpacr::RAREFYB_DISABLE, 0, 0 /* Set ContextIdInc */, 0, 0, 1);
+                }
+            }
+
+            TT_INSN(unp_cfg_context == 0 ? mop_0 : mop_1);
+
+            if constexpr (stream_z != 0)
+            {
+                if (reuse_a && !unpA_partial_face)
+                {
+                    TTI_SETADCZW(p_setadc::UNP_A, 0, 0, 0, 0, 0b0001); // the next row starts at Z = 0
+                }
+            }
+
+            // T6::SEMGET for context release
+            t6_semaphore_get(semaphore::UNPACK_SYNC);
+
+            // Switch unpacker config context
+            switch_config_context(unp_cfg_context);
+
             address_a += step_a;
             address_b += step_b;
         }

@@ -29,12 +29,20 @@ from helpers.param_config import (
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
+    MATMUL_PHASE_ELIDE,
     CRK_TILE_DIMM,
     DEST_SYNC,
     LOOP_FACTOR,
     MATH_FIDELITY,
+    MATMUL_FORM_KEYS,
+    MATMUL_K_LOOP,
+    MATMUL_ROW_END_FOLD,
     MATMUL_PACK_BLOCK,
+    MATMUL_ROW_MOP,
     MATMUL_STREAM_NARROW,
+    MATMUL_REUSE_DIR,
+    MATMUL_STREAM_Z,
+    MATMUL_UNPACK_TTSYNC,
     NUM_FACES,
     THROTTLE_LEVEL,
     TILE_COUNT,
@@ -152,16 +160,39 @@ def test_perf_matmul(
     # Unpack MOP occupancy is filtered in generate_dest_corner_combinations.
     stimuli_tiles = min(variant_tile_count, PERF_RING_TILES)
 
+
     configuration = PerfConfig(
         "sources/matmul_test.cpp",
         formats,
         run_types,
         templates=[
             MATH_FIDELITY(math_fidelity),
+            *MATMUL_PHASE_ELIDE.for_block(formats, math_fidelity, dest_acc, 0),
             DEST_SYNC(dest_sync),
             THROTTLE_LEVEL(),
             *MATMUL_STREAM_NARROW.for_block(
-                formats, dest_acc, dest_sync, dims.ct_dim, dims.rt_dim
+                formats, dest_acc, dest_sync, dims.ct_dim, dims.rt_dim,
+                math_fidelity=math_fidelity,
+            ),
+            *MATMUL_REUSE_DIR.for_block(formats, math_fidelity, dims.ct_dim, dims.rt_dim, dest_sync),
+            *MATMUL_STREAM_Z.for_block(
+                formats, dest_acc, dest_sync, dims.ct_dim, dims.rt_dim,
+                math_fidelity=math_fidelity,
+                kt_dim=dims.kt_dim,
+            ),
+            *MATMUL_UNPACK_TTSYNC.for_block(
+                formats, dest_acc, math_fidelity, dims.ct_dim, dims.rt_dim, dims.kt_dim, dest_sync
+            ),
+            *MATMUL_K_LOOP.for_block(
+                formats, dest_acc, math_fidelity, dims.ct_dim, dims.rt_dim, dims.kt_dim
+            ),
+            *MATMUL_ROW_END_FOLD.for_block(dims.ct_dim, dims.rt_dim),
+            *MATMUL_ROW_MOP.for_block(
+                formats, dest_acc, math_fidelity, dest_sync, dims.ct_dim, dims.rt_dim, dims.kt_dim
+            ),
+            *MATMUL_FORM_KEYS.for_block(
+                formats, dims.kt_dim, dims.ct_dim, dims.rt_dim,
+                math_fidelity=math_fidelity, dest_sync=dest_sync, dest_acc=dest_acc, unfuse_one_tile=True,
             ),
             MATMUL_PACK_BLOCK(
                 matmul_pack_form(

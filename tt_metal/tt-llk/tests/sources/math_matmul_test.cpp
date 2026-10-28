@@ -19,9 +19,35 @@ std::uint32_t unp_cfg_context          = 0;
 std::uint32_t pack_sync_tile_dst_ptr   = 0;
 std::uint32_t math_sync_tile_dst_index = 0;
 
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_PHASE_ELIDE)
+#include "llk_matmul_forms.h"
+constexpr ckernel::MathFidelity MATMUL_FIDELITY = ckernel::matmul_phase_fidelity<MATH_FIDELITY, MATMUL_IN0_FORMAT, MATMUL_IN1_FORMAT>();
+#else
+constexpr ckernel::MathFidelity MATMUL_FIDELITY = MATH_FIDELITY;
+#endif
+
+// reuse direction of the block (llk_matmul_forms.h matmul_reuse_dir), chosen by the test's python key from the operand formats
+#ifdef MATMUL_REUSE_DIR
+constexpr std::uint32_t matmul_reuse_dir_k = MATMUL_REUSE_DIR;
+#else
+constexpr std::uint32_t matmul_reuse_dir_k = 0;
+#endif
+
 #ifdef LLK_TRISC_UNPACK
 
 #include "llk_unpack_AB_matmul.h"
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_ROW_LE_8)
+constexpr std::uint32_t matmul_max_row_tiles = 8;
+#elif defined(ARCH_BLACKHOLE)
+constexpr std::uint32_t matmul_max_row_tiles = get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>();
+#endif
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORCE_FORM_CHAR)
+constexpr bool matmul_hoist_rows = MATMUL_FORCE_FORM_CHAR == 'h' || MATMUL_FORCE_FORM_CHAR == 'R';
+#elif defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_KT_PER_SECTION, MATMUL_OUT_FORMAT>();
+#elif defined(ARCH_BLACKHOLE)
+constexpr bool matmul_hoist_rows = unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync>();
+#endif
 #include "llk_unpack_common.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -59,9 +85,14 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #else
     constexpr bool stream_narrow = false;
 #endif
-#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, false, stream_narrow
+#ifdef MATMUL_STREAM_Z
+    constexpr std::uint32_t stream_z = 4;
+#else
+    constexpr std::uint32_t stream_z = 0;
+#endif
+#define MATMUL_UNPACK_INIT_TEMPLATE_ARGS 0, 0, false, stream_narrow, stream_z, matmul_reuse_dir_k
 #define MATMUL_UNPACK_TEMPLATE_ARGS \
-    0, 0, false, get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>(), unpack_AB_matmul_hoist_rows<MATH_FIDELITY, dest_sync>()
+    0, 0, false, get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>(), matmul_hoist_rows, matmul_max_row_tiles, stream_z, matmul_reuse_dir_k
 #else
 #define MATMUL_UNPACK_INIT_TEMPLATE_ARGS
 #define MATMUL_UNPACK_TEMPLATE_ARGS
@@ -110,6 +141,22 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (int block = 0; block < NUM_BLOCKS; ++block)
                 {
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_K_LOOP)
+                    _llk_unpack_AB_matmul_k_<get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>(), stream_z>(
+                        L1_ADDRESS(buffer_A[0]),
+                        L1_ADDRESS(buffer_B[0]),
+                        0,
+                        0,
+                        TILE_SIZE_UNPACK_B,
+                        TILE_SIZE_UNPACK_A,
+                        PARTIAL_FACE_B,
+                        PARTIAL_FACE_A,
+                        CT_DIM,
+                        RT_DIM,
+                        KT_DIM,
+                        KT_DIM,
+                        CT_DIM);
+#else
                     for (std::uint32_t j = 0; j < KT_DIM; j++)
                     {
                         _llk_unpack_AB_matmul_<MATMUL_UNPACK_TEMPLATE_ARGS>(
@@ -125,6 +172,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                             RT_DIM,
                             KT_DIM);
                     }
+#endif
                 }
             }
         }
@@ -133,11 +181,58 @@ void run_kernel(RUNTIME_PARAMETERS params)
 }
 
 #endif
+// zone markers of the other threads keep their line numbers
+#ifdef MATMUL_ROW_END_FOLD
+constexpr bool matmul_row_end_fold_k = true;
+#else
+constexpr bool matmul_row_end_fold_k = false;
+#endif
+// Wormhole and Quasar take main's template arguments: the row MOP, in1 order, reuse direction and fold parameters are Blackhole's
+#ifdef ARCH_BLACKHOLE
+#define MATMUL_DEST_DONE_ARGS dest_sync, is_fp32_dest_acc_en, fused_post_flip, next_op_sets_base
+#else
+#define MATMUL_DEST_DONE_ARGS dest_sync, is_fp32_dest_acc_en
+#endif
+#ifdef ARCH_BLACKHOLE
+#define MATMUL_MATH_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL, matmul_row_mop, matmul_tile_mop, matmul_reuse_dir_k, matmul_row_end_fold_k
+#define MATMUL_MATH_INIT_ARGS \
+    MATMUL_FIDELITY, THROTTLE_LEVEL, matmul_row_mop, matmul_tile_mop, matmul_in1_order, !(dest_sync == DstSync::SyncHalf && is_fp32_dest_acc_en), dest_sync == DstSync::SyncFull || matmul_half_end_fold_k, matmul_reuse_dir_k, matmul_row_end_fold_k
+#else
+#define MATMUL_MATH_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL
+#define MATMUL_MATH_INIT_ARGS MATMUL_FIDELITY, THROTTLE_LEVEL
+#endif
+#line 146
 
 #ifdef LLK_TRISC_MATH
 
 #include "llk_math_common.h"
 #include "llk_math_matmul.h"
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORCE_FORM_CHAR)
+constexpr bool matmul_tile_mop = !(MATMUL_FORCE_FORM_CHAR == 'r' || MATMUL_FORCE_FORM_CHAR == 'R');
+#elif defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+constexpr bool matmul_tile_mop = !matmul_math_row_form<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_KT_PER_SECTION, MATMUL_OUT_FORMAT>();
+#else
+constexpr bool matmul_tile_mop = false;
+#endif
+#ifndef MATMUL_KEY_IN0
+#define MATMUL_KEY_IN0 DataFormat::Invalid
+#define MATMUL_KEY_IN1 DataFormat::Invalid
+#endif
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS) && !defined(MATMUL_FORCE_FORM_CHAR)
+constexpr bool matmul_half_end_fold_k = matmul_tile_mop && matmul_half_end_fold<MATH_FIDELITY, dest_sync, is_fp32_dest_acc_en, MATMUL_KT_PER_SECTION, MATMUL_OUT_FORMAT, MATMUL_KEY_IN0, MATMUL_KEY_IN1>();
+#else
+constexpr bool matmul_half_end_fold_k = false;
+#endif
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_IN1_ALT)
+constexpr int matmul_in1_order = 1;
+#else
+constexpr int matmul_in1_order = 0;
+#endif
+#if defined(ARCH_BLACKHOLE) && defined(MATMUL_ROW_MOP)
+constexpr bool matmul_row_mop = true;
+#else
+constexpr bool matmul_row_mop = false;
+#endif
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -168,7 +263,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
         START_PERF_MEASURE("INIT")
         _llk_math_hw_configure_<is_fp32_dest_acc_en>(formats.math, formats.math);
         _llk_math_pack_sync_init_<dest_sync, is_fp32_dest_acc_en>();
-        _llk_math_matmul_init_<MATH_FIDELITY, THROTTLE_LEVEL>(
+        _llk_math_matmul_init_<MATMUL_MATH_INIT_ARGS>(
             in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, PARTIAL_FACE_MATH, UNPACK_TRANSPOSE_FACES, CT_DIM, RT_DIM);
         PROFILER_SYNC();
     }
@@ -189,7 +284,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 {
                     for (std::uint32_t j = 0; j < KT_DIM; j++)
                     {
-                        _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(DST_INDEX, CT_DIM, RT_DIM);
+                        _llk_math_matmul_<MATMUL_MATH_ARGS>(DST_INDEX, CT_DIM, RT_DIM);
                     }
                 }
             }
@@ -206,9 +301,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
                         "Matmul block exceeds destination capacity");
                     for (std::uint32_t j = 0; j < KT_DIM; j++)
                     {
-                        _llk_math_matmul_<MATH_FIDELITY, THROTTLE_LEVEL>(DST_INDEX, CT_DIM, RT_DIM);
+                        _llk_math_matmul_<MATMUL_MATH_ARGS>(DST_INDEX, CT_DIM, RT_DIM);
                     }
-                    _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
+                    #if defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS) && defined(MATMUL_UNFUSED_POST)
+                    [[maybe_unused]] constexpr bool fused_post_flip = false;
+                    #elif defined(ARCH_BLACKHOLE) && defined(MATMUL_FORM_KEYS)
+                    [[maybe_unused]] constexpr bool fused_post_flip = static_cast<std::uint32_t>(MATH_FIDELITY) >= 3 || MATMUL_OUT_FORMAT != DataFormat::Bfp8_b;
+                    #else
+                    [[maybe_unused]] constexpr bool fused_post_flip = static_cast<std::uint32_t>(MATH_FIDELITY) >= 3;
+                    #endif
+                    #if defined(MATMUL_KEEP_FLIP_WRITE)
+                    [[maybe_unused]] constexpr bool next_op_sets_base = false;
+#else
+                    [[maybe_unused]] constexpr bool next_op_sets_base = !is_fp32_dest_acc_en;
+#endif
+                    _llk_math_dest_section_done_<MATMUL_DEST_DONE_ARGS>();
                 }
             }
         }

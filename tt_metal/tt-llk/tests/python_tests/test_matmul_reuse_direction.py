@@ -97,11 +97,11 @@ def _configuration(
         ((2, 4), (2, 3)),
         ((4, 1), (3, 1)),
         ((4, 2), (3, 2)),
+        ((3, 2), (3, 1)),
     ],
+    fidelity=[MathFidelity.LoFi, MathFidelity.HiFi4],
 )
-def test_matmul_narrowed_block(
-    formats, blocks, fidelity=MathFidelity.LoFi, row_mop=False
-):
+def test_matmul_narrowed_block(formats, blocks, fidelity, row_mop=False):
     """Blocks narrower than the init's in the same reuse direction."""
     init_block, block = blocks
     configuration, a, b = _configuration(

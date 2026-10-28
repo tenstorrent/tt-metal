@@ -118,17 +118,20 @@ def matmul_pack_form(
     """Output pack form of the Blackhole matmul kernels, the rule ttnn's matmul kernels apply at compile time
     (llk_matmul_block_pack): 0 per tile, 1 one block run, 2 the closed block (block-float outputs and small tiles)."""
     small = in0_tile_r_dim < 32 or in1_tile_c_dim < 32
-    if rt_dim * ct_dim < 2 or (math_fidelity == MathFidelity.LoFi and kt_dim > 1):
+    if rt_dim * ct_dim < 2 or (math_fidelity == MathFidelity.LoFi and kt_dim > 1 and dest_sync != DestSync.Full):
         return 0
+    # half sync at HiFi2: one K tile of small tiles, or with a Float32 output, leaves the per-tile pack on the critical path
+    half_block = kt_dim == 1 and math_fidelity == MathFidelity.HiFi2 and (small or formats.output_format == DataFormat.Float32)
     if dest_sync == DestSync.Half and (
-        math_fidelity != MathFidelity.LoFi
+        (math_fidelity != MathFidelity.LoFi and not half_block)
         or throttle >= 4
         or (small and formats.output_format == DataFormat.Float32)
-        # Float32 operands bound a full fp32 section on the unpacker, the denser DEST reads of the block pack only slow the math
+        # Float32 operands bound a full fp32 section on the unpacker, the denser DEST reads of the block pack only slow the math (three tiles
+        # already: the 1x3 block to Bfp8_b reads 0.6 cycles behind main with the closed block pack)
         or (
             formats.input_format == DataFormat.Float32
             and formats.output_format != DataFormat.Float32
-            and rt_dim * ct_dim >= 4
+            and rt_dim * ct_dim >= 3
         )
     ):
         return 0
