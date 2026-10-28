@@ -3,8 +3,10 @@
 """The SP relay must leave every rank the entry state the gather + chain gives it, and the final state on the first
 and last chronological ranks; with an output gate beside it, and call after call.
 
-Galaxy runs the relay on its SP8 torus axis; LoudBox SP8xTP1 and QuietBox SP4xTP1 run it on a FABRIC_1D_RING SP ring
-with Galaxy's per-chip workload, as their KDA layer gates do. Every rank holds 640 rows of 24 heads.
+Galaxy runs the relay on its SP8 torus axis, as Kimi-K3 does, and on an unwrapped Fabric2D, where the last rank's hand-off
+to the first crosses the SP line. LoudBox SP8xTP1 and QuietBox SP4xTP1 run it on a TorusY ring with Galaxy's per-chip
+workload, as their KDA layer gates do, and LoudBox's 4x2 and 2x4 on Fabric2D (SP4 and SP2 lines). Every rank holds 640
+rows of 24 heads, and every fabric carries K3's payload: one FP32 tile per packet.
 """
 
 import statistics
@@ -15,7 +17,9 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params
+from models.demos.deepseek_v3_d_p.tests.kda.utils import kda_device_params
 from models.demos.deepseek_v3_d_p.tt.kda.config import block_projection_program_config
 from models.demos.deepseek_v3_d_p.tt.kda.recurrence import (
     AffineTransform,
@@ -33,21 +37,12 @@ pytestmark = run_for_blackhole()
 _ROWS, _HEADS, _KEY = 640, 24, 128
 
 
-def _ring_case(shape: tuple[int, int], case_id: str, **fabric):
-    """LoudBox's and QuietBox's SP ring: FABRIC_1D_RING rings mesh axis 0, so SP takes that axis."""
+def _mesh_case(shape: tuple[int, int], topology: str, case_id: str, device_params: dict | None = None):
+    """SP takes mesh axis 0."""
     return pytest.param(
         shape,
-        fabric_1d_device_params(fabric_config=ttnn.FabricConfig.FABRIC_1D_RING, **fabric),
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=shape, topology="ring"),
-        id=case_id,
-    )
-
-
-def _galaxy_case(case_id: str, **fabric):
-    return pytest.param(
-        (8, 4),
-        torus_xy_device_params(**fabric),
-        marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
+        kda_device_params(shape) if device_params is None else device_params,
+        marks=pytest.mark.requires_mesh_topology(mesh_shape=shape, topology=topology),
         id=case_id,
     )
 
@@ -55,21 +50,17 @@ def _galaxy_case(case_id: str, **fabric):
 _MESH = pytest.mark.parametrize(
     "mesh_device,device_params",
     [
-        _galaxy_case("SP8xTP4"),
-        _ring_case((8, 1), "loudbox-SP8xTP1-ring"),
-        _ring_case((4, 1), "quietbox-SP4xTP1-ring"),
-    ],
-    indirect=True,
-)
-
-# The prefill runner's fabric: a 7168-byte payload carries one FP32 tile per packet, so a tile column needs four packet
-# headers and the sender buffers fewer columns.
-_MESH_ONE_TILE_PACKETS = pytest.mark.parametrize(
-    "mesh_device,device_params",
-    [
-        _galaxy_case("SP8xTP4-one-tile-packets", fabric_payload_size=7168),
-        _ring_case((8, 1), "loudbox-SP8xTP1-ring-one-tile-packets", fabric_payload_size=7168),
-        _ring_case((4, 1), "quietbox-SP4xTP1-ring-one-tile-packets", fabric_payload_size=7168),
+        _mesh_case((8, 4), "mesh-8x4", "SP8xTP4"),
+        _mesh_case(
+            (8, 4),
+            "mesh-8x4",
+            "SP8xTP4-fabric-2d",
+            fabric2d_device_params(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE),
+        ),
+        _mesh_case((8, 1), "ring", "loudbox-SP8xTP1-ring"),
+        _mesh_case((4, 2), "mesh-4x2", "loudbox-SP4xTP2-fabric-2d"),
+        _mesh_case((2, 4), "mesh-2x4", "loudbox-SP2xTP4-fabric-2d"),
+        _mesh_case((4, 1), "ring", "quietbox-SP4xTP1-ring"),
     ],
     indirect=True,
 )
@@ -183,15 +174,6 @@ def test_relay_affine_prefix_matches_gather_and_chain(mesh_device, start):
     actual_start = make_actual_start(mesh_device, start)
     entry, final, gate = _relay(mesh_device)(transforms.packed, transforms.initial_tt, actual_start)
     assert gate is None
-    transforms.assert_matches_gather_and_chain(entry, final, actual_start, start)
-
-
-@_MESH_ONE_TILE_PACKETS
-def test_relay_affine_prefix_one_tile_packets(mesh_device):
-    start = 672
-    transforms = _Transforms(mesh_device, seed=start)
-    actual_start = make_actual_start(mesh_device, start)
-    entry, final, _ = _relay(mesh_device)(transforms.packed, transforms.initial_tt, actual_start)
     transforms.assert_matches_gather_and_chain(entry, final, actual_start, start)
 
 
@@ -322,13 +304,15 @@ _PERF_KERNEL = "relay_affine_prefix"
 
 def _perf_case(shape: tuple[int, int], case_id: str, reference_us: float | None):
     """A ring case with its device-time reference; None fails the case with its measured time, to calibrate it."""
-    ring = _ring_case(shape, case_id)
+    ring = _mesh_case(shape, "ring", case_id)
     return pytest.param(*ring.values, reference_us, marks=ring.marks, id=case_id)
 
 
+# To re-measure on the dedicated runners with K3's payload on TorusY (they were 110.3 us and 80.3 us with 3-tile packets
+# on FABRIC_1D_RING).
 _PERF_CASES = [
-    _perf_case((8, 1), "loudbox-SP8xTP1-ring", 110.3),
-    _perf_case((4, 1), "quietbox-SP4xTP1-ring", 80.3),
+    _perf_case((8, 1), "loudbox-SP8xTP1-ring", None),
+    _perf_case((4, 1), "quietbox-SP4xTP1-ring", None),
 ]
 
 

@@ -25,12 +25,12 @@ import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.common.prefill.runners.runner_utils import load_trace_token_ids, resolve_trace_dir
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import kda_state_dict_sha256, load_kda_layer_state_dict
 from models.demos.deepseek_v3_d_p.tests.kda.first_layer_input import FIRST_LAYER_INPUT, FirstLayerInput
 from models.demos.deepseek_v3_d_p.tests.kda.long_context_golden import MANIFEST, load_window, token_ids_sha256
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KimiK3TestCase,
+    kda_device_params,
     make_kimi_k3_device_case,
     mla_row_permutation,
     reconstruct_sp_tp_tensor,
@@ -65,7 +65,7 @@ _THRESHOLDS: dict[int, dict[str, float]] = {
 
 @pytest.mark.parametrize(
     "mesh_device,tensor_parallel_axis,device_params",
-    [pytest.param((2, 4), 1, fabric_1d_device_params(), id="SP2xTP4-fabric-1d")],
+    [pytest.param((2, 4), 1, kda_device_params((2, 4)), id="SP2xTP4-fabric-2d")],
     indirect=["mesh_device", "device_params"],
 )
 @pytest.mark.parametrize("tokens", [5120, 20480, 1044480], ids=["5k", "20k", "1M"])

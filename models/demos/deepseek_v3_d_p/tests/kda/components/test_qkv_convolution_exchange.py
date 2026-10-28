@@ -22,8 +22,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, fabric_1d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.chronology_oracle import chronological_topology
+from models.demos.deepseek_v3_d_p.tests.kda.utils import kda_device_params
 from models.demos.deepseek_v3_d_p.tt.kda.kda import _HistoryExchange
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import (
     assert_accurate,
@@ -78,22 +78,14 @@ def _mesh(shape: tuple[int, int], sp_axis: int, device_params: dict, topology: s
     )
 
 
-# LoudBox, its production SP2xTP4 call on a 1D fabric (the last rank reaches rank 0 backward).
-_LOUDBOX = _mesh((2, 4), 0, fabric_1d_device_params(), "mesh-2x4", "loudbox-SP2xTP4-fabric-1d", _LOUDBOX_SP2XTP4)
+# LoudBox, its production SP2xTP4 call on a 2D fabric.
+_LOUDBOX = _mesh((2, 4), 0, kda_device_params((2, 4)), "mesh-2x4", "loudbox-SP2xTP4-fabric-2d", _LOUDBOX_SP2XTP4)
 # Each system's ids start with it, so its CI job selects them with -k.
 _MESHES = [
     _LOUDBOX,
-    # QuietBox: an SP4 ring and SP2 on a 2D fabric. The ring's SP axis turns at every chip, which a 2D multicast
-    # cannot follow, so it runs on a 1D ring fabric, whose routing plane follows the turns.
-    _mesh(
-        (1, 4),
-        1,
-        fabric_1d_device_params(fabric_config=ttnn.FabricConfig.FABRIC_1D_RING),
-        "ring",
-        "quietbox-SP4-axis1-ring",
-        _COVERAGE,
-    ),
-    _mesh((2, 2), 0, fabric2d_device_params(), "mesh-2x2", "quietbox-SP2xTP2-fabric-2d", _COVERAGE),
+    # QuietBox: an SP4 ring on TorusX and SP2 on an unwrapped 2D fabric.
+    _mesh((1, 4), 1, kda_device_params((1, 4)), "ring", "quietbox-SP4-axis1-ring", _COVERAGE),
+    _mesh((2, 2), 0, kda_device_params((2, 2)), "mesh-2x2", "quietbox-SP2xTP2-fabric-2d", _COVERAGE),
 ]
 
 
@@ -330,7 +322,7 @@ def _ring_perf_case(shape: tuple[int, int], sp_axis: int, case_id: str, referenc
     return pytest.param(
         shape,
         sp_axis,
-        fabric_1d_device_params(fabric_config=ttnn.FabricConfig.FABRIC_1D_RING),
+        kda_device_params(shape),
         _GALAXY_PER_CHIP,
         reference_us,
         marks=pytest.mark.requires_mesh_topology(mesh_shape=shape, topology="ring"),

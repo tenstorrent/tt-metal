@@ -15,6 +15,12 @@ import ttnn
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState, kda_forward_reference
 from models.demos.deepseek_v3_d_p.reference.kda.config import KDAConfig
 from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import KimiK3Config
+from models.demos.deepseek_v3_d_p.tests.fabric_profiles import (
+    fabric2d_device_params,
+    torus_x_device_params,
+    torus_xy_device_params,
+    torus_y_device_params,
+)
 from models.demos.deepseek_v3_d_p.tests.kda.checkpoint_utils import (
     KIMI_K3_FIRST_KDA_LAYER,
     KIMI_K3_HF_REVISION,
@@ -33,6 +39,24 @@ from models.demos.deepseek_v3_d_p.tt.mla.utils import rotated_chip_positions
 from models.demos.deepseek_v3_d_p.tt.tt_ccl import per_axis_topology
 from models.tt_transformers.tt.ccl import TT_CCL
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate
+
+
+def kda_device_params(mesh_shape: tuple[int, int], **overrides) -> dict:
+    """The fabric a KDA test opens on ``mesh_shape``: a 2D fabric, as Kimi-K3 runs on, with K3's fabric payload.
+
+    Galaxy's 8x4 takes K3's TorusXY. A ring of chips takes the torus over its one axis (TorusY for Nx1, TorusX for 1xN,
+    as the box's CI matrix lists them), and 2x2, 2x4 and 4x2 take unwrapped Fabric2D.
+    """
+    rows, columns = mesh_shape
+    if (rows, columns) == (8, 4):
+        profile = torus_xy_device_params
+    elif columns == 1 and rows > 1:
+        profile = torus_y_device_params
+    elif rows == 1 and columns > 1:
+        profile = torus_x_device_params
+    else:
+        profile = fabric2d_device_params
+    return profile(fabric_payload_size=KimiK3Config.FABRIC_PAYLOAD_SIZE, **overrides)
 
 
 @dataclass(frozen=True)

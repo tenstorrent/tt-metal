@@ -7,7 +7,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric_1d_device_params, torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.kda.utils import kda_device_params
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import make_actual_start
 
 pytestmark = run_for_blackhole()
@@ -29,13 +29,13 @@ def _meshes():
     return [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(),
+            kda_device_params((8, 4)),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4",
         ),
         pytest.param(
             (2, 4),
-            fabric_1d_device_params(),
+            kda_device_params((2, 4)),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(2, 4), topology="mesh-2x4"),
             id="SP2xTP4",
         ),
@@ -234,7 +234,7 @@ def test_select_final_carry_with_projection_rejects_aliased_operands(mesh_device
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(),
+            kda_device_params((8, 4)),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4",
         )
