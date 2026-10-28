@@ -28,7 +28,8 @@ using namespace tt::tt_metal;
 
 namespace {
 
-constexpr uint32_t kRingSize = 8;
+// One input slice and one intermediate slice per ring position; the count the op is written for.
+constexpr uint32_t kRingSize = ttnn::experimental::prim::kNumIntermediateSlices;
 constexpr uint32_t kNumDirectionsPerLink = 2;
 constexpr uint32_t kTileGranularity = 2;
 // Push order of desc.kernels. Fabric define injection indexes the writer by this handle.

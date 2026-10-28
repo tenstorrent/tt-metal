@@ -940,6 +940,12 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
                 get_riscv_name(reader_.env.get_hal(), programmable_core_type_, other_risc),
                 san.len());
         } break;
+        case dev_msgs::DebugSanitizeNocReadToRegAddr:
+            error_msg = get_noc_target_str(reader_.env, reader_.device_id, programmable_core_type_, noc, san);
+            error_msg +=
+                " (NOC read lands in a local register; on Quasar the NIU can strand the response and stall L1 "
+                "writes, reads must land in L1).";
+            break;
         default:
             error_msg = fmt::format(
                 "Watcher unexpected data corruption, noc debug state on core {}, unknown failure code: {}",

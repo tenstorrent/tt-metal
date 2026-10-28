@@ -252,6 +252,24 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
             "If both output dtype and output tensor provided dtype should match");
     }
 
+    // MX is unpacked to and packed from Float16_b, so pairing it with an integer dtype needs a numeric cast on top,
+    // and no factory wires one: MX -> Int32 packs Float16_b bits as Int32, and other pairs fail deep in the stack.
+    {
+        const DataType a_dtype = input_tensor_a.dtype();
+        const std::optional<DataType> b_dtype =
+            input_tensor_b.has_value() ? std::optional<DataType>(input_tensor_b->dtype()) : std::nullopt;
+        const DataType output_dtype = output_tensor.has_value() ? output_tensor->dtype() : attributes.get_dtype();
+        const bool has_mx = is_mx(a_dtype) || (b_dtype.has_value() && is_mx(*b_dtype)) || is_mx(output_dtype);
+        const bool has_integer = !is_floating_point(a_dtype) || (b_dtype.has_value() && !is_floating_point(*b_dtype)) ||
+                                 !is_floating_point(output_dtype);
+        TT_FATAL(
+            !(has_mx && has_integer),
+            "MX/integer conversions are not supported yet (a: {}, b: {}, output: {}); convert through bfloat16 first",
+            a_dtype,
+            b_dtype.has_value() ? fmt::format("{}", *b_dtype) : std::string("scalar"),
+            output_dtype);
+    }
+
     TT_FATAL(
         input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR,
         "First operand to eltwise binary must have TILE or ROW_MAJOR layout, got {}",

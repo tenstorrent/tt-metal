@@ -13,7 +13,7 @@
 #include "ckernel_sfpu_sqrt_custom.h"
 #include "ckernel_sfpu_exp.h"
 #include "ckernel_sfpu_log1p.h"
-#include "sfpu/ckernel_sfpu_log.h"
+#include "ckernel_sfpu_log.h"
 #include "ckernel_sfpu_polyval.h"
 #include "sfpi.h"
 

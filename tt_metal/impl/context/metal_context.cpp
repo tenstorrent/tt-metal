@@ -112,11 +112,6 @@ ContextId extract_context_id(const IDevice* device) {
     return mesh_device->impl().get_context_id();
 }
 
-ContextId extract_context_id(const distributed::MeshDevice* mesh_device) {
-    TT_ASSERT(mesh_device != nullptr, "MeshDevice is nullptr");
-    return mesh_device->impl().get_context_id();
-}
-
 void MetalContext::initialize_device_manager(
     const std::vector<ChipId>& device_ids,
     uint8_t num_hw_cqs,

@@ -10,6 +10,7 @@
 #include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 
 namespace ttnn::experimental::prim {
 void RingAttentionAllGatherAsyncDeviceOperation::validate_on_program_cache_miss(
@@ -152,6 +153,22 @@ RingAttentionAllGatherAsyncDeviceOperation::create_output_tensors(
         output_tensors.emplace_back(create_device_tensor(output_spec, input_tensors[0].device()));
     }
     return output_tensors;
+}
+
+std::vector<tt::tt_metal::TensorTopology> RingAttentionAllGatherAsyncDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // One output per input (a caller's persistent buffers are those outputs, one per input), each input gathered
+    // along `dim` on `cluster_axis`: Replicate on the cluster axis, that input's placements elsewhere. With no honest
+    // label for an input (nullopt, already reported) that output keeps its input's label.
+    const auto& inputs = tensor_args.input_tensor;
+    std::vector<tt::tt_metal::TensorTopology> topologies;
+    topologies.reserve(inputs.size());
+    for (const auto& input : inputs) {
+        topologies.push_back(ttnn::operations::ccl::common::all_gather_output_topology(
+                                 input, operation_attributes.cluster_axis, operation_attributes.dim)
+                                 .value_or(input.tensor_topology()));
+    }
+    return topologies;
 }
 
 std::tuple<RingAttentionAllGatherAsyncParams, RingAttentionAllGatherAsyncInputs>

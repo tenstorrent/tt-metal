@@ -11,7 +11,6 @@
 #include "llk_sfpu/llk_math_eltwise_binary_sfpu_macros.h"
 #include "llk_sfpu/llk_math_eltwise_ternary_sfpu_macros.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
-#include "sfpu/ckernel_sfpu_topk.h"
 
 // To add a new metal SFPU operation:
 // 1. Include the metal header below: #include "llk_sfpu/<operation>.h"
@@ -36,11 +35,6 @@
 #include "llk_sfpu/ckernel_sfpu_clamp.h"
 #include "llk_sfpu/ckernel_sfpu_copy_dest_values.h"
 #include "llk_sfpu/ckernel_sfpu_quant.h"
-// Metal comparison-to-zero / unary-int-compare kernels (calculate_comp,
-// calculate_comp_int, calculate_comp_uint16, calculate_eqz_uint32,
-// calculate_nez_uint32, calculate_comp_unary_int + their *_init). Distinct from
-// the tt-llk sfpu/ckernel_sfpu_comp.h (_calculate_zero_comp_ etc.) included
-// below; the two share no symbol names so both can coexist.
 #include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
 #include "llk_sfpu/ckernel_sfpu_celu.h"
 #include "llk_sfpu/ckernel_sfpu_comp.h"
@@ -84,6 +78,7 @@
 #include "llk_sfpu/ckernel_sfpu_prelu.h"
 #include "llk_sfpu/ckernel_sfpu_rdiv.h"
 #include "llk_sfpu/ckernel_sfpu_recip.h"
+#include "llk_sfpu/ckernel_sfpu_relu.h"
 #include "llk_sfpu/ckernel_sfpu_remainder.h"
 #include "llk_sfpu/ckernel_sfpu_rpow.h"
 #include "llk_sfpu/ckernel_sfpu_rsqrt.h"
@@ -105,6 +100,7 @@
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
 #include "llk_sfpu/ckernel_sfpu_tanh_derivative.h"
 #include "llk_sfpu/ckernel_sfpu_tanhshrink.h"
+#include "llk_sfpu/ckernel_sfpu_topk.h"
 #include "llk_sfpu/ckernel_sfpu_trigonometry.h"
 #include "llk_sfpu/ckernel_sfpu_typecast.h"
 #include "llk_sfpu/ckernel_sfpu_unary_comp.h"
@@ -113,12 +109,9 @@
 #include "llk_sfpu/ckernel_sfpu_unary_shift.h"
 #include "llk_sfpu/ckernel_sfpu_xielu.h"
 #include "sfpu/ckernel_sfpu_add_int.h"
-#include "sfpu/ckernel_sfpu_comp.h"
 #include "sfpu/ckernel_sfpu_isinf_isnan.h"
-#include "sfpu/ckernel_sfpu_relu.h"
 #include "sfpu/ckernel_sfpu_rounding_ops.h"
 #include "sfpu/ckernel_sfpu_sub_int.h"
-#include "sfpu/ckernel_sfpu_tanh_derivative.h"
 #include "sfpu/ckernel_sfpu_threshold.h"
 
 // Test-only SFPU loop/adapter wrappers (calculate_sqrt_custom, calculate_expm1_cw,
@@ -629,7 +622,8 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     else if constexpr (OPERATION == SfpuType::silu)
     {
         // silu_init routes to sigmoid_init<false>, seeding the reciprocal's
-        // vConstFloatPrgm0 that calculate_silu depends on.
+        // vConstFloatPrgm0 that calculate_silu depends on (and, on Blackhole,
+        // vConstFloatPrgm1 = 1/ln2 for its exp).
         llk_math_eltwise_unary_sfpu_init<OPERATION>(silu_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::log1p)
@@ -693,13 +687,11 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
         // These ops need only the generic per-op init (SFPU config reg + ADDR_MOD_7 from
         // llk_math_sfpu_init_once() above, plus a dest RWC counter reset), so route them through
         // the bare `unused` init. The reason each op is safe to route this way varies:
-        //   - floor/ceil/trunc/frac/round/relu_max/relu_min/hardtanh/clamp: their production/metal
+        //   - floor/ceil/trunc/frac/round/relu_max/relu_min/lrelu/hardtanh/clamp: their production/metal
         //     <op>_init() genuinely reduces to math::reset_counters, so the bare init here
         //     matches production behavior.
         //   - add1/identity/cast_fp32_to_fp16a/sqrt_custom/expm1_cw: the
         //     OPERATION-keyed bare init has no delegate branch.
-        //   - lrelu: no linkable definition in this test build, since only the tt-llk common
-        //     (not the metal llk_api) header is included.
         llk_math_eltwise_unary_sfpu_init<SfpuType::unused, is_fp32_dest_acc_en>();
     }
     else if constexpr (
@@ -1413,7 +1405,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::tanh_derivative_lut)
     {
-        // Legacy tt-llk primitive: computes 1 - tanh(x)^2 with tanh from the LUT
+        // Legacy primitive: computes 1 - tanh(x)^2 with tanh from the LUT
         // (WITH_PRECOMPUTED_TANH = 0). Distinct from the accurate sech2 variant above.
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_tanh_derivative_, (APPROX_MODE, 0, ITERATIONS), dst_index, vector_mode, ITERATIONS);
     }
@@ -2488,7 +2480,8 @@ void call_ternary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::snake_beta)
     {
-        // snake_beta uses sfpu_reciprocal_iter internally; snake_beta_init programs its Newton constant in every mode.
+        // snake_beta uses sfpu_reciprocal_iter internally; snake_beta_init programs its Newton constant in every mode
+        // (BH: Prgm0; WH: Prgm0..2) and, on Blackhole, also programs Prgm1/2 = 1/pi, pi for the range reduction.
         SFPU_TERNARY_INIT_FN(snake_beta, sfpu::snake_beta_init, (APPROX_MODE));
     }
     else

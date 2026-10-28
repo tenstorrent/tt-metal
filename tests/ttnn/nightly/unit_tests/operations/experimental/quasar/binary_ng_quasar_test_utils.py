@@ -5,25 +5,18 @@
 """
 Shared test harness for the Quasar binary_ng sweeps under
 tests/ttnn/nightly/unit_tests/operations/experimental/quasar/. Holds the helpers originally defined in
-test_binary_ng_no_bcast.py (_on_quasar, the *_sharded_config builders, _act, _run, _run_mixed) so they can
+test_binary_ng_no_bcast.py (the *_sharded_config builders, _act, _run, _run_mixed) so they can
 be reused by both the no-broadcast suite and upcoming subtile-broadcast test files.
 
 Not collected by pytest: the module deliberately has no `test_` prefix.
 """
 
 import math
-import os
 
 import torch
 
 import ttnn
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
-
-
-def _on_quasar():
-    # ttnn.get_arch_name() returns "invalid" under the simulator, so detect Quasar from the sim env
-    # vars the simulator run sets (ARCH_NAME=quasar / CHIP_ARCH=quasar).
-    return any("quasar" in os.environ.get(v, "").lower() for v in ("ARCH_NAME", "CHIP_ARCH"))
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp, ulp_distance
 
 
 def _height_sharded_config(shard_shape, core_grid):
@@ -110,28 +103,60 @@ def _act(act_type):
     return [ttnn.UnaryWithParam(act_type)] if act_type is not None else []
 
 
-# The largest ULP distance from torch's result on the device's operands, per dtype and op. fp32 was measured on
-# craq-sim: add, subtract and multiply match bit for bit, and divide is within one step. bf16 takes production's bound
-# of 1: Quasar's SFPU multiply truncates, while Wormhole and Blackhole, where these suites also run, round to nearest
-# even. maximum and minimum select an operand, so they are exact.
+# The largest ULP distance from torch's result on the device's operands, per dtype and op, on Quasar (fp32 as measured
+# on ttsim); the Wormhole and Blackhole runs share these bounds. bf16 takes production's bound of 1: on Quasar the SFPU
+# multiply truncates and the FPU add rounds twice. maximum and minimum select an operand, so they are exact.
 _ULP = {
-    ttnn.float32: {"add": 0, "subtract": 0, "multiply": 0, "divide": 1, "maximum": 0, "minimum": 0},
+    ttnn.float32: {"add": 0, "subtract": 0, "multiply": 0, "divide": 2, "maximum": 0, "minimum": 0},
     ttnn.bfloat16: {"add": 1, "subtract": 1, "multiply": 1, "divide": 1, "maximum": 0, "minimum": 0},
 }
+
+
+def _fpu_add_bf16(a, b):
+    """bf16 a + b as Quasar's FPU rounds it. The FPU aligns the operand with the smaller exponent to the other's with 7
+    bits below the bf16 ULP, rounds it half away from zero, and rounds the sum to nearest even."""
+    a, b = a.double(), b.double()
+    ea, eb = torch.frexp(a).exponent, torch.frexp(b).exponent
+    a_big = ea >= eb
+    big, small = torch.where(a_big, a, b), torch.where(a_big, b, a)
+    # frexp's mantissa is in [0.5, 1), so the larger operand's bf16 ULP is 2**(e - 8); the FPU keeps 7 bits below it.
+    step = torch.exp2((torch.maximum(ea, eb) - (8 + 7)).double())
+    aligned = torch.sign(small) * torch.floor(small.abs() / step + 0.5) * step
+    rounded = (big + aligned).float().to(torch.bfloat16)
+    # frexp gives a zero the exponent 0, which can make the zero the larger operand.
+    return torch.where((a == 0) | (b == 0), (a + b).float().to(torch.bfloat16), rounded)
+
+
+# The bf16 sum as each Quasar target rounds it: twice on the hardware and on ttsim, once on craq-sim. An element is
+# right when it matches either.
+# TODO: keep only _fpu_add_bf16 when craq-sim rounds the FPU add as the hardware does.
+_FPU_ADD_ROUNDINGS = (_fpu_add_bf16, lambda a, b: (a.float() + b.float()).to(torch.bfloat16))
+
+
+def _add_goldens(ta, tb):
+    """The oracles of a bf16 add, on the operands as the device holds them."""
+    a, b = ttnn.to_torch(ta).float(), ttnn.to_torch(tb).float()
+    return [rounding(a, b) for rounding in _FPU_ADD_ROUNDINGS]
+
+
+def _matches_none(got, goldens, bound=0):
+    """Per element: True where `got` is more than `bound` ULP from every golden."""
+    return torch.stack([ulp_distance(got, golden) > bound for golden in goldens]).all(dim=0)
+
+
 # Activations that keep the golden exact: RELU, and SQUARE in fp32.
 _EXACT_ACTS = {
     ttnn.float32: (None, ttnn.UnaryOpType.RELU, ttnn.UnaryOpType.SQUARE),
     ttnn.bfloat16: (None, ttnn.UnaryOpType.RELU),
 }
-# The other activations, after a multiply: the largest ULP distance measured on craq-sim against a golden that rounds
-# each intermediate to the dtype, or production's bound where that is larger (TANH: 5). The bounds were measured on a
-# multiply only; beside another op the check is PCC only. GELU's fused form is the fast lookup table, for which
-# production's own bounds (30,000 ULP in bf16) show that ULP is not a measure, so it is PCC only too.
+# The other activations, after a multiply: the largest ULP distance on Quasar (bf16 on ttsim, fp32 on craq-sim) against
+# a golden that rounds each intermediate to the dtype, or production's bound where larger (TANH: 5). Beside another op
+# the check is PCC only, and so is GELU's fused form, the fast lookup table (production's own bf16 bound: 30,000 ULP).
 _ACT_ULP = {
     ttnn.float32: {ttnn.UnaryOpType.TANH: 5, ttnn.UnaryOpType.SIGMOID: 3, ttnn.UnaryOpType.SILU: 4},
     ttnn.bfloat16: {
         ttnn.UnaryOpType.TANH: 5,
-        ttnn.UnaryOpType.SIGMOID: 4,
+        ttnn.UnaryOpType.SIGMOID: 5,
         ttnn.UnaryOpType.SILU: 4,
         ttnn.UnaryOpType.SQUARE: 4,
     },

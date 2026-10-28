@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Local invariants of WorkUnitSpec::kernels (program_spec.hpp): for each DFB its kernels bind, exactly one
-// producer and one consumer instance, and at most one of its kernels binds a given scratchpad.
+// producer and one consumer instance, and, at most one of its kernels binds a given scratchpad.
 
 #include <gtest/gtest.h>
 #include <gmock/gmock.h>
@@ -25,6 +25,7 @@ namespace {
 using test_helpers::MakeMinimalDFB;
 using test_helpers::MakeMinimalGen1ComputeKernel;
 using test_helpers::MakeMinimalGen1DMKernel;
+using test_helpers::MakeMinimalGen1ValidProgramSpec;
 using test_helpers::MakeMinimalGen2ComputeKernel;
 using test_helpers::MakeMinimalGen2DMKernel;
 using test_helpers::MakeMinimalValidProgramSpec;
@@ -328,8 +329,8 @@ TEST_F(ProgramSpecTestGen1, CPU_DFBMultipleConsumersOnSameNodeSucceedsWithFlag) 
 
 TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadBoundByTwoKernelsSameNodeFails) {
     // One ScratchpadSpec bound by two kernels that share a node. A scratchpad is private node-local
-    // L1; binding it from two kernels on the SAME node would be true sharing, which is not yet
-    // supported (the disjoint-node case IS allowed — see the next test). MakeMinimalValidProgramSpec
+    // L1; binding it from two kernels on the SAME node requires explicit opt-in
+    // (the disjoint-node case IS allowed — see the next test). MakeMinimalValidProgramSpec
     // places both kernels on node {0,0}, so this is the same-node collision case.
     ProgramSpec spec = MakeMinimalValidProgramSpec();
 
@@ -343,6 +344,28 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadBoundByTwoKernelsSameNodeFails) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("kernel instances on node")));
+}
+
+TEST_F(ProgramSpecTestGen1, CPU_ScratchpadMultiBindingOptInIsPerResource) {
+    ProgramSpec spec = MakeMinimalGen1ValidProgramSpec();
+    spec.scratchpads = {
+        ScratchpadSpec{
+            .unique_id = ScratchpadSpecName{"shared"},
+            .size_per_node = 1024,
+            .advanced_options = {.allow_instance_multi_binding = true}},
+        ScratchpadSpec{.unique_id = ScratchpadSpecName{"private"}, .size_per_node = 1024},
+    };
+    for (auto& kernel : spec.kernels) {
+        kernel.scratchpad_bindings = {
+            {.scratchpad_spec_name = ScratchpadSpecName{"shared"}, .accessor_name = "shared"},
+            {.scratchpad_spec_name = ScratchpadSpecName{"private"}, .accessor_name = "local"},
+        };
+    }
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("ScratchpadSpec 'private' is bound by")));
+    spec.scratchpads[1].advanced_options.allow_instance_multi_binding = true;
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
 }
 
 TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadBoundByTwoKernelsDisjointNodesSucceeds) {

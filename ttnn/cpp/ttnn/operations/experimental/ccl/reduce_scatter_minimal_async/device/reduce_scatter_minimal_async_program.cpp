@@ -791,7 +791,8 @@ auto build_ring_reduce_scatter_program_impl(
     const uint32_t l1_unreserved_base_address =
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
-    const auto buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const auto buffer_size_bytes_full_size_channel =
+        tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     // Transient Fabric Mux V2: one mux core per (link, direction), serving num_workers_per_direction
     // client channels (one channel per sender worker). The V2 mux auto-terminates once all of its
     // clients close their connections, so no explicit termination signalling is required. The mux
@@ -1468,7 +1469,8 @@ ReduceScatterDescriptorArtifacts build_ring_reduce_scatter_minimal_async_program
     const uint32_t l1_unreserved_base_address =
         mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
     const size_t mux_base_l1_address = l1_unreserved_base_address;
-    const auto buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const auto buffer_size_bytes_full_size_channel =
+        tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     // Transient Fabric Mux V2: one mux core per (link, direction), serving num_workers_per_direction
     // client channels (one channel per sender worker). The V2 mux auto-terminates once all of its
     // clients close their connections, so no explicit termination signalling is required. The mux
@@ -2140,7 +2142,7 @@ auto build_line_reduce_scatter_program_impl(
     const uint32_t max_dst_size = fp32_dest_acc_en ? 4 : 8;
 
     // L1 Scratch CB Creation
-    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
     uint32_t num_pages_per_packet = packet_size_bytes / l1_scratch_cb_page_size_bytes;
     uint32_t max_scatter_write_pages = 2;
@@ -2255,7 +2257,8 @@ auto build_line_reduce_scatter_program_impl(
 
     const auto num_full_size_channels = num_workers_per_direction;
     const auto num_header_only_channels = 0;
-    const auto buffer_size_bytes_full_size_channel = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const auto buffer_size_bytes_full_size_channel =
+        tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes(*mesh_device);
 
     // Fabric mux kernel
     auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(

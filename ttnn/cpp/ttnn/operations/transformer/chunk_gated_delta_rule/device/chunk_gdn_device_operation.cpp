@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <utility>
 #include <variant>
 
@@ -26,10 +27,10 @@ void check_gdn_tensor(const Tensor& t, const char* name, DataType dt) {
     TT_FATAL(t.buffer() != nullptr, "chunk_gdn: {} must be on device", name);
 }
 
-// A gate, g or beta: the token-major [B, T, HV] tensor the model produces, fp32 or bf16, TILE, with B * HV heads and
-// num_chunks chunks of chunk_size tokens (the reader zeroes the rows past T).
+// A gate, g or beta: the token-major [B, T, HV] tensor the model produces, fp32 or bf16, TILE, with B * HV == rows
+// heads and num_chunks chunks of chunk_size tokens (the reader zeroes the rows past T).
 void check_gdn_gate(
-    const Tensor& t, const char* name, uint32_t BH, uint32_t HV, uint32_t num_chunks, uint32_t chunk_size) {
+    const Tensor& t, const char* name, uint32_t rows, uint32_t HV, uint32_t num_chunks, uint32_t chunk_size) {
     TT_FATAL(t.layout() == Layout::TILE, "chunk_gdn: {} must be TILE layout", name);
     TT_FATAL(
         t.dtype() == DataType::FLOAT32 || t.dtype() == DataType::BFLOAT16, "chunk_gdn: {} must be fp32 or bf16", name);
@@ -37,7 +38,8 @@ void check_gdn_gate(
     const auto& s = t.logical_shape();
     TT_FATAL(s.rank() == 3, "chunk_gdn: {} must be [B, T, HV] (got rank {})", name, s.rank());
     TT_FATAL(HV > 0 && s[2] == HV, "chunk_gdn: {} has {} heads per row, expected HV = {}", name, s[2], HV);
-    TT_FATAL(s[0] * HV == BH, "chunk_gdn: {} is [{}, {}, {}], expected B * HV == BH = {}", name, s[0], s[1], s[2], BH);
+    TT_FATAL(
+        s[0] * HV == rows, "chunk_gdn: {} is [{}, {}, {}], expected B * HV == rows = {}", name, s[0], s[1], s[2], rows);
     TT_FATAL(
         (s[1] + chunk_size - 1) / chunk_size == num_chunks,
         "chunk_gdn: {} has T = {} tokens, expected {} chunks of {}",
@@ -45,6 +47,10 @@ void check_gdn_gate(
         s[1],
         num_chunks,
         chunk_size);
+}
+void check_gdn_shape(const Tensor& t, const char* name, const ttnn::Shape& expected) {
+    TT_FATAL(
+        t.logical_shape() == expected, "chunk_gdn: {} has shape {}, expected {}", name, t.logical_shape(), expected);
 }
 }  // namespace
 
@@ -61,26 +67,48 @@ void ChunkGdnDeviceOperation::validate_on_program_cache_miss(
     using namespace tt::constants;
     // Input contract shared by both factories: the mono kernel and the fused producers read the same
     // head-major tensors (identical to the phased PREP prim's contract, whose reader/compute the fused
-    // producer runs unchanged; the flat forms are the prep reader's and therefore Fused-only).
+    // producer runs unchanged; the flat forms are the prep reader's and therefore Fused-only). The launcher
+    // derives rows (heads in the tensors) once from the path's flags; every tensor is held to its path's shape
+    // and the head range [head_offset, head_offset + BH) to that one rows.
+    TT_FATAL(attrs.BH >= 1, "chunk_gdn: BH must be >= 1");
+    TT_FATAL(attrs.rows >= 1, "chunk_gdn: rows must be >= 1");
+    validate_gdn_chunk_size(attrs.chunk_size);
+    TT_FATAL(attrs.key_dim % TILE_WIDTH == 0, "key_dim must be a multiple of 32");
+    TT_FATAL(attrs.val_dim % TILE_WIDTH == 0, "val_dim must be a multiple of 32");
+    const uint32_t rows = attrs.rows, NC = attrs.num_chunks, C = attrs.chunk_size;
+    const uint32_t K = attrs.key_dim, V = attrs.val_dim;
+    // Flat tensors are token-major [B, T, heads * D] with B * HV == rows and T == NC * C.
+    auto flat_batch = [&](const char* what) {
+        TT_FATAL(
+            attrs.HV > 0 && rows % attrs.HV == 0, "chunk_gdn: {} needs rows ({}) = B * HV ({})", what, rows, attrs.HV);
+        return rows / attrs.HV;
+    };
     check_gdn_tensor(in.q, "q", DataType::BFLOAT16);
     check_gdn_tensor(in.k, "k", DataType::BFLOAT16);
-    check_gdn_tensor(in.v, "v", DataType::BFLOAT16);  // flat [B,T,HV*V] when attrs.v_flat; else [BH,NC,C,V]
-    if (attrs.v_flat) {
-        TT_FATAL(attrs.HV > 0, "v_flat requires HV > 0");
-        const auto& vs = in.v.logical_shape();
-        TT_FATAL(vs.rank() == 3, "v_flat expects a flat [B,T,HV*V] v (got rank {})", vs.rank());
-        TT_FATAL(vs[2] == attrs.HV * attrs.val_dim, "v_flat width {} != HV*V ({}*{})", vs[2], attrs.HV, attrs.val_dim);
-    }
+    check_gdn_tensor(in.v, "v", DataType::BFLOAT16);
     if (attrs.qk_flat) {
-        TT_FATAL(attrs.Hk > 0, "qk_flat requires Hk > 0");
-        const auto& qsf = in.q.logical_shape();
-        TT_FATAL(qsf.rank() == 3, "qk_flat expects a flat [B,T,Hk*K] q (got rank {})", qsf.rank());
         TT_FATAL(
-            qsf[2] == attrs.Hk * attrs.key_dim, "qk_flat width {} != Hk*K ({}*{})", qsf[2], attrs.Hk, attrs.key_dim);
+            attrs.Hk > 0 && attrs.HV % attrs.Hk == 0,
+            "chunk_gdn: qk_flat needs Hk ({}) dividing HV ({})",
+            attrs.Hk,
+            attrs.HV);
         TT_FATAL(attrs.qk_norm, "qk_flat requires qk_norm (flat q/k are unnormalized; norm is in-kernel)");
+        const uint32_t B = flat_batch("qk_flat");
+        check_gdn_shape(in.q, "q", ttnn::Shape({B, NC * C, attrs.Hk * K}));
+        check_gdn_shape(in.k, "k", ttnn::Shape({B, NC * C, attrs.Hk * K}));
+    } else {
+        check_gdn_shape(in.q, "q", ttnn::Shape({rows, NC, C, K}));
+        check_gdn_shape(in.k, "k", ttnn::Shape({rows, NC, C, K}));
     }
-    check_gdn_gate(in.g, "g", attrs.BH, attrs.HV, attrs.num_chunks, attrs.chunk_size);
-    check_gdn_gate(in.beta, "beta", attrs.BH, attrs.HV, attrs.num_chunks, attrs.chunk_size);
+    if (attrs.v_flat) {
+        const uint32_t B = flat_batch("v_flat");
+        check_gdn_shape(in.v, "v", ttnn::Shape({B, NC * C, attrs.HV * V}));
+    } else {
+        check_gdn_shape(in.v, "v", ttnn::Shape({rows, NC, C, V}));
+    }
+    // The gates are token-major on both paths: [B, T, HV] with B * HV == rows and ceil(T / C) == NC.
+    check_gdn_gate(in.g, "g", rows, attrs.HV, NC, C);
+    check_gdn_gate(in.beta, "beta", rows, attrs.HV, NC, C);
     // The factory reads both gates with g's T: a beta of the same chunk count but fewer tokens reads past its end.
     TT_FATAL(
         in.g.logical_shape()[1] == in.beta.logical_shape()[1],
@@ -91,13 +119,37 @@ void ChunkGdnDeviceOperation::validate_on_program_cache_miss(
     check_gdn_tensor(in.tril_c, "tril_c", DataType::FLOAT32);
     check_gdn_tensor(in.ones_c, "ones_c", DataType::FLOAT32);
     check_gdn_tensor(in.masks_c, "masks_c", DataType::FLOAT32);
+    check_gdn_shape(in.eye_c, "eye_c", ttnn::Shape({1, 1, C, C}));
+    check_gdn_shape(in.tril_c, "tril_c", ttnn::Shape({1, 1, C, C}));
+    check_gdn_shape(in.ones_c, "ones_c", ttnn::Shape({1, 1, C, C}));
+    check_gdn_shape(in.masks_c, "masks_c", ttnn::Shape({1, 1, TILE_HEIGHT, 3 * TILE_WIDTH}));
     // Required: the mono reader and the fused receivers stream S from this buffer unconditionally (no
     // in-kernel zeroing); the public op builds a zero state when its own initial_state is omitted.
     check_gdn_tensor(in.initial_state, "initial_state", DataType::FLOAT32);
-    validate_gdn_chunk_size(attrs.chunk_size);
-    TT_FATAL(attrs.key_dim % TILE_WIDTH == 0, "key_dim must be a multiple of 32");
-    TT_FATAL(attrs.val_dim % TILE_WIDTH == 0, "val_dim must be a multiple of 32");
+    check_gdn_shape(in.initial_state, "initial_state", ttnn::Shape({rows, K, V}));
     validate_gdn_tinv(attrs.tinv, attrs.chunk_size, in.q);
+    // The head range [head_offset, head_offset + BH) must lie inside the rows of the inputs and of the preallocated
+    // outputs, which come as a pair.
+    TT_FATAL(
+        attrs.head_offset + attrs.BH <= rows,
+        "chunk_gdn: heads [{}, {}) exceed the {} heads of the inputs",
+        attrs.head_offset,
+        attrs.head_offset + attrs.BH,
+        rows);
+    TT_FATAL(
+        in.o_out.has_value() == in.final_state_out.has_value(),
+        "chunk_gdn: o_out and final_state_out must be given together");
+    if (in.o_out.has_value()) {
+        TT_FATAL(attrs.impl == ChunkGdnImpl::Fused, "chunk_gdn: preallocated outputs are for the fused program only");
+        check_gdn_tensor(*in.o_out, "o_out", DataType::FLOAT32);
+        check_gdn_tensor(*in.final_state_out, "final_state_out", DataType::FLOAT32);
+        check_gdn_shape(*in.o_out, "o_out", ttnn::Shape({rows, NC, C, V}));
+        check_gdn_shape(*in.final_state_out, "final_state_out", ttnn::Shape({rows, K, V}));
+        TT_FATAL(
+            in.o_out->memory_config() == attrs.output_mem_config &&
+                in.final_state_out->memory_config() == attrs.output_mem_config,
+            "chunk_gdn: preallocated outputs must use the op's output memory config");
+    }
 
     const auto grid = in.q.device()->compute_with_storage_grid_size();
     if (attrs.impl == ChunkGdnImpl::Mono) {
@@ -105,6 +157,7 @@ void ChunkGdnDeviceOperation::validate_on_program_cache_miss(
         TT_FATAL(
             !attrs.v_flat && !attrs.qk_flat && !attrs.qk_norm,
             "chunk_gdn: the mono program takes head-major q/k/v only (no flat inputs, no in-kernel qk-norm)");
+        TT_FATAL(attrs.head_offset == 0, "chunk_gdn: the mono program computes every head (head_offset must be 0)");
         TT_FATAL(
             attrs.BH <= grid.x * grid.y,
             "chunk_gdn: the mono program needs one core per head: BH={} exceeds the {}x{} grid",
@@ -210,7 +263,10 @@ void ChunkGdnDeviceOperation::validate_on_program_cache_miss(
 }
 
 ChunkGdnDeviceOperation::spec_return_value_t ChunkGdnDeviceOperation::compute_output_specs(
-    const operation_attributes_t& attrs, const tensor_args_t&) {
+    const operation_attributes_t& attrs, const tensor_args_t& in) {
+    if (in.o_out.has_value()) {
+        return {in.o_out->tensor_spec(), in.final_state_out->tensor_spec()};
+    }
     // o: bf16 from the mono kernel (its cb_out format), fp32 from the fused program — EXACTLY the phased
     // scan's spec (a bf16 o degraded full-model quality there and was removed). final_state is fp32 on both.
     const DataType o_dtype = attrs.impl == ChunkGdnImpl::Mono ? DataType::BFLOAT16 : DataType::FLOAT32;
@@ -223,6 +279,9 @@ ChunkGdnDeviceOperation::spec_return_value_t ChunkGdnDeviceOperation::compute_ou
 
 ChunkGdnDeviceOperation::tensor_return_value_t ChunkGdnDeviceOperation::create_output_tensors(
     const operation_attributes_t& attrs, const tensor_args_t& in) {
+    if (in.o_out.has_value()) {
+        return {*in.o_out, *in.final_state_out};
+    }
     auto specs = compute_output_specs(attrs, in);
     auto* device = in.q.device();
     std::vector<Tensor> outs;
@@ -231,6 +290,53 @@ ChunkGdnDeviceOperation::tensor_return_value_t ChunkGdnDeviceOperation::create_o
         outs.push_back(create_device_tensor(spec, device));
     }
     return outs;
+}
+
+tt::tt_metal::operation::Hash ChunkGdnDeviceOperation::compute_program_hash(
+    const operation_attributes_t& attrs, const tensor_args_t& in) {
+    auto keyed = attrs;
+    keyed.head_offset = 0;
+    return tt::tt_metal::operation::hash_operation<ChunkGdnDeviceOperation>(keyed, in);
+}
+
+std::vector<tt::tt_metal::DynamicRuntimeArg> ChunkGdnDeviceOperation::get_dynamic_runtime_args(
+    const operation_attributes_t& attrs,
+    const tensor_args_t& in,
+    tensor_return_value_t&,
+    const std::optional<ttnn::MeshCoordinate>&) {
+    std::vector<tt::tt_metal::DynamicRuntimeArg> args;
+    if (attrs.impl != ChunkGdnImpl::Fused) {
+        return args;  // the mono program runs every head (head_offset 0, validated)
+    }
+    const auto grid = in.q.device()->compute_with_storage_grid_size();
+    const FusedPlacement layout = fused_placement(grid.x, grid.y, attrs.BH, attrs.nv, attrs.np, attrs.placement);
+    const uint32_t h0 = attrs.head_offset;
+    const uint32_t NV = attrs.nv;
+    args.reserve(layout.producers.size() + 2 * attrs.BH * NV);
+    // Every producer of the pool reads items of every head it serves at head_offset + h.
+    for (const CoreCoord& pc : layout.producers) {
+        args.push_back(
+            {.kernel_idx = fused_rt::kPrepReaderKernel,
+             .core = pc,
+             .arg_idx = fused_rt::kPrepReaderHeadOffsetArg,
+             .value = h0});
+    }
+    for (uint32_t h = 0; h < attrs.BH; h++) {
+        for (uint32_t v = 0; v < NV; v++) {
+            const CoreCoord& rc = layout.receivers[h * NV + v];
+            args.push_back(
+                {.kernel_idx = fused_rt::kReceiverReaderKernel,
+                 .core = rc,
+                 .arg_idx = fused_rt::kReceiverHeadOffsetArg,
+                 .value = h0});
+            args.push_back(
+                {.kernel_idx = fused_rt::kScanWriterKernel,
+                 .core = rc,
+                 .arg_idx = fused_rt::kScanWriterHeadArg,
+                 .value = in.o_out.has_value() ? h0 + h : h});  // as the factory: wave-local into own outputs
+        }
+    }
+    return args;
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -659,6 +765,77 @@ FusedGeometryChoice choose_fused_geometry(
     return best;
 }
 
+std::vector<uint32_t> fused_even_waves(uint32_t BH, uint32_t n) {
+    std::vector<uint32_t> waves;
+    if (BH == 0 || n == 0) {
+        return waves;
+    }
+    n = std::min(n, BH);
+    const uint32_t base = BH / n;
+    const uint32_t rem = BH % n;
+    waves.reserve(n);
+    for (uint32_t i = 0; i < n; i++) {
+        waves.push_back(base + (i < rem ? 1u : 0u));
+    }
+    return waves;
+}
+
+namespace {
+// Measured per-head optimum of the fused program on QB2 at NC=64: one program up to 32 heads; beyond that,
+// waves of 24.
+constexpr uint32_t kMaxSingleWaveHeads = 32;
+constexpr uint32_t kMaxWaveHeads = 24;
+}  // namespace
+
+FusedWavePlan plan_fused_waves(
+    uint32_t grid_x,
+    uint32_t grid_y,
+    uint32_t BH,
+    uint32_t NC,
+    uint32_t Vt,
+    uint32_t max_wave,
+    uint32_t fixed_nv,
+    uint32_t fixed_np,
+    uint32_t fixed_nbuf,
+    FusedCandidates candidates,
+    float fixed_share) {
+    FusedWavePlan plan;
+    plan.t_phased_us = t_phased_us(BH, NC);
+    if (BH == 0) {
+        return plan;
+    }
+    constexpr float kInf = std::numeric_limits<float>::infinity();
+    std::vector<float> t_of(BH + 1, -1.0f);  // modelled time of a W-head wave; infinity = no geometry fits
+    auto t_wave = [&](uint32_t W) {
+        if (t_of[W] < 0.0f) {
+            const auto c = choose_fused_geometry(
+                grid_x, grid_y, W, NC, Vt, fixed_nv, fixed_np, fixed_nbuf, candidates, fixed_share);
+            t_of[W] = c.nv >= 1 ? c.t_fused_us : kInf;
+        }
+        return t_of[W];
+    };
+    auto t_waves = [&](const std::vector<uint32_t>& waves) {
+        float t = 0.0f;
+        for (const uint32_t W : waves) {
+            t += t_wave(W);
+        }
+        return t;
+    };
+    const uint32_t cap = max_wave ? max_wave : kMaxWaveHeads;
+    uint32_t n = (max_wave == 0 && BH <= kMaxSingleWaveHeads) ? 1u : (BH + cap - 1) / cap;
+    for (; n <= BH; n++) {
+        auto waves = fused_even_waves(BH, n);
+        const float t = t_waves(waves);
+        if (std::isfinite(t)) {
+            plan.waves = std::move(waves);
+            plan.t_fused_us = t;
+            plan.fused_pays = t < plan.t_phased_us;
+            break;
+        }
+    }
+    return plan;
+}
+
 // ---------------------------------------------------------------------------------------------------
 // Launcher
 // ---------------------------------------------------------------------------------------------------
@@ -684,7 +861,11 @@ std::vector<Tensor> chunk_gdn(
     bool qk_norm,
     float scale,
     bool qk_flat,
-    uint32_t Hk) {
+    uint32_t Hk,
+    uint32_t num_heads,
+    uint32_t head_offset,
+    const std::optional<Tensor>& o_out,
+    const std::optional<Tensor>& final_state_out) {
     const auto& q_shape = q.logical_shape();  // [BH,NC,C,K] head-major, or flat [B,T,Hk*K] when qk_flat
     const auto& v_shape = v.logical_shape();  // [BH,NC,C,V] head-major, or flat [B,T,HV*V] when v_flat
     // Dim derivation identical to chunk_gdn_prep (both factories consume prep's inputs; the flat forms
@@ -692,13 +873,16 @@ std::vector<Tensor> chunk_gdn(
     if (HV == 0) {
         HV = g.logical_shape()[2];
     }
-    const uint32_t BH = qk_flat ? (q_shape[0] * HV) : q_shape[0];
+    const uint32_t rows = qk_flat ? (q_shape[0] * HV) : q_shape[0];
+    const uint32_t BH = num_heads ? num_heads : rows;
     const uint32_t num_chunks = qk_flat ? (q_shape[1] / chunk_size) : q_shape[1];
     const uint32_t key_dim = qk_flat ? (q_shape[2] / Hk) : q_shape[3];
     const uint32_t val_dim = v_flat ? (v_shape[2] / HV) : v_shape[3];
     auto attrs = ChunkGdnDeviceOperation::operation_attributes_t{
         .impl = ChunkGdnImpl::Mono,
         .BH = BH,
+        .head_offset = head_offset,
+        .rows = rows,
         .num_chunks = num_chunks,
         .chunk_size = chunk_size,
         .key_dim = key_dim,
@@ -828,7 +1012,9 @@ std::vector<Tensor> chunk_gdn(
         .tril_c = tril_c,
         .ones_c = ones_c,
         .masks_c = masks_c,
-        .initial_state = initial_state};
+        .initial_state = initial_state,
+        .o_out = o_out,
+        .final_state_out = final_state_out};
     return ttnn::device_operation::launch<ChunkGdnDeviceOperation>(attrs, tensor_args);
 }
 

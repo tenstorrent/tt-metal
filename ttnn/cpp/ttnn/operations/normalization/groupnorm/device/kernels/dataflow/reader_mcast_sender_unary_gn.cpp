@@ -404,8 +404,8 @@ void kernel_main() {
 
                                 // read data from other cores
                                 for (uint32_t core_i = 0; core_i < num_mcast_cores - 1; ++core_i) {
-                                    const UnicastEndpoint remote_ep;
-                                    noc.async_read(remote_ep, CoreLocalMem<uint32_t>(l1_write_addr_external), num_bytes_read, {.noc_x = noc_coord_x[core_i + 1], .noc_y = noc_coord_y[core_i + 1], .addr = l1_read_addr_ex_par}, {});
+                                    const UnicastEndpoint peer_ep;
+                                    noc.async_read(peer_ep, CoreLocalMem<uint32_t>(l1_write_addr_external), num_bytes_read, {.noc_x = noc_coord_x[core_i + 1], .noc_y = noc_coord_y[core_i + 1], .addr = l1_read_addr_ex_par}, {});
                                     l1_write_addr_external += dfb_ex_external_slot_pitch_bytes;
                                     noc.async_read_barrier();
                                 }
@@ -468,24 +468,24 @@ void kernel_main() {
                                 out_block_hw_normal);
 #else
                             const uint32_t reread_tile_bytes = dfb_reread_out.get_tile_size();
-                            uint32_t l1_write_addr;
-                            l1_write_addr = dfb_reread_out.get_write_ptr();
+                            uint32_t reread_l1_write_addr;
+                            reread_l1_write_addr = dfb_reread_out.get_write_ptr();
                             dfb_reread_out.reserve_back(out_block_hw_normal);
 
                             for (uint32_t mt = 0; mt < out_block_h_actual; mt++) {
                                 for (uint32_t nt = 0; nt < block_w_curr; nt++) {
-                                    // Skip tiles the writer never wrote; rereading them pulls uninitialized DRAM (fp32 = huge garbage). Keep advancing l1_write_addr to stay aligned.
+                                    // Skip tiles the writer never wrote; rereading them pulls uninitialized DRAM (fp32 = huge garbage). Keep advancing reread_l1_write_addr to stay aligned.
                                     if ((index_g_offset + nt) < per_core_N) {
                                         noc.async_read(
                                             dst_a,
-                                            CoreLocalMem<uint32_t>(l1_write_addr),
+                                            CoreLocalMem<uint32_t>(reread_l1_write_addr),
                                             single_tile_size_bytes,
                                             {.page_id = out_start_id + out_block_start_id_offset + (mt * num_channels_tiles) + nt +
                                                 index_b_offset + index_g_offset},
                                             {});
                                         noc.async_read_barrier();
                                     }
-                                    l1_write_addr += reread_tile_bytes;
+                                    reread_l1_write_addr += reread_tile_bytes;
                                 }
                             }
                             dfb_reread_out.push_back(out_block_hw_normal);
