@@ -155,10 +155,12 @@ def main():
     parser.add_argument("--chunk", type=int, default=4096)
     parser.add_argument("--rows", default="1,2,4")
     parser.add_argument("--users", default="1", help="users per row prefilling at once (a list: one run each)")
-    parser.add_argument("--prefix", type=int, default=0, help="eager only: extrapolate from a run to here (0: whole)")
+    parser.add_argument(
+        "--prefix", type=int, default=0, help="eager only: extrapolate from a run to here (0: whole; traced runs whole)"
+    )
     parser.add_argument("--samples", default="", help="--prefix: starts of the sampled late rounds")
     parser.add_argument("--sample-rounds", type=int, default=6)
-    parser.add_argument("--save", default="/data/dwadhwani/trace-logs/logits", help="logits files prefix")
+    parser.add_argument("--save", default="prefill_logits", help="logits files prefix (its directory is created)")
     parser.add_argument("--modes", default="eager,traced")
     parser.add_argument("--trace-region-mb", type=int, default=400)
     kv = parser.add_mutually_exclusive_group()
@@ -216,7 +218,7 @@ def main():
                     for m, traces in zip(models, saved):
                         m.chunk_traces = traces if mode == "traced" else {}
                     label = f"ISL {args.context} {rows} rows x {users} users (c={rows * users}) {mode}"
-                    if args.prefix:
+                    if args.prefix and mode == "eager":
                         samples = [int(x) for x in args.samples.split(",") if x]
                         sampled(
                             models[:rows],
@@ -232,6 +234,7 @@ def main():
                         continue
                     out, total = run(models[:rows], prompts, users, args.chunk, label)
                     path = f"{args.save}_{args.context}_{rows}x{users}_{mode}.pt"
+                    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
                     torch.save({k: v.float() for k, v in out.items()}, path)
                     other = f"{args.save}_{args.context}_{rows}x{users}_{'eager' if mode == 'traced' else 'traced'}.pt"
                     if os.path.exists(other):

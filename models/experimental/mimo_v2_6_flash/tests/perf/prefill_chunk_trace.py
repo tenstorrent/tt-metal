@@ -176,13 +176,17 @@ def ttft(model, tokens, args):
     contexts = [int(c) for c in args.contexts.split(",")]
     padded = prefill_padded_len(args.chunk, args.chunk, model.pair is not None)
     results = {}
+    # Traces --breakdown captured stay with the model; the eager runs hide them (prefill_enqueue would replay them).
+    captured = model.chunk_traces
     for traced in (False, True) if args.trace else (False,):
+        model.chunk_traces = captured if traced else {}
         if traced and not model.chunk_traces:
             t0 = time.time()
             keys = model.setup_prefill_chunk_traces([padded])
             model.warm_prefill_chunk_traces()
             model.capture_prefill_chunk_traces()
             say(f"traces {keys} set up, warmed and captured in {time.time() - t0:.1f} s")
+            captured = model.chunk_traces
         for n in contexts:
             times = []
             for _ in range(1 if args.once else 2):

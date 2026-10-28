@@ -155,7 +155,7 @@ class AsyncLane(FakeLane):
     def set_vllm_page_tables(self, rows):
         self.table_slots.append(sorted(rows))
 
-    def prefill_enqueue(self, chunk, slot, start_pos=0, history_continues=False, draft_group=0):
+    def prefill_enqueue(self, chunk, slot, start_pos=0, history_continues=False, draft_group=0, allow_trace=True):
         self.prefills.append((slot, start_pos, chunk.numel()))
         return {"logits": torch.nn.functional.one_hot(torch.tensor(SEQ[start_pos + chunk.numel()]), VOCAB).float()}
 

@@ -840,7 +840,7 @@ class MiMoV2ForCausalLM:
         # pass is enqueued before any is read, the lanes interleaved so all replicas have work.
         # A lane's replayed later chunks, then its batch passes, go before its other rows: a batch reads no cached KV
         # (it starts at 0), and a replay must not run while an eager pass's output of that lane is alive.
-        by_lane = []
+        by_lane, traced_rows = [], set()
         for lane in range(self.dp):
             groups = {}
             for p in placed:
@@ -851,10 +851,14 @@ class MiMoV2ForCausalLM:
             rows_ = [g for key, g in groups.items() if isinstance(key, tuple)]
             # A replayed later chunk goes first: a replay must not run while an eager pass's output of that lane is
             # alive (its own output is copied into the slot's persistent logits row, which a batch replay leaves be).
+            # A row is traced only when every chunk prefill_enqueue splits it into replays (chunk_traced); one that
+            # would mix replays and eager chunks (an unaligned start moved back past the chunk budget) runs all eager
+            # (allow_trace=False), after the replays, so no replay runs while an eager output of the lane is alive.
             model = self.models[lane]
             traced = [
                 g for g in rows_ if PREFILL_CHUNK_TRACE and model.chunk_traced(g[0][2], g[0][3], g[0][4] - g[0][3])
             ]
+            traced_rows.update(g[0][0] for g in traced)
             by_lane.append(traced + batches + [g for g in rows_ if not any(g is t for t in traced)])
         order = [passes[k] for k in range(max(map(len, by_lane))) for passes in by_lane if k < len(passes)]
         # Nothing chains onto a verify a prefill followed (the plugin builds the next decode from host state).
@@ -875,7 +879,12 @@ class MiMoV2ForCausalLM:
                 group = draft_group[i]
                 self._dflash_continue(lane, slot, start, start + chunk.numel() - 1, group)
                 handle = self.models[lane].prefill_enqueue(
-                    chunk, slot, start_pos=start, history_continues=continues[i], draft_group=group
+                    chunk,
+                    slot,
+                    start_pos=start,
+                    history_continues=continues[i],
+                    draft_group=group,
+                    allow_trace=i in traced_rows,
                 )
             pending.append((rows_of_pass, lane, handle))
         t1 = time.perf_counter()
@@ -2055,7 +2064,13 @@ class MiMoV2ForCausalLM:
         # Traced later chunks: the same, for a chunk of the step's whole budget and for the longest chunk (an unaligned
         # start moved back), each SDPA program a start can bring.
         chunk_traces = []
-        if PREFILL_CHUNK_TRACE and not DFLASH:
+        if PREFILL_CHUNK_TRACE and not DFLASH and not all(m.chunk_traces_supported() for m in self.models):
+            logger.warning(
+                "MiMo vLLM: MIMO_PREFILL_CHUNK_TRACE=1 ignored: this ttnn build's chunked_flash_mla_prefill takes no "
+                "chunk_start_idx_tensor, so a later-chunk trace could only replay at its capture's start; later "
+                "chunks run eagerly"
+            )
+        elif PREFILL_CHUNK_TRACE and not DFLASH:
             pair = self.pair_split
             lengths = sorted({prefill_padded_len(n, self._chunk_align(), pair) for n in self._chunk_trace_tokens()})
             for model in self.models:

@@ -31,6 +31,7 @@ from ..reference.model import load_layer_weights
 from ..reference.mtp_backfill import HISTORY_ROWS
 from ..reference.spec_decode import SPEC_SLOTS, serial_positions
 from . import kv as kv_lib
+from . import attention as attention_lib
 from .attention import GLOBAL_SDPA_MIN_START, TtMiMoAttention, later_chunk_split, page_table_width
 from .common import TILE, MeshPlan, as_weight, cache_name, compute_config, pad_to
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
@@ -773,6 +774,7 @@ class TtMiMoModel:
         layers=None,
         history_continues=False,
         draft_group=0,
+        allow_trace=True,
     ):
         """Enqueue prefill of one user (``tokens`` 1D torch, positions start_pos ..) into batch ``slot``, in chunks
         of ``chunk_size`` tokens (default ``max_prefill_chunk``; a multiple of the block size, as is ``start_pos``).
@@ -781,7 +783,9 @@ class TtMiMoModel:
         history each chunk also writes its last rows' final normed hidden into the slot's history
         (tt/mtp_backfill.py); ``history_continues``: the first chunk continues the request's earlier chunks (their
         entries stay), else it is the request's first and the slot's other entries are invalidated.
-        ``draft_group``: the request's draft group (its DFlash context ring)."""
+        ``draft_group``: the request's draft group (its DFlash context ring). ``allow_trace=False``: every chunk runs
+        eagerly, even one a captured later-chunk trace covers (vLLM's prefill_forward runs a row that would mix
+        replays and eager chunks all eager: ``chunk_traced``)."""
         n = tokens.numel()
         chunk = chunk_size or self.max_prefill_chunk
         align = self.block_size * (2 if self.pair is not None else 1)  # pair split: 128-token global blocks
@@ -794,7 +798,8 @@ class TtMiMoModel:
             writes = None
             if hist is not None and slot < SPEC_SLOTS:
                 writes = hist.chunk_writes(slot, start_pos + s, piece, 0, history_continues or s > 0)
-            trace = None if hidden is not None or layers is not None else self._chunk_trace(slot, start_pos + s, piece)
+            eager = not allow_trace or hidden is not None or layers is not None
+            trace = None if eager else self._chunk_trace(slot, start_pos + s, piece)
             if trace is not None:
                 replayed = self._replay_prefill_chunk(trace, piece, slot, start_pos + s, writes or [])
                 continue
@@ -1115,8 +1120,15 @@ class TtMiMoModel:
         (``_chunk_trace_keys``; ``sdpa_chunks``: only the keys whose global SDPA chunk size is in it). Allocate before
         any trace capture (a buffer allocated after a capture can sit where that trace's replays write); then
         ``warm_prefill_chunk_traces`` and, after the decode capture, ``capture_prefill_chunk_traces``. Returns the
-        keys set up."""
+        keys set up. Refuses (before allocating anything) on a build whose chunked MLA prefill takes no runtime start
+        (``chunk_traces_supported``)."""
         assert self.kv_caches is not None and self.dflash is None, "traced later chunks need the KV cache, no DFlash"
+        if not self.chunk_traces_supported():
+            raise RuntimeError(
+                "traced later prefill chunks need chunked_flash_mla_prefill's chunk_start_idx_tensor (this ttnn build "
+                "keys the global layers' later chunks on a scalar start, which a replay at another start cannot "
+                "change); rebuild ttnn or run without MIMO_PREFILL_CHUNK_TRACE"
+            )
         if self.chunk_logits is None:
             self.chunk_logits = [self._logits_row() for _ in range(self.max_batch)]
         made = []
@@ -1135,6 +1147,15 @@ class TtMiMoModel:
                 }
                 made.append(key)
         return made
+
+    def chunk_traces_supported(self):
+        """Whether a later chunk's trace can replay at a start other than its capture's: every global layer reads the
+        chunk's start from a device input. The KV pair split's chunked MLA prefill always does; the other global
+        later-chunk paths only on a build whose chunked_flash_mla_prefill takes chunk_start_idx_tensor
+        (attention.MLA_RUNTIME_START), else they key their program on the scalar start the trace was captured at."""
+        return attention_lib.MLA_RUNTIME_START or all(
+            layer.is_swa or layer.attn.pair is not None for layer in self.layers
+        )
 
     def _logits_row(self):
         return ttnn.allocate_tensor_on_device(
@@ -1240,9 +1261,16 @@ class TtMiMoModel:
         trace = self.chunk_traces.get(self._chunk_trace_key(slot, start_pos, padded))
         return trace if trace is not None and trace["id"] is not None else None
 
-    def chunk_traced(self, slot, start_pos, num_tokens):
-        """Whether a later chunk of ``num_tokens`` tokens (at most max_prefill_chunk) replays a trace."""
-        return self._chunk_trace(slot, start_pos, torch.empty(num_tokens)) is not None
+    def chunk_traced(self, slot, start_pos, num_tokens, chunk_size=None):
+        """Whether every chunk ``prefill_enqueue`` splits a later prefill of ``num_tokens`` tokens at ``start_pos``
+        into (``chunk_size``, default max_prefill_chunk) replays a trace. A prefill longer than one chunk (an
+        unaligned start moved back past the chunk budget) can have chunks that replay and chunks that run eagerly;
+        it is not traced, and vLLM's prefill_forward runs it with ``allow_trace=False``."""
+        chunk = chunk_size or self.max_prefill_chunk
+        return num_tokens > 0 and all(
+            self._chunk_trace(slot, start_pos + s, torch.empty(min(chunk, num_tokens - s))) is not None
+            for s in range(0, num_tokens, chunk)
+        )
 
     def _replay_prefill_chunk(self, trace, tokens, slot, start_pos, writes):
         """Copy a later chunk's inputs into its trace's buffers, replay it (non-blocking) and copy its logits row into
