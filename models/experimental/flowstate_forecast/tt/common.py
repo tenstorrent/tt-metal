@@ -108,5 +108,5 @@ def policy(device, precision="accuracy"):
         decoder_weight_dtype=ttnn.float32,
         mem=ttnn.DRAM_MEMORY_CONFIG,
         program_configs=True,  # R1-1
-        fused_swiglu=perf,  # R2-1 (accuracy: unfused, suite drift job 1238)
+        fused_swiglu=True,  # R2-1
     )
