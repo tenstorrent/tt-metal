@@ -1,0 +1,141 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""Additive attention masks for the bidirectional encoder (+ SDPA block maps for long buckets).
+
+HF semantics (`masking_utils`):
+    full layers     keep (q, k)  iff  key k is a valid (non-padding) token
+    sliding layers  keep (q, k)  iff  key k is valid  and  |q - k| <= sliding_window (512, inclusive)
+
+TT SDPA cannot combine its `sliding_window_size` argument with an `attn_mask`
+(`sdpa_device_operation.cpp:141`), so both rules are baked into one dense additive mask:
+
+    key_bias [B, 1, 1, S] = (keep - 1) * 1e9              built per forward from the `keep` input
+    band     [1, 1, S, S] = 0 if |q - k| <= W else -1e9   constant per bucket, built at setup
+    sliding  [B, 1, S, S] = band + key_bias               (row-broadcast add)
+    full     [B, 1, S, S] = zeros[1, 1, S, 1] + key_bias  (row + column broadcast add)
+
+Both masks are bfloat4_b (E5a): SDPA reads them at the same speed as bf16 (sweep at 512-8192) with
+identical outputs, and they take 3.6x less DRAM, which is what bounds the longest bucket. In
+bfp4, 0 stays exactly 0 and -1e9 / -2e9 become about -0.8e9 / -1.9e9 (still fully masking).
+Valid query rows always keep themselves, so their softmax is well defined; a fully masked padded
+query row averages padded values and is never read back.
+
+Block map (E5a): for buckets >= BLOCK_MAP_MIN_SEQ the band leaves most (q chunk, k chunk) blocks
+fully masked. `block_map(S)` is a constant [1, 1, S/q_chunk, S/k_chunk] int32 map (1 where the
+band reaches the block) that lets SDPA skip the other blocks: 2.2x faster per sliding layer at
+4096, 5x at 8192 (sdpa_variants). Padding keys stay masked by the dense mask inside visited blocks.
+The map has the mask's batch dim, so it is used for batch 1 only (the dense mask alone is
+correct for any batch).
+
+Contract
+    prepare(S)        setup-time host -> device upload of the band (+ block map) for bucket S
+    forward(keep)     keep [B, 1, 1, S] bf16 TILE (1 = valid token, 0 = padding), device-only ops
+                      returns {"sliding_attention": [B,1,S,S], "full_attention": [B,1,S,S]} bfp4 TILE DRAM
+    block_map(S, B)   the prepared sliding-layer block map for batch B, or None
+"""
+
+from __future__ import annotations
+
+import os
+
+import torch
+
+import ttnn
+from models.common.lightweightmodule import LightweightModule
+from models.demos.embedding_gemma2.tt.config import FULL, MASK_NEG, SLIDING, compute_grid
+
+# E5a default; the text model passes its precision policy's `mask_dtype`
+MASK_DTYPE = ttnn.bfloat4_b
+BLOCK_MAP_MIN_SEQ = int(os.environ.get("EG2_BLOCK_MAP_MIN_SEQ", "4096"))
+
+
+def band_mask(seq_len: int, radius: int) -> torch.Tensor:
+    """[1, 1, S, S] bf16: 0 where |q - k| <= radius else MASK_NEG. Built in row blocks so the host
+    peak stays at the bf16 output (8 GiB at S = 65536) instead of an S x S int64 distance matrix."""
+    band = torch.full((seq_len, seq_len), MASK_NEG, dtype=torch.bfloat16)
+    rows = 1024
+    k = torch.arange(seq_len)
+    for r0 in range(0, seq_len, rows):
+        q = torch.arange(r0, min(r0 + rows, seq_len))
+        keep = (q[:, None] - k[None, :]).abs() <= radius
+        band[r0 : r0 + len(q)][keep] = 0.0
+    return band.reshape(1, 1, seq_len, seq_len)
+
+
+def band_block_map(seq_len: int, radius: int, q_chunk: int, k_chunk: int) -> torch.Tensor:
+    """[1, 1, S/q_chunk, S/k_chunk] int32: 1 where some (q, k) in the block has |q - k| <= radius."""
+    nq, nk = seq_len // q_chunk, seq_len // k_chunk
+    q0 = torch.arange(nq)[:, None] * q_chunk
+    k0 = torch.arange(nk)[None, :] * k_chunk
+    # closest distance between [q0, q0+qc-1] and [k0, k0+kc-1]
+    gap = torch.clamp(torch.maximum(k0 - (q0 + q_chunk - 1), q0 - (k0 + k_chunk - 1)), min=0)
+    return (gap <= radius).to(torch.int32).reshape(1, 1, nq, nk)
+
+
+class AttentionMasks(LightweightModule):
+    def __init__(self, device, sliding_window: int, sliding_head_dim: int = 256, num_heads: int = 4, dtype=MASK_DTYPE):
+        super().__init__()
+        self.device = device
+        self.dtype = dtype
+        self.sliding_window = sliding_window
+        self.sliding_head_dim = sliding_head_dim
+        self.num_heads = num_heads
+        self.bands: dict[int, ttnn.Tensor | None] = {}
+        self.zero_cols: dict[int, ttnn.Tensor] = {}
+        self.block_maps: dict[int, ttnn.Tensor] = {}
+
+    def prepare(self, seq_len: int) -> None:
+        if seq_len in self.bands:
+            return
+        self.zero_cols[seq_len] = ttnn.from_torch(
+            torch.zeros(1, 1, seq_len, 1),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if seq_len <= self.sliding_window + 1:
+            # every |q - k| <= S - 1 <= W: the band masks nothing
+            self.bands[seq_len] = None
+            return
+        self.bands[seq_len] = ttnn.from_torch(
+            band_mask(seq_len, self.sliding_window),
+            dtype=self.dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        if seq_len >= BLOCK_MAP_MIN_SEQ:
+            from models.demos.embedding_gemma2.tt.attention import sdpa_program_config
+
+            pc = sdpa_program_config(self.sliding_head_dim, seq_len, 1, self.num_heads, compute_grid(self.device))
+            self.block_maps[seq_len] = ttnn.from_torch(
+                band_block_map(seq_len, self.sliding_window, pc.q_chunk_size, pc.k_chunk_size),
+                dtype=ttnn.int32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                device=self.device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+    def block_map(self, seq_len: int, batch: int) -> ttnn.Tensor | None:
+        return self.block_maps.get(seq_len) if batch == 1 else None
+
+    def key_bias(self, keep: ttnn.Tensor) -> ttnn.Tensor:
+        # (keep - 1) * 1e9 : 0 for valid keys, -1e9 for padding
+        return ttnn.multiply(ttnn.subtract(keep, 1.0), -MASK_NEG, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    def forward(self, keep: ttnn.Tensor) -> dict[str, ttnn.Tensor]:
+        B, _, _, S = keep.shape
+        if S not in self.bands:
+            raise RuntimeError(f"AttentionMasks.prepare({S}) must run before forward (setup-time upload)")
+        bias = self.key_bias(keep)
+        dram = ttnn.DRAM_MEMORY_CONFIG
+        full = ttnn.add(self.zero_cols[S], bias, dtype=self.dtype, memory_config=dram)
+        band = self.bands[S]
+        if band is None:
+            sliding = full
+        else:
+            sliding = ttnn.add(band, bias, dtype=self.dtype, memory_config=dram)
+        ttnn.deallocate(bias)
+        return {SLIDING: sliding, FULL: full}
