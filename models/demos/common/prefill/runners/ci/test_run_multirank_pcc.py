@@ -149,7 +149,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
         for model_key, max_seq_len, num_users in (
             ("kimi27", 256000, 86),
             ("glm52", 1049600, 28),
-            ("mistral4", 56320, 1),
+            ("mistral4", 61440, 1),
         ):
             (manifest_dir / f"{model_key}.json").write_text(
                 json.dumps({"env": {"PREFILL_MAX_SEQ_LEN": max_seq_len, "PREFILL_NUM_USERS": num_users}})
@@ -220,7 +220,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
             "PREFILL_SP": "8",
             "PREFILL_TP": "1",
             "PREFILL_PCC_GOLDEN_LEN": "56320",
-            "PREFILL_MAX_SEQ_LEN": "56320",
+            "PREFILL_MAX_SEQ_LEN": "61440",
             "PREFILL_PRODUCER_CHUNKS": "11",
             "PREFILL_PRODUCER_CHECK_PCC": "1",
         }.items():
@@ -256,7 +256,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
                 self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(expected_length // 5120))
 
     def test_sc1_windows_preserve_model_defaults(self):
-        for model, expected_length in (("mistral4", 56320), ("kimi27", 256000), ("glm52", 256000)):
+        for model, expected_length in (("mistral4", 61440), ("kimi27", 256000), ("glm52", 256000)):
             with self.subTest(model=model):
                 result, records = self.run_harness(model, config="sc1")
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

@@ -21,7 +21,7 @@ from .base_unpacker import Unpacker
 from .fpu_node import FpuNode
 from .golden.executor import GoldenExecutor
 from .pack_node import PackNode
-from .pipeline_plan import PlannedBlock, plan_pipeline
+from .pipeline_plan import PlannedBlock
 from .sfpu_node import SfpuNode
 
 if TYPE_CHECKING:
@@ -149,6 +149,7 @@ class L1Operation:
         init_code += config.sentinel.hw_configure_unpack(config, self)
         if unpack_ops and not config.skip_unpack_init:
             init_code += config.sentinel.configure_unpack(config, self, unpack_ops[0])
+        init_code += unpack_common.unpack_to_dest_sync_init(config, self)
         if hoist and not unpack_ops[0].unpacker.per_block_init:
             init_code += unpack_ops[0].unpack_init(self, config, None)
         code = self._zone(config, "INIT", init_code)
@@ -166,29 +167,40 @@ class L1Operation:
             )
 
         def batch_body(planned: PlannedBlock, constants):
-            body = ""
+            body = unpack_common.unpack_to_dest_wait_for_dest_available(config)
+            after_commit = ""
             for cu in self.math_nodes:
                 if not isinstance(cu, FpuNode):
                     continue
                 block = planned.block_for(cu)
+                node_body = ""
                 if (
                     not hoist_reconfig
                     and cu.unpacker is not None
                     and not config.skip_unpack_init
                 ):
-                    body += config.sentinel.configure_unpack(config, self, cu)
+                    node_body += config.sentinel.configure_unpack(config, self, cu)
                 if not hoist:
-                    body += cu.unpack_init(self, config, block)
+                    node_body += cu.unpack_init(self, config, block)
                 if cu.unpacker is not None:
-                    body += planned.plan(cu, "unpack").emit_calls(
+                    node_body += planned.plan(cu, "unpack").emit_calls(
                         constants,
                         partial(cu.unpack_call, self, config, block),
                     )
                 if not hoist:
-                    body += cu.unpack_uninit(self, config, block)
+                    node_body += cu.unpack_uninit(self, config, block)
+                if (
+                    config.uses_unpack_to_dest_sync
+                    and cu.unpacker is not None
+                    and cu.unpacker.emits_dummy_srcb_valid
+                ):
+                    after_commit += node_body
+                else:
+                    body += node_body
             if not hoist_reconfig and not config.skip_unpack_init:
                 body += config.sentinel.configure_unpack(config, self, unpack_ops[0])
-            return body
+            body += unpack_common.unpack_to_dest_section_done(config, self)
+            return body + after_commit
 
         code += self._zone_loop(
             config,
@@ -351,8 +363,7 @@ class L1Operation:
 
         return code
 
-    def golden(self, config):
-        blocks = plan_pipeline(self, config.dest_acc.value)
+    def golden(self, config: "GlobalConfig", blocks: List[PlannedBlock]):
         for golden_type in (GoldenType.L1_GOLDEN, GoldenType.MASTER_GOLDEN):
             GoldenExecutor(self, config, golden_type).run(blocks)
 
