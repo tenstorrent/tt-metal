@@ -22,11 +22,13 @@ import ttnn
 from models.experimental.tafsut_forecast import ops
 from models.experimental.tafsut_forecast.ops.qkv_heads_rope.op import fits_l1
 from models.experimental.tafsut_forecast.reference import dataflow as df
+from models.experimental.tafsut_forecast.tt import program_configs
 from models.experimental.tafsut_forecast.tt.common import MASK_FILL, Precision, ckc
 
 D, NH, DH, DFF, NL = df.D, df.NH, df.DH, df.DFF, df.NL
 NREAD = df.NFUT  # read-out rows: all 32 future tokens (one tile row)
 DRAM = ttnn.DRAM_MEMORY_CONFIG
+MM_2D = os.environ.get("TAFSUT_MM_2D", "1") != "0"  # R1-2; 0 = the auto-config (screening)
 FUSED_ROPE = os.environ.get("TAFSUT_FUSED_ROPE", "1") != "0"  # R1-1; 0 = the round-0 matmul RoPE (screening)
 
 
@@ -168,6 +170,11 @@ class TtTafsut:
     # -------------------------------------------------------------------------------------------- device
     def _linear(self, x, w, **kw):
         kw.setdefault("compute_kernel_config", self._mm)
+        if MM_2D:  # R1-2: 2D multicast config over the whole grid, relu fused into it (R1-3)
+            pc = program_configs.for_linear(x, w, kw["compute_kernel_config"], relu=kw.get("activation") == "relu")
+            if pc is not None:
+                kw.pop("activation", None)
+                kw["program_config"] = pc
         return ttnn.linear(x, w, memory_config=DRAM, **kw)
 
     def embed(self, vm, c):
