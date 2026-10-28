@@ -316,3 +316,23 @@ def test_g1_proposal_fails_broken():
         if not r["fails"] and r["required"] and r["broken"] != "golden"
     ]
     assert set(passed) <= PENDING_RULING, passed
+
+
+def test_d7_ceilings():
+    """D7: each named ceiling passes at its record value (1220/1236), fails just above itself, has no drift bound on
+    its case, and leaves every other case's floor and drift alone."""
+    import json
+
+    gates = json.loads(CG.DEFAULT_GATES.read_text())
+    for (name, prec, metric, ceiling, value) in [
+        ("long_horizon", "accuracy", "f2_inactive_max_err", 0.06, 0.05574963),
+        ("long_horizon", "accuracy", "f2_flat_max_err", 0.06, 0.05574963),
+        ("horizon4", "performance", "bias_row_p50", 0.015, 0.0094),
+    ]:
+        assert CG._floors(gates, name, prec)[metric] == ceiling
+        assert CG.passes(metric, value, ceiling)
+        assert not CG.passes(metric, ceiling * 1.001, ceiling)
+        assert metric not in CG._drift(gates, name, prec)
+        other = ("paper", prec)
+        assert CG._floors(gates, *other).get(metric) != ceiling
+        assert metric in CG._drift(gates, *other)
