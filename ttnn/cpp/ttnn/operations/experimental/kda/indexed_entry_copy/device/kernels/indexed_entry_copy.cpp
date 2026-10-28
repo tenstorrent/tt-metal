@@ -26,12 +26,12 @@ void kernel_main() {
     const uint32_t first_page = get_arg(args::first_page);
     const uint32_t num_pages = get_arg(args::num_pages);
 
-    Noc noc;             // NOC_0: the index and every read
-    const Noc write_noc(1);  // NOC_1: every write, off the reads' links
+    const Noc read_noc(0);
+    const Noc write_noc(1);
     Scratchpad<volatile uint32_t> staging(scratch::staging);
 
-    noc.async_read(TensorAccessor(tensor::index), staging, sizeof(uint32_t), {.page_id = 0}, {.offset_bytes = 0});
-    noc.async_read_barrier();
+    read_noc.async_read(TensorAccessor(tensor::index), staging, sizeof(uint32_t), {.page_id = 0}, {.offset_bytes = 0});
+    read_noc.async_read_barrier();
     const uint32_t index_value = staging.local_mem()[0];
     // The host derived index_limit so that passing it means entry < num_entries without a wrap.
     if (index_value >= index_limit) {
@@ -46,10 +46,10 @@ void kernel_main() {
     for (uint32_t done = 0; done < num_pages; done += batch_pages) {
         const uint32_t count = num_pages - done < batch_pages ? num_pages - done : batch_pages;
         for (uint32_t i = 0; i < count; ++i) {
-            noc.async_read(
+            read_noc.async_read(
                 source, staging, page_size, {.page_id = source_base + done + i}, {.offset_bytes = i * page_stride});
         }
-        noc.async_read_barrier();
+        read_noc.async_read_barrier();
         for (uint32_t i = 0; i < count; ++i) {
             write_noc.async_write(
                 staging,

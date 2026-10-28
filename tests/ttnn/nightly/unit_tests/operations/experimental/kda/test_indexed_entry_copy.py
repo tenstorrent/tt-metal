@@ -9,19 +9,21 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import run_for_blackhole
 from tests.ttnn.nightly.unit_tests.operations.experimental.kda import kda_performance_model_test_utils as perf_model
 from tests.ttnn.profiling.realtime_profiler_utils import profile_realtime_program_merged
-from tt_py_test_utils_common.utility_functions import skip_with_llk_assert, skip_with_watcher
+from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_with_llk_assert, skip_with_watcher
 
 # Blackhole only, like the other KDA ops.
 pytestmark = run_for_blackhole()
 
 # (dtype, layout, entry shape past dim 0, ND shard of the multi-entry table or None for interleaved): the forms
-# the KDA staging uses, an ND-sharded FP32 tile slab with [1, 1, D, 32] shards and an interleaved BF16 row slab.
+# the KDA staging uses, an ND-sharded FP32 tile slab with [1, 1, D, 32] shards and an interleaved BF16 row slab. The
+# K3 shape (384 tiles, about 13 per worker) runs every worker through more than one staging round.
 FORMS = [
     pytest.param(ttnn.float32, ttnn.TILE_LAYOUT, (3, 64, 64), None, id="fp32-tile"),
     pytest.param(ttnn.float32, ttnn.TILE_LAYOUT, (3, 64, 64), [1, 1, 64, 32], id="fp32-tile-nd"),
+    pytest.param(ttnn.float32, ttnn.TILE_LAYOUT, (24, 128, 128), None, id="fp32-tile-k3"),
+    pytest.param(ttnn.float32, ttnn.TILE_LAYOUT, (24, 128, 128), [1, 1, 128, 32], id="fp32-tile-k3-nd"),
     pytest.param(ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (3, 192), None, id="bf16-row-major"),
 ]
 TORCH_DTYPE = {ttnn.float32: torch.float32, ttnn.bfloat16: torch.bfloat16}
@@ -39,6 +41,18 @@ def _index(device, value):
         layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
+
+
+def _overwrite(destination, host):
+    staged = ttnn.from_torch(
+        host,
+        device=destination.device(),
+        dtype=destination.dtype,
+        layout=destination.layout,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    ttnn.copy(staged, destination)
+    ttnn.deallocate(staged)
 
 
 def _random(shape, dtype, seed):
@@ -87,10 +101,10 @@ def test_index_selects_the_entry(device, dtype, layout, entry_shape, nd_shard):
     table_host = _random((_TABLE_ENTRIES, *entry_shape), dtype, 1)
     table = _to_device(table_host, device, dtype, layout, _table_memory(device, nd_shard))
     single_host = _random((1, *entry_shape), dtype, 2)
-    single = _to_device(single_host, device, dtype, layout)
     for n, ((value, scale, offset), entry) in enumerate(INDEXING):
         row = f"index {value:#x} scale {scale:#x} offset {offset:#x}"
         index = _index(device, value)
+        single = _to_device(single_host, device, dtype, layout)  # a fresh destination for each cached program
 
         ttnn.experimental.kda.indexed_entry_copy(table, single, index, index_scale=scale, index_offset=offset)
         if entry is not None:
@@ -104,11 +118,12 @@ def test_index_selects_the_entry(device, dtype, layout, entry_shape, nd_shard):
             table_host[entry : entry + 1] = update
         assert torch.equal(ttnn.to_torch(table), table_host), f"store, {row}"
         ttnn.deallocate(source)
+        ttnn.deallocate(single)
         ttnn.deallocate(index)
 
 
 # One entry on both sides needs no ND form: the consumer's single-entry tensors are interleaved.
-@pytest.mark.parametrize("dtype, layout, entry_shape, nd_shard", [FORMS[0], FORMS[2]])
+@pytest.mark.parametrize("dtype, layout, entry_shape, nd_shard", [FORMS[0], FORMS[4]])
 def test_single_entry_on_both_sides_copies_at_entry_zero(device, dtype, layout, entry_shape, nd_shard):
     source_host = _random((1, *entry_shape), dtype, 4)
     source = _to_device(source_host, device, dtype, layout)
@@ -167,16 +182,8 @@ def test_one_trace_follows_the_index(device, dtype, layout, entry_shape, nd_shar
             entry = value * scale + offset
             expected_load = table_host[entry : entry + 1].clone()
             new = _random((1, *entry_shape), dtype, 200 + value)
-            for destination, host in ((index, torch.tensor([value], dtype=torch.int64)), (update, new)):
-                staged = ttnn.from_torch(
-                    host,
-                    device=device,
-                    dtype=destination.dtype,
-                    layout=destination.layout,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                ttnn.copy(staged, destination)
-                ttnn.deallocate(staged)
+            _overwrite(index, torch.tensor([value], dtype=torch.int64))
+            _overwrite(update, new)
             ttnn.execute_trace(device, trace, cq_id=0, blocking=True)
             table_host[entry : entry + 1] = new
             assert torch.equal(ttnn.to_torch(working), expected_load), f"replay load index {value}"
@@ -210,7 +217,7 @@ def test_rejects(device, expect_error, dtype, layout, source_shape, destination_
 _K3_LAYERS, _K3_SLOTS, _K3_POSITION = 18, 2, 5
 _PRODUCTION_PERF_MARGIN = 0.05
 # The 1.5 MiB copies are DRAM-bound with reads and writes sharing the channels, and vary about +/-5% run to run on a
-# Blackhole P150 (8.39-9.29 us store over 8 runs), so their band is wider than the latency-bound tail's.
+# Blackhole P150 (store 8.39-9.29 us, load 8.55-9.45 us), so their band is wider than the latency-bound tail's.
 _RECURRENT_PERF_MARGIN = 0.07
 
 
@@ -234,7 +241,7 @@ _PRODUCTION_CASES = (
         (24, 128, 128),
         [1, 1, 128, 32],
         False,
-        8_800,
+        8_840,
         _RECURRENT_PERF_MARGIN,
     ),
     _ProductionCase(
@@ -244,7 +251,7 @@ _PRODUCTION_CASES = (
         (24, 128, 128),
         [1, 1, 128, 32],
         True,
-        8_940,
+        9_000,
         _RECURRENT_PERF_MARGIN,
     ),
     _ProductionCase("convolution-store", ttnn.bfloat16, ttnn.ROW_MAJOR_LAYOUT, (144, 192), None, False, 1_940),
@@ -259,13 +266,8 @@ _PRODUCTION_CASES = (
 def test_kimi_k3_production_performance(device, case: _ProductionCase) -> None:
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("Real-time profiler must be active for indexed_entry_copy performance checks")
-    slab = _to_device(
-        torch.zeros(_K3_SLOTS * _K3_LAYERS, *case.entry_shape, dtype=TORCH_DTYPE[case.dtype]),
-        device,
-        case.dtype,
-        case.layout,
-        _table_memory(device, case.nd_shard),
-    )
+    slab_host = _random((_K3_SLOTS * _K3_LAYERS, *case.entry_shape), case.dtype, 11)
+    slab = _to_device(slab_host, device, case.dtype, case.layout, _table_memory(device, case.nd_shard))
     carry_host = _random((1, *case.entry_shape), case.dtype, 10)
     carry = _to_device(carry_host, device, case.dtype, case.layout)
     index = _index(device, 1)
@@ -284,8 +286,10 @@ def test_kimi_k3_production_performance(device, case: _ProductionCase) -> None:
         if any("indexed_entry_copy.cpp" in source for source in program["kernel_sources"])
     ]
     duration_ns = perf_record["duration_ns"]
-    if not case.load:
-        entry = _K3_LAYERS + _K3_POSITION
+    entry = _K3_LAYERS + _K3_POSITION
+    if case.load:
+        assert torch.equal(ttnn.to_torch(carry), slab_host[entry : entry + 1]), "loaded entry"
+    else:
         assert torch.equal(ttnn.to_torch(slab)[entry : entry + 1], carry_host), "stored entry"
     # The op reads and writes one entry: the single-entry side, counted once as input and once as output.
     performance = perf_model.performance(

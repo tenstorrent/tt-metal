@@ -19,19 +19,15 @@ using namespace tt::tt_metal::experimental;
 
 namespace {
 
-// Pages staged in L1 per read/write round; bounded so wide row-major pages stay within a modest footprint.
-constexpr uint32_t kMaxBatchPages = 8;
-constexpr uint32_t kStagingBudgetBytes = 64 * 1024;
-// Workers sit on this many shifted diagonals of the worker grid, one per row and per column on each diagonal.
-// NoC reads route along x then y and writes along y then x, so a worker that shares no row or column with
-// another keeps its DRAM traffic off the other workers' links. Measured on a Blackhole P150 (11x10 grid) for
-// the Kimi-K3 copies: 3 diagonals (30 cores) copy the 54 KiB convolution tail in 1.8 us against 2.5 us on the
-// full grid, and the 1.5 MiB recurrent carry at the same ~12.4 us; more cores only add start-up cost.
+// Pages in flight per core per read/write round: covers a DRAM round trip at the K3 copy sizes, and holds a core's
+// whole share of the 54 KiB tail in one round.
+constexpr uint32_t kBatchPages = 8;
+// Workers sit on shifted diagonals, one per row and column on each, so their routes spread over the grid's links
+// instead of crowding a few rows or columns; three diagonals (30 cores on Blackhole) measured fastest.
 constexpr uint32_t kDiagonals = 3;
 
-// Reads go out on NOC_0 and writes on NOC_1, so the two directions use separate links; dynamic NoC mode lets the one
-// kernel drive both. Measured on a Blackhole P150 for the Kimi-K3 copies: the 1.5 MiB carry in 8.6 us against 12.7 us
-// with both on NOC_0; the 54 KiB tail pays dynamic mode's per-transaction cost, 1.9 against 1.8 us.
+// Reads go out on NOC_0 and writes on NOC_1 so the two directions do not share links; dynamic NoC mode lets the one
+// kernel drive both.
 DataMovementHardwareConfig copier_hw_config() {
     auto hw = ttnn::create_reader_datamovement_config();
     hw.config_1xx->noc = NOC::NOC_0;
@@ -81,7 +77,6 @@ ttnn::device_operation::ProgramArtifacts IndexedEntryCopyProgramFactory::create_
     // Validation equates page sizes and both sides are DRAM, so their aligned page sizes match.
     const uint32_t page_size = source.buffer()->page_size();
     const uint32_t page_stride = source.buffer()->aligned_page_size();
-    const uint32_t batch_pages = std::clamp(kStagingBudgetBytes / page_stride, 1u, kMaxBatchPages);
 
     const auto grid = source.device()->compute_with_storage_grid_size();
     auto [num_cores, all_cores, core_group_1, core_group_2, pages_per_core_1, pages_per_core_2] =
@@ -107,7 +102,7 @@ ttnn::device_operation::ProgramArtifacts IndexedEntryCopyProgramFactory::create_
             {
                 {"page_size", page_size},
                 {"page_stride", page_stride},
-                {"batch_pages", batch_pages},
+                {"batch_pages", kBatchPages},
                 {"pages_per_entry", entry_pages},
                 {"index_limit", index_limit},
                 {"index_scale", params.index_scale},
@@ -133,7 +128,7 @@ ttnn::device_operation::ProgramArtifacts IndexedEntryCopyProgramFactory::create_
         .name = "indexed_entry_copy",
         .kernels = {std::move(copier)},
         // The index word is read into the staging area first, then the area is reused for the entry's pages.
-        .scratchpads = {ScratchpadSpec{.unique_id = STAGING, .size_per_node = batch_pages * page_stride}},
+        .scratchpads = {ScratchpadSpec{.unique_id = STAGING, .size_per_node = kBatchPages * page_stride}},
         .tensor_parameters =
             {
                 TensorParameter{.unique_id = SOURCE, .spec = source.tensor_spec()},

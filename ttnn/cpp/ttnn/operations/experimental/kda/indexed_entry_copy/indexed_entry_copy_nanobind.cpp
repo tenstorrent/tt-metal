@@ -28,7 +28,7 @@ void bind_indexed_entry_copy(nb::module_& mod) {
             Args:
                 source (ttnn.Tensor): Tensor read from.
                 destination (ttnn.Tensor): Tensor written in place; same dtype, layout, tile, page size and
-                    shape past dim 0 as ``source``. Exactly one of the two may hold more than one entry.
+                    shape past dim 0 as ``source``. At most one of the two may hold more than one entry.
                 index (ttnn.Tensor): One-element UINT32 ROW_MAJOR interleaved device tensor.
 
             Keyword Args:
