@@ -146,8 +146,9 @@ class RerankConfig:
     # HiFi2 SDPA raised the MIRACL mean score error 0.23 -> 0.30 at no measurable speed gain.
     sdpa_fidelity: object = ttnn.MathFidelity.HiFi4
     # Fidelity of SDPA's compute config; None = sdpa_fidelity. ttnn's SDPA ignores
-    # SDPAProgramConfig.matmul_math_fidelity (only ring-joint SDPA reads it), so this sets its matmuls too. 32x512 SDPA: HiFi2 14.73, LoFi 14.92 vs
-    # 14.24 M cycles (slower); max_cores_per_head_batch 32 and segmented_accumulation: no change.
+    # SDPAProgramConfig.matmul_math_fidelity (only ring-joint SDPA reads it), so this sets its matmuls too.
+    # 32x512 SDPA: HiFi2 14.73, LoFi 14.92 vs 14.24 M cycles (slower); max_cores_per_head_batch 32 and
+    # segmented_accumulation: no change.
     sdpa_softmax_fidelity: object = None
     sdpa_max_cores_per_head_batch: int = 16
     sdpa_k_splits: int = 1
