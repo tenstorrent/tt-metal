@@ -14,6 +14,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <map>
 #include <thread>
 
@@ -938,6 +939,99 @@ static test_result run_test(
     return result;
 }
 
+// Parses `--ubb N` / `--ubb=N` (N in 1..4) from the command line; 0 means all trays.
+static uint32_t get_ubb_arg() {
+    const auto args = ::testing::internal::GetArgvs();
+    for (size_t i = 1; i < args.size(); i++) {
+        string val;
+        if (args[i] == "--ubb") {
+            TT_FATAL(i + 1 < args.size(), "--ubb requires a value (1-4)");
+            val = args[i + 1];
+        } else if (args[i].starts_with("--ubb=")) {
+            val = args[i].substr(6);
+        } else {
+            continue;
+        }
+        uint32_t ubb = 0;
+        try {
+            ubb = stoul(val);
+        } catch (const std::exception&) {
+            TT_THROW("--ubb value '{}' is not a number", val);
+        }
+        TT_FATAL(ubb >= 1 && ubb <= 4, "--ubb must be between 1 and 4, got {}", ubb);
+        return ubb;
+    }
+    return 0;
+}
+
+static vector<shared_ptr<distributed::MeshDevice>> filter_by_ubb(
+    const vector<shared_ptr<distributed::MeshDevice>>& devices) {
+    const uint32_t ubb = get_ubb_arg();
+    if (!ubb) {
+        return devices;
+    }
+    umd::ClusterDescriptor* cluster_desc = MetalContext::instance().get_cluster().get_cluster_desc();
+    vector<shared_ptr<distributed::MeshDevice>> out;
+    for (const auto& mesh : devices) {
+        auto* const device = mesh->impl().get_devices()[0];
+        if (tt::tt_fabric::get_ubb_id(*cluster_desc, device->id()).tray_id == ubb) {
+            out.push_back(mesh);
+        }
+    }
+    log_info(tt::LogTest, "--ubb {}: testing {} of {} chips", ubb, out.size(), devices.size());
+    return out;
+}
+
+// PCIe bus-number high nibble per tray (index = tray - 1); must match tt_fabric::get_ubb_id.
+static const map<string, vector<uint32_t>> ubb_tray_buses = {
+    {"0xb140", {0x00, 0x40, 0xC0, 0x80}},  // Blackhole
+    {"0x401e", {0xC0, 0x80, 0x00, 0x40}},  // Wormhole
+};
+
+// Limits UMD to the tray's PCIe devices so chips on other trays are never opened.
+class ubb_visible_devices_env : public ::testing::Environment {
+public:
+    void SetUp() override {
+        const uint32_t ubb = get_ubb_arg();
+        if (!ubb) {
+            return;
+        }
+        TT_FATAL(std::getenv("TT_VISIBLE_DEVICES") == nullptr, "--ubb cannot be combined with TT_VISIBLE_DEVICES");
+
+        namespace fs = std::filesystem;
+        vector<string> bdfs;
+        std::error_code ec;
+        for (const auto& entry : fs::directory_iterator("/sys/class/tenstorrent", ec)) {
+            const fs::path pci = fs::canonical(entry.path() / "device", ec);
+            if (ec) {
+                continue;
+            }
+            const string bdf = pci.filename().string();
+            const auto it = ubb_tray_buses.find(read_text_file_trimmed((pci / "device").string()));
+            const auto colon = bdf.find(':');
+            if (it == ubb_tray_buses.end() || colon == string::npos) {
+                continue;
+            }
+            const uint32_t bus = stoul(bdf.substr(colon + 1, 2), nullptr, 16);
+            if ((bus & 0xF0) == it->second[ubb - 1]) {
+                bdfs.push_back(bdf);
+            }
+        }
+        TT_FATAL(!bdfs.empty(), "--ubb {}: no Tenstorrent PCIe devices found on that tray", ubb);
+        sort(bdfs.begin(), bdfs.end());
+
+        string visible;
+        for (const auto& bdf : bdfs) {
+            visible += (visible.empty() ? "" : ",") + bdf;
+        }
+        log_info(tt::LogTest, "--ubb {}: TT_VISIBLE_DEVICES={}", ubb, visible);
+        setenv("TT_VISIBLE_DEVICES", visible.c_str(), 1);
+    }
+};
+
+[[maybe_unused]] static ::testing::Environment* const ubb_env =
+    ::testing::AddGlobalTestEnvironment(new ubb_visible_devices_env);
+
 }  // namespace deployment_noc
 
 TEST_F(MeshDispatchFixture, TensixDeploymentNoc00EthSourceIntegrity) {
@@ -946,7 +1040,11 @@ TEST_F(MeshDispatchFixture, TensixDeploymentNoc00EthSourceIntegrity) {
     }
     print_detected_devices();
 
-    auto result = deployment_noc::run_test(this, devices_, false);
+    auto devices = deployment_noc::filter_by_ubb(devices_);
+    if (devices.empty()) {
+        GTEST_SKIP() << "no chips on the requested UBB tray";
+    }
+    auto result = deployment_noc::run_test(this, devices, false);
     deployment_noc::report(result);
     deployment_noc::exit_if_wedged(result);
     ASSERT_TRUE(result.failures.empty());
@@ -958,7 +1056,11 @@ TEST_F(MeshDispatchFixture, TensixDeploymentNoc01TensixSourceIntegrity) {
     }
     print_detected_devices();
 
-    auto result = deployment_noc::run_test(this, devices_, true);
+    auto devices = deployment_noc::filter_by_ubb(devices_);
+    if (devices.empty()) {
+        GTEST_SKIP() << "no chips on the requested UBB tray";
+    }
+    auto result = deployment_noc::run_test(this, devices, true);
     deployment_noc::report(result);
     deployment_noc::exit_if_wedged(result);
     ASSERT_TRUE(result.failures.empty());

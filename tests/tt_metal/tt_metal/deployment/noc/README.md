@@ -46,6 +46,7 @@ TT_METAL_SLOW_DISPATCH_MODE=1 ./build/test/tt_metal/unit_tests_deployment --gtes
 - Slow dispatch is required: kernels on active Ethernet cores need it. Without
   it both tests are skipped.
 - Run one test with `--gtest_filter='*DeploymentNoc00*'` or `'*DeploymentNoc01*'`.
+- Test only the chips on one tray with `--ubb N` (N = 1-4). All trays are tested by default.
 - Add `TT_LOGGER_TYPES=Test` for quieter output.
 - `test_runner.sh` in the parent directory runs these as the "NOC tests" step.
 
