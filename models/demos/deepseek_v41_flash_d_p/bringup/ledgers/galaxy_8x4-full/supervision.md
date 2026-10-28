@@ -624,3 +624,16 @@ session's argv); a resume clears PAUSE (use --until to stop); watch + cron :07/:
   asked, not yet done; (2) the bfp4 packer-rounding test on one card (recipe above); (3) move
   /scratch/dnijemcevic/ckv_derisk/ files into the repo (paths in its report) and run the compressed-KV L1 tests on one
   card; (4) owner decisions still open (see 14:55 and 14:35 entries).
+- 16:05 DS-V4.1 DECODE KV FORMATS (tt-blaze llong/dsv41-reload-quad-engram4x1 @ 2d8abc70e8, read-only agent): NO 4-bit
+  KV. SWA layers 0-1: window KV bfloat8_b TILE [1,1,128,512] (unpacker -> bf16; per-token RMW of one tile). CSA2
+  layers 2-39: window + compressed KV in ONE bf16 ROW_MAJOR tensor per layer (rows [0,128) circular window, 128 +
+  p//ratio compressed), 1024 B/row, replicated on 8 TP chips ("Released compressed KV is E2M1 with E4M3 scales; the
+  device cache is BF16", tests/blaze/deepseekv4_1/harness.py:483). Indexer keys: uint8 rows of 192 B = 128 e4m3 +
+  fp32 per-row scale (max-abs/448, not pow2) + pad, 32-row bank granules / 256-row chunks per chip, quantized on the
+  device (truncating), dequantized in the scorer kernel. Decode attention HiFi4, bf16 activations, weights bfp8/bfp4.
+  "reload" = ring of per-layer program+weight images (not KV import); "quad" = 4 Galaxies x 16 stages of 4x2;
+  "engram4x1" = engram tables 4x1-sharded (static, 272 B rows: e4m3 + e8m0 repacked as BFP8). NO prefill->decode
+  KV import exists yet (decode starts cold at position 0); the inter-stage page carries bf16 rows (kv 1024 B, index
+  key 256 B). Fit with our plan: window KV bfp8 tiles matches only the SWA layers (CSA2 window is bf16 RM);
+  compressed KV bfp4 rows and index keys bfp4 tiles are NOT directly consumable (decode: bf16 RM / e4m3+fp32 rows);
+  a prefill->decode loader is needed either way. Bears on the cache decisions (owner).
