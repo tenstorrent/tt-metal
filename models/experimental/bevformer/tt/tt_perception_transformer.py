@@ -4,11 +4,12 @@
 """TTNN port of the BEV half of BEVFormer's ``PerceptionTransformer``
 (``reference/perception_transformer.py``): FPN levels and BEV queries in, the frame's BEV out.
 
-What changes from frame to frame and comes from the host, the CAN bus, the ego shift and the
-previous BEV's rotation, is prepared by :meth:`TTPerceptionTransformer.prepare_frame` into a
-:class:`PerceptionFrame` whose device buffers are allocated once and refilled in place. The
-encoder projects the cameras from the frame's ``img_metas`` in its forward and reads its
-visibility mask on the host there, so the transformer runs live, not under a trace.
+What changes from frame to frame and comes from the host, the cameras' projections, the CAN
+bus, the ego shift and the previous BEV's rotation, is prepared by
+:meth:`TTPerceptionTransformer.prepare_frame` into a :class:`PerceptionFrame` whose device
+buffers are allocated once and refilled in place. The encoder projects the cameras in its
+forward and reads its visibility mask on the host there, so the transformer runs live, not
+under a trace.
 
 The previous BEV's rotation is nearest-neighbour, so it moves whole cells: the host rotates an
 image of cell indices with the reference's own ``rotate``, and the device gathers the previous
@@ -34,7 +35,9 @@ class PerceptionFrame:
     address.
 
     Attributes:
-        img_metas: The frame's per-sample metas, which the encoder projects the cameras from.
+        img_metas: The frame's per-sample metas; the encoder reads the images' size from them.
+        lidar2img: ``(bs, num_cams, 4, 4)`` float32, the cameras' projections, which the encoder
+            projects its reference points with.
         can_bus: ``(bs, 1, CAN_BUS_DIMS)`` bfloat16, the relative CAN bus.
         shift: ``(bs, 1, 1, 2)`` float32 ROW_MAJOR, the ego translation in BEV-grid fractions.
         rotation_index: ``(1, 1, 1, bs * num_query)`` uint32 ROW_MAJOR, the stacked previous-BEV row each
@@ -44,6 +47,7 @@ class PerceptionFrame:
     """
 
     img_metas: list
+    lidar2img: ttnn.Tensor
     can_bus: ttnn.Tensor
     shift: ttnn.Tensor
     rotation_index: ttnn.Tensor
@@ -92,7 +96,10 @@ class TTPerceptionTransformer:
         grid_length = bev_grid_length(self.encoder.pc_range, self.bev_h, self.bev_w)
         shift = ego_shift(img_metas, self.bev_h, self.bev_w, grid_length).view(len(img_metas), 1, 1, 2)
         rotation_index, rotation_mask = rotation_gather(img_metas, self.bev_h, self.bev_w, self.rotate_center)
+        # float32: in bfloat16 the projection moves the points by several pixels on average.
+        lidar2img = torch.stack([torch.as_tensor(meta["lidar2img"], dtype=torch.float32) for meta in img_metas])
         return dict(
+            lidar2img=(lidar2img, ttnn.float32, ttnn.TILE_LAYOUT),
             can_bus=(can_bus, ttnn.bfloat16, ttnn.TILE_LAYOUT),
             shift=(shift, GRID_DTYPE, ttnn.ROW_MAJOR_LAYOUT),
             rotation_index=(rotation_index, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
@@ -170,7 +177,13 @@ class TTPerceptionTransformer:
             prev_bev = ttnn.reshape(prev_bev, (bs * 2, -1, self.embed_dims))
             shift = frame.shift
         bev_embed = self.encoder(
-            bev_queries, value=value, bev_pos=bev_pos, prev_bev=prev_bev, shift=shift, img_metas=frame.img_metas
+            bev_queries,
+            value=value,
+            bev_pos=bev_pos,
+            prev_bev=prev_bev,
+            shift=shift,
+            img_metas=frame.img_metas,
+            lidar2img=frame.lidar2img,
         )
         ttnn.deallocate(value)
         signpost(header="TTNN PerceptionTransformer Forward End")

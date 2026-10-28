@@ -65,6 +65,24 @@ def generate_reference_points_ttnn(
     return ttnn_ref_points
 
 
+def world_points_ttnn(reference_points: torch.Tensor, pc_range: List[float], device):
+    """Torch ``reference_points`` ``[bs, num_queries, num_points, 3]`` in [0, 1] scaled to
+    ``pc_range`` on the host: x, y and z, each ``[bs, num_points, num_queries, 1]`` float32 TILE on
+    ``device``, the ``world_points`` :func:`point_sampling_3d_to_2d_ttnn` takes."""
+    low = torch.tensor(pc_range[:3], dtype=torch.float32)
+    high = torch.tensor(pc_range[3:6], dtype=torch.float32)
+    world = reference_points.to(torch.float32) * (high - low) + low
+    return [
+        ttnn.from_torch(
+            world[..., axis : axis + 1].permute(0, 2, 1, 3).contiguous(),
+            device=device,
+            dtype=ttnn.float32,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        for axis in range(3)
+    ]
+
+
 def point_sampling_3d_to_2d_ttnn(
     reference_points,
     pc_range: List[float],
@@ -73,6 +91,7 @@ def point_sampling_3d_to_2d_ttnn(
     img_shape: Optional[Tuple[int, int]] = None,
     eps: float = 1e-5,
     device=None,
+    world_points=None,
 ):
     """
     Project 3D reference points to 2D camera coordinates using TTNN operations with batch support.
@@ -92,6 +111,9 @@ def point_sampling_3d_to_2d_ttnn(
         img_shape (Optional[Tuple[int, int]]): Image shape (height, width). Used if img_metas is None.
         eps (float): Small epsilon to avoid division by zero.
         device: TTNN device for computation.
+        world_points: The reference points already in world coordinates, from
+            :func:`world_points_ttnn`; ``reference_points`` is then ignored. A fixed grid's
+            are uploaded once instead of on every call.
 
     Returns:
         Tuple[ttnn.Tensor, ttnn.Tensor]:
@@ -103,7 +125,7 @@ def point_sampling_3d_to_2d_ttnn(
 
     # Convert inputs to TTNN tensors if needed. float32 throughout: in bfloat16 the projection
     # moves the points by several pixels on average and by hundreds at worst.
-    if isinstance(reference_points, torch.Tensor):
+    if world_points is None and isinstance(reference_points, torch.Tensor):
         reference_points = ttnn.from_torch(reference_points, device=device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
 
     if isinstance(lidar2img, torch.Tensor):
@@ -111,31 +133,36 @@ def point_sampling_3d_to_2d_ttnn(
 
     signpost(header="Point Sampling Tensor Setup End")
 
-    # Get tensor shapes
-    batch_size, num_queries, num_points, _ = reference_points.shape
     num_cams = lidar2img.shape[1]
 
-    # Extract point cloud range values
-    x_min, y_min, z_min = pc_range[0], pc_range[1], pc_range[2]
-    x_max, y_max, z_max = pc_range[3], pc_range[4], pc_range[5]
+    if world_points is not None:
+        # [bs, num_points, num_queries, 1] each
+        world = world_points
+        batch_size, num_points, num_queries, _ = world[0].shape
+    else:
+        batch_size, num_queries, num_points, _ = reference_points.shape
 
-    signpost(header="Point Sampling Coordinate Scaling Start")
+        # Extract point cloud range values
+        x_min, y_min, z_min = pc_range[0], pc_range[1], pc_range[2]
+        x_max, y_max, z_max = pc_range[3], pc_range[4], pc_range[5]
 
-    # Scale normalized coordinates [0, 1] to actual world coordinates
-    reference_points_x = reference_points[:, :, :, 0:1]
-    reference_points_y = reference_points[:, :, :, 1:2]
-    reference_points_z = reference_points[:, :, :, 2:3]
+        signpost(header="Point Sampling Coordinate Scaling Start")
 
-    reference_points_x = ttnn.add(ttnn.mul(reference_points_x, x_max - x_min), x_min)
-    reference_points_y = ttnn.add(ttnn.mul(reference_points_y, y_max - y_min), y_min)
-    reference_points_z = ttnn.add(ttnn.mul(reference_points_z, z_max - z_min), z_min)
+        # Scale normalized coordinates [0, 1] to actual world coordinates
+        reference_points_x = reference_points[:, :, :, 0:1]
+        reference_points_y = reference_points[:, :, :, 1:2]
+        reference_points_z = reference_points[:, :, :, 2:3]
 
-    # [bs, num_points, num_queries, 1] each
-    world = [
-        ttnn.permute(coord, (0, 2, 1, 3)) for coord in (reference_points_x, reference_points_y, reference_points_z)
-    ]
+        reference_points_x = ttnn.add(ttnn.mul(reference_points_x, x_max - x_min), x_min)
+        reference_points_y = ttnn.add(ttnn.mul(reference_points_y, y_max - y_min), y_min)
+        reference_points_z = ttnn.add(ttnn.mul(reference_points_z, z_max - z_min), z_min)
 
-    signpost(header="Point Sampling Coordinate Scaling End")
+        # [bs, num_points, num_queries, 1] each
+        world = [
+            ttnn.permute(coord, (0, 2, 1, 3)) for coord in (reference_points_x, reference_points_y, reference_points_z)
+        ]
+
+        signpost(header="Point Sampling Coordinate Scaling End")
     signpost(header="Point Sampling Camera Loop Start")
 
     reference_points_cam_list = []
