@@ -782,9 +782,10 @@ extern "C" void __builtin_rvtt_ttinsn(volatile unsigned long *, unsigned, unsign
 #define TTI_RDCFG(GprAddress, CfgReg)       TT_IP_RDCFG(nullptr, GprAddress, CfgReg)
 
 #define TT_OP_REPLAY(start_idx, len, last, set_mutex, execute_while_loading, load_mode) \
-    TT_OP(0x04, (((start_idx) << 14) + ((len) << 4) + ((last) << 3) + ((set_mutex) << 2) + ((execute_while_loading) << 1) + ((load_mode) << 0)))
+    (({static_assert(!(load_mode), "TT_OP_REPLAY available for playback only");}), \
+     TT_OP(0x04, (((start_idx) << 14) + ((len) << 4) + ((last) << 3) + ((set_mutex) << 2) + ((execute_while_loading) << 1) + ((load_mode) << 0))))
 #define TT_IP_REPLAY(IP, start_idx, len, last, set_mutex, execute_while_loading, load_mode) \
-    TT_IP_INSN(IP, TT_OP_REPLAY(start_idx, len, last, set_mutex, execute_while_loading, load_mode), 0, 0, 0)
+    __builtin_rvtt_ttreplay((IP), ((start_idx) << 10) | (len), 0, 0, (execute_while_loading), (load_mode), (last), (set_mutex))
 #define TT_REPLAY(start_idx, len, last, set_mutex, execute_while_loading, load_mode) \
     TT_IP_REPLAY(::ckernel::instrn_buffer, start_idx, len, last, set_mutex, execute_while_loading, load_mode)
 #define TTI_REPLAY(start_idx, len, last, set_mutex, execute_while_loading, load_mode) \

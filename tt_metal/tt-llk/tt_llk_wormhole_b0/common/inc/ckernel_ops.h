@@ -467,11 +467,12 @@ extern "C" void __builtin_rvtt_ttinsn(volatile unsigned long *, unsigned, unsign
     TT_IP_REG2FLOP(nullptr, SizeSel, TargetSel, ByteOffset, ContextId_2, FlopIndex, RegIndex)
 
 #define TT_OP_REPLAY(start_idx, len, execute_while_loading, load_mode) \
-    TT_OP(0x04, (((start_idx) << 14) + ((len) << 4) + ((execute_while_loading) << 1) + ((load_mode) << 0)))
+    (({static_assert(!(load_mode), "TT_OP_REPLAY available for playback only");}), \
+     TT_OP(0x04, (((start_idx) << 14) + ((len) << 4) + ((execute_while_loading) << 1) + ((load_mode) << 0))))
 #define TT_REPLAY_VALID(start_idx, len, execute_while_loading, load_mode) \
     (ckernel::is_valid(start_idx, 10) && ckernel::is_valid(len, 10) && ckernel::is_valid(execute_while_loading, 3) && ckernel::is_valid(load_mode, 1))
 #define TT_IP_REPLAY(IP, start_idx, len, execute_while_loading, load_mode) \
-    TT_IP_INSN(IP, TT_OP_REPLAY(start_idx, len, execute_while_loading, load_mode), 0, 0, 0)
+    __builtin_rvtt_ttreplay((IP), ((start_idx) << 10) | (len), 0, 0, (execute_while_loading), (load_mode))
 #define TT_REPLAY(start_idx, len, execute_while_loading, load_mode)  TT_IP_REPLAY(::ckernel::instrn_buffer, start_idx, len, execute_while_loading, load_mode)
 #define TTI_REPLAY(start_idx, len, execute_while_loading, load_mode) TT_IP_REPLAY(nullptr, start_idx, len, execute_while_loading, load_mode)
 
