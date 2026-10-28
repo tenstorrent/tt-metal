@@ -65,38 +65,6 @@ inline void load_and_clear_high_bits(
 // Helper Functions
 // ============================================================================
 
-/**
- * @brief Two's-complement signed compare-and-swap of a register pair, matching SFPSWAP(VEC_MIN_MAX)
- *        semantics but correct for the full Int32 range (including INT32_MIN).
- *
- * SFPSWAP(VEC_MIN_MAX) compares in sign-magnitude (it is the float/sign-magnitude comparator). For
- * two's-complement operands that is correct except when BOTH operands are negative: there the
- * sign-magnitude order is the exact reverse of the two's-complement order. It is also the case that
- * INT32_MIN (0x80000000) reads as sign-magnitude negative zero, which SFPSWAP ranks above every negative and
- * just below +0, so a plain sign-magnitude compare drops it for MIN. Both problems are cured by loading the operands
- * with plain INT32 (so the two's-complement bits are preserved, not converted to sign-magnitude) and then re-exchanging
- * the pair on lanes where both operands are negative. The re-swap is SFPSWAP_MOD1_SWAP (unconditional exchange) gated
- * by the condition code, so it is unaffected by the MAX/MIN direction config, and because it is a symmetric exchange it
- * leaves the corrected extreme in whichever of the two registers the caller reads next (matching the original bare
- * SFPSWAP). This mirrors the fix used by calculate_binary_max_min_int32 in ckernel_sfpu_binary_max_min.h.
- *
- * Only the cross-tile row combine (max_first_columns_across_tiles_int32) still uses it: there each pair is
- * compared once, so one 5-instruction compare-and-swap is cheaper than mapping both operands with
- * int32_to_swap_order and mapping the winner back. The per-tile row and column reduces compare each loaded
- * operand several times and map it once instead.
- *
- * @tparam HIGH_LREG The srcC register of the compare-and-swap.
- * @tparam LOW_LREG  The dest register of the compare-and-swap.
- */
-template <std::uint32_t HIGH_LREG, std::uint32_t LOW_LREG>
-inline void _emit_int32_signed_cswap_() {
-    TTI_SFPSWAP(0, HIGH_LREG, LOW_LREG, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
-    TTI_SFPSETCC(0, LOW_LREG, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);   // cc: LOW_LREG < 0
-    TTI_SFPSETCC(0, HIGH_LREG, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);  // cc &= HIGH_LREG < 0 (both negative)
-    TTI_SFPSWAP(0, HIGH_LREG, LOW_LREG, sfpi::SFPSWAP_MOD1_SWAP);
-    TTI_SFPENCC(0, 0, 0, 0);
-}
-
 // Programmable constant register holding 0x7FFFFFFF for int32_to_swap_order. Written by
 // init_reduce_max_min_int32_signed; LREG12 holds the UInt16 mask or the float AVG 1/32 only in other inits.
 constexpr std::uint32_t INT32_SWAP_ORDER_REG = p_sfpu::LREG12;
@@ -111,10 +79,13 @@ constexpr std::uint32_t INT32_SWAP_ORDER_MASK = 0x7FFFFFFF;
  */
 template <std::uint32_t reg>
 inline void int32_to_swap_order() {
-    TTI_SFPSETCC(0, reg, 0, sfpi::SFPSETCC_MOD1_LREG_LT0);
-    TTI_SFPXOR(0, INT32_SWAP_ORDER_REG, reg, 0);
-    TTI_SFPENCC(0, 0, 0, 0);
+    TTI_SFPSETCC(0 /*imm12_math*/, reg, 0 /*lreg_dest*/, sfpi::SFPSETCC_MOD1_LREG_LT0);
+    TTI_SFPXOR(0 /*imm12_math*/, INT32_SWAP_ORDER_REG, reg, 0 /*instr_mod1*/);
+    TTI_SFPENCC(0 /*imm12_math*/, 0 /*lreg_c*/, 0 /*lreg_dest*/, 0 /*instr_mod1*/);
 }
+
+// Instructions emitted by int32_to_swap_order; the Int32 column window is sized from it.
+constexpr std::uint32_t INT32_SWAP_ORDER_LEN = 3;
 
 /**
  * @brief Load one row operand into @p reg: masked for UInt16 in a 32-bit Dest, mapped by int32_to_swap_order
@@ -406,10 +377,10 @@ inline void horizontal_reduce_rotate_first() {
 //   init                                       column window          row window
 //   SUM / AVG, float                           tree-add [0, 10)       butterfly stage [10, 16)
 //   SUM / AVG, integer                         tree-add [0, 6)        butterfly stage [9, 16)
-//   MAX / MIN, float or 16-bit UInt16          LOADMACRO [0, 9)       butterfly stage [10, 16)
-//   MAX / MIN, DISABLE_SFPLOADMACRO            manual swaps [0, 3)    butterfly stage [10, 16)
+//   MAX / MIN, float or 16-bit UInt16          LOADMACRO [0, 9)       butterfly stage [9, 16)
+//   MAX / MIN, DISABLE_SFPLOADMACRO            manual swaps [0, 3)    butterfly stage [9, 16)
 //   MAX / MIN, UInt16 in a 32-bit Dest         manual swaps [0, 3)    none (column only)
-//   MAX / MIN, Int32 / UInt32                  2 maps + swaps [0, 9)  butterfly stage [10, 16)
+//   MAX / MIN, Int32 / UInt32                  2 maps + swaps [0, 9)  butterfly stage [9, 16)
 //
 // A row reduce replays what its init recorded, so it needs a fresh init_reduce after anything else records into the
 // SFPU half.
@@ -417,7 +388,7 @@ constexpr std::uint32_t COL_SUM_INT_REPLAY_LEN = 6;     // 6 SFPIADD; [0, 3) dou
 constexpr std::uint32_t COL_SUM_FLOAT_REPLAY_LEN = 10;  // 6 SFPADD full reduce + 4-slot half reduce
 constexpr std::uint32_t COL_MAX_MANUAL_REPLAY_LEN = 3;  // 3 SFPSWAP: LREG4-7 -> LREG4
 // Int32 / UInt32: map LREG6 and LREG7 into SFPSWAP's order, then the same 3-SFPSWAP chain at the window's tail.
-constexpr std::uint32_t COL_MAX_INT32_CHAIN_START = 6;
+constexpr std::uint32_t COL_MAX_INT32_CHAIN_START = 2 * INT32_SWAP_ORDER_LEN;
 constexpr std::uint32_t COL_MAX_INT32_REPLAY_LEN = COL_MAX_INT32_CHAIN_START + COL_MAX_MANUAL_REPLAY_LEN;
 
 // The LOADMACRO column MAX/MIN window: two more SFPAND when masking UInt16 high bits.
@@ -455,6 +426,17 @@ inline void horizontal_reduce_fold() {
 // One SFPSHFT2 per accumulator pair.
 constexpr std::uint32_t HORIZONTAL_ROTATE_LEN = 2;
 
+/**
+ * @brief The MIN_MAX stage leads with one SFPNOP. Its first SFPSHFT2 always follows an SFPSWAP (the previous stage's
+ *        fold, or the vertical swaps before the first stage), and on Wormhole an SFPSHFT2 right after an SFPSWAP can
+ *        collide with the swap's second write and corrupt LRegs (tt-isa SFPSWAP.md, instruction scheduling). The
+ *        hardware stalls one cycle after every SFPSWAP anyway, so the SFPNOP fills that slot and costs no cycle.
+ */
+template <HorizontalFold fold>
+constexpr std::uint32_t horizontal_stage_lead_len() {
+    return fold == HorizontalFold::MIN_MAX ? 1 : 0;
+}
+
 template <HorizontalFold fold>
 constexpr std::uint32_t horizontal_fold_len() {
     return fold == HorizontalFold::ADD_INT ? 3 : 2;
@@ -462,11 +444,12 @@ constexpr std::uint32_t horizontal_fold_len() {
 
 /**
  * @brief The row butterfly-stage window, [A, s, F] = first rotate, one in-place rotate, fold: 6 slots, 7 for the
- *        integer add. It ends at replay_buf_offset, directly above the column window of the same init.
+ *        integer add, and [N, A, s, F] (7 slots) for MIN_MAX. It ends at replay_buf_offset, directly above the column
+ *        window of the same init.
  */
 template <HorizontalFold fold>
 constexpr std::uint32_t horizontal_stage_replay_len() {
-    return 2 * HORIZONTAL_ROTATE_LEN + horizontal_fold_len<fold>();
+    return horizontal_stage_lead_len<fold>() + 2 * HORIZONTAL_ROTATE_LEN + horizontal_fold_len<fold>();
 }
 template <HorizontalFold fold>
 constexpr std::uint32_t horizontal_stage_replay_start() {
@@ -499,6 +482,9 @@ static_assert(
 template <HorizontalFold fold>
 inline void record_horizontal_reduce_stage() {
     lltt::record(horizontal_stage_replay_start<fold>(), horizontal_stage_replay_len<fold>());
+    if constexpr (horizontal_stage_lead_len<fold>() != 0) {
+        TTI_SFPNOP;
+    }
     horizontal_reduce_rotate_first();
     horizontal_reduce_rotate_step();
     horizontal_reduce_fold<fold>();
@@ -507,12 +493,14 @@ inline void record_horizontal_reduce_stage() {
 /**
  * @brief Butterfly stages replayed from pieces of the [A, s, F] window: ror1 = A F (2 REPLAY), ror2 = A s F (1),
  *        ror4 = A s, s, s F (3). Each folds the accumulator with a copy of itself rotated by 1, 2 or 4 columns.
+ *        The MIN_MAX lead SFPNOP is replayed with every A.
  */
 template <HorizontalFold fold>
 inline void horizontal_stage_ror1() {
     constexpr std::uint32_t start = horizontal_stage_replay_start<fold>();
-    lltt::replay(start, HORIZONTAL_ROTATE_LEN);
-    lltt::replay(start + 2 * HORIZONTAL_ROTATE_LEN, horizontal_fold_len<fold>());
+    constexpr std::uint32_t lead = horizontal_stage_lead_len<fold>();
+    lltt::replay(start, lead + HORIZONTAL_ROTATE_LEN);
+    lltt::replay(start + lead + 2 * HORIZONTAL_ROTATE_LEN, horizontal_fold_len<fold>());
 }
 
 template <HorizontalFold fold>
@@ -523,15 +511,17 @@ inline void horizontal_stage_ror2() {
 template <HorizontalFold fold>
 inline void horizontal_stage_ror4() {
     constexpr std::uint32_t start = horizontal_stage_replay_start<fold>();
-    lltt::replay(start, 2 * HORIZONTAL_ROTATE_LEN);
-    lltt::replay(start + HORIZONTAL_ROTATE_LEN, HORIZONTAL_ROTATE_LEN);
-    lltt::replay(start + HORIZONTAL_ROTATE_LEN, HORIZONTAL_ROTATE_LEN + horizontal_fold_len<fold>());
+    constexpr std::uint32_t lead = horizontal_stage_lead_len<fold>();
+    lltt::replay(start, lead + 2 * HORIZONTAL_ROTATE_LEN);
+    lltt::replay(start + lead + HORIZONTAL_ROTATE_LEN, HORIZONTAL_ROTATE_LEN);
+    lltt::replay(start + lead + HORIZONTAL_ROTATE_LEN, HORIZONTAL_ROTATE_LEN + horizontal_fold_len<fold>());
 }
 
 /**
  * @brief The ror4, ror2, ror1 butterfly over the two accumulators, once per 8-row group: 6 REPLAY, 20 instructions
- *        (23 for the integer add). In: LREG0 / LREG4 = per-column partials of the two 4-row groups. Out: LREG0 / LREG4
- *        = the 8-column result in every column, so no trailing "move to column 0" rotate. Clobbers LREG1 / LREG5 only.
+ *        (23 for the integer add and for MIN_MAX). In: LREG0 / LREG4 = per-column partials of the two 4-row
+ *        groups. Out: LREG0 / LREG4 = the 8-column result in every column, so no trailing "move to column 0"
+ *        rotate. Clobbers LREG1 / LREG5 only.
  */
 template <HorizontalFold fold>
 inline void horizontal_reduce_butterfly() {
@@ -588,20 +578,27 @@ inline void set_manual_col_swap_direction() {
  * 2. Load the next 4 rows into LREG4-7 (with int32_order, each loaded register is mapped into SFPSWAP's order)
  * 3. Use vertical SFPSWAP to reduce LREG pairs down (keeping max between left/right face columns)
  * 4. Use horizontal_reduce_max to consolidate 8 SFPU columns into column 0
- * 5. Store the per-row max into column 0 (with int32_order, mapped back to two's-complement first)
+ * 5. Store the per-row max into column 0 (with map_back, mapped back to two's-complement first)
  *
  * @tparam INSTRUCTION_MODE Load/store instruction mode (FP32, FP16B or LO16; INT32 with int32_order).
  * @tparam clear_high_bits Whether to mask the garbage high bits on load (true for UInt16 in a 32-bit dest).
  * @tparam int32_order Signed Int32 (and bit-31-flipped UInt32) MAX/MIN: map every loaded two's-complement operand
  *         into SFPSWAP's order with int32_to_swap_order, so the same plain SFPSWAPs and the recorded butterfly stage
- *         reduce it correctly over the full range (INT32_MIN included), and map the two results back before they
- *         are stored. Requires INSTRUCTION_MODE == INT32 (raw two's-complement words).
+ *         reduce it correctly over the full range (INT32_MIN included). Requires INSTRUCTION_MODE == INT32 (raw
+ *         two's-complement words).
+ * @tparam map_back With int32_order, map the two results back before they are stored. False leaves the stored
+ *         partials in SFPSWAP's order, for a cross-tile combine that compares them with plain SFPSWAPs.
  * @param tile_row_offset Base row offset for this tile in the dest register
  * @param result_store_mode SFPSTORE mode for the per-row result (plain instruction mode, or mode 9 for UInt16 output)
  */
-template <InstrModLoadStore INSTRUCTION_MODE, bool clear_high_bits, bool int32_order = false>
+template <
+    InstrModLoadStore INSTRUCTION_MODE,
+    bool clear_high_bits,
+    bool int32_order = false,
+    bool map_back = int32_order>
 inline void perform_reduce_row_max_tile(std::uint32_t tile_row_offset, std::uint32_t result_store_mode) {
     static_assert(!(int32_order && clear_high_bits), "int32_order is for the 32-bit Int32/UInt32 rows");
+    static_assert(int32_order || !map_back, "map_back undoes int32_order");
     static_assert(
         !int32_order || INSTRUCTION_MODE == InstrModLoadStore::INT32,
         "int32_order maps raw two's-complement words; INT32_2S_COMP would convert them on load");
@@ -645,8 +642,9 @@ inline void perform_reduce_row_max_tile(std::uint32_t tile_row_offset, std::uint
             // Horizontal max: consolidate 8 SFPU columns into column 0
             horizontal_reduce_max();
 
-            // The map is its own inverse: the stored results are two's-complement again.
-            if constexpr (int32_order) {
+            // The map is its own inverse: the stored results are two's-complement again. Without map_back they stay
+            // mapped for the cross-tile combine.
+            if constexpr (map_back) {
                 int32_to_swap_order<p_sfpu::LREG0>();
                 int32_to_swap_order<p_sfpu::LREG4>();
             }
@@ -1002,8 +1000,9 @@ inline void perform_reduce_row_max_min(std::uint32_t block_ct_dim, std::uint32_t
 }
 
 /**
- * @brief Signed-Int32 cross-tile row MAX/MIN combine. Mirrors max_first_columns_across_tiles but loads
- *        plain INT32 and uses the signed compare-and-swap.
+ * @brief Signed-Int32 cross-tile row MAX/MIN combine. Mirrors max_first_columns_across_tiles, but the per-tile
+ *        partials were stored still mapped into SFPSWAP's order (perform_reduce_row_max_tile without map_back), so
+ *        plain SFPSWAPs combine them and only the four results are mapped back, once per batch.
  *
  * @param tile_row_base Base address of the first tile in this row of tiles
  * @param block_ct_dim Number of tiles along x axis of tensor (column tiles)
@@ -1028,11 +1027,17 @@ inline void max_first_columns_across_tiles_int32(std::uint32_t tile_row_base, st
             TT_SFPLOAD(p_sfpu::LREG6, INSTRUCTION_MODE, ADDR_MOD_3, tile_offset + RESULT_ROWS[base_idx + 2]);
             TT_SFPLOAD(p_sfpu::LREG7, INSTRUCTION_MODE, ADDR_MOD_3, tile_offset + RESULT_ROWS[base_idx + 3]);
 
-            _emit_int32_signed_cswap_<p_sfpu::LREG0, p_sfpu::LREG4>();
-            _emit_int32_signed_cswap_<p_sfpu::LREG1, p_sfpu::LREG5>();
-            _emit_int32_signed_cswap_<p_sfpu::LREG2, p_sfpu::LREG6>();
-            _emit_int32_signed_cswap_<p_sfpu::LREG3, p_sfpu::LREG7>();
+            TTI_SFPSWAP(0 /*imm12_math*/, p_sfpu::LREG0, p_sfpu::LREG4, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+            TTI_SFPSWAP(0 /*imm12_math*/, p_sfpu::LREG1, p_sfpu::LREG5, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+            TTI_SFPSWAP(0 /*imm12_math*/, p_sfpu::LREG2, p_sfpu::LREG6, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+            TTI_SFPSWAP(0 /*imm12_math*/, p_sfpu::LREG3, p_sfpu::LREG7, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
         }
+
+        // The map is its own inverse: the stored results are two's-complement again.
+        int32_to_swap_order<p_sfpu::LREG0>();
+        int32_to_swap_order<p_sfpu::LREG1>();
+        int32_to_swap_order<p_sfpu::LREG2>();
+        int32_to_swap_order<p_sfpu::LREG3>();
 
         TT_SFPSTORE(p_sfpu::LREG0, INSTRUCTION_MODE, ADDR_MOD_3, tile_row_base + RESULT_ROWS[base_idx + 0]);
         TT_SFPSTORE(p_sfpu::LREG1, INSTRUCTION_MODE, ADDR_MOD_3, tile_row_base + RESULT_ROWS[base_idx + 1]);
@@ -1060,8 +1065,7 @@ inline void perform_reduce_row_max_min_int32(std::uint32_t block_ct_dim, std::ui
     constexpr InstrModLoadStore INSTRUCTION_MODE = InstrModLoadStore::INT32;
 
     // Re-establish the SFPSWAP direction (see perform_reduce_row_max_min): MAX is the default (bit 8 = 0),
-    // MIN sets bit 8. The mapped per-tile swaps and the cross-tile compare-and-swap's VEC_MIN_MAX obey this
-    // bit; the latter's both-negative fix is a direction-independent unconditional exchange.
+    // MIN sets bit 8. The mapped per-tile swaps and the cross-tile combine's swaps all obey this bit.
     set_sfpswap_direction<pool_type == PoolType::MIN>();
 
     // Int32 MAX/MIN never widens to a UInt16 output, so the per-tile store always uses the plain mode.
@@ -1070,14 +1074,23 @@ inline void perform_reduce_row_max_min_int32(std::uint32_t block_ct_dim, std::ui
     for (std::uint32_t i = 0; i < block_rt_dim; i++) {
         std::uint32_t tile_row_offset = ROWS_PER_TILE * block_ct_dim * i;
 
-        for (std::uint32_t j = 0; j < block_ct_dim; j++) {
-            std::uint32_t tile_offset = tile_row_offset + (ROWS_PER_TILE * j);
-            perform_reduce_row_max_tile<INSTRUCTION_MODE, false /*clear_high_bits*/, true /*int32_order*/>(
-                tile_offset, tile_store_mode);
-        }
-
         if (block_ct_dim > 1) {
+            // The partials stay mapped; the combine compares them with plain SFPSWAPs and maps the results back.
+            for (std::uint32_t j = 0; j < block_ct_dim; j++) {
+                std::uint32_t tile_offset = tile_row_offset + (ROWS_PER_TILE * j);
+                perform_reduce_row_max_tile<
+                    INSTRUCTION_MODE,
+                    false /*clear_high_bits*/,
+                    true /*int32_order*/,
+                    false /*map_back*/>(tile_offset, tile_store_mode);
+            }
             max_first_columns_across_tiles_int32(tile_row_offset, block_ct_dim);
+        } else {
+            perform_reduce_row_max_tile<
+                INSTRUCTION_MODE,
+                false /*clear_high_bits*/,
+                true /*int32_order*/,
+                true /*map_back*/>(tile_row_offset, tile_store_mode);
         }
     }
 }
@@ -1144,7 +1157,7 @@ inline void init_reduce_max_min_int32() {
  *        Writes the int32_to_swap_order constant to LREG12 and records the column window at [0, 9) (map LREG6 and
  *        LREG7, then the LREG4-7 -> LREG4 plain SFPSWAP chain; the column path maps LREG4/5 itself) and, above it,
  *        the row butterfly-stage window (see the slot map). Used instead of the sign-magnitude (INT32_2S_COMP) path so
- * INT32_MIN is handled correctly.
+ *        INT32_MIN is handled correctly.
  *
  * No direction is set here: both Int32 MAX/MIN calculates set their own on entry
  * (calculate_reduce_max_min_int32_col, perform_reduce_row_max_min_int32), and the recorded swaps read it at
@@ -1497,8 +1510,8 @@ inline void calculate_reduce_max_min_int32_col() {
         TTI_SFPTRANSP(0, 0, 0, 0);
 
         // The partials are still mapped, so plain swaps combine the two vertically adjacent faces.
-        TTI_SFPSWAP(0, p_sfpu::LREG7, p_sfpu::LREG6, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // odd columns of face pair
-        TTI_SFPSWAP(0, p_sfpu::LREG5, p_sfpu::LREG4, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // even columns of face pair
+        TTI_SFPSWAP(0 /*imm12_math*/, p_sfpu::LREG7, p_sfpu::LREG6, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // odd columns
+        TTI_SFPSWAP(0 /*imm12_math*/, p_sfpu::LREG5, p_sfpu::LREG4, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // even columns
 
         TTI_SFPMOV(0, p_sfpu::LREG4, p_sfpu::LREG0, 0);
         TTI_SFPMOV(0, p_sfpu::LREG6, p_sfpu::LREG1, 0);
