@@ -518,7 +518,7 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
         auto mock_device = distributed::MeshDevice::open_mesh_device(mock_env_bh_1, mesh_config_mock);
         context_id = mock_device->impl().get_context_id();
 
-        // Test buffer allocation and deallocation
+        // Test buffer allocation
         constexpr size_t page_size = 4096;
         constexpr size_t buffer_size = page_size * 12;
         distributed::DeviceLocalBufferConfig local_config{.page_size = buffer_size, .buffer_type = BufferType::L1};
@@ -526,10 +526,8 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
         auto buffer = distributed::MeshBuffer::create(buffer_config, local_config, mock_device.get());
         ASSERT_GT(buffer->address(), 0);
         ASSERT_TRUE(buffer->is_allocated());
-        buffer->deallocate();
-        ASSERT_FALSE(buffer->is_allocated());
 
-        // Test command queue operations. Source vector is sized to fill the entire buffer so
+        // Test command queue operations on the allocated buffer. Source vector is sized to fill the entire buffer so
         // EnqueueWriteMeshBuffer's precondition (src bytes >= mesh buffer bytes, added in #43429)
         // is satisfied; the prior 16-element vector was a pre-#43429 leftover.
         auto& cq = mock_device->mesh_command_queue();
@@ -541,6 +539,10 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
 
         std::vector<uint32_t> read_data;
         distributed::EnqueueReadMeshBuffer(cq, read_data, buffer, true);
+
+        // Test buffer deallocation
+        buffer->deallocate();
+        ASSERT_FALSE(buffer->is_allocated());
 
         auto program = CreateProgram(*mock_device);
         EXPECT_EQ(program.impl().get_context_id(), context_id);
