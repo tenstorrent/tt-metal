@@ -560,19 +560,20 @@ TABLE = {
         "(torch intra-op 16 / 8 threads). Default 8: the cold gather (owner 2026-10-28); also the bfp8 pack's threads",
     ),
     "CKV_FORMAT": Setting(
-        "bf16",
+        "bfp4_rows",
         ("bf16", "bfp4_rows"),
         "the compressed KV attention table (tt/compressor.AttnTable, read by sparse_sdpa; needs STATIC_TABLES=on). OWNER "
-        "DECISION 2026-10-28 (F208, FIX.8; developed on the 2x2): the reference stores the compressed KV in 4 bits (fp4 "
-        "e2m1 + e4m3 per 16, ds41_ref.py:797-799). bfp4_rows = the history as bfloat4_b row records, 288 B a row "
-        "(ttnn.bringup.ckv_bfp4: an SFPU round to nearest even before the pack, byte-equal to tt-metal's host packer; "
-        "the packer alone truncates bfp4 in effect, tests/test_bfp_packer_rounding.py), read by the sparse_sdpa fork's "
-        "kv_format ROW_BFP4 with the window region as its own bf16 tensor (index list not compacted). The served "
+        "DECISION 2026-10-28 (F208, FIX.8; developed on the 2x2; default bfp4_rows after the 2x2 ladder, owner: a win): "
+        "the reference stores the compressed KV in 4 bits (fp4 e2m1 + e4m3 per 16, ds41_ref.py:797-799). bfp4_rows = the "
+        "history as bfloat4_b row records, 320 B a row ([32 exponents | the same 32 | 256 nibble bytes]), written by the "
+        "packer (ttnn.bringup.ckv_bfp4: SFPU round to nearest even, byte-equal to the host packer; the packer alone "
+        "truncates bfp4 in effect) and read by the sparse_sdpa fork's kv_format ROW_BFP4 through the unpacker (no "
+        "data-movement RISC byte work), the window region a separate bf16 tensor (index list not compacted). The served "
         "records stay bf16 rows holding the rounded values (contract and tt-d-gen unchanged; a host load re-encodes "
-        "them exactly). Rows vs the reference's native: bfp4 RNE 0.112-0.120 rel L2, the reference's own fp4 "
-        "0.095 (bringup/ckv_derisk/CKV_4BIT_DERISK.md). 3.56x less table DRAM and gather traffic; sparse_sdpa one p150b "
-        "H 64: 160 queries 341 -> 517 us, 512 queries 1184 -> 1300 us (the row -> tile shuffle on the dataflow RISCs). "
-        "bf16 = today's stock path (bf16 rows, stock sparse_sdpa)",
+        "them exactly). 2x2 rung last (55296, chunk 2048, 8 layers): device 61.56 -> 61.79 ms per chunk (+0.4 %), "
+        "sparse_sdpa 0.93-0.95 ms both; ladder err vs golden: compress_kv 0.004-0.039 -> 0.111-0.118 (limits "
+        "0.19-0.21), layers within limits (worst L20 0.032 / 0.051, L24 0.029 / 0.042); table 3.3x smaller. "
+        "bf16 = bf16 rows, stock sparse_sdpa",
     ),
 }
 
