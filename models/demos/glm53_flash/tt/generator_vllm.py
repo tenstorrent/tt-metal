@@ -644,21 +644,27 @@ class GLM53FlashForCausalLM:
         self.already_warmed_up_prefill = True
 
     def _warmup_apc_snapshots(self) -> None:
-        """A KDA snapshot save + restore of EVERY per-row user slot before any capture: the save reads the slot's
-        live rows with a slice at the user's index (a program per user), so the first snapshot of a slot the
-        warm-up had not touched compiled at request time under the sealed program cache (SliceDeviceOperation,
-        the 2026-10-28 served APC run on the 8x4). Entry 0 of each slot holds placeholder carries afterwards (the
-        slot's first real snapshot overwrites it); the live states are zeroed after the decode capture anyway."""
+        """A KDA snapshot save + restore of EVERY entry of EVERY per-row user slot before any capture: the save reads
+        the slot's live rows with a slice at the user's index and the restore reads the ring at the entry's index
+        (a program per user and per entry), so the first snapshot into an entry the warm-up had not touched compiled
+        at request time under the sealed program cache (SliceDeviceOperation, the 2026-10-28 served APC runs on the
+        8x4: entry 0, then entry 1 at the hit's restore). The entries hold placeholder carries afterwards (a slot's
+        real snapshots overwrite them); the live states are zeroed after the decode capture anyway."""
         if self.model.kda_snapshots is None or getattr(self, "_apc_snapshots_warmed", False):
             return
         t0 = time.perf_counter()
         B = self.geometry.users_per_row
+        entries = int(getattr(self.model.kda_snapshots, "entries", self.apc.entries if self.apc is not None else 1))
         for u in range(B):
-            self.model.snapshot_kda(u, 0)
-            self.model.restore_kda(u, 0, 0)
+            for e in range(max(1, entries)):  # the ring reads slice at the entry's index: a program per entry too
+                self.model.snapshot_kda(u, e)
+                self.model.restore_kda(u, e, 0)
         self._sync()
         self._apc_snapshots_warmed = True
-        logger.info(f"GLM53 vLLM APC: snapshot save + restore warmed for {B} slots in {time.perf_counter() - t0:.1f} s")
+        logger.info(
+            f"GLM53 vLLM APC: snapshot save + restore warmed for {B} slots x {max(1, entries)} entries in "
+            f"{time.perf_counter() - t0:.1f} s"
+        )
 
     def warmup_model_decode(
         self,
