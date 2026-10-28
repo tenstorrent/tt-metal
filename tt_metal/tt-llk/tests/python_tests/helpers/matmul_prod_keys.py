@@ -111,8 +111,10 @@ def mixed_main_form(fidelity, kb, fp32_dest, in_format, in_format_b, out_format,
             else not (ct >= 4 and rt >= 4) and not (not full_sync and ct == 1 and rt == 1)
         )
         f32_in1 = not keyed
+    f32_in0_half_k1 = in_format_b == DataFormat.Float32 and in_format in block and not full_sync and kb == 1
     return (
         f32_in1
+        or f32_in0_half_k1
         or (not fp32_dest and kb == 1 and not full_sync and in_format == DataFormat.Bfp8_b and in_format_b == DataFormat.Float16_b and out_format == DataFormat.Float32)
     )
 
