@@ -476,11 +476,179 @@ tasks:
       opportunities_listed: '>= 1'
   paths:
   - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/opportunities.md
+- id: P.1
+  title: 'GENERIC_OP_PREPARED: the fabric reduce-scatters (92 per chunk, ~760 us of Python generic_op dispatch each) thro'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - X.2
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  brief:
+    details: 'perf_proposals.md entry GENERIC_OP_PREPARED: the fabric reduce-scatters (92 per chunk, ~760 us of Python generic_op
+      dispatch each) through ttnn.bringup.prepared_program. Owner focus (2026-10-28): reduce HOST time per chunk (the model
+      is host-dispatch bound: device 223.9 ms, warm wall 692.7 ms at X.1, block MoE fused head + tail on FABRIC_2D_TORUS_XY).
+      Read perf_proposals.md in this ledger dir (the entry named below: evidence, call sites, estimates) and ttnn/ttnn/bringup/INDEX.md
+      (forks first). Shipped precision unchanged; bit-identity with the old path is not required, determinism is. Put the
+      change behind the named setting in tt/settings.py (default on, ''off'' = the old path). Engram code (tt/engram.py, tt/engram_kv.py,
+      reference/weights.py) belongs to the 2x2 session: do not touch it. Report the host ms saved per chunk (warm wall before/after)
+      and the device time.'
+  ab:
+    env:
+      DS41_GENERIC_OP_PREPARED: 'off'
+    change:
+      DS41_GENERIC_OP_PREPARED: 'on'
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_PROFILE_WALL=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 692.7
+      device_ms_total: <= 230
+- id: P.2
+  title: 'TAIL_A2A_PREPARED: the block MoE''s fused tail (~1.05 ms host per call) as a prepared program with frozen hash'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.1
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/moe_block
+  brief:
+    details: 'perf_proposals.md entry TAIL_A2A_PREPARED: the block MoE''s fused tail (~1.05 ms host per call) as a prepared
+      program with frozen hashes (and optionally a kept output buffer). Owner focus (2026-10-28): reduce HOST time per chunk
+      (the model is host-dispatch bound: device 223.9 ms, warm wall 692.7 ms at X.1, block MoE fused head + tail on FABRIC_2D_TORUS_XY).
+      Read perf_proposals.md in this ledger dir (the entry named below: evidence, call sites, estimates) and ttnn/ttnn/bringup/INDEX.md
+      (forks first). Shipped precision unchanged; bit-identity with the old path is not required, determinism is. Put the
+      change behind the named setting in tt/settings.py (default on, ''off'' = the old path). Engram code (tt/engram.py, tt/engram_kv.py,
+      reference/weights.py) belongs to the 2x2 session: do not touch it. Report the host ms saved per chunk (warm wall before/after)
+      and the device time.'
+  ab:
+    env:
+      DS41_TAIL_A2A_PREPARED: 'off'
+    change:
+      DS41_TAIL_A2A_PREPARED: 'on'
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_PROFILE_WALL=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 692.7
+      device_ms_total: <= 230
+- id: P.3
+  title: 'FUSED_HEAD_PREPARED_PER_LAYER: one prepared fused-head program per layer so a call patches no weight addresses;
+    FIRST rea'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.2
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/moe_block
+  brief:
+    details: 'perf_proposals.md entry FUSED_HEAD_PREPARED_PER_LAYER: one prepared fused-head program per layer so a call patches
+      no weight addresses; FIRST read patch_count of a head call (one diagnostic run) and stop with the finding if it is ~0.
+      Owner focus (2026-10-28): reduce HOST time per chunk (the model is host-dispatch bound: device 223.9 ms, warm wall 692.7
+      ms at X.1, block MoE fused head + tail on FABRIC_2D_TORUS_XY). Read perf_proposals.md in this ledger dir (the entry
+      named below: evidence, call sites, estimates) and ttnn/ttnn/bringup/INDEX.md (forks first). Shipped precision unchanged;
+      bit-identity with the old path is not required, determinism is. Put the change behind the named setting in tt/settings.py
+      (default on, ''off'' = the old path). Engram code (tt/engram.py, tt/engram_kv.py, reference/weights.py) belongs to the
+      2x2 session: do not touch it. Report the host ms saved per chunk (warm wall before/after) and the device time.'
+  ab:
+    env:
+      DS41_FUSED_HEAD_PREPARED_PER_LAYER: 'off'
+    change:
+      DS41_FUSED_HEAD_PREPARED_PER_LAYER: 'on'
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_PROFILE_WALL=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 692.7
+      device_ms_total: <= 230
+- id: P.4
+  title: 'CCL_PERSISTENT_OUT: persistent output buffers for the per-layer all-gathers (262 per chunk) and reduce-scatter'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.3
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  brief:
+    details: 'perf_proposals.md entry CCL_PERSISTENT_OUT: persistent output buffers for the per-layer all-gathers (262 per
+      chunk) and reduce-scatters (92), removing their allocate/deallocate host cost. Owner focus (2026-10-28): reduce HOST
+      time per chunk (the model is host-dispatch bound: device 223.9 ms, warm wall 692.7 ms at X.1, block MoE fused head +
+      tail on FABRIC_2D_TORUS_XY). Read perf_proposals.md in this ledger dir (the entry named below: evidence, call sites,
+      estimates) and ttnn/ttnn/bringup/INDEX.md (forks first). Shipped precision unchanged; bit-identity with the old path
+      is not required, determinism is. Put the change behind the named setting in tt/settings.py (default on, ''off'' = the
+      old path). Engram code (tt/engram.py, tt/engram_kv.py, reference/weights.py) belongs to the 2x2 session: do not touch
+      it. Report the host ms saved per chunk (warm wall before/after) and the device time.'
+  ab:
+    env:
+      DS41_CCL_PERSISTENT_OUT: 'off'
+    change:
+      DS41_CCL_PERSISTENT_OUT: 'on'
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_PROFILE_WALL=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 692.7
+      device_ms_total: <= 230
+- id: P.5
+  title: 'ROPE_UNIFORM_PROGRAM: RoPE (rotary_embedding_indexed, 136 calls per chunk at ~197 us) built as one program for t'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - P.4
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  brief:
+    details: 'perf_proposals.md entry ROPE_UNIFORM_PROGRAM: RoPE (rotary_embedding_indexed, 136 calls per chunk at ~197 us)
+      built as one program for the mesh instead of 32, via a fork option. Owner focus (2026-10-28): reduce HOST time per chunk
+      (the model is host-dispatch bound: device 223.9 ms, warm wall 692.7 ms at X.1, block MoE fused head + tail on FABRIC_2D_TORUS_XY).
+      Read perf_proposals.md in this ledger dir (the entry named below: evidence, call sites, estimates) and ttnn/ttnn/bringup/INDEX.md
+      (forks first). Shipped precision unchanged; bit-identity with the old path is not required, determinism is. Put the
+      change behind the named setting in tt/settings.py (default on, ''off'' = the old path). Engram code (tt/engram.py, tt/engram_kv.py,
+      reference/weights.py) belongs to the 2x2 session: do not touch it. Report the host ms saved per chunk (warm wall before/after)
+      and the device time.'
+  ab:
+    env:
+      DS41_ROPE_UNIFORM_PROGRAM: 'off'
+    change:
+      DS41_ROPE_UNIFORM_PROGRAM: 'on'
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_PROFILE_WALL=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 692.7
+      device_ms_total: <= 230
 - id: X.3
   title: 'Final: full-target accuracy, warm full prefill (no readback), one warm chunk at several positions'
   step: perf
   deps:
-  - X.2
+  - P.5
   gate:
     cmd: BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py && BRINGUP_FULL_PREFILL=1
       BRINGUP_PROFILE_OPS=1 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_profile.py && scripts/run_safe_pytest.sh

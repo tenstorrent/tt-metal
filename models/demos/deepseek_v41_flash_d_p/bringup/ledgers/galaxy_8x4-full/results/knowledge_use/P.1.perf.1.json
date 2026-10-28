@@ -1,0 +1,51 @@
+{
+ "used": [
+  {
+   "id": "DS41-66",
+   "how": "fabric_reduce_scatter's cached descriptor + program_hash path (_fast) is where prepared dispatch was added; kept the address-keyed LRU so prepared entries never patch",
+   "traced": true,
+   "cited": false
+  },
+  {
+   "id": "DS41-100",
+   "how": "address-keyed descriptor caches add programs until addresses repeat: kept prepared entries keyed the same way (one prepare per descriptor, same program-cache entry via the hash that excludes patched slots)",
+   "traced": true,
+   "cited": false
+  }
+ ],
+ "contradicted": [],
+ "missing": [
+  "the fabric_reduce_scatter unit suite's baseline on the BH Galaxy 8x4 (3 full-mesh tests sized for 2x2 fail, 2x4 sub-mesh cases fail fabric init) was not recorded anywhere"
+ ],
+ "overseer": [
+  {
+   "id": "OV-3",
+   "answer": "n/a",
+   "evidence": "no padding or inflated work: host-dispatch change only, same device programs and runtime args (pcc_chunk_out identical to X.1)"
+  }
+ ],
+ "cited_only": [],
+ "meta": {
+  "model": "deepseek_v41_flash_d_p",
+  "run": "run1",
+  "task": "P.1",
+  "role": "perf",
+  "attempt": 1,
+  "agent": "bringup-engineer",
+  "t": "2026-10-28T10:50:07",
+  "head": "673f9d93ddd",
+  "touched": [
+   "models/demos/deepseek_v41_flash_d_p/bringup/BREADCRUMBS.md",
+   "models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/results/knowledge_use/P.1.perf.1.json",
+   "models/demos/deepseek_v41_flash_d_p/tt/ccl.py",
+   "models/demos/deepseek_v41_flash_d_p/tt/settings.py",
+   "ttnn/ttnn/bringup/INDEX.md",
+   "ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/CHANGELOG.md",
+   "ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/README.md",
+   "ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/fabric_reduce_scatter.py",
+   "ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/tests/test_fabric_reduce_scatter_ttnn.py",
+   "ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/tests/unit/test_fabric_rs_prepared.py",
+   "ttnn/ttnn/bringup/prepared_program/README.md"
+  ]
+ }
+}

@@ -76,7 +76,7 @@ def _inputs(mesh_device, c, seed):
 
 def _call(c, tt_in):
     kw = {"topology": getattr(ttnn.Topology, c["topology"])} if c["topology"] is not None else {}
-    for k in ("dim", "exact_fp32_add", "cache_descriptors", "program_hash"):
+    for k in ("dim", "exact_fp32_add", "cache_descriptors", "program_hash", "prepared"):
         if k in c:
             kw[k] = c[k]
     return ttnn.bringup.fabric_reduce_scatter(tt_in, cluster_axis=c["cluster_axis"], num_links=c["num_links"], **kw)

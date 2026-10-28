@@ -3510,3 +3510,22 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   Unit times: W.1 2.4 min, M.1 / L.s10240 7.2-7.4, L.last 7.6, L.s56320 8.1, smoke 6.2, contract units ~6 each.
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.6 --spec
   models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`.
+
+## P.1 (perf, galaxy 8x4): GENERIC_OP_PREPARED, the fabric reduce-scatters through prepared programs
+- Fork option `ttnn.bringup.fabric_reduce_scatter(prepared=True)` (needs program_hash): `_fast` keeps a
+  `ttnn.bringup.prepare_program(desc, [input, scratch, output])` next to each cached descriptor (its own LRU entry,
+  dkey + "prepared") and dispatches with `ttnn.bringup.run_prepared`. The descriptor LRU is keyed by the buffer
+  addresses, so a call patches nothing unless another descriptor of the same structure ran in between (then the 3 io
+  slots). Not through `prepared_program.generic_op`: its 512-entry cache is shared with the MoE block.
+- tt/settings.py `GENERIC_OP_PREPARED` (default on; off = generic_op on the cached descriptor, the old path);
+  tt/ccl.py `prepared()` (on only with GLUE_FOLD=on) passed by `_rs_bf16`, `tp_sum`, `sum_rows`, `sum_cols`.
+- Quick A/B change-on side (`measure --task P.1`): warm chunk wall median 594.3 ms (runs 570.6-639.3, spread 68.7) vs
+  692.7 at X.1 (generic_op): ~98 ms a chunk host saved (estimate was ~50); every err_layer within its limit,
+  host_transfers_per_layer 0, pcc_chunk_out 0.6206461212358627 = X.1's to the last digit (same programs, same args).
+  Device time not measured here (no device change by construction); the orchestrator's A/B profile gives it.
+- Fork tests: `BRINGUP_TEST_MESH=8x4 scripts/run_safe_pytest.sh --run-all --no-precompile
+  ttnn/ttnn/bringup/fabric_reduce_scatter_ttnn/tests/unit/test_fabric_rs_prepared.py`: 9 passed (bit-identical to
+  generic_op). Whole tests/unit/ on 8x4: 21 passed; 3 failures reproduce on the unchanged file (2x2-sized full-mesh
+  tests), 13 errors are fabric router sync timeouts opening 2x4 sub-meshes on the Galaxy (not this change).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.orchestrator measure --task P.1`; off side:
+  `DS41_GENERIC_OP_PREPARED=off`.
