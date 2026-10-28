@@ -36,6 +36,11 @@ toward the golden value freely, and away from it by ``abs``.
 
 Applicability (v1.12, v1.14): band percentiles p01 / p99 apply at >= 100 active rows, p50 at >= 8, and
 ``inactive_max_err`` only when the case has inactive rows; every skipped check prints ``not applicable (...)``.
+v1.32: a drift metric that is n/a on the candidate but applies on the fixed record is a FAIL, not a skip.
+
+D6 (v1.32, v1.33): ``bias_q_drift_max`` is over the active rows; ``inactive_bias_drift_max`` is the same v1.27
+interval on each inactive row's signed mean error (``inactive_bias_rows``); ``bias_rq_drift_max`` (the largest
+change of an active row's per-quantile mean error, ``bias_rq``) is printed as ``info`` and gates nothing yet.
 """
 
 from __future__ import annotations
@@ -58,13 +63,18 @@ LOWER_IS_BETTER = {
     "bias_row_drift_max",  # v1.26 / D3 item 3: row-indexed, against the fixed record
     "spread_ratio_row_drift_max",
     "bias_q_drift_max",  # v1.31 / D5 item 2: quantile-indexed, against the fixed record
+    "inactive_bias_drift_max",  # v1.33 / D6 item 3: the inactive rows' signed mean, against the fixed record
+    "bias_rq_drift_max",  # v1.33 / D6 item 3: report only
 }
 # v1.27: (row vector, golden value); a row passes in [min(c, e0_i) - tol, max(c, e0_i) + tol]
 ROW_DRIFT = {
     "bias_row_drift_max": ("bias_rows", 0.0),
     "spread_ratio_row_drift_max": ("spread_ratio_rows", 1.0),
     "bias_q_drift_max": ("bias_quantiles", 0.0),  # v1.31: indexed by quantile, the same interval
+    "inactive_bias_drift_max": ("inactive_bias_rows", 0.0),  # v1.33 / D6 item 3: inactive rows, two-sided
 }
+# v1.33 / D6 item 3: printed as info, never a failure, until the orchestrator sets a bound
+REPORT_ONLY = {"bias_rq_drift_max"}
 # v1.20 / v1.24 / D3 item 2: every record carries a floor for each of these; a gates.json without one is a FAIL
 REQUIRED_FLOORS = {
     "pcc_normalized",
@@ -97,6 +107,8 @@ NOT_GATED = {
     "bias_row_argmax",
     "bias_rows",
     "bias_quantiles",
+    "inactive_bias_rows",
+    "bias_rq",
     "spread_ratio_rows",
     "row_info",
 }
@@ -110,6 +122,7 @@ REQUIRED_DRIFT = {
     "spread_ratio_row_drift_max",
     "pcc_step",  # R1-0c
     "bias_q_drift_max",  # v1.31 / D5 items 2-3
+    "inactive_bias_drift_max",  # v1.33 / D6 item 3
     "inactive_max_err",
 }
 # v1.14: (metric, minimum active rows). Population percentiles over fewer rows are really the min / max.
@@ -122,13 +135,16 @@ MIN_ACTIVE = {
 }
 
 
+INACTIVE = ("inactive_max_err", "inactive_spread_ratio_min", "inactive_bias_drift_max")
+
+
 def not_applicable(record: dict, metric: str) -> str | None:
     """Why `metric` is not checked on `record` (None: it is checked)."""
     need = MIN_ACTIVE.get(metric)
     n = record.get("active_rows")
     if need is not None and n is not None and n < need:
         return f"n_active={n} < {need}"
-    if metric in ("inactive_max_err", "inactive_spread_ratio_min") and record.get("excluded_rows") == 0:
+    if metric in INACTIVE and record.get("excluded_rows") == 0:
         return "no inactive rows"
     return None
 
@@ -146,7 +162,21 @@ def gated_keys(record: dict) -> set:
 
 
 def report_only(record: dict, metric: str) -> bool:
-    return False
+    return metric in REPORT_ONLY
+
+
+def bias_rq_drift(r: dict, b: dict | None):
+    """v1.33: max over active rows and quantiles of |e_iq - e0_iq| -> (value, row, quantile), or None (n/a)."""
+    if b is None or not r.get("bias_rq") or not b.get("bias_rq") or len(r["bias_rq"]) != len(b["bias_rq"]):
+        return None
+    best = (0.0, -1, -1)
+    for i, (x, y) in enumerate(zip(r["bias_rq"], b["bias_rq"])):
+        if y is None:
+            continue
+        if x is None or not all(finite(v) for v in x):
+            return (math.inf, i, -1)
+        best = max(best, *((abs(u - v), i, q) for q, (u, v) in enumerate(zip(x, y))))
+    return best
 
 
 DEFAULT_GATES = Path(__file__).resolve().parents[2] / "doc" / "optimize" / "gates.json"
@@ -287,12 +317,6 @@ def check(
             if not ok and not report_only(r, metric):
                 failures.append(f"{key} {metric} {v} vs floor {floor}")
         for metric, tol in drifts.items():
-            if report_only(r, metric):
-                continue
-            why = not_applicable(r, metric)
-            if why:
-                print(f"n/a  drift {key[0]}/{key[1]} {metric}: not applicable ({why})")
-                continue
             if "ref" in tol:  # also for row-indexed drift: a vector the fixed record predates (D5 item 2)
                 path = (gates_dir or DEFAULT_GATES.parent) / tol["ref"]
                 if path not in refs:
@@ -302,6 +326,22 @@ def check(
                 b = row_by.get(key)
             else:
                 b = base_by.get(key)
+            if report_only(r, metric):
+                d = bias_rq_drift(r, b)
+                print(
+                    f"info drift {key[0]}/{key[1]} {metric} "
+                    + ("n/a" if d is None else f"{d[0]:.6g} (row {d[1]}, quantile {d[2]}); report only (v1.33)")
+                )
+                continue
+            why = not_applicable(r, metric)
+            if why:
+                fixed = base_by.get(key)
+                if fixed is not None and not_applicable(fixed, metric) is None:  # v1.32: n/a where the record has one
+                    print(f"FAIL drift {key[0]}/{key[1]} {metric}: n/a ({why}) on a fixed-record metric (v1.32)")
+                    failures.append(f"{key} {metric} drift: n/a on a fixed-record metric ({why})")
+                else:
+                    print(f"n/a  drift {key[0]}/{key[1]} {metric}: not applicable ({why})")
+                continue
             if metric in ROW_DRIFT:
                 vec, c = ROW_DRIFT[metric]
                 if b is None or vec not in r or vec not in b or len(r[vec]) != len(b[vec]):

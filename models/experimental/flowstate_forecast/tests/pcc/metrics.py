@@ -21,8 +21,12 @@ sort). Data space: ``quantile_outputs`` ``(B, 9, H', 1)`` and ``prediction_outpu
                        gate (v1.24): a level shift. bias_row_argmax names the row.
     bias_rows          each active row's signed mean error (None on inactive rows): check_gates gates
                        bias_row_drift_max = max_i |e_i - e0_i| against the fixed record (v1.26, D3 item 3)
-    bias_quantiles     each quantile's signed mean error over every row (normalized): check_gates gates
-                       bias_q_drift_max = max_q |m_q - m0_q| against the fixed record (v1.31, D5 item 2)
+    bias_quantiles     each quantile's signed mean error over the active rows (normalized; v1.32, D6): check_gates
+                       gates bias_q_drift_max = max_q |m_q - m0_q| against the fixed record (v1.31, D5 item 2)
+    inactive_bias_rows each inactive row's signed mean error (None on active rows): check_gates gates
+                       inactive_bias_drift_max with the v1.27 interval (v1.33, D6 item 3)
+    bias_rq            each active row's per-quantile signed mean error over steps (None on inactive rows):
+                       check_gates reports bias_rq_drift_max = max_{i,q} |e_iq - e0_iq|, ungated (v1.33)
     spread_ratio_rows  each active row's spread ratio (None on inactive rows): spread_ratio_row_drift_max
     pcc_step           PCC of the step differences along the horizon, per quantile: a one-step lag (v1.24)
     row_info           per row metric, the row index, that row's golden std and band RMS (v1.25); for
@@ -128,6 +132,8 @@ GATE_KEYS = {
     "bias_row_argmax",
     "bias_rows",
     "bias_quantiles",
+    "inactive_bias_rows",
+    "bias_rq",
     "spread_ratio_rows",
     "pcc_step",
     "row_info",
@@ -166,6 +172,7 @@ def gate_metrics(h, g_h, q, g_q, mean=None, g_mean=None) -> dict:
     if bool((~act).any()):
         iidx = (~act).nonzero().flatten()
         info["inactive_max_err"] = _row(g_h, int(iidx[err[iidx].argmax()]))
+        info["inactive_bias_rows"] = _row(g_h, int(iidx[bias[iidx].argmax()]))  # D6 item 3: the worst inactive row
     m = {
         "pcc_normalized": pearson(g_h, h),
         "pcc_spread": pearson(spread(g_h), spread(h)),
@@ -191,7 +198,12 @@ def gate_metrics(h, g_h, q, g_q, mean=None, g_mean=None) -> dict:
         "bias_row_max": float(bias.max()),
         "bias_row_argmax": int(bias.argmax()),
         "bias_rows": [round(float(b), 7) if a else None for b, a in zip(signed, act)],
-        "bias_quantiles": [round(float(v), 7) for v in diff.mean((0, 2))],
+        # v1.32: active rows only, like bias_rows (inactive rows have inactive_bias_rows); None without any
+        "bias_quantiles": (
+            [round(float(v), 7) for v in diff[act].mean((0, 2))] if bool(act.any()) else [None] * diff.shape[1]
+        ),
+        "inactive_bias_rows": [None if a else round(float(b), 7) for b, a in zip(signed, act)],
+        "bias_rq": [[round(float(v), 7) for v in e] if a else None for e, a in zip(diff.mean(2), act)],
         "spread_ratio_rows": [round(float(r), 7) if a else None for r, a in zip(ratio_all, act)],
         "pcc_step": pearson(step_diff(g_h), step_diff(h)),
         "row_info": info,

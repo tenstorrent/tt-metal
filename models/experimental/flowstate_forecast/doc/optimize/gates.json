@@ -138,6 +138,14 @@
   },
   "inactive_max_err": {
    "abs": 0.01
+  },
+  "inactive_bias_drift_max": {
+   "abs": 0.01,
+   "ref": "iter_00/fixed_record_bias_q.json"
+  },
+  "bias_rq_drift_max": {
+   "report": true,
+   "ref": "iter_00/fixed_record_bias_q.json"
   }
  },
  "drift_by": {
@@ -163,6 +171,10 @@
    },
    "inactive_max_err": {
     "abs": 0.02
+   },
+   "inactive_bias_drift_max": {
+    "abs": 0.02,
+    "ref": "iter_00/fixed_record_bias_q.json"
    }
   },
   "suite:single_long/accuracy": {

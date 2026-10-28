@@ -19,7 +19,13 @@ from models.experimental.flowstate_forecast.tests.perf.check_gates import (
     DEFAULT_GATES,
     LOWER_IS_BETTER,
     REQUIRED_FLOORS,
+    bias_rq_drift,
     check,
+)
+from models.experimental.flowstate_forecast.tests.perf.broken_outputs import (
+    INACTIVE_SHIFT,
+    TOP_Q_SHIFT,
+    toward_exempt,
 )
 
 HEAD, T0 = "f" * 40, 1_000_000.0
@@ -255,31 +261,76 @@ def _local(gates):
     return g
 
 
-@pytest.mark.parametrize("sign", [1, -1])
-def test_top_quantile_shift_fails_q_drift(recs, sign):
-    """D5 item 2: +-0.02 on the top quantile moves no row bias past 0.03, but fails bias_q_drift_max."""
-    gates, base = recs
-    g = torch.load(GOLDENS / "model16.pt", weights_only=True)
+def _shifted(case, rows_fn, sign, shift, quantile=None):
+    g = torch.load(GOLDENS / f"{case}.pt", weights_only=True)
     gh, gq = M.head(g["combined_normalized"]), M.head(g["quantile_outputs"])
     h = gh + 1e-4 * torch.randn(gh.shape, generator=torch.Generator().manual_seed(3))
-    h[:, -1] += sign * 0.02
-    m = M.gate_metrics(h, gh, gq, gq, g["prediction_outputs"], g["prediction_outputs"])
-    r = {**base[0], **m}
-    fails = _check([r], base, _local(gates), require_coverage=False)
+    rows = rows_fn(gh)
+    if quantile is None:
+        h[rows] += sign * shift
+    else:
+        h[rows, quantile] += sign * shift
+    return M.gate_metrics(h, gh, gq, gq, g["prediction_outputs"], g["prediction_outputs"])
+
+
+def _base(base, case, precision):
+    return next(x for x in base if x["name"] == f"suite:{case}" and x["precision"] == precision)
+
+
+@pytest.mark.parametrize("sign", [1, -1])
+@pytest.mark.parametrize("precision", ["accuracy", "performance"])
+def test_top_quantile_shift_fails_q_drift(recs, sign, precision):
+    """v1.32: the top-quantile probe clears its bound: +-0.02 at accuracy (0.01), +-0.05 at performance (0.03).
+    It moves no row bias past its tolerance, and fails bias_q_drift_max by name."""
+    gates, base = recs
+    m = _shifted("model16", lambda gh: slice(None), sign, TOP_Q_SHIFT[precision], quantile=-1)
+    fails = _check([{**_base(base, "model16", precision), **m}], base, _local(gates), require_coverage=False)
     assert any("bias_q_drift_max quantile 8" in f for f in fails)
     assert not any("bias_row_drift_max" in f for f in fails)
 
 
-def test_inactive_level_shift_fails_drift(recs):
-    """D5 item 3: +0.03 on the inactive rows of nan_mix stays under the 0.05 floor and fails the drift."""
+@pytest.mark.parametrize("sign", [1, -1])
+@pytest.mark.parametrize("precision", ["accuracy", "performance"])
+def test_inactive_level_shift_fails_bias_drift(recs, sign, precision):
+    """D6 item 3 / v1.32: +-0.03 accuracy, +-0.04 performance on nan_mix's inactive rows stays under the 0.05 floor
+    and fails inactive_bias_drift_max, by name, in both signs."""
     gates, base = recs
-    g = torch.load(GOLDENS / "nan_mix.pt", weights_only=True)
-    gh, gq = M.head(g["combined_normalized"]), M.head(g["quantile_outputs"])
-    h = gh + 1e-4 * torch.randn(gh.shape, generator=torch.Generator().manual_seed(3))
-    h[~M.active_rows(gh)] += 0.03
-    m = M.gate_metrics(h, gh, gq, gq, g["prediction_outputs"], g["prediction_outputs"])
-    b = next(x for x in base if x["name"] == "suite:nan_mix" and x["precision"] == "accuracy")
-    fails = _check([{**b, **m}], base, _local(gates), require_coverage=False)
-    assert any("inactive_max_err drift" in f for f in fails)
+    m = _shifted("nan_mix", lambda gh: ~M.active_rows(gh), sign, INACTIVE_SHIFT[precision])
+    fails = _check([{**_base(base, "nan_mix", precision), **m}], base, _local(gates), require_coverage=False)
+    assert any(f.split(")", 1)[1].split()[0] == "inactive_bias_drift_max" for f in fails)
     assert not any("inactive_max_err" in f and "floor" in f for f in fails)
-    assert "pcc_row_min" in m["row_info"]
+    assert "inactive_bias_rows" in m["row_info"]
+
+
+def test_bias_q_over_active_rows_only():
+    """v1.32: bias_quantiles ignores the inactive rows (they have inactive_bias_rows)."""
+    m = _shifted("nan_mix", lambda gh: ~M.active_rows(gh), 1, 0.5)
+    m0 = _shifted("nan_mix", lambda gh: ~M.active_rows(gh), 1, 0.0)
+    assert m["bias_quantiles"] == m0["bias_quantiles"]
+    assert m["inactive_bias_rows"] != m0["inactive_bias_rows"]
+
+
+def test_na_on_fixed_record_metric_fails(recs):
+    """v1.32: a drift metric n/a on the candidate but measured on the fixed record is a FAIL, not a skip."""
+    gates, base = recs
+    b = _base(base, "nan_mix", "accuracy")
+    fails = _check([dict(b, excluded_rows=0)], base, gates, require_coverage=False)
+    assert any("inactive_max_err drift: n/a on a fixed-record metric" in f for f in fails)
+
+
+def test_bias_rq_drift_reported_not_gated(recs):
+    """v1.33: q8 +0.05 on 3 active rows is reported by bias_rq_drift_max (about 0.05) and never fails by that name."""
+    gates, base = recs
+    m = _shifted("model16", lambda gh: M.active_rows(gh).nonzero().flatten()[:3], 1, 0.05, quantile=-1)
+    b = _base(base, "model16", "performance")
+    v, row, q = bias_rq_drift({**b, **m}, b)
+    assert abs(v - 0.05) < 1e-3 and q == 8
+    assert not any("bias_rq_drift_max" in f for f in _check([{**b, **m}], base, _local(gates), require_coverage=False))
+
+
+def test_toward_rule():
+    """v1.33: exempt only inside the v1.27 interval and with the opposite sign failing."""
+    assert toward_exempt([([0.002], [0.015], 0.01)], True)  # moved toward the golden: exempt
+    assert not toward_exempt([([0.002], [0.015], 0.01)], False)  # opposite sign passes too: not exempt
+    assert not toward_exempt([([-0.025], [0.005], 0.01)], True)  # crosses and overshoots: must fail
+    assert not toward_exempt([([0.002], [float("nan")], 0.01)], True)  # no fixed-record value: not exempt

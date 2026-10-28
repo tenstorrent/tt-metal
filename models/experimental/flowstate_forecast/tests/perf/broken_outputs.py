@@ -23,8 +23,14 @@ must pass every drift (R1-0a). Shifts and single-row band scalings are probed in
                         active rows with the largest golden std
     lag1                the forecast one step late (v1.22)
     band_1.3x_row       the band of one active row (the widest) scaled 1.3x (v1.26); band_0.7x_row 0.7x
-    top_q_shift(_neg)   +-0.02 on the top quantile only, every row (v1.31, D5 item 2)
-    inactive_shift(_neg) +-0.03 level shift of the inactive rows (v1.31, D5 item 3; n/a without them)
+    top_q_shift(_neg)   +-0.02 accuracy / +-0.05 performance on the top quantile only, every row (v1.31, v1.32)
+    inactive_shift(_neg) +-0.03 accuracy / +-0.04 performance on the inactive rows (v1.32, D6; n/a without them)
+    top_q_rows(_neg)    report only (v1.33): +-0.03 accuracy / +-0.05 performance on the top quantile of the 3 active
+                        rows whose top quantile is already furthest from the golden; prints bias_rq_drift_max
+
+v1.33 / D6 item 2: a signed probe that trips nothing is ``toward`` (listed and counted, never a pass) only if every
+bias vector it moves stays inside the v1.27 interval against the fixed record **and** the opposite sign fails on
+the same case and base; otherwise it passes. v1.32: n/a on a fixed-record metric is a miss, never a catch.
 
 With ``--dumps`` (the bench's MODEL_PERF_DUMP and the suite's FLOWSTATE_SUITE_DUMP outputs of the fixed record's
 jobs), each broken output is made from the device output of that case and precision instead of the golden, and
@@ -38,6 +44,7 @@ from __future__ import annotations
 
 import argparse
 import contextlib
+import functools
 import io
 import json
 import math
@@ -52,15 +59,32 @@ from models.experimental.flowstate_forecast.tests.pcc import metrics as M
 from models.experimental.flowstate_forecast.tests.perf.check_gates import (
     DEFAULT_BASELINE,
     DEFAULT_GATES,
+    ROW_DRIFT,
+    _by_key,
+    _drift,
+    bias_rq_drift,
     check,
+    finite,
     load_records,
+    not_applicable,
     session_stamp,
 )
 
 BENCH = ("paper", "long_context", "long_horizon", "scale_q", "single", "single_long")
 SHIFT = 0.05
-TOP_Q_SHIFT = 0.02  # D5 item 2
-INACTIVE_SHIFT = 0.03  # D5 item 3
+TOP_Q_SHIFT = {"accuracy": 0.02, "performance": 0.05}  # v1.32: a probe clears its bound (0.01 / 0.03)
+INACTIVE_SHIFT = {"accuracy": 0.03, "performance": 0.04}  # v1.32 / D6 item 3 (bound 0.01 / 0.02)
+RQ_SHIFT = {"accuracy": 0.03, "performance": 0.05}  # v1.33, report only
+RQ_ROWS = 3
+REPORT = ("top_q_rows", "top_q_rows_neg")
+# v1.33: the bias vectors (gated drift metrics) a signed probe moves, for the toward rule
+TARGET = {
+    "level_shift": ("bias_row_drift_max", "bias_q_drift_max", "inactive_bias_drift_max"),
+    "level_shift_rows": ("bias_row_drift_max", "bias_q_drift_max"),
+    "top_q_shift": ("bias_q_drift_max", "bias_row_drift_max"),
+    "inactive_shift": ("inactive_bias_drift_max",),
+}
+NA = "n/a on a fixed-record metric"
 
 
 def scale_band(h, rows, factor):
@@ -74,7 +98,7 @@ def n_shift_rows(B):
     return 1 if B <= 16 else 2 if B <= 32 else 4 if B <= 64 else math.ceil(0.01 * B)
 
 
-def broken(base, gh):
+def broken(base, gh, precision="accuracy"):
     """base (B, 9, H, 1): the output to break (device or golden); gh: the golden, which picks the rows."""
     h3 = M.head(gh)
     act = M.active_rows(h3)
@@ -89,12 +113,18 @@ def broken(base, gh):
     shifted[big] += SHIFT
     shifted_neg = base.clone()
     shifted_neg[big] -= SHIFT
+    tq, iq, rq = TOP_Q_SHIFT[precision], INACTIVE_SHIFT[precision], RQ_SHIFT[precision]
     top, top_neg = base.clone(), base.clone()
-    top[:, -1] += TOP_Q_SHIFT
-    top_neg[:, -1] -= TOP_Q_SHIFT
+    top[:, -1] += tq
+    top_neg[:, -1] -= tq
     ina, ina_neg = base.clone(), base.clone()
-    ina[~act] += INACTIVE_SHIFT
-    ina_neg[~act] -= INACTIVE_SHIFT
+    ina[~act] += iq
+    ina_neg[~act] -= iq
+    e8 = (M.head(base).double() - h3.double())[:, -1].mean(1).abs()
+    worst = idx[e8[idx].argsort(descending=True)[:RQ_ROWS]]
+    rqp, rqn = base.clone(), base.clone()
+    rqp[worst, -1] += rq
+    rqn[worst, -1] -= rq
     lag = base.clone()
     lag[:, :, 1:] = base[:, :, :-1]
     return {
@@ -110,10 +140,12 @@ def broken(base, gh):
         "lag1": (lag, "all series"),
         "band_1.3x_row": (scale_band(base, wide[:1], 1.3), f"row {wide[:1].tolist()}"),
         "band_0.7x_row": (scale_band(base, wide[:1], 0.7), f"row {wide[:1].tolist()}"),
-        "top_q_shift": (top, "quantile 8, all series"),
-        "top_q_shift_neg": (top_neg, "quantile 8, all series"),
-        "inactive_shift": (ina, f"{int((~act).sum())} inactive series"),
-        "inactive_shift_neg": (ina_neg, f"{int((~act).sum())} inactive series"),
+        "top_q_shift": (top, f"quantile 8 +{tq}, all series"),
+        "top_q_shift_neg": (top_neg, f"quantile 8 -{tq}, all series"),
+        "inactive_shift": (ina, f"+{iq} on {int((~act).sum())} inactive series"),
+        "inactive_shift_neg": (ina_neg, f"-{iq} on {int((~act).sum())} inactive series"),
+        "top_q_rows": (rqp, f"quantile 8 +{rq}, rows {worst.tolist()}"),
+        "top_q_rows_neg": (rqn, f"quantile 8 -{rq}, rows {worst.tolist()}"),
     }
 
 
@@ -143,8 +175,43 @@ def _metric(fail: str) -> str:
 
 
 def score(rec, base, gates, gates_dir):
+    """-> (failed metrics, metrics n/a on the fixed record); v1.32: an n/a is a miss, never a catch."""
     with contextlib.redirect_stdout(io.StringIO()):
-        return {_metric(f) for f in check([rec], base, gates, gates_dir, require_coverage=False)}
+        fails = check([rec], base, gates, gates_dir, require_coverage=False)
+    return {_metric(f) for f in fails if NA not in f}, {_metric(f) for f in fails if NA in f}
+
+
+def inside(xs, ys, tol, c=0.0) -> bool:
+    """v1.27: every element with a fixed-record value is finite and in [min(c, y) - tol, max(c, y) + tol]."""
+    return all(
+        y is None or (finite(x) and finite(y) and min(c, y) - tol <= x <= max(c, y) + tol)
+        for x, y in zip(xs, ys, strict=True)
+    )
+
+
+def toward_exempt(vectors, opposite_fails: bool) -> bool:
+    """v1.33: vectors = [(candidate, fixed record, tol)] the probe moves; exempt only if all stay inside the interval
+    and the opposite sign fails on the same case and base."""
+    return opposite_fails and all(inside(x, y, t) for x, y, t in vectors)
+
+
+@functools.cache
+def _ref(path: Path) -> dict:
+    return _by_key(load_records(path))
+
+
+def ref_vectors(rec, kind, gates, gates_dir, base_by):
+    """[(candidate vector, fixed-record vector, tol)] for the drift metrics a signed probe moves."""
+    out, key = [], (rec["name"], rec["precision"])
+    tols = _drift(gates, *key)
+    for metric in TARGET[kind.removesuffix("_neg")]:
+        tol = tols.get(metric)
+        if not tol or not_applicable(rec, metric):
+            continue
+        vec = ROW_DRIFT[metric][0]
+        b = _ref(gates_dir / tol["ref"]).get(key) if "ref" in tol else base_by.get(key)
+        out.append((rec[vec], (b or {}).get(vec, [math.nan] * len(rec[vec])), tol["abs"]))
+    return out
 
 
 def main():
@@ -157,7 +224,9 @@ def main():
     stamp = session_stamp()
     gates = json.loads(args.gates.read_text())
     base = load_records(args.baseline)
-    results, bad = [], []
+    base_by = _by_key(base)
+    gdir = args.gates.parent
+    results, bad, toward, na_miss, report = [], [], [], [], []
     for name in [f"bench_{s}" for s in BENCH] + list(TEST_CASES):
         g = torch.load(GOLDENS / f"{name}.pt", weights_only=True)
         gh = g["combined_normalized"]
@@ -177,11 +246,18 @@ def main():
                 else:
                     bad.append(f"{key}/{p}/no device dump")
             for src, base_h in bases:
-                own = score(rec(base_h, p), base, gates, args.gates.parent)
-                print(f"{key:20s} {p:11s} {src} output itself fails {sorted(own)}")
+                own, own_na = score(rec(base_h, p), base, gates, gdir)
+                print(
+                    f"{key:20s} {p:11s} {src} output itself fails {sorted(own)}"
+                    + (f"; n/a {sorted(own_na)}" if own_na else "")
+                )
                 if src == "golden" and (drift := sorted(x for x in own if "drift" in x or " row " in x)):
                     bad.append(f"{key}/{p}/golden fails drift {drift}")
-                for kind, (h, what) in broken(base_h, gh).items():
+                d0 = bias_rq_drift(
+                    rec(base_h, p), _ref(gdir / gates["drift"]["bias_rq_drift_max"]["ref"]).get((key, p))
+                )
+                caught, rows = {}, {}
+                for kind, (h, what) in broken(base_h, gh, p).items():
                     if kind.startswith("inactive_") and not bool((~M.active_rows(M.head(gh))).any()):
                         print(f"{key:20s} {p:11s} {kind:20s}: not applicable (no inactive series)")
                         continue
@@ -191,24 +267,63 @@ def main():
                         gq = M.head(g["quantile_outputs"]).double().reshape(gh.shape[0], -1)
                         real = (SHIFT * SD[:, 0, :, 0]).mean(1) / gq.std(1)
                         extra = f"; +0.05 normalized = {float(real.median()):.3g} x the data row std (median over rows)"
-                    fails = sorted(score(rec(h, p), base, gates, args.gates.parent) - own)
-                    results.append(
-                        {
-                            "case": key,
-                            "broken": kind,
-                            "base": src,
-                            "rows": what + extra,
-                            "precision": p,
-                            "fails": fails,
-                            **stamp,
-                        }
+                    r = rec(h, p)
+                    got, na = score(r, base, gates, gdir)
+                    fails = sorted(got - own)
+                    row = {
+                        "case": key,
+                        "broken": kind,
+                        "base": src,
+                        "rows": what + extra,
+                        "precision": p,
+                        "fails": fails,
+                    }
+                    if na - own_na:
+                        row["na"] = sorted(na - own_na)
+                    if kind in REPORT:  # v1.33: report only, never in the pass / miss count
+                        d = bias_rq_drift(r, _ref(gdir / gates["drift"]["bias_rq_drift_max"]["ref"]).get((key, p)))
+                        row["bias_rq_drift_max"] = None if d is None else {"value": d[0], "row": d[1], "quantile": d[2]}
+                        row["bias_rq_drift_max_base"] = None if d0 is None else d0[0]
+                        row["outcome"] = "report"
+                        report.append(row)
+                    row.update(stamp)
+                    results.append(row)
+                    caught[kind], rows[kind] = bool(fails), (row, r)
+                    print(
+                        f"{key:20s} {p:11s} {kind:20s} ({src}; {what}{extra}): fails {len(fails)} {fails}"
+                        + (f"; n/a {row['na']}" if "na" in row else "")
                     )
-                    print(f"{key:20s} {p:11s} {kind:20s} ({src}; {what}{extra}): fails {len(fails)} {fails}")
-                    if not fails:
-                        bad.append(f"{key}/{p}/{src}/{kind}")
+                for kind, (row, r) in rows.items():  # v1.33: classify the probes that tripped nothing
+                    if kind in REPORT or caught[kind]:
+                        row.setdefault("outcome", "caught")
+                        continue
+                    label = f"{key}/{p}/{src}/{kind}"
+                    opp = kind.removesuffix("_neg") if kind.endswith("_neg") else kind + "_neg"
+                    if "na" in row:  # v1.32: n/a on a fixed-record metric is a miss
+                        row["outcome"] = "miss (n/a)"
+                        na_miss.append(label)
+                        bad.append(label + " (n/a)")
+                    elif kind.removesuffix("_neg") in TARGET and toward_exempt(
+                        ref_vectors(r, kind, gates, gdir, base_by), caught.get(opp, False)
+                    ):
+                        row["outcome"] = "toward"
+                        toward.append(label)
+                    else:
+                        row["outcome"] = "pass"
+                        bad.append(label)
     if args.out:
         args.out.write_text(json.dumps(results, indent=1) + "\n")
-    print(f"{len(bad)} broken output(s) pass every floor and drift" + (": " + ", ".join(bad) if bad else ""))
+    for row in report:
+        d = row["bias_rq_drift_max"]
+        print(
+            f"report {row['case']}/{row['precision']}/{row['base']}/{row['broken']}: bias_rq_drift_max "
+            + ("n/a" if d is None else f"{d['value']:.4g} (base {row['bias_rq_drift_max_base']:.4g})")
+            + f", fails {len(row['fails'])}"
+        )
+    n = sum(1 for r in results if r.get("outcome") != "report")
+    print(f"{len(toward)} toward probe(s) (v1.33, not passes)" + (": " + ", ".join(toward) if toward else ""))
+    print(f"{len(na_miss)} n/a miss(es) (v1.32)")
+    print(f"{len(bad)} of {n} broken output(s) pass every floor and drift" + (": " + ", ".join(bad) if bad else ""))
     sys.exit(1 if bad else 0)
 
 
