@@ -25,31 +25,32 @@ class TracedForward:
     def _key(self, prep: df.Prepared):
         return (prep.tokens.shape[0], prep.ctx_len)
 
-    def _recapture(self):
-        dev = self.tt.device
+    def _release_traces(self):
         for tid, out in self._traces.values():
-            ttnn.release_trace(dev, tid)
+            ttnn.release_trace(self.tt.device, tid)
             ttnn.deallocate(out)
         self._traces.clear()
+
+    def _capture_all(self):
+        dev = self.tt.device
         for key, inp in self._inputs.items():
-            c = self.tt.constants(*key)
-            ttnn.deallocate(self.tt.forward_device(inp, c))  # compile run
+            ttnn.deallocate(self.tt.forward_device(inp, self.tt.constants(*key)))  # compile run, no trace alive
         for key, inp in self._inputs.items():
-            c = self.tt.constants(*key)
             tid = ttnn.begin_trace_capture(dev, cq_id=0)
-            out = self.tt.forward_device(inp, c)
+            out = self.tt.forward_device(inp, self.tt.constants(*key))
             ttnn.end_trace_capture(dev, tid, cq_id=0)
             self._traces[key] = (tid, out)
 
     def upload(self, prep: df.Prepared):
-        """Fill the shape's persistent inputs (allocating them and recapturing every trace on a new shape)."""
+        """Fill the shape's persistent inputs. A new shape first releases every trace, then allocates its constants
+        and inputs (no allocation while a trace is alive), then recaptures every shape."""
         key = self._key(prep)
-        host = self.tt.host_inputs(prep)  # also builds the shape's constants
         if key not in self._inputs:
-            self._inputs[key] = self.tt.upload_inputs(host)
-            self._recapture()
+            self._release_traces()
+            self._inputs[key] = self.tt.upload_inputs(self.tt.host_inputs(prep))  # host_inputs builds the constants
+            self._capture_all()
         else:
-            self.tt.upload_inputs(host, self._inputs[key])
+            self.tt.upload_inputs(self.tt.host_inputs(prep), self._inputs[key])
         return key
 
     def execute(self, prep: df.Prepared):
@@ -78,10 +79,7 @@ class TracedForward:
         return torch.cat(out, 1)
 
     def release(self):
-        for tid, out in self._traces.values():
-            ttnn.release_trace(self.tt.device, tid)
-            ttnn.deallocate(out)
+        self._release_traces()
         for inp in self._inputs.values():
             self.tt.deallocate_inputs(inp)
-        self._traces.clear()
         self._inputs.clear()
