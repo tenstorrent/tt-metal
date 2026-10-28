@@ -532,8 +532,7 @@ private:
     std::vector<Claim> claims_;  // Indexed by participant.
     // Wake tree in heap order: the caller wakes [0], and [i] wakes [i * WAKE_FANOUT + 1 .. (i + 1) * WAKE_FANOUT].
     Participants participants_;
-    // The empty entry of the index tables below: a worker not taking part, or the end of a participant's calls.
-    static constexpr uint32_t NO_INDEX = UINT32_MAX;
+    static constexpr uint32_t NO_INDEX = UINT32_MAX;  // Empty entry: not taking part, or end of a participant's calls.
     ttsl::SmallVector<uint32_t, 64> participant_of_worker_;  // Indexed by executor index.
     // Each participant's calls in call order: first_call_ and last_call_ by participant, next_call_ by call.
     ttsl::SmallVector<uint32_t, 32> first_call_;
