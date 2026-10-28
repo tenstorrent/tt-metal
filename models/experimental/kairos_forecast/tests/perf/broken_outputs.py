@@ -15,6 +15,11 @@ drift from a fixed record (suite.json and bench.json).
                         both halves cancels in (a - flip(b)) / 2)
     lag1[_h0|_h1]       every quantile one step late along the 128-step token pair (head space)
     level_shift_final, lag1_final   the same on the final data-space forecast only (+0.05 x the target's scale)
+    level_shift_rows[_h0|_h1|_final]  +0.05 on a few rows only (v1.25, D4 item 1): 1 row at B <= 16, 2 at 32, 4 at 64,
+                        1 % of the rows on paper / ragged (B = series per forward; the first active rows)
+
+The row-indexed drift (bias_row_drift_max[_final]) of a broken record is taken against the golden record itself
+(row_base): the perturbation is the whole move.
 
 A broken output is caught when a floor fails, or a drift check fails that the golden itself passes (the golden is
 not a device output, so a drift check it fails, e.g. performance spread_ratio_p50 of 1.000 vs a fixed 1.012, says
@@ -40,7 +45,10 @@ from models.experimental.kairos_forecast.tests.pcc import metrics as M
 from models.experimental.kairos_forecast.tests.perf.check_gates import DEFAULT_GATES, check, load_records, session_stamp
 from models.experimental.kairos_forecast.tests.perf.suite import GIFT_CASES, _post, load, score
 
-FIXED = {"suite": DEFAULT_GATES.parent / "iter_00" / "suite.jsonl", "bench": DEFAULT_GATES.parent / "iter_00" / "bench.json"}
+FIXED = {
+    "suite": DEFAULT_GATES.parent / "iter_00" / "suite.jsonl",
+    "bench": DEFAULT_GATES.parent / "iter_00" / "bench.json",
+}
 if os.environ.get("KAIROS_FIXED_SUITE"):  # development: score against another record (e.g. a pcc job's records)
     FIXED = {"suite": Path(os.environ["KAIROS_FIXED_SUITE"])}
 SHIFT = 0.05
@@ -76,8 +84,24 @@ def _active(raw):
     return M.active_rows(M.head_view(raw))
 
 
-def head_transforms():
+def shift_rows(name, n_series):
+    """How many rows level_shift_rows moves (D4 item 1)."""
+    if name.split("_tf")[0] in ("paper", "ragged"):
+        return max(1, math.ceil(0.01 * n_series))
+    return max(1, n_series // 16)
+
+
+def _shift_rows(raw, k):
+    """+SHIFT on the first k active rows of one forward's (one half's) head."""
+    rows = _active(raw).nonzero().flatten()[:k]
+    out = raw.clone()
+    out[rows] += SHIFT
+    return out
+
+
+def head_transforms(k_rows=1):
     """label -> f(raw [rows, 2, 576], half) -> raw. half: 0 for the x half (or no flip), 1 for the -x half."""
+
     def one_pct(raw, _h):
         act = _active(raw).nonzero().flatten()
         k = max(1, math.ceil(0.01 * len(act)))
@@ -98,6 +122,8 @@ def head_transforms():
     for half in (0, 1):
         t[f"level_shift_h{half}"] = lambda r, h, half=half: r + SHIFT if h == half else r
         t[f"lag1_h{half}"] = lambda r, h, half=half: _unseq(_lag(_seq(r))) if h == half else r
+        t[f"level_shift_rows_h{half}"] = lambda r, h, half=half: _shift_rows(r, k_rows) if h == half else r
+    t["level_shift_rows"] = lambda r, h: _shift_rows(r, k_rows)
     return t
 
 
@@ -148,7 +174,8 @@ def scorings(name):
     rec = load(name)
     gift = rec["gift"]
     out = {"golden": case_records(name)}
-    for label, f in head_transforms().items():
+    k = shift_rows(name, rec["context"].shape[0])
+    for label, f in head_transforms(k).items():
         if not gift and label[-3:] in ("_h0", "_h1"):
             continue
         out[label] = case_records(name, f)
@@ -156,6 +183,13 @@ def scorings(name):
         out["no_negate"] = case_records(name, "no_negate")
     out["level_shift_final"] = case_records(name, final=lambda q, s: q + SHIFT * s.view(-1, 1, 1))
     out["lag1_final"] = case_records(name, final=lambda q, s: _lag(q))
+
+    def rows_final(q, s):
+        q = q.clone()
+        q[:k] += SHIFT * s[:k].view(-1, 1, 1)
+        return q
+
+    out["level_shift_rows_final"] = case_records(name, final=rows_final)
     return out
 
 
@@ -169,9 +203,9 @@ def real_units(name):
     return {"shift_over_row_std_p50": float(ratio.median()), "min": float(ratio.min()), "max": float(ratio.max())}
 
 
-def _failed_metrics(recs, base, gates):
+def _failed_metrics(recs, base, gates, row_base=None):
     with contextlib.redirect_stdout(io.StringIO()):
-        fails = check(recs, base, gates, require_coverage=False, allow_unstamped=True)
+        fails = check(recs, base, gates, require_coverage=False, allow_unstamped=True, row_base=row_base)
     out = []
     for f in fails:
         if ") " not in f:  # "(name, precision): dirty tree" and the other stamp failures
@@ -197,8 +231,9 @@ def verdicts(cases, gates, fixed):
                 base = [r for r in recs_fixed if r["precision"] == prec]
                 mk = lambda recs: [{**r, "precision": prec, **stamp} for r in recs]  # noqa: E731
                 golden = {}
-                for r in mk(sc["golden"]):
-                    golden[r["name"]] = _failed_metrics([r], base, gates)
+                gold_recs = mk(sc["golden"])
+                for r in gold_recs:
+                    golden[r["name"]] = _failed_metrics([r], base, gates, gold_recs)
                 per = {"golden": golden}
                 for label, recs in sc.items():
                     if label == "golden":
@@ -209,8 +244,11 @@ def verdicts(cases, gates, fixed):
                             lab[r["name"]] = "not applicable (identical to the golden)"
                             continue
                         gd = {m for m, kind in golden[r["name"]] if kind == "drift"}
-                        lab[r["name"]] = [f"{kind}:{m}" for m, kind in _failed_metrics([r], base, gates)
-                                          if kind == "floor" or (kind == "drift" and m not in gd)]
+                        lab[r["name"]] = [
+                            f"{kind}:{m}"
+                            for m, kind in _failed_metrics([r], base, gates, gold_recs)
+                            if kind == "floor" or (kind == "drift" and m not in gd)
+                        ]
                     per[label] = lab
                 row[set_name] = per
             res[f"{name}/{prec}"] = row
@@ -239,8 +277,13 @@ def main(out_path, cases):
     fixed = {k: load_records(p) for k, p in FIXED.items()}
     res = verdicts(cases, gates, fixed)
     bad = problems(res)
-    out = {**session_stamp(), "fixed": {k: str(p) for k, p in FIXED.items()},
-           "level_shift_real_units": {c: real_units(c) for c in cases}, "verdicts": res, "problems": bad}
+    out = {
+        **session_stamp(),
+        "fixed": {k: str(p) for k, p in FIXED.items()},
+        "level_shift_real_units": {c: real_units(c) for c in cases},
+        "verdicts": res,
+        "problems": bad,
+    }
     with open(out_path, "w") as f:
         json.dump(out, f, indent=1)
     for p in bad:
