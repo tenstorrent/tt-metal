@@ -88,6 +88,55 @@ tt::tt_metal::ProgramDescriptor ConcatS2STiledProgramFactory::create_descriptor(
     const uint32_t tile_size = tt::tile_size(data_format);
     const uint32_t num_input_tensors = input_tensors.size();
 
+    // Whole-tile widths and no groups: output tile row i is [in0 row i | in1 row i], two contiguous L1 copies per
+    // row. Pure data movement, valid for every tile format (the transpose/untilize path below mis-sizes BFLOAT8_B
+    // tiles), and faster.
+    if (groups == 1 && num_input_tensors == 2 && input_tensors[0].dtype() == output.dtype() &&
+        num_tiles_for_each_input_shard[0].first == num_tiles_for_each_input_shard[1].first &&
+        num_tiles_for_each_input_shard[0].first == num_tiles_for_output_shard.first &&
+        num_tiles_for_each_input_shard[0].second + num_tiles_for_each_input_shard[1].second ==
+            num_tiles_for_output_shard.second) {
+        const uint32_t cb_ids[3] = {0, 1, 2};
+        const Tensor* tensors[3] = {&input_tensors[0], &input_tensors[1], &output};
+        for (uint32_t k = 0; k < 3; k++) {
+            const auto& t = *tensors[k];
+            const auto nt = k < 2 ? num_tiles_for_each_input_shard[k] : num_tiles_for_output_shard;
+            desc.cbs.push_back(CBDescriptor{
+                .total_size = nt.first * nt.second * tile_size,
+                .core_ranges = all_cores,
+                .format_descriptors = {{CBFormatDescriptor{
+                    .buffer_index = static_cast<uint8_t>(cb_ids[k]),
+                    .data_format = data_format,
+                    .page_size = tile_size,
+                }}},
+                .buffer = t.buffer(),
+            });
+        }
+        for (uint32_t half = 0; half < 2; half++) {
+            KernelDescriptor kd;
+            kd.kernel_source =
+                "ttnn/cpp/ttnn/operations/data_movement/concat/device/kernels/dataflow/"
+                "reader_height_sharded_width_concat_two_tensors_tiled_aligned.cpp";
+            kd.source_type = KernelDescriptor::SourceType::FILE_PATH;
+            kd.core_ranges = all_cores;
+            kd.compile_time_args = {
+                cb_ids[0],
+                cb_ids[1],
+                cb_ids[2],
+                num_tiles_for_output_shard.first,
+                num_tiles_for_each_input_shard[0].second * tile_size,
+                num_tiles_for_each_input_shard[1].second * tile_size,
+                half};
+            if (half == 0) {
+                kd.config = ReaderConfigDescriptor{};
+            } else {
+                kd.config = WriterConfigDescriptor{};
+            }
+            desc.kernels.push_back(std::move(kd));
+        }
+        return desc;
+    }
+
     for (uint32_t idx = 0; idx < num_input_tensors; idx++) {
         const Tensor& input_tensor = input_tensors.at(idx);
         const uint32_t total_num_tiles = get_total_num_tiles_per_shard(num_tiles_for_each_input_shard[idx]);
