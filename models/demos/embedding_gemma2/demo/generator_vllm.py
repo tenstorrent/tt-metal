@@ -21,8 +21,9 @@ model (BOS ... EOS; `chat_template.jinja` renders a lone text as the text itself
 returns `SentenceTransformer("google/embeddinggemma-2").encode(text)`. Prompts
 ("task: search result | query: ", ...) are the client's job, as with Qwen3-Embedding instructions.
 
-Serving shapes. A batch runs at the smallest text bucket >= its longest row (TextEncoder buckets,
-32 ... max_seq_len) and at a batch size from a fixed ladder (default 1, 8, 32), so the set of
+Serving shapes. Rows are grouped by the bucket of their own length (`group_rows_by_bucket`). A
+group runs at the smallest text bucket >= its longest row (TextEncoder buckets, 32 ...
+max_seq_len) and at a batch size from a fixed ladder (default 1, 8, 32), so the set of
 (batch, bucket) shapes is finite and every one is captured as a trace in the constructor (the
 server's warmup). A shape is served when batch == 1 or batch * bucket <= max_tokens (default
 8192); larger request batches are split into chunks of the largest ladder batch that fits, and a
@@ -79,6 +80,28 @@ def plan_chunks(num_rows: int, bucket: int, ladder, max_tokens: int) -> list[tup
         end = min(num_rows, start + cap)
         chunks.append((start, end, min(b for b in ladder if b >= end - start)))
     return chunks
+
+
+def group_rows_by_bucket(attention_mask: torch.Tensor, max_seq_len: int) -> list[tuple[torch.Tensor, int]]:
+    """Group the rows of a padded batch by the bucket of their own length.
+
+    Returns (row indices, longest length in the group) per bucket, ascending. The tokenizer pads a
+    batch to its longest row; without this, one long row would run every row at its bucket (a
+    batch with one 4000-token text and 31 short ones = 32 batch-1 forwards at 4096). Right-padded
+    rows are cut to the group's longest length; a batch that is not right-padded (a 0 before a 1
+    in a mask row) stays one group at its full length.
+    """
+    from models.demos.embedding_gemma2.tt.config import bucket_for
+
+    lengths = attention_mask.sum(-1).to(torch.int64)
+    B, L = attention_mask.shape
+    right_padded = bool((attention_mask == (torch.arange(L)[None, :] < lengths[:, None])).all())
+    if not right_padded:
+        return [(torch.arange(B), L)]
+    groups: dict[int, list[int]] = {}
+    for i, n in enumerate(lengths.tolist()):
+        groups.setdefault(bucket_for(max(int(n), 1), max_seq_len), []).append(i)
+    return [(torch.tensor(rows), max(max(int(lengths[r]) for r in rows), 1)) for _, rows in sorted(groups.items())]
 
 
 def pad_rows(t: torch.Tensor, batch: int) -> torch.Tensor:
@@ -145,13 +168,14 @@ class EmbeddingGemma2ForEmbedding:
             raise ValueError(f"batch {B} exceeds max_batch_size {self.max_batch_size}")
         if attention_mask is None:
             attention_mask = torch.ones_like(input_ids)
-        bucket = self.bucket(L)
         out = torch.empty((B, EMBEDDING_DIM), dtype=torch.float32)
-        for start, end, padded in plan_chunks(B, bucket, self.ladder, self.max_tokens):
-            ids = pad_rows(input_ids[start:end], padded)
-            mask = pad_rows(attention_mask[start:end], padded)
-            emb = self.encoder.encode(ids, mask, traced=self.traced)
-            out[start:end] = emb[: end - start]
+        for idx, length in group_rows_by_bucket(attention_mask, self.max_seq_len):
+            ids, mask = input_ids[idx, :length], attention_mask[idx, :length]
+            for start, end, padded in plan_chunks(len(idx), self.bucket(length), self.ladder, self.max_tokens):
+                emb = self.encoder.encode(
+                    pad_rows(ids[start:end], padded), pad_rows(mask[start:end], padded), traced=self.traced
+                )
+                out[idx[start:end]] = emb[: end - start]
         return out
 
     __call__ = forward
