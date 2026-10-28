@@ -643,6 +643,23 @@ class GLM53FlashForCausalLM:
         logger.info(f"GLM53 vLLM: prefill traces {captured} captured in {time.perf_counter() - t0:.0f} s")
         self.already_warmed_up_prefill = True
 
+    def _warmup_apc_snapshots(self) -> None:
+        """A KDA snapshot save + restore of EVERY per-row user slot before any capture: the save reads the slot's
+        live rows with a slice at the user's index (a program per user), so the first snapshot of a slot the
+        warm-up had not touched compiled at request time under the sealed program cache (SliceDeviceOperation,
+        the 2026-10-28 served APC run on the 8x4). Entry 0 of each slot holds placeholder carries afterwards (the
+        slot's first real snapshot overwrites it); the live states are zeroed after the decode capture anyway."""
+        if self.model.kda_snapshots is None or getattr(self, "_apc_snapshots_warmed", False):
+            return
+        t0 = time.perf_counter()
+        B = self.geometry.users_per_row
+        for u in range(B):
+            self.model.snapshot_kda(u, 0)
+            self.model.restore_kda(u, 0, 0)
+        self._sync()
+        self._apc_snapshots_warmed = True
+        logger.info(f"GLM53 vLLM APC: snapshot save + restore warmed for {B} slots in {time.perf_counter() - t0:.1f} s")
+
     def warmup_model_decode(
         self,
         kv_cache=None,
@@ -660,8 +677,10 @@ class GLM53FlashForCausalLM:
         U = self.geometry.physical_slots
         self._ensure_decode_inputs(U)
         if not enable_trace:
+            self._warmup_apc_snapshots()
             return
         if self.trace_id is None:
+            self._warmup_apc_snapshots()  # before the capture whatever the caller's eager / traced order
             t0 = time.perf_counter()
             self.trace_id, self._trace_outputs = self.model.capture(torch.zeros(U, dtype=torch.long), [0] * U)
             self.model.reset_kda_states()
