@@ -41,4 +41,11 @@ struct vec_modifiers
     Thread thread = Thread::Math; ///< the thread that drives the SFPU: Thread::Math or Thread::Pack (the target kernel's choice)
 };
 
+struct pack_modifiers
+{
+    bool relu     = false; // ReLU on the way out: negatives become 0 (the packer's ZERO_RELU mode)
+    bool l1_acc   = false; // add into what is already in L1 instead of overwriting it (the packer's L1 accumulation)
+    bool untilize = false; // write rows instead of tiles; not ported yet, rejected at compile time
+};
+
 } // namespace llk2
