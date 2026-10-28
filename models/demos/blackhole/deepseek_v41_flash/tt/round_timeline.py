@@ -298,7 +298,8 @@ def install():
             finally:
                 extra = {"label": _STATE["label"], "prof_rounds": list(_STATE["prof_rounds"])}
                 try:
-                    extra["dev_only"] = _device_only(runners_of(self))
+                    if os.environ.get("DSV41_ROUND_TL_NODEVONLY") != "1":  # (profiled runs: the back-to-back replays would only overflow the profiler buffers)
+                        extra["dev_only"] = _device_only(runners_of(self))
                 except Exception as e:  # noqa: BLE001 (instrumentation must never break the run)
                     extra["dev_only_error"] = repr(e)
                 _dump(f"{getattr(self, 'policy', 'x')}_{_STATE['mode']}", extra)

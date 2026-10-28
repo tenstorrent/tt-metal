@@ -69,3 +69,15 @@ for f in sorted(glob.glob(os.path.join(d, "rounds_pass*.json"))):
         if f"k{k}" in ex and dr:
             e = ex[f"k{k}"]
             print(f"\ndevice-only back-to-back replays (bucket {e['bucket']}): " + ", ".join(f"{a} {e[a]:.2f}" for a in ("mono_ms", "A_verify_ms", "S_greedy_ms", "S_sampled_ms", "B_tail_ms", "ASB_ms") if a in e) + " ms")
+    # per position bucket (the traced attention / indexer length grows with the bucket the block falls into)
+    print("\n| k | rows | pos bucket | rounds | round ms | device wait ms | period ms | host-only ms (period - wait) |\n|---|---|---|---|---|---|---|---|")
+    for k, dr, rw in ks:
+        for bk in sorted({r["bucket"] for r in recs if r["k"] == k and r["draft"] == dr and r.get("rmode", "g") == rw and r["bucket"] is not None}):
+            rs = [r for r in recs if r["k"] == k and r["draft"] == dr and r.get("rmode", "g") == rw and r["bucket"] == bk][5:]
+            if len(rs) < 10:
+                continue
+            m = lambda key: sum(r[key] for r in rs) / len(rs)
+            for r in rs:
+                r["period"] = r["round"] + (r["gap_before"] or 0.0)
+                r["dev_wait"] = r.get("enqueue", 0.0) + r.get("sync", 0.0)
+            print(f"| {k} | {rw} | {bk} | {len(rs)} | {m('round'):.2f} | {m('dev_wait'):.2f} | {m('period'):.2f} | {m('period') - m('dev_wait'):.2f} |")
