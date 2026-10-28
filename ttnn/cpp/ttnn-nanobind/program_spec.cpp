@@ -143,10 +143,6 @@ using ComputeConfig = m2::ComputeHardwareConfig;
 // its parent, which it keeps alive. TensorParameter.spec, a ttnn TensorSpec, is a copy too.
 constexpr auto COPY = nb::rv_policy::copy;
 
-// Python holds the tensors of a ProgramRunArgs in this attribute, which keeps them alive while the
-// C++ object refers to their MeshTensors.
-constexpr const char* TENSOR_ARGS_ATTRIBUTE = "_tensor_args";
-
 // Property setters refuse None unless told otherwise; these setters clear an std::optional field on None.
 auto setter_accepts_none() { return nb::for_setter(nb::arg("value").none()); }
 
