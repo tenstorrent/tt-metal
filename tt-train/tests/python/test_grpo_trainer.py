@@ -1131,7 +1131,7 @@ def test_failed_trainer_shuts_down_the_rollout_server(
 @pytest.mark.parametrize(
     "model_type, enable_fsdp, local_source, message",
     [
-        ("qwen3", False, False, "supports Llama models only"),
+        ("mistral", False, False, "supports Llama and Qwen3 models only"),
         ("llama", True, False, "does not support FSDP"),
         ("llama", False, True, "needs a HuggingFace Hub model id"),
     ],
@@ -1144,6 +1144,58 @@ def test_validate_remote_inputs_rejects(tmp_path, expect_error, model_type, enab
             SimpleNamespace(enable_fsdp=enable_fsdp),
             str(tmp_path) if local_source else HF_MODEL_ID,
         )
+
+
+def test_ttt_stop_and_pad_delegates_to_shared_stop_token_resolver(monkeypatch):
+    from ttml.trainers.grpo_trainer.remote_rollout import ttt_presets
+
+    tokenizer = SimpleNamespace(pad_token_id=7, eos_token_id=3, unk_token_id=0)
+    called = []
+    monkeypatch.setattr(ttt_presets.AutoTokenizer, "from_pretrained", lambda *args, **kwargs: tokenizer)
+    monkeypatch.setattr(
+        ttt_presets,
+        "resolve_stop_token_ids",
+        lambda tok: called.append(tok) or {tokenizer.eos_token_id, tokenizer.pad_token_id, 11},
+    )
+
+    stop_ids, pad_token_id = ttt_presets.stop_and_pad(HF_MODEL_ID)
+
+    assert called == [tokenizer]
+    assert stop_ids == [3, 7, 11]
+    assert pad_token_id == tokenizer.pad_token_id
+
+
+def test_ttt_stop_and_pad_includes_tokenizer_pad_id_in_stop_set(monkeypatch):
+    from ttml.common.utils import resolve_stop_token_ids
+    from ttml.trainers.grpo_trainer.remote_rollout import ttt_presets
+
+    class _FakeTokenizer:
+        eos_token_id = 5
+        pad_token_id = 17
+        unk_token_id = 0
+
+        def __init__(self):
+            self._ids = {
+                "<|eot_id|>": 31,
+                "<|end_of_text|>": 5,
+                "<|eom_id|>": self.unk_token_id,
+                "<|im_end|>": -1,
+                "<|endoftext|>": 63,
+            }
+
+        def convert_tokens_to_ids(self, token):
+            return self._ids.get(token, self.unk_token_id)
+
+    tokenizer = _FakeTokenizer()
+    monkeypatch.setattr(ttt_presets.AutoTokenizer, "from_pretrained", lambda *args, **kwargs: tokenizer)
+
+    stop_ids, pad_token_id = ttt_presets.stop_and_pad(HF_MODEL_ID)
+    expected_stop_ids = resolve_stop_token_ids(tokenizer)
+
+    assert pad_token_id == tokenizer.pad_token_id
+    assert tokenizer.pad_token_id in expected_stop_ids
+    assert set(stop_ids) == expected_stop_ids
+    assert stop_ids == sorted(stop_ids)
 
 
 class _RepeatSampler(_EchoSampler):
