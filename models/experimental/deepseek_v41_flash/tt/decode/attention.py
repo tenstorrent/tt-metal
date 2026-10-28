@@ -350,7 +350,10 @@ class DeepSeekV41LayerCache(_StaticLayerCache):
     A cache built for ``T``-row steps (:meth:`DeepSeekV41Attention.decode` with ``S == T``) also has
     ``sel_kv_rows`` (ROW_MAJOR) and ``sel_tile_rows`` (TILE), DRAM ``[1, 1, T * (window + index_topk), Dh]``:
     row ``j``'s ``[ring | selected]`` at rows ``[j * (window + index_topk), (j + 1) * (window + index_topk))``.
-    Single-row steps keep using ``sel_kv`` / ``sel_tile``, so the two kinds of step interleave.
+    Single-row steps keep using ``sel_kv`` / ``sel_tile``, so the two kinds of step interleave. Where the
+    group has ``new_kv_row``, a ``T``-row step of its kv source leaves the rows of the ``n`` groups it closed
+    in ``new_kv_rows`` / ``new_key_rows`` (DRAM ``[1, 1, n, Dh]`` / ``[1, 1, n, index_head_dim]``, fresh each
+    step), and a stage without the source receives them there.
     """
 
     __slots__ = (
@@ -359,6 +362,8 @@ class DeepSeekV41LayerCache(_StaticLayerCache):
         "sel_tile_rows",
         "new_kv_row",
         "new_key_row",
+        "new_kv_rows",
+        "new_key_rows",
         "win_hist_kv",
         "win_hist_gate",
         "cand_blocks",
@@ -394,6 +399,8 @@ class DeepSeekV41LayerCache(_StaticLayerCache):
         self.sel_tile_rows = sel_tile_rows
         self.new_kv_row = new_kv_row
         self.new_key_row = new_key_row
+        self.new_kv_rows = None
+        self.new_key_rows = None
         self.win_hist_kv = None
         self.win_hist_gate = None
         self.cand_blocks = cand_blocks
@@ -857,14 +864,17 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         )
         ttnn.deallocate(replicas)
 
-    def _write_index_key(self, latent, cos_win, sin_win, scache, entry, page_row=None) -> None:
+    def _write_index_key(self, latent, cos_win, sin_win, scache, entry, page_row=None, multi_row=False) -> None:
         """``k_norm(wk(latent))``, RoPE'd at the groups' positions, into index-key rows ``entry`` (logical,
         through row ``page_row`` of ``idx_page_table`` when given). ``latent`` is ``[1, 1, n, Dh]``, ``entry``
-        ``[n]``."""
+        ``[n]``. ``multi_row`` (a ``T``-row step) keeps the keys for other stages in ``scache.new_key_rows``."""
         k = self.index_k_norm(self.index_wk(ttnn.to_memory_config(latent, ttnn.DRAM_MEMORY_CONFIG)))
         k = _apply_rope(k, cos_win, sin_win, self.rot, self.rope_dim)
         if scache.new_key_row is not None:
-            _stash_row(k, scache.new_key_row)
+            if multi_row:
+                scache.new_key_rows = ttnn.clone(ttnn.to_memory_config(k, ttnn.DRAM_MEMORY_CONFIG))
+            else:
+                _stash_row(k, scache.new_key_row)
         k = _rows_on_one_core(k)
         ttnn.experimental.paged_update_cache(
             scache.idx_key_cache,
@@ -875,9 +885,11 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         )
         ttnn.deallocate(k)
 
-    def _write_received_key(self, scache, entry, page_row=None) -> None:
-        """Write the index key another stage's kv source sent (``scache.new_key_row``) into row ``entry``."""
-        k = _one_row_per_user(scache.new_key_row)
+    def _write_received_key(self, scache, entry, page_row=None, multi_row=False) -> None:
+        """Write the index key another stage's kv source sent (``scache.new_key_row``) into row ``entry``;
+        ``multi_row``: the ``n`` keys of ``scache.new_key_rows`` into rows ``entry`` ``[n]``."""
+        received = scache.new_key_rows if multi_row else scache.new_key_row
+        k = _rows_on_one_core(received) if multi_row else _one_row_per_user(received)
         ttnn.experimental.paged_update_cache(
             scache.idx_key_cache,
             k,
@@ -885,7 +897,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             page_table=scache.idx_page_table,
             page_table_row_tensor=page_row,
         )
-        if k.buffer_address() != scache.new_key_row.buffer_address():
+        if k.buffer_address() != received.buffer_address():
             ttnn.deallocate(k)
 
     def decode(
@@ -923,7 +935,8 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         ``hidden`` is ROW_MAJOR, width-sharded in L1 with all ``S`` rows on every core. Each row attends its own
         copy of the ring with the slots of rows ``0 .. j`` replaced (``ring_rows``, see :meth:`_write_causal_rows`),
         and a compressed layer reads row ``j``'s ``[ring | selected]`` from ``scache.sel_tile_rows``. Such a
-        step needs one session's dense caches, and has no cross-stage hand-off or two-level select.
+        step needs one session's dense caches and has no two-level select; its cross-stage rows go through
+        ``scache.new_kv_rows`` / ``new_key_rows`` (``received_entry`` ``[n]`` on the receiving stage).
 
         The arguments are what :meth:`decode_inputs` builds for a position (``rows=S`` for ``S > 1``,
         where ``pool_rows`` replaces ``pool``). ``pool`` closes a compressor group (``cos_win`` /
@@ -972,8 +985,7 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             return ttnn.reshape(out, [b, s, 1, d])
         assert b == 1, "fused_lightning_select_kv decodes one user"
         if s > 1:
-            assert scache.new_kv_row is None and scache.new_key_row is None, "the cross-stage hand-off is one row"
-            assert received_entry is None and not candidates, "S > 1 selects one level, from its own kv source"
+            assert not candidates, "S > 1 selects one level"
             stride = self.window + self.index_topk
             assert (
                 scache.sel_tile_rows is not None and scache.sel_tile_rows.shape[2] == s * stride
@@ -1001,13 +1013,16 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
             row = None
             if latent is not None:
-                self._write_index_key(latent, cos_win, sin_win, scache, entry, page_row)
+                self._write_index_key(latent, cos_win, sin_win, scache, entry, page_row, multi_row=s > 1)
                 row = _apply_rope(latent, cos_win, sin_win, self.rot, self.rope_dim)
                 if scache.new_kv_row is not None:
-                    _stash_row(row, scache.new_kv_row)
+                    if s == 1:
+                        _stash_row(row, scache.new_kv_row)
+                    else:
+                        scache.new_kv_rows = ttnn.clone(ttnn.to_memory_config(row, ttnn.DRAM_MEMORY_CONFIG))
             elif received_entry is not None:
-                self._write_received_key(scache, received_entry, page_row)
-                row, entry = scache.new_kv_row, received_entry
+                self._write_received_key(scache, received_entry, page_row, multi_row=s > 1)
+                row, entry = (scache.new_kv_row if s == 1 else scache.new_kv_rows), received_entry
             self.indexer.select_kv(
                 tokens,
                 q_a,
