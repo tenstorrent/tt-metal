@@ -116,6 +116,10 @@ _PRESETS_BH: dict[tuple[int, ...], dict] = {
         "dynamic_load": False,
         "topology": ttnn.Topology.Ring,
         "is_fsdp": False,
+        # CFG batching gains at 480p, not at 720p (not even with blockings swept for its batched rows), so it applies
+        # to pipelines built for 480p sizes only (not to the preset's default sizes)
+        "cfg_batch": _RESOLUTIONS_480P,
+        "cross_kv_cache": True,
         "vae_t_chunk_size": None,  # full-T
         "resolutions": _RESOLUTIONS_720P + _RESOLUTIONS_480P,
         "spatial_buckets_per_frame": _SPATIAL_BUCKETS_PER_FRAME,
@@ -304,8 +308,10 @@ class WanPipelineConfig:
             max_sequence_length=max_sequence_length,
             checkpoint_name=ensure_cached(checkpoint_name),
             cache_config=WanDBCacheConfig.coerce(cache_config) if cache_config is not None else None,
-            cfg_batch=cfg_batch if cfg_batch is not None else preset.get("cfg_batch", False),
-            cross_kv_cache=cross_kv_cache if cross_kv_cache is not None else preset.get("cross_kv_cache", False),
+            cfg_batch=cfg_batch if cfg_batch is not None else _preset_value(preset, "cfg_batch", resolutions),
+            cross_kv_cache=(
+                cross_kv_cache if cross_kv_cache is not None else _preset_value(preset, "cross_kv_cache", resolutions)
+            ),
             shard_text_embeddings=(
                 shard_text_embeddings
                 if shard_text_embeddings is not None
@@ -374,12 +380,14 @@ class WanPipeline(PipelineAPIMixin):
         cfg_batch (`bool`, *optional*, defaults to `False`):
             Whether to run the cond and uncond passes of classifier-free guidance as one transformer forward on
             twice the rows. Faster, but needs memory for twice the activations; the output is not bit-identical
-            to two forwards (other matmul shapes, so another accumulation order). On in the WH Galaxy 4x8 preset.
-            With DBCache step caching (untraced), the passes run batched in the steps where both compute the middle
-            blocks, and separately where one of them reuses its cached residual.
+            to two forwards (other matmul shapes, so another accumulation order). On in the WH Galaxy 4x8 preset,
+            and in the Blackhole Galaxy 4x8 preset at 480p only. With DBCache step caching (untraced), the passes
+            run batched in the steps where both compute the middle blocks, and separately where one of them reuses
+            its cached residual.
         cross_kv_cache (`bool`, *optional*, defaults to `False`):
             Whether to compute the cross-attention K/V of each prompt once per generation instead of in every
-            denoising step. Costs the DRAM of the cached K/V; off while tracing. On in the WH Galaxy 4x8 preset.
+            denoising step. Costs the DRAM of the cached K/V; off while tracing. On in the WH and Blackhole Galaxy 4x8
+            presets.
         shard_text_embeddings (`bool`, *optional*, defaults to `False`):
             Whether to shard the text encoder's token embedding table over its tensor parallel axis instead of
             replicating it (saves DRAM). On in the WH Galaxy 4x8 preset, which also places the text encoder on
