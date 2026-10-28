@@ -38,12 +38,14 @@ namespace tt::tt_metal::experimental {
 //   execution lifetime, alongside DFBs (and from the same region of L1).
 //
 // INSTANCING: Like KernelSpec, a ScratchpadSpec is a *per-node template*. One
-//   independent scratchpad instance is allocated per node where its bound kernel
-//   runs, in that node's local SRAM ("L1").
+//   independent scratchpad instance is allocated per node in its effective placement,
+//   in that node's local SRAM ("L1"). By default these are the binding kernels' nodes.
 //
 // PLACEMENT: Derived from its bound kernel(s)'s WorkUnitSpec membership, like DFB.
 //   Node-local resources (scratchpad, DFB) derive their node set from their
 //   kernel bindings; semaphores must specify their node set explicitly.
+//   advanced_options.override_placement replaces this node set. Binding and sharing
+//   rules apply within the effective placement; access outside it is undefined behavior.
 //
 // CAUTION: Scratchpad is a raw memory with no synchronization semantics.
 //   Be cautious when using it in compute kernels, as the Unpack/Math/Pack pipeline
@@ -60,7 +62,7 @@ struct ScratchpadSpec {
     ScratchpadSpecName unique_id;
 
     // Size of the SRAM ("L1") region reserved on each node, in bytes.
-    // (Only occupies space on nodes where the scratchpad's bound kernel instances run.)
+    // The node set is inferred from bindings unless advanced_options.override_placement is set.
     uint32_t size_per_node = 0;
 
     ////////////////////////////////////
