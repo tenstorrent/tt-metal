@@ -11,11 +11,13 @@ pass the resulting visual tokens to the text model along with text tokens.
 """
 
 
-import ttnn
 import torch
 
+import ttnn
+from models.experimental.mistral_24b.tt.pipeline.vision_model import TtMistralVisionTransformer
 from models.tt_transformers.tt.model import Transformer
-from ttnn import ConcatMeshToTensor
+
+_MISTRAL_VISION_MAX_SEQ_LEN_FLOOR = 4096
 
 
 class MistralTransformer(Transformer):
@@ -28,6 +30,7 @@ class MistralTransformer(Transformer):
         weight_cache_path,
         paged_attention_config=None,
         use_paged_kv_cache=False,
+        own_vision=True,
     ):
         super().__init__(
             args,
@@ -38,6 +41,18 @@ class MistralTransformer(Transformer):
             paged_attention_config=paged_attention_config,
             use_paged_kv_cache=use_paged_kv_cache,
         )
+
+        # own_vision=False: the caller builds the vision tower and passes it to prefill as vision_model.
+        self.vision_model = None
+        if own_vision:
+            self.vision_model = TtMistralVisionTransformer(
+                mesh_device=mesh_device,
+                state_dict=state_dict,
+                state_dict_prefix="vision_tower.",
+                dtype=dtype,
+                model_args=args,
+                tt_ccl=self.tt_ccl,
+            )
 
     def prepare_inputs_prefill(
         self,
@@ -51,124 +66,92 @@ class MistralTransformer(Transformer):
     ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
-        tensors on device.
-        TODO: Debate whether this function is responsible for padding
+        tensors on device (trace_enabled=False) or on host (trace_enabled=True).
+
+        Images come in as pixel_values / image_sizes (vLLM and the generator warmup), or as
+        processed_inputs plus a separately built vision_model (pipeline_tests/test_end2end.py).
+        Everything but the image splice comes from Transformer.prepare_inputs_prefill. Traced
+        prefill relies on that: it must get the whole RoPE table, because a sliced copy is a new
+        buffer that the generator drops after trace capture.
         """
-        # When trace_enabled, use None for device to keep tensors on host
-        device = None if trace_enabled else self.mesh_device
-
-        tokens = tokens.reshape(1, 1, 1, -1)
-        S = tokens.shape[-1]
-        tokens = ttnn.from_torch(
+        inputs = super().prepare_inputs_prefill(
             tokens,
-            device=device,
-            dtype=ttnn.uint32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device) if not trace_enabled else None,
+            start_pos=start_pos,
+            page_table=page_table,
+            chunk_page_table=chunk_page_table,
+            chunk_start_idx=chunk_start_idx,
+            trace_enabled=trace_enabled,
+            **kwargs,
         )
+        # Traced prefill embeds the token ids inside the trace, so it cannot take image features.
+        if trace_enabled:
+            return inputs
 
-        # Only perform embedding and vision processing when not in trace mode
-        if not trace_enabled:
-            tokens_embd = self.embd(tokens)
-
-        # Only access processed_inputs if not in trace mode and if available
-        if not trace_enabled and "processed_inputs" in kwargs and kwargs["processed_inputs"] is not None:
-            pixel_values = kwargs["processed_inputs"]["pixel_values"]
-            input_ids = kwargs["processed_inputs"]["input_ids"]
-            image_sizes = kwargs["processed_inputs"]["image_sizes"]
-
-            if pixel_values is not None:
-                vision_model = kwargs["vision_model"]
-                vision_output = vision_model(pixel_values, image_sizes)
-                vision_output_torch = ttnn.to_torch(
-                    vision_output, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=-1)
-                )[:, : vision_output.shape[-1]]
-                tokens_embd = ttnn.to_torch(tokens_embd, mesh_composer=ConcatMeshToTensor(self.mesh_device, dim=-1))
-                sliced_token_embds = tokens_embd[: tokens_embd.shape[0]]
-
-                image_features = vision_output_torch
-
-                input_ids = torch.nn.functional.pad(
-                    input_ids, (0, tokens_embd.shape[1] - input_ids.shape[1]), "constant", 0
+        processed_inputs = kwargs.get("processed_inputs")
+        if processed_inputs is not None:
+            image_token_ids = processed_inputs["input_ids"]
+            vision_output = None
+            if processed_inputs["pixel_values"] is not None:
+                vision_output = kwargs["vision_model"](
+                    processed_inputs["pixel_values"], processed_inputs["image_sizes"]
                 )
-                special_image_mask = (input_ids == 10).unsqueeze(-1)
-                special_image_mask = special_image_mask.expand_as(tokens_embd)
-                image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
-                tokens_embd = tokens_embd.masked_scatter(special_image_mask, image_features)
-
-                tokens_embd = ttnn.from_torch(
-                    tokens_embd,
-                    dtype=ttnn.bfloat16,
-                    device=self.mesh_device,
-                    layout=ttnn.TILE_LAYOUT,
-                    mesh_mapper=ttnn.ShardTensor2dMesh(
-                        self.mesh_device, dims=(None, 2), mesh_shape=list(self.mesh_device.shape)
-                    ),
-                )
-
-        # Only unsqueeze when not in trace mode
-        if not trace_enabled:
-            tokens_embd = ttnn.unsqueeze_to_4D(tokens_embd)
-        # Slice the rot mats to the prefill seqlen
-        assert (
-            self.rope_setup.cos_matrix.shape[2] >= start_pos + S
-        ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {self.rope_setup.cos_matrix.shape[2]}"
-
-        tt_rot_mats_prefill_global = [
-            ttnn.to_layout(self.rope_setup.cos_matrix[:, :, start_pos : start_pos + S, :], ttnn.TILE_LAYOUT),
-            ttnn.to_layout(self.rope_setup.sin_matrix[:, :, start_pos : start_pos + S, :], ttnn.TILE_LAYOUT),
-        ]
-
-        if hasattr(self, "rope_local_setup"):
-            tt_rot_mats_prefill_local = [
-                self.rope_local_setup.cos_matrix[:, :, start_pos : start_pos + S, :],
-                self.rope_local_setup.sin_matrix[:, :, start_pos : start_pos + S, :],
-            ]
         else:
-            tt_rot_mats_prefill_local = None
+            image_token_ids = tokens
+            vision_output = self.compute_vision_token(**kwargs)
 
-        if page_table is not None:
-            tt_page_table = ttnn.from_torch(
-                page_table,
-                device=device,
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device) if not trace_enabled else None,
-            )
-        else:
-            tt_page_table = None
+        if vision_output is None:
+            return inputs
 
-        if chunk_page_table is not None:
-            tt_chunk_page_table = ttnn.from_torch(
-                chunk_page_table,
-                device=device,
-                dtype=ttnn.int32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device) if not trace_enabled else None,
-            )
-        else:
-            tt_chunk_page_table = None
+        tokens_embd = ttnn.to_torch(inputs[0], mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=-1))
+        tokens_embd = tokens_embd.squeeze(0)  # [1, 1, S, H] -> [1, S, H]
+        comp_vision_output = ttnn.to_torch(
+            vision_output, mesh_composer=ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
+        )[: vision_output.shape[0], :]
 
-        # Must match Transformer.prepare_inputs_prefill exactly: Generator's traced
-        # prefill path reads host_inputs[5] for the chunk start index, so omitting it
-        # here raised "IndexError: tuple index out of range" (#45992).
-        if chunk_start_idx is not None and int(chunk_start_idx) > 0:
-            chunk_start_idx_tensor = torch.tensor([chunk_start_idx], dtype=torch.int32)
-            tt_chunk_start_idx = ttnn.from_torch(
-                chunk_start_idx_tensor,
-                device=device,
-                dtype=ttnn.int32,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
-            )
-        else:
-            tt_chunk_start_idx = None
-
-        # Return tokens (host) if trace_enabled, else tokens_embd (device)
-        return (
-            tokens if trace_enabled else tokens_embd,
-            tt_rot_mats_prefill_global,
-            tt_rot_mats_prefill_local,
-            tt_page_table,
-            tt_chunk_page_table,
-            tt_chunk_start_idx,
+        image_features = comp_vision_output.squeeze(0)
+        image_token_ids = torch.nn.functional.pad(
+            image_token_ids, (0, tokens_embd.shape[1] - image_token_ids.shape[1]), "constant", 0
         )
+        special_image_mask = (image_token_ids == self.args.image_token_index).unsqueeze(-1)
+        special_image_mask = special_image_mask.expand_as(tokens_embd)
+        image_features = image_features.to(tokens_embd.device, tokens_embd.dtype)
+        tokens_embd = tokens_embd.masked_scatter(special_image_mask, image_features)
+
+        return (self.args.prepare_residual_tensor_prefill(tokens_embd), *inputs[1:])
+
+    def compute_vision_token(self, pixel_values=None, image_sizes=None, **kwargs):
+        # With own_vision=False there is no tower here, so the generator's vision warmup runs text-only.
+        if pixel_values is None or self.vision_model is None:
+            return None
+        if image_sizes is not None and not isinstance(image_sizes[0], (list, tuple)):
+            image_sizes = [image_sizes]
+        return self.vision_model(pixel_values, image_sizes)
+
+
+def create_mistral_24b_model(
+    mesh_device,
+    max_batch_size,
+    max_seq_len,
+    use_paged_kv_cache=False,
+    checkpoint=None,
+):
+    from models.tt_transformers.tt.model_config import ModelArgs
+
+    max_seq_len = max(max_seq_len, _MISTRAL_VISION_MAX_SEQ_LEN_FLOOR)
+    tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len)
+    assert tt_model_args.is_multimodal, "This model is multimodal"
+
+    # checkpoint is None => load here; {} => explicit/DP-reuse skip; populated => reuse.
+    if checkpoint is None:
+        checkpoint = tt_model_args.load_state_dict()
+
+    model = MistralTransformer(
+        mesh_device=mesh_device,
+        state_dict=checkpoint,
+        weight_cache_path=tt_model_args.weight_cache_path(ttnn.bfloat8_b),
+        dtype=ttnn.bfloat8_b,
+        args=tt_model_args,
+        use_paged_kv_cache=use_paged_kv_cache,
+    )
+
+    return tt_model_args, model, checkpoint
