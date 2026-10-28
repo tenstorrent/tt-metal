@@ -12,6 +12,7 @@
 #include <functional>
 #include <initializer_list>
 #include <numeric>
+#include <optional>
 #include <string>
 #include <utility>
 #include <variant>
@@ -151,6 +152,136 @@ KernelSpec ScratchpadWriter() {
     kernel.scratchpad_bindings = {{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"}};
     return kernel;
 }
+
+enum class AllocationMode { Lockstep, RangeLockstep };
+
+class RawAllocationScratchpadUpdates : public RawAllocationTest, public ::testing::WithParamInterface<AllocationMode> {
+protected:
+    void SetUp() override {
+        RawAllocationTest::SetUp();
+        if (HasFatalFailure() || IsSkipped()) {
+            return;
+        }
+        const NodeRangeSet nodes{NodeRange(NodeCoord{0, 0})};
+        const uint32_t reservation_bytes = 4 * alignment;
+        const RawAllocationProperties properties =
+            GetParam() == AllocationMode::Lockstep
+                ? RawAllocationProperties{LockstepAllocationProperties{.per_bank_size = reservation_bytes}}
+                : RawAllocationProperties{RangeLockstepAllocationProperties{
+                      .banks_to_be_allocated_on = nodes, .per_bank_size = reservation_bytes}};
+        const auto report_spec = ReportSpec(nodes, alignment);
+        ProgramSpec spec;
+        spec.name = "RawAllocationScratchpadUpdates";
+        spec.kernels = {ScratchpadWriter()};
+        spec.advanced_options.raw_allocation_parameters = {
+            {.unique_id = RawAllocationParamName{"arena"}, .properties = properties}};
+        spec.scratchpads = {{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = 2 * alignment}};
+        spec.scratchpads[0].advanced_options.borrowed_from = ScratchpadAdvancedOptions::RawAllocationBorrowing{
+            .allocation = RawAllocationParamName{"arena"}, .offset = alignment};
+        spec.tensor_parameters = {{.unique_id = TensorParamName{"report"}, .spec = report_spec}};
+        spec.work_units = {MakeMinimalWorkUnit("work", nodes, {"writer"})};
+        workload.add_program(
+            distributed::MeshCoordinateRange(mesh_device->shape()), MakeProgramFromSpec(*mesh_device, spec));
+        initial.emplace(
+            std::visit([&](const auto& props) { return allocate_on_sram(*mesh_device, props); }, properties));
+        replacement.emplace(
+            std::visit([&](const auto& props) { return allocate_on_sram(*mesh_device, props); }, properties));
+        report.emplace(CreateSentinelTensor(*mesh_device, report_spec));
+        std::vector<uint32_t> sentinel(reservation_bytes / sizeof(uint32_t), kSentinel);
+        ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, NodeCoord{0, 0}, Base(*initial), sentinel));
+        ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, NodeCoord{0, 0}, Base(*replacement), sentinel));
+    }
+
+    void TearDown() override {
+        workload = distributed::MeshWorkload{};
+        report.reset();
+        replacement.reset();
+        initial.reset();
+        RawAllocationTest::TearDown();
+    }
+
+    static uint32_t Base(const RawAllocation& allocation) {
+        return std::visit(
+            [](const auto& layout) { return static_cast<uint32_t>(layout.addr); }, allocation.impl().layout);
+    }
+
+    Program& program() { return workload.get_programs().begin()->second; }
+
+    ProgramRunArgs Args(const RawAllocation& allocation, uint32_t seed = kScratchPattern) {
+        ProgramRunArgs args;
+        args.advanced_options.raw_allocation_args = {{RawAllocationParamName{"arena"}, std::cref(allocation)}};
+        args.tensor_args = {{TensorParamName{"report"}, TensorArgument{*report}}};
+        args.kernel_run_args = {
+            {.kernel = KernelSpecName{"writer"},
+             .runtime_arg_values = MakeRuntimeArgsForSingleNode(NodeCoord{0, 0}, {{"scratch_seed", seed}})}};
+        return args;
+    }
+
+    void Enqueue() { distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, /*blocking=*/true); }
+
+    uint32_t ReportedAddress() {
+        return mesh_device->mesh_command_queue().enqueue_read_tensor(*report).to_vector<uint32_t>().at(0);
+    }
+
+    std::vector<uint32_t> ReadReservation(const RawAllocation& allocation) {
+        return ReadArena(*mesh_device, NodeCoord{0, 0}, Base(allocation), 4 * alignment);
+    }
+
+    std::vector<uint32_t> ExpectedReservation(uint32_t seed) {
+        std::vector<uint32_t> expected(4 * alignment / sizeof(uint32_t), kSentinel);
+        PutPattern(expected, alignment, 2 * alignment, seed);
+        return expected;
+    }
+
+    std::optional<RawAllocation> initial;
+    std::optional<RawAllocation> replacement;
+    std::optional<MeshTensor> report;
+    distributed::MeshWorkload workload;
+};
+
+TEST_P(RawAllocationScratchpadUpdates, FullResetRebindsScratchpad) {
+    // A full argument reset moves scratchpad writes to the replacement reservation.
+    SetProgramRunArgs(program(), Args(*initial));
+    Enqueue();
+    SetProgramRunArgs(program(), Args(*replacement, kScratchPattern + kNodePatternStride));
+    Enqueue();
+    EXPECT_EQ(ReportedAddress(), Base(*replacement) + alignment);
+    EXPECT_EQ(ReadReservation(*replacement), ExpectedReservation(kScratchPattern + kNodePatternStride));
+    EXPECT_EQ(ReadReservation(*initial), ExpectedReservation(kScratchPattern));
+}
+
+TEST_P(RawAllocationScratchpadUpdates, PartialUpdateRebindsScratchpad) {
+    // An allocation-only update moves scratchpad writes without resupplying kernel arguments.
+    SetProgramRunArgs(program(), Args(*initial));
+    Enqueue();
+    ProgramRunArgs update;
+    update.advanced_options.raw_allocation_args = {{RawAllocationParamName{"arena"}, std::cref(*replacement)}};
+    UpdateProgramRunArgs(program(), update);
+    Enqueue();
+    EXPECT_EQ(ReportedAddress(), Base(*replacement) + alignment);
+    EXPECT_EQ(ReadReservation(*replacement), ExpectedReservation(kScratchPattern));
+    EXPECT_EQ(ReadReservation(*initial), ExpectedReservation(kScratchPattern));
+}
+
+TEST_P(RawAllocationScratchpadUpdates, PartialUpdateRetainsOmittedAllocation) {
+    // Updating a kernel argument preserves the omitted scratchpad allocation binding.
+    SetProgramRunArgs(program(), Args(*initial));
+    Enqueue();
+    ProgramRunArgs update;
+    update.kernel_run_args = Args(*initial, kScratchPattern + kNodePatternStride).kernel_run_args;
+    UpdateProgramRunArgs(program(), update);
+    Enqueue();
+    EXPECT_EQ(ReportedAddress(), Base(*initial) + alignment);
+    EXPECT_EQ(ReadReservation(*initial), ExpectedReservation(kScratchPattern + kNodePatternStride));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    AllocationModes,
+    RawAllocationScratchpadUpdates,
+    ::testing::Values(AllocationMode::Lockstep, AllocationMode::RangeLockstep),
+    [](const ::testing::TestParamInfo<AllocationMode>& info) {
+        return info.param == AllocationMode::Lockstep ? "Lockstep" : "RangeLockstep";
+    });
 
 KernelSpec DFBProducer(bool writes_scratchpad = false) {
     auto kernel = MakeMinimalGen1DMKernel("producer", DataMovementProcessor::RISCV_0);

@@ -23,6 +23,17 @@ RawAllocationImpl& RawAllocation::impl() { return *pimpl_; }
 
 const RawAllocationImpl& RawAllocation::impl() const { return *pimpl_; }
 
+bool RawAllocationImpl::matches_properties(const RawAllocationProperties& properties) const {
+    if (const auto* lockstep = std::get_if<LockstepAllocation>(&layout)) {
+        const auto* expected = std::get_if<LockstepAllocationProperties>(&properties);
+        return expected != nullptr && lockstep->config.per_bank_size == expected->per_bank_size;
+    }
+    const auto& range = std::get<RangeLockstepAllocation>(layout);
+    const auto* expected = std::get_if<RangeLockstepAllocationProperties>(&properties);
+    return expected != nullptr && range.config.per_bank_size == expected->per_bank_size &&
+           range.config.banks_to_be_allocated_on == expected->banks_to_be_allocated_on;
+}
+
 RawAllocation allocate_on_sram(distributed::MeshDevice& device, LockstepAllocationProperties properties) {
     return RawAllocation(RawAllocationImpl::allocate_on_sram(device, properties));
 }
