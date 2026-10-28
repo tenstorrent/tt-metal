@@ -10,9 +10,11 @@
 #include <cmath>
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/work_split.hpp>
 
+#include "gumbel_sample_device_operation.hpp"
 #include "gumbel_sample_device_operation_types.hpp"
 #include "metal/common/program_utils.hpp"
 #include "ttnn/operations/uniform/uniform_range.hpp"
@@ -26,16 +28,26 @@ constexpr auto kWriterKernelPath =
 constexpr auto kComputeKernelPath =
     "tt-train/sources/ttml/metal/ops/gumbel_sample/device/kernels/compute/gumbel_sample_kernel.cpp";
 
+// Kernel push order: reader, writer, then the compute kernel of each work group (group 2 only when
+// the tiles do not split evenly over the cores).
+constexpr uint32_t kReaderKernelIdx = 0U;
+constexpr uint32_t kWriterKernelIdx = 1U;
+constexpr uint32_t kComputeGroup1KernelIdx = 2U;
+constexpr uint32_t kComputeGroup2KernelIdx = 3U;
+
+// The program's only semaphore; the writer takes its id as compile-time arg 3.
+constexpr uint32_t kReductionSemId = 0U;
+
 // reader runtime arg slots
 constexpr uint32_t kReaderLogitsBufferIdx = 0U;
 constexpr uint32_t kReaderMaskBufferIdx = 1U;
 // writer runtime arg slots
 constexpr uint32_t kWriterOutputBufferIdx = 0U;
-// compute runtime arg slots. Slots 1 and 2 hold the rand from/scale bits -- process constants set
-// once at build and never re-patched on cache hits, so no index names them.
+// compute runtime arg slots. Slots 1 and 2 hold the rand from/scale bits (process constants) and
+// slot 4 the RNG stream id (hashed inputs plus the device coordinate): set at build and never
+// re-patched on cache hits, so no index names them.
 constexpr uint32_t kComputeSeedIdx = 0U;
 constexpr uint32_t kComputeInvTemperatureIdx = 3U;
-constexpr uint32_t kComputeRandStreamIdx = 4U;
 
 constexpr auto kLogitsCbIndex = tt::CBIndex::c_0;
 constexpr auto kMaskCbIndex = tt::CBIndex::c_1;
@@ -110,23 +122,34 @@ namespace ttml::metal::ops::gumbel_sample::device {
 
 namespace {
 
-// Everything the per-core loop needs, derived once so create_mesh_workload and
-// override_runtime_arguments can never disagree about the work split.
+// The unit the work is split over. Split over TILES, not tile rows: in decode a row-based split
+// leaves most of the grid idle. With positions the tile space shrinks to one VIRTUAL tile row per
+// batch entry (entry vt / Wt, column vt % Wt; the reader maps to the real page via the entry's
+// position) -- an Ht-fold cut that brings prefill sampling down to decode cost regardless of
+// context length. Only hashed dims enter (position mode leaves out the token dim), so the
+// cache-hit override recomputes the core walk from it.
+uint32_t count_split_tiles(const ttnn::Shape& padded_shape, bool position_aware) {
+    const uint32_t Wt = padded_shape[-1] / tt::constants::TILE_WIDTH;
+    const uint32_t NC = padded_shape[0] * padded_shape[1];
+    const uint32_t rows = position_aware ? NC : NC * (padded_shape[-2] / tt::constants::TILE_HEIGHT);
+    return rows * Wt;
+}
+
+// The program's structure, derived once per create_descriptor() call. A cache hit recomputes only
+// the walk (`split`, from count_split_tiles); compute_layout pins it to split_work_to_cores.
 struct GumbelSampleLayout {
-    uint32_t Wt{};              // vocab tiles per row
-    uint32_t Ht{};              // token tiles per batch entry
-    uint32_t total_rows{};      // NC * Ht -- one "row" is a 32-token tile row
-    uint32_t block_size{};      // vocab tiles streamed per CB block; always divides Wt
-    uint32_t logical_vocab{};   // V, for bounding the argmax scan past tile padding
-    uint32_t logical_tokens{};  // tokens, for bounding the row scan past tile padding
+    uint32_t Wt{};             // vocab tiles per row
+    uint32_t Ht{};             // token tiles per batch entry
+    uint32_t block_size{};     // vocab tiles streamed per CB block; always divides Wt
+    uint32_t logical_vocab{};  // V, for bounding the argmax scan past tile padding
     uint32_t num_cores{};
-    uint32_t num_cores_y{};
     tt::tt_metal::CoreRangeSet all_cores;
     tt::tt_metal::CoreRangeSet core_group_1;
     tt::tt_metal::CoreRangeSet core_group_2;
-    uint32_t total_tiles{};  // the unit work is split over -- see compute_layout
+    uint32_t total_tiles{};  // the unit work is split over -- see count_split_tiles
     uint32_t tiles_per_core_group_1{};
     uint32_t tiles_per_core_group_2{};
+    WorkSplit split;         // the same split as arithmetic: the core walk of both factory hooks
     bool position_aware{};   // sample one row per batch entry instead of every row
     uint32_t num_entries{};  // NC -- one output row each, when position_aware
 };
@@ -143,23 +166,18 @@ GumbelSampleLayout compute_layout(const ttnn::Tensor& logits, bool position_awar
     layout.Ht = padded_shape[-2] / tt::constants::TILE_HEIGHT;
     const uint32_t NC = padded_shape[0] * padded_shape[1];
     layout.num_entries = NC;
-    layout.total_rows = NC * layout.Ht;
     layout.block_size = get_block_size(layout.Wt, 4U);
     layout.logical_vocab = logical_shape[-1];
-    layout.logical_tokens = logical_shape[-2];
 
     auto* device = logits.device();
     const auto grid = device->compute_with_storage_grid_size();
-    layout.num_cores_y = grid.y;
 
-    // Split over TILES, not tile rows: in decode a row-based split leaves most of the grid idle.
-    // With positions the tile space shrinks to one VIRTUAL tile row per batch entry (entry vt / Wt,
-    // column vt % Wt; the reader maps to the real page via the entry's position) -- an Ht-fold cut
-    // that brings prefill sampling down to decode cost regardless of context length.
-    layout.total_tiles = position_aware ? (NC * layout.Wt) : (layout.total_rows * layout.Wt);
+    layout.total_tiles = count_split_tiles(padded_shape, position_aware);
+    layout.split = compute_work_split(grid, layout.total_tiles);
 
     auto [num_cores, all_cores, group_1, group_2, tiles_1, tiles_2] =
         tt::tt_metal::split_work_to_cores(grid, layout.total_tiles);
+    check_work_split(layout.split, num_cores, group_1, group_2, tiles_1, tiles_2);
     layout.num_cores = num_cores;
     layout.all_cores = all_cores;
     layout.core_group_1 = group_1;
@@ -175,14 +193,7 @@ GumbelSampleLayout compute_layout(const ttnn::Tensor& logits, bool position_awar
 std::vector<CoreWork> core_layout(const GumbelSampleLayout& layout) {
     std::vector<CoreWork> work;
     work.reserve(layout.num_cores);
-    for_each_core_with_work(
-        layout.num_cores,
-        layout.num_cores_y,
-        layout.core_group_1,
-        layout.core_group_2,
-        layout.tiles_per_core_group_1,
-        layout.tiles_per_core_group_2,
-        [&work](const CoreWork& core_work) { work.push_back(core_work); });
+    for_each_core_with_work(layout.split, [&work](const CoreWork& core_work) { work.push_back(core_work); });
     return work;
 }
 
@@ -192,12 +203,14 @@ uint32_t rand_stream_id(const GumbelSampleLayout& layout, uint32_t device_index,
     return device_index * layout.total_tiles + start_tile;
 }
 
-// Runtime-arg values the cache-miss build and the cache-hit patch must derive IDENTICALLY -- one
-// derivation site, deliberately layout-free so the cache-hit path never recomputes the split.
+// Hash-excluded runtime-arg values, which the cache-miss build and the cache-hit patch must derive
+// IDENTICALLY -- one derivation site, deliberately layout-free so the cache-hit path never
+// recomputes the split.
 struct DerivedRuntimeArgs {
     uint32_t inv_temperature_bits{};
-    uint32_t positions_address{};
     uint32_t mask_entry_stride{};
+    uint32_t Ht{};              // token tiles per batch entry
+    uint32_t logical_tokens{};  // tokens, for bounding the row scan past tile padding
 };
 
 DerivedRuntimeArgs derive_runtime_args(const operation_attributes_t& args, const tensor_args_t& tensor_args) {
@@ -205,24 +218,24 @@ DerivedRuntimeArgs derive_runtime_args(const operation_attributes_t& args, const
     // uses_gumbel_noise guarantees the reciprocal is finite; greedy gets 0, not inf.
     derived.inv_temperature_bits =
         uses_gumbel_noise(args.temperature) ? std::bit_cast<uint32_t>(1.0F / args.temperature) : 0U;
-    // Zero when absent: the slot exists in both modes so the cache-hit patch is unconditional.
-    derived.positions_address = tensor_args.positions.has_value() ? tensor_args.positions->buffer()->address() : 0U;
     // 0 for a shared [1,1,1,V] mask, Wt for per-row [B,1,1,V]; one cached program serves both.
     derived.mask_entry_stride =
         (tensor_args.logits_mask.has_value() && tensor_args.logits_mask->logical_shape()[0] > 1U)
             ? (tensor_args.logits.padded_shape()[-1] / tt::constants::TILE_WIDTH)
             : 0U;
+    // The token dim: keyed in every-row mode, normalized out of the program hash in position mode.
+    derived.Ht = tensor_args.logits.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
+    derived.logical_tokens = tensor_args.logits.logical_shape()[-2];
     return derived;
 }
 
-tt::tt_metal::Program build_program(
+tt::tt_metal::ProgramDescriptor build_program_descriptor(
     const operation_attributes_t& args,
     const tensor_args_t& tensor_args,
     tensor_return_value_t& output,
     const GumbelSampleLayout& layout,
-    uint32_t device_index,
-    GumbelSampleSharedVariables& shared_vars) {
-    tt::tt_metal::Program program{};
+    uint32_t device_index) {
+    tt::tt_metal::ProgramDescriptor desc;
 
     const auto& logits = tensor_args.logits;
     const bool has_mask = tensor_args.logits_mask.has_value();
@@ -268,30 +281,26 @@ tt::tt_metal::Program build_program(
     // Circular buffers. Peak L1 is a handful of tiles regardless of V -- the point of the fusion.
     const uint32_t streamed_tiles = 2U * layout.block_size;  // double-buffered
 
-    create_circular_buffer(program, layout.all_cores, kLogitsCbIndex, logits_format, logits_tile_bytes, streamed_tiles);
+    desc.cbs.push_back(
+        make_cb_descriptor(layout.all_cores, kLogitsCbIndex, logits_format, logits_tile_bytes, streamed_tiles));
     if (has_mask) {
-        create_circular_buffer(
-            program, layout.all_cores, kMaskCbIndex, logits_format, logits_tile_bytes, streamed_tiles);
+        desc.cbs.push_back(
+            make_cb_descriptor(layout.all_cores, kMaskCbIndex, logits_format, logits_tile_bytes, streamed_tiles));
     }
     // Scores stay FP32: a bf16 round trip would quantize the very comparisons the argmax makes.
-    create_circular_buffer(
-        program, layout.all_cores, kScoresCbIndex, tt::DataFormat::Float32, score_tile_bytes, streamed_tiles);
+    desc.cbs.push_back(make_cb_descriptor(
+        layout.all_cores, kScoresCbIndex, tt::DataFormat::Float32, score_tile_bytes, streamed_tiles));
     // The writer's output ring: 32 token ids, each in its own NOC-aligned slot.
     constexpr uint32_t kOutputSlotBytes = 32U;
-    create_circular_buffer_bytes(
-        program,
+    desc.cbs.push_back(make_cb_descriptor_bytes(
         layout.all_cores,
         kOutputStagingCbIndex,
         tt::DataFormat::UInt32,
-        tt::constants::TILE_HEIGHT * kOutputSlotBytes);
+        tt::constants::TILE_HEIGHT * kOutputSlotBytes));
 
     // Boundary-row partials: receive slots plus one staging slot for the outgoing record.
-    create_circular_buffer_bytes(
-        program,
-        layout.all_cores,
-        kRecordsCbIndex,
-        tt::DataFormat::UInt32,
-        (max_foreign_shards + 1U) * kRecordBytes);
+    desc.cbs.push_back(make_cb_descriptor_bytes(
+        layout.all_cores, kRecordsCbIndex, tt::DataFormat::UInt32, (max_foreign_shards + 1U) * kRecordBytes));
 
     // Positions staging: one ALIGNED page per entry (the NOC requires the L1 destination to match
     // the DRAM alignment), sized for the larger core group's entry window -- a run of n tiles
@@ -302,14 +311,15 @@ tt::tt_metal::Program build_program(
         const uint32_t max_local_entries =
             std::min(layout.num_entries, (layout.tiles_per_core_group_1 - 1U) / layout.Wt + 2U);
         for (auto cb_index : {kReaderPositionsCbIndex, kWriterPositionsCbIndex}) {
-            create_circular_buffer_bytes(
-                program, layout.all_cores, cb_index, tt::DataFormat::UInt32, max_local_entries * slot_bytes);
+            desc.cbs.push_back(make_cb_descriptor_bytes(
+                layout.all_cores, cb_index, tt::DataFormat::UInt32, max_local_entries * slot_bytes));
         }
     }
 
     // Kernels.
     auto* logits_buffer = logits.buffer();
     auto* mask_buffer = has_mask ? tensor_args.logits_mask->buffer() : nullptr;
+    auto* positions_buffer = layout.position_aware ? tensor_args.positions->buffer() : nullptr;
     auto* output_buffer = output.buffer();
 
     // Greedy vs noisy is decided by uses_gumbel_noise, NOT `temperature > 0`: a positive
@@ -337,11 +347,12 @@ tt::tt_metal::Program build_program(
     }
     reader_ct_args.push_back(has_mask ? 1U : 0U);               // do_logits_mask
     reader_ct_args.push_back(layout.position_aware ? 1U : 0U);  // do_positions
-    shared_vars.reader_kernel_id =
-        create_reader_kernel(program, layout.all_cores, reader_ct_args, {}, kReaderKernelPath);
+
+    desc.kernels.push_back(  // kReaderKernelIdx
+        make_reader_kernel_descriptor(layout.all_cores, reader_ct_args, {}, kReaderKernelPath));
 
     // Each split row's owner counts its senders on its own copy of this semaphore.
-    const uint32_t reduction_sem_id = tt::tt_metal::CreateSemaphore(program, layout.all_cores, 0);
+    desc.semaphores.push_back(make_semaphore_descriptor(kReductionSemId, layout.all_cores, 0U));
 
     std::vector<uint32_t> writer_ct_args{
         layout.Wt,
@@ -350,7 +361,7 @@ tt::tt_metal::Program build_program(
         // the build token-independent. ONE, never zero: the dead fallback divides by Ht in code
         // that is still compiled, and a zero is a -Werror=div-by-zero build failure.
         layout.position_aware ? 1U : layout.Ht,
-        reduction_sem_id,
+        kReductionSemId,
         max_foreign_shards};
     tt::tt_metal::TensorAccessorArgs(output_buffer).append_to(writer_ct_args);
     if (layout.position_aware) {
@@ -359,189 +370,165 @@ tt::tt_metal::Program build_program(
         tt::tt_metal::TensorAccessorArgs().append_to(writer_ct_args);
     }
     writer_ct_args.push_back(layout.position_aware ? 1U : 0U);  // do_positions
-    shared_vars.writer_kernel_id =
-        create_writer_kernel(program, layout.all_cores, writer_ct_args, {}, kWriterKernelPath);
+
+    desc.kernels.push_back(  // kWriterKernelIdx
+        make_writer_kernel_descriptor(layout.all_cores, writer_ct_args, {}, kWriterKernelPath));
 
     // FLOAT32 logits (and the mask, validated to the same dtype) unpack straight into DST instead
     // of through the 19-bit SrcA registers, which would round them to TF32 and decide greedy
     // argmax near-ties differently from ttnn::argmax. Host-side only: the mode flips the generated
     // unpack formats that copy_tile's unpack-to-dest path gates on. bf16 fits losslessly in TF32
-    // and stays on the default path. Built with a bespoke ComputeConfig because
-    // create_compute_kernel does not expose unpack_to_dest_mode.
+    // and stays on the default path.
     std::vector<tt::tt_metal::UnpackToDestMode> unpack_to_dest_mode(
         NUM_CIRCULAR_BUFFERS, tt::tt_metal::UnpackToDestMode::Default);
     if (logits.dtype() == tt::tt_metal::DataType::FLOAT32) {
         unpack_to_dest_mode[static_cast<size_t>(kLogitsCbIndex)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
         unpack_to_dest_mode[static_cast<size_t>(kMaskCbIndex)] = tt::tt_metal::UnpackToDestMode::UnpackToDestFp32;
     }
-    auto create_gumbel_compute_kernel = [&](const tt::tt_metal::CoreRangeSet& cores, uint32_t tiles_per_core) {
-        return tt::tt_metal::CreateKernel(
-            program,
-            kComputeKernelPath,
+    auto make_gumbel_compute_kernel = [&](const tt::tt_metal::CoreRangeSet& cores, uint32_t tiles_per_core) {
+        return make_compute_kernel_descriptor(
             cores,
-            tt::tt_metal::ComputeConfig{
-                .math_fidelity = tt::tt_metal::MathFidelity::HiFi4,
-                .fp32_dest_acc_en = true,
-                .unpack_to_dest_mode = unpack_to_dest_mode,
-                .math_approx_mode = false,
-                .compile_args = {tiles_per_core, layout.block_size, has_mask ? 1U : 0U, do_gumbel_noise ? 1U : 0U}});
+            {tiles_per_core, layout.block_size, has_mask ? 1U : 0U, do_gumbel_noise ? 1U : 0U},
+            {},
+            kComputeKernelPath,
+            /*fp32_dest_acc_en=*/true,
+            unpack_to_dest_mode);
     };
-    shared_vars.compute_kernel_group_1_id =
-        create_gumbel_compute_kernel(layout.core_group_1, layout.tiles_per_core_group_1);
+    desc.kernels.push_back(  // kComputeGroup1KernelIdx
+        make_gumbel_compute_kernel(layout.core_group_1, layout.tiles_per_core_group_1));
 
     if (!layout.core_group_2.ranges().empty()) {
-        shared_vars.compute_kernel_group_2_id =
-            create_gumbel_compute_kernel(layout.core_group_2, layout.tiles_per_core_group_2);
+        desc.kernels.push_back(  // kComputeGroup2KernelIdx
+            make_gumbel_compute_kernel(layout.core_group_2, layout.tiles_per_core_group_2));
     }
 
-    // Runtime args.
-    const auto [inv_temperature_bits, positions_address, mask_entry_stride] = derive_runtime_args(args, tensor_args);
+    // Runtime args. Buffers go in as Buffer* (an absent mask or positions tensor as nullptr, which
+    // emits 0). On a cache hit override_runtime_arguments() rewrites every address slot and every
+    // derive_runtime_args value; the per-core tile runs, the merge routing, the rand bounds and the
+    // stream ids follow from hashed inputs (the stream id also from the device coordinate) and keep
+    // the values written here.
+    const auto derived = derive_runtime_args(args, tensor_args);
 
-    shared_vars.core_info.reserve(layout.num_cores);
+    auto& reader = desc.kernels[kReaderKernelIdx];
+    auto& writer = desc.kernels[kWriterKernelIdx];
     for (const auto& [core, core_index, num_tiles, start_tile, in_group_1] : work) {
-        SetRuntimeArgs(
-            program,
-            shared_vars.reader_kernel_id,
+        reader.emplace_runtime_args(
             core,
-            {logits_buffer->address(),
-             has_mask ? mask_buffer->address() : 0U,
+            {logits_buffer,
+             mask_buffer,
              num_tiles,
              start_tile,
-             layout.Ht,
-             positions_address,
-             layout.logical_tokens,
-             mask_entry_stride});
+             derived.Ht,
+             positions_buffer,
+             derived.logical_tokens,
+             derived.mask_entry_stride});
 
-        SetRuntimeArgs(
-            program,
-            shared_vars.writer_kernel_id,
+        writer.emplace_runtime_args(
             core,
-            {output_buffer->address(),
+            {output_buffer,
              num_tiles,
              start_tile,
-             positions_address,
+             positions_buffer,
              send_routing[core_index][0],
              send_routing[core_index][1],
              send_routing[core_index][2],
              expected_shards[core_index],
-             layout.logical_tokens});
+             derived.logical_tokens});
 
         const uint32_t stream_id = rand_stream_id(layout, device_index, start_tile);
-        SetRuntimeArgs(
-            program,
-            in_group_1 ? shared_vars.compute_kernel_group_1_id : shared_vars.compute_kernel_group_2_id,
-            core,
-            {args.seed, kRandFromBits, kRandScaleBits, inv_temperature_bits, stream_id});
-
-        shared_vars.core_info.push_back({core, stream_id, in_group_1});
+        desc.kernels[in_group_1 ? kComputeGroup1KernelIdx : kComputeGroup2KernelIdx].emplace_runtime_args(
+            core, {args.seed, kRandFromBits, kRandScaleBits, derived.inv_temperature_bits, stream_id});
     }
 
-    shared_vars.has_compute_group_2 = !layout.core_group_2.ranges().empty();
-
-    return program;
+    return desc;
 }
 
 }  // namespace
 
-GumbelSampleProgramFactory::cached_mesh_workload_t GumbelSampleProgramFactory::create_mesh_workload(
+// Builds the program of the device at `mesh_coordinate`. The framework calls it once per device;
+// the programs differ only in the compute kernels' RNG stream ids.
+tt::tt_metal::ProgramDescriptor GumbelSampleProgramFactory::create_descriptor(
     const operation_attributes_t& operation_attributes,
-    const ttnn::MeshCoordinateRangeSet& tensor_coords,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& mesh_coordinate) {
+    TT_FATAL(mesh_coordinate.has_value(), "GumbelSample: create_descriptor needs the device's mesh coordinate");
     const auto& logits = tensor_args.logits;
     auto* mesh_device = logits.device();
     TT_FATAL(mesh_device != nullptr, "GumbelSample: logits must live on a mesh device");
 
-    const auto mesh_shape = mesh_device->shape();
     const auto layout = compute_layout(logits, tensor_args.positions.has_value());
+    const uint32_t device_index =
+        seeded_linear_index(*mesh_coordinate, mesh_device->shape(), operation_attributes.seed_axes);
 
-    tt::tt_metal::distributed::MeshWorkload mesh_workload;
-    std::unordered_map<tt::tt_metal::distributed::MeshCoordinateRange, shared_variables_t> shared_vars;
-
-    for (const auto& coord_range : tensor_coords.ranges()) {
-        for (const auto& mesh_coord : coord_range) {
-            const uint32_t device_index = seeded_linear_index(mesh_coord, mesh_shape, operation_attributes.seed_axes);
-
-            shared_variables_t vars{};
-            auto program =
-                build_program(operation_attributes, tensor_args, tensor_return_value, layout, device_index, vars);
-
-            ttnn::MeshCoordinateRange single_coord_range{mesh_coord};
-            mesh_workload.add_program(single_coord_range, std::move(program));
-            shared_vars[single_coord_range] = std::move(vars);
-        }
-    }
-
-    return cached_mesh_workload_t(std::move(mesh_workload), std::move(shared_vars));
+    return build_program_descriptor(operation_attributes, tensor_args, tensor_return_value, layout, device_index);
 }
 
 void GumbelSampleProgramFactory::override_runtime_arguments(
-    cached_mesh_workload_t& cached_workload,
+    tt::tt_metal::Program& program,
     const operation_attributes_t& operation_attributes,
     const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    tensor_return_value_t& tensor_return_value,
+    const std::optional<ttnn::MeshCoordinate>& /*mesh_coordinate*/) {
     const auto& logits = tensor_args.logits;
-    const bool has_mask = tensor_args.logits_mask.has_value();
+    const bool position_aware = tensor_args.positions.has_value();
 
-    // Deliberately NO compute_layout / core_layout here: the work split is a function of hashed
-    // quantities only and was cached in the shared variables at build; this op dispatches once per
-    // generated token, so re-deriving it would be paid on every dispatch. The only layout values
-    // that can differ under the same program hash are the token-dimension pair below (position
-    // mode normalizes the token dim away), and both are plain shape reads.
-    const uint32_t Ht = logits.padded_shape()[-2] / tt::constants::TILE_HEIGHT;
-    const uint32_t logical_tokens = logits.logical_shape()[-2];
+    // Deliberately NO compute_layout / core_layout here: this op dispatches once per generated
+    // token, so a hit only recomputes the core walk, as arithmetic over the same tile count. The
+    // work split is a function of hashed quantities only, and so are the per-core tile runs, the
+    // merge routing and the RNG stream ids (plus this program's device coordinate): they keep the
+    // values create_descriptor() wrote.
+    const WorkSplit split = compute_work_split(
+        logits.device()->compute_with_storage_grid_size(), count_split_tiles(logits.padded_shape(), position_aware));
 
     const uint32_t logits_address = logits.buffer()->address();
-    const uint32_t mask_address = has_mask ? tensor_args.logits_mask->buffer()->address() : 0U;
+    const uint32_t mask_address =
+        tensor_args.logits_mask.has_value() ? tensor_args.logits_mask->buffer()->address() : 0U;
+    // Zero when absent: the slot exists in both modes so the patch is unconditional.
+    const uint32_t positions_address = position_aware ? tensor_args.positions->buffer()->address() : 0U;
     const uint32_t output_address = tensor_return_value.buffer()->address();
 
-    // seed and temperature are runtime-only (excluded from the program hash so changing either
-    // reuses the cached program) and must be re-applied on every hit, from the SAME derivation the
-    // build used. A temperature whose kernel selection changed hashes to a different program, so a
-    // cached program is never patched with the wrong variant's args.
-    const auto [inv_temperature_bits, positions_address, mask_entry_stride] =
-        derive_runtime_args(operation_attributes, tensor_args);
+    // seed, the temperature value, the mask batch stride and (in position mode) the token dim are
+    // excluded from the program hash and must be re-applied on every hit, from the SAME derivation
+    // the build used. A temperature whose kernel selection changed hashes to a different program,
+    // so a cached program is never patched with the wrong variant's args.
+    const auto derived = derive_runtime_args(operation_attributes, tensor_args);
 
-    for (auto& [coord_range, program] : cached_workload.workload.get_programs()) {
-        auto& vars = cached_workload.shared_variables.at(coord_range);
+    auto& reader_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
+    auto& writer_args = tt::tt_metal::GetRuntimeArgs(program, kWriterKernelIdx);
+    auto& compute_g1_args = tt::tt_metal::GetRuntimeArgs(program, kComputeGroup1KernelIdx);
+    // Without group 2 there is no fourth kernel and every core is in group 1.
+    auto& compute_g2_args =
+        split.has_group_2() ? tt::tt_metal::GetRuntimeArgs(program, kComputeGroup2KernelIdx) : compute_g1_args;
 
-        auto& reader_args = GetRuntimeArgs(program, vars.reader_kernel_id);
-        auto& writer_args = GetRuntimeArgs(program, vars.writer_kernel_id);
-        auto& compute_g1_args = GetRuntimeArgs(program, vars.compute_kernel_group_1_id);
-        auto& compute_g2_args =
-            vars.has_compute_group_2 ? GetRuntimeArgs(program, vars.compute_kernel_group_2_id) : compute_g1_args;
-
-        // The merge routing and per-core tile runs are split properties, identical on every
-        // dispatch, and are not re-patched. Everything patched below is either a buffer address or
-        // token-derived: replayed stale, a cached program would read real but WRONG rows/pages --
-        // in bounds, no fault, silently wrong samples.
-        for (const auto& info : vars.core_info) {
-            const auto& core = info.core;
-            {
-                auto& core_args = reader_args[core.x][core.y];
-                core_args[kReaderLogitsBufferIdx] = logits_address;
-                core_args[kReaderMaskBufferIdx] = mask_address;
-                core_args[kReaderHtIdx] = Ht;
-                core_args[kReaderPositionsBufferIdx] = positions_address;
-                core_args[kReaderLogicalTokensIdx] = logical_tokens;
-                core_args[kReaderMaskStrideIdx] = mask_entry_stride;
-            }
-            {
-                auto& core_args = writer_args[core.x][core.y];
-                core_args[kWriterOutputBufferIdx] = output_address;
-                core_args[kWriterPositionsBufferIdx] = positions_address;
-                core_args[kWriterLogicalTokensIdx] = logical_tokens;
-            }
-            {
-                auto& core_args =
-                    info.in_compute_group_1 ? compute_g1_args[core.x][core.y] : compute_g2_args[core.x][core.y];
-                core_args[kComputeSeedIdx] = operation_attributes.seed;
-                core_args[kComputeInvTemperatureIdx] = inv_temperature_bits;
-                // Baked at build from the same split this loop iterates; see CoreRuntimeInfo.
-                core_args[kComputeRandStreamIdx] = info.rand_stream_id;
-            }
+    // Everything patched below is a buffer address or a hash-excluded value: replayed stale, a
+    // cached program would read real but WRONG rows/pages -- in bounds, no fault, silently wrong
+    // samples.
+    for_each_core_with_work(split, [&](const CoreWork& work) {
+        const auto& core = work.core;
+        {
+            auto& core_args = reader_args[core.x][core.y];
+            core_args[kReaderLogitsBufferIdx] = logits_address;
+            core_args[kReaderMaskBufferIdx] = mask_address;
+            core_args[kReaderHtIdx] = derived.Ht;
+            core_args[kReaderPositionsBufferIdx] = positions_address;
+            core_args[kReaderLogicalTokensIdx] = derived.logical_tokens;
+            core_args[kReaderMaskStrideIdx] = derived.mask_entry_stride;
         }
-    }
+        {
+            auto& core_args = writer_args[core.x][core.y];
+            core_args[kWriterOutputBufferIdx] = output_address;
+            core_args[kWriterPositionsBufferIdx] = positions_address;
+            core_args[kWriterLogicalTokensIdx] = derived.logical_tokens;
+        }
+        {
+            auto& core_args = (work.in_group_1 ? compute_g1_args : compute_g2_args)[core.x][core.y];
+            core_args[kComputeSeedIdx] = operation_attributes.seed;
+            core_args[kComputeInvTemperatureIdx] = derived.inv_temperature_bits;
+        }
+    });
 }
+
+TTML_ASSERT_DESCRIPTOR_OVERRIDE(GumbelSampleDeviceOperation, GumbelSampleProgramFactory);
 
 }  // namespace ttml::metal::ops::gumbel_sample::device
