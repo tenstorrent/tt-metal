@@ -32,6 +32,11 @@ Vocabulary (design doc ``_agents/vllm_glm53/DESIGN.md``):
 
 from __future__ import annotations
 
+# The sparse prefill's prefix read (``TtLatentCache.user_rows_rm``: the user's latent rows [0, start + T)) rounds its
+# row count up to a multiple of this (0 = exact): the kv shape of a continued chunk then depends on the prefix bucket,
+# not on the exact start, and the served warm-up builds every bucket's programs (``_warmup_prefix_starts``). The
+# served adapter sets it to max(chunk, max_seq_len / 8 rounded to the chunk) before the caches are built.
+PREFIX_BUCKET_ENV = "GLM53_PREFIX_BUCKET"
 from dataclasses import dataclass, field
 from typing import Callable, Sequence
 

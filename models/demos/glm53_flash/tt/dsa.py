@@ -56,6 +56,7 @@ from models.demos.glm53_flash.tt.indexer import TtDSAIndexer, TtIndexCache, heig
 from models.demos.glm53_flash.tt.matmul_configs import PREFILL_ROW_BLOCK, DecodeLinear, prefill_linear
 from models.demos.glm53_flash.tt.memory_plan import default_prefill_qblock
 from models.demos.glm53_flash.tt.mesh import TP_AXIS, GLMMesh, single_chip
+from models.demos.glm53_flash.tt.vllm_config import PREFIX_BUCKET_ENV
 
 try:  # the allocation discipline under live traces (lazily built constants as chunk transients, GLMMesh.lazy)
     from models.demos.glm53_flash.tt.mesh import lazy_const
@@ -583,6 +584,9 @@ class TtLatentCache:
         pt = torch.arange(self.data_blocks, dtype=torch.int32).reshape(self.slots, self.blocks_per_seq)
         self.set_page_table(pt)
         self.rows_per_user = self.blocks_per_seq * block_size
+        # the sparse prefill's prefix read rounds its row count up to this (GLM53_PREFIX_BUCKET, 0 = exact): one kv
+        # shape per prefix bucket instead of one per chunk start (vllm_config.PREFIX_BUCKET_ENV)
+        self.prefix_bucket = int(os.environ.get(PREFIX_BUCKET_ENV, "0"))
         # pooled-key index (its own identity table; a slot's pools are contiguous regardless of the latent table)
         self.index = TtIndexCache(
             device,
@@ -744,6 +748,8 @@ class TtLatentCache:
         when the user's pages are the cache's first blocks (slot 0 of an identity table, the single-slot long-context
         state) and the prefix is long, untilize them straight out of the paged cache (``untilize_with_unpadding``
         of the leading block range, no TILE slice copy); bit-identical to the slice + untilize path."""
+        if self.prefix_bucket:  # the next prefix bucket: rows past the prompt are never selectable (no valid pools)
+            n_rows = min(self.rows_per_user, -(-int(n_rows) // self.prefix_bucket) * self.prefix_bucket)
         n_blocks = min(self.blocks_per_seq, -(-n_rows // self.block_size))
         ids = self.page_table_host[self.prefill_slot(user), :n_blocks].tolist()
         if direct and n_blocks * self.block_size >= self.DIRECT_UNTILIZE_MIN_ROWS and ids == list(range(n_blocks)):

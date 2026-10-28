@@ -73,6 +73,7 @@ from models.demos.glm53_flash.tt.vllm_config import (
     DEFAULT_BLOCK_SIZE,
     DEFAULT_DEVICE_PREFILL_CHUNK,
     DEFAULT_WAVE_ROWS,
+    PREFIX_BUCKET_ENV,
     TILE,
     DecodeRowMap,
     LogicalBlockTable,
@@ -373,6 +374,8 @@ class GLM53FlashForCausalLM:
         users_per_row = int(max_batch_size) // rows if rows_independent else int(max_batch_size)
         unit = TILE * rows
         chunk = int(os.environ.get("GLM53_VLLM_PREFILL_CHUNK", str(DEFAULT_DEVICE_PREFILL_CHUNK)))
+        # the sparse prefill's prefix bucket (TtLatentCache.user_rows_rm): max(chunk, max_seq_len / 8 to the chunk)
+        os.environ.setdefault(PREFIX_BUCKET_ENV, str(max(chunk, -(-(int(max_seq_len) // 8) // chunk) * chunk)))
         chunk = max(unit, chunk // unit * unit)
         geometry = ServingGeometry(
             rows=rows,
@@ -524,6 +527,7 @@ class GLM53FlashForCausalLM:
                         f"GLM53 vLLM: eager prefill warm-up ({n} tokens in {len(plan.chunks)} device chunk(s) into "
                         f"{len(into)} slot(s)) in {time.perf_counter() - t0:.1f} s"
                     )
+                self._warmup_prefix_starts(lengths)
                 logger.info(f"GLM53 vLLM: after the prefill warm-up: {_dram_line(_mesh_device_of(self.model))}")
                 n = lengths[0]
                 dummy = torch.arange(n, dtype=torch.long) % 1000 + 1000
@@ -588,6 +592,50 @@ class GLM53FlashForCausalLM:
         dev = _mesh_device_of(self.model)
         dev.set_program_cache_misses_allowed(False)
         logger.info(f"GLM53 vLLM: program cache sealed after the captures ({dev.num_program_cache_entries()} programs)")
+
+    def _warmup_prefix_starts(self, lengths: list[int]) -> None:
+        """Continued chunks at every prefix bucket before the captures: the sparse prefill reads the user's prefix
+        rows [0, start + T) rounded up to GLM53_PREFIX_BUCKET (``TtLatentCache.user_rows_rm``), so a continued chunk's
+        kv shape depends on the prefix bucket, not on its exact start; one chunk of every lone bucket length (full and
+        ragged, ``lengths`` up to the chunk) at start j x bucket for every j builds those programs, which a long
+        prompt's chunk k >= 2 and a prefix-cache hit at a chunk-aligned snapshot then reuse (the served APC hit at
+        1536 compiled its prefix read at request time under the sealed cache, 2026-10-28 8x4). The chunk cursor of
+        slot 0 is rewound around every call; its cache rows are placeholders the next prompt overwrites.
+        ``GLM53_VLLM_WARMUP_PREFIX_STARTS=0`` skips the walk."""
+        if os.environ.get("GLM53_VLLM_WARMUP_PREFIX_STARTS", "1") != "1":
+            return
+        g = self.geometry
+        chunk = g.device_prefill_chunk
+        bucket = int(os.environ.get(PREFIX_BUCKET_ENV, "0")) or chunk
+        if bucket % chunk:
+            raise ValueError(f"{PREFIX_BUCKET_ENV}={bucket} is not a multiple of the device chunk {chunk}")
+        tails = sorted({int(n) for n in lengths if n <= chunk})
+        # the prefix read of a continued chunk (``TtLatentCache.user_rows`` / ``user_rows_rm``) is a slice whose
+        # program keys on the slot's first block AND the read length: one program per (user, prefix bucket). The
+        # length-dependent programs that do not depend on the user (the chunk's own attention over T rows) come
+        # from slot 0's walk over every tail; the other slots walk every bucket with the shortest tail only.
+        B = self.geometry.users_per_row
+        t0 = time.perf_counter()
+        n_calls = 0
+        for j in range(1, g.max_seq_len // bucket):
+            start = j * bucket
+            for u in range(B):
+                for n in tails if u == 0 else tails[:1]:
+                    if start + n > g.max_seq_len:
+                        continue
+                    dummy = torch.arange(n, dtype=torch.long) % 1000 + 1000
+                    self.model.rewind_user(u, start)
+                    out = self.model.prefill(dummy, user=u, start=start)
+                    self._free(out[0])
+                    self._free(out[1])
+                    n_calls += 1
+        for u in range(B):
+            self.model.rewind_user(u, 0)
+        self._sync()
+        logger.info(
+            f"GLM53 vLLM: continued-chunk warm-up ({n_calls} chunks at {max(0, g.max_seq_len // bucket - 1)} prefix "
+            f"bucket start(s) of {bucket} into {B} slot(s), tails {tails}) in {time.perf_counter() - t0:.1f} s"
+        )
 
     def _warmup_slots(self, B: int) -> list[int]:
         """``GLM53_VLLM_WARMUP_SLOTS``: the per-row user slots the shortest warm-up prompt is prefilled into

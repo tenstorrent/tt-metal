@@ -455,6 +455,13 @@ class GLM53MeshModel:
         logits = self.head.last_token_logits(streams, local_last + 1) if self.head is not None else None
         return streams, logits, owner_row
 
+    def rewind_user(self, user: int, position: int) -> None:
+        """Set every layer's chunked-prefill cursor of slot ``user`` to ``position`` (a 32-multiple)."""
+        if position < 0 or position % 32:
+            raise ValueError(f"rewind position {position} must be a non-negative multiple of 32")
+        for dec in self.layers:
+            dec.next_start[user] = int(position)
+
     def prefill_chunked(self, prompt_ids: torch.Tensor, user: int = 0, chunk: int = 32768, on_chunk=None):
         """A long prompt through ``prefill`` in consecutive chunks (every chunk but the last is a multiple
         of ``32 * rows`` tokens, so the row slabs stay tile-aligned). ``on_chunk(start, end, seconds)`` is
