@@ -24,8 +24,9 @@ using namespace tt::tt_metal;
 //   NOC_EVENT_QUICK_PUSH_LOOP_COUNT   reads per RISC (default 4000)
 //   NOC_EVENT_QUICK_PUSH_DELAY_NOPS   nops between reads (default 0)
 //   NOC_EVENT_QUICK_PUSH_ITER_ZONE    1 = a zone around every read (default 0)
-//   NOC_EVENT_QUICK_PUSH_MCAST_EVERY  n > 0 = a linked multicast write every n-th read (default 0); each one makes
-//                                     the NoC tracer quick-push pre-emptively, at any ring fill level
+//   NOC_EVENT_QUICK_PUSH_PUSH_EVERY   n > 0 = call kernel_profiler::quick_push() directly every n-th read (default 0)
+//   NOC_EVENT_QUICK_PUSH_MCAST_EVERY  n > 0 = a linked multicast write to the core range every n-th read (default 0);
+//                                     each one makes the NoC tracer quick-push pre-emptively, at any ring fill level
 //   NOC_EVENT_QUICK_PUSH_WARMUP       N tiny programs launched (non-blocking) before the long one (default 0), so
 //                                     the DRAM profiler region already holds many chunks
 //   NOC_EVENT_QUICK_PUSH_BLOCKING     1 = blocking enqueue of the long program (default 1)
@@ -43,7 +44,9 @@ Program make_program(
     uint32_t loop_count,
     uint32_t delay_nops,
     uint32_t iter_zone,
-    uint32_t mcast_every) {
+    uint32_t push_every,
+    uint32_t mcast_every,
+    const std::vector<uint32_t>& runtime_args) {
     Program program = CreateProgram();
 
     constexpr uint32_t cb_id = 0;
@@ -55,6 +58,7 @@ Program make_program(
         {"LOOP_COUNT", std::to_string(loop_count)},
         {"DELAY_NOPS", std::to_string(delay_nops)},
         {"ITER_ZONE", std::to_string(iter_zone)},
+        {"PUSH_EVERY", std::to_string(push_every)},
         {"MCAST_EVERY", std::to_string(mcast_every)}};
     const std::string kernel_path = "tests/tt_metal/tools/profiler/kernels/noc_event_quick_push.cpp";
     KernelHandle brisc_kernel = CreateKernel(
@@ -69,8 +73,8 @@ Program make_program(
         cores,
         DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default, .defines = kernel_defines});
-    SetRuntimeArgs(program, brisc_kernel, cores, {page_size});
-    SetRuntimeArgs(program, ncrisc_kernel, cores, {page_size});
+    SetRuntimeArgs(program, brisc_kernel, cores, runtime_args);
+    SetRuntimeArgs(program, ncrisc_kernel, cores, runtime_args);
     return program;
 }
 
@@ -83,6 +87,7 @@ int main() {
         const uint32_t loop_count = env_u32("NOC_EVENT_QUICK_PUSH_LOOP_COUNT", 4000);
         const uint32_t delay_nops = env_u32("NOC_EVENT_QUICK_PUSH_DELAY_NOPS", 0);
         const uint32_t iter_zone = env_u32("NOC_EVENT_QUICK_PUSH_ITER_ZONE", 0);
+        const uint32_t push_every = env_u32("NOC_EVENT_QUICK_PUSH_PUSH_EVERY", 0);
         const uint32_t mcast_every = env_u32("NOC_EVENT_QUICK_PUSH_MCAST_EVERY", 0);
         const uint32_t warmup = env_u32("NOC_EVENT_QUICK_PUSH_WARMUP", 0);
         const bool blocking = env_u32("NOC_EVENT_QUICK_PUSH_BLOCKING", 1) != 0;
@@ -90,11 +95,12 @@ int main() {
         constexpr uint32_t page_size = 64;
 
         fmt::print(
-            "noc_event_quick_push: loop_count={} delay_nops={} iter_zone={} mcast_every={} warmup={} blocking={} "
-            "skip_read={}\n",
+            "noc_event_quick_push: loop_count={} delay_nops={} iter_zone={} push_every={} mcast_every={} warmup={} "
+            "blocking={} skip_read={}\n",
             loop_count,
             delay_nops,
             iter_zone,
+            push_every,
             mcast_every,
             warmup,
             blocking,
@@ -105,16 +111,26 @@ int main() {
         distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mesh_device->shape());
 
         CoreRange cores({0, 0}, {1, 1});
+        // Multicast range = the core range in NoC coordinates; each sender reaches the other 3 cores.
+        const CoreCoord mcast_start = mesh_device->worker_core_from_logical_core(cores.start_coord);
+        const CoreCoord mcast_end = mesh_device->worker_core_from_logical_core(cores.end_coord);
+        const std::vector<uint32_t> runtime_args = {
+            page_size,
+            static_cast<uint32_t>(mcast_start.x),
+            static_cast<uint32_t>(mcast_start.y),
+            static_cast<uint32_t>(mcast_end.x),
+            static_cast<uint32_t>(mcast_end.y),
+            static_cast<uint32_t>(cores.size() - 1)};
 
         // Warm-up: many small programs on the same cores, each leaving a chunk per RISC in the DRAM profiler region.
         for (uint32_t i = 0; i < warmup; i++) {
             distributed::MeshWorkload workload;
-            workload.add_program(device_range, make_program(cores, page_size, /*loop_count=*/1, 0, 0, 0));
+            workload.add_program(device_range, make_program(cores, page_size, /*loop_count=*/1, 0, 0, 0, 0, runtime_args));
             distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
         }
 
         distributed::MeshWorkload workload;
-        workload.add_program(device_range, make_program(cores, page_size, loop_count, delay_nops, iter_zone, mcast_every));
+        workload.add_program(device_range, make_program(cores, page_size, loop_count, delay_nops, iter_zone, push_every, mcast_every, runtime_args));
         distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, blocking);
 
         if (!skip_read) {

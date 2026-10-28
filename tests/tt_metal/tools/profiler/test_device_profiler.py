@@ -1552,17 +1552,18 @@ NOC_EVENT_QUICK_PUSH_CONFIGS = {
         knobs={"BLOCKING": 0, "SKIP_READ": 1, "WARMUP": 1000, "ITER_ZONE": 1, "DELAY_NOPS": 2000},
         program_support_count=8000,
     ),
-    # Linked multicasts: every 7th read also issues a linked multicast, so quick_push_if_linked pushes pre-emptively
-    # at any ring fill level, including right after a regular push (the pattern of the broken pairs in the model
-    # capture: a second push ~75 cycles after the first).
-    "fd-mcast": dict(env={}, loop_count=4000, knobs={"MCAST_EVERY": 7}, mcast_every=7),
-    "sd-mcast-blaze-env": dict(
+    # Back-to-back pushes: the broken pairs in the model capture are always the second of two pushes ~75 cycles
+    # apart. PUSH_EVERY calls quick_push() directly every 7th read, so one of them regularly follows a ring-full
+    # push within a few events; MCAST_EVERY does it the way the model does, through the pre-emptive push before a
+    # linked multicast.
+    "fd-push": dict(env={}, loop_count=4000, knobs={"PUSH_EVERY": 7}),
+    "sd-push-blaze-env": dict(
         env={"slowDispatch": True, "do_mid_run_dump": True, "do_cpp_post_process": True},
         loop_count=4000,
-        knobs={"BLOCKING": 0, "SKIP_READ": 1, "WARMUP": 200, "ITER_ZONE": 1, "MCAST_EVERY": 7},
-        mcast_every=7,
+        knobs={"BLOCKING": 0, "SKIP_READ": 1, "WARMUP": 200, "ITER_ZONE": 1, "PUSH_EVERY": 7},
         program_support_count=8000,
     ),
+    "fd-mcast": dict(env={}, loop_count=4000, knobs={"MCAST_EVERY": 7}, mcast_every=7),
     "sd-sparse": dict(
         env={"slowDispatch": True, "do_mid_run_dump": True, "do_cpp_post_process": True},
         loop_count=300,
@@ -1632,22 +1633,20 @@ def test_noc_event_quick_push(config_name):
         qp = lane[lane["zone name"] == "PROFILER-NOC-QUICK-PUSH"]
         starts = int((qp["type"] == "ZONE_START").sum())
         ends = int((qp["type"] == "ZONE_END").sum())
-        # The long program is the run with the most NoC events on this lane (warm-up programs have one each).
-        events = lane[lane["timer_id"] == NOC_EVENT_TIMER_ID]
-        per_run = events.groupby("run host ID").size()
-        main_run = per_run.idxmax() if len(per_run) else None
-        noc_events = int(per_run.max()) if len(per_run) else 0
+        warmup = knobs.get("WARMUP", 0)
+        noc_events = int((lane["timer_id"] == NOC_EVENT_TIMER_ID).sum()) - warmup
         if config.get("mcast_every"):
             # two multicast writes per MCAST_EVERY-th iteration are events too
             noc_events -= 2 * ((LOOP_COUNT + config["mcast_every"] - 1) // config["mcast_every"])
-        main = lane[lane["run host ID"] == main_run]
-        user = main[main["zone name"] == "TEST-NOC-QUICK-PUSH"]
-        user_starts, user_ends = int((user["type"] == "ZONE_START").sum()), int((user["type"] == "ZONE_END").sum())
-        iters = main[main["zone name"] == "TEST-ITER"]
+        runs = lane["run host ID"].nunique()
+        user = lane[lane["zone name"] == "TEST-NOC-QUICK-PUSH"]
+        user_starts = int((user["type"] == "ZONE_START").sum()) - warmup
+        user_ends = int((user["type"] == "ZONE_END").sum()) - warmup
+        iters = lane[lane["zone name"] == "TEST-ITER"]
         iter_starts, iter_ends = int((iters["type"] == "ZONE_START").sum()), int((iters["type"] == "ZONE_END").sum())
         summary.append(
             f"core ({x},{y}) {risc}: quick-push {starts}/{ends}, events {noc_events}, user zone {user_starts}/{user_ends}, "
-            f"iter zones {iter_starts}/{iter_ends}, runs {len(per_run)}"
+            f"iter zones {iter_starts}/{iter_ends}, runs {runs}"
         )
         if starts < MIN_PUSHES_PER_LANE or starts != ends:
             errors.append(f"core ({x},{y}) {risc}: PROFILER-NOC-QUICK-PUSH starts={starts} ends={ends}")
