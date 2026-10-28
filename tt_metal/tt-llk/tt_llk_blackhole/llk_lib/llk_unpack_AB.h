@@ -27,6 +27,9 @@ using namespace ckernel::unpacker;
  * Sets up the unpacker MOP to handle various broadcast modes and transpose configurations.
  * The MOP programs the sequence of unpack operations based on tile geometry and broadcast type.
  *
+ * @note With no broadcast and no inter-face transpose, a face shorter than MAX_FPU_ROWS rows zeroes both SrcA and
+ * both SrcB banks here, because the FPU reads at least MAX_FPU_ROWS rows per face.
+ *
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param transpose_of_faces: Whether to transpose faces (reorder faces 0,2,1,3)
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
@@ -138,6 +141,13 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
         }
         else
         {
+            if (tensor_shape.face_r_dim < MAX_FPU_ROWS)
+            {
+                // The FPU reads at least MAX_FPU_ROWS rows per face. Clear both sources so ELWADD and ELWSUB also
+                // see zeros in the rows past the face.
+                _llk_unpack_clear_src_banks_<SrcA>();
+                _llk_unpack_clear_src_banks_<SrcB>();
+            }
             ckernel_template tmp(num_faces_r_dim, num_faces_c_dim, unpack_srca, unpack_srcb);
             tmp.program();
         }
@@ -153,6 +163,9 @@ inline void _llk_unpack_AB_mop_config_(const bool transpose_of_faces, const cker
  * @tparam BType: Broadcast type for source B, values = <NONE/COL/ROW/SCALAR>
  * @param tensor_shape: Tensor shape describing tile dimensions (face_r_dim, face_c_dim, num_faces_r_dim, num_faces_c_dim)
  * @param transpose: Transpose mode for SrcA face order and/or within-face transpose, values = <None/IntraFace/InterFace/Both>
+ * @note With no broadcast and no inter-face transpose, a face shorter than MAX_FPU_ROWS rows waits for math and
+ * zeroes both SrcA and both SrcB banks (see @ref _llk_unpack_AB_mop_config_). Re-run this init after any op that
+ * writes SrcA or SrcB, for example a MOVD2A or MOVD2B.
  * @note Call @ref _llk_unpack_AB_uninit_ to restore the modified datum-count state.
  * @ref _llk_unpack_AB_ is the matching execute call.
  * @ref _llk_math_eltwise_binary_init_ is the matching init on the math thread (consumes SrcA/SrcB).

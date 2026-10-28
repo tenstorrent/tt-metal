@@ -46,9 +46,13 @@ static constexpr std::uint32_t DST_INDEX = 0;
 
 // The tile geometry is parametrized by the Python test: the full 32x32 tile
 // (2x2 faces, num_faces=4) plus the 16x32 (1x2, num_faces=2) and 16x16 (1x1,
-// num_faces=1) "tiny tiles". Only num_faces_{r,c}_dim vary; face_r_dim /
-// face_c_dim stay at the full 16 (FACE_R_DIM / FACE_C_DIM). Each thread rebuilds
-// the shape from the runtime params, matching the reduce_test.cpp idiom.
+// num_faces=1) "tiny tiles", and 1x32 to 8x32 tiles with short faces
+// (TEST_FACE_R_DIM rows). Each thread rebuilds the shape from the runtime
+// params, matching the reduce_test.cpp idiom.
+
+// Poison op: fills every row of both SrcA banks with 100.0 (unpack A zeroes SrcB), then releases DEST unread.
+// A short-face op that reads those stale rows fails the golden.
+static constexpr std::uint32_t POISON_TILES = 2;
 
 #ifdef LLK_TRISC_UNPACK
 
@@ -63,7 +67,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     const ckernel::TensorShape tensor_shape = {
-        static_cast<std::uint8_t>(FACE_R_DIM),
+        static_cast<std::uint8_t>(params.TEST_FACE_R_DIM),
         static_cast<std::uint8_t>(FACE_C_DIM),
         static_cast<std::uint8_t>(params.num_faces_r_dim_A),
         static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
@@ -76,20 +80,31 @@ void run_kernel(RUNTIME_PARAMETERS params)
         formats.unpack_B_src,
         formats.unpack_A_dst,
         formats.unpack_B_dst,
-        tensor_shape.face_r_dim,
-        tensor_shape.face_r_dim,
-        num_faces,
-        num_faces);
+        FACE_R_DIM,
+        FACE_R_DIM,
+        DEFAULT_TENSOR_SHAPE.total_num_faces(),
+        DEFAULT_TENSOR_SHAPE.total_num_faces());
+
+    // Poison op (see the file header).
+    const std::uint32_t poison_tile_bytes = SCALE_DATUM_SIZE(formats.unpack_A_src, DEFAULT_TENSOR_SHAPE.total_tensor_size());
+    _llk_unpack_A_init_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+        0 /*transpose_of_faces*/, 0 /*within_face_16x16_transpose*/, DEFAULT_TENSOR_SHAPE, formats.unpack_A_src, formats.unpack_A_dst);
+    for (std::uint32_t i = 0; i < POISON_TILES; ++i)
+    {
+        _llk_unpack_A_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+            L1_ADDRESS(params.buffer_A[params.TILE_CNT] + i * poison_tile_bytes), formats.unpack_A_src, formats.unpack_A_dst);
+    }
+    _llk_unpack_reconfig_tile_shape_srca_(0 /*tile_size*/, tensor_shape.face_r_dim, num_faces);
 
     // sum_reduce_scalar_init -> copy_tile_to_dst_init_short: unpack A only,
     // no broadcast/transpose (datacopy A2D source path).
-    _llk_unpack_A_init_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
-        0 /* transpose_of_faces */, 0 /* within_face_16x16_transpose */, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
+    _llk_unpack_A_init_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+        0 /*transpose_of_faces*/, 0 /*within_face_16x16_transpose*/, tensor_shape, formats.unpack_A_src, formats.unpack_A_dst);
 
     // Copy phase: stream A[i] into SrcA for each tile (MATH moves it into DEST[i]).
     for (std::uint32_t i = 0; i < params.TILE_CNT; ++i)
     {
-        _llk_unpack_A_<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
+        _llk_unpack_A_<BroadcastType::NONE, false /*acc_to_dest*/, EltwiseBinaryReuseDestType::NONE, unpack_to_dest>(
             L1_ADDRESS(params.buffer_A[i]), formats.unpack_A_src, formats.unpack_A_dst);
     }
 
@@ -120,7 +135,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #endif
     const std::uint32_t tile_cnt            = params.TILE_CNT;
     const ckernel::TensorShape tensor_shape = {
-        static_cast<std::uint8_t>(FACE_R_DIM),
+        static_cast<std::uint8_t>(params.TEST_FACE_R_DIM),
         static_cast<std::uint8_t>(FACE_C_DIM),
         static_cast<std::uint8_t>(params.num_faces_r_dim_A),
         static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
@@ -134,6 +149,16 @@ void run_kernel(RUNTIME_PARAMETERS params)
     // kernel; this standalone harness bypasses it, so run the idempotent
     // once-init before the reduce-phase _calculate_fill_ SFPU stores.
     _llk_math_eltwise_unary_sfpu_init_once_();
+
+    // Poison op (see the file header).
+    _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(DEFAULT_TENSOR_SHAPE.total_num_faces(), formats.math);
+    _llk_math_wait_for_dest_available_<DST_SYNC>();
+    for (std::uint32_t i = 0; i < POISON_TILES; ++i)
+    {
+        _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, DST_SYNC, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
+            i, formats.math, formats.math, DEFAULT_TENSOR_SHAPE.total_num_faces());
+    }
+    _llk_math_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 
     // sum_reduce_scalar_init -> copy_tile_to_dst_init_short: datacopy A2D.
     _llk_math_eltwise_unary_datacopy_init_<DataCopyType::A2D, is_fp32_dest_acc_en, BroadcastType::NONE>(num_faces, formats.math);
@@ -192,7 +217,7 @@ void run_kernel(RUNTIME_PARAMETERS params)
     const FormatConfig& formats = params.formats;
 #endif
     const ckernel::TensorShape tensor_shape = {
-        static_cast<std::uint8_t>(FACE_R_DIM),
+        static_cast<std::uint8_t>(params.TEST_FACE_R_DIM),
         static_cast<std::uint8_t>(FACE_C_DIM),
         static_cast<std::uint8_t>(params.num_faces_r_dim_A),
         static_cast<std::uint8_t>(params.num_faces_c_dim_A)};
@@ -215,6 +240,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
     _llk_pack_reduce_mask_config_<ReduceDim::REDUCE_SCALAR>();
 
     _llk_pack_dest_init_<DST_SYNC, is_fp32_dest_acc_en>();
+
+    // Poison op (see the file header): release its DEST section without packing it.
+    _llk_packer_wait_for_math_done_();
+    _llk_pack_dest_section_done_<DST_SYNC, is_fp32_dest_acc_en>();
 
     // Single output tile: the scalar lives in DEST[0].
     _llk_packer_wait_for_math_done_();

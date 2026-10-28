@@ -207,11 +207,11 @@ private:
     // close_impl().
     std::unique_ptr<streaming_profiler::Receiver> streaming_profiler_;
 
-    // DRISC L1 arena for DRAM-sender GlobalCircularBuffer pages_sent allocations.
+    // DRISC L1 arena for DRAM-sender PrefetcherPipe sender config pages.
     // Constructed eagerly in initialize_impl() when the HAL exposes programmable
     // DRAM cores; torn down in close_impl(). Held as a shared_ptr so
     // DriscL1Allocation handles can hold a weak_ptr back and become safe no-ops
-    // if the MeshDevice closes before their owning GCBs are destroyed (mirrors
+    // if the MeshDevice closes before their owning pipes are destroyed (mirrors
     // the MeshBuffer / weak_ptr<MeshDevice> pattern).
     std::shared_ptr<::tt::tt_metal::DriscL1Arena> drisc_l1_arena_;
 
@@ -393,8 +393,8 @@ public:
     void trigger_realtime_profiler_sync_check();
     RealtimeProfilerManager* get_realtime_profiler() const;
 
-    // DRISC L1 arena. Consumed by the DRAM-sender GlobalCircularBuffer ctor for
-    // pages_sent allocations. Constructed eagerly in initialize_impl() when the
+    // DRISC L1 arena. Consumed by the DRAM-sender PrefetcherPipe factory for its
+    // sender config pages. Constructed eagerly in initialize_impl() when the
     // HAL exposes programmable DRAM cores; TT_FATAL otherwise.
     ::tt::tt_metal::DriscL1Arena& drisc_l1_arena() const;
 
