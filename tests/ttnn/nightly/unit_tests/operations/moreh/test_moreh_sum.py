@@ -394,6 +394,13 @@ def test_moreh_sum_backward(input_shape, dim, keepdim, compute_kernel_options, d
     assert passing
 
 
+@pytest.mark.parametrize("dim", [0, None])
+@pytest.mark.parametrize("keepdim", [True, False])
+def test_moreh_sum_backward_rank1(dim, keepdim, device):
+    passing = moreh_sum_backward([5], dim, keepdim, True, False, device)
+    assert passing
+
+
 @pytest.mark.parametrize(
     "input_shape",
     (([3, 2, TILE_HEIGHT * 10 - 1, TILE_WIDTH * 10 - 1]),),
