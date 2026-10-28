@@ -203,11 +203,34 @@ class TtModelHead(LightweightModule):
         return out
 
     def last_token_logits(self, streams: ttnn.Tensor, seq_len: int) -> ttnn.Tensor:
-        """Prefill: logits ``[1, 1, 1, vocab]`` of the last valid token (row ``seq_len - 1``) only."""
-        assert 1 <= seq_len <= streams.shape[-2], (seq_len, streams.shape)
-        row = ttnn.slice(streams, [0, 0, seq_len - 1, 0], [1, 1, seq_len, self.n * self.hidden])
-        out = self.forward(row)
-        ttnn.deallocate(row)
+        """Prefill: logits ``[1, 1, 1, vocab]`` of the last valid token (row ``seq_len - 1``) only. Shape-static
+        like ``tile_logits``: the collapse and the final norm run on every row, the tensor-argument ``ttnn.slice``
+        cuts the 32-row tile holding the row (the program keys on ``T``, the offset is a runtime tensor), an
+        exact one-hot matmul moves the row to the tile's row 0, the decode-shaped LM head runs on the tile and
+        its row 0 is returned. No program depends on ``seq_len``: the former host-int slice of row ``seq_len - 1``
+        was one program per prompt length, built at request time under live traces (the 2026-10-28 served
+        seal hit)."""
+        T = int(streams.shape[-2])
+        assert 1 <= seq_len <= T, (seq_len, streams.shape)
+        t0, r = ((seq_len - 1) // TILE) * TILE, (seq_len - 1) % TILE
+        h = self.collapse(streams)
+        hn = self.norm(h)
+        if h is not streams:
+            ttnn.deallocate(h)
+        rm = lambda v: ttnn.from_torch(
+            torch.tensor(v, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
+        )
+        start, end = rm([0, 0, t0, 0]), rm([1, 1, t0 + TILE, int(hn.shape[-1])])
+        tile = ttnn.slice(input_tensor=hn, starts=start, ends=end, slice_dim=2, num_devices=T // TILE)
+        ttnn.deallocate(hn)
+        onehot = torch.zeros(1, 1, TILE, TILE)
+        onehot[0, 0, 0, r] = 1.0
+        sel = ttnn.from_torch(onehot, dtype=tile.dtype, layout=ttnn.TILE_LAYOUT, device=self.device)
+        picked = ttnn.matmul(sel, tile, dtype=tile.dtype, compute_kernel_config=self.hifi4)  # row 0 = row r
+        logits = self.logits(picked)  # [1, 1, 32, vocab]
+        out = ttnn.slice(logits, [0, 0, 0, 0], [1, 1, 1, int(logits.shape[-1])])
+        for t in (start, end, tile, sel, picked, logits):
+            ttnn.deallocate(t)
         return out
 
     def tile_logits(self, streams: ttnn.Tensor, tile_start: ttnn.Tensor, tile_end: ttnn.Tensor) -> ttnn.Tensor:
