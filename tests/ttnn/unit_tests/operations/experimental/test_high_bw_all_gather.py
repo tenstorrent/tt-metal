@@ -1571,6 +1571,17 @@ def _sparse_mla_overlap_grids(mesh_device):
     return topk_grid, gather_grid
 
 
+def _stage_mesh(mesh_device):
+    """A (2, 4) sub-mesh: MiniMax-M3's pipeline stage (sp = 2 rows x tp = 4 cols), the mesh a TP-deduped index_k
+    cache is rebuilt over with one full-mesh gather."""
+    shape = tuple(mesh_device.shape)
+    if shape == (2, 4):
+        return mesh_device
+    if shape[0] >= 2 and shape[1] >= 4:
+        return mesh_device.create_submesh(ttnn.MeshShape(2, 4))
+    pytest.skip(f"a (2, 4) stage needs at least a 2x4 mesh, got {shape}")
+
+
 def _msa_overlap_grids(mesh_device):
     """The MiniMax-M3 packed-prefill carve: the bottom two rows gather, the rows above compute. Mirrors
     models/demos/minimax_m3/tt/ccl.py (MSA_GATHER_ROWS, msa_gather_strip_cores) without importing the model package:
@@ -2318,7 +2329,14 @@ def test_high_bw_all_gather_cached_link_discovery(mesh_device, num_links, expect
 
 @run_for_blackhole("sub-device gather/compute overlap requires Blackhole fabric")
 @pytest.mark.parametrize("device_params", [_FABRIC_2D_LINE_DEVICE_PARAMS], indirect=True)
-def test_high_bw_all_gather_chunk_pipeline_matches_serial(mesh_device):
+@pytest.mark.parametrize(
+    "route, mesh_device",
+    # sp_line keeps the fixture's default (the system mesh); the (2, 4) stage is carved from the galaxy opened
+    # whole, since a (2, 4) island opened on its own does not bring its fabric up
+    [pytest.param("sp_line", None, id="sp_line"), pytest.param("full_mesh", (8, 4), id="full_mesh")],
+    indirect=["mesh_device"],
+)
+def test_high_bw_all_gather_chunk_pipeline_matches_serial(mesh_device, route):
     """Gather slot i+1 on the gather sub-device while a top-k on the other sub-device consumes gather i, the two
     joined by a device-side event before each top-k: the MiniMax-M3 packed-prefill MSA schedule (G(0); for i:
     join; C(i); G(i+1)) over two output buffers that alternate by parity, on M3's two-row gather strip. Every
@@ -2326,14 +2344,21 @@ def test_high_bw_all_gather_chunk_pipeline_matches_serial(mesh_device):
     that overwrote the buffer a top-k was still reading, would rank stale rows; the pipeline must equal the
     serial schedule and the host. Sized so both ops outlast the eager dispatch latency (~1 ms): with
     tens-of-microsecond ops every program would complete before the next one is dispatched and a missing join
-    could not show."""
-    rank_line, cluster_axis = _rank_line_mesh(mesh_device)
-    topk_grid, gather_grid = _msa_overlap_grids(rank_line)
-    manager = rank_line.create_sub_device_manager([ttnn.SubDevice([topk_grid]), ttnn.SubDevice([gather_grid])], 0)
-    ready_semaphore, data_valid_semaphore = _make_l1_small_semaphore_pair(rank_line, gather_grid)
-    ttnn.synchronize_device(rank_line)
+    could not show.
 
-    axis_size = rank_line.shape[cluster_axis]
+    ``sp_line`` is the K/V gather along the SP axis; ``full_mesh`` is the TP-deduped index_k rebuild: one
+    snake over every chip of a (2, 4) stage (``cluster_axis=None``), whose row-major order is the sp*tp
+    linearization the indexer decodes."""
+    if route == "sp_line":
+        mesh, cluster_axis = _rank_line_mesh(mesh_device)
+    else:
+        mesh, cluster_axis = _stage_mesh(mesh_device), None
+    topk_grid, gather_grid = _msa_overlap_grids(mesh)
+    manager = mesh.create_sub_device_manager([ttnn.SubDevice([topk_grid]), ttnn.SubDevice([gather_grid])], 0)
+    ready_semaphore, data_valid_semaphore = _make_l1_small_semaphore_pair(mesh, gather_grid)
+    ttnn.synchronize_device(mesh)
+
+    axis_size = mesh.get_num_devices() if cluster_axis is None else mesh.shape[cluster_axis]
     # 8192 rows per rank: the gather lands 64-128 MiB per rank and the top-k ranks 32K-64K rows x 1K on a 4- or
     # 8-rank line, both well past the dispatch latency.
     slots, local_rows, width, k = 3, 8192, 1024, 48
@@ -2354,21 +2379,23 @@ def test_high_bw_all_gather_chunk_pipeline_matches_serial(mesh_device):
             .view(torch.bfloat16)
         )
     cache = _make_tensor(
-        rank_line,
+        mesh,
         host,
         ttnn.bfloat16,
         ttnn.ROW_MAJOR_LAYOUT,
-        ttnn.ShardTensor2dMesh(
-            rank_line, dims=(2, None) if cluster_axis == 0 else (None, 2), mesh_shape=tuple(rank_line.shape)
+        ttnn.ShardTensorToMesh(mesh, dim=2)
+        if cluster_axis is None
+        else ttnn.ShardTensor2dMesh(
+            mesh, dims=(2, None) if cluster_axis == 0 else (None, 2), mesh_shape=tuple(mesh.shape)
         ),
     )
     outputs = [
         _make_tensor(
-            rank_line,
+            mesh,
             torch.zeros((1, 1, rows, width), dtype=torch.bfloat16),
             ttnn.bfloat16,
             ttnn.ROW_MAJOR_LAYOUT,
-            ttnn.ReplicateTensorToMesh(rank_line),
+            ttnn.ReplicateTensorToMesh(mesh),
         )
         for _ in range(2)
     ]
@@ -2400,15 +2427,15 @@ def test_high_bw_all_gather_chunk_pipeline_matches_serial(mesh_device):
                 assert torch.equal(actual, expected[slot]), f"{label}: slot {slot} top-k differs on rank {rank}"
 
     try:
-        rank_line.load_sub_device_manager(manager)
+        mesh.load_sub_device_manager(manager)
         try:
             # Serial: each gather fully landed (host sync) before its top-k; the reference for the pipeline.
             serial = []
             for slot in range(slots):
                 gather(slot)
-                ttnn.synchronize_device(rank_line)
+                ttnn.synchronize_device(mesh)
                 serial.append(topk(slot))
-            ttnn.synchronize_device(rank_line)
+            ttnn.synchronize_device(mesh)
             check(serial, "serial")
 
             # Pipelined: the event over both sub-devices stalls the queue until gather i and top-k i-1 are done, so
@@ -2416,14 +2443,14 @@ def test_high_bw_all_gather_chunk_pipeline_matches_serial(mesh_device):
             pipelined = []
             gather(0)
             for slot in range(slots):
-                ttnn.record_event(rank_line, sub_device_ids=[ttnn.SubDeviceId(0), ttnn.SubDeviceId(1)])
+                ttnn.record_event(mesh, sub_device_ids=[ttnn.SubDeviceId(0), ttnn.SubDeviceId(1)])
                 pipelined.append(topk(slot))
                 if slot + 1 < slots:
                     gather(slot + 1)
-            ttnn.synchronize_device(rank_line)
+            ttnn.synchronize_device(mesh)
             check(pipelined, "pipelined")
         finally:
-            rank_line.clear_loaded_sub_device_manager()
+            mesh.clear_loaded_sub_device_manager()
     finally:
-        ttnn.synchronize_device(rank_line)
-        rank_line.remove_sub_device_manager(manager)
+        ttnn.synchronize_device(mesh)
+        mesh.remove_sub_device_manager(manager)
