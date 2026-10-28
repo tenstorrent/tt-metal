@@ -20,7 +20,8 @@ llama_nemotron_rerank_1b/
   tt/model.py                  NemotronReranker: embedding, 16 layers, norm, score, pooling (plain ttnn + custom ops)
   tt/model_config.py           shapes, precisions, matmul / SDPA block tables (every knob documented with its measurement)
   tt/weights.py                checkpoint -> device tensors (Q/K row permutation for RoPE, attention scale folded into Wq)
-  tt/runner.py                 TracedReranker: one trace per (batch {1,8,32}) x (length bucket), batching by bucket
+  tt/runner.py                 TracedReranker: two traces (padded / unpadded batch) per (batch {1,8,32}) x (length
+                               bucket), batching by bucket
   tt/custom_ops/               generic_op kernels: matmul_qkv_rope (QKV matmul + head split + RoPE), matmul_add_norm
                                (WO / FF2 + residual add + RMSNorm on the L1-resident residual; embed_rmsnorm),
                                fused_add_rmsnorm (from pplx_embed_4b, < 4096 rows), fused_heads_rope (previous path)
@@ -31,7 +32,7 @@ llama_nemotron_rerank_1b/
   demo/eval_miracl.py          device scores vs HF fp32 on MIRACL-en (nDCG@10, score error, Pearson)
   demo/bench.py                traced latency per (batch x length)
   perf_tools/                  matmul / SDPA sweeps, probes, cycle-level SoL report
-  tests/pcc/                   fused_heads_rope, one decoder layer, end-to-end scores
+  tests/pcc/                   fused_heads_rope, one decoder layer, end-to-end scores (padded and unpadded batches)
 ```
 
 ## Run
@@ -41,7 +42,7 @@ source python_env/bin/activate
 export TT_METAL_HOME=$PWD PYTHONPATH=$PWD
 M=models/demos/blackhole/llama_nemotron_rerank_1b
 
-pytest -q $M/tests/pcc                                         # 7 tests
+pytest -q $M/tests/pcc                                         # 8 tests
 python $M/demo/bench.py --shapes 1x512 8x512 32x512 1x8192     # traced latency
 python $M/demo/eval_miracl.py --eval-set miracl_eval.pt --batch 8
 python $M/demo/serve.py --port 8000                            # server (one P150: --dp 1)
