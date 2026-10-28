@@ -1,0 +1,26 @@
+{
+  "ref": "mvasiljevic/qwen38-gpqa-completion-20261027",
+  "inputs": {
+    "model": "Qwen3.8-27B",
+    "runner-label": "bh-qb-ge",
+    "device-type": "p300x2",
+    "workflow": "agentic",
+    "tt-metal-git-ref": "126fde8d56bcb53853858f673a0199a5d585acc4",
+    "inference-server-git-ref": "2ce8200bf5f943b4b3404d3f807f1a1bd041c49f",
+    "vllm-git-ref": "1badbd02bb6911dfdb59c206bdc00c6c1e8dc0bf",
+    "impl-of-model": "default",
+    "run-full-evals": false,
+    "run-ai-summary": false,
+    "create-issue-comment": false,
+    "docker-image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:0611f1029baae3c347440a84f511ec8d156b1d3cb953e0471324910e8b17388d"
+  },
+  "run_id": 40694868501,
+  "status": "completed_success",
+  "expected_evaluation_hours": [
+    2,
+    4
+  ],
+  "control_path": "/home/mvasiljev/agentic-research-data/experiment-26/goal12-publish/tis-swe-b32-p2048-c32/reference_config/evals/qwen38_goal12.json",
+  "notes": "OneB32server/C32 perarm;32predeclaredfirstSWE100identities8Astropy24Django; no representative full100/500accuracyclaim; onlyphase+3flags differ",
+  "result": "paired32-result.json"
+}

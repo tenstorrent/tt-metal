@@ -1,0 +1,115 @@
+Qwen3.8 SWE integration and one-machine B32 / client C32 comparison
+2026-10-28 UTC
+
+Outcome
+The combined implementation is locally exact for the fresh B32 correctness fixture,
+and its physical-512 / shared-2048 serving geometry passed an actual CI smoke.
+The paired SWE32 measurement does not establish a wall-time or accuracy improvement.
+Its task trajectories are heavily censored by the unchanged agent/request budgets.
+
+                          Combined flags ON       Control flags OFF
+CI run                    40694868501              40694874230
+Verifier rewards          17/32                    18/32
+Normal Submitted          16/32                    10/32
+Rewards among normal      12                       10
+AgentTimeoutError          15                       22
+Rewards among timeout     5                        8
+Setup failures            1                        0
+Eval hours                1.808663                 1.800334
+Allocated runner hours    2.071944                 2.069722
+Complete HTTP output      268126                   248670
+Saved output              268126                   248457
+Server generated output   315191                   274610
+HTTP ends missing usage   17                       22
+Output caps / preemptions  0 / 0                    0 / 0
+
+Rewards include verification of patches left by timed-out agents. The combined
+setup failure remains in the denominator. Workflow success is not normal task
+completion. Neither run was stopped early. Both workers were released at 15:20.
+
+Provenance and matching
+Metal runtime 126fde8d56bcb53853858f673a0199a5d585acc4, derived from SWE candidate
+6faa07fb5320284381ca1a9ab4651489366d7436, changes B32 physical prefill ceiling from
+1024 to 512 after measured warmup OOM. Logical native context remains 262144.
+Image sha256:0611f1029baae3c347440a84f511ec8d156b1d3cb953e0471324910e8b17388d.
+Combined TIS 2ce8200bf5f943b4b3404d3f807f1a1bd041c49f.
+Control TIS eefa0ec96d954380ee42bc271b21a642125d1cd5.
+Qualified wrapper 5f042c58e3a5f0d017a946c765eeebf8592a22c5;
+Shield d85068dbddf5076a994efbc9eb9c034c369b1fac.
+
+Both use all 64 layers, B32, client C32, shared block 2048, 771 scheduler blocks,
+physical prefill 512, Sampling1D, and original head_bfp8_hifi2 precision.
+HF/tokenizer revision 1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0.
+Only phase and grouped recurrence / masked recurrence / flat prefill flags differ.
+Medium reasoning, seed1234, temperature1, top_p0.95, top_k20, output16384,
+agent6300s, request3600s, suite14400s are equal.
+All32 task checksums match; initial HTTP message and prompt-token hashes match
+for all31 tasks with an initial request in both arms. The fixed cohort is the
+first32 historical SWE100 tasks: eight Astropy and24 Django, not representative
+of SWE100/500. Outputs diverge with serving trajectories; this is one paired run.
+
+Audit qualification
+Control: stable owned audit export hashes verified, isolation passes all32 tasks,
+and all32 per-trial teardown logs are clean.
+Combined: Django11239 fails before agent execution when a read-only inventory
+probe docker start --attach times out after30s. Its incomplete setup journal has
+identity unproven. Owned cleanup reports one unresolved resource, so final stable
+audit export is withheld. All32 exact trial teardown logs are clean, but these do
+not override the cleanup and isolation qualification failure. Combined HTTP/engine
+analysis uses the workflow artifact snapshot, explicitly NOT a stable final export.
+The unresolved count is an intent-only journal with network_id null, not proof
+that a concrete network leaked. It remains insufficient for stable export.
+The other31 combined tasks have linked isolated execution receipts. No remote
+cleanup or foreign resource adoption was attempted to make the audit appear clean.
+
+HTTP200 does not imply usable final token metadata. Missing-usage responses number
+17/22; two/one last approximately3600s (request timeout), the remainder occur at
+varying durations consistent with agent cancellation. Do not invent their usage.
+The server counters include generated work absent from complete returned responses.
+Control Django11820 has one completed213-token response absent from its saved
+trajectory, so saved and complete-HTTP totals are reported separately.
+
+Prefix reuse and bottleneck evidence
+Combined:611 comparable returning turns,597 preserve the full previous prompt and
+reply token prefix;5166 history tokens differ in the remaining rendered prefixes.
+Control:541 comparable,531 fully preserved;5565 history tokens differ.
+In both arms actual cached tokens equal the conservative reusable LCP block floor
+on comparable turns, with zero loss below it. The bound accounts for the final
+sampled token possibly not being committed to KV. This is not evidence that every
+rendered history is token-exact. Sampled maximum KV fraction is33.77%/38.96%;
+preemptions are zero. Snapshot sampling is not continuous peak measurement.
+
+Prefill useful-row histogram is2336 single-row +4 two-row chunks combined, and
+2127 single-row +4 two-row chunks control. Logical/padded tensor row-token proxies
+are3.1015%/3.1036%, NOT measured FLOPs or device utilization. Completed host prefill
+call durations sum4617.12s/4613.77s. These observations point to poorly packed
+prefill and long per-turn latency as important constraints despite local decode
+gains. They do not justify an untested batching change or a speedup extrapolation.
+
+Estimates
+Naive scaled cost of THIS biased, capped protocol is5.65 eval hours /6.47 runner
+hours per100, or28.26 /32.37 per500 for combined. Control is nearly identical.
+These are budget arithmetic, NOT forecasts of normally completing100/500 or
+reaching a desired quality. With15 and22 agent timeouts the uncensored completion
+cost is not identifiable. Do not call this a2x improvement over the old C8 estimate.
+The earlier diversified C8 control completed25/25 normally in2.58986h (16 rewards),
+an arithmetic anchor of10.36h/100 and51.80h/500. Earlier optimized C8 got18/25 with
+two timeouts in3.03713h, implying12.15h/100 and60.74h/500 under that protocol.
+These historical anchors have different tasks and geometry; a reliable new B32
+full-suite forecast remains unqualified. No SWE100/500 or release run was launched.
+
+Supporting validation and artifacts
+Actual CI p2048 smoke40691014802: one known task reward1/normal Submitted, all10
+responses accounted, isolation and stable export pass; B32/p2048/physical512,
+four stable captures, zero host logits reads or retirements. Warmed allocator
+checkpoint leaves1.58GB/device before capture; checkpoints are not continuous peaks.
+Fresh local strict B32 prompt1024/output32 fixture: exact token IDs, all512 state
+hashes including pagedKV, ragged reset and continuation state/logits. One warmed
+repeat gives13.2203 vs9.08376 tokens/s/user (1.4554x); local dev backend and4096
+fixture pool differ from actual CI. This is not a full-suite speed claim.
+
+Machine-readable result, exact manifests, paired task CSV are alongside this file.
+Full analyses and raw CI exports remain under:
+/data/mvasiljev/qwen38-swe-b32-c32-20261028/ci
+Analysis scripts/source hashes are recorded in each analysis JSON. Read-only
+Prometheus snapshots are under the adjacent live directory. Final Shield untouched.

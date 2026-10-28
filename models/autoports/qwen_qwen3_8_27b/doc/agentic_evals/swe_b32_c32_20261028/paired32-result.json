@@ -1,0 +1,1851 @@
+{
+  "schema_version": 1,
+  "phase": "paired32 completed, heavily deadline censored",
+  "selection": "Frozen first32 historical SWE100, 8 Astropy and24 Django; not representative100/500",
+  "arms": {
+    "combined": {
+      "run_id": 40694868501,
+      "run_url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/40694868501",
+      "workflow": "success",
+      "tasks": 32,
+      "verifier_reward_count": 17.0,
+      "normal_submissions": 16,
+      "normal_submission_rewards": 12.0,
+      "exception_counts": {
+        "none": 16,
+        "AgentTimeoutError": 15,
+        "TimeoutExpired": 1
+      },
+      "timeout_rewards": 5.0,
+      "eval_hours": 1.808662697234993,
+      "runner_hours": 2.0719444444444446,
+      "http": {
+        "started": 661,
+        "finished": 661,
+        "completed_with_usage": 644,
+        "finished_missing_usage": 17,
+        "unfinished": 0,
+        "unmatched_ends": 0,
+        "sessionless_starts": 0,
+        "seed_counts": {
+          "1234": 661
+        },
+        "status_counts": {
+          "200": 661
+        },
+        "completion_tokens": 268126,
+        "prompt_tokens": 7898655,
+        "cached_tokens": 6901760,
+        "missing_cached_usage": 0,
+        "missing_reasons": {
+          "non-JSON or invalid response token metadata": 17
+        }
+      },
+      "saved_completion_tokens": 268126,
+      "last_identity_verified_metrics_at": "2026-10-28T15:19:26.130821+00:00",
+      "server_generated_tokens": 315191.0,
+      "server_success_stop_count": 644.0,
+      "sampled_max_kv_fraction": 0.33766233766233766,
+      "preemptions": 0.0,
+      "prefix": {
+        "comparable_turns": 611,
+        "full_prefix_preserved_turns": 597,
+        "lost_history_tokens": 5166,
+        "expected_quantized_cache_tokens": 6903808,
+        "conservative_reusable_cache_tokens": 6901760,
+        "actual_cache_tokens_on_comparable_turns": 6901760,
+        "unexplained_loss_beyond_quantization": 0
+      },
+      "prefill": {
+        "chunks": 2340,
+        "useful_rows_per_chunk_histogram": {
+          "1": 2336,
+          "2": 4
+        },
+        "logical_row_token_units": 1025134,
+        "padded_tensor_row_token_units": 33052672,
+        "logical_over_padded_tensor_ratio": 0.031015162707571722,
+        "scope": "Physical512 buckets and fixedresidentB32 tensor shape proxy; not measured FLOPs or device utilization. Single-token bucket treated separately."
+      },
+      "prefill_completed_host_duration_sum_s": 4617.120689078234,
+      "runtime": {
+        "prepared_count": 1,
+        "batch": 32,
+        "throw_exception_on_fallback": true,
+        "normal_shutdown_events": 0,
+        "physical_prefill_chunk_size": 512,
+        "allocation": {
+          "scheduler_blocks": 771,
+          "scheduler_block_size": 2048,
+          "physical_cache_budget_bytes_per_device": 23661297664,
+          "group_count": 4,
+          "recurrent_snapshot_bytes_per_device": 9890906112,
+          "recurrent_unique_snapshot_pools": 16,
+          "shared_recurrent_snapshots": true,
+          "attention_bytes_per_device": 13743685632,
+          "active_recurrent_bytes_per_device": 1231552512,
+          "allocated_bytes_per_device": 31385941504,
+          "free_bytes_per_device": 2658571776,
+          "basis": "Physical selected BFP8 attention, FP32 recurrence, BF16 convolution; allocator checkpoint, not peak",
+          "selected_layers": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            50,
+            51,
+            52,
+            53,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60,
+            61,
+            62,
+            63
+          ],
+          "precision_config": {
+            "schema_version": 1,
+            "config_id": "head_bfp8_hifi2",
+            "weight_groups": {
+              "attention": "bfloat4_b",
+              "mlp": "bfloat4_b",
+              "down": "bfloat4_b",
+              "embedding": "bfloat16",
+              "head": "bfloat8_b",
+              "norm": "bfloat16"
+            },
+            "layer_exceptions": {},
+            "compute_fidelities": {
+              "projection": "LoFi",
+              "fused_prefill": "LoFi",
+              "fused_decode": "LoFi",
+              "sdpa": "LoFi",
+              "head": "HiFi2",
+              "norm": "HiFi4"
+            },
+            "activation_dtype": {
+              "prefill_column": "bfloat8_b",
+              "ordinary_attention": "bfloat16",
+              "ordinary_mlp": "bfloat16",
+              "fused_row": "bfloat16"
+            },
+            "residual_dtype": "bfloat16",
+            "ccl_dtype": {
+              "decode_b1": "bfloat8_b",
+              "prefill": "bfloat8_b",
+              "native_batched": "bfloat16"
+            },
+            "kv_cache_dtype": "bfloat8_b",
+            "logits_sampling": {
+              "logits": "bfloat16",
+              "sampling": "bfloat16",
+              "token_ids": "uint32"
+            },
+            "recurrent_state_dtype": "float32",
+            "max_context": 262144
+          }
+        },
+        "preparation_memory": {
+          "basis": "DRAM allocator checkpoints, not a peak measurement",
+          "before": {
+            "allocated_bytes_per_device": 31386007040,
+            "free_bytes_per_device": 2658506240
+          },
+          "scratch_specs": [
+            {
+              "field": "conv",
+              "shape": [
+                32,
+                3,
+                2560
+              ],
+              "padded_shape": [
+                32,
+                3,
+                2560
+              ],
+              "dtype": "DataType.BFLOAT16",
+              "layout": "Layout.ROW_MAJOR"
+            },
+            {
+              "field": "recurrent",
+              "shape": [
+                32,
+                12,
+                128,
+                128
+              ],
+              "padded_shape": [
+                32,
+                12,
+                128,
+                128
+              ],
+              "dtype": "DataType.FLOAT32",
+              "layout": "Layout.TILE"
+            },
+            {
+              "field": "key",
+              "shape": [
+                49344,
+                1,
+                32,
+                256
+              ],
+              "padded_shape": [
+                49344,
+                1,
+                32,
+                256
+              ],
+              "dtype": "DataType.BFLOAT8_B",
+              "layout": "Layout.TILE"
+            },
+            {
+              "field": "value",
+              "shape": [
+                49344,
+                1,
+                32,
+                256
+              ],
+              "padded_shape": [
+                49344,
+                1,
+                32,
+                256
+              ],
+              "dtype": "DataType.BFLOAT8_B",
+              "layout": "Layout.TILE"
+            }
+          ],
+          "scratch_bound": {
+            "allocated_bytes_per_device": 32403016192,
+            "free_bytes_per_device": 1641497088
+          },
+          "warmed_before_capture": {
+            "allocated_bytes_per_device": 32462608896,
+            "free_bytes_per_device": 1581904384
+          },
+          "after": {
+            "allocated_bytes_per_device": 31445796352,
+            "free_bytes_per_device": 2598716928
+          }
+        },
+        "capture_values": [
+          4
+        ],
+        "max_retirement_count": 0,
+        "max_host_logits_reads": 0,
+        "state_pool_last": {
+          "saves": 297,
+          "restores": 573,
+          "metadata_uploads": 870
+        }
+      },
+      "runtime_spec": {
+        "impl": {
+          "impl_id": "qwen38_autoport",
+          "impl_name": "qwen38-autoport",
+          "repo_url": "https://github.com/tenstorrent/tt-metal",
+          "code_path": "models/autoports/qwen_qwen3_8_27b"
+        },
+        "hf_model_repo": "Qwen/Qwen3.8-27B",
+        "device_type": "P300X2",
+        "docker_image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:0611f1029baae3c347440a84f511ec8d156b1d3cb953e0471324910e8b17388d",
+        "tt_metal_commit": null,
+        "vllm_commit": null,
+        "device": {
+          "max_concurrency": 32,
+          "max_context": 262144
+        },
+        "vllm_args": {
+          "max_num_seqs": 32,
+          "max_model_len": "262144",
+          "max_num_batched_tokens": 131072,
+          "long_prefill_token_threshold": 4096,
+          "block_size": 2048,
+          "mamba_block_size": 2048,
+          "prefix_cache_retention_interval": 2048,
+          "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+          "tokenizer_revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+          "enable_prefix_caching": true
+        },
+        "policy_env": {
+          "QWEN38_SERVING_EVENT_TABLES": "0",
+          "QWEN38_CACHE_BLOCK_SIZE": "2048",
+          "QWEN38_GROUPED_RECURRENCE": "1",
+          "QWEN38_MASKED_RECURRENCE": "1",
+          "QWEN38_FLAT_PREFILL": "1",
+          "QWEN38_AGENT_ISOLATED_NETWORK": "1",
+          "QWEN38_SHARED_RECURRENT_SNAPSHOTS": "1",
+          "QWEN38_CACHE_BUDGET_BYTES_PER_DEVICE": "23661297664",
+          "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+          "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE": "0"
+        }
+      },
+      "isolation": {
+        "status": "fail",
+        "scope": "Collected configuration/network phase evidence; not task accuracy or a packet-level runtime connectivity test",
+        "expected_tasks": [
+          "astropy__astropy-12907",
+          "astropy__astropy-13398",
+          "astropy__astropy-13453",
+          "astropy__astropy-14096",
+          "astropy__astropy-14309",
+          "astropy__astropy-14365",
+          "astropy__astropy-14369",
+          "astropy__astropy-7166",
+          "django__django-11099",
+          "django__django-11119",
+          "django__django-11138",
+          "django__django-11179",
+          "django__django-11206",
+          "django__django-11211",
+          "django__django-11239",
+          "django__django-11299",
+          "django__django-11433",
+          "django__django-11477",
+          "django__django-11532",
+          "django__django-11728",
+          "django__django-11815",
+          "django__django-11820",
+          "django__django-11848",
+          "django__django-11880",
+          "django__django-11964",
+          "django__django-12050",
+          "django__django-13109",
+          "django__django-13315",
+          "django__django-13344",
+          "django__django-14011",
+          "django__django-14089",
+          "django__django-14122"
+        ],
+        "tasks": [
+          {
+            "task": "django__django-11477",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-13315",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11880",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11099",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11211",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11206",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-14089",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11299",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "astropy__astropy-14309",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "astropy__astropy-14096",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11532",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "astropy__astropy-14369",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11848",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11239",
+            "primary_internal": true,
+            "phase_setup_egress": [],
+            "primary_state": "removed",
+            "setup_networks": 2,
+            "supervised_execs": 0
+          },
+          {
+            "task": "astropy__astropy-14365",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-13344",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11728",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11815",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11179",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "astropy__astropy-13453",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-13109",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "astropy__astropy-7166",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-14011",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "astropy__astropy-13398",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11119",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11433",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11138",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-14122",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "astropy__astropy-12907",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11964",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-12050",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11820",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          }
+        ],
+        "errors": [
+          "django__django-11239: missing/extra phase transitions",
+          "django__django-11239: phase container identity changed/missing",
+          "django__django-11239: expected one linked setup network",
+          "django__django-11239: setup cleanup not verified",
+          "django__django-11239: setup/primary network identity not distinct",
+          "django__django-11239: supervised workload receipts missing"
+        ],
+        "inputs_sha256": {
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/swe_bench_verified_20261028T132556_harbor_config.json": "1cbf9d539ff60c990d83c3db414e7a467f0085411bf4f7661286b9bfb43b20e4",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/52d02c0a12b54b3b98b78f7806b1e554.json": "62a16b7b8bd070a9cff0184ea74923cb41e917ce203f82a2534a0d4b2f54bc60",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/2a77ba48185e45539f7ed45796df83df.json": "36dfd6907c6a66c8a21e4d352f0c0b8be1f1b697e9febbc497d7514159166517",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/20295d49485e4a5a9293b0bc618b1b2d.json": "47e99a25005911569a1f5b76c48f8b3bce819ad84781113095148ba42febef01",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/b849a024f9e74326a21e96744825442f.json": "99914190ca74e1983890a4f87f702b5c9548ab7b00dcf8ae5b90d5ccdf019cc5",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/124ecaa980174d3a8805d63381e7b5bf.json": "9583d38ef22b0d6d162445c67be863a9c59b658e0c7e08f674f6777709a5f752",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/83aa3f8dd1c24baf8a39d3876abfc3df.json": "791d4ecb9aef933af03231295247b651c566b78af7f0c0aa90dd983d7282ee81",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/82d47b9d62664f1b83b5fc4e8db2775e.json": "6d00f9480959f0c754edf28b799143428c25d8edbcc52e350c4ad5ff4c8a717d",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/e4d366d54ca3478e86c08d022fa5ea5f.json": "16a5c1f1cd38087c039ed70323470490cdd17ea8e6b94f7c1db6ff625248ec31",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/9964b28cb52e493c9fa32f3c67fdc42f.json": "3e7386015d4e34bb2f813007e067943820e3798ee8e2f3e0465d6ce0c1d6860a",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/f218e97caf1a407ab1743e007d602eeb.json": "e3aa3e21801b0c0742beed16412c0acab259865119476f957827c8b1c2917374",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/218243d8113e4c63bdc78911057b52f1.json": "32eeb1f0ce30f725f73c8e5796a0d232bf308b7cb07c93c5635e38a3ccb50a46",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/16353c0af02a4b72a055325e2532d867.json": "e4d211c9fe88df4b41cb979ebd048b124ff021d286d25e804d05f29254068def",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/1e3625fe4303405185dd2762006a4405.json": "a0d677d677fb5c12966df67fdb2fff5ab53d33b3743cffd0d4800b66e04d4614",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/3c1d5e8bcfc745648df5f0fea5ddd305.json": "54de78e2ddfb3afa2da96f482957608ba56327c6d2f04a24f8bd7786e957c42e",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/1e4c0348ad554926a691d46c184700e4.json": "4340444444a3a00eca996e8667e6cce0d1f1f0c3017796c883e40e685d4e03f9",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/d9b8fe1596034878a2164ff2769cf660.json": "1ae60c3de6ff37da2d06e53ec76a108056d983b7840c41040223418404ac7139",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/bcc2ef319693487d92e8d369f970c647.json": "14a664b601d14715255116e68731eb07823edf5c18791a7493acb243a7413ee2",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/480ec904586d4bf1a7a531a4bbad8d30.json": "edc90afac2483be7d4ecdb79e07ec5f84cc8c0d13a62b65925e10e930774fe6c",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/f94e06e248c347c19b80c1805c09ed13.json": "31bb1f1271141bdbfc75b36f0b0ced4009dd18f0ae030e2ca54f11c9e4432921",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/2c72f2345e8e46c5ae0f4eaf3bb9b2e9.json": "deb2936234baa57efb5f5d7c9fb4b548f2c5f40d41d01d617cb282f946f590f7",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/e47369e998b54700ba64b317ed025bf9.json": "413473e24e7b0f7bc3db2e082eb5b68d06cfced5611cff33a67ee63bc8e4f98b",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/a80da48e735d486a9bc29c632fb4f0c2.json": "a5b7f6cb4cddb58d3ee08b29553a278c9aa3b319759d14e59f19ec7140af0722",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/9c1ee68c436048b1bc704f0eec8baa94.json": "846b5956e3ea6ceea97dea2d672e823260d6672712119b63cca00355be382439",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/48fb3748b6dc4616bfa40c5c9e0a7f55.json": "37576a6f6ce7ef69c6878cd480b2c87793712b2cc32b571d6e2b0297f1a300dc",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/dc975a0e145f44b6b7e49e1ce2ff8d51.json": "778e44e86d1987f5f17e93b9b653424ad37ce727346620c73838c5fc69e1f614",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/34b5b81284c54a86880643142c18ae47.json": "9f540d164cc26dfeb3456e331686b16bd33987792fa1502ff2479523e7de75c8",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/ec1d867617d24ac6a95adf0f872e5293.json": "7800f03570014a220f9ff1b327895d9be3b211c61bf85ba227525683085ca1a1",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/c52fd8eb344941ef932dd27978a95989.json": "5191905561959e73b4acf5bf4a0b3fca5ab0c697a4cd0b27566d6978a98721bb",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/d3cf62d335804f09aa681f63695b3cb1.json": "522e642abea8003db9c0013b41ae48c3cae8ce87054f75645be4b6d783097909",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/a771d590adb443b395df340607124648.json": "06b824a3487958d947a9e8bb3b3f374587942ff7a7a604f651c0fc16eff9f452",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/2a38a86468e04236bd6aef27fdb43740.json": "f6b746a4a87eee63fb13e3a303e9e36ae82588e37bb35eea8f239d51ad819f4f",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/e8f5b70586134f08affbe6ea662f0f60.json": "d8f180b3882a6576f83ac20d129008d91b102b91bfcb1776eaa1f25cc3a75945",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/8a187c87fcf9448d8a6bfa88a611ab27.json": "180d74f659dfa8fb7b9275dbeb237ece18accc613ca314f8a6d4a36bbaf99e86",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/1594aebf78224469be5a5f3378125b05.json": "ceb5f8793bfc974412b58029df01879761fc1ed552fa8da3468550d331a30554",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/e8d0744aeb794f4cb04e6d19e3a74a9c.json": "d1d0c73398ebf8e4c5702f5a5a7cccac8fa8b12869aebc085da620358c206508",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/82b33e315f7e4d2083dc7ea1f2b20a42.json": "2cca1b5d60e93c0cc11dea9fc8cfee47e7ec717940b37ea633515ec60810b5a9",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/4ee8efbc157f4646a2921084f20f343a.json": "805f22d1e68bc8c809d6308157126a37381e9148da6fe9fc9284d52a5b549809",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/ada40a9d228e435d8e6c38ae30e793ed.json": "1ca7850dd3a27891edacaa488054122a27356e4de230da4c08f6860780be75a5",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/c3660ff2d63d4b1ab843c8dee2145f3e.json": "65d22fe8e2fafacb3695568ae11a3c75b4e5c8bc3fe242eb86b89bd3db434265",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/50a80020bdee46b089e6cb5fa6b537e0.json": "205b83b3cc1a02937d5863f6ffdf6c15dddda5d11f37259cc244bb02b041d80c",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/1ad5105e12d240abaa560b7d3da405c6.json": "7efb62f34d045b8e5dc79bbadd26b7d1dfbfd1d03e8d5d8bce3d3686d568baeb",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/6223410da6d045bfb2e0f7f554a83346.json": "c145d24831a3a0c78819d41492fb7f5841a6c844490212dab6e6e7f7b92a092c",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/a423e24c19544acab419913d80317fd2.json": "c77f0de884c213812b03bf311b960b1d772284f9746f68b6961e0d5a122a44e7",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/12282e03db734e40b37cf58e09122047.json": "8118eda9b0d50af242a08c1b0ec29b377e7fcc2c89f1c9c71d5493c519157f84",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/6afeeea479ba44cdb95cc827951b6f09.json": "6add63cff1388b7211d5faee929a11a911ae2159edaf35ae2437d0fe1aa68c31",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/1982c193d0a44574836941169d29f15b.json": "be3adad74cc2eca36e74af484b71f6c6d144a67cfbf69cbccc9af4a527f54a5f",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/8da46507f7674cf58178e52bef26a64e.json": "4c18e049c5e1215b2e9a53e5a15715df75b1f2dd893f1c23ef36304c5cf3c1db",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/76bdb82b11a24ceea32644bb238f0854.json": "e599a60df3de0efde01191079423775eaedbc0798723fd8ad96a1568211ce992",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/4c10cb3ca1c94b70bbafed90621b0fc5.json": "860b5033ace60ebec44c4b580eaa49e02a35d0afb487b774b91ac51bd8b478da",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/8bd0833dc4174236a48fdbfc36efa481.json": "2a0f09a6f0431bd88591820df220f22caab96c3f89015f87e6d5e4c4f3768e53",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/07793f516cea428a851b5b851384d109.json": "2971b567696a2476ae3d72e9ca71af17f91e555c1ba00ec8cb56f1424f3c2fde",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/a466938281414172a8247054da57d22f.json": "3ca706599e7682a046e48d4681aa28c84e5c34ef38258a4cc0ca12e073055209",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/9e868a1a29414a8a90b33377df6ff435.json": "80b3a55a6407f98254137f2d8a8470a646425749bec5e060732e9b567b316add",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/0f8a38403b084039bf71da60cd9d8f38.json": "b7d36b330e1c2af8db03be30fecf8e16ebcca7f88a7936097e2b5333dc7cbda1",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/280c5cab4d6c406492191585f99b94c2.json": "ee70bf47f0b8fb8656fa22de6d2919cbbf9f0ab45f5910eda313f3cb9af0c86e",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/826a8084c15d4e059223a01f988e0853.json": "980cb9778b17680587c6eb693d4d553146b6381666e412fb1c30c7d97d504d1f",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/76aa149529be4e139f588186fd46c3ec.json": "a2b6d1a6e4aa54d752cf432747440a4e6e34a25c31fc812a92fcea81d02b1a3f",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/ba457dfbf35d46e88ca121bb8e762393.json": "8d9d6226aa0a19e2d9743faea2adee257aa13974d76d23052569b102ddc1e858",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/3e2c9558a15f4661924f6ffc3ac003b7.json": "83a336faf039de5965fd2ca74d61db4866ec05f644a26bf4dc097353940f7d5a",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/4d43261e23724ad4a7aa08731d2df08b.json": "e4e9fc60581dc57a16614766df10e637c5a37fa4186d7daaf58753a25c3d18d9",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/b8cb33b3cc5f42c69072c0d173e51dca.json": "99141c8b3a585f7db383fac43c392626c55ed45412d309179232cd5fbea82d4f",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/cf5224b1fcba4040971af215383f77b8.json": "f5f21f3955e7d2bf0d9637ef0a89e69071accac0ada52c0f32c0b0d4c9966cf2",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/1b1759c724d44478840156697396fc21.json": "c1ab7c36f1042446c7a66744200d676b587e70e65b1b281bbeb220790f7aef0e",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/221378f0adce426a822b63110231f660.json": "2abb6b0d7ab6a208cedf84d2e6654d33da9be9e75d115fa00810bc5a8b04bbf6",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/9a5b720beef1442a8915b2eda46f506d.json": "35f4c5a86c656a868dee7d08d6775243cb3adc090ec73fed81f9ca27014f608c"
+        }
+      },
+      "harness": {
+        "tool_execution_observed": true,
+        "all_trials_verified": false,
+        "primary_integration_error_classes": [
+          "TimeoutExpired"
+        ],
+        "integration_error_classes": [
+          "TimeoutExpired"
+        ],
+        "secondary_cleanup_status_counts": {
+          "clean": 32
+        },
+        "secondary_cleanup_all_clean": true,
+        "harness_qualification_pass": false,
+        "secondary_cleanup_basis": "Exact per-trial logs; later workflow cleanup cannot erase trial teardown failures",
+        "session_audit_ready": false
+      },
+      "stable_export": {
+        "qualified": false,
+        "basis": "workflow artifact snapshot only; final owned export withheld",
+        "manifest_image": null,
+        "source_owner": null,
+        "all_file_hashes_verified": true,
+        "files": [
+          {
+            "archive_path": "tt_triage/qwen38-goal12-1793193436346396631.jsonl",
+            "sha256": "8ed25bd5aec4579087469b820ae8d773ae4b20fb027796cdf1df62b178157fc2",
+            "stable_two_reads": false
+          },
+          {
+            "archive_path": "tt_triage/qwen38-http-1793193436346398654.jsonl",
+            "sha256": "1259bdad0243596d3128284ed7a16f252780882cf307aa722ca993d4c3527b63",
+            "stable_two_reads": false
+          }
+        ]
+      },
+      "analysis_path": "/data/mvasiljev/qwen38-swe-b32-c32-20261028/ci/combined-analysis.json",
+      "analysis_sha256": "561f9ac1f6cbabdeeafe991ef42ba035dad93c363decebab6630b5913d2408b5",
+      "missing_usage_duration_seconds": {
+        "min": 13.69150272803381,
+        "max": 3600.0992493559606,
+        "median": 596.665559166111,
+        "within_5s_of_request3600": 2
+      }
+    },
+    "control": {
+      "run_id": 40694874230,
+      "run_url": "https://github.com/tenstorrent/tt-agentic-bringup-qb2/actions/runs/40694874230",
+      "workflow": "success",
+      "tasks": 32,
+      "verifier_reward_count": 18.0,
+      "normal_submissions": 10,
+      "normal_submission_rewards": 10.0,
+      "exception_counts": {
+        "none": 10,
+        "AgentTimeoutError": 22
+      },
+      "timeout_rewards": 8.0,
+      "eval_hours": 1.8003336209580043,
+      "runner_hours": 2.069722222222222,
+      "http": {
+        "started": 596,
+        "finished": 596,
+        "completed_with_usage": 574,
+        "finished_missing_usage": 22,
+        "unfinished": 0,
+        "unmatched_ends": 0,
+        "sessionless_starts": 0,
+        "seed_counts": {
+          "1234": 596
+        },
+        "status_counts": {
+          "200": 596
+        },
+        "completion_tokens": 248670,
+        "prompt_tokens": 6065897,
+        "cached_tokens": 5158912,
+        "missing_cached_usage": 0,
+        "missing_reasons": {
+          "non-JSON or invalid response token metadata": 22
+        }
+      },
+      "saved_completion_tokens": 248457,
+      "last_identity_verified_metrics_at": "2026-10-28T15:19:26.160566+00:00",
+      "server_generated_tokens": 274610.0,
+      "server_success_stop_count": 574.0,
+      "sampled_max_kv_fraction": 0.38961038961038963,
+      "preemptions": 0.0,
+      "prefix": {
+        "comparable_turns": 541,
+        "full_prefix_preserved_turns": 531,
+        "lost_history_tokens": 5565,
+        "expected_quantized_cache_tokens": 5160960,
+        "conservative_reusable_cache_tokens": 5158912,
+        "actual_cache_tokens_on_comparable_turns": 5158912,
+        "unexplained_loss_beyond_quantization": 0
+      },
+      "prefill": {
+        "chunks": 2131,
+        "useful_rows_per_chunk_histogram": {
+          "1": 2127,
+          "2": 4
+        },
+        "logical_row_token_units": 944286,
+        "padded_tensor_row_token_units": 30425152,
+        "logical_over_padded_tensor_ratio": 0.031036360968714306,
+        "scope": "Physical512 buckets and fixedresidentB32 tensor shape proxy; not measured FLOPs or device utilization. Single-token bucket treated separately."
+      },
+      "prefill_completed_host_duration_sum_s": 4613.771261240821,
+      "runtime": {
+        "prepared_count": 1,
+        "batch": 32,
+        "throw_exception_on_fallback": true,
+        "normal_shutdown_events": 0,
+        "physical_prefill_chunk_size": 512,
+        "allocation": {
+          "scheduler_blocks": 771,
+          "scheduler_block_size": 2048,
+          "physical_cache_budget_bytes_per_device": 23661297664,
+          "group_count": 4,
+          "recurrent_snapshot_bytes_per_device": 9890906112,
+          "recurrent_unique_snapshot_pools": 16,
+          "shared_recurrent_snapshots": true,
+          "attention_bytes_per_device": 13743685632,
+          "active_recurrent_bytes_per_device": 1231552512,
+          "allocated_bytes_per_device": 31385941504,
+          "free_bytes_per_device": 2658571776,
+          "basis": "Physical selected BFP8 attention, FP32 recurrence, BF16 convolution; allocator checkpoint, not peak",
+          "selected_layers": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29,
+            30,
+            31,
+            32,
+            33,
+            34,
+            35,
+            36,
+            37,
+            38,
+            39,
+            40,
+            41,
+            42,
+            43,
+            44,
+            45,
+            46,
+            47,
+            48,
+            49,
+            50,
+            51,
+            52,
+            53,
+            54,
+            55,
+            56,
+            57,
+            58,
+            59,
+            60,
+            61,
+            62,
+            63
+          ],
+          "precision_config": {
+            "schema_version": 1,
+            "config_id": "head_bfp8_hifi2",
+            "weight_groups": {
+              "attention": "bfloat4_b",
+              "mlp": "bfloat4_b",
+              "down": "bfloat4_b",
+              "embedding": "bfloat16",
+              "head": "bfloat8_b",
+              "norm": "bfloat16"
+            },
+            "layer_exceptions": {},
+            "compute_fidelities": {
+              "projection": "LoFi",
+              "fused_prefill": "LoFi",
+              "fused_decode": "LoFi",
+              "sdpa": "LoFi",
+              "head": "HiFi2",
+              "norm": "HiFi4"
+            },
+            "activation_dtype": {
+              "prefill_column": "bfloat8_b",
+              "ordinary_attention": "bfloat16",
+              "ordinary_mlp": "bfloat16",
+              "fused_row": "bfloat16"
+            },
+            "residual_dtype": "bfloat16",
+            "ccl_dtype": {
+              "decode_b1": "bfloat8_b",
+              "prefill": "bfloat8_b",
+              "native_batched": "bfloat16"
+            },
+            "kv_cache_dtype": "bfloat8_b",
+            "logits_sampling": {
+              "logits": "bfloat16",
+              "sampling": "bfloat16",
+              "token_ids": "uint32"
+            },
+            "recurrent_state_dtype": "float32",
+            "max_context": 262144
+          }
+        },
+        "preparation_memory": {
+          "basis": "DRAM allocator checkpoints, not a peak measurement",
+          "before": {
+            "allocated_bytes_per_device": 31386007040,
+            "free_bytes_per_device": 2658506240
+          },
+          "scratch_specs": [
+            {
+              "field": "conv",
+              "shape": [
+                32,
+                3,
+                2560
+              ],
+              "padded_shape": [
+                32,
+                3,
+                2560
+              ],
+              "dtype": "DataType.BFLOAT16",
+              "layout": "Layout.ROW_MAJOR"
+            },
+            {
+              "field": "recurrent",
+              "shape": [
+                32,
+                12,
+                128,
+                128
+              ],
+              "padded_shape": [
+                32,
+                12,
+                128,
+                128
+              ],
+              "dtype": "DataType.FLOAT32",
+              "layout": "Layout.TILE"
+            },
+            {
+              "field": "key",
+              "shape": [
+                49344,
+                1,
+                32,
+                256
+              ],
+              "padded_shape": [
+                49344,
+                1,
+                32,
+                256
+              ],
+              "dtype": "DataType.BFLOAT8_B",
+              "layout": "Layout.TILE"
+            },
+            {
+              "field": "value",
+              "shape": [
+                49344,
+                1,
+                32,
+                256
+              ],
+              "padded_shape": [
+                49344,
+                1,
+                32,
+                256
+              ],
+              "dtype": "DataType.BFLOAT8_B",
+              "layout": "Layout.TILE"
+            }
+          ],
+          "scratch_bound": {
+            "allocated_bytes_per_device": 32403016192,
+            "free_bytes_per_device": 1641497088
+          },
+          "warmed_before_capture": {
+            "allocated_bytes_per_device": 32462305792,
+            "free_bytes_per_device": 1582207488
+          },
+          "after": {
+            "allocated_bytes_per_device": 31445493248,
+            "free_bytes_per_device": 2599020032
+          }
+        },
+        "capture_values": [
+          4
+        ],
+        "max_retirement_count": 0,
+        "max_host_logits_reads": 0,
+        "state_pool_last": {
+          "saves": 275,
+          "restores": 501,
+          "metadata_uploads": 776
+        }
+      },
+      "runtime_spec": {
+        "impl": {
+          "impl_id": "qwen38_autoport",
+          "impl_name": "qwen38-autoport",
+          "repo_url": "https://github.com/tenstorrent/tt-metal",
+          "code_path": "models/autoports/qwen_qwen3_8_27b"
+        },
+        "hf_model_repo": "Qwen/Qwen3.8-27B",
+        "device_type": "P300X2",
+        "docker_image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:0611f1029baae3c347440a84f511ec8d156b1d3cb953e0471324910e8b17388d",
+        "tt_metal_commit": null,
+        "vllm_commit": null,
+        "device": {
+          "max_concurrency": 32,
+          "max_context": 262144
+        },
+        "vllm_args": {
+          "max_num_seqs": 32,
+          "max_model_len": "262144",
+          "max_num_batched_tokens": 131072,
+          "long_prefill_token_threshold": 4096,
+          "block_size": 2048,
+          "mamba_block_size": 2048,
+          "prefix_cache_retention_interval": 2048,
+          "revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+          "tokenizer_revision": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+          "enable_prefix_caching": true
+        },
+        "policy_env": {
+          "QWEN38_SERVING_EVENT_TABLES": "0",
+          "QWEN38_CACHE_BLOCK_SIZE": "2048",
+          "QWEN38_GROUPED_RECURRENCE": "0",
+          "QWEN38_MASKED_RECURRENCE": "0",
+          "QWEN38_FLAT_PREFILL": "0",
+          "QWEN38_AGENT_ISOLATED_NETWORK": "1",
+          "QWEN38_SHARED_RECURRENT_SNAPSHOTS": "1",
+          "QWEN38_CACHE_BUDGET_BYTES_PER_DEVICE": "23661297664",
+          "TT_METAL_TRACE_ALLOC_TRACKING": "0",
+          "TT_METAL_TRACE_ALLOC_SKIP_PROGRAM_CACHE": "0"
+        }
+      },
+      "isolation": {
+        "status": "pass",
+        "scope": "Collected configuration/network phase evidence; not task accuracy or a packet-level runtime connectivity test",
+        "expected_tasks": [
+          "astropy__astropy-12907",
+          "astropy__astropy-13398",
+          "astropy__astropy-13453",
+          "astropy__astropy-14096",
+          "astropy__astropy-14309",
+          "astropy__astropy-14365",
+          "astropy__astropy-14369",
+          "astropy__astropy-7166",
+          "django__django-11099",
+          "django__django-11119",
+          "django__django-11138",
+          "django__django-11179",
+          "django__django-11206",
+          "django__django-11211",
+          "django__django-11239",
+          "django__django-11299",
+          "django__django-11433",
+          "django__django-11477",
+          "django__django-11532",
+          "django__django-11728",
+          "django__django-11815",
+          "django__django-11820",
+          "django__django-11848",
+          "django__django-11880",
+          "django__django-11964",
+          "django__django-12050",
+          "django__django-13109",
+          "django__django-13315",
+          "django__django-13344",
+          "django__django-14011",
+          "django__django-14089",
+          "django__django-14122"
+        ],
+        "tasks": [
+          {
+            "task": "django__django-13344",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11728",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "astropy__astropy-13398",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11964",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11532",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11138",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11211",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11433",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11299",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11477",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-14122",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "astropy__astropy-14369",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11880",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11099",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "astropy__astropy-13453",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11179",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-14089",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-13315",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11815",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-13109",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-12050",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11206",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "astropy__astropy-12907",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11239",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "astropy__astropy-14096",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11848",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "astropy__astropy-7166",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "astropy__astropy-14365",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11119",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-14011",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "astropy__astropy-14309",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          },
+          {
+            "task": "django__django-11820",
+            "primary_internal": true,
+            "phase_setup_egress": [
+              true,
+              false,
+              true
+            ],
+            "primary_state": "removed",
+            "setup_networks": 1,
+            "supervised_execs": 2
+          }
+        ],
+        "errors": [],
+        "inputs_sha256": {
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/swe_bench_verified_20261028T132603_harbor_config.json": "912cf4b83e56053789d6c6a910f6d3f935b764ba7e2155fb0e55f7fc84047040",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/c6c27ed0e32b427fbc7951e3b54d4adf.json": "c665699fb0f961f6ccf6bec68e38e84e3232ff3dca81f0af417d6da075e97ca5",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/0ccacc2b03ff4129bbb12d783a94d9f5.json": "e52c063fbbae0ca04e8a693d213797418df47dd2c9899967f75ca7d245f52dce",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/99a787f53a9e4e699bb2642d627d2275.json": "21792c7d3129d8d33192728aca759a73a78f738a7a56462bfe341558b4643f53",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/5637e6d7c7494fa699b39c39c876b4e8.json": "91aa7f3d0abc349f5836a022230ddec3cab0729b9690a2ca3802ab2d630644cd",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/32c612058abe411cb94ad6bd6a7abd0c.json": "e2391a9204b6295dfe8b7c6ba37e4137155aa88aea4b3da862740d24c750df5e",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/a97dfff00286420c9d4accbc5f903f89.json": "159a7414b835da3adddcc8da98e0772a4083936142bef7bb7769c50884cba2f1",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/f9950203ed844b51b72e19035e48c525.json": "57e318120d57f37272a3eb6ac457cde79b654b6d784b50f2d0d9e642c22df413",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/1e3764fe20f64fb39c921638cf0fa04b.json": "cdbf6230aa09ff3166a10a94f22ef1d3af8cbd55d36c5ce9c41c222633074b2c",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/ac6cdb138fb44cde8e94b4bb408c8b31.json": "835f7dad5eb360b5301a6540a1d880e889ee91ba194ec71523684b73d6a4923c",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/d5390cfbaf2549f59ba31306d8c75843.json": "ce7fada898411410bb2cdcb5007473a2574a94bf55f809e57072b186d963f278",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/5883321503d54a8aa0740c8c83ca83f3.json": "8c63590ca1dffc37e1d78ba4e9b0ce4b18add66ffd864d7f0106c20765c68fc8",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/b9f986b276be47fc8276a8347e5010b1.json": "60b715a0aeb9a1e93cc8403bb6157d5dc66c9ec574df58aeadbaa78bf796ac22",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/2048ff4cedae43f2b82eed9a7a00c992.json": "b2b3dd0bb8d172232c9bc01dff622f12f07f9e124882b6dee3ad670801d49340",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/9d6008ec3a0f4a67a2d79e5bf0218af7.json": "0dc0a536dbf93e571cbd21d741b373ace6a2af5a0e760b9eeb600feade5f4ac9",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/fd5c9d2119694fa7940c99742bb9163a.json": "5a001d4d5bc83cf8b04dd6e5bb4fc1e2d720a7c9aae0c1661788eaea82ebd21b",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/18f3a34aaf6a41fba2b3775c86be292d.json": "75d4a202b1237f610190839257e04acd0acf7e25083d70c068f61bfa6bd7d307",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/cc14e0c9578b4f1397f6205ea7627e81.json": "049f79271155553d5d2fc1011889fd1e4de51074b431c7cabfbd163001bc19b1",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/a3e57559304f4047afdfcac4d72f05ae.json": "7b18a21335f8193662e7faf551433c0b3230e7c3278e88c5fc98bf04bf48c7dd",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/c3773922648c4873be7ebc333d31fd4d.json": "2052428876e21d722ef6c60d0e7b65ca07b34715d5959d8d7015d2eea673db7b",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/962ae2fe94234b7f90875def359a91f2.json": "c96d6704f01b5f8640e68144049f15e4a13f18e5f42b722397384ace243d9733",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/91567ebd842f4d8091b94af713e5d148.json": "d647aa77577e51919b2dcb3f39780a4342c381b363b3de729fe37f4a25f90e99",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/9db4648a78054c4095705343a84d62bb.json": "142723085e095b8b416446592df197e7331e1e581a24fb0de50179cc8137a8a8",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/610f7493f52b49d4b0ebe98e100c8de0.json": "3f66d0669f0334bf22c02e039f0b7f1cd21053307b4684667c4f265972d4000c",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/1d201da3beca4d03bb7c325e953d847e.json": "4a8a39e13a105e76cb630b1236da987e5eff822daa76165f5acacd310214c7ef",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/d0bc8a78ec3c40bc9842aade590b9937.json": "166a10160ede2316fd0d189cad87baa121df6cf53f28ebe9773ba0bab577f61d",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/d4aa5691aee442debfbf1d20d8ccae9f.json": "e6b882224a2df0af35a311f4df9ef80b1877ea53fa9f778ac307a398e7e29ac9",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/c8a303cc4cb04a1a91b6cdc24c965245.json": "b29b7bb641946b7c26f3f3c7b142e19a349a1d87255b7bdb0bff5829eb69057b",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/508bea05fed9486ba42bb7c1e7465169.json": "56f32cb2609ae33d61862b3b2328fc025a9726fce847a862ec1449069b4d92fb",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/cd0a5cde15ee407ea3ec166e9a85a63b.json": "6be91a715201b85f5901d941a81a5dc5c05e3a4388292c290e5064c3041db2ce",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/ddadf34d661a4889b1b2980249f571b3.json": "f419b72ede0f2c9c4888fb330627ddd8d544ec65908621291455135722d865be",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/09878b1542024b12af7d89902f536e18.json": "314ad8a3328d7f2697b2d5ad8ff2de535f36321df1a24947fc002d6b865f8292",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/f6d29455d3fa4b3cbc0717908797e292.json": "f09da53a1ee91b7bfea36cfb4fb2ef314537ab14ee0bb694d610536859394ada",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/b0c9dd1d2dcf42e8a0577820837e76f7.json": "b4e051d877107f8949be2f83b92f18fc3d294bd33fae688370810111a808421b",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/a5c34ba705de40abae9f70b4a1b51897.json": "a6ada74ee36602f7f4b6fb11c1d1fb9f55738a54b0fe60b34f9ffd3aee5ae852",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/943c697b740543e58277eb64be9bae1c.json": "ebf79ccf67491ca665d343056e48e699a7b501b042678d311438c975e8b91dc4",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/a95d9c0153264025a2cd7a46352087fe.json": "825bff85435d82a38e9e6e9cc697718c31d13ad10d1bc5725ed9d03beadfc231",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/5f039770639047e892cabfb503924029.json": "8c5cacf3c92fb91b295d5fbda250fa06cf83d7b0ec5ef72fd27ee44b39e8550d",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/2759fb1c73654e1f85ec9a77f80e960c.json": "8ed8297cbc01561fc1b682832995c2ab35cc8bc93e9d1609e7a651640add78e0",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/52554fb3d3b64eff9a70dd1a84510b93.json": "1ab5ada09d43eed4b8ce9c4072f4eac68ff2a81747aee710d6ee92cc351fd219",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/f3b0a1622616459e94cfb9d343982c2a.json": "04738d6512a03f328a46af82d7a2226dc64106a28c20583b9b32b7ae89ade4bc",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/13f4ff7cf23041239a278d4b781814dc.json": "c5d6f5815e6e8d0dcb06ef90970824783cc766cc77acd682f6036dc49868688b",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/129b47b0943849ba9d48f0dc052517a0.json": "de8406409bdd1736731566e1e63952646eaf0df3b3deb1a05454c0e0519667a2",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/682fb12f611e4889b7806e205a688fe7.json": "530bca261a7210c2e88c79696c44ba1a124d1e06a688bccd895c8cd6c38fae5b",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/bef0f782a2a4481da4b7bc4f32c2573c.json": "e1b3935e361e79cf3b86b37c5aa0b5cc6a600ad4af5b5237bc614c34f323b6c7",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/1d9accb5323444ec910eed245c264ba9.json": "242f42ed7386fd1ef9bd1f482f23ee5d081fd071c0200a512d859789db79ba78",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/a298e58064a7482d9ecf623f0696117c.json": "33773a7d77937e9b2f0009818f4e99b99bbb0c4d202073b1a4d711f847b9049d",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/f51cd9b32bdf4609be9942ebbfffeb81.json": "95de75599dedbaa5604cabed370a0170efdab679dc062f0a31e8107ac9f5ad06",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/1f83d6565e6a4dc0baa79b48212c87ca.json": "4d18edb4bf2289a5d33e2174def0c646dbf1fd8aec17785b781f8692eaa7bf14",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/c06a5886db7647ed82d981230d062ac7.json": "4c78b5d86d170364e2bc0e67c151302f18fa603b0015031a9851fc211072e7d2",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/0c064ab400204d57bba7ceef38251a01.json": "fdb2a1c6265fd8ba1a1379edfc458754ee70bb925ed29bcdbbbb5557eb8ab481",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/dd40c29a9dbc45c0a18d85a57a21d9de.json": "89d24ab79c618c5ae907fe0917188813c6f70d572aaa32028c79455e2abddde6",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/81ff853297d54a1c860cf048ba0b5c02.json": "11377ba677651e244eba3d13b8d04cae4d173212cb7bb994f4264edff331bc9e",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/3d3d9db83dd444c7918fc40f3061f915.json": "bb732ba613dc907c0a469be74d540870035c5f9334a5b4820bb631bd19b3c5de",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/088775d475ec4e1cbdfd077c0bdfcf13.json": "6257d4b951d18013c78403d27dbb73deafb39a594630250e415307e800f3c444",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/0113fd70d06d4b56b6f08f83b46fa77f.json": "0f8a8464f3ac75ffd05d346a276b92ac60682e0abdcca4c58ac2220520f74442",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/9bd7e4bc2e1e4583a8cec44f45cfeab5.json": "2463745743a6fd8f7d9ec99a9aa7d17675be3b2fc084a7ab7908a1c1cede11d6",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/46bad12429614da0927f8964531c4a1e.json": "e7e0c452a0841741949736443cb028176efc6c902b32e148f44b1001c42c7c39",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/623a6f7850ed411ca13f113fd2805eea.json": "552ceb11baf4bc0145861f05bf91ede2c15d07749ec796c9774428ae2469d68b",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/62b332741bea4e8d8215509bb4dc43bf.json": "6ce9164bd390e30d00e499e9c97703e7f2973c6988e10f837a5a73e07c25e386",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/008900fa6d6f46a387b9fce9c67578e1.json": "15e0dccbd070ca5b700b6441989c8bdb4781e408f7fc215d8b9d287d472ecacc",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/9c8c54247f4f4124b3515cf98556e97f.json": "408fe160d712d860af7caee09d79bed23281304ebeca30a683cdcb7d26a55318",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/ae9214ea1a384830a3cef1a8c604bda1.json": "66e4cd3f56acbcb26d173566b3d0f997ccebe9afa973e06e46f1589c641fd238",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/eae05c85588f4390824b7f63ce999e4d.json": "8932f90d0391ca05abdd1e48522e2b7f57fa5c9d3087d43b025c98d23c0d28cf",
+          "reports_output/agentic/Qwen__Qwen3.8-27B_p300x2_agentic/eval_Qwen__Qwen3.8-27B/agentic/owned_networks/fa9f76bf16d4480286d2f4f8ddaac5df.json": "7133b0abf8d0de9143ea346dbde2be4bc35d2511e0ceb4c5d5ed12df23649ccb"
+        }
+      },
+      "harness": {
+        "tool_execution_observed": true,
+        "all_trials_verified": true,
+        "primary_integration_error_classes": [],
+        "integration_error_classes": [],
+        "secondary_cleanup_status_counts": {
+          "clean": 32
+        },
+        "secondary_cleanup_all_clean": true,
+        "harness_qualification_pass": true,
+        "secondary_cleanup_basis": "Exact per-trial logs; later workflow cleanup cannot erase trial teardown failures",
+        "session_audit_ready": true
+      },
+      "stable_export": {
+        "qualified": true,
+        "basis": "owned stable export",
+        "manifest_image": "ghcr.io/tenstorrent/tt-agentic-bringup-qb2/vllm-tt-metal-src-dev-ubuntu-22.04-amd64@sha256:0611f1029baae3c347440a84f511ec8d156b1d3cb953e0471324910e8b17388d",
+        "source_owner": "goal12-40694874230-1-0",
+        "all_file_hashes_verified": true,
+        "files": [
+          {
+            "source_path": "/home/container_app_user/cache_root/logs/qwen38-http-1793193458753492060.jsonl",
+            "archive_path": "tt_triage/qwen38-http-1793193458753492060.jsonl",
+            "bytes": 1057760,
+            "sha256": "fcd82ea05707887aac2e10b9b8fba426baef0dba12387205663e267e8ed58fbb",
+            "mtime_ns_before": 1793200708497377678,
+            "mtime_ns_after": 1793200708497377678,
+            "stable_two_reads": true
+          },
+          {
+            "source_path": "/home/container_app_user/cache_root/logs/qwen38-goal12-1793193458753490798.jsonl",
+            "archive_path": "tt_triage/qwen38-goal12-1793193458753490798.jsonl",
+            "bytes": 11024679,
+            "sha256": "49e74e96c9c2461bd012ac0f46515a3e2254e23c14560f3366bab86743db8d68",
+            "mtime_ns_before": 1793200708971792752,
+            "mtime_ns_after": 1793200708971792752,
+            "stable_two_reads": true
+          }
+        ]
+      },
+      "analysis_path": "/data/mvasiljev/qwen38-swe-b32-c32-20261028/ci/control-analysis.json",
+      "analysis_sha256": "f8bc432b5ea1c7395ee253c071cf958243e2d69478cd1444dc6f43e8e3da0e9e",
+      "missing_usage_duration_seconds": {
+        "min": 14.048674498219043,
+        "max": 3600.0106737851165,
+        "median": 180.57667876547202,
+        "within_5s_of_request3600": 1
+      }
+    }
+  },
+  "matched": {
+    "exact_task_checksums": 32,
+    "exact_initial_message_and_token_hashes": 31,
+    "initial_hash_missing_due_setup_failure": [
+      "django__django-11239"
+    ],
+    "same_precision_and_cache_geometry": true,
+    "recipe_differences": [
+      "phase",
+      "QWEN38_GROUPED_RECURRENCE",
+      "QWEN38_MASKED_RECURRENCE",
+      "QWEN38_FLAT_PREFILL"
+    ],
+    "reward_gain_tasks": [
+      "django__django-11206",
+      "django__django-11211",
+      "django__django-11728",
+      "django__django-11964",
+      "django__django-14122"
+    ],
+    "reward_loss_tasks": [
+      "astropy__astropy-14096",
+      "astropy__astropy-14365",
+      "astropy__astropy-7166",
+      "django__django-11239",
+      "django__django-11532",
+      "django__django-11848"
+    ]
+  },
+  "estimates": {
+    "combined_fixed_budget_arithmetic_only": {
+      "100_eval_hours": 5.652070928859353,
+      "500_eval_hours": 28.26035464429677,
+      "100_runner_hours": 6.474826388888889,
+      "500_runner_hours": 32.37413194444445,
+      "qualification": "Biased deadline-censored cost arithmetic ONLY; not forecast of normally completing100/500 or target accuracy; no full suite launched"
+    },
+    "control_fixed_budget_arithmetic_only": {
+      "100_eval_hours": 5.626042565493764,
+      "500_eval_hours": 28.130212827468817,
+      "100_runner_hours": 6.467881944444444,
+      "500_runner_hours": 32.33940972222222,
+      "qualification": "Biased deadline-censored cost arithmetic ONLY; not forecast of normally completing100/500 or target accuracy; no full suite launched"
+    }
+  },
+  "limits": [
+    "Combined final stable export withheld: owned cleanup unresolved_resources1/journal_identity_unproven for setup-failed Django11239. Workflow snapshot only; no stable hash qualification claimed.",
+    "Combined setup probe docker start --attach timed out after30s before agent execution;31 started tasks.",
+    "Agent6300s/output16384/request3600/suite14400 retained. Deadlines strongly censor botharms. Reward1 can occur for timed-out patch.",
+    "HTTP200 missing token metadata17combined/22control; likely deadline cancellation but do not fabricate token usage. Server generated tokens include work absent from complete responses.",
+    "Control Django11820 saved trajectory lacks one HTTP-completed213-token reply; report saved and server complete counts separately.",
+    "No measured walltime improvement; no accuracy regression conclusion from one biased, censored cohort with a setup failure.",
+    "B32 pool allocation/preemption evidence does not qualify practical uncensored C32 throughput.",
+    "Prior diversified C8 medium25 normal completed control16/25 in2.58986h implies10.36h100/51.80h500 arithmetic; earlier optimized C8 18/25 with2timeouts in3.03713h implies12.15h100/60.74h500. Neither is matched to this biased32 or a new B32/C8 result.",
+    "Do not convert local1.455x single-repeat decode gain directly into SWE suite speedup.",
+    "The cleanup unresolved count corresponds to an intent-only journal with network_id null; it is not proof a concrete network leaked. Ownership/export remains unqualified."
+  ],
+  "selection_exact": [
+    "astropy__astropy-12907",
+    "astropy__astropy-13398",
+    "astropy__astropy-13453",
+    "astropy__astropy-14096",
+    "astropy__astropy-14309",
+    "astropy__astropy-14365",
+    "astropy__astropy-14369",
+    "astropy__astropy-7166",
+    "django__django-11099",
+    "django__django-11119",
+    "django__django-11138",
+    "django__django-11179",
+    "django__django-11206",
+    "django__django-11211",
+    "django__django-11239",
+    "django__django-11299",
+    "django__django-11433",
+    "django__django-11477",
+    "django__django-11532",
+    "django__django-11728",
+    "django__django-11815",
+    "django__django-11820",
+    "django__django-11848",
+    "django__django-11880",
+    "django__django-11964",
+    "django__django-12050",
+    "django__django-13109",
+    "django__django-13315",
+    "django__django-13344",
+    "django__django-14011",
+    "django__django-14089",
+    "django__django-14122"
+  ],
+  "prior_swe25_overlap": [
+    "astropy__astropy-12907",
+    "astropy__astropy-14309",
+    "django__django-11099",
+    "django__django-11206",
+    "django__django-11433",
+    "django__django-11815",
+    "django__django-11964",
+    "django__django-13344"
+  ]
+}
