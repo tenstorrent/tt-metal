@@ -132,6 +132,8 @@ struct PackPlan
     bool relu;      // clamp negatives to 0 on the way out
     bool l1_acc;    // add into what is in L1 instead of overwriting it
     bool untilize;  // write rows instead of tiles
+    DataFormat in_format; // the packer's input format (In_data_format): the format the packer converts from
+    bool dest_fp32;       // Dest holds 32-bit datums
 };
 
 struct Plan
