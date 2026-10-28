@@ -179,7 +179,9 @@ stream (0.99944). No effect: raising the power limit (the card stays at 150 W).
   Q / K PCC), a 1D row-split score head (160 vs 149 us), bfp8 Q / K / V into SDPA (Pearson 0.99927), bfp4
   SwiGLU product, approximate SiLU, bfp8 Q into SDPA (its output takes Q's dtype: 657 -> 614 us, Pearson 0.99943),
   deeper (3- / 4-block) input buffers for FF1 + FF3 (no change), QKV with a core's whole N slice per block
-  (1206 vs 861 us), SDPA q chunk 256 (does not fit next to the resident residual).
+  (1206 vs 861 us), SDPA q chunk 256 (does not fit next to the resident residual). QKV + RoPE waits ~20 % of
+  its K loop on inputs (zones), but multicasting its weight blocks (935 us) or activations (884 us) instead of
+  relaying them is slower, and N blocks of 4 / 6 or M blocks of 10 / 20 land at 862-954 us (861 now).
 * bs1 (34 %): the matmuls at 512 rows run at 27-52 % of their limit; FF2 at LoFi is bound by its weight read.
   DRAM-sharded weights are the next step. 1 x 128 / 1 x 512 read ~0.3 ms slower than in the previous README
   (5.97 / 7.50 ms), not yet traced to a change.
