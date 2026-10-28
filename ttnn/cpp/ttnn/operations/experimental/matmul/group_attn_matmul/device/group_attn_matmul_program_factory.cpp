@@ -267,7 +267,7 @@ ttnn::device_operation::ProgramArtifacts GroupAttnMatmulProgramFactory::create_p
     // All three kernels run on every device core, as before; the flags steer the cores without work.
     // On the mcast-only cores (q_heads..31 when q_heads < 32) compute and writer return at once and
     // the reader both pushes and pops in1 to keep its write pointer in step with the mcast grid; it
-    // stays in1's producer there (the kernel-side FIFO ops do not depend on the binding's role).
+    // stays in1's producer there (the kernel-side FIFO ops do not depend on the binding's role on WH/BH).
     KernelSpec reader{
         .unique_id = READER,
         .source =
