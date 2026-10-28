@@ -19,6 +19,8 @@ void kernel_main() {
     const uint32_t T = get_arg_val<uint32_t>(4);
     const uint32_t Bt = get_arg_val<uint32_t>(5);
     const uint32_t Pt = get_arg_val<uint32_t>(6);
+    const uint32_t row_tiles = get_arg_val<uint32_t>(7);
+    const uint32_t im_off = get_arg_val<uint32_t>(8);
 
     constexpr auto x_args = TensorAccessorArgs<0>();
     constexpr uint32_t out_cb_id = tt::CBIndex::c_16;
@@ -32,10 +34,10 @@ void kernel_main() {
     for (uint32_t t = 0; t < T; ++t) {
         for (uint32_t u = 0; u < num_units; ++u) {
             const uint32_t unit = first_unit + u;
-            const uint32_t page = (t * Bt + unit / Pt) * Pt + unit % Pt;
+            const uint32_t page = (t * Bt + unit / Pt) * row_tiles + unit % Pt;
             cb_out.wait_front(2);
             noc.async_write(cb_out, x_re, bytes, {.offset_bytes = 0}, {.page_id = page});
-            noc.async_write(cb_out, x_im, bytes, {.offset_bytes = bytes}, {.page_id = page});
+            noc.async_write(cb_out, x_im, bytes, {.offset_bytes = bytes}, {.page_id = page + im_off});
             noc.async_writes_flushed();
             cb_out.pop_front(2);
         }

@@ -22,6 +22,8 @@ void kernel_main() {
     const uint32_t T = get_arg_val<uint32_t>(6);
     const uint32_t Bt = get_arg_val<uint32_t>(7);
     const uint32_t Pt = get_arg_val<uint32_t>(8);
+    const uint32_t row_tiles = get_arg_val<uint32_t>(9);  // tiles per (t, bt) row: Pt split, 2 Pt fused [re | im]
+    const uint32_t im_off = get_arg_val<uint32_t>(10);    // 0 split (separate tensors), Pt fused
 
     constexpr auto bu_args = TensorAccessorArgs<0>();
     constexpr auto l_args = TensorAccessorArgs<bu_args.next_compile_time_args_offset()>();
@@ -48,10 +50,10 @@ void kernel_main() {
     for (uint32_t t = 0; t < T; ++t) {
         for (uint32_t u = 0; u < num_units; ++u) {
             const uint32_t unit = first_unit + u;
-            const uint32_t page = (t * Bt + unit / Pt) * Pt + unit % Pt;
+            const uint32_t page = (t * Bt + unit / Pt) * row_tiles + unit % Pt;
             cb_in.reserve_back(2);
             noc.async_read(bu_re, cb_in, bytes, {.page_id = page}, {.offset_bytes = 0});
-            noc.async_read(bu_im, cb_in, bytes, {.page_id = page}, {.offset_bytes = bytes});
+            noc.async_read(bu_im, cb_in, bytes, {.page_id = page + im_off}, {.offset_bytes = bytes});
             noc.async_read_barrier();
             cb_in.push_back(2);
         }
