@@ -44,7 +44,6 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> nlp_create_qkv_heads_decode
         tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
         tt::tt_metal::BufferType::L1,
         tt::tt_metal::ShardSpec{output_core_grid, {}}};
-    // Infer head_dim
     TT_FATAL(
         num_heads > 0 && num_kv_heads_val > 0,
         "num_heads ({}) and num_kv_heads ({}) must be greater than 0",
@@ -62,6 +61,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> nlp_create_qkv_heads_decode
         "Input shape {} must be divisible by num_heads + 2*num_kv_heads = {}",
         input_tensor.padded_shape()[3],
         num_heads + 2 * num_kv_heads_val);
+    // Infer head_dim
     uint32_t head_dim = input_tensor.padded_shape()[3] / (num_heads + 2 * num_kv_heads_val);
 
     auto out = ttnn::prim::nlp_create_qkv_heads_decode(
