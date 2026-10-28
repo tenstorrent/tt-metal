@@ -80,7 +80,9 @@ for a in wh:wormhole_b0_80_arch bh:blackhole_140_arch; do
 done
 ```
 
-Override locations with `QWEN_TTSIM_DIR`, `QWEN_CRAQ_SIM`, `QWEN_EMU_DIR`. `run_craq.sh` defaults to `/localdev/$USER/sim/libttsim.so`, an old craq-sim copy (2026-10-01); every craq-sim run recorded here used `QWEN_CRAQ_SIM=/localdev/$USER/quasar-sim/libttsim.so`.
+Override locations with `QWEN_TTSIM_DIR`, `QWEN_CRAQ_SIM`, `QWEN_EMU_DIR`. `run_craq.sh` defaults to `/localdev/$USER/sim/libttsim.so`, an old craq-sim copy (2026-10-01); every craq-sim run recorded here used `QWEN_CRAQ_SIM=/localdev/$USER/quasar-sim/libttsim.so`, except the 2026-10-28 2x1 runs, which used a build of craq-sim#538 before it was merged and staged.
+
+On WH/BH the vision-token merge copies rows on the host: `QuasarModelArgs.device_scatter` is on only on Quasar. No simulator can check the device path there yet: ttsim WH aborts on scatter's int32 index (QUASAR_GAPS S3, a ttsim gap, not a WH bug) and ttsim BH aborts at the first op (tt-blaze#5898). The upstream demo (`models/demos/qwen3_vl`) scatters on device on WH.
 
 ## Hangs
 
@@ -134,10 +136,16 @@ To make the suite reflect what Quasar runs: shorten the prefill and vision token
 
 ## Baselines and run times
 
-Wall time is the first-to-last-op span from `progress.log` (setup and weight loading add a few minutes). The repro suite (`tests/e2e/repros`, as run by the checks) takes about 12 min on craq-sim 2x1. Tiny size, 2 vision / 2 text layers, 1 decode step, unless noted. The staged craq-sim `.so` with md5 74c8eb33 is craq-sim's `release_qsr` build from a928410c; `src/` is identical up to 1bfae892 (2026-10-21), so either commit names the same simulator. Since 2026-10-27 the staged build is b53e4d5c (md5 484339f9).
+Wall time is the first-to-last-op span from `progress.log` (setup and weight loading add a few minutes). The repro suite (`tests/e2e/repros`, as run by the checks) takes about 12 min on craq-sim 2x1. Tiny size, 2 vision / 2 text layers, 1 decode step, unless noted. The staged craq-sim `.so` with md5 74c8eb33 is craq-sim's `release_qsr` build from a928410c; `src/` is identical up to 1bfae892 (2026-10-21), so either commit names the same simulator. Since 2026-10-27 the staged build is b53e4d5c (md5 484339f9); since 2026-10-28 it includes craq-sim#538 (md5 7f4a2163, MOP inner loops up to 0x3FF, QUASAR_GAPS S9). The 2026-10-28 runs had the uncommitted #62275 fix (#62817, now #62968) in the tree; the model does not use that path (Q11).
 
 | Target | Grid | Verdict | Wall time | Date | Run folder (`generated/qwen3_vl_quasar/...`) |
 |---|---|---|---|---|---|
+| craq-sim with craq-sim#538 (md5 7f4a2163), main 9c941a0cc3a; vision merge scattered on device | 2x1 | PASS (prefill 0.99698, decode0 0.99861; lowest `text.layer1.mlp` 0.99427); logits identical to the host merge | 42 min | 2026-10-28 | `craq_2x3/20261028T151400Z` |
+| craq-sim (b53e4d5c, md5 484339f9), main 9c941a0cc3a; scatter on device | 8x4 | PASS (prefill 0.99681, decode0 0.99841; lowest `text.layer1.mlp` 0.99433) | 15 min | 2026-10-28 | `craq_8x4/20261028T145829Z` |
+| emu-quasar-2x3, DRAM clamp bypassed (`emu-quasar-2x3-uncapped`), main 1e85fb6a52e with #62744; scatter on device | 2x1 | runs every stage (1211 device ops, scatter included; no hang or crash); FAIL on PCC from `vision.block0.attn` on, the accepted DRAM-wrap effect (S7) | 217 min ops (3 h 38 min pytest) | 2026-10-28 | `emu_2x3/20261028T020831Z` |
+| craq-sim with craq-sim#538 (md5 7f4a2163), main 1e85fb6a52e; host merge | 2x1 | PASS (prefill 0.99698, decode0 0.99861; lowest `text.layer1.mlp` 0.99427); first 2x1 pass since #61421 (S9) | 42 min | 2026-10-28 | `craq_2x3/20261028T020043Z` |
+| craq-sim (b53e4d5c, md5 484339f9), main 1e85fb6a52e with #62744; scatter on device | 8x4 | PASS (prefill 0.99681, decode0 0.99841) | 14 min | 2026-10-27 | `craq_8x4/20261027T212609Z` |
+| craq-sim (b53e4d5c, md5 484339f9), main 1e85fb6a52e (#62543 in, old Q9 dropped) | 8x4 | PASS (prefill 0.99681, decode0 0.99841) | 14 min | 2026-10-27 | `craq_8x4/20261027T183639Z` |
 | craq-sim (b53e4d5c, md5 484339f9), main c17e19d50bc; no fp32 upload cast, rms_norm with fp32 dest acc (both workarounds removed) | 8x4 | PASS (prefill 0.99681, decode0 0.99841; lowest `text.layer1.mlp` 0.99433) | 15 min | 2026-10-27 | `craq_8x4/20261027T164520Z` |
 | ttsim WH (md5 e9c03997), same branch; `ttsim_wh_host_cast_fp32_upload` | 2x1 | PASS (prefill 0.99943, decode0 0.99950) | 10 min | 2026-10-27 | `wh_bh_wh_2x3_quasar/20261027T170038Z` |
 | ttsim WH, without any fp32 upload cast | 2x1 | abort at the first op (fp32 -> bf16 `as_tensor`, S2) | — | 2026-10-27 | `wh_bh_wh_2x3_quasar/20261027T162408Z` |
