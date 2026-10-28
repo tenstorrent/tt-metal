@@ -185,6 +185,10 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         the contract's synthetic position axis, not the token axis. Under pipeline parallelism rank 0
         builds the table and may hold different KDA layers than a stage it describes, which is why the
         spec carries the geometry and the gathered layouts rather than only this rank's tensors.
+
+        The table published is always the walked one; config "00" is also derived from the kvpe
+        cache's declared layout (`kimi_k3/cache_layout.py`) and the model written next to the table
+        when the two agree.
         """
         from models.demos.common.prefill.runners.migration import allgather_kv_stage_layout
         from models.demos.deepseek_v3_d_p.reference.kimi_k3_config import kimi_k3_kda_config
