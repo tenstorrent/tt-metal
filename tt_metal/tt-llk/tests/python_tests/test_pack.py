@@ -35,6 +35,8 @@ from helpers.llk_params import (
     format_dict,
 )
 from helpers.param_config import (
+    DEST_SYNC_TILE_LIMITS,
+    effective_dest_acc,
     get_num_blocks_and_num_tiles_in_block,
     input_output_formats,
     parametrize,
@@ -43,6 +45,7 @@ from helpers.perf.core import create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_variant_parameters import (
+    PACK_SRC_FROM_OUTPUT,
     DEST_INDEX,
     DEST_SYNC,
     LOOP_FACTOR,
@@ -100,7 +103,8 @@ def test_pack(
     perf_report=None,
     run_types=None,
     loop_factor: int = 1,
-    pack_block: bool = False,
+    pack_block: bool | int = False,
+    block_tiles: int | None = None,
 ):
     if (formats.input_format == DataFormat.Int32) ^ (
         formats.output_format == DataFormat.Int32
@@ -185,7 +189,15 @@ def test_pack(
         BlocksCalculationAlgorithm.Standard,
     )
 
-    if dest_index != 0:
+    if block_tiles is not None:
+        # A block of block_tiles tiles from dest index dest_index, the call a kernel makes with a tile index (welford groupnorm packs two tiles from index 1).
+        dest_wide = effective_dest_acc(formats.input_format, formats.output_format, dest_acc) == DestAccumulation.Yes or formats.input_format.is_32_bit()
+        section_tiles = DEST_SYNC_TILE_LIMITS[dest_sync] // (2 if dest_wide else 1)
+        if tile_cnt_A % block_tiles != 0 or dest_index + block_tiles > section_tiles:
+            pytest.skip(f"A block of {block_tiles} tiles from dest index {dest_index} does not fit tile count {tile_cnt_A} and {section_tiles} tiles per section.")
+        num_tiles_in_block = block_tiles
+        num_blocks = tile_cnt_A // block_tiles
+    elif dest_index != 0:
         num_tiles_in_block = num_tiles_in_block - dest_index
         if num_tiles_in_block <= 0 or tile_cnt_A % num_tiles_in_block != 0:
             pytest.skip(
@@ -207,6 +219,7 @@ def test_pack(
             TILIZE(),
             DEST_SYNC(dest_sync),
             PACK_BLOCK(pack_block),
+            PACK_SRC_FROM_OUTPUT(),
         ],
         "runtimes": [
             TILE_COUNT(tile_cnt_A),

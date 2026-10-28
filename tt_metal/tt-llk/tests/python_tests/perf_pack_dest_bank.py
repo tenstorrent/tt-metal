@@ -13,6 +13,7 @@ from helpers.param_config import (
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
+    PACK_SRC_FROM_OUTPUT,
     DEST_INDEX,
     L1_ACC,
     LOOP_FACTOR,
@@ -120,6 +121,7 @@ def test_perf_pack_dest_bank(
         templates=[
             TILIZE(tilize),
             LOOP_FACTOR(loop_factor),
+            PACK_SRC_FROM_OUTPUT(),
         ],
         runtimes=[
             DEST_INDEX(dest_index),
