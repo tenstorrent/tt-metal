@@ -47,6 +47,11 @@ PREFIX_BUCKET_ENV = "GLM53_PREFIX_BUCKET"
 TILE = 32
 DENSE_PREFILL_ROWS = 2048  # the traced per-length prefill covers prompts up to this many tokens
 PREFILL_BUCKETS_ENV = "GLM53_PREFILL_BUCKETS"
+# The sparse prefill's prefix read (``TtLatentCache.user_rows_rm``: the user's latent rows [0, start + T)) rounds its
+# row count up to a multiple of this (0 = exact): the kv shape of a continued chunk then depends on the prefix bucket,
+# not on the exact start, and the served warm-up builds every bucket's programs (``_warmup_prefix_starts``). The
+# served adapter sets it to max(chunk, max_seq_len / 8 rounded to the chunk) before the caches are built.
+PREFIX_BUCKET_ENV = "GLM53_PREFIX_BUCKET"
 # The eager prefill's padded chunk lengths (``eager_pad_length``; re-exported by tt/mesh_model.py). 8192 is deliberately
 # absent: a 1024-row slab per chip (8192 tokens on the 8 rows) puts the KDA sequence-parallel scan's static dataflow
 # buffers (~1005 KiB per core, slab-independent) and the prefill's L1-resident chunk terms (~608 KiB per core at 1024
@@ -830,11 +835,12 @@ class SlotContent:
             for a, b in zip(sorted(mine, key=lambda s: s.offset), sorted(theirs, key=lambda s: s.offset))
         )
 
-    def best_snapshot(self, n: int) -> tuple[int, int] | None:
-        """``(position, entry)`` of the highest snapshot at or below ``n`` (positive positions only)."""
+    def best_snapshot(self, n: int, align: int = 0) -> tuple[int, int] | None:
+        """``(position, entry)`` of the highest snapshot at or below ``n`` (positive positions only; with ``align``
+        only positions that are a multiple of it: a hit restored there continues at a chunk-aligned start)."""
         best = None
         for pos, e in self.snapshots.items():
-            if 0 < pos <= n and (best is None or pos > best[0]):
+            if 0 < pos <= n and (not align or pos % align == 0) and (best is None or pos > best[0]):
                 best = (pos, e)
         return best
 
@@ -854,6 +860,11 @@ class SlotPrefixCache:
     def __init__(self, geometry: ServingGeometry, entries: int):
         self.g = geometry
         self.entries = int(entries)
+        # a hit restores the highest snapshot at a CHUNK-ALIGNED position (``lookup``): the continued chunk then starts
+        # at a device-chunk multiple, a start the warm-up built the programs for (``_warmup_prefix_starts``); the rows
+        # between that snapshot and vLLM's hit length are prefilled again (at most one chunk). A decode snapshot at an
+        # unaligned position is kept for a later aligned restore point only. 0 = any snapshot.
+        self.hit_align = int(os.environ.get("GLM53_VLLM_APC_HIT_ALIGN", str(geometry.device_prefill_chunk)))
         if self.entries < 0:
             raise ValueError(f"snapshot entries {entries} < 0")
         self._content: dict[tuple[int, int], SlotContent] = {}
@@ -942,7 +953,7 @@ class SlotPrefixCache:
         for c in self._content.values():
             if not c.retained or not c.matches(ids, spans, n):
                 continue
-            snap = c.best_snapshot(n)
+            snap = c.best_snapshot(n, self.hit_align)
             if snap is None:
                 continue
             key = (snap[0], c.last_used)

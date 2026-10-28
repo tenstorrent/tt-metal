@@ -218,9 +218,10 @@ def test_served_prefix_cache_hit_matches_from_scratch(mesh_device, monkeypatch, 
     srv.generate(1, lb, 200, 3)
     a.release_request(1)
 
-    # ---- pass 2: the multi-turn request, vLLM's hit = 1536 (the content's full blocks); served from the snapshot,
-    # twice: the first hit may compile the tail chunk's programs, the second (warm) hit is the steady-state cost (its
-    # content is the first hit's + 5 decoded tokens, truncated back to 1536 by the hit; entry 0 still holds 1536)
+    # ---- pass 2: the multi-turn request, vLLM's hit = 1536 (the content's full blocks); served from the CHUNK-ALIGNED
+    # snapshot at 1024 (``SlotPrefixCache.hit_align``: the continued chunk starts at a warmed device-chunk multiple,
+    # the rows [1024, 1536) are prefilled again), twice: the first hit and the warm (steady-state) hit (its content is
+    # the first hit's + 5 decoded tokens, truncated back by the hit; entry 0 still holds 1536)
     full = torch.cat([A, torch.tensor(resp, dtype=torch.int32), turn])
     assert full.numel() == LEN_A + N_RESP + LEN_TURN
     hits = []  # (ms, logits, tokens, decode logits) per hit
@@ -254,7 +255,8 @@ def test_served_prefix_cache_hit_matches_from_scratch(mesh_device, monkeypatch, 
     _assert_agree(f"[{store}] hit vs from-scratch prefill", [hit_logits] + hit_outs, [ref_logits] + ref_outs)
     _assert_agree(f"[{store}] warm hit vs from-scratch prefill", [warm_logits] + warm_outs, [ref_logits] + ref_outs)
     logger.info(
-        f"PERF [{store}] hit prefill [1536, {full.numel()}) first {hit_ms:.0f} ms, warm {warm_ms:.0f} ms vs "
+        f"PERF [{store}] hit prefill [{CHUNK}, {full.numel()}) (aligned restore of the 1536 hit) first {hit_ms:.0f} ms, "
+        f"warm {warm_ms:.0f} ms vs "
         f"from-scratch [0, {full.numel()}) {ref_ms:.0f} ms; tokens hit {hit_toks} warm {warm_toks} ref {ref_toks}; "
         f"apc {a.apc.stats}"
     )
