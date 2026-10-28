@@ -154,18 +154,22 @@ class AudioLightConv1d(LightweightModule):
         a = ttnn.slice(g, (0, 0, 0, 0), (B, 1, S, D))
         b = ttnn.slice(g, (0, 0, 0, D), (B, 1, S, 2 * D))
         ttnn.deallocate(g)
-        sb = ttnn.sigmoid(b, memory_config=dram)
-        ttnn.deallocate(b)
-        glu = ttnn.multiply(a, sb, memory_config=dram)
+        # a * sigmoid(b) with the sigmoid as the multiply's SFPU pre-activation on b (ttnn.sigmoid's
+        # default: vector mode RC = 4, accurate = 0)
+        sigmoid = ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID, 4.0, 0.0)
+        glu = ttnn.multiply(a, b, input_tensor_b_activations=[sigmoid], memory_config=dram)
         ttnn.deallocate(a)
-        ttnn.deallocate(sb)
+        ttnn.deallocate(b)
         y = self._causal_depthwise(glu)
         ttnn.deallocate(glu)
         n = self.conv_norm(y)
         ttnn.deallocate(y)
-        s = ttnn.silu(n, memory_config=dram)
+        # silu and linear_end's input clamp in one SFPU pass
+        s = ttnn.unary_chain(
+            n, [ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU), self.linear_end.input_clamp()], memory_config=dram
+        )
         ttnn.deallocate(n)
-        e = self.linear_end(s)
+        e = self.linear_end.project(s)
         ttnn.deallocate(s)
         out = ttnn.add(x, e, memory_config=dram)
         ttnn.deallocate(e)
