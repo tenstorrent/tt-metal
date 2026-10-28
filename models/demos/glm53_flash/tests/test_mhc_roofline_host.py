@@ -482,8 +482,11 @@ def test_d13_colsharded_math_matches_replicated():
 
 # ------------------------------------------------------------------------------------------------- knobs
 def test_knob_defaults_are_todays_path():
-    assert mhc_mod.MHC_KSUM == "exact" and mhc_mod.MHC_PRE_SINKHORN == "llk"
-    assert mhc_mod.MHC_PRE_SPLIT == "cols" and mhc_mod.MHC_POST_SPLIT == "tile" and mhc_mod.MHC_LAYOUT == "replicated"
+    # the defaults since 3722af90ca0: the fused pre-Sinkhorn and the "extras" splits (+14 % decode, gates green)
+    assert mhc_mod.MHC_KSUM == "exact" and mhc_mod.MHC_PRE_SINKHORN == "fused"
+    assert (
+        mhc_mod.MHC_PRE_SPLIT == "extras" and mhc_mod.MHC_POST_SPLIT == "extras" and mhc_mod.MHC_LAYOUT == "replicated"
+    )
     assert mhc_mod.MHC_NORM == "sharded" and mhc_mod.MHC_PREFILL_NORM == "single"
     src = Path(mhc_mod.__file__).read_text()
     for knob in (

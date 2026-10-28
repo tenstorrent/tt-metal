@@ -353,12 +353,17 @@ def test_kernel_sources_apply_one_budget():
 
 # ---------------------------------------------------------------------------------- the pad-row mask
 def test_pad_mask_knobs(monkeypatch):
-    for env, fn in ((M.ROUTER_PAD_MASK_ENV, M.pad_mask_enabled), (M.DISPATCH_GUARD_ENV, M.dispatch_guard_enabled)):
-        assert fn({}) is True and fn({env: "1"}) is True and fn({env: "0"}) is False
-        monkeypatch.setenv(env, "0")
-        assert fn() is False
+    # the pad mask is on by default; the eager dispatch guard (a per-layer host readback: 128-token eager TTFT 1548 ->
+    # 879 ms without it) is off by default and opted in with GLM53_DISPATCH_GUARD=1
+    for env, fn, default in (
+        (M.ROUTER_PAD_MASK_ENV, M.pad_mask_enabled, True),
+        (M.DISPATCH_GUARD_ENV, M.dispatch_guard_enabled, False),
+    ):
+        assert fn({}) is default and fn({env: "1"}) is True and fn({env: "0"}) is False
+        monkeypatch.setenv(env, "0" if default else "1")
+        assert fn() is (not default)
         monkeypatch.delenv(env)
-        assert fn() is True
+        assert fn() is default
 
 
 def test_pad_row_mask_host_shape_and_values():

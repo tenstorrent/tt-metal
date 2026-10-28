@@ -30,7 +30,7 @@ from models.demos.glm53_flash.tt import generator_vllm as gv
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.generator_vllm import GLM53FlashForCausalLM
 from models.demos.glm53_flash.tt.memory_plan import GIB, MemoryPlan
-from models.demos.glm53_flash.tt.vllm_config import ServingGeometry, SlotTable
+from models.demos.glm53_flash.tt.vllm_config import PrefillPlanner, ServingGeometry, SlotTable
 
 ROWS, COLS = 8, 4
 # the README envelope (slots = rows x users per row) with ONE routed-expert layout (the regions lists)
@@ -163,34 +163,77 @@ def _adapter(max_seq_len=65536, users_per_row=4):
     return GLM53FlashForCausalLM(model, g), model
 
 
-def test_warmup_prefill_ladder_default_is_the_short_prompt(monkeypatch):
+def _auto_ladder(a):
+    """``_warmup_prefill_lengths`` under ``auto``: every eager bucket up to the device chunk, full and ragged (b - 1),
+    lone and as the continuation of a full chunk (chunk + b), plus the chunk itself, clamped to max_seq_len."""
+    g = a.geometry
+    chunk = g.device_prefill_chunk
+    try:  # the served branches' bucket set (GLM53_PREFILL_BUCKETS); this tree pads to the traced lengths
+        from models.demos.glm53_flash.tt.vllm_config import prefill_buckets
+
+        buckets = list(prefill_buckets())
+    except ImportError:
+        buckets = list(g.traced_prefill_lengths)
+    want = {chunk, max(1, chunk - 1)}
+    for b in (b for b in buckets if b <= chunk):
+        want |= {b, max(1, b - 1), chunk + b, chunk + max(1, b - 1)}
+    return sorted({min(n, g.max_seq_len) for n in want})
+
+
+def test_warmup_prefill_ladder_default_walks_every_bucket(monkeypatch):
+    """``GLM53_VLLM_WARMUP_PREFILL`` unset = ``auto``: every eager chunk shape is compiled before any capture (the
+    2026-10-28 served APC seal hit: a 1590-token prompt's ragged continuation had no program). The shortest length
+    goes into every slot of the row, the others into slot 0, each walked from 0 in device chunks; then the
+    continued-chunk walk rewinds every slot to every prefix bucket, prefills a tail there and rewinds it to 0."""
     monkeypatch.delenv("GLM53_VLLM_WARMUP_PREFILL", raising=False)
+    monkeypatch.delenv("GLM53_PREFIX_BUCKET", raising=False)
     a, m = _adapter()
+    g = a.geometry
+    chunk = g.device_prefill_chunk
+    lengths = a._warmup_prefill_lengths()
+    assert lengths == _auto_ladder(a) and lengths == sorted(set(lengths)) and lengths[-1] <= g.max_seq_len
+    assert {chunk - 1, chunk} <= set(lengths) and lengths[-1] > chunk  # the chunk itself and a continuation
     a.warmup_model_prefill(enable_trace=False, can_sample_on_device=True)
-    prefills = [c for c in m.calls if c[0] == "prefill"]
-    assert prefills == [("prefill", 0, 0, 128)]
+    prefills = {(c[1], c[2], c[3]) for c in m.calls if c[0] == "prefill"}
+    assert {(u, 0, lengths[0]) for u in range(g.users_per_row)} <= prefills  # the shortest into every slot
+    for n in lengths:  # every length walked from 0 in device chunks into slot 0
+        assert {(0, s0, e - s0) for s0, e in PrefillPlanner.walk(0, n, chunk)} <= prefills
+    assert all(n <= chunk and s0 + n <= g.max_seq_len for _, s0, n in prefills)
+    # the continued-chunk walk: every slot rewound to every prefix bucket (= the chunk when GLM53_PREFIX_BUCKET is
+    # unset) and back to 0 at the end; the tails are the ladder's lengths up to the chunk
+    rewinds = [c for c in m.calls if c[0] == "rewind_user"]
+    starts = {j * chunk for j in range(1, g.max_seq_len // chunk)}
+    assert {(u, st) for u in range(g.users_per_row) for st in starts} <= {(c[1], c[2]) for c in rewinds}
+    assert rewinds[-g.users_per_row :] == [("rewind_user", u, 0) for u in range(g.users_per_row)]
+    tails = [n for n in lengths if n <= chunk]
+    assert {(0, st, n) for st in starts for n in tails if st + n <= g.max_seq_len} <= prefills
+    assert {(u, st, tails[0]) for u in range(g.users_per_row) for st in starts} <= prefills
 
 
-def test_warmup_prefill_ladder_walks_long_chunks_at_boot(monkeypatch):
-    """The Galaxy catalog's ``128,32768``: a full 16 K device chunk and its continuation at start 16384 are walked
-    into slot 0 before any trace capture (allocation discipline: eager prefills precede the captures)."""
+def test_warmup_prefill_ladder_explicit_list_adds_long_chunks(monkeypatch):
+    """The Galaxy catalog's ``128,32768`` ADDS to the auto ladder: a full 16 K device chunk and its continuation at
+    start 16384 are walked into slot 0 before any trace capture (allocation discipline: eager prefills precede the
+    captures), and 128 (now the shortest length) goes into every slot."""
     monkeypatch.setenv("GLM53_VLLM_WARMUP_PREFILL", "128, 32768,,128")
     a, m = _adapter()
+    assert a._warmup_prefill_lengths() == sorted(set(_auto_ladder(a)) | {128, 32768})
     a.warmup_model_prefill(enable_trace=False, can_sample_on_device=True)
     a.warmup_model_decode(enable_trace=False, max_batch_size=4, num_blocks=1, can_sample_on_device=True)
     a.warmup_model_prefill(enable_trace=True, can_sample_on_device=True)
     kinds = [c[0] for c in m.calls]
     prefills = [c for c in m.calls if c[0] == "prefill"]
-    assert prefills == [("prefill", 0, 0, 128), ("prefill", 0, 0, 16384), ("prefill", 0, 16384, 16384)]
+    assert prefills[: a.geometry.users_per_row] == [("prefill", u, 0, 128) for u in range(a.geometry.users_per_row)]
+    assert ("prefill", 0, 0, 16384) in prefills and ("prefill", 0, 16384, 16384) in prefills
     assert kinds.index("capture_prefill") > max(i for i, k in enumerate(kinds) if k == "prefill")
 
 
 def test_warmup_prefill_ladder_clamps_to_max_seq_len(monkeypatch):
     monkeypatch.setenv("GLM53_VLLM_WARMUP_PREFILL", "128,99999999")
     a, m = _adapter(max_seq_len=8192)
-    assert a._warmup_prefill_lengths() == [128, 8192]
+    auto = _auto_ladder(a)
+    assert auto[-1] == 8192 and a._warmup_prefill_lengths() == sorted(set(auto) | {128})
     monkeypatch.setenv("GLM53_VLLM_WARMUP_PREFILL", " , ")
-    assert a._warmup_prefill_lengths() == [128]
+    assert a._warmup_prefill_lengths() == auto
 
 
 def test_mesh_cache_root_precedence(monkeypatch, tmp_path):

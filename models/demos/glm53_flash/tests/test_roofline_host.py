@@ -76,7 +76,10 @@ def test_weight_bytes_of_the_projections():
     state = _row("KDA+MoE", lay, "kda.decode")
     assert state.dram_bytes > 2 * 4 * 16 * 128 * 128 * 4  # the fp32 recurrent state read + written for 4 users
     pre = [r for r in layer_rows(CFG, lay, "KDA+MoE") if r.module == "MHC_PRE_ATTN"]
-    assert sum(r.n_ops for r in pre) == 18  # 16 pre-block ops before A3 (2-op norm), 18 with its 4-op norm
+    assert sum(r.n_ops for r in pre) == 1  # the fused pre-block (the default since 3722af90ca0)
+    composite = Layout(users_per_row=4, mhc_pre_block=False)
+    pre = [r for r in layer_rows(CFG, composite, "KDA+MoE") if r.module == "MHC_PRE_ATTN"]
+    assert sum(r.n_ops for r in pre) == 18  # 16 composite pre-block ops before A3 (2-op norm), 18 with its 4-op norm
 
 
 # ----------------------------------------------------------------------------------------------- floors
@@ -164,9 +167,11 @@ def test_bound_classification():
     lay = Layout(users_per_row=4)
     kda = {r.key: r for r in layer_rows(CFG, lay, "KDA+MoE")}
     assert kda["kda.qkv"].bound == "DRAM" and kda["kda.qkv"].ratio < 1.1  # 393 GB/s measured
-    assert kda["mhc.ksum"].bound == "data-movement"
+    assert "mhc.pre_block_fused" in kda and "mhc.ksum" not in kda  # the fused pre-block is the default
+    comp = {r.key: r for r in layer_rows(CFG, Layout(users_per_row=4, mhc_pre_block=False), "KDA+MoE")}
+    assert comp["mhc.ksum"].bound == "data-movement"
     assert kda["moe.rs_rows"].bound == "ethernet/CCL" and kda["kda.all_reduce"].bound == "ethernet/CCL"
-    assert kda["mhc.sinkhorn"].bound == "L1/NoC" and kda["mhc.sinkhorn"].cores == 1
+    assert comp["mhc.sinkhorn"].bound == "L1/NoC" and comp["mhc.sinkhorn"].cores == 1
     assert kda["moe.router_topk"].bound == "launch/gap"
     assert kda["layer.gaps"].bound == "launch/gap"
     assert kda["moe.experts"].bound in ("DRAM", "DRAM (under-utilized)")
@@ -186,8 +191,9 @@ def test_knob_variants_change_the_rows():
     a1 = {r.key for r in layer_rows(CFG, Layout(users_per_row=4, mhc_pre_block=True), "KDA+MoE")}
     assert "mhc.pre_block_fused" in a1 and "mhc.sinkhorn" not in a1
     s_a1 = layer_summary(CFG, Layout(users_per_row=4, mhc_pre_block=True), "KDA+MoE")["measured_us"]
-    s_base = layer_summary(CFG, Layout(users_per_row=4), "KDA+MoE")["measured_us"]
+    s_base = layer_summary(CFG, Layout(users_per_row=4, mhc_pre_block=False), "KDA+MoE")["measured_us"]
     assert s_a1 < s_base - 100  # the fused pre-block measured 101 us per wrap against ~168 (post-A3)
+    assert layer_summary(CFG, Layout(users_per_row=4), "KDA+MoE")["measured_us"] == s_a1  # the default is fused
 
 
 # ----------------------------------------------------------------------------------------------- actions + tables
@@ -205,9 +211,11 @@ def test_ranked_actions():
 
 def test_layer_table_columns_and_counts():
     lay = Layout(users_per_row=4)
-    for name, n in (("KDA+MoE", 88), ("DSA+MoE", 131), ("KDA+dense", 52), ("head", 6)):
+    composite = Layout(users_per_row=4, mhc_pre_block=False)
+    for name, n, n_comp in (("KDA+MoE", 54, 88), ("DSA+MoE", 97, 131), ("KDA+dense", 18, 52), ("head", 6, 6)):
         s = layer_summary(CFG, lay, name)
-        assert s["ops"] == n, (name, s["ops"])
+        assert s["ops"] == n, (name, s["ops"])  # the fused pre-block: 2 mHC rows per wrap instead of 9
+        assert layer_summary(CFG, composite, name)["ops"] == n_comp, (name, "composite")
         tab = layer_table(CFG, lay, name)
         assert {"key", "floor_us", "measured_us", "ratio", "bound", "action", "after_us", "measured_src"} <= set(tab[0])
         assert sum(r["floor_us"] for r in tab) == pytest.approx(s["floor_us"], abs=0.5)
@@ -264,7 +272,12 @@ def test_spec_rows_and_plain_reduction():
     plain_keys = {r.key for r in layer_rows(CFG, Layout(users_per_row=4), "KDA+MoE")}
     assert "kda.spec_backup" not in plain_keys and rl.step_table(CFG, Layout(users_per_row=4))[
         "step_floor_ms"
-    ] == pytest.approx(32.26, abs=0.05)
+    ] == pytest.approx(
+        28.32, abs=0.05
+    )  # the fused pre-block default; 32.26 with the composite pre-block
+    assert rl.step_table(CFG, Layout(users_per_row=4, mhc_pre_block=False))["step_floor_ms"] == pytest.approx(
+        32.26, abs=0.05
+    )
     # the stream-op cost model reproduces the measured stream row at the plain point (28 active: 341 + 8 + 2 us)
     plain_stream = {r.key: r for r in layer_rows(CFG, Layout(users_per_row=4, expert_path="stream"), "KDA+MoE")}
     model = rl.EXPERT_FIXED_US + 28.0 * 3.34 * 1e6 / (rl.EXPERT_GBS * 1e3) + 10.0

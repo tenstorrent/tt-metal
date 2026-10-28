@@ -373,6 +373,7 @@ class _FakeMeshModel:
         self._fed_pos = None
         self._last_ids = torch.zeros(self.total_users, dtype=torch.long)
         self._last_logits = torch.zeros(self.total_users, VOCAB)
+        self.next_start = [0] * max_batch  # the chunked-prefill cursor per slot (``rewind_user``)
 
     # trace management
     def trace_prefill_lengths(self):
@@ -436,9 +437,18 @@ class _FakeMeshModel:
         return self._last_ids.clone()
 
     # prefill
+    def rewind_user(self, user, position):
+        """``GLM53MeshModel.rewind_user``: the served warm-up walks continued chunks into every slot at every prefix
+        bucket and rewinds the slot's cursor around each (``_warmup_prefix_starts``)."""
+        if position < 0 or position % 32:
+            raise ValueError(f"rewind position {position} must be a non-negative multiple of 32")
+        self.calls.append(("rewind_user", user, int(position)))
+        self.next_start[user] = int(position)
+
     def prefill(self, ids, user=0, start=0):
         S = int(ids.numel())
         self.calls.append(("prefill", user, start, S))
+        self.next_start[user] = start + S
         first = _first_token(user, ids)
         unit = 32 * self.rows
         T_loc = (-(-S // unit) * unit) // self.rows
@@ -763,9 +773,11 @@ def test_chunked_prefill_contiguity_and_the_mid_prefill_guard():
     )
     assert [c for c in m.calls if c[0] == "prefill"][-2:] == [("prefill", 0, 16384, 16384), ("prefill", 0, 32768, 100)]
     assert a.slots.physical(0).prefilled_to == L
-    # a whole long prompt in one vLLM step walks the device chunks in order
+    # a whole long prompt in one vLLM step walks the device chunks in order (the warm-up's own calls into that
+    # slot, the ladder and the continued-chunk walk, precede n0)
+    n0 = len(m.calls)
     a.prefill_forward(ids, prompt_lens=[L], start_pos=torch.tensor([0]), empty_slots=[2], sampling_params=_greedy(1))
-    chunks = [c for c in m.calls if c[0] == "prefill" and c[1] == a.slots.physical(2).user]
+    chunks = [c for c in m.calls[n0:] if c[0] == "prefill" and c[1] == a.slots.physical(2).user]
     assert [(c[2], c[3]) for c in chunks] == [(0, 16384), (16384, 16384), (32768, 100)]
     # both prompts complete: the decode runs for all three slots
     out = a.decode_forward(
@@ -862,7 +874,8 @@ def test_rows_independent_needs_the_wave_prefill():
     a, m = _adapter(independent=True)  # the fake has it: capacity = rows x users_per_row, the wave warm-up ran
     assert a.geometry.request_capacity == 8 and a.tt_supported_decode_batch_sizes == (8,)
     waves = [c for c in m.calls if c[0] == "prefill_wave"]
-    assert len(waves) == 1 and waves[0][1] == 0 and waves[0][2] == 128 and [r for r, *_ in waves[0][4]] == [0, 1]
+    t_pad = -(-a._warmup_prefill_lengths()[0] // 32) * 32  # the wave warm-up takes the ladder's shortest length
+    assert len(waves) == 1 and waves[0][1] == 0 and waves[0][2] == t_pad and [r for r, *_ in waves[0][4]] == [0, 1]
 
 
 def test_wave_prefill_routes_rows_and_decodes_per_row():

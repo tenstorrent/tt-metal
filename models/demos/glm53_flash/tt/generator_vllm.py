@@ -590,6 +590,8 @@ class GLM53FlashForCausalLM:
         if os.environ.get(COMPILE_CHECK_ENV, "1") != "1":
             return
         dev = _mesh_device_of(self.model)
+        if dev is None or not hasattr(dev, "set_program_cache_misses_allowed"):
+            return  # a model without a mesh device (the host tests' fakes): nothing to seal
         dev.set_program_cache_misses_allowed(False)
         logger.info(f"GLM53 vLLM: program cache sealed after the captures ({dev.num_program_cache_entries()} programs)")
 
