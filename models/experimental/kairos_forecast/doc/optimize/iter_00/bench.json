@@ -1638,7 +1638,21 @@
   "route_mismatch_rows": 0,
   "route_mismatch_patches": 0,
   "bias_max_abs_diff": 0.0,
-  "min_top3_margin": 3.8743019104003906e-07
+  "min_top3_margin": 3.8743019104003906e-07,
+  "bias_q": [
+   -0.0014559,
+   -0.001038,
+   -0.0007532,
+   -0.0004447,
+   -0.0001342,
+   0.0002245,
+   0.0006274,
+   0.0013343,
+   0.0015495
+  ],
+  "inactive_argmax": 22,
+  "pcc_row_argmin_active": 115,
+  "spread_ratio_argmin": 200
  },
  {
   "test": "generate",
@@ -3279,7 +3293,21 @@
   "route_mismatch_rows": 0,
   "route_mismatch_patches": 0,
   "bias_max_abs_diff": 0.0,
-  "min_top3_margin": 3.8743019104003906e-07
+  "min_top3_margin": 3.8743019104003906e-07,
+  "bias_q": [
+   -0.0075859,
+   -0.0052715,
+   -0.0037645,
+   -0.0025765,
+   -0.0015504,
+   -0.0003944,
+   0.0013405,
+   0.0037442,
+   0.0051566
+  ],
+  "inactive_argmax": 73,
+  "pcc_row_argmin_active": 214,
+  "spread_ratio_argmin": 462
  },
  {
   "name": "long_horizon_tf",
@@ -6406,7 +6434,21 @@
   "test": "teacher_forced",
   "started_at": 1793217549.235481,
   "git_head": "69c1213cd7285663688bcf8832c01d1b890e94c3",
-  "git_dirty": ""
+  "git_dirty": "",
+  "bias_q": [
+   -0.001902,
+   -0.0008713,
+   -0.0003442,
+   -7.3e-06,
+   0.0002579,
+   0.000521,
+   0.00074,
+   0.0012084,
+   0.0021814
+  ],
+  "inactive_argmax": 205,
+  "pcc_row_argmin_active": 229,
+  "spread_ratio_argmin": 646
  },
  {
   "test": "generate",
@@ -6783,7 +6825,21 @@
   "free_route_mismatch_patches": 20,
   "free_bias_max_abs_diff": 8.508563041687012e-06,
   "free_min_top3_margin": 5.364418029785156e-07,
-  "free_step": 1
+  "free_step": 1,
+  "bias_q": [
+   -0.0008309,
+   -0.0005218,
+   -0.0002968,
+   -1.4e-06,
+   0.0003276,
+   0.0007344,
+   0.0010934,
+   0.0015071,
+   0.0016981
+  ],
+  "inactive_argmax": 22,
+  "pcc_row_argmin_active": 10,
+  "spread_ratio_argmin": 9
  },
  {
   "name": "long_horizon_tf",
@@ -9910,7 +9966,21 @@
   "test": "teacher_forced",
   "started_at": 1793217549.235481,
   "git_head": "69c1213cd7285663688bcf8832c01d1b890e94c3",
-  "git_dirty": ""
+  "git_dirty": "",
+  "bias_q": [
+   -0.0080777,
+   -0.0036703,
+   -0.0014004,
+   -6.45e-05,
+   0.0009347,
+   0.0019307,
+   0.0030189,
+   0.0047528,
+   0.0099325
+  ],
+  "inactive_argmax": 345,
+  "pcc_row_argmin_active": 334,
+  "spread_ratio_argmin": 646
  },
  {
   "test": "generate",
@@ -10287,7 +10357,21 @@
   "free_route_mismatch_patches": 71,
   "free_bias_max_abs_diff": 2.1159648895263672e-05,
   "free_min_top3_margin": 5.364418029785156e-07,
-  "free_step": 1
+  "free_step": 1,
+  "bias_q": [
+   -0.0010501,
+   0.0001996,
+   0.0010867,
+   0.0020283,
+   0.0031302,
+   0.004577,
+   0.0063783,
+   0.0082637,
+   0.0104055
+  ],
+  "inactive_argmax": 22,
+  "pcc_row_argmin_active": 48,
+  "spread_ratio_argmin": 6
  },
  {
   "test": "generate",
@@ -11160,7 +11244,21 @@
   "route_mismatch_rows": 0,
   "route_mismatch_patches": 0,
   "bias_max_abs_diff": 0.0,
-  "min_top3_margin": 1.8775463104248047e-06
+  "min_top3_margin": 1.8775463104248047e-06,
+  "bias_q": [
+   -0.0011525,
+   -0.0008265,
+   -0.0005879,
+   -0.0002575,
+   5.49e-05,
+   0.0004055,
+   0.0007456,
+   0.0014379,
+   0.0016235
+  ],
+  "inactive_argmax": 82,
+  "pcc_row_argmin_active": 238,
+  "spread_ratio_argmin": 110
  },
  {
   "test": "generate",
@@ -12033,7 +12131,21 @@
   "route_mismatch_rows": 0,
   "route_mismatch_patches": 0,
   "bias_max_abs_diff": 0.0,
-  "min_top3_margin": 1.8775463104248047e-06
+  "min_top3_margin": 1.8775463104248047e-06,
+  "bias_q": [
+   -0.0047519,
+   -0.0023599,
+   -0.0008457,
+   0.0002865,
+   0.001124,
+   0.0020081,
+   0.0035529,
+   0.006108,
+   0.0064784
+  ],
+  "inactive_argmax": 46,
+  "pcc_row_argmin_active": 238,
+  "spread_ratio_argmin": 8
  },
  {
   "test": "generate",
@@ -12144,7 +12256,21 @@
   "route_mismatch_rows": 0,
   "route_mismatch_patches": 0,
   "bias_max_abs_diff": 0.0,
-  "min_top3_margin": 0.00041237473487854004
+  "min_top3_margin": 0.00041237473487854004,
+  "bias_q": [
+   0.0048373,
+   0.0043239,
+   0.0039409,
+   0.0037385,
+   0.0035093,
+   0.0032517,
+   0.0029637,
+   0.002854,
+   0.0025423
+  ],
+  "inactive_argmax": -1,
+  "pcc_row_argmin_active": 1,
+  "spread_ratio_argmin": 0
  },
  {
   "test": "generate",
@@ -12255,7 +12381,21 @@
   "route_mismatch_rows": 0,
   "route_mismatch_patches": 0,
   "bias_max_abs_diff": 0.0,
-  "min_top3_margin": 0.00041237473487854004
+  "min_top3_margin": 0.00041237473487854004,
+  "bias_q": [
+   0.0029916,
+   0.0028058,
+   0.0023934,
+   0.002086,
+   0.0016873,
+   0.001202,
+   0.0005622,
+   -4.38e-05,
+   -0.0012786
+  ],
+  "inactive_argmax": -1,
+  "pcc_row_argmin_active": 1,
+  "spread_ratio_argmin": 1
  },
  {
   "test": "generate",
@@ -12364,7 +12504,21 @@
   "route_mismatch_rows": 0,
   "route_mismatch_patches": 0,
   "bias_max_abs_diff": 0.0,
-  "min_top3_margin": 0.0008457303047180176
+  "min_top3_margin": 0.0008457303047180176,
+  "bias_q": [
+   0.005958,
+   0.0054037,
+   0.004898,
+   0.0047529,
+   0.004324,
+   0.0040925,
+   0.0039036,
+   0.0036721,
+   0.0034016
+  ],
+  "inactive_argmax": -1,
+  "pcc_row_argmin_active": 0,
+  "spread_ratio_argmin": 0
  },
  {
   "test": "generate",
@@ -12473,7 +12627,21 @@
   "route_mismatch_rows": 0,
   "route_mismatch_patches": 0,
   "bias_max_abs_diff": 0.0,
-  "min_top3_margin": 0.0008457303047180176
+  "min_top3_margin": 0.0008457303047180176,
+  "bias_q": [
+   0.0178217,
+   0.0198136,
+   0.0207586,
+   0.0217403,
+   0.0222955,
+   0.023003,
+   0.0237786,
+   0.0246425,
+   0.026006
+  ],
+  "inactive_argmax": -1,
+  "pcc_row_argmin_active": 0,
+  "spread_ratio_argmin": 0
  },
  {
   "test": "generate",
@@ -12584,7 +12752,21 @@
   "route_mismatch_rows": 0,
   "route_mismatch_patches": 0,
   "bias_max_abs_diff": 0.0,
-  "min_top3_margin": 0.0012706965208053589
+  "min_top3_margin": 0.0012706965208053589,
+  "bias_q": [
+   0.0018756,
+   0.0013485,
+   0.0010505,
+   0.0009414,
+   0.0008355,
+   0.000808,
+   0.0006022,
+   0.0007759,
+   0.0009537
+  ],
+  "inactive_argmax": -1,
+  "pcc_row_argmin_active": 1,
+  "spread_ratio_argmin": 0
  },
  {
   "test": "generate",
@@ -12695,7 +12877,21 @@
   "route_mismatch_rows": 0,
   "route_mismatch_patches": 0,
   "bias_max_abs_diff": 0.0,
-  "min_top3_margin": 0.0012706965208053589
+  "min_top3_margin": 0.0012706965208053589,
+  "bias_q": [
+   0.0071736,
+   0.0039072,
+   0.0018889,
+   0.0004277,
+   -0.0008659,
+   -0.0020495,
+   -0.0034032,
+   -0.0045532,
+   -0.005989
+  ],
+  "inactive_argmax": -1,
+  "pcc_row_argmin_active": 1,
+  "spread_ratio_argmin": 0
  },
  {
   "name": "single_long_horizon_tf",
@@ -12798,7 +12994,21 @@
   "test": "teacher_forced",
   "started_at": 1793217549.235481,
   "git_head": "69c1213cd7285663688bcf8832c01d1b890e94c3",
-  "git_dirty": ""
+  "git_dirty": "",
+  "bias_q": [
+   0.0012941,
+   0.0011528,
+   0.0009914,
+   0.0009524,
+   0.0008754,
+   0.000773,
+   0.0006104,
+   0.0006184,
+   0.0005648
+  ],
+  "inactive_argmax": 5,
+  "pcc_row_argmin_active": 3,
+  "spread_ratio_argmin": 7
  },
  {
   "test": "generate",
@@ -12923,7 +13133,21 @@
   "free_route_mismatch_patches": 0,
   "free_bias_max_abs_diff": 7.897615432739258e-07,
   "free_min_top3_margin": 7.964670658111572e-05,
-  "free_step": 1
+  "free_step": 1,
+  "bias_q": [
+   -0.0020032,
+   -0.002146,
+   -0.002249,
+   -0.0023665,
+   -0.0022672,
+   -0.0024134,
+   -0.0026246,
+   -0.0023582,
+   -0.0021077
+  ],
+  "inactive_argmax": -1,
+  "pcc_row_argmin_active": 0,
+  "spread_ratio_argmin": 0
  },
  {
   "name": "single_long_horizon_tf",
@@ -13026,7 +13250,21 @@
   "test": "teacher_forced",
   "started_at": 1793217549.235481,
   "git_head": "69c1213cd7285663688bcf8832c01d1b890e94c3",
-  "git_dirty": ""
+  "git_dirty": "",
+  "bias_q": [
+   0.0053329,
+   0.0047999,
+   0.0042481,
+   0.0038548,
+   0.0034535,
+   0.0030579,
+   0.0025921,
+   0.0023093,
+   0.0021469
+  ],
+  "inactive_argmax": 4,
+  "pcc_row_argmin_active": 7,
+  "spread_ratio_argmin": 7
  },
  {
   "test": "generate",
@@ -13151,6 +13389,20 @@
   "free_route_mismatch_patches": 0,
   "free_bias_max_abs_diff": 4.827976226806641e-06,
   "free_min_top3_margin": 7.964670658111572e-05,
-  "free_step": 1
+  "free_step": 1,
+  "bias_q": [
+   -0.0110247,
+   -0.0112498,
+   -0.0113927,
+   -0.0115211,
+   -0.0114128,
+   -0.0114953,
+   -0.0115899,
+   -0.0110758,
+   -0.0100863
+  ],
+  "inactive_argmax": -1,
+  "pcc_row_argmin_active": 0,
+  "spread_ratio_argmin": 0
  }
 ]
