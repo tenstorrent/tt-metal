@@ -51,6 +51,7 @@ from common import (
     Shards,
     check_isl,
     hub_kwargs,
+    prefix_base,
     raise_cpu_time_limit,
     resolve_revision,
     share,
@@ -444,7 +445,7 @@ class LayerwiseGolden:
 
             def load(s: int) -> torch.nn.Module:
                 _, module, prefix = stages[s]
-                materialize(module, self.convert(shards.load(s, prefix), prefix, module), prefix)
+                materialize(module, self.convert(shards.load(s, prefix), prefix, module), prefix_base(prefix))
                 return module
 
             for module in self.stateless_modules(backbone, stages):  # RoPE etc.: buffers only, nothing to load

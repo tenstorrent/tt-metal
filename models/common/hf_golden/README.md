@@ -30,6 +30,7 @@ the dtype, the layers it exists on and what it is.
 | `generate_golden_hy3.py` | tencent/Hy3 | transformers `hy_v3` (GQA + MoE) |
 | `generate_golden_hy4_preview.py` | tencent/Hy4-preview | transformers `hy_v4` (DSA + sinks + IHC), needs transformers >= 5.17 |
 | `generate_golden_kimi_k2_7_code.py` | moonshotai/Kimi-K2.7-Code | transformers `kimi_k25` (DeepseekV3 text model), INT4 experts dequantized, needs transformers >= 5.17 |
+| `generate_golden_kimi_k3.py` | moonshotai/Kimi-K3 | repo remote code (KDA + MLA + AttnRes + latent MoE), MXFP4 experts dequantized, KDA in fla's torch references, needs `fla-core` (CUDA) |
 | `generate_golden_k2_horizon.py` | IFM/K2-Horizon-375B-A23B | repo remote code (GQA + partial RoPE + MoE), plain bf16 |
 | `generate_golden_nemotron_3_ultra.py` | nvidia/NVIDIA-Nemotron-3-Ultra-550B-A55B-BF16 | transformers `nemotron_h` (Mamba-2 + latent MoE + NoPE GQA), needs `--with kernels==0.12.3` |
 | `generate_golden_llama_3_1_8b_instruct.py` | meta-llama/Llama-3.1-8B-Instruct | transformers `llama` |
@@ -39,8 +40,6 @@ the dtype, the layers it exists on and what it is.
 
 Not covered yet:
 - **DeepSeek-V4.1-Flash**: transformers has no implementation and the repo ships no modeling code.
-- **Kimi-K3** (deferred): its remote code needs `fla` Triton kernels (CUDA only), forces flash-attention, and does
-  not import under transformers 5.12.
 
 ```
 python generate_golden_<checkpoint>.py --isl 10240                          # the trace
@@ -102,6 +101,23 @@ after the projections reads only its own query row, so the trace is bit-identica
 at isl 10240, all 468 tensors). At startup the script checks the chunked forward against the installed transformers'
 `MiniMaxM3VLIndexer.forward` on a tiny random indexer and exits if upstream has changed. isl 56320 on one H200:
 2.4 min, ~9 GB GPU peak, 50 GB on disk.
+
+**Kimi-K3:** remote code written for transformers 4.56+, run on 5.12 with shims (OutputRecorder alias, the forced
+flash_attention_2 put back to `--attn`, a plain causal mask for the selftest's whole-model forward). The remote
+KDA layer calls fla's Triton `chunk_kda`; by default it runs fla's own pure-torch references instead
+(`naive_kda_lowerbound_gate` + `naive_recurrent_kda`, fp32, the ones fla's tests grade `chunk_kda` against), checked
+against `chunk_kda` at startup on CUDA; `HF_GOLDEN_KDA=triton` keeps the kernel. AttnRes blocks are carried between
+layers, so no `--prefill-chunk`; the final stage reads `norm` and `output_attn_res_*` through a tuple stage prefix.
+A dequantized MoE layer is ~59 GB in bf16. For isl 56320, AttnRes reads run 4096 tokens at a time and `moe_infer`
+is replaced by a same-arithmetic version without upstream's extra [N x 16, 3584] copies; on a GPU under 120 GiB
+(H100) the routed experts stay in host RAM and are copied to the device per call (`HF_GOLDEN_EXPERTS=auto|device|host`;
+needs ~70 GB free host RAM). Run through a uv overlay:
+
+```
+uv run --no-project --python python_env/bin/python --with fla-core==0.6.0 --with einops --with blobfile \
+    --with compressed-tensors==0.20.0 python generate_golden_kimi_k3.py --selftest --device cuda
+PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True uv run ... python generate_golden_kimi_k3.py --isl 56320 --attn-chunk 1024
+```
 
 **MiniMax-M3.1-Flash:** M3's architecture with every layer sparse, stored MXFP8 (dense linears) + NVFP4 (routed
 experts); transformers 5.12 dequantizes neither combination, so convert() does (the script header has the formulas

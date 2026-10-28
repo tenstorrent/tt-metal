@@ -226,6 +226,13 @@ def cached_file(repo: str, filename: str, revision: str) -> Path | None:
     return None
 
 
+def prefix_base(prefix: str | tuple[str, ...]) -> str:
+    """What a stage's checkpoint keys are made relative to. A stage reads every tensor under its prefix, or under any
+    of a tuple of them (a module whose weights are not under one prefix, e.g. a final norm plus weights stored beside
+    it); a tuple's keys are made relative to its members' common prefix, so they keep the rest of their names."""
+    return prefix if isinstance(prefix, str) else os.path.commonprefix(list(prefix))
+
+
 class Shards:
     """Checkpoint shards read on demand. A shard already on disk (local dir, HF cache) is read in place; any other is
     downloaded into ``tmp`` and deleted after the last stage that reads it, so peak disk is a few shards rather than
@@ -262,19 +269,21 @@ class Shards:
     # Set by the engine: a cuda device switches load() to direct_read (bulk reads straight to the device).
     device: torch.device | None = None
 
-    def load(self, stage: int, prefix: str) -> dict[str, torch.Tensor]:
-        """Every checkpoint tensor under ``prefix``, keys relative to it, in the checkpoint's own dtype."""
+    def load(self, stage: int, prefix: str | tuple[str, ...]) -> dict[str, torch.Tensor]:
+        """Every checkpoint tensor under ``prefix``, keys relative to it (to prefix_base(prefix) for a tuple), in the
+        checkpoint's own dtype."""
         sd = {}
+        base = len(prefix_base(prefix))
         direct = getattr(self.device, "type", None) == "cuda" and os.environ.get("HF_GOLDEN_DIRECT_READ", "1") != "0"
         for f in self.files(prefix):
             path = self.fetch(f)
             if direct:
-                sd.update({k[len(prefix) :]: v for k, v in direct_read(path, prefix, self.device).items()})
+                sd.update({k[base:]: v for k, v in direct_read(path, prefix, self.device).items()})
             else:
                 with safe_open(str(path), "pt") as h:
                     for k in h.keys():
                         if k.startswith(prefix):
-                            sd[k[len(prefix) :]] = h.get_tensor(k)
+                            sd[k[base:]] = h.get_tensor(k)
             if self.last_use[f] <= stage and path.is_relative_to(self.tmp):  # never delete a cached copy
                 path.unlink()
         return sd
@@ -291,7 +300,7 @@ DIRECT_THREADS = int(os.environ.get("HF_GOLDEN_READ_THREADS", "8"))
 _pinned: torch.Tensor | None = None  # one reusable pinned staging buffer, grown on demand
 
 
-def direct_read(path: Path, prefix: str, device: torch.device) -> dict[str, torch.Tensor]:
+def direct_read(path: Path, prefix: str | tuple[str, ...], device: torch.device) -> dict[str, torch.Tensor]:
     """The tensors of ``path`` under ``prefix`` (full checkpoint names), on ``device``, bytes unchanged.
 
     safe_open reads through an mmap, one 4 KiB page fault at a time; in a memory-limited container whose page cache
