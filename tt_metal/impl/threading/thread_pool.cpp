@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <atomic>
+#include <chrono>
 #include <cstddef>
+#include <cstdlib>
 #include <future>
 #include <type_traits>
 #include <utility>
@@ -196,6 +198,19 @@ private:
 // to its physical device.
 // If all physical devices are on the same NUMA node, CPU cores will be assigned to minimize contention
 // across threads.
+// TT_METAL_WORKER_SPIN_US: after a task, a worker keeps
+// spinning for this many microseconds before it blocks on the counter, so a burst of small writes that follows
+// a long device wait by a few milliseconds (the decode step's host inputs after its replay) does not pay a futex
+// wake-up per device thread per copy (0.8 ms for 4 copies to 32 devices, several ms when a core is slow to
+// wake). 0 (the default): the brief spin below only.
+static uint32_t worker_spin_us() {
+    static const uint32_t value = [] {
+        const char* env = std::getenv("TT_METAL_WORKER_SPIN_US");
+        return env ? static_cast<uint32_t>(std::strtoul(env, nullptr, 10)) : 0u;
+    }();
+    return value;
+}
+
 class NumaAwareExecutor {
 public:
     NumaAwareExecutor(ContextId context_id, uint32_t physical_device_id) {
@@ -203,6 +218,8 @@ public:
         thread_binding::set_process_priority(0);
         worker = std::thread([this]() {
             std::function<void()> task;  // Task container for this thread
+            const uint32_t spin_us = worker_spin_us();
+            auto last_task = std::chrono::steady_clock::now();
             while (true) {
                 {
                     // Spin briefly so back-to-back tasks are picked up without entering the kernel,
@@ -213,6 +230,12 @@ public:
                     uint32_t attempts = 0;
                     while (task_counter_.load(std::memory_order_acquire) == 0) {
                         if (++attempts > BACKOFF_START_ATTEMPT) {
+                            if (spin_us > 0 && std::chrono::duration_cast<std::chrono::microseconds>(
+                                                   std::chrono::steady_clock::now() - last_task)
+                                                       .count() < spin_us) {
+                                ttsl::pause();
+                                continue;
+                            }
                             task_counter_.wait(0, std::memory_order_relaxed);
                         }
                     }
@@ -233,6 +256,9 @@ public:
                 // and notify the main thread if all tasks have completed
                 if (task_counter_.fetch_sub(1, std::memory_order_release) == 1) {
                     task_counter_.notify_all();
+                }
+                if (spin_us > 0) {
+                    last_task = std::chrono::steady_clock::now();
                 }
             }
         });
