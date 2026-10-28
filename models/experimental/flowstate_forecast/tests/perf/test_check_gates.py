@@ -32,7 +32,14 @@ def _record(case, precision, noise):
     gh, gq = M.head(g["combined_normalized"]), M.head(g["quantile_outputs"])
     h = gh + noise * torch.randn(gh.shape, generator=gen)
     m = M.gate_metrics(h, gh, gq, gq, g["prediction_outputs"], g["prediction_outputs"])
-    return {"name": f"suite:{case}", "precision": precision, **m, "git_head": HEAD, "git_dirty": "", "started_at": T0 + 5}
+    return {
+        "name": f"suite:{case}",
+        "precision": precision,
+        **m,
+        "git_head": HEAD,
+        "git_dirty": "",
+        "started_at": T0 + 5,
+    }
 
 
 @pytest.fixture(scope="module")
@@ -111,7 +118,10 @@ def test_inactive_collapsed_fails(recs):
 def test_gross_element_fails(recs):
     gates, base = recs
     r = base[0]
-    assert any("abs_err_max" in f for f in _check([dict(r, abs_err_max=r["abs_err_max"] * 1.6)], [r], gates, require_coverage=False))
+    assert any(
+        "abs_err_max" in f
+        for f in _check([dict(r, abs_err_max=r["abs_err_max"] * 1.6)], [r], gates, require_coverage=False)
+    )
 
 
 def test_missing_drift_metric_fails(recs):
@@ -141,7 +151,13 @@ def test_row_drift_toward_reference_passes(recs):
     i = _first_active(r, "bias_rows")
     b = copy.deepcopy(r)
     b["bias_rows"][i] = 0.1
-    one = lambda v: [f for f in _check([dict(r, bias_rows=r["bias_rows"][:i] + [v] + r["bias_rows"][i + 1 :])], [b], gates, require_coverage=False) if "bias_row_drift_max" in f]  # noqa: E731
+    one = lambda v: [
+        f
+        for f in _check(
+            [dict(r, bias_rows=r["bias_rows"][:i] + [v] + r["bias_rows"][i + 1 :])], [b], gates, require_coverage=False
+        )
+        if "bias_row_drift_max" in f
+    ]  # noqa: E731
     assert not one(0.0) and not one(0.12)
     assert one(0.14) and one(-0.04)
     assert any(f"row {i}" in f for f in one(0.14))
@@ -153,7 +169,16 @@ def test_spread_row_drift_toward_one_passes(recs):
     i = _first_active(r, "spread_ratio_rows")
     b = copy.deepcopy(r)
     b["spread_ratio_rows"][i] = 0.8
-    one = lambda v: [f for f in _check([dict(r, spread_ratio_rows=r["spread_ratio_rows"][:i] + [v] + r["spread_ratio_rows"][i + 1 :])], [b], gates, require_coverage=False) if "spread_ratio_row_drift_max" in f]  # noqa: E731
+    one = lambda v: [
+        f
+        for f in _check(
+            [dict(r, spread_ratio_rows=r["spread_ratio_rows"][:i] + [v] + r["spread_ratio_rows"][i + 1 :])],
+            [b],
+            gates,
+            require_coverage=False,
+        )
+        if "spread_ratio_row_drift_max" in f
+    ]  # noqa: E731
     assert not one(1.0) and not one(1.14)
     assert one(1.16) and one(0.64)
 
@@ -218,3 +243,43 @@ def test_inactive_collapse_second_check(recs):
         if r["name"] == "suite:nan_mix":
             c = dict(r, **m)
             assert any("inactive_spread_ratio_min" in f for f in _check([c], [r], gates, require_coverage=False))
+
+
+def _local(gates):
+    """gates without the ref files, so the drift is against the test's own baseline."""
+    g = copy.deepcopy(gates)
+    for d in [g["drift"], *g["drift_by"].values()]:
+        for t in d.values():
+            if t:
+                t.pop("ref", None)
+    return g
+
+
+@pytest.mark.parametrize("sign", [1, -1])
+def test_top_quantile_shift_fails_q_drift(recs, sign):
+    """D5 item 2: +-0.02 on the top quantile moves no row bias past 0.03, but fails bias_q_drift_max."""
+    gates, base = recs
+    g = torch.load(GOLDENS / "model16.pt", weights_only=True)
+    gh, gq = M.head(g["combined_normalized"]), M.head(g["quantile_outputs"])
+    h = gh + 1e-4 * torch.randn(gh.shape, generator=torch.Generator().manual_seed(3))
+    h[:, -1] += sign * 0.02
+    m = M.gate_metrics(h, gh, gq, gq, g["prediction_outputs"], g["prediction_outputs"])
+    r = {**base[0], **m}
+    fails = _check([r], base, _local(gates), require_coverage=False)
+    assert any("bias_q_drift_max quantile 8" in f for f in fails)
+    assert not any("bias_row_drift_max" in f for f in fails)
+
+
+def test_inactive_level_shift_fails_drift(recs):
+    """D5 item 3: +0.03 on the inactive rows of nan_mix stays under the 0.05 floor and fails the drift."""
+    gates, base = recs
+    g = torch.load(GOLDENS / "nan_mix.pt", weights_only=True)
+    gh, gq = M.head(g["combined_normalized"]), M.head(g["quantile_outputs"])
+    h = gh + 1e-4 * torch.randn(gh.shape, generator=torch.Generator().manual_seed(3))
+    h[~M.active_rows(gh)] += 0.03
+    m = M.gate_metrics(h, gh, gq, gq, g["prediction_outputs"], g["prediction_outputs"])
+    b = next(x for x in base if x["name"] == "suite:nan_mix" and x["precision"] == "accuracy")
+    fails = _check([{**b, **m}], base, _local(gates), require_coverage=False)
+    assert any("inactive_max_err drift" in f for f in fails)
+    assert not any("inactive_max_err" in f and "floor" in f for f in fails)
+    assert "pcc_row_min" in m["row_info"]

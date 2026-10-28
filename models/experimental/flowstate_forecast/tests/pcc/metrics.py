@@ -21,6 +21,8 @@ sort). Data space: ``quantile_outputs`` ``(B, 9, H', 1)`` and ``prediction_outpu
                        gate (v1.24): a level shift. bias_row_argmax names the row.
     bias_rows          each active row's signed mean error (None on inactive rows): check_gates gates
                        bias_row_drift_max = max_i |e_i - e0_i| against the fixed record (v1.26, D3 item 3)
+    bias_quantiles     each quantile's signed mean error over every row (normalized): check_gates gates
+                       bias_q_drift_max = max_q |m_q - m0_q| against the fixed record (v1.31, D5 item 2)
     spread_ratio_rows  each active row's spread ratio (None on inactive rows): spread_ratio_row_drift_max
     pcc_step           PCC of the step differences along the horizon, per quantile: a one-step lag (v1.24)
     row_info           per row metric, the row index, that row's golden std and band RMS (v1.25); for
@@ -92,17 +94,46 @@ def step_diff(h):
 
 def _row(g_h, i, extra=None):
     g = g_h[i].double()
-    out = {"row": int(i), "row_std": float(g.std()), "band_rms": float(spread(g_h[i : i + 1]).double().pow(2).mean().sqrt())}
+    out = {
+        "row": int(i),
+        "row_std": float(g.std()),
+        "band_rms": float(spread(g_h[i : i + 1]).double().pow(2).mean().sqrt()),
+    }
     return {**out, **(extra or {})}
 
 
 # every key gate_metrics writes (check_gates fails a gated one with neither floor nor drift, R1-0b)
 GATE_KEYS = {
-    "pcc_normalized", "pcc_spread", "pcc_row_p01", "pcc_row_min", "pcc_row_p01_active", "pcc_row_min_active",
-    "active_rows", "excluded_rows", "spread_ratio_p01", "spread_ratio_p99", "spread_ratio_p50", "spread_ratio_min",
-    "spread_ratio_max", "pcc_row_min_var", "flat_rows", "flat_max_err", "inactive_max_err", "inactive_spread_ratio_min", "abs_err_max",
-    "bias_row_p50", "bias_row_max", "bias_row_argmax", "bias_rows", "spread_ratio_rows", "pcc_step", "row_info",
-    "pcc_final", "pcc_final_spread", "pcc_mean",
+    "pcc_normalized",
+    "pcc_spread",
+    "pcc_row_p01",
+    "pcc_row_min",
+    "pcc_row_p01_active",
+    "pcc_row_min_active",
+    "active_rows",
+    "excluded_rows",
+    "spread_ratio_p01",
+    "spread_ratio_p99",
+    "spread_ratio_p50",
+    "spread_ratio_min",
+    "spread_ratio_max",
+    "pcc_row_min_var",
+    "flat_rows",
+    "flat_max_err",
+    "inactive_max_err",
+    "inactive_spread_ratio_min",
+    "abs_err_max",
+    "bias_row_p50",
+    "bias_row_max",
+    "bias_row_argmax",
+    "bias_rows",
+    "bias_quantiles",
+    "spread_ratio_rows",
+    "pcc_step",
+    "row_info",
+    "pcc_final",
+    "pcc_final_spread",
+    "pcc_mean",
 }
 
 
@@ -131,6 +162,10 @@ def gate_metrics(h, g_h, q, g_q, mean=None, g_mean=None) -> dict:
         info["pcc_row_min_active"] = _row(g_h, int(aidx[rr.argmin()]))
         info["spread_ratio_min"] = _row(g_h, int(aidx[ratio.argmin()]))
         info["spread_ratio_max"] = _row(g_h, int(aidx[ratio.argmax()]))
+    info["pcc_row_min"] = _row(g_h, int(rows.argmin()))  # D5 item 3: name the row behind every row-min metric
+    if bool((~act).any()):
+        iidx = (~act).nonzero().flatten()
+        info["inactive_max_err"] = _row(g_h, int(iidx[err[iidx].argmax()]))
     m = {
         "pcc_normalized": pearson(g_h, h),
         "pcc_spread": pearson(spread(g_h), spread(h)),
@@ -156,6 +191,7 @@ def gate_metrics(h, g_h, q, g_q, mean=None, g_mean=None) -> dict:
         "bias_row_max": float(bias.max()),
         "bias_row_argmax": int(bias.argmax()),
         "bias_rows": [round(float(b), 7) if a else None for b, a in zip(signed, act)],
+        "bias_quantiles": [round(float(v), 7) for v in diff.mean((0, 2))],
         "spread_ratio_rows": [round(float(r), 7) if a else None for r, a in zip(ratio_all, act)],
         "pcc_step": pearson(step_diff(g_h), step_diff(h)),
         "row_info": info,

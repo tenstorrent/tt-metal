@@ -23,6 +23,8 @@ must pass every drift (R1-0a). Shifts and single-row band scalings are probed in
                         active rows with the largest golden std
     lag1                the forecast one step late (v1.22)
     band_1.3x_row       the band of one active row (the widest) scaled 1.3x (v1.26); band_0.7x_row 0.7x
+    top_q_shift(_neg)   +-0.02 on the top quantile only, every row (v1.31, D5 item 2)
+    inactive_shift(_neg) +-0.03 level shift of the inactive rows (v1.31, D5 item 3; n/a without them)
 
 With ``--dumps`` (the bench's MODEL_PERF_DUMP and the suite's FLOWSTATE_SUITE_DUMP outputs of the fixed record's
 jobs), each broken output is made from the device output of that case and precision instead of the golden, and
@@ -57,6 +59,8 @@ from models.experimental.flowstate_forecast.tests.perf.check_gates import (
 
 BENCH = ("paper", "long_context", "long_horizon", "scale_q", "single", "single_long")
 SHIFT = 0.05
+TOP_Q_SHIFT = 0.02  # D5 item 2
+INACTIVE_SHIFT = 0.03  # D5 item 3
 
 
 def scale_band(h, rows, factor):
@@ -85,6 +89,12 @@ def broken(base, gh):
     shifted[big] += SHIFT
     shifted_neg = base.clone()
     shifted_neg[big] -= SHIFT
+    top, top_neg = base.clone(), base.clone()
+    top[:, -1] += TOP_Q_SHIFT
+    top_neg[:, -1] -= TOP_Q_SHIFT
+    ina, ina_neg = base.clone(), base.clone()
+    ina[~act] += INACTIVE_SHIFT
+    ina_neg[~act] -= INACTIVE_SHIFT
     lag = base.clone()
     lag[:, :, 1:] = base[:, :, :-1]
     return {
@@ -100,6 +110,10 @@ def broken(base, gh):
         "lag1": (lag, "all series"),
         "band_1.3x_row": (scale_band(base, wide[:1], 1.3), f"row {wide[:1].tolist()}"),
         "band_0.7x_row": (scale_band(base, wide[:1], 0.7), f"row {wide[:1].tolist()}"),
+        "top_q_shift": (top, "quantile 8, all series"),
+        "top_q_shift_neg": (top_neg, "quantile 8, all series"),
+        "inactive_shift": (ina, f"{int((~act).sum())} inactive series"),
+        "inactive_shift_neg": (ina_neg, f"{int((~act).sum())} inactive series"),
     }
 
 
@@ -123,8 +137,8 @@ def _metric(fail: str) -> str:
     """'(name, precision) metric ...' -> metric, or 'metric row <i>' for a row-indexed failure (v1.27: the base's
     own failures are subtracted by (metric, row), so a probe failing another row of the same metric still counts)."""
     rest = fail.split(")", 1)[1].split()
-    if len(rest) >= 3 and rest[1] == "row":
-        return f"{rest[0]} row {rest[2].rstrip(':')}"
+    if len(rest) >= 3 and rest[1] in ("row", "quantile"):
+        return f"{rest[0]} {rest[1]} {rest[2].rstrip(':')}"
     return rest[0] if rest else fail
 
 
@@ -148,6 +162,7 @@ def main():
         g = torch.load(GOLDENS / f"{name}.pt", weights_only=True)
         gh = g["combined_normalized"]
         key = name.removeprefix("bench_") if name.startswith("bench_") else f"suite:{name}"
+
         def rec(h, prec):
             q, pt, _ = to_data(g, h)
             m = M.gate_metrics(h, gh, q, g["quantile_outputs"], pt, g["prediction_outputs"])
@@ -167,7 +182,7 @@ def main():
                 if src == "golden" and (drift := sorted(x for x in own if "drift" in x or " row " in x)):
                     bad.append(f"{key}/{p}/golden fails drift {drift}")
                 for kind, (h, what) in broken(base_h, gh).items():
-                    if kind == "inactive_collapsed" and not bool((~M.active_rows(M.head(gh))).any()):
+                    if kind.startswith("inactive_") and not bool((~M.active_rows(M.head(gh))).any()):
                         print(f"{key:20s} {p:11s} {kind:20s}: not applicable (no inactive series)")
                         continue
                     extra = ""
@@ -178,7 +193,15 @@ def main():
                         extra = f"; +0.05 normalized = {float(real.median()):.3g} x the data row std (median over rows)"
                     fails = sorted(score(rec(h, p), base, gates, args.gates.parent) - own)
                     results.append(
-                        {"case": key, "broken": kind, "base": src, "rows": what + extra, "precision": p, "fails": fails, **stamp}
+                        {
+                            "case": key,
+                            "broken": kind,
+                            "base": src,
+                            "rows": what + extra,
+                            "precision": p,
+                            "fails": fails,
+                            **stamp,
+                        }
                     )
                     print(f"{key:20s} {p:11s} {kind:20s} ({src}; {what}{extra}): fails {len(fails)} {fails}")
                     if not fails:

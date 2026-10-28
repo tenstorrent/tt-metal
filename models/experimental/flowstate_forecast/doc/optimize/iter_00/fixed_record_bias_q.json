@@ -1,0 +1,572 @@
+[
+ {
+  "name": "paper",
+  "precision": "accuracy",
+  "bias_quantiles": [
+   0.0020895,
+   0.0014784,
+   0.0011544,
+   0.0007704,
+   0.0004295,
+   0.0002406,
+   -1.5e-05,
+   -0.0005467,
+   -0.0024057
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/paper-accuracy.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216902.6404178
+ },
+ {
+  "name": "paper",
+  "precision": "performance",
+  "bias_quantiles": [
+   0.0053201,
+   0.0046886,
+   0.0041555,
+   0.0041676,
+   0.0048557,
+   0.0050663,
+   0.0032533,
+   -0.0001657,
+   -0.0002542
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/paper-performance.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216902.6404178
+ },
+ {
+  "name": "long_context",
+  "precision": "accuracy",
+  "bias_quantiles": [
+   0.0030348,
+   0.0023966,
+   0.001957,
+   0.0016109,
+   0.0013199,
+   0.0011174,
+   0.0009221,
+   0.0006542,
+   0.0004883
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/long_context-accuracy.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216902.6404178
+ },
+ {
+  "name": "long_context",
+  "precision": "performance",
+  "bias_quantiles": [
+   0.0118025,
+   0.0099764,
+   0.0082199,
+   0.006946,
+   0.0060366,
+   0.0047334,
+   0.0021013,
+   -0.0009983,
+   -0.0002448
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/long_context-performance.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216902.6404178
+ },
+ {
+  "name": "long_horizon",
+  "precision": "accuracy",
+  "bias_quantiles": [
+   -0.0004548,
+   -0.0006404,
+   -0.000597,
+   -0.0007922,
+   -0.0010177,
+   -0.0008989,
+   -0.0007475,
+   -0.0013423,
+   -0.0045994
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/long_horizon-accuracy.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216902.6404178
+ },
+ {
+  "name": "long_horizon",
+  "precision": "performance",
+  "bias_quantiles": [
+   -0.000635,
+   0.00047,
+   0.001171,
+   0.0019383,
+   0.0032521,
+   0.0049378,
+   0.0051794,
+   0.0021916,
+   -0.0044762
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/long_horizon-performance.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216902.6404178
+ },
+ {
+  "name": "scale_q",
+  "precision": "accuracy",
+  "bias_quantiles": [
+   0.0007517,
+   -0.0007854,
+   -0.0011418,
+   -0.0007721,
+   -0.000516,
+   -2.91e-05,
+   -0.0005744,
+   -0.0022066,
+   -0.0044643
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/scale_q-accuracy.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216902.6404178
+ },
+ {
+  "name": "scale_q",
+  "precision": "performance",
+  "bias_quantiles": [
+   -0.0010073,
+   -0.0052136,
+   -0.0054728,
+   -0.0031451,
+   5.6e-05,
+   0.0034549,
+   0.0032266,
+   -0.0019999,
+   -0.0080831
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/scale_q-performance.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216902.6404178
+ },
+ {
+  "name": "single",
+  "precision": "accuracy",
+  "bias_quantiles": [
+   0.0010381,
+   -0.0005077,
+   -0.001356,
+   -0.0021843,
+   -0.0029941,
+   -0.0035999,
+   -0.0043667,
+   -0.0049338,
+   -0.0053059
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/single-accuracy.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216902.6404178
+ },
+ {
+  "name": "single",
+  "precision": "performance",
+  "bias_quantiles": [
+   0.0031133,
+   0.0005909,
+   -0.0009593,
+   -0.0017876,
+   -0.0017581,
+   -0.0021198,
+   -0.0037869,
+   -0.0056052,
+   0.0019878
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/single-performance.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216902.6404178
+ },
+ {
+  "name": "single_long",
+  "precision": "accuracy",
+  "bias_quantiles": [
+   0.0003416,
+   0.0003562,
+   -2e-06,
+   -0.0008151,
+   -0.001808,
+   -0.0024966,
+   -0.0031244,
+   -0.0042062,
+   -0.0047373
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/single_long-accuracy.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216902.6404178
+ },
+ {
+  "name": "single_long",
+  "precision": "performance",
+  "bias_quantiles": [
+   0.003724,
+   0.0017855,
+   -0.0003352,
+   -0.0021999,
+   -0.0035564,
+   -0.005167,
+   -0.0083774,
+   -0.0133431,
+   -0.0161417
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/single_long-performance.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216902.6404178
+ },
+ {
+  "name": "suite:single",
+  "precision": "accuracy",
+  "bias_quantiles": [
+   -0.0020321,
+   -0.0035421,
+   -0.0043569,
+   -0.0045365,
+   -0.0050913,
+   -0.0056233,
+   -0.0057507,
+   -0.0064245,
+   -0.0066706
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/suite_single-accuracy.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216381.2272203
+ },
+ {
+  "name": "suite:model16",
+  "precision": "accuracy",
+  "bias_quantiles": [
+   0.0021513,
+   0.0014321,
+   0.0010878,
+   0.0008305,
+   0.0005864,
+   0.0004921,
+   0.0002261,
+   -0.0006129,
+   -0.0030849
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/suite_model16-accuracy.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216381.2272203
+ },
+ {
+  "name": "suite:single_long",
+  "precision": "accuracy",
+  "bias_quantiles": [
+   0.0010529,
+   0.0008648,
+   0.000184,
+   -0.0003402,
+   -0.0006015,
+   -0.0011273,
+   -0.0014023,
+   -0.0011832,
+   -0.0002544
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/suite_single_long-accuracy.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216381.2272203
+ },
+ {
+  "name": "suite:nan_mix",
+  "precision": "accuracy",
+  "bias_quantiles": [
+   -0.0003826,
+   -0.0012988,
+   -0.0016631,
+   -0.0016284,
+   -0.0015091,
+   -0.0010299,
+   -0.0003698,
+   -0.0006276,
+   -0.0051919
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/suite_nan_mix-accuracy.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216381.2272203
+ },
+ {
+  "name": "suite:mask0",
+  "precision": "accuracy",
+  "bias_quantiles": [
+   -0.0001735,
+   -0.0009114,
+   -0.0012515,
+   -0.0010767,
+   -0.000898,
+   -0.0005454,
+   -0.0015416,
+   -0.0052098,
+   -0.0121039
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/suite_mask0-accuracy.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216381.2272203
+ },
+ {
+  "name": "suite:daily",
+  "precision": "accuracy",
+  "bias_quantiles": [
+   0.00068,
+   0.0002976,
+   -0.0003707,
+   -0.0004597,
+   -0.0003414,
+   -0.0013929,
+   -0.0046014,
+   -0.0107494,
+   -0.0186453
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/suite_daily-accuracy.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216381.2272203
+ },
+ {
+  "name": "suite:monthly",
+  "precision": "accuracy",
+  "bias_quantiles": [
+   0.0059257,
+   0.004857,
+   0.0046546,
+   0.00536,
+   0.00607,
+   0.0064267,
+   0.0061062,
+   0.0049852,
+   0.0019155
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/suite_monthly-accuracy.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216381.2272203
+ },
+ {
+  "name": "suite:fivemin",
+  "precision": "accuracy",
+  "bias_quantiles": [
+   0.003279,
+   0.0028033,
+   0.0023192,
+   0.0019689,
+   0.0016223,
+   0.001277,
+   0.0009531,
+   0.0007445,
+   0.0018967
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/suite_fivemin-accuracy.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216381.2272203
+ },
+ {
+  "name": "suite:cpm_edge",
+  "precision": "accuracy",
+  "bias_quantiles": [
+   -0.0037615,
+   -0.0037365,
+   -0.0038406,
+   -0.0039551,
+   -0.0042004,
+   -0.0043818,
+   -0.0049267,
+   -0.0061331,
+   -0.0091689
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/suite_cpm_edge-accuracy.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216381.2272203
+ },
+ {
+  "name": "suite:single",
+  "precision": "performance",
+  "bias_quantiles": [
+   -0.0032986,
+   -0.0063802,
+   -0.0081716,
+   -0.0080765,
+   -0.0073649,
+   -0.0076069,
+   -0.0095578,
+   -0.0130087,
+   -0.0094896
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/suite_single-performance.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216381.2272203
+ },
+ {
+  "name": "suite:model16",
+  "precision": "performance",
+  "bias_quantiles": [
+   0.0092859,
+   0.0071495,
+   0.005944,
+   0.0059109,
+   0.0068413,
+   0.0071441,
+   0.0048887,
+   0.0001236,
+   -0.0020952
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/suite_model16-performance.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216381.2272203
+ },
+ {
+  "name": "suite:single_long",
+  "precision": "performance",
+  "bias_quantiles": [
+   0.0085704,
+   0.0066733,
+   0.005311,
+   0.0046647,
+   0.0042915,
+   0.0026569,
+   -0.0004918,
+   -0.0038383,
+   -0.0017295
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/suite_single_long-performance.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216381.2272203
+ },
+ {
+  "name": "suite:nan_mix",
+  "precision": "performance",
+  "bias_quantiles": [
+   -0.0013455,
+   -0.0038333,
+   -0.0044017,
+   -0.0033497,
+   -0.001184,
+   0.0012386,
+   0.002444,
+   0.000577,
+   -0.0071052
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/suite_nan_mix-performance.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216381.2272203
+ },
+ {
+  "name": "suite:mask0",
+  "precision": "performance",
+  "bias_quantiles": [
+   0.0026748,
+   -0.0024983,
+   -0.0042626,
+   -0.0029892,
+   0.0003431,
+   0.0030353,
+   -0.0005193,
+   -0.0115619,
+   -0.013901
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/suite_mask0-performance.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216381.2272203
+ },
+ {
+  "name": "suite:daily",
+  "precision": "performance",
+  "bias_quantiles": [
+   0.0205368,
+   0.0137416,
+   0.0086462,
+   0.0053997,
+   0.0029464,
+   -0.0001559,
+   -0.0041457,
+   -0.0071036,
+   0.0029367
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/suite_daily-performance.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216381.2272203
+ },
+ {
+  "name": "suite:monthly",
+  "precision": "performance",
+  "bias_quantiles": [
+   0.0208996,
+   0.0178687,
+   0.0164095,
+   0.0183898,
+   0.022762,
+   0.0274047,
+   0.0274519,
+   0.0225023,
+   0.0265161
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/suite_monthly-performance.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216381.2272203
+ },
+ {
+  "name": "suite:fivemin",
+  "precision": "performance",
+  "bias_quantiles": [
+   0.0059513,
+   0.0077014,
+   0.0078083,
+   0.0078069,
+   0.0078083,
+   0.0069798,
+   0.0046346,
+   0.0015217,
+   0.0017014
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/suite_fivemin-performance.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216381.2272203
+ },
+ {
+  "name": "suite:cpm_edge",
+  "precision": "performance",
+  "bias_quantiles": [
+   -0.0070167,
+   -0.0087111,
+   -0.0101122,
+   -0.0105221,
+   -0.0102581,
+   -0.0106124,
+   -0.0138895,
+   -0.0213141,
+   -0.030694
+  ],
+  "source": "/home/andy/bringup/scratch/flowstate/g1b/dump/suite_cpm_edge-performance.pt",
+  "git_head": "40e7529f66f95af10a9a2f78a8d2341b38996055",
+  "git_dirty": "",
+  "started_at": 1793216381.2272203
+ }
+]

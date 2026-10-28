@@ -56,9 +56,14 @@ LOWER_IS_BETTER = {
     "bias_row_max",
     "bias_row_drift_max",  # v1.26 / D3 item 3: row-indexed, against the fixed record
     "spread_ratio_row_drift_max",
+    "bias_q_drift_max",  # v1.31 / D5 item 2: quantile-indexed, against the fixed record
 }
 # v1.27: (row vector, golden value); a row passes in [min(c, e0_i) - tol, max(c, e0_i) + tol]
-ROW_DRIFT = {"bias_row_drift_max": ("bias_rows", 0.0), "spread_ratio_row_drift_max": ("spread_ratio_rows", 1.0)}
+ROW_DRIFT = {
+    "bias_row_drift_max": ("bias_rows", 0.0),
+    "spread_ratio_row_drift_max": ("spread_ratio_rows", 1.0),
+    "bias_q_drift_max": ("bias_quantiles", 0.0),  # v1.31: indexed by quantile, the same interval
+}
 # v1.20 / v1.24 / D3 item 2: every record carries a floor for each of these; a gates.json without one is a FAIL
 REQUIRED_FLOORS = {
     "pcc_normalized",
@@ -84,7 +89,16 @@ REQUIRED_FLOORS = {
     "inactive_spread_ratio_min",
 }
 # R1-0b: keys metrics.gate_metrics writes that gate nothing by themselves (counts, indices, row vectors, info)
-NOT_GATED = {"active_rows", "excluded_rows", "flat_rows", "bias_row_argmax", "bias_rows", "spread_ratio_rows", "row_info"}
+NOT_GATED = {
+    "active_rows",
+    "excluded_rows",
+    "flat_rows",
+    "bias_row_argmax",
+    "bias_rows",
+    "bias_quantiles",
+    "spread_ratio_rows",
+    "row_info",
+}
 # ... and a drift tolerance for each of these (v1.22, v1.26)
 REQUIRED_DRIFT = {
     "pcc_normalized",
@@ -94,6 +108,8 @@ REQUIRED_DRIFT = {
     "bias_row_drift_max",
     "spread_ratio_row_drift_max",
     "pcc_step",  # R1-0c
+    "bias_q_drift_max",  # v1.31 / D5 items 2-3
+    "inactive_max_err",
 }
 # v1.14: (metric, minimum active rows). Population percentiles over fewer rows are really the min / max.
 MIN_ACTIVE = {
@@ -276,7 +292,7 @@ def check(
             if why:
                 print(f"n/a  drift {key[0]}/{key[1]} {metric}: not applicable ({why})")
                 continue
-            if "ref" in tol:
+            if "ref" in tol:  # also for row-indexed drift: a vector the fixed record predates (D5 item 2)
                 path = (gates_dir or DEFAULT_GATES.parent) / tol["ref"]
                 if path not in refs:
                     refs[path] = _by_key(load_records(path))
@@ -293,6 +309,7 @@ def check(
                     failures.append(f"{key} {metric} drift: {where}")
                     continue
                 t, worst, bad = tol["abs"], (0.0, -1), []
+                unit = "quantile" if vec == "bias_quantiles" else "row"
                 for i, (x, y) in enumerate(zip(r[vec], b[vec])):
                     if y is None:
                         continue  # inactive in the baseline
@@ -305,12 +322,12 @@ def check(
                     if out > 0:
                         bad.append((i, f"{x:.6g} outside [{lo:.6g}, {hi:.6g}]"))
                 print(
-                    f"{'ok  ' if not bad else 'FAIL'} drift {key[0]}/{key[1]} {metric} {len(bad)} row(s) outside "
-                    f"[min({c}, e0) - {t}, max({c}, e0) + {t}] (worst excess {worst[0]:.6g}, row {worst[1]})"
+                    f"{'ok  ' if not bad else 'FAIL'} drift {key[0]}/{key[1]} {metric} {len(bad)} {unit}(s) outside "
+                    f"[min({c}, e0) - {t}, max({c}, e0) + {t}] (worst excess {worst[0]:.6g}, {unit} {worst[1]})"
                 )
                 for i, what in bad:
-                    print(f"FAIL drift {key[0]}/{key[1]} {metric} row {i}: {what}")
-                    failures.append(f"{key} {metric} row {i}: {what}")
+                    print(f"FAIL drift {key[0]}/{key[1]} {metric} {unit} {i}: {what}")
+                    failures.append(f"{key} {metric} {unit} {i}: {what}")
                 continue
             if b is None or metric not in r or metric not in b:
                 where = (
