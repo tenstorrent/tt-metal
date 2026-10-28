@@ -187,7 +187,7 @@ class TtKimiK3Runtime(TtPrefillRuntime):
         spec carries the geometry and the gathered layouts rather than only this rank's tensors.
 
         The table published is always the walked one; config "00" is also derived from the kvpe
-        cache's declared layout (`kimi_k3/cache_layout.py`) and the model written next to the table
+        cache's declared layout (`merged_cache_layout_model`) and the model written next to the table
         when the two agree.
         """
         from models.demos.common.prefill.runners.migration import allgather_kv_stage_layout

@@ -70,23 +70,31 @@ def _topology(tp_deduped):
     return ttnn.TensorTopology(ttnn.MeshShape([SP * TP]), [ttnn.PlacementReplicate()], coords)
 
 
-def _stub_cache(stage_layers, *, tp_deduped=False, fp8=False):
+# Blackhole's DRAM page alignment: a row-major token row is padded up to it.
+DRAM_ALIGNMENT = 64
+
+
+def _stub_cache(stage_layers, *, tp_deduped=False, row_major_width=None):
+    """The KVPE cache tensor: tiled bfp8, or with ``row_major_width`` a scaled-FP8 row-major cache of
+    ``row_major_width``-byte token rows."""
     stripes = SP * TP if tp_deduped else SP
+    fp8 = row_major_width is not None
+    width = row_major_width if fp8 else KVPE_DIM
     storage = SimpleNamespace(
-        shape=(NUM_USERS * stage_layers, 1, SEQ_LEN // stripes, KVPE_DIM),
+        shape=(NUM_USERS * stage_layers, 1, SEQ_LEN // stripes, width),
         dtype=ttnn.fp8_e4m3 if fp8 else ttnn.bfloat8_b,
         layout=ttnn.ROW_MAJOR_LAYOUT if fp8 else ttnn.TILE_LAYOUT,
         tensor_topology=lambda: _topology(tp_deduped),
-        buffer_aligned_page_size=lambda: KVPE_DIM,  # one fp8 token row
+        buffer_aligned_page_size=lambda: -(-width // DRAM_ALIGNMENT) * DRAM_ALIGNMENT,  # one fp8 token row
     )
     return SimpleNamespace(storage=storage)
 
 
-def _build(path, stage_layout, *, tp_deduped=False, fp8=False, layer_rows=None):
+def _build(path, stage_layout, *, tp_deduped=False, row_major_width=None, layer_rows=None):
     first_stage = stage_layout[0]["count"]
     build_and_serialize_kv_chunk_table(
         mesh_device=None,
-        kvpe_cache=_stub_cache(first_stage, tp_deduped=tp_deduped, fp8=fp8),
+        kvpe_cache=_stub_cache(first_stage, tp_deduped=tp_deduped, row_major_width=row_major_width),
         seq_len=SEQ_LEN,
         num_layers=first_stage,
         mesh_shape=(SP, TP),
@@ -165,6 +173,18 @@ def test_a_compacted_cache_publishes_no_row_for_a_layer_it_does_not_hold(tmp_pat
         assert (derived.lookup(layer, 0, 0, 0).size_bytes > 0) == held, f"layer {layer}"
 
 
+# GLM-5.3's packed scaled-FP8 row (656 B, padded to 704) and a row already a multiple of the alignment.
+@pytest.mark.parametrize("row_major_width", [656, 576], ids=["padded_row", "aligned_row"])
+@TP_DEDUPED
+def test_a_row_major_cache_derives_the_walked_table(tmp_path, monkeypatch, row_major_width, tp_deduped):
+    monkeypatch.delenv(LAYOUT_MODEL_ENV, raising=False)
+    path = os.path.join(str(tmp_path), "table.pb")
+    walked = _build(path, _stage_layout(TWO_STAGES), tp_deduped=tp_deduped, row_major_width=row_major_width)
+    assert walked.config(0).chunk_size_bytes == 32 * (-(-row_major_width // DRAM_ALIGNMENT) * DRAM_ALIGNMENT)
+    assert os.path.exists(path + LAYOUT_MODEL_SUFFIX)
+    assert _derives(path + LAYOUT_MODEL_SUFFIX, walked) is None
+
+
 def test_a_model_that_derives_another_table_is_not_written(tmp_path, monkeypatch):
     monkeypatch.delenv(LAYOUT_MODEL_ENV, raising=False)
     model_for = kv_chunk_table.deepseek_cache_layout_model
@@ -181,19 +201,18 @@ def test_a_model_that_derives_another_table_is_not_written(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize(
-    "stage_layout, fp8, layer_rows",
+    "stage_layout, layer_rows",
     [
-        (_stage_layout(TWO_STAGES, chip_id=lambda r, c: c * SP + r), False, None),
-        (_stage_layout(TWO_STAGES, num_banks=BH_NUM_DRAM_BANKS - 1), False, None),
-        (_stage_layout(TWO_STAGES), True, None),
-        (_stage_layout(TWO_STAGES), False, [1, 2, 7, 4, 8]),
+        (_stage_layout(TWO_STAGES, chip_id=lambda r, c: c * SP + r), None),
+        (_stage_layout(TWO_STAGES, num_banks=BH_NUM_DRAM_BANKS - 1), None),
+        (_stage_layout(TWO_STAGES), [1, 2, 7, 4, 8]),
     ],
-    ids=["column_major_mesh", "harvested_bank", "fp8_row_major", "layer_rows_out_of_order"],
+    ids=["column_major_mesh", "harvested_bank", "layer_rows_out_of_order"],
 )
-def test_a_layout_the_model_cannot_declare_keeps_the_walk(tmp_path, monkeypatch, stage_layout, fp8, layer_rows):
+def test_a_layout_the_model_cannot_declare_keeps_the_walk(tmp_path, monkeypatch, stage_layout, layer_rows):
     monkeypatch.delenv(LAYOUT_MODEL_ENV, raising=False)
     path = os.path.join(str(tmp_path), "table.pb")
-    walked = _build(path, stage_layout, fp8=fp8, layer_rows=layer_rows)
+    walked = _build(path, stage_layout, layer_rows=layer_rows)
     assert walked.total_entries() > 0
     assert not os.path.exists(path + LAYOUT_MODEL_SUFFIX)
 
@@ -215,4 +234,4 @@ def test_publishing_the_derived_table_gives_the_walked_one(tmp_path, monkeypatch
 def test_publishing_the_derived_table_refuses_a_layout_the_model_cannot_declare(tmp_path, monkeypatch, expect_error):
     monkeypatch.setenv(LAYOUT_MODEL_ENV, "1")
     with expect_error(RuntimeError, "not derivable"):
-        _build(os.path.join(str(tmp_path), "table.pb"), _stage_layout(TWO_STAGES), fp8=True)
+        _build(os.path.join(str(tmp_path), "table.pb"), _stage_layout(TWO_STAGES, num_banks=BH_NUM_DRAM_BANKS - 1))
