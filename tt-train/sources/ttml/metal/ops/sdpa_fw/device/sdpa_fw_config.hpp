@@ -69,6 +69,8 @@ struct SDPAForwardCbTiles {
     uint32_t stat;    // each of max prev/cur, exp max diff, sum prev/cur
     uint32_t mm_out;  // each of prev/cur
     uint32_t output;
+    uint32_t reduction_scaler;  // the ones tile of the row reductions
+    uint32_t matmul_reduce;     // the ones-column tile of the matmul row reduce and the lse mask
 };
 
 SDPAForwardCbTiles cb_tiles(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks);
