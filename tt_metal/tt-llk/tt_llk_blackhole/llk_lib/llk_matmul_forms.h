@@ -110,9 +110,11 @@ constexpr char matmul_default_form()
 template <MathFidelity math_fidelity, DstSync dst_sync, bool fp32_dest, std::uint32_t kt_per_section, DataFormat out_format, DataFormat in0 = DataFormat::Invalid, DataFormat in1 = DataFormat::Invalid>
 constexpr bool matmul_half_end_fold()
 {
-    // HiFi3 and HiFi4 take it on 16-bit and 32-bit operands only: with a block float operand, and at HiFi3 with a 32-bit DEST, the earlier release of the held source reads slower
-    constexpr bool wide_operands = (in0 == DataFormat::Float16_b || in0 == DataFormat::Float16 || in0 == DataFormat::Float32) &&
-                                   (in1 == DataFormat::Float16_b || in1 == DataFormat::Float16 || in1 == DataFormat::Float32);
+    // HiFi3 and HiFi4 take it on 16-bit and 32-bit operands, and on Bfp8_b by Bfp8_b into Float32: with other block float operands, and at HiFi3 with a 32-bit DEST,
+    // the earlier release of the held source reads slower
+    constexpr bool wide_operands = ((in0 == DataFormat::Float16_b || in0 == DataFormat::Float16 || in0 == DataFormat::Float32) &&
+                                    (in1 == DataFormat::Float16_b || in1 == DataFormat::Float16 || in1 == DataFormat::Float32)) ||
+                                   (in0 == DataFormat::Bfp8_b && in1 == DataFormat::Bfp8_b && out_format == DataFormat::Float32);
     return dst_sync == DstSync::SyncHalf &&
            ((math_fidelity == MathFidelity::HiFi2 && !fp32_dest && kt_per_section == 1 && (out_format == DataFormat::Float16_b || out_format == DataFormat::Bfp8_b)) ||
             ((math_fidelity == MathFidelity::HiFi4 || (math_fidelity == MathFidelity::HiFi3 && !fp32_dest)) && wide_operands));
