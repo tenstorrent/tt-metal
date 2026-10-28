@@ -2,8 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 """Single-chip accuracy, determinism and production performance of ttnn.experimental.kda.entry_correction.
 
-On one chip the SP ring is a single rank, so a start inside the rank splits it: its chunks from the reset chunk on, and
-its final state, take the tail's entry state.
+On one chip the SP ring is a single rank, and the KDA chronology never splits a single rank (kda_chronology::derive):
+every valid chunk, and the final state, take the entry state wherever the interval starts. The split tail and its reset
+chunk need two ranks or more; the multi-chip relay and layer tests cover them.
 """
 
 from __future__ import annotations
@@ -46,24 +47,19 @@ class _Interval:
     start: int
     end: int | None
 
-    def valid_and_reset_chunks(self) -> tuple[int, int]:
-        """The rank's valid chunks and the chunk its split tail starts at (0: no tail). On one rank the interval wraps
-        within the rank: the head holds rows [offset, ROWS), the tail rows [0, offset)."""
-        offset = self.start % _ROWS
-        head_rows = _ROWS - offset
+    def valid_chunks(self) -> int:
+        """The rank's valid chunks: an interval of end - start rows, or the whole rank without an end."""
         valid_rows = _ROWS if self.end is None else min(self.end - self.start, _ROWS)
-        reset = head_rows // _CHUNK if offset != 0 and valid_rows > head_rows else 0
-        return -(-valid_rows // _CHUNK), reset
+        return -(-valid_rows // _CHUNK)
 
 
-# From the sequence start every chunk enters at the entry state; "bounded" ends two chunks before the rank's end. A start
-# 352 rows in splits the rank at chunk 9; "split-bounded" ends the interval three chunks into the tail. Over the 110
-# cores a head's 20 chunks split five per core, so the reset falls inside the second core's chunks.
+# "bounded" ends two chunks before the rank's end. "offset" starts 352 rows in, which on one rank changes nothing;
+# "offset-bounded" ends 12 chunks after it, so a head's last cores (five chunks each over the 110 cores) have none.
 _INTERVALS = {
     "full": _Interval(0, None),
     "bounded": _Interval(0, _ROWS - 64),
-    "split": _Interval(352, None),
-    "split-bounded": _Interval(352, 352 + _ROWS - 256),
+    "offset": _Interval(352, None),
+    "offset-bounded": _Interval(352, 352 + _ROWS - 256),
 }
 
 
@@ -108,13 +104,11 @@ def _device_inputs(device, correction: EntryCorrection, host: tuple[torch.Tensor
 
 
 def _reference(host: tuple[torch.Tensor, ...], interval: _Interval) -> tuple[torch.Tensor, torch.Tensor, int]:
-    """The valid chunk outputs and the final state, in FP64."""
-    zero, identity, final_a, final_b, entry, tail = (tensor.double() for tensor in host)
-    valid, reset = interval.valid_and_reset_chunks()
+    """The valid chunk outputs and the final state, in FP64. tail_entry is never read on one rank."""
+    zero, identity, final_a, final_b, entry, _ = (tensor.double() for tensor in host)
+    valid = interval.valid_chunks()
     output = zero + (identity - zero) @ entry.unsqueeze(1)
-    if reset:
-        output[:, reset:] = (zero + (identity - zero) @ tail.unsqueeze(1))[:, reset:]
-    final = final_a @ (tail if reset else entry) + final_b
+    final = final_a @ entry + final_b
     return output[:, :valid].float(), final.float(), valid
 
 
@@ -179,12 +173,12 @@ def test_entry_correction_accuracy_and_determinism(
 
 def test_entry_correction_cache_hit_reads_new_interval(device: ttnn.Device, isolated_program_cache: None) -> None:
     """actual_start and actual_end are read on device, not baked into the program: one cached program must serve an
-    unsplit interval and a split, bounded one."""
+    interval from the rank's start and a bounded one from inside it."""
     correction = _correction(device, ttnn.MathFidelity.HiFi4)
     host = _host_inputs(seed=7)
     inputs = _device_inputs(device, correction, host)
     entries = device.num_program_cache_entries()
-    for interval_id in ("bounded", "split-bounded"):
+    for interval_id in ("bounded", "offset-bounded"):
         interval = _INTERVALS[interval_id]
         output, final = correction(
             *inputs, make_actual_start(device, interval.start), make_actual_start(device, interval.end)
@@ -240,13 +234,13 @@ def test_entry_correction_rejects_aliased_entry_states(
 @skip_with_llk_assert("No need to verify LLK asserts for performance tests.")
 @skip_with_watcher("Watcher perturbs kernel timing; perf checks are not meaningful with it enabled.")
 def test_entry_correction_production_performance(device: ttnn.Device) -> None:
-    """The model's call: a split rank, so both seeds and the reset are exercised, at the scan's HiFi2."""
+    """The model's call shape, starting inside the rank, at the scan's HiFi2."""
     if not ttnn.device.IsProgramRealtimeProfilerActive():
         pytest.fail("Real-time profiler must be active for entry-correction performance checks")
     math_fidelity = ttnn.MathFidelity.HiFi2
     correction = _correction(device, math_fidelity)
     inputs = _device_inputs(device, correction, _host_inputs(seed=117))
-    interval = _INTERVALS["split"]
+    interval = _INTERVALS["offset"]
     actual_start = make_actual_start(device, interval.start)
     # Compile outside the measured window.
     for tensor in correction(*inputs, actual_start, None):
