@@ -42,7 +42,7 @@ from .sol_prepass import (
 KERNEL_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "sol_kernels")
 TILE_BYTES = 2048
 # Defaults of the pooled all-gather configuration (see SolPrepassFused.__init__): overridden per instance / by env.
-DEFAULT_GATHER_KWARGS: dict = {"num_workers_per_link": 1}
+DEFAULT_GATHER_KWARGS: dict = {"num_workers_per_link": 1, "barrier": False}
 DEFAULT_GATHER_PERSISTENT = False
 L1_CB_BUDGET = 1_200_000  # circular-buffer bytes per core the route program may use (Blackhole L1 = 1.5 MB)
 SCRATCH_PAGES = 8
