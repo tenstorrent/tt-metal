@@ -433,7 +433,7 @@ class _InterruptFlag:
             # The CCL semaphores and width_sharded_all_reduce's scratch live as long as their cached programs.
             # Without L1_SMALL they land in L1 wherever the first layer's temporaries leave the allocator, and
             # cap the circular buffers of every later program on the stage (fused_experts clashes at 40 layers).
-            "l1_small_size": int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", "4096")),
+            "l1_small_size": int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", "8192")),
         }
     ],
     indirect=["device_params"],

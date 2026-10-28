@@ -11,10 +11,12 @@ void kernel_main() {
     constexpr uint32_t cb_untilized = get_compile_time_arg_val(1);
     constexpr uint32_t tiles_per_core = get_compile_time_arg_val(2);
     constexpr uint32_t skip_untilize = get_compile_time_arg_val(3);
-    constexpr uint32_t output_rows = get_compile_time_arg_val(4);
-    constexpr uint32_t shard_width_bytes = get_compile_time_arg_val(5);
-    constexpr uint32_t full_width_bytes = get_compile_time_arg_val(6);
-    constexpr uint32_t gather_semaphore_id = get_compile_time_arg_val(7);
+    constexpr uint32_t num_slices = get_compile_time_arg_val(4);
+    constexpr uint32_t rows_per_slice = get_compile_time_arg_val(5);
+    constexpr uint32_t padded_rows_per_slice = get_compile_time_arg_val(6);
+    constexpr uint32_t shard_width_bytes = get_compile_time_arg_val(7);
+    constexpr uint32_t full_width_bytes = get_compile_time_arg_val(8);
+    constexpr uint32_t gather_semaphore_id = get_compile_time_arg_val(9);
 
     const uint32_t sender_id = get_arg_val<uint32_t>(0);
     const uint32_t hub_output_addr = get_arg_val<uint32_t>(1);
@@ -25,7 +27,7 @@ void kernel_main() {
     uint32_t local_untilized_addr;
     if constexpr (skip_untilize) {
         // ROW_MAJOR shards are stored as one page per logical row.
-        input_cb.push_back(output_rows);
+        input_cb.push_back(num_slices * padded_rows_per_slice);
         local_untilized_addr = input_cb.get_read_ptr();
     } else {
         CircularBuffer untilized_cb(cb_untilized);
@@ -38,11 +40,15 @@ void kernel_main() {
     const uint32_t shard_column_offset = sender_id * shard_width_bytes;
 
     // Width shards are contiguous columns. Stitch only the logical rows into the hub's
-    // output shard; tile-padding rows from untilize are dropped.
-    for (uint32_t row = 0; row < output_rows; ++row) {
-        const uint32_t src_addr = local_untilized_addr + row * shard_width_bytes;
-        const uint32_t dst_addr = hub_output_addr + row * full_width_bytes + shard_column_offset;
-        noc_async_write(src_addr, get_noc_addr(hub_noc_x, hub_noc_y, dst_addr), shard_width_bytes);
+    // output shard; the tile-padding rows that close every leading-dim slice are dropped.
+    for (uint32_t slice = 0; slice < num_slices; ++slice) {
+        for (uint32_t row = 0; row < rows_per_slice; ++row) {
+            const uint32_t src_row = slice * padded_rows_per_slice + row;
+            const uint32_t dst_row = slice * rows_per_slice + row;
+            const uint32_t src_addr = local_untilized_addr + src_row * shard_width_bytes;
+            const uint32_t dst_addr = hub_output_addr + dst_row * full_width_bytes + shard_column_offset;
+            noc_async_write(src_addr, get_noc_addr(hub_noc_x, hub_noc_y, dst_addr), shard_width_bytes);
+        }
     }
     noc_async_write_barrier();
 

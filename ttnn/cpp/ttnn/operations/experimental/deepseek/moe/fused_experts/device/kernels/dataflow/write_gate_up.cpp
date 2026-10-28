@@ -7,8 +7,28 @@
 #include "api/dataflow/circular_buffer.h"
 #include "api/dataflow/endpoints.h"
 #include "api/dataflow/noc_semaphore.h"
+#include "api/core_local_mem.h"
+
+namespace {
+
+constexpr uint32_t kFaceRowBytes = 16 * 2;              // 16 bf16 columns: one face row
+constexpr uint32_t kRowChunkBytes = 2 * kFaceRowBytes;  // 32 bf16 columns: one tile width of a row
+
+// Byte offset of row r's 16-column half h inside a (tile_h x 32) bf16 tile of face_r_dim-row faces:
+// faces are raster ordered (0, 1 on top, 2, 3 below when tile_h == 32), each row-major.
+FORCE_INLINE uint32_t face_row_offset(uint32_t r, uint32_t h, uint32_t face_r_dim) {
+    return ((((r / face_r_dim) * 2u) + h) * face_r_dim + (r % face_r_dim)) * kFaceRowBytes;
+}
+
+}  // namespace
 
 // Writer / gather-scatter kernel (runs on every compute core), structured in two phases:
+//
+//   INPUT (INPUT_RM_ROWS only): several ROW_MAJOR token rows are not a run of tiles, so before
+//      anything else this core restripes them into its own cb_input as (tile_h x 32) tiles and
+//      publishes it -- from its L1 replica in place (INPUT_REPLICATED), or from DRAM through a
+//      double-buffered staging CB. The writer is otherwise idle until compute produces, so this
+//      runs alongside the routing and the first gate_up weight fetch.
 //
 //   PHASE 1 -- GATHER (SwiGLU cores only): for every expert, copies this core's
 //      swiglu_tiles-tile SwiGLU activation slice (cb_out) into the cb_act slot of the hub that
@@ -50,6 +70,9 @@
 //   18: num_hubs  (1, or 2 for the two-hub gather/broadcast)
 //   19+: TensorAccessorArgs(output)
 //   then: shared_i_tiles (6-expert path's shared expert I-tiles; 0 without one)
+//   then (used by INPUT_RM_ROWS): rows, k_tiles, cb_input, input_tile_bytes, face_r_dim,
+//         input_row_stride (bytes between a replica's rows), cb_rm_stage, stage_chunk_tiles
+//         (32-column chunks per staged DRAM read), then TensorAccessorArgs(input)
 //
 // Runtime args:
 //   0: output base address
@@ -59,6 +82,7 @@
 //   6: hub1_noc_x     7: hub1_noc_y (this core's group's hub1, the high-I gather target)
 //   8: down_local     (6-expert path: this core's slot among its group's 16 down cores, picking its
 //                      H columns; 0xFFFFFFFF on a gate_up-only 9th-row core, which writes no output)
+//   9: input base address (INPUT_RM_ROWS only)
 //
 // A producer scatters its I slice to whichever hub owns it (the slice's first column decides: below
 // `split_col` goes to hub0, at or above it to hub1) and bumps BOTH hubs' gather semaphores. Bumping
@@ -87,7 +111,17 @@ void kernel_main() {
     constexpr uint32_t num_hubs = get_compile_time_arg_val(18);
 
     constexpr auto out_args = TensorAccessorArgs<19>();
-    constexpr uint32_t shared_i_tiles = get_compile_time_arg_val(out_args.next_compile_time_args_offset());
+    constexpr uint32_t kSharedArg = out_args.next_compile_time_args_offset();
+    constexpr uint32_t shared_i_tiles = get_compile_time_arg_val(kSharedArg);
+    constexpr uint32_t rows = get_compile_time_arg_val(kSharedArg + 1);
+    constexpr uint32_t k_tiles = get_compile_time_arg_val(kSharedArg + 2);
+    constexpr uint32_t cb_input_id = get_compile_time_arg_val(kSharedArg + 3);
+    constexpr uint32_t input_tile_bytes = get_compile_time_arg_val(kSharedArg + 4);
+    constexpr uint32_t face_r_dim = get_compile_time_arg_val(kSharedArg + 5);
+    constexpr uint32_t input_row_stride = get_compile_time_arg_val(kSharedArg + 6);
+    constexpr uint32_t cb_rm_stage_id = get_compile_time_arg_val(kSharedArg + 7);
+    constexpr uint32_t stage_chunk_tiles = get_compile_time_arg_val(kSharedArg + 8);
+    constexpr auto input_args = TensorAccessorArgs<kSharedArg + 9>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
     const uint32_t core_index = get_arg_val<uint32_t>(1);
@@ -123,6 +157,125 @@ void kernel_main() {
     CircularBuffer cb_down_out(cb_down_out_id);
     CircularBuffer cb_act(cb_act_id);
     CircularBuffer cb_reduce(cb_reduce_id);
+
+#ifdef INPUT_RM_ROWS
+    {
+        // Lays `num_tiles` 32-column chunks of the rows (row r at src + r * src_row_stride) out as
+        // consecutive input tiles from dst. Tile rows past `rows` are left as the CB held them: matmul
+        // and SwiGLU keep rows independent, and those rows are never written back out.
+        auto rows_to_tiles = [](uint32_t src, uint32_t src_row_stride, uint32_t dst, uint32_t num_tiles) {
+            constexpr uint32_t kHalfWords = kFaceRowBytes / sizeof(uint32_t);
+            for (uint32_t r = 0; r < rows; ++r) {
+                auto* s = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(src + r * src_row_stride);
+                const uint32_t lo = face_row_offset(r, 0, face_r_dim);
+                const uint32_t hi = face_row_offset(r, 1, face_r_dim);
+                for (uint32_t t = 0; t < num_tiles; ++t) {
+                    auto* d_lo = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst + t * input_tile_bytes + lo);
+                    auto* d_hi = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(dst + t * input_tile_bytes + hi);
+                    for (uint32_t w = 0; w < kHalfWords; ++w) {
+                        d_lo[w] = s[w];
+                    }
+                    for (uint32_t w = 0; w < kHalfWords; ++w) {
+                        d_hi[w] = s[kHalfWords + w];
+                    }
+                    s += 2 * kHalfWords;
+                }
+            }
+        };
+
+        const uint32_t input_addr = get_arg_val<uint32_t>(9);
+        CircularBuffer cb_input(cb_input_id);
+        cb_input.reserve_back(k_tiles);
+        const uint32_t tiles_l1 = cb_input.get_write_ptr();
+#ifdef INPUT_REPLICATED
+        // The replica's rows sit in this core's L1 at the same address on every core.
+        (void)input_args;
+        (void)cb_rm_stage_id;
+        (void)stage_chunk_tiles;
+        rows_to_tiles(input_addr, input_row_stride, tiles_l1, k_tiles);
+#else
+        // A DRAM read keeps 64-byte alignment between source and destination, which a 32-byte face
+        // row does not have, so each chunk of every row lands contiguously in a staging slot first.
+        // While one slot is restriped the next chunk is in flight into the other.
+        (void)input_row_stride;
+        const auto input = TensorAccessor(input_args, input_addr);
+        CircularBuffer cb_stage(cb_rm_stage_id);
+        const uint32_t stage_l1 = (cb_stage.get_write_ptr() + 63u) & ~63u;
+        constexpr uint32_t stage_row_bytes = stage_chunk_tiles * kRowChunkBytes;
+        constexpr uint32_t slot_bytes = rows * stage_row_bytes;
+        constexpr uint32_t num_chunks = (k_tiles + stage_chunk_tiles - 1) / stage_chunk_tiles;
+        auto chunk_tiles = [](uint32_t c) {
+            const uint32_t left = k_tiles - c * stage_chunk_tiles;
+            return left < stage_chunk_tiles ? left : stage_chunk_tiles;
+        };
+        auto read_chunk = [&](uint32_t c) {
+            const uint32_t slot = stage_l1 + (c % 2u) * slot_bytes;
+            for (uint32_t r = 0; r < rows; ++r) {
+                noc.async_read(
+                    input,
+                    CoreLocalMem<uint32_t>(slot + r * stage_row_bytes),
+                    chunk_tiles(c) * kRowChunkBytes,
+                    {.page_id = r, .offset_bytes = c * stage_row_bytes},
+                    {});
+            }
+        };
+        read_chunk(0);
+        for (uint32_t c = 0; c < num_chunks; ++c) {
+            noc.async_read_barrier();
+            if (c + 1 < num_chunks) {
+                read_chunk(c + 1);
+            }
+            rows_to_tiles(
+                stage_l1 + (c % 2u) * slot_bytes,
+                stage_row_bytes,
+                tiles_l1 + c * stage_chunk_tiles * input_tile_bytes,
+                chunk_tiles(c));
+        }
+#endif
+        cb_input.push_back(k_tiles);
+    }
+#else
+    (void)rows;
+    (void)k_tiles;
+    (void)cb_input_id;
+    (void)input_tile_bytes;
+    (void)input_row_stride;
+    (void)cb_rm_stage_id;
+    (void)stage_chunk_tiles;
+    (void)input_args;
+#endif
+
+    // Drains `num_tiles` output tiles from the front of cb_down_out into H columns from
+    // out_col_start. Restriped rows go back as one face row per (row, half), because each row of a
+    // ROW_MAJOR output is its own page run; the 32-byte writes only need DRAM's 16-byte write alignment.
+    auto write_output = [&](uint32_t num_tiles) {
+        for (uint32_t t = 0; t < num_tiles; ++t) {
+            const uint32_t global_tile = out_col_start + t;
+#ifdef INPUT_RM_ROWS
+            constexpr uint32_t pages_per_row = k_tiles / dst_tiles_per_page;
+            for (uint32_t r = 0; r < rows; ++r) {
+                for (uint32_t h = 0; h < 2; ++h) {
+                    noc.async_write(
+                        cb_down_out,
+                        out,
+                        kFaceRowBytes,
+                        {.offset_bytes = t * out_tile_bytes + face_row_offset(r, h, face_r_dim)},
+                        {.page_id = r * pages_per_row + global_tile / dst_tiles_per_page,
+                         .offset_bytes = (global_tile % dst_tiles_per_page) * kRowChunkBytes + h * kFaceRowBytes});
+                }
+            }
+#else
+            noc.async_write(
+                cb_down_out,
+                out,
+                out_tile_bytes,
+                {.offset_bytes = t * out_tile_bytes},
+                {.page_id = global_tile / dst_tiles_per_page,
+                 .offset_bytes = (global_tile % dst_tiles_per_page) * out_tile_bytes});
+#endif
+        }
+        noc.async_write_barrier();
+    };
 
     // cb_act / cb_reduce are allocated identically on every core, so every hub's staging region
     // shares this core's BASE address -- read here, before anything can have advanced the write
@@ -188,17 +341,7 @@ void kernel_main() {
         constexpr uint32_t kLocalTiles = shards_per_core * kOutTiles;
         cb_down_out.wait_front(kLocalTiles);
         if (expert_group == 0) {
-            for (uint32_t t = 0; t < kLocalTiles; ++t) {
-                const uint32_t global_tile = out_col_start + t;
-                noc.async_write(
-                    cb_down_out,
-                    out,
-                    out_tile_bytes,
-                    {.offset_bytes = t * out_tile_bytes},
-                    {.page_id = global_tile / dst_tiles_per_page,
-                     .offset_bytes = (global_tile % dst_tiles_per_page) * out_tile_bytes});
-            }
-            noc.async_write_barrier();
+            write_output(kLocalTiles);
         } else {
             const uint32_t slot = (expert_group - 1u) * kLocalTiles * out_tile_bytes;
             noc.async_write(
@@ -238,17 +381,7 @@ void kernel_main() {
         // The compute kernel has already summed routing_w[e] * down_e over all experts into
         // cb_down_out, so the writer drains it once into output pages idx*2 + {0, 1}.
         cb_down_out.wait_front(kOutTiles);
-        for (uint32_t t = 0; t < kOutTiles; ++t) {
-            const uint32_t global_tile = out_col_start + t;
-            noc.async_write(
-                cb_down_out,
-                out,
-                out_tile_bytes,
-                {.offset_bytes = t * out_tile_bytes},
-                {.page_id = global_tile / dst_tiles_per_page,
-                 .offset_bytes = (global_tile % dst_tiles_per_page) * out_tile_bytes});
-        }
-        noc.async_write_barrier();
+        write_output(kOutTiles);
         cb_down_out.pop_front(kOutTiles);
     }
     // Every Semaphore::up above is a non-posted atomic; async_write_barrier does not drain those.

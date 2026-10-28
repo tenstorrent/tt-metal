@@ -58,6 +58,18 @@ struct PagedUpdateCacheInputs {
     std::optional<Tensor> page_table_row_tensor;
 };
 
+// Rows written per user. update_idxs holds one position per row, user-major: entry b * rows + s
+// is the position of row s of user b.
+inline uint32_t paged_update_cache_rows_per_user(
+    const PagedUpdateCacheParams& operation_attributes, const PagedUpdateCacheInputs& tensor_args) {
+    uint32_t num_indices = operation_attributes.update_idxs.size();
+    if (tensor_args.update_idxs_tensor.has_value()) {
+        const Tensor& index_tensor = tensor_args.update_idxs_tensor.value();
+        num_indices = index_tensor.is_sharded() ? index_tensor.logical_shape()[1] : index_tensor.padded_shape()[0];
+    }
+    return num_indices / tensor_args.input_tensor.padded_shape()[1];
+}
+
 inline bool is_rm_width_sharded_l1_cache(const Tensor& cache) {
     if (cache.layout() != ttnn::Layout::ROW_MAJOR || !cache.is_sharded()) {
         return false;

@@ -28,6 +28,8 @@ constexpr uint32_t compute_num_blocks_per_col(uint32_t per_core_block_tile_cnt) 
 void kernel_main() {
     constexpr auto Wt = get_arg(args::Wt);
     constexpr auto num_heads = get_arg(args::num_heads);
+    // One block per head per group slot; the dataflow kernels pad unused slots.
+    constexpr auto num_rows = get_arg(args::num_rows);
 
 #ifdef INPUT_IS_ROW_MAJOR
     // Row-major decode input is already a contiguous token row; skip untilize.
@@ -46,7 +48,7 @@ void kernel_main() {
         compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(1);
 #endif
 
-    for (uint32_t cur_head = 0; cur_head < num_heads; ++cur_head) {
+    for (uint32_t block = 0; block < num_rows * num_heads; ++block) {
         compute_kernel_lib::untilize<Wt, dfb::cache, dfb::untilized_cache>(1);
 
         // Wait on writer to update block, then tilize back

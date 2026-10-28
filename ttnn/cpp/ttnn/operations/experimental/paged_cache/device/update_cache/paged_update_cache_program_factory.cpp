@@ -86,47 +86,25 @@ std::vector<CoreCoord> update_cache_cores(const PagedUpdateCacheInputs& tensor_a
         shard_spec.grid, shard_spec.grid.num_cores(), shard_spec.orientation == ShardOrientation::ROW_MAJOR);
 }
 
-// Per-worker-core cache-write offsets derived from `update_idxs`. These values are excluded from the
-// program hash (PagedUpdateCacheDeviceOperation::compute_program_hash) yet baked into runtime args, so
-// they must be re-patched on every cache hit via override_runtime_arguments. This helper is the single
-// source of truth for the formulas — both the artifacts build (cache miss) and override_runtime_arguments
-// (cache hit) call it, so the two paths cannot drift. Entries are in `cores` order. Returns empty when
-// an index tensor is used: in that mode the offsets are 0 here and the real positions are read on-device
-// from the (re-patched) index tensor.
-struct UpdateCachePerCoreOffsets {
-    uint32_t cache_start_id = 0;
-    uint32_t tile_update_offset_B = 0;
-};
-
-std::vector<UpdateCachePerCoreOffsets> compute_update_cache_offsets(
+// Host-vector `update_idxs` reach the kernels as per-core runtime varargs: core i gets the positions of
+// user i's rows, update_idxs[i * rows_per_user, (i + 1) * rows_per_user). The values are excluded from the
+// program hash, so both the cache-miss build and the cache-hit override set them through this helper.
+// Empty with an index tensor, whose positions the kernels read on device.
+Table<NodeCoord, AdvancedKernelRunArgs::Varargs> update_cache_position_varargs(
     const PagedUpdateCacheParams& operation_attributes,
     const PagedUpdateCacheInputs& tensor_args,
     const std::vector<CoreCoord>& cores) {
+    Table<NodeCoord, AdvancedKernelRunArgs::Varargs> varargs;
     if (tensor_args.update_idxs_tensor.has_value()) {
-        return {};
+        return varargs;
     }
-
-    const auto& cache_tensor = tensor_args.cache_tensor;
-    const auto& input_tensor = tensor_args.input_tensor;
-    const bool fp32_dest_acc_en = update_cache_fp32_dest(input_tensor, operation_attributes.compute_kernel_config);
-
-    const uint32_t Wt = input_tensor.padded_shape()[-1] / TILE_WIDTH;
-    const uint32_t Wbytes = update_cache_row_bytes(input_tensor, fp32_dest_acc_en);
-    const uint32_t cache_total_num_tiles = cache_tensor.physical_volume() / TILE_HW;
-    // share_cache => batch offset is 0 (one shared cache buffer); mirror the artifacts build exactly.
-    const uint32_t cache_batch_num_tiles =
-        operation_attributes.share_cache ? 0 : cache_total_num_tiles / cache_tensor.padded_shape()[0];
-
-    std::vector<UpdateCachePerCoreOffsets> offsets;
-    offsets.reserve(cores.size());
+    const uint32_t rows_per_user = paged_update_cache_rows_per_user(operation_attributes, tensor_args);
+    const auto& update_idxs = operation_attributes.update_idxs;
     for (uint32_t i = 0; i < cores.size(); ++i) {
-        const uint32_t update_idx = operation_attributes.update_idxs.at(i);
-        const uint32_t cache_batch_tile_offset = i * cache_batch_num_tiles;
-        const uint32_t cache_start_id = cache_batch_tile_offset + ((update_idx / TILE_HEIGHT) * Wt);
-        const uint32_t tile_update_offset_B = update_idx % TILE_HEIGHT * Wbytes;
-        offsets.push_back({cache_start_id, tile_update_offset_B});
+        const auto first = update_idxs.begin() + (i * rows_per_user);
+        varargs.emplace(cores.at(i), AdvancedKernelRunArgs::Varargs(first, first + rows_per_user));
     }
-    return offsets;
+    return varargs;
 }
 
 // The tensor arguments every dispatch must (re)bind. Shared by the cache-miss artifacts build and the
@@ -182,7 +160,6 @@ Table<TensorParamName, TensorArgument> rm_width_sharded_tensor_args(const PagedU
 
 ProgramRunArgs rm_width_sharded_update_run_args(
     const PagedUpdateCacheParams& operation_attributes, const PagedUpdateCacheInputs& tensor_args) {
-    const bool use_index_tensor = tensor_args.update_idxs_tensor.has_value();
     const auto cores = update_cache_cores(tensor_args);
 
     KernelRunArgs writer_run_args{.kernel = UC_WRITER};
@@ -191,14 +168,10 @@ ProgramRunArgs rm_width_sharded_update_run_args(
     };
     writer_run_args.advanced_options.common_runtime_varargs =
         rm_width_sharded_cache_core_coords(tensor_args.cache_tensor);
+    writer_run_args.advanced_options.runtime_varargs =
+        update_cache_position_varargs(operation_attributes, tensor_args, cores);
     for (uint32_t i = 0; i < cores.size(); ++i) {
-        AddRuntimeArgsForNode(
-            writer_run_args.runtime_arg_values,
-            cores.at(i),
-            {
-                {"my_batch_idx", i},
-                {"update_idx", use_index_tensor ? 0u : operation_attributes.update_idxs.at(i)},
-            });
+        AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, cores.at(i), {{"my_batch_idx", i}});
     }
 
     ProgramRunArgs params;
@@ -218,6 +191,7 @@ ttnn::device_operation::ProgramArtifacts build_rm_width_sharded_update_artifacts
     const uint32_t num_cache_cores = cache_shard.grid.num_cores();
     const uint32_t shard_width_bytes = cache_shard.shape[1] * cache_tensor.element_size();
     const uint32_t cache_num_rows = cache_tensor.physical_volume() / cache_tensor.padded_shape()[-1];
+    const uint32_t rows_per_user = paged_update_cache_rows_per_user(operation_attributes, tensor_args);
     const CoreRangeSet all_cores = input_tensor.shard_spec().value().grid;
 
     tt::DataFormat input_dfb_data_format = tt_metal::datatype_to_dataformat_converter(input_tensor.dtype());
@@ -225,11 +199,11 @@ ttnn::device_operation::ProgramArtifacts build_rm_width_sharded_update_artifacts
 
     uint32_t index_stick_size = 0;
     tt::DataFormat index_data_format = tt::DataFormat::Int32;
-    uint32_t index_tensor_tile_size = 0;
+    uint32_t index_dfb_entry_size = 0;
     if (use_index_tensor) {
         index_data_format = tt_metal::datatype_to_dataformat_converter(update_idxs_tensor.value().dtype());
-        index_tensor_tile_size = tt::tile_size(index_data_format);
         index_stick_size = update_idxs_tensor.value().buffer()->aligned_page_size();
+        index_dfb_entry_size = std::max(tt::tile_size(index_data_format), index_stick_size);
     }
 
     // Writer-only: the same kernel FIFO-produces the borrowed input page (and the index
@@ -247,7 +221,7 @@ ttnn::device_operation::ProgramArtifacts build_rm_width_sharded_update_artifacts
     if (use_index_tensor) {
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = UC_INDEX,
-            .entry_size = index_tensor_tile_size,
+            .entry_size = index_dfb_entry_size,
             .num_entries = 1,
             .data_format_metadata = index_data_format,
         });
@@ -299,14 +273,20 @@ ttnn::device_operation::ProgramArtifacts build_rm_width_sharded_update_artifacts
                 {"shard_width_bytes", shard_width_bytes},
                 {"cache_num_rows", cache_num_rows},
                 {"index_stick_size_B", index_stick_size},
+                {"num_rows", rows_per_user},
             },
         .runtime_arg_schema =
             {
-                .runtime_arg_names = {"my_batch_idx", "update_idx"},
+                .runtime_arg_names = {"my_batch_idx"},
                 .common_runtime_arg_names = {"cache_addr"},
             },
         .hw_config = create_writer_datamovement_config(),
-        .advanced_options = {.num_common_runtime_varargs = 2 * num_cache_cores},
+        .advanced_options =
+            {
+                // Host-vector positions of this core's user (see update_cache_position_varargs).
+                .num_runtime_varargs = use_index_tensor ? 0u : rows_per_user,
+                .num_common_runtime_varargs = 2 * num_cache_cores,
+            },
     };
 
     Group<TensorParameter> tensor_parameters = {
@@ -364,15 +344,16 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
 
     // Index tensor-specific parameters
     bool use_index_tensor = update_idxs_tensor.has_value();
-    uint32_t index_tensor_tile_size = 0;
+    uint32_t index_dfb_entry_size = 0;
     uint32_t log2_page_size = 0;
     uint32_t index_stick_size = 0;
     tt::DataFormat index_data_format = tt::DataFormat::Int32;
     if (use_index_tensor) {
         index_data_format = tt_metal::datatype_to_dataformat_converter(update_idxs_tensor.value().dtype());
-        index_tensor_tile_size = tt::tile_size(index_data_format);
         index_stick_size = update_idxs_tensor.value().buffer()->aligned_page_size();
+        index_dfb_entry_size = std::max(tt::tile_size(index_data_format), index_stick_size);
     }
+    const uint32_t rows_per_user = paged_update_cache_rows_per_user(operation_attributes, tensor_args);
 
     // Pagetable-specific parameters.
     bool is_paged_cache = page_table.has_value();
@@ -496,7 +477,7 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
     if (use_index_tensor) {
         dataflow_buffers.push_back(DataflowBufferSpec{
             .unique_id = UC_INDEX,
-            .entry_size = index_tensor_tile_size,
+            .entry_size = index_dfb_entry_size,
             .num_entries = 1,
             .data_format_metadata = index_data_format,
         });
@@ -609,9 +590,12 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
                 {"cache_position_modulo", cache_position_modulo},
                 {"input_is_row_major", static_cast<uint32_t>(input_is_row_major)},
                 {"page_table_row_page_bytes", page_table_row_page_bytes},
+                {"num_rows", rows_per_user},
             },
-        .runtime_arg_schema = {.runtime_arg_names = {"cache_start_id", "my_batch_idx", "wait_to_start"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"my_batch_idx", "wait_to_start"}},
         .hw_config = create_reader_datamovement_config(),
+        // Host-vector positions of this core's user (see update_cache_position_varargs).
+        .advanced_options = {.num_runtime_varargs = use_index_tensor ? 0u : rows_per_user},
     };
 
     // ---------------- Writer ----------------
@@ -691,16 +675,11 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
                 {"St", St},
                 {"cache_position_modulo", cache_position_modulo},
                 {"input_is_row_major", static_cast<uint32_t>(input_is_row_major)},
+                {"num_rows", rows_per_user},
             },
-        .runtime_arg_schema =
-            {.runtime_arg_names =
-                 {"cache_start_id",
-                  "cache_tile_offset_B",
-                  "my_batch_idx",
-                  "send_signal",
-                  "send_core_x",
-                  "send_core_y"}},
+        .runtime_arg_schema = {.runtime_arg_names = {"my_batch_idx", "send_signal", "send_core_x", "send_core_y"}},
         .hw_config = create_writer_datamovement_config(),
+        .advanced_options = {.num_runtime_varargs = use_index_tensor ? 0u : rows_per_user},
     };
 
     // ---------------- Compute ----------------
@@ -775,6 +754,7 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
             {
                 {"Wt", Wt},
                 {"num_heads", num_heads},
+                {"num_rows", rows_per_user},
             },
         .hw_config = compute_hw_cfg,
     };
@@ -825,18 +805,15 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
     // ---------------- Run args ----------------
 
     const auto cores = update_cache_cores(tensor_args);
-    // cache_start_id / tile_update_offset_B are derived from update_idxs (excluded from the program
-    // hash) — computed via the shared helper so override_runtime_arguments re-patches identical values on
-    // cache hits. Empty in index-tensor mode (offsets read on-device from the re-patched index tensor).
-    const auto offsets = compute_update_cache_offsets(operation_attributes, tensor_args, cores);
 
     KernelRunArgs reader_run_args{.kernel = UC_READER};
     KernelRunArgs writer_run_args{.kernel = UC_WRITER};
+    reader_run_args.advanced_options.runtime_varargs =
+        update_cache_position_varargs(operation_attributes, tensor_args, cores);
+    writer_run_args.advanced_options.runtime_varargs = reader_run_args.advanced_options.runtime_varargs;
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores.at(i);
-        const uint32_t cache_start_id = use_index_tensor ? 0u : offsets.at(i).cache_start_id;
-        const uint32_t tile_update_offset_B = use_index_tensor ? 0u : offsets.at(i).tile_update_offset_B;
 
         bool wait_to_start, send_signal;
         uint32_t send_core_x, send_core_y;
@@ -859,7 +836,6 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
             reader_run_args.runtime_arg_values,
             core,
             {
-                {"cache_start_id", cache_start_id},
                 {"my_batch_idx", i},
                 {"wait_to_start", static_cast<uint32_t>(wait_to_start)},
             });
@@ -868,8 +844,6 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
             writer_run_args.runtime_arg_values,
             core,
             {
-                {"cache_start_id", cache_start_id},
-                {"cache_tile_offset_B", tile_update_offset_B},
                 {"my_batch_idx", i},
                 {"send_signal", static_cast<uint32_t>(send_signal)},
                 {"send_core_x", send_core_x},
@@ -885,9 +859,9 @@ ttnn::device_operation::ProgramArtifacts build_paged_update_cache_artifacts(
 }
 
 // Cache-hit re-derivation, shared by both factories. Re-applies only per-dispatch state: every tensor
-// binding (which also re-points the borrowed input-shard buffer) and the update_idxs-derived offsets
-// the program hash excludes. Everything else is a function of hashed inputs (shapes / dtypes / memory
-// configs / share_cache / overrides) and is identical by construction on a hit.
+// binding (which also re-points the borrowed input-shard buffer) and the host-vector positions the
+// program hash excludes. Everything else is a function of hashed inputs (shapes / dtypes / memory
+// configs / share_cache / overrides / update_idxs count) and is identical by construction on a hit.
 ProgramRunArgs paged_update_cache_run_args(
     const PagedUpdateCacheParams& operation_attributes, const PagedUpdateCacheInputs& tensor_args) {
     if (is_rm_width_sharded_l1_cache(tensor_args.cache_tensor)) {
@@ -897,28 +871,17 @@ ProgramRunArgs paged_update_cache_run_args(
     ProgramRunArgs params;
     params.tensor_args = paged_update_cache_tensor_args(tensor_args);
 
-    const auto cores = update_cache_cores(tensor_args);
-    // Empty in index-tensor mode: the kernels read positions on-device from the index tensor, so the two
-    // offset slots keep the zeroes the artifacts build set.
-    const auto offsets = compute_update_cache_offsets(operation_attributes, tensor_args, cores);
-    if (offsets.empty()) {
+    // Empty in index-tensor mode: the kernels read positions on device from the re-bound index tensor.
+    auto position_varargs =
+        update_cache_position_varargs(operation_attributes, tensor_args, update_cache_cores(tensor_args));
+    if (position_varargs.empty()) {
         return params;
     }
 
     KernelRunArgs reader_run_args{.kernel = UC_READER};
     KernelRunArgs writer_run_args{.kernel = UC_WRITER};
-    for (uint32_t i = 0; i < cores.size(); ++i) {
-        const CoreCoord& core = cores.at(i);
-        AddRuntimeArgsForNode(
-            reader_run_args.runtime_arg_values, core, {{"cache_start_id", offsets.at(i).cache_start_id}});
-        AddRuntimeArgsForNode(
-            writer_run_args.runtime_arg_values,
-            core,
-            {
-                {"cache_start_id", offsets.at(i).cache_start_id},
-                {"cache_tile_offset_B", offsets.at(i).tile_update_offset_B},
-            });
-    }
+    reader_run_args.advanced_options.runtime_varargs = position_varargs;
+    writer_run_args.advanced_options.runtime_varargs = std::move(position_varargs);
     params.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args)};
     return params;
 }

@@ -512,7 +512,11 @@ void kernel_main() {
     sem.set_multicast(noc, mcast_start_x, mcast_start_y, mcast_end_x, mcast_end_y, num_dests, /*linked=*/false);
 
     // ---- 4. Publish the activation to this core's compute kernel. ----
-#ifdef INPUT_REPLICATED
+#if defined(INPUT_RM_ROWS)
+    // Several ROW_MAJOR rows: this core's writer restripes them into cb_input and publishes it.
+    (void)sem_input_id;
+    (void)cb_input_id;
+#elif defined(INPUT_REPLICATED)
     // The activation is a ROW_MAJOR HEIGHT_SHARDED replica this core already holds in L1, with
     // cb_input aliased over its shard: there is no broadcast to wait for and no read to do -- the
     // tiles are already in place, so publishing them is the whole job.

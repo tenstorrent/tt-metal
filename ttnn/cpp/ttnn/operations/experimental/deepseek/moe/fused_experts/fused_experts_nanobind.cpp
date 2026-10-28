@@ -33,7 +33,7 @@ void bind_fused_experts(nb::module_& mod) {
         by a scatter + normalize + relayout chain purely for this op to scan it straight back down
         to k values.
 
-        Returns a [1, B, H] BFLOAT16 tensor in the input's layout (TILE, or ROW_MAJOR when B == 1):
+        Returns a [1, B, H] BFLOAT16 tensor in the input's layout (TILE or ROW_MAJOR):
         act = silu(clamp(gate, max=limit)) * clamp(up, -limit, limit), [gate, up] = x @ gate_up_w[hit_ids[i]],
         and output[b] = sum_i w[b, hit_ids[i]] * (act[b] @ down_w[hit_ids[i]]); hit_ids are the
         routing-selected experts in ascending order and w the normalized weights above. The gate_up
@@ -58,15 +58,16 @@ void bind_fused_experts(nb::module_& mod) {
 
         Args:
             input_tensor: Activations, [1, 1, B, H] with B <= 32 token rows. TILE, ROW_MAJOR
-                (B == 1 decode; loaded as 1x32 compute tiles, no tilize), or ROW_MAJOR
-                HEIGHT_SHARDED L1 replicated over the compute grid -- the shard is the full
-                ``[B, H]`` row, i.e. the tensor ``all_gather_for_matmul`` produces and
+                bfloat16 (one row is loaded as 1x32 compute tiles with no tilize; several rows,
+                e.g. the 5-row DSpark block, are restriped on device into one bit_ceil(B)-row tile
+                row), or ROW_MAJOR HEIGHT_SHARDED L1 replicated over the compute grid -- the shard
+                is the full ``[B, H]`` block, i.e. the tensor ``all_gather_for_matmul`` produces and
                 ``matmul_decode`` consumes in place. A replicated row is already on every core, so
                 the op neither reads it from DRAM nor broadcasts it, and its token count is the
                 shard height (dim -2 carries ``B * num_cores``). The output uses the input's layout
                 and, for a replicated input, defaults to DRAM interleaved.
             routing_scores: Unbiased per-expert scores, [1, 1, B, E] bfloat16 -- TILE, or ROW_MAJOR
-                when B == 1 (decode; LinearDecode stick, no tilize). The tensor the selection
+                (decode; one LinearDecode stick per token, no tilize). The tensor the selection
                 indexes into. If the selection ranked by a bias-corrected copy, pass the uncorrected
                 scores here -- those are the ones that become weights.
             gate_up_weights: List of [H, 2I] weight tensors, one per expert (all experts provided),
@@ -97,8 +98,8 @@ void bind_fused_experts(nb::module_& mod) {
                 output of ``ttnn.topk``, passed through unmodified) or bfloat16 (a ``ttnn.embedding``
                 gather from a frozen id table -- the only dtype that op gathers, and exact for
                 E <= 256). Mutually exclusive with ``ranking_scores``.
-            ranking_scores: Scores to rank on, [1, 1, B, E] bfloat16 -- TILE, or ROW_MAJOR when
-                B == 1 (decode). Same shape and dtype rules as ``routing_scores``. When supplied the
+            ranking_scores: Scores to rank on, [1, 1, B, E] bfloat16 -- TILE or ROW_MAJOR
+                (decode). Same shape and dtype rules as ``routing_scores``. When supplied the
                 op selects each token's ``top_k`` largest entries on device and they become the hit
                 ids; the weights still come from ``routing_scores`` at those ids, so "rank on the
                 biased row, weight with the uncorrected one" is a single op. Mutually exclusive with

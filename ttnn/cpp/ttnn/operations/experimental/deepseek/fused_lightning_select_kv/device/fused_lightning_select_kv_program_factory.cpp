@@ -54,13 +54,17 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     const auto* device = kv_output.device();
     const auto& query_shard = tensor_args.query.memory_config().shard_spec().value();
     const CoreRangeSet& all_cores = query_shard.grid;
-    // B == 1 and Sq == 1: each core holds one query row per head and a single weights row.
-    const uint32_t num_heads = query_shard.shape[0];
+    // B == 1: each core holds all Sq query rows (Hi heads each, row-major [Sq * Hi, D]) and their
+    // [Sq, Hi] weights.
+    const uint32_t num_queries = tensor_args.head_weights.memory_config().shard_spec()->shape[0];
+    const uint32_t num_heads = query_shard.shape[0] / num_queries;
     const uint32_t d_tiles = query_shard.shape[1] / tt::constants::TILE_WIDTH;
-    const uint32_t num_query_tiles = num_heads * d_tiles;
-    const uint32_t num_weight_tiles = num_heads / tt::constants::TILE_WIDTH;
+    const uint32_t num_query_tiles = num_queries * num_heads * d_tiles;
+    const uint32_t num_weight_tiles = num_queries * num_heads / tt::constants::TILE_WIDTH;
     const bool has_valid_length = tensor_args.valid_length_tensor.has_value();
     const bool has_new_kv_row = tensor_args.new_kv_row.has_value();
+    const uint32_t num_new_kv_rows =
+        has_new_kv_row ? static_cast<uint32_t>(tensor_args.new_kv_row_index->logical_shape().volume()) : 0;
     const bool has_num_keys = tensor_args.num_keys_tensor.has_value();
     const bool is_candidate_source = args.candidate_topk_blocks > 0;
     const bool is_partial = args.num_parts > 1;
@@ -91,6 +95,7 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
     const DFBSpecName SELECT_DFB{"select"};
     const DFBSpecName HIST_SCATTER_DFB{"hist_scatter"};
     const DFBSpecName HIST_SUM_DFB{"hist_sum"};
+    const DFBSpecName CAND_LIST_DFB{"cand_list"};
 
     const SemaphoreSpecName SEM_HIST_ARRIVED{"hist_arrived"};
     const SemaphoreSpecName SEM_SLICE_ARRIVED{"slice_arrived"};
@@ -167,61 +172,72 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
         .tile_format_metadata = head_group_tile,
     };
 
-    // One fp32 1x32 score tile per 32 keys. Sized for the largest per-core share of the page table so
-    // the writer can keep every score this core produces resident for the top-k select.
+    // One fp32 1x32 score tile per 32 keys and query row. Sized for the largest per-core share of the
+    // page table so the writer can keep every score this core produces resident for the top-k select.
     const uint32_t cores_in_grid = all_cores.num_cores();
     const uint32_t max_num_blocks = tensor_args.page_table_tensor.logical_shape()[-1];
     const uint32_t max_blocks_per_core = tt::div_up(max_num_blocks, cores_in_grid);
+    const uint32_t local_key_capacity = std::max(max_blocks_per_core, 1u) * page_block_size;
     constexpr tt::DataFormat scores_format = tt::DataFormat::Float32;
     const DataflowBufferSpec scores_dfb{
         .unique_id = SCORES_DFB,
         .entry_size = row_tile.get_tile_size(scores_format),
-        .num_entries = std::max(max_blocks_per_core, 1u) * chunks_per_block,
+        .num_entries = std::max(max_blocks_per_core, 1u) * chunks_per_block * num_queries,
         .data_format_metadata = scores_format,
         .tile_format_metadata = row_tile,
     };
 
-    // Writer-local scratch for the top-k histogram: kTopkHistBins uint32 counts.
+    // Every core histograms each query row into 256 bins, [Sq][256] words. The global histogram is
+    // summed in parallel: the Sq * 256 bins are split into 16-byte slices (the NoC L1 alignment), each
+    // owner holds a contiguous run of slices (which may span query rows) and reads its run from every
+    // core that has keys.
     constexpr uint32_t kTopkHistBins = 256;
+    constexpr uint32_t kHistBinsPerSlice = 4;
+    const uint32_t hist_words = num_queries * kTopkHistBins;
+    const uint32_t hist_num_slices = hist_words / kHistBinsPerSlice;
+    const uint32_t hist_slices_per_owner = tt::div_up(hist_num_slices, std::min(cores_in_grid, hist_num_slices));
+    const uint32_t hist_num_owners = tt::div_up(hist_num_slices, hist_slices_per_owner);
+    // An owner's summed bins, then the total of each of its slices (padded to 16 B).
+    const uint32_t owner_chunk_words =
+        (hist_slices_per_owner * kHistBinsPerSlice) + tt::round_up(hist_slices_per_owner, kHistBinsPerSlice);
+
+    // Writer-local scratch for this core's top-k histograms.
     const DataflowBufferSpec hist_dfb{
         .unique_id = HIST_DFB,
-        .entry_size = kTopkHistBins * sizeof(uint32_t),
+        .entry_size = hist_words * static_cast<uint32_t>(sizeof(uint32_t)),
         .num_entries = 1,
         .data_format_metadata = tt::DataFormat::UInt32,
     };
-    // Once the threshold is known, every core sends {keys above the threshold bin, keys in it} (padded
-    // to 16 B, the NoC L1 alignment) to slot core_index of this buffer on the coordinator (core 0). It
-    // is allocated on every core so its L1 address is the same everywhere, but only core 0's copy is used.
+    // Once the thresholds are known, every core sends {keys above the threshold bin, keys in it} per
+    // query row (padded to 16 B, the NoC L1 alignment) to slot core_index of this buffer on the
+    // coordinator (core 0). It is allocated on every core so its L1 address is the same everywhere,
+    // but only core 0's copy is used.
     const DataflowBufferSpec hist_gather_dfb{
         .unique_id = HIST_GATHER_DFB,
-        .entry_size = 4 * sizeof(uint32_t),
+        .entry_size = tt::round_up(2 * num_queries, 4u) * static_cast<uint32_t>(sizeof(uint32_t)),
         .num_entries = cores_in_grid,
         .data_format_metadata = tt::DataFormat::UInt32,
     };
-    // The global histogram is summed in parallel: bins are split into 16-byte slices (the NoC L1
-    // alignment), each owner holds a contiguous run of slices and reads its run from every core that
-    // has keys. Entry c of hist_scatter holds core c's copy of the bins this core owns.
-    constexpr uint32_t kHistBinsPerSlice = 4;
-    constexpr uint32_t kHistNumSlices = kTopkHistBins / kHistBinsPerSlice;
-    const uint32_t hist_slices_per_owner = tt::div_up(kHistNumSlices, std::min(cores_in_grid, kHistNumSlices));
-    const uint32_t hist_num_owners = tt::div_up(kHistNumSlices, hist_slices_per_owner);
+    // Entry c of hist_scatter holds core c's copy of the bins this core owns; entry 0 then stages
+    // the owner's chunk for the coordinator.
     const DataflowBufferSpec hist_scatter_dfb{
         .unique_id = HIST_SCATTER_DFB,
-        .entry_size = hist_slices_per_owner * kHistBinsPerSlice * static_cast<uint32_t>(sizeof(uint32_t)),
+        .entry_size = owner_chunk_words * static_cast<uint32_t>(sizeof(uint32_t)),
         .num_entries = cores_in_grid,
         .data_format_metadata = tt::DataFormat::UInt32,
     };
-    // Owners write their summed bins here on the coordinator.
+    // Owners write their chunks here on the coordinator.
     const DataflowBufferSpec hist_sum_dfb{
         .unique_id = HIST_SUM_DFB,
-        .entry_size = kTopkHistBins * sizeof(uint32_t),
+        .entry_size = hist_num_owners * owner_chunk_words * static_cast<uint32_t>(sizeof(uint32_t)),
         .num_entries = 1,
         .data_format_metadata = tt::DataFormat::UInt32,
     };
-    // Coordinator -> all cores, after every radix pass: a header {threshold prefix, prefix bits, keys
-    // above it, keys still needed from it, last pass, total keys, pad, pad}; after the last pass, per
-    // core {keys to contribute, of which equal to the threshold, output offset}.
-    const uint32_t kTopkSelectWords = 8 + 3 * cores_in_grid;
+    // Coordinator -> all cores, after every radix pass: 8 global words {query rows still selecting,
+    // pad...}, then per query row a header {threshold prefix, prefix bits, keys above it, keys still
+    // needed from it, pad, total keys, pad, pad}; after the last pass, per core and query row {keys to
+    // contribute, of which equal to the threshold, output offset}.
+    const uint32_t kTopkSelectWords = tt::round_up(8 + (8 * num_queries) + (3 * num_queries * cores_in_grid), 4u);
     const DataflowBufferSpec select_dfb{
         .unique_id = SELECT_DFB,
         .entry_size = kTopkSelectWords * sizeof(uint32_t),
@@ -236,12 +252,28 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
         .num_entries = 1,
         .data_format_metadata = tt::DataFormat::UInt32,
     };
-    // {num_rows, output_offset, pad, pad} then up to k kv_cache row ids, in local key order.
+    // This core's selected keys over all query rows, each listed once: {num_keys, pad, pad, pad}, then
+    // the reader's first output page per query row, then up to sel_max_rows kv_cache row ids in local
+    // key order, then the mask of query rows that selected each.
+    const uint32_t sel_max_rows = std::min(local_key_capacity, num_queries * args.k);
+    const uint32_t sel_rows_word = 4 + tt::round_up(num_queries, 4u);
     const DataflowBufferSpec sel_dfb{
         .unique_id = SEL_DFB,
-        .entry_size = tt::round_up((4 + args.k) * static_cast<uint32_t>(sizeof(uint32_t)), 16u),
+        .entry_size = tt::round_up((sel_rows_word + 2 * sel_max_rows) * static_cast<uint32_t>(sizeof(uint32_t)), 16u),
         .num_entries = 1,
         .data_format_metadata = tt::DataFormat::UInt32,
+    };
+    // Writer-local: per query row, the local indices of the keys still in the running after each
+    // radix pass, so later passes and the final list skip the rest.
+    TT_FATAL(
+        local_key_capacity <= (1u << 16),
+        "fused_lightning_select_kv: {} keys per core do not fit the 16-bit candidate lists; use a larger grid",
+        local_key_capacity);
+    const DataflowBufferSpec cand_list_dfb{
+        .unique_id = CAND_LIST_DFB,
+        .entry_size = tt::round_up(num_queries * local_key_capacity * static_cast<uint32_t>(sizeof(uint16_t)), 16u),
+        .num_entries = 1,
+        .data_format_metadata = tt::DataFormat::UInt16,
     };
 
     const DataflowBufferSpec key_dfb =
@@ -440,11 +472,14 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
         .tensor_bindings = std::move(reader_tensor_bindings),
         .compile_time_args =
             {{"k", args.k},
+             {"num_queries", num_queries},
              {"num_query_group_tiles", num_query_group_tiles},
              {"num_weight_tiles", num_weight_tiles},
              {"page_block_size", page_block_size},
              {"num_tiles_per_block_of_key", num_tiles_per_block_of_key},
              {"kv_stage_rows", kKvStageRows},
+             {"sel_rows_word", sel_rows_word},
+             {"sel_max_rows", sel_max_rows},
              {"num_parts", args.num_parts}},
         .runtime_arg_schema = {.runtime_arg_names = {"core_index", "num_cores"}},
         .hw_config = ttnn::create_reader_datamovement_config(),
@@ -502,6 +537,14 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
                     .dfb_spec_name = HIST_SUM_DFB,
                     .accessor_name = "hist_sum",
                     .endpoint_type = DFBEndpointType::CONSUMER},
+                DFBBinding{
+                    .dfb_spec_name = CAND_LIST_DFB,
+                    .accessor_name = "cand_list",
+                    .endpoint_type = DFBEndpointType::PRODUCER},
+                DFBBinding{
+                    .dfb_spec_name = CAND_LIST_DFB,
+                    .accessor_name = "cand_list",
+                    .endpoint_type = DFBEndpointType::CONSUMER},
             },
         .semaphore_bindings =
             {
@@ -512,14 +555,20 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
         .tensor_bindings = std::move(writer_tensor_bindings),
         .compile_time_args =
             {{"k", args.k},
+             {"num_queries", num_queries},
              {"page_block_size", page_block_size},
+             {"local_key_capacity", local_key_capacity},
              {"num_hist_bins", kTopkHistBins},
              {"hist_bins_per_slice", kHistBinsPerSlice},
              {"hist_num_owners", hist_num_owners},
              {"hist_slices_per_owner", hist_slices_per_owner},
              {"num_select_words", kTopkSelectWords},
              {"kv_stage_rows", kKvStageRows},
+             {"sel_rows_word", sel_rows_word},
+             {"sel_max_rows", sel_max_rows},
              {"output_row_offset", args.output_row_offset},
+             {"output_row_stride", args.output_row_stride},
+             {"num_new_kv_rows", num_new_kv_rows},
              {"candidate_topk_blocks", args.candidate_topk_blocks},
              {"candidate_block_size", args.candidate_block_size},
              {"num_parts", args.num_parts}},
@@ -571,6 +620,7 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
                  .dfb_spec_name = SCORES_DFB, .accessor_name = "scores", .endpoint_type = DFBEndpointType::PRODUCER}},
         .compile_time_args =
             {{"k", args.k},
+             {"num_queries", num_queries},
              {"num_heads", num_heads},
              {"d_tiles", d_tiles},
              {"num_weight_tiles", num_weight_tiles},
@@ -605,7 +655,8 @@ FusedLightningSelectKvDeviceOperation::ProgramFactory::create_program_artifacts(
              hist_gather_dfb,
              select_dfb,
              hist_scatter_dfb,
-             hist_sum_dfb},
+             hist_sum_dfb,
+             cand_list_dfb},
         .semaphores =
             {SemaphoreSpec{.unique_id = SEM_HIST_ARRIVED, .target_nodes = all_cores},
              SemaphoreSpec{.unique_id = SEM_SELECT_READY, .target_nodes = all_cores},

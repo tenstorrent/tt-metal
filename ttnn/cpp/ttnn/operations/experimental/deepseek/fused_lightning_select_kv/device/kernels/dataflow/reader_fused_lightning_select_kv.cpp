@@ -2,9 +2,9 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Streams this core's share of the paged key cache to compute, one block at a time, then gathers
-// the first half of this core's selected kv_cache rows into the output (the writer does the rest on
-// the other NoC).
+// Streams this core's share of the paged key cache to compute, one block at a time (compute scores
+// it against every query row), then gathers the first half of this core's selected kv_cache rows
+// into the output (the writer does the rest on the other NoC).
 
 #define COMPRESS_RATE 4
 #include <cstdint>
@@ -22,13 +22,25 @@
 void kernel_main() {
     // ---- Compile-time args ----
     [[maybe_unused]] constexpr uint32_t k = get_arg(args::k);
-    constexpr uint32_t num_query_group_tiles = get_arg(args::num_query_group_tiles);  // Hi / 8 * D / 32 8x32 tiles
-    constexpr uint32_t num_weight_tiles = get_arg(args::num_weight_tiles);            // Hi / 32 1x32 tiles
+    constexpr uint32_t num_queries = get_arg(args::num_queries);                      // Sq
+    constexpr uint32_t num_query_group_tiles = get_arg(args::num_query_group_tiles);  // Sq * Hi / 8 * D / 32 8x32 tiles
+    constexpr uint32_t num_weight_tiles = get_arg(args::num_weight_tiles);            // Sq * Hi / 32 1x32 tiles
     constexpr uint32_t page_block_size = get_arg(args::page_block_size);
     constexpr uint32_t num_tiles_per_block_of_key = get_arg(args::num_tiles_per_block_of_key);
     [[maybe_unused]] constexpr uint32_t kv_stage_rows = get_arg(args::kv_stage_rows);
-    [[maybe_unused]] constexpr uint32_t kSelRowsOffset = 4;  // sel: {num_rows, output_offset, pad, pad, rows...}
+    // sel: {num_keys, pad, pad, pad, first output page per query row..., rows..., masks...}
+    [[maybe_unused]] constexpr uint32_t kSelPagesWord = 4;
+    [[maybe_unused]] constexpr uint32_t sel_rows_word = get_arg(args::sel_rows_word);
+    [[maybe_unused]] constexpr uint32_t sel_max_rows = get_arg(args::sel_max_rows);
     constexpr uint32_t num_parts = get_arg(args::num_parts);
+    // cur_pos (or num_keys) arrives at byte 0 and part_index at byte 128; the counts go to the writer
+    // at kMaxKeysWord (the most keys of any query row), kPartWord and kRowKeysWord + j (query row j).
+    constexpr uint32_t kPosReadBytes = (num_queries * sizeof(uint32_t) + 63) / 64 * 64;
+    static_assert(kPosReadBytes <= 128, "per-row positions must fit below part_index");
+    constexpr uint32_t kPartIndexWord = 32;
+    constexpr uint32_t kMaxKeysWord = 48;
+    constexpr uint32_t kPartWord = 49;
+    constexpr uint32_t kRowKeysWord = 64;
 
     // ---- Runtime args ----
     const uint32_t core_index = get_arg(args::core_index);
@@ -60,7 +72,7 @@ void kernel_main() {
     DataflowBuffer ctrl_dfb(dfb::ctrl);          // producer -> compute
     DataflowBuffer indices_dfb(dfb::indices);    // consumer <- compute
     DataflowBuffer kv_dfb(dfb::kv);              // reader-local staging for gathered kv rows
-    DataflowBuffer cur_pos_dfb(dfb::cur_pos);    // producer -> writer ({number of selectable keys, part})
+    DataflowBuffer cur_pos_dfb(dfb::cur_pos);    // producer -> writer (selectable keys per query row, part)
     DataflowBuffer blocks_dfb(dfb::blocks);      // producer -> writer (physical block of each local block)
     DataflowBuffer sel_dfb(dfb::sel);            // consumer <- writer (selected kv_cache rows)
 
@@ -75,25 +87,35 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* key_count =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cur_pos_dfb.get_write_ptr());
 #ifdef PARTIAL_OUTPUT
-    noc.async_read(part_index, cur_pos_dfb, 64, {.page_id = 0}, {.offset_bytes = 64});
+    noc.async_read(part_index, cur_pos_dfb, 64, {.page_id = 0}, {.offset_bytes = kPartIndexWord * sizeof(uint32_t)});
 #endif
 #ifdef HAS_NUM_KEYS
-    noc.async_read(num_keys_count, cur_pos_dfb, 64, {.page_id = 0}, {.offset_bytes = 0});
-    noc.async_read_barrier();
-    const uint32_t num_keys = key_count[0];
+    noc.async_read(num_keys_count, cur_pos_dfb, kPosReadBytes, {.page_id = 0}, {.offset_bytes = 0});
 #else
-    noc.async_read(cur_pos, cur_pos_dfb, 64, {.page_id = 0}, {.offset_bytes = 0});
-    noc.async_read_barrier();
-    // cur_pos is inclusive, so cur_pos + 1 tokens have been compressed into this many keys.
-    const uint32_t num_keys = (key_count[0] + 1) / COMPRESS_RATE;
+    noc.async_read(cur_pos, cur_pos_dfb, kPosReadBytes, {.page_id = 0}, {.offset_bytes = 0});
 #endif
+    noc.async_read_barrier();
+    invalidate_l1_cache();
+    // Every query row scores the keys of the row with the most; the writer masks each row's extra.
+    uint32_t max_keys = 0;
+    for (uint32_t row = 0; row < num_queries; ++row) {
+#ifdef HAS_NUM_KEYS
+        const uint32_t row_keys = key_count[row];
+#else
+        // cur_pos is inclusive, so cur_pos + 1 tokens have been compressed into this many keys.
+        const uint32_t row_keys = (key_count[row] + 1) / COMPRESS_RATE;
+#endif
+        key_count[kRowKeysWord + row] = row_keys;
+        max_keys = std::max(max_keys, row_keys);
+    }
+    const uint32_t num_keys = max_keys;
 #ifdef PARTIAL_OUTPUT
-    const uint32_t part = key_count[16];
+    const uint32_t part = key_count[kPartIndexWord];
 #else
     const uint32_t part = 0;
 #endif
-    key_count[0] = num_keys;
-    key_count[1] = part;
+    key_count[kMaxKeysWord] = num_keys;
+    key_count[kPartWord] = part;
     cur_pos_dfb.push_back(1);
     // This device's part of the blocks, then this core's share of it; the writer splits the same way.
     const uint32_t total_num_blocks = tt::data_movement::common::div_up(num_keys, page_block_size);
@@ -182,16 +204,28 @@ void kernel_main() {
     indices_dfb.pop_front(1);
 
 #ifndef PARTIAL_OUTPUT
-    // The writer lists this core's selected rows in local key order; this kernel takes the first half.
+    // The writer lists this core's selected rows once each, in local key order, with the query rows
+    // that selected them; this kernel takes the first half.
     sel_dfb.wait_front(1);
     invalidate_l1_cache();
     volatile tt_l1_ptr uint32_t* sel = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sel_dfb.get_read_ptr());
     const uint32_t num_rows = sel[0];
-    const uint32_t output_offset = sel[1];
+    uint32_t out_pages[num_queries];
+    for (uint32_t row = 0; row < num_queries; ++row) {
+        out_pages[row] = sel[kSelPagesWord + row];
+    }
     {
         DeviceZoneScopedN("SEL-GATHER-RD");
-        gather_kv_rows<kv_stage_rows>(
-            noc, kv_cache, output, kv_dfb, sel + kSelRowsOffset, 0, num_rows / 2, output_offset);
+        gather_selected_kv_rows<kv_stage_rows, num_queries>(
+            noc,
+            kv_cache,
+            output,
+            kv_dfb,
+            sel + sel_rows_word,
+            sel + sel_rows_word + sel_max_rows,
+            0,
+            num_rows / 2,
+            out_pages);
     }
     sel_dfb.pop_front(1);
 #endif

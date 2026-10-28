@@ -26,6 +26,19 @@ void bind_experimental_paged_cache_operations(nb::module_& mod) {
          Paged update cache operation. This operation expects the following inputs: cache_tensor of shape [B, 1, kv_len, head_dim] and input_tensor of shape [1, B, 1[32], head_dim] where input_tensor is height sharded on B cores. update_idxs will specify for each batch element which token to update in the cache.
          ``input_tensor`` may be TILE or ROW_MAJOR. TILE input is untilized before the token-row splice; ROW_MAJOR input is already a contiguous token row per head and skips that untilize. The destination cache is TILE and interleaved, or ROW_MAJOR L1 WIDTH_SHARDED (non-paged). In the width-sharded path each input core NoC-writes column slices into ``update_idxs[b]`` of the cache (linear row in the packed buffer).
 
+         Multiple rows per user: ``update_idxs`` / ``update_idxs_tensor`` hold one position per written
+         row, user-major, so ``len(update_idxs) == batch * rows_per_user`` and entry
+         ``b * rows_per_user + s`` is the cache position of row ``s`` of user ``b`` (``-1`` in the index
+         tensor skips just that row). With ``rows_per_user == 1`` this is the one-position-per-user
+         contract above. ``rows_per_user > 1`` needs a ROW_MAJOR ``input_tensor`` of shape
+         ``[1, batch, rows_per_user, head_dim]``, height-sharded one user per core (shard
+         ``[rows_per_user, head_dim]``), a single-head cache, and either a host ``update_idxs`` list or a
+         DRAM-interleaved ``update_idxs_tensor`` (an L1-sharded index tensor supports one row per user).
+         Positions are arbitrary: each row is placed independently (its own tile-row; in paged mode its
+         own page-table lookup after ``cache_position_modulo``), so rows may straddle tiles, wrap a ring,
+         or cross page-table blocks. If one user names the same position twice in a TILE cache, the later
+         row wins.
+
          ``head_dim`` is read from ``input_tensor.padded_shape[-1]``. ``block_size``
          defaults to ``cache_tensor.padded_shape[2]``; pass the kwarg to override it for
          callers that reinterpret one physical buffer with different

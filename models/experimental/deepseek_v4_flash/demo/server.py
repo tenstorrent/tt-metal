@@ -3282,7 +3282,7 @@ def build_parser(argv: list[str] | None = None, description: str = __doc__):
     p.add_argument(
         "--l1-small-size",
         type=int,
-        default=int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", "4096")),
+        default=int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", "8192")),
         help="bytes of L1_SMALL reserved for the CCL semaphores and the decode prefetcher's GCB config "
         "pages when the prefill model is on (must not be 0)",
     )

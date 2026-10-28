@@ -1692,10 +1692,10 @@ def test_matmul_decode_batched_width_sharded(device, d0, d1, m, k, n, b_blocks, 
     ],
 )
 @pytest.mark.parametrize("num_inputA_cores", [32])
-def test_matmul_decode_batched_row_major_m1(device, d0, d1, k, n, b_blocks, n_blocks, num_inputA_cores):
-    """ROW_MAJOR width-sharded A with M=1 on the batched path; output is ROW_MAJOR width-sharded."""
+@pytest.mark.parametrize("m", [1, 5])
+def test_matmul_decode_batched_row_major_width_sharded(device, d0, d1, m, k, n, b_blocks, n_blocks, num_inputA_cores):
+    """ROW_MAJOR width-sharded A ``[d0, d1, M, K]`` on the batched path; output is ROW_MAJOR width-sharded."""
     torch.manual_seed(0)
-    m = 1
     batch = d0 * d1
     bc = batch // b_blocks
     nc = n // n_blocks
@@ -1755,75 +1755,108 @@ def test_matmul_decode_batched_row_major_m1(device, d0, d1, k, n, b_blocks, n_bl
     assert_with_pcc(ref, actual, 0.99)
 
 
+def batched_replicated_inputs(device, m, batch, k, n, b_blocks, n_blocks, dram_weight, weight_dtype=ttnn.bfloat4_b):
+    """``A [batch, M, K]``, ``B [batch, K, N]`` and the device operands of the batched replicated-A path.
+
+    A is the ROW_MAJOR HEIGHT_SHARDED replica on B's ``n_blocks x b_blocks`` grid with rows ordered
+    ``[M][batch]`` (a row-major ``[M, batch * K]``, the layout of M tokens of grouped attention output).
+    B is folded to ``[1, 1, Bc*K, b_blocks*N]``, L1 width-sharded or DRAM ND-sharded (one slab per core).
+    Returns ``(torch_a, torch_b, a, b, b_grid, matmul_kwargs)``.
+    """
+    bc = batch // b_blocks
+    nc = n // n_blocks
+    torch_a = torch.randn((batch, m, k), dtype=torch.bfloat16)
+    torch_b = torch.randn((batch, k, n), dtype=torch.bfloat16)
+    torch_b_folded = torch_b.reshape(b_blocks, bc, k, n).permute(1, 2, 0, 3).reshape(1, 1, bc * k, b_blocks * n)
+
+    b_grid = _rectangle_core_range_set(n_blocks, b_blocks, device)
+    num_b_cores = b_blocks * n_blocks
+    # HEIGHT_SHARDED volume is num_cores * shard. Repeat the replica so each B core holds it; keep
+    # rank-4 [1, batch, num_cores * M, K] so the op can name the batch while M is shard_height / batch.
+    rows = torch_a.permute(1, 0, 2).reshape(m * batch, k)
+    a = ttnn.from_torch(
+        rows.repeat(num_b_cores, 1).reshape(1, batch, num_b_cores * m, k),
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        dtype=ttnn.bfloat16,
+        device=device,
+        memory_config=ttnn.create_sharded_memory_config(
+            (batch * m, k),
+            core_grid=b_grid,
+            strategy=ttnn.ShardStrategy.HEIGHT,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        ),
+    )
+    if dram_weight:
+        b = _dram_nd_sharded_weight(device, torch_b_folded, (bc * k, nc), weight_dtype)
+        return torch_a, torch_b, a, b, b_grid, {"weight_core_grid": b_grid}
+    b = ttnn.from_torch(
+        torch_b_folded,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        dtype=weight_dtype,
+        memory_config=ttnn.create_sharded_memory_config(
+            (bc * k, nc),
+            core_grid=b_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        ),
+    )
+    return torch_a, torch_b, a, b, b_grid, {}
+
+
 @pytest.mark.parametrize(
     "d0, d1, k, n, b_blocks, n_blocks",
     [
         (1, 8, 1024, 1024, 8, 8),
+        pytest.param(1, 8, 4096, 1024, 8, 8, id="o_a_proj"),
     ],
 )
-def test_matmul_decode_batched_row_major_height_sharded_replicated(device, d0, d1, k, n, b_blocks, n_blocks):
-    """ROW_MAJOR HEIGHT_SHARDED A replica: shard is the actual [batch * M, K]; batch comes from B."""
+@pytest.mark.parametrize("m", [1, 5, 8])
+@pytest.mark.parametrize("dram_weight", [False, True], ids=["l1_weight", "dram_weight"])
+@pytest.mark.parametrize("output_mcast", [False, True], ids=["sharded_out", "mcast_out"])
+def test_matmul_decode_batched_row_major_height_sharded_replicated(
+    device, d0, d1, m, k, n, b_blocks, n_blocks, dram_weight, output_mcast
+):
+    """ROW_MAJOR HEIGHT_SHARDED A replica: shard is the actual [M * batch, K], rows [M][batch]; batch comes from B.
+
+    ``output_mcast`` replicates the packed ``[M, b_blocks * N]`` result onto every B core, the way o_a
+    hands its result to o_b.
+    """
     torch.manual_seed(0)
-    m = 1
     batch = d0 * d1
     bc = batch // b_blocks
-    nc = n // n_blocks
     num_inputB_cores = b_blocks * n_blocks
     if device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y < num_inputB_cores:
         pytest.skip(f"Skipping test as device doesn't have {num_inputB_cores} cores")
+    if output_mcast and bc != 1:
+        pytest.skip("batched output_core_grid requires Bc = 1")
 
-    torch_input_tensor_a = torch.randn((batch, m, k), dtype=torch.bfloat16)
-    torch_input_tensor_b = torch.randn((batch, k, n), dtype=torch.bfloat16)
-    ref = torch.matmul(torch_input_tensor_a.to(torch.float32), torch_input_tensor_b.to(torch.float32))
+    torch_a, torch_b, a, b, b_grid, kwargs = batched_replicated_inputs(
+        device, m, batch, k, n, b_blocks, n_blocks, dram_weight
+    )
+    ref = torch.matmul(torch_a.float(), torch_b.float())  # [batch, M, N]
+    if output_mcast:
+        kwargs["output_core_grid"] = b_grid
+        kwargs["output_mcast_two_hub"] = True
 
-    torch_input_tensor_b_folded = (
-        torch_input_tensor_b.reshape(b_blocks, bc, k, n).permute(1, 2, 0, 3).reshape(1, 1, bc * k, b_blocks * n)
-    )
-    # HEIGHT_SHARDED volume is num_cores * shard. Repeat the [batch * M, K] replica so each
-    # B core holds it; keep rank-4 [1, batch, num_cores * M, K] so the op can name the batch
-    # while M itself is shard_height / batch.
-    torch_a_2d = torch_input_tensor_a.reshape(batch * m, k)
-    torch_a_replicated = torch_a_2d.repeat(num_inputB_cores, 1).reshape(1, batch, num_inputB_cores * m, k)
-
-    input_b_core_range_set = _rectangle_core_range_set(n_blocks, b_blocks, device)
-    in0_memory_config = ttnn.create_sharded_memory_config(
-        (batch * m, k),
-        core_grid=input_b_core_range_set,
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-    in1_memory_config = ttnn.create_sharded_memory_config(
-        (bc * k, nc),
-        core_grid=input_b_core_range_set,
-        strategy=ttnn.ShardStrategy.WIDTH,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-    input_tensor_a = ttnn.from_torch(
-        torch_a_replicated,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        dtype=ttnn.bfloat16,
-        device=device,
-        memory_config=in0_memory_config,
-    )
-    input_tensor_b = ttnn.from_torch(
-        torch_input_tensor_b_folded,
-        layout=ttnn.TILE_LAYOUT,
-        device=device,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        dtype=ttnn.bfloat4_b,
-    )
-    input_tensor_b_l1 = ttnn.to_memory_config(input_tensor_b, in1_memory_config)
-
-    output_tensor = ttnn.experimental.matmul_decode(input_tensor_a, input_tensor_b_l1)
+    output_tensor = ttnn.experimental.matmul_decode(a, b, **kwargs)
 
     assert output_tensor.layout == ttnn.ROW_MAJOR_LAYOUT
-    assert output_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
-    assert (output_tensor.shape[-2], output_tensor.shape[-1]) == (bc * m, b_blocks * n)
-    out = ttnn.to_torch(output_tensor).float().reshape(bc, m, b_blocks, n)
-    actual = out.permute(2, 0, 1, 3).reshape(batch, m, n)
-    assert_with_pcc(ref, actual, 0.99)
+    if output_mcast:
+        assert output_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.HEIGHT_SHARDED
+        assert (output_tensor.shape[-2], output_tensor.shape[-1]) == (num_inputB_cores * m, b_blocks * n)
+        # Every dest core holds [M, batch * N]: row m is every batch's N side by side.
+        replicas = ttnn.to_torch(output_tensor).float().reshape(num_inputB_cores, m, batch, n)
+        for replica in (replicas[0], replicas[-1]):
+            assert_with_pcc(ref, replica.permute(1, 0, 2), 0.99)
+    else:
+        assert output_tensor.memory_config().memory_layout == ttnn.TensorMemoryLayout.WIDTH_SHARDED
+        assert (output_tensor.shape[-2], output_tensor.shape[-1]) == (bc * m, b_blocks * n)
+        out = ttnn.to_torch(output_tensor).float().reshape(bc, m, b_blocks, n)
+        actual = out.permute(2, 0, 1, 3).reshape(batch, m, n)
+        assert_with_pcc(ref, actual, 0.99)
 
 
 # Unique (K, N, layout) used by deepseek_v4_flash decode matmuls. Duplicates are

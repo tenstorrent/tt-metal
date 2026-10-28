@@ -32,18 +32,20 @@ void bind_fused_partial_rope(nb::module_& mod) {
                 out[..., Hd-Rd:] = x_rope * cos + (x_rope @ trans_mat) * sin
 
         TILE input is processed as 32x32 tiles. ROW_MAJOR input is processed as 1x32
-        faces (one row of 32 elements per tile) and requires a single broadcast
-        ``cos``/``sin`` row. The output layout matches the input.
+        faces (one row of 32 elements per tile) and takes either a single broadcast TILE
+        ``cos``/``sin`` row or ROW_MAJOR ``cos``/``sin`` (one row per input row, or one
+        broadcast row). The output layout matches the input.
 
         Args:
             input (ttnn.Tensor): height- or width-sharded ``[1, 1, rows, D]`` device
                 tensor, TILE or ROW_MAJOR layout.
             cos (ttnn.Tensor): DRAM-interleaved ``[1, 1, rows, rope_dim]`` (or one
-                broadcast row) cos table, TILE layout. Shared across every head block
-                of a row.
+                broadcast row) cos table. TILE, or ROW_MAJOR (bfloat16 / float32) with a
+                ROW_MAJOR input. Shared across every head block of a row.
             sin (ttnn.Tensor): DRAM-interleaved ``[1, 1, rows, rope_dim]`` (or one
-                broadcast row) sin table, TILE layout.
-            trans_mat (ttnn.Tensor): single ``[32, 32]`` ``rotate_half`` tile (replicated).
+                broadcast row) sin table, same layout as ``cos``.
+            trans_mat (ttnn.Tensor): single ``[32, 32]`` ``rotate_half`` matrix (replicated),
+                TILE or ROW_MAJOR (bfloat16 / float32).
             rope_dim (int): trailing channel count of each head block that gets RoPE
                 (tile-aligned).
 

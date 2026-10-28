@@ -7,6 +7,9 @@ A case decodes a group of layers token by token from position 0, each layer on i
 random input and in layer order -- the order their shared compressed KV / top-k needs.
 The reference (``tests/reference.py``) steps the same layers the same way.
 
+``test_attention_decode_rows`` feeds the same positions as ``ROWS``-row ROW_MAJOR blocks through
+``decode_rows`` (DSpark's parallel verify), against the same token-by-token reference.
+
 The converted ttnn weights are cached under ``CACHE_DIR`` (``$DEEPSEEK_V4_CACHE_DIR``, default ``../cache``, per checkpoint).
 
     pytest models/experimental/deepseek_v41_flash/tests/decode/test_attention.py
@@ -31,6 +34,8 @@ from models.experimental.deepseek_v4_flash.tt.weight_cache import WeightCache
 from models.experimental.deepseek_v4_flash.tt.weight_loader import DeepseekV4WeightLoader, resolve_snapshot_dir
 
 PCC = 0.95
+# DSpark's block: the token plus four drafts.
+ROWS = 5
 
 
 def _snapshot():
@@ -38,6 +43,28 @@ def _snapshot():
         return resolve_snapshot_dir(DEFAULT_MODEL_DIR)
     except FileNotFoundError:
         return None
+
+
+def _build(device, layers, seq_len):
+    """The checkpoint's config, the fp32 reference layers, the device layers and their RoPE tables."""
+    snapshot = _snapshot()
+    config = load_config(snapshot)
+    loader = DeepseekV4WeightLoader(snapshot)
+    reference = reference_attentions(load_reference(snapshot), snapshot, loader, layers, seq_len)
+    cache = WeightCache(CACHE_DIR)
+    attns = {
+        i: DeepSeekV41Attention(
+            config,
+            i,
+            attention_weights(loader, i),
+            device,
+            cache=cache.sub(f"layers.{i}.attn"),
+            weight_dtype=ttnn.bfloat4_b,
+        )
+        for i in layers
+    }
+    rope = {i: (reference[i].freqs_cis.real, reference[i].freqs_cis.imag) for i in layers}
+    return config, reference, attns, rope
 
 
 @pytest.mark.skipif(_snapshot() is None, reason=f"V4.1-Flash checkpoint not found under {DEFAULT_MODEL_DIR}")
@@ -53,25 +80,8 @@ def _snapshot():
 )
 @torch.no_grad()
 def test_attention_decode(device, layers, seq_len):
-    snapshot = _snapshot()
-    config = load_config(snapshot)
-    loader = DeepseekV4WeightLoader(snapshot)
-    reference = reference_attentions(load_reference(snapshot), snapshot, loader, layers, seq_len)
-
-    cache = WeightCache(CACHE_DIR)
-    attns = {
-        i: DeepSeekV41Attention(
-            config,
-            i,
-            attention_weights(loader, i),
-            device,
-            cache=cache.sub(f"layers.{i}.attn"),
-            weight_dtype=ttnn.bfloat4_b,
-        )
-        for i in layers
-    }
+    config, reference, attns, rope = _build(device, layers, seq_len)
     caches = build_decode_caches(device, config, layers, seq_len)
-    rope = {i: (reference[i].freqs_cis.real, reference[i].freqs_cis.imag) for i in layers}
 
     torch.manual_seed(0)
     hidden = torch.randn(len(layers), seq_len, config.hidden_size)
@@ -99,3 +109,56 @@ def test_attention_decode(device, layers, seq_len):
             passing, pcc = comp_pcc(expected.reshape(-1), ttnn.to_torch(out).reshape(-1).float(), PCC)
             logger.info(f"layer {i} (ratio {config.compress_ratios[i]}) pos {pos}: PCC {pcc}")
             assert passing, f"layer {i} pos {pos}: PCC {pcc} < {PCC}"
+
+
+@pytest.mark.skipif(_snapshot() is None, reason=f"V4.1-Flash checkpoint not found under {DEFAULT_MODEL_DIR}")
+@pytest.mark.timeout(7200)
+@pytest.mark.parametrize(
+    "layers, seq_len",
+    (
+        # Blocks start at multiples of 5: both ratio-2 parities, one block across the causal
+        # switch (125..129 holds window - 1) and the ring wrap.
+        ((0,), 160),  # window only
+        ((2, 3), 160),  # ratio 2: kv + index source, consumer
+        ((20, 21, 24), 580),  # ratio 1: source, consumer, index-only source; top-k drops 68 of 580
+    ),
+    ids=("window", "ratio2", "ratio1"),
+)
+@torch.no_grad()
+def test_attention_decode_rows(device, layers, seq_len):
+    assert seq_len % ROWS == 0
+    config, reference, attns, rope = _build(device, layers, seq_len)
+    caches = build_decode_caches(device, config, layers, seq_len, verify_rows=ROWS)
+
+    torch.manual_seed(0)
+    hidden = torch.randn(len(layers), seq_len, config.hidden_size)
+    # The block's rows, packed on one width-sharded L1 row group as decode_rows' all_gather_for_matmul takes them.
+    hidden_config = width_sharded_l1_config(ROWS, config.hidden_size, device, tile_height=1)
+    window = config.sliding_window
+    checked = {0, 1, window - 2, window - 1, window} | set(range(seq_len - 4, seq_len))
+    for start in range(0, seq_len, ROWS):
+        positions = range(start, start + ROWS)
+        # The reference shares the group's compressed state, so it steps position-major.
+        expected = {i: [] for i in layers}
+        for pos in positions:
+            for j, i in enumerate(layers):
+                expected[i].append(reference[i](hidden[j, pos].reshape(1, 1, -1).clone(), pos))
+        for j, i in enumerate(layers):
+            out = attns[i].decode_rows(
+                ttnn.from_torch(
+                    hidden[j, start : start + ROWS].reshape(1, ROWS, 1, -1),
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    device=device,
+                    memory_config=hidden_config,
+                ),
+                scache=caches[i],
+                rows=attns[i].decode_rows_inputs(start, ROWS, *rope[i]),
+            )
+            if checked.isdisjoint(positions):
+                continue
+            got = ttnn.to_torch(out).reshape(ROWS, -1).float()
+            for k, pos in enumerate(positions):
+                passing, pcc = comp_pcc(expected[i][k].reshape(-1), got[k], PCC)
+                logger.info(f"layer {i} (ratio {config.compress_ratios[i]}) pos {pos} (row {k}): PCC {pcc}")
+                assert passing, f"layer {i} pos {pos} (row {k} of the block at {start}): PCC {pcc} < {PCC}"

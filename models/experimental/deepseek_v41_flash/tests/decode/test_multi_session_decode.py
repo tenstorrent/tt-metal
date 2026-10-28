@@ -191,7 +191,7 @@ def _log_throughput(run: dict, prompts: dict[int, list[int]], max_new: int) -> N
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
             "num_command_queues": 2,
-            "l1_small_size": int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", "4096")),
+            "l1_small_size": int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", "8192")),
         }
     ],
     indirect=["device_params"],

@@ -52,10 +52,12 @@ inline tt::tt_metal::Tile input_tile_for_compute(const Tensor& input) {
 //     boundaries. ROW_MAJOR uses 1-high faces, so Ht = shard height (one
 //     face per input row).
 // In both cases `cos`/`sin` are `[1, 1, rows, Rd]` (or a single broadcast row)
-// DRAM-interleaved TILE tables streamed per-core by the reader (shared across
+// DRAM-interleaved tables streamed per-core by the reader (shared across
 // every head block of a row), and `trans_mat` is a single [32, 32]
-// rotate_half tile, replicated. ROW_MAJOR X requires the broadcast (one
-// logical cos/sin row) and is computed as 1x32 faces. The rotation is
+// rotate_half matrix, replicated (TILE, or ROW_MAJOR tiled by the reader).
+// ROW_MAJOR X is computed as 1x32 faces and takes either a single broadcast
+// TILE cos/sin row or ROW_MAJOR cos/sin (one row per input row, or one
+// broadcast row); a ROW_MAJOR row is byte-identical to its 1x32 faces. The rotation is
 // block-diagonal per tile (it pairs channels 2p / 2p+1), so each rope tile
 // rotates independently of how the columns are spread over cores. Output
 // layout matches the input.

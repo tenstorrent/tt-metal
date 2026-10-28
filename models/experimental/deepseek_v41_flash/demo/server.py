@@ -1240,13 +1240,13 @@ def parse_args(argv: list[str] | None = None):
             action.help = (
                 "bytes of L1_SMALL reserved for the CCL semaphores and the decode prefetcher's GCB config pages "
                 f"when the prefill model is on (must not be 0; default: DEEPSEEK_V4_L1_SMALL_SIZE, else "
-                f"{_VISION_L1_SMALL_SIZE} with --vision, 4096 without)"
+                f"{_VISION_L1_SMALL_SIZE} with --vision, 8192 without)"
             )
     args = p.parse_args(argv)
     if args.vision and (args.image_rows % 32 or args.image_rows <= FIRST_IMAGE_ROW):
         p.error(f"--image-rows must be a positive multiple of 32, got {args.image_rows}")
     if args.l1_small_size is None:
-        default = _VISION_L1_SMALL_SIZE if args.vision else 4096
+        default = _VISION_L1_SMALL_SIZE if args.vision else 8192
         args.l1_small_size = int(os.environ.get("DEEPSEEK_V4_L1_SMALL_SIZE", default))
     if args.max_new_tokens is None:
         args.max_new_tokens = args.max_context

@@ -198,6 +198,9 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     // in every core's L1 as a ROW_MAJOR HEIGHT_SHARDED shard, in which case cb_input is aliased over
     // that shard and the whole read+broadcast stage is skipped.
     const bool input_replicated = fused_experts_input_is_replicated(input_tensor);
+    // Several ROW_MAJOR rows (from DRAM or a replica) are not a run of tiles, so neither the {1,0}
+    // broadcast nor the alias applies: every core's writer restripes the rows into cb_input instead.
+    const bool rm_rows = fused_experts_rm_rows(input_tensor);
 
     // gate_up weights are [K=H, N=2I] per expert (TILE layout), reshaped+permuted on the
     // host into per-shard [gate_32 | up_32] blocks. Each DRAM shard is one I-tile of gate
@@ -412,7 +415,22 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     const uint32_t input_page_size = input_df_tile_bytes;
     const uint32_t input_num_pages = k_tiles;
     uint32_t src_tiles_per_page = 1u;
-    if (input_replicated) {
+    // Restriped rows: a row's 32-column chunk is 64 bytes of bf16. The writer reads a replica's rows
+    // in place at the shard's page stride; DRAM rows are staged `stage_chunk_tiles` chunks at a time,
+    // double-buffered, because a DRAM read must keep 64-byte alignment that a 32-byte face row lacks.
+    constexpr uint32_t kRowChunkBytes = tt::constants::TILE_WIDTH * 2u;
+    constexpr uint32_t kStageBytes = 16u * 1024u;
+    const uint32_t input_row_stride = rm_rows ? static_cast<uint32_t>(input_buffer->aligned_page_size()) : 0u;
+    const uint32_t stage_chunk_tiles = std::clamp<uint32_t>(kStageBytes / (2u * batch * kRowChunkBytes), 1u, k_tiles);
+    // Two slots plus the slack that lets the writer round the base up to the DRAM read alignment.
+    const uint32_t stage_cb_bytes = 2u * batch * stage_chunk_tiles * kRowChunkBytes + 64u;
+    if (rm_rows) {
+        TT_FATAL(
+            input_row_stride >= k_tiles * kRowChunkBytes,
+            "fused_experts: ROW_MAJOR input page ({} B) must hold a whole {}-column row",
+            input_row_stride,
+            k_tiles * tt::constants::TILE_WIDTH);
+    } else if (input_replicated) {
         const auto& in_shard = input_tensor.memory_config().shard_spec().value();
         const uint64_t shard_bytes =
             static_cast<uint64_t>(in_shard.shape[0]) * in_shard.shape[1] * input_tensor.element_size();
@@ -438,15 +456,22 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     }
 
     // Output compute tiles match the input tile. TILE DRAM pages are one tile; ROW_MAJOR pages
-    // may pack several 1x32 faces (a shard stick or the full H row).
+    // may pack several 1x32 faces (a shard stick or the full H row). Restriped rows are written back
+    // one 32-column row chunk at a time, so there the unit a page is counted in is that chunk.
     const uint32_t out_tile_bytes = input_tile.get_tile_size(out_df);
+    const uint32_t dst_unit_bytes = rm_rows ? kRowChunkBytes : out_tile_bytes;
     const uint32_t dst_page_bytes = static_cast<uint32_t>(out_buffer->page_size());
     TT_FATAL(
-        dst_page_bytes >= out_tile_bytes && dst_page_bytes % out_tile_bytes == 0,
+        dst_page_bytes >= dst_unit_bytes && dst_page_bytes % dst_unit_bytes == 0,
         "fused_experts: output page size {} must be a multiple of the {}-byte compute tile",
         dst_page_bytes,
-        out_tile_bytes);
-    const uint32_t dst_tiles_per_page = dst_page_bytes / out_tile_bytes;
+        dst_unit_bytes);
+    const uint32_t dst_tiles_per_page = dst_page_bytes / dst_unit_bytes;
+    TT_FATAL(
+        !rm_rows || k_tiles % dst_tiles_per_page == 0,
+        "fused_experts: ROW_MAJOR output pages ({} columns) must tile its {}-column rows",
+        dst_tiles_per_page * tt::constants::TILE_WIDTH,
+        k_tiles * tt::constants::TILE_WIDTH);
 
     // The gathered activation is stored as Bfp8_b (not bf16) to keep the resident
     // [num_active, I] block -- the dominant L1 consumer -- within the L1 budget. The SwiGLU
@@ -733,7 +758,8 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     // buffer: the ROW_MAJOR row is already k_tiles consecutive 1x32 faces, which IS the tile layout
     // of a 1x32 compute tile, so the reader only has to publish it (no read, no broadcast, no copy).
     // Every compute core must carry that replica, and a globally-allocated CB does not consume the
-    // program's L1 budget -- it uses the buffer's own allocation.
+    // program's L1 budget -- it uses the buffer's own allocation. A replica of several rows is read
+    // in place too, but by the writer's restripe into this (then ordinary) CB.
     if (input_replicated) {
         const auto& in_grid = input_tensor.memory_config().shard_spec().value().grid;
         TT_FATAL(
@@ -753,7 +779,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
             .page_size = input_page_size,
             .tile = input_tile_desc,
         }}},
-        .buffer = input_replicated ? input_buffer : nullptr,
+        .buffer = input_replicated && !rm_rows ? input_buffer : nullptr,
     });
 
     // Per-core gate_up weight slice ([K, 128] = k_tiles x 4 tiles: gate 0,1 | up 2,3),
@@ -921,6 +947,19 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
             }}},
         });
     }
+    // Writer-private landing area for DRAM-resident ROW_MAJOR rows on their way into cb_input.
+    constexpr uint32_t cb_rm_stage = CBIndex::c_14;
+    if (rm_rows && !input_replicated) {
+        desc.cbs.push_back(CBDescriptor{
+            .total_size = stage_cb_bytes,
+            .core_ranges = all_cores,
+            .format_descriptors = {{CBFormatDescriptor{
+                .buffer_index = cb_rm_stage,
+                .data_format = input_df,
+                .page_size = stage_cb_bytes,
+            }}},
+        });
+    }
     // The readers' shared-expert compile-time block (see SharedExpert in fetch_gate_up.h), then its
     // two accessors. Without a shared expert the routed weights stand in for the accessors, which
     // are then never dereferenced.
@@ -1029,6 +1068,16 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     const uint32_t hub0_noc_x = corner_a.x;
     const uint32_t hub0_noc_y = corner_a.y;
 
+    // How the readers come by cb_input: restriped rows are the writer's to publish, an aliased
+    // replica is published as it sits, and otherwise the {1,0} broadcast delivers it.
+    auto add_reader_input_define = [&](KernelDescriptor& d) {
+        if (rm_rows) {
+            d.defines.emplace_back("INPUT_RM_ROWS", "1");
+        } else if (input_replicated) {
+            d.defines.emplace_back("INPUT_REPLICATED", "1");
+        }
+    };
+
     // ---- Expert-id sender kernel on {0,0} (NoC 0). ----
     std::vector<uint32_t> sender_ct_args = {
         num_weights,
@@ -1125,9 +1174,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         .processor = DataMovementProcessor::RISCV_0,
         .noc = NOC::NOC_0,
     };
-    if (input_replicated) {
-        sender_desc.defines.emplace_back("INPUT_REPLICATED", "1");
-    }
+    add_reader_input_define(sender_desc);
     // Pass the routing buffers as BufferBindings (not raw addresses) so the framework
     // patches the addresses on program-cache hits instead of rebuilding the descriptor.
     sender_desc.emplace_runtime_args(
@@ -1219,9 +1266,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         .processor = DataMovementProcessor::RISCV_1,
         .noc = NOC::NOC_1,
     };
-    if (input_replicated) {
-        input_sender_desc.defines.emplace_back("INPUT_REPLICATED", "1");
-    }
+    add_reader_input_define(input_sender_desc);
     // NoC 1 multicasts traverse from high to low coordinates, so swap start/end.
     // input_buffer is a BufferBinding so the framework patches its address on cache hits.
     input_sender_desc.emplace_runtime_args(
@@ -1303,9 +1348,7 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
             .processor = DataMovementProcessor::RISCV_0,
             .noc = noc,
         };
-        if (input_replicated) {
-            d.defines.emplace_back("INPUT_REPLICATED", "1");
-        }
+        add_reader_input_define(d);
         for (const auto& cr : cores.ranges()) {
             for (const auto& core : cr) {
                 const uint32_t idx = core_index_for(core);
@@ -1414,6 +1457,19 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
     };
     TensorAccessorArgs(*out_buffer).append_to(writer_ct_args);
     writer_ct_args.push_back(shared_i_tiles);
+    // ROW_MAJOR rows restriped into cb_input on the way in and scattered back to rows on the way out.
+    for (uint32_t a :
+         {batch,
+          k_tiles,
+          static_cast<uint32_t>(cb_input),
+          input_page_size,
+          face_r_dim,
+          input_row_stride,
+          static_cast<uint32_t>(cb_rm_stage),
+          stage_chunk_tiles}) {
+        writer_ct_args.push_back(a);
+    }
+    TensorAccessorArgs(*input_buffer).append_to(writer_ct_args);
 
     auto make_writer = [&](const CoreRangeSet& cores, DataMovementProcessor proc, NOC noc) {
         KernelDescriptor writer_desc;
@@ -1422,6 +1478,12 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
         writer_desc.core_ranges = cores;
         writer_desc.compile_time_args = writer_ct_args;
         writer_desc.config = DataMovementConfigDescriptor{.processor = proc, .noc = noc};
+        if (rm_rows) {
+            writer_desc.defines.emplace_back("INPUT_RM_ROWS", "1");
+            if (input_replicated) {
+                writer_desc.defines.emplace_back("INPUT_REPLICATED", "1");
+            }
+        }
         for (const auto& cr : cores.ranges()) {
             for (const auto& core : cr) {
                 const uint32_t idx = core_index_for(core);
@@ -1442,7 +1504,8 @@ ProgramDescriptor FusedExpertsDeviceOperation::MultiCore::create_descriptor(
                      // hub1 of this core's group: the rectangle's far corner.
                      g_rect[2],
                      g_rect[3],
-                     down_local_for(core)});
+                     down_local_for(core),
+                     input_buffer});
             }
         }
         desc.kernels.push_back(std::move(writer_desc));

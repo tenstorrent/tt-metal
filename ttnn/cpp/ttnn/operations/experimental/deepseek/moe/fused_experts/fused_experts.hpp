@@ -44,7 +44,7 @@ namespace ttnn::experimental::deepseek::moe {
 // be supplied:
 //
 //   * `routing_indices` -- the router's own top-k output: each token's selected expert ids, plus the
-//     score row they index. Ids are TILE; scores are TILE or (decode, B == 1) ROW_MAJOR. The op
+//     score row they index. Ids are TILE; scores are TILE or (decode) ROW_MAJOR. The op
 //     gathers each token's k scores, normalizes them (sum to 1, then `routed_scaling_factor`) and
 //     derives the hit ids and per-token weights itself. That is what the op's internals already use,
 //     so widening the k values into an E-wide weight row would be a temporary built by a scatter +
@@ -62,27 +62,31 @@ namespace ttnn::experimental::deepseek::moe {
 // INPUT LAYOUTS. Three shapes are accepted for the activation, all consumed as one tile row of B
 // tokens:
 //   * TILE, [1, 1, B, H] with B <= 32 -- the prefill / batched form.
-//   * ROW_MAJOR interleaved, [1, 1, 1, H] (decode) -- physically a run of 1x32 faces, so it is
-//     loaded as 1x32 compute tiles with no tilize. The row is read from DRAM once by the {1,0}
-//     sender and multicast to every core.
-//   * ROW_MAJOR HEIGHT_SHARDED replicated in L1, [1, 1, 1 * num_cores, H] with shard [1, H] -- the
+//   * ROW_MAJOR interleaved, [1, 1, B, H] (decode) -- one row is physically a run of 1x32 faces, so
+//     it is loaded as 1x32 compute tiles with no tilize, read from DRAM once by the {1,0} sender and
+//     multicast to every core. Several rows (the DSpark block, B = 5) are computed in one
+//     (bit_ceil(B) x 32) tile row like a TILE input of that tile; each core's writer reads them
+//     from DRAM and restripes them into its activation tiles.
+//   * ROW_MAJOR HEIGHT_SHARDED replicated in L1, [1, 1, B * num_cores, H] with shard [B, H] -- the
 //     replica `ttnn.experimental.deepseek.all_gather_for_matmul` multicasts onto every matmul core,
-//     and the layout `matmul_decode` also consumes in place. Each core already holds the full row,
-//     so nothing is read from DRAM and nothing is broadcast: cb_input is aliased over the local
-//     shard and merely published. The row count therefore comes from the shard height (`B`), not
-//     from dim -2, which carries `num_cores * B`. This is the cheapest decode form, and it
-//     removes the input broadcast barrier from the critical path.
+//     and the layout `matmul_decode` also consumes in place. Each core already holds the rows, so
+//     nothing is read from DRAM and nothing is broadcast: one row is aliased by cb_input and merely
+//     published, several are restriped from the shard by each core's writer. The row count
+//     therefore comes from the shard height (`B`), not from dim -2, which carries
+//     `num_cores * B`. This is the cheapest decode form, and it removes the input broadcast barrier
+//     from the critical path.
 //
 // Args:
 //   input_tensor:     activations, [1, 1, B, H] with B <= 32 token rows. TILE, ROW_MAJOR
-//                     (B == 1; loaded as 1x32 compute tiles, no tilize), or ROW_MAJOR
-//                     HEIGHT_SHARDED L1 replicated on the compute grid (see INPUT LAYOUTS).
+//                     (bfloat16; one row loads as 1x32 compute tiles, several are restriped into
+//                     bit_ceil(B)-row tiles), or ROW_MAJOR HEIGHT_SHARDED L1 replicated on the
+//                     compute grid (see INPUT LAYOUTS).
 //   routing_indices:  selected expert ids, [1, 1, B, top_k] TILE, either UINT16 (a `ttnn.topk`
 //                     index output) or BFLOAT16 (a `ttnn.embedding` gather from an id table; exact
 //                     for E <= 256, and the only dtype that op gathers). Mutually exclusive with
 //                     `ranking_scores`.
 //   routing_scores:   unbiased per-expert scores, [1, 1, B, E] bfloat16 -- TILE, or ROW_MAJOR
-//                     when B == 1 (decode; LinearDecode stick, indexed linearly, no tilize).
+//                     (decode; one LinearDecode stick per token, indexed linearly, no tilize).
 //                     The tensor the selection indexes into -- the ranking may have used a
 //                     bias-corrected copy of it, but these are the values that become weights.
 //   ranking_scores:   scores to rank on, [1, 1, B, E] bfloat16, same shape/dtype rules as
@@ -122,7 +126,7 @@ namespace ttnn::experimental::deepseek::moe {
 //   shared_swiglu_limit: clamp limit for the shared expert's SwiGLU; defaults to swiglu_limit,
 //                     and +inf leaves it unclamped.
 //
-// Returns a [1, B, H] BFLOAT16 tensor in the input's layout (TILE, or ROW_MAJOR when B == 1):
+// Returns a [1, B, H] BFLOAT16 tensor in the input's layout (TILE or ROW_MAJOR):
 //   act       = silu(clamp(gate, max=limit)) * clamp(up, -limit, limit),
 //               where [gate, up] = x @ gate_up_w[hit_ids[i]];
 //   output[b] = sum_i w[b, hit_ids[i]] * (act[b] @ down_w[hit_ids[i]]) (+ the shared expert),
@@ -135,7 +139,7 @@ namespace ttnn::experimental::deepseek::moe {
 // activations within the group, and the 6 groups' matching H-slices are reduced onto group 0.
 // Smaller grids (or any other selected count) keep the original 8x8 grid, every core iterating
 // every expert. routing_indices are TILE; routing_scores, ranking_scores and input_tensor may be
-// TILE or (B==1) ROW_MAJOR.
+// TILE or ROW_MAJOR.
 Tensor fused_experts(
     const Tensor& input_tensor,
     const Tensor& routing_scores,

@@ -157,11 +157,7 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
     const auto all_compute_cores_with_bbox = tt::tt_metal::CoreRangeSet(all_compute_cores.bounding_box());
 
     if (mcast_out) {
-        TT_FATAL(
-            Bc == 1 && M_tiles == 1,
-            "batched matmul_decode output_core_grid requires Bc = 1 and M_tiles = 1, but got Bc={}, M_tiles={}",
-            Bc,
-            M_tiles);
+        TT_FATAL(Bc == 1, "batched matmul_decode output_core_grid requires Bc = 1, but got Bc={}", Bc);
     }
 
     log_debug(
@@ -240,7 +236,8 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
     // across a page boundary could not offer. Pages that divide the slab on batch boundaries keep
     // every batch inside a single page, so the reduction stays whole.
     const bool custom_mm_pages_hold_whole_batches = Bc % num_k_blocks == 0;
-    const bool use_custom_mm = device->arch() == tt::ARCH::BLACKHOLE && M_tiles == 1 &&
+    // Each in0 tile row is its own custom_mm call; the reader lays full_in0 out as [Bc][M_tiles][K].
+    const bool use_custom_mm = device->arch() == tt::ARCH::BLACKHOLE &&
                                is_custom_mm_in0_tile_height(inputA_tile_height) && is_custom_mm_kt_dim(K_tiles) &&
                                is_custom_mm_ct_dim(Nc_tiles) && custom_mm_pages_hold_whole_batches;
     if (!use_custom_mm) {
@@ -249,8 +246,6 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
             reason = "custom_mm is Blackhole-only";
         } else if (!is_custom_mm_in0_tile_height(inputA_tile_height)) {
             reason = "in0 tile height is not in {1, 2, 4, 8}";
-        } else if (M_tiles != 1) {
-            reason = "more than one in0 tile row is not contiguous for custom_mm";
         } else if (!is_custom_mm_kt_dim(K_tiles)) {
             reason = "the K dimension must contain an even number of tiles in [2, 256]";
         } else if (!is_custom_mm_ct_dim(Nc_tiles)) {
@@ -429,6 +424,8 @@ ProgramDescriptor MatmulDecodeDeviceOperation::BatchedWidthSharded::create_descr
         num_k_blocks,
         Bc,
         inA_K_tiles_per_core,
+        M_tiles,
+        batch,
     };
     if (in1_from_dram) {
         TensorAccessorArgs(input_tensor_b.buffer()).append_to(reader_kernel_desc.compile_time_args);

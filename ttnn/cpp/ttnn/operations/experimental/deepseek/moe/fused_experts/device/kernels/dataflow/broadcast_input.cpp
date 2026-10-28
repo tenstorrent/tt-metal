@@ -21,6 +21,9 @@
 // signal) do not happen at all -- this core is an ordinary compute core -- so the kernel only
 // publishes the tiles that are already in place and falls through to step 5.
 //
+// INPUT_RM_ROWS: several ROW_MAJOR token rows. Every core's writer restripes them into its own
+// cb_input (see write_gate_up.cpp), so steps 1-4 are skipped and this core goes straight to step 5.
+//
 //   1. Reads all Kt tiles of input_tensor into cb_input.
 //   2. Multicasts the tiles to every other core's L1 (same cb_input address).
 //   3. Sets + multicasts the input-ready semaphore to signal the other cores.
@@ -153,7 +156,17 @@ void kernel_main() {
 
     CircularBuffer cb_input(cb_input_id);
 
-#ifdef INPUT_REPLICATED
+#if defined(INPUT_RM_ROWS)
+    // Several ROW_MAJOR rows: every core's writer (this one's included) restripes them into its own
+    // cb_input, so there is nothing to read, broadcast or publish here.
+    (void)input_addr;
+    (void)input_args;
+    (void)src_tiles_per_page;
+    (void)sem_input_id;
+    (void)input_page_size;
+    (void)input_num_pages;
+    (void)cb_input;
+#elif defined(INPUT_REPLICATED)
     // The activation is a ROW_MAJOR HEIGHT_SHARDED replica this core already holds in L1, with
     // cb_input aliased over its shard. There is nothing to read from DRAM, nothing to multicast and
     // nothing to wait for: this core is an ordinary compute core, and publishing the tiles that are

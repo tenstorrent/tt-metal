@@ -27,8 +27,11 @@ void bind_all_gather_for_matmul(nb::module_& mod) {
         HEIGHT_SHARDED: the full tensor already lives on one core, so that core untilizes if needed
         and multicasts the replica (no gather). TILE and ROW_MAJOR inputs are accepted.
 
-        The output is HEIGHT_SHARDED in L1 and its shard shape is the logical shape of the complete
-        input tensor (tile padding is dropped), matching matmul_decode full-width hub mode for A.
+        The output is HEIGHT_SHARDED in L1 with shard shape ``(M, K)``, where ``K`` is the logical
+        width and ``M`` is the product of every other logical dim, so rows spread over leading dims
+        (e.g. ``[1, B, H, K]`` gives ``M = B * H``) are all replicated. Tile padding is dropped, so
+        every output core holds the dense ``M x K`` tensor, matching matmul_decode full-width hub
+        mode for A. The output's logical shape is ``[1, ..., 1, num_output_cores * M, K]``.
 
         Args:
             * :attr:`input_tensor` (ttnn.Tensor): L1 WIDTH_SHARDED or single-core HEIGHT_SHARDED

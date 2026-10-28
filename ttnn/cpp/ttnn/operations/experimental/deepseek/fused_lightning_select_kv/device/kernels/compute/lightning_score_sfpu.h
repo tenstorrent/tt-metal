@@ -33,9 +33,9 @@ constexpr std::uint32_t kLightningScoreTile = 1;
 
 namespace ckernel::sfpu {
 
-// w8 holds the fp32 bit patterns of the 8 head weights in the score tile; they are exact bf16.
+// w8 points at the bf16 bit patterns of the 8 head weights in the score tile.
 template <bool first>
-inline void lightning_weighted_relu_accumulate(const std::uint32_t* w8) {
+inline void lightning_weighted_relu_accumulate(const volatile std::uint16_t* w8) {
     constexpr std::uint32_t acc = kLightningAccTile * 32;
     constexpr std::uint32_t score = kLightningScoreTile * 32;
     constexpr std::uint32_t slots[4] = {0, 1, 8, 9};
@@ -47,14 +47,14 @@ inline void lightning_weighted_relu_accumulate(const std::uint32_t* w8) {
 
     // Broadcast w[r] into LREG r, then one transpose makes row r of LREG0 w[r] and row r of LREG4
     // w[4 + r].
-    TT_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, w8[0] >> 16);
-    TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, w8[1] >> 16);
-    TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, w8[2] >> 16);
-    TT_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, w8[3] >> 16);
-    TT_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_FLOATB, w8[4] >> 16);
-    TT_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, w8[5] >> 16);
-    TT_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, w8[6] >> 16);
-    TT_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATB, w8[7] >> 16);
+    TT_SFPLOADI(p_sfpu::LREG0, sfpi::SFPLOADI_MOD0_FLOATB, w8[0]);
+    TT_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_FLOATB, w8[1]);
+    TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_FLOATB, w8[2]);
+    TT_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_FLOATB, w8[3]);
+    TT_SFPLOADI(p_sfpu::LREG4, sfpi::SFPLOADI_MOD0_FLOATB, w8[4]);
+    TT_SFPLOADI(p_sfpu::LREG5, sfpi::SFPLOADI_MOD0_FLOATB, w8[5]);
+    TT_SFPLOADI(p_sfpu::LREG6, sfpi::SFPLOADI_MOD0_FLOATB, w8[6]);
+    TT_SFPLOADI(p_sfpu::LREG7, sfpi::SFPLOADI_MOD0_FLOATB, w8[7]);
     TTI_SFPTRANSP(0, 0, 0, 0);
     TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, w_lo_slot * 2);
     TTI_SFPSTORE(p_sfpu::LREG4, 0, ADDR_MOD_7, w_hi_slot * 2);

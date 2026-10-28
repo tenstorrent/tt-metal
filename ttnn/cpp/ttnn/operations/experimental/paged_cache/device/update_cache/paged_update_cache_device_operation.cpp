@@ -293,7 +293,8 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
         uint32_t in_num_cores_cur_pos = update_idxs_tensor.value().shard_spec().value().grid.num_cores();
         TT_FATAL(
             input_tensor.logical_shape()[1] == num_indices,
-            "Number of update_idxs ({}) should match batch size ({}) if sharded",
+            "Number of update_idxs ({}) should match batch size ({}) if sharded (an L1-sharded update_idxs_tensor "
+            "supports one row per user)",
             num_indices,
             input_tensor.logical_shape()[1]);
         TT_FATAL(
@@ -303,10 +304,33 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
             num_cores_cur_pos);
     } else {
         TT_FATAL(
-            input_tensor.padded_shape()[1] == num_indices,
-            "Number of update_idxs ({}) should match batch size ({})",
+            num_indices > 0 && num_indices % input_tensor.padded_shape()[1] == 0,
+            "Number of update_idxs ({}) must be a positive multiple of batch size ({}): one position per written "
+            "row, user-major (entry b * rows_per_user + s is row s of user b)",
             num_indices,
             input_tensor.padded_shape()[1]);
+    }
+    const uint32_t rows_per_user = paged_update_cache_rows_per_user(operation_attributes, tensor_args);
+    if (rows_per_user > 1) {
+        const uint32_t num_heads = operation_attributes.num_kv_heads_override.value_or(cache_tensor.padded_shape()[1]);
+        TT_FATAL(
+            input_tensor.layout() == Layout::ROW_MAJOR,
+            "{} update_idxs for batch {} means {} rows per user, which needs ROW_MAJOR input; TILE input writes one "
+            "row per user",
+            num_indices,
+            input_tensor.padded_shape()[1],
+            rows_per_user);
+        TT_FATAL(
+            num_heads == 1,
+            "Writing {} rows per user needs a single-head cache, got num_kv_heads {}",
+            rows_per_user,
+            num_heads);
+        TT_FATAL(
+            input_tensor.logical_shape()[2] == rows_per_user,
+            "Writing {} rows per user needs input_tensor [1, batch, {}, head_dim], got {}",
+            rows_per_user,
+            rows_per_user,
+            input_tensor.logical_shape());
     }
 
     // Sharding validation
@@ -355,6 +379,11 @@ void PagedUpdateCacheDeviceOperation::validate_on_program_cache_miss(
                 "head",
                 input_tensor.shard_spec().value().shape[0],
                 num_heads);
+            TT_FATAL(
+                rows_per_user == 1 || input_tensor.shard_spec().value().shape[0] == rows_per_user,
+                "Row-major input shard height ({}) must equal rows per user ({}) so each user's rows sit on its core",
+                input_tensor.shard_spec().value().shape[0],
+                rows_per_user);
         }
     }
 
@@ -384,8 +413,8 @@ ttsl::hash::hash_t PagedUpdateCacheDeviceOperation::compute_program_hash(
     auto program_factory = select_program_factory(args, tensor_args);
 
     // Exclude runtime-only parameters from hash:
-    // - update_idxs: values are runtime-only (used only in runtime args), size is validated to match input tensor shape
-    // (already in tensor_args)
+    // - update_idxs values: runtime-only (runtime varargs). Their count sets rows-per-user, a compile-time
+    //   arg the input shape does not pin down for one-row callers ([1, B, nh, D] with B indices), so it is hashed.
     // - batch_offset: validated to be 0, doesn't affect program structure
     // Include parameters that affect program structure:
     // - compute_kernel_config: affects compile-time args (fp32_dest_acc_en)
@@ -401,6 +430,7 @@ ttsl::hash::hash_t PagedUpdateCacheDeviceOperation::compute_program_hash(
         args.block_size_override,
         args.num_kv_heads_override,
         args.cache_position_modulo,
+        args.update_idxs.size(),
         tensor_args,
         program_factory.index());
 }

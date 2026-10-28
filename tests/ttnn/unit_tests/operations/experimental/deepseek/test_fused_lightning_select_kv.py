@@ -15,7 +15,8 @@ with the paged KV gather that follows it:
 The unfused model path puts the one real query on row 31 of a tile-padded 32-row
 block. The fused op instead takes ``query`` ROW_MAJOR HEIGHT_SHARDED in L1 with one
 full ``[B * Hi * Sq, D]`` replica per core (the ``matmul_decode`` rm_hs layout), so
-the tests hand it just the real row. The op is decode-only: ``B == 1`` and ``Sq == 1``.
+the tests hand it just the real rows. ``B == 1``; ``Sq`` query rows (1 to 32) each select their own
+top-k at their own position, as ``Sq`` single-row calls would.
 
 Run::
 
@@ -785,7 +786,11 @@ def test_page_table_row_selects_session_row(device, session) -> None:
         assert list(out.shape)[0] == 1, f"a row-selected step decodes one user, got {list(out.shape)}"
         results.append((ttnn.to_torch(out), ttnn.to_torch(scores), ttnn.to_torch(kv_tt)))
     (rows_1, scores_1, kv_1), (rows_n, scores_n, kv_n) = results
-    assert torch.equal(scores_n, scores_1), "row-selected scores differ from the one-row table's"
+    differ = (scores_n != scores_1).reshape(-1).nonzero().reshape(-1)
+    assert differ.numel() == 0, (
+        f"row-selected scores differ from the one-row table's at {differ.numel()} keys, first {differ[:16].tolist()}: "
+        f"{scores_n.reshape(-1)[differ[:4]].tolist()} vs {scores_1.reshape(-1)[differ[:4]].tolist()}"
+    )
     assert torch.equal(rows_n, rows_1), "row-selected rows differ from the one-row table's"
     assert torch.equal(kv_n, kv_1), "row-selected new_kv_row landed elsewhere than the one-row table's"
     physical = int(tables[session, new_index // block]) * block + new_index % block
@@ -853,6 +858,182 @@ def test_session_rows_through_candidate_pool(device) -> None:
     names = ("candidate blocks", "pool count", "pool keys", "pool rows", "consumer rows", "kv cache")
     for name, one_row, row_selected in zip(names, *results):
         assert torch.equal(row_selected, one_row), f"row-selected {name} differ from the one-row table's"
+
+
+def _row_positions(num_queries: int, last_keys: int, spacing: int) -> torch.Tensor:
+    """``[Sq]`` INT32 inclusive positions ``spacing`` tokens apart; the last row has ``last_keys`` keys."""
+    last = last_keys * COMPRESS_RATE - 1
+    return torch.tensor([last - (num_queries - 1 - j) * spacing for j in range(num_queries)], dtype=torch.int32)
+
+
+@pytest.mark.parametrize(
+    "num_queries, num_keys, spacing",
+    [
+        (1, 4093, 1),
+        (2, 4093, 1),
+        (5, 4093, 1),
+        (5, 4093, 97),
+        (8, 2048, 255),
+        (13, 8191, 1),
+        (32, 4093, 1),
+        (32, 8192, 61),
+    ],
+    ids=["sq1", "sq2", "sq5", "sq5_spread", "sq8_spread", "sq13", "sq32", "sq32_spread"],
+)
+def test_multi_row_matches_single_row_calls(device, num_queries, num_keys, spacing) -> None:
+    """``Sq`` query rows in one call give, row for row, exactly the kv rows and scores of ``Sq`` single-row
+    calls at the rows' own positions. ``spacing`` 1 is a speculative step (consecutive tokens, mostly the
+    same key count); wider spacings give every row a different count, crossing page blocks."""
+    torch.manual_seed(0)
+    heads, dim, block, k = V4_INDEX_HEADS, V4_INDEX_HEAD_DIM, 64, V4_INDEX_TOPK
+    length = -(-num_keys // block) * block
+    kv_cache, page_table = _paged_inputs(1, length, block, V4_KV_HEADS, V4_HEAD_DIM, seed=3)
+    key_cache = torch.randn(page_table.numel(), 1, block, dim)
+    query = torch.randn(1, num_queries * heads, 1, dim)
+    weights = torch.randn(1, 1, num_queries, heads) * dim**-0.5
+    cur_pos = _row_positions(num_queries, num_keys, spacing)
+    row_keys = [int(p + 1) // COMPRESS_RATE for p in cur_pos]
+    assert min(row_keys) >= k, "every row must have at least k keys so all k output rows are written"
+
+    key_tt = _tile(key_cache, device)
+    kv_tt = _rm(kv_cache, device, ttnn.bfloat16)
+    page_table_tt = _rm(page_table, device, ttnn.int32)
+    # 32 rows' replicated query and its tilized copy take 1 MB of every core's L1; the rows go to DRAM.
+    out, scores = ttnn.experimental.deepseek.fused_lightning_select_kv(
+        _replicated_rm_hs(query, device),
+        key_tt,
+        _replicated_rm_hs(weights, device),
+        kv_tt,
+        page_table_tt,
+        _rm(cur_pos, device, ttnn.int32),
+        k,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    assert list(out.shape) == [num_queries, V4_KV_HEADS, k, V4_HEAD_DIM]
+    assert list(scores.shape) == [1, 1, num_queries, length]
+    out = ttnn.to_torch(out)
+    scores = ttnn.to_torch(scores).reshape(num_queries, length)
+
+    for j in range(num_queries):
+        rows_j, scores_j = ttnn.experimental.deepseek.fused_lightning_select_kv(
+            _replicated_rm_hs(query[:, j * heads : (j + 1) * heads], device),
+            key_tt,
+            _replicated_rm_hs(weights[:, :, j : j + 1], device),
+            kv_tt,
+            page_table_tt,
+            _rm(cur_pos[j : j + 1], device, ttnn.int32),
+            k,
+        )
+        n = row_keys[j]
+        single = ttnn.to_torch(scores_j).reshape(-1)[:n]
+        differ = (scores[j, :n] != single).nonzero().reshape(-1)
+        assert differ.numel() == 0, (
+            f"row {j} ({n} keys): scores differ from its single-row call at {differ.numel()} keys, first "
+            f"{differ[:16].tolist()}: {scores[j, differ[:4]].tolist()} vs {single[differ[:4]].tolist()}"
+        )
+        assert torch.equal(
+            out[j], ttnn.to_torch(rows_j)[0]
+        ), f"row {j} ({n} keys): rows differ from its single-row call"
+
+
+@pytest.mark.parametrize("num_queries", [1, 5], ids=["sq1", "sq5"])
+def test_multi_row_writes_output_tensor_with_stride(device, num_queries) -> None:
+    """With ``output_tensor``, row j's selection lands at ``output_row_offset + j * output_row_stride``: the
+    model's ``[window | top-k]`` blocks per row. The window rows and the padding stay untouched."""
+    torch.manual_seed(0)
+    heads, dim, block, k = V4_INDEX_HEADS, V4_INDEX_HEAD_DIM, 64, V4_INDEX_TOPK
+    window, pad = 128, 32
+    num_keys = 4093
+    length = -(-num_keys // block) * block
+    kv_cache, page_table = _paged_inputs(1, length, block, V4_KV_HEADS, V4_HEAD_DIM, seed=4)
+    key_cache = torch.randn(page_table.numel(), 1, block, dim)
+    query = torch.randn(1, num_queries * heads, 1, dim)
+    weights = torch.randn(1, 1, num_queries, heads) * dim**-0.5
+    cur_pos = _row_positions(num_queries, num_keys, 1)
+    key_tt = _tile(key_cache, device)
+    kv_tt = _rm(kv_cache, device, ttnn.bfloat16)
+    page_table_tt = _rm(page_table, device, ttnn.int32)
+
+    expected, _ = ttnn.experimental.deepseek.fused_lightning_select_kv(
+        _replicated_rm_hs(query, device),
+        key_tt,
+        _replicated_rm_hs(weights, device),
+        kv_tt,
+        page_table_tt,
+        _rm(cur_pos, device, ttnn.int32),
+        k,
+    )
+    expected = ttnn.to_torch(expected)  # [Sq, 1, k, Dh]
+
+    stride = window + k + pad
+    prior = torch.randn(1, V4_KV_HEADS, num_queries * stride, V4_HEAD_DIM).to(torch.bfloat16)
+    out_buf = ttnn.from_torch(prior, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device)
+    ttnn.experimental.deepseek.fused_lightning_select_kv(
+        _replicated_rm_hs(query, device),
+        key_tt,
+        _replicated_rm_hs(weights, device),
+        kv_tt,
+        page_table_tt,
+        _rm(cur_pos, device, ttnn.int32),
+        k,
+        output_tensor=out_buf,
+        output_row_offset=window,
+        output_row_stride=stride,
+    )
+    got = ttnn.to_torch(out_buf)[0, 0]
+    written = torch.zeros(num_queries * stride, dtype=torch.bool)
+    for j in range(num_queries):
+        first = window + j * stride
+        written[first : first + k] = True
+        assert torch.equal(got[first : first + k], expected[j, 0]), f"row {j}: selection not at its stride"
+    assert torch.equal(got[~written], prior[0, 0][~written]), "rows outside the selections were overwritten"
+
+
+@pytest.mark.parametrize("num_new_rows", [1, 3], ids=["one_new_row", "three_new_rows"])
+def test_multi_row_writes_new_kv_rows(device, num_new_rows) -> None:
+    """``n`` new kv rows are all written before the gather: the cache afterwards and every row's selection
+    match a call on a cache that already holds them."""
+    torch.manual_seed(0)
+    heads, dim, block, k = V4_INDEX_HEADS, V4_INDEX_HEAD_DIM, 64, V4_INDEX_TOPK
+    num_queries, num_keys = 5, 4093
+    length = -(-num_keys // block) * block
+    kv_cache, page_table = _paged_inputs(1, length, block, V4_KV_HEADS, V4_HEAD_DIM, seed=5)
+    key_cache = torch.randn(page_table.numel(), 1, block, dim)
+    query = torch.randn(1, num_queries * heads, 1, dim)
+    weights = torch.randn(1, 1, num_queries, heads) * dim**-0.5
+    # The newest rows' keys close in this step (spaced 4 tokens apart, one key each).
+    cur_pos = _row_positions(num_queries, num_keys, COMPRESS_RATE)
+    new_index = torch.tensor([num_keys - num_new_rows + r for r in range(num_new_rows)], dtype=torch.int32)
+    new_rows = torch.randn(1, 1, num_new_rows, V4_HEAD_DIM).to(torch.bfloat16)
+    with_rows = kv_cache.clone()
+    for r, index in enumerate(new_index.tolist()):
+        with_rows[int(page_table[0, index // block]), 0, index % block] = new_rows[0, 0, r]
+    key_tt = _tile(key_cache, device)
+    page_table_tt = _rm(page_table, device, ttnn.int32)
+
+    expected, _ = ttnn.experimental.deepseek.fused_lightning_select_kv(
+        _replicated_rm_hs(query, device),
+        key_tt,
+        _replicated_rm_hs(weights, device),
+        _rm(with_rows, device, ttnn.bfloat16),
+        page_table_tt,
+        _rm(cur_pos, device, ttnn.int32),
+        k,
+    )
+    kv_tt = _rm(kv_cache, device, ttnn.bfloat16)
+    got, _ = ttnn.experimental.deepseek.fused_lightning_select_kv(
+        _replicated_rm_hs(query, device),
+        key_tt,
+        _replicated_rm_hs(weights, device),
+        kv_tt,
+        page_table_tt,
+        _rm(cur_pos, device, ttnn.int32),
+        k,
+        new_kv_row=_rm(new_rows, device, ttnn.bfloat16),
+        new_kv_row_index=_rm(new_index, device, ttnn.int32),
+    )
+    assert torch.equal(ttnn.to_torch(kv_tt).to(torch.bfloat16), with_rows), "new kv rows not where expected"
+    assert torch.equal(ttnn.to_torch(got), ttnn.to_torch(expected)), "selection differs from the pre-written cache's"
 
 
 # The V4.1 model's mesh: 8 pipeline stages of 1x4 TP submeshes.

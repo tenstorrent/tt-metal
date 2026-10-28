@@ -17,11 +17,17 @@
 
 namespace ttnn::operations::experimental::deepseek::fused_lightning_select_kv {
 
+// The kernels track which query rows selected a key in one uint32 mask.
+inline constexpr uint32_t kMaxQueryRows = 32;
+inline constexpr uint32_t kMaxNewKvRows = 32;
+
 struct FusedLightningSelectKvDeviceOperation {
     struct operation_attributes_t {
         uint32_t k = 0;
-        // Row of the kv output that selected row 0 is written to.
+        // Row of the kv output that query row 0's selected row 0 is written to; query row j's
+        // selection starts ``output_row_stride`` rows after query row j - 1's.
         uint32_t output_row_offset = 0;
+        uint32_t output_row_stride = 0;
         // Candidate source mode when > 0: also select the ``candidate_topk_blocks`` best blocks of
         // ``candidate_block_size`` keys (each scored by its best key, the newest block always kept).
         uint32_t candidate_topk_blocks = 0;
@@ -42,13 +48,14 @@ struct FusedLightningSelectKvDeviceOperation {
         const Tensor& page_table_tensor;
         const Tensor& cur_pos_tensor;
         std::optional<Tensor> valid_length_tensor;
-        // Preallocated kv output ``[1, Hkv, rows, Dh]``; the selected rows land at
-        // ``[output_row_offset, output_row_offset + k)``.
+        // Preallocated kv output ``[1, Hkv, rows, Dh]``; query row j's selected rows land at
+        // ``[output_row_offset + j * output_row_stride, ... + k)``.
         std::optional<Tensor> output_tensor;
-        // Written into ``kv_cache`` at logical row ``new_kv_row_index[0]`` before the gather.
+        // ``[1, 1, n, Dh]`` rows written into ``kv_cache`` at logical rows ``new_kv_row_index[0 .. n)``
+        // before the gather.
         std::optional<Tensor> new_kv_row;
         std::optional<Tensor> new_kv_row_index;
-        // ``[1]`` INT32 number of selectable keys; replaces ``(cur_pos + 1) / 4`` when given.
+        // ``[Sq]`` INT32 number of selectable keys per query row; replaces ``(cur_pos + 1) / 4`` when given.
         std::optional<Tensor> num_keys_tensor;
         // Preallocated candidate source outputs: ``[1, candidate_topk_blocks]`` and ``[1]`` INT32.
         std::optional<Tensor> candidate_blocks_output;
@@ -66,9 +73,10 @@ struct FusedLightningSelectKvDeviceOperation {
         std::optional<Tensor> kv_page_table;
     };
 
-    // [0] selected kv rows (with num_parts > 1: the local candidates, ``[1, 1, 1, 2k + 16]`` INT32:
-    // k kv_cache rows, their k order keys, then the number selected), [1] index scores; in candidate
-    // source mode also [2] candidate blocks, [3] pool count.
+    // [0] selected kv rows, ``[Sq, Hkv, k, Dh]`` (with num_parts > 1: the local candidates,
+    // ``[1, 1, 1, 2k + 16]`` INT32: k kv_cache rows, their k order keys, then the number selected),
+    // [1] index scores ``[1, 1, Sq, max_keys]``; in candidate source mode also [2] candidate blocks,
+    // [3] pool count.
     using spec_return_value_t = std::vector<tt::tt_metal::TensorSpec>;
     using tensor_return_value_t = std::vector<Tensor>;
 
@@ -104,6 +112,7 @@ std::vector<ttnn::Tensor> fused_lightning_select_kv(
     const std::optional<const ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     const std::optional<ttnn::Tensor>& output_tensor = std::nullopt,
     uint32_t output_row_offset = 0,
+    std::optional<uint32_t> output_row_stride = std::nullopt,
     const std::optional<ttnn::Tensor>& new_kv_row = std::nullopt,
     const std::optional<ttnn::Tensor>& new_kv_row_index = std::nullopt,
     const std::optional<ttnn::Tensor>& num_keys_tensor = std::nullopt,
