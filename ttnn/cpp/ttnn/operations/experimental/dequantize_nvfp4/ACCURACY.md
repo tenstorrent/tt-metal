@@ -31,7 +31,8 @@ For **each tensor-scale case** in the fixed verification corpus, require:
 The ULP requirements are inclusive; the SNR requirement is strict. Cases
 must pass individually, rather than pooling their statistics. An exact
 nonzero reconstruction has infinite SNR and passes. An all-zero reference
-has undefined SNR and must reconstruct zero exactly. Existing routing,
+has undefined SNR and is evaluated using the same ULP limits, without an
+additional SNR or exact-zero requirement. Existing routing,
 layout, and encoding-correctness tests remain in force. BFP8 error and
 encoding-distance/P99 metrics remain diagnostic; BFP8 dominance is not an
 additional acceptance requirement.

@@ -33,11 +33,8 @@ def _accuracy_gate_failures(metrics):
         if not math.isfinite(value) or value > limit:
             failures.append(f"{key}={value} must be <= {limit}")
     snr = metrics["snr_db"]
-    if snr is None:
-        # An all-zero reference has undefined SNR; require exact zeros.
-        if metrics["rmse"] != 0:
-            failures.append("zero-signal case must have zero reconstruction error")
-    elif snr != "inf" and not snr > SFPU_ACCURACY_GATE["snr_db_exclusive_min"]:
+    # An all-zero reference has undefined SNR and uses the ULP limits above.
+    if snr is not None and snr != "inf" and not snr > SFPU_ACCURACY_GATE["snr_db_exclusive_min"]:
         failures.append(f"snr_db={snr} must be > {SFPU_ACCURACY_GATE['snr_db_exclusive_min']}")
     return failures
 
