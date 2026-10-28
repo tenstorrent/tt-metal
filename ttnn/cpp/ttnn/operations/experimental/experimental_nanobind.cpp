@@ -118,6 +118,7 @@
 namespace ttnn::operations::experimental {
 
 void py_module(nb::module_& mod) {
+    ttnn::operations::generic::bind_generic_operation_program_spec(mod);
     ttnn::operations::generic::bind_generic_operation_preparation(mod);
     slice_write::bind_slice_write(mod);
     padded_slice::bind_padded_slice(mod);
