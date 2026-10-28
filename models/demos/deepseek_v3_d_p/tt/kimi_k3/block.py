@@ -19,6 +19,7 @@ answers `writes_kv`, and a residual it talks to rather than carries.
 
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 import ttnn
@@ -115,7 +116,13 @@ class TtKimiK3Block(LightweightModule):
             cache_name_prefix=f"layer_{layer_idx}.ffn_norm",
         )
 
-        if self.is_moe:
+        self.moe_block = self.is_moe and os.environ.get("K3_MOE_IMPL") == "block"
+        if self.moe_block:
+            # (the MoE block: router, shared expert, latent and routed experts in one call - tt/kimi_k3/moe_block_ffn.py)
+            from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import TtK3MoEBlockFfn
+
+            self.ffn = TtK3MoEBlockFfn(mesh_device, model_cfg, layer_idx)
+        elif self.is_moe:
             # Kimi-K3 runs the device FP32 gate: one expert group, so there is no grouped-topk
             # fallback to prefer, and `KimiK3Adapter.default_gate_mode` names it. Defaulted here
             # rather than left None, which reaches TtMoEGatePrefill as a mode it cannot read.
@@ -250,6 +257,8 @@ class TtKimiK3Block(LightweightModule):
         residual.release(pre_ffn)
 
     def _ffn_path(self, ffn_norm_out, *, actual_isl, padding_side, ctx) -> ttnn.Tensor:
+        if self.moe_block:  # ([1, 1, S/SP, H/TP] in and out; padding rows run as real ones)
+            return self.ffn(ffn_norm_out)
         if self.is_moe:
             # 4D TILE -> 3D -> MoE -> 3D -> 4D, matching TtPrefillBlock._moe_path exactly. `TtMoe`
             # returns `(out, intermediates)`, and the squeezed input is NOT freed here: upstream

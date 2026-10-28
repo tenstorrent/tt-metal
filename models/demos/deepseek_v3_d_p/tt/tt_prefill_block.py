@@ -401,7 +401,16 @@ class TtPrefillBlock(LightweightModule):
         )
 
         # --- FFN (MoE or dense) ---
-        if self.is_moe:
+        # (MOE_IMPL=block: the MoE block - router, shared expert and routed experts in one call, tt/kimi_k3/moe_block_ffn.py;
+        # its weights: the gate / shared expert from the checkpoint, the routed experts from this cache's TtMoe tensorbins)
+        self.moe_block = self.is_moe and os.environ.get("MOE_IMPL") == "block"
+        if self.moe_block:
+            from models.demos.deepseek_v3_d_p.tt.kimi_k3.moe_block_ffn import TtK3MoEBlockFfn
+
+            self.ffn = TtK3MoEBlockFfn(
+                mesh_device, model_cfg, layer_idx, hf_config=config, cache_path=weight_cache_path
+            )
+        elif self.is_moe:
             self.ffn = self._build_moe(
                 mesh_device=mesh_device,
                 model_cfg=model_cfg,
@@ -788,6 +797,8 @@ class TtPrefillBlock(LightweightModule):
 
         `metadata` is forwarded so the traced path can build the padding config on-device (see
         TtMoe.forward); it is unused on the eager/scalar path."""
+        if self.moe_block:  # ([1, 1, S/SP, H/TP] in and out; padding rows run as real ones)
+            return self.ffn(ffn_norm_out)
         moe_input = ttnn.squeeze(ffn_norm_out, dim=0)
 
         moe_out, _ = self.ffn(

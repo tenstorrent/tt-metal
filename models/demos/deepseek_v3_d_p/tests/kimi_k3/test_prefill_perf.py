@@ -24,6 +24,10 @@ The weight cache matters here more than anywhere: without it each depth spends o
 routed experts before the first token moves, and a perf sweep re-reads them at every rung.
 """
 
+import cProfile
+import io
+import os
+import pstats
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -59,6 +63,121 @@ DEPTHS = [1, 5, 12, 24]
 # per-chunk curve is the only thing that shows how prefill scales with context.
 CHUNK_COUNTS = [1, 11]
 ITERATIONS = 5
+
+
+def _kernel_label(source: str) -> str:
+    """A kernel source -> a short name: a file path's last two parts, or an inline kernel's first #define."""
+    src = str(source)
+    if "\n" not in src and ("/" in src or src.endswith((".cpp", ".hpp", ".h"))):
+        parts = [q for q in src.split("/") if q]
+        return "/".join(parts[-2:])
+    for line in src.splitlines():
+        if line.startswith("#define "):
+            return "inline:" + line.split()[1]
+    return "inline:" + src.strip()[:24].replace("\n", " ")
+
+
+def _op_breakdown(num_layers, critical_path, sources, device_ms, chip_mean=None):
+    """Device time by program kind (programs grouped by their kernels' names): total ms, count, share - and, with
+    $K3_PERF_DUMP, every program's (runtime id, ns, kernel names) as json."""
+    import json
+    import os
+
+    chip_mean = chip_mean or {}
+    groups = defaultdict(lambda: [0.0, 0, 0.0])
+    rows = []
+    for rid, ns in critical_path.items():
+        names = tuple(sorted({_kernel_label(k) for k in sources.get(rid, ())}))
+        key = " + ".join(names[:4]) + (f" (+{len(names) - 4})" if len(names) > 4 else "")
+        groups[key][0] += ns
+        groups[key][1] += 1
+        groups[key][2] += chip_mean.get(rid, 0.0)
+        rows.append({"runtime_id": rid, "ns": ns, "mean_ns": chip_mean.get(rid), "kernels": names})
+    mean_ms = sum(chip_mean.values()) / 1e6
+    lines = [
+        f"  {ns / 1e6:9.2f} ms {ns / 1e6 / max(device_ms, 1e-9) * 100:5.1f}%  (chip mean {mn / 1e6:8.2f})  x{n:4d}  {key}"
+        for key, (ns, n, mn) in sorted(groups.items(), key=lambda kv: -kv[1][0])[:40]
+    ]
+    logger.info(
+        f"PERF_OPS L{num_layers:2d}: device {device_ms:.2f} ms (slowest chip a program, summed; the mean over chips "
+        f"summed {mean_ms:.2f} ms) by program kind (top 40):\n" + "\n".join(lines)
+    )
+    path = os.environ.get("K3_PERF_DUMP")
+    if path:
+        with open(path, "w") as f:
+            json.dump(rows, f)
+
+
+def _host_breakdown(model, once, mesh_device, num_layers, eager_ms, iters=5):
+    """Where an eager forward's host time goes: each layer's parts timed on the host (no syncs - the enqueue cost, as
+    the eager wall pays it while the device keeps up), then one forward under cProfile (the top functions by own
+    time, the .prof next to K3_PERF_DUMP)."""
+    acc = defaultdict(float)
+
+    def timed(fn, key):
+        def call(*a, **k):
+            t0 = time.perf_counter()
+            try:
+                return fn(*a, **k)
+            finally:
+                acc[key] += time.perf_counter() - t0
+
+        return call
+
+    saved = []
+    for blk in model.layers:
+        attn = "MLA" if blk.attention.writes_kv else "KDA"
+        ffn = "moe" if blk.is_moe else "dense"
+        for obj, name, key in (
+            (blk, "forward", "layer"),
+            (blk, "attn_norm", "attn_norm"),
+            (blk.attention, "forward", f"attn {attn}"),
+            (blk, "ffn_norm", "ffn_norm"),
+            (blk, "_ffn_path", f"ffn {ffn}"),
+        ):
+            orig = getattr(obj, name)
+            had = name in vars(obj)
+            saved.append((obj, name, orig, had))
+            setattr(obj, name, timed(orig, key))
+    try:
+        ttnn.synchronize_device(mesh_device)
+        t0 = time.perf_counter()
+        for _ in range(iters):
+            acc["forward"] -= time.perf_counter()
+            once()
+            acc["forward"] += time.perf_counter()
+        t_enq = time.perf_counter() - t0
+        ttnn.synchronize_device(mesh_device)
+        wall = time.perf_counter() - t0
+    finally:
+        for obj, name, orig, had in reversed(saved):
+            if had:
+                setattr(obj, name, orig)
+            else:
+                delattr(obj, name)
+    ms = {k: v / iters * 1e3 for k, v in acc.items()}
+    parts = sum(v for k, v in ms.items() if k not in ("forward", "layer"))
+    logger.info(
+        f"PERF_HOST L{num_layers}: host enqueue {t_enq / iters * 1e3:.1f} ms a forward (wall with the final sync "
+        f"{wall / iters * 1e3:.1f}, eager {eager_ms:.1f}); layers {ms['layer']:.1f} ms of it, outside them "
+        f"{ms['forward'] - ms['layer']:.1f}; inside layers: "
+        + ", ".join(f"{k} {v:.1f}" for k, v in sorted(ms.items(), key=lambda kv: -kv[1]) if k not in ("forward", "layer"))
+        + f", the rest of the layer (residual / KV ack) {ms['layer'] - parts:.1f} ms"
+    )
+
+    prof = cProfile.Profile()
+    ttnn.synchronize_device(mesh_device)
+    prof.enable()
+    once()
+    prof.disable()
+    ttnn.synchronize_device(mesh_device)
+    dump = os.environ.get("K3_PERF_DUMP")
+    if dump:
+        prof.dump_stats(str(Path(dump).with_suffix(".host.prof")))
+    for key in ("tottime", "cumulative"):
+        out = io.StringIO()
+        pstats.Stats(prof, stream=out).sort_stats(key).print_stats(45)
+        logger.info(f"PERF_HOST_PROF L{num_layers} by {key}:\n{out.getvalue()}")
 
 
 @pytest.mark.parametrize("mesh_device, device_params", PLACEMENTS, indirect=True)
@@ -170,16 +289,26 @@ def test_prefill_cost(mesh_device, device_params, num_layers, num_chunks):
         ttnn.synchronize_device(mesh_device)
         eager_ms = (time.perf_counter() - start) / ITERATIONS * 1e3
 
+        if os.environ.get("K3_PERF_HOST") == "1":
+            _host_breakdown(model, once, mesh_device, num_layers, eager_ms)
+
         device_ms = None
         try:
             _, records = profile_realtime_program(mesh_device, once, collect_all=True)
             # One record per (program, chip). The chips run a program concurrently, so the program
             # costs its slowest chip; programs then run in sequence, so the sum is device kernel time.
             critical_path = defaultdict(float)
+            sources = {}
+            chip_sum, chip_n = defaultdict(float), defaultdict(int)  # (the mean over chips too: other profiles' metric)
             for record in records:
                 critical_path[record["runtime_id"]] = max(critical_path[record["runtime_id"]], record["duration_ns"])
+                sources.setdefault(record["runtime_id"], record.get("kernel_sources", ()))
+                chip_sum[record["runtime_id"]] += record["duration_ns"]
+                chip_n[record["runtime_id"]] += 1
             device_ms = sum(critical_path.values()) / 1e6
             programs = len(critical_path)
+            chip_mean = {rid: chip_sum[rid] / chip_n[rid] for rid in chip_sum}
+            _op_breakdown(num_layers, critical_path, sources, device_ms, chip_mean)
         except RuntimeError as error:
             # Dropping records makes the set partial, and a partial sum under-reports. Say so rather
             # than quote a number that looks like a measurement.

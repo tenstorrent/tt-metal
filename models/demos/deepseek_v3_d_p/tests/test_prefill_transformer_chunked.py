@@ -2855,6 +2855,33 @@ def test_kimi_prefill_transformer_chunked(
     )
 
 
+def _glm_payload():
+    """GLM's TtMoe payload; MOE_IMPL=block: at least the MoE block combine's (2 x 6144 + 32 B, 64-B aligned)."""
+    payload = moe_fabric_payload(GLM53Config)
+    if os.environ.get("MOE_IMPL") == "block":
+        from ttnn.bringup.flat_routed_expert_ttnn.closeout_models import fabric_payload
+
+        payload = max(payload, fabric_payload(GLM53Config.EMB_SIZE))
+    return payload
+
+
+def _k3_device_params():
+    """K3's fabric (K3_FABRIC=torus_xy: the XY torus); K3_MOE_IMPL=block also opens it with the payload the MoE block's
+    combine needs (2 x 3584 + 32 B: K3's own 7168 is short of it)."""
+    payload = moe_fabric_payload(KimiK3Config)
+    if os.environ.get("K3_MOE_IMPL") == "block":
+        from ttnn.bringup.flat_routed_expert_ttnn.closeout_models import fabric_payload
+
+        payload = fabric_payload(KimiK3Config.ROUTED_EXPERT_HIDDEN_SIZE)
+    extra = {"fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_XY} if os.environ.get("K3_FABRIC") == "torus_xy" else {}
+    return fabric2d_device_params(
+        fabric_payload_size=payload,
+        l1_small_size=KimiK3Config.L1_SMALL_SIZE,
+        trace_region_size=256 * 1024 * 1024,
+        **extra,
+    )
+
+
 # ---------------------------------------------------------------------------------------------
 # Kimi-K3. Separate from the K2.6 test above for three reasons, each of which would break if the
 # two shared a parametrization:
@@ -2891,11 +2918,7 @@ def test_kimi_prefill_transformer_chunked(
     [
         pytest.param(
             (8, 4),
-            fabric2d_device_params(
-                fabric_payload_size=moe_fabric_payload(KimiK3Config),
-                l1_small_size=KimiK3Config.L1_SMALL_SIZE,
-                trace_region_size=256 * 1024 * 1024,
-            ),
+            _k3_device_params(),
             2,
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="fabric2d-8x4",
@@ -3035,7 +3058,7 @@ def test_ds_prefill_transformer_chunked_no_pcc(
         pytest.param(
             (8, 4),
             torus_xy_device_params(
-                fabric_payload_size=moe_fabric_payload(GLM53Config),
+                fabric_payload_size=_glm_payload(),
                 l1_small_size=GLM_L1_SMALL_SIZE,
                 trace_region_size=GLM_TRACE_REGION_SIZE,
             ),
