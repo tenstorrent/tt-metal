@@ -391,11 +391,74 @@ tasks:
       /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s10240_c5120/drift-seed.json: 9ca9714e553b45c6c13a3f436ac77548761ff81310f95ccf6586655631682782
       /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-last.json: 3e5bd842719f73a13d5e8493c3d47dc33ad312fc00f48e6b5e253f688db46ecf
       /data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s56320_c5120/drift-s56320.json: 5115183638d346663cf8bace35ff5906c4f9a95fd362b53e26cc0b69299f34c6
+- id: FIX.6
+  title: 'OWNER DECISION 2026-10-28: the one configuration is the block MoE with its fused head on the torus'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - W.1
+  - M.1
+  - L.s10240
+  - L.last
+  - L.s56320
+  - L.smoke
+  - K.1
+  gate:
+    cmd: BRINGUP_TASK=W.1 BRINGUP_RUNG=seed scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=M.1 BRINGUP_RUNG=s10240 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=L.s10240 BRINGUP_RUNG=s10240 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=L.last BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=L.s56320 BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=L.smoke scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_smoke.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      host_transfers_per_layer: == 0
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      smoke_device_ok: == 1
+      contract_checks_failed: == 0
+      acks_early: == 0
+      pcc_producer_kv_*: '>= limit'
+      smoke_runner_ok: == 1
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/contract
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  brief:
+    details: 'OWNER DECISION 2026-10-28: the one configuration is the block MoE with its fused head on the torus. (1) tt/settings.py
+      MOE_IMPL default ''flat'' -> ''block'' (MOE_HEAD / MOE_TAIL stay ''fused''); record the owner decision and the evidence
+      in the setting''s text: 8x4 FABRIC_2D_TORUS_XY, one 5120-token chunk, 40 layers, device 219.5 / 233.9 / 237.5 / 249.1
+      / 284.4 ms at context 0 / 50k / 100k / 200k / 500k vs flat on FABRIC_2D 308.1 / 314.6 / 323.3 / 338.0 / 375.7; warm
+      host wall 615-646 ms vs 672-1005; L.s10240 PASS (top5 1.0, final hidden rel 0.192) and L.smoke Paris with DS41_MOE_IMPL=block
+      on the torus (supervision.md 06:20). The spec''s galaxy_8x4 box now opens FABRIC_2D_TORUS_XY (overseer, intake re-approved).
+      Flat on the torus hangs (first MoE call) and block''s fused head does not build on FABRIC_2D lines (DS41-129): FABRIC_2D
+      is no longer a target on this box (owner: ''I don''t care about fabric2d if torus works''). (2) Make sure every path
+      the gates run uses the spec''s fabric: the K.1 runner (tt-d-gen''s prefill runner process, the runner env / device setup:
+      it must open the torus with the 10880 B payload, harness.open_mesh semantics) and the stand-in decode (harness.open_mesh).
+      (3) Do not change precision, MOE_HEAD/MOE_TAIL, or any limit. Report the gates'' numbers vs the flat ones.'
+    gate_tasks:
+    - W.1
+    - M.1
+    - L.s10240
+    - L.last
+    - L.s56320
+    - L.smoke
+    - K.1
 - id: X.1
   title: Warm per-section, per-chip profile of one long chunk
   step: perf
   deps:
   - L.s56320
+  - FIX.6
   gate:
     cmd: scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
     metrics:

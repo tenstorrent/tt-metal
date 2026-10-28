@@ -269,6 +269,32 @@ fixes:
   paths:
   - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
   placed: '2026-10-27T16:49:34'
+- id: FIX.6
+  title: 'OWNER DECISION 2026-10-28: the one configuration is the block MoE with its fused head on the torus'
+  gate:
+  - W.1
+  - M.1
+  - L.s10240
+  - L.last
+  - L.s56320
+  - L.smoke
+  - K.1
+  status: placed
+  t: '2026-10-28T07:36:14'
+  text: 'OWNER DECISION 2026-10-28: the one configuration is the block MoE with its fused head on the torus. (1) tt/settings.py
+    MOE_IMPL default ''flat'' -> ''block'' (MOE_HEAD / MOE_TAIL stay ''fused''); record the owner decision and the evidence
+    in the setting''s text: 8x4 FABRIC_2D_TORUS_XY, one 5120-token chunk, 40 layers, device 219.5 / 233.9 / 237.5 / 249.1
+    / 284.4 ms at context 0 / 50k / 100k / 200k / 500k vs flat on FABRIC_2D 308.1 / 314.6 / 323.3 / 338.0 / 375.7; warm
+    host wall 615-646 ms vs 672-1005; L.s10240 PASS (top5 1.0, final hidden rel 0.192) and L.smoke Paris with DS41_MOE_IMPL=block
+    on the torus (supervision.md 06:20). The spec''s galaxy_8x4 box now opens FABRIC_2D_TORUS_XY (overseer, intake re-approved).
+    Flat on the torus hangs (first MoE call) and block''s fused head does not build on FABRIC_2D lines (DS41-129): FABRIC_2D
+    is no longer a target on this box (owner: ''I don''t care about fabric2d if torus works''). (2) Make sure every path
+    the gates run uses the spec''s fabric: the K.1 runner (tt-d-gen''s prefill runner process, the runner env / device setup:
+    it must open the torus with the 10880 B payload, harness.open_mesh semantics) and the stand-in decode (harness.open_mesh).
+    (3) Do not change precision, MOE_HEAD/MOE_TAIL, or any limit. Report the gates'' numbers vs the flat ones.'
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  placed: '2026-10-28T07:43:45'
 classified:
   L.smoke:
     kind: framework
