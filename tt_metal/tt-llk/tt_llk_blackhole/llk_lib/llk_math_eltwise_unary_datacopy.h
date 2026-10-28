@@ -168,8 +168,6 @@ inline void _llk_math_eltwise_unary_datacopy_(
             //      SrcA=Float32 + MOVB2D(DEST_32B_LOW, MOV_8_ROW_BRCST): broadcast lo16 from B to dest
             //   5. Fp32_enabled=1: restore FP32 dest mode
             // _llk_unpack_A_ hands this thread the SrcB bank (SETDVALID is unsupported on Blackhole)
-            const std::uint32_t tile_base = dst_index * 64;
-
             // Both rows go to SrcB first, so each 16-bit half takes one switch set
             TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 0);
             TTI_MOVD2B(p_mov::DEST_32B_LOW, p_movd2b::SRC_ZERO_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 0);
@@ -207,7 +205,6 @@ inline void _llk_math_eltwise_unary_datacopy_(
             // but uses MOV_8_ROW_BRCST_D0_BRCST which broadcasts both across rows AND across
             // all 16 datums within each row.
             // _llk_unpack_A_ hands this thread the SrcB bank (SETDVALID is unsupported on Blackhole)
-            const std::uint32_t tile_base = dst_index * 64;
 
             // Extract source scalar from dest row 0 into B register
             TTI_MOVD2B(p_mov::DEST_NORM, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_3, p_movd2b::MOV_1_ROW, 0);   // hi16 to B
@@ -252,7 +249,6 @@ inline void _llk_math_eltwise_unary_datacopy_(
             // via MOV_4_ROWS_D0_BRCST to both the left face (rows 0-15) and the right
             // face (rows 16-31). Same hi16/lo16 split as ROW/SCALAR broadcasts.
             // _llk_unpack_A_ hands this thread the SrcB bank (SETDVALID is unsupported on Blackhole)
-            const std::uint32_t tile_base = dst_index * 64;
 
             eltwise_unary_bcast_col_32b_face_pair<0 /*face_base*/>();
             eltwise_unary_bcast_col_32b_face_pair<2 * FACE_R_DIM /*face_base*/>();
