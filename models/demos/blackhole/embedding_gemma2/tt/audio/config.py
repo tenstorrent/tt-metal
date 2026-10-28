@@ -22,12 +22,33 @@ Physical buckets
 from __future__ import annotations
 
 import math
+import os
 from dataclasses import dataclass
 from typing import Any
 
 from models.demos.blackhole.embedding_gemma2.tt.config import RMSNormConfig, _get
 
 TOKEN_BUCKETS = (32, 64, 128, 256, 512, 768)
+
+# E5c: audio intermediates live in L1 (interleaved over every core's bank) when one tensor needs at
+# most this many bytes per bank, else DRAM (the E5a text rule). The cap bounds the L1 the live
+# intermediates take so matmul circular buffers (<= 900 KB per core, audio/linear.py) never clash
+# with them. 0 puts everything in DRAM (A/B switch).
+AUDIO_L1_BYTES_PER_BANK = int(os.environ.get("EG2_AUDIO_L1_BYTES_PER_BANK", str(64 * 1024)))
+
+
+def audio_act_memory_config(device, shape, dtype=None) -> "ttnn.MemoryConfig":
+    """L1 interleaved for a tile tensor of `shape` / `dtype` (bf16 when None) if it fits the per-bank
+    cap, else DRAM interleaved."""
+    import ttnn
+
+    n = math.prod(int(s) for s in shape) * (4 if dtype == ttnn.float32 else 2)
+    grid = device.compute_with_storage_grid_size()
+    if n <= AUDIO_L1_BYTES_PER_BANK * grid.x * grid.y:
+        return ttnn.L1_MEMORY_CONFIG
+    return ttnn.DRAM_MEMORY_CONFIG
+
+
 SUBSAMPLE = 4  # two stride-2 convs
 ATTN_BLOCK = 32  # physical query block of the band attention (>= chunk_size, tile aligned)
 

@@ -18,6 +18,7 @@ from __future__ import annotations
 from functools import lru_cache
 
 import ttnn
+from models.demos.blackhole.embedding_gemma2.tt.audio.config import audio_act_memory_config
 
 # Static circular-buffer budget per core (Blackhole L1 is 1.5 MB; the allocator and other
 # program buffers need the rest), as in tt/linear.py.
@@ -73,14 +74,17 @@ def audio_linear(
     compute_kernel_config,
     activation: tuple | None = None,
     bias: ttnn.Tensor | None = None,
-    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    memory_config=None,
 ) -> ttnn.Tensor:
-    """x [B, 1, S, K] @ w [1, 1, K, N] (+ bias) -> [B, 1, S, N] `dtype` TILE, `activation` fused."""
+    """x [B, 1, S, K] @ w [1, 1, K, N] (+ bias) -> [B, 1, S, N] `dtype` TILE, `activation` fused.
+    `memory_config` None: L1 or DRAM by the audio intermediate rule (config.audio_act_memory_config)."""
     shape = x.shape
     B, S, K = shape[0], shape[-2], shape[-1]
     N = w.shape[-1]
     M = B * shape[1] * S
     x2 = ttnn.reshape(x, (1, 1, M, K)) if B * shape[1] != 1 else x
+    if memory_config is None:
+        memory_config = audio_act_memory_config(x.device(), (M, N), dtype)
     grid = x.device().compute_with_storage_grid_size()
     pc = mcast2d_config(M, K, N, grid.x, grid.y, x.dtype, dtype, activation)
     if pc is None:

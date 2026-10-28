@@ -21,7 +21,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.blackhole.embedding_gemma2.tt.audio.config import ClipBounds
+from models.demos.blackhole.embedding_gemma2.tt.audio.config import ClipBounds, audio_act_memory_config
 from models.demos.blackhole.embedding_gemma2.tt.audio.linear import audio_linear, hardtanh
 from models.demos.blackhole.embedding_gemma2.tt.audio.weights import clip_bounds
 from models.demos.blackhole.embedding_gemma2.tt.config import compute_kernel_config_hifi4
@@ -70,12 +70,12 @@ class ClippableLinear(LightweightModule):
             dtype=self.out_dtype,
             compute_kernel_config=self.compute_kernel_config,
             activation=hardtanh(b.output_min, b.output_max),
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
         b = self.bounds
-        xc = ttnn.clamp(x, min=b.input_min, max=b.input_max, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        mc = audio_act_memory_config(x.device(), x.shape, x.dtype)
+        xc = ttnn.clamp(x, min=b.input_min, max=b.input_max, memory_config=mc)
         out = self.project(xc)
         ttnn.deallocate(xc)
         return out

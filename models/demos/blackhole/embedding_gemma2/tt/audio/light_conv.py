@@ -30,7 +30,12 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.embedding_gemma2.tt.audio.attention import CTX, block_context
 from models.demos.blackhole.embedding_gemma2.tt.audio.clippable_linear import ClippableLinear
-from models.demos.blackhole.embedding_gemma2.tt.audio.config import ATTN_BLOCK, TOKEN_BUCKETS, AudioConfig
+from models.demos.blackhole.embedding_gemma2.tt.audio.config import (
+    ATTN_BLOCK,
+    TOKEN_BUCKETS,
+    AudioConfig,
+    audio_act_memory_config,
+)
 from models.demos.blackhole.embedding_gemma2.tt.audio.linear import audio_linear
 from models.demos.blackhole.embedding_gemma2.tt.audio.program_configs import block_bmm_config
 from models.demos.blackhole.embedding_gemma2.tt.config import compute_kernel_config_hifi4
@@ -147,17 +152,17 @@ class AudioLightConv1d(LightweightModule):
     def _causal_depthwise_full(self, h: ttnn.Tensor) -> ttnn.Tensor:
         """Batch 1: h_{t-s} = M_s h with the [S, S] shift matrices (2D multicast matmul, exact in bf16),
         then the same fp32 tap products and sums in the same order as the block path."""
-        dram = ttnn.DRAM_MEMORY_CONFIG
         S = h.shape[2]
         taps = len(self.taps) - 1
-        acc = ttnn.multiply(h, self.taps[taps], dtype=ttnn.float32, memory_config=dram)  # k = taps: h_t itself
+        mc = audio_act_memory_config(h.device(), h.shape, ttnn.float32)
+        acc = ttnn.multiply(h, self.taps[taps], dtype=ttnn.float32, memory_config=mc)  # k = taps: h_t itself
         for k in range(taps):
             sk = audio_linear(
                 self.shifts[S][k], h, dtype=ttnn.bfloat16, compute_kernel_config=self.compute_kernel_config
             )
-            term = ttnn.multiply(sk, self.taps[k], dtype=ttnn.float32, memory_config=dram)
+            term = ttnn.multiply(sk, self.taps[k], dtype=ttnn.float32, memory_config=mc)
             ttnn.deallocate(sk)
-            nxt = ttnn.add(acc, term, memory_config=dram)
+            nxt = ttnn.add(acc, term, memory_config=mc)
             ttnn.deallocate(term)
             ttnn.deallocate(acc)
             acc = nxt
@@ -165,12 +170,13 @@ class AudioLightConv1d(LightweightModule):
 
     def _causal_depthwise(self, h: ttnn.Tensor) -> ttnn.Tensor:
         """h [B, 1, S, D] bf16 -> fp32 [B, 1, S, D] causal depthwise conv."""
-        dram = ttnn.DRAM_MEMORY_CONFIG
         B, _, S, D = h.shape
         if B == 1 and S in self.shifts:
             return self._causal_depthwise_full(h)
+        dev = h.device()
         nb = S // ATTN_BLOCK
         taps = len(self.taps) - 1
+        mc = audio_act_memory_config(dev, h.shape, ttnn.float32)
         ctx = block_context(h)  # [B, nb, 64, D]
         # both operands batched, so the block matmul config spreads the blocks over the grid
         sel = ttnn.repeat(self.selection, ttnn.Shape([B, nb, 1, 1]))
@@ -180,19 +186,24 @@ class AudioLightConv1d(LightweightModule):
             sel,
             ctx,
             dtype=ttnn.bfloat16,
-            program_config=block_bmm_config(h.device(), taps * ATTN_BLOCK, CTX, D, per_core_M=1),
+            program_config=block_bmm_config(dev, taps * ATTN_BLOCK, CTX, D, per_core_M=1),
             compute_kernel_config=self.compute_kernel_config,
-            memory_config=dram,
+            memory_config=audio_act_memory_config(dev, (B, nb, taps * ATTN_BLOCK, D)),
         )  # [B, nb, taps*32, D]
         ttnn.deallocate(sel)
         ttnn.deallocate(ctx)
-        acc = ttnn.multiply(h, self.taps[taps], dtype=ttnn.float32, memory_config=dram)  # k = taps: h_t itself
+        acc = ttnn.multiply(h, self.taps[taps], dtype=ttnn.float32, memory_config=mc)  # k = taps: h_t itself
         acc = ttnn.reshape(acc, (B, nb, ATTN_BLOCK, D))
         for k in range(taps):
-            sk = ttnn.slice(shifted, (0, 0, k * ATTN_BLOCK, 0), (B, nb, (k + 1) * ATTN_BLOCK, D))
-            term = ttnn.multiply(sk, self.taps[k], dtype=ttnn.float32, memory_config=dram)
+            sk = ttnn.slice(
+                shifted,
+                (0, 0, k * ATTN_BLOCK, 0),
+                (B, nb, (k + 1) * ATTN_BLOCK, D),
+                memory_config=audio_act_memory_config(dev, h.shape),
+            )
+            term = ttnn.multiply(sk, self.taps[k], dtype=ttnn.float32, memory_config=mc)
             ttnn.deallocate(sk)
-            nxt = ttnn.add(acc, term, memory_config=dram)
+            nxt = ttnn.add(acc, term, memory_config=mc)
             ttnn.deallocate(term)
             ttnn.deallocate(acc)
             acc = nxt
@@ -200,34 +211,37 @@ class AudioLightConv1d(LightweightModule):
         return ttnn.reshape(acc, (B, 1, S, D))
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        dram = ttnn.DRAM_MEMORY_CONFIG
         D = self.config.hidden_size
         B, _, S, _ = x.shape
         if S % ATTN_BLOCK != 0:
             raise ValueError(f"audio lconv needs S % {ATTN_BLOCK} == 0, got {S}")
-        h = self.pre_norm(x)
+        # E5c: intermediates in L1 when they fit (config.audio_act_memory_config)
+        dev = x.device()
+        mc = audio_act_memory_config(dev, x.shape, ttnn.bfloat16)
+        mc32 = audio_act_memory_config(dev, x.shape, ttnn.float32)
+        h = self.pre_norm(x, memory_config=mc)
         g = self.linear_start(h)
         ttnn.deallocate(h)
-        a = ttnn.slice(g, (0, 0, 0, 0), (B, 1, S, D))
-        b = ttnn.slice(g, (0, 0, 0, D), (B, 1, S, 2 * D))
+        a = ttnn.slice(g, (0, 0, 0, 0), (B, 1, S, D), memory_config=mc)
+        b = ttnn.slice(g, (0, 0, 0, D), (B, 1, S, 2 * D), memory_config=mc)
         ttnn.deallocate(g)
         # a * sigmoid(b) with the sigmoid as the multiply's SFPU pre-activation on b (ttnn.sigmoid's
         # default: vector mode RC = 4, accurate = 0)
         sigmoid = ttnn.UnaryWithParam(ttnn.UnaryOpType.SIGMOID, 4.0, 0.0)
-        glu = ttnn.multiply(a, b, input_tensor_b_activations=[sigmoid], memory_config=dram)
+        glu = ttnn.multiply(a, b, input_tensor_b_activations=[sigmoid], memory_config=mc)
         ttnn.deallocate(a)
         ttnn.deallocate(b)
         y = self._causal_depthwise(glu)
         ttnn.deallocate(glu)
-        n = self.conv_norm(y)
+        n = self.conv_norm(y, memory_config=mc32)
         ttnn.deallocate(y)
         # silu and linear_end's input clamp in one SFPU pass
         s = ttnn.unary_chain(
-            n, [ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU), self.linear_end.input_clamp()], memory_config=dram
+            n, [ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU), self.linear_end.input_clamp()], memory_config=mc32
         )
         ttnn.deallocate(n)
         e = self.linear_end.project(s)
         ttnn.deallocate(s)
-        out = ttnn.add(x, e, memory_config=dram)
+        out = ttnn.add(x, e, memory_config=mc)
         ttnn.deallocate(e)
         return out

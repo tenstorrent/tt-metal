@@ -27,7 +27,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.embedding_gemma2.tt.audio.attention import AudioAttention
-from models.demos.blackhole.embedding_gemma2.tt.audio.config import AudioConfig
+from models.demos.blackhole.embedding_gemma2.tt.audio.config import AudioConfig, audio_act_memory_config
 from models.demos.blackhole.embedding_gemma2.tt.audio.feed_forward import AudioFeedForward
 from models.demos.blackhole.embedding_gemma2.tt.audio.light_conv import AudioLightConv1d
 from models.demos.blackhole.embedding_gemma2.tt.rms_norm import RMSNorm
@@ -97,20 +97,21 @@ class AudioConformerLayer(LightweightModule):
         )
 
     def forward(self, x: ttnn.Tensor, mask: ttnn.Tensor) -> ttnn.Tensor:
-        dram = ttnn.DRAM_MEMORY_CONFIG
+        # E5c: the residual stream in L1 when it fits (config.audio_act_memory_config)
+        mc = audio_act_memory_config(x.device(), x.shape, x.dtype)
         h1 = self.ffn1(x)
-        a_in = self.norm_pre_attn(h1)
+        a_in = self.norm_pre_attn(h1, memory_config=mc)
         a = self.attn(a_in, mask)
         ttnn.deallocate(a_in)
-        a_n = self.norm_post_attn(a)
+        a_n = self.norm_post_attn(a, memory_config=mc)
         ttnn.deallocate(a)
-        h2 = ttnn.add(h1, a_n, memory_config=dram)
+        h2 = ttnn.add(h1, a_n, memory_config=mc)
         ttnn.deallocate(h1)
         ttnn.deallocate(a_n)
         h3 = self.lconv(h2)
         ttnn.deallocate(h2)
         h4 = self.ffn2(h3)
         ttnn.deallocate(h3)
-        out = self.norm_out(h4)
+        out = self.norm_out(h4, memory_config=mc)
         ttnn.deallocate(h4)
         return out

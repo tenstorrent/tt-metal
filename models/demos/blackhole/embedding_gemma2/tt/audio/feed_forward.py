@@ -21,7 +21,7 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.embedding_gemma2.tt.audio.clippable_linear import ClippableLinear
-from models.demos.blackhole.embedding_gemma2.tt.audio.config import AudioConfig
+from models.demos.blackhole.embedding_gemma2.tt.audio.config import AudioConfig, audio_act_memory_config
 from models.demos.blackhole.embedding_gemma2.tt.rms_norm import RMSNorm
 from models.demos.blackhole.embedding_gemma2.tt.weights import substate
 
@@ -72,21 +72,24 @@ class AudioFeedForward(LightweightModule):
         return cls(config, pre, ffw1, ffw2, post)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        dram = ttnn.DRAM_MEMORY_CONFIG
-        h = self.pre_norm(x)
+        # E5c: intermediates in L1 when they fit (config.audio_act_memory_config)
+        mc = audio_act_memory_config(x.device(), x.shape, x.dtype)
+        h = self.pre_norm(x, memory_config=mc)
         a = self.ffw1(h)
         ttnn.deallocate(h)
         # silu and ffw2's input clamp in one SFPU pass (same ops, same order)
         s = ttnn.unary_chain(
-            a, [ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU), self.ffw2.input_clamp()], memory_config=dram
+            a,
+            [ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU), self.ffw2.input_clamp()],
+            memory_config=audio_act_memory_config(a.device(), a.shape, a.dtype),
         )
         ttnn.deallocate(a)
         d = self.ffw2.project(s)
         ttnn.deallocate(s)
-        n = self.post_norm(d)
+        n = self.post_norm(d, memory_config=mc)
         ttnn.deallocate(d)
         # x + residual_weight * n with the scale as the add's SFPU pre-activation on n
         scale = ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, self.config.residual_weight)
-        out = ttnn.add(x, n, input_tensor_b_activations=[scale], memory_config=dram)
+        out = ttnn.add(x, n, input_tensor_b_activations=[scale], memory_config=mc)
         ttnn.deallocate(n)
         return out
