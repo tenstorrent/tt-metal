@@ -323,8 +323,6 @@ void RunMultiWriterTest(
     fixture->RunProgram(mesh_device, workload, true);
 
     if (expected_head) {
-        // On the emulator, each watcher dump reads the head and that read adds 1,
-        // so allow one extra per dump since the run started.
         const uint32_t max_head =
             *expected_head + (MetalContext::instance().watcher_server()->dump_count() - dumps_before_run);
         uint32_t head = 0;
