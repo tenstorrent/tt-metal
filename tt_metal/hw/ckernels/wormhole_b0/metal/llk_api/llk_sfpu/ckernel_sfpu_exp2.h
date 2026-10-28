@@ -126,14 +126,16 @@ inline void calculate_exp2() {
     } else {
         // bf16: the raw-TTI replay body of exp, whose range reduction is x * LREG12 + 127 with
         // LREG12 = vConstFloatPrgm0. exp2_init sets it to 1.0f, so fl(x * 1 + 127) == fl(x + 127):
-        // the same instruction sequence and constants as _sfpu_exp2_bf16_ (FP32_C0 loads c0 as
-        // the fp32 EXP_21F_BF16_C0), two rows per 31 issue slots instead of sfpi's 24 per row.
+        // the same algorithm and coefficients as _sfpu_exp2_bf16_ (FP32_C0 loads c0 as the fp32
+        // EXP_21F_BF16_C0), so the output bits match it. The TTI body hoists its constants and
+        // pipelines two rows: a row pair takes 35 cycles (31 instructions and 4 SFPSWAP stalls)
+        // where the sfpi loop issued 24 slots per row.
         _sfpu_exp_21f_bf16_tti_<
-            /*SCALE_EN=*/false,
-            /*is_fp32_dest_acc_en=*/false,
-            /*CLAMP_NEGATIVE=*/true,
+            false /*SCALE_EN*/,
+            false /*is_fp32_dest_acc_en*/,
+            true /*CLAMP_NEGATIVE*/,
             ITERATIONS,
-            /*FP32_C0=*/true>(0);
+            true /*FP32_C0*/>(0 /*exp_base_scale_factor*/);
     }
 }
 
