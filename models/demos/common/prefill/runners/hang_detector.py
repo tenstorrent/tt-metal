@@ -59,8 +59,9 @@ def _bytes_acked_offset() -> int:
 def _h2d_input(coord: ttnn.MeshCoordinate, h2d: ttnn.H2DStreamService) -> dict:
     # Bytes: a one-row data page and a one-row metadata page per chunk (see build_h2d_service).
     spec = h2d.get_per_shard_spec()
-    assert math.prod(spec.shape[:-1]) == 1, f"H2D shard {list(spec.shape)} is not one row"
-    core, unit = h2d.get_service_core(coord), 2 * spec.shape[-1] * ttnn.element_size(spec.dtype)
+    *rows, width = spec.shape  # ttnn.Shape does not slice
+    assert math.prod(rows) == 1, f"H2D shard {list(spec.shape)} is not one row"
+    core, unit = h2d.get_service_core(coord), 2 * width * ttnn.element_size(spec.dtype)
     return {
         "name": "h2d",
         "arrived": _word(core, h2d.get_socket_config_addr(coord) + BYTES_SENT_OFFSET, unit),
