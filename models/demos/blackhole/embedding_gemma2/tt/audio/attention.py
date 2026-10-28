@@ -47,7 +47,12 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.embedding_gemma2.tt.audio.clippable_linear import ClippableLinear
-from models.demos.blackhole.embedding_gemma2.tt.audio.config import ATTN_BLOCK, AudioAttentionConfig, ClipBounds
+from models.demos.blackhole.embedding_gemma2.tt.audio.config import (
+    ATTN_BLOCK,
+    AudioAttentionConfig,
+    ClipBounds,
+    audio_act_memory_config,
+)
 from models.demos.blackhole.embedding_gemma2.tt.audio.linear import audio_linear
 from models.demos.blackhole.embedding_gemma2.tt.audio.program_configs import block_bmm_config
 from models.demos.blackhole.embedding_gemma2.tt.audio.weights import clip_bounds
@@ -116,20 +121,21 @@ def block_context(x: ttnn.Tensor) -> ttnn.Tensor:
     first block) followed by its own rows. Device ops only; S must be a multiple of 32."""
     B, H, S, D = x.shape
     nb = S // ATTN_BLOCK
-    dram = ttnn.DRAM_MEMORY_CONFIG
+    dev = x.device()
+    mc = audio_act_memory_config(dev, x.shape, x.dtype)  # E5c: L1 when it fits
     # A device-side zero block (x is finite). Not deallocating `first`: for S == 32 the slice is x itself.
-    first = ttnn.slice(x, (0, 0, 0, 0), (B, H, ATTN_BLOCK, D))
-    zeros = ttnn.multiply(first, 0.0, memory_config=dram)
+    first = ttnn.slice(x, (0, 0, 0, 0), (B, H, ATTN_BLOCK, D), memory_config=mc)
+    zeros = ttnn.multiply(first, 0.0, memory_config=mc)
     if nb > 1:
-        head = ttnn.slice(x, (0, 0, 0, 0), (B, H, S - ATTN_BLOCK, D))
-        prev = ttnn.concat([zeros, head], dim=2, memory_config=dram)
+        head = ttnn.slice(x, (0, 0, 0, 0), (B, H, S - ATTN_BLOCK, D), memory_config=mc)
+        prev = ttnn.concat([zeros, head], dim=2, memory_config=mc)
         ttnn.deallocate(head)
         ttnn.deallocate(zeros)
     else:
         prev = zeros
     prev_b = ttnn.reshape(prev, (B, H * nb, ATTN_BLOCK, D))
     own_b = ttnn.reshape(x, (B, H * nb, ATTN_BLOCK, D))
-    ctx = ttnn.concat([prev_b, own_b], dim=2, memory_config=dram)
+    ctx = ttnn.concat([prev_b, own_b], dim=2, memory_config=audio_act_memory_config(dev, (2, *tuple(x.shape)), x.dtype))
     ttnn.deallocate(prev)
     return ctx
 
@@ -219,26 +225,28 @@ class AudioAttention(LightweightModule):
         x' = clamp_in(x): one fused matmul, one head split, and each output clamp applied as the
         SFPU pre-activation of its scale multiply (same ops, same order as separate clamp + mul)."""
         cfg = self.config
-        dram = ttnn.DRAM_MEMORY_CONFIG
+        dev = x.device()
         bq, bk, bv = self.qkv_bounds
-        xc = ttnn.clamp(x, min=bq.input_min, max=bq.input_max, memory_config=dram)
-        qkv = audio_linear(
-            xc, self.wqkv, dtype=ttnn.float32, compute_kernel_config=self.proj_kernel_config, memory_config=dram
+        # E5c: intermediates in L1 when they fit (config.audio_act_memory_config)
+        xc = ttnn.clamp(
+            x, min=bq.input_min, max=bq.input_max, memory_config=audio_act_memory_config(dev, x.shape, x.dtype)
         )
+        qkv = audio_linear(xc, self.wqkv, dtype=ttnn.float32, compute_kernel_config=self.proj_kernel_config)
         ttnn.deallocate(xc)
+        mc = audio_act_memory_config(dev, (x.shape[0], x.shape[2], cfg.hidden_size), ttnn.float32)  # one of q/k/v
         q_r, k_r, v_r = ttnn.experimental.nlp_create_qkv_heads(
-            qkv, num_heads=cfg.num_heads, num_kv_heads=cfg.num_heads, transpose_k_heads=False, memory_config=dram
+            qkv, num_heads=cfg.num_heads, num_kv_heads=cfg.num_heads, transpose_k_heads=False, memory_config=mc
         )
         ttnn.deallocate(qkv)
 
         def clamp_op(b):
             return ttnn.UnaryWithParam(ttnn.UnaryOpType.HARDTANH, b.output_min, b.output_max)
 
-        q = ttnn.multiply(q_r, self.qscale, input_tensor_a_activations=[clamp_op(bq)], memory_config=dram)
+        q = ttnn.multiply(q_r, self.qscale, input_tensor_a_activations=[clamp_op(bq)], memory_config=mc)
         ttnn.deallocate(q_r)
-        k = ttnn.multiply(k_r, cfg.k_scale, input_tensor_a_activations=[clamp_op(bk)], memory_config=dram)
+        k = ttnn.multiply(k_r, cfg.k_scale, input_tensor_a_activations=[clamp_op(bk)], memory_config=mc)
         ttnn.deallocate(k_r)
-        v = ttnn.clamp(v_r, min=bv.output_min, max=bv.output_max, memory_config=dram)
+        v = ttnn.clamp(v_r, min=bv.output_min, max=bv.output_max, memory_config=mc)
         ttnn.deallocate(v_r)
         return q, k, v
 
@@ -246,22 +254,33 @@ class AudioAttention(LightweightModule):
         """X [B, M, 32, 32] -> [B, M, 32, 64] with out[i, j] = X[i, j - i - 20] (rel_shift_index): one
         tile-layout gather (E5c; was a row-major reshape / slice view trick on a 96-wide X)."""
         B, M = X.shape[0], X.shape[1]
-        idx = ttnn.repeat(self.shift_index, ttnn.Shape([B, M, 1, 1]))
-        out = ttnn.gather(X, dim=-1, index=idx, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        dev = X.device()
+        idx = ttnn.repeat(
+            self.shift_index,
+            ttnn.Shape([B, M, 1, 1]),
+            memory_config=audio_act_memory_config(dev, (B, M, ATTN_BLOCK, CTX), ttnn.bfloat16),
+        )
+        out = ttnn.gather(
+            X, dim=-1, index=idx, memory_config=audio_act_memory_config(dev, (B, M, ATTN_BLOCK, CTX), ttnn.float32)
+        )
         ttnn.deallocate(idx)
         return out
 
     def _softmax(self, s: ttnn.Tensor) -> ttnn.Tensor:
-        dram = ttnn.DRAM_MEMORY_CONFIG
+        dev = s.device()
+        mc = audio_act_memory_config(dev, s.shape, s.dtype)
+        mc_col = audio_act_memory_config(dev, (*tuple(s.shape)[:-1], ttnn.TILE_SIZE), s.dtype)
         # exp(s - max) and e * (1 / sum) with the exp / reciprocal as SFPU activations of the binary
         # ops (same ops in the same order as separate subtract / exp / reciprocal / multiply)
-        m = ttnn.max(s, dim=-1, keepdim=True)
+        m = ttnn.max(s, dim=-1, keepdim=True, memory_config=mc_col)
         exp = ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP, 0.0)  # 0: accurate (fast_and_approximate_mode=False)
-        e = ttnn.subtract(s, m, activations=[exp], memory_config=dram)
+        e = ttnn.subtract(s, m, activations=[exp], memory_config=mc)
         ttnn.deallocate(m)
-        denom = ttnn.sum(e, dim=-1, keepdim=True, compute_kernel_config=self.compute_kernel_config)
+        denom = ttnn.sum(
+            e, dim=-1, keepdim=True, compute_kernel_config=self.compute_kernel_config, memory_config=mc_col
+        )
         recip = ttnn.UnaryWithParam(ttnn.UnaryOpType.RECIP)
-        p = ttnn.multiply(e, denom, input_tensor_b_activations=[recip], memory_config=dram)
+        p = ttnn.multiply(e, denom, input_tensor_b_activations=[recip], memory_config=mc)
         ttnn.deallocate(e)
         ttnn.deallocate(denom)
         return p
@@ -269,18 +288,20 @@ class AudioAttention(LightweightModule):
     # ------------------------------------------------------------------ forward
     def forward(self, x: ttnn.Tensor, mask: ttnn.Tensor) -> ttnn.Tensor:
         cfg = self.config
-        dram = ttnn.DRAM_MEMORY_CONFIG
         ckc = self.compute_kernel_config
         B, _, S, _ = x.shape
         if S % ATTN_BLOCK != 0:
             raise ValueError(f"audio attention needs S % {ATTN_BLOCK} == 0, got {S}")
         nb, H, hd = S // ATTN_BLOCK, cfg.num_heads, cfg.head_dim
+        dev = x.device()
+        f32 = ttnn.float32
+        # E5c: intermediates in L1 when they fit (config.audio_act_memory_config)
+        mc_logits = audio_act_memory_config(dev, (B, H * nb, ATTN_BLOCK, CTX), f32)
 
         q, k, v = self._qkv_heads(x)
 
         # relative-position term on the [S, 32] layout (one column per distance), then shifted into
         # the 64-key context
-        dev = x.device()
         rel_t = self.rel_keys_t if B == 1 else ttnn.repeat(self.rel_keys_t, ttnn.Shape([B, 1, 1, 1]))
         pm = max(d for d in (1, 2, 4) if nb % d == 0)
         X = ttnn.matmul(
@@ -288,7 +309,7 @@ class AudioAttention(LightweightModule):
             rel_t,
             program_config=block_bmm_config(dev, S, hd, REL_WIDTH, per_core_M=pm),
             compute_kernel_config=ckc,
-            memory_config=dram,
+            memory_config=audio_act_memory_config(dev, (B, H, S, REL_WIDTH), f32),
         )
         if B != 1:
             ttnn.deallocate(rel_t)
@@ -307,7 +328,7 @@ class AudioAttention(LightweightModule):
             transpose_b=True,
             program_config=block_bmm_config(dev, ATTN_BLOCK, hd, CTX),
             compute_kernel_config=ckc,
-            memory_config=dram,
+            memory_config=mc_logits,
         )
         ttnn.deallocate(q)
         ttnn.deallocate(k_ctx)
@@ -320,11 +341,11 @@ class AudioAttention(LightweightModule):
             ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH, 0.0),  # 0: accurate (fast_and_approximate_mode=False)
             ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, cap),
         ]
-        capped = ttnn.add(ac, bd, activations=softcap, memory_config=dram)
+        capped = ttnn.add(ac, bd, activations=softcap, memory_config=mc_logits)
         ttnn.deallocate(ac)
         ttnn.deallocate(bd)
         capped = ttnn.reshape(capped, (B, H, S, CTX))
-        masked = ttnn.add(capped, mask, memory_config=dram)
+        masked = ttnn.add(capped, mask, memory_config=mc_logits)
         ttnn.deallocate(capped)
         probs = self._softmax(masked)
         ttnn.deallocate(masked)
@@ -335,12 +356,14 @@ class AudioAttention(LightweightModule):
             v_ctx,
             program_config=block_bmm_config(dev, ATTN_BLOCK, CTX, hd),
             compute_kernel_config=ckc,
-            memory_config=dram,
+            memory_config=audio_act_memory_config(dev, (B, H, S, hd), f32),
         )  # [B, H*nb, 32, hd]
         ttnn.deallocate(probs)
         ttnn.deallocate(v_ctx)
         o = ttnn.reshape(o, (B, H, S, hd))
-        o_cat = ttnn.experimental.nlp_concat_heads(o, memory_config=dram)  # [B, 1, S, H*hd]
+        o_cat = ttnn.experimental.nlp_concat_heads(
+            o, memory_config=audio_act_memory_config(dev, (B, H, S, hd), f32)
+        )  # [B, 1, S, H*hd]
         ttnn.deallocate(o)
         out = self.post(o_cat)
         ttnn.deallocate(o_cat)
