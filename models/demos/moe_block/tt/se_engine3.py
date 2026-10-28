@@ -1147,15 +1147,20 @@ void kernel_main() {
         DeviceZoneScopedN("SE-GU");
         if (NCH > 1 && m > 0) reconfig_data_format(WIN, XIN);  // (the last chunk's down / RS left other formats)
         cb_reserve_back(HOWN, MT * POMAX);
-        // shard-major: shard k (own first, then as each lands) through every pass; a pass's fp32 partial over the
-        // shards so far goes to ACC (FIFO: pushed per (shard, pass), popped by the next shard's same pass) and comes
-        // back into DEST; the last shard applies the GLU and packs h
+        // shard-major: shard k (own first, then as each lands) through every pass; a pass's fp32 partial is packed
+        // onto its fixed ACC slot (MT x pw tiles at the pass's offset) with the packer's L1 accumulation - shard 0
+        // writes it, shards 1 .. G - 2 add onto it in L1 - and only the last shard brings the sum back into DEST
+        // (unpacked straight to DEST, fp32) under its own matmuls; then the GLU and h. Shard G - 2 pushes each pass's
+        // slot as it is done (the write pointer then sits at the next pass's slot); the chunk's tail is pushed and
+        // popped as padding, so every chunk starts at the region's start
+        if (G > 1) cb_reserve_back(ACC, SE_ACCP);
+        uint32_t apushed = 0;  // (ACC pages pushed this chunk - the pack offsets are relative to the write pointer)
         for (uint32_t k = 0; k < G; ++k) {
-            uint32_t hoff = 0, loff = 0;
+            uint32_t hoff = 0, loff = 0, aoff = 0;
             for (uint32_t pg = 0; pg < NPG; ++pg) {
                 const uint32_t pw = se_arg(pg), n = MT * pw;
                 tile_regs_acquire();
-                if (k > 0) {
+                if (k + 1 == G && k > 0) {
                     cb_wait_front(ACC, n);
                     reconfig_data_format_srca(WIN, ACC);
                     copy_init(ACC);
@@ -1194,12 +1199,17 @@ void kernel_main() {
                 }
                 tile_regs_commit();
                 if (k + 1 < G) {
-                    cb_reserve_back(ACC, n);
                     tile_regs_wait();
                     pack_reconfig_data_format(ACC);
-                    for (uint32_t t = 0; t < n; ++t) pack_tile(t, ACC);
+                    PACK((llk_pack_reconfig_l1_acc(k > 0 ? 1 : 0)));
+                    for (uint32_t t = 0; t < n; ++t) pack_tile<true>(t, ACC, aoff + t - apushed);
+                    PACK((llk_pack_reconfig_l1_acc(0)));
                     tile_regs_release();
-                    cb_push_back(ACC, n);
+                    aoff += n;
+                    if (k + 2 == G) {  // (its sum is complete but for the last shard's: the last shard may read it)
+                        cb_push_back(ACC, n);
+                        apushed += n;
+                    }
                     continue;
                 }
                 tile_regs_wait();
@@ -1236,6 +1246,11 @@ void kernel_main() {
             }
         }
         cb_push_back(HOWN, MT * POMAX);
+        if (G > 1 && apushed < SE_ACCP) {  // (the region's tail: padding, so the next chunk starts at its start)
+            cb_push_back(ACC, SE_ACCP - apushed);
+            cb_wait_front(ACC, SE_ACCP - apushed);
+            cb_pop_front(ACC, SE_ACCP - apushed);
+        }
 #ifdef SE_PROBE_GUWAIT
         UNPACK((DeviceTimestampedData("SE-GUWX", gu_wx)));
         UNPACK((DeviceTimestampedData("SE-GUWW", gu_ww)));
@@ -1647,8 +1662,7 @@ class SeEngine3:
         tries = [(0, 1), (5, 1), (4, 1), (3, 1)] if self.NCH == 1 else [(0, 2), (5, 2), (5, 1), (4, 1), (3, 1)]
         for self.WRING, self.HSL in tries:  # (see wown_t)
             al = lambda v: (v + 63) // 64 * 64  # noqa: E731
-            self.acc_pages = MT * (max(sum(c) for c in self.wg) + max(sum(self.wg, [])))
-            self.acc_blocks = [MT * pw for pw in sum(self.wg, [])]
+            self.acc_pages = MT * max(sum(c) for c in self.wg)  # (a fixed slot a pass: the busiest column's)
             off, o = {}, 0
             rsr = self._rs_regions() if rs is not None else []
             # (the reduce-scatter's local buffers - HOLD, FINB: this core's compute and, after its hand-off, its port read
@@ -1669,10 +1683,9 @@ class SeEngine3:
                     ("hown", MT * self.POMAX * 2048),
                     ("hall", self.HSL * GX * MT * self.POMAX * 2048 if down else 0),
                     ("xin", 2 * MT * self.KB * 2048),
-                    # (ACC: a FIFO of fp32 pass partials, MT x pw tiles a block - the pass widths differ (K3's latent-
-                    # down passes): its straddle room (without it the tail overwrote the W stream's ready words: a W
-                    # round taken before it landed, a hang)
-                    ("acc", _ring_pages(self.acc_pages, self.acc_blocks) * 4096),
+                    # (ACC: the passes' fp32 partials, a fixed slot each - the packer accumulates onto them in L1;
+                    # every chunk starts at the region's start, so no block straddles its end)
+                    ("acc", self.acc_pages * 4096),
                     ("out", NOUT * MT * self.PWDMAX * 2048 if down and rs is None else 0),
                     ("words", 256),
                 ]
@@ -1697,7 +1710,7 @@ class SeEngine3:
                     for k, v in ovl.items():
                         off[k], o = o, al(o + v)
             if ovh:
-                if ovh["hold"] <= _ring_pages(self.acc_pages, self.acc_blocks) * 4096:
+                if ovh["hold"] <= self.acc_pages * 4096:
                     off["hold"] = off["acc"]
                 else:
                     off["hold"], o = o, al(o + ovh["hold"])
@@ -2017,7 +2030,7 @@ class SeEngine3:
             cb(RTR_CB["rx"], "rx", 2 * self.KC * MT * self.NCH * 2048, ttnn.bfloat16, 2048)  # (two rounds' buffers)
             cb(RTR_CB["rw"], "rw", 2 * self.ETC * self.KC * 2048, ttnn.bfloat16, 2048)
             cb(RTR_CB["ro"], "ro", self.ETC * MT * self.NCH * 4096, ttnn.float32, 4096)
-        cb(ACC, "acc", self.acc_pages * 4096, ttnn.float32, 4096, self.acc_blocks)
+        cb(ACC, "acc", self.acc_pages * 4096, ttnn.float32, 4096)
         xa_ct = list(ttnn.TensorAccessorArgs(x).get_compile_time_args())
         w_ct = list(ttnn.TensorAccessorArgs(w).get_compile_time_args())
         y_ct = list(ttnn.TensorAccessorArgs(y).get_compile_time_args())
@@ -2120,7 +2133,7 @@ class SeEngine3:
             NOUT,
         ]
         nd = "" if self.down else "#define SE_NODOWN\n"
-        nd += f"#define SE_HSL {self.HSL}\n"
+        nd += f"#define SE_HSL {self.HSL}\n#define SE_ACCP {self.acc_pages}u\n"
         if self.NCH > 1 and self.shards > 1:  # (chunk m = block m of every owner: the owners' rows stay contiguous)
             nd += f"#define GROW(m, lr) (((lr) / {self.CR // self.shards}) * {self.rows // 32 // self.shards} + (m) * {self.CR // self.shards} + (lr) % {self.CR // self.shards})\n"
         else:

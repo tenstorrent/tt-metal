@@ -2161,3 +2161,8 @@ Why: "engine still seems really slow". Bottom-up in the head (probes, per-step w
   186 replays differ (without the snap 4 of 34 - the combine's order, as before). GLM-5.3-Flash 2x4 5120: head 966
   (968 before), PCC 0.98686, 0 of 34 differ.
 - SE_LOG=1: the engine logs its resolved layout (KB, W ring, router K chunk, regions).
+- Gate / up partials by the packer's L1 accumulation (2026-10-28): each (shard, pass) packs its fp32 partial onto a
+  fixed per-pass ACC slot (shard 0 writes, 1 .. G - 2 add in L1); only the last shard copies the sum back into DEST
+  (UnpackToDestFp32 - full fp32; a zero-tile add would go through SrcA / SrcB, ~19 bits) - 1 read-back a pass, not
+  G - 1, and no per-shard copy_init / reconfig / matmul re-init. ACC shrinks to one slot a pass (no FIFO straddle
+  room). K3 head traced 390.4 -> 384.0 us, PCC 0.99985; GLM-5.3-Flash 2x4 5120 head 966 -> 959.5, PCC 0.98686.
