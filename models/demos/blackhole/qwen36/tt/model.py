@@ -140,17 +140,19 @@ class _DeviceDecodeLoop:
                 setattr(self, name, None)
 
 
-def spec_kv_write_conflicts(page_tables, positions, T, block_size):
+def spec_kv_write_conflicts(page_tables, positions, T, block_size, across_calls=False):
     """Cross-user collisions of the grouped verify KV write (see _spec_kv_write_conflicts_old for the rule).
     QWEN36_SPEC_HOSTFIX (default 1): a [B, nb] tensor is read at the <= B*T needed entries instead of tolist() of the
-    whole table (~33k ints at nb = 4097); same result and same errors. Returns [(j, u_first, u_second, block, tile)]."""
+    whole table (~33k ints at nb = 4097); same result and same errors. Returns [(j, u_first, u_second, block, tile)].
+    ``across_calls`` (the multi-row write, QWEN36_KV_WRITE_MULTIROW): all T rows of every user go out in ONE call, so
+    two users collide when they touch one tile at any (j, j'), not only at the same j."""
     if not (
         spec_hostfix_enabled()
         and isinstance(page_tables, torch.Tensor)
         and page_tables.dim() == 2
         and len(positions) <= page_tables.shape[0]
     ):
-        return _spec_kv_write_conflicts_old(page_tables, positions, T, block_size)
+        return _spec_kv_write_conflicts_old(page_tables, positions, T, block_size, across_calls=across_calls)
     nb = page_tables.shape[1]
     users = [u for u, p in enumerate(positions) if int(p) >= 0]
     if not users:
@@ -165,8 +167,10 @@ def spec_kv_write_conflicts(page_tables, positions, T, block_size):
     blks = page_tables[torch.tensor(users)[None, :].expand(T, -1), col].tolist()
     tiles = ((pos % block_size) // ttnn.TILE_SIZE).tolist()
     conflicts = []
+    owner = {}
     for j in range(T):
-        owner = {}  # (block, tile) -> first user that writes it in call j
+        if not across_calls:
+            owner = {}  # (block, tile) -> first user that writes it in call j
         for i, u in enumerate(users):
             blk = int(blks[j][i])
             if blk == 0:
@@ -178,7 +182,7 @@ def spec_kv_write_conflicts(page_tables, positions, T, block_size):
     return conflicts
 
 
-def _spec_kv_write_conflicts_old(page_tables, positions, T, block_size):
+def _spec_kv_write_conflicts_old(page_tables, positions, T, block_size, across_calls=False):
     """Cross-user collisions of the grouped verify KV write. Call j writes candidate j of every
     user (one user per core) to the 32-row cache tile (page_tables[u][pos // block_size],
     (pos % block_size) // 32) at pos = positions[u] + j; two users on the same tile in the same
@@ -188,8 +192,10 @@ def _spec_kv_write_conflicts_old(page_tables, positions, T, block_size):
     Returns [(j, u_first, u_second, block, tile)], empty when the write is safe."""
     rows = page_tables.tolist() if isinstance(page_tables, torch.Tensor) else [list(r) for r in page_tables]
     conflicts = []
+    owner = {}
     for j in range(T):
-        owner = {}  # (block, tile) -> first user that writes it in call j
+        if not across_calls:
+            owner = {}  # (block, tile) -> first user that writes it in call j
         for u, p in enumerate(positions):
             if int(p) < 0:
                 continue
@@ -2359,9 +2365,10 @@ class Qwen36Model:
                 _cos = ttnn.reshape(cos, (1, 1, rows, _rd))
                 _sin = ttnn.reshape(sin, (1, 1, rows, _rd))
                 _tmp += [(_cos, cos), (_sin, sin)]
-            from models.demos.blackhole.qwen36.tt.attention.tp import KV_GROUP_WRITE_OK
+            from models.demos.blackhole.qwen36.tt.attention.tp import KV_GROUP_WRITE_OK, kv_multirow_write_ok
 
-            if KV_GROUP_WRITE_OK and T > 1:
+            # The multi-row KV write (QWEN36_KV_WRITE_MULTIROW) reads kvpos whole: no per-candidate slices.
+            if KV_GROUP_WRITE_OK and T > 1 and not kv_multirow_write_ok():
                 _pos_groups = [ttnn.slice(kvpos, (j,), (rows,), (T,)) for j in range(T)]
         for layer in self.layers:
             if layer.is_full_attention:
@@ -2627,11 +2634,20 @@ class Qwen36Model:
     def _vfy_check_kv_writes(self, pt, positions):
         """Assert the grouped verify KV write has no same-tile, same-call collision between users
         for block tables ``pt`` [B, nb] and first verify slots ``positions`` (spec_kv_write_conflicts)."""
-        bad = spec_kv_write_conflicts(pt, positions, self._vfy_T, get_block_size(self._paged_kv_caches))
+        from models.demos.blackhole.qwen36.tt.attention.tp import kv_multirow_write_ok
+
+        bad = spec_kv_write_conflicts(
+            pt,
+            positions,
+            self._vfy_T,
+            get_block_size(self._paged_kv_caches),
+            across_calls=kv_multirow_write_ok(),
+        )
         assert not bad, (
             f"the grouped spec KV write needs distinct (block, 32-row tile) per user within each "
             f"candidate call, but {len(bad)} collide; first (call j, user, user, block, tile): "
-            f"{bad[:4]}. Set QWEN36_SPEC_KV_GROUP_WRITE=0 to fall back to the per-row write."
+            f"{bad[:4]}. Set QWEN36_SPEC_KV_GROUP_WRITE=0 to fall back to the per-row write (with "
+            f"QWEN36_KV_WRITE_MULTIROW=1 a tile shared at ANY two candidates collides; =0 restores the per-call rule)."
         )
 
     def release_verify_trace(self):

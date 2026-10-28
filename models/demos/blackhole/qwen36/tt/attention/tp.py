@@ -40,6 +40,23 @@ def _probe_kv_group_write():
 KV_GROUP_WRITE_OK = _probe_kv_group_write()
 
 
+def _probe_kv_multirow_write():
+    """Whether this ttnn build's paged_fused_update_cache takes ``rows_per_user`` (the multi-row KV write,
+    QWEN36_KV_WRITE_MULTIROW). Probed at import from the docstring, with no device, like _probe_kv_group_write."""
+    try:
+        return "rows_per_user" in (ttnn.experimental.paged_fused_update_cache.__doc__ or "")
+    except Exception:  # pragma: no cover
+        return False
+
+
+KV_MULTIROW_WRITE_SUPPORTED = _probe_kv_multirow_write()
+
+
+def kv_multirow_write_ok():
+    """QWEN36_KV_WRITE_MULTIROW=1 on a ttnn build that supports it (read per call, so tests can flip the env)."""
+    return KV_MULTIROW_WRITE_SUPPORTED and tpc.kv_write_multirow_enabled()
+
+
 def load_attention_weights_tp(mesh, state_dict, args, cache_dir=None):
     """Shard one full-attention layer's weights across the mesh."""
     if cache_dir is not None:
@@ -177,6 +194,7 @@ class TPAttention:
         self.B = args.max_batch_size
         self._kv_shard_cfg_cache = {}  # active-width B -> KV-update height shard cfg (bucketed decode)
         self._kv_key_cfg_cache = {}  # active-width B -> K-input height shard cfg for the fused K+V update (lean decode)
+        self._kv_rows_cfg_cache = {}  # (first core, users, rows) -> multi-row KV write input shard cfg
         # (T per user, n_users) -> fused spec-verify SDPA (progcfg, groups, tiles); None = no fit
         self._spec_sdpa_cfg_cache = {}
         self.NH = args.n_local_heads
@@ -620,6 +638,29 @@ class TPAttention:
                 ttnn.ShardSpec(cores, [ttnn.TILE_SIZE, self.HD], ttnn.ShardOrientation.ROW_MAJOR),
             )
             self._kv_key_cfg_cache[B] = cfg
+        return cfg
+
+    def _kv_rows_shard_cfg(self, first_core, n_users, rows):
+        """Height shard of ``rows`` rows per user (one user per core) on cores [first_core, first_core + n_users) of the
+        row-wise numbering over the full grid width: the multi-row fused KV write puts V on [0, n) and K on [n, 2n), so
+        the two sets are disjoint by construction. Shard i <-> user i, as in _kv_key_shard_cfg."""
+        key = (first_core, n_users, rows)
+        cfg = self._kv_rows_cfg_cache.get(key)
+        if cfg is None:
+            grid = self.mesh.compute_with_storage_grid_size()
+            assert first_core + n_users <= grid.x * grid.y, f"{first_core + n_users} cores exceed the {grid} grid"
+            cores = ttnn.CoreRangeSet(
+                {
+                    ttnn.CoreRange(ttnn.CoreCoord(i % grid.x, i // grid.x), ttnn.CoreCoord(i % grid.x, i // grid.x))
+                    for i in range(first_core, first_core + n_users)
+                }
+            )
+            cfg = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(cores, [rows, self.HD], ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            self._kv_rows_cfg_cache[key] = cfg
         return cfg
 
     def _decode_lean_eligible(self, B, use_paged):
@@ -1203,9 +1244,14 @@ class TPAttention:
         call; T calls), with three cuts: K and V go out in one fused call (T calls, not 2T), the T position slices are
         shared by all layers (spec_pos_groups), and k / v are not padded to 32 rows first (the cache has NKV = 1 head
         per device, and the op copies only row 0 of each user's tile, so the other 31 tile rows are never read).
-        Consumes k and v ([1, B, NKV, HD] TILE interleaved, rows user-major)."""
+        Consumes k and v ([1, B, NKV, HD] TILE interleaved, rows user-major).
+
+        QWEN36_KV_WRITE_MULTIROW=1 (kv_multirow_write_ok): _write_kv_fused_multirow instead, one call per layer."""
         n = spec_n_users
         T = B // n
+        if kv_multirow_write_ok():
+            self._write_kv_fused_multirow(k, v, cur_pos_tt, n, T, spec_user_page_table)
+            return
         _tile = ttnn.TILE_SIZE
         HD = self.HD
         # [1, B, NKV, HD] (tile (b) = row b) -> [1, n, T*32, HD]: tile (u*T + j) becomes (u, j), same bytes. The
@@ -1242,6 +1288,43 @@ class TPAttention:
         for _t in (k_v, v_v, k_orig, v_orig):
             if _t is not None:
                 ttnn.deallocate(_t)
+
+    def _write_kv_fused_multirow(self, k, v, cur_pos_tt, n, T, spec_user_page_table):
+        """Multi-row fused KV write (QWEN36_KV_WRITE_MULTIROW): ONE paged_fused_update_cache(rows_per_user=T) for K and V.
+
+        k / v ([1, n*T, NKV, HD] TILE interleaved, row u*T + j = user u, candidate j; tile b = row b) are viewed as
+        [1, n, T*32, HD] (tile (u, j) = row u*T + j, same bytes) and height sharded one user per core, T tiles each:
+        V on cores [0, n), K on [n, 2n). Core u writes user u's T rows at cur_pos_tt[u*T + j] (the full per-row [n*T]
+        position vector, -1 = skip), one read-modify-write per distinct cache tile (a straddle of a 32-row tile or of a
+        page block costs a second one). Same rows, same positions and same untilize/retilize as the T grouped calls, so
+        the cache bytes match them; only rows of different users must not share a tile, which spec_kv_write_conflicts
+        (across_calls=True) asserts host-side. Replaces 2T slices + 2T to_memory_config + T fused calls with 2 + 1.
+        Consumes k and v."""
+        _tile = ttnn.TILE_SIZE
+        HD = self.HD
+        assert cur_pos_tt.shape[-1] == n * T, f"multi-row KV write: {cur_pos_tt.shape} positions for {n}x{T} rows"
+        _view = ttnn.Shape([1, n, T * _tile, HD])
+        _srcs = []
+        for _t in (k, v):
+            _v = ttnn.reshape(_t, _view, _view)
+            _srcs.append((_v, None if tpc.aliases(_v, _t) else _t))
+        (k_v, k_orig), (v_v, v_orig) = _srcs
+        k_sh = ttnn.to_memory_config(k_v, self._kv_rows_shard_cfg(n, n, T * _tile))
+        v_sh = ttnn.to_memory_config(v_v, self._kv_rows_shard_cfg(0, n, T * _tile))
+        for _t in (k_v, v_v, k_orig, v_orig):
+            if _t is not None:
+                ttnn.deallocate(_t)
+        ttnn.experimental.paged_fused_update_cache(
+            self.paged_k,
+            k_sh,
+            self.paged_v,
+            v_sh,
+            update_idxs_tensor=cur_pos_tt,
+            page_table=spec_user_page_table,
+            rows_per_user=T,
+        )
+        ttnn.deallocate(k_sh)
+        ttnn.deallocate(v_sh)
 
     def _forward_verify_lean(
         self,

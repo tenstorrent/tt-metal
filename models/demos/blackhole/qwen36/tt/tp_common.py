@@ -80,6 +80,15 @@ def verify_attn_lean_enabled():
     return os.environ.get("QWEN36_VERIFY_ATTN_LEAN", "1") == "1"
 
 
+def kv_write_multirow_enabled():
+    """QWEN36_KV_WRITE_MULTIROW (default "0" = today's T fused calls per layer): the traced verify's KV write
+    (TPAttention._write_kv_fused_groups) goes out as ONE paged_fused_update_cache(rows_per_user=T) per layer: each core
+    owns one user's T candidate rows and read-modify-writes each cache tile they touch once, instead of T calls of
+    one row per user (each with 2 slices + 2 to_memory_config). Cache bytes are identical. Needs a ttnn build whose
+    paged_fused_update_cache takes rows_per_user (probed in attention/tp.py; otherwise the flag is ignored)."""
+    return os.environ.get("QWEN36_KV_WRITE_MULTIROW", "0") == "1"
+
+
 def verify_layout_cuts_enabled():
     """QWEN36_VERIFY_LAYOUT_CUTS (default "1"; "0" = today's verify, byte for byte): drop layout copies that the plain
     decode does not have (GDN verify projection: no sharded-to-interleaved + copy of the norm output). Note 42."""
