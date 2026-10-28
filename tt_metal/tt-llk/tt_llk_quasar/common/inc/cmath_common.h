@@ -289,6 +289,18 @@ inline void _set_dst_write_addr_by_rows_(const std::uint32_t tile_index)
 }
 
 /**
+ * @brief Check whether a face holds the FPU row group that starts at a given dest row.
+ *
+ * @param row: First dest row of the FPU row group, relative to the face.
+ * @param face_dest_rows: Dest rows one face occupies, including the sparse 8-row minimum of short faces.
+ * @return True when the row group lies inside the face; every face spans at least MAX_FPU_ROWS dest rows.
+ */
+constexpr bool face_row_group_present(const std::uint32_t row, const std::uint32_t face_dest_rows)
+{
+    return row < MAX_FPU_ROWS || row < face_dest_rows;
+}
+
+/**
  * @brief Copy one face of the reused dest register into SrcA ahead of an FPU pass over the face.
  *
  * @param addrmod: Address-mod slot the MOVD2A issues.
@@ -306,8 +318,7 @@ inline void move_d2a_fixed_face(const std::uint8_t addrmod, const std::uint32_t 
 #pragma GCC unroll 4
     for (const auto row : fpu_row_offsets<MAX_FACE_R_DIM>())
     {
-        // Every face spans at least MAX_FPU_ROWS dest rows, so only the row groups past that depend on face height.
-        if (row < MAX_FPU_ROWS || row < face_dest_rows)
+        if (face_row_group_present(row, face_dest_rows))
         {
             TTI_MOVD2A(p_mov::DEST_NORM, row, addrmod, FPU_MOV_ROWS, row);
         }
@@ -332,8 +343,7 @@ inline void move_d2b_fixed_face(const std::uint8_t addrmod, const std::uint32_t 
 #pragma GCC unroll 4
     for (const auto row : fpu_row_offsets<MAX_FACE_R_DIM>())
     {
-        // Every face spans at least MAX_FPU_ROWS dest rows, so only the row groups past that depend on face height.
-        if (row < MAX_FPU_ROWS || row < face_dest_rows)
+        if (face_row_group_present(row, face_dest_rows))
         {
             TTI_MOVD2B(p_mov::DEST_NORM, row, addrmod, FPU_MOV_ROWS, p_movd2b::TRANSPOSE_OFF, row);
         }

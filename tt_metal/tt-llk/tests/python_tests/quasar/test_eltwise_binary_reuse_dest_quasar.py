@@ -59,30 +59,41 @@ REUSE_DEST_FORMATS = input_output_formats(
     ],
 ) + quasar_mx_smoke(DataFormat.MxFp4, DataFormat.Float16_b)
 
-# Tile shapes swept on the reuse_dest path. (32, 32) is the pre-existing baseline and doubles as
-# the no-regression guard. (16, 32) and (16, 16) keep face_r_dim at 16 but shrink the dest tile
-# stride to 32 and 16 rows; (8, 32) halves the face stride and the MOV* count; (4, 32) drives the
+# Tile shapes swept on the reuse_dest path. BASELINE_TILE_DIMENSIONS is the pre-existing shape and
+# doubles as the no-regression guard. (16, 32) and (16, 16) keep face_r_dim at 16 but shrink the dest
+# tile stride to 32 and 16 rows; (8, 32) halves the face stride and the MOV* count; (4, 32) drives the
 # sparse 8-row face slot: one 8-row MOV and a single-iteration MOP per face.
 # (32, 16) is excluded: the kernel builds its TensorShape with tensor_shape_from_num_faces, which
 # maps num_faces == 2 to a 1x2 (wide) face grid and cannot express the 2x1 (narrow) one.
-TILE_DIMENSIONS = [(32, 32), (16, 32), (16, 16), (8, 32), (4, 32)]
+BASELINE_TILE_DIMENSIONS = (32, 32)
+TILE_DIMENSIONS = [BASELINE_TILE_DIMENSIONS, (16, 32), (16, 16), (8, 32), (4, 32)]
+# HiFi4 runs on this short-face shape too, where the MOP outer loop is 1.
+HIFI_TILE_DIMENSIONS = (4, 32)
 
 # Tiles per input and output matrix, held constant across tile shapes so every shape runs the same
 # 4-deep accumulation into 4 output tiles that the 32x32 baseline ran.
 INPUT_TILE_COUNT = 16
 OUTPUT_TILE_COUNT = 4
+assert (
+    INPUT_TILE_COUNT % OUTPUT_TILE_COUNT == 0
+    and INPUT_TILE_COUNT // OUTPUT_TILE_COUNT > 1
+), "reuse_dest needs each output tile to accumulate more than one input tile"
 
 
-def reuse_dest_tile_dimensions(formats):
-    """Tile shapes swept for a given format pair.
+def reuse_dest_tile_dimensions(formats, math_fidelity, dest_sync_mode):
+    """Tile shapes swept for a given format pair, fidelity and dest sync mode.
 
-    The tile geometry the reuse_dest math path depends on is independent of packer format
-    conversion, so only the same-format pairs carry the sweep. Every converting pair, including
-    the MX pair, stays on 32x32 and serves as the unchanged-shape guard.
+    Neither packer format conversion nor DestSync changes the MOV* count or the dest stride, so
+    only same-format pairs in DestSync.Half carry the sweep, at LoFi on every shape and at HiFi4
+    on HIFI_TILE_DIMENSIONS. Every other variant stays on BASELINE_TILE_DIMENSIONS.
     """
-    if formats.input_format != formats.output_format:
-        return [(32, 32)]
-    return TILE_DIMENSIONS
+    if formats.input_format != formats.output_format or dest_sync_mode != DestSync.Half:
+        return [BASELINE_TILE_DIMENSIONS]
+    if math_fidelity == MathFidelity.LoFi:
+        return TILE_DIMENSIONS
+    if math_fidelity == MathFidelity.HiFi4:
+        return [BASELINE_TILE_DIMENSIONS, HIFI_TILE_DIMENSIONS]
+    return [BASELINE_TILE_DIMENSIONS]
 
 
 def reuse_dest_input_dimensions(tile_dimensions) -> list:
@@ -110,31 +121,15 @@ def reuse_dest_mathops(formats, *, is_perf=False):
     return supported_mathops
 
 
-def _reuse_dest_tile_count(dimensions, tile_dimensions) -> int:
-    tile_rows, tile_cols = tile_dimensions
-    return (dimensions[0] // tile_rows) * (dimensions[1] // tile_cols)
+def valid_output_dimensions(formats, dest_sync_mode, tile_dimensions) -> list:
+    """Output matrix of OUTPUT_TILE_COUNT tiles of the given tile shape, one tile wide.
 
-
-def valid_output_dimensions(
-    formats, dest_sync_mode, input_dimensions, tile_dimensions
-) -> list:
-    """Output dims compatible with reuse_dest for a given input size, format and dest_sync.
-
-    Three constraints, all decidable at collection time so incompatible combinations are
-    never generated (instead of generated then skipped):
-      - input tile count must be an exact multiple of the output tile count, and
-      - that multiple (`inner_dim`) must be > 1 (reuse_dest needs accumulation), and
-      - the output must fit in a single block (the Quasar reuse_dest kernel uses
-        block-relative indexing; multi-block accumulates wrongly).
+    Returns no dims when the output does not fit in a single block for the format and dest_sync,
+    so that combination is never generated: the Quasar reuse_dest kernel uses block-relative
+    indexing, and multi-block accumulates wrongly.
     """
     tile_rows, tile_cols = tile_dimensions
     out_dims = [OUTPUT_TILE_COUNT * tile_rows, tile_cols]
-    tile_cnt_input = _reuse_dest_tile_count(input_dimensions, tile_dimensions)
-    tile_cnt_output = _reuse_dest_tile_count(out_dims, tile_dimensions)
-    if tile_cnt_output == 0 or tile_cnt_input % tile_cnt_output != 0:
-        return []
-    if tile_cnt_input // tile_cnt_output <= 1:
-        return []
     try:
         num_blocks, _ = get_num_blocks_and_num_tiles_in_block(
             dest_sync_mode,
