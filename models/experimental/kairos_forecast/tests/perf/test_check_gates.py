@@ -5,13 +5,26 @@
 
 import copy
 
-from models.experimental.kairos_forecast.tests.perf.check_gates import LOWER_IS_BETTER
+from pathlib import Path
+
+from models.experimental.kairos_forecast.tests.perf.check_gates import FIXED_RECORDS, LOWER_IS_BETTER, default_baseline
 from models.experimental.kairos_forecast.tests.perf.check_gates import check as _check
 
-FLOORS = {"pcc_normalized": 0.999, "pcc_final": 0.99, "route_mismatch_rows": 0, "bias_max_abs_diff": 1e-6,
-          "bias_row_p50": 0.01, "bias_row_max": 0.03, "pcc_step": 0.999, "bias_row_p50_final": 0.01,
-          "pcc_step_final": 0.999, "inactive_max_err": 0.05, "spread_ratio_p50": [0.97, 1.03],
-          "spread_ratio_p01": 0.9}
+FLOORS = {
+    "pcc_normalized": 0.999,
+    "pcc_final": 0.99,
+    "route_mismatch_rows": 0,
+    "bias_max_abs_diff": 1e-6,
+    "bias_row_p50": 0.01,
+    "bias_row_max": 0.03,
+    "pcc_step": 0.999,
+    "bias_row_p50_final": 0.01,
+    "bias_row_max_final": 0.03,
+    "pcc_step_final": 0.999,
+    "inactive_max_err": 0.05,
+    "spread_ratio_p50": [0.97, 1.03],
+    "spread_ratio_p01": 0.9,
+}
 GATES = {
     "floors": {"*/accuracy": dict(FLOORS, abs_err_max=0.05), "*/performance": dict(FLOORS, abs_err_max=0.1)},
     "drift": {"pcc_normalized": {"abs": 1e-3}, "route_mismatch_rows": {"abs": 0}, "abs_err_max": {"rel": 0.1}},
@@ -54,8 +67,16 @@ def _fails(r, metric):
 
 
 def test_lower_is_better_set():
-    assert {"route_mismatch_rows", "bias_max_abs_diff", "abs_err_max", "bias_row_p50", "bias_row_max",
-            "bias_row_p50_final", "bias_row_max_final", "inactive_max_err"} <= LOWER_IS_BETTER
+    assert {
+        "route_mismatch_rows",
+        "bias_max_abs_diff",
+        "abs_err_max",
+        "bias_row_p50",
+        "bias_row_max",
+        "bias_row_p50_final",
+        "bias_row_max_final",
+        "inactive_max_err",
+    } <= LOWER_IS_BETTER
 
 
 def test_bias_row_fails():  # v1.24, lower is better
@@ -142,3 +163,56 @@ def test_dirty_or_unstamped_fails():
     assert any("dirty" in f for f in check([_rec(git_dirty=" M tt/model.py")], [_rec()], GATES))
     r = {k: v for k, v in _rec().items() if k not in ("git_head", "git_dirty")}
     assert any("stamp" in f for f in check([r], [_rec()], GATES))
+
+
+ROW_GATES = dict(GATES, drift={"bias_row_drift_max": {"abs": 0.025}, "bias_row_drift_max_final": {"abs": 0.025}})
+
+
+def test_row_drift():  # D4 item 1: one row moved by the v1.25 probe fails, in head and final space
+    rows = [0.01 * i - 0.08 for i in range(16)]
+    base = _rec(bias_rows=rows, bias_rows_final=rows)
+    assert not check([copy.deepcopy(base)], [base], ROW_GATES)
+    for vec, metric in (("bias_rows", "bias_row_drift_max"), ("bias_rows_final", "bias_row_drift_max_final")):
+        for row in (0, 7, 15):
+            moved = list(rows)
+            moved[row] += 0.05
+            fails = check([_rec(**{**base, vec: moved})], [base], ROW_GATES)
+            assert any(metric in f and f"row {row}" in f for f in fails), (metric, row)
+        small = [x + 0.02 for x in rows]  # every row inside the bound
+        assert not check([_rec(**{**base, vec: small})], [base], ROW_GATES)
+    # inactive rows (None) are skipped; a vector of another length or a missing one fails
+    holes = [None if i % 3 == 0 else x for i, x in enumerate(rows)]
+    assert not check(
+        [_rec(bias_rows=holes, bias_rows_final=rows)], [_rec(bias_rows=holes, bias_rows_final=rows)], ROW_GATES
+    )
+    assert check([_rec(bias_rows=rows[:-1], bias_rows_final=rows)], [base], ROW_GATES)
+    assert check([_rec(bias_rows_final=rows)], [base], ROW_GATES)
+
+
+def test_row_drift_against_row_base():  # broken_outputs: the move is taken against the golden itself
+    gold = _rec(bias_rows=[0.0] * 8, bias_rows_final=[0.0] * 8)
+    dev = _rec(bias_rows=[0.3] + [0.0] * 7, bias_rows_final=[0.0] * 8)  # a fixed record with an outlier row
+    shifted = _rec(bias_rows=[0.0, 0.05] + [0.0] * 6, bias_rows_final=[0.0] * 8)
+    assert check([shifted], [dev], ROW_GATES, row_base=[gold])
+    assert not check([gold], [dev], ROW_GATES, row_base=[gold])
+
+
+def test_spread_ratio_p50_toward_one():  # D4 item 3
+    g = dict(GATES, drift={"spread_ratio_p50": {"toward": 1.0, "abs": 0.01}})
+    base = _rec(precision="performance", spread_ratio_p50=1.012)
+    assert not check([_rec(precision="performance", spread_ratio_p50=1.0)], [base], g)  # the golden passes
+    assert not check([_rec(precision="performance", spread_ratio_p50=0.99)], [base], g)
+    assert check([_rec(precision="performance", spread_ratio_p50=1.042)], [base], g)  # 0.03 away from 1
+    assert check([_rec(precision="performance", spread_ratio_p50=0.97)], [base], g)
+
+
+def test_bias_row_max_final_floor_required():  # D4 item 1
+    g = copy.deepcopy(GATES)
+    del g["floors"]["*/accuracy"]["bias_row_max_final"]
+    assert any("bias_row_max_final" in f and "no floor" in f for f in check([_rec()], [_rec()], g))
+    assert _fails(_rec(bias_row_max_final=0.05), "bias_row_max_final")
+
+
+def test_default_baseline_follows_kind():  # D4 item 4
+    assert default_baseline(Path("x/suite.jsonl")) == FIXED_RECORDS["suite"]
+    assert default_baseline(Path("x/bench.json")) == FIXED_RECORDS["bench"]

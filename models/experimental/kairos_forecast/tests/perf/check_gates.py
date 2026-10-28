@@ -23,6 +23,12 @@ case or precision of the baseline. A candidate record must carry the session sta
 empty ``git_dirty`` and a ``started_at`` no earlier than ``git_head``'s commit time, all taken once when the job's
 session started (``session_stamp()``); ``--allow-unstamped`` admits records written before that.
 
+Row-indexed drift (D4 item 1): ``bias_row_drift_max`` / ``bias_row_drift_max_final`` = max over rows of
+|b_i - b0_i|, the signed row mean error of the candidate (``bias_rows[_final]``) against the same row of the
+baseline record (or of ``row_base``: broken_outputs scores against the golden itself); lower is better, ``abs`` bound.
+A tolerance with ``toward`` (D4 item 3) is ``|v - toward| <= |baseline - toward| + abs``: a candidate may move
+toward the golden value freely, and away from it by ``abs``.
+
 Applicability (v1.12, v1.14): band percentiles p01 / p99 apply at >= 100 active rows, p50 at >= 8, and
 ``inactive_max_err`` only when the case has inactive rows; every skipped check prints ``not applicable (...)``.
 """
@@ -47,17 +53,36 @@ LOWER_IS_BETTER = {
     "bias_row_max",
     "bias_row_p50_final",  # the same in data space (over the target's scale)
     "bias_row_max_final",
+    "bias_row_drift_max",  # D4 item 1: row-indexed, against the fixed record
+    "bias_row_drift_max_final",
 }
+ROW_DRIFT = {"bias_row_drift_max": "bias_rows", "bias_row_drift_max_final": "bias_rows_final"}
 # D0 amendment 1 / D2 fix 4: gated on the target and every suite / bench case in both precisions, report-only for
 # free-running rollout steps >= 2 and e2e_stream.
 ROUTING_KEYS = {"route_mismatch_rows", "bias_max_abs_diff", "min_top3_margin"}
 # PLAN v1.20: absolute floors on every case, both precisions; a gates.json without them is a FAIL.
 # D3 / v1.24: the level-shift, lag and inactive-row metrics are gated on every case too.
-REQUIRED_FLOORS = {"pcc_normalized", "pcc_final", "route_mismatch_rows", "bias_max_abs_diff", "bias_row_p50",
-                   "bias_row_max", "pcc_step", "bias_row_p50_final", "pcc_step_final", "inactive_max_err"}
+REQUIRED_FLOORS = {
+    "pcc_normalized",
+    "pcc_final",
+    "route_mismatch_rows",
+    "bias_max_abs_diff",
+    "bias_row_p50",
+    "bias_row_max",
+    "pcc_step",
+    "bias_row_p50_final",
+    "bias_row_max_final",
+    "pcc_step_final",
+    "inactive_max_err",
+}
 # v1.14: (metric, minimum active rows). Population percentiles over fewer rows are really the min / max.
-MIN_ACTIVE = {"spread_ratio_p01": 100, "spread_ratio_p99": 100, "pcc_row_p01_active": 100, "pcc_row_p01": 100,
-              "spread_ratio_p50": 8}
+MIN_ACTIVE = {
+    "spread_ratio_p01": 100,
+    "spread_ratio_p99": 100,
+    "pcc_row_p01_active": 100,
+    "pcc_row_p01": 100,
+    "spread_ratio_p50": 8,
+}
 
 
 def not_applicable(record: dict, metric: str) -> str | None:
@@ -75,23 +100,34 @@ def report_only(record: dict, metric: str) -> bool:
     if metric not in ROUTING_KEYS:
         return False
     return record["name"].startswith("e2e_stream") or record.get("free_step", 0) >= 2
+
+
 DEFAULT_GATES = Path(__file__).resolve().parents[2] / "doc" / "optimize" / "gates.json"
-# D5: drift is always against this fixed round-0 record (both precisions, all shapes); a b2b base is timing only
-DEFAULT_BASELINE = DEFAULT_GATES.parent / "iter_00" / "bench.json"
+# D5: drift is always against this fixed round-0 record (both precisions, all shapes); a b2b base is timing only.
+# D4 item 4: the baseline follows the record kind (suite.jsonl -> the fixed suite record).
+FIXED_RECORDS = {
+    "bench": DEFAULT_GATES.parent / "iter_00" / "bench.json",
+    "suite": DEFAULT_GATES.parent / "iter_00" / "suite.jsonl",
+}
+
+
+def default_baseline(candidate: Path) -> Path:
+    return FIXED_RECORDS["suite" if str(candidate).endswith(".jsonl") else "bench"]
 
 
 _SESSION = {}
 
 
 def git_stamp() -> dict:
-    """v1.16 / v1.20: HEAD and the porcelain status of the model's tt/, tests/ and ops/, untracked files included."""
+    """v1.16 / v1.20: HEAD and the porcelain status of the model's tt/, tests/, ops/ and gates.json (D4 item 4),
+    untracked files included."""
     import subprocess
 
     model = Path(__file__).resolve().parents[2]
     git = lambda *a: subprocess.run(["git", *a], cwd=model, capture_output=True, text=True, check=True).stdout.strip()
     return {
         "git_head": git("rev-parse", "HEAD"),
-        "git_dirty": git("status", "--porcelain", "--", "tt", "tests", "ops"),
+        "git_dirty": git("status", "--porcelain", "--", "tt", "tests", "ops", "doc/optimize/gates.json"),
     }
 
 
@@ -108,8 +144,9 @@ def session_stamp() -> dict:
 def commit_time(head: str) -> float | None:
     import subprocess
 
-    r = subprocess.run(["git", "show", "-s", "--format=%ct", head], cwd=Path(__file__).resolve().parent,
-                       capture_output=True, text=True)
+    r = subprocess.run(
+        ["git", "show", "-s", "--format=%ct", head], cwd=Path(__file__).resolve().parent, capture_output=True, text=True
+    )
     return float(r.stdout.strip()) if r.returncode == 0 and r.stdout.strip() else None
 
 
@@ -144,12 +181,20 @@ def passes(metric: str, v: float, floor) -> bool:
 
 
 def check(
-    cand: list[dict], base: list[dict] | None, gates: dict, gates_dir: Path | None = None, allow_unstamped=False,
-    require_coverage=True, commit_times: dict | None = None,
+    cand: list[dict],
+    base: list[dict] | None,
+    gates: dict,
+    gates_dir: Path | None = None,
+    allow_unstamped=False,
+    require_coverage=True,
+    commit_times: dict | None = None,
+    row_base: list[dict] | None = None,
 ) -> list[str]:
-    """commit_times: {git_head: unix time} overrides the git lookup (unit tests)."""
+    """commit_times: {git_head: unix time} overrides the git lookup (unit tests). row_base: the records the
+    row-indexed drift is taken against (default: the baseline)."""
     failures = []
     base_by = _by_key(base or [])
+    row_by = _by_key(row_base) if row_base is not None else base_by
     refs = {}
     if require_coverage and base:
         for key in sorted(base_by.keys() - _by_key(cand).keys()):
@@ -166,8 +211,10 @@ def check(
         if "started_at" in r and "git_head" in r:
             ct = commit_times.get(r["git_head"]) if commit_times else commit_time(r["git_head"])
             if ct is None or r["started_at"] < ct:
-                print(f"FAIL stamp {key[0]}/{key[1]}: started_at {r['started_at']} before commit {r['git_head']} "
-                      f"({ct}) (v1.22)")
+                print(
+                    f"FAIL stamp {key[0]}/{key[1]}: started_at {r['started_at']} before commit {r['git_head']} "
+                    f"({ct}) (v1.22)"
+                )
                 failures.append(f"{key}: started before its commit")
         floors = _floors(gates, *key)
         for metric in sorted(REQUIRED_FLOORS - floors.keys()):
@@ -200,8 +247,26 @@ def check(
                 if path not in refs:
                     refs[path] = _by_key(load_records(path))
                 b = refs[path].get(key)
+            elif metric in ROW_DRIFT:
+                b = row_by.get(key)
             else:
                 b = base_by.get(key)
+            if metric in ROW_DRIFT:
+                vec = ROW_DRIFT[metric]
+                if b is None or vec not in r or vec not in b or len(r[vec]) != len(b[vec]):
+                    where = "no baseline record" if b is None else f"{vec} missing or of another length"
+                    print(f"FAIL drift {key[0]}/{key[1]} {metric}: {where}")
+                    failures.append(f"{key} {metric} drift: {where}")
+                    continue
+                d = [(abs(x - y), i) for i, (x, y) in enumerate(zip(r[vec], b[vec])) if x is not None and y is not None]
+                v, row = max(d) if d else (0.0, -1)
+                ok = v <= tol["abs"]
+                print(
+                    f"{'ok  ' if ok else 'FAIL'} drift {key[0]}/{key[1]} {metric} {v:.6g} <= {tol['abs']} (row {row})"
+                )
+                if not ok:
+                    failures.append(f"{key} {metric} drift {v} vs {tol['abs']} (row {row})")
+                continue
             if b is None or metric not in r or metric not in b:
                 where = (
                     "no baseline record"
@@ -212,6 +277,17 @@ def check(
                 failures.append(f"{key} {metric} drift: {where}")
                 continue
             v, bv = r[metric], b[metric]
+            if "toward" in tol:
+                c = tol["toward"]
+                limit = abs(bv - c) + tol["abs"]
+                ok = abs(v - c) <= limit
+                print(
+                    f"{'ok  ' if ok else 'FAIL'} drift {key[0]}/{key[1]} {metric} |{v:.6g} - {c}| <= {limit:.6g} "
+                    f"(baseline {bv:.6g})"
+                )
+                if not ok:
+                    failures.append(f"{key} {metric} drift |{v} - {c}| vs {limit}")
+                continue
             if tol.get("two_sided"):
                 ok = abs(v - bv) <= tol["abs"]
                 print(
@@ -239,13 +315,13 @@ def check(
 def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("candidate", type=Path)
-    ap.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
+    ap.add_argument("--baseline", type=Path, default=None, help="default: the fixed record of the candidate's kind")
     ap.add_argument("--gates", type=Path, default=DEFAULT_GATES)
     ap.add_argument("--allow-unstamped", action="store_true", help="admit records without git_head (pre-v1.16)")
     args = ap.parse_args()
     gates = json.loads(args.gates.read_text())
     cand = load_records(args.candidate)
-    base = load_records(args.baseline) if args.baseline else None
+    base = load_records(args.baseline or default_baseline(args.candidate))
     failures = check(cand, base, gates, args.gates.parent, args.allow_unstamped)
     print(f"{len(failures)} failure(s)" + (": " + "; ".join(failures) if failures else ""))
     sys.exit(1 if failures else 0)

@@ -34,6 +34,11 @@ All head metrics use the head output at the read-out tokens in normalized space,
                     the row's |mean error| (normalized units, head space), p50 taken per flip half and the larger
                     half kept (a shift of one half alone would sit under an all-row median), and the max over rows:
                     a level shift (PLAN v1.24, D3 item 1). No n_active gate.
+    bias_rows, bias_rows_final
+                    the signed row mean error (head space; data space over the target's scale, first 128 steps), one
+                    value per row: check_gates scores ``bias_row_drift_max[_final]`` = max_i |b_i - b0_i| against
+                    the fixed record (D4 item 1; head space over the active rows, inactive rows stored as None and
+                    gated by ``inactive_max_err``); ``bias_row_argmax[_final]`` name the row of ``bias_row_max[_final]``
     pcc_step        PCC of the step differences (along the horizon, per quantile): a one-step lag (v1.24)
     bias_row_p50_final, bias_row_max_final, pcc_step_final
                     the same on the data-space forecast (after the flip average, where a shift common to both halves
@@ -62,6 +67,8 @@ def head_view(raw: torch.Tensor, steps: int = 64) -> torch.Tensor:
     R = raw.shape[0]
     q = raw.reshape(R, 2, Q, 64).permute(0, 2, 1, 3).reshape(R, Q, 128)[..., :steps]
     return q.reshape(R, -1)
+
+
 FLAT_STD = 0.05  # normalized units: 5 % of the series' own scale
 ACTIVE_FRAC = 0.05  # active rows: golden head std >= 5 % of the golden's global std
 
@@ -119,10 +126,12 @@ def gate_metrics(head, g_head, q, g_q, scale_targets, halves: int = 1) -> dict:
     err = (head.double() - g_head.double()).abs().reshape(g_head.shape[0], -1).amax(1)
     med_err = (q[:, Q // 2] - g_q[:, Q // 2]).abs().amax(-1) / scale_targets.reshape(-1)
     q_spread = lambda t: t - t.mean(1, keepdim=True)  # [targets, 9, H]: minus the quantile mean
-    bias = (head.double() - g_head.double()).reshape(g_head.shape[0], -1).mean(1).abs()
+    signed = (head.double() - g_head.double()).reshape(g_head.shape[0], -1).mean(1)
+    bias = signed.abs()
     sc = scale_targets.double().reshape(-1)
-    row_bias = lambda a, b: (a.double() - b.double()).reshape(b.shape[0], -1).mean(1).abs() / sc  # noqa: E731
-    bias_f, bias_full = row_bias(q[..., :128], g_q[..., :128]), row_bias(q, g_q)
+    row_bias = lambda a, b: (a.double() - b.double()).reshape(b.shape[0], -1).mean(1) / sc  # noqa: E731
+    signed_f = row_bias(q[..., :128], g_q[..., :128])
+    bias_f, bias_full = signed_f.abs(), row_bias(q, g_q).abs()
     return {
         "pcc_normalized": pearson(g_head, head),
         "pcc_spread": pearson(spread(g_head), spread(head)),
@@ -144,9 +153,13 @@ def gate_metrics(head, g_head, q, g_q, scale_targets, halves: int = 1) -> dict:
         "abs_err_max": float(err.max()),  # gross single-element check, not a band check (v1.16)
         "bias_row_p50": max(float(b.median()) for b in bias.chunk(halves)),
         "bias_row_max": float(bias.max()),
+        "bias_row_argmax": int(bias.argmax()),
+        "bias_rows": [round(float(b), 7) if a else None for b, a in zip(signed, act)],  # inactive rows: None
         "pcc_step": pearson(step_diff(g_head), step_diff(head)),
         "bias_row_p50_final": float(bias_f.median()),
         "bias_row_max_final": float(bias_f.max()),
+        "bias_row_argmax_final": int(bias_f.argmax()),
+        "bias_rows_final": [round(float(b), 7) for b in signed_f],
         "pcc_step_final": pearson(step_diff(g_q[..., :128]), step_diff(q[..., :128])),
         "bias_row_p50_final_full": float(bias_full.median()),
         "pcc_step_final_full": pearson(step_diff(g_q), step_diff(q)),
@@ -173,6 +186,8 @@ def collapsed_metrics(g_raw, g_q, post, scale_targets, steps=64) -> dict:
 
 def fmt(m: dict) -> str:
     def one(k, v):
+        if isinstance(v, list):
+            return f"{k} [{len(v)} rows]"
         if isinstance(v, int):
             return f"{k} {v}"
         return f"{k} {v:.3e}" if k in ("median_err", "flat_max_err") else f"{k} {v:.6f}"
