@@ -26,7 +26,7 @@ from models.demos.blackhole.embedding_gemma2.tests.common import (
 
 # Hard floor for the free-running last hidden state, asserted together with the per-prompt
 # embedding cosine (bar 0.99). It is the binding metric of the E6a datatype sweep: measured min
-# 0.99035 ([513]) with the default precision (selected_precision_config.json), 0.99692 with the
+# 0.99184 ([33]) with the default precision (selected_precision_config.json), 0.99692 with the
 # E5a policy (baseline_precision_config.json); see doc/datatype_sweep/README.md.
 PCC_LAST_HIDDEN = 0.99
 
