@@ -1,0 +1,68 @@
+{
+ "csv": "/home/andy/bringup/goldens/kairos/profiles/iter_01b/tracy/reports/2026_10_28_14_36_33/ops_perf_results_2026_10_28_14_36_33.csv",
+ "shape": "paper",
+ "precision": "accuracy",
+ "rows": 512,
+ "sections": {
+  "embed": {
+   "profiled": 1,
+   "mean_ms": 4.860509,
+   "full_count": 1,
+   "full_ms": 4.860509
+  },
+  "enc_block": {
+   "profiled": 2,
+   "mean_ms": 12.4942835,
+   "full_count": 6,
+   "full_ms": 74.965701
+  },
+  "enc_norm": {
+   "profiled": 1,
+   "mean_ms": 0.250429,
+   "full_count": 1,
+   "full_ms": 0.250429
+  },
+  "dec_block": {
+   "profiled": 2,
+   "mean_ms": 9.1615825,
+   "full_count": 6,
+   "full_ms": 54.969494999999995
+  },
+  "dec_norm": {
+   "profiled": 1,
+   "mean_ms": 0.091325,
+   "full_count": 1,
+   "full_ms": 0.091325
+  },
+  "head": {
+   "profiled": 1,
+   "mean_ms": 1.74047,
+   "full_count": 1,
+   "full_ms": 1.74047
+  }
+ },
+ "reduced_kernel_ms": 50.254464999999996,
+ "full_estimate_ms": 136.877929,
+ "op_to_op_gap_ms": 123.514864,
+ "ops": 142,
+ "categories_ms": {
+  "MatmulDeviceOperation": 22.75068999999999,
+  "BinaryNgDeviceOperation": 14.385419,
+  "NlpCreateHeadsDeviceOperation": 5.744844,
+  "SoftmaxDeviceOperation": 2.9058599999999997,
+  "LayerNormDeviceOperation": 1.9170310000000002,
+  "TypecastDeviceOperation": 1.4586910000000002,
+  "NLPConcatHeadsDeviceOperation": 0.826697,
+  "ConcatDeviceOperation": 0.265233
+ },
+ "profile_stamp": {
+  "git_head": "2741f2940cf18b682dec50ab0469576c983160a9",
+  "git_dirty": "",
+  "started_at": 1793213653.546553
+ },
+ "summary_stamp": {
+  "started_at": 1793223395.40368,
+  "git_head": "bf7f9f1ce1e19627687876248c61e80051d803a4",
+  "git_dirty": ""
+ }
+}
