@@ -27,15 +27,18 @@ License available at: https://llvm.org/LICENSE.txt
 
 ================================================================================
 
-tt_stl/tt_stl/move_only_function.hpp originates from two projects, credited
-here, with new code by Tenstorrent:
+This project includes portions of llvm::unique_function (llvm/ADT/FunctionExtras.h)
+from the LLVM Project (https://llvm.org) and of zoo::VTableFunction from zoo
+(https://github.com/thecppzoo/zoo), with new code by Tenstorrent, in the
+following file:
 
-  - llvm::unique_function (llvm/ADT/FunctionExtras.h), part of the LLVM Project
-    (https://llvm.org), licensed under the Apache License v2.0 with LLVM
-    Exceptions: https://llvm.org/LICENSE.txt
-  - zoo::VTableFunction, part of zoo (https://github.com/thecppzoo/zoo),
-    Copyright (c) 2017 thecppzoo, licensed under the MIT License:
-    https://github.com/thecppzoo/zoo/blob/master/LICENSE
+  tt_stl/tt_stl/move_only_function.hpp
+
+The LLVM Project portions are licensed under the Apache License v2.0 with LLVM
+Exceptions. License available at: https://llvm.org/LICENSE.txt
+
+The zoo portions are Copyright (c) 2017 thecppzoo, licensed under the MIT
+License. License available at: https://github.com/thecppzoo/zoo/blob/master/LICENSE
 
 ================================================================================
 
