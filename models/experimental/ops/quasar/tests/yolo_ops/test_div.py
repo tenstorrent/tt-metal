@@ -53,7 +53,7 @@ def test_div_scalar(ttnn_mesh_device, reset_seeds, shape):
 @pytest.mark.parametrize("shape", _SITES)
 def test_div_l1(ttnn_mesh_device, reset_seeds, shape):
     """c_xy / 2 on L1 detect buffer (tt_yolov8l_utils.py:98, mem cfg ttnn_yolov8l.py:772-773)."""
-    U.skip_bfloat8_on_quasar()  # model's bf8 output dtype; no block-float formats on Quasar
+    U.skip_bfp_on_quasar()  # model's bf8 output dtype; no block-float formats on Quasar
     mesh = ttnn_mesh_device
 
     x_torch = U.torch_rand(shape)
