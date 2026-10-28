@@ -49,7 +49,7 @@ LOG_DIR = Path("generated/floater_tune")
 # The search's starting points: kFloaterLayoutSchedules' entries (iter0, iter1, frac0, frac1, donate_tail,
 # merge0..merge4) for Kimi K3 (24 heads x 2 bands) and K2.7 (16 x 3). Keep them in step with the table.
 SEEDS = {
-    "kimi_k3": (1, 4, 947, 2765, 0, 2, 2, 2, 2, 2),
+    "kimi_k3": (1, 4, 1075, 2765, 0, 2, 2, 2, 2, 2),
     "kimi_k2_7": (1, 3, 1843, 1664, 1, 2, 3, 4, 5, 5),
 }
 

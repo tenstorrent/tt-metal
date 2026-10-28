@@ -1209,7 +1209,7 @@ RingJointCBArgs allocate_ring_joint_cbs(
 
     // Signal CB, compute to writer, one page: compute pushes it when a Q chunk's last K chunk starts (the writer pops
     // it during SALAD, before compute pushes the next Q's), when a K-split sender's state is staged in half A, and when
-    // a floater visit is staged for its save (the writer's pop frees half A again).
+    // a floater visit is staged for its home to read (the writer's pop, once the home has read it, frees half A).
     constexpr uint32_t signal_page_size = 16;
     const uint32_t cb_signal =
         in.use_streaming_compute ? allocate_cb(signal_page_size, 1, tt::DataFormat::UInt16) : inactive_cb;

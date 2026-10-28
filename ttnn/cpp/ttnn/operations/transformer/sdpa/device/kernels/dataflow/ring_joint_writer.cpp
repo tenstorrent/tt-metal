@@ -615,8 +615,8 @@ void kernel_main() {
     // the physical (x, y) of its reducer (a sender) or of its senders in band order (the reducer).
     constexpr uint32_t ksplit_count = get_named_compile_time_arg_val("ksplit_count");
     constexpr bool ksplit_enabled = ksplit_count > 1;
-    // Expanded-K floaters (ring_joint_floaters.hpp): the program runs them; this kernel is a floater's (it saves visits
-    // and has no K-split role).
+    // Expanded-K floaters (ring_joint_floaters.hpp): the program runs them; this kernel is a floater's (it hands each
+    // staged visit to its home and has no K-split role).
     constexpr bool floaters = get_named_compile_time_arg_val("floaters") == 1;
     constexpr bool floater_core = get_named_compile_time_arg_val("floater_core") == 1;
     constexpr bool floater_home = floaters && !floater_core;

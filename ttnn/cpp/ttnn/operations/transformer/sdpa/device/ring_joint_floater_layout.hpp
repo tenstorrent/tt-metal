@@ -49,8 +49,8 @@ struct FloaterSchedule {
 // (models/demos/deepseek_v3_d_p/tests/perf/test_tune_ring_joint_floaters.py); whether floaters run at all is
 // floater_compute_to_transfer's call.
 inline constexpr std::array<std::pair<std::pair<uint32_t, uint32_t>, FloaterSchedule>, 2> kFloaterLayoutSchedules = {{
-    // Kimi K3: 0.31 of iteration 1, 0.9 of iteration 4, from the band's start.
-    {{24, 2}, {{1, 4}, {947, 2765}, false, {2, 2, 2, 2, 2}}},
+    // Kimi K3: 0.35 of iteration 1, 0.9 of iteration 4, from the band's start.
+    {{24, 2}, {{1, 4}, {1075, 2765}, false, {2, 2, 2, 2, 2}}},
     // Kimi K2.7: 0.6 of iteration 1, 0.54 of iteration 3, from the band's end.
     {{16, 3}, {{1, 3}, {1843, 1664}, true, {2, 3, 4, 5, 5}}},
 }};
