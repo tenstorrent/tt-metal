@@ -485,3 +485,16 @@ check (F196 / F197); host times stay hidden until verified warm.
 - 03:01 post-merge verify (flat, marko): M.1, L.s10240, L.last, L.s56320, L.smoke 5/5 PASS; L.s56320 final hidden rel
   0.1899, top5 1.0; smoke Paris. Starting the 5-position profile series (posprof/series.sh: flat device, flat wall,
   block(ops head) device, block wall; ~2 h).
+- 05:10 5-POSITION PROFILE on c9ba76f8618 (merged; FABRIC_2D; one new 5120-token chunk; device = real-time profiler,
+  0 new programs in every profiled run; wall = warm host wall, F196 + F205 settle, 10 timed runs, misses refused;
+  results /scratch/dnijemcevic/posprof/results, logs posprof/{FLAT,FLAT2,BLOCK}*):
+    ctx    flat dev  block(ops head) dev   flat wall  block wall   (10-27 flat dev, old layout)
+    0      308.1     290.4                 671.8      1089.5       329.9
+    50k    314.6     304.2                 695.8      1099.9       350.6
+    100k   323.3     310.1                 803.5*     1136.6       360.0
+    200k   338.0     320.7                 1005.3     1120.6       372.7
+    500k   375.7     363.0                 746.9      1185.3       403.7
+  * flat 100k hit the 60-run settle cap (not settled). Block's fused head (its default) does not build on 8x4
+  FABRIC_2D (DS41-129) -> measured with DS41_MOE_HEAD=ops. Findings: block -3..-6 % device vs flat; flat -7..-10 %
+  vs 10-27; block host overhead ~800 ms/chunk vs flat ~360-670; flat's host wall is position-dependent and not
+  monotonic (200k ~1005 ms in both series; 500k 747): a host-side position effect, uninvestigated (perf off).
