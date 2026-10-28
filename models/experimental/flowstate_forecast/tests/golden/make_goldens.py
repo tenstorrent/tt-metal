@@ -193,6 +193,12 @@ def run(model, x, horizon, s, full=False, layers=True):
     cpu_s = time.perf_counter() - t0
     cap.close()
     d = dict(cap.d)
+    # in-block ssm / mlp outputs for the first and last layer only: the middle ones (33 MB) put the golden
+    # directory over the 0.5 GB budget, and the per-layer outputs below still check every block
+    n = len(model.model.encoder.layers)
+    for i in range(1, n - 1):
+        d.pop(f"ssm{i}", None)
+        d.pop(f"mlp{i}", None)
     d.update(
         quantile_outputs=out.quantile_outputs,
         prediction_outputs=out.prediction_outputs,
