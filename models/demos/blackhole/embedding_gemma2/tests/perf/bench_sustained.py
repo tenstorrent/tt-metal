@@ -28,7 +28,7 @@ import time
 import torch
 
 import ttnn
-from models.demos.blackhole.embedding_gemma2.conftest import DEVICE_PARAMS, MODEL_ID
+from models.demos.blackhole.embedding_gemma2.conftest import MODEL_ID, open_eg2_device
 from models.demos.blackhole.embedding_gemma2.tests.common import make_batch
 from models.demos.blackhole.embedding_gemma2.tt.text_encoder import TextEncoder
 from models.demos.blackhole.embedding_gemma2.tt.weights import resolve_snapshot
@@ -65,7 +65,7 @@ def main() -> None:
     cases = [tuple(int(v) for v in c.split("x")) for c in args.cases.split(",")]
     max_seq_len = args.max_seq_len or max(8192, max(s for _, s in cases))
     snapshot = resolve_snapshot(MODEL_ID)
-    device = ttnn.open_device(device_id=0, **DEVICE_PARAMS)
+    device = open_eg2_device(0)  # EMBEDDING_GEMMA2_GRID; default: the device's own grid
     try:
         enc = TextEncoder.from_pretrained(device, str(snapshot), max_seq_len=max_seq_len)
         enc.capture_all(cases)

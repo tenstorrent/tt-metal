@@ -16,6 +16,9 @@ Inputs (`probe_inputs()`):
          documents (with the demo prefixes) one at a time and as the demo's padded batches
   mid    (`--inputs mid`) batch-1 lengths 100-2048 at new offsets, 505-520 three times each: the
          gate's worst cases sit at 511 / 512 / 513
+  e9     (`--inputs e9`, E9.1-r1) batch-1 lengths 160-224 at corpus offset 0: the b1_s256 contract
+         gate failure family. The 10 E9 contract inputs are gated by tests/perf/prefill.py.
+Grid: EMBEDDING_GEMMA2_GRID (default: the device's own); recorded as `compute_grid`.
 Metrics: the code of test_text_model (tests/common: pcc over the valid token rows of the whole
 batch, cosine per prompt) against the live HF fp32 reference; bars 0.99 / 0.99. Eager forward
 (trace replay == eager bit for bit, tests/pcc/test_trace.py).
@@ -60,6 +63,11 @@ PROBE_PADDED = (
 PROBE_MID = (100, 128, 200, 256, 300, 384, 450, 500, 640, 768, 1000, 1024, 1025, 1500, 2048)
 PROBE_MID_REPEAT = (505, 510, 511, 512, 513, 514, 520)
 
+# `--inputs e9` (E9.1-r1): the b1_s256 contract-gate failure family, batch 1 at corpus offset 0
+# (the model-card start; E9 stage 1 gate256_probe). The 10 contract inputs (3/4 of each bucket,
+# offset 0) are gated on the traced replay output by tests/perf/prefill.py (HF_CHECK).
+PROBE_E9_256 = (160, 176, 192, 200, 208, 224)
+
 
 def _offset(k: int, row: int, n_corpus: int) -> int:
     """Deterministic corpus offsets away from the tests' (row * 997)."""
@@ -75,6 +83,11 @@ def probe_inputs(snapshot, which: str = "short") -> list[dict]:
 
     n = len(_corpus_ids(str(snapshot)))
     out = []
+    if which == "e9":
+        for L in PROBE_E9_256:
+            ids, mask = make_batch(snapshot, [L], offsets=[0])
+            out.append({"name": f"b1_s{L}_o0", "set": "e9_256", "ids": ids, "mask": mask})
+        return out
     if which == "mid":
         lengths_list = PROBE_MID + PROBE_MID_REPEAT * 3
         for k, L in enumerate(lengths_list):
@@ -171,7 +184,7 @@ def summarize(rows) -> dict:
 
 def cmd_run(args) -> None:
     import ttnn
-    from models.demos.blackhole.embedding_gemma2.conftest import DEVICE_PARAMS, MODEL_ID
+    from models.demos.blackhole.embedding_gemma2.conftest import MODEL_ID, open_eg2_device
     from models.demos.blackhole.embedding_gemma2.reference.hf_reference import load_reference_text_model
     from models.demos.blackhole.embedding_gemma2.tests.perf.dtype_sweep import (
         CANDIDATES,
@@ -203,7 +216,8 @@ def cmd_run(args) -> None:
     print(f"{len(inputs)} inputs, HF fp32 references in {time.time() - t0:.0f} s", flush=True)
     for cid in args.candidates.split(","):
         prec = candidate_dict(cid)
-        device = ttnn.open_device(device_id=0, **DEVICE_PARAMS)
+        device = open_eg2_device(0)  # EMBEDDING_GEMMA2_GRID; default: the device's own grid
+        grid = device.compute_with_storage_grid_size()
         try:
             t0 = time.time()
             model = TextModel.from_state_dict(
@@ -219,6 +233,7 @@ def cmd_run(args) -> None:
             "commit": _git_head(),
             "time": time.strftime("%Y-%m-%d %H:%M:%S"),
             "seconds": time.time() - t0,
+            "compute_grid": [grid.x, grid.y],
             "inputs": args.inputs,
             "summary": summarize(rows),
             "rows": rows,
@@ -249,9 +264,9 @@ def main() -> None:
     r.add_argument("--candidates", required=True)
     r.add_argument("--combos", default="", help="comma-separated json files {id: {description, delta}}")
     r.add_argument("--out", required=True)
-    r.add_argument("--inputs", default="short", choices=("short", "mid"), help="input set (module docstring)")
+    r.add_argument("--inputs", default="short", choices=("short", "mid", "e9"), help="input set (module docstring)")
     ls = sub.add_parser("list")
-    ls.add_argument("--inputs", default="short", choices=("short", "mid"))
+    ls.add_argument("--inputs", default="short", choices=("short", "mid", "e9"))
     args = ap.parse_args()
     {"run": cmd_run, "list": cmd_list}[args.cmd](args)
 

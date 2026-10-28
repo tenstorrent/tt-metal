@@ -105,7 +105,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.blackhole.embedding_gemma2.conftest import DEVICE_PARAMS, MODEL_ID
+from models.demos.blackhole.embedding_gemma2.conftest import DEVICE_PARAMS, MODEL_ID, open_eg2_device
 from models.demos.blackhole.embedding_gemma2.tests.common import COSINE_EMBEDDING, make_batch, pcc
 from models.demos.blackhole.embedding_gemma2.tt.weights import resolve_snapshot
 
@@ -273,6 +273,7 @@ def run_info():
         },
         "selection": {"all": PERF_ALL, **SEL},
         "device_params": dict(DEVICE_PARAMS),
+        "grid_request": os.environ.get("EMBEDDING_GEMMA2_GRID", "") or "device default",
         "n_warmup": N_WARMUP,
         "n_iters": N_ITERS,
         "sustained_s": SUSTAINED_S,
@@ -290,7 +291,8 @@ def run_info():
 
 
 def _open_device():
-    device = ttnn.open_device(device_id=0, **DEVICE_PARAMS)
+    # EMBEDDING_GEMMA2_GRID selects the grid; default: the device's own (13 x 10 on a P150a)
+    device = open_eg2_device(0)
     path = OUT_DIR / "device_info.json"
     if not path.exists():
         grid = device.compute_with_storage_grid_size()

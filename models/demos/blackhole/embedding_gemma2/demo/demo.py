@@ -159,6 +159,9 @@ def test_multimodal_demo(eg2_device):
 
 
 if __name__ == "__main__":
+    from models.demos.blackhole.embedding_gemma2.tt.config import request_device_grid, requested_grid
+
+    request_device_grid(requested_grid())  # EMBEDDING_GEMMA2_GRID; default: the device's own grid
     dev = ttnn.open_device(device_id=0, trace_region_size=TRACE_REGION)
     try:
         run_demo(dev)

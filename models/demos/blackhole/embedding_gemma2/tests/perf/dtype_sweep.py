@@ -420,7 +420,7 @@ def _git_head() -> str:
 
 def cmd_run(args) -> None:
     import ttnn
-    from models.demos.blackhole.embedding_gemma2.conftest import DEVICE_PARAMS, MODEL_ID
+    from models.demos.blackhole.embedding_gemma2.conftest import MODEL_ID, open_eg2_device
     from models.demos.blackhole.embedding_gemma2.tt.config import TextModelConfig, default_weight_cache_dir
     from models.demos.blackhole.embedding_gemma2.tt.precision import PrecisionConfig
     from models.demos.blackhole.embedding_gemma2.tt.text_model import TextModel
@@ -452,7 +452,9 @@ def cmd_run(args) -> None:
             "host": "sjc-snva-tp100 p150a",
         }
         print(f"== {cid}: {prec_dict['description']}", flush=True)
-        device = ttnn.open_device(device_id=0, **DEVICE_PARAMS)
+        device = open_eg2_device(0)  # EMBEDDING_GEMMA2_GRID; default: the device's own grid
+        grid = device.compute_with_storage_grid_size()
+        rec["compute_grid"] = [grid.x, grid.y]
         try:
             t0 = time.time()
             model = TextModel.from_state_dict(

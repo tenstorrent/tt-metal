@@ -104,6 +104,15 @@ pytest models/demos/blackhole/embedding_gemma2/demo/demo.py -s
 python models/demos/blackhole/embedding_gemma2/tests/perf/bench_sustained.py   # burst + sustained
 ```
 
+Compute grid: `EMBEDDING_GEMMA2_GRID=<columns>x<rows>` (e.g. `12x10`, the Galaxy grid) runs any
+entry point (tests, demo, `perf.py`, `prefill.py`, `dtype_sweep.py`, `dtype_probe.py`) on that
+grid. Defaults: the prefill harness `tests/perf/prefill.py` runs on 12 x 10 (E9 contract); every
+other entry point uses the device's grid (13 x 10 on a P150a). On a P150a, 12 x 10 is reached with
+the runtime option `TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=11,9`, which `tt/config.py` sets before
+the first device open (it is read once per process; mixing grids needs separate processes). Column
+dispatch is already the Blackhole default and gives 13 x 10; details in
+`doc/prefill/01-baseline/work_log.md` (E9.1-r1).
+
 ## Benchmark (E8)
 
 Full report: `doc/benchmark/REPORT.md` (tables per tower and shape, protocol, comparison with the
