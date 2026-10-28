@@ -34,7 +34,7 @@ K_EMB = 800  # 3 x 256 masked expert inputs + 3 coefficient columns (the expert 
 HALF = torch.cat([torch.arange(0, DK, 2), torch.arange(1, DK, 2)])  # pair order -> half order, per head
 
 
-L1_ACT_BYTES = 8 << 20  # R2-3
+L1_ACT_BYTES = 4 << 20  # R2-3: B <= 128; ragged (B = 256, 8 MiB) clashes with matmul circular buffers
 
 
 def _half_rows(w):
@@ -403,7 +403,7 @@ class TtKairos:
         mark = mark or (lambda _name: None)
         B = inp["B"]
         h = inp["dec_in"]
-        # R2-3: decoder activations in L1 when one [B x 32, 512] bf16 tensor is at most 8 MiB (paper's 16 MiB
+        # R2-3: decoder activations in L1 when one [B x 32, 512] bf16 tensor is at most 4 MiB (paper's 16 MiB
         # overflows L1 next to the matmul buffers); the output goes to DRAM
         if B * D_PAD * D * 2 <= L1_ACT_BYTES:
             self._mc = ttnn.L1_MEMORY_CONFIG
