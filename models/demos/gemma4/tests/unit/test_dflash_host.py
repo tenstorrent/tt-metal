@@ -788,7 +788,9 @@ def test_release_logs_committed_tokens_per_step_for_the_session(model, adapter, 
     _propose(model, [[201, 202, 251, -1, -1, -1]], [[4, 5, 6, -1, -1, -1]], counts=[3])
     model.release_request(0)
     summary = [m for m in messages if "contract summary" in m]
-    assert summary == ["Gemma4DFlash contract summary: 2 steps, 4 tokens, 2.00 tokens/step"]
+    assert summary == [
+        "Gemma4DFlash contract summary: 2 steps, 4 tokens, 2.00 tokens/step, 2.00 accepted drafts/verify (EWMA over 1)"
+    ]
     assert model._dflash_steps == 0 and model._dflash_committed == 0
 
 
@@ -1705,19 +1707,35 @@ class _RecordingDecoder:
             self._pv_widths[int(width)]["trace"] = object()
         return {int(width): 0.1 for width in widths}
 
+    def measure_widths(self):
+        captured = sorted(w for w, r in self._pv_widths.items() if r["trace"] is not None)
+        self.events.append(("measure", tuple(captured)))
+        return {w: 40.0 + i for i, w in enumerate(captured)}
 
-@pytest.fixture
-def warm_model(adapter, monkeypatch):
+
+def _warm(adapter, monkeypatch, plain_ms=33.0, env=None):
+    """A contract model whose fused decoder is the recording stub and whose base warmup is a no-op."""
     _RecordingDecoder.instances = []
     monkeypatch.setattr(
         sys.modules["models.demos.gemma4.tt.dflash_drafter"], "DFlashFusedDecoder", _RecordingDecoder, raising=False
     )
-    model = build_model(adapter, monkeypatch)
+    model = build_model(adapter, monkeypatch, env=env)
     model._spec_decoder = None
     model._spec_width_ladder = None
     model.model_args[0].max_seq_len = 4096
     monkeypatch.setattr(adapter.Gemma4ForCausalLM, "warmup_model_decode", lambda self, *a, **k: "warm", raising=False)
+
+    def time_plain_step(self, warmup_kwargs, page_table, repeats=2):
+        model.events.append(("time_plain", list(page_table.shape)))
+        return plain_ms
+
+    monkeypatch.setattr(adapter.Gemma4DFlashContractForCausalLM, "_spec_time_plain_step", time_plain_step)
     return model
+
+
+@pytest.fixture
+def warm_model(adapter, monkeypatch):
+    return _warm(adapter, monkeypatch)
 
 
 def test_eager_warmup_prepares_and_traced_warmup_captures_on_the_same_decoder(warm_model):
@@ -1730,8 +1748,36 @@ def test_eager_warmup_prepares_and_traced_warmup_captures_on_the_same_decoder(wa
     assert model._spec_decoder is dec
     assert model.warmup_model_decode(enable_trace=True, kv_cache=model.kv_cache, num_blocks=64) == "warm"
     assert len(_RecordingDecoder.instances) == 1
-    assert [e[0] for e in dec.events] == ["prepare", "capture"]
+    assert [e[0] for e in dec.events] == ["prepare", "capture", "measure"]
     assert dec.events[0][1] == dec.events[1][1] == tuple(model._spec_width_ladder)
+
+
+def test_the_traced_warmup_measures_every_captured_width_and_times_the_plain_step(warm_model):
+    model = warm_model
+    model.warmup_model_decode(enable_trace=False, kv_cache=model.kv_cache, num_blocks=64)
+    assert model._spec_costs is None and _names(model, "time_plain") == []
+    model.warmup_model_decode(enable_trace=True, kv_cache=model.kv_cache, num_blocks=64)
+    ladder = list(model._spec_width_ladder)
+    assert model._spec_costs == {("step", (1, 5), w): 40.0 + i for i, w in enumerate(sorted(ladder))}
+    assert model._spec_plain_ms == 33.0
+    assert _names(model, "time_plain") == [("time_plain", [32, 64])], "the decode warmup's zero table: batch x blocks"
+    model.release_persistent_capture()
+    assert model._spec_costs is None and model._spec_plain_ms is None
+
+
+def test_the_plain_step_cost_from_the_env_skips_the_timed_replay(adapter, monkeypatch):
+    model = _warm(adapter, monkeypatch, env={"GEMMA4_SPEC_PLAIN_STEP_MS": "35.5"})
+    model.warmup_model_decode(enable_trace=False, kv_cache=model.kv_cache, num_blocks=64)
+    model.warmup_model_decode(enable_trace=True, kv_cache=model.kv_cache, num_blocks=64)
+    assert model._spec_plain_ms == 35.5 and _names(model, "time_plain") == []
+
+
+def test_adaptive_off_measures_nothing_at_warmup(adapter, monkeypatch):
+    model = _warm(adapter, monkeypatch, env={"GEMMA4_SPEC_ADAPTIVE": "0"})
+    model.warmup_model_decode(enable_trace=False, kv_cache=model.kv_cache, num_blocks=64)
+    model.warmup_model_decode(enable_trace=True, kv_cache=model.kv_cache, num_blocks=64)
+    assert [e[0] for e in _RecordingDecoder.instances[0].events] == ["prepare", "capture"]
+    assert model._spec_costs is None and model._spec_plain_ms is None
 
 
 def test_a_changed_ladder_between_preparation_and_capture_is_refused(warm_model, expect_error_dflash_width_prepare):
@@ -1951,3 +1997,166 @@ def test_packed_verify_k_cache_prefers_the_served_caches_and_tolerates_none(draf
     assert f(None, layer_without, 0) is None
     assert f([[None, None]], layer_without, 0) is None
     assert f(served, layer_without, 5) is None
+
+
+# -- the acceptance-adaptive policy on this rail (tt/spec_policy.py) ------------------------------
+
+# The 31B CI leg: 46.9 ms per fused replay against the ~34 ms plain step (1.38x), one width rung.
+DFLASH_STEP_MS = 46.9
+DFLASH_PLAIN_MS = 34.0
+
+
+def _with_costs(model, step_ms=DFLASH_STEP_MS, plain_ms=DFLASH_PLAIN_MS):
+    """Install the cost table the traced warmup would have measured: one record, ``(1, 5)``, per width."""
+    model._spec_decoder.costs = {1024: float(step_ms)}
+    model._spec_costs = {("step", (1, 5), 1024): float(step_ms)}
+    model._spec_plain_ms = float(plain_ms)
+    return model
+
+
+@pytest.fixture
+def costed(adapter, monkeypatch):
+    """A contract model with the CI leg's costs, a three-step retry and no probe."""
+    return _with_costs(
+        build_model(adapter, monkeypatch, env={"GEMMA4_SPEC_RETRY_STEPS": "3", "GEMMA4_SPEC_PROBE_STEPS": "0"})
+    )
+
+
+def _inform_prior(model, cond):
+    """Give the batch prior the conditionals ``cond`` as if every position had been observed."""
+    prior = model._spec_policy.prior
+    prior.cond = list(cond)
+    prior.informed = [True] * len(cond)
+
+
+def _dflash_rounds(model, accepted_per_round, key=10):
+    """Drive one solo request in the runner's order: per round the drafts its verify accepts (unused once
+    the session has ended and the row runs plain). Returns the draft length every proposal offered, the
+    first one right after the bootstrap; 0 is a plain step."""
+    proposal = _start_solo(model, key=key)
+    anchor, pos = 150, 3
+    offered = [int(proposal.num_valid[0])]
+    for accepted in accepted_per_round:
+        k = offered[-1]
+        if k:
+            drafts = proposal.draft_token_ids[0, :k].tolist()
+            out = _verify(model, [[anchor] + drafts], [list(range(pos, pos + 1 + k))], [k], keys=[key])
+            ids = out.argmax_ids[0].tolist()
+            n = min(int(accepted), k) + 1
+            committed = ids[:n] + [-1] * (6 - n)
+            positions = list(range(pos + 1, pos + 1 + n)) + [-1] * (6 - n)
+            proposal = _propose(model, [committed], [positions], counts=[n])
+            anchor, pos = ids[n - 1], pos + n
+        else:
+            assert _ordinary(model, [anchor], [pos], [key], result="device") == "device"
+            anchor, pos = anchor + 1, pos + 1
+            proposal = _propose(model, [[anchor] + [-1] * 5], [[pos] + [-1] * 5])
+        offered.append(int(proposal.num_valid[0]))
+    return offered
+
+
+def test_without_a_cost_table_every_solo_greedy_request_speculates_and_a_warning_says_so_once(
+    model, adapter, monkeypatch
+):
+    warned = []
+    monkeypatch.setattr(adapter.logger, "warning", lambda message, *a, **k: warned.append(str(message)))
+    _inform_prior(model, [0.0] * 5)  # with a table the policy would never start a session
+    assert _dflash_rounds(model, [0, 0, 0]) == [5, 5, 5, 5]
+    assert warned == [
+        "Gemma4DFlash adaptive K: no cost table (the warmup measured none and GEMMA4_SPEC_PLAIN_STEP_MS is "
+        "unset); speculation runs as without the policy"
+    ]
+
+
+def test_the_first_request_speculates_from_the_optimistic_prior_and_the_counts_feed_its_ewma(costed):
+    assert _dflash_rounds(costed, [2]) == [5, 5]  # the verify carried 5 drafts and committed 3 tokens
+    stats = costed._dflash_stats
+    assert stats.cond == pytest.approx([1.0, 1.0, 0.8, 1.0, 1.0]) and stats.observed == [1, 1, 1, 0, 0]
+    assert stats.ewma_accepted == 2.0 and stats.spec_steps == 1
+    assert costed._spec_policy.prior.cond == pytest.approx([1.0, 1.0, 0.8, 1.0, 1.0]), "the batch prior learns too"
+    assert costed._dflash_retained.verified == 0, "the new proposal is not verified yet"
+
+
+def test_rejections_end_the_session_and_the_request_runs_plain(costed):
+    """EWMA 0.2 on the first draft: 1 -> .8 -> .64 -> .51 -> .41 keeps the 1.38x replay above 1.10x (the
+    deeper, unobserved positions are capped by the first), .33 does not: the fifth proposal is the plain
+    step, the session ends and every later step of the request is the base decode."""
+    assert _dflash_rounds(costed, [0] * 7) == [5, 5, 5, 5, 5, 0, 0, 0]
+    assert len(_names(costed, "replay")) == 6 and len(_names(costed, "release_decoder")) == 1
+    assert _names(costed, "decode") == [("decode", [650], [8]), ("decode", [651], [9])]
+    assert not costed._spec_active and costed._dflash_stats is None
+    prior = costed._spec_policy.prior
+    assert prior.effective_cond(5) == pytest.approx([0.8**5] * 5) and prior.informed == [True] + [False] * 4
+    assert costed._spec_policy.declined == 3, "the decline and the two plain steps count toward the retry"
+
+
+def test_after_n_plain_steps_the_next_request_bootstraps_and_its_first_proposal_is_the_retry(
+    costed, adapter, monkeypatch
+):
+    messages = []
+    monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
+    monkeypatch.setattr(adapter, "SPEC_POLICY_LOG_INTERVAL_S", 0.0)
+    _dflash_rounds(costed, [0] * 7)
+    costed.release_request(0)
+    _prefill(costed, key=20)
+    assert _ordinary(costed, [3], [2], [20]).tolist() == [750], "the retry is due: the session starts"
+    proposal = _propose(costed, [[750] + [-1] * 5], [[3] + [-1] * 5])
+    assert proposal.num_valid.tolist() == [5] and costed._spec_policy.declined == 0
+    lines = [m for m in messages if m.startswith("Gemma4DFlash adaptive K:")]
+    assert lines[0] == (
+        "Gemma4DFlash adaptive K: 1 rows, cap (1, 5) -> record (1, 5) S_k=1024 (gain; was none); EWMA accepted "
+        "prior, per-position 1.00/1.00/1.00/1.00/1.00, expected 6.00 tokens/row at 46.9 ms (1.38x plain), gain 4.35x"
+    )
+    assert lines[1].startswith("Gemma4DFlash adaptive K: 1 rows, cap (1, 5) -> plain step (was K=5); EWMA accepted ")
+    assert "(retry; was K=0)" in lines[2] and "gain 1.08x" in lines[2]
+    # another rejection: the retry observed, the policy declines again and the request runs plain
+    out = _verify(costed, [[750, 801, 802, 803, 804, 805]], [list(range(3, 9))], [5], keys=[20])
+    ids = out.argmax_ids[0].tolist()
+    proposal = _propose(costed, [[ids[0]] + [-1] * 5], [[4] + [-1] * 5], counts=[1])
+    assert proposal.num_valid.tolist() == [0] and not costed._spec_active
+
+
+def test_a_new_request_skips_the_bootstrap_when_the_prior_says_the_replay_would_not_pay(costed):
+    _inform_prior(costed, [0.3] * 5)  # 1.43 expected tokens at 1.38x the plain step: 1.03x, below the margin
+    _prefill(costed, prompt_len=2, key=10)
+    taps = list(costed._spec_pending[0])
+    assert _ordinary(costed, [3], [2], [10], result="device") == "device"
+    assert _names(costed, "bootstrap") == [] and _names(costed, "replay") == []
+    assert costed._spec_pending is None and all(tap.releases == 1 for tap in taps), "the taps are dropped"
+    proposal = _propose(costed, [[9] + [-1] * 5], [[3] + [-1] * 5])
+    assert proposal.num_valid.tolist() == [0] and costed._spec_policy.declined == 1
+
+
+def test_the_cost_table_is_consumed_as_measured(adapter, monkeypatch):
+    """The same prior starts a session at the CI leg's replay cost and not at a dearer one."""
+    for step_ms, bootstraps in ((46.9, True), (70.0, False)):
+        model = _with_costs(build_model(adapter, monkeypatch), step_ms=step_ms)
+        _inform_prior(model, [0.5] * 5)  # 1.97 expected tokens: 1.43x at 46.9 ms, 0.96x at 70 ms
+        _prefill(model, prompt_len=2, key=10)
+        out = _ordinary(model, [3], [2], [10], result="device")
+        assert (len(_names(model, "bootstrap")) == 1) is bootstraps, step_ms
+        assert (out == "device") is not bootstraps
+
+
+def test_adaptive_off_keeps_the_rail_as_before_whatever_the_table_says(adapter, monkeypatch):
+    model = _with_costs(build_model(adapter, monkeypatch, env={"GEMMA4_SPEC_ADAPTIVE": "0"}))
+    _inform_prior(model, [0.0] * 5)
+    assert _dflash_rounds(model, [0] * 7) == [5] * 8
+
+
+def test_the_session_summary_reports_the_accepted_drafts_ewma(costed, adapter, monkeypatch):
+    messages = []
+    monkeypatch.setattr(adapter.logger, "info", lambda message, *a, **k: messages.append(str(message)))
+    _dflash_rounds(costed, [5, 3])
+    costed.release_request(0)
+    assert [m for m in messages if "contract summary" in m] == [
+        "Gemma4DFlash contract summary: 3 steps, 11 tokens, 3.67 tokens/step, 4.60 accepted drafts/verify (EWMA over 2)"
+    ]
+
+
+def test_the_composed_vision_rail_shares_the_policy(adapter, monkeypatch):
+    vision = build_model(adapter, monkeypatch, cls=adapter.Gemma4DFlashContractVisionForConditionalGeneration)
+    _with_costs(vision)
+    _inform_prior(vision, [0.3] * 5)
+    _prefill(vision, prompt_len=2, key=10)
+    assert _ordinary(vision, [3], [2], [10], result="device") == "device" and _names(vision, "bootstrap") == []

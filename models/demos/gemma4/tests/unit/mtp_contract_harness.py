@@ -23,6 +23,7 @@ import torch
 
 from models.demos.gemma4.tests.unit.dflash_contract_harness import DeviceResult, _sampling, _table, _tensor
 from models.demos.gemma4.tests.unit.dflash_sampling_harness import attach_sampling_state
+from models.demos.gemma4.tt.spec_policy import SPEC_POLICY_ENV
 
 #: Host stand-in for the 262144-wide vocabulary.
 VOCAB = 600
@@ -35,9 +36,25 @@ SPEC_ENV = (
     "GEMMA4_SPEC_WIDTH_RUNGS",
     "GEMMA4_ASSISTANT_MODEL",
     "HF_MODEL",
+    *SPEC_POLICY_ENV,
 )
 
 DEFAULT_SHAPES = ((1, 5), (5, 5), (8, 3), (16, 1))
+
+#: The plain decode step cost (ms) the stubbed warmup timer reports (``stub_drafter_modules``).
+PLAIN_MS = 20.0
+
+
+def scripted_costs(shapes, widths, step_ms, reseed_ms=None):
+    """A cost table in the decoder's layout: ``step_ms[shape]`` at every rung of ``widths[shape]`` and
+    ``reseed_ms[shape]`` (default 0) per shape."""
+    costs = {}
+    for shape in shapes:
+        shape = tuple(shape)
+        for w in widths[shape]:
+            costs[("step", shape, int(w))] = float(step_ms[shape])
+        costs[("reseed", shape)] = float((reseed_ms or {}).get(shape, 0.0))
+    return costs
 
 
 class Target:
@@ -131,6 +148,7 @@ class Decoder:
         self.buffer = None  # the one verify-logits buffer; rewritten by every step and reseed
         self.readbacks = 0
         self.reseed_tables = []  # the [B_v, blocks] table of every serving_reseed call
+        self.costs = {}  # what serving_measure_costs reports (scripted per test; empty = no table)
 
     # -- warmup --------------------------------------------------------------
     def serving_prepare(self, shapes, widths_by_shape, max_rows, max_context=None, max_rungs=None):
@@ -166,6 +184,12 @@ class Decoder:
             raise RuntimeError("serving_capture called twice")
         self.captured = True
         self.events.append(("capture", list(self.shapes)))
+
+    def serving_measure_costs(self):
+        if not self.captured:
+            raise RuntimeError("serving_measure_costs before serving_capture")
+        self.events.append(("measure", sorted(self.costs)))
+        return dict(self.costs)
 
     def serving_release(self):
         self.released = True
@@ -247,8 +271,13 @@ class Decoder:
         return result
 
 
-def install_decoder(model, shapes=DEFAULT_SHAPES, max_rows=None, widths=None):
-    """Give ``model`` a prepared and captured decoder without running warmup."""
+def install_decoder(model, shapes=DEFAULT_SHAPES, max_rows=None, widths=None, step_ms=None, plain_ms=None):
+    """Give ``model`` a prepared and captured decoder without running warmup.
+
+    ``step_ms`` (per shape) with ``plain_ms`` installs a scripted cost table
+    as the warmup measurement would (reseeds cost 0); without them the model
+    has no table and the fixed record choice serves.
+    """
     shapes = tuple(tuple(s) for s in shapes)
     max_seq_len = int(model.model_args[0].max_seq_len)
     widths = widths or {s: _ladder(max_seq_len, s[1]) for s in shapes}
@@ -260,6 +289,10 @@ def install_decoder(model, shapes=DEFAULT_SHAPES, max_rows=None, widths=None):
     model._mtp_widths = {s: list(w) for s, w in widths.items()}
     model._mtp_max_rows = decoder.max_rows
     model._mtp_captured = True
+    if step_ms is not None:
+        decoder.costs = scripted_costs(shapes, model._mtp_widths, step_ms)
+        model._spec_costs = dict(decoder.costs)
+        model._spec_plain_ms = float(plain_ms if plain_ms is not None else PLAIN_MS)
     return decoder
 
 
@@ -359,9 +392,12 @@ def build_mtp_model(
     return model
 
 
-def stub_drafter_modules(monkeypatch, events):
+def stub_drafter_modules(monkeypatch, events, costs=None, plain_ms=PLAIN_MS):
     """Replace ``create_assistant_model`` and ``SpeculativeDecoder`` with recording builders.
 
+    The stubbed decoder reports ``costs`` from ``serving_measure_costs`` and
+    the adapter's plain-step timer (a traced replay on the device) reports
+    ``plain_ms``; both land in ``events`` as the warmup measures them.
     Returns the list the builders append their construction arguments to.
     """
     built = []
@@ -373,12 +409,19 @@ def stub_drafter_modules(monkeypatch, events):
     class SpeculativeDecoder(Decoder):
         def __init__(self, **kwargs):
             super().__init__(events)
+            self.costs = dict(costs or {})
             built.append(("decoder", kwargs))
+
+    def time_plain_step(self, warmup_kwargs, page_table, repeats=2):
+        events.append(("time_plain", int(warmup_kwargs["max_batch_size"]), page_table.tolist()))
+        return float(plain_ms)
 
     common = sys.modules["models.demos.gemma4.tt.common"]
     monkeypatch.setattr(common, "create_assistant_model", create_assistant_model, raising=False)
     spec_decode = SimpleNamespace(SpeculativeDecoder=SpeculativeDecoder)
     monkeypatch.setitem(sys.modules, "models.demos.gemma4.tt.spec_decode", spec_decode)
+    adapter = sys.modules["models.demos.gemma4.tt.generator_vllm"]
+    monkeypatch.setattr(adapter.Gemma4MTPContractForCausalLM, "_spec_time_plain_step", time_plain_step)
     return built
 
 
@@ -486,6 +529,7 @@ __all__ = [
     "DEFAULT_SHAPES",
     "Decoder",
     "DeviceResult",
+    "PLAIN_MS",
     "SPEC_ENV",
     "StepResult",
     "Target",
@@ -506,5 +550,6 @@ __all__ = [
     "build_mtp_model",
     "install_decoder",
     "logits_result",
+    "scripted_costs",
     "stub_drafter_modules",
 ]

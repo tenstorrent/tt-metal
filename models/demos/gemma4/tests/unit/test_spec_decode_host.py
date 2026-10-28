@@ -1981,3 +1981,210 @@ def test_every_layer_verifies_and_reseeds_through_its_own_group_table(monkeypatc
     assert not torch.equal(
         uploads[rec["v_ptl_list"][1].tag][:live], installed[0][rows][:, : widths["sliding_attention"]].to(torch.int32)
     )
+
+
+# ===== Acceptance-adaptive draft length (tt/spec_policy.py): the pure policy functions.
+from models.demos.gemma4.tt.spec_policy import (  # noqa: E402
+    SPEC_ADAPTIVE_ENV,
+    SPEC_EWMA_ENV,
+    SPEC_MIN_GAIN_ENV,
+    SPEC_PLAIN_STEP_MS_ENV,
+    SPEC_PROBE_STEPS_ENV,
+    SPEC_RETRY_STEPS_ENV,
+    AcceptanceStats,
+    RecordCandidate,
+    SpecPolicy,
+    SpecPolicyConfig,
+    describe_costs,
+    rank_records,
+)
+
+_PLAIN = 20.0
+# Step costs per record: 2.5x / 2.5x / 1.75x / 1.5x the plain step.
+_COSTS = {(1, 5): 50.0, (5, 5): 50.0, (8, 3): 35.0, (16, 1): 30.0}
+
+
+def _cands(costs, n=1, width=2048):
+    return [RecordCandidate(shape, width, ms) for shape, ms in costs.items() if shape[0] >= n]
+
+
+def _row(cond, alpha=0.2):
+    stats = AcceptanceStats(5, alpha)
+    stats.cond = list(cond)
+    return stats
+
+
+def test_policy_config_defaults_are_on_with_the_documented_knobs():
+    assert SpecPolicyConfig.from_env({}) == SpecPolicyConfig(
+        adaptive=True, min_gain=1.10, retry_steps=8, probe_steps=32, ewma=0.2, plain_step_ms=None
+    )
+
+
+def test_policy_config_reads_every_knob_from_the_env():
+    env = {
+        SPEC_ADAPTIVE_ENV: "0",
+        SPEC_MIN_GAIN_ENV: "1.25",
+        SPEC_RETRY_STEPS_ENV: "4",
+        SPEC_PROBE_STEPS_ENV: "0",
+        SPEC_EWMA_ENV: "0.5",
+        SPEC_PLAIN_STEP_MS_ENV: "22.5",
+    }
+    assert SpecPolicyConfig.from_env(env) == SpecPolicyConfig(False, 1.25, 4, 0, 0.5, 22.5)
+    assert SpecPolicyConfig.from_env({SPEC_PLAIN_STEP_MS_ENV: " "}).plain_step_ms is None
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "message"),
+    [
+        (SPEC_ADAPTIVE_ENV, "maybe", "must be 1 or 0"),
+        (SPEC_MIN_GAIN_ENV, "0.9", "must be at least 1.0"),
+        (SPEC_MIN_GAIN_ENV, "x", "must be a number"),
+        (SPEC_RETRY_STEPS_ENV, "-1", "must be at least 0"),
+        (SPEC_PROBE_STEPS_ENV, "2.5", "must be an integer"),
+        (SPEC_EWMA_ENV, "1.5", r"must be in \[0.0, 1.0\]"),
+        (SPEC_PLAIN_STEP_MS_ENV, "-3", "must be at least 0.0"),
+    ],
+)
+def test_bad_policy_knobs_are_refused_naming_the_knob(name, value, message, expect_error):
+    with expect_error(ValueError, f"{name} {message}"):
+        SpecPolicyConfig.from_env({name: value})
+
+
+def test_acceptance_stats_update_only_the_positions_the_verify_reached():
+    stats = AcceptanceStats(5, 0.5)
+    stats.observe(accepted=2, verified=5)  # drafts 1 and 2 accepted, draft 3 rejected, 4 and 5 never reached
+    assert stats.cond == [1.0, 1.0, 0.5, 1.0, 1.0] and stats.observed == [1, 1, 1, 0, 0]
+    assert stats.ewma_accepted == 2.0 and stats.spec_steps == 1
+    stats.observe(accepted=3, verified=3)  # a shorter verify, every carried draft accepted: no rejection seen
+    assert stats.cond == [1.0, 1.0, 0.75, 1.0, 1.0] and stats.observed == [2, 2, 2, 0, 0]
+    assert stats.ewma_accepted == 2.5 and stats.spec_steps == 2
+    stats.observe(accepted=0, verified=0)  # a draftless verify observes nothing
+    assert stats.spec_steps == 2
+    stats.observe(accepted=9, verified=9)  # clamped to the draft length
+    assert stats.observed == [3, 3, 3, 1, 1] and stats.ewma_accepted == 3.75
+
+
+def test_expected_tokens_is_one_plus_the_running_product_of_the_conditionals():
+    stats = _row([0.9, 0.5, 0.5, 0.0, 1.0])
+    assert stats.accept_probs(5) == pytest.approx([0.9, 0.45, 0.225, 0.0, 0.0])
+    assert stats.expected_tokens(1) == pytest.approx(1.9)
+    assert stats.expected_tokens(3) == pytest.approx(2.575)
+    assert stats.expected_tokens(5) == pytest.approx(2.575)
+    assert stats.expected_tokens(0) == 1.0
+
+
+def test_a_new_row_starts_from_the_batch_prior_and_the_prior_learns_from_every_row():
+    policy = SpecPolicy(SpecPolicyConfig(ewma=0.5), 5)
+    first = policy.new_row()
+    assert first.cond == [1.0] * 5, "optimistic until the first verify"
+    policy.observe(first, accepted=0, verified=5)
+    assert policy.prior.cond[0] == 0.5 and first.cond[0] == 0.5
+    second = policy.new_row()
+    assert second.cond == [0.5, 1.0, 1.0, 1.0, 1.0] and second.observed == [0] * 5 and second.ewma_accepted is None
+    policy.observe(second, accepted=5, verified=5)
+    assert first.cond[0] == 0.5 and second.cond[0] == 0.75 and policy.prior.cond[0] == 0.75
+
+
+def test_rank_records_scores_expected_tokens_per_cost_relative_to_the_plain_step(expect_error):
+    rows = [_row([1.0] * 5), _row([0.5] * 5)]
+    ranked = rank_records(_cands(_COSTS), rows, _PLAIN)
+    # (8,3): 4 + 1.875 tokens over two rows at 1.75x; (1,5) and (5,5): 6 + 1.96875 at 2.5x; (16,1): 2 + 1.5 at 1.5x
+    assert [c.shape for c in ranked] == [(8, 3), (1, 5), (5, 5), (16, 1)]
+    assert ranked[0].expected_tokens == pytest.approx(5.875) and ranked[0].gain == pytest.approx(5.875 / 2 / 1.75)
+    assert ranked[1].gain == pytest.approx(7.96875 / 2 / 2.5) and ranked[3].gain == pytest.approx(3.5 / 2 / 1.5)
+    assert all(c.reason == "gain" for c in ranked)
+    with expect_error(ValueError, "positive plain step cost"):
+        rank_records(_cands(_COSTS), rows, 0.0)
+    with expect_error(ValueError, "non-positive cost"):
+        rank_records([RecordCandidate((1, 5), 2048, 0.0)], rows, _PLAIN)
+    with expect_error(ValueError, "at least one drafting row"):
+        rank_records(_cands(_COSTS), [], _PLAIN)
+
+
+def test_the_policy_picks_k5_at_high_acceptance_and_drops_to_k3_k1_and_plain_as_it_falls():
+    policy = SpecPolicy(SpecPolicyConfig(probe_steps=0), 5)
+
+    def choice(cond):
+        return policy.decide(_cands(_COSTS), [_row(cond)], _PLAIN, 5)
+
+    assert choice([1.0] * 5).shape == (1, 5)  # 6 tokens at 2.5x: 2.4x
+    assert choice([0.7] * 5).shape == (8, 3)  # 2.53 at 1.75x = 1.45x beats 2.94 at 2.5x = 1.18x
+    assert choice([0.8, 0.2, 0.2, 0.2, 0.2]).shape == (16, 1)  # only the first draft lands: 1.8 at 1.5x = 1.20x
+    assert choice([0.4] * 5) is None  # 1.4 at 1.5x = 0.93x: nothing beats the plain step
+
+
+def test_the_margin_decides_between_a_marginal_record_and_the_plain_step():
+    row = _row([0.8, 0.2, 0.2, 0.2, 0.2])  # (16,1): 1.8 tokens at 1.5x the plain step = 1.20x
+    assert SpecPolicy(SpecPolicyConfig(min_gain=1.15), 5).decide(_cands(_COSTS), [row], _PLAIN, 5).shape == (16, 1)
+    assert SpecPolicy(SpecPolicyConfig(min_gain=1.25), 5).decide(_cands(_COSTS), [row], _PLAIN, 5) is None
+
+
+def test_the_cost_table_is_consumed_as_measured():
+    """The same acceptance picks another record when the measured costs change."""
+    row = _row([0.7] * 5)
+    cheap_k5 = {**_COSTS, (1, 5): 36.0}  # 1.8x: 2.94 tokens -> 1.63x, above (8,3)'s 1.45x
+    assert SpecPolicy(SpecPolicyConfig(), 5).decide(_cands(cheap_k5), [row], _PLAIN, 5).shape == (1, 5)
+    dear = {shape: ms * 2 for shape, ms in _COSTS.items()}
+    assert SpecPolicy(SpecPolicyConfig(), 5).decide(_cands(dear), [row], _PLAIN, 5) is None
+    # the adapter adds the reseed cost to a record's step cost on a step that reseeds
+    assert SpecPolicy(SpecPolicyConfig(), 5).decide([RecordCandidate((8, 3), 2048, 55.0)], [row], _PLAIN, 3) is None
+
+
+def test_after_n_declined_steps_the_policy_retries_at_the_smallest_draft_length():
+    policy = SpecPolicy(SpecPolicyConfig(retry_steps=3, probe_steps=0), 5)
+    row = _row([0.4] * 5)
+    kinds = []
+    for _ in range(8):
+        choice = policy.decide(_cands(_COSTS), [row], _PLAIN, 5)
+        kinds.append(None if choice is None else (choice.shape, choice.reason))
+    assert kinds == [None, None, None, ((16, 1), "retry"), None, None, None, ((16, 1), "retry")]
+    assert policy.declined == 0 and policy.last_k == 1
+    never = SpecPolicy(SpecPolicyConfig(retry_steps=0), 5)
+    assert all(never.decide(_cands(_COSTS), [row], _PLAIN, 5) is None for _ in range(20))
+
+
+def test_below_the_cap_the_policy_probes_the_next_larger_draft_length_every_n_steps():
+    policy = SpecPolicy(SpecPolicyConfig(probe_steps=3), 5)
+    rows = [_row([0.7] * 5) for _ in range(5)]
+    out = [(c.shape, c.reason) for c in (policy.decide(_cands(_COSTS, n=5), rows, _PLAIN, 5) for _ in range(7))]
+    assert out == [
+        ((8, 3), "gain"),
+        ((8, 3), "gain"),
+        ((5, 5), "probe"),
+        ((8, 3), "gain"),
+        ((8, 3), "gain"),
+        ((5, 5), "probe"),
+        ((8, 3), "gain"),
+    ]
+    # at the cap, and on a plain step, the count restarts
+    policy.decide(_cands(_COSTS, n=5), rows, _PLAIN, 5)
+    assert policy.below_cap == 2
+    policy.decide(_cands(_COSTS, n=5), [_row([1.0] * 5) for _ in range(5)], _PLAIN, 5)
+    assert policy.below_cap == 0 and policy.last_k == 5
+    policy.decide(_cands(_COSTS, n=5), rows, _PLAIN, 5)
+    policy.decide(_cands(_COSTS, n=5), [_row([0.1] * 5) for _ in range(5)], _PLAIN, 5)
+    assert policy.below_cap == 0 and policy.last_k == 0
+    # without a larger record the probe step keeps the choice
+    only = SpecPolicy(SpecPolicyConfig(probe_steps=1), 5)
+    assert only.decide([RecordCandidate((16, 1), 2048, 30.0)], rows, _PLAIN, 5).reason == "gain"
+
+
+def test_measure_positions_time_each_rung_at_the_first_position_it_serves():
+    widths = [2048, 8192, 32768]
+    assert SpeculativeDecoder.serving_measure_positions(widths, 5) == [(2048, 0), (8192, 2042), (32768, 8186)]
+    for w, pos in SpeculativeDecoder.serving_measure_positions(widths, 5):
+        assert serving_width_for(widths, pos, 5) == w
+    assert SpeculativeDecoder.serving_measure_positions([4096, 1024, 1024], 1) == [(1024, 0), (4096, 1022)]
+
+
+def test_describe_costs_lists_the_plain_step_then_every_record():
+    costs = {
+        ("step", (1, 5), 2048): 50.0,
+        ("step", (1, 5), 8192): 52.5,
+        ("reseed", (1, 5)): 18.0,
+        ("step", (16, 1), 2048): 30.0,
+    }
+    assert describe_costs(costs, 20.0) == (
+        "plain 20.0 | (1, 5): S_k 2048 50.0, S_k 8192 52.5; reseed 18.0 | (16, 1): S_k 2048 30.0"
+    )
+    assert describe_costs({}, None) == "plain unmeasured"

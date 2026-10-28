@@ -2581,6 +2581,82 @@ class SpeculativeDecoder:
         self._srv_seeded = {}
         _lg.info(f"[spec-serving] captured {len(cost)} records in {time.perf_counter() - t_all:.1f}s: {cost}")
 
+    @staticmethod
+    def serving_measure_positions(widths, k):
+        """The position each rung of a width ladder is timed at: 0 for the narrowest rung, and for every wider
+        rung the first position the previous rung no longer covers (``serving_width_for`` then selects it)."""
+        ladder = sorted({int(w) for w in widths})
+        positions, prev = [], None
+        for w in ladder:
+            pos = 0 if prev is None else prev - int(k) - 1
+            if serving_width_for(ladder, pos, k) != w:
+                raise ValueError(
+                    f"position {pos} selects rung {serving_width_for(ladder, pos, k)} of {ladder}, not {w}"
+                )
+            positions.append((w, pos))
+            prev = w
+        return positions
+
+    def serving_measure_costs(self, repeats=2):
+        """Time the serving sequence once per record on padding inputs; the adaptive-K cost table (ms).
+
+        Returns ``{("reseed", shape): ms, ("step", shape, width): ms}``: per
+        shape one ``serving_reseed`` of row 0 (the eager target forward at
+        ``B_v`` rows a row pays when it enters speculation), and per record
+        one ``serving_step`` of row 0 at the first position that selects its
+        rung (``serving_measure_positions``), so each number is what the
+        adapter pays for that call on the device: the uploads, the replay
+        and the host readback of the drafts and argmax ids. The minimum of
+        ``repeats`` timings is kept. Runs after ``serving_capture`` and
+        before any real step, through zero tables (block 0, vLLM's null
+        block, which the eager and captured passes already wrote; a bounded
+        target has its per-layer tables installed by the adapter first), and
+        leaves the decoder as the capture left it: no seed, no previous
+        replay.
+        """
+        from loguru import logger as _lg
+
+        self._srv_require(captured=True)
+        if int(repeats) < 1:
+            raise ValueError(f"serving_measure_costs needs repeats >= 1, got {repeats}")
+        t_all = time.perf_counter()
+        costs = {}
+        for shape in self._srv_shapes:
+            B, K = shape
+            table = torch.zeros((B, self._srv_blocks), dtype=torch.int32)
+            best = None
+            for _ in range(int(repeats)):
+                t0 = time.perf_counter()
+                self.serving_reseed(shape, [0], [0], [0], table)
+                ttnn.synchronize_device(self.mesh_device)
+                dt = (time.perf_counter() - t0) * 1e3
+                best = dt if best is None else min(best, dt)
+            costs[("reseed", shape)] = best
+            for width, pos in self.serving_measure_positions(self._srv_widths[shape], K):
+                best = None
+                for _ in range(int(repeats)):
+                    t0 = time.perf_counter()
+                    result = self.serving_step(shape, [0], [0], [pos], table, [None])
+                    ttnn.synchronize_device(self.mesh_device)
+                    dt = (time.perf_counter() - t0) * 1e3
+                    best = dt if best is None else min(best, dt)
+                if int(result.width) != int(width):
+                    raise RuntimeError(
+                        f"serving_measure_costs timed record shape={shape} at position {pos} on S_k={result.width}, "
+                        f"expected the S_k={width} rung"
+                    )
+                costs[("step", shape, int(width))] = best
+        self._srv_last = None
+        self._srv_seeded = {}
+        _lg.info(
+            f"[spec-serving] measured {len(costs)} record costs in {time.perf_counter() - t_all:.1f}s "
+            f"(min of {int(repeats)} timings each, ms): "
+            + ", ".join(
+                f"{k[0]} {k[1]}" + (f" S_k={k[2]}" if len(k) > 2 else "") + f"={v:.1f}" for k, v in costs.items()
+            )
+        )
+        return costs
+
     def serving_widths(self):
         """The resolved width ladder per prepared shape ({shape: [rungs]}), after serving_prepare."""
         self._srv_require()

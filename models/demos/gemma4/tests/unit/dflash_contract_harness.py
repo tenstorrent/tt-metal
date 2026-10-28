@@ -130,6 +130,11 @@ class Decoder:
         self.page_table_torch = None
         self.script = []
         self.replays = 0
+        self.costs = {}  # what measure_widths reports ({width: ms}); scripted per test, empty = no table
+
+    def measure_widths(self):
+        self.events.append(("measure", sorted(self.costs)))
+        return dict(self.costs)
 
     def width_for(self, start):
         need = int(start) + self.P_v + VERIFY_WIDTH_MARGIN

@@ -1867,6 +1867,47 @@ class DFlashFusedDecoder:
         self._replay_on_first = True
         return cost
 
+    def measure_widths(self, repeats=2, anchor_id=1, start=0):
+        """Time one replay per captured width on the capture's own inputs: ``{width: ms}``.
+
+        The adaptive policy's cost table (``spec_policy``). Each timing is
+        what a contract step pays on the device for that width: the
+        per-iteration input upload, the fused replay (the draft block and the
+        packed verify) and the ids readback, at ``anchor_id`` and position
+        ``start`` through the scratch table (block 0, which the prepare and
+        capture passes already wrote). The minimum of ``repeats`` timings is
+        kept. Runs after ``capture_widths`` and before any request, and leaves
+        the decoder as the capture left it: the next request replays rather
+        than reads ``_out``.
+        """
+        import time as _time
+
+        widths = sorted(w for w, r in self._pv_widths.items() if r["trace"] is not None)
+        if not widths:
+            raise RuntimeError("measure_widths needs captured widths (capture_widths first)")
+        if int(repeats) < 1:
+            raise ValueError(f"measure_widths needs repeats >= 1, got {repeats}")
+        costs = {}
+        for width in widths:
+            self._pv_width_activate(self._pv_widths[width])
+            best = None
+            for _ in range(int(repeats)):
+                t0 = _time.perf_counter()
+                self._upload_iter_inputs(anchor_id, start)
+                ttnn.execute_trace(self.mesh_device, self.trace, cq_id=0, blocking=False)
+                out_ids_t, _fc_out = self._out
+                self._read_ids(out_ids_t)
+                ttnn.synchronize_device(self.mesh_device)
+                dt = (_time.perf_counter() - t0) * 1e3
+                best = dt if best is None else min(best, dt)
+            costs[width] = best
+        self._replay_on_first = True
+        logger.info(
+            f"dFlash measured {len(costs)} verify widths (min of {int(repeats)} replays each, ms): "
+            + ", ".join(f"{w}={ms:.1f}" for w, ms in costs.items())
+        )
+        return costs
+
     def width_for(self, start):
         """Narrowest CAPTURED width that covers a verify block at ``start``.
 

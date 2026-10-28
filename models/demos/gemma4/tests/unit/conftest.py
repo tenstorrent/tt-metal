@@ -50,6 +50,7 @@ from models.demos.gemma4.tt.generator import (  # noqa: E402  - pure helpers the
     items_within_prefill_window,
     merge_soft_tokens,
 )
+from models.demos.gemma4.tt.spec_policy import SPEC_POLICY_ENV  # noqa: E402
 
 _ENV_CLEARED = (
     "GEMMA4_CONTRACT_ASYNC",
@@ -323,11 +324,11 @@ def drafter_module():
         yield _fresh_import(patch, "models.demos.gemma4.tt.dflash_drafter")
 
 
-def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,), cls=None):
+def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,), cls=None, env=None):
     """A contract-rail model over recording stubs, after a solo-capable warmup.
 
     ``cls`` selects the dFlash contract class to build (the text class by default, or its
-    composed vision class).
+    composed vision class); ``env`` holds the policy knobs the model reads at construction.
     """
     cls = cls or adapter.Gemma4DFlashContractForCausalLM
     model = cls.__new__(cls)
@@ -354,6 +355,10 @@ def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,), cls=None):
     model.results = []
     model.reloads = []
     model.decode_commands = []
+    for name in SPEC_POLICY_ENV:  # the policy knobs are read at init: the shell's values are cleared, ``env`` wins
+        monkeypatch.delenv(name, raising=False)
+    for key, value in (env or {}).items():
+        monkeypatch.setenv(key, value)
     model._dflash_init_state()
     model._spec_get_drafter = lambda: SimpleNamespace(target_layer_ids=[1, 2])
     model._effective_paged_block_size = lambda kv_cache: 64
