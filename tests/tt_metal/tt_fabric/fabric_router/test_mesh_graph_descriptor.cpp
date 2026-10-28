@@ -15,6 +15,7 @@
 #include <utility>
 #include <unordered_set>
 #include <fstream>
+#include <iterator>
 #include <sstream>
 
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
@@ -3155,21 +3156,53 @@ const std::string kGptOssRing = R"proto(
     }
 )proto";
 
-std::string llama_8b_pod_pipeline() {
+// A ring of `wide` 4x2 stages followed by `narrow` 1x2 stages.
+std::string llama_8b_pod_pipeline(const int wide = 8, const int narrow = 32) {
+    const int stages = wide + narrow;
     std::ostringstream out;
     out << "pipeline_descriptors {\n  name: \"llama_8b_pod\"\n";
-    for (int stage = 0; stage < 8; ++stage) {
+    for (int stage = 0; stage < wide; ++stage) {
         out << "  stages { id: \"s" << stage << "\" label: \"Token4x2\" shape { dims: [ 4, 2 ] } }\n";
     }
-    for (int stage = 8; stage < 40; ++stage) {
+    for (int stage = wide; stage < stages; ++stage) {
         out << "  stages { id: \"s" << stage << "\" label: \"Token1x2\" shape { dims: [ 1, 2 ] } }\n";
     }
-    for (int stage = 0; stage < 39; ++stage) {
-        out << "  edges { src: \"s" << stage << "\" dst: \"s" << (stage + 1) << "\" }\n";
+    for (int stage = 0; stage < stages; ++stage) {
+        out << "  edges { src: \"s" << stage << "\" dst: \"s" << (stage + 1) % stages << "\" }\n";
     }
-    out << "  edges { src: \"s39\" dst: \"s0\" }\n}\n";
+    out << "}\n";
     return out.str();
 }
+
+// M0 has eight 4x2 slices, and M1 thirty-two 1x2 slices in one row, so a 4x2 stage only fits M0.
+const std::string kLlama8bPodMeshes = R"proto(
+    mesh_descriptors {
+      name: "M0"
+      arch: BLACKHOLE
+      device_topology { dims: [ 4, 16 ] }
+      host_topology { dims: [ 1, 8 ] }
+      channels { count: 2 policy: RELAXED }
+    }
+    mesh_descriptors {
+      name: "M1"
+      arch: BLACKHOLE
+      device_topology { dims: [ 1, 64 ] }
+      host_topology { dims: [ 1, 32 ] }
+      channels { count: 2 policy: RELAXED }
+    }
+    graph_descriptors {
+      name: "G0"
+      type: "FABRIC"
+      instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+      instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+      connections {
+        nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+        nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+        channels { count: 2 policy: STRICT }
+      }
+    }
+    top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+)proto";
 
 // A part MGD that merge accepts: one FABRIC graph, MGD 1.0 meshes, plus the given pipelines.
 std::string mergeable_with_pipelines(const std::string& pipelines) {
@@ -3258,35 +3291,7 @@ TEST(MeshGraphDescriptorTests, GptOssRingParsesAndIsReadable) {
 // Stage count is not limited, and stages in one pipeline may have different shapes.
 // M0 holds the eight 4x2 stages (slice 4x2, eight slices). M1 holds the thirty-two 1x2 stages.
 TEST(MeshGraphDescriptorTests, Llama8bPodParsesFortyStages) {
-    const std::string text_proto = R"proto(
-                                       mesh_descriptors {
-                                         name: "M0"
-                                         arch: BLACKHOLE
-                                         device_topology { dims: [ 4, 16 ] }
-                                         host_topology { dims: [ 1, 8 ] }
-                                         channels { count: 2 policy: RELAXED }
-                                       }
-                                       mesh_descriptors {
-                                         name: "M1"
-                                         arch: BLACKHOLE
-                                         device_topology { dims: [ 1, 64 ] }
-                                         host_topology { dims: [ 1, 32 ] }
-                                         channels { count: 2 policy: RELAXED }
-                                       }
-                                       graph_descriptors {
-                                         name: "G0"
-                                         type: "FABRIC"
-                                         instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-                                         instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
-                                         connections {
-                                           nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-                                           nodes { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
-                                           channels { count: 2 policy: STRICT }
-                                         }
-                                       }
-                                       top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
-                                   )proto" +
-                                   llama_8b_pod_pipeline();
+    const std::string text_proto = kLlama8bPodMeshes + llama_8b_pod_pipeline();
     MeshGraphDescriptor desc(text_proto);
     ASSERT_EQ(desc.pipeline_descriptors().size(), 1u);
     const PipelineDescriptorData& pipeline = desc.pipeline_descriptors().front();
@@ -4160,6 +4165,56 @@ TEST(MeshGraphDescriptorTests, TierBTriesEveryMeshAStageFits) {
     const std::vector<std::string> stages = {"[ 2, 12 ]", "[ 2, 12 ]", "[ 2, 8 ]", "[ 2, 8 ]", "[ 2, 8 ]"};
     EXPECT_NO_THROW(
         MeshGraphDescriptor desc(two_meshes_with_stages("[ 2, 24 ]", "[ 1, 6 ]", "[ 2, 24 ]", "[ 1, 6 ]", stages)));
+}
+
+// Nine 4x2 and thirty-one 1x2 stages need 40 slices, which the two meshes have, but only M0 holds 4x2 stages.
+TEST(MeshGraphDescriptorTests, TierBRejectsLlama8bPodWithANinthWideStage) {
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(kLlama8bPodMeshes + llama_8b_pod_pipeline(9, 31)); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("pipeline stages that only fit mesh 'M0' need 9 slices and it declares 8")));
+}
+
+namespace {
+
+// The shipped ring of eight 4x4 meshes, with a ring of eight 4x4 stages, one per mesh.
+std::string subtorus_8stage_with_ring(const bool drop_closing_connection) {
+    std::ifstream file(
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/subtorus/"
+        "subtorus_4x4_pipeline_8stage_mesh_graph_descriptor.textproto");
+    std::string text((std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    if (drop_closing_connection) {
+        const std::size_t closing =
+            text.find("mesh_id: 7 } }\n    nodes { mesh { mesh_descriptor: \"M0\" mesh_id: 0 } }");
+        const std::size_t begin = text.rfind("  connections {", closing);
+        const std::string end_marker = "assign_z_direction: true\n  }\n";
+        const std::size_t end = text.find(end_marker, closing) + end_marker.size();
+        text.erase(begin, end - begin);
+    }
+    std::ostringstream pipeline;
+    pipeline << "pipeline_descriptors {\n  name: \"ring8\"\n";
+    for (int stage = 0; stage < 8; ++stage) {
+        pipeline << "  stages { id: \"s" << stage << "\" shape { dims: [ 4, 4 ] } }\n";
+    }
+    for (int stage = 0; stage < 8; ++stage) {
+        pipeline << "  edges { src: \"s" << stage << "\" dst: \"s" << (stage + 1) % 8 << "\" }\n";
+    }
+    pipeline << "}\n";
+    return text + pipeline.str();
+}
+
+}  // namespace
+
+// Each stage fills one mesh, and each ring edge rides the connection between neighbouring meshes.
+TEST(MeshGraphDescriptorTests, TierBAcceptsTheSubtorusEightStageRing) {
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(subtorus_8stage_with_ring(false)));
+}
+
+// Without the 7-0 connection the meshes form a line, so the ring has one crossing with no connection.
+TEST(MeshGraphDescriptorTests, TierBRejectsTheSubtorusRingWithoutItsClosingConnection) {
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(subtorus_8stage_with_ring(true)); }),
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("has no declared connection")));
 }
 
 // A connection between two pods is a connection between the meshes under them.
