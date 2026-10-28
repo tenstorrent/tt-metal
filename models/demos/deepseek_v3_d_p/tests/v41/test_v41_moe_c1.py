@@ -315,8 +315,25 @@ def test_v41_moe_c1(mesh_device, device_params):
                     x = x_rows[t]
                     act = torch.nn.functional.silu(torch.clamp(x @ g0, max=limit)) * torch.clamp(x @ u0, -limit, limit)
                     pieces["shared_pcc"].append(round(_pcc((act @ d0).float(), shared_host[t]), 5))
+            # the collectives: every chip's total (after the shared add) summed on the host against the TP
+            # reduce-scatter's and the SP gather-sum's rows on every chip
+            totals = [ttnn.to_torch(t)[0, 0].float() for t in ttnn.get_device_tensors(c1.debug["total"])]
+            tp_parts = [ttnn.to_torch(t)[0, 0].float() for t in ttnn.get_device_tensors(c1.debug["tp_part"])]
+            summeds = [ttnn.to_torch(t)[0, 0].float() for t in ttnn.get_device_tensors(c1.debug["summed"])]
+            width = tp_parts[0].shape[1]
+            pieces["rs_pcc"], pieces["sum_pcc"] = [], []
+            for t in range(n_rows):
+                rs, sm = [], []
+                for chip in range(len(totals)):
+                    r_, c_ = divmod(chip, tp)
+                    want_rs = sum(totals[r_ * tp + k][t, c_ * width : (c_ + 1) * width] for k in range(tp))
+                    rs.append(round(_pcc(want_rs, tp_parts[chip][t]), 4))
+                    want_sum = sum(totals[k][t, c_ * width : (c_ + 1) * width] for k in range(len(totals)))
+                    sm.append(round(_pcc(want_sum, summeds[chip][t]), 4))
+                pieces["rs_pcc"].append([min(rs), max(rs)])
+                pieces["sum_pcc"].append([min(sm), max(sm)])
             per_row["chip0"] = pieces
-            for k in ("W", "y", "part", "shared"):
+            for k in ("W", "y", "part", "shared", "total", "tp_part", "summed"):
                 ttnn.deallocate(c1.debug[k])
             logger.info(f"c1 moe rows {n_rows} per row {json.dumps(per_row)}")
             # the same call captured and replayed: the replay's rows must equal the eager call's (the verify

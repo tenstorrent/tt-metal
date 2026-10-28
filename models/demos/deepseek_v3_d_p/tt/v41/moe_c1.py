@@ -717,8 +717,12 @@ class C1Moe:
             part = total
         # 11: the sum over the 32 chips, this chip's TP slice
         tp_part = self.ccl.tp_reduce_scatter(part, dim=3)
+        if self.debug is not None:
+            self.debug["total"], self.debug["tp_part"] = ttnn.clone(part), ttnn.clone(tp_part)
         ttnn.deallocate(part)
         summed = self._sp_all_reduce(tp_part)
+        if self.debug is not None:
+            self.debug["summed"] = ttnn.clone(summed)
         ttnn.deallocate(tp_part)
         # 12: + the shared expert (unless folded above), placed at the live row
         if folded:
