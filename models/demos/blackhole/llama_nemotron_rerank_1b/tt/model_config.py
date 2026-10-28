@@ -172,8 +172,6 @@ class RerankConfig:
     mask_dtype: object = ttnn.bfloat4_b
     # Pass attn_mask_block_map so SDPA skips (q chunk, k chunk) blocks that hold no real query or key.
     sdpa_block_map: bool = True
-    # Debug only: run SDPA without the padding mask (correct only when every sequence fills its bucket).
-    sdpa_no_mask: bool = False
     # SDPA writes heads side by side ([B, 1, S, n_heads * head_dim]) so nlp_concat_heads is not needed.
     sdpa_concat_heads: bool = True
     # Residual add + following RMSNorm as one op (tt/custom_ops/fused_add_rmsnorm) writing both outputs.

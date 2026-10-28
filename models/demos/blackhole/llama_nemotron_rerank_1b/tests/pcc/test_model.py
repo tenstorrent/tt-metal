@@ -45,3 +45,24 @@ def test_scores(device, hf_model, tokenizer, state_dict, batch):
     )
     assert sorted(range(len(ref)), key=lambda i: -ref[i]) == sorted(range(len(got)), key=lambda i: -got[i])
     assert max(err) < MAX_ABS_ERR and pear > MIN_PEARSON
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 32768}], indirect=True)
+def test_unpadded_batch_runs_unmasked(device, hf_model, tokenizer, state_dict):
+    """Pairs that exactly fill their 128-token bucket take the unmasked SDPA path; their scores must match
+    the masked path (an all-zero mask) and the HF reference."""
+    S = 128
+    ids = [x[:S] for x in tokenize_pairs(tokenizer, [(QUERY, d) for d in DOCS]) if len(x) >= S]
+    assert ids, "no pair reaches 128 tokens"
+    ids = (ids * 4)[:4]
+    ref = reference_scores(hf_model, ids)
+    model = NemotronReranker(device, RerankConfig(), state_dict, cache_dir=None)
+    host, lens = model.prepare_host_inputs(ids, seq_len=S)
+    assert not model.needs_mask(lens, S)
+    dev = model.to_device(host)
+    unmasked = model.scores_from_output(model.forward(*dev, masked=False), lens)
+    masked = model.scores_from_output(model.forward(*dev, masked=True), lens)
+    print(f"ref {ref}\nunmasked {unmasked}\nmasked {masked}")
+    assert max(abs(a - b) for a, b in zip(unmasked, masked)) < 0.1
+    assert max(abs(a - b) for a, b in zip(unmasked, ref)) < MAX_ABS_ERR
+    assert model.score(ids) == unmasked

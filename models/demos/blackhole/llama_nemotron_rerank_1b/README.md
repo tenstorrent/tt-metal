@@ -93,16 +93,19 @@ and nDCG@10 within 0.015 of HF.
 
 Traced forward, inputs on device. "Sustained" is the median of the second half of 40 replays: under load the
 board holds its 150 W limit by lowering the clock from 1.35 GHz to about 0.95 GHz, so it is the number a
-loaded server sees; "best" is at full clock.
+loaded server sees; "best" is at full clock. The benchmark's pairs fill the bucket, so no pair is padded and
+SDPA runs without a mask (the serving runner does the same for such a batch). "Padded" is a batch with any
+padded pair: SDPA reads and adds the padding mask on every K chunk it computes (`demo/bench.py --masked`,
+same full-length inputs, so it is the upper bound for a padded batch of that shape).
 
-| batch x tokens | after bring-up | now, sustained | now, best | speed of light (kernel cycles) |
-|---|---|---|---|---|
-| 1 x 128 | 12.8 ms | 6.31 ms | 6.31 ms | |
-| 1 x 512 | 15.6 ms | 7.80 ms | 7.80 ms | 33.7 % |
-| 8 x 512 | 76.2 ms | 39.0 ms | 35.5 ms | 58.6 % |
-| 32 x 512 | 329 ms | 174 ms | 110 ms | **75.3 %** (148.1 M cycles) |
-| 1 x 2048 | 46.5 ms | 25.0 ms | 24.5 ms | 51.9 % |
-| 1 x 8192 | 362 ms | 187 ms | 137 ms | 64.1 % |
+| batch x tokens | after bring-up | now, sustained | now, best | padded, sustained | speed of light (kernel cycles) |
+|---|---|---|---|---|---|
+| 1 x 128 | 12.8 ms | 6.26 ms | 6.24 ms | 6.43 ms | |
+| 1 x 512 | 15.6 ms | 7.70 ms | 7.68 ms | 8.05 ms | 33.7 % |
+| 8 x 512 | 76.2 ms | 38.8 ms | 35.4 ms | 41.6 ms | 58.6 % |
+| 32 x 512 | 329 ms | 175 ms | 109 ms | 180 ms | **75.9 %** (147.0 M cycles) |
+| 1 x 2048 | 46.5 ms | 24.9 ms | 24.3 ms | 27.7 ms | 51.9 % |
+| 1 x 8192 | 362 ms | 188 ms | 135 ms | 220 ms | 64.1 % |
 
 Speed of light: ideal cycles for the matmuls and attention at the precision each op runs at
 (130 cores x 4096 FLOP/cycle LoFi, / 2 for HiFi2, / 4 for HiFi4), divided by the sum of the ops' device
@@ -116,12 +119,12 @@ shape the board is still throttled and "best" can read 20-40 % higher.
 
 | op | M cycles | share | of its SoL |
 |---|---|---|---|
-| FF1 + FF3 + SwiGLU (`minimal_matmul`, HiFi2) | 77.8 | 52 % | 85 % |
-| FF2 + residual add + RMSNorm (`matmul_add_norm`, LoFi) | 24.2 | 16 % | 68 % |
-| QKV + head split + RoPE (`matmul_qkv_rope`, HiFi2) | 18.6 | 13 % | 67 % |
-| SDPA (HiFi4) | 14.3 | 10 % | 58 % |
-| WO + residual add + RMSNorm (`matmul_add_norm`, HiFi2) | 12.7 | 9 % | 65 % |
-| embedding + first RMSNorm (`embed_rmsnorm`), score head, mask | 0.7 | 0.5 % | |
+| FF1 + FF3 + SwiGLU (`minimal_matmul`, HiFi2) | 77.8 | 53 % | 85 % |
+| FF2 + residual add + RMSNorm (`matmul_add_norm`, LoFi) | 24.0 | 16 % | 69 % |
+| QKV + head split + RoPE (`matmul_qkv_rope`, HiFi2) | 18.3 | 12 % | 68 % |
+| SDPA (HiFi4, unmasked) | 14.1 | 10 % | 59 % |
+| WO + residual add + RMSNorm (`matmul_add_norm`, HiFi2) | 12.2 | 8 % | 68 % |
+| embedding + first RMSNorm (`embed_rmsnorm`), score head | 0.6 | 0.4 % | |
 
 ## What was done
 
@@ -141,7 +144,7 @@ Data movement, in the order they landed (32x512 unless noted):
 | SDPA writes concatenated heads (`output_concat_heads`) | no `nlp_concat_heads` pass | |
 | padding mask built on device from a [B, 1, 32, S] valid row, stored as bfp4 | the mask holds only 0 and -1e9, exact in bfp4 at a quarter of bf16's bytes; the host sends no S x S tensor | SDPA 32x512 1780 -> 1113 us |
 | SDPA block map (`attn_mask_block_map`) | blocks with no real query or key are skipped | 1x2048 802 -> 389 us |
-| ttnn SDPA change: block-map value 2 = every key real; the reader zero-fills those mask tiles (NOC zero writes, no DRAM read) and the streaming compute pops them unapplied | SDPA with a padding mask runs at unmasked speed on fully visible blocks; output bit-identical | 1x8192 36.4 -> 46.3 % of SoL; isolated 32x512 SDPA 1255 -> 663 us |
+| SDPA without the mask when no pair is padded: `forward(masked=False)`, and the serving runner keeps a second trace per bucket for such batches | an all-zero padding mask is still read from DRAM and added on every K chunk | 32x512 SDPA 1101 -> 623 us per layer; 1x8192 220 -> 188 ms sustained |
 | softmax scale 1/8 folded into Wq (exact: power of two), SDPA at scale 1 | ttnn's SDPA wrapper otherwise multiplies the mask by 1/scale on every call | one [B, 1, S, S] pass per layer removed |
 | activations up to 8.5 MB in L1 | bs1 intermediates never touch DRAM | 1x512 10.1 -> 8.9 ms |
 | block-sharded RMSNorm up to 512 rows | stock rms_norm gives each core whole tile rows (16 cores at 512 rows) | 1x128 7.03 -> 6.27 ms |
@@ -160,7 +163,7 @@ stream (0.99944). No effect: raising the power limit (the card stays at 150 W).
 
 ## Open items
 
-* 32 x 512 is at 75.3 % of speed of light. The rest is spread over the ops: FF1 + FF3 is at 85 % (every
+* 32 x 512 is at 75.9 % of speed of light. The rest is spread over the ops: FF1 + FF3 is at 85 % (every
   `minimal_matmul` block config of that shape lands within 1 %, `perf_tools/sweep_mm.py`); the fused
   WO / FF2 matmuls run at ~76-84 % of their limit inside their K loops (FF2 at LoFi with 4 x 1 subblocks, which
   the 7-tile N slice per core forces) plus ~8 % of epilogue; QKV + RoPE's matmul runs at ~80 % of HiFi2 peak and
@@ -207,6 +210,10 @@ stream (0.99944). No effect: raising the power limit (the card stays at 150 W).
   1116 us. A virtual 13 x 10 grid matches the physical one (580 us), and 13 x 8 costs only its extra work
   (638 us); 16 x 8 needs 3 row blocks in the 2 leftover physical rows, and those cores run ~40 % slower than
   the 13 column groups (per-core kernel ends 1.18 M vs 0.85 M cycles), which sets the op's time.
+* Windowed SDPA (`cu_window_seqlens`, stock ttnn): the batch flattened to one [1, H, B*S, 64] sequence with each
+  pair's real tokens in one window and its padding in another, so no mask tensor at all. Correct, but 2161 us
+  against 1098 us for the masked [B, H, S, 64] call at 32 x 512 with mixed lengths
+  (`perf_tools/probe_sdpa_windowed.py`).
 * bs1 (34 %): the matmuls at 512 rows run at 27-52 % of their limit; FF2 at LoFi is bound by its weight read.
   DRAM-sharded weights are the next step. 1 x 128 / 1 x 512 read ~0.3 ms slower than in the previous README
   (5.97 / 7.50 ms), not yet traced to a change.

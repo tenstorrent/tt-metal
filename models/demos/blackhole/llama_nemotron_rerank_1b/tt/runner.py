@@ -6,8 +6,10 @@
 ``score_ids`` takes any number of tokenized (query, passage) sequences, groups them by
 sequence-length bucket, packs each group into the largest batch bucket it fills (padding
 the last batch with repeats whose scores are dropped), copies the host inputs into the
-bucket's persistent device inputs and replays its trace. A trace is captured the first
-time its bucket is used, or up front with ``warmup``.
+bucket's persistent device inputs and replays its trace. Each bucket has two traces: one
+with the padding mask, and one without it for batches where every pair fills the bucket
+(SDPA runs unmasked). A trace is captured the first time it is used, or up front with
+``warmup``.
 """
 
 import time
@@ -26,7 +28,7 @@ class TracedReranker:
         self.seq_buckets = tuple(b for b in SEQ_BUCKETS if b <= max_seq_len)
         self.max_seq_len = self.seq_buckets[-1]
         self.batch_buckets = tuple(sorted(batch_buckets))
-        self._traces = {}  # (B, S) -> (trace_id, device inputs, output)
+        self._traces = {}  # (B, S, masked) -> (trace_id, device inputs, output)
         # A replayed trace writes into the addresses its intermediates had at capture, which are
         # free afterwards. Every persistent tensor (RoPE tables) is therefore allocated before the
         # first capture, so none can land in a region a trace later overwrites. Per-request inputs
@@ -49,32 +51,33 @@ class TracedReranker:
             plan.append(next(b for b in self.batch_buckets if b >= left))
         return plan
 
-    def _trace(self, B, S):
-        key = (B, S)
+    def _trace(self, B, S, masked):
+        key = (B, S, masked)
         if key not in self._traces:
             host, _ = self.model.prepare_host_inputs([[0] * S] * B, seq_len=S)
             dev_in = self.model.to_device(host)
             self.model.rot_mats(S)
-            self.model.forward(*dev_in)  # compile
+            self.model.forward(*dev_in, masked=masked)  # compile
             tid = ttnn.begin_trace_capture(self.device, cq_id=0)
-            out = self.model.forward(*dev_in)
+            out = self.model.forward(*dev_in, masked=masked)
             ttnn.end_trace_capture(self.device, tid, cq_id=0)
             self._traces[key] = (tid, dev_in, out)
         return self._traces[key]
 
     def warmup(self, shapes=None):
-        """Capture traces for ``shapes`` [(B, S), ...] (default: every batch x seq bucket)."""
+        """Capture both traces for ``shapes`` [(B, S), ...] (default: every batch x seq bucket)."""
         shapes = shapes or [(b, s) for s in self.seq_buckets for b in self.batch_buckets]
         t0 = time.perf_counter()
         for B, S in shapes:
-            self._trace(B, S)
+            for masked in (True, False):
+                self._trace(B, S, masked)
         ttnn.synchronize_device(self.device)
         return time.perf_counter() - t0
 
     def _run(self, batch_ids, S):
         B = len(batch_ids)
-        tid, dev_in, out = self._trace(B, S)
         host, lens = self.model.prepare_host_inputs(batch_ids, seq_len=S)
+        tid, dev_in, out = self._trace(B, S, self.model.needs_mask(lens, S))
         for h, d in zip(host, dev_in):
             ttnn.copy_host_to_device_tensor(h, d)
         ttnn.execute_trace(self.device, tid, cq_id=0, blocking=False)

@@ -167,17 +167,13 @@ class NemotronReranker:
         qc, kc = self.sdpa_chunks(B, S)
         tokens = torch.full((B, S), PAD_TOKEN_ID, dtype=torch.int32)
         valid = torch.zeros(B, 1, 32, S, dtype=torch.bfloat16)
-        # (q chunk, k chunk) blocks: 0 = no real query row or no real key (skipped), 1 = partly padded keys,
-        # 2 = all keys real.
+        # (q chunk, k chunk) blocks: 0 = no real query row or no real key (skipped), 1 = computed.
         block_map = torch.zeros(B, 1, (S + qc - 1) // qc, (S + kc - 1) // kc, dtype=torch.int32)
         for b, ids in enumerate(batch_ids):
             n = len(ids)
             tokens[b, :n] = torch.tensor(ids, dtype=torch.int32)
             valid[b, :, :, :n] = 1.0
             block_map[b, 0, : (n + qc - 1) // qc, : (n + kc - 1) // kc] = 1
-            # 2 = every key in the k chunk is real, so the block's mask is all zeros: the patched SDPA
-            # reader zero-fills those mask tiles in L1 instead of reading them from DRAM.
-            block_map[b, 0, : (n + qc - 1) // qc, : n // kc] = 2
         host = (
             ttnn.from_torch(tokens, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
             ttnn.from_torch(valid, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT),
@@ -321,7 +317,7 @@ class NemotronReranker:
 
     def _attention(self, layer, xn, B, S, mask, block_map, rope, wo=True):
         """xn: the attention-normed residual [1, 1, B * S, dim]. ``wo=False`` returns the concatenated
-        heads before WO (for matmul_add_norm)."""
+        heads before WO (for matmul_add_norm). ``mask`` None runs SDPA unmasked (no padded pair)."""
         cfg = self.cfg
         qc, kc = self.sdpa_chunks(B, S)
         if cfg.fuse_qkv_rope:
@@ -350,8 +346,8 @@ class NemotronReranker:
             k_r,
             v,
             is_causal=False,
-            attn_mask=None if cfg.sdpa_no_mask else mask,
-            attn_mask_block_map=block_map if (self.cfg.sdpa_block_map and not cfg.sdpa_no_mask) else None,
+            attn_mask=mask,
+            attn_mask_block_map=block_map if (mask is not None and cfg.sdpa_block_map) else None,
             output_concat_heads=cfg.sdpa_concat_heads,
             scale=1.0,
             compute_kernel_config=self.sdpa_ckc,
@@ -472,11 +468,15 @@ class NemotronReranker:
         ttnn.deallocate(row)
         return mask
 
-    def forward(self, tokens, valid, block_map):
-        """Device inputs from ``prepare_host_inputs`` -> [B, 1, 32, 32] fp32 tile, score sum at [b, 0, 0, 0]."""
+    def forward(self, tokens, valid, block_map, masked=True):
+        """Device inputs from ``prepare_host_inputs`` -> [B, 1, 32, 32] fp32 tile, score sum at [b, 0, 0, 0].
+
+        ``masked=False`` is for a batch with no padded pair (every pair fills S tokens): its padding mask
+        is all zeros, so SDPA runs without one. Masked SDPA reads and adds every mask tile, and at
+        32 x 512 costs 1101 vs 623 us per layer (perf_tools/probe_sdpa_windowed.py --full)."""
         B, S = tokens.shape[0], tokens.shape[1]
         rope = self.rot_mats(S)
-        mask = self._padding_mask(valid, S)
+        mask = self._padding_mask(valid, S) if masked else None
         fused = self.cfg.fuse_add_norm and B * S >= self.cfg.fuse_add_norm_min_rows
         resid_l1 = fused and self.cfg.residual_l1
         resident = fused and self.cfg.resident_residual
@@ -576,8 +576,14 @@ class NemotronReranker:
         # valid's rows are identical, so every output row holds the sum; row 0 is read.
         pooled = ttnn.matmul(valid, t, dtype=ttnn.float32, compute_kernel_config=self.mm_ckc)
         ttnn.deallocate(t)
-        ttnn.deallocate(mask)
+        if mask is not None:
+            ttnn.deallocate(mask)
         return pooled
+
+    @staticmethod
+    def needs_mask(lens, S):
+        """Whether a batch of real lengths ``lens`` padded to ``S`` tokens has any padding."""
+        return any(n < S for n in lens)
 
     def scores_from_output(self, out, lens):
         sums = ttnn.to_torch(out).float()[:, 0, 0, 0]
@@ -587,7 +593,7 @@ class NemotronReranker:
         """Convenience path (no trace): token id lists -> list of float scores."""
         host, lens = self.prepare_host_inputs(batch_ids, seq_len)
         dev = self.to_device(host)
-        out = self.forward(*dev)
+        out = self.forward(*dev, masked=self.needs_mask(lens, dev[0].shape[1]))
         for t in dev:
             ttnn.deallocate(t)
         return self.scores_from_output(out, lens)

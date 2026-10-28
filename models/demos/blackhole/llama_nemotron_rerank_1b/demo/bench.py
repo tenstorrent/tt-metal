@@ -5,8 +5,10 @@
 
     python models/demos/blackhole/llama_nemotron_rerank_1b/demo/bench.py --shapes 1x128 1x512 8x512 32x512
 
-Each shape: build inputs (all sequences full length, so the padding mask is
-all zeros but still applied), compile, capture a trace, then replay it
+Each shape: build inputs (all sequences full length, so no pair is padded and
+SDPA runs without a mask, as the serving runner does for such a batch; ``--masked``
+applies the all-zero padding mask anyway, the cost of a batch with any padded
+pair), compile, capture a trace, then replay it
 ``--iters`` times. Reported: median and min replay latency (host-synchronized,
 inputs already on device), sequences/s and tokens/s, and the trace output
 checked against an untraced forward. ``--signpost`` wraps one replay in
@@ -32,15 +34,15 @@ except ModuleNotFoundError:
         pass
 
 
-def bench_shape(model, device, B, S, iters, do_signpost):
+def bench_shape(model, device, B, S, iters, do_signpost, masked):
     g = torch.Generator().manual_seed(0)
     ids = [torch.randint(1000, 120000, (S,), generator=g).tolist() for _ in range(B)]
     host, lens = model.prepare_host_inputs(ids, seq_len=S)
     dev_in = model.to_device(host)
     model.rot_mats(S)
-    ref = model.scores_from_output(model.forward(*dev_in), lens)  # compile + untraced result
+    ref = model.scores_from_output(model.forward(*dev_in, masked=masked), lens)  # compile + untraced result
     tid = ttnn.begin_trace_capture(device, cq_id=0)
-    out = model.forward(*dev_in)
+    out = model.forward(*dev_in, masked=masked)
     ttnn.end_trace_capture(device, tid, cq_id=0)
     ttnn.synchronize_device(device)
     times = []
@@ -62,7 +64,7 @@ def bench_shape(model, device, B, S, iters, do_signpost):
     # Sustained: the board settles its clock under load, so the median skips the first half.
     med = statistics.median(times[len(times) // 2 :])
     print(
-        f"B={B:<3} S={S:<5} sustained {med:8.2f} ms  min {min(times):8.2f} ms  "
+        f"B={B:<3} S={S:<5} {'masked  ' if masked else 'unmasked'} sustained {med:8.2f} ms  min {min(times):8.2f} ms  "
         f"{B / med * 1e3:8.1f} seq/s  {B * S / med * 1e3:10.0f} tok/s  trace-vs-eager {maxdiff:.2e}"
     )
     return med
@@ -73,6 +75,7 @@ def main():
     ap.add_argument("--shapes", nargs="+", default=["1x128", "1x512", "8x512", "32x512"])
     ap.add_argument("--iters", type=int, default=30, help="replays; the second half gives the sustained median")
     ap.add_argument("--signpost", action="store_true")
+    ap.add_argument("--masked", action="store_true", help="apply the padding mask (all zeros here)")
     ap.add_argument("--cfg", nargs="*", default=[], help="RerankConfig overrides, key=value")
     args = ap.parse_args()
     dev = ttnn.open_device(device_id=0, l1_small_size=32768, trace_region_size=400_000_000)
@@ -82,7 +85,7 @@ def main():
         )
         for s in args.shapes:
             B, S = map(int, s.split("x"))
-            bench_shape(model, dev, B, S, args.iters, args.signpost)
+            bench_shape(model, dev, B, S, args.iters, args.signpost, args.masked)
     finally:
         ttnn.close_device(dev)
 

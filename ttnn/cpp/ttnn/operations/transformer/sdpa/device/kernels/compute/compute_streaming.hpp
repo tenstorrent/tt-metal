@@ -1478,9 +1478,7 @@ static void sdpa_inner_loop_step(
     [[maybe_unused]] const ring_joint::PackedKVChunkMask& packed_mask = {},
     // K/V retention: the next Q chunk on this core uses the same K and V, so leave them at the
     // front of cb_kt_in / cb_v_in; the reader does not push them again.
-    const bool keep_kv = false,
-    // A provided mask's chunk is all zeros (block map flagged every key real): pop it unapplied.
-    const bool provided_mask_this_chunk = true) {
+    const bool keep_kv = false) {
     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     constexpr uint32_t dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
@@ -1538,8 +1536,7 @@ static void sdpa_inner_loop_step(
                                                                            is_causal_sdpa && apply_causal,
                                                                            apply_sliding_window,
                                                                            apply_mask && lw_partial_tile_idx > 0);
-        const bool no_mask_this_iter = !(use_provided_mask && provided_mask_this_chunk) &&
-                                       !(uses_lightweight_mask && should_apply_lightweight_mask);
+        const bool no_mask_this_iter = !use_provided_mask && !(uses_lightweight_mask && should_apply_lightweight_mask);
 
         // run()#1 (the reduce's first half) may overlap the second-half pack only if no masked
         // column lands in [0, active_Sk/2) — see sdpa_first_half_unmasked.
@@ -1635,17 +1632,15 @@ static void sdpa_inner_loop_step(
             // this subblock's first row (apply indexes it mask-base 0).
             constexpr uint32_t mask_subblock_tiles = qkt_subblock_h * Sk_chunk_t;
             CircularBuffer(cb_mask_in).wait_front(mask_subblock_tiles);
-            if (provided_mask_this_chunk) {
-                begin_mask_l1_accumulate<true>(cb_qkt_im, cb_mask_in);
-                apply_provided_mask_streaming<qkt_subblock_h, KT_stride, Sk_chunk_t>(
-                    cb_mask_in,
-                    cb_qkt_im,
-                    q_subblock,  // cb_qkt_im base: absolute row group
-                    active_Sk);
-                end_mask_l1_accumulate();
-                // Restore srcA to fp16 for the following max reduce / next-subblock Q@KT.
-                reconfig_data_format_srca(cb_mask_in, cb_qkt_im);
-            }
+            begin_mask_l1_accumulate<true>(cb_qkt_im, cb_mask_in);
+            apply_provided_mask_streaming<qkt_subblock_h, KT_stride, Sk_chunk_t>(
+                cb_mask_in,
+                cb_qkt_im,
+                q_subblock,  // cb_qkt_im base: absolute row group
+                active_Sk);
+            end_mask_l1_accumulate();
+            // Restore srcA to fp16 for the following max reduce / next-subblock Q@KT.
+            reconfig_data_format_srca(cb_mask_in, cb_qkt_im);
             CircularBuffer(cb_mask_in).pop_front(mask_subblock_tiles);
         } else if constexpr (uses_lightweight_mask) {
             // Lightweight stamp: causal and/or padding masks. Active for ring, causal non-ring, or
@@ -2301,13 +2296,11 @@ void sdpa_standard_v2(
         // Windowed K-range narrowing: this Q chunk's [k_lo, k_hi) comes from the reader's ctrl CB —
         // read via the UNPACK mailbox so all three TRISCs agree. The reader streams exactly this many
         // K/V chunks and the writer produces exactly this many mask chunks; disagreement deadlocks.
-        uint32_t k_full_count = 0;
         if constexpr (use_windowed_narrowing) {
             CircularBuffer cb_k_range_obj(cb_windowed_k_range);
             cb_k_range_obj.wait_front(1);
             k_loop_start = ckernel::read_tile_value(cb_windowed_k_range, 0, 0);
             k_loop_end = ckernel::read_tile_value(cb_windowed_k_range, 0, 1);
-            k_full_count = ckernel::read_tile_value(cb_windowed_k_range, 0, 2);
             cb_k_range_obj.pop_front(1);
         }
 
@@ -2321,8 +2314,7 @@ void sdpa_standard_v2(
                              uint32_t k_start_tile,
                              bool apply_mask,
                              uint32_t lw_partial_tile_idx,
-                             bool apply_sliding_window,
-                             bool provided_mask_this_chunk = true) {
+                             bool apply_sliding_window) {
             sdpa_inner_loop_step<
                 decltype(profiling_tag)::value,
                 Sq_chunk_t,
@@ -2384,8 +2376,7 @@ void sdpa_standard_v2(
                 {},  // kv_pad_rotation
                 0,   // q_base_tiles
                 {},  // packed_mask
-                keep_kv && is_last,
-                provided_mask_this_chunk);
+                keep_kv && is_last);
         };
 
         for (uint32_t k_chunk = k_loop_start; k_chunk < k_loop_end; k_chunk++) {
@@ -2461,8 +2452,7 @@ void sdpa_standard_v2(
                 k_chunk * Sk_chunk_t,
                 apply_partial_mask,
                 apply_partial_mask ? lw_mask.global_n_partial_tile_idx : 0u,
-                apply_sliding_mask,
-                (k_chunk - k_loop_start) >= k_full_count);
+                apply_sliding_mask);
 
             // Post-iteration cleanup
             // prev.out and cb_exp_max_diff are already popped row-by-row inside salad_correct_row.
