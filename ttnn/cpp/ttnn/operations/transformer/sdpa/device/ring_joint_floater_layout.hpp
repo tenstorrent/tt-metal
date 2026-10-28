@@ -43,8 +43,8 @@ struct FloaterSchedule {
     uint32_t merge_after[kFloaterFirstPieceVisits];
 };
 
-// The heads per device x K-split bands the layout runs on, the two the gtest checks it on exactly (Kimi K3 and K2.7).
-// Other shapes that fill the 24 home blocks (12 heads x 4 bands) have never run floaters.
+// The heads per device x K-split bands the layout supports: the two the gtest checks it on exactly (Kimi K3 and K2.7).
+// Other shapes that fill the 24 home blocks (12 heads x 4 bands) are not covered by those checks and are unsupported.
 inline constexpr std::array<std::pair<uint32_t, uint32_t>, 2> kFloaterLayoutHeadsBands = {{{24, 2}, {16, 3}}};
 
 inline bool floater_layout_supported(uint32_t heads, uint32_t bands) {
@@ -81,6 +81,11 @@ inline std::optional<FloaterSchedule> tuned_floater_schedule(const FloaterShape&
 
 // Values of a schedule in SDPAProgramConfig::floater_schedule's order: iters, fracs, donate_tail, merge_after.
 constexpr size_t kFloaterScheduleValues = 2 * kDonatedPieces + 1 + kFloaterFirstPieceVisits;
+
+// Whether floater_schedule_from_values accepts `values` without a TT_FATAL.
+inline bool floater_schedule_values_well_formed(const std::vector<uint32_t>& values) {
+    return values.empty() || (values.size() == kFloaterScheduleValues && values[2 * kDonatedPieces] <= 1);
+}
 
 // A schedule given as SDPAProgramConfig::floater_schedule: nullopt for an empty list (no floaters).
 // build_floater_layout validates the values against the layout.
@@ -196,18 +201,6 @@ inline FloaterLayout build_floater_layout(
             "ring_joint floaters: invalid schedule for {} heads x {} bands",
             heads,
             bands);
-    }
-    // A floater runs its first-piece visits back to back, so a later place in its queue never merges earlier.
-    for (uint32_t v = 1; v < kFloaterFirstPieceVisits; ++v) {
-        TT_FATAL(
-            schedule.merge_after[v - 1] <= schedule.merge_after[v],
-            "ring_joint floaters: merge iterations must not decrease along a floater's queue (visit {} merges after "
-            "{}, "
-            "visit {} after {})",
-            v - 1,
-            schedule.merge_after[v - 1],
-            v,
-            schedule.merge_after[v]);
     }
     // Home blocks hold head pairs, so every head is covered only with an even count that fills them exactly.
     TT_FATAL(

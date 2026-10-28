@@ -1241,7 +1241,8 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
     // Output specs come before validation, so derive_ksplit's TT_FATALs must not preempt it: only configs that can
     // run floaters (an expanded K without a sliding window) derive the K split here.
     if (tensor_args.has_k_expand() && !args.has_sliding_window() &&
-        ring_joint_plan::floater_eligibility(args, tensor_args, ring_joint_plan::derive_ksplit(args, tensor_args))) {
+        ring_joint_plan::floater_eligibility(
+            args, tensor_args, ring_joint_plan::derive_ksplit(args, tensor_args), /*refuse_unusable_schedule=*/false)) {
         // Floater scratch, exactly when the program runs floaters (the factory decides alike): per floater core, a
         // ring of slots holding a partial's max, sum and out tiles, one float32 tile page each, in DRAM.
         namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;

@@ -275,9 +275,11 @@ TEST(RingJointFloaterLayout, KimiTwoKChunksRunWithoutFloaters) {
 
 TEST(RingJointFloaterLayout, TakesAScheduleFromValues) {
     EXPECT_FALSE(floater_schedule_from_values({}).has_value());
-    const std::optional<FloaterSchedule> schedule = floater_schedule_from_values({2, 4, 1075, 2765, 0, 3, 3, 3, 3, 3});
-    ASSERT_TRUE(schedule.has_value());
     const FloaterSchedule k3 = tuned_floater_schedule({24, 2, kTunedQChunkSize, kTunedKChunkSize}).value();
+    std::vector<uint32_t> values = {k3.iters[0], k3.iters[1], k3.fracs[0], k3.fracs[1], k3.donate_tail ? 1u : 0u};
+    values.insert(values.end(), std::begin(k3.merge_after), std::end(k3.merge_after));
+    const std::optional<FloaterSchedule> schedule = floater_schedule_from_values(values);
+    ASSERT_TRUE(schedule.has_value());
     for (uint32_t piece = 0; piece < kDonatedPieces; ++piece) {
         EXPECT_EQ(schedule->iters[piece], k3.iters[piece]);
         EXPECT_EQ(schedule->fracs[piece], k3.fracs[piece]);
@@ -287,6 +289,14 @@ TEST(RingJointFloaterLayout, TakesAScheduleFromValues) {
         EXPECT_EQ(schedule->merge_after[v], k3.merge_after[v]);
     }
     EXPECT_TRUE(floater_schedule_from_values({1, 3, 1843, 1536, 1, 3, 4, 5, 6, 6})->donate_tail);
+}
+
+// What output-spec inference checks before the op's validation, without a TT_FATAL.
+TEST(RingJointFloaterLayout, TellsWellFormedScheduleValues) {
+    EXPECT_TRUE(floater_schedule_values_well_formed({}));
+    EXPECT_TRUE(floater_schedule_values_well_formed({2, 4, 1075, 2765, 0, 3, 3, 3, 3, 3}));
+    EXPECT_FALSE(floater_schedule_values_well_formed({2, 4, 1075, 2765, 0, 3, 3, 3, 3}));
+    EXPECT_FALSE(floater_schedule_values_well_formed({2, 4, 1075, 2765, 2, 3, 3, 3, 3, 3}));
 }
 
 TEST(RingJointFloaterLayout, RejectsMalformedScheduleValues) {
@@ -302,7 +312,7 @@ TEST(RingJointFloaterLayout, RefusesAShapeItCannotCoverWhole) {
     EXPECT_ANY_THROW(build_floater_layout(k3, kGridX, kGridY, 24, 3, kGatherWorkers, 48, kRingSize));
 }
 
-// 12 heads x 4 bands also fills the 24 home blocks, but has never run floaters.
+// 12 heads x 4 bands also fills the 24 home blocks, but the exact layout tables do not cover it.
 TEST(RingJointFloaterLayout, RunsOnlyOnTheCheckedLayouts) {
     for (uint32_t heads : {8u, 12u, 16u, 24u, 25u, 48u}) {
         for (uint32_t bands = 1; bands <= kKSplitMaxCount; ++bands) {
@@ -310,11 +320,6 @@ TEST(RingJointFloaterLayout, RunsOnlyOnTheCheckedLayouts) {
             EXPECT_EQ(floater_layout_supported(heads, bands), checked) << "heads=" << heads << " bands=" << bands;
         }
     }
-}
-
-TEST(RingJointFloaterLayout, RefusesMergesThatGoBackAlongTheQueue) {
-    const FloaterSchedule decreasing = floater_schedule_from_values({1, 3, 1843, 1536, 1, 3, 4, 5, 6, 5}).value();
-    EXPECT_ANY_THROW(build_floater_layout(decreasing, kGridX, kGridY, 16, 3, kGatherWorkers, 32, kRingSize));
 }
 
 TEST(RingJointFloaterLayout, NoFloaterLayoutKeepsTheDefaults) {

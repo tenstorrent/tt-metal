@@ -1803,7 +1803,7 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     sdpa_fused_op_signaler->slice_readiness = slice_readiness;
     // Expanded-K floaters (ring_joint_plan::floater_eligibility).
     const std::optional<ring_joint::FloaterSchedule> floater_plan =
-        ring_joint_plan::floater_eligibility(args, tensor_args, ksplit);
+        ring_joint_plan::floater_eligibility(args, tensor_args, ksplit, /*refuse_unusable_schedule=*/true);
     const bool floaters = floater_plan.has_value();
     const ring_joint::FloaterSchedule floater_schedule = floater_plan.value_or(ring_joint::FloaterSchedule{});
     // The device operation allocates the scratch on the same eligibility, and cache hits tell floater programs by it.

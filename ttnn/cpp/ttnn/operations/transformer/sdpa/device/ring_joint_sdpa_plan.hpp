@@ -82,14 +82,19 @@ bool slice_readiness_enabled(const RingJointSDPAParams& args, const RingJointSDP
 
 // Expanded-K floaters (kernels/ring_joint_floaters.hpp): the schedule of a shape on the 11x10 grid of the 8-chip ring
 // with 2 gather links, or nullopt. The schedule is the tuned one for the shape's heads, bands and Q / K chunk sizes
-// (ring_joint::kTunedFloaterSchedules; a shape without one gets none), or SDPAProgramConfig::floater_schedule, which
-// is refused (TT_FATAL) on a call that cannot run floaters. On those
+// (ring_joint::kTunedFloaterSchedules; a shape without one gets none), or SDPAProgramConfig::floater_schedule. On those
 // shapes the K split's 24 home blocks of 2x2 cores fill a 10x10 sub-grid, leaving the 25th block, the last grid column
 // and the gather column below its workers idle: 20 cores, five floater groups of 4 that take over pieces of the homes'
 // bands. The gather's workers are the top 2 x num_links cores of column grid.x (column-major from (grid.x, 0)). The
 // homes merge at interleaved ring steps, which need slice readiness; it is checked last, so other shapes never query
 // the gather's buffers or the fabric.
+//
+// refuse_unusable_schedule: TT_FATAL on a floater_schedule the call cannot use, or a malformed one. Set only after the
+// op's validation (the program factory); output-spec inference runs before it and leaves errors to the validator.
 std::optional<ring_joint::FloaterSchedule> floater_eligibility(
-    const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args, const KSplitShape& ksplit);
+    const RingJointSDPAParams& args,
+    const RingJointSDPAInputs& tensor_args,
+    const KSplitShape& ksplit,
+    bool refuse_unusable_schedule);
 
 }  // namespace ttnn::prim::ring_joint_plan

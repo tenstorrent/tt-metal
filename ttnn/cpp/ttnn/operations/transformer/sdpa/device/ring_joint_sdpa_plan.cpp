@@ -216,18 +216,26 @@ bool slice_readiness_enabled(const RingJointSDPAParams& args, const RingJointSDP
 }
 
 std::optional<ring_joint::FloaterSchedule> floater_eligibility(
-    const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args, const KSplitShape& ksplit) {
+    const RingJointSDPAParams& args,
+    const RingJointSDPAInputs& tensor_args,
+    const KSplitShape& ksplit,
+    bool refuse_unusable_schedule) {
     const auto& ag = args.all_gather_operation_attributes;
     const uint32_t NH = tensor_args.input_q.logical_shape()[1];
-    // A schedule given in the config is checked whether or not this call can use it, and one that it cannot use is
-    // refused rather than dropped, so a tuning run never times the program without floaters by mistake.
+    // A schedule given in the config that the call cannot use is refused rather than dropped, so a tuning run never
+    // times the program without floaters by mistake. Only after validation: before it, a malformed schedule is no
+    // schedule, and the program factory's call reports it.
     const bool requested = args.program_config.has_value() && args.program_config->floater_schedule.has_value();
     const std::optional<ring_joint::FloaterSchedule> requested_schedule =
-        requested ? ring_joint::floater_schedule_from_values(args.program_config->floater_schedule.value())
-                  : std::nullopt;
+        requested && (refuse_unusable_schedule ||
+                      ring_joint::floater_schedule_values_well_formed(args.program_config->floater_schedule.value()))
+            ? ring_joint::floater_schedule_from_values(args.program_config->floater_schedule.value())
+            : std::nullopt;
     const auto refuse = [&](const char* reason) {
         TT_FATAL(
-            !requested_schedule.has_value(), "floater_schedule is set, but this call cannot run floaters: {}", reason);
+            !refuse_unusable_schedule || !requested_schedule.has_value(),
+            "floater_schedule is set, but this call cannot run floaters: {}",
+            reason);
     };
     if (!(tensor_args.has_k_expand() && ksplit.count > 1 && !args.has_sliding_window() &&
           !tensor_args.attention_sink.has_value() && ksplit.num_q_chunks == 2 && args.program_config.has_value() &&
