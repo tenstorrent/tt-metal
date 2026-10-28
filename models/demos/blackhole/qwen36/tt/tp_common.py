@@ -85,6 +85,25 @@ def verify_layout_cuts_enabled():
     return os.environ.get("QWEN36_VERIFY_LAYOUT_CUTS", "1") == "1"
 
 
+_PREFILL_RS_LINKS = None
+
+
+def prefill_rs_links(rows=None):
+    """QWEN36_PREFILL_RS_LINKS (default unset = None = tt_all_reduce auto-detects, today's behaviour): when set to an
+    int N > 0, the prefill MLP-down and attention-wo tt_all_reduce reduce-scatters use N Ethernet links. On the 1x8 TP
+    mesh those calls pass cluster_axis=0 (the size-1 axis), so the auto-detect gives 1 link although the 8-wide axis
+    has 2 (the fused GDN-out matmul_reduce_scatter_prefill already runs 2). Read once. rows <= TILE_SIZE (decode /
+    verify widths that share the MLP code path) always gets None so decode and its traces are unchanged."""
+    global _PREFILL_RS_LINKS
+    if _PREFILL_RS_LINKS is None:
+        raw = os.environ.get("QWEN36_PREFILL_RS_LINKS", "").strip()
+        n = int(raw) if raw else 0
+        _PREFILL_RS_LINKS = n if n > 0 else 0
+    if rows is not None and rows <= TILE_SIZE:
+        return None
+    return _PREFILL_RS_LINKS or None
+
+
 def spec_hostfix_enabled():
     """Host-side spec-step fixes (QWEN36_SPEC_HOSTFIX, default 1; 0 = the old code paths): conflict check without
     tolist, one read of the drafter ids, vectorized row loops, drafter page tables skipped when unchanged.
