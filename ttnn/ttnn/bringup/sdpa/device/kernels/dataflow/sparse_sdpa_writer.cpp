@@ -47,8 +47,9 @@ void kernel_main() {
     constexpr bool use_attention_sink = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::USE_ATTENTION_SINK) != 0;
     constexpr uint32_t cb_attention_sink = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_ATTENTION_SINK);
     constexpr uint32_t cb_sink_scratch = get_compile_time_arg_val(sparse_sdpa::writer_ct_arg::CB_SINK_SCRATCH);
-    constexpr auto out_args =
-        TensorAccessorArgs<sparse_sdpa::writer_ct_arg::END, sparse_sdpa::writer_common_arg::END>();
+    constexpr auto out_args = TensorAccessorArgs<
+        sparse_sdpa::writer_ct_arg::END + sparse_sdpa::ROW_BFP4_CT_COUNT,
+        sparse_sdpa::writer_common_arg::END + sparse_sdpa::ROW_BFP4_COMMON_COUNT>();
     // kv carries a RUNTIME tensor shape (T dim in common runtime args), so its accessor spans both arg streams.
     constexpr auto kv_args =
         TensorAccessorArgs<out_args.next_compile_time_args_offset(), out_args.next_common_runtime_args_offset()>();
@@ -78,6 +79,19 @@ void kernel_main() {
     const auto kv = TensorAccessor(kv_args, kv_addr);
     experimental::CB idx_cb(cb_idx), kreq_cb(cb_kreq), kack_cb(cb_kack);
     volatile tt_l1_ptr uint32_t* idx_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(idx_cb.get_write_ptr());
+#ifdef SPARSE_SDPA_ROW_BFP4
+    // ROW_BFP4 (fork option): kv = bfloat4_b row records (chunks >= 1), kv_window = the bf16 rows of chunk 0
+    constexpr uint32_t ct_rb = sparse_sdpa::writer_ct_arg::END;
+    constexpr uint32_t k4_stride = get_compile_time_arg_val(ct_rb + sparse_sdpa::row_bfp4_ct_arg::K4_ROW_STRIDE);
+    constexpr uint32_t k4_row_bytes = sparse_sdpa::row_bfp4_bytes(k_dim);
+    constexpr uint32_t k4_DHt = k_dim / tt::constants::TILE_WIDTH;
+    constexpr auto sink_args_rb =
+        TensorAccessorArgs<kv_args.next_compile_time_args_offset(), kv_args.next_common_runtime_args_offset()>();
+    constexpr auto kvw_args = TensorAccessorArgs<
+        sink_args_rb.next_compile_time_args_offset(),
+        sink_args_rb.next_common_runtime_args_offset()>();
+    const auto kvw = TensorAccessor(kvw_args, get_common_arg_val<uint32_t>(sparse_sdpa::writer_common_arg::END));
+#endif
 
     // --- persistent compute-input tiles (built once; the reader is busier with the K gather) ---
     // Reduce identity scaler (value 1.0; the softmax scale is applied in compute's exp).
@@ -145,7 +159,7 @@ void kernel_main() {
         bool last = false;
         while (!last) {
             kreq_cb.wait_front(1);
-            uint32_t base, split, dst_l1, scale_dst_l1 = 0;
+            uint32_t base, split, dst_l1, scale_dst_l1 = 0, kind = 0;
             {
                 volatile tt_l1_ptr uint32_t* request =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(kreq_cb.get_read_ptr());
@@ -156,8 +170,23 @@ void kernel_main() {
                 if constexpr (scaled_kv) {
                     scale_dst_l1 = request[sparse_sdpa::gather_request::SCALE_DST_L1];
                 }
+#ifdef SPARSE_SDPA_ROW_BFP4
+                scale_dst_l1 = request[sparse_sdpa::gather_request::TILE_DST_L1];
+                kind = request[sparse_sdpa::gather_request::KIND];
+#endif
             }
             kreq_cb.pop_front(1);
+            (void)kind;
+#ifdef SPARSE_SDPA_ROW_BFP4
+            if (kind == sparse_sdpa::gather_request::KIND_BFP4) {
+                sparse_sdpa::trid_ring_gather<false, 1, 1, 0, 0, sparse_sdpa::SCALED_K_TRID_RING>(
+                    noc, kv, dst_l1, idx_ptr, base, 0, split, k4_row_bytes, kv_batch_page_offset, k4_stride);
+                sparse_sdpa::shuffle_rows_to_bfp4_tiles<k4_DHt>(dst_l1, k4_stride, scale_dst_l1, 0, split);
+            } else {
+                sparse_sdpa::trid_ring_gather<false, 1, 1, 0, 0, sparse_sdpa::K_TRID_RING>(
+                    noc, kvw, dst_l1, idx_ptr, base, 0, split, k_row_bytes, 0);
+            }
+#else
             if constexpr (scaled_kv) {
                 sparse_sdpa::trid_ring_gather<
                     block_cyclic,
@@ -179,6 +208,7 @@ void kernel_main() {
                     sparse_sdpa::K_TRID_RING>(
                     noc, kv, dst_l1, idx_ptr, base, 0, split, k_row_bytes, kv_batch_page_offset);
             }
+#endif
             kack_cb.reserve_back(1);
             kack_cb.push_back(1);
         }

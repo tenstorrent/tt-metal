@@ -64,6 +64,7 @@ Tensor sparse_sdpa(
     bool high_precision = false,
     bool fp32_output = false,
     bool fp32_scores = false,
-    bool bf16_probs = false);
+    bool bf16_probs = false,
+    const std::optional<Tensor>& kv_window = std::nullopt);
 
 }  // namespace ttnn::prim::bringup

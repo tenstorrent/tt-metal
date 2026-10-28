@@ -77,8 +77,10 @@ FORCE_INLINE void trid_ring_gather(
     uint32_t lo,
     uint32_t hi,
     uint32_t k_row_bytes,
-    uint32_t page_offset) {
+    uint32_t page_offset,
+    uint32_t dst_stride = 0) {  // L1 row stride (0: k_row_bytes)
     constexpr uint32_t D = RingDepth;
+    const uint32_t stride = dst_stride ? dst_stride : k_row_bytes;
     const UnicastEndpoint local_l1;
     const uint32_t cnt = hi - lo;
     for (uint32_t i = 0; i < cnt; ++i) {
@@ -90,13 +92,45 @@ FORCE_INLINE void trid_ring_gather(
         experimental::set_read_trid(noc, trid);
         const uint32_t page = tt::block_cyclic::bringup::
             logical_to_physical_page<BlockCyclic, ChunkLocal, Sp, ShardStrideGap, SlabStrideGap>(idx_ptr[base + p]);
-        noc.async_read(kv, local_l1, k_row_bytes, {.page_id = page_offset + page}, {.addr = dst_l1 + p * k_row_bytes});
+        noc.async_read(kv, local_l1, k_row_bytes, {.page_id = page_offset + page}, {.addr = dst_l1 + p * stride});
     }
     const uint32_t to_drain = (cnt < D) ? cnt : D;
     for (uint32_t d = 0; d < to_drain; ++d) {
         experimental::async_read_barrier_with_trid(noc, ((cnt - to_drain + d) % D) + 1);
     }
     experimental::set_read_trid(noc, 0);  // restore untagged
+}
+
+// ROW_BFP4 (fork option): gathered row records [row_begin, row_end) of a chunk (L1 rows `row_stride` apart: k_dim/16
+// exponents, then k_dim/2 nibble bytes) -> the chunk's bfloat4_b tiles [Skt, DHt] (tile (tr, c) at tiles_l1 +
+// (tr DHt + c) BFP4_TILE_BYTES). Row p = tile row p / 32, row r = p % 32 of it: per tile its 2 exponents (face 2 (r /
+// 16) and + 1, row r % 16) and 2 x 8 mantissa bytes. Rows of the two RISCs are disjoint, so are their writes.
+template <uint32_t DHt>
+FORCE_INLINE void shuffle_rows_to_bfp4_tiles(
+    uint32_t rows_l1, uint32_t row_stride, uint32_t tiles_l1, uint32_t row_begin, uint32_t row_end) {
+    constexpr uint32_t n_groups = DHt * 2;
+    for (uint32_t p = row_begin; p < row_end; ++p) {
+        const uint32_t r = p % tt::constants::TILE_HEIGHT;
+        const uint32_t fr = r % tt::constants::FACE_HEIGHT;
+        const uint32_t face0 = (r / tt::constants::FACE_HEIGHT) * 2;
+        const uint32_t row = rows_l1 + p * row_stride;
+        volatile tt_l1_ptr uint8_t* rb = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(row);
+        volatile tt_l1_ptr uint32_t* rw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(row + n_groups);
+        uint32_t tile = tiles_l1 + (p / tt::constants::TILE_HEIGHT) * DHt * BFP4_TILE_BYTES;
+        for (uint32_t c = 0; c < DHt; ++c, tile += BFP4_TILE_BYTES) {
+            volatile tt_l1_ptr uint8_t* tb = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(tile);
+            tb[face0 * 16 + fr] = rb[2 * c];
+            tb[(face0 + 1) * 16 + fr] = rb[2 * c + 1];
+            volatile tt_l1_ptr uint32_t* m0 =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile + 64 + face0 * 128 + fr * 8);
+            volatile tt_l1_ptr uint32_t* m1 =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile + 64 + (face0 + 1) * 128 + fr * 8);
+            m0[0] = rw[4 * c];
+            m0[1] = rw[4 * c + 1];
+            m1[0] = rw[4 * c + 2];
+            m1[1] = rw[4 * c + 3];
+        }
+    }
 }
 
 }  // namespace sparse_sdpa
