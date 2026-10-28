@@ -137,6 +137,19 @@ uint32_t num_work_items(const SDPAForwardShape& shape, const SDPAForwardChunks& 
     return num_stacks * (shape.St / chunks.Sq_chunk_t);
 }
 
+namespace {
+
+bool pairs_causal_chunks(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks) {
+    return shape.mask_type == AttentionMaskType::Causal && (shape.St / chunks.Sq_chunk_t) % 2U == 0U;
+}
+
+}  // namespace
+
+uint32_t num_work_units(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks) {
+    const uint32_t items = num_work_items(shape, chunks);
+    return pairs_causal_chunks(shape, chunks) ? items / 2U : items;
+}
+
 SDPAForwardShape shape_of(
     const ttnn::Tensor& query,
     const ttnn::Tensor& key,
@@ -163,18 +176,16 @@ uint64_t l1_budget_bytes(const tt::tt_metal::IDevice* device) {
 
 std::vector<CoreItemRuns> split_work(
     const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores) {
-    const uint32_t total_items = num_work_items(shape, chunks);
-    TT_FATAL(num_cores > 0 && num_cores <= total_items, "split_work: need 1..{} cores, got {}", total_items, num_cores);
-    // Causal with an even chunk count and enough pairs for every core: heavy/light chunk pairs.
-    const uint32_t q_num_chunks = shape.St / chunks.Sq_chunk_t;
-    const uint32_t num_stacks = shape.batch * shape.q_heads / chunks.heads_per_item;
-    const uint32_t total_pairs = num_stacks * (q_num_chunks / 2U);
+    const uint32_t total_units = num_work_units(shape, chunks);
+    TT_FATAL(num_cores > 0 && num_cores <= total_units, "split_work: need 1..{} cores, got {}", total_units, num_cores);
     std::vector<CoreItemRuns> per_core_runs;
-    if (shape.mask_type == AttentionMaskType::Causal && q_num_chunks % 2U == 0U && total_pairs >= num_cores) {
+    if (pairs_causal_chunks(shape, chunks)) {
+        const uint32_t q_num_chunks = shape.St / chunks.Sq_chunk_t;
+        const uint32_t num_stacks = shape.batch * shape.q_heads / chunks.heads_per_item;
         per_core_runs = split_items_paired(num_stacks, q_num_chunks, num_cores);
     }
     if (per_core_runs.empty() || !fits_runtime_args(per_core_runs)) {
-        per_core_runs = split_items_contiguous(total_items, num_cores);
+        per_core_runs = split_items_contiguous(num_work_items(shape, chunks), num_cores);
     }
     return per_core_runs;
 }
@@ -234,7 +245,9 @@ SDPAForwardChunks resolve_chunks(
     // four K/V tiles do better once the inner dim reaches 128 tiles-wide traffic or with a mask tensor
     // (the step then reads mask tiles on top of K/V). More rows per item only pay off once the work is
     // scheduled by cost rather than paired, so heads_per_item stays 1 unless asked for. The chunks shrink
-    // while they do not fit L1 or would leave cores idle.
+    // while they do not fit L1 or would leave cores idle: causal work is handed out as light/heavy chunk
+    // pairs, so a pair per core is the floor there (main's one-row chunks on every core), an item per core
+    // otherwise.
     constexpr uint32_t kDefaultSqChunkT = 4U;
     const uint32_t default_sk_chunk_t = (shape.qWt >= 4U || shape.mask_type == AttentionMaskType::Arbitrary) ? 4U : 8U;
     SDPAForwardChunks chunks{
@@ -244,7 +257,7 @@ SDPAForwardChunks resolve_chunks(
     if (chunks.Sq_chunk_t == 0U) {
         chunks.Sq_chunk_t = kDefaultSqChunkT;
         while (chunks.Sq_chunk_t > 1U &&
-               (shape.St % chunks.Sq_chunk_t != 0U || num_work_items(shape, chunks) < num_available_cores)) {
+               (shape.St % chunks.Sq_chunk_t != 0U || num_work_units(shape, chunks) < num_available_cores)) {
             chunks.Sq_chunk_t /= 2U;
         }
     }

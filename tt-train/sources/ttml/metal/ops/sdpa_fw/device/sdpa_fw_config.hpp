@@ -84,8 +84,12 @@ using CoreItemRuns = std::vector<ItemRun>;
 
 uint32_t num_work_items(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks);
 
-// Per-core item runs for num_cores cores: causal chunks as light/heavy pairs when there are enough pairs,
-// otherwise contiguous blocks; falls back to contiguous blocks when the lists would not fit the runtime args.
+// What the split hands out whole: light/heavy chunk pairs for causal with an even chunk count (so every
+// core gets the same work), items otherwise. The program runs on min(available cores, units) cores.
+uint32_t num_work_units(const SDPAForwardShape& shape, const SDPAForwardChunks& chunks);
+
+// Per-core item runs for num_cores <= num_work_units cores: causal chunks as light/heavy pairs, otherwise
+// contiguous blocks; falls back to contiguous blocks when the lists would not fit the runtime args.
 std::vector<CoreItemRuns> split_work(
     const SDPAForwardShape& shape, const SDPAForwardChunks& chunks, uint32_t num_cores);
 
@@ -94,7 +98,7 @@ std::vector<CoreItemRuns> split_work(
 void check_chunks(const SDPAForwardProgramConfig& config, const SDPAForwardShape& shape, uint64_t l1_budget_bytes);
 
 // check_chunks, then picks the unset knobs by a shape rule, shrinking them until they fit l1_budget_bytes
-// and keep num_available_cores busy. Throws when even the smallest chunks do not fit.
+// and give num_available_cores a work unit each. Throws when even the smallest chunks do not fit.
 SDPAForwardChunks resolve_chunks(
     const SDPAForwardProgramConfig& config,
     const SDPAForwardShape& shape,

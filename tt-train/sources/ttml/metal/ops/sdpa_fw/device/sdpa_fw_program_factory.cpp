@@ -196,7 +196,6 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const uint32_t Sk_chunk_t = chunks.Sk_chunk_t;
     const uint32_t heads_per_item = chunks.heads_per_item;
     const uint32_t rows = chunks.rows();  // tile-rows of one item
-    const uint32_t total_q_chunks = num_work_items(shape, chunks);
 
     const float scale = 1.0F / std::sqrt(static_cast<float>(qEmbd));
     const uint32_t scaler = std::bit_cast<uint32_t>(scale);
@@ -209,7 +208,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     const uint32_t minus_one = std::bit_cast<uint32_t>(-1.0F);  // used to transform mask from 1/0 to 0/-1
     const uint32_t custom_inf = std::bit_cast<uint32_t>(1e9F);  // used to transform mask from 0/-1 to 0/-1e9F
 
-    const uint32_t num_cores = std::min(num_available_cores, total_q_chunks);
+    const uint32_t num_cores = std::min(num_available_cores, num_work_units(shape, chunks));
     const auto all_cores = tt::tt_metal::num_cores_to_corerangeset(num_cores, compute_with_storage_grid_size);
     const std::vector<CoreItemRuns> per_core_runs = split_work(shape, chunks, num_cores);
 
