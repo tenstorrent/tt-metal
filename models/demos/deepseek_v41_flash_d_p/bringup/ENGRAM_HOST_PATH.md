@@ -177,8 +177,14 @@ the values, rel L2 3.5e-3 vs the exact rows; a format change, so C (accuracy) an
   do not see the engram output identical. The 2x2 subset has no end-to-end token metric: the Galaxy's 40-layer ladder
   at 56k + K.1 is the confirmation.
 
-**Defaults (owner 2026-10-28):** `ENGRAM_TABLE=random`, `ENGRAM_GATHER_THREADS=8`, `ENGRAM_ROWS=bfp8` (bf16 kept as
-the option). The engram_rows step carries an owner waiver in spec.yaml (its exact-match check fails by the bfp8
+**Defaults (owner 2026-10-28):** `ENGRAM_TABLE=resident`, `ENGRAM_GATHER_THREADS=8`, `ENGRAM_ROWS=bfp8` (bf16 kept as
+the option; `random` = read-ahead off, for a host without the RAM). Resident + bfp8 holds each table in RAM already
+as bfloat8_b (`tt/engram.py:resident_bfp8`: 272 B a row, 16 exponents next to the 256 magnitudes, 104.4 GB a layer;
+built at process start from the checkpoint, nothing written to disk: 84 s a layer cold on the QB, 1.24 GB/s). A
+5120-token chunk from hash to TILE bytes (`engram_bfp8.tile_rows`, one pass): 1 / 4 / 8 / 16 threads 202 / 11.9 /
+**7.6** / 5.0 ms (hash 1.1 ms), vs ~25-30 ms for the resident 8-bit copy + per-chunk pack + tiling. Checked: the packed
+rows equal the per-chunk pack's (`test_engram_table_modes.py`, full table with DS41_TEST_ENGRAM_RESIDENT=1); the
+engram_rows step test on the 2x2 gives the same rows (rel 0.00350977 vs the exact, as before). The engram_rows step carries an owner waiver in spec.yaml (its exact-match check fails by the bfp8
 rounding, rel 3.5e-3); its gates also run `tests/test_engram_bfp8.py` (bit-exact vs ttnn's bfp8 of the exact rows).
 F221 passes the waiver on to the next step's vs-golden check (engram_kv, layer 1: 0.00350 vs 0.00335). Checked:
 C.swa_engram.engram_rows, C.enc_source_engram.engram_rows, S.swa_engram.01 / .18, S.enc_source_engram.01 / .03 / .20

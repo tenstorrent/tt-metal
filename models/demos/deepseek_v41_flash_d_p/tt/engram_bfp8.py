@@ -13,6 +13,9 @@ from_torch(dtype=bfloat8_b) would give it.
 
 TILE bytes per 32 x 32 tile: 64 exponent bytes (face 0..3, 16 rows each) then 1024 sign-magnitude bytes (face 0..3,
 row-major 16 x 16); tiles row-major over the tensor's [rows / 32, cols / 32].
+
+Packed table rows (ENGRAM_TABLE=resident with ENGRAM_ROWS=bfp8): each table row as 16 exponent bytes then its 256
+magnitude bytes (272 B); ``tile_rows`` gathers a chunk's rows from them straight into TILE bytes.
 """
 
 from __future__ import annotations
@@ -116,6 +119,69 @@ def pack_rows_torch(w: torch.Tensor, s: torch.Tensor):
     shared = eg.amax(-1)
     gap = (shared.unsqueeze(-1) - eg).clamp(max=_GAPS - 1).view(n, d)
     return shared.to(torch.uint8), _BYTE[wi, gap.long()]
+
+
+def pack_into(w: torch.Tensor, s: torch.Tensor, out, threads: int | None = None):
+    """pack_rows of w [N, 256], s [N, 8] written into packed rows out [N, 272] (numpy uint8: exponents then
+    magnitudes)."""
+    global _KERNEL
+    import numba
+
+    if _KERNEL is None:
+        _KERNEL = _numba_kernel()
+    if threads:
+        numba.set_num_threads(min(threads, numba.config.NUMBA_NUM_THREADS))
+    g = w.shape[1] // 16
+    _KERNEL(w.numpy(), s.numpy(), out[:, :g], out[:, g:], _EXP.int().numpy(), _ZERO.numpy(), _BYTE.numpy())
+
+
+def _tile_kernel():
+    import numba
+
+    @numba.njit(parallel=True, cache=True)
+    def tile(packed, ids, valid, out, n):
+        g = packed.shape[1] // 17  # 16-value groups a table row
+        slots = ids.shape[1]
+        tcols = slots * g // 2  # 32-column tiles across [n, slots * g * 16]
+        for t in numba.prange(n):
+            tr, ri = t // 32, t % 32
+            fr, rr = ri // 16, ri % 16
+            for j in range(slots):
+                rid = ids[t, j] if t < valid else -1
+                for k in range(g):
+                    c0 = (j * g + k) * 16
+                    f = fr * 2 + (c0 % 32) // 16
+                    base = (tr * tcols + c0 // 32) * 1088
+                    mo = base + 64 + f * 256 + rr * 16
+                    if rid < 0:
+                        out[base + f * 16 + rr] = 0
+                        for v in range(16):
+                            out[mo + v] = 0
+                    else:
+                        out[base + f * 16 + rr] = packed[rid, k]
+                        for v in range(16):
+                            out[mo + v] = packed[rid, g + k * 16 + v]
+
+    return tile
+
+
+_TILE = None
+
+
+def tile_rows(packed, ids: torch.Tensor, n: int, threads: int | None = None) -> torch.Tensor:
+    """packed table rows [N, 272] (numpy), ids [valid, slots] (valid <= n) -> the bfloat8_b TILE bytes of the chunk
+    rows [n, slots * 256] (rows past ``valid`` 0): tile_bytes of those rows' exponents and magnitudes, in one pass."""
+    global _TILE
+    import numba
+
+    if _TILE is None:
+        _TILE = _tile_kernel()
+    if threads:
+        numba.set_num_threads(min(threads, numba.config.NUMBA_NUM_THREADS))
+    w = ids.shape[1] * (packed.shape[1] // 17) * 16
+    out = torch.empty(n * w * 17 // 16, dtype=torch.uint8)
+    _TILE(packed, ids.contiguous().numpy(), ids.shape[0], out.numpy(), n)
+    return out
 
 
 def tile_bytes(exps: torch.Tensor, mags: torch.Tensor) -> torch.Tensor:
