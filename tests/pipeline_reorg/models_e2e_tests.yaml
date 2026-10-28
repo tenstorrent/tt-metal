@@ -1675,7 +1675,7 @@
 # ── WAN 2.2 (Black Hole quad galaxy, bh_sc4 / exabox-multihost-ci-sc4) ──
 - name: TT-DiT Wan2.2-T2V-A14B multihost quad e2e tests
   cmd: |
-    unset HF_HUB_OFFLINE
+    export HF_HUB_OFFLINE=1
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
     export HF_HOME=/mnt/weka/model-weights/video/huggingface
@@ -1747,7 +1747,7 @@
 
 - name: TT-DiT Wan2.2-I2V-A14B multihost quad e2e tests
   cmd: |
-    unset HF_HUB_OFFLINE
+    export HF_HUB_OFFLINE=1
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000 TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
     export HF_HOME=/mnt/weka/model-weights/video/huggingface
@@ -1820,7 +1820,7 @@
 # ── WAN 2.2 (Black Hole single galaxy, bh_sc1) ───────────────────
 - name: TT-DiT Wan2.2-T2V-A14B single galaxy perf tests
   cmd: |
-    unset HF_HUB_OFFLINE    # umt5 fetches the Wan2.2 tokenizer from the hub
+    export HF_HUB_OFFLINE=1
     export NO_PROMPT=1
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub
@@ -1849,7 +1849,7 @@
 
 - name: TT-DiT Wan2.2-I2V-A14B single galaxy perf tests
   cmd: |
-    unset HF_HUB_OFFLINE    # umt5 fetches the Wan2.2 tokenizer from the hub
+    export HF_HUB_OFFLINE=1
     export NO_PROMPT=1
     export TT_DIT_CACHE_DIR="$HOME/.cache/tt-dit"
     export VBENCH_CACHE_DIR=/mnt/weka/model-weights/video/vbench TORCH_HOME=/mnt/weka/model-weights/video/vbench/torch_hub

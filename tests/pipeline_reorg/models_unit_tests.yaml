@@ -1738,7 +1738,7 @@
     # Multihost jobs skip setup-job's watcher env; DISABLE_ETH avoids the ACTIVE_ETH overflow.
     export TT_METAL_WATCHER=30 TT_METAL_WATCHER_APPEND=1
     export TT_METAL_WATCHER_NOINLINE=1 TT_METAL_WATCHER_DISABLE_ETH=1
-    unset HF_HUB_OFFLINE    # umt5 fetches the Wan2.2 tokenizer from the hub
+    export HF_HUB_OFFLINE=1
     export NO_PROMPT=1
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
     export HF_HOME=/mnt/weka/model-weights/video/huggingface
@@ -1769,7 +1769,7 @@
     # Multihost jobs skip setup-job's watcher env; DISABLE_ETH avoids the ACTIVE_ETH overflow.
     export TT_METAL_WATCHER=30 TT_METAL_WATCHER_APPEND=1
     export TT_METAL_WATCHER_NOINLINE=1 TT_METAL_WATCHER_DISABLE_ETH=1
-    unset HF_HUB_OFFLINE    # umt5 fetches the Wan2.2 tokenizer from the hub
+    export HF_HUB_OFFLINE=1
     export NO_PROMPT=1
     export TT_DIT_CACHE_DIR=/tmp/TT_DIT_CACHE
     export HF_HOME=/mnt/weka/model-weights/video/huggingface
@@ -1804,7 +1804,7 @@
     # tt-run forwards TT_* variables to every rank, so all four galaxies are watched.
     export TT_METAL_WATCHER=30 TT_METAL_WATCHER_APPEND=1
     export TT_METAL_WATCHER_NOINLINE=1 TT_METAL_WATCHER_DISABLE_ETH=1
-    unset HF_HUB_OFFLINE
+    export HF_HUB_OFFLINE=1
     export NO_PROMPT=1 TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0 TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS=120000
     export HF_HOME=/mnt/weka/model-weights/video/huggingface
     export TT_DIT_LOCAL_WEIGHTS_ROOT=/mnt/weka/model-weights/video
