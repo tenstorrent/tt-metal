@@ -298,8 +298,9 @@ void JitBuildEnv::init(
         // Streaming profiler. Mutually exclusive with get_profiler_enabled() (rtoptions
         // TT_FATALs on both), so this branch never stacks on the one above. PROFILE_KERNEL=1 keeps every
         // DeviceZoneScopedN / DeviceTimestampedData site compiled; PROFILE_STREAMING makes
-        // api/debug/kernel_profiler.hpp select the SPSC producer (kernel_profiler_streaming.hpp) instead of
-        // the DRAM one. No DRAM options (dispatch cores, trace-only, sum, accumulate) apply here.
+        // api/debug/kernel_profiler.hpp select the streaming markers (kernel_profiler_streaming.hpp) instead of
+        // the DRAM producer, and DevicePublish write its records on the SPSC ring. No DRAM options (dispatch cores,
+        // trace-only, sum, accumulate) apply here.
         TT_FATAL(
             this->arch_ != tt::ARCH::QUASAR,
             "TT_METAL_STREAMING_PROFILER is not supported on Quasar: the streaming profiler needs a DRISC "
@@ -592,9 +593,7 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     // Linker flags
     this->lflags_ += jit_build_query.linker_flags(params);
     this->lflags_ += fmt::format("-T{} ", this->linker_script_);
-    // Kernels keep their relocations for the XIP transform (llrt/tt_elffile.cpp). Under the streaming
-    // profiler firmware keeps them too: the host rebases every image's zone ids through them at load
-    // (llrt/zone_meta.cpp).
+    // Kernels keep relocations for XIP, and under the streaming profiler firmware does too, to rebase call-site ids.
     if (!this->is_fw_ || env_.get_rtoptions().get_streaming_profiler_enabled()) {
         this->lflags_ += "-Wl,--emit-relocs ";
     }
@@ -765,13 +764,6 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
         defines.insert(defines.begin(), {"-include", pch});
         // Warn if GCC rejects the PCH, while allowing textual fallback.
         cflags += " -Winvalid-pch -Wno-error=invalid-pch";
-    }
-
-    // Streaming profiler only: a zone site emits an assembler label named by TU, and this tag keeps the
-    // labels of this link's TUs apart when LTO merges them into one assembly (hostdev/profiler_zone_id.h).
-    // Kept out of `defines_`/`build_key_`: it is a property of the source list, not of the recipe.
-    if (env_.get_rtoptions().get_streaming_profiler_enabled()) {
-        defines.push_back(fmt::format("-DTT_ZONE_TU_TAG={}", src_index));
     }
 
     const std::string obj_path = out_dir + this->objs_[src_index];

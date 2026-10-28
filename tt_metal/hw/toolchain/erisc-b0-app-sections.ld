@@ -24,6 +24,25 @@ SECTIONS
   PROVIDE (__global_pointer$ = __firmware_global_pointer);
   PROVIDE (__erisc_jump_table = ORIGIN(ERISC_JUMPTABLE));
 
+  /* DevicePublish's call-site sections – file-only, at main.ld's VMAs, which explains each. */
+  .device_publish_descriptor_contents 0x6900000 (INFO) :
+  {
+    KEEP(*(.device_publish_descriptor_contents))
+    . = ALIGN(4);
+  }
+  .device_publish_descriptors 0x6A00000 (INFO) :
+  {
+    KEEP(*(.device_publish_descriptors))
+  }
+  .device_publish_strings 0x6B00000 (INFO) :
+  {
+    KEEP(*(.device_publish_strings))
+  }
+  .device_publish_ids 0x6C00000 (INFO) :
+  {
+    KEEP(*(.device_publish_ids))
+  }
+
   .text :
   {
     *(.start)
