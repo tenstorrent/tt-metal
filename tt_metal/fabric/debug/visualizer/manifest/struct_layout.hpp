@@ -325,7 +325,7 @@ constexpr auto get_enumerators() {
     // If the enum has an EnumLayout specialization, return its enumerators from there
     if constexpr (requires { EnumLayout<E>::enumerators; }) {
         return EnumLayout<E>::enumerators;
-    } else { 
+    } else {
         // Otherwise, use enchantum to find the enumerators
         constexpr auto& entries = enchantum::entries<E>;
         static_assert(!entries.empty(), "enchantum finds no enumerators of this enum; give it an EnumLayout");
