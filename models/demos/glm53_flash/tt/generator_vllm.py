@@ -511,7 +511,7 @@ class GLM53FlashForCausalLM:
             self._ensure_decode_inputs(U)
             if not self.already_warmed_up_prefill:
                 lengths = self._warmup_prefill_lengths()
-                slots = self._warmup_slots(U)
+                slots = self._warmup_slots(self.geometry.users_per_row)  # the model's per-row user index
                 for n in lengths:
                     dummy = torch.arange(n, dtype=torch.long) % 1000 + 1000
                     plan = PrefillPlan("eager", PrefillPlanner.walk(0, n, self.geometry.device_prefill_chunk))
@@ -589,13 +589,13 @@ class GLM53FlashForCausalLM:
         dev.set_program_cache_misses_allowed(False)
         logger.info(f"GLM53 vLLM: program cache sealed after the captures ({dev.num_program_cache_entries()} programs)")
 
-    def _warmup_slots(self, U: int) -> list[int]:
-        """``GLM53_VLLM_WARMUP_SLOTS``: the physical slots the shortest warm-up prompt is prefilled into (default
-        ``all``: every one of the ``U`` slots, so a program whose variant depends on the slot index — the eager
-        per-user state writes — is built at boot, never at the first request into that slot; an int keeps the
-        first that many)."""
+    def _warmup_slots(self, B: int) -> list[int]:
+        """``GLM53_VLLM_WARMUP_SLOTS``: the per-row user slots the shortest warm-up prompt is prefilled into
+        (default ``all``: every one of the ``B`` users a row holds — the mesh model's ``user`` index, replicated
+        over the rows — so a program whose variant depends on that index, the eager per-user state writes, is
+        built at boot, never at the first request into that slot; an int keeps the first that many)."""
         raw = os.environ.get("GLM53_VLLM_WARMUP_SLOTS", "all").strip().lower()
-        n = U if raw in ("", "all") else max(1, min(U, int(raw)))
+        n = B if raw in ("", "all") else max(1, min(B, int(raw)))
         return list(range(n))
 
     def _warmup_prefill_lengths(self) -> list[int]:
