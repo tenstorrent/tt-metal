@@ -21,11 +21,14 @@ the heads, and wo input. Padded slots hold zeros: they add nothing to
 QK^T, multiply zero-rows of wo, and (with cos=1/sin=0) are untouched by
 RoPE. Scale stays 1/sqrt(80) — padded dims contribute 0 to the dot product.
 
-RoPE application avoids the rotary_embedding_llama convention ambiguity:
-we apply it explicitly as `x*cos + (x @ R)*sin` with the sign-permutation
-matrix `R` from `rope.rope_rotate_matrix`. R operates in the natural padded
-head layout, so q/k/v share one padding scheme and SDPA (a dot product) is
-invariant to it.
+RoPE is one ttnn.experimental.rotary_embedding_llama call for q and one for
+k. That op rotates each pair of lanes (2i, 2i+1) of a head, while rotate_half
+pairs dims i and i + 39, so the q and k rows of wqkv (and of its bias) are
+reordered at load to `rope.rope_head_permutation`: lane 2i holds dim i, lane
+2i+1 dim i + 39, and the 2 pass-through dims follow at lanes 78-79. q and k
+share the order, so QK^T is unchanged; v and wo keep the reference order. The
+cos/sin of `rope.rope_cos_sin_padded` follow the same order, with cos=1/sin=0
+on the pass-through and pad lanes.
 """
 from __future__ import annotations
 
@@ -37,6 +40,7 @@ import torch.nn.functional as F
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.common.tensor_utils import get_rot_transformation_mat
 from models.demos.minimax_m3.tt.vision.common import (
     hifi4_compute_config,
     linear_compute_config,
@@ -45,7 +49,7 @@ from models.demos.minimax_m3.tt.vision.common import (
     next_tile_multiple,
     sdpa_program_config,
 )
-from models.demos.minimax_m3.tt.vision.rope import rope_rotate_matrix
+from models.demos.minimax_m3.tt.vision.rope import rope_head_permutation
 
 
 def _pack_wqkv_weight(
@@ -58,11 +62,13 @@ def _pack_wqkv_weight(
 ) -> torch.Tensor:
     """Pack separate q/k/v Linear weights into one head_dim-padded wqkv.
 
-    Returns ttnn-linear convention: [hidden_in, 3*num_heads*padded_head_dim].
+    The q and k rows of each head are in the order of rope_head_permutation, which rotary_embedding_llama rotates;
+    v keeps the reference order. Returns ttnn-linear convention: [hidden_in, 3*num_heads*padded_head_dim].
     """
     in_dim = q_w.shape[1]
     w = torch.stack([q_w, k_w, v_w], dim=0).to(torch.bfloat16)  # (3, num_heads*head_dim, in)
     w = w.view(3, num_heads, head_dim, in_dim)
+    w = torch.cat([w[:2, :, rope_head_permutation(head_dim)], w[2:]])  # q and k in the RoPE op's head order
     w = F.pad(w, (0, 0, 0, padded_head_dim - head_dim))  # (3, num_heads, padded, in)
     w = w.reshape(3 * num_heads * padded_head_dim, in_dim)
     return w.transpose(0, 1).contiguous()  # [in, 3*H*padded]
@@ -78,6 +84,7 @@ def _pack_wqkv_bias(
 ) -> torch.Tensor:
     b = torch.stack([q_b, k_b, v_b], dim=0).to(torch.bfloat16)  # (3, num_heads*head_dim)
     b = b.view(3, num_heads, head_dim)
+    b = torch.cat([b[:2, :, rope_head_permutation(head_dim)], b[2:]])  # q and k in the RoPE op's head order
     b = F.pad(b, (0, padded_head_dim - head_dim))
     return b.reshape(3 * num_heads * padded_head_dim).contiguous()
 
@@ -168,18 +175,18 @@ class M3VLAttention(LightweightModule):
             else None
         )
 
-        # Sign-permutation matrix for the rotate_half RoPE application.
-        R = rope_rotate_matrix(self.head_dim, self.padded_head_dim)
-        self.rotate_mat = ttnn.as_tensor(
-            R.view(1, 1, self.padded_head_dim, self.padded_head_dim).to(torch.bfloat16).contiguous(),
+        # rotary_embedding_llama's transformation matrix, one tile: x @ trans_mat turns each lane pair (a, b) of a tile
+        # into (-b, a). Like cos and sin, it must be bfloat16 whatever the weights' dtype.
+        self.trans_mat = ttnn.as_tensor(
+            get_rot_transformation_mat(),
             device=mesh_device,
-            dtype=dtype,
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mm,
         )
 
-        # QKV and the output projection accumulate in L1; RoPE's x @ R and SDPA keep the plain HiFi4 config.
+        # QKV and the output projection accumulate in L1; RoPE and SDPA keep the plain HiFi4 config.
         self.compute_kernel_config = linear_compute_config()
         self.rope_compute_kernel_config = hifi4_compute_config()
         self.sdpa_compute_kernel_config = hifi4_compute_config()
@@ -235,9 +242,10 @@ class M3VLAttention(LightweightModule):
 
     # ------------------------------------------------------------------
     def stage_cos_sin(self, cos_pt: torch.Tensor, sin_pt: torch.Tensor) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
-        """Push (L, padded_head_dim) cos/sin (already padded by rope_cos_sin_padded) to device.
+        """Push (L, padded_head_dim) cos/sin (from rope_cos_sin_padded, in the RoPE op's head order) to device.
 
-        Shaped (1, 1, L, padded_head_dim) so they broadcast over the head axis.
+        Shaped (1, 1, L, padded_head_dim) so the op broadcasts them over the heads, and bfloat16, the only dtype
+        rotary_embedding_llama takes.
         """
         assert (
             cos_pt.shape[-1] == self.padded_head_dim
@@ -246,7 +254,7 @@ class M3VLAttention(LightweightModule):
         cos_tt = ttnn.from_torch(
             cos_pt.view(1, 1, *cos_pt.shape).to(torch.bfloat16).contiguous(),
             device=self.device,
-            dtype=self.dtype,
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mm,
@@ -254,7 +262,7 @@ class M3VLAttention(LightweightModule):
         sin_tt = ttnn.from_torch(
             sin_pt.view(1, 1, *sin_pt.shape).to(torch.bfloat16).contiguous(),
             device=self.device,
-            dtype=self.dtype,
+            dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=mm,
@@ -262,11 +270,15 @@ class M3VLAttention(LightweightModule):
         return cos_tt, sin_tt
 
     def _apply_rope(self, x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-        """x*cos + (x @ R)*sin, broadcasting cos/sin over the head axis."""
-        x_rot = ttnn.matmul(x, self.rotate_mat, compute_kernel_config=self.rope_compute_kernel_config)
-        out = ttnn.add(ttnn.mul(x, cos), ttnn.mul(x_rot, sin))
-        ttnn.deallocate(x_rot)
-        return out
+        """x*cos + (x @ trans_mat)*sin in one op, trans_mat applied to each tile of the head dim (prefill mode)."""
+        return ttnn.experimental.rotary_embedding_llama(
+            x,
+            cos,
+            sin,
+            self.trans_mat,
+            is_decode_mode=False,
+            compute_kernel_config=self.rope_compute_kernel_config,
+        )
 
     # ------------------------------------------------------------------
     def forward(

@@ -32,7 +32,7 @@ from .vision_helpers import assert_pcc, grid_name, parametrize_vision_grids, to_
 @pytest.mark.parametrize("num_layers", [2], ids=lambda n: f"layers{n}")
 @parametrize_vision_grids()
 def test_vision_tower_vs_ref(mesh_device, device_params, grid_thw, num_layers, vision_reference, vision_activations):
-    """Tower output and vision tokens match the reference at PCC >= 0.99."""
+    """Tower output and vision tokens match the reference at PCC >= 0.9998."""
     acts = vision_activations(grid_thw, num_layers)
     pixel_values, grid = acts["pixel_values"], acts["grid_thw"]
     tower_ref, final_ref = acts["tower.out"], acts["final"]
@@ -44,7 +44,7 @@ def test_vision_tower_vs_ref(mesh_device, device_params, grid_thw, num_layers, v
     name = f"{grid_name(grid_thw)} layers={num_layers}"
 
     tower_tt = to_host(model.forward_tower(pixel_values, grid), mesh_device, tower_ref.shape)
-    assert_pcc(f"tower {name}", tower_ref, tower_tt, 0.99)
+    assert_pcc(f"tower {name}", tower_ref, tower_tt, 0.9998)
 
     final_tt = to_host(model.forward(pixel_values, grid), mesh_device, final_ref.shape)
-    assert_pcc(f"final {name}", final_ref, final_tt, 0.99)
+    assert_pcc(f"final {name}", final_ref, final_tt, 0.9998)
