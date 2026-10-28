@@ -1,19 +1,19 @@
 {
   "schema_version": 1,
-  "config_id": "p3_qkv_gu",
-  "description": "E6a selected text policy (E6a review fixes): bfp8 weights, HiFi2 + fp32 accumulation matmuls; attn_qkv and mlp_gate_up outputs bfp8, every other activation bf16; SDPA HiFi2 + fp32 acc without exp_approx; HiFi4 norms; bf16 residual; bfp4 masks. Safe baseline: config_id base_bfp8_hifi2 (README).",
+  "config_id": "p2_sdpa_fast",
+  "description": "E9.1-r re-selection at the 12 x 10 grid (2026-10-28): text policy p2_sdpa_fast: bfp8 weights, HiFi2 + fp32 accumulation matmuls; every activation bf16; SDPA HiFi2 without fp32 accumulation, with exp_approx; HiFi4 norms; bf16 residual; bfp4 masks. Replaces E6a p3_qkv_gu (fails the b1_s256 contract input). Safe baseline: config_id base_bfp8_hifi2 (README; crashes at 12 x 10 in multi-bucket sessions <= 8192, open for E9 stage 5).",
   "text": {
     "weights": {
-      "attn_qkv": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bfp8"},
+      "attn_qkv": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
       "attn_o": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
-      "mlp_gate_up": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bfp8"},
+      "mlp_gate_up": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
       "mlp_down": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
       "ple_proj": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
       "ple_block": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
       "final_proj": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"}
     },
     "layer_exceptions": [],
-    "sdpa": {"fidelity": "HiFi2", "fp32_acc": true, "exp_approx": false},
+    "sdpa": {"fidelity": "HiFi2", "fp32_acc": false, "exp_approx": true},
     "norms": {"fidelity": "HiFi4", "fp32_acc": true},
     "residual_dtype": "bf16",
     "mask_dtype": "bfp4"
