@@ -171,11 +171,11 @@ def test_the_published_table_is_the_walk_kda_configs_included(tmp_path, monkeypa
 
 
 def test_a_model_that_derives_another_kvpe_config_is_not_written(tmp_path, monkeypatch):
-    model_for = kv_chunk_table.kimi_k3_cache_layout_model
+    model_for = kv_chunk_table.merged_cache_layout_model
     # Declares a prefill chunk twice the writer's, so every chip owns the wrong positions.
     monkeypatch.setattr(
         kv_chunk_table,
-        "kimi_k3_cache_layout_model",
+        "merged_cache_layout_model",
         lambda **kwargs: model_for(**{**kwargs, "chunk_size": 2 * kwargs["chunk_size"]}),
     )
     path = os.path.join(str(tmp_path), "table.pb")

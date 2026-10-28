@@ -25,8 +25,7 @@ from loguru import logger
 import ttnn
 from models.demos.common.prefill.runners.cache_layout import publish_kv_chunk_table
 from models.demos.common.prefill.runners.migration import allgather_kv_stage_layout, serialize_prebuilt_kv_chunk_table
-from models.demos.deepseek_v3_d_p.tt.kimi_k3.cache_layout import kimi_k3_cache_layout_model
-from models.demos.deepseek_v3_d_p.tt.runners.cache_layout import deepseek_cache_layout_model
+from models.demos.deepseek_v3_d_p.tt.runners.cache_layout import deepseek_cache_layout_model, merged_cache_layout_model
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
     PREFILL_CHUNK_TOKENS,
@@ -45,6 +44,8 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
 LAYOUT_MODEL_ENV = "DEEPSEEK_KV_TABLE_FROM_LAYOUT_MODEL"
 # Kimi-K3's model declares only its kvpe config, so setting this to 1 is refused: its table is always walked.
 KIMI_K3_LAYOUT_MODEL_ENV = "KIMI_K3_KV_TABLE_FROM_LAYOUT_MODEL"
+# Set to 1 to publish GLM-5.3's merged table derived from its KVPE and index caches' CacheLayoutModel.
+GLM53_LAYOUT_MODEL_ENV = "GLM53_KV_TABLE_FROM_LAYOUT_MODEL"
 
 # A KV chunk is one DRAM bank's worth of tokens (NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK=32) x head_dim.
 _TILE_DIM = 32  # bfp8 is tiled 32x32
@@ -225,8 +226,9 @@ def build_and_serialize_kv_chunk_table(
     ``CacheLayoutModel`` over the gathered stages) with ``to_chunk_map``. Until that replaces the walk
     (``DEEPSEEK_KV_TABLE_FROM_LAYOUT_MODEL=1``), the walked table is published and the derived one is checked
     against it; the model is written next to the table (``<path>.cache_layout.pb``) only when the two agree.
-    Kimi-K3's merged table (``kda``) is checked the same way on its kvpe config "00" alone
-    (``kimi_k3/cache_layout.py``); its KDA configs are walked only."""
+    GLM-5.3's merged table (``index_kv_cache``) is checked the same way on its KVPE and index configs, and
+    published derived with ``GLM53_KV_TABLE_FROM_LAYOUT_MODEL=1``. Kimi-K3's (``kda``) is checked on its kvpe
+    config "00" alone; its KDA configs are walked only. A table with DFlash drafter configs is walked only."""
     assert chunk_size_global == PREFILL_CHUNK_TOKENS, (
         f"create_kv_chunk_address_table_block_cyclic assumes a block-cyclic period of "
         f"PREFILL_CHUNK_TOKENS={PREFILL_CHUNK_TOKENS}, but chunk_size_global={chunk_size_global}. "
@@ -269,32 +271,40 @@ def build_and_serialize_kv_chunk_table(
             kvpe_layer_rows=layer_rows,
             kvpe_alias_rows=kvpe_alias_rows,
         )
-        if kda is None:
+        has_dflash = dflash_caches is not None or dflash_spec is not None
+        if has_dflash:
             return _build_and_serialize_merged_kv_chunk_table(path=path, **merged)
+        is_kimi_k3 = kda is not None
+        index_stage_layout = stage_layouts[1] if index_kv_cache is not None and stage_layouts else None
 
-        def kimi_k3_layout_model():
-            return kimi_k3_cache_layout_model(
+        def merged_layout_model():
+            return merged_cache_layout_model(
                 kvpe_cache=primary_cache,
-                stage_layout=stage_layout,
+                kvpe_stage_layout=stage_layout,
                 mesh_shape=mesh_shape,
                 sp_axis=sp_axis,
                 num_users=num_users,
                 seq_len=seq_len,
                 chunk_size=chunk_size_global,
                 kv_dedup=kv_dedup,
-                layer_rows=layer_rows,
+                kvpe_layer_rows=layer_rows,
+                kvpe_alias_rows=kvpe_alias_rows,
+                index_cache=index_kv_cache,
+                index_stage_layout=index_stage_layout,
+                index_layer_ids=index_layer_ids,
             )
 
+        model_name = "Kimi-K3" if is_kimi_k3 else "GLM-5.3"
         publish_kv_chunk_table(
             path=path,
             walk=lambda: _build_merged_kv_chunk_table(**merged),
-            layout_model=kimi_k3_layout_model,
-            hosts=_stage_hosts(stage_layout),
-            enable_env=KIMI_K3_LAYOUT_MODEL_ENV,
-            model_name="Kimi-K3",
-            declares_every_config=False,
+            layout_model=merged_layout_model,
+            hosts=[*_stage_hosts(stage_layout), *_stage_hosts(index_stage_layout)],
+            enable_env=KIMI_K3_LAYOUT_MODEL_ENV if is_kimi_k3 else GLM53_LAYOUT_MODEL_ENV,
+            model_name=model_name,
+            declares_every_config=not is_kimi_k3,
         )
-        logger.info(f"[migration] Kimi-K3 KV chunk address table serialized to {path}")
+        logger.info(f"[migration] {model_name} KV chunk address table serialized to {path}")
         return path
     assert kvpe_alias_rows is None, "kvpe_alias_rows is wired into the merged (DSA) table only"
 
