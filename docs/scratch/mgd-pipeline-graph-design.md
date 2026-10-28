@@ -1665,14 +1665,17 @@ plane (since [#55313](https://github.com/tenstorrent/tt-metal/pull/55313)):
   injected `DirectLinks`; `nullptr` falls back to the control plane.
 - `detail::resolve_pipeline_placement(...)` - the exact stage/link/core-slot search.
 
-Tier C calls `resolve_graph_layout_with_connections` with `DirectLinks` built from the
-candidate mapping and the bound links (3.3). It is the same function Tier D calls through
-`resolve_graph_layout`, so the two cannot drift. It handles fork graphs today: edges form a
-DAG after dropping loopbacks, and edges carried over host are left out.
+Tier C calls `resolve_pipeline_placement` directly, with the resolver's own `InternalChip`s and
+`DirectLinks` from C1 (4.1). The wrapper, `resolve_graph_layout_with_connections`, does four
+things before it: checks the node list and edges (Tier A already has, 2.1), sorts the stages
+(`topological_sort`), converts `ChipTuple`s into `InternalChip`s, and asks the control plane
+for links when none are given. Tier C needs only the sort, which is file-local in the same
+`pipeline_builder.cpp`, so C2 calls it as the wrapper does. The search is the same function
+Tier D reaches through `resolve_graph_layout`, so the two cannot drift. It handles fork graphs
+today: edges form a DAG after dropping loopbacks, and edges carried over host are left out.
 
 The first version of Tier C calls it with no change: the rerun benchmark drove the unmodified
-search with injected links on every case in 4.2, and the wrapper reaches the control plane
-only when `direct_links` is null. The resolver throws with a message string on failure; C2
+search with injected links on every case in 4.2. The resolver throws with a message string on failure; C2
 catches it, rejects that carve and keeps the message as the reason. No structured failure is
 needed. The resolver tries every stage-to-submesh assignment and link before it throws, so its
 failure is about the whole carve and cannot soundly name one stage. Failures that do depend on
@@ -1687,7 +1690,7 @@ tries the unused submeshes in order and keeps one that passes every check:
 
 | Check | Rule |
 |---|---|
-| chip count | the submesh has exactly `node_chip_counts[stage]` chips |
+| chip count | the submesh has exactly `stage_chip_counts[stage]` chips |
 | core capacity | links the stage needs (one per edge, plus 2 for stage 0's host-to-device and device-to-host) fit `capacity x chips`, where capacity is 1 slot per chip on submeshes of 8 or more chips and 2 on smaller ones |
 | neighbour count | the submesh has at least as many distinct neighbouring submeshes as the stage has distinct logical neighbours |
 | connectivity | it links to the submesh of every already-placed neighbour |
@@ -1823,7 +1826,7 @@ broadcast on every rank (4.3, open question 20). The control plane's gather is u
 |---|---|---|
 | `collect_inter_mesh_candidates(mesh_graph, psd, fabric_node_to_asic, options)` | 9 | replaces `inter_mesh_cables`, once per seating, with the same options as the final call |
 | down-link hashes in the chip info | 9 | down links never reach C1, closing question 20 |
-| cable-type filter and tier per channel (`PortTypeRules`) | 6 | disallowed cables never reach C1; `R` and `direct_links` take better tiers first |
+| cable-type filter and tier per channel (`PortTypeRules`) | 6 | disallowed cables never reach C1; `R` and `submesh_links` take better tiers first |
 | `PortDescriptor::tier` and the tier sort in `pair_logical_intermesh_ports` | 9 | the fill order after the required links (4.3) |
 | `resolve_inter_mesh_binding` in the mapper (stretch) | 11 | later: check that the required links can be placed before the mapping is emitted (4.3) |
 
@@ -1905,14 +1908,14 @@ with every slice used.
 
 | Piece | Today | Tier C |
 |---|---|---|
-| resolver | `resolve_graph_layout_with_connections` (C++) | **use directly** (3.1) |
+| resolver | `resolve_pipeline_placement` (C++), after `topological_sort` | **use directly** (3.1) |
 | host slices | the MGD's `get_host_ranks` (a grid of host ranks) and `get_coord_range`, the same slices Tier B divides out | **use directly**: each host's range, laid out as the host grid, in `LogicalMultiMeshGraph::mesh_host_grids_` (4.0, 4.1) |
 | stages and edges | `PipelineDescriptorData` (MGD) | **use directly**: the stage graph beside today's mesh graphs is built from them, and each stage's shape and declared edges (`PipelineDescriptorData::Edge`) are kept beside it; no separate logical pipeline type (4.0) |
 | carve | `plan_ring_carve`, `plan_fork_carve` (Python) | **replaced** by the footprint solve (4.1, 4.2) |
 | RELAXED (later): host cuts | `plan_ring_placement`, `plan_fork_placement` (Python) | **replaced** by soft target edges in the same solve |
 | per-chain resolution | `_resolve_chains_separately` (Python) | **rebuild**: a loop over the resolver, one call per fabric chain |
 | default core counts | `_pipeline_core_defaults` (Python) | **rebuild** (open question 7) |
-| submesh links | `discover_submesh_links` (C++, asks the control plane) | not needed: C2 supplies `direct_links` |
+| submesh links | `discover_submesh_links` (C++, asks the control plane) | its loop, in C1 with the MGD's links and PSD cables in place of the control plane (4.1) |
 ## 4. Pipeline mapping in the topology mapper (Tier C)
 
 The topology mapper places meshes with SAT joint seating. A *seat* is a physical footprint
@@ -2005,7 +2008,7 @@ Tier B, which already lives in `pipeline_builder.cpp`.
 Includes: `pipeline_builder.cpp` includes `topology_mapper_utils.hpp` and `topology_solver.hpp`;
 `pipeline_builder.hpp` includes neither (it forward-declares), so the ttnn ops and the nanobind
 module that include it are unchanged. `topology_mapper_utils.hpp` includes `pipeline_builder.hpp`
-for `ChipTuple`, `GraphLayoutResult` and `DirectLinks`, which the new types store as is. `topology_mapper_utils.cpp` includes
+for `InternalChip`, `GraphLayoutResult` and `DirectLinks`, which the new types store as is. `topology_mapper_utils.cpp` includes
 `pipeline_builder.hpp`. Both `.cpp` files are in the same library (`tt_metal/fabric/sources.cmake`).
 
 ```
@@ -2067,7 +2070,7 @@ and SAT session the seating uses:
   a coordinate from the MGD's `get_host_ranks`, which has the same layout.
 - **Physical: part of `PhysicalMultiMeshGraph`.** The positions are four fields of the
   `physical` graph `next()` already builds for each seating, the twin of the stage graph in
-  `logical_`. `build_hierarchical_from_flat_graph` leaves them empty: a position's chips depend
+  `logical_`. `build_hierarchical_from_flat_graph` leaves them empty: the cables between positions depend
   on the intra-mesh layout, so `build_physical_pipeline_adjacency_graph` fills them after
   intra-mesh success, and only when the MGD has pipelines. A node is a *position*: a rectangle of host slices on one mesh that some stage
   shape fills exactly. Positions are generated for every stage shape, so they overlap: on a
@@ -2075,7 +2078,7 @@ and SAT session the seating uses:
   That is intended. The graph lists every place a stage could go; the resource constraint
   (each slice in at most one chosen position) keeps the chosen ones apart. An edge joins two
   positions only when they are disjoint and border each other, so overlapping positions are
-  never adjacent. Each position keeps its chips as the resolver's `ChipTuple`s and each edge
+  never adjacent. Each position keeps its chips as the resolver's `InternalChip`s and each edge
   its links as the resolver's `DirectLinks`, so the carve's resolver arguments are lookups,
   not conversions. The positions depend only on the stage shapes and host slices; only the links
   between meshes change per seating, so the positions may be cached if the stats call for it.
@@ -2095,7 +2098,8 @@ instead of defining:
 | a stage's id | `PipelineStageId` (`fabric_types.hpp`), an integer |
 | host slices per mesh | `MeshContainer<MeshCoordinateRange>`, shaped as the host grid; each cell the MGD's `get_coord_range` for that host |
 | position nodes | `std::size_t` indices |
-| a position's chips | `std::vector<ChipTuple>` (resolver input) |
+| a position | a `MeshCoordinateRange` of the host grid, while C1 runs; then its index |
+| a position's chips | `std::vector<detail::InternalChip>` (resolver input: `FabricNodeId`, slot-local row and col) |
 | links between positions | `detail::DirectLinks` (resolver input) |
 | the carve | `MappingResult<PipelineStageNode, std::size_t>` (solver) |
 | a pipeline's layout | `GraphLayoutResult` (resolver output) |
@@ -2182,16 +2186,16 @@ LogicalMultiMeshGraph build_logical_multi_mesh_adjacency_graph(const MeshGraphDe
 ```cpp
 // --- additions to PhysicalMultiMeshGraph (P5), the twin of the LogicalMultiMeshGraph fields ---
 // Empty by default; build_hierarchical_from_flat_graph leaves them so. Filled per seating by
-// build_physical_pipeline_adjacency_graph after intra-mesh success, because a position's chips depend
-// on the intra-mesh layout, and only when the logical stage graph has nodes. Position i is a rectangle of host
+// build_physical_pipeline_adjacency_graph after intra-mesh success, because the cables between positions
+// depend on the intra-mesh layout, and only when the logical stage graph has nodes. Position i is a rectangle of host
 // slices on one mesh that some stage shape fills exactly.
 struct PhysicalMultiMeshGraph {
     // ... mesh_adjacency_graphs_, mesh_level_graph_, mesh_exit_node_graphs_, mesh_pgd_pinnings_ as today ...
 
     AdjacencyGraph<std::size_t> pipeline_position_graph_;               // disjoint, bordering; one entry per link
-    std::vector<std::vector<ChipTuple>> pipeline_position_chips_;       // per position: (mesh, chip, row, col), slot-local
+    std::vector<std::vector<::tt::tt_fabric::detail::InternalChip>> pipeline_position_chips_;   // per position: FabricNodeId, slot-local row and col
     std::vector<std::vector<std::uint32_t>> pipeline_position_slices_;  // per position: slice ids, for add_resource_constraint
-    detail::DirectLinks pipeline_position_links_;                       // keyed by (position, position), both ways
+    ::tt::tt_fabric::detail::DirectLinks pipeline_position_links_;       // keyed by (position, position), both ways
 };
 
 // --- the solve's answer (P5): no new type. solve_pipeline_footprint returns the solver's own
@@ -2201,7 +2205,7 @@ struct PhysicalMultiMeshGraph {
 // --- the mapping result (P6 fills it, P8 returns it) ---
 // Each pipeline keeps the resolver's own input and output, the same layout blaze gets at runtime.
 struct PipelinePlacement {
-    std::vector<std::vector<ChipTuple>> submesh_chips;   // resolver input: pipeline_position_chips_ of each stage's position
+    std::vector<std::vector<::tt::tt_fabric::detail::InternalChip>> submesh_chips;   // resolver input: pipeline_position_chips_ of each stage's position
     GraphLayoutResult layout;                            // resolver output: stage order, node_to_submesh,
                                                          // resolved_edges (exit/entry chips), H2D and D2H chips
 };
@@ -2314,15 +2318,17 @@ bool detail::check_pipeline_seating(const LogicalMultiMeshGraph& logical,
             placement.submesh_chips.push_back(physical.pipeline_position_chips_[position]);   // already slot-local
         }
         const DirectLinks links = direct_links(carve, physical);   // pipeline_position_links_ re-keyed to submesh indices
+        const std::vector<EdgeInputTuple> edges = edge_tuples(pipeline, logical);
         try {
-            placement.layout = resolve_graph_layout_with_connections(
-                node_names(pipeline, logical), edge_tuples(pipeline, logical), placement.submesh_chips,
-                chip_counts(pipeline, logical), core_counts(pipeline, logical), std::nullopt, &links);
+            const std::vector<std::string> order = topological_sort(node_names(pipeline, logical), edges);   // as the wrapper does
+            placement.layout = resolve_pipeline_placement(
+                order, edges, links, chip_counts(pipeline, logical), placement.submesh_chips, core_counts(pipeline, logical));
+            placement.layout.stage_order = order;
         } catch (const std::runtime_error& e) {
             return reject(full, "pipeline_layout", fmt::format("pipeline '{}': {}", pipeline, e.what()));
         }
         // IMPORTANT: R is the exact channel of every crossing, so phase 0 binds the cable the check used.
-        // Chips come back through submesh_chips: layout.node_to_submesh + (row, col) -> (mesh, chip);
+        // Chips come back through submesh_chips: layout.node_to_submesh + (row, col) -> the chip's FabricNodeId;
         // the channel is the PSD's next unused one between those two ASICs.
         record_required_links(placement, full, psd, result.required_links);
         result.pipelines.emplace(pipeline, std::move(placement));
@@ -2338,11 +2344,11 @@ bool detail::check_pipeline_seating(const LogicalMultiMeshGraph& logical,
 File-local helpers beside it: `inter_mesh_cables` (3.3), `pipeline_pre_checks` (4.2, "Solve
 cost"), `add_resource_completeness` (4.2, "No solver changes"), `pipeline_names` and `carve_of` (a
 pipeline's positions in stage order), the resolver arguments `direct_links`, `node_names`, `edge_tuples`,
-`chip_counts` and `core_counts` (4.2, "From the chosen rectangles to the resolver call"),
+`chip_counts` and `core_counts` (4.2, "From the chosen rectangles to the resolver call"), today's `topological_sort`,
 `record_required_links` (4.2, "Which cable each crossing uses"), `first_over_demand` (4.2, "`R`
 must fit each connection's demand"), and `reject`, which sets `full.success = false`,
 `full.stats.failure_stage` and `full.error_message` and returns false. They return existing
-types (`ChipTuple`, `EdgeInputTuple`, `DirectLinks`, `ExitNodeConnection`); there is no wrapper struct.
+types (`InternalChip`, `EdgeInputTuple`, `DirectLinks`, `ExitNodeConnection`); there is no wrapper struct.
 
 #### The mapper hook and where the mapping is saved (P8)
 
@@ -2441,7 +2447,7 @@ stage order and the crossings are all decided by the solve in C2.
   connection (`inter_mesh_cables`, 3.3), and the links the intra-mesh topology
   routes over.
 - **Output.** The seating's `PhysicalMultiMeshGraph` gains its `pipeline_position_*` fields, in the resolver's own types: the chips
-  of each position (`ChipTuple`s) and, for each pair of touching positions, the candidate links
+  of each position (`InternalChip`s) and, for each pair of touching positions, the candidate links
   between them (`DirectLinks`). Channels are not stored; `R` looks up the exact channel in the
   PSD once the resolver has picked a crossing's two chips (4.2).
 - **What it does not decide.** The carve, stage order or crossings (C2), which channels are
@@ -2449,12 +2455,12 @@ stage order and the crossings are all decided by the solve in C2.
 
 ```
 G = build_physical_pipeline_adjacency_graph(logical, full, psd, physical)  pipeline_builder.cpp, fills physical.pipeline_position_*
-      slices:    logical.mesh_host_grids_[m]: one coordinate range per host, chips through full.fabric_node_to_physical
+      slices:    logical.mesh_host_grids_[m]: one coordinate range per host; a chip is FabricNodeId(m, row-major id)
       shapes:    logical.pipeline_stages_, the distinct stage shapes
       cands:     inter_mesh_cables(psd, full, a, b) per connected pair (3.3) + routed intra-mesh links
       positions: every rectangle of slices that a stage shape fills, per mesh (they overlap); index i
       edges:     two disjoint positions, a slice of one bordering a slice of the other
-      links:     per edge, the candidate links behind it, as DirectLinks keyed (i, j)
+      links:     per ordered pair, one LinkPair per linked chip pair (discover_submesh_links' loop), keyed (i, j)
 C = built inside solve_pipeline_footprint (4.2), target logical.pipeline_stage_graph_
       required: stage -> positions of its shape; resource: position -> covered slices
 ```
@@ -2463,7 +2469,7 @@ C = built inside solve_pipeline_footprint (4.2), target logical.pipeline_stage_g
 which positions touch. The check after it does not: per-chip pipeline-core capacity, a stage
 whose entry and exit land on the same chip, and the chips stage 0's host I/O uses, are
 chip facts. So each position keeps its chips and each edge
-keeps the links behind it, ready to become the resolver's `submesh_chips` and `direct_links`
+keeps the links behind it, ready to become the resolver's `chips` and `submesh_links`
 (3.1) for whichever rectangles the solve picks.
 
 #### Links
@@ -2481,6 +2487,12 @@ To do:
 
 - In `build_physical_pipeline_adjacency_graph`, call
   `inter_mesh_cables(psd, full.fabric_node_to_asic, a, b)` for each mesh pair the MGD connects.
+- Find the links the way `discover_submesh_links` does: for every ordered pair of disjoint
+  positions, one `LinkPair` per linked chip pair, so each direction has its own exit and entry
+  chips. That function asks the control plane, which does not exist at mapping time, so C1 runs
+  the same loop with its own test: inside a mesh, `logical.mesh_adjacency_graphs_`; between
+  meshes, a cable from `inter_mesh_cables`. No slice or link types are added: a position is a
+  `MeshCoordinateRange` of the host grid while C1 builds it.
 - For each position-graph edge, keep the links behind it as `LinkPair`s in
   `PhysicalMultiMeshGraph::pipeline_position_links_` (`DirectLinks`, keyed by the two position indices). C2
   re-keys the chosen positions' entries to submesh indices for the resolver, and looks up the
@@ -2585,20 +2597,20 @@ resolver (3.1) whatever the mapper did. The one way the runtime can fail on a ca
 accepted is a chip collision: the endpoints a slice must host do not fit its chips (two cables
 landing on the same chip, or more endpoints than the slice has core slots). The carve cannot
 see that. So C2 runs the resolver itself on one submesh per chosen rectangle
-(`resolve_graph_layout_with_connections`, the contract below). The chip counts force its
+(`resolve_pipeline_placement`, the contract below). The chip counts force its
 placement step, so its link step is the check. It runs once, on the one carve.
 
 #### Which cable each crossing uses (IMPORTANT)
 
 The mapping says two rectangles on different meshes touch through *some* candidate cable.
 When several cables join them, the mapping does not pick one. The resolver's link step does:
-`direct_links` carries every candidate link between the two slots, ordered by chip id,
+`submesh_links` carries every candidate link between the two slots, ordered by chip id,
 and `resolved_edges` returns the exit and entry chip of the link it used. So `R` comes from the
 resolver, not from the mapping:
 
 1. For each resolved edge whose two slots are on different meshes, read its exit and entry
    chips back from `submesh_chips`: `layout.node_to_submesh` gives the submesh, the edge's
-   `(row, col)` the `ChipTuple`, and its `(mesh_id, chip_id)` the `FabricNodeId`.
+   `(row, col)` the `InternalChip`, and its `fid` the `FabricNodeId`.
 2. Look that chip pair up in `inter_mesh_cables` (3.3), which holds the PSD's
    `ExitNodeConnection` entries between the two ASICs, and take one channel: the lowest
    source ETH channel (best tier first once P16 lands). The pairing has no order of its own to
@@ -2697,37 +2709,38 @@ The six arguments:
 
 | Argument | What C2 builds | Rule the resolver enforces |
 |---|---|---|
-| `nodes` | every stage name, in declaration order, isolated stages included | every edge endpoint must be listed; no duplicates |
-| `edges` | `(src, dst, is_loopback)` per STRICT fabric edge; `is_loopback` is the MGD edge's `loopback`, which Tier A has checked (2.1). RELAXED (later): edges left to host are dropped, and each fabric chain is its own call (`_resolve_chains_separately`) | the non-loopback edges must form a DAG, or the sort throws `cycle detected` |
-| `submesh_chips` | one entry per slot: `(mesh_id, chip_id, row, col)` for each chip, `chip_id` from `full.fabric_node_to_asic` | `(row, col)` are **slot-local**: relative to the slot's own origin, recomputed when a slot spans several host slices |
-| `node_chip_counts` | `rows x cols` of each stage's `shape` (already in chips) | a stage only binds to a slot with exactly that many chips, so the placement step is forced to the solve's carve |
-| `node_pipeline_core_counts` | blaze's `_pipeline_core_defaults` per node: ring head 4 with `co_locate_ring_host_io`; chain head and tail 2 | empty means 1 slot per chip on slots of 8 or more chips, 2 on smaller ones |
-| `direct_links` | `DirectLinks`: per ordered slot pair, every `LinkPair{exit_row, exit_col, entry_row, entry_col}` | **directed per key**: a cable usable both ways appears under `{i, j}` and `{j, i}`, each with its own exit and entry chips |
+| `stage_order` | `topological_sort` of every stage name (its id as text), isolated stages included | the non-loopback edges must form a DAG, or the sort throws `cycle detected`; Tier A guarantees it (2.1) |
+| `edges` | `(src, dst, is_loopback)` per STRICT fabric edge; `is_loopback` is the MGD edge's `loopback`, which Tier A has checked (2.1). RELAXED (later): edges left to host are dropped, and each fabric chain is its own call (`_resolve_chains_separately`) | each edge needs a link between its two stages' slots |
+| `submesh_links` | `DirectLinks`: per ordered slot pair, every `LinkPair{exit_row, exit_col, entry_row, entry_col}` | **directed per key**: a cable usable both ways appears under `{i, j}` and `{j, i}`, each with its own exit and entry chips |
+| `stage_chip_counts` | `rows x cols` of each stage's `shape` (already in chips) | a stage only binds to a slot with exactly that many chips, so the placement step is forced to the solve's carve |
+| `chips` | one entry per slot: an `InternalChip{fid, row, col}` per chip, `fid` the chip's logical `FabricNodeId` | `(row, col)` are **slot-local**: relative to the slot's own origin, recomputed when a slot spans several host slices |
+| `capacity_overrides` | blaze's `_pipeline_core_defaults` per node: ring head 4 with `co_locate_ring_host_io`; chain head and tail 2 | empty means 1 slot per chip on slots of 8 or more chips, 2 on smaller ones |
 
 Steps, in order:
 
 1. **Links and slices.** C1 already stores both in the resolver's types (4.1): each position's
-   chips as slot-local `ChipTuple`s in `pipeline_position_chips_`, and every candidate link between two
+   chips as slot-local `InternalChip`s in `pipeline_position_chips_`, and every candidate link between two
    touching positions (not only the ones that will be bound) as `LinkPair`s in `pipeline_position_links_`, under
    both `{i, j}` and `{j, i}`, ordered by chip id (best cable tier first once P16 lands).
 2. **Slots.** `carve_of(pipeline, logical, target_to_global)`: the positions of the pipeline's stages,
    in stage order, each looked up as `target_to_global.at(PipelineStageNode{pipeline.name,
    stage.id})`. A slot may span several host slices.
-3. **`submesh_chips`.** `pipeline_position_chips_[p]` for each slot `p`, copied as is: the `(row, col)`
-   were made slot-local when C1 built the position. No reverse map is kept: each `ChipTuple`
-   already holds `(mesh_id, chip_id)`, so `R` reads a resolved chip back from `submesh_chips`.
-4. **`direct_links`.** For each pair of slots `(a, b)` at submesh indices `(i, j)`, copy
+3. **`chips`.** `pipeline_position_chips_[p]` for each slot `p`, copied as is: the `(row, col)`
+   were made slot-local when C1 built the position. No reverse map is kept: each `InternalChip`
+   already holds its `FabricNodeId`, so `R` reads a resolved chip back from `submesh_chips`.
+4. **`submesh_links`.** For each pair of slots `(a, b)` at submesh indices `(i, j)`, copy
    `pipeline_position_links_[{a, b}]` under `{i, j}`. Pairs with no entry do not touch. Nothing is recomputed.
-5. **Stage inputs.** `nodes`, `edges` with the MGD's loopback marks, `node_chip_counts` from each
+5. **Stage inputs.** `stage_order`, `edges` with the MGD's loopback marks, `stage_chip_counts` from each
    stage's shape, and the core counts, all read from the pipeline's stages in
    `logical.pipeline_stages_` (each stage's outgoing edges keep `src → dst` and the loopback mark). The resolver names nodes with strings, so a node's name is its
-   `PipelineStageId` as text (`std::to_string(stage.id)`), and `layout` reads back the same
-   way. They cost a few string copies per pipeline per seating.
+   `PipelineStageId` as text (`std::to_string(node.stage_id)`), `stage_order` is
+   `topological_sort` of those names, and `layout` reads back the same way. They cost a few string copies per pipeline per seating.
 6. **Guard stage 0.** Stage 0 needs its edge links plus 2 slots for H2D and D2H. A one-chip slot
    has 2 slots and fails on capacity before any search, so C1 never offers stage 0 a one-chip
    position (with 4x2-chip slices stage 0 has 8 slots and needs 4).
-7. **Call and read back.** `resolve_graph_layout_with_connections(nodes, edges, submesh_chips,
-   node_chip_counts, node_pipeline_core_counts, std::nullopt, &direct_links)`.
+7. **Call and read back.** `resolve_pipeline_placement(stage_order, edges, submesh_links,
+   stage_chip_counts, chips, capacity_overrides)`, then `layout.stage_order = stage_order`, as
+   the wrapper does.
    `resolved_edges` gives each edge's exit and entry chip in slot-local coordinates; H2D and
    D2H chips are separate fields. `R` is recorded from it as in "Which cable each crossing
    uses".
