@@ -141,9 +141,20 @@ vllm serve /path/to/MiMo-V2.6-Flash-MOPD --served-model-name XiaomiMiMo/MiMo-V2.
 `--data-parallel-size 4` runs the four rows as lanes of one engine, and a step is all-prefill or all-decode for every
 lane: a prefill on one lane stops the other lanes' decode (on SPEED-Bench coding at c=16, prefill steps take 19-26% of
 the wall time). `serving/serve_rows.sh` runs four engines instead, each with `--data-parallel-size 1` on one row's 8
-chips (`TT_VISIBLE_DEVICES`, `MESH_DEVICE=(1,8)`, ports 8001-8004), behind `serving/lb.py` on port 8000. The proxy
-sends each request to the engine with the fewest in flight, and its `/metrics` concatenates the engines'. A row
+chips (`TT_VISIBLE_DEVICES`, `MESH_DEVICE=(1,8)`, ports 8001-8004), behind `serving/lb.py` on port 8000. A row
 prefills while the others decode, and each engine's host work runs in its own process.
+
+The proxy routes by prefix, because each engine has its own prefix cache.
+- **Prefix key.** It hashes each request's prompt in 256-character chunks: the chat messages and tools, or a
+  completion prompt or its token ids, plus `cache_salt`.
+- **Index.** An LRU index of the chunk hashes records which engines served each prefix.
+- **Routing.** A request whose longest known prefix is at least 1024 characters goes to the least loaded engine
+  holding it. If that engine has more than 2 requests in flight above the least loaded engine, the request goes to
+  the least loaded engine instead, which then caches the prefix too. Any other request goes to the least loaded
+  engine.
+- **Health and metrics.** `/health` is 200 only when every engine is healthy. `/metrics` concatenates the engines'
+  metrics. `/lb/stats` shows the routing counters.
+- **Failover.** A request whose engine refuses the connection goes to another engine.
 
 ```bash
 TT_METAL_HOME=<tt-metal build> PLUGIN_SRC=<vllm-tt-plugin at mimo-v2.6-flash/single-lane>/src VLLM=<venv>/bin/vllm \
@@ -197,6 +208,31 @@ The 4-lane plain numbers are from the build before #63006. That change touches o
 | TTFT median / max | 494 / 661 s | 224 / 293 s |
 | prefill over the run | 6,122 tok/s | 13,122 tok/s |
 | decode window (all 16 decoding) | 1291.8 tok/s | 1301.0 tok/s |
+
+**tt-inference-server.** The release flow starts this deployment itself, on branch
+`mimo-v2.6-flash/row-engines` of tt-inference-server. A device spec's `submesh_engines` (the four row chip groups in
+the MiMo Blackhole Galaxy entries) makes `vllm-tt-metal/src/run_vllm_api_server.py` start one engine per group and
+serve the same proxy (`engine_proxy.py`) on the service port, so every workflow talks to one endpoint.
+- **Checked on the host:** the launcher with the dev catalog's MiMo runtime spec (1M context) came up with all 4
+  engines healthy in 250 s. SPEED-Bench c=16 through it gave 958 tok/s greedy and 938 sampled, and SIGTERM stopped
+  every engine in 8 s.
+- **Image:** it needs the vllm-tt-plugin branch above.
+
+Shared prefixes, through the proxy with and without prefix routing (`--min-match-chars` 1e12 turns it off):
+- Workload: 8 documents of 6000 random words (about 8K tokens), 4 questions each, sent question by question (a
+  document's requests are not adjacent), c=16, 32 output tokens. Each run used its own `cache_salt`, and the two
+  modes alternated, two runs each.
+- The plugin reports no prefix-cache counters on TT; the tokens actually prefilled come from the engines' MiMo
+  prefill timing lines.
+
+| | load only | prefix routing |
+|---|---|---|
+| wall time | 9.4 / 8.3 s | 7.7 / 6.5 s |
+| TTFT mean / median | 2.50 / 2.57 s, 2.27 / 2.29 s | 1.90 / 1.37 s, 1.94 / 1.62 s |
+| prompt tokens prefilled | 186,788 / 157,346 | 109,992 / 103,825 |
+
+Prefilling each document once would be about 70K tokens. The rest is requests that arrived while their document
+was still prefilling on the same engine, plus spills.
 
 Checks:
 - c=1 greedy on 16 prompts (63 to 60,000 tokens, 64 output tokens), served by rows 0 and 1, is identical to the
@@ -739,8 +775,7 @@ with one mechanism, for 1 and 3 MTP layers:
 - Prefill and decode in the same step for different lanes (the plugin runs a step as all-prefill or all-decode); one
   engine per row ("One engine per Galaxy row") runs them at the same time on different rows.
 - Row engines:
-  - the plugin HTTP suite and an accuracy eval through the proxy;
-  - prefix-cache-aware routing (the proxy balances by load, so a repeated prefix only hits on the engine that holds it);
+  - the plugin HTTP suite and an accuracy eval through the proxy (or a full TTI release run);
   - DFlash;
   - c=16 at 1M.
 - Tracing later prefill chunks and chunks longer than 512 tokens.
