@@ -56,6 +56,7 @@ struct matmul_params
     std::uint32_t face_r_dim;    ///< rows per face, both operands
     std::uint32_t num_faces;     ///< faces per tile, both operands
     bool transpose;              ///< in1's faces transposed (not ported yet)
+    bool reuse_x;                ///< x (SrcB) is held while w streams; from the Resolver's unpack walk
     std::uint32_t rt_dim;        ///< output tiles along y
     std::uint32_t ct_dim;        ///< output tiles along x
     std::uint32_t kt_dim;        ///< K tiles
@@ -70,6 +71,7 @@ constexpr matmul_params matmul_params_from(const Plan& p)
         p.work.face_r_dim,
         p.work.num_faces,
         p.math.transpose_faces,
+        p.walk.held == Where::SrcB,
         p.work.rt_dim,
         p.work.ct_dim,
         p.work.kt_dim,
@@ -79,18 +81,14 @@ constexpr matmul_params matmul_params_from(const Plan& p)
     };
 }
 
-inline constexpr std::uint32_t mvmul_rows = 8; ///< SrcB and Dest rows one MVMUL covers
+inline constexpr std::uint32_t mvmul_rows = 8; ///< SrcB and Dest rows one MVMUL covers (and SrcA is one 16-row face)
+inline constexpr std::uint32_t faces_per_face_row = 2; ///< a 32x32 tile is 2 x 2 faces, stored face 0, 1 (top), 2, 3 (bottom)
+inline constexpr std::uint32_t replay_tile_start  = 16; ///< the math thread's replay slots for one tile: [16, 32)
 
 /// Dest rows one output tile takes.
 constexpr std::uint32_t dest_rows_per_tile(const matmul_params& p)
 {
     return p.num_faces * p.face_r_dim;
-}
-
-/// True when in0 (SrcB) is the reused operand; must match unpack.h's matmul_walk::reuse_src_b.
-constexpr bool reuse_src_b(const matmul_params& p)
-{
-    return p.ct_dim >= p.rt_dim;
 }
 
 /// Row counter behavior of one address modifier: {increment, clear, carriage return} for SrcA, SrcB and Dest.
@@ -142,7 +140,7 @@ inline __attribute__((always_inline)) void matmul_configure()
     static_assert(P.num_faces == 4 && P.face_r_dim == FACE_R_DIM, "32x32 tiles only, for now: the address modifiers below assume four 16-row faces");
     static_assert(!P.transpose, "transposed matmul is not ported yet");
     constexpr bool hifi    = P.math_fidelity != 0;
-    constexpr bool reuse_b = reuse_src_b(P);
+    constexpr bool reuse_b = P.reuse_x;
 
     // Dest mode and ALU format baseline (the math side of hw_configure). Wait for math and SFPU to drain first.
     hal::sync::wait::stall<StallTarget::Config, StallCondition::MathIdle | StallCondition::SfpuIdle>();
@@ -157,19 +155,36 @@ inline __attribute__((always_inline)) void matmul_configure()
         cfg::set<cfg::AluFormatSpecReg::SrcB_val, cfg::Sec::S0, 0>(),
         cfg::set<cfg::AluFormatSpecReg::SrcB_override, cfg::Sec::S0, 0>());
 
-    // Address modifiers, in rows (see the file comment for what each one is for).
-    constexpr std::uint32_t face = P.face_r_dim;
-    constexpr counter_step hold {0, 0, 0}, back {0, 0, 1}, reset {0, 1, 1};
-    set_addr_mod<cfg::Sec::S0, hold, counter_step {mvmul_rows, 0, 0}, counter_step {mvmul_rows, 0, 0}>();          // next_rows
-    set_addr_mod<cfg::Sec::S1, counter_step {face, 0, 0}, back, counter_step {mvmul_rows, 0, 0}>();                 // next_in1_face
-    set_addr_mod<cfg::Sec::S2, back, counter_step {2 * face, 0, 1}, counter_step {mvmul_rows, 0, 0}>();             // next_in0_face
-    set_addr_mod<cfg::Sec::S4, counter_step {2 * face, 0, 1}, counter_step {3 * face, 0, 1}, back>();               // second_k_half
-    set_addr_mod<cfg::Sec::S5, reset, reset, reset, hifi ? 1u : 0u>();                                             // tile_done
+    // Address modifiers. Row counters (RWCs) follow the ISA's ApplyAddrMod: a plain step adds incr to the counter; a
+    // carriage-return step adds incr to the counter's CR register and copies it to the counter; clear zeroes both.
+    // SrcA and SrcB counters are 6 bits (tt-isa-documentation, RWCs.md), so they wrap every 64 rows: one tile's
+    // 4 faces of 16 rows. Faces sit in Src row-major: face f starts at row f * face_rows.
+    // in1 (SrcA) is K x N: its faces 0, 1 are the first K half, 2, 3 the second.
+    // in0 (SrcB) is M x K: its faces 0, 2 are the first K half, 1, 3 the second.
+    constexpr std::uint32_t face_rows          = P.face_r_dim;
+    constexpr std::uint32_t one_face           = face_rows;                      // SrcA: face 0 -> 1, the next output face column
+    constexpr std::uint32_t one_face_row       = faces_per_face_row * face_rows; // SrcB: face 0 -> 2, the bottom output faces; SrcA: CR 0 -> face 2
+    constexpr std::uint32_t one_face_row_and_1 = one_face_row + face_rows;       // SrcB: CR at face 2 (row 32) + 48 = row 80, wraps to 16: face 1
+    constexpr counter_step stay {0, 0, 0};          // counter unchanged
+    constexpr counter_step back_to_cr {0, 0, 1};    // counter back to its CR row
+    constexpr counter_step clear {0, 1, 1};         // counter and CR to 0
+    constexpr counter_step down_one_mvmul {mvmul_rows, 0, 0};
+    // next_rows: SrcB and Dest on by one MVMUL, to the second half of the faces
+    set_addr_mod<cfg::Sec::S0, stay, down_one_mvmul, down_one_mvmul>();
+    // next_in1_face: SrcA to in1's next face; SrcB back to the start of its face; Dest on to the next output face
+    set_addr_mod<cfg::Sec::S1, counter_step {one_face, 0, 0}, back_to_cr, down_one_mvmul>();
+    // next_in0_face: SrcA back to its CR face; SrcB (and its CR) one face row down; Dest on to the bottom output faces
+    set_addr_mod<cfg::Sec::S2, back_to_cr, counter_step {one_face_row, 0, 1}, down_one_mvmul>();
+    // second_k_half: SrcA to in1 face 2, SrcB to in0 face 1 (both through CR); Dest back to the tile's first row
+    set_addr_mod<cfg::Sec::S4, counter_step {one_face_row, 0, 1}, counter_step {one_face_row_and_1, 0, 1}, back_to_cr>();
+    // tile_done: every counter to 0, and the next fidelity phase (HiFi only)
+    set_addr_mod<cfg::Sec::S5, clear, clear, clear, hifi ? 1u : 0u>();
 
     // One tile: 16 MVMULs. With LoFi the last one also releases the streamed Src bank; with HiFi that waits for the
     // MOP's end op, after the last fidelity phase.
     constexpr auto release_streamed = hifi ? hal::fpu::SourceRelease::None : (reuse_b ? hal::fpu::SourceRelease::SrcA : hal::fpu::SourceRelease::SrcB);
-    constexpr hal::replay::BufferRange tile_replay {16, 16};
+    constexpr std::uint32_t mvmuls_per_tile = 16; // 4 output faces x 2 MVMULs (8 rows each) x 2 K halves
+    constexpr hal::replay::BufferRange tile_replay {replay_tile_start, mvmuls_per_tile};
     hal::replay::record<tile_replay>(
         []
         {
@@ -219,13 +234,13 @@ inline __attribute__((always_inline)) void matmul_configure()
 }
 
 /// One K step into the rt_dim x ct_dim output tiles starting at dest_row (relative to the current Dest section).
-/// Walks the tiles in the order unpack.h's matmul_walk delivers them: for each reused tile, every streamed one.
+/// Walks the tiles in the order the unpack walk delivers them: for each held (reused) tile, every streamed one.
 template <matmul_params P>
 inline __attribute__((always_inline)) void matmul_execute(std::uint32_t dest_row)
 {
     using namespace ckernel;
     using namespace hal::counters::rwc;
-    constexpr bool reuse_b                 = reuse_src_b(P);
+    constexpr bool reuse_b                 = P.reuse_x;
     constexpr std::uint32_t reused_tiles   = reuse_b ? P.rt_dim : P.ct_dim;
     constexpr std::uint32_t streamed_tiles = reuse_b ? P.ct_dim : P.rt_dim;
     constexpr MathCounter release_reused {.src_a = Set(0), .src_b = Set(0), .dest = Set(0), .flip = reuse_b ? Src::B : Src::A, .clear_fidelity = true};
@@ -234,7 +249,7 @@ inline __attribute__((always_inline)) void matmul_execute(std::uint32_t dest_row
     {
         for (std::uint32_t streamed_tile = 0; streamed_tile < streamed_tiles; streamed_tile++)
         {
-            // Output tiles are row-major: (row, column) = (reused, streamed) when in0 is reused, else swapped.
+            // Output tiles are row-major: (row, column) = (reused, streamed) when x is reused, else swapped.
             const std::uint32_t output_tile = reuse_b ? P.ct_dim * reused_tile + streamed_tile : reused_tile + streamed_tile * P.ct_dim;
             cfg::write<cfg::Access::TensixCfgUnit, cfg::DestTargetRegCfgMath::Offset, cfg::Sec::S0>(
                 dest_row + output_tile * dest_rows_per_tile(P) + get_dest_buffer_base());
