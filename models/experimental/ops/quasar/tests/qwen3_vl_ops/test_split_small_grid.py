@@ -6,7 +6,9 @@
 # from a capture. See small_grid.py for the conventions these cases follow.
 #
 # The captured call splits the [1,1,32,151936] bfloat8_b LM-head logits from L1 into four
-# DRAM pieces along the width. This keeps that form in bfloat16 at [1,1,32,4096].
+# pieces along the width. This keeps that form in bfloat16 at [1,1,32,4096]. With no
+# memory_config the pieces stay in the input's L1 (the capture saw them in DRAM, after the
+# model had moved them), so that is what is checked here.
 # ---------------------------------------------------------------------------
 """Small-grid cases for ``ttnn.split`` that fit a 1- or 2-compute-node device."""
 
@@ -26,7 +28,12 @@ CASES = [
         _NAME,
         [t([1, 1, 32, 4096], mem=S.l1()), lit(1024)],
         {"dim": lit(3)},
-        [out([1, 1, 32, 1024]), out([1, 1, 32, 1024]), out([1, 1, 32, 1024]), out([1, 1, 32, 1024])],
+        [
+            out([1, 1, 32, 1024], mem=S.l1()),
+            out([1, 1, 32, 1024], mem=S.l1()),
+            out([1, 1, 32, 1024], mem=S.l1()),
+            out([1, 1, 32, 1024], mem=S.l1()),
+        ],
     ),
 ]
 

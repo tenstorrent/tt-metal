@@ -7,8 +7,11 @@
 #
 # The captured call is greedy decoding over the full [1,1,32,151936] vocab. argmax compares
 # every element in scalar code on a data-movement core, so 4.9M elements do not finish on
-# craq-sim in the test budget. These keep the full vocab width for one row (the reduction and
-# its cross-core merge are the same) and add a 32-row case at a narrower width.
+# craq-sim in the test budget. These keep the full vocab width for two rows (the reduction and
+# its cross-core merge are the same) and add a 32-row case at a narrower width. At least two
+# output rows are needed: with one, argmax_multi_core cannot split rows across both DM
+# processors and binds its DFBs self-looped on one, which Quasar rejects (dfb.cpp:603).
+# The model always has 32 rows (one per decode user), so it never takes that path.
 # ---------------------------------------------------------------------------
 """Small-grid cases for ``ttnn.argmax`` that fit a 1- or 2-compute-node device."""
 
@@ -24,9 +27,9 @@ _NAME = "ttnn.argmax"
 
 CASES = [
     case(
-        "small_1x151936",
+        "small_2x151936",
         _NAME,
-        [t([1, 1, 1, 151936], layout="ROW_MAJOR")],
+        [t([1, 1, 2, 151936], layout="ROW_MAJOR")],
         {"dim": lit(-1), "output_tensor": lit(None), "keepdim": lit(False), "sub_core_grids": lit(None)},
     ),
     case(
