@@ -2180,3 +2180,53 @@ Why: "engine still seems really slow". Bottom-up in the head (probes, per-step w
   ~210 GB/s) is the largest piece; the x round is lock-step (a receiver signals ready for round j only on entering
   receive(j), after round j - 1 landed) and the owner's loopback fence waits for all 11 acks. New probe NOWREAD (no W
   DRAM reads at all).
+
+### SE engine round protocol (2026-10-28, K3 head traced, test_head_se3 ring of 4; median core)
+Why: gate / up's handshake-only build-up (NOMATH, NOX, NOW, NOWREAD, NOXWAIT, NOGLU) took 49 us for 64 steps (~0.77 us
+a step); the x round looked lock-step (a receiver acks round j only on entering receive(j)) with the owner's loopback
+fence waiting for all 11 acks. Baseline today: handshake-only gate / up 49.5 us; traced head 386.2 / 386.4 / 386.8 us,
+gate / up 224.3, PCC 0.99985.
+- x rounds by hand, credit-based (SE_XCR=1, A/B): receivers credit round n to its owner as soon as its XIN slot is
+  free (not on reaching round n), the owner multicasts data linked to a count-up stamp (XD[slot], loopback - the owner
+  waits on its own stamp, no write barrier), owners send out of order (as soon as their credits are in, before the
+  previous round landed on them). Handshake-only: 49.8 (credits, in-order owner) / 49.5 (send-ahead) / 50.8 (the
+  same protocol lock-step, SE_XLA=0) / 49.8 (+ the owner's write barrier back) vs 49.5; traced head 388.2 / 384.6
+  vs 386.2, gate / up unchanged (223-224). Per-step waits (GUWAIT, GUSTEP) in the handshake-only run: x 0.3-0.45 us a
+  step, W ~0 - with or without credits. Not the x protocol.
+- Probe NOXR (no x rounds at all) in the handshake-only run: 44.1 us (vs 49.5) - the x rounds are ~5 us of it, the W
+  stream paces the rest. (Probe NOWR in the fused head HANGS by itself: its "push as if landed" blocks the NCRISC in
+  cb_reserve_back(WIN) while the compute waits for RS arrivals that loop must push - triage: NCRISCs in
+  cb_reserve_back, BRISCs past the x rounds. Do not use NOWR in the head.)
+- New probe WLOOP (the NCRISC loop's passes and cycles while the first chunk's gate / up W rounds land): 175 passes in
+  59 K cycles - ~340 cycles (0.25 us) a pass, ~2.7 passes a W round. Every pass re-ran blk() (4 runtime divisions:
+  sps is a runtime arg) in the prefetch scan, the send's skip loop and the credit, plus offset_of's walk at a send.
+- SE_WTAB=1: round -> block and my blocks' W-own offsets tabled once (uint16 on the stack): handshake-only 48.8 ->
+  41.1 us (285 cycles a pass); traced head 381.5 / 385.5 / 382.0 vs 386.2 / 386.4 / 386.8 (~-4 us), gate / up 224
+  (unchanged - see below), PCC same.
+- SE_WGATE=1 (skip the RS / latent / prep / y checks while the first chunk's gate / up W rounds land): 147 cycles a
+  pass, gate / up 41.3 (no change on top of WTAB); head 380.9. SE_WDEF=1 (the W ready set issued once the block left
+  L1 - non-blocking, instead of flush / set / flush): 43.2 handshake-only (no gain). SE_WNB=1 (a send whose DRAM read
+  has not landed is skipped this pass instead of blocking the loop in the trid barrier): head 382.9 (no gain).
+- Why the real gate / up does not move (GUWAIT / GUSTEP per column, WTAB): the 5-pair columns (logical 0-3) wait x 41-51
+  us and W 11-18 us a call, nearly all of it at step 0 (x ~5, W 4-10 - the first W blocks after the router phase),
+  step 2 (x 5-11: round 2 waits for every row core's pop of round 0, and the lighter columns wait on W round 0 up to
+  16 us) and step 16 (x ~18.5: shard 1 from the gather); between those they are math-bound (x / W ~0). The lighter
+  columns' extra x waits (~1.3-1.5 us at the narrow-pass steps) are the row waiting for the 5-pair columns - load
+  balance, not protocol. So the head's gate / up is heavy-column math + startup + shard arrival; the round protocol
+  is hidden under math there.
+- SE_WEARLY=1 (my blocks of the stream's first window issued at kernel start, under the router phase): router logits
+  37 -> 48.5 us (the reads crowd NOC1 / the leads' read barrier), gate / up 224 -> 216.5; head 390.0 - worse.
+- GLM-5.3-Flash 2x4 5120 traced head: base 957.7, WTAB 952.1, WTAB + XCR 956.0 (PCC 0.98686 each). An earlier GLM base
+  run (same default code) timed out in the fused head's build (the test caught it and fell back to the ops head; cores
+  15-2 / 15-3 - the gather's port column - did not finish; no triage: the timeout was swallowed); the repeat passed.
+  Intermittent - see llk-merge-branch-hang; not reproduced in the 6 later GLM runs.
+- Kept (default, no switch): the per-round tables. Deleted: SE_XCR (credit x rounds), SE_WDEF, SE_WNB, SE_WGATE,
+  SE_WEARLY (the exploration diff: moe_block_runs/se_round_protocol_explore.patch). Probe WLOOP stays.
+  Validation: K3 head traced 382.0 us (base 386.2-386.8), PCC 0.99985. K3 block (k3_ring4 640, traced, same day):
+  head 390.6 vs 394.0 at HEAD, dispatch / experts + combine / tail unchanged (55.0 / 1151.3 / 115.2), PCC 0.99612;
+  MOE_COMBINE_SNAP=-14 MOE_TRACE_REPLAYS=200: 0 of 186 replays differ (PCC min 0.99611; eager calls bit-identical
+  PCCs to the earlier snap run). GLM: head 954.7 (base 957.7), PCC 0.98686, 0 of 34 differ.
+Reading: the round protocol is no longer what the K3 head's gate / up waits on - it is the 5-pair columns' math plus
+the startup (~16 us: the first W blocks land after the router phase; round 2 waits on every row core's pop of round
+0) and the gather's shard arrival (~18.5 us at shard 1). The handshake-only floor is now ~0.64 us a step (41 us).
+x-round credits would only pay with more XIN slots (2 now; the arena has 16 KB free at KB 14, a slot is 56 KB).

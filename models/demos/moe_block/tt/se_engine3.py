@@ -482,15 +482,28 @@ void kernel_main() {
     const uint32_t wbank = get_arg_val<uint32_t>(ys0 + GY);  // (the DRAM bank holding my W-own region)
     const uint32_t sps = get_arg_val<uint32_t>(ys0 + GY + 1), ord0 = ys0 + GY + 3;  // (steps a shard; the shard order)
     // round w's block (natural index): a gate / up pass's steps in this chip's processing order, then down's
-    auto blk = [&](uint32_t w) {
-        const uint32_t c = w % NB;
-        if (c >= NPG * NSG) return c;
-        const uint32_t k = c / (NPG * sps), rem = c % (NPG * sps), pg = rem / sps, st = rem % sps;
-        return pg * NSG + get_arg_val<uint32_t>(ord0 + k) * sps + st;  // (shard-major: shard, pass, step)
-    };
     auto bsize = [&](uint32_t b) {  // (tiles)
         return b < NPG * NSG ? KB * get_arg_val<uint32_t>(wg0 + b / NSG) : KBD * get_arg_val<uint32_t>(wd0 + (b - NPG * NSG) / NSD1);
     };
+    // (a chunk's round -> block, and my blocks' offsets in my W-own, tabled once: computed in place, the round's block
+    // (4 runtime divisions - sps is a runtime arg) and the offset's walk over my blocks ran on every pass of the
+    // stream's loop below (the prefetch scan, the send's skip, the credit) - ~340 cycles a pass, a W round ~2.7
+    // passes; tabled ~285 (K3 head handshake-only gate / up 48.8 -> 41.1 us, traced head ~-4 us; GLM-5.3 -5.6 us))
+    static_assert(NB <= 1024, "W rounds a chunk");
+    uint16_t rblk[NB], woffs[NB / GY + 1];
+    for (uint32_t c = 0; c < NB; ++c) {
+        uint32_t b = c;
+        if (c < NPG * NSG) {
+            const uint32_t k = c / (NPG * sps), rem = c % (NPG * sps), pg = rem / sps, st = rem % sps;
+            b = pg * NSG + get_arg_val<uint32_t>(ord0 + k) * sps + st;  // (shard-major: shard, pass, step)
+        }
+        rblk[c] = b;
+    }
+    for (uint32_t kb = 0, o = 0; cy + kb * GY < NB; ++kb) {  // (my blocks: cy, cy + GY, ..)
+        woffs[kb] = o;
+        o += bsize(cy + kb * GY);
+    }
+    auto blk = [&](uint32_t w) -> uint32_t { return rblk[w % NB]; };
     const auto yg = TensorAccessor(y_args, y_addr, 2048);
     // my blocks from DRAM, once: my W-own is one contiguous region in one bank (per-bank layout, wbase its offset),
     // read block by block in large bursts, every read issued now - the k-th block's under transaction id
@@ -636,11 +649,7 @@ void kernel_main() {
 #else
     constexpr uint32_t WPN = NB;  // (the first chunk's: resident after it)
 #endif
-    auto offset_of = [&](uint32_t b) {
-        uint32_t o = 0;
-        for (uint32_t b2 = cy; b2 < b; b2 += GY) o += bsize(b2);
-        return o;
-    };
+    auto offset_of = [&](uint32_t b) { return static_cast<uint32_t>(woffs[b / GY]); };  // (b: one of mine)
     uint32_t dn_go = 0;  // (SE_BRW_DN1: the down's NOC1 reads start once the stream passed round SE_DN1_AT)
     uint32_t wla = 0;  // (SE_WLA: rounds landed here - the window's base)
     auto prefetch = [&](uint32_t upto) {  // (issue my blocks of rounds < upto, and the window)
@@ -809,8 +818,17 @@ void kernel_main() {
 #ifdef SE_HW
     uint32_t hw_it = 0, hw_last[4] = {};
 #endif
+#ifdef SE_PROBE_WLOOP
+    uint32_t wl_it = 0, wl_t0 = 0, wl_t1 = 0;  // (the loop's passes while the first chunk's gate / up W rounds land; cycles)
+#endif
     while (ws < NR || wr < NR || wc < NR || af < NCH * naf || ab < NCH * nab || fo < NCH * fcount || ff < NFF || lo < NLO || li < NLI || pu < pnu || !rout) {
         invalidate_l1_cache();
+#ifdef SE_PROBE_WLOOP
+        if (wr < NPG * NSG) {
+            if (wl_it++ == 0) wl_t0 = *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+            wl_t1 = *reinterpret_cast<volatile uint32_t*>(RISCV_DEBUG_REG_WALL_CLOCK_L);
+        }
+#endif
 #ifdef SE_HW
         if ((++hw_it & 0x3FF) == 0) {  // (a snapshot every 1024 polls: per-poll stores hid the hang)
         HWW(0, 0xE0000000u | (hw_it & 0xFFFFFF)); HWW(1, ws); HWW(2, wr); HWW(3, wc); HWW(4, af); HWW(5, ab); HWW(6, fo);
@@ -946,7 +964,7 @@ void kernel_main() {
 #ifdef SE_WRING
             woff = slot_of[kb] * WSLOT;
 #else
-            for (uint32_t b2 = cy; b2 < b; b2 += GY) woff += bsize(b2);
+            woff = offset_of(b);
 #endif
             if (ws < WPN) {  // (first chunk, or every chunk with the ring: its reads issued and landed)
 #ifdef SE_BRW
@@ -1023,6 +1041,10 @@ void kernel_main() {
     }
 #endif
     noc_async_write_barrier();
+#ifdef SE_PROBE_WLOOP
+    DeviceTimestampedData("SE-WLIT", wl_it);
+    DeviceTimestampedData("SE-WLCY", wl_t1 - wl_t0);
+#endif
 #ifdef SE_BRW
     wsy[0] = 0, wsy[1] = 0;  // (re-arm: every block landed and sent)
 #endif
@@ -1594,7 +1616,8 @@ def _probes():
     DRAM reads (16 B a block); NOWREAD: no W DRAM reads at all; NOXWAIT: the x rounds do not wait for a shard's arrival (gate / up at its own pace in the
     head: GU_ALONE at the head's shapes) - the results are wrong. GUWAIT (results right): gate / up's unpacker cycles
     waiting for x / W a core, SE-GUWX / SE-GUWW; GUSTEP (with GUWAIT): the first 48 steps' waits, one data marker each
-    (unnamed in the csv: their source lines sit inside a macro argument)."""
+    (unnamed in the csv: their source lines sit inside a macro argument). WLOOP: the NCRISC stream loop's passes and
+    cycles while the first chunk's gate / up W rounds land (SE-WLIT / SE-WLCY, a core)."""
     import os
 
     out = "".join(f"#define SE_PROBE_{p}\n" for p in os.environ.get("SE_PROBE", "").split(",") if p)
