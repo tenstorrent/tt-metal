@@ -18,6 +18,7 @@ import pytest
 import torch
 import torch.nn.functional as F
 
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.mtp_verify import row_serial_torch
 from models.demos.blackhole.qwen38_flash_next.tests.helpers.torch_ttnn import (
     BF16,
     FP32,
@@ -45,7 +46,6 @@ from models.demos.blackhole.qwen38_flash_next.tests.helpers.torch_ttnn import (
     source_segment,
     view_tile_pages,
 )
-from models.demos.blackhole.qwen38_flash_next.tools.mtp_v2_verify_reference import row_serial_torch
 from models.demos.blackhole.qwen38_flash_next.tt.gdn import Qwen38GDN, Qwen38GDNState
 from models.demos.blackhole.qwen38_flash_next.ttnn import gdn as gdn_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import mtp_v2

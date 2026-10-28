@@ -19,6 +19,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from models.demos.blackhole.qwen38_flash_next.tests.helpers.mtp_verify import accept_select
 from models.demos.blackhole.qwen38_flash_next.tests.helpers.torch_ttnn import (
     BF16,
     DRAFT_WIDTH,
@@ -68,7 +69,6 @@ from models.demos.blackhole.qwen38_flash_next.tests.helpers.torch_ttnn import (
     source_segment,
     use_aliasing_view,
 )
-from models.demos.blackhole.qwen38_flash_next.tools.mtp_v2_verify_reference import accept_select
 from models.demos.blackhole.qwen38_flash_next.ttnn import embedding as embedding_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import final_mixer as final_mixer_module
 from models.demos.blackhole.qwen38_flash_next.ttnn import gdn as gdn_module
