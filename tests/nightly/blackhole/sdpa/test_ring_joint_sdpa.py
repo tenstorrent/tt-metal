@@ -9081,12 +9081,12 @@ def test_ring_joint_attention_chunked_unrolled_v_perf_check(model_name, ring_siz
 if MESH_CONFIG.is_galaxy:
     # sp=8 tp=4, the Galaxy's floater schedules (ttnn/cpp/ttnn/operations/transformer/sdpa/device/
     # ring_joint_floater_layout.hpp): measured on a high-power Blackhole Galaxy, two runs within 0.3 percentage points
-    # (K3 61.06 / 60.88%, K2.7 55.89 / 55.62%). +/-1.5% as on the LoudBox rows: two samples, one host, not yet compared
+    # (K3 61.38 / 61.37%, K2.7 56.94 / 56.72%). +/-1.5% as on the LoudBox rows: two samples, one host, not yet compared
     # with the CI host.
     EXPANDED_K_CHUNKED_PERF_CHECK_CONFIGS = [
         # (model_name, ring_size, expected_util, margin)
-        ("kimi_k3_expanded_k", 8, 60.97, 0.015),
-        ("kimi_k2_7_expanded_k", 8, 55.76, 0.015),
+        ("kimi_k3_expanded_k", 8, 61.37, 0.015),
+        ("kimi_k2_7_expanded_k", 8, 56.83, 0.015),
     ]
 else:
     # The Blackhole LoudBox ring (sp=8 tp=1), production fabric packets, with the floaters
