@@ -8,7 +8,6 @@
 #include <functional>
 #include <memory>
 #include <mutex>
-#include <unordered_map>
 
 namespace tt::umd {
 class Cluster;

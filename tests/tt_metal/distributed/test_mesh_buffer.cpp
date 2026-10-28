@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <boost/move/utility_core.hpp>
 #include <gtest/gtest.h>
 #include "gmock/gmock.h"
 #include <tt-metalium/tensor/spec/tensor_spec.hpp>

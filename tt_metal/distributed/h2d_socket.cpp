@@ -12,6 +12,7 @@
 #include <tt-metalium/experimental/sockets/hd_socket_descriptor.hpp>
 #include "tt_metal/distributed/pcie_core_writer.hpp"
 #include <tt-metalium/experimental/sockets/shm_resource_tracker.hpp>
+#include <tt-umd/driver_atomics.hpp>
 #include "tt_metal/impl/buffers/h2d_socket_internal.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
@@ -31,7 +32,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <stdexcept>
-#include <sys/mman.h>
 #include <unistd.h>
 
 namespace tt::tt_metal::distributed {

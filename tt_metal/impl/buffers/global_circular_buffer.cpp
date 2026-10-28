@@ -5,7 +5,6 @@
 #include <tt_stl/assert.hpp>
 #include <buffer.hpp>
 #include <buffer_types.hpp>
-#include <circular_buffer_constants.h>
 #include <core_coord.hpp>
 #include <device.hpp>
 #include <global_circular_buffer.hpp>
@@ -33,7 +32,6 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/context/metal_env_impl.hpp"
 #include "llrt/tt_cluster.hpp"
-#include <umd/device/types/xy_pair.hpp>
 
 namespace tt::tt_metal::experimental {
 

@@ -4,7 +4,6 @@
 
 #include "watcher_server.hpp"
 
-#include <unistd.h>
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -30,7 +29,6 @@
 #include "llrt/hal.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
-#include <tt_stl/span.hpp>
 #include "impl/context/metal_env_accessor.hpp"
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>

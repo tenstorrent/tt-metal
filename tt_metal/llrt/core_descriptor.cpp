@@ -17,9 +17,7 @@
 #include <tt_stl/assert.hpp>
 #include "common/core_coord.hpp"
 #include "hal.hpp"
-#include "hal_types.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
-#include "common/tt_backend_api_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <tt-metalium/experimental/fabric/control_plane.hpp>

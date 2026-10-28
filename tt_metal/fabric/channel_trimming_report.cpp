@@ -10,7 +10,6 @@
 #include <vector>
 
 #include <tt-logger/tt-logger.hpp>
-#include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <yaml-cpp/yaml.h>
 

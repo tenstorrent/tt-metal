@@ -9,10 +9,8 @@
 #include <climits>
 #include <cstdint>
 #include <cstddef>
-#include <future>
 #include <memory>
 #include <mutex>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -22,7 +20,6 @@
 #include <unistd.h>
 #include <sys/resource.h>
 #include <numa.h>
-#include <tt-metalium/device.hpp>
 #include "impl/device/device_impl.hpp"
 #include <tt_stl/small_vector.hpp>
 #include <tt_stl/tt_pause.hpp>

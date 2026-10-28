@@ -21,7 +21,6 @@
 #include "noc/noc_overlay_parameters.h"
 #include "noc/noc_parameters.h"
 #include "rtoptions.hpp"
-#include "tensix.h"
 #include "hal_2xx_common.hpp"
 #include "internal/tt-2xx/quasar/overlay/remapper_common.hpp"
 #include "internal/tt-2xx/quasar/tensix_neo_reg.h"

@@ -6,27 +6,12 @@
 #include <tt_stl/assert.hpp>
 #include <buffer.hpp>
 #include "impl/buffers/buffer_impl.hpp"
-#include <host_api.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <tt_metal.hpp>
 #include <functional>
 #include <memory>
 
 #include "device.hpp"
-#include "dispatch/device_command.hpp"
-#include "impl/context/metal_context.hpp"
-#include "hal_types.hpp"
-#include "lightmetal/host_api_capture_helpers.hpp"
-#include "tt-metalium/program.hpp"
-#include <tt_stl/span.hpp>
 #include <tt_stl/overloaded.hpp>
-#include "system_memory_manager.hpp"
-#include "tt_metal/impl/dispatch/data_collection.hpp"
-#include "tt_metal/impl/dispatch/kernels/cq_commands.hpp"
-#include "tt_metal/impl/program/dispatch.hpp"
-#include <impl/dispatch/dispatch_query_manager.hpp>
-#include <impl/debug/dprint_server.hpp>
-#include <impl/debug/watcher_server.hpp>
 
 using namespace tt::tt_metal;
 

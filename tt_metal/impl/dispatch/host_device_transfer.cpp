@@ -15,7 +15,6 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/per_core_allocation/buffer.hpp>
 
-#include "impl/allocator/allocator.hpp"
 #include "impl/context/context_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/emulation/host_sanitizers.hpp"

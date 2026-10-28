@@ -4,13 +4,11 @@
 
 #pragma once
 
-#include <circular_buffer.hpp>
 #include <device.hpp>
 #include <tt-metalium/program.hpp>
-#include <stdint.h>
+#include <cstdint>
 #include "impl/dispatch/vector_aligned.hpp"
 #include <tt_stl/span.hpp>
-#include <array>
 #include <functional>
 #include <memory>
 #include <unordered_map>

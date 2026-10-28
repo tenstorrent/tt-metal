@@ -12,10 +12,8 @@
 #include <cstring>
 #include <chrono>
 #include <cstdlib>
-#include <optional>
 #include <thread>
 #include <string>
-#include <tuple>
 
 #include <tt_stl/assert.hpp>
 #include "core_coord.hpp"
@@ -32,7 +30,6 @@
 #include <tt-umd/types/core_coordinates.hpp>
 #include <impl/dispatch/dispatch_core_manager.hpp>
 #include "impl/dispatch/kernels/cq_prefetch.hpp"
-#include <impl/debug/inspector/inspector.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <impl/dispatch/dispatch_mem_map.hpp>
 #include <impl/device/device_manager.hpp>

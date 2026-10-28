@@ -4,15 +4,12 @@
 
 #pragma once
 
-#include <bitset>
-#include <compare>
 #include <cstdint>
 #include <map>
 #include <mutex>
 #include <umd/device/types/xy_pair.hpp>
 #include <unordered_map>
 #include <array>
-#include <internal/profiler/event_metadata.hpp>
 #include <internal/profiler/noc_debugging_metadata.hpp>
 #include <unordered_set>
 #include <set>

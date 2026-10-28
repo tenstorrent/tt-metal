@@ -16,8 +16,6 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt_stl/fmt.hpp>
-#include <circular_buffer_constants.h>  // For NUM_CIRCULAR_BUFFERS
 #include <core_coord.hpp>
 #include <fmt/base.h>
 #include <fmt/ranges.h>
@@ -25,16 +23,10 @@
 #include "llrt/hal/tt-2xx/quasar/qa_att_windows.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/xy_pair.hpp>
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
-#include "core_descriptor.hpp"
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
-#include "dispatch_core_common.hpp"
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 #include "hal_types.hpp"
 #include "hostdev/debug_ring_buffer_common.h"

@@ -7,7 +7,6 @@
 #include <functional>
 #include <memory>
 #include <optional>
-#include <thread>
 #include <vector>
 
 #include <tt_stl/span.hpp>

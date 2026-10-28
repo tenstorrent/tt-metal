@@ -4,18 +4,15 @@
 
 #pragma once
 
-#include <stdint.h>
+#include <cstdint>
 #include <cstddef>
 #include <map>
 #include <optional>
 #include <vector>
 
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/tt_backend_api_types.hpp>
-#include <tt-umd/cluster_descriptor.hpp>
 #include <tt-umd/types/core_coordinates.hpp>
 #include <tt-umd/soc_descriptor.hpp>
-#include <tt-umd/types/xy_pair.hpp>
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 
 //! SocDescriptor contains information regarding the SOC configuration targeted.

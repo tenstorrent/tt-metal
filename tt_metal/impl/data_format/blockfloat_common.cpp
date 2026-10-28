@@ -5,7 +5,6 @@
 #include <algorithm>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/span.hpp>
-#include <array>
 #include <vector>
 #include <thread>
 #include <future>

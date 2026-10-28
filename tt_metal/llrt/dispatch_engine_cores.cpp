@@ -14,7 +14,6 @@
 #include "llrt/tt_cluster.hpp"
 #include <tt_stl/assert.hpp>
 #include <tt-metalium/device.hpp>
-#include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-umd/types/arch.hpp>
 #include <tt-umd/types/core_coordinates.hpp>

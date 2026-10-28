@@ -5,8 +5,6 @@
 #include "semaphore.hpp"
 #include <cstdint>
 
-#include <umd/device/types/core_coordinates.hpp>
-
 namespace tt::tt_metal {
 
 Semaphore::Semaphore(

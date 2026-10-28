@@ -5,7 +5,6 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/reflection.hpp>
 
-#include <boost/move/utility_core.hpp>
 #include <fmt/format.h>
 #include <mesh_coord.hpp>
 #include "distributed/mesh_coord_utils.hpp"

@@ -11,7 +11,6 @@
 #include <filesystem>
 #include <fstream>
 #include <istream>
-#include <iterator>
 #include <functional>
 #include <memory>
 #include <mutex>

@@ -21,6 +21,7 @@
 #include <tt-metalium/host_api.hpp>
 
 #include "common/executor.hpp"
+#include "impl/context/metal_env_impl.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/dispatch/dispatch_query_manager.hpp"
 #include "impl/program/kernel_compile_utils.hpp"

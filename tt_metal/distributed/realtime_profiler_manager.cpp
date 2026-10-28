@@ -29,10 +29,11 @@
 #include <fmt/core.h>
 #include <tt-logger/tt-logger.hpp>
 
+#include <tt-metalium/allocator.hpp>
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/sockets/d2h_socket.hpp>
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
-#include <tt-metalium/mesh_buffer.hpp>
+#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_device_view.hpp>
@@ -42,7 +43,6 @@
 #include <tt-umd/types/xy_pair.hpp>
 
 #include <common/TracySystem.hpp>
-#include <common/TracyTTDeviceData.hpp>
 #include <llrt/tt_cluster.hpp>
 #include <tracy/TracyTTDevice.hpp>
 

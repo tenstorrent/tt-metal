@@ -9,6 +9,7 @@
 #include <stdexcept>
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
+#include <tt-metalium/distributed.hpp>
 #include <tt-metalium/system_mesh.hpp>
 
 #include "impl/context/metal_context.hpp"

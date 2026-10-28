@@ -28,7 +28,6 @@
 
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include "common/executor.hpp"
 #include "get_platform_architecture.hpp"
 #include "hal_types.hpp"
 #include "llrt/hal.hpp"
@@ -45,7 +44,6 @@
 #include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <tt-umd/types/cluster_types.hpp>
 #include <tt-umd/types/xy_pair.hpp>
-#include <unistd.h>
 
 static constexpr uint32_t HOST_MEM_CHANNELS = 4;
 static constexpr uint32_t HOST_MEM_CHANNELS_MASK = HOST_MEM_CHANNELS - 1;
