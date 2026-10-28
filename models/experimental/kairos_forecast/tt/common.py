@@ -105,3 +105,34 @@ def bmm_config(device, m: int, k: int, n: int, fp32_dest: bool = True):
         per_core_M=mt,
         per_core_N=nt,
     )
+
+
+def linear_config(M: int, K: int, N: int, relu: bool = False, fp32_dest: bool = True, grid=(11, 10)):
+    """R1-4: 2D multicast program config for a (M, K) @ (K, N) linear (M over the 10 rows, N over the 11 columns),
+    from the per-role sweep (iter_01/sweep_linear.jsonl): the largest in0_block_w <= 8, the largest output subblock
+    that fits the dst, and an out_block_h <= 26 tiles with out_block_h x per_core_N <= 84 tiles
+    (bigger blocks overflow L1 in the sweep). relu goes into the epilogue (a precision change, D3).
+    None for small M (the default config is as fast there)."""
+    import ttnn
+
+    Mt, Kt, Nt = M // TILE, K // TILE, N // TILE
+    if Mt < 8 * grid[1]:
+        return None
+    dst = 4 if fp32_dest else 8
+    pm, pn = -(-Mt // grid[1]), -(-Nt // grid[0])
+    kw = max(d for d in range(1, 9) if Kt % d == 0)
+    sw = max(d for d in range(1, min(pn, dst) + 1) if pn % d == 0)
+    sh = max(d for d in range(1, dst // sw + 1) if pm % d == 0)
+    bh = max(d for d in range(1, 27) if pm % d == 0 and d % sh == 0 and d * pn <= 84)  # out block: L1 (sweep)
+    return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=kw,
+        out_subblock_h=sh,
+        out_subblock_w=sw,
+        out_block_h=bh,
+        out_block_w=pn,
+        per_core_M=pm,
+        per_core_N=pn,
+        transpose_mcast=False,
+        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.RELU) if relu else None,
+    )

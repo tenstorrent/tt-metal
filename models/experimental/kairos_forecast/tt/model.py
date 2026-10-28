@@ -18,6 +18,7 @@ import torch
 
 from models.experimental.kairos_forecast.tt.common import (
     bmm_config,
+    linear_config,
     D_PAD,
     NEG,
     S_PAD,
@@ -250,11 +251,16 @@ class TtKairos:
     def _lin(self, x, w, *, bias=None, act=None, fid=None, dtype=None):
         import ttnn
 
+        M = 1
+        for d in tuple(x.shape)[:-1]:
+            M *= d
+        cfg = linear_config(M, x.shape[-1], w.shape[-1], act == "relu", self.p.fp32_dest_acc_en)  # R1-4
         return ttnn.linear(
             x,
             w,
             bias=bias,
-            activation=act,
+            activation=act if cfg is None else None,
+            program_config=cfg,
             compute_kernel_config=self.p.mm(fid) if fid is None else fid,
             dtype=dtype,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
