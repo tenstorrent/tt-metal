@@ -244,6 +244,36 @@ void kernel_main() {
     // hidden behind block i's matmul, and block i - 2's y is ready: the block's queued I/O.
     // One N block per core: the in0 kernel starts every M block at K block 0 (it only alternates
     // direction between N blocks of one M block), so the K order here is always forward.
+#ifdef NORM_ONLY
+    // No matmul: the compute runs block i's first pass, then block i - 1's second pass. Exchange
+    // block i once its partial sums exist, then write block i - 1's y.
+    for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
+        exchange(m_block_iter);
+        if (m_block_iter >= 1) {
+            cb_y.wait_front(out_tiles);
+            io = {};
+            io.y = true;
+            io.y_ptr = cb_y.get_read_ptr();
+            io.y_m = M_start_tile + (m_block_iter - 1) * M_block_tiles;
+            io.end = M_block_tiles * n_real;
+            drain();
+            noc.async_writes_flushed();
+            cb_y.pop_front(out_tiles);
+        }
+    }
+    cb_y.wait_front(out_tiles);
+    io = {};
+    io.y = true;
+    io.y_ptr = cb_y.get_read_ptr();
+    io.y_m = M_start_tile + (M_blocks_per_core - 1) * M_block_tiles;
+    io.end = M_block_tiles * n_real;
+    drain();
+    noc.async_writes_flushed();
+    cb_y.pop_front(out_tiles);
+    noc.async_write_barrier();
+    noc.async_atomic_barrier();
+    return;
+#endif
     constexpr uint32_t xchg_k = K_num_blocks > 1 ? 1 : 0;
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
         const uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;

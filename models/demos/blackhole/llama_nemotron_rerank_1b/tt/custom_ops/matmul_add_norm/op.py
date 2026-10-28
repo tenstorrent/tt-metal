@@ -108,6 +108,7 @@ def matmul_add_norm(
     in1_depth=2,
     full_sync=False,
     transposed=True,
+    norm_only_shape=None,
 ):
     """x ``[1, 1, M, K]``, w ``[K, N]``, residual: the resident stream from ``to_resident`` for [M, N]
     (updated in place to residual + x @ w). Returns y = rmsnorm(residual) * gamma ``[1, 1, M, N]``.
@@ -116,16 +117,22 @@ def matmul_add_norm(
     core's whole N slice (ceil(N / grid_y) tiles; exactly that avoids computing padding), and M_block must divide
     a core's rows (ceil(M / grid_x) tiles). ``fp32_acc=False`` accumulates in bf16 DST (subblocks up
     to 8 tiles instead of 4). ``y_fidelity`` (e.g. "HiFi2") sets the fidelity of the y multiplies
-    (default HiFi4). ``skip_gamma``: y = rmsnorm(h) only (gamma folded into the next matmul)."""
+    (default HiFi4). ``skip_gamma``: y = rmsnorm(h) only (gamma folded into the next matmul).
+    ``norm_only_shape`` = (rows, width) with x = w = None: no matmul, y = rmsnorm(residual) (use
+    ``resident_rmsnorm``)."""
     gamma_tiles, inv_w_tile, one_tile = consts
-    device = x.device()
-    shape = list(x.padded_shape)
-    M = 1
-    for d in shape[:-1]:
-        M *= int(d)
-    M //= TILE
-    K = shape[-1] // TILE
-    N = int(w.padded_shape[-1]) // TILE
+    norm_only = norm_only_shape is not None
+    device = residual.device()
+    if norm_only:
+        M, K, N = norm_only_shape[0] // TILE, 1, norm_only_shape[1] // TILE
+    else:
+        shape = list(x.padded_shape)
+        M = 1
+        for d in shape[:-1]:
+            M *= int(d)
+        M //= TILE
+        K = shape[-1] // TILE
+        N = int(w.padded_shape[-1]) // TILE
     gxy = grid or device.compute_with_storage_grid_size()
     gx, gy = int(gxy.x), int(gxy.y)
     mb, kb, nb, sh, sw = block
@@ -151,32 +158,44 @@ def matmul_add_norm(
     all_cores = g.all_cores()
     out_tiles = mb * nb
     res_shard_tiles = g.M_per_core * g.N_per_core
-    cbs = [
-        mg.cb(0, mb * kb * in0_depth, x.dtype, all_cores),
-        mg.cb(1, kb * nb * in1_depth, w.dtype, all_cores),
-        mg.cb(3, out_tiles, ttnn.float32 if fp32_acc else ttnn.bfloat16, all_cores),
-        ttnn.cb_descriptor_from_sharded_tensor(4, residual),
-        mg.cb(6, 1, ttnn.bfloat16, all_cores),
-        mg.cb(8, nb, ttnn.bfloat16, all_cores),
-        mg.cb(9, mb, ttnn.float32, all_cores),
-        mg.cb(10, 2 * mb, ttnn.float32, all_cores),
-        mg.cb(11, 4, ttnn.float32, all_cores),
-        mg.cb(12, 1, ttnn.bfloat16, all_cores),
-        mg.cb(17, 2 * out_tiles, y_dtype, all_cores),
-    ] + ([] if skip_gamma else [mg.cb(5, nb, ttnn.bfloat16, all_cores)])
+    matmul_cbs = (
+        []
+        if norm_only
+        else [
+            mg.cb(0, mb * kb * in0_depth, x.dtype, all_cores),
+            mg.cb(1, kb * nb * in1_depth, w.dtype, all_cores),
+            mg.cb(3, out_tiles, ttnn.float32 if fp32_acc else ttnn.bfloat16, all_cores),
+        ]
+    )
+    cbs = (
+        matmul_cbs
+        + [
+            ttnn.cb_descriptor_from_sharded_tensor(4, residual),
+            mg.cb(6, 1, ttnn.bfloat16, all_cores),
+            mg.cb(8, nb, ttnn.bfloat16, all_cores),
+            mg.cb(9, mb, ttnn.float32, all_cores),
+            mg.cb(10, 2 * mb, ttnn.float32, all_cores),
+            mg.cb(11, 4, ttnn.float32, all_cores),
+            mg.cb(12, 1, ttnn.bfloat16, all_cores),
+            mg.cb(17, 2 * out_tiles, y_dtype, all_cores),
+        ]
+        + ([] if skip_gamma else [mg.cb(5, nb, ttnn.bfloat16, all_cores)])
+    )
     semaphores = mg.matmul_semaphores(all_cores, extra=1)
     xchg_sem = 6
 
     defines = list(defines) + ([("Y_FIDELITY", y_fidelity)] if y_fidelity else [])
     defines += [("NO_GAMMA", "1")] if skip_gamma else []
+    defines += [("NORM_ONLY", "1")] if norm_only else []
+    w_slot = gamma_tiles if norm_only else w  # the writer's in1 accessor slot (unused without a matmul)
     zoned = any(d == "ZONES" for d, _ in defines)
     in0_kernel = os.path.join(_HERE, "kernels", "dm_in0_zoned.cpp") if zoned else mg.IN0_KERNEL
-    kernels = mg.in0_kernels(device, g, x, y, kernel=in0_kernel)
+    kernels = [] if norm_only else mg.in0_kernels(device, g, x, y, kernel=in0_kernel)
 
-    w_bytes = TILE_BYTES[w.dtype]
+    w_bytes = TILE_BYTES[w_slot.dtype]
     writer_prefix = [g.M, g.padded_M, g.K, g.K, g.N, g.n_n * g.N_per_core, mb, kb, nb, g.M_blocks_per_core]
     writer_prefix += [w_bytes, res_shard_tiles, TILE_BYTES[y_dtype], 0, 3, 4, 5]
-    tail = [g.n_n, xchg_sem] + mg.accessor_args(w, gamma_tiles, inv_w_tile, one_tile, y)
+    tail = [g.n_n, xchg_sem] + mg.accessor_args(w_slot, gamma_tiles, inv_w_tile, one_tile, y)
     send_ct = writer_prefix + [1] + tail
     recv_ct = writer_prefix + [0] + tail
     eps_bits = struct.unpack("<I", struct.pack("<f", eps))[0]
@@ -184,7 +203,7 @@ def matmul_add_norm(
 
     send_rt, recv_rt, compute_rt = [], [], []
     addrs = [
-        w.buffer_address(),
+        w_slot.buffer_address(),
         gamma_tiles.buffer_address(),
         inv_w_tile.buffer_address(),
         one_tile.buffer_address(),
@@ -243,5 +262,30 @@ def matmul_add_norm(
         )
     )
     program = ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=semaphores)
-    ttnn.generic_op([x, w, residual, gamma_tiles, inv_w_tile, one_tile, y], program)
+    ins = (
+        [residual, gamma_tiles, inv_w_tile, one_tile]
+        if norm_only
+        else [x, w, residual, gamma_tiles, inv_w_tile, one_tile]
+    )
+    ttnn.generic_op(ins + [y], program)
     return y
+
+
+def resident_rmsnorm(residual, consts, *, rows, width, eps, block_m=4, grid=None, **kwargs):
+    """y = rmsnorm(residual) * gamma for the L1-resident residual stream (no matmul), with the same
+    exchange of partial sums as matmul_add_norm. Used for the first layer's attention norm."""
+    gxy = grid or residual.device().compute_with_storage_grid_size()
+    _, _, sr, sc = residual_layout(rows, width, gxy, kwargs.get("transposed", True))
+    npc, mpc = sc // TILE, sr // TILE
+    block_m = max(d for d in range(1, block_m + 1) if mpc % d == 0)
+    return matmul_add_norm(
+        None,
+        None,
+        residual,
+        consts,
+        eps=eps,
+        block=(block_m, 1, npc, 1, 1),
+        grid=gxy,
+        norm_only_shape=(rows, width),
+        **kwargs,
+    )

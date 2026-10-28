@@ -23,7 +23,11 @@ import torch
 import ttnn
 from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops.fused_add_rmsnorm import fused_add_rmsnorm
 from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops.fused_heads_rope import fused_heads_rope
-from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops.matmul_add_norm import matmul_add_norm, to_resident
+from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops.matmul_add_norm import (
+    matmul_add_norm,
+    resident_rmsnorm,
+    to_resident,
+)
 from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops.matmul_qkv_rope import (
     make_rope_table,
     matmul_qkv_rope,
@@ -472,9 +476,21 @@ class NemotronReranker:
         if fused and self.cfg.resident_residual:
             # The residual stream stays in L1 (sharded like matmul_add_norm's grid); WO and FF2 add
             # into it in place and write the following RMSNorm's output.
-            xn = self._norm(x, self.layers[0].attn_norm, self.cfg.norm_out_dtype)
             res = to_resident(x, self.grid)
             ttnn.deallocate(x)
+            gamma, inv_w, _eps = self.layers[0].attn_norm_consts
+            xn = resident_rmsnorm(
+                res,
+                (gamma, inv_w, self.one_tile),
+                rows=B * S,
+                width=self.cfg.dim,
+                eps=self.cfg.norm_eps,
+                grid=self.grid,
+                y_dtype=self.cfg.norm_out_dtype,
+                memory_config=self._mem(B * S, self.cfg.dim),
+                y_fidelity=MM_ADD_NORM_Y_FIDELITY,
+                skip_gamma=self.cfg.fold_norm_gamma,
+            )
             for i, layer in enumerate(self.layers):
                 o = self._attention(layer, xn, B, S, mask, block_map, rope, wo=False)
                 ttnn.deallocate(xn)

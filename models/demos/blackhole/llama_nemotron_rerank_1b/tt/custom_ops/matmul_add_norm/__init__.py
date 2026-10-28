@@ -7,6 +7,7 @@ from .op import (
     matmul_add_norm,
     residual_layout,
     residual_memory_config,
+    resident_rmsnorm,
     to_resident,
 )
 
@@ -16,5 +17,6 @@ __all__ = [
     "matmul_add_norm",
     "residual_layout",
     "residual_memory_config",
+    "resident_rmsnorm",
     "to_resident",
 ]

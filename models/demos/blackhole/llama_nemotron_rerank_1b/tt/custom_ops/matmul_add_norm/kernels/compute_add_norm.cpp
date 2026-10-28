@@ -188,7 +188,9 @@ void pass1(uint32_t blk, uint32_t n_real) {
     constexpr uint32_t out_tiles = M_block_tiles * N_block_tiles;
     constexpr uint32_t P = 2;  // h in DST slots 0-1, h^2 in 2-3 (fits fp32 DST's 4 half-sync slots)
     CircularBuffer cb_acc(acc_cb), cb_x2(x2_cb), cb_part(part_cb);
+#ifndef NORM_ONLY
     cb_acc.wait_front(out_tiles);
+#endif
     cb_part.reserve_back(M_block_tiles);
     for (uint32_t m = 0; m < M_block_tiles; ++m) {
         const uint32_t row = (blk * M_block_tiles + m) * res_w;
@@ -200,27 +202,38 @@ void pass1(uint32_t blk, uint32_t n_real) {
             // res_cb and x2_cb are both bf16: one pack format for the row.
             // The FPU add and the SFPU square are initialised once per row (the SFPU init does not
             // touch the FPU's eltwise state).
+#ifdef NORM_ONLY
+            reconfig_data_format_srca(res_cb);
+            copy_init(res_cb);
+#else
             reconfig_data_format(acc_cb, res_cb);
-            pack_reconfig_data_format(res_cb);
             add_init(acc_cb, res_cb);
+#endif
+            pack_reconfig_data_format(res_cb);
             mul_binary_tile_init();
             for (uint32_t n = 0; n < N_block_tiles; n += P) {
                 const uint32_t t = m * N_block_tiles + n;
                 const uint32_t cnt = N_block_tiles - n < P ? N_block_tiles - n : P;
                 tile_regs_acquire();
                 for (uint32_t j = 0; j < cnt; ++j) {
+#ifdef NORM_ONLY
+                    copy_tile(res_cb, row + (n + j < res_w ? n + j : 0), j);
+#else
                     add_tiles(acc_cb, res_cb, t + j, row + (n + j < res_w ? n + j : 0), j);
+#endif
                 }
                 for (uint32_t j = 0; j < cnt; ++j) {
                     mul_binary_tile(j, j, P + j);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
+#ifndef NORM_ONLY
                 for (uint32_t j = 0; j < cnt; ++j) {
                     if (n + j < res_w) {
                         pack_tile<true>(j, res_cb, row + n + j);
                     }
                 }
+#endif
                 for (uint32_t j = 0; j < cnt; ++j) {
                     pack_tile<true>(P + j, x2_cb, n + j);
                 }
@@ -251,7 +264,9 @@ void pass1(uint32_t blk, uint32_t n_real) {
         tile_regs_release();
         cb_x2.pop_front(N_block_tiles);
     }
+#ifndef NORM_ONLY
     cb_acc.pop_front(out_tiles);
+#endif
     // Pushed after every h tile is packed: the writer's exchange waits on it, and pass 2 waits on
     // the gathered tiles the exchange produces, so pass 2's reads of h follow these packs.
     cb_part.push_back(M_block_tiles);
@@ -368,8 +383,12 @@ void kernel_main() {
     CircularBuffer cb_in0(in0_cb), cb_in1(in1_cb), cb_acc(acc_cb), cb_gamma(gamma_cb), cb_inv_w(inv_w_cb);
     CircularBuffer cb_one(one_cb), cb_res(res_cb);
 
+#ifdef NORM_ONLY
+    compute_kernel_hw_startup(res_cb, inv_w_cb, x2_cb);
+#else
     compute_kernel_hw_startup<SrcOrder::Reverse>(in0_cb, in1_cb, acc_cb);
     matmul_init(in0_cb, in1_cb);
+#endif
 
     constexpr uint32_t in0_block_num_tiles = M_block_tiles * K_block_tiles;
     constexpr uint32_t in1_block_num_tiles = K_block_tiles * N_block_tiles;
@@ -384,6 +403,25 @@ void kernel_main() {
     cb_one.wait_front(1);
     cb_res.wait_front(res_shard_tiles);
 
+#ifdef NORM_ONLY
+    // y = rmsnorm(residual) only: block i's first pass, then block i - 1's second pass.
+    for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
+        pass1<M_block_tiles, N_block_tiles, res_w>(m_block_iter, n_real);
+        if (m_block_iter > 0) {
+            pass2_begin<M_block_tiles, N_block_tiles>();
+            for (uint32_t m0 = 0; m0 < M_block_tiles; m0 += G) {
+                pass2_group<M_block_tiles, N_block_tiles, res_w>(m_block_iter - 1, m0, eps_bits);
+            }
+            pass2_end<M_block_tiles, N_block_tiles>();
+        }
+    }
+    pass2_begin<M_block_tiles, N_block_tiles>();
+    for (uint32_t m0 = 0; m0 < M_block_tiles; m0 += G) {
+        pass2_group<M_block_tiles, N_block_tiles, res_w>(M_blocks_per_core - 1, m0, eps_bits);
+    }
+    pass2_end<M_block_tiles, N_block_tiles>();
+    return;
+#endif
     // Software pipeline. Block i's second pass needs the other cores' partial sums, which arrive
     // while block i + 1's matmul runs, so it runs after that matmul (block i's first pass needs
     // the finished accumulator). With INTERLEAVE_P2 its groups instead run between K blocks of
