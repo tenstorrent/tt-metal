@@ -1,8 +1,10 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Full-model PCC on the test goldens (stage C), both precisions; per-layer PCC on `single`.
-The gate is tests/perf/check_gates.py; these are the tt-metal tiers (0.99 normalized / 0.98 final)."""
+"""Full-model PCC on the test goldens (stage C), both precisions. The gate is tests/perf/check_gates.py; these are
+the tt-metal tiers (0.99 normalized / 0.98 final). On `single` the stacked per-layer PCC (each layer's output in
+the full forward, so layer i carries the error of layers < i) is recorded in both precisions, report-only: the
+asserted module PCCs, one module on its golden input, are in test_modules.py (CONTRACT §3, v1.24, D3 item 8)."""
 
 import json
 import os
@@ -13,7 +15,10 @@ import torch
 from models.experimental.flowstate_forecast.reference import weights
 from models.experimental.flowstate_forecast.tests.pcc import metrics
 from models.experimental.flowstate_forecast.tests.golden.test_dataflow import GOLDENS, TEST_CASES
+from models.experimental.flowstate_forecast.tests.perf.check_gates import session_stamp
 from models.experimental.flowstate_forecast.tt.model import FlowStateTT
+
+STAMP = session_stamp()  # v1.23: once, at session start (collection)
 
 OUT = os.environ.get("FLOWSTATE_PCC_OUT", "/tmp/flowstate_pcc")
 
@@ -59,14 +64,14 @@ def test_model_case(tt_model, case):
     assert out["quantile_outputs"].shape == g["quantile_outputs"].shape
     m, col = score(g, out)
     if keep:
-        m["layer_pcc"] = [metrics.pearson(out["layers"][i + 1], g[f"layer{i}"]) for i in range(6)]
-        m["embed_pcc"] = metrics.pearson(out["layers"][0], g["embed"])
-    print(tt_model.p.name, case, json.dumps({k: (round(v, 6) if isinstance(v, float) else v) for k, v in m.items()}))
+        m["layer_pcc_stacked"] = [metrics.pearson(out["layers"][i + 1], g[f"layer{i}"]) for i in range(6)]
+        m["embed_pcc_stacked"] = metrics.pearson(out["layers"][0], g["embed"])
+    print(tt_model.p.name, case, metrics.fmt(m))
+    if keep:
+        print(tt_model.p.name, case, "stacked layer pcc", m["layer_pcc_stacked"], "embed", m["embed_pcc_stacked"])
     os.makedirs(OUT, exist_ok=True)
     with open(f"{OUT}/{tt_model.p.name}_{case}.json", "w") as f:
         json.dump(m, f, indent=1)
-    from models.experimental.flowstate_forecast.tests.perf.check_gates import git_stamp
-
     _record(
         {
             "test": "suite",
@@ -74,7 +79,7 @@ def test_model_case(tt_model, case):
             "precision": tt_model.p.name,
             **m,
             **{f"collapsed_{k}": v for k, v in col.items()},
-            **git_stamp(),
+            **STAMP,
         }
     )
     assert m["pcc_normalized"] > 0.99 and m["pcc_final"] > 0.98, m

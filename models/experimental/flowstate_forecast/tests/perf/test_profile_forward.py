@@ -21,9 +21,12 @@ import ttnn
 
 from models.experimental.flowstate_forecast.reference import weights
 from models.experimental.flowstate_forecast.tests.golden.test_dataflow import GOLDENS
+from models.experimental.flowstate_forecast.tests.perf.check_gates import session_stamp
 from models.experimental.flowstate_forecast.tt.model import FlowStateTT
 
 COUNTS = {"embed": 1, "layer_mid": 5, "layer_last": 1, "decoder": 1}
+
+STAMP = session_stamp()  # v1.23: once, at session start
 
 
 def test_profile_forward(device):
@@ -66,5 +69,5 @@ def test_profile_forward(device):
     out = Path(os.environ.get("MODEL_PROFILE_OUT", "/tmp/flowstate_profile"))
     out.mkdir(parents=True, exist_ok=True)
     (out / "layer_counts.json").write_text(
-        json.dumps({"shape": shape, "precision": precision, "counts": COUNTS}, indent=1)
+        json.dumps({"shape": shape, "precision": precision, "counts": COUNTS, **STAMP}, indent=1)
     )

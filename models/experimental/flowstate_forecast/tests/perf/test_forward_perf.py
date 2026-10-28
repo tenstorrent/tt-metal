@@ -25,13 +25,14 @@ import ttnn
 from models.experimental.flowstate_forecast.reference import weights
 from models.experimental.flowstate_forecast.tests.golden.test_dataflow import GOLDENS
 from models.experimental.flowstate_forecast.tests.pcc import metrics as M
-from models.experimental.flowstate_forecast.tests.perf.check_gates import git_stamp
+from models.experimental.flowstate_forecast.tests.perf.check_gates import session_stamp
 from models.experimental.flowstate_forecast.tt.model import FlowStateTT
 from models.experimental.flowstate_forecast.tt.trace import TracedForward
 
 ITERS = 5
 SETTLE_S = 0.3
 SHAPES = ("paper", "long_context", "long_horizon", "scale_q", "single", "single_long")
+STAMP = session_stamp()  # v1.23: once, at session start (collection)
 CASES = [pytest.param(s, p, id=f"{s}-{p}") for s in SHAPES for p in ("accuracy", "performance")]
 
 
@@ -129,7 +130,7 @@ def test_forward_perf(device, shape, precision):
             "speedup_vs_cpu": g["cpu_s"] / statistics.median(steady),
             "chip": os.environ.get("TTQ_CHIP_SERIAL"),
             "traced": True,
-            **git_stamp(),
+            **STAMP,
         }
     )
     assert met["pcc_normalized"] >= (0.999 if precision == "accuracy" else 0.995) and met["pcc_final"] >= 0.98

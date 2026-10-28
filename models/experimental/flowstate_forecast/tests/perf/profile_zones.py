@@ -42,6 +42,7 @@ def main():
         "estimate_ms": sum(est.values()),
         "top_ops": {z: sorted(((k, v / 1e6) for k, v in ops[z].items()), key=lambda t: -t[1])[:8] for z in counts},
     }
+    out["profile_stamp"] = {k: v for k, v in json.load(open(a.counts)).items() if k.startswith(("git_", "started_at"))}
     print(json.dumps(out, indent=1))
     if a.out:
         json.dump(out, open(a.out, "w"), indent=1)
