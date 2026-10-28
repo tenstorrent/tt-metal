@@ -26,6 +26,7 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/device.hpp"
 
 using namespace tt::tt_metal;
@@ -59,6 +60,17 @@ ttnn::Tensor reshape_rm(const ttnn::Tensor& x, const ttnn::Shape& shape) {
     ttnn::Tensor t = ttnn::to_layout(x, Layout::ROW_MAJOR);
     t = ttnn::reshape(t, shape);
     return ttnn::to_layout(t, Layout::TILE);
+}
+
+// use_qk_l2norm_in_kernel: FLA's norm x / sqrt(sum_K x^2 + eps) in fp32 with eps inside the root, the form the v2
+// requirements fix as the reference, as host ops in front of the program until stage 4 moves it into the reader.
+// Eight device ops when enabled, none when not, so the default call's op count does not move. Deliberately not the
+// model's rms_norm-based approximation: that difference is the documented numerics change of the migration.
+ttnn::Tensor l2_norm_rows(const ttnn::Tensor& x_in, const DeviceComputeKernelConfig& cfg) {
+    const ttnn::Tensor x = as_f32(x_in);
+    const ttnn::Tensor sum_sq = ttnn::sum(ttnn::multiply(x, x), -1, /*keepdim=*/true, std::nullopt, cfg);
+    const ttnn::Tensor inv = ttnn::rsqrt(ttnn::add(sum_sq, 1e-6f));
+    return ttnn::multiply(x, inv);
 }
 
 // Stage-gated rejection: the signature accepts the argument, this build cannot serve it. One message shape for
@@ -398,7 +410,6 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
         output_tensor,
         num_slices,
         units_per_core);
-    TT_FATAL(!use_qk_l2norm_in_kernel, "{}: use_qk_l2norm_in_kernel not done here; L2-normalize q/k on host", kOp);
 
     auto* dev = q_in.device();
     const uint32_t B = d.B;
@@ -411,10 +422,18 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     const uint32_t BH = B * HV;
 
     const float scale = scale_opt.has_value() ? *scale_opt : (1.0f / std::sqrt(static_cast<float>(K)));
+    const auto kernel_cfg = init_device_compute_kernel_config(
+        dev->arch(),
+        compute_kernel_config,
+        MathFidelity::HiFi4,
+        /*default_approx_mode=*/false,
+        /*default_fp32_acc=*/true,
+        /*default_l1_acc=*/false);
 
-    // Scale q (q is already L2-normed on host), then head-split + GQA-expand q,k from H to HV heads.
-    ttnn::Tensor q = ttnn::multiply(as_f32(q_in), scale);
-    ttnn::Tensor k = as_f32(k_in);
+    // The optional norm, then the scale (in that order), then head-split + GQA-expand q,k from H to HV heads.
+    ttnn::Tensor q = use_qk_l2norm_in_kernel ? l2_norm_rows(q_in, kernel_cfg) : as_f32(q_in);
+    q = ttnn::multiply(q, scale);
+    ttnn::Tensor k = use_qk_l2norm_in_kernel ? l2_norm_rows(k_in, kernel_cfg) : as_f32(k_in);
     q = head_split(q, B, T, H, K);  // [B*H, T, K]
     k = head_split(k, B, T, H, K);
     if (G > 1) {
@@ -460,13 +479,6 @@ std::tuple<ttnn::Tensor, std::optional<ttnn::Tensor>> fused_recurrent_gated_delt
     }
 
     const auto out_mem = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG);
-    const auto kernel_cfg = init_device_compute_kernel_config(
-        dev->arch(),
-        compute_kernel_config,
-        MathFidelity::HiFi4,
-        /*default_approx_mode=*/false,
-        /*default_fp32_acc=*/true,
-        /*default_l1_acc=*/false);
 
     const bool want_state = output_final_state || output_per_token_state;
     auto res = ttnn::prim::fused_recurrent_gated_delta_rule(

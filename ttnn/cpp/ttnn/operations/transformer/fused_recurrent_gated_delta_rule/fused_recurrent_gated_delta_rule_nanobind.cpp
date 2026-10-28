@@ -85,8 +85,7 @@ void bind_fused_recurrent_gated_delta_rule(nb::module_& mod) {
             output_per_token_state (bool): return the state after every token, [B, T, HV, K, V]; overrides
                 output_final_state.
             use_qk_l2norm_in_kernel (bool): normalise q and k over K inside the op (ε inside the root), before the
-                scale. Formerly `use_qk_l2norm`, which no in-tree caller passed. Not yet served: normalise on the
-                host.
+                scale. Formerly `use_qk_l2norm`, which no in-tree caller passed.
             use_gate_in_kernel (bool), A_log (ttnn.Tensor [HV]), dt_bias (ttnn.Tensor [HV], KDA [HV*K]),
                 lower_bound (float): compute g inside the op from raw gate values: GDN
                 g = -exp(A_log) * softplus(g_raw + dt_bias); KDA bounded form
@@ -116,8 +115,8 @@ void bind_fused_recurrent_gated_delta_rule(nb::module_& mod) {
         What this build serves and what it rejects (the message names the stage of the v2 plan that brings it):
 
             served     fp32 or bf16 TILE inputs (bf16 is cast on the host; o is fp32 until stage 4), initial_state
-                       [B, HV, K, V], the final and the per-token state, ring mode, scale, program_config with
-                       default fields, T up to 32
+                       [B, HV, K, V], the final and the per-token state, ring mode, use_qk_l2norm_in_kernel (as
+                       host ops until stage 4), scale, program_config with default fields, T up to 32
             stage 2    B*HV above the compute grid; num_slices 2 or 4; units_per_core above 1
             stage 3a   state_indices, num_accepted_tokens, inplace_final_state
             stage 4    output_tensor; ROW_MAJOR inputs
