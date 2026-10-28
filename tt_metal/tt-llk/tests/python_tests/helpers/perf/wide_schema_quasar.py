@@ -6,9 +6,8 @@
 
 Separate published table from the WH/BH schema in ``wide_schema.py``. A Quasar
 run is aligned to this schema; a WH/BH run is aligned to that one. The two must
-not be mixed: Quasar-only columns (face dims, unpacker engine, implied math
-format, ...) stay out of the WH/BH table, and WH/BH-only columns stay out of
-this one.
+not be mixed: Quasar-only columns (face dims, unpacker engine, ...) stay out of
+the WH/BH table, and WH/BH-only columns stay out of this one.
 
 Same conventions as ``wide_schema``: one row per test config per run; every
 column except ``marker`` and the mandatory provenance keys is nullable; Column
@@ -17,7 +16,16 @@ dtype/nullability/origin are the contract the Parquet writer enforces.
 Imports no device libraries, so it loads without hardware.
 """
 
-from .schema import MEAN, STD, stat_column
+from tt_llk_perf import metrics as _mc
+
+from .schema import (
+    MEAN,
+    METRIC_BASES,
+    RUN_TYPE_NAMES,
+    STD,
+    metric_column,
+    stat_column,
+)
 from .wide_schema import Column
 
 # Same PerfRunType timing grid as WH/BH, plus the 4-TRISC parallel FPU/SFPU
@@ -76,7 +84,6 @@ DB_SCHEMA = [
     Column("face_r_dim", "int64", True, "configuration"),
     Column("full_ct_dim", "int64", True, "configuration"),
     Column("full_rt_dim", "int64", True, "configuration"),
-    Column("implied_math_format", "string", True, "configuration"),
     Column("in0_face_c_dim", "int64", True, "configuration"),
     Column("in0_face_r_dim", "int64", True, "configuration"),
     Column("in1_face_c_dim", "int64", True, "configuration"),
@@ -85,6 +92,7 @@ DB_SCHEMA = [
     Column("input_num_blocks", "int64", True, "configuration"),
     Column("input_num_tiles_in_block", "int64", True, "configuration"),
     Column("input_tile_cnt", "int64", True, "configuration"),
+    Column("is_reduce_to_one", "bool", True, "configuration"),
     Column("k_dimm", "int64", True, "configuration"),
     Column("math_fidelity", "string", True, "configuration"),
     Column("math_transpose_faces", "string", True, "configuration"),
@@ -107,6 +115,7 @@ DB_SCHEMA = [
     Column("r_dimm", "int64", True, "configuration"),
     Column("relu_config", "int64", True, "configuration"),
     Column("reuse_dest_type", "string", True, "configuration"),
+    Column("sfpu_impl", "string", True, "configuration"),
     Column("sign_magnitude", "bool", True, "configuration"),
     Column("src0_tile_idx", "int64", True, "configuration"),
     Column("src1_tile_idx", "int64", True, "configuration"),
@@ -137,10 +146,31 @@ MANDATORY = [c.name for c in DB_SCHEMA if not c.nullable]
 # Columns a Quasar test emits but the published table intentionally drops.
 # TEXT_SIZE(...) is per-stage ELF code size; not used by the gate. SFPU_ISOLATE
 # is 4-TRISC-only (#53072) and must not live on the WH/BH dropped set.
-DROPPED_COLUMNS = {
-    "TEXT_SIZE(L1_TO_L1)",
-    "TEXT_SIZE(MATH_ISOLATE)",
-    "TEXT_SIZE(PACK_ISOLATE)",
-    "TEXT_SIZE(UNPACK_ISOLATE)",
-    "TEXT_SIZE(SFPU_ISOLATE)",
-}
+_L1_CLIENT_METRIC_KEYS = tuple(
+    _mc.l1_client_metric_key(_mc.quasar_l1_client_label(sel))
+    for sel in range(_mc.QUASAR_L1_CLIENT_NUM_SUBPORTS * 8)
+    if _mc.quasar_l1_client_selection_is_valid(sel)
+)
+
+DROPPED_COLUMNS = (
+    {
+        "TEXT_SIZE(L1_TO_L1)",
+        "TEXT_SIZE(MATH_ISOLATE)",
+        "TEXT_SIZE(PACK_ISOLATE)",
+        "TEXT_SIZE(UNPACK_ISOLATE)",
+        "TEXT_SIZE(SFPU_ISOLATE)",
+    }
+    | {
+        metric_column(run_type, base)
+        for run_type in RUN_TYPE_NAMES
+        for metric in METRIC_BASES
+        for base in (metric, stat_column(metric, MEAN), stat_column(metric, STD))
+    }
+    | {
+        # One column per l1_client selection that can carry data; like the other metrics, CSV only.
+        metric_column(run_type, base)
+        for run_type in RUN_TYPE_NAMES
+        for metric in _L1_CLIENT_METRIC_KEYS
+        for base in (metric, stat_column(metric, MEAN), stat_column(metric, STD))
+    }
+)

@@ -4,13 +4,17 @@
 """Per-token vectors to one embedding per text, the TTNN form of reference/postprocessing.py.
 
     last_hidden_state (B, 1, S, H)
-      -> mean_pool           -> (B, 1, 1, H)   padding excluded
+      -> mean_pool           -> (B, 1, 1, H)   fp32, padding excluded
       -> matryoshka_truncate -> (B, 1, 1, dim) optional, feature axis
       -> l2_normalize        -> (B, 1, 1, dim) unit norm
 
 Functions rather than a class: there are no weights here. The sequence axis disappears at
 mean_pool, which is why this stage needs the batch-separated (B, 1, S, H) layout rather than the
 flat token axis the MoE uses.
+
+The pooled embedding is fp32 from mean_pool on. In bfloat16, l2_normalize left the norm anywhere
+in 0.9952..1.0047, which the tests' 1 - dot against the unit reference counts as error; in fp32 it
+is 1.000000.
 """
 
 from __future__ import annotations
@@ -26,9 +30,9 @@ MASK_SUM_FLOOR = 1e-9
 # sum of squares rather than to the norm, since that is what rsqrt consumes, so it is squared.
 L2_EPS = 1e-12
 
-# Only ttnn.sum among the operators here accepts a compute_kernel_config; ttnn.multiply,
-# ttnn.divide, ttnn.rsqrt and ttnn.clamp take none, so the port's HiFi4 plus fp32-accumulation
-# setting is applied to the two reduces and is simply not expressible on the rest.
+# Only ttnn.matmul and ttnn.sum among the operators here accept a compute_kernel_config;
+# ttnn.multiply, ttnn.rsqrt and ttnn.clamp take none, so the port's HiFi4 plus fp32-accumulation
+# setting is applied to the mean's matmul and the norm's sum and is not expressible on the rest.
 
 
 def mean_pool(hidden_states: ttnn.Tensor, mask_weights: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
@@ -39,28 +43,23 @@ def mean_pool(hidden_states: ttnn.Tensor, mask_weights: ttnn.Tensor, compute_ker
     <pad> embedding is trained and non-zero, so counting it would make one text's embedding
     depend on how long its batch-mates are.
 
+    One batched matmul, (B, 1, 1, S) weights against (B, 1, S, H) tokens, in place of a multiply,
+    two sums, a clamp and a divide. Its K runs over the tile padding of S, where the hidden states
+    can hold anything (the MoE layer's output padding is unwritten) and the weights are zero; the
+    FPU's product of zero and inf or NaN is zero, so the padding drops out whatever it holds
+    (test_mean_pool_ignores_non_finite_tile_padding).
+
     Args:
         hidden_states: (B, 1, S, H) encoder output.
-        mask_weights: (B, 1, S, 1) from tt.common.pooling_mask, 1.0 at real tokens and 0.0 at
-            padding. Its trailing singleton broadcasts over the hidden axis.
-        compute_kernel_config: The port's device compute kernel config, applied to the two sums.
+        mask_weights: (B, 1, 1, S) from tt.common.pooling_mask: 1/count at real tokens, 0 at padding,
+            the count floored the way the reference floors it, so a row that keeps nothing pools to
+            zeros.
+        compute_kernel_config: The port's device compute kernel config, applied to the matmul.
 
     Returns:
-        ttnn.Tensor: (B, 1, 1, H), one vector per text. Not unit norm.
+        ttnn.Tensor: (B, 1, 1, H) fp32, one vector per text. Not unit norm.
     """
-    weighted = ttnn.multiply(hidden_states, mask_weights)
-    # The divisor is floored the way the reference floors it. A fully padded row has a keep count
-    # of zero, and dividing by it returns inf across all 768 features rather than raising, so the
-    # row would leave here looking like data. Such a row cannot come from the tokenizer, which
-    # always emits bos, but mean_pool takes any mask its caller builds.
-    kept = ttnn.clamp(
-        ttnn.sum(mask_weights, dim=2, keepdim=True, compute_kernel_config=compute_kernel_config),
-        min=MASK_SUM_FLOOR,
-    )
-    pooled = ttnn.divide(ttnn.sum(weighted, dim=2, keepdim=True, compute_kernel_config=compute_kernel_config), kept)
-    ttnn.deallocate(weighted)
-    ttnn.deallocate(kept)
-    return pooled
+    return ttnn.matmul(mask_weights, hidden_states, dtype=ttnn.float32, compute_kernel_config=compute_kernel_config)
 
 
 def matryoshka_truncate(embeddings: ttnn.Tensor, dim: Optional[int]) -> ttnn.Tensor:
@@ -97,9 +96,12 @@ def l2_normalize(embeddings: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Te
     of a value that could round to zero in bfloat16.
 
     The sum of squares is floored first. Without it a zero row gives rsqrt(0) = inf and then
-    0 * inf = NaN, which would undo mean_pool's own MASK_SUM_FLOOR one operator later: a fully
-    padded row pools to zeros and must stay zeros rather than turning into NaN here. The
-    reference gets this from F.normalize's eps.
+    0 * inf = NaN, which would undo the zero weights of a fully padded row one operator later: such
+    a row pools to zeros and must stay zeros rather than turning into NaN here. The reference gets
+    this from F.normalize's eps.
+
+    On mean_pool's fp32 output the norm comes out 1.000000 over 64 random rows; on a bfloat16
+    input every step rounds and it lands anywhere in 0.9959..1.0043.
 
     Args:
         embeddings: (B, 1, 1, dim) pooled, optionally truncated embeddings.

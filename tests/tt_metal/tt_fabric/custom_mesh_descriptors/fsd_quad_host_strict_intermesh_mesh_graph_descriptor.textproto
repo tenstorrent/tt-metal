@@ -1,0 +1,41 @@
+# Same four-host pod, intra-mesh relaxed so placement can finish, intermesh STRICT.
+# Each boundary asks for a different count, and every count is within both the factory cables
+# and the live cables. Mesh 2 to mesh 3 is missing one factory cable. That cable is unused:
+# both descriptors already cover the count of 4, so STRICT has no used downed link there.
+mesh_descriptors {
+  name: "M"
+  arch: BLACKHOLE
+  device_topology { dims: [ 8, 4 ] dim_types: [ RING, RING ] }
+  host_topology   { dims: [ 1, 1 ] }
+  channels { count: 2 policy: RELAXED }
+}
+graph_descriptors {
+  name: "G0"
+  type: "FABRIC"
+  instances { mesh { mesh_descriptor: "M" mesh_id: 0 } }
+  instances { mesh { mesh_descriptor: "M" mesh_id: 1 } }
+  instances { mesh { mesh_descriptor: "M" mesh_id: 2 } }
+  instances { mesh { mesh_descriptor: "M" mesh_id: 3 } }
+  connections {
+    nodes { mesh { mesh_descriptor: "M" mesh_id: 0 } }
+    nodes { mesh { mesh_descriptor: "M" mesh_id: 1 } }
+    channels { count: 2 policy: STRICT }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M" mesh_id: 1 } }
+    nodes { mesh { mesh_descriptor: "M" mesh_id: 2 } }
+    channels { count: 8 policy: STRICT }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M" mesh_id: 2 } }
+    nodes { mesh { mesh_descriptor: "M" mesh_id: 3 } }
+    channels { count: 4 policy: STRICT }
+  }
+  connections {
+    nodes { mesh { mesh_descriptor: "M" mesh_id: 3 } }
+    nodes { mesh { mesh_descriptor: "M" mesh_id: 0 } }
+    channels { count: 16 policy: STRICT }
+  }
+}
+
+top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }

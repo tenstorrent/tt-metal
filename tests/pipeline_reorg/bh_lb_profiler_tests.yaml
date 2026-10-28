@@ -1,0 +1,30 @@
+# This file defines the test matrix for the Blackhole LoudBox profiler tests pipeline.
+#
+# Each entry represents a parallel job with the following keys:
+#   name: The display name for the job in GitHub Actions.
+#   cmd: The command the job runs.
+#   skus: A mapping of SKU names to their configuration.
+#     Each SKU entry contains:
+#       timeout: The maximum allowed runtime for this job in minutes on that SKU.
+#   owner_id: The Slack user ID to notify on failure.
+#   team: The team that owns the test.
+
+# For max allowed timeout refer to .github/time_budget.yaml
+
+- name: BH LoudBox streaming profiler sync
+  cmd: pytest tests/ttnn/tracy/test_streaming_profiler_sync.py::test_streaming_profiler_sync_check
+  skus:
+    bh_loudbox:
+      timeout: 10
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime
+  budget_type: profiler
+
+- name: BH LoudBox streaming profiler fabric overhead
+  cmd: pytest tests/ttnn/tracy/test_streaming_profiler_sync.py::test_streaming_profiler_fabric_overhead tests/ttnn/tracy/test_streaming_profiler_sync.py::test_streaming_profiler_fabric_sync_check tests/ttnn/tracy/test_streaming_profiler_sync.py::test_streaming_profiler_fabric_eth_zones
+  skus:
+    bh_loudbox:
+      timeout: 10
+  owner_id: U03BJ1L3LUQ # Mo Memarian
+  team: runtime
+  budget_type: profiler

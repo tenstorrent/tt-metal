@@ -26,9 +26,9 @@ enum class SemScope : uint8_t {
     EXTERNAL = 2,
     // Blackhole compute scope: the Tensix hardware (Sync Unit) semaphore, so concurrent UNPACK
     // and PACK writers cannot lose an update. Produced by ResolveSemaphoreScope() for a Blackhole
-    // semaphore bound only by compute kernels (semaphore_scope.hpp). Keep this enum numerically in
-    // step with the device-side SemScope in api/dataflow/semaphore_binding_token.h -- the two are
-    // unlinked mirrors.
+    // semaphore bound only by compute kernels (metal2_host_api/program_spec/construction/resource/
+    // semaphore.cpp). Keep this enum numerically in step with the device-side SemScope in
+    // api/dataflow/semaphore_binding_token.h -- the two are unlinked mirrors.
     COMPUTE_ATOMIC = 3,
 };
 
@@ -136,10 +136,10 @@ public:
     virtual std::string_view get_compiler_opt_level() const = 0;
     // Returns the linker optimization level
     virtual std::string_view get_linker_opt_level() const = 0;
-    // Returns true when this kernel opted into RISC-V Vector (Zve32f) code generation for its
-    // TRISC2 (pack) compile (ComputeConfig::enable_trisc2_rvv). Default off: the build recipe
-    // is byte-identical to a build without this knob.
-    virtual bool get_trisc2_rvv_enabled() const { return false; }
+    // Returns true when this kernel opted into RISC-V Vector code generation. Which compute
+    // processor gets the vector flags is decided by the HAL (rvv_compile_flags), not the kernel.
+    // Default off: the build recipe is byte-identical to a build without this knob.
+    virtual bool get_rvv_enabled() const { return false; }
 
     // Called to process the user defines
     virtual void process_defines(std::function<void(const std::string& define, const std::string& value)>) const = 0;
@@ -160,7 +160,9 @@ public:
                                                              uint16_t logical_dfb_id,
                                                              bool is_relay,
                                                              uint8_t prefetcher_pipe_id,
-                                                             const std::optional<LLKMetadata>&)>&) const {}
+                                                             const std::optional<LLKMetadata>&,
+                                                             uint8_t pap,
+                                                             uint8_t cap)>&) const {}
     virtual void process_semaphore_binding_handles(
         std::function<
             // NOLINTNEXTLINE(performance-unnecessary-value-param)

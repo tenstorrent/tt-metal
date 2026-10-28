@@ -28,6 +28,8 @@
 #include "jit_build/build_env_manager.hpp"
 #include "hal_types.hpp"
 #include "fabric/fabric_host_utils.hpp"
+#include "fabric/fabric_tensix_builder.hpp"
+#include "llrt/core_descriptor.hpp"
 #include "debug/dprint_server.hpp"
 #include "debug/inspector/inspector.hpp"
 
@@ -102,32 +104,12 @@ void validate_worker_l1_size(size_t& worker_l1_size, const Hal& hal) {
 }  // namespace
 
 ContextId extract_context_id(const IDevice* device) {
-    // get_mesh_device is not const
-    if (const_cast<IDevice*>(device)->get_mesh_device() != nullptr) {
-        const auto& mesh_device = const_cast<IDevice*>(device)->get_mesh_device();
-        return mesh_device->impl().get_context_id();
+    if (const auto* device_concrete = dynamic_cast<const Device*>(device)) {
+        return device_concrete->get_context_id();  // Its mesh's, without locking the mesh.
     }
-    // Must be a Device if not MeshDevice
-    const auto* device_concrete = dynamic_cast<const Device*>(device);
-    TT_ASSERT(device_concrete != nullptr, "Device is not a Device");
-    return device_concrete->get_context_id();
-}
-
-ContextId extract_context_id(const distributed::MeshDevice* mesh_device) {
-    TT_ASSERT(mesh_device != nullptr, "MeshDevice is nullptr");
+    const auto mesh_device = const_cast<IDevice*>(device)->get_mesh_device();  // get_mesh_device is not const
+    TT_ASSERT(mesh_device != nullptr, "Device is neither a Device nor part of a MeshDevice");
     return mesh_device->impl().get_context_id();
-}
-
-ContextId extract_context_id(const distributed::MeshDevice* mesh_device, const IDevice* device) {
-    ContextId context_id = DEFAULT_CONTEXT_ID;
-    if (mesh_device != nullptr) {
-        context_id = extract_context_id(mesh_device);
-    } else if (device != nullptr) {
-        context_id = extract_context_id(device);
-    } else {
-        TT_FATAL(false, "Both MeshDevice and Device are nullptr");
-    }
-    return context_id;
 }
 
 void MetalContext::initialize_device_manager(
@@ -277,7 +259,7 @@ void MetalContext::initialize(
     }
 
     if (rtoptions().get_profiler_enabled()) {
-        profiler_state_manager_ = std::make_unique<ProfilerStateManager>(MetalEnvAccessor(*this->env_).impl());
+        profiler_state_manager_ = std::make_unique<ProfilerStateManager>(*this);
     }
 
     data_collector_ = std::make_unique<DataCollector>(MetalEnvAccessor(*this->env_).impl());
@@ -300,6 +282,19 @@ void MetalContext::initialize(
     // Set internal routing for active ethernet cores, this is required for our FW to run
     if (has_flag(get_fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC) &&
         !get_cluster().is_mock_or_emulated()) {
+        // Only Wormhole non-Galaxy clusters reach remote chips through UMD ethernet gateways.
+        if (tt_fabric::is_tt_fabric_config(get_fabric_config()) && get_cluster().arch() == tt::ARCH::WORMHOLE_B0 &&
+            !get_cluster().is_galaxy_cluster()) {
+            // The channel lookup reads the fabric routing tables. A control plane rebuilt after SetFabricConfig (e.g.
+            // by initialize_control_plane()) has none until DeviceManager configures fabric, so configure it here.
+            this->initialize_fabric_config();
+            // Pin UMD's remote-transfer cores here, before the watcher attaches and firmware launches: UMD does not
+            // lock its core list against concurrent remote transfers.
+            for (const auto& [mmio_chip, eth_chans] :
+                 tt_fabric::get_remote_transfer_dispatch_channels(this->get_control_plane(), get_cluster())) {
+                get_cluster().configure_ethernet_cores_for_remote_transfers(mmio_chip, eth_chans);
+            }
+        }
         get_cluster().set_internal_routing_info_for_ethernet_cores(this->get_control_plane(), true);
     }
 
@@ -669,7 +664,25 @@ void MetalContext::initialize_fabric_config() {
 
 void MetalContext::initialize_fabric_tensix_datamover_config() {
     TT_FATAL(env_ != nullptr, "Missing MetalEnv for this MetalContext");
-    MetalEnvAccessor(*env_).impl().initialize_fabric_tensix_datamover_config();
+    auto& env_impl = MetalEnvAccessor(*env_).impl();
+    if (!tt_fabric::is_tt_fabric_config(env_impl.get_fabric_config()) ||
+        env_impl.get_fabric_tensix_config() == tt_fabric::FabricTensixConfig::DISABLED) {
+        return;
+    }
+
+    tt_fabric::FabricTensixSessionInputs inputs{.active_devices = device_manager_->get_all_active_devices()};
+    if (!inputs.active_devices.empty()) {
+        // Mux core placement is the same on every device, so take it from the first one.
+        const auto device_id = inputs.active_devices.front()->id();
+        auto& dispatch_core_manager = get_dispatch_core_manager();
+        const auto num_hw_cqs = dispatch_core_manager.get_num_hw_cqs();
+        const auto dispatch_core_config = dispatch_core_manager.get_dispatch_core_config();
+        inputs.logical_fabric_mux_cores =
+            tt::get_logical_fabric_mux_cores(env_impl, device_id, num_hw_cqs, dispatch_core_config);
+        inputs.logical_dispatch_mux_cores =
+            tt::get_logical_dispatch_cores(env_impl, device_id, num_hw_cqs, dispatch_core_config);
+    }
+    env_impl.initialize_fabric_tensix_datamover_config(inputs);
 }
 
 tt_fabric::FabricConfig MetalContext::get_fabric_config() const {

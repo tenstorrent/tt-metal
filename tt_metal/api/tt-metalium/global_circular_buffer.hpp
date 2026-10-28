@@ -4,16 +4,19 @@
 
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <functional>
 #include <memory>
 #include <tuple>
+#include <utility>
 #include <variant>
 
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/hal_types.hpp>
+#include <vector>
 
 namespace tt::tt_metal {
 
@@ -28,16 +31,6 @@ class MeshDevice;
 namespace experimental {
 
 class GlobalCircularBufferImpl;
-
-// Forward declarations for the experimental DRAM-sender extension defined in
-// tt-metalium/experimental/global_circular_buffer.hpp. The DRAM-sender feature is an
-// opt-in mode that is not part of the public GlobalCircularBuffer API surface; existing
-// callers continue to see the original public interface unchanged.
-class GlobalCircularBuffer;
-enum class SenderCoreType : uint8_t;
-namespace global_circular_buffer_dram_sender {
-struct GlobalCircularBufferDramSenderInternals;
-}  // namespace global_circular_buffer_dram_sender
 
 class GlobalCircularBuffer {
 public:
@@ -74,8 +67,6 @@ public:
 
 private:
     std::unique_ptr<GlobalCircularBufferImpl> impl_;
-
-    friend struct global_circular_buffer_dram_sender::GlobalCircularBufferDramSenderInternals;
 };
 
 /**

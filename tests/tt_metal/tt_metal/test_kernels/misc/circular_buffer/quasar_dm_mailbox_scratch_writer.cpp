@@ -22,11 +22,6 @@
 // each receiving thread reads its queue back with mailbox_read(IsolateSfpuThreadId). The writes
 // are plain MMIO stores to the queues' NEO0 DM/NOC addresses -- that address view is directly
 // load/store-accessible from the DM core.
-//
-// The mailbox stores are bracketed by two sentinel writes to the cluster-control scratch register
-// SCRATCH_16 (0x03000080): 0x00AAAAAA before and 0x0BBBBBBB after. These act as waveform markers
-// on Zebu: if a mailbox MMIO store hangs or faults, the missing 0x0BBBBBBB localizes the failure
-// to the mailbox accesses themselves.
 void kernel_main() {
     // The Quasar DM allocator (GetProcessorsPerClusterQuasar) skips reserved DM0/DM1, so the
     // host's request for one DM thread places this kernel on DM2 only. Gate on hartid == 2
@@ -37,8 +32,6 @@ void kernel_main() {
     constexpr std::uint32_t value_unpack = get_arg(args::value_unpack);
     constexpr std::uint32_t value_math = get_arg(args::value_math);
     constexpr std::uint32_t value_pack = get_arg(args::value_pack);
-    volatile tt_l1_ptr std::uint32_t* const scratch = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(
-        TT_CLUSTER_CTRL_SCRATCH_16__REG_ADDR);  // Address 0x03000080
     volatile tt_l1_ptr std::uint32_t* const queue_unpack = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(
         NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC_MAILBOX_3__REG_ADDR);  // Address 0x0180018C
     volatile tt_l1_ptr std::uint32_t* const queue_math = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(
@@ -46,11 +39,7 @@ void kernel_main() {
     volatile tt_l1_ptr std::uint32_t* const queue_pack = reinterpret_cast<volatile tt_l1_ptr std::uint32_t*>(
         NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_TRISC_MAILBOX_11__REG_ADDR);  // Address 0x018001AC
 
-    scratch[0] = 0x00AAAAAA;
-
     queue_unpack[0] = value_unpack;
     queue_math[0] = value_math;
     queue_pack[0] = value_pack;
-
-    scratch[0] = 0x0BBBBBBB;
 }

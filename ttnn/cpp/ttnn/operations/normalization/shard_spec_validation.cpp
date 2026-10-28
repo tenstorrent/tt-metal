@@ -5,6 +5,7 @@
 #include "shard_spec_validation.hpp"
 
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/mesh_device.hpp>
 
 namespace ttnn::operations::normalization::detail {
 

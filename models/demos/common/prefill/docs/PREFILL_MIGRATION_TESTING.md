@@ -62,12 +62,11 @@ export HOSTSP=<H0>:1,<H1>:1       # runner + driver: the --host list, passed to 
 Two shape constraints apply: `MAX_SEQ_LEN % CHUNK_SIZE == 0` and `CHUNK_SIZE % (SP*32) == 0` (each SP shard
 stays 32-token-block aligned).
 
-**`PREFILL_MOCK_MIGRATION=1` is single-rank only** — the runner rejects it for `num_ranks > 1`, because each
-rank would publish a table covering just its own layer slice and a merged mock table is not implemented. So
-**Gate 1** needs a 1-rank binding. `PREFILL_ENABLE_MIGRATION=1` (Gate 2) has no such restriction: the real
-path merges the per-rank stage layouts through the worker
-(`deliver_device_map_and_gather_stage_layouts`), so a pipelined runner publishes one table spanning every
-rank's layers. Gate 2 runs on 1, 2 or 4 ranks — see *Covering every rank* below for what that costs on the
+**`PREFILL_ENABLE_MIGRATION` picks the table's consumer, not whether one is built.** Every run all-gathers
+the per-rank stage layouts and rank 0 builds one merged table spanning every rank's layers. `1` (Gate 2)
+hands it to a live migration worker over the client queues (`deliver_device_map_and_gather_stage_layouts`)
+and blocks on the worker's ready; `0` (Gate 1, mock migration) leaves it on disk for an offline reader such as
+`prefill_producer`. Both run on 1, 2 or 4 ranks — see *Covering every rank* below for what that costs on the
 read-back side.
 
 ---
@@ -251,9 +250,9 @@ knob existed, so existing legs are unaffected.
 
 Coverage: the multi-turn scheduling described here has no dedicated automated test yet — a device-free
 host-logic test for turn continuation (align-down/replay and absolute-length bookkeeping) is a TODO. The
-closest existing coverage is the on-device producer/runner PCC gate
-`tests/test_producer_runner_e2e.py::test_producer_runner_pcc`, which drives the producer end to end and
-fails if any resident slot's KV PCC is below threshold, though it is not multi-turn-specific.
+closest existing coverage is the on-device producer/runner PCC gate `runners/ci/run_multirank_pcc.sh`,
+which drives the producer end to end and fails if any resident slot's KV PCC is below threshold, though
+it is not multi-turn-specific.
 
 ---
 
@@ -419,7 +418,7 @@ asserts when a chunk overruns the cache — it no longer derives from a chunk co
 In the binding, replace the migration block with:
 
 ```yaml
-  PREFILL_MOCK_MIGRATION: "1"
+  PREFILL_ENABLE_MIGRATION: "0"
   PREFILL_MIGRATION_TABLE_PATH: "/tmp/prefill_kv_chunk_table.pb"
   PREFILL_MIGRATION_DEVICE_MAP_PATH: "/tmp/prefill_kv_device_map.json"
   PREFILL_NUM_USERS: "2"
@@ -442,17 +441,17 @@ Expect `[producer] KV cache PCC PASSED` (threshold `PREFILL_STANDALONE_CHUNKED_P
 `0.93`).
 
 This gate is not a prerequisite for the producer's golden PCC on the real-migration path, because the runner
-serialises the device map there too: one `serialize_device_map` call sits above the mock/real split inside the
-`_migration_enabled` block, so **every rank on either path** publishes its own host-local sidecar. It has to
-be: `deliver_device_map_and_gather_stage_layouts` hands the map to the co-located *worker* over the migration
-client and leaves nothing on disk, while every device-less read-back resolves chips from the JSON.
+serialises the device map there too: **every rank on either path** publishes its own host-local JSON sidecar.
+It has to: `deliver_device_map_and_gather_stage_layouts` hands the map to the co-located *worker* over the
+migration client and leaves nothing on disk, while every device-less read-back resolves chips from the JSON.
+`PREFILL_MIGRATION_EXPORT_TO_FILE=1` is the third transport — a plain-text map at
+`PREFILL_MIGRATION_DEVICE_MAP_PATH` for a worker that reads it off disk — and it suppresses the JSON sidecar,
+so a device-less read-back cannot run alongside it.
 
-That call **had** regressed to living under `if _mock_migration:` only, and the symptom is exactly as quiet as
-you would fear — a real-migration run published no sidecar, each reader polled 60 s, logged `device map ... not
-found; skipping KV read`, and every PCC plus the `--dump-src-kv` reference vanished with nothing raising. If
-you see that line, check this call before suspecting the table. Beware the confusing variant too: a *stale*
-map left in `/tmp` by an earlier mock run makes the same misconfiguration look like it works. Gate 1 remains
-the cheapest way to separate a table problem from a transport problem.
+A reader that polls 60 s and logs `device map ... not found; skipping KV read` loses every PCC and the
+`--dump-src-kv` reference with nothing raising; check the sidecar before suspecting the table. Beware the
+inverse too: a *stale* map left in `/tmp` by an earlier run makes the same misconfiguration look like it
+works. Gate 1 remains the cheapest way to separate a table problem from a transport problem.
 
 ## Gate 2 — loopback migration
 
@@ -472,7 +471,7 @@ Launch order is A → B (wait for `WORKER_READY`) → C. Between runs, clear sta
 
 ```bash
 pkill -f migration_endpoint ; pkill prte
-rm -f /dev/shm/tt_h2d_* /dev/shm/tt_d2h_* /dev/shm/tt_prefill_layer_acks_* /tmp/migration_done.sentinel*
+rm -f /dev/shm/tt_h2d_* /dev/shm/tt_d2h_* /dev/shm/tt_prefill_layer_completions_* /tmp/migration_done.sentinel*
 ```
 
 ```bash
@@ -541,6 +540,8 @@ gates you intend to run require.
 |------|------|-----------------------|
 | 1 | `build_kv_chunk_table` | serialises the block-cyclic layout; issues no comms |
 | 2 | `kv_migration_stages` | one `KvCacheStage` per migratable cache, for the cross-stage table merge |
+| 1, 2 | `cache_kind` (adapter) | what each table config holds (`kvpe` / `index` / other); the producer's index check and the driver's cache plan key on it instead of the config count. Kimi-K3 declares its KDA state configs here (`tt/kda/KDA_STATE_MIGRATION.md`) |
+| 2 | `layer_position_range` (adapter) | positions one /migrate of a layer covers; default `[0, real_len)`. Kimi-K3 returns the KDA version window `[v * 36864, (v + 1) * 36864)`, `v = (real_len - 1) % 8`, for its KDA layers, so MLA and KDA layers go in separate calls and the byte verify walks that window |
 | 2 `dst-bytes` | **none** | nothing is decoded — the byte compare is model-agnostic |
 | 2 `dst-golden` | none beyond Gate 1 | reuses the producer's own read-back, not a runtime hook |
 

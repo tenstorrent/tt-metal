@@ -46,6 +46,7 @@ target_sources(
             ccl_common.hpp
             ccl_host_datastructures.hpp
             sharding_addrgen_helper.hpp
+            shared_with_host/ccl_runtime_args.hpp
             shared_with_host/hetergeneous_data_structs.hpp
             shared_with_host/sharded_tensor_addr_gen.hpp
             shared_with_host/snake_ring.hpp
@@ -53,6 +54,7 @@ target_sources(
             common/host/ccl_command_stream_builders.hpp
             common/host/ccl_worker_builder.hpp
             common/host/command_backend_runtime_args_overrider.hpp
+            common/host/descriptor_runtime_args.hpp
             common/host/moe_utils.hpp
             common/interpreter_backends/kernel_common/algorithms.hpp
             common/interpreter_backends/kernel_common/io_descriptors.hpp

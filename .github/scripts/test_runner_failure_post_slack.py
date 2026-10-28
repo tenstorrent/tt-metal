@@ -1,3 +1,5 @@
+import pytest
+
 from runner_failure_common import JobScanResult, RecentJob
 from runner_failure_post_slack import (
     failure_summary_for_slack_cell,
@@ -7,7 +9,8 @@ from runner_failure_post_slack import (
 )
 
 
-def test_failure_summary_shows_metadata_signature_when_log_not_checked() -> None:
+@pytest.mark.parametrize("signature", ["Set up runner failure", "Runner disconnected"])
+def test_failure_summary_shows_metadata_signature_when_log_not_checked(signature) -> None:
     result = JobScanResult(
         job=RecentJob(
             owner_repo="tenstorrent/tt-metal",
@@ -28,11 +31,11 @@ def test_failure_summary_shows_metadata_signature_when_log_not_checked() -> None
         ),
         log_status="gh api timed out",
         log_checked=False,
-        signature_labels=("Set up runner failure",),
+        signature_labels=(signature,),
         fabric_missing_links="",
     )
 
-    assert failure_summary_for_slack_cell(result) == "Set up runner failure"
+    assert failure_summary_for_slack_cell(result) == signature
 
 
 def test_scan_health_alerts_above_ten_percent() -> None:
@@ -74,3 +77,49 @@ def test_scan_health_does_not_alert_at_threshold() -> None:
 
     assert health.failure_rate == 0.10
     assert not should_post_health_alert(health, 0.10)
+
+
+def test_unavailable_logs_do_not_raise_health_alerts() -> None:
+    report = {
+        "counts": {
+            "jobs_to_scan": 4,
+            "log_download_attempts": 0,
+            "log_download_successes": 0,
+            "log_download_failures": 0,
+            "log_download_unavailable": 4,
+        },
+        "scan_results": [
+            {
+                "log_checked": False,
+                "log_unavailable": True,
+                "log_status": "not available: runner lost communication with GitHub (HTTP 404)",
+            }
+            for _ in range(4)
+        ],
+    }
+
+    health = scan_health_from_report(report)
+
+    assert health.attempts == 0
+    assert health.unavailable == 4
+    assert not health.failure_statuses
+    assert not should_post_health_alert(health, 0.10)
+
+
+def test_real_download_errors_still_alert_with_unavailable_logs() -> None:
+    report = {
+        "counts": {"jobs_to_scan": 5},
+        "scan_results": [
+            {"log_checked": True},
+            {"log_checked": False, "log_status": "gh api timed out"},
+            {"log_checked": False, "log_unavailable": True},
+            {"log_checked": False, "log_unavailable": True},
+        ],
+    }
+
+    health = scan_health_from_report(report)
+
+    assert health.attempts == 3
+    assert health.failures == 2
+    assert should_post_health_alert(health, 0.10)
+    assert health.failure_statuses == {"gh api timed out": 1, "job scan did not return a result": 1}

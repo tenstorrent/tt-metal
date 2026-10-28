@@ -5,7 +5,7 @@
 #include <fmt/base.h>
 #include <gtest/gtest.h>
 #include <cstddef>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <cstdint>
@@ -33,9 +33,10 @@
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include "tt_metal/test_utils/stimulus.hpp"
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include "eth_test_common.hpp"
 #include "impl/context/metal_env_accessor.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -74,7 +75,7 @@ bool reader_kernel_no_send(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::Program();
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     distributed::DeviceLocalBufferConfig dram_config{
         .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
@@ -151,7 +152,7 @@ bool writer_kernel_no_receive(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::Program();
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
 
     distributed::DeviceLocalBufferConfig dram_config{
         .page_size = byte_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
@@ -225,7 +226,7 @@ bool noc_reader_and_writer_kernels(
     auto zero_coord = distributed::MeshCoordinate(0, 0);
     auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
     tt_metal::Program program = tt_metal::Program();
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
 
     distributed::DeviceLocalBufferConfig dram_config{.page_size = byte_size, .buffer_type = tt_metal::BufferType::DRAM};
@@ -332,6 +333,9 @@ bool noc_reader_and_writer_kernels(
 namespace tt::tt_metal {
 
 TEST_F(UnitMeshCQSingleCardProgramFixture, ActiveEthKernelsNocReadNoSend) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const size_t src_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
@@ -339,7 +343,7 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, ActiveEthKernelsNocReadNoSend) {
         tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
 
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
             for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; ++erisc_idx) {
                 const auto ethernet_config = tt_metal::EthernetConfig{
@@ -371,6 +375,9 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, ActiveEthKernelsNocReadNoSend) {
 }
 
 TEST_F(UnitMeshCQSingleCardProgramFixture, ActiveEthKernelsNocWriteNoReceive) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     if (arch_ == ARCH::BLACKHOLE) {
         GTEST_SKIP() << "See GH Issue #18384";
     }
@@ -381,7 +388,7 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, ActiveEthKernelsNocWriteNoReceive) {
         tt::tt_metal::MetalContext::instance().hal().get_num_risc_processors(HalProgrammableCoreType::ACTIVE_ETH);
 
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
             for (uint32_t erisc_idx = 0; erisc_idx < erisc_count; ++erisc_idx) {
                 const auto ethernet_config = tt_metal::EthernetConfig{
@@ -404,11 +411,14 @@ TEST_F(UnitMeshCQSingleCardProgramFixture, ActiveEthKernelsNocWriteNoReceive) {
 }
 
 TEST_F(N300MeshDeviceFixture, ActiveEthKernelsNocReadNoSend) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& mesh_device_0 = devices_.at(0);
     const auto& mesh_device_1 = devices_.at(1);
-    auto* const device_0 = mesh_device_0->get_devices()[0];
-    auto* const device_1 = mesh_device_1->get_devices()[0];
+    auto* const device_0 = mesh_device_0->impl().get_devices()[0];
+    auto* const device_1 = mesh_device_1->impl().get_devices()[0];
 
     const size_t src_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
@@ -449,11 +459,14 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsNocReadNoSend) {
 }
 
 TEST_F(N300MeshDeviceFixture, ActiveEthKernelsNocWriteNoReceive) {
+    if (not this->slow_dispatch_) {
+        GTEST_SKIP() << "fast dispatch to active ethernet has been removed";
+    }
     using namespace CMAKE_UNIQUE_NAMESPACE;
     const auto& mesh_device_0 = devices_.at(0);
     const auto& mesh_device_1 = devices_.at(1);
-    auto* const device_0 = mesh_device_0->get_devices()[0];
-    auto* const device_1 = mesh_device_1->get_devices()[0];
+    auto* const device_0 = mesh_device_0->impl().get_devices()[0];
+    auto* const device_1 = mesh_device_1->impl().get_devices()[0];
 
     const size_t src_eth_l1_byte_address = tt::tt_metal::MetalContext::instance().hal().get_dev_addr(
         HalProgrammableCoreType::ACTIVE_ETH, HalL1MemAddrType::UNRESERVED);
@@ -506,7 +519,7 @@ TEST_F(N300MeshDeviceFixture, ActiveEthKernelsNocWriteNoReceive) {
 // TODO #14640: Run this on WH when i$ flush issue is addressed
 TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnIdleErisc0) {
     const auto& mesh_device = devices_.at(0);
-    auto* const device = mesh_device->get_devices()[0];
+    auto* const device = mesh_device->impl().get_devices()[0];
 
     using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t eth_l1_address =
@@ -550,7 +563,7 @@ TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnIdleErisc0) {
 
 TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnIdleErisc1) {
     const auto& mesh_device = devices_.at(0);
-    auto* const device = mesh_device->get_devices()[0];
+    auto* const device = mesh_device->impl().get_devices()[0];
 
     using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t eth_l1_address =
@@ -594,7 +607,7 @@ TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnIdleErisc1) {
 
 TEST_F(BlackholeSingleCardFixture, IdleEthKernelOnBothIdleEriscs) {
     const auto& mesh_device = devices_.at(0);
-    auto* const device = mesh_device->get_devices()[0];
+    auto* const device = mesh_device->impl().get_devices()[0];
 
     using namespace CMAKE_UNIQUE_NAMESPACE;
     uint32_t read_write_size_bytes = WORD_SIZE * 2048;
@@ -652,7 +665,7 @@ TEST_F(BlackholeSingleCardFixture, ActiveEthPtpTraceStamped) {
     enum : size_t { kMagic, kRunCount, kEntryLo, kEntryHi, kExitLo, kExitHi, kExitValid, kNumWords };
 
     for (const auto& mesh_device : devices_) {
-        auto* device = mesh_device->get_devices()[0];
+        auto* device = mesh_device->impl().get_devices()[0];
         for (const auto& eth_core : device->get_active_ethernet_cores(true)) {
             const auto eth_noc_xy = device->ethernet_core_from_logical_core(eth_core);
             const auto trace =

@@ -13,7 +13,7 @@
 #include <optional>
 #include <fstream>
 
-#include <umd/device/types/arch.hpp>
+#include <tt-umd/types/arch.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -208,7 +208,7 @@ private:
             {closest_phys_tensix.value(), CoreType::TENSIX, CoordSystem::NOC0}, CoordSystem::LOGICAL);
 
         tt_metal::ShardSpecBuffer shard_spec = tt_metal::ShardSpecBuffer(
-            CoreRangeSet(std::set<CoreRange>({CoreRange(logical_tensix)})),
+            tt::tt_metal::CoreRangeSet(std::set<tt::tt_metal::CoreRange>({tt::tt_metal::CoreRange(logical_tensix)})),
             {1, params.packet_size},
             tt_metal::ShardOrientation::ROW_MAJOR,
             {1, params.packet_size},

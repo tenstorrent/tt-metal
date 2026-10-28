@@ -8,8 +8,8 @@
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/experimental/quasar/binary/common/binary_op_utils.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
-#include <tt-metalium/hal.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/math.hpp>
 
 #include <algorithm>
 using namespace tt::tt_metal;
@@ -25,7 +25,9 @@ uint32_t extract_nD_dims(const Tensor& x, const int out_rank) {
     const auto& shape = x.logical_shape();
     uint32_t nD_dim = 1;
     if (out_rank >= 6 && shape.rank() >= 6) {
-        for (int i = -6; i >= -out_rank; --i) {
+        // A lower-rank operand has no dims beyond its own rank; they broadcast as 1.
+        const int rank = std::min<int>(out_rank, shape.rank());
+        for (int i = -6; i >= -rank; --i) {
             auto dim = shape[i];
             nD_dim *= dim;
         }
@@ -318,19 +320,24 @@ void overwrite_compute_kernel_name_and_defines(
 // Returns true on the (arch, broadcast, dtype) tuple that hangs the LLK
 // `unary_bcast` path on Blackhole: COL bcast + BFLOAT16 input + fp32_dest_acc_en.
 bool hits_bh_col_bcast_bf16_to_fp32_hang(
-    SubtileBroadcastType subtile_broadcast_type, DataType a_dtype, DataType b_dtype, bool fp32_dest_acc_en) {
+    tt::ARCH arch,
+    SubtileBroadcastType subtile_broadcast_type,
+    DataType a_dtype,
+    DataType b_dtype,
+    bool fp32_dest_acc_en) {
     const bool is_col_bcast =
         subtile_broadcast_type == SubtileBroadcastType::COL_A || subtile_broadcast_type == SubtileBroadcastType::COL_B;
     const bool has_bf16_input = a_dtype == DataType::BFLOAT16 || b_dtype == DataType::BFLOAT16;
-    return tt::tt_metal::hal::get_arch() == tt::ARCH::BLACKHOLE && is_col_bcast && fp32_dest_acc_en && has_bf16_input;
+    return arch == tt::ARCH::BLACKHOLE && is_col_bcast && fp32_dest_acc_en && has_bf16_input;
 }
 
 bool is_llk_bcast(
+    const tt::ARCH arch,
     const SubtileBroadcastType subtile_broadcast_type,
     const DataType a_dtype,
     const DataType b_dtype,
     const bool fp32_dest_acc_en) {
-    if (hits_bh_col_bcast_bf16_to_fp32_hang(subtile_broadcast_type, a_dtype, b_dtype, fp32_dest_acc_en)) {
+    if (hits_bh_col_bcast_bf16_to_fp32_hang(arch, subtile_broadcast_type, a_dtype, b_dtype, fp32_dest_acc_en)) {
         return false;
     }
 
@@ -349,7 +356,6 @@ bool is_llk_bcast(
         }
         if (all_match(DataType::FLOAT32) || all_match(DataType::INT32) || all_match(DataType::UINT32) ||
             all_match(DataType::UINT16)) {
-            tt::ARCH arch = tt::tt_metal::hal::get_arch();
             if (arch == tt::ARCH::WORMHOLE_B0) {
                 return true;
             }
@@ -430,6 +436,17 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     const auto a_data_format = datatype_to_dataformat_converter(a_dtype);
     const auto b_data_format = datatype_to_dataformat_converter(b_dtype);
     const auto c_data_format = datatype_to_dataformat_converter(c_dtype);
+
+    // fp32 dest accumulation must be enabled whenever any input or output is fp32, otherwise
+    // loading fp32 tiles into a DST configured for bf16 produces tile-aligned corruption
+    // for broadcast multiply (issue 43196). Computed here because it also bounds the number of
+    // tiles a compute batch may hold in DST (below), not only the compute kernel config.
+    const bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
+                                  c_data_format == tt::DataFormat::Float32 ||
+                                  a_data_format == tt::DataFormat::Float32 ||
+                                  b_data_format == tt::DataFormat::Float32 ||
+                                  (a_data_format == tt::DataFormat::Int32 && b_data_format == tt::DataFormat::Int32) ||
+                                  (a_data_format == tt::DataFormat::UInt32 && b_data_format == tt::DataFormat::UInt32);
 
     uint32_t a_single_tile_size = tt::tile_size(a_data_format);
     uint32_t b_single_tile_size = tt::tile_size(b_data_format);
@@ -552,8 +569,9 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     if (enable_multi_tile && !is_where_op) {
         if (!is_sfpu_op) {
-            // FPU kernels: 16-bit types can handle 8 tiles,
-            num_tiles_per_cycle = 8;  // Default for 16-bit types (BF16, BF8, BF4)
+            // FPU kernels: half-sync DST holds 8 tiles of 16-bit data, but only 4 when fp32 dest
+            // accumulation is on (any fp32 operand/output), since each element then takes 32 bits.
+            num_tiles_per_cycle = fp32_dest_acc_en ? 4 : 8;
         } else {
             // SFPU kernel should handle 4, but for unknown reason, only 2 works
             // no document and example to show why 4 does not work, need further investigation
@@ -721,15 +739,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     writer_desc.common_runtime_args = writer_common_runtime_args;
 
     // COMPUTE KERNEL
-    // fp32 dest accumulation must be enabled whenever any input or output is fp32, otherwise
-    // loading fp32 tiles into a DST configured for bf16 produces tile-aligned corruption
-    // for broadcast multiply (issue 43196).
-    bool fp32_dest_acc_en = c_data_format == tt::DataFormat::UInt32 || c_data_format == tt::DataFormat::Int32 ||
-                            c_data_format == tt::DataFormat::Float32 || a_data_format == tt::DataFormat::Float32 ||
-                            b_data_format == tt::DataFormat::Float32 ||
-                            (a_data_format == tt::DataFormat::Int32 && b_data_format == tt::DataFormat::Int32) ||
-                            (a_data_format == tt::DataFormat::UInt32 && b_data_format == tt::DataFormat::UInt32);
-
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t src1_cb_index = tt::CBIndex::c_1;
     uint32_t src0interim_cb_index = tt::CBIndex::c_3;
@@ -770,9 +779,10 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
 
     compute_kernel_defines["BCAST_INPUT"] = kernel_config.bcast_input_str();
 
+    const tt::ARCH arch = a.device()->arch();
     bool use_llk_bcast =
         !inputs_row_major && CMAKE_UNIQUE_NAMESPACE::is_llk_bcast(
-                                 operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, fp32_dest_acc_en);
+                                 arch, operation_attributes.subtile_broadcast_type, a_dtype, b_dtype, fp32_dest_acc_en);
 
     // The B2D broadcast path for BFP formats introduces rounding that EXP/EXP2
     // amplifies beyond acceptable tolerance.
@@ -818,7 +828,6 @@ tt::tt_metal::ProgramDescriptor BinaryNgDeviceOperation::ProgramFactory::create_
     // instead of MOVB2D.  Fall back to the software-broadcast path for the affected
     // broadcast types on Blackhole when FP32 dest accumulation is active.
     if (use_llk_bcast && fp32_dest_acc_en) {
-        tt::ARCH arch = tt::tt_metal::hal::get_arch();
         if (arch == tt::ARCH::BLACKHOLE) {
             auto sbt = operation_attributes.subtile_broadcast_type;
             bool uses_movb2d =

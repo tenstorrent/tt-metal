@@ -102,21 +102,9 @@ const SubDevice& SubDeviceManager::sub_device(SubDeviceId sub_device_id) const {
     return sub_devices_[sub_device_index];
 }
 
-const vector_aligned<uint32_t>& SubDeviceManager::noc_mcast_unicast_data() const { return noc_mcast_unicast_data_; }
-
 bool SubDeviceManager::has_noc_mcast_txns(SubDeviceId sub_device_id) const {
     auto sub_device_index = this->get_sub_device_index(sub_device_id);
     return has_noc_mcast_txns_[sub_device_index];
-}
-
-uint8_t SubDeviceManager::num_noc_unicast_txns(SubDeviceId sub_device_id) const {
-    auto sub_device_index = this->get_sub_device_index(sub_device_id);
-    return num_noc_unicast_txns_[sub_device_index];
-}
-
-uint8_t SubDeviceManager::noc_unicast_data_start_index(SubDeviceId sub_device_id) const {
-    auto sub_device_index = this->get_sub_device_index(sub_device_id);
-    return noc_unicast_data_start_index_[sub_device_index];
 }
 
 const std::vector<std::pair<CoreRangeSet, uint32_t>>& SubDeviceManager::get_core_go_message_mapping() const {
@@ -358,33 +346,9 @@ void SubDeviceManager::populate_sub_allocators() {
 void SubDeviceManager::populate_noc_data() {
     uint32_t num_sub_devices = this->num_sub_devices();
     has_noc_mcast_txns_.resize(num_sub_devices);
-    num_noc_unicast_txns_.resize(num_sub_devices);
-    noc_unicast_data_start_index_.resize(num_sub_devices);
 
-    NOC noc_index = MetalContext::instance(context_id_).get_dispatch_query_manager().go_signal_noc();
-    uint32_t idx = 0;
     for (uint32_t i = 0; i < num_sub_devices; ++i) {
-        const auto& eth_cores = sub_devices_[i].impl()->cores(HalProgrammableCoreType::ACTIVE_ETH);
-
         has_noc_mcast_txns_[i] = sub_devices_[i].impl()->has_core_type(HalProgrammableCoreType::TENSIX);
-
-        noc_unicast_data_start_index_[i] = idx;
-
-        // TODO: Precompute number of eth cores and resize once
-        for (const auto& core_range : eth_cores.ranges()) {
-            noc_mcast_unicast_data_.resize(idx + core_range.size());
-            for (const auto& core : core_range) {
-                auto virtual_core = device_->virtual_core_from_logical_core(core, CoreType::ETH);
-                noc_mcast_unicast_data_[idx++] = device_->get_noc_unicast_encoding(noc_index, virtual_core);
-            }
-        }
-        num_noc_unicast_txns_[i] = idx - noc_unicast_data_start_index_[i];
-
-        TT_FATAL(
-            idx <= DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES,
-            "NOC data entries {} exceeds maximum supported size {}",
-            idx,
-            DispatchSettings::DISPATCH_GO_SIGNAL_NOC_DATA_ENTRIES);
     }
 
     const auto& compute_grid_size = device_->compute_with_storage_grid_size();

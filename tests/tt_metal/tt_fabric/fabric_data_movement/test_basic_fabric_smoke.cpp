@@ -28,7 +28,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "tt_metal/fabric/hw/inc/tt_fabric_status.h"
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace tt::tt_fabric::fabric_router_tests {
 
@@ -72,7 +72,6 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
     auto worker_mem_map = fixture->generate_worker_mem_map(sender_device, topology);
     uint32_t num_packets = 5;  // Small number for smoke test
     uint32_t time_seed = std::chrono::system_clock::now().time_since_epoch().count();
-    auto mesh_shape = control_plane.get_physical_mesh_shape(src_fabric_node_id.mesh_id);
 
     std::vector<uint32_t> compile_time_args = {
         worker_mem_map.test_results_address,
@@ -107,8 +106,6 @@ void RunTestUnicastSmoke(BaseFabricFixture* fixture) {
         time_seed,
         receiver_virtual_core.x,
         receiver_virtual_core.y,
-        mesh_shape[1],
-        src_fabric_node_id.chip_id,
         1, /* num_hops - simple for smoke */
         1, /* fwd_range */
         dst_fabric_node_id.chip_id,

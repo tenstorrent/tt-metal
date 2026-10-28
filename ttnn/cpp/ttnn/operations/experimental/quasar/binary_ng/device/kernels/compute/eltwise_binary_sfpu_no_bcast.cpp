@@ -29,21 +29,18 @@
 
 #include "eltwise_utils_common.hpp"
 #include "eltwise_utils_sfpu.hpp"
+template <typename PreLhsDFB, typename PostLhsDFB, typename PreRhsDFB, typename PostRhsDFB, typename OutDFB>
 FORCE_INLINE void process_sfpu_tiles(
     uint32_t n,
-    uint32_t cb_pre_lhs_id,
-    uint32_t cb_post_lhs_id,
-    uint32_t cb_pre_rhs_id,
-    uint32_t cb_post_rhs_id,
-    uint32_t cb_out_id ISCLOSE_RT_ARG_PARAMS) {
-    DataflowBuffer cb_post_lhs(cb_post_lhs_id);
-    DataflowBuffer cb_post_rhs(cb_post_rhs_id);
-    DataflowBuffer cb_out(cb_out_id);
-
-    PREPROCESS(LHS, DataflowBuffer(cb_pre_lhs_id), cb_post_lhs, cb_out, n);
+    PreLhsDFB& cb_pre_lhs,
+    PostLhsDFB& cb_post_lhs,
+    PreRhsDFB& cb_pre_rhs,
+    PostRhsDFB& cb_post_rhs,
+    OutDFB& cb_out ISCLOSE_RT_ARG_PARAMS) {
+    PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, n);
     cb_post_lhs.wait_front(n);
 
-    PREPROCESS(RHS, DataflowBuffer(cb_pre_rhs_id), cb_post_rhs, cb_out, n);
+    PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, n);
     cb_post_rhs.wait_front(n);
 
     cb_out.reserve_back(n);
@@ -102,6 +99,20 @@ void kernel_main() {
     constexpr auto cb_post_lhs_id = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs_id;
     constexpr auto cb_post_rhs_id = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs_id;
 
+    DataflowBuffer cb_pre_lhs(cb_pre_lhs_id);
+    DataflowBuffer cb_pre_rhs(cb_pre_rhs_id);
+    DataflowBuffer cb_out(cb_out_id);
+#if HAS_ACTIVATIONS(LHS)
+    DataflowBuffer cb_post_lhs(cb_post_lhs_id);
+#else
+    auto& cb_post_lhs = cb_pre_lhs;
+#endif
+#if HAS_ACTIVATIONS(RHS)
+    DataflowBuffer cb_post_rhs(cb_post_rhs_id);
+#else
+    auto& cb_post_rhs = cb_pre_rhs;
+#endif
+
     compute_kernel_hw_startup(cb_post_lhs_id, cb_out_id);
     copy_init(cb_post_lhs_id);
 #ifdef PACK_RELU
@@ -116,18 +127,12 @@ void kernel_main() {
     uint32_t num_full_chunks = num_tiles / num_tiles_per_cycle;
     for (uint32_t chunk = 0; chunk < num_full_chunks; ++chunk) {
         process_sfpu_tiles(
-            num_tiles_per_cycle,
-            cb_pre_lhs_id,
-            cb_post_lhs_id,
-            cb_pre_rhs_id,
-            cb_post_rhs_id,
-            cb_out_id ISCLOSE_RT_ARG_FWD);
+            num_tiles_per_cycle, cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out ISCLOSE_RT_ARG_FWD);
     }
 
     // Process remainder
     uint32_t remainder = num_tiles % num_tiles_per_cycle;
     if (remainder > 0) {
-        process_sfpu_tiles(
-            remainder, cb_pre_lhs_id, cb_post_lhs_id, cb_pre_rhs_id, cb_post_rhs_id, cb_out_id ISCLOSE_RT_ARG_FWD);
+        process_sfpu_tiles(remainder, cb_pre_lhs, cb_post_lhs, cb_pre_rhs, cb_post_rhs, cb_out ISCLOSE_RT_ARG_FWD);
     }
 }

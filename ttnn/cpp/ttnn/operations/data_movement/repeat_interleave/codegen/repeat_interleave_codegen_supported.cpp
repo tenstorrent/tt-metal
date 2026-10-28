@@ -93,9 +93,18 @@ bool supported_by_codegen(
         return false;
     }
 
-    // The dtypes the port is swept and certified against.
+    // bfloat16/float32/int32 are swept against the generator; bfloat8_b is admitted for TILE outer
+    // dims on the strength of the dedicated exactness test. bfloat4_b is not admitted: it has not
+    // been exercised on this path.
     const DataType dtype = input.dtype();
-    if (dtype != DataType::BFLOAT16 && dtype != DataType::FLOAT32 && dtype != DataType::INT32) {
+    if (dtype != DataType::BFLOAT16 && dtype != DataType::FLOAT32 && dtype != DataType::INT32 &&
+        dtype != DataType::BFLOAT8_B) {
+        return false;
+    }
+    // A bfloat8_b tile carries its shared exponents inside the page, so only whole-page replication
+    // is a lossless copy. Block floats exist only in TILE; this guards the ROW_MAJOR branch, which
+    // sizes sticks by element_size().
+    if (dtype == DataType::BFLOAT8_B && input.layout() != Layout::TILE) {
         return false;
     }
 
@@ -112,8 +121,22 @@ bool supported_by_codegen(
             tile.get_transpose_within_face() || tile.get_transpose_of_faces()) {
             return false;
         }
+        // The page map counts tiles from the logical shape, so a buffer padded past tile rounding
+        // (tilize_with_val_padding, a view) holds pages the map does not know about and the reader
+        // would replicate padding tiles in place of data.
+        const auto& padded = input.padded_shape();
+        for (uint32_t i = 0; i + 2 < ndim; ++i) {
+            if (padded[i] != shape[i]) {
+                return false;
+            }
+        }
+        if (padded[ndim - 2] != tt::round_up(shape[ndim - 2], tt::constants::TILE_HEIGHT) ||
+            padded[ndim - 1] != tt::round_up(shape[ndim - 1], tt::constants::TILE_WIDTH)) {
+            return false;
+        }
         // The last two dims subdivide a 32x32 tile, and the reader replicates whole tile pages:
-        // page replication is not torch's element-level interleave along H or W.
+        // page replication is not torch's element-level interleave along H or W. bfloat8_b relies on
+        // this exclusion: an element-level interleave would re-block its shared exponents.
         return nd < ndim - 2;
     }
 

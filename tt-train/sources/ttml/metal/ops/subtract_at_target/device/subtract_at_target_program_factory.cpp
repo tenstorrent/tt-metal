@@ -148,30 +148,28 @@ CreatedProgram create_program_for_device(
 
     const uint32_t subtract_bits = float_to_uint32_bits(subtract_value);
 
-    for (uint32_t i = 0, num_rows_written = 0; i < num_cores; ++i) {
-        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
-
-        const uint32_t num_rows_this_core = core_group_1.contains(core)   ? num_rows_per_core_group_1
-                                            : core_group_2.contains(core) ? num_rows_per_core_group_2
-                                                                          : 0U;
-        TT_FATAL(num_rows_this_core > 0U, "subtract_at_target: core not in any group");
-
-        SetRuntimeArgs(
-            program,
-            reader_kernel,
-            core,
-            {input_buffer->address(),
-             target_buffer->address(),
-             num_rows_this_core,
-             num_rows_written,
-             window.first_v,
-             window.last_v,
-             subtract_bits});
-
-        SetRuntimeArgs(program, writer_kernel, core, {output_buffer->address(), num_rows_this_core, num_rows_written});
-
-        num_rows_written += num_rows_this_core;
-    }
+    for_each_core_with_work(
+        num_cores,
+        num_cores_y,
+        core_group_1,
+        core_group_2,
+        num_rows_per_core_group_1,
+        num_rows_per_core_group_2,
+        [&](const CoreWork& work) {
+            const auto& [core, core_index, num_rows, start_row, in_group_1] = work;
+            SetRuntimeArgs(
+                program,
+                reader_kernel,
+                core,
+                {input_buffer->address(),
+                 target_buffer->address(),
+                 num_rows,
+                 start_row,
+                 window.first_v,
+                 window.last_v,
+                 subtract_bits});
+            SetRuntimeArgs(program, writer_kernel, core, {output_buffer->address(), num_rows, start_row});
+        });
 
     return CreatedProgram{
         std::move(program),
@@ -269,9 +267,7 @@ void SubtractAtTargetProgramFactory::override_runtime_arguments(
         auto& reader_args = GetRuntimeArgs(program, sv.reader_kernel_id);
         auto& writer_args = GetRuntimeArgs(program, sv.writer_kernel_id);
 
-        for (uint32_t i = 0; i < sv.num_cores; ++i) {
-            tt::tt_metal::CoreCoord core = {i / sv.num_cores_y, i % sv.num_cores_y};
-
+        for_each_core(sv.num_cores, sv.num_cores_y, [&](const tt::tt_metal::CoreCoord& core) {
             {
                 auto& args = reader_args[core.x][core.y];
                 args[kInputBufferIdx] = input_buffer->address();
@@ -284,7 +280,7 @@ void SubtractAtTargetProgramFactory::override_runtime_arguments(
                 auto& args = writer_args[core.x][core.y];
                 args[kOutputBufferIdx] = output_buffer->address();
             }
-        }
+        });
     }
 }
 

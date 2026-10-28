@@ -136,7 +136,7 @@ ttnn::Tensor welford_reduce(
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(ttnn::init_device_compute_kernel_config(
         input_tensor.device()->arch(),
         std::nullopt,
-        MathFidelity::HiFi4,
+        tt::tt_metal::MathFidelity::HiFi4,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true));
 

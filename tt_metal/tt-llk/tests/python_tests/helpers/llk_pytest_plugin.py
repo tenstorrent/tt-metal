@@ -29,6 +29,7 @@ driver that lives outside ``tests/sources/``.
 """
 
 import atexit
+import collections
 import datetime
 import json
 import logging
@@ -38,9 +39,11 @@ import signal
 import sys
 from dataclasses import asdict
 from pathlib import Path
-from typing import Optional
+from typing import NoReturn, Optional
 
-# ttsim runs in-process (no ExalensServer). Its init must complete before the
+from ttsim_error import parse_ttsim_error
+
+# ttsim runs in-process (no SimulationServer). Its init must complete before the
 # skip_for_* markers in this plugin call get_chip_architecture() (which reaches
 # check_context()) at module-load time.
 # TT_METAL_SIMULATOR is the canonical env var (matches tt-metal runtime and the ttsim README);
@@ -53,6 +56,8 @@ _SIMULATOR_PATH = os.environ.get("TT_METAL_SIMULATOR") or os.environ.get(
     "TT_UMD_SIMULATOR_PATH"
 )
 _IS_XDIST_WORKER = "PYTEST_XDIST_WORKER" in os.environ
+# Skips ttexalens after setup_build fills the paths, and the session-end perf combine.
+_HARDWARE_FREE = os.environ.get("LLK_HARDWARE_FREE") == "1"
 _SHOULD_RUN_SIMULATOR = _IS_XDIST_WORKER or (
     "--run-simulator" in sys.argv and "--compile-producer" not in sys.argv
 )
@@ -61,21 +66,39 @@ if _SHOULD_RUN_SIMULATOR and _SIMULATOR_PATH and _SIMULATOR_PATH.endswith(".so")
 
     _tt_exalens_init.init_ttexalens(simulation_directory=_SIMULATOR_PATH)
 
+# tt_llk_perf lives in tools/python, outside the test tree, so it goes on sys.path before the helpers import it.
+# LLK_HOME wins when set, matching init_llk_home() further down.
+_TT_LLK_TOOLS_PYTHON = str(
+    Path(os.environ.get("LLK_HOME") or Path(__file__).resolve().parents[3])
+    / "tools"
+    / "python"
+)
+if _TT_LLK_TOOLS_PYTHON not in sys.path:
+    sys.path.insert(0, _TT_LLK_TOOLS_PYTHON)
+
 import helpers.order_processing as order_processing
 import helpers.utils as utils_module
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture, get_chip_architecture
 from helpers.device import LLKAssertException
-from helpers.exalens_server import ExalensServer
 from helpers.format_config import InputOutputFormat
 from helpers.logger import configure_logger, logger
 from helpers.perf.core import PerfConfig, PerfReport, combine_perf_reports
+from helpers.simulation_server import SimulationServer, pid_alive
 from helpers.test_config import BuildMode, TestConfig, process_coverage_run_artefacts
 from ttexalens import check_context, tt_exalens_init
 from ttexalens.tt_exalens_lib import get_tensix_state
 
-_exalens_server: Optional[ExalensServer] = None
+_sim_server: Optional[SimulationServer] = None
+# xdist worker: PID of the controller's simulation host.
+_sim_host_pid: Optional[int] = None
+# xdist worker: set in pytest_configure, raised from pytest_runtest_setup.
+# pytest.exit during configure looks like a worker crash, and xdist respawns
+# the worker until --max-worker-restart.
+_worker_fatal: Optional[str] = None
+_SIM_SERVER_DIR_KEY = "llk_sim_server_dir"
+_SIM_HOST_PID_KEY = "llk_sim_host_pid"
 
 
 # This is a workaround for this issue: https://github.com/tenstorrent/tt-exalens/issues/958
@@ -94,12 +117,13 @@ def override_gprs_used_by_tensix_dump():
 
 
 @atexit.register
-def _stop_exalens_server():
-    """atexit handler to ensure the tt-exalens server is stopped on process exit."""
-    global _exalens_server
-    if _exalens_server is not None:
-        _exalens_server.stop()
-        _exalens_server = None
+def _stop_sim_server():
+    """atexit handler to ensure the simulation host is stopped on process exit."""
+    global _sim_server
+    if _sim_server is not None:
+        tt_exalens_init.cleanup_global_context()
+        _sim_server.stop()
+        _sim_server = None
 
 
 def _fatal_signal_handler(signum, frame):
@@ -113,7 +137,7 @@ def _fatal_signal_handler(signum, frame):
     raise KeyboardInterrupt
 
 
-# Ensure the tt-exalens server is stopped on SIGTERM/SIGQUIT so the emulator
+# Ensure the simulation host is stopped on SIGTERM/SIGQUIT so the emulator
 # session is released. Without this, `kill` or Ctrl+\ would terminate the
 # process immediately, leaving the emulator slot orphaned.
 signal.signal(signal.SIGTERM, _fatal_signal_handler)
@@ -196,21 +220,46 @@ def pytest_addoption(parser):
         "--port",
         action="store",
         type=int,
-        default=5555,
-        help="Integer number of the server port.",
+        default=None,
+        help="Deprecated and ignored: the RTL simulator is shared through a UMD "
+        "simulation server, which needs no port. Will be removed.",
     )
     parser.addoption(
         "--reset-simulator-per-test",
         action="store_true",
         default=False,
-        help="Restart the tt-exalens server after each test. "
-        "Only effective with --run-simulator.",
+        help="Restart the simulation host after each test. "
+        "Only effective with --run-simulator, and not with xdist (-n).",
     )
 
     parser.addoption(
         "--coverage",
         action="store_true",
         help="Enables coverage *.info file generation for every test variant run",
+    )
+
+    parser.addoption(
+        "--ulp-measure",
+        default=None,
+        metavar="PATH",
+        help="Append one JSON record per recorded comparison to PATH (created and "
+        "truncated at session start; one that cannot be is a usage error). Reporting "
+        "only, except that the sweep's records are required: a sweep cell whose record "
+        "is not written fails.",
+    )
+    parser.addoption(
+        "--ulp-emit",
+        action="store_true",
+        help="Re-measure rather than gate: the exhaustive unary sweep writes what it "
+        "measured into this architecture's helpers/sfpu_accuracy_budget_*.yaml at the "
+        "end of the session. "
+        "Writes the table; use it deliberately.",
+    )
+    parser.addoption(
+        "--ulp-report",
+        action="store_true",
+        help="Log the measured ULP distance of every comparison on a ULP-capable "
+        "format, pass or fail, enrolled or not. Reporting only.",
     )
 
     parser.addoption(
@@ -279,6 +328,19 @@ def pytest_addoption(parser):
         const="_USE_DEFAULT_PATH",  # Value when flag is used without argument
         default=None,  # Value when flag is not used at all
         help="Path to where the test order, per runner should be stored to, default path is the same folder as LLK repo",
+    )
+
+    parser.addoption(
+        "--perf-splits",
+        type=int,
+        default=None,
+        help="Number of perf shards.",
+    )
+    parser.addoption(
+        "--perf-group",
+        type=int,
+        default=None,
+        help="1-based perf shard to run.",
     )
 
     parser.addoption(
@@ -458,8 +520,39 @@ def pytest_configure(config):
         _RECORD_TEST_ORDER = True
         utils_module._RECORD_TEST_ORDER = True
 
+    if config.getoption("--ulp-emit"):
+        from . import ulp_sweep
+        from .ulp_table import MEASURED_ARCH
+
+        if TestConfig.CHIP_ARCH != MEASURED_ARCH:
+            # finish_emit refuses this too, but only at session end: emit bypasses the
+            # tolerance-cell skip, so every cell would compile and run first.
+            raise pytest.UsageError(
+                f"--ulp-emit measures the table's unkeyed rows, which are read as "
+                f"{MEASURED_ARCH.value} measurements; this session targets "
+                f"{TestConfig.CHIP_ARCH.value}"
+            )
+        ulp_sweep.EMIT = True
+    if config.getoption("--ulp-report"):
+        utils_module._ULP_REPORT = True
+    if config.getoption("--ulp-measure"):
+        # Set in the workers too; only the file preparation below is master-only.
+        utils_module._ULP_MEASURE_PATH = config.getoption("--ulp-measure")
+
     log_file = "pytest_errors.log"
     if not hasattr(config, "workerinput"):  # executed only by master pytest runner
+        if config.getoption("--port") is not None:
+            logger.warning(
+                "--port is deprecated and ignored: the RTL simulator is now shared "
+                "through a UMD simulation server, which needs no port. Drop it from "
+                "your command line; it will be removed."
+            )
+        try:
+            utils_module.prepare_ulp_measure_file()
+        except OSError as exc:
+            raise pytest.UsageError(
+                f"--ulp-measure: cannot prepare the file: {exc}"
+            ) from exc
         # Refresh order folder with setup_files function
         order_processing.setup_files(TestConfig.ARTEFACTS_DIR / "order_records", True)
         if os.path.exists(log_file):
@@ -475,7 +568,7 @@ def pytest_configure(config):
         format="%(asctime)s - %(levelname)s - %(message)s",
     )
 
-    if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+    if not _HARDWARE_FREE and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         if TestConfig.TEST_TARGET.run_simulator:
             if _SIMULATOR_PATH is None:
                 pytest.exit(
@@ -486,7 +579,7 @@ def pytest_configure(config):
 
             if _SIMULATOR_PATH.endswith(".so"):
                 # ttsim: already initialized at module import above; runs in-process, no server.
-                # --reset-simulator-per-test restarts the ExalensServer, which ttsim doesn't use,
+                # --reset-simulator-per-test restarts the SimulationServer, which ttsim doesn't use,
                 # so it would be a silent no-op. Fail fast to avoid confusing false-green runs.
                 if TestConfig.TEST_TARGET.reset_simulator_per_test:
                     pytest.exit(
@@ -496,14 +589,27 @@ def pytest_configure(config):
                     )
                 TestConfig.resolve_worker_tensix_location()
             elif not hasattr(config, "workerinput"):
-                # RTL simulator: only the controller process manages the server; xdist workers
-                # just connect to the already-running instance. TENSIX_LOCATION is bound
-                # after init_ttexalens_remote in pytest_runtest_setup, once the server is up.
-                global _exalens_server
-                _exalens_server = ExalensServer(
-                    simulator_path=_SIMULATOR_PATH,
-                    port=TestConfig.TEST_TARGET.simulator_port,
-                )
+                # RTL simulator: the controller runs the host, test processes attach as clients.
+                if (
+                    TestConfig.TEST_TARGET.reset_simulator_per_test
+                    and config.getoption("numprocesses", None)
+                ):
+                    pytest.exit(
+                        "ERROR: --reset-simulator-per-test restarts the simulation every "
+                        "xdist worker shares. Re-run without -n.",
+                        returncode=1,
+                    )
+                global _sim_server
+                _sim_server = SimulationServer(simulator_path=_SIMULATOR_PATH)
+            else:
+                # xdist worker: attach to the host the controller started.
+                global _sim_host_pid, _worker_fatal
+                server_directory = config.workerinput.get(_SIM_SERVER_DIR_KEY)
+                if server_directory is None:
+                    _worker_fatal = "ERROR: the controller started no simulation server to attach to."
+                else:
+                    _sim_host_pid = config.workerinput[_SIM_HOST_PID_KEY]
+                    _attach_to_sim_server(server_directory)
         else:
             tt_exalens_init.init_ttexalens()
             TestConfig.resolve_worker_tensix_location()
@@ -629,13 +735,60 @@ def _select_tests_by_op(config, items):
     )
 
 
-@pytest.hookimpl(tryfirst=True)
-def pytest_collection_modifyitems(config, items):
-    _select_tests_by_op(config, items)
+def _split_by_cost(config, items):
+    """Cut the tests, in collection order, into --perf-splits chunks of equal estimated time.
 
-    if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
-        _collapse_runtime_only_variants(config, items)
+    A test weighs its module's cost from perf_split_costs.json (perf_split_costs_sol.json with
+    --speed-of-light, which compiles every variant) divided by the module's test count. The
+    chunks are contiguous, so a module's tests, and the ELFs they share, stay in one shard
+    except at a cut point. build_perf_split_costs.py rebuilds both tables. This runs before
+    _collapse_runtime_only_variants, so the compile and run passes cut the same list.
+    """
+    splits = config.getoption("--perf-splits")
+    group = config.getoption("--perf-group")
+    if splits is None and group is None:
+        return
+    if not splits or not group or not 1 <= group <= splits:
+        raise pytest.UsageError(
+            "--perf-splits N and --perf-group G go together, with 1 <= G <= N"
+        )
 
+    arch = TestConfig.CHIP_ARCH.value
+    costs_file = (
+        "perf_split_costs_sol.json"
+        if TestConfig.SPEED_OF_LIGHT
+        else "perf_split_costs.json"
+    )
+    table = json.loads((Path(__file__).resolve().parents[2] / costs_file).read_text())
+    module_cost = table.get(arch)
+    if module_cost is None:
+        raise pytest.UsageError(f"{costs_file} has no costs for {arch}")
+
+    modules = [item.path.stem for item in items]
+    unknown = sorted(set(modules) - module_cost.keys())
+    if unknown:
+        logger.warning(
+            f"--perf-splits: {costs_file} has no cost for {', '.join(unknown)}; "
+            "each counts as 1 s"
+        )
+    tests_in = collections.Counter(modules)
+    weights = [module_cost.get(m, 1.0) / tests_in[m] for m in modules]
+    total = sum(weights)
+    if total == 0:
+        weights, total = [1.0] * len(items), float(len(items))
+
+    # A test goes to the chunk that holds the midpoint of its weight.
+    chunk = total / splits
+    selected, deselected, before = [], [], 0.0
+    for item, weight in zip(items, weights):
+        shard = min(int((before + weight / 2) / chunk), splits - 1) + 1
+        (selected if shard == group else deselected).append(item)
+        before += weight
+    config.hook.pytest_deselected(items=deselected)
+    items[:] = selected
+
+
+def _restore_test_order(config, items):
     test_order_file = config.getoption("--test-order-file")
 
     if not test_order_file:
@@ -672,6 +825,20 @@ def pytest_collection_modifyitems(config, items):
     )
 
 
+@pytest.hookimpl(wrapper=True, tryfirst=True)
+def pytest_collection_modifyitems(config, items):
+    # Choose compile representatives only after other plugins apply selection filters.
+    result = yield
+    _select_tests_by_op(config, items)
+    _split_by_cost(config, items)
+    _restore_test_order(config, items)
+
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE and not TestConfig.SPEED_OF_LIGHT:
+        _collapse_runtime_only_variants(config, items)
+
+    return result
+
+
 def pytest_terminal_summary(terminalreporter, exitstatus, config):
     """Suppress the short test summary info section."""
 
@@ -701,11 +868,6 @@ def _stringify_params(params):
             parts.append(f"{name}={str(value)}")
 
     return f"[{' | '.join(parts)}]"
-
-
-# Match the ttsim error preamble printed by ttsim_error() before _Exit(1):
-#   [<clk>] ERROR: <Category>: <function>: <details>
-_TTSIM_ERR_RE = re.compile(r"^\[\d+\] ERROR: (\w+): (\w+): (.*)$", re.MULTILINE)
 
 
 @pytest.hookimpl(tryfirst=True)
@@ -749,10 +911,12 @@ def pytest_runtest_logreport(report):
         report.longrepr or ""
     ):
         report.when = "call"
-        m = _TTSIM_ERR_RE.search(report.capstdout or "")
-        if m:
-            cat, func, msg = m.group(1), m.group(2), m.group(3).strip()
-            report.longrepr = f"[ttsim:{cat}] {func}: {msg}"
+        parsed = parse_ttsim_error(report.capstdout or "")
+        if parsed:
+            cat, func, msg = parsed
+            report.longrepr = (
+                f"[ttsim:{cat}] {func}: {msg}" if msg else f"[ttsim:{cat}] {func}"
+            )
             props = list(getattr(report, "user_properties", []))
             props.append(("ttsim_category", cat))
             props.append(("ttsim_func", func))
@@ -870,39 +1034,76 @@ def pytest_runtest_teardown(item, nextitem):
         return
 
     global _reset_simulator_pending
-    if _exalens_server is not None:
+    if _sim_server is not None:
         _reset_simulator_pending = True
 
 
-def pytest_runtest_setup(item):
-    """Start the server on the first test, or restart between tests if requested."""
-    global _exalens_server, _reset_simulator_pending
+def _attach_to_sim_server(server_directory: str) -> None:
+    tt_exalens_init.init_ttexalens(simulation_directory=server_directory)
+    TestConfig.resolve_worker_tensix_location()
 
-    if _exalens_server is None:
+
+def _fail_xdist_worker(item, msg: str) -> NoReturn:
+    """Fail this item and stop the xdist session.
+
+    pytest.exit from a worker leaves the current item pending and reports
+    workerfinished with no shouldstop. pytest-xdist 3.8.0 then raises
+    INTERNALERROR (``assert not crashitem``) and the message never surfaces.
+    """
+    item.session.shouldstop = msg
+    pytest.fail(msg, pytrace=False)
+
+
+def pytest_runtest_setup(item):
+    """Start the host on the first test, or restart between tests if requested.
+
+    On an xdist worker, also stop the session when the controller's simulation
+    host was never started or has died.
+    """
+    global _reset_simulator_pending
+
+    if _worker_fatal is not None:
+        _fail_xdist_worker(item, _worker_fatal)
+
+    if _sim_host_pid is not None and not pid_alive(_sim_host_pid):
+        _fail_xdist_worker(
+            item, f"Simulation host (PID {_sim_host_pid}) is no longer running."
+        )
+
+    if _sim_server is None:
         return
 
-    if not _exalens_server.running and not _exalens_server.ever_started:
-        _exalens_server.start()
-        tt_exalens_init.init_ttexalens_remote(
-            port=TestConfig.TEST_TARGET.simulator_port
-        )
-        TestConfig.resolve_worker_tensix_location()
-    elif not _exalens_server.running:
-        logger.error("tt-exalens server is no longer running unexpectedly.")
+    if not _sim_server.running and not _sim_server.ever_started:
+        _sim_server.start()
+        _attach_to_sim_server(_sim_server.server_directory)
+    elif not _sim_server.running:
+        logger.error("Simulation host is no longer running unexpectedly.")
         pytest.exit(returncode=1)
     elif _reset_simulator_pending:
         _reset_simulator_pending = False
         tt_exalens_init.cleanup_global_context()
-        _exalens_server.restart()
-        tt_exalens_init.init_ttexalens_remote(
-            port=TestConfig.TEST_TARGET.simulator_port
-        )
-        TestConfig.resolve_worker_tensix_location()
+        _sim_server.restart()
+        _attach_to_sim_server(_sim_server.server_directory)
 
 
 def pytest_sessionstart(session):
     if hasattr(session.config, "workerinput"):
         return
+    # Under xdist no test runs on the controller; start the host before xdist's (trylast)
+    # pytest_sessionstart spawns the workers.
+    if (
+        _sim_server is not None
+        and not _sim_server.ever_started
+        and session.config.pluginmanager.has_plugin("dsession")
+    ):
+        _sim_server.start()
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_configure_node(node):
+    if _sim_server is not None and _sim_server.running:
+        node.workerinput[_SIM_SERVER_DIR_KEY] = _sim_server.server_directory
+        node.workerinput[_SIM_HOST_PID_KEY] = _sim_server.pid
 
 
 @pytest.fixture(scope="module", autouse=True)
@@ -979,11 +1180,71 @@ def perf_report(request, worker_id):
     temp_report.dump_csv(post_path)
 
 
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown(node, error):
+    """Merge an xdist worker's ``--ulp-emit`` measurements into the controller's."""
+    from . import ulp_sweep
+
+    ulp_sweep.merge_measured(
+        getattr(node, "workeroutput", {}).get(ulp_sweep.WORKEROUTPUT_KEY)
+    )
+
+
+def _finish_ulp_emit(session):
+    """Under ``--ulp-emit``, write the session's measurements into the table once; a
+    refusal fails a clean session and leaves an interrupted one's status alone."""
+    from . import ulp_sweep
+    from .ulp_table import TABLE_PATH
+
+    if not ulp_sweep.EMIT:
+        return
+    if TestConfig.BUILD_MODE == BuildMode.PRODUCE or session.config.option.collectonly:
+        # The producer only compiles, and --collect-only runs nothing: neither measures.
+        _ulp_emit_line(
+            session, "--ulp-emit: nothing runs in this session; nothing to write"
+        )
+        return
+    try:
+        if not ulp_sweep.MEASURED:
+            raise RuntimeError("nothing was measured, so the table was not touched")
+        # The hook also runs after a Ctrl-C, with INTERRUPTED already in `exitstatus`.
+        clean = session.testsfailed == 0 and session.exitstatus == pytest.ExitCode.OK
+        written = ulp_sweep.finish_emit(get_chip_architecture(), clean, TABLE_PATH)
+        message = f"--ulp-emit: rewrote {len(written)} op(s) in {TABLE_PATH.name}"
+    except (RuntimeError, ValueError) as exc:
+        # A ValueError is a TableError: the table on disk does not load, or the rewrite
+        # would not (`write_table_file` reads its dump back first); nothing was written.
+        message = f"--ulp-emit: {exc}"
+        if session.exitstatus == pytest.ExitCode.OK:
+            session.exitstatus = pytest.ExitCode.TESTS_FAILED
+    _ulp_emit_line(session, message)
+
+
+def _ulp_emit_line(session, message):
+    reporter = session.config.pluginmanager.get_plugin("terminalreporter")
+    if reporter is not None:
+        reporter.write_line(message)
+    else:
+        print(message)
+
+
 def pytest_sessionfinish(session):
     if hasattr(session.config, "workerinput"):
+        if _sim_host_pid is not None:
+            tt_exalens_init.cleanup_global_context()
+        # Each worker measured its own share; the controller merges them in
+        # pytest_testnodedown and writes the table once.
+        from . import ulp_sweep
+
+        if ulp_sweep.EMIT:
+            session.config.workeroutput[ulp_sweep.WORKEROUTPUT_KEY] = (
+                ulp_sweep.export_measured()
+            )
         return
 
-    if TestConfig.BUILD_MODE != BuildMode.PRODUCE:
+    _finish_ulp_emit(session)
+
+    if not _HARDWARE_FREE and TestConfig.BUILD_MODE != BuildMode.PRODUCE:
         combine_perf_reports()
 
         # This was set by pytest CLI argument in pytest_configure call
@@ -993,7 +1254,7 @@ def pytest_sessionfinish(session):
         if TestConfig.WITH_COVERAGE:
             process_coverage_run_artefacts()
 
-    _stop_exalens_server()
+    _stop_sim_server()
 
 
 # Skip decorators for specific architectures

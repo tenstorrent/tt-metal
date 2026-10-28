@@ -12,6 +12,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/math.hpp>
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/pool/upsample/device/upsample_common.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"

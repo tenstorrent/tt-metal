@@ -140,7 +140,7 @@ UntilizerPoolFallback add_untilizer_pool(
     cmp.kernel_source = std::string(kKernelDir) + "compute/untilize_dispatch_fabric2d.cpp";
     cmp.core_ranges = pool_cores;
     cmp.compile_time_args = ct;
-    cmp.config = tt::tt_metal::ComputeConfigDescriptor{.math_fidelity = MathFidelity::HiFi4};
+    cmp.config = tt::tt_metal::ComputeConfigDescriptor{.math_fidelity = tt::tt_metal::MathFidelity::HiFi4};
 
     tt::tt_metal::KernelDescriptor wtr;
     wtr.kernel_source = std::string(kKernelDir) + "dataflow/untilize_writer_dispatch_fabric2d.cpp";

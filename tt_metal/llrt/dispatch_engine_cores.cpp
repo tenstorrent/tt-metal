@@ -5,10 +5,9 @@
 #include "impl/dispatch/dispatch_engine_cores.hpp"
 
 #include "common/core_coord.hpp"
-#include "core_descriptor.hpp"
 #include "impl/context/metal_context.hpp"
-#include "impl/context/metal_env_accessor.hpp"
 #include "impl/context/metal_env_impl.hpp"
+#include "distributed/mesh_device_impl.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include "llrt/metal_soc_descriptor.hpp"
 #include "llrt/rtoptions.hpp"
@@ -17,8 +16,8 @@
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 namespace {
 
@@ -214,8 +213,8 @@ CoreType resolve_dispatch_core_type(
 namespace {
 
 const std::vector<CoreCoord>& get_sd_cq_dispatch_cores(const distributed::MeshDevice& mesh_device) {
-    auto& context = MetalContext::instance(extract_context_id(&mesh_device));
-    auto& env = MetalEnvAccessor(context.get_env()).impl();
+    auto& context = mesh_device.impl().metal_context();
+    auto& env = mesh_device.impl().metal_env();
     const auto& dispatch_core_config = context.get_dispatch_core_config();
     return env.get_quasar_dispatch_cores(
         mesh_device.get_device_ids()[0], mesh_device.num_hw_cqs(), dispatch_core_config);
@@ -224,8 +223,8 @@ const std::vector<CoreCoord>& get_sd_cq_dispatch_cores(const distributed::MeshDe
 }  // namespace
 
 CoreType resolve_sd_cq_kernel_core_type(const distributed::MeshDevice& mesh_device) {
-    auto& context = MetalContext::instance(extract_context_id(&mesh_device));
-    auto& env = MetalEnvAccessor(context.get_env()).impl();
+    auto& context = mesh_device.impl().metal_context();
+    auto& env = mesh_device.impl().metal_env();
     return tt::tt_metal::resolve_dispatch_core_type(
         env, mesh_device.get_device_ids()[0], context.get_dispatch_core_config());
 }
@@ -274,8 +273,7 @@ bool sd_cq_kernel_tests_should_skip(const distributed::MeshDevice& mesh_device) 
     if (mesh_device.arch() != tt::ARCH::QUASAR) {
         return false;
     }
-    auto& context = MetalContext::instance(extract_context_id(&mesh_device));
-    auto& env = MetalEnvAccessor(context.get_env()).impl();
+    auto& env = mesh_device.impl().metal_env();
     if (env.get_rtoptions().get_use_quasar_tensix_dispatch_cores()) {
         return false;
     }

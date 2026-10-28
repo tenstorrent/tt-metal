@@ -10,6 +10,7 @@ d2h internals; reuses the shard-extraction primitives it already exposes.
 
 from __future__ import annotations
 
+import math
 import os
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
@@ -59,6 +60,19 @@ def _as_hwt(shard: torch.Tensor, T: int) -> torch.Tensor:
     if shard.dim() == 4:
         return shard
     return shard.reshape(shard.shape[0], shard.shape[1], shard.shape[2] // T, T)
+
+
+def _local_range(view) -> ttnn.MeshCoordinateRange | None:
+    """This host's devices as one range, for an event it can wait on: `event_synchronize` visits every device in
+    the event's range and throws on a remote one. None (the whole mesh) on a single host."""
+    if view is None:
+        return None
+    # The range iterator yields one coordinate object that it mutates in place, so copy each out as it passes.
+    local = [tuple(int(x) for x in c) for c in ttnn.MeshCoordinateRange(view.shape()) if view.is_local(c)]
+    lo = [min(c[d] for c in local) for d in range(len(local[0]))]
+    hi = [max(c[d] for c in local) for d in range(len(local[0]))]
+    assert len(local) == math.prod(h - l + 1 for l, h in zip(lo, hi)), f"local devices are not one rectangle: {local}"
+    return ttnn.MeshCoordinateRange(ttnn.MeshCoordinate(lo), ttnn.MeshCoordinate(hi))
 
 
 def _all_contiguous(*shard_groups) -> bool:
@@ -143,7 +157,7 @@ def _yuv_planar_d2h(
     host_Cr = tt_Cr.cpu(blocking=False)
     read_event = None
     if defer:
-        read_event = ttnn.record_event(mesh_device, 0)
+        read_event = ttnn.record_event(mesh_device, 0, device_range=_local_range(view))
     else:
         ttnn.synchronize_device(mesh_device)
 

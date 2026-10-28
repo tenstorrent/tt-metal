@@ -15,7 +15,11 @@ from models.common.lightweightmodule import LightweightModule
 from models.common.utility_functions import is_blackhole
 from models.demos.deepseek_v3_d_p.tt.kv_ack import zero_pad_and_ack
 from models.demos.deepseek_v3_d_p.tt.mla import ttMLA
-from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import compute_constants, extract_mesh_config
+from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
+    compute_constants,
+    extract_mesh_config,
+    routed_expert_combine_overlap_arg,
+)
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe import TtMoe
 from models.demos.deepseek_v3_d_p.tt.moe.tt_moe_gate_prefill import GateComputeMode
 from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import (
@@ -272,6 +276,7 @@ class TtPrefillBlock(LightweightModule):
         max_seq_len: Optional[int] = None,
         kv_only: bool = False,
         routing_use_l1_small_for_semaphores: bool = False,
+        tp_shard_kv: Optional[bool] = None,
         sparse_kv_cache_format: MlaKvCacheFormat = MlaKvCacheFormat.BF16_RM,
         overlap_shared_expert_with_dispatch: bool = True,
         first_layer_idx: Optional[int] = None,
@@ -317,6 +322,14 @@ class TtPrefillBlock(LightweightModule):
             use_fused_rmsnorm = getattr(model_cfg, "USE_FUSED_PREFILL_RMSNORM", False) and is_blackhole() and is_chunked
 
         # --- Attention norm ---
+        # Mistral-Small-4 at 640 rows/device: the 2D post-all-gather split (one tile row per core) runs
+        # the normalize on 80 cores instead of 20, 17.9 us vs 33.9 per norm. Bit-identical to the 1D path.
+        use_mistral4_2d_post_norm = (
+            is_blackhole()
+            and seq_len // mesh_device.shape[sp_axis] == 640
+            and config.num_attention_heads == 32
+            and config.q_lora_rank == 1024
+        )
         use_glm53_l1_attn_norm = (
             is_blackhole()
             and is_chunked
@@ -337,6 +350,7 @@ class TtPrefillBlock(LightweightModule):
             cache_name_prefix=f"layer_{layer_idx}.attn_norm",
             use_fused=use_fused_rmsnorm,
             output_memcfg=ttnn.L1_MEMORY_CONFIG if use_glm53_l1_attn_norm else None,
+            post_use_2d_core_grid=use_mistral4_2d_post_norm,
         )
 
         # --- MLA ---
@@ -364,6 +378,7 @@ class TtPrefillBlock(LightweightModule):
             sparse_kv_cache_format=sparse_kv_cache_format,
             first_layer_idx=first_layer_idx,
             llama4_scale_cache=llama4_scale_cache,
+            tp_shard_kv=tp_shard_kv,
         )
 
         if kv_only:
@@ -382,6 +397,7 @@ class TtPrefillBlock(LightweightModule):
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.ffn_norm",
             use_fused=use_fused_rmsnorm,
+            post_use_2d_core_grid=use_mistral4_2d_post_norm,
         )
 
         # --- FFN (MoE or dense) ---
@@ -498,6 +514,9 @@ class TtPrefillBlock(LightweightModule):
             # Same source as the block's attn_norm and ffn_norm, so the three cannot disagree.
             rms_norm_eps=config.rms_norm_eps,
             max_gate_seq_len_per_chip=getattr(model_cfg, "MAX_GATE_SEQ_LEN_PER_CHIP", None),
+            # Only configs that opt in (Kimi K2.7, GLM 5.3, Mistral Small 4) overlap the routed expert with
+            # combine_fabric2d.
+            overlap_routed_expert_with_combine=routed_expert_combine_overlap_arg(model_cfg),
             num_links=num_links,
             topology=topology,
             routed_expert_weights=state_dict.get("routed_expert_weights"),  # None if cache exists
@@ -581,6 +600,7 @@ class TtPrefillBlock(LightweightModule):
         index_kv_cache: Optional[ttnn.Tensor] = None,
         metadata: Optional[ttnn.Tensor] = None,
         ack_layer_idx: Optional[int] = None,
+        ack_alias_layer_ids: tuple = (),
         force_kv_only: bool = False,
     ):
         """
@@ -605,6 +625,8 @@ class TtPrefillBlock(LightweightModule):
                 d2h_service path does not cover.
             ack_layer_idx: global layer id this block acks under, overriding its own. MTP replays one
                 block per level, so each level needs a distinct id on the host-callback path.
+            ack_alias_layer_ids: global layer ids acked right after this block's own, for table rows
+                that alias its KV (decode MTP levels past the ones prefill computes).
             on_layer_hidden: optional tap fired at the END of the block with (GLOBAL layer index, output
                 residual x) — for consumers that need the post-FFN hidden (e.g. the DFlash drafter
                 matching target_layer_ids). NOT fired for kv_only blocks (no output). The callback must
@@ -689,6 +711,8 @@ class TtPrefillBlock(LightweightModule):
             metadata_msg=metadata_msg,
             on_layer_complete=on_layer_complete,
             trace_controller=getattr(self, "_trace_controller", None),
+            tp_axis=self.mla.tp_shard_kv_axis,
+            alias_layer_ids=ack_alias_layer_ids,
         )
 
         if kv_only:

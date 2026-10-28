@@ -42,8 +42,11 @@ template <
     bool zero_pages,
     uint32_t in_cb_sz,
     uint32_t bf16_init_value,
-    uint32_t MAX_TILES_PER_REDUCTION>
-ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base_addr) {
+    uint32_t MAX_TILES_PER_REDUCTION,
+    typename InDFB,
+    typename ClearDFB>
+ALWI void read_kernel_with_top_left_index(
+    InDFB& in_cb, ClearDFB& clear_cb, uint32_t ind, uint32_t in_l1_read_base_addr) {
     constexpr uint32_t BYTES_PER_ELEM = 2;
     constexpr uint32_t in_ntiles_c = (in_c + TILE_WIDTH - 1) / TILE_WIDTH;
     constexpr uint32_t MAX_BYTES_PER_REDUCTION = MAX_TILES_PER_REDUCTION * TILE_WIDTH * BYTES_PER_ELEM;
@@ -52,8 +55,6 @@ ALWI void read_kernel_with_top_left_index(uint32_t ind, uint32_t in_l1_read_base
     constexpr bool tilize_reconfig = in_nblocks_c > 1 && in_ntiles_c % MAX_TILES_PER_REDUCTION != 0 &&
                                      (kernel_h * kernel_w) <= 16 && !last_tile_is_partial;
 
-    DataflowBuffer in_cb(in_cb_id);
-    DataflowBuffer clear_cb(clear_value_cb_id);
     Noc noc;
     UnicastEndpoint self_ep;
 
@@ -280,6 +281,7 @@ void kernel_main() {
          interm_reduction_chunks <= multi_buffering_factor);
     constexpr uint32_t in_cb_ntiles = in_cb_sz / (TILE_WIDTH * TILE_HEIGHT);  // only use the non-multi buffering size
 
+    DataflowBuffer in_cb(in_cb_id);
     DataflowBuffer clear_value_cb(clear_value_cb_id);
     DataflowBuffer in_scalar_cb(in_scalar_cb_id);
     DataflowBuffer in_shard_cb(in_shard_cb_id);
@@ -316,9 +318,8 @@ void kernel_main() {
             // fill is only valid for non-negative inputs). A thread's ring entries are strided, so
             // every thread recovers the ring base and idempotently fills it all. Direct CPU fill +
             // flush: clear_out_tiles' NoC self-loopback read is unreliable on the Quasar sim.
-            DataflowBuffer icb_clear(in_cb_id);
-            const uint32_t icb_base = icb_clear.get_write_ptr() - get_my_thread_id() * icb_clear.get_entry_size();
-            const uint32_t clear_bytes = icb_clear.get_entry_size() * multi_buffering_factor * get_num_threads();
+            const uint32_t icb_base = in_cb.get_write_ptr() - get_my_thread_id() * in_cb.get_entry_size();
+            const uint32_t clear_bytes = in_cb.get_entry_size() * multi_buffering_factor * get_num_threads();
             fill_with_val(icb_base, clear_bytes / 2, bf16_init_value);
 #ifdef ARCH_QUASAR
             flush_l2_cache_range(static_cast<uintptr_t>(icb_base), static_cast<size_t>(clear_bytes));
@@ -449,7 +450,7 @@ void kernel_main() {
                 zero_pages,
                 in_cb_sz,
                 bf16_init_value,
-                max_tiles_per_reduction>(ind, in_l1_read_base_addr);
+                max_tiles_per_reduction>(in_cb, clear_value_cb, ind, in_l1_read_base_addr);
 #if ENABLE_DEBUG_PRINT == 1
             // [DIAG] Peek THIS reader's just-filled input CB (reader is producer; on DM get_read_ptr still
             // points at the base page it filled, before compute pops). Tilized face0 row0 = first 16
@@ -457,9 +458,7 @@ void kernel_main() {
             // reader1's in_cb_1 reads 0 while reader0's in_cb_0 reads 1..16, the split reader1 input feed
             // is the bug (not the pack). Only the first stick is reliable (rd_ptr stays at base after).
             if (stick_idx == my_lane) {
-                DataflowBuffer in_cb_peek(in_cb_id);
-                volatile tt_l1_ptr uint16_t* ip =
-                    reinterpret_cast<volatile tt_l1_ptr uint16_t*>(in_cb_peek.get_read_ptr());
+                volatile tt_l1_ptr uint16_t* ip = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(in_cb.get_read_ptr());
                 // face0 = tilized rows 0..15, each row = 16 channels; ip[r*16+0] = row r channel 0.
                 // Window rows (the 9 sticks) should read the input value (channel 0 -> 1); cleared/tail
                 // rows read the pool identity (-inf). Shows whether reader1 fills its window rows at all.

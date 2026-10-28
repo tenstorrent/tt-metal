@@ -308,13 +308,6 @@ void kernel_main() {
 
                 for (uint32_t block = 0; block < num_blocks_inner_dim; block++) {
                     const bool last_out = block == (num_blocks_inner_dim - 1);
-// Configure packer once for pack out without Bias
-#if not defined FUSE_BIAS and defined PACK_RELU
-                    if (last_out) {
-                        // if last block we pack the final result with relu enabled
-                        pack_relu_config(ReluConfig::zero());
-                    }
-#endif
 
                     if constexpr (in0_transpose_tile) {
                         reconfig_data_format_srca(in1_dfb_id, in0_transpose_dfb_id);
@@ -334,6 +327,14 @@ void kernel_main() {
                             in0_block_w);
                         pack_reconfig_data_format(mm_partials_dfb_id);
                     }
+
+// Enable packer ReLU only after the in0 transpose pack above, so it governs
+// matmul output packs only (not the transpose stage that packs in0_dfb).
+#if not defined FUSE_BIAS and defined PACK_RELU
+                    if (last_out) {
+                        pack_relu_config(ReluConfig::zero());
+                    }
+#endif
 
                     in0_dfb.wait_front(in0_block_num_tiles);
                     in1_dfb.wait_front(in1_block_num_tiles);

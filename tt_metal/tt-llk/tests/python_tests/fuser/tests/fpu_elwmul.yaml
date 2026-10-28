@@ -19,7 +19,7 @@ operations:
         in1: "input_B"
         operation: "Elwmul"
         unpacker: "UnpackerAB"
-        math_fidelity: "HiFi2"
+        math_fidelity: "LoFi"
     pack:
       - output: "elwmul_out"
         block_size: [64, 128]

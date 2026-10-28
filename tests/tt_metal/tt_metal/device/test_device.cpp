@@ -6,7 +6,7 @@
 #include <gtest/gtest.h>
 #include <cstddef>
 #include <cstdint>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -26,6 +26,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
+#include "multi_device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
@@ -110,6 +111,24 @@ bool dram_ping(
         }
     }
     return pass;
+}
+
+// Checks the mesh-wide properties that MeshDevice establishes once its devices are open against
+// what the devices themselves report. Every device has to agree, so comparing each one also covers
+// the reference the mesh established from.
+void expect_properties_match_devices(const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+    const auto devices = mesh_device->impl().get_devices();
+    ASSERT_FALSE(devices.empty());
+    for (auto* device : devices) {
+        EXPECT_EQ(mesh_device->num_hw_cqs(), device->num_hw_cqs());
+        EXPECT_EQ(mesh_device->compute_with_storage_grid_size(), device->compute_with_storage_grid_size());
+        EXPECT_EQ(mesh_device->grid_size(), device->grid_size());
+        EXPECT_EQ(mesh_device->logical_grid_size(), device->logical_grid_size());
+        EXPECT_EQ(mesh_device->dram_grid_size(), device->dram_grid_size());
+        EXPECT_EQ(mesh_device->l1_size_per_core(), device->l1_size_per_core());
+        EXPECT_EQ(mesh_device->dram_size_per_channel(), device->dram_size_per_channel());
+        EXPECT_EQ(mesh_device->ethernet_cores(), device->ethernet_cores());
+    }
 }
 }  // namespace unit_tests::basic::device
 
@@ -284,7 +303,7 @@ TEST_F(MeshDeviceFixture, TestDeviceToHostMemChannelAssignment) {
 // Test to ensure writing from 16B aligned L1 address to 16B aligned PCIe address works
 TEST_F(MeshDeviceFixture, TensixTestL1ToPCIeAt16BAlignedAddress) {
     auto mesh_device = this->devices_.at(0);
-    auto* device = mesh_device->get_devices()[0];
+    auto* device = mesh_device->impl().get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
     distributed::MeshWorkload workload;
     auto zero_coord = distributed::MeshCoordinate(0, 0);
@@ -625,7 +644,7 @@ TEST_F(MeshDeviceFixture, SlowDispatchFullGridAccess) {
 
     for (const auto& mesh_device : devices_) {
         for (const auto& coord : distributed::MeshCoordinateRange(mesh_device->shape())) {
-            auto* device = mesh_device->get_device(coord[0], coord[1]);
+            auto* device = mesh_device->impl().get_device(coord);
             auto compute_grid = device->compute_with_storage_grid_size();
             auto logical_grid = device->logical_grid_size();
 
@@ -664,6 +683,19 @@ TEST_F(MeshDeviceFixture, SlowDispatchFullGridAccess) {
         EnqueueReadMeshBuffer(mesh_device->mesh_command_queue(), dst_vec, mesh_buffer, true);
         EXPECT_EQ(dst_vec, src_vec) << "Buffer operations failed with full grid in slow dispatch mode";
     }
+}
+
+TEST_F(GenericMeshDeviceFixture, MeshPropertiesMatchDevices) {
+    unit_tests::basic::device::expect_properties_match_devices(mesh_device_);
+}
+
+TEST_F(GenericMeshDeviceFixture, MeshPropertiesMatchDevicesAfterReshape) {
+    // A reshape swaps the view out from under the established properties, so they have to be
+    // re-established against the new one. Any mesh reshapes to a line of the same size.
+    const distributed::MeshShape line_shape(1, mesh_device_->num_devices());
+    mesh_device_->reshape(line_shape);
+    ASSERT_EQ(mesh_device_->shape(), line_shape);
+    unit_tests::basic::device::expect_properties_match_devices(mesh_device_);
 }
 
 }  // namespace tt::tt_metal

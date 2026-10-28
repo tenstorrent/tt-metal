@@ -32,13 +32,54 @@ from models.common.lightweightmodule import LightweightModule
 
 
 def validate_kda_bounds(actual_start: int | None, actual_end: int | None) -> None:
-    """Validate host bounds; device-only trace metadata has the same caller contract."""
+    """Validate host bounds; device-only trace metadata has the same caller contract.
+
+    The start is 32-token aligned; the end is a prompt's real length and need not be.
+    """
     start = 0 if actual_start is None else actual_start
-    for name, value in (("actual_start", start), ("actual_end", actual_end)):
-        if value is not None and (value < 0 or value % ttnn.TILE_SIZE != 0):
-            raise ValueError(f"K3 KDA {name} must be nonnegative and 32-token aligned, got {value}")
+    if start < 0 or start % ttnn.TILE_SIZE != 0:
+        raise ValueError(f"K3 KDA actual_start must be nonnegative and 32-token aligned, got {start}")
     if actual_end is not None and actual_end <= start:
         raise ValueError("K3 KDA requires actual_end > actual_start")
+
+
+def _device_bound(value: int, device) -> ttnn.Tensor:
+    """A replicated 1-element UINT32 bound, the form ttKDA takes."""
+    return ttnn.from_torch(
+        torch.tensor([value], dtype=torch.int64),
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+    )
+
+
+class K3KdaChunk:
+    """What every KDA layer of one eager chunk shares: the device bounds.
+
+    They depend only on the chunk, so building them per layer repeated two host-to-device writes on every layer.
+    They are built by the first KDA layer that asks, so a rank with no KDA layer uploads nothing, and the
+    transformer releases them after its last layer. Traced calls bring their bounds in `metadata` and do not use
+    this.
+    """
+
+    def __init__(self, actual_start: int | None, actual_end: int | None):
+        self._host_bounds = (0 if actual_start is None else actual_start, actual_end)
+        self._bounds = None
+
+    def bounds(self, device) -> tuple:
+        if self._bounds is None:
+            start, end = self._host_bounds
+            self._bounds = (_device_bound(start, device), None if end is None else _device_bound(end, device))
+        return self._bounds
+
+    def release(self) -> None:
+        if self._bounds is not None:
+            for bound in self._bounds:
+                if bound is not None:
+                    ttnn.deallocate(bound)
+            self._bounds = None
 
 
 @dataclass(frozen=True)
@@ -60,9 +101,11 @@ class K3AttnContext:
     # (#54744), and KDA stops its carries there; trace reads `metadata[2]` on device.
     actual_end: Optional[int] = None
     # The traced path's `(slot_id, actual_start, actual_end)` triple of 1-element uint32 tensors.
-    # KDA requires both bounds to be 32-token aligned on every replay. Device-only
+    # KDA requires a 32-token aligned start on every replay; the end may be unaligned. Device-only
     # values are caller preconditions; do not round real lengths or read them back.
     metadata: Optional[tuple] = None
+    # Eager calls only: the KDA inputs shared by every layer of this chunk. `None` builds them per layer.
+    kda_chunk: Optional[K3KdaChunk] = None
 
 
 class K3Attention(Protocol):
@@ -72,7 +115,7 @@ class K3Attention(Protocol):
     """GLOBAL model layer index — what names weights and what taps report."""
 
     writes_kv: bool
-    """Whether this layer fills a KV slab, and so whether the block owes a pad-zero and an ack."""
+    """Whether this layer fills a KV slab, and so whether the block owes a pad-zero."""
 
     def forward(self, normed: ttnn.Tensor, ctx: K3AttnContext) -> ttnn.Tensor:
         """`[1, 1, T_local, emb/tp]` in, the same out. Ownership of the return passes to the caller."""
@@ -93,6 +136,9 @@ class TtK3MlaAttention(LightweightModule):
 
     def __init__(self, mla):
         self._mla = mla
+
+    def set_tp_shard_kv(self, tp_shard_kv: Optional[bool]):
+        self._mla.set_tp_shard_kv(tp_shard_kv)
 
     @property
     def layer_idx(self) -> int:
@@ -183,21 +229,15 @@ class TtK3KdaAttention(LightweightModule):
 
         # Reuse both caller-owned scalars during capture: replay changes the
         # interval without rebuilding the graph or reading bounds on the host.
-        def device_bound(value: int) -> ttnn.Tensor:
-            return ttnn.from_torch(
-                torch.tensor([value], dtype=torch.int64),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                device=self.kda.device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                mesh_mapper=ttnn.ReplicateTensorToMesh(self.kda.device),
-            )
-
+        owns_bounds = False
         if ctx.metadata is not None:
             actual_start, actual_end = ctx.metadata[1:3]
+        elif ctx.kda_chunk is not None:
+            actual_start, actual_end = ctx.kda_chunk.bounds(self.kda.device)
         else:
-            actual_start = device_bound(0 if ctx.actual_start is None else ctx.actual_start)
-            actual_end = None if ctx.actual_end is None else device_bound(ctx.actual_end)
+            actual_start = _device_bound(0 if ctx.actual_start is None else ctx.actual_start, self.kda.device)
+            actual_end = None if ctx.actual_end is None else _device_bound(ctx.actual_end, self.kda.device)
+            owns_bounds = True
         try:
             output, new_state = self.kda.forward(
                 hidden,
@@ -206,7 +246,7 @@ class TtK3KdaAttention(LightweightModule):
                 actual_end=actual_end,
             )
         finally:
-            if ctx.metadata is None:
+            if owns_bounds:
                 ttnn.deallocate(actual_start)
                 if actual_end is not None:
                     ttnn.deallocate(actual_end)
@@ -239,6 +279,7 @@ def build_attention(
     kv_only: bool = False,
     is_balanced: bool = False,
     first_layer_idx: int = 0,
+    tp_shard_kv: Optional[bool] = None,
 ) -> K3Attention:
     """The one place the hybrid schedule turns into a module.
 
@@ -276,6 +317,7 @@ def build_attention(
                 layer_num=schedule.num_mla_layers,
                 kv_only=kv_only,
                 first_layer_idx=first_layer_idx,
+                tp_shard_kv=tp_shard_kv,
             )
         )
 

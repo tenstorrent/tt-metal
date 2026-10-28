@@ -11,6 +11,7 @@
 #include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
+#include "llrt/hal/tt-2xx/quasar/qa_emulator_models.hpp"
 #include <algorithm>
 #include <cstdio>
 #include <cstdint>
@@ -34,16 +35,16 @@
 #include "sanitize_noc_host.hpp"
 #include "tracy/Tracy.hpp"
 #include "tunnels_from_mmio_device.hpp"
-#include "umd/device/utils/semver.hpp"
-#include <umd/device/cluster.hpp>
-#include <umd/device/cluster_descriptor.hpp>
-#include <umd/device/firmware/firmware_utils.hpp>
-#include <umd/device/simulation/simulation_chip.hpp>
-#include <umd/device/pcie/pci_device.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
-#include <umd/device/types/cluster_types.hpp>
-#include <umd/device/types/xy_pair.hpp>
+#include <tt-umd/utils/semver.hpp>
+#include <tt-umd/cluster.hpp>
+#include <tt-umd/cluster_descriptor.hpp>
+#include <tt-umd/firmware/firmware_utils.hpp>
+#include <tt-umd/simulation/simulation_chip.hpp>
+#include <tt-umd/pcie/pci_device.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_types.hpp>
+#include <tt-umd/types/xy_pair.hpp>
 #include <unistd.h>
 
 static constexpr uint32_t HOST_MEM_CHANNELS = 4;
@@ -83,12 +84,30 @@ std::unique_ptr<tt::umd::ClusterDescriptor> get_mock_cluster_desc(const tt::llrt
     return mock_cluster_desc;
 }
 
+// Whether [addr, addr + size) lies entirely in the core's L1 or DRAM bank, where nothing is a register.
+bool is_in_core_memory(
+    const tt::umd::SocDescriptor& soc_desc, const tt::umd::CoreCoord& core, uint64_t addr, uint64_t size) {
+    uint64_t memory_size = 0;
+    switch (core.core_type) {
+        case tt::CoreType::TENSIX:
+        case tt::CoreType::WORKER: memory_size = soc_desc.worker_l1_size; break;
+        case tt::CoreType::ETH:
+        case tt::CoreType::ACTIVE_ETH:
+        case tt::CoreType::IDLE_ETH: memory_size = soc_desc.eth_l1_size; break;
+        case tt::CoreType::DRAM: memory_size = soc_desc.dram_bank_size; break;
+        default: return false;
+    }
+    return (addr < memory_size) && (size <= (memory_size - addr));
+}
+
 }  // namespace
 namespace tt {
 
-std::unordered_set<ChipId> Cluster::simulator_target_devices(const std::filesystem::path& simulator_dir) {
+std::unordered_set<ChipId> Cluster::simulator_target_devices(const std::filesystem::path& simulator_dir, tt::ARCH arch) {
+    // Open every chip UMD discovery finds for wh/bh.
+    const bool umd_discovers_topology = simulator_dir.extension() == ".so" && arch != tt::ARCH::QUASAR;
     std::error_code error;  // An unreadable directory counts as no layout, rather than throwing.
-    if (std::filesystem::exists(simulator_dir / "ip_layout.yaml", error)) {
+    if (umd_discovers_topology || std::filesystem::exists(simulator_dir / "ip_layout.yaml", error)) {
         return {};
     }
     return {0};
@@ -421,12 +440,38 @@ void Cluster::get_metal_desc_from_tt_desc() {
         // it on a copy (public field on tt::umd::SocDescriptor) for metal_SocDescriptor's dram_views YAML load.
         silicon_dram_metadata_yaml = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
     }
+    // The 1x3, 2x3 and 2x3_DISPATCH emulator models back less DRAM than their soc descriptor declares.
+    // They are recognised by the simulator directory name and their DRAM size is clamped to what they back.
+    const tt_metal::quasar_emu::ModelInfo* emulator_model = nullptr;
+    std::string simulator_name;
+    if (this->target_type_ == TargetDevice::Simulator && this->arch_ == tt::ARCH::QUASAR) {
+        simulator_name = rtoptions_.get_simulator_name();
+        emulator_model = tt_metal::quasar_emu::find_model(simulator_name);
+        if (emulator_model == nullptr && !simulator_name.ends_with(".so")) {
+            log_info(
+                tt::LogDevice,
+                "Quasar simulator '{}' is not a listed emulator model; DRAM size taken from its soc descriptor",
+                simulator_name);
+        }
+    }
     for (const auto& id : this->driver_->get_target_device_ids()) {
         tt::umd::SocDescriptor umd_soc = this->driver_->get_soc_descriptor(id);
         if (this->target_type_ == TargetDevice::Silicon) {
             umd_soc.device_descriptor_file_path = silicon_dram_metadata_yaml;
         }
-        this->sdesc_per_chip_.emplace(id, metal_SocDescriptor(umd_soc, this->get_cluster_desc()->get_board_type(id)));
+        std::optional<uint64_t> dram_view_size_limit;
+        if (emulator_model != nullptr) {
+            dram_view_size_limit = emulator_model->dram_size_per_channel;
+        }
+        metal_SocDescriptor sdesc(umd_soc, this->get_cluster_desc()->get_board_type(id), dram_view_size_limit);
+        if (dram_view_size_limit.has_value()) {
+            log_info(
+                tt::LogDevice,
+                "Quasar emulator model '{}': DRAM limited to {} MiB per channel, the DRAM the model backs",
+                simulator_name,
+                sdesc.dram_view_size >> 20);
+        }
+        this->sdesc_per_chip_.emplace(id, std::move(sdesc));
     }
 }
 
@@ -434,11 +479,22 @@ const std::unordered_map<tt::tt_metal::CoreCoord, int32_t>& Cluster::get_virtual
     return this->virtual_routing_to_profiler_flat_id_.at(this->get_board_type(chip_id));
 }
 
+IpVariant Cluster::get_quasar_ip_variant() const {
+    return this->get_soc_desc(*this->driver_->get_target_device_ids().begin())
+        .get_arch_descriptor()
+        .get_ip_variant()
+        .value_or(IpVariant::GRENDEL);
+}
+
 void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
     std::unique_ptr<tt::umd::Cluster> device_driver;
     if (this->target_type_ == TargetDevice::Silicon) {
         device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
             .num_host_mem_ch_per_mmio_device = std::nullopt,  // Automatically determine number of host mem channels.
+            // Names the accelerator group on the descriptor discovery builds. Nullopt on bare metal,
+            // where UMD falls back to gethostname(). UMD throws if this is set to an illegal id, so
+            // do not pre-validate it here and keep two copies of the rule.
+            .topology_discovery_options = {.cluster_id = rtoptions_.get_cluster_id()},
         });
     } else if (this->target_type_ == TargetDevice::Simulator) {
         const std::string sdesc_path = get_soc_description_file(this->arch_, this->target_type_, rtoptions_);
@@ -451,13 +507,15 @@ void Cluster::open_driver(const bool& /*skip_driver_allocs*/) {
                 .sdesc_path = sdesc_path,
                 .cluster_descriptor = mock_cluster_desc.get(),
                 .simulator_directory = rtoptions_.get_simulator_path(),
+                .serve_simulation_devices_over_sockets = rtoptions_.get_simulator_serve_over_sockets(),
             });
         } else {
             device_driver = std::make_unique<tt::umd::Cluster>(tt::umd::ClusterOptions{
                 .chip_type = tt::umd::ChipType::SIMULATION,
                 .num_host_mem_ch_per_mmio_device = 1,
-                .target_devices = simulator_target_devices(rtoptions_.get_simulator_path()),
+                .target_devices = simulator_target_devices(rtoptions_.get_simulator_path(), this->arch_),
                 .simulator_directory = rtoptions_.get_simulator_path(),
+                .serve_simulation_devices_over_sockets = rtoptions_.get_simulator_serve_over_sockets(),
             });
         }
     } else if (this->target_type_ == TargetDevice::Mock) {
@@ -856,6 +914,9 @@ void Cluster::write_core(
     tt_cxy_pair core,
     uint64_t addr,
     std::optional<tt::umd::IoOrdering> ordering) const {
+    if (sz_in_bytes == 0) {
+        return;  // nothing to write
+    }
     const ChipId chip_id = core.chip;
     const metal_SocDescriptor& soc_desc = this->get_soc_desc(chip_id);
     if (rtoptions_.get_watcher_enabled() && !rtoptions_.watcher_noc_sanitize_disabled()) {
@@ -937,15 +998,23 @@ void Cluster::write_core_immediate(const void* mem_ptr, uint32_t sz_in_bytes, tt
     }
 
     tt::umd::CoreCoord core_coord = soc_desc.get_coord_at(core, CoordSystem::TRANSLATED);
-    this->driver_->write_to_device_reg(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+    const bool is_remote = this->get_cluster_desc()->is_chip_remote(chip_id);
+    if (is_remote && is_in_core_memory(soc_desc, core_coord, addr, sz_in_bytes)) {
+        // Write combining only splits writes through a local chip's TLB window. A remote chip's writes go over
+        // ethernet, where a register-width write costs one command per word, so a payload in L1 or a DRAM bank goes
+        // as a block. Registers keep register-width writes.
+        this->driver_->write_to_device(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+    } else {
+        this->driver_->write_to_device_reg(mem_ptr, sz_in_bytes, core.chip, core_coord, addr);
+    }
 
-    if (this->get_cluster_desc()->is_chip_remote(chip_id)) {
+    if (is_remote) {
         this->driver_->wait_for_non_mmio_flush(chip_id);
     }
 }
 
 void Cluster::read_core(std::vector<uint32_t>& data, uint32_t size_in_bytes, tt_cxy_pair core, uint64_t addr) const {
-    data.resize(size_in_bytes / sizeof(uint32_t));
+    data.resize((size_in_bytes + sizeof(uint32_t) - 1) / sizeof(uint32_t));
     read_core(data.data(), size_in_bytes, core, addr);
 }
 
@@ -1027,6 +1096,20 @@ void Cluster::noc_multicast_write(
             {core_end.x, core_end.y},
             addr,
             sz_in_bytes);
+    }
+
+    if (this->target_type_ == tt::TargetDevice::Emule) {
+        // The emulated chip has no NOC multicast: write each worker core of the rectangle, as UMD's simulation
+        // backends do. Watcher sanitized the rectangle above; write_core sanitizes each core again.
+        const auto& worker_cores = this->virtual_worker_cores_.at(chip_id);
+        for (auto x = std::min(core_start.x, core_end.x); x <= std::max(core_start.x, core_end.x); x++) {
+            for (auto y = std::min(core_start.y, core_end.y); y <= std::max(core_start.y, core_end.y); y++) {
+                if (worker_cores.contains(tt::tt_metal::CoreCoord(x, y))) {
+                    this->write_core(mem_ptr, sz_in_bytes, tt_cxy_pair(chip_id, x, y), addr);
+                }
+            }
+        }
+        return;
     }
 
     tt::umd::CoreCoord start_coord = soc_desc.get_coord_at(core_start, CoordSystem::TRANSLATED);
@@ -1118,7 +1201,7 @@ void* Cluster::host_dma_address(uint64_t offset, ChipId src_device_id, uint16_t 
 }
 
 uint64_t Cluster::get_pcie_base_addr_from_device(ChipId chip_id) const {
-    return this->driver_->get_pcie_base_addr_from_device(chip_id);
+    return this->driver_->get_sysmem_window_noc_base(chip_id);
 }
 
 const std::unordered_set<ChipId>& Cluster::get_devices_controlled_by_mmio_device(ChipId mmio_device_id) const {
@@ -1282,6 +1365,26 @@ void Cluster::configure_ethernet_cores_for_fabric_routers(
         }
         this->release_ethernet_cores_for_fabric_routers();
     }
+}
+
+void Cluster::configure_ethernet_cores_for_remote_transfers(
+    ChipId mmio_chip_id, const std::set<tt_fabric::chan_id_t>& eth_chans) {
+    if (this->arch_ != tt::ARCH::WORMHOLE_B0 || this->target_type_ != tt::TargetDevice::Silicon || eth_chans.empty()) {
+        return;
+    }
+    const auto& soc_desc = this->get_soc_desc(mmio_chip_id);
+    std::unordered_set<tt::umd::CoreCoord> eth_cores;
+    std::string eth_chans_str;
+    for (const auto eth_chan : eth_chans) {
+        eth_cores.insert(soc_desc.get_eth_core_for_channel(eth_chan, CoordSystem::LOGICAL));
+        eth_chans_str += fmt::format("{}{}", eth_chans_str.empty() ? "" : ", ", eth_chan);
+    }
+    log_debug(
+        tt::LogMetal,
+        "Pinning remote transfer cores of MMIO chip {} to ethernet channel(s) {}",
+        mmio_chip_id,
+        eth_chans_str);
+    this->driver_->configure_active_ethernet_cores_for_mmio_device(mmio_chip_id, eth_cores);
 }
 
 void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_planes) {

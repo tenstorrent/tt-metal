@@ -97,8 +97,11 @@ void kernel_main() {
         const int32_t term4 = fixed_mul(y_centered_q16, cos_angle_q16);
         const int32_t y_in_q16 = fixed_add(fixed_add(term3, term4), center_y_q16);
 
-        const int32_t h0 = fixed_to_int(y_in_q16);
-        const int32_t h1 = h0 + 1;
+        // Sticks past the tensor's last batch are padding in an unevenly sharded last shard: they
+        // still push a page (compute is sized per shard) but must read only the fill stick.
+        const bool in_tensor = curr_batch < input_batch;
+        const int32_t h0 = in_tensor ? fixed_to_int(y_in_q16) : -1;
+        const int32_t h1 = in_tensor ? h0 + 1 : -1;
         const int32_t w0 = fixed_to_int(x_in_q16);
         const int32_t w1 = w0 + 1;
 

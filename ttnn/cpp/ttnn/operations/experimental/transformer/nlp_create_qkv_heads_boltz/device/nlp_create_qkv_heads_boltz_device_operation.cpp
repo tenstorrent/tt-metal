@@ -61,8 +61,9 @@ void NlpCreateHeadsBoltzDeviceOperation::validate_on_program_cache_miss(
             operation_attributes.num_kv_heads,
             num_cores);
         TT_FATAL(
-            operation_attributes.num_q_heads >= operation_attributes.num_kv_heads,
-            "Number of Q heads ({}) must be >= number of KV heads ({})",
+            operation_attributes.num_kv_heads > 0 &&
+                operation_attributes.num_q_heads >= operation_attributes.num_kv_heads,
+            "Number of Q heads ({}) must be >= number of KV heads ({}), which must be greater than 0",
             operation_attributes.num_q_heads,
             operation_attributes.num_kv_heads);
         TT_FATAL(

@@ -139,7 +139,7 @@ void sum_top_experts_per_group(
     CircularBuffer cb_top_experts(cb_top_experts_per_group);
     CircularBuffer cb_group_summed(cb_group_summed_scores);
     // sum the top experts_per_group rows for each group
-    compute_kernel_hw_startup(cb_top_experts_per_group, cb_top_experts_per_group, cb_group_summed_scores);
+    reconfig_data_format(cb_top_experts_per_group, cb_top_experts_per_group);
     add_init(cb_top_experts_per_group, cb_top_experts_per_group, true);
     cb_top_experts.wait_front(summed_experts_per_group);
 
@@ -154,6 +154,7 @@ void sum_top_experts_per_group(
     cb_group_summed.reserve_back(1);
 
     tile_regs_wait();
+    pack_reconfig_data_format(cb_group_summed_scores);
     pack_tile(0, cb_group_summed_scores);
     tile_regs_release();
 

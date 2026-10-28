@@ -9,7 +9,7 @@ This is to be filled in as the header grows.
 
 ```cpp
 struct ComputeHardwareConfig {
-    MathFidelity fpu_math_fidelity = MathFidelity::HiFi4;
+    tt::tt_metal::MathFidelity fpu_math_fidelity = tt::tt_metal::MathFidelity::HiFi4;
 
     Precision sfpu_precision_mode = Precision::Precise;
 
@@ -25,7 +25,14 @@ struct ComputeHardwareConfig {
     };
     std::optional<Compute1XXConfig> config_1xx = std::nullopt;
 
-    struct Compute2XXConfig {};
+    struct Compute12XConfig {
+        bool enable_pack_rvv = false;
+    };
+    std::optional<Compute12XConfig> config_12x = std::nullopt;
+
+    struct Compute2XXConfig {
+        bool enable_unpack_rvv = false;
+    };
     std::optional<Compute2XXConfig> config_2xx = std::nullopt;
 };
 ```

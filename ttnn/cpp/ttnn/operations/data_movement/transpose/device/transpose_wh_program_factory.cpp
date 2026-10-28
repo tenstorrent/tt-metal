@@ -11,6 +11,7 @@
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/math.hpp>
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -172,15 +173,14 @@ ttnn::device_operation::ProgramArtifacts TransposeWHProgramFactory::create_progr
 
     // ---- compute ----
     KernelSpec::CompilerOptions::Defines compute_defines;
-    if (row_major && (input_tensor.dtype() == DataType::UINT32 || input_tensor.dtype() == DataType::INT32)) {
-        compute_defines.insert({"DST_ACCUM_MODE", "1"});
-    }
 
     // Legacy built a ComputeConfigDescriptor directly (no TTNN ComputeKernelConfig feeding it),
     // setting only fp32_dest_acc_en and unpack_to_dest_mode; every other field kept its Metal
     // default, which ComputeHardwareConfig's defaults reproduce.
+    // Int32/UInt32 unpack to Dest as Float32 does: Quasar's tilize and transpose unpack to Dest only
+    // when UnpackToDest is requested, and Quasar rejects a 32-bit integer unpack into SrcA (#59515).
     ComputeHardwareConfig compute_hw{.enable_32_bit_dest = fp32_dest_acc_en};
-    if (src0_dfb_data_format == tt::DataFormat::Float32) {
+    if (fp32_dest_acc_en) {
         compute_hw.unpack_modes.insert({IN0, UnpackMode::UnpackToDest});
         if (row_major) {
             compute_hw.unpack_modes.insert({TILIZE, UnpackMode::UnpackToDest});

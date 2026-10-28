@@ -93,6 +93,7 @@ def fully_shard(
     shard_dim: Union[int, Literal["auto"]] = "auto",
     mesh_axis: str = "fsdp",
     reshard_after_forward: bool = True,
+    replicate: Sequence[str] = (),
 ) -> AbstractModuleBase
 ```
 
@@ -111,9 +112,10 @@ Wraps `module` in place and returns it. After the call:
 | Parameter | Default | Description |
 |---|---|---|
 | `module` | required | An `AbstractModuleBase` instance (block, root model, etc.). |
-| `shard_dim` | `"auto"` | Tensor dim to shard along, or `"auto"`. Auto picks `rank-2` (the typical "first matmul weight dim" for `[1, 1, O, I]` weights), falls back to `rank-1` if `rank-2` is already taken by another mesh axis (e.g. TP) or has size 1. Parameters whose chosen dim is not divisible by the FSDP axis size are skipped with a warning. |
+| `shard_dim` | `"auto"` | Tensor dim to shard along, or `"auto"`. Auto picks `rank-2` (the second-to-last dim, `O` in `[1, 1, O, I]` weights) or `rank-1` (the last dim), preferring whole-tile shards and skipping dims of size 1 or already taken by another mesh axis (e.g. TP). Parameters whose chosen dim is not divisible by the FSDP axis size are skipped with a warning. Parameters whose shards aren't whole tiles are still sharded, with one warning per shape, shard dim and axis size. |
 | `mesh_axis` | `"fsdp"` | Name of the mesh axis to shard across. Must exist on the mesh and have size > 1. Kept distinct from `"dp"` so a 2D mesh `("fsdp", "dp")` cleanly supports hybrid sharded data parallel later. |
 | `reshard_after_forward` | `True` | If `True`, weights are resharded between forward and backward to keep peak memory low; the backward-pre callback re-gathers just in time. If `False`, weights stay gathered between forward and backward — cheaper in CCL but uses more memory. |
+| `replicate` | `()` | Regex patterns of parameters to keep replicated instead of sharding, searched for (`re.search`) in each parameter's dotted name relative to `module`. See [Keeping parameters replicated](#keeping-parameters-replicated). |
 
 ### Recommended usage pattern (FSDP2-style root)
 
@@ -131,6 +133,59 @@ is what gives the canonical "one block gathered at a time" memory profile.
 
 You can wrap any other granularity (e.g. only every other block, or just
 the root), but per-block wrapping is the granularity we test against.
+
+### Keeping parameters replicated
+
+Some parameters are too small to shard into whole 32×32 tiles. Their
+`all_gather` and `reduce_scatter` then take ttnn's slow composite path on
+every step. Keeping them replicated skips those CCLs; their gradients are
+just all-reduced once per step.
+
+Each wrapper only examines the parameters it owns, so pass the same
+patterns to every `fully_shard` call, each per-block wrapper as well as the
+root. Passing them to the root alone can't reach parameters inside wrapped
+blocks:
+
+```python
+replicate = [r"(q|k)_norm\.weight$"]
+for block in model.blocks:
+    ttml.fsdp.fully_shard(block, replicate=replicate)
+ttml.fsdp.fully_shard(model, replicate=replicate)
+```
+
+Or set them in `device_config` for the
+[training example](/tt-train/sources/examples/train/train.py) and the
+[GRPO Qwen3 completer](/tt-train/sources/examples/grpo/utils/qwen3_completer.py):
+
+```yaml
+device_config:
+  enable_fsdp: true
+  mesh_shape: [32, 1]
+  fsdp_replicate_params: ["q_norm.weight", "k_norm.weight"]
+```
+
+A tied parameter is kept replicated if a pattern matches any of its names,
+and outer wrappers then leave it alone. A parameter already sharded on the
+FSDP axis (e.g. by a TP-style mapper) can't be kept replicated, so matching
+it raises.
+
+The run logs how many parameters were kept replicated and warns about
+patterns that matched nothing. `ttml.fsdp.replicated_parameters(model)`
+lists them.
+
+On Qwen3-0.6B at FSDP 8, replicating the q/k norms cut step time by 9%
+(278.6 → 253.3 ms).
+
+**Cost.** Every device holds the full parameter, its gradient and its
+optimizer state. For small parameters that's negligible: Qwen3-32B's 128
+q/k norms take ~4 MiB per device instead of ~1 MiB. Don't replicate large
+matrices or embeddings.
+
+**Gradient sync.** Each FSDP rank sees different data, so the training loop
+must average replicated gradients over the FSDP axis with
+`ttml.sync_gradients(model.parameters(), axis_names=("fsdp",))` (or
+`("dp", "fsdp")` under HSDP). It skips sharded parameters, so one call
+covers the whole model. `SFTTrainer` and `GRPOTrainer` already do this.
 
 ---
 
@@ -231,13 +286,19 @@ host-roundtrip:
 
 ### Gradient sync
 
-`ttml.sync_gradients(model.parameters(), axis_names=("dp",))` continues to
-work exactly like in DDP. For pure-FSDP runs (no `"dp"` axis on the mesh)
-it is a no-op: gradients have already been reduce-scattered in
-`backward_post`. For a hybrid mesh (`"fsdp"` and `"dp"`), each parameter
-is filtered per-axis: FSDP-sharded params skip the `"fsdp"` axis (already
-reduce-scattered) but still all-reduce on the `"dp"` axis (replicated
-across DP groups). The same call covers both cases, no rewrites needed.
+Call `ttml.sync_gradients(model.parameters(), axis_names=("dp", "fsdp"))`,
+as `SFTTrainer` and `GRPOTrainer` do. Axes missing from the mesh are
+skipped, so the same call works for DDP, FSDP and HSDP. Each parameter is
+filtered per axis:
+
+- FSDP-sharded parameters skip `"fsdp"`, since `backward_post` already
+  reduce-scattered their gradients. Under HSDP they still all-reduce over
+  `"dp"`.
+- Replicated parameters (from `replicate=`, or ones that couldn't be
+  sharded) all-reduce over both axes.
+
+`axis_names=("dp",)` alone, as in plain DDP, is not enough under FSDP: it
+never averages replicated gradients over `"fsdp"`.
 
 ## Gradient accumulation
 
@@ -320,11 +381,8 @@ In this layout:
 - **`clip_grad_norm`** raises under FSDP for the same reason it raises
   under TP: the per-rank L2 norm isn't the global norm. A
   sharding-aware clip is on the TODO list.
-- **Parameters on the chosen shard dim with size 1** (e.g. RMSNorm
-  `gamma` shaped `[1, 1, 1, F]` with `shard_dim` 2) are skipped
-  with a warning rather than sharded. They stay replicated. For the
-  small norm-style parameters this is the right behavior. If `shard_dim`
-  is set to `auto`, it will try to shard on dim 2, and then dim 3 before skipping.
+- **Parameters with no usable or divisible shard dim** (e.g. a `[1, 1, 1, 1]`
+  scalar) stay replicated, with a warning.
 
 ---
 
