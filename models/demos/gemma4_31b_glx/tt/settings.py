@@ -132,10 +132,10 @@ TABLE = {
         "Checkpoint dir the prefill-runner adapter (tt/serving.py) loads the config and weights from.",
     ),
     "SERVING_GOLDEN_DIR": Setting(
-        "/data/dgolubovic/repos/tt-agentic-bringup-sc-gemma31-glx/.bringup/runs/prefill-stepwise/.bringup/goldens/"
-        "gemma4_31b_glx/c6563d9ac127e48c/s5120_c5120",
+        "",
         None,
-        "Golden trace (token ids + kv_cache/) the prefill producer defaults to (adapter.prefill_trace_default).",
+        "Golden trace (token ids + kv_cache/) the prefill producer defaults to (adapter.prefill_trace_default). "
+        "Empty: no default, so PREFILL_TRACE_DIR must be set.",
     ),
     "MLP_FIDELITY": Setting(
         "HiFi4",
