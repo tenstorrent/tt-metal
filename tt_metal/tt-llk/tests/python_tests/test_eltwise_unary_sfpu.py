@@ -687,7 +687,6 @@ def test_hardmish_float16_dest_identity_branch(dest_acc: DestAccumulation):
     # 32 tiles, so blocks divide evenly at both Dest widths (8 or 4 tiles per half).
     input_dimensions = [256, 128]
     num_elements = input_dimensions[0] * input_dimensions[1]
-    tile_cnt = num_elements // (TILE_DIMENSIONS[0] * TILE_DIMENSIONS[1])
 
     # 0x0400..0x7BFF: every positive normal fp16, ending at 65504. Subnormals are left out
     # because the unpack flushes them, which is the unpack and not the op.
@@ -705,47 +704,21 @@ def test_hardmish_float16_dest_identity_branch(dest_acc: DestAccumulation):
     src_A = src_fp16.to(torch.float32)
     src_B = torch.zeros(num_elements, dtype=torch.float32)
 
-    num_blocks, num_tiles_in_block = get_num_blocks_and_num_tiles_in_block(
-        DestSync.Half,
-        dest_acc,
-        formats,
-        input_dimensions,
-        TILE_DIMENSIONS,
-        BlocksCalculationAlgorithm.Standard,
-    )
-
-    configuration = TestConfig(
-        "sources/eltwise_unary_sfpu_test.cpp",
-        formats,
-        templates=[
-            generate_input_dim(input_dimensions, input_dimensions),
-            APPROX_MODE(ApproximationMode.No),
-            FAST_MODE(FastMode.No),
-            CLAMP_NEGATIVE(True),
-            MATH_OP(mathop=MathOperation.Hardmish),
-        ],
-        runtimes=[
-            TILE_COUNT(tile_cnt),
-            NUM_BLOCKS(num_blocks),
-            NUM_TILES_IN_BLOCK(num_tiles_in_block),
-        ],
-        variant_stimuli=StimuliConfig(
-            src_A,
-            formats.input_format,
-            src_B,
-            formats.input_format,
-            formats.output_format,
-            tile_count_A=tile_cnt,
-            tile_count_B=tile_cnt,
-            tile_count_res=tile_cnt,
+    res = torch.tensor(
+        eltwise_unary_sfpu(
+            formats=formats,
+            dest_acc=dest_acc,
+            approx_mode=ApproximationMode.No,
+            mathop=MathOperation.Hardmish,
+            fast_mode=FastMode.No,
+            input_dimensions=input_dimensions,
+            src_A=src_A,
+            src_B=src_B,
+            unpack_to_dest=False,
+            check_golden=False,
         ),
-        dest_acc=dest_acc,
-        unpack_to_dest=False,
-    )
-
-    res = torch.tensor(configuration.run().result, dtype=torch.float32).to(
-        torch.float16
-    )
+        dtype=torch.float32,
+    ).to(torch.float16)
     assert res.numel() == num_elements, "result and stimulus differ in length"
 
     # By value: -4.0 answers a zero whose sign the kernel does not pin.
