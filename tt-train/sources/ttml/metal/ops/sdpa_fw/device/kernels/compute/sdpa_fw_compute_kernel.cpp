@@ -420,7 +420,7 @@ FORCE_INLINE void process_q_chunk(
         return;
     }
     for (uint32_t p = 0; p < num_partials; ++p) {
-        merge_partial<scaler_bits, scaler_bf16_bits, rows>(
+        merge_partial<scaler_bits, scaler_bf16_bits, rows, block_size>(
             vWt,
             alias_cb_prev_mm_out,
             alias_cb_prev_max,
