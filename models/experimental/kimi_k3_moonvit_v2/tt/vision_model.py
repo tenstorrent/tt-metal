@@ -8,10 +8,11 @@
 merger). `TT_MoonViT_Vision_Model` adds the projector (`mm_projector`), so it maps image patches to
 language-model embeddings.
 
-One still image per call. Its patches are padded to `config.max_patches` rows on the host
-(`reference.functional`), uploaded split along `sp_axis`, run through the tower, merger and
-projector, and gathered back with the padding dropped. Weights are replicated and activations are
-DRAM interleaved.
+One still image per call. Its patches are put in window order and padded to `config.max_patches`
+rows on the host (`reference.functional.prepare_host_inputs`), uploaded split along `sp_axis`, run
+through the tower, merger and projector, and gathered back with the padding dropped. The merged
+tokens come out in the reference's order. Weights are replicated and activations are DRAM
+interleaved.
 
 Child names match the reference, so `load_torch_state_dict(reference.state_dict())` loads it, and
 `module.load_cached` caches it.
@@ -52,7 +53,7 @@ class TT_MoonViT_Encoder(Module):
             compute_kernel_config=compute_kernel_config,
         )
 
-    def forward(self, x: ttnn.Tensor, rope: RopeTensors, logical_n: int) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, rope: RopeTensors, logical_n: ttnn.Tensor) -> ttnn.Tensor:
         raise NotImplementedError("TT_MoonViT_Encoder.forward")
 
 
@@ -65,14 +66,14 @@ class TT_MoonViT_Vision_Tower(Module):
         self.encoder = TT_MoonViT_Encoder(
             config, mesh_device=mesh_device, parallel=parallel, compute_kernel_config=compute_kernel_config
         )
-        self.merger = TT_Patch_Merger(config, mesh_device=mesh_device, parallel=parallel)
+        self.merger = TT_Patch_Merger(config)
 
     def forward(
-        self, patches: ttnn.Tensor, pos_emb: ttnn.Tensor, rope: RopeTensors, logical_n: int, h: int, w: int
+        self, patches: ttnn.Tensor, pos_emb: ttnn.Tensor, rope: RopeTensors, logical_n: ttnn.Tensor
     ) -> ttnn.Tensor:
         x = self.patch_embed(patches, pos_emb)
         x = self.encoder(x, rope, logical_n)
-        return self.merger(x, h, w)
+        return self.merger(x)
 
 
 class TT_MoonViT_Vision_Model(Module):
@@ -98,8 +99,9 @@ class TT_MoonViT_Vision_Model(Module):
     def prepare_inputs(self, pixel_values: torch.Tensor, grid_thws: torch.Tensor) -> dict:
         """Host prep (`reference.functional.prepare_host_inputs`), then upload split along `sp_axis`.
 
-        Returns `patches` [1, 1, S/sp, patch_dim], `pos_emb` [1, 1, S/sp, hidden], `rope`,
-        `logical_n` (the unpadded length), and the grid `h`, `w`.
+        Returns `patches` [1, 1, S/sp, patch_dim], `pos_emb` [1, 1, S/sp, hidden], `rope` and
+        `logical_n` (the unpadded length as a device tensor, `logical_length_tensor`), rows in window
+        order.
         """
         check_grid(grid_thws, self.config)
         raise NotImplementedError("TT_MoonViT_Vision_Model.prepare_inputs")
@@ -109,13 +111,14 @@ class TT_MoonViT_Vision_Model(Module):
         raise NotImplementedError("TT_MoonViT_Vision_Model.gather_output")
 
     def forward(
-        self, patches: ttnn.Tensor, pos_emb: ttnn.Tensor, rope: RopeTensors, logical_n: int, h: int, w: int
+        self, patches: ttnn.Tensor, pos_emb: ttnn.Tensor, rope: RopeTensors, logical_n: ttnn.Tensor
     ) -> ttnn.Tensor:
-        x = self.vision_tower(patches, pos_emb, rope, logical_n, h, w)
+        x = self.vision_tower(patches, pos_emb, rope, logical_n)
         return self.mm_projector(x)
 
     def run(self, pixel_values: torch.Tensor, grid_thws: torch.Tensor) -> torch.Tensor:
         """Host in, host out: (h*w, 3, 14, 14), [[1, h, w]] -> (h*w/4, text_hidden_size)."""
+        h, w = check_grid(grid_thws, self.config)
         inputs = self.prepare_inputs(pixel_values, grid_thws)
-        merged_n = inputs["logical_n"] // self.config.merge_area
+        merged_n = h * w // self.config.merge_area
         return self.gather_output(self.forward(**inputs), logical_n=merged_n)

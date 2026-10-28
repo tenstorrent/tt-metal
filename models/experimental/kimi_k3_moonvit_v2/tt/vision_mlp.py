@@ -4,9 +4,9 @@
 
 """MLP: `MLP2` in the reference. fc0 -> tanh GELU -> fc1, no biases.
 
-The GELU is `ttnn.gelu` with the tanh approximation, applied after fc0. The activation fused into
-the matmul is the exact erf GELU, which is not the op the reference uses. Sequence parallel: each
-device works on its own rows and no collectives are needed.
+The GELU is the tanh approximation (`PytorchGELUTanh` in the reference), fused into the fc0 matmul
+as `activation="gelu_tanh"` (`UnaryOpType.GELU_TANH`). Sequence parallel: each device works on its
+own rows and no collectives are needed.
 """
 
 from __future__ import annotations

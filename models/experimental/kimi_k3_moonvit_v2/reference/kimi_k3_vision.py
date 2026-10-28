@@ -43,8 +43,12 @@ def load_vision_config(source: str | Path | None = None, *, num_hidden_layers: i
     vision_config = dict(json.loads(path.read_text())["vision_config"])
     if num_hidden_layers is not None:
         vision_config["vt_num_hidden_layers"] = num_hidden_layers
-    vision_config["_attn_implementation"] = "eager"
-    return KimiK3VisionConfig(**vision_config)
+    vision_config.pop("_attn_implementation", None)
+    config = KimiK3VisionConfig(**vision_config)
+    # Set after construction: transformers 5 drops `_attn_implementation` passed to the constructor,
+    # and the tower then falls back to `sdpa`, which upstream's attention table does not have.
+    config._attn_implementation = "eager"
+    return config
 
 
 class KimiK3VisionModel(nn.Module):

@@ -16,6 +16,7 @@ from models.experimental.kimi_k3_moonvit_v2.reference.modeling_kimi_k3 import (
     Rope2DPosEmbRepeated,
     VisionTowerConfig,
     apply_rope,
+    tpool_patch_merger,
 )
 from models.experimental.kimi_k3_moonvit_v2.tests.common import GRIDS, random_patches
 
@@ -68,13 +69,36 @@ def test_rotate_pairs_is_the_device_trans_mat(config):
     torch.testing.assert_close(functional.rotate_pairs(x), tiled)
 
 
-def test_prepare_host_inputs_pads(config, tower):
-    pixels, grid_thws = random_patches(config, [(1, 40, 100)])
+@pytest.mark.parametrize("grid", GRIDS.values(), ids=GRIDS.keys())
+def test_window_order_merges_by_reshape(config, grid):
+    """Window order makes the merger a reshape of consecutive rows into the reference's tokens."""
+    (_, h, w) = grid[0]
+    x = torch.randn(h * w, config.hidden_size)
+    (expected,) = tpool_patch_merger(x, torch.tensor(grid), merge_kernel_size=config.merge_kernel_size)
+    window = functional.to_window_order(x, h, w, config.merge_kernel_size)
+    torch.testing.assert_close(window.reshape(-1, config.merge_area, config.hidden_size), expected)
+    torch.testing.assert_close(functional.from_window_order(window, h, w, config.merge_kernel_size), x)
+
+
+def test_prepare_host_inputs(config, tower):
+    h, w = 40, 100
+    pixels, grid_thws = random_patches(config, [(1, h, w)])
     inputs = functional.prepare_host_inputs(config, tower.patch_embed.pos_emb.weight, pixels, grid_thws)
-    n, rows = 4000, config.max_patches
+    n, rows = h * w, config.max_patches
     assert inputs["logical_n"] == n
     assert inputs["patches"].shape == (rows, config.patch_dim)
     assert inputs["pos_emb"].shape == (rows, config.hidden_size)
     assert inputs["cos"].shape == inputs["sin"].shape == (rows, config.head_dim)
     for key in ("patches", "pos_emb", "cos", "sin"):
         assert not inputs[key][n:].any(), key
+
+    # Every per-row input shares the window order.
+    cos, sin = functional.rope_cos_sin(config, h, w)
+    raster = {
+        "patches": functional.patches_to_rows(pixels),
+        "pos_emb": functional.pos_embeds(tower.patch_embed.pos_emb.weight, h, w, config.pos_emb_interpolation_mode),
+        "cos": cos,
+        "sin": sin,
+    }
+    for key, value in raster.items():
+        torch.testing.assert_close(inputs[key][:n], functional.to_window_order(value, h, w, config.merge_kernel_size))

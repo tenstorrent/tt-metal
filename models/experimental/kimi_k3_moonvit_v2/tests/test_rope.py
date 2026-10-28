@@ -40,6 +40,7 @@ def test_rope_tables(mesh_device, sp_axis, num_links, config, grid):
     h, w = check_grid(torch.tensor(grid), config)
     rope = build(mesh_device, sp_axis, num_links, config).get_rot_mats(h, w)
     cos, sin = functional.rope_cos_sin(config, h, w)
+    cos, sin = (functional.to_window_order(t, h, w, config.merge_kernel_size) for t in (cos, sin))
     assert_pcc(cos, sp_gather(rope.cos, mesh_device, sp_axis, h * w), pcc=0.9999)
     assert_pcc(sin, sp_gather(rope.sin, mesh_device, sp_axis, h * w), pcc=0.9999)
 
@@ -57,6 +58,8 @@ def test_rope_apply(mesh_device, sp_axis, num_links, config, reference, grid):
     golden, _ = apply_rope(q, q, rope_freqs_cis)
 
     rope = build(mesh_device, sp_axis, num_links, config).get_rot_mats(h, w)
-    q_tt = sp_shard(q.transpose(0, 1), mesh_device, sp_axis, config.max_patches)  # [1, heads, S/sp, head_dim]
+    q_window = functional.to_window_order(q, h, w, config.merge_kernel_size)
+    q_tt = sp_shard(q_window.transpose(0, 1), mesh_device, sp_axis, config.max_patches)  # [1, heads, S/sp, head_dim]
     out = ttnn.experimental.rotary_embedding_llama(q_tt, rope.cos, rope.sin, rope.trans_mat, is_decode_mode=False)
-    assert_pcc(golden, sp_gather(out, mesh_device, sp_axis, h * w).transpose(0, 1))
+    out = sp_gather(out, mesh_device, sp_axis, h * w).transpose(0, 1)
+    assert_pcc(golden, functional.from_window_order(out, h, w, config.merge_kernel_size))

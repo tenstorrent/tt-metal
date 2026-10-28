@@ -11,6 +11,11 @@ Each function reproduces one piece of `modeling_kimi_k3.py` in the form the devi
   * `pos_embeds`: the learned 64x64 table interpolated to the image grid.
   * `rope_cos_sin` + `rotate_pairs`: the complex-multiply 2D RoPE as `x * cos + rotate(x) * sin`,
     the form `ttnn.experimental.rotary_embedding_llama` computes with a pair-swapping `trans_mat`.
+  * `to_window_order` / `from_window_order`: the row order the device runs in. Each 2x2 merge window's
+    four patches are consecutive, windows in raster order, so the patch merger folds four consecutive
+    rows on each device and needs no collective. Attention is non-causal and every other op works on
+    each row alone, so the order changes nothing else as long as patches, position embeddings and RoPE
+    tables share it.
   * `pad_rows`: padding to the fixed device sequence length.
 
 `prepare_host_inputs` combines them for one image.
@@ -63,6 +68,23 @@ def apply_rope(x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor) -> torch.T
     return x * cos + rotate_pairs(x) * sin
 
 
+def window_order(h: int, w: int, merge_kernel_size: tuple[int, int]) -> torch.Tensor:
+    """Raster patch indices in window order: window (i, j) holds patches (kh*i + a, kw*j + b) for
+    a < kh, b < kw, in the order `tpool_patch_merger` concatenates them."""
+    kh, kw = merge_kernel_size
+    return torch.arange(h * w).reshape(h // kh, kh, w // kw, kw).permute(0, 2, 1, 3).flatten()
+
+
+def to_window_order(x: torch.Tensor, h: int, w: int, merge_kernel_size: tuple[int, int]) -> torch.Tensor:
+    """Reorder dim 0 (h*w patches in raster order) into window order."""
+    return x[window_order(h, w, merge_kernel_size)]
+
+
+def from_window_order(x: torch.Tensor, h: int, w: int, merge_kernel_size: tuple[int, int]) -> torch.Tensor:
+    """The inverse of `to_window_order`."""
+    return x[window_order(h, w, merge_kernel_size).argsort()]
+
+
 def pad_rows(x: torch.Tensor, rows: int) -> torch.Tensor:
     """Zero-pad dim 0 to `rows`."""
     if x.shape[0] > rows:
@@ -73,18 +95,23 @@ def pad_rows(x: torch.Tensor, rows: int) -> torch.Tensor:
 def prepare_host_inputs(
     config: MoonViTConfig, pos_emb_weight: torch.Tensor, pixel_values: torch.Tensor, grid_thws: torch.Tensor
 ) -> dict:
-    """Everything the device needs for one image, padded to `config.max_patches` rows.
+    """Everything the device needs for one image, in window order and padded to `config.max_patches` rows.
 
     Returns `patches` (S, patch_dim), `pos_emb` (S, hidden), `cos` and `sin` (S, head_dim) and
     `logical_n`, the number of real rows.
     """
     h, w = check_grid(grid_thws, config)
     cos, sin = rope_cos_sin(config, h, w)
+    pos_emb = pos_embeds(pos_emb_weight, h, w, config.pos_emb_interpolation_mode)
     rows = config.max_patches
+
+    def prepare(x: torch.Tensor) -> torch.Tensor:
+        return pad_rows(to_window_order(x, h, w, config.merge_kernel_size), rows)
+
     return {
-        "patches": pad_rows(patches_to_rows(pixel_values), rows),
-        "pos_emb": pad_rows(pos_embeds(pos_emb_weight, h, w, config.pos_emb_interpolation_mode), rows),
-        "cos": pad_rows(cos, rows),
-        "sin": pad_rows(sin, rows),
+        "patches": prepare(patches_to_rows(pixel_values)),
+        "pos_emb": prepare(pos_emb),
+        "cos": prepare(cos),
+        "sin": prepare(sin),
         "logical_n": h * w,
     }

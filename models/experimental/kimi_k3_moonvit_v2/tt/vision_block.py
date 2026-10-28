@@ -40,5 +40,5 @@ class TT_Vision_Block(Module):
         rename_substate(state, "wqkv", "attention.wqkv")
         rename_substate(state, "wo", "attention.wo")
 
-    def forward(self, x: ttnn.Tensor, rope: RopeTensors, logical_n: int) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, rope: RopeTensors, logical_n: ttnn.Tensor) -> ttnn.Tensor:
         raise NotImplementedError("TT_Vision_Block.forward")

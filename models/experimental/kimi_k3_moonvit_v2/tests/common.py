@@ -63,9 +63,10 @@ GRIDS = {
 # Device grids. The CPU golden builds L x L scores per head, which rules out 65,536 patches here.
 DEVICE_GRIDS = pytest.mark.parametrize("grid", [[(1, 64, 64)], [(1, 40, 100)]], ids=["64x64", "40x100"])
 
-# 4 Blackhole chips in a ring along mesh axis 0, 2 links between neighbours.
+# The 4 Blackhole chips of a QuietBox 2 in a ring along mesh axis 1 (the (1, 4) mesh other QB2 models
+# open), 2 links between neighbours.
 RING_SIZE = 4
-RING4 = pytest.param((RING_SIZE, 1), 0, 2, {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}, id="ring4x1")
+RING4 = pytest.param((1, RING_SIZE), 1, 2, {"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}, id="ring1x4")
 # One P150 standing in for one chip of that ring: it gets the first quarter of the padded sequence
 # (`device_config`).
 P150 = pytest.param((1, 1), None, 1, {}, id="p150")

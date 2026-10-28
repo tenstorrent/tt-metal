@@ -8,8 +8,9 @@ Scope: one still image per call. No packing, no video. The encoder takes 14x14 p
 merger turns each 2x2 window into one 28 px token, and the projector maps it to a language-model
 embedding.
 
-Target layout: 4 Blackhole chips in a ring along mesh axis 0 (`(4, 1)` mesh, `FABRIC_1D_RING`,
-2 links). Each image's patches are padded to 65,536 rows and split along the ring. Attention is
+Target layout: the 4 Blackhole chips of a QuietBox 2 in a ring along mesh axis 1 (`(1, 4)` mesh, `FABRIC_1D_RING`,
+2 links). Each image's patches are put in window order (each 2x2 merge window's four patches
+consecutive), padded to 65,536 rows and split along the ring, so the merger is a reshape on each chip. Attention is
 ring attention with the padding masked; norms, MLP, merger and projector are sequence parallel. Weights are bf16 and
 replicated, activations DRAM interleaved, matmuls HiFi4 with fp32 accumulation.
 
@@ -23,7 +24,7 @@ also use `models.common.utility_functions`.
 | `reference/modeling_kimi_k3.py` | Upstream `modeling_kimi_k3.py` without the language model (`KimiK3PreTrainedModel`, `KimiK3ForConditionalGeneration` and their imports) |
 | `reference/configuration_kimi_k3.py` | Upstream `configuration_kimi_k3.py`, unchanged |
 | `reference/kimi_k3_vision.py` | `KimiK3VisionModel`: the vision path of `KimiK3ForConditionalGeneration` (tower, then `mm_projector`), and `load_vision_config`, which selects upstream's `eager` attention |
-| `reference/functional.py` | Host prep for the device: patch rows, position embeddings, RoPE cos/sin, padding |
+| `reference/functional.py` | Host prep for the device: patch rows, position embeddings, RoPE cos/sin, window order, padding |
 | `reference/checkpoint.py` | Reads `vision_tower.*` and `mm_projector.*` from a Kimi-K3 HF checkpoint |
 | `reference/config.json`, `LICENSE-Kimi-K3` | The K3 `vision_config` and the license of the vendored code |
 | `tt/model_config.py` | `MoonViTConfig`, the grid check, `VisionParallel`, the compute kernel config |
@@ -44,7 +45,7 @@ loaded weights as `.tensorbin` files. Tests build both, run the same input, and 
 
 ```python
 ccl = TT_CCL(mesh_device, num_links=2, topology=ttnn.Topology.Ring)
-tt_model = TT_MoonViT_Vision_Model(config, mesh_device=mesh_device, sequence_parallel=ParallelFactor(4, 0), ccl=ccl)
+tt_model = TT_MoonViT_Vision_Model(config, mesh_device=mesh_device, sequence_parallel=ParallelFactor(4, 1), ccl=ccl)
 tt_model.load_torch_state_dict(reference.state_dict())
 out = tt_model.run(pixel_values, grid_thws)  # (h*w, 3, 14, 14), [[1, h, w]] -> (h*w/4, 7168)
 ```
@@ -89,7 +90,7 @@ pytest models/experimental/kimi_k3_moonvit_v2/tests/test_vision_attention.py \
        models/experimental/kimi_k3_moonvit_v2/tests/test_vision_model.py
 ```
 
-Each row-wise test has a `ring4x1` case and a `p150` case, where one chip stands in for one chip of
+Each row-wise test has a `ring1x4` case and a `p150` case, where one chip stands in for one chip of
 the ring and gets the first quarter of the padded sequence (16,384 rows);
 pytest skips the cases that need more chips than the machine has. Device tests that need a forward are marked `xfail(raises=NotImplementedError, strict=True)`, so
 each starts failing as a reminder once its forward runs.

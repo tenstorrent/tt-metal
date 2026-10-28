@@ -8,9 +8,15 @@ wqkv -> split into 12 heads of 128 for q, k, v (`nlp_create_qkv_heads`) -> RoPE 
 (`rotary_embedding_llama`, see `rope.py`) -> non-causal ring attention over the sequence split
 along `sp_axis` (`ring_joint_scaled_dot_product_attention`, `logical_n` masking the padding) ->
 merge heads (`nlp_concat_heads`) -> wo. Scale is `head_dim ** -0.5`.
+
+`logical_n` is a device tensor (`logical_length_tensor`), not an int. As an int the op compiles it
+into the kernel and its program cache key, so every image size would build new programs and could
+not replay one trace. The tensor is read on device each call.
 """
 
 from __future__ import annotations
+
+import torch
 
 import ttnn
 
@@ -18,6 +24,18 @@ from .linear import Linear
 from .model_config import MoonViTConfig, VisionParallel
 from .module import Module
 from .rope import RopeTensors
+
+
+def logical_length_tensor(mesh_device: ttnn.MeshDevice, n: int) -> ttnn.Tensor:
+    """The unpadded patch count as the `logical_n` the ring attention reads: [1, 1, 1, 1] uint32,
+    row major, replicated."""
+    return ttnn.from_torch(
+        torch.tensor([n], dtype=torch.int64).reshape(1, 1, 1, 1),
+        device=mesh_device,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
 
 
 class TT_Vision_Attention(Module):
@@ -33,5 +51,5 @@ class TT_Vision_Attention(Module):
         self.wqkv = Linear(config.hidden_size, 3 * config.qkv_hidden_size, **kwargs)
         self.wo = Linear(config.qkv_hidden_size, config.hidden_size, **kwargs)
 
-    def forward(self, x: ttnn.Tensor, rope: RopeTensors, logical_n: int) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, rope: RopeTensors, logical_n: ttnn.Tensor) -> ttnn.Tensor:
         raise NotImplementedError("TT_Vision_Attention.forward")

@@ -8,7 +8,8 @@ The reference rotates adjacent (x0, x1) pairs by a complex multiply in fp32. Tha
 `x * cos + (x @ trans_mat) * sin` with cos/sin repeated per pair and `trans_mat` mapping
 (x0, x1) -> (-x1, x0), which is what `ttnn.experimental.rotary_embedding_llama` computes
 (`reference.functional.rope_cos_sin` / `rotate_pairs`). The tables are shared by every layer
-and head, so they are built once per image.
+and head, so they are built once per image. Their rows are in window order, like the activations
+(`reference.functional.to_window_order`).
 """
 
 from __future__ import annotations
@@ -33,6 +34,6 @@ class TT_Rope:
         self.parallel = parallel
 
     def get_rot_mats(self, h: int, w: int) -> RopeTensors:
-        """Pad `rope_cos_sin(config, h, w)` to `max_patches` rows and upload, plus the
-        `rot_transformation_mat` tile, all from `reference.functional`."""
+        """`rope_cos_sin(config, h, w)` in window order, padded to `max_patches` rows and uploaded,
+        plus the `rot_transformation_mat` tile, all from `reference.functional`."""
         raise NotImplementedError("TT_Rope.get_rot_mats")
