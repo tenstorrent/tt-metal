@@ -152,26 +152,48 @@ soft = venc.encode(vid["pixel_values_videos"], vid["video_position_ids"])  # one
 | `tt/vision/config.py` | `VisionConfig` from the HF vision config; patch buckets |
 | `tt/vision/weights.py` | vision / embed_vision tensor loading (`.linear.weight` folded) |
 | `tt/vision/patch_embedder.py` | `VisionPatchEmbedder` (input projection + 2D position table) |
-| `tt/vision/rope.py` | host `axial_cos_sin`; device `AxialRope` |
-| `tt/vision/attention.py` | `VisionAttention` (12 x 64 MHA, q/k/v norms, scaling 1.0) |
-| `tt/vision/encoder_layer.py` | `VisionEncoderLayer` (sandwich norms; E1 `MLP`) |
+| `tt/vision/rope.py` | host `axial_cos_sin`; device `AxialRope` (fused `rotary_embedding_llama`) |
+| `tt/vision/attention.py` | `VisionAttention` (12 x 64 MHA, q/k/v norms, scaling 1.0; SDPA table, windowed path) |
+| `tt/vision/linear.py` | `vision_linear` (vision program-config rule over `tt/linear.py`) |
+| `tt/vision/mlp.py` | `VisionMLP` (bf16 weights, gelu as the multiply's pre-activation) |
+| `tt/vision/encoder_layer.py` | `VisionEncoderLayer` (sandwich norms, L1 residual for one image) |
 | `tt/vision/pooler.py` | host `pooling_matrix`; device `VisionPooler` (one batched matmul) |
 | `tt/vision/embedder.py` | `VisionEmbedder` (`embed_vision`) |
 | `tt/vision/vision_model.py` | `VisionModel` (device-only forward) |
 | `tt/vision/vision_encoder.py` | `VisionEncoder` (host: inputs, upload, trace capture/replay, readback) |
 | `reference/hf_vision_reference.py` | HF fp32 vision reference + activation hooks |
 | `tests/pcc/vision/` | PCC per module, full stack, soft tokens, trace, determinism, audit, perf |
-| `doc/functional_vision/` | stage report, work log, tt-perf-report artifacts |
+| `doc/functional_vision/` | E2 stage report, work log, tt-perf-report artifacts |
+| `doc/optimized_vision/` | E5b stage report, work log, tt-perf-report before / after |
+| `tests/perf/bench_vision.py` | traced burst / sustained latency per (batch, bucket) |
 
 ```bash
 pytest models/demos/blackhole/embedding_gemma2/tests/pcc/vision -q                      # PCC + trace + audit + perf
 pytest models/demos/blackhole/embedding_gemma2/tests/pcc/vision/test_vision_perf.py -k traced -s
 ```
 
-Measured on real images and an 8-frame video: per-module PCC >= 0.99995 and soft-token PCC
-0.9977-0.9997 per image vs the HF fp32 reference. HF's own bf16 run scores 0.9970-0.9998 against
-the same reference. Traced latency is 55.6 ms for 1 image and 294.5 ms for a batch of 4. Details
-and limitations are in `doc/functional_vision/README.md`.
+Measured on real images and an 8-frame video (E5b path): per-layer PCC >= 0.99993 and soft-token
+PCC 0.9972-0.9997 per image vs the HF fp32 reference. HF's own bf16 run scores 0.9970-0.9998
+against the same reference.
+
+### Vision tower performance (E5b, optimized)
+
+Traced device ms per forward (`tests/perf/bench_vision.py`, burst median of 5 windows; sustained
+after a 10 s soak is within 0.1 ms). Both columns were measured on the same day and card; the E2
+code measures slower today than in the E2 report (55.6 / 294.5 / 199.6 ms), see
+`doc/optimized_vision/README.md`.
+
+| batch x bucket | E2 code ms | E5b ms | speedup | ms per image / frame |
+|---|---|---|---|---|
+| 1 x 2560 (image) | 62.80 | 26.26 | 2.39x | 26.3 |
+| 4 x 2560 (images) | 323.26 | 121.62 | 2.66x | 30.4 |
+| 8 x 1280 (video frames) | 228.31 | 94.65 | 2.41x | 11.8 |
+
+Policy: SDPA per-shape chunk/grid table with HiFi2 + fp32 accumulation and a bfp4 key-padding
+mask (windowed SDPA without a mask for 8+ video frames), fused axial RoPE, bf16 weights with
+HiFi2 2D-multicast / minimal_matmul configs, gelu fused into the gate * up multiply, activations,
+the QKV and MLP up / gate outputs and the residual stream in L1 for one image. bfp8 weights and SDPA without fp32 accumulation were
+measured and left for E6 (accuracy). Details: `doc/optimized_vision/README.md`.
 
 ## Audio tower
 
@@ -274,9 +296,10 @@ Measured on 21 real inputs (6 texts incl. German, Japanese, Spanish and a 2080-t
 4 images; 3 images with captions; an 8-frame video with text; 3 audio clips; 2 audio clips with
 text; 2 mixed inputs): embedding cosine vs HF fp32 min 0.99957, mean 0.99990; at MRL 256 min
 0.99963. TT and HF pick the same best match on every row of the caption x image and
-caption x audio similarity matrices. Traced latency (inputs on device -> normalized embedding):
-text 1 x 512 18.3 ms, 1 image + caption 73.9 ms, 10 s audio + text 42.0 ms, 8-frame video
-230.1 ms. Details are in `doc/full_model/README.md`.
+caption x audio similarity matrices. Traced latency at E4, before the E5a text and E5b vision
+optimizations (inputs on device -> normalized embedding): text 1 x 512 18.3 ms, 1 image +
+caption 73.9 ms, 10 s audio + text 42.0 ms, 8-frame video 230.1 ms. Details are in
+`doc/full_model/README.md`.
 
 ## Out of scope (decoder-only items of the bring-up skill)
 

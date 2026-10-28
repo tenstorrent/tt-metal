@@ -51,13 +51,23 @@
     "pooled_rows_per_bucket": {"1280": 160, "2560": 288},
     "supported_max_patches_per_image": 2520,
     "largest_tested_patches_per_image": 2520,
-    "largest_tested_evidence": "tests/pcc/vision/test_vision_model.py::test_soft_tokens (5 images at N=2520, 8 video frames at N=1260; soft-token PCC 0.9977-0.9997 vs HF fp32)",
+    "largest_tested_evidence": "tests/pcc/vision/test_vision_model.py::test_soft_tokens (5 images at N=2520, 8 video frames at N=1260; soft-token PCC 0.9977-0.9997 vs HF fp32 at E2, 0.9972-0.9997 on the E5b path)",
     "valid_patches_tested": [1080, 2304, 2340, 2376, 2430],
     "largest_tested_batch": {"images_2560": 4, "video_frames_1280": 8},
     "video_frames_tested": 8,
     "reduction": "none: the processor fixes the patch count, and both buckets run at their maximum",
-    "untested": "videos longer than 8 frames (32-frame video = batch 32 x 1280, not probed); non-default max_soft_tokens (70/140 for images)",
-    "decode": "not applicable: one-pass bidirectional encoder per image / frame"
+    "untested": "videos longer than 8 frames (32-frame video = batch 32 x 1280, not probed); non-default max_soft_tokens (70/140 for images); windowed SDPA for batches 2-7 at bucket 1280 (they use the masked path)",
+    "decode": "not applicable: one-pass bidirectional encoder per image / frame",
+    "optimized_e5b": {
+      "summary": "E5b keeps every capability (buckets, patch counts, batch). Policy: bf16 weights, HiFi2 + fp32 acc matmuls and SDPA, per-shape SDPA chunk/grid table, bfp4 key-padding mask, windowed SDPA (no mask) for batch >= 8 at bucket 1280, fused axial RoPE, activations in L1 for one image.",
+      "new_device_input": "VisionDeviceInputs.windows: cu_window_seqlens [2B+1] uint32 ROW_MAJOR (valid-patch prefix per row), a persistent trace input like the others",
+      "windowed_attention_precondition": "valid patches are a prefix of each row (processor output always is); prepare_inputs raises otherwise for batch >= 8 at bucket 1280",
+      "mask_bytes": "bfp4 [B,1,S,S]: 0.5625 B/element, 3.7 MB per image at 2560 (bf16 was 13.1 MB)",
+      "l1_activations": "one image (2560 patches): [*,768] activations and the residual stream in L1 (64 KB per bank rule), plus the QKV output (91 KB per bank) and MLP up / gate outputs (121 KB per bank each); batch > 1 stays in DRAM (128 KB per bank for every tensor clashes with op circular buffers)",
+      "traced_device_ms_burst": {"1x2560": 26.263, "4x2560": 121.619, "8x1280": 94.643},
+      "traced_device_ms_e2_code_same_day": {"1x2560": 62.797, "4x2560": 323.257, "8x1280": 228.314},
+      "evidence": "doc/optimized_vision/README.md; tt-ops/runs/embeddinggemma-2/e5b/bench.jsonl (labels baseline_E2, c3_wide_l1)"
+    }
   },
   "audio": {
     "component": "audio tower (Gemma4AudioModel: conv subsampling + 12 conformer layers + output_proj) + embed_audio (RMSNorm no scale + Linear 1536->512)",
