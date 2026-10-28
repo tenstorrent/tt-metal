@@ -39,6 +39,9 @@ void kernel_main() {
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(6);       // query tile-rows per Q chunk
     constexpr uint32_t heads_per_item = get_compile_time_arg_val(7);   // Q heads stacked in one item
     constexpr uint32_t q_num_chunks = Ht / Sq_chunk_t;
+    constexpr uint32_t k_tiles = Sk_chunk_t * qWt;                             // K tiles of one step
+    constexpr uint32_t v_tiles = Sk_chunk_t * vWt;                             // V tiles of one step
+    [[maybe_unused]] constexpr uint32_t mask_tiles = Sq_chunk_t * Sk_chunk_t;  // arbitrary mask tiles of one step
     constexpr auto query_args = TensorAccessorArgs<8>();
     constexpr auto key_args = TensorAccessorArgs<query_args.next_compile_time_args_offset()>();
     constexpr auto value_args = TensorAccessorArgs<key_args.next_compile_time_args_offset()>();
@@ -91,17 +94,20 @@ void kernel_main() {
         const uint32_t key_offset = (w.batch * num_of_groups + kv_group_idx) * qWt * Ht;
         const uint32_t value_offset = (w.batch * num_of_groups + kv_group_idx) * vWt * Ht;
 
+        // Each step issues all its reads (K, the step's mask tiles, V), then waits once and pushes them in
+        // the order the compute kernel waits for them.
         for (uint32_t k_step = k_begin; k_step < k_end; ++k_step) {
             const uint32_t h_start = k_step * Sk_chunk_t;
             const uint32_t key_start_idx = key_offset + h_start * qWt;
             // K lands feature-major in cb_key (all Sk_chunk_t tiles of feature 0, then feature 1, ...),
             // the order matmul_block walks when it multiplies by K^T.
-            read_tile_block_transposed(cb_key, key_address_generator, key_start_idx, Sk_chunk_t, qWt, tile_bytes);
+            read_tile_block_transposed</* UseBarrier */ false>(
+                cb_key, key_address_generator, key_start_idx, Sk_chunk_t, qWt, tile_bytes);
 
 #ifdef USE_ATTN_MASK
             // Arbitrary mask: Sq_chunk_t x Sk_chunk_t tiles of this step, row-major, shared by the stacked
             // heads; the mask is (1, 1, S, S), so a row's Sk_chunk_t tiles are contiguous.
-            cb_reserve_back(cb_attn_mask, Sq_chunk_t * Sk_chunk_t);
+            cb_reserve_back(cb_attn_mask, mask_tiles);
             uint32_t mask_l1_addr = get_write_ptr(cb_attn_mask);
             for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
                 const uint32_t mask_start_idx = (w.first_row_tile + r) * Ht + h_start;
@@ -110,13 +116,18 @@ void kernel_main() {
                     mask_l1_addr += tile_bytes;
                 }
             }
-            noc_async_read_barrier();
-            cb_push_back(cb_attn_mask, Sq_chunk_t * Sk_chunk_t);
 #endif
             // Note: For CAUSAL_MASK, the two reusable mask tiles are generated once by the writer.
             const uint32_t value_start_idx = value_offset + h_start * vWt;
-            read_tiles_by_row(
-                cb_value, value_address_generator, value_start_idx, Sk_chunk_t * vWt, tile_bytes, Sk_chunk_t * vWt);
+            read_tiles_by_row</* UseBarrier */ false>(
+                cb_value, value_address_generator, value_start_idx, v_tiles, tile_bytes, v_tiles);
+
+            noc_async_read_barrier();
+            cb_push_back(cb_key, k_tiles);
+#ifdef USE_ATTN_MASK
+            cb_push_back(cb_attn_mask, mask_tiles);
+#endif
+            cb_push_back(cb_value, v_tiles);
         }
 #ifdef HAS_GATE
         read_stacked_rows(cb_gate, gate_address_generator, vWt, w);
