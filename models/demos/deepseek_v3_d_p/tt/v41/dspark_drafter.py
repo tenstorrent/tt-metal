@@ -650,32 +650,34 @@ class TtDSparkDrafter:
             )
         return self._consts[key]
 
-    def block_tokens(self, ids, user: int, blocks: int):
-        """``ids`` [1, 1, 1, ROWS] uint32 row-major (the verify step's argmax per tile row; row ``user + a`` verify
-        row ``a``'s) -> the block tile [1, 1, ROWS] uint32: row ``5 a`` = ``ids[user + a]`` for ``a < blocks``, the
+    def block_tokens(self, ids, rows: tuple):
+        """``ids`` [1, 1, 1, ROWS] uint32 row-major (the verify step's argmax per tile row; ``rows[a]`` verify row
+        ``a``'s) -> the block tile [1, 1, ROWS] uint32: row ``5 a`` = ``ids[rows[a]]`` for ``a < len(rows)``, the
         noise token elsewhere."""
+        blocks = len(rows)
         parts = []
         for a in range(blocks):
-            parts.append(ttnn.slice(ids, [0, 0, 0, user + a], [1, 1, 1, user + a + 1]))
+            parts.append(ttnn.slice(ids, [0, 0, 0, rows[a]], [1, 1, 1, rows[a] + 1]))
             parts.append(self._noise_run(DSPARK_BLOCK_SIZE - 1))
         rest = ROWS - DSPARK_BLOCK_SIZE * blocks
         if rest:
             parts.append(self._noise_run(rest))
         return ttnn.reshape(ttnn.concat(parts, dim=3), (1, 1, ROWS))
 
-    def block_index_rows(self, wslots, user: int, blocks: int):
+    def block_index_rows(self, wslots, rows: tuple):
         """``wslots`` [1, 1, ROWS, 128] fp32 tiled (the verify step's window slots per tile row: the slots of
-        positions ``p + j - 127 .. p + j`` of verify row ``j`` at row ``user + j``) -> the fused call's index rows
-        [1, 1, ROWS, INDEX_WIDTH] uint32 row-major: row ``5 a + i`` lists verify row ``a``'s window (the ring
+        positions ``p + j - 127 .. p + j`` of verify row ``j`` at tile row ``rows[j]``) -> the fused call's index
+        rows [1, 1, ROWS, INDEX_WIDTH] uint32 row-major: row ``5 a + i`` lists verify row ``a``'s window (the ring
         slots of positions ``<= p + a``), then its block's five rows ``ring_slots + 5 a ..``, then the sentinel; the
         rows past the blocks block 0's window alone."""
-        key = ("index", user, blocks)
+        blocks = len(rows)
+        key = ("index", tuple(rows))
         if key not in self._consts:
             sel = torch.zeros(1, 1, ROWS, ROWS)
             cols = torch.full((1, 1, ROWS, INDEX_WIDTH - RING), -1, dtype=torch.int32)  # -1: the sentinel
             for r in range(ROWS):
                 a = r // DSPARK_BLOCK_SIZE
-                sel[0, 0, r, user + min(a, blocks - 1)] = 1.0
+                sel[0, 0, r, rows[min(a, blocks - 1)]] = 1.0
                 if a < blocks:
                     cols[0, 0, r, :DSPARK_BLOCK_SIZE] = torch.arange(
                         self.ring_slots + DSPARK_BLOCK_SIZE * a, self.ring_slots + DSPARK_BLOCK_SIZE * (a + 1)
@@ -685,36 +687,38 @@ class TtDSparkDrafter:
             return None  # ``prepare_fused``
         sel, cols = self._consts[key]
         w = ttnn.matmul(sel, wslots, compute_kernel_config=self.markov_compute)  # one 1.0 a row: exact (< 2^8)
-        rows = ttnn.concat([ttnn.typecast(w, ttnn.int32), cols], dim=3)
-        return ttnn.to_layout(ttnn.typecast(rows, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT)
+        rows_t = ttnn.concat([ttnn.typecast(w, ttnn.int32), cols], dim=3)
+        return ttnn.to_layout(ttnn.typecast(rows_t, ttnn.uint32), ttnn.ROW_MAJOR_LAYOUT)
 
-    def prepare_fused(self, users: list[int], max_blocks: int) -> None:
-        """Allocate the fused call's constants for ``users`` x 1..``max_blocks`` blocks before any capture (a
-        persistent tensor allocated after a capture may sit in that capture's freed intermediates)."""
-        for blocks in range(1, max_blocks + 1):
+    def prepare_fused(self, layouts: list) -> None:
+        """Allocate the fused call's constants for every row layout in ``layouts`` (tuples of tile rows: the
+        verify rows a block takes) before any capture (a persistent tensor allocated after a capture may sit in
+        that capture's freed intermediates)."""
+        for rows in layouts:
+            blocks = len(rows)
             for i in range(DSPARK_BLOCK_SIZE):
                 self._block_mask(i, blocks)
             self._noise_run(DSPARK_BLOCK_SIZE - 1)
             if ROWS - DSPARK_BLOCK_SIZE * blocks:
                 self._noise_run(ROWS - DSPARK_BLOCK_SIZE * blocks)
-            for user in users:
-                self.block_index_rows(None, user, blocks)
+            self.block_index_rows(None, tuple(rows))
 
-    def fused_draft(self, taps, ids, inputs: dict, user: int, blocks: int):
+    def fused_draft(self, taps, ids, inputs: dict, rows: tuple):
         """The draft call inside the verify step's graph (``TtV41VerifyDecoder._forward``), after the sampler:
-        ``taps`` [1, 1, ROWS, n_taps * hidden/tp] bf16 (row ``user + j`` the tap of verify row ``j`` at position
+        ``taps`` [1, 1, ROWS, n_taps * hidden/tp] bf16 (tile row ``rows[j]`` the tap of verify row ``j`` at position
         ``p + j``), ``ids`` the rows' argmaxes, ``inputs`` the step's unpacked inputs (``dring``: the ring slot of
         every verify row, the sentinel elsewhere; ``dmain``: the fp32 RoPE pair of every row's position;
         ``dblock``: the bf16 pair of the block rows' positions, row ``5 a + i`` at ``p + a + 1 + i``; ``wslots``)
-        -> the drafts of every accept outcome ``a < blocks`` [1, 1, 1, ROWS] uint32 row-major (row ``5 a + i`` the
-        ``i + 1``-th draft after accepting ``a``). Every verify row's tap reaches the rings (a rejected row's write
-        sits past the frontier and is rewritten when its position is really processed)."""
+        -> the drafts of every accept outcome ``a < len(rows)`` [1, 1, 1, ROWS] uint32 row-major (row ``5 a + i``
+        the ``i + 1``-th draft after accepting ``a``). Every verify row's tap reaches the rings (a rejected row's
+        write sits past the frontier and is rewritten when its position is really processed)."""
         assert DSPARK_MARKOV == "device", "the fused draft call keeps the Markov loop in the graph"
         assert self.ring_slots > RING, "the fused draft call needs position-based rings (ring_slots > 128)"
+        blocks = len(rows)
         assert blocks * DSPARK_BLOCK_SIZE <= ROWS, blocks
         self._write_main_kv(taps, inputs["dmain"], inputs["dring"], ROWS)
-        tokens = self.block_tokens(ids, user, blocks)
-        index_rows = self.block_index_rows(inputs["wslots"], user, blocks)
+        tokens = self.block_tokens(ids, rows)
+        index_rows = self.block_index_rows(inputs["wslots"], rows)
         final = self.forward_block({"token": tokens, "rope_block": inputs["dblock"], "index_rows": index_rows})
         logits, _ = self.head(final, 0)
         drafts = self._markov_device(logits, tokens, blocks)

@@ -798,7 +798,8 @@ class DeepseekV41ForCausalLM:
             self.ring_owner = u  # the same seeding in every slot
             token, drafts = int(prompt[-1]), []
             seen: dict[str, int] = {}
-            keys = [f"vd:1:{u}.{n}" for n in range(1, K + 2)]
+            c1 = "c" if decoder.c1 else ""
+            keys = [f"vd:{c1}1:{u}.{n}" for n in range(1, K + 2)]
             for step in range(WARMUP_DECODE_STEPS * (K + 1)):
                 # grow the block only once the shorter variants replayed: 1 row, then 2, .. K + 1
                 want = 1 + min(len(drafts), K)

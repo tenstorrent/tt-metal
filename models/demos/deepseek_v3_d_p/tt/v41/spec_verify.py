@@ -105,6 +105,7 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         self.draft_plain = False  # the drafter runs on a plain step too (one live slot a rank; ``blocks = 1``)
         self.drafts: dict[int, list[list[int]]] = {}  # slot -> per accept outcome a: the five drafts after it
         self.draft_layout: tuple | None = None  # (user, blocks) of the fused draft call this step, or None
+        self.draft_rows: tuple | None = None  # the live slot's tile rows this step (``block_rows``)
 
     def attach_drafter(self, drafter, users: list[int] | None = None, max_k: int = 3) -> None:
         """Run ``drafter`` (a ``TtDSparkDrafter`` at this pool's ``ring_slots``) inside the steps with drafts; its
@@ -112,7 +113,26 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         assert drafter.ring_slots == self.ring_slots, (drafter.ring_slots, self.ring_slots)
         assert self.model.dspark is not None, "the fused draft call needs the model's seeder (dspark_weights)"
         self.drafter = drafter
-        drafter.prepare_fused(list(range(self.users)) if users is None else users, max_k + 1)
+        layouts = []
+        for u in list(range(self.users)) if users is None else users:
+            for k in range(max_k + 1):
+                try:
+                    layouts.append(self.block_rows(u, k, one_slot=True))
+                except AssertionError:
+                    pass
+        drafter.prepare_fused(layouts)
+
+    def block_rows(self, u: int, k: int, one_slot: bool) -> tuple:
+        """The tile rows of user ``u``'s block of ``1 + k`` tokens: its own row, then ``k`` rows. With the c1 MoE
+        and one live slot the draft rows are the tile's rows past the users' (``users .. users + k - 1``: the c1
+        MoE gathers any rows; the 32-row MoE dispatches the users' rows only), else ``u + 1 .. u + k``."""
+        if k and self.c1 and one_slot:
+            rows = (u,) + tuple(range(self.users, self.users + k))
+        else:
+            rows = tuple(range(u, u + k + 1))
+            assert u + k < self.users, f"user {u}: {k} drafts need rows {u}..{u + k} within {self.users}"
+        assert rows[-1] < ROWS and k < self.C1_ROWS, (rows, k)
+        return rows
 
     # --- the step's layout ---------------------------------------------------------------------------------------
     def variant(self, tokens: dict) -> str:
@@ -121,7 +141,8 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         user index and the row count are baked in) and whether the drafter runs."""
         layouts = sorted({(slot % self.users, len(block)) for slot, block in tokens.items()})
         parts = [f"{u}.{rows}" for u, rows in layouts]
-        return ("vd:" if self._fused_layout(tokens) else "v:") + f"{len(tokens)}:" + ",".join(parts)
+        c1 = "c" if self.c1 and len(tokens) == 1 else ""
+        return ("vd:" if self._fused_layout(tokens) else "v:") + f"{c1}{len(tokens)}:" + ",".join(parts)
 
     def _fused_layout(self, tokens: dict) -> tuple | None:
         """(user, blocks) of the fused draft call for ``tokens``: one live slot per live rank, every one at the same
@@ -160,16 +181,18 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         c1sel = torch.full((sp, ROWS), C1_ONEHOT_SENTINEL, dtype=torch.int32)
         c1put = torch.full((sp, ROWS), C1_ONEHOT_SENTINEL, dtype=torch.int32)
         self.live_rows = max((len(block) for block in tokens.values()), default=1)
+        self.draft_rows = None
         for slot in sorted(tokens):
             block = tokens[slot]
             r, u = divmod(slot, users)
             k = len(block) - 1
-            assert 0 <= k and u + k < users, f"slot {slot}: {k} drafts need rows {u}..{u + k} within {users}"
             p = self.slots[slot].position
             rows = []
             assert len(block) == self.live_rows, "one (user, rows) layout on every live rank"
+            block_rows = self.block_rows(u, k, one_slot=len(tokens) == 1)
+            self.draft_rows = block_rows
             for j, token in enumerate(block):
-                row = u + j
+                row = block_rows[j]
                 assert (r, row) not in taken, f"slot {slot}: row {row} of rank {r} already live"
                 taken.add((r, row))
                 c1sel[r, j], c1put[r, row] = row, j  # the c1 MoE: rows u .. u + K to 0 .. K and back
@@ -433,8 +456,7 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         logits, _ = model.head(final, 0)
         ids = self.sampler.sample(logits, self.inputs)  # [1, 1, 1, ROWS]: the rows' argmaxes
         if self.draft_layout is not None:
-            user, blocks = self.draft_layout
-            drafts = self.drafter.fused_draft(self.taps, ids, self.inputs, user, blocks)
+            drafts = self.drafter.fused_draft(self.taps, ids, self.inputs, self.draft_rows)
             ids = ttnn.concat([ids, drafts], dim=3)  # [1, 1, 1, 64]
         return self.sampler.gather(ids)
 
