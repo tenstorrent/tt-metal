@@ -438,7 +438,8 @@ struct FabricInfo {
     FabricSettings config;
     Topology topology = Topology::Linear;
     bool is_2d_routing = false;
-    size_t packet_header_size_bytes = 0;
+    // The packet header type the run's routers use (packet_header_types.hpp).
+    layout::Type packet_header;
     size_t max_payload_size_bytes = 0;
     size_t channel_buffer_size_bytes = 0;
     // 2D routing only.

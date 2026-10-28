@@ -192,4 +192,12 @@ that rank wrote, which names it back:
 
 **UDM isn't described.**
 
-A UDM run (`fabric.config.udm_mode`) writes a manifest, but not its UDM-specific parts: the tensix mux and relay cores and their L1, a receiver's path into its relay, and which routers have a relay. The VC0 worker channel's `producer` may also read `"worker"` where a tensix mux feeds it. Covering UDM needs a UDM mock fixture, the relay path as one more of a receiver's outputs (with the three UDM arguments [docs/FIELDS.md](docs/FIELDS.md) lists as not yet described becoming fields), a per-router relay flag, and the tensix mux and relay cores.
+A UDM run (`fabric.config.udm_mode`) writes a manifest, but leaves out what UDM adds:
+
+- The tensix mux and relay cores, and their L1.
+- A receiver's path into its relay, and which routers have a relay.
+- The `UDMControlFields` that follow each packet's header. `fabric.packet_header` describes the header type before them.
+
+The VC0 worker channel's `producer` can also be wrong: it reads `"worker"` even where a tensix mux feeds the channel.
+
+Covering UDM needs a UDM mock fixture for test coverage, the relay path as one more of a receiver's outputs (with the three UDM arguments [docs/FIELDS.md](docs/FIELDS.md) lists as not yet described becoming fields), a per-router relay flag, and the tensix mux and relay cores.

@@ -79,6 +79,12 @@ constexpr uint32_t compute_2d_pkt_hdr_route_buffer_size(uint32_t required_bytes)
     return static_cast<uint32_t>(PKT_HDR_2D_ROUTE_BUFFER_SIZES.back());
 }
 
+// The bytes a packet's header takes, given the size of the run's header type.
+constexpr size_t compute_pkt_hdr_size_bytes(size_t header_type_size, bool is_udm) {
+    // UDM mode adds the UDMControlFields union to the header.
+    return is_udm ? header_type_size + sizeof(UDMControlFields) : header_type_size;
+}
+
 // Which packet header a run uses, as FabricContext chose it: the routing mode, and the template argument of that mode's
 // header. A 1D run uses LowLatencyPacketHeaderT<extension_words>, and a 2D run uses
 // HybridMeshPacketHeaderT<route_buffer_size>. The field for the other mode is ignored.

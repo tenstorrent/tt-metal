@@ -48,7 +48,8 @@ The rest of `fabric` is what FabricContext derived from the settings:
 | --- | --- |
 | `topology` | The fabric topology |
 | `is_2d_routing` | Whether 2D routing is on |
-| `packet_header_size_bytes`, `max_payload_size_bytes`, `channel_buffer_size_bytes` | The packet header, payload and channel buffer sizes |
+| `packet_header` | The header type `visit_packet_header_type` (`packet_header_types.hpp`) picks for the routing mode and FabricContext's 1D extension words or 2D route buffer size. Its size, plus the `UDMControlFields` that follow it in UDM mode (`compute_pkt_hdr_size_bytes`), must be FabricContext's header size |
+| `max_payload_size_bytes`, `channel_buffer_size_bytes` | The payload and channel buffer sizes |
 | `routing_2d_route_buffer_size` | 2D routing only: the packet header's route buffer size |
 | `routing_1d_extension_words` | 1D routing only: the packet header's extension words |
 | `multi_txq` | Whether senders and receivers transmit on separate Ethernet TX queues (`FabricEriscDatamoverConfig::multi_txq_enabled`) |
