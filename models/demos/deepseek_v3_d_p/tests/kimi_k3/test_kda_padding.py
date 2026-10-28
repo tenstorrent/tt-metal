@@ -27,7 +27,7 @@ from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     deallocate_state,
     device_scalar,
 )
-from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, TtK3KdaAttention, build_kda_scalars
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, TtK3KdaAttention
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical, make_actual_start
 
 pytestmark = run_for_blackhole()
@@ -70,7 +70,7 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
         )
 
     input_tt = upload(hidden)
-    start_tt, end_tt = make_actual_start(mesh_device, 0), make_actual_start(mesh_device, capacity)
+    start_tt, end_tt = device_scalar(mesh_device, 0), device_scalar(mesh_device, capacity)
     ctx = K3AttnContext(kda_scalars=(slot_tt, start_tt, end_tt), kda_states=slabs)
     # Nonzero carried state before the short intervals, including ends just past
     # the head or a device boundary and a one-tile separated tail on SP ranks.
@@ -84,19 +84,14 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
         cases += [(32, capacity - 31), (0, local_rows + 2)]
     cases += [(0, capacity)]
 
-    def snapshots(output, permutation, length, state=None):
-        owned = state is None
-        state = committed_carry() if owned else state
+    def snapshots(output, permutation, length, state):
         physical = reconstruct_sp_tp_tensor(output, mesh_device, sp_axis, tp_axis, tp_dim=2, sp_dim=1)
         valid_output = physical[:, torch.argsort(permutation)][:, :length].clone()
-        result = [valid_output] + [
+        return [valid_output] + [
             ttnn.to_torch(shard).clone()
             for tensor in (state.recurrent, state.convolution)
             for shard in ttnn.get_device_tensors(tensor)
         ]
-        if owned:
-            deallocate_state(state)
-        return result
 
     eager_results = []
     trace = None
@@ -153,18 +148,16 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
                     ):
                         ttnn.deallocate(tensor)
                 deallocate_state(incoming)
+                # Eager and traced chunks read the same persistent bounds, rewritten before every chunk.
+                for destination, value in ((start_tt, start), (end_tt, start + length)):
+                    source = device_scalar(mesh_device, value)
+                    ttnn.copy(source, destination)
+                    ttnn.deallocate(source)
                 if traced:
-                    for destination, value in ((start_tt, start), (end_tt, start + length)):
-                        source = make_actual_start(mesh_device, value)
-                        ttnn.copy(source, destination)
-                        ttnn.deallocate(source)
                     ttnn.execute_trace(mesh_device, trace, cq_id=0, blocking=True)
                     output = traced_output
                 else:
-                    scalars, owned = build_kda_scalars(mesh_device, None, 0, start, start + length)
-                    output = attention.forward(input_tt, K3AttnContext(kda_scalars=scalars, kda_states=slabs))
-                    for scalar in owned:
-                        ttnn.deallocate(scalar)
+                    output = attention.forward(input_tt, ctx)
                 committed = committed_carry()
                 assert_matches_reference(
                     output_tt=output,
@@ -184,8 +177,8 @@ def test_k3_padding_eager_and_trace_continue_exact_carries(mesh_device, sp_axis,
                     label=f"K3 {'trace' if traced else 'eager'} SP{sp} start={start} length={length}",
                     nrmse=LayerNrmseThresholds(output=0.02, recurrent=0.03, convolution=0.004),
                 )
+                observed = snapshots(output, permutation, length, committed)
                 deallocate_state(committed)
-                observed = snapshots(output, permutation, length)
                 if traced:
                     for eager, replayed in zip(eager_results[case_index], observed, strict=True):
                         assert_bit_identical(eager, replayed, name="K3 eager versus traced continuation")
