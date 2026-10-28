@@ -26,6 +26,10 @@ session started (``session_stamp()``); ``--allow-unstamped`` admits records writ
 Row-indexed drift (D4 item 1): ``bias_row_drift_max`` / ``bias_row_drift_max_final`` = max over rows of
 |b_i - b0_i|, the signed row mean error of the candidate (``bias_rows[_final]``) against the same row of the
 baseline record (or of ``row_base``: broken_outputs scores against the golden itself); lower is better, ``abs`` bound.
+A row passes when it lies in the interval between the reference and the fixed record (v1.27): b_i in
+[min(0, b0_i) - abs, max(0, b0_i) + abs] (spread rows around 1); a row that moved toward the reference by more than
+``abs`` is printed as ``improved``. ``bias_q_drift_max`` (v1.31) is the same check on ``bias_q``, the signed mean
+error per quantile over the active rows.
 A tolerance with ``toward`` (D4 item 3) is ``|v - toward| <= |baseline - toward| + abs``: a candidate may move
 toward the golden value freely, and away from it by ``abs``.
 
@@ -56,6 +60,7 @@ LOWER_IS_BETTER = {
     "bias_row_max_final",
     "bias_row_drift_max",  # D4 item 1: row-indexed, against the fixed record
     "bias_row_drift_max_final",
+    "bias_q_drift_max",  # v1.31: per-quantile signed bias, against the fixed record
     "spread_ratio_row_drift_max",  # D5 R1-0a: row-indexed spread ratio, against the fixed record
     "spread_ratio_row_drift_max_final",
 }
@@ -64,7 +69,10 @@ ROW_DRIFT = {
     "bias_row_drift_max_final": "bias_rows_final",
     "spread_ratio_row_drift_max": "spread_rows",  # D5 R1-0a
     "spread_ratio_row_drift_max_final": "spread_rows_final",
+    "bias_q_drift_max": "bias_q",  # v1.31
 }
+# v1.27: the reference value a row may move toward freely (signed bias 0, spread ratio 1)
+ROW_CENTER = {"spread_rows": 1.0, "spread_rows_final": 1.0}
 # D0 amendment 1 / D2 fix 4: gated on the target and every suite / bench case in both precisions, report-only for
 # free-running rollout steps >= 2 and e2e_stream.
 ROUTING_KEYS = {"route_mismatch_rows", "bias_max_abs_diff", "min_top3_margin"}
@@ -276,14 +284,21 @@ def check(
                     print(f"FAIL drift {key[0]}/{key[1]} {metric}: non-finite or missing rows {bad[:8]}")
                     failures.append(f"{key} {metric} drift: non-finite or missing rows {bad[:8]}")
                     continue
-                d = [(abs(x - y), i) for i, (x, y) in enumerate(zip(r[vec], b[vec])) if x is not None and y is not None]
-                v, row = max(d) if d else (0.0, -1)
-                ok = v <= tol["abs"]
+                c, bound = ROW_CENTER.get(vec, 0.0), tol["abs"]
+                pairs = [(i, x, y) for i, (x, y) in enumerate(zip(r[vec], b[vec])) if x is not None and y is not None]
+                # v1.27: distance outside [min(c, y) - bound, max(c, y) + bound]; 0 inside it
+                out = [(max(min(c, y) - bound - x, x - max(c, y) - bound, 0.0), i) for i, x, y in pairs]
+                excess, row = max(out) if out else (0.0, -1)
+                v, vrow = max((abs(x - y), i) for i, x, y in pairs) if pairs else (0.0, -1)
+                improved = [i for (e, i), (_, x, y) in zip(out, pairs) if e == 0.0 and abs(x - y) > bound]
+                ok = excess == 0.0
                 print(
-                    f"{'ok  ' if ok else 'FAIL'} drift {key[0]}/{key[1]} {metric} {v:.6g} <= {tol['abs']} (row {row})"
+                    f"{'ok  ' if ok else 'FAIL'} drift {key[0]}/{key[1]} {metric} {v:.6g} (row {vrow}), outside the "
+                    f"interval by {excess:.6g} (row {row}), bound {bound}"
+                    + (f", improved rows {improved}" if improved else "")
                 )
                 if not ok:
-                    failures.append(f"{key} {metric} drift {v} vs {tol['abs']} (row {row})")
+                    failures.append(f"{key} {metric} drift {v} vs {bound} (row {row})")
                 continue
             if b is None or metric not in r or metric not in b:
                 where = (

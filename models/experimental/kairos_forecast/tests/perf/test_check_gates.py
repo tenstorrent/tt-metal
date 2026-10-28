@@ -175,9 +175,15 @@ def test_row_drift():  # D4 item 1: one row moved by the v1.25 probe fails, in h
     for vec, metric in (("bias_rows", "bias_row_drift_max"), ("bias_rows_final", "bias_row_drift_max_final")):
         for row in (0, 7, 15):
             moved = list(rows)
-            moved[row] += 0.05
+            moved[row] += 0.05 if rows[row] >= 0 else -0.05  # away from the reference
             fails = check([_rec(**{**base, vec: moved})], [base], ROW_GATES)
             assert any(metric in f and f"row {row}" in f for f in fails), (metric, row)
+            toward = list(rows)  # v1.27: inside [min(0, b0) - abs, max(0, b0) + abs] passes
+            toward[row] = 0.0
+            assert not check([_rec(**{**base, vec: toward})], [base], ROW_GATES), (metric, row)
+            overshoot = list(rows)  # crossing the reference past the interval fails
+            overshoot[row] = 0.05 if rows[row] < 0 else -0.05
+            assert check([_rec(**{**base, vec: overshoot})], [base], ROW_GATES), (metric, row)
         small = [x + 0.02 for x in rows]  # every row inside the bound
         assert not check([_rec(**{**base, vec: small})], [base], ROW_GATES)
     # inactive rows (None) are skipped; a vector of another length or a missing one fails
@@ -210,7 +216,10 @@ def test_spread_row_drift():  # D5 R1-0a: one row's band at 1.3x or 0.7x fails, 
     rows = [1.0 + 0.002 * i for i in range(16)]
     base = _rec(spread_rows=rows, spread_rows_final=rows)
     assert not check([copy.deepcopy(base)], [base], SPREAD_GATES)
-    for vec, metric in (("spread_rows", "spread_ratio_row_drift_max"), ("spread_rows_final", "spread_ratio_row_drift_max_final")):
+    for vec, metric in (
+        ("spread_rows", "spread_ratio_row_drift_max"),
+        ("spread_rows_final", "spread_ratio_row_drift_max_final"),
+    ):
         for row in (0, 9):
             for f in (1.3, 0.7):
                 moved = list(rows)
@@ -251,3 +260,26 @@ def test_bias_row_max_final_floor_required():  # D4 item 1
 def test_default_baseline_follows_kind():  # D4 item 4
     assert default_baseline(Path("x/suite.jsonl")) == FIXED_RECORDS["suite"]
     assert default_baseline(Path("x/bench.json")) == FIXED_RECORDS["bench"]
+
+
+Q_GATES = dict(GATES, drift={"bias_q_drift_max": {"abs": 0.01}})
+INACTIVE_GATES = dict(GATES, drift={"inactive_max_err": {"abs": 0.01}})
+
+
+def test_bias_q_drift():  # v1.31 / v1.32: per-quantile signed bias against the fixed record, by name
+    bq = [0.001 * (i - 4) for i in range(9)]
+    base = _rec(bias_q=bq)
+    assert not check([copy.deepcopy(base)], [base], Q_GATES)
+    for d in (0.02, -0.02):  # the accuracy probe: bound + 0.01 on the top quantile
+        moved = bq[:-1] + [bq[-1] + d]
+        fails = check([_rec(bias_q=moved)], [base], Q_GATES)
+        assert any("bias_q_drift_max" in f and "row 8" in f for f in fails), d
+    assert not check([_rec(bias_q=[0.0] * 9)], [base], Q_GATES)  # toward the reference
+    assert any("bias_q_drift_max" in f for f in check([_rec(bias_q=bq[:-1] + [float("nan")])], [base], Q_GATES))
+    assert any("bias_q_drift_max" in f for f in check([_rec()], [base], Q_GATES))  # missing vector
+
+
+def test_inactive_drift():  # v1.31: inactive_max_err gets an absolute drift
+    base = _rec(inactive_max_err=0.01)
+    assert not check([_rec(inactive_max_err=0.019)], [base], INACTIVE_GATES)
+    assert any("inactive_max_err drift" in f for f in check([_rec(inactive_max_err=0.021)], [base], INACTIVE_GATES))

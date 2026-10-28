@@ -148,6 +148,7 @@ def gate_metrics(head, g_head, q, g_q, scale_targets, halves: int = 1) -> dict:
         "pcc_row_min": float(rows.min()),
         "pcc_row_p01_active": float(torch.quantile(rows[act], 0.01)),
         "pcc_row_min_active": float(rows[act].min()),
+        "pcc_row_argmin_active": int(act.nonzero().flatten()[rows[act].argmin()]),  # v1.31: the row behind it
         "active_rows": int(act.sum()),
         "excluded_rows": int((~act).sum()),
         "spread_ratio_p01": float(torch.quantile(ratio, 0.01)),
@@ -155,6 +156,7 @@ def gate_metrics(head, g_head, q, g_q, scale_targets, halves: int = 1) -> dict:
         "spread_ratio_p50": float(torch.quantile(ratio, 0.5)),
         "spread_ratio_min": float(ratio.min()),
         "spread_ratio_max": float(ratio.max()),
+        "spread_ratio_argmin": int(act.nonzero().flatten()[ratio.argmin()]),
         "pcc_row_min_var": float(rows[~flat].min()) if bool((~flat).any()) else 1.0,
         "flat_rows": int(flat.sum()),
         "flat_max_err": float(err[flat].max()) if bool(flat.any()) else 0.0,
@@ -164,6 +166,12 @@ def gate_metrics(head, g_head, q, g_q, scale_targets, halves: int = 1) -> dict:
         "bias_row_max": float(bias.max()),
         "bias_row_argmax": int(bias.argmax()),
         "bias_rows": [round(float(b), 7) if a else None for b, a in zip(signed, act)],  # inactive rows: None
+        # v1.31 / v1.32: signed mean error per quantile over the active rows (head space)
+        "bias_q": [
+            round(float(b), 7)
+            for b in (head.double() - g_head.double())[act].reshape(int(act.sum()), Q, -1).mean((0, 2))
+        ],
+        "inactive_argmax": int((~act).nonzero().flatten()[err[~act].argmax()]) if bool((~act).any()) else -1,
         "pcc_step": pearson(step_diff(g_head), step_diff(head)),
         "bias_row_p50_final": float(bias_f.median()),
         "bias_row_max_final": float(bias_f.max()),
