@@ -362,6 +362,18 @@ def test_session_disable_workaround(monkeypatch):
     assert calls == [torch.float32]
 
 
+def test_host_multiply_also_replaces_ttnn_mul(monkeypatch):
+    import ttnn
+
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e import op_overrides as O
+
+    monkeypatch.setattr(O, "WORKAROUNDS", [])
+    s = O.OverrideSession(None, ("multiply",), ())
+    s.install(monkeypatch)
+    assert ttnn.mul is ttnn.multiply  # the text MLP gate calls ttnn.mul
+    assert s.host_ops_active == ["ttnn.multiply"]
+
+
 def test_strip_fp32_dest_acc_rewrites_only_fp32_configs():
     import ttnn
 

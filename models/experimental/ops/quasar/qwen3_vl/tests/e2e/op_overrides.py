@@ -238,6 +238,7 @@ class HostFallback:
     torch_fn: Callable  # (host args, host kwargs) -> tensor, list of tensors, or None when updating in place
     inplace_arg: int | None = None  # index of the device tensor the op updates in place
     output_like_input: bool = False  # without a memory_config kwarg the op returns its input's layout (e.g. sharded)
+    aliases: tuple = ()  # other ttnn names bound to the same op object, replaced too (e.g. ttnn.mul = ttnn.multiply)
 
 
 _GOLDENS: dict = {}  # target -> golden function, looked up on the real op before a fallback replaces it
@@ -337,7 +338,7 @@ FALLBACKS = {
         HostFallback("ttnn.rms_norm", "golden", _golden("ttnn.rms_norm", _flat_affine)),
         HostFallback("ttnn.layer_norm", "golden", _golden("ttnn.layer_norm", _flat_affine)),
         HostFallback("ttnn.add", "golden", _golden("ttnn.add")),
-        HostFallback("ttnn.multiply", "golden", _golden("ttnn.multiply")),
+        HostFallback("ttnn.multiply", "golden", _golden("ttnn.multiply"), aliases=("ttnn.mul",)),  # MLP gate: ttnn.mul
         HostFallback(
             "ttnn.transformer.scaled_dot_product_attention",
             "golden",
@@ -441,7 +442,6 @@ class OverrideSession:
 
         from models.experimental.ops.quasar.qwen3_vl.tests.e2e.recorder import to_host
 
-        parent, attr = resolve(fb.target)
         self.host_ops_active.append(fb.target)
         conv = lambda v: to_host(v) if isinstance(v, ttnn.Tensor) else v
 
@@ -473,7 +473,8 @@ class OverrideSession:
 
             return [upload(t) for t in out] if isinstance(out, (list, tuple)) else upload(out)
 
-        monkeypatch.setattr(parent, attr, wrapper)
+        for target in (fb.target, *fb.aliases):
+            monkeypatch.setattr(*resolve(target), wrapper)
 
     def _install_workaround(self, monkeypatch, wa):
         parent, attr = resolve(wa.target)
