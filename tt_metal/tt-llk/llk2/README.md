@@ -3,7 +3,7 @@
 A layered rewrite of the compute stack, built one op at a time. Design and op list:
 [LLK 2.0 matmul kernel: layout and op list](https://claude.ai/artifact/B6gUhxaMbCzqyx3d3cJhFv).
 
-Calls only go down one layer: Compute API → LLK API (thread split, `configure` / `execute`) → HAL. Tensor and
+Calls only go down one layer: Compute API → llk-lib (thread split, `configure` / `execute`) → HAL. Tensor and
 Resolver are used by more than one layer. Everything is compile time except addresses.
 
 ## Layout
@@ -12,12 +12,12 @@ Resolver are used by more than one layer. Everything is compile time except addr
 inc/common/                 arch-independent, always on the include path
     kernel_settings.h       Dest mode and math fidelity for the kernel
     tensor/tensor.h         TensorShape, TensorSpec, Tensor
-    compute_api/            one op per file, on Tensors, taking a modifier struct
+    compute_api/            one op per file, on Tensors, taking the op's modifier struct
     resolver/               plan structs and the driver (a chain of one call)
-    llk_api/thread.h        current_thread and the per-thread call pattern
+    llk_lib/thread.h        current_thread and the per-thread call pattern
 inc/blackhole/              one arch; the build adds inc/common and one inc/<arch>
-    resolver/               each op's OpApi: options, work, plan
-    llk_api/                each op's params struct, per-thread calls, configure and execute
+    resolver/               each op's OpApi: accepts, options, work, plan
+    llk_lib/                one header per thread or op: unpack.h (every unpack op), matmul.h (math)
 tests/                      an out-of-tree consumer of the tt-llk test harness
 ```
 
@@ -26,9 +26,9 @@ include path.
 
 ## Ops
 
-| Op | Compute API | Blackhole LLK API | Tests |
+| Op | Compute API | Blackhole llk-lib | Tests |
 |---|---|---|---|
-| `matmul` | `compute_api/matmul.h` | `llk_api/matmul.h` (unpack and math) | `test_llk2_matmul.py` |
+| `matmul` | `compute_api/matmul.h` | `llk_lib/unpack.h`, `llk_lib/matmul.h` | `test_llk2_matmul.py` |
 
 Pack and the math-to-pack Dest sync still use today's LLKs in the tests.
 

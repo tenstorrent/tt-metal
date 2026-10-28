@@ -2,11 +2,13 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// What the Resolver returns for one Compute API call (report 3, section 3), cut down to what matmul needs:
-//   OpConfig  negotiation: where each operand sits in registers and in which format, and the result's spec
-//   Work      work allocation: loop counts
-//   Plan      planning: what each unit does
-// The LLK API turns a Plan into its op's named parameter struct (matmul_params, ...).
+// What the Resolver returns for one Compute API call (tt-llk-lab llk-tensor, report 3, section 3), cut down to
+// what matmul needs. Three results, one per Resolver step:
+//   OpConfig  options (negotiation): which unit does the math, the register format of each operand, the fidelity,
+//             and the spec of the result
+//   Work      work (allocation): loop counts, from the tensors once the config is fixed
+//   Plan      plan: what each unit does. llk-lib turns it into each thread's parameter struct
+//             (unpack_params_from, matmul_params_from)
 
 #pragma once
 
@@ -17,6 +19,7 @@
 namespace llk2
 {
 
+// Where math reads an operand from.
 enum class Where : std::uint8_t
 {
     None,
@@ -25,6 +28,8 @@ enum class Where : std::uint8_t
     Dest
 };
 
+// The math operation a Compute API call performs. llk-lib's generic per-thread calls (unpack, ...) pick the parts
+// of their implementation that differ per op from this.
 enum class MathOp : std::uint8_t
 {
     None,
@@ -66,7 +71,6 @@ struct UnpackPlan // one operand
 struct MathPlan
 {
     Exu unit;
-    MathOp op;
     std::uint32_t math_fidelity;
     bool dest_fp32;
     DataFormat format; // the math (Src) format
@@ -75,6 +79,7 @@ struct MathPlan
 
 struct Plan
 {
+    MathOp op;
     UnpackPlan in0, in1;
     MathPlan math;
     Work work;

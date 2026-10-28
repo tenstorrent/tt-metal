@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""LLK 2.0 matmul: the Compute API and the LLK API layer under it, against the same golden as test_matmul.py.
+"""LLK 2.0 matmul through the Compute API, against the same golden as test_matmul.py.
 
 Shapes, formats and fidelity are compile time in LLK 2.0, so the tile dims reach the kernel as constexprs
 (LLK2_MATMUL_DIMS) and the formats with compile_time_formats=True.
@@ -8,7 +8,6 @@ Shapes, formats and fidelity are compile time in LLK 2.0, so the tile dims reach
 
 from dataclasses import dataclass
 
-import pytest
 import torch
 from helpers.format_config import DataFormat
 from helpers.golden_generators import MatmulGolden, get_golden_generator
@@ -59,13 +58,6 @@ def _combinations():
     return combos
 
 
-DRIVERS = {
-    "compute_api": "llk2_matmul_compute_api_test.cpp",
-    "llk_api": "llk2_matmul_llk_api_test.cpp",
-}
-
-
-@pytest.mark.parametrize("layer", list(DRIVERS))
 @parametrize(
     math_fidelity=[
         MathFidelity.LoFi,
@@ -75,7 +67,7 @@ DRIVERS = {
     ],
     format_dest_acc_and_dims=_combinations(),
 )
-def test_llk2_matmul(layer, math_fidelity, format_dest_acc_and_dims):
+def test_llk2_matmul(math_fidelity, format_dest_acc_and_dims):
     formats, dest_acc, (dims_A, dims_B) = format_dest_acc_and_dims
     torch_format = format_dict[formats.output_format]
 
@@ -109,7 +101,7 @@ def test_llk2_matmul(layer, math_fidelity, format_dest_acc_and_dims):
         tilized_A, tilized_B = src_A, src_B
 
     configuration = TestConfig(
-        cpp_source(DRIVERS[layer]),
+        cpp_source("llk2_matmul_compute_api_test.cpp"),
         formats,
         templates=[
             MATH_FIDELITY(math_fidelity),
