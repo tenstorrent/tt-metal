@@ -499,7 +499,7 @@ class DropInVisionTransformer(torch.nn.Module):
 class HostEmbedding(LightweightModule):
     """Token embedding whose table stays in host memory; looks up the rows on the host and uploads only them.
 
-    On Quasar the bf16 [151936, 2560] table (~778 MB) does not fit in DRAM next to the bf16 LM head (QUASAR_GAPS Q8).
+    On Quasar the bf16 [151936, 2560] table (~778 MB) does not fit in DRAM next to the bf16 LM head (QUASAR_GAPS Q4).
     Returns what ttnn.embedding + unsqueeze_to_4D would: [1, 1, num_tokens, dim], bf16, TILE.
     """
 

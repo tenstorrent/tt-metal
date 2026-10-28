@@ -97,7 +97,7 @@ A hang shows up as the pytest timeout. The script prints the last lines of `prog
 | 2026-10-26 | craq-sim 8x4 (.so md5 74c8eb33), branch on main fb6d34ceaed | 134 (+12 experimental add/mul) | 94 (+10) | 23 (+2): 8x5 L1 shard grids, 12-bank DRAM sharding | 16 | 1 | 1 h 45 min (95 min in tests; 12-50 s per case) |
 | 2026-10-26 | craq-sim 8x4, main 5285b13d773 with the DFB drain (no #57646 revert, no tensor_layout droppable) | 134 (+12) | 94 (+10) | 23 (+2) | 16 | 1 | 1 h 34 min (88 min in tests); every case's outcome identical to the run above |
 
-The 16 failures: base add (7) and multiply (3), all passing through the experimental ops; `linear` with a captured 8x8 matmul grid (2); `plus_one` int32 and uint32 (2, Q10); `scatter` (1, Q1); `layer_norm` `[2752, 4096]` at PCC 0.998996 against 0.999 (1). The timeout is prefill SDPA `[16, 12288, 64]` (more than 20 min on craq-sim; the `[32, 4096, 128]` case passes in 13 min).
+The 16 failures: base add (7) and multiply (3), all passing through the experimental ops; `linear` with a captured 8x8 matmul grid (2); `plus_one` int32 and uint32 (2, Q6); `scatter` (1, Q1); `layer_norm` `[2752, 4096]` at PCC 0.998996 against 0.999 (1). The timeout is prefill SDPA `[16, 12288, 64]` (more than 20 min on craq-sim; the `[32, 4096, 128]` case passes in 13 min).
 
 ## Baselines
 

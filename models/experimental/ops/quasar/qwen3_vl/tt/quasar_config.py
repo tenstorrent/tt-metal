@@ -290,7 +290,7 @@ class QuasarModelArgs(_QuasarArgsMixin, ModelArgs):
         # The vision-token merge scatters on device on Quasar (int32 transpose fixed by #62744; QUASAR_GAPS Q1).
         self.device_scatter = is_quasar()
         # Quasar DRAM (2 x 1 GiB) cannot hold the bf16 embedding table next to the bf16 LM head; keep the table on the
-        # host and upload only the looked-up rows (QUASAR_GAPS Q8). Prefill already embeds on the host.
+        # host and upload only the looked-up rows (QUASAR_GAPS Q4). Prefill already embeds on the host.
         self.host_embedding = True
 
 
