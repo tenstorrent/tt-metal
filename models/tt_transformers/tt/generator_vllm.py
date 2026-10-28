@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
 from types import SimpleNamespace
 from typing import List, Mapping, Union
 
@@ -35,7 +36,7 @@ from models.common.llama_models import create_vision_mask
 from models.common.utility_functions import is_wormhole_b0, nearest_32
 from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model import Transformer
-from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup
+from models.tt_transformers.tt.model_config import DecodersPrecision, ModelArgs, TensorGroup, parse_optimizations
 
 
 def _canonical_shared_kv_shapes(per_layer_specs) -> dict:
@@ -807,6 +808,18 @@ class Phi3ForCausalLM(Generator):
         tt_data_parallel=1,
         optimizations: str = "performance",
     ):
+        # The plugin only passes "performance" or "accuracy"; TT_PHI3_OPTIMIZATIONS takes a full precision_cfg /
+        # fidelity_cfg string (the demo's --optimizations format) so serving can run the same precision as the demo.
+        custom = os.environ.get("TT_PHI3_OPTIMIZATIONS")
+        if custom:
+            logger.info(f"Phi3ForCausalLM: optimizations from TT_PHI3_OPTIMIZATIONS: {custom}")
+            precision = parse_optimizations(custom)
+        else:
+            precision = (
+                DecodersPrecision.from_string(optimizations)
+                if optimizations is not None
+                else DecodersPrecision.performance
+            )
         tt_model, model_args = initialize_vllm_text_transformer(
             hf_config,
             tt_data_parallel,
@@ -815,11 +828,7 @@ class Phi3ForCausalLM(Generator):
             max_seq_len=max_seq_len,
             n_layers=n_layers,
             dtype=ttnn.bfloat8_b,
-            optimizations=(
-                DecodersPrecision.from_string(optimizations)
-                if optimizations is not None
-                else DecodersPrecision.performance
-            ),
+            optimizations=precision,
         )
         return cls(tt_model, model_args, mesh_device)
 
