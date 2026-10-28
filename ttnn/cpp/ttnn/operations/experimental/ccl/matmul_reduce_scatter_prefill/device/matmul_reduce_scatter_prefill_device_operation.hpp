@@ -16,14 +16,15 @@
 namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill {
 
 // The framework calls: create_output_tensors, then the cache key (the default: every attribute, the plan's inputs
-// included, plus the tensor specs), then on a hit validate_on_program_cache_hit + override_runtime_arguments, on a
-// miss validate_on_program_cache_miss + create_descriptor once per mesh coordinate.
+// included, plus the tensor specs), then on a hit validate_on_program_cache_hit + override_runtime_arguments (once for
+// the whole mesh workload), on a miss validate_on_program_cache_miss + create_mesh_workload (create_descriptor once
+// per mesh coordinate).
 struct MatmulReduceScatterPrefillDeviceOperation {
     using operation_attributes_t = MatmulReduceScatterPrefillParams;
     using tensor_args_t = MatmulReduceScatterPrefillInputs;
     using spec_return_value_t = tt::tt_metal::TensorSpec;
     using tensor_return_value_t = Tensor;
-    using program_factory_t = std::variant<MatmulReduceScatterPrefillProgramFactory>;
+    using program_factory_t = std::variant<MatmulReduceScatterPrefillMeshWorkloadFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 

@@ -4,12 +4,14 @@
 #pragma once
 
 #include <array>
+#include <functional>
 #include <optional>
 
 #include <tt-metalium/global_semaphore.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/program_descriptors.hpp>
 
+#include "ttnn/device_operation.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "matmul_reduce_scatter_prefill_device_operation_types.hpp"
 
@@ -23,14 +25,36 @@ struct MatmulReduceScatterPrefillProgramFactory {
         const MatmulReduceScatterPrefillInputs& tensor_args,
         Tensor& output,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
+};
 
-    // Rewrites the A / W / output addresses, and the staging address and tensor-backed CBs 3, 4, 5 when it moved.
+// The mesh workload: a program per coordinate from create_descriptor, with what a cache hit writes kept at creation
+// (the four kernels' common-arg objects, the three staging-backed CBs and their zone offsets), so a hit computes the
+// call's addresses once and writes them into each program, with no lookup per program.
+struct MatmulReduceScatterPrefillMeshWorkloadFactory {
+    struct shared_variables_t {
+        // Cache the argument objects, not their data(): dispatch may relocate the payload.
+        std::reference_wrapper<tt::tt_metal::RuntimeArgsData> reader;
+        std::reference_wrapper<tt::tt_metal::RuntimeArgsData> writer;
+        std::reference_wrapper<tt::tt_metal::RuntimeArgsData> port_reader;
+        std::reference_wrapper<tt::tt_metal::RuntimeArgsData> port_sender;
+        std::array<tt::tt_metal::CBHandle, 3> staging_cbs{};  // FINISHED, ARRIVALS_FWD, ARRIVALS_BWD
+        std::array<uint32_t, 3> staging_offsets{};
+    };
+    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
+
+    static cached_mesh_workload_t create_mesh_workload(
+        const MatmulReduceScatterPrefillParams& attrs,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords,
+        const MatmulReduceScatterPrefillInputs& tensor_args,
+        Tensor& output);
+
+    // A, W and the output on every hit; the staging address and its CBs only when the staging tensor moved; the
+    // per-mesh semaphores and mailbox never (they keep create_descriptor's values for the mesh's life).
     static void override_runtime_arguments(
-        tt::tt_metal::Program& program,
+        cached_mesh_workload_t& cached,
         const MatmulReduceScatterPrefillParams& attrs,
         const MatmulReduceScatterPrefillInputs& tensor_args,
-        Tensor& output,
-        const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
+        Tensor& output);
 };
 
 // Per-mesh persistent state: 4 global semaphores (arr_fwd, arr_bwd, ready, credit) on the full grid and the replicated

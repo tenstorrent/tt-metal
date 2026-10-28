@@ -189,7 +189,7 @@ uint32_t check_group(const Tensor& input_tensor, const Tensor& weight, int32_t c
 MatmulReduceScatterPrefillDeviceOperation::program_factory_t
 MatmulReduceScatterPrefillDeviceOperation::select_program_factory(
     const operation_attributes_t& /*attrs*/, const tensor_args_t& /*tensor_args*/) {
-    return MatmulReduceScatterPrefillProgramFactory{};
+    return MatmulReduceScatterPrefillMeshWorkloadFactory{};
 }
 
 void MatmulReduceScatterPrefillDeviceOperation::validate_on_program_cache_miss(
