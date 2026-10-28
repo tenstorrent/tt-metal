@@ -14,8 +14,12 @@
 // coefficient tile is unpacked once per block rather than once per unit. Needs dst_full_sync_en (8 fp32 DST
 // tiles: BLOCK accumulators, one input slot, one coefficient slot).
 //
-// compile_time_args = [cb_in, cb_coef, cb_out, CT, N, J, BLOCK, HAS_X, cb_x, X_FP32, OUT_BF16]
-// runtime args      = [unit_start, unit_count]  (unit_count a multiple of BLOCK)
+// With COEF_RSQRT every coefficient tile is replaced by its SFPU rsqrt before use (the mHC projection's
+// rsqrt(mean(x^2) + eps) folded into the mix; the same LLK, mode and fp32 DST as ttnn.rsqrt on
+// an fp32 tile).
+//
+// compile_time_args = [cb_in, cb_coef, cb_out, CT, N, J, BLOCK, HAS_X, cb_x, X_FP32, OUT_BF16, COEF_RSQRT]
+// runtime args = [unit_start, unit_count] (unit_count a multiple of BLOCK)
 
 #include <cstdint>
 
@@ -25,6 +29,7 @@
 #include "api/compute/reconfig_data_format.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/eltwise_unary/addcmul.h"
+#include "api/compute/eltwise_unary/rsqrt.h"
 #include "api/compute/eltwise_unary/typecast.h"
 #include "api/dataflow/dataflow_buffer.h"
 
@@ -43,6 +48,7 @@ void kernel_main() {
     constexpr uint32_t cb_x = get_compile_time_arg_val(8);
     constexpr bool X_FP32 = get_compile_time_arg_val(9) == 1;
     constexpr bool OUT_BF16 = get_compile_time_arg_val(10) == 1;
+    constexpr bool COEF_RSQRT = get_compile_time_arg_val(11) == 1;
     constexpr auto FP32 = static_cast<uint32_t>(DataFormat::Float32);
     constexpr auto BF16 = static_cast<uint32_t>(DataFormat::Float16_b);
     constexpr uint32_t K = N + HAS_X;
@@ -89,6 +95,10 @@ void kernel_main() {
         for (uint32_t j = 0; j < J; ++j) {
             tile_regs_acquire();
             copy_tile(cb_coef, j * K, COEF);
+            if constexpr (COEF_RSQRT) {
+                rsqrt_tile_init();
+                rsqrt_tile(COEF);
+            }
             if constexpr (HAS_X && !X_FP32) {
                 // the bf16 term goes through SrcA: switch the unpacker to its format, and back after the term
                 reconfig_data_format_srca(cb_coef, cb_x);
@@ -106,6 +116,11 @@ void kernel_main() {
             addcmul_tile_init();
             for (uint32_t k = 1; k < K; ++k) {
                 copy_tile(cb_coef, j * K + k, COEF);
+                if constexpr (COEF_RSQRT) {
+                    rsqrt_tile_init();
+                    rsqrt_tile(COEF);
+                    addcmul_tile_init();
+                }
                 for (uint32_t b = 0; b < BLOCK; ++b) {
                     copy_term(k, b);
                     addcmul_tile<DataFormat::Float32>(b, IN, COEF, b, ONE);

@@ -58,6 +58,14 @@ def initial_pre_mix(mesh_device, config, tokens: int) -> ttnn.Tensor:
 # dim 1 and the same ``ttnn.sum`` over that dim: ~11 us). Prefill shapes keep the all-reduce.
 _TP_SUM = os.environ.get("V41_MHC_TP_SUM", "all_reduce")
 assert _TP_SUM in ("all_reduce", "gather"), _TP_SUM
+# the decode tile's projection: ``V41_MHC_PROJ_W=dram`` reads the projection weight from its
+# DRAM tensor (each K-split core reads its own blocks once: no L1 copy op a site; ``l1`` the copy as before, what the
+# prefill's one-split cores need) and ``V41_MHC_RSQRT=fused`` applies the rsqrt to the mix's coefficient tile inside
+# the stream mix (no ``ttnn.rsqrt`` op a site; ``op`` as before). Both bit for bit (tests/v41/test_v41_mhc_decode_ops.py).
+_PROJ_W = os.environ.get("V41_MHC_PROJ_W", "l1")
+assert _PROJ_W in ("l1", "dram"), _PROJ_W
+_RSQRT = os.environ.get("V41_MHC_RSQRT", "op")
+assert _RSQRT in ("op", "fused"), _RSQRT
 
 
 class _V41Site(TtMHCWrap):
@@ -146,8 +154,12 @@ _MAX_BLOCK_UNITS = 6  # units per block (a divisor of the stream width in tiles)
 _MIX_DEPTH = 4
 
 
-def _stream_mix(streams, n: int, coef_srcs, table, outputs: int, x=None, dtype=ttnn.float32) -> ttnn.Tensor:
+def _stream_mix(
+    streams, n: int, coef_srcs, table, outputs: int, x=None, dtype=ttnn.float32, coef_rsqrt: bool = False
+) -> ttnn.Tensor:
     """One fused op: ``out_j = sum_k coef[j][k] * in_k`` per token, fp32, ``in = [x?] + streams 0..n-1``.
+    ``coef_rsqrt``: every coefficient is ``rsqrt`` of the source's value (the SFPU's, as ``ttnn.rsqrt`` on an fp32
+    tile: bit for bit).
 
     ``streams`` [1, 1, T, n*C] fp32, ``x`` optional [1, 1, T, C] fp32 or bf16 (exact in fp32), ``coef_srcs`` one or
     two [1, 1, T, <=32] fp32 tensors and ``table[j][k] = (src, col)``: term k of output j is weighted by column
@@ -259,7 +271,7 @@ def _stream_mix(streams, n: int, coef_srcs, table, outputs: int, x=None, dtype=t
             kernel_source=f"{_KERNEL_DIR}/mhc_mix_compute.cpp",
             core_ranges=cores,
             compile_time_args=[_CB_IN, _CB_COEF, _CB_OUT, ct, n, outputs, block, int(x is not None), cb_x, int(x_fp32)]
-            + [int(dtype == ttnn.bfloat16)],
+            + [int(dtype == ttnn.bfloat16), int(coef_rsqrt)],
             runtime_args=compute_args,
             config=compute_config,
         ),
@@ -429,16 +441,29 @@ def fused_project(x, fn_T, mix_col: int, width: int, eps_part: float) -> ttnn.Te
     return out
 
 
-def fused_rms_project(x, fn_T, mix_col: int, norm_eps: float, tp_factor: int = 1, tp_sum=None) -> ttnn.Tensor:
+def fused_rms_project(
+    x, fn_T, mix_col: int, norm_eps: float, tp_factor: int = 1, tp_sum=None, weight_in_l1=None, fused_rsqrt=None
+) -> ttnn.Tensor:
     """``tt_mhc._project`` in one pass over the streams and one TP reduction: [1, 1, T, K] -> [1, 1, T, 32] with
     ``RMSNorm(x) @ fn`` in columns < ``mix_col`` (``tp_sum`` sums the partial mixes and mean of squares together,
-    replicated on every TP chip). Columns >= ``mix_col`` are scratch the Sinkhorn op does not read."""
-    # every core reads all of the (small) weight: from L1, not 80x from DRAM
-    w = ttnn.to_memory_config(fn_T, ttnn.L1_MEMORY_CONFIG)
-    r = fused_project(x, w, mix_col, x.shape[-1] * tp_factor, norm_eps / tp_factor)
-    ttnn.deallocate(w)
+    replicated on every TP chip). Columns >= ``mix_col`` are scratch the Sinkhorn op does not read.
+    ``weight_in_l1`` / ``fused_rsqrt`` (None: ``V41_MHC_PROJ_W`` / ``V41_MHC_RSQRT``): the module comment."""
+    weight_in_l1 = _PROJ_W == "l1" if weight_in_l1 is None else weight_in_l1
+    fused_rsqrt = _RSQRT == "fused" if fused_rsqrt is None else fused_rsqrt
+    grid = x.device().compute_with_storage_grid_size()
+    if weight_in_l1 or x.shape[-2] // 32 >= grid.x * grid.y:
+        # every core reads all of the (small) weight (the prefill's one split): from L1, not 80x from DRAM
+        w = ttnn.to_memory_config(fn_T, ttnn.L1_MEMORY_CONFIG)
+        r = fused_project(x, w, mix_col, x.shape[-1] * tp_factor, norm_eps / tp_factor)
+        ttnn.deallocate(w)
+    else:
+        # the decode tile: K split over the cores, each reading its own blocks of the weight once (from DRAM)
+        r = fused_project(x, fn_T, mix_col, x.shape[-1] * tp_factor, norm_eps / tp_factor)
     if tp_sum is not None:
         r = tp_sum(r)
+    if fused_rsqrt:
+        # every column times rsqrt of column mix_col of r (rsqrt(mean(x^2) + eps)), per token, in the mix
+        return _stream_mix(r, 1, [r], [[(0, mix_col)]], outputs=1, coef_rsqrt=True)
     rs = ttnn.rsqrt(r)  # column mix_col: rsqrt(mean(x^2) + eps); the other columns are scratch
     # every column times column mix_col of rs, per token: no column slice (untilize + slice + tilize)
     return _stream_mix(r, 1, [rs], [[(0, mix_col)]], outputs=1)
