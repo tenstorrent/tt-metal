@@ -46,6 +46,7 @@ index selection is per live row either way (``V41_DECODE_C1_INDEX``'s pages are 
 
 from __future__ import annotations
 
+import os
 import time
 
 import torch
@@ -55,8 +56,8 @@ from models.demos.deepseek_v3_d_p.tt.mhc.tt_mhc import mhc_expand
 from models.demos.deepseek_v3_d_p.tt.v41.attention import TOPK_ALIGN, TtV41Attention
 from models.demos.deepseek_v3_d_p.tt.v41.batch_decode import ROWS, DeviceSampler, TtV41BatchDecoder
 from models.demos.deepseek_v3_d_p.tt.v41.head_layout import o_heads, q_heads
-from models.demos.deepseek_v3_d_p.tt.v41.indexer import DecodePins, TtV41Indexer
-from models.demos.deepseek_v3_d_p.tt.v41.indexer_kernels import range_scores
+from models.demos.deepseek_v3_d_p.tt.v41.indexer import CandidateBlocks, DecodePins, TtV41Indexer, _gather_cols
+from models.demos.deepseek_v3_d_p.tt.v41.indexer_kernels import range_scores, split_geometry
 from models.demos.deepseek_v3_d_p.tt.v41.layout import TP_AXIS
 from models.demos.deepseek_v3_d_p.tt.v41.moe_c1 import C1_SELECT_ROWS, C1Moe
 from models.demos.deepseek_v3_d_p.tt.v41.pool import RING, scatter_rows
@@ -106,6 +107,12 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         self.drafts: dict[int, list[list[int]]] = {}  # slot -> per accept outcome a: the five drafts after it
         self.draft_layout: tuple | None = None  # (user, blocks) of the fused draft call this step, or None
         self.draft_rows: tuple | None = None  # the live slot's tile rows this step (``block_rows``)
+        # the merged index selection of the live rows (V41_VR_MERGE=rows, the default; ``row`` is the per-row chain
+        # ): per (tile rows, split rows R) the replicated index page that stacks the rows'
+        # pins, built before any capture (``prepare_merge``; a constant allocated after a capture may be overwritten
+        # by its replay)
+        self.merge_rows = os.environ.get("V41_VR_MERGE", "rows") == "rows"
+        self._stack_idx: dict[tuple, ttnn.Tensor] = {}
 
     def attach_drafter(self, drafter, users: list[int] | None = None, max_k: int = 3) -> None:
         """Run ``drafter`` (a ``TtDSparkDrafter`` at this pool's ``ring_slots``) inside the steps with drafts; its
@@ -121,6 +128,27 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
                 except AssertionError:
                     pass
         drafter.prepare_fused(layouts)
+        self.prepare_merge(layouts)
+
+    def prepare_merge(self, layouts: list[tuple]) -> None:
+        """The stacked pin index pages of every live-row layout (``block_rows`` tuples) the merged selection may
+        see, for every split geometry of the pool's index sources: entry ``l * R + r`` is layout row ``l``'s tile
+        row (a replicated uint32 row-major constant; the merged path takes a layout only when its page exists)."""
+        if not self.merge_rows:
+            return
+        widths = {self.pool.slots[src].cap + 32 for src in self.pool.slots if src >= 0}
+        for rows in layouts:
+            if len(rows) < 2:
+                continue
+            for width in widths:
+                n_rows = split_geometry(width)[0]
+                key = (tuple(rows), n_rows)
+                if key in self._stack_idx:
+                    continue
+                idx = torch.tensor([row for row in rows for _ in range(n_rows)], dtype=torch.int32)
+                self._stack_idx[key] = self._replicated(
+                    idx.view(1, 1, 1, len(rows) * n_rows), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT
+                )
 
     def block_rows(self, u: int, k: int, one_slot: bool) -> tuple:
         """The tile rows of user ``u``'s block of ``1 + k`` tokens: its own row, then ``k`` rows. With the c1 MoE
@@ -606,20 +634,47 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         )
         q_rm, w_rm = indexer.decode_query(q, w)
         parts = {}
+        dense: list[tuple[int, ttnn.Tensor]] = []  # (tile row, its split-layout score) of the densely scored rows
         for row, u in self.live:
             mine = candidates[row] if candidates is not None else None
-            pin_r = ttnn.slice(pins.newest, [0, 0, 0, row], [1, 1, 1, row + 1])
             if in_blocks and mine.ids is not None:
+                pin_r = ttnn.slice(pins.newest, [0, 0, 0, row], [1, 1, 1, row + 1])
                 base = u * (cap + 32) // cfg.CANDIDATE_BLOCK_SIZE
                 parts[row] = indexer.select_user_in_blocks(
                     q_rm, w_rm, blocks_of, pin_r, mine.ids, row, cap, base, cfg.INDEX_TOPK
                 )
                 continue
-            score = range_scores(q_rm, w_rm, k, pins.newest, u, cap + 32, row=row)
-            topk, blocks = indexer.select_split(score, pin_r, cap + 32, cfg.INDEX_TOPK, mine)
-            if published is not None:
-                published[row] = blocks
-            parts[row] = topk
+            dense.append((row, range_scores(q_rm, w_rm, k, pins.newest, u, cap + 32, row=row)))
+        n_rows = split_geometry(cap + 32)[0]
+        stack_key = (tuple(row for row, _ in dense), n_rows)
+        if len(dense) > 1 and stack_key in self._stack_idx:
+            # the live rows' selections merged in one chain: the scores stacked along the
+            # rows, the pins gathered into one page, one select over all of them, the rows sliced apart
+            stacked = ttnn.concat([score for _, score in dense], dim=2)
+            idx = self._stack_idx[stack_key]
+            wide = pins.newest
+            if idx.shape[3] > wide.shape[3]:
+                wide = ttnn.concat([wide] * (-(-idx.shape[3] // wide.shape[3])), dim=3)
+            newest = _gather_cols(wide, idx)  # [1, 1, 1, L * R]
+            mine = candidates[dense[0][0]] if candidates is not None else None  # every row's is None here
+            topk_all, blocks_all = indexer.select_split_rows(
+                stacked, newest, len(dense), cap + 32, cfg.INDEX_TOPK, mine
+            )
+            for l, (row, _) in enumerate(dense):
+                parts[row] = ttnn.slice(topk_all, [0, 0, l, 0], [1, 1, l + 1, cfg.INDEX_TOPK])
+                if published is not None:
+                    ids = blocks_all.ids
+                    published[row] = CandidateBlocks(
+                        None if ids is None else ttnn.slice(ids, [0, 0, l, 0], [1, 1, l + 1, ids.shape[3]])
+                    )
+        else:
+            for row, score in dense:
+                mine = candidates[row] if candidates is not None else None
+                pin_r = ttnn.slice(pins.newest, [0, 0, 0, row], [1, 1, 1, row + 1])
+                topk, blocks = indexer.select_split(score, pin_r, cap + 32, cfg.INDEX_TOPK, mine)
+                if published is not None:
+                    published[row] = blocks
+                parts[row] = topk
         rows = [parts.get(i, self.sentinel_topk) for i in range(ROWS)]
         return ttnn.concat(rows, dim=2), published
 

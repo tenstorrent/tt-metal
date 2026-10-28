@@ -499,32 +499,43 @@ class TtV41Indexer(LightweightModule):
         ``((j // per_chunk) * R + r) * per_chunk + j % per_chunk``, R a power of two) -> [1, 1, 1, k] uint32
         row-major global ids in descending score (sentinel tail for -inf). Per row a top-k on its own core, then one
         top-k over the R x k_r picks' values."""
-        n_rows, width = rows.shape[2], rows.shape[3]
-        if n_rows == 1:  # one row: its top-k is the global one (slot 0 of row 0 is key 0)
+        return self._merge_split_rows(rows, 1, k, per_chunk)
+
+    def _merge_split_rows(self, rows, n_live: int, k: int, per_chunk: int):
+        """``_merge_split`` over ``n_live`` split layouts stacked along dim 2 (``rows`` [1, 1, L * R, Wr]: layout
+        ``l`` at rows ``l * R .. (l + 1) * R - 1``) in one chain of ops -> [1, 1, L, k] uint32 row-major, row ``l``
+        the global top-k of layout ``l`` (the verify rows of speculative decode merge their selections together: the chain's op count does not grow with the rows)."""
+        total, width = rows.shape[2], rows.shape[3]
+        n_rows = total // n_live
+        assert n_rows * n_live == total, (total, n_live)
+        if n_rows == 1:  # one row a layout: its top-k is the global one (slot 0 of row 0 is key 0)
             return _topk(rows, k)
         kr = min(k, width)
         assert kr >= TOPK_MIN and width >= _round_up(kr, TOPK_ALIGN), (tuple(rows.shape), k)
-        local = _topk(rows, kr)  # [1, 1, R, kr] row-major
+        local = _topk(rows, kr)  # [1, 1, L * R, kr] row-major
         local_t = ttnn.to_layout(local, ttnn.TILE_LAYOUT)
         safe = _min(local_t, width - 1)
         safe_rm = ttnn.to_layout(safe, ttnn.ROW_MAJOR_LAYOUT)
-        values = ttnn.to_layout(_gather_cols(rows, safe_rm), ttnn.TILE_LAYOUT)  # [1, 1, R, kr] bf16
+        values = ttnn.to_layout(_gather_cols(rows, safe_rm), ttnn.TILE_LAYOUT)  # [1, 1, L * R, kr] bf16
         picked = ttnn.typecast(_is_sentinel(local_t), ttnn.bfloat16)
         values = ttnn.where(picked, float("-inf"), values)  # a sentinel pick's value is -inf whatever the column
         # the global id of (r, j): a shift and a mask per power of two
         shift, row_shift = per_chunk.bit_length() - 1, n_rows.bit_length() - 1
         row_ids = self._split_const(
-            "row",
-            (n_rows, kr),
-            lambda: torch.arange(n_rows, dtype=torch.int32).view(1, 1, n_rows, 1).expand(1, 1, n_rows, kr).contiguous(),
+            f"row{n_rows}",
+            (total, kr),
+            lambda: (torch.arange(total, dtype=torch.int32) % n_rows)
+            .view(1, 1, total, 1)
+            .expand(1, 1, total, kr)
+            .contiguous(),
         )
         slot = ttnn.bitwise_right_shift(safe, shift)
         within = ttnn.bitwise_and(safe, per_chunk - 1)
         chunk = ttnn.add(ttnn.bitwise_left_shift(slot, row_shift), row_ids)
         glob = _keep_sentinel(ttnn.add(ttnn.bitwise_left_shift(chunk, shift), within), local_t)
-        flat_values = ttnn.reshape(ttnn.to_layout(values, ttnn.ROW_MAJOR_LAYOUT), [1, 1, 1, n_rows * kr])
-        flat_ids = ttnn.reshape(ttnn.to_layout(glob, ttnn.ROW_MAJOR_LAYOUT), [1, 1, 1, n_rows * kr])
-        pos = _topk(flat_values, k)  # [1, 1, 1, k]
+        flat_values = ttnn.reshape(ttnn.to_layout(values, ttnn.ROW_MAJOR_LAYOUT), [1, 1, n_live, n_rows * kr])
+        flat_ids = ttnn.reshape(ttnn.to_layout(glob, ttnn.ROW_MAJOR_LAYOUT), [1, 1, n_live, n_rows * kr])
+        pos = _topk(flat_values, k)  # [1, 1, L, k]
         pos_t = ttnn.to_layout(pos, ttnn.TILE_LAYOUT)
         pos_safe = ttnn.to_layout(_min(pos_t, n_rows * kr - 1), ttnn.ROW_MAJOR_LAYOUT)
         chosen = ttnn.to_layout(_gather_cols(flat_ids, pos_safe), ttnn.TILE_LAYOUT)
@@ -536,9 +547,17 @@ class TtV41Indexer(LightweightModule):
         lands past every row: no pin)."""
         if n_rows == 1:
             return newest  # the user's own one-entry page
-        shift, row_shift = per_chunk.bit_length() - 1, n_rows.bit_length() - 1
         n_pins = max(n_rows, 2 * PIN_PAGE)  # a page of exactly PIN_PAGE entries would read as a query_first page
-        pins = ttnn.to_layout(ttnn.concat([newest] * n_pins, dim=3), ttnn.TILE_LAYOUT)  # [1, 1, 1, P]
+        return self._split_pins_page(ttnn.concat([newest] * n_pins, dim=3), n_rows, per_chunk)
+
+    def _split_pins_page(self, newest, n_rows: int, per_chunk: int):
+        """``_split_pins`` from a page ``newest`` [1, 1, 1, P] uint32 row-major that already holds every split row's
+        user newest key (P a multiple of R, not PIN_PAGE: stacked layouts, each row ``l * R + r`` its layout's
+        newest) -> the per-row pin page [1, 1, 1, P]."""
+        n_pins = newest.shape[3]
+        assert n_pins % n_rows == 0 and n_pins != PIN_PAGE, (n_pins, n_rows)
+        shift, row_shift = per_chunk.bit_length() - 1, n_rows.bit_length() - 1
+        pins = ttnn.to_layout(newest, ttnn.TILE_LAYOUT)  # [1, 1, 1, P]
         chunk = ttnn.bitwise_right_shift(pins, shift)
         row = ttnn.bitwise_and(chunk, n_rows - 1)
         local = ttnn.add(
@@ -546,10 +565,40 @@ class TtV41Indexer(LightweightModule):
             ttnn.bitwise_and(pins, per_chunk - 1),
         )
         rows = self._split_const(
-            "rowpin", (1, n_pins), lambda: torch.arange(n_pins, dtype=torch.int32).view(1, 1, 1, n_pins)
+            f"rowpin{n_rows}",
+            (1, n_pins),
+            lambda: (torch.arange(n_pins, dtype=torch.int32) % n_rows).view(1, 1, 1, n_pins),
         )
         other = _u32(ttnn.ne(row, rows))  # 1 where the row is not the newest key's
         return ttnn.to_layout(ttnn.bitwise_or(local, ttnn.multiply(other, SENTINEL)), ttnn.ROW_MAJOR_LAYOUT)
+
+    def select_split_rows(self, stacked, newest, n_live: int, width: int, k: int, candidates=None):
+        """``select_split`` over ``n_live`` users' (or verify rows') split layouts stacked along dim 2 (``stacked``
+        [1, 1, L * R, Wr] bf16 row-major; ``newest`` [1, 1, 1, L * R] uint32 row-major, entry ``l * R + r`` layout
+        ``l``'s newest key) in one chain of ops -> (top-k rows [1, 1, L, k], the published blocks [1, 1, L, kb] of
+        the candidate source as one ``CandidateBlocks`` or None); row ``l`` of each is layout ``l``'s."""
+        n_rows = stacked.shape[2] // n_live
+        assert newest.shape[3] != PIN_PAGE, "a page of PIN_PAGE entries would read as a query_first page"
+        assert n_rows * n_live == stacked.shape[2] and newest.shape[3] == stacked.shape[2], (
+            tuple(stacked.shape),
+            tuple(newest.shape),
+            n_live,
+        )
+        chunk_cols = RANGE_CHUNK * 32
+        block = self.config.CANDIDATE_BLOCK_SIZE
+        published = None
+        if self.is_candidate_source:
+            kb = self.config.CANDIDATE_TOPK_BLOCKS
+            if width // block > kb:
+                pins = newest if n_rows == 1 else self._split_pins_page(newest, n_rows, chunk_cols)
+                maxima = segment_max(stacked, block, pins, 0, 0xFFFFFFFF)  # [1, 1, L * R, Wr / block]
+                assert maxima.shape[3] == stacked.shape[3] // block, (tuple(maxima.shape), tuple(stacked.shape))
+                published = CandidateBlocks(self._merge_split_rows(maxima, n_live, kb, chunk_cols // block))
+            else:
+                published = CandidateBlocks(None)
+        elif self.uses_candidates:
+            assert isinstance(candidates, CandidateBlocks) and candidates.ids is None, "published blocks: in blocks"
+        return self._merge_split_rows(stacked, n_live, k, chunk_cols), published
 
     def select_split(self, rows, newest, width: int, k: int, candidates: CandidateBlocks | None = None):
         """B11-B12 on one user's score in the split layout (``range_scores`` of ``width`` columns) -> (top-k rows

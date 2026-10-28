@@ -899,3 +899,101 @@ def test_v41_range_scores(mesh_device, device_params, split):
             ttnn.synchronize_device(mesh_device)
             print(f"{what} at {cap} keys: {(time.perf_counter() - t0) / 10 * 1e3:.3f} ms a call (with host)")
     print(f"range_scores overlaps with the dense path: {overlaps}")
+
+
+@pytest.mark.parametrize("split", [1, 32], ids=lambda r: f"rows{r}")
+@pytest.mark.parametrize("mesh_device, device_params", KERNEL_MESHES, indirect=True)
+def test_v41_select_split_rows(mesh_device, device_params, split):
+    """``TtV41Indexer.select_split_rows`` (the live rows' selections merged in one chain) on
+    four tile rows' split-layout scores stacked along the rows, against ``select_split`` row by row: the top-k ids
+    and the candidate source's published blocks bit-equal, for the candidate source and for a plain consumer, in
+    the one-row and the 32-row layouts; the rows at distinct positions (one below INDEX_TOPK, one idle). Then the
+    per-row chain and the merged one are timed over four rows."""
+    cfg, rows = C, 32
+    cap = 20480
+    width = cap + 32
+    users = 4
+    g = torch.Generator().manual_seed(135)
+    newest = torch.full((rows,), -1, dtype=torch.int64)
+    newest[:users] = torch.tensor([19999, 299, 4095, -1])
+    tile_rows = [0, 4, 5, 6]  # a verify block's rows under the c1 MoE: the user's own, then the rows past the users'
+    with phase("inputs", what="FP4-like query / index-K, head weights"):
+        q = _fp4_like((rows, 32, 128), g)
+        w = (torch.randn(rows, 32, generator=g) * 0.05).to(torch.bfloat16)
+        k = _fp4_like((users * width, 128), g)
+        k.view(users, width, 128)[:, cap:] = 0
+        rep = ttnn.ReplicateTensorToMesh(mesh_device)
+        dev_q = ttnn.from_torch(
+            q.reshape(1, 1, rows, -1), device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep
+        )
+        dev_w = ttnn.from_torch(
+            w.reshape(1, 1, rows, 32), device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=rep
+        )
+        dev_k = ttnn.from_torch(
+            k.reshape(users, 1, width, 128), device=mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rep
+        )
+        # the tile's pin page: row t's newest (the verify rows read their user's keys with their own pin entry)
+        page = torch.full((rows,), -1, dtype=torch.int64)
+        for u, t in enumerate(tile_rows):
+            page[t] = newest[u]
+        dev_pin = _replicated(mesh_device, page.view(1, 1, 1, rows).to(torch.int32), ttnn.uint32)
+    weights = {
+        "wq_b": torch.zeros(cfg.INDEX_N_HEADS * cfg.INDEX_HEAD_DIM, cfg.Q_LORA_RANK),
+        "weights_proj": torch.zeros(cfg.INDEX_N_HEADS, cfg.EMB_SIZE),
+    }
+    source = TtV41Indexer(mesh_device, cfg, cfg.CANDIDATE_SOURCE_LAYER, weights)
+    consumer = TtV41Indexer(mesh_device, cfg, 24, weights)
+    topk = cfg.INDEX_TOPK
+    with phase("scores", what="range_scores of the four rows (user u's keys, tile row t's query and pin)"):
+        scores = [range_scores(dev_q, dev_w, dev_k, dev_pin, u, width, rows=split, row=t) for u, t in enumerate(tile_rows)]
+        n_rows = scores[0].shape[2]
+        assert n_rows == split, (n_rows, split)
+        stacked = ttnn.concat(scores, dim=2)
+        idx = _replicated(
+            mesh_device,
+            torch.tensor([t for t in tile_rows for _ in range(n_rows)], dtype=torch.int32).view(1, 1, 1, -1),
+            ttnn.uint32,
+        )
+        wide = ttnn.concat([dev_pin] * (-(-idx.shape[3] // rows)), dim=3)
+        newest_page = ttnn.gather(wide, -1, idx)
+        got = [int(v) for v in ttnn.to_torch(ttnn.get_device_tensors(newest_page)[0])[0, 0, 0].tolist()]
+        want = [int(page[t]) & 0xFFFFFFFF for t in tile_rows for _ in range(n_rows)]
+        assert got == want, (got[:8], want[:8])
+    for name, indexer, cand in (("source", source, None), ("consumer", consumer, CandidateBlocks(None))):
+        with phase(f"{name}-merged", what="select_split_rows over the stacked rows"):
+            merged, published = indexer.select_split_rows(stacked, newest_page, users, width, topk, cand)
+            assert list(merged.shape) == [1, 1, users, topk], tuple(merged.shape)
+            merged_t = _chip0(merged)
+            blocks_t = None if published is None or published.ids is None else _chip0(published.ids)
+        for u, t in enumerate(tile_rows):
+            with phase(f"{name}-row{u}", what="select_split of the row alone"):
+                pin_t = ttnn.slice(dev_pin, [0, 0, 0, t], [1, 1, 1, t + 1])
+                one, pub = indexer.select_split(scores[u], pin_t, width, topk, cand)
+                one_t = _chip0(one)[0]
+            assert torch.equal(merged_t[u], one_t), f"{name}: row {u}'s top-k differs at {(merged_t[u] != one_t).nonzero()[:8].flatten().tolist()}"
+            if blocks_t is not None:
+                pub_t = _chip0(pub.ids)[0]
+                assert torch.equal(blocks_t[u], pub_t), f"{name}: row {u}'s blocks differ"
+            n_valid = len(_rows(one_t.view(1, -1))[0])
+            print(f"select_split_rows {name} row {u} (newest {int(newest[u])}): {n_valid} picks, bit-equal to the row's own")
+    with phase("timing", what="the per-row chain against the merged one, four rows (with the host's dispatch)"):
+        pins = [ttnn.slice(dev_pin, [0, 0, 0, t], [1, 1, 1, t + 1]) for t in tile_rows]
+        for what, fn in (
+            ("select_split x 4 (source)", lambda: [source.select_split(s, p, width, topk) for s, p in zip(scores, pins)]),
+            ("select_split_rows (source)", lambda: source.select_split_rows(stacked, newest_page, users, width, topk)),
+            (
+                "select_split x 4 (plain)",
+                lambda: [consumer.select_split(s, p, width, topk, CandidateBlocks(None)) for s, p in zip(scores, pins)],
+            ),
+            (
+                "select_split_rows (plain)",
+                lambda: consumer.select_split_rows(stacked, newest_page, users, width, topk, CandidateBlocks(None)),
+            ),
+        ):
+            fn()
+            ttnn.synchronize_device(mesh_device)
+            t0 = time.perf_counter()
+            for _ in range(10):
+                fn()
+            ttnn.synchronize_device(mesh_device)
+            print(f"{what} at {cap} keys, {split} split rows: {(time.perf_counter() - t0) / 10 * 1e3:.3f} ms a call (with host)")
