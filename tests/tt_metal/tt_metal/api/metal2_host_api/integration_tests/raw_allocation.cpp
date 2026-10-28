@@ -310,6 +310,164 @@ KernelSpec DFBConsumer() {
     return kernel;
 }
 
+class RawAllocationDFBUpdates : public RawAllocationTest, public ::testing::WithParamInterface<AllocationMode> {
+protected:
+    void SetUp() override {
+        RawAllocationTest::SetUp();
+        if (HasFatalFailure() || IsSkipped()) {
+            return;
+        }
+        const NodeRangeSet nodes{NodeRange(NodeCoord{0, 0})};
+        fixture_entry_size = tt::round_up(1024, alignment);
+        fixture_offset = alignment;
+        fixture_reservation_bytes = 2 * fixture_entry_size + 2 * alignment;
+        const RawAllocationProperties properties =
+            GetParam() == AllocationMode::Lockstep
+                ? RawAllocationProperties{LockstepAllocationProperties{.per_bank_size = fixture_reservation_bytes}}
+                : RawAllocationProperties{RangeLockstepAllocationProperties{
+                      .banks_to_be_allocated_on = nodes, .per_bank_size = fixture_reservation_bytes}};
+        const TensorSpec report_spec = ReportSpec(nodes, alignment);
+        const TensorSpec output_spec = OutputSpec(1, fixture_entry_size);
+        ProgramSpec spec;
+        spec.name = "RawAllocationDFBUpdates";
+        spec.kernels = {DFBProducer(), DFBConsumer()};
+        spec.advanced_options.raw_allocation_parameters = {
+            {.unique_id = RawAllocationParamName{"arena"}, .properties = properties}};
+        spec.dataflow_buffers = {MakeMinimalDFB("fifo", fixture_entry_size, kDFBDepth)};
+        spec.dataflow_buffers[0].data_format_metadata = tt::DataFormat::Float16_b;
+        spec.dataflow_buffers[0].borrowed_from = RawAllocationParamName{"arena"};
+        spec.dataflow_buffers[0].advanced_options.borrowed_memory_offset = fixture_offset;
+        spec.tensor_parameters = {
+            {.unique_id = TensorParamName{"report"}, .spec = report_spec},
+            {.unique_id = TensorParamName{"output"}, .spec = output_spec}};
+        spec.work_units = {MakeMinimalWorkUnit("work", nodes, {"producer", "consumer"})};
+        fixture_workload.add_program(
+            distributed::MeshCoordinateRange(mesh_device->shape()), MakeProgramFromSpec(*mesh_device, spec));
+        fixture_initial.emplace(
+            std::visit([&](const auto& props) { return allocate_on_sram(*mesh_device, props); }, properties));
+        fixture_replacement.emplace(
+            std::visit([&](const auto& props) { return allocate_on_sram(*mesh_device, props); }, properties));
+        fixture_report.emplace(CreateSentinelTensor(*mesh_device, report_spec));
+        fixture_output.emplace(CreateSentinelTensor(*mesh_device, output_spec));
+        std::vector<uint32_t> sentinel(fixture_reservation_bytes / sizeof(uint32_t), kSentinel);
+        ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, NodeCoord{0, 0}, Base(*fixture_initial), sentinel));
+        ASSERT_TRUE(slow_dispatch::WriteToL1(*mesh_device, NodeCoord{0, 0}, Base(*fixture_replacement), sentinel));
+    }
+
+    void TearDown() override {
+        fixture_workload = distributed::MeshWorkload{};
+        fixture_output.reset();
+        fixture_report.reset();
+        fixture_replacement.reset();
+        fixture_initial.reset();
+        RawAllocationTest::TearDown();
+    }
+
+    static uint32_t Base(const RawAllocation& allocation) {
+        return std::visit(
+            [](const auto& layout) { return static_cast<uint32_t>(layout.addr); }, allocation.impl().layout);
+    }
+
+    Program& fixture_program() { return fixture_workload.get_programs().begin()->second; }
+
+    ProgramRunArgs Args(const RawAllocation& allocation, uint32_t seed) {
+        ProgramRunArgs args;
+        args.advanced_options.raw_allocation_args = {{RawAllocationParamName{"arena"}, std::cref(allocation)}};
+        args.tensor_args = {
+            {TensorParamName{"report"}, TensorArgument{*fixture_report}},
+            {TensorParamName{"output"}, TensorArgument{*fixture_output}}};
+        args.kernel_run_args = {
+            {.kernel = KernelSpecName{"producer"},
+             .runtime_arg_values = MakeRuntimeArgsForSingleNode(NodeCoord{0, 0}, {{"dfb_seed", seed}})},
+            {.kernel = KernelSpecName{"consumer"},
+             .runtime_arg_values = MakeRuntimeArgsForSingleNode(NodeCoord{0, 0}, {{"output_page_start", 0u}})}};
+        return args;
+    }
+
+    void Enqueue() {
+        distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), fixture_workload, /*blocking=*/true);
+    }
+
+    std::vector<uint32_t> ReadTensor(const MeshTensor& tensor) {
+        return mesh_device->mesh_command_queue().enqueue_read_tensor(tensor).to_vector<uint32_t>();
+    }
+
+    std::vector<uint32_t> ReadReservation(const RawAllocation& allocation) {
+        return ReadArena(*mesh_device, NodeCoord{0, 0}, Base(allocation), fixture_reservation_bytes);
+    }
+
+    std::vector<uint32_t> ExpectedReport(uint32_t address) {
+        std::vector<uint32_t> expected(fixture_report->logical_shape().volume(), kSentinel);
+        expected[1] = address;
+        expected[2] = address;
+        return expected;
+    }
+
+    std::vector<uint32_t> ExpectedReservation(uint32_t seed) {
+        std::vector<uint32_t> expected(fixture_reservation_bytes / sizeof(uint32_t), kSentinel);
+        PutPattern(expected, fixture_offset, kDFBDepth * fixture_entry_size, seed);
+        return expected;
+    }
+
+    uint32_t fixture_entry_size = 0;
+    uint32_t fixture_offset = 0;
+    uint32_t fixture_reservation_bytes = 0;
+    std::optional<RawAllocation> fixture_initial;
+    std::optional<RawAllocation> fixture_replacement;
+    std::optional<MeshTensor> fixture_report;
+    std::optional<MeshTensor> fixture_output;
+    distributed::MeshWorkload fixture_workload;
+};
+
+TEST_P(RawAllocationDFBUpdates, FullResetRebindsDFB) {
+    // A full reset moves DFB transfers to the replacement reservation and preserves the first reservation.
+    SetProgramRunArgs(fixture_program(), Args(*fixture_initial, kDFBPattern));
+    Enqueue();
+    const uint32_t next_seed = kDFBPattern + kNodePatternStride;
+    SetProgramRunArgs(fixture_program(), Args(*fixture_replacement, next_seed));
+    Enqueue();
+    EXPECT_EQ(ReadTensor(*fixture_report), ExpectedReport(Base(*fixture_replacement) + fixture_offset));
+    EXPECT_EQ(ReadTensor(*fixture_output), Pattern(kDFBDepth * fixture_entry_size, next_seed));
+    EXPECT_EQ(ReadReservation(*fixture_replacement), ExpectedReservation(next_seed));
+    EXPECT_EQ(ReadReservation(*fixture_initial), ExpectedReservation(kDFBPattern));
+}
+
+TEST_P(RawAllocationDFBUpdates, PartialUpdateRebindsDFB) {
+    // An allocation-only update moves DFB transfers without supplying tensor or kernel arguments again.
+    SetProgramRunArgs(fixture_program(), Args(*fixture_initial, kDFBPattern));
+    Enqueue();
+    ProgramRunArgs update;
+    update.advanced_options.raw_allocation_args = {{RawAllocationParamName{"arena"}, std::cref(*fixture_replacement)}};
+    UpdateProgramRunArgs(fixture_program(), update);
+    Enqueue();
+    EXPECT_EQ(ReadTensor(*fixture_report), ExpectedReport(Base(*fixture_replacement) + fixture_offset));
+    EXPECT_EQ(ReadTensor(*fixture_output), Pattern(kDFBDepth * fixture_entry_size, kDFBPattern));
+    EXPECT_EQ(ReadReservation(*fixture_replacement), ExpectedReservation(kDFBPattern));
+    EXPECT_EQ(ReadReservation(*fixture_initial), ExpectedReservation(kDFBPattern));
+}
+
+TEST_P(RawAllocationDFBUpdates, PartialUpdateRetainsOmittedAllocation) {
+    // Updating kernel arguments keeps DFB transfers in the previously supplied reservation.
+    SetProgramRunArgs(fixture_program(), Args(*fixture_initial, kDFBPattern));
+    Enqueue();
+    const uint32_t next_seed = kDFBPattern + kNodePatternStride;
+    ProgramRunArgs update;
+    update.kernel_run_args = Args(*fixture_initial, next_seed).kernel_run_args;
+    UpdateProgramRunArgs(fixture_program(), update);
+    Enqueue();
+    EXPECT_EQ(ReadTensor(*fixture_report), ExpectedReport(Base(*fixture_initial) + fixture_offset));
+    EXPECT_EQ(ReadTensor(*fixture_output), Pattern(kDFBDepth * fixture_entry_size, next_seed));
+    EXPECT_EQ(ReadReservation(*fixture_initial), ExpectedReservation(next_seed));
+}
+
+INSTANTIATE_TEST_SUITE_P(
+    AllocationModes,
+    RawAllocationDFBUpdates,
+    ::testing::Values(AllocationMode::Lockstep, AllocationMode::RangeLockstep),
+    [](const ::testing::TestParamInfo<AllocationMode>& info) {
+        return info.param == AllocationMode::Lockstep ? "Lockstep" : "RangeLockstep";
+    });
+
 TEST_F(RawAllocationRangeLockstep, ScratchpadDefaultOffset) {
     // The scratchpad starts at the allocation’s base address, and its writes land there.
     const NodeRangeSet node_set{NodeRange(NodeCoord{0, 0})};
