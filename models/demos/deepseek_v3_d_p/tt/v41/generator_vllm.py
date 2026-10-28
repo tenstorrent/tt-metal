@@ -36,6 +36,9 @@ from models.demos.deepseek_v3_d_p.reference.deepseek_v41 import oracle as orc
 from models.demos.deepseek_v3_d_p.reference.deepseek_v41_flash_config import DeepSeekV41FlashConfig as C
 from models.demos.deepseek_v3_d_p.tests.v41.weight_cache import weight_cache_dir
 from models.demos.deepseek_v3_d_p.tt.v41.batch_decode import TtV41BatchDecoder
+from models.demos.deepseek_v3_d_p.tt.v41.dspark_drafter import TtDSparkDrafter
+from models.demos.deepseek_v3_d_p.tt.v41.dspark_weights import seeding_weights
+from models.demos.deepseek_v3_d_p.tt.v41.spec_verify import TtV41VerifyDecoder
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41ChunkTables, V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.decode import ROWS
 from models.demos.deepseek_v3_d_p.tt.v41.engram import V41EngramTable
@@ -49,6 +52,14 @@ from models.demos.deepseek_v3_d_p.tt.v41.transformer import (
 from models.demos.deepseek_v3_d_p.tt.v41.weights import load_layer, load_layer_dense, resolve_checkpoint
 
 WARMUP_PROMPT = 255  # tokens of the warm-up prompt (a full window; odd, so the ratio-2 carry path runs first)
+# TT_V41_SPEC=K (speculative decode): the decode step is the verify decoder (tt/v41/spec_verify)
+# with the DSpark drafter in its capture; a greedy request's step verifies K drafts and the round's accepted tokens
+# are handed to the plugin one per decode_forward call (the pool is ahead of the plugin's position by the buffered
+# tokens; the plugin's contract is unchanged, the calls that drain the buffer touch no device). Speculation needs
+# one live slot a mesh row and the drafter's rings hold one request's state (the last joined): the other slots'
+# rows run plain. TT_V41_SPEC_GREEDY_ALL=1 (a smoke's knob): every request is verified greedily whatever it asked.
+SPEC = "TT_V41_SPEC"
+SPEC_GREEDY_ALL = "TT_V41_SPEC_GREEDY_ALL"
 WARMUP_DECODE_STEPS = 8  # at most; done once the step is captured and replayed once
 PREFILL_SLOTS = "TT_V41_PREFILL_SLOTS"  # prefill states (default 2): requests prefill through them into the pool
 # Traced prefill: ``TT_V41_TRACE_PREFILL_LENGTHS`` lists prompt lengths (tokens, comma-separated) whose prefill is
@@ -178,6 +189,17 @@ class DeepseekV41ForCausalLM:
         # request key -> (its prefill state, the prefix so far); oldest first
         self.pending: OrderedDict[int, tuple[V41PrefillState, torch.Tensor, dict]] = OrderedDict()
         self.next_prefill_state = 0
+        # speculative decode (TT_V41_SPEC): the draft length, the drafter (attached to the verify decoder), the slot
+        # whose state the drafter's rings hold, per slot the next round's drafts and the round's tokens not yet
+        # handed to the plugin
+        self.spec_k = int(os.environ.get(SPEC, "0"))
+        self.spec_greedy_all = os.environ.get(SPEC_GREEDY_ALL, "0") == "1"
+        self.drafter: TtDSparkDrafter | None = None
+        self.ring_owner: int | None = None
+        self.next_drafts: dict[int, list[int]] = {}
+        self.buffered: dict[int, list[int]] = {}  # slot -> the round's tokens not yet handed to the plugin
+        self.handed: dict[int, int] = {}  # slot -> the token last handed (the plugin feeds it back)
+        self.spec_stats = {"rounds": 0, "accepted": 0, "emitted": 0, "buffered_steps": 0}
         self.warmed_up = False
         # traced prefill per (slot, prompt length): the fixed input buffers are shared by every trace of a model
         self.prefill_traces: dict[tuple[int, int], V41PrefillTrace] = {}
@@ -225,6 +247,7 @@ class DeepseekV41ForCausalLM:
         root = weight_cache_dir(spec, mesh_device.shape)
         engram, engram_hash = build_engram_modules(mesh_device, C, ckpt, layers, tokenizer)
         top = ckpt.read(["embed.weight", "norm.weight", "head.weight"])
+        spec_k = int(os.environ.get(SPEC, "0"))
         model = TtV41Transformer(
             mesh_device,
             C,
@@ -238,14 +261,40 @@ class DeepseekV41ForCausalLM:
             engram=engram,
             engram_hash=engram_hash,
             weight_cache_path=root,
+            dspark_weights=seeding_weights(ckpt, C) if spec_k else None,
         )
         sp = tuple(mesh_device.shape)[0]
         assert (
             max_batch_size % sp == 0
         ), f"max_num_seqs {max_batch_size}: the pool holds the same slots per mesh row ({sp})"
-        decoder = TtV41BatchDecoder(
+        decoder_cls = TtV41VerifyDecoder if spec_k else TtV41BatchDecoder
+        decoder = decoder_cls(
             model, root, users_per_rank=max_batch_size // sp, trace=True, sample_on_device=cls.SAMPLE_ON_DEVICE
         )
+        drafter = None
+        if spec_k:
+            from models.demos.deepseek_v3_d_p.tests.v41.weight_cache import WEIGHT_CACHE, routed_expert_dtype
+
+            assert 1 <= spec_k <= decoder.C1_ROWS - 1, f"{SPEC} {spec_k}: 1 to {decoder.C1_ROWS - 1} drafts"
+            t1, dram0 = time.time(), _dram_bytes(mesh_device)
+            drafter = TtDSparkDrafter(
+                mesh_device,
+                C,
+                ckpt,
+                model.embedding,
+                None,
+                WEIGHT_CACHE,
+                routed_expert_dtype(),
+                shared_head=model.head,
+                trace=True,
+                ring_slots=decoder.ring_slots,
+            )
+            decoder.attach_drafter(drafter, users=list(range(max_batch_size // sp)), max_k=spec_k)
+            decoder.draft_plain = True
+            logger.info(
+                f"DeepSeek-V4.1-Flash: DSpark drafter built in {time.time() - t1:.1f} s, "
+                f"{(_dram_bytes(mesh_device) - dram0) / 2**20:.0f} MB of DRAM a chip; K = {spec_k} drafts a round"
+            )
         prefill_slots = int(os.environ.get(PREFILL_SLOTS, 2))
         logger.info(
             f"DeepSeek-V4.1-Flash: {len(layers)} layers built in {time.time() - t0:.0f} s; max_seq_len {max_seq} "
@@ -253,6 +302,7 @@ class DeepseekV41ForCausalLM:
             f"prefill states, mesh {tuple(mesh_device.shape)}"
         )
         gen = cls(mesh_device, model, decoder, tokenizer, max_batch_size, prefill_slots)
+        gen.drafter = drafter
         gen.weight_cache_root = Path(root)
         gen._unswap("after the build")  # the layers' weight files pushed the tables into swap (TT_V41_UNSWAP)
         return gen
@@ -416,6 +466,14 @@ class DeepseekV41ForCausalLM:
         slot = self._slot_for_prefill(key)
         t0 = time.time()
         self.decoder.join(slot, prompt[: state.start], state)
+        if self.drafter is not None:
+            # the drafter's rings take this request's seeding (one set of rings: the last joined request speculates)
+            assert state.dspark_rings is not None, "the prefill did not seed the drafter's rings"
+            self.drafter.load_rings_from_device(state.dspark_rings, start=state.start)
+            self.ring_owner = slot
+            self.next_drafts.pop(slot, None)
+            self.buffered.pop(slot, None)
+            self.handed.pop(slot, None)
         logger.info(
             f"DeepSeek-V4.1-Flash: request of {prompt.numel()} tokens joined slot {slot} in {time.time() - t0:.3f} s "
             f"({self.decoder.last_join.get('mode')} width {self.decoder.last_join.get('width')})"
@@ -456,6 +514,8 @@ class DeepseekV41ForCausalLM:
             out = torch.zeros(tokens.shape[0], dtype=torch.int32)
         else:
             out = torch.zeros(tokens.shape[0], 1, self.config.VOCAB_SIZE, dtype=torch.float32)
+        if self.drafter is not None:
+            return self._decode_forward_spec(tokens, positions, page_table, params, out)
         step, rows, sampling = {}, {}, {}
         for i in range(tokens.shape[0]):
             if int(page_table[i, 0]) == 0:
@@ -483,6 +543,64 @@ class DeepseekV41ForCausalLM:
                 out[i, 0] = result[slot]
         last = self.decoder.last
         logger.debug(f"DeepSeek-V4.1-Flash: decode step of {len(step)} rows in {time.time() - t0:.3f} s {last}")
+        return out
+
+    def _decode_forward_spec(self, tokens, positions, page_table, params, out) -> torch.Tensor:
+        """``decode_forward`` under ``TT_V41_SPEC``: the verify decoder's round for the slot whose rows the
+        drafter holds (greedy, or every slot under ``TT_V41_SPEC_GREEDY_ALL``), plain rows for the others; a slot
+        with buffered tokens from its last round hands the next one over without a device step."""
+        assert params is not None, "speculative decode samples on device"
+        blocks, rows, sampling = {}, {}, {}
+        t0 = time.time()
+        for i in range(tokens.shape[0]):
+            if int(page_table[i, 0]) == 0:
+                continue
+            key = self._request_key(page_table, i)
+            if key in self.pending:
+                self._join_pending(key)
+            slot = self._slot_for_decode(key)
+            token, p = int(tokens[i, 0]), int(positions[i])
+            buffered = self.buffered.get(slot)
+            if buffered:
+                # the plugin feeds back the token we handed it; the pool processed it in the last round and the
+                # next of the round's tokens follows without a step
+                assert (
+                    token == self.handed[slot]
+                ), f"slot {slot}: the plugin's token {token}, handed {self.handed[slot]}"
+                out[i] = self.handed[slot] = buffered.pop(0)
+                self.spec_stats["buffered_steps"] += 1
+                continue
+            assert p == self.decoder.position(
+                slot
+            ), f"row {i}: vLLM position {p}, slot {slot} at {self.decoder.position(slot)}"
+            temperature = float(params.temperature[i])
+            greedy = temperature <= 0 or self.spec_greedy_all
+            drafts = self.next_drafts.get(slot, []) if greedy and slot == self.ring_owner else []
+            blocks[slot] = [token] + drafts[: self.spec_k]
+            rows[slot] = i
+            sampling[slot] = (int(params.top_k[i]), float(params.top_p[i]), 0.0 if greedy else temperature)
+        if not blocks:
+            return out
+        result = self.decoder.decode(blocks, sampling)
+        for slot, i in rows.items():
+            block, argmax = blocks[slot], result[slot]
+            a, emitted = self.decoder.accept(block, argmax)
+            self.decoder.commit(slot, a)
+            out[i] = self.handed[slot] = emitted[0]
+            self.buffered[slot] = list(emitted[1:])
+            if slot in self.decoder.drafts:
+                self.next_drafts[slot] = self.decoder.drafts[slot][a][: self.spec_k]
+            else:
+                self.next_drafts.pop(slot, None)
+            if len(block) > 1:
+                self.spec_stats["rounds"] += 1
+                self.spec_stats["accepted"] += a
+                self.spec_stats["emitted"] += len(emitted)
+        last = self.decoder.last
+        logger.debug(
+            f"DeepSeek-V4.1-Flash: spec step of {len(blocks)} slots ({[len(b) for b in blocks.values()]} rows) in "
+            f"{time.time() - t0:.3f} s {last}; accepted {[len(self.buffered[s]) for s in blocks]} stats {self.spec_stats}"
+        )
         return out
 
     def read_decode_output(self, tt_out, async_read=False):
@@ -605,6 +723,10 @@ class DeepseekV41ForCausalLM:
         t0 = time.time()
         for slot in range(self.max_batch_size):
             self.decoder.join(slot, prompt, self.prefill_states[slot % len(self.prefill_states)])
+        if self.drafter is not None:  # the drafter's rings: slot 0's (its warm-up rounds, ``_warmup_spec``)
+            state = self.prefill_states[0]
+            self.drafter.load_rings_from_device(state.dspark_rings, start=state.start)
+            self.ring_owner = 0
         logger.info(f"DeepSeek-V4.1-Flash warm-up: {self.max_batch_size} slots joined in {time.time() - t0:.1f} s")
         _l1_probe(self.mesh_device, "after warm-up joins")
 
@@ -635,6 +757,11 @@ class DeepseekV41ForCausalLM:
             _l1_probe(self.mesh_device, f"after decode step {step} ({mode})")
             if self.decoder.capture is not None and replays >= 1:
                 break
+        if self.drafter is not None:
+            self._warmup_spec(prompt)
+            self.warmed_up = True
+            self._unswap("after the warm-up")
+            return
         assert self.decoder.capture is not None, "the decode step was not captured"
         if self.decoder.c1:
             # the one-live-row variant (V41_DECODE_C1_MOE=1): its own eager steps and capture, on slot 0
@@ -656,6 +783,46 @@ class DeepseekV41ForCausalLM:
             assert "c1" in self.decoder.captures, "the c1 decode step was not captured"
         self.warmed_up = True
         self._unswap("after the warm-up")
+
+    def _warmup_spec(self, prompt: torch.Tensor) -> None:
+        """The verify decoder's captures: the plain 32-slot step (``v:``) is captured by ``warmup_model_decode``'s
+        loop; here, per user index (the tile row a request's slot takes: the capture is per (user, rows), not per
+        rank), slot ``u``'s rounds at 1 .. K + 1 rows (``vd:``: the drafter in the graph), each variant run eagerly
+        twice, captured and replayed once, the drafts of each step feeding the next (every slot was joined from the
+        warm-up prompt, whose seeding the drafter's rings hold)."""
+        decoder, K = self.decoder, self.spec_k
+        assert any(k.startswith("v:") for k in decoder.captures), "the 32-slot step was not captured"
+        assert self.ring_owner == 0, f"the drafter's rings hold slot {self.ring_owner}, not slot 0"
+        users = self.max_batch_size // tuple(self.mesh_device.shape)[0]
+        for u in range(users):
+            self.ring_owner = u  # the same seeding in every slot
+            token, drafts = int(prompt[-1]), []
+            seen: dict[str, int] = {}
+            keys = [f"vd:1:{u}.{n}" for n in range(1, K + 2)]
+            for step in range(WARMUP_DECODE_STEPS * (K + 1)):
+                # grow the block only once the shorter variants replayed: 1 row, then 2, .. K + 1
+                want = 1 + min(len(drafts), K)
+                for n in range(1, want + 1):
+                    if seen.get(keys[n - 1], 0) < 1:
+                        want = n
+                        break
+                block = [token] + drafts[: want - 1]
+                t0 = time.time()
+                out = decoder.decode({u: block}, {u: (1, 0.0, 0.0)})
+                a, emitted = decoder.accept(block, out[u])
+                decoder.commit(u, a)
+                variant, mode = decoder.last.get("variant"), decoder.last.get("mode")
+                seen[variant] = seen.get(variant, 0) + (mode == "replay")
+                token, drafts = emitted[-1], decoder.drafts[u][a][:K]
+                logger.info(
+                    f"DeepSeek-V4.1-Flash warm-up: spec step {step} {variant} ({mode}) in {time.time() - t0:.2f} s "
+                    f"{decoder.last}; accepted {a}"
+                )
+                if all(seen.get(key, 0) >= 1 for key in keys):
+                    break
+            missing = [key for key in keys if seen.get(key, 0) < 1]
+            assert not missing, f"spec variants not captured and replayed: {missing}"
+        self.ring_owner = None  # the next joined request's
 
     def _warmup_prompt(self, n: int = WARMUP_PROMPT) -> torch.Tensor:
         """The first ``n`` tokens of the text the tests use (``oracle.text_tokens``, with this tokenizer), the text

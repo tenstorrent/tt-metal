@@ -102,6 +102,7 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         self.taps = None
         self.capture_taps: dict[str, ttnn.Tensor] = {}
         self.drafter = None  # ``attach_drafter``
+        self.draft_plain = False  # the drafter runs on a plain step too (one live slot a rank; ``blocks = 1``)
         self.drafts: dict[int, list[list[int]]] = {}  # slot -> per accept outcome a: the five drafts after it
         self.draft_layout: tuple | None = None  # (user, blocks) of the fused draft call this step, or None
 
@@ -115,22 +116,30 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
 
     # --- the step's layout ---------------------------------------------------------------------------------------
     def variant(self, tokens: dict) -> str:
-        """The capture key: the live rows' layout (rank, user, rows) of the step, and whether the drafter runs."""
-        parts = []
-        for slot, block in sorted(tokens.items()):
-            r, u = divmod(slot, self.users)
-            parts.append(f"{r}.{u}.{len(block)}")
-        return ("vd:" if self._fused_layout(tokens) else "v:") + ",".join(parts)
+        """The capture key: the live slots' count (one: the c1 MoE), the set of (user, rows) layouts over the ranks
+        (the graph is one program on every rank: a rank's live rows are its inputs, the sentinel elsewhere; the
+        user index and the row count are baked in) and whether the drafter runs."""
+        layouts = sorted({(slot % self.users, len(block)) for slot, block in tokens.items()})
+        parts = [f"{u}.{rows}" for u, rows in layouts]
+        return ("vd:" if self._fused_layout(tokens) else "v:") + f"{len(tokens)}:" + ",".join(parts)
 
     def _fused_layout(self, tokens: dict) -> tuple | None:
-        """(user, blocks) of the fused draft call for ``tokens``: every live slot has the same user index and
-        block length (the drafter's graph is one per rank), at least one draft; else None."""
+        """(user, blocks) of the fused draft call for ``tokens``: one live slot per live rank, every one at the same
+        user index and block length (the drafter's graph is one per rank); else None (no drafts proposed: a step
+        of several slots a rank, or of slots at different user indices, runs as plain or verify rows alone).
+        ``draft_plain``: a step of one token a slot proposes too (``blocks = 1``: the served round's first step)."""
         if self.drafter is None or not tokens:
             return None
+        ranks = [slot // self.users for slot in tokens]
+        if len(set(ranks)) != len(ranks):
+            assert all(len(block) == 1 for block in tokens.values()), "verify rows need one live slot a rank"
+            return None
         layouts = {(slot % self.users, len(block)) for slot, block in tokens.items()}
-        assert len(layouts) == 1, f"the fused draft call needs one (user, rows) layout on every live rank: {layouts}"
+        if len(layouts) != 1:
+            assert all(len(block) == 1 for block in tokens.values()), f"one (user, rows) layout a step: {layouts}"
+            return None
         ((user, rows),) = layouts
-        return (user, rows) if rows > 1 else None
+        return (user, rows) if rows > 1 or self.draft_plain else None
 
     def join(self, slot: int, tokens: torch.Tensor, state) -> None:
         super().join(slot, tokens, state)
@@ -171,7 +180,7 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
                 first[r, row] = 1.0 if j == 0 else 0.0
                 rows.append(row)
             self.rows[slot] = rows
-            self.live += [(row, u) for row in rows]
+            self.live += [(row, u) for row in rows if (row, u) not in self.live]  # one selection per tile row
             committed = self.pending_carry.pop(slot, None)
             if committed is not None:
                 for src in carry_rows:
@@ -183,9 +192,18 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
             ints["c1sel"], ints["c1put"] = c1sel, c1put
         floats, rope, visible_cols = {}, {}, {}
         if self.sample_on_device:
+            # every row the argmax (greedy drafts need greedy verification); a slot of one token with sampling
+            # parameters (``sampling``: slot -> (k, p, temperature), temperature 0 greedy) samples as the batched
+            # step does
             ints["k"] = torch.ones(sp, ROWS, dtype=torch.int32)
             floats["p"] = torch.zeros(sp, ROWS, dtype=torch.float32)
             floats["temp"] = torch.ones(sp, ROWS, dtype=torch.float32)
+            for slot, (sk, sp_, st) in (sampling or {}).items():
+                if slot not in tokens or len(tokens[slot]) > 1 or st <= 0:
+                    continue
+                r, u = divmod(slot, users)
+                ints["k"][r, u] = max(1, min(int(sk), 32)) if sk > 0 else 32
+                floats["p"][r, u], floats["temp"][r, u] = float(sp_), 1.0 / float(st)
         rope["rope0"] = self.rope_tables.rows(False, positions)
         rope["ropec"] = self.rope_tables.rows(True, positions)
         rope["ropeg"] = self.rope_tables.rows(True, positions // 2 * 2)
@@ -269,9 +287,17 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
         return inputs
 
     # --- one step ------------------------------------------------------------------------------------------------
-    def decode(self, tokens: dict[int, list[int]], sampling: dict | None = None) -> dict[int, list[int]]:
+    def decode(self, tokens: dict, sampling: dict | None = None) -> dict:
         """``tokens``: slot -> its block (the committed next token, then its drafts) -> slot -> the argmax of each
-        of its rows. The slots do not advance: ``commit`` does."""
+        of its rows. The slots do not advance: ``commit`` does. A slot given one token as an int (the batched
+        decoder's contract: the generator's warm-up) gets its argmax back as an int and advances by one."""
+        scalar = {slot for slot, block in tokens.items() if not isinstance(block, (list, tuple))}
+        if scalar:
+            tokens = {slot: ([int(block)] if slot in scalar else block) for slot, block in tokens.items()}
+            out = self.decode(tokens, sampling)
+            for slot in scalar:
+                self.commit(slot, 0)
+            return {slot: (v[0] if slot in scalar else v) for slot, v in out.items()}
         for slot, block in tokens.items():
             user = self.slots[slot]
             assert user.position + len(block) <= self.pool.max_seq_len, f"slot {slot} at {user.position}: full"
@@ -365,7 +391,7 @@ class TtV41VerifyDecoder(TtV41BatchDecoder):
                 ttnn.deallocate(dst_rows)
 
     def _forward(self, on_block, c1: bool = False):
-        c1 = self.c1
+        c1 = self.c1 and len(self.rows) == 1  # the c1 MoE: one live slot (its 1 + K rows)
         model = self.model
         self.inputs = dict(self.packer.unpack(self.buffers), engram=self.buffers.get("engram", {}))
         self.inputs["token"] = ttnn.reshape(self.inputs["token"], (1, 1, ROWS))
