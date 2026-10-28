@@ -642,6 +642,57 @@ tasks:
     - L.s56320
     - L.smoke
     - K.1
+- id: FIX.10
+  title: 'ENGRAM_TABLE=resident must coexist with the full model on the Galaxy host (runner thrashes: ~2 min a layer, SIGBUS)'
+  step: overseer_fix
+  role: overseer
+  precheck: false
+  deps:
+  - L.s56320
+  - K.1
+  gate:
+    cmd: BRINGUP_TASK=L.s56320 BRINGUP_RUNG=s56320 scripts/run_safe_pytest.sh --run-all models/demos/common/bringup/tests/test_ladder.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_contract.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_kv_layout.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_adapter_acks.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_contract.py
+      && BRINGUP_TASK=K.1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/deepseek_v41_flash_d_p/tests/bringup/contract/test_runner_smoke.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      host_transfers_per_layer: == 0
+      contract_checks_failed: == 0
+      acks_early: == 0
+      pcc_producer_kv_*: '>= limit'
+      smoke_runner_ok: == 1
+  device: true
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  - models/demos/deepseek_v41_flash_d_p/bringup/hooks.py
+  - models/demos/deepseek_v41_flash_d_p/tests/bringup/contract
+  - models/demos/deepseek_v41_flash_d_p/bringup/ledgers/tt
+  brief:
+    details: 'OWNER 2026-10-28 (the engram tables in host RAM are the owner''s choice for the Galaxy; the engram code is the
+      Galaxy''s for this and P.6). Evidence: K.1 runner smoke with the default ENGRAM_TABLE=resident (the runner, runner_case.py,
+      is not under pytest, so it builds both tables, 209 GB anonymous, MADV_HUGEPAGE) ran ~2 min a layer in the first forward
+      and died SIGBUS once (17:00 run) / was stopped at layer ~15 (18:39 run). py-spy: main thread in torch.cat inside moe_block/tt/se_engine3.py:1604-1607
+      upload -> flat_expert.py:316 _bank_sharded (the fused head''s per-layer weight upload, lazy at first use), ~59 cores
+      of user time; the process read 496 GB from disk in 30 min; RSS 218 GB; swap 7.8 of 8 GB full; /proc/vmstat compact_stall
+      611k, compact_fail 549k, thp_fault_fallback 147k. Host: 566 GB RAM, tt_cache 285 GB, checkpoint 476 GB. The same smoke
+      with DS41_ENGRAM_TABLE=random PASSES in 968 s (19:12 run), FIX.7''s in ~6 min of runner time. Find the cause (page-cache
+      eviction of the weight cache while it streams, THP compaction from MADV_HUGEPAGE on 209 GB, thread oversubscription
+      between numba''s pool, torch''s OpenMP and the gather pools, or swap) with measurements, and fix it at the cause so
+      that resident mode costs no load or serving time on this host: e.g. build the tables after the weights are on the device,
+      release host copies the model no longer needs, no MADV_HUGEPAGE if compaction is the cost, cap or release numba / gather
+      threads after the build. Rows stay bit-identical (tests/test_engram_bfp8.py, tests/test_engram_table_modes.py). Report:
+      model load time and K.1 runner smoke time, resident vs random; peak RSS, disk read, swap. Note: the Galaxy spec''s owner
+      rules still say ''never hold the 203 GB of tables in host RAM'' and ''Host RAM is shared (503 GB)'': the overseer raises
+      the spec wording with the owner; do not edit the spec.'
+    gate_tasks:
+    - L.s56320
+    - K.1
 - id: P.6
   title: 'ENGRAM_ASYNC: engram rows looked up and uploaded off the critical path (layer 14 behind layers 1-13)'
   step: perf
@@ -649,28 +700,27 @@ tasks:
   device: true
   deps:
   - FIX.7
+  - FIX.10
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   brief:
-    details: 'OWNER DECISION 2026-10-28: overlap ALL engram host work with dispatch; nothing to decide, no stop for the
-      owner (the overseer accepts it as a clean win: gate PASS, accuracy unchanged, warm wall better, device not worse).
-      The owner assigned this engram task to the Galaxy session (the 2x2 session is told). Tables are resident in host RAM
-      as bfp8 (ENGRAM_TABLE=resident, ENGRAM_ROWS=bfp8; bringup/engram_handoff.md, ENGRAM_HOST_PATH.md 3e). Today
-      begin_chunk (tt/model.py:736) does both engram layers'' hash + lookup + pack + upload synchronously on the main
-      thread BEFORE embed and layer 0 are dispatched; the run is host-bound (wall ~544 vs device ~220 ms), so all of it
-      adds to the wall. Change: begin_chunk starts both layers'' jobs (hash, lookup, pack AND upload) on background
-      threads and returns at once; the main thread dispatches embed, layer 0, ... meanwhile; take_engram_rows(i) waits
-      for layer i''s job just before layer i''s engram op (layer 1 overlaps layer 0, layer 14 overlaps layers 0-13). The
-      upload must not serialize behind the queued layers: use a second command queue + an event that layer i''s engram
-      op waits on when the mesh has one (check how tt-d-gen opens the mesh), else issue it from the worker so it lands
-      before layer i is dispatched. Keep the GIL-holding parts of the job minimal (torch / numpy work releases it).
-      Rows bit-identical to today''s (tests/test_engram_bfp8.py, tests/test_engram_table_modes.py pass); deterministic.
-      Behind the setting ENGRAM_ASYNC in tt/settings.py (default on, ''off'' = today''s path). Measure with
-      DS41_ENGRAM_TABLE=resident (pytest defaults to random, F222). Report: per engram layer the ms of hash, lookup,
-      pack and upload (the upload / PCIe part was never measured) and how much of it is now hidden; the warm wall
-      before/after (F196 + F205) and the device time. Next-chunk prefetch (hides even the first wait) needs later
-      tokens, which begin_chunk(tokens, start) does not get under the serving contract: say in the report whether the
-      engine has them; do not change the contract.'
+    details: 'OWNER DECISION 2026-10-28: overlap ALL engram host work with dispatch; nothing to decide, no stop for the owner
+      (the overseer accepts it as a clean win: gate PASS, accuracy unchanged, warm wall better, device not worse). The owner
+      assigned this engram task to the Galaxy session (the 2x2 session is told). Tables are resident in host RAM as bfp8 (ENGRAM_TABLE=resident,
+      ENGRAM_ROWS=bfp8; bringup/engram_handoff.md, ENGRAM_HOST_PATH.md 3e). Today begin_chunk (tt/model.py:736) does both
+      engram layers'' hash + lookup + pack + upload synchronously on the main thread BEFORE embed and layer 0 are dispatched;
+      the run is host-bound (wall ~544 vs device ~220 ms), so all of it adds to the wall. Change: begin_chunk starts both
+      layers'' jobs (hash, lookup, pack AND upload) on background threads and returns at once; the main thread dispatches
+      embed, layer 0, ... meanwhile; take_engram_rows(i) waits for layer i''s job just before layer i''s engram op (layer
+      1 overlaps layer 0, layer 14 overlaps layers 0-13). The upload must not serialize behind the queued layers: use a second
+      command queue + an event that layer i''s engram op waits on when the mesh has one (check how tt-d-gen opens the mesh),
+      else issue it from the worker so it lands before layer i is dispatched. Keep the GIL-holding parts of the job minimal
+      (torch / numpy work releases it). Rows bit-identical to today''s (tests/test_engram_bfp8.py, tests/test_engram_table_modes.py
+      pass); deterministic. Behind the setting ENGRAM_ASYNC in tt/settings.py (default on, ''off'' = today''s path). Measure
+      with DS41_ENGRAM_TABLE=resident (pytest defaults to random, F222). Report: per engram layer the ms of hash, lookup,
+      pack and upload (the upload / PCIe part was never measured) and how much of it is now hidden; the warm wall before/after
+      (F196 + F205) and the device time. Next-chunk prefetch (hides even the first wait) needs later tokens, which begin_chunk(tokens,
+      start) does not get under the serving contract: say in the report whether the engine has them; do not change the contract.'
   ab:
     env:
       DS41_ENGRAM_ASYNC: 'off'

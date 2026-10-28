@@ -3620,3 +3620,47 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   (~1.5 ms a chunk); a bfp8 x / h option in se_engine3 for the shared expert (DS41-132).
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.7 --spec
   models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`; old path: DS41_GEMM_INPUTS=bf16.
+
+## FIX.10 (overseer fix): ENGRAM_TABLE=resident coexists with the full model on the Galaxy host (DS41-133, DS41-134)
+- Cause, measured (host-only probes, /tmp/fix10_scripts, no device; then the gate's runners):
+  1. Threads (the slowdown). numba's omp threading layer sets the OpenMP max-threads ICV to NUMBA_NUM_THREADS (64 =
+     every logical CPU) at its first launch, and torch takes its intra-op pool from the same ICV: 32 -> 64. A
+     head-layout-like torch workload (32 chips x 32-row block permutes + cats) went 2.0 s -> 23 s (user 1295 s, sys 0,
+     no reclaim / compaction during it) after one pack_rows(threads=8); torch.set_num_threads(32) -> 2.0 s again. The
+     resident build runs numba at model init, so the whole load and the fused head's lazy per-layer layout ran at 64
+     threads: the 18:39 runner's head first calls took ~112 s a layer (random: ~6 s; the ~59 busy cores of the py-spy
+     note were OMP threads spinning). Random mode was hit too, from its first begin_chunk's pack_rows on; the same
+     chunk's hash + gather + TILE bytes took 110 ms at 64 threads vs 8 ms at 32.
+  2. THP compaction (the build). The host's THP defrag is 'madvise': each 2 MB fault of the MADV_HUGEPAGE rows
+     compacts in the faulting thread while the page cache fills memory. Both tables: 236 s (with the 64-thread
+     problem; sys 860 + 1867 s, compact_stall 214k) / 171 s with the thread fix (layer 14 alone 130 s, compact_stall
+     125k, 22k fallbacks to 4 KB) and direct reclaim dropped 95 GB of page cache; 4 KB pages: 74 s, compact_stall 0,
+     page cache kept. Huge pages gather faster: 6.3 vs 8.5 ms a layer-chunk (8 threads).
+  3. Page cache: the build's pread left the ~200 GB of table bytes cached, evicting the weight cache the load reads
+     next. Swap (8 GB, swappiness 60) fills from cold anonymous pages either way; it was not the slowdown.
+- Changes: tt/engram_bfp8.py `_run` restores torch.get_num_threads() around every numba launch (set_num_threads
+  included; holds from any thread), kernels nogil=True. tt/engram.py: rows in 4 KB pages unless ENGRAM_HUGEPAGES=on
+  (default off), every read block's file pages dropped (POSIX_FADV_DONTNEED, `_drop_cache`; resident_copy too),
+  ENGRAM_BUILD=background (default; load = the old blocking build): one builder thread a process started when the
+  engram layers are created (before the decoder layers load), `TtEngramRows.packed` waits for it, the gather kernel
+  warmed on that thread (~0.5 s off the first chunk). Probe: both tables built in 70.8 s behind the main thread, whose
+  torch work ran at baseline meanwhile (1.8 -> 1.9-2.3 s). tt/perf_engram_host.py: CPU check of the thread guard.
+- Rows bit-identical: tests/test_engram_table_modes.py with DS41_TEST_ENGRAM_RESIDENT=1 9 passed (resident_bfp8
+  rows == pack_rows, tiles == the per-chunk pack, resident_copy bytes); tests/test_engram_bfp8.py 1 passed (device).
+- Numbers (runner start -> first forward; random = the 19:12 run, resident before = 18:40):
+  load: resident before 7m43s (4m23s blocking table build, then 40 layers in 3m16s at 64 threads), random 2m38s,
+  resident now 3m21s (smoke) / 2m56s (runner contract). The rest vs random: 210 GB of tables leave ~220 GB of page
+  cache for the 285 GB weight cache, so part of it comes from disk (expert loads summed 72.7 s in the smoke's runner,
+  32.3 s in the contract's). Fused head's first call a layer: 112 s -> 3.5 s (random 6 s, also at 64 threads then).
+  K.1 runner smoke (Paris, tt-d-gen): 848.6 s test call, runner prefill 427 s, runner wall 421 s (random 19:12:
+  897.5 s / runner 455 s; resident 18:39: stopped at layer ~15 after 30 min). Runner peak RSS 244 GB (smoke) / 249 GB
+  (contract), disk read 444 / 244 GB (200 GB of it the tables), system swap max 7 / 3 of 8 GB, MemAvailable min 176 /
+  140 GB; compact_stall +2 over the whole gate. The 17:00 SIGBUS did not recur; FIX.7 saw the same tt-d-gen SIGBUS
+  ("Non-existent physical address") with random tables, so it is likely not from the tables.
+- Gate FIX.10: all 6 units PASS (L.s56320 591 s, err_final_hidden 0.1889 <= 0.2586, top5 1.0; contract 0 failed,
+  acks_early 0, producer KV PCC window 0.9777 / compress 0.9847 / index_k 0.9919; smoke_runner_ok 1).
+- Open: the spec's owner rules ("never hold the 203 GB of tables in host RAM", "Host RAM is shared (503 GB)") still
+  disagree with the default (the overseer raises it). Pytest processes keep ENGRAM_TABLE=random (F222).
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.10 --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`; old behaviour:
+  DS41_ENGRAM_HUGEPAGES=on DS41_ENGRAM_BUILD=load (the thread guard has no switch: it only restores torch's count).

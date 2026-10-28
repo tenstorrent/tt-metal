@@ -56,11 +56,29 @@ def _tables():
 _EXP, _ZERO, _BYTE = _tables()
 
 
+def _run(threads, kernel, *args):
+    """A numba parallel kernel with torch's intra-op thread count kept (FIX.10, DS41-133): numba's omp threading layer
+    sets the OpenMP max-threads ICV to NUMBA_NUM_THREADS (every logical CPU: 64 on the Galaxy host) at its first
+    launch, and torch reads its pool size from the same ICV (32 -> 64). Every torch op after it then ran 5-20x slower
+    on the host (the fused head's per-layer weight layout ~112 s a layer instead of ~6 s; tt/perf_engram_host.py
+    test_numba_keeps_torch_threads)."""
+    import numba
+
+    n = torch.get_num_threads()
+    try:
+        if threads:  # (set_num_threads launches the pool too)
+            numba.set_num_threads(min(threads, numba.config.NUMBA_NUM_THREADS))
+        return kernel(*args)
+    finally:
+        if torch.get_num_threads() != n:
+            torch.set_num_threads(n)
+
+
 def _numba_kernel():
     import numba
     import numpy as np
 
-    @numba.njit(parallel=True, cache=True)
+    @numba.njit(parallel=True, cache=True, nogil=True)  # (nogil: the background build, FIX.10)
     def pack(w, s, exps, mags, exp_t, zero_t, byte_t):
         n, d = w.shape
         per_scale = d // s.shape[1]
@@ -88,16 +106,15 @@ def pack_rows(w: torch.Tensor, s: torch.Tensor, threads: int | None = None):
     the bfloat8_b shared exponent of each 16-value group and each value's sign + 7-bit magnitude. A compiled loop over
     ``threads`` (QB: 5120-token chunk 63 ms on 1 thread, 8 ms on 8; the torch form below: ~230 ms)."""
     global _KERNEL
-    import numba
 
     if _KERNEL is None:
         _KERNEL = _numba_kernel()
     n, d = w.shape
     exps = torch.empty(n, d // 16, dtype=torch.uint8)
     mags = torch.empty(n, d, dtype=torch.uint8)
-    if threads:
-        numba.set_num_threads(min(threads, numba.config.NUMBA_NUM_THREADS))
-    _KERNEL(
+    _run(
+        threads,
+        _KERNEL,
         w.contiguous().numpy(),
         s.contiguous().numpy(),
         exps.numpy(),
@@ -125,20 +142,19 @@ def pack_into(w: torch.Tensor, s: torch.Tensor, out, threads: int | None = None)
     """pack_rows of w [N, 256], s [N, 8] written into packed rows out [N, 272] (numpy uint8: exponents then
     magnitudes)."""
     global _KERNEL
-    import numba
 
     if _KERNEL is None:
         _KERNEL = _numba_kernel()
-    if threads:
-        numba.set_num_threads(min(threads, numba.config.NUMBA_NUM_THREADS))
     g = w.shape[1] // 16
-    _KERNEL(w.numpy(), s.numpy(), out[:, :g], out[:, g:], _EXP.int().numpy(), _ZERO.numpy(), _BYTE.numpy())
+    _run(
+        threads, _KERNEL, w.numpy(), s.numpy(), out[:, :g], out[:, g:], _EXP.int().numpy(), _ZERO.numpy(), _BYTE.numpy()
+    )
 
 
 def _tile_kernel():
     import numba
 
-    @numba.njit(parallel=True, cache=True)
+    @numba.njit(parallel=True, cache=True, nogil=True)  # (nogil: the background build, FIX.10)
     def tile(packed, ids, valid, out, n):
         g = packed.shape[1] // 17  # 16-value groups a table row
         slots = ids.shape[1]
@@ -172,15 +188,12 @@ def tile_rows(packed, ids: torch.Tensor, n: int, threads: int | None = None) -> 
     """packed table rows [N, 272] (numpy), ids [valid, slots] (valid <= n) -> the bfloat8_b TILE bytes of the chunk
     rows [n, slots * 256] (rows past ``valid`` 0): tile_bytes of those rows' exponents and magnitudes, in one pass."""
     global _TILE
-    import numba
 
     if _TILE is None:
         _TILE = _tile_kernel()
-    if threads:
-        numba.set_num_threads(min(threads, numba.config.NUMBA_NUM_THREADS))
     w = ids.shape[1] * (packed.shape[1] // 17) * 16
     out = torch.empty(n * w * 17 // 16, dtype=torch.uint8)
-    _TILE(packed, ids.contiguous().numpy(), ids.shape[0], out.numpy(), n)
+    _run(threads, _TILE, packed, ids.contiguous().numpy(), ids.shape[0], out.numpy(), n)
     return out
 
 
