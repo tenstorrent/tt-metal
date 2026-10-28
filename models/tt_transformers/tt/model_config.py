@@ -333,6 +333,11 @@ class ModelOptimizations:
                     f"Model {model_name} is running out of L1 memory under standard high-performance settings, using FP16 accumulate in attention prefill QKV Matmul"
                 )
                 settings["OpFidelity"][OpGroup.LI_QKV_PREFILL] = MathFidelitySetting.HIFI2_FP16
+            if base_model_name.startswith("Phi-3.5-mini"):
+                # FF2 in bfp4 as well: +8 % decode at batch 1; top-1 93 -> 89 (bar 89), top-5 99, fraud-prompt verdicts
+                # unchanged. QKV and KV-cache bfp4 failed the same checks.
+                settings["TensorPrecision"][TensorGroup.FF2] = PrecisionSetting.BFP4
+                settings["OpFidelity"][OpGroup.LI_FF2] = MathFidelitySetting.LOFI
             inst = cls(settings)
         inst.__name__ = "performance"
         return inst
@@ -2742,6 +2747,9 @@ class ModelArgs:
         result = model_specific_supported_seq_lens.get(model_name, {}).get(
             device_name, default_supported_seq_lens.get(device_name)
         )
+        # With the small prefill buckets on, trace them too (and 2048, which ~1K-token prompts pad to).
+        if result is not None and os.environ.get("TT_PREFILL_SMALL_BUCKETS") == "1":
+            result = sorted(set(result) | {256, 512, 2048})
 
         if result is not None:
             return cap_seq_lens_to_max_prefill_chunk_size(result, self.capped_warmup_seq_len)
@@ -3946,7 +3954,13 @@ class ModelArgs:
 
     def get_dram_sharded_matmul_num_workers(self, tensor_group: TensorGroup, n: int) -> int:
         """Return the validated P150 reader count for a Llama 3.1 8B decode projection."""
-        if self.base_model_name != "Llama-3.1-8B" or self.device_name != "P150":
+        # TT_DRAM_SHARDED_2READERS=1 tries the two-reader config on other models (Phi-3.5 S08 experiment).
+        # Phi-3.5-mini: +13-21 % decode on P150 (batch 16-1), token match and G2 unchanged (S08, 2026-10-28).
+        validated = (
+            self.base_model_name in ("Llama-3.1-8B", "Phi-3.5-mini-instruct")
+            or os.environ.get("TT_DRAM_SHARDED_2READERS") == "1"
+        )
+        if not validated or self.device_name != "P150":
             return 1
 
         if tensor_group not in (TensorGroup.FF1_FF3, TensorGroup.FF2, TensorGroup.WQKV, TensorGroup.WO):

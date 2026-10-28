@@ -734,6 +734,13 @@ def get_padded_prefill_len(seq_len: int) -> int:
     # TODO: https://github.com/tenstorrent/tt-metal/issues/34117
     if seq_len <= 128:
         return 128
+    # TT_PREFILL_SMALL_BUCKETS=1 adds 256 and 512 buckets (both legal: attention needs a multiple of 128 and the MLP
+    # only reshapes from 512 up), so a ~400-token prompt suffix stops paying for 1,024 tokens of prefill.
+    if os.environ.get("TT_PREFILL_SMALL_BUCKETS") == "1":
+        if seq_len <= 256:
+            return 256
+        if seq_len <= 512:
+            return 512
     if seq_len <= 1024:
         return 1024
     else:
@@ -742,7 +749,7 @@ def get_padded_prefill_len(seq_len: int) -> int:
 
 
 def get_all_padded_prefill_lengths(max_len):
-    lengths = [128]
+    lengths = [128] + ([256, 512] if os.environ.get("TT_PREFILL_SMALL_BUCKETS") == "1" else [])
     k = 0
     while (v := (1 << k) * 1024) <= max_len:
         lengths.append(v)
