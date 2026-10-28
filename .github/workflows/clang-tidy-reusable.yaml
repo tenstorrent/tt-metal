@@ -286,27 +286,6 @@ jobs:
       - name: Pre-create fixes dir
         run: mkdir -p .build/clang-tidy/fixes
 
-      - name: Merge v23 skip-list into .clang-tidy
-        if: ${{ inputs.clang-tidy-version != '20' }}
-        run: |
-          uv pip install --quiet PyYAML
-          python3 - << 'PYEOF'
-          import yaml
-
-          with open(".clang-tidy") as f:
-              config = yaml.safe_load(f)
-          with open("cmake/clang-tidy.d/.clang-tidy.v23-new-checks.yaml") as f:
-              skip_list = yaml.safe_load(f)
-
-          config["Checks"] = config["Checks"].rstrip(", \n") + ",\n  " + skip_list["Checks"].strip()
-
-          with open(".clang-tidy", "w") as f:
-              yaml.dump(config, f, default_flow_style=False, sort_keys=False)
-
-          print("Merged skip-list into .clang-tidy for this run:")
-          print(config["Checks"])
-          PYEOF
-
       - name: 🔧 CMake configure
         run: |
           # --warnings-as-errors=* turns each clang-tidy diagnostic into a failing
