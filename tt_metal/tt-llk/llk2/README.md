@@ -36,6 +36,7 @@ include path.
 | `copy` | `compute_api/copy.h` | `llk_lib/unpack.h` (incl. unpack to Dest), `llk_lib/copy.h` | `test_llk2_copy.py` |
 | `vec_silu`, `vec_tanh`, `vec_gelu`, `vec_gelu_tanh`, `vec_relu_max`, `vec_sigmoid`, `vec_hardsigmoid`, `vec_hardtanh`, `vec_selu`, `vec_softplus` | `compute_api/vec.h` | `llk_lib/vec.h` | `test_llk2_vec.py` |
 | dataflow buffers (`wait_front`, `reserve_back`, `release`) | `tensor/dataflow_buffer.h` | `llk_lib/dataflow_buffer.h` | `test_llk2_dfb.py` |
+| target kernel: bmm_large_block_zm_fused_bias_activation | `kernels/bmm_large_block_zm_fused_bias_activation.h` (body), `.cpp` (as tt-metal would build it) | all of the above | `test_llk2_bmm_fused.py` |
 | `pack` (`relu`, `l1_acc`) | `compute_api/pack.h` | `llk_lib/pack.h` | `test_llk2_pack.py`, `test_llk2_matmul.py` |
 | Dest sync | `compute_api/dest.h` | `llk_lib/dest.h` | every test |
 
