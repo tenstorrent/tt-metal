@@ -179,12 +179,31 @@ sfpi_inline sfpi::vFloat _sfpu_expm1_(sfpi::vFloat a) {
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_expm1() {
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat x = sfpi::dst_reg[0];
-        sfpi::vFloat y = _sfpu_expm1_<is_fp32_dest_acc_en>(x);
-        if constexpr (!is_fp32_dest_acc_en) {
-            y = sfpi::convert<sfpi::vFloat16b>(y, sfpi::RoundMode::Nearest);
+        if constexpr (is_fp32_dest_acc_en) {
+            // expm1(±0) = ±0. The reduction keeps -0.0 in its linear term (f = j * Prgm1 + a
+            // with a = -0.0), but the final accumulate (r * s + u) rounds it to +0.0, so the
+            // destination is written only for non-zero inputs: a ±0 lane keeps the input
+            // verbatim, which is the required result, and every non-zero result stays
+            // bit-identical (sign(expm1(x)) == sign(x) on the whole domain). The predicate is
+            // evaluated before the reduction so the input is not held live across it: the SFPU
+            // has only 8 LRegs for live values and cannot spill them, so holding it across the
+            // polynomial is a hard "there are too few lregs to hold live values" build error.
+            // Predication still executes the reduction and only masks the writeback, so this is
+            // a correctness fix, not a fast path. is_zero is an integer compare,
+            // (as<vUInt>(inp) << 1) == 0, exact for ±0 and deterministic-false for
+            // NaN/±inf/subnormals, so the pass-through does not lean on the float compare's NaN
+            // semantics, which SFPSETCC leaves unspecified for a NaN comparand
+            // (tests/ttnn/unit_tests/operations/eltwise/test_nextafter.py). fp32-only: the
+            // reduction already yields +0.0 for a zero input and the 16-bit convert/store cannot
+            // reintroduce the sign, so there is no sign to preserve.
+            sfpi::vFloat inp = sfpi::dst_reg[0];
+            v_if(!sfpi::is_zero(inp)) { sfpi::dst_reg[0] = _sfpu_expm1_<is_fp32_dest_acc_en>(inp); }
+            v_endif;
+        } else {
+            sfpi::vFloat result = _sfpu_expm1_<is_fp32_dest_acc_en>(sfpi::dst_reg[0]);
+            result = sfpi::convert<sfpi::vFloat16b>(result, sfpi::RoundMode::Nearest);
+            sfpi::dst_reg[0] = result;
         }
-        sfpi::dst_reg[0] = y;
         sfpi::dst_reg++;
     }
 }
