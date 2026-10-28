@@ -23,6 +23,10 @@ RawAllocationImpl& RawAllocation::impl() { return *pimpl_; }
 
 const RawAllocationImpl& RawAllocation::impl() const { return *pimpl_; }
 
+DeviceAddr RawAllocationImpl::address() const {
+    return std::visit([](const auto& allocation) { return allocation.addr; }, layout);
+}
+
 bool RawAllocationImpl::matches_properties(const RawAllocationProperties& properties) const {
     if (const auto* lockstep = std::get_if<LockstepAllocation>(&layout)) {
         const auto* expected = std::get_if<LockstepAllocationProperties>(&properties);

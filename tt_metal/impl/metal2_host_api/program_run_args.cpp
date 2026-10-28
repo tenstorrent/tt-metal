@@ -243,6 +243,23 @@ void BindRawAllocationArgs(
     if (args.empty()) {
         return;
     }
+    for (const auto& binding : program.get_dfb_borrowed_bindings()) {
+        const auto* allocation_name = std::get_if<RawAllocationParamName>(&binding.source);
+        if (allocation_name == nullptr) {
+            continue;
+        }
+        if (const auto argument = args.get(*allocation_name)) {
+            const auto base = argument->get().impl().address();
+            const uint64_t address = uint64_t{base} + binding.offset;
+            TT_FATAL(
+                address <= std::numeric_limits<uint32_t>::max(),
+                "Borrowed RawAllocation address {} for DFB id {} (RawAllocationParameter '{}') exceeds uint32_t max.",
+                address,
+                binding.dfb_id,
+                *allocation_name);
+            program.get_dataflow_buffer(binding.dfb_id)->set_borrowed_memory_base_addr(static_cast<uint32_t>(address));
+        }
+    }
     for (const auto& name : program.get_registered_kernel_names()) {
         auto kernel = program.get_kernel_by_spec_name(name);
         for (auto& binding : kernel->scratchpad_binding_handles()) {
@@ -251,8 +268,7 @@ void BindRawAllocationArgs(
             }
             const auto& source = *binding.borrowed_from;
             if (const auto argument = args.get(source.allocation)) {
-                const auto base =
-                    std::visit([](const auto& layout) { return layout.addr; }, argument->get().impl().layout);
+                const auto base = argument->get().impl().address();
                 SetScratchpadBindingAddress(*kernel, binding, base + source.offset);
             }
         }
@@ -276,7 +292,7 @@ void RejectPrefetcherPipeRelayResize(
 
 void ValidateDFBRunOverrides(const detail::ProgramImpl& program_impl, const ProgramRunArgs& params, bool require_all) {
     // DFB run overrides: same checks as the full path (duplicates; non-zero size overrides), plus a
-    // partial-path-only correctness guard for borrowed-memory DFBs (below). A resized borrowed DFB
+    // partial-path-only correctness guard for borrowed-memory DFBs (below). A resized tensor-backed DFB
     // must have its backing TensorParameter supplied in this same update, so AttachBorrowedDFBBuffers
     // re-runs the per-bank fit check against the new size. The full Set path gets this for free
     // (require_all=true); on this partial path the backing tensor may be omitted, which would
@@ -306,7 +322,7 @@ void ValidateDFBRunOverrides(const detail::ProgramImpl& program_impl, const Prog
         }
         RejectPrefetcherPipeRelayResize(program_impl, dfb_params);
         const bool resizes = dfb_params.entry_size.has_value() || dfb_params.num_entries.has_value();
-        if (require_all || !resizes) {
+        if (!resizes) {
             continue;
         }
         const auto& bindings = program_impl.get_dfb_borrowed_bindings();
@@ -317,10 +333,25 @@ void ValidateDFBRunOverrides(const detail::ProgramImpl& program_impl, const Prog
         if (binding == bindings.end()) {
             continue;
         }
+        if (const auto* allocation_name = std::get_if<RawAllocationParamName>(&binding->source)) {
+            const auto& properties = program_impl.get_raw_allocation_parameters().at(allocation_name->get()).properties;
+            const auto per_bank_size = std::visit([](const auto& props) { return props.per_bank_size; }, properties);
+            const auto& config = program_impl.get_dataflow_buffer(binding->dfb_id)->config;
+            const uint64_t size_per_node = uint64_t{dfb_params.entry_size.value_or(config.entry_size)} *
+                                           dfb_params.num_entries.value_or(config.num_entries);
+            TT_FATAL(
+                uint64_t{binding->offset} + size_per_node <= per_bank_size,
+                "DFB '{}' borrowing offset {} + size_per_node {} exceeds RawAllocationParameter '{}' per_bank_size {}.",
+                dfb_spec_name,
+                binding->offset,
+                size_per_node,
+                *allocation_name,
+                per_bank_size);
+        }
         // A partial tensor-backed resize needs its tensor to repeat the per-bank size check.
         if (const auto* tensor_name = std::get_if<TensorParamName>(&binding->source)) {
             TT_FATAL(
-                params.tensor_args.contains(*tensor_name),
+                require_all || params.tensor_args.contains(*tensor_name),
                 "dfb_run_overrides resizes borrowed-memory DFB '{}', but its backing TensorParameter '{}' was "
                 "not supplied in this UpdateProgramRunArgs. Resizing a borrowed DFB on the partial-update fast "
                 "path requires supplying its backing tensor, so the per-bank fit check can re-validate against "
