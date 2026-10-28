@@ -62,7 +62,7 @@ REUSE_DEST_FORMATS = input_output_formats(
 # Tile shapes swept on the reuse_dest path. (32, 32) is the pre-existing baseline and doubles as
 # the no-regression guard. (16, 32) and (16, 16) keep face_r_dim at 16 but shrink the dest tile
 # stride to 32 and 16 rows; (8, 32) halves the face stride and the MOV* count; (4, 32) drives the
-# sparse 8-row face slot, the ceiling MOP loop count and the CLR_SPECIFIC face clear.
+# sparse 8-row face slot: one 8-row MOV and a single-iteration MOP per face.
 # (32, 16) is excluded: the kernel builds its TensorShape with tensor_shape_from_num_faces, which
 # maps num_faces == 2 to a 1x2 (wide) face grid and cannot express the 2x1 (narrow) one.
 TILE_DIMENSIONS = [(32, 32), (16, 32), (16, 16), (8, 32), (4, 32)]

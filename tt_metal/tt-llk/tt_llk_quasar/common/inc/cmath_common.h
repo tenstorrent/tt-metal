@@ -295,7 +295,7 @@ inline void _set_dst_write_addr_by_rows_(const std::uint32_t tile_index)
  * @param face_dest_rows: Dest rows one face occupies, including the sparse 8-row minimum of short faces.
  * @note MOVD2A dst is the dest row relative to dest_section_base + dest_counter and src the SrcA row; the dest
  *       counter handles face progression, so each MOV copies one FPU row group of the face into the matching
- *       SrcA rows. TTI row offsets are immediates, so guard each row group beyond the first at runtime.
+ *       SrcA rows.
  */
 inline void move_d2a_fixed_face(const std::uint8_t addrmod, const std::uint32_t face_dest_rows)
 {
@@ -303,18 +303,14 @@ inline void move_d2a_fixed_face(const std::uint8_t addrmod, const std::uint32_t 
     // MATH drains the preceding math instructions so their source-bank release has landed before
     // SRCA_VLD tests the bank that MOVD2A will write.
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::MATH, p_stall::SRCA_VLD);
-    TTI_MOVD2A(0, 0, addrmod, FPU_MOV_ROWS, 0);
-    if (face_dest_rows > ELTWISE_MATH_ROWS)
+#pragma GCC unroll 4
+    for (const auto row : fpu_row_offsets<MAX_FACE_R_DIM>())
     {
-        TTI_MOVD2A(0, ELTWISE_MATH_ROWS, addrmod, FPU_MOV_ROWS, ELTWISE_MATH_ROWS);
-    }
-    if (face_dest_rows > 2 * ELTWISE_MATH_ROWS)
-    {
-        TTI_MOVD2A(0, 2 * ELTWISE_MATH_ROWS, addrmod, FPU_MOV_ROWS, 2 * ELTWISE_MATH_ROWS);
-    }
-    if (face_dest_rows > 3 * ELTWISE_MATH_ROWS)
-    {
-        TTI_MOVD2A(0, 3 * ELTWISE_MATH_ROWS, addrmod, FPU_MOV_ROWS, 3 * ELTWISE_MATH_ROWS);
+        // Every face spans at least MAX_FPU_ROWS dest rows, so only the row groups past that depend on face height.
+        if (row < MAX_FPU_ROWS || row < face_dest_rows)
+        {
+            TTI_MOVD2A(0 /*dest_32b_lo*/, row, addrmod, FPU_MOV_ROWS, row);
+        }
     }
 }
 
@@ -325,7 +321,7 @@ inline void move_d2a_fixed_face(const std::uint8_t addrmod, const std::uint32_t 
  * @param face_dest_rows: Dest rows one face occupies, including the sparse 8-row minimum of short faces.
  * @note MOVD2B dst is the dest row relative to dest_section_base + dest_counter and src the SrcB row; the dest
  *       counter handles face progression, so each MOV copies one FPU row group of the face into the matching
- *       SrcB rows. TTI row offsets are immediates, so guard each row group beyond the first at runtime.
+ *       SrcB rows.
  */
 inline void move_d2b_fixed_face(const std::uint8_t addrmod, const std::uint32_t face_dest_rows)
 {
@@ -333,18 +329,14 @@ inline void move_d2b_fixed_face(const std::uint8_t addrmod, const std::uint32_t 
     // MATH drains the preceding math instructions so their source-bank release has landed before
     // SRCB_VLD tests the bank that MOVD2B will write.
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::MATH, p_stall::SRCB_VLD);
-    TTI_MOVD2B(0, 0, addrmod, FPU_MOV_ROWS, 0, 0);
-    if (face_dest_rows > ELTWISE_MATH_ROWS)
+#pragma GCC unroll 4
+    for (const auto row : fpu_row_offsets<MAX_FACE_R_DIM>())
     {
-        TTI_MOVD2B(0, ELTWISE_MATH_ROWS, addrmod, FPU_MOV_ROWS, 0, ELTWISE_MATH_ROWS);
-    }
-    if (face_dest_rows > 2 * ELTWISE_MATH_ROWS)
-    {
-        TTI_MOVD2B(0, 2 * ELTWISE_MATH_ROWS, addrmod, FPU_MOV_ROWS, 0, 2 * ELTWISE_MATH_ROWS);
-    }
-    if (face_dest_rows > 3 * ELTWISE_MATH_ROWS)
-    {
-        TTI_MOVD2B(0, 3 * ELTWISE_MATH_ROWS, addrmod, FPU_MOV_ROWS, 0, 3 * ELTWISE_MATH_ROWS);
+        // Every face spans at least MAX_FPU_ROWS dest rows, so only the row groups past that depend on face height.
+        if (row < MAX_FPU_ROWS || row < face_dest_rows)
+        {
+            TTI_MOVD2B(0 /*dest_32b_lo*/, row, addrmod, FPU_MOV_ROWS, 0 /*transpose*/, row);
+        }
     }
 }
 
