@@ -2288,10 +2288,12 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Schedule) {
     EXPECT_EQ(uncut.per_core.size(), kCores);
     check_schedule(tinyllama, sq4sk8, uncut, kDefaultMaxPieces);
 
-    // Two heads, S=2048: the late items are cut.
+    // Two heads, S=2048: the late items are cut. Only items heavier than a core's fair share are cut, so the
+    // scratch slots (one per sender) stay under the core count: that bounds the scratch the program owns.
     const SDPAForwardShape two_heads = causal_shape(1U, 2U, 2U, 64U, 2U);
     const SDPAForwardSchedule cut = make_schedule(two_heads, sq4sk8, kCores, kDefaultMaxPieces);
     EXPECT_GT(cut.num_slots, 0U);
+    EXPECT_LT(cut.num_slots, kCores);
     EXPECT_EQ(count_role(cut, UnitRole::Sender), cut.num_slots);
     EXPECT_GT(count_role(cut, UnitRole::Merger), 0U);
     check_schedule(two_heads, sq4sk8, cut, kDefaultMaxPieces);
@@ -2313,6 +2315,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_Schedule) {
         }
     }
     EXPECT_GT(most_partials, 3U);
+    EXPECT_LT(many.num_slots, kCores);
     check_schedule(one_head, sq4sk1, many, 16U);
 
     // More cores than items with no cuts allowed: one core per item.
