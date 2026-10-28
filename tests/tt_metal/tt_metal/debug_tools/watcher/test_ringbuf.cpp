@@ -427,7 +427,7 @@ TEST_F(MeshWatcherFixture, TestWatcherRingBufferMpscMultiWriter) {
     }
 }
 
-// The same 22 writers, pushing across the point where push_to_ring_buffer() rewinds the Quasar head
+// All user processors on the core push across the point where push_to_ring_buffer() rewinds the head
 // before its semaphore saturates.
 TEST_F(MeshWatcherFixture, TestWatcherRingBufferMpscSemaphoreRewind) {
     if (MetalContext::instance().hal().get_arch() != tt::ARCH::QUASAR) {
