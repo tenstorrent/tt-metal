@@ -562,7 +562,7 @@ Perf so far (block MoE fused head+tail on FABRIC_2D_TORUS_XY, the default since 
 chunk (P.1 prepared reduce-scatter -79, P.2 prepared fused tail -50); P.3 rejected. Owner delegation: clean wins
 (gate PASS, accuracy unchanged/within limits and no worse, wall better, device not worse, diff clean) the overseer
 accepts; anything else to the owner.
-Precision plan (owner; F208): phase 0 precision audit hook + reference quantizer checks; 1 GEMM inputs bfp8 (FIX.7);
+De-risk agent output dir: /scratch/dnijemcevic/ckv_derisk/ (outside the repo until FIX.7 commits). Precision plan (owner; F208): phase 0 precision audit hook + reference quantizer checks; 1 GEMM inputs bfp8 (FIX.7);
 compressed KV FIRST (owner: hardest, biggest risk): de-risk agent running CPU-only L0 (CKV_4BIT_DERISK.md: option A
 reference e2m1 + e4m3 scale per 16 vs B row-packed bfp4; RoPE is inside the quantized row; index_topk 512 rows /
 candidate blocks of 8 -> row-major with in-row scales, gather+decode); device L1 (one card) / L2 (1-layer repro) only
@@ -574,3 +574,21 @@ item; engram: "never hold the tables in host RAM" spec rule vs the RAM path; F20
 keep notes) to implement. Engram work: on the 2x2 session (ENGRAM_HOST_PATH.md, 4b order).
 Overseer notes: use `pgrep -f "^python -u -m models.demos.common.bringup.orchestrator"` (the plain pattern matches this
 session's argv); a resume clears PAUSE (use --until to stop); watch + cron :07/:37 + Stop hook armed.
+- 14:45 COMPRESSED-KV DE-RISK L0 DONE (report /scratch/dnijemcevic/ckv_derisk/CKV_4BIT_DERISK.md; codec.py + 8 passing
+  tests, study.py, study_results.json; intended repo paths in the report; moves into the repo after FIX.7 commits).
+  Today: write tt/model.py:422 -> TtCompressor.write (tt/compressor.py:548; served cache via update_padded_kv_cache,
+  attention table via slice_write, replicated); read: stock sparse_sdpa(kv_format=BF16) (tt/attention.py:589) as 512
+  single rows per query; 38/40 layers read one of 4 sources (L2, L8, L14, L20). L0 (golden s10240 native rows):
+  rows vs native bf16 0.0017 | A (reference e2m1 + e4m3/16, codec bit-exact) 0.095 | B (row-packed bfp4, host
+  rounding) 0.111-0.120 | B truncated 0.21-0.22; attention output vs native: A 0.025-0.047, B 0.026-0.053 (1-11 %
+  above A), B truncated 0.18-0.25. RECOMMENDATION B (288 B/row, 3.6x less than bf16; native bfp4 unpack after a
+  byte shuffle into tiles, no tilize, no scale multiply), IF the device packer rounds to nearest (else SFPU rounding
+  first): L1 test 1 decides. Work: write fork op (pack bfp4 -> 288-B rows, both stores); read: sparse_sdpa fork
+  ROW_BFP4 (gather rows like GLM scaled-fp8, shuffle into 16 bfp4 tiles / 32 rows), window rows stay separate (two
+  KV tensors); contract change (owner + server). L1 plan (one card, after FIX.7): packer bytes, device rounding,
+  write bytes, gather/decode 512 rows + sentinels, sparse_sdpa ROW_BFP4 vs CPU, micro-benchmark. L2: diag repro
+  behind CKV_FORMAT. DS41-133 drafted in the report.
+  INCIDENT: the de-risk agent imported ttnn on the host (cluster open) and held the chips 14:35:58-14:37:43 between
+  FIX.7's gate units (FIX.7 L.s56320 delayed ~2 min, unharmed). Lesson for briefs: "no device" includes `import ttnn`.
+- SWITCH POINT (owner): continue in a fresh session (/bringup, "report on deepseek_v41_flash_d_p galaxy_8x4") from
+  the 14:35 hand-off entry + this one. FIX.7 still in its gate check (L.s56320, L.smoke, K.1 to go).
