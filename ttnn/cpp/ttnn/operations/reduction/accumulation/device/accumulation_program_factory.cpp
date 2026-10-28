@@ -497,6 +497,9 @@ ttnn::device_operation::ProgramArtifacts AccumulationProgramFactory::create_tile
     }
     if (operation_attributes.op == AccumulationOp::CUMPROD) {
         compute_defines_map["CUMPROD"] = "1";
+    } else if (output_dataformat == DataFormat::Float32 && !operation_attributes.disable_compensation) {
+        // fp32 cumsum keeps the compensated (Kahan) sum of the permuted path.
+        compute_defines_map["COMPENSATED_SUM"] = "1";
     }
     const KernelSpec::CompilerOptions::Defines compute_defines(compute_defines_map);
 

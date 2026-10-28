@@ -13,6 +13,9 @@
 #include "ttnn/device.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/conv/conv2d/conv2d.hpp"
+#include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/conv/conv_types.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
@@ -252,5 +255,33 @@ INSTANTIATE_TEST_SUITE_P(
             .stride = {1, 1},
             .padding = {1, 1},
         }));
+
+class Conv2DPerfModelFixture : public TTNNFixtureWithSuiteDevice<Conv2DPerfModelFixture> {};
+
+// Regression: the perf model sized conv_transpose2d with the forward formula, 16x too few mul-adds here.
+TEST_F(Conv2DPerfModelFixture, TransposeUsesItsOwnOutputShape) {
+    auto& device = *device_;
+    const auto tensor = ttnn::zeros(ttnn::Shape({1, 1, 32, 32}), DataType::BFLOAT16, ttnn::TILE_LAYOUT, device);
+    ttnn::prim::Conv2dInputs tensor_args{.a = tensor, .b = tensor, .bias = std::nullopt};
+    Tensor output = tensor;
+
+    // 30x40x512 -> 256 channels, 2x2 kernel, stride 2: 15x20 forward, 60x80 transposed.
+    const auto ideal_cycles = [&](bool is_transpose) {
+        ttnn::prim::Conv2dParams args;
+        args.sliding_window_config = sliding_window::SlidingWindowConfig{
+            .batch_size = 1, .channels = 512, .input_hw = {30, 40}, .window_hw = {2, 2}, .stride_hw = {2, 2}};
+        args.sliding_window_config.is_transpose = is_transpose;
+        args.output_channels = 256;
+        args.input_tensor_shape = {1, 30, 40, 512};
+        args.compute_kernel_config = init_device_compute_kernel_config(device.arch(), std::nullopt);
+        return ttnn::prim::Conv2dDeviceOperation::create_op_performance_model(args, tensor_args, output)
+            .ideal_compute_cycles;
+    };
+
+    // Cycle counts are rounded up, so compare the ratio rather than exact values.
+    const double ratio =
+        static_cast<double>(ideal_cycles(/*is_transpose=*/true)) / ideal_cycles(/*is_transpose=*/false);
+    EXPECT_NEAR(ratio, 16.0, 0.1);
+}
 
 }  // namespace ttnn::operations::conv::conv2d::test

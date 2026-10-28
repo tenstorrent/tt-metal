@@ -4,25 +4,48 @@
 
 #include "attn_matmul_program_factory.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/host_api.hpp>
 #include <tt-metalium/constants.hpp>
-#include <tt-metalium/program_descriptors.hpp>
-#include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_run_args.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 
 namespace ttnn::experimental::prim {
 
 using namespace tt;
 using namespace tt::constants;
 using namespace tt::tt_metal;
+using namespace tt::tt_metal::experimental;
 
-tt::tt_metal::ProgramDescriptor AttnMatmulProgramFactory::create_descriptor(
+// Spec names. Op-scoped namespace rather than an anonymous one: the experimental matmul factories
+// share a CMake target, where same-named anonymous-namespace constants collide under a unity build.
+namespace attn_matmul_metal2 {
+const KernelSpecName READER{"reader"};
+const KernelSpecName WRITER{"writer"};
+const KernelSpecName COMPUTE{"compute"};
+
+const DFBSpecName IN0{"in0"};
+const DFBSpecName IN1{"in1"};
+const DFBSpecName INTERMED0{"intermed0"};
+const DFBSpecName INTERMED1{"intermed1"};
+const DFBSpecName INTERMED2{"intermed2"};
+const DFBSpecName OUT{"out"};
+
+const TensorParamName INPUT_A{"input_a"};
+const TensorParamName INPUT_B{"input_b"};
+const TensorParamName OUTPUT{"output"};
+}  // namespace attn_matmul_metal2
+
+ttnn::device_operation::ProgramArtifacts AttnMatmulProgramFactory::create_program_artifacts(
     const AttnMatmulParams& operation_attributes, const AttnMatmulInputs& tensor_args, Tensor& tensor_return_value) {
-    ProgramDescriptor desc;
+    using namespace attn_matmul_metal2;
 
     const auto& a = tensor_args.input_tensor_a;
     const auto& b = tensor_args.input_tensor_b;
     auto& output = tensor_return_value;
+    const auto& a_mesh = a.mesh_tensor();
+    const auto& b_mesh = b.mesh_tensor();
+    const auto& output_mesh = output.mesh_tensor();
 
     const auto& ashape = a.padded_shape();
     const auto& bshape = b.padded_shape();
@@ -55,10 +78,7 @@ tt::tt_metal::ProgramDescriptor AttnMatmulProgramFactory::create_descriptor(
     log_debug(tt::LogOp, "interm_data_format: {}", interm_data_format);
     log_debug(tt::LogOp, "output_data_format: {}", output_data_format);
 
-    tt::tt_metal::Buffer* src0_buffer = a.buffer();
-    tt::tt_metal::Buffer* src1_buffer = b.buffer();
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.buffer() != nullptr, "Output buffer should be allocated on device!");
 
     // A block of work is one MtNt
     auto num_output_blocks_total = ashape[1];  // ashape[1] is Q num_heads; only parallelize on this
@@ -96,125 +116,221 @@ tt::tt_metal::ProgramDescriptor AttnMatmulProgramFactory::create_descriptor(
     uint32_t in1_KtNt_stride = transpose_hw_bool ? bshape[2] / TILE_HEIGHT * in1_Kt : in1_Kt * Nt;
     uint32_t in1_KtNt_skip = transpose_hw_bool ? (bshape[2] / TILE_HEIGHT - 1) * in1_Kt : (in1_Kt - Kt) * Nt;
 
-    // ---- Circular buffers ----
-    // cb_src0's total_size = Kt * in0_single_tile_size depends on the input shape;
-    // padded_shape is folded into compute_program_hash() so each unique Kt keeps
-    // its own cache entry.  CB total_size/page_size are not patched on cache hit
-    // — the cached descriptor already carries the correct values.
-    constexpr uint8_t src0_cb_index = tt::CBIndex::c_0;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = Kt * in0_single_tile_size,
-        .core_ranges = all_device_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = src0_cb_index,
-            .data_format = in0_data_format,
-            .page_size = in0_single_tile_size,
-        }}},
-    });
-
-    constexpr uint8_t src1_cb_index = tt::CBIndex::c_1;
-    const uint32_t cb1_num_input_tiles = 2;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = cb1_num_input_tiles * in1_single_tile_size,
-        .core_ranges = all_device_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = src1_cb_index,
-            .data_format = in1_data_format,
-            .page_size = in1_single_tile_size,
-        }}},
-    });
-
-    constexpr uint8_t cb_intermed0_index = tt::CBIndex::c_2;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = interm_single_tile_size,
-        .core_ranges = all_device_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = cb_intermed0_index,
-            .data_format = interm_data_format,
-            .page_size = interm_single_tile_size,
-        }}},
-    });
-
-    constexpr uint8_t cb_intermed1_index = tt::CBIndex::c_3;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = interm_single_tile_size,
-        .core_ranges = all_device_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = cb_intermed1_index,
-            .data_format = interm_data_format,
-            .page_size = interm_single_tile_size,
-        }}},
-    });
-
-    constexpr uint8_t cb_intermed2_index = tt::CBIndex::c_4;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = interm_single_tile_size,
-        .core_ranges = all_device_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = cb_intermed2_index,
-            .data_format = interm_data_format,
-            .page_size = interm_single_tile_size,
-        }}},
-    });
-
-    constexpr uint8_t output_cb_index = tt::CBIndex::c_5;
-    const uint32_t num_output_tiles = 2;
-    desc.cbs.push_back(CBDescriptor{
-        .total_size = num_output_tiles * output_single_tile_size,
-        .core_ranges = all_device_cores,
-        .format_descriptors = {{CBFormatDescriptor{
-            .buffer_index = output_cb_index,
-            .data_format = output_data_format,
-            .page_size = output_single_tile_size,
-        }}},
-    });
-
-    // ---- Kernels ----
-    std::vector<uint32_t> reader_compile_time_args = {
-        static_cast<uint32_t>(transpose_hw_bool),
-        static_cast<uint32_t>(fp32_dest_acc_en and in0_data_format == tt::DataFormat::Float32)};
-    tt::tt_metal::TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
-
-    std::vector<uint32_t> writer_compile_time_args = {static_cast<uint32_t>(output_cb_index)};
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
-
-    KernelDescriptor reader_desc;
-    reader_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/matmul/attn_matmul/device/kernels/dataflow/"
-        "reader_transformer_attn_matmul.cpp";
-    reader_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    reader_desc.core_ranges = all_device_cores;
-    reader_desc.compile_time_args = std::move(reader_compile_time_args);
-    reader_desc.config = ReaderConfigDescriptor{};
-
-    KernelDescriptor writer_desc;
-    writer_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp";
-    writer_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    writer_desc.core_ranges = all_device_cores;
-    writer_desc.compile_time_args = std::move(writer_compile_time_args);
-    writer_desc.config = WriterConfigDescriptor{};
-
-    std::vector<uint32_t> compute_args = {
-        static_cast<uint32_t>(transpose_hw_bool),  // transpose_hw for matmul_init
+    // ---- Dataflow buffers ----
+    // in0's capacity (Kt entries) depends on the input shape; the default reflection hash keys the
+    // program cache on the full tensor specs, so each unique Kt keeps its own cache entry.
+    DataflowBufferSpec dfb_in0{
+        .unique_id = IN0,
+        .entry_size = in0_single_tile_size,
+        .num_entries = Kt,
+        .data_format_metadata = in0_data_format,
     };
 
-    KernelDescriptor compute_desc;
-    compute_desc.kernel_source =
-        "ttnn/cpp/ttnn/operations/experimental/matmul/attn_matmul/device/kernels/compute/transformer_attn_matmul.cpp";
-    compute_desc.source_type = KernelDescriptor::SourceType::FILE_PATH;
-    compute_desc.core_ranges = all_device_cores;
-    compute_desc.compile_time_args = std::move(compute_args);
-    compute_desc.config = ComputeConfigDescriptor{
-        .math_fidelity = math_fidelity,
-        .fp32_dest_acc_en = fp32_dest_acc_en,
+    const uint32_t dfb_in1_num_input_tiles = 2;
+    DataflowBufferSpec dfb_in1{
+        .unique_id = IN1,
+        .entry_size = in1_single_tile_size,
+        .num_entries = dfb_in1_num_input_tiles,
+        .data_format_metadata = in1_data_format,
+    };
+
+    DataflowBufferSpec dfb_intermed0{
+        .unique_id = INTERMED0,
+        .entry_size = interm_single_tile_size,
+        .num_entries = 1,
+        .data_format_metadata = interm_data_format,
+    };
+
+    DataflowBufferSpec dfb_intermed1{
+        .unique_id = INTERMED1,
+        .entry_size = interm_single_tile_size,
+        .num_entries = 1,
+        .data_format_metadata = interm_data_format,
+    };
+
+    DataflowBufferSpec dfb_intermed2{
+        .unique_id = INTERMED2,
+        .entry_size = interm_single_tile_size,
+        .num_entries = 1,
+        .data_format_metadata = interm_data_format,
+    };
+
+    const uint32_t num_output_tiles = 2;
+    DataflowBufferSpec dfb_out{
+        .unique_id = OUT,
+        .entry_size = output_single_tile_size,
+        .num_entries = num_output_tiles,
+        .data_format_metadata = output_data_format,
+    };
+
+    // ---- Compute hardware config ----
+    ComputeHardwareConfig compute_hw = to_compute_hardware_config(operation_attributes.compute_kernel_config);
+    compute_hw.sfpu_precision_mode = Precision::Precise;
+    compute_hw.double_buffer_dest = true;
+    if (compute_hw.enable_32_bit_dest) {
+        if (in0_data_format == tt::DataFormat::Float32) {
+            compute_hw.unpack_modes.emplace(IN0, UnpackMode::UnpackToSrc);
+        }
+        if (in1_data_format == tt::DataFormat::Float32) {
+            compute_hw.unpack_modes.emplace(IN1, UnpackMode::UnpackToSrc);
+        }
+        if (interm_data_format == tt::DataFormat::Float32) {
+            compute_hw.unpack_modes.emplace(INTERMED0, UnpackMode::UnpackToSrc);
+            compute_hw.unpack_modes.emplace(INTERMED2, UnpackMode::UnpackToSrc);
+        }
+    }
+
+    // ---- Kernels ----
+    KernelSpec reader{
+        .unique_id = READER,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/matmul/attn_matmul/device/kernels/dataflow/"
+            "reader_transformer_attn_matmul.cpp",
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = IN0,
+                    .accessor_name = "in0",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = IN1,
+                    .accessor_name = "in1",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                // The reader copies one row out of each untilized tile (intermed1, from compute) into
+                // the tile it assembles for compute (intermed2).
+                DFBBinding{
+                    .dfb_spec_name = INTERMED1,
+                    .accessor_name = "intermed1",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = INTERMED2,
+                    .accessor_name = "intermed2",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{
+                    .tensor_parameter_name = INPUT_A,
+                    .accessor_name = "src0",
+                },
+                TensorBinding{
+                    .tensor_parameter_name = INPUT_B,
+                    .accessor_name = "src1",
+                },
+            },
+        .compile_time_args =
+            {
+                {"transpose_hw", static_cast<uint32_t>(transpose_hw_bool)},
+                {"fp32_acc_en", static_cast<uint32_t>(fp32_dest_acc_en and in0_data_format == tt::DataFormat::Float32)},
+            },
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names =
+                    {"Mt",
+                     "Kt",
+                     "Nt",
+                     "MtKt",
+                     "in1_KtNt_skip",
+                     "in1_KtNt_mul_32",
+                     "blocks",
+                     "itileA_start",
+                     "itileB_start"},
+            },
+        .hw_config = ttnn::create_reader_datamovement_config(),
+    };
+
+    // The Metal 2.0 fork of eltwise/unary's shared interleaved writer. Its binding and argument
+    // names (dfb::out, tensor::dst, num_pages, start_id) are the fork's interface, inherited here.
+    KernelSpec writer{
+        .unique_id = WRITER,
+        .source =
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/"
+            "writer_unary_interleaved_start_id_metal2.cpp",
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = OUT,
+                    .accessor_name = "out",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+            },
+        .tensor_bindings =
+            {
+                TensorBinding{
+                    .tensor_parameter_name = OUTPUT,
+                    .accessor_name = "dst",
+                },
+            },
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"num_pages", "start_id"},
+            },
+        .hw_config = ttnn::create_writer_datamovement_config(),
+    };
+
+    KernelSpec compute{
+        .unique_id = COMPUTE,
+        .source =
+            "ttnn/cpp/ttnn/operations/experimental/matmul/attn_matmul/device/kernels/compute/"
+            "transformer_attn_matmul.cpp",
+        .compiler_options = {.opt_level = KernelBuildOptLevel::O3},
+        .dfb_bindings =
+            {
+                DFBBinding{
+                    .dfb_spec_name = IN0,
+                    .accessor_name = "in0",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = IN1,
+                    .accessor_name = "in1",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = INTERMED0,
+                    .accessor_name = "intermed0",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = INTERMED0,
+                    .accessor_name = "intermed0",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = INTERMED1,
+                    .accessor_name = "intermed1",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = INTERMED2,
+                    .accessor_name = "intermed2",
+                    .endpoint_type = DFBEndpointType::CONSUMER,
+                },
+                DFBBinding{
+                    .dfb_spec_name = OUT,
+                    .accessor_name = "out",
+                    .endpoint_type = DFBEndpointType::PRODUCER,
+                },
+            },
+        .compile_time_args =
+            {
+                {"transpose_hw", static_cast<uint32_t>(transpose_hw_bool)},  // transpose_hw for matmul_init
+            },
+        .runtime_arg_schema =
+            {
+                .runtime_arg_names = {"batch", "Mt", "Kt", "Nt"},
+            },
+        .hw_config = compute_hw,
     };
 
     // ---- Per-core runtime args (idle cores get zeroed args) ----
-    reader_desc.runtime_args.reserve(total_num_cores);
-    writer_desc.runtime_args.reserve(total_num_cores);
-    compute_desc.runtime_args.reserve(total_num_cores);
+    KernelRunArgs reader_run_args{.kernel = READER};
+    KernelRunArgs writer_run_args{.kernel = WRITER};
+    KernelRunArgs compute_run_args{.kernel = COMPUTE};
 
     uint32_t num_output_blocks_per_core = 0;
     for (uint32_t i = 0, num_blocks_written = 0; i < total_num_cores; i++) {
@@ -225,50 +341,95 @@ tt::tt_metal::ProgramDescriptor AttnMatmulProgramFactory::create_descriptor(
         } else if (core_group_2.contains(core)) {
             num_output_blocks_per_core = num_output_blocks_per_core_group_2;
         } else {
-            reader_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
-            compute_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{0, 0, 0, 0});
-            writer_desc.runtime_args.emplace_back(core, std::vector<uint32_t>{0, 0, 0});
+            AddRuntimeArgsForNode(
+                reader_run_args.runtime_arg_values,
+                core,
+                {{"Mt", 0u},
+                 {"Kt", 0u},
+                 {"Nt", 0u},
+                 {"MtKt", 0u},
+                 {"in1_KtNt_skip", 0u},
+                 {"in1_KtNt_mul_32", 0u},
+                 {"blocks", 0u},
+                 {"itileA_start", 0u},
+                 {"itileB_start", 0u}});
+            AddRuntimeArgsForNode(
+                compute_run_args.runtime_arg_values, core, {{"batch", 0u}, {"Mt", 0u}, {"Kt", 0u}, {"Nt", 0u}});
+            AddRuntimeArgsForNode(writer_run_args.runtime_arg_values, core, {{"num_pages", 0u}, {"start_id", 0u}});
             continue;
         }
 
-        reader_desc.emplace_runtime_args(
+        AddRuntimeArgsForNode(
+            reader_run_args.runtime_arg_values,
             core,
             {
-                src0_buffer,
-                src1_buffer,
-                Mt,
-                Kt,
-                Nt,
-                MtKt,
-                in1_KtNt_skip,
-                in1_KtNt_stride * num_rows_in_one_tile,
-                num_output_blocks_per_core,
-                num_blocks_written * MtKt,  // itileA_start
-                0u,                         // itileB_start; always read same in1 per core
+                {"Mt", Mt},
+                {"Kt", Kt},
+                {"Nt", Nt},
+                {"MtKt", MtKt},
+                {"in1_KtNt_skip", in1_KtNt_skip},
+                {"in1_KtNt_mul_32", in1_KtNt_stride * num_rows_in_one_tile},
+                {"blocks", num_output_blocks_per_core},
+                {"itileA_start", num_blocks_written * MtKt},
+                {"itileB_start", 0u},  // always read same in1 per core
             });
-        compute_desc.runtime_args.emplace_back(
-            core,
-            std::vector<uint32_t>{
-                1,                                  // B
-                1,                                  // Mt
-                Kt,                                 // Kt
-                num_output_blocks_per_core * MtNt,  // Nt
-            });
-        writer_desc.emplace_runtime_args(
+        AddRuntimeArgsForNode(
+            compute_run_args.runtime_arg_values,
             core,
             {
-                dst_buffer,
-                num_output_blocks_per_core * MtNt,
-                num_blocks_written * MtNt,
+                {"batch", 1u},
+                {"Mt", 1u},
+                {"Kt", Kt},
+                {"Nt", num_output_blocks_per_core * MtNt},
+            });
+        AddRuntimeArgsForNode(
+            writer_run_args.runtime_arg_values,
+            core,
+            {
+                {"num_pages", num_output_blocks_per_core * MtNt},
+                {"start_id", num_blocks_written * MtNt},
             });
         num_blocks_written += num_output_blocks_per_core;
     }
 
-    desc.kernels.push_back(std::move(reader_desc));
-    desc.kernels.push_back(std::move(writer_desc));
-    desc.kernels.push_back(std::move(compute_desc));
+    ProgramSpec spec{
+        .name = "attn_matmul",
+        .kernels = {std::move(reader), std::move(writer), std::move(compute)},
+        .dataflow_buffers =
+            {std::move(dfb_in0),
+             std::move(dfb_in1),
+             std::move(dfb_intermed0),
+             std::move(dfb_intermed1),
+             std::move(dfb_intermed2),
+             std::move(dfb_out)},
+        .tensor_parameters =
+            {
+                TensorParameter{.unique_id = INPUT_A, .spec = a.tensor_spec()},
+                TensorParameter{.unique_id = INPUT_B, .spec = b.tensor_spec()},
+                TensorParameter{.unique_id = OUTPUT, .spec = output.tensor_spec()},
+            },
+        .work_units =
+            {
+                WorkUnitSpec{
+                    .name = "main",
+                    .kernels = {READER, WRITER, COMPUTE},
+                    .target_nodes = all_device_cores,
+                },
+            },
+    };
 
-    return desc;
+    ProgramRunArgs run_args;
+    run_args.kernel_run_args = {std::move(reader_run_args), std::move(writer_run_args), std::move(compute_run_args)};
+    run_args.tensor_args = {
+        {INPUT_A, a_mesh},
+        {INPUT_B, b_mesh},
+        {OUTPUT, output_mesh},
+    };
+
+    return ttnn::device_operation::ProgramArtifacts{
+        .spec = std::move(spec),
+        .run_params = std::move(run_args),
+    };
 }
 
 }  // namespace ttnn::experimental::prim

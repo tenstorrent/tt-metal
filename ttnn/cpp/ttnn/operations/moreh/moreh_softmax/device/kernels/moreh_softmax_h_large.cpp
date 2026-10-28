@@ -67,7 +67,7 @@ ALWI void find_shift(
         // find max
         if (Ht == 1) {
             mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
-                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*popm=*/0);
+                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/1, /*popm=*/0);
 
             ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb::tmp, dfb::max_scaler, dfb::max>(
                 ckl::ReduceInputBlockShape::single());
@@ -77,7 +77,7 @@ ALWI void find_shift(
                 ckl::ReduceInputBlockShape::col(Ht - 1));
 
             mask_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
-                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*popm=*/0);
+                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/1, /*popm=*/0);
 
             // Phase 2: Reduce final masked tile with accumulation
             ckl::reduce<PoolType::MAX, ReduceDim::REDUCE_COL, dfb::tmp, dfb::max_scaler, dfb::max>(
@@ -89,7 +89,7 @@ ALWI void find_shift(
         // find min
         if (Ht == 1) {
             mask_posinf_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
-                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*popm=*/0);
+                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/1, /*popm=*/0);
 
             ckl::reduce<
                 kShiftPool,
@@ -118,7 +118,7 @@ ALWI void find_shift(
             // tile into dfb::exps. A 0-masked pad (what the MAX path wants) wins the MIN on every
             // all-positive row, so the mask polarity has to flip with the pool type.
             mask_posinf_tile_to_dfb<dfb::in0, dfb::mask, dfb::tmp>(
-                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop0=*/1, /*popm=*/0);
+                dfb_in0_obj, dfb_mask_obj, dfb_tmp_obj, 0, 0, /*pop=*/1, /*popm=*/0);
             ckl::reduce<
                 kShiftPool,
                 ReduceDim::REDUCE_COL,
