@@ -29,8 +29,8 @@ from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import (
     deallocate_state,
     device_scalar,
 )
-from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, TtK3KdaAttention, build_kda_scalars
-from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical, make_actual_start
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import K3AttnContext, TtK3KdaAttention
+from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_bit_identical
 
 pytestmark = run_for_blackhole()
 
@@ -102,40 +102,44 @@ def test_one_capture_serves_every_slot(mesh_device, sp_axis, tp_axis, device_par
         physical = reconstruct_sp_tp_tensor(output, mesh_device, sp_axis, tp_axis, tp_dim=2, sp_dim=1)
         permutation = mla_row_permutation(start, sp, local_rows)
         valid = physical[:, torch.argsort(permutation)][:, :length].clone()
-        return {"output": [valid], "carries": carries(), "slabs": _host(slabs.recurrent) + _host(slabs.convolution)}
+        return {"output": [valid], "slabs": _host(slabs.recurrent) + _host(slabs.convolution)}
 
     input_tt = upload(chunk_input(0, 0))
-    slot_tt, start_tt, end_tt = (
-        device_scalar(mesh_device, 0),
-        make_actual_start(mesh_device, 0),
-        make_actual_start(mesh_device, capacity),
-    )
+    slot_tt, start_tt, end_tt = (device_scalar(mesh_device, value) for value in (0, 0, capacity))
+    # Eager and traced chunks read the same persistent scalars, rewritten before each chunk as the runtime
+    # rewrites its metadata, so the two paths differ only in the capture.
+    ctx = K3AttnContext(kda_scalars=(slot_tt, start_tt, end_tt), kda_states=slabs)
+
+    def stage(index, slot, start, length):
+        for destination, source in (
+            (input_tt, upload(chunk_input(index, start))),
+            (slot_tt, device_scalar(mesh_device, slot)),
+            (start_tt, device_scalar(mesh_device, start)),
+            (end_tt, device_scalar(mesh_device, start + length)),
+        ):
+            ttnn.copy(source, destination)
+            ttnn.deallocate(source)
+
     trace = None
     traced_output = None
     try:
-        # Eager reference: the slot is a device scalar built from the host slot, the same path as traced.
         eager = []
         for index, (slot, start, length) in enumerate(CHUNKS):
-            source = upload(chunk_input(index, start))
-            ttnn.copy(source, input_tt)
-            ttnn.deallocate(source)
+            stage(index, slot, start, length)
             before = carries()
-            scalars, owned = build_kda_scalars(mesh_device, None, slot, start, start + length)
-            output = attention.forward(input_tt, K3AttnContext(kda_scalars=scalars, kda_states=slabs))
-            for scalar in owned:
-                ttnn.deallocate(scalar)
-            observed = observe(output, start, length)
+            output = attention.forward(input_tt, ctx)
+            eager.append(observe(output, start, length))
             ttnn.deallocate(output)
+            after = carries()
             other = 1 - slot
-            for got, want in zip(observed["carries"][other], before[other], strict=True):
+            for got, want in zip(after[other], before[other], strict=True):
                 assert_bit_identical(want, got, name=f"eager chunk {index}: slot {other} must be untouched")
             assert any(
-                not torch.equal(got, want) for got, want in zip(observed["carries"][slot], before[slot], strict=True)
+                not torch.equal(got, want) for got, want in zip(after[slot], before[slot], strict=True)
             ), f"eager chunk {index}: slot {slot} did not advance"
-            eager.append(observed)
 
         # One capture, recorded on slot 0. Warm until program and resource state settle first.
-        ctx = K3AttnContext(kda_scalars=(slot_tt, start_tt, end_tt), kda_states=slabs)
+        stage(0, 0, 0, capacity)
         for _ in range(2):
             ttnn.deallocate(attention.forward(input_tt, ctx))
         trace = ttnn.begin_trace_capture(mesh_device, cq_id=0)
@@ -144,27 +148,14 @@ def test_one_capture_serves_every_slot(mesh_device, sp_axis, tp_axis, device_par
         for slot in range(NUM_SLOTS):
             slabs.zero_slot(slot)
 
+        # Every slot's carry is a batch of the slabs, so matching both whole slabs bit for bit covers both carries.
         for index, (slot, start, length) in enumerate(CHUNKS):
-            source = upload(chunk_input(index, start))
-            ttnn.copy(source, input_tt)
-            ttnn.deallocate(source)
-            for destination, value in ((start_tt, start), (end_tt, start + length)):
-                staged = make_actual_start(mesh_device, value)
-                ttnn.copy(staged, destination)
-                ttnn.deallocate(staged)
-            staged = device_scalar(mesh_device, slot)
-            ttnn.copy(staged, slot_tt)
-            ttnn.deallocate(staged)
+            stage(index, slot, start, length)
             ttnn.execute_trace(mesh_device, trace, cq_id=0, blocking=True)
             observed = observe(traced_output, start, length)
             for key in ("output", "slabs"):
                 for shard, (want, got) in enumerate(zip(eager[index][key], observed[key], strict=True)):
                     assert_bit_identical(want, got, name=f"traced chunk {index} slot {slot} {key} {shard}")
-            for carry_slot in range(NUM_SLOTS):
-                for shard, (want, got) in enumerate(
-                    zip(eager[index]["carries"][carry_slot], observed["carries"][carry_slot], strict=True)
-                ):
-                    assert_bit_identical(want, got, name=f"traced chunk {index} carry slot {carry_slot} {shard}")
     finally:
         if trace is not None:
             ttnn.release_trace(mesh_device, trace)
