@@ -33,3 +33,9 @@ def include_dirs() -> list[str]:
         str(LLK2_ROOT / "inc" / "common"),
         str(LLK2_ROOT / "inc" / _ARCH_DIR[TestConfig.CHIP_ARCH]),
     ]
+
+
+def kernel_test_include_dirs() -> list[str]:
+    """include_dirs() plus the kernel-side helpers (kernels/) and the test-only helpers (tests/helpers/), for tests
+    whose kernels use dataflow buffers."""
+    return include_dirs() + [str(LLK2_ROOT / "kernels"), str(LLK2_ROOT / "tests" / "helpers")]

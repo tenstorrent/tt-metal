@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Compute API: add on the FPU. Single thread, arch-independent. Every TRISC runs this same call; llk-lib's
-// per-thread calls execute only on their own thread.
+// per-thread calls execute only on their own thread. a's and b's L1 addresses are read only on the unpack thread;
+// they need to be valid only there (tensor/tensor.h).
 //
 //   add(a, b, acc);                                              // acc = a + b; a, b in L1, acc in Dest, same shape
 //   add<add_modifiers{.bcast = Broadcast::Row}>(a, bias, acc);   // acc = a + bias's row 0, repeated down every row
@@ -27,15 +28,8 @@ namespace llk2
 {
 
 /// acc = a + b (b broadcast as Mods.bcast says).
-template <
-    add_modifiers Mods = add_modifiers {},
-    const TensorSpec<tensor_rank>& A,
-    class RA,
-    const TensorSpec<tensor_rank>& B,
-    class RB,
-    const TensorSpec<tensor_rank>& D,
-    class RD>
-inline __attribute__((always_inline)) void add(const Tensor<A, RA>& a, const Tensor<B, RB>& b, const Tensor<D, RD>& acc)
+template <add_modifiers Mods = add_modifiers {}, const TensorSpec<tensor_rank>& A, const TensorSpec<tensor_rank>& B, const TensorSpec<tensor_rank>& D>
+inline __attribute__((always_inline)) void add(const Tensor<A>& a, const Tensor<B>& b, const Tensor<D>& acc)
 {
     eltwise_binary<add_op, Mods>(a, b, acc);
 }

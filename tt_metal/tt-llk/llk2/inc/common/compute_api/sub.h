@@ -19,15 +19,8 @@ namespace llk2
 {
 
 /// acc = a - b (b broadcast as Mods.bcast says).
-template <
-    sub_modifiers Mods = sub_modifiers {},
-    const TensorSpec<tensor_rank>& A,
-    class RA,
-    const TensorSpec<tensor_rank>& B,
-    class RB,
-    const TensorSpec<tensor_rank>& D,
-    class RD>
-inline __attribute__((always_inline)) void sub(const Tensor<A, RA>& a, const Tensor<B, RB>& b, const Tensor<D, RD>& acc)
+template <sub_modifiers Mods = sub_modifiers {}, const TensorSpec<tensor_rank>& A, const TensorSpec<tensor_rank>& B, const TensorSpec<tensor_rank>& D>
+inline __attribute__((always_inline)) void sub(const Tensor<A>& a, const Tensor<B>& b, const Tensor<D>& acc)
 {
     eltwise_binary<sub_op, Mods>(a, b, acc);
 }

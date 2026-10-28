@@ -44,7 +44,7 @@ from helpers.test_variant_parameters import (
 from helpers.tilize_untilize import tilize_block
 from helpers.utils import passed_test
 from llk2_common import TILE_DATUMS, TILE_DIM, blocks_in_pop_order, tilize_operands, unwrap_case
-from llk2_paths import LLK2_ROOT, cpp_source, include_dirs
+from llk2_paths import cpp_source, kernel_test_include_dirs
 
 HARDTANH_MIN, HARDTANH_MAX = -1.0, 1.0  # the harness golden's CLAMP_MIN / CLAMP_MAX
 
@@ -261,7 +261,7 @@ def test_llk2_bmm_fused(case):
         ),
         dest_acc=dest_acc,
         compile_time_formats=True,
-        include_dirs=include_dirs() + [str(LLK2_ROOT / "kernels")],
+        include_dirs=kernel_test_include_dirs(),
     )
 
     res = configuration.run().result

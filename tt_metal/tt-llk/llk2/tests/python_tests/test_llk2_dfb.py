@@ -26,7 +26,7 @@ from helpers.test_variant_parameters import (
 )
 from helpers.utils import passed_test
 from llk2_common import DEST_HALF_TILES, TILE_DATUMS, TILE_DIM, blocks_in_pop_order, tilize_operands
-from llk2_paths import cpp_source, include_dirs
+from llk2_paths import cpp_source, kernel_test_include_dirs
 
 
 
@@ -139,7 +139,7 @@ def test_llk2_dfb(math_fidelity, format_dest_acc_and_blocking):
         ),
         dest_acc=dest_acc,
         compile_time_formats=True,
-        include_dirs=include_dirs(),
+        include_dirs=kernel_test_include_dirs(),
     )
 
     res = configuration.run().result
