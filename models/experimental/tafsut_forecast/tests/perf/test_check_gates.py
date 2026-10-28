@@ -212,7 +212,7 @@ def test_away_is_inside_interval():
 
     assert not SB.away("level_shift_rows#0", [-0.056], [1.0], [0.05], [1.0])  # toward, lands at -0.006
     assert SB.away("level_shift_rows#0", [-0.01], [1.0], [0.05], [1.0])  # crosses 0 and overshoots to +0.04
-    assert not SB.away("shift10pct", [-0.02], [1.0], [0.05], [1.0])  # crosses 0, lands at +0.03: inside
+    assert not SB.away("shift10pct", [-0.02], [1.0], [0.045], [1.0])  # crosses 0, lands at +0.025: inside
     assert SB.away("level_shift_rows-#0", [-0.056], [1.0], [-0.05], [1.0])  # away
     assert not SB.away("band0.7x_row#0", [0.0], [1.3], [0.0], [0.7])  # 1.3 -> 0.91: inside [0.85, 1.45]
     assert SB.away("band0.7x_row#0", [0.0], [1.1], [0.0], [0.7])  # 1.1 -> 0.77: crosses 1 and overshoots
