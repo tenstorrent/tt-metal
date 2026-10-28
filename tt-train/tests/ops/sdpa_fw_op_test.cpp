@@ -1835,8 +1835,9 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_ChunkKnobs_SplitWork) {
     SDPAForwardShape none = causal;
     none.mask_type = ttml::metal::AttentionMaskType::None;
     EXPECT_EQ(num_work_units(none, four_rows), 128U);
-    const auto none_split = split_work(none, four_rows, kCores);
-    ASSERT_EQ(none_split.size(), kCores);
+    const uint32_t none_cores = std::min(kCores, num_work_units(none, four_rows));
+    const auto none_split = split_work(none, four_rows, none_cores);
+    ASSERT_EQ(none_split.size(), none_cores);
     check_each_item_once(none_split, 128U);
 
     EXPECT_ANY_THROW(split_work(causal, four_rows, 65U)) << "more cores than pairs is a caller bug";
