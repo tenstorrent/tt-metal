@@ -30,7 +30,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.minimax_m3.tt.vision.common import hifi4_compute_config, mesh_mapper
+from models.demos.minimax_m3.tt.vision.common import linear_compute_config, mesh_mapper
 
 PATCH_SIZE = 14
 IN_CHANNELS = 3
@@ -82,7 +82,7 @@ class M3VLPatchEmbed(LightweightModule):
             mesh_mapper=mesh_mapper(mesh_device),
         )
 
-        self.compute_kernel_config = hifi4_compute_config()
+        self.compute_kernel_config = linear_compute_config()
 
     @classmethod
     def from_torch(

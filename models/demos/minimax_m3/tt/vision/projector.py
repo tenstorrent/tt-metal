@@ -23,7 +23,7 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.minimax_m3.tt.vision.common import as_linear_bias, as_linear_weight, hifi4_compute_config
+from models.demos.minimax_m3.tt.vision.common import as_linear_bias, as_linear_weight, linear_compute_config
 
 
 class M3VLProjector(LightweightModule):
@@ -53,7 +53,7 @@ class M3VLProjector(LightweightModule):
         self.merge_2_w = as_linear_weight(mesh_device, ref_projector.merge_linear_2.weight.data, dtype)
         self.merge_2_b = as_linear_bias(mesh_device, ref_projector.merge_linear_2.bias.data, dtype)
 
-        self.compute_kernel_config = hifi4_compute_config()
+        self.compute_kernel_config = linear_compute_config()
 
     @classmethod
     def from_torch(cls, mesh_device, ref_projector, spatial_merge_size, dtype=ttnn.bfloat16) -> "M3VLProjector":

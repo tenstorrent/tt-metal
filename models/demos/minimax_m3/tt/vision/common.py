@@ -5,8 +5,8 @@
 
 Small utilities that every submodule needs: the mesh mapper, the
 torch->ttnn Linear weight/bias converters, the head-dim tile rounding, the
-standard compute-kernel config and the SDPA program config. Centralised here
-so the modules don't each copy them.
+standard and weight-matmul compute-kernel configs and the SDPA program config.
+Centralised here so the modules don't each copy them.
 """
 from __future__ import annotations
 
@@ -56,15 +56,21 @@ def as_linear_bias(mesh_device, torch_b: torch.Tensor, dtype) -> ttnn.Tensor:
     )
 
 
-def hifi4_compute_config(fp32_dest_acc: bool = True):
+def hifi4_compute_config(fp32_dest_acc: bool = True, packer_l1_acc: bool = False):
     """Standard HiFi4 compute-kernel config. Matmul-bearing ops use fp32_dest_acc=True;
     LayerNorm uses False (matches the original per-module settings)."""
     return ttnn.WormholeComputeKernelConfig(
         math_fidelity=ttnn.MathFidelity.HiFi4,
         math_approx_mode=False,
         fp32_dest_acc_en=fp32_dest_acc,
-        packer_l1_acc=False,
+        packer_l1_acc=packer_l1_acc,
     )
+
+
+def linear_compute_config():
+    """HiFi4 config for the weight matmuls (ttnn.linear): fp32 accumulation, and packer_l1_acc so the partial sums
+    of each output block accumulate in L1 instead of being reloaded for every K block."""
+    return hifi4_compute_config(packer_l1_acc=True)
 
 
 def sdpa_program_config(mesh_device, chunk_size: int = 128):
