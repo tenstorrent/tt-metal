@@ -19,7 +19,7 @@
 #include "tt_metal/impl/dispatch/command_queue_common.hpp"
 
 #include "llrt.hpp"
-#include "env_lib.hpp"
+#include "common/env_lib.hpp"
 #include <tt-metalium/math.hpp>
 
 #include "llrt/hal.hpp"
