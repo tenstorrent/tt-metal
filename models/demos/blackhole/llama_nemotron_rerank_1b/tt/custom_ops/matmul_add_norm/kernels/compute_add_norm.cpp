@@ -170,10 +170,15 @@ void pass1(uint32_t blk, uint32_t n_real) {
     for (uint32_t m = 0; m < M_block_tiles; ++m) {
         const uint32_t row = (blk * M_block_tiles + m) * res_w;
         cb_x2.reserve_back(N_block_tiles);
+        // res_cb and x2_cb are both bf16: one pack format for the row.
+        reconfig_data_format(acc_cb, res_cb);
+        pack_reconfig_data_format(res_cb);
         for (uint32_t n = 0; n < N_block_tiles; n += P) {
             const uint32_t t = m * N_block_tiles + n;
             const uint32_t cnt = N_block_tiles - n < P ? N_block_tiles - n : P;
+#ifdef INIT_PER_PAIR
             reconfig_data_format(acc_cb, res_cb);
+#endif
             add_init(acc_cb, res_cb);
             tile_regs_acquire();
             for (uint32_t j = 0; j < cnt; ++j) {
@@ -187,13 +192,11 @@ void pass1(uint32_t blk, uint32_t n_real) {
 #endif
             tile_regs_commit();
             tile_regs_wait();
-            pack_reconfig_data_format(res_cb);
             for (uint32_t j = 0; j < cnt; ++j) {
                 if (n + j < res_w) {
                     pack_tile<true>(j, res_cb, row + n + j);
                 }
             }
-            pack_reconfig_data_format(x2_cb);
             for (uint32_t j = 0; j < cnt; ++j) {
                 pack_tile<true>(P + j, x2_cb, n + j);
             }
@@ -257,10 +260,15 @@ void pass2(uint32_t blk, uint32_t eps_bits) {
         cb_inv.pop_front(1);
         continue;
 #endif
+        reconfig_data_format(res_cb, inv_cb);
+        mul_cols_init(res_cb, inv_cb);
+        pack_reconfig_data_format(y_cb);
         for (uint32_t n = 0; n < N_block_tiles; n += 4) {
             const uint32_t cnt = N_block_tiles - n < 4 ? N_block_tiles - n : 4;
+#ifndef NO_GAMMA
             reconfig_data_format(res_cb, inv_cb);
             mul_cols_init(res_cb, inv_cb);
+#endif
             tile_regs_acquire();
             for (uint32_t j = 0; j < cnt; ++j) {
                 mul_cols_tile(res_cb, inv_cb, row + (n + j < res_w ? n + j : 0), 0, j);
@@ -274,7 +282,6 @@ void pass2(uint32_t blk, uint32_t eps_bits) {
 #endif
             tile_regs_commit();
             tile_regs_wait();
-            pack_reconfig_data_format(y_cb);
             for (uint32_t j = 0; j < cnt; ++j) {
                 pack_tile<true>(j, y_cb, m * N_block_tiles + n + j);
             }

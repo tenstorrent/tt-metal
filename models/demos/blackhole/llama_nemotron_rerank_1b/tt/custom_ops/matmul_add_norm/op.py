@@ -50,8 +50,8 @@ def make_matmul_add_norm_constants(gamma: torch.Tensor, device):
 
 
 def residual_layout(rows, width, grid):
-    """(padded rows, padded width, shard rows, shard width) in elements for a [rows, width] residual
-    stream on ``grid``: rows split over x, columns over y, each padded to whole tiles per core."""
+    """(rows, width covered by the core grid, shard rows, shard width) in elements for a [rows, width]
+    residual stream on ``grid``: rows split over x, columns over y, whole tiles per core."""
     gx, gy = int(grid.x), int(grid.y)
     mt, nt = rows // TILE, width // TILE
     mpc, npc = -(-mt // gx), -(-nt // gy)
@@ -74,18 +74,15 @@ def residual_memory_config(rows, width, grid):
 
 
 def to_resident(x: ttnn.Tensor, grid) -> ttnn.Tensor:
-    """[1, 1, rows, width] (TILE, interleaved) -> the padded, L1-resident residual stream."""
+    """[1, 1, rows, width] (TILE, interleaved) -> the L1-resident residual stream. The shards are uneven
+    (the last row / column of cores holds fewer real tiles); no padded copy is made."""
     rows, width = int(x.padded_shape[-2]), int(x.padded_shape[-1])
-    pr, pw, _, _ = residual_layout(rows, width, grid)
-    if (pr, pw) != (rows, width):
-        x = ttnn.pad(x, [(0, 0), (0, 0), (0, pr - rows), (0, pw - width)], 0.0)
     return ttnn.to_memory_config(x, residual_memory_config(rows, width, grid))
 
 
 def from_resident(res: ttnn.Tensor, rows, width) -> ttnn.Tensor:
     """The L1-resident residual stream -> [1, 1, rows, width] interleaved in DRAM (tests, debugging)."""
-    t = ttnn.to_memory_config(res, ttnn.DRAM_MEMORY_CONFIG)
-    return ttnn.slice(t, [0, 0, 0, 0], [1, 1, rows, width])
+    return ttnn.to_memory_config(res, ttnn.DRAM_MEMORY_CONFIG)
 
 
 def matmul_add_norm(
