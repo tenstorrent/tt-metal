@@ -33,6 +33,7 @@
 #include <set>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <tuple>
 #include <unordered_map>
 #include <unordered_set>
@@ -112,6 +113,61 @@ class GlobalCircularBuffer;
 namespace {
 
 using namespace tt::tt_metal;
+
+using KernelGroupCoreRanges = std::map<std::set<KernelHandle>, std::set<CoreRange>>;
+
+KernelGroupCoreRanges group_cores_by_kernels(
+    const std::unordered_map<KernelHandle, std::shared_ptr<Kernel>>& handle_to_kernel,
+    const CoreCoord& base,
+    const CoreCoord& grid_extent) {
+    // grid maps cores to sets-of-kernels running on that core
+    size_t grid_size = grid_extent.x * grid_extent.y;
+    std::vector<bool> valid(grid_size, false);
+    std::vector<std::set<KernelHandle>> grid(grid_size);
+    for (const auto& [id, kernel] : handle_to_kernel) {
+        for (auto core : kernel->logical_cores()) {
+            int core_index = (core.y * grid_extent.x) + core.x;
+            valid[core_index] = true;
+            grid[core_index].insert(id);
+        }
+    }
+
+    // Flip the mapping to get sets-of-kernels to cores
+    KernelGroupCoreRanges map;
+    for (auto y = base.y; y < grid_extent.y; y++) {
+        for (auto x = base.x; x < grid_extent.x; x++) {
+            int index = (y * grid_extent.x) + x;
+            if (valid[index]) {
+                // grid is not used any more. Avoid copy construction by moving.
+                auto [it, inserted] = map.try_emplace(std::move(grid[index]));
+                it->second.insert(CoreRange({x, y}, {x, y}));
+            }
+        }
+    }
+
+    return map;
+}
+
+// Resource-only nodes participate in ownership and L1 validation, but do not
+// create kernel groups or launches.
+std::vector<SubDeviceId> resource_sub_device_ids(
+    const IDevice* device, const CoreRangeSet& cores, std::string_view resource_name) {
+    std::vector<SubDeviceId> sub_device_ids;
+    uint32_t covered = 0;
+    for (size_t i = 0; i < device->num_sub_devices(); ++i) {
+        const auto id = SubDeviceId{static_cast<unsigned char>(i)};
+        const auto intersection = device->worker_cores(HalProgrammableCoreType::TENSIX, id).intersection(cores);
+        if (!intersection.empty()) {
+            sub_device_ids.push_back(id);
+            covered += intersection.num_cores();
+        }
+    }
+    TT_FATAL(
+        covered == cores.num_cores(),
+        "{} placement contains nodes outside the active sub-device worker grids",
+        resource_name);
+    return sub_device_ids;
+}
 
 size_t get_ringbuffer_size(IDevice* device, HalProgrammableCoreType programmable_core_type) {
     const auto& hal = MetalContext::instance(extract_context_id(device)).hal();
@@ -1122,30 +1178,7 @@ void detail::ProgramImpl::update_kernel_groups(uint32_t programmable_core_type_i
         grid_extent_[programmable_core_type_index].x++;
         grid_extent_[programmable_core_type_index].y++;
 
-        // grid maps cores to sets-of-kernels running on that core
-        size_t grid_size = grid_extent_[programmable_core_type_index].x * grid_extent_[programmable_core_type_index].y;
-        std::vector<bool> valid(grid_size, false);
-        std::vector<std::set<KernelHandle>> grid(grid_size);
-        for (const auto& [id, kernel] : handle_to_kernel) {
-            for (auto core : kernel->logical_cores()) {
-                int core_index = (core.y * grid_extent_[programmable_core_type_index].x) + core.x;
-                valid[core_index] = true;
-                grid[core_index].insert(id);
-            }
-        }
-
-        // Flip the mapping to get sets-of-kernels to cores
-        std::map<std::set<KernelHandle>, std::set<CoreRange>> map;
-        for (auto y = base.y; y < grid_extent_[programmable_core_type_index].y; y++) {
-            for (auto x = base.x; x < grid_extent_[programmable_core_type_index].x; x++) {
-                int index = (y * grid_extent_[programmable_core_type_index].x) + x;
-                if (valid[index]) {
-                    // grid is not used any more. Avoid copy construction by moving.
-                    auto [it, inserted] = map.try_emplace(std::move(grid[index]));
-                    it->second.insert(CoreRange({x, y}, {x, y}));
-                }
-            }
-        }
+        auto map = group_cores_by_kernels(handle_to_kernel, base, grid_extent_[programmable_core_type_index]);
 
         // Build the list of KernelGroups with merged core range sets from the
         // mapping of sets-of-kernels to cores
@@ -3015,22 +3048,9 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
         };
         find_sub_device_ids(HalProgrammableCoreType::TENSIX);
         find_sub_device_ids(HalProgrammableCoreType::ACTIVE_ETH);
-        // Resource-only nodes participate in ownership and L1 validation, but do not
-        // create kernel groups or launches.
         for (const auto& group : scratchpad_allocation_groups()) {
-            uint32_t covered = 0;
-            for (size_t i = 0; i < device->num_sub_devices(); ++i) {
-                const auto id = SubDeviceId{static_cast<unsigned char>(i)};
-                const auto intersection =
-                    device->worker_cores(HalProgrammableCoreType::TENSIX, id).intersection(group.cores);
-                if (!intersection.empty()) {
-                    used_sub_device_ids.insert(id);
-                    covered += intersection.num_cores();
-                }
-            }
-            TT_FATAL(
-                covered == group.cores.num_cores(),
-                "Scratchpad placement contains nodes outside the active sub-device worker grids");
+            const auto ids = resource_sub_device_ids(device, group.cores, "Scratchpad");
+            used_sub_device_ids.insert(ids.begin(), ids.end());
         }
         auto [sub_device_ids, _] = sub_device_ids_map.insert_or_assign(
             sub_device_manager_id, std::vector<SubDeviceId>(used_sub_device_ids.begin(), used_sub_device_ids.end()));

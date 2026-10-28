@@ -2097,6 +2097,48 @@ std::vector<DFBRiscConfig> DataflowBufferImpl::compute_per_core_risc_configs(con
     return per_core_rc;
 }
 
+namespace {
+
+uint32_t dfb_config_size_for_cores(
+    const Hal& hal,
+    const CoreRangeSet& cores,
+    const std::vector<std::shared_ptr<DataflowBufferImpl>>& dataflow_buffers) {
+    // WH/BH addresses a DFB's config by its device slot (slot N starts at N * serialized_size), so the
+    // region has to span the highest slot in use on these cores, not just hold one entry per DFB.
+    // Quasar uses a single program-wide packed layout sized by compute_dfb_config_serialized_size.
+    const bool slot_addressed = !hal.has_tile_counter_registers();
+
+    bool has_dfb = false;
+    uint32_t max_slot_plus_one = 0;
+    for (const auto& dfb : dataflow_buffers) {
+        TT_ASSERT(dfb->configs_finalized, "DFB {} configs not finalized before serialization", dfb->id);
+        for (const CoreRange& range : cores.ranges()) {
+            if (dfb->core_ranges.intersects(range)) {
+                has_dfb = true;
+                if (slot_addressed) {
+                    max_slot_plus_one = std::max(max_slot_plus_one, dfb->device_slot + 1);
+                }
+                break;
+            }
+        }
+    }
+    // compute_dfb_config_serialized_size covers the full layout: header + DM1/DM0 blobs +
+    // per-hart sequential blobs + producer-ready region + alignment padding.
+    uint32_t config_size =
+        (has_dfb && hal.has_tile_counter_registers()) ? compute_dfb_config_serialized_size(dataflow_buffers) : 0u;
+    if (slot_addressed && has_dfb) {
+        // WH/BH: region spans the highest device slot used by DFBs on these cores.
+        config_size = max_slot_plus_one * dfb_wh_bh_serialized_size();
+    }
+
+    if (hal.has_tile_counter_registers() && config_size > 0) {
+        config_size = align_dfb_config_transfer_size(hal, config_size);
+    }
+    return config_size;
+}
+
+}  // namespace
+
 uint32_t finalize_dfbs(
     uint32_t /*programmable_core_type_index*/,
     std::vector<std::shared_ptr<tt::tt_metal::KernelGroup>>& kernel_groups,
@@ -2111,46 +2153,12 @@ uint32_t finalize_dfbs(
     const ContextId context_id = dataflow_buffers.front()->get_context_id();
     const auto& hal = MetalContext::instance(context_id).hal();
 
-    // WH/BH addresses a DFB's config by its device slot (slot N starts at N * serialized_size), so the
-    // region has to span the highest slot in use on the kernel group, not just hold one entry per DFB.
-    // Quasar uses a single program-wide packed layout sized by compute_dfb_config_serialized_size.
-    const bool slot_addressed = !hal.has_tile_counter_registers();
-
     dfb_offset = base_offset;
-    dfb_size = 0;
-
+    dfb_size = std::accumulate(kernel_groups.begin(), kernel_groups.end(), 0u, [&](uint32_t size, const auto& kg) {
+        return std::max(size, dfb_config_size_for_cores(hal, kg->core_ranges, dataflow_buffers));
+    });
     for (auto& kg : kernel_groups) {
-        auto kernel_config = kg->launch_msg.view().kernel_config();
-        kernel_config.local_cb_offset() = base_offset;
-
-        bool kg_has_dfb = false;
-        uint32_t max_slot_plus_one = 0;
-        for (const auto& dfb : dataflow_buffers) {
-            TT_ASSERT(dfb->configs_finalized, "DFB {} configs not finalized before serialization", dfb->id);
-            for (const CoreRange& kg_range : kg->core_ranges.ranges()) {
-                if (dfb->core_ranges.intersects(kg_range)) {
-                    kg_has_dfb = true;
-                    if (slot_addressed) {
-                        max_slot_plus_one = std::max(max_slot_plus_one, dfb->device_slot + 1);
-                    }
-                    break;
-                }
-            }
-        }
-        // compute_dfb_config_serialized_size covers the full layout: header + DM1/DM0 blobs +
-        // per-hart sequential blobs + producer-ready region + alignment padding.
-        uint32_t kg_dfb_size = (kg_has_dfb && hal.has_tile_counter_registers())
-                                   ? compute_dfb_config_serialized_size(dataflow_buffers)
-                                   : 0u;
-        if (slot_addressed && kg_has_dfb) {
-            // WH/BH: region spans the highest device slot used by DFBs on this kernel group.
-            kg_dfb_size = max_slot_plus_one * dfb_wh_bh_serialized_size();
-        }
-
-        if (hal.has_tile_counter_registers() && kg_dfb_size > 0) {
-            kg_dfb_size = align_dfb_config_transfer_size(hal, kg_dfb_size);
-        }
-        dfb_size = std::max(dfb_size, kg_dfb_size);
+        kg->launch_msg.view().kernel_config().local_cb_offset() = base_offset;
     }
 
     log_debug(
