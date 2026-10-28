@@ -67,13 +67,48 @@ constexpr uint32_t forward_descriptors_per_stream(uint32_t ring_extent) {
     return m * (m - 1) / 2;
 }
 
-// A stream's fwd_section is its slice of the DRAM forwarding buffer: fwd_pages_per_stream pages starting
-// at page stream * fwd_pages_per_stream. Each page is one token plus its fwd_meta. The upstream chip's
-// sender writes it and this chip's reader reads it.
+// ---------------------------------------------------------------------------------------------------
+// Virtual channels.
 //
-// Pages one stream's fwd_section must hold. A chunk's length depends on expert_offsets, which is on
-// device; reading it back while building the program would break trace capture, so this is an upper bound
-// that does not depend on the data.
+// A forwarding region is not one queue but one per MOVEMENT CLASS: the (hops upstream, hops downstream)
+// pair a page is in. That is the same set the forward descriptors enumerate -- a descriptor is an
+// (origin, destination) pair crossing this chip -- so a channel index IS an index into that list and
+// there are forward_descriptors_per_stream of them.
+//
+// Two properties make a channel per class safe at ANY depth, which is what lets the region shrink:
+//
+//   DRAIN. A class with dst == +1 is delivered to the next chip's OUTPUT, so draining it needs no space
+//   anywhere. Every other class moves one hop and becomes a class nearer +1, so every chain ends in a
+//   deliverable one within half_extent - 1 hops: (-1,+3) -> (-2,+2) -> (-3,+1) -> out. The graph is a
+//   forest of paths, never a cycle, so a blocked chip always has a legal move and capacity stops being a
+//   correctness parameter. Merge classes and that stops holding -- lump every dst > +1 together and
+//   (-1,+3) -> (-2,+2) lands back in the same channel, which wraps the ring.
+//
+//   ORDER. Each class at a chip is fed by exactly one class on the chip before it, so a channel has a
+//   single producer and stays a dense FIFO. Both chips derive page positions from the same running count
+//   with nothing exchanged, exactly as the single flat section used to.
+// ---------------------------------------------------------------------------------------------------
+
+constexpr uint32_t num_vcs(uint32_t ring_extent) { return forward_descriptors_per_stream(ring_extent); }
+
+// The (src, dst) hop offsets of every channel, in channel order.
+std::vector<std::pair<int32_t, int32_t>> forwarding_classes(uint32_t ring_extent);
+
+// The channel a page in channel `vc` lands in on the next chip, or VC_NONE when it is delivered there.
+uint32_t vc_after_hop(uint32_t vc, uint32_t ring_extent);
+
+// The channel this chip's own tokens for a destination `distance` hops away land in downstream. Only
+// distance >= 2 is forwarded at all; distance 1 is a final write and has no channel.
+uint32_t vc_for_own(uint32_t distance, uint32_t ring_extent);
+
+// A stream's fwd_section is its slice of the DRAM forwarding buffer: fwd_pages_per_stream pages starting
+// at page stream * fwd_pages_per_stream, divided into num_vcs channels of fwd_vc_pages each. Each page is
+// one token plus its fwd_meta. The upstream chip's sender writes it and this chip's reader reads it.
+//
+// What the region cost per stream when it was one flat queue that had to hold a whole launch, which is what
+// fwd_reduction divides. A chunk's length depends on expert_offsets, which is on device; reading it back
+// while building the program would break trace capture, so this is an upper bound that does not depend on
+// the data.
 //
 // One origin sends one destination at most seq_len_per_chip * min(num_experts_per_tok,
 // experts_per_chip) tokens, because a token picks distinct experts and the destination hosts
@@ -81,11 +116,37 @@ constexpr uint32_t forward_descriptors_per_stream(uint32_t ring_extent) {
 // at distance dd is fed by m-dd origins: exactly one is a full m away and splits across every stream, and
 // the rest split across the num_links streams going that way. One spare page per chunk covers rounding
 // when a chunk is split.
-uint32_t fwd_pages_per_stream(
+//
+// Note this bound charges every (origin, destination) pair a full run independently, which per-origin
+// conservation forbids -- the m-1 origins feeding a stream emit (m-1) runs between them, not the m(m-1)/2
+// the pairs suggest. It is kept as the baseline the reduction divides so a factor means the same thing it
+// does for combine_fabric2d.
+uint32_t dense_pages_per_stream(
     uint32_t ring_extent,
     uint32_t num_links,
     uint32_t seq_len_per_chip,
     uint32_t num_experts_per_tok,
     uint32_t experts_per_chip);
+
+// Pages one channel holds. A FACTOR rather than a page count so it means the same thing for every model:
+// the dense size scales with num_experts_per_tok and the experts a chip hosts, so a fixed page count would
+// be a different reduction for each of them. Reducing it is free of correctness risk -- see the DRAIN note
+// above -- and costs only throughput, which is why it is an op parameter rather than a constant here.
+uint32_t fwd_vc_pages(
+    uint32_t ring_extent,
+    uint32_t num_links,
+    uint32_t seq_len_per_chip,
+    uint32_t num_experts_per_tok,
+    uint32_t experts_per_chip,
+    uint32_t fwd_reduction);
+
+// Pages a stream's whole section holds: every channel, each the same depth.
+uint32_t fwd_pages_per_stream(
+    uint32_t ring_extent,
+    uint32_t num_links,
+    uint32_t seq_len_per_chip,
+    uint32_t num_experts_per_tok,
+    uint32_t experts_per_chip,
+    uint32_t fwd_reduction);
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch_fabric2d

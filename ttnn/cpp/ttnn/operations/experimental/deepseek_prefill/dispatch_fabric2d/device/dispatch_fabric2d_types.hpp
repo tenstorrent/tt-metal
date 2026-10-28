@@ -24,6 +24,12 @@ struct DispatchFabric2dParams {
     uint32_t seq_len_per_chip = 640;
     uint32_t axis = 0;
     uint32_t num_links = 2;
+    // How much smaller than the dense forwarding region to make this op's. The region is split by movement
+    // class, so every chain of classes ends in one that delivers to the next chip's output and needs no
+    // space anywhere: a blocked chip always has a legal move and no depth can deadlock the ring. What a
+    // reduction costs is throughput, and where that curve bends is a measurement, which is why it is a
+    // parameter rather than a constant.
+    uint32_t fwd_reduction = 1;
     // The kernel reads padding_config under a compile-time branch, so this must be in the cache key.
     bool has_padding_config = false;
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Mesh;

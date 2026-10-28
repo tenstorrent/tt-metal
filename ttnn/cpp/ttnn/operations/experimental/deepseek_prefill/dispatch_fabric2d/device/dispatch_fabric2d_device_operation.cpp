@@ -81,6 +81,7 @@ void DispatchFabric2dDeviceOperation::validate_on_program_cache_miss(
         "dispatch_fabric2d: num_links must be between 1 and 4 (got {})",
         args.num_links);
     TT_FATAL(args.seq_len_per_chip > 0, "dispatch_fabric2d: seq_len_per_chip must be positive");
+    TT_FATAL(args.fwd_reduction >= 1, "dispatch_fabric2d: fwd_reduction must be >= 1 (got {})", args.fwd_reduction);
     TT_FATAL(
         args.output_mem_config.buffer_type() == tt::tt_metal::BufferType::DRAM &&
             args.output_mem_config.memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
@@ -278,6 +279,7 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
     uint32_t seq_len_per_chip,
     uint32_t axis,
     uint32_t num_links,
+    uint32_t fwd_reduction,
     tt::tt_fabric::Topology topology,
     const tt::tt_metal::MemoryConfig& memory_config,
     const CoreRangeSet& worker_core_range_set) {
@@ -294,6 +296,7 @@ std::array<ttnn::Tensor, 2> dispatch_fabric2d(
             .seq_len_per_chip = seq_len_per_chip,
             .axis = axis,
             .num_links = num_links,
+            .fwd_reduction = fwd_reduction,
             .has_padding_config = padding_config.has_value(),
             .topology = topology,
             .output_mem_config = memory_config,
