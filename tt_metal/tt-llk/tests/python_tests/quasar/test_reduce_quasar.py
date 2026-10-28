@@ -175,11 +175,6 @@ def test_reduce_quasar(
     perf_report=None,
     input_dimensions=None,
 ):
-    if formats.input_format.is_integer() and reduce_dim == ReduceDimension.Scalar:
-        pytest.skip(
-            "[ttsim:UnimplementedFunctionality] tensix_movb2a: ALU_ACC_CTRL_INT8_math_enabled"
-        )
-
     tile_shape = construct_tile_shape(tile_dimensions)
 
     if input_dimensions is None:
