@@ -40,10 +40,6 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import MlaKvCache, MlaKvC
 _BLOCK_TIMING_ENABLED = os.environ.get("TT_PREFILL_BLOCK_TIMING", "0") == "1"
 _BLOCK_TIMINGS: dict[int, dict[str, list[float]]] = {}
 
-# Opt-in (TT_PREFILL_FUSED_MM_RS=1): MLA's q_a_proj / o_proj and the indexer's wk / weights_proj run their matmul and
-# TP reduce-scatter as one matmul_reduce_scatter_prefill op. Off by default.
-_FUSED_MM_RS_ENABLED = os.environ.get("TT_PREFILL_FUSED_MM_RS", "0") == "1"
-
 
 def reset_block_timings() -> None:
     """Drop all recorded per-layer MLA/FFN samples (e.g. to exclude a warmup iteration)."""
@@ -335,15 +331,6 @@ class TtPrefillBlock(LightweightModule):
             and config.num_attention_heads == 32
             and config.q_lora_rank == 1024
         )
-        use_glm53_l1_attn_norm = (
-            is_blackhole()
-            and is_chunked
-            and seq_len // mesh_device.shape[sp_axis] == 640
-            and config.num_attention_heads == 64
-            and config.q_lora_rank == 2048
-            and getattr(config, "indexer_types", None) is not None
-            and not _FUSED_MM_RS_ENABLED  # the fused op reads its input from DRAM
-        )
         self.attn_norm = TtDistributedRmsNorm(
             mesh_device=mesh_device,
             emb_dim=emb_dim,
@@ -355,7 +342,6 @@ class TtPrefillBlock(LightweightModule):
             weight_cache_path=weight_cache_path,
             cache_name_prefix=f"layer_{layer_idx}.attn_norm",
             use_fused=use_fused_rmsnorm,
-            output_memcfg=ttnn.L1_MEMORY_CONFIG if use_glm53_l1_attn_norm else None,
             post_use_2d_core_grid=use_mistral4_2d_post_norm,
         )
 
@@ -385,7 +371,6 @@ class TtPrefillBlock(LightweightModule):
             first_layer_idx=first_layer_idx,
             llama4_scale_cache=llama4_scale_cache,
             tp_shard_kv=tp_shard_kv,
-            fused_mm_rs=_FUSED_MM_RS_ENABLED,
         )
 
         if kv_only:

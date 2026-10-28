@@ -304,7 +304,6 @@ class ttMLA:
         llama4_scale_cache: Optional[dict] = None,
         sparse_mla_overlap_profile: Optional[str] = None,
         tp_shard_kv: Optional[bool] = None,
-        fused_mm_rs: bool = False,
     ):
         # DSA indexer weights (v3.2 / GLM): extract NON-mutating, so the caller's state_dict survives
         # repeated construction / cache build+load (the old pop() emptied it on the first pass). Dense
@@ -468,7 +467,7 @@ class ttMLA:
 
         self.ccl_num_links = 2 if self._is_blackhole else 1  # Blackhole trains 2 fabric routing planes, others 1
         # q_a_proj, o_proj and the indexer's wk / weights_proj run matmul + TP reduce-scatter as one op.
-        self._fused_mm_rs = fused_mm_rs and self.tp_factor > 1
+        self._fused_mm_rs = self.tp_factor > 1
 
         # The TP high-bandwidth all-gathers operate on the fixed prefill chunk, never on the full
         # growing KV-cache. Allocate their worst-case outputs once at construction and share them
