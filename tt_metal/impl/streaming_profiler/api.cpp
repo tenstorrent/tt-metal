@@ -4,75 +4,385 @@
 
 #include <tt-metalium/experimental/streaming_profiler.hpp>
 
+#include <algorithm>
+#include <array>
+#include <bit>
 #include <atomic>
-#include <deque>
+#include <cstring>
 #include <functional>
+#include <memory_resource>
 #include <mutex>
 #include <optional>
+#include <ranges>
 #include <span>
 #include <string>
 #include <utility>
+#include <variant>
+#include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt_stl/indestructible.hpp>
 
 #include "hostdev/profiler_zone_id.h"
+#include "hostdev/record_site.h"
+#include "impl/streaming_profiler/decode.hpp"
 #include "impl/streaming_profiler/service.hpp"
 #include "impl/streaming_profiler/sync/clock_map.hpp"
-#include "llrt/zone_meta.hpp"
+#include "llrt/call_sites.hpp"
 
 namespace api = tt::tt_metal::experimental::streaming_profiler;
-
-namespace tt::tt_metal::experimental::streaming_profiler::detail {
-static_assert(ZONE_ID_BITS == TT_ZONE_ID_BITS);
-static_assert(ZONE_ID_COUNT == TT_ZONE_ID_COUNT);
-std::atomic<const MarkerSite*> SiteRegistry::sites[ZONE_ID_COUNT];
-}  // namespace tt::tt_metal::experimental::streaming_profiler::detail
 
 namespace tt::tt_metal::streaming_profiler {
 
 namespace {
 
-static_assert(TT_ZONE_STALL_ID < api::detail::ZONE_ID_COUNT);
+using api::detail::code_bytes;
+using api::detail::kTimestampCode;
+constexpr uint16_t kBoolCode = api::detail::type_code<bool>();
 
-constexpr api::MarkerSite kStallSite{.name = api::STALL_ZONE_NAME};
+// A field's size in a host record.
+constexpr uint32_t host_bytes(uint16_t code) {
+    return code == kTimestampCode ? sizeof(api::Timestamp) : code_bytes(code);
+}
 
-// Fills the table behind api::detail::site_of from the zone-name registry as ELFs load. Nothing is ever freed: a
-// record may hold a site's address for the life of the process. Ids are unique per process by construction
-// (each image owns a block), so a slot is written once; a repeat is a registry fault and the first writer wins.
-class SiteTables {
+// How a Timestamp field's ticks come from what its record sent.
+PayloadToRecord::Op timestamp_op(const tt::llrt::CallSite& site, uint32_t field) {
+    using Op = PayloadToRecord::Op;
+    return field == site.payload_publish_time_field ? Op::Published
+           : site.timestamps_as_distances           ? Op::Distance
+                                                    : Op::Time;
+}
+
+struct RecordTimes {
+    const ClockMap& map;
+    ClockMap::Reader& reader;
+    uint32_t dev;
+    uint64_t clock_offset;
+    uint64_t published_ticks;
+    // A host Timestamp holds the device time, then the host time.
+    api::Timestamp timestamp(uint64_t ticks) const {
+        const int64_t host = map.place_host(reader, dev, static_cast<int64_t>(ticks + clock_offset));
+        return std::bit_cast<api::Timestamp>(std::array{ticks, static_cast<uint64_t>(host)});
+    }
+};
+
+class PayloadFields final : public api::detail::FieldReader {
 public:
-    void add(std::span<const tt::llrt::ZoneMetaEntry* const> entries) {
-        std::lock_guard<std::mutex> lk(mu_);
-        for (const tt::llrt::ZoneMetaEntry* e : entries) {
-            if (e->zone_id >= api::detail::ZONE_ID_COUNT) {
-                continue;
-            }
-            auto& slot = api::detail::SiteRegistry::sites[e->zone_id];
-            if (slot.load(std::memory_order_relaxed) == nullptr) {
-                slot.store(
-                    &sites_.emplace_back(
-                        api::MarkerSite{.name = e->name, .location = {.file = e->file, .line = e->line}}),
-                    std::memory_order_release);
-            }
+    PayloadFields(
+        const tt::llrt::CallSite& site,
+        std::span<const std::byte> bytes,
+        std::span<const tt::llrt::FieldBits> bits,
+        std::span<const uint8_t> alternatives,
+        std::pmr::memory_resource* arena,
+        const RecordTimes* times) :
+        FieldReader(alternatives, site.argument_field_counts, arena),
+        site_(&site),
+        times_(times),
+        bytes_(bytes),
+        codes_(site.payload_codes),
+        bits_(bits) {}
+
+private:
+    void read(std::span<std::byte> out) override {
+        const size_t field = field_++;
+        const uint16_t code = codes_[field];
+        const uint64_t value = field_value(bytes_.data(), bits_[field].bit, bits_[field].width, code);
+        if (code == kTimestampCode) {
+            const PayloadToRecord::Op op = timestamp_op(*site_, field);
+            const api::Timestamp time = times_->timestamp(timestamp_ticks(op, times_->published_ticks, value));
+            std::memcpy(out.data(), &time, out.size());
+        } else {
+            std::memcpy(out.data(), &value, out.size());
         }
     }
 
-private:
-    std::mutex mu_;
-    std::deque<api::MarkerSite> sites_;
+    const tt::llrt::CallSite* site_ = nullptr;
+    const RecordTimes* times_ = nullptr;
+    std::span<const std::byte> bytes_;
+    std::span<const uint16_t> codes_;
+    std::span<const tt::llrt::FieldBits> bits_;
+    std::size_t field_ = 0;
 };
+
+// A call site's metadata, from the values its image held.
+class MetadataFields final : public api::detail::FieldReader {
+public:
+    explicit MetadataFields(const tt::llrt::CallSite& site) : site_(&site) {}
+
+private:
+    void read(std::span<std::byte> out) override {
+        std::visit([&](const auto& value) { std::memcpy(out.data(), &value, out.size()); }, site_->metadata[field_++]);
+    }
+
+    const tt::llrt::CallSite* site_ = nullptr;
+    std::size_t field_ = 0;
+};
+
+// The alternative each of a call site's arguments takes in `record_type`, when the site sends records of that type: one
+// argument per entry of record_type.arguments, or any number for a variadic type. A named type is matched by its name
+// alone: one whose fields differ between the two sides has already stopped the program (tt::llrt::add_host_type).
+std::optional<std::vector<uint8_t>> match(
+    const tt::llrt::CallSite& site, const api::detail::RecordTypeDescriptor& record_type) {
+    if (site.metadata_type != record_type.metadata_type ||
+        (!record_type.variadic && site.arguments.size() != record_type.arguments.size())) {
+        return std::nullopt;
+    }
+    std::vector<uint8_t> alternatives;
+    for (std::size_t k = 0; k < site.arguments.size(); k++) {
+        const tt::llrt::CallSite::Argument& argument = site.arguments[k];
+        const std::span<const api::detail::ArgumentType> types = record_type.arguments[record_type.variadic ? 0 : k];
+        const auto codes = std::span(site.payload_codes).subspan(argument.first_field, argument.field_bits.size());
+        const auto fits = [&](const api::detail::ArgumentType& type) {
+            return type.name == argument.type && type.array == argument.is_array &&
+                   std::ranges::equal(type.codes, codes) &&
+                   (type.count == 0 || type.count * argument.field_bits.size() == site.argument_field_counts[k]);
+        };
+        // An array of the exact length beats a span, as an exact match beats a conversion when a std::variant is built.
+        auto chosen = std::ranges::find_if(
+            types, [&](const api::detail::ArgumentType& type) { return type.count != 0 && fits(type); });
+        if (chosen == types.end()) {
+            chosen = std::ranges::find_if(types, fits);
+        }
+        if (chosen == types.end()) {
+            return std::nullopt;
+        }
+        alternatives.push_back(uint8_t(chosen - types.begin()));
+    }
+    return alternatives;
+}
+
+class ProbeFields final : public api::detail::FieldReader {
+public:
+    ProbeFields(std::span<const uint16_t> codes, size_t probed_field) : codes_(codes), probed_field_(probed_field) {}
+
+private:
+    void read(std::span<std::byte> out) override {
+        const uint16_t code = codes_[field_];
+        const bool probed = field_++ == probed_field_;
+        if (code == kBoolCode) {
+            out[0] = std::byte(probed);
+        } else {
+            std::ranges::fill(out, probed ? std::byte{0xFF} : std::byte{0});
+        }
+    }
+
+    std::span<const uint16_t> codes_;
+    size_t probed_field_ = 0, field_ = 0;
+};
+
+// The byte offset of each payload field in a record the decoder writes directly, found by building one record per field
+// with only that field's bits set. A payload without a fixed layout, or with a field narrower than its bytes, is built
+// instead. A bool shows one bit, so it counts as whole when no other field shares its byte.
+std::optional<std::vector<uint32_t>> direct_offsets(const api::detail::RecordTypeDescriptor& record_type) {
+    const std::span<const uint16_t> codes = record_type.payload_codes;
+    if (!record_type.fixed_layout) {
+        return std::nullopt;
+    }
+    std::vector<std::byte> samples(record_type.size * codes.size());
+    std::vector<tt::llrt::FieldBits> bits;
+    for (size_t field = 0; field < codes.size(); field++) {
+        ProbeFields fields(codes, field);
+        record_type.build(
+            samples.data() + field * record_type.size, api::detail::RecordOrigin{}, api::Timestamp{}, fields);
+        bits.push_back(tt::llrt::find_set_bits(std::span(samples).subspan(field * record_type.size, record_type.size)));
+    }
+    std::vector<uint32_t> offsets;
+    const auto alone_in_byte = [&](size_t field) {
+        const uint32_t byte = bits[field].bit / 8;
+        return std::ranges::none_of(std::views::iota(size_t{0}, codes.size()), [&](size_t other) {
+            return other != field && bits[other].bit / 8 <= byte &&
+                   byte < (bits[other].bit + bits[other].width + 7) / 8;
+        });
+    };
+    for (size_t field = 0; field < codes.size(); field++) {
+        const bool fills_its_bytes = bits[field].width == 8 * host_bytes(codes[field]) ||
+                                     (codes[field] == kBoolCode && bits[field].width == 1 && alone_in_byte(field));
+        if (bits[field].bit % 8 != 0 || !fills_its_bytes) {
+            return std::nullopt;
+        }
+        offsets.push_back(bits[field].bit / 8);
+    }
+    return offsets;
+}
+
+PayloadToRecord payload_to_record(
+    const tt::llrt::CallSite& site, std::span<const tt::llrt::FieldBits> bits, std::span<const uint32_t> offsets) {
+    using Op = PayloadToRecord::Op;
+    PayloadToRecord result;
+    for (uint32_t field = 0; field < site.payload_codes.size(); field++) {
+        const uint16_t code = site.payload_codes[field];
+        const Op op = code == kTimestampCode ? timestamp_op(site, field) : Op::Copy;
+        result.fields.push_back({op, code, offsets[field], bits[field].bit, bits[field].width});
+        if (op == Op::Distance || op == Op::Published) {
+            result.follows_time.push_back(offsets[field]);
+        }
+    }
+    return result;
+}
+
+// The layout spsc_short_records() writes a short form's records in, or none when the form's fields don't fit it.
+// The payload is a distance, or the bytes of fields that share one qword of the record.
+std::optional<profiler::SpscShortLayout> short_run_layout(const PayloadToRecord& payload_to_record, uint32_t stride) {
+    using Layout = profiler::SpscShortLayout;
+    Layout layout{.stride = stride};
+    layout.payload_shuffle.fill(Layout::kZeroByte);
+    std::optional<uint32_t> copied_qword;
+    uint32_t filled_qwords = 0;
+    const auto pick = [&](uint32_t qword, Layout::Qword from) {
+        layout.payload_dwords[2 * qword] = 2 * from;
+        layout.payload_dwords[2 * qword + 1] = 2 * from + 1;
+        filled_qwords |= 1u << qword;
+    };
+    const auto qword_of = [](uint32_t byte) { return (byte - profiler::kSpscHeadBytes) / 8; };
+    for (const PayloadToRecord::Field& field : payload_to_record.fields) {
+        const uint32_t qword = qword_of(field.to);
+        if (field.op == PayloadToRecord::Op::Copy) {
+            const uint32_t bytes = code_bytes(field.code);
+            if (layout.distance_mask != 0 || qword_of(field.to + bytes - 1) != qword ||
+                copied_qword.value_or(qword) != qword) {
+                return std::nullopt;
+            }
+            copied_qword = qword;
+            pick(qword, Layout::kPayload);
+            // The shuffle covers four records, two in each 128-bit half.
+            for (uint32_t k = 0; k < bytes; k++) {
+                for (uint32_t record = 0; record < layout.payload_shuffle.size() / 8; record++) {
+                    layout.payload_shuffle[8 * record + field.to % 8 + k] =
+                        uint8_t(8 * (record % 2) + Layout::kPayloadByte + field.bit / 8 + k);
+                }
+            }
+        } else if (field.op == PayloadToRecord::Op::Distance) {
+            if (copied_qword) {
+                return std::nullopt;
+            }
+            layout.distance_mask = -1;
+            pick(qword, Layout::kPayload);
+            pick(qword + 1, Layout::kOffset);
+        } else {  // Op::Published
+            pick(qword, Layout::kTime);
+            pick(qword + 1, Layout::kOffset);
+        }
+    }
+    // A qword of the record's payload that no field fills would need zeros, which the run kernel doesn't write.
+    if (filled_qwords != (1u << qword_of(layout.stride)) - 1) {
+        return std::nullopt;
+    }
+    return layout;
+}
+
+constexpr uint64_t alternatives_key(uint32_t id, uint32_t type) { return uint64_t{id} << 32 | type; }
 
 }  // namespace
 
-void init_site_registry() {
-    static std::once_flag once;
-    std::call_once(once, [] {
-        api::detail::SiteRegistry::sites[TT_ZONE_STALL_ID].store(&kStallSite, std::memory_order_release);
-        static ttsl::Indestructible<SiteTables> tables;
-        tt::llrt::ZoneMetaRegistry::instance().set_listener(
-            [](std::span<const tt::llrt::ZoneMetaEntry* const> entries) { tables.get().add(entries); });
-    });
+RecordRoutes::RecordRoutes(std::vector<api::detail::RecordTypeDescriptor> record_types) :
+    record_types_(std::move(record_types)), routes_(TT_ZONE_ID_COUNT), short_run_types_(TT_ZONE_ID_COUNT) {
+    for (size_t type = 0; type < record_types_.size(); type++) {
+        std::optional<std::vector<uint32_t>> direct = direct_offsets(record_types_[type]);
+        strides_[type] = direct ? static_cast<uint32_t>(record_types_[type].size) : profiler::kSpscPublishedBytes;
+        if (direct) {
+            direct_types_ |= uint64_t{1} << type;
+            for (size_t field = 0; field < direct->size(); field++) {
+                if (record_types_[type].payload_codes[field] == kTimestampCode) {
+                    time_offsets_[type].push_back((*direct)[field]);
+                }
+            }
+            field_offsets_[type] = std::move(*direct);
+        }
+    }
+}
+
+RecordRoutes::Route RecordRoutes::resolve(uint32_t id) {
+    // An image's call sites are registered when it loads, before it can run, so a record of an unregistered one means a
+    // missing descriptor or a corrupt ring. Its packet forms are unknown, so the lane's time cursor could not be kept.
+    const tt::llrt::CallSite* const site = tt::llrt::find_call_site(id);
+    TT_FATAL(site != nullptr, "streaming profiler: a record of call site {}, which no loaded image describes", id);
+    Route resolved;
+    for (uint32_t type = 0; type < record_types_.size(); type++) {
+        if (std::optional<std::vector<uint8_t>> alternatives = match(*site, record_types_[type])) {
+            resolved.types |= uint64_t{1} << type;
+            alternatives_.emplace(alternatives_key(id, type), std::move(*alternatives));
+        }
+    }
+    for (const tt::llrt::CallSite::PacketLayout& layout : site->packet_layouts) {
+        if (layout.time_form == api::detail::TimeForm::Short) {
+            resolved.short_length = uint8_t(layout.body_words);
+        } else if (layout.time_form == api::detail::TimeForm::Full) {
+            resolved.full_length = uint8_t(layout.body_words);
+        }
+    }
+    if ((resolved.types & direct_types_) != 0) {
+        resolved.payload_to_record =
+            payload_to_record_by_time_form(*site, field_offsets_[std::countr_zero(resolved.types & direct_types_)]);
+    }
+    set_route(id, resolved);
+    return resolved;
+}
+
+uint64_t RecordRoutes::short_run_type(const Route& route) {
+    const uint32_t type = std::countr_zero(route.types);
+    if (route.short_length != 1 || !std::has_single_bit(route.types) || built(type) ||
+        strides_[type] > profiler::SpscShortLayout::kMaxStride) {
+        return 0;
+    }
+    const PayloadToRecord& payload_to_record = (*route.payload_to_record)[uint32_t(api::detail::TimeForm::Short)];
+    const std::optional<profiler::SpscShortLayout> layout = short_run_layout(payload_to_record, strides_[type]);
+    if (!layout) {
+        return 0;
+    }
+    if (!short_runs_[type]) {
+        short_runs_[type] = {.layout = *layout, .payload_to_record = &payload_to_record};
+    }
+    return uint64_t{1} << type;
+}
+
+const PayloadToRecordByTimeForm* RecordRoutes::payload_to_record_by_time_form(
+    const tt::llrt::CallSite& site, std::span<const uint32_t> field_offsets) {
+    PayloadToRecordByTimeForm by_time_form;
+    for (const tt::llrt::CallSite::PacketLayout& layout : site.packet_layouts) {
+        by_time_form[uint32_t(layout.time_form)] = payload_to_record(site, layout.payload_bits, field_offsets);
+    }
+    // The payload is already the records' data when the site has one form and each field sits in it as in a record,
+    // past its head.
+    const bool as_is =
+        site.packet_layouts.size() == 1 &&
+        std::ranges::all_of(
+            by_time_form[uint32_t(site.packet_layouts[0].time_form)].fields, [](const PayloadToRecord::Field& field) {
+                return field.op == PayloadToRecord::Op::Copy && field.bit % 8 == 0 &&
+                       field.width == 8 * code_bytes(field.code) &&
+                       field.to == profiler::kSpscHeadBytes + field.bit / 8;
+            });
+    return as_is ? nullptr : &payload_to_record_by_time_form_.emplace_back(std::move(by_time_form));
+}
+
+std::span<const uint8_t> RecordRoutes::alternatives(uint32_t id, uint32_t type) const {
+    return alternatives_.at(alternatives_key(id, type));
+}
+
+const std::byte* build_records(
+    std::span<const PublishedRecord> published,
+    uint32_t type,
+    const RecordRoutes& routes,
+    std::pmr::memory_resource& arena,
+    const ClockMap& map,
+    ClockMap::Reader& reader,
+    uint32_t dev) {
+    const api::detail::RecordTypeDescriptor& record_type = routes.record_type(type);
+    auto* const out = static_cast<std::byte*>(arena.allocate(published.size() * record_type.size));
+    for (size_t i = 0; i < published.size(); i++) {
+        const PublishedRecord& record = published[i];
+        const tt::llrt::CallSite& site = *tt::llrt::find_call_site(record.origin.call_site_id);
+        const RecordTimes times{map, reader, dev, record.clock_offset, record.ticks};
+        const tt::llrt::CallSite::PacketLayout& layout =
+            *std::ranges::find(site.packet_layouts, record.length, &tt::llrt::CallSite::PacketLayout::body_words);
+        PayloadFields fields(
+            site,
+            std::span(record.bytes, record.byte_count),
+            layout.payload_bits,
+            routes.alternatives(record.origin.call_site_id, type),
+            &arena,
+            &times);
+        record_type.build(out + i * record_type.size, record.origin, times.timestamp(record.ticks), fields);
+    }
+    return out;
 }
 
 }  // namespace tt::tt_metal::streaming_profiler
@@ -81,12 +391,70 @@ namespace tt::tt_metal::experimental::streaming_profiler {
 
 namespace internal = tt::tt_metal::streaming_profiler;
 
-Callback detail::register_callback(std::string name, uint32_t types, std::function<void(const BatchData&)> callback) {
+Callback detail::register_callback(
+    std::string name,
+    std::span<const RecordTypeDescriptor> record_types,
+    std::function<void(const BatchData&)> callback) {
     static std::atomic<uint32_t> anonymous{0};
     if (name.empty()) {
         name = "callback-" + std::to_string(++anonymous);
     }
-    return Callback(internal::service().add_consumer(std::move(name), types, std::move(callback)));
+    for (const RecordTypeDescriptor& record_type : record_types) {
+        tt::llrt::add_host_type(record_type.metadata_type, record_type.metadata_codes);
+        for (const std::span<const ArgumentType> alternatives : record_type.arguments) {
+            for (const ArgumentType& type : alternatives) {
+                tt::llrt::add_host_type(type.name, type.codes);
+            }
+        }
+    }
+    return Callback(internal::service().add_consumer(
+        std::move(name),
+        std::vector<RecordTypeDescriptor>(record_types.begin(), record_types.end()),
+        std::move(callback)));
+}
+
+void detail::visit_chunks(
+    const BatchData& batch, const std::function<void(std::size_t type, std::size_t from, std::size_t count)>& visit) {
+    if (batch.counts.size() == 1) {
+        visit(0, 0, batch.counts[0]);
+        return;
+    }
+    std::array<uint32_t, internal::RecordRoutes::kMaxTypes> visited{};
+    uint32_t type = 0, count = 0;
+    const auto visit_chunk = [&] {
+        if (count != 0) {
+            visit(type, visited[type], count);
+            visited[type] += count;
+            count = 0;
+        }
+    };
+    for (const uint32_t record_type : batch.order) {
+        if (record_type != type) {
+            visit_chunk();
+            type = record_type;
+        }
+        count++;
+    }
+    visit_chunk();
+}
+
+std::atomic<const void*> detail::site_metadata[TT_ZONE_ID_COUNT];
+
+const void* detail::build_site_metadata(uint32_t id, const void* (*build)(FieldReader& fields)) {
+    static std::mutex building;
+    const std::lock_guard lock(building);
+    const void* metadata = site_metadata[id].load(std::memory_order_relaxed);
+    if (metadata == nullptr) {
+        const tt::llrt::CallSite& site = *tt::llrt::find_call_site(id);
+        internal::MetadataFields fields(site);
+        metadata = build(fields);
+        site_metadata[id].store(metadata, std::memory_order_release);
+    }
+    return metadata;
+}
+
+const SourceLocation& detail::location_of(uint32_t call_site_id) {
+    return tt::llrt::find_call_site(call_site_id)->location;
 }
 
 Callback::Callback(Callback&& other) noexcept : id_(std::exchange(other.id_, detail::CallbackId{})) {}
@@ -107,31 +475,11 @@ void Callback::reset() noexcept {
     }
 }
 
-TimestampedData::TimestampedData(const TimestampedData& other) : PointRecord(other), value_count_(other.value_count_) {
-    uint64_t* values = new uint64_t[value_count_];
-    std::ranges::copy(other.payload(), values);
-    values_ = values;
-}
-
-TimestampedData::TimestampedData(TimestampedData&& other) noexcept :
-    PointRecord(other),
-    value_count_(std::exchange(other.value_count_, 0)),
-    values_(std::exchange(other.values_, nullptr)) {}
-
-TimestampedData& TimestampedData::operator=(TimestampedData other) noexcept {
-    PointRecord::operator=(other);
-    std::swap(value_count_, other.value_count_);
-    std::swap(values_, other.values_);
-    return *this;
-}
-
-TimestampedData::~TimestampedData() { delete[] values_; }
-
 bool IsActive() { return internal::service().is_active(); }
 
-constinit thread_local Record::TscToSteadyLine Record::tsc_to_steady_line_{};
+constinit thread_local Timestamp::TscToSteadyLine Timestamp::tsc_to_steady_line_{};
 
-std::chrono::steady_clock::time_point Record::refill_tsc_to_steady_line(int64_t tsc) {
+std::chrono::steady_clock::time_point Timestamp::refill_tsc_to_steady_line(int64_t tsc) {
     const internal::SteadyClock& steady = internal::service().steady();
     const std::optional<internal::Segment<int64_t>> segment = steady.segment_at(tsc);
     TT_FATAL(
@@ -144,7 +492,7 @@ std::chrono::steady_clock::time_point Record::refill_tsc_to_steady_line(int64_t 
         .value = segment->value,
         .slope = segment->slope};
     // Past the newest SteadyClock sample, segment_at() returns an empty segment that only extrapolates, so calling
-    // tsc_to_steady() here would just refill again.
+    // time() here would just refill again.
     return tsc_to_steady_line_.at(tsc);
 }
 
