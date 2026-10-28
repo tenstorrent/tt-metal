@@ -50,6 +50,42 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
     return float(torch.corrcoef(torch.stack([a, b]))[0, 1])
 
 
+def _oracle_row(moe, c1, x: torch.Tensor, experts: list, weights: torch.Tensor, tp: int) -> torch.Tensor:
+    """The MoE of one row in fp64 from the device's own weights (bfp4 experts, bfp8 shared expert, dequantized by
+    ``to_torch``): ``sum_k w_k expert_k(x) + shared(x)``, ``x`` the experts' input row (after the FP8 QDQ)."""
+    routed = c1.routed
+    two_d = lambda t: t.reshape(*t.shape[-2:]).double()
+    hidden = x.shape[0]
+    limit = float(
+        moe.moe.shared_expert.clamped_silu_glu_limit
+        if hasattr(moe.moe.shared_expert, "clamped_silu_glu_limit")
+        else getattr(moe.moe.shared_expert, "_shared").clamped_silu_glu_limit
+    )
+
+    def ffn(g, u, d):
+        inter = d.shape[0]
+        gate, up = x @ g[:, :inter], x @ u[:, :inter]
+        act = torch.nn.functional.silu(torch.clamp(gate, max=limit)) * torch.clamp(up, -limit, limit)
+        return act @ d[:, :hidden]
+
+    tables = [ttnn.to_torch(t).flatten().tolist() for t in ttnn.get_device_tensors(c1.table)]
+    out = torch.zeros(hidden, dtype=torch.float64)
+    for k, e in enumerate(experts):
+        chip = next(i for i, tab in enumerate(tables) if e in tab)
+        l = tables[chip].index(e)
+        g = two_d(ttnn.to_torch(ttnn.get_device_tensors(routed.gate_projs[l])[chip]))
+        u = two_d(ttnn.to_torch(ttnn.get_device_tensors(routed.up_projs[l])[chip]))
+        d = two_d(ttnn.to_torch(ttnn.get_device_tensors(routed.down_projs[l])[chip]))
+        out += weights[k] * ffn(g, u, d)
+    shared = getattr(moe.moe.shared_expert, "_shared", moe.moe.shared_expert)
+    for c in range(tp):  # the shared expert's TP shards of SP rank 0
+        g = two_d(ttnn.to_torch(ttnn.get_device_tensors(shared.gate_proj)[c]))
+        u = two_d(ttnn.to_torch(ttnn.get_device_tensors(shared.up_proj)[c]))
+        d = two_d(ttnn.to_torch(ttnn.get_device_tensors(shared.down_proj)[c]))
+        out += ffn(g, u, d)
+    return out
+
+
 def _row(t, rank: int, u: int, tp: int) -> torch.Tensor:
     """Row ``u`` of rank ``rank``'s tile, the TP shards concatenated -> ``[hidden]`` fp32."""
     chips = ttnn.get_device_tensors(t)
@@ -108,6 +144,8 @@ def test_v41_moe_c1(mesh_device, device_params):
         "shared_in_ffn": shared_in_ffn,
         "c1_shared": shared_mode,
         "c1_select": os.environ.get("V41_DECODE_C1_SELECT", "fresh"),
+        "c1_ffn": os.environ.get("V41_DECODE_C1_FFN", "composite"),
+        "c1_ffn_fidelity": os.environ.get("V41_DECODE_C1_FFN_FIDELITY", "lofi"),
     }
     if shared_mode == "split":
         # the split weights: every chip's piece bit for bit the host slice of its TP shard
@@ -140,6 +178,8 @@ def test_v41_moe_c1(mesh_device, device_params):
         logger.info(f"c1 shared split: width {split.width}, tiles per SP rank {split.counts}, bit-exact on 32 chips")
     worst = {"max_abs": 0.0, "pcc": 1.0, "rel": 0.0}
     coverage = {}
+    use_oracle = os.environ.get("V41_C1_ORACLE", "1" if result["c1_ffn"] == "matvec" else "0") == "1"
+    oracle_worst = {"full": 0.0, "c1": 0.0}
     for trial in range(trials):
         h = torch.randn(sp, ROWS, hidden) * 1.0
         tt_h = ttnn.from_torch(
@@ -188,13 +228,26 @@ def test_v41_moe_c1(mesh_device, device_params):
                 assert torch.equal(ttnn.to_torch(a), ttnn.to_torch(b)), f"counts differ on chip {i}"
             ttnn.deallocate(fresh_counts)
             ttnn.deallocate(fresh_w)
-        ttnn.deallocate(c1.debug["weights"])
         idx = ttnn.to_torch(ttnn.get_device_tensors(c1.debug["indices"])[0])[0, :6].tolist()
-        c1.debug = None
         ref_row, out_row = _row(ref, r, u, tp), _row(out, r, u, tp)
         max_abs = float((ref_row - out_row).abs().max())
         rel = max_abs / max(float(ref_row.abs().max()), 1e-6)
         pcc = _pcc(ref_row, out_row)
+        oracle = {}
+        if use_oracle:
+            # the fp64 MoE of the live row from the device's own (dequantized) weights: which path is nearer it
+            wts = ttnn.to_torch(ttnn.get_device_tensors(c1.debug["weights"])[0])[0, :6].double()
+            x_full = ttnn.to_torch(ttnn.get_device_tensors(c1.debug["x_full"])[0])[0, 0, 0].double()
+            exact = _oracle_row(moe, c1, x_full, idx, wts, tp)
+            for name, row in (("full", ref_row), ("c1", out_row)):
+                d = float((exact - row.double()).abs().max())
+                oracle[name] = {
+                    "rel": round(d / max(float(exact.abs().max()), 1e-6), 6),
+                    "pcc": round(_pcc(exact.float(), row), 6),
+                }
+            ttnn.deallocate(c1.debug["x_full"])
+        ttnn.deallocate(c1.debug["weights"])
+        c1.debug = None
         # every other row of the c1 output is zero on every chip
         idle_max = 0.0
         for i, chip in enumerate(ttnn.get_device_tensors(out)):
@@ -214,6 +267,7 @@ def test_v41_moe_c1(mesh_device, device_params):
             "pcc": round(pcc, 6),
             "ref_absmax": round(float(ref_row.abs().max()), 4),
             "idle_max": idle_max,
+            "oracle": oracle,
         }
         result["trials"].append(entry)
         logger.info(f"c1 moe trial {json.dumps(entry)}")
@@ -222,11 +276,15 @@ def test_v41_moe_c1(mesh_device, device_params):
             "pcc": min(worst["pcc"], pcc),
             "rel": max(worst["rel"], rel),
         }
+        for name in oracle:
+            oracle_worst[name] = max(oracle_worst[name], oracle[name]["rel"])
         assert sum(counts) == 6, f"the row's 6 experts over the chips: {counts}"
         assert idle_max == 0.0, f"the c1 output's idle rows are not zero: {idle_max}"
         for t in (ref, out, tt_h, sel, put):
             ttnn.deallocate(t)
     result["worst"] = {k: round(v, 6) for k, v in worst.items()}
+    if use_oracle:
+        result["oracle_worst_rel"] = oracle_worst
     result["coverage"] = {str(k): v for k, v in sorted(coverage.items())}
     # the per-layer device time of each path, under trace
     h = torch.randn(sp, ROWS, hidden)
@@ -243,6 +301,15 @@ def test_v41_moe_c1(mesh_device, device_params):
         for k, v in C1Moe.host_rows(sp, ROWS, (1, 2)).items()
     }
     sel, put = C1Moe.onehots(rows["c1sel"], rows["c1put"], decoder.c1_table)
+    c1.debug = {}
+    ttnn.deallocate(c1(tt_h, sel, put))
+    timing_counts = [int(ttnn.to_torch(t).sum()) for t in ttnn.get_device_tensors(c1.debug["counts"])]
+    for k in ("weights", "x_full"):
+        if k in c1.debug:
+            ttnn.deallocate(c1.debug[k])
+    c1.debug = None
+    result["timing_chip_counts"] = timing_counts  # the timed row's experts per chip (the busiest chip is the layer)
+    logger.info(f"c1 moe timing row: experts per chip {timing_counts}")
     timing = {}
     paths = (("full", lambda: decoder._ffn(moe, tt_h)), ("c1", lambda: c1(tt_h, sel, put)))
     for name, fn in () if os.environ.get("V41_C1_PROFILE") == "1" else paths:
@@ -272,4 +339,9 @@ def test_v41_moe_c1(mesh_device, device_params):
         with open(os.path.expanduser(out_path), "w") as f:
             json.dump(result, f, indent=1)
     decoder.release()
-    assert worst["pcc"] > 0.999 and worst["rel"] < 0.02, worst
+    assert worst["pcc"] > 0.999, worst
+    if use_oracle and worst["rel"] >= 0.02:
+        # a path nearer the exact MoE than the 32-row path may differ from that path by more than the bf16 bar
+        assert oracle_worst["c1"] <= oracle_worst["full"], oracle_worst
+    else:
+        assert worst["rel"] < 0.02, worst

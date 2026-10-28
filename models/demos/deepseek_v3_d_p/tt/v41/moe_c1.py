@@ -61,9 +61,10 @@ _KERNELS = "models/demos/deepseek_v3_d_p/tt/v41/kernels"
 _TILE = 32
 _SENTINEL = 32  # the identity table's zero row
 # the routed expert FFN op: ``fused`` (moe_fused_swiglu, the in-tree op for few tokens an expert) or ``composite``
-# (unified_routed_expert_moe, today's prefill op: ~90 us an expert at one token)
+# (unified_routed_expert_moe, today's prefill op: ~90 us an expert at one token) or ``matvec`` (C1FfnMatvec, the
+# decode-shaped reader: every core reads, the row and the activated tiles multicast)
 _FFN = os.environ.get("V41_DECODE_C1_FFN", "composite")
-assert _FFN in ("fused", "composite"), _FFN
+assert _FFN in ("fused", "composite", "matvec"), _FFN
 # the shared expert on the c1 path: ``fold`` (the MoE's own shared expert, its partial folded into the tail) or
 # ``split`` (C1SharedSplit)
 _SHARED = os.environ.get("V41_DECODE_C1_SHARED", "fold")
@@ -198,6 +199,193 @@ class C1SharedSplit:
         return out
 
 
+class C1FfnMatvec:
+    """The decode-shaped routed expert FFN (``V41_DECODE_C1_FFN=matvec``): one token row
+    through this chip's selected experts with every core of the grid reading the expert's weights, instead of
+    ``unified_routed_expert_moe``'s 11 column senders multicasting them down the grid at one tile of M (~90 us an
+    expert, 222 GB/s). Per expert: core c < NT_GU owns gate/up column tile c (its two dot
+    products over K from the resident row, fp32 accumulation, the clamped SiLU-GLU in DST); the activated tiles are
+    staged on core 0 and multicast into every core's L1; core c owns down column tiles {c, c + cores, ..} < NT_D.
+    The row ``x`` (bf16 TILE ``[32, hidden]``, row 0 live) is read by a few cores and multicast once by core 0.
+    Output: tile row l of the persistent ``y`` (bf16 ``[EPC * 32, hidden]``, zeroed once and shared by the layers;
+    the other regions keep stale finite values that the local sum's zero weights drop). The kernels are
+    ``kernels/c1_ffn_{reader,compute,writer}.cpp`` (the reader's header has the dataflow). Measured: the reads at ~380 GB/s (52 us an expert), the compute hidden, ~25 us of sync an expert;
+    the one-row step -0.8 ms."""
+
+    BLK_GU = 32
+    BLK_D = 24
+    RING_GU = 5  # gate/up ring blocks: the whole K, so the reader runs an expert ahead of the compute
+    RING_D = 3  # down ring blocks of two columns: the whole K, issued before the activation gather
+    ACT_SLOTS = 3  # activated-row slots (an expert's slot is reused three experts later, after a done barrier)
+    NONE = 0xFFFFFFFF
+    _shared_y = {}  # (device, epc, hidden) -> the output buffer shared by the layers
+
+    def __init__(self, routed, device, hidden: int, epc: int, E: int, fidelity=None):
+        self.routed, self.epc, self.E, self.hidden = routed, epc, E, hidden
+        gate0, down0 = routed.gate_projs[0], routed.down_projs[0]
+        assert gate0.dtype == ttnn.bfloat4_b and down0.dtype == ttnn.bfloat4_b, (gate0.dtype, down0.dtype)
+        gs, ds = tuple(gate0.padded_shape), tuple(down0.padded_shape)
+        inter = int(gate0.shape[-1])
+        assert gs[-2] == hidden and ds[-2] == inter and int(down0.shape[-1]) == hidden, (gs, ds, hidden, inter)
+        self.KT, self.NGU_FULL, self.NT_GU = hidden // _TILE, gs[-1] // _TILE, inter // _TILE
+        self.KD, self.ND_FULL, self.NT_D = inter // _TILE, ds[-1] // _TILE, hidden // _TILE
+        assert self.KT % self.BLK_GU == 0 and self.KD % self.BLK_D == 0, (self.KT, self.KD)
+        grid = device.compute_with_storage_grid_size()
+        self.gx, self.gy = grid.x, grid.y
+        self.n_cores = self.gx * self.gy
+        assert self.n_cores >= self.NT_GU and 2 * self.n_cores >= self.NT_D, (self.n_cores, self.NT_GU, self.NT_D)
+        self.cores = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(self.gx - 1, self.gy - 1))])
+        noc = lambda x, y: device.worker_core_from_logical_core(ttnn.CoreCoord(x, y))
+        c00, c11 = noc(0, 0), noc(self.gx - 1, self.gy - 1)
+        self.rect = [c00.x, c00.y, c11.x, c11.y]
+        fid = {"lofi": ttnn.MathFidelity.LoFi, "hifi2": ttnn.MathFidelity.HiFi2, "hifi4": ttnn.MathFidelity.HiFi4}
+        self.fidelity = fidelity or os.environ.get("V41_DECODE_C1_FFN_FIDELITY", "lofi")
+        # timing probes (wrong outputs): ``noread`` skips the weight reads, ``nocompute`` the matmuls
+        self.probe = {"": 0, "noread": 1, "nocompute": 2, "none": 3}[os.environ.get("V41_DECODE_C1_FFN_PROBE", "")]
+        self.X_SENDERS = self.gy  # one x stripe reader a grid row
+        assert self.KT % self.X_SENDERS == 0, (self.KT, self.X_SENDERS)
+        self.X_PER_SENDER = self.KT // self.X_SENDERS
+        self.tpc = int(os.environ.get("V41_DECODE_C1_FFN_TPC", "1"))  # gate/up column tiles a core (1 or 2)
+        self.dpair = os.environ.get("V41_DECODE_C1_FFN_DPAIR", "1") == "1"  # down: adjacent column pairs a core
+        shard_w = lambda t: (
+            int(t.memory_config().nd_shard_spec.shard_shape[-1]) // _TILE if t.memory_config().nd_shard_spec else 0
+        )
+        self.shard_gu, self.shard_d = shard_w(gate0), shard_w(down0)
+        self.compute = ttnn.ComputeConfigDescriptor(
+            math_fidelity=fid[self.fidelity], fp32_dest_acc_en=True, math_approx_mode=False
+        )
+        # one output buffer for every layer of the decoder (the layers run in order and the local sum reads it
+        # before the next layer's FFN writes it): 3.9 MB a chip instead of 157 at 40 layers
+        key = (id(device), epc, hidden)
+        if key not in C1FfnMatvec._shared_y:
+            C1FfnMatvec._shared_y[key] = ttnn.from_torch(
+                torch.zeros(1, 1, epc * _TILE, hidden),
+                device=device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+            )
+        self.y = C1FfnMatvec._shared_y[key]
+        self.table = routed.global_expert_idx_table
+        self.waddr = [t.buffer_address() for w in (routed.gate_projs, routed.up_projs, routed.down_projs) for t in w]
+        assert len(self.waddr) == 3 * epc
+        # per core: the owned gate/up column and the owned down columns
+        self.per_core = []
+        ngu_cores = -(-self.NT_GU // self.tpc)
+        for i in range(self.n_cores):
+            x, y = i % self.gx, i // self.gx
+            if self.dpair:
+                nd = [n for n in (2 * i, 2 * i + 1) if n < self.NT_D]
+            else:
+                nd = [n for n in (i, i + self.n_cores) if n < self.NT_D]
+            self.per_core.append(
+                {
+                    "xy": (x, y),
+                    "ngu": i if i < ngu_cores else self.NONE,
+                    "nd": (nd + [self.NONE, self.NONE])[:2],
+                    "nd_count": len(nd),
+                    "x_sender": int(i < self.X_SENDERS),
+                    "x_first": (i % self.X_SENDERS) * self.X_PER_SENDER,
+                }
+            )
+        self.scr_page = 64 + (E * 4 + epc * 4 + 63) // 64 * 64  # a 64-byte aligned base inside
+
+    def __call__(self, x, counts):
+        """``x``: bf16 TILE ``[1, 1, 32, hidden]`` (DRAM-interleaved; row 0 the live row, the others zero),
+        ``counts``: uint32 row-major ``[1, E]`` -> ``self.y`` with tile row l = local expert l's output of row 0
+        (rows 1..31 zero) for every l with ``counts[table[l]] > 0``."""
+        assert x.dtype == ttnn.bfloat16 and x.layout == ttnn.TILE_LAYOUT, (x.dtype, x.layout)
+        assert tuple(x.shape)[-2:] == (_TILE, self.hidden), tuple(x.shape)
+        X_TILE, W_TILE, ACT_TILE = 2048, 576, 2048
+        cb_x, cb_gate, cb_up, cb_down, cb_act, cb_actf, cb_scr, cb_done, cb_stage, cb_out = (
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            16,
+        )
+        rd, wr, cm = ttnn.RuntimeArgs(), ttnn.RuntimeArgs(), ttnn.RuntimeArgs()
+        for c in self.per_core:
+            cx, cy = c["xy"]
+            rd[cx][cy] = (
+                [
+                    x.buffer_address(),
+                    counts.buffer_address(),
+                    self.table.buffer_address(),
+                    c["ngu"],
+                    c["nd"][0],
+                    c["nd"][1],
+                    int(cx == 0 and cy == 0),
+                    self.rect[0],
+                    self.rect[1],
+                ]
+                + self.rect
+                + [0, 1, 2, 3, 4, c["x_sender"], c["x_first"]]
+                + self.waddr
+            )
+            wr[cx][cy] = [self.y.buffer_address(), c["nd"][0], c["nd"][1]]
+            cm[cx][cy] = [c["ngu"], c["nd_count"]]
+        common = [self.epc, self.E, self.KT, self.NT_GU, self.NGU_FULL, self.KD, self.NT_D, self.ND_FULL]
+        kernels = [
+            ttnn.KernelDescriptor(
+                kernel_source=f"{_KERNELS}/c1_ffn_reader.cpp",
+                core_ranges=self.cores,
+                compile_time_args=[cb_x, cb_gate, cb_up, cb_down, cb_act, cb_actf, cb_scr, cb_done, cb_stage]
+                + common
+                + [self.BLK_GU, self.BLK_D, self.n_cores, X_TILE, W_TILE, ACT_TILE, self.ACT_SLOTS, self.probe]
+                + [self.tpc, self.shard_gu, self.shard_d, self.RING_GU, self.RING_D, self.X_SENDERS, self.X_PER_SENDER]
+                + _accessors(x, self.routed.gate_projs[0], self.routed.up_projs[0], self.routed.down_projs[0])
+                + _accessors(counts, self.table),
+                runtime_args=rd,
+                config=ttnn.ReaderConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=f"{_KERNELS}/c1_ffn_writer.cpp",
+                core_ranges=self.cores,
+                compile_time_args=[cb_scr, cb_out, self.epc, self.E, self.NT_D, ACT_TILE] + _accessors(self.y),
+                runtime_args=wr,
+                config=ttnn.WriterConfigDescriptor(),
+            ),
+            ttnn.KernelDescriptor(
+                kernel_source=f"{_KERNELS}/c1_ffn_compute.cpp",
+                core_ranges=self.cores,
+                compile_time_args=[cb_x, cb_gate, cb_up, cb_down, cb_act, cb_actf, cb_scr, cb_done, cb_out]
+                + [self.epc, self.E, self.KT, self.NT_GU, self.KD, self.BLK_GU, self.BLK_D, self.probe, self.tpc],
+                runtime_args=cm,
+                config=self.compute,
+            ),
+        ]
+
+        def cb(index, fmt, pages, page):
+            f = ttnn.CBFormatDescriptor(buffer_index=index, data_format=fmt, page_size=page)
+            return ttnn.CBDescriptor(total_size=pages * page, core_ranges=self.cores, format_descriptors=[f])
+
+        bf16, bfp4, u32 = ttnn.bfloat16, ttnn.bfloat4_b, ttnn.uint32
+        cbs = [
+            cb(cb_x, bf16, self.KT, X_TILE),
+            cb(cb_gate, bfp4, self.RING_GU * self.BLK_GU * self.tpc, W_TILE),
+            cb(cb_up, bfp4, self.RING_GU * self.BLK_GU * self.tpc, W_TILE),
+            cb(cb_down, bfp4, self.RING_D * self.BLK_D * 2, W_TILE),
+            cb(cb_act, bf16, 2 * self.tpc, ACT_TILE),
+            cb(cb_actf, bf16, self.ACT_SLOTS * self.NT_GU, ACT_TILE),
+            cb(cb_scr, u32, 1, self.scr_page),
+            cb(cb_done, u32, 2, 64),
+            cb(cb_stage, bf16, self.NT_GU, ACT_TILE),
+            cb(cb_out, bf16, 4, ACT_TILE),
+        ]
+        sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=self.cores, initial_value=0) for i in range(5)]
+        ttnn.generic_op(
+            [x, counts, self.table, self.y], ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs)
+        )
+        return self.y
+
+
 class C1Moe:
     """The c1 MoE of one decode layer's ``TtV41Moe`` (its gate a :class:`DecodeGate`): see the module docstring.
     ``ccl``: the model's ``V41Collectives``; ``pool``: the decoder's ``V41DecodePool`` (its ``tt_ccl``)."""
@@ -269,6 +457,7 @@ class C1Moe:
             shared = getattr(shared, "_shared", shared)  # DecodeSharedExpert wraps the MoE's TtSharedExpert
             self.shared_split = C1SharedSplit(shared, device)
         self.debug = None  # a dict: the call keeps its ``counts`` and ``indices`` there (tests)
+        self.matvec = C1FfnMatvec(self.routed, device, hidden, self.epc, self.E) if _FFN == "matvec" else None
         # the FFN's program-cache entry for this shape is built here, on an empty L1: ``ttnn.reduce_scatter`` (the
         # decode tail's TP reduce-scatter) leaves a 512-byte L1 buffer at 914,176 after its first call, and the
         # routed experts' static CBs (to 1,004,864 in this mode) are rejected at compile against it; today's
@@ -282,7 +471,12 @@ class C1Moe:
             mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
         none = self._replicated(torch.zeros(1, self.E, dtype=torch.int32), ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT)
-        ttnn.deallocate(self._ffn(ttnn.reshape(zeros, (self.epc * _TILE, hidden)), none))
+        if self.matvec is not None:
+            row = self._replicated(torch.zeros(1, 1, _TILE, hidden), ttnn.bfloat16)
+            self.matvec(row, none)
+            ttnn.deallocate(row)
+        else:
+            ttnn.deallocate(self._ffn(ttnn.reshape(zeros, (self.epc * _TILE, hidden)), none))
         ttnn.deallocate(none)
 
     def _replicated(self, t: torch.Tensor, dtype, layout=ttnn.TILE_LAYOUT):
@@ -449,19 +643,32 @@ class C1Moe:
             shared = ttnn.unsqueeze(shared, dim=0)
             self.shared_fold = "returned"
         folded = self.shared_fold in ("pending", "split")
-        # 8, 9: the row at the head of every local expert's region; the selected experts run in place
-        x_in = ttnn.matmul(
-            self.R, x_full, compute_kernel_config=_HIFI4, dtype=ttnn.bfloat8_b, memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
-        ttnn.deallocate(x_full)
-        x_in = ttnn.reshape(x_in, (self.epc * _TILE, self.hidden))
-        y = self._ffn(x_in, counts)
+        if self.debug is not None:
+            self.debug["x_full"] = x_full  # the experts' input row (tests build the reference from it)
+        if self.matvec is not None:
+            # 8', 9': the decode-shaped FFN reads the bf16 row itself (no bfp8 region buffer) into its persistent y
+            y = self.matvec(x_full, counts)
+            if self.debug is None:
+                ttnn.deallocate(x_full)
+        else:
+            # 8, 9: the row at the head of every local expert's region; the selected experts run in place
+            x_in = ttnn.matmul(
+                self.R,
+                x_full,
+                compute_kernel_config=_HIFI4,
+                dtype=ttnn.bfloat8_b,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            if self.debug is None:
+                ttnn.deallocate(x_full)
+            x_in = ttnn.reshape(x_in, (self.epc * _TILE, self.hidden))
+            y = ttnn.reshape(self._ffn(x_in, counts), (1, 1, self.epc * _TILE, self.hidden))
         if self.debug is None:
             ttnn.deallocate(counts)
         # 10: the local weighted sum (row 0)
-        y = ttnn.reshape(y, (1, 1, self.epc * _TILE, self.hidden))
         part = ttnn.matmul(W, y, compute_kernel_config=_HIFI4, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        ttnn.deallocate(y)
+        if self.matvec is None:
+            ttnn.deallocate(y)
         if self.W0 is None:
             ttnn.deallocate(W)
         if folded:
