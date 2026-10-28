@@ -1,0 +1,80 @@
+{
+ "zone_ms_once": {
+  "embed": 1.697521,
+  "layer_mid": 51.340346,
+  "layer_last": 14.104328,
+  "decoder": 0.029943
+ },
+ "counts": {
+  "embed": 1,
+  "layer_mid": 5,
+  "layer_last": 1,
+  "decoder": 1
+ },
+ "zone_ms_total": {
+  "embed": 1.697521,
+  "layer_mid": 256.70173,
+  "layer_last": 14.104328,
+  "decoder": 0.029943
+ },
+ "estimate_ms": 272.533522,
+ "top_ops": {
+  "embed": [
+   [
+    "MatmulDeviceOperation",
+    1.697521
+   ]
+  ],
+  "layer_mid": [
+   [
+    "MatmulDeviceOperation",
+    30.892792
+   ],
+   [
+    "BinaryNgDeviceOperation",
+    12.639337
+   ],
+   [
+    "GenericOpDeviceOperation",
+    5.006179
+   ],
+   [
+    "LayerNormDeviceOperation",
+    2.802038
+   ]
+  ],
+  "layer_last": [
+   [
+    "MatmulDeviceOperation",
+    8.729166
+   ],
+   [
+    "GenericOpDeviceOperation",
+    5.006395
+   ],
+   [
+    "BinaryNgDeviceOperation",
+    0.191562
+   ],
+   [
+    "SliceDeviceOperation",
+    0.097963
+   ],
+   [
+    "LayerNormDeviceOperation",
+    0.079242
+   ]
+  ],
+  "decoder": [
+   [
+    "MatmulDeviceOperation",
+    0.029943
+   ]
+  ]
+ },
+ "profile_stamp": {
+  "started_at": 1793220939.5415213,
+  "git_head": "c97b6f32caef7d0fc10a09fe2ab06a53bec2f4fb",
+  "git_dirty": ""
+ }
+}

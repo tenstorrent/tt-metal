@@ -1,0 +1,13 @@
+{
+ "shape": "paper",
+ "precision": "accuracy",
+ "counts": {
+  "embed": 1,
+  "layer_mid": 5,
+  "layer_last": 1,
+  "decoder": 1
+ },
+ "started_at": 1793220939.5415213,
+ "git_head": "c97b6f32caef7d0fc10a09fe2ab06a53bec2f4fb",
+ "git_dirty": ""
+}

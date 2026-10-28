@@ -1,0 +1,998 @@
+[ttq] submitted job 1207 (cpu); reattach with: ttq wait 1207
+[ttq] job 1207 queued (0s): 0 ahead; waiting for a free slot
+[ttq] job 1207 flowstate/cpu attempt 0 on cpu pool, 16 cores (cpus 16-31,48-63), timeout 3600s, started Wed Oct 28 13:54:38 2026
+[ttq] cwd /home/andy/bringup/flowstate
+[ttq] $ env PYTHONPATH=/home/andy/bringup/flowstate /home/andy/tt-metal/python_env/bin/python models/experimental/flowstate_forecast/tests/perf/check_gates.py /home/andy/bringup/scratch/flowstate/r1/c2_all.json
+ok   floor paper/accuracy pcc_normalized 0.999996 >= 0.999
+ok   floor paper/accuracy pcc_final 1 >= 0.99
+ok   floor paper/accuracy pcc_mean 1 >= 0.995
+ok   floor paper/accuracy pcc_spread 0.999972 >= 0.9995
+n/a  floor paper/accuracy pcc_row_p01_active: not applicable (n_active=64 < 100)
+ok   floor paper/accuracy pcc_row_min_active 0.999719 >= 0.99
+ok   floor paper/accuracy pcc_row_min 0.999719 >= 0.4
+ok   floor paper/accuracy spread_ratio_p50 0.99539 in [0.97, 1.03]
+n/a  floor paper/accuracy spread_ratio_p01: not applicable (n_active=64 < 100)
+n/a  floor paper/accuracy spread_ratio_p99: not applicable (n_active=64 < 100)
+ok   floor paper/accuracy spread_ratio_min 0.986835 >= 0.9
+ok   floor paper/accuracy spread_ratio_max 1.02375 <= 1.1
+n/a  floor paper/accuracy inactive_max_err: not applicable (no inactive rows)
+ok   floor paper/accuracy pcc_final_spread 0.999974 >= 0.9995
+ok   floor paper/accuracy bias_row_p50 0.00112346 <= 0.02
+ok   floor paper/accuracy bias_row_max 0.00440372 <= 0.05
+ok   floor paper/accuracy pcc_step 0.999844 >= 0.997
+n/a  floor paper/accuracy pcc_row_p01: not applicable (n_active=64 < 100)
+ok   floor paper/accuracy pcc_row_min_var 0.999719 >= 0.99
+ok   floor paper/accuracy flat_max_err 0 <= 0.05
+n/a  floor paper/accuracy inactive_spread_ratio_min: not applicable (no inactive rows)
+ok   drift paper/accuracy pcc_normalized 0.999996 >= 0.999796 (baseline 0.999996)
+ok   drift paper/accuracy pcc_final 1 >= 0.9998 (baseline 1)
+ok   drift paper/accuracy pcc_spread 0.999972 >= 0.999471 (baseline 0.999971)
+n/a  drift paper/accuracy pcc_row_p01_active: not applicable (n_active=64 < 100)
+ok   drift paper/accuracy spread_ratio_p50 |0.99539 - 1.0| <= 0.0154348 (baseline 0.994565)
+ok   drift paper/accuracy abs_err_max 0.0562825 <= 0.104932 (baseline 0.0699544)
+ok   drift paper/accuracy bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 63)
+ok   drift paper/accuracy spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 63)
+ok   drift paper/accuracy pcc_step 0.999844 >= 0.994827 (baseline 0.999827)
+ok   drift paper/accuracy spread_ratio_max 1.02375 <= 1.07443 (baseline 1.02443)
+ok   drift paper/accuracy spread_ratio_min 0.986835 >= 0.93536 (baseline 0.98536)
+ok   drift paper/accuracy pcc_row_min 0.999719 >= 0.899637 (baseline 0.999637)
+ok   floor paper/performance pcc_normalized 0.999969 >= 0.995
+ok   floor paper/performance pcc_final 1 >= 0.98
+ok   floor paper/performance pcc_mean 1 >= 0.99
+ok   floor paper/performance pcc_spread 0.999767 >= 0.998
+n/a  floor paper/performance pcc_row_p01_active: not applicable (n_active=64 < 100)
+ok   floor paper/performance pcc_row_min_active 0.997855 >= 0.98
+ok   floor paper/performance pcc_row_min 0.997855 >= 0.3
+ok   floor paper/performance spread_ratio_p50 0.989653 in [0.95, 1.05]
+n/a  floor paper/performance spread_ratio_p01: not applicable (n_active=64 < 100)
+n/a  floor paper/performance spread_ratio_p99: not applicable (n_active=64 < 100)
+ok   floor paper/performance spread_ratio_min 0.96688 >= 0.8
+ok   floor paper/performance spread_ratio_max 1.16486 <= 1.25
+n/a  floor paper/performance inactive_max_err: not applicable (no inactive rows)
+ok   floor paper/performance pcc_final_spread 0.999714 >= 0.998
+ok   floor paper/performance bias_row_p50 0.00364116 <= 0.05
+ok   floor paper/performance bias_row_max 0.0263307 <= 0.15
+ok   floor paper/performance pcc_step 0.999076 >= 0.985
+n/a  floor paper/performance pcc_row_p01: not applicable (n_active=64 < 100)
+ok   floor paper/performance pcc_row_min_var 0.997855 >= 0.98
+ok   floor paper/performance flat_max_err 0 <= 0.045
+n/a  floor paper/performance inactive_spread_ratio_min: not applicable (no inactive rows)
+ok   drift paper/performance pcc_normalized 0.999969 >= 0.998968 (baseline 0.999968)
+ok   drift paper/performance pcc_final 1 >= 0.999 (baseline 1)
+ok   drift paper/performance pcc_spread 0.999767 >= 0.997762 (baseline 0.999762)
+n/a  drift paper/performance pcc_row_p01_active: not applicable (n_active=64 < 100)
+ok   drift paper/performance spread_ratio_p50 |0.989653 - 1.0| <= 0.0199561 (baseline 0.990044)
+ok   drift paper/performance abs_err_max 0.173546 <= 0.258855 (baseline 0.17257)
+ok   drift paper/performance bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 63)
+ok   drift paper/performance spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 63)
+ok   drift paper/performance pcc_step 0.999076 >= 0.994059 (baseline 0.999059)
+ok   drift paper/performance spread_ratio_max 1.16486 <= 1.22668 (baseline 1.17668)
+ok   drift paper/performance spread_ratio_min 0.96688 >= 0.916469 (baseline 0.966469)
+ok   drift paper/performance pcc_row_min 0.997855 >= 0.797838 (baseline 0.997838)
+ok   floor long_context/accuracy pcc_normalized 0.999997 >= 0.999
+ok   floor long_context/accuracy pcc_final 1 >= 0.99
+ok   floor long_context/accuracy pcc_mean 1 >= 0.995
+ok   floor long_context/accuracy pcc_spread 0.99996 >= 0.9995
+n/a  floor long_context/accuracy pcc_row_p01_active: not applicable (n_active=15 < 100)
+ok   floor long_context/accuracy pcc_row_min_active 0.9998 >= 0.99
+ok   floor long_context/accuracy pcc_row_min 0.98972 >= 0.4
+ok   floor long_context/accuracy spread_ratio_p50 0.994559 in [0.97, 1.03]
+n/a  floor long_context/accuracy spread_ratio_p01: not applicable (n_active=15 < 100)
+n/a  floor long_context/accuracy spread_ratio_p99: not applicable (n_active=15 < 100)
+ok   floor long_context/accuracy spread_ratio_min 0.985676 >= 0.9
+ok   floor long_context/accuracy spread_ratio_max 1.02059 <= 1.1
+ok   floor long_context/accuracy inactive_max_err 0.00865631 <= 0.05
+ok   floor long_context/accuracy pcc_final_spread 0.99997 >= 0.9995
+ok   floor long_context/accuracy bias_row_p50 0.000681382 <= 0.02
+ok   floor long_context/accuracy bias_row_max 0.00470441 <= 0.05
+ok   floor long_context/accuracy pcc_step 0.999917 >= 0.997
+n/a  floor long_context/accuracy pcc_row_p01: not applicable (n_active=15 < 100)
+ok   floor long_context/accuracy pcc_row_min_var 0.9998 >= 0.99
+ok   floor long_context/accuracy flat_max_err 0.00865631 <= 0.05
+ok   floor long_context/accuracy inactive_spread_ratio_min 1.05471 >= 0.25
+ok   drift long_context/accuracy pcc_normalized 0.999997 >= 0.999797 (baseline 0.999997)
+ok   drift long_context/accuracy pcc_final 1 >= 0.9998 (baseline 1)
+ok   drift long_context/accuracy pcc_spread 0.99996 >= 0.999443 (baseline 0.999943)
+n/a  drift long_context/accuracy pcc_row_p01_active: not applicable (n_active=15 < 100)
+ok   drift long_context/accuracy spread_ratio_p50 |0.994559 - 1.0| <= 0.014227 (baseline 0.995773)
+ok   drift long_context/accuracy abs_err_max 0.0284459 <= 0.0430351 (baseline 0.02869)
+ok   drift long_context/accuracy bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 15)
+ok   drift long_context/accuracy spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 15)
+ok   drift long_context/accuracy pcc_step 0.999917 >= 0.99492 (baseline 0.99992)
+ok   drift long_context/accuracy spread_ratio_max 1.02059 <= 1.07353 (baseline 1.02353)
+ok   drift long_context/accuracy spread_ratio_min 0.985676 >= 0.934531 (baseline 0.984531)
+ok   drift long_context/accuracy pcc_row_min 0.98972 >= 0.897292 (baseline 0.997292)
+ok   floor long_context/performance pcc_normalized 0.999956 >= 0.995
+ok   floor long_context/performance pcc_final 1 >= 0.98
+ok   floor long_context/performance pcc_mean 1 >= 0.99
+ok   floor long_context/performance pcc_spread 0.999118 >= 0.998
+n/a  floor long_context/performance pcc_row_p01_active: not applicable (n_active=15 < 100)
+ok   floor long_context/performance pcc_row_min_active 0.998794 >= 0.98
+ok   floor long_context/performance pcc_row_min 0.992926 >= 0.3
+ok   floor long_context/performance spread_ratio_p50 0.979294 in [0.95, 1.05]
+n/a  floor long_context/performance spread_ratio_p01: not applicable (n_active=15 < 100)
+n/a  floor long_context/performance spread_ratio_p99: not applicable (n_active=15 < 100)
+ok   floor long_context/performance spread_ratio_min 0.928484 >= 0.8
+ok   floor long_context/performance spread_ratio_max 1.13099 <= 1.25
+ok   floor long_context/performance inactive_max_err 0.0335587 <= 0.045
+ok   floor long_context/performance pcc_final_spread 0.999351 >= 0.998
+ok   floor long_context/performance bias_row_p50 0.00469012 <= 0.05
+ok   floor long_context/performance bias_row_max 0.016781 <= 0.15
+ok   floor long_context/performance pcc_step 0.999394 >= 0.985
+n/a  floor long_context/performance pcc_row_p01: not applicable (n_active=15 < 100)
+ok   floor long_context/performance pcc_row_min_var 0.998794 >= 0.98
+ok   floor long_context/performance flat_max_err 0.0335587 <= 0.045
+ok   floor long_context/performance inactive_spread_ratio_min 1.46026 >= 0.25
+ok   drift long_context/performance pcc_normalized 0.999956 >= 0.998956 (baseline 0.999956)
+ok   drift long_context/performance pcc_final 1 >= 0.999 (baseline 1)
+ok   drift long_context/performance pcc_spread 0.999118 >= 0.997122 (baseline 0.999122)
+n/a  drift long_context/performance pcc_row_p01_active: not applicable (n_active=15 < 100)
+ok   drift long_context/performance spread_ratio_p50 |0.979294 - 1.0| <= 0.0346852 (baseline 0.975315)
+ok   drift long_context/performance abs_err_max 0.0968053 <= 0.142644 (baseline 0.0950963)
+ok   drift long_context/performance bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 15)
+ok   drift long_context/performance spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 15)
+ok   drift long_context/performance pcc_step 0.999394 >= 0.994362 (baseline 0.999362)
+ok   drift long_context/performance spread_ratio_max 1.13099 <= 1.1828 (baseline 1.1328)
+ok   drift long_context/performance spread_ratio_min 0.928484 >= 0.883027 (baseline 0.933027)
+ok   drift long_context/performance pcc_row_min 0.992926 >= 0.793097 (baseline 0.993097)
+ok   floor long_horizon/accuracy pcc_normalized 0.999988 >= 0.999
+ok   floor long_horizon/accuracy pcc_final 1 >= 0.99
+ok   floor long_horizon/accuracy pcc_mean 1 >= 0.995
+ok   floor long_horizon/accuracy pcc_spread 0.999931 >= 0.9995
+n/a  floor long_horizon/accuracy pcc_row_p01_active: not applicable (n_active=64 < 100)
+ok   floor long_horizon/accuracy pcc_row_min_active 0.999756 >= 0.99
+ok   floor long_horizon/accuracy pcc_row_min 0.999756 >= 0.4
+ok   floor long_horizon/accuracy spread_ratio_p50 0.994566 in [0.97, 1.03]
+n/a  floor long_horizon/accuracy spread_ratio_p01: not applicable (n_active=64 < 100)
+n/a  floor long_horizon/accuracy spread_ratio_p99: not applicable (n_active=64 < 100)
+ok   floor long_horizon/accuracy spread_ratio_min 0.961236 >= 0.9
+ok   floor long_horizon/accuracy spread_ratio_max 1.01193 <= 1.1
+n/a  floor long_horizon/accuracy inactive_max_err: not applicable (no inactive rows)
+ok   floor long_horizon/accuracy pcc_final_spread 0.999954 >= 0.9995
+ok   floor long_horizon/accuracy bias_row_p50 0.00187154 <= 0.02
+ok   floor long_horizon/accuracy bias_row_max 0.0236919 <= 0.05
+ok   floor long_horizon/accuracy pcc_step 0.999782 >= 0.997
+n/a  floor long_horizon/accuracy pcc_row_p01: not applicable (n_active=64 < 100)
+ok   floor long_horizon/accuracy pcc_row_min_var 0.999756 >= 0.99
+ok   floor long_horizon/accuracy flat_max_err 0 <= 0.05
+n/a  floor long_horizon/accuracy inactive_spread_ratio_min: not applicable (no inactive rows)
+ok   drift long_horizon/accuracy pcc_normalized 0.999988 >= 0.999789 (baseline 0.999989)
+ok   drift long_horizon/accuracy pcc_final 1 >= 0.9998 (baseline 1)
+ok   drift long_horizon/accuracy pcc_spread 0.999931 >= 0.999438 (baseline 0.999938)
+n/a  drift long_horizon/accuracy pcc_row_p01_active: not applicable (n_active=64 < 100)
+ok   drift long_horizon/accuracy spread_ratio_p50 |0.994566 - 1.0| <= 0.0154201 (baseline 0.99458)
+ok   drift long_horizon/accuracy abs_err_max 0.440939 <= 0.684846 (baseline 0.456564)
+ok   drift long_horizon/accuracy bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 63)
+ok   drift long_horizon/accuracy spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 63)
+ok   drift long_horizon/accuracy pcc_step 0.999782 >= 0.994755 (baseline 0.999755)
+ok   drift long_horizon/accuracy spread_ratio_max 1.01193 <= 1.0597 (baseline 1.0097)
+ok   drift long_horizon/accuracy spread_ratio_min 0.961236 >= 0.914561 (baseline 0.964561)
+ok   drift long_horizon/accuracy pcc_row_min 0.999756 >= 0.899769 (baseline 0.999769)
+ok   floor long_horizon/performance pcc_normalized 0.999833 >= 0.995
+ok   floor long_horizon/performance pcc_final 0.999998 >= 0.98
+ok   floor long_horizon/performance pcc_mean 0.999999 >= 0.99
+ok   floor long_horizon/performance pcc_spread 0.99913 >= 0.998
+n/a  floor long_horizon/performance pcc_row_p01_active: not applicable (n_active=64 < 100)
+ok   floor long_horizon/performance pcc_row_min_active 0.996801 >= 0.98
+ok   floor long_horizon/performance pcc_row_min 0.996801 >= 0.3
+ok   floor long_horizon/performance spread_ratio_p50 0.982229 in [0.95, 1.05]
+n/a  floor long_horizon/performance spread_ratio_p01: not applicable (n_active=64 < 100)
+n/a  floor long_horizon/performance spread_ratio_p99: not applicable (n_active=64 < 100)
+ok   floor long_horizon/performance spread_ratio_min 0.876217 >= 0.8
+ok   floor long_horizon/performance spread_ratio_max 1.06643 <= 1.25
+n/a  floor long_horizon/performance inactive_max_err: not applicable (no inactive rows)
+ok   floor long_horizon/performance pcc_final_spread 0.999408 >= 0.998
+ok   floor long_horizon/performance bias_row_p50 0.00537617 <= 0.05
+ok   floor long_horizon/performance bias_row_max 0.107989 <= 0.15
+ok   floor long_horizon/performance pcc_step 0.998683 >= 0.985
+n/a  floor long_horizon/performance pcc_row_p01: not applicable (n_active=64 < 100)
+ok   floor long_horizon/performance pcc_row_min_var 0.996801 >= 0.98
+ok   floor long_horizon/performance flat_max_err 0 <= 0.045
+n/a  floor long_horizon/performance inactive_spread_ratio_min: not applicable (no inactive rows)
+ok   drift long_horizon/performance pcc_normalized 0.999833 >= 0.998838 (baseline 0.999838)
+ok   drift long_horizon/performance pcc_final 0.999998 >= 0.998999 (baseline 0.999999)
+ok   drift long_horizon/performance pcc_spread 0.99913 >= 0.997161 (baseline 0.999161)
+n/a  drift long_horizon/performance pcc_row_p01_active: not applicable (n_active=64 < 100)
+ok   drift long_horizon/performance spread_ratio_p50 |0.982229 - 1.0| <= 0.0278489 (baseline 0.982151)
+ok   drift long_horizon/performance abs_err_max 1.56594 <= 2.20828 (baseline 1.47219)
+ok   drift long_horizon/performance bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 63)
+ok   drift long_horizon/performance spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 63)
+ok   drift long_horizon/performance pcc_step 0.998683 >= 0.993672 (baseline 0.998672)
+ok   drift long_horizon/performance spread_ratio_max 1.06643 <= 1.11507 (baseline 1.06507)
+ok   drift long_horizon/performance spread_ratio_min 0.876217 >= 0.828924 (baseline 0.878924)
+ok   drift long_horizon/performance pcc_row_min 0.996801 >= 0.796952 (baseline 0.996952)
+ok   floor scale_q/accuracy pcc_normalized 0.999987 >= 0.999
+ok   floor scale_q/accuracy pcc_final 1 >= 0.99
+ok   floor scale_q/accuracy pcc_mean 1 >= 0.995
+ok   floor scale_q/accuracy pcc_spread 0.999969 >= 0.9995
+ok   floor scale_q/accuracy pcc_row_p01_active 0.999581 >= 0.995
+ok   floor scale_q/accuracy pcc_row_min_active 0.999531 >= 0.99
+ok   floor scale_q/accuracy pcc_row_min 0.997202 >= 0.4
+ok   floor scale_q/accuracy spread_ratio_p50 0.998194 in [0.97, 1.03]
+ok   floor scale_q/accuracy spread_ratio_p01 0.972503 >= 0.93
+ok   floor scale_q/accuracy spread_ratio_p99 1.00855 <= 1.07
+ok   floor scale_q/accuracy spread_ratio_min 0.955048 >= 0.9
+ok   floor scale_q/accuracy spread_ratio_max 1.01708 <= 1.1
+ok   floor scale_q/accuracy inactive_max_err 0.00930189 <= 0.05
+ok   floor scale_q/accuracy pcc_final_spread 0.999971 >= 0.9995
+ok   floor scale_q/accuracy bias_row_p50 0.00205809 <= 0.02
+ok   floor scale_q/accuracy bias_row_max 0.0093183 <= 0.05
+ok   floor scale_q/accuracy pcc_step 0.998725 >= 0.997
+ok   floor scale_q/accuracy pcc_row_p01 0.999551 >= 0.4
+ok   floor scale_q/accuracy pcc_row_min_var 0.999531 >= 0.99
+ok   floor scale_q/accuracy flat_max_err 0.00930189 <= 0.05
+ok   floor scale_q/accuracy inactive_spread_ratio_min 0.974154 >= 0.25
+ok   drift scale_q/accuracy pcc_normalized 0.999987 >= 0.999788 (baseline 0.999988)
+ok   drift scale_q/accuracy pcc_final 1 >= 0.9998 (baseline 1)
+ok   drift scale_q/accuracy pcc_spread 0.999969 >= 0.999471 (baseline 0.999971)
+ok   drift scale_q/accuracy pcc_row_p01_active 0.999581 >= 0.996607 (baseline 0.999607)
+ok   drift scale_q/accuracy spread_ratio_p50 |0.998194 - 1.0| <= 0.0116899 (baseline 0.99831)
+ok   drift scale_q/accuracy abs_err_max 0.0650392 <= 0.0873048 (baseline 0.0582032)
+ok   drift scale_q/accuracy bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 255)
+ok   drift scale_q/accuracy spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 255)
+ok   drift scale_q/accuracy pcc_step 0.998725 >= 0.99373 (baseline 0.99873)
+ok   drift scale_q/accuracy spread_ratio_max 1.01708 <= 1.06169 (baseline 1.01169)
+ok   drift scale_q/accuracy spread_ratio_min 0.955048 >= 0.912194 (baseline 0.962194)
+ok   drift scale_q/accuracy pcc_row_min 0.997202 >= 0.897598 (baseline 0.997598)
+ok   floor scale_q/performance pcc_normalized 0.999901 >= 0.995
+ok   floor scale_q/performance pcc_final 1 >= 0.98
+ok   floor scale_q/performance pcc_mean 1 >= 0.99
+ok   floor scale_q/performance pcc_spread 0.999735 >= 0.998
+ok   floor scale_q/performance pcc_row_p01_active 0.998664 >= 0.99
+ok   floor scale_q/performance pcc_row_min_active 0.997426 >= 0.98
+ok   floor scale_q/performance pcc_row_min 0.987641 >= 0.3
+ok   floor scale_q/performance spread_ratio_p50 1.00265 in [0.95, 1.05]
+ok   floor scale_q/performance spread_ratio_p01 0.965759 >= 0.9
+ok   floor scale_q/performance spread_ratio_p99 1.03366 <= 1.1
+ok   floor scale_q/performance spread_ratio_min 0.896785 >= 0.8
+ok   floor scale_q/performance spread_ratio_max 1.04634 <= 1.25
+ok   floor scale_q/performance inactive_max_err 0.0192295 <= 0.045
+ok   floor scale_q/performance pcc_final_spread 0.999726 >= 0.998
+ok   floor scale_q/performance bias_row_p50 0.00704219 <= 0.05
+ok   floor scale_q/performance bias_row_max 0.0338467 <= 0.15
+ok   floor scale_q/performance pcc_step 0.992582 >= 0.985
+ok   floor scale_q/performance pcc_row_p01 0.997626 >= 0.3
+ok   floor scale_q/performance pcc_row_min_var 0.997426 >= 0.98
+ok   floor scale_q/performance flat_max_err 0.0192295 <= 0.045
+ok   floor scale_q/performance inactive_spread_ratio_min 1.0596 >= 0.25
+ok   drift scale_q/performance pcc_normalized 0.999901 >= 0.998903 (baseline 0.999903)
+ok   drift scale_q/performance pcc_final 1 >= 0.999 (baseline 1)
+ok   drift scale_q/performance pcc_spread 0.999735 >= 0.99774 (baseline 0.99974)
+ok   drift scale_q/performance pcc_row_p01_active 0.998664 >= 0.990739 (baseline 0.998739)
+ok   drift scale_q/performance spread_ratio_p50 |1.00265 - 1.0| <= 0.0123822 (baseline 1.00238)
+ok   drift scale_q/performance abs_err_max 0.160127 <= 0.216752 (baseline 0.144502)
+ok   drift scale_q/performance bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 255)
+ok   drift scale_q/performance spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 255)
+ok   drift scale_q/performance pcc_step 0.992582 >= 0.987601 (baseline 0.992601)
+ok   drift scale_q/performance spread_ratio_max 1.04634 <= 1.08991 (baseline 1.03991)
+ok   drift scale_q/performance spread_ratio_min 0.896785 >= 0.848388 (baseline 0.898388)
+ok   drift scale_q/performance pcc_row_min 0.987641 >= 0.792999 (baseline 0.992999)
+ok   floor single/accuracy pcc_normalized 0.999927 >= 0.999
+ok   floor single/accuracy pcc_final 0.999911 >= 0.99
+ok   floor single/accuracy pcc_mean 0.999874 >= 0.995
+ok   floor single/accuracy pcc_spread 0.999987 >= 0.9995
+n/a  floor single/accuracy pcc_row_p01_active: not applicable (n_active=1 < 100)
+ok   floor single/accuracy pcc_row_min_active 0.999927 >= 0.99
+ok   floor single/accuracy pcc_row_min 0.999927 >= 0.4
+n/a  floor single/accuracy spread_ratio_p50: not applicable (n_active=1 < 8)
+n/a  floor single/accuracy spread_ratio_p01: not applicable (n_active=1 < 100)
+n/a  floor single/accuracy spread_ratio_p99: not applicable (n_active=1 < 100)
+ok   floor single/accuracy spread_ratio_min 0.995136 >= 0.9
+ok   floor single/accuracy spread_ratio_max 0.995136 <= 1.1
+n/a  floor single/accuracy inactive_max_err: not applicable (no inactive rows)
+ok   floor single/accuracy pcc_final_spread 0.999991 >= 0.9995
+ok   floor single/accuracy bias_row_p50 0.00183385 <= 0.02
+ok   floor single/accuracy bias_row_max 0.00183385 <= 0.05
+ok   floor single/accuracy pcc_step 0.99919 >= 0.997
+n/a  floor single/accuracy pcc_row_p01: not applicable (n_active=1 < 100)
+ok   floor single/accuracy pcc_row_min_var 0.999927 >= 0.99
+ok   floor single/accuracy flat_max_err 0 <= 0.05
+n/a  floor single/accuracy inactive_spread_ratio_min: not applicable (no inactive rows)
+ok   drift single/accuracy pcc_normalized 0.999927 >= 0.999702 (baseline 0.999902)
+ok   drift single/accuracy pcc_final 0.999911 >= 0.999683 (baseline 0.999883)
+ok   drift single/accuracy pcc_spread 0.999987 >= 0.999487 (baseline 0.999987)
+n/a  drift single/accuracy pcc_row_p01_active: not applicable (n_active=1 < 100)
+n/a  drift single/accuracy spread_ratio_p50: not applicable (n_active=1 < 8)
+ok   drift single/accuracy abs_err_max 0.0220789 <= 0.0375128 (baseline 0.0250086)
+ok   drift single/accuracy bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 0)
+ok   drift single/accuracy spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 0)
+ok   drift single/accuracy pcc_step 0.99919 >= 0.993926 (baseline 0.998926)
+ok   drift single/accuracy spread_ratio_max 0.995136 <= 1.04398 (baseline 0.993984)
+ok   drift single/accuracy spread_ratio_min 0.995136 >= 0.943984 (baseline 0.993984)
+ok   drift single/accuracy pcc_row_min 0.999927 >= 0.899902 (baseline 0.999902)
+ok   floor single/performance pcc_normalized 0.999781 >= 0.995
+ok   floor single/performance pcc_final 0.999746 >= 0.98
+ok   floor single/performance pcc_mean 0.999594 >= 0.99
+ok   floor single/performance pcc_spread 0.999919 >= 0.998
+n/a  floor single/performance pcc_row_p01_active: not applicable (n_active=1 < 100)
+ok   floor single/performance pcc_row_min_active 0.999781 >= 0.98
+ok   floor single/performance pcc_row_min 0.999781 >= 0.3
+n/a  floor single/performance spread_ratio_p50: not applicable (n_active=1 < 8)
+n/a  floor single/performance spread_ratio_p01: not applicable (n_active=1 < 100)
+n/a  floor single/performance spread_ratio_p99: not applicable (n_active=1 < 100)
+ok   floor single/performance spread_ratio_min 0.997056 >= 0.9
+ok   floor single/performance spread_ratio_max 0.997056 <= 1.1
+n/a  floor single/performance inactive_max_err: not applicable (no inactive rows)
+ok   floor single/performance pcc_final_spread 0.99996 >= 0.998
+ok   floor single/performance bias_row_p50 0.00123537 <= 0.05
+ok   floor single/performance bias_row_max 0.00123537 <= 0.15
+ok   floor single/performance pcc_step 0.996398 >= 0.985
+n/a  floor single/performance pcc_row_p01: not applicable (n_active=1 < 100)
+ok   floor single/performance pcc_row_min_var 0.999781 >= 0.98
+ok   floor single/performance flat_max_err 0 <= 0.045
+n/a  floor single/performance inactive_spread_ratio_min: not applicable (no inactive rows)
+ok   drift single/performance pcc_normalized 0.999781 >= 0.99879 (baseline 0.99979)
+ok   drift single/performance pcc_final 0.999746 >= 0.998746 (baseline 0.999746)
+ok   drift single/performance pcc_spread 0.999919 >= 0.997936 (baseline 0.999936)
+n/a  drift single/performance pcc_row_p01_active: not applicable (n_active=1 < 100)
+n/a  drift single/performance spread_ratio_p50: not applicable (n_active=1 < 8)
+ok   drift single/performance abs_err_max 0.0317162 <= 0.041843 (baseline 0.0278953)
+ok   drift single/performance bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 0)
+ok   drift single/performance spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 0)
+ok   drift single/performance pcc_step 0.996398 >= 0.991393 (baseline 0.996393)
+ok   drift single/performance spread_ratio_max 0.997056 <= 1.04699 (baseline 0.996991)
+ok   drift single/performance spread_ratio_min 0.997056 >= 0.946991 (baseline 0.996991)
+ok   drift single/performance pcc_row_min 0.999781 >= 0.79979 (baseline 0.99979)
+ok   floor single_long/accuracy pcc_normalized 0.999976 >= 0.999
+ok   floor single_long/accuracy pcc_final 0.999975 >= 0.99
+ok   floor single_long/accuracy pcc_mean 0.999968 >= 0.995
+ok   floor single_long/accuracy pcc_spread 0.99998 >= 0.9995
+n/a  floor single_long/accuracy pcc_row_p01_active: not applicable (n_active=1 < 100)
+ok   floor single_long/accuracy pcc_row_min_active 0.999976 >= 0.99
+ok   floor single_long/accuracy pcc_row_min 0.999976 >= 0.4
+n/a  floor single_long/accuracy spread_ratio_p50: not applicable (n_active=1 < 8)
+n/a  floor single_long/accuracy spread_ratio_p01: not applicable (n_active=1 < 100)
+n/a  floor single_long/accuracy spread_ratio_p99: not applicable (n_active=1 < 100)
+ok   floor single_long/accuracy spread_ratio_min 0.992995 >= 0.9
+ok   floor single_long/accuracy spread_ratio_max 0.992995 <= 1.1
+n/a  floor single_long/accuracy inactive_max_err: not applicable (no inactive rows)
+ok   floor single_long/accuracy pcc_final_spread 0.999984 >= 0.9995
+ok   floor single_long/accuracy bias_row_p50 0.00193466 <= 0.02
+ok   floor single_long/accuracy bias_row_max 0.00193466 <= 0.05
+ok   floor single_long/accuracy pcc_step 0.999898 >= 0.997
+n/a  floor single_long/accuracy pcc_row_p01: not applicable (n_active=1 < 100)
+ok   floor single_long/accuracy pcc_row_min_var 0.999976 >= 0.99
+ok   floor single_long/accuracy flat_max_err 0 <= 0.05
+n/a  floor single_long/accuracy inactive_spread_ratio_min: not applicable (no inactive rows)
+ok   drift single_long/accuracy pcc_normalized 0.999976 >= 0.999773 (baseline 0.999973)
+ok   drift single_long/accuracy pcc_final 0.999975 >= 0.999764 (baseline 0.999964)
+ok   drift single_long/accuracy pcc_spread 0.99998 >= 0.999488 (baseline 0.999988)
+n/a  drift single_long/accuracy pcc_row_p01_active: not applicable (n_active=1 < 100)
+n/a  drift single_long/accuracy spread_ratio_p50: not applicable (n_active=1 < 8)
+ok   drift single_long/accuracy abs_err_max 0.0121504 <= 0.0133487 (baseline 0.00889912)
+ok   drift single_long/accuracy bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 0)
+ok   drift single_long/accuracy spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 0)
+ok   drift single_long/accuracy pcc_step 0.999898 >= 0.994869 (baseline 0.999869)
+ok   drift single_long/accuracy spread_ratio_max 0.992995 <= 1.0433 (baseline 0.993299)
+ok   drift single_long/accuracy spread_ratio_min 0.992995 >= 0.943299 (baseline 0.993299)
+ok   drift single_long/accuracy pcc_row_min 0.999976 >= 0.899973 (baseline 0.999973)
+ok   floor single_long/performance pcc_normalized 0.9997 >= 0.995
+ok   floor single_long/performance pcc_final 0.99963 >= 0.98
+ok   floor single_long/performance pcc_mean 0.999703 >= 0.99
+ok   floor single_long/performance pcc_spread 0.999933 >= 0.998
+n/a  floor single_long/performance pcc_row_p01_active: not applicable (n_active=1 < 100)
+ok   floor single_long/performance pcc_row_min_active 0.9997 >= 0.98
+ok   floor single_long/performance pcc_row_min 0.9997 >= 0.3
+n/a  floor single_long/performance spread_ratio_p50: not applicable (n_active=1 < 8)
+n/a  floor single_long/performance spread_ratio_p01: not applicable (n_active=1 < 100)
+n/a  floor single_long/performance spread_ratio_p99: not applicable (n_active=1 < 100)
+ok   floor single_long/performance spread_ratio_min 0.976733 >= 0.9
+ok   floor single_long/performance spread_ratio_max 0.976733 <= 1.1
+n/a  floor single_long/performance inactive_max_err: not applicable (no inactive rows)
+ok   floor single_long/performance pcc_final_spread 0.999926 >= 0.998
+ok   floor single_long/performance bias_row_p50 0.00337011 <= 0.05
+ok   floor single_long/performance bias_row_max 0.00337011 <= 0.15
+ok   floor single_long/performance pcc_step 0.998758 >= 0.985
+n/a  floor single_long/performance pcc_row_p01: not applicable (n_active=1 < 100)
+ok   floor single_long/performance pcc_row_min_var 0.9997 >= 0.98
+ok   floor single_long/performance flat_max_err 0 <= 0.045
+n/a  floor single_long/performance inactive_spread_ratio_min: not applicable (no inactive rows)
+ok   drift single_long/performance pcc_normalized 0.9997 >= 0.998723 (baseline 0.999723)
+ok   drift single_long/performance pcc_final 0.99963 >= 0.998684 (baseline 0.999684)
+ok   drift single_long/performance pcc_spread 0.999933 >= 0.997932 (baseline 0.999932)
+n/a  drift single_long/performance pcc_row_p01_active: not applicable (n_active=1 < 100)
+n/a  drift single_long/performance spread_ratio_p50: not applicable (n_active=1 < 8)
+ok   drift single_long/performance abs_err_max 0.0248491 <= 0.043392 (baseline 0.028928)
+ok   drift single_long/performance bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 0)
+ok   drift single_long/performance spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 0)
+ok   drift single_long/performance pcc_step 0.998758 >= 0.993531 (baseline 0.998531)
+ok   drift single_long/performance spread_ratio_max 0.976733 <= 1.02686 (baseline 0.976862)
+ok   drift single_long/performance spread_ratio_min 0.976733 >= 0.926862 (baseline 0.976862)
+ok   drift single_long/performance pcc_row_min 0.9997 >= 0.799723 (baseline 0.999723)
+ok   floor suite:single/accuracy pcc_normalized 0.99998 >= 0.999
+ok   floor suite:single/accuracy pcc_final 0.999977 >= 0.99
+ok   floor suite:single/accuracy pcc_mean 0.999973 >= 0.995
+ok   floor suite:single/accuracy pcc_spread 0.999992 >= 0.9995
+n/a  floor suite:single/accuracy pcc_row_p01_active: not applicable (n_active=1 < 100)
+ok   floor suite:single/accuracy pcc_row_min_active 0.99998 >= 0.99
+ok   floor suite:single/accuracy pcc_row_min 0.99998 >= 0.4
+n/a  floor suite:single/accuracy spread_ratio_p50: not applicable (n_active=1 < 8)
+n/a  floor suite:single/accuracy spread_ratio_p01: not applicable (n_active=1 < 100)
+n/a  floor suite:single/accuracy spread_ratio_p99: not applicable (n_active=1 < 100)
+ok   floor suite:single/accuracy spread_ratio_min 0.996366 >= 0.9
+ok   floor suite:single/accuracy spread_ratio_max 0.996366 <= 1.1
+n/a  floor suite:single/accuracy inactive_max_err: not applicable (no inactive rows)
+ok   floor suite:single/accuracy pcc_final_spread 0.999992 >= 0.9995
+ok   floor suite:single/accuracy bias_row_p50 0.00421595 <= 0.02
+ok   floor suite:single/accuracy bias_row_max 0.00421595 <= 0.05
+ok   floor suite:single/accuracy pcc_step 0.999747 >= 0.997
+n/a  floor suite:single/accuracy pcc_row_p01: not applicable (n_active=1 < 100)
+ok   floor suite:single/accuracy pcc_row_min_var 0.99998 >= 0.99
+ok   floor suite:single/accuracy flat_max_err 0 <= 0.05
+n/a  floor suite:single/accuracy inactive_spread_ratio_min: not applicable (no inactive rows)
+ok   drift suite:single/accuracy pcc_normalized 0.99998 >= 0.999784 (baseline 0.999984)
+ok   drift suite:single/accuracy pcc_final 0.999977 >= 0.999782 (baseline 0.999982)
+ok   drift suite:single/accuracy pcc_spread 0.999992 >= 0.999493 (baseline 0.999993)
+n/a  drift suite:single/accuracy pcc_row_p01_active: not applicable (n_active=1 < 100)
+n/a  drift suite:single/accuracy spread_ratio_p50: not applicable (n_active=1 < 8)
+ok   drift suite:single/accuracy abs_err_max 0.0138782 <= 0.0269279 (baseline 0.017952)
+ok   drift suite:single/accuracy bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 0)
+ok   drift suite:single/accuracy spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 0)
+ok   drift suite:single/accuracy pcc_step 0.999747 >= 0.99462 (baseline 0.99962)
+ok   drift suite:single/accuracy spread_ratio_max 0.996366 <= 1.04673 (baseline 0.996728)
+ok   drift suite:single/accuracy spread_ratio_min 0.996366 >= 0.946728 (baseline 0.996728)
+ok   drift suite:single/accuracy pcc_row_min 0.99998 >= 0.899984 (baseline 0.999984)
+ok   floor suite:model16/accuracy pcc_normalized 0.999993 >= 0.999
+ok   floor suite:model16/accuracy pcc_final 1 >= 0.99
+ok   floor suite:model16/accuracy pcc_mean 1 >= 0.995
+ok   floor suite:model16/accuracy pcc_spread 0.99998 >= 0.9995
+n/a  floor suite:model16/accuracy pcc_row_p01_active: not applicable (n_active=16 < 100)
+ok   floor suite:model16/accuracy pcc_row_min_active 0.999843 >= 0.99
+ok   floor suite:model16/accuracy pcc_row_min 0.999843 >= 0.4
+ok   floor suite:model16/accuracy spread_ratio_p50 0.994951 in [0.97, 1.03]
+n/a  floor suite:model16/accuracy spread_ratio_p01: not applicable (n_active=16 < 100)
+n/a  floor suite:model16/accuracy spread_ratio_p99: not applicable (n_active=16 < 100)
+ok   floor suite:model16/accuracy spread_ratio_min 0.988803 >= 0.9
+ok   floor suite:model16/accuracy spread_ratio_max 1.00231 <= 1.1
+n/a  floor suite:model16/accuracy inactive_max_err: not applicable (no inactive rows)
+ok   floor suite:model16/accuracy pcc_final_spread 0.999972 >= 0.9995
+ok   floor suite:model16/accuracy bias_row_p50 0.00089962 <= 0.02
+ok   floor suite:model16/accuracy bias_row_max 0.00334929 <= 0.05
+ok   floor suite:model16/accuracy pcc_step 0.999852 >= 0.997
+n/a  floor suite:model16/accuracy pcc_row_p01: not applicable (n_active=16 < 100)
+ok   floor suite:model16/accuracy pcc_row_min_var 0.999843 >= 0.99
+ok   floor suite:model16/accuracy flat_max_err 0 <= 0.05
+n/a  floor suite:model16/accuracy inactive_spread_ratio_min: not applicable (no inactive rows)
+ok   drift suite:model16/accuracy pcc_normalized 0.999993 >= 0.999793 (baseline 0.999993)
+ok   drift suite:model16/accuracy pcc_final 1 >= 0.9998 (baseline 1)
+ok   drift suite:model16/accuracy pcc_spread 0.99998 >= 0.99948 (baseline 0.99998)
+n/a  drift suite:model16/accuracy pcc_row_p01_active: not applicable (n_active=16 < 100)
+ok   drift suite:model16/accuracy spread_ratio_p50 |0.994951 - 1.0| <= 0.0145644 (baseline 0.995436)
+ok   drift suite:model16/accuracy abs_err_max 0.052647 <= 0.0862094 (baseline 0.0574729)
+ok   drift suite:model16/accuracy bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 15)
+ok   drift suite:model16/accuracy spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 15)
+ok   drift suite:model16/accuracy pcc_step 0.999852 >= 0.994865 (baseline 0.999865)
+ok   drift suite:model16/accuracy spread_ratio_max 1.00231 <= 1.05217 (baseline 1.00217)
+ok   drift suite:model16/accuracy spread_ratio_min 0.988803 >= 0.938257 (baseline 0.988257)
+ok   drift suite:model16/accuracy pcc_row_min 0.999843 >= 0.899813 (baseline 0.999813)
+ok   floor suite:single_long/accuracy pcc_normalized 0.99998 >= 0.999
+ok   floor suite:single_long/accuracy pcc_final 0.999976 >= 0.99
+ok   floor suite:single_long/accuracy pcc_mean 0.999967 >= 0.995
+ok   floor suite:single_long/accuracy pcc_spread 0.999991 >= 0.9995
+n/a  floor suite:single_long/accuracy pcc_row_p01_active: not applicable (n_active=1 < 100)
+ok   floor suite:single_long/accuracy pcc_row_min_active 0.99998 >= 0.99
+ok   floor suite:single_long/accuracy pcc_row_min 0.99998 >= 0.4
+n/a  floor suite:single_long/accuracy spread_ratio_p50: not applicable (n_active=1 < 8)
+n/a  floor suite:single_long/accuracy spread_ratio_p01: not applicable (n_active=1 < 100)
+n/a  floor suite:single_long/accuracy spread_ratio_p99: not applicable (n_active=1 < 100)
+ok   floor suite:single_long/accuracy spread_ratio_min 0.993447 >= 0.9
+ok   floor suite:single_long/accuracy spread_ratio_max 0.993447 <= 1.1
+n/a  floor suite:single_long/accuracy inactive_max_err: not applicable (no inactive rows)
+ok   floor suite:single_long/accuracy pcc_final_spread 0.999992 >= 0.9995
+ok   floor suite:single_long/accuracy bias_row_p50 0.00133085 <= 0.02
+ok   floor suite:single_long/accuracy bias_row_max 0.00133085 <= 0.05
+ok   floor suite:single_long/accuracy pcc_step 0.999869 >= 0.997
+n/a  floor suite:single_long/accuracy pcc_row_p01: not applicable (n_active=1 < 100)
+ok   floor suite:single_long/accuracy pcc_row_min_var 0.99998 >= 0.99
+ok   floor suite:single_long/accuracy flat_max_err 0 <= 0.05
+n/a  floor suite:single_long/accuracy inactive_spread_ratio_min: not applicable (no inactive rows)
+ok   drift suite:single_long/accuracy pcc_normalized 0.99998 >= 0.999783 (baseline 0.999983)
+ok   drift suite:single_long/accuracy pcc_final 0.999976 >= 0.999786 (baseline 0.999986)
+ok   drift suite:single_long/accuracy pcc_spread 0.999991 >= 0.999479 (baseline 0.999979)
+n/a  drift suite:single_long/accuracy pcc_row_p01_active: not applicable (n_active=1 < 100)
+n/a  drift suite:single_long/accuracy spread_ratio_p50: not applicable (n_active=1 < 8)
+ok   drift suite:single_long/accuracy abs_err_max 0.0070188 <= 0.00986338 (baseline 0.00657558)
+ok   drift suite:single_long/accuracy bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 0)
+ok   drift suite:single_long/accuracy spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 0)
+ok   drift suite:single_long/accuracy pcc_step 0.999869 >= 0.994892 (baseline 0.999892)
+ok   drift suite:single_long/accuracy spread_ratio_max 0.993447 <= 1.04664 (baseline 0.99664)
+ok   drift suite:single_long/accuracy spread_ratio_min 0.993447 >= 0.94664 (baseline 0.99664)
+ok   drift suite:single_long/accuracy pcc_row_min 0.99998 >= 0.899983 (baseline 0.999983)
+ok   floor suite:nan_mix/accuracy pcc_normalized 0.999986 >= 0.999
+ok   floor suite:nan_mix/accuracy pcc_final 1 >= 0.99
+ok   floor suite:nan_mix/accuracy pcc_mean 1 >= 0.995
+ok   floor suite:nan_mix/accuracy pcc_spread 0.999979 >= 0.9995
+n/a  floor suite:nan_mix/accuracy pcc_row_p01_active: not applicable (n_active=3 < 100)
+ok   floor suite:nan_mix/accuracy pcc_row_min_active 0.999963 >= 0.99
+ok   floor suite:nan_mix/accuracy pcc_row_min 0.766647 >= 0.4
+n/a  floor suite:nan_mix/accuracy spread_ratio_p50: not applicable (n_active=3 < 8)
+n/a  floor suite:nan_mix/accuracy spread_ratio_p01: not applicable (n_active=3 < 100)
+n/a  floor suite:nan_mix/accuracy spread_ratio_p99: not applicable (n_active=3 < 100)
+ok   floor suite:nan_mix/accuracy spread_ratio_min 0.992905 >= 0.9
+ok   floor suite:nan_mix/accuracy spread_ratio_max 1.00043 <= 1.1
+ok   floor suite:nan_mix/accuracy inactive_max_err 0.00587827 <= 0.05
+ok   floor suite:nan_mix/accuracy pcc_final_spread 0.999983 >= 0.9995
+ok   floor suite:nan_mix/accuracy bias_row_p50 0.000144584 <= 0.02
+ok   floor suite:nan_mix/accuracy bias_row_max 0.00661246 <= 0.05
+ok   floor suite:nan_mix/accuracy pcc_step 0.999461 >= 0.997
+n/a  floor suite:nan_mix/accuracy pcc_row_p01: not applicable (n_active=3 < 100)
+ok   floor suite:nan_mix/accuracy pcc_row_min_var 0.999963 >= 0.99
+ok   floor suite:nan_mix/accuracy flat_max_err 0.00587827 <= 0.05
+ok   floor suite:nan_mix/accuracy inactive_spread_ratio_min 1.1245 >= 0.25
+ok   drift suite:nan_mix/accuracy pcc_normalized 0.999986 >= 0.999786 (baseline 0.999986)
+ok   drift suite:nan_mix/accuracy pcc_final 1 >= 0.9998 (baseline 1)
+ok   drift suite:nan_mix/accuracy pcc_spread 0.999979 >= 0.999477 (baseline 0.999977)
+n/a  drift suite:nan_mix/accuracy pcc_row_p01_active: not applicable (n_active=3 < 100)
+n/a  drift suite:nan_mix/accuracy spread_ratio_p50: not applicable (n_active=3 < 8)
+ok   drift suite:nan_mix/accuracy abs_err_max 0.0361466 <= 0.0581521 (baseline 0.0387681)
+ok   drift suite:nan_mix/accuracy bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 2)
+ok   drift suite:nan_mix/accuracy spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 2)
+ok   drift suite:nan_mix/accuracy pcc_step 0.999461 >= 0.994385 (baseline 0.999385)
+ok   drift suite:nan_mix/accuracy spread_ratio_max 1.00043 <= 1.05194 (baseline 1.00194)
+ok   drift suite:nan_mix/accuracy spread_ratio_min 0.992905 >= 0.943092 (baseline 0.993092)
+ok   drift suite:nan_mix/accuracy pcc_row_min 0.766647 >= 0.747595 (baseline 0.847595)
+ok   floor suite:mask0/accuracy pcc_normalized 0.999985 >= 0.999
+ok   floor suite:mask0/accuracy pcc_final 1 >= 0.99
+ok   floor suite:mask0/accuracy pcc_mean 1 >= 0.995
+ok   floor suite:mask0/accuracy pcc_spread 0.999986 >= 0.9995
+n/a  floor suite:mask0/accuracy pcc_row_p01_active: not applicable (n_active=2 < 100)
+ok   floor suite:mask0/accuracy pcc_row_min_active 0.999997 >= 0.99
+ok   floor suite:mask0/accuracy pcc_row_min 0.999997 >= 0.4
+n/a  floor suite:mask0/accuracy spread_ratio_p50: not applicable (n_active=2 < 8)
+n/a  floor suite:mask0/accuracy spread_ratio_p01: not applicable (n_active=2 < 100)
+n/a  floor suite:mask0/accuracy spread_ratio_p99: not applicable (n_active=2 < 100)
+ok   floor suite:mask0/accuracy spread_ratio_min 0.9923 >= 0.9
+ok   floor suite:mask0/accuracy spread_ratio_max 1.00247 <= 1.1
+n/a  floor suite:mask0/accuracy inactive_max_err: not applicable (no inactive rows)
+ok   floor suite:mask0/accuracy pcc_final_spread 0.999995 >= 0.9995
+ok   floor suite:mask0/accuracy bias_row_p50 0.00246607 <= 0.02
+ok   floor suite:mask0/accuracy bias_row_max 0.00477495 <= 0.05
+ok   floor suite:mask0/accuracy pcc_step 0.999937 >= 0.997
+n/a  floor suite:mask0/accuracy pcc_row_p01: not applicable (n_active=2 < 100)
+ok   floor suite:mask0/accuracy pcc_row_min_var 0.999997 >= 0.99
+ok   floor suite:mask0/accuracy flat_max_err 0 <= 0.05
+n/a  floor suite:mask0/accuracy inactive_spread_ratio_min: not applicable (no inactive rows)
+ok   drift suite:mask0/accuracy pcc_normalized 0.999985 >= 0.999774 (baseline 0.999974)
+ok   drift suite:mask0/accuracy pcc_final 1 >= 0.9998 (baseline 1)
+ok   drift suite:mask0/accuracy pcc_spread 0.999986 >= 0.999469 (baseline 0.999969)
+n/a  drift suite:mask0/accuracy pcc_row_p01_active: not applicable (n_active=2 < 100)
+n/a  drift suite:mask0/accuracy spread_ratio_p50: not applicable (n_active=2 < 8)
+ok   drift suite:mask0/accuracy abs_err_max 0.0232248 <= 0.0548571 (baseline 0.0365714)
+ok   drift suite:mask0/accuracy bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 1)
+ok   drift suite:mask0/accuracy spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 1)
+ok   drift suite:mask0/accuracy pcc_step 0.999937 >= 0.994793 (baseline 0.999793)
+ok   drift suite:mask0/accuracy spread_ratio_max 1.00247 <= 1.05229 (baseline 1.00229)
+ok   drift suite:mask0/accuracy spread_ratio_min 0.9923 >= 0.937812 (baseline 0.987812)
+ok   drift suite:mask0/accuracy pcc_row_min 0.999997 >= 0.899992 (baseline 0.999992)
+ok   floor suite:daily/accuracy pcc_normalized 0.999981 >= 0.999
+ok   floor suite:daily/accuracy pcc_final 0.999987 >= 0.99
+ok   floor suite:daily/accuracy pcc_mean 0.999909 >= 0.995
+ok   floor suite:daily/accuracy pcc_spread 0.999981 >= 0.9995
+n/a  floor suite:daily/accuracy pcc_row_p01_active: not applicable (n_active=1 < 100)
+ok   floor suite:daily/accuracy pcc_row_min_active 0.999981 >= 0.99
+ok   floor suite:daily/accuracy pcc_row_min 0.999981 >= 0.4
+n/a  floor suite:daily/accuracy spread_ratio_p50: not applicable (n_active=1 < 8)
+n/a  floor suite:daily/accuracy spread_ratio_p01: not applicable (n_active=1 < 100)
+n/a  floor suite:daily/accuracy spread_ratio_p99: not applicable (n_active=1 < 100)
+ok   floor suite:daily/accuracy spread_ratio_min 0.989247 >= 0.9
+ok   floor suite:daily/accuracy spread_ratio_max 0.989247 <= 1.1
+n/a  floor suite:daily/accuracy inactive_max_err: not applicable (no inactive rows)
+ok   floor suite:daily/accuracy pcc_final_spread 0.999988 >= 0.9995
+ok   floor suite:daily/accuracy bias_row_p50 0.00159366 <= 0.02
+ok   floor suite:daily/accuracy bias_row_max 0.00159366 <= 0.05
+ok   floor suite:daily/accuracy pcc_step 0.999474 >= 0.997
+n/a  floor suite:daily/accuracy pcc_row_p01: not applicable (n_active=1 < 100)
+ok   floor suite:daily/accuracy pcc_row_min_var 0.999981 >= 0.99
+ok   floor suite:daily/accuracy flat_max_err 0 <= 0.05
+n/a  floor suite:daily/accuracy inactive_spread_ratio_min: not applicable (no inactive rows)
+ok   drift suite:daily/accuracy pcc_normalized 0.999981 >= 0.999779 (baseline 0.999979)
+ok   drift suite:daily/accuracy pcc_final 0.999987 >= 0.999784 (baseline 0.999984)
+ok   drift suite:daily/accuracy pcc_spread 0.999981 >= 0.99948 (baseline 0.99998)
+n/a  drift suite:daily/accuracy pcc_row_p01_active: not applicable (n_active=1 < 100)
+n/a  drift suite:daily/accuracy spread_ratio_p50: not applicable (n_active=1 < 8)
+ok   drift suite:daily/accuracy abs_err_max 0.022369 <= 0.0379481 (baseline 0.0252987)
+ok   drift suite:daily/accuracy bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 0)
+ok   drift suite:daily/accuracy spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 0)
+ok   drift suite:daily/accuracy pcc_step 0.999474 >= 0.994357 (baseline 0.999357)
+ok   drift suite:daily/accuracy spread_ratio_max 0.989247 <= 1.04089 (baseline 0.990886)
+ok   drift suite:daily/accuracy spread_ratio_min 0.989247 >= 0.940886 (baseline 0.990886)
+ok   drift suite:daily/accuracy pcc_row_min 0.999981 >= 0.899979 (baseline 0.999979)
+ok   floor suite:monthly/accuracy pcc_normalized 0.999952 >= 0.999
+ok   floor suite:monthly/accuracy pcc_final 1 >= 0.99
+ok   floor suite:monthly/accuracy pcc_mean 1 >= 0.995
+ok   floor suite:monthly/accuracy pcc_spread 0.999971 >= 0.9995
+n/a  floor suite:monthly/accuracy pcc_row_p01_active: not applicable (n_active=3 < 100)
+ok   floor suite:monthly/accuracy pcc_row_min_active 0.999958 >= 0.99
+ok   floor suite:monthly/accuracy pcc_row_min 0.999958 >= 0.4
+n/a  floor suite:monthly/accuracy spread_ratio_p50: not applicable (n_active=3 < 8)
+n/a  floor suite:monthly/accuracy spread_ratio_p01: not applicable (n_active=3 < 100)
+n/a  floor suite:monthly/accuracy spread_ratio_p99: not applicable (n_active=3 < 100)
+ok   floor suite:monthly/accuracy spread_ratio_min 0.994134 >= 0.9
+ok   floor suite:monthly/accuracy spread_ratio_max 1.00481 <= 1.1
+n/a  floor suite:monthly/accuracy inactive_max_err: not applicable (no inactive rows)
+ok   floor suite:monthly/accuracy pcc_final_spread 0.999964 >= 0.9995
+ok   floor suite:monthly/accuracy bias_row_p50 0.00847966 <= 0.02
+ok   floor suite:monthly/accuracy bias_row_max 0.0119684 <= 0.05
+ok   floor suite:monthly/accuracy pcc_step 0.998984 >= 0.997
+n/a  floor suite:monthly/accuracy pcc_row_p01: not applicable (n_active=3 < 100)
+ok   floor suite:monthly/accuracy pcc_row_min_var 0.999958 >= 0.99
+ok   floor suite:monthly/accuracy flat_max_err 0 <= 0.05
+n/a  floor suite:monthly/accuracy inactive_spread_ratio_min: not applicable (no inactive rows)
+ok   drift suite:monthly/accuracy pcc_normalized 0.999952 >= 0.999759 (baseline 0.999959)
+ok   drift suite:monthly/accuracy pcc_final 1 >= 0.9998 (baseline 1)
+ok   drift suite:monthly/accuracy pcc_spread 0.999971 >= 0.999474 (baseline 0.999974)
+n/a  drift suite:monthly/accuracy pcc_row_p01_active: not applicable (n_active=3 < 100)
+n/a  drift suite:monthly/accuracy spread_ratio_p50: not applicable (n_active=3 < 8)
+ok   drift suite:monthly/accuracy abs_err_max 0.0470415 <= 0.0695887 (baseline 0.0463924)
+ok   drift suite:monthly/accuracy bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 2)
+ok   drift suite:monthly/accuracy spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 2)
+ok   drift suite:monthly/accuracy pcc_step 0.998984 >= 0.994139 (baseline 0.999139)
+ok   drift suite:monthly/accuracy spread_ratio_max 1.00481 <= 1.05385 (baseline 1.00385)
+ok   drift suite:monthly/accuracy spread_ratio_min 0.994134 >= 0.943101 (baseline 0.993101)
+ok   drift suite:monthly/accuracy pcc_row_min 0.999958 >= 0.899958 (baseline 0.999958)
+ok   floor suite:fivemin/accuracy pcc_normalized 0.999848 >= 0.999
+ok   floor suite:fivemin/accuracy pcc_final 0.999813 >= 0.99
+ok   floor suite:fivemin/accuracy pcc_mean 0.999503 >= 0.995
+ok   floor suite:fivemin/accuracy pcc_spread 0.999931 >= 0.9995
+n/a  floor suite:fivemin/accuracy pcc_row_p01_active: not applicable (n_active=1 < 100)
+ok   floor suite:fivemin/accuracy pcc_row_min_active 0.999848 >= 0.99
+ok   floor suite:fivemin/accuracy pcc_row_min 0.999848 >= 0.4
+n/a  floor suite:fivemin/accuracy spread_ratio_p50: not applicable (n_active=1 < 8)
+n/a  floor suite:fivemin/accuracy spread_ratio_p01: not applicable (n_active=1 < 100)
+n/a  floor suite:fivemin/accuracy spread_ratio_p99: not applicable (n_active=1 < 100)
+ok   floor suite:fivemin/accuracy spread_ratio_min 0.997112 >= 0.9
+ok   floor suite:fivemin/accuracy spread_ratio_max 0.997112 <= 1.1
+n/a  floor suite:fivemin/accuracy inactive_max_err: not applicable (no inactive rows)
+ok   floor suite:fivemin/accuracy pcc_final_spread 0.99994 >= 0.9995
+ok   floor suite:fivemin/accuracy bias_row_p50 0.00174975 <= 0.02
+ok   floor suite:fivemin/accuracy bias_row_max 0.00174975 <= 0.05
+ok   floor suite:fivemin/accuracy pcc_step 0.99886 >= 0.997
+n/a  floor suite:fivemin/accuracy pcc_row_p01: not applicable (n_active=1 < 100)
+ok   floor suite:fivemin/accuracy pcc_row_min_var 0.999848 >= 0.99
+ok   floor suite:fivemin/accuracy flat_max_err 0 <= 0.05
+n/a  floor suite:fivemin/accuracy inactive_spread_ratio_min: not applicable (no inactive rows)
+ok   drift suite:fivemin/accuracy pcc_normalized 0.999848 >= 0.999583 (baseline 0.999783)
+ok   drift suite:fivemin/accuracy pcc_final 0.999813 >= 0.999568 (baseline 0.999768)
+ok   drift suite:fivemin/accuracy pcc_spread 0.999931 >= 0.999381 (baseline 0.999881)
+n/a  drift suite:fivemin/accuracy pcc_row_p01_active: not applicable (n_active=1 < 100)
+n/a  drift suite:fivemin/accuracy spread_ratio_p50: not applicable (n_active=1 < 8)
+ok   drift suite:fivemin/accuracy abs_err_max 0.0133967 <= 0.0288842 (baseline 0.0192561)
+ok   drift suite:fivemin/accuracy bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 0)
+ok   drift suite:fivemin/accuracy spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 0)
+ok   drift suite:fivemin/accuracy pcc_step 0.99886 >= 0.993556 (baseline 0.998556)
+ok   drift suite:fivemin/accuracy spread_ratio_max 0.997112 <= 1.04694 (baseline 0.996936)
+ok   drift suite:fivemin/accuracy spread_ratio_min 0.997112 >= 0.946936 (baseline 0.996936)
+ok   drift suite:fivemin/accuracy pcc_row_min 0.999848 >= 0.899783 (baseline 0.999783)
+ok   floor suite:cpm_edge/accuracy pcc_normalized 0.999984 >= 0.999
+ok   floor suite:cpm_edge/accuracy pcc_final 0.999982 >= 0.99
+ok   floor suite:cpm_edge/accuracy pcc_mean 0.999976 >= 0.995
+ok   floor suite:cpm_edge/accuracy pcc_spread 0.999994 >= 0.9995
+n/a  floor suite:cpm_edge/accuracy pcc_row_p01_active: not applicable (n_active=1 < 100)
+ok   floor suite:cpm_edge/accuracy pcc_row_min_active 0.999984 >= 0.99
+ok   floor suite:cpm_edge/accuracy pcc_row_min 0.999984 >= 0.4
+n/a  floor suite:cpm_edge/accuracy spread_ratio_p50: not applicable (n_active=1 < 8)
+n/a  floor suite:cpm_edge/accuracy spread_ratio_p01: not applicable (n_active=1 < 100)
+n/a  floor suite:cpm_edge/accuracy spread_ratio_p99: not applicable (n_active=1 < 100)
+ok   floor suite:cpm_edge/accuracy spread_ratio_min 0.99668 >= 0.9
+ok   floor suite:cpm_edge/accuracy spread_ratio_max 0.99668 <= 1.1
+n/a  floor suite:cpm_edge/accuracy inactive_max_err: not applicable (no inactive rows)
+ok   floor suite:cpm_edge/accuracy pcc_final_spread 0.999996 >= 0.9995
+ok   floor suite:cpm_edge/accuracy bias_row_p50 0.00463795 <= 0.02
+ok   floor suite:cpm_edge/accuracy bias_row_max 0.00463795 <= 0.05
+ok   floor suite:cpm_edge/accuracy pcc_step 0.999839 >= 0.997
+n/a  floor suite:cpm_edge/accuracy pcc_row_p01: not applicable (n_active=1 < 100)
+ok   floor suite:cpm_edge/accuracy pcc_row_min_var 0.999984 >= 0.99
+ok   floor suite:cpm_edge/accuracy flat_max_err 0 <= 0.05
+n/a  floor suite:cpm_edge/accuracy inactive_spread_ratio_min: not applicable (no inactive rows)
+ok   drift suite:cpm_edge/accuracy pcc_normalized 0.999984 >= 0.999779 (baseline 0.999979)
+ok   drift suite:cpm_edge/accuracy pcc_final 0.999982 >= 0.999776 (baseline 0.999976)
+ok   drift suite:cpm_edge/accuracy pcc_spread 0.999994 >= 0.99949 (baseline 0.99999)
+n/a  drift suite:cpm_edge/accuracy pcc_row_p01_active: not applicable (n_active=1 < 100)
+n/a  drift suite:cpm_edge/accuracy spread_ratio_p50: not applicable (n_active=1 < 8)
+ok   drift suite:cpm_edge/accuracy abs_err_max 0.0202458 <= 0.036085 (baseline 0.0240567)
+ok   drift suite:cpm_edge/accuracy bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 0)
+ok   drift suite:cpm_edge/accuracy spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 0)
+ok   drift suite:cpm_edge/accuracy pcc_step 0.999839 >= 0.994776 (baseline 0.999776)
+ok   drift suite:cpm_edge/accuracy spread_ratio_max 0.99668 <= 1.04763 (baseline 0.997629)
+ok   drift suite:cpm_edge/accuracy spread_ratio_min 0.99668 >= 0.947629 (baseline 0.997629)
+ok   drift suite:cpm_edge/accuracy pcc_row_min 0.999984 >= 0.899979 (baseline 0.999979)
+ok   floor suite:single/performance pcc_normalized 0.999935 >= 0.995
+ok   floor suite:single/performance pcc_final 0.999925 >= 0.98
+ok   floor suite:single/performance pcc_mean 0.999893 >= 0.99
+ok   floor suite:single/performance pcc_spread 0.999973 >= 0.998
+n/a  floor suite:single/performance pcc_row_p01_active: not applicable (n_active=1 < 100)
+ok   floor suite:single/performance pcc_row_min_active 0.999935 >= 0.98
+ok   floor suite:single/performance pcc_row_min 0.999935 >= 0.3
+n/a  floor suite:single/performance spread_ratio_p50: not applicable (n_active=1 < 8)
+n/a  floor suite:single/performance spread_ratio_p01: not applicable (n_active=1 < 100)
+n/a  floor suite:single/performance spread_ratio_p99: not applicable (n_active=1 < 100)
+ok   floor suite:single/performance spread_ratio_min 0.995464 >= 0.9
+ok   floor suite:single/performance spread_ratio_max 0.995464 <= 1.1
+n/a  floor suite:single/performance inactive_max_err: not applicable (no inactive rows)
+ok   floor suite:single/performance pcc_final_spread 0.999977 >= 0.998
+ok   floor suite:single/performance bias_row_p50 0.00788739 <= 0.05
+ok   floor suite:single/performance bias_row_max 0.00788739 <= 0.15
+ok   floor suite:single/performance pcc_step 0.99835 >= 0.985
+n/a  floor suite:single/performance pcc_row_p01: not applicable (n_active=1 < 100)
+ok   floor suite:single/performance pcc_row_min_var 0.999935 >= 0.98
+ok   floor suite:single/performance flat_max_err 0 <= 0.045
+n/a  floor suite:single/performance inactive_spread_ratio_min: not applicable (no inactive rows)
+ok   drift suite:single/performance pcc_normalized 0.999935 >= 0.998932 (baseline 0.999932)
+ok   drift suite:single/performance pcc_final 0.999925 >= 0.99892 (baseline 0.99992)
+ok   drift suite:single/performance pcc_spread 0.999973 >= 0.997967 (baseline 0.999967)
+n/a  drift suite:single/performance pcc_row_p01_active: not applicable (n_active=1 < 100)
+n/a  drift suite:single/performance spread_ratio_p50: not applicable (n_active=1 < 8)
+ok   drift suite:single/performance abs_err_max 0.0229373 <= 0.0404572 (baseline 0.0269715)
+ok   drift suite:single/performance bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 0)
+ok   drift suite:single/performance spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 0)
+ok   drift suite:single/performance pcc_step 0.99835 >= 0.993276 (baseline 0.998276)
+ok   drift suite:single/performance spread_ratio_max 0.995464 <= 1.04511 (baseline 0.995112)
+ok   drift suite:single/performance spread_ratio_min 0.995464 >= 0.945112 (baseline 0.995112)
+ok   drift suite:single/performance pcc_row_min 0.999935 >= 0.799932 (baseline 0.999932)
+ok   floor suite:model16/performance pcc_normalized 0.999888 >= 0.995
+ok   floor suite:model16/performance pcc_final 1 >= 0.98
+ok   floor suite:model16/performance pcc_mean 1 >= 0.99
+ok   floor suite:model16/performance pcc_spread 0.999645 >= 0.998
+n/a  floor suite:model16/performance pcc_row_p01_active: not applicable (n_active=16 < 100)
+ok   floor suite:model16/performance pcc_row_min_active 0.997791 >= 0.98
+ok   floor suite:model16/performance pcc_row_min 0.997791 >= 0.3
+ok   floor suite:model16/performance spread_ratio_p50 0.986536 in [0.95, 1.05]
+n/a  floor suite:model16/performance spread_ratio_p01: not applicable (n_active=16 < 100)
+n/a  floor suite:model16/performance spread_ratio_p99: not applicable (n_active=16 < 100)
+ok   floor suite:model16/performance spread_ratio_min 0.973944 >= 0.8
+ok   floor suite:model16/performance spread_ratio_max 1.05077 <= 1.25
+n/a  floor suite:model16/performance inactive_max_err: not applicable (no inactive rows)
+ok   floor suite:model16/performance pcc_final_spread 0.999645 >= 0.998
+ok   floor suite:model16/performance bias_row_p50 0.00603703 <= 0.05
+ok   floor suite:model16/performance bias_row_max 0.0132336 <= 0.15
+ok   floor suite:model16/performance pcc_step 0.998675 >= 0.985
+n/a  floor suite:model16/performance pcc_row_p01: not applicable (n_active=16 < 100)
+ok   floor suite:model16/performance pcc_row_min_var 0.997791 >= 0.98
+ok   floor suite:model16/performance flat_max_err 0 <= 0.045
+n/a  floor suite:model16/performance inactive_spread_ratio_min: not applicable (no inactive rows)
+ok   drift suite:model16/performance pcc_normalized 0.999888 >= 0.998914 (baseline 0.999914)
+ok   drift suite:model16/performance pcc_final 1 >= 0.999 (baseline 1)
+ok   drift suite:model16/performance pcc_spread 0.999645 >= 0.997736 (baseline 0.999736)
+n/a  drift suite:model16/performance pcc_row_p01_active: not applicable (n_active=16 < 100)
+ok   drift suite:model16/performance spread_ratio_p50 |0.986536 - 1.0| <= 0.0247614 (baseline 0.985239)
+ok   drift suite:model16/performance abs_err_max 0.545253 <= 0.636239 (baseline 0.424159)
+ok   drift suite:model16/performance bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 15)
+ok   drift suite:model16/performance spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 15)
+ok   drift suite:model16/performance pcc_step 0.998675 >= 0.99383 (baseline 0.99883)
+ok   drift suite:model16/performance spread_ratio_max 1.05077 <= 1.08561 (baseline 1.03561)
+ok   drift suite:model16/performance spread_ratio_min 0.973944 >= 0.923034 (baseline 0.973034)
+ok   drift suite:model16/performance pcc_row_min 0.997791 >= 0.798509 (baseline 0.998509)
+ok   floor suite:single_long/performance pcc_normalized 0.999727 >= 0.995
+ok   floor suite:single_long/performance pcc_final 0.999636 >= 0.98
+ok   floor suite:single_long/performance pcc_mean 0.999496 >= 0.99
+ok   floor suite:single_long/performance pcc_spread 0.999915 >= 0.998
+n/a  floor suite:single_long/performance pcc_row_p01_active: not applicable (n_active=1 < 100)
+ok   floor suite:single_long/performance pcc_row_min_active 0.999727 >= 0.98
+ok   floor suite:single_long/performance pcc_row_min 0.999727 >= 0.3
+n/a  floor suite:single_long/performance spread_ratio_p50: not applicable (n_active=1 < 8)
+n/a  floor suite:single_long/performance spread_ratio_p01: not applicable (n_active=1 < 100)
+n/a  floor suite:single_long/performance spread_ratio_p99: not applicable (n_active=1 < 100)
+ok   floor suite:single_long/performance spread_ratio_min 0.983242 >= 0.9
+ok   floor suite:single_long/performance spread_ratio_max 0.983242 <= 1.1
+n/a  floor suite:single_long/performance inactive_max_err: not applicable (no inactive rows)
+ok   floor suite:single_long/performance pcc_final_spread 0.999925 >= 0.998
+ok   floor suite:single_long/performance bias_row_p50 0.00338129 <= 0.05
+ok   floor suite:single_long/performance bias_row_max 0.00338129 <= 0.15
+ok   floor suite:single_long/performance pcc_step 0.998161 >= 0.985
+n/a  floor suite:single_long/performance pcc_row_p01: not applicable (n_active=1 < 100)
+ok   floor suite:single_long/performance pcc_row_min_var 0.999727 >= 0.98
+ok   floor suite:single_long/performance flat_max_err 0 <= 0.045
+n/a  floor suite:single_long/performance inactive_spread_ratio_min: not applicable (no inactive rows)
+ok   drift suite:single_long/performance pcc_normalized 0.999727 >= 0.998718 (baseline 0.999718)
+ok   drift suite:single_long/performance pcc_final 0.999636 >= 0.998629 (baseline 0.999629)
+ok   drift suite:single_long/performance pcc_spread 0.999915 >= 0.997902 (baseline 0.999902)
+n/a  drift suite:single_long/performance pcc_row_p01_active: not applicable (n_active=1 < 100)
+n/a  drift suite:single_long/performance spread_ratio_p50: not applicable (n_active=1 < 8)
+ok   drift suite:single_long/performance abs_err_max 0.0200429 <= 0.031029 (baseline 0.020686)
+ok   drift suite:single_long/performance bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 0)
+ok   drift suite:single_long/performance spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 0)
+ok   drift suite:single_long/performance pcc_step 0.998161 >= 0.993136 (baseline 0.998136)
+ok   drift suite:single_long/performance spread_ratio_max 0.983242 <= 1.03268 (baseline 0.982678)
+ok   drift suite:single_long/performance spread_ratio_min 0.983242 >= 0.932678 (baseline 0.982678)
+ok   drift suite:single_long/performance pcc_row_min 0.999727 >= 0.799718 (baseline 0.999718)
+ok   floor suite:nan_mix/performance pcc_normalized 0.999903 >= 0.995
+ok   floor suite:nan_mix/performance pcc_final 1 >= 0.98
+ok   floor suite:nan_mix/performance pcc_mean 1 >= 0.99
+ok   floor suite:nan_mix/performance pcc_spread 0.999861 >= 0.998
+n/a  floor suite:nan_mix/performance pcc_row_p01_active: not applicable (n_active=3 < 100)
+ok   floor suite:nan_mix/performance pcc_row_min_active 0.999754 >= 0.98
+ok   floor suite:nan_mix/performance pcc_row_min 0.401107 >= 0.3
+n/a  floor suite:nan_mix/performance spread_ratio_p50: not applicable (n_active=3 < 8)
+n/a  floor suite:nan_mix/performance spread_ratio_p01: not applicable (n_active=3 < 100)
+n/a  floor suite:nan_mix/performance spread_ratio_p99: not applicable (n_active=3 < 100)
+ok   floor suite:nan_mix/performance spread_ratio_min 0.98792 >= 0.9
+ok   floor suite:nan_mix/performance spread_ratio_max 1.01458 <= 1.1
+ok   floor suite:nan_mix/performance inactive_max_err 0.00832306 <= 0.045
+ok   floor suite:nan_mix/performance pcc_final_spread 0.999878 >= 0.998
+ok   floor suite:nan_mix/performance bias_row_p50 0.000188551 <= 0.05
+ok   floor suite:nan_mix/performance bias_row_max 0.0192904 <= 0.15
+ok   floor suite:nan_mix/performance pcc_step 0.998008 >= 0.985
+n/a  floor suite:nan_mix/performance pcc_row_p01: not applicable (n_active=3 < 100)
+ok   floor suite:nan_mix/performance pcc_row_min_var 0.999754 >= 0.98
+ok   floor suite:nan_mix/performance flat_max_err 0.00832306 <= 0.045
+ok   floor suite:nan_mix/performance inactive_spread_ratio_min 2.27102 >= 0.25
+ok   drift suite:nan_mix/performance pcc_normalized 0.999903 >= 0.998903 (baseline 0.999903)
+ok   drift suite:nan_mix/performance pcc_final 1 >= 0.999 (baseline 1)
+ok   drift suite:nan_mix/performance pcc_spread 0.999861 >= 0.997866 (baseline 0.999866)
+n/a  drift suite:nan_mix/performance pcc_row_p01_active: not applicable (n_active=3 < 100)
+n/a  drift suite:nan_mix/performance spread_ratio_p50: not applicable (n_active=3 < 8)
+ok   drift suite:nan_mix/performance abs_err_max 0.064782 <= 0.103032 (baseline 0.0686883)
+ok   drift suite:nan_mix/performance bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 2)
+ok   drift suite:nan_mix/performance spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 2)
+ok   drift suite:nan_mix/performance pcc_step 0.998008 >= 0.992944 (baseline 0.997944)
+ok   drift suite:nan_mix/performance spread_ratio_max 1.01458 <= 1.06465 (baseline 1.01465)
+ok   drift suite:nan_mix/performance spread_ratio_min 0.98792 >= 0.938337 (baseline 0.988337)
+ok   drift suite:nan_mix/performance pcc_row_min 0.401107 >= 0.269917 (baseline 0.469917)
+ok   floor suite:mask0/performance pcc_normalized 0.999966 >= 0.995
+ok   floor suite:mask0/performance pcc_final 1 >= 0.98
+ok   floor suite:mask0/performance pcc_mean 1 >= 0.99
+ok   floor suite:mask0/performance pcc_spread 0.999971 >= 0.998
+n/a  floor suite:mask0/performance pcc_row_p01_active: not applicable (n_active=2 < 100)
+ok   floor suite:mask0/performance pcc_row_min_active 0.99996 >= 0.98
+ok   floor suite:mask0/performance pcc_row_min 0.99996 >= 0.3
+n/a  floor suite:mask0/performance spread_ratio_p50: not applicable (n_active=2 < 8)
+n/a  floor suite:mask0/performance spread_ratio_p01: not applicable (n_active=2 < 100)
+n/a  floor suite:mask0/performance spread_ratio_p99: not applicable (n_active=2 < 100)
+ok   floor suite:mask0/performance spread_ratio_min 0.991842 >= 0.9
+ok   floor suite:mask0/performance spread_ratio_max 0.996488 <= 1.1
+n/a  floor suite:mask0/performance inactive_max_err: not applicable (no inactive rows)
+ok   floor suite:mask0/performance pcc_final_spread 0.999932 >= 0.998
+ok   floor suite:mask0/performance bias_row_p50 0.00326178 <= 0.05
+ok   floor suite:mask0/performance bias_row_max 0.0034533 <= 0.15
+ok   floor suite:mask0/performance pcc_step 0.998542 >= 0.985
+n/a  floor suite:mask0/performance pcc_row_p01: not applicable (n_active=2 < 100)
+ok   floor suite:mask0/performance pcc_row_min_var 0.99996 >= 0.98
+ok   floor suite:mask0/performance flat_max_err 0 <= 0.045
+n/a  floor suite:mask0/performance inactive_spread_ratio_min: not applicable (no inactive rows)
+ok   drift suite:mask0/performance pcc_normalized 0.999966 >= 0.998951 (baseline 0.999951)
+ok   drift suite:mask0/performance pcc_final 1 >= 0.999 (baseline 1)
+ok   drift suite:mask0/performance pcc_spread 0.999971 >= 0.99796 (baseline 0.99996)
+n/a  drift suite:mask0/performance pcc_row_p01_active: not applicable (n_active=2 < 100)
+n/a  drift suite:mask0/performance spread_ratio_p50: not applicable (n_active=2 < 8)
+ok   drift suite:mask0/performance abs_err_max 0.0290842 <= 0.0519274 (baseline 0.0346183)
+ok   drift suite:mask0/performance bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 1)
+ok   drift suite:mask0/performance spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 1)
+ok   drift suite:mask0/performance pcc_step 0.998542 >= 0.993519 (baseline 0.998519)
+ok   drift suite:mask0/performance spread_ratio_max 0.996488 <= 1.04771 (baseline 0.997712)
+ok   drift suite:mask0/performance spread_ratio_min 0.991842 >= 0.938235 (baseline 0.988235)
+ok   drift suite:mask0/performance pcc_row_min 0.99996 >= 0.799955 (baseline 0.999955)
+ok   floor suite:daily/performance pcc_normalized 0.999952 >= 0.995
+ok   floor suite:daily/performance pcc_final 0.999968 >= 0.98
+ok   floor suite:daily/performance pcc_mean 0.998517 >= 0.99
+ok   floor suite:daily/performance pcc_spread 0.999961 >= 0.998
+n/a  floor suite:daily/performance pcc_row_p01_active: not applicable (n_active=1 < 100)
+ok   floor suite:daily/performance pcc_row_min_active 0.999952 >= 0.98
+ok   floor suite:daily/performance pcc_row_min 0.999952 >= 0.3
+n/a  floor suite:daily/performance spread_ratio_p50: not applicable (n_active=1 < 8)
+n/a  floor suite:daily/performance spread_ratio_p01: not applicable (n_active=1 < 100)
+n/a  floor suite:daily/performance spread_ratio_p99: not applicable (n_active=1 < 100)
+ok   floor suite:daily/performance spread_ratio_min 0.986173 >= 0.9
+ok   floor suite:daily/performance spread_ratio_max 0.986173 <= 1.1
+n/a  floor suite:daily/performance inactive_max_err: not applicable (no inactive rows)
+ok   floor suite:daily/performance pcc_final_spread 0.999989 >= 0.998
+ok   floor suite:daily/performance bias_row_p50 0.0101124 <= 0.05
+ok   floor suite:daily/performance bias_row_max 0.0101124 <= 0.15
+ok   floor suite:daily/performance pcc_step 0.998501 >= 0.985
+n/a  floor suite:daily/performance pcc_row_p01: not applicable (n_active=1 < 100)
+ok   floor suite:daily/performance pcc_row_min_var 0.999952 >= 0.98
+ok   floor suite:daily/performance flat_max_err 0 <= 0.045
+n/a  floor suite:daily/performance inactive_spread_ratio_min: not applicable (no inactive rows)
+ok   drift suite:daily/performance pcc_normalized 0.999952 >= 0.998955 (baseline 0.999955)
+ok   drift suite:daily/performance pcc_final 0.999968 >= 0.998971 (baseline 0.999971)
+ok   drift suite:daily/performance pcc_spread 0.999961 >= 0.997963 (baseline 0.999963)
+n/a  drift suite:daily/performance pcc_row_p01_active: not applicable (n_active=1 < 100)
+n/a  drift suite:daily/performance spread_ratio_p50: not applicable (n_active=1 < 8)
+ok   drift suite:daily/performance abs_err_max 0.03161 <= 0.0386235 (baseline 0.025749)
+ok   drift suite:daily/performance bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 0)
+ok   drift suite:daily/performance spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 0)
+ok   drift suite:daily/performance pcc_step 0.998501 >= 0.993848 (baseline 0.998848)
+ok   drift suite:daily/performance spread_ratio_max 0.986173 <= 1.03761 (baseline 0.987609)
+ok   drift suite:daily/performance spread_ratio_min 0.986173 >= 0.937609 (baseline 0.987609)
+ok   drift suite:daily/performance pcc_row_min 0.999952 >= 0.799955 (baseline 0.999955)
+ok   floor suite:monthly/performance pcc_normalized 0.999615 >= 0.995
+ok   floor suite:monthly/performance pcc_final 1 >= 0.98
+ok   floor suite:monthly/performance pcc_mean 1 >= 0.99
+ok   floor suite:monthly/performance pcc_spread 0.999843 >= 0.998
+n/a  floor suite:monthly/performance pcc_row_p01_active: not applicable (n_active=3 < 100)
+ok   floor suite:monthly/performance pcc_row_min_active 0.999682 >= 0.98
+ok   floor suite:monthly/performance pcc_row_min 0.999682 >= 0.3
+n/a  floor suite:monthly/performance spread_ratio_p50: not applicable (n_active=3 < 8)
+n/a  floor suite:monthly/performance spread_ratio_p01: not applicable (n_active=3 < 100)
+n/a  floor suite:monthly/performance spread_ratio_p99: not applicable (n_active=3 < 100)
+ok   floor suite:monthly/performance spread_ratio_min 0.988756 >= 0.9
+ok   floor suite:monthly/performance spread_ratio_max 1.0138 <= 1.1
+n/a  floor suite:monthly/performance inactive_max_err: not applicable (no inactive rows)
+ok   floor suite:monthly/performance pcc_final_spread 0.999677 >= 0.998
+ok   floor suite:monthly/performance bias_row_p50 0.0361018 <= 0.05
+ok   floor suite:monthly/performance bias_row_max 0.0364988 <= 0.15
+ok   floor suite:monthly/performance pcc_step 0.995017 >= 0.985
+n/a  floor suite:monthly/performance pcc_row_p01: not applicable (n_active=3 < 100)
+ok   floor suite:monthly/performance pcc_row_min_var 0.999682 >= 0.98
+ok   floor suite:monthly/performance flat_max_err 0 <= 0.045
+n/a  floor suite:monthly/performance inactive_spread_ratio_min: not applicable (no inactive rows)
+ok   drift suite:monthly/performance pcc_normalized 0.999615 >= 0.998606 (baseline 0.999606)
+ok   drift suite:monthly/performance pcc_final 1 >= 0.999 (baseline 1)
+ok   drift suite:monthly/performance pcc_spread 0.999843 >= 0.997825 (baseline 0.999825)
+n/a  drift suite:monthly/performance pcc_row_p01_active: not applicable (n_active=3 < 100)
+n/a  drift suite:monthly/performance spread_ratio_p50: not applicable (n_active=3 < 8)
+ok   drift suite:monthly/performance abs_err_max 0.101091 <= 0.139901 (baseline 0.0932674)
+ok   drift suite:monthly/performance bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 2)
+ok   drift suite:monthly/performance spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 2)
+ok   drift suite:monthly/performance pcc_step 0.995017 >= 0.989956 (baseline 0.994956)
+ok   drift suite:monthly/performance spread_ratio_max 1.0138 <= 1.06321 (baseline 1.01321)
+ok   drift suite:monthly/performance spread_ratio_min 0.988756 >= 0.936984 (baseline 0.986984)
+ok   drift suite:monthly/performance pcc_row_min 0.999682 >= 0.799664 (baseline 0.999664)
+ok   floor suite:fivemin/performance pcc_normalized 0.999162 >= 0.995
+ok   floor suite:fivemin/performance pcc_final 0.998797 >= 0.98
+ok   floor suite:fivemin/performance pcc_mean 0.99706 >= 0.99
+ok   floor suite:fivemin/performance pcc_spread 0.999702 >= 0.998
+n/a  floor suite:fivemin/performance pcc_row_p01_active: not applicable (n_active=1 < 100)
+ok   floor suite:fivemin/performance pcc_row_min_active 0.999162 >= 0.98
+ok   floor suite:fivemin/performance pcc_row_min 0.999162 >= 0.3
+n/a  floor suite:fivemin/performance spread_ratio_p50: not applicable (n_active=1 < 8)
+n/a  floor suite:fivemin/performance spread_ratio_p01: not applicable (n_active=1 < 100)
+n/a  floor suite:fivemin/performance spread_ratio_p99: not applicable (n_active=1 < 100)
+ok   floor suite:fivemin/performance spread_ratio_min 0.985014 >= 0.9
+ok   floor suite:fivemin/performance spread_ratio_max 0.985014 <= 1.1
+n/a  floor suite:fivemin/performance inactive_max_err: not applicable (no inactive rows)
+ok   floor suite:fivemin/performance pcc_final_spread 0.999775 >= 0.998
+ok   floor suite:fivemin/performance bias_row_p50 0.00665042 <= 0.05
+ok   floor suite:fivemin/performance bias_row_max 0.00665042 <= 0.15
+ok   floor suite:fivemin/performance pcc_step 0.994592 >= 0.985
+n/a  floor suite:fivemin/performance pcc_row_p01: not applicable (n_active=1 < 100)
+ok   floor suite:fivemin/performance pcc_row_min_var 0.999162 >= 0.98
+ok   floor suite:fivemin/performance flat_max_err 0 <= 0.045
+n/a  floor suite:fivemin/performance inactive_spread_ratio_min: not applicable (no inactive rows)
+ok   drift suite:fivemin/performance pcc_normalized 0.999162 >= 0.998255 (baseline 0.999255)
+ok   drift suite:fivemin/performance pcc_final 0.998797 >= 0.997949 (baseline 0.998949)
+ok   drift suite:fivemin/performance pcc_spread 0.999702 >= 0.997708 (baseline 0.999708)
+n/a  drift suite:fivemin/performance pcc_row_p01_active: not applicable (n_active=1 < 100)
+n/a  drift suite:fivemin/performance spread_ratio_p50: not applicable (n_active=1 < 8)
+ok   drift suite:fivemin/performance abs_err_max 0.0220422 <= 0.031536 (baseline 0.021024)
+ok   drift suite:fivemin/performance bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 0)
+ok   drift suite:fivemin/performance spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 0)
+ok   drift suite:fivemin/performance pcc_step 0.994592 >= 0.989515 (baseline 0.994515)
+ok   drift suite:fivemin/performance spread_ratio_max 0.985014 <= 1.03667 (baseline 0.986675)
+ok   drift suite:fivemin/performance spread_ratio_min 0.985014 >= 0.936675 (baseline 0.986675)
+ok   drift suite:fivemin/performance pcc_row_min 0.999162 >= 0.799255 (baseline 0.999255)
+ok   floor suite:cpm_edge/performance pcc_normalized 0.999865 >= 0.995
+ok   floor suite:cpm_edge/performance pcc_final 0.999831 >= 0.98
+ok   floor suite:cpm_edge/performance pcc_mean 0.999691 >= 0.99
+ok   floor suite:cpm_edge/performance pcc_spread 0.999961 >= 0.998
+n/a  floor suite:cpm_edge/performance pcc_row_p01_active: not applicable (n_active=1 < 100)
+ok   floor suite:cpm_edge/performance pcc_row_min_active 0.999865 >= 0.98
+ok   floor suite:cpm_edge/performance pcc_row_min 0.999865 >= 0.3
+n/a  floor suite:cpm_edge/performance spread_ratio_p50: not applicable (n_active=1 < 8)
+n/a  floor suite:cpm_edge/performance spread_ratio_p01: not applicable (n_active=1 < 100)
+n/a  floor suite:cpm_edge/performance spread_ratio_p99: not applicable (n_active=1 < 100)
+ok   floor suite:cpm_edge/performance spread_ratio_min 0.991042 >= 0.9
+ok   floor suite:cpm_edge/performance spread_ratio_max 0.991042 <= 1.1
+n/a  floor suite:cpm_edge/performance inactive_max_err: not applicable (no inactive rows)
+ok   floor suite:cpm_edge/performance pcc_final_spread 0.999967 >= 0.998
+ok   floor suite:cpm_edge/performance bias_row_p50 0.0120137 <= 0.05
+ok   floor suite:cpm_edge/performance bias_row_max 0.0120137 <= 0.15
+ok   floor suite:cpm_edge/performance pcc_step 0.999086 >= 0.985
+n/a  floor suite:cpm_edge/performance pcc_row_p01: not applicable (n_active=1 < 100)
+ok   floor suite:cpm_edge/performance pcc_row_min_var 0.999865 >= 0.98
+ok   floor suite:cpm_edge/performance flat_max_err 0 <= 0.045
+n/a  floor suite:cpm_edge/performance inactive_spread_ratio_min: not applicable (no inactive rows)
+ok   drift suite:cpm_edge/performance pcc_normalized 0.999865 >= 0.998859 (baseline 0.999859)
+ok   drift suite:cpm_edge/performance pcc_final 0.999831 >= 0.998824 (baseline 0.999824)
+ok   drift suite:cpm_edge/performance pcc_spread 0.999961 >= 0.997964 (baseline 0.999964)
+n/a  drift suite:cpm_edge/performance pcc_row_p01_active: not applicable (n_active=1 < 100)
+n/a  drift suite:cpm_edge/performance spread_ratio_p50: not applicable (n_active=1 < 8)
+ok   drift suite:cpm_edge/performance abs_err_max 0.0537577 <= 0.0942736 (baseline 0.062849)
+ok   drift suite:cpm_edge/performance bias_row_drift_max 0 row(s) outside [min(0.0, e0) - 0.03, max(0.0, e0) + 0.03] (worst excess 0, row 0)
+ok   drift suite:cpm_edge/performance spread_ratio_row_drift_max 0 row(s) outside [min(1.0, e0) - 0.15, max(1.0, e0) + 0.15] (worst excess 0, row 0)
+ok   drift suite:cpm_edge/performance pcc_step 0.999086 >= 0.994081 (baseline 0.999081)
+ok   drift suite:cpm_edge/performance spread_ratio_max 0.991042 <= 1.03955 (baseline 0.989548)
+ok   drift suite:cpm_edge/performance spread_ratio_min 0.991042 >= 0.939548 (baseline 0.989548)
+ok   drift suite:cpm_edge/performance pcc_row_min 0.999865 >= 0.799859 (baseline 0.999859)
+0 failure(s)
+[ttq] job 1207 done rc=0 in 2s (queued 0s) on cpu pool
+[ttq] log /home/andy/.local/share/ttq/jobs/001207/output.log

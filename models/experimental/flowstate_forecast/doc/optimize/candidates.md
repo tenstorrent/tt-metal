@@ -25,3 +25,6 @@ PLAN v1.20, v1.21 and v1.23 do not apply (CONTRACT:403). What applies: F2, F4, F
 | id | candidate | commit | jobs | paper / accuracy device ms | vs best | check_gates | kept |
 |---|---|---|---|---|---|---|---|
 | R0 | round 0: route-K scan (fused layout), default matmul configs | 40e7529f66f | suite 1122, bench 1123, check_gates 1133, score_broken 1136 | 375.3 | - | 0 failures (fixed record) | baseline |
+| R1-base | round-1 base (R1-0a..d checker items; model code = R0) | 59a9a6119aa | bench 1150, suite 1166 (119 passed), check_gates 0, score_broken 1147 (golden + device, 0/672 pass) | 375.3 | 0 | 0 failures | base |
+| R1-1 | per-role 1D matmul configs (sweep 1156; out_block_h 5, in0_block_w per role, silu fused in w1) | 55e6df898fd | bench 1174, suite 1175 (119 passed), score_broken 1199 (0/672) | 278.5 (perf 268.8) | -25.8 % | 0 failures | yes |
+| R1-2 | gate sigmoid fused into its matmul | c97b6f32cae | bench 1200, suite 1201 (119 passed), score_broken 1208 (0/672) | 272.7 (perf 263.1) | -2.1 % | 0 failures | yes (below the 3 % screen; one op removed, -5.8 ms against about 0.3 ms run-to-run) |
