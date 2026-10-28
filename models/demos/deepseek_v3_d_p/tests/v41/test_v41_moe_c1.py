@@ -2,12 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The c1 decode MoE (``tt/v41/moe_c1.py``, ``V41_DECODE_C1_MOE=1``) against the batched step's 32-row MoE on one
+"""The c1 decode MoE (``tt/v41/moe_c1.py``, ``V41_DECODE_C1_MOE=1``) against the batched step's 32-row MoE on
+one
 live row.
 
 One MoE layer (``V41_C1_LAYER``, default 2) from the weight cache, built as the batched decoder builds it (the
-decode routing and tail on), fed ``V41_C1_TRIALS`` random tiles (default 8) with a random live (rank, row): both
-paths on the same input, the live row's output compared over the full hidden width (bf16 tolerance: the row's bfp8
+decode routing and tail on), fed ``V41_C1_TRIALS`` random tiles (default 8) with a random live (rank, row):
+both
+paths on the same input, the live row's output compared over the full hidden width (bf16 tolerance: the row's
+bfp8
 packing and the fp32 order of the weighted sum are the only differences), the c1 path's idle rows zero. The
 per-chip expert counts of every trial are read back so the run covers chips with 0, 1, 2, .. of the row's
 experts. Then both paths under trace (``V41_C1_REPLAYS``, default 20): the per-layer device time.
@@ -15,10 +18,12 @@ experts. Then both paths under trace (``V41_C1_REPLAYS``, default 20): the per-l
 Run with ``V41_DECODE_ROUTING=1 V41_DECODE_TAIL=1 V41_DECODE_C1_MOE=1 TT_V41_EXPERT_DTYPE=bfp4`` (the served
 expert dtype); with the served catalog's ``V41_SHARED_IN_FFN=rs`` the 32-row path folds the
 shared expert's partial into its tail and the c1 path takes that partial from the tail's ``pending_shared``
-(``C1Moe.shared_fold`` reads ``pending``; ``returned`` with the MoE's own shared expert), and the test checks the
+(``C1Moe.shared_fold`` reads ``pending``; ``returned`` with the MoE's own shared expert), and the test checks
+the
 tail holds nothing after either path.
 
-``V41_C1_ROWS=n`` (default 1): the c1 MoE on ``n`` live rows of one user (``C1Moe(rows=n)``, the speculative verify
+``V41_C1_ROWS=n`` (default 1): the c1 MoE on ``n`` live rows of one user (``C1Moe(rows=n)``, the speculative
+verify
 step's ``1 + K`` rows): rows ``u .. u + n - 1`` of the live rank against the 32-row path, the
 idle rows zero, and one traced call replayed against the eager call on the same input (bit for bit)."""
 
@@ -55,7 +60,8 @@ def _pcc(a: torch.Tensor, b: torch.Tensor) -> float:
 
 
 def _oracle_row(moe, c1, x: torch.Tensor, experts: list, weights: torch.Tensor, tp: int) -> torch.Tensor:
-    """The MoE of one row in fp64 from the device's own weights (bfp4 experts, bfp8 shared expert, dequantized by
+    """The MoE of one row in fp64 from the device's own weights (bfp4 experts, bfp8 shared expert, dequantized
+    by
     ``to_torch``): ``sum_k w_k expert_k(x) + shared(x)``, ``x`` the experts' input row (after the FP8 QDQ)."""
     routed = c1.routed
     two_d = lambda t: t.reshape(*t.shape[-2:]).double()
@@ -131,8 +137,10 @@ def test_v41_moe_c1(mesh_device, device_params):
     decoder_cls = type("RowsDecoder", (TtV41BatchDecoder,), {"C1_ROWS": n_rows}) if n_rows > 1 else TtV41BatchDecoder
     decoder = decoder_cls(model, root, users_per_rank=users, trace=False)
     logger.info(f"c1 moe: layer {layer} built in {time.time() - t0:.1f} s; {n_rows} live rows a call")
-    # one prefill first, as every served or tested flow has: without it the decode tail's ``ttnn.reduce_scatter``
-    # leaves a 512-byte L1 block at 914,176 after its first call and every later routed-expert FFN program (the
+    # one prefill first, as every served or tested flow has: without it the decode tail's
+    # ``ttnn.reduce_scatter``
+    # leaves a 512-byte L1 block at 914,176 after its first call and every later routed-expert FFN program
+    # (the
     # 32-row one included) is rejected at compile against it
     torch.manual_seed(3)
     prompt = torch.randint(1000, 20000, (C.SLIDING_WINDOW + 7,))
@@ -156,7 +164,8 @@ def test_v41_moe_c1(mesh_device, device_params):
     }
 
     def host_rows(r: int, u: int) -> dict:
-        """``C1Moe.host_rows`` for ``n_rows`` rows ``u .. u + n_rows - 1`` of rank ``r`` (rows 0 .. n - 1 of the
+        """``C1Moe.host_rows`` for ``n_rows`` rows ``u .. u + n_rows - 1`` of rank ``r`` (rows 0 .. n - 1 of
+        the
         c1 tile and back; the verify decoder's layout)."""
         if n_rows == 1:
             return C1Moe.host_rows(sp, ROWS, (r, u))
@@ -273,7 +282,8 @@ def test_v41_moe_c1(mesh_device, device_params):
                 exact = _oracle_row(moe, c1, x_rows[t], all_idx[t], all_w[t], tp)
                 per_row["oracle_pcc_full"].append(round(_pcc(exact.float(), ref_row[t]), 5))
                 per_row["oracle_pcc_c1"].append(round(_pcc(exact.float(), out_row[t]), 5))
-            # chip 0's pieces: W's nonzero entries per row, the FFN output rows of its regions against the oracle's
+            # chip 0's pieces: W's nonzero entries per row, the FFN output rows of its regions against the
+            # oracle's
             # expert FFN of the same row, the local weighted sum and the shared partial
             W_host = ttnn.to_torch(ttnn.get_device_tensors(c1.debug["W"])[0])[0, 0].float()
             y_host = ttnn.to_torch(ttnn.get_device_tensors(c1.debug["y"])[0])[0, 0].float()
@@ -299,7 +309,8 @@ def test_v41_moe_c1(mesh_device, device_params):
                         want = (act @ d[:, : x.shape[0]]).float()
                         row_pcc.append((l, e, round(_pcc(want, y_host[32 * l + t]), 5)))
                 pieces["y_pcc"].append(row_pcc)
-            # the local weighted sum against W @ y on the host, the shared piece against the split's own weights
+            # the local weighted sum against W @ y on the host, the shared piece against the split's own
+            # weights
             part_host = ttnn.to_torch(ttnn.get_device_tensors(c1.debug["part"])[0])[0, 0].float()
             shared_host = ttnn.to_torch(ttnn.get_device_tensors(c1.debug["shared"])[0])[0, 0].float()
             want_part = W_host @ y_host
@@ -332,6 +343,46 @@ def test_v41_moe_c1(mesh_device, device_params):
                     sm.append(round(_pcc(want_sum, summeds[chip][t]), 4))
                 pieces["rs_pcc"].append([min(rs), max(rs)])
                 pieces["sum_pcc"].append([min(sm), max(sm)])
+            # every chip's total against the host's: the row's experts on the chip (weights and FFN from the
+            # device weights) plus the chip's shared piece; the chips whose row is off are listed
+            tables = [ttnn.to_torch(t).flatten().tolist() for t in ttnn.get_device_tensors(c1.table)]
+            W_all = [ttnn.to_torch(t)[0, 0].float() for t in ttnn.get_device_tensors(c1.debug["W"])]
+            pieces["bad_chips"] = []
+            if c1.shared_split is not None:
+                sp_ = c1.shared_split
+                for t in range(n_rows):
+                    bad = []
+                    for chip, tab in enumerate(tables):
+                        want = torch.zeros(x_rows[t].shape[0], dtype=torch.float64)
+                        for l, e in enumerate(tab):
+                            if e in all_idx[t]:
+                                k_ = all_idx[t].index(e)
+                                g = two_d(ttnn.to_torch(ttnn.get_device_tensors(routed.gate_projs[l])[chip]))
+                                u_ = two_d(ttnn.to_torch(ttnn.get_device_tensors(routed.up_projs[l])[chip]))
+                                d = two_d(ttnn.to_torch(ttnn.get_device_tensors(routed.down_projs[l])[chip]))
+                                x = x_rows[t]
+                                inter = d.shape[0]
+                                act = torch.nn.functional.silu(torch.clamp(x @ g[:, :inter], max=limit)) * torch.clamp(
+                                    x @ u_[:, :inter], -limit, limit
+                                )
+                                want += float(all_w[t][k_]) * (act @ d[:, : x.shape[0]])
+                        g0 = two_d(ttnn.to_torch(ttnn.get_device_tensors(sp_.gate)[chip]))
+                        u0 = two_d(ttnn.to_torch(ttnn.get_device_tensors(sp_.up)[chip]))
+                        d0 = two_d(ttnn.to_torch(ttnn.get_device_tensors(sp_.down)[chip]))
+                        x = x_rows[t]
+                        act = torch.nn.functional.silu(torch.clamp(x @ g0, max=limit)) * torch.clamp(
+                            x @ u0, -limit, limit
+                        )
+                        want += act @ d0
+                        p_ = _pcc(want.float(), totals[chip][t])
+                        if p_ < 0.999:
+                            w_nz = [
+                                (int(i), round(float(W_all[chip][t, i]), 4))
+                                for i in torch.nonzero(W_all[chip][t]).flatten().tolist()
+                            ]
+                            mine = [(l, e) for l, e in enumerate(tab) if e in all_idx[t]]
+                            bad.append({"chip": chip, "pcc": round(p_, 4), "experts": mine, "W": w_nz})
+                    pieces["bad_chips"].append(bad)
             per_row["chip0"] = pieces
             for k in ("W", "y", "part", "shared", "total", "tp_part", "summed"):
                 ttnn.deallocate(c1.debug[k])
@@ -361,7 +412,8 @@ def test_v41_moe_c1(mesh_device, device_params):
         pcc = _pcc(ref_row, out_row)
         oracle = {}
         if use_oracle:
-            # the fp64 MoE of the live row from the device's own (dequantized) weights: which path is nearer it
+            # the fp64 MoE of the live row from the device's own (dequantized) weights: which path is nearer
+            # it
             wts = ttnn.to_torch(ttnn.get_device_tensors(c1.debug["weights"])[0])[0, :6].double()
             x_full = ttnn.to_torch(ttnn.get_device_tensors(c1.debug["x_full"])[0])[0, 0, 0].double()
             exact = _oracle_row(moe, c1, x_full, idx, wts, tp)
