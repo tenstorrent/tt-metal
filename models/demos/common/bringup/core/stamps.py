@@ -22,6 +22,7 @@ directory run whole; ladder, contract and profile units never read a waiver (onl
 from __future__ import annotations
 
 import fnmatch
+import functools
 import hashlib
 import json
 import re
@@ -269,11 +270,23 @@ def goldens_key(spec) -> str:
     return sha16("\n".join(parts)) if parts else ""
 
 
+@functools.lru_cache(maxsize=1)
+def settings_prefixes() -> tuple:
+    """F220: every model's switch prefix (``Settings("DS41_", ...)`` in models/demos/<model>/tt/settings.py): a model
+    switch set in the environment changes what a unit measures, so it is in the stamp like BRINGUP_ / TT_."""
+    root = Path(__file__).resolve().parents[5]
+    found = set()
+    for f in root.glob("models/demos/*/tt/settings.py"):
+        found.update(re.findall(r"""Settings\(\s*["']([A-Z0-9_]+)["']""", f.read_text(errors="ignore")))
+    return tuple(sorted(found))
+
+
 def env_key(env: dict) -> str:
+    prefixes = ENV_PREFIXES + settings_prefixes()
     keep = {
         k: v
         for k, v in env.items()
-        if k.startswith(ENV_PREFIXES) and k not in ENV_IGNORED and not k.startswith(ENV_IGNORED_PREFIXES)
+        if k.startswith(prefixes) and k not in ENV_IGNORED and not k.startswith(ENV_IGNORED_PREFIXES)
     }
     return sha16(json.dumps(keep, sort_keys=True))
 
