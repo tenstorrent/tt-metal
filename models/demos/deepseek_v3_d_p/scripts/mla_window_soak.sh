@@ -8,7 +8,13 @@
 # the test freezes the mesh at the offending op and the dispatch-timeout hook runs tt-triage
 # against it; the counter dump is the endpoint either way.
 #
-# Usage: [LOOPS=n] [ITERS=n] [EDC_PROBE=0|1] mla_window_soak.sh
+# Usage: [LOOPS=n] [ITERS=n] [EDC_PROBE=0|1] [NODE=test] [RESET=cmd] [VISIBLE=ids] [EDC_DEVICES=ids] mla_window_soak.sh
+# VISIBLE becomes TT_VISIBLE_DEVICES for pytest only; reset and the counter read see every chip.
+#
+# One UBB (4x2 mesh), here UBB 2 = chips 8-15 of a 24-chip galaxy:
+#   NODE=models/demos/deepseek_v3_d_p/tests/test_mla_window_repro_ubb.py::test_mla_window_repro_ubb \
+#   RESET="tt-smi -r all" VISIBLE=8,9,10,11,12,13,14,15 EDC_DEVICES="$(seq -s ' ' 0 23)" mla_window_soak.sh
+# RESET: tt-smi -glx_reset_auto needs all 32 chips present. EDC_DEVICES: list only chips that exist.
 
 set -uo pipefail
 
@@ -16,7 +22,7 @@ SCRIPTS="$(cd "$(dirname "$0")" && pwd)"
 TT_METAL_HOME="${TT_METAL_HOME:-$(cd "$SCRIPTS/../../../.." && pwd)}"
 OUT="${OUT:-/data/$USER/soaklogs/mla_window_$(date +%Y%m%d_%H%M%S)}"
 LOOPS="${LOOPS:-136}"
-NODE=models/demos/deepseek_v3_d_p/tests/test_mla_window_repro.py::test_mla_window_repro
+NODE="${NODE:-models/demos/deepseek_v3_d_p/tests/test_mla_window_repro.py::test_mla_window_repro}"
 TRIAGE_ARGS="--run=dump_op_mesh --run=dump_callstacks --run=check_binary_integrity --llm-output -vv"
 
 mkdir -p "$OUT"
@@ -31,12 +37,13 @@ for i in $(seq 1 "$LOOPS"); do
   ts=$(date -Is)
 
   r0=$(date +%s)
-  tt-smi -glx_reset_auto > "$OUT/reset_$i.log" 2>&1
+  ${RESET:-tt-smi -glx_reset_auto} > "$OUT/reset_$i.log" 2>&1
   reset_s=$(( $(date +%s) - r0 ))
 
   p0=$(date +%s)
   mkdir -p "$OUT/inspector_$i"
-  EDC_PROBE="${EDC_PROBE:-1}" \
+  env ${VISIBLE:+TT_VISIBLE_DEVICES=$VISIBLE} \
+    EDC_PROBE="${EDC_PROBE:-1}" \
     MLA_WINDOW_ITERS="${ITERS:-30000}" \
     TT_METAL_OPERATION_TIMEOUT_SECONDS=5 \
     TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE="python tools/tt-triage.py $TRIAGE_ARGS > $OUT/triage_$i.log 2>&1" \
@@ -48,7 +55,7 @@ for i in $(seq 1 "$LOOPS"); do
 
   # Read before the next bulk's reset zeroes the counters. MRISC zeroes them after training, so
   # any non-zero value happened during this bulk.
-  python3 "$SCRIPTS/gddr_edc_counters.py" --all > "$OUT/edc_$i.log" 2>&1
+  python3 "$SCRIPTS/gddr_edc_counters.py" --all ${EDC_DEVICES:-} > "$OUT/edc_$i.log" 2>&1
   sites=$(sed -n 's/^dev  *\([0-9]*\) inst \([0-9]*\):.*\*\*\* EDC \*\*\*.*/\1:\2/p' "$OUT/edc_$i.log" | paste -sd,)
   if ! grep -q 'instances checked' "$OUT/edc_$i.log"; then
     edc=READ_ERR
