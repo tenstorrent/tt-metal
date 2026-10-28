@@ -82,6 +82,8 @@ void AutoContext::close_device() {
     // from this one would point at addresses the next mesh hands out to other buffers.
     m_ccl_resources.reset();
     m_device_constants.clear();
+    // Its axes and sizes were derived from the mesh being closed.
+    m_parallelism_context.reset();
     m_device = nullptr;
     // Drop the process-global fabric config that open_device_mesh may have
     // installed via enable_fabric(). Without this, fabric stays armed for
@@ -252,10 +254,6 @@ void AutoContext::initialize_parallelism_context(const DistributedConfig& config
         throw std::runtime_error("ParallelismContext is already initialized.");
     }
     m_parallelism_context = std::make_unique<ParallelismContext>(get_device(), config);
-}
-
-void AutoContext::reset_parallelism_context() {
-    m_parallelism_context = nullptr;
 }
 
 const uint32_t ParallelismContext::get_ddp_size() const {

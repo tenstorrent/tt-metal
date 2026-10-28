@@ -48,7 +48,6 @@ public:
     }
     static void TearDownTestSuite() {
         if (ttml::test_utils::system_supports_mesh(kMeshShape)) {
-            ttml::autograd::ctx().reset_parallelism_context();
             ttml::autograd::ctx().close_device();
         }
     }
