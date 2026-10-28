@@ -353,6 +353,26 @@ def lm_head_kwargs():
     return {} if cfg is None else {"compute_kernel_config": cfg}
 
 
+DRAFT_LMHEAD_BFP4_ENV = "QWEN36_DRAFT_LMHEAD_BFP4"
+_DRAFT_LMHEAD_BFP4_LOGGED = False
+
+
+def draft_lmhead_bfp4_enabled():
+    """QWEN36_DRAFT_LMHEAD_BFP4 (default 0, opt-in pending an acceptance A/B): the MTP DRAFTER gets its own
+    bfloat4_b copy of the LM head; the base/verify head stays bfloat8_b, so output is unchanged (verify
+    arbitrates every draft) and only acceptance can move. Halves the drafter head's DRAM read per draft
+    step for about +89 MB DRAM per device. Logs the choice once per process."""
+    global _DRAFT_LMHEAD_BFP4_LOGGED
+    on = os.environ.get(DRAFT_LMHEAD_BFP4_ENV, "0") == "1"
+    if not _DRAFT_LMHEAD_BFP4_LOGGED:
+        _DRAFT_LMHEAD_BFP4_LOGGED = True
+        logger.info(
+            f"MTP drafter LM head: {'BFP4 copy (verify head stays BFP8)' if on else 'shared BFP8 head'} "
+            f"({DRAFT_LMHEAD_BFP4_ENV}={int(on)})"
+        )
+    return on
+
+
 BFP4_GDN_IN_ENV = "QWEN36_BFP4_GDN_IN"
 _BFP4_GDN_IN_LOGGED = False
 

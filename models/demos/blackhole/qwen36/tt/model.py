@@ -365,23 +365,7 @@ class Qwen36Model:
                 f"LM-head vocab {vocab_rows} not divisible by num_devices "
                 f"{self.num_devices}; falling back to replicated LM head."
             )
-        if self._lmhead_vocab_sharded:
-            # Separate cache (.vshard): as_tensor ignores mesh_mapper on reload.
-            lm_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=-1)
-            lm_cache = tensor_cache_path / "output.weight.vshard" if tensor_cache_path else None
-        else:
-            lm_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if self.num_devices > 1 else None
-            lm_cache = tensor_cache_path / "output.weight" if tensor_cache_path else None
-        self.lm_head_weight = ttnn.as_tensor(
-            lm_head_weight,
-            preprocess=lambda t: t.T.contiguous(),  # [dim, vocab_size]
-            dtype=ttnn.bfloat8_b,
-            layout=ttnn.TILE_LAYOUT,
-            device=mesh_device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            cache_file_name=lm_cache,
-            **(dict(mesh_mapper=lm_mapper) if lm_mapper is not None else {}),
-        )
+        self.lm_head_weight = self._build_lm_head_weight(lm_head_weight, tensor_cache_path, ttnn.bfloat8_b)
 
         self.vocab_size = args.vocab_size
         # True: return pre-gather vocab-sharded logits for per-shard argmax + host combine.
@@ -738,11 +722,34 @@ class Qwen36Model:
             return 0
         return int((token_ids[:, :chunk_start] == self._vision_placeholder_token_id()).sum())
 
+    def _build_lm_head_weight(self, lm_head_weight, tensor_cache_path, dtype, cache_tag=""):
+        """LM-head weight [dim, vocab] on device, vocab-sharded (or replicated, see __init__) at ``dtype``.
+        ``cache_tag`` is appended to the cache file name so a second copy (the MTP drafter's BFP4 head,
+        QWEN36_DRAFT_LMHEAD_BFP4) gets its own cache files; the base call passes "" and keeps the
+        existing names, so existing caches stay valid."""
+        if self._lmhead_vocab_sharded:
+            # Separate cache (.vshard): as_tensor ignores mesh_mapper on reload.
+            lm_mapper = ttnn.ShardTensorToMesh(self.mesh_device, dim=-1)
+            lm_cache = tensor_cache_path / f"output.weight.vshard{cache_tag}" if tensor_cache_path else None
+        else:
+            lm_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device) if self.num_devices > 1 else None
+            lm_cache = tensor_cache_path / f"output.weight{cache_tag}" if tensor_cache_path else None
+        return ttnn.as_tensor(
+            lm_head_weight,
+            preprocess=lambda t: t.T.contiguous(),  # [dim, vocab_size]
+            dtype=dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            cache_file_name=lm_cache,
+            **(dict(mesh_mapper=lm_mapper) if lm_mapper is not None else {}),
+        )
+
     def switch_mode(self, mode):
         """Generator mode-change hook; no-op (no prefetcher)."""
         return None
 
-    def _lm_head(self, x, out_dtype=None, gather=True):
+    def _lm_head(self, x, out_dtype=None, gather=True, weight=None):
         """LM-head matmul. Vocab-sharded mesh: partial logits + all-gather to full replicated.
         Single device: plain matmul. ``gather=False`` returns the per-device vocab shard [.., vocab/TP]
         (the verify's sharded argmax consumes it without the all-gather).
@@ -750,7 +757,10 @@ class Qwen36Model:
         out_dtype: leave None (default) for the base/verify path — losslessness is defined by the
         BASE argmax, so that call must stay byte-identical. The MTP drafter passes float32: its
         argmax only has to rank candidates, and at bf16 4.7-5.5% of draft rejections at 8k/32k were
-        EXACT ties in the drafter's own logits, i.e. tokens thrown away to a rounding coin flip."""
+        EXACT ties in the drafter's own logits, i.e. tokens thrown away to a rounding coin flip.
+
+        weight: None uses self.lm_head_weight. The MTP drafter passes its own head copy
+        (Qwen36MTP.draft_lm_head_weight, BFP4 under QWEN36_DRAFT_LMHEAD_BFP4); same sharding/shape."""
         kw, ccl_kw = _lm_head_kwargs(), {}  # QWEN36_LMHEAD_CFG (opt-in) for the base path
         if out_dtype is not None:
             # HiFi2 matches the bfloat8_b weight; fp32 dest accumulation is what actually keeps the
@@ -769,7 +779,7 @@ class Qwen36Model:
             # the fp32 -> bf16 cast on this [1,1,B,vocab/tp] tensor actually returns garbage (the
             # drafter's argmax came back with an out-of-range id). Gather at the head's own dtype.
             ccl_kw = dict(dtype=out_dtype)
-        logits = ttnn.linear(x, self.lm_head_weight, **kw)
+        logits = ttnn.linear(x, self.lm_head_weight if weight is None else weight, **kw)
         if self._lmhead_vocab_sharded and gather:
             from models.tt_transformers.tt.ccl import tt_all_gather
 
