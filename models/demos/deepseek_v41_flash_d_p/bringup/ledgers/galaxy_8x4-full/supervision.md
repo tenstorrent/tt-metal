@@ -748,3 +748,19 @@ Open for the owner: dlukic / node access; push; the in-RAM engram slowdown in th
 - 19:45 OWNER: ignore the 4-bit compressed-KV work for now (the 2x2 proposed something very slow). FIX.8 stays HELD and is
   not integrated; do not watch or pull dnijemcevic/model_bringup_bfp4kv. Galaxy plan unchanged otherwise: FIX.10 ->
   resident profile -> P.6 -> FIX.9 -> P.4 / P.5 -> index query fp4.
+
+## 2026-10-28 20:55 MILESTONE + HAND-OFF: FIX.10 PASS f17604c27c2 (resident engram tables fit the Galaxy host)
+- Root causes (by measurement): DS41-133 numba's omp layer raised the shared OpenMP max-threads ICV to 64 at its first
+  launch, torch's pool followed (32 -> 64) and every host torch op ran 5-20x slower (fused head weight layout 112 s a
+  layer); fix: tt/engram_bfp8.py _run restores torch's thread count around each launch. DS41-134 MADV_HUGEPAGE on 200 GB
+  compacted synchronously (THP defrag 'madvise') and direct reclaim evicted ~95 GB of the weight cache; fix:
+  ENGRAM_HUGEPAGES=off default (build 74 s, gather 8.5 vs 6.3 ms a layer) + DONTNEED of the read table bytes. New
+  ENGRAM_BUILD=background: the build overlaps the weight load on a thread (nogil numba). First forward 3.5 s a layer
+  (112 resident before, ~6 random); runner load 3m21s. Gate: L.s56320 + all K.1 units (Paris) PASS with resident.
+  Overseer review: diff honest (no test or threshold touched; rows bit-identical; tasks.yaml = the FIX.10 insertion).
+- The 17:00 SIGBUS: FIX.7 also saw a tt-d-gen "Non-existent physical address" SIGBUS with random tables; three
+  transient bus errors today, cause open (not clearly dlukic, not the tables). A fourth: ask the owner for a board reset.
+- NOW: the resident 5-position profile (tmux ds41-chain, /scratch/dnijemcevic/run_ds41_chain2.sh -> posprof/series_engram.sh,
+  tag ENG, ~60-70 min, results /scratch/dnijemcevic/posprof/results/ENG*). Then: publish the profile page; set P.6's
+  chunk_wall_ms bar to the ENG position-0 wall; orchestrator --until P.6 (accept on a clean win); release FIX.9 -> P.4 /
+  P.5 -> index query fp4. 4-bit KV (FIX.8) set aside (owner 19:45).
