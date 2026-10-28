@@ -442,3 +442,22 @@ Symbols: `R` block rows, `q_w` wave rows, `q` rows per owner per wave, `S` slice
 ### Structural impossibilities
 
 None missing from `feature_spec.py` INVALID.
+
+## Implementation deviations (Phase 0, implementer)
+
+Recorded against the binding / advisory items above; each has a reason, and where it is a perf lever the knob stays live.
+
+| Design item | As built | Why |
+|-------------|----------|-----|
+| Port placement nearest each link's Ethernet core (`_worker_nearest_noc1`, eth-channel word) | fabric_ring_exchange's placement: `2·L` free cores nearest the middle of logical row 0 (next to the Ethernet row), identical on every chip; shard cores excluded | measured transport of the example uses it; identical coordinates on every chip make the "same landing address at the same port coords" contract trivial. Nearest-eth placement is a TRANSPORT refinement |
+| Ports for every `L_ports` link | only `L = min(num_links, publishers per wave)` links get ports; `2·num_links` cores are still reserved so `N` (and the split) does not depend on the split | a link with no publisher would only run the fence |
+| Port send order strict `(wave, item)` + counted gate (`SEM_OWN_COUNTED`) | per-wave `own_stats[w]` semaphores (no gate) and each send item advances its own wave counter | OVERLAP: the gate cost a port round trip per publish, strict order one hop latency per wave in series (measured: 2048×1280 last-launched chip 42.4 → 33.5 µs, exchange-stubbed 32.4) |
+| Reader issues every wave's reads up front | wave-ordered reads with transaction ids, `READ_LOOKAHEAD_WAVES = 1` waves in flight ahead (knob) | all-up-front reads were served out of wave order across 104 cores, so some groups' wave 0 landed last and gated every port's first send |
+| Reader Phase B in wave order (collect → all-gather → wait inv per wave) | non-blocking poll over collect / all-gather / announce / inv-push; compute folds every owned wave before scaling | an owner's collect of wave w+1 waited behind wave w's all-gather (~4 µs per wave in series) |
+| `SEM_INV` / `SEM_GATHER` single cumulative counters | announces (`SEM_INV` increments) of wave w gated on the owner's own count of waves < w; `SEM_GATHER` one bit field per owned wave | cumulative counts are only correct when increments arrive in wave order (bug found by the golden ring-mock suite: ragged last row-group read stale inv rows) |
+| inv all-gather on the writer RISC-V when γ is resident | on the reader (NCRISC) for every case | keeps every NoC atomic on NCRISC (base Perf 1 BRISC-atomic `--dev` assert); Phase B on the reader is a light poll loop |
+| `cb_gather` one wave quantum | one region per owned wave (`max_owned · G_w · q`) | remote contributors may run a wave ahead of the owner's compute (WAR) |
+| `x_depth = 2` blocks when the whole block does not fit | not built; refused with `NotImplementedError` | affects 128×8192 HEIGHT_SHARDED, 4096×1024 WIDTH_SHARDED and prefill ≥ 8192 rows × 3584 (golden / translated); the per-wave γ fallback (lamp L4) is built and covers WIDTH_SHARDED 2048×2048 with γ |
+| SHARD-IN-INTERLEAVED-OUT deferred | built (compute streams per tile-row, writer stores with the shard's chunk widths) | cheap once output placement is its own flag; a sharded output must still carry the input's shard spec |
+| srcB-hold γ / inv passes (base Perf 2) | kernel-lib chains everywhere | lamp L11; per-core blocks here are 3–5 tile-rows |
+| γ multicast | per-core γ reads (as designed: G-MC deferred) | — |
