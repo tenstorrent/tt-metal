@@ -259,88 +259,91 @@ void pass1(uint32_t blk, uint32_t n_real) {
 
 // inv = rsqrt(column-sum of the gathered partials + eps) per tile-row; y = h * inv * gamma, with h
 // read back from the residual shard.
-template <uint32_t M_block_tiles, uint32_t N_block_tiles, uint32_t res_w>
-void pass2(uint32_t blk, uint32_t eps_bits) {
-    constexpr uint32_t out_tiles = M_block_tiles * N_block_tiles;
-    constexpr uint32_t G = 4;  // tile-rows per DST session for the inverse RMS (fp32 DST: 4 slots)
-    CircularBuffer cb_gath(gath_cb), cb_inv(inv_cb), cb_y(y_cb);
+constexpr uint32_t G = 4;  // tile-rows per pass-2 group (their inverse RMS in one fp32 DST session)
+
+// Pass 2 in groups of G tile-rows, so a group can run between two K blocks of the next block's
+// matmul (see kernel_main). pass2_begin / pass2_end bracket the groups of one block.
+template <uint32_t M_block_tiles, uint32_t N_block_tiles>
+void pass2_begin() {
+    CircularBuffer cb_gath(gath_cb), cb_y(y_cb);
     cb_gath.wait_front(M_block_tiles);
-    cb_y.reserve_back(out_tiles);
-    // G tile-rows at a time: their inverse RMS in one DST session (CB 11 holds G tiles), then their y.
-    for (uint32_t m0 = 0; m0 < M_block_tiles; m0 += G) {
-        const uint32_t cnt = M_block_tiles - m0 < G ? M_block_tiles - m0 : G;
-        {
-#ifdef ZONES
-            DeviceZoneScopedN("P2A");
+    cb_y.reserve_back(M_block_tiles * N_block_tiles);
+}
+
+template <uint32_t M_block_tiles, uint32_t N_block_tiles>
+void pass2_end() {
+    CircularBuffer cb_gath(gath_cb), cb_y(y_cb);
+    cb_y.push_back(M_block_tiles * N_block_tiles);
+    cb_gath.pop_front(M_block_tiles);
+}
+
+// Group m0: inv = rsqrt(column-sum of the gathered partials + eps) for G tile-rows (CB 11), then
+// y = h * inv (* gamma) for those rows, h read back from the residual shard.
+template <uint32_t M_block_tiles, uint32_t N_block_tiles, uint32_t res_w>
+void pass2_group(uint32_t blk, uint32_t m0, uint32_t eps_bits) {
+    CircularBuffer cb_inv(inv_cb);
+    const uint32_t cnt = M_block_tiles - m0 < G ? M_block_tiles - m0 : G;
+    cb_inv.reserve_back(G);
+    pack_reconfig_data_format(inv_cb);
+    col_sum_init(gath_cb, one_cb, inv_cb);
+    tile_regs_acquire();
+    for (uint32_t j = 0; j < cnt; ++j) {
+        col_sum_tile(gath_cb, one_cb, m0 + j, j);
+    }
+    MATH((llk_math_reduce_uninit()));
+    transpose_dest_init<DST_ACCUM_MODE, true>();
+    for (uint32_t j = 0; j < cnt; ++j) {
+        transpose_dest<DST_ACCUM_MODE, true>(j);  // mean squares: row 0 -> column 0
+    }
+    binop_with_scalar_tile_init();
+    for (uint32_t j = 0; j < cnt; ++j) {
+        add_scalar_col(j, eps_bits);
+    }
+    rsqrt_tile_init();
+    for (uint32_t j = 0; j < cnt; ++j) {
+        rsqrt_col(j);
+    }
+    tile_regs_commit();
+    tile_regs_wait();
+    for (uint32_t j = 0; j < cnt; ++j) {
+        pack_tile<true>(j, inv_cb, j);
+    }
+    tile_regs_release();
+    cb_inv.push_back(G);
+    cb_inv.wait_front(G);
+
+    reconfig_data_format(res_cb, inv_cb);
+    mul_cols_init(res_cb, inv_cb);
+    pack_reconfig_data_format(y_cb);
+    for (uint32_t mi = 0; mi < cnt; ++mi) {
+        const uint32_t m = m0 + mi;
+        const uint32_t row = (blk * M_block_tiles + m) * res_w;
+        for (uint32_t n = 0; n < N_block_tiles; n += 4) {
+            const uint32_t c4 = N_block_tiles - n < 4 ? N_block_tiles - n : 4;
+#ifndef NO_GAMMA
+            reconfig_data_format(res_cb, inv_cb);
+            mul_cols_init(res_cb, inv_cb);
 #endif
-            cb_inv.reserve_back(G);
-            pack_reconfig_data_format(inv_cb);
-            col_sum_init(gath_cb, one_cb, inv_cb);
             tile_regs_acquire();
-            for (uint32_t j = 0; j < cnt; ++j) {
-                col_sum_tile(gath_cb, one_cb, m0 + j, j);
+            for (uint32_t j = 0; j < c4; ++j) {
+                mul_cols_tile(res_cb, inv_cb, row + (n + j < res_w ? n + j : 0), mi, j);
             }
-            MATH((llk_math_reduce_uninit()));
-            transpose_dest_init<DST_ACCUM_MODE, true>();
-            for (uint32_t j = 0; j < cnt; ++j) {
-                transpose_dest<DST_ACCUM_MODE, true>(j);  // mean squares: row 0 -> column 0
+#ifndef NO_GAMMA
+            reconfig_data_format_srca(gamma_cb);
+            mul_dest_init(gamma_cb);
+            for (uint32_t j = 0; j < c4; ++j) {
+                mul_dest_tile(gamma_cb, n + j, j);
             }
-            binop_with_scalar_tile_init();
-            for (uint32_t j = 0; j < cnt; ++j) {
-                add_scalar_col(j, eps_bits);
-            }
-            rsqrt_tile_init();
-            for (uint32_t j = 0; j < cnt; ++j) {
-                rsqrt_col(j);
-            }
+#endif
             tile_regs_commit();
             tile_regs_wait();
-            for (uint32_t j = 0; j < cnt; ++j) {
-                pack_tile<true>(j, inv_cb, j);
+            for (uint32_t j = 0; j < c4; ++j) {
+                pack_tile<true>(j, y_cb, m * N_block_tiles + n + j);
             }
             tile_regs_release();
-            cb_inv.push_back(G);
-            cb_inv.wait_front(G);
         }
-#ifdef ZONES
-        DeviceZoneScopedN("P2B");
-#endif
-
-        reconfig_data_format(res_cb, inv_cb);
-        mul_cols_init(res_cb, inv_cb);
-        pack_reconfig_data_format(y_cb);
-        for (uint32_t mi = 0; mi < cnt; ++mi) {
-            const uint32_t m = m0 + mi;
-            const uint32_t row = (blk * M_block_tiles + m) * res_w;
-            for (uint32_t n = 0; n < N_block_tiles; n += 4) {
-                const uint32_t c4 = N_block_tiles - n < 4 ? N_block_tiles - n : 4;
-#ifndef NO_GAMMA
-                reconfig_data_format(res_cb, inv_cb);
-                mul_cols_init(res_cb, inv_cb);
-#endif
-                tile_regs_acquire();
-                for (uint32_t j = 0; j < c4; ++j) {
-                    mul_cols_tile(res_cb, inv_cb, row + (n + j < res_w ? n + j : 0), mi, j);
-                }
-#ifndef NO_GAMMA
-                reconfig_data_format_srca(gamma_cb);
-                mul_dest_init(gamma_cb);
-                for (uint32_t j = 0; j < c4; ++j) {
-                    mul_dest_tile(gamma_cb, n + j, j);
-                }
-#endif
-                tile_regs_commit();
-                tile_regs_wait();
-                for (uint32_t j = 0; j < c4; ++j) {
-                    pack_tile<true>(j, y_cb, m * N_block_tiles + n + j);
-                }
-                tile_regs_release();
-            }
-        }
-        cb_inv.pop_front(G);
     }
-    cb_y.push_back(out_tiles);
-    cb_gath.pop_front(M_block_tiles);
+    cb_inv.pop_front(G);
 }
 
 void kernel_main() {
@@ -354,6 +357,7 @@ void kernel_main() {
     constexpr uint32_t eps_bits = get_compile_time_arg_val(7);
     constexpr uint32_t res_w = get_compile_time_arg_val(8);
     constexpr uint32_t res_shard_tiles = get_compile_time_arg_val(9);
+    constexpr uint32_t n_groups = (M_block_tiles + G - 1) / G;
 
     const uint32_t M_start_tile = get_arg_val<uint32_t>(0);
     const uint32_t M_end_tile = get_arg_val<uint32_t>(1);
@@ -380,13 +384,18 @@ void kernel_main() {
     cb_one.wait_front(1);
     cb_res.wait_front(res_shard_tiles);
 
-    // Software pipeline: block i's second pass (which needs the other cores' partial sums) runs
-    // after block i + 1's matmul, so the exchange is hidden behind that matmul.
+    // Software pipeline. Block i's second pass needs the other cores' partial sums, which arrive
+    // while block i + 1's matmul runs, so it runs after that matmul (block i's first pass needs
+    // the finished accumulator). With INTERLEAVE_P2 its groups instead run between K blocks of
+    // block i + 1's matmul (it does not touch the accumulator); measured: FF2 1180 -> 1173 us,
+    // WO 628 -> 640 us at 16384 rows, i.e. the matmul has little input-wait slack to fill.
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
         const uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
         const uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
         const uint32_t current_M_block_tiles = m_tile_end - m_tile;
         const uint32_t current_subblock_h = std::min(current_M_block_tiles, subblock_h);
+        const bool has_p2 = m_block_iter > 0;
+        uint32_t groups_done = 0;
 
 #ifdef ZONES
         DeviceZoneScopedN("MM");
@@ -410,15 +419,37 @@ void kernel_main() {
             if (k_block == 0) {
                 PACK((llk_pack_reconfig_l1_acc(1)));
             }
+#ifdef INTERLEAVE_P2
+            // Group g runs after K block 2 + g * (K_num_blocks - 2) / n_groups.
+            if (has_p2 && groups_done < n_groups && K_num_blocks > 3 && k_block + 1 < K_num_blocks &&
+                k_block == 2 + groups_done * (K_num_blocks - 3) / n_groups) {
+                PACK((llk_pack_reconfig_l1_acc(0)));
+                if (groups_done == 0) {
+                    pass2_begin<M_block_tiles, N_block_tiles>();
+                }
+                pass2_group<M_block_tiles, N_block_tiles, res_w>(m_block_iter - 1, groups_done * G, eps_bits);
+                ++groups_done;
+                reconfig_data_format(in1_cb, in0_cb);
+                pack_reconfig_data_format(acc_cb);
+                matmul_block_init(in0_cb, in1_cb, false, current_subblock_w, current_subblock_h, K_block_tiles);
+                PACK((llk_pack_reconfig_l1_acc(1)));
+            }
+#endif
         }
         cb_acc.push_back(out_block_num_tiles);
         PACK((llk_pack_reconfig_l1_acc(0)));
 
-        if (m_block_iter > 0) {
+        if (has_p2) {
 #ifdef ZONES
             DeviceZoneScopedN("P2");
 #endif
-            pass2<M_block_tiles, N_block_tiles, res_w>(m_block_iter - 1, eps_bits);
+            if (groups_done == 0) {
+                pass2_begin<M_block_tiles, N_block_tiles>();
+            }
+            for (; groups_done < n_groups; ++groups_done) {
+                pass2_group<M_block_tiles, N_block_tiles, res_w>(m_block_iter - 1, groups_done * G, eps_bits);
+            }
+            pass2_end<M_block_tiles, N_block_tiles>();
         }
         {
 #ifdef ZONES
@@ -427,5 +458,9 @@ void kernel_main() {
             pass1<M_block_tiles, N_block_tiles, res_w>(m_block_iter, n_real);
         }
     }
-    pass2<M_block_tiles, N_block_tiles, res_w>(M_blocks_per_core - 1, eps_bits);
+    pass2_begin<M_block_tiles, N_block_tiles>();
+    for (uint32_t m0 = 0; m0 < M_block_tiles; m0 += G) {
+        pass2_group<M_block_tiles, N_block_tiles, res_w>(M_blocks_per_core - 1, m0, eps_bits);
+    }
+    pass2_end<M_block_tiles, N_block_tiles>();
 }
