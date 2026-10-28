@@ -667,3 +667,51 @@ session's argv); a resume clears PAUSE (use --until to stop); watch + cron :07/:
   bf16 path kept behind the switch. Release after: the overseer's single-card bfp4/bfp8 packer rounding test (~10 device
   min) and the de-risk files (/scratch/dnijemcevic/ckv_derisk, report section 7 now cites the K3 artifact and PR #49811)
   moved into the repo; the packer result goes to FIX.8 as a note.
+
+## 2026-10-28 18:55 HAND-OFF (owner: the current plan, in case of a switch to another machine)
+Node bh-glx-110-c10u02 (slurm 158554), branch dnijemcevic/model_bringup. origin = c3d41c620db (the 2x2's engram commits
+on top of 5b275cb7622). Local commits on top (records, P.6, FIX.8, the ckv_derisk files, overseer_tools): push on the
+owner's word only; a move to another machine needs them pushed first.
+NODE-LOCAL (/scratch is this node's disk): the run dir /scratch/dnijemcevic/bringup/deepseek_v41_flash_d_p/runs/
+galaxy_8x4-full/run1 (orchestrator.log, stamps, unit logs, verify/), the profile results and the launchers. Copies of the
+launchers, the profile scripts and the TBLOCK baseline: ledgers/galaxy_8x4-full/overseer_tools/ (README there). On a new
+node the stamps are gone: passed units re-run once.
+State: orchestrator stopped (after FIX.7, --until FIX.7). The 2x2 engram commits taken (ENGRAM_TABLE=resident bfp8 tables
+in host RAM ~209 GB built at process start outside pytest; under pytest ENGRAM_TABLE=random, F222; ENGRAM_ROWS=bfp8).
+L.s56320 PASS on them (bfp8 rows, 582 s). K.1 runner smoke (Paris) NOT yet passed on them: two runs spoiled by another
+user's device jobs (18:05 entry); the slowdown of run 1 from 17:10 (resident tables inside tt-d-gen's runner?) is open.
+BLOCKER: user dlukic runs device jobs on this node from SSH (robo_test.py loop driven by `claude -n dsp-fb`, deepseek_v3
+test_dispatch_sweep under tracy, every ~20 min). Slurm does not stop it (no pam_slurm_adopt, /dev/tenstorrent 0666) and
+the locks do not meet (his stale /tmp/tt-device.lock vs our TTPOOL_LEGACY_LOCK). Owner is coordinating. Check before any
+device run: `ps -u dlukic -o pid,lstart,cmd | grep -E "pytest|tracy|robo_test|run_safe" | grep -v grep` must be empty.
+PLAN, in order (owner 2026-10-28; engrams BEFORE 4-bit):
+ 1. Paris (K.1#test_runner_smoke) with the default resident engram tables, ~13 min.
+ 2. Only if it passes: the 5-position profile of the current default (block MoE, fused head + tail, FABRIC_2D_TORUS_XY)
+    WITH the engram tables resident (DS41_ENGRAM_TABLE=resident forced: pytest would pick random): one new 5120 chunk at
+    0 / 51200 / 102400 / 204800 / 512000, device time (real-time profiler) + F196/F205 warm wall, ~60-70 min, tag ENG
+    (posprof/series_engram.sh). Then publish a page like https://claude.ai/artifact/HRfMf31S4781YkU2M8NDUf (per-section
+    tables at 0k and 500k, device and host time vs context), compared with the TBLOCK baseline.
+    Steps 1-2-3 are one launcher: /scratch/dnijemcevic/run_ds41_chain.sh (tmux).
+ 3. P.6 ENGRAM_ASYNC (perf task, before P.4; P.4 deps P.6): all engram host work (both layers' hash, lookup, pack AND
+    upload) off the main thread; begin_chunk returns at once, take_engram_rows(i) waits just before layer i's engram op;
+    upload via a 2nd command queue + event if the mesh has one. Owner: nothing to decide - the overseer accepts its A/B
+    as a clean win (gate PASS, accuracy unchanged, wall better, device not worse); only a failure goes to the owner.
+    Before it starts: set its chunk_wall_ms bar (now < 544) to the ENG profile's position-0 wall. The PCIe upload time
+    was never measured (the 2x2's 7.6 ms/layer is ids -> TILE bytes on the host); P.6 reports it.
+ 4. 4-bit compressed KV: (a) the overseer's single-card packer rounding test for bfloat4_b AND bfloat8_b (~10 device min;
+    recipe in the 14:35-14:55 entries; PR #49811 says the Blackhole packer truncates fp8 - unknown for bfp formats; FIX.7's
+    bfp8 GEMM inputs depend on it too); (b) release FIX.8 (queued HELD) with the result as a note. FIX.8: only the
+    attention table (AttnTable, read by sparse_sdpa) as bfloat4_b rows of 288 B; the served records stay bf16 rows with
+    the rounded values (serving contract + tt-d-gen unchanged; load_served repacks exactly); write = fork op, read =
+    sparse_sdpa fork ROW_BFP4 with the window as a 2nd tensor; CKV_FORMAT=bf16|bfp4_rows, bf16 kept; gate as FIX.7.
+    Design: bringup/ckv_derisk/CKV_4BIT_DERISK.md (now in the repo; header lists the owner's design change; section 7
+    cites the K3 fp8-wire artifact and PR #49811). ~4-6 agent-hours + ~1.5 device-hours.
+ 5. Then: window KV to the reference's width on the same two-tensor fork (fp8 per 32 power-of-two: the K3 cast ops
+    nearly as-is, or bfp8); index keys + index query to fp4 width; serving-contract text; X.1 re-baseline; P.4 / P.5.
+Reference material from today: the precision table reference vs our prefill vs tt-blaze decode
+https://claude.ai/artifact/QP9f8tn3xDrojyyk8fMLUs (wider than the reference: the three KV caches, the index query, the
+shared expert's x/h; narrower: bfp8/bfp4 re-rounded weights, bf16 cross-chip partial sums, RoPE tables, sink, HiFi2
+SDPA). Decode (tt-blaze llong/dsv41-reload-quad-engram4x1) has no prefill KV import; a loader converts our formats
+losslessly (index-key scale must be a power of two); the compressor's partial group is not handed over (64-aligned
+hand-over, contract :59-61, :123-124).
+Open for the owner: dlukic / node access; push; the in-RAM engram slowdown in the runner if Paris shows it again.
