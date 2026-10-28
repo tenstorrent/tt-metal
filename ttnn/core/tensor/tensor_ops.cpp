@@ -6,6 +6,7 @@
 #include "tensor/tensor_ops.hpp"
 
 #include "ttnn/common/queue_id.hpp"
+#include "ttnn/queue_hazards.hpp"
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
@@ -150,7 +151,25 @@ Tensor to_device(
     }
     auto& cq = mesh_device->mesh_command_queue(raw_optional(cq_id));
     Tensor device_tensor;
-    if (is_uniform_write(input_tensor.host_tensor(), *mesh_device)) {
+    if (ttnn::queue_hazards::enabled() && is_uniform_write(input_tensor.host_tensor(), *mesh_device)) [[unlikely]] {
+        // Allocate before writing, so that the write is ordered after earlier accesses to the memory it lands in.
+        const auto& spec = input_tensor.tensor_spec();
+        device_tensor = ttnn::create_device_tensor(
+            mem_config ? TensorSpec(
+                             spec.logical_shape(),
+                             TensorLayout(
+                                 spec.tensor_layout().get_data_type(),
+                                 spec.tensor_layout().get_page_config(),
+                                 *mem_config,
+                                 spec.tensor_layout().get_alignment()))
+                       : spec,
+            mesh_device,
+            input_tensor.tensor_topology());
+        ttnn::queue_hazards::transfer(
+            *mesh_device, QueueId(cq.id()), "ttnn.to_device", device_tensor, /*writes=*/true, /*blocking=*/false, [&] {
+                cq.enqueue_write_tensor(input_tensor.host_tensor(), device_tensor.device_storage().get_mesh_tensor());
+            });
+    } else if (is_uniform_write(input_tensor.host_tensor(), *mesh_device)) {
         if (mem_config) {
             device_tensor = Tensor(cq.enqueue_write_tensor(input_tensor.host_tensor(), *mem_config));
         } else {
@@ -182,12 +201,20 @@ namespace ttnn {
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<QueueId> cq_id) {
     GraphTracker::instance().track_function_start("tt::tt_metal::copy_to_device", host_tensor, device_tensor, cq_id);
     auto& cq = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
-    if (is_uniform_write(host_tensor.host_tensor(), *device_tensor.device())) {
-        cq.enqueue_write_tensor(host_tensor.host_tensor(), device_tensor.device_storage().get_mesh_tensor());
+    auto write = [&] {
+        if (is_uniform_write(host_tensor.host_tensor(), *device_tensor.device())) {
+            cq.enqueue_write_tensor(host_tensor.host_tensor(), device_tensor.device_storage().get_mesh_tensor());
+        } else {
+            auto coords = tt::tt_metal::non_uniform_data_movement::enqueue_write_tensor(
+                cq, host_tensor.host_tensor(), device_tensor.device_storage().get_mesh_tensor());
+            device_tensor.device_storage() = DeviceStorage(device_tensor.device_storage(), std::move(coords));
+        }
+    };
+    if (queue_hazards::enabled()) [[unlikely]] {
+        queue_hazards::transfer(
+            *device_tensor.device(), QueueId(cq.id()), "ttnn.copy_to_device", device_tensor, true, false, write);
     } else {
-        auto coords = tt::tt_metal::non_uniform_data_movement::enqueue_write_tensor(
-            cq, host_tensor.host_tensor(), device_tensor.device_storage().get_mesh_tensor());
-        device_tensor.device_storage() = DeviceStorage(device_tensor.device_storage(), std::move(coords));
+        write();
     }
     device_tensor = ttnn::set_tensor_id(device_tensor);
     GraphTracker::instance().track_function_end(device_tensor);
@@ -199,7 +226,13 @@ void copy_to_device(
     Tensor& device_tensor,
     const std::optional<BufferRegion>& region) {
     GraphTracker::instance().track_function_start("tt::tt_metal::copy_to_device", queue, src, device_tensor, region);
-    enqueue_write_tensor(queue, src, device_tensor.device_storage().get_mesh_tensor(), region);
+    auto write = [&] { enqueue_write_tensor(queue, src, device_tensor.device_storage().get_mesh_tensor(), region); };
+    if (queue_hazards::enabled()) [[unlikely]] {
+        queue_hazards::transfer(
+            *device_tensor.device(), QueueId(queue.id()), "ttnn.copy_to_device", device_tensor, true, false, write);
+    } else {
+        write();
+    }
     GraphTracker::instance().track_function_end(device_tensor);
 }
 
@@ -211,7 +244,13 @@ void copy_to_host(
     bool blocking) {
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::copy_to_host", queue, device_tensor, dst, region, blocking);
-    enqueue_read_tensor(queue, device_tensor.mesh_tensor(), dst, region, blocking);
+    auto read = [&] { enqueue_read_tensor(queue, device_tensor.mesh_tensor(), dst, region, blocking); };
+    if (queue_hazards::enabled()) [[unlikely]] {
+        queue_hazards::transfer(
+            *device_tensor.device(), QueueId(queue.id()), "ttnn.copy_to_host", device_tensor, false, blocking, read);
+    } else {
+        read();
+    }
     GraphTracker::instance().track_function_end(device_tensor);
 }
 
@@ -219,12 +258,20 @@ void copy_to_host(const Tensor& device_tensor, Tensor& host_tensor, bool blockin
     GraphTracker::instance().track_function_start(
         "tt::tt_metal::copy_to_host", device_tensor, host_tensor, blocking, cq_id);
     auto& cq = device_tensor.device()->mesh_command_queue(raw_optional(cq_id));
-    if (device_tensor.device_storage().is_uniform_storage()) {
-        cq.enqueue_read_tensor(device_tensor.mesh_tensor(), host_tensor.host_storage().host_tensor(), blocking);
+    auto read = [&] {
+        if (device_tensor.device_storage().is_uniform_storage()) {
+            cq.enqueue_read_tensor(device_tensor.mesh_tensor(), host_tensor.host_storage().host_tensor(), blocking);
+        } else {
+            auto coords = device_tensor.device_storage().get_coords();
+            tt::tt_metal::non_uniform_data_movement::enqueue_read_tensor(
+                cq, device_tensor.mesh_tensor(), host_tensor.host_storage().host_tensor(), coords, blocking);
+        }
+    };
+    if (queue_hazards::enabled()) [[unlikely]] {
+        queue_hazards::transfer(
+            *device_tensor.device(), QueueId(cq.id()), "ttnn.copy_to_host", device_tensor, false, blocking, read);
     } else {
-        auto coords = device_tensor.device_storage().get_coords();
-        tt::tt_metal::non_uniform_data_movement::enqueue_read_tensor(
-            cq, device_tensor.mesh_tensor(), host_tensor.host_storage().host_tensor(), coords, blocking);
+        read();
     }
     GraphTracker::instance().track_function_end(host_tensor);
 }
@@ -238,12 +285,20 @@ Tensor cpu(const Tensor& input_tensor, bool blocking, std::optional<QueueId> cq_
 
     auto& cq = input_tensor.device()->mesh_command_queue(raw_optional(cq_id));
     Tensor output;
-    if (input_tensor.device_storage().is_uniform_storage()) {
-        output = Tensor(cq.enqueue_read_tensor(input_tensor.mesh_tensor(), blocking));
+    auto read = [&] {
+        if (input_tensor.device_storage().is_uniform_storage()) {
+            output = Tensor(cq.enqueue_read_tensor(input_tensor.mesh_tensor(), blocking));
+        } else {
+            auto coords = input_tensor.device_storage().get_coords();
+            output = Tensor(tt::tt_metal::non_uniform_data_movement::enqueue_read_tensor(
+                cq, input_tensor.mesh_tensor(), coords, blocking));
+        }
+    };
+    if (ttnn::queue_hazards::enabled()) [[unlikely]] {
+        ttnn::queue_hazards::transfer(
+            *input_tensor.device(), QueueId(cq.id()), "ttnn.from_device", input_tensor, false, blocking, read);
     } else {
-        auto coords = input_tensor.device_storage().get_coords();
-        output = Tensor(tt::tt_metal::non_uniform_data_movement::enqueue_read_tensor(
-            cq, input_tensor.mesh_tensor(), coords, blocking));
+        read();
     }
     // The read labels the host tensor with the MeshTensor's topology; a storage that labels its own shards
     // (get_device_tensors) carries that label to the host instead.

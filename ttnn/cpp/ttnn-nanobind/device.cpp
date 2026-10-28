@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include "ttnn/queue_hazards.hpp"
 #include "ttnn-nanobind/device.hpp"
 
 #include <tt-metalium/device_types.hpp>
@@ -716,6 +717,9 @@ void device_module(nb::module_& m_device) {
                     *device, device->mesh_command_queue(cq_id->get()), sub_device_ids);
             } else {
                 tt::tt_metal::distributed::Synchronize(*device, std::nullopt, sub_device_ids);
+            }
+            if (ttnn::queue_hazards::enabled()) {
+                ttnn::queue_hazards::on_synchronize(*device, cq_id, sub_device_ids);
             }
         },
         synchronize_device_doc.data(),

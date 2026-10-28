@@ -38,6 +38,9 @@ MeshEvent& MeshEvent::operator=(MeshEvent&& other) noexcept = default;
 MeshEvent::~MeshEvent() = default;
 
 MeshDevice* MeshEvent::device() const { return impl().device(); }
+uint32_t MeshEvent::id() const { return impl().id(); }
+uint32_t MeshEvent::mesh_cq_id() const { return impl().mesh_cq_id(); }
+const MeshCoordinateRange& MeshEvent::device_range() const { return impl().device_range(); }
 
 MeshEventImpl& MeshEvent::impl() {
     TT_FATAL(impl_ != nullptr, "MeshEvent is in a moved-from state.");

@@ -32,6 +32,7 @@ set(TTNN_CORE_SRCS
     core/prefetcher_pipe.cpp
     core/reports.cpp
     core/worker_cores.cpp
+    core/queue_hazards.cpp
     core/tensor/flatbuffer/tensor_file_layout.cpp
     core/tensor/flatbuffer/tensor_flatbuffer.cpp
     core/tensor/flatbuffer/tensor_spec_flatbuffer.cpp
@@ -252,6 +253,7 @@ set(TTNNCPP_API_HEADERS
     api/ttnn/tensor/xtensor/xtensor_all_includes.hpp
     api/ttnn/types.hpp
     api/ttnn/worker_cores.hpp
+    api/ttnn/queue_hazards.hpp
     api/ttnn/tensor/py_to_tt_tensor.hpp
     cpp/ttnn/operations/copy/typecast/typecast.hpp
     cpp/ttnn/operations/creation/creation.hpp

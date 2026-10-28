@@ -21,6 +21,7 @@
 
 #include "ttnn/core.hpp"
 #include "ttnn/worker_cores.hpp"
+#include "ttnn/queue_hazards.hpp"
 #include <tt-metalium/bfloat4.hpp>
 #include <tt-metalium/bfloat8.hpp>
 #include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
@@ -219,6 +220,36 @@ void py_module(nb::module_& mod) {
         [](const tt::tt_metal::CoreRangeSet& worker_cores) { ttnn::push_worker_cores_scope_for_thread(worker_cores); },
         nb::arg("worker_cores"));
     mod.def("pop_worker_cores_scope_for_thread", &ttnn::pop_worker_cores_scope_for_thread);
+    mod.def(
+        "set_queue_hazard_checks",
+        [](bool enabled) {
+            ttnn::queue_hazards::set_mode(enabled ? ttnn::queue_hazards::Mode::check : ttnn::queue_hazards::Mode::off);
+        },
+        nb::arg("enabled"));
+    mod.def(
+        "set_queue_ordering",
+        [](const std::string& mode) {
+            const auto parsed = enchantum::cast<ttnn::queue_hazards::Mode>(mode);
+            TT_FATAL(parsed.has_value(), "Unknown queue ordering mode {}: use off or check", mode);
+            ttnn::queue_hazards::set_mode(*parsed);
+        },
+        nb::arg("mode"),
+        R"doc(
+        Experimental. How device memory accesses on different streams (a command queue on a sub-device, or its host
+        transfers) are ordered: "off", or "check" (memory handed out again is ordered; an unordered access to the same
+        tensor is refused).
+        )doc");
+    mod.def(
+        "wait_for",
+        [](const ttnn::Tensor& tensor, std::optional<QueueId> cq_id) {
+            ttnn::queue_hazards::wait_for(tensor, cq_id.value_or(ttnn::get_current_command_queue_id_for_thread()));
+        },
+        nb::arg("tensor"),
+        nb::arg("cq_id") = nb::none(),
+        R"doc(
+        Experimental. Makes the command queue wait for exactly the accesses to ``tensor`` on other streams, so that
+        what it enqueues next may read or write it. Does nothing while queue ordering is off.
+        )doc");
     mod.def(
         "get_worker_cores",
         [](const tt::tt_metal::distributed::MeshDevice& mesh_device) { return ttnn::get_worker_cores(mesh_device); },

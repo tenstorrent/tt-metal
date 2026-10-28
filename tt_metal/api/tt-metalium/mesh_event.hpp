@@ -32,6 +32,11 @@ public:
     ~MeshEvent();
 
     MeshDevice* device() const;
+    // The event's position in its command queue's sequence, and that queue's id.
+    uint32_t id() const;
+    uint32_t mesh_cq_id() const;
+    // The devices whose queue the event was recorded on.
+    const MeshCoordinateRange& device_range() const;
 
     MeshEventImpl& impl();
     const MeshEventImpl& impl() const;

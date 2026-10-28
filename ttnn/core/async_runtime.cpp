@@ -6,6 +6,7 @@
 
 #include <tt-metalium/distributed.hpp>
 #include "ttnn/distributed/api.hpp"
+#include "ttnn/queue_hazards.hpp"
 
 using namespace tt::tt_metal;
 
@@ -39,22 +40,41 @@ void read_buffer(
     }
 }
 
-void queue_synchronize(tt::tt_metal::distributed::MeshCommandQueue& cq) { cq.finish(); }
+void queue_synchronize(tt::tt_metal::distributed::MeshCommandQueue& cq) {
+    cq.finish();
+    if (queue_hazards::enabled()) {
+        queue_hazards::on_synchronize(*cq.device(), QueueId(cq.id()), {});
+    }
+}
 
 void event_synchronize(const tt::tt_metal::distributed::MeshEvent& event) {
     tt::tt_metal::distributed::EventSynchronize(event);
+    if (queue_hazards::enabled()) {
+        queue_hazards::on_event_synchronize(event);
+    }
 }
 
 void wait_for_event(
     tt::tt_metal::distributed::MeshCommandQueue& cq, const tt::tt_metal::distributed::MeshEvent& event) {
     cq.enqueue_wait_for_event(event);
+    if (queue_hazards::enabled()) {
+        queue_hazards::on_wait_for_event(QueueId(cq.id()), event);
+    }
 }
 
 tt::tt_metal::distributed::MeshEvent record_event(tt::tt_metal::distributed::MeshCommandQueue& cq) {
-    return cq.enqueue_record_event();
+    auto event = cq.enqueue_record_event();
+    if (queue_hazards::enabled()) {
+        queue_hazards::on_record_event(event, {});
+    }
+    return event;
 }
 tt::tt_metal::distributed::MeshEvent record_event_to_host(tt::tt_metal::distributed::MeshCommandQueue& cq) {
-    return cq.enqueue_record_event_to_host();
+    auto event = cq.enqueue_record_event_to_host();
+    if (queue_hazards::enabled()) {
+        queue_hazards::on_record_event(event, {});
+    }
+    return event;
 }
 
 }  // namespace ttnn

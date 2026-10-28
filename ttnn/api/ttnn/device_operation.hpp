@@ -34,6 +34,7 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/device_operation_detail.hpp"
 #include "ttnn/worker_cores.hpp"
+#include "ttnn/queue_hazards.hpp"
 
 namespace ttnn::device_operation {
 
@@ -286,7 +287,25 @@ void enqueue_mesh_workload(
         return;
     }
 
-    tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    if (ttnn::queue_hazards::enabled()) [[unlikely]] {
+        std::vector<const Tensor*> reads;
+        std::vector<const Tensor*> writes;
+        ttsl::reflection::visit_object_of_type<Tensor>(
+            [&reads](const Tensor& tensor) { reads.push_back(&tensor); }, tensor_args);
+        ttsl::reflection::visit_object_of_type<Tensor>(
+            [&writes](const Tensor& tensor) { writes.push_back(&tensor); }, tensor_return_value);
+        ttnn::queue_hazards::launch(
+            *mesh_device,
+            workload,
+            get_operation_name<mesh_device_operation_t>(operation_attributes),
+            reads,
+            writes,
+            [&] {
+                tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+            });
+    } else {
+        tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
+    }
 
     ttnn::graph::track_mesh_workload_execution(workload, mesh_device, runtime_id);
 
