@@ -115,3 +115,66 @@ with the same five traces: 2000 replays at 1x2048, no hang (`logs/selected_soak_
 bf16 weights are slower than bfp8 on every measured shape, so the hang does not affect selection;
 it is left as an open item (a candidate for E6b / a tt-metal issue if it reproduces with the E5a
 vision policy, which also uses bf16 weights).
+
+## 9. E6a review fixes (E6a-r)
+
+Review E6a: 1.8e-5 margin on the hard last-hidden gate; bf16w row missing; bf16w hang
+unclassified; layer-exception twin of `p3_qkv_gu_exp_ple` untried; chart / doc fixes. Logs and
+data under `tt-ops/runs/embeddinggemma-2/e6/` (`logs/r_*`, `probe.jsonl`, `sweep.jsonl`).
+
+Twin (`combos_r.json`, `logs/r_twin.log`): `p3_qkv_gu_exp_ple_exc` = `p3_qkv_gu_exp_ple` with
+layers 0 and 5 (worst per-layer PCC of `p3_qkv_gu_exp` in `results_gates_g1.jsonl`: 0.999734,
+0.999795) and 23 (last) keeping bf16 qkv / gate_up / ple_block outputs. Screen pass: last hidden
+0.99035, cosine 0.99183; 29.48 ms ranking aggregate **[M]**.
+
+Probe (`tests/perf/dtype_probe.py`, `logs/r_probe.log`, `r_probe_mid.log`): 12 gate cases + 54
+short / padded / demo inputs + 36 mid-length inputs. The gate values reproduce the sweep bit for
+bit (`p3_qkv_gu_exp` 0.99002 at `[512, 33]`). `p3_qkv_gu_exp` fails on a 3-token input (offset
+24991): last hidden 0.98236, cosine 0.98724; the twin, `p3_qkv_gu`, `p3_qkv_exp` and the
+baseline hold (README table).
+
+First selection: the twin, the fastest that held (commit `cff53689f6`). Its gate run
+(`gates.sh r1`, logs `gate_r1_*_twin.log`) failed `test_full_model.py::test_retrieval[audio]` and
+`demo.py::test_multimodal_demo`: the caption_speech2s row is an HF near tie (0.00463) and the twin
+flips it by 1e-5. Chain stopped, device reset. Override runs (`scripts/mm_check.sh`,
+`logs/r_mm_*`): `p3_qkv_gu`, `p3_qkv_exp`, `p3_qkv_gu_exp` pass test_full_model (30) and the
+demo (2), row margins 0.00198 / 0.00173 / 0.00214. Final selection: `p3_qkv_gu` (commit
+`9adacfe162`), 31.06 ms; `p3_qkv_exp` is 0.56 ms slower on the ranking aggregate but faster at
+1x2048 / 1x8192.
+
+bf16w row (`scripts/bf16w_row.sh`, `bf16w_rest.sh`): accuracy reproduces (last hidden 0.99876,
+cosine 0.99944); perf one trace per process: 5.215 / 7.560 / 22.198 / 29.678 / 108.554 ms
+burst. The first 1x2048 attempt with one trace and the full perf loop hung
+(`triage/bf16w_1x2048_single_trace.txt`), so 1x2048 was re-run as burst windows only.
+
+bf16w hang classification **[M]**, every run on bf16w_hifi2 at 1x2048 with `bf16w_repro.py`:
+
+| run | trace | stopped after | running op (tt-triage) |
+|---|---|---|---|
+| E6a `bf16w_repro_2.log` | 5 traces captured | 240-260 replays | k-norm `rms_norm` [1, 2, 2048, 256] L1 |
+| `r_bf16w_trace1_1x2048.log` | 1 trace | 220-240 replays | no op decoded: the launch / watcher mailboxes of worker cores (7..12, 0) hold values like 0x41DC0000 (27.5 as fp32) |
+| `r_bf16w_trk_all_1x2048.log`, `TT_METAL_TRACE_ALLOC_TRACKING=1` | 5 traces | 460-480 replays; no "still alive" error | `LayerNormDeviceOperation` [1, 2, 2048, 256] L1 |
+| `r_bf16w_eager_1x2048.log` | none (eager `encode`) | 760-780 forwards | `LayerNormDeviceOperation` [1, 2, 2048, 256] L1 (v-norm, no gamma) |
+| perf loop, `dtype_sweep.py --shapes 1x2048` | 1 trace | inside the ~600-replay loop (count not logged) | k-norm `rms_norm` [1, 2, 2048, 256] L1 |
+
+Classification: a bf16w-specific device hang in the per-head RMSNorm of the K / V heads at
+1x2048 (L1 interleaved input), not a trace issue: it reproduces without any trace, with one trace,
+and with five; the allocation tracker finds no unsafe live buffer before any replay. The
+compute kernel stalls on every core of the op (unpacker waiting for a context, packer in
+`elem_apply_pack`, writer in `cb_wait_front`) **[M]**. In one run the firmware mailboxes of six
+worker cores held float-looking words **[M]**, which points at a stray NoC write of tensor data
+into worker L1 rather than a kernel deadlock **[I]**. Why bf16 weights trigger it is not known
+**[I: bf16 projection weights change L1 / DRAM allocation and matmul program configs upstream;
+the norm has the same shape and dtype in both policies]**; the next step would be a watcher run
+(`TT_METAL_WATCHER`, NoC sanitization) of `bf16w_repro.py ... eager 1500`. The selected and
+earlier bfp8 configs ran 2000+ replays at 1x2048 without a hang (`selected_soak_1x2048.log`,
+soak below). Each hang: tt-triage, kill, `tt-smi -r`, device listed OK.
+
+Final runs on `9adacfe162` (`scripts/chain_r.sh`, `logs/chain_r.log`) **[M]**: gates `r1` all pass
+(pcc 357, s32768 1, full model 30, demo 2, vision 91, audio 109, watcher 101 with 0 error lines;
+`test_precision_config` 1211 checks on `p3_qkv_gu`); allocation tracking over test_trace (6),
+test_full_model_trace (11) and the demo (2): no "still alive"; interleaved five-shape soak 2060
+replays, 0 mismatches, with and without tracking; post-selection bench `post_bench_r.jsonl`
+(selected 4.813 / 6.833 / 20.054 / 24.243 / 93.054 ms burst vs baseline override 4.923 / 7.314 /
+22.042 / 29.393 / 105.688). Report-only change after the gates: chart label placement and the
+left-panel y range in `dtype_sweep.py` `_chart` (no runtime or test path).

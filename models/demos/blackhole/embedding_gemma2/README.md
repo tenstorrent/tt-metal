@@ -104,24 +104,34 @@ pytest models/demos/blackhole/embedding_gemma2/demo/demo.py -s
 python models/demos/blackhole/embedding_gemma2/tests/perf/bench_sustained.py   # burst + sustained
 ```
 
-## Text tower performance (E5a, optimized)
+## Text tower performance (E5a optimized, E6a precision)
 
-Traced device time per forward on one P150a (burst median; sustained after a 10 s soak is within
-0.07 ms). Details, the change ledger and tt-perf-report tables: `doc/optimized_text/README.md`.
+Traced device time per forward on one P150a (burst median of 5 windows; `tests/perf/bench_sustained.py`
+through the default construction path). E5a details, the change ledger and tt-perf-report tables:
+`doc/optimized_text/README.md`; E6a precision selection: `doc/datatype_sweep/README.md`.
 
-| batch x bucket | E4 functional ms | optimized ms | speedup |
-|---|---|---|---|
-| 1 x 128 | 8.75 | 4.92 | 1.78x |
-| 1 x 512 | 18.31 | 7.32 | 2.50x |
-| 1 x 2048 | 58.98 | 22.05 | 2.67x |
-| 8 x 512 | 74.50 | 29.42 | 2.53x |
-| 1 x 8192 | 411.70 | 109.81 | 3.75x |
+| batch x bucket | E4 functional ms | E5a optimized ms | E6a default ms (sustained) | speedup vs E4 |
+|---|---|---|---|---|
+| 1 x 128 | 8.75 | 4.92 | 4.81 (4.81) | 1.82x |
+| 1 x 512 | 18.31 | 7.32 | 6.83 (6.83) | 2.68x |
+| 1 x 2048 | 58.98 | 22.05 | 20.05 (20.05) | 2.94x |
+| 8 x 512 | 74.50 | 29.42 | 24.24 (24.62) | 3.07x |
+| 1 x 8192 | 411.70 | 109.81 | 93.05 (93.81) | 4.42x |
 
-Policy: bfp8 weights + HiFi2 matmuls with measured program configs, HiFi2 SDPA with per-shape
-chunks, bfp4 additive masks (with an SDPA block map at buckets >= 4096), intermediates and the
-residual stream in L1 up to 4096 tokens. The largest bucket is now 65536 (was 32768); 65536 has
-no HF reference (validated by padding equivalence vs 32768 only), so the HF-validated maximum
-stays 32768.
+E6a default measured on code commit `9adacfe162` **[M]**; the E5a column is the E5a report (the
+same policy re-measured in the E6a session through `EMBEDDING_GEMMA2_PRECISION=baseline_precision_config.json`:
+4.92 / 7.31 / 22.04 / 29.39 / 105.69 ms).
+
+Policy (E6a, `doc/datatype_sweep/selected_precision_config.json`, config `p3_qkv_gu`): bfp8
+weights + HiFi2 matmuls with fp32 accumulation and measured program configs; the QKV and MLP
+gate / up projection outputs in bfp8, every other activation and the residual stream bf16; HiFi2
+SDPA with fp32 accumulation and per-shape chunks; HiFi4 norms; bfp4 additive masks (with an SDPA
+block map at buckets >= 4096); intermediates and the residual stream in L1 up to 4096 tokens.
+Accuracy margin over the gate cases plus 90 extra short / padded / mid-length inputs: last-hidden
+PCC >= 0.99106 (gate 0.99), embedding cosine >= 0.99382 (gate 0.99). The E5a policy is one
+override away: `EMBEDDING_GEMMA2_PRECISION=<doc/datatype_sweep/baseline_precision_config.json>`.
+The largest bucket is now 65536 (was 32768); 65536 has no HF reference (validated by padding
+equivalence vs 32768 only), so the HF-validated maximum stays 32768.
 
 ## Vision tower
 

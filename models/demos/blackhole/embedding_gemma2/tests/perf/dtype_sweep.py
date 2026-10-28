@@ -564,7 +564,7 @@ def _chart(recs, metric_key, ylabel, bar, path, selected, title):
             ax.set_ylim(zoom_lo, zoom_hi)
             ax.set_title("zoom: the passing configs and the gate line", fontsize=9)
         else:
-            lo = min(y for _, y, *_ in pts)
+            lo = min([y for _, y, *_ in pts] + [bar])  # the gate line stays in view
             ax.set_ylim(lo - 0.04 * (1 - lo), 1 + 0.02 * (1 - lo))
             ax.set_ylabel(ylabel)
             ax.set_title("every evaluated config", fontsize=9)
@@ -607,7 +607,10 @@ def _chart(recs, metric_key, ylabel, bar, path, selected, title):
             if k == 0 and not (cid == selected or cid in front_ids or cid.startswith(("base", "bf16w"))):
                 continue
             color = "#d62728" if cid == selected else ("#22323f" if ok else "#8a8a8a")
-            for dx, dy in ((6, 3), (6, -10), (-6, 3), (-6, -10), (6, 12), (6, -19), (-6, 12), (-6, -19)):
+            # left panel (dense): only the offsets next to the point, so a label never drifts
+            # onto a neighbour; a label that fits nowhere is dropped (the right panel / CSV have it)
+            offsets = ((6, 3), (6, -10), (-6, 3), (-6, -10), (6, 12), (6, -19), (-6, 12), (-6, -19))
+            for dx, dy in offsets[:4] if k == 0 else offsets:
                 t = ax.annotate(
                     cid,
                     (x, y),
