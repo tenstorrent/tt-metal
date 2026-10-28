@@ -324,9 +324,26 @@ class FunctionalDecoder(LightweightModule):
         src = self.kda_batched
         if self.max_batch == 1:  # ttKDA only reads its input state; the new carries are fresh tensors
             return LayerState(kda=src), []
-        rec = ttnn.slice(src.recurrent, [user, 0, 0, 0], [user + 1] + list(src.recurrent.shape)[1:])
+        rec = self._user_recurrent(src.recurrent, user)
         conv = self._require_weights().attn.user_conv_state(src, user)  # ttKDA's [1, taps, W] row-major
         return LayerState(kda=KdaState(recurrent=rec, convolution=conv)), [rec, conv]
+
+    @staticmethod
+    def _user_recurrent(batched: ttnn.Tensor, user: int) -> ttnn.Tensor:
+        """Slot ``user`` of the batched recurrent state ``[B, H, K, V]`` as a fresh ``[1, H, K, V]`` tensor through the
+        tensor-argument ``ttnn.slice`` (the program keys on the shapes, the slot index is a runtime tensor): one
+        program whatever ``user`` is. The host-int slice was a program per user index, which the first continued
+        chunk of a slot the warm-up had not used compiled under the sealed cache (2026-10-28 served APC, 8x4)."""
+        B, H, K, V = (int(v) for v in batched.shape)
+        dev = batched.device()
+        rm = lambda v: ttnn.from_torch(
+            torch.tensor(v, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=dev
+        )
+        start, end = rm([user, 0, 0, 0]), rm([user + 1, H, K, V])
+        out = ttnn.slice(input_tensor=batched, starts=start, ends=end, slice_dim=0, num_devices=B)
+        ttnn.deallocate(start)
+        ttnn.deallocate(end)
+        return out
 
     def _write_user_kda_state_slot(self, slot, new: KdaState):
         """``_write_user_kda_state`` with the slot chosen on device (the traced prefill): the recurrent

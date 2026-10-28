@@ -128,6 +128,17 @@ def mcast1d_config(cx: int, cy: int, pcn: int, ibw: int, activation=None):
     )
 
 
+def _exact_compute(device):
+    """HiFi4 + fp32 accumulation: a one-hot matmul is then exact (used for the per-user state reads)."""
+    return ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi4,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+
 class BiasedDecodeLinear(DecodeLinear):
     """``DecodeLinear`` with a persistent bias (``[1, 1, 1, N]`` TILE) and the fused activation of its decode
     config; the default dispatch (M > 32) applies the same activation as a composite."""
@@ -479,11 +490,22 @@ class TtKDA(LightweightModule):
         taps = self.kcfg.conv_kernel_size - 1
         if state.convolution.layout != ttnn.TILE_LAYOUT:
             return ttnn.slice(state.convolution, [user, 0, 0], [user + 1, taps, self.conv_width])
-        rm = ttnn.to_layout(state.convolution, ttnn.ROW_MAJOR_LAYOUT)  # [taps, B, W]
-        sl = ttnn.slice(rm, [0, user, 0], [taps, user + 1, self.conv_width])  # [taps, 1, W]
+        # the tap-major tiles [taps, B, W] read at row ``user`` by an exact one-hot matmul [taps, 1, B] @ [taps, B, W]
+        # (every product x * 1.0 or x * 0.0, fp32 accumulation): ONE program whatever ``user`` is. The earlier
+        # untilize + slice at the user's index was a program per user, which the first continued chunk of a slot the
+        # warm-up's continuation prompts had not used compiled under the sealed cache (2026-10-28 served APC, 8x4).
+        B = int(state.convolution.shape[1])
+        sel = torch.zeros(taps, 1, B)
+        sel[:, 0, user] = 1.0
+        sel_dev = from_torch_host_layout(sel, ttnn.bfloat16, ttnn.TILE_LAYOUT, self.device)
+        row = ttnn.matmul(
+            sel_dev, state.convolution, dtype=ttnn.bfloat16, compute_kernel_config=_exact_compute(self.device)
+        )
+        ttnn.deallocate(sel_dev)
+        rm = ttnn.to_layout(row, ttnn.ROW_MAJOR_LAYOUT)  # [taps, 1, W]
+        ttnn.deallocate(row)
+        out = ttnn.permute(rm, [1, 0, 2])  # [1, taps, W]
         ttnn.deallocate(rm)
-        out = ttnn.permute(sl, [1, 0, 2])
-        ttnn.deallocate(sl)
         return out
 
     def write_user_conv_state(self, state: KdaState, user: int, conv: ttnn.Tensor):
