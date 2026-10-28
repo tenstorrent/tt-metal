@@ -2751,9 +2751,16 @@ class SeEngine3:
         cols = lambda cs: ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(cx0 + c, 0), ttnn.CoreCoord(cx0 + c, GY - 1)) for c in cs]
         )  # noqa: E731
+
+        def owners(fam):  # (a family of one column - S 1: GLM-Flash at 640 rows, K step 16 - is a fixed sender a row,
+            # that column's core: the unified Mcast refuses a rotation of one, which Mcast1D built as a fixed sender)
+            if len(fam) > 1:
+                return ttnn.McastRotatingSenderConfig(sender_cores=cols(fam))
+            return ttnn.McastFixedSenderConfig(sender_index=fam[0])
+
         fams = [
-            ("x0", ttnn.McastRotatingSenderConfig(sender_cores=cols(self.fam0))),
-            ("x1", ttnn.McastRotatingSenderConfig(sender_cores=cols(self.fam1))),
+            ("x0", owners(self.fam0)),
+            ("x1", owners(self.fam1)),
             ("h", ttnn.McastRotatingSenderConfig()),
         ][: 3 if self.down else 2]
         for name, cfg in fams:  # (one family a row of the engine: the receiver groups are its rows)
