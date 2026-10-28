@@ -403,17 +403,7 @@ sfpi_inline sfpi::vFloat calculate_log_body(sfpi::vFloat a, const uint log_base_
     return result;
 }
 
-/**
- * @tparam APPROXIMATION_MODE Ignored
- * @tparam FAST_APPROX Ignored (see calculate_log_body)
- * @tparam HAS_BASE_SCALING If true, multiply the natural log by log_base_scale_factor, the fp32
- *   bits of 1/ln(base) (with IS_BASE_TWO, only the mantissa term; see calculate_log_body)
- * @tparam is_fp32_dest_acc_en If true, DEST registers are fp32, and output does not need to be rounded to bfloat16
- * @tparam ITERATIONS Number of iterations for given face
- * @tparam IS_BASE_TWO If true, take the exact log2 path: log_base_scale_factor is always applied to
- *   the mantissa term, so it must be the fp32 bits of 1/ln(2) (0x3FB8AA3B) and HAS_BASE_SCALING
- *   must be true (see calculate_log_body)
- */
+/// @tparam D Row of this call, 0 .. ITERATIONS-1.
 template <int D>
 inline void log_bf16_row() {
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 2 * D);
@@ -446,6 +436,7 @@ inline void log_bf16_row() {
     TTI_SFPSTORE(p_sfpu::LREG4, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 2 * D);
 }
 
+/// @tparam D Row of this call, 0 .. ITERATIONS-1.
 template <int D>
 inline void log_fp32_row() {
     TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 2 * D);
@@ -488,6 +479,7 @@ inline void log_fp32_row() {
     TTI_SFPSTORE(p_sfpu::LREG5, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 2 * D);
 }
 
+/// @tparam D First row; N = ITERATIONS.
 template <int D, int N>
 inline void log_bf16_rows() {
     if constexpr (D < N) {
@@ -496,6 +488,7 @@ inline void log_bf16_rows() {
     }
 }
 
+/// @tparam D First row; N = ITERATIONS.
 template <int D, int N>
 inline void log_fp32_rows() {
     if constexpr (D < N) {
@@ -504,6 +497,7 @@ inline void log_fp32_rows() {
     }
 }
 
+/// @tparam N ITERATIONS / 4.
 template <int N>
 inline void log_advance_dst() {
     if constexpr (N > 0) {
@@ -512,6 +506,17 @@ inline void log_advance_dst() {
     }
 }
 
+/**
+ * @tparam APPROXIMATION_MODE Ignored
+ * @tparam FAST_APPROX Ignored (see calculate_log_body)
+ * @tparam HAS_BASE_SCALING If true, multiply the natural log by log_base_scale_factor, the fp32
+ *   bits of 1/ln(base) (with IS_BASE_TWO, only the mantissa term; see calculate_log_body)
+ * @tparam is_fp32_dest_acc_en If true, DEST registers are fp32, and output does not need to be rounded to bfloat16
+ * @tparam ITERATIONS Number of iterations for given face
+ * @tparam IS_BASE_TWO If true, take the exact log2 path: log_base_scale_factor is always applied to
+ *   the mantissa term, so it must be the fp32 bits of 1/ln(2) (0x3FB8AA3B) and HAS_BASE_SCALING
+ *   must be true (see calculate_log_body)
+ */
 template <
     bool APPROXIMATION_MODE,
     bool FAST_APPROX,
