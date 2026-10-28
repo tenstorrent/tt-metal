@@ -1,12 +1,9 @@
 """B with a per-group best shared exponent (E_max or E_max + 1, the smaller group L2 error); still plain bfloat4_b."""
-import os
-import sys
 
 import torch
-
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import codec
 from safetensors import safe_open
+
+from models.demos.deepseek_v41_flash_d_p.tt import ckv_codec as codec
 
 G = "/data/dnijemcevic/bringup/deepseek_v41_flash_d_p/golden_full/galaxy_8x4/s10240_c5120"
 
