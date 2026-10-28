@@ -8,14 +8,19 @@ models/demos/common/prefill/runners/ci -p test_run_multirank_pcc.py``.
 The actual shell harness runs with stub launchers; its inline verdict gate remains real.
 """
 
+import contextlib
+import importlib.util
+import io
 import json
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
+from unittest import mock
 
 HARNESS = Path(__file__).with_name("run_multirank_pcc.sh")
 STUB = r"""
@@ -364,8 +369,17 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
 
 
+def _load_perf_gate():
+    spec = importlib.util.spec_from_file_location("perf_gate", HARNESS.with_name("perf_gate.py"))
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
 class PerfGateTableTests(unittest.TestCase):
-    """perf_gate.py against a baseline table, without the shell harness."""
+    """perf_gate.py against a baseline table, in-process, without the shell harness."""
+
+    perf_gate = _load_perf_gate()
 
     TABLE = {
         "margin": {"throughput_tok_s": 0.015, "ttft_s": 0.015, "chunk_time_ms": 0.1},
@@ -388,15 +402,14 @@ class PerfGateTableTests(unittest.TestCase):
         perf_json = root / "run_sc1.json"
         index = {"@5k": 0, "@55k": 10, "@1M": 200}
         perf_json.write_text(json.dumps({"chunk_index": index, "throughput_tok_s": throughput}))
-        result = subprocess.run(
-            [sys.executable, str(HARNESS.with_name("perf_gate.py")), str(perf_json)]
-            + ["--table", str(root / "table.json"), "--model", model, "--config", "sc1"]
-            + (["--power", power] if power else [])
-            + list(extra_args),
-            capture_output=True,
-            text=True,
-            env={**os.environ, "PREFILL_SUMMARIES": str(root / "summaries"), **(env or {})},
-        )
+        argv = ["perf_gate.py", str(perf_json), "--table", str(root / "table.json"), "--model", model]
+        argv += ["--config", "sc1"] + (["--power", power] if power else []) + list(extra_args)
+        out, err = io.StringIO(), io.StringIO()
+        with mock.patch.object(sys, "argv", argv), mock.patch.dict(
+            os.environ, {"PREFILL_SUMMARIES": str(root / "summaries"), **(env or {})}
+        ), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            returncode = self.perf_gate.main()
+        result = types.SimpleNamespace(returncode=returncode, stdout=out.getvalue(), stderr=err.getvalue())
         verdicts = root / "summaries" / "perf" / "run_sc1_gate.md"
         return result, verdicts.read_text() if verdicts.exists() else ""
 
@@ -443,10 +456,8 @@ class PerfGateTableTests(unittest.TestCase):
     def test_unreadable_power_class_fails_without_blaming_the_runner(self):
         # The harness falls back to probing locally when the remote probe fails; with no tt-smi the TDP is
         # unreadable, which says nothing about the host's power class.
-        repo = HARNESS.parents[6]
-        result, verdicts = self.gate(
-            "multi", {"@5k": 20000, "@55k": 10000}, power="", env={"PATH": "", "PYTHONPATH": str(repo)}
-        )
+        with mock.patch.object(sys, "path", [str(HARNESS.parents[6]), *sys.path]):
+            result, verdicts = self.gate("multi", {"@5k": 20000, "@55k": 10000}, power="", env={"PATH": ""})
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("power class could not be determined", result.stderr)
         self.assertNotIn("misrouted", result.stderr)

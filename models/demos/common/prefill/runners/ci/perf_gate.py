@@ -23,8 +23,8 @@ def fail(msg):
 
 
 def power_class():
-    """"14kw", "8kw", or "unknown" when tt-smi cannot report the TDP (no tt-smi here, or it timed out):
-    an unreadable TDP is not evidence of a low-power host."""
+    """This host's power class: 14kw, 8kw, or unknown when tt-smi cannot report the TDP (no tt-smi here,
+    or it timed out). An unreadable TDP is not evidence of a low-power host."""
     try:
         from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import get_tdp_limit_max
 
