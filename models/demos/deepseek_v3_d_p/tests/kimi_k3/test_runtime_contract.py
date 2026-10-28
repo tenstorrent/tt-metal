@@ -26,10 +26,10 @@ from types import SimpleNamespace
 from unittest.mock import Mock, create_autospec
 
 import pytest
-import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
+from models.demos.deepseek_v3_d_p.tt.kimi_k3 import attention as attention_module
 from models.demos.deepseek_v3_d_p.tt.kimi_k3.attention import (
     K3AttnContext,
     TtK3KdaAttention,
@@ -169,48 +169,36 @@ def test_kda_construction_passes_global_and_local_geometry(monkeypatch, sp_axis,
 
 @pytest.mark.parametrize("host_start,host_end", [(None, None), (672, None), (672, 704), (0, 32)])
 def test_build_kda_scalars_uploads_eager_slot_and_bounds_once(monkeypatch, host_start, host_end):
-    device, mapper = object(), object()
-    slot, start, end = object(), object(), object()
-    from_torch = Mock(side_effect=[slot, start, end])
-    monkeypatch.setattr(ttnn, "from_torch", from_torch)
-    monkeypatch.setattr(ttnn, "ReplicateTensorToMesh", lambda device: mapper)
+    device = object()
+    monkeypatch.setattr(attention_module, "device_scalar", lambda on, value: (on, value))
 
     scalars, owned = build_kda_scalars(device, None, 2, host_start, host_end)
 
     # Slot first, then the start; an absent end uploads nothing and stays `None` (full capacity).
-    assert scalars == (slot, start, end if host_end is not None else None)
-    assert owned == ((slot, start, end) if host_end is not None else (slot, start))
-    uploaded = [call.args[0] for call in from_torch.call_args_list]
-    expected = [2, 0 if host_start is None else host_start] + ([host_end] if host_end is not None else [])
-    assert [tensor.tolist() for tensor in uploaded] == [[value] for value in expected]
-    assert all(tensor.dtype == torch.int64 for tensor in uploaded)
-    assert from_torch.call_args.kwargs == {
-        "dtype": ttnn.uint32,
-        "layout": ttnn.ROW_MAJOR_LAYOUT,
-        "device": device,
-        "memory_config": ttnn.DRAM_MEMORY_CONFIG,
-        "mesh_mapper": mapper,
-    }
+    start = (device, 0 if host_start is None else host_start)
+    end = None if host_end is None else (device, host_end)
+    assert scalars == ((device, 2), start, end)
+    assert owned == tuple(scalar for scalar in scalars if scalar is not None)
 
 
 def test_build_kda_scalars_borrows_traced_metadata(monkeypatch):
-    from_torch = Mock()
-    monkeypatch.setattr(ttnn, "from_torch", from_torch)
+    upload = Mock()
+    monkeypatch.setattr(attention_module, "device_scalar", upload)
     slot, start, end = object(), object(), object()
     # The host ints are placeholders under trace; the metadata tensors are what replay rewrites.
     scalars, owned = build_kda_scalars(object(), (slot, start, end, object()), 7, 999, 999)
     assert scalars == (slot, start, end)
     assert owned == ()
-    from_torch.assert_not_called()
+    upload.assert_not_called()
 
 
 @pytest.mark.parametrize("start,end", [(1, 64), (33, 64), (-32, 32), (32, 32), (64, 32), (32, 31)])
 def test_build_kda_scalars_rejects_invalid_host_bounds_before_upload(monkeypatch, expect_error, start, end):
-    from_torch = Mock()
-    monkeypatch.setattr(ttnn, "from_torch", from_torch)
+    upload = Mock()
+    monkeypatch.setattr(attention_module, "device_scalar", upload)
     with expect_error(ValueError, "K3 KDA"):
         build_kda_scalars(object(), None, 0, start, end)
-    from_torch.assert_not_called()
+    upload.assert_not_called()
 
 
 def test_kda_forward_loads_and_stores_its_slot_through_the_shared_scratch(monkeypatch):
