@@ -31,9 +31,10 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
-# The configuration is read from the environment so one file serves both the scheduled run and a
-# manual dispatch that wants to sweep an axis, without a second copy of the op table. The defaults
-# cover both float dtypes on a single DRAM tile, which is what runs daily.
+# The configuration is read from the environment so one file serves both the nightly run
+# ("ttnn nightly eltwise determinism tests" in tests/pipeline_reorg/ops_unit_tests.yaml) and a local
+# run that wants to sweep an axis, without a second copy of the op table. The defaults cover both
+# float dtypes on a single DRAM tile, which is what runs nightly.
 
 
 def _runs_from_env():
