@@ -10,7 +10,9 @@
 #include <fmt/format.h>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/tensor/tensor_types.hpp>
 
+#include "ttnn/operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/ring_attention_all_gather_async_multi_core_with_workers_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/chunked_prefill_utils.hpp"
@@ -215,6 +217,38 @@ bool slice_readiness_enabled(const RingJointSDPAParams& args, const RingJointSDP
     return ring_attention_all_gather_async_detail::uses_output_bank_owned_schedule(inputs, outputs, ag.dim);
 }
 
+double floater_compute_to_transfer(
+    const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args, const KSplitShape& ksplit) {
+    const auto bytes_per_element = [](const Tensor& tensor) {
+        return static_cast<double>(tt::tt_metal::tile_size(tensor.dtype())) /
+               static_cast<double>(tt::constants::TILE_HW);
+    };
+    const auto& q_shape = tensor_args.input_q.padded_shape();
+    // k_expand_weight: [1, heads, no-PE width, latent width].
+    const auto& wuk_shape = tensor_args.k_expand_weight->logical_shape();
+    const uint32_t v_dim = tensor_args.v_head_dim(args.latent_v_head_dim);
+    double bytes_per_token = tensor_args.gathered_k.padded_shape()[3] * bytes_per_element(tensor_args.gathered_k);
+    if (tensor_args.gathered_v.has_value()) {
+        bytes_per_token +=
+            static_cast<double>(tensor_args.v_num_heads()) * v_dim * bytes_per_element(tensor_args.gathered_v.value());
+    }
+    const tt::tt_metal::MathFidelity fidelity =
+        args.program_config->matmul_math_fidelity.value_or(ttnn::get_math_fidelity(args.compute_kernel_config));
+    return ring_joint::floater_compute_to_transfer({
+        .heads = static_cast<uint32_t>(q_shape[1]),
+        .q_rows = static_cast<uint32_t>(q_shape[2]),
+        .qk_dim = static_cast<uint32_t>(q_shape[3]),
+        .v_dim = v_dim,
+        .expand_in = static_cast<uint32_t>(wuk_shape[3]),
+        .expand_out = static_cast<uint32_t>(wuk_shape[2]),
+        .fidelity_multiplier =
+            static_cast<uint32_t>(tt::tt_metal::operation::OpPerformanceModel::fidelity_multiplier(fidelity)),
+        .bytes_per_token = bytes_per_token,
+        .cores = static_cast<uint32_t>(ksplit.grid.x * ksplit.grid.y),
+        .ring_links = 2 * args.all_gather_operation_attributes.num_links,
+    });
+}
+
 std::optional<ring_joint::FloaterSchedule> floater_eligibility(
     const RingJointSDPAParams& args,
     const RingJointSDPAInputs& tensor_args,
@@ -247,14 +281,11 @@ std::optional<ring_joint::FloaterSchedule> floater_eligibility(
             "x 2 bands or 16 x 3, an 11x10 grid and an 8-chip ring with 2 gather links");
         return std::nullopt;
     }
-    const auto& config = args.program_config.value();
-    const std::optional<ring_joint::FloaterSchedule> schedule = requested
-                                                                    ? requested_schedule
-                                                                    : ring_joint::tuned_floater_schedule(
-                                                                          {NH,
-                                                                           ksplit.count,
-                                                                           static_cast<uint32_t>(config.q_chunk_size),
-                                                                           static_cast<uint32_t>(config.k_chunk_size)});
+    const std::optional<ring_joint::FloaterSchedule> schedule =
+        requested ? requested_schedule
+        : floater_compute_to_transfer(args, tensor_args, ksplit) >= ring_joint::kFloaterMinComputeToTransfer
+            ? ring_joint::floater_layout_schedule(NH, ksplit.count)
+            : std::nullopt;
     if (!schedule.has_value()) {
         return std::nullopt;
     }

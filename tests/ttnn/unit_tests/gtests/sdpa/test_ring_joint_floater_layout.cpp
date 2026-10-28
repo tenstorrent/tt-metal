@@ -22,9 +22,6 @@ constexpr uint32_t kGridX = 11;
 constexpr uint32_t kGridY = 10;
 constexpr uint32_t kGatherWorkers = 4;
 constexpr uint32_t kRingSize = 8;
-// The chunk sizes both tuned shapes run at (Kimi 5k chunks: 640 rows per chip, two q320 chunks).
-constexpr uint32_t kTunedQChunkSize = 320;
-constexpr uint32_t kTunedKChunkSize = 256;
 
 // Kimi K3: 24 heads, 2 bands.
 constexpr std::array<std::array<uint32_t, 4>, 5> kK3Groups = {
@@ -145,8 +142,7 @@ const std::array<Golden, 2> kGoldens = {{
 }};
 
 FloaterSchedule schedule_of(const Golden& golden) {
-    const std::optional<FloaterSchedule> schedule =
-        tuned_floater_schedule({golden.heads, golden.bands, kTunedQChunkSize, kTunedKChunkSize});
+    const std::optional<FloaterSchedule> schedule = floater_layout_schedule(golden.heads, golden.bands);
     EXPECT_TRUE(schedule.has_value());
     return schedule.value_or(FloaterSchedule{});
 }
@@ -251,31 +247,54 @@ TEST(RingJointFloaterLayout, HoldsTheProtocolsInvariants) {
     }
 }
 
-TEST(RingJointFloaterLayout, OnlyTheTunedShapesHaveASchedule) {
-    for (uint32_t heads : {8u, 16u, 24u, 32u, 64u}) {
-        for (uint32_t bands = 1; bands <= kKSplitMaxCount; ++bands) {
-            for (uint32_t q_chunk_size : {128u, 160u, 320u}) {
-                for (uint32_t k_chunk_size : {256u, 512u}) {
-                    const bool tuned = ((heads == 24 && bands == 2) || (heads == 16 && bands == 3)) &&
-                                       q_chunk_size == kTunedQChunkSize && k_chunk_size == kTunedKChunkSize;
-                    EXPECT_EQ(tuned_floater_schedule({heads, bands, q_chunk_size, k_chunk_size}).has_value(), tuned)
-                        << "heads=" << heads << " bands=" << bands << " q=" << q_chunk_size << " k=" << k_chunk_size;
-                }
-            }
-        }
+// Kimi K3 / K2.7 MLA on the Galaxy 8x4: expanded K at 5k chunks (640 Q rows per device) and 2k (256), every fidelity.
+// The floaters were measured slower or no faster than none at 512k cached tokens on exactly the shapes marked false.
+TEST(RingJointFloaterLayout, ComputeToTransferMatchesTheGalaxyMeasurements) {
+    struct Measured {
+        uint32_t heads, q_rows, fidelity_multiplier;
+        bool floaters_faster;
+    };
+    const std::array<Measured, 16> measured = {{
+        {24, 640, 1, false},
+        {24, 640, 2, true},
+        {24, 640, 3, true},
+        {24, 640, 4, true},
+        {24, 256, 1, false},
+        {24, 256, 2, false},
+        {24, 256, 3, false},
+        {24, 256, 4, true},
+        {16, 640, 1, false},
+        {16, 640, 2, true},
+        {16, 640, 3, true},
+        {16, 640, 4, true},
+        {16, 256, 1, false},
+        {16, 256, 2, false},
+        {16, 256, 3, false},
+        {16, 256, 4, true},
+    }};
+    constexpr double kBfp8BytesPerElement = 1088.0 / 1024.0;
+    for (const Measured& m : measured) {
+        const double ratio = floater_compute_to_transfer({
+            .heads = m.heads,
+            .q_rows = m.q_rows,
+            .qk_dim = 192,
+            .v_dim = 128,
+            .expand_in = 512,
+            .expand_out = 128,
+            .fidelity_multiplier = m.fidelity_multiplier,
+            .bytes_per_token = (576.0 + m.heads * 128.0) * kBfp8BytesPerElement,
+            .cores = kGridX * kGridY,
+            .ring_links = 4,
+        });
+        EXPECT_EQ(ratio >= kFloaterMinComputeToTransfer, m.floaters_faster)
+            << "heads=" << m.heads << " q_rows=" << m.q_rows << " fidelity x" << m.fidelity_multiplier
+            << " ratio=" << ratio;
     }
-}
-
-// Kimi 2k chunks (256 rows per chip: two q128 chunks, k256) fit the layout, but their floaters cost more than they
-// save.
-TEST(RingJointFloaterLayout, KimiTwoKChunksRunWithoutFloaters) {
-    EXPECT_FALSE(tuned_floater_schedule({24, 2, 128, 256}).has_value());
-    EXPECT_FALSE(tuned_floater_schedule({16, 3, 128, 256}).has_value());
 }
 
 TEST(RingJointFloaterLayout, TakesAScheduleFromValues) {
     EXPECT_FALSE(floater_schedule_from_values({}).has_value());
-    const FloaterSchedule k3 = tuned_floater_schedule({24, 2, kTunedQChunkSize, kTunedKChunkSize}).value();
+    const FloaterSchedule k3 = floater_layout_schedule(24, 2).value();
     std::vector<uint32_t> values = {k3.iters[0], k3.iters[1], k3.fracs[0], k3.fracs[1], k3.donate_tail ? 1u : 0u};
     values.insert(values.end(), std::begin(k3.merge_after), std::end(k3.merge_after));
     const std::optional<FloaterSchedule> schedule = floater_schedule_from_values(values);
@@ -299,6 +318,27 @@ TEST(RingJointFloaterLayout, TellsWellFormedScheduleValues) {
     EXPECT_FALSE(floater_schedule_values_well_formed({2, 4, 1075, 2765, 2, 3, 3, 3, 3, 3}));
 }
 
+// floater_schedule_values_well_formed is what output-spec inference checks instead of calling the parser.
+TEST(RingJointFloaterLayout, WellFormedAgreesWithTheParser) {
+    const std::vector<std::vector<uint32_t>> samples = {
+        {},
+        {2, 4, 1075, 2765, 0, 3, 3, 3, 3, 3},
+        {2, 4, 1075, 2765, 1, 3, 3, 3, 3, 3},
+        {2, 4, 1075, 2765, 0, 3, 3, 3, 3},
+        {2, 4, 1075, 2765, 0, 3, 3, 3, 3, 3, 3},
+        {2, 4, 1075, 2765, 2, 3, 3, 3, 3, 3},
+        {1}};
+    for (const auto& values : samples) {
+        bool parsed = true;
+        try {
+            floater_schedule_from_values(values);
+        } catch (const std::exception&) {
+            parsed = false;
+        }
+        EXPECT_EQ(floater_schedule_values_well_formed(values), parsed) << values.size() << " values";
+    }
+}
+
 TEST(RingJointFloaterLayout, RejectsMalformedScheduleValues) {
     EXPECT_ANY_THROW(floater_schedule_from_values({2, 4, 1075, 2765, 0, 3, 3, 3, 3}));
     EXPECT_ANY_THROW(floater_schedule_from_values({2, 4, 1075, 2765, 0, 3, 3, 3, 3, 3, 3}));
@@ -307,7 +347,7 @@ TEST(RingJointFloaterLayout, RejectsMalformedScheduleValues) {
 
 // 25 heads x 2 bands also gives 24 head-pair blocks by integer division, leaving head 24 without a home.
 TEST(RingJointFloaterLayout, RefusesAShapeItCannotCoverWhole) {
-    const FloaterSchedule k3 = tuned_floater_schedule({24, 2, kTunedQChunkSize, kTunedKChunkSize}).value();
+    const FloaterSchedule k3 = floater_layout_schedule(24, 2).value();
     EXPECT_ANY_THROW(build_floater_layout(k3, kGridX, kGridY, 25, 2, kGatherWorkers, 50, kRingSize));
     EXPECT_ANY_THROW(build_floater_layout(k3, kGridX, kGridY, 24, 3, kGatherWorkers, 48, kRingSize));
 }

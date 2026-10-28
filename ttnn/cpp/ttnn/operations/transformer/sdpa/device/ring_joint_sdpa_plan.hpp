@@ -80,14 +80,20 @@ std::string single_q_chunk_blocker(
 // payload size (its bank-owned schedule).
 bool slice_readiness_enabled(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args);
 
+// ring_joint::floater_compute_to_transfer of this call: its QK^T / PV and K expansion per arriving K/V token at the
+// matmuls' fidelity, over that token's transfer on the ring. Needs expanded K and a program config.
+double floater_compute_to_transfer(
+    const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args, const KSplitShape& ksplit);
+
 // Expanded-K floaters (kernels/ring_joint_floaters.hpp): the schedule of a shape on the 11x10 grid of the 8-chip ring
-// with 2 gather links, or nullopt. The schedule is the tuned one for the shape's heads, bands and Q / K chunk sizes
-// (ring_joint::kTunedFloaterSchedules; a shape without one gets none), or SDPAProgramConfig::floater_schedule. On those
-// shapes the K split's 24 home blocks of 2x2 cores fill a 10x10 sub-grid, leaving the 25th block, the last grid column
-// and the gather column below its workers idle: 20 cores, five floater groups of 4 that take over pieces of the homes'
-// bands. The gather's workers are the top 2 x num_links cores of column grid.x (column-major from (grid.x, 0)). The
-// homes merge at interleaved ring steps, which need slice readiness; it is checked last, so other shapes never query
-// the gather's buffers or the fabric.
+// with 2 gather links, or nullopt. The schedule is SDPAProgramConfig::floater_schedule if set; otherwise the layout's
+// (ring_joint::kFloaterLayoutSchedules), where the call's compute per arriving token is large enough against its
+// transfer for the floaters to pay off (floater_compute_to_transfer >= ring_joint::kFloaterMinComputeToTransfer). On
+// those shapes the K split's 24 home blocks of 2x2 cores fill a 10x10 sub-grid, leaving the 25th block, the last grid
+// column and the gather column below its workers idle: 20 cores, five floater groups of 4 that take over pieces of the
+// homes' bands. The gather's workers are the top 2 x num_links cores of column grid.x (column-major from (grid.x, 0)).
+// The homes merge at interleaved ring steps, which need slice readiness; it is checked last, so other shapes never
+// query the gather's buffers or the fabric.
 //
 // refuse_unusable_schedule: TT_FATAL on a floater_schedule the call cannot use, or a malformed one. Set only after the
 // op's validation (the program factory); output-spec inference runs before it and leaves errors to the validator.

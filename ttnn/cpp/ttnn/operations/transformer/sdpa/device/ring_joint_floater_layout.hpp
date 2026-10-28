@@ -43,47 +43,74 @@ struct FloaterSchedule {
     uint32_t merge_after[kFloaterFirstPieceVisits];
 };
 
-// The heads per device x K-split bands the layout supports: the two the gtest checks it on exactly (Kimi K3 and K2.7).
-// Other shapes that fill the 24 home blocks (12 heads x 4 bands) are not covered by those checks and are unsupported.
-inline constexpr std::array<std::pair<uint32_t, uint32_t>, 2> kFloaterLayoutHeadsBands = {{{24, 2}, {16, 3}}};
-
-inline bool floater_layout_supported(uint32_t heads, uint32_t bands) {
-    return std::find(kFloaterLayoutHeadsBands.begin(), kFloaterLayoutHeadsBands.end(), std::pair{heads, bands}) !=
-           kFloaterLayoutHeadsBands.end();
-}
-
-// What a schedule is tuned for: heads per device, K-split bands, and the SDPA's Q and K chunk sizes. The layout fixes
-// the rest (the 11x10 grid, the 8-chip ring, 2 gather links).
-struct FloaterShape {
-    uint32_t heads, bands, q_chunk_size, k_chunk_size;
-    bool operator==(const FloaterShape&) const = default;
-};
-
-// Schedules tuned on the Blackhole Galaxy 8x4's 8-chip SP ring (models/demos/deepseek_v3_d_p/tests/perf/
-// test_tune_ring_joint_floaters.py, at 55k and 512k cached tokens). A shape that is not listed runs without floaters:
-// a floater expands K for every piece it runs, and where the Q chunk is too short to amortize that (Kimi 2k chunks,
-// q128, where the best schedule found is 20-26% slower than none) the floaters cost more than the idle cores give back.
-inline constexpr std::array<std::pair<FloaterShape, FloaterSchedule>, 2> kTunedFloaterSchedules = {{
+// The layouts the floaters run on, by heads per device x K-split bands, each with its schedule: the two the gtest
+// checks exactly (Kimi K3 and K2.7). Other shapes that fill the 24 home blocks (12 heads x 4 bands) are not covered by
+// those checks and are unsupported. The schedules are tuned on the Blackhole Galaxy 8x4's 8-chip SP ring at 5k chunks
+// (models/demos/deepseek_v3_d_p/tests/perf/test_tune_ring_joint_floaters.py); whether floaters run at all is
+// floater_compute_to_transfer's call.
+inline constexpr std::array<std::pair<std::pair<uint32_t, uint32_t>, FloaterSchedule>, 2> kFloaterLayoutSchedules = {{
     // Kimi K3: 0.31 of iteration 1, 0.9 of iteration 4, from the band's start.
-    {{24, 2, 320, 256}, {{1, 4}, {947, 2765}, false, {4, 4, 4, 4, 4}}},
+    {{24, 2}, {{1, 4}, {947, 2765}, false, {4, 4, 4, 4, 4}}},
     // Kimi K2.7: 0.6 of iteration 1, 0.54 of iteration 3, from the band's end.
-    {{16, 3, 320, 256}, {{1, 3}, {1843, 1664}, true, {2, 3, 4, 5, 5}}},
+    {{16, 3}, {{1, 3}, {1843, 1664}, true, {2, 3, 4, 5, 5}}},
 }};
 
-// The tuned schedule of `shape`, or nullopt.
-inline std::optional<FloaterSchedule> tuned_floater_schedule(const FloaterShape& shape) {
-    for (const auto& [tuned_shape, schedule] : kTunedFloaterSchedules) {
-        if (tuned_shape == shape) {
+// The schedule of the layout for `heads` x `bands`, or nullopt for an unsupported layout.
+inline std::optional<FloaterSchedule> floater_layout_schedule(uint32_t heads, uint32_t bands) {
+    for (const auto& [heads_bands, schedule] : kFloaterLayoutSchedules) {
+        if (heads_bands == std::pair{heads, bands}) {
             return schedule;
         }
     }
     return std::nullopt;
 }
 
+inline bool floater_layout_supported(uint32_t heads, uint32_t bands) {
+    return floater_layout_schedule(heads, bands).has_value();
+}
+
+// Matmul multiply-adds per Tensix core per cycle at LoFi, as sdpa_perf_model.cpp counts them.
+constexpr double kTensixMacsPerCycle = 4096.0;
+// One Blackhole Ethernet link's bandwidth per direction (25 GB/s) at the 1.35 GHz AI clock, in bytes per cycle.
+constexpr double kEthLinkBytesPerCycle = 25e9 / 1.35e9;
+
+// One device's ring-joint SDPA work per K/V token that arrives over the ring, for floater_compute_to_transfer.
+struct FloaterWorkload {
+    uint32_t heads;                // per device
+    uint32_t q_rows;               // per device
+    uint32_t qk_dim, v_dim;        // QK^T width (K expanded: no-PE + PE) and PV width
+    uint32_t expand_in;            // K expansion per head: latent width in ...
+    uint32_t expand_out;           // ... no-PE width out
+    uint32_t fidelity_multiplier;  // of the QK^T / PV matmuls: LoFi 1 to HiFi4 4
+    double bytes_per_token;        // one token's K row and V heads on the ring
+    uint32_t cores;                // SDPA compute cores
+    uint32_t ring_links;           // links into a device: both directions
+};
+
+// Floaters add compute (20 idle cores beside the 96 working ones) at a fixed cost per piece (K expanded again, the
+// partial saved and merged). Compute helps only while a ring step's work outlasts the arrival of its K/V slice, so the
+// floaters pay off where the SDPA's compute per arriving token is large against that token's transfer: this ratio of
+// the two, both in ideal cycles (the matmuls at their fidelity, the links at full bandwidth). It rises with fidelity,
+// Q rows and heads.
+inline double floater_compute_to_transfer(const FloaterWorkload& w) {
+    const double macs =
+        static_cast<double>(w.heads) * (static_cast<double>(w.q_rows) * (w.qk_dim + w.v_dim) +
+                                        static_cast<double>(w.expand_in) * static_cast<double>(w.expand_out));
+    const double compute_cycles = macs * w.fidelity_multiplier / (static_cast<double>(w.cores) * kTensixMacsPerCycle);
+    const double transfer_cycles = w.bytes_per_token / (static_cast<double>(w.ring_links) * kEthLinkBytesPerCycle);
+    return compute_cycles / transfer_cycles;
+}
+
+// The floaters run from this floater_compute_to_transfer up. Measured on the Galaxy 8x4 (Kimi K3 and K2.7, 5k and 2k
+// chunks, LoFi to HiFi4): every shape at 0.45 or below runs slower with floaters, every shape at 0.51 or above 13-16%
+// faster at 512k cached tokens. A shape near the boundary gains or loses little either way.
+constexpr double kFloaterMinComputeToTransfer = 0.48;
+
 // Values of a schedule in SDPAProgramConfig::floater_schedule's order: iters, fracs, donate_tail, merge_after.
 constexpr size_t kFloaterScheduleValues = 2 * kDonatedPieces + 1 + kFloaterFirstPieceVisits;
 
-// Whether floater_schedule_from_values accepts `values` without a TT_FATAL.
+// Whether floater_schedule_from_values accepts `values` without a TT_FATAL: its two checks, kept in step with it (the
+// gtest checks the two agree).
 inline bool floater_schedule_values_well_formed(const std::vector<uint32_t>& values) {
     return values.empty() || (values.size() == kFloaterScheduleValues && values[2 * kDonatedPieces] <= 1);
 }
