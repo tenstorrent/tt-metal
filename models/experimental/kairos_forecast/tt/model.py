@@ -273,7 +273,7 @@ class TtKairos:
         import ttnn
 
         cos, sin = cs
-        return ttnn.add(ttnn.multiply(x, cos), ttnn.multiply(xr, sin))
+        return ttnn.addcmul(ttnn.multiply(x, cos), xr, sin)  # R2-8: one fused op for xr * sin + (precision change)
 
     def _split(self, x, w, B, S):
         """Normed x and a [a | b | c] weight -> three [B, 8, S, 64] head tensors."""
