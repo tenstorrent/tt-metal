@@ -1,0 +1,2 @@
+B current: 8.339 ms, diff 0
+C current: 6.521 ms, diff 0
