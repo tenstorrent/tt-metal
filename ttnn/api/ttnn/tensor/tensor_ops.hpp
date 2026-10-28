@@ -33,6 +33,12 @@ Tensor create_device_tensor(
     std::optional<tt::tt_metal::TensorTopology> tensor_topology = std::nullopt);
 
 void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optional<QueueId> cq_id = std::nullopt);
+// Several host tensors into their device tensors with one dispatch round (MeshCommandQueue::enqueue_write_tensors):
+// uniform writes only, all on one mesh device.
+void copy_to_device_batch(
+    const std::vector<Tensor>& host_tensors,
+    std::vector<Tensor>& device_tensors,
+    std::optional<QueueId> cq_id = std::nullopt);
 
 void copy_to_device(
     tt::tt_metal::distributed::MeshCommandQueue& queue,

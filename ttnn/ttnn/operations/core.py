@@ -551,6 +551,9 @@ ttnn.attach_golden_function(
     ttnn.copy_host_to_device_tensor,
     golden_function=_make_copy_transfer_golden_function("host_tensor", "device_tensor"),
 )
+ttnn.register_python_operation(
+    name="ttnn.copy_host_to_device_tensors",
+)(ttnn._ttnn.operations.core.copy_host_to_device_tensors)
 doc = """
 Copies host tensor data into a pre-allocated device tensor, writing only the shards mapped to cores in :attr:`logical_core_filter`.
 

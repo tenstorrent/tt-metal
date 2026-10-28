@@ -316,6 +316,14 @@ class EngramChunkInputs:
         mask = None if self.mask is None else ttnn.to_device(self.mask, mesh_device)
         return EngramChunkInputs(ttnn.to_device(self.lookup, mesh_device), mask)
 
+    def copy_pairs(self, buffers: "EngramChunkInputs") -> list[tuple[ttnn.Tensor, ttnn.Tensor]]:
+        """The (host, device) pairs ``copy_into`` would copy, for a batched upload."""
+        assert self.mask is None or buffers.mask is not None, "the buffers were allocated without a token mask"
+        pairs = [(self.lookup, buffers.lookup)]
+        if self.mask is not None:
+            pairs.append((self.mask, buffers.mask))
+        return pairs
+
     def copy_into(self, buffers: "EngramChunkInputs") -> "EngramChunkInputs":
         """Write these host inputs into device ``buffers`` of the same shapes (fixed device addresses, as a traced
         forward reads them) and return the device inputs of this chunk (no mask where these have none)."""

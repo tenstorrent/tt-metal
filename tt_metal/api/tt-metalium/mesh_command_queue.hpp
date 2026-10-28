@@ -102,6 +102,19 @@ public:
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         const std::vector<ShardDataTransfer>& shard_data_transfers,
         bool blocking) = 0;
+    // A batch of whole-tensor writes dispatched in one round: one task per device that writes every shard of
+    // every buffer landing on it, one wait. The per-device dispatch workers sleep between tasks and each
+    // enqueue_write wakes all of them, so N writes after a long device wait cost N wake-ups of the slowest worker
+    // (2 to 3 ms a decode step on a 32-chip mesh); a batch pays one. The default dispatches the writes one by one.
+    struct BatchedWrite {
+        std::shared_ptr<MeshBuffer> mesh_buffer;
+        const DistributedHostBuffer* host_buffer = nullptr;
+    };
+    virtual void enqueue_write_batch(const std::vector<BatchedWrite>& writes, bool blocking) {
+        for (const auto& w : writes) {
+            this->enqueue_write(w.mesh_buffer, *w.host_buffer, blocking);
+        }
+    }
 
     // MeshBuffer Read APIs
     virtual void enqueue_read_mesh_buffer(
@@ -125,6 +138,10 @@ public:
     tt::tt_metal::MeshTensor enqueue_write_tensor(
         const tt::tt_metal::HostTensor& host_tensor, const tt::tt_metal::MemoryConfig& memory_config);
     void enqueue_write_tensor(const tt::tt_metal::HostTensor& host_tensor, tt::tt_metal::MeshTensor& device_tensor);
+    // Several host tensors into their device tensors with one dispatch round (enqueue_write_batch); every pair
+    // as enqueue_write_tensor would write it.
+    void enqueue_write_tensors(
+        const std::vector<std::pair<const tt::tt_metal::HostTensor*, tt::tt_metal::MeshTensor*>>& pairs);
 
     virtual MeshEvent enqueue_record_event(
         ttsl::Span<const SubDeviceId> sub_device_ids = {},

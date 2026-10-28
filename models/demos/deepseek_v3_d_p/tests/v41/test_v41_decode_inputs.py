@@ -3,9 +3,11 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """The batched decode step's packed host inputs (``V41_DECODE_HOST_INPUTS=packed``): the RoPE
-rows from host tables equal ``cos_sin`` at the same positions bit for bit; ``StepPacker.pack`` + ``unpack`` on the
+rows from host tables equal ``cos_sin`` at the same positions bit for bit; ``StepPacker.pack`` + ``unpack`` on
+the
 mesh gives every chip the tensors the per-input path gave it (shapes, dtypes, bits); an Engram layer's packed
-shards with ``live_rows`` equal the full path's shards on the chips that hold a live row and the zero shard on the
+shards with ``live_rows`` equal the full path's shards on the chips that hold a live row and the zero shard on
+the
 others. No weights; ~20 s on the Galaxy."""
 
 import pytest
@@ -61,7 +63,8 @@ def _chips(t) -> list[torch.Tensor]:
 @pytest.mark.parametrize("mode", ["packed", "one"])
 @pytest.mark.parametrize("mesh_device, device_params", galaxy_meshes(), indirect=True)
 def test_v41_step_packer(mesh_device, device_params, mode):
-    """pack -> upload -> unpack on the mesh against the per-input path (``from_torch`` of each value); ``mode``
+    """pack -> upload -> unpack on the mesh against the per-input path (``from_torch`` of each value);
+    ``mode``
     ``packed`` (the three or four host tensors) or ``one`` (one uint32 tensor with the bf16
     rows as fp32 bit patterns, bitcast and tilized on device). A second pack of other values
     into the same packer must read back those values (the host rows are reused)."""
@@ -87,7 +90,8 @@ def test_v41_step_packer(mesh_device, device_params, mode):
     visible["visible2"] = (visible["visible1"] + 1) // 2
 
     packer = StepPacker(pool, sp, mode)
-    # the first pack holds other values (its upload allocates the buffers); the second, of the values above, must
+    # the first pack holds other values (its upload allocates the buffers); the second, of the values above,
+    # must
     # land in the same rows and columns (the capture reads fixed slices) and replace the first's
     other_ints = {k: v + 1 for k, v in ints.items()}
     other_rope = {k: tuple(t + 1 for t in v) for k, v in rope.items()}
@@ -139,6 +143,75 @@ def test_v41_step_packer(mesh_device, device_params, mode):
     assert tuple(token.shape) == (1, 1, ROWS) and torch.equal(
         _chips(token)[tp].view(-1).to(torch.int64), ints["token"][1].to(torch.int64)
     )
+
+
+@pytest.mark.parametrize("mesh_device, device_params", galaxy_meshes(), indirect=True)
+def test_v41_copy_batch(mesh_device, device_params):
+    """``ttnn.copy_host_to_device_tensors`` (the step's copies in one dispatch round) writes
+    every tensor of the batch as ``copy_host_to_device_tensor`` does, bit for bit on every chip, for the
+    step's three
+    shapes (the one-page packed row per rank replicated over TP, two Engram lookups of one real shard among
+    zero
+    shards); a second batch of other values replaces the first's; and after a 50 ms host sleep (the workers
+    asleep as
+    after the step's device wait) the batch's wall against the three single copies' (printed, not
+    asserted)."""
+    import time
+
+    pool = _Pool(mesh_device)
+    sp, tp = pool.sp, pool.tp
+    chips = sp * tp
+    g = torch.Generator().manual_seed(128)
+
+    def one_row(seed):
+        host = torch.randint(0, 2**31 - 1, (sp, 1, 1, 12800), generator=g, dtype=torch.int32) + seed
+        parts = []
+        for r in range(sp):
+            shard = ttnn.Tensor(host[r : r + 1], ttnn.uint32)
+            parts.extend([shard] * tp)
+        return ttnn.from_host_shards(parts, ttnn.MeshShape(sp, tp))
+
+    zero = ttnn.from_torch(torch.zeros(1, 1, 192, PACKED_WIDTH, dtype=torch.uint16), dtype=ttnn.uint16)
+
+    def engram(seed, chip):
+        rows = torch.randint(0, 60000, (1, 1, 192, PACKED_WIDTH), generator=g, dtype=torch.int32) + seed
+        parts = [zero] * chips
+        parts[chip] = ttnn.Tensor(rows.to(torch.uint16), ttnn.uint16)
+        return ttnn.from_host_shards(parts, ttnn.MeshShape(sp, tp))
+
+    def batch(seed):
+        return [one_row(seed), engram(seed, 5), engram(seed, 17)]
+
+    first = batch(0)
+    devs = [ttnn.to_device(h, mesh_device) for h in first]
+    second = batch(1000)
+    ttnn.copy_host_to_device_tensors(second, devs)
+    for i, (h, d) in enumerate(zip(second, devs)):
+        assert d.dtype == h.dtype and d.layout == h.layout and tuple(d.shape) == tuple(h.shape), i
+        for chip, (mine, theirs) in enumerate(zip(_chips(d), _chips(h))):
+            assert torch.equal(mine, theirs), (i, chip)
+    # the single path on a third batch into the same buffers: the same bits as the batch of the same values
+    third = batch(2000)
+    ref = [ttnn.to_device(h, mesh_device) for h in third]
+    ttnn.copy_host_to_device_tensors(third, devs)
+    for i, (d, r) in enumerate(zip(devs, ref)):
+        for chip, (mine, theirs) in enumerate(zip(_chips(d), _chips(r))):
+            assert torch.equal(mine, theirs), (i, chip)
+    # the timing: after a host sleep (the workers blocked on their futex) the batch against three single
+    # copies
+    singles, batches = [], []
+    for trial in range(10):
+        time.sleep(0.05)
+        t0 = time.perf_counter()
+        for h, d in zip(second, devs):
+            ttnn.copy_host_to_device_tensor(h, d)
+        singles.append(1e3 * (time.perf_counter() - t0))
+        time.sleep(0.05)
+        t0 = time.perf_counter()
+        ttnn.copy_host_to_device_tensors(third, devs)
+        batches.append(1e3 * (time.perf_counter() - t0))
+    ttnn.synchronize_device(mesh_device)
+    print(f"copy_batch: three single copies after a sleep {sorted(singles)} ms; one batch {sorted(batches)} ms")
 
 
 @pytest.mark.parametrize("mesh_device, device_params", galaxy_meshes(), indirect=True)

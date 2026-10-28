@@ -363,6 +363,24 @@ void py_module(nb::module_& mod) {
         )doc");
 
     mod.def(
+        "copy_host_to_device_tensors",
+        [](const std::vector<ttnn::Tensor>& host_tensors,
+           std::vector<ttnn::Tensor>& device_tensors,
+           const std::optional<QueueId>& cq_id) { copy_to_device_batch(host_tensors, device_tensors, cq_id); },
+        nb::arg("host_tensors"),
+        nb::arg("device_tensors"),
+        nb::arg("cq_id") = nb::none(),
+        R"doc(
+        Copies several host tensors into their device tensors with one dispatch round (one task per device
+        writing every shard that lands on it, one wait) instead of one round per tensor. Uniform writes only.
+
+        Args:
+            host_tensors (list[ttnn.Tensor]): the tensors to be copied from host to device.
+            device_tensors (list[ttnn.Tensor]): the tensors to be copied to, in the same order.
+            cq_id (ttnn.QueueId, optional): The queue id to use. Defaults to `None`.
+        )doc");
+
+    mod.def(
         "copy_host_to_device_tensor_partial",
         [](const ttnn::Tensor& host_tensor,
            ttnn::Tensor& device_tensor,

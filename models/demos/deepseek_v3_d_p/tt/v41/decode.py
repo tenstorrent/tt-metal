@@ -149,6 +149,10 @@ class TtV41Decoder:
         # ``stage.probe``: the served step's first host-to-device copy after the replay costs 1.7 to 2.0 ms against
         # 0.1 in isolation; the probe says whether the cost is the first copy's whatever its size
         self.stage_probe = os.environ.get("V41_DECODE_STAGE_PROBE", "0")  # "1": before the staging; "pre": after
+        # V41_DECODE_STAGE_BATCH=1: the step's host-to-device copies (the packed inputs, the
+        # Engram rows) issued as one ``ttnn.copy_host_to_device_tensors`` (one dispatch round: one wake-up of the
+        # 32 per-device workers instead of one a copy)
+        self.stage_batch = os.environ.get("V41_DECODE_STAGE_BATCH", "0") == "1"
         self.probe: tuple | None = None  # the replay's issue, before its sync (``issue_s`` then carries it)
 
     # --- construction ----------------------------------------------------------------------------------
@@ -252,6 +256,24 @@ class TtV41Decoder:
         if self.stage_probe == "1":
             self.probe_copy()
             tick("probe")
+        if self.stage_batch:
+            hosts, devs = [], []
+            for key, value in inputs.items():
+                if key == "engram":
+                    for l, e in value.items():
+                        for h, d in e.copy_pairs(self.buffers[key][l]):
+                            hosts.append(h)
+                            devs.append(d)
+                elif isinstance(value, tuple):
+                    for host, dev in zip(value, self.buffers[key]):
+                        hosts.append(host)
+                        devs.append(dev)
+                else:
+                    hosts.append(value)
+                    devs.append(self.buffers[key])
+            ttnn.copy_host_to_device_tensors(hosts, devs)
+            tick("batch")
+            return
         for key, value in inputs.items():
             if key == "engram":
                 for l, e in value.items():

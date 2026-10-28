@@ -216,6 +216,38 @@ void distributed::MeshCommandQueue::enqueue_write_tensor(const HostTensor& host_
         get_tensor_topology(host_tensor));
 }
 
+void distributed::MeshCommandQueue::enqueue_write_tensors(
+    const std::vector<std::pair<const HostTensor*, MeshTensor*>>& pairs) {
+    std::vector<BatchedWrite> writes;
+    writes.reserve(pairs.size());
+    for (const auto& [host_tensor, device_tensor] : pairs) {
+        TT_FATAL(
+            is_uniform_write(*host_tensor, device_tensor->device()),
+            "Incompatible shape between source host tensor and target MeshDevice. For non-uniform transfers, use the "
+            "non-uniform data movement APIs.");
+        TT_FATAL(host_tensor->logical_shape() == device_tensor->logical_shape(), "Host tensor has different shape");
+        TT_FATAL(host_tensor->dtype() == device_tensor->dtype(), "Host tensor has different dtype");
+        TT_FATAL(
+            host_tensor->tensor_spec().page_config() == device_tensor->tensor_spec().page_config(),
+            "Host tensor has different page config");
+        writes.push_back(BatchedWrite{device_tensor->impl().raw_mesh_buffer(), &host_tensor->buffer()});
+    }
+    enqueue_write_batch(writes, /*blocking=*/false);
+    for (size_t i = 0; i < pairs.size(); i++) {
+        const auto& [host_tensor, device_tensor] = pairs[i];
+        *device_tensor = mesh_tensor_from_buffer_with_topology(
+            std::move(*writes[i].mesh_buffer),
+            TensorSpec(
+                host_tensor->tensor_spec().logical_shape(),
+                TensorLayout(
+                    host_tensor->tensor_spec().tensor_layout().get_data_type(),
+                    host_tensor->tensor_spec().tensor_layout().get_page_config(),
+                    device_tensor->memory_config(),
+                    host_tensor->tensor_spec().tensor_layout().get_alignment())),
+            get_tensor_topology(*host_tensor));
+    }
+}
+
 // ======================================================================================
 //                                  .to_layout()
 // ======================================================================================

@@ -121,6 +121,7 @@ public:
         const std::shared_ptr<MeshBuffer>& mesh_buffer,
         const DistributedHostBuffer& host_buffer,
         bool blocking) override;
+    void enqueue_write_batch(const std::vector<BatchedWrite>& writes, bool blocking) override;
 
     // MeshBuffer Read APIs
     void enqueue_read_mesh_buffer(void* host_data, const std::shared_ptr<MeshBuffer>& buffer, bool blocking) override;

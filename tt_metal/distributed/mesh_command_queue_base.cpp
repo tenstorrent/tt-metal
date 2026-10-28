@@ -297,6 +297,68 @@ void MeshCommandQueueBase::enqueue_write(
     this->enqueue_write_with_core_filter(*mesh_buffer, host_buffer, blocking, nullptr);
 }
 
+void MeshCommandQueueBase::enqueue_write_batch(const std::vector<BatchedWrite>& writes, bool blocking) {
+    auto lock = lock_api_function_();
+    // every (buffer, shard) of the batch, grouped by the device that receives it
+    struct Item {
+        MeshBuffer* buffer;
+        ShardDataTransfer transfer;
+    };
+    std::unordered_map<uint32_t, std::vector<Item>> per_device;
+    std::vector<uint32_t> device_order;
+    for (const auto& w : writes) {
+        TT_FATAL(w.mesh_buffer != nullptr && w.host_buffer != nullptr, "enqueue_write_batch: a null write");
+        for (const auto& coord : w.host_buffer->shard_coords()) {
+            auto buf = w.host_buffer->get_shard(coord);
+            if (!buf.has_value()) {
+                continue;
+            }
+            MeshCoordinate shard_coord(coord);
+            if (!mesh_device_->impl().is_local(shard_coord)) {
+                continue;
+            }
+            auto transfer = ShardDataTransfer{shard_coord}
+                                .host_data(buf->view_bytes().data())
+                                .region(BufferRegion(0, buf->view_bytes().size()));
+            experimental::ShardDataTransferSetPinnedMemory(transfer, experimental::HostBufferGetPinnedMemory(*buf));
+            uint32_t device_id = mesh_device_->impl().get_device(shard_coord)->id();
+            auto [it, inserted] = per_device.try_emplace(device_id);
+            if (inserted) {
+                device_order.push_back(device_id);
+            }
+            it->second.push_back(Item{w.mesh_buffer.get(), std::move(transfer)});
+        }
+    }
+    std::atomic<bool> any_pinned_used = false;
+    for (uint32_t device_id : device_order) {
+        const auto& items = per_device.at(device_id);
+        dispatch_thread_pool_->enqueue(
+            [this, &items, &any_pinned_used]() {
+                for (const auto& item : items) {
+                    bool pinned_used = this->write_shard_to_device(
+                        *item.buffer,
+                        item.transfer.shard_coord(),
+                        item.transfer.host_data(),
+                        item.transfer.region(),
+                        {},
+                        experimental::ShardDataTransferGetPinnedMemory(item.transfer),
+                        nullptr);
+                    if (pinned_used) {
+                        any_pinned_used.store(true, std::memory_order_relaxed);
+                    }
+                }
+            },
+            device_id);
+    }
+    dispatch_thread_pool_->wait();
+    if (any_pinned_used.load(std::memory_order_relaxed)) {
+        this->invalidate_prefetcher_cache_after_pinned_write();
+    }
+    if (blocking) {
+        this->finish_nolock();
+    }
+}
+
 void MeshCommandQueueBase::enqueue_write_with_core_filter(
     MeshBuffer& mesh_buffer,
     const DistributedHostBuffer& host_buffer,

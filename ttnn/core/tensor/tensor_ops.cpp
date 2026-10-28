@@ -187,6 +187,33 @@ void copy_to_device(const Tensor& host_tensor, Tensor& device_tensor, std::optio
     GraphTracker::instance().track_function_end(device_tensor);
 }
 
+void copy_to_device_batch(
+    const std::vector<Tensor>& host_tensors, std::vector<Tensor>& device_tensors, std::optional<QueueId> cq_id) {
+    TT_FATAL(
+        host_tensors.size() == device_tensors.size(),
+        "copy_to_device_batch: {} host tensors for {} device tensors",
+        host_tensors.size(),
+        device_tensors.size());
+    if (host_tensors.empty()) {
+        return;
+    }
+    auto* mesh_device = device_tensors[0].device();
+    auto& cq = mesh_device->mesh_command_queue(raw_optional(cq_id));
+    std::vector<std::pair<const HostTensor*, MeshTensor*>> pairs;
+    pairs.reserve(host_tensors.size());
+    for (size_t i = 0; i < host_tensors.size(); i++) {
+        TT_FATAL(device_tensors[i].device() == mesh_device, "copy_to_device_batch: every device tensor on one mesh");
+        TT_FATAL(
+            is_uniform_write(host_tensors[i].host_tensor(), *mesh_device),
+            "copy_to_device_batch: uniform writes only (every shard populated)");
+        pairs.emplace_back(&host_tensors[i].host_tensor(), &device_tensors[i].device_storage().get_mesh_tensor());
+    }
+    cq.enqueue_write_tensors(pairs);
+    for (auto& t : device_tensors) {
+        t = ttnn::set_tensor_id(t);
+    }
+}
+
 void copy_to_device(
     tt::tt_metal::distributed::MeshCommandQueue& queue,
     const std::byte* src,
