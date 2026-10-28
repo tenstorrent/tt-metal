@@ -313,3 +313,15 @@ def test_the_store_finds_the_same_test_filed_by_another_task(tmp_path):
     res.mkdir()
     st.restore("P.22#swa", "SID", rec, res, "P.22")
     assert list(res.iterdir())
+
+
+def test_a_model_switch_in_the_environment_changes_the_stamp():
+    """F220: DS41_ENGRAM_ROWS=bfp8 reused the bf16 ladder's PASS ("same code"): a model switch (a prefix a model's
+    tt/settings.py declares) is part of the unit's environment key; without one set the key is as before."""
+    from models.demos.common.bringup.core import stamps
+
+    assert "DS41_" in stamps.settings_prefixes()
+    base = {"TT_METAL_HOME": "/x", "BRINGUP_RUNG": "s4096", "HOME": "/h"}
+    assert stamps.env_key(base) == stamps.env_key(dict(base, UNRELATED_VAR="1"))
+    assert stamps.env_key(base) != stamps.env_key(dict(base, DS41_ENGRAM_ROWS="bfp8"))
+    assert stamps.env_key(dict(base, DS41_ENGRAM_ROWS="bf16")) != stamps.env_key(dict(base, DS41_ENGRAM_ROWS="bfp8"))
