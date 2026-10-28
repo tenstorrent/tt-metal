@@ -68,9 +68,6 @@ constexpr auto kPackedPartialsOutputCbIndex = tt::CBIndex::c_22;
 
 constexpr uint32_t kNumOneTile = 1U;
 
-const std::string kComputeGradInputDefineKey = "COMPUTE_GRAD_INPUT";
-const std::string kComputePackedPartialsDefineKey = "COMPUTE_PACKED_PARTIALS";
-
 struct PolyNormBackwardKernels {
     tt::tt_metal::KernelHandle reader{};
     tt::tt_metal::KernelHandle dL_dx_writer{};
@@ -201,24 +198,16 @@ PolyNorm3BackwardProgramFactory::cached_program_t PolyNorm3BackwardProgramFactor
         "Weight buffer must be in DRAM. Weight buffer of type {}",
         enchantum::to_string(weight_buffer->buffer_type()));
 
-    // An output is nullopt when it is not requested. All CBs are still created: they are a few tiles each, and the
-    // compute kernel's startup refers to cb_output.
-    tt::tt_metal::Buffer* dL_dx_output_buffer = nullptr;
-    if (args.compute_grad_input) {
-        dL_dx_output_buffer = output[0].value().buffer();
-        TT_FATAL(
-            dL_dx_output_buffer->buffer_type() == ttnn::BufferType::DRAM,
-            "dL_dx output buffer must be in DRAM. Output buffer of type {}",
-            enchantum::to_string(dL_dx_output_buffer->buffer_type()));
-    }
-    tt::tt_metal::Buffer* packed_partials_output_buffer = nullptr;
-    if (args.compute_packed_partials) {
-        packed_partials_output_buffer = output[1].value().buffer();
-        TT_FATAL(
-            packed_partials_output_buffer->buffer_type() == ttnn::BufferType::DRAM,
-            "Packed partials output buffer must be in DRAM. Output buffer of type {}",
-            enchantum::to_string(packed_partials_output_buffer->buffer_type()));
-    }
+    auto* dL_dx_output_buffer = output[0].buffer();
+    TT_FATAL(
+        dL_dx_output_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        "dL_dx output buffer must be in DRAM. Output buffer of type {}",
+        enchantum::to_string(dL_dx_output_buffer->buffer_type()));
+    auto* packed_partials_output_buffer = output[1].buffer();
+    TT_FATAL(
+        packed_partials_output_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        "Packed partials output buffer must be in DRAM. Output buffer of type {}",
+        enchantum::to_string(packed_partials_output_buffer->buffer_type()));
 
     PolyNormBackwardKernels kernels;
     std::vector<uint32_t> reader_compile_time_args{block_size, Wt};
@@ -228,24 +217,12 @@ PolyNorm3BackwardProgramFactory::cached_program_t PolyNorm3BackwardProgramFactor
     std::map<std::string, std::string> defines;
     defines["REDUCE_OP"] = "PoolType::SUM";
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
-    if (args.compute_grad_input) {
-        defines[kComputeGradInputDefineKey] = "1";
-    }
-    if (args.compute_packed_partials) {
-        defines[kComputePackedPartialsDefineKey] = "1";
-    }
 
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_time_args, defines, kReaderKernelPath);
 
     std::vector<uint32_t> dL_dx_writer_compile_time_args{block_size, Wt, packed_partials_tiles_per_row};
-    // A skipped output gets placeholder args so the writer's accessor offsets do not depend on the flags.
-    for (auto* buffer : {dL_dx_output_buffer, packed_partials_output_buffer}) {
-        if (buffer != nullptr) {
-            tt::tt_metal::TensorAccessorArgs(buffer).append_to(dL_dx_writer_compile_time_args);
-        } else {
-            tt::tt_metal::TensorAccessorArgs().append_to(dL_dx_writer_compile_time_args);
-        }
-    }
+    tt::tt_metal::TensorAccessorArgs(dL_dx_output_buffer).append_to(dL_dx_writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(packed_partials_output_buffer).append_to(dL_dx_writer_compile_time_args);
     kernels.dL_dx_writer =
         create_writer_kernel(program, all_cores, dL_dx_writer_compile_time_args, defines, kDLdxWriterKernelPath);
 
@@ -301,10 +278,7 @@ PolyNorm3BackwardProgramFactory::cached_program_t PolyNorm3BackwardProgramFactor
                 program,
                 kernels.dL_dx_writer,
                 core,
-                {dL_dx_output_buffer != nullptr ? dL_dx_output_buffer->address() : 0U,
-                 packed_partials_output_buffer != nullptr ? packed_partials_output_buffer->address() : 0U,
-                 num_rows,
-                 start_row});
+                {dL_dx_output_buffer->address(), packed_partials_output_buffer->address(), num_rows, start_row});
             SetRuntimeArgs(
                 program, in_group_1 ? kernels.compute_group_1 : kernels.compute_group_2, core, {Wt, eps_fp32_bits});
         });
@@ -334,11 +308,8 @@ void PolyNorm3BackwardProgramFactory::override_runtime_arguments(
     auto* input_buffer = tensor_args.input.buffer();
     auto* dL_dout_buffer = tensor_args.dL_dout.buffer();
     auto* weight_buffer = tensor_args.weight.buffer();
-    // An output is nullopt when it is not requested.
-    auto* dL_dx_output_buffer =
-        operation_attributes.compute_grad_input ? tensor_return_value[0].value().buffer() : nullptr;
-    auto* packed_partials_output_buffer =
-        operation_attributes.compute_packed_partials ? tensor_return_value[1].value().buffer() : nullptr;
+    auto* dL_dx_output_buffer = tensor_return_value[0].buffer();
+    auto* packed_partials_output_buffer = tensor_return_value[1].buffer();
 
     const uint32_t scaler_fp32_bits =
         std::bit_cast<uint32_t>(1.0F / static_cast<float>(tensor_args.input.logical_shape()[-1]));
@@ -356,12 +327,8 @@ void PolyNorm3BackwardProgramFactory::override_runtime_arguments(
         rr[6] = eps_fp32_bits;
 
         auto& dL_dx_wr = dL_dx_writer_runtime_args[core.x][core.y];
-        if (dL_dx_output_buffer != nullptr) {
-            dL_dx_wr[kWriterOutputBufferIdx] = dL_dx_output_buffer->address();
-        }
-        if (packed_partials_output_buffer != nullptr) {
-            dL_dx_wr[1] = packed_partials_output_buffer->address();
-        }
+        dL_dx_wr[kWriterOutputBufferIdx] = dL_dx_output_buffer->address();
+        dL_dx_wr[1] = packed_partials_output_buffer->address();
 
         // Update compute kernel eps (runtime arg index 1).
         auto compute_kernel =

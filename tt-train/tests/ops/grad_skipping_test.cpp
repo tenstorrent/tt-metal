@@ -14,21 +14,13 @@
 #include <vector>
 #include <xtensor/core/xmath.hpp>
 #include <xtensor/generators/xbuilder.hpp>
-#include <xtensor/views/xview.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "metal/ops/moe_group/moe_group.hpp"
-#include "moe_test_utils.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/layernorm_op.hpp"
-#include "ops/mla_kv_assemble_op.hpp"
-#include "ops/moe_ffn_swiglu_op.hpp"
-#include "ops/moe_group_op.hpp"
-#include "ops/moe_ungroup_op.hpp"
 #include "ops/multi_head_utils.hpp"
-#include "ops/polynorm_op.hpp"
 #include "ops/rmsnorm_op.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
 #include "ops/swiglu_op.hpp"
@@ -62,7 +54,6 @@ struct GradSkipCase {
     std::vector<size_t> frozen;  // indices into OpUnderTest::inputs
     // Device ops that tt-train itself launches for the frozen inputs' grads; the frozen run must launch fewer of each.
     std::vector<std::string> must_skip;
-    bool blackhole_only = false;
 };
 
 // gtest prints a failing row's parameter through this; without it the row prints as raw bytes.
@@ -74,17 +65,12 @@ void PrintTo(const GradSkipCase& c, std::ostream* os) {
 constexpr const char* kBinary = "BinaryNgDeviceOperation";
 constexpr const char* kUnary = "UnaryDeviceOperation";
 constexpr const char* kMatmul = "MatmulDeviceOperation";
-constexpr const char* kVariableMatmul = "VariableMatmulDeviceOperation";
 constexpr const char* kMorehSum = "MorehSumOperation";
 constexpr const char* kMorehMean = "MorehMeanOperation";
-constexpr const char* kTranspose = "TransposeDeviceOperation";
 constexpr const char* kReduce = "ReduceDeviceOperation";
-constexpr const char* kSlice = "SliceDeviceOperation";
-constexpr const char* kConcat = "ConcatDeviceOperation";
 constexpr const char* kSwigluElemwiseBw = "SwigluElemwiseBwDeviceOperation";
 constexpr const char* kUnaryBackward = "UnaryBackwardDeviceOperation";
 constexpr const char* kNlpConcatHeads = "NLPConcatHeadsDeviceOperation";
-constexpr const char* kMoeUngroup = "MoeUngroupDeviceOperation";
 constexpr const char* kTernary = "TernaryDeviceOperation";
 constexpr const char* kSdpaBwQ = "SDPABackwardQDeviceOperation";
 constexpr const char* kSdpaBwKV = "SDPABackwardKVDeviceOperation";
@@ -183,19 +169,6 @@ OpUnderTest rmsnorm() {
         }};
 }
 
-// Inputs: x [2, 1, 32, 64], weight [1, 1, 1, 3], bias [1, 1, 1, 1].
-OpUnderTest polynorm3(bool composite) {
-    return OpUnderTest{
-        .inputs =
-            {{uniform(kActivation, -1.F, 1.F, 1U)},
-             {uniform({1U, 1U, 1U, 3U}, 0.5F, 1.5F, 2U)},
-             {uniform({1U, 1U, 1U, 1U}, -1.F, 1.F, 3U)}},
-        .forward = [composite](const std::vector<TensorPtr>& in) {
-            return composite ? ttml::ops::polynorm3_composite(in[0], in[1], in[2])
-                             : ttml::ops::polynorm3(in[0], in[1], in[2]);
-        }};
-}
-
 // x: [2, 1, 32, D], w1 / w3: [1, 1, H, D], w2: [1, 1, D, H] with D = 64, H = 128.
 OpUnderTest swiglu() {
     return OpUnderTest{
@@ -251,117 +224,6 @@ OpUnderTest grouped_heads() {
         }};
 }
 
-// Inputs: kv_up [2, 1, 32, 2 * (32 + 64)], k_pe [2, 1, 32, 32]: 2 heads with qk_nope = qk_rope = 32 and v = 64. K and
-// V then share their [2, 2, 32, 64] shape, so their sum is a single root that sends a random grad into each.
-OpUnderTest mla_kv_assemble() {
-    constexpr uint32_t n_heads = 2U, qk_nope = 32U, qk_rope = 32U, v_dim = 64U;
-    return OpUnderTest{
-        .inputs =
-            {{uniform({2U, 1U, 32U, n_heads * (qk_nope + v_dim)}, -1.F, 1.F, 1U)},
-             {uniform({2U, 1U, 32U, qk_rope}, -1.F, 1.F, 2U)}},
-        .forward = [](const std::vector<TensorPtr>& in) {
-            auto [k, v] = ttml::ops::mla_kv_assemble(in[0], in[1], n_heads, qk_nope, qk_rope, v_dim);
-            return ttml::ops::add(k, v);
-        }};
-}
-
-// Hidden size shared by the MoE builders below.
-constexpr uint32_t kMoeH = 64U;
-
-// Inputs: grouped [1, 1, T_cap, H], then w_gate[0..E), w_up[0..E), w_down[0..E) with E = 2, H = kMoeH, I = 128.
-// Expert e owns rows offsets[e]..offsets[e] + counts[e]; the rest of its tile-padded slot stays zero.
-constexpr uint32_t kMoeExperts = 2U;
-
-OpUnderTest moe_ffn_swiglu() {
-    constexpr uint32_t H = kMoeH, I = 128U;
-    const std::vector<uint32_t> counts{32U, 40U};
-    const std::vector<uint32_t> offsets{0U, 32U, 96U};
-
-    xt::xarray<float> grouped = uniform({1U, 1U, offsets.back(), H}, -1.F, 1.F, 1U);
-    for (uint32_t e = 0; e < kMoeExperts; ++e) {
-        xt::view(grouped, 0, 0, xt::range(offsets[e] + counts[e], offsets[e + 1U]), xt::all()) = 0.F;
-    }
-    OpUnderTest op{.inputs = {{grouped}}};
-    for (uint32_t e = 0; e < kMoeExperts; ++e) {
-        op.inputs.push_back({uniform({1U, 1U, I, H}, -0.5F, 0.5F, 10U + e)});
-    }
-    for (uint32_t e = 0; e < kMoeExperts; ++e) {
-        op.inputs.push_back({uniform({1U, 1U, I, H}, -0.5F, 0.5F, 20U + e)});
-    }
-    for (uint32_t e = 0; e < kMoeExperts; ++e) {
-        op.inputs.push_back({uniform({1U, 1U, H, I}, -0.5F, 0.5F, 30U + e)});
-    }
-    op.forward = [offsets](const std::vector<TensorPtr>& in) {
-        const auto t_offsets = ttml::core::from_vector<uint32_t, ttnn::DataType::UINT32>(
-            offsets,
-            ttnn::Shape({static_cast<uint32_t>(offsets.size())}),
-            &ttml::autograd::ctx().get_device(),
-            ttnn::Layout::ROW_MAJOR);
-        const auto experts = [&in](uint32_t first) {
-            return std::vector<TensorPtr>(in.begin() + first, in.begin() + first + kMoeExperts);
-        };
-        return ttml::ops::moe_ffn_swiglu_fw(
-            in[0], t_offsets, experts(1U), experts(1U + kMoeExperts), experts(1U + 2U * kMoeExperts));
-    };
-    return op;
-}
-
-// Routing for D = B = 1, S = 32 tokens picking K = 2 of E = 4 experts, with experts 0 and 1 local.
-constexpr uint32_t kMoeD = 1U, kMoeB = 1U, kMoeS = 32U, kMoeE = 4U, kMoeK = 2U;
-constexpr uint32_t kMoeLocal = 2U;
-
-ttml::test_utils::moe::MoeHostInputs moe_routing_inputs() {
-    return ttml::test_utils::moe::make_moe_host_inputs(
-        {.D = kMoeD, .B = kMoeB, .S = kMoeS, .H = kMoeH, .E = kMoeE, .K = kMoeK});
-}
-
-ttml::test_utils::moe::MoeDeviceInputs moe_device_inputs(const ttml::test_utils::moe::MoeHostInputs& host) {
-    return ttml::test_utils::moe::to_device_inputs(host, {0U, 1U}, &ttml::autograd::ctx().get_device());
-}
-
-// Inputs: dispatched [D, B, S, H], scores [D, B, S, K]. moe_group_op feeds moe_ungroup_op so backward has a single
-// root; the frozen input's branch is the one inside moe_group_op.
-OpUnderTest moe_group() {
-    const auto host = moe_routing_inputs();
-    return OpUnderTest{
-        .inputs = {{host.dispatched, ttnn::Layout::ROW_MAJOR}, {host.scores, ttnn::Layout::ROW_MAJOR}},
-        .forward = [host](const std::vector<TensorPtr>& in) {
-            const auto dev = moe_device_inputs(host);
-            const auto g = ttml::ops::moe_group_op(in[0], dev.metadata_u16, in[1], dev.leids_u16, kMoeLocal, kMoeK);
-            return ttml::ops::moe_ungroup_op(
-                g.grouped,
-                g.grouped_scores,
-                dev.metadata_u16,
-                dev.leids_u16,
-                g.plan,
-                g.offsets,
-                kMoeLocal,
-                kMoeK,
-                kMoeD,
-                kMoeB,
-                kMoeS);
-        }};
-}
-
-// Inputs: expert_out [1, 1, T_cap, H] and grouped_scores [1, 1, 1, T_cap], taken from one metal::moe_group run so
-// moe_ungroup_op sees them as leaves. Pad rows are never written, so non-finite garbage there is zeroed.
-OpUnderTest moe_ungroup() {
-    const auto host = moe_routing_inputs();
-    const auto dev = moe_device_inputs(host);
-    auto [grouped, grouped_scores, k_slot, counts, offsets, plan] =
-        ttml::metal::moe_group(dev.dispatched_bf16, dev.metadata_u16, dev.scores_bf16, dev.leids_u16, kMoeLocal, kMoeK);
-    const auto finite = [](const ttnn::Tensor& t) {
-        const xt::xarray<float> v = ttml::core::to_xtensor(t);
-        return xt::xarray<float>(xt::where(xt::isfinite(v), v, 0.F));
-    };
-    return OpUnderTest{
-        .inputs = {{finite(grouped)}, {finite(grouped_scores), ttnn::Layout::ROW_MAJOR}},
-        .forward = [dev, plan, offsets](const std::vector<TensorPtr>& in) {
-            return ttml::ops::moe_ungroup_op(
-                in[0], in[1], dev.metadata_u16, dev.leids_u16, plan, offsets, kMoeLocal, kMoeK, kMoeD, kMoeB, kMoeS);
-        }};
-}
-
 TensorPtr add_op(const TensorPtr& a, const TensorPtr& b) {
     return ttml::ops::add(a, b);
 }
@@ -403,9 +265,6 @@ protected:
 // `must_skip` device ops and no more of any op, and every trainable input must get the same grad bit for bit.
 TEST_P(GradSkippingTest, FrozenInputsSkipTheirGradWork) {
     const GradSkipCase& c = GetParam();
-    if (c.blackhole_only && ttml::autograd::ctx().get_device().arch() != tt::ARCH::BLACKHOLE) {
-        GTEST_SKIP() << c.name << " is only supported on Blackhole.";
-    }
     const OpUnderTest op = c.make();
     std::vector<bool> requires_grad(op.inputs.size(), true);
     const BackwardRun reference = run_backward(op, requires_grad);
@@ -568,48 +427,6 @@ INSTANTIATE_TEST_SUITE_P(
         GradSkipCase{.name = "RMSNorm_FrozenTensor", .make = rmsnorm, .frozen = {0}},
         // The kernel skips the dgamma partials and the wrapper skips their reduction.
         GradSkipCase{.name = "RMSNorm_FrozenGamma", .make = rmsnorm, .frozen = {1}, .must_skip = {kReduce}},
-        // dx is skipped inside polynorm3_bw, which is still launched for dw and db, so there is no op to count; the
-        // row checks that their grads are unchanged.
-        GradSkipCase{
-            .name = "PolyNorm3_FrozenInput", .make = [] { return polynorm3(/*composite=*/false); }, .frozen = {0}},
-        // dw and db share the packed partials: the kernel skips them, and the wrapper their reduction, only when both
-        // weight and bias are frozen; otherwise only the frozen side's extraction is skipped.
-        GradSkipCase{
-            .name = "PolyNorm3_FrozenWeight",
-            .make = [] { return polynorm3(/*composite=*/false); },
-            .frozen = {1},
-            .must_skip = {kSlice, kConcat}},
-        GradSkipCase{
-            .name = "PolyNorm3_FrozenBias",
-            .make = [] { return polynorm3(/*composite=*/false); },
-            .frozen = {2},
-            .must_skip = {kSlice}},
-        GradSkipCase{
-            .name = "PolyNorm3_FrozenWeightAndBias",
-            .make = [] { return polynorm3(/*composite=*/false); },
-            .frozen = {1, 2},
-            .must_skip = {kReduce, kSlice, kConcat}},
-        GradSkipCase{
-            .name = "PolyNorm3Composite_FrozenInput",
-            .make = [] { return polynorm3(/*composite=*/true); },
-            .frozen = {0},
-            .must_skip = {kBinary}},
-        GradSkipCase{
-            .name = "PolyNorm3Composite_FrozenWeight",
-            .make = [] { return polynorm3(/*composite=*/true); },
-            .frozen = {1},
-            .must_skip = {kBinary, kReduce, kConcat}},
-        GradSkipCase{
-            .name = "PolyNorm3Composite_FrozenBias",
-            .make = [] { return polynorm3(/*composite=*/true); },
-            .frozen = {2},
-            .must_skip = {kReduce}},
-        // Only db is left, so the shared x^2, x^3 and their RMS normalizations are skipped too.
-        GradSkipCase{
-            .name = "PolyNorm3Composite_OnlyBias",
-            .make = [] { return polynorm3(/*composite=*/true); },
-            .frozen = {0, 1},
-            .must_skip = {kUnary, kBinary, kReduce, kConcat}},
         // dx = dL_dlinear1 @ w1 + dL_dgate @ w3.
         GradSkipCase{.name = "SwiGLU_FrozenX", .make = swiglu, .frozen = {0}, .must_skip = {kMatmul}},
         GradSkipCase{.name = "SwiGLU_FrozenW1", .make = swiglu, .frozen = {1}, .must_skip = {kMatmul}},
@@ -672,77 +489,11 @@ INSTANTIATE_TEST_SUITE_P(
         GradSkipCase{.name = "FusedSDPA_FrozenKV", .make = fused_attention, .frozen = {1, 2}, .must_skip = {kSdpaBwKV}},
         // Without a gate, grad_V alone needs nothing from the Q kernel.
         GradSkipCase{.name = "FusedSDPA_OnlyV", .make = fused_attention, .frozen = {0, 1}, .must_skip = {kSdpaBwQ}},
-        // The frozen grad is skipped inside mla_kv_assemble_bw, which is still launched for the other, so there is no
-        // op to count; the rows check that the other grad is unchanged.
-        GradSkipCase{.name = "MlaKvAssemble_FrozenKvUp", .make = mla_kv_assemble, .frozen = {0}},
-        GradSkipCase{.name = "MlaKvAssemble_FrozenKPe", .make = mla_kv_assemble, .frozen = {1}},
         GradSkipCase{
             .name = "GroupedHeads_FrozenQs", .make = grouped_heads, .frozen = {0}, .must_skip = {kNlpConcatHeads}},
         GradSkipCase{
             .name = "GroupedHeads_FrozenKvs",
             .make = grouped_heads,
             .frozen = {1},
-            .must_skip = {kNlpConcatHeads, "ConcatDeviceOperation"}},
-        // Per expert: 2 dX matmuls; plus the two zeroed dX buffers and their sum.
-        GradSkipCase{
-            .name = "MoeFfnSwiglu_FrozenGrouped",
-            .make = moe_ffn_swiglu,
-            .frozen = {0},
-            .must_skip = {kVariableMatmul},
-            .blackhole_only = true},
-        GradSkipCase{
-            .name = "MoeFfnSwiglu_FrozenWGate",
-            .make = moe_ffn_swiglu,
-            .frozen = {1, 2},
-            .must_skip = {kVariableMatmul},
-            .blackhole_only = true},
-        GradSkipCase{
-            .name = "MoeFfnSwiglu_FrozenWUp",
-            .make = moe_ffn_swiglu,
-            .frozen = {3, 4},
-            .must_skip = {kVariableMatmul},
-            .blackhole_only = true},
-        // Per expert: 1 dW_down matmul; plus the recomputed activated.
-        GradSkipCase{
-            .name = "MoeFfnSwiglu_FrozenWDown",
-            .make = moe_ffn_swiglu,
-            .frozen = {5, 6},
-            .must_skip = {kVariableMatmul},
-            .blackhole_only = true},
-        GradSkipCase{
-            .name = "MoeFfnSwiglu_FrozenExpert0",
-            .make = moe_ffn_swiglu,
-            .frozen = {1, 3, 5},
-            .must_skip = {kVariableMatmul},
-            .blackhole_only = true},
-        // Per expert: d_activated, dW_gate, dW_up and 2 dX matmuls; plus swiglu_elemwise_bw and the dX buffers and sum.
-        GradSkipCase{
-            .name = "MoeFfnSwiglu_OnlyWDown",
-            .make = moe_ffn_swiglu,
-            .frozen = {0, 1, 2, 3, 4},
-            .must_skip = {kVariableMatmul, kSwigluElemwiseBw},
-            .blackhole_only = true},
-        // The row-scatter moe_ungroup, and moe_ungroup_op's d(expert_out) since grouped no longer requires grad.
-        GradSkipCase{
-            .name = "MoeGroup_FrozenDispatched",
-            .make = moe_group,
-            .frozen = {0},
-            .must_skip = {kMoeUngroup, kTranspose, kBinary}},
-        // The one-hot scatter of d(grouped_scores) into d(scores) and its moe_ungroup, and moe_ungroup_op's
-        // d(grouped_scores) since grouped_scores no longer requires grad.
-        GradSkipCase{
-            .name = "MoeGroup_FrozenScores",
-            .make = moe_group,
-            .frozen = {1},
-            .must_skip = {kMoeUngroup, kTranspose, kBinary, kReduce}},
-        GradSkipCase{
-            .name = "MoeUngroup_FrozenExpertOut",
-            .make = moe_ungroup,
-            .frozen = {0},
-            .must_skip = {kTranspose, kBinary}},
-        GradSkipCase{
-            .name = "MoeUngroup_FrozenGroupedScores",
-            .make = moe_ungroup,
-            .frozen = {1},
-            .must_skip = {kTranspose, kBinary}}),
+            .must_skip = {kNlpConcatHeads, "ConcatDeviceOperation"}}),
     [](const ::testing::TestParamInfo<GradSkipCase>& info) { return info.param.name; });

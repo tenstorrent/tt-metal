@@ -32,8 +32,6 @@ ttml::metal::ops::polynorm3_bw::device::PolyNorm3BackwardDeviceOperation::tensor
     const ttnn::Tensor& weight_tensor,
     float epsilon = 1e-5F,
     const std::optional<ttnn::Tensor>& preallocated_dL_dx = std::nullopt,
-    const std::optional<ttnn::Tensor>& preallocated_packed_partials = std::nullopt,
-    bool compute_grad_input = true,
-    bool compute_packed_partials = true);
+    const std::optional<ttnn::Tensor>& preallocated_packed_partials = std::nullopt);
 
 }  // namespace ttnn::prim
