@@ -48,7 +48,7 @@ constexpr bool do_mask_w = true;
 constexpr bool do_mask_w = false;
 #endif
 
-// Which outputs to produce. Gamma and the two row sums are only needed for dx.
+// Which outputs to produce. Gamma, the scaler and mask tiles, and the two row sums are only needed for dx.
 #ifdef COMPUTE_GRAD_INPUT
 constexpr bool compute_grad_input = true;
 #else
@@ -503,16 +503,20 @@ inline void compute_dbeta_components(
 }
 
 void kernel_main() {
-    if constexpr (do_mask_w) {
-        cb_wait_front(cb_mask_w_idx, onetile);
+    if constexpr (compute_grad_input) {
+        if constexpr (do_mask_w) {
+            cb_wait_front(cb_mask_w_idx, onetile);
+        }
+        cb_wait_front(cb_scaler_idx, onetile);
     }
-    cb_wait_front(cb_scaler_idx, onetile);
 
     // cb_gamma and cb_dx only exist when dx is requested, so start up with CBs that are always created and share
     // their data formats.
     compute_kernel_hw_startup(cb_x_hat_idx, cb_dL_out_idx, cb_rstd_bcast_idx);
     copy_init(cb_x_hat_idx);
-    reconfig_data_format(cb_scaler_idx, cb_scaled_dy_gamma_sum_idx);
+    if constexpr (compute_grad_input) {
+        reconfig_data_format(cb_scaler_idx, cb_scaled_dy_gamma_sum_idx);
+    }
 
     for (uint32_t row = 0; row < num_rows_per_core; ++row) {
         // Wait for rstd and mean (per row)
@@ -662,7 +666,7 @@ void kernel_main() {
         }
 #endif
     }
-    if constexpr (do_mask_w) {
+    if constexpr (compute_grad_input && do_mask_w) {
         cb_pop_front(cb_mask_w_idx, onetile);
     }
 }

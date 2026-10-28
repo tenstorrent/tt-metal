@@ -49,7 +49,7 @@
 //   Multiple query heads share the same K/V head. Gradients from all query heads
 //   in a group are accumulated into their shared K/V head's gradient.
 //
-// Processing order:
+// Processing order (dP, dS and dK only with grad_K; dV only with grad_V):
 //   for each K/V row k:
 //     for each query head h in group:
 //       for each query row q:
@@ -61,8 +61,9 @@
 //
 // P^T and dS^T are produced by in-DST 32-bit transpose_dest right after the dS
 // elementwise chain (P is already resident in DST for the dS multiply), so neither
-// transpose needs a pack->CB->unpack roundtrip. u_scalar = rowsum(dO ⊙ O) is
-// precomputed by the Q kernel.
+// transpose needs a pack->CB->unpack roundtrip. With grad_V alone there is no dS
+// chain, and P^T comes from compute_attn_weights_transposed. u_scalar = rowsum(dO ⊙ O)
+// is precomputed by the Q kernel and only read with grad_K.
 // ----------------------------------------------------------------------
 
 constexpr uint32_t num_rows_per_core = get_compile_time_arg_val(0);

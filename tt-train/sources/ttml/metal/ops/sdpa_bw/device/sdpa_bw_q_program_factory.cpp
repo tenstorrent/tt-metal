@@ -71,6 +71,9 @@ const std::string kComputeGradQueryDefKey = "COMPUTE_GRAD_QUERY";
 const std::string kComputeUScalerDefKey = "COMPUTE_U_SCALER";
 const std::string kComputeGradGateDefKey = "COMPUTE_GRAD_GATE";
 const std::string kComputeGatedGradOutputDefKey = "COMPUTE_GATED_GRAD_OUTPUT";
+const std::string kComputeUDefKey = "COMPUTE_U";
+const std::string kReadAttnOutputDefKey = "READ_ATTN_OUTPUT";
+const std::string kReadGateDefKey = "READ_GATE";
 
 /**
  * Calculate work-balanced pair distribution for causal SDPA backward.
@@ -194,6 +197,12 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     const bool compute_u_scaler = args.compute_u_scaler;
     const bool compute_grad_gate = args.compute_grad_gate;
     const bool compute_gated_grad_output = args.compute_gated_grad_output;
+    // Derived once here and passed to the kernels as defines, so the CBs and the kernels agree on them:
+    // u = rowsum(dY * Y) feeds grad_Q's dS and the u_scaler output; Y feeds u and grad_gate (the gated dO alone
+    // doesn't read it); G feeds the gate helper, which produces grad_gate, the gated dO output and grad_Q's dP operand.
+    const bool compute_u = compute_grad_query || compute_u_scaler;
+    const bool read_attn_output = compute_u || compute_grad_gate;
+    const bool read_gate = args.has_gate && (compute_grad_query || compute_gated_grad_output || compute_grad_gate);
 
     // -------------------------------------------------------------------------
     // 1) Setup device, data formats, tile sizes, and compute split
@@ -292,8 +301,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
         bfloat16_single_tile_size_bytes,
         2 * vWt);
 
-    // Y feeds u = rowsum(dY * Y) (grad_Q and the u_scaler output) and grad_gate; the gated dO alone doesn't read it.
-    if (compute_grad_query || compute_u_scaler || compute_grad_gate) {
+    if (read_attn_output) {
         [[maybe_unused]] auto cb_attn_output = create_circular_buffer(  // CBIndex::c_1
             program,
             all_cores,
@@ -381,7 +389,7 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
 
     // u_scaler = rowsum(dY * Y), needed by grad_Q (for its own dS) and by the u_scaler output. compute_u_scalar_row
     // also uses cb_u_scalar_row as scratch for the row reduction, so it exists whenever u_scaler is computed.
-    if (compute_grad_query || compute_u_scaler) {
+    if (compute_u) {
         [[maybe_unused]] auto cb_mat_mul_reduce =  // CBIndex::c_7
             create_circular_buffer(
                 program,
@@ -413,9 +421,11 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     }
 
     if (args.has_gate) {
-        [[maybe_unused]] auto cb_gate =  // CBIndex::c_15
-            create_circular_buffer(
-                program, all_cores, kGateCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt);
+        if (read_gate) {
+            [[maybe_unused]] auto cb_gate =  // CBIndex::c_15
+                create_circular_buffer(
+                    program, all_cores, kGateCbIndex, data_format, bfloat16_single_tile_size_bytes, 2 * vWt);
+        }
 
         if (compute_grad_gate) {
             [[maybe_unused]] auto cb_grad_gate =  // CBIndex::c_16
@@ -516,6 +526,18 @@ SDPABackwardQProgramFactory::cached_program_t SDPABackwardQProgramFactory::creat
     }
     if (compute_gated_grad_output) {
         set_define_on_all(kComputeGatedGradOutputDefKey);
+    }
+    if (compute_u) {
+        writer_defines[kComputeUDefKey] = "1";
+        compute_defines[kComputeUDefKey] = "1";
+    }
+    if (read_attn_output) {
+        reader_defines[kReadAttnOutputDefKey] = "1";
+        compute_defines[kReadAttnOutputDefKey] = "1";
+    }
+    if (read_gate) {
+        reader_defines[kReadGateDefKey] = "1";
+        compute_defines[kReadGateDefKey] = "1";
     }
 
     // Per-arch math fidelity. Wormhole has HW bug TT #38306: HiFi4 + fp32_dest_acc + matmul_block

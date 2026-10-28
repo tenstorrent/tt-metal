@@ -102,19 +102,11 @@ constexpr bool compute_gated_grad_output = true;
 constexpr bool compute_gated_grad_output = false;
 #endif
 
-// u_scaler feeds this kernel's own dS (grad_Q) and the KV kernel's dS (the u_scaler output). The gate gives the
-// gated dO used by dP (grad_Q) and by the KV kernel, and grad_gate. These are preprocessor conditions rather than
+// The program factory derives from the flags above whether this kernel computes u = rowsum(dY * Y) (COMPUTE_U) and
+// reads Y (READ_ATTN_OUTPUT) and G (READ_GATE). u and the gate helper are preprocessor conditions rather than
 // `if constexpr`: outside a template a discarded branch is still instantiated, and the helpers static_assert that
 // they have something to produce.
-#if defined(COMPUTE_GRAD_QUERY) || defined(COMPUTE_U_SCALER)
-#define SDPA_BW_Q_COMPUTE_U
-#endif
-#if defined(HAS_GATE) && \
-    (defined(COMPUTE_GRAD_QUERY) || defined(COMPUTE_GATED_GRAD_OUTPUT) || defined(COMPUTE_GRAD_GATE))
-#define SDPA_BW_Q_USE_GATE
-#endif
-// Y feeds u and grad_gate; the gated dO alone needs only dY and G, so Y is then neither read nor allocated.
-#if defined(SDPA_BW_Q_COMPUTE_U) || (defined(HAS_GATE) && defined(COMPUTE_GRAD_GATE))
+#ifdef READ_ATTN_OUTPUT
 constexpr bool read_attn_output = true;
 #else
 constexpr bool read_attn_output = false;
@@ -269,7 +261,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
     }
     cb_wait_front(cb_grad_output, v_tiles);
 
-#ifdef SDPA_BW_Q_COMPUTE_U
+#ifdef COMPUTE_U
     compute_u_scalar_row</* PackLocal */ compute_grad_query, /* PackOutput */ compute_u_scaler>(
         cb_grad_output,
         cb_attn_output,
@@ -280,7 +272,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         cb_u_scaler_output);
 #endif
 
-#ifdef SDPA_BW_Q_USE_GATE
+#ifdef READ_GATE
     compute_gated_grad_output_and_grad_gate<
         /* PackLocal */ compute_grad_query,
         /* PackOutput */ compute_gated_grad_output,
@@ -298,7 +290,7 @@ FORCE_INLINE void process_single_row(uint32_t global_row_idx) {
         process_kv_loop(global_row_idx);
     }
 
-#ifdef SDPA_BW_Q_USE_GATE
+#ifdef READ_GATE
     cb_pop_front(cb_gate, v_tiles);
 #endif
     if constexpr (read_attn_output) {
@@ -326,7 +318,7 @@ void kernel_main() {
         compute_kernel_hw_startup(cb_grad_output, cb_grad_output, cb_grad_output);
     }
 
-#ifdef SDPA_BW_Q_COMPUTE_U
+#ifdef COMPUTE_U
     cb_wait_front(cb_mat_mul_reduction, onetile);
 #endif
     if constexpr (compute_grad_query) {
