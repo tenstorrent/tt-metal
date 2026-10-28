@@ -141,6 +141,22 @@ class TtKairos:
     def prepare(self, front):
         """Host tensors of one forward -> device inputs."""
         import ttnn
+
+        inp = self.build_inputs(front, lambda x, dt: upload(self.device, x, dtype=dt))
+        inp.update(self._consts(inp["B"]))
+        return inp
+
+    def prepare_host(self, front):
+        """The same inputs as host ttnn tensors (tile layout, not on device), for refreshing trace inputs."""
+        import ttnn
+
+        return self.build_inputs(front, lambda x, dt: ttnn.from_torch(
+            x.to(torch.float32 if dt == ttnn.float32 else torch.bfloat16).contiguous(), dtype=dt,
+            layout=ttnn.TILE_LAYOUT))
+
+    def build_inputs(self, front, leaf):
+        """Per-forward inputs; leaf(torch tensor, ttnn dtype) makes each one (device upload or host tensor)."""
+        import ttnn
         from models.experimental.kairos_forecast.reference.dataflow import expert_coeffs
 
         xf, w, idx, am = front["x_final"], front["weights"], front["indices"], front["attn_mask"]
@@ -159,9 +175,9 @@ class TtKairos:
         pd = positions(N_SEG, D_PAD)
         key_add = (1.0 - m) * NEG
         enc_f, dec_f = self.module_freqs(front["s_features"])
-        dev = self.device
-        t = lambda x, dt=ttnn.bfloat16: upload(dev, x, dtype=dt)  # noqa: E731
-        inp = {
+        t = lambda x, dt=ttnn.bfloat16: leaf(x, dt)  # noqa: E731
+        return {
+            "B": B,
             "xs": t(xs.reshape(1, 1, B * N_TOK, K_EMB)),
             "enc_mask": t(key_add[:, None, None, :].expand(B, 1, S_PAD, S_PAD), ttnn.float32),
             "cross_mask": t(key_add[:, None, None, :].expand(B, 1, D_PAD, S_PAD), ttnn.float32),
@@ -169,9 +185,6 @@ class TtKairos:
             "dec_rope": [(tuple(map(t, rope_tables(fs, pd))), tuple(map(t, rope_tables(fc, pd))),
                           tuple(map(t, rope_tables(fc, pe)))) for fs, fc in dec_f],
         }
-        inp.update(self._consts(B))
-        inp["B"] = B
-        return inp
 
     def _consts(self, B):
         import ttnn
