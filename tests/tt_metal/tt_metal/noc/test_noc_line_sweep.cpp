@@ -20,14 +20,15 @@
 //   * A write or read that never completes: shows up as a slot that still holds the poison pattern.
 //
 // Structure:
-//   * A "line" is an ordered set of cores: a logical tensix row, a logical tensix column, the active-Ethernet
-//     cores, or the idle-Ethernet cores of a chip.
+//   * A "line" is an ordered set of NOC endpoints: a logical tensix row, a logical tensix column, the
+//     active-Ethernet cores, the idle-Ethernet cores, or the DRAM banks of a chip.
 //   * One "step" takes an active line and a passive line. In PUSH mode every core of the active line runs the
-//     kernel and writes its own payload into a dedicated slot on every core of the passive line. In PULL mode
-//     every core of the active line reads every passive core's payload into a dedicated local slot.
-//   * A sweep iterates: for each active line, for each other passive line, for each NOC (and RISC) combination.
-//     Row-major sweeps iterate tensix rows, column-major sweeps iterate columns, and the Ethernet variants pair
-//     Ethernet lines with tensix rows and columns.
+//     kernel and writes its own payload into a dedicated slot on its destination cores in the passive line. In
+//     PULL mode every core of the active line reads its source cores' payloads into dedicated local slots. Which
+//     (source, destination) pairs a step uses is defined by step_pairs below. DRAM cannot run a kernel, so it is
+//     only ever the passive line.
+//   * A sweep iterates: for each transfer size, for each active line, for each passive line (itself included), for
+//     each NOC (and RISC) combination.
 //   * After every step the host reads every slot back and compares it to the expected payload. Nothing on the
 //     device ever waits for data from another core, so corruption cannot turn into a hang.
 //
@@ -70,6 +71,8 @@
 #include <variant>
 #include <vector>
 
+#include <tt-metalium/allocator.hpp>
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/distributed.hpp>
@@ -77,6 +80,7 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/kernel_types.hpp>
+#include <tt-metalium/mesh_buffer.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -84,6 +88,7 @@
 #include <fmt/format.h>
 
 #include "env_lib.hpp"
+#include "impl/allocator/allocator.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "llrt/tt_cluster.hpp"
@@ -100,16 +105,17 @@ constexpr uint32_t kFlitWords = kFlitBytes / 4;
 constexpr uint32_t kFlitPairBytes = 2 * kFlitBytes;
 constexpr const char* kKernelPath = "tests/tt_metal/tt_metal/test_kernels/dataflow/noc_line_sweep.cpp";
 
-enum class LineKind { TensixRow, TensixCol, ActiveEth, IdleEth };
+enum class LineKind { TensixRow, TensixCol, ActiveEth, IdleEth, Dram };
 
 struct Line {
     LineKind kind;
     std::string name;
-    std::vector<CoreCoord> cores;  // logical coordinates
-    HalProgrammableCoreType prog_type;
+    std::vector<CoreCoord> cores;       // logical coordinates; for the DRAM line (bank id, 0)
+    HalProgrammableCoreType prog_type;  // unused for the DRAM line
     CoreType host_type;
 
     bool is_eth() const { return kind == LineKind::ActiveEth || kind == LineKind::IdleEth; }
+    bool is_dram() const { return kind == LineKind::Dram; }
 };
 
 struct RiscNoc {
@@ -211,23 +217,53 @@ Region unreserved_region(HalProgrammableCoreType t) {
     return {static_cast<uint32_t>(hal.get_dev_addr(t, addr_type)), hal.get_dev_size(t, addr_type)};
 }
 
-// Layout inside the unreserved region of every core: [payload][slot 0][slot 1]...[slot N-1]
-uint32_t payload_addr(HalProgrammableCoreType t) { return unreserved_region(t).base; }
-uint32_t slot_addr(HalProgrammableCoreType t, uint32_t transfer_bytes) {
-    return unreserved_region(t).base + ((transfer_bytes + 1023) / 1024) * 1024;
+// Layout of every endpoint's region: [payload][slot 0][slot 1]...[slot N-1], payload area rounded up to 1 KB.
+// For a core the region is its unreserved L1; for a DRAM bank it is that bank's page of a buffer allocated per
+// step.
+uint32_t payload_area_bytes(uint32_t transfer_bytes) { return ((transfer_bytes + 1023) / 1024) * 1024; }
+
+// DRAM view (what the allocator calls a DRAM channel) behind an allocator bank id.
+uint32_t dram_view_of_bank(IDevice* device, uint32_t bank) {
+    return device->allocator()->impl().get_dram_channel_from_bank_id(bank);
 }
 
-std::string core_desc(IDevice* device, const CoreCoord& logical, CoreType type) {
+// NOC endpoint of a DRAM bank for one NOC, for reporting only: the view's preferred worker endpoint, which is the
+// endpoint an interleaved-buffer access from a kernel takes on that NOC. The kernel addresses a bank by bank id
+// through the same tables, so this is never used for addressing. Translated (NOC0-style) coordinates.
+CoreCoord dram_endpoint(IDevice* device, uint32_t bank, NOC noc) {
+    const auto& soc = MetalContext::instance().get_cluster().get_soc_desc(device->id());
+    return soc.get_preferred_worker_core_for_dram_view(dram_view_of_bank(device, bank), static_cast<uint8_t>(noc));
+}
+
+std::string core_desc(IDevice* device, const Line& line, uint32_t i, NOC noc) {
     const auto& cluster = MetalContext::instance().get_cluster();
-    const CoreCoord virt = device->virtual_core_from_logical_core(logical, type);
-    const CoreCoord phys = cluster.get_physical_coordinate_from_logical_coordinates(device->id(), logical, type, true);
+    if (line.is_dram()) {
+        const auto& soc = cluster.get_soc_desc(device->id());
+        const CoreCoord ep = dram_endpoint(device, i, noc);
+        return fmt::format(
+            "bank{} ch{} endpoint tr({},{})",
+            i,
+            soc.get_channel_for_dram_view(dram_view_of_bank(device, i)),
+            ep.x,
+            ep.y);
+    }
+    const CoreCoord logical = line.cores[i];
+    const CoreCoord virt = device->virtual_core_from_logical_core(logical, line.host_type);
+    const CoreCoord phys =
+        cluster.get_physical_coordinate_from_logical_coordinates(device->id(), logical, line.host_type, true);
     return fmt::format("log({},{}) virt({},{}) phys({},{})", logical.x, logical.y, virt.x, virt.y, phys.x, phys.y);
 }
 
 std::string line_desc(IDevice* device, const Line& line) {
-    std::string s = fmt::format("{} [{} cores]:", line.name, line.cores.size());
-    for (const auto& c : line.cores) {
-        s += " " + core_desc(device, c, line.host_type);
+    std::string s = fmt::format("{} [{} endpoints]:", line.name, line.cores.size());
+    for (uint32_t i = 0; i < line.cores.size(); i++) {
+        if (line.is_dram()) {
+            const CoreCoord e0 = dram_endpoint(device, i, NOC::NOC_0);
+            const CoreCoord e1 = dram_endpoint(device, i, NOC::NOC_1);
+            s += fmt::format(" bank{} noc0({},{}) noc1({},{})", i, e0.x, e0.y, e1.x, e1.y);
+        } else {
+            s += " " + core_desc(device, line, i, NOC::NOC_0);
+        }
     }
     return s;
 }
@@ -277,6 +313,23 @@ std::vector<Line> eth_lines(IDevice* device) {
         lines.push_back(
             {LineKind::IdleEth, "idle-eth", std::move(idle), HalProgrammableCoreType::IDLE_ETH, CoreType::ETH});
     }
+    return lines;
+}
+
+// Every DRAM bank of the chip as one line. Only ever a passive line (no kernel can run there).
+std::vector<Line> dram_line(IDevice* device) {
+    Line l{LineKind::Dram, "dram", {}, HalProgrammableCoreType::TENSIX, CoreType::DRAM};
+    const uint32_t num_banks = device->allocator()->get_num_banks(BufferType::DRAM);
+    for (uint32_t b = 0; b < num_banks; b++) {
+        l.cores.emplace_back(b, 0);
+    }
+    return {std::move(l)};
+}
+
+std::vector<Line> tensix_rows_and_cols(IDevice* device) {
+    auto lines = tensix_rows(device);
+    auto cols = tensix_cols(device);
+    lines.insert(lines.end(), cols.begin(), cols.end());
     return lines;
 }
 
@@ -474,12 +527,15 @@ protected:
         return out;
     }
 
-    // Cap the transfer so that every core of the sink line can hold `num_slots` slots next to its payload.
+    // Cap the transfer so that every core of the sink line can hold `num_slots` slots next to its payload. The DRAM
+    // line is not capped: its buffer is sized to the step.
     uint32_t effective_transfer(const Line& sources, const Line& sinks, uint32_t num_slots, uint32_t requested) const {
         uint32_t t = requested;
         for (const Line* l : {&sources, &sinks}) {
+            if (l->is_dram()) {
+                continue;
+            }
             const Region r = unreserved_region(l->prog_type);
-            // payload + slots must fit; payload area is rounded up to 1 KB.
             const uint32_t need_slots = l == &sinks ? num_slots : 0;
             const uint32_t max_t = (r.size - 1024) / (need_slots + 1);
             t = std::min(t, max_t - (max_t % kFlitPairBytes));
@@ -487,8 +543,8 @@ protected:
         return std::max<uint32_t>(t, kFlitPairBytes);
     }
 
-    // One transfer of a step: the payload of source core `src` lands in slot `slot` of sink core `dst` (indices
-    // into the source and sink lines).
+    // One transfer of a step: the payload of source `src` lands in slot `slot` of sink `dst` (indices into the
+    // source and sink lines).
     struct Pair {
         uint32_t src;
         uint32_t dst;
@@ -500,13 +556,13 @@ protected:
     //    traffic stays inside the line.
     //  * Two tensix lines of the same kind (row -> row, column -> column): only the cores with the same index. Every
     //    packet then travels perpendicular to both lines, so neither line carries traffic along itself.
-    //  * Everything else (an Ethernet group against the other group or against a tensix line): every core against
-    //    every core, since an Ethernet group has no geometry to align with.
+    //  * Everything else (an Ethernet group or the DRAM line against anything, or anything against them): every
+    //    core against every core, since those lines have no geometry to align with.
     static std::vector<Pair> step_pairs(const Line& sources, const Line& sinks) {
         std::vector<Pair> pairs;
         const bool same_line = sources.kind == sinks.kind && sources.name == sinks.name;
-        const bool aligned =
-            !same_line && sources.kind == sinks.kind && !sources.is_eth() && sources.cores.size() == sinks.cores.size();
+        const bool aligned = !same_line && sources.kind == sinks.kind && !sources.is_eth() && !sources.is_dram() &&
+                             sources.cores.size() == sinks.cores.size();
         if (aligned) {
             for (uint32_t i = 0; i < sources.cores.size(); i++) {
                 pairs.push_back({i, i, 0});
@@ -536,6 +592,7 @@ protected:
         uint32_t step_index) {
         IDevice* device = mesh_device->get_device(distributed::MeshCoordinate(0, 0));
         const ChipId dev_id = device->id();
+        TT_FATAL(!active.is_dram(), "the DRAM line cannot be the active line");
         const Line& sources = pull ? passive : active;
         const Line& sinks = pull ? active : passive;
         const std::vector<Pair> pairs = step_pairs(sources, sinks);
@@ -557,8 +614,32 @@ protected:
                 sinks.name);
         }
         const uint32_t words = transfer / 4;
-        const uint32_t src_payload = payload_addr(sources.prog_type);
-        const uint32_t sink_slots = slot_addr(sinks.prog_type, transfer);
+        const uint32_t payload_area = payload_area_bytes(transfer);
+        const uint32_t slots_bytes = num_slots * transfer;
+
+        // The DRAM line lives in a buffer allocated for this step: one page per bank, laid out like a core's
+        // region, with page b on bank b. The host keeps a full image of it and moves it in one write and one read.
+        const bool dram_passive = passive.is_dram();
+        std::shared_ptr<distributed::MeshBuffer> dram_buf;
+        std::vector<uint32_t> dram_image;
+        uint32_t page_words = 0;
+        if (dram_passive) {
+            const uint32_t page_bytes = payload_area + (pull ? 0 : slots_bytes);
+            page_words = page_bytes / 4;
+            distributed::DeviceLocalBufferConfig local{.page_size = page_bytes, .buffer_type = BufferType::DRAM};
+            distributed::ReplicatedBufferConfig global{
+                .size = static_cast<DeviceAddr>(page_bytes) * passive.cores.size()};
+            dram_buf = distributed::MeshBuffer::create(global, local, mesh_device.get());
+            dram_image.assign(page_words * passive.cores.size(), kPoison);
+        }
+        // Base of endpoint i's region in `line`, as the kernel addresses it. For a DRAM bank that is the buffer
+        // address: the kernel's bank-id lookup adds the bank's own offset.
+        auto region_base = [&](const Line& line, uint32_t i) -> uint32_t {
+            if (line.is_dram()) {
+                return static_cast<uint32_t>(dram_buf->address());
+            }
+            return unreserved_region(line.prog_type).base;
+        };
 
         auto phase_t = std::chrono::steady_clock::now();
         auto lap = [&phase_t]() {
@@ -568,7 +649,7 @@ protected:
             return d;
         };
 
-        // 1. Host-generated payload per source core, written into that core's L1.
+        // 1. Host-generated payload per source, written into that source's region.
         const uint32_t step_seed =
             cfg_.seed ^ (static_cast<uint32_t>(dev_id) * 0x9E3779B9u) ^ (step_index * 0x85EBCA6Bu);
         std::vector<std::vector<uint32_t>> payloads(sources.cores.size());
@@ -580,33 +661,42 @@ protected:
                 const bool complement_flit = (i / kFlitWords) % 2 == 1;
                 payloads[s][i] = complement_flit ? ~payloads[s][i - kFlitWords] : rng();
             }
-            if (cfg_.inject_xor == 0) {
-                detail::WriteToDeviceL1(device, sources.cores[s], src_payload, payloads[s], sources.host_type);
-            } else {
+            std::vector<uint32_t> to_device = payloads[s];
+            if (cfg_.inject_xor != 0) {
                 // Checker self-test: the device gets a deliberately corrupted copy; the comparison still expects the
                 // pristine payload, so every pair must be reported with exactly the injected signature.
-                std::vector<uint32_t> corrupted = payloads[s];
-                for (uint32_t i = cfg_.inject_flit_word; i < corrupted.size(); i += kFlitWords) {
+                for (uint32_t i = cfg_.inject_flit_word; i < to_device.size(); i += kFlitWords) {
                     if (cfg_.inject_mode == "set") {
-                        corrupted[i] |= cfg_.inject_xor;
+                        to_device[i] |= cfg_.inject_xor;
                     } else if (cfg_.inject_mode == "clear") {
-                        corrupted[i] &= ~cfg_.inject_xor;
+                        to_device[i] &= ~cfg_.inject_xor;
                     } else {
-                        corrupted[i] ^= cfg_.inject_xor;
+                        to_device[i] ^= cfg_.inject_xor;
                     }
                 }
-                detail::WriteToDeviceL1(device, sources.cores[s], src_payload, corrupted, sources.host_type);
+            }
+            if (sources.is_dram()) {
+                std::copy(to_device.begin(), to_device.end(), dram_image.begin() + s * page_words);
+            } else {
+                detail::WriteToDeviceL1(
+                    device, sources.cores[s], region_base(sources, s), to_device, sources.host_type);
             }
         }
-        // 2. Poison every slot on every sink core.
+        // 2. Poison every slot on every sink (the DRAM image starts out as poison).
         std::vector<uint32_t> poison(words * num_slots, kPoison);
-        for (const auto& c : sinks.cores) {
-            detail::WriteToDeviceL1(device, c, sink_slots, poison, sinks.host_type);
+        if (!sinks.is_dram()) {
+            for (uint32_t d = 0; d < sinks.cores.size(); d++) {
+                detail::WriteToDeviceL1(
+                    device, sinks.cores[d], region_base(sinks, d) + payload_area, poison, sinks.host_type);
+            }
+        }
+        if (dram_passive) {
+            detail::WriteToBuffer(*dram_buf->get_device_buffer(distributed::MeshCoordinate(0, 0)), dram_image);
         }
 
         t_write_ += lap();
 
-        // 3. One kernel on every active core, with its own peer list (noc_x, noc_y, slot).
+        // 3. One kernel on every active core, with its own peer list (kind, a, b, remote_base, slot).
         Program program = CreateProgram();
         std::set<CoreRange> ranges;
         for (const auto& c : active.cores) {
@@ -631,18 +721,27 @@ protected:
         for (const Pair& p : pairs) {
             const uint32_t a = pull ? p.dst : p.src;  // index into the active line
             const uint32_t q = pull ? p.src : p.dst;  // index into the passive line
-            const CoreCoord v = device->virtual_core_from_logical_core(passive.cores[q], passive.host_type);
-            peer_args[a].insert(peer_args[a].end(), {static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), p.slot});
+            // PUSH: the peer's slot region. PULL: the peer's payload.
+            const uint32_t remote_base = region_base(passive, q) + (pull ? 0 : payload_area);
+            if (passive.is_dram()) {
+                peer_args[a].insert(peer_args[a].end(), {1u, q, 0u, remote_base, p.slot});
+            } else {
+                const CoreCoord v = device->virtual_core_from_logical_core(passive.cores[q], passive.host_type);
+                peer_args[a].insert(
+                    peer_args[a].end(),
+                    {0u, static_cast<uint32_t>(v.x), static_cast<uint32_t>(v.y), remote_base, p.slot});
+            }
         }
         for (uint32_t i = 0; i < active.cores.size(); i++) {
+            // PUSH: my payload. PULL: my slot region.
+            const uint32_t local = region_base(active, i) + (pull ? payload_area : 0);
             std::vector<uint32_t> rt = {
                 pull ? 1u : 0u,
-                pull ? sink_slots : src_payload,
-                pull ? src_payload : sink_slots,
+                local,
                 transfer,
                 cfg_.chunk_bytes,
                 cfg_.num_iters,
-                static_cast<uint32_t>(peer_args[i].size() / 3)};
+                static_cast<uint32_t>(peer_args[i].size() / 5)};
             rt.insert(rt.end(), peer_args[i].begin(), peer_args[i].end());
             SetRuntimeArgs(program, kernel, active.cores[i], rt);
         }
@@ -653,9 +752,24 @@ protected:
 
         // 4. Read the slots of every sink back and compare each pair's slot.
         std::vector<std::vector<uint32_t>> readback(sinks.cores.size());
-        for (uint32_t d = 0; d < sinks.cores.size(); d++) {
-            detail::ReadFromDeviceL1(
-                device, sinks.cores[d], sink_slots, poison.size() * 4, readback[d], sinks.host_type);
+        if (sinks.is_dram()) {
+            detail::ReadFromBuffer(
+                *dram_buf->get_device_buffer(distributed::MeshCoordinate(0, 0)),
+                reinterpret_cast<uint8_t*>(dram_image.data()));
+            for (uint32_t d = 0; d < sinks.cores.size(); d++) {
+                const auto first = dram_image.begin() + d * page_words + payload_area / 4;
+                readback[d].assign(first, first + slots_bytes / 4);
+            }
+        } else {
+            for (uint32_t d = 0; d < sinks.cores.size(); d++) {
+                detail::ReadFromDeviceL1(
+                    device,
+                    sinks.cores[d],
+                    region_base(sinks, d) + payload_area,
+                    slots_bytes,
+                    readback[d],
+                    sinks.host_type);
+            }
         }
         uint32_t bad_pairs = 0;
         uint32_t reported = 0;
@@ -671,9 +785,9 @@ protected:
                 "[dev {}] {} {} -> {} {} over noc{} ({}, {}, {} B): {}",
                 dev_id,
                 sources.name,
-                core_desc(device, r.src, sources.host_type),
+                core_desc(device, sources, p.src, rn.noc),
                 sinks.name,
-                core_desc(device, r.dst, sinks.host_type),
+                core_desc(device, sinks, p.dst, rn.noc),
                 static_cast<int>(rn.noc),
                 pull ? "PULL/read" : "PUSH/write",
                 active.is_eth() ? "erisc kernel" : "tensix kernel",
@@ -860,49 +974,36 @@ TEST_F(NocLineSweepFixture, TensixColMajorPull) { run_sweep("tensix col-major pu
 
 // Every Ethernet core (active and idle groups) writes into every tensix row and every tensix column.
 TEST_F(NocLineSweepFixture, EthToTensixPush) {
-    run_sweep(
-        "eth -> tensix push",
-        eth_lines,
-        [](IDevice* d) {
-            auto lines = tensix_rows(d);
-            auto cols = tensix_cols(d);
-            lines.insert(lines.end(), cols.begin(), cols.end());
-            return lines;
-        },
-        false);
+    run_sweep("eth -> tensix push", eth_lines, tensix_rows_and_cols, false);
 }
 
 // Every Ethernet core reads from every tensix row and column (the inbound direction into the Ethernet core's L1).
 TEST_F(NocLineSweepFixture, EthFromTensixPull) {
-    run_sweep(
-        "eth <- tensix pull",
-        eth_lines,
-        [](IDevice* d) {
-            auto lines = tensix_rows(d);
-            auto cols = tensix_cols(d);
-            lines.insert(lines.end(), cols.begin(), cols.end());
-            return lines;
-        },
-        true);
+    run_sweep("eth <- tensix pull", eth_lines, tensix_rows_and_cols, true);
 }
 
 // Every tensix row and column writes into the Ethernet cores (no kernel on the Ethernet core, so this also works
 // under fast dispatch).
 TEST_F(NocLineSweepFixture, TensixToEthPush) {
-    run_sweep(
-        "tensix -> eth push",
-        [](IDevice* d) {
-            auto lines = tensix_rows(d);
-            auto cols = tensix_cols(d);
-            lines.insert(lines.end(), cols.begin(), cols.end());
-            return lines;
-        },
-        eth_lines,
-        false);
+    run_sweep("tensix -> eth push", tensix_rows_and_cols, eth_lines, false);
 }
 
 // Every Ethernet core writes into every other Ethernet core, within its own group and across groups.
 TEST_F(NocLineSweepFixture, EthToEthPush) { run_sweep("eth -> eth push", eth_lines, eth_lines, false); }
+
+// ---------------------------------------------------------------------------------------------------------------
+// Tensix <-> DRAM. Every bank is reached through its preferred endpoint for the NOC in use, the endpoint an
+// interleaved-buffer access from a kernel takes. DRAM never runs a kernel, so it is only ever the passive line.
+
+// Every tensix row and column writes into every DRAM bank.
+TEST_F(NocLineSweepFixture, TensixToDramPush) {
+    run_sweep("tensix -> dram push", tensix_rows_and_cols, dram_line, false);
+}
+
+// Every tensix row and column reads from every DRAM bank.
+TEST_F(NocLineSweepFixture, TensixFromDramPull) {
+    run_sweep("tensix <- dram pull", tensix_rows_and_cols, dram_line, true);
+}
 
 }  // namespace
 }  // namespace tt::tt_metal

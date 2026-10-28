@@ -26,8 +26,10 @@ Faults it is designed to expose:
 
 ## What it does
 
-* A **line** is an ordered set of cores: a logical tensix row, a logical tensix column, the active-Ethernet cores,
-  or the idle-Ethernet cores of a chip.
+* A **line** is an ordered set of NOC endpoints: a logical tensix row, a logical tensix column, the active-Ethernet
+  cores, the idle-Ethernet cores, or the DRAM banks of a chip. DRAM cannot run a kernel, so it is only ever the
+  passive line; a bank is addressed by bank id through the same tables an interleaved-buffer access uses, so each
+  transfer takes the bank's preferred endpoint for the NOC in use.
 * A **step** takes an active line and a passive line and moves data between a set of (source, destination) pairs.
   * PUSH: every core of the active line runs the kernel and writes its own host-generated payload into a dedicated
     slot on its destination cores in the passive line.
@@ -39,8 +41,8 @@ Faults it is designed to expose:
     index, i.e. the core in column x of row a to the core in column x of row b. Every packet then travels
     perpendicular to both lines, so neither line carries traffic along itself and the step isolates the links
     between the two lines.
-  * An Ethernet group against anything, or anything against an Ethernet group: every core to every core, since an
-    Ethernet group has no geometry to align with.
+  * An Ethernet group or the DRAM line against anything, or anything against them: every core to every core, since
+    those lines have no geometry to align with.
 * A **sweep** iterates: for each transfer size, for each active line, for each passive line (itself included), for
   each NOC (and RISC) combination. The default sizes are 1, 2, 4 and 8 KB per (source, destination) pair, each
   sent as a single NOC transaction, so every path carries packets of 16, 32, 64 and 128 flits.
@@ -49,8 +51,9 @@ Faults it is designed to expose:
   flit is therefore sent as both 0 and 1 in every 128 bytes, so a stuck-at in either direction cannot hide behind
   the data, and the fault classification below is exact.
 
-Memory layout in the unreserved L1 region of every core: `[payload][slot 0][slot 1]...[slot N-1]`. Slots are
-pre-filled with `0xDEADBEEF`, so a slot that never received data is reported as `UNDELIVERED` rather than as random
+Memory layout of every endpoint's region: `[payload][slot 0][slot 1]...[slot N-1]`. For a core that is its
+unreserved L1 region; for a DRAM bank it is the bank's page of a buffer allocated for the step. Slots are pre-filled
+with `0xDEADBEEF`, so a slot that never received data is reported as `UNDELIVERED` rather than as random
 corruption.
 
 | Test | Active (runs kernel) | Passive | Direction |
@@ -63,6 +66,8 @@ corruption.
 | `EthFromTensixPull` | active-eth, idle-eth | every row and column | read |
 | `TensixToEthPush` | every row and column | active-eth, idle-eth | write |
 | `EthToEthPush` | active-eth, idle-eth | both Ethernet groups, its own included | write |
+| `TensixToDramPush` | every row and column | every DRAM bank | write |
+| `TensixFromDramPull` | every row and column | every DRAM bank | read |
 
 The Ethernet-to-tensix write direction is the one used by fabric routers to deliver packets into local L1, so
 `EthToTensixPush` covers the same path with the same RISC and NOC selection a router would use.
@@ -184,4 +189,5 @@ counts: 8 KB gives `[0->1: 64/64, 1->0: 0/64]`.
 * One line at a time. Background traffic on the other NOC or from other lines is not generated, so faults that only
   appear under contention need at least `TT_NOC_SWEEP_ITERS` and a larger `TT_NOC_SWEEP_TRANSFER_BYTES`.
 * Ethernet kernels need slow dispatch. Kernels cannot be launched on Ethernet cores under fast dispatch.
-* DRAM endpoints are not included; the test covers L1-to-L1 paths only.
+* DRAM is reached only through each bank's preferred endpoint for the NOC in use. Other NOC endpoints of the same
+  channel are not targeted, and no Ethernet-to-DRAM traffic is generated.
