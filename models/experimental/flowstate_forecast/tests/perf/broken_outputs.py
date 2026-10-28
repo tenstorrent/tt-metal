@@ -10,18 +10,19 @@ Each broken output is made in head space from the golden ``combined_normalized``
 data space the reference's way (x stdev + mean per step, the per-step statistics combined like the head, then
 torch.quantile and the weighted mean), so the head and data-space metrics stay consistent. Each is scored as a
 candidate record by ``check_gates.check`` (floors and drift against the fixed record), with the same session stamp
-as the scoring (v1.23). The golden itself is scored first, and only failures beyond the golden's own count
-(v1.26: no vacuous catches).
+as the scoring (v1.23). Each base output (the golden, and the device output with ``--dumps``) is scored first, and
+only failures beyond the base's own count, by (metric, row) for the row-indexed drift (v1.26, v1.27). The golden
+must pass every drift (R1-0a). Shifts and single-row band scalings are probed in both signs.
 
     collapsed           every quantile -> the quantile mean (PLAN v1.9)
     inactive_collapsed  only the inactive series (not applicable without inactive series)
     active1pct_0.3x     the band of ceil(1 %) of the active series, the widest, scaled 0.3x
     all_0.88x, all_1.12x
-    level_shift         +0.05 normalized on every row (v1.22); also given in data units against the row std
-    level_shift_rows    +0.05 on 1 row at B <= 16, 2 at B <= 32, 4 at B <= 64, ceil(1 %) above (v1.25), the
+    level_shift(_neg)   +-0.05 normalized on every row (v1.22); also given in data units against the row std
+    level_shift_rows(_neg) +-0.05 on 1 row at B <= 16, 2 at B <= 32, 4 at B <= 64, ceil(1 %) above (v1.25), the
                         active rows with the largest golden std
     lag1                the forecast one step late (v1.22)
-    band_1.3x_row       the band of one active row (the widest) scaled 1.3x (v1.26)
+    band_1.3x_row       the band of one active row (the widest) scaled 1.3x (v1.26); band_0.7x_row 0.7x
 
 With ``--dumps`` (the bench's MODEL_PERF_DUMP and the suite's FLOWSTATE_SUITE_DUMP outputs of the fixed record's
 jobs), each broken output is made from the device output of that case and precision instead of the golden, and
@@ -82,6 +83,8 @@ def broken(base, gh):
     big = idx[std[idx].argsort(descending=True)[:ks]]
     shifted = base.clone()
     shifted[big] += SHIFT
+    shifted_neg = base.clone()
+    shifted_neg[big] -= SHIFT
     lag = base.clone()
     lag[:, :, 1:] = base[:, :, :-1]
     return {
@@ -91,9 +94,12 @@ def broken(base, gh):
         "all_0.88x": (scale_band(base, slice(None), 0.88), "all series"),
         "all_1.12x": (scale_band(base, slice(None), 1.12), "all series"),
         "level_shift": (base + SHIFT, "all series"),
+        "level_shift_neg": (base - SHIFT, "all series"),
         "level_shift_rows": (shifted, f"rows {big.tolist()} of {gh.shape[0]}"),
+        "level_shift_rows_neg": (shifted_neg, f"rows {big.tolist()} of {gh.shape[0]}"),
         "lag1": (lag, "all series"),
         "band_1.3x_row": (scale_band(base, wide[:1], 1.3), f"row {wide[:1].tolist()}"),
+        "band_0.7x_row": (scale_band(base, wide[:1], 0.7), f"row {wide[:1].tolist()}"),
     }
 
 
@@ -114,8 +120,11 @@ def to_data(g, head):
 
 
 def _metric(fail: str) -> str:
-    """'(name, precision) metric ...' -> metric (the check that failed)."""
+    """'(name, precision) metric ...' -> metric, or 'metric row <i>' for a row-indexed failure (v1.27: the base's
+    own failures are subtracted by (metric, row), so a probe failing another row of the same metric still counts)."""
     rest = fail.split(")", 1)[1].split()
+    if len(rest) >= 3 and rest[1] == "row":
+        return f"{rest[0]} row {rest[2].rstrip(':')}"
     return rest[0] if rest else fail
 
 
@@ -145,34 +154,35 @@ def main():
             return {"name": key, "precision": prec, **m, **stamp}
 
         for p in ("accuracy", "performance"):
-            dev = None
+            bases = [("golden", gh)]  # R1-0a: the golden is always scored, and must pass every drift
             if args.dumps:
-                f = args.dumps / (f"{key.removeprefix('suite:')}-{p}.pt" if not key.startswith("suite:") else f"suite_{key[6:]}-{p}.pt")
+                f = args.dumps / (f"{key}-{p}.pt" if not key.startswith("suite:") else f"suite_{key[6:]}-{p}.pt")
                 if f.is_file():
-                    dev = torch.load(f, weights_only=True)["combined_normalized"]
+                    bases.append(("device", torch.load(f, weights_only=True)["combined_normalized"]))
                 else:
                     bad.append(f"{key}/{p}/no device dump")
-            base_h = dev if dev is not None else gh
-            src = "device" if dev is not None else "golden"
-            own = score(rec(base_h, p), base, gates, args.gates.parent)
-            print(f"{key:20s} {p:11s} {src} output itself fails {sorted(own)}")
-            for kind, (h, what) in broken(base_h, gh).items():
-                if kind == "inactive_collapsed" and not bool((~M.active_rows(M.head(gh))).any()):
-                    print(f"{key:20s} {p:11s} {kind:19s}: not applicable (no inactive series)")
-                    continue
-                extra = ""
-                if kind == "level_shift":
-                    _, _, SD = to_data(g, gh)
-                    gq = M.head(g["quantile_outputs"]).double().reshape(gh.shape[0], -1)
-                    real = (SHIFT * SD[:, 0, :, 0]).mean(1) / gq.std(1)
-                    extra = f"; +0.05 normalized = {float(real.median()):.3g} x the data row std (median over rows)"
-                fails = sorted(score(rec(h, p), base, gates, args.gates.parent) - own)
-                results.append(
-                    {"case": key, "broken": kind, "base": src, "rows": what + extra, "precision": p, "fails": fails, **stamp}
-                )
-                print(f"{key:20s} {p:11s} {kind:19s} ({src}; {what}{extra}): fails {len(fails)} {fails}")
-                if not fails:
-                    bad.append(f"{key}/{p}/{kind}")
+            for src, base_h in bases:
+                own = score(rec(base_h, p), base, gates, args.gates.parent)
+                print(f"{key:20s} {p:11s} {src} output itself fails {sorted(own)}")
+                if src == "golden" and (drift := sorted(x for x in own if "drift" in x or " row " in x)):
+                    bad.append(f"{key}/{p}/golden fails drift {drift}")
+                for kind, (h, what) in broken(base_h, gh).items():
+                    if kind == "inactive_collapsed" and not bool((~M.active_rows(M.head(gh))).any()):
+                        print(f"{key:20s} {p:11s} {kind:20s}: not applicable (no inactive series)")
+                        continue
+                    extra = ""
+                    if kind == "level_shift":
+                        _, _, SD = to_data(g, gh)
+                        gq = M.head(g["quantile_outputs"]).double().reshape(gh.shape[0], -1)
+                        real = (SHIFT * SD[:, 0, :, 0]).mean(1) / gq.std(1)
+                        extra = f"; +0.05 normalized = {float(real.median()):.3g} x the data row std (median over rows)"
+                    fails = sorted(score(rec(h, p), base, gates, args.gates.parent) - own)
+                    results.append(
+                        {"case": key, "broken": kind, "base": src, "rows": what + extra, "precision": p, "fails": fails, **stamp}
+                    )
+                    print(f"{key:20s} {p:11s} {kind:20s} ({src}; {what}{extra}): fails {len(fails)} {fails}")
+                    if not fails:
+                        bad.append(f"{key}/{p}/{src}/{kind}")
     if args.out:
         args.out.write_text(json.dumps(results, indent=1) + "\n")
     print(f"{len(bad)} broken output(s) pass every floor and drift" + (": " + ", ".join(bad) if bad else ""))
