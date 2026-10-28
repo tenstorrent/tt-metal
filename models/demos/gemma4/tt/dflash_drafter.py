@@ -1867,44 +1867,69 @@ class DFlashFusedDecoder:
         self._replay_on_first = True
         return cost
 
-    def measure_widths(self, repeats=2, anchor_id=1, start=0):
-        """Time one replay per captured width on the capture's own inputs: ``{width: ms}``.
+    def measure_positions(self, top_position=None):
+        """The positions each captured width is timed at, ``[(width, first, last)]``: ``first`` is the position
+        the width starts serving (``width_for``), ``last`` the highest it serves, capped at ``top_position``."""
+        widths = sorted(w for w, r in self._pv_widths.items() if r["trace"] is not None)
+        positions, prev = [], None
+        for w in widths:
+            first = 0 if prev is None else prev - self.P_v - VERIFY_WIDTH_MARGIN + 1
+            if self.width_for(first) != w:
+                raise ValueError(f"position {first} selects width {self.width_for(first)} of {widths}, not {w}")
+            last = w - self.P_v - VERIFY_WIDTH_MARGIN
+            if top_position is not None:
+                last = min(last, int(top_position))
+            positions.append((w, first, max(first, last)))
+            prev = w
+        return positions
 
-        The adaptive policy's cost table (``spec_policy``). Each timing is
-        what a contract step pays on the device for that width: the
-        per-iteration input upload, the fused replay (the draft block and the
-        packed verify) and the ids readback, at ``anchor_id`` and position
-        ``start`` through the scratch table (block 0, which the prepare and
-        capture passes already wrote). The minimum of ``repeats`` timings is
-        kept. Runs after ``capture_widths`` and before any request, and leaves
-        the decoder as the capture left it: the next request replays rather
-        than reads ``_out``.
+    def measure_widths(self, top_position, repeats=2, anchor_id=1):
+        """Time one replay per captured width at the ends of its position range: ``{width: (first, ms, last, ms)}``.
+
+        The adaptive policy's cost table (``spec_policy``), a cost line in
+        the position per width. Each timing is what a contract step pays on
+        the device for that width at that position: the per-iteration input
+        upload, the fused replay (the draft block and the packed verify) and
+        the ids readback, at ``anchor_id`` through the scratch table (block
+        0, which the prepare and capture passes already wrote). The minimum
+        of ``repeats`` timings is kept. Runs after ``capture_widths`` and
+        before any request, and leaves the decoder as the capture left it:
+        the next request replays rather than reads ``_out``.
         """
         import time as _time
 
-        widths = sorted(w for w, r in self._pv_widths.items() if r["trace"] is not None)
-        if not widths:
-            raise RuntimeError("measure_widths needs captured widths (capture_widths first)")
         if int(repeats) < 1:
             raise ValueError(f"measure_widths needs repeats >= 1, got {repeats}")
+        positions = self.measure_positions(top_position)
+        if not positions:
+            raise RuntimeError("measure_widths needs captured widths (capture_widths first)")
+        t_all = _time.perf_counter()
         costs = {}
-        for width in widths:
+        timings = 0
+        for width, first, last in positions:
             self._pv_width_activate(self._pv_widths[width])
-            best = None
-            for _ in range(int(repeats)):
-                t0 = _time.perf_counter()
-                self._upload_iter_inputs(anchor_id, start)
-                ttnn.execute_trace(self.mesh_device, self.trace, cq_id=0, blocking=False)
-                out_ids_t, _fc_out = self._out
-                self._read_ids(out_ids_t)
-                ttnn.synchronize_device(self.mesh_device)
-                dt = (_time.perf_counter() - t0) * 1e3
-                best = dt if best is None else min(best, dt)
-            costs[width] = best
+            line = []
+            for pos in (first, last) if last > first else (first,):
+                best = None
+                for _ in range(int(repeats)):
+                    t0 = _time.perf_counter()
+                    self._upload_iter_inputs(anchor_id, pos)
+                    ttnn.execute_trace(self.mesh_device, self.trace, cq_id=0, blocking=False)
+                    out_ids_t, _fc_out = self._out
+                    self._read_ids(out_ids_t)
+                    ttnn.synchronize_device(self.mesh_device)
+                    dt = (_time.perf_counter() - t0) * 1e3
+                    best = dt if best is None else min(best, dt)
+                timings += 1
+                line.append((pos, best))
+            if len(line) == 1:
+                line.append(line[0])
+            costs[width] = (line[0][0], line[0][1], line[1][0], line[1][1])
         self._replay_on_first = True
         logger.info(
-            f"dFlash measured {len(costs)} verify widths (min of {int(repeats)} replays each, ms): "
-            + ", ".join(f"{w}={ms:.1f}" for w, ms in costs.items())
+            f"dFlash measured {len(costs)} verify widths ({timings} timings, min of {int(repeats)} replays each) "
+            f"in {_time.perf_counter() - t_all:.1f}s (ms at position): "
+            + ", ".join(f"{w}={v[1]:.1f}@{v[0]}..{v[3]:.1f}@{v[2]}" for w, v in costs.items())
         )
         return costs
 

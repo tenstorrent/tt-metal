@@ -2582,31 +2582,37 @@ class SpeculativeDecoder:
         _lg.info(f"[spec-serving] captured {len(cost)} records in {time.perf_counter() - t_all:.1f}s: {cost}")
 
     @staticmethod
-    def serving_measure_positions(widths, k):
-        """The position each rung of a width ladder is timed at: 0 for the narrowest rung, and for every wider
-        rung the first position the previous rung no longer covers (``serving_width_for`` then selects it)."""
+    def serving_measure_positions(widths, k, top_position=None):
+        """The positions each rung of a width ladder is timed at, ``[(width, first, last)]``: ``first`` is the
+        position the rung starts serving (0 for the narrowest, else the first position the previous rung no
+        longer covers) and ``last`` the highest it serves (``width - k - 2``), capped at ``top_position``."""
         ladder = sorted({int(w) for w in widths})
         positions, prev = [], None
         for w in ladder:
-            pos = 0 if prev is None else prev - int(k) - 1
-            if serving_width_for(ladder, pos, k) != w:
+            first = 0 if prev is None else prev - int(k) - 1
+            if serving_width_for(ladder, first, k) != w:
                 raise ValueError(
-                    f"position {pos} selects rung {serving_width_for(ladder, pos, k)} of {ladder}, not {w}"
+                    f"position {first} selects rung {serving_width_for(ladder, first, k)} of {ladder}, not {w}"
                 )
-            positions.append((w, pos))
+            last = w - int(k) - 2
+            if top_position is not None:
+                last = min(last, int(top_position))
+            positions.append((w, first, max(first, last)))
             prev = w
         return positions
 
-    def serving_measure_costs(self, repeats=2):
-        """Time the serving sequence once per record on padding inputs; the adaptive-K cost table (ms).
+    def serving_measure_costs(self, top_position, repeats=2):
+        """Time the serving sequence per record at the ends of its position range; the adaptive-K cost table.
 
-        Returns ``{("reseed", shape): ms, ("step", shape, width): ms}``: per
-        shape one ``serving_reseed`` of row 0 (the eager target forward at
-        ``B_v`` rows a row pays when it enters speculation), and per record
-        one ``serving_step`` of row 0 at the first position that selects its
-        rung (``serving_measure_positions``), so each number is what the
-        adapter pays for that call on the device: the uploads, the replay
-        and the host readback of the drafts and argmax ids. The minimum of
+        Returns ``{("reseed", shape): (0, ms, top, ms), ("step", shape, width): (first, ms, last, ms)}``,
+        each value a cost line in the position (``spec_policy.CostLine``):
+        per shape one ``serving_reseed`` of row 0 at position 0 and at
+        ``top_position`` (the eager target forward at ``B_v`` rows a row pays
+        when it enters speculation), and per record one ``serving_step`` of
+        row 0 at the first and the last position its rung serves
+        (``serving_measure_positions``), so each number is what the adapter
+        pays for that call on the device: the uploads, the replay and the
+        host readback of the drafts and argmax ids. The minimum of
         ``repeats`` timings is kept. Runs after ``serving_capture`` and
         before any real step, through zero tables (block 0, vLLM's null
         block, which the eager and captured passes already wrote; a bounded
@@ -2619,40 +2625,53 @@ class SpeculativeDecoder:
         self._srv_require(captured=True)
         if int(repeats) < 1:
             raise ValueError(f"serving_measure_costs needs repeats >= 1, got {repeats}")
+        top_position = max(0, int(top_position))
         t_all = time.perf_counter()
         costs = {}
-        for shape in self._srv_shapes:
-            B, K = shape
-            table = torch.zeros((B, self._srv_blocks), dtype=torch.int32)
+        timings = 0
+
+        def timed(call):
             best = None
             for _ in range(int(repeats)):
                 t0 = time.perf_counter()
-                self.serving_reseed(shape, [0], [0], [0], table)
+                out = call()
                 ttnn.synchronize_device(self.mesh_device)
                 dt = (time.perf_counter() - t0) * 1e3
                 best = dt if best is None else min(best, dt)
-            costs[("reseed", shape)] = best
-            for width, pos in self.serving_measure_positions(self._srv_widths[shape], K):
-                best = None
-                for _ in range(int(repeats)):
-                    t0 = time.perf_counter()
-                    result = self.serving_step(shape, [0], [0], [pos], table, [None])
-                    ttnn.synchronize_device(self.mesh_device)
-                    dt = (time.perf_counter() - t0) * 1e3
-                    best = dt if best is None else min(best, dt)
-                if int(result.width) != int(width):
-                    raise RuntimeError(
-                        f"serving_measure_costs timed record shape={shape} at position {pos} on S_k={result.width}, "
-                        f"expected the S_k={width} rung"
-                    )
-                costs[("step", shape, int(width))] = best
+            return best, out
+
+        for shape in self._srv_shapes:
+            B, K = shape
+            table = torch.zeros((B, self._srv_blocks), dtype=torch.int32)
+            at_zero, _ = timed(lambda: self.serving_reseed(shape, [0], [0], [0], table))
+            at_top = at_zero
+            if top_position > 0:
+                at_top, _ = timed(lambda: self.serving_reseed(shape, [0], [0], [top_position], table))
+                timings += 1
+            timings += 1
+            costs[("reseed", shape)] = (0, at_zero, top_position, at_top)
+            for width, first, last in self.serving_measure_positions(self._srv_widths[shape], K, top_position):
+                line = []
+                for pos in (first, last) if last > first else (first,):
+                    ms, result = timed(lambda: self.serving_step(shape, [0], [0], [pos], table, [None]))
+                    timings += 1
+                    if int(result.width) != int(width):
+                        raise RuntimeError(
+                            f"serving_measure_costs timed record shape={shape} at position {pos} on "
+                            f"S_k={result.width}, expected the S_k={width} rung"
+                        )
+                    line.append((pos, ms))
+                if len(line) == 1:
+                    line.append(line[0])
+                costs[("step", shape, int(width))] = (line[0][0], line[0][1], line[1][0], line[1][1])
         self._srv_last = None
         self._srv_seeded = {}
         _lg.info(
-            f"[spec-serving] measured {len(costs)} record costs in {time.perf_counter() - t_all:.1f}s "
-            f"(min of {int(repeats)} timings each, ms): "
+            f"[spec-serving] measured {len(costs)} record cost lines ({timings} timings, min of {int(repeats)} "
+            f"each) in {time.perf_counter() - t_all:.1f}s (ms at position): "
             + ", ".join(
-                f"{k[0]} {k[1]}" + (f" S_k={k[2]}" if len(k) > 2 else "") + f"={v:.1f}" for k, v in costs.items()
+                f"{k[0]} {k[1]}" + (f" S_k={k[2]}" if len(k) > 2 else "") + f"={v[1]:.1f}@{v[0]}..{v[3]:.1f}@{v[2]}"
+                for k, v in costs.items()
             )
         )
         return costs
