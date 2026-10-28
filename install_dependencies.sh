@@ -417,6 +417,17 @@ install_llvm() {
         $TEMP_DIR/llvm.sh 20
     fi
 
+    # clang-tidy-23 only (not the full llvm-23 toolchain): the repo is already
+    # registered and pinned below v17/v20 in prep_ubuntu_system, so this is an
+    # exact-package install, same approach as the CI build image.
+    echo "[INFO] Checking if clang-tidy-23 is already installed..."
+    if command -v clang-tidy-23 &> /dev/null; then
+        echo "[INFO] clang-tidy-23 is already installed. Skipping installation."
+    else
+        echo "[INFO] Installing clang-tidy-23..."
+        apt-get install -y --no-install-recommends clang-tidy-23
+    fi
+
     rm -rf "$TEMP_DIR"
 }
 
