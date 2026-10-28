@@ -1650,14 +1650,12 @@ class GLM53FlashForCausalLM:
                 self._free(out[1])
             chunk_ids = ids[s0 - plan.start : e - plan.start]
             out = self.model.prefill(chunk_ids, user=user, start=s0)
-            self._spec_alloc_check(f"the eager chunk [{s0}, {e})'s main-model prefill")
             if self.spec is not None:
                 # every chunk fills the drafter's rows [s0, e): the last row takes the chunk's greedy chunk-end token
                 # (the prompt's first generated token on the last chunk; on an intermediate chunk the model's own
                 # guess of the next chunk's first token, which the plugin never hands this call)
                 first_c = int(self.model.first_token(out[1], out[2]))
                 self.spec.prefill_fill(chunk_ids, first_c, out[0], user, s0, e - s0)
-                self._spec_alloc_check(f"the eager chunk [{s0}, {e})'s MTP fill")
             if on_chunk is not None:
                 on_chunk(e)
             if mem_log:
@@ -1669,6 +1667,9 @@ class GLM53FlashForCausalLM:
         logits = self._eager_last_logits(logits_last, owner_row) if want_logits else None
         self._free(streams)
         self._free(logits_last)
+        # the footprint check runs once the chunk outputs are freed: a check with the streams / logits still live
+        # compared a transient against the post-capture baseline and always failed (the 2026-10-28 8x4 runs)
+        self._spec_alloc_check(f"the eager prefill [{plan.start}, {plan.end}) (chunks + MTP fills, outputs freed)")
         return first, logits
 
     def _prefill_one_mm(self, prefix_ids: torch.Tensor, user: int, plan, mm: list[MMItem], *, want_logits: bool):
