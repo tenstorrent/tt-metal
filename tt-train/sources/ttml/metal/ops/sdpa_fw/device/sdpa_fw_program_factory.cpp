@@ -191,7 +191,7 @@ SDPAForwardProgramFactory::cached_program_t SDPAForwardProgramFactory::create(
     // well as in validate.
     const SDPAForwardShape shape = shape_of(query, key, value, mask_type, args.has_gate, args.return_intermediates);
     const SDPAForwardChunks chunks =
-        resolve_chunks(args.program_config, shape, l1_budget_bytes(device), num_available_cores);
+        resolve_chunks(args.program_config, shape, available_l1_bytes(*device), num_available_cores);
     const uint32_t Sq_chunk_t = chunks.Sq_chunk_t;
     const uint32_t Sk_chunk_t = chunks.Sk_chunk_t;
     const uint32_t heads_per_item = chunks.heads_per_item;

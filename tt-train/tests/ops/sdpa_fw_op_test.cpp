@@ -24,6 +24,7 @@
 #include "core/system_utils.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/common/const_utils.hpp"
+#include "metal/common/program_utils.hpp"
 #include "metal/operations.hpp"
 #include "metal/ops/sdpa_fw/device/sdpa_fw_config.hpp"
 #include "metal/ops/sdpa_fw/device/sdpa_fw_device_operation_types.hpp"
@@ -636,7 +637,7 @@ void run_sdpa_test(const SDPATestConfig& config, xt::xarray<float>* kernel_outpu
         // The gate CB takes L1, so the gated run may resolve different chunks than an ungated run would.
         // Reproduce the gated run's pick and pin the ungated run to it: both must use the same numerics.
         auto* device = &autograd::ctx().get_device();
-        const uint64_t l1_budget_bytes = ttml::metal::ops::sdpa_fw::device::l1_budget_bytes(device);
+        const uint64_t l1_budget_bytes = ttml::metal::available_l1_bytes(*device);
         const auto grid = device->compute_with_storage_grid_size();
         const auto picked = ttml::metal::ops::sdpa_fw::device::resolve_chunks(
             config.program_config,
