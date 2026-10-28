@@ -1,15 +1,56 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
-"""PCC gate for perf-mcp: runs the e2e correctness test that produces a PCC value.
+"""PCC gate for perf-mcp: self-contained e2e correctness test that produces a PCC value.
 
-This file exists because the perf-mcp config's PERF_MCP_PCC_TEST points here.
-It delegates to test_tokens_match_hf_generate which computes end-to-end logits PCC.
+All constants and helpers are inlined so the worktree copy works without
+test_e2e_text_generation.py present.
 """
 from __future__ import annotations
 
 import os
 
+import torch
+
 import ttnn
+
+PCC_TARGET = 0.99
+HIDDEN_PCC_FLOOR = 0.995
+HIDDEN_NORM_TOL = 0.005
+
+
+def _bf16_tie_tol(x: torch.Tensor) -> torch.Tensor:
+    return 2 * torch.ldexp(torch.ones_like(x), torch.frexp(x.abs().clamp_min(1e-6))[1] - 8)
+
+
+def _assert_tokens_agree(tt_tok, ref_tok, ref_logits, what, tt_logits=None):
+    assert tt_tok.shape == ref_tok.shape, f"{what}: shape {tuple(tt_tok.shape)} vs {tuple(ref_tok.shape)}"
+    diff = (tt_tok != ref_tok).nonzero().tolist()
+    bad = []
+    for b, s in diff:
+        lg = ref_logits[b, s].float()
+        top = lg[ref_tok[b, s]]
+        gap = float(top - lg[tt_tok[b, s]])
+        tol = float(_bf16_tie_tol(top))
+        sig = float((tt_logits[b, s].float() - lg).pow(2).mean().sqrt()) if tt_logits is not None else float("nan")
+        print(
+            f"[glm] {what} row {b} step {s}: tt={int(tt_tok[b, s])} ref={int(ref_tok[b, s])} gap={gap:.4f} tie_tol={tol:.4f} sigma={sig:.4f} top={float(top):.3f}"
+        )
+        if gap > tol:
+            bad.append((b, s, gap))
+    n = tt_tok.numel()
+    print(
+        f"[glm] {what}: {n - len(diff)}/{n} tokens equal, {len(diff) - len(bad)} bf16 near-ties, {len(bad)} real mismatches"
+    )
+    assert not bad, f"{what}: {len(bad)} token(s) differ from the reference beyond a bf16 tie: {bad[:8]}"
+
+
+def _assert_terminated(ended_by, golden_ended_by):
+    if os.environ.get("TT_PERF_OSL_TOKENS"):
+        print("TT_PERF_OSL_TOKENS caps the horizon for profiling by design; termination not asserted")
+        return
+    assert ended_by != "safety_cap", "run ended on the safety cap, not the model's stop rule"
+    assert ended_by in ("eos", "max_new_tokens"), f"run ended by {ended_by}"
+    assert ended_by == golden_ended_by, f"TT ended by {ended_by}, HF generate() by {golden_ended_by}"
 
 
 def test_main_perf():
@@ -20,23 +61,22 @@ def test_main_perf():
     open_kwargs = {"num_command_queues": 1, "trace_region_size": 1 << 30}
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(rows, n_chips), **open_kwargs)
     try:
-        from models.demos.glm_4_7_flash.tests.e2e.test_e2e_text_generation import (
-            HIDDEN_NORM_TOL,
-            HIDDEN_PCC_FLOOR,
-            PCC_TARGET,
-            _assert_terminated,
-            _assert_tokens_agree,
-            _check_stubs,
-            _request,
-        )
-        from models.demos.glm_4_7_flash.tt.pipeline import build_pipeline, pcc
-        from models.demos.glm_4_7_flash.tt.reference import _hf_reference_generate, load_hf_model
+        from models.demos.glm_4_7_flash.tt import inputs as glm_inputs
+        from models.demos.glm_4_7_flash.tt.pipeline import GRADUATED_STUBS, build_pipeline, pcc
+        from models.demos.glm_4_7_flash.tt.reference import StopRule, _hf_reference_generate, load_hf_model
 
-        tok, ids, mask, rule = _request()
+        B = glm_inputs.batch_size()
+        tok = glm_inputs.load_tokenizer()
+        ids, mask = glm_inputs.encode_example(tok, B)
+        rule = StopRule.for_prompt(ids.shape[1])
+
         golden = _hf_reference_generate(ids, mask, rule)
         pipe = build_pipeline(mesh, model=load_hf_model(), batch=ids.shape[0])
         out = pipe.generate(ids, rule, teacher_tokens=golden["new_tokens"], keep_logits=True)
-        _check_stubs(pipe)
+
+        missing = [n for n in GRADUATED_STUBS if pipe.counts.get(n, 0) == 0]
+        print(f"[glm] stub invocations: {dict(sorted(pipe.counts.items()))}")
+        assert not missing, f"graduated stubs never invoked: {missing}"
 
         assert (
             out["steps"] == golden["new_tokens"].shape[1]
