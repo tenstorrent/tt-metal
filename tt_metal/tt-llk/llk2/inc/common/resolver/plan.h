@@ -120,6 +120,7 @@ struct MathPlan
     DataFormat format; // the math (Src) format
     bool transpose_faces;
     std::uint32_t function; // op-specific: which eltwise binary or SFPU function; 0 when unused
+    bool fast = false;      // SFPU functions: approximate mode
 };
 
 struct PackPlan
