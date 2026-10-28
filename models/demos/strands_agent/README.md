@@ -16,13 +16,13 @@ pytest -sv models/demos/strands_agent/demo/text_demo.py
 
 ## Perf
 Eager prefill, p50 of 5 runs after 2 warmups. One Blackhole chip of a QB2 (P300x2), 1x1 mesh.
-Batch: one question repeated up to 32 times, at most 8192 padded tokens per forward.
+B=32: one question repeated 32 times in one call, split into forwards of at most 8192 padded tokens. Throughput is 32 / B=32 latency.
 
 | Prompt tokens | 128 | 256 | 512 | 1024 | 2048 | 4000 |
 |---|---|---|---|---|---|---|
-| B=1 latency (ms) | 46.9 | 49.1 | 90.4 | 161.1 | 283.8 | 537.2 |
-| Batch size | 32 | 32 | 16 | 8 | 4 | 2 |
-| Batch throughput (questions/s) | 46.6 | 26.9 | 13.9 | 7.0 | 3.7 | 1.9 |
+| B=1 latency (ms) | 47.8 | 50.4 | 90.7 | 161.2 | 283.5 | 537.1 |
+| B=32 latency (ms) | 686.8 | 1187.2 | 2309.1 | 4587.0 | 8721.7 | 17164.3 |
+| Batch throughput (questions/s) | 46.6 | 27.0 | 13.9 | 7.0 | 3.7 | 1.9 |
 
 ```bash
 pytest -sv models/demos/strands_agent/tests/test_perf.py

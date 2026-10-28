@@ -3,7 +3,8 @@
 
 """StrandsDecider latency (batch 1) and batched throughput (eager prefill, one chip) against prompt length.
 
-The batched run repeats one question up to MAX_BATCH times within MAX_BATCH_TOKENS padded tokens. No time assertions."""
+The batched run repeats one question BATCH times; the call splits it into forwards of at most MAX_BATCH_TOKENS
+padded tokens. No time assertions."""
 
 import statistics
 import time
@@ -13,9 +14,8 @@ import torch
 from loguru import logger
 
 from models.common.utility_functions import run_for_blackhole
-from models.demos.blackhole.qwen36.tt.model import Qwen36Model
 from models.demos.strands_agent.tests.common import parametrize_mesh
-from models.demos.strands_agent.tt.model import StrandsDecider
+from models.demos.strands_agent.tt.model import StrandsDecider, plan_batches
 from models.demos.strands_agent.tt.prompting import encode_request
 
 TARGET_LENGTHS = (128, 256, 512, 1024, 2048, 4000)
@@ -37,6 +37,7 @@ STATE_TEXT = (
 )
 WARMUP_RUNS = 2
 TIMED_RUNS = 5
+BATCH = 32
 
 
 def _build_question(decider, target):
@@ -66,11 +67,8 @@ def test_strands_decider_latency(mesh_device):
     rows = []
     for target in TARGET_LENGTHS:
         q = _build_question(decider, target)
-        batch = min(
-            decider.max_batch, max(1, decider.max_batch_tokens // Qwen36Model._mask_bucket_for(len(q.input_ids)))
-        )
         times = {}
-        for qs in ([q], [q] * batch):
+        for qs in ([q], [q] * BATCH):
             for _ in range(WARMUP_RUNS):
                 decider.question_logits_batch(qs)
             runs = []
@@ -79,12 +77,9 @@ def test_strands_decider_latency(mesh_device):
                 decider.question_logits_batch(qs)
                 runs.append((time.perf_counter() - start) * 1000)
             times[len(qs)] = statistics.median(runs)
-        rows.append((target, len(q.input_ids), times[1], batch, times[batch]))
+        forwards = len(plan_batches([len(q.input_ids)] * BATCH, decider.max_batch, decider.max_batch_tokens))
+        rows.append((len(q.input_ids), times[1], times[BATCH], forwards))
 
-    logger.info(
-        f"{'target':>7} {'tokens':>7} {'B=1 ms':>8} {'batch':>6} {'batch ms':>9} {'ms/question':>12} {'questions/s':>12}"
-    )
-    for target, tokens, b1, batch, bt in rows:
-        logger.info(
-            f"{target:>7} {tokens:>7} {b1:>8.1f} {batch:>6} {bt:>9.1f} {bt / batch:>12.1f} {1000 * batch / bt:>12.1f}"
-        )
+    logger.info(f"{'tokens':>7} {'B=1 ms':>8} {'B=32 ms':>9} {'forwards':>9} {'questions/s':>12}")
+    for tokens, b1, bt, forwards in rows:
+        logger.info(f"{tokens:>7} {b1:>8.1f} {bt:>9.1f} {forwards:>9} {1000 * BATCH / bt:>12.1f}")
