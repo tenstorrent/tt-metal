@@ -219,3 +219,9 @@ its log/owned-process cancellation are preserved and no pre-commit pass is
 claimed. An explicit local index contains only the28 reviewed files, and every
 validated runtime/test blob is checked against freezev4 before commit. Git
 plumbing creates the local checkpoint without rescanning unrelated NFS source.
+
+Local source checkpoint: `952b1433ad1b60501e09b2c22a99be183bea61cf` on
+`mvasiljevic/qwen38-local-tsu-ttft` (28 stage-owned files; parent
+`206dd3a0ec6f6e1494d4408e6590e47d4bc97ae0`). No push. The 37 validated runtime/test
+blobs in this commit exactly match source freezev4. This follow-up ledger update
+changes documentation only; its resulting HEAD is in the local handoff receipt.
