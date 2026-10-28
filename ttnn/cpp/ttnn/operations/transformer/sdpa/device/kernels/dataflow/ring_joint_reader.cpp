@@ -609,10 +609,26 @@ void kernel_main() {
     constexpr uint32_t sol_res_block_words = get_named_compile_time_arg_val("sol_res_block_words");
     static_assert(!sol_resident || (sol_chunk_mode && !sol_compact && !sol_pack), "resident mode is a chunk mode");
     static_assert(!sol_resident || sol_res_block_words * 32 >= sol_nb, "resident: block words cover the shard");
+    // D1 (sparse_attn_design_2026-10-23.md 4.2): the resident piece stream replaces the chain with one producer per
+    // head group that reads each piece from DRAM and multicasts it to every other member (no forwarding). The head
+    // chain's membership and semaphores are reused: sender = the producer's credit count (+1 per consumer per
+    // piece), receiver = each consumer's delivered count (set to the running piece count by multicast), valid = the
+    // producer's local source word for that set. The group arguments follow the Sol chain members.
+    constexpr bool sol_res_mcast = get_named_compile_time_arg_val("sol_res_mcast") == 1;
+    static_assert(!sol_res_mcast || sol_resident, "group delivery is the resident stream");
+    // Resident iteration boundary (U3). rec_base != 0: one plan page per ring iteration holding every chunk's record
+    // from that word on (0 = one page per chunk). no_dummies: no phase-alignment pushes at the end of an iteration;
+    // every member of a chain or group pushes the same sequence, so their CB pointers stay in step without them, and
+    // the dummies' reserves held the reader back until compute had nearly drained the iteration.
+    constexpr uint32_t sol_res_plan_rec_base = get_named_compile_time_arg_val("sol_res_plan_rec_base");
+    constexpr bool sol_res_no_dummies = get_named_compile_time_arg_val("sol_res_no_dummies") == 1;
+    static_assert(sol_res_plan_rec_base == 0 || sol_resident, "the one-page plan is the resident plan");
+    static_assert(!sol_res_no_dummies || sol_resident, "dummies are dropped in resident mode only");
     constexpr uint32_t cb_k_stage = get_named_compile_time_arg_val("cb_k_stage");
     constexpr uint32_t cb_v_stage = get_named_compile_time_arg_val("cb_v_stage");
     constexpr uint32_t sol_blocks_per_page = get_named_compile_time_arg_val("sol_blocks_per_page");
-    // K/V CB depth in chunks (factory kv_cb_pages, default 2); only the end-of-iteration phase alignment needs it.
+    // K/V CB depth in chunks (factory kv_cb_pages, default 2); the end-of-iteration phase alignment and the group
+    // delivery's credit lookahead use it.
     constexpr uint32_t kv_cb_pages = get_named_compile_time_arg_val("kv_cb_pages");
     constexpr uint32_t kSolBlockTiles = 2;  // 64-token blocks
     constexpr uint32_t sol_bias_tile_bytes = get_tile_size(cb_sol_bias);
@@ -1171,6 +1187,9 @@ void kernel_main() {
     // Tracks whether Q has been pushed for q_per_core == 1 optimization.
     // When q_per_core == 1, Q is identical across ring iterations so we only push it once.
     bool q_pushed = false;
+    // D1 (resident group delivery): pieces this core has pushed through the group stream since launch. The
+    // producer's delivered count and the consumers' credits are running totals of it, never reset in a launch.
+    [[maybe_unused]] uint32_t res_group_pieces = 0;
 
     /**
      * Iterate over ring indices.
@@ -1500,11 +1519,31 @@ void kernel_main() {
             uint32_t res_hi[kResMax];
             uint32_t seg_ulo[kResMax];
             uint32_t seg_uhi[kResMax];
+            // One-page plan (sol_res_plan_rec_base != 0): every chunk's record [kept-block words][union lo, hi]
+            // [do_pooled] in the one plan page, from word rec_base (past the shard slice the scratch reads), pushed
+            // once per iteration. The per-chunk pages made the reader wait for compute to pop each one, so the next
+            // iteration's plan could not go out before compute had finished this iteration's pieces.
+            constexpr uint32_t kPlanRec = kBlockWords + 3;
+            [[maybe_unused]] const auto plan_rec = [&](uint32_t i) {
+                return CoreLocalMem<volatile uint32_t>(
+                    cb_plan.get_write_ptr() + (sol_res_plan_rec_base + i * kPlanRec) * sizeof(uint32_t));
+            };
             {
                 SOL_ZONE("RD_RES_BITS");  // mask rows of this core's chunks and of every chain member's
                 for (uint32_t i = 0; i < n_res; ++i) {
                     read_shard_slice(res_nq[i], res_qc[i]);
-                    row_kept_bits(res_lo[i], res_hi[i]);
+                    if constexpr (sol_res_plan_rec_base != 0) {
+                        // One read per chunk: the block words go straight into the chunk's record.
+                        uint32_t words[kBlockWords];
+                        row_block_bits(words);
+                        auto rec = plan_rec(i);
+                        for (uint32_t w = 0; w < kBlockWords; ++w) {
+                            rec[w] = words[w];
+                        }
+                        piece_bits(words, res_lo[i], res_hi[i]);
+                    } else {
+                        row_kept_bits(res_lo[i], res_hi[i]);
+                    }
                 }
             }
             // Head segments and their chain-wide unions. The chain members cover the head this core participates
@@ -1519,22 +1558,17 @@ void kernel_main() {
                     ++i1;
                 }
                 if (sol_n_members > 0 && head_cfg.participates && res_nq[i0] == head_cfg.head) {
-                    for (uint32_t m = 0; m < sol_n_members; ++m) {
-                        const uint32_t m_start = get_arg_val<uint32_t>(sol_members_base + 2 * m);
-                        const uint32_t m_count = get_arg_val<uint32_t>(sol_members_base + 2 * m + 1);
-                        for (uint32_t c = 0; c < m_count; ++c) {
-                            const uint32_t qc = m_start + c;
-                            if (qc >= res_qc[i0] && qc < res_qc[i0] + (i1 - i0)) {
-                                continue;  // this core's own chunks are already in
-                            }
-                            read_shard_slice(res_nq[i0], qc);
-                            uint32_t lo;
-                            uint32_t hi;
-                            row_kept_bits(lo, hi);
-                            ulo |= lo;
-                            uhi |= hi;
-                        }
+                    // Chain / group members stream every piece that holds a full block of this shard (block 0
+                    // forced, as in row_block_bits): a superset of the members' union that needs no mask reads (the
+                    // union read every member's row per ring iteration, ~200 us while compute idled, and at these
+                    // densities it is nearly every piece anyway). The same on every member (it depends on the shard
+                    // only) and inside every live piece, so compute agrees; it skips a piece it keeps no block of.
+                    uint32_t words[kBlockWords];
+                    for (uint32_t w = 0; w < kBlockWords; ++w) {
+                        words[w] = full_bits[w];
                     }
+                    words[0] |= 1u;
+                    piece_bits(words, ulo, uhi);
                 }
                 for (uint32_t i = i0; i < i1; ++i) {
                     seg_ulo[i] = ulo;
@@ -1542,7 +1576,16 @@ void kernel_main() {
                 }
                 i0 = i1;
             }
-            {
+            if constexpr (sol_res_plan_rec_base != 0) {
+                SOL_ZONE("RD_RES_PLAN");
+                for (uint32_t i = 0; i < n_res; ++i) {
+                    auto rec = plan_rec(i);
+                    rec[kBlockWords] = seg_ulo[i];
+                    rec[kBlockWords + 1] = seg_uhi[i];
+                    rec[kBlockWords + 2] = do_pooled;
+                }
+                cb_plan.push_back(1);
+            } else {
                 SOL_ZONE("RD_RES_PLAN");  // long when compute is behind: the reserve waits for the previous plan pop
                 for (uint32_t i = 0; i < n_res; ++i) {
                     if (i > 0) {
@@ -1669,13 +1712,149 @@ void kernel_main() {
                 }
                 KV_chunks_processed_in_iter++;
             };
+            uint32_t n_pieces = 0;  // pieces streamed this iteration (the first pass counts them)
+            // D1: group delivery. Arguments (after the Sol chain members): role (0 = not in a group: reads its own
+            // K/V; 1 = producer; 2 = consumer), producer NoC x, y, receiver count, rectangle count, then per
+            // rectangle (x_start, y_start, x_end, y_end, cores), producer only. Every member pushes the same page
+            // sequence into cb_k_in / cb_v_in (same pieces, same pooled pages), so
+            // the producer's write pointer for a piece is every consumer's page for it.
+            //   consumer: reserve the piece's K and V pages, credit the producer (+1), wait until the delivered
+            //     count reaches the piece, push. At most one credit is outstanding (the next piece's), and never
+            //     past the iteration's last piece (the pooled and dummy pages after it are this core's own).
+            //   producer: reserve its own pages, read K and V from DRAM, push them for its compute, wait for
+            //     receivers x (piece + 1) credits, multicast K and V to every rectangle, then the new count.
+            // The credits share one counter, so the sum says every consumer has freed its page only because no
+            // consumer can credit two pieces ahead: when the producer waits for piece p, every consumer has
+            // received at most p - 1 and so credited at most p, and the sum reaches receivers x p only if each one
+            // has. With a deeper lookahead, a fast consumer's extra credits would stand in for a slow one's and the
+            // multicast would overwrite a page the slow core's compute has not popped. The CB still holds
+            // kv_cb_pages pieces: the lookahead bounds only the producer's lead over the slowest receipt.
+            [[maybe_unused]] const uint32_t g_base = sol_members_base + 2 * sol_n_members;
+            [[maybe_unused]] const uint32_t g_role = sol_res_mcast ? get_arg_val<uint32_t>(g_base) : 0;
+            [[maybe_unused]] uint32_t g_granted = 0;  // pieces credited this iteration
+            [[maybe_unused]] uint32_t g_ahead = 0;    // pieces credited, not yet pushed
+            const auto g_try_grant = [&](bool blocking) -> bool {
+                if (g_granted >= n_pieces) {
+                    return false;
+                }
+                CircularBuffer cb_k(cb_k_in);
+                CircularBuffer cb_v(cb_v_in);
+                const uint32_t k_need = k_chunk_tiles * (g_ahead + 1);
+                const uint32_t v_need = v_cb_entry_tiles * (g_ahead + 1);
+                if (!blocking &&
+                    (g_ahead > 0 || !cb_k.pages_reservable_at_back(k_need) || !cb_v.pages_reservable_at_back(v_need))) {
+                    return false;
+                }
+                cb_k.reserve_back(k_need);
+                cb_v.reserve_back(v_need);
+                ++g_ahead;
+                ++g_granted;
+                Semaphore<>(head_sender_semaphore_id)
+                    .up(noc, get_arg_val<uint32_t>(g_base + 1), get_arg_val<uint32_t>(g_base + 2), 1);
+                return true;
+            };
+            const auto g_grant_ahead = [&]() {
+                while (g_try_grant(false)) {
+                }
+            };
+            const auto stream_piece_group = [&](uint32_t nb, uint32_t nq, uint32_t k) {
+                CircularBuffer cb_k(cb_k_in);
+                CircularBuffer cb_v(cb_v_in);
+                if (g_role == 2) {
+                    if (g_ahead == 0) {
+                        g_try_grant(true);
+                    }
+                    {
+                        SOL_ZONE("RD_GROUP_RX");  // the wait for the producer's multicast (the credit went out earlier)
+                        Semaphore<>(head_receiver_semaphore_id).wait_min(res_group_pieces + 1);
+                    }
+                    cb_k.push_back(k_chunk_tiles);
+                    cb_v.push_back(v_cb_entry_tiles);
+                    --g_ahead;
+                    ++res_group_pieces;
+                    g_grant_ahead();
+                    KV_chunks_processed_in_iter++;
+                    return;
+                }
+                // Producer.
+                const uint32_t nk = nq / q_heads_per_k;
+                const uint32_t nv = nq / q_heads_per_v;
+                const uint32_t kv_batch = indexed_kv_cache ? kv_cache_batch_idx : nb;
+                const uint32_t gathered_kv_batch = indexed_kv_cache ? 0 : nb;
+                const uint32_t src_batch = source_is_local ? kv_batch : gathered_kv_batch;
+                const uint32_t row0 = (source_is_local ? 0 : source_start_tile) + k * Sk_chunk_t;
+                const Slice k_slice(src_batch, nk, row0, row0 + Sk_chunk_t, 0, DHt);
+                const Slice v_slice(src_batch, nv, row0, row0 + Sk_chunk_t, v_col_offset_t, v_col_offset_t + vDHt);
+                cb_k.reserve_back(k_chunk_tiles);
+                cb_v.reserve_back(v_cb_entry_tiles);
+                const uint32_t k_addr = cb_k.get_write_ptr();
+                const uint32_t v_addr = cb_v.get_write_ptr();
+                {
+                    SOL_ZONE("RD_FETCH_K");
+                    if (source_is_local) {
+                        fetch_block(local_k_generator, k_slice, end_seq_tile, cb_k_in, k_addr, k_tile_bytes, true);
+                        fetch_block(local_v_generator, v_slice, end_seq_tile, cb_v_in, v_addr, v_tile_bytes, false);
+                    } else {
+                        fetch_block(gathered_k_generator, k_slice, end_seq_tile, cb_k_in, k_addr, k_tile_bytes, true);
+                        fetch_block(gathered_v_generator, v_slice, end_seq_tile, cb_v_in, v_addr, v_tile_bytes, false);
+                    }
+                }
+                // Push first: the multicast only reads the pages, and they are not reserved again before this
+                // core's compute has popped them and the writes below are flushed.
+                cb_k.push_back(k_chunk_tiles);
+                cb_v.push_back(v_cb_entry_tiles);
+                ++res_group_pieces;
+                const uint32_t n_recv = get_arg_val<uint32_t>(g_base + 3);
+                const uint32_t n_rects = get_arg_val<uint32_t>(g_base + 4);
+                {
+                    SOL_ZONE("RD_GROUP_TX");  // the wait for the slowest consumer's credit, then the multicasts
+                    Semaphore<>(head_sender_semaphore_id).wait_min(n_recv * res_group_pieces);
+                    Semaphore<> count_src(head_valid_semaphore_id);
+                    count_src.set(res_group_pieces);
+                    for (uint32_t r = 0; r < n_rects; ++r) {
+                        const uint32_t a = g_base + 5 + 5 * r;
+                        // NoC 1 runs the other way: its rectangle starts at the high corner.
+                        const bool rev = noc.get_noc_id() == 1;
+                        const uint32_t x0 = get_arg_val<uint32_t>(a + (rev ? 2 : 0));
+                        const uint32_t y0 = get_arg_val<uint32_t>(a + (rev ? 3 : 1));
+                        const uint32_t x1 = get_arg_val<uint32_t>(a + (rev ? 0 : 2));
+                        const uint32_t y1 = get_arg_val<uint32_t>(a + (rev ? 1 : 3));
+                        const uint32_t n_dests = get_arg_val<uint32_t>(a + 4);
+                        // K and V linked, then the count: back to back, no flush in between (ChainLink::forward).
+                        noc.async_write_multicast(
+                            CoreLocalMem<uint32_t>(k_addr),
+                            MulticastEndpoint{},
+                            k_chunk_tiles * k_tile_bytes,
+                            n_dests,
+                            {},
+                            {.noc_x_start = x0, .noc_y_start = y0, .noc_x_end = x1, .noc_y_end = y1, .addr = k_addr},
+                            /*linked=*/true);
+                        noc.async_write_multicast(
+                            CoreLocalMem<uint32_t>(v_addr),
+                            MulticastEndpoint{},
+                            v_cb_entry_tiles * v_tile_bytes,
+                            n_dests,
+                            {},
+                            {.noc_x_start = x0, .noc_y_start = y0, .noc_x_end = x1, .noc_y_end = y1, .addr = v_addr},
+                            /*linked=*/true);
+                        count_src.relay_multicast(
+                            noc, Semaphore<>(head_receiver_semaphore_id), x0, y0, x1, y1, n_dests, /*linked=*/false);
+                    }
+                    noc.async_writes_flushed();
+                }
+                KV_chunks_processed_in_iter++;
+            };
             {
                 SOL_ZONE("RD_RES_PIECES");  // the whole piece stream of this iteration (fetch / chain / CB waits)
                 // Two passes over the same (piece, head group) order: a count first, so each streamed piece knows
                 // whether another follows in this iteration (the lookahead arms the next page), then the stream.
-                uint32_t n_pieces = 0;
                 uint32_t j = 0;
                 for (uint32_t pass = 0; pass < 2; ++pass) {
+                    if constexpr (sol_res_mcast) {
+                        if (pass == 1 && g_role == 2) {
+                            g_grant_ahead();  // the first pieces' credits, before the first wait
+                        }
+                    }
                     for (uint32_t k = 0; k < num_local_k_chunks; ++k) {
                         if (!chunked_kv_chunk_is_live<
                                 kv_pad_rotation_enabled,
@@ -1697,7 +1876,16 @@ void kernel_main() {
                                     ++n_pieces;
                                 } else {
                                     ++j;
-                                    stream_piece(res_nb[i0], res_nq[i0], k, j < n_pieces);
+                                    if constexpr (sol_res_mcast) {
+                                        // A group serves one head; a member's chunks never span two (factory).
+                                        if (g_role != 0) {
+                                            stream_piece_group(res_nb[i0], res_nq[i0], k);
+                                        } else {
+                                            stream_piece(res_nb[i0], res_nq[i0], k, j < n_pieces);
+                                        }
+                                    } else {
+                                        stream_piece(res_nb[i0], res_nq[i0], k, j < n_pieces);
+                                    }
                                 }
                             }
                             i0 = i1;
@@ -1709,6 +1897,13 @@ void kernel_main() {
             if constexpr (sol_gen_bias) {
                 if (do_pooled) {
                     SOL_ZONE("RD_RES_POOLED");
+                    if constexpr (sol_res_plan_rec_base != 0) {
+                        // The row reads below fill the whole scratch, records included: take the page back first,
+                        // which waits until compute has popped (read) this iteration's plan. Short iterations
+                        // can push every piece before compute starts. The next iteration's reserve returns it.
+                        cb_plan.reserve_back(1);
+                        scratch = cb_plan.get_write_ptr() + 64;
+                    }
                     constexpr uint32_t pooled_rows_t = sol_n_blocks_pad / 32;
                     const sol_bias_gen::Geometry geo{
                         kv_local_padded_Nt * 32, sol_logical_n_tokens, sol_nb, sol_nb_pad, sol_nkc, Sk_chunk_t};
@@ -2792,7 +2987,7 @@ void kernel_main() {
             // so the next group and subsequent dispatches start at the right source.
             packed_readiness.drain(source_group_size, wait_packed_source);
         }
-        if constexpr (!has_sliding_window) {
+        if constexpr (!has_sliding_window && !sol_res_no_dummies) {
             SOL_ZONE("RD_DUMMY");  // phase-alignment pushes: the reserves wait for compute to drain the K/V CBs
             for (uint32_t dummy_chunk = 0;
                  dummy_chunk < dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer, kt_inplace_v, kv_cb_pages>(

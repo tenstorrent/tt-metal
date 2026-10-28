@@ -1054,7 +1054,9 @@ def _run_sequence(
 
 @GALAXY_RING
 @pytest.mark.parametrize(
-    "rows,logical_n,k_chunk", [(1024, 8192, 256), (4736, 37888, 384)], ids=["r1024k256", "r4736k384"]
+    "rows,logical_n,k_chunk",
+    [(1024, 8192, 256), (4736, 37888, 384), (4736, 37888, 256)],
+    ids=["r1024k256", "r4736k384", "r4736k256"],
 )
 def test_resident_call_parity(
     mesh_device, sp_axis, tp_axis, num_links, topology, is_fsdp, rows, logical_n, k_chunk, reset_seeds, capfd

@@ -1462,14 +1462,19 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // build the next V while compute consumed the current one; with in-place latent V (kt_inplace_v)
     // there is no V entry, but the 3rd K^T slot still buys prefetch slack that hides the reader's
     // NoC latency tail — measured ~+3pt math util on the dv512 q32 shape vs double-buffering.
-    // K/V CB depth in chunks. Default 2 (double buffer). TT_SOL_KV_PAGES=3..8 is a measurement knob (not hashed:
-    // set it for the whole process): the store-and-forward chain is many cores deep and a 2-deep buffer cannot
-    // decouple reader time from compute time across that many hops, so the two add instead of overlapping. Costs
-    // Sk_chunk_t * (DHt + vDHt) tiles of L1 per extra page.
+    // K/V CB depth in chunks. Default 2 (double buffer). TT_SOL_KV_PAGES=3|4 is a measurement knob (not hashed:
+    // set it for the whole process): the store-and-forward chain is ~10 cores deep and the sparse op's time per
+    // chunk visit measures as reader time PLUS compute time rather than the larger of the two, which a 2-deep
+    // buffer cannot decouple across that many hops. Costs Sk_chunk_t * (DHt + vDHt) tiles of L1 per extra page.
+    // Resident mode delivers each head chain's pieces by multicast from one producer per group instead of
+    // forwarding them core to core (see sol_res_mcast in the reader), over a 3-deep K/V CB: the producer can send the
+    // next piece while every member computes on the previous ones.
+    const bool sol_res_mcast = sol_resident && build_kv_chains && use_head_chain && sol_chain_len == 0;
     const uint32_t kv_cb_pages = [&]() -> uint32_t {
         const char* env = std::getenv("TT_SOL_KV_PAGES");
-        const uint32_t pages = env ? static_cast<uint32_t>(std::atoi(env)) : 2u;
-        return (pages >= 2 && pages <= 8 && !v_shares_k_buffer) ? pages : 2u;
+        const uint32_t default_pages = sol_res_mcast ? 3u : 2u;
+        const uint32_t pages = env ? static_cast<uint32_t>(std::atoi(env)) : default_pages;
+        return (pages >= 2 && pages <= 8 && !v_shares_k_buffer) ? pages : default_pages;
     }();
     uint32_t k_tiles = Sk_chunk_t * DHt * (v_shares_k_buffer ? 3 : kv_cb_pages);
     uint32_t v_tiles = Sk_chunk_t * vDHt * kv_cb_pages;
@@ -2232,8 +2237,18 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t cb_sol_plan =
         sol_enabled ? allocate_cb((sol_compact ? 128 : 64) + sol_mask_row_bytes, 1, tt::DataFormat::UInt32)
                     : inactive_cb;
-    // One pooled chunk of bias tiles in flight (bias is read once per pooled chunk, a few pooled chunks per Q
-    // chunk); 2*Sk_chunk_t would push the static CB region past the L1 buffers at the largest supported shapes.
+    // Resident mode puts every chunk's plan record in one page per ring iteration, after the header (16 words) and
+    // the shard slice the reader scans (sol_nb_pad words), so the reader does not wait for compute to pop a page per
+    // chunk at each iteration boundary. The records fit in the scratch the whole-row reads already need; a short row
+    // (one shard: the slice is the whole row) leaves no room for them, and then each chunk gets its own page. And no
+    // phase-alignment dummies: every chain / group member pushes the same sequence, so the pointers stay in step.
+    const uint32_t sol_res_rec_words = sol_resident ? tt::div_up(sol_nb, 32u) + 3 : 0;
+    const bool sol_res_plan_fits =
+        (16 + sol_nb_pad + max_q_per_core * sol_res_rec_words) * sizeof(uint32_t) <= 64 + sol_mask_row_bytes;
+    const uint32_t sol_res_plan_rec_base = (sol_resident && sol_res_plan_fits) ? 16 + sol_nb_pad : 0;
+    const bool sol_res_no_dummies = sol_resident;
+    // One pooled chunk of bias tiles in flight (bias is read once per pooled chunk, 4 pooled chunks per Q chunk per
+    // layer); 2*Sk_chunk_t pushed the static CB region past the L1 buffers at the 10 s / 15 s shapes.
     const uint32_t cb_sol_bias = sol_enabled ? allocate_tile_cb(Sk_chunk_t, mask_tile_size, mask_df) : inactive_cb;
     // Pack-mode staging pages. Under sol_pack the roles invert: these hold the raw downloaded chunk and are the
     // chain's forward source, while cb_k_in / cb_v_in carry PACKED pages to compute.
@@ -3363,7 +3378,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         {"sol_resident", sol_resident ? 1u : 0u},
         {"sol_resident_slots", sol_resident ? max_q_per_core : 0u},
         {"sol_res_block_words", sol_resident ? tt::div_up(sol_nb, 32u) : 0u},
-        // Static row max (see sol_static_max above): 1 iff sol_row_max is present (resident only). The reader
+        // Resident group delivery by multicast (see sol_res_mcast above).
+        {"sol_res_mcast", sol_res_mcast ? 1u : 0u},
+        // Resident iteration boundary (see sol_res_plan_rec_base above): the one-page plan's record base word
+        // (0 = a page per chunk) and no phase-alignment dummies.
+        {"sol_res_plan_rec_base", sol_res_plan_rec_base},
+        {"sol_res_no_dummies", sol_res_no_dummies ? 1u : 0u},
+        // M4 static row max (see sol_static_max above): 1 iff sol_row_max is present (resident only). The reader
         // then has a sol_row_max accessor right after sol_pv's and its address at rotated_args_base + 3, with the
         // bias / n_members / my_start / table / member words shifted up by one (no slot otherwise, so every other
         // mode keeps its offsets); compute ignores the tensor and keeps the running max.
@@ -3453,6 +3474,16 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         }
         compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
     }
+    // Resident mode builds the compute kernel at O2 unconditionally: at the default level the 5 s program sits at
+    // the 70,656 B kernel config buffer (M9's and M10's first builds overflowed it; M10 with its flushes outlined
+    // was still 336 B over), and O2 cuts the three TRISC binaries by ~30 %. Every profiled resident run (which set
+    // O2 through TT_SOL_STEP_PROFILE) showed the same per-piece compute as the unprofiled timings, so O2 costs no
+    // measurable step time here: the step is bound by Tensix instruction throughput, not by RISC issue. The
+    // kernel's build hash carries the level (ComputeKernel::config_hash), so the JIT cache cannot serve the O3
+    // binary for it.
+    if (sol_resident) {
+        compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
+    }
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
@@ -3479,6 +3510,84 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         for (uint32_t len = 0; len <= 65; ++len) {
             const float v = (len == 0 || len > 64) ? kSolBiasNeg : std::log(static_cast<float>(len)) / scale_value;
             sol_len_bias_table[len / 2] |= f2bf(v) << (16 * (len % 2));
+        }
+    }
+
+    // D1 group delivery: per core [role, producer x, producer y, receivers, rectangles, (x0, y0, x1, y1, cores)...].
+    // A group is a head chain's members (resident chains hold single-head cores only); the producer reads every piece
+    // from DRAM. The receivers are covered by rectangles of consecutive NoC x on one row each, so a multicast never
+    // lands on a core outside the group. The producer is the first member in core order (not the chain's injector,
+    // which the chain setup may move to the middle of a row): it starts its row, so it does not split a rectangle,
+    // and a group of consecutive cores spanning two rows needs two rectangles.
+    constexpr uint32_t kSolGroupMaxRects = 8;
+    std::vector<std::vector<uint32_t>> sol_group_args(num_cores, std::vector<uint32_t>{0u, 0u, 0u, 0u, 0u});
+    if (sol_res_mcast) {
+        for (uint32_t h = 0; h < static_cast<uint32_t>(head_segments.size()); ++h) {
+            std::vector<uint32_t> members;
+            for (const auto& seg : head_segments[h]) {
+                const auto& cfg = head_chain_configs.at(seg.core_idx);
+                if (!cfg.participates || cfg.head != h ||
+                    std::find(members.begin(), members.end(), seg.core_idx) != members.end()) {
+                    continue;
+                }
+                TT_FATAL(
+                    core_work[seg.core_idx].head_work.size() == 1,
+                    "sol resident group delivery: core {} of head {} spans two heads",
+                    seg.core_idx,
+                    h);
+                members.push_back(seg.core_idx);
+            }
+            if (members.size() < 2) {
+                continue;
+            }
+            const uint32_t producer = *std::min_element(members.begin(), members.end());
+            const CoreCoord prod_phys = core_work[producer].physical_core;
+            std::map<uint32_t, std::vector<uint32_t>> receiver_xs_by_row;
+            for (const uint32_t ci : members) {
+                if (ci != producer) {
+                    receiver_xs_by_row[core_work[ci].physical_core.y].push_back(core_work[ci].physical_core.x);
+                }
+            }
+            std::vector<std::array<uint32_t, 5>> rects;
+            for (auto& [y, xs] : receiver_xs_by_row) {
+                std::sort(xs.begin(), xs.end());
+                size_t run_start = 0;
+                for (size_t k = 1; k <= xs.size(); ++k) {
+                    if (k == xs.size() || xs[k] != xs[k - 1] + 1) {
+                        rects.push_back({xs[run_start], y, xs[k - 1], y, static_cast<uint32_t>(k - run_start)});
+                        run_start = k;
+                    }
+                }
+            }
+            TT_FATAL(
+                rects.size() <= kSolGroupMaxRects,
+                "sol resident group delivery: head {} needs {} multicast rectangles (at most {})",
+                h,
+                rects.size(),
+                kSolGroupMaxRects);
+            const uint32_t n_receivers = static_cast<uint32_t>(members.size() - 1);
+            for (const uint32_t ci : members) {
+                auto& a = sol_group_args[ci];
+                a = {
+                    ci == producer ? 1u : 2u,
+                    static_cast<uint32_t>(prod_phys.x),
+                    static_cast<uint32_t>(prod_phys.y),
+                    n_receivers,
+                    0u};
+                if (ci == producer) {
+                    a[4] = static_cast<uint32_t>(rects.size());
+                    for (const auto& r : rects) {
+                        a.insert(a.end(), r.begin(), r.end());
+                    }
+                }
+            }
+            log_debug(
+                tt::LogOp,
+                "sol resident group: head {} producer core {} -> {} receivers in {} rectangles",
+                h,
+                producer,
+                n_receivers,
+                rects.size());
         }
     }
 
@@ -3651,6 +3760,11 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             for (const auto& [start, count] : sol_members) {
                 reader_args.push_back(start);
                 reader_args.push_back(count);
+            }
+            if (sol_res_mcast) {
+                for (const uint32_t w : sol_group_args[i]) {
+                    reader_args.push_back(w);
+                }
             }
         }
         reader_kernel.emplace_runtime_args(core, reader_args.args);

@@ -103,6 +103,12 @@ class MiniMaxH3Attention(Module):
         9184: (256, 512),
         13664: (256, 512),
     }
+    # Sol resident mode's K/V piece size per sequence length (its query unit is always the 64-row block). 256-key
+    # pieces measured 4.13-4.15 ms against 4.22 for 384 at 5 s tau 1 (2026-10-27, traced): less work left at each
+    # ring-iteration boundary and in the tail after the last shard. 10 s / 15 s keep the dense k until measured.
+    measured_resident_k_chunks = {
+        4736: 256,
+    }
 
     def __init__(
         self,
@@ -378,6 +384,7 @@ class MiniMaxH3Attention(Module):
                 k_chunk = max(tile, min(512, (seq_local // tile) * tile))
             if q_override is not None:
                 q_chunk = q_override  # Sol resident mode: the 64-row query block is the compute unit
+                k_chunk = self.measured_resident_k_chunks.get(seq_local, k_chunk)
             if k_override is not None:
                 k_chunk = k_override  # Sol resident multi-pass: a smaller K/V piece frees L1 for more resident chunks
             if windowed:

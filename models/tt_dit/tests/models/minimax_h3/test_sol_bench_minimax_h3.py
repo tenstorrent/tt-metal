@@ -136,6 +136,7 @@ def test_sol_bench_attention(mesh_device, sp_axis, tp_axis, num_links, topology,
         MiniMaxH3Attention.measured_sdpa_chunk_sizes = {
             k: (qc, kc) for k in MiniMaxH3Attention.measured_sdpa_chunk_sizes
         }
+        MiniMaxH3Attention.measured_resident_k_chunks = {}  # the override sets resident's k too
     taus = [float(t) for t in os.environ.get("SOL_TAU", "1.0").split(",")] if mode == "sol" else [None]
     results = []
     for tau in taus:
