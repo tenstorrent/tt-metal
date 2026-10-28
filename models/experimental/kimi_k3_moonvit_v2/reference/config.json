@@ -1,0 +1,32 @@
+{
+  "vision_config": {
+    "_attn_implementation": "flash_attention_2",
+    "activation_func": "gelu_pytorch_tanh",
+    "attn_bias": false,
+    "init_pos_emb_height": 64,
+    "init_pos_emb_time": 4,
+    "init_pos_emb_width": 64,
+    "linear_bias": false,
+    "merge_kernel_size": [
+      2,
+      2
+    ],
+    "merge_type": "sd2_tpool",
+    "mlp_type": "mlp2",
+    "mm_hidden_size": 1024,
+    "mm_projector_type": "patchmergerv2",
+    "norm_type": "rmsnorm",
+    "patch_embed_proj_bias": false,
+    "patch_size": 14,
+    "pos_emb_interpolation_mode": "bilinear",
+    "pos_emb_type": "divided_fixed",
+    "projector_hidden_act": "gelu",
+    "projector_ln_eps": 1e-05,
+    "qkv_hidden_size": 1536,
+    "text_hidden_size": 7168,
+    "vt_hidden_size": 1024,
+    "vt_intermediate_size": 4096,
+    "vt_num_attention_heads": 12,
+    "vt_num_hidden_layers": 27
+  }
+}
