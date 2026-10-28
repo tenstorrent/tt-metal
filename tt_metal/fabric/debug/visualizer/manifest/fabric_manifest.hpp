@@ -6,6 +6,8 @@
 
 #include <filesystem>
 
+#include <nlohmann/json_fwd.hpp>
+
 namespace tt::llrt {
 class RunTimeOptions;
 }  // namespace tt::llrt
@@ -14,8 +16,15 @@ namespace tt::tt_fabric {
 
 class ControlPlane;
 
+namespace manifest {
+struct ManifestFacts;
+}  // namespace manifest
+
 // Version of the fabric manifest schema that will be emitted.
 constexpr int FABRIC_MANIFEST_VERSION = 1;
+
+// The manifest's JSON for `facts`. It reads nothing but `facts`: the types and vocabulary blocks are derived from them.
+nlohmann::ordered_json make_manifest_json(const manifest::ManifestFacts& facts);
 
 // Standard per-rank path for the fabric manifest.
 std::filesystem::path fabric_manifest_path(const tt::llrt::RunTimeOptions& rtoptions);
