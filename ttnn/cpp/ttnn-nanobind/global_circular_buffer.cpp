@@ -57,9 +57,6 @@ void py_module(nb::module_& mod) {
                 buffer_address (Optional[int]): Exact data address. Supply both addresses together.
                 config_address (Optional[int]): Exact configuration address. Fails if either range is unavailable.
             )doc");
-
-    // DRAM-sender GCB factories live under ttnn.experimental.* — see
-    // ttnn/cpp/ttnn/operations/experimental/tensor_prefetcher/tensor_prefetcher_nanobind.cpp.
 }
 
 }  // namespace ttnn::global_circular_buffer

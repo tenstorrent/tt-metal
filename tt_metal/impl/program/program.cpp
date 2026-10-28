@@ -54,8 +54,10 @@
 #include "hal_types.hpp"
 #include "impl/device/device_impl.hpp"
 #include "impl/memory_tracking/memory_stats_shm.hpp"
+#include "tt-metalium/mesh_buffer.hpp"
 #include "tt-metalium/mesh_device.hpp"
 #include "tt-metalium/mesh_workload.hpp"
+#include "tt-metalium/tensor/mesh_tensor.hpp"
 #include <unistd.h>
 #include "jit_build/build.hpp"
 #include "jit_build/build_cache_telemetry.hpp"
@@ -883,6 +885,37 @@ std::vector<std::string> ProgramImpl::get_registered_tensor_parameter_names() co
         }
     }
     return names;
+}
+
+detail::BoundTensorFootprint detail::make_bound_tensor_footprint(const MeshTensor& tensor) {
+    const auto& mesh_buffer = tensor.mesh_buffer();
+    const Buffer* backing_buffer = mesh_buffer.get_backing_buffer();
+    return BoundTensorFootprint{
+        .buffer_type = mesh_buffer.device_local_config().buffer_type,
+        .address = mesh_buffer.address(),
+        .size_per_bank = mesh_buffer.get_reference_buffer()->aligned_size_per_bank(),
+        .buffer_id = backing_buffer != nullptr ? std::optional{backing_buffer->unique_id()} : std::nullopt};
+}
+
+void ProgramImpl::set_bound_tensor_footprint(const std::string& name, const detail::BoundTensorFootprint& footprint) {
+    if (!metal2_registry_) {
+        return;
+    }
+    auto it = metal2_registry_->tensor_parameter_layouts.find(name);
+    if (it != metal2_registry_->tensor_parameter_layouts.end()) {
+        it->second.bound = footprint;
+    }
+}
+
+const detail::BoundTensorFootprint* ProgramImpl::get_bound_tensor_footprint(const std::string& name) const {
+    if (!metal2_registry_) {
+        return nullptr;
+    }
+    auto it = metal2_registry_->tensor_parameter_layouts.find(name);
+    if (it == metal2_registry_->tensor_parameter_layouts.end() || !it->second.bound.has_value()) {
+        return nullptr;
+    }
+    return &*it->second.bound;
 }
 
 void ProgramImpl::register_dfb_borrowed_binding(uint32_t dfb_id, const std::string& tensor_parameter_name) {

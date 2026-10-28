@@ -39,7 +39,8 @@ from loguru import logger
 
 import ttnn
 from models.common.utils import block_cyclic_reorder
-from models.demos.minimax_m3.tt.prefill_chunk import PrefillChunk, pack_forward_tokens, validate_chunks
+from models.demos.common.prefill.chunk_layout import pack_forward_tokens
+from models.demos.common.prefill.prefill_chunk import PrefillChunk, validate_chunks
 from models.demos.minimax_m3.utils.general_utils import sparse_attention_freq
 
 
@@ -415,7 +416,7 @@ class TtPrefillRuntime:
         get_last_token: int = -1,
         metadata_msg=None,
     ):
-        """Prefill ONE forward of ``forward_tokens_budget // chunk_size`` ``chunks`` (tt/prefill_chunk.py) into the
+        """Prefill ONE forward of ``forward_tokens_budget // chunk_size`` ``chunks`` (common/prefill/prefill_chunk.py) into the
         engine-owned ``kv_cache``. Norms, projections and the MoE run once on all rows; the attention core
         (RoPE, KV write, SP gathers, SDPA) runs per non-empty chunk against its slot_id. With ``skip_lm_head``
         (the default) returns None — single-rank is headless, the populated cache is the output, read back

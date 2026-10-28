@@ -193,10 +193,9 @@ inline void setup_remote_cb_interfaces(
         uint32_t fifo_ptr = l1_remote_cb_config_addr[4];
         uint32_t remote_noc_xy_addr = l1_remote_cb_config_addr[5];
         uint32_t aligned_pages_sent_addr = l1_remote_cb_config_addr[6];
-        // Canonical NoC target for the sender's pages_sent inc (on the receiver) or the
-        // receiver's pages_acked inc (on the sender). For a sharded GCB host writes the same
-        // L1 offset as slot 6; for a DRAM-sender GCB it points at the worker- or DRISC-side
-        // counter, since sender and receiver live in different L1 address spaces.
+        // NoC target for the sender's pages_sent inc (on the receiver) or the receiver's
+        // pages_acked inc (on the sender): the peer's copy of the counter slot 6 names, at the
+        // same L1 offset since sender and receivers share a layout.
         uint32_t remote_pages_addr_override = l1_remote_cb_config_addr[7];
         if (is_sender) {
             RemoteSenderCBInterface& sender_cb_interface = get_remote_sender_cb_interface(cb_id);

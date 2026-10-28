@@ -250,9 +250,9 @@ knob existed, so existing legs are unaffected.
 
 Coverage: the multi-turn scheduling described here has no dedicated automated test yet — a device-free
 host-logic test for turn continuation (align-down/replay and absolute-length bookkeeping) is a TODO. The
-closest existing coverage is the on-device producer/runner PCC gate
-`tests/test_producer_runner_e2e.py::test_producer_runner_pcc`, which drives the producer end to end and
-fails if any resident slot's KV PCC is below threshold, though it is not multi-turn-specific.
+closest existing coverage is the on-device producer/runner PCC gate `runners/ci/run_multirank_pcc.sh`,
+which drives the producer end to end and fails if any resident slot's KV PCC is below threshold, though
+it is not multi-turn-specific.
 
 ---
 

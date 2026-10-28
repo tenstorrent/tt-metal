@@ -296,14 +296,23 @@ def _gate_unspecified_nan_sign(mathop, formats, dest_acc, specials):
     )
 
 
-def _skip_bh_unless_fp32(formats, dest_acc):
-    """Blackhole with dest_acc=No only supports the Float32->Float32 combination."""
+def bh_unless_fp32_skip_reason(formats, dest_acc, arch):
+    """Why a driver calling :func:`_skip_bh_unless_fp32` skips this variant on *arch*,
+    or ``None``: Blackhole with dest_acc=No only supports Float32->Float32. The exact-op
+    guard in test_sfpu_accuracy_budget.py asks it at the table's architecture."""
     if (
         dest_acc == DestAccumulation.No
-        and TestConfig.CHIP_ARCH == ChipArchitecture.BLACKHOLE
+        and arch == ChipArchitecture.BLACKHOLE
         and formats != InputOutputFormat(DataFormat.Float32, DataFormat.Float32)
     ):
-        pytest.skip(reason="This combination is not supported on BH architecture")
+        return "This combination is not supported on BH architecture"
+    return None
+
+
+def _skip_bh_unless_fp32(formats, dest_acc):
+    reason = bh_unless_fp32_skip_reason(formats, dest_acc, TestConfig.CHIP_ARCH)
+    if reason:
+        pytest.skip(reason=reason)
 
 
 _UNARY_SWEEP_ARGNAMES = (
