@@ -116,7 +116,7 @@ A larger NoC batch that is decoupled from the DEST group is a perf lamp below, n
 
 | Rank | Candidate split | DRAM crossings | Cross-core | Occupancy note | Verdict |
 |------|-----------------|----------------|-----------|----------------|---------|
-| 1 | **Flattened `tile` axis, contiguous page ranges** (`split_work_to_cores(..., row_wise=True)`) | in 1× + out 1× = `2T` | 0 | Tile-granular balance for **any** shape, including `[32, 8192]` (one tile-row tall; catalog `width_split`) and `[8192, 32]` | **chosen** |
+| 1 | **Flattened `tile` axis, contiguous page ranges** (`split_work_to_cores(..., row_wise=True)`). *Perf 2: the counts are kept but ownership is now bank-affine (see changelog Perf 2)* | in 1× + out 1× = `2T` | 0 | Tile-granular balance for **any** shape, including `[32, 8192]` (one tile-row tall; catalog `width_split`) and `[8192, 32]` | **chosen** |
 | 1 (tie on bytes) | Split by tile-rows (`batch · tile_row`), each core takes whole rows | `2T` | 0 | Strands the grid when `tensor_batch · tile_rows` is small (`width_split`: up to 7.8× loss) | rejected: same bytes, worse occupancy, and it is a coarser case of rank 1 |
 | 1 (tie on bytes) | Split by tile-columns | `2T` | 0 | Each core reads strided page runs (one run per tile-row), so there are more and shorter NoC runs | rejected: same bytes, more fragmented transfers |
 | — | Split a dependent axis + combine | — | — | **There is no dependent axis.** The op has no reduction or scan, so this candidate does not exist. | n/a |

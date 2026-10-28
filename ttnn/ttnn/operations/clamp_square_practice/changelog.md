@@ -122,3 +122,91 @@ custom. The kernel-head justification comment is at the bypass site.
 kernel (its clamp-hoist side win is already included). 1 noisy win not graduated (board-fitted NoC split).
 1 blocked on correctness (dynamic claiming). The op is 13.0% faster on the focus shape, faster on every guard
 shape, with no regression.
+
+## Perf 2 — perf tournament round 2
+- **Date**: 2026-10-28. Blackhole p150b, 120 cores. Metric: DEVICE KERNEL DURATION, one fresh-cache profiled run
+  per variant (the guard set was run twice). SUPPORTED is unchanged.
+- **Focus shape**: `feature_spec.py` has no `LOOSE_CASES` perf flag, so the focus stays `(1,1,4096,4096)`, the
+  same as Perf 1, measured at the op's only config (bf16, TILE, DRAM interleaved, 16-bit DEST).
+- **Instrumentation**: the Perf 1 zones are unchanged and carried onto the new reader and writer: `reader_read`,
+  `compute_chain`, `writer_write` and `writer_final_barrier`.
+
+### Measured breakdown (post-Perf-1 op)
+Cumulative ablation on the focus shape, bench `test_perf1_breakdown.py`.
+
+| variant | ns |
+|---|---|
+| full | 157 057 |
+| read + write (compute stubbed) | 159 214 |
+| read + compute | 93 144 |
+| write + compute | 112 533 |
+| read only | 83 334 |
+| write only | 110 139 |
+| compute only | 40 416 |
+| sync floor | 1 174 |
+
+- **Ranked bottleneck**:
+  1. DRAM/NoC data movement. Compute is fully hidden: full ≈ DM-only. The combined rate is ~427 GB/s against a
+     ~512 GB/s peak, and the Perf 1 DM ceiling is 131–142 µs.
+  2. Within DM, the writer is the weaker half: 305 GB/s alone, vs 404 GB/s for the reader.
+  3. Compute is off the critical path. No compute ideas were floated.
+
+### Portfolio and verdicts
+Each experiment's directory is `perf_experiments/<slug>/` and its test is
+`tests/.../test_perfexp_<slug>.py`.
+
+| idea | verdict | focus before → after | domain / notes |
+|---|---|---|---|
+| `posted_stateful_dm`: posted writes with a fence tail; stateful one-packet write; reader twin: stateful one-packet read | **NULL** | 159.3 → 156.8–159.8 µs (±1%); writer-only 110.2 → 109.2–111.3 | Every combination is flat on all shapes and bit-exact. Per-transaction issue cost is not the limit: about 470 ns per tile per core, set by DRAM contention and skew. |
+| `trid_pipelined_dm`: trid-scoped read barrier and write flush, T = 2/3/4 | **NULL** | 158.3 → 157.6–159.8 µs | Flat at full grid: 120 cores × 8 tiles in flight already saturate DRAM. Measured regression of +40–60 ns at 1 tile/core. Bit-exact on 9 shapes. |
+| `bank_affine_split`: each core owns pages from the NoC-nearest DRAM bank group (banks grouped by anchor column), counts unchanged | **WIN** | 157.7 → 151.7 µs (subagent medians); DM-only 158.0 → 145.9 | Bank groups come from `get_optimal_dram_bank_to_logical_worker_assignment(NOC_0/1)`; nothing is fitted to this board. Controls: far column is +13%; 1 or 2 banks per core is +21%, because a core loses bank parallelism. Bit-exact on 10 shapes, including ragged ones. |
+| `dynamic_claim_v2`: a dispatcher core hands out block ids via semaphore mailboxes, with no fetch-and-add | WIN, **not graduated** | 157.8 → 153.3 µs | Correct over about 14 400 launches. Root cause of Perf 1's duplicates: the INCR_GET return word is unreliable when it is polled. Measured regressions: (2,4,256,512) +3 to +10% and (1,1,32,32) +12%. It costs a core plus 4 kernels and 5 semaphores. It conflicts with `bank_affine_split`, since both decide page ownership, and loses to it on every shape. |
+
+### Graduated
+**`bank_affine_split`** is now the op's only work-split path. The contiguous `start_tile` page ranges were
+deleted from the descriptor, reader and writer.
+- The host keeps `split_work_to_cores`' per-core tile counts, so the CBs, the compute kernel and its runtime args
+  are unchanged.
+- The host assigns each core a short segment list over the bank groups with a greedy, regret-ordered
+  transportation fill.
+- The reader and writer walk that same list, with no device divide.
+- The runtime-arg length is fixed at `3 + n_groups·(4 + group_max)`, so a program-cache hit cannot index past
+  the args.
+- Raw LLK: none new. The kernels still use `noc_async_{read,write}_page` through the `TensorAccessor`.
+- **Carve-outs: none.** The ≤1 tile/core regime measures +50 to +85 ns. A same-session attribution run
+  (`test_perf2_small_regime.py`) pushed the old contiguous assignment through the new kernels and was no faster:
+  1.30 vs 1.31 µs, 1.38 vs 1.39 µs, 1.53 vs 1.48 µs. So the cost is fixed kernel overhead (the segment walker and
+  19 runtime args instead of 3), not routing.
+  - A host-side assignment switch would not recover it; only a second kernel path would.
+  - I judged at most 85 ns on a ~1.3 µs launch not worth a dual path. The cost is recorded here as a measured
+    small-shape regression rather than fenced off.
+
+### Whole-op before → after, guard set
+Same session, same bench. Before is the HEAD (Perf 1) kernels and descriptor; each value is the mean of 2 runs.
+
+| shape | tiles | before ns | after ns | Δ |
+|---|---|---|---|---|
+| (1,1,4096,4096) **focus** | 16 384 | 158 878 | 147 233 | **−7.3%** |
+| (8,1,1024,1024) | 8 192 | 80 716 | 74 272 | −8.0% |
+| (2,4,256,512) | 1 024 | 11 886 | 10 329 | −13.1% |
+| (1,1,32,8192) | 256 | 3 316 | 3 223 | −2.8% |
+| (1,1,256,256) | 64 | 1 691 | 1 671 | flat |
+| (2,64,256) | 16 | 1 428 | 1 475 | +47 ns (+3.3%) |
+| (64,128) | 8 | 1 256 | 1 340 | +84 ns (+6.7%) |
+| (1,1,32,32) | 1 | 1 261 | 1 327 | +66 ns (noisy, ±60 ns) |
+
+- The data-movement-only path (compute stubbed) is faster on every shape: the focus shape goes from 157.4 to
+  146.2 µs.
+- Golden `eval/golden_tests/clamp_square_practice/`: 46/46. Op unit, extended and precision-baseline tests:
+  68/68. Output is bit-exact against the reference.
+
+### Helper bypasses — none
+No raw-LLK path was graduated in this round. The Perf 1 `ClampSquareFused` bypass still stands, unchanged.
+
+**Summary**: 4 ideas measured.
+- 1 graduated: the bank-affine work split, as the op's one path, with no carve-out.
+- 2 null: posted/stateful DM and trid-pipelined DM.
+- 1 correct win not graduated: dynamic claim. It conflicts with the graduated split and is beaten by it.
+
+The op is 7.3% faster on the focus shape and 3–13% faster on mid and large shapes. The ≤1 tile/core shapes are
+50–85 ns slower; that cost is measured, attributed to kernel overhead and left uncarved.

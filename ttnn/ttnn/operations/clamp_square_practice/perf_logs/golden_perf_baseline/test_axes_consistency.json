@@ -1,0 +1,50 @@
+{
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_program_cache_reuse[1x1x32x32]": {
+    "bounds": {
+      "declared": "symmetric",
+      "captured": "asymmetric"
+    }
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_program_cache_reuse[1x1x256x256]": {
+    "bounds": {
+      "declared": "symmetric",
+      "captured": "asymmetric"
+    }
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_program_cache_reuse[1x1x32x8192]": {
+    "bounds": {
+      "declared": "symmetric",
+      "captured": "asymmetric"
+    }
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_program_cache_reuse[2x4x256x512]": {
+    "bounds": {
+      "declared": "symmetric",
+      "captured": "asymmetric"
+    }
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_program_cache_reuse[8x1x1024x1024]": {
+    "bounds": {
+      "declared": "symmetric",
+      "captured": "asymmetric"
+    }
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_program_cache_reuse[1x1x4096x4096]": {
+    "bounds": {
+      "declared": "symmetric",
+      "captured": "asymmetric"
+    }
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_program_cache_reuse[64x128]": {
+    "bounds": {
+      "declared": "symmetric",
+      "captured": "asymmetric"
+    }
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_program_cache_reuse[2x64x256]": {
+    "bounds": {
+      "declared": "symmetric",
+      "captured": "asymmetric"
+    }
+  }
+}

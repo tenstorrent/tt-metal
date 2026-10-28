@@ -1,0 +1,362 @@
+{
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x32x32-alignment=tile_aligned-bounds=symmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "symmetric",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x32x32-alignment=tile_aligned-bounds=asymmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "asymmetric",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x32x32-alignment=tile_aligned-bounds=equal-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "equal",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x32x32-alignment=tile_aligned-bounds=wide-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "wide",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x256x256-alignment=tile_aligned-bounds=symmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "symmetric",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x256x256-alignment=tile_aligned-bounds=asymmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "asymmetric",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x256x256-alignment=tile_aligned-bounds=equal-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "equal",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x256x256-alignment=tile_aligned-bounds=wide-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "wide",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-bounds=symmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "symmetric",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-bounds=asymmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "asymmetric",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-bounds=equal-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "equal",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-bounds=wide-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "wide",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[2x4x256x512-alignment=tile_aligned-bounds=symmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "symmetric",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[2x4x256x512-alignment=tile_aligned-bounds=asymmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "asymmetric",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[2x4x256x512-alignment=tile_aligned-bounds=equal-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "equal",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[2x4x256x512-alignment=tile_aligned-bounds=wide-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "wide",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[8x1x1024x1024-alignment=tile_aligned-bounds=symmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "symmetric",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[8x1x1024x1024-alignment=tile_aligned-bounds=asymmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "asymmetric",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[8x1x1024x1024-alignment=tile_aligned-bounds=equal-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "equal",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[8x1x1024x1024-alignment=tile_aligned-bounds=wide-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "wide",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x4096x4096-alignment=tile_aligned-bounds=symmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "symmetric",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x4096x4096-alignment=tile_aligned-bounds=asymmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "asymmetric",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x4096x4096-alignment=tile_aligned-bounds=equal-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "equal",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x4096x4096-alignment=tile_aligned-bounds=wide-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "wide",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[64x128-alignment=tile_aligned-bounds=symmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "symmetric",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[64x128-alignment=tile_aligned-bounds=asymmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "asymmetric",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[64x128-alignment=tile_aligned-bounds=equal-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "equal",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[64x128-alignment=tile_aligned-bounds=wide-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "wide",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[2x64x256-alignment=tile_aligned-bounds=symmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "symmetric",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[2x64x256-alignment=tile_aligned-bounds=asymmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "asymmetric",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[2x64x256-alignment=tile_aligned-bounds=equal-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "equal",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[2x64x256-alignment=tile_aligned-bounds=wide-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "wide",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_program_cache_reuse[1x1x32x32]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "asymmetric",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_program_cache_reuse[1x1x256x256]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "asymmetric",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_program_cache_reuse[1x1x32x8192]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "asymmetric",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_program_cache_reuse[2x4x256x512]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "asymmetric",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_program_cache_reuse[8x1x1024x1024]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "asymmetric",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_program_cache_reuse[1x1x4096x4096]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "asymmetric",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_program_cache_reuse[64x128]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "asymmetric",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  },
+  "eval/golden_tests/clamp_square_practice/test_golden.py::test_program_cache_reuse[2x64x256]": {
+    "dtype": "BFLOAT16",
+    "layout": "TILE",
+    "memory_layout": "INTERLEAVED",
+    "buffer_type": "DRAM",
+    "bounds": "asymmetric",
+    "rank": "rank_ge_2",
+    "alignment": "tile_aligned"
+  }
+}

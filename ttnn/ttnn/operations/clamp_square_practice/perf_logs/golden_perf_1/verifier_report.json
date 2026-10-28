@@ -1,0 +1,574 @@
+{
+  "summary": {
+    "total": 46,
+    "supported_pass": 40,
+    "supported_fail": 0,
+    "supported_marked_xfail": 0,
+    "supported_skipped": 0,
+    "supported_other": 0,
+    "xfail_expected": 0,
+    "xpass_drift": 0,
+    "xfail_wrong_mode": 0,
+    "xfail_other": 0,
+    "invalid_skipped": 0,
+    "invalid_unexpected": 0,
+    "infeasible_skipped": 0,
+    "no_axes_found": 6
+  },
+  "by_category": {
+    "supported_pass": [
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x32x32-alignment=tile_aligned-bounds=symmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "symmetric",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x32x32-alignment=tile_aligned-bounds=asymmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "asymmetric",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x32x32-alignment=tile_aligned-bounds=equal-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "equal",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x32x32-alignment=tile_aligned-bounds=wide-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "wide",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x256x256-alignment=tile_aligned-bounds=symmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "symmetric",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x256x256-alignment=tile_aligned-bounds=asymmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "asymmetric",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x256x256-alignment=tile_aligned-bounds=equal-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "equal",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x256x256-alignment=tile_aligned-bounds=wide-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "wide",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-bounds=symmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "symmetric",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-bounds=asymmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "asymmetric",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-bounds=equal-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "equal",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x32x8192-alignment=tile_aligned-bounds=wide-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "wide",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[2x4x256x512-alignment=tile_aligned-bounds=symmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "symmetric",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[2x4x256x512-alignment=tile_aligned-bounds=asymmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "asymmetric",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[2x4x256x512-alignment=tile_aligned-bounds=equal-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "equal",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[2x4x256x512-alignment=tile_aligned-bounds=wide-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "wide",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[8x1x1024x1024-alignment=tile_aligned-bounds=symmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "symmetric",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[8x1x1024x1024-alignment=tile_aligned-bounds=asymmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "asymmetric",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[8x1x1024x1024-alignment=tile_aligned-bounds=equal-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "equal",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[8x1x1024x1024-alignment=tile_aligned-bounds=wide-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "wide",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x4096x4096-alignment=tile_aligned-bounds=symmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "symmetric",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x4096x4096-alignment=tile_aligned-bounds=asymmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "asymmetric",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x4096x4096-alignment=tile_aligned-bounds=equal-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "equal",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[1x1x4096x4096-alignment=tile_aligned-bounds=wide-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "wide",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[64x128-alignment=tile_aligned-bounds=symmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "symmetric",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[64x128-alignment=tile_aligned-bounds=asymmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "asymmetric",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[64x128-alignment=tile_aligned-bounds=equal-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "equal",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[64x128-alignment=tile_aligned-bounds=wide-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "wide",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[2x64x256-alignment=tile_aligned-bounds=symmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "symmetric",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[2x64x256-alignment=tile_aligned-bounds=asymmetric-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "asymmetric",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[2x64x256-alignment=tile_aligned-bounds=equal-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "equal",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_op[2x64x256-alignment=tile_aligned-bounds=wide-buffer_type=DRAM-dtype=BFLOAT16-layout=TILE-memory_layout=INTERLEAVED-rank=rank_ge_2]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "wide",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_program_cache_reuse[1x1x32x32]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "asymmetric",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_program_cache_reuse[1x1x256x256]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "asymmetric",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_program_cache_reuse[1x1x32x8192]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "asymmetric",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_program_cache_reuse[2x4x256x512]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "asymmetric",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_program_cache_reuse[8x1x1024x1024]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "asymmetric",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_program_cache_reuse[1x1x4096x4096]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "asymmetric",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_program_cache_reuse[64x128]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "asymmetric",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_golden.py::test_program_cache_reuse[2x64x256]",
+        "axes": {
+          "dtype": "BFLOAT16",
+          "layout": "TILE",
+          "memory_layout": "INTERLEAVED",
+          "buffer_type": "DRAM",
+          "bounds": "asymmetric",
+          "rank": "rank_ge_2",
+          "alignment": "tile_aligned"
+        },
+        "status": "passed"
+      }
+    ],
+    "no_axes_found": [
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_regression.py::test_small_magnitude_input[64x128]",
+        "test_name": "test_small_magnitude_input[64x128]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_regression.py::test_small_magnitude_input[128x256]",
+        "test_name": "test_small_magnitude_input[128x256]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_regression.py::test_large_magnitude_input[64x128]",
+        "test_name": "test_large_magnitude_input[64x128]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_regression.py::test_large_magnitude_input[128x256]",
+        "test_name": "test_large_magnitude_input[128x256]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_regression.py::test_uniform_input[64x128]",
+        "test_name": "test_uniform_input[64x128]",
+        "status": "passed"
+      },
+      {
+        "nodeid": "eval/golden_tests/clamp_square_practice/test_regression.py::test_uniform_input[128x256]",
+        "test_name": "test_uniform_input[128x256]",
+        "status": "passed"
+      }
+    ]
+  }
+}

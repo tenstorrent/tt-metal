@@ -28,17 +28,19 @@ GEN = HERE / "gen_kernels"
 def _gen():
     GEN.mkdir(exist_ok=True)
     r = (SRC / "clamp_square_practice_reader.cpp").read_text()
-    r = r.replace(
+    for call in (
+        "noc_async_read_page(page, input_accessor, l1_write_addr);",
         "noc_async_read_page(page0 + i, input_accessor, l1_write_addr);",
-        "if constexpr (!ABLATE_READ) { noc_async_read_page(page0 + i, input_accessor, l1_write_addr); }",
-    )
+    ):  # pre-Perf-2 reader
+        r = r.replace(call, "if constexpr (!ABLATE_READ) { " + call + " }")
     r = r.replace("#include <cstdint>", "#include <cstdint>\n#ifndef ABLATE_READ\n#define ABLATE_READ 0\n#endif")
     (GEN / "reader.cpp").write_text(r)
     w = (SRC / "clamp_square_practice_writer.cpp").read_text()
-    w = w.replace(
+    for call in (
+        "noc_async_write_page(page, output_accessor, l1_read_addr);",
         "noc_async_write_page(page0 + i, output_accessor, l1_read_addr);",
-        "if constexpr (!ABLATE_WRITE) { noc_async_write_page(page0 + i, output_accessor, l1_read_addr); }",
-    )
+    ):  # pre-Perf-2 writer
+        w = w.replace(call, "if constexpr (!ABLATE_WRITE) { " + call + " }")
     w = w.replace("#include <cstdint>", "#include <cstdint>\n#ifndef ABLATE_WRITE\n#define ABLATE_WRITE 0\n#endif")
     (GEN / "writer.cpp").write_text(w)
     assert "ABLATE_READ) {" in r and "ABLATE_WRITE) {" in w
@@ -68,8 +70,9 @@ SHAPES = [
 
 
 @pytest.mark.parametrize("shape", SHAPES, ids=lambda s: "x".join(map(str, s)))
+@pytest.mark.parametrize("rep", range(int(os.environ.get("CS_REPS", "1"))))
 @pytest.mark.parametrize("variant", list(VARIANTS))
-def test_breakdown(device, shape, variant):
+def test_breakdown(device, shape, variant, rep):
     # Env filters (run_safe_pytest word-splits -k): CS_VARIANTS=full,no_read  CS_SHAPES=1x1x4096x4096
     vs, ss = os.environ.get("CS_VARIANTS"), os.environ.get("CS_SHAPES")
     if (vs and variant not in vs.split(",")) or (ss and "x".join(map(str, shape)) not in ss.split(",")):

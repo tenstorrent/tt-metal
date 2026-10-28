@@ -1,0 +1,104 @@
+--- clamp_square_practice_program_descriptor.py	2026-10-28 19:06:19.588968961 +0000
++++ perf_experiments/bank_affine_split/graduate/clamp_square_practice_program_descriptor.py	2026-10-28 19:42:11.541917415 +0000
+@@ -44,6 +44,65 @@
+     return struct.unpack("<I", struct.pack("<f", value))[0]
+
+
++# ---- Bank-affine page ownership (Perf 2) ----
++# Interleaved page p lives in DRAM bank p % NB. Instead of a contiguous page range per core (which
++# sends every core's traffic to every bank across the whole grid), each core owns pages of the bank
++# GROUP NoC-nearest to it. Groups = banks sharing a DRAM column. Distances come from the device:
++# get_optimal_dram_bank_to_logical_worker_assignment(NOC_k)[b] is the logical worker placed right
++# after bank b's NoC_k endpoint (metal derives it from physical coordinates + harvesting). NoC0
++# routes +x/+y and NoC1 -x/-y, so the data leg of a NoC0 read (bank -> core) and of a NoC1 write
++# (core -> bank) both have length ~ ((cx - ax) mod GX) + ((cy - ay) mod GY).
++# Per-core tile counts are exactly split_work_to_cores' counts, so the compute kernel and CBs are
++# unchanged; only WHICH pages a core owns changes.
++
++
++def _bank_anchors(device, noc):
++    a = device.get_optimal_dram_bank_to_logical_worker_assignment(noc)
++    if isinstance(a, dict):
++        return [(a[k].x, a[k].y) for k in sorted(a)]
++    return [(c.x, c.y) for c in a]
++
++
++def _bank_affine_segments(device, cores, core_tiles, n_pages):
++    """-> (groups, per-core segment lists [(group, q0, cnt)]). Group gi's pages, in order, are
++    q -> (q // g) * NB + groups[gi][q % g]; each core owns <= one contiguous q-run per group."""
++    nb = device.dram_grid_size().x
++    grid = device.compute_with_storage_grid_size()
++    a0 = _bank_anchors(device, ttnn.NOC.NOC_0)
++    a1 = _bank_anchors(device, ttnn.NOC.NOC_1)
++    cols = {}
++    for b in range(nb):
++        cols.setdefault(a0[b][0], []).append(b)
++    groups = [sorted(v) for _, v in sorted(cols.items())]
++
++    def dist(a, c):
++        return (c[0] - a[0]) % grid.x + (c[1] - a[1]) % grid.y
++
++    cost = [[sum(dist(a0[b], c) + dist(a1[b], c) for b in grp) / len(grp) for grp in groups] for c in cores]
++    full, rem = divmod(n_pages, nb)
++    left = [full * len(grp) + sum(1 for b in grp if b < rem) for grp in groups]
++    # Transportation, greedy by regret: cores whose cheapest group is most clearly cheapest go first.
++    ng = len(groups)
++    regret = [(sorted(cc)[1] - min(cc)) if ng > 1 else 0 for cc in cost]
++    take = [[0] * ng for _ in cores]
++    for ci in sorted(range(len(cores)), key=lambda ci: (-regret[ci], ci)):
++        need = core_tiles[ci]
++        for gi in sorted(range(ng), key=lambda gi: (cost[ci][gi], gi)):
++            t = min(need, left[gi])
++            take[ci][gi] += t
++            left[gi] -= t
++            need -= t
++        assert need == 0
++    segs = [[] for _ in cores]
++    for gi in range(ng):
++        q = 0
++        for ci in range(len(cores)):
++            if take[ci][gi]:
++                segs[ci].append((gi, q, take[ci][gi]))
++                q += take[ci][gi]
++    return groups, segs
++
++
+ def create_program_descriptor(
+     input_tensor: ttnn.Tensor,
+     output_tensor: ttnn.Tensor,
+@@ -107,19 +166,27 @@
+     compute_rt_args = ttnn.RuntimeArgs()
+
+     g1_cores = set((c.x, c.y) for c in ttnn.corerange_to_cores(core_group_1, row_wise=True))
+-    start_tile = 0
+-    for core in ttnn.corerange_to_cores(all_cores, row_wise=True):
+-        core_tiles = core_tiles_g1 if (core.x, core.y) in g1_cores else core_tiles_g2
+-        reader_rt_args[core.x][core.y] = [in_addr, start_tile, core_tiles]
+-        writer_rt_args[core.x][core.y] = [out_addr, start_tile, core_tiles]
++    cores = ttnn.corerange_to_cores(all_cores, row_wise=True)
++    tiles_per_core = [core_tiles_g1 if (c.x, c.y) in g1_cores else core_tiles_g2 for c in cores]
++    assert sum(tiles_per_core) == tensor_tiles
++    groups, segs = _bank_affine_segments(device, [(c.x, c.y) for c in cores], tiles_per_core, tensor_tiles)
++    num_banks = device.dram_grid_size().x
++    group_max = max(len(g) for g in groups)
++    for core, core_tiles, core_segs in zip(cores, tiles_per_core, segs):
++        # Fixed length (program-cache safe): len(groups) slots of (g, row0, k0, cnt, bank[0..group_max-1]).
++        seg_args = []
++        for gi, q0, cnt in core_segs:
++            grp = groups[gi]
++            seg_args += [len(grp), q0 // len(grp), q0 % len(grp), cnt] + grp + [0] * (group_max - len(grp))
++        seg_args += [0] * ((4 + group_max) * (len(groups) - len(core_segs)))
++        reader_rt_args[core.x][core.y] = [in_addr, core_tiles, len(core_segs)] + seg_args
++        writer_rt_args[core.x][core.y] = [out_addr, core_tiles, len(core_segs)] + seg_args
+         compute_rt_args[core.x][core.y] = [core_tiles, min_bits, max_bits]
+-        start_tile += core_tiles
+-    assert start_tile == tensor_tiles
+
+     # ---- Kernels ----
+-    reader_ct_args = [CB_INPUT_TILES, block_tiles, input_page_size]
++    reader_ct_args = [CB_INPUT_TILES, block_tiles, input_page_size, num_banks, group_max]
+     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+-    writer_ct_args = [CB_OUTPUT_TILES, block_tiles, output_page_size]
++    writer_ct_args = [CB_OUTPUT_TILES, block_tiles, output_page_size, num_banks, group_max]
+     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+     compute_ct_args = [CB_INPUT_TILES, CB_OUTPUT_TILES, block_tiles]

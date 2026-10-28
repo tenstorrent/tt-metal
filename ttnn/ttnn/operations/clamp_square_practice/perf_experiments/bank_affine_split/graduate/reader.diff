@@ -1,0 +1,73 @@
+--- kernels/clamp_square_practice_reader.cpp	2026-10-28 18:10:41.834467345 +0000
++++ perf_experiments/bank_affine_split/graduate/kernels/clamp_square_practice_reader.cpp	2026-10-28 19:42:11.429915748 +0000
+@@ -1,11 +1,19 @@
+ // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+ // SPDX-License-Identifier: Apache-2.0
+
+-// clamp_square_practice reader (NCRISC / NoC0) — load_block.
+-// Streams this core's contiguous page range [start_tile, start_tile + core_tiles) into
+-// cb_input_tiles in blocks of block_tiles: one reserve, `valid` async reads, ONE barrier,
+-// one push per block. The CB quantum is always the nominal block_tiles (FullBlock contract
+-// with the compute chain), including the ragged last block.
++// clamp_square_practice reader (NCRISC / NoC0). Same block/CB contract as the op's reader (reserve
++// block_tiles, `valid` reads, ONE barrier, push block_tiles; nominal quantum on the ragged tail).
++// What changes vs the op is WHICH pages this core owns. The host partitions the DRAM banks into
++// groups (a group = an ordered bank list, e.g. the banks NoC-nearest a region of the grid) and hands
++// the core a short list of segments over those groups:
++//   seg = (g, row0, k0, cnt, bank[0..GMAX-1]); q = row0*g + k0 + i, i in [0, cnt):
++//         page = (q / g) * NB + bank[q % g]
++// i.e. this core walks the group's pages in natural order, round-robin across the group's banks
++// (g = 1 -> one bank, consecutive bank addresses; g = NB with bank[k] = k -> the op's contiguous range).
++// The host pre-splits q0 into (row0, k0) (no device divide); the walk is incremental.
++// RT args (fixed length, program-cache safe): [addr, core_tiles, nseg, NSLOT slots of (4 + GMAX)].
++// No helper bypassed: the op itself uses raw noc_async_{read,write}_page.
++// CT args: [cb, block_tiles, page_bytes, num_banks, GMAX, TensorAccessorArgs...]
+
+ #include <cstdint>
+
+@@ -16,25 +24,38 @@
+     constexpr uint32_t cb_input_tiles = get_compile_time_arg_val(0);
+     constexpr uint32_t block_tiles = get_compile_time_arg_val(1);
+     constexpr uint32_t page_bytes = get_compile_time_arg_val(2);
+-    constexpr auto input_args = TensorAccessorArgs<3>();
++    constexpr uint32_t num_banks = get_compile_time_arg_val(3);
++    constexpr uint32_t gmax = get_compile_time_arg_val(4);
++    constexpr auto input_args = TensorAccessorArgs<5>();
+
+     const uint32_t src_addr = get_arg_val<uint32_t>(0);
+-    const uint32_t start_tile = get_arg_val<uint32_t>(1);
+-    const uint32_t core_tiles = get_arg_val<uint32_t>(2);
++    const uint32_t core_tiles = get_arg_val<uint32_t>(1);
+
+     const auto input_accessor = TensorAccessor(input_args, src_addr, page_bytes);
+
+-    // Permanent stage zone (free when the profiler is off). Kernel-level, never per block: the
+-    // per-RISC marker budget is exhausted silently. Occupancy: includes cb_reserve_back stalls.
+     MaybeDeviceZoneScope("reader_read");
++    uint32_t seg_arg = 3, banks = 0, g = 1, k = 0, row_base = 0, left = 0;
+     for (uint32_t done = 0; done < core_tiles; done += block_tiles) {
+         const uint32_t remaining = core_tiles - done;
+         const uint32_t valid = remaining < block_tiles ? remaining : block_tiles;
+         cb_reserve_back(cb_input_tiles, block_tiles);
+         uint32_t l1_write_addr = get_write_ptr(cb_input_tiles);
+-        const uint32_t page0 = start_tile + done;
+         for (uint32_t i = 0; i < valid; ++i) {
+-            noc_async_read_page(page0 + i, input_accessor, l1_write_addr);
++            while (left == 0) {
++                g = get_arg_val<uint32_t>(seg_arg);
++                row_base = get_arg_val<uint32_t>(seg_arg + 1) * num_banks;
++                k = get_arg_val<uint32_t>(seg_arg + 2);
++                left = get_arg_val<uint32_t>(seg_arg + 3);
++                banks = seg_arg + 4;
++                seg_arg += 4 + gmax;
++            }
++            const uint32_t page = row_base + get_arg_val<uint32_t>(banks + k);
++            if (++k == g) {
++                k = 0;
++                row_base += num_banks;
++            }
++            --left;
++            noc_async_read_page(page, input_accessor, l1_write_addr);
+             l1_write_addr += page_bytes;
+         }
+         noc_async_read_barrier();
