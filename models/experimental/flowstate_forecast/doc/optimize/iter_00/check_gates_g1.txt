@@ -1,0 +1,44 @@
+[ttq] submitted job 1133 (cpu); reattach with: ttq wait 1133
+[ttq] job 1133 queued (0s): 0 ahead; waiting for a free slot
+ok   floor suite:fivemin/performance spread_ratio_max 0.986675 <= 1.1
+n/a  floor suite:fivemin/performance inactive_max_err: not applicable (no inactive rows)
+ok   floor suite:fivemin/performance pcc_final_spread 0.999761 >= 0.998
+ok   floor suite:fivemin/performance bias_row_p50 0.00576818 <= 0.05
+ok   floor suite:fivemin/performance bias_row_max 0.00576818 <= 0.15
+ok   floor suite:fivemin/performance pcc_step 0.994515 >= 0.985
+ok   drift suite:fivemin/performance pcc_normalized 0.999255 >= 0.998255 (baseline 0.999255)
+ok   drift suite:fivemin/performance pcc_final 0.998949 >= 0.997949 (baseline 0.998949)
+ok   drift suite:fivemin/performance pcc_spread 0.999708 >= 0.997708 (baseline 0.999708)
+n/a  drift suite:fivemin/performance pcc_row_p01_active: not applicable (n_active=1 < 100)
+n/a  drift suite:fivemin/performance spread_ratio_p50: not applicable (n_active=1 < 8)
+ok   drift suite:fivemin/performance abs_err_max 0.021024 <= 0.031536 (baseline 0.021024)
+ok   drift suite:fivemin/performance bias_row_drift_max 0 <= 0.03 (row 0)
+ok   drift suite:fivemin/performance spread_ratio_row_drift_max 0 <= 0.15 (row 0)
+ok   floor suite:cpm_edge/performance pcc_normalized 0.999859 >= 0.995
+ok   floor suite:cpm_edge/performance pcc_final 0.999824 >= 0.98
+ok   floor suite:cpm_edge/performance pcc_mean 0.999678 >= 0.99
+ok   floor suite:cpm_edge/performance pcc_spread 0.999964 >= 0.998
+n/a  floor suite:cpm_edge/performance pcc_row_p01_active: not applicable (n_active=1 < 100)
+ok   floor suite:cpm_edge/performance pcc_row_min_active 0.999859 >= 0.98
+ok   floor suite:cpm_edge/performance pcc_row_min 0.999859 >= 0.3
+n/a  floor suite:cpm_edge/performance spread_ratio_p50: not applicable (n_active=1 < 8)
+n/a  floor suite:cpm_edge/performance spread_ratio_p01: not applicable (n_active=1 < 100)
+n/a  floor suite:cpm_edge/performance spread_ratio_p99: not applicable (n_active=1 < 100)
+ok   floor suite:cpm_edge/performance spread_ratio_min 0.989548 >= 0.9
+ok   floor suite:cpm_edge/performance spread_ratio_max 0.989548 <= 1.1
+n/a  floor suite:cpm_edge/performance inactive_max_err: not applicable (no inactive rows)
+ok   floor suite:cpm_edge/performance pcc_final_spread 0.99997 >= 0.998
+ok   floor suite:cpm_edge/performance bias_row_p50 0.0136811 <= 0.05
+ok   floor suite:cpm_edge/performance bias_row_max 0.0136811 <= 0.15
+ok   floor suite:cpm_edge/performance pcc_step 0.999081 >= 0.985
+ok   drift suite:cpm_edge/performance pcc_normalized 0.999859 >= 0.998859 (baseline 0.999859)
+ok   drift suite:cpm_edge/performance pcc_final 0.999824 >= 0.998824 (baseline 0.999824)
+ok   drift suite:cpm_edge/performance pcc_spread 0.999964 >= 0.997964 (baseline 0.999964)
+n/a  drift suite:cpm_edge/performance pcc_row_p01_active: not applicable (n_active=1 < 100)
+n/a  drift suite:cpm_edge/performance spread_ratio_p50: not applicable (n_active=1 < 8)
+ok   drift suite:cpm_edge/performance abs_err_max 0.062849 <= 0.0942736 (baseline 0.062849)
+ok   drift suite:cpm_edge/performance bias_row_drift_max 0 <= 0.03 (row 0)
+ok   drift suite:cpm_edge/performance spread_ratio_row_drift_max 0 <= 0.15 (row 0)
+0 failure(s)
+[ttq] job 1133 done rc=0 in 0s (queued 0s) on cpu pool
+[ttq] log /home/andy/.local/share/ttq/jobs/001133/output.log

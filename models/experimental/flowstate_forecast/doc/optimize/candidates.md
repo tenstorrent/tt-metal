@@ -24,4 +24,4 @@ PLAN v1.20, v1.21 and v1.23 do not apply (CONTRACT:403). What applies: F2, F4, F
 
 | id | candidate | commit | jobs | paper / accuracy device ms | vs best | check_gates | kept |
 |---|---|---|---|---|---|---|---|
-| R0 | round 0: route-K scan (fused layout), default matmul configs | see iter_00/summary.md | see iter_00/summary.md | see iter_00/summary.md | - | 0 failures (fixed record) | baseline |
+| R0 | round 0: route-K scan (fused layout), default matmul configs | 40e7529f66f | suite 1122, bench 1123, check_gates 1133, score_broken 1136 | 375.3 | - | 0 failures (fixed record) | baseline |
