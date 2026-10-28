@@ -26,7 +26,8 @@ void kernel_main() {
     const uint32_t first_page = get_arg(args::first_page);
     const uint32_t num_pages = get_arg(args::num_pages);
 
-    Noc noc;
+    Noc noc;             // NOC_0: the index and every read
+    const Noc write_noc(1);  // NOC_1: every write, off the reads' links
     Scratchpad<volatile uint32_t> staging(scratch::staging);
 
     noc.async_read(TensorAccessor(tensor::index), staging, sizeof(uint32_t), {.page_id = 0}, {.offset_bytes = 0});
@@ -50,13 +51,13 @@ void kernel_main() {
         }
         noc.async_read_barrier();
         for (uint32_t i = 0; i < count; ++i) {
-            noc.async_write(
+            write_noc.async_write(
                 staging,
                 destination,
                 page_size,
                 {.offset_bytes = i * page_stride},
                 {.page_id = destination_base + done + i});
         }
-        noc.async_write_barrier();
+        write_noc.async_write_barrier();
     }
 }

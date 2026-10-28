@@ -29,6 +29,16 @@ constexpr uint32_t kStagingBudgetBytes = 64 * 1024;
 // full grid, and the 1.5 MiB recurrent carry at the same ~12.4 us; more cores only add start-up cost.
 constexpr uint32_t kDiagonals = 3;
 
+// Reads go out on NOC_0 and writes on NOC_1, so the two directions use separate links; dynamic NoC mode lets the one
+// kernel drive both. Measured on a Blackhole P150 for the Kimi-K3 copies: the 1.5 MiB carry in 8.6 us against 12.7 us
+// with both on NOC_0; the 54 KiB tail pays dynamic mode's per-transaction cost, 1.9 against 1.8 us.
+DataMovementHardwareConfig copier_hw_config() {
+    auto hw = ttnn::create_reader_datamovement_config();
+    hw.config_1xx->noc = NOC::NOC_0;
+    hw.config_1xx->noc_mode = NOC_MODE::DM_DYNAMIC_NOC;
+    return hw;
+}
+
 // Cores on `diagonals` shifted diagonals: core (x = (i + k) % width, y = i) for row i and diagonal k.
 CoreRangeSet diagonal_cores(CoreCoord grid, uint32_t diagonals) {
     std::set<CoreRange> cores;
@@ -105,7 +115,7 @@ ttnn::device_operation::ProgramArtifacts IndexedEntryCopyProgramFactory::create_
                 {"indexed_is_source", static_cast<uint32_t>(indexed_is_source)},
             },
         .runtime_arg_schema = {.runtime_arg_names = {"first_page", "num_pages"}},
-        .hw_config = ttnn::create_reader_datamovement_config(),
+        .hw_config = copier_hw_config(),
     };
 
     // Page ranges depend only on shapes, so they are invariant across cache hits; only tensor addresses are
