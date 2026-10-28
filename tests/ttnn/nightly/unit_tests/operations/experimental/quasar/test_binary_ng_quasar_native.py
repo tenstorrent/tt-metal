@@ -844,6 +844,10 @@ def _config_params(configs, cases):
     ]
 
 
+# The option "walk" of a broadcast entry is {"a", "b", "out", "pads"}, each 0 or 1: the operands that the program
+# borrows from L1, and whether its reader skips pad slots. The child checks it on an entry's first run, as it checks
+# "modes", from the JIT files of the one binary_ng reader and writer. No JIT file records the shard width or the stride.
+
 # Same shape as _ARM_SRC: a fixed child script, parameters as JSON in the environment. ARM_EXPECT names the factory
 # every op in the child must have bound: "qsr" for native, "dfb" for the fallback. The strategy "l1" or "dram" places a
 # tensor interleaved, and then the shard shape and range are None. The strategies "dram_height", "dram_width" and
@@ -972,6 +976,34 @@ def compute_modes(kernels):
     return [int(defines.get(k, "0")) for k in ("A_MODE", "B_MODE", "A_OUTER_BCAST", "B_OUTER_BCAST")]
 
 
+def dataflow_walk(kernels):
+    # Which operands the one binary_ng reader and writer among `kernels` borrow from L1, and whether the reader skips
+    # pad slots. A DM kernel's defines are on its compile command only, so this reads what the factory ties to them: a
+    # borrowed operand binds no tensor (no tail ring runs beside a moving one), and pad slots add the arg valid_rows.
+    binary_ng = [(path, source) for path, source in kernels if "/binary_ng/device/kernels" in source]
+    readers = [path for path, source in binary_ng if "/dataflow/reader" in source]
+    writers = [path for path, source in binary_ng if "/dataflow/writer" in source]
+    if len(readers) != 1 or len(writers) != 1:
+        return "{} binary_ng readers and {} writers".format(len(readers), len(writers))
+
+    def bound_tensors(path):
+        names = set()
+        for line in (pathlib.Path(path) / "kernel_bindings_generated.h").read_text().splitlines():
+            words = line.split()
+            if len(words) > 3 and words[0] == "using" and words[3].startswith("::tensor_accessor::TensorBindingToken"):
+                names.add(words[1][: -len("_t")])
+        return names
+
+    reader_tensors, writer_tensors = bound_tensors(readers[0]), bound_tensors(writers[0])
+    reader_args = (pathlib.Path(readers[0]) / "kernel_args_generated.h").read_text()
+    return {
+        "a": int("in0" not in reader_tensors),
+        "b": int("in1" not in reader_tensors),
+        "out": int("out" not in writer_tensors),
+        "pads": int("RtaArg<uint32_t> valid_rows{" in reader_args),
+    }
+
+
 def memory_config(strategy, shard_shape, rng, orientation="row"):
     if strategy in INTERLEAVED:
         return INTERLEAVED[strategy]
@@ -1040,11 +1072,15 @@ try:
         spec = json.dumps(entry[1:])
         if spec in seen and device.num_program_cache_entries() != cached:
             failures.append("{}: repeats an earlier spec but missed the program cache".format(name))
-        # A repeat hits the program cache and compiles nothing, so only a first run shows its modes.
+        # A repeat hits the program cache and compiles nothing, so only a first run shows its modes and its walk.
         if "modes" in opts and spec not in seen:
             modes = compute_modes(kernels_logged()[logged:])
             if modes != opts["modes"]:
                 failures.append("{}: the compute ran with {}, the case expects {}".format(name, modes, opts["modes"]))
+        if "walk" in opts and spec not in seen:
+            walk = dataflow_walk(kernels_logged()[logged:])
+            if walk != opts["walk"]:
+                failures.append("{}: the reader walked {}, the case expects {}".format(name, walk, opts["walk"]))
         seen.add(spec)
         if spec in specs[i + 1:]:
             keep.extend([ta, tb, out])
@@ -1881,7 +1917,8 @@ def test_native_other_ops_on_the_tail_rings_are_bit_exact(name, knobs):
 # (multiply), in one mix of each kind of borrowing: nothing borrowed, beside DRAM with partial tiles; all three
 # borrowed; the inputs borrowed beside an output that moves; the output borrowed beside inputs that move. SQUARE on both
 # inputs runs two self-loop rings on each Neo. block_6's shards hold 6 tiles, which 4 does not divide. The tail rings
-# carry no activation, so at the rule's compute count block_6 takes the NoC path.
+# carry no activation, so at the rule's compute count block_6 takes the NoC path. Multiply in fast mode runs ELWMUL on
+# the FPU kernel, the op with several fidelity phases, after each activation's init.
 # SQUARE and RELU have exact models; GELU and TANH do not. GELU also shifts the SFPU results of the later programs on
 # the same device, on both factories.
 _ACTIVATIONS = ("lhs", "rhs", "post", "relu", "relu_lhs", "relu_chain")
@@ -1898,20 +1935,20 @@ def _with_act(entry, act):
 _ACT_CASES = (
     [
         (_with_act(_with_op(entry, op), act), path, split)
-        for op in ("add", "multiply")
+        for op in ("add", "multiply", "multiply_fast")
         for act in _ACTIVATIONS
         for entry, path, split in _MIXED_CASES
         if entry[0] in _ACT_MIXES
     ]
     + [
         (_with_act(_with_op(entry, op), "both"), path, split)
-        for op in ("add", "multiply")
+        for op in ("add", "multiply", "multiply_fast")
         for entry, path, split in _MIXED_CASES
         if entry[0] == "B.B.B_partial"
     ]
     + [
         (_with_act(_with_op(_BLOCK_6, op), act), _NOC, _noc_split(_tensor_tiles(_BLOCK_6)))
-        for op in ("add", "multiply")
+        for op in ("add", "multiply", "multiply_fast")
         for act in ("lhs", "relu")
     ]
 )
@@ -2000,10 +2037,11 @@ def test_native_fp32_activations_match_the_prediction(name, knobs):
 
 # Broadcast on the native path. Each operand has a mode, FULL, ROW, COL, SCALAR or VALUE (the values of A_MODE and
 # B_MODE, kernels_qsr/common/operand_walk.hpp), and an outer-dim broadcast flag. Every case names the modes that its
-# compute kernel must be built with, and its output must equal the oracle exactly. The broadcast configurations batch
-# the FPU kernel only at R = C = W = 1, so no case predicts wrong tiles, before or after llk_unpack_AB steps a batch by
-# the ring stride. Beside a broadcast operand the rule runs R = C = 4; R1C4W1 sets one reader thread on four tile
-# counters, which a held page's change and a VALUE ring's entries must survive.
+# compute kernel must be built with. It names its walk too, or sits in _BCAST_WALK_BY_CONFIG. Its output must equal the
+# oracle exactly. The broadcast configurations batch the FPU kernel only at R = C = W = 1, so no case predicts wrong
+# tiles, before or after llk_unpack_AB steps a batch by the ring stride. Beside a broadcast operand the rule runs
+# R = C = 4; R1C4W1 sets one reader thread on four tile counters, which a held page's change and a VALUE ring's entries
+# must survive.
 _MODE = {"FULL": 0, "ROW": 1, "COL": 2, "SCALAR": 3, "VALUE": 4}
 _BCAST_CONFIGS = {"rule": {}, "rule-n1": _COMPUTE_BATCH_1, "R1C1W1": _threads(1, 1, 1), "R1C4W1": _threads(1, 4, 1)}
 
@@ -2011,6 +2049,24 @@ _BCAST_CONFIGS = {"rule": {}, "rule-n1": _COMPUTE_BATCH_1, "R1C1W1": _threads(1,
 def _modes(a="FULL", b="FULL", a_outer=False, b_outer=False):
     """The [A_MODE, B_MODE, A_OUTER_BCAST, B_OUTER_BCAST] that the compute kernel of a case is built with."""
     return [_MODE[a], _MODE[b], int(a_outer), int(b_outer)]
+
+
+def _walk(a=0, b=0, out=0, pads=0):
+    """The walk of a case, as dataflow_walk in _SHARD_ARM_SRC reads it: 1 for each operand that its program borrows
+    from L1, and 1 where its reader skips pad slots."""
+    return {"a": a, "b": b, "out": out, "pads": pads}
+
+
+# No case here borrows b, so b is 0 in every walk. In the b cases b is the broadcast operand, which is never borrowed.
+# The a cases run in DRAM, where nothing is borrowed.
+_NOC_WALK = _walk()  # every operand moves over the NoC
+_ANCHORED_WALK = _walk(a=1, out=1)  # an anchor borrows a and the output; b moves in the anchor's tile order
+_PADDED_WALK = _walk(a=1, out=1, pads=1)  # the anchor has pad slots, which the reader skips
+# In L1 the bank walk gives a cluster 2 tiles of _OUTER_SHAPE, which 4 compute threads do not divide: these cases take
+# the NoC path at C = 4 and the slice anchor at C = 1, so they declare no walk.
+_BCAST_WALK_BY_CONFIG = frozenset(
+    {"outer_b_L1", "row_b_L1", "row_b_L1/multiply", *(f"outer_b/fp32/{op}" for op in _FP32_OPS)}
+)
 
 
 def _bcast(name, a_shape, b_shape, modes, a=_IDRAM, b=_IDRAM, out=_IDRAM, **opts):
@@ -2026,31 +2082,64 @@ def _bcast(name, a_shape, b_shape, modes, a=_IDRAM, b=_IDRAM, out=_IDRAM, **opts
 
 
 # Outer-dim broadcast: FULL operands with a unit outer dim. Wt = 5 is not a multiple of 4 and Ht = 2; a unit outer dim
-# on a, on b, and on both. On the NoC path in DRAM and in L1; beside a borrowed a and output in the shard walk
-# (w = 4 < Wt = 32) and in the bank walk; with SQUARE on the broadcast operand. In outer_b_same_config, b has the
-# anchor's memory config but a broadcast shape, so its shards hold other tiles: the anchor borrows a and the output, and
-# b moves. outer_b_rank7 broadcasts dim -6 of a rank-7 output whose dim -7 is 2: the walk's digit for dim -6.
+# on a, on b, and on both. On the NoC path in DRAM; in L1, on the NoC path at C = 4 and with the slice anchor at C = 1;
+# beside a borrowed a and output in the shard walk (w = 4 < Wt = 32) and in the bank walk; with SQUARE on the broadcast
+# operand. In outer_b_same_config, b has the anchor's memory config but a broadcast shape, so its shards hold other
+# tiles: the anchor borrows a and the output, and b moves. outer_b_rank7 broadcasts dim -6 of a rank-7 output whose
+# dim -7 is 2: the walk's digit for dim -6.
 # outer_b_wide_shard puts a and the output in block shards 3 tiles wider than the tensor, on the 4 clusters of a
 # sub-grid. The cursor's step across a shard row's edge needs w <= Wt, so no anchor may take this program. outer_b_rank2
 # has a b of lower rank. outer_rank6 has rank 6, D = 2 and dim -6 = 3: a broadcasts dim -6, and b broadcasts D and C.
+# outer_b_uneven_shard borrows a and the output in shards over 14 x 60 tiles that leave pad rows and columns, beside a b
+# that moves. Together, outer_b_uneven_shard and row_b_uneven_shard prove that the mapped pad path compiles and runs
+# and skips no valid tile. Beside a broadcast b, a read of a pad slot stays in range, so a missing skip would not show.
 _OUTER_SHAPE = [2, 3, 64, 160]
 _B32_WALK = ("block", [4 * 32, 4 * 32], (0, 0, 7, 3))  # on [2, 1, 256, 1024]: 32 shards of 4x4 tiles
 _H32_4 = ("height", [4 * 32, 32], (0, 0, 7, 3))  # on [2, 1, 2048, 32]: 32 shards of 4 tiles; b's 16 shards
 _BLOCK_WIDE = ("block", [3 * 32, 4 * 32], (0, 0, 0, 3))  # on [2, 3, 64, 32]: 4 shards of 3x4 tiles, 1 tile wide
+_B32_W8 = ("block", [4 * 32, 8 * 32], (0, 0, 7, 3))  # on [2, 1, 224, 1920]: 32 shards, pad rows and columns
 _OUTER = [
-    _bcast("outer_b", _OUTER_SHAPE, [1, 3, 64, 160], _modes(b_outer=True)),
-    _bcast("outer_a", [1, 3, 64, 160], _OUTER_SHAPE, _modes(a_outer=True), op="subtract"),
-    _bcast("outer_both", [2, 1, 64, 160], [1, 3, 64, 160], _modes(a_outer=True, b_outer=True), op="multiply"),
+    _bcast("outer_b", _OUTER_SHAPE, [1, 3, 64, 160], _modes(b_outer=True), walk=_NOC_WALK),
+    _bcast("outer_a", [1, 3, 64, 160], _OUTER_SHAPE, _modes(a_outer=True), op="subtract", walk=_NOC_WALK),
+    _bcast(
+        "outer_both",
+        [2, 1, 64, 160],
+        [1, 3, 64, 160],
+        _modes(a_outer=True, b_outer=True),
+        op="multiply",
+        walk=_NOC_WALK,
+    ),
     _bcast("outer_b_L1", _OUTER_SHAPE, [1, 3, 64, 160], _modes(b_outer=True), a=_IL1, b=_IL1, out=_IL1, op="divide"),
     _bcast(
-        "outer_b_shard_walk", [2, 1, 256, 1024], [1, 1, 256, 1024], _modes(b_outer=True), a=_B32_WALK, out=_B32_WALK
+        "outer_b_shard_walk",
+        [2, 1, 256, 1024],
+        [1, 1, 256, 1024],
+        _modes(b_outer=True),
+        a=_B32_WALK,
+        out=_B32_WALK,
+        walk=_ANCHORED_WALK,
     ),
-    _bcast("outer_b_bank_walk", [2, 1, 64, 1024], [1, 1, 64, 1024], _modes(b_outer=True), a=_IL1, out=_IL1),
-    _bcast("outer_b_act", _OUTER_SHAPE, [1, 3, 64, 160], _modes(b_outer=True), act="rhs"),
     _bcast(
-        "outer_b_same_config", [2, 1, 2048, 32], [1, 1, 2048, 32], _modes(b_outer=True), a=_H32_4, b=_H32_4, out=_H32_4
+        "outer_b_bank_walk",
+        [2, 1, 64, 1024],
+        [1, 1, 64, 1024],
+        _modes(b_outer=True),
+        a=_IL1,
+        out=_IL1,
+        walk=_ANCHORED_WALK,
     ),
-    _bcast("outer_b_rank7", [2, 3, 1, 1, 2, 64, 64], [2, 1, 1, 1, 2, 64, 64], _modes(b_outer=True)),
+    _bcast("outer_b_act", _OUTER_SHAPE, [1, 3, 64, 160], _modes(b_outer=True), act="rhs", walk=_NOC_WALK),
+    _bcast(
+        "outer_b_same_config",
+        [2, 1, 2048, 32],
+        [1, 1, 2048, 32],
+        _modes(b_outer=True),
+        a=_H32_4,
+        b=_H32_4,
+        out=_H32_4,
+        walk=_ANCHORED_WALK,
+    ),
+    _bcast("outer_b_rank7", [2, 3, 1, 1, 2, 64, 64], [2, 1, 1, 1, 2, 64, 64], _modes(b_outer=True), walk=_NOC_WALK),
     _bcast(
         "outer_b_wide_shard",
         [2, 3, 64, 32],
@@ -2059,9 +2148,22 @@ _OUTER = [
         a=_BLOCK_WIDE,
         out=_BLOCK_WIDE,
         grid=(0, 0, 0, 3),
+        walk=_NOC_WALK,
     ),
-    _bcast("outer_b_rank2", _OUTER_SHAPE, [64, 160], _modes(b_outer=True)),
-    _bcast("outer_rank6", [1, 2, 1, 2, 64, 64], [3, 1, 1, 1, 64, 64], _modes(a_outer=True, b_outer=True)),
+    _bcast("outer_b_rank2", _OUTER_SHAPE, [64, 160], _modes(b_outer=True), walk=_NOC_WALK),
+    _bcast(
+        "outer_rank6", [1, 2, 1, 2, 64, 64], [3, 1, 1, 1, 64, 64], _modes(a_outer=True, b_outer=True), walk=_NOC_WALK
+    ),
+    _bcast(
+        "outer_b_uneven_shard/multiply",
+        [2, 1, 7 * 32, 60 * 32],
+        [1, 1, 7 * 32, 60 * 32],
+        _modes(b_outer=True),
+        a=_B32_W8,
+        out=_B32_W8,
+        op="multiply",
+        walk=_PADDED_WALK,
+    ),  # w = 8: at C = 4 the step crosses a shard-row edge every 2 steps
 ]
 # fp32: all four ops run the SFPU kernel, in L1, at the rule's batch of 2.
 _OUTER_FP32 = [
@@ -2077,7 +2179,16 @@ _OUTER_FP32 = [
         dtype="float32",
     )
     for op in _FP32_OPS
-] + [_bcast("outer_both/fp32", [2, 1, 64, 160], [1, 3, 64, 160], _modes(a_outer=True, b_outer=True), dtype="float32")]
+] + [
+    _bcast(
+        "outer_both/fp32",
+        [2, 1, 64, 160],
+        [1, 3, 64, 160],
+        _modes(a_outer=True, b_outer=True),
+        dtype="float32",
+        walk=_NOC_WALK,
+    )
+]
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
@@ -2102,13 +2213,23 @@ _H2_14 = ("height", [16 * 32, 14 * 32], (0, 0, 1, 0))  # on [1, 1, 1024, 448]: 2
 # bank walk gives a cluster at most 2 tiles of _OUTER_SHAPE. Production borrows no shard beside a ROW operand, so
 # row_b_full_batches runs on 32 clusters, 14 tiles each: FPU add batches 8 at R1C1W1, and the SFPU kernel 4. SQUARE
 # runs on the row tiles before the broadcast; a lone RELU on the result runs in the SFPU post chain, as the factory
-# keeps PACK_RELU off beside a broadcast.
+# keeps PACK_RELU off beside a broadcast. row_b_uneven_shard has the pad rows and columns of 14 x 30 tiles in 4 x 4
+# shards. Multiply in fast mode runs ELWMUL, the one FPU op with several fidelity phases, beside a ROW operand and, in
+# row_b_full_batches/multiply_fast, in batches of 8 at R1C1W1 through the staging ring.
 _ROW = [
-    _bcast("row_b", _OUTER_SHAPE, [1, 3, 1, 160], _modes(b="ROW", b_outer=True)),
-    _bcast("row_a", [1, 3, 1, 160], _OUTER_SHAPE, _modes(a="ROW", a_outer=True), op="subtract"),
-    _bcast("row_a_act", [1, 3, 1, 160], _OUTER_SHAPE, _modes(a="ROW", a_outer=True), act="lhs", op="subtract"),
-    _bcast("row_b/multiply", _OUTER_SHAPE, [2, 3, 1, 160], _modes(b="ROW"), op="multiply"),
-    _bcast("row_a/divide", [2, 3, 1, 160], _OUTER_SHAPE, _modes(a="ROW"), op="divide"),
+    _bcast("row_b", _OUTER_SHAPE, [1, 3, 1, 160], _modes(b="ROW", b_outer=True), walk=_NOC_WALK),
+    _bcast("row_a", [1, 3, 1, 160], _OUTER_SHAPE, _modes(a="ROW", a_outer=True), op="subtract", walk=_NOC_WALK),
+    _bcast(
+        "row_a_act",
+        [1, 3, 1, 160],
+        _OUTER_SHAPE,
+        _modes(a="ROW", a_outer=True),
+        act="lhs",
+        op="subtract",
+        walk=_NOC_WALK,
+    ),
+    _bcast("row_b/multiply", _OUTER_SHAPE, [2, 3, 1, 160], _modes(b="ROW"), op="multiply", walk=_NOC_WALK),
+    _bcast("row_a/divide", [2, 3, 1, 160], _OUTER_SHAPE, _modes(a="ROW"), op="divide", walk=_NOC_WALK),
     _bcast("row_b_L1", _OUTER_SHAPE, [1, 3, 1, 160], _modes(b="ROW", b_outer=True), a=_IL1, b=_IL1, out=_IL1),
     _bcast(
         "row_b_L1/multiply",
@@ -2127,6 +2248,7 @@ _ROW = [
         _modes(b="ROW", b_outer=True),
         a=_B32_WALK,
         out=_B32_WALK,
+        walk=_ANCHORED_WALK,
     ),
     _bcast(
         "row_b_bank_walk",
@@ -2136,14 +2258,38 @@ _ROW = [
         a=_IL1,
         out=_IL1,
         op="multiply",
+        walk=_ANCHORED_WALK,
     ),
-    _bcast("row_b_act", _OUTER_SHAPE, [1, 3, 1, 160], _modes(b="ROW", b_outer=True), act="rhs"),
-    _bcast("row_b_act/multiply", _OUTER_SHAPE, [1, 3, 1, 160], _modes(b="ROW", b_outer=True), act="rhs", op="multiply"),
-    _bcast("row_b/relu", _OUTER_SHAPE, [1, 3, 1, 160], _modes(b="ROW", b_outer=True), act="relu"),
+    _bcast("row_b_act", _OUTER_SHAPE, [1, 3, 1, 160], _modes(b="ROW", b_outer=True), act="rhs", walk=_NOC_WALK),
     _bcast(
-        "row_b/relu/multiply", _OUTER_SHAPE, [1, 3, 1, 160], _modes(b="ROW", b_outer=True), act="relu", op="multiply"
+        "row_b_act/multiply",
+        _OUTER_SHAPE,
+        [1, 3, 1, 160],
+        _modes(b="ROW", b_outer=True),
+        act="rhs",
+        op="multiply",
+        walk=_NOC_WALK,
     ),
-    _bcast("row_b_full_batches", [1, 1, 1024, 448], [1, 1, 1, 448], _modes(b="ROW"), a=_H2_14, b=_IL1, out=_H2_14),
+    _bcast("row_b/relu", _OUTER_SHAPE, [1, 3, 1, 160], _modes(b="ROW", b_outer=True), act="relu", walk=_NOC_WALK),
+    _bcast(
+        "row_b/relu/multiply",
+        _OUTER_SHAPE,
+        [1, 3, 1, 160],
+        _modes(b="ROW", b_outer=True),
+        act="relu",
+        op="multiply",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "row_b_full_batches",
+        [1, 1, 1024, 448],
+        [1, 1, 1, 448],
+        _modes(b="ROW"),
+        a=_H2_14,
+        b=_IL1,
+        out=_H2_14,
+        walk=_NOC_WALK,
+    ),
     _bcast(
         "row_b_full_batches/multiply",
         [1, 1, 1024, 448],
@@ -2153,6 +2299,35 @@ _ROW = [
         b=_IL1,
         out=_H2_14,
         op="multiply",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "row_b_uneven_shard",
+        [1, 1, 14 * 32, 30 * 32],
+        [1, 1, 1, 30 * 32],
+        _modes(b="ROW"),
+        a=_B32,
+        out=_B32,
+        walk=_PADDED_WALK,
+    ),
+    _bcast(
+        "row_b/multiply_fast",
+        _OUTER_SHAPE,
+        [1, 3, 1, 160],
+        _modes(b="ROW", b_outer=True),
+        op="multiply_fast",
+        walk=_NOC_WALK,
+    ),
+    _bcast(
+        "row_b_full_batches/multiply_fast",
+        [1, 1, 1024, 448],
+        [1, 1, 1, 448],
+        _modes(b="ROW"),
+        a=_H2_14,
+        b=_IL1,
+        out=_H2_14,
+        op="multiply_fast",
+        walk=_NOC_WALK,
     ),
 ]
 
@@ -2408,16 +2583,29 @@ _BCAST_TABLES = {"outer": _OUTER + _OUTER_FP32, "row": _ROW}
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
 def test_native_broadcast_tables_predict_exact_output():
-    """No device. Each broadcast case must be exact in each broadcast configuration, and name its modes once.
+    """No device. Each broadcast case must be exact in each broadcast configuration, and name its modes and its walk.
 
     A broadcast operand is never borrowed, so an input always moves; a configuration that batched the FPU kernel above
-    ring stride 1 would make a case a strict expected failure, which the broadcast tables do not carry.
+    ring stride 1 would make a case a strict expected failure, which the broadcast tables do not carry. A case declares
+    its walk or is named in _BCAST_WALK_BY_CONFIG, never both, and a walk has exactly the keys of _NOC_WALK.
     """
+    named = set()
     for table, entries in _BCAST_TABLES.items():
         names = [entry[0] for entry in entries]
         assert len(names) == len(set(names)), f"{table}: a case name repeats"
+        named.update(names)
         for entry in entries:
             assert "modes" in entry[5], f"{table}/{entry[0]}: no modes to check"
+            assert (
+                "walk" in entry[5] or entry[0] in _BCAST_WALK_BY_CONFIG
+            ), f"{table}/{entry[0]}: no walk to check, and not named in _BCAST_WALK_BY_CONFIG"
+            assert not (
+                "walk" in entry[5] and entry[0] in _BCAST_WALK_BY_CONFIG
+            ), f"{table}/{entry[0]}: declares a walk and is named in _BCAST_WALK_BY_CONFIG, which holds cases with none"
+            walk = entry[5].get("walk", _NOC_WALK)
+            assert (
+                walk.keys() == _NOC_WALK.keys()
+            ), f"{table}/{entry[0]}: the walk has the keys {sorted(walk)}, a walk has exactly {sorted(_NOC_WALK)}"
             for config, knobs in _BCAST_CONFIGS.items():
                 for output_moves in (True, False):
                     _, c, w, batch = _resolve(knobs, (True, output_moves), _runs_sfpu(entry))
@@ -2425,6 +2613,8 @@ def test_native_broadcast_tables_predict_exact_output():
                     assert (
                         exact
                     ), f"{table}/{entry[0]} under {config}: the FPU kernel batches {batch} at stride {max(c, w)}"
+    stale = _BCAST_WALK_BY_CONFIG - named
+    assert not stale, f"these cases are named in _BCAST_WALK_BY_CONFIG but are in no broadcast table: {sorted(stale)}"
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
