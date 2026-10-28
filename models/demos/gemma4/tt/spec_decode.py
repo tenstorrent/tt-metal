@@ -2539,7 +2539,11 @@ class SpeculativeDecoder:
         um = ttnn.permute(stacked, (0, 1, 3, 2))  # [1, 1, B, P]
         stacked.deallocate(True)
         verify_x = ttnn.reshape(um, (1, B * P))
-        um.deallocate(True)
+        if not _same_device_buffer(verify_x, um):
+            # A same-volume reshape is a view of ``um``: freeing the source would free
+            # the verify input (inside a capture, the replay then reuses the storage
+            # the host reads the drafts from).
+            um.deallocate(True)
         # 4. masks built in-trace at [B, 1, P, S], then ONE packed verify; the
         # H x repeat tiles the P block per head (row h*P+p, the packed layout).
         mask_full, mask_slide = self._srv_masks_device(S, rec)
@@ -2976,7 +2980,11 @@ class SpeculativeDecoder:
         um = ttnn.permute(stacked, (0, 1, 3, 2))  # [1,1,B,P]
         stacked.deallocate(True)
         verify_x = ttnn.reshape(um, (1, B * P))
-        um.deallocate(True)
+        if not _same_device_buffer(verify_x, um):
+            # A same-volume reshape is a view of ``um``: freeing the source would free
+            # the verify input (inside a capture, the replay then reuses the storage
+            # the host reads the drafts from).
+            um.deallocate(True)
         vlogits, vhidden = self.target.ttnn_packed_verify_forward(
             x=verify_x,
             position_idx=tr["v_pos"],
