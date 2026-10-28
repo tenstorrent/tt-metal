@@ -356,6 +356,7 @@ def main():
                                 [{"role": "user", "content": header + " observation" * count}],
                                 tokenize=True,
                                 add_generation_prompt=True,
+                                return_dict=False,
                                 enable_thinking=True,
                                 reasoning_effort="medium",
                                 preserve_thinking=True,
