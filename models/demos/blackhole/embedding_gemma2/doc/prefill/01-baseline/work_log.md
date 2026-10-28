@@ -12,7 +12,7 @@ log with `__start` / `__end wall_s` / `__tt_exit`), one at a time.
 |---|---|
 | `3eed8629a2` | E8 review doc fixes (datatype_sweep README vision worst-token attribution; benchmark REPORT.md; README) - docs only |
 | `7ef04f02da` | stage-1 harness: `tests/perf/prefill.py`, `prefill_refs.py`, `prefill_telemetry.py`, `prefill_op_table.py`, `prefill_summary.py`; `perf.py::test_tracy_forward` contract buckets. No model code. |
-| (docs commit) | `doc/prefill/target_contract.json`, `doc/prefill/01-baseline/` (this log; SHA in the worker report) |
+| `f6b3ded953` | `doc/prefill/target_contract.json`, `doc/prefill/01-baseline/` (this log, README, perf_summary, per-op tables) - docs only |
 
 The measurements ran on the working tree of `7ef04f02da` before two non-semantic changes: black
 reformatting at commit time, and `@pytest.mark.timeout(3600)` (added after the 65536 sustained case
@@ -80,7 +80,7 @@ Analysis (CPU only): `python3 $R/scripts/analyze.py $R/analysis/tables $R/run/pr
 | observation | evidence | control | resolution |
 |---|---|---|---|
 | b1_s256 last-hidden PCC 0.98872 < 0.99 | `run/prefill.jsonl`, `run_gate/prefill.jsonl` (identical) | baseline precision 0.99692 on the same input; offsets 997 / 5003 >= 0.9955 | open, orchestrator decision (README options) |
-| 65536 "burst" starts at 1287-1306 MHz | burst `telemetry_start` | 2 runs, 2057.2 / 2049.8 ms | documented: one 2 s forward + 3 s idle does not return to full clock [I] |
+| 65536 "burst" is not a full-clock figure: AICLK drops inside the first window | sustained telemetry started after the same 3 s idle (`run/telemetry_20261028-072751_b1_s65536.csv`, `run/telemetry_20261028-074659_b1_s65536.csv`): 1350 MHz / 68-69 W at start, 1343 MHz at 1 s, 1287 MHz at 2 s; burst windows of run `20261028-074659` rise 2041.6 -> 2055.2 ms. The burst `telemetry_start` (1287 / 1306 MHz) is sampled after warm-up, before the first 3 s idle, so it is not the window-start clock | 2 runs, 2057.2 / 2049.8 ms | documented (corrected in E9.1-r1; the first version said the clock was already at 1287-1306 MHz at burst start, which the window-start telemetry contradicts) |
 | traced residual 36 ms at 65536 vs <= 3.2 ms elsewhere | `analysis/reconcile.json` | kernel sum from a cold eager profile at full clock | attributed to the lower clock [I]; not a dispatch cost |
 | host work negative at >= 16384 | host records (N = 14 / 5) | replay + sync measured in the same phase | run-to-run noise at small N under clock drift; reported as noise |
 | 65536 sustained timed out | `logs/sweep_all.log` | rerun with the timeout mark passed | fixed (harness limit) |

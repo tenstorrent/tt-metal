@@ -126,7 +126,10 @@ replay + output readback, excluding host input preparation (timed separately as 
 for 1 x 2560 vision, 6.7 ms for 1 x 768 audio, under 0.5 ms for text up to 8192; serial
 throughput with host prep in `doc/benchmark/REPORT.md`); public API = `EmbeddingGemma2.encode([item], traced=True)` including the
 HF processor. 2cq is not supported (one command queue). Vision sustains 5.4 % slower than burst
-after 30 s back to back; text and audio do not throttle.
+after 30 s back to back. Text throttles from 1 x 4096 up: in E9 (`doc/prefill/01-baseline/README.md`)
+the median AICLK fell to 1312 MHz at 1 x 32768 and 1306 MHz at 1 x 65536 (minimum 1293 / 1268 MHz),
+and sustained was 0.6-1.9 % slower than burst at 4096 and above; text up to 2048 held 1350 MHz.
+Audio 1 x 768 showed no drift in E8.
 
 How to run `tests/perf/perf.py` (from the tt-metal root, environment as in Setup). A plain run is
 quick; every extra is an opt-in env switch (`"1"` = on). They combine, and `-k` picks single cases.

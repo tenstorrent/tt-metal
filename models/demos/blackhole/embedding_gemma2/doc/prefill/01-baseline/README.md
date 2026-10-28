@@ -32,9 +32,14 @@ third of the sustained run, sampled every 100 ms.
   (medians 1306-1337 MHz, minimum 1268 MHz) with power around 130-138 W median (150 W TDP limit, 200 A TDC limit) and
   sustained is 0.6-1.9 % slower than burst **[M]**. Power samples peak above 150 W (to 238 W)
   for single 100 ms reads; the limit is enforced on an average **[I]**.
-- At 65536 the clock is already at 1287-1306 MHz when the burst windows start (telemetry at burst
-  start), so its "burst" is not a full-clock number **[M]**; one forward (2 s) is longer than the
-  3 s idle window lets the clock recover **[I]**.
+- The 65536 "burst" is not a full-clock figure: the clock drops inside the first window **[M]**.
+  The sustained telemetry, which starts after the same 3 s idle as a burst window
+  (`run/telemetry_20261028-072751_b1_s65536.csv`, `run/telemetry_20261028-074659_b1_s65536.csv`),
+  reads 1350 MHz / 68-69 W at the start, 1343 MHz at 1 s and 1287 MHz at 2 s, within about one
+  forward (2.05 s). The burst windows of run `20261028-074659` (3 forwards each) rise from 2041.6 to
+  2055.2 ms (2041.6, 2046.3, 2049.8, 2051.3, 2055.2) **[M]**. The burst record's `telemetry_start`
+  (1287 / 1306 MHz) is sampled after warm-up and before the first 3 s idle, so it is not the clock
+  at window start.
 
 ## Harness
 
@@ -121,7 +126,8 @@ the rotary op reads only its rows **[I]**, and kernel sums sit 1-7 % under the t
   op-to-op gaps are not profiled (no profile of a trace replay), so the residual holds dispatch gaps,
   the one sync per window, and any clock difference between the cold profiled forward and the timed
   window **[I]**. At <= 8192 it is 0.3-1.0 us per op, i.e. dispatch; at 65536 the 36 ms follows the
-  lower clock (1287-1306 MHz during that burst vs a cold profile) **[I]**.
+  lower clock (AICLK falls from 1350 to about 1287 MHz within the first forward of a window, per the
+  sustained telemetry after the same idle, vs a cold profile) **[I]**.
 - Eager op-to-op gaps (host dispatch in eager mode) are 13 ms at 128 and fall under 1 ms at >= 2048,
   where the device is the bottleneck; trace removes them (traced residual 0.36 ms at 128) **[M]**.
 - Host work per request after host prep (round trip minus replay+sync) is 0.06-0.43 ms up to 8192;
@@ -188,9 +194,9 @@ Investigation (`tt-ops/.../scripts/gate256_probe.py`, eager vs HF fp32, `gate256
   is the hard input; worst-token cosine there is 0.35-0.90 (selected) vs 0.71-0.96 (baseline).
 - Control: the E5a baseline precision (`baseline_precision_config.json`, bf16 activations) on the
   same inputs: >= 0.99677 everywhere (192: 0.99692).
-- Cause: the selected precision (bfp8 QKV and gate/up outputs) on this input, inside the 1.1e-3
-  margin the E6a probe measured for it (min 0.99106) **[I: the controls isolate precision; the
-  per-op source was not bisected]**.
+- Cause: the selected precision (bfp8 QKV and gate/up outputs) on this input **[I: the controls
+  isolate precision; the per-op source was not bisected]**. 0.98872 is 2.3e-3 below the E6a probe
+  minimum for this config (0.99106), so the E6a probe never covered this input.
 - Cost of the control config, burst, same card (`run_baseline_precision`, run `20261028-080654`):
   128 4.924 (+2.3 %), 256 5.837 (+6.6 %), 512 7.313 (+7.0 %), 1024 12.372 (+15.0 %), 2048 22.057
   (+9.9 %), 4096 39.527 (+16.1 %), 8192 105.575 (+13.6 %) ms; all its gates pass (0.99677-0.99799).
@@ -224,7 +230,8 @@ tokens); it would need more host RAM or a streaming-attention reference **[M / I
   1024 10.759, 8192 92.944 ms vs sweep 4.813 / 10.758 / 92.970: within 0.03 % **[M]**.
 - The gate run (alloc tracking on, before the sweep) burst numbers match the sweep within 0.015 %
   up to 16384, -0.14 % at 32768 and -0.03 % at 65536 **[M]** (`run_gate/prefill.jsonl`).
-- 65536 burst in two runs: 2057.2 and 2049.8 ms (0.4 %), clock already lowered in both **[M]**.
+- 65536 burst in two runs: 2057.2 and 2049.8 ms (0.4 %) **[M]**; in both the clock drops inside
+  the first window (see Headline) **[I: from the sustained telemetry after the same idle]**.
 
 ## Runs
 
