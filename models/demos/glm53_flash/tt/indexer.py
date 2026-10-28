@@ -42,7 +42,7 @@ from models.demos.glm53_flash.custom_ops.index_score_decode.op import IndexScore
 from models.demos.glm53_flash.custom_ops.topk_rows.op import TopkRows
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.matmul_configs import prefill_linear
-from models.demos.glm53_flash.tt.mesh import from_torch_host_layout
+from models.demos.glm53_flash.tt.mesh import from_torch_host_layout, lazy_const
 from models.demos.glm53_flash.tt.vllm_config import PREFIX_BUCKET_ENV
 
 TILE = 32
@@ -228,12 +228,12 @@ class TtIndexCache:
         fill runs one program for every chunk start (the earlier device slice was a program per start block)."""
         per_chip = self.partition
         if b0 == 0:
+            # a user's views are built on its first prefill: under live traces that is a chunk transient (GLMMesh.lazy)
             key = ("pools", user)
-            if key not in self._prefill_views:
-                self._prefill_views[key] = [
-                    self._upload_pool_view(r, per_chip and i == 0) for i, r in enumerate(self._pool_view_rows(user))
-                ]
-            return self._prefill_views[key]
+            make = lambda: [
+                self._upload_pool_view(r, per_chip and i == 0) for i, r in enumerate(self._pool_view_rows(user))
+            ]
+            return lazy_const(self.mesh, self._prefill_views, key, make)
         if not 0 < b0 < self.pool_blocks:
             raise ValueError(f"pool start block {b0} outside [1, {self.pool_blocks})")
         out = []
@@ -309,13 +309,17 @@ class TtIndexCache:
         if not self.partition:
             return [self._user_pts[user]]
         key = ("ring", user)
-        if key not in self._prefill_views:
-            self._prefill_views[key] = self.mesh.upload(
+        own = lazy_const(
+            self.mesh,
+            self._prefill_views,
+            key,
+            lambda: self.mesh.upload(
                 self._owner_rows(user, self._ring_ids_host), ttnn.int32, cols=0, layout=ttnn.ROW_MAJOR_LAYOUT
-            )
+            ),
+        )
         if self.scratch is None:
-            return [self._prefill_views[key]]
-        return [self._prefill_views[key], self._user_pts[self.scratch]]
+            return [own]
+        return [own, self._user_pts[self.scratch]]
 
     def pools_batched(self) -> ttnn.Tensor:
         """[max_batch, 1, pools_per_user, D] view for scoring (taken after the latest writes)."""
@@ -1018,10 +1022,12 @@ class TtDSAIndexer(LightweightModule):
         per layer (a blocking write on the dispatch path) with a dictionary lookup."""
         R = positions.shape[0]
         key = (name, T, tuple(positions[:, 0].tolist()), tuple(positions[:, -1].tolist()), R, limit)
-        if key not in self._const_cache:
-            bounds = bound(positions).to(torch.int32).reshape(R * T, 1)
-            self._const_cache[key] = self._const(bounds, ttnn.uint32, per_row=R > 1)
-        return self._const_cache[key]
+        return lazy_const(
+            self.mesh,
+            self._const_cache,
+            key,
+            lambda: self._const(bound(positions).to(torch.int32).reshape(R * T, 1), ttnn.uint32, per_row=R > 1),
+        )
 
     def _score_prefill_rows(
         self, q: ttnn.Tensor, w: ttnn.Tensor, cache: TtIndexCache, user: int, *, positions: torch.Tensor, kv_len: int
@@ -1091,13 +1097,15 @@ class TtDSAIndexer(LightweightModule):
     def _pool_offsets(self, T: int) -> ttnn.Tensor:
         """fp32 [1,1,T,index_topk] of the in-pool offsets 0..P-1 repeated (cached per T)."""
         key = ("pool_offsets", T)
-        if key not in self._const_cache:
+
+        def make() -> ttnn.Tensor:
             P, K = self.P, self.cfg.index_topk
             offs = torch.arange(P, dtype=torch.float32).repeat(K // P).reshape(1, 1, 1, K).expand(1, 1, T, K)
-            self._const_cache[key] = ttnn.from_torch(
+            return ttnn.from_torch(
                 offs.contiguous(), dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device
             )
-        return self._const_cache[key]
+
+        return lazy_const(self.mesh, self._const_cache, key, make)
 
     def _tail_ids(self, T: int, query_start: int, positions: torch.Tensor | None = None) -> ttnn.Tensor:
         """Token ids of the incomplete tail pool of each query (position a = query_start + s, or row r of
@@ -1108,22 +1116,27 @@ class TtDSAIndexer(LightweightModule):
             positions = (torch.arange(T, dtype=torch.int64) + query_start).reshape(1, T)
         R = positions.shape[0]
         key = ("tail", T, tuple(positions[:, 0].tolist()), tuple(positions[:, -1].tolist()), R)
-        if key not in self._const_cache:
+
+        def make() -> ttnn.Tensor:
             P = self.P
             rows = positions.reshape(R, 1, T, 1)  # a
             base = (rows + 1) // P * P
             ids = torch.stack([base + j for j in range(P - 1)], dim=-1).reshape(R, 1, T, P - 1)
             ids = torch.where(ids <= rows, ids, torch.full_like(ids, SENTINEL))
-            self._const_cache[key] = self._const(ids, ttnn.uint32, per_row=R > 1)  # [1,1,T,P-1] per chip
-        return self._const_cache[key]
+            return self._const(ids, ttnn.uint32, per_row=R > 1)  # [1,1,T,P-1] per chip
+
+        return lazy_const(self.mesh, self._const_cache, key, make)
 
     def _sentinels(self, T: int, n: int) -> ttnn.Tensor:
         key = ("sentinel", T, n)
-        if key not in self._const_cache:
-            self._const_cache[key] = ttnn.from_torch(
+        return lazy_const(
+            self.mesh,
+            self._const_cache,
+            key,
+            lambda: ttnn.from_torch(
                 torch.full((1, 1, T, n), SENTINEL, dtype=torch.int64),
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
-            )
-        return self._const_cache[key]
+            ),
+        )

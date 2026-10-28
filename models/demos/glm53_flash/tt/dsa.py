@@ -55,21 +55,9 @@ from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.indexer import TtDSAIndexer, TtIndexCache, height_shard_rows
 from models.demos.glm53_flash.tt.matmul_configs import PREFILL_ROW_BLOCK, DecodeLinear, prefill_linear
 from models.demos.glm53_flash.tt.memory_plan import default_prefill_qblock
-from models.demos.glm53_flash.tt.mesh import TP_AXIS, GLMMesh, single_chip
-from models.demos.glm53_flash.tt.vllm_config import PREFIX_BUCKET_ENV
-
-try:  # the allocation discipline under live traces (lazily built constants as chunk transients, GLMMesh.lazy)
-    from models.demos.glm53_flash.tt.mesh import lazy_const
-except ImportError:  # a tree without it: plain caching
-
-    def lazy_const(mesh, cache: dict, key, make):
-        t = cache.get(key)
-        if t is None:
-            t = cache[key] = make()
-        return t
-
-
+from models.demos.glm53_flash.tt.mesh import TP_AXIS, GLMMesh, lazy_const, single_chip
 from models.demos.glm53_flash.tt.packed_inputs import sparse_host_values
+from models.demos.glm53_flash.tt.vllm_config import PREFIX_BUCKET_ENV
 
 TILE = 32
 CORES_PER_USER_DECODE = 4
@@ -1225,14 +1213,17 @@ class TtDSA(LightweightModule):
     def _cu_window(self, n_keys: int) -> ttnn.Tensor:
         """``cu_window_seqlens`` = [0, n_keys] for the windowed (prefix-aware) causal SDPA: one window
         over the whole prefix. Chunk geometry, not data: built once per key length and cached."""
-        if n_keys not in self._cu_windows:
-            self._cu_windows[n_keys] = ttnn.from_torch(
+        return lazy_const(
+            self.mesh,
+            self._cu_windows,
+            n_keys,
+            lambda: ttnn.from_torch(
                 torch.tensor([0, n_keys], dtype=torch.int32),
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=self.device,
-            )
-        return self._cu_windows[n_keys]
+            ),
+        )
 
     def _dense_attention(
         self,
@@ -2023,10 +2014,13 @@ class TtDSA(LightweightModule):
         """The windowed SDPA's per-device Q offset: mesh row r reads ``offsets[r]`` (a [1,1] int32 ROW_MAJOR
         tensor per chip, row-sharded, replicated over the columns; cached per geometry)."""
         key = ("qoff", offsets)
-        if key not in self._slab_consts:
-            t = torch.tensor(offsets, dtype=torch.int32).reshape(len(offsets), 1)
-            self._slab_consts[key] = self.mesh.upload(t, ttnn.int32, rows=0, layout=ttnn.ROW_MAJOR_LAYOUT)
-        return self._slab_consts[key]
+        t = torch.tensor(offsets, dtype=torch.int32).reshape(len(offsets), 1)
+        return lazy_const(
+            self.mesh,
+            self._slab_consts,
+            key,
+            lambda: self.mesh.upload(t, ttnn.int32, rows=0, layout=ttnn.ROW_MAJOR_LAYOUT),
+        )
 
     def _select_rows(self, o_dense: ttnn.Tensor, o_sparse: ttnn.Tensor, dense: list[int]) -> ttnn.Tensor:
         """Mixed chunk: slab rows [0, dense[r]) of mesh row r come from ``o_dense`` [1,1,n_d,N], the rest from
@@ -2035,12 +2029,14 @@ class TtDSA(LightweightModule):
         n_d, N = o_dense.shape[-2], o_dense.shape[-1]
         T_loc = o_sparse.shape[-2]
         key = ("select", n_d, tuple(dense))
-        if key not in self._slab_consts:
+
+        def make() -> ttnn.Tensor:
             m = torch.zeros(len(dense), 1, n_d, 1)
             for r, d in enumerate(dense):
                 m[r, 0, :d] = 1.0
-            self._slab_consts[key] = self.mesh.upload(m, ttnn.bfloat16, rows=0)
-        mask = self._slab_consts[key]
+            return self.mesh.upload(m, ttnn.bfloat16, rows=0)
+
+        mask = lazy_const(self.mesh, self._slab_consts, key, make)
         head_sparse = o_sparse if n_d == T_loc else ttnn.slice(o_sparse, [0, 0, 0, 0], [1, 1, n_d, N])
         head = ttnn.where(mask, o_dense, head_sparse)
         if n_d == T_loc:

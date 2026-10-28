@@ -77,7 +77,7 @@ from models.demos.glm53_flash.custom_ops.expert_stream.regions import (
 from models.demos.glm53_flash.custom_ops.router_topk.op import RouterTopk
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.matmul_configs import DecodeLinear
-from models.demos.glm53_flash.tt.mesh import GLMMesh, interleave_blocks, single_chip
+from models.demos.glm53_flash.tt.mesh import GLMMesh, interleave_blocks, lazy_const, single_chip
 from models.demos.glm53_flash.tt.mlp import TtClampedSwiGLU
 
 TILE = 32
@@ -693,11 +693,12 @@ class TtRouter(LightweightModule):
 
     def _dense_zeros(self, T: int) -> ttnn.Tensor:
         key = ("zeros", T)
-        if key not in self._const:
-            self._const[key] = ttnn.zeros(
-                (1, 1, T, self.E), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device
-            )
-        return self._const[key]
+        return lazy_const(
+            self.mesh,
+            self._const,
+            key,
+            lambda: ttnn.zeros((1, 1, T, self.E), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device),
+        )
 
     def forward(
         self,
@@ -1746,10 +1747,12 @@ class TtRoutedExperts(LightweightModule):
     def _iota_rows(self, T: int, k: int) -> ttnn.Tensor:
         """uint32 ROW_MAJOR [1, T*k] with value t at (t, j) (cached per geometry)."""
         key = ("iota_rows", T, k)
-        if key not in self._const_cache:
+
+        def make() -> ttnn.Tensor:
             t = torch.arange(T, dtype=torch.int32).reshape(T, 1).expand(T, k).reshape(1, T * k).contiguous()
-            self._const_cache[key] = self.mesh.upload(t, ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        return self._const_cache[key]
+            return self.mesh.upload(t, ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        return lazy_const(self.mesh, self._const_cache, key, make)
 
     @staticmethod
     def _pad_rows(t: ttnn.Tensor, T_pad: int) -> ttnn.Tensor:
@@ -1764,11 +1767,12 @@ class TtRoutedExperts(LightweightModule):
 
     def _zero_u32_row(self, n: int) -> ttnn.Tensor:
         key = ("zero_u32", n)
-        if key not in self._const_cache:
-            self._const_cache[key] = self.mesh.upload(
-                torch.zeros(1, n, dtype=torch.int32), ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT
-            )
-        return self._const_cache[key]
+        return lazy_const(
+            self.mesh,
+            self._const_cache,
+            key,
+            lambda: self.mesh.upload(torch.zeros(1, n, dtype=torch.int32), ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT),
+        )
 
     def forward(
         self, x: ttnn.Tensor, dense_w: ttnn.Tensor, idx: ttnn.Tensor | None = None, w: ttnn.Tensor | None = None
@@ -2153,8 +2157,11 @@ class TtEPExperts(LightweightModule):
         """idx / w [1,1,T,K] (fp32 TILE: integral ids, weights) -> the [1,1,T,32] BF16 index / weight tiles the EP
         op reads (columns >= K padded with IDX_PAD / 0)."""
         T, K = idx.shape[-2], idx.shape[-1]
-        if T not in self._pad:
-            self._pad[T] = (
+        pad_i, pad_w = lazy_const(
+            self.mesh,
+            self._pad,
+            T,
+            lambda: [
                 ttnn.full(
                     (1, 1, T, TILE - K),
                     float(IDX_PAD),
@@ -2163,8 +2170,8 @@ class TtEPExperts(LightweightModule):
                     device=self.device,
                 ),
                 ttnn.zeros((1, 1, T, TILE - K), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=self.device),
-            )
-        pad_i, pad_w = self._pad[T]
+            ],
+        )
         it = ttnn.concat([ttnn.typecast(idx, ttnn.bfloat16), pad_i], dim=-1)
         wt = ttnn.concat([ttnn.typecast(w, ttnn.bfloat16), pad_w], dim=-1)
         return it, wt

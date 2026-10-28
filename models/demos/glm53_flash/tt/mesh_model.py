@@ -42,44 +42,16 @@ from models.demos.glm53_flash.tt.trace_prefill import (
     supported_prefill_lengths,
 )
 
-PREFILL_BUCKETS_ENV = "GLM53_PREFILL_BUCKETS"
-# 8192 is deliberately absent: a 1024-row slab per chip (8192 tokens on the 8 rows) puts the KDA sequence-parallel
-# scan's static dataflow buffers (~1005 KiB per core, slab-independent) and the prefill's L1-resident chunk terms
-# (~608 KiB per core at 1024 rows) over the 1.5 MiB L1 ("Statically allocated dataflow buffers ... clash with L1
-# buffers"); slabs <= 512 rows fit and slabs >= ~1216 rows spill the terms to DRAM (the 16384 chunk path).
-# 256..2048 are the traced lengths (their per-length KDA prefill layers exist from the captures) and 16384 the serving
-# chunk (built by the 32 K warm-up), so these buckets cost no DRAM; a 4096 bucket added ~1 GB of per-length buffers
-# at boot and left the 1 M x 32-slot model unable to allocate the indexer's chunk transient (smoke r9, 2026-10-27).
-DEFAULT_PREFILL_BUCKETS = (256, 512, 1024, 2048, 16384)
+# the eager prefill's chunk-length buckets live in the ttnn-free tt/vllm_config.py (the served warm-up ladder walks
+# them); re-exported here for tt/dsa.py and the tests
+from models.demos.glm53_flash.tt.vllm_config import (  # noqa: E402  (re-exports)
+    DEFAULT_PREFILL_BUCKETS,
+    PREFILL_BUCKETS_ENV,
+    eager_pad_length,
+    prefill_buckets,
+)
 
-
-def prefill_buckets(env=None) -> tuple[int, ...]:
-    """``GLM53_PREFILL_BUCKETS``: the eager prefill's padded chunk lengths (default 256,512,1024,2048,16384; ``0`` =
-    pad
-    to the row unit only, the pre-2026-10-27 behaviour)."""
-    env = os.environ if env is None else env
-    raw = env.get(PREFILL_BUCKETS_ENV, "")
-    if raw.strip() == "0":
-        return ()
-    if not raw.strip():
-        return DEFAULT_PREFILL_BUCKETS
-    return tuple(sorted(int(v) for v in raw.split(",") if v.strip()))
-
-
-def eager_pad_length(seq_len: int, unit: int, buckets: tuple[int, ...] | None = None) -> int:
-    """Padded length of an eager prefill chunk of ``seq_len`` tokens: the row unit's ceiling, raised to the smallest
-    bucket that holds it (a bucket must be a multiple of ``unit``; above the largest bucket the ceiling stands).
-    Every bucket is warmed at boot (the serving warm-up ladder), so a prompt's odd tail chunk never builds a new
-    per-length ttKDA prefill layer after the trace captures (buffers allocated then are clobbered by replays: the
-    2026-10-27 served hang) and never compiles at request time. The kernels clip to the valid ``seq_len``."""
-    T = -(-int(seq_len) // unit) * unit
-    for b in prefill_buckets() if buckets is None else buckets:
-        if b % unit:
-            raise ValueError(f"prefill bucket {b} is not a multiple of the row unit {unit}")
-        if T <= b:
-            return b
-    return T
-
+__all__ = ["DEFAULT_PREFILL_BUCKETS", "PREFILL_BUCKETS_ENV", "eager_pad_length", "prefill_buckets"]
 
 PACKED_INPUTS_ENV = "GLM53_DECODE_PACKED_INPUTS"
 
@@ -426,6 +398,7 @@ class GLM53MeshModel:
             else:
                 ttnn.deallocate(streams)
             streams = out
+        self.mesh.release_transients()  # constants built under live traces live for this step only (GLMMesh.lazy)
         if self.head is None:
             return streams, None, None
         logits, ids = self.head.forward_greedy(streams)
@@ -464,6 +437,7 @@ class GLM53MeshModel:
         T_loc = T_pad // self.mesh.rows
         owner_row, local_last = divmod(S - 1, T_loc)
         logits = self.head.last_token_logits(streams, local_last + 1) if self.head is not None else None
+        self.mesh.release_transients()  # constants built under live traces live for this chunk only (GLMMesh.lazy)
         return streams, logits, owner_row
 
     # ------------------------------------------------------------------- waves
@@ -797,7 +771,18 @@ class GLM53MeshModel:
         return trace_id, outs
 
     def replay(self, trace_id, cq_id: int = 0, blocking: bool = True):
+        """Replay a captured trace. ``blocking=True`` (the default, what the served decode uses) returns after the
+        device finished it (``FDMeshCommandQueue::enqueue_trace`` -> ``finish``), so ops enqueued afterwards never
+        overlap the replay; the served adapter still synchronizes explicitly before a KDA snapshot save that
+        follows a replay (``GLM53FlashForCausalLM._snapshot``) so that order does not rest on this default."""
         ttnn.execute_trace(self.device, trace_id, cq_id=cq_id, blocking=blocking)
+
+    def dram_allocated(self) -> int:
+        """The DRAM allocator's allocated bytes per bank (a host-side query, no device op): the footprint the served
+        adapter fingerprints after the decode capture and re-checks after every prefix-cache call site
+        (``GLM53_VLLM_APC_ALLOC_CHECK``); a change means a buffer allocated under live traces persists."""
+        mv = ttnn.device.get_memory_view(self.device, ttnn.BufferType.DRAM)
+        return int(mv.total_bytes_allocated_per_bank)
 
     # ------------------------------------------------------------- prefix cache (KDA snapshots)
     def allocate_kda_snapshots(self, entries: int, store: str = "device"):

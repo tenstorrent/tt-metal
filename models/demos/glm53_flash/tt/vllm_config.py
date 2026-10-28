@@ -32,18 +32,30 @@ Vocabulary (design doc ``_agents/vllm_glm53/DESIGN.md``):
 
 from __future__ import annotations
 
-# The sparse prefill's prefix read (``TtLatentCache.user_rows_rm``: the user's latent rows [0, start + T)) rounds its
-# row count up to a multiple of this (0 = exact): the kv shape of a continued chunk then depends on the prefix bucket,
-# not on the exact start, and the served warm-up builds every bucket's programs (``_warmup_prefix_starts``). The
-# served adapter sets it to max(chunk, max_seq_len / 8 rounded to the chunk) before the caches are built.
-PREFIX_BUCKET_ENV = "GLM53_PREFIX_BUCKET"
+import os
 from dataclasses import dataclass, field
 from typing import Callable, Sequence
 
 import torch
 
+# The sparse prefill's prefix read (``TtLatentCache.user_rows_rm``: the user's latent rows [0, start + T)) rounds its
+# row count up to a multiple of this (0 = exact): the kv shape of a continued chunk then depends on the prefix bucket,
+# not on the exact start, and the served warm-up builds every bucket's programs (``_warmup_prefix_starts``). The
+# served adapter sets it to max(chunk, max_seq_len / 8 rounded to the chunk) before the caches are built.
+PREFIX_BUCKET_ENV = "GLM53_PREFIX_BUCKET"
+
 TILE = 32
 DENSE_PREFILL_ROWS = 2048  # the traced per-length prefill covers prompts up to this many tokens
+PREFILL_BUCKETS_ENV = "GLM53_PREFILL_BUCKETS"
+# The eager prefill's padded chunk lengths (``eager_pad_length``; re-exported by tt/mesh_model.py). 8192 is deliberately
+# absent: a 1024-row slab per chip (8192 tokens on the 8 rows) puts the KDA sequence-parallel scan's static dataflow
+# buffers (~1005 KiB per core, slab-independent) and the prefill's L1-resident chunk terms (~608 KiB per core at 1024
+# rows) over the 1.5 MiB L1 ("Statically allocated dataflow buffers ... clash with L1 buffers"); slabs <= 512 rows fit
+# and slabs >= ~1216 rows spill the terms to DRAM (the 16384 chunk path). 256..2048 are the traced lengths (their
+# per-length KDA prefill layers exist from the captures) and 16384 the serving chunk, so these buckets cost no DRAM; a
+# 4096 bucket added ~1 GB of per-length buffers at boot and left the 1 M x 32-slot model unable to allocate the
+# indexer's chunk transient (smoke r9, 2026-10-27).
+DEFAULT_PREFILL_BUCKETS = (256, 512, 1024, 2048, 16384)
 DEFAULT_DEVICE_PREFILL_CHUNK = 16384  # tokens per eager prefill chunk on the 8x4 (32 K exceeds the KDA owner cores)
 DEFAULT_BLOCK_SIZE = 32  # the latent page (TtLatentCache.block_size); the vLLM block size must match it
 DEFAULT_WAVE_ROWS = 2048  # rows per mesh row per wave (= today's 16 K chunk on 8 rows: memory-neutral)
@@ -637,6 +649,34 @@ class WavePlanner:
 
 
 # ---------------------------------------------------------------------------------- sampling / sizing
+def prefill_buckets(env=None) -> tuple[int, ...]:
+    """``GLM53_PREFILL_BUCKETS``: the eager prefill's padded chunk lengths (default 256,512,1024,2048,16384; ``0`` =
+    pad to the row unit only, the pre-2026-10-27 behaviour)."""
+    env = os.environ if env is None else env
+    raw = env.get(PREFILL_BUCKETS_ENV, "")
+    if raw.strip() == "0":
+        return ()
+    if not raw.strip():
+        return DEFAULT_PREFILL_BUCKETS
+    return tuple(sorted(int(v) for v in raw.split(",") if v.strip()))
+
+
+def eager_pad_length(seq_len: int, unit: int, buckets: tuple[int, ...] | None = None) -> int:
+    """Padded length of an eager prefill chunk of ``seq_len`` tokens: the row unit's ceiling, raised to the smallest
+    bucket that holds it (a bucket must be a multiple of ``unit``; above the largest bucket the ceiling stands).
+    Every bucket is warmed at boot (the serving warm-up ladder, ``GLM53FlashForCausalLM.warmup_model_prefill``), so
+    a prompt's odd tail chunk never builds a new per-length ttKDA prefill layer or compiles its programs after the
+    trace captures (a program's kernel binaries and any buffer allocated then are clobbered by replays: the
+    2026-10-27 served hang) and never compiles at request time. The kernels clip to the valid ``seq_len``."""
+    T = -(-int(seq_len) // unit) * unit
+    for b in prefill_buckets() if buckets is None else buckets:
+        if b % unit:
+            raise ValueError(f"prefill bucket {b} is not a multiple of the row unit {unit}")
+        if T <= b:
+            return b
+    return T
+
+
 def greedy_rows(sampling_params, rows: Sequence[int]) -> None:
     """Device sampling is the head's argmax: every sampled row must be greedy (temperature 0, or top_k 1).
     ``sampling_params`` carries per-row lists (``TTSamplingParams`` on device-sampling calls)."""
@@ -677,6 +717,9 @@ APC_SNAPSHOTS_ENV = "GLM53_VLLM_APC_SNAPSHOTS"  # KDA snapshot entries per user 
 APC_SNAPSHOT_STORE_ENV = "GLM53_VLLM_APC_SNAPSHOT_STORE"  # device (DRAM ring) | host (torch copies)
 APC_TAIL_SPLIT_ENV = "GLM53_VLLM_APC_TAIL_SPLIT"  # "1": eager prefills snapshot the prompt's last 32-boundary
 APC_MAX_SNAPSHOTS = 8
+# "1": the served adapter records the DRAM footprint after the decode capture and refuses the first APC call site
+# (snapshot save, hit restore, prefill row, release) after which it differs (doc/serving/prefix_caching.md s.6)
+APC_ALLOC_CHECK_ENV = "GLM53_VLLM_APC_ALLOC_CHECK"
 
 
 @dataclass(frozen=True)

@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -77,6 +78,36 @@ def mesh_device_params(rows: int, cols: int, **overrides) -> dict:
     return params
 
 
+# Per-device runtime state shared by every GLMMesh built over the same mesh device (``GLMMesh.__post_init__``):
+# ``frozen`` = [bool] (a trace exists), ``transients`` = the lazily built device buffers made under that rule since
+# the last ``GLMMesh.release_transients``, ``logged`` = the keys whose post-capture build was reported once.
+_RUNTIME: dict[tuple, dict] = {}
+
+
+def _runtime_key(device) -> tuple:
+    ident = getattr(device, "id", None)
+    if callable(ident):
+        try:
+            return ("device", int(ident()))
+        except Exception:  # pragma: no cover - a device without a usable id
+            pass
+    return ("object", id(device))
+
+
+def _runtime_state(device) -> dict:
+    return _RUNTIME.setdefault(_runtime_key(device), {"frozen": [False], "transients": [], "logged": set()})
+
+
+def lazy_const(mesh: "GLMMesh | None", cache: dict, key, make: Callable[[], object]):
+    """``GLMMesh.lazy`` for modules that may run without a mesh (single-chip unit tests): plain caching then."""
+    if mesh is not None:
+        return mesh.lazy(cache, key, make)
+    t = cache.get(key)
+    if t is None:
+        t = cache[key] = make()
+    return t
+
+
 def from_torch_host_layout(
     t: torch.Tensor, dtype, layout, device, *, memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=None
 ) -> ttnn.Tensor:
@@ -104,9 +135,20 @@ class GLMMesh:
     _prefill_depth: list = field(default_factory=lambda: [0], repr=False, compare=False)  # prefill_scope nesting
     # the eager KDA prefill's persistent chronology scalars (tt/kda.py chrono_scalar: one start/end pair per mesh)
     chrono: dict = field(default_factory=dict, repr=False, compare=False)
-    # set by the mesh model after a trace capture: a device buffer allocated while traces exist is clobbered by
-    # their replays (the 2026-10-27 served KDA hang), so lazily allocated constants must not appear after it
-    allocations_frozen: list = field(default_factory=lambda: [False], repr=False, compare=False)
+    # [bool], set by the mesh model after a trace capture (``freeze_allocations``): a device buffer allocated while
+    # traces exist may sit where a replay's transient buffers were and is overwritten by the next replay (the
+    # 2026-10-27 served KDA hang), so no lazily built constant may outlive a replay after it. The list is the
+    # device's (``_runtime_state``): every GLMMesh over the same mesh device shares it, including the per-layer
+    # meshes ``FunctionalDecoder.from_state_dict`` builds, whose guards (tt/kda.py ``scalar`` / ``chrono_scalar``)
+    # never saw the model mesh's flag before 2026-10-28.
+    allocations_frozen: list = field(default=None, repr=False, compare=False)
+    # the device buffers ``lazy`` built under live traces since the last ``release_transients`` (shared per device)
+    _transients: list = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self):
+        state = _runtime_state(self.device)
+        object.__setattr__(self, "allocations_frozen", state["frozen"])  # frozen dataclass
+        object.__setattr__(self, "_transients", state["transients"])
 
     @classmethod
     def from_device(cls, mesh_device, topology=None) -> "GLMMesh":
@@ -246,10 +288,60 @@ class GLMMesh:
         zeroed slot tensor of the EP combine): one DRAM tensor per shape for the model instead of one per layer.
         Persistent constants must stay out of L1: an interleaved L1 constant per layer (8 KB pages round-robin from
         bank 0) pins the first cores' L1, and after enough layers the static circular buffers of the next program
-        clash with the L1 buffers (the EP32 8x4 e2e, doc/mesh/README.md)."""
-        if key not in self._consts:
-            self._consts[key] = make()
-        return self._consts[key]
+        clash with the L1 buffers (the EP32 8x4 e2e, doc/mesh/README.md). Built under live traces it is a chunk
+        transient (``lazy``)."""
+        return self.lazy(self._consts, key, make)
+
+    # ------------------------------------------------------- allocation discipline under live traces
+    @property
+    def frozen(self) -> bool:
+        """True once a trace was captured on this device (``freeze_allocations``)."""
+        return bool(self.allocations_frozen[0])
+
+    def freeze_allocations(self) -> None:
+        """After a trace capture: from here on a lazily built device buffer must not outlive the next replay
+        (``lazy`` makes it a chunk transient; ``tt/kda.py`` ``scalar`` / ``chrono_scalar`` refuse outright)."""
+        self.allocations_frozen[0] = True
+
+    def lazy(self, cache: dict, key, make: Callable[[], object]):
+        """A lazily built device constant (``make()`` returns a tensor or a list of tensors) keyed by its geometry.
+        Built before the first trace capture it is cached in ``cache`` for the model's life. Built under live
+        traces it is a chunk transient instead: handed to the caller, never cached, and released by
+        ``release_transients`` at the end of the enclosing eager chunk (``GLM53MeshModel.prefill_streams`` /
+        ``decode_step``), so no buffer allocated after a capture outlives the next replay (the tt-metal allocator's
+        "potentially unsafe" warning names exactly that: a buffer allocated under an active trace is corrupted by
+        the trace's execution unless it is released before then; the 2026-10-27 served hang was ``scalar(49152)``
+        allocated after the captures). The first post-capture build of a key is logged once at INFO: a served log
+        then names the chunk geometries the boot warm-up (``GLM53_VLLM_WARMUP_PREFILL`` + the buckets) left out."""
+        t = cache.get(key)
+        if t is not None:
+            return t
+        t = make()
+        if self.allocations_frozen[0]:
+            self._note_transient(key, t)
+        else:
+            cache[key] = t
+        return t
+
+    def _note_transient(self, key, t) -> None:
+        self._transients.extend(list(t) if isinstance(t, (list, tuple)) else [t])
+        logged = _runtime_state(self.device)["logged"]
+        if key not in logged:
+            logged.add(key)
+            logger.info(
+                f"mesh: device constant {key!r} first built after a trace capture: a chunk transient from now on "
+                "(released at the chunk end, rebuilt per use); extend the boot warm-up to cover this geometry"
+            )
+
+    def release_transients(self) -> int:
+        """Deallocate the chunk transients ``lazy`` built under live traces; returns how many were released."""
+        n = 0
+        for t in self._transients:
+            if getattr(t, "is_allocated", None) is not None and t.is_allocated():
+                ttnn.deallocate(t)
+                n += 1
+        self._transients.clear()
+        return n
 
     # ------------------------------------------------------------------ readback
     def device_tensors(self, x: ttnn.Tensor) -> list[ttnn.Tensor]:

@@ -323,7 +323,11 @@ class FunctionalDecoder(LightweightModule):
         if not self.is_kda:
             return LayerState(cache=self.cache), []
         if start == 0:
-            return LayerState(kda=self._require_weights().attn.allocate_state(1)), []
+            # a fresh zero state; ttKDA only reads its input state, so the chunk frees it with the other temporaries
+            # (before 2026-10-28 it was never deallocated: two buffers per KDA layer per from-0 chunk that persisted
+            # under live traces, exactly what a replay clobbers and what GLM53_VLLM_APC_ALLOC_CHECK=1 refuses)
+            zero = self._require_weights().attn.allocate_state(1)
+            return LayerState(kda=zero), [zero.recurrent, zero.convolution]
         src = self.kda_batched
         if self.max_batch == 1:  # ttKDA only reads its input state; the new carries are fresh tensors
             return LayerState(kda=src), []
