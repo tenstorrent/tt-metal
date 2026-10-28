@@ -1,6 +1,6 @@
 # Tafsut round 1 proposals (from round 0, job 955)
 
-Target: paper, 1697.8 ms device (job 942). Ranked by expected gain. All pre-approved kinds (skill §7), so G2-r1 is
+Target: paper, 1697.51 ms device (fixed record, job 1061; 1697.8 in job 942). Ranked by expected gain. All pre-approved kinds (skill §7), so G2-r1 is
 automatic once G1 is approved; round-1 work waits for G1 (D1).
 
 | id | change | expected | risk | measure |

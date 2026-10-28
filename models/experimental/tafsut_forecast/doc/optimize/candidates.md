@@ -18,7 +18,7 @@ One line per candidate, in the order tried. Status: proposed / screening / kept 
 
 | id | round | change | ruling (D2) | status | evidence |
 |---|---|---|---|---|---|
-| R0 | 0 | round-0 baseline: Chronos-2 structure (fused QKV, masked SDPA, traced forward, read-out cut) | fixed record (D2) | kept | `iter_00/bench.json`: paper 1697.47 ms accuracy, 1653.57 ms performance (job 1009) |
+| R0 | 0 | round-0 baseline: Chronos-2 structure (fused QKV, masked SDPA, traced forward, read-out cut) | fixed record (D2) | kept | `iter_00/bench.json`: paper 1697.51 ms accuracy, 1654.19 ms performance (job 1061; 1697.47 in job 1009) |
 | R1-1 | 1 | RoPE: batch into M for `rot`, then fused `qkv_heads_rope` (model-local generic_op, absolute kernel paths, micro-bench, fresh-input trace test); alt: fold the signed permutation R into Wq/Wk (order-only if bitwise-equal weights, else v1.19) | pre-approved | proposed | |
 | R1-2 | 1 | 2D program configs per role (one sweep job) | pre-approved | proposed | |
 | R1-3 | 1 | relu fused in ff-up program config | pre-approved | proposed | |
