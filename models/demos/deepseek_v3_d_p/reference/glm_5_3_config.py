@@ -57,6 +57,10 @@ class GLM53Config:
     NUM_SHARED_EXPERTS = 1
     NUM_EXPERT_GROUPS = 1
     NUM_LIMITED_GROUPS = 1
+    # Cache the noaux_tc correction bias mean-centred (see centre_gate_bias). The checkpoint biases sit on
+    # per-layer offsets of ~8-34 with a spread of only ~0.06-0.15, so bf16 keeps just 3-9 distinct values a
+    # layer; centred it keeps 78-173. Every config that does not name it keeps the uncentred cache file.
+    MOE_GATE_BIAS_CENTERED = True
 
     # Gate-test device-mode scores bar. pcc_scores sorts both sides, so this measures the
     # selected-weight distribution rather than slot alignment; 160 experts, top-8 floors at
