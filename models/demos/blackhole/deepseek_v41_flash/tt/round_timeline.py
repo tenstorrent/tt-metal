@@ -185,7 +185,36 @@ def _device_only_one(r, nrep, res):
                 d["trunc"] = _trunc(r, P, nrep)
             except Exception as e:  # noqa: BLE001
                 d["trunc_error"] = repr(e)
+        if os.environ.get("DSV41_ROUND_TL_SECTIONS") == "1":
+            try:
+                d["sections"] = _sections(r, P)
+            except Exception as e:  # noqa: BLE001
+                d["sections_error"] = repr(e)[:300]
         res[f"k{r.k}" + ("" if r.draft else "_nodraft")] = d
+
+
+def _sections(r, P):
+    """Eager verify forward (stop after the argmax) with a device sync around every layer section (DSV41Layer.forward(profile=...), the DSV41_PROFILE=1 mechanism of tests/test_spec_loop.py): ms per
+    section summed over the 40 layers, minimum of 3 runs. Eager timings include host dispatch, so only the COMPARISON of k=3 and k=5 sections is meaningful."""
+    dec, md = r.dec, r.md
+    r.set_bucket(P)
+    dec.stop_after = "verify"
+    best = {}
+    try:
+        dec.forward()
+        ttnn.synchronize_device(md)
+        for _ in range(3):
+            dec.profile = {}
+            dec.forward()
+            ttnn.synchronize_device(md)
+            for k_, v in dec.profile.items():
+                if not k_.startswith("_"):
+                    best[k_] = min(best.get(k_, 1e9), v * 1e3)
+    finally:
+        dec.profile, dec.stop_after = None, None
+        r.set_bucket(None)
+        r._use(torch.full((r.B,), r.max_pos))
+    return best
 
 
 def _trunc(r, P, nrep):
