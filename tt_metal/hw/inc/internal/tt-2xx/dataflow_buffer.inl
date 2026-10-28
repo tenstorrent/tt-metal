@@ -533,7 +533,7 @@ inline DataflowBuffer<Pap, Cap>::~DataflowBuffer() {
     if (drain_owner_ != this) {
         return;
     }
-    finish_impl();
+//    finish_impl();
 #ifndef COMPILE_FOR_TRISC
     if (has_outbound_writes_) {
         write_barrier_impl(noc_index);

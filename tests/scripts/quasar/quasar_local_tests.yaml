@@ -327,3 +327,12 @@ models/demos/vision/classification/resnet50/quasar/tests/test_resnet50_e2e.py:
       TT_METAL_ENV: dev
       TT_METAL_SLOW_DISPATCH_MODE: 1
       RESNET_PCC_LOG: 1
+
+# Llama3.2 1B Quasar graph op tests (entire directory)
+models/experimental/llama32_1b_quasar/tests/graph_ops:
+  - runner: pytest
+    config: 2x3_DISPATCH
+    env:
+      TT_METAL_ENV: dev
+      TT_METAL_SLOW_DISPATCH_MODE: 1
+      MESH_DEVICE: N150

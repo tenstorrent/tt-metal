@@ -47,7 +47,7 @@ A single pytest process shares one simulator config and one environment, so
 entries that differ there stay in separate commands.
 
 YAML entries default to runner: gtest (binary under build/test/tt_metal/<group>).
-Set runner: pytest for Python tests (group is a .py path relative to TT_METAL_HOME;
+Set runner: pytest for Python tests (group is a .py file or directory relative to TT_METAL_HOME;
 filter is the pytest node id after ::). Omit filter (or use "") to run all tests in the
 gtest binary / pytest file.
 
@@ -889,16 +889,16 @@ run_test_invocation() {
         local g pyfile
         for g in "${groups[@]}"; do
             pyfile="$TT_METAL_HOME/$g"
-            if [[ ! -f "$pyfile" && -z "${seen_missing[$pyfile]:-}" ]]; then
+            if [[ ! -e "$pyfile" && -z "${seen_missing[$pyfile]:-}" ]]; then
                 seen_missing["$pyfile"]=1
                 missing+=("$pyfile")
             fi
         done
         if [[ ${#missing[@]} -gt 0 ]]; then
-            echo "  SKIP: pytest file not found:"
+            echo "  SKIP: pytest path not found:"
             printf '    %s\n' "${missing[@]}"
             skipped=$((skipped + 1))
-            results+=("SKIP  $label  (pytest file not found)")
+            results+=("SKIP  $label  (pytest path not found)")
             return
         fi
     else
