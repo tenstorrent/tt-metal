@@ -580,7 +580,7 @@ An external pytest suite should:
    ```
    For a single variant, pass `include_dirs=`, `src_include_dirs=`, or `helpers_trees=` to the constructor instead.
    `add_include_dirs` is header `-I`. `add_src_include_dirs` is the `tests/helpers/src` role (`#include <trisc.cpp>`), not the test driver path. Extra src-include dirs are prepended ahead of in-tree `helpers/src`.
-   `-I` is not recursive: `llk_tree_include_roots` expands one `tt_llk_<arch>` tree into `llk_lib`, `common/inc`, and `common/inc/sfpu`. Extra dirs are prepended so they win over in-tree `experimental/` copies.
+   `-I` is not recursive: `llk_tree_include_roots` expands one `tt_llk_<arch>` tree into `llk_lib`, `common/inc`, and `common/inc/sfpu`. Extra dirs are prepended so they win over in-tree `experimental/` copies. Eltwise SFPU kernels (`ckernel_sfpu_<op>.h`) belong in `tt_metal/hw/ckernels/<arch>/metal/llk_api/llk_sfpu/`, which the harness puts on every test's include path, not in `common/inc/sfpu`, which is for shared SFPU helpers and `experimental/`.
 
 3. Point `TestConfig` at an out-of-tree C++ driver with an **absolute** `test_name`. Relative names still mean `tests/<name>` inside tt-llk. Absolute paths are quote-included; artefacts are stored under `/tmp/tt-llk-build/sources/<basename>/` so the harness never `mkdir`s through the `.cpp` file.
 
