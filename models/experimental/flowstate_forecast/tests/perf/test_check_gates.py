@@ -128,3 +128,78 @@ def test_stamp_failures(recs):
     assert any("dirty" in f for f in one(dict(r, git_dirty="?? tt/new.py")))
     assert any("started before its commit" in f for f in one(dict(r, started_at=T0 - 1)))
     assert any("session stamp" in f for f in one({k: v for k, v in r.items() if k != "started_at"}))
+
+
+def _first_active(r, vec):
+    return next(i for i, v in enumerate(r[vec]) if v is not None)
+
+
+def test_row_drift_toward_reference_passes(recs):
+    """v1.27: a row whose baseline bias is 0.1 may move to 0 (toward the reference), not to 0.14 or -0.04."""
+    gates, base = recs
+    r = base[0]
+    i = _first_active(r, "bias_rows")
+    b = copy.deepcopy(r)
+    b["bias_rows"][i] = 0.1
+    one = lambda v: [f for f in _check([dict(r, bias_rows=r["bias_rows"][:i] + [v] + r["bias_rows"][i + 1 :])], [b], gates, require_coverage=False) if "bias_row_drift_max" in f]  # noqa: E731
+    assert not one(0.0) and not one(0.12)
+    assert one(0.14) and one(-0.04)
+    assert any(f"row {i}" in f for f in one(0.14))
+
+
+def test_spread_row_drift_toward_one_passes(recs):
+    gates, base = recs
+    r = base[0]
+    i = _first_active(r, "spread_ratio_rows")
+    b = copy.deepcopy(r)
+    b["spread_ratio_rows"][i] = 0.8
+    one = lambda v: [f for f in _check([dict(r, spread_ratio_rows=r["spread_ratio_rows"][:i] + [v] + r["spread_ratio_rows"][i + 1 :])], [b], gates, require_coverage=False) if "spread_ratio_row_drift_max" in f]  # noqa: E731
+    assert not one(1.0) and not one(1.14)
+    assert one(1.16) and one(0.64)
+
+
+@pytest.mark.parametrize("bad", [None, float("nan"), float("inf")])
+def test_row_vector_fails_closed(recs, bad):
+    """v1.27: NaN / inf / None in a later row against a baseline value fails."""
+    gates, base = recs
+    r = base[0]
+    for vec, metric in (("bias_rows", "bias_row_drift_max"), ("spread_ratio_rows", "spread_ratio_row_drift_max")):
+        c = copy.deepcopy(r)
+        i = max(i for i, v in enumerate(c[vec]) if v is not None)
+        c[vec][i] = bad
+        assert any(metric in f and f"row {i}" in f for f in _check([c], [r], gates, require_coverage=False))
+
+
+@pytest.mark.parametrize("bad", [float("nan"), float("inf")])
+def test_scalar_fails_closed(recs, bad):
+    gates, base = recs
+    r = base[0]
+    for metric in ("pcc_normalized", "abs_err_max", "spread_ratio_p50", "flat_max_err", "pcc_step"):
+        assert any(metric in f for f in _check([dict(r, **{metric: bad})], [r], gates, require_coverage=False)), metric
+
+
+def test_nan_output_is_nan_not_zero():
+    """pearson / row_pccs of a NaN output are NaN (fail closed), not 0."""
+    import math
+
+    a = torch.randn(2, 9, 8)
+    b = a.clone()
+    b[1, 0, 0] = float("nan")
+    assert math.isnan(M.pearson(a, b)) and math.isnan(float(M.row_pccs(a, b)[1]))
+
+
+def test_ungated_key_fails(recs):
+    """R1-0b: a gated key the record carries with neither floor nor drift fails."""
+    gates, base = recs
+    g = copy.deepcopy(gates)
+    for v in g["floors"].values():
+        v.pop("pcc_row_min_var", None)
+    assert any("pcc_row_min_var: ungated" in f for f in _check(copy.deepcopy(base), base, g))
+
+
+def test_pcc_step_drift(recs):
+    """R1-0c: pcc_step 0.006 below the baseline fails in both presets, though above the floor."""
+    gates, base = recs
+    for r in base:
+        c = dict(r, pcc_step=r["pcc_step"] - 0.006)
+        assert any("pcc_step drift" in f for f in _check([c], [r], gates, require_coverage=False)), r["precision"]

@@ -30,6 +30,8 @@ sort). Data space: ``quantile_outputs`` ``(B, 9, H', 1)`` and ``prediction_outpu
 
 from __future__ import annotations
 
+import math
+
 import torch
 
 Q = 9
@@ -46,6 +48,8 @@ def pearson(a, b) -> float:
     a, b = a.double().flatten(), b.double().flatten()
     a, b = a - a.mean(), b - b.mean()
     den = float(a.norm() * b.norm())
+    if not math.isfinite(den):  # R1-0b: a NaN / inf output is NaN here, not 0, so the checker fails it closed
+        return float("nan")
     return float((a * b).sum()) / den if den > 0 else 0.0
 
 
@@ -62,7 +66,8 @@ def row_pccs(exp, got):
     g = got.double().reshape(got.shape[0], -1)
     e, g = e - e.mean(1, keepdim=True), g - g.mean(1, keepdim=True)
     den = e.norm(dim=1) * g.norm(dim=1)
-    return torch.where(den > 0, (e * g).sum(1) / den.clamp_min(1e-300), torch.zeros_like(den))
+    out = torch.where(den > 0, (e * g).sum(1) / den.clamp_min(1e-300), torch.zeros_like(den))
+    return torch.where(den.isfinite(), out, torch.full_like(den, float("nan")))  # R1-0b: NaN stays NaN
 
 
 def active_rows(g_head):
@@ -89,6 +94,16 @@ def _row(g_h, i, extra=None):
     g = g_h[i].double()
     out = {"row": int(i), "row_std": float(g.std()), "band_rms": float(spread(g_h[i : i + 1]).double().pow(2).mean().sqrt())}
     return {**out, **(extra or {})}
+
+
+# every key gate_metrics writes (check_gates fails a gated one with neither floor nor drift, R1-0b)
+GATE_KEYS = {
+    "pcc_normalized", "pcc_spread", "pcc_row_p01", "pcc_row_min", "pcc_row_p01_active", "pcc_row_min_active",
+    "active_rows", "excluded_rows", "spread_ratio_p01", "spread_ratio_p99", "spread_ratio_p50", "spread_ratio_min",
+    "spread_ratio_max", "pcc_row_min_var", "flat_rows", "flat_max_err", "inactive_max_err", "abs_err_max",
+    "bias_row_p50", "bias_row_max", "bias_row_argmax", "bias_rows", "spread_ratio_rows", "pcc_step", "row_info",
+    "pcc_final", "pcc_final_spread", "pcc_mean",
+}
 
 
 def gate_metrics(h, g_h, q, g_q, mean=None, g_mean=None) -> dict:

@@ -25,7 +25,10 @@ session started (``session_stamp()``); ``--allow-unstamped`` admits records writ
 
 Row-indexed drift (PLAN v1.26, D3 item 3): ``bias_row_drift_max`` = max over active rows of |e_i - e0_i|, the
 signed row mean error of the candidate (``bias_rows``) against the same row of the baseline record (or of
-``row_base``); ``spread_ratio_row_drift_max`` the same over ``spread_ratio_rows``; lower is better, ``abs`` bound.
+``row_base``); ``spread_ratio_row_drift_max`` the same over ``spread_ratio_rows``. v1.27: row i passes when e_i is in
+[min(0, e0_i) - abs, max(0, e0_i) + abs] (spread: centred on 1), so a row may move toward the golden freely; every
+failing row is its own failure, ``<metric> row <i>``. Fail closed (v1.27, R1-0b): a None, NaN or inf candidate
+value fails, and every gated key the record carries needs a floor or a drift tolerance.
 Every record also needs a floor for each REQUIRED_FLOORS metric and a tolerance for each REQUIRED_DRIFT metric.
 A tolerance with ``toward`` (v1.26: spread_ratio_p50 toward 1) is ``|v - toward| <= |baseline - toward| + abs``: a candidate may move
 toward the golden value freely, and away from it by ``abs``.
@@ -38,6 +41,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 from pathlib import Path
 
@@ -53,7 +57,8 @@ LOWER_IS_BETTER = {
     "bias_row_drift_max",  # v1.26 / D3 item 3: row-indexed, against the fixed record
     "spread_ratio_row_drift_max",
 }
-ROW_DRIFT = {"bias_row_drift_max": "bias_rows", "spread_ratio_row_drift_max": "spread_ratio_rows"}
+# v1.27: (row vector, golden value); a row passes in [min(c, e0_i) - tol, max(c, e0_i) + tol]
+ROW_DRIFT = {"bias_row_drift_max": ("bias_rows", 0.0), "spread_ratio_row_drift_max": ("spread_ratio_rows", 1.0)}
 # v1.20 / v1.24 / D3 item 2: every record carries a floor for each of these; a gates.json without one is a FAIL
 REQUIRED_FLOORS = {
     "pcc_normalized",
@@ -68,7 +73,17 @@ REQUIRED_FLOORS = {
     "bias_row_p50",
     "bias_row_max",
     "pcc_step",
+    "pcc_row_p01",  # R1-0b: every gated key written by metrics.gate_metrics has a floor
+    "pcc_row_p01_active",
+    "pcc_row_min",
+    "pcc_row_min_var",
+    "flat_max_err",
+    "spread_ratio_p01",
+    "spread_ratio_p50",
+    "spread_ratio_p99",
 }
+# R1-0b: keys metrics.gate_metrics writes that gate nothing by themselves (counts, indices, row vectors, info)
+NOT_GATED = {"active_rows", "excluded_rows", "flat_rows", "bias_row_argmax", "bias_rows", "spread_ratio_rows", "row_info"}
 # ... and a drift tolerance for each of these (v1.22, v1.26)
 REQUIRED_DRIFT = {
     "pcc_normalized",
@@ -77,6 +92,7 @@ REQUIRED_DRIFT = {
     "spread_ratio_p50",
     "bias_row_drift_max",
     "spread_ratio_row_drift_max",
+    "pcc_step",  # R1-0c
 }
 # v1.14: (metric, minimum active rows). Population percentiles over fewer rows are really the min / max.
 MIN_ACTIVE = {
@@ -97,6 +113,18 @@ def not_applicable(record: dict, metric: str) -> str | None:
     if metric == "inactive_max_err" and record.get("excluded_rows") == 0:
         return "no inactive rows"
     return None
+
+
+def finite(v) -> bool:
+    """v1.27: fail closed; None, NaN and inf are not values."""
+    return isinstance(v, (int, float)) and math.isfinite(v)
+
+
+def gated_keys(record: dict) -> set:
+    """The scalar gate metrics of a bench / suite record (the keys metrics.gate_metrics writes)."""
+    from models.experimental.flowstate_forecast.tests.pcc.metrics import GATE_KEYS
+
+    return {k for k in record if k in GATE_KEYS} - NOT_GATED
 
 
 def report_only(record: dict, metric: str) -> bool:
@@ -220,14 +248,19 @@ def check(
         for metric in sorted(REQUIRED_DRIFT - _drift(gates, *key).keys()):
             print(f"FAIL drift {key[0]}/{key[1]} {metric}: no drift tolerance (v1.22, v1.26)")
             failures.append(f"{key} {metric}: no drift")
+        drifts = _drift(gates, *key)
+        for metric in sorted(gated_keys(r) - floors.keys() - drifts.keys()):
+            print(f"FAIL gate {key[0]}/{key[1]} {metric}: written but neither floored nor drift-checked (R1-0b)")
+            failures.append(f"{key} {metric}: ungated")
         for metric, floor in floors.items():
             why = not_applicable(r, metric)
             if why:
                 print(f"n/a  floor {key[0]}/{key[1]} {metric}: not applicable ({why})")
                 continue
             v = r.get(metric)
-            if v is None:
-                failures.append(f"{key} {metric}: missing")
+            if not finite(v):
+                print(f"FAIL floor {key[0]}/{key[1]} {metric}: {v!r} is not a finite value (v1.27)")
+                failures.append(f"{key} {metric}: not finite ({v!r})")
                 continue
             ok = passes(metric, v, floor)
             rel = "in" if isinstance(floor, list) else "<=" if metric in LOWER_IS_BETTER else ">="
@@ -235,7 +268,7 @@ def check(
             print(f"{tag} floor {key[0]}/{key[1]} {metric} {v:.6g} {rel} {floor}")
             if not ok and not report_only(r, metric):
                 failures.append(f"{key} {metric} {v} vs floor {floor}")
-        for metric, tol in _drift(gates, *key).items():
+        for metric, tol in drifts.items():
             if report_only(r, metric):
                 continue
             why = not_applicable(r, metric)
@@ -252,20 +285,31 @@ def check(
             else:
                 b = base_by.get(key)
             if metric in ROW_DRIFT:
-                vec = ROW_DRIFT[metric]
+                vec, c = ROW_DRIFT[metric]
                 if b is None or vec not in r or vec not in b or len(r[vec]) != len(b[vec]):
                     where = "no baseline record" if b is None else f"{vec} missing or of another length"
                     print(f"FAIL drift {key[0]}/{key[1]} {metric}: {where}")
                     failures.append(f"{key} {metric} drift: {where}")
                     continue
-                d = [(abs(x - y), i) for i, (x, y) in enumerate(zip(r[vec], b[vec])) if x is not None and y is not None]
-                v, row = max(d) if d else (0.0, -1)
-                ok = v <= tol["abs"]
+                t, worst, bad = tol["abs"], (0.0, -1), []
+                for i, (x, y) in enumerate(zip(r[vec], b[vec])):
+                    if y is None:
+                        continue  # inactive in the baseline
+                    if not finite(x):  # v1.27: NaN / inf / None against a baseline value fails
+                        bad.append((i, f"{x!r} vs baseline {y}"))
+                        continue
+                    lo, hi = min(c, y) - t, max(c, y) + t
+                    out = max(lo - x, x - hi, 0.0)
+                    worst = max(worst, (out, i))
+                    if out > 0:
+                        bad.append((i, f"{x:.6g} outside [{lo:.6g}, {hi:.6g}]"))
                 print(
-                    f"{'ok  ' if ok else 'FAIL'} drift {key[0]}/{key[1]} {metric} {v:.6g} <= {tol['abs']} (row {row})"
+                    f"{'ok  ' if not bad else 'FAIL'} drift {key[0]}/{key[1]} {metric} {len(bad)} row(s) outside "
+                    f"[min({c}, e0) - {t}, max({c}, e0) + {t}] (worst excess {worst[0]:.6g}, row {worst[1]})"
                 )
-                if not ok:
-                    failures.append(f"{key} {metric} drift {v} vs {tol['abs']} (row {row})")
+                for i, what in bad:
+                    print(f"FAIL drift {key[0]}/{key[1]} {metric} row {i}: {what}")
+                    failures.append(f"{key} {metric} row {i}: {what}")
                 continue
             if b is None or metric not in r or metric not in b:
                 where = (
@@ -277,6 +321,10 @@ def check(
                 failures.append(f"{key} {metric} drift: {where}")
                 continue
             v, bv = r[metric], b[metric]
+            if not finite(v) or not finite(bv):
+                print(f"FAIL drift {key[0]}/{key[1]} {metric}: {v!r} vs baseline {bv!r}, not finite (v1.27)")
+                failures.append(f"{key} {metric} drift: not finite ({v!r} vs {bv!r})")
+                continue
             if "toward" in tol:
                 c = tol["toward"]
                 limit = abs(bv - c) + tol["abs"]
