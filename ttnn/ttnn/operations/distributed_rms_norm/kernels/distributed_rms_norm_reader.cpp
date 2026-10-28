@@ -167,7 +167,13 @@ void kernel_main() {
     constexpr uint32_t SEG_STRIDE = get_compile_time_arg_val(20);
     constexpr uint32_t WT = get_compile_time_arg_val(21);
     constexpr uint32_t LOOKAHEAD = get_compile_time_arg_val(19);  // waves of x reads in flight beyond the oldest
-    constexpr auto input_args = TensorAccessorArgs<23>();
+    // passes: the core's waves run in pass blocks of PW waves (Phase A + Phase B each); cb_gather holds REGIONS
+    // owned-wave regions and cb_inv_rms PW waves, reused pass after pass behind a row-group barrier (SEM_PASS)
+    constexpr uint32_t PW = get_compile_time_arg_val(23);
+    constexpr uint32_t REGIONS = get_compile_time_arg_val(24);
+    constexpr uint32_t SEM_PASS = get_compile_time_arg_val(25);
+    constexpr uint32_t NP = (NW + PW - 1) / PW;
+    constexpr auto input_args = TensorAccessorArgs<26>();
 
     size_t a = 0;
     const uint32_t in_addr = get_arg_val<uint32_t>(a++);
@@ -218,7 +224,9 @@ void kernel_main() {
         const uint32_t first = k * Q;
         return first >= n ? 0 : ((n - first) < Q ? n - first : Q);
     };
-    // gather region of member m for wave w: how many earlier waves m owned with rows
+    // owned-wave ordinal of member m at wave w: how many earlier waves m owned with rows. Its gather region (and
+    // SEM_GATHER field) is ordinal mod REGIONS: one pass holds at most REGIONS owned waves, and the ring of regions
+    // follows the owner's cb_gather pushes (one region per owned wave with rows).
     auto ordinal = [&](uint32_t m, uint32_t w) -> uint32_t {
         uint32_t o = 0;
         for (uint32_t v = 0; v < w; ++v) {
@@ -228,35 +236,38 @@ void kernel_main() {
                 }
             }
         }
-        return o;
+        return o % REGIONS;
     };
 
     Noc noc;
     CircularBuffer x_cb(cb_x_tiles);
 
-    const uint32_t inv_base = get_write_ptr(cb_inv_rms);
+    uint32_t inv_base = 0;  // cb_inv_rms write pointer at the pass start (the same on every member: same pushes)
     [[maybe_unused]] uint32_t gather_base = 0;
     if constexpr (G_W > 1) {
         gather_base = get_write_ptr(cb_gather);
     }
     const uint32_t scratch = get_write_ptr(cb_record_scratch);  // [0, Q) publish staging, [Q, Q + G*Q) collect
 
-    // ---------------- load: wave-ordered reads with a bounded look-ahead (x is resident) ----------------
-    // Wave w's reads carry transaction id w + 1. At most 1 + LOOKAHEAD waves are in flight per core, so DRAM serves the
-    // grid's reads roughly in wave order: every row-group's wave 0 lands first and its exchange starts early, instead
-    // of competing with every core's last wave.
+    // ---------------- load: wave-ordered reads with a bounded look-ahead (x resident per pass block) ----------------
+    // Wave w's reads carry transaction id w + 1 (mod 15: ids 1..15). At most 1 + LOOKAHEAD waves are in flight per
+    // core, so DRAM serves the grid's reads roughly in wave order: every row-group's wave 0 lands first and its
+    // exchange starts early, instead of competing with every core's last wave.
     [[maybe_unused]] uint32_t x_base = 0;
+    [[maybe_unused]] uint32_t x_row0 = 0;
     [[maybe_unused]] const auto input_accessor = TensorAccessor(input_args, in_addr);
     uint32_t issued = 0;
+    uint32_t issue_end = 0;
+    auto trid = [](uint32_t w) -> uint32_t { return 1 + w % 15; };
     auto issue_wave = [&](uint32_t w) {
         if constexpr (!SHARDED) {
             DRMS_ZONE("rd_issue");
-            noc_async_read_set_trid(w + 1);
+            noc_async_read_set_trid(trid(w));
             const uint32_t r0 = w * Q_W;
             const uint32_t n = n_wave(w);
             for (uint32_t r = r0; r < r0 + n; ++r) {
                 const uint32_t page0 = (start_row + r) * WT + w0;
-                const uint32_t l1 = x_base + r * WS * T_IN;
+                const uint32_t l1 = x_base + (r - x_row0) * WS * T_IN;
                 for (uint32_t t = 0; t < V; ++t) {
                     noc_async_read_tile(page0 + t, input_accessor, l1 + t * T_IN);
                 }
@@ -265,20 +276,35 @@ void kernel_main() {
         }
     };
     auto issue_ahead = [&](uint32_t upto) {
-        while (issued < NW && issued <= upto) {
+        while (issued < issue_end && issued <= upto) {
             issue_wave(issued++);
         }
     };
-    if constexpr (!SHARDED) {
-        cb_reserve_back(cb_x_tiles, rows * WS);
-        x_base = get_write_ptr(cb_x_tiles);
-        if (V < WS) {
-            for (uint32_t r = 0; r < rows; ++r) {
-                noc.async_write_zeros(x_cb, (WS - V) * T_IN, {.offset_bytes = (r * WS + V) * T_IN});
+    // reserve + start the x reads of the pass block [w_begin, w_end)
+    auto load_pass = [&](uint32_t w_begin, uint32_t w_end) {
+        if constexpr (!SHARDED) {
+            const uint32_t row0 = w_begin * Q_W;
+            const uint32_t row_end = (w_end * Q_W < rows) ? w_end * Q_W : rows;
+            const uint32_t rows_p = row_end > row0 ? row_end - row0 : 0;
+            issued = w_begin;
+            issue_end = w_end;
+            if (rows_p == 0) {
+                return;
             }
-            noc.write_zeros_l1_barrier();
+            cb_reserve_back(cb_x_tiles, rows_p * WS);
+            x_base = get_write_ptr(cb_x_tiles);
+            x_row0 = row0;
+            if (V < WS) {
+                for (uint32_t r = 0; r < rows_p; ++r) {
+                    noc.async_write_zeros(x_cb, (WS - V) * T_IN, {.offset_bytes = (r * WS + V) * T_IN});
+                }
+                noc.write_zeros_l1_barrier();
+            }
+            issue_ahead(w_begin + LOOKAHEAD);
         }
-        issue_ahead(LOOKAHEAD);
+    };
+    if constexpr (!SHARDED) {
+        load_pass(0, PW < NW ? PW : NW);
     } else {
         cb_reserve_back(cb_x_tiles, rows * WS);
         cb_push_back(cb_x_tiles, rows * WS);
@@ -304,7 +330,7 @@ void kernel_main() {
     auto land_wave = [&](uint32_t w) {
         if constexpr (!SHARDED) {
             DRMS_ZONE("rd_land");
-            noc_async_read_barrier_with_trid(w + 1);
+            noc_async_read_barrier_with_trid(trid(w));
             const uint32_t n = n_wave(w);
             if constexpr (W_VALID_LAST < 32) {
                 if (holds_pad) {
@@ -421,38 +447,23 @@ void kernel_main() {
         }
     };
 
-    // ================= Phase A =================
-    for (uint32_t w = 0; w <= NW; ++w) {
-        if (w < NW) {
-            land_wave(w);
-            issue_ahead(w + 1 + LOOKAHEAD);
-        }
-        if (w >= 1) {
-            service(w - 1);
-        }
-    }
-    {
-        CircularBuffer stats_cb(cb_stats);
-        noc.async_write_zeros(stats_cb, G * Q * 4096, {.offset_bytes = 0});
-        noc.write_zeros_l1_barrier();
-    }
-
     // ================= Phase B =================
     // A non-blocking poll over three in-order queues, so no wave waits behind another wave's exchange:
     //   collect  (owned waves with rows)  landed notifies satisfied and cb_stats free -> records -> cb_stats
     //   allgather (owned waves)           the finalized rows in cb_rms_root -> every member's cb_inv_rms
     //   inv      (every wave)             SEM_INV reached the wave's owners -> push the wave's Q_W pages
     const uint32_t inv_sem = get_semaphore(SEM_INV);
+    uint32_t w_lim = NW;  // end of the current pass block (the Phase B queues stop there)
     auto next_owned = [&](uint32_t from) -> uint32_t {
         uint32_t w = from;
-        while (w < NW && my_k(w) == OWNERS) {
+        while (w < w_lim && my_k(w) == OWNERS) {
             ++w;
         }
         return w;
     };
     auto next_owned_rows = [&](uint32_t from) -> uint32_t {
         uint32_t w = next_owned(from);
-        while (w < NW && n_own(w, my_k(w)) == 0) {
+        while (w < w_lim && n_own(w, my_k(w)) == 0) {
             w = next_owned(w + 1);
         }
         return w;
@@ -516,7 +527,7 @@ void kernel_main() {
         const uint32_t no = n_own(w, k);
         if (no > 0) {
             const uint32_t src = get_read_ptr(cb_rms_root);
-            const uint32_t dst = inv_base + (w * Q_W + k * Q) * T_I;
+            const uint32_t dst = inv_base + ((w % PW) * Q_W + k * Q) * T_I;
             for (uint32_t i = 0; i < G_W; ++i) {
                 const uint32_t m = rotated(i, my_j, G_W);
                 combine_write_tiles<T_I>(src, member_x(m), member_y(m), dst, no);
@@ -535,40 +546,87 @@ void kernel_main() {
             noc_semaphore_inc(get_noc_addr(member_x(m), member_y(m), inv_sem), 1);
         }
     };
-    uint32_t wc = next_owned_rows(0);  // next owned wave (with rows) to collect
-    uint32_t wa = next_owned(0);       // next owned wave whose rows to all-gather
-    uint32_t wn = next_owned(0);       // next owned wave to announce (SEM_INV increments, wave-ordered)
-    uint32_t wi = 0;                   // next wave whose inv rows to push
-    cb_reserve_back(cb_inv_rms, NW * Q_W);
     volatile tt_l1_ptr uint32_t* my_inv = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(inv_sem);
-    while (wi < NW || wn < NW) {
-        if (wc < NW) {
-            const uint32_t kp = group * OWNERS + my_k(wc);
-            if (landed_ok(wc, kp % L) && cb_pages_reservable_at_back(cb_stats, G * Q)) {
-                collect(wc);
-                wc = next_owned_rows(wc + 1);
-                continue;
+    // Row-group pass barrier (passes > 1 only): before pass p writes into other members' cb_gather / cb_inv_rms
+    // slots (the same slots pass p-1 used), every member's compute must be done with pass p-1. Each reader learns
+    // that of its own compute from cb_inv_rms (every page it pushed was popped), clears its SEM_GATHER fields (all of
+    // pass p-1's contributions were counted), then counts itself done on every member's SEM_PASS.
+    const uint32_t pass_sem = get_semaphore(SEM_PASS);
+    auto pass_barrier = [&](uint32_t p) {
+        DRMS_ZONE("rd_pass_barrier");
+        while (!cb_pages_reservable_at_back(cb_inv_rms, PW * Q_W)) {
+        }
+        if constexpr (G_W > 1) {
+            *reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(SEM_GATHER)) = 0;
+        }
+        for (uint32_t i = 0; i < G_W; ++i) {
+            const uint32_t m = rotated(i, my_j, G_W);
+            noc_semaphore_inc(get_noc_addr(member_x(m), member_y(m), pass_sem), 1);
+        }
+        noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(pass_sem), p * G_W);
+    };
+
+    for (uint32_t p = 0; p < NP; ++p) {
+        const uint32_t w_begin = p * PW;
+        const uint32_t w_end = (w_begin + PW < NW) ? w_begin + PW : NW;
+        w_lim = w_end;
+        if (p > 0) {
+            load_pass(w_begin, w_end);  // x reads of this pass go out before the barrier wait
+            pass_barrier(p);
+        }
+
+        // ================= Phase A =================
+        for (uint32_t w = w_begin; w <= w_end; ++w) {
+            if (w < w_end) {
+                land_wave(w);
+                issue_ahead(w + 1 + LOOKAHEAD);
+            }
+            if (w > w_begin) {
+                service(w - 1);
             }
         }
-        if (wa < NW) {
-            const uint32_t no = n_own(wa, my_k(wa));
-            // a wave with rows is all-gathered only after it was collected (wc moved past it)
-            if (no == 0 || (wc > wa && cb_pages_available_at_front(cb_rms_root, no))) {
-                allgather(wa);
-                wa = next_owned(wa + 1);
+        if (p == 0) {
+            CircularBuffer stats_cb(cb_stats);
+            noc.async_write_zeros(stats_cb, G * Q * 4096, {.offset_bytes = 0});
+            noc.write_zeros_l1_barrier();
+        }
+
+        // ================= Phase B (the pass's waves) =================
+        uint32_t wc = next_owned_rows(w_begin);  // next owned wave (with rows) to collect
+        uint32_t wa = next_owned(w_begin);       // next owned wave whose rows to all-gather
+        uint32_t wn = next_owned(w_begin);       // next owned wave to announce (SEM_INV increments, wave-ordered)
+        uint32_t wi = w_begin;                   // next wave whose inv rows to push
+        cb_reserve_back(cb_inv_rms, (w_end - w_begin) * Q_W);
+        inv_base = get_write_ptr(cb_inv_rms);
+        while (wi < w_end || wn < w_end) {
+            if (wc < w_end) {
+                const uint32_t kp = group * OWNERS + my_k(wc);
+                if (landed_ok(wc, kp % L) && cb_pages_reservable_at_back(cb_stats, G * Q)) {
+                    collect(wc);
+                    wc = next_owned_rows(wc + 1);
+                    continue;
+                }
+            }
+            if (wa < w_end) {
+                const uint32_t no = n_own(wa, my_k(wa));
+                // a wave with rows is all-gathered only after it was collected (wc moved past it)
+                if (no == 0 || (wc > wa && cb_pages_available_at_front(cb_rms_root, no))) {
+                    allgather(wa);
+                    wa = next_owned(wa + 1);
+                    continue;
+                }
+            }
+            invalidate_l1_cache();
+            if (wn < wa && *my_inv >= wn * OWNERS) {
+                announce(wn);
+                wn = next_owned(wn + 1);
                 continue;
             }
-        }
-        invalidate_l1_cache();
-        if (wn < wa && *my_inv >= wn * OWNERS) {
-            announce(wn);
-            wn = next_owned(wn + 1);
-            continue;
-        }
-        if (wi < NW && *my_inv >= (wi + 1) * OWNERS) {
-            cb_push_back(cb_inv_rms, Q_W);
-            ++wi;
-            continue;
+            if (wi < w_end && *my_inv >= (wi + 1) * OWNERS) {
+                cb_push_back(cb_inv_rms, Q_W);
+                ++wi;
+                continue;
+            }
         }
     }
     noc_async_atomic_barrier();

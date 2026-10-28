@@ -33,7 +33,7 @@ from __future__ import annotations
 import hashlib
 import math
 import struct
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import ttnn
@@ -51,6 +51,7 @@ SCALE_BLOCK_TILES = 8
 MIN_SLICE_TILES = 4
 MAX_GROUP_CORES = 24
 WAVES_MAX = 8
+LANDING_MIN_WORDS = 1024  # landing scratch floor (4 KiB): most plans then share one allocation
 READ_LOOKAHEAD_WAVES = 1  # x-read waves in flight beyond the oldest unlanded one (wave-ordered DRAM traffic)
 
 # ---- Exchange constants ----
@@ -133,14 +134,18 @@ class Member:
     V: int  # valid tiles of the slice
 
 
+# γ placement modes of the scaling pass (fallback order: block -> wave -> chunk; Refinement 1)
+GAMMA_BLOCK = 0  # x·γ of the whole pass block into cb_x_gamma before Phase B (the exchange's stall shadow)
+GAMMA_WAVE = 1  # x·γ per wave, right before the wave's inv scaling (cb_x_gamma = q_w rows)
+GAMMA_CHUNK = 2  # x·γ per C-chunk of a wave, fused ahead of its inv scaling (cb_x_gamma = q_w · C tiles)
+_GAMMA_MODE_NAMES = {GAMMA_BLOCK: "block", GAMMA_WAVE: "wave", GAMMA_CHUNK: "chunk"}
+
+
 @dataclass
 class LocalPlan:
     regime: str
     sharded: bool
     S: int  # slice tiles (nominal)
-    C: int  # chunk
-    nch: int  # chunks per slice
-    WS: int  # x / output row stride (tiles): Wp (interleaved) or S (shard)
     G_w: int
     G_h: int
     rows_max: int
@@ -150,11 +155,55 @@ class LocalPlan:
     q: int
     masked: bool
     members: list = field(default_factory=list)  # Member per worker core, in group order
-    gamma_per_wave: bool = False  # L1 fallback: the γ pass per wave (cb_x_gamma holds q_w rows)
+    # ---- L1 blocking (Refinement 1; Phase 0 = PW num_waves, cap W_CHUNK_TILES, block γ, x_depth 1) ----
+    PW: int = 0  # waves per pass (0 -> num_waves: one pass). Waves stay global across passes (exchange unchanged)
+    cap: int = W_CHUNK_TILES  # chunk cap (halved by the L1 fallback)
+    gamma_mode: int = GAMMA_BLOCK
+    gamma_stream: bool = False  # cb_gamma_tiles streams STREAM_DEPTH C-tile chunks instead of the resident slice
+    x_depth: int = 1  # interleaved x CB depth in pass blocks (2: the next pass's reads overlap this pass)
+    out_resident: bool = False  # output CB backed on the output shard (input's own placement)
+
+    def __post_init__(self):
+        if self.PW <= 0:
+            self.PW = self.num_waves
+
+    @property
+    def chunks(self):
+        return chunking(self.S, self.sharded, self.cap)
+
+    @property
+    def C(self):
+        return self.chunks[0]
+
+    @property
+    def nch(self):
+        return self.chunks[1]
+
+    @property
+    def WS(self):
+        return self.chunks[2]
 
     @property
     def Wp(self):
         return self.nch * self.C
+
+    @property
+    def passes(self):
+        return math.ceil(self.num_waves / self.PW)
+
+    @property
+    def R_pass(self):
+        """Tile-rows of one pass block (the whole assignment when there is one pass)."""
+        return min(self.rows_max, self.PW * self.q_w)
+
+    @property
+    def regions(self):
+        """cb_gather regions (one per owned wave) live within one pass."""
+        return max(1, max_owned_waves(self.PW, self.owners, self.G_w))
+
+    @property
+    def gamma_per_wave(self):
+        return self.gamma_mode == GAMMA_WAVE
 
 
 def gather_field_bits(G_w: int) -> int:
@@ -163,7 +212,8 @@ def gather_field_bits(G_w: int) -> int:
 
 
 def max_owned_waves(num_waves: int, owners: int, G_w: int) -> int:
-    """Most waves one member owns (owner k of wave w = member (w * owners + k) mod G_w)."""
+    """Most waves one member owns among num_waves consecutive waves (owner k of wave w = member (w * owners + k) mod
+    G_w: the owner slots of consecutive waves are consecutive integers, so each residue appears at most this often)."""
     return math.ceil(num_waves * owners / G_w) if G_w > 1 else 0
 
 
@@ -180,8 +230,8 @@ def wave_params(rows_max: int, G_w: int):
         waves -= 1
 
 
-def chunking(S: int, sharded: bool):
-    nch = math.ceil(S / W_CHUNK_TILES)
+def chunking(S: int, sharded: bool, cap: int = W_CHUNK_TILES):
+    nch = math.ceil(S / cap)
     C = math.ceil(S / nch)
     if sharded:
         nch = math.ceil(S / C)
@@ -200,33 +250,105 @@ class Sizes:
     G: int
 
 
-def footprint(
-    sz: Sizes, sharded, masked, S, R, G_w, num_waves, q_w, owners, q, out_sharded=None, gamma_per_wave=False
-) -> int:
-    """Per-worker L1 bytes of every CB (l1_ledger.md -> Total per-core footprint)."""
-    C, nch, WS = chunking(S, sharded)
-    Wp = nch * C
-    max_owned = max_owned_waves(num_waves, owners, G_w)
-    f = 0
-    f += 0 if sharded else R * Wp * sz.T_in  # cb_x_tiles
-    f += (2 if masked else 1) * ttnn.tile_size(SCALER_FORMAT)
-    f += sz.T_i * (q_w + num_waves * q_w + 2 * q + q)  # sumsq, inv, chip, root
-    if G_w > 1:  # the on-chip combine CBs exist only on D3 / D3-WS (create_mesh_program_descriptor)
-        f += sz.T_i * (2 * q_w + max(1, max_owned) * G_w * q)  # partial_col, gather
-    f += ttnn.tile_size(STATS_FORMAT) * sz.G * q  # stats
-    f += (sz.G + 1) * q * RECORD_BYTES  # record scratch
+def cb_table(plan: LocalPlan, sz: Sizes):
+    """(cb index, page size, pages) of every CB this plan ALLOCATES per worker (zero-copy shard-backed CBs excluded).
+    The single source of the L1 footprint and of the CB descriptors (l1_ledger.md)."""
+    p = plan
+    T_s = ttnn.tile_size(STATS_FORMAT)
+    t = [
+        (CB_REDUCE_SCALER, ttnn.tile_size(SCALER_FORMAT), 2 if p.masked else 1),
+        (CB_SUMSQ_PARTIAL, sz.T_i, p.q_w),
+        (CB_INV_RMS, sz.T_i, p.PW * p.q_w),
+        (CB_CHIP_PARTIAL, sz.T_i, 2 * p.q),
+        (CB_RMS_ROOT, sz.T_i, p.q),
+        (CB_STATS, T_s, sz.G * p.q),
+        (CB_RECORD_SCRATCH, RECORD_BYTES, (sz.G + 1) * p.q),
+    ]
+    if not p.sharded:
+        t.append((CB_X_TILES, sz.T_in, p.x_depth * p.R_pass * p.WS))
+    if not p.out_resident:
+        t.append((CB_OUTPUT, sz.T_out, STREAM_DEPTH * p.C))
+    if p.G_w > 1:  # the on-chip combine CBs exist only on D3 / D3-WS
+        t.append((CB_PARTIAL_COL, sz.T_i, 2 * p.q_w))
+        t.append((CB_GATHER, sz.T_i, p.regions * p.G_w * p.q))
     if sz.has_gamma:
-        f += Wp * sz.T_g + (q_w if gamma_per_wave else R) * WS * sz.T_i  # cb_gamma_tiles + cb_x_gamma
-    if masked:
-        f += 2 * q_w * sz.T_i
-    out_sharded = sharded if out_sharded is None else out_sharded
-    f += 0 if out_sharded else STREAM_DEPTH * C * sz.T_out
-    return f
+        t.append((CB_GAMMA_TILES, sz.T_g, STREAM_DEPTH * p.C if p.gamma_stream else p.Wp))
+        xg = {GAMMA_BLOCK: p.R_pass * p.WS, GAMMA_WAVE: p.q_w * p.WS, GAMMA_CHUNK: p.q_w * p.C}[p.gamma_mode]
+        t.append((CB_X_GAMMA, sz.T_i, xg))
+    if p.masked:
+        t.append((CB_SUMSQ_LAST, sz.T_i, p.q_w))
+        t.append((CB_SUMSQ_ACC, sz.T_i, p.q_w))
+    return t
+
+
+def footprint(sz: Sizes, plan: LocalPlan) -> int:
+    """Per-worker L1 bytes of every allocated CB (l1_ledger.md -> Total per-core footprint)."""
+    return sum(ps * n for _, ps, n in cb_table(plan, sz))
+
+
+def _caps():
+    c, out = W_CHUNK_TILES, []
+    while c >= 1:
+        out.append(c)
+        c //= 2
+    return out
+
+
+def blocking_options(num_waves: int, has_gamma: bool, sharded: bool):
+    """The L1 fallback ladder, predicate-guarded first fit (Refinement 1). Phase 0's plan is the first option (one
+    pass, full chunk cap, block γ) and its per-wave γ fallback the second, so every shape that fit keeps its plan:
+      1. per-wave x·γ;  2. per-chunk x·γ (resident γ, then streamed γ);  3. chunk-cap halving;
+      4. passes (multi-block rows: waves per pass PW < num_waves; interleaved x_depth 2, then 1)."""
+    pws = []
+    for P in range(1, num_waves + 1):
+        pw = math.ceil(num_waves / P)
+        if pw not in pws:
+            pws.append(pw)
+    modes = (
+        [(GAMMA_BLOCK, False), (GAMMA_WAVE, False), (GAMMA_CHUNK, False), (GAMMA_CHUNK, True)]
+        if has_gamma
+        else [(GAMMA_BLOCK, False)]
+    )
+    for pw in pws:
+        for cap in _caps():
+            for gm, gs in modes:
+                for xd in [1] if (sharded or pw >= num_waves) else [2, 1]:
+                    yield dict(PW=pw, cap=cap, gamma_mode=gm, gamma_stream=gs, x_depth=xd)
+
+
+def first_fit(base: LocalPlan, sz: Sizes, budget: int):
+    """(option rank, plan) of the first ladder option whose footprint fits, or None."""
+    for rank, opt in enumerate(blocking_options(base.num_waves, sz.has_gamma, base.sharded)):
+        p = replace(base, **opt)
+        if footprint(sz, p) <= budget:
+            return rank, p
+    return None
+
+
+def _wave_plan(regime, sharded, S, G_w, G_h, rows_max, masked, out_resident, members=None):
+    nw, q_w, owners, q = wave_params(rows_max, G_w)
+    return LocalPlan(
+        regime=regime,
+        sharded=sharded,
+        S=S,
+        G_w=G_w,
+        G_h=G_h,
+        rows_max=rows_max,
+        num_waves=nw,
+        q_w=q_w,
+        owners=owners,
+        q=q,
+        masked=masked,
+        members=members or [],
+        out_resident=out_resident,
+    )
 
 
 def fused_split(T: int, Wt: int, N: int, sz: Sizes, budget: int):
-    """(S, G_w, G_h) for an interleaved input on N worker cores (op_design.md -> Work Distribution)."""
-    best = None
+    """(S, G_w, G_h) for an interleaved input on N worker cores (op_design.md -> Work Distribution). Phase 0's rule
+    (the whole block resident, per-wave γ allowed) first; when no slice fits it, the slice whose first-fit L1
+    fallback ranks best (Refinement 1), ties broken by the Phase 0 key."""
+    cands = []
     for S in range(min(Wt, MIN_SLICE_TILES), Wt + 1):
         G_w = math.ceil(Wt / S)
         if G_w > MAX_GROUP_CORES or G_w > N:
@@ -235,17 +357,25 @@ def fused_split(T: int, Wt: int, N: int, sz: Sizes, budget: int):
             continue  # a narrower slice gives the same G_w: never better
         G_h = min(T, N // G_w)
         rows_max = math.ceil(T / G_h)
-        nw, q_w, owners, q = wave_params(rows_max, G_w)
-        # feasibility with the per-wave γ fallback (the smaller cb_x_gamma); local_plan prefers whole-block γ
-        if footprint(sz, False, False, S, rows_max, G_w, nw, q_w, owners, q, gamma_per_wave=True) > budget:
-            continue
         key = (rows_max * S, -min(rows_max, WAVES_MAX), G_w)
+        cands.append((key, S, G_w, G_h, rows_max))
+    best = None
+    for key, S, G_w, G_h, rows_max in cands:
+        base = _wave_plan("D", False, S, G_w, G_h, rows_max, False, False)
+        # feasibility with the per-wave γ fallback (the smaller cb_x_gamma); local_plan prefers whole-block γ
+        if footprint(sz, replace(base, gamma_mode=GAMMA_WAVE if sz.has_gamma else GAMMA_BLOCK)) > budget:
+            continue
         if best is None or key < best[0]:
             best = (key, S, G_w, G_h)
     if best is None:
+        for key, S, G_w, G_h, rows_max in cands:
+            fit = first_fit(_wave_plan("D", False, S, G_w, G_h, rows_max, False, False), sz, budget)
+            if fit is not None and (best is None or (fit[0], key) < best[0]):
+                best = ((fit[0], key), S, G_w, G_h)
+    if best is None:
         raise NotImplementedError(
-            f"distributed_rms_norm: no W-split of Wt={Wt} fits L1 with the whole per-core block resident "
-            f"(budget {budget} B); the x_depth = 2 fallback is not built"
+            f"distributed_rms_norm: no W-split of Wt={Wt} fits L1 even one wave per pass at a 1-tile chunk "
+            f"(budget {budget} B)"
         )
     return best[1], best[2], best[3]
 
@@ -254,7 +384,7 @@ def _shard_cores(spec, n):
     return list(ttnn.corerange_to_cores(spec.grid, n, row_wise=spec.orientation == ttnn.ShardOrientation.ROW_MAJOR))
 
 
-def local_plan(input_tensor, workers, sz: Sizes, budget: int, out_sharded=None) -> LocalPlan:
+def local_plan(input_tensor, workers, sz: Sizes, budget: int, out_resident=None) -> LocalPlan:
     shape = list(input_tensor.shape)
     W = shape[-1]
     Wt = math.ceil(W / TILE_DIM)
@@ -319,32 +449,22 @@ def local_plan(input_tensor, workers, sz: Sizes, budget: int, out_sharded=None) 
         if G_w > 1 and any(m.V <= 0 for m in members):
             raise NotImplementedError("distributed_rms_norm: a width shard with no valid tile")
 
-    C, nch, WS = chunking(S, sharded)
-    num_waves, q_w, owners, q = wave_params(rows_max, G_w)
-    plan = LocalPlan(
-        regime=regime,
-        sharded=sharded,
-        S=S,
-        C=C,
-        nch=nch,
-        WS=WS,
-        G_w=G_w,
-        G_h=max(m.group for m in members) + 1,
-        rows_max=rows_max,
-        num_waves=num_waves,
-        q_w=q_w,
-        owners=owners,
-        q=q,
-        masked=masked,
-        members=members,
-    )
-    fp = footprint(sz, sharded, masked, S, rows_max, G_w, num_waves, q_w, owners, q, out_sharded)
-    if fp > budget and sz.has_gamma:
-        plan.gamma_per_wave = True  # lamp L4 fallback: x*γ per wave (cb_x_gamma = q_w rows) instead of per block
-        fp = footprint(sz, sharded, masked, S, rows_max, G_w, num_waves, q_w, owners, q, out_sharded, True)
-    if fp > budget:
-        raise NotImplementedError(f"distributed_rms_norm: per-core footprint {fp} B exceeds L1 budget {budget} B")
-    return plan
+    G_h = max(m.group for m in members) + 1
+    base_plan = _wave_plan(regime, sharded, S, G_w, G_h, rows_max, masked, bool(out_resident), members)
+    fit = first_fit(base_plan, sz, budget)
+    if fit is None:
+        smallest = replace(
+            base_plan,
+            PW=1,
+            cap=1,
+            gamma_mode=GAMMA_CHUNK if sz.has_gamma else GAMMA_BLOCK,
+            gamma_stream=sz.has_gamma,
+        )
+        raise NotImplementedError(
+            f"distributed_rms_norm: per-core footprint {footprint(sz, smallest)} B (one wave per pass, 1-tile chunk) "
+            f"exceeds L1 budget {budget} B"
+        )
+    return fit[1]
 
 
 def member_of(plan: LocalPlan, w: int, k: int) -> int:
@@ -409,13 +529,13 @@ _RESOURCES = {}
 
 
 class Resources:
-    def __init__(self, mesh, ports, G, num_waves, seg_stride):
+    def __init__(self, mesh, ports, G, words):
         import torch  # host-side only
 
         self.ports = ports
+        self.words = words
         crs = _crs(ports)
         self.sems = [ttnn.create_global_semaphore(mesh, crs, 0) for _ in range(G)]  # ready + G-1 arrivals
-        words = max(1, num_waves * G * seg_stride // 4)
         n_dev = mesh.get_num_devices()
         mc = ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
@@ -446,10 +566,17 @@ class Resources:
 
 
 def get_resources(mesh, ports, G, num_waves, seg_stride):
-    key = (id(mesh), tuple((c.x, c.y) for c in ports), G, num_waves, seg_stride)
+    """One landing scratch + semaphore set per (mesh, port cores, G), grown to the largest request seen. Keying on the
+    plan's waves / segment stride too left one L1 allocation per distinct plan alive for the process: over a long
+    run those pile up and shrink the CB budget of every later call (Refinement 1)."""
+    words = max(1, num_waves * G * seg_stride // 4)
+    key = (id(mesh), tuple((c.x, c.y) for c in ports), G)
     res = _RESOURCES.get(key)
-    if res is None:
-        res = (mesh, Resources(mesh, ports, G, num_waves, seg_stride))
+    if res is None or res[1].words < words:
+        if res is not None:
+            _RESOURCES.pop(key)
+            del res  # free the smaller scratch before allocating its replacement (in-order queue: safe)
+        res = (mesh, Resources(mesh, ports, G, max(words, LANDING_MIN_WORDS)))
         _RESOURCES[key] = res
     res[1].key = key
     return res[1]
@@ -549,8 +676,29 @@ def _gamma_es(gamma):
     return ttnn.tile_size(gamma.dtype) // TILE_HW
 
 
-def plan_summary(input_tensor, *, cluster_axis, num_links, gamma=None, fp32_dest_acc_en=True):
-    """Host-only: the selected regime and its split (for tests)."""
+def _out_resident(input_tensor, output_tensor) -> bool:
+    """The output CB is backed on the output shard (compute packs in place) only when the output carries the input's
+    own shard placement; any other output (interleaved, or a different shard spec: resharding) streams through
+    cb_output to the writer's output TensorAccessor (Refinement 1)."""
+    in_mc = input_tensor.memory_config()
+    out_mc = output_tensor.memory_config() if output_tensor is not None else in_mc
+    if in_mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
+        return False
+    if out_mc.memory_layout != in_mc.memory_layout or out_mc.buffer_type != in_mc.buffer_type:
+        return False
+    a, b = out_mc.shard_spec, in_mc.shard_spec
+    return (
+        a is not None
+        and b is not None
+        and list(a.shape) == list(b.shape)
+        and a.grid == b.grid
+        and a.orientation == b.orientation
+    )
+
+
+def plan_summary(input_tensor, *, cluster_axis, num_links, gamma=None, fp32_dest_acc_en=True, out_resident=None):
+    """Host-only: the selected regime and its split (for tests). out_resident defaults to the input's own placement
+    for a sharded input (the golden suite's sharded-output request)."""
     mesh = input_tensor.device()
     grid = mesh.compute_with_storage_grid_size()
     taken = set()
@@ -561,8 +709,10 @@ def plan_summary(input_tensor, *, cluster_axis, num_links, gamma=None, fp32_dest
     pset = {(c.x, c.y) for c in ports}
     workers = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in pset]
     sz = _sizes(input_tensor, gamma, fp32_dest_acc_en, mesh.shape[cluster_axis])
-    p = local_plan(input_tensor, workers, sz, l1_budget(mesh))
-    return dict(
+    if out_resident is None:
+        out_resident = mc.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
+    p = local_plan(input_tensor, workers, sz, l1_budget(mesh), out_resident)
+    out = dict(
         regime=p.regime,
         gamma_per_wave=p.gamma_per_wave,
         S=p.S,
@@ -572,6 +722,17 @@ def plan_summary(input_tensor, *, cluster_axis, num_links, gamma=None, fp32_dest
         num_waves=p.num_waves,
         workers=len(workers),
     )
+    # Refinement 1 L1 fallbacks: reported only when they leave the Phase 0 plan (Phase 0 summaries are unchanged)
+    if p.passes > 1 or p.cap != W_CHUNK_TILES or p.gamma_mode == GAMMA_CHUNK:
+        out.update(
+            passes=p.passes,
+            waves_per_pass=p.PW,
+            chunk=p.C,
+            gamma_mode=_GAMMA_MODE_NAMES[p.gamma_mode],
+            gamma_stream=p.gamma_stream,
+            x_depth=p.x_depth,
+        )
+    return out
 
 
 def _range_cores(r):
@@ -622,8 +783,8 @@ def create_mesh_program_descriptor(
     port_list = port_cores(grid, 2 * num_links, taken)
     pset = {(c.x, c.y) for c in port_list}
     workers = [ttnn.CoreCoord(x, y) for y in range(grid.y) for x in range(grid.x) if (x, y) not in pset]
-    out_sharded = output_tensor.memory_config().memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
-    plan = local_plan(input_tensor, workers, sz, l1_budget(mesh), out_sharded)
+    out_resident = _out_resident(input_tensor, output_tensor)
+    plan = local_plan(input_tensor, workers, sz, l1_budget(mesh), out_resident)
 
     # ---- publishers -> links ----
     P = plan.G_h * plan.owners  # publishers per wave
@@ -656,8 +817,9 @@ def create_mesh_program_descriptor(
     # ---- semaphore ids ----
     SEM_GATHER = 0
     SEM_INV = 1
-    SEM_LANDED_BASE = 2  # + 2*l + d (workers: landed notifies per link and direction)
-    SEM_OWN_STATS_BASE = 2 + 2 * L  # + w (ports: publishers of wave w announced)
+    SEM_PASS = 2  # workers: members done with a pass (row-group barrier before the next pass reuses gather / inv slots)
+    SEM_LANDED_BASE = 3  # + 2*l + d (workers: landed notifies per link and direction)
+    SEM_OWN_STATS_BASE = 3 + 2 * L  # + w (ports: publishers of wave w announced)
     n_sems = SEM_OWN_STATS_BASE + plan.num_waves
     assert n_sems <= 16, "NUM_SEMAPHORES"
 
@@ -665,36 +827,20 @@ def create_mesh_program_descriptor(
     port_crs = _crs(used_ports)
     all_crs = _crs([m.core for m in plan.members] + used_ports)
 
-    # ---- CBs (worker cores) ----
-    R = plan.rows_max
-    max_owned = max_owned_waves(plan.num_waves, plan.owners, plan.G_w)
-    cbs = [
-        _cb(CB_REDUCE_SCALER, SCALER_FORMAT, ttnn.tile_size(SCALER_FORMAT), 2 if plan.masked else 1, worker_crs),
-        _cb(CB_SUMSQ_PARTIAL, interm, sz.T_i, plan.q_w, worker_crs),
-        _cb(CB_INV_RMS, interm, sz.T_i, plan.num_waves * plan.q_w, worker_crs),
-        _cb(CB_CHIP_PARTIAL, interm, sz.T_i, 2 * plan.q, worker_crs),
-        _cb(CB_RMS_ROOT, interm, sz.T_i, plan.q, worker_crs),
-        _cb(CB_STATS, STATS_FORMAT, ttnn.tile_size(STATS_FORMAT), G * plan.q, worker_crs),
-        _cb(CB_RECORD_SCRATCH, STATS_FORMAT, RECORD_BYTES, (G + 1) * plan.q, worker_crs),
-    ]
+    # ---- CBs (worker cores): cb_table() is the single source of the allocated CBs and of footprint() ----
+    fmt = {
+        CB_X_TILES: input_tensor.dtype,
+        CB_REDUCE_SCALER: SCALER_FORMAT,
+        CB_STATS: STATS_FORMAT,
+        CB_RECORD_SCRATCH: STATS_FORMAT,
+        CB_OUTPUT: output_tensor.dtype,
+        CB_GAMMA_TILES: gamma.dtype if gamma is not None else None,
+    }
+    cbs = [_cb(idx, fmt.get(idx, interm), ps, n, worker_crs) for idx, ps, n in cb_table(plan, sz)]
     if plan.sharded:
         cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_X_TILES, input_tensor))
-    else:
-        cbs.append(_cb(CB_X_TILES, input_tensor.dtype, sz.T_in, R * plan.WS, worker_crs))
-    if out_sharded:
+    if plan.out_resident:
         cbs.append(ttnn.cb_descriptor_from_sharded_tensor(CB_OUTPUT, output_tensor))
-    else:
-        cbs.append(_cb(CB_OUTPUT, output_tensor.dtype, sz.T_out, STREAM_DEPTH * plan.C, worker_crs))
-    if plan.G_w > 1:
-        cbs.append(_cb(CB_PARTIAL_COL, interm, sz.T_i, 2 * plan.q_w, worker_crs))
-        cbs.append(_cb(CB_GATHER, interm, sz.T_i, max(1, max_owned) * plan.G_w * plan.q, worker_crs))
-    if gamma is not None:
-        cbs.append(_cb(CB_GAMMA_TILES, gamma.dtype, sz.T_g, plan.Wp, worker_crs))
-        x_gamma_rows = plan.q_w if plan.gamma_per_wave else R
-        cbs.append(_cb(CB_X_GAMMA, interm, sz.T_i, x_gamma_rows * plan.WS, worker_crs))
-    if plan.masked:
-        cbs.append(_cb(CB_SUMSQ_LAST, interm, sz.T_i, plan.q_w, worker_crs))
-        cbs.append(_cb(CB_SUMSQ_ACC, interm, sz.T_i, plan.q_w, worker_crs))
 
     # ---- compile-time args ----
     reader_ct = [
@@ -721,8 +867,11 @@ def create_mesh_program_descriptor(
         seg_stride,  # 20
         Wt,  # 21
         gather_field_bits(plan.G_w),  # 22
+        plan.PW,  # 23 waves per pass
+        plan.regions,  # 24 cb_gather regions (owned waves per pass)
+        SEM_PASS,  # 25
     ]
-    reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+    reader_ct.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())  # 26..
     compute_ct = [
         int(gamma is not None),  # 0
         int(plan.sharded),  # 1
@@ -738,13 +887,15 @@ def create_mesh_program_descriptor(
         G,  # 11
         plan.G_w,  # 12
         SCALE_BLOCK_TILES,  # 13
-        int(out_sharded),  # 14
-        int(plan.gamma_per_wave),  # 15
+        int(plan.out_resident),  # 14
+        plan.gamma_mode,  # 15
+        plan.PW,  # 16
+        int(plan.gamma_stream),  # 17
     ]
     gamma_is_tile = gamma is not None and gamma.layout == ttnn.TILE_LAYOUT
     writer_ct = [
         int(gamma is not None),  # 0
-        int(out_sharded),  # 1
+        int(plan.out_resident),  # 1
         plan.WS,  # 2
         plan.C,  # 3
         plan.nch,  # 4
@@ -756,8 +907,9 @@ def create_mesh_program_descriptor(
         _gamma_es(gamma) if gamma is not None else 0,  # 10
         sz.T_g,  # 11
         plan.Wp,  # 12
+        int(plan.gamma_stream),  # 13
     ]
-    writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
+    writer_ct.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())  # 14..
     writer_ct.extend(
         ttnn.TensorAccessorArgs(gamma).get_compile_time_args()
         if gamma is not None
@@ -949,8 +1101,18 @@ def create_mesh_program_descriptor(
                     None if mc.shard_spec is None else (tuple(mc.shard_spec.shape), str(mc.shard_spec.grid)),
                     output_tensor.memory_config().buffer_type,
                     tuple(sorted(pset)),
-                    out_sharded,
-                    plan.gamma_per_wave,
+                    plan.out_resident,
+                    None
+                    if output_tensor.memory_config().shard_spec is None
+                    else (
+                        tuple(output_tensor.memory_config().shard_spec.shape),
+                        str(output_tensor.memory_config().shard_spec.grid),
+                    ),
+                    plan.gamma_mode,
+                    plan.gamma_stream,
+                    plan.PW,
+                    plan.cap,
+                    plan.x_depth,
                     res.landing_addr,
                 )
             )

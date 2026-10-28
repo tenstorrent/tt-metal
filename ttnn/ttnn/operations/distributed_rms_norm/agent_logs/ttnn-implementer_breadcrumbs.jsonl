@@ -1,2 +1,3 @@
 {"event":"hypothesis","detail":"golden ring-mock PCC 0.93 on multi-wave shapes; rows 576-639 (ragged last row-group) received inv ~1.0: cb_inv_rms pushed before the rows landed — SEM_INV cumulative counts reached early because the empty-wave owner announced first","ts":"2026-10-28T17:02:22+00:00"}
 {"event":"fix_applied","detail":"wave-ordered SEM_INV announces (gated on own count of earlier waves) + SEM_GATHER per-owned-wave bit fields","ts":"2026-10-28T17:02:22+00:00"}
+{"event":"test_run","status":"pass","tests":"acceptance 192/1skip + 4 golden R1 cells","note":"fallback ladder landed","ts":"2026-10-28T23:58:10+00:00"}

@@ -43,7 +43,9 @@ void kernel_main() {
     constexpr uint32_t GAMMA_ES = get_compile_time_arg_val(10);
     constexpr uint32_t T_G = get_compile_time_arg_val(11);
     constexpr uint32_t WP = get_compile_time_arg_val(12);
-    constexpr auto output_args = TensorAccessorArgs<13>();
+    // γ streams one C-tile chunk per (wave with rows, chunk) instead of the resident slice (L1 fallback)
+    constexpr bool GAMMA_STREAM = get_compile_time_arg_val(13) != 0;
+    constexpr auto output_args = TensorAccessorArgs<14>();
     [[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<output_args.next_compile_time_args_offset()>();
 
     const uint32_t out_addr = get_arg_val<uint32_t>(0);
@@ -53,46 +55,95 @@ void kernel_main() {
     const uint32_t w0 = get_arg_val<uint32_t>(4);
     const uint32_t V = get_arg_val<uint32_t>(5);
 
-    // ---------------- γ supply ----------------
-    if constexpr (HAS_GAMMA) {
-        DRMS_ZONE("wr_gamma");
-        const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr);
-        cb_reserve_back(cb_gamma_tiles, WP);
-        const uint32_t base = get_write_ptr(cb_gamma_tiles);
-        if constexpr (GAMMA_IS_TILE) {
-            constexpr uint32_t prefix = FACE_DIM * FACE_DIM * GAMMA_ES + FACE_DIM * GAMMA_ES;
-            for (uint32_t t = 0; t < V; ++t) {
-                noc_async_read(gamma_accessor.get_noc_addr(w0 + t), base + t * T_G, prefix);
+    auto n_wave = [&](uint32_t w) -> uint32_t {
+        const uint32_t r0 = w * Q_W;
+        return r0 >= rows ? 0 : ((rows - r0) < Q_W ? rows - r0 : Q_W);
+    };
+
+    // γ tiles [t0, t0 + nt) of the slice -> pages 0.. of the cb_gamma_tiles write window (row 0 is all any consumer
+    // reads: BroadcastDim::Row)
+    [[maybe_unused]] auto read_gamma = [&](uint32_t t0, uint32_t nt) {
+        if constexpr (HAS_GAMMA) {
+            const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr);
+            const uint32_t base = get_write_ptr(cb_gamma_tiles);
+            if constexpr (GAMMA_IS_TILE) {
+                constexpr uint32_t prefix = FACE_DIM * FACE_DIM * GAMMA_ES + FACE_DIM * GAMMA_ES;
+                for (uint32_t t = 0; t < nt; ++t) {
+                    noc_async_read(gamma_accessor.get_noc_addr(w0 + t0 + t), base + t * T_G, prefix);
+                }
+                noc_async_read_barrier();
+            } else {
+                constexpr uint32_t stick = 2 * FACE_DIM * GAMMA_ES;
+                for (uint32_t t = 0; t < nt; ++t) {
+                    noc_async_read(gamma_accessor.get_noc_addr(w0 + t0 + t), base + t * T_G, stick);
+                }
+                noc_async_read_barrier();
+                for (uint32_t t = 0; t < nt; ++t) {
+                    const uint32_t page = base + t * T_G;
+                    noc_async_write(
+                        page + FACE_DIM * GAMMA_ES,
+                        get_noc_addr(page + FACE_DIM * FACE_DIM * GAMMA_ES),
+                        FACE_DIM * GAMMA_ES);
+                }
+                noc_async_write_barrier();
             }
-            noc_async_read_barrier();
-        } else {
-            constexpr uint32_t stick = 2 * FACE_DIM * GAMMA_ES;
-            for (uint32_t t = 0; t < V; ++t) {
-                noc_async_read(gamma_accessor.get_noc_addr(w0 + t), base + t * T_G, stick);
-            }
-            noc_async_read_barrier();
-            for (uint32_t t = 0; t < V; ++t) {
-                const uint32_t page = base + t * T_G;
-                noc_async_write(
-                    page + FACE_DIM * GAMMA_ES,
-                    get_noc_addr(page + FACE_DIM * FACE_DIM * GAMMA_ES),
-                    FACE_DIM * GAMMA_ES);
-            }
-            noc_async_write_barrier();
         }
+    };
+    auto chunk_width = [](uint32_t c) -> uint32_t { return (c + 1 == NCH) ? WS - c * C : C; };
+    auto chunk_valid = [&](uint32_t c) -> uint32_t {
+        const uint32_t t0 = c * C;
+        const uint32_t cw = chunk_width(c);
+        return t0 >= V ? 0 : ((V - t0) < cw ? V - t0 : cw);
+    };
+
+    // ---------------- γ supply ----------------
+    // resident (once per kernel, before any output): the slice's V row-0 γ tiles into cb_gamma_tiles
+    if constexpr (HAS_GAMMA && !GAMMA_STREAM) {
+        DRMS_ZONE("wr_gamma");
+        cb_reserve_back(cb_gamma_tiles, WP);
+        read_gamma(0, V);
         cb_push_back(cb_gamma_tiles, WP);
     }
+    // streamed: one chunk per (wave with rows, chunk), in the compute's consumption order
+    uint32_t gw = 0, gc = 0;  // next γ chunk item
+    [[maybe_unused]] auto push_gamma_chunk = [&]() -> bool {
+        if constexpr (HAS_GAMMA && GAMMA_STREAM) {
+            while (gw < NW && n_wave(gw) == 0) {
+                ++gw;
+            }
+            if (gw >= NW) {
+                return false;
+            }
+            DRMS_ZONE("wr_gamma");
+            cb_reserve_back(cb_gamma_tiles, C);
+            read_gamma(gc * C, chunk_valid(gc));
+            cb_push_back(cb_gamma_tiles, C);
+            if (++gc == NCH) {
+                gc = 0;
+                ++gw;
+            }
+            return true;
+        }
+        return false;
+    };
 
     // ---------------- store_wave ----------------
-    if constexpr (!OUT_SHARDED) {
+    if constexpr (OUT_SHARDED) {
+        // output shard-backed (compute packs in place): only the streamed γ remains to supply
+        while (push_gamma_chunk()) {
+        }
+    } else {
+        // interleaved or resharded output (TensorAccessor: a sharded output's pages live on their shard cores)
         const auto output_accessor = TensorAccessor(output_args, out_addr);
+        push_gamma_chunk();  // one chunk ahead: chunk i+1's γ read overlaps chunk i's stores
         for (uint32_t w = 0; w < NW; ++w) {
             const uint32_t r0 = w * Q_W;
-            const uint32_t n = r0 >= rows ? 0 : ((rows - r0) < Q_W ? rows - r0 : Q_W);
-            for (uint32_t c = 0; c < NCH; ++c) {
+            const uint32_t n = n_wave(w);
+            for (uint32_t c = 0; c < NCH && n > 0; ++c) {
+                push_gamma_chunk();
                 const uint32_t t0 = c * C;
-                const uint32_t cw = (c + 1 == NCH) ? WS - c * C : C;  // a shard-backed slice's last chunk is narrower
-                const uint32_t nv = t0 >= V ? 0 : ((V - t0) < cw ? V - t0 : cw);
+                const uint32_t cw = chunk_width(c);  // a shard-backed slice's last chunk is narrower
+                const uint32_t nv = chunk_valid(c);
                 for (uint32_t r = 0; r < n; ++r) {
                     {
                         DRMS_ZONE("wr_wait_out");

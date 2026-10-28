@@ -190,30 +190,10 @@ def validate(
         if all(axes.get(k) == v for k, v in exc.items()):
             raise ExcludedCell(f"distributed_rms_norm: unsupported combination (refinement candidate): {exc}")
 
-    in_mc = input_tensor.memory_config()
-    out_sharded = memory_config is not None and memory_config.memory_layout != ttnn.TensorMemoryLayout.INTERLEAVED
-    if in_mc.memory_layout == ttnn.TensorMemoryLayout.INTERLEAVED:
-        if out_sharded:
-            raise NotImplementedError("distributed_rms_norm: interleaved input with a sharded output is not built")
-    elif out_sharded and not _same_placement(memory_config, in_mc):
-        raise NotImplementedError(
-            "distributed_rms_norm: a sharded output must carry the input's own shard spec (resharding is not built)"
-        )
+    # Output placement: the input's own shard spec packs in place (zero-copy); any other output (interleaved, or a
+    # different shard spec / an interleaved input with a sharded output: resharding) streams through the writer's
+    # output TensorAccessor inside the same dispatch (Refinement 1).
     return cfg, links
-
-
-def _same_placement(out_mc, in_mc) -> bool:
-    if out_mc.memory_layout != in_mc.memory_layout:
-        return False
-    a, b = out_mc.shard_spec, in_mc.shard_spec
-    return (
-        out_mc.buffer_type == in_mc.buffer_type
-        and a is not None
-        and b is not None
-        and list(a.shape) == list(b.shape)
-        and a.grid == b.grid
-        and a.orientation == b.orientation
-    )
 
 
 # ---------------------------------------------------------------------------
