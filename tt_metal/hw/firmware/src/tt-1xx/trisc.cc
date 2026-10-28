@@ -11,6 +11,7 @@
 #include "hostdev/rta_constants.h"
 
 #include "api/debug/kernel_profiler.hpp"
+#include "internal/profiler/riscv_pmc.hpp"
 
 #include "internal/debug/fw_debug.h"
 #include "api/debug/waypoint.h"
@@ -213,12 +214,14 @@ int main(int argc, char* argv[]) {
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
 
         WAYPOINT("R");
+        RiscvPmcBegin();
         int index =
             static_cast<std::underlying_type<TensixProcessorTypes>::type>(TensixProcessorTypes::MATH0) + thread_id;
         uint32_t kernel_lma = (kernel_config_base + launch_msg->kernel_config.kernel_text_offset[index]);
         auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
         record_stack_usage(stack_free);
         WAYPOINT("D");
+        RiscvPmcEnd();
         DEVICE_PRINT_KERNEL_FINISHED();
 
         // Signal completion

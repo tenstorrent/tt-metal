@@ -11,6 +11,7 @@
 #include "stream_io_map.h"
 #include "internal/firmware_common.h"
 #include "api/debug/kernel_profiler.hpp"
+#include "internal/profiler/riscv_pmc.hpp"
 #include "internal/risc_attribs.h"
 #include "internal/circular_buffer_interface.h"
 #include "internal/circular_buffer_init.h"
@@ -179,6 +180,7 @@ int main(int argc, char* argv[]) {
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
 
         WAYPOINT("R");
+        RiscvPmcBegin();
 
 #if defined(ARCH_WORMHOLE)
         // Jumping to IRAM causes bizarre behavior, so signal the
@@ -194,6 +196,7 @@ int main(int argc, char* argv[]) {
 #endif
         record_stack_usage(stack_free);
         WAYPOINT("D");
+        RiscvPmcEnd();
         DEVICE_PRINT_KERNEL_FINISHED();
 
         signal_ncrisc_completion();
