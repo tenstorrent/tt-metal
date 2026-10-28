@@ -10,6 +10,7 @@
 
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/operations/ccl/common/host/ccl_topology_utils.hpp"
 
 using namespace tt::tt_metal;
 
@@ -28,8 +29,8 @@ void DeepseekMoEReduceScatterDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_on_program_cache_hit(operation_attributes, tensor_args);
 
-    // hardcoded constants
-    const uint32_t required_ring_size = 8;
+    // hardcoded constants (one input slice and one intermediate slice per ring position)
+    const uint32_t required_ring_size = kNumIntermediateSlices;
     const uint32_t num_directions_per_link = 2;
 
     const uint32_t num_tile_elements = tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH;
@@ -170,17 +171,32 @@ std::vector<ttnn::Tensor> DeepseekMoEReduceScatterDeviceOperation::create_output
     const tt::tt_metal::TensorSpec& intermediate_tensor_spec = tensor_specs.at(0);
     const tt::tt_metal::TensorSpec& output_tensor_spec = tensor_specs.at(1);
 
-    return {
-        create_device_tensor(intermediate_tensor_spec, input_tensors.at(0).device()),  // intermediate
-        create_device_tensor(intermediate_tensor_spec, input_tensors.at(0).device()),  // intermediate
-        create_device_tensor(intermediate_tensor_spec, input_tensors.at(0).device()),  // intermediate
-        create_device_tensor(intermediate_tensor_spec, input_tensors.at(0).device()),  // intermediate
-        create_device_tensor(intermediate_tensor_spec, input_tensors.at(0).device()),  // intermediate
-        create_device_tensor(intermediate_tensor_spec, input_tensors.at(0).device()),  // intermediate
-        create_device_tensor(intermediate_tensor_spec, input_tensors.at(0).device()),  // intermediate
-        create_device_tensor(intermediate_tensor_spec, input_tensors.at(0).device()),  // intermediate
-        create_device_tensor(output_tensor_spec, input_tensors.at(0).device()),        // output
-    };
+    std::vector<ttnn::Tensor> tensors;
+    tensors.reserve(kNumIntermediateSlices + 1);
+    for (size_t slice = 0; slice < kNumIntermediateSlices; ++slice) {
+        tensors.push_back(create_device_tensor(intermediate_tensor_spec, input_tensors.at(0).device()));
+    }
+    tensors.push_back(create_device_tensor(output_tensor_spec, input_tensors.at(0).device()));
+    return tensors;
+}
+
+std::vector<tt::tt_metal::TensorTopology> DeepseekMoEReduceScatterDeviceOperation::compute_output_topologies(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // kNumIntermediateSlices intermediates then the output (create_output_tensors). The inputs are the
+    // per-destination `dim` slices of each device's local reduction; ring position d sums slice d from every device
+    // and keeps it, so the output is a reduce_scatter result: Shard{dim} along `cluster_axis` (or over the whole
+    // mesh), the other axes as input[0] had them. The intermediates are device-local scratch and keep input[0]'s
+    // label, as does the output with no honest label (nullopt, already reported). The hook runs before validation,
+    // so an empty input list (rejected right after) returns {}.
+    if (tensor_args.input_tensors.empty()) {
+        return {};
+    }
+    const auto& first_input = tensor_args.input_tensors.front();
+    const auto output_topology = ttnn::operations::ccl::common::reduce_scatter_output_topology(
+        first_input, operation_attributes.cluster_axis, static_cast<int32_t>(operation_attributes.dim));
+    std::vector<tt::tt_metal::TensorTopology> topologies(kNumIntermediateSlices, first_input.tensor_topology());
+    topologies.push_back(output_topology.value_or(first_input.tensor_topology()));
+    return topologies;
 }
 
 }  // namespace ttnn::experimental::prim

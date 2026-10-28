@@ -23,7 +23,8 @@ Read the source implementation and extract:
 ```
 # Find the source kernel
 Glob for tt_llk_{source_arch}/llk_lib/llk_{type}_{op}*.h
-Glob for tt_llk_{source_arch}/common/inc/sfpu/ckernel_sfpu_{op}.h
+Glob for tt_metal/hw/ckernels/{source_arch}/metal/llk_api/llk_sfpu/ckernel_sfpu_{op}.h
+Glob for tt_llk_{source_arch}/common/inc/sfpu/ckernel_sfpu_{op}.h   # the few WH/BH kernels not moved yet
 
 # Read it
 Read tt_llk_{source_arch}/llk_lib/llk_{type}_{op}.h
@@ -40,7 +41,8 @@ Read tt_llk_{source_arch}/llk_lib/llk_{type}_{op}.h
 Glob for tt_llk_{target_arch}/llk_lib/llk_{type}_*.h
 
 # For SFPU
-Glob for tt_llk_{target_arch}/common/inc/sfpu/ckernel_sfpu_*.h
+Glob for tt_metal/hw/ckernels/{target_arch}/metal/llk_api/llk_sfpu/ckernel_sfpu_*.h
+Glob for tt_llk_{target_arch}/common/inc/sfpu/ckernel_sfpu_*.h   # the few WH/BH kernels not moved yet
 ```
 
 Read the closest existing kernel LINE BY LINE. Document:

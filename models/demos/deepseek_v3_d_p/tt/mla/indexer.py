@@ -979,8 +979,12 @@ class TtIndexerBase:
         *,
         subdevice_id: ttnn.SubDeviceId | None = None,
         sub_core_grids: ttnn.CoreRangeSet | None = None,
+        dram_read_noc: ttnn.NOC | None = None,
     ) -> ttnn.Tensor:
-        """Select local top-k indices, optionally confined to one loaded subdevice/core grid."""
+        """Select local top-k indices, optionally confined to one loaded subdevice/core grid.
+
+        dram_read_noc picks the NoC top-k streams the logits from DRAM on (None = the op's default).
+        """
         metadata_kwargs = {}
         if state.valid_length_tensor is not None:
             metadata_kwargs.update(
@@ -995,6 +999,7 @@ class TtIndexerBase:
             **metadata_kwargs,
             subdevice_id=subdevice_id,
             sub_core_grids=sub_core_grids,
+            dram_read_noc=dram_read_noc,
         )
 
     def finalize_distribution(

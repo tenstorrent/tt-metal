@@ -6,7 +6,6 @@ set(UNIT_TESTS_TTNN_SMOKE_SOURCES
     sdpa/test_ring_joint_ksplit.cpp
     sdpa/test_ring_mla_packing_plan.cpp
     sdpa/test_sliding_window_work_plan.cpp
-    test_quasar_matmul_unified_subblock.cpp
     test_to_and_from_json.cpp
     test_sliding_window_infra.cpp
     test_async_runtime.cpp
@@ -107,6 +106,7 @@ set(UNIT_TESTS_TTNN_TENSOR_SOURCES
     tensor/test_tensor_nd_sharding.cpp
     tensor/test_tensor_serialization.cpp
     tensor/test_tensor_utils.cpp
+    tensor/test_random.cpp
     tensor/test_unit_mesh_utils.cpp
     tensor/test_xtensor_adapter.cpp
     tensor/test_unchecked_reinterpret_layout.cpp

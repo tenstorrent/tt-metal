@@ -352,6 +352,14 @@ void bind_sdpa(nb::module_& mod) {
             attn_mask_block_map (ttnn.Tensor, optional): Defaults to `None`. Non causal with `attn_mask` only. [Bm x Hm x ceil(Sq / q_chunk) x ceil(Sk / k_chunk)] int32/uint32 ROW_MAJOR with the mask's batch and head dims, nonzero where a (q chunk, k chunk) block of the mask has a visible entry. Blocks flagged 0 are not read or computed; rows whose every block is 0 are unspecified. Heads whose K/V chunks are forwarded between their cores keep those chains, and stream every block, while fewer than 40 percent of the blocks in a sample of the map's rows are masked; skipping blocks pays only past that.
 
 
+        Grouped-query attention (non-causal, `nqh > nkh`) is scheduled automatically. Cores working on the query
+        heads of one KV head can share its K/V (read once, then forwarded core to core). With a single K chunk
+        (`k_chunk_size >= s`, `fp32_dest_acc_en=False`), each core also keeps a KV head's K/V across its consecutive
+        query chunks instead of re-reading it. When `q_chunk_size` does not divide `s`, a query chunk may run on into
+        the next query head of its group if that lowers the most query chunks any core runs (no `attn_mask`, no
+        `attention_sink`, tile-aligned unpadded `s`, `nkh == nvh`). None of this changes the output layout. Head
+        crossing can change the rounding of some rows with `fp32_dest_acc_en=False`, not the accuracy.
+
         Returns:
             ttnn.Tensor: the output tensor [b x nqh x s x dh] (or [b x 1 x s x nqh*dh] with output_concat_heads).
 

@@ -491,6 +491,10 @@ class ttMLA:
                 layout=ttnn.TILE_LAYOUT,
             )
         if self.tp_factor > 1:
+            ready_semaphore, data_valid_semaphore = self.tt_ccl.get_mla_high_bw_gather_semaphores()
+            self._tp_gather_semaphores = dict(
+                ready_semaphore=ready_semaphore, data_valid_semaphore=data_valid_semaphore
+            )
             if not self.kv_only and not self._merge_qkv_a:
                 self._q_a_latent_gather_output = self.tt_ccl.get_mla_high_bw_all_gather_buffer(
                     name="q_a_latent",
@@ -1181,6 +1185,7 @@ class ttMLA:
             output_tensor=gather_output,
             cluster_axis=self.tp_axis,
             num_links=self.ccl_num_links,
+            **self._tp_gather_semaphores,
         )
 
     def _q_a_norm(self, qr: ttnn.Tensor, norm_memory_config: ttnn.MemoryConfig) -> ttnn.Tensor:
@@ -1436,6 +1441,7 @@ class ttMLA:
                 output_tensor=self._kv_stem_gather_output,
                 cluster_axis=self.tp_axis,
                 num_links=self.ccl_num_links,
+                **self._tp_gather_semaphores,
             )
             # Reduce the TP partials directly into the two consumer tensors.
             tt_kv_nope, tt_kv_rope = ttnn.experimental.fast_reduce_nc_split(
@@ -1590,6 +1596,7 @@ class ttMLA:
                 output_tensor=self._output_gate_gather_output,
                 cluster_axis=self.tp_axis,
                 num_links=self.ccl_num_links,
+                **self._tp_gather_semaphores,
             )
         else:
             h = hidden_states
@@ -2014,10 +2021,13 @@ class ttMLA:
             loaded = True
             ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_OVERLAP_START`")
             ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_LOCAL_TOPK`")
+            # The KV gather's readers stream from DRAM on NoC0 concurrently; reading the logits on NoC1 keeps
+            # top-k off that traffic.
             local_indices = self._indexer.select_local(
                 selection_state,
                 subdevice_id=resources.topk_subdevice_id,
                 sub_core_grids=resources.topk_core_grid,
+                dram_read_noc=ttnn.NOC.NOC_1,
             )
             ttnn.tracy_message("`TT_SIGNPOST: SPARSE_MLA_KV_GATHER`")
             kvpe_dev = self._gather_kvpe_prefix(

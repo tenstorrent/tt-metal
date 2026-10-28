@@ -654,8 +654,9 @@ def test_layer_norm_sharded_uneven_multicore_logical_width_two_stage(device, w, 
 )
 @pytest.mark.parametrize("use_welford", [False, True], ids=["legacy", "welford"])
 @pytest.mark.parametrize("use_weight_bias", [False, True], ids=["no_weight_bias", "weight_bias"])
+@pytest.mark.parametrize("h", [32, 64])
 def test_layer_norm_sharded_width_non_rectangular_grid(
-    device, full_lines, cores_in_last_line, origin, line_length, orientation, use_welford, use_weight_bias
+    device, full_lines, cores_in_last_line, origin, line_length, orientation, use_welford, use_weight_bias, h
 ):
     """A shard grid with a partially-filled trailing line is not a rectangle, so the reduction multicasts
     over a bounding box larger than the active cores. The result must still match torch, including when the
@@ -663,7 +664,6 @@ def test_layer_norm_sharded_width_non_rectangular_grid(
     orientations (which select different mcast core-range topologies in the factory)."""
     torch.manual_seed(0)
 
-    h = 32
     shard_width = 32
     _, sharded_mem_config, w = non_rectangular_width_shard_config(
         device,

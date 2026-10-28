@@ -11,7 +11,6 @@
 #include "llk_sfpu/llk_math_eltwise_binary_sfpu_macros.h"
 #include "llk_sfpu/llk_math_eltwise_ternary_sfpu_macros.h"
 #include "llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h"
-#include "sfpu/ckernel_sfpu_topk.h"
 
 // To add a new metal SFPU operation:
 // 1. Include the metal header below: #include "llk_sfpu/<operation>.h"
@@ -36,11 +35,6 @@
 #include "llk_sfpu/ckernel_sfpu_clamp.h"
 #include "llk_sfpu/ckernel_sfpu_copy_dest_values.h"
 #include "llk_sfpu/ckernel_sfpu_quant.h"
-// Metal comparison-to-zero / unary-int-compare kernels (calculate_comp,
-// calculate_comp_int, calculate_comp_uint16, calculate_eqz_uint32,
-// calculate_nez_uint32, calculate_comp_unary_int + their *_init). Distinct from
-// the tt-llk sfpu/ckernel_sfpu_comp.h (_calculate_zero_comp_ etc.) included
-// below; the two share no symbol names so both can coexist.
 #include "llk_sfpu/ckernel_sfpu_binop_with_unary.h"
 #include "llk_sfpu/ckernel_sfpu_celu.h"
 #include "llk_sfpu/ckernel_sfpu_comp.h"
@@ -54,6 +48,8 @@
 #include "llk_sfpu/ckernel_sfpu_exp.h"
 #include "llk_sfpu/ckernel_sfpu_exp2.h"
 #include "llk_sfpu/ckernel_sfpu_expm1.h"
+#include "llk_sfpu/ckernel_sfpu_expm1_cw.h"
+#include "llk_sfpu/ckernel_sfpu_fill.h"
 #include "llk_sfpu/ckernel_sfpu_fmod.h"
 #include "llk_sfpu/ckernel_sfpu_gcd.h"
 #include "llk_sfpu/ckernel_sfpu_gelu.h"
@@ -82,6 +78,7 @@
 #include "llk_sfpu/ckernel_sfpu_prelu.h"
 #include "llk_sfpu/ckernel_sfpu_rdiv.h"
 #include "llk_sfpu/ckernel_sfpu_recip.h"
+#include "llk_sfpu/ckernel_sfpu_relu.h"
 #include "llk_sfpu/ckernel_sfpu_remainder.h"
 #include "llk_sfpu/ckernel_sfpu_rpow.h"
 #include "llk_sfpu/ckernel_sfpu_rsqrt.h"
@@ -103,6 +100,7 @@
 #include "llk_sfpu/ckernel_sfpu_tanh.h"
 #include "llk_sfpu/ckernel_sfpu_tanh_derivative.h"
 #include "llk_sfpu/ckernel_sfpu_tanhshrink.h"
+#include "llk_sfpu/ckernel_sfpu_topk.h"
 #include "llk_sfpu/ckernel_sfpu_trigonometry.h"
 #include "llk_sfpu/ckernel_sfpu_typecast.h"
 #include "llk_sfpu/ckernel_sfpu_unary_comp.h"
@@ -111,14 +109,9 @@
 #include "llk_sfpu/ckernel_sfpu_unary_shift.h"
 #include "llk_sfpu/ckernel_sfpu_xielu.h"
 #include "sfpu/ckernel_sfpu_add_int.h"
-#include "sfpu/ckernel_sfpu_comp.h"
-#include "sfpu/ckernel_sfpu_expm1_cw.h"
-#include "sfpu/ckernel_sfpu_fill.h"
 #include "sfpu/ckernel_sfpu_isinf_isnan.h"
-#include "sfpu/ckernel_sfpu_relu.h"
 #include "sfpu/ckernel_sfpu_rounding_ops.h"
 #include "sfpu/ckernel_sfpu_sub_int.h"
-#include "sfpu/ckernel_sfpu_tanh_derivative.h"
 #include "sfpu/ckernel_sfpu_threshold.h"
 
 // Test-only SFPU loop/adapter wrappers (calculate_sqrt_custom, calculate_expm1_cw,
@@ -629,7 +622,8 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
     else if constexpr (OPERATION == SfpuType::silu)
     {
         // silu_init routes to sigmoid_init<false>, seeding the reciprocal's
-        // vConstFloatPrgm0 that calculate_silu depends on.
+        // vConstFloatPrgm0 that calculate_silu depends on (and, on Blackhole,
+        // vConstFloatPrgm1 = 1/ln2 for its exp).
         llk_math_eltwise_unary_sfpu_init<OPERATION>(silu_init<APPROX_MODE>);
     }
     else if constexpr (OPERATION == SfpuType::log1p)
@@ -693,13 +687,11 @@ void call_unary_sfpu_operation_init(std::uint32_t math_format)
         // These ops need only the generic per-op init (SFPU config reg + ADDR_MOD_7 from
         // llk_math_sfpu_init_once() above, plus a dest RWC counter reset), so route them through
         // the bare `unused` init. The reason each op is safe to route this way varies:
-        //   - floor/ceil/trunc/frac/round/relu_max/relu_min/hardtanh/clamp: their production/metal
+        //   - floor/ceil/trunc/frac/round/relu_max/relu_min/lrelu/hardtanh/clamp: their production/metal
         //     <op>_init() genuinely reduces to math::reset_counters, so the bare init here
         //     matches production behavior.
         //   - add1/identity/cast_fp32_to_fp16a/sqrt_custom/expm1_cw: the
         //     OPERATION-keyed bare init has no delegate branch.
-        //   - lrelu: no linkable definition in this test build, since only the tt-llk common
-        //     (not the metal llk_api) header is included.
         llk_math_eltwise_unary_sfpu_init<SfpuType::unused, is_fp32_dest_acc_en>();
     }
     else if constexpr (
@@ -1413,7 +1405,7 @@ void call_unary_sfpu_operation(std::uint32_t dst_index, std::uint32_t math_forma
     }
     else if constexpr (OPERATION == SfpuType::tanh_derivative_lut)
     {
-        // Legacy tt-llk primitive: computes 1 - tanh(x)^2 with tanh from the LUT
+        // Legacy primitive: computes 1 - tanh(x)^2 with tanh from the LUT
         // (WITH_PRECOMPUTED_TANH = 0). Distinct from the accurate sech2 variant above.
         SFPU_UNARY_CALL(DST_SYNC_MODE, DST_ACCUM_MODE, _calculate_tanh_derivative_, (APPROX_MODE, 0, ITERATIONS), dst_index, vector_mode, ITERATIONS);
     }
@@ -1760,6 +1752,13 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
     {
         SFPU_BINARY_INIT_FN(add1, div_floor_init, (APPROXIMATION_MODE));
     }
+    else if constexpr (BINOP == BinaryOp::ISCLOSE || BINOP == BinaryOp::ISCLOSE_EQNAN)
+    {
+        // isclose_init programs vConstIntPrgm0 = 0x7FFFFFFF, the sign-clear mask the kernel reads
+        // for both the Inf/NaN classification and |b| in the tolerance. Mirrors
+        // isclose_binary_tile_init.
+        SFPU_BINARY_INIT_FN_NO_ARGS(isclose, isclose_init);
+    }
     else if constexpr (BINOP == BinaryOp::GCD)
     {
         // gcd_init records the per-iteration REPLAY buffer used by the binary-GCD loop.
@@ -1851,7 +1850,7 @@ void call_binary_sfpu_operation_init([[maybe_unused]] std::uint32_t zero_point =
     else
     {
         // BinaryOps without a dedicated SfpuType use the baseline binary addrmod setup.
-        // BITWISE_AND/OR/XOR, RSUB_INT32, MASK, ISCLOSE and LOGSIGMOID land here: those
+        // BITWISE_AND/OR/XOR, RSUB_INT32, MASK(_POSINF) and LOGSIGMOID land here: those
         // kernels need no per-op init beyond the standard binary addrmod configuration
         // (logsigmoid_init is a no-op).
         SFPU_BINARY_INIT(add1);
@@ -1886,6 +1885,11 @@ constexpr SfpuType get_binary_comp_sfpu_type()
         return SfpuType::ne;
     }
 }
+
+// torch.isclose defaults, as the fp32 bit patterns the ISCLOSE / ISCLOSE_EQNAN dispatch below
+// forwards as runtime args (the goldens use the same two values).
+constexpr std::uint32_t ISCLOSE_RTOL_BITS = 0x3727c5acu; // 1e-5f
+constexpr std::uint32_t ISCLOSE_ATOL_BITS = 0x322bcc77u; // 1e-8f
 
 /**
  * Calls only the calculate portion of a binary SFPU operation.
@@ -2227,16 +2231,18 @@ void call_binary_sfpu_operation(
             dst_index_out,
             vector_mode);
     }
-    else if constexpr (BINOP == BinaryOp::MASK)
+    else if constexpr (BINOP == BinaryOp::MASK || BINOP == BinaryOp::MASK_POSINF)
     {
-        // float mask: out = (mask != 0) ? data : 0, with data at in0 and mask at in1.
-        // Driven through the test-only adapter since calculate_mask uses fixed dst
-        // offsets rather than the forwarded indices.
+        // float mask: out = (mask != 0) ? data : fill, with data at in0 and mask at in1; the
+        // fill is 0 for MASK and +inf for MASK_POSINF. Driven through the test-only adapter
+        // since calculate_mask / calculate_mask_posinf use fixed dst offsets rather than the
+        // forwarded indices.
+        constexpr bool POSINF = (BINOP == BinaryOp::MASK_POSINF);
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_mask_binary,
-            (APPROXIMATION_MODE, PER_FACE_ITERATIONS),
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, POSINF),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,
@@ -2267,25 +2273,26 @@ void call_binary_sfpu_operation(
         SFPU_BINARY_CALL(
             DST_SYNC_MODE, DST_ACCUM_MODE, mul_int32, (APPROXIMATION_MODE, PER_FACE_ITERATIONS), dst_index_in0, dst_index_in1, dst_index_out, vector_mode);
     }
-    else if constexpr (BINOP == BinaryOp::ISCLOSE)
+    else if constexpr (BINOP == BinaryOp::ISCLOSE || BINOP == BinaryOp::ISCLOSE_EQNAN)
     {
         // isclose: out = (|a - b| <= atol + rtol * |b|) ? 1 : 0, with a=in0, b=in1.
         // rtol/atol are passed as fp32 bit patterns via the params wrapper's runtime-arg
-        // forwarding. Fixed to torch's defaults rtol=1e-5 (0x3727c5ac), atol=1e-8
-        // (0x322bcc77); EQUAL_NAN=false, so any NaN operand yields 0. The test uses
-        // large-margin stimuli so the exact tolerance (and fp32-vs-bf16 rounding of the
-        // tol term) never flips the pass/fail decision.
+        // forwarding, fixed to torch's defaults. EQUAL_NAN selects torch.isclose(...,
+        // equal_nan=True): a NaN in both operands yields 1; without it any NaN operand yields
+        // 0. The finite-ramp test uses large-margin stimuli so the exact tolerance (and
+        // fp32-vs-bf16 rounding of the tol term) never flips the pass/fail decision.
+        constexpr bool EQUAL_NAN = (BINOP == BinaryOp::ISCLOSE_EQNAN);
         SFPU_BINARY_CALL(
             DST_SYNC_MODE,
             DST_ACCUM_MODE,
             calculate_sfpu_isclose,
-            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, /*EQUAL_NAN=*/false),
+            (APPROXIMATION_MODE, PER_FACE_ITERATIONS, EQUAL_NAN),
             dst_index_in0,
             dst_index_in1,
             dst_index_out,
             vector_mode,
-            /*rtol_bits=*/0x3727c5acu,
-            /*atol_bits=*/0x322bcc77u);
+            ISCLOSE_RTOL_BITS,
+            ISCLOSE_ATOL_BITS);
     }
     else if constexpr (BINOP == BinaryOp::LOGSIGMOID)
     {
@@ -2473,7 +2480,8 @@ void call_ternary_sfpu_operation_init()
     }
     else if constexpr (OPERATION == SfpuType::snake_beta)
     {
-        // snake_beta uses sfpu_reciprocal_iter internally; snake_beta_init programs its Newton constant in every mode.
+        // snake_beta uses sfpu_reciprocal_iter internally; snake_beta_init programs its Newton constant in every mode
+        // (BH: Prgm0; WH: Prgm0..2) and, on Blackhole, also programs Prgm1/2 = 1/pi, pi for the range reduction.
         SFPU_TERNARY_INIT_FN(snake_beta, sfpu::snake_beta_init, (APPROX_MODE));
     }
     else

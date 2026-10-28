@@ -121,7 +121,9 @@ template <
     uint32_t out_cb_id,
     bool init_tilize = true,
     bool uninit_tilize = true,
-    compute_kernel_lib::tilize_config::RemapMode remap_mode = compute_kernel_lib::tilize_config::RemapMode::Configure>
+    compute_kernel_lib::tilize_config::RemapMode remap_mode = compute_kernel_lib::tilize_config::RemapMode::Configure,
+    typename InDFB,
+    typename OutDFB>
 __attribute__((noinline)) void tilize_in(
 #else
 template <
@@ -130,10 +132,12 @@ template <
     uint32_t out_cb_id,
     bool init_tilize = true,
     bool uninit_tilize = true,
-    compute_kernel_lib::tilize_config::RemapMode remap_mode = compute_kernel_lib::tilize_config::RemapMode::Configure>
+    compute_kernel_lib::tilize_config::RemapMode remap_mode = compute_kernel_lib::tilize_config::RemapMode::Configure,
+    typename InDFB,
+    typename OutDFB>
 void tilize_in(
 #endif
-    uint32_t in_num_subblocks) {
+    InDFB& in_cb, OutDFB& out_cb, uint32_t in_num_subblocks) {
     constexpr compute_kernel_lib::tilize_config::InitUninitMode init_uninit_mode =
         init_tilize ? (uninit_tilize ? compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit
                                      : compute_kernel_lib::tilize_config::InitUninitMode::InitOnly)
@@ -150,11 +154,12 @@ void tilize_in(
         compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
         reconfig_mode,
         compute_kernel_lib::tilize_config::Fp32Mode::Fast,
-        remap_mode>(in_num_subblocks);
+        remap_mode>(in_cb, out_cb, in_num_subblocks);
 }  // tilize_in()
 
 template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id, typename DFBIn>
 inline void tilize_single_block(DFBIn& in_cb) {
+    ASSERT(in_cb.get_id() == in_cb_id);
     in_cb.wait_front(in_block_w);
     fast_tilize_block(in_cb_id, in_block_w, out_cb_id);
     in_cb.pop_front(in_block_w);
@@ -176,6 +181,8 @@ template <
     typename DFBIn,
     typename DFBOut>
 inline void tilize_single_block_with_out_cb_update(DFBIn& in_cb, DFBOut& out_cb, uint32_t& out_cb_addr) {
+    ASSERT(in_cb.get_id() == in_cb_id);
+    ASSERT(out_cb.get_id() == out_cb_id);
 #ifndef ARCH_QUASAR  // activation_reuse/split_reader path is off for resnet; dead on Quasar (no cb_interface)
     PACK((out_cb.evil_set_write_ptr(out_cb_addr)));
 #endif
@@ -204,6 +211,9 @@ inline void tilize_in_reuse_split_reader(
     DFBOut& out_cb,
     uint32_t act_cb_start_address,
     uint32_t act_cb_second_reader_start_address) {
+    ASSERT(in1_cb.get_id() == in1_cb_id);
+    ASSERT(in2_cb.get_id() == in2_cb_id);
+    ASSERT(out_cb.get_id() == out_cb_id);
     out_cb.reserve_back(out_cb_tiles);
     fast_tilize_init_with_dt(in1_cb_id, in_block_w, out_cb_id);
 
@@ -379,16 +389,21 @@ void kernel_main() {
 #ifdef SPLIT_READER
     DataflowBuffer cb_in0_second_reader(in0_cb_second_reader_id);
 #endif
+#ifdef HAS_ACT_ROW_MAJOR
+    DataflowBuffer cb_in0_pretilize(in0_pretilize_cb_id);
+#else
+    auto& cb_in0_pretilize = cb_in0;
+#endif
     DataflowBuffer cb_tilized_in0(tilized_in0_cb_id);
-    DataflowBuffer cb_mm_in0(mm_in0_cb_id);
+    auto& cb_mm_in0 = height_sharded ? cb_tilized_in0 : cb_in0;
     DataflowBuffer cb_in1(in1_cb_id);
     DataflowBuffer cb_matmul_partials(matmul_partials_cb);
-    DataflowBuffer cb_mm_out(mm_out_cb_id);
     DataflowBuffer cb_out(out_cb_id);
 #ifdef FUSE_BIAS
     DataflowBuffer cb_bias(bias_cb_id);
 #endif
-    DataflowBuffer cb_untilize_mode_out(untilize_mode_out_cb_id);
+    auto& cb_untilize_mode_out = untilize_out ? cb_matmul_partials : cb_out;
+    auto& cb_mm_out = fuse_bias ? cb_matmul_partials : cb_untilize_mode_out;
 
     [[maybe_unused]] const uint32_t out_cb_tiles =
         activation_reuse ? in0_block_w * (in0_num_subblocks_read + in0_num_subblocks_read_last) : 0;
@@ -469,12 +484,13 @@ void kernel_main() {
                             tilized_in0_cb_id,
                             true,
                             !split_reader || split_reader_cb_shared,
-                            compute_kernel_lib::tilize_config::RemapMode::Configure>(in0_num_subblocks_read);
+                            compute_kernel_lib::tilize_config::RemapMode::Configure>(
+                            cb_in0_pretilize, cb_tilized_in0, in0_num_subblocks_read);
 
 #ifdef SPLIT_READER
                         if constexpr (split_reader && !split_reader_cb_shared) {
                             tilize_in<in0_block_w, in0_cb_second_reader_id, tilized_in0_cb_id, false, true>(
-                                in0_num_subblocks_read_last);
+                                cb_in0_second_reader, cb_tilized_in0, in0_num_subblocks_read_last);
                         }
 #endif
                         reconfig_data_format(in0_pretilize_cb_id, in1_cb_id, in0_pretilize_cb_id, in0_cb_id);
@@ -495,14 +511,14 @@ void kernel_main() {
 #endif
                     if constexpr (!activation_reuse) {
                         tilize_in<in0_block_w, in0_cb_id, tilized_in0_cb_id, true, !split_reader>(
-                            in0_num_subblocks_read);
+                            cb_in0, cb_tilized_in0, in0_num_subblocks_read);
                     }
 
 #ifdef SPLIT_READER
                     if constexpr (split_reader) {
                         if constexpr (!activation_reuse) {
                             tilize_in<in0_block_w, in0_cb_second_reader_id, tilized_in0_cb_id, false, true>(
-                                in0_num_subblocks_read_last);
+                                cb_in0_second_reader, cb_tilized_in0, in0_num_subblocks_read_last);
                         } else {
 #ifndef ARCH_QUASAR  // activation_reuse path is off for resnet; dead on Quasar (no evil_set_*)
                             PACK((cb_tilized_in0.evil_set_write_ptr(tilized_cb_start_address)));
@@ -802,7 +818,7 @@ void kernel_main() {
                         compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
                         compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
                         compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::NoReconfigure>(
-                        in0_num_subblocks * out_subblock_h);
+                        cb_matmul_partials, cb_out, in0_num_subblocks * out_subblock_h);
                 }
             }
             // out is the borrowed output shard and this kernel is its only producer and consumer (self-loop).

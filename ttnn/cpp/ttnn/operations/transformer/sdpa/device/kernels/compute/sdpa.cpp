@@ -47,6 +47,8 @@ void kernel_main() {
     constexpr bool use_zigzag_balancing = get_compile_time_arg_val(27) == 1;
     // The per Q chunk K range comes from the reader over a ctrl CB, for windowed mode and for a mask block map.
     constexpr bool use_windowed_narrowing = get_compile_time_arg_val(28) != 0;
+    // K/V retention: Q heads per retention key, to tell whether consecutive Q chunks of a core share K/V. 0 = off.
+    constexpr uint32_t kv_reuse_group = get_compile_time_arg_val(29);
 
     const uint32_t num_phases = get_arg_val<uint32_t>(0);
     const uint32_t use_chunk_start_idx_tensor = get_arg_val<uint32_t>(1);
@@ -66,7 +68,7 @@ void kernel_main() {
     constexpr uint32_t qk_chunk_tiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
 
-    constexpr uint32_t cb_arg_offset = 29;
+    constexpr uint32_t cb_arg_offset = 30;
     constexpr uint32_t cb_q_in = get_compile_time_arg_val(cb_arg_offset + 0);
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
@@ -190,7 +192,8 @@ void kernel_main() {
             chunked_q_chunk_offset_phase_1,
             lw_mask,
             q_num_chunks,
-            use_zigzag_balancing);
+            use_zigzag_balancing,
+            kv_reuse_group);
     } else {
         // Standard SDPA path (causal, masked, chunked, etc.)
         constexpr bool use_lightweight_causal_mask = is_causal && !use_provided_mask && (sliding_window_size == 0);

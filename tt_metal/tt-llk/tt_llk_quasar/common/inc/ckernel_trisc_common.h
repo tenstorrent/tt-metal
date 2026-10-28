@@ -45,6 +45,10 @@ constexpr static std::uint32_t NUM_FACES = 4;
 // Default number of tiles processed per one _llk_* execute call
 static constexpr std::uint32_t NUM_TILES = 1;
 
+// SET_SRC/DST_TILE_FACE_ROW_IDX carry an 18-bit value, but under FACE_SEL only 11 bits reach the counter: a larger face
+// index aliases back to an earlier tile.
+constexpr std::uint32_t FACE_SEL_IDX_LIMIT = 1u << 11;
+
 // Number of rows that can fit into Dest
 static constexpr std::uint32_t DEST_REGISTER_FULL_SIZE = 64 * FACE_R_DIM;
 static constexpr std::uint32_t DEST_REGISTER_HALF_SIZE = DEST_REGISTER_FULL_SIZE >> 1;
@@ -170,6 +174,8 @@ inline std::uint32_t get_dest_max_tiles()
 template <std::uint8_t TRISC_ID>
 inline void _set_dest_section_base_(const std::uint32_t base_addr)
 {
+    static_assert(TRISC_ID < 4, "_set_dest_section_base_ takes a per-Neo thread id in [0, 3]");
+
     if constexpr (TRISC_ID == 0)
     {
         cfg[DEST_TARGET_REG_CFG_MATH_SEC0_Offset_ADDR32] = base_addr;
@@ -182,7 +188,7 @@ inline void _set_dest_section_base_(const std::uint32_t base_addr)
     {
         cfg[DEST_TARGET_REG_CFG_MATH_SEC2_Offset_ADDR32] = base_addr;
     }
-    else
+    else if constexpr (TRISC_ID == 3)
     {
         cfg[DEST_TARGET_REG_CFG_MATH_SEC3_Offset_ADDR32] = base_addr;
     }

@@ -1,9 +1,13 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
+from dataclasses import dataclass
+
 import pytest
 import torch
 from helpers.chip_architecture import ChipArchitecture
+from helpers.constraints import skip_if_32bit_input_without_dest_acc
+from helpers.data_format_inference import dest_acc_for
 from helpers.format_config import DataFormat, InputOutputFormat
 from helpers.golden_generators import (
     ELEMENTS_PER_TILE,
@@ -53,6 +57,8 @@ INT32_PAD_MIN = INT32_MIN + 1  # -0x7FFFFFFF
 UINT16_MAX = torch.iinfo(torch.uint16).max  # 0xFFFF
 UINT32_MAX = torch.iinfo(torch.uint32).max  # 0xFFFFFFFF
 UINT32_BIT31 = 2**31  # 0x80000000
+
+MAX_MIN_POOLS = [ReducePool.Min, ReducePool.Max]
 
 dimension_combinations = [
     [m, n]
@@ -302,13 +308,7 @@ def test_sfpu_reduce(
     reduced_extent,
 ):
 
-    if reduce_pool in [ReducePool.Average, ReducePool.Min] and TestConfig.WITH_COVERAGE:
-        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
-
-    if formats.input_format.is_32_bit() and dest_acc == DestAccumulation.No:
-        pytest.skip(
-            reason="32-bit formats require DestAccumulation.Yes (HW cannot unpack into SrcA/SrcB)"
-        )
+    skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     if (
         mathop == MathOperation.ReduceRow
@@ -587,7 +587,7 @@ def _run_integer_reduce(
 @pytest.mark.parametrize(
     "mathop", [MathOperation.ReduceColumn, MathOperation.ReduceRow]
 )
-@pytest.mark.parametrize("reduce_pool", [ReducePool.Min, ReducePool.Max])
+@pytest.mark.parametrize("reduce_pool", MAX_MIN_POOLS)
 @pytest.mark.parametrize(
     "injected_value", [INT32_MIN, INT32_MAX], ids=["INT32_MIN", "INT32_MAX"]
 )
@@ -604,8 +604,6 @@ def test_int32_reduce_extreme(mathop, reduce_pool, injected_value, base_range):
     "negative zero", ranked as 0), so the earlier INT32_2S_COMP path dropped it. This injects the extreme
     values into an otherwise moderate Int32 tile and checks the device reduction against a torch golden.
     """
-    if reduce_pool == ReducePool.Min and TestConfig.WITH_COVERAGE:
-        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
 
     golden_slice, res_slice = _run_integer_reduce(
         mathop, reduce_pool, injected_value, base_range=base_range
@@ -639,70 +637,148 @@ def test_int32_reduce_extreme(mathop, reduce_pool, injected_value, base_range):
     )
 
 
-@pytest.mark.parametrize(
-    "mathop, dims",
-    [
-        (MathOperation.ReduceColumn, [TILE_DIM, TILE_DIM]),
-        (MathOperation.ReduceRow, [TILE_DIM, TILE_DIM]),
-        # Multi-tile rows: the bit-31 flip must cover every tile of the block.
-        (MathOperation.ReduceRow, [TILE_DIM, 2 * TILE_DIM]),
-        (MathOperation.ReduceRow, [2 * TILE_DIM, 2 * TILE_DIM]),
-    ],
-    ids=["col-1x1", "row-1x1", "row-1x2", "row-2x2"],
-)
-@pytest.mark.parametrize("reduce_pool", [ReducePool.Min, ReducePool.Max])
-def test_uint32_reduce_max_min_bit31(mathop, dims, reduce_pool):
-    """UInt32 MAX/MIN must order words with bit 31 set above the rest.
+@dataclass(frozen=True)
+class IntegerReduceBlock:
+    """Input block of the Int32 / UInt32 MAX/MIN tests, sized in tiles."""
 
-    SFPSWAP compares in sign-magnitude, which ranks a word with bit 31 set as negative. The tile mixes
-    values straddling 2^31 with small ones, and plants lanes where 0 against 0x80000000 decides the result;
-    every reduced lane is checked against an unsigned golden.
-    """
-    if reduce_pool == ReducePool.Min and TestConfig.WITH_COVERAGE:
-        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
+    mathop: MathOperation
+    tile_rows: int
+    tile_cols: int
 
+    @property
+    def shape(self) -> tuple[int, int]:
+        return (self.tile_rows * TILE_DIM, self.tile_cols * TILE_DIM)
+
+    @property
+    def reduced_dim(self) -> int:
+        return 0 if self.mathop == MathOperation.ReduceColumn else 1
+
+    def __str__(self) -> str:
+        direction = "col" if self.mathop == MathOperation.ReduceColumn else "row"
+        return f"{direction}-{self.tile_rows}x{self.tile_cols}"
+
+
+# The multi-tile row blocks also check that partial results are combined across tiles.
+INTEGER_MAX_MIN_BLOCKS = [
+    IntegerReduceBlock(MathOperation.ReduceColumn, tile_rows=1, tile_cols=1),
+    IntegerReduceBlock(MathOperation.ReduceRow, tile_rows=1, tile_cols=1),
+    IntegerReduceBlock(MathOperation.ReduceRow, tile_rows=1, tile_cols=2),
+    IntegerReduceBlock(MathOperation.ReduceRow, tile_rows=2, tile_cols=2),
+]
+
+
+def _check_max_min(
+    block: IntegerReduceBlock,
+    reduce_pool: ReducePool,
+    values: torch.Tensor,
+    input_format: DataFormat,
+):
+    """Reduce ``values`` on device and compare every result with torch's max / min."""
+
+    if reduce_pool == ReducePool.Max:
+        expected = values.amax(dim=block.reduced_dim)
+    else:
+        expected = values.amin(dim=block.reduced_dim)
+
+    _, result = _run_integer_reduce(
+        block.mathop, reduce_pool, input_format=input_format, tile=values
+    )
+    result = result.to(torch.int64)
+    if input_format == DataFormat.UInt32:
+        result &= UINT32_MAX
+
+    wrong = (result != expected).nonzero().flatten().tolist()
+    assert not wrong, (
+        f"{len(wrong)} wrong results, first at index {wrong[0]}: "
+        f"expected {int(expected[wrong[0]])}, got {int(result[wrong[0]])}"
+    )
+
+
+@dataclass(frozen=True)
+class SignBoundaryRow:
+    """A row filled with ``fill``, except for one copy of each of ``others``."""
+
+    fill: int
+    others: tuple[int, ...]
+
+
+# Rows whose MAX and MIN are decided by -1 vs 0, -2 vs -1 or INT32_MIN. Blackhole's row MAX/MIN
+# remaps negative Int32 values so that SFPSWAP orders them correctly (see int32_to_swap_order); that
+# turns -1 into -0, which only works if -0 is ranked just below 0. Random data almost never tests it.
+SIGN_BOUNDARY_ROWS = [
+    SignBoundaryRow(fill=-1, others=(0,)),  # max 0, min -1
+    SignBoundaryRow(fill=0, others=(-1,)),  # max 0, min -1
+    SignBoundaryRow(fill=-1, others=(0, 1)),  # max 1, min -1
+    SignBoundaryRow(fill=-2, others=(-1,)),  # max -1, min -2
+    SignBoundaryRow(fill=-1, others=(-2,)),  # max -1, min -2
+    SignBoundaryRow(fill=0, others=(-1, INT32_MIN)),  # max 0, min INT32_MIN
+]
+
+
+def _sign_boundary_block(block: IntegerReduceBlock) -> torch.Tensor:
+    # A column reduce gets the same lines running down its columns, so every column is decided the same way.
+    if block.mathop == MathOperation.ReduceColumn:
+        return _sign_boundary_block(
+            IntegerReduceBlock(
+                MathOperation.ReduceRow, block.tile_cols, block.tile_rows
+            )
+        ).T.contiguous()
+
+    rows, cols = block.shape
+    values = torch.empty(rows, cols, dtype=torch.int64)
+    for row in range(rows):
+        # The row reduce works on each 16-row half of a tile as four groups of 4 rows. Skipping one
+        # extra pattern every 4 rows gives the four groups different results, so a result written
+        # to another group's rows makes the test fail.
+        pattern = SIGN_BOUNDARY_ROWS[(row + row // 4) % len(SIGN_BOUNDARY_ROWS)]
+        values[row, :] = pattern.fill
+        for i, value in enumerate(pattern.others):
+            # Put the odd values in a different column on every row.
+            values[row, (7 * row + 3 + 11 * i) % cols] = value
+    return values
+
+
+@pytest.mark.parametrize("block", INTEGER_MAX_MIN_BLOCKS, ids=str)
+@pytest.mark.parametrize("reduce_pool", MAX_MIN_POOLS)
+def test_int32_reduce_max_min_sign_boundary(block, reduce_pool):
+    _check_max_min(block, reduce_pool, _sign_boundary_block(block), DataFormat.Int32)
+
+
+@pytest.mark.parametrize("block", INTEGER_MAX_MIN_BLOCKS, ids=str)
+@pytest.mark.parametrize("reduce_pool", MAX_MIN_POOLS)
+def test_uint32_reduce_max_min_bit31(block, reduce_pool):
+    """UInt32 MAX/MIN must rank values with bit 31 set above all others, although SFPSWAP
+    compares them as negative numbers."""
     torch.manual_seed(0)
+    rows, cols = block.shape
+    # Values just below and just above 2^31, with every third row small instead.
     values = torch.randint(
-        UINT32_BIT31 - 16, UINT32_BIT31 + 16, dims, dtype=torch.int64
+        UINT32_BIT31 - 16, UINT32_BIT31 + 16, (rows, cols), dtype=torch.int64
     )
     values[::3] = torch.randint(0, 1000, values[::3].shape, dtype=torch.int64)
-    for i, extreme in enumerate([3, INT32_MAX, UINT32_BIT31 + 5]):
-        values[(5 * i) % TILE_DIM, (7 * i + 1) % TILE_DIM] = extreme
-    # Lanes where 0 vs 0x80000000 decides the result (after the flip they are the +0 / -0 pair). Row and
-    # column MIN_LANE are 0x80000000 with a planted 0 (MIN must find a 0); row and column MAX_LANE are 0 with a
-    # planted 0x80000000 (MAX must find it). The lanes cross: row MIN_LANE also holds column MAX_LANE's 0 and
-    # row MAX_LANE holds column MIN_LANE's 0x80000000, which are further instances of the same pair.
-    MIN_LANE, MAX_LANE = 25, 26
-    values[MIN_LANE, :] = UINT32_BIT31
-    values[MIN_LANE, 10] = 0
-    values[MAX_LANE, :] = 0
-    values[MAX_LANE, 12] = UINT32_BIT31
-    values[:, MIN_LANE] = UINT32_BIT31
-    values[7, MIN_LANE] = 0
-    values[:, MAX_LANE] = 0
-    values[9, MAX_LANE] = UINT32_BIT31
+    values[0, 1] = 3
+    values[5, 8] = INT32_MAX
+    values[10, 15] = UINT32_BIT31 + 5
     values[3, 5] = UINT32_MAX
-    reduce_axis = 0 if mathop == MathOperation.ReduceColumn else 1
-    golden = (
-        values.max(dim=reduce_axis).values
-        if reduce_pool == ReducePool.Max
-        else values.min(dim=reduce_axis).values
-    )
 
-    _, res = _run_integer_reduce(
-        mathop,
-        reduce_pool,
-        injected_value=None,
-        input_format=DataFormat.UInt32,
-        tile=values,
-    )
-    res = res.to(torch.int64) & 0xFFFFFFFF
+    # Lines where only 0 vs 2^31 decides the result. Row and column 25 are all 2^31 except one 0,
+    # which MIN must find; row and column 26 are all 0 except one 2^31, which MAX must find.
+    values[25, :] = UINT32_BIT31
+    values[25, 10] = 0
+    values[26, :] = 0
+    values[26, 12] = UINT32_BIT31
+    values[:, 25] = UINT32_BIT31
+    values[7, 25] = 0
+    values[:, 26] = 0
+    values[9, 26] = UINT32_BIT31
 
-    mismatch = (golden != res).nonzero().flatten().tolist()
-    assert not mismatch, (
-        f"{len(mismatch)} mismatched UInt32 {reduce_pool} {mathop} lanes, first at {mismatch[0]}: "
-        f"golden {int(golden[mismatch[0]]):#010x}, device {int(res[mismatch[0]]):#010x}"
-    )
+    # Rows where 2^31 - 1 vs 2^31, the closest pair on either side of bit 31, decides the result.
+    values[27, :] = INT32_MAX
+    values[27, 14] = UINT32_BIT31
+    values[28, :] = UINT32_BIT31
+    values[28, 16] = INT32_MAX
+
+    _check_max_min(block, reduce_pool, values, DataFormat.UInt32)
 
 
 # =============================================================================
@@ -916,14 +992,8 @@ def test_float_reduce_specials(mathop, reduce_pool, edge_class, formats):
     and NaN on the way in, so the probe would never arrive. That leaves exactly one dest_acc per
     format, and both are cells the measured matrix accepts.
     """
-    if reduce_pool in (ReducePool.Average, ReducePool.Min) and TestConfig.WITH_COVERAGE:
-        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
 
-    dest_acc = (
-        DestAccumulation.Yes
-        if formats.input_format.is_32_bit()
-        else DestAccumulation.No
-    )
+    dest_acc = dest_acc_for(formats.input_format)
 
     # The pipeline gate, same as every other cat-B consumer in this repo. Asserted rather than
     # assumed: if the measured matrix ever stops accepting one of these two cells, this test must
@@ -1126,8 +1196,6 @@ def test_uint32_reduce_column_average_bit31(band):
     See the block comment above for the mechanism. Compared exactly: every lane's expected
     average is an integer the shift produces without rounding.
     """
-    if TestConfig.WITH_COVERAGE:
-        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
 
     column_sums, golden, res = _run_uint32_column_average(_UINT32_AVERAGE_BANDS[band])
 
@@ -1186,8 +1254,6 @@ _INT32_COLUMN_SUM_BANDS = {
 )
 def test_int32_reduce_column_average_exact(band):
     """Int32 column AVG must equal the column sum divided by 32, rounded toward zero, on every lane."""
-    if TestConfig.WITH_COVERAGE:
-        pytest.skip(reason="https://github.com/tenstorrent/tt-llk/issues/1040")
 
     column_sums = torch.tensor(_INT32_COLUMN_SUM_BANDS[band], dtype=torch.int64)
     # Every row holds floor(sum / 32) and row 0 also carries the remainder in [0, 31], so the column

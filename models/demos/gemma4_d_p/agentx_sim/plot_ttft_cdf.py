@@ -23,7 +23,7 @@ import textwrap
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from agentx_sim import BUCKETS  # noqa: E402
 
-KNOBS = ("config", "concurrency", "cache", "align", "max_think_s", "decode_tps")
+KNOBS = ("config", "concurrency", "cache", "align", "mid_cost", "max_think_s", "decode_tps")
 # Categorical palette in a fixed order, so a run keeps its color across plots of the same sweep.
 COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#8f5bd6", "#d6457a", "#4c9f9f", "#7a7a72"]
 
@@ -43,6 +43,7 @@ def load_runs(paths, where):
         with open(path) as f:
             for line in f:
                 r = json.loads(line)
+                r.setdefault("mid_cost", 0.0)  # exports from before --mid-cost
                 if all(matches(r.get(k), v) for k, v in where):
                     runs.append(r)
     return runs
@@ -66,7 +67,9 @@ def knob(k, v):
     if k == "concurrency":
         return f"{v} sessions"
     if k == "align":
-        return f"{v}-aligned resume"
+        return {"resume": "resume at the model's granularity"}.get(v, f"{v}-aligned resume")
+    if k == "mid_cost":
+        return f"mid-chunk cost +{100 * float(v):g}%"
     if k == "max_think_s":
         return f"think cap {float(v):g} s"
     return f"decode {float(v):g} tok/s"

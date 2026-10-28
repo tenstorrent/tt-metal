@@ -30,8 +30,9 @@ bool param_is_sharded(const autograd::Tensor& tensor) {
 
 }  // namespace
 
-MuonComposite::MuonComposite(ttml::serialization::NamedParameters parameters, const MuonConfig& config) :
-    OptimizerBase(std::move(parameters)), m_config(config) {
+MuonComposite::MuonComposite(
+    ttml::serialization::NamedParameters parameters, const MuonConfig& config, std::vector<ParamGroup> param_groups) :
+    OptimizerBase(std::move(parameters)), m_ns_steps(config.ns_steps) {
     require_bf16_parameters(m_parameters, "MuonComposite");
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
@@ -52,6 +53,7 @@ MuonComposite::MuonComposite(ttml::serialization::NamedParameters parameters, co
                     /* requires_grad */ false));
         }
     }
+    init_param_groups(param_group_defaults(config), std::move(param_groups));
 }
 
 void MuonComposite::zero_grad() {
@@ -67,59 +69,66 @@ void MuonComposite::step() {
         print_stats();
     }
 
-    for (auto& [name, buffer_ptr] : m_momentum_buffer) {
-        auto buffer = buffer_ptr->get_value(autograd::PreferredPrecision::HALF);
-        const auto& tensor_ptr = m_parameters.at(name);
-        if (!tensor_ptr->is_grad_initialized()) {
-            continue;
+    for (const auto& group : m_param_groups) {
+        const float lr = group.options.at("lr");
+        const float momentum = group.options.at("momentum");
+
+        for (const auto& name : group.params) {
+            const auto buffer_it = m_momentum_buffer.find(name);
+            if (buffer_it == m_momentum_buffer.end()) {
+                continue;
+            }
+            auto& buffer_ptr = buffer_it->second;
+            auto buffer = buffer_ptr->get_value(autograd::PreferredPrecision::HALF);
+            const auto& tensor_ptr = m_parameters.at(name);
+            if (!tensor_ptr->is_grad_initialized()) {
+                continue;
+            }
+
+            const auto gradients = tensor_ptr->get_grad();
+
+            // By value: the ops below relabel their outputs (see optimizers::restore_topology).
+            const auto topology = tensor_ptr->get_value(autograd::PreferredPrecision::HALF).tensor_topology();
+
+            if (m_steps > 0 && momentum != 0.0F) {
+                buffer = ttnn::multiply(buffer, momentum);
+                buffer = ttnn::add(buffer, gradients);
+            } else {
+                // A copy rather than the gradient itself: Tensor copies share their attributes, so restoring the
+                // buffer's label below would otherwise relabel the caller's gradient as well.
+                buffer = ttnn::clone(
+                    gradients,
+                    /* dtype */ std::nullopt,
+                    /* memory_config */ std::nullopt,
+                    /* compute_kernel_config */ std::nullopt);
+            }
+
+            buffer_ptr->set_value(buffer);
+
+            const auto update_direction = ops::newtonschulz5(buffer, m_ns_steps, 1e-7f);
+
+            tensor_ptr->set_value(ttnn::subtract(
+                tensor_ptr->get_value(autograd::PreferredPrecision::HALF), ttnn::multiply(update_direction, lr)));
+            restore_topology({tensor_ptr, buffer_ptr}, topology);
         }
-
-        const auto gradients = tensor_ptr->get_grad();
-
-        // By value: the ops below relabel their outputs (see optimizers::restore_topology).
-        const auto topology = tensor_ptr->get_value(autograd::PreferredPrecision::HALF).tensor_topology();
-
-        if (m_steps > 0 && m_config.momentum != 0.0F) {
-            buffer = ttnn::multiply(buffer, m_config.momentum);
-            buffer = ttnn::add(buffer, gradients);
-        } else {
-            // A copy rather than the gradient itself: Tensor copies share their attributes, so restoring the
-            // buffer's label below would otherwise relabel the caller's gradient as well.
-            buffer = ttnn::clone(
-                gradients,
-                /* dtype */ std::nullopt,
-                /* memory_config */ std::nullopt,
-                /* compute_kernel_config */ std::nullopt);
-        }
-
-        buffer_ptr->set_value(buffer);
-
-        const auto update_direction = ops::newtonschulz5(buffer, m_config.ns_steps, 1e-7f);
-
-        tensor_ptr->set_value(ttnn::subtract(
-            tensor_ptr->get_value(autograd::PreferredPrecision::HALF), ttnn::multiply(update_direction, m_config.lr)));
-        restore_topology({tensor_ptr, buffer_ptr}, topology);
     }
+
     m_steps++;
 }
 
 serialization::StateDict MuonComposite::get_state_dict() const {
     serialization::StateDict dict;
     dict["steps"] = m_steps;
-    dict["lr"] = m_config.lr;
-    dict["momentum"] = m_config.momentum;
-    dict["ns_steps"] = m_config.ns_steps;
+    dict["ns_steps"] = m_ns_steps;
     dict["momentum_buffer"] = m_momentum_buffer;
-    save_initial_lr(dict);
+    save_param_groups(dict);
     return dict;
 }
 
 void MuonComposite::set_state_dict(const serialization::StateDict& dict) {
+    restore_param_groups(dict);
     m_steps = serialization::get_value_type<size_t>(dict, "steps");
-    set_lr(serialization::get_value_type<float>(dict, "lr"));
-    restore_initial_lr(dict);
-    m_config.momentum = serialization::get_value_type<float>(dict, "momentum");
-    m_config.ns_steps = serialization::get_value_type<int>(dict, "ns_steps");
+    m_ns_steps = serialization::get_value_type<int>(dict, "ns_steps");
     m_momentum_buffer = std::get<serialization::NamedParameters>(dict.at("momentum_buffer"));
 }
 

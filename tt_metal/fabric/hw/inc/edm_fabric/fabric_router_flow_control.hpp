@@ -5,9 +5,9 @@
 #pragma once
 
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_erisc_router_ct_args.hpp"
+#include "tt_metal/fabric/hw/inc/edm_fabric/fabric_router_link_transport.hpp"
 
 #include "internal/ethernet/tt_eth_api.h"
-#include "internal/ethernet/tunneling.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/router_data_cache.hpp"
 
 #include <tuple>
@@ -34,7 +34,7 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
         update_sender_side_credits();
     }
 
-    // Assumes !eth_txq_is_busy() -- PLEASE CHECK BEFORE CALLING
+    // Assumes !ReceiverLinkTransport::is_busy() -- PLEASE CHECK BEFORE CALLING
     FORCE_INLINE void send_ack_credit(uint8_t src_id) {
         ack_counters[src_id]++;
         ack_counters_base_ptr[src_id] = ack_counters[src_id];
@@ -49,8 +49,7 @@ struct ReceiverChannelCounterBasedResponseCreditSender {
 
 private:
     FORCE_INLINE void update_sender_side_credits() const {
-        internal_::eth_send_packet_bytes_unsafe(
-            receiver_txq_id,
+        ReceiverLinkTransport::send_packet(
             local_receiver_credits_base_address,
             to_senders_credits_base_address,
             total_number_of_receiver_to_sender_credit_num_bytes);
@@ -66,12 +65,13 @@ struct ReceiverChannelStreamRegisterFreeSlotsBasedCreditSender {
     }
 
     FORCE_INLINE void send_completion_credit(uint8_t src_id, uint32_t num_completions) {
-        remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_completed_stream_ids[src_id], num_completions);
+        ReceiverLinkTransport::remote_update_ptr_val(
+            sender_channel_packets_completed_stream_ids[src_id], num_completions);
     }
 
-    // Assumes !eth_txq_is_busy() -- PLEASE CHECK BEFORE CALLING
+    // Assumes !ReceiverLinkTransport::is_busy() -- PLEASE CHECK BEFORE CALLING
     FORCE_INLINE void send_ack_credit(uint8_t src_id) {
-        remote_update_ptr_val<receiver_txq_id>(sender_channel_packets_ack_stream_ids[src_id], 1);
+        ReceiverLinkTransport::remote_update_ptr_val(sender_channel_packets_ack_stream_ids[src_id], 1);
     }
 
     std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> sender_channel_packets_completed_stream_ids;
@@ -223,7 +223,7 @@ constexpr FORCE_INLINE auto init_sender_channel_from_receiver_credits_flow_contr
     return SenderChannelFromReceiverCredits<NUM_SENDER_CHANNELS>{};
 }
 
-// MUST CHECK !is_eth_txq_busy() before calling
+// MUST CHECK !ReceiverLinkTransport::is_busy() before calling (or pass CHECK_BUSY)
 // The sender type is a parameter because each receiver channel picks its own credit transport
 // (ReceiverChannelResponseCreditSenderFor), so callers hand in whichever one their channel holds.
 template <bool CHECK_BUSY, typename ReceiverChannelResponseCreditSenderT>
@@ -232,7 +232,7 @@ FORCE_INLINE void receiver_send_completion_ack(
     uint8_t src_id,
     uint32_t num_completions = 1) {
     if constexpr (CHECK_BUSY) {
-        while (internal_::eth_txq_is_busy(receiver_txq_id)) {
+        while (ReceiverLinkTransport::is_busy()) {
         };
     }
     receiver_channel_response_credit_sender.send_completion_credit(src_id, num_completions);
@@ -242,7 +242,7 @@ template <bool CHECK_BUSY, typename ReceiverChannelResponseCreditSenderT>
 FORCE_INLINE void receiver_send_received_ack(
     ReceiverChannelResponseCreditSenderT& receiver_channel_response_credit_sender, uint8_t src_id) {
     if constexpr (CHECK_BUSY) {
-        while (internal_::eth_txq_is_busy(receiver_txq_id)) {
+        while (ReceiverLinkTransport::is_busy()) {
         };
     }
     receiver_channel_response_credit_sender.send_ack_credit(src_id);

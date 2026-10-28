@@ -36,7 +36,15 @@ inline ttnn::Tensor make_zero_host_tensor(const tt::tt_metal::TensorSpec& spec) 
             return ttnn::Tensor::from_vector<uint16_t>(std::vector<uint16_t>(bytes / sizeof(uint16_t)), spec);
         case DataType::BFLOAT4_B:
         case DataType::BFLOAT8_B:
-            // Block-float formats pack a shared exponent per group of datums, so the
+        case DataType::MXFP8_E4M3:
+        case DataType::MXFP8_E5M2:
+        case DataType::MXFP6_E2M3:
+        case DataType::MXFP6_E3M2:
+        case DataType::MXFP4:
+        case DataType::MXINT8:
+        case DataType::MXINT4:
+        case DataType::MXINT2:
+            // Block-float and MX formats pack a shared exponent per group of datums, so the
             // packed byte count is NOT element_count * sizeof. from_vector requires a
             // buffer of exactly logical-volume elements and (per its contract) `float`
             // for block formats; it tilizes + quantizes internally.
