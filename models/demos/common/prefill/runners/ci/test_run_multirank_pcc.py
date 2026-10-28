@@ -86,7 +86,9 @@ elif args[:1] == ["-m"] and args[1].endswith("prefill_producer"):
     for rank in range(4):
         if rank == 3 and mode == "missing":
             continue
-        verdict = {"rank": rank, "ok": True, "min_pcc": 0.99, "threshold": 0.85,
+        # The real producer echoes the threshold it was given; the gate checks it is the model's.
+        threshold = float(os.environ["PREFILL_STANDALONE_CHUNKED_PCC"])
+        verdict = {"rank": rank, "ok": True, "min_pcc": 0.99, "threshold": threshold,
                    "slots_checked": 1, "per_cache": {"kvpe": 0.99}}
         if rank == 3:
             if mode == "false":
@@ -138,9 +140,8 @@ class MultirankPccHarnessTests(unittest.TestCase):
         metal.mkdir()
         mgd_dir = metal / "models/demos/common/prefill/runners/topology_configuration/ci"
         mgd_dir.mkdir(parents=True)
-        for model_key in ("kimi27", "glm52"):
-            for system in ("sc1", "sc4"):
-                (mgd_dir / f"{model_key}_{system}_mgd.textproto").touch()
+        for system in ("sc1", "sc4"):
+            (mgd_dir / f"{system}_mgd.textproto").touch()
         # manifest_env() reads PREFILL_MAX_SEQ_LEN / PREFILL_NUM_USERS straight off these, so the
         # fake tree needs them or the harness dies before it launches anything. Values mirror the
         # real manifests; only their presence and the sc1 override path are under test here.
@@ -148,7 +149,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
         manifest_dir.mkdir(parents=True)
         for model_key, max_seq_len, num_users in (
             ("kimi27", 256000, 86),
-            ("glm52", 1049600, 28),
+            ("glm53", 1064960, 54),
             ("mistral4", 61440, 1),
         ):
             (manifest_dir / f"{model_key}.json").write_text(
@@ -219,7 +220,6 @@ class MultirankPccHarnessTests(unittest.TestCase):
         for key, value in {
             "PREFILL_SP": "8",
             "PREFILL_TP": "1",
-            "PREFILL_PCC_GOLDEN_LEN": "56320",
             "PREFILL_MAX_SEQ_LEN": "61440",
             "PREFILL_PRODUCER_CHUNKS": "11",
             "PREFILL_PRODUCER_CHECK_PCC": "1",
@@ -232,15 +232,13 @@ class MultirankPccHarnessTests(unittest.TestCase):
         self.assertEqual(len(producer_mpi), 1)
         mpi_args = producer_mpi[0]["args"]
         self.assertEqual(mpi_args[mpi_args.index("-np") + 1], "4")
-        self.assertTrue(producer["PREFILL_MIGRATION_DEVICE_MAP_PATH"].endswith("device_map_r0.json"))
-        self.assertEqual(
-            runner["PREFILL_MIGRATION_DEVICE_MAP_PATH"].replace(".json", "_r0.json"),
-            producer["PREFILL_MIGRATION_DEVICE_MAP_PATH"],
-        )
+        # Both get the base path; each process scopes it to its rank (rank_scoped_device_map_path).
+        self.assertTrue(producer["PREFILL_MIGRATION_DEVICE_MAP_PATH"].endswith("device_map.json"))
+        self.assertEqual(runner["PREFILL_MIGRATION_DEVICE_MAP_PATH"], producer["PREFILL_MIGRATION_DEVICE_MAP_PATH"])
         self.assertIn("PCC GATE PASS", result.stdout)
 
     def test_existing_models_use_discovery_and_four_hosts(self):
-        for model in ("kimi27", "glm52"):
+        for model, max_seq_len, request_len in (("kimi27", 256000, 256000), ("glm53", 1064960, 1044480)):
             with self.subTest(model=model):
                 result, records = self.run_harness(model)
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -251,12 +249,11 @@ class MultirankPccHarnessTests(unittest.TestCase):
                 self.assertFalse([record for record in records if record["kind"] == "probe"])
                 producer = self.one_record(records, "producer")["env"]
                 self.assertEqual(producer["TEST_MPI_HOST"], "worker0:1,worker1:1,worker2:1,worker3:1")
-                expected_length = 256000 if model == "kimi27" else 1049600
-                self.assertEqual(producer["PREFILL_MAX_SEQ_LEN"], str(expected_length))
-                self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(expected_length // 5120))
+                self.assertEqual(producer["PREFILL_MAX_SEQ_LEN"], str(max_seq_len))
+                self.assertEqual(producer["PREFILL_PRODUCER_CHUNKS"], str(request_len // 5120))
 
     def test_sc1_windows_preserve_model_defaults(self):
-        for model, expected_length in (("mistral4", 61440), ("kimi27", 256000), ("glm52", 256000)):
+        for model, expected_length in (("mistral4", 61440), ("kimi27", 256000), ("glm53", 1064960)):
             with self.subTest(model=model):
                 result, records = self.run_harness(model, config="sc1")
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
@@ -331,7 +328,7 @@ class MultirankPccHarnessTests(unittest.TestCase):
             "missing": "expected exactly ranks 0..3",
             "false": "ok is not literally true",
             "truthy": "ok is not literally true",
-            "empty": "slots_checked is 0",
+            "empty": "slots_checked is not the 1 slots fed",
             "nan": "non-finite",
             "wrong_rank": "expected exactly ranks 0..3",
         }
