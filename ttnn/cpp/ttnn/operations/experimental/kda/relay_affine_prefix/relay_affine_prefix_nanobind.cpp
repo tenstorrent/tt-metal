@@ -16,7 +16,7 @@ void bind_relay_affine_prefix(nb::module_& mod) {
     ttnn::bind_function<"relay_affine_prefix", "ttnn.experimental.kda.">(
         mod,
         R"doc(
-        The sequence-parallel prefix as a relay around the SP ring: rank ``p`` (chronological position, from
+        The sequence-parallel prefix as a relay along the SP axis: rank ``p`` (chronological position, from
         ``actual_start``) takes its entry state ``E_p`` from its predecessor, computes
         ``E_{p+1} = A_p E_p + B_p`` from its packed ``[A | B]`` summary and forwards it, one head per core and
         one tile column at a time; the last rank sends the final state on to the first. ``cores`` lists a core
@@ -50,8 +50,9 @@ void bind_relay_affine_prefix(nb::module_& mod) {
             local_rows (int): Positive, 32-aligned token rows per SP device.
             num_links (int): Fabric links to the successor, one sender core each.
             cores (list[ttnn.CoreCoord]): One core per head, then one sender per link, all distinct.
-            sequence_parallel_axis (int, optional): Mesh axis partitioning the sequence; the fabric must wrap
-                it into a ring of more than two ranks.
+            sequence_parallel_axis (int, optional): Mesh axis partitioning the sequence, of at least two ranks,
+                on a 2D fabric (FABRIC_2D or a torus; the last rank's hand-off to the first crosses the axis on
+                a mesh).
             entry_memory_config (ttnn.MemoryConfig, optional): Interleaved memory of the entry states.
                 Defaults to DRAM.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): The hop's matmul fidelity;
