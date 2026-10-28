@@ -247,6 +247,10 @@ void kernel_main() {
     constexpr bool sol_resident = get_named_compile_time_arg_val("sol_resident") == 1;
     constexpr uint32_t sol_resident_slots = get_named_compile_time_arg_val("sol_resident_slots");
     constexpr uint32_t sol_res_block_words = get_named_compile_time_arg_val("sol_res_block_words");
+    // Resident iteration boundary (U3): one plan page per ring iteration (record base word, 0 = a page per chunk),
+    // no phase-alignment dummies. The reader takes the same two args.
+    constexpr uint32_t sol_res_plan_rec_base = get_named_compile_time_arg_val("sol_res_plan_rec_base");
+    constexpr bool sol_res_no_dummies = get_named_compile_time_arg_val("sol_res_no_dummies") == 1;
     static_assert(!sol_resident || (sol_chunk_mode && !sol_compact && !sol_pack), "resident mode is a chunk mode");
     static_assert(
         !sol_resident || (use_streaming_compute && !v_shares_k_buffer && !kt_inplace_v && !has_joint_k &&
@@ -646,6 +650,8 @@ void kernel_main() {
                 sol_resident_slots,
                 sol_res_block_words,
                 kv_cb_pages,
+                sol_res_plan_rec_base,
+                sol_res_no_dummies,
                 RingStreamingMaskCtx<
                     neginf_tile_idx,
                     causal_diag_tile_idx,

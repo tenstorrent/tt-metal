@@ -2250,6 +2250,25 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t cb_sol_plan =
         sol_enabled ? allocate_cb((sol_compact ? 128 : 64) + sol_mask_row_bytes, 1, tt::DataFormat::UInt32)
                     : inactive_cb;
+    // U3: resident mode puts every chunk's plan record in one page per ring iteration, after the header (16 words)
+    // and the shard slice the reader scans (sol_nb_pad words), so the reader no longer waits for compute to pop a
+    // page per chunk at each iteration boundary. TT_SOL_RES_PLAN1=0 restores a page per chunk. The records fit in
+    // the scratch the whole-row reads already need. And no phase-alignment dummies (TT_SOL_RES_DUMMIES=1 keeps them):
+    // every chain / group member pushes the same sequence, so the pointers stay in step without them.
+    const auto env_is = [](const char* name, const char* value) {
+        const char* v = std::getenv(name);
+        return v && std::string(v) == value;
+    };
+    const uint32_t sol_res_rec_words = sol_resident ? tt::div_up(sol_nb, 32u) + 3 : 0;
+    const uint32_t sol_res_plan_rec_base = (sol_resident && !env_is("TT_SOL_RES_PLAN1", "0")) ? 16 + sol_nb_pad : 0;
+    TT_FATAL(
+        sol_res_plan_rec_base == 0 ||
+            (sol_res_plan_rec_base + max_q_per_core * sol_res_rec_words) * sizeof(uint32_t) <= 64 + sol_mask_row_bytes,
+        "sol resident: {} plan records of {} words do not fit the plan page ({} B)",
+        max_q_per_core,
+        sol_res_rec_words,
+        64 + sol_mask_row_bytes);
+    const bool sol_res_no_dummies = sol_resident && !env_is("TT_SOL_RES_DUMMIES", "1");
     // One pooled chunk of bias tiles in flight (bias is read once per pooled chunk, 4 pooled chunks per Q chunk per
     // layer); 2*Sk_chunk_t pushed the static CB region past the L1 buffers at the 10 s / 15 s shapes.
     const uint32_t cb_sol_bias = sol_enabled ? allocate_tile_cb(Sk_chunk_t, mask_tile_size, mask_df) : inactive_cb;
@@ -3394,6 +3413,10 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
           !(std::getenv("TT_SOL_MEMBER_UNION") && std::string(std::getenv("TT_SOL_MEMBER_UNION")) == "1"))
              ? 1u
              : 0u},
+        // U3 resident iteration boundary (see sol_res_plan_rec_base above): the one-page plan's record base word
+        // (0 = a page per chunk) and no phase-alignment dummies.
+        {"sol_res_plan_rec_base", sol_res_plan_rec_base},
+        {"sol_res_no_dummies", sol_res_no_dummies ? 1u : 0u},
         // M4 static row max (see sol_static_max above): 1 iff sol_row_max is present (resident only). The reader
         // then has a sol_row_max accessor right after sol_pv's and its address at rotated_args_base + 3, with the
         // bias / n_members / my_start / table / member words shifted up by one (no slot otherwise, so every other

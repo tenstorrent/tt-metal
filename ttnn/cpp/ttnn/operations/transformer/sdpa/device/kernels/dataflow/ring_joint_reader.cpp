@@ -627,6 +627,14 @@ void kernel_main() {
     // a barrier and a bit scan per chunk, ~200 us per iteration in the M9 profile, while compute idled); at the
     // densities this path runs, the union is nearly every piece anyway. Compute skips a piece it keeps no block of.
     constexpr bool sol_res_full_union = get_named_compile_time_arg_val("sol_res_full_union") == 1;
+    // Resident iteration boundary (U3). rec_base != 0: one plan page per ring iteration holding every chunk's record
+    // from that word on (0 = one page per chunk). no_dummies: no phase-alignment pushes at the end of an iteration;
+    // every member of a chain or group pushes the same sequence, so their CB pointers stay in step without them, and
+    // the dummies' reserves held the reader back until compute had nearly drained the iteration.
+    constexpr uint32_t sol_res_plan_rec_base = get_named_compile_time_arg_val("sol_res_plan_rec_base");
+    constexpr bool sol_res_no_dummies = get_named_compile_time_arg_val("sol_res_no_dummies") == 1;
+    static_assert(sol_res_plan_rec_base == 0 || sol_resident, "the one-page plan is the resident plan");
+    static_assert(!sol_res_no_dummies || sol_resident, "dummies are dropped in resident mode only");
     constexpr uint32_t cb_k_stage = get_named_compile_time_arg_val("cb_k_stage");
     constexpr uint32_t cb_v_stage = get_named_compile_time_arg_val("cb_v_stage");
     constexpr uint32_t sol_blocks_per_page = get_named_compile_time_arg_val("sol_blocks_per_page");
@@ -1528,11 +1536,31 @@ void kernel_main() {
             uint32_t res_hi[kResMax];
             uint32_t seg_ulo[kResMax];
             uint32_t seg_uhi[kResMax];
+            // One-page plan (sol_res_plan_rec_base != 0): every chunk's record [kept-block words][union lo, hi]
+            // [do_pooled] in the one plan page, from word rec_base (past the shard slice the scratch reads), pushed
+            // once per iteration. The per-chunk pages made the reader wait for compute to pop each one, so the next
+            // iteration's plan could not go out before compute had finished this iteration's pieces.
+            constexpr uint32_t kPlanRec = kBlockWords + 3;
+            [[maybe_unused]] const auto plan_rec = [&](uint32_t i) {
+                return CoreLocalMem<volatile uint32_t>(
+                    cb_plan.get_write_ptr() + (sol_res_plan_rec_base + i * kPlanRec) * sizeof(uint32_t));
+            };
             {
                 SOL_ZONE("RD_RES_BITS");  // mask rows of this core's chunks and of every chain member's
                 for (uint32_t i = 0; i < n_res; ++i) {
                     read_shard_slice(res_nq[i], res_qc[i]);
-                    row_kept_bits(res_lo[i], res_hi[i]);
+                    if constexpr (sol_res_plan_rec_base != 0) {
+                        // One read per chunk: the block words go straight into the chunk's record.
+                        uint32_t words[kBlockWords];
+                        row_block_bits(words);
+                        auto rec = plan_rec(i);
+                        for (uint32_t w = 0; w < kBlockWords; ++w) {
+                            rec[w] = words[w];
+                        }
+                        piece_bits(words, res_lo[i], res_hi[i]);
+                    } else {
+                        row_kept_bits(res_lo[i], res_hi[i]);
+                    }
                 }
             }
             // Head segments and their chain-wide unions. The chain members cover the head this core participates
@@ -1583,7 +1611,16 @@ void kernel_main() {
                 }
                 i0 = i1;
             }
-            {
+            if constexpr (sol_res_plan_rec_base != 0) {
+                SOL_ZONE("RD_RES_PLAN");
+                for (uint32_t i = 0; i < n_res; ++i) {
+                    auto rec = plan_rec(i);
+                    rec[kBlockWords] = seg_ulo[i];
+                    rec[kBlockWords + 1] = seg_uhi[i];
+                    rec[kBlockWords + 2] = do_pooled;
+                }
+                cb_plan.push_back(1);
+            } else {
                 SOL_ZONE("RD_RES_PLAN");  // long when compute is behind: the reserve waits for the previous plan pop
                 for (uint32_t i = 0; i < n_res; ++i) {
                     if (i > 0) {
@@ -2043,6 +2080,13 @@ void kernel_main() {
             if constexpr (sol_gen_bias) {
                 if (do_pooled) {
                     SOL_ZONE("RD_RES_POOLED");
+                    if constexpr (sol_res_plan_rec_base != 0) {
+                        // The row reads below fill the whole scratch, records included: take the page back first,
+                        // which waits until compute has popped (read) this iteration's plan. Short iterations
+                        // can push every piece before compute starts. The next iteration's reserve returns it.
+                        cb_plan.reserve_back(1);
+                        scratch = cb_plan.get_write_ptr() + 64;
+                    }
                     constexpr uint32_t pooled_rows_t = sol_n_blocks_pad / 32;
                     const sol_bias_gen::Geometry geo{
                         kv_local_padded_Nt * 32, sol_logical_n_tokens, sol_nb, sol_nb_pad, sol_nkc, Sk_chunk_t};
@@ -3134,7 +3178,7 @@ void kernel_main() {
             // so the next group and subsequent dispatches start at the right source.
             packed_readiness.drain(source_group_size, wait_packed_source);
         }
-        if constexpr (!has_sliding_window) {
+        if constexpr (!has_sliding_window && !sol_res_no_dummies) {
             SOL_ZONE("RD_DUMMY");  // phase-alignment pushes: the reserves wait for compute to drain the K/V CBs
             for (uint32_t dummy_chunk = 0;
                  dummy_chunk < dummy_kv_chunks_for_phase_alignment<v_shares_k_buffer, kt_inplace_v, kv_cb_pages>(

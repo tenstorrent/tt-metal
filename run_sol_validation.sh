@@ -761,6 +761,50 @@ if want u1; then
     fi
 fi
 
+# U3 (2026-10-27): the ring-iteration boundary. The u2 profile: the busiest cores idle 0.5-0.65 ms in 7 gaps of
+# 75-260 us, one per iteration boundary, with the gather's data already there. At each boundary the reader (a) pushed
+# phase-alignment dummies, whose reserves waited for compute to nearly drain the K/V CBs, then (b) read every chunk's
+# mask slice twice and pushed one plan page per chunk, each waiting for compute to pop the previous one, so the next
+# iteration's plan and first piece went out only after compute had finished the current one. Now: no dummies
+# (TT_SOL_RES_DUMMIES=1 restores), one plan page per iteration with every chunk's record (TT_SOL_RES_PLAN1=0
+# restores), one mask read per chunk. Rebuild first (factory + reader + compute).
+# Gate (~14 min): 5 s parity at 3 and 2 pages, 1184 rows, 512 rows (short iterations: every piece pushed before
+# compute starts), 256-key pieces at tau 2. On a failure, two parities isolate the cause and the job stops.
+# Then traced (6 replays): dense; U3 at tau 1 / 2 / 3; the A/Bs (plan per chunk, dummies back); 256-key pieces at
+# 3 pages; one profile, summarized.
+if want u3; then
+    if ! python -c "import diffusers.models.transformers.transformer_minimax_h3" > /dev/null 2>&1; then
+        echo "    u3: diffusers lacks transformer_minimax_h3; install the upgrade first (no timings possible)"
+        exit 1
+    fi
+    P="4x8 and resident_call_parity and r4736"
+    C="4x8sp1tp0nl2 and resident_matches_compact"
+    ok=1
+    run u3_parity 600 pytest "$T" -s -k "$P" || ok=0
+    run u3_parity_kv2 600 env TT_SOL_KV_PAGES=2 pytest "$T" -s -k "$P" || ok=0
+    run u3_r1184 900 pytest "$T" -s -k "$C and r1184k512" || ok=0
+    run u3_r512 900 pytest "$T" -s -k "$C and r512k512" || ok=0
+    run u3_k256 600 pytest "$T" -s -k "$C and r1024k256 and tau2" || ok=0
+    if [ "$ok" != 1 ]; then
+        echo "    u3: a correctness run failed; isolating (plan per chunk / dummies back), no timings"
+        run u3_parity_plan1 600 env TT_SOL_RES_PLAN1=0 pytest "$T" -s -k "$P"
+        run u3_parity_dummies 600 env TT_SOL_RES_DUMMIES=1 pytest "$T" -s -k "$P"
+    else
+        S="4x8 and nl2 and 768p_5s and not dense and not agather"
+        TR="SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 SOL_BENCH_MODE=resident SOL_BENCH_PREFIX=off"
+        run u3_trace_dense 900 env SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 pytest "$B" -s -k "4x8 and nl2 and 768p_5s and dense"
+        for tau in 1.0 2.0 3.0; do
+            run "u3_trace_tau${tau}" 900 env $TR SOL_TAU=$tau pytest "$B" -s -k "$S"
+        done
+        run u3_trace_plan1_tau1.0 900 env $TR SOL_TAU=1.0 TT_SOL_RES_PLAN1=0 pytest "$B" -s -k "$S"
+        run u3_trace_dummies_tau1.0 900 env $TR SOL_TAU=1.0 TT_SOL_RES_DUMMIES=1 pytest "$B" -s -k "$S"
+        run u3_trace_k256_tau1.0 900 env $TR SOL_TAU=1.0 SOL_BENCH_CHUNKS=320x256 pytest "$B" -s -k "$S"
+        PR="TT_METAL_DEVICE_PROFILER=1 TT_SOL_STEP_PROFILE=1 SOL_BENCH_PROFILE=1 SOL_BENCH_REPS=1 SOL_BENCH_MODE=resident"
+        run u3_profile 900 env $PR SOL_BENCH_PREFIX=off SOL_TAU=1.0 pytest "$B" -s -k "$S"
+        summarize_profile u3_profile_summary u3_profile
+    fi
+fi
+
 # U2 (2026-10-27): measure, then decide. The u1p profile (32 devices, U1, tau 1) shows the busiest cores at 3.44 ms
 # of "compute" in a 4.15 ms span, but the step zone also held the step's wait for its K entry: cores that read
 # their own K/V (no group) do the same number of steps in 1.65 ms. So compute is now zoned after that wait (compute

@@ -4575,6 +4575,8 @@ template <
     uint32_t sol_resident_slots,
     uint32_t sol_res_block_words,
     uint32_t kv_cb_pages,
+    uint32_t sol_res_plan_rec_base,
+    bool sol_res_no_dummies,
     typename MaskCtx>
 void sdpa_ring_resident(
     const uint32_t global_q_start,
@@ -4660,17 +4662,37 @@ void sdpa_ring_resident(
     uint32_t union_lo[sol_resident_slots];
     uint32_t union_hi[sol_resident_slots];
     uint32_t do_pooled = 0;
-    for (uint32_t i = 0; i < n_res; ++i) {
-        const uint32_t flat = global_q_start + i;
-        res_head[i] = (flat / num_q_chunks) % NH;
+    if constexpr (sol_res_plan_rec_base != 0) {
+        // One plan page per ring iteration: chunk i's record [kBW block words][union lo, hi][do_pooled] at word
+        // rec_base + i * (kBW + 3). Popped once, early, so the reader can push the next iteration's plan while this
+        // iteration's pieces are still being computed.
+        constexpr uint32_t kRec = kBW + 3;
         CircularBuffer(cb_sol_plan).wait_front(1);
-        for (uint32_t w = 0; w < kBW; ++w) {
-            res_blk[i][w] = ckernel::read_tile_value(cb_sol_plan, 0, w);
+        for (uint32_t i = 0; i < n_res; ++i) {
+            const uint32_t flat = global_q_start + i;
+            res_head[i] = (flat / num_q_chunks) % NH;
+            const uint32_t r = sol_res_plan_rec_base + i * kRec;
+            for (uint32_t w = 0; w < kBW; ++w) {
+                res_blk[i][w] = ckernel::read_tile_value(cb_sol_plan, 0, r + w);
+            }
+            union_lo[i] = ckernel::read_tile_value(cb_sol_plan, 0, r + kBW);
+            union_hi[i] = ckernel::read_tile_value(cb_sol_plan, 0, r + kBW + 1);
+            do_pooled = ckernel::read_tile_value(cb_sol_plan, 0, r + kBW + 2);
         }
-        union_lo[i] = ckernel::read_tile_value(cb_sol_plan, 0, kBW);
-        union_hi[i] = ckernel::read_tile_value(cb_sol_plan, 0, kBW + 1);
-        do_pooled = ckernel::read_tile_value(cb_sol_plan, 0, kBW + 2);
         CircularBuffer(cb_sol_plan).pop_front(1);
+    } else {
+        for (uint32_t i = 0; i < n_res; ++i) {
+            const uint32_t flat = global_q_start + i;
+            res_head[i] = (flat / num_q_chunks) % NH;
+            CircularBuffer(cb_sol_plan).wait_front(1);
+            for (uint32_t w = 0; w < kBW; ++w) {
+                res_blk[i][w] = ckernel::read_tile_value(cb_sol_plan, 0, w);
+            }
+            union_lo[i] = ckernel::read_tile_value(cb_sol_plan, 0, kBW);
+            union_hi[i] = ckernel::read_tile_value(cb_sol_plan, 0, kBW + 1);
+            do_pooled = ckernel::read_tile_value(cb_sol_plan, 0, kBW + 2);
+            CircularBuffer(cb_sol_plan).pop_front(1);
+        }
     }
     const auto bit = [](uint32_t lo, uint32_t hi, uint32_t k) -> bool {
         return k < 32 ? ((lo >> k) & 1u) != 0 : ((hi >> (k - 32)) & 1u) != 0;
@@ -4921,8 +4943,9 @@ void sdpa_ring_resident(
         sdpa_cb_pop_front_out_of_line(cb_q_in, n_res * q_chunk_tiles);
     }
 
-    // Phase alignment of the K/V CBs with the chained reader (same rule as sdpa_ring_v2).
-    {
+    // Phase alignment of the K/V CBs with the chained reader (same rule as sdpa_ring_v2), unless the reader drops
+    // the dummies (sol_res_no_dummies).
+    if constexpr (!sol_res_no_dummies) {
         MaybeDeviceZoneScopedN(kRingStepProfiling, "RES_DUMMY");
         for (uint32_t dummy_chunk = 0;
              dummy_chunk < dummy_kv_chunks_for_phase_alignment<false, false, kv_cb_pages>(KV_chunks_processed_in_iter);
