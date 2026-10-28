@@ -14,7 +14,7 @@
 #include <string>
 #include <vector>
 
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-umd/types/cluster_descriptor_types.hpp>
 #include <common/TracyTTDeviceData.hpp>
 #include <tt-metalium/experimental/profiler.hpp>
 #include "impl/threading/thread_pool.hpp"
