@@ -1528,3 +1528,72 @@ def test_get_programs_perf_data():
         validate_programs_perf_durations(json.load(f))
     with open(PROFILER_LOGS_DIR / "test_get_programs_perf_data_all.json", "r") as f:
         validate_programs_perf_durations(json.load(f))
+
+
+def test_noc_event_quick_push():
+    """
+    One long kernel whose BRISC and NCRISC each record LOOP_COUNT NoC events, so the profiler's L1 marker ring
+    quick-pushes to DRAM many times inside a single launch (as a persistent kernel does), with a DRAM region large
+    enough that nothing is dropped. The host read must then parse every chunk cleanly: every PROFILER-NOC-QUICK-PUSH
+    zone has both endpoints, the user zone that spans the pushes is intact, all NoC events are present, and the
+    NoC trace JSON is written.
+    """
+    LOOP_COUNT = 4000
+    CORE_COUNT = 4  # (0,0)-(1,1) in the test binary
+    RISCS = ("BRISC", "NCRISC")
+    NOC_EVENT_TIMER_ID = 12345  # kernel_profiler::NOC_TRACING_STATIC_ID
+    # 48 B of DRAM per RISC per support-count unit; LOOP_COUNT events of 16 B plus chunk headers must fit.
+    PROGRAM_SUPPORT_COUNT = 4000
+
+    clear_profiler_runtime_artifacts()
+    envVars = set_env_vars(enable_noc_tracing=True, set_program_support_count=PROGRAM_SUPPORT_COUNT)
+    testCommand = (
+        f"cd {TT_METAL_HOME} && NOC_EVENT_QUICK_PUSH_LOOP_COUNT={LOOP_COUNT} {envVars} "
+        f"build/test/tt_metal/tools/profiler/test_noc_event_quick_push"
+    )
+    print()
+    logger.info(f"Running: {testCommand}")
+    result = subprocess.run(testCommand, shell=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT)
+    output = result.stdout.decode("UTF-8", errors="replace")
+    print(output)
+    assert result.returncode == 0, f"test binary exited with {result.returncode}"
+    assert "markers were dropped" not in output, "the DRAM profiler region overflowed; raise PROGRAM_SUPPORT_COUNT"
+    assert "tmp-diag" not in output, "a zone endpoint was dropped as a duplicate marker"
+
+    csv_path = f"{PROFILER_LOGS_DIR}/profile_log_device.csv"
+    assert os.path.isfile(csv_path), f"device log not written: {csv_path}"
+    df = pd.read_csv(csv_path, skiprows=1, header=0, na_filter=False)
+    df.columns = [c.strip() for c in df.columns]
+    df["RISC processor type"] = df["RISC processor type"].str.strip()
+    df["zone name"] = df["zone name"].astype(str).str.strip()
+    df["type"] = df["type"].astype(str).str.strip()
+    lanes = df.groupby(["core_x", "core_y", "RISC processor type"])
+
+    errors = []
+    quick_push_pairs = 0
+    for (x, y, risc), lane in lanes:
+        if risc not in RISCS:
+            continue
+        qp = lane[lane["zone name"] == "PROFILER-NOC-QUICK-PUSH"]
+        starts = int((qp["type"] == "ZONE_START").sum())
+        ends = int((qp["type"] == "ZONE_END").sum())
+        if starts == 0 or starts != ends:
+            errors.append(f"core ({x},{y}) {risc}: PROFILER-NOC-QUICK-PUSH starts={starts} ends={ends}")
+        quick_push_pairs += min(starts, ends)
+        user = lane[lane["zone name"] == "TEST-NOC-QUICK-PUSH"]
+        if int((user["type"] == "ZONE_START").sum()) != 1 or int((user["type"] == "ZONE_END").sum()) != 1:
+            errors.append(f"core ({x},{y}) {risc}: TEST-NOC-QUICK-PUSH zone not intact: {user['type'].tolist()}")
+        noc_events = int((pd.to_numeric(lane["timer_id"], errors="coerce") == NOC_EVENT_TIMER_ID).sum())
+        if noc_events != LOOP_COUNT:
+            errors.append(f"core ({x},{y}) {risc}: {noc_events} NoC events, expected {LOOP_COUNT}")
+    lane_count = sum(1 for (_, _, risc), _ in lanes if risc in RISCS)
+    assert lane_count == CORE_COUNT * len(RISCS), f"expected {CORE_COUNT * len(RISCS)} lanes, got {lane_count}"
+    assert quick_push_pairs >= 8 * lane_count, f"too few mid-kernel pushes to exercise the bug: {quick_push_pairs}"
+    assert not errors, "\n".join(errors)
+
+    noc_trace_files = [f for f in os.listdir(PROFILER_LOGS_DIR) if f.startswith("noc_trace_dev0") and f.endswith(".json")]
+    assert noc_trace_files, f"no NoC trace JSON written in {PROFILER_LOGS_DIR}"
+    with open(os.path.join(PROFILER_LOGS_DIR, noc_trace_files[0]), "r") as f:
+        noc_trace = json.load(f)
+    read_events = [e for e in noc_trace if e.get("type") == "READ"]
+    assert len(read_events) == LOOP_COUNT * CORE_COUNT * len(RISCS), f"NoC trace has {len(read_events)} READ events"
