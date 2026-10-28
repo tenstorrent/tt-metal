@@ -154,6 +154,9 @@ public:
         std::optional<tt::umd::IoOrdering> ordering = std::nullopt) const;
     void read_dram_vec(void* mem_ptr, uint32_t sz_in_bytes, ChipId device_id, int dram_view, uint64_t addr) const;
 
+    // Without an explicit ordering, writes to DRAM cores are Relaxed and all others Strict. Large writes can go through
+    // PCIe DMA instead of MMIO, see Hal::get_dma_write_min_bytes. Relaxed writes are not ordered against any other
+    // write until a barrier.
     void write_core(
         const void* mem_ptr,
         uint32_t sz_in_bytes,
@@ -442,7 +445,9 @@ private:
     // Set tunnels from mmio
     void set_tunnels_from_mmio_device();
 
-    bool supports_dma_operations(ChipId chip_id, uint32_t sz_in_bytes) const;
+    bool dma_available(ChipId chip_id) const;
+    bool use_dma_read(ChipId chip_id, uint32_t sz_in_bytes, uint64_t addr) const;
+    bool use_dma_write(ChipId chip_id, uint32_t sz_in_bytes, uint64_t addr, tt::umd::IoOrdering ordering) const;
 
     ARCH arch_{tt::ARCH::Invalid};
     TargetDevice target_type_{0};
