@@ -761,6 +761,26 @@ if want u1; then
     fi
 fi
 
+# D4b (2026-10-28): the stats stage (d4a: skipping it saved >= 0.27 ms, as much as skipping Q@K^T). No rebuild (the
+# new knobs are compute-header defines, compiled on the fly). Per step it reduces the row max, then tests whether any
+# max grew past the lazy threshold (two PACK_DONE round trips plus the unpack RISC polling for the result), then
+# rescales only if so. Traced tau 1 at the 256-key default:
+#   base, stats (all three skipped), s2b (test skipped, never rescale: timing only), eager (test skipped, always
+#   rescale: correct, the pre-M7 rule), plus eager's 5 s parity. If eager is faster than base, it is a real fix.
+if want d4b; then
+    if ! python -c "import diffusers.models.transformers.transformer_minimax_h3" > /dev/null 2>&1; then
+        echo "    d4b: diffusers lacks transformer_minimax_h3; install the upgrade first"
+        exit 1
+    fi
+    S="4x8 and nl2 and 768p_5s and not dense and not agather"
+    TR="SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 SOL_BENCH_MODE=resident SOL_BENCH_PREFIX=off SOL_TAU=1.0"
+    run d4b_trace_tau1.0 900 env $TR pytest "$B" -s -k "$S"
+    for knob in stats s2b eager; do
+        run "d4b_trace_ablate_${knob}_tau1.0" 900 env $TR TT_SOL_ABLATE=$knob pytest "$B" -s -k "$S"
+    done
+    run d4b_parity_eager 600 env TT_SOL_ABLATE=eager pytest "$T" -s -k "4x8 and resident_call_parity and r4736k256"
+fi
+
 # D4a (2026-10-28): what the resident step's time is made of, to turn D4 into a design. No rebuild.
 #   ablations  traced tau 1 at the 256-key default with each stage of the compact step skipped (TT_SOL_ABLATE; timing
 #              only, results wrong): the drop from the baseline is that stage's share of the op. pv is left out: it

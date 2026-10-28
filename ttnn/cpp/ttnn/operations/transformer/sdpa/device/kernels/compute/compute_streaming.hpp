@@ -196,6 +196,19 @@ constexpr bool kAblatePack1 = true;
 #else
 constexpr bool kAblatePack1 = false;
 #endif
+// S2B: skip the lazy-rescale test (S2b: two PACK_DONE round trips and the unpack RISC's poll per step) and never
+// rescale (timing only, wrong once a row max grows). EAGER: skip the test and always rescale initialized members
+// (correct: the pre-M7 rule). Together they split the stats share into the test's synchronization and the rescale.
+#ifdef SOL_ABLATE_S2B
+constexpr bool kAblateS2b = true;
+#else
+constexpr bool kAblateS2b = false;
+#endif
+#ifdef SOL_ABLATE_EAGER
+constexpr bool kEagerRescale = true;
+#else
+constexpr bool kEagerRescale = false;
+#endif
 
 // --- Outlined out-of-order pack (code-size) ---
 // pack_tile<true>() (absolute-address pack) inlines the full
@@ -4242,7 +4255,10 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
         //      that word once the pack has landed (it polls the PACK_DONE token itself: a Tensix-side wait would not
         //      order its load) and read_tile_value hands the same word to the math and pack threads, so the three
         //      threads take the same branch. ----
-        if (n_init > 0 && !kAblateStats) {
+        if constexpr (kEagerRescale) {
+            rescale = n_init > 0 && !kAblateStats;
+        }
+        if (n_init > 0 && !kAblateStats && !kAblateS2b && !kEagerRescale) {
             // d = new - stored max of every initialized member, DEST batches of up to kDst tiles, packed to the
             // alpha scratch pages 0..nd-1 (nd <= n_slots * Sq_chunk_t <= stats_cap).
             uint32_t nd = 0;
