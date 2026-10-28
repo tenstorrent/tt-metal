@@ -1195,7 +1195,7 @@ needs a 3rd M0–M1 channel, 2 declared", or "every split crosses M0–M1 on 4 e
 channels declared"). Tier B stores no projection and no carve.
 
 **A step limit.** Step 3 counts search nodes and stops after 10^6. Running out is not a proof,
-so Tier B accepts, logs a warning, and leaves the answer to Tier C; the constructor always
+so Tier B accepts without a warning and leaves the answer to Tier C; the constructor always
 returns. The slow case is a fully used grid of one-slice meshes that must close a ring, a
 Hamiltonian-cycle search that is slow when none exists: a ring of 49 stages on a 7x7 grid of
 one-slice meshes reaches the limit in about 250 ms. (Backup if slow: with step 4, an odd grid
