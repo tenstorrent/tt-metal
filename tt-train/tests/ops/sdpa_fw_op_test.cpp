@@ -540,22 +540,26 @@ void run_sdpa_test(const SDPATestConfig& config, xt::xarray<float>* kernel_outpu
     const std::array<std::size_t, 4> kv_shape{
         config.batch_size, config.num_key_heads, config.sequence_length, head_dim_kv};
 
-    xt::xarray<float> query_tensor = ttml::test_utils::make_uniform_xarray<float>(query_shape, -1.0F, 1.0F, seed);
+    // Each input gets its own seed (the same seed on equal shapes would make Q, K and V identical), and
+    // is rounded to bf16 up front so the references see exactly what the device sees.
+    xt::xarray<float> query_tensor =
+        round_to_bf16(ttml::test_utils::make_uniform_xarray<float>(query_shape, -1.0F, 1.0F, seed));
 
-    xt::xarray<float> key_tensor = ttml::test_utils::make_uniform_xarray<float>(kv_shape, -1.0F, 1.0F, seed);
+    xt::xarray<float> key_tensor =
+        round_to_bf16(ttml::test_utils::make_uniform_xarray<float>(kv_shape, -1.0F, 1.0F, seed + 1U));
 
     const std::array<std::size_t, 4> value_shape{
         config.batch_size, config.num_key_heads, config.sequence_length, head_dim_v};
-    xt::xarray<float> value_tensor = ttml::test_utils::make_uniform_xarray<float>(value_shape, -1.0F, 1.0F, seed);
+    xt::xarray<float> value_tensor =
+        round_to_bf16(ttml::test_utils::make_uniform_xarray<float>(value_shape, -1.0F, 1.0F, seed + 2U));
 
     // Optional gate: (B, num_query_heads, S, head_dim_v) - same shape as the kernel output.
-    // Use a different seed so the gate is decorrelated from V (same shape, same seed would give identical data).
     std::optional<xt::xarray<float>> gate_tensor;
     if (config.use_gate) {
         const std::array<std::size_t, 4> gate_shape{
             config.batch_size, config.num_query_heads, config.sequence_length, head_dim_v};
         gate_tensor = round_to_bf16(
-            ttml::test_utils::make_uniform_xarray<float>(gate_shape, config.gate_min, config.gate_max, seed + 1U));
+            ttml::test_utils::make_uniform_xarray<float>(gate_shape, config.gate_min, config.gate_max, seed + 3U));
     }
 
     // Create attention mask in kernel-expected format (1, 1, S, S) - broadcasted across batches/heads.
