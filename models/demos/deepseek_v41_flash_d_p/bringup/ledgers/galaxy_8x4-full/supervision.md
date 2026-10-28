@@ -466,3 +466,8 @@ check (F196 / F197); host times stay hidden until verified warm.
   is an owner rule). Consequences: runner smoke re-runs in K.1 (model code changed); after the K.1 commit the overseer
   re-verifies M.1 + L.* (accuracy, ~40 min) before the reconcile; SEED-BOX RE-VERIFY += TP_SUM_BLOCKS; perf of the
   column RS shows in the 5-position profile.
+- 01:08 K.1 PASS 20e3d9ffa5c (attempt 6; all 5 units from the agent's check reused, F169): B + DS41-128 TP_SUM_BLOCKS=cols;
+  Paris through tt-d-gen again on the new code. Orchestrator stopped at --until K.1.
+- 01:46 re-verify on 20e3d9ffa5c (TP sums' new add order): M.1, L.s10240, L.last, L.s56320, L.smoke 5/5 PASS (7-8 min
+  each); L.s56320 final hidden rel 0.189 (was 0.189), top5 1.0, top1 0.997; L.smoke '...Capital of France = Paris'.
+  Dashboard exported (not republished: the 313 KB framework page must be read whole before a publish; deferred).
