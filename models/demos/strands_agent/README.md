@@ -11,7 +11,7 @@ export TT_VISIBLE_DEVICES=0
 export TT_MESH_GRAPH_DESC_PATH=$TT_METAL_HOME/tt_metal/fabric/mesh_graph_descriptors/p150_mesh_graph_descriptor.textproto
 export TT_METAL_PINNED_MEMORY_CACHE_LIMIT_BYTES=0
 
-pytest -sv models/demos/strands_agent/tests/test_model.py
+pytest -sv models/demos/strands_agent/demo/text_demo.py
 ```
 
 ## Perf
@@ -19,7 +19,7 @@ Eager prefill, batch 1, p50 of 5 runs after 2 warmups. One Blackhole chip of a Q
 
 | Prompt tokens | 128 | 256 | 512 | 1024 | 2048 | 4000 |
 |---|---|---|---|---|---|---|
-| Latency (ms) | 46.7 | 53.0 | 94.4 | 165.4 | 286.2 | 544.7 |
+| Latency (ms) | 46.9 | 53.7 | 94.8 | 165.3 | 285.7 | 544.7 |
 
 ```bash
 pytest -sv models/demos/strands_agent/tests/test_perf.py
