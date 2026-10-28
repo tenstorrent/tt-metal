@@ -491,6 +491,35 @@ class TestImportReportMultiFileOperationIds:
         assert cursor.fetchall() == [(1, 0), (stride + 1, 0), (1, 1)]
 
 
+class TestImportReportIndexes:
+    """The imported DB carries the lookup indexes ttnn-visualizer's per-operation and per-tensor queries rely on."""
+
+    def test_lookup_indexes_exist_and_are_used(self, tmp_path):
+        report = _make_report(TestImportReportMultiFileOperationIds._minimal_single_op_graph())
+        conn, cursor = _import_to_db(report, tmp_path)
+        try:
+            indexes = {row[0] for row in cursor.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+            assert {name for name, _, _ in graph_report._DATABASE_INDEXES} <= indexes
+            plan = " ".join(
+                str(row) for row in cursor.execute("EXPLAIN QUERY PLAN SELECT * FROM buffers WHERE operation_id = 1")
+            )
+            assert "idx_buffers_operation" in plan
+        finally:
+            conn.close()
+
+    def test_reimport_into_the_same_db_keeps_the_indexes(self, tmp_path):
+        """CREATE INDEX IF NOT EXISTS: importing again into an existing DB doesn't fail on the existing indexes."""
+        report = _make_report(TestImportReportMultiFileOperationIds._minimal_single_op_graph())
+        _import_to_db(report, tmp_path)[0].close()
+        conn, cursor = _import_to_db(report, tmp_path)
+        try:
+            assert cursor.execute(
+                "SELECT COUNT(*) FROM sqlite_master WHERE name = 'idx_buffers_address'"
+            ).fetchone() == (1,)
+        finally:
+            conn.close()
+
+
 @pytest.fixture
 def single_relu_python_io():
     """python_io sidecar for single_relu_mock_graph with a minimal stack trace.

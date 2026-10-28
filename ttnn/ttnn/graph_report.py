@@ -996,6 +996,35 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
     cursor.execute(CREATE_INDEX_STACK_TRACES_SOURCE_FILE_SQL)
 
 
+# Indexes for how ttnn-visualizer reads a report: per-operation rows (WHERE operation_id = ? [AND rank = ?]), tensors
+# joined to their producing/consuming operations and to the buffers at their address, and the next buffer at an
+# address (query_next_buffer). Without them each of those scans the whole table, and buffers runs to millions of rows
+# on a large model. Tables with a UNIQUE constraint leading with the lookup columns already have an index.
+_DATABASE_INDEXES = (
+    ("idx_operation_arguments_operation", "operation_arguments", "operation_id, rank"),
+    ("idx_captured_graph_operation", "captured_graph", "operation_id, rank"),
+    ("idx_nodes_operation", "nodes", "operation_id, rank"),
+    ("idx_edges_operation", "edges", "operation_id, rank"),
+    ("idx_errors_operation", "errors", "operation_id, rank"),
+    ("idx_stack_traces_operation", "stack_traces", "operation_id, rank"),
+    ("idx_input_tensors_operation", "input_tensors", "operation_id, rank"),
+    ("idx_input_tensors_tensor", "input_tensors", "tensor_id, rank"),
+    ("idx_output_tensors_operation", "output_tensors", "operation_id, rank"),
+    ("idx_output_tensors_tensor", "output_tensors", "tensor_id, rank"),
+    ("idx_device_tensors_tensor", "device_tensors", "tensor_id, rank"),
+    ("idx_buffers_operation", "buffers", "operation_id, rank"),
+    ("idx_buffers_address", "buffers", "address, operation_id"),
+    ("idx_buffer_chunks_operation", "buffer_chunks", "operation_id, rank"),
+)
+
+
+def create_database_indexes(cursor: sqlite3.Cursor) -> None:
+    """Create the lookup indexes, once the rows are in: building an index after a bulk insert is cheaper than
+    maintaining it row by row."""
+    for name, table, columns in _DATABASE_INDEXES:
+        cursor.execute(f"CREATE INDEX IF NOT EXISTS {name} ON {table} ({columns})")
+
+
 def save_database_schema_version(cursor: sqlite3.Cursor) -> None:
     """Save the database schema version to the database."""
     cursor.execute(
@@ -2584,6 +2613,7 @@ def import_report(
 
             total_stats["files"] += 1
 
+        create_database_indexes(cursor)
         conn.commit()
         summary = [f"Imported {total_stats['files']} report(s) into {db_path}"]
         summary.append(f"  - {total_stats['devices']} devices")
