@@ -142,6 +142,37 @@ class SlotTable:
         load[p // users_per_row] = load.get(p // users_per_row, 0) + 1
         return p
 
+    def claim_rowaware(self, logical: int, busy_rows, users_per_row: int):
+        """Prefill of a NEW request with few prefill slots per mesh row (DSV41_PREFILL_ROW_AWARE=1): a free model user of a mesh row WITHOUT an in-progress prompt (``busy_rows``), the row
+        with the fewest live users first (decoders spread over the rows, so that every row keeps a free user for the next prompt), then the lowest in-row index, then the user the logical slot
+        already maps to. Only free users are candidates: the logical slot's own user is no exception (a continuation of the same prefill call may still be bound to it). The swap is invisible
+        to the plugin (free logical slots hold no state). Falls back to a busy row when no clean row has a free user. -> (physical user, True when its row was clean).
+        """
+        if not 0 <= logical < self.n_logical:
+            raise ValueError(f"empty slot {logical} outside 0..{self.n_logical - 1}")
+        U = users_per_row
+        live_row = {}
+        for q in self.live:
+            live_row[q // U] = live_row.get(q // U, 0) + 1
+        free = [j for j in range(self.n_logical) if self.phys[j] not in self.live]
+        if not free:
+            raise ValueError(f"no free model user for the prefill of slot {logical}")
+        best = min(
+            free,
+            key=lambda j: (
+                self.phys[j] // U in busy_rows,
+                live_row.get(self.phys[j] // U, 0),
+                self.phys[j] % U,
+                j != logical,
+                self.phys[j],
+            ),
+        )
+        if best != logical:
+            self.phys[logical], self.phys[best] = self.phys[best], self.phys[logical]
+        p = self.phys[logical]
+        self.live.add(p)
+        return p, (p // U) not in busy_rows
+
     def claim_packed(self, logical: int, load: dict, users_per_row: int) -> int:
         """Prefill of a NEW request with decode buckets: like ``claim_balanced`` (concurrent prompts spread over the mesh rows: ``load`` {mesh row: users in prefill}) but among the rows
         of equal prefill load the free model user with the LOWEST in-row index u is taken (then the row with the fewest live users), so that the live set stays inside the smallest

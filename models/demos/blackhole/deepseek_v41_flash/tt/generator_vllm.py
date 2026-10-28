@@ -705,6 +705,14 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                     f"DSV4.1 prefix caching ON: snapshot policy {apc.policy}, host budget {apc.store.budget / 2**30:.1f} GiB"
                 )
         self.inprog = VS.PrefillTracker()  # users prefilled in chunks and not decoding yet (interleave mode)
+        # DSV41_PREFILL_ROW_AWARE=1 (default off; only effective with few prefill slots per mesh row, DSV41_PREFILL_UP < users per row): place a new prompt only into a mesh row without an
+        # in-progress prompt, bind the continuations of a call before claiming users for its new prompts (the plugin shifts state slots when the first finisher starts decoding), and tell the
+        # plugin how many prompts the rows can still hold (``prefill_row_capacity``). Off = the shipped placement, unchanged.
+        self.row_aware = os.environ.get("DSV41_PREFILL_ROW_AWARE", "0") == "1"
+        self.pf_done = (
+            set()
+        )  # users whose last prefill piece ended their prompt (decoding / about to decode): their prefill slot holds nothing to protect
+        self.row_stats = {"placed": 0, "conflicts": 0}
         self.s_pad_cur = 0
         self.s_pad_policy = os.environ.get("DSV41_VLLM_S_PAD", "bucket")
         self.kv_cache = None
@@ -949,6 +957,66 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             return first[rows].to(torch.int32).reshape(N)
         return logits[rows].float().reshape(N, 1, -1)
 
+    def _busy_rows(self):
+        """Mesh rows that hold the carried state of a prompt in progress (one prefill slot per row: another prompt prefilled in such a row evicts it). A user counts while its
+        carried state is intact (the model's ``pf_resume`` equals its recorded end) and its last piece did not end its prompt.
+        """
+        U = self.U
+        resume = self.m.__dict__.get("pf_resume", {})
+        return {p // U for p, (end, _) in self.inprog.users.items() if p not in self.pf_done and resume.get(p) == end}
+
+    def prefill_row_capacity(self):
+        """Prompts the mesh rows can still take into prefill right now: rows without an in-progress prompt that have a free user. None when the row-aware placement is off (the plugin's
+        scheduler then keeps its static cap)."""
+        U, Up = getattr(self.m, "U", None), getattr(self.m, "Up", None)
+        if not (self.row_aware and U and Up and Up < U):
+            return None
+        busy = self._busy_rows()
+        free_rows = {p // U for p in range(self.B) if p not in self.slots.live}
+        return len(free_rows - busy)
+
+    def _place_row_aware(self, toks, starts, ends, empty_slots):
+        """Users of the rows of one prefill call (DSV41_PREFILL_ROW_AWARE=1, few prefill slots per mesh row): first every continuation finds its carried user and is bound to the state slot the
+        plugin gave it (the plugin shifts the slots of the continuing prompts when a request leaves the prefill batch, so the logical slot of a NEW prompt can still map to the user of a
+        continuation that comes later in the call); then each new prompt takes a free user of a mesh row without an in-progress prompt (fewest live users first, so that the decoders spread
+        over the rows too). A row with an in-progress prompt is the last resort (evicts it: counted in ``row_stats``). -> (items, phys) in call order.
+        """
+        N, U = len(ends), self.U
+        resume = self.m.__dict__.get("pf_resume", {})
+        eff, chosen = list(starts), [None] * N
+        for i in range(N):
+            st = starts[i]
+            if st <= 0:
+                continue
+            p = self.inprog.find(st, toks[i, :st], exclude=[c for c in chosen if c is not None])
+            if p is not None and resume.get(p) != st:
+                p = None
+            if p is not None:
+                self.slots.bind(empty_slots[i], p)
+                self.slots.live.add(p)
+                chosen[i] = p
+            else:
+                (logger.info if getattr(self.m, "apc", None) is not None else logger.warning)(
+                    f"DSV4.1 chunk continuation at {st} without carried state: recomputing from position 0"
+                )
+                eff[i] = 0
+        busy = self._busy_rows() | {p // U for p in chosen if p is not None}
+        for i in range(N):
+            if chosen[i] is not None:
+                continue
+            p, clean = self.slots.claim_rowaware(empty_slots[i], busy, U)
+            self.row_stats["placed"] += 1
+            if not clean:
+                self.row_stats["conflicts"] += 1
+                logger.warning(
+                    f"DSV4.1 prefill placement: no mesh row without an in-progress prompt for the new prompt of slot {empty_slots[i]}: user {p} (row {p // U}) evicts the prompt there"
+                )
+            busy.add(p // U)
+            chosen[i] = p
+            self.pf_done.discard(p)
+        items = [(chosen[i], toks[i], eff[i], ends[i]) for i in range(N)]
+        return items, list(chosen)
+
     def _interleave_chunk(self):
         c = (
             int(os.environ.get("DSV41_VLLM_CHUNK", "0")) or self.generator.prefill_chunk or 512
@@ -1012,7 +1080,15 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
         load = {}
         for p_ in self.inprog.users:
             load[p_ // U if U else 0] = load.get(p_ // U if U else 0, 0) + 1
+        rowaware = self.row_aware and balanced
+        if rowaware:
+            for i in range(N):
+                if not 0 <= starts[i] < ends[i]:
+                    raise ValueError(f"chunk [{starts[i]}, {ends[i]}) of row {i} is empty or reversed")
+            items, phys = self._place_row_aware(toks, starts, ends, empty_slots)
         for i in range(N):
+            if rowaware:
+                break
             st, e, slot = starts[i], ends[i], empty_slots[i]
             if not 0 <= st < e:
                 raise ValueError(f"chunk [{st}, {e}) of row {i} is empty or reversed")
@@ -1133,6 +1209,11 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
                 continue
             self.book.set_prompt(p, toks[i, : ends[i]].reshape(-1))
             self.inprog.update(p, ends[i], toks[i])
+            if self.row_aware:
+                if final_map is not None and final_map.get(p):
+                    self.pf_done.add(p)
+                else:
+                    self.pf_done.discard(p)
             if self.spec is not None:
                 self.spec_has[
                     p
@@ -1440,6 +1521,7 @@ class DeepseekV41ForCausalLM(SupportsMultiModal):
             if self.spec is not None:
                 self.spec_has[p] = False
             self.inprog.drop(p)
+            self.pf_done.discard(p)
 
     def warmup_model_prefill(self, kv_cache=None, enable_trace=True, *args, **kwargs):
         """No-op: the prefill trace is keyed by the (chunk, S_pad) of the first prompt and cannot be captured without one. The first request compiles and captures
