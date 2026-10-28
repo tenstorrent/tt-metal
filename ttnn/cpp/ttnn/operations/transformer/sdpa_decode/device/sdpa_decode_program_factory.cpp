@@ -527,6 +527,12 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         TT_FATAL(sliding_window_size == 0, "spec_multi_pos_tiles is not supported with a sliding window");
         TT_FATAL(!use_mla || tensor_args.v.has_value(), "spec_multi_pos_tiles with MLA needs a separate V cache");
         TT_FATAL(!use_attention_mask, "spec_multi_pos_tiles is not supported with an explicit attention mask");
+        // Sub-tile cache blocks move positions into padded tile space; the kernels convert the group's scan bound
+        // but not the candidates' mask bounds.
+        TT_FATAL(
+            !has_block_padding,
+            "spec_multi_pos_tiles needs cache blocks of whole tiles, got a block of {} positions",
+            original_block_size);
         TT_FATAL(
             PNHt == spec_multi_pos_tiles,
             "spec_multi_pos_tiles={} must equal PNHt={} (one 32-row Q tile per candidate)",

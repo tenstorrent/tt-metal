@@ -280,16 +280,17 @@ def grouped_decode_program(reqs, table_tokens, cands):
     return program
 
 
-def run_grouped_decode(device, q_slots, k_cache, v_cache, page_table_tt, cur_pos, scale, cands):
+def run_grouped_decode(device, q_slots, k_cache, v_cache, page_table_tt, cur_pos, scale, cands, return_lse=True):
     """A speculative verify's decode with one KV scan per request (spec_multi_pos_tiles): q_slots [1, R * T, NH, DK],
     candidate j of request r in slot r * T + j, goes in as Q [1, R, T * 32, DK] (DRAM interleaved) with candidate j's
     heads in rows 0..NH-1 of its 32-row tile j; ``page_table_tt`` has one row per request and ``cur_pos`` one entry per
-    candidate. Returns (out [1, R * T, NH, DV], lse [1, R * T, NH]) per slot, as the per-slot decode does."""
+    candidate. Returns (out [1, R * T, NH, DV], lse [1, R * T, NH] or None without ``return_lse``) per slot, as the
+    per-slot decode does."""
     slots = q_slots.shape[1]
     reqs = slots // cands
     q = torch.zeros(1, reqs, cands, TILE, DK)
     q[:, :, :, :NH] = q_slots.reshape(1, reqs, cands, NH, DK)
-    out, lse = ttnn.transformer.paged_flash_multi_latent_attention_decode(
+    result = ttnn.transformer.paged_flash_multi_latent_attention_decode(
         ttnn.from_torch(
             q.reshape(1, reqs, cands * TILE, DK), device=device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT
         ),
@@ -302,13 +303,17 @@ def run_grouped_decode(device, q_slots, k_cache, v_cache, page_table_tt, cur_pos
         program_config=grouped_decode_program(reqs, page_table_tt.shape[-1] * BLOCK, cands),
         compute_kernel_config=compute_config(),
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        return_lse=True,
+        return_lse=return_lse,
         spec_multi_pos_tiles=cands,
     )
+    if not return_lse:
+        out, lse = result, None
+    else:
+        out, lse = result
+        assert tuple(lse.shape) == (1, reqs, cands * TILE, 1), lse.shape
+        lse = ttnn.to_torch(lse).float().reshape(1, reqs, cands, TILE)[:, :, :, :NH].reshape(1, slots, NH)
     assert tuple(out.shape) == (1, reqs, cands * TILE, DV), out.shape
-    assert tuple(lse.shape) == (1, reqs, cands * TILE, 1), lse.shape
     out = ttnn.to_torch(out).float().reshape(1, reqs, cands, TILE, DV)[:, :, :, :NH].reshape(1, slots, NH, DV)
-    lse = ttnn.to_torch(lse).float().reshape(1, reqs, cands, TILE)[:, :, :, :NH].reshape(1, slots, NH)
     return out, lse
 
 
@@ -374,6 +379,43 @@ def test_mla_decode_spec_multi_pos(device, layout, cands, starts, function_level
             grouped = float(comp_pcc(ref_out, out[0, s], 0.999)[1])
             per_slot = float(comp_pcc(ref_out, ref_out_tt[0, s], 0.999)[1])
             assert grouped >= 0.999 and grouped >= per_slot - 2e-4, f"{tag}: PCC {grouped} (per-slot {per_slot})"
+
+
+@pytest.mark.parametrize("return_lse", [True, False], ids=["lse", "no_lse"])
+def test_mla_decode_spec_multi_pos_skipped(device, return_lse, function_level_defaults, reset_seeds):
+    """-1 candidates of spec_multi_pos_tiles with and without return_lse: request 0's group is all -1 (the whole row
+    is skipped), request 1's has -1 on both sides of its two real candidates, request 2's none. A -1 candidate's output
+    is 0 (and its lse -1e30) even where the output buffer held another call's results: a first call with every
+    candidate real fills it, and the second call's output usually takes the same L1. The real candidates match the
+    torch reference."""
+    cands, n = 4, 2048
+    scale = DK**-0.5
+    pos = [-1, -1, -1, -1, -1, 300, 301, -1, 1000, 1001, 1002, 1003]
+    reqs = len(pos) // cands
+    q_slots = torch.randn(1, len(pos), NH, DK)
+    k_seqs, v_seqs = torch.randn(reqs, n, DK), torch.randn(reqs, n, DV)
+    page_table = make_page_table(reqs, n // BLOCK)
+    table_tt = ttnn.from_torch(page_table.to(torch.int32), device=device, dtype=ttnn.int32)
+    k_cache = PagedCache(device, k_seqs, page_table, ttnn.bfloat8_b)
+    v_cache = PagedCache(device, v_seqs, page_table, ttnn.bfloat8_b)
+    every = [500 * r + 100 + j for r in range(reqs) for j in range(cands)]
+    first, _ = run_grouped_decode(device, q_slots, k_cache, v_cache, table_tt, every, scale, cands, return_lse)
+    assert torch.all(first.abs().amax(dim=(-2, -1)) > 0), "the first call must leave non-zero outputs"
+    out, lse = run_grouped_decode(device, q_slots, k_cache, v_cache, table_tt, pos, scale, cands, return_lse)
+    for s, p in enumerate(pos):
+        r = s // cands
+        tag = f"request {r} candidate {s % cands} at {p} (return_lse {return_lse})"
+        if p < 0:
+            assert torch.all(out[0, s] == 0), f"{tag}: a -1 candidate's output must be 0"
+            if return_lse:
+                assert torch.all(lse[0, s] == NO_KEY_LSE), f"{tag}: a -1 candidate's lse must be -1e30"
+            continue
+        visible = (torch.arange(n) <= p)[None, :].expand(NH, n)
+        ref_out, ref_lse = ref_attention(q_slots[0, s], k_cache.seqs[r], v_cache.seqs[r], scale, visible)
+        if return_lse:
+            assert_lse_close(lse[0, s], ref_lse, 0.05, tag)
+        passing, message = comp_pcc(ref_out, out[0, s], 0.999)
+        assert passing, f"{tag}: {message}"
 
 
 # ---------------------------------------------------------------- chunked prefill

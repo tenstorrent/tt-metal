@@ -155,48 +155,56 @@ void kernel_main() {
         if (cur_pos == UINT32_MAX) {
             // cur_pos of -1 indicates that the user should be skipped
 #ifdef SDPA_DECODE_RETURN_LSE
-            // return_lse: the user's root writes output rows 0 and lse -1e30 (no visible key), so a merge of
-            // partial attentions weights this user's part 0 instead of reading stale memory.
-            if (is_tree_root) {
-                constexpr uint32_t skip_out_tiles = PNHt * vDHt;
-                constexpr uint32_t skip_out_tile_bytes = get_tile_size(cb_out);
-                CircularBuffer cb_out_zero(cb_out);
-                cb_out_zero.reserve_back(skip_out_tiles);
-                for (uint32_t t = 0; t < skip_out_tiles; ++t) {
-                    fill_tile<skip_out_tile_bytes>(cb_out, t, 0);
-                }
-                // Sharded output: cb_out is this user's output shard, now zero. Interleaved: write the zeros.
-                if constexpr (!is_out_sharded) {
-                    const auto zero_out_writer = TensorAccessor(out_args, out_addr);
-                    uint32_t zero_addr = cb_out_zero.get_write_ptr();
-                    for (uint32_t t = 0; t < skip_out_tiles; ++t) {
-                        noc.async_write(
-                            CoreLocalMem<uint32_t>(zero_addr),
-                            zero_out_writer,
-                            skip_out_tile_bytes,
-                            {},
-                            {.page_id = cur_batch * skip_out_tiles + t});
-                        zero_addr += skip_out_tile_bytes;
-                    }
-                }
-                constexpr uint32_t lse_tile_bytes = get_tile_size(cb_lse_out);
-                const auto lse_writer = TensorAccessor(lse_args, get_arg_val<uint32_t>(lse_arg_idx));
-                CircularBuffer cb_lse(cb_lse_out);
-                cb_lse.reserve_back(PNHt);
-                for (uint32_t t = 0; t < PNHt; ++t) {
-                    const uint32_t lse_tile_addr = cb_lse.get_write_ptr() + t * lse_tile_bytes;
-                    fill_tile<lse_tile_bytes>(cb_lse_out, t, 0);
-                    sdpa_lse::fill_no_key_lse_tile(lse_tile_addr);
-                    noc.async_write(
-                        CoreLocalMem<uint32_t>(lse_tile_addr),
-                        lse_writer,
-                        lse_tile_bytes,
-                        {},
-                        {.page_id = cur_batch * PNHt + t});
-                }
-                noc.async_write_barrier();
-            }
+            constexpr bool zero_skipped = true;
+#else
+            constexpr bool zero_skipped = spec_multi_pos;
 #endif
+            // return_lse: the user's root writes output rows 0 and lse -1e30 (no visible key), so a merge of
+            // partial attentions weights this user's part 0 instead of reading stale memory. Spec mode: a group of
+            // -1 candidates only gets output 0, as the -1 candidates of a group with others do (below).
+            if constexpr (zero_skipped) {
+                if (is_tree_root) {
+                    constexpr uint32_t skip_out_tiles = PNHt * vDHt;
+                    constexpr uint32_t skip_out_tile_bytes = get_tile_size(cb_out);
+                    CircularBuffer cb_out_zero(cb_out);
+                    cb_out_zero.reserve_back(skip_out_tiles);
+                    for (uint32_t t = 0; t < skip_out_tiles; ++t) {
+                        fill_tile<skip_out_tile_bytes>(cb_out, t, 0);
+                    }
+                    // Sharded output: cb_out is this user's output shard, now zero. Interleaved: write the zeros.
+                    if constexpr (!is_out_sharded) {
+                        const auto zero_out_writer = TensorAccessor(out_args, out_addr);
+                        uint32_t zero_addr = cb_out_zero.get_write_ptr();
+                        for (uint32_t t = 0; t < skip_out_tiles; ++t) {
+                            noc.async_write(
+                                CoreLocalMem<uint32_t>(zero_addr),
+                                zero_out_writer,
+                                skip_out_tile_bytes,
+                                {},
+                                {.page_id = cur_batch * skip_out_tiles + t});
+                            zero_addr += skip_out_tile_bytes;
+                        }
+                    }
+#ifdef SDPA_DECODE_RETURN_LSE
+                    constexpr uint32_t lse_tile_bytes = get_tile_size(cb_lse_out);
+                    const auto lse_writer = TensorAccessor(lse_args, get_arg_val<uint32_t>(lse_arg_idx));
+                    CircularBuffer cb_lse(cb_lse_out);
+                    cb_lse.reserve_back(PNHt);
+                    for (uint32_t t = 0; t < PNHt; ++t) {
+                        const uint32_t lse_tile_addr = cb_lse.get_write_ptr() + t * lse_tile_bytes;
+                        fill_tile<lse_tile_bytes>(cb_lse_out, t, 0);
+                        sdpa_lse::fill_no_key_lse_tile(lse_tile_addr);
+                        noc.async_write(
+                            CoreLocalMem<uint32_t>(lse_tile_addr),
+                            lse_writer,
+                            lse_tile_bytes,
+                            {},
+                            {.page_id = cur_batch * PNHt + t});
+                    }
+#endif
+                    noc.async_write_barrier();
+                }
+            }
             return;
         }
     }

@@ -89,14 +89,17 @@ MEAN_ACCEPTED = {}
 # differently from the plain decode's, so where the plain step's top logits tie to within bf16 rounding the verify can
 # pick the other token. A divergence passes only there: the speculative token scores within TIE_STEPS bf16 steps of the
 # plain step's best logit at that position (as test_model_chunked_tp8_dp4.near_top); every token before it matched.
-# The per-slot verify must match plain greedy exactly.
+# The grouped verify runs only under the KV pair split; without it (the per-slot verify) the tokens must match plain
+# greedy exactly.
 TIE_STEPS = 2
 
 
 def near_tie(first_diff, seq, plain_top):
     if first_diff is None:
         return True
-    if not verify_grouped() or first_diff not in plain_top:  # the prefill's token
+    if not (generator_vllm.KV_PAIR_SPLIT and verify_grouped()):
+        return False
+    if first_diff not in plain_top:  # the prefill's token
         return False
     top = plain_top[first_diff]
     best = float(top.values[0])
