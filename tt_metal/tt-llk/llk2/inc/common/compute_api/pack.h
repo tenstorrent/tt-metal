@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Compute API: pack. Single thread, arch-independent. Every TRISC runs this same call; llk-lib's per-thread call
-// executes only on the pack thread.
+// executes only on the pack thread. dst's L1 address is read only there; it needs to be valid only on the pack
+// thread (tensor/tensor.h).
 //
 //   pack(src, dst);                                     // dst = src; src: a Dest tensor, dst: an L1 tensor
 //   pack<pack_modifiers{.relu = true}>(src, dst);       // dst = max(src, 0)
@@ -57,8 +58,8 @@ inline __attribute__((always_inline)) void pack_checked(std::uint32_t src_addres
 
 /// dst = src (with Mods' ReLU, or added into dst with l1_acc = Toggle::On): every tile of the Dest tensor src to the L1
 /// tensor dst. Mods.l1_acc must not be Toggle::Runtime here: that form takes the l1_acc argument (below).
-template <pack_modifiers Mods = pack_modifiers {}, const TensorSpec<tensor_rank>& D, class RD, const TensorSpec<tensor_rank>& O, class RO>
-inline __attribute__((always_inline)) void pack(const Tensor<D, RD>& src, const Tensor<O, RO>& dst)
+template <pack_modifiers Mods = pack_modifiers {}, const TensorSpec<tensor_rank>& D, const TensorSpec<tensor_rank>& O>
+inline __attribute__((always_inline)) void pack(const Tensor<D>& src, const Tensor<O>& dst)
 {
     static_assert(Mods.l1_acc != Toggle::Runtime, "pack: l1_acc = Toggle::Runtime needs the run-time l1_acc argument");
     detail::pack_checked<Mods, D, O>(src.address, dst.address, false /* unused: l1_acc is Off or On */);
@@ -67,8 +68,8 @@ inline __attribute__((always_inline)) void pack(const Tensor<D, RD>& src, const 
 /// As above, with the run-time l1_acc argument. With l1_acc = Toggle::Runtime, src is added into dst when l1_acc is true
 /// and written over dst when it is false. With Toggle::Off or Toggle::On the modifier decides and the argument is
 /// ignored (no code reads it), so a kernel can pick Off or Runtime from a compile-time setting and keep one call.
-template <pack_modifiers Mods, const TensorSpec<tensor_rank>& D, class RD, const TensorSpec<tensor_rank>& O, class RO>
-inline __attribute__((always_inline)) void pack(const Tensor<D, RD>& src, const Tensor<O, RO>& dst, bool l1_acc)
+template <pack_modifiers Mods, const TensorSpec<tensor_rank>& D, const TensorSpec<tensor_rank>& O>
+inline __attribute__((always_inline)) void pack(const Tensor<D>& src, const Tensor<O>& dst, bool l1_acc)
 {
     detail::pack_checked<Mods, D, O>(src.address, dst.address, l1_acc);
 }
