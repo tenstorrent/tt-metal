@@ -1401,13 +1401,31 @@ void MeshDeviceImpl::load_sub_device_manager(SubDeviceManagerId sub_device_manag
         !::tt::tt_metal::experimental::DispatchContext::get().is_fast_dispatch_session_active(),
         "Sub-device managers are not supported with manual Fast Dispatch: a session opened with "
         "DispatchContext::initialize_fast_dispatch is active.");
+    // Inside a trace capture the switch is recorded into the trace instead of sent (FDMeshCommandQueue::
+    // reset_worker_state). Every hardware CQ resets its worker state on a switch, and only the capturing one records.
+    const bool capturing = std::any_of(mesh_command_queues_.begin(), mesh_command_queues_.end(), [](const auto& cq) {
+        return cq != nullptr && cq->trace_id().has_value();
+    });
+    TT_FATAL(
+        !capturing || this->num_hw_cqs() == 1,
+        "Loading a sub-device manager during trace capture is supported only with one hardware command queue");
     sub_device_manager_tracker_->load_sub_device_manager(sub_device_manager_id);
 }
 void MeshDeviceImpl::clear_loaded_sub_device_manager() {
     auto lock = lock_api();
     TT_FATAL(!command_list_builder_active_, "Cannot clear the sub-device manager while a CommandListBuilder is active");
     validate_sub_device_manager_tracker();
+    const bool capturing = std::any_of(mesh_command_queues_.begin(), mesh_command_queues_.end(), [](const auto& cq) {
+        return cq != nullptr && cq->trace_id().has_value();
+    });
+    TT_FATAL(
+        !capturing || this->num_hw_cqs() == 1,
+        "Clearing the sub-device manager during trace capture is supported only with one hardware command queue");
     sub_device_manager_tracker_->clear_loaded_sub_device_manager();
+}
+void MeshDeviceImpl::set_active_sub_device_manager_view(SubDeviceManagerId sub_device_manager_id) {
+    validate_sub_device_manager_tracker();
+    sub_device_manager_tracker_->set_active_sub_device_manager_view(sub_device_manager_id);
 }
 
 CoreCoord MeshDeviceImpl::dram_grid_size() const {

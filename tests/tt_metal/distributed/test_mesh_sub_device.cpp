@@ -72,6 +72,12 @@ protected:
         MeshDeviceFixtureBase(Config{.num_cqs = 2, .trace_region_size = (16 << 20)}) {}
 };
 
+// One hardware CQ plus a trace region: a trace can record sub-device manager switches only with one CQ.
+class MeshSubDeviceTrace1CQTestSuite : public MeshDeviceFixtureBase {
+protected:
+    MeshSubDeviceTrace1CQTestSuite() : MeshDeviceFixtureBase(Config{.num_cqs = 1, .trace_region_size = (1 << 20)}) {}
+};
+
 TEST(SubDeviceSetupBatchTest, PreservesGroupsAtFetchBoundary) {
     using program_dispatch::setup_batch::append_setup_commands;
     // One cache line per group; two groups fit exactly in this synthetic fetch limit.
@@ -371,6 +377,73 @@ TEST_F(MeshSubDeviceMultiCQTraceTestSuite, SubDeviceSwitchingWhileOtherCQReplays
         mesh_device_->load_sub_device_manager(sub_device_manager_0);
     }
     mesh_device_->release_mesh_trace(trace_id);
+}
+
+// A trace that loads a sub-device manager and clears it again, twice, recorded inside the capture: full-grid
+// programs in the default manager around windows with a program on each sub-device of the loaded one. The switch
+// remaps every core's GO message index, so a replay that gets it wrong leaves workers polling a mailbox slot nothing
+// signals. Regressions here hang rather than fail.
+TEST_F(MeshSubDeviceTrace1CQTestSuite, SubDeviceSwitchingInTrace) {
+    constexpr uint32_t k_num_replays = 10;
+    CoreRangeSet full_grid(CoreRange({0, 0}, {4, 4}));
+    CoreRangeSet cores_0(CoreRange({0, 0}, {2, 4}));
+    CoreRangeSet cores_1(CoreRange({3, 0}, {4, 4}));
+    // The second sub-device first, so the switch moves the cores off GO message index 0.
+    auto sub_device_manager =
+        mesh_device_->create_sub_device_manager({SubDevice(std::array{cores_1}), SubDevice(std::array{cores_0})}, 3200);
+
+    MeshCoordinateRange devices(mesh_device_->shape());
+    auto delay_workload = [&](const CoreRangeSet& cores) {
+        Program program = CreateProgram();
+        auto kernel = CreateKernel(
+            program,
+            "tests/tt_metal/tt_metal/test_kernels/misc/sub_device/delay.cpp",
+            cores,
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        std::array<uint32_t, 1> rt_args = {1000};
+        SetRuntimeArgs(program, kernel, cores, rt_args);
+        auto workload = MeshWorkload();
+        workload.add_program(devices, std::move(program));
+        return workload;
+    };
+    auto full_workload = delay_workload(full_grid);
+    auto workload_0 = delay_workload(cores_0);
+    auto workload_1 = delay_workload(cores_1);
+
+    auto& cq = mesh_device_->mesh_command_queue();
+    auto window = [&]() {
+        mesh_device_->load_sub_device_manager(sub_device_manager);
+        EnqueueMeshWorkload(cq, workload_0, false);
+        EnqueueMeshWorkload(cq, workload_1, false);
+        EnqueueMeshWorkload(cq, workload_0, false);
+        mesh_device_->clear_loaded_sub_device_manager();
+    };
+    // Compile every workload in the manager it runs in before capturing.
+    EnqueueMeshWorkload(cq, full_workload, false);
+    window();
+    Finish(cq);
+
+    auto trace_id = mesh_device_->begin_mesh_trace(cq.id());
+    for (uint32_t i = 0; i < 2; i++) {
+        EnqueueMeshWorkload(cq, full_workload, false);
+        window();
+    }
+    EnqueueMeshWorkload(cq, full_workload, false);
+    mesh_device_->end_mesh_trace(cq.id(), trace_id);
+
+    for (uint32_t i = 0; i < k_num_replays; i++) {
+        mesh_device_->replay_mesh_trace(cq.id(), trace_id, false);
+    }
+    Finish(cq);
+    // The host's dispatch state matches the device's after the replays: eager work in both managers still runs.
+    EnqueueMeshWorkload(cq, full_workload, false);
+    window();
+    mesh_device_->replay_mesh_trace(cq.id(), trace_id, false);
+    EnqueueMeshWorkload(cq, full_workload, false);
+    Finish(cq);
+
+    mesh_device_->release_mesh_trace(trace_id);
+    mesh_device_->remove_sub_device_manager(sub_device_manager);
 }
 
 TEST_F(MeshSubDeviceTestSuite, SubDeviceBasicProgramsReuse) {

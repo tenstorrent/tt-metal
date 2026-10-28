@@ -3245,6 +3245,58 @@ void write_program_command_sequence(
     LOG_TRACE_LAZY(tt::LogDispatch, "");
 }
 
+namespace {
+void write_command_chunk(
+    SystemMemoryManager& manager, uint32_t command_queue_id, const void* data, uint32_t size_bytes) {
+    if (!size_bytes) {
+        return;
+    }
+    manager.issue_queue_reserve(size_bytes, command_queue_id);
+    manager.cq_write(data, size_bytes, manager.get_issue_queue_write_ptr(command_queue_id));
+    manager.issue_queue_push_back(size_bytes, command_queue_id);
+    manager.fetch_queue_reserve_back(command_queue_id);
+    manager.fetch_queue_write(size_bytes, command_queue_id);
+}
+}  // namespace
+
+void write_program_config_commands(
+    const ProgramCommandSequence& program_command_sequence,
+    SystemMemoryManager& manager,
+    uint32_t command_queue_id,
+    bool send_binary) {
+    auto write = [&](const auto& commands) {
+        write_command_chunk(manager, command_queue_id, commands.data(), commands.size_bytes());
+    };
+    write(program_command_sequence.preamble_command_sequence);
+    for (const auto& commands : program_command_sequence.runtime_args_command_sequences) {
+        write(commands);
+    }
+    write(program_command_sequence.program_config_buffer_command_sequence);
+    if (send_binary) {
+        if (program_command_sequence.prefetcher_cache_used) {
+            write(program_command_sequence.program_binary_setup_prefetcher_cache_command);
+        }
+        write(program_command_sequence.program_binary_command_sequence);
+    } else {
+        write(program_command_sequence.wait_barrier_command_sequence);
+    }
+}
+
+void write_program_launch_commands(
+    const ProgramCommandSequence& program_command_sequence,
+    SystemMemoryManager& manager,
+    uint32_t command_queue_id,
+    bool stall) {
+    auto write = [&](const auto& commands) {
+        write_command_chunk(manager, command_queue_id, commands.data(), commands.size_bytes());
+    };
+    if (stall) {
+        write(program_command_sequence.stall_command_sequences[program_command_sequence.current_stall_seq_idx]);
+    }
+    write(program_command_sequence.launch_msg_command_sequence);
+    write(program_command_sequence.go_msg_command_sequence);
+}
+
 TraceNode create_trace_node(
     ProgramImpl& program, distributed::MeshDevice* mesh_device, uint32_t num_workers, bool use_prefetcher_cache) {
     std::vector<SubDeviceId> sub_device_ids{program.determine_sub_device_ids(mesh_device)};

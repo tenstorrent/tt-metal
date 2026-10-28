@@ -158,6 +158,12 @@ void SubDeviceManagerTracker::remove_sub_device_manager(SubDeviceManagerId sub_d
 
 SubDeviceManager* SubDeviceManagerTracker::get_active_sub_device_manager() const { return active_sub_device_manager_; }
 
+void SubDeviceManagerTracker::set_active_sub_device_manager_view(SubDeviceManagerId sub_device_manager_id) {
+    auto sub_device_manager = sub_device_managers_.find(sub_device_manager_id);
+    TT_FATAL(sub_device_manager != sub_device_managers_.end(), "Sub device manager does not exist");
+    active_sub_device_manager_ = sub_device_manager->second.get();
+}
+
 SubDeviceManager* SubDeviceManagerTracker::get_default_sub_device_manager() const {
     return default_sub_device_manager_;
 }

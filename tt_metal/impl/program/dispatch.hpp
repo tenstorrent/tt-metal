@@ -242,6 +242,20 @@ void write_program_command_sequence(
     bool stall_before_program,
     bool send_binary = true);
 
+// write_program_command_sequence in two parts, for a traced program a sub-device manager switch can overlap: the
+// config part (preamble, runtime args, config data, binary) goes out before the switch, while the previous manager's
+// programs still run, and the launch part (stall, launch and go messages) after it.
+void write_program_config_commands(
+    const ProgramCommandSequence& program_command_sequence,
+    SystemMemoryManager& manager,
+    uint32_t command_queue_id,
+    bool send_binary);
+void write_program_launch_commands(
+    const ProgramCommandSequence& program_command_sequence,
+    SystemMemoryManager& manager,
+    uint32_t command_queue_id,
+    bool stall);
+
 KernelHandle get_device_local_kernel_handle(KernelHandle kernel_handle);
 
 void reset_config_buf_mgrs_and_expected_workers(
