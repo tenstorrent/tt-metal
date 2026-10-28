@@ -4,20 +4,30 @@
 
 """DeepSeek-V4.1 decode MoE for one live row (``V41_DECODE_C1_MOE=1``).
 
-The batched decode step runs the MoE on a tile whose first ``users_per_rank`` rows of every rank are real, whatever
-is live: at c1 the 31 idle rows (token 0) select 6 experts each and go through the dispatch, the experts and the
+The batched decode step runs the MoE on a tile whose first ``users_per_rank`` rows of every rank are real,
+whatever
+is live: at c1 the 31 idle rows (token 0) select 6 experts each and go through the dispatch, the experts and
+the
 combine ( ~0.5 to 0.65 ms a layer). With one live row the fabric chain is not needed:
-:class:`C1Moe` gathers the row to every chip (a one-hot matmul picks it out of the live rank's tile into row 0 of
-an otherwise zero tile, an SP all-gather of the tiles and a one-hot sum over the gathered rows broadcast it, a TP
-all-gather completes it), runs the gate and the exact top-k redundantly, selects the row's experts that are this
+:class:`C1Moe` gathers the row to every chip (a one-hot matmul picks it out of the live rank's tile into row 0
+of
+an otherwise zero tile, an SP all-gather of the tiles and a one-hot sum over the gathered rows broadcast it, a
+TP
+all-gather completes it), runs the gate and the exact top-k redundantly, selects the row's experts that are
+this
 chip's (:func:`c1_select`, one core) into the routed expert FFN's ``counts`` and the weights of the local sum,
-runs ``unified_routed_expert_moe`` on a 12-region buffer that holds the row at the head of each region (one tile
-row an expert), sums the local outputs with a ``[32, 384] x [384, 5120]`` matmul, sums the partials over the 32
+runs ``unified_routed_expert_moe`` on a 12-region buffer that holds the row at the head of each region (one
+tile
+row an expert), sums the local outputs with a ``[32, 384] x [384, 5120]`` matmul, sums the partials over the
+32
 chips (TP reduce-scatter, then the SP all-gather and one-hot sum again), adds the shared expert's output and
-places the result at the live row of the live rank's tile with a second one-hot matmul (the other rows zero). The
+places the result at the live row of the live rank's tile with a second one-hot matmul (the other rows zero).
+The
 gate, ``router_select``, ``fp8_qdq``, the shared expert and the routed expert FFN are the MoE's own; the
-collectives are ``V41Collectives``' and the pool's. Measured (``tests/v41/test_v41_moe_c1.py`` under trace): ~500
-us a layer against ~1,120 for the 32-row path on random rows; the routed expert FFN is ~90 us an expert (20 MB of
+collectives are ``V41Collectives``' and the pool's. Measured (``tests/v41/test_v41_moe_c1.py`` under trace):
+~500
+us a layer against ~1,120 for the 32-row path on random rows; the routed expert FFN is ~90 us an expert (20 MB
+of
 bfp4 weights), the shared expert 72, the two SP all-gathers 44 each, the gate 45, 28 programs.
 
 The one-hot tiles ``sel`` (row 0 = e_u on the live rank) and ``put`` (row u = e_0 on the live rank) come from
@@ -31,26 +41,39 @@ adds it after the 32-chip sum (step 12). With ``V41_SHARED_IN_FFN=rs`` (the serv
 intermediate, not yet summed over TP) in the decode tail's ``DecodeReduce.pending_shared``; the c1 path takes
 it from there, masks it to the chips of SP rank 0 (``sp0 @ partial``: a per-chip one-hot constant, so the SP
 all-gather-and-sum of step 11 counts it once) and adds it to the local routed partial before step 11's TP
-reduce-scatter, which is what the 32-row tail does with it. That replaces the shared expert's own reduce-scatter
+reduce-scatter, which is what the 32-row tail does with it. That replaces the shared expert's own
+reduce-scatter
 (~16 us) and the final add with a one-hot matmul and an add (~4 us).
 
-``rows`` above 1 (the speculative verify step, ``tt/v41/spec_verify.py``: ``1 + K`` rows of one user) runs the same chain on ``T <= rows`` live rows at rows ``0 .. T - 1`` of the tile: ``sel`` picks them,
-the SP gather-sum keeps row ``j`` of every rank (the ``sum8`` matrix is the identity repeated), ``router_select``
-ranks ``T`` real rows, ``c1_select`` (``T`` a runtime argument) marks an expert of any row with count ``T`` and writes
-row ``t``'s weight at ``(t, 32 l)``, ``R`` puts all the rows at the head of every region (the FFN computes a selected
-expert on the ``T`` rows at once: one tile of M, the same cost as one row; a row that did not select the expert
-has weight 0), the shared expert runs row-wise, and ``put`` places rows ``0 .. T - 1``. The composite FFN carries
+``rows`` above 1 (the speculative verify step, ``tt/v41/spec_verify.py``: ``1 + K`` rows of one user) runs the
+same chain on ``T <= rows`` live rows at rows ``0 .. T - 1`` of the tile: ``sel`` picks them,
+the SP gather-sum keeps row ``j`` of every rank (the ``sum8`` matrix is the identity repeated),
+``router_select``
+ranks ``T`` real rows, ``c1_select`` (``T`` a runtime argument) marks an expert of any row with count ``T``
+and writes
+row ``t``'s weight at ``(t, 32 l)``, ``R`` puts all the rows at the head of every region (the FFN computes a
+selected
+expert on the ``T`` rows at once: one tile of M, the same cost as one row; a row that did not select the
+expert
+has weight 0), the shared expert runs row-wise, and ``put`` places rows ``0 .. T - 1``. The composite FFN
+carries
 the rows (``C1FfnMatvec`` is one row's); the one-row call is unchanged.
 
 With ``V41_DECODE_C1_SHARED=split`` the c1 path runs the shared expert itself on a 32-way
-split of its intermediate instead of the chip's TP slice: :class:`C1SharedSplit` holds, per chip, the SP rank's
-tile-aligned piece of the chip's TP shard of ``gate_proj`` / ``up_proj`` (columns) and ``down_proj`` (rows), cut on
+split of its intermediate instead of the chip's TP slice: :class:`C1SharedSplit` holds, per chip, the SP
+rank's
+tile-aligned piece of the chip's TP shard of ``gate_proj`` / ``up_proj`` (columns) and ``down_proj`` (rows),
+cut on
 device at construction with one-hot matmuls (bit-exact: whole tiles keep their bfp8 blocks; +1.6 MB a chip a
 layer), and the layer runs three matmuls on ``[5120, 96]`` / ``[96, 5120]`` instead of ``[5120, 576]`` /
-``[576, 5120]``. Every chip's partial then holds a different piece, so no ``sp0`` mask: the TP reduce-scatter and
-the SP gather-sum of step 11 add all 32. The tile's row 0 is the only live row either way. The MoE's own shared
-expert is not called (``shared_fold`` reads ``split``; the tail's ``pending_shared`` stays empty). The chain is
-on every chip's critical path, so the saving (~35 us a layer: the 9-core and 12-core matmuls read 3.1 MB each at
+``[576, 5120]``. Every chip's partial then holds a different piece, so no ``sp0`` mask: the TP reduce-scatter
+and
+the SP gather-sum of step 11 add all 32. The tile's row 0 is the only live row either way. The MoE's own
+shared
+expert is not called (``shared_fold`` reads ``split``; the tail's ``pending_shared`` stays empty). The chain
+is
+on every chip's critical path, so the saving (~35 us a layer: the 9-core and 12-core matmuls read 3.1 MB each
+at
 ~19 GB/s a core) comes off the busiest chip's path as much as device 0's.
 """
 
@@ -68,12 +91,15 @@ from models.demos.deepseek_v3_d_p.tt.v41.routing import DecodeGate, router_selec
 _KERNELS = "models/demos/deepseek_v3_d_p/tt/v41/kernels"
 _TILE = 32
 _SENTINEL = 32  # the identity table's zero row
-# the routed expert FFN op: ``fused`` (moe_fused_swiglu, the in-tree op for few tokens an expert) or ``composite``
-# (unified_routed_expert_moe, today's prefill op: ~90 us an expert at one token) or ``matvec`` (C1FfnMatvec, the
+# the routed expert FFN op: ``fused`` (moe_fused_swiglu, the in-tree op for few tokens an expert) or
+# ``composite``
+# (unified_routed_expert_moe, today's prefill op: ~90 us an expert at one token) or ``matvec`` (C1FfnMatvec,
+# the
 # decode-shaped reader: every core reads, the row and the activated tiles multicast)
 _FFN = os.environ.get("V41_DECODE_C1_FFN", "composite")
 assert _FFN in ("fused", "composite", "matvec"), _FFN
-# the shared expert on the c1 path: ``fold`` (the MoE's own shared expert, its partial folded into the tail) or
+# the shared expert on the c1 path: ``fold`` (the MoE's own shared expert, its partial folded into the tail)
+# or
 # ``split`` (C1SharedSplit)
 _SHARED = os.environ.get("V41_DECODE_C1_SHARED", "fold")
 assert _SHARED in ("fold", "split"), _SHARED
@@ -97,12 +123,18 @@ C1_SELECT_ROWS = 4  # the most live rows c1_select handles (the verify step's 1 
 
 
 def c1_select(indices, weights, table, num_experts: int, w=None, rows: int = 1):
-    """``indices``: uint16 TILE ``[T, K]`` (``T <= 32``; rows ``0 .. rows - 1`` the live rows), ``weights``: bf16
-    row-major ``[T, K]``, ``table``: this chip's ``global_expert_idx_table`` (uint32 row-major, ``EPC`` words).
-    Returns ``(counts, w)``: uint32 row-major ``[1, E]`` (``rows`` at the experts some live row selected that are
-    this chip's) and bf16 TILE ``[32, 32 * EPC]`` (row ``t``, column ``32 l`` = row ``t``'s weight of local expert
-    ``l``, else 0). ``w``: a persistent, zeroed tensor of that shape to write the head words into (rows
-    ``0 .. C1_SELECT_ROWS - 1`` of column ``32 l``; the kernel's ``PERSIST``), instead of a fresh tensor zeroed by
+    """``indices``: uint16 TILE ``[T, K]`` (``T <= 32``; rows ``0 .. rows - 1`` the live rows), ``weights``:
+    bf16
+    row-major ``[T, K]``, ``table``: this chip's ``global_expert_idx_table`` (uint32 row-major, ``EPC``
+    words).
+    Returns ``(counts, w)``: uint32 row-major ``[1, E]`` (``rows`` at the experts some live row selected that
+    are
+    this chip's) and bf16 TILE ``[32, 32 * EPC]`` (row ``t``, column ``32 l + t`` = row ``t``'s weight of
+    local
+    expert ``l``, else 0: it multiplies row ``t`` of expert ``l``'s region of the FFN output). ``w``: a
+    persistent, zeroed tensor of that shape to write the head words into (rows
+    ``0 .. C1_SELECT_ROWS - 1`` of column ``32 l``; the kernel's ``PERSIST``), instead of a fresh tensor
+    zeroed by
     the kernel."""
     E = num_experts
     T, K = int(indices.shape[-2]), int(indices.shape[-1])
@@ -154,10 +186,14 @@ def c1_select(indices, weights, table, num_experts: int, w=None, rows: int = 1):
 
 class C1SharedSplit:
     """The shared expert's intermediate split over the 32 chips (``V41_DECODE_C1_SHARED=split``; the module
-    docstring). ``shared``: the layer's ``TtSharedExpert`` (its ``gate_proj`` / ``up_proj`` ``[hidden, inter/tp]``
-    and ``down_proj`` ``[inter/tp, hidden]`` per chip, TP-sharded, SP-replicated). The TP shard's ``inter/tp/32``
-    tiles go to the SP ranks in order, the first ranks one more when they do not divide (18 tiles over 8 ranks: 3,
-    3, 2, 2, 2, 2, 2, 2), every chip's piece padded to ``width`` (the largest) with zero columns / rows, which add
+    docstring). ``shared``: the layer's ``TtSharedExpert`` (its ``gate_proj`` / ``up_proj`` ``[hidden,
+    inter/tp]``
+    and ``down_proj`` ``[inter/tp, hidden]`` per chip, TP-sharded, SP-replicated). The TP shard's
+    ``inter/tp/32``
+    tiles go to the SP ranks in order, the first ranks one more when they do not divide (18 tiles over 8
+    ranks: 3,
+    3, 2, 2, 2, 2, 2, 2), every chip's piece padded to ``width`` (the largest) with zero columns / rows, which
+    add
     nothing (``silu(min(0, L)) * clamp(0) = 0``)."""
 
     def __init__(self, shared, device):
@@ -205,7 +241,8 @@ class C1SharedSplit:
         )
 
     def __call__(self, x):
-        """``x``: bf16 TILE ``[32, hidden]`` (the all-gathered row at row 0) -> this chip's partial of the shared
+        """``x``: bf16 TILE ``[32, hidden]`` (the all-gathered row at row 0) -> this chip's partial of the
+        shared
         expert's output, bf16 TILE ``[32, hidden]``; ``x`` is not consumed."""
         mm = lambda a, b, cfg: ttnn.matmul(a, b, program_config=cfg, compute_kernel_config=self.compute)
         act = clamped_silu_glu(mm(x, self.gate, self.gu_cfg), mm(x, self.up, self.gu_cfg), self.limit)
@@ -217,14 +254,20 @@ class C1SharedSplit:
 class C1FfnMatvec:
     """The decode-shaped routed expert FFN (``V41_DECODE_C1_FFN=matvec``): one token row
     through this chip's selected experts with every core of the grid reading the expert's weights, instead of
-    ``unified_routed_expert_moe``'s 11 column senders multicasting them down the grid at one tile of M (~90 us an
+    ``unified_routed_expert_moe``'s 11 column senders multicasting them down the grid at one tile of M (~90 us
+    an
     expert, 222 GB/s). Per expert: core c < NT_GU owns gate/up column tile c (its two dot
-    products over K from the resident row, fp32 accumulation, the clamped SiLU-GLU in DST); the activated tiles are
-    staged on core 0 and multicast into every core's L1; core c owns down column tiles {c, c + cores, ..} < NT_D.
-    The row ``x`` (bf16 TILE ``[32, hidden]``, row 0 live) is read by a few cores and multicast once by core 0.
-    Output: tile row l of the persistent ``y`` (bf16 ``[EPC * 32, hidden]``, zeroed once and shared by the layers;
+    products over K from the resident row, fp32 accumulation, the clamped SiLU-GLU in DST); the activated
+    tiles are
+    staged on core 0 and multicast into every core's L1; core c owns down column tiles {c, c + cores, ..} <
+    NT_D.
+    The row ``x`` (bf16 TILE ``[32, hidden]``, row 0 live) is read by a few cores and multicast once by core
+    0.
+    Output: tile row l of the persistent ``y`` (bf16 ``[EPC * 32, hidden]``, zeroed once and shared by the
+    layers;
     the other regions keep stale finite values that the local sum's zero weights drop). The kernels are
-    ``kernels/c1_ffn_{reader,compute,writer}.cpp`` (the reader's header has the dataflow). Measured: the reads at ~380 GB/s (52 us an expert), the compute hidden, ~25 us of sync an expert;
+    ``kernels/c1_ffn_{reader,compute,writer}.cpp`` (the reader's header has the dataflow). Measured: the reads
+    at ~380 GB/s (52 us an expert), the compute hidden, ~25 us of sync an expert;
     the one-row step -0.8 ms."""
 
     BLK_GU = 32
@@ -244,7 +287,8 @@ class C1FfnMatvec:
         assert gs[-2] == hidden and ds[-2] == inter and int(down0.shape[-1]) == hidden, (gs, ds, hidden, inter)
         self.KT, self.NGU_FULL, self.NT_GU = hidden // _TILE, gs[-1] // _TILE, inter // _TILE
         self.KD, self.ND_FULL, self.NT_D = inter // _TILE, ds[-1] // _TILE, hidden // _TILE
-        # timing probes (wrong outputs): ``noread`` skips the weight reads, ``nocompute`` the matmuls; ``cols<n>``
+        # timing probes (wrong outputs): ``noread`` skips the weight reads, ``nocompute`` the matmuls;
+        # ``cols<n>``
         #  runs the TP-row split's quarter geometry on the whole-expert tensors: n gate/up
         # column tiles on n cores and n down K tiles (the quarter's 18 of 72), the reads of a quarter expert
         probe = os.environ.get("V41_DECODE_C1_FFN_PROBE", "")
@@ -318,7 +362,8 @@ class C1FfnMatvec:
 
     def __call__(self, x, counts):
         """``x``: bf16 TILE ``[1, 1, 32, hidden]`` (DRAM-interleaved; row 0 the live row, the others zero),
-        ``counts``: uint32 row-major ``[1, E]`` -> ``self.y`` with tile row l = local expert l's output of row 0
+        ``counts``: uint32 row-major ``[1, E]`` -> ``self.y`` with tile row l = local expert l's output of row
+        0
         (rows 1..31 zero) for every l with ``counts[table[l]] > 0``."""
         assert x.dtype == ttnn.bfloat16 and x.layout == ttnn.TILE_LAYOUT, (x.dtype, x.layout)
         assert tuple(x.shape)[-2:] == (_TILE, self.hidden), tuple(x.shape)
@@ -412,7 +457,8 @@ class C1FfnMatvec:
 
 
 class C1Moe:
-    """The c1 MoE of one decode layer's ``TtV41Moe`` (its gate a :class:`DecodeGate`): see the module docstring.
+    """The c1 MoE of one decode layer's ``TtV41Moe`` (its gate a :class:`DecodeGate`): see the module
+    docstring.
     ``ccl``: the model's ``V41Collectives``; ``pool``: the decoder's ``V41DecodePool`` (its ``tt_ccl``)."""
 
     def __init__(self, v41_moe, ccl, pool, rows: int = 1):
@@ -430,8 +476,10 @@ class C1Moe:
         self.table = self.routed.global_expert_idx_table  # uint32 [EPC] per chip, the chip's global expert ids
         assert self.table.layout == ttnn.ROW_MAJOR_LAYOUT and int(self.table.shape[-1]) == self.epc, self.table
         device = moe.mesh_device
-        # the region of local expert l starts at row 32 l of the FFN buffer: a constant per chip, built from the
-        # chip's expert table (the FFN reads region[global id] for each of its experts; the other entries unread)
+        # the region of local expert l starts at row 32 l of the FFN buffer: a constant per chip, built from
+        # the
+        # chip's expert table (the FFN reads region[global id] for each of its experts; the other entries
+        # unread)
         hidden = int(self.routed.gate_projs[0].shape[-2])
         self.hidden = hidden
         region = []
@@ -454,7 +502,8 @@ class C1Moe:
         for j in range(rows):
             R[j::_TILE, j] = 1.0
         self.R = self._replicated(R.view(1, 1, self.epc * _TILE, _TILE), ttnn.bfloat16)
-        # sum8[j, 32 r + j] = 1 (j < rows): ``sum8 @ gathered`` sums the SP column's tiles (their other rows zero)
+        # sum8[j, 32 r + j] = 1 (j < rows): ``sum8 @ gathered`` sums the SP column's tiles (their other rows
+        # zero)
         # row by row
         sum8 = torch.zeros(_TILE, _TILE * pool.sp)
         for j in range(rows):
@@ -476,7 +525,8 @@ class C1Moe:
             mesh_mapper=ttnn.ShardTensor2dMesh(device, mesh_shape=device.shape, dims=(0, 1)),
         )
         self.sp0 = ttnn.reshape(self.sp0, (1, 1, _TILE, _TILE))
-        # c1_select's persistent weight tile (``V41_DECODE_C1_SELECT=persist``): zeroed once, before any capture
+        # c1_select's persistent weight tile (``V41_DECODE_C1_SELECT=persist``): zeroed once, before any
+        # capture
         self.W0 = (
             self._replicated(torch.zeros(1, 1, _TILE, _TILE * self.epc), ttnn.bfloat16)
             if _SELECT == "persist"
@@ -490,8 +540,10 @@ class C1Moe:
             self.shared_split = C1SharedSplit(shared, device)
         self.debug = None  # a dict: the call keeps its ``counts`` and ``indices`` there (tests)
         self.matvec = C1FfnMatvec(self.routed, device, hidden, self.epc, self.E) if _FFN == "matvec" else None
-        # the FFN's program-cache entry for this shape is built here, on an empty L1: ``ttnn.reduce_scatter`` (the
-        # decode tail's TP reduce-scatter) leaves a 512-byte L1 buffer at 914,176 after its first call, and the
+        # the FFN's program-cache entry for this shape is built here, on an empty L1: ``ttnn.reduce_scatter``
+        # (the
+        # decode tail's TP reduce-scatter) leaves a 512-byte L1 buffer at 914,176 after its first call, and
+        # the
         # routed experts' static CBs (to 1,004,864 in this mode) are rejected at compile against it; today's
         # 32-row FFN entry is built before any reduce-scatter runs and never meets it
         zeros = ttnn.from_torch(
@@ -521,11 +573,13 @@ class C1Moe:
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.moe.mesh_device),
         )
 
-    # --- the one-hot tiles, once a step ------------------------------------------------------------------------
+    # --- the one-hot tiles, once a step
+    # ------------------------------------------------------------------------
     @staticmethod
     def host_rows(sp: int, rows: int, live: tuple[int, int] | None) -> dict:
         """The two integer rows per rank (``[sp, rows]`` int32): ``c1sel`` (word 0 = u on the live rank) and
-        ``c1put`` (word u = 0 on the live rank), every other word the sentinel. ``live``: (rank, u) or None."""
+        ``c1put`` (word u = 0 on the live rank), every other word the sentinel. ``live``: (rank, u) or
+        None."""
         sel = torch.full((sp, rows), _SENTINEL, dtype=torch.int32)
         put = torch.full((sp, rows), _SENTINEL, dtype=torch.int32)
         if live is not None:
@@ -549,7 +603,8 @@ class C1Moe:
 
     @staticmethod
     def onehots(ids_sel, ids_put, table):
-        """``ids_*``: uint32 row-major ``[1, 1, 1, 32]`` (the device slices of ``host_rows``) -> the ``sel`` and
+        """``ids_*``: uint32 row-major ``[1, 1, 1, 32]`` (the device slices of ``host_rows``) -> the ``sel``
+        and
         ``put`` tiles, bf16 TILE ``[1, 1, 32, 32]``."""
         out = []
         for ids in (ids_sel, ids_put):
@@ -558,9 +613,11 @@ class C1Moe:
             out.append(ttnn.reshape(tile, (1, 1, _TILE, _TILE)))
         return tuple(out)
 
-    # --- the layer -----------------------------------------------------------------------------------------------
+    # --- the layer
+    # -----------------------------------------------------------------------------------------------
     def _ffn(self, x_in, counts):
-        """The routed expert FFN on the 12-region buffer (bfp8 TILE ``[EPC * 32, hidden]``): local expert ``l``'s
+        """The routed expert FFN on the 12-region buffer (bfp8 TILE ``[EPC * 32, hidden]``): local expert
+        ``l``'s
         rows at ``32 l`` where ``counts`` says so. ``fused``: ``moe_fused_swiglu`` into a zeroed output (the
         unselected regions stay zero); ``composite``: ``unified_routed_expert_moe`` in place."""
         routed = self.routed
@@ -604,9 +661,11 @@ class C1Moe:
         )
 
     def _sp_all_reduce(self, t):
-        """``t`` ``[1, 1, 32, W]`` with rows 1..31 zero -> the same shape on every chip of the SP column, row 0 the
+        """``t`` ``[1, 1, 32, W]`` with rows 1..31 zero -> the same shape on every chip of the SP column, row
+        0 the
         sum of the column's row 0s: one all-gather of the tiles (dim 2) and a one-hot matmul over the 32 x sp
-        gathered rows. A ring reduce-scatter and all-gather over the 8 chips cost 46 us each (7 serialized hops);
+        gathered rows. A ring reduce-scatter and all-gather over the 8 chips cost 46 us each (7 serialized
+        hops);
         the all-gather alone is one of them, the matmul 3 us."""
         if self.pool.sp == 1:
             return t
@@ -617,7 +676,8 @@ class C1Moe:
 
     def __call__(self, h, sel, put, rows: int = 1):
         """``h``: bf16 TILE ``[1, 1, 32, hidden/tp]`` (the normed residual tile), ``sel`` / ``put`` of
-        :meth:`onehots` -> the MoE output of the live row at its row of the live rank's tile, the other rows zero;
+        :meth:`onehots` -> the MoE output of the live row at its row of the live rank's tile, the other rows
+        zero;
         the same shape as ``h``. ``rows``: the live rows (``sel`` picks them into rows ``0 .. rows - 1``)."""
         moe, gate, cfg = self.moe, self.gate, self.gate.config
         assert 1 <= rows <= self.rows, (rows, self.rows)
@@ -654,13 +714,15 @@ class C1Moe:
         x_full = self.ccl.tp_all_gather(xq, dim=3)
         ttnn.deallocate(xq)
         # 7: the shared expert (rows 1..31 zero in, zero out). ``TtSharedExpert`` returns its reduce-scattered
-        # [32, hidden/tp] output (added at step 12); ``DecodeSharedExpert`` (V41_SHARED_IN_FFN) returns None and
+        # [32, hidden/tp] output (added at step 12); ``DecodeSharedExpert`` (V41_SHARED_IN_FFN) returns None
+        # and
         # parks its [32, hidden] partial in the decode tail's reduce: taken here, folded into step 11's
         # reduce-scatter on SP rank 0 only (the module docstring)
         shared = None if self.shared_split is not None else moe.shared_expert(ttnn.squeeze(x_full, dim=0))
         if self.shared_split is not None:
             # 7': this chip's piece of the shared expert on the all-gathered row (C1SharedSplit); every chip's
-            # partial differs, so step 11's TP reduce-scatter and SP gather-sum add all 32 of them: no sp0 mask
+            # partial differs, so step 11's TP reduce-scatter and SP gather-sum add all 32 of them: no sp0
+            # mask
             shared = self.shared_split(ttnn.reshape(x_full, (_TILE, self.hidden)))
             shared = ttnn.reshape(shared, (1, 1, _TILE, self.hidden))
             self.shared_fold = "split"
@@ -680,7 +742,8 @@ class C1Moe:
             self.debug["x_full"] = x_full  # the experts' input row (tests build the reference from it)
         matvec = self.matvec is not None and rows == 1
         if matvec:
-            # 8', 9': the decode-shaped FFN reads the bf16 row itself (no bfp8 region buffer) into its persistent y
+            # 8', 9': the decode-shaped FFN reads the bf16 row itself (no bfp8 region buffer) into its
+            # persistent y
             y = self.matvec(x_full, counts)
             if self.debug is None:
                 ttnn.deallocate(x_full)

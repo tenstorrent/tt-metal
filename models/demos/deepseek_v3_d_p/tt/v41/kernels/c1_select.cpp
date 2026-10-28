@@ -8,7 +8,7 @@
 // counts and the weight matrix of the local weighted sum:
 //
 //   counts[e] = ROWS if e is one of some live row's K experts and one of this chip's, else 0 (uint32 [1, E])
-//   W[t, 32 * l] = row t's weight of local expert l if row t selected it, else 0 (bf16 TILE [32, EPC * 32])
+//   W[t, 32 * l + t] = row t's weight of local expert l if row t selected it, else 0 (bf16 TILE [32, EPC * 32])
 //
 // (every live row sits at the head of every selected expert's region, so the FFN computes the expert on all of them
 // and the weights drop the rows that did not select it). ``idx`` is router_select's uint16 TILE [T, K] (rows
@@ -20,8 +20,8 @@
 // runtime args = [idx_addr, weights_addr, table_addr, counts_addr, w_addr, ROWS]
 //
 // PERSIST = 1: ``w`` is a persistent tensor the caller zeroed once; only the first TMAX * 32
-// bytes of each local expert's tile (rows 0 .. TMAX - 1 of face 0, columns 0..15, i.e. the weights at (t, 32 l) and
-// zeros) are written each call, not the whole EPC x 2 KB (zeroing 6,144 words on one RISC was ~13 of the op's 16
+// bytes of each local expert's tile (rows 0 .. TMAX - 1 of face 0, columns 0..15, i.e. the weights at (t, 32 l + t)
+// and zeros) are written each call, not the whole EPC x 2 KB (zeroing 6,144 words on one RISC was ~13 of the op's 16
 // us). ROWS <= TMAX <= 16 (the live rows stay in face 0).
 
 #include <cstdint>
@@ -77,6 +77,7 @@ void kernel_main() {
     volatile tt_l1_ptr uint32_t* mine = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(table_l1);
     volatile tt_l1_ptr uint32_t* cnt = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(counts_l1);
     volatile tt_l1_ptr uint32_t* wtile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(w_l1);
+    volatile tt_l1_ptr uint16_t* wtile16 = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(w_l1);
 
     for (uint32_t e = 0; e < E; ++e) {
         cnt[e] = 0;
@@ -94,8 +95,9 @@ void kernel_main() {
             for (uint32_t l = 0; l < EPC; ++l) {
                 if (mine[l] == e) {
                     cnt[e] = rows;
-                    // element (t, 32 l): tile l, face 0, row t, column 0 = 16-bit word 16 t = 32-bit word 8 t
-                    wtile[l * (W_STRIDE / 4) + t * 8] = wt[t * 32 + j];
+                    // element (t, 32 l + t): tile l, face 0, row t, column t (16-bit word 16 t + t): the weight
+                    // multiplies row t of expert l's region, which holds row t's output
+                    wtile16[l * (W_STRIDE / 2) + t * 16 + t] = wt[t * 32 + j];
                 }
             }
         }
