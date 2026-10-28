@@ -57,6 +57,9 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
                 and update its contents before replay of a captured trace.
             sequence_parallel_axis (int, optional): Mesh axis partitioning the
                 sequence. Native mesh coordinates supply each device's rank.
+            sequence_parallel_size (int, optional): Ranks of one chronology along
+                ``sequence_parallel_axis``; the axis extent by default. Must divide the
+                extent; a device's rank is its coordinate modulo this size.
             predecessor_carry (ttnn.Tensor): Three-row history from the
                 preceding rank, matching history. For local execution, alias history.
             program_config (QkvCausalConv1dSiluProgramConfig): Required program tuning;
@@ -95,7 +98,8 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
-        nb::arg("input_column_offset") = 0);
+        nb::arg("input_column_offset") = 0,
+        nb::arg("sequence_parallel_size") = nb::none());
 
     mod.def(
         "qkv_causal_conv1d_silu_exchange_core",
@@ -121,6 +125,8 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         three rows, which arrive over the fabric. The fourth output is the
         three-token history ending at the logical end of the interval
         (``actual_end``, default full capacity), for the next call.
+        ``sequence_parallel_size`` (keyword, optional) limits one chronology to that
+        many ranks along ``sequence_parallel_axis``; the axis extent by default.
 
         Returns:
             tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: ``q``, ``k``,
@@ -146,6 +152,7 @@ void bind_qkv_causal_conv1d_silu(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
-        nb::arg("input_column_offset") = 0);
+        nb::arg("input_column_offset") = 0,
+        nb::arg("sequence_parallel_size") = nb::none());
 }
 }  // namespace ttnn::operations::experimental::kda::qkv_causal_conv1d_silu::detail

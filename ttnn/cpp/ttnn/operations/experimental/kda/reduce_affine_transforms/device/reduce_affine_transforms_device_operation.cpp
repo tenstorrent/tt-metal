@@ -126,6 +126,7 @@ std::pair<ttnn::Tensor, ttnn::Tensor> reduce_affine_transforms(
     const ttnn::DeviceComputeKernelConfig& cfg,
     const Tensor& actual_start,
     uint32_t sequence_parallel_axis,
+    std::optional<uint32_t> sequence_parallel_size,
     uint32_t local_rows,
     const std::optional<Tensor>& actual_end) {
     // Cache-miss validation cannot protect attribute construction on cache hits. Keep these guards here because the
@@ -144,6 +145,7 @@ std::pair<ttnn::Tensor, ttnn::Tensor> reduce_affine_transforms(
             .key_dim = static_cast<uint32_t>(shape[1]),
             .value_dim = static_cast<uint32_t>(b.logical_shape()[2]),
             .sequence_parallel_axis = sequence_parallel_axis,
+            .sequence_parallel_size = sequence_parallel_size,
             .local_rows = local_rows,
             .output_mem_config = mem,
             .compute_kernel_config = cfg},

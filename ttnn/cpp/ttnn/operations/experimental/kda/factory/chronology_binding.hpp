@@ -17,9 +17,20 @@ inline ttnn::device_operation::MeshWorkloadArtifacts chronology_workload(
     const ttnn::MeshDevice& device,
     uint32_t sequence_parallel_axis,
     uint32_t local_rows,
-    std::initializer_list<tt::tt_metal::experimental::KernelSpecName> chronology_readers) {
+    std::initializer_list<tt::tt_metal::experimental::KernelSpecName> chronology_readers,
+    std::optional<uint32_t> sequence_parallel_size = std::nullopt) {
     using namespace tt::tt_metal::experimental;
     TT_FATAL(sequence_parallel_axis < device.shape().dims(), "KDA: invalid sequence_parallel_axis");
+    // The chronology spans ``sp_size`` ranks along the axis: the mesh's extent by default, or an explicit size (1 =
+    // every coordinate runs a one-rank chronology of its own sequence, e.g. one prompt per mesh row on a multi-row
+    // mesh), which must divide the extent so ranks stay contiguous along the axis.
+    const uint32_t axis_extent = device.shape()[sequence_parallel_axis];
+    const uint32_t sp_size = sequence_parallel_size.value_or(axis_extent);
+    TT_FATAL(
+        sp_size >= 1 && sp_size <= axis_extent && axis_extent % sp_size == 0,
+        "KDA: sequence_parallel_size {} must divide the mesh extent {} of the sequence-parallel axis",
+        sp_size,
+        axis_extent);
     ttnn::device_operation::MeshWorkloadArtifacts workload;
     for (const auto& coordinate : tensor_coords.coords()) {
         auto spec = artifacts.spec;
@@ -28,8 +39,8 @@ inline ttnn::device_operation::MeshWorkloadArtifacts chronology_workload(
                 return kernel.unique_id == chronology_reader;
             });
             TT_FATAL(reader != spec.kernels.end(), "KDA: chronology reader is absent from the program");
-            reader->compile_time_args.insert({"sp_rank", coordinate[sequence_parallel_axis]});
-            reader->compile_time_args.insert({"sp_size", device.shape()[sequence_parallel_axis]});
+            reader->compile_time_args.insert({"sp_rank", coordinate[sequence_parallel_axis] % sp_size});
+            reader->compile_time_args.insert({"sp_size", sp_size});
             reader->compile_time_args.insert({"local_rows", local_rows});
         }
         workload.programs.push_back({
@@ -46,9 +57,16 @@ inline ttnn::device_operation::MeshWorkloadArtifacts chronology_workload(
     const ttnn::MeshDevice& device,
     uint32_t sequence_parallel_axis,
     uint32_t local_rows,
-    const tt::tt_metal::experimental::KernelSpecName& chronology_reader) {
+    const tt::tt_metal::experimental::KernelSpecName& chronology_reader,
+    std::optional<uint32_t> sequence_parallel_size = std::nullopt) {
     return chronology_workload(
-        artifacts, tensor_coords, device, sequence_parallel_axis, local_rows, {chronology_reader});
+        artifacts,
+        tensor_coords,
+        device,
+        sequence_parallel_axis,
+        local_rows,
+        {chronology_reader},
+        sequence_parallel_size);
 }
 
 inline void bind_chronology_channel(

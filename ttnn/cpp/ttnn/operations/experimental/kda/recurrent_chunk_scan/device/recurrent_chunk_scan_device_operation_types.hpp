@@ -28,6 +28,7 @@ struct RecurrentChunkScanParams {
     // rows, the identity where the rank has no head, and no tail.
     bool packed_head = false;
     uint32_t sequence_parallel_axis;
+    std::optional<uint32_t> sequence_parallel_size;  // the chronology's rank count; the mesh extent when unset
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;
 };

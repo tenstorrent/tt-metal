@@ -257,7 +257,8 @@ ttnn::device_operation::MeshWorkloadArtifacts ReduceAffineTransformsProgramFacto
         device,
         attrs.sequence_parallel_axis,
         attrs.local_rows,
-        dataflow_kernel_name);
+        dataflow_kernel_name,
+        attrs.sequence_parallel_size);
 }
 
 }  // namespace ttnn::experimental::prim

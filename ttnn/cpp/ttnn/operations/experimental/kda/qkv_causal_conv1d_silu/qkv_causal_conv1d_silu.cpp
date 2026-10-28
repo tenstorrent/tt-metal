@@ -21,7 +21,8 @@ prim::QkvCausalConv1dSiluParams make_params(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     uint32_t sequence_parallel_axis,
-    uint32_t input_column_offset) {
+    uint32_t input_column_offset,
+    std::optional<uint32_t> sequence_parallel_size) {
     TT_FATAL(
         input.storage_type() == StorageType::DEVICE && input.buffer() != nullptr && input.logical_shape().rank() == 3,
         "qkv_causal_conv1d_silu: input must be an allocated device tensor of rank 3");
@@ -32,6 +33,7 @@ prim::QkvCausalConv1dSiluParams make_params(
         .v_width = v_width,
         .channel_chunk_size = program_config.channel_chunk_size,
         .sequence_parallel_axis = sequence_parallel_axis,
+        .sequence_parallel_size = sequence_parallel_size,
         .input_column_offset = input_column_offset,
         .output_mem_config = memory_config.value_or(ttnn::DRAM_MEMORY_CONFIG),
         .compute_kernel_config = init_device_compute_kernel_config(
@@ -66,7 +68,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     uint32_t sequence_parallel_axis,
-    uint32_t input_column_offset) {
+    uint32_t input_column_offset,
+    std::optional<uint32_t> sequence_parallel_size) {
     auto params = make_params(
         input,
         q_width,
@@ -76,7 +79,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_conv1d_silu(
         memory_config,
         compute_kernel_config,
         sequence_parallel_axis,
-        input_column_offset);
+        input_column_offset,
+        sequence_parallel_size);
     auto outputs = ttnn::device_operation::launch<prim::QkvCausalConv1dSiluOperation>(
         params,
         prim::QkvCausalConv1dSiluInputs{
@@ -109,7 +113,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_co
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
     uint32_t sequence_parallel_axis,
-    uint32_t input_column_offset) {
+    uint32_t input_column_offset,
+    std::optional<uint32_t> sequence_parallel_size) {
     auto params = make_params(
         input,
         q_width,
@@ -119,7 +124,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> qkv_causal_co
         memory_config,
         compute_kernel_config,
         sequence_parallel_axis,
-        input_column_offset);
+        input_column_offset,
+        sequence_parallel_size);
     TT_FATAL(
         exchange_semaphores.size() == params.exchange_semaphore_addresses.size(),
         "qkv_causal_conv1d_silu_with_carry: pass {} exchange_semaphores",

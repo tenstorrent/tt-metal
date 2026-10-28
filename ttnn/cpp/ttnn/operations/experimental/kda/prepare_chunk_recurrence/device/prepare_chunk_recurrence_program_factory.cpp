@@ -408,7 +408,8 @@ ttnn::device_operation::MeshWorkloadArtifacts PrepareChunkRecurrenceProgramFacto
         device,
         attrs.sequence_parallel_axis,
         attrs.num_chunks * TILE_HEIGHT,
-        READER);
+        READER,
+        attrs.sequence_parallel_size);
 }
 
 }  // namespace ttnn::experimental::prim

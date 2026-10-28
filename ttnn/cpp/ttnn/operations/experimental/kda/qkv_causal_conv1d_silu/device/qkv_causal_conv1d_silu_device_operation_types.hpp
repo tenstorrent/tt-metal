@@ -20,6 +20,7 @@ struct QkvCausalConv1dSiluParams {
     uint32_t v_width;
     uint32_t channel_chunk_size;
     uint32_t sequence_parallel_axis;
+    std::optional<uint32_t> sequence_parallel_size;  // the chronology's rank count; the mesh extent when unset
     // First channel of the convolution within the input's last dimension.
     uint32_t input_column_offset;
     // Fabric history exchange only: L1 addresses of its global semaphores, entry, predecessor arrival, carry arrival.

@@ -57,6 +57,11 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
                 host product is itself exact in BF16. Defaults to 1.0.
             beta_logits_column_offset (int): Tile-aligned first column of the beta logits in ``beta``.
                 Defaults to 0.
+            sequence_parallel_axis (int, optional): Mesh axis partitioning the sequence. Native
+                mesh coordinates supply each device's rank.
+            sequence_parallel_size (int, optional): Ranks of one chronology along
+                ``sequence_parallel_axis``; the axis extent by default. Must divide the
+                extent; a device's rank is its coordinate modulo this size.
 
         Returns:
             list[ttnn.Tensor]: Seven new TILE-layout tensors, where ``N = T / 32``, in order:
@@ -89,7 +94,8 @@ void bind_prepare_chunk_recurrence(nb::module_& mod) {
         nb::arg("actual_end") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
         nb::arg("gate_scale") = 1.0F,
-        nb::arg("beta_logits_column_offset") = 0);
+        nb::arg("beta_logits_column_offset") = 0,
+        nb::arg("sequence_parallel_size") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::prepare_chunk_recurrence::detail

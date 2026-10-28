@@ -150,6 +150,7 @@ class ttKDA:
         weights: KDAWeights | None = None,
         *,
         active_seq_len: int,
+        sequence_parallel_size: int | None = None,
     ) -> None:
         if tp_axis not in (0, 1) or sp_axis not in (0, 1) or sp_axis == tp_axis:
             raise ValueError(f"KDA requires distinct 2D SP/TP axes, got SP={sp_axis}, TP={tp_axis}")
@@ -157,9 +158,18 @@ class ttKDA:
         self.device = mesh_device
         self.tensor_parallel_axis = tp_axis
         self.sequence_parallel_axis = sp_axis
-        self.sequence_parallel_size = (
+        mesh_extent = (
             tuple(mesh_device.shape)[self.sequence_parallel_axis] if isinstance(mesh_device, ttnn.MeshDevice) else 1
         )
+        # ``sequence_parallel_size``: the ranks of one chronology along the SP axis; the mesh extent by default.
+        # 1 on a multi-row mesh = every row runs its own sequence (one prompt per row), with the single-rank
+        # paths below and the ops told the size explicitly (their kernels bind it from the mesh otherwise).
+        self.sequence_parallel_size = mesh_extent if sequence_parallel_size is None else int(sequence_parallel_size)
+        if self.sequence_parallel_size < 1 or mesh_extent % self.sequence_parallel_size:
+            raise ValueError(
+                f"sequence_parallel_size {self.sequence_parallel_size} must divide the SP axis extent {mesh_extent}"
+            )
+        self._explicit_sp_size = None if sequence_parallel_size is None else self.sequence_parallel_size
         if active_seq_len <= 0 or active_seq_len % (self.sequence_parallel_size * KDA_CHUNK_SIZE):
             raise ValueError("active_seq_len must give a positive tile-aligned local physical length")
         self.active_seq_len_local = active_seq_len // self.sequence_parallel_size
@@ -275,6 +285,7 @@ class ttKDA:
             mesh_device,
             program_config.recurrence,
             sequence_parallel_axis=self.sequence_parallel_axis,
+            sequence_parallel_size=self._explicit_sp_size,
             local_rows=self.active_seq_len_local,
             heads=self.config.num_heads,
             key_dim=self.config.head_k_dim,
@@ -509,6 +520,7 @@ class ttKDA:
             exchange_semaphores=self._history_exchange.semaphores,
             actual_end=actual_end,
             sequence_parallel_axis=self.sequence_parallel_axis,
+            sequence_parallel_size=self._explicit_sp_size,
             memory_config=self.qkv_memory_config,
         )
         gate = self._compute_decay(inputs.projected, inputs.decay_rank_offset)

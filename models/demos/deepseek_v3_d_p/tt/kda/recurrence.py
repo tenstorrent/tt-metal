@@ -116,6 +116,7 @@ def _prepare_chunk_terms(
     actual_start: ttnn.Tensor,
     actual_end: ttnn.Tensor | None,
     sequence_parallel_axis: int,
+    sequence_parallel_size: int | None = None,
     gate_scale: float,
     beta_logits_column_offset: int,
     memory_config: ttnn.MemoryConfig,
@@ -134,6 +135,7 @@ def _prepare_chunk_terms(
         actual_start=actual_start,
         actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
+        sequence_parallel_size=sequence_parallel_size,
         gate_scale=gate_scale,
         beta_logits_column_offset=beta_logits_column_offset,
     )
@@ -174,6 +176,7 @@ def _summarize_chunk_groups(
     actual_start: ttnn.Tensor,
     actual_end: ttnn.Tensor | None,
     sequence_parallel_axis: int,
+    sequence_parallel_size: int | None = None,
     groups_per_head: int,
     summary_memory_config: ttnn.MemoryConfig,
     compute_config: _RecurrenceComputeConfig,
@@ -187,6 +190,7 @@ def _summarize_chunk_groups(
         actual_start=actual_start,
         actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
+        sequence_parallel_size=sequence_parallel_size,
     )
     # A single sequence rank has no split tail, so only the head summaries are needed.
     ttnn.deallocate(tail_a)
@@ -202,6 +206,7 @@ def _scan_chunks(
     actual_start: ttnn.Tensor,
     actual_end: ttnn.Tensor | None,
     sequence_parallel_axis: int,
+    sequence_parallel_size: int | None = None,
     compute_config: ttnn.DeviceComputeKernelConfig,
     groups_per_head: int = 1,
 ) -> RecurrenceResult:
@@ -215,6 +220,7 @@ def _scan_chunks(
         actual_end=actual_end,
         tail_entry_states=tail_entry_states,
         sequence_parallel_axis=sequence_parallel_axis,
+        sequence_parallel_size=sequence_parallel_size,
     )
     return RecurrenceResult(output=output, final_state=final_states)
 
@@ -252,6 +258,7 @@ def distributed_prefix(
     initial_state: ttnn.Tensor,
     *,
     sequence_parallel_axis: int,
+    sequence_parallel_size: int | None = None,
     compute_config: ttnn.DeviceComputeKernelConfig,
     actual_start: ttnn.Tensor,
     local_rows: int,
@@ -297,6 +304,7 @@ def distributed_prefix(
         memory_config=output_memory,
         compute_kernel_config=compute_config,
         sequence_parallel_axis=sequence_parallel_axis,
+        sequence_parallel_size=sequence_parallel_size,
     )
 
 
@@ -326,6 +334,7 @@ def _ordinary_group_scan(
     actual_start: ttnn.Tensor,
     actual_end: ttnn.Tensor | None,
     sequence_parallel_axis: int,
+    sequence_parallel_size: int | None = None,
     groups_per_head: int,
     prefix_memory_config: ttnn.MemoryConfig,
     compute_config: _RecurrenceComputeConfig,
@@ -346,6 +355,7 @@ def _ordinary_group_scan(
         tail_entry_states=initial_state,
         local_rows=grouped.v_beta.shape[1] * grouped.v_beta.shape[2] * groups_per_head,
         sequence_parallel_axis=sequence_parallel_axis,
+        sequence_parallel_size=sequence_parallel_size,
     )
     return _scan_chunks(
         grouped,
@@ -356,6 +366,7 @@ def _ordinary_group_scan(
         actual_start=actual_start,
         actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
+        sequence_parallel_size=sequence_parallel_size,
     )
 
 
@@ -367,6 +378,7 @@ def _scan_local_grouped_chunks(
     actual_start: ttnn.Tensor,
     actual_end: ttnn.Tensor | None,
     sequence_parallel_axis: int,
+    sequence_parallel_size: int | None = None,
     summary_group_chunks: int,
     groups: int,
     memory: ttnn.MemoryConfig,
@@ -383,6 +395,7 @@ def _scan_local_grouped_chunks(
         actual_start=actual_start,
         actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
+        sequence_parallel_size=sequence_parallel_size,
     )
     scan = _ordinary_group_scan(
         grouped,
@@ -394,6 +407,7 @@ def _scan_local_grouped_chunks(
         actual_start=actual_start,
         actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
+        sequence_parallel_size=sequence_parallel_size,
     )
     output = ttnn.reshape(
         scan.output, (geometry.batch_heads, geometry.num_chunks, geometry.chunk_size, geometry.value_dim)
@@ -408,6 +422,7 @@ def _partition_prefix(
     groups_per_head: int,
     local_rows: int,
     sequence_parallel_axis: int,
+    sequence_parallel_size: int | None = None,
     actual_start: ttnn.Tensor,
     actual_end: ttnn.Tensor | None,
     compute_config: _RecurrenceComputeConfig,
@@ -420,6 +435,7 @@ def _partition_prefix(
         actual_start=actual_start,
         actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
+        sequence_parallel_size=sequence_parallel_size,
         memory_config=KDA_OUTPUT_MEMORY_CONFIG,
         compute_kernel_config=compute_config.affine_prefix,
     )
@@ -427,6 +443,7 @@ def _partition_prefix(
         pack_transform(AffineTransform(a, b)),
         initial_state,
         sequence_parallel_axis=sequence_parallel_axis,
+        sequence_parallel_size=sequence_parallel_size,
         compute_config=compute_config.affine_prefix,
         actual_start=actual_start,
         local_rows=local_rows,
@@ -442,6 +459,7 @@ def _scan_sp_grouped_chunks(
     groups: int,
     memory: ttnn.MemoryConfig,
     sequence_parallel_axis: int,
+    sequence_parallel_size: int | None = None,
     actual_start: ttnn.Tensor,
     actual_end: ttnn.Tensor | None,
     compute_config: _RecurrenceComputeConfig,
@@ -459,6 +477,7 @@ def _scan_sp_grouped_chunks(
             actual_start=actual_start,
             actual_end=actual_end,
             sequence_parallel_axis=sequence_parallel_axis,
+            sequence_parallel_size=sequence_parallel_size,
             memory_config=KDA_OUTPUT_MEMORY_CONFIG,
             compute_kernel_config=compute_config.preparation,
             packed_head=True,
@@ -467,6 +486,7 @@ def _scan_sp_grouped_chunks(
             packed,
             initial_state,
             sequence_parallel_axis=sequence_parallel_axis,
+            sequence_parallel_size=sequence_parallel_size,
             compute_config=compute_config.affine_prefix,
             actual_start=actual_start,
             local_rows=geometry.local_rows,
@@ -479,6 +499,7 @@ def _scan_sp_grouped_chunks(
             actual_start=actual_start,
             actual_end=actual_end,
             sequence_parallel_axis=sequence_parallel_axis,
+            sequence_parallel_size=sequence_parallel_size,
             memory_config=memory,
             compute_kernel_config=compute_config.preparation,
         )
@@ -490,6 +511,7 @@ def _scan_sp_grouped_chunks(
             actual_start=actual_start,
             actual_end=actual_end,
             sequence_parallel_axis=sequence_parallel_axis,
+            sequence_parallel_size=sequence_parallel_size,
             compute_config=compute_config,
         )
         # The chronological prefix ends where the split tail begins, supplying its seed.
@@ -505,6 +527,7 @@ def _scan_sp_grouped_chunks(
             actual_start=actual_start,
             actual_end=actual_end,
             sequence_parallel_axis=sequence_parallel_axis,
+            sequence_parallel_size=sequence_parallel_size,
             memory_config=KDA_DISTRIBUTED_PREFIX_MEMORY_CONFIG,
             compute_kernel_config=compute_config.affine_prefix,
         )
@@ -516,6 +539,7 @@ def _scan_sp_grouped_chunks(
         actual_start=actual_start,
         actual_end=actual_end,
         sequence_parallel_axis=sequence_parallel_axis,
+        sequence_parallel_size=sequence_parallel_size,
         compute_config=compute_config.scan,
     )
     output = ttnn.reshape(
@@ -550,6 +574,7 @@ class KDARecurrence:
         value_dim: int,
         batch: int = 1,
         gate_scale: float = 1.0,
+        sequence_parallel_size: int | None = None,
     ) -> None:
         # Preparation multiplies the gate by gate_scale before its cumulative sum.
         self._gate_scale = gate_scale
@@ -596,9 +621,15 @@ class KDARecurrence:
                 f"preparation and the scan run slower ({heads} heads, {local_rows} rows per device)."
             )
         self._sequence_parallel_axis = sequence_parallel_axis
-        self._sequence_parallel = (
-            isinstance(device, ttnn.MeshDevice) and tuple(device.shape)[sequence_parallel_axis] > 1
+        # the ranks of one chronology along the SP axis: the mesh extent unless given (1 = every row its own
+        # sequence); handed to every chronology op, whose kernels bind the size from the mesh otherwise
+        self._sequence_parallel_size = sequence_parallel_size
+        effective_sp = (
+            int(sequence_parallel_size)
+            if sequence_parallel_size is not None
+            else (tuple(device.shape)[sequence_parallel_axis] if isinstance(device, ttnn.MeshDevice) else 1)
         )
+        self._sequence_parallel = effective_sp > 1
         grouped = self._sequence_parallel or program_config.local_scan_strategy == "grouped"
         if grouped:
             if key_dim != value_dim:
@@ -681,6 +712,7 @@ class KDARecurrence:
             actual_start=actual_start,
             actual_end=actual_end,
             sequence_parallel_axis=self._sequence_parallel_axis,
+            sequence_parallel_size=self._sequence_parallel_size,
             gate_scale=self._gate_scale,
             beta_logits_column_offset=beta_logits_column_offset,
             memory_config=self._preparation_memory,
@@ -751,6 +783,7 @@ class KDARecurrence:
             actual_start=actual_start,
             actual_end=actual_end,
             sequence_parallel_axis=self._sequence_parallel_axis,
+            sequence_parallel_size=self._sequence_parallel_size,
             compute_config=self._compute_config.scan,
         )
 
@@ -772,6 +805,7 @@ class KDARecurrence:
             actual_start=actual_start,
             actual_end=actual_end,
             sequence_parallel_axis=self._sequence_parallel_axis,
+            sequence_parallel_size=self._sequence_parallel_size,
         )
 
     def _run_sp(
@@ -792,5 +826,6 @@ class KDARecurrence:
             actual_start=actual_start,
             actual_end=actual_end,
             sequence_parallel_axis=self._sequence_parallel_axis,
+            sequence_parallel_size=self._sequence_parallel_size,
             gather_buffer=self._gather_buffer,
         )

@@ -19,6 +19,7 @@ struct AffineExclusiveScanParams {
     uint32_t value_dim;
 
     uint32_t sequence_parallel_axis;
+    std::optional<uint32_t> sequence_parallel_size;  // the chronology's rank count; the mesh extent when unset
     uint32_t local_rows;
     tt::tt_metal::MemoryConfig output_mem_config;
     DeviceComputeKernelConfig compute_kernel_config;

@@ -96,7 +96,7 @@ void add_history_exchange(
     uint32_t channel_tiles) {
     const auto& device = in.input.mesh_tensor().device();
     const uint32_t axis = attrs.sequence_parallel_axis;
-    const uint32_t sp_size = device.shape()[axis];
+    const uint32_t sp_size = attrs.sequence_parallel_size.value_or(device.shape()[axis]);
     // A 2D multicast is routed by the connection's ETH direction, so every hop must leave in the same direction.
     // 1D fabric follows its routing plane, which may turn (the QuietBox ring).
     TT_FATAL(
@@ -518,7 +518,8 @@ ttnn::device_operation::MeshWorkloadArtifacts QkvCausalConv1dSiluProgramFactory:
         attrs.sequence_parallel_axis,
         attrs.sequence,
         // The writer stages the exchanged rows, so it needs the same chronology as the reader.
-        {reader_kernel_name, writer_kernel_name});
+        {reader_kernel_name, writer_kernel_name},
+        attrs.sequence_parallel_size);
     if (exchange) {
         add_history_exchange(workload, attrs, in, predecessor_name, outputs[3], dist.cores, exchange_core, Ct);
     }

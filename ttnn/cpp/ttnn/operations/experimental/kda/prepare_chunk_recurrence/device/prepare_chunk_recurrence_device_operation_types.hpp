@@ -13,6 +13,7 @@ namespace ttnn::experimental::prim {
 
 struct PrepareChunkRecurrenceParams {
     uint32_t sequence_parallel_axis;
+    std::optional<uint32_t> sequence_parallel_size;  // the chronology's rank count; the mesh extent when unset
     uint32_t num_heads;
     uint32_t num_chunks;
     uint32_t key_dim;

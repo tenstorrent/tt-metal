@@ -36,6 +36,7 @@ Tensor affine_exclusive_scan(
     const DeviceComputeKernelConfig&,
     const Tensor&,
     uint32_t sequence_parallel_axis,
+    std::optional<uint32_t> sequence_parallel_size,
     uint32_t local_rows,
     const std::optional<Tensor>& actual_end);
 

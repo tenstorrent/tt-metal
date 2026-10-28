@@ -65,7 +65,7 @@ void ChainAffineTransformsOperation::validate_on_program_cache_miss(
     const auto* mesh = in.transforms.device();
     TT_FATAL(attrs.sequence_parallel_axis < mesh->shape().dims(), "{}: invalid sequence_parallel_axis", operation_name);
     TT_FATAL(
-        t_shape[0] == mesh->shape()[attrs.sequence_parallel_axis],
+        t_shape[0] == attrs.sequence_parallel_size.value_or(mesh->shape()[attrs.sequence_parallel_axis]),
         "{}: transforms must hold one transition per sequence-parallel rank",
         operation_name);
     // Each head needs at least one core; spare cores split its value columns further.
@@ -131,6 +131,7 @@ std::pair<Tensor, Tensor> chain_affine_transforms(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const Tensor& actual_start,
     uint32_t sequence_parallel_axis,
+    std::optional<uint32_t> sequence_parallel_size,
     uint32_t local_rows) {
     // Cache-miss validation cannot protect attribute construction on cache hits. Keep these guards here because the
     // launcher indexes both shapes before dispatching validation.
@@ -145,6 +146,7 @@ std::pair<Tensor, Tensor> chain_affine_transforms(
             .key_dim = static_cast<uint32_t>(s_shape[1]),
             .value_dim = static_cast<uint32_t>(s_shape[2]),
             .sequence_parallel_axis = sequence_parallel_axis,
+            .sequence_parallel_size = sequence_parallel_size,
             .local_rows = local_rows,
             .output_mem_config = memory_config,
             .compute_kernel_config = compute_kernel_config},

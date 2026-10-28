@@ -65,6 +65,9 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
                 and update its contents before replay of a captured trace.
             sequence_parallel_axis (int, optional): Mesh axis partitioning the
                 sequence. Native mesh coordinates supply each device's rank.
+            sequence_parallel_size (int, optional): Ranks of one chronology along
+                ``sequence_parallel_axis``; the axis extent by default. Must divide the
+                extent; a device's rank is its coordinate modulo this size.
             local_rows (int): Positive, 32-aligned token rows per SP device. Summary tensor
                 shapes do not encode this sequence length.
             tail_a, tail_b (ttnn.Tensor): Tail-segment affine summaries.
@@ -102,7 +105,8 @@ void bind_affine_exclusive_scan(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
-        nb::arg("actual_end") = nb::none());
+        nb::arg("actual_end") = nb::none(),
+        nb::arg("sequence_parallel_size") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::affine_exclusive_scan::detail

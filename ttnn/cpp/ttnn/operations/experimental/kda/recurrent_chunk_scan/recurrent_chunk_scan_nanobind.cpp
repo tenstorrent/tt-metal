@@ -58,6 +58,9 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 and update its contents before replay of a captured trace.
             sequence_parallel_axis (int, optional): Mesh axis partitioning the
                 sequence. Native mesh coordinates supply each device's rank.
+            sequence_parallel_size (int, optional): Ranks of one chronology along
+                ``sequence_parallel_axis``; the axis extent by default. Must divide the
+                extent; a device's rank is its coordinate modulo this size.
             tail_entry_states (ttnn.Tensor): FLOAT32 carry ``[B*H,K,V]``
                 to reload at the locally derived split. Ignored when unsplit.
                 No input tensor is modified.
@@ -100,7 +103,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("memory_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
-        nb::arg("actual_end") = nb::none());
+        nb::arg("actual_end") = nb::none(),
+        nb::arg("sequence_parallel_size") = nb::none());
 
     ttnn::bind_function<"summarize_chunk_recurrence", "ttnn.experimental.kda.">(
         mod,
@@ -157,6 +161,9 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
                 and update its contents before replay of a captured trace.
             sequence_parallel_axis (int, optional): Mesh axis partitioning the
                 sequence. Native mesh coordinates supply each device's rank.
+            sequence_parallel_size (int, optional): Ranks of one chronology along
+                ``sequence_parallel_axis``; the axis extent by default. Must divide the
+                extent; a device's rank is its coordinate modulo this size.
             groups_per_head (int, optional): Groups folded into the leading
                 dimension. Defaults to 1.
             memory_config (ttnn.MemoryConfig, optional): Output memory configuration.
@@ -202,7 +209,8 @@ void bind_recurrent_chunk_scan(nb::module_& mod) {
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("sequence_parallel_axis") = 0,
         nb::arg("actual_end") = nb::none(),
-        nb::arg("packed_head") = false);
+        nb::arg("packed_head") = false,
+        nb::arg("sequence_parallel_size") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::kda::recurrent_chunk_scan::detail
