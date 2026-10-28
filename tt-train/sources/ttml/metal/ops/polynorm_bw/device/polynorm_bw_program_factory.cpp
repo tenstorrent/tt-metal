@@ -83,9 +83,6 @@ constexpr auto kPackedPartialsOutputCbIndex = tt::CBIndex::c_22;
 
 constexpr uint32_t kNumOneTile = 1U;
 
-const std::string kComputeGradInputDefineKey = "COMPUTE_GRAD_INPUT";
-const std::string kComputePackedPartialsDefineKey = "COMPUTE_PACKED_PARTIALS";
-
 }  // namespace
 
 namespace ttml::metal::ops::polynorm3_bw::device {
@@ -211,24 +208,16 @@ tt::tt_metal::ProgramDescriptor PolyNorm3BackwardProgramFactory::create_descript
         "Weight buffer must be in DRAM. Weight buffer of type {}",
         enchantum::to_string(weight_buffer->buffer_type()));
 
-    // An output is nullopt when it is not requested. All CBs are still created: they are a few tiles each, and the
-    // compute kernel's startup refers to cb_output.
-    tt::tt_metal::Buffer* dL_dx_output_buffer = nullptr;
-    if (args.compute_grad_input) {
-        dL_dx_output_buffer = output[0].value().buffer();
-        TT_FATAL(
-            dL_dx_output_buffer->buffer_type() == ttnn::BufferType::DRAM,
-            "dL_dx output buffer must be in DRAM. Output buffer of type {}",
-            enchantum::to_string(dL_dx_output_buffer->buffer_type()));
-    }
-    tt::tt_metal::Buffer* packed_partials_output_buffer = nullptr;
-    if (args.compute_packed_partials) {
-        packed_partials_output_buffer = output[1].value().buffer();
-        TT_FATAL(
-            packed_partials_output_buffer->buffer_type() == ttnn::BufferType::DRAM,
-            "Packed partials output buffer must be in DRAM. Output buffer of type {}",
-            enchantum::to_string(packed_partials_output_buffer->buffer_type()));
-    }
+    auto* dL_dx_output_buffer = output[0].buffer();
+    TT_FATAL(
+        dL_dx_output_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        "dL_dx output buffer must be in DRAM. Output buffer of type {}",
+        enchantum::to_string(dL_dx_output_buffer->buffer_type()));
+    auto* packed_partials_output_buffer = output[1].buffer();
+    TT_FATAL(
+        packed_partials_output_buffer->buffer_type() == ttnn::BufferType::DRAM,
+        "Packed partials output buffer must be in DRAM. Output buffer of type {}",
+        enchantum::to_string(packed_partials_output_buffer->buffer_type()));
 
     std::vector<uint32_t> reader_compile_time_args{block_size, Wt};
     tt::tt_metal::TensorAccessorArgs(input_buffer).append_to(reader_compile_time_args);
@@ -237,18 +226,10 @@ tt::tt_metal::ProgramDescriptor PolyNorm3BackwardProgramFactory::create_descript
     std::map<std::string, std::string> defines;
     defines["REDUCE_OP"] = "PoolType::SUM";
     defines["REDUCE_DIM"] = "ReduceDim::REDUCE_ROW";
-    if (args.compute_grad_input) {
-        defines[kComputeGradInputDefineKey] = "1";
-    }
-    if (args.compute_packed_partials) {
-        defines[kComputePackedPartialsDefineKey] = "1";
-    }
 
     desc.kernels.push_back(
         make_reader_kernel_descriptor(all_cores, reader_compile_time_args, defines, kReaderKernelPath));
 
-    // A skipped output's nullptr buffer appends a null accessor, so the writer's accessor offsets do not depend on the
-    // flags.
     std::vector<uint32_t> dL_dx_writer_compile_time_args{block_size, Wt, packed_partials_tiles_per_row};
     tt::tt_metal::TensorAccessorArgs(dL_dx_output_buffer).append_to(dL_dx_writer_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(packed_partials_output_buffer).append_to(dL_dx_writer_compile_time_args);
@@ -279,7 +260,6 @@ tt::tt_metal::ProgramDescriptor PolyNorm3BackwardProgramFactory::create_descript
         // Slot 6 (eps) is read and dropped by the reader (compute takes eps); kept so the arg layout is unchanged.
         reader.emplace_runtime_args(
             core, {input_buffer, dL_dout_buffer, weight_buffer, num_rows, start_row, scaler_fp32_bits, eps_fp32_bits});
-        // A skipped output goes in as nullptr, which writes 0.
         dL_dx_writer.emplace_runtime_args(
             core, {dL_dx_output_buffer, packed_partials_output_buffer, num_rows, start_row});
         desc.kernels[in_group_1 ? kComputeGroup1KernelIdx : kComputeGroup2KernelIdx].emplace_runtime_args(
@@ -300,10 +280,8 @@ void PolyNorm3BackwardProgramFactory::override_runtime_arguments(
     const uint32_t input_addr = tensor_args.input.buffer()->address();
     const uint32_t dL_dout_addr = tensor_args.dL_dout.buffer()->address();
     const uint32_t weight_addr = tensor_args.weight.buffer()->address();
-    // A skipped output's address is 0, as in create_descriptor().
-    const uint32_t dL_dx_output_addr = get_address_or_zero(output[0].has_value() ? output[0]->buffer() : nullptr);
-    const uint32_t packed_partials_output_addr =
-        get_address_or_zero(output[1].has_value() ? output[1]->buffer() : nullptr);
+    const uint32_t dL_dx_output_addr = output[0].buffer()->address();
+    const uint32_t packed_partials_output_addr = output[1].buffer()->address();
 
     auto& reader_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kReaderKernelIdx);
     auto& dL_dx_writer_runtime_args = tt::tt_metal::GetRuntimeArgs(program, kDLdxWriterKernelIdx);
