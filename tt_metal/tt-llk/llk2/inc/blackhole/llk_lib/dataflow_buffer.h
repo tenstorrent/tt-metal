@@ -127,14 +127,14 @@ constexpr std::uint32_t tiles_acked_address(std::uint32_t id)
 }
 
 /// Reads a counter register from the RISC-V. Not HAL: a volatile load, as tt-metal's reg_read.
-inline __attribute__((always_inline)) std::uint16_t read_counter(std::uint32_t address)
+inline __attribute__((always_inline)) std::uint16_t read_stream_counter(std::uint32_t address)
 {
     return static_cast<std::uint16_t>(*reinterpret_cast<volatile std::uint32_t*>(address) & counter_mask);
 }
 
 /// Writes a counter register from the owner's Tensix stream once Wait's units are idle: SETDMAREG, STALLWAIT, STOREREG.
 template <std::uint32_t Address, std::uint32_t Gpr, hal::sync::StallCondition Wait>
-inline __attribute__((always_inline)) void signal_counter(std::uint16_t value)
+inline __attribute__((always_inline)) void write_stream_counter(std::uint16_t value)
 {
     namespace move = hal::move;
     constexpr move::Transfer<move::Gpr, move::Mmio> store {
@@ -145,7 +145,7 @@ inline __attribute__((always_inline)) void signal_counter(std::uint16_t value)
 }
 
 /// Moves a pointer on by Words and wraps it at the end of the buffer.
-inline __attribute__((always_inline)) void advance(std::uint32_t& ptr, std::uint32_t words, const dataflow_buffer_interface& b)
+inline __attribute__((always_inline)) void advance_fifo_ptr(std::uint32_t& ptr, std::uint32_t words, const dataflow_buffer_interface& b)
 {
     ptr += words;
     if (ptr >= b.fifo_limit)
@@ -194,7 +194,7 @@ inline __attribute__((always_inline)) std::uint32_t dataflow_buffer_wait_front()
     if constexpr (runs_on<On>)
     {
         // Same 16-bit arithmetic as llk_wait_tiles: pages in the buffer = received (register) - acked (local).
-        while (static_cast<std::uint16_t>(read_counter(tiles_received_address(p.id)) - b.tiles_acked) < Pages)
+        while (static_cast<std::uint16_t>(read_stream_counter(tiles_received_address(p.id)) - b.tiles_acked) < Pages)
         {
         }
     }
@@ -209,11 +209,11 @@ inline __attribute__((always_inline)) void dataflow_buffer_pop_front()
     constexpr dataflow_buffer_params p = dataflow_buffer_params_from(B);
     dataflow_buffer_interface& b       = dataflow_buffer_state<p.id>;
     b.tiles_acked += Pages;
-    advance(b.fifo_rd_ptr, Pages * p.page_words, b);
+    advance_fifo_ptr(b.fifo_rd_ptr, Pages * p.page_words, b);
     if constexpr (runs_on<On>)
     {
         using hal::sync::StallCondition;
-        signal_counter<tiles_acked_address(p.id), pop_counter_gpr, StallCondition::Unpacker0Idle | StallCondition::Unpacker1Idle>(b.tiles_acked);
+        write_stream_counter<tiles_acked_address(p.id), pop_counter_gpr, StallCondition::Unpacker0Idle | StallCondition::Unpacker1Idle>(b.tiles_acked);
     }
 }
 
@@ -226,7 +226,7 @@ inline __attribute__((always_inline)) std::uint32_t dataflow_buffer_reserve_back
     if constexpr (runs_on<On>)
     {
         // Same 16-bit arithmetic as llk_wait_for_free_tiles: free = capacity - (received (local) - acked (register)).
-        while (static_cast<std::uint16_t>(p.pages - static_cast<std::uint16_t>(b.tiles_received - read_counter(tiles_acked_address(p.id)))) < Pages)
+        while (static_cast<std::uint16_t>(p.pages - static_cast<std::uint16_t>(b.tiles_received - read_stream_counter(tiles_acked_address(p.id)))) < Pages)
         {
         }
     }
@@ -241,10 +241,10 @@ inline __attribute__((always_inline)) void dataflow_buffer_push_back()
     constexpr dataflow_buffer_params p = dataflow_buffer_params_from(B);
     dataflow_buffer_interface& b       = dataflow_buffer_state<p.id>;
     b.tiles_received += Pages;
-    advance(b.fifo_wr_ptr, Pages * p.page_words, b);
+    advance_fifo_ptr(b.fifo_wr_ptr, Pages * p.page_words, b);
     if constexpr (runs_on<On>)
     {
-        signal_counter<tiles_received_address(p.id), push_counter_gpr, hal::sync::StallCondition::PackerIdle>(b.tiles_received);
+        write_stream_counter<tiles_received_address(p.id), push_counter_gpr, hal::sync::StallCondition::PackerIdle>(b.tiles_received);
     }
 }
 
