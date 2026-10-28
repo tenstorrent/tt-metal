@@ -81,7 +81,8 @@ Run (from the tt-metal root, HF_MODEL = the pinned snapshot, transformers overla
 
 test_tracy_forward (text, one warmed eager forward between Tracy signposts PERF_TEXT / PERF_TEXT_END)
 runs only under the device profiler (`python -m tracy -r -p -v -m pytest ...`, see
-doc/optimized_text/README.md).
+doc/optimized_text/README.md). Under the profiler it also covers batch 1 at every prefill contract
+bucket (b1_s128 ... b1_s65536; doc/prefill/01-baseline/README.md).
 """
 
 from __future__ import annotations
@@ -838,13 +839,25 @@ class TestFull:
 
 
 # ---------------------------------------------------------------------- Tracy (profiling only)
+# b1_s512 / b8_s512: the E5a cases; b1 x every prefill contract bucket (doc/prefill/target_contract.json,
+# tests/perf/prefill.py). Device work per bucket does not depend on the logical length (static shapes,
+# dense masks, static block map), so the rows are full length. 65536 needs EMBEDDING_GEMMA2_MAX_SEQ_LEN=65536.
+# The contract cases are collected under the profiler only, so EMBEDDING_GEMMA2_PERF_ALL keeps its 65 ids.
+PREFILL_BUCKETS = (128, 256, 512, 1024, 2048, 4096, 8192, 16384, 32768, 65536)
+TRACY_CASES = ((1, 512), (8, 512)) + (tuple((1, s) for s in PREFILL_BUCKETS if s != 512) if PROFILER else ())
+
+
 @pytest.mark.skipif(
     os.environ.get("TT_METAL_DEVICE_PROFILER") != "1", reason="profiling only: run under python -m tracy -p"
 )
-@pytest.mark.parametrize("batch,seq_len", [(1, 512), (8, 512)], ids=["b1_s512", "b8_s512"])
+@pytest.mark.parametrize("batch,seq_len", TRACY_CASES, ids=[f"b{b}_s{s}" for b, s in TRACY_CASES])
 def test_tracy_forward(batch, seq_len, eg2_device, tt_text_model, eg2_snapshot):
     from models.demos.blackhole.embedding_gemma2.tt.text_encoder import TextEncoder
 
+    if seq_len > tt_text_model.config.max_seq_len:
+        pytest.skip(
+            f"bucket {seq_len} > max_seq_len {tt_text_model.config.max_seq_len}: set EMBEDDING_GEMMA2_MAX_SEQ_LEN"
+        )
     enc = TextEncoder(tt_text_model, eg2_device)
     ids, mask = make_batch(eg2_snapshot, [seq_len] * batch)
     host = enc.prepare_inputs(ids, mask)
