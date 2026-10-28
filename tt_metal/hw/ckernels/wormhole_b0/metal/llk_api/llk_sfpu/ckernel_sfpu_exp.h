@@ -353,11 +353,11 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     //
     // Per-element runtime is unchanged: the recorded instructions execute
     // exactly as if they had been issued inline, and dst_reg is advanced
-    // by ADDR_MOD_6 inside the body so each replay walks to the next
+    // by the INCRWC inside the body so each replay walks to the next
     // element correctly.
     //
-    // The accurate path (APPROXIMATION_MODE=false) does not otherwise use
-    // the replay buffer, so slot 0 is free here. Callers that mix this
+    // Neither accurate exp (APPROXIMATION_MODE=false) nor bf16 exp2 otherwise
+    // uses the replay buffer, so slot 0 is free here. Callers that mix this
     // function with other replay-buffer clients should ensure they don't
     // require slot 0 to survive across the call.
     TTI_REPLAY(0, BODY_LEN, 1, 1);
@@ -439,7 +439,7 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     for (std::uint32_t i = 1; i < ITERATIONS; i++) {
         // Replay the recorded body for the remaining ITERATIONS - 1 elements.
         // Each replay is one REPLAY-equivalent issue; the body executes as
-        // if it had been issued inline, dst_reg advancing via ADDR_MOD_6.
+        // if it had been issued inline, dst_reg advancing via the INCRWC.
         TTI_REPLAY(0, BODY_LEN, 0, 0);
     }
 }
