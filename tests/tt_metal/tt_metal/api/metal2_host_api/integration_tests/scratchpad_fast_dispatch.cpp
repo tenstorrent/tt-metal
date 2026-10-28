@@ -35,6 +35,8 @@
 #include "command_queue_fixture.hpp"
 #include "tt_metal/impl/dispatch/slow_dispatch.hpp"
 
+#include "metal2_host_api/test_helpers/scratchpad_override.hpp"
+
 namespace tt::tt_metal {
 namespace {
 
@@ -52,6 +54,10 @@ namespace {
 //   This closes the loop on both (a) and (b): the host both learns where the framework put the
 //   scratchpad AND confirms the kernel's writes actually landed there. A 0/stale base address, or a
 //   non-L1-backed scratchpad, would fail the compare.
+TEST_F(UnitMeshCQSingleCardFixture, ScratchpadPlacementOverrideGuardedAccess) {
+    experimental::test_helpers::CheckScratchpadPlacementOverride(*devices_.at(0), true);
+}
+
 TEST_F(UnitMeshCQSingleCardFixture, ScratchpadWriteReadback) {
     auto mesh_device = devices_.at(0);
 

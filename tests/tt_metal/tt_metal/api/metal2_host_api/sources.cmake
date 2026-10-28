@@ -15,6 +15,7 @@
 list(
     APPEND
     UNIT_TESTS_API_SOURCES
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/scratchpad_allocations.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/advanced_options/dfb_advanced_options.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/advanced_options/kernel_advanced_options.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/advanced_options/semaphore_advanced_options.cpp

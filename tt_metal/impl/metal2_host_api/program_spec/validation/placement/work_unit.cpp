@@ -19,7 +19,7 @@ namespace {
 // ValidateNodeBounds: Node coordinate bounds checking
 // ----------------------------------------------------------------------------
 //
-// Validates that every NodeCoord referenced by a WorkUnitSpec or SemaphoreSpec
+// Validates explicitly placed nodes, including work units, semaphores and scratchpad overrides,
 // is within the compute worker grid on this device.
 // (Kernel and DFB placement is derived from WorkUnitSpec membership, so
 // bounds-checking the WorkUnitSpecs covers them too.)
@@ -54,6 +54,12 @@ void ValidateNodeBounds(const ProgramSpec& spec, const CoreCoord& compute_grid_s
     }
     for (const auto& sem : spec.semaphores) {
         check_target_nodes(sem.target_nodes, "SemaphoreSpec", sem.unique_id.get());
+    }
+    for (const auto& scratchpad : spec.scratchpads) {
+        if (scratchpad.advanced_options.override_placement) {
+            check_target_nodes(
+                *scratchpad.advanced_options.override_placement, "ScratchpadSpec", scratchpad.unique_id.get());
+        }
     }
     for (const auto& pipe : spec.advanced_options.prefetcher_pipe_parameters) {
         check_target_nodes(pipe.receivers, "PrefetcherPipeParameter", pipe.unique_id.get());

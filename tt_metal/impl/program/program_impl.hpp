@@ -56,6 +56,7 @@ class HWCommandQueue;
 class EnqueueProgramCommand;
 
 class Kernel;
+struct ScratchpadBindingHandle;
 
 namespace distributed {
 class MeshDevice;
@@ -780,6 +781,13 @@ private:
     // Scratchpad allocation occurs once on Program creation, and is re-run if the DFB layout
     // is recomputed (due to a DFB size override at runtime).
     bool scratchpads_allocated_{false};
+
+    struct ScratchpadAllocationGroup {
+        CoreRangeSet cores;
+        std::vector<std::pair<Kernel*, ScratchpadBindingHandle*>> bindings;
+    };
+    // Reconstructed from binding metadata; used consistently for registration and allocation.
+    std::vector<ScratchpadAllocationGroup> scratchpad_allocation_groups() const;
 
     static constexpr uint8_t core_to_kernel_group_invalid_index = 0xff;
     std::vector<std::vector<std::shared_ptr<KernelGroup>>> kernel_groups_;

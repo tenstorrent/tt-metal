@@ -57,6 +57,7 @@ std::optional<LLKMetadata> LLKMetadataFromScratchpad(const ScratchpadSpec& spec)
 
 ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
     const KernelSpec& kernel,
+    const CoreRangeSet& kernel_nodes,
     const std::unordered_map<ScratchpadSpecName, const ScratchpadSpec*>& scratchpad_by_name,
     size_t scratchpad_base_crta_word) {
     ScratchpadBindingsForKernel out;
@@ -71,7 +72,9 @@ ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
         handle.size_bytes = scratchpad_spec->size_per_node;
         handle.addr_crta_word = static_cast<uint32_t>(crta_word_index);
         handle.llk_metadata = LLKMetadataFromScratchpad(*scratchpad_spec);
-        if (scratchpad_spec->advanced_options.allow_instance_multi_binding) {
+        handle.placement = scratchpad_spec->advanced_options.override_placement.value_or(kernel_nodes);
+        if (scratchpad_spec->advanced_options.allow_instance_multi_binding ||
+            scratchpad_spec->advanced_options.override_placement.has_value()) {
             handle.shared_allocation_identifier = scratchpad_spec->unique_id;
         }
         // handle.allocated_address stays 0 until allocate_scratchpads runs.

@@ -88,5 +88,16 @@ TEST_F(ProgramSpecTestQuasar, ScratchpadLlkFormatAffectsKernelHash) {
     EXPECT_NE(hash_f16, hash_f32);
 }
 
+TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverrideDoesNotChangeKernelHash) {
+    auto spec = MakeMinimalValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = 64}};
+    spec.kernels[0].scratchpad_bindings = {{ScratchpadSpecName{"pad"}, "pad"}};
+    auto original = MakeProgramFromSpec(*mesh_device_, spec);
+    const auto hash = original.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash();
+    spec.scratchpads[0].advanced_options.override_placement = CoreRangeSet(CoreRange({1, 0}));
+    auto overridden = MakeProgramFromSpec(*mesh_device_, spec);
+    EXPECT_EQ(hash, overridden.impl().get_kernel_by_spec_name("dm_kernel")->compute_hash());
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental

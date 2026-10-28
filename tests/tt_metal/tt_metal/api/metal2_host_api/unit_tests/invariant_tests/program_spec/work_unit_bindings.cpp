@@ -397,5 +397,22 @@ TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadBoundByTwoKernelsDisjointNodesSuccee
     EXPECT_NO_THROW({ MakeProgramFromSpec(*mesh_device_, spec); });
 }
 
+TEST_F(ProgramSpecTestQuasar, CPU_ScratchpadOverridePrivacyAppliesOnlyOnReservedNodes) {
+    auto spec = MakeMinimalValidProgramSpec();
+    spec.scratchpads = {ScratchpadSpec{
+        .unique_id = ScratchpadSpecName{"pad"},
+        .size_per_node = 64,
+        .advanced_options = {.override_placement = CoreRangeSet(CoreRange({1, 0}))}}};
+    // Both kernels bind the spec on {0,0}, where it has no storage.
+    for (auto& kernel : spec.kernels) {
+        kernel.scratchpad_bindings = {{ScratchpadSpecName{"pad"}, "pad"}};
+    }
+    EXPECT_NO_THROW(MakeProgramFromSpec(*mesh_device_, spec));
+    spec.scratchpads[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}, {1, 0}));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(*mesh_device_, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("kernel instances on node")));
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::experimental

@@ -207,8 +207,10 @@ struct ScratchpadBindingsForKernel {
     uint32_t section_words = 0;  // == number of scratchpad bindings
 };
 
+// Resolves scratchpad metadata and placement for each binding of a kernel.
 ScratchpadBindingsForKernel ResolveScratchpadBindingsForKernel(
     const KernelSpec& kernel,
+    const CoreRangeSet& kernel_nodes,
     const std::unordered_map<ScratchpadSpecName, const ScratchpadSpec*>& scratchpad_by_name,
     size_t scratchpad_base_crta_word);
 

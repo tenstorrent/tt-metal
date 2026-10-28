@@ -336,6 +336,7 @@ LoweredKernel LowerKernel(
     // crta_layout that flows into the kernel ctor reflects all four sections.
     ScratchpadBindingsForKernel sp_bindings = ResolveScratchpadBindingsForKernel(
         kernel_spec,
+        node_ranges,
         collected.scratchpad_by_name,
         /*scratchpad_base_crta_word=*/ta_bindings.crta_layout.vararg_section_offset);
     ta_bindings.crta_layout.scratchpad_section_words = sp_bindings.section_words;

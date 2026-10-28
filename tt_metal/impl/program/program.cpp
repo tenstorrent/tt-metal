@@ -645,10 +645,6 @@ KernelHandle detail::ProgramImpl::add_kernel(
         }
     }
 
-    if (!kernel->scratchpad_binding_handles().empty()) {
-        register_ephemeral_allocation(this->dfb_allocation_metadata_, kernel->core_range_set());
-    }
-
     kernels_[index].insert({id, kernel});
     kernel_groups_[index].resize(0);
     core_to_kernel_group_index_table_[index].clear();
@@ -2191,22 +2187,40 @@ void detail::ProgramImpl::invalidate_circular_buffer_allocation() {
     this->local_circular_buffer_allocation_needed_ = true;
 }
 
-void detail::ProgramImpl::prepare_ephemeral_allocation(const IDevice* device) {
-    // Shared scratchpads allocate over the union of their binders' nodes. Register
-    // those exact ranges before initializing region bases and allocating DFBs.
-    std::unordered_map<ScratchpadBindingHandle::AllocationIdentifier, CoreRangeSet> shared_cores;
-    for (const auto& kernels_of_core_type : this->kernels_) {
+std::vector<detail::ProgramImpl::ScratchpadAllocationGroup> detail::ProgramImpl::scratchpad_allocation_groups() const {
+    std::vector<ScratchpadAllocationGroup> groups;
+    std::unordered_map<ScratchpadBindingHandle::AllocationIdentifier, ScratchpadAllocationGroup> shared;
+    for (const auto& kernels_of_core_type : kernels_) {
         for (const auto& [kernel_handle, kernel] : kernels_of_core_type) {
-            for (const auto& handle : kernel->scratchpad_binding_handles()) {
+            for (auto& handle : kernel->scratchpad_binding_handles()) {
+                const auto& cores = handle.placement;
                 if (handle.shared_allocation_identifier) {
-                    auto& cores = shared_cores[*handle.shared_allocation_identifier];
-                    cores = cores.merge(kernel->core_range_set());
+                    auto& group = shared[*handle.shared_allocation_identifier];
+                    group.cores = group.cores.merge(cores);
+                    group.bindings.emplace_back(kernel.get(), &handle);
+                } else {
+                    groups.push_back({cores, {{kernel.get(), &handle}}});
                 }
             }
         }
     }
-    for (const auto& [identifier, cores] : shared_cores) {
-        register_ephemeral_allocation(this->dfb_allocation_metadata_, cores);
+    // Preserve the existing allocation order: private bindings first, shared specs second.
+    for (auto& [identifier, group] : shared) {
+        groups.push_back(std::move(group));
+    }
+    return groups;
+}
+
+void detail::ProgramImpl::prepare_ephemeral_allocation(const IDevice* device) {
+    // Register precisely the ranges that allocation will request, including override-only
+    // nodes, before preparing bases/seals and allocating DFBs.
+    for (const auto& group : scratchpad_allocation_groups()) {
+        // Retain the individual binding ranges as well as their union, matching the
+        // existing registration behavior when no override is supplied.
+        for (const auto& [kernel, handle] : group.bindings) {
+            register_ephemeral_allocation(this->dfb_allocation_metadata_, handle->placement);
+        }
+        register_ephemeral_allocation(this->dfb_allocation_metadata_, group.cores);
     }
 
     auto& persistent_l1 = device->allocator_impl()->persistent_l1();
@@ -2249,53 +2263,11 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
         }
     };
 
-    // Backticks needed to set a binding handle's address
-    struct ScratchpadBindingRef {
-        ScratchpadBindingHandle& handle;
-        Kernel& kernel;
-    };
-
-    // Multiple Scratchpad bindings could share the same allocation through:
-    // ScratchpadAdvancedOptions::allow_instance_multi_binding.
-    //
-    // Shared allocation are identified by an ID.
-    std::unordered_map<ScratchpadBindingHandle::AllocationIdentifier, std::vector<ScratchpadBindingRef>>
-        multi_binded_scratchpads;
-
-    // Going through all single-binded scratchpads
-    for (auto& kernels_of_core_type : this->kernels_) {
-        for (auto& [kernel_handle, kernel] : kernels_of_core_type) {
-            auto& scratchpad_handles = kernel->scratchpad_binding_handles();
-            if (scratchpad_handles.empty()) {
-                continue;
-            }
-            const CoreRangeSet& kernel_cores = kernel->core_range_set();
-            for (auto& handle : scratchpad_handles) {
-                // Multi-binded scratchpad, let's collect it and deal with it later
-                if (auto id = handle.shared_allocation_identifier) {
-                    multi_binded_scratchpads[*id].emplace_back(handle, *kernel);
-                    continue;
-                }
-
-                DeviceAddr addr =
-                    allocate_scratchpad(this->dfb_allocation_metadata_, kernel_cores, handle.size_bytes, alignment);
-                set_address_on_scratchpad(addr, handle, *kernel);
-            }
-        }
-    }
-
-    // Now let's deal with multi-binded scratchpads
-    for (auto& [id, refs] : multi_binded_scratchpads) {
-        auto size_bytes = refs.front().handle.size_bytes;
-
-        CoreRangeSet cores = std::accumulate(
-            refs.begin(), refs.end(), CoreRangeSet{}, [](const CoreRangeSet& cores, const auto& handle) {
-                return cores.merge(handle.kernel.core_range_set());
-            });
-
-        DeviceAddr addr = allocate_scratchpad(this->dfb_allocation_metadata_, cores, size_bytes, alignment);
-        for (auto& handle : refs) {
-            set_address_on_scratchpad(addr, handle.handle, handle.kernel);
+    for (const auto& group : scratchpad_allocation_groups()) {
+        const auto size_bytes = group.bindings.front().second->size_bytes;
+        const DeviceAddr addr = allocate_scratchpad(this->dfb_allocation_metadata_, group.cores, size_bytes, alignment);
+        for (const auto& [kernel, handle] : group.bindings) {
+            set_address_on_scratchpad(addr, *handle, *kernel);
         }
     }
 
@@ -3043,6 +3015,23 @@ const std::vector<SubDeviceId>& detail::ProgramImpl::determine_sub_device_ids(co
         };
         find_sub_device_ids(HalProgrammableCoreType::TENSIX);
         find_sub_device_ids(HalProgrammableCoreType::ACTIVE_ETH);
+        // Resource-only nodes participate in ownership and L1 validation, but do not
+        // create kernel groups or launches.
+        for (const auto& group : scratchpad_allocation_groups()) {
+            uint32_t covered = 0;
+            for (size_t i = 0; i < device->num_sub_devices(); ++i) {
+                const auto id = SubDeviceId{static_cast<unsigned char>(i)};
+                const auto intersection =
+                    device->worker_cores(HalProgrammableCoreType::TENSIX, id).intersection(group.cores);
+                if (!intersection.empty()) {
+                    used_sub_device_ids.insert(id);
+                    covered += intersection.num_cores();
+                }
+            }
+            TT_FATAL(
+                covered == group.cores.num_cores(),
+                "Scratchpad placement contains nodes outside the active sub-device worker grids");
+        }
         auto [sub_device_ids, _] = sub_device_ids_map.insert_or_assign(
             sub_device_manager_id, std::vector<SubDeviceId>(used_sub_device_ids.begin(), used_sub_device_ids.end()));
         return sub_device_ids->second;

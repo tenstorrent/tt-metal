@@ -20,6 +20,7 @@ namespace tt::tt_metal::experimental {
 // By default, each node's scratchpad may be bound by only one kernel instance.
 // The advanced multi-binding option permits shared backing memory on overlapping nodes;
 // allocation groups those bindings and kernel code is responsible for synchronization.
+// When placement is overridden, only binders on reserved nodes participate in this census.
 // Duplicate bindings within one kernel are rejected earlier during collection.
 void ValidateScratchpadBindersPerNode(const ValidationContext& ctx, tt::ARCH arch) {
     const ProgramSpec& spec = ctx.spec;
@@ -38,7 +39,11 @@ void ValidateScratchpadBindersPerNode(const ValidationContext& ctx, tt::ARCH arc
         // deterministic.
         std::map<NodeCoord, std::vector<const KernelSpec*>> binders_on_node;
         for (const KernelSpec* kernel : binders_it->second) {
-            for (const NodeCoord& node : corerange_to_cores(collected.kernel_node_set.at(kernel->unique_id))) {
+            const auto& kernel_nodes = collected.kernel_node_set.at(kernel->unique_id);
+            const auto nodes = scratchpad.advanced_options.override_placement
+                                   ? kernel_nodes.intersection(*scratchpad.advanced_options.override_placement)
+                                   : kernel_nodes;
+            for (const NodeCoord& node : corerange_to_cores(nodes)) {
                 binders_on_node[node].push_back(kernel);
             }
         }
@@ -54,7 +59,7 @@ void ValidateScratchpadBindersPerNode(const ValidationContext& ctx, tt::ARCH arc
                 allow_multi_binding,
                 "ScratchpadSpec '{}' is bound by {} kernel instances on node {} ({}). A scratchpad is "
                 "private node-local L1; multiple kernels may bind the same scratchpad only on disjoint "
-                "nodes, so each node's instance stays private to one kernel. Sharing one node's "
+                "nodes within its placement, so each node's instance stays private to one kernel. Sharing one node's "
                 "scratchpad across kernels requires advanced_options.allow_instance_multi_binding = true "
                 "and explicit synchronization in kernel code.",
                 scratchpad.unique_id,

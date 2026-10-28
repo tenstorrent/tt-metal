@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -273,6 +274,12 @@ struct DFBAdvancedOptions {
     // CAUTION: The relay's storage is the pipe's ring, owned outside the Program. The DFB cannot
     //          be resized by DFBRunOverrides, and its address is only known once the pipe is bound.
     Group<PrefetcherPipeParamName> prefetcher_pipe_relays;
+
+    ////////////////////////////////////////////////////////////////////////////////
+    // Placement override
+    ////////////////////////////////////////////////////////////////////////////////
+
+    std::optional<CoreRangeSet> override_placement;
 };
 
 struct ScratchpadAdvancedOptions {
@@ -297,6 +304,18 @@ struct ScratchpadAdvancedOptions {
     // DM cores and Compute cores have cache coherency misalignment that currently
     // lacks ways to synchronize. See: #62551
     bool allow_instance_multi_binding = false;
+
+    // Replace placement inferred from the binding kernels. Must be non-empty and within
+    // the logical worker grid; may omit binding nodes and include nodes with no binder.
+    // Placement is fixed for the Program lifetime; size_per_node is unchanged.
+    // All bindings use one allocation over this set, with a uniform local L1 address.
+    // This does not enable sharing on overlapping nodes: allow_instance_multi_binding
+    // and its architecture restrictions still apply within the effective placement.
+    //
+    // CAUTION: Access outside this set is undefined behavior. Kernel code must guard
+    // such accesses; the framework adds no device-side checks. Unset preserves default
+    // placement and allocation behavior.
+    std::optional<CoreRangeSet> override_placement = std::nullopt;
 };
 
 struct ProgramAdvancedOptions {

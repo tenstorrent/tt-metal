@@ -179,7 +179,8 @@ struct ScratchpadBindingHandle {
     uint32_t allocated_address = 0;  // L1 base address; filled by allocate_scratchpads (0 until allocated)
     std::optional<LLKMetadata> llk_metadata;  // LLK related metadata (dataformat/ tile format)
     // Present only if the binding handle could share it's allocation with another scratchpad.
-    // Configured in advanced options: ScratchpadAdvancedOptions::allow_instance_multi_binding.
+    // Set for allow_instance_multi_binding or override_placement. Grouping allocations
+    // does not itself permit multiple binding kernel instances on a reserved node.
     // For all the scratchpad binding handle sharing the same identifier,
     // the size_bytes are all equivalent.
     //
@@ -189,6 +190,9 @@ struct ScratchpadBindingHandle {
     // The ScratchpadSpecName serves as an identifier & does not carry specific meaning.
     using AllocationIdentifier = experimental::ScratchpadSpecName;
     std::optional<experimental::ScratchpadSpecName> shared_allocation_identifier;
+    // Resolved reservation nodes, excluded from the kernel hash.
+    // Invariant: Placement is non-empty and fixed for the Program's lifetime.
+    CoreRangeSet placement;
 };
 
 // Metal 2.0: per-kernel resolved PrefetcherPipe accessor (KernelAdvancedOptions::PrefetcherPipeBinding).
