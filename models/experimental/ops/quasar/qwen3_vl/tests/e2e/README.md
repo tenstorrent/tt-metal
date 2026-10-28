@@ -123,7 +123,7 @@ Compared on 2026-10-27: every distinct call in `progress.log` of the craq-sim 8x
 
 **Only in the graph suite:**
 - No case exists for the vision MLP FC1 or the patch-merger FC1, both `linear(activation="gelu")`: the generator could not rebuild the `activation` argument (`test_linear.py` "NOT generated": 72 + 12 calls). The e2e runs both (it found the Quasar gelu gap, since fixed by #57753).
-- Run on the host by the e2e: `scatter` and `zeros_like` (vision-token merge, Q1) on craq-sim 2x1 only (on device elsewhere since #62744), token `embedding` over `[151936,2560]` (01, Q8).
+- Run on the host by the e2e: token `embedding` over `[151936,2560]` (01, Q8).
 - On-device sampling and position increment: `argmax`, `plus_one` (Q10); the e2e reads logits on the host and teacher-forces one step.
 - Demo-size prefill only: `minimal_matmul` 00/01, chunked `reshape` 07-09/12/15/16.
 - Others: `multiply` 02 on the KV cache `[1024,8,32,128]`, `interleaved_to_sharded` 01, `unsqueeze_to_4D` 01, `to_device` 00 (page table `[1,1024]`).
