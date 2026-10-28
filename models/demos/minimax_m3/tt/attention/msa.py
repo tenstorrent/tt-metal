@@ -682,11 +682,13 @@ def msa_chunks_pipelined(
 
     Schedule, with G(i) = chunk i's K/V/index_k gather (gather sub-device, buffer set i % 2) and C(i) = its
     indexer -> top-k -> sparse_sdpa_msa (compute sub-device):
-        G(0); for i: join(G(i), C(i-1)); C(i); G(i+1)
-    The join before C(i) covers both sub-devices, so C(i) and G(i+1), enqueued after it, start only once G(i)
+        G(0); for i: join(G(i), C(i-1)); G(i+1); C(i)
+    The join before G(i+1) covers both sub-devices, so G(i+1) and C(i), enqueued after it, start only once G(i)
     has landed and C(i-1) has released the buffer set G(i+1) overwrites; G(i+1) does not wait for C(i), which
-    is the overlap (a program stalls only on its own sub-device's predecessors). A join over one sub-device
-    would race that overwrite. Only sub-device-confined ops may run inside the window: a program whose cores
+    is the overlap (a program stalls only on its own sub-device's predecessors). G(i+1) goes first because the
+    dispatcher launches programs in queue order and blocks on each one's own sub-device: queued behind C(i)'s
+    three ops it would launch only when sparse_sdpa does, queued before them it runs under the whole of C(i).
+    A join over one sub-device would race that overwrite. Only sub-device-confined ops may run inside the window: a program whose cores
     span both sub-devices (a layout change, an allocation that runs as a program) is rejected at enqueue
     (fd_mesh_command_queue.cpp, "Programs must be executed on a single sub-device"); one whose cores happen to
     fit a single sub-device runs there, stalling only on that sub-device's predecessors.
@@ -725,6 +727,8 @@ def msa_chunks_pipelined(
             for i, c in enumerate(chunks):
                 overlap.join()
                 k_full, v_full, index_k_full, kv_len = pending
+                if i + 1 < len(chunks):
+                    pending = gather(i + 1)
                 geometry = dict(
                     chunk_start_idx=c.cached_len,
                     cluster_axis=sp_axis,
@@ -759,8 +763,6 @@ def msa_chunks_pipelined(
                         )
                     ttnn.deallocate(block_ids)
                     block_ids = None
-                if i + 1 < len(chunks):
-                    pending = gather(i + 1)
     except BaseException:
         if block_ids is not None:  # the block ids of the chunk whose attention raised
             ttnn.deallocate(block_ids)
