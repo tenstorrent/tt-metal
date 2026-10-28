@@ -58,9 +58,10 @@ assert SPEC_SLOTS in (4, 8), f"MIMO_SPEC_SLOTS={SPEC_SLOTS}: 4 or 8"
 # group of GROUP_SLOTS consecutive slots with its own drafter state; 2: c=8 over 4 lanes with 3 drafts each, 4: c=16
 # with 1 draft each, which one MTP layer drafts through the planned program, planned_drafts).
 DRAFT_GROUPS = int(os.environ.get("MIMO_SPEC_GROUPS", "1"))
-assert DRAFT_GROUPS in (1, 2, 4) and SPEC_SLOTS % DRAFT_GROUPS == 0, f"MIMO_SPEC_GROUPS={DRAFT_GROUPS}"
+assert DRAFT_GROUPS == 1 or (
+    DRAFT_GROUPS in (2, 4) and SPEC_SLOTS == 8
+), f"MIMO_SPEC_GROUPS={DRAFT_GROUPS}: 1, or 2 / 4 with MIMO_SPEC_SLOTS=8"
 GROUP_SLOTS = SPEC_SLOTS // DRAFT_GROUPS
-assert GROUP_SLOTS >= 2, f"MIMO_SPEC_GROUPS={DRAFT_GROUPS}: a group of {GROUP_SLOTS} slot holds no draft"
 MAX_DRAFTS = GROUP_SLOTS - 1  # drafts per request: its last committed token and drafts fill one draft group
 
 
