@@ -39,6 +39,7 @@ def load(d):
     fr[col] = pd.to_numeric(fr[col], errors="coerce")
     return fr.groupby(keys, dropna=False)[col].median()
 arms = {a: load(a) for a in ("N1", "L1", "N2", "L2")}
+print("points per arm:", {a: len(v) for a, v in arms.items()})
 for a, b in (("N1", "N2"), ("L1", "L2"), ("N1", "L1"), ("N2", "L2")):
     x, y = arms[a].align(arms[b], join="inner")
     d = (y - x); p = d / x * 100
