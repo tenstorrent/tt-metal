@@ -4,10 +4,16 @@
 
 ## Environment
 
+Every case starts with `skip_unless_programmable_dram_package()` (`tests/tt_metal/tt_metal/context/mimir_contract.hpp`) and runs when it passes: the selected package declares programmable DRAM cores and a transport is configured. `TT_METAL_EMU_SERVER` is not required.
+
+Select the package, set to the descriptor for the run (see Descriptors), with one of:
+- a chippy server (`TT_METAL_EMU_SERVER` or `TT_METAL_GRENDEL_JTAG_SERVER`) and `TT_METAL_EMU_SOC_DESC` or `TT_METAL_GRENDEL_JTAG_SOC_DESC` to match
+- `TT_METAL_SOC_DESC`, with no server
+
 Set:
-- `TT_METAL_EMU_SERVER`
-- `TT_METAL_EMU_SOC_DESC`, set to the descriptor for the run (see Descriptors)
-- `TT_METAL_SLOW_DISPATCH_MODE=1`
+- `TT_METAL_SLOW_DISPATCH_MODE=1`. A Mimir-only package has no Tensix cores for fast dispatch, so every case skips without it.
+
+Cases that read Mimir-local addresses (`Cluster` TL1 and register reads, D2D state, the remote preflight, Mimir-local address records) also call `skip_unless_mimir_local_package()` and skip on a `full_package` descriptor.
 
 Unset:
 - `TT_METAL_WATCHER`
@@ -448,6 +454,8 @@ If a run is killed mid-stall, the session is probably wedged. Use the same rule:
 ## Rules
 
 - Never set `TT_METAL_CLEAR_DRAM`. It writes every view in full, 1 GiB per Mimir, which is far too slow on the emulator.
+- Tests that run kernels reach host DRAM through `mimir_contract::write_gddr_view` / `read_gddr_view` on the unit mesh (`ScopedDevice::mesh()`), which use the slow-dispatch DRAM channel API. They reach CCE TL1 through the `IDevice*` forms of `write_cce_tl1` / `read_cce_tl1`, which use the contract suite's `write_cce_sram` / `read_cce_sram`. A DRAM write below the allocator's DRAM base is refused.
+- The host suites (`MimirHost*`), the firmware-load and reset-state checks, and the register reads (`mimir_hw_state`, `mimir_snoop_ctl`, debug dumps) stay on `Cluster`. They test the backend boundary itself, and no contract helper covers register reads.
 
 ## Manual D2D AXI monitor step
 

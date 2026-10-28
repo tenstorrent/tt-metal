@@ -34,7 +34,6 @@
 #include "impl/buffers/tensor_prefetcher_transport.hpp"
 #include "impl/context/metal_context.hpp"
 #include "llrt/hal.hpp"
-#include "llrt/tt_cluster.hpp"
 #include <tt-metalium/distributed_host_buffer.hpp>
 #include <tt-metalium/experimental/distributed_tensor/distributed_tensor_apis.hpp>
 #include <tt-metalium/experimental/distributed_tensor/topology/tensor_topology.hpp>
@@ -57,13 +56,7 @@
 namespace tt::tt_metal::mimir_test::prefetcher {
 
 void write_go_word(IDevice* device, uint32_t cce_index, uint32_t go_word) {
-    write_cce_tl1(
-        MetalContext::instance().get_cluster(),
-        device->id(),
-        cce_index,
-        go_message_tl1_offset(),
-        {go_word},
-        Tl1Range::WholeTl1);
+    write_cce_tl1(device, cce_index, go_message_tl1_offset(), {go_word}, Tl1Range::WholeTl1);
 }
 
 uint32_t with_init_signal(uint32_t go_word) {
@@ -115,7 +108,7 @@ private:
 };
 
 TEST(MimirPrefetcher, MM7GatePreconditionsHold) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -144,7 +137,8 @@ TEST(MimirPrefetcher, MM7GatePreconditionsHold) {
 }
 
 TEST(MimirPrefetcher, MM7GateUninitializedSenderFails) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -356,7 +350,7 @@ std::string gcb_layout_creation_error(
 }
 
 TEST(MimirPrefetcher, MM7GcbLayoutLocalReceiver) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -365,8 +359,7 @@ TEST(MimirPrefetcher, MM7GcbLayoutLocalReceiver) {
 
     IDevice* device = mesh->get_devices().front();
     const uint32_t sender_cce = gcb_layout_sender_cce(device, *mesh, 0);
-    const uint32_t local_receiver_cce =
-        cce_index_for(mimir_index_for_cce(sender_cce), (location_for_cce(sender_cce) + 1) % kCcesPerMimir);
+    const uint32_t local_receiver_cce = sibling_cce(sender_cce);
     const DramReceiverGcb first_gcb =
         expect_dram_receiver_gcb_layout(*mesh, {{.bank = 0, .receiver_cces = {local_receiver_cce}}});
 
@@ -377,11 +370,11 @@ TEST(MimirPrefetcher, MM7GcbLayoutLocalReceiver) {
 }
 
 TEST(MimirPrefetcher, MM7GcbLayoutRemoteReceiver) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
-    const MimirTopology topology = topology_from(cluster_soc_desc());
+    const MimirTopology topology = topology_from(configured_soc_desc());
     if (topology.num_mimirs < 2) {
         GTEST_SKIP() << "Needs a receiver on another Mimir; this descriptor has one Mimir.";
     }
@@ -390,20 +383,18 @@ TEST(MimirPrefetcher, MM7GcbLayoutRemoteReceiver) {
 
     // The remote receiver comes first, so the receiver table must keep this order, not sort it.
     const uint32_t sender_cce = gcb_layout_sender_cce(mesh->get_devices().front(), *mesh, 0);
-    const uint32_t sender_mimir = mimir_index_for_cce(sender_cce);
-    const uint32_t remote_receiver_cce =
-        cce_index_for((sender_mimir + 1) % topology.num_mimirs, location_for_cce(sender_cce));
-    const uint32_t local_receiver_cce = cce_index_for(sender_mimir, (location_for_cce(sender_cce) + 1) % kCcesPerMimir);
+    const uint32_t remote_receiver_cce = next_mimir_cce(sender_cce);
+    const uint32_t local_receiver_cce = sibling_cce(sender_cce);
     expect_dram_receiver_gcb_layout(*mesh, {{.bank = 0, .receiver_cces = {remote_receiver_cce, local_receiver_cce}}});
 }
 
 TEST(MimirPrefetcher, MM7GcbLayoutTwoSenders) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
     // Two senders with one receiver each, all four on different CCEs.
-    const MimirTopology topology = topology_from(cluster_soc_desc());
+    const MimirTopology topology = topology_from(configured_soc_desc());
     if (topology.num_mimirs < 2) {
         GTEST_SKIP() << "Needs four CCEs (two senders, two receivers); this descriptor has one Mimir.";
     }
@@ -442,7 +433,7 @@ TEST(MimirPrefetcher, MM7GcbLayoutTwoSenders) {
 }
 
 TEST(MimirPrefetcher, MM7GcbLayoutRejectsConflictingReceivers) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -456,7 +447,7 @@ TEST(MimirPrefetcher, MM7GcbLayoutRejectsConflictingReceivers) {
     // Every logical DRAM coord, grouped by the CCE it names.
     std::map<std::pair<size_t, size_t>, std::vector<CoreCoord>> logical_by_translated;
     for (uint32_t view = 0; view < soc_desc.get_num_dram_views(); ++view) {
-        for (uint32_t endpoint = 0; endpoint < cces_per_mimir(soc_desc); ++endpoint) {
+        for (uint32_t endpoint = 0; endpoint < locations_per_channel(soc_desc); ++endpoint) {
             const CoreCoord logical(view, endpoint);
             const CoreCoord translated = soc_desc.get_physical_dram_core_from_logical(logical);
             logical_by_translated[{translated.x, translated.y}].push_back(logical);
@@ -834,14 +825,14 @@ private:
 
 uint32_t gcb_smoke_local_receiver(distributed::MeshDevice& mesh) {
     const uint32_t sender_cce = gcb_layout_sender_cce(mesh.get_devices().front(), mesh, 0);
-    return cce_index_for(mimir_index_for_cce(sender_cce), (location_for_cce(sender_cce) + 1) % kCcesPerMimir);
+    return sibling_cce(sender_cce);
 }
 
 std::string gcb_smoke_d2d_skip_reason() {
     if (std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         return skip_reason;
     }
-    if (topology_from(cluster_soc_desc()).num_mimirs < 2) {
+    if (topology_from(configured_soc_desc()).num_mimirs < 2) {
         return "Needs a receiver on another Mimir; this descriptor has one Mimir.";
     }
     return mimir_remote_preflight_result();
@@ -849,7 +840,7 @@ std::string gcb_smoke_d2d_skip_reason() {
 
 // Drain N: the sender completes and every counter on both ends agrees.
 TEST(MimirPrefetcher, MM7GcbSmokeDiscardDrain) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -903,7 +894,7 @@ void run_gcb_smoke_validation(
 }
 
 TEST(MimirPrefetcher, MM7GcbSmokeValidatorLocal) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -918,7 +909,7 @@ TEST(MimirPrefetcher, MM7GcbSmokeValidatorLocal) {
 
 // The validator reports the mismatch and keeps acking, so the sender still completes.
 TEST(MimirPrefetcher, MM7GcbSmokeValidatorWrongSeed) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -934,7 +925,7 @@ TEST(MimirPrefetcher, MM7GcbSmokeValidatorWrongSeed) {
 // Three page sizes in one GCB: 256 B pages leave wr_ptr at 1280, which 512 B pages pad to 1536; 384 B pages do not
 // divide the 4 KiB FIFO, so every wrap also pads the 256 B past the page-aligned limit.
 TEST(MimirPrefetcher, MM7GcbSmokeResize) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -950,7 +941,8 @@ TEST(MimirPrefetcher, MM7GcbSmokeResize) {
 }
 
 TEST(MimirPrefetcher, MM7GcbSmokeValidatorD2d) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     if (const std::string skip_reason = gcb_smoke_d2d_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -958,9 +950,7 @@ TEST(MimirPrefetcher, MM7GcbSmokeValidatorD2d) {
     ScopedMesh mesh_closer(mesh);
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
     const uint32_t sender_cce = gcb_layout_sender_cce(mesh->get_devices().front(), *mesh, 0);
-    const uint32_t remote_receiver_cce = cce_index_for(
-        (mimir_index_for_cce(sender_cce) + 1) % topology_from(cluster_soc_desc()).num_mimirs,
-        location_for_cce(sender_cce));
+    const uint32_t remote_receiver_cce = next_mimir_cce(sender_cce);
     run_gcb_smoke_validation(
         *mesh,
         remote_receiver_cce,
@@ -970,7 +960,7 @@ TEST(MimirPrefetcher, MM7GcbSmokeValidatorD2d) {
 
 // The receiver drains every page the sender sends and keeps running until the host stops it.
 TEST(MimirPrefetcher, MM7GcbSmokeDrainUntilStopped) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -1006,7 +996,7 @@ TEST(MimirPrefetcher, MM7GcbSmokeDrainUntilStopped) {
 // Released, the receiver exits without acking the held pages and without writing rd_ptr back: rd_ptr in TL1 stays at
 // the FIFO start although the kernel had moved it past the popped pages.
 TEST(MimirPrefetcher, MM7GcbSmokeStallUntilReleased) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -1053,7 +1043,7 @@ TEST(MimirPrefetcher, MM7GcbSmokeStallUntilReleased) {
 // The receiver holds everything the sender sent, so the sender's final barrier expires with DRAIN_TIMEOUT. Then the
 // host releases the receiver.
 TEST(MimirPrefetcher, MM7GcbSmokeDrainTimeout) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -1087,7 +1077,7 @@ TEST(MimirPrefetcher, MM7GcbSmokeDrainTimeout) {
 // No sender runs. The host credits a few pages, the receiver drains them, and its next front wait expires; it reports
 // CREDIT_TIMEOUT and writes rd_ptr back past the drained pages.
 TEST(MimirPrefetcher, MM7GcbSmokeReceiverWaitTimeout) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -1121,7 +1111,7 @@ TEST(MimirPrefetcher, MM7GcbSmokeReceiverWaitTimeout) {
 // Two sender and validator runs on one GCB: the second pair resumes from the wr_ptr and rd_ptr the first left in TL1,
 // and its 512 B pages pad from the first run's 1280 B to 1536 B.
 TEST(MimirPrefetcher, MM7GcbSmokeRelaunchResumes) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -1161,7 +1151,7 @@ TEST(MimirPrefetcher, MM7GcbSmokeRelaunchResumes) {
 // Deferred from MM7Gate: the gate checks firmware presence, not idleness, so it stays ok while a receiver Program runs
 // on another bank's sender CCE.
 TEST(MimirPrefetcher, MM7GcbSmokePreconditionsWithReceiverRunning) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -1334,7 +1324,7 @@ bool sender_exited(const CceSenderStatus& status) {
 
 // Deferred from MM7Gate: IsTensorPrefetcherSupported reports the port supported, and Start and Stop work.
 TEST(MimirPrefetcher, MM7GateStartStopWorks) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -1347,7 +1337,7 @@ TEST(MimirPrefetcher, MM7GateStartStopWorks) {
 
 // Start with no requests: the sender runs until STOP, then reports Stopped with OK.
 TEST(MimirPrefetcher, MM7LifecycleStartStop) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -1373,7 +1363,7 @@ TEST(MimirPrefetcher, MM7LifecycleStartStop) {
 // that skipped the zeroing would leave bytes_sent non-zero, so the sender would read slot 0 before the host's STOP and
 // fail with BadCmd.
 TEST(MimirPrefetcher, MM7LifecycleStartStopTwice) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -1409,7 +1399,7 @@ TEST(MimirPrefetcher, MM7LifecycleStartStopTwice) {
 // A receiver Program runs on another bank's sender CCE. Start over both banks fails on that CCE before it launches or
 // zeroes anything: both control blocks keep the pattern written before, and bank 0's CCE stays idle.
 TEST(MimirPrefetcher, MM7LifecycleBusySenderFailsStart) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -1457,7 +1447,7 @@ TEST(MimirPrefetcher, MM7LifecycleBusySenderFailsStart) {
 // Bank 0's GCB delivers to the CCE that is the other provisioned bank's sender, so Queue fails before anything is
 // queued. The tensor list is empty: the receiver check comes first, so no PREFETCH data is needed.
 TEST(MimirPrefetcher, MM7LifecycleQueueRejectsReceiverOnSender) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -1489,7 +1479,7 @@ TEST(MimirPrefetcher, MM7LifecycleQueueRejectsReceiverOnSender) {
 // sender reports the STOP as its third request, and CQ 0's slot holds 2. A WAIT_CQ that did not wait would leave the
 // sender Running during the hold; host and kernel disagreeing on the slot would end it in CQ_TIMEOUT.
 TEST(MimirPrefetcher, MM7LifecycleWaitCq) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -1539,7 +1529,7 @@ TEST(MimirPrefetcher, MM7LifecycleWaitCq) {
 // receiver running, so nothing acks it: the sender holds in Draining while Stop blocks on another thread. The host then
 // acks the page as a receiver would, and the sender passes DRAIN and reports the STOP as its second request.
 TEST(MimirPrefetcher, MM7LifecycleDrainAtStop) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -1611,7 +1601,7 @@ std::string route_skip_reason(const std::vector<uint32_t>& route_cces) {
     if (std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         return skip_reason;
     }
-    const uint32_t num_cces = topology_from(cluster_soc_desc()).num_cces;
+    const uint32_t num_cces = topology_from(configured_soc_desc()).num_cces;
     const uint32_t highest_cce = *std::max_element(route_cces.begin(), route_cces.end());
     if (highest_cce >= num_cces) {
         return fmt::format("Descriptor exposes {} CCEs; this route needs CCE {}.", num_cces, highest_cce);
@@ -1739,7 +1729,7 @@ void run_t1_route(uint32_t sender_cce, uint32_t receiver_cce) {
 }
 
 TEST(MimirPrefetcher, MM7T1Local0To1) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = route_skip_reason({0, 1}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -1747,7 +1737,7 @@ TEST(MimirPrefetcher, MM7T1Local0To1) {
 }
 
 TEST(MimirPrefetcher, MM7T1Local3To2) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = route_skip_reason({3, 2}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -1755,7 +1745,8 @@ TEST(MimirPrefetcher, MM7T1Local3To2) {
 }
 
 TEST(MimirPrefetcher, MM7T1D2d0To2) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     if (const std::string skip_reason = route_skip_reason({0, 2}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -1763,7 +1754,8 @@ TEST(MimirPrefetcher, MM7T1D2d0To2) {
 }
 
 TEST(MimirPrefetcher, MM7T1D2d3To1) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     if (const std::string skip_reason = route_skip_reason({3, 1}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -1873,7 +1865,8 @@ void run_t2_two_senders(uint32_t first_sender_cce, uint32_t second_sender_cce, u
 }
 
 TEST(MimirPrefetcher, MM7T2FanOut0To123) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     if (const std::string skip_reason = route_skip_reason({0, 1, 2, 3}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -1881,7 +1874,8 @@ TEST(MimirPrefetcher, MM7T2FanOut0To123) {
 }
 
 TEST(MimirPrefetcher, MM7T2FanOut3To012) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     if (const std::string skip_reason = route_skip_reason({3, 0, 1, 2}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -1889,7 +1883,8 @@ TEST(MimirPrefetcher, MM7T2FanOut3To012) {
 }
 
 TEST(MimirPrefetcher, MM7T2TwoSenders01To2) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     if (const std::string skip_reason = route_skip_reason({0, 1, 2}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -1897,7 +1892,8 @@ TEST(MimirPrefetcher, MM7T2TwoSenders01To2) {
 }
 
 TEST(MimirPrefetcher, MM7T2TwoSenders02To3) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     if (const std::string skip_reason = route_skip_reason({0, 2, 3}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -2063,7 +2059,7 @@ SingleGcbCase t3_wrap_and_resize_case() {
 }
 
 TEST(MimirPrefetcher, MM7T3SubChunkLocal0To1) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -2071,7 +2067,8 @@ TEST(MimirPrefetcher, MM7T3SubChunkLocal0To1) {
 }
 
 TEST(MimirPrefetcher, MM7T3SubChunkD2d0To2) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3D2dReceiverCce}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -2079,7 +2076,7 @@ TEST(MimirPrefetcher, MM7T3SubChunkD2d0To2) {
 }
 
 TEST(MimirPrefetcher, MM7T3BelowStageThirdLocal0To1) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -2087,7 +2084,8 @@ TEST(MimirPrefetcher, MM7T3BelowStageThirdLocal0To1) {
 }
 
 TEST(MimirPrefetcher, MM7T3BelowStageThirdD2d0To2) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3D2dReceiverCce}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -2095,7 +2093,7 @@ TEST(MimirPrefetcher, MM7T3BelowStageThirdD2d0To2) {
 }
 
 TEST(MimirPrefetcher, MM7T3PartialStageChunkLocal0To1) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -2103,7 +2101,7 @@ TEST(MimirPrefetcher, MM7T3PartialStageChunkLocal0To1) {
 }
 
 TEST(MimirPrefetcher, MM7T3AboveStageThirdLocal0To1) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -2111,7 +2109,8 @@ TEST(MimirPrefetcher, MM7T3AboveStageThirdLocal0To1) {
 }
 
 TEST(MimirPrefetcher, MM7T3AboveStageThirdD2d0To2) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3D2dReceiverCce}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -2120,7 +2119,7 @@ TEST(MimirPrefetcher, MM7T3AboveStageThirdD2d0To2) {
 
 // Local only: the split happens in host serialization, before any page reaches the route.
 TEST(MimirPrefetcher, MM7T3PageSplitLocal0To1) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -2128,7 +2127,7 @@ TEST(MimirPrefetcher, MM7T3PageSplitLocal0To1) {
 }
 
 TEST(MimirPrefetcher, MM7T3AbaLocal0To1) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -2136,7 +2135,8 @@ TEST(MimirPrefetcher, MM7T3AbaLocal0To1) {
 }
 
 TEST(MimirPrefetcher, MM7T3AbaD2d0To2) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3D2dReceiverCce}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -2144,7 +2144,7 @@ TEST(MimirPrefetcher, MM7T3AbaD2d0To2) {
 }
 
 TEST(MimirPrefetcher, MM7T3WrapAndResizeLocal0To1) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -2152,7 +2152,8 @@ TEST(MimirPrefetcher, MM7T3WrapAndResizeLocal0To1) {
 }
 
 TEST(MimirPrefetcher, MM7T3WrapAndResizeD2d0To2) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3D2dReceiverCce}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -2207,7 +2208,7 @@ void run_t3_gcb_switch(uint32_t receiver_cce, uint32_t second_receiver_cce) {
 }
 
 TEST(MimirPrefetcher, MM7T3GcbSwitchLocal0To1) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -2215,7 +2216,8 @@ TEST(MimirPrefetcher, MM7T3GcbSwitchLocal0To1) {
 }
 
 TEST(MimirPrefetcher, MM7T3GcbSwitchD2d0To2) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3D2dReceiverCce}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -2224,7 +2226,8 @@ TEST(MimirPrefetcher, MM7T3GcbSwitchD2d0To2) {
 
 // The same switch, with GCB2 on another receiver CCE across D2D: CCE 1, then CCE 2, then back to CCE 1.
 TEST(MimirPrefetcher, MM7T3ReceiverSwitch0To1Then2) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce, kT3D2dReceiverCce});
         !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
@@ -2237,7 +2240,7 @@ TEST(MimirPrefetcher, MM7T3ReceiverSwitch0To1Then2) {
 // has the success budget, so a CQ_TIMEOUT cannot end the wait while the test watches it. Local only: the wait is on the
 // sender, before anything crosses the route.
 TEST(MimirPrefetcher, MM7T3FenceLocal0To1) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = route_skip_reason({kT3SenderCce, kT3LocalReceiverCce}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -2346,7 +2349,8 @@ TEST(MimirPrefetcher, MM7T5TraceCaptureReplay) { GTEST_SKIP(); }
 // The hash is a bijection, so every word of the page differs, and the first word it read must be the tensor's: a sender
 // that delivered other bytes fails these checks too, not just the recovery's.
 TEST(MimirPrefetcher, MM7T4MismatchD2d2To0) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     if (const std::string skip_reason = route_skip_reason({2, 0}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -2395,7 +2399,8 @@ TEST(MimirPrefetcher, MM7T4MismatchD2d2To0) {
 // and drops the rest, Stop's DRAIN and STOP among them, because the sender has exited; Stop releases the session and
 // throws, naming the failed sender and those dropped pages.
 TEST(MimirPrefetcher, MM7T4CreditTimeoutD2d1To3) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     if (const std::string skip_reason = route_skip_reason({1, 3}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -2455,7 +2460,8 @@ TEST(MimirPrefetcher, MM7T4CreditTimeoutD2d1To3) {
 // A request that fits into a receiver that holds it: Stop's DRAIN barrier expires with DRAIN_TIMEOUT, and Stop throws
 // once the session is released.
 TEST(MimirPrefetcher, MM7T4DrainTimeoutD2d1To3) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     if (const std::string skip_reason = route_skip_reason({1, 3}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -2541,7 +2547,7 @@ void run_rejected_queue_case(const RejectedQueue& queue_rejected_request, const 
 
 // An interleaved DRAM tensor has neither shard spec, so it resolves to the K-row-major layout.
 TEST(MimirPrefetcher, MM7RejectKRowMajorTensor) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -2563,7 +2569,7 @@ TEST(MimirPrefetcher, MM7RejectKRowMajorTensor) {
 }
 
 TEST(MimirPrefetcher, MM7RejectStreamingTensor) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -2582,11 +2588,11 @@ TEST(MimirPrefetcher, MM7RejectStreamingTensor) {
 
 // The tensor sits on DRAM bank 1, so bank 0's sender would read a slab the tensor does not have there.
 TEST(MimirPrefetcher, MM7RejectRangePastTensor) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
-    if (topology_from(cluster_soc_desc()).num_views < 2) {
+    if (topology_from(configured_soc_desc()).num_views < 2) {
         GTEST_SKIP();
     }
     run_rejected_queue_case(
@@ -2606,7 +2612,7 @@ TEST(MimirPrefetcher, MM7RejectRangePastTensor) {
 // The allocator never places a tensor past its view, so this one wraps a buffer at an explicit bank-local address half
 // a page before the view's end. Nothing reads or writes it.
 TEST(MimirPrefetcher, MM7RejectRangePastView) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }

@@ -14,12 +14,15 @@
 #include <cstdlib>
 #include <cstring>
 #include <exception>
+#include <limits>
 #include <memory>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
 
 #include "impl/context/metal_context.hpp"
+#include "impl/dispatch/slow_dispatch.hpp"
 #include "impl/kernels/kernel.hpp"
 #include "impl/program/slow_dispatch.hpp"
 #include "llrt/hal.hpp"
@@ -29,6 +32,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/tt_metal.hpp>
+#include "tt_metal/tt_metal/context/mimir_contract.hpp"
 #include "tt_metal/tt_metal/dram/mimir_hw_state.hpp"
 #include "tt_metal/tt_metal/dram/mimir_gddr_map.hpp"
 #include "tt_metal/tt_metal/dram/mimir_test_common.hpp"
@@ -40,35 +44,7 @@ namespace tt::tt_metal::mimir_test {
 inline constexpr uint64_t kKiB = 1024;
 inline constexpr uint64_t kMiB = 1024 * kKiB;
 inline constexpr uint64_t kGiB = 1024 * kMiB;
-inline constexpr uint64_t kCceGddrSpaBase = 0x1000000000000ULL;
-inline constexpr uint64_t kCceGddrMimirStride = 0x200000000ULL;
-inline constexpr uint64_t kCceGddrD2d1SpaBase = 0x1002000000000ULL;
-inline constexpr uint64_t kCceSramSpaBase = 0x1280000000ULL;
-inline constexpr uint64_t kCceSramTileStride = 0x400000ULL;
 inline constexpr uint64_t kAnchorBytes = 128 * kKiB;
-
-// The SPA a CCE on `source_mimir` issues for GDDR on `mimir_index`, routed as the host's CceSpaRoutes route it: local
-// GDDR on D2D0, a peer on its mimir_channels route, and with no topology Mimir 0 reaches peers on D2D1.
-inline uint64_t host_cce_gddr_address(
-    const metal_SocDescriptor& soc, uint32_t source_mimir, uint32_t mimir_index, uint64_t offset) {
-    uint32_t port = 0;
-    const auto& channels = soc.get_arch_descriptor().get_mimir_channels();
-    if (mimir_index != source_mimir && channels.empty()) {
-        port = source_mimir == 0 ? 1 : 0;
-    } else if (mimir_index != source_mimir) {
-        for (const auto& route : channels.at(source_mimir).routes) {
-            if (route.peer_instance == mimir_index) {
-                port = route.d2d;
-            }
-        }
-    }
-    const uint64_t route_base = port == 0 ? kCceGddrSpaBase : kCceGddrD2d1SpaBase;
-    return route_base + static_cast<uint64_t>(mimir_index) * kCceGddrMimirStride + offset;
-}
-
-inline uint64_t host_cce_sram_address(uint32_t cce_index, uint64_t offset) {
-    return kCceSramSpaBase + static_cast<uint64_t>(cce_index) * kCceSramTileStride + offset;
-}
 
 inline uint64_t host_cce_sram_mla_address(
     const tt::umd::GrendelAddressWindows& windows, uint32_t location, uint64_t offset) {
@@ -119,7 +95,9 @@ inline void check_tl1_layout() {
         kTl1HartWindowOffset + harts * kTl1HartWindowBytes,
         kTl1RemoteLandingOffset);
     TT_FATAL(
-        tl1_test_base() + kTl1RemoteLandingOffset + kMaxCces * harts * kTl1RemoteLandingSlotBytes <= tl1_test_end(),
+        tl1_test_base() + kTl1RemoteLandingOffset +
+                num_cces_from_soc(mimir_contract::configured_soc_desc()) * harts * kTl1RemoteLandingSlotBytes <=
+            tl1_test_end(),
         "remote landing area does not fit the CCE UNRESERVED TL1");
 }
 
@@ -130,14 +108,13 @@ struct MimirCceL1AddressInfo {
     uint64_t tl1_offset = 0;
     uint64_t cluster_address = 0;
     uint64_t host_axi_address = 0;
-    uint64_t spa_address = 0;
     uint64_t mla_address = 0;
     uint32_t size = 0;
 
     std::string to_string() const {
         return fmt::format(
             "CCE{} (M{} location {}, chip {}) TL1 0x{:x} +{} B: translated core ({}, {}), cluster 0x{:x}, "
-            "host AXI 0x{:x}, SPA 0x{:x}, MLA 0x{:x}",
+            "host AXI 0x{:x}, MLA 0x{:x}",
             cce_index,
             mimir_index,
             location,
@@ -148,7 +125,6 @@ struct MimirCceL1AddressInfo {
             translated_core.y,
             cluster_address,
             host_axi_address,
-            spa_address,
             mla_address);
     }
 
@@ -220,7 +196,6 @@ inline MimirCceL1AddressInfo mimir_cce_l1_address(
         info.host_axi_address,
         cce_index,
         cce_window_address);
-    info.spa_address = host_cce_sram_address(cce_index, tl1_offset);
     info.mla_address = host_cce_sram_mla_address(windows, info.location, tl1_offset);
     info.size = size;
     return info;
@@ -275,16 +250,38 @@ inline std::vector<uint32_t> read_cce_tl1(
     return data;
 }
 
-// The open device's chip, Unreserved.
-inline void write_cce_tl1(IDevice* device, uint32_t cce_index, uint64_t tl1_offset, const std::vector<uint32_t>& data) {
-    write_cce_tl1(
-        MetalContext::instance().get_cluster(), device->id(), cce_index, tl1_offset, data, Tl1Range::Unreserved);
+// The open device's chip, through the contract suite's CCE SRAM helpers.
+inline void write_cce_tl1(
+    IDevice* device,
+    uint32_t cce_index,
+    uint64_t tl1_offset,
+    const std::vector<uint32_t>& data,
+    Tl1Range range = Tl1Range::Unreserved) {
+    const uint32_t size_bytes = static_cast<uint32_t>(data.size() * sizeof(uint32_t));
+    check_cce_tl1_access(tl1_offset, size_bytes, range);
+    mimir_contract::write_cce_sram(
+        device,
+        logical_cce_core(soc_desc_of(device), cce_index),
+        mimir_contract::cce_sram_noc_addr(tl1_offset),
+        data.data(),
+        size_bytes);
 }
 
 inline std::vector<uint32_t> read_cce_tl1(
-    IDevice* device, uint32_t cce_index, uint64_t tl1_offset, uint32_t size_bytes) {
-    return read_cce_tl1(
-        MetalContext::instance().get_cluster(), device->id(), cce_index, tl1_offset, size_bytes, Tl1Range::Unreserved);
+    IDevice* device,
+    uint32_t cce_index,
+    uint64_t tl1_offset,
+    uint32_t size_bytes,
+    Tl1Range range = Tl1Range::Unreserved) {
+    check_cce_tl1_access(tl1_offset, size_bytes, range);
+    std::vector<uint32_t> data(size_bytes / sizeof(uint32_t), 0);
+    mimir_contract::read_cce_sram(
+        device,
+        logical_cce_core(soc_desc_of(device), cce_index),
+        mimir_contract::cce_sram_noc_addr(tl1_offset),
+        data.data(),
+        size_bytes);
+    return data;
 }
 
 // Not allocator()->get_bank_offset: it truncates to int32, zeroes the split descriptor's 4 GiB view offsets.
@@ -400,12 +397,14 @@ inline void launch_program_and_wait(IDevice* device, Program& program) {
     slow_dispatch::WaitProgramDone(*device, program);
 }
 
-// Opens chip 0 as a unit MeshDevice and owns it. device() is the physical device under it, for host reads and writes
-// and slow-dispatch launches. The destructor closes the mesh on every path; close() closes early.
+// Opens chip 0 as a unit MeshDevice and owns it. mesh() is for host DRAM reads and writes. device() is the physical
+// device under it, for host TL1 access and slow-dispatch launches. The destructor closes the mesh on every path;
+// close() closes early.
 class ScopedDevice {
 public:
     ScopedDevice() : mesh_(distributed::MeshDevice::create_unit_mesh(0)), closer_(mesh_) {}
 
+    distributed::MeshDevice& mesh() const { return *mesh_; }
     IDevice* device() const {
         return mesh_->get_device(distributed::MeshCoordinate::zero_coordinate(mesh_->shape().dims()));
     }
@@ -422,14 +421,14 @@ inline uint64_t go_message_tl1_offset() {
 
 // The whole GO_MSG word of one CCE.
 inline uint32_t read_go_word(IDevice* device, uint32_t cce_index) {
-    return read_cce_tl1(
-               MetalContext::instance().get_cluster(),
-               device->id(),
-               cce_index,
-               go_message_tl1_offset(),
-               sizeof(uint32_t),
-               Tl1Range::WholeTl1)
-        .front();
+    uint32_t go_word = 0;
+    mimir_contract::read_cce_sram(
+        device,
+        logical_cce_core(soc_desc_of(device), cce_index),
+        mimir_contract::cce_sram_noc_addr(go_message_tl1_offset()),
+        &go_word,
+        sizeof(go_word));
+    return go_word;
 }
 
 inline uint8_t go_signal_of(uint32_t go_word) {
@@ -568,8 +567,9 @@ inline ::testing::AssertionResult run_cce_copy_ops(
 }
 
 // Topology and host accessors.
-inline bool mimir_emu_target_configured() {
-    return std::getenv("TT_METAL_EMU_SERVER") != nullptr && std::getenv("TT_METAL_EMU_SOC_DESC") != nullptr;
+inline bool mimir_local_package_selected() {
+    return mimir_contract::configured_soc_desc().get_arch_descriptor().get_grendel_address_space() ==
+           tt::umd::GrendelAddressSpace::MimirLocal;
 }
 
 struct MimirTopology {
@@ -582,12 +582,9 @@ struct MimirTopology {
 };
 
 inline MimirTopology topology_from(const metal_SocDescriptor& soc) {
-    check_cce_constants_once(soc);
     MimirTopology topology;
     topology.num_mimirs = static_cast<uint32_t>(soc.get_num_dram_channels());
     topology.num_cces = num_cces_from_soc(soc);
-    TT_FATAL(
-        topology.num_cces <= kMaxCces, "descriptor has {} CCEs; tests instantiate {}", topology.num_cces, kMaxCces);
     topology.num_views = static_cast<uint32_t>(soc.get_num_dram_views());
     topology.view_size = soc.dram_view_size;
     for (uint32_t view = 0; view < topology.num_views; ++view) {
@@ -597,10 +594,14 @@ inline MimirTopology topology_from(const metal_SocDescriptor& soc) {
     return topology;
 }
 
-#define MIMIR_SKIP_UNLESS_EMU()                                                                      \
-    if (!::tt::tt_metal::mimir_test::mimir_emu_target_configured()) {                                \
-        GTEST_SKIP() << "Set TT_METAL_EMU_SERVER=host:port and TT_METAL_EMU_SOC_DESC=<mimir YAML>."; \
-    }
+// For a case that reads Mimir-local addresses (raw register reads, D2D state, Mimir-local address records). Invoke it
+// directly in the test body after skip_unless_programmable_dram_package(): GTEST_SKIP returns from its caller.
+#define skip_unless_mimir_local_package()                                                                   \
+    do {                                                                                                    \
+        if (!::tt::tt_metal::mimir_test::mimir_local_package_selected()) {                                  \
+            GTEST_SKIP() << "This case reads Mimir-local addresses; the selected package is full_package."; \
+        }                                                                                                   \
+    } while (0)
 
 struct MimirDramAddressInfo {
     ChipId chip = 0;
@@ -610,16 +611,11 @@ struct MimirDramAddressInfo {
     uint64_t flat_address = 0;
     MimirChannelLocation first_channel;
     uint32_t size = 0;
-    std::vector<uint64_t> spa_by_source_mimir;
 
     std::string to_string() const {
-        std::string spa_list;
-        for (size_t source = 0; source < spa_by_source_mimir.size(); ++source) {
-            spa_list += fmt::format("{}M{}=0x{:x}", source == 0 ? "" : ", ", source, spa_by_source_mimir[source]);
-        }
         return fmt::format(
             "view {} (M{}, chip {}) view_offset 0x{:x} +{} B: chiplet offset 0x{:x}, flat 0x{:x}, "
-            "first channel {} (tile {} slice {}), SPA by source [{}]",
+            "first channel {} (tile {} slice {})",
             view,
             mimir_index,
             chip,
@@ -629,8 +625,7 @@ struct MimirDramAddressInfo {
             flat_address,
             first_channel.instance,
             first_channel.tile,
-            first_channel.slice,
-            spa_list);
+            first_channel.slice);
     }
 
     std::string host_string() const {
@@ -669,11 +664,6 @@ inline MimirDramAddressInfo mimir_dram_address(
     info.flat_address = windows.dram_address(info.mimir_index, info.chiplet_offset);
     info.first_channel = mimir_channel_location(info.chiplet_offset);
     info.size = size;
-    const uint32_t num_mimirs = static_cast<uint32_t>(soc.get_num_dram_channels());
-    for (uint32_t source_mimir = 0; source_mimir < num_mimirs; ++source_mimir) {
-        info.spa_by_source_mimir.push_back(
-            host_cce_gddr_address(soc, source_mimir, info.mimir_index, info.chiplet_offset));
-    }
     return info;
 }
 
@@ -685,7 +675,7 @@ inline ::testing::AssertionResult mimir_host_dram_write(
     uint64_t view_offset,
     const std::vector<uint32_t>& data) {
     const uint32_t size = static_cast<uint32_t>(data.size() * sizeof(uint32_t));
-    const MimirDramAddressInfo info = mimir_dram_address(soc, chip, view, view_offset, size);
+    static_cast<void>(mimir_dram_address(soc, chip, view, view_offset, size));
     cluster.write_dram_vec(data.data(), size, chip, static_cast<int>(view), view_offset);
     return ::testing::AssertionSuccess();
 }
@@ -699,31 +689,11 @@ inline ::testing::AssertionResult mimir_host_dram_read(
     uint32_t size_bytes,
     std::vector<uint32_t>& data) {
     TT_FATAL(size_bytes % sizeof(uint32_t) == 0, "DRAM read size {} is not a multiple of 4", size_bytes);
-    const MimirDramAddressInfo info = mimir_dram_address(soc, chip, view, view_offset, size_bytes);
+    static_cast<void>(mimir_dram_address(soc, chip, view, view_offset, size_bytes));
     data.assign(size_bytes / sizeof(uint32_t), 0);
     // No dram_barrier: EmuAxi runs on SimulationChip, whose dram_membar is a no-op.
     cluster.read_dram_vec(data.data(), size_bytes, chip, static_cast<int>(view), view_offset);
     return ::testing::AssertionSuccess();
-}
-
-inline ::testing::AssertionResult write_dram_view(
-    IDevice* device,
-    const metal_SocDescriptor& soc,
-    uint32_t view,
-    uint64_t view_offset,
-    const std::vector<uint32_t>& data) {
-    return mimir_host_dram_write(MetalContext::instance().get_cluster(), soc, device->id(), view, view_offset, data);
-}
-
-inline ::testing::AssertionResult read_dram_view(
-    IDevice* device,
-    const metal_SocDescriptor& soc,
-    uint32_t view,
-    uint64_t view_offset,
-    uint32_t size_bytes,
-    std::vector<uint32_t>& data) {
-    return mimir_host_dram_read(
-        MetalContext::instance().get_cluster(), soc, device->id(), view, view_offset, size_bytes, data);
 }
 
 struct MimirAnchor {
@@ -788,6 +758,7 @@ struct MimirTransferRecord {
 
 inline MimirTransferRecord make_sram_record(
     const metal_SocDescriptor& soc,
+    const CceSpaRoutes& issuer_routes,
     std::string source,
     std::string destination,
     uint32_t dest_cce,
@@ -798,7 +769,7 @@ inline MimirTransferRecord make_sram_record(
     MimirTransferRecord record;
     record.source = std::move(source);
     record.destination = std::move(destination);
-    record.requested_address = host_cce_sram_address(dest_cce, landing_offset);
+    record.requested_address = mimir_contract::cce_sram_address(issuer_routes, dest_cce, landing_offset);
     record.destination_local_address = host_cce_sram_mla_address(
         tt::umd::mimir_local_address_windows(soc), location_for_cce(dest_cce), landing_offset);
     record.predicted_stages = {

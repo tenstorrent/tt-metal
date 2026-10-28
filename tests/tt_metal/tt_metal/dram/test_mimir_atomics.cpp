@@ -154,7 +154,7 @@ std::string cce_skip_reason(uint32_t cce_index) {
     if (const std::string watcher_reason = mimir_watcher_skip_reason(); !watcher_reason.empty()) {
         return watcher_reason;
     }
-    const MimirTopology topology = topology_from(cluster_soc_desc());
+    const MimirTopology topology = topology_from(configured_soc_desc());
     if (cce_index >= topology.num_cces) {
         return fmt::format("Descriptor exposes {} CCEs; CCE {} is not present.", topology.num_cces, cce_index);
     }
@@ -166,9 +166,6 @@ std::string multi_hart_skip_reason() {
 }
 
 uint32_t multi_hart_count() { return kEightHartLaunchPassed ? abi::kMaxParticipants : 2; }
-
-// The other CCE of this CCE's Mimir.
-uint32_t sibling_cce(uint32_t cce_index) { return cce_index ^ 1u; }
 
 uint32_t leg_seed(uint32_t tag) { return mimir_test_seed() ^ (tag * 0x9E3779B9u); }
 
@@ -688,7 +685,7 @@ std::string batch_config(const IdmaBatch& batch, uint32_t seed) {
 class MimirAtomicCceTest : public ::testing::TestWithParam<uint32_t> {
 protected:
     void SetUp() override {
-        MIMIR_SKIP_UNLESS_EMU();
+        skip_unless_programmable_dram_package();
         if (const std::string skip_reason = cce_skip_reason(GetParam()); !skip_reason.empty()) {
             GTEST_SKIP() << skip_reason;
         }
@@ -792,7 +789,7 @@ TEST_P(MimirAtomicProbe, TwoHartAmo) {
         << label << ": host view of the LR/SC word after the flush";
 }
 
-INSTANTIATE_TEST_SUITE_P(MM42, MimirAtomicProbe, ::testing::Range(0u, kMaxCces), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(MM42, MimirAtomicProbe, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 struct SweepPoint {
     uint32_t value = 0;
@@ -1783,8 +1780,9 @@ TEST_P(MimirAtomicItnControl, Cce0ToCce1PlainWrite) {
         compare_words(label + " line", expected, read_cce_tl1(device, receiver_cce, layout.target, abi::kLineBytes)));
 }
 
-INSTANTIATE_TEST_SUITE_P(MM42, MimirAtomicLocal, ::testing::Range(0u, kMaxCces), cce_param_name);
-INSTANTIATE_TEST_SUITE_P(MM42, MimirAtomicItnControl, ::testing::Range(0u, kMaxCces), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(MM42, MimirAtomicLocal, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(
+    MM42, MimirAtomicItnControl, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 std::string format_name(uint32_t format) {
     switch (format) {
@@ -1980,7 +1978,7 @@ TEST_P(MimirAccumProbe, DirtyLine) {
     EXPECT_EQ(code, idma_abi::kCodeLanded) << label << ": " << result << idma_code_note(code);
 }
 
-INSTANTIATE_TEST_SUITE_P(MM42, MimirAccumProbe, ::testing::Range(0u, kMaxCces), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(MM42, MimirAccumProbe, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 class MimirAtomicIdmaAccum : public MimirAtomicCceTest {};
 
@@ -2257,7 +2255,8 @@ TEST_P(MimirAtomicIdmaAccum, MixedPathControl) {
         label + " combined result", expected, read_cce_tl1(device, cce_index, layout.target, abi::kLineBytes)));
 }
 
-INSTANTIATE_TEST_SUITE_P(MM42, MimirAtomicIdmaAccum, ::testing::Range(0u, kMaxCces), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(
+    MM42, MimirAtomicIdmaAccum, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 class MimirKnownIssue : public MimirAtomicCceTest {};
 
@@ -2486,6 +2485,7 @@ TEST_P(MimirKnownIssue, Mim560Detector) {
     log_info(tt::LogTest, "MM42Detector {}: {}; {}; {}", label, overlap, classes, verdict);
 }
 
-INSTANTIATE_TEST_SUITE_P(MM42Detector, MimirKnownIssue, ::testing::Range(0u, kMaxCces), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(
+    MM42Detector, MimirKnownIssue, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 }  // namespace tt::tt_metal::mimir_test::atomics

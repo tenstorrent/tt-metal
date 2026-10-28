@@ -36,7 +36,6 @@
 
 namespace tt::tt_metal::mimir_test::dm_mesh_buffer {
 
-inline constexpr ChipId kChipId = 0;
 // InterleavedPlacement: one page per bank, a few KiB each, since the emulator's host writes are slow.
 inline constexpr uint32_t kPlacementPageBytes = 4 * 1024;
 inline constexpr uint32_t kPlacementPageWords = kPlacementPageBytes / sizeof(uint32_t);
@@ -74,7 +73,7 @@ std::vector<std::optional<uint32_t>> view_of_each_bank(
 
 // MM0-style raw view read at get_address_offset(view) + view_offset, guarded against leaving the view.
 ::testing::AssertionResult raw_view_page_matches(
-    const Cluster& cluster,
+    distributed::MeshDevice& unit_mesh,
     const metal_SocDescriptor& soc,
     std::optional<uint32_t> view,
     uint64_t view_offset,
@@ -96,11 +95,7 @@ std::vector<std::optional<uint32_t>> view_of_each_bank(
     }
     std::vector<uint32_t> actual;
     try {
-        const ::testing::AssertionResult read =
-            mimir_host_dram_read(cluster, soc, kChipId, view.value(), view_offset, size_bytes, actual);
-        if (!read) {
-            return read;
-        }
+        mimir_contract::read_gddr_view(unit_mesh, view.value(), view_offset, size_bytes, actual);
     } catch (const std::exception& error) {
         return ::testing::AssertionFailure() << label << ": read threw: " << error.what();
     }
@@ -115,7 +110,7 @@ void record_result(const std::string& name, const ::testing::AssertionResult& re
 class MimirDmMeshBufferDram : public ::testing::TestWithParam<std::string> {};
 
 TEST_P(MimirDmMeshBufferDram, InterleavedPlacement) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -143,7 +138,6 @@ TEST_P(MimirDmMeshBufferDram, InterleavedPlacement) {
     distributed::MeshCommandQueue& command_queue = mesh->mesh_command_queue();
     distributed::EnqueueWriteMeshBuffer(command_queue, mesh_buffer, source, /*blocking=*/true);
 
-    const Cluster& cluster = MetalContext::instance().get_cluster();
     const std::vector<std::optional<uint32_t>> bank_views = view_of_each_bank(allocator, soc, num_banks);
     for (uint32_t bank_id = 0; bank_id < num_banks; ++bank_id) {
         const std::string label = fmt::format(
@@ -152,7 +146,7 @@ TEST_P(MimirDmMeshBufferDram, InterleavedPlacement) {
             bank_views[bank_id].has_value() ? fmt::format("{}", bank_views[bank_id].value()) : "none",
             buffer.address());
         const ::testing::AssertionResult placement =
-            raw_view_page_matches(cluster, soc, bank_views[bank_id], buffer.address(), bank_pages[bank_id], label);
+            raw_view_page_matches(*mesh, soc, bank_views[bank_id], buffer.address(), bank_pages[bank_id], label);
         record_result(fmt::format("bank{}", bank_id), placement);
         EXPECT_TRUE(placement);
     }
@@ -165,7 +159,7 @@ TEST_P(MimirDmMeshBufferDram, InterleavedPlacement) {
 }
 
 TEST_P(MimirDmMeshBufferDram, WriteRead) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -188,7 +182,7 @@ TEST_P(MimirDmMeshBufferDram, WriteRead) {
 }
 
 TEST_P(MimirDmMeshBufferDram, MultipleWriteReadRounds) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }

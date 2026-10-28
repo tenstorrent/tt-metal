@@ -256,7 +256,7 @@ void run_hart_to_hart(IDevice* device, uint32_t value) {
 class MimirDmCache : public ::testing::TestWithParam<CacheCase> {};
 
 TEST_P(MimirDmCache, Op) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     const CacheCase cache_case = GetParam();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
@@ -347,7 +347,7 @@ inline constexpr uint32_t kPerfSizesBytes[] = {8, 64, 200, 2048, 32 * 1024};
 class MimirDmCachePerf : public ::testing::TestWithParam<WritePath> {};
 
 TEST_P(MimirDmCachePerf, WritePath) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -407,7 +407,7 @@ std::string cce_skip_reason(uint32_t cce_index) {
     if (const std::string watcher_reason = mimir_watcher_skip_reason(); !watcher_reason.empty()) {
         return watcher_reason;
     }
-    const MimirTopology topology = topology_from(cluster_soc_desc());
+    const MimirTopology topology = topology_from(configured_soc_desc());
     if (cce_index >= topology.num_cces) {
         return fmt::format("Descriptor exposes {} CCEs; CCE {} is not present.", topology.num_cces, cce_index);
     }
@@ -449,7 +449,7 @@ std::vector<uint32_t> probe_args(uint32_t mode, uint32_t hart) {
 class MimirCacheProbe : public ::testing::TestWithParam<uint32_t> {
 protected:
     void SetUp() override {
-        MIMIR_SKIP_UNLESS_EMU();
+        skip_unless_programmable_dram_package();
         if (const std::string skip_reason = cce_skip_reason(GetParam()); !skip_reason.empty()) {
             GTEST_SKIP() << skip_reason;
         }
@@ -465,17 +465,17 @@ TEST_P(MimirCacheProbe, EightHartLaunch) {
     record_descriptor_properties(soc_desc_of(device));
 
     std::vector<std::pair<uint32_t, std::vector<uint32_t>>> hart_args;
-    for (uint32_t hart = 0; hart < kHartsPerCce; ++hart) {
+    for (uint32_t hart = 0; hart < cce_hart_count(); ++hart) {
         hart_args.emplace_back(hart, probe_args(abi::kModeNull, hart));
     }
     const std::string label =
-        fmt::format("EightHartLaunch on CCE{}: null kernel on harts 0-{}", cce_index, kHartsPerCce - 1);
+        fmt::format("EightHartLaunch on CCE{}: null kernel on harts 0-{}", cce_index, cce_hart_count() - 1);
     log_info(tt::LogTest, "MM41 {}", label);
     const std::optional<std::vector<std::vector<uint32_t>>> statuses =
         run_on_cce(device, cce_index, hart_args, kProbeHostDeadline);
     if (!statuses.has_value()) {
         std::string missing;
-        for (uint32_t hart = 0; hart < kHartsPerCce; ++hart) {
+        for (uint32_t hart = 0; hart < cce_hart_count(); ++hart) {
             if (read_status_magic(device, cce_index, hart) != abi::kDoneMagic) {
                 missing += fmt::format(" {}", hart);
             }
@@ -484,11 +484,11 @@ TEST_P(MimirCacheProbe, EightHartLaunch) {
         FAIL() << label << ": no status from harts" << missing << " after " << kProbeHostDeadline.count() << " s"
                << kFreshSessionNote;
     }
-    for (uint32_t hart = 0; hart < kHartsPerCce; ++hart) {
+    for (uint32_t hart = 0; hart < cce_hart_count(); ++hart) {
         EXPECT_EQ((*statuses)[hart][abi::kStatusCode], abi::kCodeDone)
             << label << ": hart " << hart << " " << status_detail((*statuses)[hart]);
     }
-    RecordProperty("harts_with_status", static_cast<int>(kHartsPerCce));
+    RecordProperty("harts_with_status", static_cast<int>(cce_hart_count()));
 }
 
 // Records the snoop-master config (default 0x6) and the L2 CONFIGURATION fields. Records only.
@@ -574,7 +574,7 @@ TEST_P(MimirCacheProbe, L2Geometry) {
     RecordProperty("first_evicting_count_by_stride", summary);
 }
 
-INSTANTIATE_TEST_SUITE_P(MM41, MimirCacheProbe, ::testing::Range(0u, kMaxCces), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(MM41, MimirCacheProbe, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 // MM41 cases (plan increments 2-4). Each runs on every CCE of the descriptor unless it says otherwise. Kernels make no
 // uncached store while an iDMA or another CCE may be writing into their TL1 (MIM-560): a reader polls the data with
@@ -890,17 +890,8 @@ void expect_host_on_cce(
         << label << ": guard overwritten";
 }
 
-uint32_t sibling_cce(uint32_t cce_index) {
-    return cce_index_for(mimir_index_for_cce(cce_index), 1 - location_for_cce(cce_index));
-}
-
-// The CCE at the same location on the other Mimir of a two-Mimir descriptor.
-uint32_t remote_cce(uint32_t cce_index) {
-    return cce_index_for(1 - mimir_index_for_cce(cce_index), location_for_cce(cce_index));
-}
-
 std::string two_mimir_skip_reason() {
-    const MimirTopology topology = topology_from(cluster_soc_desc());
+    const MimirTopology topology = topology_from(configured_soc_desc());
     return topology.num_mimirs < 2
                ? fmt::format("Descriptor exposes {} Mimir; the case needs two.", topology.num_mimirs)
                : "";
@@ -1213,7 +1204,7 @@ TEST_P(MimirCacheOps, L1DcacheFlushFull) {
     run_l1_flush_target(GetParam(), abi::kModeL1FlushFullTarget, "L1DcacheFlushFull");
 }
 
-INSTANTIATE_TEST_SUITE_P(MM41, MimirCacheOps, ::testing::Range(0u, kMaxCces), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(MM41, MimirCacheOps, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 enum class SharedForm : uint32_t { WriterReader, EightWriters };
 
@@ -1246,7 +1237,7 @@ inline constexpr uint32_t kSharedPasses = 16;
 class MimirCacheSharedL2 : public ::testing::TestWithParam<SharedParam> {
 protected:
     void SetUp() override {
-        MIMIR_SKIP_UNLESS_EMU();
+        skip_unless_programmable_dram_package();
         if (const std::string skip_reason = cce_skip_reason(std::get<0>(GetParam())); !skip_reason.empty()) {
             GTEST_SKIP() << skip_reason;
         }
@@ -1274,7 +1265,7 @@ protected:
         const uint32_t tag = 0x60 + cce_index;
         constexpr uint32_t value = 0x5A000000u;
         prefill_on_cce(device, cce_index, region_offset, pattern_words(kOldValue, kSharedRegionWords), tag);
-        write_cce_tl1(device, cce_index, flag_offset, std::vector<uint32_t>(kHartsPerCce * kWordsPerLine, 0));
+        write_cce_tl1(device, cce_index, flag_offset, std::vector<uint32_t>(cce_hart_count() * kWordsPerLine, 0));
         std::vector<uint32_t> expected = pattern_words(kOldValue, kSharedRegionWords);
         if (form == SharedForm::WriterReader) {
             const uint64_t writer_offset = region_offset + layout.writer_first_word * sizeof(uint32_t);
@@ -1338,14 +1329,14 @@ protected:
         }
 
         std::vector<HartKernel> kernels;
-        for (uint32_t hart = 0; hart < kHartsPerCce; ++hart) {
+        for (uint32_t hart = 0; hart < cce_hart_count(); ++hart) {
             std::vector<uint32_t> args = mm41_args(abi::kModeSharedConcurrentWriter, hart);
             args[abi::kArgDataOffset] = static_cast<uint32_t>(region_offset);
             args[abi::kArgNumWords] = layout.eight_writer_words;
             args[abi::kArgValue] = value;
             args[abi::kArgFlagOffset] = static_cast<uint32_t>(flag_offset);
             args[abi::kArgHartSlot] = hart;
-            args[abi::kArgNumHarts] = kHartsPerCce;
+            args[abi::kArgNumHarts] = cce_hart_count();
             args[abi::kArgPasses] = kSharedPasses;
             args[abi::kArgStrideBytes] = layout.eight_writer_stride_bytes;
             kernels.push_back(cache_kernel(cce_index, hart, args));
@@ -1354,7 +1345,7 @@ protected:
             "{} on CCE{}: {} harts each store {} words at stride {} B, {} passes, region TL1 0x{:x}",
             layout.name,
             cce_index,
-            kHartsPerCce,
+            cce_hart_count(),
             layout.eight_writer_words,
             layout.eight_writer_stride_bytes,
             kSharedPasses,
@@ -1363,7 +1354,7 @@ protected:
         const StagedRun run = run_together(device, kernels, kMm41HostDeadline);
         ASSERT_FALSE(run.statuses.empty())
             << label << ": no status after " << kMm41HostDeadline.count() << " s" << kFreshSessionNote;
-        for (uint32_t hart = 0; hart < kHartsPerCce; ++hart) {
+        for (uint32_t hart = 0; hart < cce_hart_count(); ++hart) {
             const std::vector<uint32_t>& status = run.statuses[hart];
             log_info(tt::LogTest, "MM41 {}: hart {} {}", label, hart, mm41_detail(status));
             EXPECT_EQ(status[abi::kStatusCode], abi::kCodeDone)
@@ -1383,7 +1374,7 @@ protected:
             std::string winners;
             for (uint32_t word = 0; word < layout.eight_writer_words; ++word) {
                 bool from_some_hart = false;
-                for (uint32_t hart = 0; hart < kHartsPerCce; ++hart) {
+                for (uint32_t hart = 0; hart < cce_hart_count(); ++hart) {
                     if (observed[word] == last_value(hart, word)) {
                         from_some_hart = true;
                         winners += fmt::format("{}{}", winners.empty() ? "" : " ", hart);
@@ -1395,7 +1386,7 @@ protected:
             }
             RecordProperty("last_writer_by_word", winners);
         } else {
-            for (uint32_t hart = 0; hart < kHartsPerCce; ++hart) {
+            for (uint32_t hart = 0; hart < cce_hart_count(); ++hart) {
                 for (uint32_t word = 0; word < layout.eight_writer_words; ++word) {
                     expected[hart * layout.eight_writer_stride_bytes / sizeof(uint32_t) + word] =
                         last_value(hart, word);
@@ -1416,7 +1407,8 @@ INSTANTIATE_TEST_SUITE_P(
     MM41,
     MimirCacheSharedL2,
     ::testing::Combine(
-        ::testing::Range(0u, kMaxCces), ::testing::Values(SharedForm::WriterReader, SharedForm::EightWriters)),
+        ::testing::ValuesIn(mimir_contract::cce_indices()),
+        ::testing::Values(SharedForm::WriterReader, SharedForm::EightWriters)),
     shared_param_name);
 
 // External writers into a reader hart's TL1 data (section 4.1 external-writer coherence).
@@ -1460,7 +1452,7 @@ std::string writer_param_name(const ::testing::TestParamInfo<WriterParam>& info)
 // The host and a remote CCE's SPA stores have no snoop-on mechanism (plan R2 reaches only same-Mimir writers).
 std::vector<WriterParam> writer_params() {
     std::vector<WriterParam> params;
-    for (uint32_t cce_index = 0; cce_index < kMaxCces; ++cce_index) {
+    for (const uint32_t cce_index : mimir_contract::cce_indices()) {
         for (const ExternalWriter writer :
              {ExternalWriter::Host,
               ExternalWriter::LocalIdma,
@@ -1573,7 +1565,8 @@ std::vector<uint32_t> idma_source_words(uint32_t value) {
 class MimirCacheWriterProbe : public ::testing::TestWithParam<WriterParam> {
 protected:
     void SetUp() override {
-        MIMIR_SKIP_UNLESS_EMU();
+        skip_unless_programmable_dram_package();
+        skip_unless_mimir_local_package();
         if (const std::string skip_reason = cce_skip_reason(std::get<0>(GetParam())); !skip_reason.empty()) {
             GTEST_SKIP() << skip_reason;
         }
@@ -1659,8 +1652,8 @@ TEST_P(MimirCacheWriterProbe, ExternalWriters) {
             } else {
                 const uint32_t view = writer == ExternalWriter::LocalGddrIdma
                                           ? local_dram_view_for_cce(soc, cce_index)
-                                          : base_dram_view_for_mimir(soc, 1 - mimir_index_for_cce(cce_index));
-                EXPECT_TRUE(write_dram_view(device, soc, view, gddr_source_view_offset(), source));
+                                          : base_dram_view_for_mimir(soc, next_mimir(mimir_index_for_cce(cce_index)));
+                mimir_contract::write_gddr_view(device_closer.mesh(), view, gddr_source_view_offset(), source);
                 batch.source = gddr_operand(soc, cce_index, view, gddr_source_view_offset());
                 batch.host_verified = true;
                 batch.expected_xor = xor_of(source);
@@ -1683,7 +1676,7 @@ TEST_P(MimirCacheWriterProbe, ExternalWriters) {
         case ExternalWriter::SiblingSpa:
         case ExternalWriter::RemoteCce: {
             const uint32_t writer_cce =
-                writer == ExternalWriter::SiblingSpa ? sibling_cce(cce_index) : remote_cce(cce_index);
+                writer == ExternalWriter::SiblingSpa ? sibling_cce(cce_index) : next_mimir_cce(cce_index);
             if (writer == ExternalWriter::SiblingSpa) {
                 remap_snoop.emplace(cluster, device->id(), writer_cce, snoop);
                 RecordProperty(
@@ -1970,7 +1963,7 @@ TEST_P(MimirCacheCoherence, CrossD2d) {
     IDevice* device = device_closer.device();
     check_tl1_layout();
     record_descriptor_properties(soc_desc_of(device));
-    const uint32_t remote = remote_cce(cce_index);
+    const uint32_t remote = next_mimir_cce(cce_index);
     RecordProperty("route", fmt::format("CCE{} <-> CCE{} over D2D", cce_index, remote));
     run_flush_remote_read(device, cce_index, remote, 0x8C + cce_index, "CrossD2d");
     if (HasFatalFailure()) {
@@ -2000,7 +1993,7 @@ inline constexpr uint32_t kRaceHartValue = 0x4A000000u;
 inline constexpr uint32_t kRaceExternalValue = 0xE4000000u;
 inline constexpr uint32_t kSnoopMasterConfigs = 8;
 
-INSTANTIATE_TEST_SUITE_P(MM41, MimirCacheCoherence, ::testing::Range(0u, kMaxCces), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(MM41, MimirCacheCoherence, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 // One CCE and one NOC_SNOOP_TL_MASTER_CFG value per case, so a stall under one configuration loses no other.
 using RaceParam = std::tuple<uint32_t, uint32_t>;
@@ -2012,7 +2005,7 @@ std::string race_param_name(const ::testing::TestParamInfo<RaceParam>& info) {
 // Every CCE, the default configuration first.
 std::vector<RaceParam> race_params() {
     std::vector<RaceParam> params;
-    for (uint32_t cce_index = 0; cce_index < kMaxCces; ++cce_index) {
+    for (const uint32_t cce_index : mimir_contract::cce_indices()) {
         params.emplace_back(cce_index, kSnoopMasterDefault);
         for (uint32_t config = 0; config < kSnoopMasterConfigs; ++config) {
             if (config != kSnoopMasterDefault) {
@@ -2026,7 +2019,8 @@ std::vector<RaceParam> race_params() {
 class MimirCacheCoherenceRace : public ::testing::TestWithParam<RaceParam> {
 protected:
     void SetUp() override {
-        MIMIR_SKIP_UNLESS_EMU();
+        skip_unless_programmable_dram_package();
+        skip_unless_mimir_local_package();
         if (const std::string skip_reason = cce_skip_reason(std::get<0>(GetParam())); !skip_reason.empty()) {
             GTEST_SKIP() << skip_reason;
         }
@@ -2311,7 +2305,7 @@ inline constexpr uint32_t kChurnRounds = 4;
 // One PreloadChurn leg: the consumer holds the hot set cached; each round the host launches the sibling CCE's iDMA
 // preload from local GDDR into it once the consumer's round flag is up, and the consumer waits for the data in TL1
 // (producer completion), invalidates in L2 (snoop off), reads it cached twice and checks it.
-void run_churn_leg(IDevice* device, uint32_t cce_index, bool snoop) {
+void run_churn_leg(distributed::MeshDevice& unit_mesh, IDevice* device, uint32_t cce_index, bool snoop) {
     const metal_SocDescriptor& soc = soc_desc_of(device);
     const uint32_t sibling = sibling_cce(cce_index);
     const uint64_t data_offset = tl1_data(kReaderHart);
@@ -2323,12 +2317,11 @@ void run_churn_leg(IDevice* device, uint32_t cce_index, bool snoop) {
     prefill_on_cce(device, cce_index, data_offset, pattern_words(kOldValue, kChurnWords), tag);
     write_cce_tl1(device, cce_index, flag_offset, std::vector<uint32_t>(kWordsPerLine, 0));
     for (uint32_t round = 0; round < kChurnRounds; ++round) {
-        EXPECT_TRUE(write_dram_view(
-            device,
-            soc,
+        mimir_contract::write_gddr_view(
+            unit_mesh,
             view,
             gddr_source_view_offset() + static_cast<uint64_t>(round) * idma_abi::kMaxBytesInPacket,
-            pattern_words(abi::churn_word(value, round, 0), kChurnWords)));
+            pattern_words(abi::churn_word(value, round, 0), kChurnWords));
     }
     std::vector<uint32_t> args = mm41_args(abi::kModeChurnConsumer, kReaderHart);
     args[abi::kArgDataOffset] = static_cast<uint32_t>(data_offset);
@@ -2437,11 +2430,11 @@ TEST_P(MimirCacheStress, PreloadChurn) {
     IDevice* device = device_closer.device();
     check_tl1_layout();
     record_descriptor_properties(soc_desc_of(device));
-    run_churn_leg(device, cce_index, false);
+    run_churn_leg(device_closer.mesh(), device, cce_index, false);
     if (HasFatalFailure()) {
         return;
     }
-    run_churn_leg(device, cce_index, true);
+    run_churn_leg(device_closer.mesh(), device, cce_index, true);
 }
 
 // MM-8 MimirDmCachePerf's write paths past 32 KiB; kStatusCycles is recorded, not gated.
@@ -2496,7 +2489,7 @@ TEST_P(MimirCacheStress, PerfSweep) {
     }
 }
 
-INSTANTIATE_TEST_SUITE_P(MM41, MimirCacheStress, ::testing::Range(0u, kMaxCces), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(MM41, MimirCacheStress, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 // MM4x compile-only row: every MM4x kernel JIT-compiles for all eight harts of CCE 0, with nothing launched.
 inline constexpr const char* kMm4xKernels[] = {
@@ -2514,14 +2507,14 @@ std::string mm4x_kernel_name(const ::testing::TestParamInfo<uint32_t>& info) {
 class MimirMm4xCompile : public ::testing::TestWithParam<uint32_t> {};
 
 TEST_P(MimirMm4xCompile, Kernel) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
     ScopedDevice device_closer;
     IDevice* device = device_closer.device();
     std::vector<CceKernelLaunch> launches;
-    for (uint32_t hart = 0; hart < kHartsPerCce; ++hart) {
+    for (uint32_t hart = 0; hart < cce_hart_count(); ++hart) {
         launches.push_back({.cce_index = 0, .kernel_path = kMm4xKernels[GetParam()], .hart = hart});
     }
     Program program = CreateProgram();

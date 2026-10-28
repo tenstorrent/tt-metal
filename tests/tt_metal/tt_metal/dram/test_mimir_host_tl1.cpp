@@ -129,7 +129,7 @@ const HalDramL1Region& hal_region_of(const std::vector<HalDramL1Region>& regions
 
 class MimirHostTl1Cce : public ::testing::TestWithParam<uint32_t> {};
 
-INSTANTIATE_TEST_SUITE_P(MM1, MimirHostTl1Cce, ::testing::Range(0u, kMaxCces), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(MM1, MimirHostTl1Cce, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 struct BoundaryWindow {
     uint32_t cce_index;
@@ -259,8 +259,9 @@ std::vector<uint8_t> read_preflight_chunk(
 }
 
 TEST(MimirHostTl1, DiscoverCceTl1Map) {
-    MIMIR_SKIP_UNLESS_EMU();
-    const MimirTopology topology = topology_from(cluster_soc_desc());
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
+    const MimirTopology topology = topology_from(configured_soc_desc());
     if (topology.num_cces == 0) {
         GTEST_SKIP() << "Descriptor exposes no CCEs.";
     }
@@ -347,9 +348,10 @@ TEST(MimirHostTl1, DiscoverCceTl1Map) {
 }
 
 TEST_P(MimirHostTl1Cce, PerCceVisibility) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     const uint32_t cce_index = GetParam();
-    const MimirTopology topology = topology_from(cluster_soc_desc());
+    const MimirTopology topology = topology_from(configured_soc_desc());
     if (cce_index >= topology.num_cces) {
         GTEST_SKIP() << "Descriptor exposes only " << topology.num_cces << " CCEs.";
     }
@@ -422,8 +424,9 @@ TEST_P(MimirHostTl1Cce, PerCceVisibility) {
 }
 
 TEST(MimirHostTl1, BoundaryAndIsolation) {
-    MIMIR_SKIP_UNLESS_EMU();
-    const MimirTopology topology = topology_from(cluster_soc_desc());
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
+    const MimirTopology topology = topology_from(configured_soc_desc());
     if (topology.num_cces == 0) {
         GTEST_SKIP() << "Descriptor exposes no CCEs.";
     }
@@ -472,8 +475,9 @@ TEST(MimirHostTl1, BoundaryAndIsolation) {
 }
 
 TEST(MimirHostTl1, HostSideRejections) {
-    MIMIR_SKIP_UNLESS_EMU();
-    const MimirTopology topology = topology_from(cluster_soc_desc());
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
+    const MimirTopology topology = topology_from(configured_soc_desc());
     if (topology.num_cces == 0) {
         GTEST_SKIP() << "Descriptor exposes no CCEs.";
     }
@@ -546,8 +550,9 @@ TEST(MimirHostTl1, HostSideRejections) {
 }
 
 TEST(MimirFwPreflight, FirmwareLoadPreflight) {
-    MIMIR_SKIP_UNLESS_EMU();
-    const MimirTopology topology = topology_from(cluster_soc_desc());
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
+    const MimirTopology topology = topology_from(configured_soc_desc());
     if (topology.num_cces == 0) {
         GTEST_SKIP() << "Descriptor exposes no CCEs.";
     }
@@ -603,8 +608,8 @@ TEST(MimirFwPreflight, FirmwareLoadPreflight) {
             }
         }
 
-        const std::array<uint64_t, kHartsPerCce> reset_vectors = read_cce_reset_vectors(cluster, soc, chip, cce_index);
-        for (uint32_t hart = 0; hart < kHartsPerCce; ++hart) {
+        const std::vector<uint64_t> reset_vectors = read_cce_reset_vectors(cluster, soc, chip, cce_index);
+        for (uint32_t hart = 0; hart < cce_hart_count(); ++hart) {
             log_info(
                 tt::LogTest, "CCE{} hart {} reset vector 0x{:x} (logged only)", cce_index, hart, reset_vectors[hart]);
         }

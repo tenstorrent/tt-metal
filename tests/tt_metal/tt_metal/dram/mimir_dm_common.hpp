@@ -42,7 +42,7 @@ inline constexpr const char* kFreshSessionNote =
 // The descriptor this run is configured with, e.g. "mimir_2x_package", with every character that is not a letter or
 // digit replaced by '_'.
 inline std::string configured_descriptor_name() {
-    const char* descriptor_path = std::getenv("TT_METAL_EMU_SOC_DESC");
+    const char* descriptor_path = mimir_contract::selected_soc_desc_path();
     if (descriptor_path == nullptr) {
         return "Unconfigured";
     }

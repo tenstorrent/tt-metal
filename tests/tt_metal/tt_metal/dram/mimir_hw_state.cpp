@@ -4,8 +4,10 @@
 
 #include "tt_metal/tt_metal/dram/mimir_hw_state.hpp"
 
+#include <array>
 #include <cstddef>
 #include <map>
+#include <optional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -42,13 +44,9 @@ inline constexpr uint64_t kAttDebugLastTranslationOffset = 0x28;
 inline constexpr uint64_t kAttDebugMiscOffset = 0x2C;
 inline constexpr uint64_t kAttEndpointTableOffset = 0x2000;
 inline constexpr uint64_t kD2dTileStride = 0x00200000ULL;
-// Composed per location (base + location * CCE_WITHIN_TILE_STRIDE), not with grendel::cce_control_addr, which adds the
-// HSIO stride for index >= 2 (grendel_implementation.hpp:341-348).
-inline constexpr uint64_t kCceLocationStride = tt::umd::grendel::CCE_WITHIN_TILE_STRIDE;
 inline constexpr uint64_t kCceResetBaseAddress = tt::umd::grendel::CCE_PF_CTRL_RESET_BASE;
 inline constexpr uint64_t kCceResetVectorHartStride = tt::umd::grendel::CCE_HART_RESET_VECTOR_STRIDE;
 inline constexpr uint64_t kCceUncoreReleased = tt::umd::grendel::CCE_UNCORE_RELEASED;
-static_assert(kHartsPerCce == tt::umd::grendel::CCE_NUM_HARTS);
 inline constexpr uint64_t kCceAxiReadErrorOffset = 0x98;
 inline constexpr uint64_t kCceAxiWriteErrorOffset = 0xA0;
 inline constexpr uint64_t kCceRemapBaseAddress = tt::umd::grendel::CCE_DMRISC_REMAP_BASE;
@@ -92,9 +90,18 @@ inline constexpr AttEndpointExpected kAttEndpointsExpected[] = {
 
 // ATT entry 2 routes to endpoint 64 + destination CCE index.
 inline constexpr uint32_t kFirstRemoteSramEntry = 64;
-// ATT endpoints for remote DRAM: M0 -> M1 lands on M1 D2D1, M1 -> M0 on M0 D2D0.
-inline constexpr uint32_t kRemoteGddrEntryFromM0 = 113;
-inline constexpr uint32_t kRemoteGddrEntryFromM1 = 96;
+
+struct RemoteGddrEndpointEntry {
+    uint32_t source_mimir;
+    uint32_t d2d_port;
+    uint32_t entry_index;
+};
+
+// ATT endpoints for remote DRAM in the MMK package: Mimir 0 reaches Mimir 1 over D2D1, Mimir 1 reaches 0 over D2D0.
+inline constexpr RemoteGddrEndpointEntry kRemoteGddrEndpointEntries[] = {
+    {0, 1, 113},
+    {1, 0, 96},
+};
 
 AttEndpointPrediction expected_att_endpoint(uint32_t entry) {
     for (const AttEndpointExpected& endpoint : kAttEndpointsExpected) {
@@ -105,24 +112,15 @@ AttEndpointPrediction expected_att_endpoint(uint32_t entry) {
     TT_THROW("ATT endpoint entry {} is not in the expected table", entry);
 }
 
-// Literals: deriving them from UMD would compare UMD with itself.
-inline constexpr uint64_t kExpectedRemapSramMlaBase = 0x40000000ULL;
-inline constexpr uint64_t kExpectedRemapGddrLocalBase = 0x800000000ULL;
-
-struct CceRemapEntryValues {
-    uint64_t start;
-    uint64_t end;
-    uint64_t remap_start;
-    uint64_t attrs;
-};
-
 uint32_t mimir_count(const metal_SocDescriptor& soc) { return static_cast<uint32_t>(soc.get_num_dram_channels()); }
 
 std::string tile_prefix(const D2dTile& tile) { return fmt::format("M{}.D2D{}", tile.mimir_index, tile.d2d_index); }
 
 uint64_t d2d_tile_offset(const D2dTile& tile) { return static_cast<uint64_t>(tile.d2d_index) * kD2dTileStride; }
 
-uint64_t cce_location_offset(uint32_t location) { return static_cast<uint64_t>(location) * kCceLocationStride; }
+uint64_t cce_register_address(const metal_SocDescriptor& soc, uint32_t location, uint64_t register_address) {
+    return tt::umd::mimir_local_address_windows(soc).cce_control_address(0, location, register_address);
+}
 
 uint64_t ss_bar_address(const D2dTile& tile, uint64_t offset) {
     return kSsBarBaseAddress + d2d_tile_offset(tile) + offset;
@@ -267,41 +265,25 @@ void append_att_expected(std::vector<MimirRegister>& registers, const D2dTile& t
     }
 }
 
-// Chippy (utility/cce.py) and UMD (TTDevice::program_cce_dmrisc_remap) write these same values.
-CceRemapEntryValues cce_remap_entry_values(uint32_t entry_index, uint32_t mimir_index) {
-    const uint64_t inst = mimir_index;
-    switch (entry_index) {
-        case 0: {
-            const uint64_t start = 0x1300000000ULL + inst * 0x8000000ULL;
-            return {start, start + 0x8000000ULL, 0, 1};
-        }
-        case 1: {
-            const uint64_t start = kCceSramSpaBase + inst * 2 * kCceSramTileStride;
-            return {start, start + 2 * kCceSramTileStride, kExpectedRemapSramMlaBase, 1};
-        }
-        default: {
-            const uint64_t start = kCceGddrSpaBase + inst * kCceGddrMimirStride;
-            return {start, start + kCceGddrMimirStride, kExpectedRemapGddrLocalBase, 1};
-        }
-    }
-}
-
 void append_cce_remap_expected(
     std::vector<MimirRegister>& registers, const metal_SocDescriptor& soc, uint32_t mimir_index) {
-    for (uint32_t location = 0; location < cces_per_mimir(soc); ++location) {
+    // Chippy programs the remap; compare it with UMD's package windows.
+    const std::array<tt::umd::CceDmriscRemapEntry, kCceRemapEntriesPerCce> expected_entries =
+        tt::umd::cce_dmrisc_remap_entries(tt::umd::GrendelAddressWindows{}, mimir_index);
+    for (uint32_t location = 0; location < locations_per_channel(soc); ++location) {
         for (uint32_t entry_index = 0; entry_index < kCceRemapEntriesPerCce; ++entry_index) {
-            const CceRemapEntryValues entry = cce_remap_entry_values(entry_index, mimir_index);
-            const uint64_t entry_base = kCceRemapBaseAddress + cce_location_offset(location) +
-                                        static_cast<uint64_t>(entry_index) * kCceRemapEntryStride;
+            const tt::umd::CceDmriscRemapEntry& entry = expected_entries[entry_index];
+            const uint64_t entry_base = cce_register_address(
+                soc, location, kCceRemapBaseAddress + static_cast<uint64_t>(entry_index) * kCceRemapEntryStride);
             const std::string prefix = fmt::format("M{}.CCE{}.DMRISC_REMAP{}", mimir_index, location, entry_index);
-            registers.push_back(
-                make_register(prefix + ".START", mimir_index, entry_base + kCceRemapStartOffset, entry.start, true));
-            registers.push_back(
-                make_register(prefix + ".END", mimir_index, entry_base + kCceRemapEndOffset, entry.end, true));
             registers.push_back(make_register(
-                prefix + ".REMAP_START", mimir_index, entry_base + kCceRemapRemapStartOffset, entry.remap_start, true));
+                prefix + ".START", mimir_index, entry_base + kCceRemapStartOffset, entry.region_start, true));
             registers.push_back(
-                make_register(prefix + ".ATTRS", mimir_index, entry_base + kCceRemapAttrsOffset, entry.attrs, true));
+                make_register(prefix + ".END", mimir_index, entry_base + kCceRemapEndOffset, entry.region_end, true));
+            registers.push_back(make_register(
+                prefix + ".REMAP_START", mimir_index, entry_base + kCceRemapRemapStartOffset, entry.local_base, true));
+            registers.push_back(
+                make_register(prefix + ".ATTRS", mimir_index, entry_base + kCceRemapAttrsOffset, 1, true));
         }
     }
 }
@@ -454,7 +436,7 @@ std::vector<CceResetState> read_cce_reset_states(const Cluster& cluster, const m
     for (uint32_t cce_index = 0; cce_index < num_cces; ++cce_index) {
         const uint32_t mimir_index = mimir_index_for_cce(cce_index);
         const uint64_t reset_address =
-            hw_state_impl::kCceResetBaseAddress + hw_state_impl::cce_location_offset(location_for_cce(cce_index));
+            hw_state_impl::cce_register_address(soc, location_for_cce(cce_index), hw_state_impl::kCceResetBaseAddress);
         CceResetState state;
         state.cce_index = cce_index;
         state.raw_lo = hw_state_impl::read_smc_word(cluster, soc, chip, mimir_index, reset_address);
@@ -466,20 +448,21 @@ std::vector<CceResetState> read_cce_reset_states(const Cluster& cluster, const m
 }
 
 // Returns the raw 64-bit value. The vector occupies bits 51:0; upper bits are not masked.
-std::array<uint64_t, kHartsPerCce> read_cce_reset_vectors(
+std::vector<uint64_t> read_cce_reset_vectors(
     const Cluster& cluster, const metal_SocDescriptor& soc, ChipId chip, uint32_t cce_index) {
-    check_cce_constants_once(soc);
-    std::array<uint64_t, kHartsPerCce> vectors{};
+    std::vector<uint64_t> vectors(cce_hart_count());
     const uint32_t mimir_index = mimir_index_for_cce(cce_index);
-    const uint64_t location_offset = hw_state_impl::cce_location_offset(location_for_cce(cce_index));
+    const uint32_t location = location_for_cce(cce_index);
     for (uint32_t hart = 0; hart < vectors.size(); ++hart) {
         vectors[hart] = hw_state_impl::read_smc_value(
             cluster,
             soc,
             chip,
             mimir_index,
-            hw_state_impl::kCceResetVectorBaseAddress + location_offset +
-                hw_state_impl::kCceResetVectorHartStride * hart,
+            hw_state_impl::cce_register_address(
+                soc,
+                location,
+                hw_state_impl::kCceResetVectorBaseAddress + hw_state_impl::kCceResetVectorHartStride * hart),
             true);
     }
     return vectors;
@@ -640,10 +623,13 @@ AttEndpointPrediction att_endpoint_for_remote_sram(uint32_t dest_cce) {
     return hw_state_impl::expected_att_endpoint(hw_state_impl::kFirstRemoteSramEntry + dest_cce);
 }
 
-AttEndpointPrediction att_endpoint_for_remote_gddr(uint32_t source_mimir) {
-    TT_FATAL(source_mimir < 2, "Remote GDDR source Mimir {} is not 0 or 1", source_mimir);
-    return hw_state_impl::expected_att_endpoint(
-        source_mimir == 0 ? hw_state_impl::kRemoteGddrEntryFromM0 : hw_state_impl::kRemoteGddrEntryFromM1);
+std::optional<AttEndpointPrediction> att_endpoint_for_remote_gddr(uint32_t source_channel, uint32_t d2d_port) {
+    for (const hw_state_impl::RemoteGddrEndpointEntry& entry : hw_state_impl::kRemoteGddrEndpointEntries) {
+        if (entry.source_mimir == source_channel && entry.d2d_port == d2d_port) {
+            return hw_state_impl::expected_att_endpoint(entry.entry_index);
+        }
+    }
+    return std::nullopt;
 }
 
 std::vector<D2dTile> live_d2d_tiles(const metal_SocDescriptor& soc) {
@@ -676,7 +662,6 @@ D2dErrorSnapshot snapshot_d2d_errors(const Cluster& cluster, const metal_SocDesc
     for (uint32_t cce_index = 0; cce_index < num_cces_from_soc(soc); ++cce_index) {
         const uint32_t mimir_index = mimir_index_for_cce(cce_index);
         const uint32_t location = location_for_cce(cce_index);
-        const uint64_t location_offset = hw_state_impl::cce_location_offset(location);
         const std::string prefix = fmt::format("M{}.CCE{}", mimir_index, location);
         snapshot.axi_errors.push_back(hw_state_impl::read_named(
             cluster,
@@ -684,7 +669,8 @@ D2dErrorSnapshot snapshot_d2d_errors(const Cluster& cluster, const metal_SocDesc
             chip,
             prefix + ".AXI_READ_ERROR",
             mimir_index,
-            hw_state_impl::kCceResetBaseAddress + location_offset + hw_state_impl::kCceAxiReadErrorOffset,
+            hw_state_impl::cce_register_address(
+                soc, location, hw_state_impl::kCceResetBaseAddress + hw_state_impl::kCceAxiReadErrorOffset),
             true));
         snapshot.axi_errors.push_back(hw_state_impl::read_named(
             cluster,
@@ -692,7 +678,8 @@ D2dErrorSnapshot snapshot_d2d_errors(const Cluster& cluster, const metal_SocDesc
             chip,
             prefix + ".AXI_WRITE_ERROR",
             mimir_index,
-            hw_state_impl::kCceResetBaseAddress + location_offset + hw_state_impl::kCceAxiWriteErrorOffset,
+            hw_state_impl::cce_register_address(
+                soc, location, hw_state_impl::kCceResetBaseAddress + hw_state_impl::kCceAxiWriteErrorOffset),
             true));
     }
     return snapshot;

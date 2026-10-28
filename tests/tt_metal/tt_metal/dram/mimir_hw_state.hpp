@@ -6,8 +6,8 @@
 
 #include <gtest/gtest.h>
 
-#include <array>
 #include <cstdint>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -32,7 +32,7 @@ struct CceResetState {
 };
 std::vector<CceResetState> read_cce_reset_states(
     const Cluster& cluster, const metal_SocDescriptor& soc, ChipId chip);  // one per CCE
-std::array<uint64_t, kHartsPerCce> read_cce_reset_vectors(
+std::vector<uint64_t> read_cce_reset_vectors(
     const Cluster& cluster, const metal_SocDescriptor& soc, ChipId chip, uint32_t cce_index);
 // "" = proceed. Otherwise a skip reason: watcher enabled; any CCE core_reset != 0; or (require_uncore_released && any
 // uncore bit 0).
@@ -74,8 +74,10 @@ struct AttEndpointPrediction {
     uint32_t entry_index = 0;
     uint64_t value = 0;  // expected x | (y << 6)
 };
-AttEndpointPrediction att_endpoint_for_remote_sram(uint32_t dest_cce);      // entry 64 + destination CCE
-AttEndpointPrediction att_endpoint_for_remote_gddr(uint32_t source_mimir);  // M0 -> 113 (M1 D2D1), M1 -> 96 (M0 D2D0)
+AttEndpointPrediction att_endpoint_for_remote_sram(uint32_t dest_cce);  // entry 64 + destination CCE
+// Entry for a GDDR copy from source_channel over d2d_port, the port the source CCE's CceSpaRoutes picks for the
+// destination. nullopt when that (Mimir, port) pair is not in the MMK table (0 over D2D1 -> 113, 1 over D2D0 -> 96).
+std::optional<AttEndpointPrediction> att_endpoint_for_remote_gddr(uint32_t source_channel, uint32_t d2d_port);
 // Live D2D tiles: 1x1 -> only M0 D2D0; 2x -> all four. Never read a non-live tile.
 struct D2dTile {
     uint32_t mimir_index = 0;

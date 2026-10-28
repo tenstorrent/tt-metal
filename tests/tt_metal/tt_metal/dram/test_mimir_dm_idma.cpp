@@ -111,9 +111,9 @@ bool is_remote_case(IdmaCase idma_case) {
            idma_case == IdmaCase::RemoteTl1KernelVerified;
 }
 
-inline constexpr uint32_t kRemoteSourceCce = 1;
-inline constexpr uint32_t kRemoteDestinationCce = 2;
-inline constexpr uint32_t kRemoteDestinationMimir = 1;
+// Remote cases run from CCE 0's sibling to the first CCE on the next Mimir (CCE 1 to CCE 2 on MMK).
+uint32_t remote_source_cce() { return sibling_cce(0); }
+uint32_t remote_destination_cce() { return next_mimir_cce(0); }
 
 // Topology first, then mimir_remote_preflight_result() for remote cases, which reads the Cluster. Both run before any
 // device is opened.
@@ -121,9 +121,13 @@ std::string idma_skip_reason(IdmaCase idma_case) {
     if (const std::string watcher_reason = mimir_watcher_skip_reason(); !watcher_reason.empty()) {
         return watcher_reason;
     }
-    const MimirTopology topology = topology_from(cluster_soc_desc());
-    if (idma_case == IdmaCase::SiblingTl1 && topology.num_cces < 2) {
-        return fmt::format("Descriptor exposes {} CCEs; the sibling case needs two.", topology.num_cces);
+    const MimirTopology topology = topology_from(configured_soc_desc());
+    const uint32_t cces_per_mimir = locations_per_channel(configured_soc_desc());
+    if (idma_case == IdmaCase::SiblingTl1 && cces_per_mimir < 2) {
+        return fmt::format("Descriptor has {} CCE per Mimir; the sibling case needs two.", cces_per_mimir);
+    }
+    if (idma_case == IdmaCase::LocalGddr1 && dram_views_for_channel(configured_soc_desc(), 0).size() < 2) {
+        return "Mimir 0 has one DRAM view; LocalGddr1 needs a second.";
     }
     if (is_remote_case(idma_case)) {
         if (topology.num_mimirs < 2) {
@@ -158,31 +162,29 @@ Endpoint gddr_endpoint(uint32_t view, uint64_t view_offset) {
 }
 
 // The package address the iDMA command carries for this endpoint, from the issuing CCE.
-uint64_t command_address(const metal_SocDescriptor& soc, uint32_t issuing_cce, const Endpoint& endpoint) {
+uint64_t command_address(const metal_SocDescriptor& soc, const CceSpaRoutes& issuer_routes, const Endpoint& endpoint) {
     if (endpoint.kind == EndpointKind::Gddr) {
-        return host_cce_gddr_address(
-            soc,
-            mimir_index_for_cce(issuing_cce),
-            mimir_of_view(soc, endpoint.view),
-            chiplet_offset_of(soc, endpoint.view, endpoint.offset));
+        return mimir_contract::cce_gddr_address(
+            issuer_routes, mimir_of_view(soc, endpoint.view), chiplet_offset_of(soc, endpoint.view, endpoint.offset));
     }
-    return host_cce_sram_address(endpoint.cce_index, endpoint.offset);
+    return mimir_contract::cce_sram_address(issuer_routes, endpoint.cce_index, endpoint.offset);
 }
 
-std::string endpoint_label(const metal_SocDescriptor& soc, uint32_t issuing_cce, const Endpoint& endpoint) {
+std::string endpoint_label(
+    const metal_SocDescriptor& soc, const CceSpaRoutes& issuer_routes, const Endpoint& endpoint) {
     switch (endpoint.kind) {
         case EndpointKind::OwnTl1:
             return fmt::format(
                 "own TL1 0x{:x} (CCE{}, SPA 0x{:x})",
                 endpoint.offset,
                 endpoint.cce_index,
-                command_address(soc, issuing_cce, endpoint));
+                command_address(soc, issuer_routes, endpoint));
         case EndpointKind::SramSpa:
             return fmt::format(
                 "CCE{} TL1 0x{:x} (SPA 0x{:x})",
                 endpoint.cce_index,
                 endpoint.offset,
-                command_address(soc, issuing_cce, endpoint));
+                command_address(soc, issuer_routes, endpoint));
         case EndpointKind::Gddr:
             return fmt::format(
                 "GDDR view {} (M{}) +0x{:x} (chiplet 0x{:x}, SPA 0x{:x})",
@@ -190,7 +192,7 @@ std::string endpoint_label(const metal_SocDescriptor& soc, uint32_t issuing_cce,
                 mimir_of_view(soc, endpoint.view),
                 endpoint.offset,
                 chiplet_offset_of(soc, endpoint.view, endpoint.offset),
-                command_address(soc, issuing_cce, endpoint));
+                command_address(soc, issuer_routes, endpoint));
     }
     return "unknown";
 }
@@ -270,10 +272,13 @@ std::vector<IdmaLeg> legs_for(IdmaCase idma_case, const metal_SocDescriptor& soc
                 .len_bytes = abi::kMaxBytesInPacket}};
         case IdmaCase::SiblingTl1:
             return write_and_read_legs(
-                0, sram_spa_endpoint(1, tl1_remote_landing(0, kCopyHart)), abi::kBackendRemoteSram, abi::kModeIdmaCopy);
+                0,
+                sram_spa_endpoint(sibling_cce(0), tl1_remote_landing(0, kCopyHart)),
+                abi::kBackendRemoteSram,
+                abi::kModeIdmaCopy);
         case IdmaCase::LocalGddr:
         case IdmaCase::LocalGddr1: {
-            const uint32_t view = local_dram_view_for_cce(soc, idma_case == IdmaCase::LocalGddr ? 0 : 1);
+            const uint32_t view = local_dram_view_for_cce(soc, idma_case == IdmaCase::LocalGddr ? 0 : sibling_cce(0));
             const uint64_t view_offset = dram_unreserved + kGddrDataOffset;
             const uint32_t backend = gddr_backend_for(soc, view, view_offset);
             const uint32_t expected_backend =
@@ -286,15 +291,16 @@ std::vector<IdmaLeg> legs_for(IdmaCase idma_case, const metal_SocDescriptor& soc
         case IdmaCase::RemoteTl1:
         case IdmaCase::RemoteTl1KernelVerified:
             return write_and_read_legs(
-                kRemoteSourceCce,
-                sram_spa_endpoint(kRemoteDestinationCce, tl1_remote_landing(kRemoteSourceCce, kCopyHart)),
+                remote_source_cce(),
+                sram_spa_endpoint(remote_destination_cce(), tl1_remote_landing(remote_source_cce(), kCopyHart)),
                 abi::kBackendD2d,
                 idma_case == IdmaCase::RemoteTl1 ? abi::kModeIdmaCopyHostVerified : abi::kModeIdmaCopy);
         case IdmaCase::RemoteGddr:
             return write_and_read_legs(
-                kRemoteSourceCce,
+                remote_source_cce(),
                 gddr_endpoint(
-                    base_dram_view_for_mimir(soc, kRemoteDestinationMimir), dram_unreserved + kGddrDataOffset),
+                    base_dram_view_for_mimir(soc, mimir_index_for_cce(remote_destination_cce())),
+                    dram_unreserved + kGddrDataOffset),
                 abi::kBackendD2d,
                 abi::kModeIdmaCopyHostVerified);
         case IdmaCase::Strided1D:
@@ -321,19 +327,23 @@ std::vector<IdmaLeg> legs_for(IdmaCase idma_case, const metal_SocDescriptor& soc
 }
 
 void write_endpoint(
-    IDevice* device, const metal_SocDescriptor& soc, const Endpoint& endpoint, const std::vector<uint32_t>& words) {
+    distributed::MeshDevice& unit_mesh, IDevice* device, const Endpoint& endpoint, const std::vector<uint32_t>& words) {
     if (endpoint.kind == EndpointKind::Gddr) {
-        write_dram_view(device, soc, endpoint.view, endpoint.offset, words);
+        mimir_contract::write_gddr_view(unit_mesh, endpoint.view, endpoint.offset, words);
     } else {
         write_cce_tl1(device, endpoint.cce_index, endpoint.offset, words);
     }
 }
 
 std::vector<uint32_t> read_endpoint(
-    IDevice* device, const metal_SocDescriptor& soc, const Endpoint& endpoint, uint64_t byte_offset, uint32_t bytes) {
+    distributed::MeshDevice& unit_mesh,
+    IDevice* device,
+    const Endpoint& endpoint,
+    uint64_t byte_offset,
+    uint32_t bytes) {
     std::vector<uint32_t> words;
     if (endpoint.kind == EndpointKind::Gddr) {
-        read_dram_view(device, soc, endpoint.view, endpoint.offset + byte_offset, bytes, words);
+        mimir_contract::read_gddr_view(unit_mesh, endpoint.view, endpoint.offset + byte_offset, bytes, words);
     } else {
         words = read_cce_tl1(device, endpoint.cce_index, endpoint.offset + byte_offset, bytes);
     }
@@ -442,7 +452,7 @@ std::string status_detail(const std::vector<uint32_t>& status) {
 // Runs one leg and checks it: the kernel reports success, the host reads the expected data (re-reading the first
 // mismatch after kRecheckDelay before calling it wrong), and the guards before and after it are intact. Returns false
 // when the host deadline passed, after which nothing else may run in this session (MIM-601).
-bool run_leg(IDevice* device, const IdmaLeg& leg, uint32_t tag) {
+bool run_leg(distributed::MeshDevice& unit_mesh, IDevice* device, const IdmaLeg& leg, uint32_t tag) {
     const metal_SocDescriptor& soc = soc_desc_of(device);
     const uint32_t num_words = leg.num_elements * leg.len_bytes / sizeof(uint32_t);
     const uint64_t status_offset = tl1_done_block(kCopyHart);
@@ -456,12 +466,13 @@ bool run_leg(IDevice* device, const IdmaLeg& leg, uint32_t tag) {
     const std::vector<uint32_t> leading_guard = make_guard(kLeadingGuardTag + tag);
     std::vector<uint32_t> poison_and_guard = make_seed_pattern(tag, num_words);
     poison_and_guard.insert(poison_and_guard.end(), guard.begin(), guard.end());
-    write_endpoint(device, soc, leg.source, source_words);
-    write_endpoint(device, soc, leg.destination, poison_and_guard);
-    write_endpoint(device, soc, leading_guard_of(leg.destination), leading_guard);
+    write_endpoint(unit_mesh, device, leg.source, source_words);
+    write_endpoint(unit_mesh, device, leg.destination, poison_and_guard);
+    write_endpoint(unit_mesh, device, leading_guard_of(leg.destination), leading_guard);
     write_cce_tl1(device, leg.cce_index, status_offset, std::vector<uint32_t>(abi::kStatusWords, abi::kStatusPoison));
 
     const CoreCoord translated_core = translated_dram_core(soc, leg.cce_index);
+    const CceSpaRoutes issuer_routes = mimir_contract::read_cce_spa_routes(device, leg.cce_index);
     const std::string label = fmt::format(
         "{} on CCE{} hart {}: {} backend VC {} {} x {} B (source stride {} B), {} -> {}",
         leg.name,
@@ -472,10 +483,10 @@ bool run_leg(IDevice* device, const IdmaLeg& leg, uint32_t tag) {
         leg.num_elements,
         leg.len_bytes,
         leg.source_stride_bytes,
-        endpoint_label(soc, leg.cce_index, leg.source),
-        endpoint_label(soc, leg.cce_index, leg.destination));
-    record_leg(leg.name, "source", endpoint_label(soc, leg.cce_index, leg.source));
-    record_leg(leg.name, "destination", endpoint_label(soc, leg.cce_index, leg.destination));
+        endpoint_label(soc, issuer_routes, leg.source),
+        endpoint_label(soc, issuer_routes, leg.destination));
+    record_leg(leg.name, "source", endpoint_label(soc, issuer_routes, leg.source));
+    record_leg(leg.name, "destination", endpoint_label(soc, issuer_routes, leg.destination));
     record_leg(
         leg.name,
         "core",
@@ -493,8 +504,8 @@ bool run_leg(IDevice* device, const IdmaLeg& leg, uint32_t tag) {
         "alignment",
         fmt::format(
             "source {} destination {}",
-            command_address(soc, leg.cce_index, leg.source) % abi::kLineBytes,
-            command_address(soc, leg.cce_index, leg.destination) % abi::kLineBytes));
+            command_address(soc, issuer_routes, leg.source) % abi::kLineBytes,
+            command_address(soc, issuer_routes, leg.destination) % abi::kLineBytes));
     record_leg(
         leg.name, "mode", fmt::format("{} backend VC {} trid {}", mode_name(leg.mode), leg.backend_vc, abi::kTrid));
     record_leg(leg.name, "seed", fmt::format("0x{:08x}", seed));
@@ -526,13 +537,13 @@ bool run_leg(IDevice* device, const IdmaLeg& leg, uint32_t tag) {
         "iDMA " + label,
         leg.name,
         expected,
-        [device, &soc, &leg](uint64_t byte_offset, uint32_t bytes) {
-            return read_endpoint(device, soc, leg.destination, byte_offset, bytes);
+        [&unit_mesh, device, &leg](uint64_t byte_offset, uint32_t bytes) {
+            return read_endpoint(unit_mesh, device, leg.destination, byte_offset, bytes);
         }))
         << detail;
-    EXPECT_EQ(read_endpoint(device, soc, leg.destination, num_words * sizeof(uint32_t), abi::kLineBytes), guard)
+    EXPECT_EQ(read_endpoint(unit_mesh, device, leg.destination, num_words * sizeof(uint32_t), abi::kLineBytes), guard)
         << label << ": guard after the destination was overwritten";
-    EXPECT_EQ(read_endpoint(device, soc, leading_guard_of(leg.destination), 0, kGuardBytes), leading_guard)
+    EXPECT_EQ(read_endpoint(unit_mesh, device, leading_guard_of(leg.destination), 0, kGuardBytes), leading_guard)
         << label << ": guard before the destination was overwritten";
     return true;
 }
@@ -540,7 +551,8 @@ bool run_leg(IDevice* device, const IdmaLeg& leg, uint32_t tag) {
 class MimirDmIdma : public ::testing::TestWithParam<IdmaCase> {};
 
 TEST_P(MimirDmIdma, Copy) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     const IdmaCase idma_case = GetParam();
     if (const std::string skip_reason = idma_skip_reason(idma_case); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
@@ -557,7 +569,8 @@ TEST_P(MimirDmIdma, Copy) {
 
     const std::vector<IdmaLeg> legs = legs_for(idma_case, soc);
     for (uint32_t leg_index = 0; leg_index < legs.size(); ++leg_index) {
-        if (!run_leg(device, legs[leg_index], static_cast<uint32_t>(idma_case) * 8 + leg_index + 1)) {
+        if (!run_leg(
+                device_closer.mesh(), device, legs[leg_index], static_cast<uint32_t>(idma_case) * 8 + leg_index + 1)) {
             return;
         }
     }
