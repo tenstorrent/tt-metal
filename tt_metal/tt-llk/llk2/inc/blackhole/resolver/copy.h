@@ -29,7 +29,7 @@ namespace llk2
 inline constexpr std::uint32_t copy_tile_dim = default_tile_dim; ///< copy is ported for 32x32 tiles only
 
 /// The 32-bit formats the unpacker can write straight to Dest.
-constexpr bool is_32bit_format(DataFormat f)
+constexpr bool is_32bit_datum(DataFormat f)
 {
     return datum_bits(f) == 32;
 }
@@ -37,7 +37,7 @@ constexpr bool is_32bit_format(DataFormat f)
 /// True when copy unpacks straight to Dest instead of through SrcA.
 constexpr bool copy_unpacks_to_dest(DataFormat l1, const copy_modifiers& m, const KernelSettings& s)
 {
-    return is_32bit_format(l1) && s.dest_fp32 && !m.transpose;
+    return is_32bit_datum(l1) && s.dest_fp32 && !m.transpose;
 }
 
 /// Formats with a 5-bit exponent (A formats): in a 16-bit Dest they stay FP16, the rest become BF16.
@@ -108,7 +108,7 @@ constexpr Plan copy_plan(const TensorSpec<6>& src, const TensorSpec<6>&, const c
     };
     const UnpackPlan unused {}; // to = Where::None: unpacker 1 idles
     const UnpackWalk walk {1, 1, k.rt_dim * k.ct_dim, Where::None};
-    const MathPlan math {c.unit, c.math_fidelity, is_32bit_format(c.result.format), c.in0.format, m.transpose, 0};
+    const MathPlan math {c.unit, c.math_fidelity, is_32bit_datum(c.result.format), c.in0.format, m.transpose, 0};
     return {Op::Copy, src_plan, unused, walk, math, PackPlan {}, k};
 }
 
