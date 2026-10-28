@@ -117,6 +117,7 @@ from dataclasses import dataclass
 import transformers as _tf
 from diffusers.image_processor import VaeImageProcessor
 from diffusers.models.autoencoders.autoencoder_kl import AutoencoderKL as _AutoencoderKL
+from huggingface_hub import snapshot_download
 from loguru import logger as _dq_log
 from PIL import Image
 from safetensors.torch import load_file as _load_file
@@ -196,6 +197,17 @@ MAX_TEXT_TOKENS = 2048
 
 _DEFAULT_WEIGHTS_DIR = os.environ.get("IDEOGRAM4_WEIGHTS")
 _DEFAULT_QWEN_REPO = "Qwen/Qwen3-VL-8B-Instruct"
+# The checkpoint subfolders the pipeline reads.
+_WEIGHTS_SUBFOLDERS = ("text_encoder", "tokenizer", "transformer", "unconditional_transformer", "vae")
+
+
+def _resolve_weights_dir(weights: str) -> str:
+    """A local directory as is, or a HuggingFace repo id snapshot-downloaded (cached)."""
+    if os.path.isdir(weights):
+        return weights
+    _dq_log.info(f"Resolving HuggingFace repo {weights} (auto-download if missing)")
+    return snapshot_download(repo_id=weights, allow_patterns=[f"{sub}/*" for sub in _WEIGHTS_SUBFOLDERS])
+
 
 # Per-mesh-shape parallelism presets (Blackhole). Ideogram is always cfg-parallel factor 1
 # (both distilled nets resident on the full mesh, sequential CFG); tp/sp are (factor, mesh_axis).
@@ -281,12 +293,12 @@ class Ideogram4Pipeline(PipelineAPIMixin):
         self.sp_axis = dit_pc.sequence_parallel.mesh_axis
         self.sp_factor = dit_pc.sequence_parallel.factor
         self.topology = config.topology
-        weights_dir = config.weights_dir
-        if not weights_dir:
+        if not config.weights_dir:
             raise ValueError(
-                "Ideogram4 weights directory not set: pass weights_dir=... to create_pipeline "
-                "or set the IDEOGRAM4_WEIGHTS environment variable to the fp8 checkpoint dir."
+                "Ideogram4 weights not set: pass weights_dir=... to create_pipeline or set the "
+                "IDEOGRAM4_WEIGHTS environment variable to the fp8 checkpoint dir or HuggingFace repo id."
             )
+        weights_dir = _resolve_weights_dir(config.weights_dir)
         self.weights_dir = weights_dir
         qwen_repo = config.qwen_repo
         self.model_config = modeling_ideogram4.Ideogram4Config()
