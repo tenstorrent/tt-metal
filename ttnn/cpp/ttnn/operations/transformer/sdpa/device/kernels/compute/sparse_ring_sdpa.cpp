@@ -88,6 +88,7 @@ void kernel_main() {
     constexpr uint32_t cb_pooled_bias = get_named_compile_time_arg_val("cb_pooled_bias");
     constexpr uint32_t pooled_chunks = get_named_compile_time_arg_val("pooled_chunks");
     constexpr uint32_t pooled_last_tiles = get_named_compile_time_arg_val("pooled_last_tiles");
+    constexpr bool pooled_route = get_named_compile_time_arg_val("pooled_route") == 1;
     constexpr uint32_t resident_slots = get_named_compile_time_arg_val("resident_slots");
     constexpr uint32_t plan_block_words = get_named_compile_time_arg_val("plan_block_words");
     // Plan layout: one plan page per ring iteration (record base word), or 0 for a page per resident chunk. The
@@ -176,6 +177,7 @@ void kernel_main() {
                 cb_pooled_bias,
                 pooled_chunks,
                 pooled_last_tiles,
+                pooled_route,
                 resident_slots,
                 plan_block_words,
                 plan_rec_base,

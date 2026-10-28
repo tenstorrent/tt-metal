@@ -238,7 +238,8 @@ void kernel_main() {
     constexpr uint32_t num_q_passes = get_named_compile_time_arg_val("num_q_passes");
     static_assert(num_q_passes >= 1 && resident_slots >= 1 && resident_slots <= 32, "passes of 1..32 Q blocks");
     static_assert(GROUPED_KV_SOURCE_COUNT == 1, "no grouped K/V sources");
-    constexpr uint32_t pooled_bias_tile_bytes = get_tile_size(cb_pooled_bias);
+    // Float16_b 32x32 bias tiles (pooled_bias_gen.hpp); the CB only exists with the pooled route.
+    constexpr uint32_t pooled_bias_tile_bytes = pooled_route ? get_tile_size(cb_pooled_bias) : 2048u;
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);

@@ -258,15 +258,16 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         input_tensor_k: B x NHK x local_N x DH
         input_tensor_v: B x NHV x local_N x DH
         gathered_k / gathered_v: B x NHK / NHV x padded_N x DH   (fused all-gather)
-        block_mask: 1 x NH x nb_pad x n_blocks_pad (uint32);  pooled_k / pooled_v: 1 x NH x n_blocks_pad x DH
+        block_mask: 1 x NH x nb_pad x n_blocks_pad (uint32);  pooled_k / pooled_v (optional): 1 x NH x n_blocks_pad x DH
         output_tensor: B x NH x local_N x DH
 
     Every core holds the Q blocks (block_size rows) of its current pass in L1 (one accumulator set each); when a
     core's blocks do not fit at once they are split evenly into passes, and every pass replays the ring over the K/V
     the all-gather delivered during the first one. Each ring iteration, every K/V piece (k_chunk_size keys) that any
     Q block of the core's head group keeps is delivered once to the group and applied to every resident Q block
-    that keeps one of its blocks. On a pass's first active ring iteration the pooled entries (one per dropped block,
-    weighted by its token count through a generated column bias) are applied too. After a pass's last ring
+    that keeps one of its blocks. With pooled K / V (Sol-Attn), on a pass's first active ring iteration the pooled
+    entries (one per dropped block, weighted by its token count through a generated column bias) are applied too;
+    without them the softmax covers the kept blocks only. After a pass's last ring
     iteration each of its Q blocks is normalized and written out.
     */
 

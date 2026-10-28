@@ -1411,6 +1411,7 @@ template <
     uint32_t cb_pooled_bias,
     uint32_t pooled_chunks,
     uint32_t pooled_last_tiles,
+    bool pooled_route,
     uint32_t resident_slots,
     uint32_t plan_block_words,
     uint32_t plan_rec_base,
@@ -1499,7 +1500,7 @@ void sdpa_ring_resident(
     uint32_t res_blk[resident_slots][kBW];
     uint32_t union_lo[resident_slots];
     uint32_t union_hi[resident_slots];
-    uint32_t do_pooled = 0;
+    [[maybe_unused]] uint32_t do_pooled = 0;
     if constexpr (plan_rec_base != 0) {
         // One plan page per ring iteration: chunk i's record [kBW block words][union lo, hi][do_pooled] at word
         // rec_base + i * (kBW + 3). Popped once, early, so the reader can push the next iteration's plan while this
@@ -1707,45 +1708,48 @@ void sdpa_ring_resident(
         }
     }
 
-    // Pooled chunks (first active ring iteration): full-width steps over the head's resident chunks in groups of
-    // the scratch capacity, each member with its own bias row (the reader pushes them in Q-chunk order after the
-    // pooled K/V entry; the step consumes them one at a time).
-    if (do_pooled) {
-        uint32_t heads_done = 0;
-        for (uint32_t i0 = 0; i0 < n_res; ++i0) {
-            if ((heads_done >> i0) & 1u) {
-                continue;
-            }
-            uint32_t head_mask = 0;
-            for (uint32_t i = i0; i < n_res; ++i) {
-                if (res_head[i] == res_head[i0]) {
-                    head_mask |= 1u << i;
-                }
-            }
-            heads_done |= head_mask;
-            uint8_t pgroup[resident_slots];
-            uint8_t pwidth[resident_slots];
-            uint8_t pcols[resident_slots * kBlocksPerPiece];
-            uint8_t pws[resident_slots * kBlocksPerPiece];
-            uint8_t pruns[resident_slots];
-            uint32_t n_p = 0;
-            for (uint32_t i = i0; i < n_res; ++i) {
-                if (((head_mask >> i) & 1u) == 0) {
+    // Pooled chunks (pooled route only, on the pass's first active ring iteration): full-width steps over the head's
+    // resident chunks in groups of the scratch capacity, each member with its own bias row (the reader pushes them in
+    // Q-chunk order after the pooled K/V entry; the step consumes them one at a time). Without the pooled route the
+    // plan's do_pooled is always 0 and no step ever adds a column bias.
+    if constexpr (pooled_route) {
+        if (do_pooled) {
+            uint32_t heads_done = 0;
+            for (uint32_t i0 = 0; i0 < n_res; ++i0) {
+                if ((heads_done >> i0) & 1u) {
                     continue;
                 }
-                pgroup[n_p] = static_cast<uint8_t>(i);
-                pcols[n_p * kBlocksPerPiece] = 0;  // one run from column 0
-                pruns[n_p] = 1;
-                ++n_p;
-            }
-            for (uint32_t pc = 0; pc < pooled_chunks; ++pc) {
-                const uint32_t active_width = (pc + 1 == pooled_chunks) ? pooled_last_tiles : Sk_chunk_t;
-                for (uint32_t g = 0; g < n_p; ++g) {
-                    pwidth[g] = static_cast<uint8_t>(active_width);
-                    pws[g * kBlocksPerPiece] = static_cast<uint8_t>(active_width);
+                uint32_t head_mask = 0;
+                for (uint32_t i = i0; i < n_res; ++i) {
+                    if (res_head[i] == res_head[i0]) {
+                        head_mask |= 1u << i;
+                    }
                 }
-                run_groups(pgroup, pwidth, pcols, pws, pruns, n_p, true);
-                pop_kv();
+                heads_done |= head_mask;
+                uint8_t pgroup[resident_slots];
+                uint8_t pwidth[resident_slots];
+                uint8_t pcols[resident_slots * kBlocksPerPiece];
+                uint8_t pws[resident_slots * kBlocksPerPiece];
+                uint8_t pruns[resident_slots];
+                uint32_t n_p = 0;
+                for (uint32_t i = i0; i < n_res; ++i) {
+                    if (((head_mask >> i) & 1u) == 0) {
+                        continue;
+                    }
+                    pgroup[n_p] = static_cast<uint8_t>(i);
+                    pcols[n_p * kBlocksPerPiece] = 0;  // one run from column 0
+                    pruns[n_p] = 1;
+                    ++n_p;
+                }
+                for (uint32_t pc = 0; pc < pooled_chunks; ++pc) {
+                    const uint32_t active_width = (pc + 1 == pooled_chunks) ? pooled_last_tiles : Sk_chunk_t;
+                    for (uint32_t g = 0; g < n_p; ++g) {
+                        pwidth[g] = static_cast<uint8_t>(active_width);
+                        pws[g * kBlocksPerPiece] = static_cast<uint8_t>(active_width);
+                    }
+                    run_groups(pgroup, pwidth, pcols, pws, pruns, n_p, true);
+                    pop_kv();
+                }
             }
         }
     }

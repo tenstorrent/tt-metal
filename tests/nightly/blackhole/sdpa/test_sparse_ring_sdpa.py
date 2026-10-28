@@ -12,7 +12,8 @@ checks the sparse output against:
              at lower densities it must stay close.
   reference  fp32 torch block-sparse attention with the same mask: kept 64-token blocks exact, every other valid
              block one pooled entry (mean K, mean V) weighted by its token count. This is what the op computes,
-             so it separates kernel errors from the approximation.
+             so it separates kernel errors from the approximation. The kept-only tests omit pooled K / V (the
+             VSA fine-branch mode); their reference drops the pooled entries and normalizes over the kept blocks.
 
 Runs on a single ring (1xN) or the 4x8 Galaxy (TP=4 heads x SP=8 ring). The 5 s MiniMax-H3 geometry is skipped
 on CI.
@@ -112,8 +113,11 @@ def pool(x, geo, S):
     return out
 
 
-def sparse_reference(q, k, v, mask, pooled_k, pooled_v, geo, S, scale):
-    """fp32 block-sparse attention: kept blocks exact, other valid blocks one pooled entry of weight len."""
+def sparse_reference(q, k, v, mask, pooled_k, pooled_v, geo, S, scale, *, pooled=True):
+    """fp32 block-sparse attention: kept blocks exact, other valid blocks one pooled entry of weight len.
+
+    pooled=False: kept blocks only (no pooled entries); the softmax normalizes over the kept blocks.
+    """
     _, H, _, _ = q.shape
     nb, nb_pad = geo.nb(), geo.nb_pad()
     lens = _block_lengths(geo, S).reshape(-1)  # [S * nb_pad]
@@ -135,7 +139,7 @@ def sparse_reference(q, k, v, mask, pooled_k, pooled_v, geo, S, scale):
             le = (qh @ kh.T) * scale
             le = le.masked_fill(~exact, float("-inf"))
             lp = (qh @ pk.T) * scale + log_len[None, :]
-            lp = lp.masked_fill(keep | ~valid[None, :], float("-inf"))
+            lp = lp.masked_fill(keep | ~valid[None, :] | (not pooled), float("-inf"))
             w = torch.softmax(torch.cat([le, lp], dim=1), dim=1)
             out[0, h, rows] = (w[:, : le.shape[1]] @ vh + w[:, le.shape[1] :] @ pv).float()
     return out
@@ -208,12 +212,13 @@ class Case:
         total = HEADS_PER_DEVICE * self.geo.nb()
         return -(-total // cores), max(1, total // cores)
 
-    def run(self, q, k, v, mask, *, want_dense=True, want_ref=True, q_blocks_per_pass=None):
+    def run(self, q, k, v, mask, *, want_dense=True, want_ref=True, q_blocks_per_pass=None, pooled=True):
+        """pooled=False omits pooled K / V: kept blocks only (the VSA fine-branch mode)."""
         rt, geo = self.rt, self.geo
         tq, tk, tv = (self._upload(x, self.seq_dims) for x in (q, k, v))
         pooled_k, pooled_v = (pool(x, geo, self.S).bfloat16().float() for x in (k, v))
         t_mask = self._upload(mask, self.dims(0, 1), dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-        t_pk, t_pv = (self._upload(x, self.dims(None, 1)) for x in (pooled_k, pooled_v))
+        t_pk, t_pv = (self._upload(x, self.dims(None, 1)) for x in (pooled_k, pooled_v)) if pooled else (None, None)
         out = ttnn.transformer.sparse_ring_sdpa(
             tq,
             tk,
@@ -261,7 +266,11 @@ class Case:
                 rt.ccl_column,
             )
             dense = ttnn.to_torch(tt_dense, mesh_composer=self.composer).float()
-        ref = sparse_reference(q, k, v, mask, pooled_k, pooled_v, geo, self.S, self.scale) if want_ref else None
+        ref = (
+            sparse_reference(q, k, v, mask, pooled_k, pooled_v, geo, self.S, self.scale, pooled=pooled)
+            if want_ref
+            else None
+        )
         n = geo.logical_n  # rows past logical_n are padding the ops leave undefined
         return {
             "sparse": sparse[:, :, :n],
@@ -437,3 +446,44 @@ def test_production_10s(runtime, density):
         dense_min=0.9995 if density == 1 else 0.99,
         ref_min=None,
     )
+
+
+# Kept blocks only (no pooled K / V): the mode the VSA fine branch needs. The softmax normalizes over the kept blocks,
+# so only keep-all matches dense; sparser masks are judged against the kept-only reference.
+
+
+@pytest.mark.parametrize("geom", list(ALIGNED))
+def test_kept_only_keep_all_matches_dense(runtime, geom):
+    """No pooled route and every full block kept: dense attention."""
+    case = Case(runtime, ALIGNED[geom])
+    mask = make_mask(case.geo, case.S, case.H, density=KEEP_ALL)
+    r = case.run(*case.inputs(9), mask, pooled=False)
+    _check(f"kept-only keepall {geom}", r, _density(mask, case.geo, case.S), dense_min=0.9995, ref_min=0.9995)
+
+
+@pytest.mark.parametrize("density", [0.2, 0.05])
+@pytest.mark.parametrize("geom", list(ALIGNED))
+def test_kept_only(runtime, geom, density):
+    """No pooled route: exactly the softmax over the kept blocks (dense is logged, not gated)."""
+    case = Case(runtime, ALIGNED[geom])
+    mask = make_mask(case.geo, case.S, case.H, density=density, seed=10)
+    r = case.run(*case.inputs(10), mask, pooled=False)
+    _check(f"kept-only d{density} {geom}", r, _density(mask, case.geo, case.S), dense_min=None, ref_min=0.999)
+
+
+@pytest.mark.parametrize("geom", ["r1024k256", "r1184k256"])
+def test_kept_only_forced_passes(runtime, geom):
+    """No pooled route, two passes: the same output as one pass and the kept-only reference."""
+    geo = ALIGNED.get(geom) or RAGGED[geom]
+    case = Case(runtime, geo)
+    most, fewest = case.blocks_per_core()
+    q_blocks_per_pass = -(-most // 2)
+    if -(-most // q_blocks_per_pass) != 2 or fewest < 2:
+        pytest.skip(f"{most} / {fewest} blocks per core cannot be split into 2 passes")
+    mask = make_mask(geo, case.S, case.H, density=0.2, seed=11)
+    q, k, v = case.inputs(11)
+    one = case.run(q, k, v, mask, want_dense=False, want_ref=False, pooled=False)
+    r = case.run(q, k, v, mask, want_dense=False, q_blocks_per_pass=q_blocks_per_pass, pooled=False)
+    p_one = _pcc(one["sparse"], r["sparse"])
+    _check(f"kept-only passes {geom}", r, _density(mask, geo, case.S), dense_min=None, ref_min=0.999)
+    assert p_one > 0.99999, f"2 passes vs one pass: pcc {p_one:.6f}"
