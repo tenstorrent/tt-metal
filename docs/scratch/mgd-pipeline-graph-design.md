@@ -647,8 +647,11 @@ On that one graph:
   ids only need to be unique within their pipeline.
 - **Tier A** checks each pipeline on its own (2.1).
 - **Tier B** counts capacity over all pipelines together, and a projection places every
-  stage of every pipeline at once. The pipelines compete for the same slices, so two that
-  each fit alone can fail together (2.2).
+  stage of every pipeline at once. Pipelines in one descriptor compete for the same slices, so
+  two that each fit alone can fail together (`mixed4` plus `mixed4_b`, 2.2). Parts are
+  different: each part already fit its own meshes, and merge keeps those meshes and their
+  connections, so the parts' assignments together still fit and the merged check cannot reject
+  on counts. Tier C can still reject, because the parts share seats and cables.
 - **Plan 1** takes `k_AB` over the combined projections, so it sums the STRICT crossings of
   every pipeline (4.4).
 
@@ -659,9 +662,9 @@ and are rejected; relax that only if a real setup needs it.
 **Validation order.** Every `MeshGraphDescriptor` constructor runs Tier A (in `static_validate`)
 and Tier B (after `populate`). Loading a part therefore checks that part against its own meshes,
 before merge. `merge` returns a new `MeshGraphDescriptor`, so both tiers run again on the merged
-meshes and every pipeline together. A pipeline that fits its own part can still fail after merge,
-when the pipelines share the combined slices. A pipeline that does not fit the meshes in its own
-file fails when that file is loaded. Tier B stores nothing for the mapper:
+meshes and every pipeline together. That second Tier B run cannot reject a merge of parts that
+each passed (above), unless a part only passed because its search ran out of steps. A pipeline
+that does not fit the meshes in its own file fails when that file is loaded. Tier B stores nothing for the mapper:
 `init_from_parts` does not run Tier B itself, and neither does `MeshGraph`.
 
 **Tests.**
@@ -1366,8 +1369,7 @@ for the channels, a repeated edge counting twice, POD and CLUSTER connections be
 and the step limit (the 7x7 ring above accepts). Backup if slow: a RING `host_topology` axis (a
 ring4 on one mesh passes once A3–A0 wrap), an odd grid ring rejected before the first search
 node, "find all" over its cap saving the defaults, interchangeable-mesh symmetry (8 identical
-meshes on ALL_TO_ALL visit one ordering). Also: a merged descriptor in which each part passes alone but the merge
-fails capacity, `subtorus_4x4_pipeline_8stage` with and without its 7-0 connection, and
+meshes on ALL_TO_ALL visit one ordering). Also: `subtorus_4x4_pipeline_8stage` with and without its 7-0 connection, and
 `llama_8b_pod` with nine 4x2 stages and thirty-one 1x2 stages (the total fits, M0 does not).
 
 **Open points.**

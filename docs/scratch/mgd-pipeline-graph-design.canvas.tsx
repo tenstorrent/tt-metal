@@ -1254,7 +1254,6 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
       "A 7x7 grid of one-slice meshes and a ring of 49 stages: the search hits the step limit in about 250 ms and accepts.",
       "subtorus_4x4_pipeline_8stage: the 8-stage ring of 4x4 stages is accepted; without the 7-0 connection it is rejected.",
       "llama_8b_pod with nine 4x2 stages and thirty-one 1x2 stages: the 40 slices fit in total, but only M0 holds 4x2 stages and it has 8 slices.",
-      "Two parts that each fit alone, merged: rejected because the pipelines together need more slices than the merged meshes have.",
       "Not covered without the backup carve: two copies of ring4 on two line meshes pass Tier B and are rejected by Tier C.",
     ],
     behaviour: "An impossible pipeline fails when its MeshGraphDescriptor is constructed, before MeshGraph and before SAT.",
