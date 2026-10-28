@@ -7,7 +7,6 @@
 #include <array>
 #include <cstdint>
 #include <string_view>
-#include <tuple>
 #include <type_traits>
 
 #include <hostdevcommon/fabric_common.h>
@@ -465,7 +464,7 @@ struct StructLayout<HybridMeshPacketHeaderT<N>> {
 };
 
 // Every header fabric can choose (packet_header_types.hpp), and its routing fields where they have a layout (the 1D
-// headers'). They aren't in DescribedStructs, since a run describes only the header it uses.
+// headers'). A manifest describes only the header its run uses, reached from the schema that names it.
 static_assert([] {
     for_each_packet_header_type([]<typename Header>(std::type_identity<Header>, const PacketHeaderConfig&) {
         static_assert(check_struct_layout<Header>());
@@ -478,40 +477,5 @@ static_assert([] {
 }());
 
 #pragma GCC diagnostic pop
-
-// ============ All described structs ============
-
-// Every struct described at compile time. The manifest writes one type entry per element, which describes the
-// struct's members.
-using DescribedStructs = std::tuple<
-    WorkerXY,
-    EDMChannelWorkerLocationInfo,
-    SenderChannelProducerCursor,
-    erisc::datamover::handshake::handshake_info_t,
-    RouterStateManager,
-    route_table_2d_t,
-    routing_l1_info_t,
-    RiscTimestampV2,
-    BandwidthTelemetry,
-    EriscDynamicEntry,
-    DynamicInfo,
-    StaticInfo,
-    FabricTelemetry,
-    CodeProfilingTimerResult,
-    ChannelTrimmingOverrides,
-    NocUnicastCommandHeader,
-    NocUnicastInlineWriteCommandHeader,
-    NocUnicastAtomicIncCommandHeader,
-    NocUnicastAtomicIncFusedCommandHeader,
-    NocUnicastScatterCommandHeader,
-    NocMulticastCommandHeader,
-    NocMulticastAtomicIncCommandHeader,
-    NocSparseMulticastWriteCommandHeader>;
-
-// ============ All described tagged unions ============
-
-// Every tagged union described at compile time. The manifest writes one type entry per element, beside the structs,
-// which describes the union's tag enum and cases.
-using DescribedTaggedUnions = std::tuple<NocCommandFields>;
 
 }  // namespace tt::tt_fabric::layout
