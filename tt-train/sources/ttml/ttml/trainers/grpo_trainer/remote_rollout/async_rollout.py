@@ -5,7 +5,9 @@
 
 from __future__ import annotations
 
+import atexit
 import itertools
+import os
 import time
 from typing import Any, Callable, Dict, List, Optional
 
@@ -83,28 +85,33 @@ class AsyncRolloutServer:
         self._num_generations = num_generations
         self._bridge.connect()
         self._queue.connect()
+        # If rank 0 fails to send a shutdown signal, force rank 1 to exit.
+        atexit.register(os._exit, 1)
 
     def serve_forever(self) -> None:
         n = self._batch_prompts
         starts = itertools.cycle(range(0, len(self._prompts), n))
-        with exit_on_error():
-            while self._install_newest_weights():
-                start = next(starts)
-                prompts = self._prompts[start : start + n]
-                extra = {k: col[start : start + n] for k, col in self._extra_columns.items()}
-                t0 = time.perf_counter()
-                rollout = self._sampler.generate(prompts)
-                self._queue.push(
-                    score_rollout(
-                        rollout,
-                        prompts,
-                        extra,
-                        tokenizer=self._tokenizer,
-                        reward_funcs=self._reward_funcs,
-                        num_generations=self._num_generations,
-                        generation_time_s=time.perf_counter() - t0,
+        try:
+            with exit_on_error():
+                while self._install_newest_weights():
+                    start = next(starts)
+                    prompts = self._prompts[start : start + n]
+                    extra = {k: col[start : start + n] for k, col in self._extra_columns.items()}
+                    t0 = time.perf_counter()
+                    rollout = self._sampler.generate(prompts)
+                    self._queue.push(
+                        score_rollout(
+                            rollout,
+                            prompts,
+                            extra,
+                            tokenizer=self._tokenizer,
+                            reward_funcs=self._reward_funcs,
+                            num_generations=self._num_generations,
+                            generation_time_s=time.perf_counter() - t0,
+                        )
                     )
-                )
+        finally:
+            atexit.unregister(os._exit)
             self._queue.close()
             self._bridge.close()
 
