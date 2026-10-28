@@ -231,6 +231,7 @@ def test_tune_ring_joint_floaters(request, mesh_device, device_params, variant, 
                 return entry["ns"] if entry["status"] == "ok" else None
             log.write({"schedule": text, "status": "started"})
             outcome = None
+            recorded = False
             try:
                 ns = []
                 for forward, mla in forwards:
@@ -248,10 +249,11 @@ def test_tune_ring_joint_floaters(request, mesh_device, device_params, variant, 
                 else:
                     outcome = {"schedule": text, "status": "ok", "ns": ns}
                 log.write(outcome)
+                recorded = True
             except BaseException as error:
                 # Stopped before an outcome was recorded by something other than the schedule (the profiler, an
                 # interrupt): retry it. A device timeout is a hang; its "started" stays, so it is not tried again.
-                if outcome is None and "TIMEOUT" not in str(error):
+                if not recorded and "TIMEOUT" not in str(error):
                     log.write({"schedule": text, "status": "aborted"})
                 raise
             finally:
