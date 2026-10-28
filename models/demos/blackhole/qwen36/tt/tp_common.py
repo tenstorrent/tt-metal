@@ -1376,6 +1376,18 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
 #                                        QWEN36_DECODE_AR_GDN_FP32=1 keeps the separate add). The layer arms the
 #                                        residual (arm_residual) before attention / MLP and takes the sum with
 #                                        add_residual; any other all_reduce caller is unaffected.
+#   QWEN36_DECODE_AR_LIVE_ROWS=0 (default) every bf16 all-reduce sends all 32 rows of each tile (full 2 KB tiles).
+#   QWEN36_DECODE_AR_LIVE_ROWS=1         a bf16 all-reduce whose partial has <= 16 logical rows (plain decode at <= 16
+#                                        users, spec verify / drafter buckets of <= 4 users x 4 rows) passes
+#                                        live_rows_packing=True: the op sends only the top half (rows 0..15) of each
+#                                        tile, 4 half-tiles per 4 KB fabric packet, half the fabric bytes. Rows 0..15
+#                                        of the result are byte-identical; rows 16..31 (padding) hold stale partial
+#                                        sums, so the persistent buffer is zero-filled at construction (no NaN/Inf
+#                                        bit patterns from an uninitialised buffer ever reach the padding rows).
+#                                        Inputs with more rows / fp32 keep the full-tile path inside the op.
+#   FUSE_RESIDUAL=1 + LIVE_ROWS=1        untested together: an all_reduce that fuses an armed residual keeps the
+#                                        full-tile path (no live_rows_packing) unless
+#                                        QWEN36_DECODE_AR_FUSE_LIVE_ROWS=1 (default 0; for the both-on op test only).
 #
 # Prefill never reads these flags: it keeps the fractured residual and produces only KV / GDN state,
 # so the residual format is private to each forward. Dispatch inside the layer / final norm is on
@@ -1384,6 +1396,16 @@ def matmul_reduce_scatter_prefill(x, weight, tt_ccl, compute_cfg, topology, nd, 
 DECODE_AR_ENV = "QWEN36_DECODE_ALLREDUCE"
 DECODE_AR_GDN_FP32_ENV = "QWEN36_DECODE_AR_GDN_FP32"
 DECODE_AR_FUSE_ENV = "QWEN36_DECODE_AR_FUSE_RESIDUAL"
+DECODE_AR_FUSE_LIVE_ROWS_ENV = "QWEN36_DECODE_AR_FUSE_LIVE_ROWS"
+DECODE_AR_LIVE_ROWS_ENV = "QWEN36_DECODE_AR_LIVE_ROWS"
+DECODE_AR_LIVE_ROWS_MAX = TILE_SIZE // 2  # rows that fit faces 0/1 of a 32x32 tile (the op's own eligibility bound)
+
+
+def decode_ar_live_rows_enabled():
+    """QWEN36_DECODE_AR_LIVE_ROWS (default "0" = off): <= 16-row decode all-reduces send only each tile's live half."""
+    return os.environ.get(DECODE_AR_LIVE_ROWS_ENV, "0") == "1"
+
+
 _DAR_GRID = (10, 4)  # RES40 core grid (x, y)
 _DAR_UNSET = object()
 
@@ -1395,7 +1417,9 @@ class DecodeResidualAllReduce:
     persistent all-reduce buffer is allocated exactly once, at construction (never inside a trace).
     """
 
-    def __init__(self, mesh_device, args, tt_ccl, gdn_fp32=False, fuse_residual=False):
+    def __init__(
+        self, mesh_device, args, tt_ccl, gdn_fp32=False, fuse_residual=False, live_rows=False, fuse_live_rows=False
+    ):
         self.mesh = mesh_device
         self.tt_ccl = tt_ccl
         self.dim = args.dim
@@ -1409,6 +1433,16 @@ class DecodeResidualAllReduce:
         self.fuse_residual = fuse_residual
         self._armed = None
         self._fused_out = None
+        self.live_rows = live_rows
+        # Both-on guard (QWEN36_DECODE_AR_FUSE_RESIDUAL x QWEN36_DECODE_AR_LIVE_ROWS): until the combined op passes
+        # its byte-identity test, an all_reduce that fuses a residual does not also pack live rows, unless
+        # fuse_live_rows (QWEN36_DECODE_AR_FUSE_LIVE_ROWS=1) opts in.
+        self.fuse_live_rows = bool(fuse_live_rows and fuse_residual and live_rows)
+        if fuse_residual and live_rows and not self.fuse_live_rows:
+            logger.warning(
+                f"{DECODE_AR_FUSE_ENV}=1 with {DECODE_AR_LIVE_ROWS_ENV}=1: residual-fused all-reduces keep full tiles "
+                f"(the combination is untested; {DECODE_AR_FUSE_LIVE_ROWS_ENV}=1 enables it)"
+            )
 
         ncores = _DAR_GRID[0] * _DAR_GRID[1]
         grid = ttnn.CoreRangeSet(
@@ -1437,6 +1471,17 @@ class DecodeResidualAllReduce:
         buf_mem = width_mem(self.dim * self.tp // ncores)
 
         def alloc(dtype):
+            if self.live_rows:
+                # Live-rows packing never rewrites rows 16..31 of the remote slots: start them at zero, not at whatever
+                # an uninitialised L1 buffer holds, so the reduction's padding rows stay finite.
+                return ttnn.from_torch(
+                    torch.zeros([1, 1, TILE_SIZE, self.dim * self.tp]),
+                    dtype=dtype,
+                    layout=ttnn.TILE_LAYOUT,
+                    device=mesh_device,
+                    memory_config=buf_mem,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+                )
             return ttnn.empty(
                 [1, 1, TILE_SIZE, self.dim * self.tp],
                 dtype=dtype,
@@ -1552,6 +1597,8 @@ class DecodeResidualAllReduce:
         residual = self._take_armed(packed, dtype)
         if residual is not None:
             extra["residual_tensor"] = residual
+        if self.live_rows and self.live_rows_eligible(packed) and (residual is None or self.fuse_live_rows):
+            extra["live_rows_packing"] = True
         out = ttnn.experimental.all_reduce_async(
             packed,
             self.buffer_fp32 if use_fp32 else self.buffer,
@@ -1567,6 +1614,13 @@ class DecodeResidualAllReduce:
         if residual is not None:
             self._fused_out = out
         return out
+
+    @staticmethod
+    def live_rows_eligible(packed):
+        """True when the op's live-rows packing can engage on this (RES40-packed, cast) partial: bf16 and at most
+        DECODE_AR_LIVE_ROWS_MAX logical rows. Passing the flag on an ineligible input is harmless (the op falls back);
+        filtering here only keeps the full-row calls' arguments, and so their program-cache entries, unchanged."""
+        return packed.dtype == ttnn.bfloat16 and packed.shape[-2] <= DECODE_AR_LIVE_ROWS_MAX
 
 
 def get_decode_allreduce(args, tt_ccl):
@@ -1607,11 +1661,13 @@ def get_decode_allreduce(args, tt_ccl):
                 tt_ccl,
                 gdn_fp32=os.environ.get(DECODE_AR_GDN_FP32_ENV, "0") == "1",
                 fuse_residual=os.environ.get(DECODE_AR_FUSE_ENV, "0") == "1",
+                live_rows=decode_ar_live_rows_enabled(),
+                fuse_live_rows=os.environ.get(DECODE_AR_FUSE_LIVE_ROWS_ENV, "0") == "1",
             )
             logger.info(
                 f"{DECODE_AR_ENV}=1: decode uses the replicated 40-core L1 residual + all_reduce_async "
                 f"(gdn_fp32={inst.gdn_fp32}, fuse_residual={inst.fuse_residual}, num_links={inst.num_links}, "
-                f"topology={inst.topology})"
+                f"topology={inst.topology}, live_rows={inst.live_rows})"
             )
     tt_ccl._qwen36_decode_ar = inst
     return inst

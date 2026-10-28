@@ -64,7 +64,7 @@ def rec(monkeypatch):
     return calls
 
 
-def _dar(fuse, gdn_fp32=False):
+def _dar(fuse, gdn_fp32=False, live_rows=False, fuse_live_rows=False):
     d = tpc.DecodeResidualAllReduce.__new__(tpc.DecodeResidualAllReduce)
     d.mesh = "mesh"
     d.res_mem = RES_MEM
@@ -74,6 +74,8 @@ def _dar(fuse, gdn_fp32=False):
     d.fuse_residual = fuse
     d._armed = None
     d._fused_out = None
+    d.live_rows = live_rows
+    d.fuse_live_rows = fuse_live_rows
     d.buffer = "buf"
     d.buffer_fp32 = "buf32" if gdn_fp32 else None
 
@@ -186,3 +188,18 @@ def test_rearm_clears_stale_fused_output(rec):
     d.all_reduce(FT(mem=OTHER_MEM, name="p0"))
     d.arm_residual(x)  # a new module starts: the previous fused output must not leak into its add
     assert d._fused_out is None
+
+
+@pytest.mark.parametrize("fuse_live_rows,expect_packing", [(False, False), (True, True)])
+def test_fuse_with_live_rows_guard(rec, fuse_live_rows, expect_packing):
+    """QWEN36_DECODE_AR_FUSE_RESIDUAL=1 + QWEN36_DECODE_AR_LIVE_ROWS=1: a residual-fused all_reduce keeps full tiles
+    unless QWEN36_DECODE_AR_FUSE_LIVE_ROWS=1; an unarmed one still packs live rows."""
+    d = _dar(fuse=True, live_rows=True, fuse_live_rows=fuse_live_rows)
+    x = FT(name="x")
+    d.arm_residual(x)
+    d.all_reduce(FT(mem=OTHER_MEM, name="p0"))
+    d.all_reduce(FT(mem=OTHER_MEM, name="p1"))
+    k0, k1 = [c[2] for c in rec if c[0] == "all_reduce_async"]
+    assert k0["residual_tensor"] is x
+    assert (k0.get("live_rows_packing") is True) is expect_packing
+    assert "residual_tensor" not in k1 and k1.get("live_rows_packing") is True

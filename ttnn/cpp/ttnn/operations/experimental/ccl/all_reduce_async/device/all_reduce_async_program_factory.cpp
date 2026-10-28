@@ -383,6 +383,41 @@ tt::tt_metal::ProgramDescriptor AllReduceAsyncMeshWorkloadFactory::create_descri
         }
     }
 
+    // Live-rows packing (operation_attributes.live_rows_packing): with <= 16 logical rows in a single 32-row tile row,
+    // every live row sits in faces 0/1 of its tile, i.e. the first half of a bf16 32x32 tile page. The writer then
+    // sends only those halves, four per fabric packet (one 4-chunk scatter write of 4 x page/2 bytes), halving the
+    // fabric bytes of the decode all-reduce. The reader packs the halves back to back in cb0 (two cb pages per packet).
+    // Every packet stays exactly 4 half-tiles: links whose tile count is not a multiple of 4, odd shard / offset tile
+    // counts, or any other layout fall back to the default full-tile path (no partial packets are ever sent).
+    constexpr uint32_t kHalvesPerPacket = 4;  // == NOC_SCATTER_WRITE_MAX_CHUNKS (static_assert in worker_writer.cpp)
+    bool half_tile_packing = false;
+    if (operation_attributes.live_rows_packing) {
+        const auto& input_logical_shape = input_tensor.logical_shape();
+        const auto& input_padded_shape = input_tensor.padded_shape();
+        const auto& input_tile = input_tensor.tensor_spec().tile();
+        const uint32_t half_page_size = op_config.get_page_size() / 2;
+        const uint64_t padded_rows = input_padded_shape.volume() / input_padded_shape[-1];
+        const uint64_t logical_rows = input_logical_shape.volume() / input_logical_shape[-1];
+        half_tile_packing =
+            input_tensor.dtype() == DataType::BFLOAT16 && output_dtype == DataType::BFLOAT16 &&
+            input_tile.get_height() == TILE_HEIGHT && input_tile.get_width() == TILE_WIDTH &&
+            input_tile.get_face_shape()[0] == FACE_HEIGHT && input_tile.get_face_shape()[1] == FACE_WIDTH &&
+            !input_tile.get_transpose_within_face() && !input_tile.get_transpose_of_faces() &&
+            input_tensor_shard_shape[0] == TILE_HEIGHT && padded_rows == TILE_HEIGHT && logical_rows <= FACE_HEIGHT &&
+            op_config.get_page_size() == input_tile.get_tile_size(df) && op_config.get_page_size() % 2 == 0 &&
+            kHalvesPerPacket * half_page_size <= packet_size_bytes && input_tensor_shard_num_pages % 2 == 0;
+        for (uint32_t link = 0; link < num_links && half_tile_packing; link++) {
+            half_tile_packing = output_tensor_pages_in_link[link] % kHalvesPerPacket == 0 &&
+                                input_tensor_tile_offset_per_link[link] % 2 == 0;
+        }
+        log_debug(
+            tt::LogOp,
+            "all_reduce_async live_rows_packing: logical_rows={} padded_rows={} -> half_tile_packing={}",
+            logical_rows,
+            padded_rows,
+            half_tile_packing);
+    }
+
     // Create reduction semaphores for each link
     std::vector<uint32_t> reduction_semaphore_ids;
     reduction_semaphore_ids.reserve(num_links);
@@ -519,6 +554,9 @@ tt::tt_metal::ProgramDescriptor AllReduceAsyncMeshWorkloadFactory::create_descri
     worker_sender_reader_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     worker_sender_reader_kernel_desc.core_ranges = sender_worker_core_range;
     worker_sender_reader_kernel_desc.compile_time_args = std::move(reader_compile_args);
+    if (half_tile_packing) {
+        worker_sender_reader_kernel_desc.defines.emplace_back("LIVE_ROWS_HALF_TILE", "1");
+    }
     worker_sender_reader_kernel_desc.config = tt::tt_metal::DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
         .noc = reader_noc,
@@ -547,6 +585,9 @@ tt::tt_metal::ProgramDescriptor AllReduceAsyncMeshWorkloadFactory::create_descri
     worker_sender_writer_kernel_desc.source_type = tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH;
     worker_sender_writer_kernel_desc.core_ranges = sender_worker_core_range;
     worker_sender_writer_kernel_desc.compile_time_args = std::move(writer_compile_args);
+    if (half_tile_packing) {
+        worker_sender_writer_kernel_desc.defines.emplace_back("LIVE_ROWS_HALF_TILE", "1");
+    }
     worker_sender_writer_kernel_desc.config = tt::tt_metal::DataMovementConfigDescriptor{
         .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
         .noc = writer_noc,

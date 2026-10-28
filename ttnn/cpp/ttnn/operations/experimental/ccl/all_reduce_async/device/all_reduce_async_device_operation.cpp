@@ -293,7 +293,8 @@ ttnn::experimental::prim::AllReduceAsyncDeviceOperation::tensor_return_value_t a
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama,
     bool fp32_dest_acc,
-    const std::optional<Tensor>& residual_tensor) {
+    const std::optional<Tensor>& residual_tensor,
+    bool live_rows_packing) {
     using OperationType = ttnn::experimental::prim::AllReduceAsyncDeviceOperation;
     const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
@@ -312,7 +313,8 @@ ttnn::experimental::prim::AllReduceAsyncDeviceOperation::tensor_return_value_t a
         use_optimal_ccl_for_llama,
         cluster_axis,
         &mesh_device,
-        fp32_dest_acc);
+        fp32_dest_acc,
+        live_rows_packing);
     auto tensor_args = OperationType::tensor_args_t{
         .input_tensor = input_tensor, .buffer_tensor = buffer_tensor, .residual_tensor = residual_tensor};
 

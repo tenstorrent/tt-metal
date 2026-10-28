@@ -39,6 +39,7 @@ void bind_all_reduce_async(nb::module_& mod) {
             num_links (int, optional): Number of links to use for the all_reduce_async operation. Defaults to `None`, which indicates to the operation that it should choose. Note that this value will be ignored if there are fewer links available than requested.
             topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Linear`.
             residual_tensor (ttnn.Tensor, optional): persistent-buffer overload only. When given, the reduction kernel returns `residual_tensor + sum(input_tensor over cluster_axis)` in one op (fused residual add). It must be L1 WIDTH_SHARDED with the output shard spec, the input dtype and the input padded shape. Defaults to `None` (plain all-reduce).
+            live_rows_packing (bool, optional): persistent-buffer overload only. When the input has <= 16 logical rows in a single 32-row bf16 tile row (width-sharded, one tile row per shard), send only the top half (faces 0/1) of each tile, four half-tiles per fabric packet. Rows 0..15 of the result are byte-identical to the default; rows 16..31 are undefined. Ineligible inputs keep the default path. Defaults to `False`.
 
         Returns:
             ttnn.Tensor: the output tensor.
@@ -121,7 +122,8 @@ void bind_all_reduce_async(nb::module_& mod) {
                 bool,
                 bool,
                 bool,
-                const std::optional<ttnn::Tensor>&>(ttnn::experimental::all_reduce_async),
+                const std::optional<ttnn::Tensor>&,
+                bool>(ttnn::experimental::all_reduce_async),
             nb::arg("input_tensor"),
             nb::arg("buffer_tensor"),
             nb::arg("cluster_axis"),
@@ -136,7 +138,8 @@ void bind_all_reduce_async(nb::module_& mod) {
             nb::arg("use_noc1_only") = false,
             nb::arg("use_optimal_ccl_for_llama") = false,
             nb::arg("fp32_dest_acc") = false,
-            nb::arg("residual_tensor") = nb::none()));
+            nb::arg("residual_tensor") = nb::none(),
+            nb::arg("live_rows_packing") = false));
 }
 
 }  // namespace ttnn::operations::experimental::ccl

@@ -14,6 +14,10 @@ and the test asserts
 Run (Blackhole Galaxy, inside the container, one 1x8 TP submesh):
     MESH_DEVICE=P150x8 QWEN36_FABRIC_RING=1 HF_MODEL=<Qwen3.8-27B snapshot> \\
         pytest models/demos/blackhole/qwen36/tests/test_decode_ar_fuse.py -v -s
+
+Both-on case (ar-fuse x ccl-live-rows): run the same command with QWEN36_DECODE_AR_LIVE_ROWS=1. The DecodeResidualAllReduce
+is then built with live_rows=True and fuse_live_rows=True (the opt-in past the model's both-on guard), so B1/B8 send
+half tiles in both the unfused reference and the fused call (and the traced call), and must still match byte for byte.
 """
 import os
 
@@ -71,7 +75,10 @@ def test_decode_ar_fuse_residual(mesh_device, B, reset_seeds, ensure_gc):
 
     args = Qwen36ModelArgs(mesh_device, max_batch_size=32, max_seq_len=256)
     tt_ccl = TT_CCL(mesh_device)
-    dar = tpc.DecodeResidualAllReduce(mesh_device, args, tt_ccl, gdn_fp32=False, fuse_residual=True)
+    live = tpc.decode_ar_live_rows_enabled()  # QWEN36_DECODE_AR_LIVE_ROWS=1: the both-on case
+    dar = tpc.DecodeResidualAllReduce(
+        mesh_device, args, tt_ccl, gdn_fp32=False, fuse_residual=True, live_rows=live, fuse_live_rows=live
+    )
     dim = args.dim
 
     parts = (torch.randn(tp, B, dim) * 0.5).to(torch.bfloat16)
@@ -103,7 +110,7 @@ def test_decode_ar_fuse_residual(mesh_device, B, reset_seeds, ensure_gc):
 
     ref = res.float() + parts.float().sum(0)
     passing, pcc = comp_pcc(ref, got[0].reshape(B, dim).float(), 0.999)
-    logger.info(f"AR-fuse B={B}: byte-identical to unfused on {tp} devices; PCC vs fp32 ref {pcc}")
+    logger.info(f"AR-fuse B={B} live_rows={live}: byte-identical to unfused on {tp} devices; PCC vs fp32 ref {pcc}")
     assert passing, pcc
 
     # Traced: capture one fused call, replay twice, same bytes.
@@ -120,6 +127,7 @@ def test_decode_ar_fuse_residual(mesh_device, B, reset_seeds, ensure_gc):
         num_links=dar.num_links,
         memory_config=dar.res_mem,
         residual_tensor=residual,
+        **({"live_rows_packing": True} if live and dar.live_rows_eligible(packed) else {}),
     )
     ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
     for rep in range(2):

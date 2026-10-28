@@ -552,7 +552,8 @@ ttnn::Tensor all_reduce_async(
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama,
     bool fp32_dest_acc,
-    const std::optional<ttnn::Tensor>& residual_tensor) {
+    const std::optional<ttnn::Tensor>& residual_tensor,
+    bool live_rows_packing) {
     topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology, cluster_axis);
     ttnn::MemoryConfig out_memory_config = memory_config.value_or(input_tensor.memory_config());
 
@@ -571,7 +572,8 @@ ttnn::Tensor all_reduce_async(
         use_noc1_only,
         use_optimal_ccl_for_llama,
         fp32_dest_acc,
-        residual_tensor);
+        residual_tensor,
+        live_rows_packing);
 }
 
 }  // namespace ttnn::experimental
