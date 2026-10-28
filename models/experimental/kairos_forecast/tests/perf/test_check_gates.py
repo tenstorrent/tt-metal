@@ -74,10 +74,10 @@ def test_pcc_step_fails():
     assert _fails(_rec(pcc_step_final=0.99), "pcc_step_final")
 
 
-def test_not_applicable_below_active_rows(capsys):
+def test_not_applicable_below_active_rows(capfd):  # capfd: tests/conftest.py holds it
     r = _rec(active_rows=9, spread_ratio_p01=0.1)  # p01 needs >= 100 active rows
     assert not _fails(r, "spread_ratio_p01")
-    assert "not applicable (n_active=9 < 100)" in capsys.readouterr().out
+    assert "not applicable (n_active=9 < 100)" in capfd.readouterr().out
     assert _fails(_rec(active_rows=9, spread_ratio_p50=1.2), "spread_ratio_p50")  # p50 applies at >= 8
     assert not _fails(_rec(active_rows=2, spread_ratio_p50=1.2), "spread_ratio_p50")
 
