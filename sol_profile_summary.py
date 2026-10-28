@@ -11,6 +11,7 @@ group producer zone (RD_GROUP_TX). Streams the CSV once; memory is per open zone
 """
 
 import collections
+import re
 import sys
 
 COMPUTE_ZONE = "RING_STEP"
@@ -60,6 +61,12 @@ def main(path):
     TIMELINE_ZONES = ("RD_SYNC", "RD_RES_PIECES", "RD_RES_POOLED", "AG_SIGNAL", "AG_SLAB_WAIT")
     events = collections.defaultdict(list)  # (run, dev, x, y) -> [(start, end, label)]: reader phases, step gaps
     last_step_end = {}  # (run, dev, x, y) -> end of the previous TRISC_0 step
+    # Hardware perf counters (TT_METAL_PROFILE_PERF_COUNTERS; timer id 9090): (run, dev, x, y) -> counter -> (value,
+    # ref cycles). The meta data column carries them as {'counter type'; 'FPU_COUNTER'; 'value'; n; 'ref cnt'; m}.
+    counters = collections.defaultdict(dict)
+    re_type = re.compile(r"counter type['\"]?\s*[:;]\s*['\"]?([A-Za-z0-9_]+)")
+    re_val = re.compile(r"['\"]value['\"]\s*[:;]\s*(\d+)")
+    re_ref = re.compile(r"ref cnt['\"]?\s*[:;]\s*(\d+)")
     with open(path) as f:
         head = f.readline()
         if "CHIP_FREQ[MHz]:" in head:
@@ -67,6 +74,11 @@ def main(path):
         f.readline()
         for line in f:
             c = line.split(",", 12)
+            if len(c) > 12 and "counter type" in c[12]:
+                mt, mv, mr = re_type.search(c[12]), re_val.search(c[12]), re_ref.search(c[12])
+                if mt and mv and mr:
+                    counters[(c[7], c[0], c[1], c[2])][mt.group(1)] = (int(mv.group(1)), int(mr.group(1)))
+                continue
             if len(c) < 12 or c[10] not in WANTED:
                 continue
             dev, x, y, risc, t, run, zone, typ = c[0], c[1], c[2], c[3], int(c[5]), c[7], c[10], c[11]
@@ -110,6 +122,23 @@ def main(path):
         if dev not in main_runs or max(v) > max(runs[(dev, main_runs[dev])]):
             main_runs[dev] = run
     print("\nthe attention op is taken as each device's longest run")
+    if counters:
+        # Busy fraction of each engine over the compute kernel (value / ref cycles), across the op's cores: how the
+        # unpacker, FPU, SFPU and packer share the time (the dense kernel keeps them overlapped).
+        per_counter = collections.defaultdict(list)
+        for (run, dev, x, y), cs in counters.items():
+            if main_runs.get(dev) != run:
+                continue
+            for name, (v, r) in cs.items():
+                if r > 0:
+                    per_counter[name].append(v / r)
+        print("\nperf counters, busy fraction (value / ref cycles) across the op's cores:")
+        for name in sorted(per_counter):
+            vals = per_counter[name]
+            print(
+                "  %-30s n %5d  min %.3f  p10 %.3f  med %.3f  p90 %.3f  max %.3f"
+                % (name, len(vals), min(vals), pct(vals, 0.1), pct(vals, 0.5), pct(vals, 0.9), max(vals))
+            )
 
     cores = sorted(k for k in span if main_runs.get(k[1]) == k[0])
     per = {}

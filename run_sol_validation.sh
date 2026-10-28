@@ -761,6 +761,56 @@ if want u1; then
     fi
 fi
 
+# D4p (2026-10-28): D4 phase 1, steps over pairs of consecutive pieces (sparse_attn_design_2026-10-23.md 5.4). The
+# step's fixed cost (~5 us: stage drains, PACK_DONE round trips, CB handshakes) is paid per step, and at 256-key
+# pieces a core runs ~165 steps; a pair step covers 512 keys of compute while the reader, the group multicast and the
+# gather keep moving 256-key pieces. Rebuild first (factory: sol_res_pairs, the doubled score scratch, 4 K/V pages).
+# Gate (~20 min): 5 s parity at 4 pages (pairs) and 3 pages (pairs that wrap fall back to singles), 1024-row parity
+# and the 1024-row 256-key checks (pairs), 1184 / 512 rows at 512-key pieces (no pairs: the unchanged path).
+# Then traced (6 replays): pairs at tau 1 / 2 / 3, the A/B without pairs at 4 and at 3 pages, dense; hardware perf
+# counters (FPU / SFPU / packer / unpacker busy, thread stalls; TT_METAL_PROFILE_PERF_COUNTERS=39) for dense, no
+# pairs and pairs; one step profile with pairs (fewer steps: fits the profiler buffer). All summarized on the machine.
+if want d4p; then
+    if ! python -c "import diffusers.models.transformers.transformer_minimax_h3" > /dev/null 2>&1; then
+        echo "    d4p: diffusers lacks transformer_minimax_h3; install the upgrade first"
+        exit 1
+    fi
+    C="4x8sp1tp0nl2 and resident_matches_compact"
+    P="4x8 and resident_call_parity"
+    ok=1
+    run d4p_parity 600 pytest "$T" -s -k "$P and r4736k256" || ok=0
+    run d4p_parity_kv3 600 env TT_SOL_KV_PAGES=3 pytest "$T" -s -k "$P and r4736k256" || ok=0
+    run d4p_parity_r1024 600 pytest "$T" -s -k "$P and r1024k256" || ok=0
+    run d4p_k256 900 pytest "$T" -s -k "$C and r1024k256" || ok=0
+    run d4p_r1184 900 pytest "$T" -s -k "$C and r1184k512" || ok=0
+    run d4p_r512 900 pytest "$T" -s -k "$C and r512k512" || ok=0
+    if [ "$ok" != 1 ]; then
+        echo "    d4p: a correctness run failed; the 5 s parity without pairs for comparison, no timings"
+        run d4p_parity_nopairs 600 env TT_SOL_RES_PAIRS=0 pytest "$T" -s -k "$P and r4736k256"
+    else
+        S="4x8 and nl2 and 768p_5s and not dense and not agather"
+        D="4x8 and nl2 and 768p_5s and dense"
+        TR="SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 SOL_BENCH_MODE=resident SOL_BENCH_PREFIX=off"
+        for tau in 1.0 2.0 3.0; do
+            run "d4p_trace_tau${tau}" 900 env $TR SOL_TAU=$tau pytest "$B" -s -k "$S"
+        done
+        run d4p_trace_nopairs_kv4_tau1.0 900 env $TR SOL_TAU=1.0 TT_SOL_RES_PAIRS=0 TT_SOL_KV_PAGES=4 pytest "$B" -s -k "$S"
+        run d4p_trace_nopairs_tau1.0 900 env $TR SOL_TAU=1.0 TT_SOL_RES_PAIRS=0 pytest "$B" -s -k "$S"
+        run d4p_trace_dense 900 env SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 pytest "$B" -s -k "$D"
+        PC="TT_METAL_PROFILE_PERF_COUNTERS=39 SOL_BENCH_PROFILE=1 SOL_BENCH_REPS=1"
+        run d4p_counters_dense 900 env $PC pytest "$B" -s -k "$D"
+        summarize_profile d4p_counters_dense_summary d4p_counters_dense
+        run d4p_counters_nopairs 900 env $PC SOL_BENCH_MODE=resident SOL_BENCH_PREFIX=off SOL_TAU=1.0 TT_SOL_RES_PAIRS=0 \
+            pytest "$B" -s -k "$S"
+        summarize_profile d4p_counters_nopairs_summary d4p_counters_nopairs
+        run d4p_counters_pairs 900 env $PC SOL_BENCH_MODE=resident SOL_BENCH_PREFIX=off SOL_TAU=1.0 pytest "$B" -s -k "$S"
+        summarize_profile d4p_counters_pairs_summary d4p_counters_pairs
+        PR="TT_METAL_DEVICE_PROFILER=1 TT_SOL_STEP_PROFILE=1 SOL_BENCH_PROFILE=1 SOL_BENCH_REPS=1 SOL_BENCH_MODE=resident"
+        run d4p_profile 900 env $PR SOL_BENCH_PREFIX=off SOL_TAU=1.0 pytest "$B" -s -k "$S"
+        summarize_profile d4p_profile_summary d4p_profile log_val_d4p_cores.txt
+    fi
+fi
+
 # D4c (2026-10-28): the one-round-trip lazy-rescale test (compute header only; no rebuild, the kernel compiles on the
 # fly). d4b: the test cost ~0.21 ms (two PACK_DONE round trips per step + a column reduce); now d is max-folded in DEST
 # and the unpack RISC scans one tile per batch. Same decision. TT_SOL_ABLATE=lazy2 = the old test for the A/B.

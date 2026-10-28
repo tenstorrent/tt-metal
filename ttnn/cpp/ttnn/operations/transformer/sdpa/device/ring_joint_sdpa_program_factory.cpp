@@ -1480,9 +1480,16 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const bool sol_chain_credits =
         sol_resident && build_kv_chains && !sol_res_mcast &&
         !(std::getenv("TT_SOL_CHAIN_CREDITS") && std::string(std::getenv("TT_SOL_CHAIN_CREDITS")) == "0");
+    // D4 (sparse_attn_design_2026-10-23.md 5.4): resident steps cover two consecutive pieces of a head (one step per
+    // pair instead of one per piece, halving the per-step fixed cost) when the pieces are small (<= 256 keys). The
+    // score scratch doubles (two pieces' widths per member) and the K/V CB holds 4 pieces, so a pair and the next
+    // piece's delivery fit together; 1,379,472 B of CBs at 5 s, below the 384-key build. TT_SOL_RES_PAIRS=0: off.
+    const bool sol_res_pairs =
+        sol_resident && Sk_chunk_t <= 8 &&
+        !(std::getenv("TT_SOL_RES_PAIRS") && std::string(std::getenv("TT_SOL_RES_PAIRS")) == "0");
     const uint32_t kv_cb_pages = [&]() -> uint32_t {
         const char* env = std::getenv("TT_SOL_KV_PAGES");
-        const uint32_t default_pages = (sol_chain_credits || sol_res_mcast) ? 3u : 2u;
+        const uint32_t default_pages = sol_res_pairs ? 4u : (sol_chain_credits || sol_res_mcast) ? 3u : 2u;
         const uint32_t pages = env ? static_cast<uint32_t>(std::atoi(env)) : default_pages;
         return (pages >= 2 && pages <= 8 && !v_shares_k_buffer) ? pages : default_pages;
     }();
@@ -2184,9 +2191,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // kSolResidentGroup x Sq_chunk_t rows of Sk_chunk_t tiles. The compute kernel derives the same capacity
     // (sdpa_ring_resident, kGroupCap) and ASSERTs the page count.
     constexpr uint32_t kSolResidentGroup = 4;
+    // D4 pairs: a step holds two pieces' widths per member (see sol_res_pairs above).
     const uint32_t qk_im_cb_tiles =
-        sol_resident ? std::max(qk_tiles, std::min(max_q_per_core, kSolResidentGroup) * Sq_chunk_t * Sk_chunk_t)
-                     : qk_tiles;
+        sol_resident
+            ? std::max(
+                  qk_tiles,
+                  std::min(max_q_per_core, kSolResidentGroup) * Sq_chunk_t * Sk_chunk_t * (sol_res_pairs ? 2u : 1u))
+            : qk_tiles;
     const uint32_t res_stats_tiles = statistics_tiles * (sol_resident ? max_q_per_core : 1u);
     const uint32_t cb_qk_im = allocate_tile_cb(qk_im_cb_tiles, qk_im_tile_size, qk_im_df);
     const uint32_t cb_out_im_A = allocate_tile_cb(out_im_tiles, im_tile_size, im_df);
@@ -3410,6 +3421,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
           !(std::getenv("TT_SOL_MEMBER_UNION") && std::string(std::getenv("TT_SOL_MEMBER_UNION")) == "1"))
              ? 1u
              : 0u},
+        // D4: resident steps over piece pairs (see sol_res_pairs above).
+        {"sol_res_pairs", sol_res_pairs ? 1u : 0u},
         // U3 resident iteration boundary (see sol_res_plan_rec_base above): the one-page plan's record base word
         // (0 = a page per chunk) and no phase-alignment dummies.
         {"sol_res_plan_rec_base", sol_res_plan_rec_base},

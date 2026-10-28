@@ -251,6 +251,8 @@ void kernel_main() {
     // no phase-alignment dummies. The reader takes the same two args.
     constexpr uint32_t sol_res_plan_rec_base = get_named_compile_time_arg_val("sol_res_plan_rec_base");
     constexpr bool sol_res_no_dummies = get_named_compile_time_arg_val("sol_res_no_dummies") == 1;
+    // D4: resident steps over pairs of consecutive pieces (factory sol_res_pairs; the score scratch is sized for it).
+    constexpr bool sol_res_pairs = get_named_compile_time_arg_val("sol_res_pairs") == 1;
     static_assert(!sol_resident || (sol_chunk_mode && !sol_compact && !sol_pack), "resident mode is a chunk mode");
     static_assert(
         !sol_resident || (use_streaming_compute && !v_shares_k_buffer && !kt_inplace_v && !has_joint_k &&
@@ -652,6 +654,7 @@ void kernel_main() {
                 kv_cb_pages,
                 sol_res_plan_rec_base,
                 sol_res_no_dummies,
+                sol_res_pairs,
                 RingStreamingMaskCtx<
                     neginf_tile_idx,
                     causal_diag_tile_idx,
