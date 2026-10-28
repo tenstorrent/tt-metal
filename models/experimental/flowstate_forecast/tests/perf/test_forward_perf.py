@@ -128,6 +128,7 @@ def test_forward_perf(device, shape, precision):
             "speedup_vs_cpu": g["cpu_s"] / statistics.median(steady),
             "chip": os.environ.get("TTQ_CHIP_SERIAL"),
             "traced": True,
+            **git_stamp(),
         }
     )
     assert met["pcc_normalized"] >= (0.999 if precision == "accuracy" else 0.995) and met["pcc_final"] >= 0.98
