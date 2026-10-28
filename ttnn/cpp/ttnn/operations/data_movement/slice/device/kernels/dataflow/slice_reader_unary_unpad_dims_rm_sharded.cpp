@@ -36,9 +36,10 @@ void kernel_main() {
     const LocalTensorAccessor<uint32_t> dst_shard(tensor::dst);
 
     // Raw address needed: a sharded buffer starts at the same SRAM address on every core of its shard
-    // grid, so the input's base address locates the input shard on each source core read below. This
-    // core may lie outside the input's shard grid and hold no input shard; on such a core, src_shard is
-    // used only for its base address.
+    // grid, so the input's base address locates the input shard on each source core read below. The host
+    // passes this address to every core that runs the reader, including cores outside the input's shard
+    // grid. Such a core holds no input data at this address, which is fine because the kernel reads at
+    // this address only on the source cores, and every source core is in the input's shard grid.
     const uint32_t l1_read_addr =
         static_cast<uint32_t>(local_mem::detail::AddressAccess::address(src_shard.local_mem()));
     // Byte offset into this core's output shard, which the rows fill front to back.
