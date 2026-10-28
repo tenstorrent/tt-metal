@@ -370,6 +370,17 @@ TEST_F(MeshBufferViewTest, DistinctCoreAddressesPreserveBacking) {
     EXPECT_EQ(readback, expected);
 }
 
+TEST_F(MeshBufferTestSuite, CreateOnSingleDeviceSetsAddress) {
+    constexpr DeviceAddr page_size = 1024;
+    const DeviceLocalBufferConfig local{.page_size = page_size, .buffer_type = BufferType::L1};
+    const MeshCoordinate coord = mesh_device_->get_view().get_local_mesh_coord_range().start_coord();
+    auto mesh_buffer = experimental::per_core_allocation::create_on_single_device(
+        ReplicatedBufferConfig{.size = 4 * page_size}, local, mesh_device_.get(), coord);
+    const DeviceAddr device_address = mesh_buffer->get_device_buffer(coord)->address();
+    EXPECT_NE(device_address, 0);
+    EXPECT_EQ(mesh_buffer->address(), device_address);
+}
+
 TEST_F(MeshBufferTest2x4, ShardedBufferInitialization) {
     const DeviceLocalBufferConfig device_local_config{
         .page_size = 1024, .buffer_type = BufferType::DRAM, .bottom_up = false};
