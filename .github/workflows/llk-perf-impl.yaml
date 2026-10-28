@@ -200,8 +200,8 @@ jobs:
             exit 1
           fi
           echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
-          # A Wormhole TRISC keeps its branch-predictor state from the previous kernel. A MATH_ISOLATE kernel
-          # before each L1_TO_L1 kernel leaves the same state whatever test ran before it.
+          # A Wormhole kernel's cycles depend on the kernel that ran before it on the same core. With MATH_ISOLATE
+          # measured too, each L1_TO_L1 kernel follows a MATH_ISOLATE kernel, whatever test the scheduler ran before.
           if [[ $CHIP_ARCH == wormhole && $RUN_TYPES == L1_TO_L1 ]]; then RUN_TYPES=MATH_ISOLATE,L1_TO_L1; fi
           echo "LLK_PERF_RUN_TYPES=$RUN_TYPES" >> "$GITHUB_ENV"
       - name: Compile
@@ -328,8 +328,8 @@ jobs:
             CHIP_ARCH=unknown
           fi
           echo "CHIP_ARCH=$CHIP_ARCH" >> "$GITHUB_ENV"
-          # A Wormhole TRISC keeps its branch-predictor state from the previous kernel. A MATH_ISOLATE kernel
-          # before each L1_TO_L1 kernel leaves the same state whatever test ran before it.
+          # A Wormhole kernel's cycles depend on the kernel that ran before it on the same core. With MATH_ISOLATE
+          # measured too, each L1_TO_L1 kernel follows a MATH_ISOLATE kernel, whatever test the scheduler ran before.
           if [[ $CHIP_ARCH == wormhole && $RUN_TYPES == L1_TO_L1 ]]; then RUN_TYPES=MATH_ISOLATE,L1_TO_L1; fi
           echo "LLK_PERF_RUN_TYPES=$RUN_TYPES" >> "$GITHUB_ENV"
           echo "PERF_RUN_TAG=${{ github.run_id }}-$CHIP_ARCH-${{ strategy.job-index }}" >> "$GITHUB_ENV"
