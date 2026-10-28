@@ -21,7 +21,7 @@ struct SRAMArenaImpl;
  * the user and the runtime. It is the sole owner of the memory reservation it
  * represents.
  *
- * **Currently SRAM only**.
+ * This is used to implement arena allocation & is a blaze-only feature.
  */
 struct SRAMArena {
     // No default constructor to be consistent with MeshTensor & MeshBuffer.
