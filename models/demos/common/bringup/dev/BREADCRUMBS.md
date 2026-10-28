@@ -2191,3 +2191,60 @@ first A/B then measured HiFi4 twice (the agent had put the default back on the o
   generic_op and prepared with the call site's moved tensors at other addresses (bit-identical), and the determinism check.
 - Selftests: test_fork_capture_programs.py (the same program at two addresses -> one summary and one signature; another
   define -> another program; masking keeps shapes).
+
+## F202: a mesh a test opens itself carries every device param (DeepSeek-V4.1 galaxy_8x4 K.1 decode hang, 2026-10-27)
+Problem: the K.1 runner smoke's stand-in decode opens a fresh mesh by hand (test_runner_smoke.open_mesh: set_fabric_config
++ open_mesh_device) and dropped the spec's fabric_router_config (hooks.device_params: 10880 B payload for the weighted
+combine's 10272 B packets). Every combine packet exceeded the router default 4352 B: the first MoE call hung (2/2 on
+b06u08, every run here), while the runner (sets the payload itself) and the fixture-based tests passed. Hours went into
+a "flat_routed_expert decode hang" that was a test's mesh setup. xing40's copy of the test had the same latent bug.
+Fix: testing/harness.open_mesh(spec) / close_mesh: every device_params entry applied as the repo fixture applies it
+(conftest set_fabric: STRICT_INIT, tensix extension off, router config passed; the rest to open_mesh_device). Both
+smoke tests use it. Selftest test_open_mesh.py: the helper's calls, and a lint that refuses ttnn.set_fabric_config /
+ttnn.open_mesh_device in any models/demos/*/tests/bringup file. The fork side (combine_rf) now refuses a payload too
+small for its packets at build time, so this can never be a silent hang again.
+
+## F203: a runner test waits for its engine build instead of failing into an agent (DeepSeek-V4.1 galaxy_8x4, 2026-10-27; F200 on the galaxy branch before the merge)
+- Seen: the owner turned on serving.require_engine for the 8x4 full run while tt-d-gen was still being built (dgen-build
+  in parallel); K.1's gate would have failed on the missing build and started an agent attempt that cannot succeed.
+- orchestrator.engine_missing: a task whose gate names a test file that tt-d-gen's engine drives (it names dgen_engine
+  or use_engine) with require_engine and no build (dgen_engine.find_build) does not gate; it waits ("tt-d-gen build
+  missing: <why>", WAITING FOR A PERSON) and F109 runs the independent tasks meanwhile. parked_waiting releases it as
+  soon as the build is found; when only it is left, the run stops waiting and `resume` re-checks.
+- Selftest: test_engine_wait.py (waits, no gate, no agent, independent work passes, runs once a build appears; no wait
+  without the requirement or without a runner test).
+- Also: testing/dgen_engine.server_repo expands $USER / ~ like the spec's own paths (core/spec._expand); the 8x4 spec's
+  `/scratch/$USER/tt-d-gen` was taken literally and the built engine never found (selftest
+  test_the_specs_server_repo_expands_like_its_other_paths).
+- Also: testing/dgen_prefill_driver passes device_prefill_pipeline its arguments by name, layers_per_chunk only to a build
+  whose signature declares it (tt-d-gen 1cf343887 dropped it; by position the timeout became sp_factor and the engine
+  died, ENGINE_FATAL ... sp_factor=1800000). Selftest test_the_engine_driver_names_its_pipeline_arguments.
+- Seeded runs (F185 follow-up, not done): the seed's contract tests are carried unchecked; box literals in them
+  (server_rules CHUNK 2048 / MAX_SEQ 4096 / GOLDEN_RUNG s4096) broke K.1 on 8x4. The rule for tt/ (sizes from the spec
+  and mesh, never one box's literals) applies to the contract tests too.
+- Also: tt-d-gen attaches to the runner's layer-completion ring /tt_prefill_layer_completions_<id>
+  (dgen_engine.ack_shm_name = layer_completion_ring_reader.scheduler_shm_name), not the pre-ring counter channel
+  /tt_prefill_layer_acks_<id>: with the old name the engine waited out its 30 min connect timeout while the runner
+  waited for its first chunk. Selftest test_the_engine_attaches_to_the_runners_completion_ring. Other models' plans
+  (xing40 serve/server.py, contract test) still name the old channel: fix at their next run.
+
+## F204: a hang's triage and Inspector dump survive the next run and every framework kill (DeepSeek-V4.1 galaxy_8x4, 2026-10-27; F201 on the galaxy branch before the merge)
+Problem: the K.1 runner-smoke decode hang lost its evidence twice in a row: run 2's generated/tt-triage was wiped by
+run 3, and run 3's was cut off by a kill while tt-triage was still writing. Both dirs (generated/tt-triage, rewritten by
+the next hang; generated/inspector, rewritten by every mesh open) live at fixed repo paths; the gate kept only
+triage.txt, and only at the gate's end, after later units had reopened the mesh.
+Fix: core/hangdump.py. keep() copies both dirs whole into <logs>/<log stem>.hang-<unit>-<time>/ the moment a unit
+returns the safe runner's HANG (it returns only after triage finished), before the next unit runs; a single-command
+gate keeps it at its end; the gate's result names the dir. wait_triage() blocks (up to 300 s) while a tt-triage.py
+of this user runs, before every framework kill: overseer abort, an agent's timeout, a stopped orchestrator (_killpg).
+Selftest test_hangdump.py (a three-unit gate whose middle unit hangs and whose next unit rewrites inspector; abort
+waits before it kills). Overseer side (skill): never kill a device run by hand while tt-triage runs; diagnostic runs
+outside a gate go through a serialized wrapper that copies the same dirs before the next run (diag/run.sh on the node).
+
+## F205: a wall is settled only without a downward drift (DeepSeek-V4.1 galaxy_8x4 5-position profile, 2026-10-28)
+Problem: F200's settle test (the last 5 walls within 5 % of their median) passes a slow drift: walls falling ~1 % a run
+stay within a 5 % band of 5 runs. The 8x4 flat series was called settled at 1042 ms (200k, 11 runs) and 842 ms (100k,
+8 runs) while 0k fell to 640 ms over 28 runs and 500k to 721 over 31: the host walls were not comparable.
+Fix: testing/profile.settled also requires the last window's median at most WALL_TREND_PCT (2 %) below the window
+before it (two windows of 5 needed); WALL_MAX_SETTLE 30 -> 60. Selftests test_warm_wall.py (the drift case; the F200
+2x2 sequence now settles on the 119 ms plateau, not on the 123.6 .. 123.5 window still 16 % below its predecessor).
