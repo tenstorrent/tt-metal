@@ -85,9 +85,10 @@ class SyncRemoteRolloutBatchSource(RolloutBatchSource):
                 generation_time_s=generation_time_s,
             )
 
-    def update_weights(self, model: Any, step: int) -> None:
+    def update_weights(self, model: Any, step: int) -> float:
         if self._pushed_version is not None and step - self._pushed_version < self._weight_sync_every:
-            return
+            return 0.0
+        start = time.perf_counter()
         hf_dict = weights_ref_hf_dict(model)
         try:
             self._client.send_weights(hf_dict, version=step)
@@ -95,6 +96,7 @@ class SyncRemoteRolloutBatchSource(RolloutBatchSource):
             del hf_dict
             gc.collect()
         self._pushed_version = step
+        return time.perf_counter() - start
 
     def close(self) -> None:
         self._client.shutdown()

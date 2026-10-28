@@ -715,6 +715,7 @@ def _run_train_loop_on_host(monkeypatch, num_batches=1):
         def update_weights(self, model, step):
             run.update_weights_steps.append(step)
             run.clock += _WEIGHT_SYNC_TIME_S
+            return _WEIGHT_SYNC_TIME_S
 
     class _Optimizer:
         lr = _BASE_LR
@@ -1221,19 +1222,58 @@ def _sync_source(monkeypatch, client, weight_sync_every):
     )
 
 
+def test_in_process_source_update_weights_returns_zero_duration_and_updates_sampler_version():
+    class _VersionSampler(RolloutSampler):
+        def __init__(self):
+            self._version = -1
+
+        @property
+        def weight_version(self):
+            return self._version
+
+        def generate(self, prompts):
+            raise AssertionError("generate is not used in this test")
+
+        def update_weights(self, weights, version):
+            self._version = version
+
+    sampler = _VersionSampler()
+    source = InProcessRolloutBatchSource(
+        sampler=sampler,
+        prompts=[[1]],
+        extra_columns={},
+        batch_prompts=1,
+        tokenizer=_IdsTokenizer(),
+        reward_funcs=[lambda completions, **_: [0.0] * len(completions)],
+        num_generations=1,
+        max_completion_length=4,
+    )
+
+    assert source.update_weights(None, 7) == 0.0
+    assert sampler.weight_version == 7
+
+
 def test_sync_remote_source_pushes_every_weight_sync_every_steps(monkeypatch):
     client = _FakeRolloutClient()
     source = _sync_source(monkeypatch, client, weight_sync_every=2)
 
-    source.update_weights(None, 0)
+    first_push_duration = source.update_weights(None, 0)
     versions = []
+    skipped_durations = []
+    push_durations = [first_push_duration]
     for step, scored in enumerate(source, start=1):
         versions.append(scored.rollout.weight_version)
         if step < 4:
-            source.update_weights(None, step)
+            duration_s = source.update_weights(None, step)
+            if step == 2:
+                push_durations.append(duration_s)
+            else:
+                skipped_durations.append(duration_s)
 
     assert versions == [0, 0, 2, 2]
     assert client.pushed == [0, 2]
+    assert skipped_durations == [0.0, 0.0]
+    assert all(duration_s >= 0.0 for duration_s in push_durations)
 
 
 def test_sync_remote_source_rejects_a_stale_rollout_version(monkeypatch, expect_error):
@@ -1257,7 +1297,7 @@ class _ReplayedRollouts(RolloutBatchSource):
         return iter(self.batches)
 
     def update_weights(self, model, step):
-        pass
+        return 0.0
 
 
 class _FirstBlockGrads(TrainerCallback):

@@ -115,8 +115,9 @@ it to eval mode only for the duration of `generate()` and restore the previous
 mode afterwards — `ttml.common.utils.run_mode` does exactly that.
 
 After the last optimizer step of each generation batch the trainer calls
-`rollout_batch_source.update_weights(model, step)`; the source decides whether
-that becomes a sampler `update_weights(weights, version=step)`.
+`rollout_batch_source.update_weights(model, step)`. The source decides whether
+that becomes a sampler `update_weights(weights, version=step)`, and returns the
+seconds spent pushing weights (`0.0` when no push was due or no weights moved).
 
 ---
 
