@@ -171,6 +171,14 @@ class DraftResult:
 # --------------------------------------------------------------------------------------------- #
 # Pure host helpers (no device needed)
 # --------------------------------------------------------------------------------------------- #
+def _free_maint(*ts):
+    """Deallocate the outputs of an MTP KV-maintenance forward. With QWEN36_MTP_KV_ONLY=1 its hidden is None (the layer
+    stopped after the KV write); everything else is a real tensor."""
+    for t in ts:
+        if t is not None:
+            ttnn.deallocate(t)
+
+
 def anchor_selector(m, B, T):
     """One-hot [1,1,B,B*T] bf16 with a single 1.0 at (u, u*T + m[u]): ``sel @ feed`` gathers each
     user's accepted-prefix row of the verify feed. QWEN36_SPEC_HOSTSET (default 1): one index assignment."""
@@ -1356,8 +1364,7 @@ class MTPSpecEngine:
         _, h_next = self.model.ttnn_mtp_decode_forward(
             hid, toks, slots, pt_tt, need_logits=False, **self._mtp_rd_kw(rows)
         )
-        for t in (*parts, cat, hid, pt_tt, h_next):
-            ttnn.deallocate(t)
+        _free_maint(*parts, cat, hid, pt_tt, h_next)
 
     def _join_warm_warmup(self):
         """QWEN36_SPEC_JOIN_FAST: compile the R-row batched warm (R = 2 .. B) before capture, so a join never compiles a
@@ -1413,8 +1420,7 @@ class MTPSpecEngine:
         _, hn = self.mtp.forward_decode(
             hid, tok, pos, cos, sin, self._mtpw_pt, need_logits=False, alias_kv_write=False, spec_n_users=1
         )
-        for t in (tok, pos, idx, cos, sin, *parts, cat, hid, hn):
-            ttnn.deallocate(t)
+        _free_maint(tok, pos, idx, cos, sin, *parts, cat, hid, hn)
 
     def _capture_mtp_warm_trace(self):
         """QWEN36_SPEC_JOIN_TRACE, inside the guarded scope: capture the MTP join warm once, against the hidden buffers
@@ -5239,7 +5245,7 @@ class MTPSpecEngine:
             alias_kv_write=True,
             spec_n_users=b,
         )
-        ttnn.deallocate(hn)
+        _free_maint(hn)
         h, tok, outs = hp, d["tok0"], []
         for k in range(self.K):
             logits, hn = mtp.forward_decode(h, tok, d["pos"][k], d["cos"][k], d["sin"][k], mtp_pt)
@@ -5546,7 +5552,7 @@ class MTPSpecEngine:
             need_logits=False,
             **self._mtp_rd_kw([row]),
         )
-        ttnn.deallocate(h_next)
+        _free_maint(h_next)
 
     def _reseed_mtp(self, committed_tokens, committed_positions, m):
         """Per-slot reseed (B == 1 past EAGER_RESEED_PROMPT_LEN): one 1-row drafter decode per committed slot."""
@@ -5564,7 +5570,7 @@ class MTPSpecEngine:
                     **self._mtp_rd_kw([u]),
                 )
                 ttnn.deallocate(row)
-                ttnn.deallocate(h_next)
+                _free_maint(h_next)
                 self.mtp_extra_steps += 1
 
     def _eager_row(self, feed, r):
@@ -5618,8 +5624,7 @@ class MTPSpecEngine:
         _, h_next = self.mtp.forward_decode(
             feed, tok_tt, pos_tt, cos, sin, pt_tt, need_logits=False, alias_kv_write=True, spec_n_users=B
         )
-        for t in (tok_tt, pos_tt, pt_tt, cos, sin, h_next):
-            ttnn.deallocate(t)
+        _free_maint(tok_tt, pos_tt, pt_tt, cos, sin, h_next)
         self.mtp_extra_steps += 1
 
     def _reseed_warmup(self, rows, dim_frac, dtype):

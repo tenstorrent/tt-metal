@@ -85,6 +85,16 @@ def verify_layout_cuts_enabled():
     return os.environ.get("QWEN36_VERIFY_LAYOUT_CUTS", "1") == "1"
 
 
+def mtp_kv_only_enabled():
+    """QWEN36_MTP_KV_ONLY (default "0"; "0" = today's drafter, byte for byte): an MTP KV-maintenance forward
+    (Qwen36MTP.forward_decode with need_logits=False: the batched reseed inside the drafter trace, the eager reseeds and
+    the join warms) stops right after the drafter layer's paged KV write. It skips the paged SDPA, the gate, wo, the
+    attention all-reduce, the residual add, ffn_norm (all-gather) and the MLP with its all-reduce, all of which only
+    produced an output the callers dropped. The K/V bytes written are unchanged (same ops up to the write), so the
+    drafts and acceptance are unchanged. Read once when the MTP head is built (TP only)."""
+    return os.environ.get("QWEN36_MTP_KV_ONLY", "0") == "1"
+
+
 def spec_hostfix_enabled():
     """Host-side spec-step fixes (QWEN36_SPEC_HOSTFIX, default 1; 0 = the old code paths): conflict check without
     tolist, one read of the drafter ids, vectorized row loops, drafter page tables skipped when unchanged.

@@ -823,6 +823,7 @@ class TPAttention:
         spec_n_users=1,
         spec_user_page_table=None,
         spec_pos_groups=None,
+        kv_only=False,
     ):
         """One decode step for B "users".
 
@@ -854,7 +855,13 @@ class TPAttention:
 
         spec_pos_groups: QWEN36_VERIFY_ATTN_LEAN only; list of T device int32 [n_users] tensors, entry j = the strided
         slice cur_pos[j::T] (group j's KV positions). The verify model builds them once per trace; None = slice here.
+
+        kv_only (QWEN36_MTP_KV_ONLY, MTP KV maintenance only): write K/V exactly as the full step does, then return None
+        instead of the attention output. Q's norm/RoPE, the SDPA, the gate, wo and the all-reduce are skipped; every op
+        that produces the written K/V is the same op on the same input, so the cache bytes are identical. Never with
+        spec_verify_mode.
         """
+        assert not (kv_only and spec_verify_mode), "kv_only is a KV-maintenance mode, never the spec verify"
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
         if (
             alias_kv_write
@@ -883,7 +890,7 @@ class TPAttention:
         _L1 = ttnn.L1_MEMORY_CONFIG  # keep decode head-prep + attn output L1-resident
         use_paged = self.use_paged and page_table is not None
         if not alias_kv_write and not spec_verify_mode and self._decode_lean_eligible(B, use_paged):
-            return self._forward_decode_lean(x, cur_pos_tt, cos_tt, sin_tt, page_table, decode_ar)
+            return self._forward_decode_lean(x, cur_pos_tt, cos_tt, sin_tt, page_table, decode_ar, kv_only=kv_only)
         if not use_paged and self.k_caches is None:
             self.reset_state()
 
@@ -921,11 +928,17 @@ class TPAttention:
             v = ttnn.reshape(vp, (1, B, NKV, HD), memory_config=_L1)
             ttnn.deallocate(vp)
 
+        if kv_only:
+            # Nothing reads Q or the gate: the attention output is not computed.
+            ttnn.deallocate(q)
+            ttnn.deallocate(gate)
         # QK norm — (1+w), matching prefill/HF (the prior "flat" no-+1 decode band-aided the reshape scramble).
-        q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6, memory_config=_L1), tw["q_norm"], memory_config=_L1)
+        if not kv_only:
+            q = ttnn.multiply(ttnn.rms_norm(q, epsilon=1e-6, memory_config=_L1), tw["q_norm"], memory_config=_L1)
         k = ttnn.multiply(ttnn.rms_norm(k, epsilon=1e-6, memory_config=_L1), tw["k_norm"], memory_config=_L1)
 
-        q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
+        if not kv_only:
+            q = apply_partial_rope_decode(q, cos_tt, sin_tt, NH, B, self.rope_dim)
         k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
 
         # SDPA-decode grid: use the real device grid (11x10=110 cores on P150x4), not a
@@ -984,6 +997,8 @@ class TPAttention:
                 ttnn.experimental.paged_update_cache(values, v_sh, update_idxs_tensor=cur_pos_tt, page_table=page_table)
                 ttnn.deallocate(k_sh)
                 ttnn.deallocate(v_sh)
+            if kv_only:
+                return None
             # The paged SDPA-decode derives its batch from the PAGE TABLE's row count and does not
             # check it against Q or cur_pos: a mismatch reads out of bounds silently.
             assert B == page_table.shape[0] == cur_pos_tt.shape[-1], (
@@ -1065,6 +1080,8 @@ class TPAttention:
                 ttnn.deallocate(v_sh)
             ttnn.deallocate(k)
             ttnn.deallocate(v)
+            if kv_only:
+                return None
 
             if NKV == 1:
                 k_full, v_full = self.k_caches[0], self.v_caches[0]
@@ -1292,7 +1309,7 @@ class TPAttention:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-    def _forward_decode_lean(self, x, cur_pos_tt, cos_tt, sin_tt, page_table, decode_ar=None):
+    def _forward_decode_lean(self, x, cur_pos_tt, cos_tt, sin_tt, page_table, decode_ar=None, kv_only=False):
         """Paged gated-attention decode with the leaner op sequence of models/demos/qwen38_27b_qb2 `_full_decode`.
 
         Same math as the legacy forward_decode paged branch, fewer ops (B=1, one layer, attention-internal):
@@ -1305,6 +1322,7 @@ class TPAttention:
           * gate applied on the flat [1,B,NH*HD] SDPA output with sigmoid fused into the multiply (no gate-to-heads
             reshape, no separate sigmoid, no nlp_concat_heads_decode chain).
         The QKV matmul, SDPA program config, wo matmul and the all-reduce are unchanged.
+        kv_only: return None right after the fused K+V update (see forward_decode); Q and the gate are dropped unread.
         """
         tw, NH, NKV, HD = self.tw, self.NH, self.NKV, self.HD
         B = x.shape[-2]
@@ -1316,6 +1334,23 @@ class TPAttention:
             qkv3, num_heads=NH, num_kv_heads=NKV, memory_config=ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG
         )
         ttnn.deallocate(qkv3)
+        if kv_only:
+            ttnn.deallocate(q)
+            ttnn.deallocate(gate)
+            k = ttnn.sharded_to_interleaved(k, _L1)
+            k = ttnn.rms_norm(k, epsilon=1e-6, weight=tw["k_norm"], memory_config=_L1)
+            if B == 1:
+                k = apply_partial_rope_decode_single(k, cos_tt, sin_tt, self.rope_dim, memory_config=_L1)
+            else:
+                k = apply_partial_rope_decode(k, cos_tt, sin_tt, NKV, B, self.rope_dim)
+            k_sh = ttnn.to_memory_config(k, self._kv_key_shard_cfg(B))
+            ttnn.deallocate(k)
+            ttnn.experimental.paged_fused_update_cache(
+                self.paged_k, k_sh, self.paged_v, v, update_idxs_tensor=cur_pos_tt, page_table=page_table
+            )
+            ttnn.deallocate(k_sh)
+            ttnn.deallocate(v)
+            return None
         # rms_norm / rope need interleaved q,k; v stays sharded on cores [0, B) for the fused cache update.
         q = ttnn.sharded_to_interleaved(q, _L1)
         k = ttnn.sharded_to_interleaved(k, _L1)
