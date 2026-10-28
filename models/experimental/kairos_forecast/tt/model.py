@@ -155,7 +155,7 @@ class TtKairos:
         causal = torch.zeros(D_PAD, D_PAD)
         causal[:, N_SEG:] = NEG
         causal[torch.triu(torch.ones(N_SEG, N_SEG, dtype=torch.bool), 1).nonzero(as_tuple=True)] = NEG
-        self._causal = causal  # uploaded per batch size (the fused softmax wants the mask's batch = B)
+        self.causal = upload(device, causal.reshape(1, 1, D_PAD, D_PAD), dtype=ttnn.float32)
         self._const = {}
 
     # ---- host side -------------------------------------------------------------------------------------------
@@ -218,8 +218,8 @@ class TtKairos:
         return {
             "B": B,
             "xs": t(xs.reshape(1, 1, B * N_TOK, K_EMB)),
-            "enc_mask": t(key_add[:, None, None, :].expand(B, 1, TILE, S_PAD)),  # 0 / NEG: exact in bf16; one tile row
-            "cross_mask": t(key_add[:, None, None, :].expand(B, 1, TILE, S_PAD)),  # (the softmax broadcasts it)
+            "enc_mask": t(key_add[:, None, None, :].expand(B, 1, S_PAD, S_PAD), ttnn.float32),
+            "cross_mask": t(key_add[:, None, None, :].expand(B, 1, D_PAD, S_PAD), ttnn.float32),
             "enc_rope": [tuple(map(t, rope_tables(f, pe))) for f in enc_f],
             "dec_rope": [
                 (
@@ -239,12 +239,7 @@ class TtKairos:
             reg[:, 0] = self.W["shared.weight"][1]
             dec_in = torch.zeros(1, 1, B * D_PAD, D)
             dec_in.view(B, D_PAD, D)[:, :N_SEG] = self.W["shared.weight"][0]
-            causal = self._causal.reshape(1, 1, D_PAD, D_PAD).expand(B, 1, D_PAD, D_PAD)
-            self._const[B] = {
-                "reg": upload(self.device, reg),
-                "dec_in": upload(self.device, dec_in),
-                "causal": upload(self.device, causal),
-            }
+            self._const[B] = {"reg": upload(self.device, reg), "dec_in": upload(self.device, dec_in)}
         return self._const[B]
 
     # ---- device side -----------------------------------------------------------------------------------------
@@ -300,10 +295,7 @@ class TtKairos:
             compute_kernel_config=self.p.hifi4(),
             program_config=bmm_config(self.device, Sq, DK, Sk, fp32),
         )  # R1-2b: full grid
-        if Sq == Sk == D_PAD:  # decoder self-attention: a per-row causal mask, which the fused softmax cannot take
-            s = ttnn.softmax(ttnn.add(s, mask), dim=-1, numeric_stable=True, compute_kernel_config=self.p.hifi4())
-        else:  # R1-5a: a key mask (one row, broadcast) fused into the softmax (bf16 mask, fp32 scores)
-            s = ttnn.scale_mask_softmax(s, None, mask, numeric_stable=True, compute_kernel_config=self.p.hifi4())
+        s = ttnn.softmax(ttnn.add(s, mask), dim=-1, numeric_stable=True, compute_kernel_config=self.p.hifi4())
         o = ttnn.matmul(
             ttnn.typecast(s, ttnn.bfloat16),
             v,
@@ -354,7 +346,7 @@ class TtKairos:
         import ttnn
 
         cs_self, cs_q, cs_k = rope
-        h = ttnn.add(h, self.self_attention(h, blk, cs_self, self._consts(B)["causal"], B, D_PAD))
+        h = ttnn.add(h, self.self_attention(h, blk, cs_self, self.causal, B, D_PAD))
         h = ttnn.add(h, self.cross_attention(h, enc, blk, cs_q, cs_k, cross_mask, B))
         return self._ff(h, blk, "n3")
 

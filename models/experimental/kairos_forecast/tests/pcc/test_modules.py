@@ -129,7 +129,7 @@ def test_modules(device, W, case, prec):
             sa = DF.attention(W, f"{p}.0.SelfAttention", DF.rms_norm(dins[b], W[f"{p}.0.layer_norm.weight"]),
                               DF.rms_norm(dins[b], W[f"{p}.0.layer_norm.weight"]), causal, s)
             if b >= 1:
-                got = to(m.self_attention(up(dec_dev(dins[b])), m.dec[b], cs_self, m._consts(B)["causal"], B, D_PAD))
+                got = to(m.self_attention(up(dec_dev(dins[b])), m.dec[b], cs_self, m.causal, B, D_PAD))
                 chk("dec_self", dec_ref(got, B), sa, f" block{b} fwd{i}")
             h1 = dins[b] + sa
             n = DF.rms_norm(h1, W[f"{p}.1.layer_norm.weight"])
