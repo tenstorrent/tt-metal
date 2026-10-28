@@ -1,7 +1,9 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent USA, Inc.
 # SPDX-License-Identifier: Apache-2.0
 
-import math
+import functools
+import os
+from typing import NamedTuple
 
 import ttnn
 
@@ -154,20 +156,78 @@ def apply_output_projection(tensor, weights: AttentionWeights, activation_dtype)
     return out
 
 
-# Per-M_tiles tuned config for the fused attention o_proj matmul + reduce-scatter.
-# Tuple layout: (grid_y, M_block, K_block, N_block, chunk_width, subblock_h, subblock_w, num_workers).
+class FusedMMRSConfig(NamedTuple):
+    """Blocking for the fused attention o_proj matmul + reduce-scatter.
+
+    The matmul runs on ``grid`` = (x, y) cores; the reduce-scatter workers take the rows from y to the
+    bottom of the device grid. ``num_workers`` = RS workers per link (None: as many as that RS zone holds,
+    zone // (2 * num_links) - 1). ``mm_window_blocks`` = None hands the matmul output to the RS through
+    DRAM; N keeps a rolling window of N M-blocks per core in L1 instead (needs >= 2 blocks per core).
+    """
+
+    grid: tuple
+    m_block: int
+    k_block: int
+    n_block: int
+    subblock_h: int
+    subblock_w: int
+    chunk_width: int
+    num_workers: int | None = None
+    mm_window_blocks: int | None = None
+
+
+# Per-M_tiles tuned configs for the fused attention o_proj matmul + reduce-scatter (Ring only).
 # S=1024 (M_tiles=32): min=256us on Tracy (2026-04-23 sweep); see commit for methodology.
+# M_tiles 64/80/128: swept 2026-10-12 on the Blackhole galaxy, (2,4) stage, Ring, 2 links, 12x10 core grid
+# (models/demos/minimax_m3/tests/perf/bench_mmrs_oproj.py, traced device time, bf8_b out). Times are fused vs the
+# unfused bf16 ttnn.matmul + reduce_scatter_minimal_async on the same shape. With the bf16 output the model uses,
+# 80 tiles is 431 us; end to end (55k prompt, 5k chunks, eager) every (2,4) stage is 1.6-2.0% faster.
+# 20 tiles (chunk 5120 on the whole 8x4 galaxy, SP=8) is deliberately absent: the op is faster there in isolation
+# (140 vs 238 us) but the 60-layer prefill got 14% slower (6.18 vs 5.41 s), cause not yet found. One lead: the
+# fused op costs ~3.5x the eager host dispatch time of the matmul + reduce-scatter it replaces (1.2 vs 0.34 ms on
+# 32 chips), and the smaller per-chip work hides less of it.
 _FUSED_MM_RS_CONFIGS = {
-    32: (4, 4, 4, 6, 2, 2, 2, 3),  # S=1024
+    32: FusedMMRSConfig((8, 4), 4, 4, 6, 2, 2, 2, num_workers=3),  # S=1024
+    64: FusedMMRSConfig((12, 8), 5, 4, 8, 1, 4, 1, num_workers=5, mm_window_blocks=2),  # 281.5 us vs 591.6 us
+    # 80 tiles = production chunk 5120 on a (2,4) stage.
+    80: FusedMMRSConfig((12, 8), 5, 4, 8, 1, 4, 1, num_workers=5, mm_window_blocks=2),  # 311.0 us vs 685.7 us
+    128: FusedMMRSConfig((12, 7), 5, 4, 16, 1, 4, 1, num_workers=8, mm_window_blocks=2),  # 477.3 us vs 1133.9 us
 }
 
 
 def is_shape_fused_mm_rs_supported(tensor) -> bool:
+    # M3_FUSED_MM_RS=0 forces the unfused o_proj + reduce-scatter (A/B against the fused op).
+    if os.environ.get("M3_FUSED_MM_RS", "1").strip().lower() in ("0", "false", "no", "off"):
+        return False
     m_tiles = (tensor.shape[-2] + 31) // 32
     return m_tiles in _FUSED_MM_RS_CONFIGS
 
 
-def apply_output_projection_fused_rs(tensor, weights: AttentionWeights, mesh_config, ccl_manager):
+@functools.lru_cache(maxsize=None)
+def _fused_mm_rs_kernel_configs(cfg: FusedMMRSConfig, arch):
+    """(MinimalMatmulConfig, compute kernel config) for a table entry, built once: the fused op already
+    costs far more host time per call than the matmul + reduce-scatter it replaces."""
+    mm_config = ttnn.MinimalMatmulConfig(
+        M_block_size=cfg.m_block,
+        K_block_size=cfg.k_block,
+        N_block_size=cfg.n_block,
+        subblock_h=cfg.subblock_h,
+        subblock_w=cfg.subblock_w,
+        compute_with_storage_grid_size=ttnn.CoreCoord(*cfg.grid),
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        arch,
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    return mm_config, compute_config
+
+
+def apply_output_projection_fused_rs(
+    tensor, weights: AttentionWeights, mesh_config, ccl_manager, activation_dtype=ttnn.bfloat16
+):
     """Attention output projection + TP reduce-scatter fused into one device op.
 
     Replaces the sequential `apply_output_projection` + first half of
@@ -179,15 +239,16 @@ def apply_output_projection_fused_rs(tensor, weights: AttentionWeights, mesh_con
     traffic on the other half — MM signals RS via on-chip semaphore per output
     block so RS starts forwarding as soon as the first block lands in DRAM.
 
-    Dtypes (end-to-end bf8_b through the TP allreduce):
+    Dtypes:
       - activation cast to bf8_b before MM (DRAM-bandwidth saver)
-      - weight is bf8_b (as loaded, row-parallel sharded on K across TP=8)
+      - weight is bf8_b (as loaded, row-parallel sharded on K across TP)
       - MM math: LoFi (same as `ttnn.matmul` default, via compute_kernel_config)
-      - fused-op output inherits input dtype → bf8_b
-      - downstream all-gather + padding-slice operate on bf8_b
+      - output is ``activation_dtype`` (bf16), like the unfused o_proj: under the sharded residual it IS the
+        residual stream, and downstream ops (e.g. the MoE router's grouped top-k) reject bf8_b.
+        M3_FUSED_MM_RS_OUT=bf8_typecast instead reduce-scatters bf8_b (half the link traffic) and casts after.
 
     Returns the reduce-scattered tensor of shape
-    [1, 1, S, padded_hidden_total / TP] in bf8_b.
+    [1, 1, S, padded_hidden_total / TP] in ``activation_dtype``.
 
     Only valid for prefill (TP > 1); the decoder path uses a different pattern.
     """
@@ -197,61 +258,65 @@ def apply_output_projection_fused_rs(tensor, weights: AttentionWeights, mesh_con
     assert K % TILE == 0 and N % TILE == 0, f"K={K}, N={N} must be tile-aligned"
 
     M_tiles = (tensor.shape[-2] + TILE - 1) // TILE
-    K_tiles = K // TILE
-    N_tiles = N // TILE
-
     if M_tiles not in _FUSED_MM_RS_CONFIGS:
         raise ValueError(
             f"No tuned fused o_proj MM+RS config for M_tiles={M_tiles}; "
             f"tuned shapes: {sorted(_FUSED_MM_RS_CONFIGS)}. "
             f"Use apply_output_projection + apply_allreduce for untuned shapes."
         )
-    grid_y, m_block, k_block, n_block, chunk_width, subblock_h, subblock_w, num_workers = _FUSED_MM_RS_CONFIGS[M_tiles]
-
-    mm_core_grid = ttnn.CoreCoord(8, grid_y)
-    Nt_per_core = N_tiles // mm_core_grid.x
-    Mt_per_core = max(1, math.ceil(M_tiles / grid_y))
+    cfg = _FUSED_MM_RS_CONFIGS[M_tiles]
+    mm_core_grid = ttnn.CoreCoord(*cfg.grid)
 
     tensor = ttnn.typecast(tensor, ttnn.bfloat8_b)
 
-    mm_config = ttnn.MinimalMatmulConfig(
-        M_block_size=m_block,
-        K_block_size=k_block,
-        N_block_size=n_block,
-        subblock_h=subblock_h,
-        subblock_w=subblock_w,
-        compute_with_storage_grid_size=mm_core_grid,
+    mm_config, compute_config = _fused_mm_rs_kernel_configs(cfg, ccl_manager.mesh_device.arch())
+
+    num_workers = cfg.num_workers
+    if num_workers is None:
+        device_grid = ccl_manager.compute_grid_size
+        num_workers = ((device_grid.y - mm_core_grid.y) * device_grid.x) // (2 * ccl_manager.num_links) - 1
+
+    # Windowed L1 hand-off: the MM output stays in L1 (a rolling window of M blocks per core) and the RS
+    # reads it from there instead of a DRAM round trip. Needs both caller-owned counter arrays.
+    l1_handoff = cfg.mm_window_blocks is not None
+    extra_kwargs = (
+        dict(mm_window_blocks=cfg.mm_window_blocks, mm_credit_counters=ccl_manager.get_mm_credit_counters_buffer())
+        if l1_handoff
+        else {}
     )
 
-    compute_config = ttnn.init_device_compute_kernel_config(
-        ccl_manager.mesh_device.arch(),
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        math_approx_mode=False,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
-    )
+    bf8_rs = os.environ.get("M3_FUSED_MM_RS_OUT", "") == "bf8_typecast"
+    if not bf8_rs:
+        extra_kwargs["dtype"] = activation_dtype
 
     mm_out, rs_out = ttnn.experimental.minimal_matmul_strided_reduce_scatter_async(
         tensor,
         weights.o_proj,
         3,  # scatter on last (hidden) dim
         ccl_manager.get_rs_ping_pong_semaphore(),
-        ttnn.CoreCoord(0, grid_y),  # RS cores start just below the MM rows
+        ttnn.CoreCoord(0, mm_core_grid.y),  # RS cores start just below the MM rows
         compute_kernel_config=compute_config,
         num_links=ccl_manager.num_links,
-        memory_config_mm=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config_mm=ttnn.L1_MEMORY_CONFIG if l1_handoff else ttnn.DRAM_MEMORY_CONFIG,
+        rs_intermediate_mem_config=ttnn.DRAM_MEMORY_CONFIG,
         rs_output_mem_config=ttnn.DRAM_MEMORY_CONFIG,
         topology=ccl_manager.topology,
         cluster_axis=mesh_config.tp_axis,
         bias=None,  # MiniMax-M3 has no o_proj bias
         config=mm_config,
         barrier_semaphore=ccl_manager.get_barrier_semaphore(),
-        chunk_width_in_mm_blocks=chunk_width,
+        chunk_width_in_mm_blocks=cfg.chunk_width,
         num_workers_per_link=num_workers,
-    )
+        mm_progress_counters=ccl_manager.get_mm_progress_counters_buffer(),
+        **extra_kwargs,
+    )[:2]
 
     tensor.deallocate(True)
     mm_out.deallocate(True)
+    if bf8_rs and rs_out.dtype != activation_dtype:
+        cast = ttnn.typecast(rs_out, activation_dtype)
+        rs_out.deallocate(True)
+        rs_out = cast
     return rs_out
 
 
