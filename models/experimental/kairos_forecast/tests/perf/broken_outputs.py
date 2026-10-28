@@ -29,7 +29,9 @@ import contextlib
 import io
 import json
 import math
+import os
 import sys
+from pathlib import Path
 
 import torch
 
@@ -39,6 +41,8 @@ from models.experimental.kairos_forecast.tests.perf.check_gates import DEFAULT_G
 from models.experimental.kairos_forecast.tests.perf.suite import GIFT_CASES, _post, load, score
 
 FIXED = {"suite": DEFAULT_GATES.parent / "iter_00" / "suite.jsonl", "bench": DEFAULT_GATES.parent / "iter_00" / "bench.json"}
+if os.environ.get("KAIROS_FIXED_SUITE"):  # development: score against another record (e.g. a pcc job's records)
+    FIXED = {"suite": Path(os.environ["KAIROS_FIXED_SUITE"])}
 SHIFT = 0.05
 PERFECT = {"route_mismatch_rows": 0, "route_mismatch_patches": 0, "bias_max_abs_diff": 0.0, "min_top3_margin": 1.0}
 
@@ -117,7 +121,7 @@ def case_records(name, transform=None, final=None):
         d, g = torch.cat(dev), torch.cat(heads)
         q = _post(rec)(d)
         q = final(q, scale) if final else q
-        return [{**base, **score(d, g, q, g_q, scale)}]
+        return [{**base, **score(d, g, q, g_q, scale, 2 if gift else 1)}]
     steps = n // 2 if gift else n
     qs = [head_to_quantiles(dev[k], *rec["loc_scale"][k]) for k in range(n)]
     a = torch.cat(qs[:steps], -1)[..., :h]
@@ -134,9 +138,8 @@ def case_records(name, transform=None, final=None):
     gq = torch.cat([head_to_quantiles(heads[k], *rec["loc_scale"][k]) for k in range(n)])
     dq = torch.cat(qs)
     sc = torch.cat([rec["loc_scale"][k][1].reshape(-1) for k in range(n)])
-    if final:
-        dq = final(dq, sc)
-    tf = score(torch.cat(dev), torch.cat(heads), dq, gq, sc)
+    # no final output in the teacher-forced record: a `final` scoring leaves it equal to the golden (not applicable)
+    tf = score(torch.cat(dev), torch.cat(heads), dq, gq, sc, 2 if gift else 1)
     tf["pcc_normalized_step_min"] = min(M.pearson(M.head_view(heads[k]), M.head_view(dev[k])) for k in range(n))
     return [r, {**base, "name": f"{name}_tf", "rows": heads[0].shape[0] * n, **tf}]
 

@@ -31,12 +31,15 @@ All head metrics use the head output at the read-out tokens in normalized space,
     spread_ratio_min, spread_ratio_max
                     the extremes of that ratio (floor-only, no drift; D3 condition 1b)
     bias_row_p50, bias_row_max
-                    median and max over rows of the row's |mean error| (normalized units, head space; each flip
-                    half is its own row): a level shift (PLAN v1.24). No n_active gate.
+                    the row's |mean error| (normalized units, head space), p50 taken per flip half and the larger
+                    half kept (a shift of one half alone would sit under an all-row median), and the max over rows:
+                    a level shift (PLAN v1.24, D3 item 1). No n_active gate.
     pcc_step        PCC of the step differences (along the horizon, per quantile): a one-step lag (v1.24)
     bias_row_p50_final, bias_row_max_final, pcc_step_final
-                    the same on the data-space forecast, row bias over the target's scale (after the flip average,
-                    where a shift common to both halves cancels)
+                    the same on the data-space forecast (after the flip average, where a shift common to both halves
+                    cancels), row bias over the target's scale, over the first forward's horizon (<= 128 steps):
+                    on a rollout the later steps are free-running and drift by more than the shift we test for.
+                    ``*_final_full`` (report-only) cover the whole horizon.
     pcc_final       PCC of the single-pass [targets, 9, H] forecast after inverse scaling and band calibration
     pcc_final_spread  PCC of that forecast minus its mean over the quantile axis (data space)
     median_err      worst |median error| / scale over target rows
@@ -106,7 +109,8 @@ def step_diff(t: torch.Tensor) -> torch.Tensor:
     return t[..., 1:] - t[..., :-1]
 
 
-def gate_metrics(head, g_head, q, g_q, scale_targets) -> dict:
+def gate_metrics(head, g_head, q, g_q, scale_targets, halves: int = 1) -> dict:
+    """halves: 2 when the head rows are the x half then the -x half (equal, contiguous)."""
     rows = row_pccs(g_head, head)
     std = g_head.double().reshape(g_head.shape[0], -1).std(1)
     flat = std < FLAT_STD
@@ -116,7 +120,9 @@ def gate_metrics(head, g_head, q, g_q, scale_targets) -> dict:
     med_err = (q[:, Q // 2] - g_q[:, Q // 2]).abs().amax(-1) / scale_targets.reshape(-1)
     q_spread = lambda t: t - t.mean(1, keepdim=True)  # [targets, 9, H]: minus the quantile mean
     bias = (head.double() - g_head.double()).reshape(g_head.shape[0], -1).mean(1).abs()
-    bias_f = (q.double() - g_q.double()).reshape(g_q.shape[0], -1).mean(1).abs() / scale_targets.double().reshape(-1)
+    sc = scale_targets.double().reshape(-1)
+    row_bias = lambda a, b: (a.double() - b.double()).reshape(b.shape[0], -1).mean(1).abs() / sc  # noqa: E731
+    bias_f, bias_full = row_bias(q[..., :128], g_q[..., :128]), row_bias(q, g_q)
     return {
         "pcc_normalized": pearson(g_head, head),
         "pcc_spread": pearson(spread(g_head), spread(head)),
@@ -136,12 +142,14 @@ def gate_metrics(head, g_head, q, g_q, scale_targets) -> dict:
         "flat_max_err": float(err[flat].max()) if bool(flat.any()) else 0.0,
         "inactive_max_err": float(err[~act].max()) if bool((~act).any()) else 0.0,
         "abs_err_max": float(err.max()),  # gross single-element check, not a band check (v1.16)
-        "bias_row_p50": float(bias.median()),
+        "bias_row_p50": max(float(b.median()) for b in bias.chunk(halves)),
         "bias_row_max": float(bias.max()),
         "pcc_step": pearson(step_diff(g_head), step_diff(head)),
         "bias_row_p50_final": float(bias_f.median()),
         "bias_row_max_final": float(bias_f.max()),
-        "pcc_step_final": pearson(step_diff(g_q), step_diff(q)),
+        "pcc_step_final": pearson(step_diff(g_q[..., :128]), step_diff(q[..., :128])),
+        "bias_row_p50_final_full": float(bias_full.median()),
+        "pcc_step_final_full": pearson(step_diff(g_q), step_diff(q)),
         "pcc_final": pearson(g_q, q),
         "pcc_final_spread": pearson(q_spread(g_q), q_spread(q)),
         "median_err": float(med_err.max()),

@@ -66,8 +66,9 @@ def _post(rec):
     return post
 
 
-def score(dev_raw, gold_raw, q, g_q, scale) -> dict:
-    m = M.gate_metrics(M.head_view(dev_raw), M.head_view(gold_raw), q, g_q, scale)
+def score(dev_raw, gold_raw, q, g_q, scale, halves=1) -> dict:
+    """halves: 2 when the rows are the x half then the -x half (flip cases), for the per-half row bias."""
+    m = M.gate_metrics(M.head_view(dev_raw), M.head_view(gold_raw), q, g_q, scale, halves)
     m["pcc_normalized_full"] = M.pearson(M.head_view(gold_raw, 128), M.head_view(dev_raw, 128))
     return m
 
@@ -87,7 +88,7 @@ def run_case(model, name, precision, *, collapsed=False):
     if steps == 1:
         dev = torch.cat([e["head"] for e in gen.log])
         gold = torch.cat(rec["head"])
-        r = {**base, **score(dev, gold, q, g_q, scale), **_routing(gen.log, rec)}
+        r = {**base, **score(dev, gold, q, g_q, scale, 2 if gift else 1), **_routing(gen.log, rec)}
         if collapsed:
             r["collapsed"] = M.collapsed_metrics(gold, g_q, _post(rec), scale)
         return [r], gen
@@ -114,7 +115,7 @@ def teacher_forced(model, name, precision, rec):
     dq = torch.cat([head_to_quantiles(heads[k], *rec["loc_scale"][k]) for k in range(len(heads))])
     gq = torch.cat([head_to_quantiles(rec["head"][k], *rec["loc_scale"][k]) for k in range(len(heads))])
     scale = torch.cat([rec["loc_scale"][k][1].reshape(-1) for k in range(len(heads))])
-    m = score(dev, gold, dq, gq, scale)
+    m = score(dev, gold, dq, gq, scale, 2 if rec["gift"] else 1)  # steps of the x half, then of the -x half
     step_rows = rec["head"][0].shape[0]
     m["pcc_normalized_step_min"] = min(
         M.pearson(M.head_view(rec["head"][k]), M.head_view(heads[k])) for k in range(len(heads)))
