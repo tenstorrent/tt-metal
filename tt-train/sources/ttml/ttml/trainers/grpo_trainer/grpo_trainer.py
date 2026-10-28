@@ -969,7 +969,6 @@ def save_checkpoint(
     grpo_config: Optional[GRPOConfig] = None,
     optimizer: Any = None,
     model_source: Optional[str] = None,
-    scheduler: Any = None,
     learning_rate: Optional[float] = None,
 ) -> None:
     ckpt_dir = os.path.join(output_dir, "checkpoints", f"grpo_step_{step}")
@@ -1612,7 +1611,6 @@ class GRPOTrainer:
             grpo_config=cfg,
             optimizer=self._optimizer,
             model_source=self.model_source,
-            scheduler=self._lr_scheduler,
             learning_rate=self.metrics["lr"],
         )
         ckpt_dir = os.path.join(cfg.output_dir, "checkpoints", f"grpo_step_{step}")
