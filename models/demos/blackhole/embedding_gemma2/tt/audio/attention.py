@@ -224,17 +224,17 @@ class AudioAttention(LightweightModule):
 
     def _softmax(self, s: ttnn.Tensor) -> ttnn.Tensor:
         dram = ttnn.DRAM_MEMORY_CONFIG
+        # exp(s - max) and e * (1 / sum) with the exp / reciprocal as SFPU activations of the binary
+        # ops (same ops in the same order as separate subtract / exp / reciprocal / multiply)
         m = ttnn.max(s, dim=-1, keepdim=True)
-        z = ttnn.subtract(s, m, memory_config=dram)
+        exp = ttnn.UnaryWithParam(ttnn.UnaryOpType.EXP, 0.0)  # 0: accurate (fast_and_approximate_mode=False)
+        e = ttnn.subtract(s, m, activations=[exp], memory_config=dram)
         ttnn.deallocate(m)
-        e = ttnn.exp(z, fast_and_approximate_mode=False, memory_config=dram)
-        ttnn.deallocate(z)
         denom = ttnn.sum(e, dim=-1, keepdim=True, compute_kernel_config=self.compute_kernel_config)
-        r = ttnn.reciprocal(denom)
-        ttnn.deallocate(denom)
-        p = ttnn.multiply(e, r, memory_config=dram)
+        recip = ttnn.UnaryWithParam(ttnn.UnaryOpType.RECIP)
+        p = ttnn.multiply(e, denom, input_tensor_b_activations=[recip], memory_config=dram)
         ttnn.deallocate(e)
-        ttnn.deallocate(r)
+        ttnn.deallocate(denom)
         return p
 
     # ------------------------------------------------------------------ forward
