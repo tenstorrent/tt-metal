@@ -1321,3 +1321,13 @@ the 64 K needles = the served prefix-cache hit at 45 layers), frozen snapshots g
 (untracked: the logits gate had no reference on a snapshot). Queued on `wt_frozen98`: the APC test with the default (16 K) and a
 32-token hit alignment (an unaligned restore under the sealed cache decides whether option 2 is a default flip), then the three
 45-layer smokes (text a-e, spec, APC with the repeated needles).
+
+21:40 APC on the merged tree (8x4, 4 layers, `wt_frozen98`): device store hit 173 / 174 ms (first / warm) vs 338 ms from scratch,
+host store 315 / 314 vs 492 ms, both hits bit-identical on the logits and the tokens. The same test with
+`GLM53_VLLM_APC_HIT_ALIGN=32` (the 1536 hit restored at the decode-crossing snapshot = an unaligned continued chunk) trips the
+sealed program cache in `SliceDeviceOperation` at `TtLatentCache.user_rows` called from `_prefix_rows`: the dense range (absolute
+positions below 2048) reads exactly `start` prefix rows and splits the chunk's rows into dense / sparse by absolute position, so
+each start is a new program; the sparse path's prefix read is already bucketed (`user_rows_rm`). That is the scope of option 2
+(shape-static prefix attention): read the whole dense prefix [0, 2048) with a host-built mask over [start, 2048) in
+`_dense_attention`, a fixed dense query-row count per slab (superset rows, `_select_rows`), and the masked SDPA variant warmed per
+bucket. Until then the served default restores at chunk-aligned snapshots only (16 K on the served profiles).
