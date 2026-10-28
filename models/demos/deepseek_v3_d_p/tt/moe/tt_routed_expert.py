@@ -86,6 +86,20 @@ COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
 DEFAULT_ROUTED_EXPERT_WEIGHTS_DTYPE = ttnn.bfloat4_b
 
 
+def tile_transpose(t: torch.Tensor) -> torch.Tensor:
+    """Transpose each 32x32 tile of the last two dims in place, keeping every tile at its position.
+
+    The routed-expert kernel undoes it in the matmul unpack (``weights_tile_transposed``), so the
+    product is unchanged while a block-float tile's shared exponents run along K (the weight's input
+    dim) instead of N. An MXFP4 checkpoint scales 32 consecutive inputs together, so along K each
+    16-wide exponent block sits inside one MXFP4 scale group.
+    """
+    *lead, rows, cols = t.shape
+    assert rows % ttnn.TILE_SIZE == 0 and cols % ttnn.TILE_SIZE == 0, f"{t.shape} is not tile aligned"
+    tiles = t.reshape(*lead, rows // ttnn.TILE_SIZE, ttnn.TILE_SIZE, cols // ttnn.TILE_SIZE, ttnn.TILE_SIZE)
+    return tiles.transpose(-1, -3).reshape(t.shape).contiguous()
+
+
 def routed_expert_weight_memory_config(mesh_device, n_dim: int, dram_nd_sharded: bool) -> ttnn.MemoryConfig:
     """DRAM placement of one routed-expert weight tensor whose N (the free dim) is ``n_dim``.
 
@@ -173,6 +187,7 @@ class TtRoutedExpert(LightweightModule):
         hidden_dim: int | None = None,
         weights_dram_nd_sharded: bool = False,
         cache_dump_mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
+        weights_tile_transposed: bool = False,
     ):
         """
         Shared logic for converting expert weights to ttnn with caching.
@@ -188,6 +203,8 @@ class TtRoutedExpert(LightweightModule):
             device: None for cache-only, mesh_device for cache+load
             emb_dim: Required when torch_weights is None
             hidden_dim: Required when torch_weights is None
+            weights_tile_transposed: Store every weight tile with its 32x32 contents transposed
+                (see tile_transpose). Cached under a distinct name, since the tensorbin differs.
             weights_dram_nd_sharded: Place the device weights DRAM ND-sharded rather than
                 DRAM-interleaved (see routed_expert_weight_memory_config). A device-side choice
                 only: the cache holds the plain host tensor either way, so one cache serves both
@@ -201,7 +218,8 @@ class TtRoutedExpert(LightweightModule):
         def _cache_name(name):
             if cache_path is None or cache_name_prefix is None:
                 return None
-            return str(cache_path / f"{cache_name_prefix}.{name}")
+            suffix = "_tileT" if weights_tile_transposed else ""
+            return str(cache_path / f"{cache_name_prefix}.{name}{suffix}")
 
         def _to_device(host_tt):
             # Per device (1, 1, K, N) -> (K, N) while still on host, where a squeeze is a pure spec
@@ -242,6 +260,13 @@ class TtRoutedExpert(LightweightModule):
                 stacked_gate = torch.empty(mesh_rows, mesh_cols, emb_dim, hidden_dim)
                 stacked_up = torch.empty(mesh_rows, mesh_cols, emb_dim, hidden_dim)
                 stacked_down = torch.empty(mesh_rows, mesh_cols, hidden_dim, emb_dim)
+
+            if weights_tile_transposed:
+                stacked_gate, stacked_up, stacked_down = (
+                    tile_transpose(stacked_gate),
+                    tile_transpose(stacked_up),
+                    tile_transpose(stacked_down),
+                )
 
             mapper = ExpertMapping.get_weights_mesh_mapper(mesh_device)
 
@@ -399,6 +424,7 @@ class TtRoutedExpert(LightweightModule):
         hybrid_token_threshold: Optional[int] = None,
         weights_dram_nd_sharded: Optional[bool] = None,
         cache_dump_mode: ttnn.DumpTensorMode = ttnn.DumpTensorMode.DISTRIBUTED_GATHER,
+        weights_tile_transposed: bool = False,
     ):
         """
         Initialize TtRoutedExpert module.
@@ -434,6 +460,9 @@ class TtRoutedExpert(LightweightModule):
                           the arch default: ND-sharded on Blackhole, interleaved elsewhere. True
                           forces ND-sharded (Blackhole only), False forces interleaved. See
                           routed_expert_weight_memory_config for the placement itself.
+            weights_tile_transposed: Store weight tiles transposed so block-float exponents run
+                          along K, and have unified_routed_expert_moe transpose them back in the
+                          matmul unpack. Fused composite path only (no hybrid, no fallback).
             cache_dump_mode: How a weight-cache miss is written (see ttnn.as_tensor). Pass
                           ttnn.DumpTensorMode.LOCAL when each rank builds different layers
                           (pipeline parallel).
@@ -486,6 +515,12 @@ class TtRoutedExpert(LightweightModule):
                     "expert on the composite."
                 )
         self.hybrid_token_threshold = hybrid_token_threshold
+
+        # Only unified_routed_expert_moe knows how to read tile-transposed weights; moe_fused_swiglu
+        # (hybrid) and the Wormhole routed_expert_ffn fallback would multiply them as stored.
+        if weights_tile_transposed and (not self._is_blackhole or hybrid_token_threshold is not None):
+            raise NotImplementedError("weights_tile_transposed needs the Blackhole composite path without hybrid")
+        self.weights_tile_transposed = weights_tile_transposed
 
         # DRAM placement of the expert weights. The Blackhole default is ND-sharded: both fused
         # routed-expert ops then read a per-core weight slice as ONE NoC transaction per K-row
@@ -549,6 +584,7 @@ class TtRoutedExpert(LightweightModule):
                 device=self.mesh_device,
                 weights_dram_nd_sharded=self.weights_dram_nd_sharded,
                 cache_dump_mode=self.cache_dump_mode,
+                weights_tile_transposed=self.weights_tile_transposed,
             )
         elif weight_cache_path is not None:
             logger.debug(f"Loading weights from cache ({experts_per_chip} local experts)")
@@ -562,6 +598,7 @@ class TtRoutedExpert(LightweightModule):
                 device=self.mesh_device,
                 weights_dram_nd_sharded=self.weights_dram_nd_sharded,
                 cache_dump_mode=self.cache_dump_mode,
+                weights_tile_transposed=self.weights_tile_transposed,
                 emb_dim=emb_dim,
                 hidden_dim=hidden_dim,
             )
@@ -586,6 +623,7 @@ class TtRoutedExpert(LightweightModule):
                 device=self.mesh_device,
                 weights_dram_nd_sharded=self.weights_dram_nd_sharded,
                 cache_dump_mode=self.cache_dump_mode,
+                weights_tile_transposed=self.weights_tile_transposed,
             )
 
         assert result is not None, "Expected weight tensors to be returned when device is provided"
@@ -743,6 +781,7 @@ class TtRoutedExpert(LightweightModule):
                     up_biases=self.up_biases,
                     down_biases=self.down_biases,
                     min_active_tokens=0 if threshold is None else threshold + 1,
+                    weights_tile_transposed=self.weights_tile_transposed,
                 )
             else:
                 # Nobody allocated for us. Match what the composite hands back: one shared
@@ -864,6 +903,8 @@ class TtRoutedExpert(LightweightModule):
         """
         if not self._is_blackhole:
             raise NotImplementedError("the routed expert / combine overlap is Blackhole-only")
+        if self.weights_tile_transposed:
+            raise NotImplementedError("hybrid_routed_expert_moe cannot read tile-transposed weights")
         if dispatched_buffer.layout != ttnn.ROW_MAJOR_LAYOUT or dispatched_buffer.dtype != ttnn.bfloat16:
             raise ValueError(
                 f"the routed expert / combine overlap needs a ROW_MAJOR bfloat16 dispatch buffer, got "

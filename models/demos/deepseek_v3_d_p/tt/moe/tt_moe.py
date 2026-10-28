@@ -215,6 +215,7 @@ class TtMoe(LightweightModule):
         routed_expert_activation=ttnn.RoutedExpertActivation.Silu,
         routed_expert_hybrid_token_threshold=None,
         routed_expert_weights_dram_nd_sharded: Optional[bool] = None,
+        routed_expert_weights_tile_transposed: bool = False,
         shared_expert_activations_dtype=ttnn.bfloat16,
         shared_expert_weights_dtype=ttnn.bfloat8_b,
         shared_expert_activation: str = ACTIVATION_SILU,
@@ -319,6 +320,9 @@ class TtMoe(LightweightModule):
                 both routed-expert ops read a per-core weight slice as one NoC transaction per
                 K-row; interleaved elsewhere. Passed straight through; the cache is placement-
                 agnostic, so this never invalidates one.
+            routed_expert_weights_tile_transposed: store each routed-expert weight tile with its 32x32
+                contents transposed, so bfloat4_b exponents run along K (see TtRoutedExpert). Not
+                combinable with overlap_routed_expert_with_combine.
             overlap_routed_expert_with_combine: run the routed expert and combine_fabric2d as ONE program
                 (hybrid_routed_expert_moe in overlap mode), combine taking each expert as soon as it is
                 written. Blackhole only. Off by default (False): only models that opt in with
@@ -549,6 +553,8 @@ class TtMoe(LightweightModule):
             ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
         )
         overlap_fits = is_blackhole() and ring_axis_wraps and fabric_payload >= overlap_payload
+        # The overlap runs hybrid_routed_expert_moe, which has no transposed-tile path.
+        overlap_fits = overlap_fits and not routed_expert_weights_tile_transposed
         if overlap_routed_expert_with_combine is None:
             overlap_routed_expert_with_combine = overlap_fits
         elif overlap_routed_expert_with_combine and not overlap_fits:
@@ -606,6 +612,7 @@ class TtMoe(LightweightModule):
             activation=routed_expert_activation,
             hybrid_token_threshold=routed_expert_hybrid_token_threshold,
             weights_dram_nd_sharded=routed_expert_weights_dram_nd_sharded,
+            weights_tile_transposed=routed_expert_weights_tile_transposed,
         )
 
         # Initialize shared expert (col axis: axis 1)

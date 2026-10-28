@@ -73,6 +73,7 @@ def run_single_routed_expert(
     weights_dtype=ttnn.bfloat4_b,
     pcc_threshold: float = 0.97,
     min_cap_frac: tuple[float, float] | None = None,
+    weights_tile_transposed: bool = False,
 ):
     """
     Simplest scenario: 1 chip, 1 expert. Shared body for the per-model entrypoints below — they
@@ -235,6 +236,7 @@ def run_single_routed_expert(
         # Both placements are swept explicitly: the module's None default would pick ND-sharded on
         # Blackhole and leave the interleaved path uncovered.
         weights_dram_nd_sharded=weights_dram_sharded,
+        weights_tile_transposed=weights_tile_transposed,
     )
 
     # Run TTNN forward
@@ -513,10 +515,23 @@ _DSV4_CLAMP_CASES = [
     pytest.param(DeepSeekV4FlashConfig, 0.15, ttnn.bfloat4_b, 0.97, _DSV4_FLASH_DEEP_CAP_FRAC, id="flash_deep-bf4"),
 ]
 
+# V4 stores its routed-expert tiles transposed (TtV4Block), so the bf4 rows also run that way: the
+# kernel must transpose them back in the matmul unpack. Same weights and bar as the plain bf4 rows.
+_DSV4_TILE_T_CASES = [
+    pytest.param(DeepSeekV4ProConfig, 0.12, ttnn.bfloat4_b, 0.97, _DSV4_PRO_DEEP_CAP_FRAC, id="pro_deep-bf4-tileT"),
+    pytest.param(
+        DeepSeekV4FlashConfig, 0.15, ttnn.bfloat4_b, 0.97, _DSV4_FLASH_DEEP_CAP_FRAC, id="flash_deep-bf4-tileT"
+    ),
+]
+
 _DSV4_CLAMP_TOKENS = 512
 
 
-@pytest.mark.parametrize("config, weight_scale, weights_dtype, pcc_threshold, min_cap_frac", _DSV4_CLAMP_CASES)
+@pytest.mark.parametrize(
+    "config, weight_scale, weights_dtype, pcc_threshold, min_cap_frac, weights_tile_transposed",
+    [pytest.param(*c.values, False, id=c.id) for c in _DSV4_CLAMP_CASES]
+    + [pytest.param(*c.values, True, id=c.id) for c in _DSV4_TILE_T_CASES],
+)
 # Row-major only: it is what production feeds the routed expert, and it tilizes inside the
 # per-chunk loop, between BINARY_ACT_INIT() and the BINARY_ACT_TILE calls.
 @pytest.mark.parametrize("x_row_major", [True], ids=["x_rm"])
@@ -528,6 +543,7 @@ def test_single_routed_expert_dsv4_clamped(
     weights_dtype,
     pcc_threshold: float,
     min_cap_frac: tuple[float, float],
+    weights_tile_transposed: bool,
     x_row_major: bool,
 ):
     """DeepSeek-V4 routed expert at V4 Pro and V4 Flash dims, with both clamps exercised.
@@ -549,4 +565,5 @@ def test_single_routed_expert_dsv4_clamped(
         weights_dtype=weights_dtype,
         pcc_threshold=pcc_threshold,
         min_cap_frac=min_cap_frac,
+        weights_tile_transposed=weights_tile_transposed,
     )

@@ -1147,6 +1147,10 @@ tt::tt_metal::ProgramDescriptor UnifiedRoutedExpertFfnProgramFactory::create_des
         // the activations that have that branch.
         compute_defines.emplace_back("FUSE_BIAS", "1");
     }
+    if (op.weights_tile_transposed) {
+        // Weight tiles hold their 32x32 contents transposed; the matmul unpack undoes it.
+        compute_defines.emplace_back("IN1_TRANSPOSE_TILE", "1");
+    }
 
     tt::tt_metal::KernelDescriptor compute_kernel_desc;
     compute_kernel_desc.kernel_source =

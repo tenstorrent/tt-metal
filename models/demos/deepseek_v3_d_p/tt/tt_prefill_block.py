@@ -471,6 +471,7 @@ class TtPrefillBlock(LightweightModule):
         routing_use_l1_small_for_semaphores=False,
         is_balanced=False,
         overlap_shared_expert_with_dispatch=True,
+        routed_expert_weights_tile_transposed=False,
     ):
         mesh_config = extract_mesh_config(mesh_device)
         sp_factor = mesh_device.shape[sp_axis]
@@ -523,6 +524,7 @@ class TtPrefillBlock(LightweightModule):
             shared_expert_weights=state_dict.get("shared_expert_weights"),  # None if cache exists
             routed_expert_activations_dtype=routed_expert_activations_dtype,
             routed_expert_weights_dtype=routed_expert_weights_dtype,
+            routed_expert_weights_tile_transposed=routed_expert_weights_tile_transposed,
             # Kimi-K3 is the only config that names one; everything else defaults to SiLU.
             routed_expert_activation=ROUTED_EXPERT_ACTIVATION_BY_NAME[
                 getattr(model_cfg, "ROUTED_EXPERT_ACTIVATION", "silu")
