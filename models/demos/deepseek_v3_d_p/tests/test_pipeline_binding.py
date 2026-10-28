@@ -91,6 +91,7 @@ def test_assemble_puts_host_k_on_ranks_2k_and_2k_plus_1(tmp_path):
     assert ids[5] == ",".join(map(str, range(102, 118)))
     assert "--host host0:2,host1:2,host2:2,host3:2 --map-by slot" in out.read_text()
     assert cfg["global_env"]["PREFILL_SP_AXIS"] == "1"
+    assert cfg["global_env"]["PREFILL_TP_SHARD_KV"] == "0"
 
 
 def test_two_galaxy_binding_needs_its_own_descriptor(tmp_path, expect_error):
