@@ -165,27 +165,33 @@ skus:
       - in-service
     weights-cache-mode: yyz4-mnt-models
 
+  # Exabox Blackhole Galaxy pools are split by power cap so bh_sc* and
+  # bh_sc*_high_power never share a host (tt-orchestration MINFRA-1902):
+  #   exabox-multihost-ci-sc1-8kw   exabox.tenstorrent.com/power=8kw
+  #   exabox-multihost-ci-sc1-14kw  exabox.tenstorrent.com/power=14kw
+  # exabox-multihost-ci-sc1 (no power filter, any galaxy) is not used here on purpose.
   # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
   bh_sc1:
     runs_on:
-      - exabox-multihost-ci-sc1
+      - exabox-multihost-ci-sc1-8kw
 
   # Like bh_sc1, but high-power pool (exabox.tenstorrent.com/power=14kw).
   # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
   bh_sc1_high_power:
     runs_on:
-      - exabox-multihost-ci-sc1-hp
+      - exabox-multihost-ci-sc1-14kw
 
+  # 8kw quad pool; see bh_sc1.
   # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
   bh_sc4:
     runs_on:
-      - exabox-multihost-ci-sc4
+      - exabox-multihost-ci-sc4-8kw
 
   # Like bh_sc4, but high-power pool (exabox.tenstorrent.com/power=14kw).
   # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
   bh_sc4_high_power:
     runs_on:
-      - exabox-multihost-ci-sc4-hp
+      - exabox-multihost-ci-sc4-14kw
 
   # exabox-multihost-ci-* labels mark multihost routing; do not reuse for other runners.
   bh_sc16:
