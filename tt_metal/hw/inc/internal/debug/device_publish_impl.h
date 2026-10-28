@@ -286,7 +286,7 @@ struct Described<PublishTimePayload<kField>> {
 template <auto kLocation, auto kMetadata, typename Payload>
 [[gnu::section(DEVICE_PUBLISH_IDS_SECTION_NAME), maybe_unused]] static char call_site_handle = 0;
 
-template <auto kLocation, auto kMetadata, typename Payload, bool kWholeTime>
+template <auto kLocation, auto kMetadata, typename Payload, bool kSendsToExternalProcess>
 [[gnu::section(DEVICE_PUBLISH_DESCRIPTORS_SECTION_NAME),
   maybe_unused]] static const detail::CallSiteDescriptor call_site_descriptor = {
     .id = &call_site_handle<kLocation, kMetadata, Payload>,
@@ -303,9 +303,10 @@ template <auto kLocation, auto kMetadata, typename Payload, bool kWholeTime>
     .payload_field_count = uint32_t(section_codes<typename Described<Payload>::type>.size()),
     .payload_arguments = section_arguments<typename Described<Payload>::type>.data(),
     .payload_argument_count = uint32_t(section_arguments<typename Described<Payload>::type>.size()),
-    .packet_layouts = section_layouts<Payload, kWholeTime>.data(),
-    .packet_layout_count = uint32_t(section_layouts<Payload, kWholeTime>.size()),
+    .packet_layouts = section_layouts<Payload, kSendsToExternalProcess>.data(),
+    .packet_layout_count = uint32_t(section_layouts<Payload, kSendsToExternalProcess>.size()),
     .payload_publish_time_field = uint32_t(kUnsentLeaf<Payload>),
+    .sends_to_external_process = kSendsToExternalProcess,
 };
 }  // namespace device_observability
 

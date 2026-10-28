@@ -113,6 +113,10 @@ struct Registry {
     std::deque<CallSite> sites;  // a record may hold its site's address for the life of the process
     std::array<std::atomic<const CallSite*>, TT_CALL_SITE_ID_COUNT> by_id{};
     TypeLayouts types;
+    // The ids of the images' call sites whose records go to the external process, in load order.
+    std::vector<uint32_t> ids_sending_to_external_process;
+    std::mutex listener_mutex;  // held through each call, so removing the listener waits out the calls in flight
+    std::function<void()> listener;
 };
 
 Registry& call_site_registry() {
@@ -299,6 +303,7 @@ std::vector<ArgumentField> read_arguments(
         }
         site.arguments.push_back(
             {.type = keep(strings.at(argument.type)),
+             .is_enum = argument.type != 0 && argument.samples == 0,
              .first_field = first_field,
              .is_array = argument.is_array != 0,
              .field_bits = std::move(bits)});
@@ -346,6 +351,7 @@ std::vector<std::pair<uint32_t, CallSite>> read_call_sites(const std::string& el
             .metadata_type = keep(strings.at(descriptor.metadata_type)),
             .payload_codes = contents.read_table<uint16_t>(descriptor.payload_codes, descriptor.payload_field_count),
             .metadata_codes = contents.read_table<uint16_t>(descriptor.metadata_codes, descriptor.metadata_field_count),
+            .sends_to_external_process = descriptor.sends_to_external_process != 0,
             .payload_publish_time_field = descriptor.payload_publish_time_field};
         site.metadata_bits = read_field_bits(
             contents, descriptor.metadata_samples, descriptor.metadata_size, site.metadata_codes, site.metadata_type);
@@ -357,12 +363,14 @@ std::vector<std::pair<uint32_t, CallSite>> read_call_sites(const std::string& el
                 descriptor.payload_arguments, descriptor.payload_argument_count),
             contents,
             strings);
-        // Only data whose Timestamps travel as distances has a full form.
+        // Only a payload whose Timestamps travel as distances has a full form, unless its records go to the external
+        // process too, which are always full and send their Timestamps whole.
         const auto layouts =
             contents.read_table<api::detail::PacketLayout>(descriptor.packet_layouts, descriptor.packet_layout_count);
         site.timestamps_as_distances =
+            !site.sends_to_external_process &&
             std::ranges::find(layouts, api::detail::TimeForm::Full, &api::detail::PacketLayout::time_form) !=
-            layouts.end();
+                layouts.end();
         for (const api::detail::PacketLayout& layout : layouts) {
             site.packet_layouts.push_back(
                 {.time_form = layout.time_form,
@@ -415,11 +423,26 @@ void load_call_sites(const std::string& elf_path, ll_api::ElfFile& elf) {
     elf.RebaseCallSiteIds(base);
 
     std::vector<std::pair<uint32_t, CallSite>> sites = read_call_sites(elf_path, elf);
-    const std::lock_guard lock(registry.mutex);
-    for (auto& [id, site] : sites) {
-        add_site(registry, id, std::move(site));
+    {
+        const std::lock_guard lock(registry.mutex);
+        for (auto& [id, site] : sites) {
+            if (site.sends_to_external_process) {
+                registry.ids_sending_to_external_process.push_back(id);
+            }
+            add_site(registry, id, std::move(site));
+        }
     }
     log_debug(tt::LogLLRuntime, "streaming profiler: '{}' -> call site ids [{}, {})", elf_path, base, base + count);
+    const std::lock_guard listening(registry.listener_mutex);
+    if (registry.listener) {
+        registry.listener();
+    }
+}
+
+void set_call_site_listener(std::function<void()> listener) {
+    Registry& registry = call_site_registry();
+    const std::lock_guard listening(registry.listener_mutex);
+    registry.listener = std::move(listener);
 }
 
 uint32_t add_call_site(CallSite site) {
@@ -443,6 +466,13 @@ uint32_t add_call_site(CallSite site) {
     const uint32_t id = registry.next_id++;
     add_site(registry, id, std::move(site));
     return id;
+}
+
+std::vector<uint32_t> ids_of_call_sites_sending_to_external_process(size_t first) {
+    Registry& registry = call_site_registry();
+    const std::lock_guard lock(registry.mutex);
+    const std::vector<uint32_t>& ids = registry.ids_sending_to_external_process;
+    return std::vector<uint32_t>(ids.begin() + first, ids.end());
 }
 
 const CallSite* find_call_site(uint32_t id) { return call_site_registry().by_id[id].load(std::memory_order_acquire); }

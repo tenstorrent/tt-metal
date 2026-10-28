@@ -722,8 +722,9 @@ private:
     static constexpr bool kFromRegisters = std::is_same_v<Source, RegisterWords<Payload>>;
     static constexpr bool kCopyRuns = !kFromRegisters;
 
+    // A whole-time record, which is always full, sends its Timestamps whole: a distance would take the same 8 bytes.
     template <size_t K>
-    static constexpr bool kIsDistance = kSlices<Payload>[K].is_distance;
+    static constexpr bool kIsDistance = kSlices<Payload>[K].is_distance && !kWholeTime;
 
     // The record being written: where its arguments are, its time, and each slice's Timestamp bits, which are read
     // before anything is written because they choose the form (0 for any other slice, which is read as it is stored).

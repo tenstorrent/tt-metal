@@ -18,6 +18,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <mutex>
 #include <string>
 #include <string_view>
@@ -52,11 +53,16 @@ constexpr std::string_view kNames[] = {"metal", "both"};
 // How far apart the two processes may put a "both" reading on the host's steady clock: each process maps the TSC onto
 // it from samples of its own.
 constexpr int64_t kSteadyAgreementNs = 1000;
+// How many cycles before its record's own time a reading's Timestamp may be: the kernel takes it just before
+// publishing.
+constexpr uint64_t kTakenWithinCycles = 100'000;
 
 // The file the external process creates once it listens, which the Metal process waits for before it opens the
-// device; the one the Metal process creates once it has closed the device; and where the external process leaves
-// what it saw of the "both" readings.
+// device; the one it creates once a "probe" reading reaches it, which the Metal process waits for before it runs
+// the kernel; the one the Metal process creates once it has closed the device; and where the external process
+// leaves what it saw of the "both" readings.
 std::string ready_path(const std::string& path) { return path + ".ready"; }
+std::string attached_path(const std::string& path) { return path + ".attached"; }
 std::string closed_path(const std::string& path) { return path + ".closed"; }
 std::string both_path(const std::string& path) { return path + ".both"; }
 
@@ -92,11 +98,18 @@ struct Readings {
     std::array<uint64_t, 2> counts{};
     uint64_t wrong = 0;
     BothSeen both;
+    bool probed = false;  // a "probe" reading arrived
 
     void add(const api::Record<Reading, Name>& record) {
         const Reading& reading = record.payload();
+        if (record.metadata().name == "probe") {
+            probed = true;
+            return;
+        }
+        const uint64_t taken = reading.taken.device_cycles(), published = record.published_at().device_cycles();
         if (reading.destination > 1 || record.metadata().name != kNames[reading.destination] ||
-            reading.value != reading_value(reading.destination, reading.iteration)) {
+            reading.value != reading_value(reading.destination, reading.iteration) || taken > published ||
+            published - taken > kTakenWithinCycles) {
             wrong++;
             return;
         }
@@ -107,7 +120,7 @@ struct Readings {
     }
 };
 
-// The external process: having no MetalContext, it listens once it registers a callback. With `drain`, it only
+// The external process, which it becomes by registering its callback with external_process set. With `drain`, it only
 // receives, until it is killed.
 int run_reader(const std::string& path, bool drain) {
     Readings readings;
@@ -117,8 +130,12 @@ int run_reader(const std::string& path, bool drain) {
             for (const auto& record : batch.records<api::Record<Reading, Name>>()) {
                 readings.add(record);
             }
+            if (std::exchange(readings.probed, false)) {
+                std::ofstream(attached_path(path)) << 1;
+            }
         },
-        "external-reader");
+        "external-reader",
+        /*external_process=*/true);
     std::ofstream(ready_path(path)) << 1;
     if (drain) {
         while (true) {
@@ -160,13 +177,12 @@ int main(int argc, char** argv) {
         ::execl("/proc/self/exe", argv[0], "--reader", path.c_str(), nullptr);
         ::_exit(127);
     }
-    // Once the external process listens, opening the device connects to it and waits for it to attach.
+    // Once the external process listens, opening the device connects to it.
     wait_for_file(ready_path(path), std::chrono::seconds(120));
     std::remove(ready_path(path).c_str());
 
     auto mesh_device =
         distributed::MeshDevice::create_unit_mesh(0, DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1);
-    // Registered once the device is open, so this process has a MetalContext and doesn't listen as an external process.
     Readings readings;
     uint64_t dispatch_zones = 0;
     auto callback = api::RegisterCallback(
@@ -180,21 +196,31 @@ int main(int argc, char** argv) {
             }
         },
         "external-test");
-    Program program = CreateProgram();
-    const CoreRange cores(CoreCoord{0, 0}, CoreCoord{kGridSide - 1, kGridSide - 1});
-    for (const auto& [processor, noc] : kDmRiscs) {
-        CreateKernel(
-            program,
-            "tests/tt_metal/tools/profiler/kernels/external_dm.cpp",
-            cores,
-            DataMovementConfig{
-                .processor = processor, .noc = noc, .defines = {{"N_ITERS", std::to_string(kIterations) + "u"}}});
-    }
     distributed::MeshCommandQueue& cq = mesh_device->mesh_command_queue();
-    distributed::MeshWorkload workload;
-    workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
-    distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
-    distributed::Finish(cq);
+    const auto run = [&](const std::map<std::string, std::string>& defines) {
+        Program program = CreateProgram();
+        const CoreRange cores(CoreCoord{0, 0}, CoreCoord{kGridSide - 1, kGridSide - 1});
+        for (const auto& [processor, noc] : kDmRiscs) {
+            CreateKernel(
+                program,
+                "tests/tt_metal/tools/profiler/kernels/external_dm.cpp",
+                cores,
+                DataMovementConfig{.processor = processor, .noc = noc, .defines = defines});
+        }
+        distributed::MeshWorkload workload;
+        workload.add_program(distributed::MeshCoordinateRange(mesh_device->shape()), std::move(program));
+        distributed::EnqueueMeshWorkload(cq, workload, /*blocking=*/false);
+        distributed::Finish(cq);
+    };
+    // The external process attaches the relays a moment after the device opens: probe readings go out until one
+    // reaches it.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(120);
+    while (!std::ifstream(attached_path(path)) && std::chrono::steady_clock::now() < deadline) {
+        run({{"PROBE", "1"}});
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+    }
+    std::remove(attached_path(path).c_str());
+    run({{"N_ITERS", std::to_string(kIterations) + "u"}});
     mesh_device->close();
     callback.reset();
     std::ofstream(closed_path(path)) << 1;

@@ -120,15 +120,14 @@ int64_t widen_refclk(std::optional<int64_t>& last, uint32_t lo) {
     return *last;
 }
 
-constexpr size_t kWindowBursts = std::chrono::seconds(1) / kRefclkBurstPeriod;
-// The burst period in root refclk ticks. Host nodes are placed at multiples of it.
-constexpr double kNodeTicks = kernel_profiler::kEthRefclkHz * std::chrono::duration<double>(kRefclkBurstPeriod).count();
 constexpr size_t kMinLineBursts = 3;
 
 }  // namespace
 
-ClockSolver::ClockSolver(const CaptureContext& ctx, const ClockBases& bases) :
+ClockSolver::ClockSolver(const CaptureContext& ctx, const ClockBases& bases, std::chrono::milliseconds burst_period) :
     bases_(bases),
+    window_bursts_(std::max<size_t>(kMinLineBursts, std::chrono::seconds(1) / burst_period)),
+    node_ticks_(kernel_profiler::kEthRefclkHz * std::chrono::duration<double>(burst_period).count()),
     map_(ctx.devices.size(), bases),
     reader_(map_.reader()),
     ctx_(ctx),
@@ -175,14 +174,14 @@ bool ClockSolver::on_refclk_burst(const RefclkBurst& burst) {
         .refclk = static_cast<double>(static_cast<int64_t>(origin.refclk) - bases_.root_refclk) + sum_refclk / kept +
                   kernel_profiler::kRefclkTicksPerUpdate / 2.0,
         .weight = 1.0 / (static_cast<double>(median_rtt) * static_cast<double>(median_rtt))});
-    if (burst_points_.size() > kWindowBursts) {
+    if (burst_points_.size() > window_bursts_) {
         burst_points_.pop_front();
     }
     if (burst_points_.size() < kMinLineBursts) {
         return false;
     }
     const LineFit line = fit_line(burst_points_, &BurstPoint::refclk, &BurstPoint::tsc, &BurstPoint::weight);
-    const double grid_at = std::ceil(burst_points_.back().refclk / kNodeTicks) * kNodeTicks;
+    const double grid_at = std::ceil(burst_points_.back().refclk / node_ticks_) * node_ticks_;
     // The host series maps root refclk ticks to host TSC as a chain of straight segments, one per node. Each burst fits
     // a new line, which gives slightly different host times than the line the current segment was built from. Jumping
     // onto the new line could make host time go backwards. Instead, the new node starts where the current segment ends
@@ -192,26 +191,26 @@ bool ClockSolver::on_refclk_burst(const RefclkBurst& burst) {
         // A node's slope includes a correction meant to last one burst period, until the next burst is due. If this
         // burst is late, a node one period after the previous one, at the line's own slope, ends the correction on
         // time. Otherwise it would keep running until this node and overshoot.
-        const double steered = host_node_->at + kNodeTicks;
+        const double steered = host_node_->at + node_ticks_;
         if (grid_at > steered) {
             host_node_ = HostNode{
-                .at = steered, .value = host_node_->value + host_node_->tangent * kNodeTicks, .tangent = host_rate_};
+                .at = steered, .value = host_node_->value + host_node_->tangent * node_ticks_, .tangent = host_rate_};
             map_.append_host(*host_node_, steered);
         }
         node_at = std::max(grid_at, steered);
         value = host_node_->value + host_node_->tangent * (node_at - host_node_->at);
     }
     // `lead` is how much later the series' host time at node_at is than the new line's, in refclk ticks. When the
-    // series is early (lead < 0), raising the slope by -lead / kNodeTicks catches up in exactly one burst period. When
-    // it is late, lowering the slope by lead / kNodeTicks could take it to zero or below, so the slope is scaled by
-    // kNodeTicks / (kNodeTicks + lead) instead, which stays positive.
+    // series is early (lead < 0), raising the slope by -lead / node_ticks_ catches up in exactly one burst period. When
+    // it is late, lowering the slope by lead / node_ticks_ could take it to zero or below, so the slope is scaled by
+    // node_ticks_ / (node_ticks_ + lead) instead, which stays positive.
     const double lead = (value - line.at(node_at)) / line.slope;
     host_rate_ = line.slope;
     host_node_ = HostNode{
         .at = node_at,
         .value = value,
-        .tangent = line.slope * (lead > 0.0 ? kNodeTicks / (kNodeTicks + lead) : (kNodeTicks - lead) / kNodeTicks)};
-    map_.append_host(*host_node_, node_at + kNodeTicks);
+        .tangent = line.slope * (lead > 0.0 ? node_ticks_ / (node_ticks_ + lead) : (node_ticks_ - lead) / node_ticks_)};
+    map_.append_host(*host_node_, node_at + node_ticks_);
     return true;
 }
 

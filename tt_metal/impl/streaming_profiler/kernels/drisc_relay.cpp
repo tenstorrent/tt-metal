@@ -38,9 +38,9 @@ constexpr uint32_t kShipMinPct = 25;
 // 0 selects direct push: frames go straight from staging to the host FIFO.
 constexpr uint32_t kSpoolBase = get_named_compile_time_arg_val("spool_base");
 constexpr uint32_t kSpoolBytes = get_named_compile_time_arg_val("spool_bytes");
-// The external socket's config; 0 means no external process.
-constexpr uint32_t kExternalConfigAddr = get_named_compile_time_arg_val("external_socket_config_addr");
-constexpr bool kExternal = kExternalConfigAddr != 0;
+// The EndpointControlBlock of the external process's ring; 0 means no external process.
+constexpr uint32_t kExternalEndpointAddr = get_named_compile_time_arg_val("external_endpoint_addr");
+constexpr bool kExternal = kExternalEndpointAddr != 0;
 
 constexpr uint32_t kNumRisc = kernel_profiler::PROFILER_SPSC_TENSIX_RISC;
 static_assert(kNumRisc == 5, "the control scans are unrolled for exactly five RISCs");
@@ -179,8 +179,9 @@ FORCE_INLINE void note_routed(uint32_t at) {
 // A marked frame's first copied piece ends at its second page or at its lanes' first page, whichever is first, and its
 // second piece is its lanes' pages.
 FORCE_INLINE uint32_t marked_head_bytes(uint32_t w0) {
-    const uint32_t first = ((w0 >> kernel_profiler::SPSC_SPAN_ROUTED_FIRST_SHIFT) &
-                            kernel_profiler::SPSC_SPAN_ROUTED_PAGE_MASK) * kPageBytes;
+    const uint32_t first =
+        ((w0 >> kernel_profiler::SPSC_SPAN_ROUTED_FIRST_SHIFT) & kernel_profiler::SPSC_SPAN_ROUTED_PAGE_MASK) *
+        kPageBytes;
     return first < 2u * kPageBytes ? first : 2u * kPageBytes;
 }
 
@@ -266,8 +267,8 @@ struct SpoolPump {
     uint32_t rd_iss_off = 0;  // rd_iss % kSpoolBytes
     uint32_t dma_issued = 0;  // cumulative ship-stream writes: the caller's per-generation completion gate
     uint32_t dma_rd_issued = 0;
-    uint32_t chunks = 0;  // refills so far; also the sequence number the oldest-first ship compares
-    Bounce b[2] = {};
+    uint32_t chunks = 0;      // refills so far; also the sequence number the oldest-first ship compares
+    Bounce b[2];              // a bounce's other fields are set when it refills
     uint32_t notified = 0;    // bytes_sent as the host last saw it
     uint32_t acked_seen = 0;  // the downstream's bytes_acked as last read
     uint32_t level = kLevelIdle;
@@ -276,7 +277,9 @@ struct SpoolPump {
     volatile tt_l1_ptr uint32_t* acked_;  // the downstream's bytes_acked word
 
     explicit SpoolPump(SocketSenderInterface& sender) :
-        sender_(sender), acked_(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender.bytes_acked_base_addr)) {}
+        sender_(sender), acked_(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender.bytes_acked_base_addr)) {
+        b[0].state = b[1].state = kEmpty;
+    }
 
     uint32_t occupancy() const { return static_cast<uint32_t>(wr - rd); }
     bool has_room(uint32_t bytes) const { return kSpoolBytes - occupancy() >= bytes; }
@@ -380,10 +383,10 @@ struct SpoolPump {
         }
     }
 
-    // Walks bounce i's frames from walk_at, for a bounce the walk reaches into, and copies the marked ones' pieces to the
-    // external process from the bounce itself, ahead of the bounce's own push so its write-ack line covers them. Frames
-    // that drain while no external process is attached are passed over. False when the copy would pass the external
-    // notify cap with writes still unacked; the bounce then waits a pass, as it does for its own cap.
+    // Walks bounce i's frames from walk_at, for a bounce the walk reaches into, and copies the marked ones' pieces to
+    // the external process from the bounce itself, ahead of the bounce's own push so its write-ack line covers them.
+    // Frames that drain while no external process is attached are passed over. False when the copy would pass the
+    // external notify cap with writes still unacked; the bounce then waits a pass, as it does for its own cap.
     __attribute__((noinline)) bool ship_routed(uint32_t i) {
         const uint32_t hi = static_cast<uint32_t>(b[i].rd_end);
         if (external != nullptr &&
@@ -391,7 +394,7 @@ struct SpoolPump {
             if (!ncrisc_noc_nonposted_writes_flushed(NOC_INDEX)) {
                 return false;
             }
-            notify_external(*external);
+            notify_now();
         }
         // The drain DMA wrote the bounce behind the cache.
         invalidate_l1_cache();
@@ -440,9 +443,11 @@ struct SpoolPump {
                 staged_store_fence();
                 head_end = at + marked_head_bytes(w0);
                 span = at + ((w0 >> kernel_profiler::SPSC_SPAN_ROUTED_FIRST_SHIFT) &
-                             kernel_profiler::SPSC_SPAN_ROUTED_PAGE_MASK) * kPageBytes;
+                             kernel_profiler::SPSC_SPAN_ROUTED_PAGE_MASK) *
+                                kPageBytes;
                 span_end = at + ((w0 >> kernel_profiler::SPSC_SPAN_ROUTED_END_SHIFT) &
-                                 kernel_profiler::SPSC_SPAN_ROUTED_PAGE_MASK) * kPageBytes;
+                                 kernel_profiler::SPSC_SPAN_ROUTED_PAGE_MASK) *
+                                    kPageBytes;
             } else if (!marked) {
                 // The rest of an unmarked frame the last bounce cut off.
                 at = static_cast<int32_t>(end - hi) < 0 ? end : hi;
@@ -585,8 +590,8 @@ struct GatherRegs {
     uint32_t send;
 };
 FORCE_INLINE GatherRegs gather_regs() {
-    volatile uint32_t* base = reinterpret_cast<volatile uint32_t*>(
-        NOC_REGS_START_ADDR + NOC_CMD_BUF_INSTANCE_OFFSET(kReadNoc, read_cmd_buf));
+    volatile uint32_t* base =
+        reinterpret_cast<volatile uint32_t*>(NOC_REGS_START_ADDR + NOC_CMD_BUF_INSTANCE_OFFSET(kReadNoc, read_cmd_buf));
     uint32_t send = NOC_CTRL_SEND_REQ;
     asm("" : "+r"(base), "+r"(send));
     return {base, send};
@@ -829,7 +834,7 @@ static FORCE_INLINE void finish(SpoolPump& pump, SocketSenderInterface& sender) 
     }
     pump.notify();
     if constexpr (kExternal) {
-        relay_ctrl()->external.copied = external_copied;
+        relay_ctrl()->external_frames = external_copied;
     }
     relay_ctrl()->done = kernel_profiler::kResidentAwaitingAcksWord;
     socket_barrier(sender);
@@ -849,13 +854,13 @@ static FORCE_INLINE void finish(SpoolPump& pump, SocketSenderInterface& sender) 
 // Per generation, the slots mark_routed marked, bit i for slot i, for their emit.
 static uint8_t routed_marked[kNGens];
 
-// Marks each frame of the slots in `changed` (bit i for slot i) of the batch just gathered that holds a routed record the
-// relay hasn't marked yet: word 0 gets the lanes holding them, whose runs the pump finds after the spool. A record at or
-// past its lane's tail isn't in this frame yet and leaves its halfword unmarked, so the core's next frame is marked for
-// it. With no external process attached, the routed halfwords are taken as marked. The
-// routed halfwords come from the core's record, which a deferred tail refresh may already have moved past the frame; the
-// tails come from the record too, unless `refreshed` says the batch's own refresh was deferred, when they come from the
-// frame's control block. Returns the marked slots.
+// Marks each frame of the slots in `changed` (bit i for slot i) of the batch just gathered that holds a routed record
+// the relay hasn't marked yet: word 0 gets the lanes holding them, whose runs the pump finds after the spool. A record
+// at or past its lane's tail isn't in this frame yet and leaves its halfword unmarked, so the core's next frame is
+// marked for it. With no external process attached, the routed halfwords are taken as marked. The routed halfwords come
+// from the core's record, which a deferred tail refresh may already have moved past the frame; the tails come from the
+// record too, unless `refreshed` says the batch's own refresh was deferred, when they come from the frame's control
+// block. Returns the marked slots.
 __attribute__((noinline)) static uint32_t mark_routed(
     bool attached, const uint8_t* cores, uint32_t changed, uint32_t gen, bool refreshed) {
     uint32_t marked = 0;
@@ -882,8 +887,8 @@ __attribute__((noinline)) static uint32_t mark_routed(
             invalidate_l1_cache();
             tails = frame + kPrefixWords + kernel_profiler::SPSC_WIRE_TAIL_0;
         }
-        // Lane r is halfword r % 2 of word r / 2. A moved halfword whose record is in this frame is marked; one at or past
-        // its lane's tail waits for the core's next frame.
+        // Lane r is halfword r % 2 of word r / 2. A moved halfword whose record is in this frame is marked; one at or
+        // past its lane's tail waits for the core's next frame.
         uint32_t last0 = last[0], last1 = last[1], last2 = last[2];
         uint32_t moved = 0;
         const auto lane = [&](uint32_t r, uint32_t now, uint32_t& last_word) __attribute__((always_inline)) {
@@ -906,7 +911,8 @@ __attribute__((noinline)) static uint32_t mark_routed(
         last[1] = last1;
         last[2] = last2;
         if (moved != 0) {
-            frame[0] = kernel_profiler::spsc_span_w0() | kernel_profiler::SPSC_SPAN_TO_EXTERNAL | moved << kRoutedLaneShift;
+            frame[0] =
+                kernel_profiler::spsc_span_w0() | kernel_profiler::SPSC_SPAN_TO_EXTERNAL | moved << kRoutedLaneShift;
             marked |= 1u << i;
         }
     }
@@ -1118,15 +1124,11 @@ void kernel_main() {
 
     SocketSenderInterface sender = create_sender_socket_interface(kSocketConfigAddr);
     set_sender_socket_page_size(sender, kPageBytes);
-    // The external socket's config is the host's to write while the relay runs: it follows relay_ctrl()->external.
-    SocketSenderInterface external{};
+    // The external process fills in its endpoint's control block while the relay runs, and the relay follows it.
+    SocketSenderInterface external;
     uint32_t external_attach = 0;
-    if constexpr (kExternal) {
-        external_copied = 0;
-        routed_marked[0] = routed_marked[1] = 0;
-        routed_pending = 0;
-        relay_ctrl()->external.attached = 0;
-    }
+    [[maybe_unused]] volatile tt_l1_ptr kernel_profiler::EndpointControlBlock* endpoint =
+        reinterpret_cast<volatile tt_l1_ptr kernel_profiler::EndpointControlBlock*>(kExternalEndpointAddr);
 
     volatile tt_l1_ptr uint32_t* stop = &relay_ctrl()->stop;
     // The host's launch check polls this; a DRISC that never leaves reset would otherwise wedge every producer
@@ -1135,13 +1137,10 @@ void kernel_main() {
 
     zero_stage_prefixes();
 
-    // Statics persist across launches, so everything the loop trusts is re-initialised.
-    n_list = 0;
+    // _start zeroes the statics on every launch; these start nonzero.
     n_probe = num_cores;
-    acked_seen = 0;
     for (uint32_t i = 0; i < num_cores; i++) {
         probe_list[i] = static_cast<uint8_t>(i);
-        deferred[i] = 0;
     }
     seed_heads(num_cores, coords, tails_seen);
     if constexpr (kExternal) {
@@ -1180,13 +1179,13 @@ void kernel_main() {
         sweeps++;
         *heartbeat = sweeps;
         if constexpr (kExternal) {
-            const uint32_t attach = relay_ctrl()->external.attach;
+            const uint32_t attach = endpoint->ring_write_enable;
             if (attach != external_attach) {
                 // Every copy has landed before the external process may free the buffer it went to.
                 while (!ncrisc_noc_nonposted_writes_flushed(NOC_INDEX)) {
                 }
                 if (attach != 0) {
-                    external = create_sender_socket_interface(kExternalConfigAddr);
+                    point_socket_at(external, kExternalEndpointAddr, sender);
                     set_sender_socket_page_size(external, kPageBytes);
                     external_notified = 0;
                     external_whole = 0;
@@ -1195,7 +1194,7 @@ void kernel_main() {
                 routed_pending = 0;
                 external_attach = attach;
                 pump.external = attach != 0 ? &external : nullptr;
-                relay_ctrl()->external.attached = attach;
+                endpoint->ring_write_enable_acknowledged = attach;
             }
         }
         const uint32_t relieved_at_sweep_start = relieved;
@@ -1229,7 +1228,8 @@ void kernel_main() {
                 if constexpr (kSpool) {
                     // Stream completion is FIFO, so outstanding <= later-issues means this generation retired.
                     const uint32_t since = pump.dma_issued - gen_dma_mark[g];
-                    const uint32_t cap = since > experimental::kMaxOutstandingWrites ? experimental::kMaxOutstandingWrites : since;
+                    const uint32_t cap =
+                        since > experimental::kMaxOutstandingWrites ? experimental::kMaxOutstandingWrites : since;
                     while (experimental::dma_get_writes_outstanding(kDmaShip) > cap) {
                     }
                 } else {
@@ -1335,7 +1335,8 @@ void kernel_main() {
                     routed_marked[gen] =
                         routed_changed == 0
                             ? 0u
-                            : mark_routed(external_attach != 0, &ship_list[cur - n], (1u << n) - 1u, gen, defer_nn != 0);
+                            : mark_routed(
+                                  external_attach != 0, &ship_list[cur - n], (1u << n) - 1u, gen, defer_nn != 0);
                 }
 
                 pend_n = n;

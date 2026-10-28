@@ -40,6 +40,21 @@ target_sources(
         ${API_GENERATED_HEADERS}
 )
 
+# The streaming profiler's messages to the external process.
+include(protobuf)
+GENERATE_PROTO_FILES(
+    ${CMAKE_CURRENT_SOURCE_DIR}/impl/streaming_profiler/protobuf/external_process.proto
+    OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/streaming_profiler
+)
+target_sources(tt_metal PRIVATE ${PROTO_SRCS})
+set_source_files_properties(
+    ${PROTO_SRCS}
+    PROPERTIES
+        SKIP_UNITY_BUILD_INCLUSION
+            TRUE
+)
+target_include_directories(tt_metal SYSTEM PRIVATE ${CMAKE_CURRENT_BINARY_DIR}/streaming_profiler)
+
 # clang-tidy reads configuration relative to the generated translation unit,
 # not the included header. Overlay the API checks only for this verification
 # target; the parent build directory's .clang-tidy supplies the normal checks.
@@ -117,6 +132,7 @@ target_link_libraries(
         ${EXECINFO_LIB}
     PRIVATE
         Metalium::Metal::Impl
+        protobuf::libprotobuf
         metal_common_libs
         common
         jit_build

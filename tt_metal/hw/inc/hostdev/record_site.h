@@ -82,6 +82,8 @@ struct CallSiteDescriptor {
     SectionAddress<PacketLayout> packet_layouts;  // one per form its records take, shortest first
     uint32_t packet_layout_count;
     uint32_t payload_publish_time_field;  // the payload field that is the record's publish time and isn't sent
+    // 1 when the call site's records go to the external process too: they are always full, and their Timestamps whole.
+    uint32_t sends_to_external_process;
 };
 
 // A CallSiteDescriptor's payload_publish_time_field when no field is the record's publish time.
@@ -99,7 +101,7 @@ struct StringEntry {
 static_assert(sizeof(ArgumentSlice) == 4 * sizeof(uint16_t));
 static_assert(sizeof(CallArgument) == 6 * sizeof(uint32_t));
 static_assert(sizeof(PacketLayout) == 4 * sizeof(uint32_t));
-static_assert(sizeof(CallSiteDescriptor) == 18 * sizeof(uint32_t));
+static_assert(sizeof(CallSiteDescriptor) == 20 * sizeof(uint32_t));
 static_assert(sizeof(StringEntry) == 4 * sizeof(uint32_t));
 
 // A value's size on the device, which is also its alignment.
