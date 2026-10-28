@@ -522,8 +522,7 @@ private:
     static constexpr unsigned GENERATION_SHIFT = 32;
     static constexpr uint64_t LOW_HALF = (uint64_t{1} << GENERATION_SHIFT) - 1;
 
-    // (generation << 32) | holders: the caller that acquired the job and the workers taking part.
-    std::atomic<uint64_t> state_ = 0;
+    std::atomic<uint64_t> state_ = 0;  // (generation << 32) | holders: the acquiring caller and workers taking part.
     uint32_t generation_ = 0;  // Of the current use, as published; set by the caller on acquire, read by holders.
     uint64_t use_ = 0;         // Counts the job's uses, for claims; set by the caller on acquire, read by holders.
     const uint32_t slot_;
