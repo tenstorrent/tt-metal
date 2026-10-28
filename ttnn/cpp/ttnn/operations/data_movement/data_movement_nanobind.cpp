@@ -19,6 +19,7 @@
 #include "ttnn/operations/data_movement/fill_rm/fill_rm_nanobind.hpp"
 #include "ttnn/operations/data_movement/fold/fold_nanobind.hpp"
 #include "ttnn/operations/data_movement/pixel_unshuffle/pixel_unshuffle_nanobind.hpp"
+#include "ttnn/operations/data_movement/pixel_shuffle/pixel_shuffle_nanobind.hpp"
 #include "ttnn/operations/data_movement/indexed_fill/indexed_fill_nanobind.hpp"
 #include "ttnn/operations/data_movement/moe_expert_token_remap/moe_expert_token_remap_nanobind.hpp"
 #include "ttnn/operations/data_movement/moe_routing_remap/moe_routing_remap_nanobind.hpp"
@@ -58,6 +59,7 @@ void py_module(nb::module_& mod) {
     bind_fill_rm(mod);
     bind_fold_operation(mod);
     bind_pixel_unshuffle(mod);
+    bind_pixel_shuffle(mod);
     bind_non_zero_indices(mod);
     clone::bind_clone_operation(mod);
     detail::bind_concat(mod);

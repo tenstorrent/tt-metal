@@ -35,6 +35,7 @@ file(
     pad/device/kernels/*.hpp
     permute/device/kernels/*.cpp
     pixel_unshuffle/device/kernels/*.cpp
+    pixel_shuffle/device/kernels/*.cpp
     reshape_on_device/device/kernels/*.cpp
     repeat/device/kernels/*.cpp
     roll/device/kernels/*.cpp
@@ -174,6 +175,10 @@ target_sources(
             # permute/
             permute/permute_nanobind.hpp
             permute/device/permute_device_operation.hpp
+            # pixel_shuffle/
+            pixel_shuffle/pixel_shuffle.hpp
+            pixel_shuffle/pixel_shuffle_nanobind.hpp
+            pixel_shuffle/device/pixel_shuffle_device_op.hpp
             # pixel_unshuffle/
             pixel_unshuffle/pixel_unshuffle.hpp
             pixel_unshuffle/pixel_unshuffle_nanobind.hpp
