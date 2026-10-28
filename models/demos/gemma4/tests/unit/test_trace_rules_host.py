@@ -127,14 +127,10 @@ def test_release_drops_every_trace_and_resets_sampling(monkeypatch):
     assert g._g4_trace_alloc_baseline == {}
     assert g._g4_recapture_without_precompile  # the live request's sampler state must not be touched
     assert g._prev_decode_batch == 128
-
-
-def test_a_release_the_decode_warmup_caused_is_logged_at_info(monkeypatch):
+    # With nothing left to drop, a release the decode warmup caused is logged at INFO (the wider bucket grows
+    # the tables the first bucket allocated); a serving-time release stays a WARNING.
     import models.demos.gemma4.tt.generator as generator_module
 
-    levels = {ttnn.BufferType.DRAM: 1000, ttnn.BufferType.L1: 10}
-    g = _guard(monkeypatch, levels)
-    g.model[0].sampling.reset_trace = lambda: None
     logged = []
     for level in ("info", "warning"):
         monkeypatch.setattr(

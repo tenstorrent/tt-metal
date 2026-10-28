@@ -278,6 +278,25 @@ def _warmup_instance(bridge, monkeypatch, *, lanes_fail_at=None, vision_fails=Fa
     return inst, calls
 
 
+def _realloc_instance(bridge, monkeypatch, *, traces):
+    """A bridge instance whose model raised the realloc flag; the trace release and the logger are recorders."""
+    inst = object.__new__(bridge.Gemma4ForCausalLM)
+    inst.model = [
+        SimpleNamespace(
+            _invalidate_decode_traces_after_page_table_realloc=True,
+            _g4_page_table_realloc_reason="new batch key 32 (keys [1])",
+        )
+    ]
+    releases = []
+    inst._g4_release_decode_traces = lambda reason, *, in_warmup=False: releases.append((reason, in_warmup)) or traces
+    logged = {"info": [], "warning": [], "error": []}
+    for level in logged:
+        monkeypatch.setattr(
+            bridge.logger, level, lambda message, *a, _l=level, **k: logged[_l].append(str(message).format(*a))
+        )
+    return inst, releases, logged
+
+
 def test_failed_lane_group_warmup_turns_the_router_off(bridge, monkeypatch):
     inst, calls = _warmup_instance(bridge, monkeypatch, lanes_fail_at=1, bounded=False)
     bridge.Gemma4ForCausalLM.warmup_model_prefill(inst, [object()], enable_trace=True, can_sample_on_device=False)
@@ -302,6 +321,66 @@ def test_failed_lane_batched_warmup_turns_the_batched_walks_off(bridge, monkeypa
     inst, calls = _warmup_instance(bridge, monkeypatch, bounded=False)
     bridge.Gemma4ForCausalLM.warmup_model_prefill(inst, [object()], enable_trace=True, can_sample_on_device=False)
     assert any(k > 1 for k, _ in calls["captures"]) and bridge.Gemma4ForCausalLM._g4_lane_batched_walks(inst)
+
+    # -- a page-table buffer realloc inside the decode warmup is warmup, not a serving-time event --------------
+    # The wider bucket grows the buffers the first bucket allocated, in either warmup pass: INFO, no ERROR.
+    for eager_pass_done in (False, True):
+        inst, releases, logged = _realloc_instance(bridge, monkeypatch, traces=0)
+        inst._decode_warmup_complete = eager_pass_done
+        inst._g4_decode_warmup_active = True
+        inst._g4_note_page_table_realloc()
+        assert releases == [
+            ("per-layer page-table buffer realloc (new batch key 32 (keys [1]); addresses changed)", True)
+        ]
+        assert logged["error"] == [] and logged["warning"] == []
+        assert logged["info"] == [
+            "Gemma4 vLLM: decode warmup grew the per-layer page tables (new batch key 32 (keys [1])); 0 trace(s) dropped"
+        ]
+        assert inst.model[0]._invalidate_decode_traces_after_page_table_realloc is False
+    # after the warmup, a realloc that released a trace is an error
+    inst, releases, logged = _realloc_instance(bridge, monkeypatch, traces=1)
+    inst._decode_warmup_complete = True
+    inst._g4_decode_warmup_active = False
+    inst._g4_note_page_table_realloc()
+    assert releases[0][1] is False
+    assert logged["info"] == [] and logged["warning"] == []
+    assert len(logged["error"]) == 1
+    assert "cleared 1 decode trace(s)" in logged["error"][0] and "AFTER WARMUP" in logged["error"][0]
+    # after the warmup, a realloc with nothing captured is a warning
+    inst, releases, logged = _realloc_instance(bridge, monkeypatch, traces=0)
+    inst._decode_warmup_complete = True
+    inst._g4_decode_warmup_active = False
+    inst._g4_note_page_table_realloc()
+    assert releases[0][1] is False
+    assert logged["error"] == [] and logged["info"] == []
+    assert logged["warning"] == [
+        "Gemma4 vLLM: per-layer page-table buffer realloc (new batch key 32 (keys [1]); addresses changed); 0 decode trace(s) released"
+    ]
+    # no realloc flag: no release and no log
+    inst, releases, logged = _realloc_instance(bridge, monkeypatch, traces=1)
+    inst.model[0]._invalidate_decode_traces_after_page_table_realloc = False
+    inst._decode_warmup_complete = True
+    inst._g4_note_page_table_realloc()
+    assert releases == [] and not any(logged.values())
+
+    # -- the decode warmup completes only after its last bucket ----------------------------------------------
+    # Every bucket runs with the warmup marked active and not yet complete; the marker flips at the end.
+    inst = object.__new__(bridge.Gemma4ForCausalLM)
+    inst.model = [SimpleNamespace(mesh_config=SimpleNamespace(lane_sharded=False), sampling=None)]
+    monkeypatch.setenv("GEMMA4_DECODE_WARMUP_BATCHES", "1,32")
+    seen = []
+
+    def bucket(self, *, max_batch_size, **kwargs):
+        seen.append((max_batch_size, self._g4_decode_warmup_active, self._decode_warmup_complete))
+
+    parent = next(c for c in bridge.Gemma4ForCausalLM.__mro__[1:] if "warmup_model_decode" in c.__dict__)
+    monkeypatch.setattr(parent, "warmup_model_decode", bucket)
+    inst.warmup_model_decode(
+        kv_cache=None, enable_trace=False, max_batch_size=32, num_blocks=8, can_sample_on_device=True
+    )
+    assert seen == [(1, True, False), (32, True, False)]
+    assert inst._decode_warmup_complete is True and inst._g4_decode_warmup_active is False
+    assert inst.tt_supported_decode_batch_sizes == (1, 32)
 
 
 def test_failed_vision_warmup_refuses_multimodal_inputs_on_a_text_class(bridge, monkeypatch, expect_error):
@@ -553,91 +632,3 @@ def test_prefill_forward_without_metadata_or_payloads_stays_text(bridge, monkeyp
         page_tables_per_layer=[_row(range(1, 20))] * 2,
     )
     assert recorded["start_pos"] == [896] and recorded["pixel_values"] == [[None]] and encoded == []
-
-
-# ── a page-table buffer realloc inside the decode warmup is warmup, not a serving-time event ────────────────────
-
-
-def _realloc_instance(bridge, monkeypatch, *, traces):
-    """A bridge instance whose model raised the realloc flag; the trace release and the logger are recorders."""
-    inst = object.__new__(bridge.Gemma4ForCausalLM)
-    inst.model = [
-        SimpleNamespace(
-            _invalidate_decode_traces_after_page_table_realloc=True,
-            _g4_page_table_realloc_reason="new batch key 32 (keys [1])",
-        )
-    ]
-    releases = []
-    inst._g4_release_decode_traces = lambda reason, *, in_warmup=False: releases.append((reason, in_warmup)) or traces
-    logged = {"info": [], "warning": [], "error": []}
-    for level in logged:
-        monkeypatch.setattr(
-            bridge.logger, level, lambda message, *a, _l=level, **k: logged[_l].append(str(message).format(*a))
-        )
-    return inst, releases, logged
-
-
-@pytest.mark.parametrize("eager_pass_done", [False, True], ids=["eager-pass", "trace-pass"])
-def test_a_page_table_realloc_during_the_decode_warmup_is_informational(bridge, monkeypatch, eager_pass_done):
-    """The wider bucket grows the buffers the first bucket allocated, in either warmup pass: INFO, no ERROR."""
-    inst, releases, logged = _realloc_instance(bridge, monkeypatch, traces=0)
-    inst._decode_warmup_complete = eager_pass_done
-    inst._g4_decode_warmup_active = True
-    inst._g4_note_page_table_realloc()
-    assert releases == [("per-layer page-table buffer realloc (new batch key 32 (keys [1]); addresses changed)", True)]
-    assert logged["error"] == [] and logged["warning"] == []
-    assert logged["info"] == [
-        "Gemma4 vLLM: decode warmup grew the per-layer page tables (new batch key 32 (keys [1])); 0 trace(s) dropped"
-    ]
-    assert inst.model[0]._invalidate_decode_traces_after_page_table_realloc is False
-
-
-def test_a_page_table_realloc_after_the_warmup_that_released_a_trace_is_an_error(bridge, monkeypatch):
-    inst, releases, logged = _realloc_instance(bridge, monkeypatch, traces=1)
-    inst._decode_warmup_complete = True
-    inst._g4_decode_warmup_active = False
-    inst._g4_note_page_table_realloc()
-    assert releases[0][1] is False
-    assert logged["info"] == [] and logged["warning"] == []
-    assert len(logged["error"]) == 1
-    assert "cleared 1 decode trace(s)" in logged["error"][0] and "AFTER WARMUP" in logged["error"][0]
-
-
-def test_a_page_table_realloc_after_the_warmup_with_nothing_captured_is_a_warning(bridge, monkeypatch):
-    inst, releases, logged = _realloc_instance(bridge, monkeypatch, traces=0)
-    inst._decode_warmup_complete = True
-    inst._g4_decode_warmup_active = False
-    inst._g4_note_page_table_realloc()
-    assert releases[0][1] is False
-    assert logged["error"] == [] and logged["info"] == []
-    assert logged["warning"] == [
-        "Gemma4 vLLM: per-layer page-table buffer realloc (new batch key 32 (keys [1]); addresses changed); 0 decode trace(s) released"
-    ]
-
-
-def test_no_realloc_flag_means_no_release_and_no_log(bridge, monkeypatch):
-    inst, releases, logged = _realloc_instance(bridge, monkeypatch, traces=1)
-    inst.model[0]._invalidate_decode_traces_after_page_table_realloc = False
-    inst._decode_warmup_complete = True
-    inst._g4_note_page_table_realloc()
-    assert releases == [] and not any(logged.values())
-
-
-def test_the_decode_warmup_completes_only_after_its_last_bucket(bridge, monkeypatch):
-    """Every bucket runs with the warmup marked active and not yet complete; the marker flips at the end."""
-    inst = object.__new__(bridge.Gemma4ForCausalLM)
-    inst.model = [SimpleNamespace(mesh_config=SimpleNamespace(lane_sharded=False), sampling=None)]
-    monkeypatch.setenv("GEMMA4_DECODE_WARMUP_BATCHES", "1,32")
-    seen = []
-
-    def bucket(self, *, max_batch_size, **kwargs):
-        seen.append((max_batch_size, self._g4_decode_warmup_active, self._decode_warmup_complete))
-
-    parent = next(c for c in bridge.Gemma4ForCausalLM.__mro__[1:] if "warmup_model_decode" in c.__dict__)
-    monkeypatch.setattr(parent, "warmup_model_decode", bucket)
-    inst.warmup_model_decode(
-        kv_cache=None, enable_trace=False, max_batch_size=32, num_blocks=8, can_sample_on_device=True
-    )
-    assert seen == [(1, True, False), (32, True, False)]
-    assert inst._decode_warmup_complete is True and inst._g4_decode_warmup_active is False
-    assert inst.tt_supported_decode_batch_sizes == (1, 32)

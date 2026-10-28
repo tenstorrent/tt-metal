@@ -21,6 +21,7 @@ from types import SimpleNamespace
 
 import torch
 
+from models.demos.gemma4.tests.unit.conftest import install_base_stubs
 from models.demos.gemma4.tests.unit.dflash_contract_harness import DeviceResult, _sampling, _table, _tensor
 from models.demos.gemma4.tests.unit.dflash_sampling_harness import attach_sampling_state
 
@@ -340,11 +341,11 @@ def build_mtp_model(adapter, monkeypatch, *, ring=None, max_batch_size=32, max_s
     def base_warmup(self, *args, **kwargs):
         model.events.append(("base_warmup", kwargs.get("enable_trace")))
 
-    base = adapter.Gemma4ForCausalLM
-    monkeypatch.setattr(base, "prefill_forward", prefill)
-    monkeypatch.setattr(base, "decode_forward", decode)
-    monkeypatch.setattr(base, "read_decode_output", read, raising=False)
-    monkeypatch.setattr(base, "warmup_model_decode", base_warmup)
+    install_base_stubs(adapter, monkeypatch)
+    model._harness_prefill_forward = prefill
+    model._harness_decode_forward = decode
+    model._harness_read_decode_output = read
+    model._harness_warmup_model_decode = base_warmup
     if warm:
         install_decoder(model)
     return model
@@ -473,6 +474,36 @@ def _names(model, kind):
     return [event for event in model.events if event[0] == kind]
 
 
+def _steps(model):
+    return _names(model, "step")
+
+
+def _wire(model, live_rows, anchors, positions, keys, total, result, **kwargs):
+    """An ordinary step over ``total`` wire rows with the given live rows (-1 positions elsewhere)."""
+    toks = [0] * total
+    poss = [-1] * total
+    ks = [0] * total
+    for r, a, p, key in zip(live_rows, anchors, positions, keys):
+        toks[r], poss[r], ks[r] = a, p, key
+    return _ordinary(model, toks, poss, ks, result=result, **kwargs)
+
+
+def _committed(total, live_rows, anchors, positions):
+    """The committed-token and position blocks of a proposal: one anchor per live row, -1 elsewhere."""
+    committed = [[-1] * 6 for _ in range(total)]
+    posits = [[-1] * 6 for _ in range(total)]
+    for r, a, p in zip(live_rows, anchors, positions):
+        committed[r] = [a] + [-1] * 5
+        posits[r] = [p] + [-1] * 5
+    return committed, posits
+
+
+def _warmup(model, enable_trace):
+    model.warmup_model_decode(
+        kv_cache=model.kv_cache, enable_trace=enable_trace, max_batch_size=32, num_blocks=8, can_sample_on_device=True
+    )
+
+
 __all__ = [
     "DEFAULT_SHAPES",
     "Decoder",
@@ -483,6 +514,7 @@ __all__ = [
     "VOCAB",
     "_block",
     "_commands",
+    "_committed",
     "_ladder",
     "_names",
     "_ordinary",
@@ -491,9 +523,12 @@ __all__ = [
     "_propose",
     "_sampling",
     "_start_solo",
+    "_steps",
     "_table",
     "_tensor",
     "_verify",
+    "_warmup",
+    "_wire",
     "build_mtp_model",
     "install_decoder",
     "logits_result",

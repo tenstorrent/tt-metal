@@ -319,6 +319,30 @@ def drafter_module():
         yield _fresh_import(patch, "models.demos.gemma4.tt.dflash_drafter")
 
 
+def _base_stub(name):
+    """The base-class entry point ``name`` routed to the instance's own ``_harness_<name>`` stub."""
+
+    def call(self, *args, **kwargs):
+        stub = self.__dict__.get("_harness_" + name)
+        assert stub is not None, f"{type(self).__name__} has no harness stub for {name}"
+        return stub(self, *args, **kwargs)
+
+    call.__name__ = name
+    return call
+
+
+def install_base_stubs(adapter, monkeypatch):
+    """Route the base ``Gemma4ForCausalLM`` serving entry points to per-instance recorders.
+
+    The contract classes reach the plain prefill / decode / read / warmup through the base class, so the
+    stubs live on it; dispatching on the instance lets a dFlash model and an MTP model built in the same
+    test keep their own recorders (each harness sets ``model._harness_<name>``).
+    """
+    base = adapter.Gemma4ForCausalLM
+    for name in ("prefill_forward", "decode_forward", "read_decode_output", "warmup_model_decode"):
+        monkeypatch.setattr(base, name, _base_stub(name), raising=False)
+
+
 def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,), cls=None):
     """A contract-rail model over recording stubs, after a solo-capable warmup.
 
@@ -434,10 +458,10 @@ def build_model(adapter, monkeypatch, *, ring=None, widths=(1024,), cls=None):
         model.events.append(("read", bool(async_read)))
         return [tt_out]
 
-    base = adapter.Gemma4ForCausalLM
-    monkeypatch.setattr(base, "prefill_forward", prefill)
-    monkeypatch.setattr(base, "decode_forward", decode)
-    monkeypatch.setattr(base, "read_decode_output", read, raising=False)
+    install_base_stubs(adapter, monkeypatch)
+    model._harness_prefill_forward = prefill
+    model._harness_decode_forward = decode
+    model._harness_read_decode_output = read
     model.tap_counter = [0]
 
     def harness_taps(rows, group):
