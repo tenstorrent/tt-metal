@@ -203,7 +203,7 @@ private:
     // before the rest of the mesh shutdown so its receiver thread observes a live device.
     std::unique_ptr<RealtimeProfilerManager> realtime_profiler_;
 
-    // Constructed by init_streaming_profiler() when TT_METAL_STREAMING_PROFILER is set; torn down in
+    // Constructed by init_streaming_profiler() when device observability is on; torn down in
     // close_impl().
     std::unique_ptr<streaming_profiler::Receiver> streaming_profiler_;
 

@@ -102,14 +102,14 @@ uint32_t get_profiler_dram_bank_size_for_hal_allocation(llrt::RunTimeOptions& rt
     // The size of each buffer returned by get_profiler_dram_bank_size_per_risc_bytes is half to maintain the same
     // total profiler size.
     const uint32_t device_profiler_bytes = debug_dump_enabled ? per_buffer_size * 2 : per_buffer_size;
-    if (!rtoptions.get_streaming_profiler_enabled()) {
+    if (!rtoptions.get_device_observability_enabled()) {
         return device_profiler_bytes;
     }
-    // The streaming profiler's GDDR spool takes over the device profiler's DRAM slot (the two are mutually
+    // Device observability's GDDR spool takes over the device profiler's DRAM slot (the two are mutually
     // exclusive). The Blackhole HAL sizes that slot as this per-RISC value x 5 RISCs x 20 cores per DRAM channel,
     // so it is handed the spool's per-RISC share; reserve_spool() checks the resulting slot at boot.
     constexpr uint32_t kBlackholeRiscsPerDramChannel = 5 * 20;
-    return div_up(rtoptions.get_streaming_profiler_spool_mb() << 20, kBlackholeRiscsPerDramChannel);
+    return div_up(rtoptions.get_device_observability_spool_mb() << 20, kBlackholeRiscsPerDramChannel);
 }
 
 ProfilerStateManager::ProfilerStateManager(MetalContext& ctx) :
@@ -293,10 +293,10 @@ void ProfilerStateManager::start_debug_dump_thread(
                     auto profiler_it = this->device_profiler_map.find(device->id());
                     TT_ASSERT(profiler_it != this->device_profiler_map.end());
                     DeviceProfiler& profiler = profiler_it->second;
-                    // The kernels are done, but BRISC publishes a core's last chunks in finish_profiler only after it
+                    // The kernels are done, but BRISC publishes a core's last chunks in end_launch only after it
                     // has reported completion to dispatch, and stalls there if a buffer is full, so chunks can still
                     // land while this read runs. Poll again until a poll finds nothing new. Only BRISC and NCRISC
-                    // record NOC events, finish_profiler pushes them first, and each stalls at most once, so 4 polls
+                    // record NOC events, end_launch pushes them first, and each stalls at most once, so 4 polls
                     // cover the worst case: one before BRISC publishes, BRISC's handover, BRISC's chunk with
                     // NCRISC's handover, and NCRISC's chunk. Later chunks stay behind the read cursors for the next
                     // poll.

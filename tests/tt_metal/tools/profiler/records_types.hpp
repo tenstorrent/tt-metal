@@ -9,13 +9,14 @@
 #include <cstdint>
 #include <type_traits>
 
-#include <hostdevcommon/streaming_profiler_reflection.hpp>
+#include <hostdevcommon/device_observability_reflection.hpp>
+#include <hostdevcommon/device_observability_types.hpp>
 #include <hostdevcommon/streaming_profiler_types.hpp>
 
 namespace records_test {
-using tt::tt_metal::experimental::streaming_profiler::Interval;
-using tt::tt_metal::experimental::streaming_profiler::String;
-using tt::tt_metal::experimental::streaming_profiler::Timestamp;
+using tt::tt_metal::experimental::device_observability::Interval;
+using tt::tt_metal::experimental::device_observability::String;
+using tt::tt_metal::experimental::device_observability::Timestamp;
 using tt::tt_metal::experimental::streaming_profiler::TimestampedDataMetadata;
 
 // The ticks the data-movement kernels' long zone spins for, past a wrap of the clock's low word.
@@ -163,8 +164,8 @@ struct Skewed {
 #endif
 
 namespace semantics_test {
-using tt::tt_metal::experimental::streaming_profiler::String;
-using tt::tt_metal::experimental::streaming_profiler::Timestamp;
+using tt::tt_metal::experimental::device_observability::String;
+using tt::tt_metal::experimental::device_observability::Timestamp;
 
 // Every call's metadata names the call, and Other is a second metadata type with the same field.
 struct Call {
@@ -367,7 +368,7 @@ struct FillSource {
 template <typename T>
 constexpr T filled(uint64_t seed) {
     FillSource source{seed};
-    return tt::tt_metal::experimental::streaming_profiler::detail::build<T>(source);
+    return tt::tt_metal::experimental::device_observability::detail::build<T>(source);
 }
 
 // How far back from the record's first Timestamp its others lie in iteration i: within a short form's 16 bits, a medium

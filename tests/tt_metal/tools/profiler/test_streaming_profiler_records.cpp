@@ -39,13 +39,13 @@
 using namespace tt;
 using namespace tt::tt_metal;
 using namespace records_test;
-using experimental::streaming_profiler::Batch;
-using experimental::streaming_profiler::Core;
-using experimental::streaming_profiler::Processor;
-using experimental::streaming_profiler::Record;
-using experimental::streaming_profiler::RegisterCallback;
+using experimental::device_observability::Batch;
+using experimental::device_observability::Core;
+using experimental::device_observability::Processor;
+using experimental::device_observability::Record;
+using experimental::device_observability::RegisterCallback;
+using experimental::device_observability::Variadic;
 using experimental::streaming_profiler::TimestampedData;
-using experimental::streaming_profiler::Variadic;
 using experimental::streaming_profiler::Zone;
 
 namespace {

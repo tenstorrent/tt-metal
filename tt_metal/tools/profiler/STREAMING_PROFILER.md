@@ -23,9 +23,11 @@ void kernel_main() {
 }
 ```
 
-Host callback — a zone arrives as one record, whole, when it closes. The public API is
-`<tt-metalium/experimental/streaming_profiler.hpp>` (namespace `tt::tt_metal::experimental::streaming_profiler`);
-register a callable taking the `Batch` of the record types you want:
+Host callback — a zone arrives as one record, whole, when it closes. Callbacks are device observability's:
+`<tt-metalium/experimental/device_observability.hpp>` (namespace `tt::tt_metal::experimental::device_observability`).
+The profiler's record types, `Zone`, `TimestampedData` and `Event`, are in
+`<tt-metalium/experimental/streaming_profiler.hpp>` (namespace `tt::tt_metal::experimental::streaming_profiler`).
+Register a callable taking the `Batch` of the record types you want:
 
 ```cpp
 Callback zones = RegisterCallback([](const Batch<Zone>& batch) {
@@ -108,20 +110,21 @@ the other two primitives, because the streaming wire resolves every marker's nam
 
 ## 4. Your own records — `DevicePublish`
 
-A kernel can publish a struct of its own, and a callback receives it as the same C++ type. Define the payload, and a
-metadata struct that names the call site, in a header that both the kernel and the host include:
+A kernel can publish a struct of its own, and a callback receives it as the same C++ type. This needs only device
+observability, `TT_METAL_DEVICE_OBSERVABILITY=1`, which `TT_METAL_STREAMING_PROFILER=1` turns on too. Define the
+payload, and a metadata struct that names the call site, in a header that both the kernel and the host include:
 
 ```cpp
 // tile_stats.hpp
 #pragma once
 #include <cstdint>
-#include <hostdevcommon/streaming_profiler_types.hpp>
+#include <hostdevcommon/device_observability_types.hpp>
 
 struct TileStats {  // the payload, sent with each record
     uint32_t tiles, bytes;
 };
 struct Name {  // the metadata, fixed when the kernel compiles
-    tt::tt_metal::experimental::streaming_profiler::String name;  // "..."_s in a kernel, a std::string_view on the host
+    tt::tt_metal::experimental::device_observability::String name;  // "..."_s in a kernel, a std::string_view on the host
 };
 ```
 

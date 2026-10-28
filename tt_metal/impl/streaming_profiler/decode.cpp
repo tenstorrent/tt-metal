@@ -15,13 +15,13 @@ namespace tt::tt_metal::streaming_profiler {
 
 namespace {
 
-using experimental::streaming_profiler::detail::code_bytes;
-using experimental::streaming_profiler::detail::TimeForm;
+using experimental::device_observability::detail::code_bytes;
+using experimental::device_observability::detail::TimeForm;
 static_assert(
     uint32_t(TimeForm::Short) == 0 && uint32_t(TimeForm::Medium) == 1 && uint32_t(TimeForm::Full) == 2,
     "a form's value is its packets' count of time words");
 
-profiler::SpscLaneConsts lane_consts(const experimental::streaming_profiler::Core& core, int64_t clock_offset) {
+profiler::SpscLaneConsts lane_consts(const experimental::device_observability::Core& core, int64_t clock_offset) {
     const uint64_t coords_lo = static_cast<uint32_t>(core.logical.x) | (static_cast<uint32_t>(core.logical.y) << 8) |
                                (static_cast<uint32_t>(core.physical.x) << 16) |
                                (static_cast<uint32_t>(core.physical.y) << 24);
@@ -446,7 +446,7 @@ constexpr size_t kOrderBytes = kBatchWords / 2 * sizeof(uint32_t);
 }  // namespace
 
 ConsumerBatches::ConsumerBatches(
-    std::vector<experimental::streaming_profiler::detail::RecordTypeDescriptor> record_types) :
+    std::vector<experimental::device_observability::detail::RecordTypeDescriptor> record_types) :
     routes_(std::move(record_types)),
     records_(routes_.type_count()),
     counts_(routes_.type_count()),
@@ -470,7 +470,7 @@ DecodedFrames ConsumerBatches::decode(
     return decoded;
 }
 
-const experimental::streaming_profiler::detail::BatchData& ConsumerBatches::build_batch(
+const experimental::device_observability::detail::BatchData& ConsumerBatches::build_batch(
     DecodedFrames& frames, const ClockMap& map, ClockMap::Reader& reader, uint32_t dev, uint64_t dropped_bytes) {
     const StreamDecoder::Out out = out_in(frames.buffer.get());
     const StreamDecoder::Produced& produced = frames.produced;

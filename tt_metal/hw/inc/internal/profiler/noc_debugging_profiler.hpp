@@ -4,10 +4,10 @@
 
 #pragma once
 
-// !PROFILE_STREAMING: these record through the DRAM producer's flush_to_dram_if_full/timeStampedData, which the
+// !DEVICE_OBSERVABILITY: these record through the DRAM producer's flush_to_dram_if_full/timeStampedData, which the
 // streaming producer does not provide. Unlike NOC_EVENTS and PERF_COUNTERS, DEVICE_DEBUG_DUMP does not force the
 // DRAM profiler on, so the two can be asked for together; compile the hooks out until streaming support lands.
-#if defined(DEVICE_DEBUG_DUMP) && defined(PROFILE_KERNEL) && !defined(PROFILE_STREAMING) && \
+#if defined(DEVICE_DEBUG_DUMP) && defined(PROFILE_KERNEL) && !defined(DEVICE_OBSERVABILITY) && \
     !defined(DISPATCH_KERNEL) && (defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_BRISC))
 
 #include "noc_debugging_metadata.hpp"

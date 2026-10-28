@@ -21,7 +21,7 @@ constexpr uint32_t kProcessor = 2 + COMPILE_FOR_TRISC;
 #endif
 
 namespace semantics_test {
-using tt::tt_metal::experimental::streaming_profiler::kNoInline;
+using tt::tt_metal::experimental::device_observability::kNoInline;
 
 // A struct alone, through the out-of-line writer, after another argument, and two of it as a list.
 template <typename S>

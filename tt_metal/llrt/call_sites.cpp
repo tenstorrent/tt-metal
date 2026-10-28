@@ -32,7 +32,7 @@ namespace tt::llrt {
 
 namespace {
 
-namespace api = tt::tt_metal::experimental::streaming_profiler;
+namespace api = tt::tt_metal::experimental::device_observability;
 
 // The fields each struct name has, as kernels and the host show it. The host matches a type by its name, so every
 // showing of a name must have the same fields. A long, unsigned long or size_t field is 32 bits on the device and 64 on

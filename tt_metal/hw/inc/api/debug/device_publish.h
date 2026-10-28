@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 //
-// DevicePublish sends a payload struct, or a few arguments, over the streaming profiler, with metadata fixed at compile
+// DevicePublish sends a payload struct, or a few arguments, over device observability, with metadata fixed at compile
 // time.
 //
 //     DevicePublish<NocSite{.api = "noc_async_read"_s, .type = NocType::Read}>(NocEvent{x, y, bytes});
@@ -11,7 +11,7 @@
 //     DevicePublish<Name{"y"_s}, kPublishBatched>(count);  // options follow the metadata
 //     DevicePublish<kPublishBatched>(count);  // or stand alone when there is none
 //     DevicePublish<>(count);  // with neither, the host reads Record<uint32_t, void>
-//     DevicePublish<Name{"z"_s}, kNoInline>(count);  // only a call here, even when the profiler is inlined
+//     DevicePublish<Name{"z"_s}, kNoInline>(count);  // only a call here, even when DevicePublish is inlined
 //
 // A record is visible to the host as soon as it is written. kPublishBatched lets it wait for its RISC's next batch of
 // records, or the launch's end, which saves a fence per record for a tool that publishes often.

@@ -28,8 +28,8 @@ constexpr uint16_t kRisc = 0;
 constexpr uint16_t kRisc = 1;
 #endif
 
-using tt::tt_metal::experimental::streaming_profiler::kNoInline;
-using tt::tt_metal::experimental::streaming_profiler::kPublishBatched;
+using tt::tt_metal::experimental::device_observability::kNoInline;
+using tt::tt_metal::experimental::device_observability::kPublishBatched;
 
 #define EXAMPLE_PRINT(fmt, ...) \
     DevicePublish<Format{TT_RECORD_STRING(fmt), TT_RECORD_STRING(#__VA_ARGS__)}>(__VA_ARGS__)

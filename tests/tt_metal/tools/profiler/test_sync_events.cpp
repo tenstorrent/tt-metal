@@ -25,12 +25,12 @@
 #include <enchantum/enchantum.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/streaming_profiler.hpp>
+#include <tt-metalium/experimental/device_observability.hpp>
 #include "tt_metal/impl/kernels/kernel.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
-using tt::tt_metal::experimental::streaming_profiler::Processor;
+using tt::tt_metal::experimental::device_observability::Processor;
 
 constexpr uint32_t DELAY_CYCLES = 10000;
 

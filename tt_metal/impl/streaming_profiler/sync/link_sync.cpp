@@ -114,7 +114,7 @@ void add_router_compile_args(
     std::unordered_map<std::string, uint32_t>& named_args) {
     const Hal& hal = fabric.get_hal();
     const llrt::RunTimeOptions& rtoptions = fabric.get_rtoptions();
-    if (hal.get_arch() != tt::ARCH::BLACKHOLE || !rtoptions.get_streaming_profiler_enabled()) {
+    if (hal.get_arch() != tt::ARCH::BLACKHOLE || !rtoptions.get_device_observability_enabled()) {
         return;
     }
     auto role = kernel_profiler::LinkSyncRole::None;
@@ -126,7 +126,7 @@ void add_router_compile_args(
             control_plane.get_physical_chip_id_from_fabric_node_id(node),
             eth_logical);
     }
-    named_args.merge(compile_args(role, l1_addr(hal), rtoptions.get_streaming_profiler_sync_check_enabled()));
+    named_args.merge(compile_args(role, l1_addr(hal), rtoptions.get_device_observability_sync_check_enabled()));
 }
 
 void clear_port_state(const Hal& hal, tt::Cluster& cluster, uint32_t chip, const CoreCoord& virt) {

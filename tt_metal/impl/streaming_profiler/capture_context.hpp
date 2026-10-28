@@ -12,19 +12,20 @@
 #include <span>
 #include <vector>
 
-#include <tt-metalium/experimental/streaming_profiler.hpp>
+#include <tt-metalium/experimental/device_observability.hpp>
 
 #include "hostdev/streaming_profiler_common.h"
 
 namespace tt::tt_metal::streaming_profiler {
 
-inline constexpr size_t kProcessorCount = static_cast<size_t>(experimental::streaming_profiler::Processor::ERISC1) + 1;
+inline constexpr size_t kProcessorCount =
+    static_cast<size_t>(experimental::device_observability::Processor::ERISC1) + 1;
 inline constexpr std::array<const char*, kProcessorCount> kProcessorNames = {
     "BRISC", "NCRISC", "TRISC_0", "TRISC_1", "TRISC_2", "ERISC_0", "ERISC_1"};
 
-constexpr bool is_ethernet(experimental::streaming_profiler::Processor processor) {
-    return processor == experimental::streaming_profiler::Processor::ERISC0 ||
-           processor == experimental::streaming_profiler::Processor::ERISC1;
+constexpr bool is_ethernet(experimental::device_observability::Processor processor) {
+    return processor == experimental::device_observability::Processor::ERISC0 ||
+           processor == experimental::device_observability::Processor::ERISC1;
 }
 
 // Maps NoC coordinates to core indices. 64x64 covers every supported grid, and find() returns kNone outside it.
@@ -54,7 +55,7 @@ struct CaptureContext {
     struct Device {
         // Holds kernel_profiler::PROFILER_SPSC_TENSIX_RISC lanes for each tile, ordered by tile and then by RISC. An
         // eth tile has two RISCs and fills its other lanes with ERISC1.
-        std::vector<experimental::streaming_profiler::Core> lanes;
+        std::vector<experimental::device_observability::Core> lanes;
         // Each tile's clock offset, by core index. It is the wall clock of the chip's wall-clock core minus the tile's
         // at the same instant, so adding it puts the tile's timestamps on the wall-clock core's clock, which the clock
         // sync maps to the root chip's refclk. Every tile's wall clock counts the same AICLK, so the offset stays fixed

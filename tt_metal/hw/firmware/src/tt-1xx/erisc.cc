@@ -12,16 +12,13 @@
 #include "internal/hw_thread.h"
 #include "api/debug/device_print.h"
 
-#if defined(PROFILE_KERNEL)
+#if defined(PROFILE_KERNEL) && !defined(DEVICE_OBSERVABILITY)
 namespace kernel_profiler {
 uint32_t wIndex __attribute__((used));
-// Only the DRAM profiler uses these.
-#if !defined(PROFILE_STREAMING)
 uint32_t stackSize __attribute__((used));
 uint32_t sums[SUM_COUNT] __attribute__((used));
 uint32_t sumIDs[SUM_COUNT] __attribute__((used));
 uint32_t traceCount __attribute__((used));
-#endif
 }  // namespace kernel_profiler
 #endif
 

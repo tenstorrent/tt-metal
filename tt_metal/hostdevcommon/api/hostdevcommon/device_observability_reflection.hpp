@@ -14,9 +14,9 @@
 #include <type_traits>
 #include <utility>
 
-#include "hostdevcommon/streaming_profiler_types.hpp"
+#include "hostdevcommon/device_observability_types.hpp"
 
-namespace tt::tt_metal::experimental::streaming_profiler {
+namespace tt::tt_metal::experimental::device_observability {
 
 namespace detail {
 // A type's full name as the compiler spells it: "... [with T = ns::Name; ...]" (GCC) or "... [T = ns::Name]" (clang)
@@ -293,4 +293,4 @@ constexpr bool check_argument() {
 
 }  // namespace detail
 
-}  // namespace tt::tt_metal::experimental::streaming_profiler
+}  // namespace tt::tt_metal::experimental::device_observability

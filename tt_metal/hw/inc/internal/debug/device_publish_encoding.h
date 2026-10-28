@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 //
 // DevicePublish's encoding (internal/debug/device_publish_impl.h): what a record's packet words are and, with the
-// streaming profiler on, the writer that stores a call's values as those words on its RISC's ring
+// device observability on, the writer that stores a call's values as those words on its RISC's ring
 // (internal/debug/device_publish_ring.h). A record's payload is laid out from its arguments' samples, the same ones the
 // host reads (llrt/call_sites.cpp), as slices of each argument, which each of its packet's forms places.
 #pragma once
@@ -18,11 +18,12 @@
 #include "hostdev/streaming_profiler_common.h"
 #include "internal/risc_attribs.h"
 
-namespace kernel_profiler {
-namespace streaming_profiler = tt::tt_metal::experimental::streaming_profiler;
-}  // namespace kernel_profiler
+namespace device_observability {
+using namespace ::kernel_profiler;
+using namespace ::tt::tt_metal::experimental::device_observability;
+}  // namespace device_observability
 
-namespace kernel_profiler::records {
+namespace device_observability {
 
 // The type a call site describes an argument as: its own, a std::array for a C array, or a String for a string
 // literal, which the payload check then rejects.
@@ -36,7 +37,7 @@ struct ArgumentValue<Element[N]> {
 };
 template <size_t N>
 struct ArgumentValue<const char[N]> {
-    using type = streaming_profiler::String;
+    using type = String;
 };
 template <typename Arg>
 using ValueOf = typename ArgumentValue<std::remove_reference_t<Arg>>::type;
@@ -51,8 +52,7 @@ template <typename Arg>
 struct RecordPayloadOf<Arg> {
     using Value = ValueOf<Arg>;
     using type = std::conditional_t<
-        std::is_class_v<Value> && !streaming_profiler::detail::is_leaf_type<Value> &&
-            !streaming_profiler::detail::is_std_array<Value>,
+        std::is_class_v<Value> && !detail::is_leaf_type<Value> && !detail::is_std_array<Value>,
         Value,
         std::tuple<Value>>;
 };
@@ -60,8 +60,7 @@ template <typename... Args>
 using RecordPayload = typename RecordPayloadOf<Args...>::type;
 
 template <typename Payload>
-using ArgumentList = std::
-    conditional_t<streaming_profiler::detail::is_specialization<Payload, std::tuple>, Payload, std::tuple<Payload>>;
+using ArgumentList = std::conditional_t<detail::is_specialization<Payload, std::tuple>, Payload, std::tuple<Payload>>;
 template <typename Payload, size_t I>
 using ArgumentAt = std::tuple_element_t<I, ArgumentList<Payload>>;
 template <typename Payload>
@@ -81,8 +80,7 @@ struct SampleSource {
         if (!set) {
             return V{};
         }
-        if constexpr (
-            std::is_same_v<V, streaming_profiler::String> || std::is_same_v<V, streaming_profiler::Timestamp>) {
+        if constexpr (std::is_same_v<V, String> || std::is_same_v<V, Timestamp>) {
             return __builtin_bit_cast(V, ~uint64_t{0});
         } else if constexpr (std::is_same_v<V, bool>) {
             return true;
@@ -98,7 +96,7 @@ struct SampleSource {
 template <typename T>
 constexpr T sample_of(size_t field) {
     SampleSource source{field};
-    return streaming_profiler::detail::build<T>(source);
+    return detail::build<T>(source);
 }
 
 // One byte as eight one-bit objects, so that each bit of a bit_cast is defined or not on its own.
@@ -174,8 +172,7 @@ constexpr auto samples_of(std::index_sequence<K...>) {
 
 // T's samples, which its descriptor carries and its field layout comes from.
 template <typename T>
-inline constexpr auto kSamples =
-    samples_of<T>(std::make_index_sequence<streaming_profiler::detail::leaf_type_codes<T>.size()>{});
+inline constexpr auto kSamples = samples_of<T>(std::make_index_sequence<detail::leaf_type_codes<T>.size()>{});
 // T's sample for field `field` as bytes, its padding zero.
 template <typename T>
 constexpr Bytes<sizeof(T)> sample_bytes(size_t field) {
@@ -208,10 +205,10 @@ struct FieldLayout {
 };
 template <typename V>
 constexpr auto lay_out_fields() {
-    FieldLayout<streaming_profiler::detail::leaf_type_codes<V>.size()> layout;
-    if constexpr (streaming_profiler::detail::is_leaf_type<V>) {
+    FieldLayout<detail::leaf_type_codes<V>.size()> layout;
+    if constexpr (detail::is_leaf_type<V>) {
         layout.sizes[0] = uint16_t(sizeof(V));
-    } else if constexpr (streaming_profiler::detail::is_std_array<V>) {
+    } else if constexpr (detail::is_std_array<V>) {
         using Element = typename V::value_type;
         constexpr auto element = lay_out_fields<Element>();
         constexpr size_t kElementLeaves = element.offsets.size();
@@ -265,13 +262,13 @@ struct ArgumentSlices {
 template <typename V>
 constexpr auto slice_argument() {
     constexpr auto& layout = kFieldLayout<V>;
-    constexpr auto& codes = streaming_profiler::detail::leaf_type_codes<V>;
+    constexpr auto& codes = detail::leaf_type_codes<V>;
     ArgumentSlices<codes.size() + sizeof(V)> out;
     const uint32_t widest = uint32_t(std::min<size_t>(alignof(V), 8));
     std::array<uint32_t, codes.size()> piece_from{}, piece_bytes{};
     for (size_t field = 0; field < codes.size(); ++field) {
         const uint32_t from = layout.offsets[field], end = from + layout.sizes[field];
-        const uint32_t bytes = std::min<uint32_t>(streaming_profiler::detail::code_bytes(codes[field]), widest);
+        const uint32_t bytes = std::min<uint32_t>(detail::code_bytes(codes[field]), widest);
         if (field == layout.unsent) {
             continue;
         }
@@ -303,7 +300,7 @@ constexpr auto slice_argument() {
         if (held) {
             continue;
         }
-        const bool timestamp = codes[field] == streaming_profiler::detail::kTimestampCode;
+        const bool timestamp = codes[field] == detail::kTimestampCode;
         out.slices[out.count++] = {timestamp, 0, uint16_t(piece_from[field]), uint16_t(piece_bytes[field])};
         for (uint32_t byte = piece_from[field]; byte < piece_from[field] + piece_bytes[field]; ++byte) {
             covered[byte] = true;
@@ -337,7 +334,7 @@ inline constexpr auto kArgumentSlices = slice_argument<V>();
 // A Timestamp travels as a distance when each argument's fields lie in its slices; otherwise it goes whole.
 template <typename Payload, size_t... I>
 constexpr bool sends_distances(std::index_sequence<I...>) {
-    return streaming_profiler::detail::holds<Payload>(streaming_profiler::detail::kTimestampCode) &&
+    return detail::holds<Payload>(detail::kTimestampCode) &&
            (kArgumentSlices<ArgumentAt<Payload, I>>.holds_every_field && ...);
 }
 template <typename Payload>
@@ -369,12 +366,10 @@ inline constexpr auto kSlices = record_slices<Payload>(ArgumentIndices<Payload>{
 // alignment, those whose bytes end on a multiple of it first, each at a multiple of its alignment up to 4, so none of
 // its slices straddles a word.
 template <typename Payload, size_t... I>
-constexpr std::array<streaming_profiler::detail::ArgumentSlice, sizeof...(I)> place_arguments(
-    std::index_sequence<I...>) {
+constexpr std::array<detail::ArgumentSlice, sizeof...(I)> place_arguments(std::index_sequence<I...>) {
     constexpr std::array<uint32_t, sizeof...(I)> alignments{uint32_t(alignof(ArgumentAt<Payload, I>))...};
-    std::array<streaming_profiler::detail::ArgumentSlice, sizeof...(I)> placements{
-        streaming_profiler::detail::ArgumentSlice{
-            uint16_t(I), 0, 0, uint16_t(kFieldLayout<ArgumentAt<Payload, I>>.sent_bytes)}...};
+    std::array<detail::ArgumentSlice, sizeof...(I)> placements{
+        detail::ArgumentSlice{uint16_t(I), 0, 0, uint16_t(kFieldLayout<ArgumentAt<Payload, I>>.sent_bytes)}...};
     uint32_t end = 0;
     for (uint32_t align = std::max({uint32_t{1}, alignments[I]...}); align != 0; align /= 2) {
         for (const bool ragged : {false, true}) {
@@ -392,15 +387,15 @@ template <typename Payload>
 inline constexpr auto kArgumentPlacement = place_arguments<Payload>(ArgumentIndices<Payload>{});
 
 // The words the record's time takes after word 0, and the bytes each Timestamp's distance takes, in each form.
-constexpr uint32_t time_words(streaming_profiler::detail::TimeForm form) { return uint32_t(form); }
-constexpr uint32_t distance_bytes(streaming_profiler::detail::TimeForm form) { return 2u << uint32_t(form); }
+constexpr uint32_t time_words(detail::TimeForm form) { return uint32_t(form); }
+constexpr uint32_t distance_bytes(detail::TimeForm form) { return 2u << uint32_t(form); }
 
 template <size_t N>
 struct PlacedLayout {
     uint32_t body_words;
-    std::array<streaming_profiler::detail::ArgumentSlice, N> slices;
+    std::array<detail::ArgumentSlice, N> slices;
 };
-template <typename Payload, streaming_profiler::detail::TimeForm F>
+template <typename Payload, detail::TimeForm F>
 inline constexpr auto kLayout = [] {
     constexpr auto& slices = kSlices<Payload>;
     PlacedLayout<slices.size()> placed{};
@@ -423,7 +418,7 @@ inline constexpr auto kLayout = [] {
             }
             return true;
         };
-        if (F == streaming_profiler::detail::TimeForm::Short) {
+        if (F == detail::TimeForm::Short) {
             // The short form's record time takes bytes 2 and 3 of every call site's payload, so the decoder finds it
             // before it knows the call site.
             taken[2] = taken[3] = true;
@@ -459,15 +454,14 @@ inline constexpr bool kWritesShortRecords = true;
 inline constexpr bool kWritesShortRecords = false;
 #endif
 template <typename Payload>
-inline constexpr bool kHasShort = kWritesShortRecords && kSendsDistances<Payload> &&
-                                  kLayout<Payload, streaming_profiler::detail::TimeForm::Short>.body_words <
-                                      kLayout<Payload, streaming_profiler::detail::TimeForm::Medium>.body_words;
+inline constexpr bool kHasShort =
+    kWritesShortRecords && kSendsDistances<Payload> &&
+    kLayout<Payload, detail::TimeForm::Short>.body_words < kLayout<Payload, detail::TimeForm::Medium>.body_words;
 // The body length in word 0 of a call site's packets: its first form's, shortest first.
 template <typename Payload>
-inline constexpr uint32_t kFirstBody =
-    kHasShort<Payload> ? kLayout<Payload, streaming_profiler::detail::TimeForm::Short>.body_words
-                       : kLayout<Payload, streaming_profiler::detail::TimeForm::Medium>.body_words;
-template <typename Payload, streaming_profiler::detail::TimeForm F>
+inline constexpr uint32_t kFirstBody = kHasShort<Payload> ? kLayout<Payload, detail::TimeForm::Short>.body_words
+                                                          : kLayout<Payload, detail::TimeForm::Medium>.body_words;
+template <typename Payload, detail::TimeForm F>
 inline constexpr uint32_t kPayloadWords = kLayout<Payload, F>.body_words - time_words(F);
 
 // Each slice's first word among the words its record's slices take, an 8-byte slice taking two, low word first.
@@ -485,8 +479,7 @@ template <typename Payload>
 struct RegisterWords {
     std::array<
         uint32_t,
-        kSendsDistances<Payload> ? kSliceFirstWord<Payload>.back()
-                                 : kPayloadWords<Payload, streaming_profiler::detail::TimeForm::Medium>>
+        kSendsDistances<Payload> ? kSliceFirstWord<Payload>.back() : kPayloadWords<Payload, detail::TimeForm::Medium>>
         words;
 };
 
@@ -510,7 +503,7 @@ struct PayloadLayout {
 
 // Which argument and byte offset each payload word of form F copies whole from, or argument -1 for a word that must be
 // built: one holding bytes of two arguments, a Timestamp's distance, or the short form's time.
-template <typename Payload, streaming_profiler::detail::TimeForm F, size_t... I>
+template <typename Payload, detail::TimeForm F, size_t... I>
 constexpr std::array<PayloadPart, kPayloadWords<Payload, F>> copyable_words(std::index_sequence<I...>) {
     constexpr auto& layout = kLayout<Payload, F>;
     constexpr auto& slices = kSlices<Payload>;
@@ -520,10 +513,10 @@ constexpr std::array<PayloadPart, kPayloadWords<Payload, F>> copyable_words(std:
     for (uint32_t word = 0; word < words.size(); ++word) {
         // A copyable word's bytes all come from one argument, each at the same distance from its place in the payload.
         int32_t argument = -1, distance = 0;
-        bool copyable = !(F == streaming_profiler::detail::TimeForm::Short && word == 0);
+        bool copyable = !(F == detail::TimeForm::Short && word == 0);
         for (uint32_t byte = 4 * word; byte < 4 * word + 4; ++byte) {
             for (size_t k = 0; k < slices.size(); ++k) {
-                const streaming_profiler::detail::ArgumentSlice placed = layout.slices[k];
+                const detail::ArgumentSlice placed = layout.slices[k];
                 if (placed.to <= byte && byte < placed.to + placed.bytes) {
                     const int32_t byte_distance = int32_t(placed.from + (byte - placed.to)) - int32_t(byte);
                     copyable &= !slices[k].is_distance &&
@@ -543,7 +536,7 @@ constexpr std::array<PayloadPart, kPayloadWords<Payload, F>> copyable_words(std:
     }
     return words;
 }
-template <typename Payload, streaming_profiler::detail::TimeForm F, bool kCopyRuns>
+template <typename Payload, detail::TimeForm F, bool kCopyRuns>
 inline constexpr auto kPayloadLayout = [] {
     constexpr auto words = copyable_words<Payload, F>(ArgumentIndices<Payload>{});
     PayloadLayout<words.size()> payload;
@@ -567,7 +560,7 @@ inline constexpr auto kPayloadLayout = [] {
     return payload;
 }();
 template <typename Payload>
-inline constexpr bool kHasRun = kPayloadLayout<Payload, streaming_profiler::detail::TimeForm::Medium, true>.has_run;
+inline constexpr bool kHasRun = kPayloadLayout<Payload, detail::TimeForm::Medium, true>.has_run;
 
 template <typename>
 struct MemberOf;
@@ -594,23 +587,23 @@ constexpr size_t publish_time_leaf() {
 template <auto kField>
 inline constexpr size_t kUnsentLeaf<PublishTimePayload<kField>> = publish_time_leaf<kField>();
 
-}  // namespace kernel_profiler::records
+}  // namespace device_observability
 
-// The writer stores records on the streaming profiler's rings, which kernels and firmware built with it have. Dispatch
+// The writer stores records on device observability's rings, which kernels and firmware built with it have. Dispatch
 // kernels have none: PROFILE_KERNEL is a global JIT define, so they get it too, but no relay serves a dispatch core, so
 // a ring there would fill and wedge the next relay bring-up. Nor does its relay kernel: the ring's producer is ~1 KB
 // the relay has no code room for (its self-profiling is its own staging-slot markers, see
 // impl/streaming_profiler/kernels/drisc_relay.cpp).
-#if defined(PROFILE_STREAMING) && defined(PROFILE_KERNEL) && !defined(DISPATCH_KERNEL) && \
-    !defined(STREAMING_PROFILER_RELAY_KERNEL)
+#if defined(DEVICE_OBSERVABILITY) && defined(PROFILE_KERNEL) && !defined(DISPATCH_KERNEL) && \
+    !defined(DEVICE_OBSERVABILITY_RELAY_KERNEL)
 
 #include "internal/debug/device_publish_ring.h"
 
-namespace kernel_profiler::records {
+namespace device_observability {
 
 template <size_t I, typename Source>
 FORCE_INLINE const auto& argument_at(const Source& source) {
-    if constexpr (streaming_profiler::detail::is_specialization<Source, std::tuple>) {
+    if constexpr (detail::is_specialization<Source, std::tuple>) {
         return std::get<I>(source);
     } else {
         return source;
@@ -621,7 +614,7 @@ FORCE_INLINE const auto& argument_at(const Source& source) {
 // arguments, so each payload word reads its argument where it lies rather than from a copy.
 template <typename... Args>
 FORCE_INLINE decltype(auto) record_source(const Args&... args) {
-    if constexpr (streaming_profiler::detail::is_specialization<RecordPayload<Args...>, std::tuple>) {
+    if constexpr (detail::is_specialization<RecordPayload<Args...>, std::tuple>) {
         return std::tuple<const Args&...>(args...);
     } else {
         return (args, ...);
@@ -656,9 +649,9 @@ FORCE_INLINE auto slice_bits(const Source& source) {
 
 // Slice K's bits where form F's payload word `word` holds them, or 0 when the slice lies elsewhere. Every caller passes
 // a constant word, so the tests fold away.
-template <typename Payload, streaming_profiler::detail::TimeForm F, size_t K, typename Bits>
+template <typename Payload, detail::TimeForm F, size_t K, typename Bits>
 FORCE_INLINE uint32_t slice_in_word(Bits bits, uint32_t word) {
-    constexpr streaming_profiler::detail::ArgumentSlice copy = kLayout<Payload, F>.slices[K];
+    constexpr detail::ArgumentSlice copy = kLayout<Payload, F>.slices[K];
     if (copy.to / 4u == word) {
         return uint32_t(bits) << (8 * (copy.to % 4));
     }
@@ -710,7 +703,7 @@ struct WordStore {
 // RegisterWords. A payload with Timestamps writes the shortest form they fit; any other payload is always medium.
 template <typename Payload, typename Source>
 struct RecordWriter {
-    using Form = streaming_profiler::detail::TimeForm;
+    using Form = detail::TimeForm;
 
     // The longest packet: a full one, or a medium one with the timer's high word ahead of it.
     static constexpr uint32_t kMaxWords = [] {
@@ -914,9 +907,7 @@ private:
 template <typename Payload, size_t A, typename Source, size_t... K>
 FORCE_INLINE uint32_t register_word(const Source& source, std::index_sequence<K...>) {
     if constexpr (!kSendsDistances<Payload>) {
-        return (
-            slice_in_word<Payload, streaming_profiler::detail::TimeForm::Medium, K>(slice_bits<Payload, K>(source), A) |
-            ... | 0u);
+        return (slice_in_word<Payload, detail::TimeForm::Medium, K>(slice_bits<Payload, K>(source), A) | ... | 0u);
     } else {
         constexpr size_t slice = [] {
             size_t k = 0;
@@ -947,28 +938,26 @@ FORCE_INLINE void publish_record(uint32_t header, const Source& source, std::ind
     }
 }
 
-}  // namespace kernel_profiler::records
+}  // namespace device_observability
 
-namespace kernel_profiler {
+namespace device_observability {
 
 static_assert(
-    1 + records::kLayout<records::PublishTimePayload<&streaming_profiler::Interval::end>, streaming_profiler::detail::TimeForm::Full>.body_words ==
-        MIN_RESERVE_WORDS,
+    1 + kLayout<PublishTimePayload<&Interval::end>, detail::TimeForm::Full>.body_words == MIN_RESERVE_WORDS,
     "every room check reserves a zone record's longest packet");
 
 // Whether ppfmt's stall record, which write_pending_stall writes and the host describes stalls from, is the medium
 // record DevicePublish lays out for a zone, whose Interval's Timestamps lie back to back.
 constexpr bool stall_record_is_zone_medium_record() {
-    using Payload = records::PublishTimePayload<&streaming_profiler::Interval::end>;
-    constexpr auto layout = records::kLayout<Payload, streaming_profiler::detail::TimeForm::Medium>;
+    using Payload = PublishTimePayload<&Interval::end>;
+    constexpr auto layout = kLayout<Payload, detail::TimeForm::Medium>;
     return layout.body_words == ppfmt::STALL_BODY_WORDS && layout.slices.size() == 1 && layout.slices[0].to == 0 &&
            8u * layout.slices[0].bytes == ppfmt::STALL_START_DISTANCE_BITS &&
-           records::kUnsentLeaf<Payload> == ppfmt::STALL_PUBLISH_TIME_FIELD &&
-           offsetof(streaming_profiler::Interval, end) ==
-               streaming_profiler::detail::code_bytes(streaming_profiler::detail::kTimestampCode);
+           kUnsentLeaf<Payload> == ppfmt::STALL_PUBLISH_TIME_FIELD &&
+           offsetof(Interval, end) == detail::code_bytes(detail::kTimestampCode);
 }
 static_assert(stall_record_is_zone_medium_record(), "the host describes stalls by ppfmt's stall record");
 
-}  // namespace kernel_profiler
+}  // namespace device_observability
 
 #endif

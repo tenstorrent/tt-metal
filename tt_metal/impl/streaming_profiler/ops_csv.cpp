@@ -13,7 +13,7 @@
 
 namespace tt::tt_metal::streaming_profiler {
 
-using experimental::streaming_profiler::Processor;
+using experimental::device_observability::Processor;
 using experimental::streaming_profiler::Zone;
 
 OpsCsvConsumer::OpsCsvConsumer(const std::string& path) : file_(std::fopen(path.c_str(), "w")) {
@@ -25,7 +25,7 @@ void OpsCsvConsumer::operator()(const Batch& batch) {
         if (zone.runtime_id() == 0 || !zone.metadata().name.ends_with("-KERNEL")) {
             continue;
         }
-        const experimental::streaming_profiler::Core core = zone.core();
+        const experimental::device_observability::Core core = zone.core();
         const uint32_t processor = static_cast<uint32_t>(core.processor);
         const uint32_t core_key =
             (static_cast<uint32_t>(core.physical.y) << 16) | static_cast<uint32_t>(core.physical.x);
@@ -33,7 +33,7 @@ void OpsCsvConsumer::operator()(const Batch& batch) {
         uint32_t& completed = executions_seen_[{core.chip_id, core_key, processor, zone.runtime_id()}];
         OpAgg& op = ops_[{core.chip_id, zone.runtime_id(), completed}];
         completed++;
-        const experimental::streaming_profiler::Interval& interval = zone.payload();
+        const experimental::device_observability::Interval& interval = zone.payload();
         op.start_cycles = std::min(op.start_cycles, interval.start.device_cycles());
         op.end_cycles = std::max(op.end_cycles, interval.end.device_cycles());
         const Time start = interval.start.time();

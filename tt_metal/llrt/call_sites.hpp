@@ -15,7 +15,7 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/experimental/streaming_profiler.hpp>
+#include <tt-metalium/experimental/device_observability.hpp>
 
 #include "hostdev/record_site.h"
 
@@ -35,7 +35,7 @@ FieldBits find_set_bits(std::span<const std::byte> sample);
 
 // A call site as its image describes it, every string in it lasting for the process.
 struct CallSite {
-    tt::tt_metal::experimental::streaming_profiler::SourceLocation location;
+    tt::tt_metal::experimental::device_observability::SourceLocation location;
     std::string_view metadata_type;
     std::vector<uint16_t> payload_codes, metadata_codes;
     std::vector<FieldBits> metadata_bits;  // each metadata field's bits in the metadata struct
@@ -50,7 +50,7 @@ struct CallSite {
     std::vector<uint32_t> argument_field_counts;  // each argument's payload field count, every element's for an array
     // The packet layout of a form its records take, which their body length tells apart.
     struct PacketLayout {
-        tt::tt_metal::experimental::streaming_profiler::detail::TimeForm time_form{};
+        tt::tt_metal::experimental::device_observability::detail::TimeForm time_form{};
         uint32_t body_words = 0;
         std::vector<FieldBits> payload_bits;  // each payload field's bits in the packet's payload, width 0 if not sent
     };
@@ -58,7 +58,7 @@ struct CallSite {
     bool timestamps_as_distances = false;  // whether its Timestamp fields travel back from the record's time
     // The payload field that is the record's own time, which no form sends.
     uint32_t payload_publish_time_field =
-        tt::tt_metal::experimental::streaming_profiler::detail::kNoPayloadPublishTimeField;
+        tt::tt_metal::experimental::device_observability::detail::kNoPayloadPublishTimeField;
     // The metadata's fields as the call site sets them: each one's bits, sign-extended for a signed field, or a
     // String's text.
     std::vector<std::variant<uint64_t, std::string_view>> metadata;

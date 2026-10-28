@@ -11,14 +11,14 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "hostdevcommon/streaming_profiler_reflection.hpp"
+#include "hostdevcommon/device_observability_reflection.hpp"
 
 #ifndef TT_DEVICE_COMPILE
 #include <array>
 #include <cstring>
 #endif
 
-namespace tt::tt_metal::experimental::streaming_profiler::detail {
+namespace tt::tt_metal::experimental::device_observability::detail {
 
 // An address in a section the device never loads: in kernels a pointer the linker fills in, on the host the 32-bit
 // link address the loader resolves by the section's own address.
@@ -146,4 +146,4 @@ inline uint64_t field_value(const std::byte* bytes, uint32_t bit, uint32_t width
 }
 #endif
 
-}  // namespace tt::tt_metal::experimental::streaming_profiler::detail
+}  // namespace tt::tt_metal::experimental::device_observability::detail

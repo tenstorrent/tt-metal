@@ -108,7 +108,7 @@ void kernel_main() {
 #elif RECORD_ERROR == 22
     DevicePublish<Name{"error"_s}>("text"_s);
 #elif RECORD_ERROR == 23
-    DevicePublish<tt::tt_metal::experimental::streaming_profiler::kNoInline, Name{"error"_s}>();
+    DevicePublish<tt::tt_metal::experimental::device_observability::kNoInline, Name{"error"_s}>();
 #elif RECORD_ERROR == 24
     DevicePublish<5u>();
 #endif

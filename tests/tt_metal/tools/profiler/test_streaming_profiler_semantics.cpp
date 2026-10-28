@@ -27,7 +27,7 @@
 #include <fmt/ranges.h>
 
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/streaming_profiler.hpp>
+#include <tt-metalium/experimental/device_observability.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/mesh_device.hpp>
 
@@ -35,7 +35,7 @@
 
 using namespace tt::tt_metal;
 using namespace semantics_test;
-namespace api = tt::tt_metal::experimental::streaming_profiler;
+namespace api = tt::tt_metal::experimental::device_observability;
 using api::Record;
 using api::Variadic;
 

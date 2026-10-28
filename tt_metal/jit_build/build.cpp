@@ -294,25 +294,28 @@ void JitBuildEnv::init(
         this->defines_ += "-DPROFILER_FULL_HOST_BUFFER_SIZE_PER_RISC=" +
                           std::to_string(config.profiler_dram_bank_size_per_risc_bytes) + " ";
     }
-    if (rtoptions.get_streaming_profiler_enabled()) {
-        // Streaming profiler. Mutually exclusive with get_profiler_enabled() (rtoptions
-        // TT_FATALs on both), so this branch never stacks on the one above. PROFILE_KERNEL=1 keeps every
-        // DeviceZoneScopedN / DeviceTimestampedData site compiled; PROFILE_STREAMING makes
-        // api/debug/kernel_profiler.hpp select the streaming markers (kernel_profiler_streaming.hpp) instead of
-        // the DRAM producer, and DevicePublish write its records on the SPSC ring. No DRAM options (dispatch cores,
-        // trace-only, sum, accumulate) apply here.
+    if (rtoptions.get_device_observability_enabled()) {
+        // Device observability. Mutually exclusive with get_profiler_enabled() (rtoptions
+        // TT_FATALs on both), so this branch never stacks on the one above. PROFILE_KERNEL=1 keeps the launch
+        // lifecycle compiled; DEVICE_OBSERVABILITY makes api/debug/kernel_profiler.hpp select
+        // kernel_profiler_streaming.hpp instead of the DRAM producer, and DevicePublish write its records on the SPSC
+        // ring. PROFILE_STREAMING adds the streaming profiler's markers (DeviceZoneScopedN, DeviceTimestampedData and
+        // the rest). No DRAM options (dispatch cores, trace-only, sum, accumulate) apply here.
         TT_FATAL(
             this->arch_ != tt::ARCH::QUASAR,
-            "TT_METAL_STREAMING_PROFILER is not supported on Quasar: the streaming profiler needs a DRISC "
+            "TT_METAL_DEVICE_OBSERVABILITY is not supported on Quasar: device observability needs a DRISC "
             "drainer, which Quasar does not have. Use TT_METAL_DEVICE_PROFILER instead.");
-        this->defines_ += "-DPROFILE_KERNEL=1 -DPROFILE_STREAMING=1 ";
-        if (rtoptions.get_streaming_profiler_sync_events_enabled()) {
-            // Enable synchronization-event instrumentation (internal/profiler/synchronization_event_profiler.hpp)
-            // Note: only enabled with streaming profiler.
-            this->defines_ += "-DPROFILE_SYNC_EVENTS=1 ";
+        this->defines_ += "-DPROFILE_KERNEL=1 -DDEVICE_OBSERVABILITY=1 ";
+        if (rtoptions.get_device_observability_inline_enabled()) {
+            this->defines_ += "-DDEVICE_OBSERVABILITY_INLINE_ENABLED=1 ";
         }
-        if (rtoptions.get_streaming_profiler_inline_enabled()) {
-            this->defines_ += "-DPROFILE_INLINE_ENABLED=1 ";
+        if (rtoptions.get_streaming_profiler_enabled()) {
+            this->defines_ += "-DPROFILE_STREAMING=1 ";
+            if (rtoptions.get_streaming_profiler_sync_events_enabled()) {
+                // Enable synchronization-event instrumentation (internal/profiler/synchronization_event_profiler.hpp)
+                // Note: only enabled with streaming profiler.
+                this->defines_ += "-DPROFILE_SYNC_EVENTS=1 ";
+            }
         }
     }
     if (rtoptions.get_profiler_noc_events_enabled()) {
@@ -593,8 +596,8 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     // Linker flags
     this->lflags_ += jit_build_query.linker_flags(params);
     this->lflags_ += fmt::format("-T{} ", this->linker_script_);
-    // Kernels keep relocations for XIP, and under the streaming profiler firmware does too, to rebase call-site ids.
-    if (!this->is_fw_ || env_.get_rtoptions().get_streaming_profiler_enabled()) {
+    // Kernels keep relocations for XIP, and under device observability firmware does too, to rebase call-site ids.
+    if (!this->is_fw_ || env_.get_rtoptions().get_device_observability_enabled()) {
         this->lflags_ += "-Wl,--emit-relocs ";
     }
 

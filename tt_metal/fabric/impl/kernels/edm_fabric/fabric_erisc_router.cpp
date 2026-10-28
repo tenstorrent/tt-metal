@@ -47,7 +47,7 @@
 #include <cstdint>
 #include <type_traits>
 
-#if defined(PROFILE_STREAMING) && defined(ARCH_BLACKHOLE)
+#if defined(DEVICE_OBSERVABILITY) && defined(ARCH_BLACKHOLE)
 #include "tt_metal/impl/streaming_profiler/kernels/link_sync.hpp"
 #endif
 
@@ -2287,7 +2287,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     }
                 }
             }
-#if defined(PROFILE_STREAMING) && defined(ARCH_BLACKHOLE)
+#if defined(DEVICE_OBSERVABILITY) && defined(ARCH_BLACKHOLE)
             link_sync::RouterHook::step(fabric_heartbeat_counter);
 #endif
         }

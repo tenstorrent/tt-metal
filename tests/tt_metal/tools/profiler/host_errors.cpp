@@ -13,11 +13,11 @@
 #include <utility>
 #include <variant>
 
-#include <tt-metalium/experimental/streaming_profiler.hpp>
+#include <tt-metalium/experimental/device_observability.hpp>
 
 namespace host_errors {
 
-using namespace tt::tt_metal::experimental::streaming_profiler;
+using namespace tt::tt_metal::experimental::device_observability;
 
 struct Name {
     String name;
