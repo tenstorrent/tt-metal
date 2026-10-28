@@ -16,6 +16,8 @@
 
 namespace ttnn::operations::experimental::quasar::transpose_op {
 
+using ttnn::operations::data_movement::has_subaligned_shard_row;
+
 namespace detail {
 
 using namespace tt::tt_metal::experimental;
@@ -114,8 +116,29 @@ inline Tensor transpose_(
         output_mem_constructed = output_mem_config.value();
     }
 
+    // noc_async_write_sharded mis-splits rows of a B/W-sharded RM output whose shard row isn't a
+    // multiple of the buffer alignment, and each prim rescales or synthesizes its own spec for a
+    // specless config. Ask the prim for the spec it will write; if it's sub-aligned, write L1
+    // interleaved and reshard to it.
+    const auto launch_prim = [&](const auto& compute_output_spec, const auto& run) -> ttnn::Tensor {
+        if (a.layout() == Layout::ROW_MAJOR && output_mem_constructed.is_sharded()) {
+            const auto output_mc = compute_output_spec().memory_config();
+            if (has_subaligned_shard_row(output_mc, a.element_size())) {
+                const auto staged = run(MemoryConfig(TensorMemoryLayout::INTERLEAVED, BufferType::L1));
+                return ttnn::to_memory_config(staged, output_mc, std::nullopt);
+            }
+        }
+        return run(output_mem_constructed);
+    };
+
     auto prim_permute = [&](const ttnn::Tensor& input, const ttsl::SmallVector<uint32_t>& dims) -> ttnn::Tensor {
-        return ttnn::prim::permute(input, dims, output_mem_constructed, std::nullopt, pad_value);
+        return launch_prim(
+            [&] {
+                return ttnn::operations::data_movement::PermuteDeviceOperation::compute_output_specs(
+                    {.dims = dims, .output_mem_config = output_mem_constructed, .pad_value = pad_value},
+                    {.input_tensor = input, .optional_output_tensor = std::nullopt});
+            },
+            [&](const MemoryConfig& mc) { return ttnn::prim::permute(input, dims, mc, std::nullopt, pad_value); });
     };
 
     bool interleaved_rm = !a.is_sharded() && a.layout() == Layout::ROW_MAJOR;
@@ -163,7 +186,13 @@ inline Tensor transpose_(
             break;
         default: break;
     }
-    return ttnn::prim::qsr::transpose(a, transpose_dim, output_mem_constructed, pad_value);
+    return launch_prim(
+        [&] {
+            return ttnn::prim::qsr::TransposeDeviceOperation::compute_output_specs(
+                {.dim = transpose_dim, .output_mem_config = output_mem_constructed, .pad_value = pad_value},
+                {.input = a});
+        },
+        [&](const MemoryConfig& mc) { return ttnn::prim::qsr::transpose(a, transpose_dim, mc, pad_value); });
 }
 
 ttnn::Tensor transpose_nd(
@@ -196,18 +225,46 @@ ttnn::Tensor transpose_impl(
     const std::optional<MemoryConfig>& memory_config_arg,
     float pad_value = 0.0f) {
     {
-        // Irregular RM block/width sharded hits a pages_per_shard misread in noc_async_*_sharded.
-        // Unshard until the kernel-side helpers handle irregular RM geometries.
+        // Irregular RM block/width sharded hits a pages_per_shard misread in noc_async_*_sharded, and
+        // so does a shard row that isn't a multiple of the buffer alignment (the helpers use the
+        // aligned page size as both the page stride and the per-page payload). Unshard until the
+        // kernel-side helpers handle those geometries.
         const bool rm = input_tensor.layout() == Layout::ROW_MAJOR;
         const bool in_sharded = detail::is_block_or_width_sharded_mc(input_tensor.memory_config());
         const auto& input_logical = input_tensor.logical_shape();
         const bool irregular_hw = input_logical.rank() >= 2 && (input_logical[-1] % tt::constants::TILE_WIDTH != 0 ||
                                                                 input_logical[-2] % tt::constants::TILE_HEIGHT != 0);
-        if (rm && in_sharded && irregular_hw) {
+        const bool subaligned_row =
+            has_subaligned_shard_row(input_tensor.memory_config(), input_tensor.element_size());
+        if (rm && in_sharded && (irregular_hw || subaligned_row)) {
+            // Snapshot orientation before the L1-interleaved staging hop strips it.
+            std::optional<tt::tt_metal::ShardOrientation> input_orientation_hint;
+            if (input_tensor.shard_spec().has_value()) {
+                input_orientation_hint = input_tensor.shard_spec()->orientation;
+            }
+            auto resolved_mc = memory_config_arg;
+            if (memory_config_arg.has_value() && memory_config_arg->is_sharded() &&
+                !memory_config_arg->shard_spec().has_value()) {
+                const auto& input_padded = input_tensor.padded_shape();
+                const uint32_t n1 = input_logical.get_normalized_index(dim1);
+                const uint32_t n2 = input_logical.get_normalized_index(dim2);
+                ttsl::SmallVector<uint32_t> out_padded_vec(input_padded.cbegin(), input_padded.cend());
+                std::swap(out_padded_vec[n1], out_padded_vec[n2]);
+                auto output_padded_shape = ttnn::Shape(std::move(out_padded_vec));
+                // Composite path opts into RM-safe synth; TILE inputs still tile-inflate.
+                auto spec = generate_transpose_shard_spec(
+                    input_tensor,
+                    output_padded_shape,
+                    memory_config_arg->memory_layout(),
+                    input_orientation_hint,
+                    input_tensor.layout() == Layout::TILE ? OutputTiling::Tile : OutputTiling::RowMajor);
+                resolved_mc = tt::tt_metal::MemoryConfig(
+                    memory_config_arg->memory_layout(), memory_config_arg->buffer_type(), std::move(spec));
+            }
             const auto interleaved_l1 =
                 tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1);
             Tensor x = ttnn::to_memory_config(input_tensor, interleaved_l1, std::nullopt);
-            return transpose_impl(x, dim1, dim2, memory_config_arg, pad_value);
+            return transpose_impl(x, dim1, dim2, resolved_mc, pad_value);
         }
     }
     const auto& input_shape = input_tensor.logical_shape();
