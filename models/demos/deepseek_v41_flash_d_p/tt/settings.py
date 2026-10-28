@@ -535,7 +535,10 @@ TABLE = {
         "NVMe, read_ahead_kb 128, 32 CPUs), layer 1, 5120 tokens, gather a layer a chunk: cold mmap 7.2 s, cold "
         "random 0.42 s (8 threads), resident 9-15 ms; load of one layer resident 109 s. With ENGRAM_ROWS=bfp8 resident "
         "holds the rows already as bfloat8_b (272 B a row, 104.4 GB a layer; built in 84 s at 1.24 GB/s) and a 5120-token "
-        "chunk takes 7.6 ms on 8 threads from hash to TILE bytes. Default resident (owner 2026-10-28; random before)",
+        "chunk takes 7.6 ms on 8 threads from hash to TILE bytes. Default resident (owner 2026-10-28; random before). "
+        "Tests: random (owner 2026-10-28: no table build at every test's start; rows bit-identical, "
+        "tests/test_engram_table_modes.py)",
+        test="random",
     ),
     "ENGRAM_ROWS": Setting(
         "bfp8",
