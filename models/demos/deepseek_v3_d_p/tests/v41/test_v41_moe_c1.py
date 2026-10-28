@@ -251,7 +251,21 @@ def test_v41_moe_c1(mesh_device, device_params):
             ttnn.deallocate(fresh_w)
         idx = ttnn.to_torch(ttnn.get_device_tensors(c1.debug["indices"])[0])[0, :6].tolist()
         ref_row, out_row = rows_of(ref, r, u), rows_of(out, r, u)
+        per_row = {}
         if n_rows > 1:
+            # per row: the c1 row against the 32-row path's, and a second eager call on the same input against
+            # the first (determinism); the rows' expert ids and the chip counts
+            again = c1(tt_h, sel, put, n_rows)
+            again_rows = rows_of(again, r, u)
+            ttnn.deallocate(again)
+            all_idx = ttnn.to_torch(ttnn.get_device_tensors(c1.debug["indices"])[0])[:n_rows, :6].tolist()
+            per_row = {
+                "pcc": [round(_pcc(ref_row[t], out_row[t]), 5) for t in range(n_rows)],
+                "max_abs": [round(float((ref_row[t] - out_row[t]).abs().max()), 4) for t in range(n_rows)],
+                "again_max_abs": [round(float((again_rows[t] - out_row[t]).abs().max()), 4) for t in range(n_rows)],
+                "experts": all_idx,
+            }
+            logger.info(f"c1 moe rows {n_rows} per row {json.dumps(per_row)}")
             # the same call captured and replayed: the replay's rows must equal the eager call's (the verify
             # step's rounds replay it)
             ttnn.synchronize_device(mesh_device)
@@ -271,7 +285,7 @@ def test_v41_moe_c1(mesh_device, device_params):
                 "replay_diff_words": n_diff,
             }
             logger.info(f"c1 moe rows {n_rows} replay check {entry_replay}")
-            assert n_diff == 0, f"the replayed c1 call differs from the eager one in {n_diff} words"
+            result.setdefault("replay_diff_words", []).append(n_diff)
         max_abs = float((ref_row - out_row).abs().max())
         rel = max_abs / max(float(ref_row.abs().max()), 1e-6)
         pcc = _pcc(ref_row, out_row)
@@ -310,6 +324,7 @@ def test_v41_moe_c1(mesh_device, device_params):
             "ref_absmax": round(float(ref_row.abs().max()), 4),
             "idle_max": idle_max,
             "oracle": oracle,
+            "per_row": per_row,
         }
         result["trials"].append(entry)
         logger.info(f"c1 moe trial {json.dumps(entry)}")
@@ -381,6 +396,9 @@ def test_v41_moe_c1(mesh_device, device_params):
         with open(os.path.expanduser(out_path), "w") as f:
             json.dump(result, f, indent=1)
     decoder.release()
+    assert not any(
+        result.get("replay_diff_words", [])
+    ), f"replayed calls differ from eager: {result['replay_diff_words']}"
     assert worst["pcc"] > 0.999, worst
     if use_oracle and worst["rel"] >= 0.02:
         # a path nearer the exact MoE than the 32-row path may differ from that path by more than the bf16 bar

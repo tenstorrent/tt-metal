@@ -82,7 +82,15 @@ def test_v41_verify_rows(mesh_device, device_params):
     max_seq = -(-(prompt_len + 8 * n_tokens + 64) // chunk) * chunk
     assert cap % chunk == 0 and cap >= max_seq, (cap, chunk, max_seq)
     tokenizer = AutoTokenizer.from_pretrained(orc.HF_SNAPSHOT)
-    text = orc.text_tokens(prompt_len + 8)[0]
+    need = prompt_len + 8
+    try:
+        text = orc.text_tokens(need)[0]
+    except ValueError as e:  # a prompt beyond the book (the 1M gate): the book repeated end to end
+        have = int(str(e).split()[0])
+        text = orc.text_tokens(have)[0].repeat(-(-need // have))[:need]
+        logger.info(
+            f"verify rows: {have} tokens of text repeated {-(-need // have)} times for a prompt of {prompt_len}"
+        )
     prompt = text[:prompt_len]
     record = {
         "fused": fused,
