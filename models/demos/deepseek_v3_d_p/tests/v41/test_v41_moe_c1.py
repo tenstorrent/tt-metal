@@ -16,7 +16,11 @@ Run with ``V41_DECODE_ROUTING=1 V41_DECODE_TAIL=1 V41_DECODE_C1_MOE=1 TT_V41_EXP
 expert dtype); with the served catalog's ``V41_SHARED_IN_FFN=rs`` the 32-row path folds the
 shared expert's partial into its tail and the c1 path takes that partial from the tail's ``pending_shared``
 (``C1Moe.shared_fold`` reads ``pending``; ``returned`` with the MoE's own shared expert), and the test checks the
-tail holds nothing after either path."""
+tail holds nothing after either path.
+
+``V41_C1_ROWS=n`` (default 1): the c1 MoE on ``n`` live rows of one user (``C1Moe(rows=n)``, the speculative verify
+step's ``1 + K`` rows): rows ``u .. u + n - 1`` of the live rank against the 32-row path, the
+idle rows zero, and one traced call replayed against the eager call on the same input (bit for bit)."""
 
 import json
 import os
@@ -101,6 +105,7 @@ def test_v41_moe_c1(mesh_device, device_params):
     layer = int(os.environ.get("V41_C1_LAYER", 2))
     trials = int(os.environ.get("V41_C1_TRIALS", 8))
     replays = int(os.environ.get("V41_C1_REPLAYS", 20))
+    n_rows = int(os.environ.get("V41_C1_ROWS", 1))
     users = 4
     ckpt = resolve_checkpoint()
     if ckpt is None:
@@ -123,8 +128,9 @@ def test_v41_moe_c1(mesh_device, device_params):
         chunk=1024,
         weight_cache_path=root,
     )
-    decoder = TtV41BatchDecoder(model, root, users_per_rank=users, trace=False)
-    logger.info(f"c1 moe: layer {layer} built in {time.time() - t0:.1f} s")
+    decoder_cls = type("RowsDecoder", (TtV41BatchDecoder,), {"C1_ROWS": n_rows}) if n_rows > 1 else TtV41BatchDecoder
+    decoder = decoder_cls(model, root, users_per_rank=users, trace=False)
+    logger.info(f"c1 moe: layer {layer} built in {time.time() - t0:.1f} s; {n_rows} live rows a call")
     # one prefill first, as every served or tested flow has: without it the decode tail's ``ttnn.reduce_scatter``
     # leaves a 512-byte L1 block at 914,176 after its first call and every later routed-expert FFN program (the
     # 32-row one included) is rejected at compile against it
@@ -146,7 +152,25 @@ def test_v41_moe_c1(mesh_device, device_params):
         "c1_select": os.environ.get("V41_DECODE_C1_SELECT", "fresh"),
         "c1_ffn": os.environ.get("V41_DECODE_C1_FFN", "composite"),
         "c1_ffn_fidelity": os.environ.get("V41_DECODE_C1_FFN_FIDELITY", "lofi"),
+        "rows": n_rows,
     }
+
+    def host_rows(r: int, u: int) -> dict:
+        """``C1Moe.host_rows`` for ``n_rows`` rows ``u .. u + n_rows - 1`` of rank ``r`` (rows 0 .. n - 1 of the
+        c1 tile and back; the verify decoder's layout)."""
+        if n_rows == 1:
+            return C1Moe.host_rows(sp, ROWS, (r, u))
+        from models.demos.deepseek_v3_d_p.tt.v41.moe_c1 import _SENTINEL
+
+        sel = torch.full((sp, ROWS), _SENTINEL, dtype=torch.int32)
+        put = torch.full((sp, ROWS), _SENTINEL, dtype=torch.int32)
+        for j in range(n_rows):
+            sel[r, j], put[r, u + j] = u + j, j
+        return {"c1sel": sel, "c1put": put}
+
+    def rows_of(t, r: int, u: int) -> torch.Tensor:
+        return torch.stack([_row(t, r, u + j, tp) for j in range(n_rows)])
+
     if shared_mode == "split":
         # the split weights: every chip's piece bit for bit the host slice of its TP shard
         split = c1.shared_split
@@ -178,7 +202,7 @@ def test_v41_moe_c1(mesh_device, device_params):
         logger.info(f"c1 shared split: width {split.width}, tiles per SP rank {split.counts}, bit-exact on 32 chips")
     worst = {"max_abs": 0.0, "pcc": 1.0, "rel": 0.0}
     coverage = {}
-    use_oracle = os.environ.get("V41_C1_ORACLE", "1" if result["c1_ffn"] == "matvec" else "0") == "1"
+    use_oracle = os.environ.get("V41_C1_ORACLE", "1" if result["c1_ffn"] == "matvec" else "0") == "1" and n_rows == 1
     oracle_worst = {"full": 0.0, "c1": 0.0}
     for trial in range(trials):
         h = torch.randn(sp, ROWS, hidden) * 1.0
@@ -190,16 +214,13 @@ def test_v41_moe_c1(mesh_device, device_params):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, (sp, tp), dims=(2, 3)),
         )
-        r, u = int(torch.randint(sp, (1,))), int(torch.randint(users, (1,)))
-        rows = {
-            k: decoder.pool.per_rank(v.view(sp, 1, 1, ROWS), ttnn.uint32)
-            for k, v in C1Moe.host_rows(sp, ROWS, (r, u)).items()
-        }
+        r, u = int(torch.randint(sp, (1,))), int(torch.randint(users - n_rows + 1, (1,)))
+        rows = {k: decoder.pool.per_rank(v.view(sp, 1, 1, ROWS), ttnn.uint32) for k, v in host_rows(r, u).items()}
         sel, put = C1Moe.onehots(rows["c1sel"], rows["c1put"], decoder.c1_table)
         c1.debug = {}
         ref = decoder._ffn(moe, tt_h)
         assert moe.moe.reduce_module.pending_shared is None, "the 32-row path left a shared partial in the tail"
-        out = c1(tt_h, sel, put)
+        out = c1(tt_h, sel, put, n_rows)
         assert moe.moe.reduce_module.pending_shared is None, "the c1 path left a shared partial in the tail"
         expect_fold = "split" if shared_mode == "split" else ("pending" if shared_in_ffn != "0" else "returned")
         assert c1.shared_fold == expect_fold, (c1.shared_fold, expect_fold)
@@ -211,7 +232,7 @@ def test_v41_moe_c1(mesh_device, device_params):
             ttnn.deallocate(decoder._ffn(moe, tt_h))
             ttnn.synchronize_device(mesh_device)
             signpost("c1")
-            ttnn.deallocate(c1(tt_h, sel, put))
+            ttnn.deallocate(c1(tt_h, sel, put, n_rows))
             ttnn.synchronize_device(mesh_device)
             signpost("stop")
         counts = [int(ttnn.to_torch(t).sum()) for t in ttnn.get_device_tensors(c1.debug["counts"])]
@@ -219,7 +240,7 @@ def test_v41_moe_c1(mesh_device, device_params):
             # the persistent weight tile against a fresh one from the same indices and weights, every chip
             from models.demos.deepseek_v3_d_p.tt.v41.moe_c1 import c1_select
 
-            fresh_counts, fresh_w = c1_select(c1.debug["indices"], c1.debug["weights"], c1.table, c1.E)
+            fresh_counts, fresh_w = c1_select(c1.debug["indices"], c1.debug["weights"], c1.table, c1.E, rows=n_rows)
             for i, (a, b) in enumerate(zip(ttnn.get_device_tensors(fresh_w), ttnn.get_device_tensors(c1.W0))):
                 assert torch.equal(ttnn.to_torch(a), ttnn.to_torch(b)), f"persistent W differs on chip {i}"
             for i, (a, b) in enumerate(
@@ -229,7 +250,28 @@ def test_v41_moe_c1(mesh_device, device_params):
             ttnn.deallocate(fresh_counts)
             ttnn.deallocate(fresh_w)
         idx = ttnn.to_torch(ttnn.get_device_tensors(c1.debug["indices"])[0])[0, :6].tolist()
-        ref_row, out_row = _row(ref, r, u, tp), _row(out, r, u, tp)
+        ref_row, out_row = rows_of(ref, r, u), rows_of(out, r, u)
+        if n_rows > 1:
+            # the same call captured and replayed: the replay's rows must equal the eager call's (the verify
+            # step's rounds replay it)
+            ttnn.synchronize_device(mesh_device)
+            tid = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+            replayed = c1(tt_h, sel, put, n_rows)
+            ttnn.end_trace_capture(mesh_device, tid, cq_id=0)
+            ttnn.synchronize_device(mesh_device)
+            eager_rows = rows_of(replayed, r, u)  # the capture ran the ops once
+            ttnn.execute_trace(mesh_device, tid, cq_id=0, blocking=False)
+            ttnn.synchronize_device(mesh_device)
+            replay_rows = rows_of(replayed, r, u)
+            ttnn.release_trace(mesh_device, tid)
+            ttnn.deallocate(replayed)
+            n_diff = int((eager_rows != replay_rows).sum())
+            entry_replay = {
+                "captured_vs_eager_max_abs": float((eager_rows - out_row).abs().max()),
+                "replay_diff_words": n_diff,
+            }
+            logger.info(f"c1 moe rows {n_rows} replay check {entry_replay}")
+            assert n_diff == 0, f"the replayed c1 call differs from the eager one in {n_diff} words"
         max_abs = float((ref_row - out_row).abs().max())
         rel = max_abs / max(float(ref_row.abs().max()), 1e-6)
         pcc = _pcc(ref_row, out_row)
@@ -253,7 +295,7 @@ def test_v41_moe_c1(mesh_device, device_params):
         for i, chip in enumerate(ttnn.get_device_tensors(out)):
             t = ttnn.to_torch(chip)[0, 0].float()
             if i // tp == r:
-                t = torch.cat([t[:u], t[u + 1 :]])
+                t = torch.cat([t[:u], t[u + n_rows :]])
             idle_max = max(idle_max, float(t.abs().max()))
         for n in counts:
             coverage[n] = coverage.get(n, 0) + 1
@@ -278,7 +320,10 @@ def test_v41_moe_c1(mesh_device, device_params):
         }
         for name in oracle:
             oracle_worst[name] = max(oracle_worst[name], oracle[name]["rel"])
-        assert sum(counts) == 6, f"the row's 6 experts over the chips: {counts}"
+        if n_rows == 1:
+            assert sum(counts) == 6, f"the row's 6 experts over the chips: {counts}"
+        else:
+            assert sum(counts) % n_rows == 0 and 6 * n_rows <= sum(counts) <= 6 * n_rows * n_rows, counts
         assert idle_max == 0.0, f"the c1 output's idle rows are not zero: {idle_max}"
         for t in (ref, out, tt_h, sel, put):
             ttnn.deallocate(t)
@@ -296,13 +341,10 @@ def test_v41_moe_c1(mesh_device, device_params):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, (sp, tp), dims=(2, 3)),
     )
-    rows = {
-        k: decoder.pool.per_rank(v.view(sp, 1, 1, ROWS), ttnn.uint32)
-        for k, v in C1Moe.host_rows(sp, ROWS, (1, 2)).items()
-    }
+    rows = {k: decoder.pool.per_rank(v.view(sp, 1, 1, ROWS), ttnn.uint32) for k, v in host_rows(1, 0).items()}
     sel, put = C1Moe.onehots(rows["c1sel"], rows["c1put"], decoder.c1_table)
     c1.debug = {}
-    ttnn.deallocate(c1(tt_h, sel, put))
+    ttnn.deallocate(c1(tt_h, sel, put, n_rows))
     timing_counts = [int(ttnn.to_torch(t).sum()) for t in ttnn.get_device_tensors(c1.debug["counts"])]
     for k in ("weights", "x_full"):
         if k in c1.debug:
@@ -311,7 +353,7 @@ def test_v41_moe_c1(mesh_device, device_params):
     result["timing_chip_counts"] = timing_counts  # the timed row's experts per chip (the busiest chip is the layer)
     logger.info(f"c1 moe timing row: experts per chip {timing_counts}")
     timing = {}
-    paths = (("full", lambda: decoder._ffn(moe, tt_h)), ("c1", lambda: c1(tt_h, sel, put)))
+    paths = (("full", lambda: decoder._ffn(moe, tt_h)), ("c1", lambda: c1(tt_h, sel, put, n_rows)))
     for name, fn in () if os.environ.get("V41_C1_PROFILE") == "1" else paths:
         for _ in range(2):
             ttnn.deallocate(fn())
