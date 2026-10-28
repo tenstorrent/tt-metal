@@ -23,16 +23,8 @@ namespace llk2
 {
 
 /// Runs one resolved eltwise binary op: checks acc against the Resolver's result, then unpack and math.
-template <
-    const auto& Api,
-    auto Mods,
-    const TensorSpec<tensor_rank>& A,
-    class RA,
-    const TensorSpec<tensor_rank>& B,
-    class RB,
-    const TensorSpec<tensor_rank>& D,
-    class RD>
-inline __attribute__((always_inline)) void eltwise_binary(const Tensor<A, RA>& a, const Tensor<B, RB>& b, const Tensor<D, RD>& acc)
+template <const auto& Api, auto Mods, const TensorSpec<tensor_rank>& A, const TensorSpec<tensor_rank>& B, const TensorSpec<tensor_rank>& D>
+inline __attribute__((always_inline)) void eltwise_binary(const Tensor<A>& a, const Tensor<B>& b, const Tensor<D>& acc)
 {
     static_assert(D.storage == Storage::Dest, "an eltwise binary op writes Dest");
     static_assert(

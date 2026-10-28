@@ -9,8 +9,13 @@
 //   TensorShape  sizes and strides over tensor_rank (6) dims, outermost first, strides in datums, plus an offset in
 //                datums: tile y/x, face y/x, datum y/x
 //   TensorSpec   the shape, the data format, the storage (L1 or Dest) and the owner (thread, unit). Compile time
-//   Tensor       a spec by reference and a release action, both in its type, and a run-time address
-//                (L1: the byte address of datum 0; Dest: the first row)
+//   Tensor       a spec by reference in its type, and a run-time address (L1: the byte address of datum 0; Dest:
+//                the first row)
+//
+// An L1 Tensor's address is valid only on the thread that uses it: the unpack thread for inputs (it reads them), the
+// pack thread for outputs (it writes them); on other threads it may be anything (a kernel's buffer pointer is 0 on
+// math). So every llk-lib call that takes an L1 address runs on unpack or pack; no math-side call (matmul,
+// eltwise_binary, copy, vec, the Dest sync) takes one.
 //
 // A kernel names a spec with l1_spec / dst_spec (or make_spec), which lay the tile grid out with tiled() and give it
 // L1's dense strides or Dest's row strides (laid_out). The Resolver reads specs; llk-lib reads only the Plan.
@@ -77,8 +82,8 @@ inline constexpr std::uint32_t dest_row_datums    = 16;                 ///< dat
 inline constexpr std::uint32_t min_dest_face_rows = 8;                  ///< every face takes at least an 8-row slot in Dest (Quasar's tiny_face_stride)
 inline constexpr std::uint32_t max_tiny_face_rows = min_dest_face_rows; ///< the tallest tiny tile: tiny tiles are 1, 2, 4 or 8 rows
 inline constexpr std::uint32_t bfp_block_datums   = 16;                 ///< block float formats share one exponent byte per 16 datums
-inline constexpr std::uint32_t l1_word_bytes      = 16;                 ///< L1 word: tiles in L1 are padded to whole words, and the unpacker, packer and
-                                                                        ///< dataflow buffer addresses and tile sizes count words
+inline constexpr std::uint32_t l1_word_bytes      = 16;                 ///< L1 word: tiles in L1 are padded to whole words, and the unpacker's and
+                                                                        ///< packer's addresses and tile sizes count words
 inline constexpr std::uint32_t bits_per_byte      = 8;                  ///< bits in one byte, for datum_bits to bytes
 inline constexpr std::uint32_t faces_per_face_row = default_tile_dim / face_cols; ///< faces side by side in a full tile: 2
 inline constexpr std::uint32_t faces_per_full_tile =
@@ -105,18 +110,10 @@ struct TensorSpec
     Exu exu;                 ///< the owner: its unit
 };
 
-/// The release action of a Tensor that needs none.
-struct NoRelease
-{
-    /// Does nothing.
-    void operator()() const
-    {
-    }
-};
-
-/// A tensor: spec S and release action Release in its type, the address at run time.
-template <const auto& S, class Release = NoRelease>
-struct Tensor : Release
+/// A tensor: spec S in its type, the address at run time. An L1 address is valid only on the thread that reads or
+/// writes the tensor (see the top of this file).
+template <const auto& S>
+struct Tensor
 {
     static constexpr const auto& spec = S; ///< the tensor's spec
     std::uint32_t address;                 ///< L1: byte address of datum 0; Dest: the absolute first row
@@ -126,13 +123,6 @@ struct Tensor : Release
     {
     }
 };
-
-/// Runs t's release action (a dataflow buffer pop or push; nothing for NoRelease).
-template <const auto& S, class R>
-inline void release(const Tensor<S, R>& t)
-{
-    static_cast<const R&>(t)();
-}
 
 // ---- helpers over tensor_rank shapes and specs ---------------------------------------------------------------------
 
