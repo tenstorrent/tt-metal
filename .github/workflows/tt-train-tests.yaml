@@ -22,6 +22,14 @@ on:
         description: >-
           .deb packages artifact to install instead of extracting a build tarball. Test commands
           must then call the installed binaries (e.g. ttml_tests from tt-ml-validation).
+      prebuilt-image:
+        required: false
+        type: string
+        default: ""
+        description: >-
+          Image with the packages already installed. When set it replaces docker-image and the
+          download and install steps are skipped. Still requires package-artifact-name, which is
+          the fallback when this is empty, as it always is on PRs from forks.
       wheel-artifact-name:
         required: false
         type: string
@@ -86,6 +94,12 @@ jobs:
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/train_${{ inputs.test-category }}_tests.yaml
     steps:
+      - name: Check package inputs
+        if: ${{ inputs.prebuilt-image != '' && inputs.package-artifact-name == '' }}
+        run: |
+          echo "::error::prebuilt-image needs package-artifact-name: it selects the packages-mode checkout, setup and sanitizer options, and is the fallback when the image is empty"
+          exit 1
+
       - name: Checkout the repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         timeout-minutes: 20
@@ -133,7 +147,8 @@ jobs:
     runs-on: ${{ matrix.test-group.runs_on }}
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
-      image: ${{ inputs.harbor-prefix }}${{ inputs.docker-image || 'docker-image-unresolved!' }}
+      # A prebuilt image is a canonical ghcr ref, so it takes no Harbor prefix.
+      image: ${{ inputs.prebuilt-image || format('{0}{1}', inputs.harbor-prefix, inputs.docker-image || 'docker-image-unresolved!') }}
       env:
         LOGURU_LEVEL: INFO
         TT_LOGGER_LEVEL: warn
@@ -172,7 +187,7 @@ jobs:
           auto-triage: ${{ !inputs.enable-watcher }}
 
       - name: ⬇️ Download packages
-        if: ${{ inputs.package-artifact-name != '' }}
+        if: ${{ inputs.package-artifact-name != '' && inputs.prebuilt-image == '' }}
         uses: ./docker-job/.github/actions/download-artifact-with-retry
         timeout-minutes: 10
         with:
@@ -180,7 +195,7 @@ jobs:
           path: /work/pkgs/
 
       - name: Install packages
-        if: ${{ inputs.package-artifact-name != '' }}
+        if: ${{ inputs.package-artifact-name != '' && inputs.prebuilt-image == '' }}
         timeout-minutes: 10
         run: |
           # tt-metalium-jit is optional: TT_USE_SYSTEM_SFPI builds don't produce it.
