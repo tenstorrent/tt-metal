@@ -4,6 +4,7 @@
 
 #include "api/compute/common.h"
 #include "api/compute/eltwise_binary.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 
@@ -12,6 +13,9 @@ void kernel_main() {
     constexpr auto num_output_tiles = get_arg(args::num_output_tiles);
     constexpr auto num_input_tiles = get_arg(args::num_input_tiles);
     constexpr auto input_granularity = get_arg(args::input_granularity);
+    // fp32 bits of the factor applied to each reduced tile before packing; 1.0f skips the multiply.
+    constexpr uint32_t post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
+    constexpr bool apply_post_mul = post_mul_scaler_bits != 0x3f800000u;
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst0 = 0;
@@ -41,6 +45,10 @@ void kernel_main() {
                 add_tiles(dfb::in0, dfb::in1, k, first_tile, dst0);
             }
             cb_in0_obj.pop_front(input_granularity);
+        }
+        if constexpr (apply_post_mul) {
+            binop_with_scalar_tile_init();
+            mul_unary_tile(dst0, post_mul_scaler_bits);
         }
         tile_regs_commit();
         cb_out0_obj.reserve_back(onetile);

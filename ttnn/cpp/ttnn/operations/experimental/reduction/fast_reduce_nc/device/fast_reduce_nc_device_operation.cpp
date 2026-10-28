@@ -86,6 +86,10 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
                                                                   : args.output_dtype.value_or(DataType::INT32);
         TT_FATAL(
             output_dtype == DataType::INT32, "FastReduceNC INT32 input requires an INT32 output, got {}", output_dtype);
+        TT_FATAL(
+            args.post_mul_scaler == 1.0f,
+            "FastReduceNC INT32 input does not support post_mul_scaler, got {}",
+            args.post_mul_scaler);
     }
 
     CMAKE_UNIQUE_NAMESPACE::validate_split_output(args, tensor_args);
@@ -184,7 +188,8 @@ Tensor fast_reduce_nc(
     const DeviceComputeKernelConfig& compute_kernel_config,
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<DataType>& output_dtype,
-    bool use_sfpu_reduce) {
+    bool use_sfpu_reduce,
+    float post_mul_scaler) {
     using OperationType = ttnn::experimental::prim::FastReduceNCDeviceOperation;
 
     auto operation_attributes = OperationType::operation_attributes_t{
@@ -193,7 +198,8 @@ Tensor fast_reduce_nc(
         .compute_kernel_config = compute_kernel_config,
         .sub_core_grids = sub_core_grids,
         .output_dtype = output_dtype,
-        .use_sfpu_reduce = use_sfpu_reduce};
+        .use_sfpu_reduce = use_sfpu_reduce,
+        .post_mul_scaler = post_mul_scaler};
     auto tensor_args = OperationType::tensor_args_t{.input = input, .preallocated_output = output};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args).front();

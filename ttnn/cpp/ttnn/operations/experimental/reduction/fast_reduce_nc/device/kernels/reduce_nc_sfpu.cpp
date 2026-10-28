@@ -6,6 +6,7 @@
 // so Float32 keeps full precision (the FPU path truncates it to tf32) and Int32 is supported at all.
 
 #include "api/compute/common.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/dataflow/dataflow_buffer.h"
 #include "experimental/kernel_args.h"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
@@ -14,6 +15,9 @@ void kernel_main() {
     constexpr auto num_output_tiles = get_arg(args::num_output_tiles);
     constexpr auto num_input_tiles = get_arg(args::num_input_tiles);
     constexpr auto input_granularity = get_arg(args::input_granularity);
+    // fp32 bits of the factor applied to each reduced tile before packing; 1.0f skips the multiply.
+    constexpr uint32_t post_mul_scaler_bits = get_arg(args::post_mul_scaler_bits);
+    constexpr bool apply_post_mul = post_mul_scaler_bits != 0x3f800000u;
 
     constexpr uint32_t onetile = 1;
     constexpr uint32_t dst_acc = 0;
@@ -40,6 +44,12 @@ void kernel_main() {
                     dfb::in0, k, dst_acc, dst_work, j == 0 && k == 0);
             }
             cb_in0_obj.pop_front(input_granularity);
+        }
+        if constexpr (apply_post_mul) {
+            binop_with_scalar_tile_init();
+            mul_unary_tile(dst_acc, post_mul_scaler_bits);
+            // The multiply reprograms the SFPU; restore the fold for the next output tile.
+            compute_kernel_lib::detail::sfpu_reduce_fold_init<PoolType::SUM, format>();
         }
         tile_regs_commit();
         cb_out0_obj.reserve_back(onetile);

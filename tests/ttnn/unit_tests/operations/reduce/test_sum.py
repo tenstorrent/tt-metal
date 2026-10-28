@@ -328,3 +328,30 @@ def test_sum_nc_ignores_tile_padding(device, dim, dtype):
     output_tensor = ttnn.to_torch(ttnn.sum(input_tensor, dim=dim, keepdim=True))
 
     assert torch.equal(output_tensor, torch_output)
+
+
+@pytest.mark.parametrize(
+    "shape, dim", [((8, 16, 64, 64), [0]), ((7, 9, 64, 64), [0, 1]), ((3, 7, 100, 100), [1]), ((8, 16, 64, 64), [1, 3])]
+)
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32, ttnn.int32], ids=["bf16", "fp32", "int32"])
+def test_sum_nc_scalar(device, shape, dim, dtype):
+    torch.manual_seed(0)
+    scalar = 3.0
+    if dtype == ttnn.int32:
+        torch_input = torch.randint(-1000, 1000, shape, dtype=torch.int32)
+    else:
+        torch_input = torch.randn(shape) * 0.25 + 1.0
+    input_tensor = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    device_input = ttnn.to_torch(input_tensor)
+    if dtype != ttnn.int32:
+        device_input = device_input.float()
+    torch_output = torch.sum(device_input, dim=dim, keepdim=True) * int(scalar)
+
+    output_tensor = ttnn.to_torch(ttnn.sum(input_tensor, dim=dim, keepdim=True, scalar=scalar))
+
+    if dtype == ttnn.int32:
+        assert torch.equal(output_tensor, torch_output)
+    elif dtype == ttnn.float32:
+        assert_with_ulp(expected_result=torch_output, actual_result=output_tensor, ulp_threshold=8)
+    else:
+        assert_allclose(torch_output.float(), output_tensor.float(), rtol=1e-2, atol=0)

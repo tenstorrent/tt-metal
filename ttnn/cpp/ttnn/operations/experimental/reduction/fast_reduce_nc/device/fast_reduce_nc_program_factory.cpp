@@ -4,6 +4,8 @@
 
 #include "ttnn/operations/experimental/reduction/fast_reduce_nc/device/fast_reduce_nc_program_factory.hpp"
 
+#include <bit>
+
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -96,7 +98,7 @@ ttnn::device_operation::ProgramArtifacts FastReduceNCProgramFactory::create_prog
     ////////////////////////////////////////////////////////////////////////////
     //                         Parameters Setup
     ////////////////////////////////////////////////////////////////////////////
-    // Input and output CBs may differ when the Sum precision chain requests FP32 packing.
+    // Input and output CBs may differ when the Sum/Mean precision chain requests FP32 packing.
     const auto input_data_format = datatype_to_dataformat_converter(tensor_args.input.dtype());
     const auto input_tile_size = tt::tile_size(input_data_format);
     const auto output_data_format = datatype_to_dataformat_converter(tensor_return_value.dtype());
@@ -319,7 +321,8 @@ ttnn::device_operation::ProgramArtifacts FastReduceNCProgramFactory::create_prog
             .compile_time_args =
                 {{"num_output_tiles", num_cols_per_core_group},
                  {"num_input_tiles", num_reduce_input_tile},
-                 {"input_granularity", input_granularity}},
+                 {"input_granularity", input_granularity},
+                 {"post_mul_scaler_bits", std::bit_cast<uint32_t>(operation_attributes.post_mul_scaler)}},
             .hw_config = compute_hw,
         };
     };

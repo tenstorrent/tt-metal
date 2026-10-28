@@ -499,12 +499,15 @@ static Tensor std_var_impl(
 }
 
 template <reduction_common::ReduceType reduce_type>
-bool call_fast_nc(DataType dtype) {
-    if constexpr (reduce_type != reduction_common::ReduceType::Sum) {
-        return false;
+bool call_fast_nc(DataType dtype, float scalar) {
+    const bool float_dtype = dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B || dtype == DataType::FLOAT32;
+    if constexpr (reduce_type == reduction_common::ReduceType::Sum) {
+        // fast_reduce_nc scales with a float multiply, so an INT32 sum takes it only unscaled.
+        return float_dtype || (dtype == DataType::INT32 && scalar == 1.0f);
+    } else if constexpr (reduce_type == reduction_common::ReduceType::Mean) {
+        return float_dtype;
     }
-    return dtype == DataType::BFLOAT16 || dtype == DataType::BFLOAT8_B || dtype == DataType::FLOAT32 ||
-           dtype == DataType::INT32;
+    return false;
 }
 
 Tensor non_height_width_reduce(
@@ -515,7 +518,8 @@ Tensor non_height_width_reduce(
     const std::optional<CoreRangeSet>& sub_core_grids,
     const std::optional<DataType>& output_dtype = std::nullopt,
     bool fp32_intermediate_stages = false,
-    bool fast_and_approximate_mode = false) {
+    bool fast_and_approximate_mode = false,
+    float post_mul_scaler = 1.0f) {
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
     const auto& input_shape = input_tensor.logical_shape();
     auto tensor_to_reduce = input_tensor;
@@ -533,7 +537,8 @@ Tensor non_height_width_reduce(
         sub_core_grids,
         output_dtype,
         fp32_intermediate_stages,
-        fast_and_approximate_mode);
+        fast_and_approximate_mode,
+        post_mul_scaler);
     auto [start, end, step] = get_slice_parameters(input_shape, output_tensor.logical_shape());
     // fast_reduce_nc keeps the input's padded H/W as logical, so trimming them back only relabels tile
     // padding. Block-float output keeps the slice, which leaves its shared-exponent padding clean.
@@ -668,8 +673,7 @@ Tensor reduce(
         (dim.size() < static_cast<size_t>(in_shape.rank()) ||
          input_tensor.logical_volume() > static_cast<uint64_t>(in_shape[-2]) * in_shape[-1]);
 
-    // fast_reduce_nc ignores `scalar` so it can't be used when scalar != 1.0f.
-    if (call_fast_nc<reduce_type>(input_tensor.dtype()) && scalar == 1.0f) {
+    if (call_fast_nc<reduce_type>(input_tensor.dtype(), scalar)) {
         auto dims = split_height_width_dims(dim, input_tensor);
         non_height_width_dims = dims.first;
         height_width_dims = dims.second;
@@ -696,6 +700,13 @@ Tensor reduce(
                 fast_nc_final_dtype = height_width_dims.empty() ? DataType::BFLOAT16 : DataType::FLOAT32;
                 fast_nc_intermediate_fp32 = non_height_width_dims.size() > 1;
             }
+            // The scale is applied once: by fast_reduce_nc when no H/W stage follows, else by the H/W stage,
+            // which divides a mean by its own H/W volume, so it takes only the N/C share of 1/N.
+            float nc_volume = 1.0f;
+            for (int d : non_height_width_dims) {
+                nc_volume *= static_cast<float>(input_tensor.logical_shape()[d]);
+            }
+            const float nc_scalar = reduce_type == reduction_common::ReduceType::Mean ? scalar / nc_volume : scalar;
             input_tensor = non_height_width_reduce(
                 input_tensor,
                 non_height_width_dims,
@@ -704,13 +715,17 @@ Tensor reduce(
                 sub_core_grids,
                 fast_nc_final_dtype,
                 fast_nc_intermediate_fp32,
-                fast_and_approximate_mode);
+                fast_and_approximate_mode,
+                height_width_dims.empty() ? nc_scalar : 1.0f);
 
             if (height_width_dims.empty()) {
                 return adjust_shape(
                     input_tensor, input_tensor_arg.logical_shape(), keepdim, height_width_dims, non_height_width_dims);
             }
             dim = height_width_dims;
+            if constexpr (reduce_type == reduction_common::ReduceType::Mean) {
+                scalar = nc_scalar;
+            }
         }
     }
     return reduce_impl<reduce_type>(

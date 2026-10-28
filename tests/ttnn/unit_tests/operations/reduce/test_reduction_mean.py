@@ -229,17 +229,7 @@ def test_mean_multi_axis_bf16(device):
         ((1, 2, 32, 64), ttnn.TILE_LAYOUT),
         ((1, 2, 32, 64), ttnn.ROW_MAJOR_LAYOUT),
         ((1, 2, 32, 2048), ttnn.TILE_LAYOUT),
-        pytest.param(
-            (1, 2, 32, 2048),
-            ttnn.ROW_MAJOR_LAYOUT,
-            marks=pytest.mark.xfail(
-                reason=(
-                    "https://github.com/tenstorrent/tt-metal/issues/62259: "
-                    "fp32-Dest row reduce leaks column 16 into the chunk accumulator"
-                ),
-                strict=True,
-            ),
-        ),
+        ((1, 2, 32, 2048), ttnn.ROW_MAJOR_LAYOUT),
     ],
 )
 def test_mean_full_tensor_bf16(device, dim, shape, layout):
@@ -252,3 +242,36 @@ def test_mean_full_tensor_bf16(device, dim, shape, layout):
     output_tensor = ttnn.mean(input_tensor, dim=dim)
 
     assert torch.equal(ttnn.to_torch(output_tensor).flatten(), torch_output.flatten())
+
+
+@pytest.mark.parametrize(
+    "shape, dim",
+    [
+        ((8, 16, 64, 64), [0]),
+        ((8, 16, 64, 64), [1]),
+        ((8, 16, 64, 64), [0, 1]),
+        ((7, 9, 64, 64), [0]),
+        ((7, 9, 64, 64), [0, 1]),
+        ((64, 4, 32, 64), [0]),
+        ((3, 7, 100, 100), [1]),
+        ((8, 16, 64, 64), [0, 3]),
+        ((8, 16, 64, 64), [1, 2, 3]),
+    ],
+)
+@pytest.mark.parametrize("keepdim", [True, False])
+@pytest.mark.parametrize("scalar", [1.0, 3.0])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.bfloat8_b, ttnn.float32], ids=["bf16", "bf8_b", "fp32"])
+def test_mean_nc(device, shape, dim, keepdim, scalar, dtype):
+    torch.manual_seed(0)
+    torch_input = torch.randn(shape) * 0.25 + 1.0
+    input_tensor = ttnn.from_torch(torch_input, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, float("nan"))
+    # Reference from the device-rounded input so bf8_b's block rounding is not counted as op error.
+    torch_output = torch.mean(ttnn.to_torch(input_tensor).float(), dim=dim, keepdim=keepdim) * scalar
+
+    output_tensor = ttnn.to_torch(ttnn.mean(input_tensor, dim=dim, keepdim=keepdim, scalar=scalar))
+
+    if dtype == ttnn.float32:
+        assert_with_ulp(expected_result=torch_output, actual_result=output_tensor, ulp_threshold=8)
+    else:
+        assert_allclose(torch_output, output_tensor.float(), rtol=3e-2 if dtype == ttnn.bfloat8_b else 1e-2, atol=0)

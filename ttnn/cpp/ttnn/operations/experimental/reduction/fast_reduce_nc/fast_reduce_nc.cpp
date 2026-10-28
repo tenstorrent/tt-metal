@@ -35,7 +35,8 @@ ttnn::Tensor fast_reduce_nc(
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
     const std::optional<tt::tt_metal::DataType>& output_dtype,
     bool fp32_intermediate_stages,
-    bool fast_and_approximate_mode) {
+    bool fast_and_approximate_mode,
+    float post_mul_scaler) {
     TT_FATAL(
         input.storage_type() == StorageType::DEVICE,
         "Input tensor storage type must be DEVICE but got {}",
@@ -78,7 +79,8 @@ ttnn::Tensor fast_reduce_nc(
         kernel_config_val,
         sub_core_grids,
         output_dtype,
-        use_sfpu_reduce(temp_input));
+        use_sfpu_reduce(temp_input),
+        post_mul_scaler);
 }
 
 std::tuple<Tensor, Tensor> fast_reduce_nc_split(
