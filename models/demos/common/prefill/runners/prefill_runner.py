@@ -166,7 +166,9 @@ if D2D_FIFO_SIZE_BYTES < _D2D_FIFO_MIN_BYTES:
         f"PREFILL_PP_D2D_FIFO_BYTES={D2D_FIFO_SIZE_BYTES} must be >= {_D2D_FIFO_MIN_BYTES} B "
         f"(the {D2D_METADATA_SIZE_BYTES} B D2D record, in 256 B steps)"
     )
-TP_SHARD_KV = os.environ.get("PREFILL_TP_SHARD_KV", str(int(ADAPTER.tp_shard_kv_default))) == "1"
+# The models that default this on dedup a dense MLA cache, and ring_mla's split-KV path behind that
+# runs SP on mesh axis 0 only, so an SP-axis-1 stage (4x4) defaults to the SP-only cache.
+TP_SHARD_KV = os.environ.get("PREFILL_TP_SHARD_KV", str(int(ADAPTER.tp_shard_kv_default and SP_AXIS == 0))) == "1"
 assert (
     not TP_SHARD_KV or ADAPTER.supports_tp_shard_kv
 ), f"PREFILL_TP_SHARD_KV=1: model {ADAPTER.name!r} does not support a TP-deduped KV cache"
