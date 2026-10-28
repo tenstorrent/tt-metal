@@ -49,6 +49,9 @@ _DEPTH_CHUNKS = 1  # KV prefix each timed chunk attends to, in chunks
 # Profile only: the prefix each profiled chunk attends to, in tokens (default one chunk). Timing does not depend
 # on the prefix's values, so it is left unwritten: 40960 profiles the workload test's depth without 20 fills.
 _PROFILE_DEPTH = int(os.environ.get("GLM_PROFILE_DEPTH", "0"))
+# Profile only: GLM_PROFILE_TRACED=1 profiles one replay of the captured (segmented) trace instead of an eager
+# forward, one chunk per forward. Run with TT_METAL_PROFILER_TRACE_TRACKING=1 so replayed ops are attributed.
+_PROFILE_TRACED = os.environ.get("GLM_PROFILE_TRACED", "0") == "1"
 
 
 def _metadata_msg(mesh_device, words):
@@ -321,7 +324,27 @@ def test_glm_packed_forward_profile(
         ttnn.synchronize_device(mesh_device)
         ttnn.ReadDeviceProfiler(mesh_device)
 
+    def run_traced(chunk_start):
+        # One replay of the captured forward. The trace is split at every sub-device manager load / clear, so
+        # those switches sit between trace segments, as in serving.
+        tokens = torch.randint(0, config.vocab_size, (chunk,), generator=g).tolist()
+        msg = _metadata_msg(mesh_device, (0, chunk_start, chunk_start + chunk))
+        runtime.prefill_chunk(runtime.make_chunk_input(tokens), caches, metadata_msg=msg)
+        ttnn.synchronize_device(mesh_device)
+        ttnn.deallocate(msg)
+
     try:
+        if _PROFILE_TRACED:
+            assert forward_chunks == 1, "GLM_PROFILE_TRACED profiles the one-chunk traced forward"
+            runtime.compile(caches)
+            runtime.capture_trace(caches)
+            run_traced(start)
+            ttnn.ReadDeviceProfiler(mesh_device)  # drop the warm replay's records
+            signpost("PROFILE_MEASURE_START")
+            run_traced(start)
+            ttnn.ReadDeviceProfiler(mesh_device)
+            signpost("PROFILE_MEASURE_END")
+            return
         if not _PROFILE_DEPTH:
             for c in range(_DEPTH_CHUNKS):
                 run(c * chunk)
@@ -330,4 +353,6 @@ def test_glm_packed_forward_profile(
         run(start)
         signpost("PROFILE_MEASURE_END")
     finally:
+        if _PROFILE_TRACED:
+            runtime.release_trace()
         runtime.model.release_sub_device_managers()
