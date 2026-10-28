@@ -39,12 +39,15 @@ WORKFLOWS_CHANGED=false
 
 while IFS= read -r FILE; do
     case "$FILE" in
+        # tt-train's specific patterns - must come before the generic CMake catch-all.
+        tt-train/*(*/)CMakeLists.txt|tt-train/*(*/)*.@(cmake|cmake.in)|cmake/packaging.cmake)
+            CMAKE_CHANGED=true
+            TTTRAIN_CHANGED=true
+            ANY_CODE_CHANGED=true
+            ;;
         CMakeLists.txt|**/CMakeLists.txt|**/*.cmake|*.cmake.in|**/*.cmake.in|CMakePresets.json)
             CMAKE_CHANGED=true
             ANY_CODE_CHANGED=true
-            if [[ "$FILE" == tt-train/* || "$FILE" == "cmake/packaging.cmake" ]]; then
-                TTTRAIN_CHANGED=true
-            fi
             ;;
         tt_metal/sfpi-info.sh|tt_metal/sfpi-version)
             # Read in by a cmake file; also pins the SFPI compiler used to build LLK
