@@ -37,7 +37,7 @@ ROPE_FP32_DEST = os.environ.get("TAFSUT_ROPE_FP32_DEST", "1") != "0"
 # round 1 candidates (screening knobs, default off until kept)
 ADD_NORM = os.environ.get("TAFSUT_ADD_NORM", "1") != "0"  # R1-4 + R1-7b: residual add fused into the next norm, gamma folded; 0 = off
 SDPA_CONCAT = os.environ.get("TAFSUT_SDPA_CONCAT", "1") != "0"  # R1-5: SDPA writes the heads concatenated; 0 = off
-PERF_BF16_DEST = os.environ.get("TAFSUT_PERF_BF16_DEST", "0") == "1"  # R1-7a: performance linears without fp32 DST
+PERF_BF16_DEST = os.environ.get("TAFSUT_PERF_BF16_DEST", "1") != "0"  # R1-7a: performance linears without fp32 DST; 0 = off
 
 
 def sdpa_chunks(s_pad: int, ctx_len: int | None) -> int:
