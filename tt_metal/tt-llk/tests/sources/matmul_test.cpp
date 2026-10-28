@@ -379,6 +379,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
 #define MATMUL_PACK_FORM 0
 #endif
 
+#ifndef MATMUL_L1_ACC
+#define MATMUL_L1_ACC 0
+#endif
+
 #if defined(ARCH_BLACKHOLE)
 // MATMUL_PACK_FORM 1 packs the block with one program run, 2 closes every tile (block-float outputs and small tiles).
 inline void matmul_pack_out(std::uint32_t tile_index, std::uint32_t address, std::uint32_t num_tiles, std::uint32_t tile_stride, std::uint32_t num_faces = 4)
@@ -442,6 +446,9 @@ void run_kernel(RUNTIME_PARAMETERS params)
         }
         else if constexpr (PERF_RUN_TYPE == PerfRunType::PACK_ISOLATE || PERF_RUN_TYPE == PerfRunType::L1_CONGESTION)
         {
+#if defined(ARCH_BLACKHOLE) && MATMUL_L1_ACC == 1
+            reconfigure_packer_l1_acc(1);
+#endif
             for (std::uint32_t loop = 0; loop < LOOP_FACTOR; loop++)
             {
                 for (std::uint32_t tile = 0; tile < CT_DIM * RT_DIM; tile++)
@@ -472,6 +479,12 @@ void run_kernel(RUNTIME_PARAMETERS params)
                 }
 #endif
                 _llk_packer_wait_for_math_done_();
+#if defined(ARCH_BLACKHOLE) && MATMUL_L1_ACC == 1
+                if (loop == 0)
+                {
+                    reconfigure_packer_l1_acc(1);
+                }
+#endif
                 // Pack dest occupancy (RT×CT).
                 for (std::uint32_t i = 0; i < CT_DIM * RT_DIM; i++)
                 {

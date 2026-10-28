@@ -22,6 +22,14 @@
  */
 inline void llk_pack_dummy([[maybe_unused]] const std::uint32_t pack_output) {}
 
+// Opt-in byte-wise destination write of the default packs (_llk_pack_rmw_dest_init_): a kernel defines LLK_PACK_RMW_DEST. Off, the packs write
+// the destination as main does.
+#ifdef LLK_PACK_RMW_DEST
+inline constexpr bool llk_pack_rmw_dest = true;
+#else
+inline constexpr bool llk_pack_rmw_dest = false;
+#endif
+
 // Unified cores, shared by the CB-id API below and the LLKOperand API (experimental/). They take
 // already-resolved scalar formats/geometry + the runtime write address; the per-source prologue
 // (resolving these from a CB id, or from an MemDescriptor) lives in the callers.
@@ -50,11 +58,14 @@ inline void llk_pack_init_impl(
 
     _llk_pack_init_<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
         pack_src_reg_format, face_r_dim, tile_c_dim, num_faces, num_tiles, is_input_8bit_format);
+    if constexpr (llk_pack_rmw_dest) {
+        _llk_pack_rmw_dest_init_();
+    }
 }
 
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void llk_pack_impl(std::uint32_t tile_index, std::uint32_t pack_tile_addr) {
-    _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
+    _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode, false, llk_pack_rmw_dest>(tile_index, pack_tile_addr);
 }
 
 template <
@@ -155,15 +166,42 @@ inline void llk_matmul_pack(
         std::uint32_t pack_tile_addr =
             get_output_tile_address<out_of_order_output, pack_mode>(output_id, output_tile_index);
 
-        _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
+        _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode, false, llk_pack_rmw_dest>(tile_index, pack_tile_addr);
     }
 }
 
 // Matmul output blocks take llk_pack_block where the tt-llk sweep reads it faster: DestSync full (the pack is not hidden behind
 // the math there, also at LoFi with several K tiles), and half sync at LoFi with one K tile; a static math throttle of 4 or more at half sync keeps the per-tile pack (math bounds the block).
-template <MathFidelity math_fidelity, std::uint32_t kt_per_section, std::uint32_t output, int throttle_level = 0>
+// in_format, block_rt and block_ct are optional keys of the caller (Invalid and 0 keep the rule above): the operand format and the output block
+// shape of the half sync cells where the block pack reads faster than the per-tile one.
+template <
+    MathFidelity math_fidelity,
+    std::uint32_t kt_per_section,
+    std::uint32_t output,
+    int throttle_level = 0,
+    DataFormat in_format = DataFormat::Invalid,
+    std::uint32_t block_rt = 0,
+    std::uint32_t block_ct = 0>
 constexpr bool llk_matmul_block_pack() {
-    if constexpr (math_fidelity == MathFidelity::LoFi && kt_per_section > 1 && DST_SYNC_MODE != DstSync::SyncFull) {
+    constexpr bool keyed = in_format != DataFormat::Invalid && block_rt != 0 && block_ct != 0;
+    constexpr DataFormat out_format = static_cast<DataFormat>(pack_dst_format[output]);
+    if constexpr (
+        keyed && DST_SYNC_MODE != DstSync::SyncFull && throttle_level == 0 &&
+        (in_format == DataFormat::Float16_b || in_format == DataFormat::Float32) && kt_per_section == 1 && math_fidelity == MathFidelity::HiFi2 &&
+        out_format != DataFormat::Float32 && out_format != DataFormat::Bfp8_b && out_format != DataFormat::Bfp4_b && pack_tile_num_faces[output] == 4 &&
+        pack_tile_face_r_dim[output] == FACE_R_DIM && pack_partial_face[output] == 0 && block_rt * block_ct == 2) {
+        return true;
+    } else if constexpr (
+        keyed && DST_SYNC_MODE != DstSync::SyncFull && throttle_level == 0 && in_format == DataFormat::Float32 &&
+        math_fidelity == MathFidelity::HiFi2 && out_format == DataFormat::Bfp8_b && pack_tile_num_faces[output] == 4 &&
+        pack_tile_face_r_dim[output] == FACE_R_DIM && pack_partial_face[output] == 0 && block_rt == 1 && block_ct >= 5) {
+        return true;
+    } else if constexpr (
+        keyed && DST_SYNC_MODE != DstSync::SyncFull && throttle_level == 0 && in_format == DataFormat::Float16_b &&
+        math_fidelity == MathFidelity::LoFi && kt_per_section == 1 && out_format == DataFormat::Float32 &&
+        (pack_tile_num_faces[output] != 4 || pack_tile_face_r_dim[output] != FACE_R_DIM || pack_partial_face[output] != 0) && block_ct >= 4) {
+        return true;
+    } else if constexpr (math_fidelity == MathFidelity::LoFi && kt_per_section > 1 && DST_SYNC_MODE != DstSync::SyncFull) {
         return false;
     } else if constexpr (DST_SYNC_MODE == DstSync::SyncFull) {
         return true;
@@ -172,7 +210,7 @@ constexpr bool llk_matmul_block_pack() {
     } else {
         constexpr bool small_tile = pack_tile_num_faces[output] != 4 || pack_tile_face_r_dim[output] != FACE_R_DIM ||
                                     pack_partial_face[output] != 0;
-        constexpr bool float32_out = static_cast<DataFormat>(pack_dst_format[output]) == DataFormat::Float32;
+        constexpr bool float32_out = out_format == DataFormat::Float32;
         // HiFi2 with one K tile: the per-tile pack is on the critical path for small tiles and Float32 outputs
         constexpr bool hifi2_one_k = math_fidelity == MathFidelity::HiFi2 && kt_per_section == 1 && (small_tile || float32_out);
         return (math_fidelity == MathFidelity::LoFi || hifi2_one_k) && !(small_tile && float32_out);
@@ -198,7 +236,35 @@ inline bool llk_pack_block_is_closable(const std::uint32_t output_id) {
     return get_local_cb_interface(output_id).fifo_page_size < 0x1000;
 }
 
-template <bool is_fp32_dest_acc_en>
+// Small tiles: one to four faces of 1 to 16 rows, at most eight PACRs, full tile width.
+inline bool llk_pack_block_is_small(const std::uint32_t output_id) {
+    const std::uint32_t num_faces = get_output_num_faces(output_id);
+    const std::uint32_t face_r_dim = get_output_face_r_dim(output_id);
+    return get_output_tile_c_dim(output_id) == TILE_C_DIM && num_faces * (face_r_dim < 4 ? 1 : face_r_dim >> 2) <= 8;
+}
+
+// Small tiles of a plain format, one tile per CB page: they run back to back with one close.
+inline bool llk_pack_block_is_dense(const std::uint32_t output_id) {
+    const std::uint32_t dst_format = pack_dst_format[output_id];
+    if (IS_BFP_FORMAT(dst_format) || !llk_pack_block_is_small(output_id)) {
+        return false;
+    }
+    const std::uint32_t tile_words =
+        (get_output_num_faces(output_id) * get_output_face_r_dim(output_id) * FACE_C_DIM * datum_size_in_bytes(dst_format)) >> 4;
+    return get_local_cb_interface(output_id).fifo_page_size == tile_words;
+}
+
+// Records the tile body that llk_pack_block<is_fp32_dest_acc_en, true> replays for the small tiles of this output; call it after the pack init
+// and again after any program that replaces the replay buffer.
+inline void llk_pack_block_dense_init(const std::uint32_t output) {
+    const std::uint8_t output_id = get_output_id(output);
+    if (llk_pack_block_is_dense(output_id)) {
+        _llk_pack_block_dense_init_(get_output_face_r_dim(output_id), get_output_num_faces(output_id));
+    }
+}
+
+// dense_small: the caller called llk_pack_block_dense_init for this output, small tiles of a plain format then run back to back with one close.
+template <bool is_fp32_dest_acc_en, bool dense_small = false>
 inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output, std::uint32_t ntiles) {
     std::uint8_t output_id = get_output_id(output);
 
@@ -222,19 +288,28 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output,
             get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
         get_local_cb_interface(output_id).fifo_wr_tile_ptr +=
             get_local_cb_interface(output_id).fifo_page_size * ntiles;
-        _llk_pack_block_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default>(
+        _llk_pack_block_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default, llk_pack_rmw_dest>(
             start_tile_index, pack_tile_addr, ntiles);
-    } else if (ntiles > 1 && llk_pack_block_is_closable(output_id)) {
+    } else if (dense_small && ntiles > 1 && llk_pack_block_is_dense(output_id)) {
+        std::uint32_t pack_tile_addr =
+            get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
+        get_local_cb_interface(output_id).fifo_wr_tile_ptr +=
+            get_local_cb_interface(output_id).fifo_page_size * ntiles;
+        _llk_pack_block_dense_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
+            start_tile_index, pack_tile_addr, ntiles, get_output_face_r_dim(output_id), get_output_num_faces(output_id));
+    // two block-float tiles that straddle a four tile boundary of DEST (tiles 3 and 4) read 6 cycles slower closed than per tile
+    } else if (ntiles > 1 && llk_pack_block_is_closable(output_id) &&
+               !(IS_BFP_FORMAT(pack_dst_format[output_id]) && ntiles == 2 && (start_tile_index & 3) == 3)) {
         const std::uint32_t page_size = get_local_cb_interface(output_id).fifo_page_size;
         std::uint32_t pack_tile_addr =
             get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
         get_local_cb_interface(output_id).fifo_wr_tile_ptr += page_size * ntiles;
-        _llk_pack_block_closed_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
+        _llk_pack_block_closed_<DST_SYNC_MODE, is_fp32_dest_acc_en, llk_pack_rmw_dest>(
             start_tile_index, pack_tile_addr, ntiles, page_size << 4, get_output_num_faces(output_id));
     } else {
         for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
             std::uint32_t pack_tile_addr = get_output_tile_address<false, PackMode::Default>(output_id, 0);
-            _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default>(tile_index, pack_tile_addr);
+            _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default, false, llk_pack_rmw_dest>(tile_index, pack_tile_addr);
         }
     }
 }

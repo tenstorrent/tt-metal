@@ -11,6 +11,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    PACK_SRC_FROM_OUTPUT,
     MATH_FIDELITY,
     NUM_BLOCKS,
     NUM_TILES_IN_BLOCK,
@@ -74,6 +75,7 @@ def test_matmul_pack_untilize(
         templates=[
             generate_input_dim(input_dimensions, input_dimensions),
             MATH_FIDELITY(math_fidelity),
+            PACK_SRC_FROM_OUTPUT(),
         ],
         runtimes=[NUM_BLOCKS(num_blocks), NUM_TILES_IN_BLOCK(1)],
         variant_stimuli=StimuliConfig(

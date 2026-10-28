@@ -38,6 +38,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    PACK_SRC_FROM_OUTPUT,
     DEST_SYNC,
     LOOP_FACTOR,
     NUM_GUARD_TILES,
@@ -85,6 +86,7 @@ def make_fast_untilize_test_config(
             generate_input_dim(input_dimensions, input_dimensions),
             PERF_RUN_TYPE(perf_run_type),
             DEST_SYNC(dest_sync),
+            PACK_SRC_FROM_OUTPUT(),
         ],
         runtimes=[
             TILE_COUNT(tile_count),

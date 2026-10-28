@@ -114,12 +114,54 @@ def matmul_pack_form(
     in0_tile_r_dim: int = 32,
     in1_tile_c_dim: int = 32,
     throttle: int = 0,
+    dense_pages: bool = False,
 ) -> int:
     """Output pack form of the Blackhole matmul kernels, the rule ttnn's matmul kernels apply at compile time
-    (llk_matmul_block_pack): 0 per tile, 1 one block run, 2 the closed block (block-float outputs and small tiles)."""
+    (llk_matmul_block_pack): 0 per tile, 1 one block run, 2 the closed block (padded pages), 4 the dense run of small tiles
+    (only with dense_pages: the perf sweep, where the output address does not change the pack timing; the functional tests keep a 32x32 page per tile, which a dense run cannot write)."""
     small = in0_tile_r_dim < 32 or in1_tile_c_dim < 32
     if rt_dim * ct_dim < 2 or (math_fidelity == MathFidelity.LoFi and kt_dim > 1 and dest_sync != DestSync.Full):
         return 0
+    if (
+        dest_sync == DestSync.Half
+        and throttle == 0
+        and not small
+        and formats.output_format != DataFormat.Float32
+        and formats.input_format in (DataFormat.Float16_b, DataFormat.Float32)
+    ):
+        # HiFi2 two-tile blocks of one K tile (not to a block float output: with the pack format taken from the output the per-tile pack reads 0.9 cycles
+        # ahead there), and one-row Bfp8_b blocks of five or more tiles from Float32 operands: the per-tile pack
+        # is on the critical path
+        if math_fidelity == MathFidelity.HiFi2 and (
+            (kt_dim == 1 and rt_dim * ct_dim == 2 and not formats.output_format.is_block_float())
+            or (
+                formats.input_format == DataFormat.Float32
+                and formats.output_format == DataFormat.Bfp8_b
+                and rt_dim == 1
+                and ct_dim >= 5
+            )
+        ):
+            return 2 if formats.output_format.is_block_float() else 1
+    if (
+        dest_sync == DestSync.Half
+        and throttle == 0
+        and math_fidelity == MathFidelity.LoFi
+        and kt_dim == 1
+        and small
+        and formats.output_format == DataFormat.Float32
+        and formats.input_format == DataFormat.Float16_b
+        and ct_dim >= 4
+    ):
+        # small tiles packed to Float32 behind Float16_b operands: the closed block beats the per-tile pack at LoFi
+        return 2
+    # a Bfp4_b output of two or more full tiles takes the closed block pack at half sync too (up to 17 cycles under main on a 2x2 block at HiFi2 with a 32-bit DEST,
+    # where the per-tile pack read 0.5 behind), except against a Float32 operand
+    if (
+        formats.output_format == DataFormat.Bfp4_b
+        and not small
+        and DataFormat.Float32 not in (formats.input_format, formats.input_format_B)
+    ):
+        return 2
     # half sync at HiFi2: one K tile of small tiles, or with a Float32 output, leaves the per-tile pack on the critical path
     half_block = kt_dim == 1 and math_fidelity == MathFidelity.HiFi2 and (small or formats.output_format == DataFormat.Float32)
     if dest_sync == DestSync.Half and (
@@ -129,12 +171,18 @@ def matmul_pack_form(
         # Float32 operands bound a full fp32 section on the unpacker, the denser DEST reads of the block pack only slow the math (three tiles
         # already: the 1x3 block to Bfp8_b reads 0.6 cycles behind main with the closed block pack)
         or (
-            formats.input_format == DataFormat.Float32
+            (
+                formats.input_format == DataFormat.Float32
+                or (formats.input_format_B == DataFormat.Float32 and formats.output_format == DataFormat.Bfp4_b)
+            )
             and formats.output_format != DataFormat.Float32
             and rt_dim * ct_dim >= 3
         )
     ):
         return 0
+    if dense_pages and small and in1_tile_c_dim == 32 and not formats.output_format.is_block_float():
+        # eight small tiles at half sync hide the pack behind the math: the closed form stays
+        return 2 if dest_sync == DestSync.Half and rt_dim * ct_dim >= 8 else 4
     return 2 if small or formats.output_format.is_block_float() else 1
 
 

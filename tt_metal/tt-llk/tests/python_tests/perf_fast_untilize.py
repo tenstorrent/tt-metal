@@ -17,6 +17,7 @@ from helpers.param_config import parametrize
 from helpers.perf.core import PerfConfig
 from helpers.stimuli_config import StimuliConfig
 from helpers.test_variant_parameters import (
+    PACK_SRC_FROM_OUTPUT,
     DEST_SYNC,
     LOOP_FACTOR,
     TILE_COUNT,
@@ -50,7 +51,11 @@ def test_perf_fast_untilize(
             PerfRunType.MATH_ISOLATE,
             PerfRunType.PACK_ISOLATE,
         ],
-        templates=[generate_input_dim(dimensions, dimensions), DEST_SYNC(dest_sync)],
+        templates=[
+            generate_input_dim(dimensions, dimensions),
+            DEST_SYNC(dest_sync),
+            PACK_SRC_FROM_OUTPUT(),
+        ],
         runtimes=[
             TILE_COUNT(tile_count),
             LOOP_FACTOR(loop_factor),

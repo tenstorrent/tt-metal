@@ -154,9 +154,17 @@ class MATMUL_ROW_MOP(TemplateParameter):
             return []
         fp32_dest = dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats)
         out_format = formats.output_format
-        if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, max(ct_dim, rt_dim), dest_sync == DestSync.Full, min(ct_dim, rt_dim)):
+        # Float16_b against Bfp8_b at LoFi, full sync and a 32-bit DEST: the row MOP reads slower than the tile MOP on the 7 tile row at K 32 (+188 cycles)
+        if (
+            math_fidelity == MathFidelity.LoFi
+            and dest_sync == DestSync.Full
+            and fp32_dest
+            and {formats.input_format, formats.input_format_B} == {DataFormat.Float16_b, DataFormat.Bfp8_b}
+        ):
             return []
-        if dest_sync == DestSync.Half and forced_form(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, rt_dim, ct_dim, False, sections):
+        if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, max(ct_dim, rt_dim), dest_sync == DestSync.Full, min(ct_dim, rt_dim), in_format_b=formats.input_format_B):
+            return []
+        if dest_sync == DestSync.Half and forced_form(math_fidelity, kt_dim, fp32_dest, formats.input_format, out_format, out_format, False, rt_dim, ct_dim, False, sections, in_format_b=formats.input_format_B):
             return []
         return [MATMUL_ROW_MOP()] if m2_row_mop(math_fidelity, rt_dim, ct_dim, kt_dim, fp32_dest, out_format, out_format) else []
 
@@ -308,6 +316,17 @@ def _matmul_throttled_h2_cell(formats, math_fidelity, dest_sync, ct_dim: int, rt
 
 
 @dataclass
+class MATMUL_L1_ACC(TemplateParameter):
+    """Blackhole matmul pack thread with the packer L1 accumulate switch on, as the ttnn bmm kernels run the later K blocks of a spilled output
+    (llk_pack_reconfig_l1_acc(1) after the first pack). The perf loop accumulates into the same L1 tiles; the values do not matter."""
+
+    l1_acc: L1Accumulation = L1Accumulation.No
+
+    def convert_to_cpp(self) -> str:
+        return f"#define MATMUL_L1_ACC {1 if self.l1_acc == L1Accumulation.Yes else 0}"
+
+
+@dataclass
 class MATMUL_ROW_END_FOLD(TemplateParameter):
     """Blackhole math: the default row form of a block that walks down the held operand (rt_dim > ct_dim) ends each row on a MVMUL that frees both sources and clears the counters, no SETRWC per row."""
 
@@ -426,6 +445,7 @@ class MATMUL_FORM_KEYS(TemplateParameter):
         self.keep_flip = False
         self.in0 = None
         self.in1 = None
+        self.pack_src_from_output = True
 
     def __repr__(self) -> str:
         return f"MATMUL_FORM_KEYS({self.kt_per_section}, {self.output_format.name}, {self.row_le_8}{', unfused_post' if self.unfused_post else ''}{', keep_flip' if self.keep_flip else ''}{', in ' + self.in0.name + ' ' + self.in1.name if self.in0 is not None else ''}{', force ' + self.force_form if self.force_form else ''})"
@@ -523,11 +543,11 @@ class MATMUL_FORM_KEYS(TemplateParameter):
 
             fp32_dest = dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats)
             forced = (
-                forced_form(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, dest_sync == DestSync.Full, rt_dim, ct_dim, False, sections)
+                forced_form(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, dest_sync == DestSync.Full, rt_dim, ct_dim, False, sections, in_format_b=formats.input_format_B)
             )
             if forced:
                 return [MATMUL_FORM_KEYS(1 if kt_dim == 1 else 2, formats.output_format, 0 < max(ct_dim, rt_dim) <= 8, False, forced)]
-            if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, False, max(ct_dim, rt_dim), dest_sync == DestSync.Full, min(ct_dim, rt_dim)):
+            if main_form_cell(math_fidelity, kt_dim, fp32_dest, formats.input_format, formats.output_format, formats.output_format, False, max(ct_dim, rt_dim), dest_sync == DestSync.Full, min(ct_dim, rt_dim), in_format_b=formats.input_format_B):
                 return [MATMUL_FORM_KEYS(0, formats.output_format, 0 < max(ct_dim, rt_dim) <= 8, unfused)]
         # the forms depend on k only as 1, 2 to 4 or 5 and more; one representative keeps the variant count down
         return [
@@ -646,6 +666,10 @@ class MATMUL_UNPACK_TTSYNC(TemplateParameter):
     def for_block(formats, dest_acc, math_fidelity, ct_dim: int, rt_dim: int, kt_dim: int, dest_sync=None) -> list:
         """[MATMUL_UNPACK_TTSYNC()] for the blocks of up to 2x2 tiles that the K loop entry does not take and where the GPR form measured 0 slower than the context poll."""
         if get_chip_architecture() != ChipArchitecture.BLACKHOLE:
+            return []
+        from helpers.matmul_prod_keys import mixed_main_form
+
+        if mixed_main_form(math_fidelity, kt_dim, dest_acc == DestAccumulation.Yes or is_dest_acc_needed(formats), formats.input_format, formats.input_format_B, formats.output_format, dest_sync == DestSync.Full):
             return []
         if MATMUL_K_LOOP.for_block(formats, dest_acc, math_fidelity, ct_dim, rt_dim, kt_dim):
             return []
@@ -1578,15 +1602,25 @@ class DATACOPY_FLAG(TemplateParameter):
 class PACK_BLOCK(TemplateParameter):
     """Pack every dest block with one _llk_pack_block_ run (Blackhole)."""
 
-    pack_block: bool = False
+    pack_block: bool | int = False  # 2: the block calls llk_pack_block makes, not the opt-in fast forms
 
     def convert_to_cpp(self) -> str:
-        return f"constexpr bool pack_block_en = {str(self.pack_block).lower()};"
+        return (
+            f"constexpr bool pack_block_en = {str(bool(self.pack_block)).lower()};\n"
+            f"constexpr bool pack_block_default = {str(self.pack_block == 2).lower()};"
+        )
+
+
+class PACK_RMW_DEST(TemplateParameter):
+    """Opt-in byte-wise destination write of the default packs (Blackhole), see _llk_pack_rmw_dest_init_."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define PACK_RMW_DEST"
 
 
 class MATMUL_PACK_BLOCK(TemplateParameter):
     """Output pack form of the matmul kernels (see matmul_pack_form), picked from columns the test already reports, so
-    it adds no column: 0 per tile, 1 one block run, 2 the closed block."""
+    it adds no column: 0 per tile, 1 one block run, 2 the closed block, 4 the dense replay run of small tiles."""
 
     def __init__(self, pack_block: int = 0):
         self.matmul_pack_block = int(pack_block)
@@ -1609,7 +1643,7 @@ class MATMUL_PACK_BLOCK(TemplateParameter):
 
 @dataclass
 class TINY_PACK_MODE(TemplateParameter):
-    """Tiny-tile block pack (Blackhole): 0 block-contiguous run, 1 closed run per tile, 2 _llk_pack_ per tile."""
+    """Tiny-tile block pack (Blackhole): 0 block-contiguous run, 1 closed run per tile, 2 _llk_pack_ per tile, 3 dense replay run"""
 
     tiny_pack_mode: int = 0
 
@@ -3134,3 +3168,13 @@ class GATED_REDUCE_SCALARS(RuntimeParameter):
             "\n".join(f"std::uint32_t {name.upper()};" for name in vars(self)),
             "IIII",
         )
+
+
+@dataclass
+class PACK_SRC_FROM_OUTPUT(TemplateParameter):
+    """The packer input of a block float input from a 16-bit DEST follows the output format family, as in production (data_format.cpp)."""
+
+    pack_src_from_output = True
+
+    def convert_to_cpp(self) -> str:
+        return ""

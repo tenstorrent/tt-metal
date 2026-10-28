@@ -263,6 +263,7 @@ def infer_pack_in(
     unpacking_to_dest: bool = False,
     chip_arch: Optional[ChipArchitecture] = None,
     unpacking_to_srcs: bool = False,
+    pack_src_from_output: bool = False,
 ) -> DataFormat:
     """
     Infers the packer input format based on input/output formats and architecture.
@@ -274,6 +275,7 @@ def infer_pack_in(
         is_fp32_dest_acc_en: Flag indicating if FP32 accumulation is enabled
         unpacking_to_dest: Whether unpacking targets the destination register
         chip_arch: The chip architecture (Wormhole or Blackhole). If None, will be detected automatically.
+        pack_src_from_output: Take the packer input of a block float input from a 16-bit DEST from the output format family, as production does.
 
     Returns:
         The inferred packer input format
@@ -376,6 +378,17 @@ def infer_pack_in(
             else DataFormat.Float16_b
         )
 
+    # Block float 8-bit exponent input from a 16-bit DEST to a 16-bit or Float32 output: production takes the packer input from the output format
+    # family (the DEST format), not from the block float unpack format, which would make the packer convert 8 bit datums in two phases.
+    if (
+        pack_src_from_output
+        and is_fp32_dest_acc_en == DestAccumulation.No
+        and not unpacking_to_dest
+        and unpack_out in (DataFormat.Bfp8_b, DataFormat.Bfp4_b)
+        and (output_format == DataFormat.Float16_b or output_format == DataFormat.Float32)
+    ):
+        return DataFormat.Float16_b
+
     # Default:
     # With float32 dest reg datums, packer gasket can do any conversion thus packer input can be the desired output format
     # Otherwise, packer input stays equal to the dest register format (unpack_out) and packer performs conversion instead of the packer gasket
@@ -437,6 +450,7 @@ def infer_data_formats(
     input_format_B: DataFormat = None,
     unpacking_to_srcs: bool = False,
     register_format_hint: Optional[DataFormat] = None,
+    pack_src_from_output: bool = False,
 ) -> FormatConfig:
     """
     Infers all data formats needed for unpacking, math, and packing stages in a pipeline.
@@ -541,6 +555,7 @@ def infer_data_formats(
         is_fp32_dest_acc_en,
         unpacking_to_dest,
         chip_arch,
+        pack_src_from_output=pack_src_from_output,
     )  # input to the packing stage, determines what gasket can convert from dest register
     # potentially different from unpack_out and pack_out depending on FP32 accumulation
 
@@ -636,6 +651,7 @@ def data_formats(
     input_format_B: DataFormat = None,
     unpacking_to_srcs: bool = False,
     register_format_hint: Optional[DataFormat] = None,
+    pack_src_from_output: bool = False,
 ) -> List[FormatConfig]:
     """
     Entry point for computing a list of FormatConfig objects.
@@ -765,6 +781,7 @@ def data_formats(
             input_format_B,
             unpacking_to_srcs,
             register_format_hint=register_format_hint,
+            pack_src_from_output=pack_src_from_output,
         )
     else:
         intermediate_config = None
@@ -778,6 +795,7 @@ def data_formats(
         input_format_B,
         unpacking_to_srcs,
         register_format_hint=register_format_hint,
+        pack_src_from_output=pack_src_from_output,
     )
 
     return build_data_formats(num_iterations, intermediate_config, final_config)

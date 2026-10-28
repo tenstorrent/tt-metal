@@ -330,7 +330,8 @@ def _perf_test_sources(quasar: bool):
             if not isinstance(node, ast.ImportFrom) or not node.module:
                 continue
             if not any(
-                alias.name.startswith(("run_", "_run_")) for alias in node.names
+                alias.name.startswith(("run_", "_run_")) or (alias.asname or "").startswith(("run_", "_run_"))
+                for alias in node.names
             ):
                 continue
             candidate = ROOT.joinpath(*node.module.split(".")).with_suffix(".py")
@@ -355,6 +356,11 @@ def _perf_test_sources(quasar: bool):
         for path in sorted(ROOT.glob("perf_*.py")):
             sibling = path.parent / path.name.replace("perf_", "test_", 1)
             source = path
+            if not sibling.exists():
+                try:
+                    source = imported_runner_source(ast.parse(path.read_text())) or source
+                except SyntaxError:
+                    pass
             if sibling.exists():
                 try:
                     sibling_tree = ast.parse(sibling.read_text())

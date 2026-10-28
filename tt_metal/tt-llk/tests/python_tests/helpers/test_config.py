@@ -1035,6 +1035,9 @@ class TestConfig:
                 # `formats` may be an InputOutputFormat (carries the hint) or a
                 # FormatConfig (doesn't); fall back to None for the latter.
                 register_format_hint=getattr(formats, "register_format_hint", None),
+                pack_src_from_output=any(
+                    getattr(t, "pack_src_from_output", False) for t in self.templates
+                ),
             )
             self.pack_size = TILE_SIZES.get(self.formats_config[0].output_format, 128)
             self.unpack_size_a = TILE_SIZES.get(

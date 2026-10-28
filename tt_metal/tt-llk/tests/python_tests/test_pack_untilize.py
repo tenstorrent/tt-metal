@@ -27,6 +27,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    PACK_SRC_FROM_OUTPUT,
     DEST_SYNC,
     NUM_FACES,
     TILE_COUNT,
@@ -149,6 +150,7 @@ def test_pack_untilize(
             ),
             DEST_SYNC(dest_sync),
             TILE_DST_CT_OFFSET(tile_dst_ct_offset),
+            PACK_SRC_FROM_OUTPUT(),
         ],
         runtimes=[TILE_COUNT(tile_cnt_A), NUM_FACES(4)],
         variant_stimuli=StimuliConfig(

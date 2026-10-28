@@ -17,6 +17,7 @@ from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import StimuliSpec, generate_stimuli
 from helpers.test_config import TestConfig
 from helpers.test_variant_parameters import (
+    PACK_SRC_FROM_OUTPUT,
     CRK_TILE_DIMM,
     MATH_FIDELITY,
     NUM_FACES,
@@ -117,7 +118,11 @@ def _run_matmul_custom(
     configuration = TestConfig(
         "sources/matmul_custom_test.cpp",
         formats,
-        templates=[MATH_FIDELITY(math_fidelity), THROTTLE_LEVEL(throttle_level)],
+        templates=[
+            MATH_FIDELITY(math_fidelity),
+            THROTTLE_LEVEL(throttle_level),
+            PACK_SRC_FROM_OUTPUT(),
+        ],
         runtimes=[
             NUM_FACES(),
             TILE_COUNT(matmul_dims.output_tile_cnt),
