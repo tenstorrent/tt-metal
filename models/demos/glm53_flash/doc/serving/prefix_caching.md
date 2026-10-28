@@ -240,128 +240,18 @@ their kernel-binary buffers are persistent; the check names the chunk, the remed
 starts), not the model code. The mixed dense/sparse chunk's row mask is keyed by its dense row count (`n_d`), which
 depends on the chunk start: under live traces it is a chunk transient like the rest.
 
-## 5. Plugin proposal (generic, NOT applied; needs approval)
+## 5. Plugin side (one generic change: vllm-tt-plugin#261, `mm_identifiers`)
 
-Two generic pieces for `vllm-tt-plugin`. (1) forwards vLLM's own mm identifier next to the placeholder fields;
-(2) lets a model that keeps its own prefix records confirm a hit before the scheduler commits it (the executor is
-in-process, so the call is a direct method call through `collective_rpc`). Neither names a model.
+The plugin already reports vLLM's prefix-cache hit to the model: a hit request arrives at ``prefill_forward`` with
+``start_pos = num_computed_tokens`` (``docs/MODEL_EXECUTION.md``: "Prefix-cache hits and resumed requests can
+also have nonzero start_pos"; the lane coordinator even routes a request to the lane holding its cached prefix,
+#249). The adapter serves that hit from a retained slot or re-prefills from 0 inside the same call, so vLLM's
+bookkeeping is always honoured and no pre-scheduling confirmation is needed (a "confirms_prefix_cache_hits"
+capability was drafted on 2026-10-28 and dropped: it duplicated what the plugin does).
 
-```diff
---- a/src/vllm_tt_plugin/model_runner.py
-+++ b/src/vllm_tt_plugin/model_runner.py
-@@ class TTModelRunner
--    _MM_PLACEHOLDER_FIELDS = ("mm_placeholder_offsets", "mm_placeholder_lengths")
-+    # Per-item placeholder ranges (vLLM ``mm_position``) and vLLM's content identifier of the item (the key its
-+    # block hashes carry), after the processor fields.
-+    _MM_PLACEHOLDER_FIELDS = ("mm_placeholder_offsets", "mm_placeholder_lengths", "mm_identifiers")
-@@ def _gather_multi_modal_inputs
-                 for key in fields:
-                     if key == "mm_placeholder_offsets":
-                         per_field[key].append(None if offset is None else int(offset))
-                     elif key == "mm_placeholder_lengths":
-                         per_field[key].append(None if length is None else int(length))
-+                    elif key == "mm_identifiers":
-+                        # survives payload stripping: a model keeping its own prefix records can match a
-+                        # cached item without its pixels
-+                        per_field[key].append(getattr(mm_feature, "identifier", None))
-                     elif item is None or key not in item:
-                         per_field[key].append(None)
---- a/src/vllm_tt_plugin/worker.py
-+++ b/src/vllm_tt_plugin/worker.py
-@@ class TTWorker
-+    def prefix_cache_hit_confirmer(self):
-+        """The model's ``confirm_prefix_cache_hit(prompt_token_ids, mm_items, num_computed_tokens) -> int`` when it
-+        declares ``model_capabilities["confirms_prefix_cache_hits"]``, else None (``collective_rpc`` target)."""
-+        model = getattr(self.model_runner, "model", None)
-+        caps = getattr(type(model), "model_capabilities", {}) or {}
-+        if not caps.get("confirms_prefix_cache_hits", False):
-+            return None
-+        return getattr(model, "confirm_prefix_cache_hit", None)
---- a/src/vllm_tt_plugin/scheduler.py
-+++ b/src/vllm_tt_plugin/scheduler.py
-@@ class TTScheduler(AsyncScheduler):
-     def __init__(self, *args, **kwargs):
-         super().__init__(*args, **kwargs)
-+        # A model that owns its prefix cache (device state per slot) confirms vLLM's longest-hit before the
-+        # scheduler commits it: ``num_computed_tokens`` then never exceeds what the device can serve, and
-+        # ``NewRequestData.from_request`` strips only the mm payload the model really has resident.
-+        self._prefix_hit_confirmer = None
-+        self._orig_get_computed_blocks = self.kv_cache_manager.get_computed_blocks
-+        self.kv_cache_manager.get_computed_blocks = self._confirmed_computed_blocks
-+
-+    def set_prefix_hit_confirmer(self, confirmer) -> None:
-+        self._prefix_hit_confirmer = confirmer
-+
-+    def _confirmed_computed_blocks(self, request: Request):
-+        blocks, num_new, boundary = self._orig_get_computed_blocks(request)
-+        confirm = self._prefix_hit_confirmer
-+        if confirm is None or num_new <= 0:
-+            return blocks, num_new, boundary
-+        mm_items = [
-+            (f.identifier, f.mm_position.offset, f.mm_position.length, f.modality)
-+            for f in (request.mm_features or ())
-+        ]
-+        honoured = int(confirm(list(request.prompt_token_ids), mm_items, num_new))
-+        block_size = self.kv_cache_manager.block_size
-+        honoured = max(0, min(num_new, honoured)) // block_size * block_size
-+        if honoured == num_new:
-+            return blocks, num_new, boundary
-+        keep = honoured // block_size
-+        trimmed = self.kv_cache_manager.create_kv_cache_blocks(
-+            tuple(group[:keep] for group in blocks.blocks)
-+        )
-+        # the junction pin (Marconi sparse retention) is dropped with the trimmed hit
-+        return trimmed, honoured, 0
---- a/src/vllm_tt_plugin/lane_scheduler.py
-+++ b/src/vllm_tt_plugin/lane_scheduler.py
-@@ class TTLaneCoordinator
-+    def set_prefix_hit_confirmer(self, confirmer) -> None:
-+        for sched in self.lanes:
-+            sched.set_prefix_hit_confirmer(confirmer)
---- a/src/vllm_tt_plugin/platform.py
-+++ b/src/vllm_tt_plugin/platform.py
-@@ def _install_block_output_pause_guard_patch() -> None:
-+def _install_prefix_hit_confirmer_patch() -> None:
-+    """After ``EngineCore.__init__`` built the executor and the scheduler, hand the scheduler the model's hit
-+    confirmer (``TTWorker.prefix_cache_hit_confirmer``; None for models without one). In-process executors only
-+    (``distributed_executor_backend = "uni"``: the bound method crosses no process boundary)."""
-+    import vllm.v1.engine.core as engine_core
-+
-+    if hasattr(engine_core, "_tt_original_engine_core_init"):
-+        return
-+    original = engine_core.EngineCore.__init__
-+    engine_core._tt_original_engine_core_init = original
-+
-+    def init_tt(self, *args, **kwargs):
-+        original(self, *args, **kwargs)
-+        setter = getattr(self.scheduler, "set_prefix_hit_confirmer", None)
-+        if setter is None:
-+            return
-+        confirmers = self.model_executor.collective_rpc("prefix_cache_hit_confirmer")
-+        confirmer = next((c for c in confirmers if c is not None), None)
-+        if confirmer is not None:
-+            setter(confirmer)
-+            logger.info("Prefix-cache hits are confirmed by the model before they are scheduled")
-+
-+    engine_core.EngineCore.__init__ = init_tt
-@@ check_and_update_config (after the supports_prefix_caching block)
-+        confirms_hits = bool(model_capabilities.get("confirms_prefix_cache_hits", False)) if model_capabilities else False
-+        if confirms_hits and not supports_prefix_caching:
-+            raise ValueError(
-+                f"Model {model_class.__module__}.{model_class.__name__} declares "
-+                "model_capabilities['confirms_prefix_cache_hits']=True without supports_prefix_caching=True"
-+            )
-+        if confirms_hits and vllm_config.cache_config.enable_prefix_caching:
-+            _install_prefix_hit_confirmer_patch()
---- a/docs/MODEL_CAPABILITIES.md
-+| `confirms_prefix_cache_hits` | `False` | Declares `confirm_prefix_cache_hit(prompt_token_ids, mm_items, num_computed_tokens) -> int`: the block-aligned number of cached tokens the model will serve (0 = none). The scheduler trims vLLM's longest hit to it before admission, so `num_computed_tokens` and the stripped multimodal payload match the model's resident state. Requires `supports_prefix_caching`. |
---- a/docs/MODEL_EXECUTION.md
-+`mm_identifiers` is appended after the two placeholder fields: vLLM's content identifier of the item (the key its block hashes carry), present even when the item's payload was stripped.
-```
-
-Adapter side of the proposal (already in place, inert without the plugin change): `GLM53FlashForCausalLM.
-confirm_prefix_cache_hit` returns the snapshot position the lookup would resume from (0 = no slot serves it), and
-`mm_spans_of_row` reads `mm_identifiers` when present. Once merged, the adapter adds
-`"confirms_prefix_cache_hits": True` next to the gate. Two requests hitting the same slot in one step: the first
-takes it, the second's lookup falls back (text: re-prefill; mm: the refusal) — a reservation at confirmation
-time closes that gap if it shows up in practice.
+The one piece the adapter cannot derive is vLLM's content identifier of a multimodal item: the token ids of an
+image run are all ``image_token_id``, so two images cannot be told apart by the ids, and a prefix-cached item
+arrives with its payload stripped. ``mm_identifiers`` (vllm-tt-plugin#261) appends that identifier after the two
+placeholder fields; ``mm_spans_of_row`` reads it when present. Until it merges, a hit on a prompt with images is
+refused (the mm refusal) and the request is prefilled from 0. Two requests hitting the same slot in one step: the
+first takes it, the second's lookup falls back (text: re-prefill; mm: the refusal).

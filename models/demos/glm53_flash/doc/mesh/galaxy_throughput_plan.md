@@ -129,7 +129,7 @@ run each (`tests/test_mesh_long_context.py`, the README rows).
 |---|---|---|---|
 | D1 | the step gap (73 served vs 61 harness ms): device-side token feedback + position increment inside the traced step, ids-only read, then `supports_async_decode` | `tt/generator_vllm.py`, `tt/mesh_model.py`, `tt/packed_inputs.py` | packed inputs landed; the rest not started |
 | D2 | APC at any 32-aligned snapshot | A3 | after A3 the default `GLM53_VLLM_APC_HIT_ALIGN` drops from the chunk to 32 |
-| D3 | APC with the plugin: `mm_identifiers` (images in the content chain) and `confirms_prefix_cache_hits` (the scheduler trims a hit to the adapter's resume position) | vllm-tt-plugin (two generic PRs) | written, pending the go |
+| D3 | APC with images: `mm_identifiers` next to the placeholder fields (vLLM's content identifier of an item, present when the payload was stripped). The plugin already reports the hit itself as `start_pos`, so no confirmation hook | vllm-tt-plugin#261 (one generic PR) | open |
 | D4 | spec v2: partitioned-cache verify (spec at 1 M), sparse-range verify (lift the 2050 bound), `logits` accept mode, async decode | `tt/vllm_spec.py`, `tt/spec_decode.py` | branch `arg/glm53_served_spec_long` holds the sparse-range verify draft |
 | D5 | catalog: 1 M x 32, 128K x 256, the multimodal class, the smoke's stages a-e as the release pre-check | TIS `arg/glm53_flash_galaxy` | after A7 |
 | D6 | release flow: GPQA, Terminal-Bench, LiveCodeBench, MMMU-Pro, benchmarks vs the measured targets | TIS workflows | not started; needs D5 |
@@ -156,5 +156,5 @@ runs outside the queue; nothing pushed without the go.
 | decision | why | default if unanswered |
 |---|---|---|
 | A0: the ttnn KDA `sequence_parallel_size` override (outside the model dir) | without it there is no row-local KDA scan on a multi-row mesh, so no waves and no A3 benefit for the KDA layers | the patch is prepared on its own branch and not applied; A3 proceeds for the DSA / page-table side (it also serves the APC) |
-| D3: the two plugin PRs | APC with images and exact hit accounting | APC serves text hits with the plugin's own block hashes; images miss |
+| D3: the `mm_identifiers` plugin PR (#261) | APC with images | APC serves text hits from the plugin's `start_pos`; prompts with images are prefilled from 0 |
 | C12: bfp4 gate/up experts | 1/3 of the expert bytes on every decode step | stays bfp8; bfp4 is taken only if accuracy and PCC against bf16 are retained (user rule), never for the speed alone |
