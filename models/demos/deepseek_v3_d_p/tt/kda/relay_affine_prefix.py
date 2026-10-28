@@ -6,9 +6,13 @@ applies its own [A | B] summary to the entry state its predecessor sends and for
 the final state to the first. It needs a 2D fabric: on a torus that hand-off is one hop, on a mesh it crosses the SP
 line.
 
-The relay's landing buffers are L1 tensors sharded one head per head core, at the same address on every device; they
-outlive each call, since a rank's predecessor writes into them before the rank's own call starts. Layers run one after
-another, so one relay per mesh and geometry is shared; the final carry's SP-line barrier separates consecutive calls.
+The relay's landing buffers are L1 tensors sharded one head per head core, at the same address on every device. A
+rank's predecessor writes into them before the rank's own call starts, so a layer reserves them before its first program
+(reserve) and the call frees them once the relay has consumed them: between layers that L1 is free for the other
+attention layers (ring_mla's circular buffers span nearly all of L1 on the relay's head columns). The program that ends a
+layer on every SP rank (the MoE combine, a ring attention) keeps a predecessor from writing before its successor has
+reserved them. Layers run one after another, so one relay per mesh and geometry is shared; the final carry's SP-line
+barrier separates consecutive calls.
 """
 
 from __future__ import annotations
@@ -101,12 +105,10 @@ class RelayAffinePrefix:
             ttnn.BufferType.L1,
             ttnn.ShardSpec(head_set, (key_dim, key_dim), ttnn.ShardOrientation.ROW_MAJOR),
         )
-        alloc = lambda: ttnn.allocate_tensor_on_device(
-            ttnn.Shape([batch_heads * key_dim, key_dim]), ttnn.float32, ttnn.TILE_LAYOUT, mesh_device, shard
-        )
-        self.entry_landing = alloc()
-        self.state_staging = alloc()
-        self.final_landing = alloc()
+        self._landing_shape = ttnn.Shape([batch_heads * key_dim, key_dim])
+        self._landing_memory_config = shard
+        # entry_landing, state_staging, final_landing while reserved.
+        self._landing = None
         # A peer can bump the entry and final arrival counters before this rank's call starts.
         self.semaphores = persistent_semaphores(mesh_device, 2)
         # The hop's matmul runs at the affine prefix's fidelity, accumulating in an FP32 DST.
@@ -116,9 +118,19 @@ class RelayAffinePrefix:
         # Where the entry states land for their reader (the chunk scan, or the entry correction's many cores).
         self.entry_memory_config = ttnn.DRAM_MEMORY_CONFIG
 
+    def reserve(self):
+        """Allocate the landing buffers for the next call, before any program of its layer (a no-op while reserved)."""
+        if self._landing is None:
+            self._landing = tuple(
+                ttnn.allocate_tensor_on_device(
+                    self._landing_shape, ttnn.float32, ttnn.TILE_LAYOUT, self.mesh_device, self._landing_memory_config
+                )
+                for _ in range(3)
+            )
+
     def __call__(self, packed, initial_state, actual_start, output_gate: RelayOutputGate | None = None):
         """Return this rank's entry states and the final state, both [BH, K, K] FP32, and the output gate's output
-        (None without one)."""
+        (None without one). Frees the landing buffers once the relay has run."""
         gate = {}
         if output_gate is not None:
             gate = dict(
@@ -132,13 +144,13 @@ class RelayAffinePrefix:
                 output_gate_copied_columns=output_gate.copied_columns,
                 output_gate_copy_cores=list(output_gate.copy_cores),
             )
-        return ttnn.experimental.kda.relay_affine_prefix(
+        # Reserving here suffices only when no program of this rank runs between its predecessor's relay and its own.
+        self.reserve()
+        result = ttnn.experimental.kda.relay_affine_prefix(
             packed,
             initial_state,
             actual_start,
-            self.entry_landing,
-            self.state_staging,
-            self.final_landing,
+            *self._landing,
             self.semaphores,
             local_rows=self.local_rows,
             num_links=self.num_links,
@@ -148,3 +160,9 @@ class RelayAffinePrefix:
             compute_kernel_config=self.compute_config,
             **gate,
         )
+        # Every write into them is consumed within the call: the predecessor's entry columns by this rank's heads, and
+        # the last rank's final state by the first rank's writer.
+        for tensor in self._landing:
+            ttnn.deallocate(tensor)
+        self._landing = None
+        return result

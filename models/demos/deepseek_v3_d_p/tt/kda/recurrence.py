@@ -853,6 +853,8 @@ class KDARecurrence:
         """
         if (output_gate is not None or defer_final_carry) and not self.uses_affine_relay:
             raise ValueError("the output gate and a deferred final carry need the SP relay")
+        # A no-op when the layer already reserved them (reserve_affine_relay).
+        self.reserve_affine_relay()
         prepared, state, geometry = self._prepare(
             q=q,
             k=k,
@@ -917,6 +919,13 @@ class KDARecurrence:
     @property
     def uses_affine_relay(self) -> bool:
         return self._affine_relay is not None
+
+    def reserve_affine_relay(self) -> None:
+        """Allocate the SP relay's L1 landing buffers for the next call (RelayAffinePrefix.reserve): a layer calls it
+        before its first program, since the predecessor's relay may write into them while this rank is still ahead
+        of its own. Without the relay, a no-op."""
+        if self._affine_relay is not None:
+            self._affine_relay.reserve()
 
     @property
     def final_carry_cores(self) -> list[ttnn.CoreCoord]:

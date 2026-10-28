@@ -592,6 +592,8 @@ class ttKDA:
         self._validate_forward(hidden_states, state, actual_start)
         if actual_end is not None:
             self._validate_runtime_bound(actual_end, "actual_end")
+        # The SP predecessor's relay can write into this rank's landing buffers before its own recurrence starts.
+        self.recurrence.reserve_affine_relay()
         inputs = self._project_inputs(hidden_states)
         q, k, v, new_convolution = ttnn.experimental.kda.qkv_causal_conv1d_silu_with_carry(
             inputs.projected,
