@@ -626,33 +626,46 @@ class TtLatentCache:
         None (every column attends its own heads over a replicated / scratch cache)."""
         return user // self.users_per_chip if self.prefill_mode == "heads2users" else None
 
-    def _prefill_views_for(self, user: int) -> list[ttnn.Tensor]:
-        """[1, blocks_per_seq] page-table views a prefill of ``user`` fills (batch_idx 0): partitioned = the per-chip
-        owner row (the user's slot on its owner column, the scratch slot or the dummy row elsewhere) and, with a
-        scratch slot, the replicated scratch row."""
-        key = ("fill", user)
-        if key not in self._prefill_views:
-            if not self.partition:
-                self._prefill_views[key] = [
-                    ttnn.slice(self.page_table_full, [user, 0], [user + 1, self.blocks_per_seq])
-                ]
-            else:
-                owner, slot = user // self.users_per_chip, user % self.users_per_chip
-                other = self.scratch if self.scratch is not None else self.dummy_row
-                rows = torch.stack(
-                    [self.page_table_host[slot if c == owner else other] for c in range(self.mesh.cols)]
-                )  # [cols, bps]
-                views = [self.mesh.upload(rows, ttnn.int32, cols=0, layout=ttnn.ROW_MAJOR_LAYOUT)]
-                if self.scratch is not None:
-                    views.append(
-                        self.mesh.upload(
-                            self.page_table_host[self.scratch : self.scratch + 1],
-                            ttnn.int32,
-                            layout=ttnn.ROW_MAJOR_LAYOUT,
-                        )
-                    )
-                self._prefill_views[key] = views
-        return self._prefill_views[key]
+    def _view_rows(self, user: int) -> list[torch.Tensor]:
+        """The host page-table rows a prefill of ``user`` fills (batch_idx 0), one ``[n, blocks_per_seq]`` tensor per
+        view: not partitioned = the user's row; partitioned = the per-chip owner row (the user's slot on its owner
+        column, the scratch slot or the dummy row elsewhere) and, with a scratch slot, the replicated scratch row."""
+        if not self.partition:
+            return [self.page_table_host[user : user + 1]]
+        owner, slot = user // self.users_per_chip, user % self.users_per_chip
+        other = self.scratch if self.scratch is not None else self.dummy_row
+        rows = [torch.stack([self.page_table_host[slot if c == owner else other] for c in range(self.mesh.cols)])]
+        if self.scratch is not None:
+            rows.append(self.page_table_host[self.scratch : self.scratch + 1])
+        return rows
+
+    def _upload_view(self, rows: torch.Tensor, per_chip: bool) -> ttnn.Tensor:
+        if per_chip:
+            return self.mesh.upload(rows, ttnn.int32, cols=0, layout=ttnn.ROW_MAJOR_LAYOUT)
+        if getattr(self, "mesh", None) is not None:
+            return self.mesh.upload(rows, ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT)
+        return ttnn.from_torch(rows.contiguous(), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=self.device)
+
+    def _prefill_views_for(self, user: int, b0: int = 0) -> list[ttnn.Tensor]:
+        """``[1, blocks_per_seq]`` page-table views a prefill of ``user`` fills from block ``b0`` on (batch_idx 0;
+        ``_view_rows``). ``b0 == 0``: the user's views, built once (under live traces a chunk transient, GLMMesh.lazy).
+        ``b0 > 0``: the rows shifted by ``b0`` on the host and padded back to the full width with the row's last block
+        (never written: ``fill`` clips its rows to the slot end), uploaded for this call (the caller frees them). The
+        width never changes, so the fill runs ONE program for every chunk start and prefix-cache hit position; the
+        earlier device slice ``[0, b0] .. [1, blocks_per_seq]`` was a program per start block, compiled at request
+        time under the sealed cache (the served APC hit at 1536, 2026-10-28 8x4)."""
+        per_chip = self.partition
+        if b0 == 0:
+            key = ("fill", user)
+            make = lambda: [self._upload_view(r, per_chip and i == 0) for i, r in enumerate(self._view_rows(user))]
+            return lazy_const(getattr(self, "mesh", None), self._prefill_views, key, make)
+        if not 0 < b0 < self.blocks_per_seq:
+            raise ValueError(f"fill start block {b0} outside [1, {self.blocks_per_seq})")
+        out = []
+        for i, r in enumerate(self._view_rows(user)):
+            shifted = torch.cat([r[:, b0:], r[:, -1:].expand(-1, b0)], dim=1).contiguous()
+            out.append(self._upload_view(shifted, per_chip and i == 0))
+        return out
 
     def fill(self, latent: ttnn.Tensor, user: int, start: int = 0, slot=None):
         """latent [1, 1, T_pad, 512] (T_pad % block_size == 0) -> pages of ``user`` from position
@@ -681,12 +694,9 @@ class TtLatentCache:
             if start == 0 and not self.partition:
                 ttnn.experimental.paged_fill_cache(self.cache, src, self.page_table, batch_idx=user)
                 return
-            for full in self._prefill_views_for(user):
-                view = (
-                    full if b0 == 0 else ttnn.slice(full, [0, b0], [1, self.blocks_per_seq])
-                )  # device slice, no upload
+            for view in self._prefill_views_for(user, b0):  # fixed-width views: one fill program for every start
                 ttnn.experimental.paged_fill_cache(self.cache, src, view, batch_idx=0)
-                if view is not full:
+                if b0:
                     ttnn.deallocate(view)
         finally:
             if clipped is not None:
