@@ -254,8 +254,13 @@ struct ppfmt {
     static constexpr uint32_t record_w0(uint32_t body_words) {
         return (T_RECORD << TYPE_SHIFT) | (body_words << LENGTH_SHIFT);
     }
-    // A stall's record is a zone's medium one: the stall's end as its time, then its start's distance back.
+    // A stall's record, which the producer writes (internal/debug/device_publish_ring.h; device_publish_encoding.h
+    // checks these against DevicePublish's layout of it) and the host describes from these (llrt/call_sites.cpp): a
+    // zone's medium record, an Interval whose end is the record's time and whose start follows as a distance back
+    // from the end.
     static constexpr uint32_t STALL_BODY_WORDS = 2;
+    static constexpr uint32_t STALL_START_DISTANCE_BITS = 32;
+    static constexpr uint32_t STALL_PUBLISH_TIME_FIELD = 1;  // the end, which no form sends
 };
 
 // Words in a staging/ring slot. A slot must hold the PACKED image of a span, which can be LARGER than the

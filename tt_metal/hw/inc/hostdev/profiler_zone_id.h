@@ -7,5 +7,6 @@
 #pragma once
 
 #define TT_CALL_SITE_ID_COUNT (1u << 16)
-// The profiler's own stall zone: recognized by value, so it has no ELF record and no source location.
+// The stall call site, the producer's own, which every image shares: recognized by value, so it has no ELF record and
+// no source location (llrt/call_sites.cpp describes it).
 #define TT_STALL_CALL_SITE_ID (TT_CALL_SITE_ID_COUNT - 1u)
