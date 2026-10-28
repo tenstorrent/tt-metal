@@ -97,23 +97,31 @@
   team: models
   budget_type: vllm
 
-# Product path on QB2: 256k + chunked prefill + B=32.
+# Product path on QB2: 256k + chunked prefill + B=32, served through the MTP speculative
+# contract adapter as the tt-inference-server QB2 release entry is (the plain decode is this
+# rail's fallback for rows above the record cap, declined steps and unsupported requests, so the
+# leg still covers it). A 4-chip column is TP4 (two local KV heads, the unsplit packed SDPA path
+# the 8-chip column never takes): the shield QB2 eval accepted about one draft in a hundred
+# while the tp=8 leg accepted 2.7-5.1 of 6, so this leg separates TP4 from batch. The trace
+# region holds the 20 speculative records plus the plain traces.
 - name: "Gemma4-12B"
   model: google/gemma-4-12B-it
   coherence-test: true
-  server-timeout: 20
+  server-timeout: 25
   benchmark-timeout: 5
   mesh-device: P150x4
   arch: arch-blackhole
-  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 512000000}'
+  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 768000000}'
   server-default-top-k: 32
-  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --async-scheduling"
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --no-async-scheduling --speculative-config.method custom_class --speculative-config.model vllm_tt_plugin.model_owned_drafter --speculative-config.num_speculative_tokens 5"
+  additional-benchmark-args: "--max-concurrency 5 --num-prompts 10 --temperature 0"
+  extra-env: "TT_MODEL_CLASS_OVERRIDES=Gemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM,Gemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM,Gemma4UnifiedForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM,TTGemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM,TTGemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM GEMMA4_SPEC_DRAFT_LEN=5 GEMMA4_PAGE_BLOCK_SIZE=64"
   multimodal: false
   skus:
     bh_quietbox_2:
       timeout: 40
       tier: 1
-  owner_id: U08TJ70UFRT # Harry Andrews
+  owner_id: U088413NP0Q # Ashai Reddy
   team: models
   budget_type: vllm
 
@@ -240,31 +248,6 @@
   skus:
     bh_loudbox:
       timeout: 30
-      tier: 2
-  owner_id: U088413NP0Q # Ashai Reddy
-  team: models
-  budget_type: vllm
-
-
-- name: "Gemma4-12B MTP contract (P150x4)"
-  # The MTP contract adapter on a 4-chip column (TP4: two local KV heads, the unsplit packed
-  # SDPA path the 8-chip column never takes); the shield QB2 eval accepted about one draft in a
-  # hundred while the tp=8 leg accepted 2.7-5.1 of 6, so this leg separates TP4 from batch.
-  # Server flags as the tp=8 leg; the trace region holds 20 records plus the plain traces.
-  model: google/gemma-4-12B-it
-  coherence-test: true
-  server-timeout: 25
-  benchmark-timeout: 5
-  mesh-device: P150x4
-  arch: arch-blackhole
-  tt-config: '{"sample_on_device_mode": "decode_only", "fabric_config": "FABRIC_1D", "trace_region_size": 768000000}'
-  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --no-async-scheduling --speculative-config.method custom_class --speculative-config.model vllm_tt_plugin.model_owned_drafter --speculative-config.num_speculative_tokens 5"
-  additional-benchmark-args: "--max-concurrency 5 --num-prompts 10 --temperature 0"
-  extra-env: "TT_MODEL_CLASS_OVERRIDES=Gemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM,Gemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM,Gemma4UnifiedForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM,TTGemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM,TTGemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM GEMMA4_SPEC_DRAFT_LEN=5 GEMMA4_PAGE_BLOCK_SIZE=64"
-  multimodal: false
-  skus:
-    bh_quietbox_2:
-      timeout: 35
       tier: 2
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
