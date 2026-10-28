@@ -19,15 +19,22 @@
 using namespace tt::tt_fabric::common::experimental;
 namespace tt::tt_fabric::mesh::experimental {
 
-struct MeshMcastRange;  // forward declaration; full definition in tt-1xx/api_impl.h
-template <typename T, typename = void>
-struct is_addrgen;  // forward declaration; full definition in tt-1xx/api_impl.h
-
 // Type trait to detect if a type is an addrgen (has get_noc_addr method)
+template <typename T, typename = void>
+struct is_addrgen : std::false_type {};
+
+template <typename T>
+struct is_addrgen<T, std::void_t<decltype(std::declval<const T&>().get_noc_addr(0))>> : std::true_type {};
 
 // FABRIC_MAX_PACKET_SIZE is available via macro from addrgen_api.h
 
 // hop info e/w/n/s
+struct MeshMcastRange {
+    uint8_t e;
+    uint8_t w;
+    uint8_t n;
+    uint8_t s;
+};
 
 // clang-format off
 /**
