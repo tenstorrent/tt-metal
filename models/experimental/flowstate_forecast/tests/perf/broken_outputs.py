@@ -23,6 +23,11 @@ as the scoring (v1.23). The golden itself is scored first, and only failures bey
     lag1                the forecast one step late (v1.22)
     band_1.3x_row       the band of one active row (the widest) scaled 1.3x (v1.26)
 
+With ``--dumps`` (the bench's MODEL_PERF_DUMP and the suite's FLOWSTATE_SUITE_DUMP outputs of the fixed record's
+jobs), each broken output is made from the device output of that case and precision instead of the golden, and
+the device output itself is the "own" record: the perturbation a G2 candidate would bring. A row whose device bias
+is already near +0.05 hides a +0.05 shift of the golden from the row-indexed drift, not one of the device output.
+
 Every one must fail on every applicable case and precision. Exit status 1 otherwise.
 """
 
@@ -64,8 +69,8 @@ def n_shift_rows(B):
     return 1 if B <= 16 else 2 if B <= 32 else 4 if B <= 64 else math.ceil(0.01 * B)
 
 
-def broken(gh):
-    """gh (B, 9, H, 1) -> {name: (head, what)}."""
+def broken(base, gh):
+    """base (B, 9, H, 1): the output to break (device or golden); gh: the golden, which picks the rows."""
     h3 = M.head(gh)
     act = M.active_rows(h3)
     idx = act.nonzero().flatten()
@@ -75,20 +80,20 @@ def broken(gh):
     std = h3.double().reshape(h3.shape[0], -1).std(1)
     ks = n_shift_rows(gh.shape[0])
     big = idx[std[idx].argsort(descending=True)[:ks]]
-    shifted = gh.clone()
+    shifted = base.clone()
     shifted[big] += SHIFT
-    lag = gh.clone()
-    lag[:, :, 1:] = gh[:, :, :-1]
+    lag = base.clone()
+    lag[:, :, 1:] = base[:, :, :-1]
     return {
-        "collapsed": (scale_band(gh, slice(None), 0.0), "all series"),
-        "inactive_collapsed": (scale_band(gh, ~act, 0.0), f"{int((~act).sum())} inactive series"),
-        "active1pct_0.3x": (scale_band(gh, wide[:k], 0.3), f"{k} of {len(idx)} active series"),
-        "all_0.88x": (scale_band(gh, slice(None), 0.88), "all series"),
-        "all_1.12x": (scale_band(gh, slice(None), 1.12), "all series"),
-        "level_shift": (gh + SHIFT, "all series"),
+        "collapsed": (scale_band(base, slice(None), 0.0), "all series"),
+        "inactive_collapsed": (scale_band(base, ~act, 0.0), f"{int((~act).sum())} inactive series"),
+        "active1pct_0.3x": (scale_band(base, wide[:k], 0.3), f"{k} of {len(idx)} active series"),
+        "all_0.88x": (scale_band(base, slice(None), 0.88), "all series"),
+        "all_1.12x": (scale_band(base, slice(None), 1.12), "all series"),
+        "level_shift": (base + SHIFT, "all series"),
         "level_shift_rows": (shifted, f"rows {big.tolist()} of {gh.shape[0]}"),
         "lag1": (lag, "all series"),
-        "band_1.3x_row": (scale_band(gh, wide[:1], 1.3), f"row {wide[:1].tolist()}"),
+        "band_1.3x_row": (scale_band(base, wide[:1], 1.3), f"row {wide[:1].tolist()}"),
     }
 
 
@@ -124,6 +129,7 @@ def main():
     ap.add_argument("--gates", type=Path, default=DEFAULT_GATES)
     ap.add_argument("--baseline", type=Path, default=DEFAULT_BASELINE)
     ap.add_argument("--out", type=Path)
+    ap.add_argument("--dumps", type=Path, help="device outputs: <shape>-<precision>.pt, suite_<case>-<precision>.pt")
     args = ap.parse_args()
     stamp = session_stamp()
     gates = json.loads(args.gates.read_text())
@@ -133,30 +139,38 @@ def main():
         g = torch.load(GOLDENS / f"{name}.pt", weights_only=True)
         gh = g["combined_normalized"]
         key = name.removeprefix("bench_") if name.startswith("bench_") else f"suite:{name}"
-        rec = lambda h, prec: {  # noqa: E731
-            "name": key,
-            "precision": prec,
-            **M.gate_metrics(h, gh, *to_data(g, h)[:1], g["quantile_outputs"], to_data(g, h)[1], g["prediction_outputs"]),
-            **stamp,
-        }
-        own = {p: score(rec(gh, p), base, gates, args.gates.parent) for p in ("accuracy", "performance")}
-        for p in own:
-            print(f"{key:20s} {p:11s} golden itself fails {sorted(own[p])}")
-        for kind, (h, what) in broken(gh).items():
-            if kind == "inactive_collapsed" and not bool((~M.active_rows(M.head(gh))).any()):
-                print(f"{key:20s} {kind:19s}: not applicable (no inactive series; identical to the golden)")
-                continue
-            extra = ""
-            if kind == "level_shift":
-                _, _, SD = to_data(g, gh)
-                real = (SHIFT * SD[:, 0, :, 0]).mean(1) / M.head(g["quantile_outputs"]).double().reshape(gh.shape[0], -1).std(1)
-                extra = f"; +0.05 normalized = {float(real.median()):.3g} x the data row std (median over rows)"
-            for p in ("accuracy", "performance"):
-                fails = sorted(score(rec(h, p), base, gates, args.gates.parent) - own[p])
+        def rec(h, prec):
+            q, pt, _ = to_data(g, h)
+            m = M.gate_metrics(h, gh, q, g["quantile_outputs"], pt, g["prediction_outputs"])
+            return {"name": key, "precision": prec, **m, **stamp}
+
+        for p in ("accuracy", "performance"):
+            dev = None
+            if args.dumps:
+                f = args.dumps / (f"{key.removeprefix('suite:')}-{p}.pt" if not key.startswith("suite:") else f"suite_{key[6:]}-{p}.pt")
+                if f.is_file():
+                    dev = torch.load(f, weights_only=True)["combined_normalized"]
+                else:
+                    bad.append(f"{key}/{p}/no device dump")
+            base_h = dev if dev is not None else gh
+            src = "device" if dev is not None else "golden"
+            own = score(rec(base_h, p), base, gates, args.gates.parent)
+            print(f"{key:20s} {p:11s} {src} output itself fails {sorted(own)}")
+            for kind, (h, what) in broken(base_h, gh).items():
+                if kind == "inactive_collapsed" and not bool((~M.active_rows(M.head(gh))).any()):
+                    print(f"{key:20s} {p:11s} {kind:19s}: not applicable (no inactive series)")
+                    continue
+                extra = ""
+                if kind == "level_shift":
+                    _, _, SD = to_data(g, gh)
+                    gq = M.head(g["quantile_outputs"]).double().reshape(gh.shape[0], -1)
+                    real = (SHIFT * SD[:, 0, :, 0]).mean(1) / gq.std(1)
+                    extra = f"; +0.05 normalized = {float(real.median()):.3g} x the data row std (median over rows)"
+                fails = sorted(score(rec(h, p), base, gates, args.gates.parent) - own)
                 results.append(
-                    {"case": key, "broken": kind, "rows": what + extra, "precision": p, "fails": fails, **stamp}
+                    {"case": key, "broken": kind, "base": src, "rows": what + extra, "precision": p, "fails": fails, **stamp}
                 )
-                print(f"{key:20s} {p:11s} {kind:19s} ({what}{extra}): fails {len(fails)} {fails}")
+                print(f"{key:20s} {p:11s} {kind:19s} ({src}; {what}{extra}): fails {len(fails)} {fails}")
                 if not fails:
                     bad.append(f"{key}/{p}/{kind}")
     if args.out:

@@ -69,6 +69,9 @@ def test_model_case(tt_model, case):
     print(tt_model.p.name, case, metrics.fmt(m))
     if keep:
         print(tt_model.p.name, case, "stacked layer pcc", m["layer_pcc_stacked"], "embed", m["embed_pcc_stacked"])
+    if dump := os.environ.get("FLOWSTATE_SUITE_DUMP"):  # the device outputs score_broken perturbs (D3 item 4)
+        os.makedirs(dump, exist_ok=True)
+        torch.save({k: v for k, v in out.items() if k != "layers"}, f"{dump}/suite_{case}-{tt_model.p.name}.pt")
     os.makedirs(OUT, exist_ok=True)
     with open(f"{OUT}/{tt_model.p.name}_{case}.json", "w") as f:
         json.dump(m, f, indent=1)
