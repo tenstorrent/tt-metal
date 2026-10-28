@@ -43,6 +43,7 @@ def qkv_heads_rope(
     memory_config=None,
     math_fidelity=ttnn.MathFidelity.HiFi4,
     units_per_block: int = _UNITS_PER_BLOCK,
+    fp32_dest_acc_en: bool = True,
 ):
     """[B, S, 3 * H * Dh] -> RoPE'd Q, RoPE'd K and V, each [B, H, S, Dh]. cos/sin are [1, 1, >=S, Dh]."""
     for name, t in (("xqkv", xqkv), ("cos", cos), ("sin", sin)):
@@ -77,7 +78,7 @@ def qkv_heads_rope(
     all_cores, work = common.split_rows(device, num_units)
     upb = units_per_block
     dst_block = head_tiles
-    while dst_block > 8 or head_tiles % dst_block:
+    while dst_block > (4 if fp32_dest_acc_en else 8) or head_tiles % dst_block:
         dst_block -= 1
 
     dt = xqkv.dtype
@@ -122,7 +123,9 @@ def qkv_heads_rope(
         core_ranges=all_cores,
         compile_time_args=[head_tiles, seq_tiles, num_heads, dst_block],
         runtime_args=[((c.x, c.y), [start, n]) for c, n, start in work],
-        config=ttnn.ComputeConfigDescriptor(math_fidelity=math_fidelity, math_approx_mode=True),
+        config=ttnn.ComputeConfigDescriptor(
+            math_fidelity=math_fidelity, math_approx_mode=True, fp32_dest_acc_en=fp32_dest_acc_en
+        ),
     )
     ttnn.generic_op([xqkv, cos, sin, q, k, v], ttnn.ProgramDescriptor(kernels=[reader, writer, compute], cbs=cbs))
     return q, k, v
