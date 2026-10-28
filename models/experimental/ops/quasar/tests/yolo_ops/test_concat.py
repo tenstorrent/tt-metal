@@ -87,12 +87,6 @@ _CHANNEL_SITES = [
     [pytest.param(*s, id=s[0]) for s in _CHANNEL_SITES],
 )
 def test_concat_channel(ttnn_mesh_device, reset_seeds, name, dim, in_shapes, out_shape):
-    if name.startswith("dist2bbox"):
-        # [1,2,A]+[1,2,A] on dim=1 in TILE is a composite (untilize_with_unpadding -> RM concat ->
-        # tilize_with_val_padding); the final tilize of a 4-row RM block faults only on the
-        # emulator (`Neo0TRISC1 hardware fault MEM_READ_NO_RESPONSE` in tilize_metal2.cpp).
-        # Owner: tilize_with_val_padding on Quasar.
-        U.skip_on_emulator("tilize_with_val_padding MEM_READ_NO_RESPONSE fault, emulator-only")
     mesh = ttnn_mesh_device
 
     parts_torch = [U.torch_rand(s) for s in in_shapes]
@@ -135,10 +129,6 @@ _DETECT_L1_SITES = [
 )
 def test_concat_detect_l1(ttnn_mesh_device, reset_seeds, name, dim, in_shapes, out_shape):
     """detect-head concats on L1 buffers (ttnn_yolov8l.py:734/744/757, tt_yolov8l_utils.py:100; mem cfg :772-773)."""
-    if name.startswith("dist2bbox"):
-        U.skip_on_emulator(
-            "tilize_with_val_padding MEM_READ_NO_RESPONSE fault, emulator-only"
-        )  # see test_concat_channel
     mesh = ttnn_mesh_device
 
     parts_torch = [U.torch_rand(s) for s in in_shapes]
