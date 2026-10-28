@@ -1,0 +1,5 @@
+test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations,avg_cycles,avg_packets_per_s,avg_bandwidth_gigabytes_per_s,bw_min_gigabytes_per_s,bw_max_gigabytes_per_s,bw_std_dev_gigabytes_per_s,tolerance_percent
+EW_Chunk4Fused_NoFlush,CHIP_UNICAST,STREAM,Mesh,"[8]",1,4352,1,6845067.000000,9466671.400002,41.198954,41.198954,41.198954,0.000000,1.000000
+EW_Chunk4Fused_Flush,CHIP_UNICAST,STREAM,Mesh,"[8]",1,4352,1,11121501.000000,5826551.649818,25.357153,25.357153,25.357153,0.000000,1.000000
+NS_Chunk4Fused_NoFlush,CHIP_UNICAST,STREAM,Mesh,"[8]",1,4352,1,7028594.000000,9219482.587840,40.123188,40.123188,40.123188,0.000000,1.000000
+NS_Chunk4Fused_Flush,CHIP_UNICAST,STREAM,Mesh,"[8]",1,4352,1,11328727.000000,5719971.890928,24.893318,24.893318,24.893318,0.000000,1.000000

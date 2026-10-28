@@ -1,0 +1,24 @@
+# VC1 split (two 2x2 meshes, ttrun.py; see vc1_split.yaml): the short compile row (every row's routers are the same) of vc1_split.yaml's benchmarks, for PC
+# sampling of VC1 routers (consolidation/vc1_pcs_runs.sh).
+allocation_policies:
+    receiver:
+      policy: RoundRobin
+      max_configs_per_core: 4
+
+Tests:
+  - name: "PcsVc1Compile"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16]
+    defaults:
+      ftype: unicast
+      num_packets: 1000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]

@@ -82,8 +82,10 @@ BandwidthProfiler::calculate_outgoing_traffics_through_device_boundaries(
 }
 
 void BandwidthProfiler::trace_traffic_path(const FabricNodeId& src_node_id, const TestTrafficSenderConfig& config) {
-    // Use proper topology detection from fixture
-    if (fixture_.get_topology() == Topology::Ring) {
+    // Configs addressed by node id (inter-mesh traffic) have no hops
+    if (!config.hops.has_value()) {
+        trace_node_id_traffic_path(src_node_id, config);
+    } else if (fixture_.get_topology() == Topology::Ring) {
         // Ring topology - use ring traversal logic with boundary turning
         trace_ring_traffic_path(src_node_id, config);
     } else {
@@ -148,6 +150,60 @@ void BandwidthProfiler::trace_line_or_mesh_traffic_path(
             load.packets += static_cast<uint64_t>(config.parameters.num_packets) * count;
         }
     }
+}
+
+// A unicast addressed by node id (inter-mesh traffic: the routing tables pick the path, so the config has no hops):
+// follow the control plane's forwarding direction from node to node. Where a direction has several neighbors (links
+// into other meshes), the next node is the destination, else one in the destination's mesh, else one in this node's
+// mesh; if none of those exists the trace stops there and only the boundaries up to it are counted.
+void BandwidthProfiler::trace_node_id_traffic_path(
+    const FabricNodeId& src_node_id, const TestTrafficSenderConfig& config) {
+    TT_FATAL(
+        config.parameters.chip_send_type == tt::tt_fabric::ChipSendType::CHIP_UNICAST && config.dst_node_ids.size() == 1,
+        "Bandwidth profiling of a config without hops needs a unicast to one destination (from {})",
+        src_node_id);
+    const FabricNodeId dst_node_id = config.dst_node_ids[0];
+    constexpr uint32_t max_hops = 64;
+    FabricNodeId node = src_node_id;
+    for (uint32_t hop = 0; node != dst_node_id; hop++) {
+        TT_FATAL(hop < max_hops, "No path from {} to {} within {} hops", src_node_id, dst_node_id, max_hops);
+        const RoutingDirection direction = route_manager_.get_forwarding_direction(node, dst_node_id);
+        outgoing_traffic_[node][direction]++;
+        auto& load = outgoing_load_[node][direction];
+        load.bytes += static_cast<uint64_t>(config.parameters.payload_size_bytes) * config.parameters.num_packets;
+        load.packets += config.parameters.num_packets;
+
+        const auto neighbors = route_manager_.get_all_neighbor_node_ids(node, direction);
+        auto pick = [&](auto&& pred) { return std::find_if(neighbors.begin(), neighbors.end(), pred); };
+        auto next = pick([&](const FabricNodeId& n) { return n == dst_node_id; });
+        if (next == neighbors.end()) {
+            next = pick([&](const FabricNodeId& n) { return n.mesh_id == dst_node_id.mesh_id; });
+        }
+        if (next == neighbors.end()) {
+            next = pick([&](const FabricNodeId& n) { return n.mesh_id == node.mesh_id; });
+        }
+        if (next == neighbors.end()) {
+            log_warning(
+                tt::LogTest,
+                "Bandwidth profiler: no next node from {} in direction {} toward {}; counted {} boundaries",
+                node,
+                direction,
+                dst_node_id,
+                hop + 1);
+            return;
+        }
+        node = *next;
+    }
+}
+
+// The direction a config's traffic leaves its source in: from its hops, or for a config addressed by node id, from the
+// routing tables.
+RoutingDirection BandwidthProfiler::first_hop_direction(
+    const FabricNodeId& src_node_id, const TestTrafficSenderConfig& config) const {
+    if (config.hops.has_value()) {
+        return route_manager_.get_forwarding_direction(*config.hops);
+    }
+    return route_manager_.get_forwarding_direction(src_node_id, config.dst_node_ids.at(0));
 }
 
 void BandwidthProfiler::read_performance_results(
@@ -286,7 +342,7 @@ void BandwidthProfiler::convert_core_cycles_to_direction_cycles(
             // Get unique (direction, link_id) pairs this core sends traffic to
             std::set<std::pair<RoutingDirection, uint32_t>> core_direction_links;
             for (const auto& [config, _] : sender.get_configs()) {
-                RoutingDirection direction = route_manager_.get_forwarding_direction(*config.hops);
+                RoutingDirection direction = first_hop_direction(device_node_id, config);
                 uint32_t link_id = config.link_id;
                 core_direction_links.insert({direction, link_id});
             }
@@ -340,7 +396,7 @@ void BandwidthProfiler::calculate_bandwidth(
         for (const auto& [core, sender] : test_device.get_senders()) {
             (void)core;
             for (const auto& [sender_config, _] : sender.get_configs()) {
-                RoutingDirection config_direction = route_manager_.get_forwarding_direction(sender_config.hops.value());
+                RoutingDirection config_direction = first_hop_direction(device_id, sender_config);
                 uint32_t config_link_id = sender_config.link_id;
 
                 // Create cache key: device_id + direction + link_id

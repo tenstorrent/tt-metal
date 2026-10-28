@@ -1,0 +1,28 @@
+# Phase/cost analysis stage 3 (RESULTS §98): one long row for PC sampling (lin1).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: PcsLin1
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Linear
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 83720930
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1

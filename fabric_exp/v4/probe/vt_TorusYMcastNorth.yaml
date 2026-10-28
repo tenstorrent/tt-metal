@@ -1,0 +1,21 @@
+allocation_policies:
+  receiver:
+    max_configs_per_core: 2
+Tests:
+- name: TorusYMcastNorth
+  sync: true
+  fabric_setup:
+    topology: Torus
+    torus_config: Y
+    num_links: max
+  defaults:
+    ftype: mcast
+    ntype: unicast_write
+    size: 256
+    num_packets: 2000
+    destination:
+      hops:
+        N: max
+  patterns:
+  - type: all_devices_uniform_pattern
+    iterations: 3

@@ -12,8 +12,10 @@
 #include <tt_stl/assert.hpp>
 #include <tt_stl/fmt.hpp>
 #include <algorithm>
+#include <cstdio>
 #include <cstdlib>
 #include <numeric>
+#include <string_view>
 
 namespace tt::tt_fabric {
 
@@ -731,7 +733,11 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
     // which can leave whole packet slots unused. Give those slots to the live
     // local-worker injection channel; forwarding and receive depths stay
     // unchanged.
-    if ((topology == Topology::Mesh || topology == Topology::Torus) &&
+    // Study switch (fabric_exp, 1D analysis): TT_FABRIC_EXP_LINEAR_SPARE_SLOTS=1 gives Linear's spare slots to its
+    // worker channel too.
+    const bool linear_spare_slots =
+        topology == Topology::Linear && std::getenv("TT_FABRIC_EXP_LINEAR_SPARE_SLOTS") != nullptr;
+    if ((topology == Topology::Mesh || topology == Topology::Torus || linear_spare_slots) &&
         options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::DISABLED) {
         size_t allocated_slots = 0;
         for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
@@ -782,6 +788,154 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
 
         num_sender_buffer_slots_per_vc[0][worker_channel] = worker_slots;
         num_remote_sender_buffer_slots_per_vc[0][worker_channel] = worker_slots;
+    }
+
+    // 1D (Linear, Ring) on Blackhole: the tier table's first fit (16 + 16 sender, 32 receiver slots) leaves ~19 of 83
+    // slots unused. The receiver keeps its tier depth, a power of 2 (the receiver ring's index arithmetic is cheapest
+    // so); the sender channels share every other slot evenly, the remainder to the worker channel. Measured (fabric_exp
+    // RESULTS §98, slot allocation sweep): 16 worker slots bind 1-hop and 16 forwarding slots bind 3-hop on Linear;
+    // rings are not slot-bound. Only for the study's router in the v2 slot (TT_FABRIC_KERNEL_VERSION=2, v4): main's
+    // router has power-of-2 paths in its channel index arithmetic, and a sender channel whose depth is not a power of
+    // 2 costs the flows through it 2-6 cycles/packet there (§98, 1D slot split), so main keeps the tier depths.
+    // TT_FABRIC_EXP_TIER_SLOTS=1 keeps the tier depths, as do the older study switches.
+    const char* kernel_version = std::getenv("TT_FABRIC_KERNEL_VERSION");
+    const bool split_1d_slots =
+        kernel_version != nullptr && std::string_view(kernel_version) == "2" &&
+        (topology == Topology::Linear || topology == Topology::Ring) && arch == tt::ARCH::BLACKHOLE &&
+        options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::DISABLED && !vc1_present && !vc2_present &&
+        !linear_spare_slots && std::getenv("TT_FABRIC_EXP_TIER_SLOTS") == nullptr &&
+        fabric_experiment_slot_cap("TT_FABRIC_EXP_MAX_SENDER_SLOTS") == 0 &&
+        fabric_experiment_slot_cap("TT_FABRIC_EXP_MAX_RECEIVER_SLOTS") == 0 &&
+        num_used_sender_channels_per_vc[0] >= 2;  // a router with only the worker channel (neighbor exchange) keeps its tier
+    if (split_1d_slots) {
+        const size_t slot_capacity = available_channel_buffering_space / channel_buffer_size_bytes;
+        const size_t senders = num_used_sender_channels_per_vc[0];
+        const size_t receiver_slots = num_used_receiver_channels_per_vc[0] * vc0_receiver_buffer_slots;
+        TT_FATAL(
+            receiver_slots + senders <= slot_capacity,
+            "1D slot split: {} sender channels and {} receiver slots do not fit {} slots",
+            senders,
+            receiver_slots,
+            slot_capacity);
+        const size_t sender_slots = slot_capacity - receiver_slots;
+        const size_t forwarding = std::min(sender_slots / senders, MAX_CHANNEL_BUFFER_SLOTS);
+        const size_t worker = std::min(sender_slots - (senders - 1) * forwarding, MAX_CHANNEL_BUFFER_SLOTS);
+        const uint32_t worker_channel = get_worker_connected_sender_channel();
+        num_sender_buffer_slots_per_vc[0].fill(forwarding);
+        num_remote_sender_buffer_slots_per_vc[0].fill(forwarding);
+        num_sender_buffer_slots_per_vc[0][worker_channel] = worker;
+        num_remote_sender_buffer_slots_per_vc[0][worker_channel] = worker;
+    }
+
+    // Study switch (fabric_exp, slot allocation): TT_FABRIC_EXP_SLOTS=worker,forwarding,receiver sets VC0's depths on
+    // VC0-only fabrics: the worker channel, every forwarding channel, the receiver channel. A worker of 0 takes every
+    // slot the others leave, up to MAX_CHANNEL_BUFFER_SLOTS. Every router gets the same depths, so the receiver depth
+    // matches at both ends of a link. TT_FABRIC_EXP_SLOTS_1D (Linear, Ring) and TT_FABRIC_EXP_SLOTS_2D (Mesh, Torus)
+    // set one topology family and take precedence, so a suite with both (the sanity yamls) can give each its own.
+    const bool exp_slots_2d = topology == Topology::Mesh || topology == Topology::Torus;
+    const char* exp_slots = std::getenv(exp_slots_2d ? "TT_FABRIC_EXP_SLOTS_2D" : "TT_FABRIC_EXP_SLOTS_1D");
+    if (exp_slots == nullptr) {
+        exp_slots = std::getenv("TT_FABRIC_EXP_SLOTS");
+    }
+    if (exp_slots != nullptr && options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::DISABLED) {
+        size_t worker = 0, forwarding = 0, receiver = 0;
+        TT_FATAL(
+            std::sscanf(exp_slots, "%zu,%zu,%zu", &worker, &forwarding, &receiver) == 3,
+            "TT_FABRIC_EXP_SLOTS={}: expected worker,forwarding,receiver",
+            exp_slots);
+        TT_FATAL(!vc1_present && !vc2_present, "TT_FABRIC_EXP_SLOTS is for VC0-only fabrics");
+        const size_t slot_capacity = available_channel_buffering_space / channel_buffer_size_bytes;
+        const size_t others = (num_used_sender_channels_per_vc[0] - 1) * forwarding +
+                              num_used_receiver_channels_per_vc[0] * receiver;
+        TT_FATAL(others < slot_capacity, "TT_FABRIC_EXP_SLOTS={}: no slots left for the worker", exp_slots);
+        if (worker == 0) {
+            worker = std::min(slot_capacity - others, MAX_CHANNEL_BUFFER_SLOTS);
+        }
+        TT_FATAL(
+            worker > 0 && forwarding > 0 && receiver > 0 && worker <= MAX_CHANNEL_BUFFER_SLOTS &&
+                forwarding <= MAX_CHANNEL_BUFFER_SLOTS && receiver <= MAX_CHANNEL_BUFFER_SLOTS &&
+                worker + others <= slot_capacity,
+            "TT_FABRIC_EXP_SLOTS={}: {} worker + {} other slots, capacity {}, at most {} per channel",
+            exp_slots,
+            worker,
+            others,
+            slot_capacity,
+            MAX_CHANNEL_BUFFER_SLOTS);
+        const uint32_t worker_channel = get_worker_connected_sender_channel();
+        num_sender_buffer_slots_per_vc[0].fill(forwarding);
+        num_remote_sender_buffer_slots_per_vc[0].fill(forwarding);
+        num_sender_buffer_slots_per_vc[0][worker_channel] = worker;
+        num_remote_sender_buffer_slots_per_vc[0][worker_channel] = worker;
+        num_receiver_buffer_slots_per_vc[0].fill(receiver);
+        num_remote_receiver_buffer_slots_per_vc[0].fill(receiver);
+    }
+
+    // Study switch (fabric_exp, VC1 allocation): TT_FABRIC_EXP_SLOTS_VC1=worker,forwarding0,receiver0,forwarding1,
+    // receiver1 sets the depths on VC0+VC1 fabrics: VC0's worker channel, every VC0 forwarding channel, the VC0
+    // receiver channel, every VC1 sender channel (all forwarding), the VC1 receiver channel. A worker of 0 takes every
+    // slot the others leave, up to MAX_CHANNEL_BUFFER_SLOTS. Every router gets the same depths, as above.
+    // Without the switch, the study's router in the v2 slot (TT_FABRIC_KERNEL_VERSION=2, v4) on Blackhole VC1 routers
+    // of the measured shape (4 VC0 and 3 VC1 sender channels, one receiver each) gets 0,9,16,5,4 (worker 19 of 81):
+    // the tier table's 51,4,8,2,4 binds the rows the study measures (VC0 receiver 8: 1-hop +26 to +43; VC0 forwarding
+    // 4: 2-hop 482 against 264; VC1 forwarding 2: inter-mesh flows with VC1 hops 780-970 against 320-405; fabric_exp
+    // RESULTS §98, VC1 allocation, jobs 109-112). The depths come from the offline model (consolidation/alloc_model.py,
+    // between its VC0:VC1 weights 3:2 and 2:1, receivers powers of 2), not from here, and move with the router's shape.
+    // Main's router keeps the tier table; TT_FABRIC_EXP_TIER_SLOTS=1 keeps it for the study's router too.
+    const char* exp_slots_vc1 = std::getenv("TT_FABRIC_EXP_SLOTS_VC1");
+    const bool vc1_study_default =
+        exp_slots_vc1 == nullptr && kernel_version != nullptr && std::string_view(kernel_version) == "2" &&
+        arch == tt::ARCH::BLACKHOLE && std::getenv("TT_FABRIC_EXP_TIER_SLOTS") == nullptr &&
+        fabric_experiment_slot_cap("TT_FABRIC_EXP_WORKER_SLOTS") == 0 &&
+        fabric_experiment_slot_cap("TT_FABRIC_EXP_MAX_SENDER_SLOTS") == 0 &&
+        fabric_experiment_slot_cap("TT_FABRIC_EXP_MAX_RECEIVER_SLOTS") == 0 && num_used_sender_channels_per_vc[0] == 4 &&
+        num_used_sender_channels_per_vc[1] == 3 && num_used_receiver_channels_per_vc[0] == 1 &&
+        num_used_receiver_channels_per_vc[1] == 1;
+    if (vc1_study_default) {
+        exp_slots_vc1 = "0,9,16,5,4";
+    }
+    if (exp_slots_vc1 != nullptr && vc1_present && !vc2_present &&
+        options.fabric_tensix_config == tt::tt_fabric::FabricTensixConfig::DISABLED) {
+        size_t worker = 0, forwarding0 = 0, receiver0 = 0, forwarding1 = 0, receiver1 = 0;
+        TT_FATAL(
+            std::sscanf(
+                exp_slots_vc1, "%zu,%zu,%zu,%zu,%zu", &worker, &forwarding0, &receiver0, &forwarding1, &receiver1) ==
+                5,
+            "TT_FABRIC_EXP_SLOTS_VC1={}: expected worker,forwarding0,receiver0,forwarding1,receiver1",
+            exp_slots_vc1);
+        const size_t slot_capacity = available_channel_buffering_space / channel_buffer_size_bytes;
+        const size_t others = (num_used_sender_channels_per_vc[0] - 1) * forwarding0 +
+                              num_used_receiver_channels_per_vc[0] * receiver0 +
+                              num_used_sender_channels_per_vc[1] * forwarding1 +
+                              num_used_receiver_channels_per_vc[1] * receiver1;
+        TT_FATAL(others < slot_capacity, "TT_FABRIC_EXP_SLOTS_VC1={}: no slots left for the worker", exp_slots_vc1);
+        if (worker == 0) {
+            worker = std::min(slot_capacity - others, MAX_CHANNEL_BUFFER_SLOTS);
+        }
+        for (const size_t depth : {worker, forwarding0, receiver0, forwarding1, receiver1}) {
+            TT_FATAL(
+                depth > 0 && depth <= MAX_CHANNEL_BUFFER_SLOTS,
+                "TT_FABRIC_EXP_SLOTS_VC1={}: every depth must be 1 to {}",
+                exp_slots_vc1,
+                MAX_CHANNEL_BUFFER_SLOTS);
+        }
+        TT_FATAL(
+            worker + others <= slot_capacity,
+            "TT_FABRIC_EXP_SLOTS_VC1={}: {} worker + {} other slots, capacity {}",
+            exp_slots_vc1,
+            worker,
+            others,
+            slot_capacity);
+        const uint32_t worker_channel = get_worker_connected_sender_channel();
+        num_sender_buffer_slots_per_vc[0].fill(forwarding0);
+        num_remote_sender_buffer_slots_per_vc[0].fill(forwarding0);
+        num_sender_buffer_slots_per_vc[0][worker_channel] = worker;
+        num_remote_sender_buffer_slots_per_vc[0][worker_channel] = worker;
+        num_receiver_buffer_slots_per_vc[0].fill(receiver0);
+        num_remote_receiver_buffer_slots_per_vc[0].fill(receiver0);
+        num_sender_buffer_slots_per_vc[1].fill(forwarding1);
+        num_remote_sender_buffer_slots_per_vc[1].fill(forwarding1);
+        num_receiver_buffer_slots_per_vc[1].fill(receiver1);
+        num_remote_receiver_buffer_slots_per_vc[1].fill(receiver1);
     }
 }
 

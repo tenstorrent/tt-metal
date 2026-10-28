@@ -4,6 +4,8 @@
 *.log
 !*.csv
 results/*_latency.csv
+# Raw PC samples (pc_sampler.py, ~10-20 MB per row); the per-section summaries derived from them are committed.
+results/*_samples.bin
 __pycache__/
 # Router ELFs saved by the run scripts (tens of GB): variants/<v>/elf/ and consolidation/builds/ stay local.
 variants/*/elf/

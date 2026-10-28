@@ -31,6 +31,9 @@ ROOT = os.path.join(COV, "root")
 BIN = TREE + "/build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric"
 BH = TREE + "/fabric_exp/a08u24_cluster_desc.yaml"
 WH_T3K = TREE + "/tt_metal/third_party/umd/tests/cluster_descriptor_examples/t3k_cluster_desc.yaml"
+GLX = TREE + "/tt_metal/third_party/tt-cluster-descriptors/blackhole/single_bh_galaxy_clus_desc/single_bh_galaxy_clus_desc.yaml"
+EXPRESS_8X4 = {"TT_MESH_GRAPH_DESC_PATH": TREE + "/tests/tt_metal/tt_fabric/custom_mesh_descriptors/"
+                                          "express_links_8x4_mesh_graph_descriptor.textproto"}
 KDIR = "kernels/fabric_erisc_router_v2/"
 TREE_EDM = TREE + "/tt_metal/fabric/impl/kernels/edm_fabric"
 CPUS = os.environ.get("TT_COV_CPUS", "48-63")
@@ -93,6 +96,12 @@ CASES = {
     "bh_vc1_1erisc": (BH, None, ONE, "bh"),
     "bh_vc1_allinstr": (BH, None, ALL_INSTR, "bh"),
     "wh_vc1": (WH_T3K, None, {}, "wh"),
+    # Single BH Galaxy (8x4); express = the 8x4 torus with one dim-0 express pattern (5 VC0 sender channels, Z routers)
+    "glx_2d": (GLX, test_yaml("Mesh"), {}, False),
+    "glx_1d": (GLX, test_yaml("Linear"), {}, False),
+    "glx_ring": (GLX, test_yaml("Ring"), {}, False),
+    "glx_torus": (GLX, test_yaml("Torus", "      torus_config: XY\n"), {}, False),
+    "glx_express": (GLX, test_yaml("Torus", "      torus_config: XY\n"), EXPRESS_8X4, False),
     "wh_1d": (WH_T3K, test_yaml("Linear"), {}, False),
     "wh_ring": (WH_T3K, test_yaml("Ring"), {}, False),
     "wh_2d": (WH_T3K, test_yaml("Mesh"), {}, False),

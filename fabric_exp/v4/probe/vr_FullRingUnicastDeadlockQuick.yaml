@@ -1,0 +1,17 @@
+Tests:
+- name: FullRingUnicastDeadlockQuick
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+  defaults:
+    ftype: unicast
+    size: 1024
+    num_packets: 1000000
+  patterns:
+  - type: full_ring

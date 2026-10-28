@@ -2,7 +2,8 @@
 # VC1 functions for consolidation jobs (source after jobs_lib.sh). The P150x8 split into two 2x2 meshes
 # (fabric_exp/vc1, RESULTS §84): multi-mesh sanity (data checked) then intra-mesh benchmarks
 # (fabric_exp/vc1/vc1_split.yaml), two MPI ranks via ttrun.py, a fresh kernel cache per run, compile commands logged.
-# The per-test CSV is kept as results/<label>_13129088_vc1_tests.csv.
+# The per-test CSV is kept as results/<label>_13129088_vc1_tests.csv. VC1_YAML runs another yaml (e.g. vc1/vc1_inter.yaml),
+# VC1_TIMEOUT sets the run's timeout (600 s). VC1CAP_EXTRA_ENV (as vc1_capture_lib.sh) overrides run settings.
 out=fabric_exp/results
 run_vc1() {  # label cache opt|auto
     local l=$1 c=$2 o=$3 optenv=""
@@ -14,10 +15,10 @@ run_vc1() {  # label cache opt|auto
     env -u TT_METAL_SLOW_DISPATCH_MODE TT_METAL_HOME=/home/aagarwal/tt-metal TT_METAL_CLEAR_L1=1 \
         TT_METAL_DEVICE_PROFILER=0 TT_FABRIC_KERNEL_VERSION=2 TT_FABRIC_NO_BW_TELEMETRY=1 \
         ${KA_ENV-TT_FABRIC_EXP_SEQ_UPDATE_TIMEOUT=1000} TT_FABRIC_EXP_FLAGS=13129088 TT_METAL_CACHE=$c \
-        TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1 $optenv \
-        timeout 600 python_env/bin/python ttnn/ttnn/distributed/ttrun.py \
+        TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1 $optenv ${VC1CAP_EXTRA_ENV:-} \
+        timeout ${VC1_TIMEOUT:-600} python_env/bin/python ttnn/ttnn/distributed/ttrun.py \
         --rank-binding fabric_exp/vc1/p150x8_2x2_split_rank_bindings.yaml \
-        ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config $PWD/fabric_exp/vc1/vc1_split.yaml \
+        ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config $PWD/${VC1_YAML:-fabric_exp/vc1/vc1_split.yaml} \
         > $out/${l}_13129088_vc1.log 2>&1
     local rc=$?
     local fin=$(sed 's/\x1b\[[0-9;]*m//g' $out/${l}_13129088_vc1.log | grep -ac 'Finished\. (test_tt_fabric')

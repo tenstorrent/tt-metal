@@ -1,0 +1,24 @@
+# PC-sampling trial (RESULTS §98, phase/cost analysis): one long 2D row, 1-hop E/W 4352 B writes, chip 0 -> chip 1.
+# 20M packets (about 2 s at ~127 cycles/packet), so a host-side sampler has time to collect PCs while traffic runs.
+allocation_policies:
+    receiver:
+      policy: RoundRobin
+      max_configs_per_core: 4
+
+Tests:
+  - name: "PcsMesh1HopEW"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [4352]
+    defaults:
+      ftype: unicast
+      num_packets: 20000000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]

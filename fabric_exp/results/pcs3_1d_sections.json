@@ -1,0 +1,5837 @@
+[
+ {
+  "row": "lin1",
+  "cycles_per_packet": 129.23187562536592,
+  "duration_s": 7.772,
+  "rate_per_s": 76880.8,
+  "targets": [
+   {
+    "target": {
+     "chip": 0,
+     "chan": 4,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "10081830465089211350",
+    "work_share": 0.00827933765298776,
+    "sections": {
+     "E0 worker: send check": 0.31965442764578833,
+     "E0 worker: connection poll": 0.2544996400287977,
+     "E0 VC0 forwarding: idle test": 0.1695464362850972,
+     "E0 VC0 free-slots group read": 0.07919366450683946,
+     "E0 loop and round control": 0.07631389488840892,
+     "E0 per-round (out of line)": 0.04949604031677466,
+     "E0 worker: completion check": 0.029157667386609073,
+     "E0 round end (telemetry, end_round)": 0.013858891288696905,
+     "E0 VC0 forwarding: visit: upstream credit": 0.006119510439164867,
+     "E0 worker: send": 0.0017998560115190785,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.0003599712023038157
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 4,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "7973297115653940",
+    "work_share": 0.08081353491720662,
+    "sections": {
+     "E1 poll": 0.6187904967602592,
+     "E1 loop and round control": 0.1879049676025918,
+     "E1 per-round (out of line)": 0.10511159107271419,
+     "E1 decode": 0.07631389488840892,
+     "E1 completions: batch check": 0.0073794096472282215,
+     "E1 completions: send": 0.004499640028797696
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 5,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "12298611826209249269",
+    "work_share": 0.005579553635709143,
+    "sections": {
+     "E0 worker: send check": 0.31911447084233263,
+     "E0 worker: connection poll": 0.2602591792656587,
+     "E0 VC0 forwarding: idle test": 0.16342692584593232,
+     "E0 VC0 free-slots group read": 0.08513318934485241,
+     "E0 loop and round control": 0.07469402447804176,
+     "E0 per-round (out of line)": 0.04895608351331893,
+     "E0 worker: completion check": 0.03113750899928006,
+     "E0 round end (telemetry, end_round)": 0.01169906407487401,
+     "E0 VC0 forwarding: visit: upstream credit": 0.00413966882649388,
+     "E0 worker: send": 0.0012598992080633548,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00017998560115190784
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 5,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "7973297115653940",
+    "work_share": 0.0779337652987761,
+    "sections": {
+     "E1 poll": 0.6297696184305256,
+     "E1 loop and round control": 0.18682505399568033,
+     "E1 per-round (out of line)": 0.09971202303815695,
+     "E1 decode": 0.07289416846652268,
+     "E1 completions: batch check": 0.005759539236861051,
+     "E1 completions: send": 0.004499640028797696,
+     "E1 1D route decision": 0.0005399568034557236
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 6,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "10081830465089211350",
+    "work_share": 0.005579553635709143,
+    "sections": {
+     "E0 worker: send check": 0.31893448524118073,
+     "E0 worker: connection poll": 0.2501799856011519,
+     "E0 VC0 forwarding: idle test": 0.1742260619150468,
+     "E0 VC0 free-slots group read": 0.08423326133909287,
+     "E0 loop and round control": 0.07955363570914327,
+     "E0 per-round (out of line)": 0.04859611231101512,
+     "E0 worker: completion check": 0.029877609791216703,
+     "E0 round end (telemetry, end_round)": 0.008639308855291577,
+     "E0 VC0 forwarding: visit: upstream credit": 0.003779697624190065,
+     "E0 worker: send": 0.0014398848092152627,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.0003599712023038157,
+     "E0 other (execute_pause_command)": 0.00017998560115190784
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 6,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "7973297115653940",
+    "work_share": 0.0755939524838013,
+    "sections": {
+     "E1 poll": 0.621130309575234,
+     "E1 loop and round control": 0.18844492440604751,
+     "E1 per-round (out of line)": 0.10835133189344852,
+     "E1 decode": 0.07037437005039597,
+     "E1 completions: batch check": 0.0064794816414686825,
+     "E1 completions: send": 0.005219582433405328
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 7,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "12298611826209249269",
+    "work_share": 0.0028797696184305254,
+    "sections": {
+     "E0 worker: send check": 0.3232541396688265,
+     "E0 worker: connection poll": 0.2575593952483801,
+     "E0 VC0 forwarding: idle test": 0.1675665946724262,
+     "E0 loop and round control": 0.08243340532757379,
+     "E0 VC0 free-slots group read": 0.07955363570914327,
+     "E0 per-round (out of line)": 0.04877609791216703,
+     "E0 worker: completion check": 0.029157667386609073,
+     "E0 round end (telemetry, end_round)": 0.008819294456443484,
+     "E0 worker: send": 0.0016198704103671706,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0012598992080633548
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 7,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "7973297115653940",
+    "work_share": 0.08117350611951044,
+    "sections": {
+     "E1 poll": 0.6193304535637149,
+     "E1 loop and round control": 0.18448524118070556,
+     "E1 per-round (out of line)": 0.10907127429805616,
+     "E1 decode": 0.07613390928725702,
+     "E1 completions: batch check": 0.005939524838012959,
+     "E1 completions: send": 0.005039596832253419
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 8,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "2493955989011201288",
+    "work_share": 0.003419726421886249,
+    "sections": {
+     "E0 worker: send check": 0.320374370050396,
+     "E0 worker: connection poll": 0.26475881929445644,
+     "E0 VC0 forwarding: idle test": 0.16702663786897048,
+     "E0 VC0 free-slots group read": 0.09143268538516919,
+     "E0 loop and round control": 0.07181425485961124,
+     "E0 per-round (out of line)": 0.040316774658027354,
+     "E0 worker: completion check": 0.027897768178545716,
+     "E0 round end (telemetry, end_round)": 0.012958963282937365,
+     "E0 worker: send": 0.003419726421886249
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 8,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "2103362005179002920",
+    "work_share": 0.0826133909287257,
+    "sections": {
+     "E1 poll": 0.61321094312455,
+     "E1 loop and round control": 0.19564434845212383,
+     "E1 per-round (out of line)": 0.1009719222462203,
+     "E1 decode": 0.078113750899928,
+     "E1 completions: batch check": 0.00755939524838013,
+     "E1 completions: send": 0.004499640028797696
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 10,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "7310544533362410835",
+    "work_share": 0.004499640028797696,
+    "sections": {
+     "E0 worker: send check": 0.3389128869690425,
+     "E0 worker: connection poll": 0.25323974082073436,
+     "E0 VC0 forwarding: idle test": 0.15784737221022319,
+     "E0 VC0 free-slots group read": 0.08405327573794097,
+     "E0 loop and round control": 0.07451403887688984,
+     "E0 per-round (out of line)": 0.050215982721382287,
+     "E0 worker: completion check": 0.02429805615550756,
+     "E0 round end (telemetry, end_round)": 0.012419006479481642,
+     "E0 worker: send": 0.004499640028797696
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 10,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "2103362005179002920",
+    "work_share": 0.08243340532757379,
+    "sections": {
+     "E1 poll": 0.6222102231821455,
+     "E1 loop and round control": 0.187544996400288,
+     "E1 per-round (out of line)": 0.09917206623470122,
+     "E1 decode": 0.07883369330453564,
+     "E1 completions: batch check": 0.008639308855291577,
+     "E1 completions: send": 0.0032397408207343412,
+     "E1 1D route decision": 0.0003599712023038157
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 4,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "10081830465089211350",
+    "work_share": 0.009359251259899209,
+    "sections": {
+     "E0 worker: send check": 0.31317494600431967,
+     "E0 worker: connection poll": 0.25323974082073436,
+     "E0 VC0 forwarding: idle test": 0.17332613390928725,
+     "E0 loop and round control": 0.080093592512599,
+     "E0 VC0 free-slots group read": 0.07703383729301656,
+     "E0 per-round (out of line)": 0.053815694744420446,
+     "E0 worker: completion check": 0.0275377969762419,
+     "E0 round end (telemetry, end_round)": 0.011879049676025918,
+     "E0 VC0 forwarding: visit: upstream credit": 0.007199424046076314,
+     "E0 worker: send": 0.0017998560115190785,
+     "E0 other (execute_pause_command)": 0.0005399568034557236,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.0003599712023038157
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 4,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "7973297115653940",
+    "work_share": 0.08045356371490281,
+    "sections": {
+     "E1 poll": 0.6186105111591073,
+     "E1 loop and round control": 0.18448524118070556,
+     "E1 per-round (out of line)": 0.10889128869690425,
+     "E1 decode": 0.07505399568034557,
+     "E1 completions: batch check": 0.00755939524838013,
+     "E1 completions: send": 0.005219582433405328,
+     "E1 1D route decision": 0.00017998560115190784
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 5,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "12298611826209249269",
+    "work_share": 0.008459323254139669,
+    "sections": {
+     "E0 worker: send check": 0.31587473002159827,
+     "E0 worker: connection poll": 0.26709863210943124,
+     "E0 VC0 forwarding: idle test": 0.16720662347012238,
+     "E0 VC0 free-slots group read": 0.07955363570914327,
+     "E0 loop and round control": 0.07631389488840892,
+     "E0 per-round (out of line)": 0.04679625629949604,
+     "E0 worker: completion check": 0.02681785457163427,
+     "E0 round end (telemetry, end_round)": 0.011339092872570195,
+     "E0 VC0 forwarding: visit: upstream credit": 0.007199424046076314,
+     "E0 worker: send": 0.0010799136069114472,
+     "E0 other (execute_pause_command)": 0.0005399568034557236,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00017998560115190784
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 5,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "7973297115653940",
+    "work_share": 0.07397408207343413,
+    "sections": {
+     "E1 poll": 0.6339092872570194,
+     "E1 loop and round control": 0.187544996400288,
+     "E1 per-round (out of line)": 0.09917206623470122,
+     "E1 decode": 0.06947444204463643,
+     "E1 completions: batch check": 0.005399568034557235,
+     "E1 completions: send": 0.004319654427645789,
+     "E1 1D route decision": 0.00017998560115190784
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 6,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "10081830465089211350",
+    "work_share": 0.0073794096472282215,
+    "sections": {
+     "E0 worker: send check": 0.3167746580273578,
+     "E0 worker: connection poll": 0.26709863210943124,
+     "E0 VC0 forwarding: idle test": 0.15244780417566595,
+     "E0 VC0 free-slots group read": 0.08369330453563716,
+     "E0 loop and round control": 0.08369330453563716,
+     "E0 per-round (out of line)": 0.04877609791216703,
+     "E0 worker: completion check": 0.02681785457163427,
+     "E0 round end (telemetry, end_round)": 0.012419006479481642,
+     "E0 VC0 forwarding: visit: upstream credit": 0.005579553635709143,
+     "E0 worker: send": 0.0014398848092152627,
+     "E0 other (execute_pause_command)": 0.0008999280057595393,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.0003599712023038157
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 6,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "7973297115653940",
+    "work_share": 0.078113750899928,
+    "sections": {
+     "E1 poll": 0.6193304535637149,
+     "E1 loop and round control": 0.19888408927285817,
+     "E1 per-round (out of line)": 0.09665226781857451,
+     "E1 decode": 0.07145428365730741,
+     "E1 completions: batch check": 0.007019438444924406,
+     "E1 completions: send": 0.00665946724262059
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 7,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "12298611826209249269",
+    "work_share": 0.012059035277177825,
+    "sections": {
+     "E0 worker: send check": 0.32955363570914326,
+     "E0 worker: connection poll": 0.25359971202303816,
+     "E0 VC0 forwarding: idle test": 0.16216702663786897,
+     "E0 VC0 free-slots group read": 0.0779337652987761,
+     "E0 loop and round control": 0.0779337652987761,
+     "E0 per-round (out of line)": 0.04535637149028078,
+     "E0 worker: completion check": 0.02771778257739381,
+     "E0 round end (telemetry, end_round)": 0.01259899208063355,
+     "E0 VC0 forwarding: visit: upstream credit": 0.009899208063354932,
+     "E0 worker: send": 0.0019798416126709864,
+     "E0 other (execute_pause_command)": 0.0010799136069114472,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00017998560115190784
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 7,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "7973297115653940",
+    "work_share": 0.07955363570914327,
+    "sections": {
+     "E1 poll": 0.6258099352051836,
+     "E1 loop and round control": 0.18718502519798416,
+     "E1 per-round (out of line)": 0.10187185025197984,
+     "E1 decode": 0.07325413966882649,
+     "E1 completions: send": 0.005939524838012959,
+     "E1 completions: batch check": 0.005579553635709143,
+     "E1 1D route decision": 0.0003599712023038157
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 8,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "2493955989011201288",
+    "work_share": 0.00665946724262059,
+    "sections": {
+     "E0 worker: send check": 0.3255939524838013,
+     "E0 worker: connection poll": 0.25863930885529157,
+     "E0 VC0 forwarding: idle test": 0.16882649388048956,
+     "E0 VC0 free-slots group read": 0.08207343412526998,
+     "E0 loop and round control": 0.07613390928725702,
+     "E0 per-round (out of line)": 0.04607631389488841,
+     "E0 worker: completion check": 0.027177825773938086,
+     "E0 round end (telemetry, end_round)": 0.008459323254139669,
+     "E0 worker: credit": 0.003779697624190065,
+     "E0 worker: send": 0.0028797696184305254,
+     "E0 other (execute_pause_command)": 0.0003599712023038157
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 8,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "2103362005179002920",
+    "work_share": 0.08243340532757379,
+    "sections": {
+     "E1 poll": 0.6232901367890569,
+     "E1 loop and round control": 0.18934485241180707,
+     "E1 per-round (out of line)": 0.09863210943124551,
+     "E1 decode": 0.07631389488840892,
+     "E1 completions: batch check": 0.006299496040316775,
+     "E1 completions: send": 0.005939524838012959,
+     "E1 1D route decision": 0.00017998560115190784
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 10,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "7310544533362410835",
+    "work_share": 0.008099352051835854,
+    "sections": {
+     "E0 worker: send check": 0.3142548596112311,
+     "E0 worker: connection poll": 0.2631389488840893,
+     "E0 VC0 forwarding: idle test": 0.16846652267818574,
+     "E0 loop and round control": 0.0939524838012959,
+     "E0 VC0 free-slots group read": 0.08351331893448524,
+     "E0 per-round (out of line)": 0.04787616990640749,
+     "E0 round end (telemetry, end_round)": 0.010439164866810655,
+     "E0 worker: completion check": 0.009899208063354932,
+     "E0 worker: send": 0.008099352051835854,
+     "E0 other (execute_pause_command)": 0.0003599712023038157
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 10,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "2103362005179002920",
+    "work_share": 0.08207343412526998,
+    "sections": {
+     "E1 poll": 0.619150467962563,
+     "E1 loop and round control": 0.1927645788336933,
+     "E1 per-round (out of line)": 0.09827213822894168,
+     "E1 decode": 0.07739380849532038,
+     "E1 completions: batch check": 0.007739380849532037,
+     "E1 completions: send": 0.004499640028797696,
+     "E1 1D route decision": 0.00017998560115190784
+    }
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 4,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "18182554529866137118",
+    "work_share": 0.020518358531317494,
+    "sections": {
+     "E0 worker: send check": 0.30093592512598993,
+     "E0 worker: connection poll": 0.2595392368610511,
+     "E0 VC0 forwarding: idle test": 0.17062634989200864,
+     "E0 VC0 free-slots group read": 0.08243340532757379,
+     "E0 loop and round control": 0.07865370770338373,
+     "E0 per-round (out of line)": 0.04913606911447084,
+     "E0 worker: completion check": 0.02681785457163427,
+     "E0 VC0 forwarding: visit: upstream credit": 0.018178545716342694,
+     "E0 round end (telemetry, end_round)": 0.011159107271418287,
+     "E0 worker: send": 0.002339812814974802,
+     "E0 other (execute_pause_command)": 0.00017998560115190784
+    }
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 4,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "7973297115653940",
+    "work_share": 0.08225341972642189,
+    "sections": {
+     "E1 poll": 0.6265298776097912,
+     "E1 loop and round control": 0.1929445644348452,
+     "E1 per-round (out of line)": 0.09035277177825773,
+     "E1 decode": 0.0779337652987761,
+     "E1 completions: batch check": 0.007919366450683946,
+     "E1 completions: send": 0.00413966882649388,
+     "E1 1D route decision": 0.00017998560115190784
+    }
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 5,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 5,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 6,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "18182554529866137118",
+    "work_share": 0.013498920086393088,
+    "sections": {
+     "E0 worker: send check": 0.32001439884809213,
+     "E0 worker: connection poll": 0.25881929445644347,
+     "E0 VC0 forwarding: idle test": 0.16450683945284378,
+     "E0 loop and round control": 0.07883369330453564,
+     "E0 VC0 free-slots group read": 0.0755939524838013,
+     "E0 per-round (out of line)": 0.04787616990640749,
+     "E0 worker: completion check": 0.030597552195824333,
+     "E0 VC0 forwarding: visit: upstream credit": 0.012059035277177825,
+     "E0 round end (telemetry, end_round)": 0.010259179265658747,
+     "E0 worker: send": 0.0012598992080633548,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00017998560115190784
+    }
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 6,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "7973297115653940",
+    "work_share": 0.08549316054715622,
+    "sections": {
+     "E1 poll": 0.6222102231821455,
+     "E1 loop and round control": 0.18286537077033838,
+     "E1 per-round (out of line)": 0.10187185025197984,
+     "E1 decode": 0.080093592512599,
+     "E1 completions: batch check": 0.00755939524838013,
+     "E1 completions: send": 0.005219582433405328,
+     "E1 1D route decision": 0.00017998560115190784
+    }
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 7,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 7,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 8,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "12298611826209249269",
+    "work_share": 0.012059035277177825,
+    "sections": {
+     "E0 worker: send check": 0.3171346292296616,
+     "E0 worker: connection poll": 0.2523398128149748,
+     "E0 VC0 forwarding: idle test": 0.17350611951043918,
+     "E0 VC0 free-slots group read": 0.08603311735061195,
+     "E0 loop and round control": 0.07631389488840892,
+     "E0 per-round (out of line)": 0.0482361411087113,
+     "E0 worker: completion check": 0.02177825773938085,
+     "E0 round end (telemetry, end_round)": 0.012059035277177825,
+     "E0 VC0 forwarding: visit: upstream credit": 0.009539236861051115,
+     "E0 worker: send": 0.0019798416126709864,
+     "E0 other (execute_pause_command)": 0.0005399568034557236,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.0005399568034557236
+    }
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 8,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "2992557856822981993",
+    "work_share": 0.08207343412526998,
+    "sections": {
+     "E1 poll": 0.6236501079913607,
+     "E1 loop and round control": 0.19204463642908567,
+     "E1 per-round (out of line)": 0.09431245500359971,
+     "E1 decode": 0.07649388048956084,
+     "E1 completions: batch check": 0.007919366450683946,
+     "E1 completions: send": 0.005579553635709143
+    }
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 10,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "758924378684274132",
+    "work_share": 0.013678905687544997,
+    "sections": {
+     "E0 worker: send check": 0.31371490280777536,
+     "E0 worker: connection poll": 0.2602591792656587,
+     "E0 VC0 forwarding: idle test": 0.17638588912886968,
+     "E0 VC0 free-slots group read": 0.08351331893448524,
+     "E0 loop and round control": 0.07919366450683946,
+     "E0 per-round (out of line)": 0.047156227501799854,
+     "E0 worker: completion check": 0.014398848092152628,
+     "E0 VC0 forwarding: visit: upstream credit": 0.01169906407487401,
+     "E0 round end (telemetry, end_round)": 0.011339092872570195,
+     "E0 worker: send": 0.0019798416126709864,
+     "E0 other (kernel_main)": 0.00017998560115190784,
+     "E0 other (execute_pause_command)": 0.00017998560115190784
+    }
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 10,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "2992557856822981993",
+    "work_share": 0.08117350611951044,
+    "sections": {
+     "E1 poll": 0.6286897048236141,
+     "E1 loop and round control": 0.1859251259899208,
+     "E1 per-round (out of line)": 0.09611231101511879,
+     "E1 decode": 0.07721382289416846,
+     "E1 completions: batch check": 0.008099352051835854,
+     "E1 completions: send": 0.003959683225341973
+    }
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 4,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 4,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 5,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "16859369020693722463",
+    "work_share": 0.0017998560115190785,
+    "sections": {
+     "E0 worker: send check": 0.32163426925845934,
+     "E0 worker: connection poll": 0.2638588912886969,
+     "E0 VC0 forwarding: idle test": 0.171886249100072,
+     "E0 VC0 free-slots group read": 0.07973362131029518,
+     "E0 loop and round control": 0.07217422606191505,
+     "E0 per-round (out of line)": 0.05093592512598992,
+     "E0 worker: completion check": 0.02501799856011519,
+     "E0 round end (telemetry, end_round)": 0.012958963282937365,
+     "E0 worker: send": 0.0014398848092152627,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0003599712023038157
+    }
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 5,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "7973297115653940",
+    "work_share": 0.080093592512599,
+    "sections": {
+     "E1 poll": 0.6241900647948164,
+     "E1 loop and round control": 0.19096472282217422,
+     "E1 per-round (out of line)": 0.09917206623470122,
+     "E1 decode": 0.07541396688264938,
+     "E1 completions: batch check": 0.005579553635709143,
+     "E1 completions: send": 0.004499640028797696,
+     "E1 1D route decision": 0.00017998560115190784
+    }
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 6,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 6,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 7,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "16859369020693722463",
+    "work_share": 0.002339812814974802,
+    "sections": {
+     "E0 worker: send check": 0.328113750899928,
+     "E0 worker: connection poll": 0.2570194384449244,
+     "E0 VC0 forwarding: idle test": 0.17530597552195826,
+     "E0 VC0 free-slots group read": 0.08657307415406768,
+     "E0 loop and round control": 0.06983441324694024,
+     "E0 per-round (out of line)": 0.046256299496040314,
+     "E0 worker: completion check": 0.02249820014398848,
+     "E0 round end (telemetry, end_round)": 0.01169906407487401,
+     "E0 worker: send": 0.0021598272138228943,
+     "E0 other (execute_pause_command)": 0.0003599712023038157,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00017998560115190784
+    }
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 7,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "7973297115653940",
+    "work_share": 0.0872930165586753,
+    "sections": {
+     "E1 poll": 0.6247300215982722,
+     "E1 loop and round control": 0.18322534197264218,
+     "E1 per-round (out of line)": 0.0962922966162707,
+     "E1 decode": 0.0826133909287257,
+     "E1 completions: batch check": 0.008459323254139669,
+     "E1 completions: send": 0.004679625629949604
+    }
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 8,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "12298611826209249269",
+    "work_share": 0.0012598992080633548,
+    "sections": {
+     "E0 worker: send check": 0.3178545716342693,
+     "E0 worker: connection poll": 0.2604391648668107,
+     "E0 VC0 forwarding: idle test": 0.17980561555075594,
+     "E0 VC0 free-slots group read": 0.08045356371490281,
+     "E0 loop and round control": 0.07577393808495321,
+     "E0 per-round (out of line)": 0.04445644348452124,
+     "E0 worker: completion check": 0.028617710583153346,
+     "E0 round end (telemetry, end_round)": 0.011339092872570195,
+     "E0 worker: send": 0.0012598992080633548
+    }
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 8,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "2992557856822981993",
+    "work_share": 0.07883369330453564,
+    "sections": {
+     "E1 poll": 0.6245500359971202,
+     "E1 loop and round control": 0.18394528437724983,
+     "E1 per-round (out of line)": 0.10439164866810655,
+     "E1 decode": 0.0736141108711303,
+     "E1 completions: batch check": 0.00827933765298776,
+     "E1 completions: send": 0.005219582433405328
+    }
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 10,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "758924378684274132",
+    "work_share": 0.003959683225341973,
+    "sections": {
+     "E0 worker: send check": 0.32919366450683946,
+     "E0 worker: connection poll": 0.2523398128149748,
+     "E0 VC0 forwarding: idle test": 0.17116630669546437,
+     "E0 VC0 free-slots group read": 0.07955363570914327,
+     "E0 loop and round control": 0.07487401007919367,
+     "E0 per-round (out of line)": 0.04787616990640749,
+     "E0 worker: completion check": 0.028257739380849533,
+     "E0 round end (telemetry, end_round)": 0.012778977681785457,
+     "E0 VC0 forwarding: visit: upstream credit": 0.002339812814974802,
+     "E0 worker: send": 0.0016198704103671706
+    }
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 10,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "2992557856822981993",
+    "work_share": 0.08567314614830814,
+    "sections": {
+     "E1 poll": 0.60943124550036,
+     "E1 loop and round control": 0.18898488120950324,
+     "E1 per-round (out of line)": 0.10763138948884089,
+     "E1 decode": 0.08045356371490281,
+     "E1 completions: batch check": 0.00827933765298776,
+     "E1 completions: send": 0.005219582433405328
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 4,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "10081830465089211350",
+    "work_share": 0.005579553635709143,
+    "sections": {
+     "E0 worker: send check": 0.32397408207343414,
+     "E0 worker: connection poll": 0.25161987041036715,
+     "E0 VC0 forwarding: idle test": 0.1717062634989201,
+     "E0 VC0 free-slots group read": 0.08549316054715622,
+     "E0 loop and round control": 0.07163426925845932,
+     "E0 per-round (out of line)": 0.04733621310295177,
+     "E0 worker: completion check": 0.0275377969762419,
+     "E0 round end (telemetry, end_round)": 0.01511879049676026,
+     "E0 VC0 forwarding: visit: upstream credit": 0.003419726421886249,
+     "E0 worker: send": 0.0021598272138228943
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 4,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "7973297115653940",
+    "work_share": 0.08207343412526998,
+    "sections": {
+     "E1 poll": 0.6159107271418287,
+     "E1 loop and round control": 0.19726421886249101,
+     "E1 per-round (out of line)": 0.09665226781857451,
+     "E1 decode": 0.0755939524838013,
+     "E1 completions: batch check": 0.008099352051835854,
+     "E1 completions: send": 0.0064794816414686825
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 5,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "12298611826209249269",
+    "work_share": 0.0030597552195824333,
+    "sections": {
+     "E0 worker: send check": 0.31605471562275017,
+     "E0 worker: connection poll": 0.24802015838732902,
+     "E0 VC0 forwarding: idle test": 0.16684665226781858,
+     "E0 VC0 free-slots group read": 0.07973362131029518,
+     "E0 per-round (out of line)": 0.07703383729301656,
+     "E0 loop and round control": 0.07289416846652268,
+     "E0 worker: completion check": 0.02771778257739381,
+     "E0 round end (telemetry, end_round)": 0.008639308855291577,
+     "E0 worker: send": 0.0019798416126709864,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0008999280057595393,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00017998560115190784
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 5,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "7973297115653940",
+    "work_share": 0.7492800575953924,
+    "sections": {
+     "E1 local delivery": 0.2681785457163427,
+     "E1 completions: send": 0.18232541396688265,
+     "E1 poll": 0.13156947444204464,
+     "E1 retire": 0.1007919366450684,
+     "E1 admission": 0.09359251259899208,
+     "E1 1D route decision": 0.07397408207343413,
+     "E1 completions: batch check": 0.06299496040316775,
+     "E1 loop and round control": 0.03545716342692585,
+     "E1 decode": 0.02411807055435565,
+     "E1 per-round (out of line)": 0.020698344132469404,
+     "E1 packet bookkeeping": 0.006299496040316775
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 6,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "10081830465089211350",
+    "work_share": 0.0032397408207343412,
+    "sections": {
+     "E0 worker: send check": 0.32181425485961124,
+     "E0 worker: connection poll": 0.2552195824334053,
+     "E0 VC0 forwarding: idle test": 0.17368610511159108,
+     "E0 VC0 free-slots group read": 0.08153347732181425,
+     "E0 loop and round control": 0.07487401007919367,
+     "E0 per-round (out of line)": 0.04787616990640749,
+     "E0 worker: completion check": 0.030777537796976243,
+     "E0 round end (telemetry, end_round)": 0.010979121670266379,
+     "E0 worker: send": 0.0021598272138228943,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0008999280057595393,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00017998560115190784
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 6,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "7973297115653940",
+    "work_share": 0.08135349172066235,
+    "sections": {
+     "E1 poll": 0.6189704823614111,
+     "E1 loop and round control": 0.19726421886249101,
+     "E1 per-round (out of line)": 0.09341252699784017,
+     "E1 decode": 0.0755939524838013,
+     "E1 completions: batch check": 0.008999280057595392,
+     "E1 completions: send": 0.005579553635709143,
+     "E1 1D route decision": 0.00017998560115190784
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 7,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "12298611826209249269",
+    "work_share": 0.003419726421886249,
+    "sections": {
+     "E0 worker: send check": 0.3228941684665227,
+     "E0 worker: connection poll": 0.25899928005759537,
+     "E0 VC0 forwarding: idle test": 0.171886249100072,
+     "E0 VC0 free-slots group read": 0.0826133909287257,
+     "E0 loop and round control": 0.07217422606191505,
+     "E0 per-round (out of line)": 0.04877609791216703,
+     "E0 worker: completion check": 0.027177825773938086,
+     "E0 round end (telemetry, end_round)": 0.012059035277177825,
+     "E0 VC0 forwarding: visit: upstream credit": 0.002339812814974802,
+     "E0 worker: send": 0.0010799136069114472
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 7,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "7973297115653940",
+    "work_share": 0.08279337652987762,
+    "sections": {
+     "E1 poll": 0.6301295896328294,
+     "E1 loop and round control": 0.18916486681065514,
+     "E1 per-round (out of line)": 0.09089272858171346,
+     "E1 decode": 0.07667386609071274,
+     "E1 completions: batch check": 0.007019438444924406,
+     "E1 completions: send": 0.005939524838012959,
+     "E1 1D route decision": 0.00017998560115190784
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 9,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "966748813431262358",
+    "work_share": 0.005039596832253419,
+    "sections": {
+     "E0 worker: send check": 0.3255939524838013,
+     "E0 worker: connection poll": 0.26205903527717783,
+     "E0 VC0 forwarding: idle test": 0.15460763138948885,
+     "E0 VC0 free-slots group read": 0.08099352051835854,
+     "E0 loop and round control": 0.07649388048956084,
+     "E0 per-round (out of line)": 0.05165586753059755,
+     "E0 worker: completion check": 0.03095752339812815,
+     "E0 round end (telemetry, end_round)": 0.01259899208063355,
+     "E0 worker: send": 0.005039596832253419
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 9,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "2103362005179002920",
+    "work_share": 0.07955363570914327,
+    "sections": {
+     "E1 poll": 0.6130309575233981,
+     "E1 loop and round control": 0.18916486681065514,
+     "E1 per-round (out of line)": 0.11051115910727141,
+     "E1 decode": 0.07451403887688984,
+     "E1 completions: batch check": 0.007739380849532037,
+     "E1 completions: send": 0.004859611231101512,
+     "E1 1D route decision": 0.00017998560115190784
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 11,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "17483610142571359246",
+    "work_share": 0.013678905687544997,
+    "sections": {
+     "E0 worker: send check": 0.3140748740100792,
+     "E0 worker: connection poll": 0.2658387329013679,
+     "E0 VC0 forwarding: idle test": 0.15946724262059037,
+     "E0 VC0 free-slots group read": 0.08333333333333333,
+     "E0 loop and round control": 0.07235421166306695,
+     "E0 per-round (out of line)": 0.05057595392368611,
+     "E0 worker: completion check": 0.028077753779697623,
+     "E0 round end (telemetry, end_round)": 0.01259899208063355,
+     "E0 worker: send": 0.008099352051835854,
+     "E0 worker: credit": 0.005579553635709143
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 11,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5556,
+    "build": "2103362005179002920",
+    "work_share": 0.08387329013678906,
+    "sections": {
+     "E1 poll": 0.6214902807775378,
+     "E1 loop and round control": 0.18430525557955363,
+     "E1 per-round (out of line)": 0.10115190784737221,
+     "E1 decode": 0.07937365010799136,
+     "E1 completions: batch check": 0.0091792656587473,
+     "E1 completions: send": 0.004499640028797696
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 4,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "10081830465089211350",
+    "work_share": 0.00288028802880288,
+    "sections": {
+     "E0 worker: send check": 0.3227722772277228,
+     "E0 worker: connection poll": 0.26372637263726373,
+     "E0 VC0 forwarding: idle test": 0.16741674167416742,
+     "E0 VC0 free-slots group read": 0.08586858685868587,
+     "E0 loop and round control": 0.07308730873087309,
+     "E0 per-round (out of line)": 0.051125112511251125,
+     "E0 worker: completion check": 0.024302430243024302,
+     "E0 round end (telemetry, end_round)": 0.00882088208820882,
+     "E0 worker: send": 0.0025202520252025204,
+     "E0 VC0 forwarding: visit: upstream credit": 0.00036003600360036
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 4,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "7973297115653940",
+    "work_share": 0.08082808280828083,
+    "sections": {
+     "E1 poll": 0.6306030603060306,
+     "E1 loop and round control": 0.18613861386138614,
+     "E1 per-round (out of line)": 0.09558955895589559,
+     "E1 decode": 0.07758775877587759,
+     "E1 completions: batch check": 0.006840684068406841,
+     "E1 completions: send": 0.0032403240324032404
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 5,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "12298611826209249269",
+    "work_share": 0.006120612061206121,
+    "sections": {
+     "E0 worker: send check": 0.3215121512151215,
+     "E0 worker: connection poll": 0.25976597659765976,
+     "E0 VC0 forwarding: idle test": 0.17083708370837083,
+     "E0 VC0 free-slots group read": 0.081008100810081,
+     "E0 loop and round control": 0.07524752475247524,
+     "E0 per-round (out of line)": 0.04788478847884788,
+     "E0 worker: completion check": 0.02754275427542754,
+     "E0 round end (telemetry, end_round)": 0.010081008100810081,
+     "E0 worker: send": 0.00432043204320432,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0018001800180018
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 5,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "7973297115653940",
+    "work_share": 0.08262826282628263,
+    "sections": {
+     "E1 poll": 0.6234023402340234,
+     "E1 loop and round control": 0.18955895589558955,
+     "E1 per-round (out of line)": 0.09864986498649865,
+     "E1 decode": 0.07794779477947794,
+     "E1 completions: batch check": 0.00576057605760576,
+     "E1 completions: send": 0.00468046804680468
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 6,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "10081830465089211350",
+    "work_share": 0.014221422142214222,
+    "sections": {
+     "E0 worker: send check": 0.3076507650765076,
+     "E0 worker: connection poll": 0.2504050405040504,
+     "E0 VC0 forwarding: idle test": 0.17335733573357337,
+     "E0 VC0 free-slots group read": 0.08604860486048604,
+     "E0 loop and round control": 0.07776777677767777,
+     "E0 per-round (out of line)": 0.049864986498649864,
+     "E0 worker: completion check": 0.029342934293429344,
+     "E0 VC0 forwarding: visit: upstream credit": 0.012601260126012601,
+     "E0 round end (telemetry, end_round)": 0.01134113411341134,
+     "E0 worker: send": 0.00144014401440144,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00018001800180018
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 6,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "7973297115653940",
+    "work_share": 0.08496849684968497,
+    "sections": {
+     "E1 poll": 0.6140414041404141,
+     "E1 loop and round control": 0.19477947794779477,
+     "E1 per-round (out of line)": 0.09918991899189919,
+     "E1 decode": 0.07992799279927992,
+     "E1 completions: batch check": 0.007020702070207021,
+     "E1 completions: send": 0.005040504050405041
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 7,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "12298611826209249269",
+    "work_share": 0.0039603960396039604,
+    "sections": {
+     "E0 worker: send check": 0.32673267326732675,
+     "E0 worker: connection poll": 0.25418541854185417,
+     "E0 VC0 forwarding: idle test": 0.17263726372637264,
+     "E0 VC0 free-slots group read": 0.07812781278127813,
+     "E0 loop and round control": 0.07200720072007201,
+     "E0 per-round (out of line)": 0.048784878487848786,
+     "E0 worker: completion check": 0.030063006300630062,
+     "E0 round end (telemetry, end_round)": 0.01332133213321332,
+     "E0 worker: send": 0.00234023402340234,
+     "E0 VC0 forwarding: visit: upstream credit": 0.00144014401440144,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00018001800180018,
+     "E0 other (execute_pause_command)": 0.00018001800180018
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 7,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "7973297115653940",
+    "work_share": 0.07938793879387938,
+    "sections": {
+     "E1 poll": 0.6343834383438344,
+     "E1 loop and round control": 0.18145814581458145,
+     "E1 per-round (out of line)": 0.09756975697569757,
+     "E1 decode": 0.07452745274527453,
+     "E1 completions: batch check": 0.0072007200720072,
+     "E1 completions: send": 0.00486048604860486
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 9,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "966748813431262358",
+    "work_share": 0.00972097209720972,
+    "sections": {
+     "E0 worker: send check": 0.32367236723672366,
+     "E0 worker: connection poll": 0.25922592259225924,
+     "E0 VC0 forwarding: idle test": 0.16363636363636364,
+     "E0 VC0 free-slots group read": 0.08118811881188119,
+     "E0 loop and round control": 0.07182718271827182,
+     "E0 per-round (out of line)": 0.049324932493249325,
+     "E0 worker: completion check": 0.030423042304230423,
+     "E0 round end (telemetry, end_round)": 0.010981098109810981,
+     "E0 worker: send": 0.00972097209720972
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 9,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "2103362005179002920",
+    "work_share": 0.0855085508550855,
+    "sections": {
+     "E1 poll": 0.6261026102610261,
+     "E1 loop and round control": 0.18037803780378037,
+     "E1 per-round (out of line)": 0.1000900090009001,
+     "E1 decode": 0.08064806480648065,
+     "E1 completions: batch check": 0.007920792079207921,
+     "E1 completions: send": 0.00486048604860486
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 11,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "17483610142571359246",
+    "work_share": 0.01044104410441044,
+    "sections": {
+     "E0 worker: send check": 0.3278127812781278,
+     "E0 worker: connection poll": 0.25904590459045906,
+     "E0 VC0 forwarding: idle test": 0.15301530153015303,
+     "E0 VC0 free-slots group read": 0.07884788478847884,
+     "E0 loop and round control": 0.07524752475247524,
+     "E0 per-round (out of line)": 0.04968496849684968,
+     "E0 worker: completion check": 0.030063006300630062,
+     "E0 round end (telemetry, end_round)": 0.015841584158415842,
+     "E0 worker: send": 0.010261026102610262,
+     "E0 worker: credit": 0.00018001800180018
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 11,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "2103362005179002920",
+    "work_share": 0.07956795679567957,
+    "sections": {
+     "E1 poll": 0.6207020702070207,
+     "E1 loop and round control": 0.18703870387038704,
+     "E1 per-round (out of line)": 0.10297029702970296,
+     "E1 decode": 0.0747074707470747,
+     "E1 completions: batch check": 0.00972097209720972,
+     "E1 completions: send": 0.00486048604860486
+    }
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 4,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "18182554529866137118",
+    "work_share": 0.0016201620162016202,
+    "sections": {
+     "E0 worker: send check": 0.3290729072907291,
+     "E0 worker: connection poll": 0.24932493249324933,
+     "E0 VC0 forwarding: idle test": 0.17443744374437445,
+     "E0 VC0 free-slots group read": 0.08658865886588658,
+     "E0 loop and round control": 0.07182718271827182,
+     "E0 per-round (out of line)": 0.04896489648964897,
+     "E0 worker: completion check": 0.026462646264626462,
+     "E0 round end (telemetry, end_round)": 0.011701170117011701,
+     "E0 worker: send": 0.0016201620162016202
+    }
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 4,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "7973297115653940",
+    "work_share": 0.08352835283528352,
+    "sections": {
+     "E1 poll": 0.6241224122412241,
+     "E1 loop and round control": 0.18775877587758777,
+     "E1 per-round (out of line)": 0.09792979297929794,
+     "E1 decode": 0.07722772277227723,
+     "E1 completions: batch check": 0.00666066606660666,
+     "E1 completions: send": 0.0063006300630063005
+    }
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 5,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 5,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 6,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "18182554529866137118",
+    "work_share": 0.4752475247524752,
+    "sections": {
+     "E0 worker: send": 0.41062106210621063,
+     "E0 worker: send check": 0.1477947794779478,
+     "E0 worker: connection poll": 0.11269126912691269,
+     "E0 VC0 forwarding: idle test": 0.0891089108910891,
+     "E0 worker: completion check": 0.0819081908190819,
+     "E0 worker: credit": 0.063006300630063,
+     "E0 loop and round control": 0.036003600360036005,
+     "E0 VC0 free-slots group read": 0.03528352835283528,
+     "E0 per-round (out of line)": 0.015841584158415842,
+     "E0 round end (telemetry, end_round)": 0.006120612061206121,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0016201620162016202
+    }
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 6,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "7973297115653940",
+    "work_share": 0.0819081908190819,
+    "sections": {
+     "E1 poll": 0.6252025202520252,
+     "E1 loop and round control": 0.1935193519351935,
+     "E1 per-round (out of line)": 0.0927092709270927,
+     "E1 decode": 0.0784878487848785,
+     "E1 completions: batch check": 0.00666066606660666,
+     "E1 completions: send": 0.0034203420342034203
+    }
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 7,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 7,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 9,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "7759399540948636955",
+    "work_share": 0.0025202520252025204,
+    "sections": {
+     "E0 worker: send check": 0.32565256525652564,
+     "E0 worker: connection poll": 0.24842484248424843,
+     "E0 VC0 forwarding: idle test": 0.17965796579657967,
+     "E0 VC0 free-slots group read": 0.08748874887488749,
+     "E0 loop and round control": 0.06786678667866787,
+     "E0 per-round (out of line)": 0.04428442844284428,
+     "E0 worker: completion check": 0.03258325832583258,
+     "E0 round end (telemetry, end_round)": 0.01152115211521152,
+     "E0 worker: send": 0.0025202520252025204
+    }
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 9,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "2992557856822981993",
+    "work_share": 0.07668766876687669,
+    "sections": {
+     "E1 poll": 0.6214221422142214,
+     "E1 loop and round control": 0.19603960396039605,
+     "E1 per-round (out of line)": 0.10117011701170117,
+     "E1 decode": 0.07254725472547255,
+     "E1 completions: batch check": 0.00468046804680468,
+     "E1 completions: send": 0.004140414041404141
+    }
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 11,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "10081830465089211350",
+    "work_share": 0.00144014401440144,
+    "sections": {
+     "E0 worker: send check": 0.3384338433843384,
+     "E0 worker: connection poll": 0.2631863186318632,
+     "E0 VC0 forwarding: idle test": 0.16111611161116113,
+     "E0 VC0 free-slots group read": 0.07884788478847884,
+     "E0 loop and round control": 0.07038703870387039,
+     "E0 per-round (out of line)": 0.049324932493249325,
+     "E0 worker: completion check": 0.026462646264626462,
+     "E0 round end (telemetry, end_round)": 0.010801080108010801,
+     "E0 worker: send": 0.00144014401440144
+    }
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 11,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "2992557856822981993",
+    "work_share": 0.07956795679567957,
+    "sections": {
+     "E1 poll": 0.6295229522952295,
+     "E1 loop and round control": 0.18487848784878488,
+     "E1 per-round (out of line)": 0.09792979297929794,
+     "E1 decode": 0.07488748874887488,
+     "E1 completions: batch check": 0.008100810081008101,
+     "E1 completions: send": 0.00468046804680468
+    }
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 4,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 4,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 5,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "16859369020693722463",
+    "work_share": 0.00288028802880288,
+    "sections": {
+     "E0 worker: send check": 0.3200720072007201,
+     "E0 worker: connection poll": 0.2522052205220522,
+     "E0 VC0 forwarding: idle test": 0.17587758775877588,
+     "E0 VC0 free-slots group read": 0.07992799279927992,
+     "E0 loop and round control": 0.0747074707470747,
+     "E0 per-round (out of line)": 0.05094509450945094,
+     "E0 worker: completion check": 0.0297029702970297,
+     "E0 round end (telemetry, end_round)": 0.013681368136813681,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0019801980198019802,
+     "E0 worker: send": 0.0009000900090009
+    }
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 5,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "7973297115653940",
+    "work_share": 0.07704770477047705,
+    "sections": {
+     "E1 poll": 0.6248424842484248,
+     "E1 loop and round control": 0.18343834383438343,
+     "E1 per-round (out of line)": 0.10711071107110712,
+     "E1 decode": 0.0711071107110711,
+     "E1 completions: batch check": 0.007560756075607561,
+     "E1 completions: send": 0.005940594059405941
+    }
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 6,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 6,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 7,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "16859369020693722463",
+    "work_share": 0.0032403240324032404,
+    "sections": {
+     "E0 worker: send check": 0.32115211521152115,
+     "E0 worker: connection poll": 0.25994599459945994,
+     "E0 VC0 forwarding: idle test": 0.1720972097209721,
+     "E0 VC0 free-slots group read": 0.08748874887488749,
+     "E0 loop and round control": 0.07236723672367237,
+     "E0 per-round (out of line)": 0.04554455445544554,
+     "E0 worker: completion check": 0.025922592259225923,
+     "E0 round end (telemetry, end_round)": 0.012241224122412242,
+     "E0 worker: send": 0.0016201620162016202,
+     "E0 VC0 forwarding: visit: upstream credit": 0.00144014401440144,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00018001800180018
+    }
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 7,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "7973297115653940",
+    "work_share": 0.08172817281728173,
+    "sections": {
+     "E1 poll": 0.6268226822682268,
+     "E1 loop and round control": 0.18361836183618363,
+     "E1 per-round (out of line)": 0.10027002700270027,
+     "E1 decode": 0.07578757875787578,
+     "E1 completions: batch check": 0.007560756075607561,
+     "E1 completions: send": 0.005940594059405941
+    }
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 9,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "7759399540948636955",
+    "work_share": 0.009180918091809182,
+    "sections": {
+     "E0 worker: send check": 0.3195319531953195,
+     "E0 worker: connection poll": 0.26624662466246624,
+     "E0 VC0 forwarding: idle test": 0.16795679567956795,
+     "E0 VC0 free-slots group read": 0.08082808280828083,
+     "E0 loop and round control": 0.07722772277227723,
+     "E0 per-round (out of line)": 0.04842484248424842,
+     "E0 worker: completion check": 0.019621962196219624,
+     "E0 round end (telemetry, end_round)": 0.010981098109810981,
+     "E0 VC0 forwarding: visit: upstream credit": 0.006840684068406841,
+     "E0 worker: send": 0.0019801980198019802,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00036003600360036
+    }
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 9,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "2992557856822981993",
+    "work_share": 0.08082808280828083,
+    "sections": {
+     "E1 poll": 0.6212421242124212,
+     "E1 loop and round control": 0.1926192619261926,
+     "E1 per-round (out of line)": 0.09828982898289829,
+     "E1 decode": 0.07578757875787578,
+     "E1 completions: batch check": 0.007020702070207021,
+     "E1 completions: send": 0.00486048604860486,
+     "E1 1D route decision": 0.00018001800180018
+    }
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 11,
+     "erisc": 0
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "10081830465089211350",
+    "work_share": 0.00216021602160216,
+    "sections": {
+     "E0 worker: send check": 0.31431143114311433,
+     "E0 worker: connection poll": 0.2563456345634563,
+     "E0 VC0 forwarding: idle test": 0.1693969396939694,
+     "E0 VC0 free-slots group read": 0.08262826282628263,
+     "E0 loop and round control": 0.0783078307830783,
+     "E0 per-round (out of line)": 0.051845184518451846,
+     "E0 worker: completion check": 0.031323132313231326,
+     "E0 round end (telemetry, end_round)": 0.013681368136813681,
+     "E0 worker: send": 0.0012601260126012602,
+     "E0 VC0 forwarding: visit: upstream credit": 0.00072007200720072,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00018001800180018
+    }
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 11,
+     "erisc": 1
+    },
+    "samples": 6224,
+    "kernel": 5555,
+    "build": "2992557856822981993",
+    "work_share": 0.07326732673267326,
+    "sections": {
+     "E1 poll": 0.634023402340234,
+     "E1 loop and round control": 0.19567956795679567,
+     "E1 per-round (out of line)": 0.08964896489648964,
+     "E1 decode": 0.06804680468046805,
+     "E1 completions: batch check": 0.007380738073807381,
+     "E1 completions: send": 0.00522052205220522
+    }
+   }
+  ]
+ },
+ {
+  "row": "lin3",
+  "cycles_per_packet": 140.1937325985936,
+  "duration_s": 7.773,
+  "rate_per_s": 76922.5,
+  "targets": [
+   {
+    "target": {
+     "chip": 0,
+     "chan": 4,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "10081830465089211350",
+    "work_share": 0.008815426997245178,
+    "sections": {
+     "E0 worker: send check": 0.31717171717171716,
+     "E0 worker: connection poll": 0.25840220385674934,
+     "E0 VC0 forwarding: idle test": 0.17447199265381083,
+     "E0 VC0 free-slots group read": 0.07823691460055096,
+     "E0 loop and round control": 0.0721763085399449,
+     "E0 per-round (out of line)": 0.048668503213957756,
+     "E0 worker: completion check": 0.02975206611570248,
+     "E0 round end (telemetry, end_round)": 0.012304866850321396,
+     "E0 VC0 forwarding: visit: upstream credit": 0.006795224977043159,
+     "E0 worker: send": 0.0018365472910927456,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00018365472910927456
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 4,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "7973297115653940",
+    "work_share": 0.0837465564738292,
+    "sections": {
+     "E1 poll": 0.6249770431588614,
+     "E1 loop and round control": 0.18659320477502295,
+     "E1 per-round (out of line)": 0.09788797061524335,
+     "E1 decode": 0.0780532598714417,
+     "E1 completions: batch check": 0.006795224977043159,
+     "E1 completions: send": 0.005693296602387512
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 5,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "12298611826209249269",
+    "work_share": 0.0073461891643709825,
+    "sections": {
+     "E0 worker: send check": 0.3184573002754821,
+     "E0 worker: connection poll": 0.24224058769513315,
+     "E0 VC0 forwarding: idle test": 0.1781450872359963,
+     "E0 VC0 free-slots group read": 0.0874196510560147,
+     "E0 loop and round control": 0.07272727272727272,
+     "E0 per-round (out of line)": 0.052525252525252523,
+     "E0 worker: completion check": 0.030303030303030304,
+     "E0 round end (telemetry, end_round)": 0.0108356290174472,
+     "E0 VC0 forwarding: visit: upstream credit": 0.005876951331496786,
+     "E0 worker: send": 0.0012855831037649219,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00018365472910927456
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 5,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "7973297115653940",
+    "work_share": 0.07309458218549128,
+    "sections": {
+     "E1 poll": 0.6277318640955004,
+     "E1 loop and round control": 0.1869605142332415,
+     "E1 per-round (out of line)": 0.1054178145087236,
+     "E1 decode": 0.06905417814508724,
+     "E1 completions: batch check": 0.006795224977043159,
+     "E1 completions: send": 0.003489439853076217,
+     "E1 1D route decision": 0.0005509641873278236
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 6,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "10081830465089211350",
+    "work_share": 0.003856749311294766,
+    "sections": {
+     "E0 worker: send check": 0.31955922865013775,
+     "E0 worker: connection poll": 0.2609733700642792,
+     "E0 VC0 forwarding: idle test": 0.1630853994490358,
+     "E0 VC0 free-slots group read": 0.08999081726354453,
+     "E0 loop and round control": 0.07162534435261708,
+     "E0 per-round (out of line)": 0.049586776859504134,
+     "E0 worker: completion check": 0.02865013774104683,
+     "E0 round end (telemetry, end_round)": 0.012672176308539946,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0025711662075298437,
+     "E0 worker: send": 0.0012855831037649219
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 6,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "7973297115653940",
+    "work_share": 0.08429752066115702,
+    "sections": {
+     "E1 poll": 0.6198347107438017,
+     "E1 loop and round control": 0.18861340679522498,
+     "E1 per-round (out of line)": 0.09935720844811755,
+     "E1 decode": 0.07952249770431588,
+     "E1 completions: batch check": 0.007897153351698806,
+     "E1 completions: send": 0.004224058769513315,
+     "E1 1D route decision": 0.0005509641873278236
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 7,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "12298611826209249269",
+    "work_share": 0.0027548209366391185,
+    "sections": {
+     "E0 worker: send check": 0.33774104683195594,
+     "E0 worker: connection poll": 0.24958677685950414,
+     "E0 VC0 forwarding: idle test": 0.16565656565656567,
+     "E0 VC0 free-slots group read": 0.07713498622589532,
+     "E0 loop and round control": 0.07566574839302112,
+     "E0 per-round (out of line)": 0.050505050505050504,
+     "E0 worker: completion check": 0.02865013774104683,
+     "E0 round end (telemetry, end_round)": 0.012304866850321396,
+     "E0 worker: send": 0.0018365472910927456,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0007346189164370982,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00018365472910927456
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 7,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "7973297115653940",
+    "work_share": 0.07842056932966024,
+    "sections": {
+     "E1 poll": 0.6161616161616161,
+     "E1 loop and round control": 0.19265381083562902,
+     "E1 per-round (out of line)": 0.10486685032139578,
+     "E1 decode": 0.07346189164370982,
+     "E1 completions: batch check": 0.007897153351698806,
+     "E1 completions: send": 0.0049586776859504135
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 8,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "2493955989011201288",
+    "work_share": 0.003305785123966942,
+    "sections": {
+     "E0 worker: send check": 0.3234159779614325,
+     "E0 worker: connection poll": 0.2628099173553719,
+     "E0 VC0 forwarding: idle test": 0.16492194674012856,
+     "E0 VC0 free-slots group read": 0.0874196510560147,
+     "E0 loop and round control": 0.07309458218549128,
+     "E0 per-round (out of line)": 0.04426078971533517,
+     "E0 worker: completion check": 0.02975206611570248,
+     "E0 round end (telemetry, end_round)": 0.011019283746556474,
+     "E0 worker: send": 0.003305785123966942
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 8,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "2103362005179002920",
+    "work_share": 0.07878787878787878,
+    "sections": {
+     "E1 poll": 0.6249770431588614,
+     "E1 loop and round control": 0.18806244260789715,
+     "E1 per-round (out of line)": 0.10174471992653811,
+     "E1 decode": 0.07309458218549128,
+     "E1 completions: batch check": 0.006427915518824609,
+     "E1 completions: send": 0.005693296602387512
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 10,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "7310544533362410835",
+    "work_share": 0.006427915518824609,
+    "sections": {
+     "E0 worker: send check": 0.32966023875114786,
+     "E0 worker: connection poll": 0.24591368227731863,
+     "E0 VC0 forwarding: idle test": 0.16859504132231404,
+     "E0 VC0 free-slots group read": 0.08393021120293848,
+     "E0 loop and round control": 0.07603305785123966,
+     "E0 per-round (out of line)": 0.051423324150596875,
+     "E0 worker: completion check": 0.025895316804407712,
+     "E0 round end (telemetry, end_round)": 0.012121212121212121,
+     "E0 worker: send": 0.006427915518824609
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 10,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "2103362005179002920",
+    "work_share": 0.08778696051423324,
+    "sections": {
+     "E1 poll": 0.6236914600550965,
+     "E1 loop and round control": 0.18861340679522498,
+     "E1 per-round (out of line)": 0.0945821854912764,
+     "E1 decode": 0.08172635445362718,
+     "E1 completions: send": 0.006060606060606061,
+     "E1 completions: batch check": 0.005325987144168962
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 4,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "10081830465089211350",
+    "work_share": 0.011386593204775024,
+    "sections": {
+     "E0 worker: send check": 0.3186409550045914,
+     "E0 worker: connection poll": 0.2528925619834711,
+     "E0 VC0 forwarding: idle test": 0.17355371900826447,
+     "E0 VC0 free-slots group read": 0.0773186409550046,
+     "E0 loop and round control": 0.0751147842056933,
+     "E0 per-round (out of line)": 0.050137741046831955,
+     "E0 worker: completion check": 0.029201101928374655,
+     "E0 round end (telemetry, end_round)": 0.011753902662993572,
+     "E0 VC0 forwarding: visit: upstream credit": 0.009917355371900827,
+     "E0 worker: send": 0.0012855831037649219,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00018365472910927456
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 4,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "7973297115653940",
+    "work_share": 0.07603305785123966,
+    "sections": {
+     "E1 poll": 0.6407713498622589,
+     "E1 loop and round control": 0.18071625344352618,
+     "E1 per-round (out of line)": 0.09586776859504133,
+     "E1 decode": 0.07162534435261708,
+     "E1 completions: batch check": 0.006611570247933884,
+     "E1 completions: send": 0.004407713498622589
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 5,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "12298611826209249269",
+    "work_share": 0.009917355371900827,
+    "sections": {
+     "E0 worker: send check": 0.32011019283746556,
+     "E0 worker: connection poll": 0.2662993572084481,
+     "E0 VC0 forwarding: idle test": 0.16326905417814508,
+     "E0 VC0 free-slots group read": 0.08264462809917356,
+     "E0 loop and round control": 0.06960514233241506,
+     "E0 per-round (out of line)": 0.048301193755739213,
+     "E0 worker: completion check": 0.028466483011937556,
+     "E0 round end (telemetry, end_round)": 0.011019283746556474,
+     "E0 VC0 forwarding: visit: upstream credit": 0.00808080808080808,
+     "E0 worker: send": 0.001652892561983471,
+     "E0 other (execute_pause_command)": 0.0003673094582185491,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00018365472910927456
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 5,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "7973297115653940",
+    "work_share": 0.07346189164370982,
+    "sections": {
+     "E1 poll": 0.6393021120293848,
+     "E1 loop and round control": 0.1869605142332415,
+     "E1 per-round (out of line)": 0.09384756657483931,
+     "E1 decode": 0.06831955922865014,
+     "E1 completions: batch check": 0.006427915518824609,
+     "E1 completions: send": 0.0051423324150596875
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 6,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "10081830465089211350",
+    "work_share": 0.009917355371900827,
+    "sections": {
+     "E0 worker: send check": 0.31827364554637283,
+     "E0 worker: connection poll": 0.2593204775022957,
+     "E0 VC0 forwarding: idle test": 0.16565656565656567,
+     "E0 loop and round control": 0.08337924701561066,
+     "E0 VC0 free-slots group read": 0.0773186409550046,
+     "E0 per-round (out of line)": 0.047933884297520664,
+     "E0 worker: completion check": 0.02534435261707989,
+     "E0 round end (telemetry, end_round)": 0.012304866850321396,
+     "E0 VC0 forwarding: visit: upstream credit": 0.007897153351698806,
+     "E0 worker: send": 0.00202020202020202,
+     "E0 other (execute_pause_command)": 0.0005509641873278236
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 6,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "7973297115653940",
+    "work_share": 0.07566574839302112,
+    "sections": {
+     "E1 poll": 0.6268135904499541,
+     "E1 loop and round control": 0.18732782369146006,
+     "E1 per-round (out of line)": 0.10505050505050505,
+     "E1 decode": 0.07162534435261708,
+     "E1 completions: batch check": 0.0051423324150596875,
+     "E1 completions: send": 0.00404040404040404
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 7,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "12298611826209249269",
+    "work_share": 0.008815426997245178,
+    "sections": {
+     "E0 worker: send check": 0.3134986225895317,
+     "E0 worker: connection poll": 0.25968778696051426,
+     "E0 VC0 forwarding: idle test": 0.16914600550964187,
+     "E0 VC0 free-slots group read": 0.07988980716253444,
+     "E0 loop and round control": 0.07456382001836548,
+     "E0 per-round (out of line)": 0.052525252525252523,
+     "E0 worker: completion check": 0.031588613406795224,
+     "E0 round end (telemetry, end_round)": 0.010284664830119375,
+     "E0 VC0 forwarding: visit: upstream credit": 0.00808080808080808,
+     "E0 worker: send": 0.0007346189164370982
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 7,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "7973297115653940",
+    "work_share": 0.08613406795224977,
+    "sections": {
+     "E1 poll": 0.6194674012855831,
+     "E1 loop and round control": 0.18567493112947658,
+     "E1 per-round (out of line)": 0.10174471992653811,
+     "E1 decode": 0.0815426997245179,
+     "E1 completions: batch check": 0.006978879706152434,
+     "E1 completions: send": 0.004407713498622589,
+     "E1 1D route decision": 0.00018365472910927456
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 8,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "2493955989011201288",
+    "work_share": 0.009550045913682277,
+    "sections": {
+     "E0 worker: send check": 0.3098255280073462,
+     "E0 worker: connection poll": 0.2519742883379247,
+     "E0 VC0 forwarding: idle test": 0.18218549127640038,
+     "E0 VC0 free-slots group read": 0.08117539026629936,
+     "E0 loop and round control": 0.07603305785123966,
+     "E0 per-round (out of line)": 0.05032139577594123,
+     "E0 worker: completion check": 0.02534435261707989,
+     "E0 round end (telemetry, end_round)": 0.013223140495867768,
+     "E0 worker: credit": 0.007162534435261708,
+     "E0 worker: send": 0.0023875114784205694,
+     "E0 other (execute_pause_command)": 0.0003673094582185491
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 8,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "2103362005179002920",
+    "work_share": 0.08135904499540864,
+    "sections": {
+     "E1 poll": 0.6194674012855831,
+     "E1 loop and round control": 0.19265381083562902,
+     "E1 per-round (out of line)": 0.09917355371900827,
+     "E1 decode": 0.07676767676767676,
+     "E1 completions: batch check": 0.0073461891643709825,
+     "E1 completions: send": 0.004407713498622589,
+     "E1 1D route decision": 0.00018365472910927456
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 10,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "7310544533362410835",
+    "work_share": 0.007897153351698806,
+    "sections": {
+     "E0 worker: send check": 0.32653810835629016,
+     "E0 worker: connection poll": 0.26023875114784206,
+     "E0 VC0 forwarding: idle test": 0.15831037649219468,
+     "E0 loop and round control": 0.09109274563820019,
+     "E0 VC0 free-slots group read": 0.08484848484848485,
+     "E0 per-round (out of line)": 0.04995408631772268,
+     "E0 round end (telemetry, end_round)": 0.01248852157943067,
+     "E0 worker: completion check": 0.008264462809917356,
+     "E0 worker: send": 0.007897153351698806,
+     "E0 other (execute_pause_command)": 0.0003673094582185491
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 10,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "2103362005179002920",
+    "work_share": 0.0765840220385675,
+    "sections": {
+     "E1 poll": 0.6209366391184573,
+     "E1 loop and round control": 0.18806244260789715,
+     "E1 per-round (out of line)": 0.10651974288337925,
+     "E1 decode": 0.07180899908172636,
+     "E1 completions: batch check": 0.007897153351698806,
+     "E1 completions: send": 0.004591368227731864,
+     "E1 1D route decision": 0.00018365472910927456
+    }
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 4,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "18182554529866137118",
+    "work_share": 0.01652892561983471,
+    "sections": {
+     "E0 worker: send check": 0.31606978879706155,
+     "E0 worker: connection poll": 0.2539944903581267,
+     "E0 VC0 forwarding: idle test": 0.16363636363636364,
+     "E0 VC0 free-slots group read": 0.08539944903581267,
+     "E0 loop and round control": 0.07823691460055096,
+     "E0 per-round (out of line)": 0.04664830119375574,
+     "E0 worker: completion check": 0.02699724517906336,
+     "E0 VC0 forwarding: visit: upstream credit": 0.01487603305785124,
+     "E0 round end (telemetry, end_round)": 0.01248852157943067,
+     "E0 worker: send": 0.0012855831037649219,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.0003673094582185491
+    }
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 4,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "7973297115653940",
+    "work_share": 0.08080808080808081,
+    "sections": {
+     "E1 poll": 0.633425160697888,
+     "E1 loop and round control": 0.18328741965105602,
+     "E1 per-round (out of line)": 0.09623507805325987,
+     "E1 decode": 0.0758494031221304,
+     "E1 completions: batch check": 0.006244260789715335,
+     "E1 completions: send": 0.004591368227731864,
+     "E1 1D route decision": 0.0003673094582185491
+    }
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 5,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 5,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 6,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "18182554529866137118",
+    "work_share": 0.014141414141414142,
+    "sections": {
+     "E0 worker: send check": 0.31735537190082647,
+     "E0 worker: connection poll": 0.24646464646464647,
+     "E0 VC0 forwarding: idle test": 0.17722681359044995,
+     "E0 VC0 free-slots group read": 0.08503213957759412,
+     "E0 loop and round control": 0.07199265381083562,
+     "E0 per-round (out of line)": 0.049770431588613405,
+     "E0 worker: completion check": 0.02662993572084481,
+     "E0 VC0 forwarding: visit: upstream credit": 0.012855831037649219,
+     "E0 round end (telemetry, end_round)": 0.011386593204775024,
+     "E0 worker: send": 0.0011019283746556473,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00018365472910927456
+    }
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 6,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "7973297115653940",
+    "work_share": 0.07566574839302112,
+    "sections": {
+     "E1 poll": 0.6222222222222222,
+     "E1 loop and round control": 0.19100091827364554,
+     "E1 per-round (out of line)": 0.1039485766758494,
+     "E1 decode": 0.0714416896235078,
+     "E1 completions: batch check": 0.007162534435261708,
+     "E1 completions: send": 0.00404040404040404,
+     "E1 1D route decision": 0.00018365472910927456
+    }
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 7,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 7,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 8,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "12298611826209249269",
+    "work_share": 0.011753902662993572,
+    "sections": {
+     "E0 worker: send check": 0.30633608815427,
+     "E0 worker: connection poll": 0.272910927456382,
+     "E0 VC0 forwarding: idle test": 0.16859504132231404,
+     "E0 VC0 free-slots group read": 0.08062442607897154,
+     "E0 loop and round control": 0.0765840220385675,
+     "E0 per-round (out of line)": 0.045546372819100095,
+     "E0 worker: completion check": 0.025528007346189166,
+     "E0 round end (telemetry, end_round)": 0.011753902662993572,
+     "E0 VC0 forwarding: visit: upstream credit": 0.010651974288337925,
+     "E0 worker: send": 0.0011019283746556473,
+     "E0 other (execute_pause_command)": 0.0003673094582185491
+    }
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 8,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "2992557856822981993",
+    "work_share": 0.07529843893480258,
+    "sections": {
+     "E1 poll": 0.6310376492194674,
+     "E1 loop and round control": 0.18934802571166207,
+     "E1 per-round (out of line)": 0.09623507805325987,
+     "E1 decode": 0.07089072543617998,
+     "E1 completions: batch check": 0.00808080808080808,
+     "E1 completions: send": 0.004224058769513315,
+     "E1 1D route decision": 0.00018365472910927456
+    }
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 10,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "758924378684274132",
+    "work_share": 0.013957759412304867,
+    "sections": {
+     "E0 worker: send check": 0.3184573002754821,
+     "E0 worker: connection poll": 0.26372819100091827,
+     "E0 VC0 forwarding: idle test": 0.16712580348943984,
+     "E0 VC0 free-slots group read": 0.08631772268135904,
+     "E0 loop and round control": 0.07419651056014692,
+     "E0 per-round (out of line)": 0.0512396694214876,
+     "E0 worker: completion check": 0.01487603305785124,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0108356290174472,
+     "E0 round end (telemetry, end_round)": 0.009917355371900827,
+     "E0 worker: send": 0.0018365472910927456,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.0007346189164370982,
+     "E0 VC0 forwarding: visit: send": 0.0005509641873278236,
+     "E0 other (execute_pause_command)": 0.00018365472910927456
+    }
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 10,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "2992557856822981993",
+    "work_share": 0.07933884297520662,
+    "sections": {
+     "E1 poll": 0.6152433425160698,
+     "E1 loop and round control": 0.19100091827364554,
+     "E1 per-round (out of line)": 0.10707070707070707,
+     "E1 decode": 0.07382920110192838,
+     "E1 completions: batch check": 0.0073461891643709825,
+     "E1 completions: send": 0.005325987144168962,
+     "E1 1D route decision": 0.00018365472910927456
+    }
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 4,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 4,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 5,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "16859369020693722463",
+    "work_share": 0.0027548209366391185,
+    "sections": {
+     "E0 worker: send check": 0.325068870523416,
+     "E0 worker: connection poll": 0.256198347107438,
+     "E0 VC0 forwarding: idle test": 0.1667584940312213,
+     "E0 VC0 free-slots group read": 0.08393021120293848,
+     "E0 loop and round control": 0.0751147842056933,
+     "E0 per-round (out of line)": 0.052157943067033974,
+     "E0 worker: completion check": 0.027180899908172636,
+     "E0 round end (telemetry, end_round)": 0.0108356290174472,
+     "E0 worker: send": 0.0022038567493112946,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0005509641873278236
+    }
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 5,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "7973297115653940",
+    "work_share": 0.08044077134986226,
+    "sections": {
+     "E1 poll": 0.6332415059687787,
+     "E1 loop and round control": 0.18089990817263543,
+     "E1 per-round (out of line)": 0.09752066115702479,
+     "E1 decode": 0.07695133149678604,
+     "E1 completions: batch check": 0.007897153351698806,
+     "E1 completions: send": 0.003305785123966942,
+     "E1 1D route decision": 0.00018365472910927456
+    }
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 6,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 6,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 7,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "16859369020693722463",
+    "work_share": 0.0018365472910927456,
+    "sections": {
+     "E0 worker: send check": 0.3239669421487603,
+     "E0 worker: connection poll": 0.25876951331496784,
+     "E0 VC0 forwarding: idle test": 0.16345270890725436,
+     "E0 VC0 free-slots group read": 0.08558310376492195,
+     "E0 loop and round control": 0.0765840220385675,
+     "E0 per-round (out of line)": 0.05234159779614325,
+     "E0 worker: completion check": 0.025711662075298437,
+     "E0 round end (telemetry, end_round)": 0.011753902662993572,
+     "E0 worker: send": 0.0018365472910927456
+    }
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 7,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "7973297115653940",
+    "work_share": 0.0765840220385675,
+    "sections": {
+     "E1 poll": 0.6192837465564738,
+     "E1 loop and round control": 0.19449035812672177,
+     "E1 per-round (out of line)": 0.10211202938475666,
+     "E1 decode": 0.07125803489439853,
+     "E1 completions: batch check": 0.007529843893480257,
+     "E1 completions: send": 0.005325987144168962
+    }
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 8,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "12298611826209249269",
+    "work_share": 0.0031221303948576677,
+    "sections": {
+     "E0 worker: send check": 0.32819100091827363,
+     "E0 worker: connection poll": 0.2574839302112029,
+     "E0 VC0 forwarding: idle test": 0.16455463728191,
+     "E0 VC0 free-slots group read": 0.08650137741046832,
+     "E0 loop and round control": 0.06960514233241506,
+     "E0 per-round (out of line)": 0.05362718089990817,
+     "E0 worker: completion check": 0.028833792470156105,
+     "E0 round end (telemetry, end_round)": 0.00808080808080808,
+     "E0 worker: send": 0.0031221303948576677
+    }
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 8,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "2992557856822981993",
+    "work_share": 0.08686868686868687,
+    "sections": {
+     "E1 poll": 0.6115702479338843,
+     "E1 loop and round control": 0.1933884297520661,
+     "E1 per-round (out of line)": 0.10174471992653811,
+     "E1 decode": 0.08062442607897154,
+     "E1 completions: batch check": 0.006427915518824609,
+     "E1 completions: send": 0.006060606060606061,
+     "E1 1D route decision": 0.00018365472910927456
+    }
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 10,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "758924378684274132",
+    "work_share": 0.003305785123966942,
+    "sections": {
+     "E0 worker: send check": 0.32323232323232326,
+     "E0 worker: connection poll": 0.25068870523415976,
+     "E0 VC0 forwarding: idle test": 0.17741046831955923,
+     "E0 VC0 free-slots group read": 0.08337924701561066,
+     "E0 loop and round control": 0.07952249770431588,
+     "E0 per-round (out of line)": 0.04664830119375574,
+     "E0 worker: completion check": 0.022405876951331498,
+     "E0 round end (telemetry, end_round)": 0.013406795224977043,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0018365472910927456,
+     "E0 worker: send": 0.0014692378328741965
+    }
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 10,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "2992557856822981993",
+    "work_share": 0.08080808080808081,
+    "sections": {
+     "E1 poll": 0.62277318640955,
+     "E1 loop and round control": 0.19357208448117538,
+     "E1 per-round (out of line)": 0.09641873278236915,
+     "E1 decode": 0.07419651056014692,
+     "E1 completions: batch check": 0.006427915518824609,
+     "E1 completions: send": 0.006244260789715335,
+     "E1 1D route decision": 0.0003673094582185491
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 4,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "10081830465089211350",
+    "work_share": 0.6560146923783288,
+    "sections": {
+     "E0 VC0 forwarding: visit: send": 0.4244260789715335,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.162534435261708,
+     "E0 worker: send check": 0.11496786042240588,
+     "E0 worker: connection poll": 0.09586776859504133,
+     "E0 VC0 forwarding: visit: upstream credit": 0.06758494031221304,
+     "E0 VC0 forwarding: idle test": 0.044444444444444446,
+     "E0 VC0 free-slots group read": 0.030670339761248853,
+     "E0 loop and round control": 0.02662993572084481,
+     "E0 per-round (out of line)": 0.014325068870523415,
+     "E0 worker: completion check": 0.011753902662993572,
+     "E0 round end (telemetry, end_round)": 0.004224058769513315,
+     "E0 worker: send": 0.0014692378328741965,
+     "E0 other (kernel_main)": 0.0011019283746556473
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 4,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "7973297115653940",
+    "work_share": 0.08558310376492195,
+    "sections": {
+     "E1 poll": 0.6319559228650138,
+     "E1 loop and round control": 0.1834710743801653,
+     "E1 per-round (out of line)": 0.09292929292929293,
+     "E1 decode": 0.08135904499540864,
+     "E1 completions: batch check": 0.006060606060606061,
+     "E1 completions: send": 0.004224058769513315
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 5,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "12298611826209249269",
+    "work_share": 0.003305785123966942,
+    "sections": {
+     "E0 worker: send check": 0.30596877869605144,
+     "E0 worker: connection poll": 0.2413223140495868,
+     "E0 VC0 forwarding: idle test": 0.1733700642791552,
+     "E0 per-round (out of line)": 0.09348025711662075,
+     "E0 VC0 free-slots group read": 0.07823691460055096,
+     "E0 loop and round control": 0.07162534435261708,
+     "E0 worker: completion check": 0.02203856749311295,
+     "E0 round end (telemetry, end_round)": 0.010651974288337925,
+     "E0 worker: send": 0.0022038567493112946,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0011019283746556473
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 5,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "7973297115653940",
+    "work_share": 0.8593204775022957,
+    "sections": {
+     "E1 forward": 0.3640036730945822,
+     "E1 admission": 0.13976124885215793,
+     "E1 completions: send": 0.136455463728191,
+     "E1 1D route decision": 0.10596877869605142,
+     "E1 retire": 0.09733700642791551,
+     "E1 poll": 0.06556473829201102,
+     "E1 completions: batch check": 0.03636363636363636,
+     "E1 loop and round control": 0.024793388429752067,
+     "E1 per-round (out of line)": 0.013957759412304867,
+     "E1 decode": 0.00844811753902663,
+     "E1 packet bookkeeping": 0.0073461891643709825
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 6,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "10081830465089211350",
+    "work_share": 0.0031221303948576677,
+    "sections": {
+     "E0 worker: send check": 0.33112947658402203,
+     "E0 worker: connection poll": 0.26372819100091827,
+     "E0 VC0 forwarding: idle test": 0.16584022038567492,
+     "E0 VC0 free-slots group read": 0.0780532598714417,
+     "E0 loop and round control": 0.07162534435261708,
+     "E0 per-round (out of line)": 0.047199265381083565,
+     "E0 worker: completion check": 0.02773186409550046,
+     "E0 round end (telemetry, end_round)": 0.011570247933884297,
+     "E0 worker: send": 0.0018365472910927456,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0012855831037649219
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 6,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "7973297115653940",
+    "work_share": 0.07695133149678604,
+    "sections": {
+     "E1 poll": 0.6301193755739211,
+     "E1 loop and round control": 0.18071625344352618,
+     "E1 per-round (out of line)": 0.10578512396694215,
+     "E1 decode": 0.07052341597796143,
+     "E1 completions: send": 0.006427915518824609,
+     "E1 completions: batch check": 0.006427915518824609
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 7,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "12298611826209249269",
+    "work_share": 0.006795224977043159,
+    "sections": {
+     "E0 worker: send check": 0.3370064279155188,
+     "E0 worker: connection poll": 0.26299357208448115,
+     "E0 VC0 forwarding: idle test": 0.16069788797061524,
+     "E0 VC0 free-slots group read": 0.07603305785123966,
+     "E0 loop and round control": 0.07235996326905418,
+     "E0 per-round (out of line)": 0.04352617079889807,
+     "E0 worker: completion check": 0.028282828282828285,
+     "E0 round end (telemetry, end_round)": 0.012304866850321396,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0036730945821854912,
+     "E0 worker: send": 0.0031221303948576677
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 7,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "7973297115653940",
+    "work_share": 0.08007346189164372,
+    "sections": {
+     "E1 poll": 0.6312213039485767,
+     "E1 loop and round control": 0.18438934802571166,
+     "E1 per-round (out of line)": 0.09660238751147843,
+     "E1 decode": 0.07603305785123966,
+     "E1 completions: batch check": 0.007713498622589532,
+     "E1 completions: send": 0.003856749311294766,
+     "E1 1D route decision": 0.00018365472910927456
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 9,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "966748813431262358",
+    "work_share": 0.006978879706152434,
+    "sections": {
+     "E0 worker: send check": 0.3169880624426079,
+     "E0 worker: connection poll": 0.26078971533516987,
+     "E0 VC0 forwarding: idle test": 0.1674931129476584,
+     "E0 VC0 free-slots group read": 0.08393021120293848,
+     "E0 loop and round control": 0.07107438016528926,
+     "E0 per-round (out of line)": 0.0512396694214876,
+     "E0 worker: completion check": 0.02938475665748393,
+     "E0 round end (telemetry, end_round)": 0.012121212121212121,
+     "E0 worker: send": 0.006978879706152434
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 9,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "2103362005179002920",
+    "work_share": 0.08723599632690542,
+    "sections": {
+     "E1 poll": 0.6150596877869605,
+     "E1 loop and round control": 0.19026629935720846,
+     "E1 per-round (out of line)": 0.09807162534435261,
+     "E1 decode": 0.08319559228650138,
+     "E1 completions: batch check": 0.009366391184573003,
+     "E1 completions: send": 0.00404040404040404
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 11,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "17483610142571359246",
+    "work_share": 0.015794306703397612,
+    "sections": {
+     "E0 worker: send check": 0.31239669421487604,
+     "E0 worker: connection poll": 0.2611570247933884,
+     "E0 VC0 forwarding: idle test": 0.16932966023875115,
+     "E0 VC0 free-slots group read": 0.08117539026629936,
+     "E0 loop and round control": 0.07309458218549128,
+     "E0 per-round (out of line)": 0.048852157943067034,
+     "E0 worker: completion check": 0.024609733700642792,
+     "E0 round end (telemetry, end_round)": 0.013406795224977043,
+     "E0 worker: send": 0.008815426997245178,
+     "E0 worker: credit": 0.006978879706152434,
+     "E0 other (execute_pause_command)": 0.00018365472910927456
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 11,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "2103362005179002920",
+    "work_share": 0.08319559228650138,
+    "sections": {
+     "E1 poll": 0.6257116620752985,
+     "E1 loop and round control": 0.19118457300275482,
+     "E1 per-round (out of line)": 0.09476584022038567,
+     "E1 decode": 0.0758494031221304,
+     "E1 completions: send": 0.0073461891643709825,
+     "E1 completions: batch check": 0.0051423324150596875
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 4,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "10081830465089211350",
+    "work_share": 0.0027548209366391185,
+    "sections": {
+     "E0 worker: send check": 0.3292929292929293,
+     "E0 worker: connection poll": 0.2558310376492195,
+     "E0 VC0 forwarding: idle test": 0.1595959595959596,
+     "E0 VC0 free-slots group read": 0.0815426997245179,
+     "E0 loop and round control": 0.07933884297520662,
+     "E0 per-round (out of line)": 0.049586776859504134,
+     "E0 worker: completion check": 0.02975206611570248,
+     "E0 round end (telemetry, end_round)": 0.012304866850321396,
+     "E0 worker: send": 0.001652892561983471,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0011019283746556473
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 4,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "7973297115653940",
+    "work_share": 0.08723599632690542,
+    "sections": {
+     "E1 poll": 0.614692378328742,
+     "E1 loop and round control": 0.19155188246097338,
+     "E1 per-round (out of line)": 0.09788797061524335,
+     "E1 decode": 0.08117539026629936,
+     "E1 completions: batch check": 0.008631772268135905,
+     "E1 completions: send": 0.005876951331496786,
+     "E1 1D route decision": 0.00018365472910927456
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 5,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "12298611826209249269",
+    "work_share": 0.004224058769513315,
+    "sections": {
+     "E0 worker: send check": 0.3212121212121212,
+     "E0 worker: connection poll": 0.2622589531680441,
+     "E0 VC0 forwarding: idle test": 0.17447199265381083,
+     "E0 VC0 free-slots group read": 0.08007346189164372,
+     "E0 loop and round control": 0.07456382001836548,
+     "E0 per-round (out of line)": 0.047566574839302114,
+     "E0 worker: completion check": 0.025528007346189166,
+     "E0 round end (telemetry, end_round)": 0.010101010101010102,
+     "E0 worker: send": 0.0025711662075298437,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0012855831037649219,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.0003673094582185491
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 5,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "7973297115653940",
+    "work_share": 0.0815426997245179,
+    "sections": {
+     "E1 poll": 0.6224058769513315,
+     "E1 loop and round control": 0.18861340679522498,
+     "E1 per-round (out of line)": 0.10064279155188247,
+     "E1 decode": 0.0758494031221304,
+     "E1 completions: batch check": 0.006795224977043159,
+     "E1 completions: send": 0.005693296602387512
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 6,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "10081830465089211350",
+    "work_share": 0.663544536271809,
+    "sections": {
+     "E0 VC0 forwarding: visit: send": 0.4295684113865932,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.16510560146923783,
+     "E0 worker: send check": 0.1125803489439853,
+     "E0 worker: connection poll": 0.0852157943067034,
+     "E0 VC0 forwarding: visit: upstream credit": 0.06795224977043159,
+     "E0 VC0 forwarding: idle test": 0.047566574839302114,
+     "E0 VC0 free-slots group read": 0.031588613406795224,
+     "E0 loop and round control": 0.026262626262626262,
+     "E0 per-round (out of line)": 0.018365472910927456,
+     "E0 worker: completion check": 0.009366391184573003,
+     "E0 round end (telemetry, end_round)": 0.00404040404040404,
+     "E0 other (kernel_main)": 0.0014692378328741965,
+     "E0 worker: send": 0.0009182736455463728
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 6,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "7973297115653940",
+    "work_share": 0.07548209366391184,
+    "sections": {
+     "E1 poll": 0.6292011019283746,
+     "E1 loop and round control": 0.19173553719008266,
+     "E1 per-round (out of line)": 0.09678604224058769,
+     "E1 decode": 0.07199265381083562,
+     "E1 completions: batch check": 0.006795224977043159,
+     "E1 completions: send": 0.003489439853076217
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 7,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "12298611826209249269",
+    "work_share": 0.0014692378328741965,
+    "sections": {
+     "E0 worker: send check": 0.3044995408631772,
+     "E0 worker: connection poll": 0.24719926538108355,
+     "E0 VC0 forwarding: idle test": 0.15096418732782368,
+     "E0 per-round (out of line)": 0.10890725436179982,
+     "E0 VC0 free-slots group read": 0.07768595041322314,
+     "E0 loop and round control": 0.07401285583103764,
+     "E0 worker: completion check": 0.02534435261707989,
+     "E0 round end (telemetry, end_round)": 0.009733700642791552,
+     "E0 worker: send": 0.0012855831037649219,
+     "E0 other (execute_pause_command)": 0.00018365472910927456,
+     "E0 VC0 forwarding: visit: upstream credit": 0.00018365472910927456
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 7,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "7973297115653940",
+    "work_share": 0.8591368227731864,
+    "sections": {
+     "E1 forward": 0.35720844811753905,
+     "E1 admission": 0.1494949494949495,
+     "E1 completions: send": 0.13829201101928373,
+     "E1 1D route decision": 0.10211202938475666,
+     "E1 retire": 0.09825528007346189,
+     "E1 poll": 0.06170798898071626,
+     "E1 completions: batch check": 0.03930211202938476,
+     "E1 loop and round control": 0.024426078971533517,
+     "E1 per-round (out of line)": 0.015426997245179064,
+     "E1 packet bookkeeping": 0.008264462809917356,
+     "E1 decode": 0.005509641873278237
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 9,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "966748813431262358",
+    "work_share": 0.009550045913682277,
+    "sections": {
+     "E0 worker: send check": 0.33590449954086316,
+     "E0 worker: connection poll": 0.25179063360881543,
+     "E0 VC0 forwarding: idle test": 0.16290174471992655,
+     "E0 VC0 free-slots group read": 0.08393021120293848,
+     "E0 loop and round control": 0.0692378328741965,
+     "E0 per-round (out of line)": 0.045179063360881545,
+     "E0 worker: completion check": 0.02865013774104683,
+     "E0 round end (telemetry, end_round)": 0.012855831037649219,
+     "E0 worker: send": 0.009550045913682277
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 9,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "2103362005179002920",
+    "work_share": 0.08172635445362718,
+    "sections": {
+     "E1 poll": 0.6167125803489439,
+     "E1 loop and round control": 0.19522497704315886,
+     "E1 per-round (out of line)": 0.10082644628099173,
+     "E1 decode": 0.07603305785123966,
+     "E1 completions: send": 0.005693296602387512,
+     "E1 completions: batch check": 0.005509641873278237
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 11,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "17483610142571359246",
+    "work_share": 0.010284664830119375,
+    "sections": {
+     "E0 worker: send check": 0.3258034894398531,
+     "E0 worker: connection poll": 0.26299357208448115,
+     "E0 VC0 forwarding: idle test": 0.16510560146923783,
+     "E0 VC0 free-slots group read": 0.07897153351698806,
+     "E0 loop and round control": 0.06483011937557392,
+     "E0 per-round (out of line)": 0.051790633608815424,
+     "E0 worker: completion check": 0.028282828282828285,
+     "E0 round end (telemetry, end_round)": 0.011937557392102846,
+     "E0 worker: send": 0.010101010101010102,
+     "E0 worker: credit": 0.00018365472910927456
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 11,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "2103362005179002920",
+    "work_share": 0.07621671258034894,
+    "sections": {
+     "E1 poll": 0.624058769513315,
+     "E1 loop and round control": 0.19595959595959597,
+     "E1 per-round (out of line)": 0.09770431588613407,
+     "E1 decode": 0.07033976124885216,
+     "E1 completions: batch check": 0.006060606060606061,
+     "E1 completions: send": 0.005876951331496786
+    }
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 4,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "18182554529866137118",
+    "work_share": 0.0025711662075298437,
+    "sections": {
+     "E0 worker: send check": 0.3243342516069789,
+     "E0 worker: connection poll": 0.26244260789715335,
+     "E0 VC0 forwarding: idle test": 0.16859504132231404,
+     "E0 VC0 free-slots group read": 0.08319559228650138,
+     "E0 loop and round control": 0.07272727272727272,
+     "E0 per-round (out of line)": 0.050505050505050504,
+     "E0 worker: completion check": 0.024609733700642792,
+     "E0 round end (telemetry, end_round)": 0.011019283746556474,
+     "E0 worker: send": 0.0025711662075298437
+    }
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 4,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "7973297115653940",
+    "work_share": 0.08099173553719008,
+    "sections": {
+     "E1 poll": 0.6176308539944904,
+     "E1 loop and round control": 0.18732782369146006,
+     "E1 per-round (out of line)": 0.10596877869605142,
+     "E1 decode": 0.0758494031221304,
+     "E1 completions: batch check": 0.00808080808080808,
+     "E1 completions: send": 0.0051423324150596875
+    }
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 5,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 5,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 6,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5445,
+    "build": "18182554529866137118",
+    "work_share": 0.4418732782369146,
+    "sections": {
+     "E0 worker: send": 0.3814508723599633,
+     "E0 worker: send check": 0.15390266299357208,
+     "E0 worker: connection poll": 0.11368227731864096,
+     "E0 worker: completion check": 0.10449954086317723,
+     "E0 VC0 forwarding: idle test": 0.08907254361799816,
+     "E0 worker: credit": 0.05858585858585859,
+     "E0 VC0 free-slots group read": 0.03801652892561983,
+     "E0 loop and round control": 0.03415977961432507,
+     "E0 per-round (out of line)": 0.019100091827364555,
+     "E0 round end (telemetry, end_round)": 0.005693296602387512,
+     "E0 VC0 forwarding: visit: upstream credit": 0.001652892561983471,
+     "E0 VC0 forwarding: visit: send": 0.00018365472910927456
+    }
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 6,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5444,
+    "build": "7973297115653940",
+    "work_share": 0.07916972814107275,
+    "sections": {
+     "E1 poll": 0.6241734019103601,
+     "E1 loop and round control": 0.19599559147685525,
+     "E1 per-round (out of line)": 0.09368111682586333,
+     "E1 decode": 0.07200587803085966,
+     "E1 completions: send": 0.0071638501102130785,
+     "E1 completions: batch check": 0.0069801616458486405
+    }
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 7,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 7,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 9,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5444,
+    "build": "7759399540948636955",
+    "work_share": 0.0018368846436443791,
+    "sections": {
+     "E0 worker: send check": 0.32402645113886847,
+     "E0 worker: connection poll": 0.264695077149155,
+     "E0 VC0 forwarding: idle test": 0.16825863335782512,
+     "E0 VC0 free-slots group read": 0.0799044819985305,
+     "E0 loop and round control": 0.07274063188831742,
+     "E0 per-round (out of line)": 0.05290227773695812,
+     "E0 worker: completion check": 0.024246877296105803,
+     "E0 round end (telemetry, end_round)": 0.011388684790595151,
+     "E0 worker: send": 0.0018368846436443791
+    }
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 9,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5444,
+    "build": "2992557856822981993",
+    "work_share": 0.07549595885378398,
+    "sections": {
+     "E1 poll": 0.628765613519471,
+     "E1 loop and round control": 0.1890154298310066,
+     "E1 per-round (out of line)": 0.09919177075679647,
+     "E1 decode": 0.06998530492285085,
+     "E1 completions: batch check": 0.007531227038941954,
+     "E1 completions: send": 0.005510653930933138
+    }
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 11,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5444,
+    "build": "10081830465089211350",
+    "work_share": 0.002571638501102131,
+    "sections": {
+     "E0 worker: send check": 0.316678912564291,
+     "E0 worker: connection poll": 0.25753122703894193,
+     "E0 VC0 forwarding: idle test": 0.1704628949301984,
+     "E0 VC0 free-slots group read": 0.08155767817781043,
+     "E0 loop and round control": 0.07329169728141073,
+     "E0 per-round (out of line)": 0.05437178545187362,
+     "E0 worker: completion check": 0.0319617927994122,
+     "E0 round end (telemetry, end_round)": 0.011572373254959589,
+     "E0 worker: send": 0.002571638501102131
+    }
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 11,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5444,
+    "build": "2992557856822981993",
+    "work_share": 0.08468038207200587,
+    "sections": {
+     "E1 poll": 0.6186627479794269,
+     "E1 loop and round control": 0.1899338721528288,
+     "E1 per-round (out of line)": 0.09992652461425422,
+     "E1 decode": 0.07972079353416606,
+     "E1 completions: batch check": 0.006796473181484203,
+     "E1 completions: send": 0.004775900073475386,
+     "E1 1D route decision": 0.0001836884643644379
+    }
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 4,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 4,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 5,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5444,
+    "build": "16859369020693722463",
+    "work_share": 0.002755326965466569,
+    "sections": {
+     "E0 worker: send check": 0.3223732549595885,
+     "E0 worker: connection poll": 0.25642909625275534,
+     "E0 VC0 forwarding: idle test": 0.15576781778104334,
+     "E0 VC0 free-slots group read": 0.08137398971344599,
+     "E0 per-round (out of line)": 0.07531227038941954,
+     "E0 loop and round control": 0.06612784717119764,
+     "E0 worker: completion check": 0.02718589272593681,
+     "E0 round end (telemetry, end_round)": 0.012674504041146216,
+     "E0 worker: send": 0.0016531961792799412,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0011021307861866275
+    }
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 5,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5444,
+    "build": "7973297115653940",
+    "work_share": 0.7024246877296105,
+    "sections": {
+     "E1 local delivery": 0.23199853049228508,
+     "E1 completions: send": 0.18387215282880234,
+     "E1 poll": 0.15429831006612785,
+     "E1 retire": 0.09772226304188097,
+     "E1 admission": 0.08192505510653932,
+     "E1 completions: batch check": 0.07861866274797942,
+     "E1 1D route decision": 0.0736590742101396,
+     "E1 loop and round control": 0.0387582659808964,
+     "E1 decode": 0.0266348273328435,
+     "E1 per-round (out of line)": 0.025900073475385747,
+     "E1 packet bookkeeping": 0.006612784717119765
+    }
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 6,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 6,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 7,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5444,
+    "build": "16859369020693722463",
+    "work_share": 0.0033063923585598823,
+    "sections": {
+     "E0 worker: send check": 0.3232916972814107,
+     "E0 worker: connection poll": 0.26083761939750183,
+     "E0 VC0 forwarding: idle test": 0.16660543717854517,
+     "E0 VC0 free-slots group read": 0.07843497428361498,
+     "E0 loop and round control": 0.07825128581925055,
+     "E0 per-round (out of line)": 0.04720793534166055,
+     "E0 worker: completion check": 0.029573842762674503,
+     "E0 round end (telemetry, end_round)": 0.012490815576781777,
+     "E0 worker: send": 0.002204261572373255,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0011021307861866275
+    }
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 7,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5444,
+    "build": "7973297115653940",
+    "work_share": 0.08743570903747244,
+    "sections": {
+     "E1 poll": 0.6146216017634093,
+     "E1 loop and round control": 0.18626010286554004,
+     "E1 per-round (out of line)": 0.10396767083027186,
+     "E1 decode": 0.084313005143277,
+     "E1 completions: batch check": 0.007714915503306392,
+     "E1 completions: send": 0.002755326965466569,
+     "E1 1D route decision": 0.0003673769287288758
+    }
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 9,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5444,
+    "build": "7759399540948636955",
+    "work_share": 0.009000734753857457,
+    "sections": {
+     "E0 worker: send check": 0.32531227038941957,
+     "E0 worker: connection poll": 0.26028655400440853,
+     "E0 VC0 forwarding: idle test": 0.16972814107274062,
+     "E0 loop and round control": 0.07880235121234387,
+     "E0 VC0 free-slots group read": 0.07384276267450404,
+     "E0 per-round (out of line)": 0.05143277002204261,
+     "E0 worker: completion check": 0.02094048493754592,
+     "E0 round end (telemetry, end_round)": 0.0106539309331374,
+     "E0 VC0 forwarding: visit: upstream credit": 0.00789860396767083,
+     "E0 worker: send": 0.0009184423218221896,
+     "E0 VC0 forwarding: visit: send": 0.0001836884643644379
+    }
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 9,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5444,
+    "build": "2992557856822981993",
+    "work_share": 0.07825128581925055,
+    "sections": {
+     "E1 poll": 0.6318883174136665,
+     "E1 loop and round control": 0.18148420279206465,
+     "E1 per-round (out of line)": 0.10360029390154299,
+     "E1 decode": 0.07384276267450404,
+     "E1 completions: batch check": 0.004775900073475386,
+     "E1 completions: send": 0.00440852314474651
+    }
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 11,
+     "erisc": 0
+    },
+    "samples": 6228,
+    "kernel": 5444,
+    "build": "10081830465089211350",
+    "work_share": 0.0029390154298310064,
+    "sections": {
+     "E0 worker: send check": 0.3205363703159442,
+     "E0 worker: connection poll": 0.25973548861131524,
+     "E0 VC0 forwarding: idle test": 0.1743203526818516,
+     "E0 VC0 free-slots group read": 0.0799044819985305,
+     "E0 loop and round control": 0.0721895664952241,
+     "E0 per-round (out of line)": 0.04720793534166055,
+     "E0 worker: completion check": 0.029390154298310066,
+     "E0 round end (telemetry, end_round)": 0.013776634827332844,
+     "E0 worker: send": 0.002020573108008817,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0009184423218221896
+    }
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 11,
+     "erisc": 1
+    },
+    "samples": 6228,
+    "kernel": 5444,
+    "build": "2992557856822981993",
+    "work_share": 0.08119030124908155,
+    "sections": {
+     "E1 poll": 0.6170095518001469,
+     "E1 loop and round control": 0.1875459221160911,
+     "E1 per-round (out of line)": 0.10727406318883174,
+     "E1 decode": 0.07659808963997061,
+     "E1 completions: batch check": 0.0069801616458486405,
+     "E1 completions: send": 0.004224834680382072,
+     "E1 1D route decision": 0.0003673769287288758
+    }
+   }
+  ]
+ },
+ {
+  "row": "linmcast",
+  "cycles_per_packet": 144.9584599163244,
+  "duration_s": 24.81,
+  "rate_per_s": 78657.9,
+  "targets": [
+   {
+    "target": {
+     "chip": 0,
+     "chan": 4,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "10081830465089211350",
+    "work_share": 0.006412364353830977,
+    "sections": {
+     "E0 worker: send check": 0.3201249588951003,
+     "E0 worker: connection poll": 0.25611092842266797,
+     "E0 VC0 forwarding: idle test": 0.1665022470678505,
+     "E0 VC0 free-slots group read": 0.0846212868573934,
+     "E0 loop and round control": 0.07853776170119478,
+     "E0 per-round (out of line)": 0.04872300778252768,
+     "E0 worker: completion check": 0.027567686068179328,
+     "E0 round end (telemetry, end_round)": 0.01139975885125507,
+     "E0 VC0 forwarding: visit: upstream credit": 0.004548942233914282,
+     "E0 worker: send": 0.001644195988161789,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00021922613175490518
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 4,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "7973297115653940",
+    "work_share": 0.08155212101282473,
+    "sections": {
+     "E1 poll": 0.6264386714896416,
+     "E1 loop and round control": 0.18689027732105667,
+     "E1 per-round (out of line)": 0.09843253315795243,
+     "E1 decode": 0.07700317877891044,
+     "E1 completions: batch check": 0.006686397018524608,
+     "E1 completions: send": 0.00443932916803683,
+     "E1 1D route decision": 0.00010961306587745259
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 5,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18245,
+    "build": "12298611826209249269",
+    "work_share": 0.006741573033707865,
+    "sections": {
+     "E0 worker: send check": 0.3225541244176487,
+     "E0 worker: connection poll": 0.2570567278706495,
+     "E0 VC0 forwarding: idle test": 0.17040285009591669,
+     "E0 VC0 free-slots group read": 0.08363935324746506,
+     "E0 loop and round control": 0.0696081118114552,
+     "E0 per-round (out of line)": 0.05009591668950397,
+     "E0 worker: completion check": 0.028007673335160316,
+     "E0 round end (telemetry, end_round)": 0.011893669498492737,
+     "E0 VC0 forwarding: visit: upstream credit": 0.004878048780487805,
+     "E0 worker: send": 0.0017539051795012332,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00010961907371882707
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 5,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "7973297115653940",
+    "work_share": 0.08018195768935657,
+    "sections": {
+     "E1 poll": 0.6264934780225803,
+     "E1 loop and round control": 0.18601337279403704,
+     "E1 per-round (out of line)": 0.10078921407431767,
+     "E1 decode": 0.07464649786254522,
+     "E1 completions: batch check": 0.0065219774197084295,
+     "E1 completions: send": 0.00548065329387263,
+     "E1 1D route decision": 5.4806532938726295e-05
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 6,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "10081830465089211350",
+    "work_share": 0.5497095253754247,
+    "sections": {
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.1975775512441083,
+     "E0 VC0 forwarding: visit: send": 0.1386057218020388,
+     "E0 worker: send": 0.12490408856735723,
+     "E0 worker: send check": 0.11860133727940371,
+     "E0 worker: completion check": 0.1083525156198619,
+     "E0 worker: connection poll": 0.08604625671380028,
+     "E0 VC0 forwarding: idle test": 0.06297270634659652,
+     "E0 VC0 forwarding: visit: upstream credit": 0.04784610325550805,
+     "E0 worker: credit": 0.040776060506412366,
+     "E0 VC0 free-slots group read": 0.030965691110380358,
+     "E0 loop and round control": 0.025704263948262633,
+     "E0 per-round (out of line)": 0.01287953524060068,
+     "E0 round end (telemetry, end_round)": 0.004329716102159377,
+     "E0 other (kernel_main)": 0.00043845226350981036
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 6,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "7973297115653940",
+    "work_share": 0.9041981804231064,
+    "sections": {
+     "E1 forward": 0.22783075742628522,
+     "E1 admission": 0.1984544557711279,
+     "E1 completions: send": 0.16809163652307355,
+     "E1 local delivery": 0.14649786254521538,
+     "E1 1D route decision": 0.09815850049325879,
+     "E1 retire": 0.06056121889729256,
+     "E1 completions: batch check": 0.04510577660857174,
+     "E1 loop and round control": 0.027129233804669518,
+     "E1 per-round (out of line)": 0.012824728707661954,
+     "E1 poll": 0.010742080455990354,
+     "E1 packet bookkeeping": 0.004329716102159377,
+     "E1 decode": 0.00027403266469363147
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 7,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "12298611826209249269",
+    "work_share": 0.7227337498629837,
+    "sections": {
+     "E0 VC0 forwarding: visit: send": 0.3086703935109065,
+     "E0 worker: send": 0.15888413898936754,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.1419489203113011,
+     "E0 worker: send check": 0.08330593006686397,
+     "E0 VC0 forwarding: visit: upstream credit": 0.07322152800613833,
+     "E0 worker: connection poll": 0.06461690233475831,
+     "E0 VC0 forwarding: idle test": 0.0423106434286967,
+     "E0 worker: credit": 0.0400087690452702,
+     "E0 worker: completion check": 0.028389784062260223,
+     "E0 VC0 free-slots group read": 0.023292776498958678,
+     "E0 loop and round control": 0.020333223720267454,
+     "E0 per-round (out of line)": 0.011618984983009974,
+     "E0 round end (telemetry, end_round)": 0.0028499397128137673,
+     "E0 other (kernel_main)": 0.0005480653293872629
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 7,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "7973297115653940",
+    "work_share": 0.8398553107530418,
+    "sections": {
+     "E1 admission": 0.4382878439109942,
+     "E1 completions: send": 0.12879535240600679,
+     "E1 forward": 0.11350432971610216,
+     "E1 completions: batch check": 0.07650991998246191,
+     "E1 local delivery": 0.0729474953414447,
+     "E1 loop and round control": 0.05316233695056451,
+     "E1 1D route decision": 0.05135372136358654,
+     "E1 retire": 0.031732982571522524,
+     "E1 per-round (out of line)": 0.02323796996601995,
+     "E1 poll": 0.007234462347911871,
+     "E1 packet bookkeeping": 0.0030691658445686724,
+     "E1 decode": 0.0001644195988161789
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 8,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "2493955989011201288",
+    "work_share": 0.14512769922174723,
+    "sections": {
+     "E0 worker: send check": 0.2687712375315138,
+     "E0 worker: connection poll": 0.21188205634111587,
+     "E0 VC0 forwarding: idle test": 0.1412912419160364,
+     "E0 worker: send": 0.1258357996273156,
+     "E0 VC0 free-slots group read": 0.07091965362271183,
+     "E0 loop and round control": 0.059739120903211665,
+     "E0 worker: completion check": 0.051408527896525266,
+     "E0 per-round (out of line)": 0.03984434944645402,
+     "E0 worker: credit": 0.019127479995615478,
+     "E0 round end (telemetry, end_round)": 0.011016113120683986,
+     "E0 VC0 forwarding: visit: upstream credit": 0.00010961306587745259,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 5.4806532938726295e-05
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 8,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "2103362005179002920",
+    "work_share": 0.29458511454565384,
+    "sections": {
+     "E1 poll": 0.45884029376301655,
+     "E1 loop and round control": 0.14660747561109283,
+     "E1 local delivery": 0.07903102049764332,
+     "E1 per-round (out of line)": 0.07535898279074865,
+     "E1 completions: send": 0.06724761591581717,
+     "E1 decode": 0.061273703825496,
+     "E1 retire": 0.03184259563739998,
+     "E1 1D route decision": 0.026471555409404803,
+     "E1 admission": 0.026416748876466074,
+     "E1 completions: batch check": 0.024608133289488108,
+     "E1 packet bookkeeping": 0.0023018743834265043
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 10,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "7310544533362410835",
+    "work_share": 0.005261427162117725,
+    "sections": {
+     "E0 worker: send check": 0.32598925791954403,
+     "E0 worker: connection poll": 0.2540830867039351,
+     "E0 VC0 forwarding: idle test": 0.16639263400197304,
+     "E0 VC0 free-slots group read": 0.08215499287515071,
+     "E0 loop and round control": 0.07694837224597172,
+     "E0 per-round (out of line)": 0.049545105776608575,
+     "E0 worker: completion check": 0.02680039460703716,
+     "E0 round end (telemetry, end_round)": 0.012824728707661954,
+     "E0 worker: send": 0.005261427162117725
+    }
+   },
+   {
+    "target": {
+     "chip": 0,
+     "chan": 10,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "2103362005179002920",
+    "work_share": 0.08445686725857722,
+    "sections": {
+     "E1 poll": 0.6186013372794037,
+     "E1 loop and round control": 0.18858927984215718,
+     "E1 per-round (out of line)": 0.10106324673901129,
+     "E1 decode": 0.07952427929409185,
+     "E1 completions: batch check": 0.007289268880850597,
+     "E1 completions: send": 0.004932587964485367
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 4,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "10081830465089211350",
+    "work_share": 0.008988271401951112,
+    "sections": {
+     "E0 worker: send check": 0.3186451825057547,
+     "E0 worker: connection poll": 0.25978296612956264,
+     "E0 VC0 forwarding: idle test": 0.168201249588951,
+     "E0 VC0 free-slots group read": 0.08155212101282473,
+     "E0 loop and round control": 0.07508495012605503,
+     "E0 per-round (out of line)": 0.04861339471665022,
+     "E0 worker: completion check": 0.027567686068179328,
+     "E0 round end (telemetry, end_round)": 0.01139975885125507,
+     "E0 VC0 forwarding: visit: upstream credit": 0.007344075413789323,
+     "E0 worker: send": 0.00147977638934561,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.0001644195988161789,
+     "E0 other (execute_pause_command)": 0.0001644195988161789
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 4,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "7973297115653940",
+    "work_share": 0.08237421900690563,
+    "sections": {
+     "E1 poll": 0.6217801161898499,
+     "E1 loop and round control": 0.18639701852460813,
+     "E1 per-round (out of line)": 0.10276224926011181,
+     "E1 decode": 0.07700317877891044,
+     "E1 completions: batch check": 0.006686397018524608,
+     "E1 completions: send": 0.005206620629178998,
+     "E1 1D route decision": 0.0001644195988161789
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 5,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "12298611826209249269",
+    "work_share": 0.5530527238846871,
+    "sections": {
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.1917132522196646,
+     "E0 VC0 forwarding: visit: send": 0.14057875698783295,
+     "E0 worker: send": 0.12939822426833278,
+     "E0 worker: send check": 0.11613504329716103,
+     "E0 worker: completion check": 0.10840732215280062,
+     "E0 worker: connection poll": 0.08944426175600131,
+     "E0 VC0 forwarding: idle test": 0.062369834484270525,
+     "E0 VC0 forwarding: visit: upstream credit": 0.05179217362709635,
+     "E0 worker: credit": 0.03957031678176039,
+     "E0 VC0 free-slots group read": 0.02871862325989258,
+     "E0 loop and round control": 0.023895648361284664,
+     "E0 per-round (out of line)": 0.013482407102926669,
+     "E0 round end (telemetry, end_round)": 0.003891263838649567,
+     "E0 other (kernel_main)": 0.0005480653293872629,
+     "E0 other (execute_pause_command)": 5.4806532938726295e-05
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 5,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "7973297115653940",
+    "work_share": 0.906500054806533,
+    "sections": {
+     "E1 forward": 0.2238846870546969,
+     "E1 admission": 0.19834484270525046,
+     "E1 completions: send": 0.16957141291241917,
+     "E1 local delivery": 0.15471884248602433,
+     "E1 1D route decision": 0.09887098542146223,
+     "E1 retire": 0.056012276663378276,
+     "E1 completions: batch check": 0.04642113339910117,
+     "E1 loop and round control": 0.026416748876466074,
+     "E1 per-round (out of line)": 0.01052285432423545,
+     "E1 poll": 0.010139208593664364,
+     "E1 packet bookkeeping": 0.004932587964485367,
+     "E1 decode": 0.0001644195988161789
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 6,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "10081830465089211350",
+    "work_share": 0.7235558478570646,
+    "sections": {
+     "E0 VC0 forwarding: visit: send": 0.30373780554642116,
+     "E0 worker: send": 0.16156965910336513,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.14638824947933793,
+     "E0 worker: send check": 0.0829770908692316,
+     "E0 VC0 forwarding: visit: upstream credit": 0.07196097774854762,
+     "E0 worker: connection poll": 0.06423325660418722,
+     "E0 VC0 forwarding: idle test": 0.04247506302751288,
+     "E0 worker: credit": 0.039899155979392746,
+     "E0 worker: completion check": 0.029321495122218568,
+     "E0 VC0 free-slots group read": 0.022306258906061603,
+     "E0 loop and round control": 0.019620738792064014,
+     "E0 per-round (out of line)": 0.010851693521867807,
+     "E0 round end (telemetry, end_round)": 0.003507618108078483,
+     "E0 other (kernel_main)": 0.0010413241258357996,
+     "E0 other (execute_pause_command)": 0.00010961306587745259
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 6,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "7973297115653940",
+    "work_share": 0.8419379590047134,
+    "sections": {
+     "E1 admission": 0.4303408966348789,
+     "E1 completions: send": 0.1325770031787789,
+     "E1 forward": 0.11279184478789872,
+     "E1 local delivery": 0.07804450290474625,
+     "E1 completions: batch check": 0.07513975665899375,
+     "E1 1D route decision": 0.05327195001644196,
+     "E1 loop and round control": 0.05135372136358654,
+     "E1 retire": 0.031732982571522524,
+     "E1 per-round (out of line)": 0.023731228762468488,
+     "E1 poll": 0.00783733421023786,
+     "E1 packet bookkeeping": 0.00295955277869122,
+     "E1 decode": 0.00021922613175490518
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 7,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "12298611826209249269",
+    "work_share": 0.00904307793488984,
+    "sections": {
+     "E0 worker: send check": 0.3173298257152253,
+     "E0 worker: connection poll": 0.2534254083086704,
+     "E0 VC0 forwarding: idle test": 0.1694617998465417,
+     "E0 VC0 free-slots group read": 0.08725200043845226,
+     "E0 loop and round control": 0.07464649786254522,
+     "E0 per-round (out of line)": 0.04916146004603749,
+     "E0 worker: completion check": 0.027403266469363148,
+     "E0 round end (telemetry, end_round)": 0.011893017647703607,
+     "E0 VC0 forwarding: visit: upstream credit": 0.007289268880850597,
+     "E0 worker: send": 0.001644195988161789,
+     "E0 other (execute_pause_command)": 0.00038364573057108405,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00010961306587745259
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 7,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "7973297115653940",
+    "work_share": 0.08495012605502576,
+    "sections": {
+     "E1 poll": 0.6189301764770361,
+     "E1 loop and round control": 0.1909459607585224,
+     "E1 per-round (out of line)": 0.09815850049325879,
+     "E1 decode": 0.07946947276115313,
+     "E1 completions: batch check": 0.007015236216156966,
+     "E1 completions: send": 0.005425846760933903,
+     "E1 1D route decision": 5.4806532938726295e-05
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 8,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18243,
+    "build": "2493955989011201288",
+    "work_share": 0.15309981910869921,
+    "sections": {
+     "E0 worker: send check": 0.2623472016663926,
+     "E0 worker: connection poll": 0.21306802609219974,
+     "E0 VC0 forwarding: idle test": 0.1458093515320945,
+     "E0 worker: send": 0.12700761936085073,
+     "E0 VC0 free-slots group read": 0.06402455736446856,
+     "E0 loop and round control": 0.06314750863344845,
+     "E0 worker: completion check": 0.04982733103108041,
+     "E0 per-round (out of line)": 0.03924793071315025,
+     "E0 worker: credit": 0.024886257742695827,
+     "E0 round end (telemetry, end_round)": 0.00926382722139999,
+     "E0 VC0 forwarding: visit: upstream credit": 0.001151126459463904,
+     "E0 other (execute_pause_command)": 0.000164446637066272,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 5.481554568875733e-05
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 8,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "2103362005179002920",
+    "work_share": 0.2970514085278965,
+    "sections": {
+     "E1 poll": 0.4632796229310534,
+     "E1 loop and round control": 0.14041433738901676,
+     "E1 local delivery": 0.0791954400964595,
+     "E1 per-round (out of line)": 0.07207059081442507,
+     "E1 completions: send": 0.06872739230516278,
+     "E1 decode": 0.061821769154883265,
+     "E1 retire": 0.030910884577441632,
+     "E1 admission": 0.02723884687054697,
+     "E1 completions: batch check": 0.027184040337608243,
+     "E1 1D route decision": 0.02619752274471117,
+     "E1 packet bookkeeping": 0.00295955277869122
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 10,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "7310544533362410835",
+    "work_share": 0.005809492491504987,
+    "sections": {
+     "E0 worker: send check": 0.3222076071467719,
+     "E0 worker: connection poll": 0.25753589827907486,
+     "E0 VC0 forwarding: idle test": 0.16825605612188974,
+     "E0 loop and round control": 0.0916913296064891,
+     "E0 VC0 free-slots group read": 0.08308670393510907,
+     "E0 per-round (out of line)": 0.04768168365669188,
+     "E0 round end (telemetry, end_round)": 0.013153567905294311,
+     "E0 worker: completion check": 0.010194015126603092,
+     "E0 worker: send": 0.005809492491504987,
+     "E0 other (execute_pause_command)": 0.00038364573057108405
+    }
+   },
+   {
+    "target": {
+     "chip": 1,
+     "chan": 10,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "2103362005179002920",
+    "work_share": 0.07760605064123643,
+    "sections": {
+     "E1 poll": 0.6256165734955607,
+     "E1 loop and round control": 0.18837005371040227,
+     "E1 per-round (out of line)": 0.10144689246958237,
+     "E1 decode": 0.07223501041324126,
+     "E1 completions: batch check": 0.0069604296832182395,
+     "E1 completions: send": 0.005261427162117725,
+     "E1 1D route decision": 0.00010961306587745259
+    }
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 4,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "18182554529866137118",
+    "work_share": 0.1756549380686178,
+    "sections": {
+     "E0 worker: completion check": 0.20979940808944425,
+     "E0 worker: send check": 0.20651101611312067,
+     "E0 worker: connection poll": 0.1596514304505097,
+     "E0 worker: send": 0.1254521538967445,
+     "E0 VC0 forwarding: idle test": 0.11136687493149183,
+     "E0 VC0 free-slots group read": 0.05705360078921407,
+     "E0 loop and round control": 0.04592787460265264,
+     "E0 worker: credit": 0.03880302532061822,
+     "E0 per-round (out of line)": 0.026526361942343528,
+     "E0 VC0 forwarding: visit: upstream credit": 0.009536336731338375,
+     "E0 round end (telemetry, end_round)": 0.007344075413789323,
+     "E0 VC0 forwarding: visit: send": 0.00147977638934561,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00038364573057108405,
+     "E0 other (execute_pause_command)": 0.0001644195988161789
+    }
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 4,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "7973297115653940",
+    "work_share": 0.7974350542584676,
+    "sections": {
+     "E1 local delivery": 0.27874602652636193,
+     "E1 completions: send": 0.2569878329496876,
+     "E1 poll": 0.1000219226131755,
+     "E1 retire": 0.0929518798640798,
+     "E1 admission": 0.07744163104242026,
+     "E1 1D route decision": 0.06971390989805985,
+     "E1 completions: batch check": 0.05584785706456209,
+     "E1 loop and round control": 0.03299353282911323,
+     "E1 decode": 0.014140085498191384,
+     "E1 per-round (out of line)": 0.013701633234681574,
+     "E1 packet bookkeeping": 0.007453688479666776
+    }
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 5,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 5,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 6,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "18182554529866137118",
+    "work_share": 0.011180532719500164,
+    "sections": {
+     "E0 worker: send check": 0.3181519237093062,
+     "E0 worker: connection poll": 0.251507179655815,
+     "E0 VC0 forwarding: idle test": 0.1685848953195221,
+     "E0 VC0 free-slots group read": 0.08675874164200373,
+     "E0 loop and round control": 0.07661953304833936,
+     "E0 per-round (out of line)": 0.048448975117834046,
+     "E0 worker: completion check": 0.02707442727173079,
+     "E0 round end (telemetry, end_round)": 0.011509371917132522,
+     "E0 VC0 forwarding: visit: upstream credit": 0.009371917132522197,
+     "E0 worker: send": 0.0016990025211005152,
+     "E0 other (execute_pause_command)": 0.0001644195988161789,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00010961306587745259
+    }
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 6,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "7973297115653940",
+    "work_share": 0.07946947276115313,
+    "sections": {
+     "E1 poll": 0.6243012167050312,
+     "E1 loop and round control": 0.19017866929738025,
+     "E1 per-round (out of line)": 0.09865175928970733,
+     "E1 decode": 0.07349556067083196,
+     "E1 completions: batch check": 0.00739888194672805,
+     "E1 completions: send": 0.0058642990244437134,
+     "E1 1D route decision": 0.00010961306587745259
+    }
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 7,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 7,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 8,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "12298611826209249269",
+    "work_share": 0.15647265154006357,
+    "sections": {
+     "E0 worker: send check": 0.2625780993094377,
+     "E0 worker: connection poll": 0.21056669955058643,
+     "E0 VC0 forwarding: idle test": 0.13887975446673242,
+     "E0 worker: send": 0.127151156417845,
+     "E0 VC0 free-slots group read": 0.06697358325112353,
+     "E0 loop and round control": 0.06434286967006467,
+     "E0 worker: completion check": 0.05036720377068946,
+     "E0 per-round (out of line)": 0.03962512331469911,
+     "E0 worker: credit": 0.01819576893565713,
+     "E0 VC0 forwarding: visit: upstream credit": 0.009974788994848187,
+     "E0 round end (telemetry, end_round)": 0.00991998246190946,
+     "E0 VC0 forwarding: visit: send": 0.0007672914611421681,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00038364573057108405,
+     "E0 other (execute_pause_command)": 0.00027403266469363147
+    }
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 8,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "2992557856822981993",
+    "work_share": 0.3022580291570755,
+    "sections": {
+     "E1 poll": 0.4633344294639921,
+     "E1 loop and round control": 0.1388249479337937,
+     "E1 completions: send": 0.07968869889290804,
+     "E1 local delivery": 0.07727721144360408,
+     "E1 per-round (out of line)": 0.07278307574262852,
+     "E1 decode": 0.05979392743615039,
+     "E1 retire": 0.03151375643976762,
+     "E1 admission": 0.027732105666995507,
+     "E1 1D route decision": 0.024388907157733203,
+     "E1 completions: batch check": 0.02279951770251014,
+     "E1 packet bookkeeping": 0.001863422119916694
+    }
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 10,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "758924378684274132",
+    "work_share": 0.013043954839416859,
+    "sections": {
+     "E0 worker: send check": 0.32982571522525483,
+     "E0 worker: connection poll": 0.25830318974021704,
+     "E0 VC0 forwarding: idle test": 0.1627754028280171,
+     "E0 VC0 free-slots group read": 0.0837991888633125,
+     "E0 loop and round control": 0.0748109174613614,
+     "E0 per-round (out of line)": 0.04850378165077277,
+     "E0 worker: completion check": 0.015948701085169353,
+     "E0 round end (telemetry, end_round)": 0.012715115641784501,
+     "E0 VC0 forwarding: visit: upstream credit": 0.01096130658774526,
+     "E0 worker: send": 0.0016990025211005152,
+     "E0 other (execute_pause_command)": 0.00027403266469363147,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00027403266469363147,
+     "E0 VC0 forwarding: visit: send": 0.00010961306587745259
+    }
+   },
+   {
+    "target": {
+     "chip": 2,
+     "chan": 10,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "2992557856822981993",
+    "work_share": 0.08034637728817275,
+    "sections": {
+     "E1 poll": 0.6220541488545435,
+     "E1 loop and round control": 0.19182286528554204,
+     "E1 per-round (out of line)": 0.09909021155321715,
+     "E1 decode": 0.07535898279074865,
+     "E1 completions: batch check": 0.006686397018524608,
+     "E1 completions: send": 0.0048229748986079145,
+     "E1 1D route decision": 0.0001644195988161789
+    }
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 4,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 4,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 5,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "16859369020693722463",
+    "work_share": 0.17247615915817166,
+    "sections": {
+     "E0 worker: send check": 0.208045599035405,
+     "E0 worker: completion check": 0.2071686945083854,
+     "E0 worker: connection poll": 0.1646388249479338,
+     "E0 worker: send": 0.1279732544119259,
+     "E0 VC0 forwarding: idle test": 0.11849172421352626,
+     "E0 VC0 free-slots group read": 0.05234023895648361,
+     "E0 loop and round control": 0.04636632686616245,
+     "E0 worker: credit": 0.04280390222514524,
+     "E0 per-round (out of line)": 0.023512002630713583,
+     "E0 round end (telemetry, end_round)": 0.0069604296832182395,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0011509371917132521,
+     "E0 VC0 forwarding: visit: send": 0.00043845226350981036,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00010961306587745259
+    }
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 5,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "7973297115653940",
+    "work_share": 0.8013263180971172,
+    "sections": {
+     "E1 local delivery": 0.27370382549599914,
+     "E1 completions: send": 0.25978296612956264,
+     "E1 poll": 0.10007672914611422,
+     "E1 retire": 0.09536336731338375,
+     "E1 admission": 0.07930505316233695,
+     "E1 1D route decision": 0.07020716869450838,
+     "E1 completions: batch check": 0.052614271621177246,
+     "E1 loop and round control": 0.03189740217033871,
+     "E1 decode": 0.016661186013372794,
+     "E1 per-round (out of line)": 0.014085278965252659,
+     "E1 packet bookkeeping": 0.006302751287953524
+    }
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 6,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 6,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 7,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "16859369020693722463",
+    "work_share": 0.0015345829222843362,
+    "sections": {
+     "E0 worker: send check": 0.32840074536884795,
+     "E0 worker: connection poll": 0.2511235339252439,
+     "E0 VC0 forwarding: idle test": 0.16929738024772553,
+     "E0 VC0 free-slots group read": 0.08473089992327085,
+     "E0 loop and round control": 0.0739888194672805,
+     "E0 per-round (out of line)": 0.04943549271073112,
+     "E0 worker: completion check": 0.028444590595198948,
+     "E0 round end (telemetry, end_round)": 0.012934341773539406,
+     "E0 worker: send": 0.0015345829222843362,
+     "E0 other (execute_pause_command)": 0.00010961306587745259
+    }
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 7,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "7973297115653940",
+    "work_share": 0.08401841499506742,
+    "sections": {
+     "E1 poll": 0.6139427819796119,
+     "E1 loop and round control": 0.19604296832182397,
+     "E1 per-round (out of line)": 0.09887098542146223,
+     "E1 decode": 0.0794146662282144,
+     "E1 completions: batch check": 0.007124849282034418,
+     "E1 completions: send": 0.004548942233914282,
+     "E1 1D route decision": 5.4806532938726295e-05
+    }
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 8,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "12298611826209249269",
+    "work_share": 0.14534692535350213,
+    "sections": {
+     "E0 worker: send check": 0.2696481420585334,
+     "E0 worker: connection poll": 0.21286857393401293,
+     "E0 VC0 forwarding: idle test": 0.14479886002411488,
+     "E0 worker: send": 0.12424641017209251,
+     "E0 VC0 free-slots group read": 0.06998794256275348,
+     "E0 loop and round control": 0.058971829442069496,
+     "E0 worker: completion check": 0.050860462567138005,
+     "E0 per-round (out of line)": 0.03776170119478242,
+     "E0 worker: credit": 0.020826482516715993,
+     "E0 round end (telemetry, end_round)": 0.009755562863093281,
+     "E0 VC0 forwarding: visit: upstream credit": 0.00027403266469363147
+    }
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 8,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "2992557856822981993",
+    "work_share": 0.2966129562643867,
+    "sections": {
+     "E1 poll": 0.46969198728488437,
+     "E1 loop and round control": 0.13756439767620302,
+     "E1 completions: send": 0.07727721144360408,
+     "E1 local delivery": 0.07640030691658446,
+     "E1 per-round (out of line)": 0.07305710840732216,
+     "E1 decode": 0.05666995505864299,
+     "E1 retire": 0.0314589499068289,
+     "E1 admission": 0.028992655924586212,
+     "E1 1D route decision": 0.023292776498958678,
+     "E1 completions: batch check": 0.02307355036720377,
+     "E1 packet bookkeeping": 0.0025211005151814098
+    }
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 10,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "758924378684274132",
+    "work_share": 0.003836457305710841,
+    "sections": {
+     "E0 worker: send check": 0.3313602981475392,
+     "E0 worker: connection poll": 0.2522196645840184,
+     "E0 VC0 forwarding: idle test": 0.16748876466074755,
+     "E0 VC0 free-slots group read": 0.08303189740217033,
+     "E0 loop and round control": 0.07327633453907706,
+     "E0 per-round (out of line)": 0.049545105776608575,
+     "E0 worker: completion check": 0.026416748876466074,
+     "E0 round end (telemetry, end_round)": 0.012824728707661954,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0019730351857941467,
+     "E0 worker: send": 0.0016990025211005152,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00010961306587745259,
+     "E0 VC0 forwarding: visit: send": 5.4806532938726295e-05
+    }
+   },
+   {
+    "target": {
+     "chip": 3,
+     "chan": 10,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "2992557856822981993",
+    "work_share": 0.07870218130001096,
+    "sections": {
+     "E1 poll": 0.631152033322372,
+     "E1 loop and round control": 0.1846432094705689,
+     "E1 per-round (out of line)": 0.0996382768826044,
+     "E1 decode": 0.07344075413789324,
+     "E1 completions: batch check": 0.0058642990244437134,
+     "E1 completions: send": 0.0050422010303628195,
+     "E1 1D route decision": 0.00021922613175490518
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 4,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "10081830465089211350",
+    "work_share": 0.5507508495012605,
+    "sections": {
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.1975775512441083,
+     "E0 VC0 forwarding: visit: send": 0.1400306916584457,
+     "E0 worker: send": 0.12342431217801161,
+     "E0 worker: send check": 0.11618984983009975,
+     "E0 worker: completion check": 0.10961306587745259,
+     "E0 worker: connection poll": 0.08500493258796449,
+     "E0 VC0 forwarding: idle test": 0.06675435711936863,
+     "E0 VC0 forwarding: visit: upstream credit": 0.04729803792612079,
+     "E0 worker: credit": 0.042420256494574156,
+     "E0 VC0 free-slots group read": 0.030472432313931822,
+     "E0 loop and round control": 0.023731228762468488,
+     "E0 per-round (out of line)": 0.013208374438233037,
+     "E0 round end (telemetry, end_round)": 0.004110489970404472,
+     "E0 other (kernel_main)": 0.0001644195988161789
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 4,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "7973297115653940",
+    "work_share": 0.9077606050641236,
+    "sections": {
+     "E1 forward": 0.2244327523840842,
+     "E1 admission": 0.19681025978296612,
+     "E1 completions: send": 0.16990025211005153,
+     "E1 local delivery": 0.15400635755782088,
+     "E1 1D route decision": 0.09717198290036172,
+     "E1 retire": 0.061931382220760715,
+     "E1 completions: batch check": 0.04466732434506193,
+     "E1 loop and round control": 0.025101392085936643,
+     "E1 per-round (out of line)": 0.01331798750411049,
+     "E1 poll": 0.009152691000767292,
+     "E1 packet bookkeeping": 0.0034528115751397566,
+     "E1 decode": 5.4806532938726295e-05
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 5,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "12298611826209249269",
+    "work_share": 0.7130329935328291,
+    "sections": {
+     "E0 VC0 forwarding: visit: send": 0.3007234462347912,
+     "E0 worker: send": 0.15499287515071797,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.14452482735942124,
+     "E0 worker: send check": 0.08999232708538858,
+     "E0 VC0 forwarding: visit: upstream credit": 0.07081004055683437,
+     "E0 worker: connection poll": 0.0656582264605941,
+     "E0 VC0 forwarding: idle test": 0.04527019620738792,
+     "E0 worker: credit": 0.041981804231064346,
+     "E0 worker: completion check": 0.02828017099638277,
+     "E0 VC0 free-slots group read": 0.023183163433081223,
+     "E0 loop and round control": 0.019949577989696373,
+     "E0 per-round (out of line)": 0.010139208593664364,
+     "E0 round end (telemetry, end_round)": 0.0032335854433848516,
+     "E0 other (kernel_main)": 0.0012605502575907049
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 5,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "7973297115653940",
+    "work_share": 0.839416858489532,
+    "sections": {
+     "E1 admission": 0.42628521319741314,
+     "E1 completions: send": 0.1365230735503672,
+     "E1 forward": 0.1123533925243889,
+     "E1 completions: batch check": 0.07908582703058205,
+     "E1 local delivery": 0.07519456319193248,
+     "E1 1D route decision": 0.053491176148196866,
+     "E1 loop and round control": 0.049983558040118385,
+     "E1 retire": 0.0314589499068289,
+     "E1 per-round (out of line)": 0.023895648361284664,
+     "E1 poll": 0.0076181080784829555,
+     "E1 packet bookkeeping": 0.004110489970404472
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 6,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "10081830465089211350",
+    "work_share": 0.00295955277869122,
+    "sections": {
+     "E0 worker: send check": 0.32516715992546313,
+     "E0 worker: connection poll": 0.25950893346486903,
+     "E0 VC0 forwarding: idle test": 0.17417516167927216,
+     "E0 VC0 free-slots group read": 0.07908582703058205,
+     "E0 loop and round control": 0.07365998026964814,
+     "E0 per-round (out of line)": 0.04883262084840513,
+     "E0 worker: completion check": 0.02532061821769155,
+     "E0 round end (telemetry, end_round)": 0.011290145785377617,
+     "E0 worker: send": 0.002027841718732873,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0008220979940808945,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00010961306587745259
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 6,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "7973297115653940",
+    "work_share": 0.07990792502466294,
+    "sections": {
+     "E1 poll": 0.6291241916036392,
+     "E1 loop and round control": 0.1846432094705689,
+     "E1 per-round (out of line)": 0.09958347034966568,
+     "E1 decode": 0.07519456319193248,
+     "E1 completions: batch check": 0.0067412035514633345,
+     "E1 completions: send": 0.004658555299791735,
+     "E1 1D route decision": 5.4806532938726295e-05
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 7,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "12298611826209249269",
+    "work_share": 0.004055683437465746,
+    "sections": {
+     "E0 worker: send check": 0.3209470568891812,
+     "E0 worker: connection poll": 0.2628521319741313,
+     "E0 VC0 forwarding: idle test": 0.1690233475830319,
+     "E0 VC0 free-slots group read": 0.08308670393510907,
+     "E0 loop and round control": 0.07239943001205744,
+     "E0 per-round (out of line)": 0.04817494245314041,
+     "E0 worker: completion check": 0.028499397128137673,
+     "E0 round end (telemetry, end_round)": 0.01096130658774526,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0021922613175490518,
+     "E0 worker: send": 0.0017538090540392415,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.00010961306587745259
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 7,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "7973297115653940",
+    "work_share": 0.08588183711498411,
+    "sections": {
+     "E1 poll": 0.6198070810040557,
+     "E1 loop and round control": 0.18776718184807628,
+     "E1 per-round (out of line)": 0.09991230954729803,
+     "E1 decode": 0.08067521648580511,
+     "E1 completions: batch check": 0.006631590485585882,
+     "E1 completions: send": 0.005151814096240272,
+     "E1 1D route decision": 5.4806532938726295e-05
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 9,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "966748813431262358",
+    "work_share": 0.00548065329387263,
+    "sections": {
+     "E0 worker: send check": 0.32697577551244106,
+     "E0 worker: connection poll": 0.2557272826920969,
+     "E0 VC0 forwarding: idle test": 0.16491285761262742,
+     "E0 VC0 free-slots group read": 0.08149731447988601,
+     "E0 loop and round control": 0.07650991998246191,
+     "E0 per-round (out of line)": 0.04943549271073112,
+     "E0 worker: completion check": 0.028060944864627863,
+     "E0 round end (telemetry, end_round)": 0.01139975885125507,
+     "E0 worker: send": 0.00548065329387263
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 9,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "2103362005179002920",
+    "work_share": 0.08078482955168256,
+    "sections": {
+     "E1 poll": 0.6233146991121342,
+     "E1 loop and round control": 0.18782198838101502,
+     "E1 per-round (out of line)": 0.10018634221199167,
+     "E1 decode": 0.07618108078482955,
+     "E1 completions: batch check": 0.007892140743176587,
+     "E1 completions: send": 0.004494135700975556,
+     "E1 1D route decision": 0.00010961306587745259
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 11,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18245,
+    "build": "17483610142571359246",
+    "work_share": 0.15374075089065498,
+    "sections": {
+     "E0 worker: send check": 0.2726226363387229,
+     "E0 worker: connection poll": 0.21003014524527266,
+     "E0 VC0 forwarding: idle test": 0.1332419841052343,
+     "E0 worker: send": 0.12929569745135652,
+     "E0 VC0 free-slots group read": 0.06900520690600165,
+     "E0 loop and round control": 0.06012606193477665,
+     "E0 worker: completion check": 0.04954782132090984,
+     "E0 per-round (out of line)": 0.04105234310770074,
+     "E0 worker: credit": 0.02323924362839134,
+     "E0 round end (telemetry, end_round)": 0.010523431077007398,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0011510002740476844,
+     "E0 other (execute_pause_command)": 0.00010961907371882707,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 5.4809536859413536e-05
+    }
+   },
+   {
+    "target": {
+     "chip": 4,
+     "chan": 11,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "2103362005179002920",
+    "work_share": 0.2857064562095802,
+    "sections": {
+     "E1 poll": 0.4661843691768059,
+     "E1 loop and round control": 0.14178450071248494,
+     "E1 per-round (out of line)": 0.0796338923599693,
+     "E1 local delivery": 0.07678395264715554,
+     "E1 completions: send": 0.06461690233475831,
+     "E1 decode": 0.060287186232598926,
+     "E1 retire": 0.03151375643976762,
+     "E1 admission": 0.028773429792831307,
+     "E1 completions: batch check": 0.026690781541159708,
+     "E1 1D route decision": 0.02159377397785816,
+     "E1 packet bookkeeping": 0.0021374547846103255
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 4,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "10081830465089211350",
+    "work_share": 0.0028499397128137673,
+    "sections": {
+     "E0 worker: send check": 0.32385180313493367,
+     "E0 worker: connection poll": 0.25835799627315575,
+     "E0 VC0 forwarding: idle test": 0.17121560890058096,
+     "E0 VC0 free-slots group read": 0.08078482955168256,
+     "E0 loop and round control": 0.07365998026964814,
+     "E0 per-round (out of line)": 0.05201139975885125,
+     "E0 worker: completion check": 0.026471555409404803,
+     "E0 round end (telemetry, end_round)": 0.01079688698892908,
+     "E0 worker: send": 0.0018086155869779677,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0010413241258357996
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 4,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "7973297115653940",
+    "work_share": 0.0844020607256385,
+    "sections": {
+     "E1 poll": 0.6278088348131097,
+     "E1 loop and round control": 0.1861229858599145,
+     "E1 per-round (out of line)": 0.0952537542475063,
+     "E1 decode": 0.07925024662939822,
+     "E1 completions: batch check": 0.006412364353830977,
+     "E1 completions: send": 0.0050422010303628195,
+     "E1 1D route decision": 0.00010961306587745259
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 5,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "12298611826209249269",
+    "work_share": 0.004055683437465746,
+    "sections": {
+     "E0 worker: send check": 0.3228104790090979,
+     "E0 worker: connection poll": 0.2535898279074866,
+     "E0 VC0 forwarding: idle test": 0.17017428477474514,
+     "E0 VC0 free-slots group read": 0.0829770908692316,
+     "E0 loop and round control": 0.07459169132960648,
+     "E0 per-round (out of line)": 0.050531623369505646,
+     "E0 worker: completion check": 0.029102268990463663,
+     "E0 round end (telemetry, end_round)": 0.012167050312397237,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0024114874493039572,
+     "E0 worker: send": 0.001644195988161789
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 5,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "7973297115653940",
+    "work_share": 0.08040118382111147,
+    "sections": {
+     "E1 poll": 0.6246848624356023,
+     "E1 loop and round control": 0.18831524717746356,
+     "E1 per-round (out of line)": 0.09974788994848185,
+     "E1 decode": 0.07596185465307465,
+     "E1 completions: batch check": 0.006850816617340787,
+     "E1 completions: send": 0.00443932916803683
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 6,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "10081830465089211350",
+    "work_share": 0.7170886769702949,
+    "sections": {
+     "E0 VC0 forwarding: visit: send": 0.3032445467499726,
+     "E0 worker: send": 0.1559245862106763,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.14348350323358544,
+     "E0 worker: send check": 0.0837991888633125,
+     "E0 VC0 forwarding: visit: upstream credit": 0.07349556067083196,
+     "E0 worker: connection poll": 0.06965910336512113,
+     "E0 VC0 forwarding: idle test": 0.04258467609339033,
+     "E0 worker: credit": 0.04094048010522854,
+     "E0 worker: completion check": 0.029321495122218568,
+     "E0 VC0 free-slots group read": 0.023566809163652308,
+     "E0 loop and round control": 0.018250575468595858,
+     "E0 per-round (out of line)": 0.011180532719500164,
+     "E0 round end (telemetry, end_round)": 0.0026855201139975885,
+     "E0 other (kernel_main)": 0.001863422119916694
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 6,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "7973297115653940",
+    "work_share": 0.840403376082429,
+    "sections": {
+     "E1 admission": 0.42294201468815085,
+     "E1 completions: send": 0.1400854981913844,
+     "E1 forward": 0.11388797544667324,
+     "E1 completions: batch check": 0.07716759837772663,
+     "E1 local delivery": 0.07426285213197413,
+     "E1 1D route decision": 0.05371040227995177,
+     "E1 loop and round control": 0.05113449523183163,
+     "E1 retire": 0.0316781760385838,
+     "E1 per-round (out of line)": 0.02367642222952976,
+     "E1 poll": 0.0076181080784829555,
+     "E1 packet bookkeeping": 0.003562424641017209,
+     "E1 decode": 0.00027403266469363147
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 7,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "12298611826209249269",
+    "work_share": 0.5531075304176257,
+    "sections": {
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.19785158390880192,
+     "E0 VC0 forwarding: visit: send": 0.14414118162885015,
+     "E0 worker: send": 0.12062917899813658,
+     "E0 worker: send check": 0.11229858599145018,
+     "E0 worker: completion check": 0.10681793269757756,
+     "E0 worker: connection poll": 0.08610106324673901,
+     "E0 VC0 forwarding: idle test": 0.06746684204757207,
+     "E0 VC0 forwarding: visit: upstream credit": 0.04828455551901787,
+     "E0 worker: credit": 0.04220103036281925,
+     "E0 VC0 free-slots group read": 0.02828017099638277,
+     "E0 loop and round control": 0.027951331798750412,
+     "E0 per-round (out of line)": 0.013592020168804122,
+     "E0 round end (telemetry, end_round)": 0.004274909569220651,
+     "E0 other (execute_pause_command)": 0.00010961306587745259
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 7,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "7973297115653940",
+    "work_share": 0.9037597281595966,
+    "sections": {
+     "E1 forward": 0.22097994080894443,
+     "E1 admission": 0.20223610654390003,
+     "E1 completions: send": 0.1662830209360956,
+     "E1 local delivery": 0.15099199824619094,
+     "E1 1D route decision": 0.09777485476268771,
+     "E1 retire": 0.0602323796996602,
+     "E1 completions: batch check": 0.048448975117834046,
+     "E1 loop and round control": 0.026581168475282253,
+     "E1 per-round (out of line)": 0.011673791515948701,
+     "E1 poll": 0.009536336731338375,
+     "E1 packet bookkeeping": 0.0048229748986079145,
+     "E1 decode": 0.00043845226350981036
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 9,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "966748813431262358",
+    "work_share": 0.007672914611421682,
+    "sections": {
+     "E0 worker: send check": 0.327195001644196,
+     "E0 worker: connection poll": 0.25715225254850377,
+     "E0 VC0 forwarding: idle test": 0.16184369176805874,
+     "E0 VC0 free-slots group read": 0.08210018634221199,
+     "E0 loop and round control": 0.07689356571303299,
+     "E0 per-round (out of line)": 0.0495999123095473,
+     "E0 worker: completion check": 0.026526361942343528,
+     "E0 round end (telemetry, end_round)": 0.011016113120683986,
+     "E0 worker: send": 0.007672914611421682
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 9,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "2103362005179002920",
+    "work_share": 0.07727721144360408,
+    "sections": {
+     "E1 poll": 0.6278636413460484,
+     "E1 loop and round control": 0.18760276224926012,
+     "E1 per-round (out of line)": 0.09925463115203333,
+     "E1 decode": 0.07333114107201578,
+     "E1 completions: batch check": 0.00800175380905404,
+     "E1 completions: send": 0.003946070371588293
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 11,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18245,
+    "build": "17483610142571359246",
+    "work_share": 0.15028775006851192,
+    "sections": {
+     "E0 worker: send check": 0.2718004932858317,
+     "E0 worker: connection poll": 0.21277062208824335,
+     "E0 VC0 forwarding: idle test": 0.13866812825431626,
+     "E0 worker: send": 0.12896684023020005,
+     "E0 VC0 free-slots group read": 0.06955330227459577,
+     "E0 loop and round control": 0.05930391888188545,
+     "E0 worker: completion check": 0.05130172650041107,
+     "E0 per-round (out of line)": 0.03666758015894766,
+     "E0 worker: credit": 0.019786242806248286,
+     "E0 round end (telemetry, end_round)": 0.009646478487256784,
+     "E0 VC0 forwarding: visit: upstream credit": 0.001534667032063579
+    }
+   },
+   {
+    "target": {
+     "chip": 5,
+     "chan": 11,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "2103362005179002920",
+    "work_share": 0.29058423764112684,
+    "sections": {
+     "E1 poll": 0.4664035953085608,
+     "E1 loop and round control": 0.1398662720596295,
+     "E1 local delivery": 0.07744163104242026,
+     "E1 per-round (out of line)": 0.07694837224597172,
+     "E1 completions: send": 0.06631590485585882,
+     "E1 decode": 0.060725638496108736,
+     "E1 admission": 0.031130110709196537,
+     "E1 retire": 0.030582045379809273,
+     "E1 completions: batch check": 0.02619752274471117,
+     "E1 1D route decision": 0.022251452373122878,
+     "E1 packet bookkeeping": 0.0021374547846103255
+    }
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 4,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "18182554529866137118",
+    "work_share": 0.0014249698564068837,
+    "sections": {
+     "E0 worker: send check": 0.32335854433848515,
+     "E0 worker: connection poll": 0.25687821988381015,
+     "E0 VC0 forwarding: idle test": 0.17198290036172312,
+     "E0 VC0 free-slots group read": 0.08478570645620959,
+     "E0 loop and round control": 0.07349556067083196,
+     "E0 per-round (out of line)": 0.048777814315466406,
+     "E0 worker: completion check": 0.028444590595198948,
+     "E0 round end (telemetry, end_round)": 0.010851693521867807,
+     "E0 worker: send": 0.0014249698564068837
+    }
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 4,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "7973297115653940",
+    "work_share": 0.07952427929409185,
+    "sections": {
+     "E1 poll": 0.624958895100296,
+     "E1 loop and round control": 0.18837005371040227,
+     "E1 per-round (out of line)": 0.0996382768826044,
+     "E1 decode": 0.0744272717307903,
+     "E1 completions: batch check": 0.007508495012605502,
+     "E1 completions: send": 0.004987394497424093,
+     "E1 1D route decision": 0.00010961306587745259
+    }
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 5,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 5,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 6,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "18182554529866137118",
+    "work_share": 0.17138002849939712,
+    "sections": {
+     "E0 worker: send check": 0.21089553874821879,
+     "E0 worker: completion check": 0.2090869231612408,
+     "E0 worker: connection poll": 0.16420037268442397,
+     "E0 worker: send": 0.12917899813657788,
+     "E0 VC0 forwarding: idle test": 0.1129562643867149,
+     "E0 VC0 free-slots group read": 0.05403924147758413,
+     "E0 loop and round control": 0.04488655047681683,
+     "E0 worker: credit": 0.040776060506412366,
+     "E0 per-round (out of line)": 0.023786035295407213,
+     "E0 round end (telemetry, end_round)": 0.008769045270196207,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0010961306587745259,
+     "E0 VC0 forwarding: visit: send": 0.0003288391976323578
+    }
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 6,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "7973297115653940",
+    "work_share": 0.7974898607914064,
+    "sections": {
+     "E1 local delivery": 0.27151156417845007,
+     "E1 completions: send": 0.2607694837224597,
+     "E1 poll": 0.10013153567905295,
+     "E1 retire": 0.09404801052285433,
+     "E1 admission": 0.07727721144360408,
+     "E1 1D route decision": 0.07091965362271183,
+     "E1 completions: batch check": 0.05551901786692974,
+     "E1 loop and round control": 0.03151375643976762,
+     "E1 decode": 0.01572947495341445,
+     "E1 per-round (out of line)": 0.015345829222843364,
+     "E1 packet bookkeeping": 0.007234462347911871
+    }
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 7,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 7,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 9,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "7759399540948636955",
+    "work_share": 0.00147977638934561,
+    "sections": {
+     "E0 worker: send check": 0.32916803682999013,
+     "E0 worker: connection poll": 0.25567247615915817,
+     "E0 VC0 forwarding: idle test": 0.1760933903321276,
+     "E0 VC0 free-slots group read": 0.08489531952208704,
+     "E0 loop and round control": 0.06965910336512113,
+     "E0 per-round (out of line)": 0.0464759399320399,
+     "E0 worker: completion check": 0.02367642222952976,
+     "E0 round end (telemetry, end_round)": 0.01287953524060068,
+     "E0 worker: send": 0.00147977638934561
+    }
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 9,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "2992557856822981993",
+    "work_share": 0.07689356571303299,
+    "sections": {
+     "E1 poll": 0.628137674010742,
+     "E1 loop and round control": 0.18804121451276992,
+     "E1 per-round (out of line)": 0.09958347034966568,
+     "E1 decode": 0.07201578428148635,
+     "E1 completions: batch check": 0.007344075413789323,
+     "E1 completions: send": 0.004877781431546641
+    }
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 11,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "10081830465089211350",
+    "work_share": 0.14523731228762468,
+    "sections": {
+     "E0 worker: send check": 0.2676751068727392,
+     "E0 worker: connection poll": 0.21144360407760604,
+     "E0 VC0 forwarding: idle test": 0.14951222185684535,
+     "E0 worker: send": 0.1258906061602543,
+     "E0 VC0 free-slots group read": 0.06768606817932697,
+     "E0 loop and round control": 0.058533377178559685,
+     "E0 worker: completion check": 0.05162775402828017,
+     "E0 per-round (out of line)": 0.037816507727721146,
+     "E0 worker: credit": 0.0189630603967993,
+     "E0 round end (telemetry, end_round)": 0.010468047791296722,
+     "E0 VC0 forwarding: visit: upstream credit": 0.00038364573057108405
+    }
+   },
+   {
+    "target": {
+     "chip": 6,
+     "chan": 11,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "2992557856822981993",
+    "work_share": 0.3076290693850707,
+    "sections": {
+     "E1 poll": 0.4625123314699112,
+     "E1 loop and round control": 0.1343856187657569,
+     "E1 completions: send": 0.08374438233037378,
+     "E1 local delivery": 0.07612627425189082,
+     "E1 per-round (out of line)": 0.07179655814973145,
+     "E1 decode": 0.05858818371149841,
+     "E1 retire": 0.032609887098542144,
+     "E1 admission": 0.030417625780993093,
+     "E1 1D route decision": 0.02411487449303957,
+     "E1 completions: batch check": 0.02367642222952976,
+     "E1 packet bookkeeping": 0.002027841718732873
+    }
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 4,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 4,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 5,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "16859369020693722463",
+    "work_share": 0.1644195988161789,
+    "sections": {
+     "E0 worker: send check": 0.21226570207168693,
+     "E0 worker: completion check": 0.2088128904965472,
+     "E0 worker: connection poll": 0.1598706565822646,
+     "E0 worker: send": 0.12178011618984982,
+     "E0 VC0 forwarding: idle test": 0.1183821111476488,
+     "E0 VC0 free-slots group read": 0.05683437465745917,
+     "E0 loop and round control": 0.04609229420146881,
+     "E0 worker: credit": 0.04137893236873835,
+     "E0 per-round (out of line)": 0.026033103145894992,
+     "E0 round end (telemetry, end_round)": 0.007289268880850597,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0010961306587745259,
+     "E0 VC0 forwarding: visit: send": 0.0001644195988161789
+    }
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 5,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18246,
+    "build": "7973297115653940",
+    "work_share": 0.8003398005042202,
+    "sections": {
+     "E1 local delivery": 0.27704702400526143,
+     "E1 completions: send": 0.25786473747670724,
+     "E1 poll": 0.09804888742738134,
+     "E1 retire": 0.09508933464869013,
+     "E1 admission": 0.07656472651540064,
+     "E1 1D route decision": 0.07223501041324126,
+     "E1 completions: batch check": 0.05387482187876795,
+     "E1 loop and round control": 0.03239066096678724,
+     "E1 per-round (out of line)": 0.015345829222843364,
+     "E1 decode": 0.014742957360517374,
+     "E1 packet bookkeeping": 0.006796010084402061
+    }
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 6,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 6,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 0,
+    "note": "no build matched"
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 7,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18245,
+    "build": "16859369020693722463",
+    "work_share": 0.003069334064127158,
+    "sections": {
+     "E0 worker: send check": 0.32375993422855576,
+     "E0 worker: connection poll": 0.25946834749246367,
+     "E0 VC0 forwarding: idle test": 0.17232118388599615,
+     "E0 VC0 free-slots group read": 0.08352973417374623,
+     "E0 loop and round control": 0.07311592217045766,
+     "E0 per-round (out of line)": 0.047519868457111536,
+     "E0 worker: completion check": 0.025596053713346122,
+     "E0 round end (telemetry, end_round)": 0.011564812277336257,
+     "E0 worker: send": 0.0019183337900794738,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0010961907371882709,
+     "E0 other (execute_pause_command)": 5.4809536859413536e-05,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 5.4809536859413536e-05
+    }
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 7,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18245,
+    "build": "7973297115653940",
+    "work_share": 0.08226911482597972,
+    "sections": {
+     "E1 poll": 0.6258152918607838,
+     "E1 loop and round control": 0.18843518772266374,
+     "E1 per-round (out of line)": 0.09608111811455193,
+     "E1 decode": 0.07673335160317896,
+     "E1 completions: batch check": 0.007399287476020828,
+     "E1 completions: send": 0.005480953685941353,
+     "E1 1D route decision": 5.4809536859413536e-05
+    }
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 9,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18245,
+    "build": "7759399540948636955",
+    "work_share": 0.00992052617155385,
+    "sections": {
+     "E0 worker: send check": 0.32480131542888463,
+     "E0 worker: connection poll": 0.2530008221430529,
+     "E0 VC0 forwarding: idle test": 0.17314332693888737,
+     "E0 VC0 free-slots group read": 0.08424225815291861,
+     "E0 loop and round control": 0.07169087421211291,
+     "E0 per-round (out of line)": 0.051685393258426963,
+     "E0 worker: completion check": 0.01874486160591943,
+     "E0 round end (telemetry, end_round)": 0.01271581255138394,
+     "E0 VC0 forwarding: visit: upstream credit": 0.00805700191833379,
+     "E0 worker: send": 0.0014798574952041654,
+     "E0 VC0 forwarding: visit: send": 0.00021923814743765414,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 0.0001644286105782406,
+     "E0 other (execute_pause_command)": 5.4809536859413536e-05
+    }
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 9,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18245,
+    "build": "2992557856822981993",
+    "work_share": 0.08084406686763497,
+    "sections": {
+     "E1 poll": 0.6234036722389695,
+     "E1 loop and round control": 0.18668128254316252,
+     "E1 per-round (out of line)": 0.10183611948479035,
+     "E1 decode": 0.07640449438202247,
+     "E1 completions: batch check": 0.007234858865442587,
+     "E1 completions: send": 0.004384762948753083,
+     "E1 1D route decision": 5.4809536859413536e-05
+    }
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 11,
+     "erisc": 0
+    },
+    "samples": 20328,
+    "kernel": 18245,
+    "build": "10081830465089211350",
+    "work_share": 0.14836941627843245,
+    "sections": {
+     "E0 worker: send check": 0.27152644560153466,
+     "E0 worker: connection poll": 0.21118114551932035,
+     "E0 VC0 forwarding: idle test": 0.1409153192655522,
+     "E0 worker: send": 0.1274321731981365,
+     "E0 VC0 free-slots group read": 0.06692244450534393,
+     "E0 loop and round control": 0.05853658536585366,
+     "E0 worker: completion check": 0.05256234584817758,
+     "E0 per-round (out of line)": 0.04121677171827898,
+     "E0 worker: credit": 0.019621814195670047,
+     "E0 round end (telemetry, end_round)": 0.008714716360646753,
+     "E0 VC0 forwarding: visit: upstream credit": 0.0011510002740476844,
+     "E0 VC0 forwarding: visit: send": 0.00010961907371882707,
+     "E0 other (execute_pause_command)": 5.4809536859413536e-05,
+     "E0 VC0 forwarding: visit: completions and bookkeeping": 5.4809536859413536e-05
+    }
+   },
+   {
+    "target": {
+     "chip": 7,
+     "chan": 11,
+     "erisc": 1
+    },
+    "samples": 20328,
+    "kernel": 18245,
+    "build": "2992557856822981993",
+    "work_share": 0.2960263085776925,
+    "sections": {
+     "E1 poll": 0.46653877774732805,
+     "E1 loop and round control": 0.13735269936969033,
+     "E1 local delivery": 0.07941901890929022,
+     "E1 per-round (out of line)": 0.07508906549739655,
+     "E1 completions: send": 0.06988215949575226,
+     "E1 decode": 0.06122225267196492,
+     "E1 retire": 0.03178953137845985,
+     "E1 admission": 0.028939435461770347,
+     "E1 completions: batch check": 0.024993148807892572,
+     "E1 1D route decision": 0.022197862428062484,
+     "E1 packet bookkeeping": 0.002576048232392436
+    }
+   }
+  ]
+ }
+]

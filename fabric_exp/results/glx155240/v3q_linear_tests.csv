@@ -1,0 +1,11 @@
+test_name,ftype,ntype,topology,num_devices,device,num_links,direction,total_traffic_count,num_packets,packet_size,cycles,bandwidth_GB_s,packets_per_second
+GlxLinear1HopEW_size_16_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Linear,4,0,1,E,1,50000,16,6088242,0.177391,11086944.310
+GlxLinear1HopEW_size_256_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Linear,4,0,1,E,1,50000,256,6085146,2.839702,11092585.124
+GlxLinear1HopEW_size_1024_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Linear,4,0,1,E,1,50000,1024,6192618,11.161677,10900074.896
+GlxLinear1HopEW_size_2048_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Linear,4,0,1,E,1,50000,2048,6545760,21.119014,10312018.772
+GlxLinear1HopEW_size_4352_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Linear,4,0,1,E,1,50000,4352,12475338,23.547258,5410675.045
+GlxLinear3HopEW_size_256_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Linear,4,0,1,E,1,50000,256,6848193,2.523293,9856614.730
+GlxLinear3HopEW_size_1024_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Linear,4,0,1,E,1,50000,1024,6906466,10.008013,9773449.982
+GlxLinear3HopEW_size_4352_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Linear,4,0,1,E,1,50000,4352,12475298,23.547333,5410692.394
+GlxLinearMulticast_size_1024_ntype_unicast_write,CHIP_MULTICAST,NOC_UNICAST_WRITE,Linear,4,31,1,W,1,20000,1024,21461420,1.288265,1258071.460
+GlxLinearMulticast_size_4352_ntype_unicast_write,CHIP_MULTICAST,NOC_UNICAST_WRITE,Linear,4,31,1,W,1,20000,4352,34978496,3.359321,771902.829

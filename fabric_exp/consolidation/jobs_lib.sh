@@ -68,6 +68,9 @@ suite_yaml() {
         1d) echo fabric_exp/exp_1d_4352.yaml ;;
         lat) echo fabric_exp/exp_latency.yaml ;;  # latency mode (RESULTS §19): results/<label>_latency.csv
         burst) echo fabric_exp/exp_burst.yaml ;;  # bursty senders: stream idle segments (RESULTS §98)
+        burst612) echo fabric_exp/exp_burst612.yaml ;;  # bursts of 6 and 12 (not multiples of the completion group)
+        val1d_m1) echo fabric_exp/v4/val1d_m1.yaml ;;  # v4 bring-up: val1d without rings, mux, telemetry, trimming
+        1d_m1) echo fabric_exp/v4/exp_1d_m1.yaml ;;  # v4 bring-up: the 1D benchmark without its ring row
     esac
 }
 M=$(mktemp)

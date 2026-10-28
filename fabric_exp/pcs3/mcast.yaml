@@ -1,0 +1,24 @@
+# Phase/cost analysis stage 3 (RESULTS §98): one long row for PC sampling (mcast).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: PcsMcast
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 4352
+    num_links:
+    - 1
+  defaults:
+    ftype: mcast
+    num_packets: 76595744
+  patterns:
+  - type: all_to_all
+    iterations: 1

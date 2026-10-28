@@ -12,7 +12,7 @@ A variant DIR holds replacement files: either mirrored tree paths (DIR/tt_metal/
 are matched by name under tt_metal/fabric (they must be unique there). New files, and files under tests/, need mirrored paths. A bare
 fabric_erisc_router_v3.cpp replaces fabric_erisc_router_v2.cpp (Phase 1 runs v3 candidates in v2's place). The generated per-config headers
 (named_ct_arg_map_generated.h etc.) and the firmware link objects come from the Phase 0 kernel cache
-(/home/aagarwal/.tt-metal-cache-p0), which must stay in place.
+(/home/aagarwal/.tt-metal-cache-p0), which must stay in place. OFFLINE_SFPI=<sfpi root> swaps the toolchain.
 """
 import argparse, concurrent.futures, glob, json, os, re, shlex, shutil, subprocess, sys
 
@@ -89,7 +89,7 @@ def resolve(variant):
         for f in fs:
             src = os.path.join(dp, f)
             rel = os.path.relpath(src, variant)
-            if f == "fabric_erisc_router_v3.cpp" and rel == f:
+            if f in ("fabric_erisc_router_v3.cpp", "fabric_erisc_router_v4.cpp") and rel == f:
                 dst = V2_PATH  # Phase 1: a v3 candidate is built and run in v2's place (same host args, selector "2")
             elif rel.startswith(("tt_metal/", "tests/")):
                 dst = rel
@@ -140,7 +140,16 @@ def add_host_setting_args(hd):
         open(m, "w").write(t)
 
 
+# OFFLINE_SFPI=<sfpi root> builds with another toolchain (compiler, its headers and libraries) than the one the
+# commands were logged with, e.g. a newer sfpi release unpacked outside the tree, to compare its code generation.
+# The logged root differs by source (the tree, or coverage.py's runtime root of symlinks), so any .../runtime/sfpi.
+LOGGED_SFPI = re.compile(r"[^\s'\"]*/runtime/sfpi(?=/)")
+OFFLINE_SFPI = os.environ.get("OFFLINE_SFPI")
+
+
 def build_one(h, proc, cmds, ov, out, flags, set_opt):
+    if OFFLINE_SFPI:
+        cmds = {k: LOGGED_SFPI.sub(OFFLINE_SFPI, v) for k, v in cmds.items()}
     hd = os.path.join(out, h)
     wd = os.path.join(hd, proc)
     os.makedirs(wd, exist_ok=True)
@@ -159,6 +168,11 @@ def build_one(h, proc, cmds, ov, out, flags, set_opt):
             o += [x, "-I" + ov, "-I" + ov + "/tt_metal"]; i += 1; continue
         if x == "-I" + EDM:
             o.append("-I" + ov + "/tt_metal/fabric/impl/kernels/edm_fabric"); i += 1; continue
+        # A variant that overlays files outside tt_metal/fabric (e.g. NoC API headers under tt_metal/hw/inc): its copy
+        # of the include directory goes first; files it does not overlay still come from the tree's directory.
+        m = re.fullmatch(r"-I(?:\S*/)?(tt_metal/(?!fabric)\S*?)/?", x)
+        if m and os.path.isdir(os.path.join(ov, m.group(1))):
+            o += ["-I" + os.path.join(ov, m.group(1)), x]; i += 1; continue
         if set_opt and re.fullmatch(r"-O\w+", x):
             o.append("-" + set_opt); i += 1; continue
         if x == "-c":

@@ -1,0 +1,20 @@
+Tests:
+- name: FullRingMulticast
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    num_links:
+    - 1
+    - 2
+    - 3
+    - 4
+    ntype:
+    - unicast_write
+    - fused_atomic_inc
+    - unicast_scatter_write
+  defaults:
+    ftype: mcast
+    size: 1024
+    num_packets: 100
+  patterns:
+  - type: full_ring

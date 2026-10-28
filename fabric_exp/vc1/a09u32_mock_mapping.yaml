@@ -1,0 +1,7 @@
+# Mock cluster for the VC1 split on bh-lb-120-a09u32 (CPU only): both ranks see this host's cluster descriptor;
+# TT_VISIBLE_DEVICES in the rank bindings picks each rank's four chips. The cube wiring at chip-id level is the same as
+# a08u24's ({0,1,2,3} and {4,5,6,7} are two 4-cycles joined by 4 chip pairs x 2 links), so the MGD and rank bindings
+# carry over unchanged.
+rank_to_cluster_mock_cluster_desc:
+  0: "fabric_exp/a09u32_cluster_desc.yaml"
+  1: "fabric_exp/a09u32_cluster_desc.yaml"

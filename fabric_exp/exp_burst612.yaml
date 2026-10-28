@@ -1,0 +1,162 @@
+# Bursty senders, burst lengths that are not multiples of the completion group (study benchmark only; never in
+# validation yamls). Same form as exp_burst.yaml (needs fabric_exp/streams/port/streams_idle.patch): a burst of N packets,
+# then G idle cycles on the sender. exp_burst.yaml's N are all multiples of 4 (or below 4), so a batch that restarts at
+# a gap (v4vc) ends exactly at the next gap there; N = 6 and 12 test that (2026-10-28). Every row sends ~20000 packets
+# (repeat = round(20000 / N)). 2x4 P150x8 mesh, 1 link; E/W [0, 0] -> [0, 1], N/S [0, 0] -> [0, 4].
+allocation_policies:
+    receiver:
+      policy: RoundRobin
+      max_configs_per_core: 4
+
+Tests:
+  - name: "BurstEW_N6_G500"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+            repeat: 3333
+            stream:
+              - {ntype: unicast_write, count: 6}
+              - {idle: 500}
+
+  - name: "BurstEW_N12_G500"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+            repeat: 1667
+            stream:
+              - {ntype: unicast_write, count: 12}
+              - {idle: 500}
+
+  - name: "BurstEW_N6_G2000"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+            repeat: 3333
+            stream:
+              - {ntype: unicast_write, count: 6}
+              - {idle: 2000}
+
+  - name: "BurstEW_N12_G2000"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+            repeat: 1667
+            stream:
+              - {ntype: unicast_write, count: 12}
+              - {idle: 2000}
+
+  - name: "BurstNS_N6_G500"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 4]
+            repeat: 3333
+            stream:
+              - {ntype: unicast_write, count: 6}
+              - {idle: 500}
+
+  - name: "BurstNS_N12_G500"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 4]
+            repeat: 1667
+            stream:
+              - {ntype: unicast_write, count: 12}
+              - {idle: 500}
+
+  - name: "BurstNS_N6_G2000"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 4]
+            repeat: 3333
+            stream:
+              - {ntype: unicast_write, count: 6}
+              - {idle: 2000}
+
+  - name: "BurstNS_N12_G2000"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 4]
+            repeat: 1667
+            stream:
+              - {ntype: unicast_write, count: 12}
+              - {idle: 2000}

@@ -1,0 +1,29 @@
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: TorusY3HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Torus
+    torus_config: Y
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - unicast_scatter_write
+    size:
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 3

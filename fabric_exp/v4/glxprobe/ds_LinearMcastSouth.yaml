@@ -1,0 +1,20 @@
+allocation_policies:
+  receiver:
+    max_configs_per_core: 2
+Tests:
+- name: LinearMcastSouth
+  sync: true
+  fabric_setup:
+    topology: Ring
+    num_links: max
+  defaults:
+    ftype: mcast
+    ntype: unicast_write
+    size: 256
+    num_packets: 2000
+    destination:
+      hops:
+        S: max
+  patterns:
+  - type: all_devices_uniform_pattern
+    iterations: 3

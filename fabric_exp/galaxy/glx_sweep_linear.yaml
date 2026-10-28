@@ -1,0 +1,39 @@
+# Blackhole Galaxy (single node, 8x4 mesh, rows of 4 chips), 1D Linear, one link.
+# Size sweep (RESULTS §98, Galaxy): where each router's rate meets the 200G wire line (about 251 cycles/packet at
+# 4352 B). 200,000 packets per row.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: GlxSweepLinear1HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Linear
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 1536
+    - 1792
+    - 2048
+    - 2304
+    - 2560
+    - 3072
+    - 3584
+    - 4096
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 200000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1

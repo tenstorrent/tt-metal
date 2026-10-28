@@ -1,0 +1,163 @@
+# v4 tori on the P150x8 (wraparound on Y only: deadlock avoidance and first-level acks on the N/S routers):
+# exp_2d_4352.yaml's rows on Torus Y, plus 1-hop N/S both ways; E/W rows are the non-wrapping axis (control).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: TorusY1HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Torus
+    torus_config: Y
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - unicast_scatter_write
+    size:
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+- name: TorusY1HopNS
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Torus
+    torus_config: Y
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - unicast_scatter_write
+    size:
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 4
+- name: TorusY1HopNSBidir
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Torus
+    torus_config: Y
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - unicast_scatter_write
+    size:
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 4
+  - device:
+    - 0
+    - 4
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 0
+- name: TorusY1HopEWBidir
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Torus
+    torus_config: Y
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - unicast_scatter_write
+    size:
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+  - device:
+    - 0
+    - 1
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 0
+- name: TorusY3HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Torus
+    torus_config: Y
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - unicast_scatter_write
+    size:
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 3
+- name: TorusYMulticast
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Torus
+    torus_config: Y
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    - unicast_scatter_write
+    size:
+    - 4352
+  defaults:
+    ftype: mcast
+    num_packets: 20000
+  patterns:
+  - type: all_to_all
+    iterations: 1

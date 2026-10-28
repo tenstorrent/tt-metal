@@ -1,0 +1,24 @@
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: UnidirRingMulticast
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    - unicast_scatter_write
+    size:
+    - 4352
+  defaults:
+    ftype: mcast
+    num_packets: 20000
+  patterns:
+  - type: unidirectional_linear
+    iterations: 1

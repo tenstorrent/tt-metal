@@ -1,0 +1,9 @@
+test_name,ftype,ntype,topology,num_devices,device,num_links,direction,total_traffic_count,num_packets,packet_size,cycles,bandwidth_GB_s,packets_per_second
+VC1Inter_0_0_to_1_0_size_16_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,4,0,1,N,1,50000,16,39084489,0.027632,1727027.824
+VC1Inter_0_0_to_1_0_size_4352_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,4,0,1,N,1,50000,4352,44732722,6.567005,1508962.500
+VC1Inter_0_0_to_1_1_size_16_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,4,0,1,N,1,50000,16,11264038,0.095880,5992522.397
+VC1Inter_0_0_to_1_1_size_4352_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,4,0,1,N,1,50000,4352,11305514,25.983781,5970537.916
+VC1Inter_0_0_to_1_2_size_16_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,4,0,1,N,1,50000,16,42669247,0.025311,1581935.580
+VC1Inter_0_0_to_1_2_size_4352_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,4,0,1,N,1,50000,4352,48343538,6.076510,1396256.931
+VC1Inter_0_0_to_1_3_size_16_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,4,0,1,N,1,50000,16,39127690,0.027602,1725121.008
+VC1Inter_0_0_to_1_3_size_4352_ntype_unicast_write,CHIP_UNICAST,NOC_UNICAST_WRITE,Mesh,4,0,1,N,1,50000,4352,45533347,6.451535,1482430.009

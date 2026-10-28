@@ -237,9 +237,9 @@ inherent work, latency, a rule). **LOST-CONTEXT** lost with evidence pointing at
 built or queued but not decided. **WITHDRAWN** a rule or explanation that was proposed and then shown wrong. Tools are
 IN when in use. "Found in" is the design (or tool) and the ERISC it changed.
 
-Counts (109 rows): **IN 73** (36 of them tools, findings, rules and practices) **· OPEN 15 · LOST-SUBSTANCE 12 ·
+Counts (110 rows): **IN 74** (37 of them tools, findings, rules and practices) **· OPEN 15 · LOST-SUBSTANCE 12 ·
 LOST-CONTEXT 3 · WITHDRAWN 4**, and 2 rows split between IN and LOST-SUBSTANCE (E0-4, E1-6). By "applies to": E0 25,
-E1 37, both 22, test 25. Cross-pollination (applies to both, in the lead on one ERISC only): P4 (per-round work out
+E1 37, both 22, test 26. Cross-pollination (applies to both, in the lead on one ERISC only): P4 (per-round work out
 of line) and P13 (register access through the provided helpers) went from E1 to E0 in v3z (A1, A2); R1 (no
 check-then-defer race: E1 patched, E0 none found) and R2 (holds bounded by the window: E1 by the ring since v3z, E0
 holds nothing) hold on both. E0_AUDIT.md has the E0 side.
@@ -270,6 +270,7 @@ holds nothing) hold on both. E0_AUDIT.md has the E0 side.
 | T20 | §98 | Bursty-sender benchmark: stream idle segments (`streams_idle.patch`), `exp_burst.yaml`, `exp_burst_vc1.yaml` | E1 (v3x) | Jobs 328–331, 346, 349: the v3v family's bursty losses were the cut's (E1-16); v3z at v3tk's level | **IN** (tool) | test | n/a | Judges holds on bursty traffic (rule R2) |
 | T21 | V3E1 §12 | Pass-level credit models (`sim/credsim3.py`, `e0frames.py`, `window2.py`) | E1 | Uncalibrated; shapes only. `window2.py` predicted v3v6's step under (b) at ~24 cycles | **IN** (tool) | test | n/a | |
 | T22 | §95 | Keepalive mock check (`scratch_tools/ka13/mock_ka.py`): what the host passes per config | v3tk | 1000 on every Blackhole config, 0 on Wormhole | **IN** (tool) | test | n/a | |
+| T23 | §98 | PC sampling of running routers over the Ethernet cores' debug bus (`pc_sampler.py`), mapped through the launch message's load address and `-g` rebuilds of the run's own compile commands (`pcs_sections.py`) | phase/cost analysis | No measurable perturbation (rates equal to 0.01); 0 read errors; the v3q cost map (ROUTER_MAP_V3.md) | **IN** (tool) | test | n/a | Multi-mesh routers not yet covered |
 
 ## P2. E0 (sender_erisc) designs
 

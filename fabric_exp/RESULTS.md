@@ -6621,6 +6621,1209 @@ and -O3. Repeats agree within 0.2.
   gate fixed the race.
 - Profiling real VC1 (inter-mesh) traffic: on hold.
 
+**Phase/cost analysis: PC sampling over the debug bus, stages 1 and 2** (a09u32 jobs 028–029; `consolidation/pc_sampler.py`,
+`pcs_report.py`, `pcs_trial_runs.sh`, `fabric_exp/pcs_trial.yaml`).
+- Method: each Ethernet core's debug bus (an observation mux read through RISCV_DEBUG_REG_DBG_BUS_CNTL_REG /
+  RISCV_DEBUG_REG_DBG_RD_DATA) exposes each ERISC's decode/execute PC. A host process reads it while a test runs: one
+  NoC write (select) and one NoC read per sample; the core is not halted or stepped. The device is opened as
+  hang_capture.py opens it (tt-exalens, safe mode), after the test has opened it.
+- Stage 1 (offline): building with `-g` leaves the loadable code byte-identical on every config at -O3 and -Os, so
+  sampled PCs can be mapped to source lines without changing what runs.
+- Stage 2 (device): one long 2D 1-hop E/W 4352 B row run three times (A without the sampler, B with it, C without),
+  twice. All six runs 126.92–126.93 cycles/packet: no measurable perturbation. The sampler opened the device in 0.03 s
+  beside the running test and read all 96 ERISCs (48 connected Ethernet cores × 2) about 78k times a second with no
+  read errors; the broker's post-job health gate was clean.
+- PCs map correctly once two layout facts are used:
+  - kernels run from the kernel config window (E0 at 0xf480, E1 at about 0x11b50 here), not from their link address,
+    so a PC maps to the ELF through the launch message's config base and text offset;
+  - the image in L1 is the relocated `.xip.elf` one, byte-equal to it.
+  About 87% of each router ERISC's samples fall in its kernel (the rest are outside the traffic window). Idle E0s on
+  unused links alternate between tt-metal's Ethernet firmware and the base firmware (the idle context switch). The
+  traffic-carrying pair (chip 6 E0 → chip 4 E1 here) touches the most distinct addresses.
+- Not yet done: mapping addresses to source lines through the `-g` builds, sampling only the routers that carry the
+  traffic, and the per-config section breakdown (stage 3).
+
+**Phase/cost analysis, stage 3: the v3q cost map** (a09u32 jobs 030–031; `consolidation/ROUTER_MAP_V3.md`,
+`pcs3_runs.sh`, `pcs_sections.py`, `pcs_tables.py`, `fabric_exp/pcs3/*.yaml`, results `pcs3_*`).
+- 13 rows (2D: 1-hop E/W and N/S writes at 4352 B and 16 B, scatter, fused, atomic, 3-hop, multicast, forwarded,
+  bidirectional; 1D: 1-hop, 3-hop, multicast), about 8 s of traffic each, every router ERISC sampled (about 5,500
+  samples per ERISC per row, 0 read errors). Rates match the suites (e.g. 1-hop E/W 126.9, 3-hop 142.8, multicast
+  141.1).
+- Mapping: the run's own compile commands rebuilt with `-g` (all 68 builds identical in code to what ran); each
+  address's inline chain classified into sections of the two main loops.
+- Findings (cycles per packet; ROUTER_MAP_V3.md has the tables):
+  - E0 sets the rate on 1-hop writes (no spare time; E1 polls 11–17); E1 on scatter and fused writes (polls 6 or
+    less); 3-hop, forwarded and multicast routers are near their limit on both ERISCs.
+  - E0's send costs 53–63 in every row; on the 1-hop sender the per-pass checks cost about 45–55 more (worker send
+    check ~13–16, connection poll ~10, forwarding idle test ~11, group read ~9, completion check ~4–7) and worker
+    credits ~8.
+  - E1: completion credits 20–33 per packet even batched (80–130 per frame), retire 14–20, decode 18–22; local delivery
+    35–38 (write), 57 (atomic), 74 (scatter), 80 (fused); forward ~51 per copy plus 12–24 of admission on forwarders.
+- Not covered: multi-mesh (VC1-enabled) routers.
+
+**Galaxy (200G links): main against v3q** (Slurm job 155240 on bh-glx-120-c07u14, single BH Galaxy 8x4, one link,
+telemetry off; `fabric_exp/galaxy/`: `frs_glx.sbatch`, `glx_{mesh,linear,ring}.yaml`, `glx_report.py`; results
+`results/glx155240/`).
+- Configs: **main** = router v1 at flags 0 (main as of the Oct 9 merge base), firmware keepalive 8000; **mainka** = the
+  same with the keepalive at 1000; **v3q** = the lead (keepalive 1000 from the host setting). Trees run from
+  `/data/aagarwal/frs-glx/trees` (lean copies of the study tree, v3q's files swapped into v2's place); each was checked
+  first on a09u32 (2D 1-hop 4352 B: main 221.6, v3q 127.0, as before).
+- Validation: mesh sanity (data-checked) 96/96 on both routers. Every benchmark run passed (mesh 27, linear 10, ring 5
+  tests per config). Device clock 1350 MHz, as on the P150s.
+- At 200G a 4352 B packet takes 251 cycles on the wire (23.4 GB/s), so every 4352 B row is wire-bound for both routers
+  (v3q 252.1, main 251.1). Router differences show at 16–2048 B. v3q's 1-hop floor (~121) meets the wire near 2 KiB;
+  main's (~223) only near 3.8 KiB.
+
+| Row (cycles/packet) | main | v3q | v3q vs main |
+| --- | ---: | ---: | ---: |
+| 2D 1-hop E/W write 16 B / 256 B / 1024 B / 2048 B | 223.5 / 223.9 / 223.1 / 222.5 | 120.5 / 120.7 / 123.4 / 128.7 | 1.85x / 1.85x / 1.81x / 1.73x |
+| 2D 1-hop N/S write 16 B / 2048 B | 223.8 / 223.2 | 121.1 / 129.2 | 1.85x / 1.73x |
+| 2D scatter 2048 B · fused 1024 B · atomic | 218.9 · 223.5 · 223.9 | 145.0 · 150.1 · 128.8 | 1.51x · 1.49x · 1.74x |
+| 2D bidirectional 1024 B | 223.6 | 124.5 | 1.80x |
+| 2D 3-hop E/W 256 B / 1024 B | 224.0 / 223.6 | 137.6 / 139.5 | 1.63x / 1.60x |
+| 2D 7-hop N/S 256 B / 1024 B | 223.9 / 221.7 | 180.4 / 181.8 | 1.24x / 1.22x |
+| 2D forwarded 1024 B | 159.5 | 113.9 | 1.40x |
+| 2D multicast all-to-all 1024 B · 4352 B | 236.7 · 331.5 | 188.6 · 330.6 | 1.25x · 1.00x |
+| 1D 1-hop 16 B / 1024 B / 2048 B | 167.4 / 164.1 / 164.8 | 121.8 / 123.9 / 130.9 | 1.37x / 1.33x / 1.26x |
+| 1D 3-hop 1024 B · multicast 1024 B | 164.4 · 186.4 | 138.1 · 153.3 | 1.19x · 1.22x |
+| Ring 1-hop 256 B / 1024 B | 192.6 / 190.1 | 175.9 / 176.0 | 1.09x / 1.08x |
+| Full-ring multicast 1024 B | 276.0 | 269.4 | 1.02x |
+
+- Rings gain only 2–9%: ring routers still run the generic loop (deadlock avoidance, no completion batching; ledger
+  E1-31). Rings and tori are the Galaxy's production topologies, so this is the largest gap the Galaxy shows.
+- 7-hop N/S (column 0 down the Galaxy) runs at ~181 against 3-hop E/W's ~138. Not yet explained (candidates: a
+  longer credit round trip on some N/S links, or one slower link in the column); main hides it at 222.
+- v3q's small-packet floor is ~5 above the P150's (1-hop 16 B 120.5 vs 115.7).
+- Keepalive: no effect on main at router-bound sizes (main = mainka within 0.1: main's ~223 hides it). On wire-bound
+  4352 B rows 1000 costs ~1 cycle (251.1 → 252.1, 0.4%); the floor it removes at 400G (§15) does not exist at 200G.
+  The sweep below shows that v3q does need it (firmware keepalive: +5 to +7 at router-bound sizes).
+
+**Galaxy size sweep: where each router meets the 200G wire** (Slurm job 155281 on bh-glx-110-a01u08, another Galaxy;
+`glx_sweep_{mesh,linear}.yaml`, 1-hop writes at 1024–4352 B, bidirectional at 2048/3072/4352, 200,000 packets per row;
+configs v3q, main, v3qfw = v3q with the firmware keepalive (override 0), v3qr = v3q repeated; results
+`results/glx155281/`).
+- Repeatability: v3q and v3qr agree within 0.1 on every row, and the rows shared with job 155240 (another node) agree
+  within 0.2.
+- The wire line, fitted on v3qfw's wire-bound rows (2560 / 3072 / 3584 B, residuals ≤ 0.01): cycles/packet =
+  12.80 + size / 18.50 in 2D and 10.31 + size / 18.51 in 1D. That is 199.8 Gb/s, with a fixed 237 B per packet in 2D
+  and 191 B in 1D (header, framing, the packets-sent update; the 46 B difference is the 2D route header). Above ~4 KiB a
+  packet takes a second Ethernet frame, +3.0 cycles (4096 B: 237.2 against 234.2 on the line; §15's 4114 B frame
+  limit). Keepalive 1000 stretches wire-bound rows by 0.40%.
+
+| Share of the wire (with keepalive 1000) | 1024 B | 1536 B | 1792 B | 2048 B | 2304 B | 2560 B |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| wire, 2D (cycles/packet) | 68.4 | 96.2 | 110.1 | 124.0 | 137.9 | 151.8 |
+| v3q 2D E/W | 123.3 (55%) | 124.9 (77%) | 126.1 (87%) | 128.5 (96.5%) | 138.0 (100%) | 151.8 (100%) |
+| v3q 2D N/S | 123.9 (55%) | 125.5 (77%) | 126.7 (87%) | 129.1 (96.0%) | 138.0 (100%) | 151.8 (100%) |
+| main 2D E/W | 223.0 (31%) | 221.4 (43%) | 221.8 (50%) | 222.7 (56%) | 223.1 (62%) | 222.9 (68%) |
+| wire, 1D | 65.9 | 93.7 | 107.5 | 121.4 | 135.3 | 149.2 |
+| v3q 1D | 123.9 (53%) | 125.9 (74%) | 127.9 (84%) | 130.9 (92.8%) | 136.9 (98.9%) | 149.2 (100%) |
+| main 1D | 164.0 (40%) | 164.3 (57%) | 164.7 (65%) | 165.0 (74%) | 165.1 (82%) | 165.2 (90%) |
+
+- v3q saturates the link from ~2.3 KiB in 2D and ~2.5 KiB in 1D; at exactly 2 KiB it is 4.5–5 cycles short in 2D
+  (96–96.5%) and 9.5 short in 1D (93%; 1D's worker channel has no spare slots, ledger "1D Linear worker slots"). Main
+  meets the line only at ~3.9 KiB in 2D and ~2.8 KiB in 1D.
+- Below 2 KiB v3q's own floor (~123–128) sets the rate: 1 KiB would need ~68 cycles per packet.
+- Bidirectional E/W: 2048 B 137.6 (v3q) vs 223.8 (main); 3072 B 181.7 vs 223.1; 4352 B 256.9 vs 259.2. The reverse
+  direction's credits share each wire: at 3072 B v3q sits 2.8 above the one-way line.
+- **Firmware keepalive costs v3q 5–7 cycles at router-bound sizes** (1024 B 130.3 vs 123.3, 2048 B 133.7 vs 128.5;
+  same on N/S and 1D), and gains it 0.6–1.0 on wire-bound rows. Main never shows this (its ~223 floor hides it). The
+  mechanism at 200G is not investigated; the host setting (1000 on Blackhole) is the right default for v3 on Galaxy
+  too.
+
+**Shape inventory** (2026-10-26, offline; `consolidation/SHAPE_INVENTORY.md`, tools `argdump.py`, `stack_scan.py`,
+`pcs_stack.py`, Galaxy cases in `coverage.py`).
+- Runtime args: on every Galaxy topology and the P150x8, every runtime arg except the packed downstream NoC x
+  coordinates is constant within each existing binary (most are identical on every router), so they can be
+  compile-time at no extra binaries. Compile-time NoC x would add 14% (2D mesh), 33% (torus), 63% (express) binaries.
+- Program coverage (v3q built for 1,435 configs at three levels): the sender and receiver programs run on BH 2D/1D VC0
+  and VC1 only; express falls back to the generic loop on both ERISCs (5 VC0 channels on every router), rings and tori
+  on E1, VC2, the mux, UDM, one-ERISC and all Wormhole configs entirely.
+- Memory-resident loop state, from stage 3's PC samples: E0 8–12 cycles/packet on 1-hop rows and 16–21 on forwarding
+  rows (the far-slot value, `ForwardingState::in_flight` and the `channels[]` records live on the stack); E1 0.0–0.2
+  on local-delivery rows and 5.6–7.4 on forwarding rows (downstream cursor fields). Every main loop saves all 13
+  callee-saved registers.
+
+**v4 router bring-up, family 1** (2026-10-26; new files `fabric_exp/variants/v4/` = `fabric_erisc_router_v4.cpp` +
+`tt_metal/fabric/hw/inc/edm_fabric/router/*.hpp`, 2,256 lines; design `consolidation/SHAPE_NOTE.md`; feature semantics
+for later families `consolidation/V4_FEATURE_SPEC.md`).
+- Scope: two-ERISC Blackhole, 1D and 2D, VC0, strict atomics; other configs fail to compile (static_assert) until their
+  family is brought up. Builds: all 196 in-scope configs (P150 and Galaxy, 1D and 2D) at -O3 and -Os.
+- Hardware (a09u32, jobs 033-036): validation 249/249 data-checked tests on the first run (mesh 96, stream 10, val1d
+  without rings/mux/telemetry 143), no hangs.
+- Rate (cycles/packet; v3q / main in brackets): 2D 1-hop E/W 4352 B 152.0 -> 141.1 -> 143.0 (127 / 222); scatter
+  158.1 -> 157.7 -> 152.7 (143.9); 3-hop 175.1 -> 158.6 -> 164.5 (142.8), over three layout revisions found with PC
+  sampling (`pcsv_runs.sh`, `pcs_profile.py`):
+  - v4a -> v4b (sender): the free-slots group's values were spilled to the stack right after their loads (each store
+    waits for its load: 20.7 cycles/packet); reduced to a one-word mask of channels with packets; per-round bookkeeping
+    (yield flag, sent snapshot) moved into the round object in memory; no closure around the loop.
+  - v4b -> v4c (receiver): per-packet counters out of one aggregate with arrays and references (they were stack-resident);
+    Route as a one-word value; downstream cursors back in a table reached by pointer (as v3q): local-delivery rows
+    better (scatter -5), forwarding rows worse (3-hop +6, admission 8.5 -> 18.7).
+- Remaining gaps: register pressure. About 5 of the sender's 12 callee-saved registers hold hoisted address constants
+  (credit-write paths), so the far ring cursor is stack-resident (~10 cycles/packet in the send); the receiver's
+  cursor placement trades local-delivery rows against forwarding rows.
+
+**1D against 2D** (2026-10-26, a09u32 jobs 037-039; study host switch `TT_FABRIC_EXP_LINEAR_SPARE_SLOTS` in
+`fabric_static_sized_channels_allocator.cpp` gives Linear's spare slots to the worker channel, as main already does for
+Mesh and Torus; `TT_FABRIC_EXP_WORKER_SLOTS` caps it).
+- On v3q, 1D is not faster than 2D: 1-hop 129.2 vs 127.0, bidirectional 140.3 vs 135.1, 3-hop 140.3 vs 142.9. (Main's
+  1D beats main's 2D only because main's 2D is slow: Galaxy 164 vs 222.)
+- Worker-injected rows are bound by the worker credit loop (§76): Linear gives the worker channel 16 slots (2D: 17)
+  and leaves ~17 slots of L1 unused. With 24 or 35 worker slots, v3q's 1D beats 2D: 1-hop 124.5 (2D 127.0),
+  bidirectional 124.8 (2D 135.1), 1-hop scatter 140.4 (2D 146.7); 3-hop and multicast unchanged (receiver-bound). 24
+  slots suffice. Data-checked 1D validation at 35 slots: 143/143.
+- The rest of the per-packet work is the same in both modes (v3q cost map: send 53-63, local write ~35, forward ~51,
+  completions ~25-32); 1D only polls two sender channels instead of four and carries a smaller header, while its
+  forwarders rewrite the header every hop.
+- v4's 1D: its forwards were stateless in 1D (only E/W 2D routers preset the downstream): every single-downstream VC
+  now forwards statefully: 3-hop 179 -> 155, linear multicast 162.2 -> 152.0, unidirectional 215.7 -> 196.9 (v3q 140.3,
+  144.6, 188.5). (Multicast figures first read with awk were wrong: the quoted "[2,4]" field shifts the columns;
+  csv.DictReader gives the figures here.)
+- 1D header rewrite per hop (`update_packet_header_for_next_hop`): v3q 1.75 cycles/packet on the 3-hop middle receiver
+  (shift and store of the field read at decode). v4 reloaded the field just before the shift: 8.65; with the fields read
+  once per packet and carried to the rewrite, 1.94 (job 040): 3-hop 155.1 -> 149.8, multicast -3, validation 96 + 143.
+  Remaining 1D 3-hop gap: the middle router's sender, send 72.0 vs v3q 60.4 (the same register pressure as in 2D).
+  The sender's send costs 69.6 vs v3q's 53.1 in 1D too: v4's loop held two pointer arguments in callee-saved registers
+  (worker interfaces, upstream credit table) where v3q keeps the far ring; now copied into the loop's own tables.
+
+**Sender send fix: no closures in the sender loop** (2026-10-27, a09u32 jobs 041-043; v4g, v4h, v4i are successive
+edits of `variants/v4`; profiles `pcsv_v4{g,h,i}2d`; v4f reconstructed from the transcript reproduces job 040's binary
+byte for byte).
+- v4f -> v4g: send returns `bool` with an output parameter instead of a `Sent` struct, and both credits went out of
+  line. 2D 1-hop 141.8 -> 130.5, but 3-hop 162.2 -> 192.2 and multicast 160.5 -> 178.6. v4h (upstream credit inline
+  again) left 3-hop at 188.5: the credit was not the cause.
+- Cause: the forwarding dispatch was a `for_each_bit` lambda capturing the loop's state by reference. In v4f GCC
+  dissolved the closure; after the `Sent` edit it kept it as a stack object of pointers (`pending`, `in_flight`, the
+  table, the far ring), and every channel test loaded through them: the dispatch line cost 27 cycles/packet on the
+  3-hop middle sender. Static stack accesses in `sender::run` fell (v4f 140, v4h 103) while the hot path got worse;
+  counts do not show it, the disassembly does.
+- v4i: the loop function takes no closures. The forwarding dispatch, the free-slots group read, the per-round sent
+  count and the record init recurse over their channel mask with explicit arguments (`lowest_bit`,
+  `without_lowest_bit`). Validation 96 + 143.
+
+| cycles/packet | v4f | v4h | v4i | v3q |
+| --- | ---: | ---: | ---: | ---: |
+| 2D 1-hop E/W 4352 B | 141.8 | 133.1 | 130.0 | 127.0 |
+| 2D 1-hop bidirectional | 142.2 | 135.8 | 136.5 | 135.1 |
+| 2D 3-hop | 162.2 | 188.5 | 149.8 | 142.9 |
+| 2D multicast | 160.5 | 173.0 | 148.9 | 141.1 |
+| 2D 1-hop scatter | 155.5 | 154.8 | 154.3 | 146.7 |
+| 1D 1-hop (24 worker slots) | 129.0 | 124.5 | 124.5 | 124.5 |
+| 1D 3-hop (24) | 149.1 | 148.8 | 147.5 | 139.9 |
+| 1D multicast (24) | 150.6 | 151.6 | 151.6 | 147.0 |
+
+- Credit placement no longer matters: v4i with the upstream credit out of line too (v4cuo, perf rows only) is within
+  2.0 of v4i on every row (3-hop 150.6, multicast 150.9, 1-hop 130.2). v4i keeps it inline (E0-11).
+- v4i 3-hop middle sender (cycles/packet): send 68.3 (v3q 62.4), forwarding dispatch 10.7 (v4h 27), visits 22.8,
+  upstream credit 11.0. The 1-hop worker send is 62.4 (v3q 57.9). What remains in the send are single stack loads (far
+  ring next slot, the worker slot, a header address), about 1 cycle each: register allocation, not pursued.
+- Remaining v4 gaps to v3q: 2D 3-hop +7 and multicast +8 (on the 3-hop row the middle sender's send is +6, the
+  receiver's sections within 3 of v3q's each), scatter rows +5 to +8 (receiver local delivery), 1D 3-hop +7.6 (not
+  profiled at v4i).
+
+**Receiver gaps: v4j** (2026-10-27, a09u32 jobs 044-046; `variants/v4i` is the frozen v4i, v4j = `variants/v4`;
+profiles `pcsv_v4ir{2d,1d}`, `pcsv_v4j{2d,1d}`, `pcsv_v4js`, `pcsv_v3qs`; new sampler rows `pcs3/fwd16.yaml`,
+`pcs3/mixcmd.yaml`).
+- Instruction-level comparison with v3q on the same rows: the receiver's forward (both pay ~15 cycles/packet of
+  command-buffer waits), retire and completion check matched v3q within an instruction; decode did not. v4i's 2D path
+  from poll to the deliver test was 19 instructions (v3q ~12): the one-word Route packed the deliver bit into bit 31
+  and the slots below it, then masked them apart again; the 1D one rotated the field and did the same.
+- v4j: each routing mode's Route holds the routing value as read (2D action byte, 1D field) and answers forwards /
+  delivers / forward slots with one mask each (2D path now 13 instructions, 1D 10); Downstreams holds its links by
+  value (a forward's ring base one load from its cursor instead of two dependent loads); the receiver's per-packet
+  helpers (admit, forward_all, the completion trid lookup) recurse over their masks instead of taking closures (no
+  code change today: the receiver's closures were dissolved, 20 stack accesses either way). Validation 96 + 143,
+  mix suite 33/33.
+
+| cycles/packet | v4i | v4j | v3q |
+| --- | ---: | ---: | ---: |
+| 2D 1-hop E/W 4352 B | 130.0 | 129.3 | 127.0 |
+| 2D 1-hop scatter E/W / N/S | 154.3 / 156.0 | 149.5 / 153.4 | 146.7 / 149.1 |
+| 2D 3-hop | 149.8 | 149.7 | 142.9 |
+| 2D multicast / scatter | 148.9 / 184.5 | 148.3 / 179.2 | 141.1 / 174.6 |
+| 1D 1-hop scatter (24 worker slots) | 146.1 | 141.2 | 141.3 |
+| 1D 3-hop (24) | 147.5 | 143.0 | 139.9 |
+| 1D multicast / scatter (24) | 151.6 / 187.5 | 149.2 / 181.8 | 147.0 / 181.5 |
+| 2D fused 4352 B (mix suite, E/W) | 157.0 | 152.9 | 151.1 |
+| 2D atomic (mix, E/W) | 135.1 | 131.1 | 127.9 |
+
+- Scatter, fused and atomic rows gain 3-7 everywhere; 1D scatter rows now equal v3q. 2D 3-hop and multicast do not
+  move: their receivers were not decode-bound. On the 3-hop row the forwarding receiver is saturated and its sections
+  are within 2-3 of v3q's each (forward +3, completions +2); with the middle sender's send (+4-6) that is the gap.
+- Mix suite (first a09u32 baseline; `streams/p3_mixes.yaml`), v4j against v3q: 4352 B pure rows +0 to +2.4, mixed
+  sizes +3.5 to +9.6, small writes (16-1024 B) +5.8 to +9.5, mixed commands +37 (E/W, N/S) to +63 (forwarded).
+  - Mixed commands (write, scatter, fused atomic, atomic; job 046): v4j's receiver spends 62.6 cycles/packet spinning
+    in `flush_write_to_noc_pipeline` (strict atomics wait for every earlier write's acknowledgement); v3q's deferred
+    flushed atomic costs 26.9. The difference is the whole gap (203.2 vs 166.8 on the sampled row). Deferred atomics
+    are off in v4 by decision until the shape is reliable.
+  - Small writes: sender-bound. On forwarded 16 B (two senders through one router) the merge-point sender is ~96%
+    busy: send 64.3 vs v3q 60.6, and the per-pass free-slots group read 15.0 vs 3.4. v4 turns the four registers into a
+    channels-with-packets mask every pass (~5 instructions per channel; v4b's fix for spilled group values); v3q keeps
+    the raw values in callee-saved registers and tests each where it is used. On 1-hop 16 B both ERISCs have slack
+    (the worker credit loop sets the rate): sender +3 per send, receiver +3 to +5 over the packet.
+
+**Shared send experiment: v4s** (2026-10-27, a09u32 job 047; `variants/v4s`, control `variants/v4j` re-run in the same
+job, equal to job 045 within 0.2 except MixCmd ±1.6).
+- Question: the send and the forwarding visit were templated on the channel and inlined once per channel. A diff of
+  two inlined sends: 49 of 70 instructions identical up to registers; the rest carry ~6 per-channel values (header id,
+  ring bounds, completion-counter address, free-slots register block, record location).
+- v4s: behavior stays compile-time (template parameters per kind: worker or forwarding, the VC's far ring, flags); the
+  addresses become a `SenderChannel` value. The worker's visit passes `sender_channel<0>` (folds to immediates, same
+  code as before); the forwarding channels share one visit, reached by a run-time loop over the channels with work,
+  with the `SenderChannel` in each record. 2D sender loop 686 -> 414 instructions (2 sends instead of 4); 1D unchanged.
+  Validation 96 + 143, mix 33/33.
+- Rate against the control: worker rows and all 1D rows unchanged (within 0.2; 1D has one forwarding channel);
+  forwarding rows worse: 2D 3-hop +5.4, multicast +18.4 (the §89 pattern again), forwarded small writes and mixed
+  sizes +2.9 to +3.5, MixCmd within its noise.
+- Where (multicast sender, cycles/packet): the shared visit's checks 40.1 vs 16.5; its send 60.8 vs 67.3 (cheaper: the
+  channel loads hide behind the TX-status reads). The +23.6: the record's addresses loaded per visit 12.4 (the
+  completion check becomes record -> counter address -> counter, two dependent loads, where an immediate address needed
+  one), the run-time loop 8.6 (ctz, mask), the in-flight bit with a variable shift ~3. A multicast pass visits several
+  forwarding channels, most only for their completion check, so the per-visit cost multiplies.
+- Conclusion: sharing the visit puts run-time channel addressing on the completion check of every in-flight channel on
+  every pass. If code is shared, share the send only (its channel values are needed off the critical path); keep the
+  per-channel checks compile-time. `variants/v4` stays v4j.
+
+**Shared send only: v4s2** (2026-10-27, a09u32 job 048; `variants/v4s2`; control v4j re-run, within 0.2 of job 047).
+- v4s2: the forwarding channels with a packet send through one send (run-time loop, `SenderChannel` in the record,
+  the send does not read completions); then per-channel compile-time code takes completions (their counters read as
+  one group every pass with forwarding work), credits upstream and keeps the in-flight bit. 2D sender loop 470
+  instructions (v4j 686, v4s 414); validation 96 + 143, mix 33/33.
+- Against the control: worker-injected rows better (1-hop 16-1024 B -3.1 to -4.5, E/W MixSize4 -3.7, MixCmd E/W -6,
+  4352 B 1-hop -1.2); forwarding rows worse (2D 3-hop +17.4, 3-hop scatter +10, multicast +7, forwarded small writes
+  and mixed sizes +5.5); multicast scatter -4; 1D unchanged.
+- 3-hop forwarding sender (now saturated, 167): send 67.8 (v4j 67.1); run-time send loop and dispatch 19.6 (v4j
+  dispatch 10.7); completions 21.9 (v4j visit checks 9.8): the group read of every forwarding completion counter (L1)
+  on every pass with forwarding work, where v4j's channel took its completions from the read its send already made.
+- Two arrangements, one result: a run-time-addressed forwarding path costs forwarded packets 5-18 cycles (v4s: the
+  checks' dependent loads; v4s2: the loop's ctz -> record -> slot chain before the send, and a completion read that is
+  no longer folded into the send). Per-channel code with constant addresses is worth that much on the forwarding
+  path; the code saved is 30-40% of the 2D sender loop. The worker-row gains in v4s2 come with the smaller loop
+  (allocation), not with a mechanism, and are not counted on.
+
+**Readability round: v4k, v4m** (2026-10-27, a09u32 jobs 049-050; `variants/v4m` = `variants/v4`, controls v4j re-run in
+each job). Three of the user's review points, no intended codegen change:
+- Sender `channels_with_packets`: one named predicate, `holds_packet<CH>` (the free-slots count is anything but the ring
+  size), a group read into `registers[CH]`, and `channels_holding_packets`. It stays `!=`, not `<`: an out-of-range
+  count (an over-fill) must read as holding packets, as the generic loop reads it (LEDGER E0-10, §93). Written as a
+  ternary (`holds_packet ? 1u << CH : 0u`) the 1D sender grew 328 -> 387 instructions (GCC branched on it and
+  duplicated the worker visit); as `static_cast<uint32_t>(holds_packet) << CH` every sender is byte-identical to v4j
+  (68 configs). `send` gained a comment naming its four channel inputs and why it stays per channel (v4s, v4s2).
+- Downstreams by name: routing names a downstream by its direction in 2D (action bit d is direction d, asserted
+  against the codec) and 0 in 1D; the downstream tables keep the host's compact order and `downstream_entry` maps a
+  name to its entry at compile time. `action_to_slots` is gone; 2D receivers E/W 681 -> 678, N/S ~811 -> 790
+  instructions. The stateful-forward preset finds its one live entry instead of assuming entry 0.
+- The 1D sparse-multicast hop (write this chip's page group, advance the indices, forward): v4k computed a run-time
+  "write first" flag in front of the forward and the write (one inlined forward instead of two); the 1D scatter rows
+  lost 2.3 to 4.4 (1-hop scatter 141.2 -> 145.5), a register-allocation shift in the delivery path. v4m keeps v4j's
+  two-way branch and moves the whole sparse case into one out-of-line function (`sparse_multicast_hop`): 1D receiver
+  731 -> 684 instructions, 1D scatter rows +1.0 to +1.4 against the control, all else within noise. Accepted (robust
+  over peak); the remaining cycle is allocation, not mechanism.
+- Validation 96 + 143 and mix 33/33 on both. 1D sparse multicast, which no suite sends, on v4m with fabric_unit_tests
+  (built on a09u32: `ninja -C build fabric_unit_tests`, 41 test objects, no library rebuild; job 051,
+  `consolidation/v4m_gtest_runs.sh`, suite router settings): `Fabric1DFixture.TestSparseMcastPerPage*` 3/3 (single
+  destination, two contiguous, non-contiguous); all `Fabric1DFixture` tests 10 passed, 3 skipped by the tests (two
+  T3K-only, one TG gateways). The router ELFs carry `receiver::sparse_multicast_hop`, so v4m ran.
+
+**Rings and tori: v4 family 2** (2026-10-27, a09u32 jobs 052-060; `variants/v4`).
+- What rings and tori add (V4_FEATURE_SPEC §2-3): deadlock avoidance (bubble flow control: injection channels, the
+  worker and on tori a channel fed from the other axis, send only with two free far slots) and first-level acks on VC0
+  (the far sender returns producer slots on an ack, sent when a packet arrives; completions only free far slots). All
+  ring and torus routers (P150x8 and Galaxy) have both, one receiver channel, no VC1; 8 transaction ids.
+- v4 changes: the bring-up gate admits deadlock avoidance and VC0 acks; receiver `acknowledge_arrival` (the generic
+  loop's protocol: one ack per pass in its own credit frame when the TX queue is free, the packets-received register
+  consumed at the ack; only acked packets processed); completions one slot per frame under acks (the generic loop does
+  not batch them there); stateful forwards re-program the credit address on deadlock-avoiding routers, as main does
+  (main gives no reason; the forwarding sync buffer is RD_CMD_BUF, atomics use AT_CMD_BUF); the sender's ack and
+  bubble paths were already written and compile now (`far_slots_needed_by` reads the untrimmed injection array: GCC
+  rejects the trimmed std::array<bool, N>'s operator[] there as "used before its definition"). 2D routes never turn
+  an E/W-facing router's packet onto N/S on a torus either (E/W routers read only the column's X action), so the live
+  downstream rule holds. 272 configs build at -O3 and -Os (P150 and Galaxy, mesh, line, ring, torus); mesh and line
+  binaries are byte-identical to v4m.
+- What this P150x8 can run (cube wiring; mock-probed first, see below): ring validation `val_ring_p150.yaml`
+  (FullRingMulticast, FullRingUnicast, FullRingUnicastDeadlockQuick, HalfRingMulticast) and the Y-torus all-to-all
+  `val_torus_y_p150.yaml`; the Galaxy-sized Ring LinearMcast and Torus Y multicast tests abort in setup here.
+  Benchmarks `v4/exp_ring.yaml` (exp_1d_4352's rows on Ring), `v4/exp_torus_y.yaml` (2D rows on Torus Y; only the N/S
+  routers wrap and have deadlock avoidance).
+- Incident: jobs 052-053 ran unvetted ring/torus yamls; tests that abort in setup after the fabric is up leave the
+  ERISCs in the router, every later run failed ("Timed out while waiting for active ethernet core"), and the broker held
+  the device degraded (~03:21-03:41) until tt_device_reset. Since then, yamls are vetted CPU-only on the mock cluster
+  (a09u32's descriptor) and on main's router before v4.
+- Hardware: v4 ring validation 19/19, Y-torus 12/12 (data-checked; main 19/19, 12/12).
+
+| cycles/packet | main | v3q | v4 |
+| --- | ---: | ---: | ---: |
+| Ring 1-hop E/W / scatter | 182.1 / 234.3 | 176.1 / 227.6 | 183.4 / 222.3 |
+| Ring 1-hop bidirectional | 182.1 | 176.1 | 183.5 |
+| Ring 3-hop / scatter | 210.0 / 233.8 | 209.1 / 227.1 | 215.3 / 222.1 |
+| Ring multicast / scatter | 213.0 / 264.1 | 208.9 / 259.6 | 206.2 / 250.8 |
+| Ring unidirectional multicast | 272.9 | 272.0 | 251.2 |
+| Half-ring multicast / scatter | 246.8 / 291.0 | 230.9 / 285.0 | 231.4 / 269.5 |
+| Torus Y 1-hop N/S / scatter | 203.8 / 242.4 | 173.1 / 231.2 | 188.6 / 227.7 |
+| Torus Y 1-hop E/W (no deadlock avoidance) | 132.5 | 127.0 | 129.4 |
+
+- The ack protocol costs every router ~50 cycles/packet (ring 1-hop ~180 vs mesh ~130). v4 ring 1-hop (pcsv_v4ring):
+  both ERISCs saturated. Receiver: completions 69.4 and ack 46.9 cycles/packet (two credit frames per packet, each
+  behind TX-status reads ~7 cycles, plus the header's source id from L1 and the completion's bounded wait), local
+  delivery 32. Sender: worker credit 33.9 (one per ack, i.e. per packet; without acks once per completion batch,
+  ~8), worker visit 54.6 (ack-counter and connection loads stall ~10 each), send 62.3. v3q's sender pays the same
+  credit (34.4); its receiver is the generic loop. The receiver ring has 32 slots on these configs.
+
+**Rings: the ack protocol's cost, v4f1-v4f4** (2026-10-27, a09u32 jobs 061-064; variants kept as `variants/v4f1`..`v4f4`;
+lead `variants/v4` = `variants/v4l` = v4f1, byte-identical over all 272 configs).
+- v4f1, one credit frame per pass. The credit frame (counter credits) carries every sender channel's ack and
+  completion counts, absolute, so acks and completions only raise the counts and the loop sends one frame per pass when
+  they changed and the TX queue is free (`add_ack`, `send_credit_frame`; `release_completions` no longer checks the TX
+  queue or sends). Every packet that has arrived is acked when seen (the packets-received register consumed in one
+  step), not one per pass. Completions stay one slot at a time under acks.
+- v4f2 = v4f1 with completions batched under acks as without (batch of 4 on the 32-slot ring); v4f3 = v4f2 with
+  transaction ids in contiguous slot blocks instead of round-robin (ring: 8 ids, 32 slots); v4f4 = v4f2 with partial
+  batches held at most 8 passes. All validate (mesh 96, 1D 143, ring 19, Y-torus 12, mix 33).
+
+| cycles/packet | main | v3q | v4 (job 059) | v4f1 | v4f2 | v4f3 | v4f4 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Ring 1-hop E/W | 182.1 | 176.1 | 183.3 | 177.4 | 154.2 | 165.7 | 159.5 |
+| Ring 1-hop scatter | 234.3 | 227.6 | 222.3 | 217.2 | 192.5 | 195.3 | 198.0 |
+| Ring 3-hop | 210.0 | 209.1 | 215.3 | 208.7 | 187.8 | 190.0 | 192.5 |
+| Ring multicast / scatter | 213.0 / 264.1 | 208.9 / 259.6 | 206.3 / 250.9 | 177.4 / 216.8 | 171.4 / 205.5 | 179.4 / 208.1 | 174.2 / 210.7 |
+| Ring unidirectional multicast | 272.9 | 272.0 | 251.2 | 244.8 | 226.4 | 229.8 | 231.5 |
+| Half-ring multicast / scatter | 246.8 / 291.0 | 230.9 / 285.0 | 228.4 / 268.2 | 213.0 / 261.5 | 417.9 / 843.0 | 430.8 / 925.2 | 411.4 / 883.5 |
+| Torus Y 1-hop N/S / scatter | 203.8 / 242.4 | 173.1 / 231.2 | 188.6 / 227.7 | 182.8 / 222.9 | 169.7 / 198.2 | 169.5 / 200.7 | 170.1 / 203.4 |
+
+- v4f1: every ring and Y-torus N/S row better than job 059's v4 (-5 to -34) and than main; mesh, 1D and mix unchanged
+  (means -0.4 to +0.05). Lead.
+- Batching completions under acks (v4f2) is much faster on most ring rows but half-ring multicast collapses (2-4x).
+  Not transaction-id sharing (v4f3: block ids made it worse, and cost 1D multicast 9) and not trickle holds (v4f4: an
+  8-pass hold limit changed nothing there and cost meshes 2-4). Profile (pcsv_v4f2r vs pcsv_v4f1r, half-ring): in v4f2
+  both ERISCs of the router are slow at every L1 and register read (receiver: packets-received register 34.6 vs 13.6
+  cycles/packet, header word 32.5 vs 5.9, downstream credit register 31.4 vs not hot; sender: each of its counter and
+  register loads ~25), the sender spinning for far slots (visit checks 122 + 96 vs send 67) and the receiver stalled in
+  admission (56) and poll (38). Mechanism not found; batching under acks stays off (the generic loop's choice too).
+- Galaxy (200G) validation of v4l and main on the 2D torus and rings queued: Slurm job 155833
+  (`galaxy/frs_glx_torus.sbatch`; trees /data/aagarwal/frs-glx/trees/{base,v4l}; all 173 Galaxy ring/torus tests got
+  past setup on the mock Galaxy first; mock runs now use their own root, trees/mockroot, so a swapped /home tree cannot
+  reach them).
+
+**Galaxy rings and torus, v4l and main** (Slurm job 155833, bh-glx-110-a02u02, 200G links; `glx_report.py --configs`).
+- Data-checked, both routers: torus deadlock stability 87/87, torus stability `_short` 56/56, ring sanity 19/19, ring
+  rows 5/5.
+- Torus nightly (v4l only): stopped by the step's 1500 s timeout while still running (2,138 tests passed, none failed,
+  group 122 of 145; tests finishing every ~0.2 s up to the kill), not a hang. The sbatch now gives the nightly
+  `NT_TIMEOUT` (3000 s). Rerun (job 155913): all 145 groups, 2604 tests passed, none failed, 27.5 min.
+- Ring rows (cycles/packet, the slowest sender, device clock 1350 MHz on both):
+
+| row | main | v4l |
+| --- | ---: | ---: |
+| 1-hop E/W 256 B / 1024 B / 4352 B | 192.5 / 190.2 / 248.6 | 177.4 / 177.6 / 249.6 |
+| Full-ring multicast 1024 B / 4352 B | 270.2 / 263.7 | 236.6 / 313.8 |
+
+- 4352 B rows are wire-bound at 200G (1-hop: equal). Full-ring multicast at 4352 B, where every chip multicasts and
+  the links are saturated, is 19% slower on v4l (the slowest sender: 43.9 M vs 36.9 M cycles); on the 400G P150 the
+  same row is faster than main (177.4 vs 213.0). Open: how v4's sender shares a saturated link between injection
+  and forwarded traffic.
+
+**Per-packet credit cost: v4u** (2026-10-27, a09u32 jobs 065-068; variants `v4u`, halves `v4ue0`/`v4ue1`, pieces
+`v4ue0a`/`v4ue0b`/`v4ue1a`/`v4ue1b`; all built for the 272 configs at -O3 (v4u also -Os)). The study's question: is
+batching wrong, or is each credit just expensive? Each credit made cheaper, nothing held or batched:
+- Sender (E0): (a) the worker credit (an emulated L1 inline write on E0's write command buffer, which nothing else in
+  the sender uses) is programmed once per connection (`preset_worker_credit`: destination, size, NoC) and again after
+  router commands or the base firmware ran (`end_round` now says when); each credit stores the count and issues the
+  write with that state. (b) The worker visit reads its counters (completions, acks, connection semaphore) as one
+  fenced group.
+- Receiver (E1): (a) under first-level acks, the pass reads the packets-received count and the TX queue status as one
+  group, and the credit frame skips its busy re-read when the queue was free (only E1 sends on it). (b) A single-slot
+  completion path (`completion_batch == 1`, the first-level-ack case): one record, one bounded wait, one credit.
+- Validation: ring 19, Y-torus 12, mesh 96, 1D 143, mix 33, stream 10, burst 44, flushmix 16, flushmix4 4, every
+  variant data-checked where run; v4u rerun (v4ur2) within 0.2 of the first run.
+
+| cycles/packet | main | v3q | v4l | E0 (a) | E0 (b) | E0 both | E1 (a) | E1 (b) | E1 both | v4u |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Ring 1-hop E/W | 182.1 | 176.1 | 177.4 | 177.8 | 177.5 | 177.6 | 172.3 | 160.7 | 156.3 | 156.7 |
+| Ring 1-hop scatter | 234.3 | 227.6 | 217.1 | 216.9 | 216.0 | 215.9 | 211.6 | 199.6 | 195.4 | 195.5 |
+| Ring 3-hop | 210.0 | 209.1 | 208.8 | 209.3 | 208.8 | 209.2 | 204.5 | 192.9 | 189.0 | 189.0 |
+| Ring multicast | 213.0 | 208.9 | 177.4 | 177.4 | 177.5 | 177.5 | 172.4 | 163.5 | 164.6 | 156.6 |
+| Ring unidirectional multicast | 272.9 | 272.0 | 244.8 | 244.7 | 244.7 | 244.7 | 240.5 | 236.1 | 234.0 | 233.9 |
+| Half-ring multicast / scatter | 246.8 / 291.0 | 230.9 / 285.0 | 213.1 / 261.5 | 213.1 / 261.4 | 213.1 / 261.7 | 213.1 / 261.6 | 208.0 / 256.2 | 197.2 / 245.8 | 192.4 / 240.7 | 192.5 / 241.0 |
+| Torus Y 1-hop N/S / scatter | 203.8 / 242.4 | 173.1 / 231.2 | 182.9 / 223.0 | 183.4 / 222.8 | 183.3 / 222.3 | 183.4 / 222.0 | 177.8 / 217.3 | 171.1 / 205.7 | 171.1 / 200.8 | 161.7 / 200.9 |
+| 2D 1-hop E/W 4352 B | | 127.0 | 129.5 | 129.0 | 128.7 | 127.9 | 129.5 | 129.5 | 129.4 | 127.9 |
+| EW_PureWrite16 | | 116.3 | 123.7 | 121.9 | 120.8 | 120.1 | 123.7 | 123.7 | 123.7 | 120.1 |
+| mix mean (vs v4l) | | -4.7 | | -0.81 | -1.17 | -1.90 | +0.01 | -0.00 | -0.01 | -1.88 |
+
+- The pieces add up. The receiver carries the ring and torus gain (rings are E1-bound): single-slot completions -17,
+  grouped registers -5, together -21. The sender carries the mesh and mix gain (worker-injected small packets: -3.6 to
+  -4.1 on PureWrite16; 4352 mean -0.5). Where E1 alone stops short (ring multicast 164.6, torus N/S 171.1), the
+  bound moves to E0, and the sender pieces take those rows the rest of the way (156.6, 161.7). 1D unchanged (mean
+  +0.00); burst mean -0.55 (no row worse than +0.01), flushmix -0.66, flushmix4 -0.61.
+- v4u gets v4f2's batched-completion ring gain (ring 1-hop 154.2) without batching, and has no half-ring collapse
+  (192.5; v4f2 417.9). The answer to the question: credits were expensive per event, and the robust fix is cheaper
+  events, not fewer.
+- Profile, ring 1-hop (`pcsv_v4f1r` vs `pcsv_v4ur`, cycles/packet). E1: completions 47.0 -> 32.7, credit frame
+  20.0 -> 11.0, ack (now with the TX status read) 32.6 -> 36.7, delivery/header/retire unchanged (32.6/12.3/11.7 ->
+  31.9/12.2/12.2). E0: visit checks 54.0 -> 42.5, worker credit 27.8 -> 21.8, send 61.8 -> 59.7, free-slots read
+  23.9 -> 27.3 (E0's slack, E1 being the bound).
+- Lead: `variants/v4` = v4u.
+- Galaxy (200G, Slurm job 155963): torus deadlock stability 87/87, stability `_short` 56/56, ring sanity 19/19, ring
+  rows 5/5, torus nightly 2604/2604 (all data-checked). Ring rows (cycles/packet, main / v4l / v4u): 1-hop 256 B
+  192.5 / 177.4 / 156.3, 1024 B 190.2 / 177.6 / 156.6, 4352 B 248.6 / 249.6 / 249.6 (wire); full-ring multicast
+  1024 B 270.2 / 236.6 / 216.1, 4352 B 263.7 / 313.8 / 303.6 (still behind main; open item above).
+- Galaxy multicast size sweep (job 155971, `glx_ring_mcast_sweep.yaml`): no data. Main's run waited the whole 1500 s
+  for a KMD lock that another process held on node bh-glx-110-a03u02 (an `--exclusive` job). The sbatch now stops a
+  step after 180 s of lock wait with no test started and lists the processes it can see. Resubmitted without that
+  node: job 156067 (bh-glx-120-c02u02), all 6/6 per router. Full-ring multicast, cycles/packet:
+
+| size | main | v4l | v4u | v4u/main |
+| ---: | ---: | ---: | ---: | ---: |
+| 1024 | 270.2 | 236.5 | 216.1 | 1.25x |
+| 2048 | 265.7 | 236.9 | 216.6 | 1.23x |
+| 2560 | 282.3 | 237.0 | 216.8 | 1.30x |
+| 3072 | 261.2 | 237.3 | 217.2 | 1.20x |
+| 3584 | 261.1 | 237.6 | 218.6 | 1.19x |
+| 4352 | 263.4 | 318.3 | 302.7 | 0.87x |
+
+  v4 is router-bound and flat (~217) up to 3584 B; 4352 B is the one size whose 200G wire time (~248) exceeds v4's
+  router time, and there v4 keeps the links only ~82% busy (main, router-bound at ~261 everywhere, ~94%). So the
+  loss appears exactly when the wire is the bound. Suspects (untested): credit frames taking wire time (v4 sends a
+  frame on any pass with new acks or completions, up to two per packet, ~14 wire cycles each at 200G, on a direction
+  that also carries data) or E0's turnaround after the TX queue frees.
+- Naming: this run first used the name v4g, already taken by job 041's sender-fix variant. It overwrote job 041's
+  result files `v4g_13129088_{mesh,val1d,4352}` and `v4gw24_13129088_1d` (their numbers are in the sender-fix entry
+  above) and `consolidation/v4g_runs.sh` (regenerated exactly from `v4f_runs.sh`). Renamed to v4u (variant, results,
+  `v4u_runs.sh`, coverage builds).
+
+**Credit frames per packet: v4p, v4p2** (2026-10-27, a09u32 jobs 069, 072; Galaxy Slurm job 157726). The Galaxy 4352 B
+full-ring multicast gap's first suspect: a wire-bound link carries an ack frame and a completion frame per packet,
+because with idle receiver passes between arrivals the ack (sent the pass a packet arrives) and the completion (sent
+once its forward has left, a later pass) never share a frame. Both are already counts in one frame per pass (v4f1).
+- v4p = v4u + under first-level acks, completions credited on a pass without a frame wait for the next ack frame, at
+  most 16 passes. v4p2 = at most one held completion (a second sends the frame). Mesh and 1D code identical to v4u
+  (272 configs, offline builds). Data-checked on P150: ring 19/19, Y-torus 12/12 (both).
+- P150 (router-bound everywhere): every first-level-ack row slower, v4p / v4p2 vs v4u: ring writes +6.5 / +8.2,
+  scatter +9.5 / +11.6, half-ring +7.0 / +9.1, torus N/S +8.0 / +9.5 (scatter +14 / +17); unidirectional ring
+  multicast write -2.9 / -0.4; rows without acks unchanged. v4u twice in the same jobs: within 0.1 of job 065.
+- Cause: E1's code, not the protocol. The hold's two loop-carried variables push the ring receiver loop into spilling
+  (`receiver::run`: 555 -> 594 instructions, stack loads 20 -> 32, stores 36 -> 46); holding one completion (v4p2)
+  costs as much as holding 16 passes' worth (v4p), so credit clumping is not it. P150 cannot answer the frame question;
+  the Galaxy row can (the wire binds there, not E1).
+- Galaxy (Slurm job 157929, bh-glx-120-c06u08, 200G; jobs 157726 and 157804 ran nothing: other users' processes held
+  the device on the --exclusive node): ring sanity 19/19 on v4p and v4p2 (data-checked), but full-ring multicast
+  collapses at every size: v4p 18,904-20,526 cycles/packet, v4p2 17,279-18,676, against v4u 216.1-304.2 and main
+  261-284 (two runs each, within 1%). Ring 1-hop: +6.6 / +8.2 at 256 B and 1 KiB (E1's spills, as on P150), equal at
+  4352 B (wire-bound).
+- Mechanism: bubble flow control. A saturated full ring moves on its free slot (a forward needs one free far slot, an
+  injection two); a held completion is that slot's credit, so the upstream sender cannot forward, no packet arrives,
+  no ack frame goes out to carry the credit, and the slot is released only by the 16-pass limit: the ring advances one
+  hop per limit. One held slot is enough (v4p2). Consistent in size: 16 passes x ~65 cycles x 19 hops ~ 19,800 cycles
+  per packet. P150's 8-chip ring rows do not saturate the ring this way. Likely also v4f2's unexplained half-ring
+  multicast collapse (completions batched under acks hide bubble credits the same way).
+- So on deadlock-avoiding rings a completion must not wait for anything. v4p and v4p2 are dropped.
+- The frame suspect is weak anyway: main's ring receiver sends one frame per ack and one per completion (each
+  `send_ack_credit` / `send_completion_credit` sends the whole counter block, `fabric_router_flow_control.hpp`), two
+  frames per packet at any load, and keeps the link ~94% busy; v4 sends at most that many. The 4352 B gap goes back to
+  how v4's sender shares a saturated link between injection and forwarded traffic.
+
+**Slot allocation sweep: v4us** (2026-10-27, a09u32 jobs 070-071, 073-075). The user's question: with no power-of-2
+requirement, give channels computed depths and the leftover to the worker channel, instead of the tier tables.
+- Host study switch (`fabric_static_sized_channels_allocator.cpp`): `TT_FABRIC_EXP_SLOTS_1D` (Linear, Ring) /
+  `TT_FABRIC_EXP_SLOTS_2D` (Mesh, Torus) / `TT_FABRIC_EXP_SLOTS` (both) = worker,forwarding,receiver for VC0 (worker
+  0 = every slot left, at most 127), checked against capacity: 83 slots of 4400 B on 1D and rings, 81 of 4448 B on 2D
+  and tori. Every router gets the same depths, so the receiver depth matches at both ends of a link.
+- v4us = v4u + the transaction-id tracker indexes ids by slot (no table) also when the ring is a whole number of id
+  rounds (`SLOT_INDEX_TRIDS`); identical code to v4u at today's depths (272 configs).
+- Data-checked: 1D validation 143/143 at 27/24/32 (worker/forwarding/receiver), ring 19/19 at 27/16/40, mesh sanity
+  96/96 at 29/12/16 (its Linear tests at 55/12/16) and at 13/20/8, Y-torus 12/12 at 21/12/24.
+
+| cycles/packet, 4352 B | today | change at |
+| --- | ---: | --- |
+| 1D 1-hop write / bidirectional | 131.8 / 140.8 | worker 19-51: -7.3 / -15.9 (16 slots bind; 19 suffice) |
+| 1D 1-hop scatter | 149.2 | worker 35: -8.0, 27: -7.4, 19: -4.8; receiver 16 (worker 51): -3.1 |
+| 1D 3-hop write | 144.2 | forwarding 20: -8.0, 24: -10.9, 28: -13.5, 32: -11.6 |
+| 2D 1-hop write / bidirectional | 127.9 / 135.7 | worker 20-41: -2.1 / -8.8 (saturates at 20) |
+| 2D 3-hop write | 149.7 | forwarding 15: +6.2, 14: +15.0, 12: +39.6, 10: +72.3, 8: +122.7 |
+| 2D any row | | receiver 8: +40 to +50 (forwarding 16-20 cannot help); 32 (worker 13): 1-hop +32 |
+| Ring, all rows | 156.7 (1-hop) | worker 19-43, forwarding 24: within 1.6; receiver 24, 40, 48: +7.5 to +8.7 on every row |
+| Y-torus N/S (acks) | 161.8 | worker, forwarding: 0; receiver 24: +8.0; 32 (worker 13): -0.3 |
+
+- Credit loops (slots x cycles/packet where a depth binds): 2D worker ~2,170 cycles, 2D forwarding (3-hop) ~2,200-
+  2,400, 2D receiver ~1,420 (8 slots: 178). So at ~126 cycles/packet 2D wants worker >= 18, forwarding >= 19 per
+  channel, receiver >= 12: 92 slots of 81. The 2D split is a trade; 1D has room for all.
+- Rings: depth is not the limit anywhere (acks shorten the worker loop); only the receiver ring's size matters, as a
+  cost.
+- A receiver ring that is not a power of 2 costs ~8 cycles/packet on E1 regardless of depth (24, 40, 48 equal; 48 is
+  a whole number of id rounds, so not the tracker): `ring_add` becomes a compare and a usually-taken branch, ~5 per
+  packet (ack loop, retire, completion index, transaction-id lookup); the ring receiver loop is 48-72 B larger, no
+  more spills. Sender channels show no such cost (worker 19, 27, 35 and forwarding 15, 20, 24, 28 are all fine).
+- 2D worker/forwarding at receiver 16, stream mixes (33 rows): 20/15 mean -3.33 (every E/W and N/S row -1.0 to -7.6;
+  FWD_MixCmd 217.4 -> 175.7, not repeated at 23/14, so noise), 23/14 mean -1.92; 4352 B rows: 20/15 mean -0.40
+  (1-hop -2 to -3, bidirectional -8.8, 3-hop +6.2 / +9.1 scatter).
+- 1D picks: 31/20/32 mean -6.07, 27/24/32 -6.46, 23/28/32 -6.60 (12 rows; 3-hop -8.0 / -10.9 / -13.5, 1-hop scatter
+  -7.7 / -7.4 / -6.7).
+- Results: `results/v4us_*` (2D, torus; job 071 used the one switch, its yamls are single-family), `v4usa_*` (1D,
+  ring), `v4usc_*` (receiver 8, torus receiver 32), `v4usd_*` (mixes, 1D picks); `consolidation/slots_table.py
+  PREFIX SUITE [TAG ...]` prints a sweep with the depths each run got.
+
+**1D slot split in the builder** (2026-10-27, a09u32 jobs 076-077). User: keep 2D as is for now. New default in
+`fabric_static_sized_channels_allocator.cpp` for Linear and Ring on Blackhole (VC0 only, no tensix extension, none of
+the older study switches): the receiver keeps its tier depth (32), the sender channels share the other slots evenly,
+remainder to the worker channel: 26 / 25 / 32 of 83 (was 16 / 16 / 32). `TT_FABRIC_EXP_TIER_SLOTS=1` restores the tier
+depths. Mock check: Linear and Ring 26/25/32, Y-torus 17/16/16/16/16 unchanged.
+- Data-checked at 26/25/32: main's router (kernel v1, flags 0, firmware keepalive) 1D 143/143, ring 19/19; v4u 143/143,
+  19/19.
+
+| cycles/packet, 4352 B | v4u tier | v4u 26/25 | main tier | main 26/25 | main 19/32 | main 32/19 | main 35/16 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1D 1-hop write / bidirectional | 131.8 / 140.8 | 124.5 / 124.8 | 187.6 / 168.0 | 187.6 / 171.2 | 187.6 / 171.3 | 187.5 / 167.9 | 188.6 / 174.9 |
+| 1D 3-hop write | 144.3 | 132.6 | 187.6 | 187.6 | 187.6 | 187.5 | 188.1 |
+| Half-ring multicast write / scatter | 192.4 / 241.1 | 192.0 / 240.7 | 249.4 / 299.1 | 232.8 / 284.5 | 229.9 / 281.5 | 251.6 / 301.0 | 245.2 / 297.5 |
+| Ring 1-hop write / bidirectional | 156.8 / 156.5 | 156.7 / 156.5 | 198.6 / 191.6 | 200.2 / 194.9 | 200.3 / 194.7 | 198.5 / 191.4 | 202.2 / 198.7 |
+| Ring 3-hop write | 189.0 | 187.1 | 209.6 | 215.8 | 209.5 | 215.9 | 205.9 |
+| Ring multicast write / scatter | 156.6 / 195.8 | 156.6 / 195.8 | 212.4 / 263.7 | 196.6 / 233.6 | 198.7 / 233.7 | 206.5 / 252.5 | 210.3 / 260.5 |
+| Unidirectional ring multicast write | 233.9 | 233.0 | 273.0 | 279.2 | 272.8 | 279.3 | 268.4 |
+
+(worker / forwarding; receiver 32 throughout. v4u 1D rows from `exp_1d_m1.yaml`, main's from `exp_1d_4352.yaml`; v4u at
+32/19: 1-hop as 26/25, 3-hop 138.3.)
+- v4u: 1D gains everywhere (1-hop -7.3, bidirectional -16.0, 3-hop -11.7, scatter -7 to -9), rings unchanged (3-hop
+  -1.9). v4's sender channels have no power-of-2 path; the worker needs >= 19 slots.
+- Main: deeper forwarding pays on multicast (ring multicast -16 / -30 scatter, half-ring -14 to -19), but every sender
+  channel whose depth is not a power of 2 costs the flows through it 2-6 cycles/packet (`wrap_increment` and the 2N
+  pointer wrap in `edm_fabric_flow_control_helpers.hpp` have power-of-2 paths): a 26- or 19-slot worker: ring 1-hop
+  +1.6, bidirectional +3.1 to +3.3; a 25- or 19-slot forwarding channel: ring 3-hop +6.2, unidirectional multicast
+  +6.2. 32/19 = tier on 1-hop rows; 19/32 = tier on forwarded rows. Main's best fit would be 16/32/32 (all powers of 2;
+  not run), which gives up v4's 1-hop gain (16 worker slots bind v4).
+- Results: `results/main1d_*`, `v4u1d_*` (`_split_`, `_tier_`, `_s<w>-<f>-<r>_`); scripts `consolidation/split1d_runs.sh`,
+  `main_slots_runs.sh`.
+- Kept form: the split applies only to the study's router in the v2 slot (`TT_FABRIC_KERNEL_VERSION=2`, v4); main's
+  router keeps the tier depths, so its numbers are today's (mock check: kernel v1 ring 16/16/32, v2 26/25/32). Both
+  pairings are the ones job 076 measured and data-checked. Routers with only the worker channel (neighbor exchange,
+  the speedy path, which v4 does not run yet) keep their tier depths too.
+- Main at 16 / 32 / 32 (all powers of 2, 80 of 83; job 078, with the tier depths again as the same-job control):
+  data-checked 1D 143/143, ring 19/19. Every forwarded multicast row gains, nothing else moves (all within 0.4):
+  ring multicast 212.4 -> 198.6 (scatter 263.7 -> 233.7), half-ring 249.2 -> 230.5 (300.2 -> 281.8), linear multicast
+  163.6 -> 159.0 (221.0 -> 211.8). Neighbor exchange write 124.9 -> 142.7, but that is the study switch giving the
+  single-sender router 16 worker slots instead of its tier 32, not the rule: a builder rule for main would leave it.
+  Not a builder rule (the builder's computed split is for the router that replaces main); it is main's best measured
+  1D allocation, the fair baseline when comparing main and v4 on 1D and ring rows.
+
+**Is the batched completion path worth its complexity? v4sc1, v4sc2** (2026-10-27, a09u32 job 079; v4u as the same-job
+control `v4uctl`). User: `release_completions` reads as complex; is it costing cycles to save cycles? The batched path
+(no first-level acks: meshes, 1D, torus E/W) came from v3 (LEDGER E1-16 to E1-28), when E0's per-credit cost was high.
+- v4sc1 = v4u with single-slot completions on every VC (the path rings already use); E1's mesh/1D receiver loop 2,908
+  -> 2,187 B, stack loads 22 -> 17. v4sc2 = v4sc1 with the single-slot path checking a slot's writes once (a later
+  pass credits it) instead of waiting up to 32 checks. Both data-checked: mesh 96, 1D 143, ring 19, Y-torus 12.
+
+| suite (rows), cycles/packet vs v4u | v4sc1 mean (range) | v4sc2 mean (range) |
+| --- | ---: | ---: |
+| 2D 4352 B (10) | +12.80 (+1.2 to +19.4) | +11.77 (+0.8 to +18.8) |
+| stream mixes (30, MixCmd out) | +12.91 (+4.4 to +20.8) | +12.28 (+4.6 to +18.8) |
+| flushed-signal mixes (16) / chunk-4 (4) | +13.02 / +16.31 | +11.68 / +14.25 |
+| bursty senders (44) | +2.18 (-0.7 to +17.2) | +1.93 (-2.0 to +16.4) |
+| 1D (12) | +12.16 (0 to +22.0) | +10.93 (0 to +20.2) |
+| ring (14) | -0.01 | -2.76 (-3.0 on every row) |
+| Y-torus (12) | +8.57 (E/W +9 to +19.5, N/S 0) | +6.87 (N/S -3.0) |
+
+- Batching still pays ~12 cycles/packet without acks (1-hop writes +9, scatter +16 to +20, small writes +16, 3-hop
+  +19): a credit per packet costs both ERISCs (E1 a frame per completion, the far E0 a producer credit per completion).
+  The complexity buys real cycles; it is not waste.
+- The single-slot path's bounded wait is waste: checking once and leaving the slot to a later pass is -3.0 on every
+  ring and torus N/S row (v4sc2 vs v4sc1 there). The batch path has the same bounded wait (E1-25, worth -1.6 to -4.8
+  in v3); untested in v4.
+
+**Where v4u's E1 waits: line-level profile** (2026-10-27, a09u32 jobs 080-081; `pcsv_v4uq2d` (2D), `pcsv_v4uqr` (ring);
+new tool `consolidation/pcs_lines.py CACHE GDIR PREFIX ROW...`: the busiest ERISC's samples by innermost source line,
+with each line's hottest instruction; a waiting instruction holds the PC, so a load's wait shows on its first use).
+User's question: is there scope to restructure E1's pass for more overlap (grouped reads up front, header prefetch,
+decode one packet while delivering the previous)?
+
+| E1 wait, cycles/packet | scatter 146.0 | fused 152.6 | 3-hop 149.6 | multicast 146.8 | 16 B 119.5 | ring 1-hop 156.7 | half-ring 191.8 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| command-buffer ready check before each NoC command | ~17-25 | ~20 | ~19 | ~15 | ~8 | ~8 | ~22 |
+| header word, used at once | 8.7 | 8.5 | 10.6 | 9.8 | 8.9 | 8.4 | 6.3 |
+| header loaded again by the ack loop (source channel) | | | | | | 8.6 | 6.9 |
+| packets-received (+ TX status) read, used at once | 4.6 | 4.4 | 7.3 | | (idle) | 5.8 | 15.5 |
+| downstream credit read (admission) | | | 3.6 | 5.7 | | | |
+| completion: status read + bounded-wait spin | 2.3 | 2.3 | 2.1 | 2.6 | 1.9 | 12.0 | 11.7 |
+| `mul` for the ack loop's header address | | | | | | 3.6 | 4.1 |
+
+- The command-buffer checks are mostly one lone register read each (~7, `noc_cmd_buf_ready` used at once inside the
+  NoC API before every command: `ncrisc_noc_set_transaction_id`, `noc_fast_write_dw_inline_with_state`); scatter and
+  fused add real busy time (consecutive commands on one buffer). Grouping those reads needs NoC API variants that skip
+  the internal check (`noc_write_with_state` and `noc_fast_atomic_increment_with_state` already take one;
+  `ncrisc_noc_set_transaction_id` and the inline-write path do not).
+- From the load-overlap microbenchmark (§17): distance hides nothing on this core (a lone load costs 6-8 at any
+  distance); only reads issued together overlap, up to four. So a prefetch issued a phase early does not help, and a
+  pipeline that decodes the next packet while delivering this one would add a pass of latency per hop and loop-carried
+  state (spills) for no load-latency gain. The restructure is a same-pass reshape around groups of up to four reads.
+
+**E1 pass reshape prototypes: v4x1, v4x2** (2026-10-27, a09u32 job 082; v4u as the same-job control `v4uxc`). Built from
+the profile above, all data-checked (mesh 96, 1D 143, ring 19, Y-torus 12).
+- v4x1 (stage 1): the next completion chosen first (`next_completion`, no loads), then one register group
+  (packets-received, TX status, that completion's write-sent status), then acks, the completion (`credit_completion`)
+  and the frame, then the packet; no bounded waits; `receive` no longer polls (the group's count is used every pass).
+- v4x2 (stage 2): v4x1 + the packet's header word, routing fields and (one or two live downstreams) their local credit
+  registers read as one group in `receive`.
+
+| vs v4u, cycles/packet (mean, range) | v4x1 | v4x2 |
+| --- | ---: | ---: |
+| 2D 4352 B (10) | +5.75 (+2.6 to +7.8) | +11.05 (+4.4 to +17.1) |
+| stream mixes (30) | +4.14 (-0.5 to +10.9) | +11.79 |
+| flushed-signal mixes (16) / chunk-4 (4) | +6.24 / +8.23 | +13.32 / +15.97 |
+| bursty senders (44) | +1.74 | +2.78 |
+| 1D (12) | +7.08 | +11.21 |
+| ring (14) / Y-torus (12) | +1.95 / +4.75 | +8.74 / +11.39 |
+| latency 1-hop / 3-hop (ns) | -2 to +11 / +4 to +20 | +18 to +39 / +48 to +56 |
+
+- v4x1's loss includes E0-bound rows (2D 1-hop write +5.7): credit timing, not E1's cost. The completion was chosen
+  before the group with "a packet is waiting", which without acks is stale at the top of the pass (0 after the last
+  retire): the newest slot was never held, the batch's proof was usually the slot issued a pass earlier (still
+  leaving), and partial batches went out on the idle timer, so credits came smaller and later. Fixed in v4x3 (the
+  previous pass's progress).
+- v4x2's further loss fits §17: an L1 read in a group but used later costs ~9, and the credit registers were read and
+  stored on every packet, also on rows that never forward. Dropped.
+
+**E1 pass reshape: v4x3, v4x4** (2026-10-27, a09u32 jobs 083-084; same-job v4u controls `v4uxd`, `v4uxe`, within 0.1 of
+job 082's). Both data-checked (mesh 96, 1D 143, ring 19, Y-torus 12).
+- v4x3 = v4x1 with the completion chosen on "the previous pass handled a packet" (known before the group). v4x4 (hybrid)
+  = with first-level acks v4x3's order (register group, acks + completion + frame, then the packet); without acks
+  v4u's order (packet first, the count polled only when the kept count is used up, the TX queue read only when a frame
+  is due), with v4x's completion code (`next_completion`, `credit_completion`, no bounded waits).
+
+| vs v4u, cycles/packet (mean, range) | v4x3 | v4x4 |
+| --- | ---: | ---: |
+| 2D 4352 B (10) | +3.61 (+0.8 to +7.5) | +2.89 (+0.4 to +4.7) |
+| stream mixes (30) | +3.42 | +1.14 (-0.1 to +4.5) |
+| flushed-signal mixes (16) / chunk-4 (4) | +4.74 / +5.71 | +2.35 / +2.12 |
+| bursty senders (44) | +0.52 | +0.82 |
+| 1D (12) | +7.08 | +2.13 |
+| ring (14) / Y-torus (12) | +1.01 / +3.24 | +1.02 / +2.92 |
+| latency (ns) | 0 to +20 | -9.6 to +8.1 |
+
+- None of the reshapes beats v4u. On this core grouping helps only reads a pass needs anyway: without acks v4u reads
+  the count rarely (a lower bound kept between reads) and the TX queue once per frame, so reading them every pass, even
+  grouped, adds cost (v4x1/v4x3 vs v4x4 there); with acks v4u already groups the per-pass reads, and sending the frame
+  before the packet costs ~3-4 (v4x4 ring +1.0 against v4sc2's -2.8 for the same spin removal in v4u's order).
+- The bounded wait: worth keeping in the batch path (v4x4's remaining +2 to +4 without acks, the E1-24 race: a full
+  batch's newest write usually leaves just after the first check), pure cost in the single-slot path (-3, job 079).
+- Left with real headroom (profile above): the command-buffer ready check (~7 per NoC command, more on scatter and
+  fused), which needs NoC API variants that skip the internal check so the ready registers can be read in a group; and
+  on ack VCs the second header load (~7) and the ack loop's `mul` (~3.6).
+
+**Readable completions and the ring ack cursor: v4y, v4y3** (2026-10-27, a09u32 job 085; v4u control `v4uye`, within 0.1
+of job 084's). v4y = v4u with `release_completions` split into `next_completion` (which credit is due) and
+`credit_completion` (whether its writes have left, then the credit), the batch path keeping its bounded wait, single
+slots checked once. v4y3 = v4y + an ack cursor on first-level-ack VCs (the ack loop steps a slot address instead of
+`first_slot + index * size`). Both data-checked (mesh 96, 1D 143, ring 19, Y-torus 12).
+- v4y: rings -2.74 (every row -2.9 to -3.3: the single-slot spin), Y-torus N/S -3; but scatter and fused rows +2.4 to
+  +3.6 and 1D +2.25 (multicast scatter +6.9), with no change in the batch path's behavior: code layout of the split
+  function. Above the 1-2 cycle tolerance: the split waits for a profile; the single-slot change alone is taken
+  (v4ua below).
+- v4y3: the cursor gives back ~1.2 of the ring gain (one more loop-carried value). Dropped.
+
+**Single-slot completions without the wait, and grouped command-buffer checks: v4ua, v4ub** (2026-10-27, a09u32 job
+086; v4u control `v4uyf`, within 0.2 of job 085's). Both data-checked (mesh 96, 1D 143, ring 19, Y-torus 12).
+- v4ua = v4u with the single-slot completion checked once (a later pass credits a slot still being read): rings -2.73
+  (every row -2.8 to -3.1 but two at -1.1/-1.2), Y-torus N/S -3.0, every mesh, 1D, mix, flush and burst row within
+  0.2 (that code is unchanged). Latency -4 to +7 ns. Lead candidate.
+- NoC API flags (user-approved; in the variant as an overlay of the tree's headers, so a job swaps them in only for
+  itself): `skip_cmdbuf_chk = false` on `ncrisc_noc_set_transaction_id` and `noc_fast_write_dw_inline_with_state`
+  (Blackhole and Wormhole), passed through `noc_inline_dw_write_with_state` (`dataflow_api.h`); defaults keep every
+  caller's code. `offline_build.py` now puts a variant's copy of any include directory outside `tt_metal/fabric` first.
+- v4ub = v4ua + `receive` reads the ready state of the local-write, forward-data and forward-credit command buffers in
+  one group with the header loads, waits there for any not ready, and the packet's first command on each skips its
+  check. Worse nearly everywhere: 2D +4.59, mixes +5.83, flushed +5.54, 1D +8.28, ring +7.18, Y-torus +5.30 (atomic
+  rows +11, though they use none of those buffers); better only where a packet forwards: ring 3-hop -6.9,
+  unidirectional ring multicast -10.3. Two mistakes in the shape: the wait moved before decode, so a buffer still
+  draining the previous write is no longer overlapped with decode and admission; and the NIU register reads sit in
+  the header's group, so decode's first use of the header waits behind them (loads complete in order, §17). A first
+  build with fences around the group added 6-9 stack loads (the fence makes memory-held state reload) and an
+  out-of-line wait added more (a call in the loop); both removed before the run.
+
+**The forward's command-buffer checks paired: v4uf** (2026-10-27, a09u32 job 087; v4ua as the same-job control
+`v4uac`, within 0.2 of job 086's). v4uf = v4ua + the NoC API flags (overlay) + in a stateful forward (one live
+downstream: 1D, rings, E/W 2D routers) the data and credit command buffers' ready state read as a pair right before the
+forward; a buffer not ready is waited for just before its command, as the API would; the two commands then skip their
+own checks. Local writes, atomics and everything else as in v4ua. Data-checked: mesh 96, 1D 143, ring 19, Y-torus 12.
+- Every suite within ±0.6 of v4ua except forwarded rows: ring 3-hop -6.8, unidirectional ring multicast -5.0,
+  half-ring multicast -3.4, 1D 3-hop -3.1, 1D unidirectional multicast -2.0. 2D 3-hop does not move (bound by its
+  forwarding slots' credit loop, not E1). Latency 3-hop -2 to -10 ns, 1-hop -4 to +7.
+- Lead: `variants/v4` = v4uf (v4u + single-slot completions checked once + the paired forward checks; the NoC API
+  flags travel with it as an overlay of `tt_metal/hw/inc` until they are applied to the tree).
+
+**Galaxy check of the lead v4uf** (Slurm job 158477, bh-glx-110-a04u14, 200G; the Galaxy trees' host predates the 1D
+slot split, so 1D/ring routers there keep 16/16/32). Data-checked: ring sanity 19/19, torus deadlock stability 87/87,
+torus stability `_short` 56/56 (nightly in the same job).
+
+| full-ring multicast, cycles/packet | main | v4u (two runs) | v4uf (two runs) |
+| --- | ---: | ---: | ---: |
+| 1024 / 2048 / 2560 / 3072 B | 276.0 / 271.0 / 282.4 / 261.4 | 216.2 / 216.6 / 216.9 / 217.2 | 207.3 / 207.9 / 208.1 / 208.7 |
+| 3584 B | 261.1 | 218.8 / 218.9 | 240.1 / 235.0 |
+| 4352 B | 263.8 | 303.5 / 305.2 | 345.5 / 348.9 |
+| ring 1-hop 256 B / 1 KiB / 4352 B | | 156.3 / 156.6 / 249.6 | 153.3 / 153.7 / 249.6 |
+
+- Router-bound sizes -4%, 1-hop -2%; but where the wire binds (4352 B, and now 3584 B, which v4uf's faster router
+  pushes into the wire-bound regime) +8% to +14%: v4uf/main at 4352 B 0.76 (v4u 0.87).
+- Suspect: the single-slot change (checked once, a later pass credits it). A saturated full ring moves on its free
+  slot, so each hop's completion credit for it is on the ring's critical path; v4u's bounded wait credited it the
+  moment its write left, v4uf a pass later. On the P150's rings nothing saturates, so the same change read as -3.
+  The same reasoning names a candidate for the old 4352 B gap to main: v4 never credits the slot just written while
+  packets keep coming (the newest slot is held until the next packet or an idle pass); main credits every slot as
+  soon as its write has left. Tests: v4wt (v4uf with the bounded wait back) and v4eg (v4uf with single slots due as
+  soon as one waits, main's rule).
+
+**Single-slot completion timing: v4wt, v4eg** (2026-10-27, a09u32 job 088; v4uf control `v4ufc`, within 0.05 of job
+087's; Galaxy Slurm job 158562). Both data-checked on P150 (mesh 96, 1D 143, ring 19, Y-torus 12). Also v4uf's torus
+nightly on Galaxy (job 158477): 2604/2604.
+- v4wt = v4uf with the single-slot bounded wait back (v4u's rule): rings +2.76, Y-torus N/S +3.0, all else within 0.4.
+- v4eg = v4uf with single slots due as soon as one waits, the slot just written too (main's rule), checked once:
+  rings -1.71 (-1.9 to -2.2 on 11 of 14 rows; ring multicast write +1.5), Y-torus N/S -2.0, all else within 0.4;
+  latency -5 to +12 ns. Ring 1-hop ~151.6 (v4u 156.7).
+
+**Single-slot completion timing on Galaxy** (Slurm job 158562, bh-glx-110-a04u14; v4uf, v4wt, v4eg against main, two
+multicast runs each, agreeing within 0.5 except v4uf 4352 B 351.9 / 347.3). Data-checked: ring sanity 19/19 (v4wt,
+v4eg), torus deadlock stability 87/87 and stability `_short` 56/56 (v4eg).
+
+| full-ring multicast, cycles/packet | main | v4uf (checked once) | v4wt (bounded wait) | v4eg (eager, checked once) |
+| --- | ---: | ---: | ---: | ---: |
+| 1024-3072 B | 271.7-275.8 | 207.3-208.7 | 210.3-211.6 | 205.3-206.8 |
+| 3584 B | 261.1 | 238.2 / 237.5 | 215.9 / 216.0 | 234.9 / 235.0 |
+| 4352 B | 263.7 | 351.9 / 347.3 | 310.3 / 309.7 | 356.0 / 356.9 |
+| ring 1-hop 256 B / 1 KiB | | 153.3 / 153.7 | 156.4 / 156.7 | 151.3 / 151.5 |
+
+- The bounded wait is what a saturated ring needs: with it (v4wt) 4352 B is back at v4u's ~310 and 3584 B is the best
+  of all (215.9); without it the free slot's credit goes a pass later at every hop. Crediting the newest slot early
+  (v4eg) does not help there, so holding the newest slot is not the old gap to main (310 vs 264, still open).
+- Where the router binds the wait costs ~3, on Galaxy as on P150 (v4wt +3 vs v4uf; v4eg -2 more).
+- So the single-slot rule wants both: wait (bounded) on a pass without a packet, where E1 has slack, which is the
+  wire-bound case; check once while packets keep coming. Goes into the completion component (V4_VC1_DESIGN §4.3).
+
+**Main's router on VC1 routers: the reference for v4's VC1 work** (2026-10-27, a09u32 jobs 089 and 090;
+`consolidation/vc1_main_runs.sh [fw|1000]`, labels `mainvc1_*` and `mainvc1ka_*`). Main's router (v1 kernel, flags 0)
+on the VC1 split (`vc1/vc1_split.yaml`: the multi-mesh sanity suite, data-checked, then the intra-mesh rows on VC1
+routers), hang capture armed, at the builder's level (-Os) and -O2, each in a fresh cache. All four runs clean: 34/34
+finishes, no error lines. VC1 design step 1 (`consolidation/V4_VC1_DESIGN.md` §6).
+
+| VC0 rows on VC1 routers, cycles/packet (slowest sender) | main -Os | main -O2 | v3q -Os / -O2 / -O3 | v3z -Os |
+| --- | ---: | ---: | ---: | ---: |
+| 1-hop E/W 16 B | 307.2 | 305.4 | 180.1 / 176.2 / 175.1 | 174.8 |
+| 1-hop E/W 4352 B | 310.8 | 306.6 | 190.3 / 191.2 / 190.5 | 186.4 |
+| 1-hop N/S 16 B | 309.6 | 304.9 | 188.5 / 179.8 / 181.4 | 185.0 |
+| 1-hop N/S 4352 B | 303.5 | 302.8 | 197.8 / 192.8 / 191.9 | 193.0 |
+| multicast 4352 B | 553.9 | 548.7 | 565.5 / 559.5 / 557.7 | 580.9 |
+
+- Main is core-bound at ~305 on every 1-hop row, whatever the size or the keepalive: v1 reads only the study's
+  override (`EXP_SEQ_UPDATE_TIMEOUT`), so `fw` ran at the firmware's 8000 and `1000` at 1000, and the rows agree within
+  0.1 (as §44's untrimmed stock, then ~222 on VC0-only routers). The opt level is worth ~1%.
+- v3 is ~40% faster than main on the 1-hop rows; on multicast main is 1-5% ahead of v3q and 5% ahead of v3z.
+- Targets for v4 on VC1 routers: v3q's 1-hop rows (175-198) and main's multicast (549-554).
+
+**v4vc: VC1 in v4** (2026-10-27, a09u32 job 091; `variants/v4vc`, `consolidation/v4vc_runs.sh`; design note
+`consolidation/V4_VC1_DESIGN.md` §6a). v4vc = v4uf + VC1: on E0, VC1's forwarding channels (a second grouped free-slots
+read and one test per pass, a far ring per VC, one shared table); on E1, the VC1 receiver channel with its state in a
+record, one credit sender and one frame per pass for both channels, downstreams per VC (crossover: channel 0 forwards
+on VC1's), intermesh landing (out of line, then Y-first decode) and exits (out of line; the destination mesh read with
+the action bytes on edge routers). Init: VC1 runtime args, VC1 connections opened when receiver 1 is serviced (as
+main), the credit block zeroed for every sender channel, and the per-entry init work in one out-of-line body each.
+
+| | -O3 | -O2 | -Os |
+| --- | ---: | ---: | ---: |
+| VC1 E0 + E1, largest of each (limit 26,624 B) | 24,424 | 23,300 | 22,356 |
+| first build, before the init changes | 29,972 | 27,756 | 26,356 |
+| VC0-only 2D at -O3 (v4uf 20,124) | 17,692 | | |
+
+- **Correct first time:** the VC1 split suite (multi-mesh sanity, data-checked, intra- and inter-mesh) 34/34 at -O3,
+  -O2 and -Os, no error lines; every router ELF in the three caches is v4's.
+- **VC0-only builds:** E0's loop is v4uf's code in all 136 configs (8 BH and Galaxy cases), E1's differs only in the
+  setup before the loop. Validation (mesh 96, 1D 143, ring 19, Y-torus 12) passes; every suite's mean within 0.1 of
+  the same-job v4uf control (`v4ufv`), no row beyond 1.0.
+- **VC0 rows on VC1 routers** (cycles/packet, slowest sender):
+
+| row | main -Os | v3q -Os / -O2 / -O3 | v4vc -Os / -O2 / -O3 |
+| --- | ---: | ---: | ---: |
+| 1-hop E/W 16 B | 307.2 | 180.1 / 176.2 / 175.1 | 194.5 / 186.2 / 187.3 |
+| 1-hop E/W 4352 B | 310.8 | 190.3 / 191.2 / 190.5 | 205.6 / 198.5 / 199.0 |
+| 1-hop N/S 16 B | 309.6 | 188.5 / 179.8 / 181.4 | 196.1 / 189.1 / 189.9 |
+| 1-hop N/S 4352 B | 303.5 | 197.8 / 192.8 / 191.9 | 207.5 / 200.4 / 201.1 |
+| multicast 4352 B | 553.9 | 565.5 / 559.5 / 557.7 | 588.4 / 586.9 / 588.2 |
+
+  v4vc is ~40% faster than main on 1-hop, but 8-12 behind v3q (v3q from 2026-10-26) and on multicast 30 behind v3q,
+  35-40 behind main. v3q uses the same completion policy on VC0's 8-slot ring (batches of 2, the newest slot held while
+  packets keep coming), so that is not the difference. Next: PC sampling of both on these rows (job 092,
+  `consolidation/vc1_pcs_runs.sh`, `vc1/pcs_vc1_*.yaml`: one long row each, the sampler beside the two ranks; the -g
+  twins rebuild from a two-rank log: 96/96 configs).
+
+**v4vc and v3q on VC1 routers, PC-sampled** (2026-10-27, a09u32 job 092; `consolidation/vc1_pcs_runs.sh VARIANT TAG
+LEVEL ROW...`, `vc1/pcs_vc1_{compile,ew16,ew4352,mcast}.yaml`: one long row of the split suite each, pc_sampler.py
+beside the two ranks, 96 targets, 155-217k samples per row; -g twins from the two-rank compile log, 96/96 and 94/94;
+`pcs_lines.py --target CHIP/CHAN` added to profile the same router in both). Both at -O3, same job:
+
+| row (cycles/packet, slowest sender's pps) | v3q | v4vc |
+| --- | ---: | ---: |
+| 1-hop E/W 16 B | 175.0 | 187.6 |
+| 1-hop E/W 4352 B | 190.5 | 199.5 |
+| intra-mesh multicast 4352 B (pps metric: half the split table's) | 279.0 | 294.0 |
+
+- **These rows are bound by the credit round trip on the VC1 tier's small rings, and E0's pass time is a term in
+  that loop.** VC1 builds get VC0 receiver rings of 8 slots, VC0 forwarding channels of 4, and the worker 51.
+  - 1-hop E/W 16 B: v4vc's E0 spends 71 cycles/packet in `send` and ~104 in passes that send nothing: one or two
+    passes per packet waiting for far-ring credits, so E0 is not saturated (8 slots x 187 = ~1,500 cycles per slot
+    round trip; v3q 1,400). A freed far slot waits for E0's next pass, which is why a leaner E0 took 31 off at the
+    same slots in §86: both the slots and E0's per-pass time set these rows.
+  - Multicast: the busiest E1 spends 49 cycles/packet in admission (the downstream credit re-reads of 4-slot
+    forwarding channels); the split table's multicast rows (main 549-554, v3q 558-566, v4vc 587-588) sit at the
+    ~550-600 cap that 4 slots put on a forwarded flow (V4_VC1_DESIGN §4.4).
+- **Same router, line level (E/W 16 B):** E0's pass has v3q's shape (VC0 group of four, worker visit, VC0 forwarding
+  test, VC1 group of three and one test). v4vc's E0 waits longer:
+  - group reads and their first use: ~66 cycles/packet (v3q ~50);
+  - the TX-queue register writes in `send`: 22 (v3q 12).
+  The two E1s look alike (packets-received polling 26 vs 29, local-write command buffer 11 vs 10, completions
+  similar). On a slot-bound row these per-pass costs set how fast the loop turns a credit around.
+- So the levers for VC1-router rows are the VC1 allocation (design step 6; the slot override is VC0-only today) and
+  E0's per-pass cost (the ~10 to v3q on 1-hop).
+
+**Completion design B, mechanism only: v4gi** (2026-10-27, a09u32 job 093; `variants/v4gi`, `consolidation/
+v4gi_runs.sh`; v4vc as the same-job control `v4vcg`, within 0.2 of job 091 on every suite and within 0.3 on the VC1
+rows). v4gi = v4vc with one transaction ID per aligned completion group (`GroupIds`: slot i carries
+first + (i / T) mod ids), so one status read proves a group over both command buffers; slot records hold only the
+sender channel (no command-buffer bits, no ordering argument, no ring wrap: a group of 1, 2 or 4 aligned slots lies in
+one record word); `release_completions` as due / proof / credit, one path for every group size; the tracker leaves the
+receiver (teardown still waits on the channel's ID range). Timing as v4vc (same due rule, a group of several slots
+waits up to 32 checks, a single slot is checked once), with two deliberate differences: a group whose slots no command
+read (atomics) now costs one status read, and after a partial (idle) credit the next credit is the rest of that group
+(alignment). Group size now a power of 2 (rings of 12-15 slots: 2, was 3). Data-checked: mesh 96, 1D 143, ring 19,
+Y-torus 12; VC1 split 34/34 at -O3 and -Os. E1 loop 713 -> 572 instructions (2D, median); VC1 E0 + E1 at -O3 23,884 B.
+
+| suite (vs v4vc, same job) | mean | min | max |
+| --- | ---: | ---: | ---: |
+| 4352 | -2.84 | -7.9 | +1.9 |
+| mix | -1.06 | -6.2 | +3.3 |
+| flushmix | -4.08 | -9.0 | -0.4 |
+| flushmix4 | -3.94 | -7.0 | +0.1 |
+| burst | +0.12 | -2.4 | +4.9 |
+| 1d_m1 | -3.77 | -6.7 | +0.0 |
+| ring | -2.71 | -3.9 | +1.6 |
+| torusy | -1.29 | -7.7 | +2.9 |
+
+VC0 rows on VC1 routers, -O3 (-Os): 1-hop E/W 16 B -3.8 (-2.6), 4352 B -1.3 (+0.7), N/S 16 B -4.1 (-2.6), 4352 B
+-0.8 (0.0), multicast -8.2 (+0.2). Latency within -18 to +7 ns.
+- Gains: scatter -5 to -7 everywhere (2D, 1D, Y-torus E/W), fused -4 to -6, flushed atomics -4 to -9, every ring row
+  -2.7 to -3.9 (rings keep one slot per group and the same IDs: the gain is the smaller loop and no record bits).
+- Losses: pure atomics +2.0 / +3.3 (the status read for groups no command read); MixSize4 +2.1 / +3.2; bursts of 16 B
+  (N8 G500) +3.4 / +3.7 and N/S N32 4352 B +4.9; Y-torus N/S scatter +2.9; 3-hop writes +1.9 / +2.1 (Mesh, Y-torus E/W);
+  ring multicast write +1.6. Bursts and mixed sizes are where partial (idle) credits happen, so the alignment rule is
+  the suspect there; not yet profiled.
+
+**v4gi's burst losses, PC-sampled** (2026-10-27, a09u32 job 094; `pcsv_runs.sh`, new long rows `pcs3/burstns8.yaml`,
+`burstew8.yaml`, `burstns32.yaml`: exp_burst.yaml's rows at ~20M packets; v4gi `pcsv_v4gib_*`, v4vc `pcsv_v4vcb_*`).
+
+| row (long) | v4vc | v4gi |
+| --- | ---: | ---: |
+| N/S bursts of 8 x 16 B, gap 500 | 132.1 | 138.1 |
+| E/W bursts of 8 x 16 B, gap 500 | 130.9 | 130.1 |
+| N/S bursts of 32 x 4352 B, gap 500 | 135.1 | 139.9 |
+
+- The N/S rows reproduce (+6.0, +4.8); E/W 16 B does not (the suite's +3.4 there was a short row).
+- N/S 16 B, per packet: the busiest E0 spends more in the worker visit (+2.6) and in worker credits (+1.7: 3.8 ->
+  5.5), so completion credits reach it in more, smaller pieces; the busiest E1 polls more (26.9 -> 30.5), so E1 is not
+  the limit. N/S 4352 B: the same, smaller (E0 worker visit +1.6, worker credit +0.5; E1 completions +2.4).
+- Cause (from the code): E0 drains the worker channel continuously, so the gaps E1 sees fall at any slot and an idle
+  pass credits part of a group. v4vc then goes on in full batches from wherever it stopped; v4gi credits the rest of
+  that group first (an extra, smaller credit), and that rest became due only once more than a whole group waited, so
+  its slots were also held longer. Fixes in job 095: v4gi2 (due unit = the rest of the oldest group), v4gi3 (v4vc's
+  unit, spanning two groups with two ID proofs), both with a READ bit in the records (no proof for atomics).
+
+**Fixes for v4gi's losses that did not work: v4gi2, v4gi3, v4gir** (2026-10-27, a09u32 jobs 095 and 098; job 095 was
+cut by the broker's 600 s default during its controls' validation, so the device was held for an eth/fabric fault and
+reset by the broker; job 098 ran the controls v4gi `v4gic` and v4vc `v4vcd`, with v4gic within 0.1 of job 093's v4gi on
+every suite). All three add a READ bit to the slot records (set by forwards and by deliveries that read the slot; no
+proof for a group no command read). v4gi2: due unit = the rest of the oldest group, `first` and its group end computed
+every pass before the due test. v4gi3: v4vc's unit (oldest T slots), spanning at most two groups, two ID proofs.
+v4gir: the bit alone, v4gi's timing. Data-checked (mesh 96, 1D 143, ring 19, Y-torus 12); VC1 split 34/34 at -O3.
+
+| suite mean vs v4gi | v4gir (job 098, same job) | v4gi2 (job 095) | v4gi3 (job 095) |
+| --- | ---: | ---: | ---: |
+| 4352 | +2.05 | +4.32 | +11.30 |
+| mix | +1.12 | +3.47 | +6.49 |
+| flushmix | +2.73 | +6.11 | +12.32 |
+| flushmix4 | +2.88 | +6.77 | +15.68 |
+| burst | +0.20 | +0.51 | +1.61 |
+| 1d_m1 | +2.88 | +6.33 | +13.07 |
+| ring | +5.36 | +8.37 | +5.44 |
+| torusy | +1.55 | +3.90 | +7.39 |
+
+VC1-router rows at -O3 (job 095): v4gi 183.4 / 197.9 / 185.8 / 200.5 / 579.8; v4gi2 +5 to +10; v4gi3 +4 to +18.
+- The READ bit costs E1 +1 to +5 on every suite (rings +5.4) and saves 1.1 on the pure atomic row it was for: carrying
+  the record through delivery costs E1 registers (static E1 stack loads, 2D: 6 -> 19). Dropped.
+- v4gi3's spanning proof waits on the second group's ID, which also covers that group's newer slots (with groups of
+  2 on VC1 builds' 8-slot rings, often the slot just issued): VC1 N/S +18. Group IDs and spanning credits do not mix.
+- v4gi2's due arithmetic before the due test adds +2 to +4 on top of the bit. Next: v4gi4, the relative due as
+  T - ((next_index - waiting) & (T - 1)) without the bit (rings and tori compile to v4gi's code; 2D E1 +11
+  instructions, no added stack traffic); job 102.
+
+**v4gi4: due relative to the group, no READ bit** (2026-10-28, a09u32 job 102; v4gi as the same-job control `v4gie`,
+VC1 rows within 1.0 of jobs 093/095). Data-checked (mesh 96, 1D 143, ring 19, Y-torus 12); VC1 split 34/34.
+
+| suite mean vs v4gi | 4352 | mix | flushmix | flushmix4 | burst | 1d_m1 | ring | torusy |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| v4gi4 | +1.71 | +1.59 | +2.91 | +2.87 | +0.19 | +2.68 | +0.01 | +0.98 |
+
+- Long burst rows (pcsv_v4gi4b, against job 094): N/S 8 x 16 B 138.5 (v4gi 138.1, v4vc 132.1), N/S 32 x 4352 B 140.6
+  (v4gi 139.9, v4vc 135.1). Not fixed.
+- So the longer holds after a partial credit are not the burst loss: v4gi4 credits the rest of a group as soon as it
+  and one newer slot are retired, and the rows did not move. What is left of job 094's evidence is the far E0's extra
+  worker-visit and worker-credit time; E1's frame-send time per packet is the same in v4vc and v4gi (10.4 vs 10.3), so
+  it is not simply more credit frames. Cause open.
+- The +11-instruction due test costs +4 on every scatter, fused and atomic row (E1-bound rows) with no added stack
+  traffic: E1 at the register limit again. Dropped.
+- Net: v4gi stays as decision 1's result; its losses (N/S bursts +4 to +6, pure atomics +2 to +3) stand.
+
+**v4gi's burst losses diagnosed: the worker's credit window** (2026-10-28, a09u32 jobs 103-104;
+`consolidation/v4dg_runs.sh`, `v4dg2_runs.sh`, decoder `dg_report.py`). Diagnostic builds v4gidg / v4vcdg = v4gi / v4vc
+plus `router_diag.hpp` counters, written into the phase-profile block that `TT_FABRIC_TXQ_COUNTERS=1` allocates and
+compiled away without it (offline, 163 configs each: loops identical to v4gi / v4vc). E0: worker credit sizes, cycles in
+`credit_worker`, passes where the worker had a packet and the far ring no room. E1: credit sizes (split by idle pass and
+group alignment), frames, proofs, idle passes with a partial group waiting. The counters perturb the rates (steady N/S
+16 B 135 with them, 121 without), so rates are compared within one setting; without them the long N/S 8 x 16 B row
+reproduces job 094 in the same job (v4gi 138.08, v4vc 132.11).
+
+| long N/S 8 x 16 B, counters on (job 103) | v4vc | v4gi |
+| --- | ---: | ---: |
+| cycles/packet | 139.85 | 148.12 |
+| credits per packet (slots per credit) | 0.252 (3.97) | 0.291 (3.44) |
+| credits of 4 / of 2 slots | 98% / 1% | 72% / 27% |
+| idle passes with a partial group waiting, per packet | 0.117 | 0.321 |
+| E0: cycles per `credit_worker` / passes blocked by the far ring | 27.0 / 0 | 27.1 / 0 |
+| E1: proof cycles / failed proofs / frames put off | 21.3 / 0 / 0 | 18.0 / 0 / 0 |
+
+- Not E0's cost per credit: `credit_worker` is 27 cycles in both, so v4gi's extra 0.039 credits per packet cost E0
+  ~1 cycle per packet against a loss of 6 to 8. Over the burst suite, rows near link rate lose 140-220 cycles per extra
+  credit; rows paced by the worker's own gaps (bursts of 1-4) get as many extra credits and lose nothing.
+- Not the far ring: E0 never had a worker packet with the far ring full.
+- The worker's credit window binds (job 104, counters off): with `TT_FABRIC_EXP_WORKER_SLOTS=32` (2D default 17) every
+  burst row runs 7-15 faster and v4gi equals v4vc on all of them (long N/S 8 x 16 B 122.92 / 122.99, N/S 32 x 4352 B
+  125.71 / 125.71; suite within 0.1 except E/W 32 x 4352 B G2000 +1.9 and the steady 16 B rows +0.6 / +0.7). At 17:
+  +5.98 and +4.77 again.
+- Mechanism: v4gi's groups sit at fixed ring positions; v4vc's batches restart wherever a partial batch ended, so they
+  line up with the stream's gaps. At a gap (the worker waiting on credits starves E0, so E1 sees one) v4vc usually
+  has a full batch waiting, credited on the first idle pass; v4gi often has a partial group, held 4 idle passes while
+  the worker waits on exactly those credits (idle passes with a partial waiting: 0.321 vs 0.117 per packet).
+- Partial groups on the first idle pass (v4gidg1, diagnostic) at 17 worker slots: long N/S 8 x 16 B gap +5.98 ->
+  +3.07, suite N/S and E/W 8 x 16 B G500 +3.3 -> +0.6 and +3.1 -> +1.2, but N/S 32 x 4352 B unchanged (+4.9) and steady
+  16 B rows +1.7 to +3.0 (+2.7 to +4.4 at 32 worker slots: 0.33-0.37 credits per packet, E0 pays per credit). The hold
+  is part of the loss, not all of it; not a fix.
+- So v4gi's burst loss exists only while the 17-slot worker window binds. Results `results/dg_*`, `results/dg2_*`.
+
+**Bursts of 6 and 12** (2026-10-28, a09u32 job 105; `v4dg3_runs.sh`, new suite `exp_burst612.yaml` (`burst612`):
+N = 6, 12 x G = 500, 2000 x E/W, N/S x 4352 / 16 B). exp_burst.yaml's N are all multiples of T = 4, so v4vc's batches
+(restarting at a gap) end exactly at the next gap there.
+- v4gi - v4vc at 17 worker slots: mean +0.37 over 16 rows; N12 G500 16 B +2.3 (E/W) / +2.0 (N/S), N6 G500 +0.2 to
+  +0.9, G2000 rows equal (worker-paced). The burst suite in the same job: N8 G500 16 B +3.2 / +3.5, as jobs 103-104.
+- At N = 6 v4vc leaves partial batches too: 8-10% of its credits are 2 slots (counters, `dg3_*_burst612_c17`).
+- At 32 worker slots: mean +0.04 (all within 0.1 but N/S N12 16 B +0.5). The window is worth more than the design
+  difference: N12 G500 16 B 131.3 -> 118.1, N/S 4352 B 138.0 -> 125.9 (both designs).
+- Analysis of the problem and its levers: `consolidation/COMPLETION_CREDITS.md`.
+
+**The worker credit loop's round trip, measured** (2026-10-28, a09u32 jobs 106-108; `v4rt3_runs.sh`, decoder
+`rt_report.py`). v4girt / v4vcrt = v4gi / v4vc plus `router_rt.hpp`: sampled timestamps, each interval on one chip's
+clock. E0: a worker packet's send -> E0 reading a completion count that covers it (every 61st packet). E1: the
+watched slot at the head -> retired -> its group credited -> the frame carrying it sent (~1 in 64). Compiled away
+without `TT_FABRIC_TXQ_COUNTERS=1` (offline: loops identical to v4gi / v4vc). Job 106's first version timed every
+credit and sampled every ~5th packet on E1, which made E1 the bottleneck (+24 to +47 cycles/packet); job 107 sampled
+every 64th packet on E0, always the last packet of a burst of 8 or 32, and timed E1's own bookkeeping. Job 108 is the
+valid one; its hooks still cost +2 to +6 (means), +7.6 / +9.3 on the long N/S 8 x 16 B row, so absolute times are a
+little high. Plain v4gi with the profile buffer allocated: +0.01 (layout is not it).
+
+| cycles, v4gi (v4vc) | steady N/S 16 B | steady N/S 4352 B | N/S 8 x 16 B G500 | N/S 12 x 16 B G500 |
+| --- | ---: | ---: | ---: | ---: |
+| E0 send -> completion seen | 1319 (1529) | 1505 (1580) | 1349 (1431) | 1351 (1426) |
+| E1 head -> retired | 90 (90) | 91 (91) | 90 (90) | 90 (90) |
+| E1 retired -> credited (batching wait, proof) | 350 (325) | 336 (343) | 368 (344) | 356 (344) |
+| E1 credited -> frame sent | 50 (57) | 50 (54) | 51 (54) | 51 (55) |
+| rest: link out + link back + E0's look | 829 (1056) | 1028 (1092) | 840 (942) | 854 (936) |
+| packets still in the worker channel at the send | 2.7 (1.9) | 2.0 (1.9) | 2.2 (2.1) | 2.7 (2.3) |
+
+- The link dominates: the rest is ~63-70% of send -> seen, ~820-950 cycles at 16 B and ~970-1,090 at 4352 B. With
+  the latency suite (1-hop one-way 905 cycles worker to worker at 16 B, ~150 of it router work), the link is ~400-500
+  cycles each way. No router change touches it.
+- Batching is the largest router term: 325-370 cycles (~25%; a sample sits ~1.6 slots from its group's oldest).
+  E1's own work is ~90, the frame ~50.
+- E0's queue ahead of a send (2-3 packets, ~300-400 cycles) and the credit write (27) are on the worker's side of the
+  loop, outside send -> seen; the worker's loop is ~1,800 cycles in all, against 17 slots x ~120 = ~2,040: at the edge.
+- The mean does not explain the v4gi / v4vc difference: v4gi's send -> seen is shorter on every row (by 50-210), yet
+  N/S 8 x 16 B is slower. The loss is in which credits are late when the worker is blocked (the gaps), not in the mean.
+- Window arithmetic: a ring of W slots caps a link at RT / W cycles per packet (RT: E0's send -> seen, plus its look).
+  At the 2D 16 B round trip that is ~1,350-1,500 / 8 = ~170-190 for VC1 builds' 8-slot VC0 rings, close to what the
+  VC1 1-hop rows run at (v4gi 183-201; their round trip was not measured here, T = 2 there); 4-slot rings ~350. No
+  completion policy can lift that far: the link alone takes ~900 of the round trip.
+
+**VC1 allocation sweep, VC0 side** (2026-10-28, a09u32 job 109; `vca_runs.sh`, table `vca_table.py`). New study switch
+`TT_FABRIC_EXP_SLOTS_VC1=worker,forwarding0,receiver0,forwarding1,receiver1` (`fabric_static_sized_channels_allocator.cpp`;
+0 = the rest to the worker, every router the same depths; checked on the mock first: both ranks get it and v4gi
+compiles). New yaml `vc1/vc1_alloc.yaml`: vc1_split.yaml's tests plus a 2-hop unicast ([0, 0] -> [0, 3], through a VC0
+forwarding channel), the 2-hop merged with a 1-hop flow from each middle chip, and bursts of 8 and 32 (G500) on 1-hop
+E/W. v4gi -O3, 7 allocations x 2 passes (the second in reverse order): all 14 runs clean (sanity data checked, 50/50
+finishes), pass-to-pass spread <= 0.7.
+
+| cycles/packet, v4gi -O3 | main 51,4,8,2,4 | r16 (w43) | f8 (w39) | f8r16 (w31) | f8r16v (w21) | f12r16 (w19) | f8r32 (w15) |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1-hop E/W 16 B / 4352 B | 183.5 / 198.0 | -25.7 / -40.4 | +0.2 / +0.1 | -25.8 / -40.3 | -25.7 / -40.1 | -25.6 / -40.0 | -25.5 / -37.2 |
+| 1-hop N/S 16 B / 4352 B | 185.9 / 200.6 | -28.3 / -43.0 | 0.0 / +0.1 | -28.3 / -42.9 | -28.2 / -42.8 | -28.0 / -42.6 | -28.0 / -39.4 |
+| multicast 4352 B | 289.4 | +7.4 | -84.3 | -119.9 | -119.0 | -149.2 | -119.8 |
+| 2-hop 16 B / 4352 B | 482.4 / 530.2 | +46.2 / +42.8 | -223.2 / -250.2 | -192.0 / -219.2 | -190.0 / -217.9 | -267.7 / -308.3 | -191.8 / -219.6 |
+| 2-hop merged 16 B / 4352 B | 257.6 / 283.0 | +19.8 / +19.2 | -77.6 / -86.9 | -104.1 / -119.6 | -102.0 / -118.7 | -119.1 / -144.2 | -104.0 / -119.6 |
+| bursts 8 x 16 B / 4352 B | 183.4 / 197.9 | -25.8 / -40.3 | +0.3 / +0.1 | -25.5 / -40.1 | -25.5 / -39.9 | -25.4 / -39.8 | -15.6 / -15.7 |
+| bursts 32 x 16 B / 4352 B | 183.5 / 197.8 | -25.5 / -40.2 | +0.1 / +0.2 | -25.7 / -40.0 | -25.4 / -39.8 | -25.4 / -39.7 | -24.1 / -34.5 |
+
+(Allocations: worker, VC0 forwarding, VC0 receiver, VC1 forwarding, VC1 receiver; columns after main are differences.)
+- The VC0 receiver binds every 1-hop row: 8 -> 16 slots is -26 to -43 (E/W 4352 B 198 -> 158). 32 slots adds nothing,
+  so at ~158 those rows are bound elsewhere (E0's pass over 7 sender channels; VC0-only routers run them at ~120-130).
+- The VC0 forwarding channels bind everything forwarded: 4 -> 8 halves the 2-hop row (482 -> 259), 12 takes it to 215
+  (530 -> 222 at 4352 B); multicast 289 -> 140.
+- The worker needs ~19: at 15 (f8r32) bursts of 8 lose 10-24 of the gain; 19 and up are the same as 51.
+- **The group size works against the forwarding window.** A 16-slot receiver credits groups of T = 4. On a 4-slot
+  forwarding channel that is the whole window: r16 makes the 2-hop row +46 slower although it speeds up every 1-hop
+  row. On an 8-slot one it is half: f8r16's 2-hop row is 31 slower than f8's (8-slot receiver, T = 2). T comes from
+  the ring, but the window that binds is the far sender channel's.
+- VC1 doubled (f8r16v: VC1 forwarding 4, receiver 8, T = 2 there) runs clean and costs the VC0 rows nothing (within
+  2); VC1's own traffic is not measured by these rows.
+
+**Inter-mesh benchmark rows, and the group size against the window** (2026-10-28, a09u32 job 110; `vcb_runs.sh`).
+- **The profiler fix:** `BandwidthProfiler` now traces configs without hops (inter-mesh traffic, routed by the tables)
+  through the control plane's forwarding direction node by node (`trace_node_id_traffic_path`), and takes their first
+  direction from it (`first_hop_direction`); before, it aborted on `hops.value()` (job 216). New yaml
+  `vc1/vc1_inter.yaml`: [0, 0] to each chip of mesh 1. All 16 inter runs clean (16/16 finishes).
+- **v4git** (diagnostic) = v4gi with each receiver's completion group sized to the smaller of its ring and the smallest
+  sender channel of its VC (every router has the same depths, so the far sender channels'); VC0-only builds are
+  byte-identical to v4gi (141 of 163 offline configs; the 22 VC1 ones differ), VC1 E0 + E1 23,564 B at -O3.
+- v4gi and v4git interleaved per allocation, one run each, main's allocation first and last (drift <= 1.1). All 16
+  alloc runs clean (50/50).
+
+| v4gi -O3, cycles/packet | main 51,4,8,2,4 | f12r16 0,12,16,2,4 | f10r16v4 0,10,16,4,4 | f8r16v6 0,8,16,6,4 | f8r16v 0,8,16,4,8 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| worker slots | 51 | 19 | 19 | 19 | 21 |
+| 1-hop E/W 16 B / 4352 B | 183.5 / 198.0 | 157.9 / 158.0 | 158.0 / 157.9 | 158.4 / 158.0 | 157.8 / 157.8 |
+| 2-hop 16 B / 4352 B | 482.2 / 530.3 | 214.7 / 222.1 | 240.5 / 258.2 | 290.4 / 310.8 | 292.4 / 312.2 |
+| multicast 4352 B | 289.5 | 140.2 | 144.6 | 169.4 | 170.6 |
+| inter-mesh, direct link 16 B / 4352 B | 232.5 / 236.6 | 206.4 / 207.1 | 206.4 / 207.1 | 206.4 / 207.1 | 206.4 / 207.1 |
+| inter-mesh, then VC1 hops, 16 B (3 rows) | 780-853 | 778-855 | 398-446 | 310-375 | 455-497 |
+| same, 4352 B | 894-966 | 901-965 | 456-500 | 371-408 | 498-547 |
+
+- **VC1's 2-slot forwarding channels cap every inter-mesh flow that goes on inside the destination mesh** at 780-970
+  cycles/packet (6.1-6.6 GB/s at 4352 B against 24.8 direct), 3-4x the direct link. 4 slots: 400-500; 6: 310-410. The VC0 slots don't
+  touch these rows. Main's allocation has this cap today.
+- With VC1 forwarding at 4, a 4-slot VC1 receiver (T = 1) beats an 8-slot one (T = 2) by 40-60: the same group-against-
+  window effect as on VC0.
+- **v4git - v4gi** (T from the smallest sender channel instead of the ring; pairs are 16 B / 4352 B):
+
+| allocation (VC0 T: v4gi -> v4git) | 1-hop | 2-hop | multicast | 2-hop merged | inter direct | inter + VC1 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| main (2 -> 1) | -7 to -11 | -47 / -32 | -15 | -18 / -16 | +17 / +16 | -2 to -13 |
+| f8r16 (4 -> 2) | +9.5 | -34 / -33 | +4 | +11 / +6 | +19 | -7 to +4 |
+| f10r16v4 (4 -> 2) | +9.5 | +1 / -11 | +14 | +17 / +16 | +19 | -4 to +10 |
+| f12r16 (4 -> 2) | +9.5 | +22 / +17 | +16 | +17 / +17 | +19 | -7 to +5 |
+| f8r16v (VC0 4 -> 2, VC1 2 -> 1) | +9.5 | -36 / -34 | +3 | +10 / +5 | +19 | -37 to -56 |
+
+- So a smaller group helps exactly while it is the forwarding window that binds (4-slot channels; 8 for the plain
+  2-hop row) and costs ~9.5 on every 1-hop row otherwise (more credits for E0, whose pass binds those rows here), and
+  16-22 on forwarded rows once the forwarding channels have 10-12 slots. With forwarding sized to ~3 groups or more,
+  the ring's group (v4gi) is the better rule; v4git only rescues allocations that are too small. Not pursued.
+
+**The VC0 / VC1 forwarding split, and a mixed load** (2026-10-28, a09u32 job 111; `vcc_runs.sh`, tables
+`vca_table.py`, `vcc_mix.py`). v4gi -O3, worker 19, VC0 receiver 16, VC1 receiver 4 (T = 4 and 1), the forwarding
+slots (VC0 f0, VC1 f1, 3 channels each) split five ways; main's allocation first and last, a10 twice (drift <= 0.7).
+New yaml `vc1/vc1_mix.yaml`: [0, 0] -> [1, 0] (crosses to [1, 1], then W on VC1) together with a VC0 flow on the same
+[1, 1] W link, either [1, 1]'s worker ([1, 1] -> [1, 0]) or a forwarded one ([1, 3] -> [1, 0], N then W); one
+sender per rank, so each rank's CSV row is its own flow. All 24 runs clean (50/50, 16/16, 16/16).
+
+| cycles/packet | main 51,4,8,2,4 | 12 / 2 | 10 / 4 | 9 / 5 | 8 / 6 | 7 / 7 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| 1-hop E/W 16 B / 4352 B | 183.4 / 198.0 | 157.9 / 158.0 | 157.8 / 158.0 | 157.8 / 158.0 | 157.9 / 158.0 | 158.2 / 158.0 |
+| 2-hop 16 B / 4352 B | 482.2 / 530.0 | 214.5 / 221.8 | 240.5 / 258.2 | 264.2 / 283.0 | 290.4 / 311.1 | 328.7 / 353.6 |
+| multicast 4352 B | 289.5 | 140.1 | 144.8 | 156.0 | 169.3 | 188.1 |
+| 2-hop merged 16 B / 4352 B | 257.5 / 283.0 | 138.5 / 138.8 | 138.7 / 140.8 | 143.8 / 150.3 | 153.7 / 163.3 | 170.0 / 183.1 |
+| inter-mesh direct 16 B / 4352 B | 232.4 / 236.7 | 206.3 / 207.2 | 206.3 / 207.2 | 206.3 / 207.2 | 206.3 / 207.2 | 206.3 / 207.2 |
+| inter-mesh + VC1 hops, 16 B (3 rows) | 781-853 | 778-855 | 398-446 | 320-369 | 310-375 | 310-372 |
+| same, 4352 B | 894-966 | 901-965 | 456-500 | 378-404 | 371-408 | 371-406 |
+| mixed: VC0 worker / VC1 flow, 16 B | 227 / 843 | 216 / 833 | 221 / 453 | 216 / 380 | 216 / 379 | 216 / 378 |
+| mixed: VC0 forwarded / VC1 flow, 16 B | 528 / 830 | 245 / 814 | 291 / 445 | 314 / 376 | 337 / 368 | 380 / 371 |
+
+(Columns: VC0 forwarding / VC1 forwarding slots per channel; the worker gets 19 in all of them. Mixed rows: the two
+flows overlapped 0.62-0.98 of the longer one's time, 0.39-0.65 at 12 / 2, where the slow VC1 flow ran on alone.)
+- **VC1 forwarding has a knee at 5.** 2 -> 4 -> 5 takes the VC1 rows 780-970 -> 400-500 -> 320-400; 6 and 7 add
+  nothing. At 5 the VC1 receiver (4 slots) binds instead: ~1,300 / 4 = ~325.
+- **VC0 forwarding is still window-bound at 12** (2-hop 215, ~2,400 / 12 = 200) and every slot moved to VC1 costs it,
+  more the smaller the channel: the 2-hop row +13 to +18 per slot from 12 to 10, +24 to +28 from 10 to 8, +38 to +43
+  from 8 to 7; multicast +2 to +19 per slot.
+- Under the mixed load the split moves each flow as it does alone, and the shared link costs both about the same at
+  every split: the VC1 flow 40-70 slower than alone, the VC0 worker 216-225 (alone 158; main 227), the forwarded VC0
+  flow 24-54 slower.
+- So 9 / 5 (19, 9, 16, 5, 4: 81 slots) puts VC1 at its knee for 24 / 25 on the VC0 2-hop row and 11 on multicast
+  against 10 / 4, and 74-96 faster VC1 rows. Limits: 2x2 meshes (at most 2 hops a side), one or two flows.
+
+**The allocation from a model, checked; main's router on the same rows** (2026-10-28, a09u32 job 112; `vcd_runs.sh`).
+User: do not hardcode a split; find an algorithmic way, since the split moves with the router's shape; keep the data
+for the case that free depths (no power-of-2 constraint) lift other bottlenecks (`consolidation/ALLOCATION_NOTE.md`).
+- **Model** (`consolidation/alloc_model.py`): a row runs at max(service bound, slowest window on its path), a window of W
+  slots allowing one packet per RT0 / W + b cycles (RT0: its credit loop's round trip; b: what each packet in flight
+  adds), fitted per window kind (worker, VC0 ring behind an intra- / inter-mesh link, VC0 / VC1 forwarding, VC1
+  ring), completion group and size. Fit to jobs 109-111: 80 points, mean error 0.2%, max 2.0%.
+- **Allocation**: receivers at T = 4 sized to stop binding at the 1-hop bound (16), the worker from its round trip (18),
+  then max-min water-filling of the rest between VC0 forwarding (3-slot steps) and the VC1 path (forwarding 3-slot
+  steps, ring 1-slot), weighted VC0:VC1. The weight is the only policy input.
+- **Check** (predictions written before the run, `vcd_predictions.txt`): every VC0 row within 1.3% (18-slot worker
+  included: bursts within 1.3 of 19), the all-power-of-2 point within 0.3%; the VC1 rows it extrapolated were
+  optimistic (VC1 ring 7 / forwarding 8: 207 predicted, 290 measured): the VC1 path has its own service bound, ~290 /
+  293, which nothing earlier reached. Refit with job 112: 112 points, mean 0.6%, max 3.8%; weights 1:1 -> 18,8,16,6,5,
+  3:2 -> 18,9,16,5,5, 2:1 -> 19,10,16,4,4 (all three measured), 1:2 -> 20,6,16,7,6.
+- All 21 runs clean (7 x 50, 14 x 16 finishes); 19,9,16,5,4 repeats job 111 within 0.4.
+
+| cycles/packet | main's router, main's table | main's router, 25,8,16,4,4 | v4gi, 25,8,16,4,4 | v4gi 18,8,16,6,5 | v4gi 18,9,16,5,5 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 1-hop E/W 16 B / 4352 B | 307.2 / 310.8 | 303.3 / 306.5 | 158.1 / 157.9 | 157.9 / 158.0 | 157.9 / 158.0 |
+| 2-hop 16 B / 4352 B | 454.1 / 518.4 | 305.8 / 303.4 | 290.6 / 310.6 | 292.5 / 310.9 | 266.1 / 285.0 |
+| multicast 4352 B | 277.0 | 200.5 | 169.6 | 169.7 | 156.4 |
+| inter-mesh direct 16 B / 4352 B | 333.3 / 333.5 | 330.3 / 330.7 | 206.3 / 207.1 | 206.4 / 207.3 | 206.4 / 207.3 |
+| inter-mesh + VC1 hops 16 B / 4352 B | 795-899 / 982-1,035 | 436-459 / 500-523 | 398-446 / 456-500 | 299-326 / 326-353 | 335-373 / 377-412 |
+| mixed 16 B: VC0 worker / VC1 flow | 353 / 855 | 345 / 475 | 221 / 454 | 212 / 340 | 216 / 386 |
+
+(Main's router as shipped: kernel v1, flags 0, firmware keepalive, the builder's -Os.)
+- Main's table costs main's router as well (2-hop 454 -> 306, VC1 rows ~halved with 25,8,16,4,4), until its ~305
+  per-packet pass caps it.
+- The same VC0 with a faster VC1, only off powers of 2: 18,8,16,6,5 against 25,8,16,4,4, VC0 rows within 2, VC1 rows
+  97-130 faster (24-29%): the power-of-2 split leaves 7 slots on a worker that needs 18.
+
+**The same rule on VC0-only routers** (2026-10-28, offline; no device job). User: check the rule for VC0-only as well.
+`alloc_model.py` now has three families (vc1; 2d and 1d from the slot allocation sweep, jobs 070-075, router v4us,
+4352 B suites), the same model and the same allocation steps; window kinds per traffic where the loops differ
+(bidirectional and scatter rows have longer worker and ring loops). Two changes found on the way: VC0 receivers are
+taken at powers of 2 (the sweep's ~8 cycles/packet on E1 for other ring sizes; the note's earlier "receivers of any
+size" was wrong), and the water-filling freezes rows at their service bound (1D's multicast sits at its bound and hid
+the 3-hop row, which still gains).
+
+| family | fit | rule | measured | today |
+| --- | --- | --- | --- | --- |
+| 2D (81 slots) | 60 points, mean 0.3%, max 2.3% | 20 / 15 / 16 | the sweep's best 2D split (mixes mean -3.33; 4352 B rows -0.40) | 17 / 16 / 16 |
+| 1D (83 slots) | 35 points, mean 0.6%, max 7.5% | 19 / 32 / 32 | mean -5.92; best measured 23 / 28 / 32 -6.60 (within ~0.7) | 26 / 25 / 32 |
+| VC1 (81 slots) | 112 points, mean 0.6%, max 3.8% | 18,8,16,6,5 (1:1) .. 19,10,16,4,4 (2:1) | all measured (jobs 110-112) | 51,4,8,2,4 |
+
+(worker / forwarding / receiver.) Rings and tori: no window binds (acks), so the rule only fixes their receivers. The
+2D and 1D round trips are v4us's; using the rule for today's router needs one calibration run. Note:
+`consolidation/ALLOCATION_NOTE.md` section 4.
+
+**The builder's VC1 default for the study's router** (2026-10-28, a09u32 job 113; `vce_runs.sh`). User: keep the
+allocation offline, but make the experiments run with the right slots so the window problem is not chased again.
+- `fabric_static_sized_channels_allocator.cpp`: with `TT_FABRIC_EXP_SLOTS_VC1` unset, the router in the v2 slot
+  (`TT_FABRIC_KERNEL_VERSION=2`) on Blackhole VC1 routers of the measured shape (4 VC0 + 3 VC1 sender channels, one
+  receiver each) gets `0,9,16,5,4` (worker 19 of 81), the split measured twice (jobs 111, 112) between the model's
+  3:2 and 2:1 picks, every receiver a power of 2. Not computed in the builder: the numbers come from
+  `consolidation/alloc_model.py` and move with the router's shape. Main's router keeps the tier table;
+  `TT_FABRIC_EXP_TIER_SLOTS=1` keeps it for the study's router too; any other slot switch disables the default.
+- Mock (CPU only): kernel v2 19,9,16,5,4; kernel v1 51,4,8,2,4; v2 + `TT_FABRIC_EXP_TIER_SLOTS=1` 51,4,8,2,4; v2 +
+  explicit `TT_FABRIC_EXP_SLOTS_VC1` the explicit depths. VC0-only builds unchanged by construction (VC1 channel count).
+- Device, v4gi -O3, no slot switch, depths logged: VC1 routers 19,9,16,5,4 and rows as job 112's 19,9,16,5,4 (21 rows,
+  mean +0.02, within 0.5); 2D 17/16/16 and 1D 26/25/32 with rows as job 093's v4gi (22 rows, within 0.3). All clean.
+- So VC1 numbers before this entry (jobs up to 108, and every `main` column of jobs 109-112) are at the tier table,
+  window-bound: compare VC1 rows only at the same slots (`TT_FABRIC_EXP_LOG_SLOTS=1` logs them). 2D stays at
+  17 / 16 / 16 (the user's earlier call; the rule's 20 / 15 / 16 trades 3-hop for 1-hop rows), 1D at 26 / 25 / 32.
+
 ## Reproducing
 
 Host build: `./build_metal.sh --configure-only --build-metal-tests --enable-ccache --without-python-bindings`, then
@@ -6657,6 +7860,9 @@ python3 fabric_exp/phase_report.py fabric_exp/results/<label>_phase.csv fabric_e
 | `TT_FABRIC_EXP_FLAGS` bit 15 / 16 | generic receiver: the step's completion reads (write-sent status, TX-queue busy check) and the next step's packets-received count read together at the end of the step / without the packets-received count (§21; -5 to -8 on E1-bound paths, costs latency; parked) |
 | `TT_FABRIC_EXP_MAX_SENDER_SLOTS`, `TT_FABRIC_EXP_MAX_RECEIVER_SLOTS` | cap VC0 channel depth |
 | `TT_FABRIC_EXP_WORKER_SLOTS=W` | mesh: worker channel (VC0 ch0) gets W slots, receiver stays 16, forwarding channels share the rest (at most 16; with `TT_FABRIC_EXP_MAX_SENDER_SLOTS=8`, 8) (§27) |
+| `TT_FABRIC_EXP_SLOTS=W,F,R`, `_SLOTS_1D`, `_SLOTS_2D` | VC0-only fabrics: worker W (0 = every slot left, at most 127), every forwarding channel F, receiver R slots; `_1D` (Linear, Ring) and `_2D` (Mesh, Torus) set one family and take precedence (§98, slot allocation sweep) |
+| `TT_FABRIC_EXP_SLOTS_VC1=W,F0,R0,F1,R1` | VC0 + VC1 fabrics: worker W (0 = every slot left), every VC0 forwarding channel F0, the VC0 receiver R0, every VC1 sender channel F1, the VC1 receiver R1 (§98, VC1 allocation sweep). Unset, the router in the v2 slot on Blackhole VC1 routers of the measured shape (4 VC0 + 3 VC1 senders) gets `0,9,16,5,4` (worker 19), from `consolidation/alloc_model.py`; main's router keeps the tier table 51,4,8,2,4 |
+| `TT_FABRIC_EXP_TIER_SLOTS=1` | Blackhole with the router in the v2 slot: keep the tier table's depths instead of the builder's study defaults: 1D (Linear, Ring) 16 / 16 / 32 instead of the even split 26 / 25 / 32 (§98, 1D slot split), VC1 routers 51,4,8,2,4 instead of 19,9,16,5,4 (§98, the builder's VC1 default). Main's router always keeps the tier depths |
 | `TT_FABRIC_EXP_LOG_SLOTS=1` | log the chosen slot counts |
 | `TT_FABRIC_EXP_LOG_CONFIG=1` | log each router's speedy flag, serviced channels, credit batching and slots |
 | `TT_FABRIC_NO_BW_TELEMETRY=1` | do not force router BW telemetry in benchmark mode |

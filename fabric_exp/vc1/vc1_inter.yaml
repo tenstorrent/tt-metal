@@ -1,0 +1,79 @@
+# Inter-mesh benchmark rows on the VC1 split (study benchmark only; run like vc1_split.yaml: p150x8_2x2_split_mgd.textproto,
+# one MPI rank per mesh via ttrun.py). Needs the study tree's BandwidthProfiler fix for configs without hops
+# (trace_node_id_traffic_path, 2026-10-28; before it the profiler aborted on these, job 216). A unicast from [0, 0] to
+# each chip of mesh 1: the routing tables pick the exit and the path, so the rows cover the direct inter-mesh link and
+# one or two hops inside mesh 1 after it (VC1's forwarding channels and receivers); which row is which depends on the
+# placement, see each row's traced boundaries. 8 tests, 16 finishes over both ranks.
+allocation_policies:
+    receiver:
+      policy: RoundRobin
+      max_configs_per_core: 4
+
+Tests:
+  - name: "VC1Inter_0_0_to_1_0"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [1, 0]
+
+  - name: "VC1Inter_0_0_to_1_1"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [1, 1]
+
+  - name: "VC1Inter_0_0_to_1_2"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [1, 2]
+
+  - name: "VC1Inter_0_0_to_1_3"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [1, 3]

@@ -1,0 +1,11 @@
+# alloc_model.py predictions for job vcd, written 2026-10-28 15:29:52 before the run (fit: jobs 109-111)
+18,8,16,6,5      16 B  1-hop  157.7  2-hop  291.3  inter direct  206.3  inter + VC1  270.6
+18,8,16,6,5    4352 B  1-hop  157.6  2-hop  311.5  inter direct  207.1  inter + VC1  308.5
+18,9,16,5,5      16 B  1-hop  157.7  2-hop  265.0  inter direct  206.3  inter + VC1  321.5
+18,9,16,5,5    4352 B  1-hop  157.6  2-hop  282.0  inter direct  207.1  inter + VC1  367.4
+19,5,16,8,7      16 B  1-hop  157.7  2-hop  433.4  inter direct  206.3  inter + VC1  207.1
+19,5,16,8,7    4352 B  1-hop  157.6  2-hop  471.0  inter direct  207.1  inter + VC1  234.8
+25,8,16,4,4      16 B  1-hop  157.7  2-hop  291.3  inter direct  206.3  inter + VC1  397.8
+25,8,16,4,4    4352 B  1-hop  157.6  2-hop  311.5  inter direct  207.1  inter + VC1  455.8
+19,9,16,5,4      16 B  1-hop  157.7  2-hop  265.0  inter direct  206.3  inter + VC1  321.5
+19,9,16,5,4    4352 B  1-hop  157.6  2-hop  282.0  inter direct  207.1  inter + VC1  371.4

@@ -1,0 +1,27 @@
+# val_torus_y.yaml's tests that get past setup on the P150x8 (mock probe on a09u32's descriptor, 2026-10-27);
+# the others need a taller torus or other link directions (Galaxy) and abort in setup, wedging the device.
+allocation_policies:
+  receiver:
+    max_configs_per_core: 2
+Tests:
+- name: UnicastAlltoAll
+  fabric_setup:
+    topology: Torus
+    torus_config: Y
+    num_links: max
+  parametrization_params:
+    size:
+    - 256
+    - 512
+    - 1024
+    num_packets:
+    - 2000
+    ntype:
+    - unicast_write
+    - atomic_inc
+    - fused_atomic_inc
+    - unicast_scatter_write
+  defaults:
+    ftype: unicast
+  patterns:
+  - type: all_to_all

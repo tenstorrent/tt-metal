@@ -1,0 +1,24 @@
+# One long row for PC sampling (halfring): HalfRingMulticast (every chip multicasts to half the ring), 4352 B.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: halfring
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    ntype:
+    - unicast_write
+    num_links:
+    - 1
+    size:
+    - 4352
+  defaults:
+    ftype: mcast
+    num_packets: 20000000
+  patterns:
+  - type: half_ring
+    iterations: 1

@@ -1,0 +1,17 @@
+Tests:
+- name: LinearMcastNorth
+  sync: true
+  fabric_setup:
+    topology: Ring
+    num_links: max
+  defaults:
+    ftype: mcast
+    ntype: unicast_write
+    size: 256
+    num_packets: 2000
+    destination:
+      hops:
+        N: max
+  patterns:
+  - type: all_devices_uniform_pattern
+    iterations: 3

@@ -86,6 +86,8 @@ private:
     void trace_traffic_path(const FabricNodeId& src_node_id, const TestTrafficSenderConfig& config);
     void trace_ring_traffic_path(const FabricNodeId& src_node_id, const TestTrafficSenderConfig& config);
     void trace_line_or_mesh_traffic_path(const FabricNodeId& src_node_id, const TestTrafficSenderConfig& config);
+    void trace_node_id_traffic_path(const FabricNodeId& src_node_id, const TestTrafficSenderConfig& config);
+    RoutingDirection first_hop_direction(const FabricNodeId& src_node_id, const TestTrafficSenderConfig& config) const;
 
     void read_performance_results(
         const std::unordered_map<MeshCoordinate, TestDevice>& test_devices, const SenderMemoryMap& sender_memory_map);

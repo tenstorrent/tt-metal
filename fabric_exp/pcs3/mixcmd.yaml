@@ -1,0 +1,33 @@
+# One long row for PC sampling (mixcmd): EW_MixCmd of streams/p3_mixes.yaml (write, scatter, fused atomic, atomic;
+# 4352 B), ~8 s.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: PcsMixCmd
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  defaults:
+    ftype: unicast
+    repeat: 13500000
+    stream:
+    - ntype: unicast_write
+      size: 4352
+    - ntype: unicast_scatter_write
+      size: 4352
+    - ntype: fused_atomic_inc
+      size: 4352
+    - ntype: atomic_inc
+      size: 4352
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1

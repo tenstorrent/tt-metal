@@ -1,0 +1,27 @@
+allocation_policies:
+  receiver:
+    max_configs_per_core: 1
+Tests:
+- name: TorusXYMcastSouth4East2West1Hop
+  sync: true
+  fabric_setup:
+    topology: Torus
+    torus_config: XY
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - atomic_inc
+    - fused_atomic_inc
+    - unicast_scatter_write
+  defaults:
+    ftype: mcast
+    size: 512
+    num_packets: 2000
+    destination:
+      hops:
+        S: 4
+        E: 2
+        W: 1
+  patterns:
+  - type: all_devices_uniform_pattern
+    iterations: 3

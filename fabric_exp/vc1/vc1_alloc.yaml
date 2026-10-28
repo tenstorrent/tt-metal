@@ -1,0 +1,172 @@
+# VC1 allocation sweep (study benchmark only): vc1_split.yaml's tests (multi-mesh sanity, data checked; 1-hop E/W and N/S;
+# intra-mesh multicast), plus rows that cross a VC0 forwarding channel and bursty 1-hop rows. Run like vc1_split.yaml
+# (p150x8_2x2_split_mgd.textproto, one MPI rank per mesh via ttrun.py), with TT_FABRIC_EXP_SLOTS_VC1 setting the depths.
+# 25 tests, 50 finishes over both ranks. Device ids are [mesh_id, chip]; chips are row-major in each 2x2 mesh
+# ([m, 0] -> [m, 1] is E/W, [m, 0] -> [m, 2] N/S, [m, 0] -> [m, 3] two hops). Still no inter-mesh benchmark rows: the
+# harness's BandwidthProfiler aborts on them (job 216).
+# - VC1Mesh2Hop: one flow through a VC0 forwarding channel on the middle chip.
+# - VC1Mesh2HopMerge: that flow plus a 1-hop flow from each middle chip ([0, 1] and [0, 2]) to the same destination, so
+#   whichever dimension the route takes first, one link carries a forwarded flow and a worker flow together.
+# - VC1Burst*: exp_burst612.yaml's form (needs fabric_exp/streams/port/streams_idle.patch), E/W, ~20000 packets.
+allocation_policies:
+    receiver:
+      policy: RoundRobin
+      max_configs_per_core: 4
+
+Tests:
+  - name: "MultiMeshAllToAll"
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+      size: [1024, 4096]
+    defaults:
+      ftype: unicast
+      num_packets: 100
+    patterns:
+      - type: all_to_all
+
+  - name: "MultiMeshNeighborExchangeInter"
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write, atomic_inc, fused_atomic_inc, unicast_scatter_write]
+    defaults:
+      ftype: unicast
+      size: 32
+      num_packets: 3000
+    patterns:
+      - type: neighbor_exchange
+        mesh_scope: inter_mesh
+
+  - name: "VC1Mesh1HopEW"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+
+  - name: "VC1Mesh1HopNS"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 2]
+
+  - name: "VC1MeshMulticast"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [4352]
+    defaults:
+      ftype: mcast
+      num_packets: 20000
+    patterns:
+      - type: all_to_all
+        iterations: 1
+        mesh_scope: intra_mesh
+
+  - name: "VC1Mesh2Hop"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 3]
+
+  - name: "VC1Mesh2HopMerge"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      ntype: [unicast_write]
+      size: [16, 4352]
+    defaults:
+      ftype: unicast
+      num_packets: 50000
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 3]
+      - device: [0, 1]
+        patterns:
+          - destination:
+              device: [0, 3]
+      - device: [0, 2]
+        patterns:
+          - destination:
+              device: [0, 3]
+
+  - name: "VC1BurstEW_N8_G500"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+            repeat: 2500
+            stream:
+              - {ntype: unicast_write, count: 8}
+              - {idle: 500}
+
+  - name: "VC1BurstEW_N32_G500"
+    benchmark_mode: true
+    sync: true
+    fabric_setup:
+      topology: Mesh
+    parametrization_params:
+      size: [4352, 16]
+    defaults:
+      ftype: unicast
+    senders:
+      - device: [0, 0]
+        patterns:
+          - destination:
+              device: [0, 1]
+            repeat: 625
+            stream:
+              - {ntype: unicast_write, count: 32}
+              - {idle: 500}

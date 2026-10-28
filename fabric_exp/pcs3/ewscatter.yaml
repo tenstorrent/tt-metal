@@ -1,0 +1,28 @@
+# Phase/cost analysis stage 3 (RESULTS §98): one long row for PC sampling (ewscatter).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: PcsEWScatter
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_scatter_write
+    size:
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 73469387
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1

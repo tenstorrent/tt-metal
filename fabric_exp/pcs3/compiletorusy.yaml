@@ -1,0 +1,29 @@
+# Short row that compiles the routers for PC sampling (compiletorusy; pcsv_runs.sh logs their compile commands).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: PcsCompiletorusy
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Torus
+    torus_config: Y
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 4

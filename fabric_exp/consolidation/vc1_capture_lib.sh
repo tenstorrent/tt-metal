@@ -122,6 +122,8 @@ _vc1cap_trap_off() {
 
 # _vc1cap_run LOG CACHE OPT: one sanity run; sets VC1CAP_RC (exit code, 124 = killed as hung), VC1CAP_HUNG,
 # VC1CAP_FIN (test finishes over both ranks), VC1CAP_BAD (error lines), VC1CAP_SECS.
+# VC1CAP_EXTRA_ENV="VAR=value ..." goes after the defaults, so it overrides them (e.g. main's router: kernel v1, flags 0,
+# with KA_ENV= for the firmware keepalive).
 _vc1cap_run() {
     local log=$1 c=$2 o=$3 optenv="" t0=$SECONDS st child
     [ "$o" = auto ] || optenv="TT_METAL_FABRIC_OPT_LEVEL=$o"
@@ -130,7 +132,7 @@ _vc1cap_run() {
     setsid -w env -u TT_METAL_SLOW_DISPATCH_MODE TT_METAL_HOME=/home/aagarwal/tt-metal \
         TT_METAL_CLEAR_L1=1 TT_METAL_DEVICE_PROFILER=0 TT_FABRIC_KERNEL_VERSION=2 TT_FABRIC_NO_BW_TELEMETRY=1 \
         ${KA_ENV-TT_FABRIC_EXP_SEQ_UPDATE_TIMEOUT=1000} TT_FABRIC_EXP_FLAGS=13129088 TT_METAL_CACHE=$c $optenv \
-        TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1 \
+        TT_METAL_LOG_KERNELS_COMPILE_COMMANDS=1 ${VC1CAP_EXTRA_ENV:-} \
         python_env/bin/python ttnn/ttnn/distributed/ttrun.py \
         --rank-binding fabric_exp/vc1/p150x8_2x2_split_rank_bindings.yaml \
         ./build/test/tt_metal/tt_fabric/test_infra/test_tt_fabric --test_config $PWD/${VC1CAP_YAML:-fabric_exp/vc1/vc1_sanity.yaml} \
@@ -267,6 +269,7 @@ vc1_capture_selftest() {  # NAME VARIANT-DIR|tree LEVEL
 # 34 finishes, a fresh cache, the per-test CSV kept) with the hang capture armed: a run that does not exit within
 # VC1CAP_SPLIT_TIMEOUT (240 s; a clean run takes ~25-35 s) or ends with fewer than 34 finishes is captured into
 # fabric_exp/results/LABEL_hangcap/ as in vc1_repeat_capture. Used by vc1_variant when VC1_RUN=run_vc1_cap.
+# VC1CAP_SPLIT_YAML and VC1CAP_SPLIT_FINISHES run another yaml of the same kind (e.g. vc1/vc1_alloc.yaml, 50).
 run_vc1_cap() {  # label cache opt|auto
     local l=$1 c=$2 o=$3 res=0 reason
     rm -rf "${c:?}"; mkdir -p $c
@@ -275,14 +278,15 @@ run_vc1_cap() {  # label cache opt|auto
     echo "=== ${l}_13129088_vc1: opt $o, cache $c (hang capture armed) ==="
     VC1CAP_LABEL=$l
     _vc1cap_trap_on
-    local VC1CAP_YAML=fabric_exp/vc1/vc1_split.yaml VC1CAP_RUN_TIMEOUT=${VC1CAP_SPLIT_TIMEOUT:-240}
+    local VC1CAP_YAML=${VC1CAP_SPLIT_YAML:-fabric_exp/vc1/vc1_split.yaml} VC1CAP_RUN_TIMEOUT=${VC1CAP_SPLIT_TIMEOUT:-240}
+    local fins=${VC1CAP_SPLIT_FINISHES:-34}
     _vc1cap_run $out/${l}_13129088_vc1.log $c $o
-    echo "exit $VC1CAP_RC after ${VC1CAP_SECS} s; $VC1CAP_FIN test finishes over both ranks (34 expected); $VC1CAP_BAD error lines"
+    echo "exit $VC1CAP_RC after ${VC1CAP_SECS} s; $VC1CAP_FIN test finishes over both ranks ($fins expected); $VC1CAP_BAD error lines"
     [ -f generated/fabric/bandwidth_results_blackhole.csv ] && cp generated/fabric/bandwidth_results_blackhole.csv $out/${l}_13129088_vc1_tests.csv
-    if [ $VC1CAP_HUNG = 1 ] || [ "$VC1CAP_FIN" -ne 34 ] || [ $VC1CAP_RC -ne 0 ] || [ "$VC1CAP_BAD" -ne 0 ]; then
+    if [ $VC1CAP_HUNG = 1 ] || [ "$VC1CAP_FIN" -ne $fins ] || [ $VC1CAP_RC -ne 0 ] || [ "$VC1CAP_BAD" -ne 0 ]; then
         res=1
         echo "!!! ${l} failed: last tests $(sed 's/\x1b\[[0-9;]*m//g' $out/${l}_13129088_vc1.log | grep -a 'Running Test:' | tail -2 | grep -o 'Running Test: [A-Za-z0-9_]*' | tr '\n' ' ')"
-        if [ $VC1CAP_HUNG = 1 ] || [ "$VC1CAP_FIN" -ne 34 ]; then
+        if [ $VC1CAP_HUNG = 1 ] || [ "$VC1CAP_FIN" -ne $fins ]; then
             reason=$([ $VC1CAP_HUNG = 1 ] && echo "timeout ${VC1CAP_RUN_TIMEOUT}s" || echo "exit $VC1CAP_RC with $VC1CAP_FIN finishes")
             echo "=== hang capture (${reason}) ==="
             _vc1cap_capture $out/${l}_hangcap $c $out/${l}_13129088_vc1.log --meta label=$l --meta level=$o \

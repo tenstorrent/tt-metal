@@ -5,6 +5,8 @@
 #include "compute_mesh_router_builder.hpp"
 #include <enchantum/enchantum.hpp>
 #include <cstdlib>
+#include <fstream>
+#include <map>
 #include <limits>
 #include <string>
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
@@ -980,6 +982,36 @@ void ComputeMeshRouterBuilder::create_kernel(tt::tt_metal::Program& program, con
                 .opt_level = opt_level});
 
         tt::tt_metal::SetRuntimeArgs(program, kernel, eth_logical_core, rt_args);
+
+        // Study instrumentation (fabric_exp, shape inventory): with TT_FABRIC_EXP_DUMP_ARGS=<file>, append one JSON
+        // line per router ERISC with everything its kernel is built and launched with.
+        if (const char* dump_path = std::getenv("TT_FABRIC_EXP_DUMP_ARGS")) {
+            std::ofstream dump(dump_path, std::ios::app);
+            auto list = [](const std::vector<uint32_t>& v) {
+                std::string s = "[";
+                for (size_t i = 0; i < v.size(); i++) {
+                    s += (i ? "," : "") + std::to_string(v[i]);
+                }
+                return s + "]";
+            };
+            std::map<std::string, uint32_t> named_sorted(named_ct_args.begin(), named_ct_args.end());
+            std::map<std::string, std::string> defines_sorted(risc_defines.begin(), risc_defines.end());
+            dump << "{\"device\":" << device_id << ",\"mesh\":" << local_node_.mesh_id.get()
+                 << ",\"chip\":" << local_node_.chip_id << ",\"eth_chan\":" << static_cast<uint32_t>(eth_chan)
+                 << ",\"risc\":" << risc_id << ",\"ct_args\":" << list(ct_args) << ",\"named_ct_args\":{";
+            bool first = true;
+            for (const auto& [k, v] : named_sorted) {
+                dump << (first ? "" : ",") << "\"" << k << "\":" << v;
+                first = false;
+            }
+            dump << "},\"defines\":{";
+            first = true;
+            for (const auto& [k, v] : defines_sorted) {
+                dump << (first ? "" : ",") << "\"" << k << "\":\"" << v << "\"";
+                first = false;
+            }
+            dump << "},\"rt_args\":" << list(rt_args) << "}\n";
+        }
     }
 
     if (erisc_builder_->has_drisc_offload()) {

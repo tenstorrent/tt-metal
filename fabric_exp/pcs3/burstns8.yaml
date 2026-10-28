@@ -1,0 +1,25 @@
+# One long row for PC sampling: BurstNS_N8_G500 of exp_burst.yaml (bursts of 8, 500 idle cycles), ~20M packets.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: BurstNSN8G500Pcs
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    size:
+    - 16
+  defaults:
+    ftype: unicast
+  senders:
+  - device: [0, 0]
+    patterns:
+    - destination:
+        device: [0, 4]
+      repeat: 2500000
+      stream:
+      - {ntype: unicast_write, count: 8}
+      - {idle: 500}

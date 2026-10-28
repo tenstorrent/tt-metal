@@ -1,0 +1,49 @@
+# Blackhole Galaxy (single node, 8x4 mesh, rows of 4 chips: [0,0..3] is the first row), 1D Ring, one link.
+# Main vs lead comparison (RESULTS §98): sizes from 16 B to 4352 B, since at 200G the wire, not the router,
+# limits large packets.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: GlxRing1HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+- name: GlxFullRingMulticast
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Ring
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 4352
+  defaults:
+    ftype: mcast
+    num_packets: 20000
+  patterns:
+  - type: full_ring
+    iterations: 1

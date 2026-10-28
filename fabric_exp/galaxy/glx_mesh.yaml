@@ -1,0 +1,250 @@
+# Blackhole Galaxy (single node, 8x4 mesh, rows of 4 chips: [0,0..3] is the first row), 2D Mesh, one link.
+# Main vs lead comparison (RESULTS §98): sizes from 16 B to 4352 B, since at 200G the wire, not the router,
+# limits large packets.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: GlxMesh1HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size: &id001
+    - 16
+    - 256
+    - 1024
+    - 2048
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+- name: GlxMesh1HopNS
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size: *id001
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 4
+- name: GlxMesh1HopEWScatter
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_scatter_write
+    size:
+    - 2048
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+- name: GlxMesh1HopEWFused
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - fused_atomic_inc
+    size:
+    - 1024
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+- name: GlxMesh1HopEWAtomic
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - atomic_inc
+    size:
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+- name: GlxMesh1HopEWBidir
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+  - device:
+    - 0
+    - 1
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 0
+- name: GlxMesh3HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 3
+- name: GlxMesh7HopNS
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 256
+    - 1024
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 28
+- name: GlxMeshFwd
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 2
+  - device:
+    - 0
+    - 1
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 2
+- name: GlxMeshMulticast
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Mesh
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 1024
+    - 4352
+  defaults:
+    ftype: mcast
+    num_packets: 20000
+  patterns:
+  - type: all_to_all
+    iterations: 1

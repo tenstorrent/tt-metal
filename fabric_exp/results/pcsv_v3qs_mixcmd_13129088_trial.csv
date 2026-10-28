@@ -1,0 +1,2 @@
+test_name,ftype,ntype,topology,num_devices,num_links,packet_size,iterations,avg_cycles,avg_packets_per_s,avg_bandwidth_gigabytes_per_s,bw_min_gigabytes_per_s,bw_max_gigabytes_per_s,bw_std_dev_gigabytes_per_s,tolerance_percent
+PcsMixCmd,CHIP_UNICAST,STREAM,Mesh,"[8]",1,3264,1,9008092296.000000,8092723.476243,26.414649,26.414649,26.414649,0.000000,1.000000

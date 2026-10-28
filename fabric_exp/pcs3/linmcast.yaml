@@ -1,0 +1,24 @@
+# Phase/cost analysis stage 3 (RESULTS §98): one long row for PC sampling (linmcast).
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: PcsLinMcast
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Linear
+  parametrization_params:
+    ntype:
+    - unicast_write
+    size:
+    - 4352
+    num_links:
+    - 1
+  defaults:
+    ftype: mcast
+    num_packets: 74482758
+  patterns:
+  - type: all_to_all
+    iterations: 1

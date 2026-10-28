@@ -1,0 +1,146 @@
+# v4 bring-up 1D benchmark
+# Filtered from fabric_exp/exp_1d_4352.yaml for the v4 router's first bring-up family (no rings, mux, telemetry or trimming).
+# NeighborExchange (the speedy path, one sender channel) dropped too: not in family 1.
+allocation_policies:
+  receiver:
+    policy: RoundRobin
+    max_configs_per_core: 4
+Tests:
+- name: Linear1HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Linear
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - unicast_scatter_write
+    size:
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+- name: Linear1HopNS
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Linear
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - unicast_scatter_write
+    size:
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 4
+- name: Linear1HopEWBidir
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Linear
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - unicast_scatter_write
+    size:
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 1
+  - device:
+    - 0
+    - 1
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 0
+- name: Linear3HopEW
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Linear
+  parametrization_params:
+    ntype:
+    - unicast_write
+    - unicast_scatter_write
+    size:
+    - 4352
+  defaults:
+    ftype: unicast
+    num_packets: 50000
+  senders:
+  - device:
+    - 0
+    - 0
+    patterns:
+    - destination:
+        device:
+        - 0
+        - 3
+- name: LinearMulticast
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Linear
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    - unicast_scatter_write
+    size:
+    - 4352
+  defaults:
+    ftype: mcast
+    num_packets: 20000
+  patterns:
+  - type: all_to_all
+    iterations: 1
+- name: UnidirLinearMulticast
+  benchmark_mode: true
+  sync: true
+  fabric_setup:
+    topology: Linear
+  parametrization_params:
+    num_links:
+    - 1
+    ntype:
+    - unicast_write
+    - unicast_scatter_write
+    size:
+    - 4352
+  defaults:
+    ftype: mcast
+    num_packets: 20000
+  patterns:
+  - type: unidirectional_linear
+    iterations: 1
