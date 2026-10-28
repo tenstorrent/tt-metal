@@ -404,18 +404,6 @@ void ControlPlane::init_control_plane(
 
     const MeshGraphDescriptor mgd(std::filesystem::path(mesh_graph_desc_file), /*backwards_compatible=*/true);
 
-    // Interpret this process's mesh binding before it is used to resolve MGD_DEFAULT, gather per-mesh configs, or build
-    // the topology mapper. The binding (mesh_id / host_rank) is already in config_: packed from rtoptions by MetalEnv
-    // (which reads TT_MESH_ID / TT_MESH_HOST_RANK once at startup), or injected directly by a test via the config
-    // constructor arg. An unset mesh id (MESH_ID_UNSET) means "no explicit binding" -- a single host that owns every
-    // mesh in the descriptor; normalize it to a concrete mesh id (0) so it is a valid per-mesh map key and topology
-    // mapper input, and remember it was unset so validation applies the single-host constraints. Validation against the
-    // mesh graph happens after it is built (validate_fabric_config_compatibility).
-    this->local_mesh_binding_explicit_ = (config_.mesh_id != tt::tt_fabric::MESH_ID_UNSET);
-    if (!this->local_mesh_binding_explicit_) {
-        config_.mesh_id = MeshId{0};
-    }
-
     // Resolve the owned mesh's config (MGD_DEFAULT -> this mesh's declared default) before it is gathered, so the
     // control plane and every peer see a concrete config for this mesh.
     if (config_.fabric_config == FabricConfig::MGD_DEFAULT) {
@@ -431,8 +419,7 @@ void ControlPlane::init_control_plane(
     for (const auto& descriptor : gathered_fabric_configs_) {
         per_mesh_fabric_config[descriptor.mesh_id] = descriptor.fabric_config;
     }
-    this->mesh_graph_ = std::make_unique<MeshGraph>(
-        mgd, /*fabric_config=*/std::nullopt, cluster.is_ubb_galaxy(), per_mesh_fabric_config);
+    this->mesh_graph_ = std::make_unique<MeshGraph>(mgd, per_mesh_fabric_config, cluster.is_ubb_galaxy());
     this->validate_system_health_against_mesh_graph_policy();
 
     auto& driver_ref = const_cast<tt::umd::Cluster&>(*driver);
@@ -573,16 +560,6 @@ void ControlPlane::init_control_plane_auto_discovery() {
     const auto& rtoptions = this->rtoptions_.get();
     // MGD_DEFAULT is allowed here: auto-discovery generates its own mesh graph descriptor below, and the owned
     // mesh's default is taken from that generated descriptor once it exists.
-
-    // Interpret this process's mesh binding before it is used to resolve MGD_DEFAULT or build the topology mapper. The
-    // binding is already in config_ (packed from rtoptions by MetalEnv, or injected by a test). An unset mesh id
-    // (MESH_ID_UNSET) means "no explicit binding" -- a single host owning every mesh; normalize it to a concrete mesh id
-    // (0) and remember it was unset so validation applies the single-host constraints. Validation against the generated
-    // mesh graph happens after it is built.
-    this->local_mesh_binding_explicit_ = (config_.mesh_id != tt::tt_fabric::MESH_ID_UNSET);
-    if (!this->local_mesh_binding_explicit_) {
-        config_.mesh_id = MeshId{0};
-    }
 
     int world_size = *distributed_context->size();
     int rank = *distributed_context->rank();
@@ -770,42 +747,21 @@ void ControlPlane::validate_fabric_config_compatibility() {
     const auto& distributed_context = this->distributed_context_.get();
 
     // Validate this process's own mesh binding (config_.mesh_id / host_rank) against the built mesh graph first, so an
-    // invalid TT_MESH_ID / TT_MESH_HOST_RANK (or an unbound multi-host-rank mesh) reports the specific diagnostic users
-    // expect before any cross-rank compatibility checks. Runs on every init path (init_control_plane and single-host
-    // auto-discovery). local_mesh_binding_explicit_ records whether a concrete mesh id was bound (vs. MESH_ID_UNSET
-    // normalized to 0 earlier).
+    // invalid TT_MESH_ID / TT_MESH_HOST_RANK reports the specific diagnostic users expect before any cross-rank
+    // compatibility checks. Runs on every init path (init_control_plane and single-host auto-discovery).
     {
         const auto mesh_ids = this->mesh_graph_->get_all_mesh_ids();
-        if (!this->local_mesh_binding_explicit_) {
-            // No explicit mesh binding: only supported on a single host, which then owns every mesh in the descriptor.
-            // Each such mesh must have exactly one host rank (0); a mesh split across host ranks cannot be owned without
-            // a binding.
+        TT_FATAL(
+            std::find(mesh_ids.begin(), mesh_ids.end(), config_.mesh_id) != mesh_ids.end(),
+            "Invalid TT_MESH_ID: Local mesh binding mesh_id {} not found in mesh graph descriptor",
+            *config_.mesh_id);
+        // An unset host rank is left for the topology mapper to resolve.
+        if (config_.host_rank != MESH_HOST_RANK_UNSET) {
+            const auto& host_ranks = this->mesh_graph_->get_host_ranks(config_.mesh_id).values();
             TT_FATAL(
-                *distributed_context.size() == 1 && *distributed_context.rank() == 0,
-                "Not specifying both TT_MESH_ID and TT_MESH_HOST_RANK is only supported for single host systems.");
-            for (const auto& mesh_id : mesh_ids) {
-                const auto& host_ranks = this->mesh_graph_->get_host_ranks(mesh_id);
-                TT_FATAL(
-                    host_ranks.size() == 1 && *host_ranks.values().front() == 0,
-                    "Mesh {} has {} host ranks, expected 1",
-                    *mesh_id,
-                    host_ranks.size());
-            }
-        } else {
-            // Explicit mesh binding: mesh_id must name a mesh in the descriptor.
-            TT_FATAL(
-                std::find(mesh_ids.begin(), mesh_ids.end(), config_.mesh_id) != mesh_ids.end(),
-                "Invalid TT_MESH_ID: Local mesh binding mesh_id {} not found in mesh graph descriptor",
-                *config_.mesh_id);
-            // When a host rank was also bound, it must be one of that mesh's host ranks. An unset host rank is left for
-            // the topology mapper to resolve.
-            if (config_.host_rank != MESH_HOST_RANK_UNSET) {
-                const auto& host_ranks = this->mesh_graph_->get_host_ranks(config_.mesh_id).values();
-                TT_FATAL(
-                    std::find(host_ranks.begin(), host_ranks.end(), config_.host_rank) != host_ranks.end(),
-                    "Invalid TT_MESH_HOST_RANK: Local mesh binding host_rank {} not found in mesh graph descriptor",
-                    *config_.host_rank);
-            }
+                std::find(host_ranks.begin(), host_ranks.end(), config_.host_rank) != host_ranks.end(),
+                "Invalid TT_MESH_HOST_RANK: Local mesh binding host_rank {} not found in mesh graph descriptor",
+                *config_.host_rank);
         }
     }
 

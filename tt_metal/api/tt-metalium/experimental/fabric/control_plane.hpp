@@ -436,12 +436,6 @@ private:
     // fewer routing planes according to which links are available.
     tt_metal::FabricConfigDescriptor config_;
 
-    // Whether this process was bound to a concrete mesh id (config_.mesh_id != MESH_ID_UNSET at interpretation time).
-    // When false, no explicit binding was given: the single host owns every mesh and config_.mesh_id was normalized to
-    // 0. Captured before config_.mesh_id is normalized so the sentinel never leaks downstream, and consumed by
-    // validate_fabric_config_compatibility() to apply the single-host constraints.
-    bool local_mesh_binding_explicit_ = false;
-
     // Every rank's FabricConfigDescriptor, gathered once in gather_fabric_config_descriptors(). Indexed by rank.
     // Used to build each mesh's config in MeshGraph and to cross-check compatibility, without a second all-gather.
     std::vector<tt_metal::FabricConfigDescriptor> gathered_fabric_configs_;

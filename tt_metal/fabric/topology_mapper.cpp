@@ -1692,7 +1692,7 @@ MeshGraph TopologyMapper::generate_mesh_graph_from_physical_system_descriptor(
         MeshGraph mesh_graph(
             MeshGraphDescriptor::generate_mesh_graph_descriptor_of_shape(
                 mesh_shape, fabric_type, reliability_mode, cluster.arch(), number_of_connections),
-            /*fabric_config=*/std::nullopt,
+            /*per_mesh_fabric_config=*/{},
             cluster.is_ubb_galaxy());
         auto logical_adjacency_matrix = tt::tt_fabric::build_adjacency_graph_logical(mesh_graph);
 

@@ -185,7 +185,7 @@ TEST(MetalEnv, FabricConfigDescriptorDefaults) {
     EXPECT_EQ(desc.fabric_udm_mode, tt_fabric::FabricUDMMode::DISABLED);
     EXPECT_EQ(desc.fabric_manager, tt_fabric::FabricManagerMode::DEFAULT);
     EXPECT_EQ(desc.mesh_id, tt_fabric::MeshId{0});
-    EXPECT_EQ(desc.host_rank, tt_fabric::MeshHostRankId{0});
+    EXPECT_EQ(desc.host_rank, tt_fabric::MESH_HOST_RANK_UNSET);
 }
 
 MetalEnvDescriptor wormhole_mock_descriptor() {
@@ -241,7 +241,7 @@ TEST(MetalEnv, ConfigureFabricMeshBindingFromDescriptor) {
 
     env.configure_fabric({.fabric_config = tt_fabric::FabricConfig::FABRIC_1D});
     EXPECT_EQ(env.get_fabric_config_descriptor().mesh_id, tt_fabric::MeshId{0});
-    EXPECT_EQ(env.get_fabric_config_descriptor().host_rank, tt_fabric::MeshHostRankId{0});
+    EXPECT_EQ(env.get_fabric_config_descriptor().host_rank, tt_fabric::MESH_HOST_RANK_UNSET);
 }
 
 TEST(MetalEnv, ConfigureFabricLastCallWins) {

@@ -893,7 +893,8 @@ public:
     bool is_custom_fabric_mesh_graph_desc_path_specified() const { return is_custom_fabric_mesh_graph_desc_path_set; }
     std::string get_custom_fabric_mesh_graph_desc_path() const { return custom_fabric_mesh_graph_desc_path; }
 
-    // TT_MESH_ID / TT_MESH_HOST_RANK. Mesh 0 / host rank 0 unless the launcher assigned this process a binding.
+    // TT_MESH_ID / TT_MESH_HOST_RANK. Mesh 0 / MESH_HOST_RANK_UNSET (resolved by the topology mapper) unless the
+    // launcher assigned this process a binding.
     tt::tt_fabric::MeshId get_fabric_mesh_id() const { return fabric_mesh_id; }
     tt::tt_fabric::MeshHostRankId get_fabric_mesh_host_rank() const { return fabric_mesh_host_rank; }
 
