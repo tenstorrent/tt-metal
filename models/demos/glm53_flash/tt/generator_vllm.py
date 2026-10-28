@@ -660,6 +660,7 @@ class GLM53FlashForCausalLM:
         self.vocab_size = int(getattr(getattr(model, "cfg", None), "vocab_size", 0))
         self.trace_id = None
         self._trace_outputs = None  # (logits, ids) of the captured decode step
+        self._trace_capture_outputs = None  # every output of that capture, kept alive while the trace exists
         self._decode_inputs_ready = False
         self.already_warmed_up_prefill = False
         self._decode_warmup_complete = False
@@ -1218,6 +1219,10 @@ class GLM53FlashForCausalLM:
                 # the speculating launch's ordinary step is P (the plain step + MTP level 1); V / C / D / D0 follow
                 self.trace_id, outs = self.spec.capture_plain(torch.zeros(U, dtype=torch.long), [0] * U)
                 self.spec.capture()
+            # every output of the captured step stays referenced: the trace writes them on each replay, and a freed
+            # one (the streams, when only logits / ids were kept) is a hole in the trace's address space the next
+            # allocation reuses (the APC footprint check caught it: -64 KiB per bank after the baseline, 2026-10-28)
+            self._trace_capture_outputs = tuple(outs)
             self._trace_outputs = (outs[-2], outs[-1])  # (logits, ids) of the captured step
             self.model.reset_kda_states()
             self._sync()
@@ -2219,6 +2224,7 @@ class GLM53FlashForCausalLM:
                 logger.warning(f"GLM53 vLLM: releasing the speculative traces failed: {exc}")
             self.trace_id = None
             self._trace_outputs = None
+            self._trace_capture_outputs = None
             self._spec_pending = self._spec_last = None
         if self.trace_id is not None:
             if "ttnn" in sys.modules and getattr(self.model, "device", None) is not None:
@@ -2228,6 +2234,7 @@ class GLM53FlashForCausalLM:
                     logger.warning(f"GLM53 vLLM: release_trace failed: {exc}")
             self.trace_id = None
             self._trace_outputs = None
+            self._trace_capture_outputs = None
         rel = getattr(self.model, "release_prefill_traces", None)
         if rel is not None:
             rel()
