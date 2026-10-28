@@ -3551,3 +3551,35 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   needs its signatures captured (optests).
 - Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.orchestrator measure --task P.2`; off side:
   `DS41_TAIL_A2A_PREPARED=off`.
+
+## P.3 (perf, galaxy 8x4): FUSED_HEAD_PREPARED_PER_LAYER, one prepared fused-head program per layer
+- Diagnostic first (brief: stop if ~0): the fused head's shared prepared program (fused_head.py `_run`, layers mode)
+  records 40096 patch slots over 32 chips; per io: x 10848, w 3520, y 7040, arena 8352, rows 480, xbuf 3520, route
+  160, router weights (io 7-9) 3680 + 160 + 160, slots 576, planner outs 5 x 320. Patched every call (weights move):
+  w + router = 7520 slots (io 1, 7, 8, 9). Not ~0, so the change went ahead. Old path warm head call: ~710-745 us host
+  (`run_prepared` timed in-process, DIAGTMP instrumentation, removed).
+- Why the proposal's "40 PreparedPrograms keyed by skey" alone would not work: the prepared hash excludes patched
+  slots, so 40 programs with w in io share ONE cached device program and still patch. The weights must be baked in.
+- Fork option (ttnn/ttnn/bringup/prepared_program): `ttnn.bringup.freeze_prepared(prepared, io, frozen)` derives a
+  PreparedProgram with the io tensors at `frozen` written into their slots / CBs, no longer patched, part of the key
+  (salted). prepare_program / run_prepared unchanged (the hash walk moved to a helper, same result).
+  CHANGELOG, README, INDEX updated; test `_check_frozen` added to the fused-head case (frozen A / B bit-identical to
+  generic_op / shared, fewer patches, distinct keys, deterministic). Fork tests on this box: 2 skipped (2x2 cases need
+  exactly 4 devices; the galaxy has 32): the new check has NOT run on a device yet.
+- Model: `MoEOptions.head_per_layer` (moe_block.py) -> `HeadSE3.per_layer`; `HeadSE3._layer_pp` keeps `state["pl"]`
+  {weight addresses: frozen program}, cleared when the shared program is re-prepared. tt/settings.py
+  `FUSED_HEAD_PREPARED_PER_LAYER` (default on per the brief; off = the shared patched program, the old path);
+  tt/moe_block_adapter.py passes it.
+- Result (change on, `measure --task P.3`): accuracy identical to X.1 / P.2 to the last digit (pcc_chunk_out
+  0.6206461212358627, every err_layer within limit, host_transfers_per_layer 0); program cache 320 (+40, one per
+  layer). Warm chunk wall median 536.8 ms (spread 70.3) and 552.6 ms (spread 49.2) vs P.2 544.4 and an old-path run
+  in this step 524.4 (with timing instrumentation). Warm head call host ~970 us (instrumented run; per-layer lookup
+  ~9 us) vs ~710-745 us old: the change is SLOWER by ~250 us a call, ~10 ms a chunk. Patching 7520 slots was cheap;
+  switching among 40 cached 32-chip programs costs more (likely host cache misses on their dispatch data; not
+  isolated). DS41-131. Recommendation: off. Device time not measured (no device change by construction: the same
+  kernels and arg values).
+- Gotchas: one instrumented measure died with a bus error in to_torch after warm-up (F207-like), its automatic
+  re-run found "No such device"; the next measure ran clean. tt-probe.sh saves scripts under tests/ (outside this
+  step's paths): diagnostics went through measure with temporary logging instead.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup.orchestrator measure --task P.3`; off side:
+  `DS41_FUSED_HEAD_PREPARED_PER_LAYER=off`.
