@@ -22,7 +22,6 @@ import torch
 import ttnn
 from models.common.utility_functions import run_for_blackhole
 from models.demos.deepseek_v3_d_p.reference.kda import KDAReferenceState
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import fabric2d_device_params, fabric_1d_device_params
 from models.demos.deepseek_v3_d_p.tests.kda.perf.test_layer_perf import _trace_wall_samples_ms
 from models.demos.deepseek_v3_d_p.tests.kda.reference_cache import load_or_compute_cpu_reference
 from models.demos.deepseek_v3_d_p.tests.kda.utils import (
@@ -30,6 +29,7 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
     KimiK3TestCase,
     LayerNrmseThresholds,
     check_kimi_k3_accuracy,
+    kda_device_params,
     make_kimi_k3_device_case,
     make_kimi_k3_test_case,
 )
@@ -49,17 +49,16 @@ from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import ass
 pytestmark = [run_for_blackhole(), pytest.mark.perf]
 
 _DEVICE_OVERRIDES = {"l1_small_size": 24576, "trace_region_size": 256 * 1024 * 1024}
-# LoudBox shapes on the unwrapped 1D fabric (the KDA perf leg's profile) and the 8x4 galaxy on the 2D
-# fabric the Kimi-K3 chunked tests run on. A 1D fabric on a 2x4 sub-mesh of a galaxy fails router sync,
-# so a galaxy runs the 8x4 case.
+# LoudBox shapes on the 2D fabric of their shape and the 8x4 galaxy on TorusXY, as Kimi-K3 runs. A galaxy
+# runs the 8x4 case.
 _LAYOUTS = [
-    pytest.param((1, 8), 1, fabric_1d_device_params(**_DEVICE_OVERRIDES), id="SP1xTP8"),
-    pytest.param((2, 4), 1, fabric_1d_device_params(**_DEVICE_OVERRIDES), id="SP2xTP4"),
-    pytest.param((2, 4), 0, fabric_1d_device_params(**_DEVICE_OVERRIDES), id="SP4xTP2"),
+    pytest.param((1, 8), 1, kda_device_params((1, 8), **_DEVICE_OVERRIDES), id="SP1xTP8"),
+    pytest.param((2, 4), 1, kda_device_params((2, 4), **_DEVICE_OVERRIDES), id="SP2xTP4"),
+    pytest.param((2, 4), 0, kda_device_params((2, 4), **_DEVICE_OVERRIDES), id="SP4xTP2"),
     pytest.param(
         (8, 4),
         1,
-        fabric2d_device_params(**_DEVICE_OVERRIDES),
+        kda_device_params((8, 4), **_DEVICE_OVERRIDES),
         marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
         id="SP8xTP4",
     ),

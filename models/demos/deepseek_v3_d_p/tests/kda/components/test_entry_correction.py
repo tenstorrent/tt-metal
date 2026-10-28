@@ -8,7 +8,7 @@ import torch
 
 import ttnn
 from models.common.utility_functions import run_for_blackhole
-from models.demos.deepseek_v3_d_p.tests.fabric_profiles import torus_xy_device_params
+from models.demos.deepseek_v3_d_p.tests.kda.utils import kda_device_params
 from models.demos.deepseek_v3_d_p.tt.kda.entry_correction import EntryCorrection
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, make_actual_start
 
@@ -44,7 +44,7 @@ def _rank_chunks(sp_size: int, start: int, end: int | None) -> dict[int, tuple[i
     [
         pytest.param(
             (8, 4),
-            torus_xy_device_params(),
+            kda_device_params((8, 4)),
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 4), topology="mesh-8x4"),
             id="SP8xTP4",
         )
