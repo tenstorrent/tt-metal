@@ -16,6 +16,9 @@ drift from a fixed record (suite.json and bench.json).
     lag1[_h0|_h1]       every quantile one step late along the 128-step token pair (head space)
     level_shift_final, lag1_final   the same on the final data-space forecast only (+0.05 x the target's scale)
     spread_shift_rows_<f>[_h0|_h1|_final]  one row's band x1.3 or x0.7, on the level_shift_rows row counts (D5 R1-0a)
+    top_q_<+-d>         the top quantile of every active row shifted by d (v1.31 / v1.32: 0.02 is the accuracy probe,
+                        0.05 the performance one; the other preset's is not required to fail)
+    inactive_shift_<+-0.03>  the inactive rows level-shifted by 0.03 (v1.31)
     level_shift_rows[_h0|_h1|_final]  +0.05 on a few rows only (v1.25, D4 item 1): 1 row at B <= 16, 2 at 32, 4 at 64,
                         1 % of the rows on paper / ragged (B = series per forward; the first active rows)
 
@@ -36,6 +39,7 @@ import io
 import json
 import math
 import os
+import re
 import sys
 from pathlib import Path
 
@@ -54,6 +58,8 @@ if os.environ.get("KAIROS_FIXED_SUITE"):  # development: score against another r
     FIXED = {"suite": Path(os.environ["KAIROS_FIXED_SUITE"])}
 SHIFT = 0.05
 SPREAD_SHIFTS = (1.3, 0.7)  # D5 R1-0a: per-row band scaling probes
+TOP_Q = {"accuracy": 0.02, "performance": 0.05}  # v1.32: bound + 0.01 / + 0.02
+INACTIVE_SHIFT = 0.03  # v1.31
 PERFECT = {"route_mismatch_rows": 0, "route_mismatch_patches": 0, "bias_max_abs_diff": 0.0, "min_top3_margin": 1.0}
 
 
@@ -101,6 +107,19 @@ def _shift_rows(raw, k):
     return out
 
 
+def _top_q(raw, d):
+    h = raw.reshape(raw.shape[0], 2, M.Q, 64).clone()
+    act = _active(raw)
+    h[act, :, M.Q - 1] += d
+    return h.reshape(raw.shape)
+
+
+def _inactive_shift(raw, d):
+    out = raw.clone()
+    out[~_active(raw)] += d
+    return out
+
+
 def head_transforms(k_rows=1):
     """label -> f(raw [rows, 2, 576], half) -> raw. half: 0 for the x half (or no flip), 1 for the -x half."""
 
@@ -126,6 +145,11 @@ def head_transforms(k_rows=1):
         t[f"lag1_h{half}"] = lambda r, h, half=half: _unseq(_lag(_seq(r))) if h == half else r
         t[f"level_shift_rows_h{half}"] = lambda r, h, half=half: _shift_rows(r, k_rows) if h == half else r
     t["level_shift_rows"] = lambda r, h: _shift_rows(r, k_rows)
+    for d in sorted(set(TOP_Q.values())):
+        for sgn in (1, -1):
+            t[f"top_q_{sgn * d:+g}"] = lambda r, h, x=sgn * d: _top_q(r, x)
+    for sgn in (1, -1):
+        t[f"inactive_shift_{sgn * INACTIVE_SHIFT:+g}"] = lambda r, h, x=sgn * INACTIVE_SHIFT: _inactive_shift(r, x)
     for f in SPREAD_SHIFTS:  # D5 R1-0a: one row's band scaled, on the level_shift_rows row counts
         t[f"spread_shift_rows_{f}"] = lambda r, h, f=f: _band(r, f, _active(r).nonzero().flatten()[:k_rows])
         for half in (0, 1):
@@ -235,7 +259,9 @@ def _failed_metrics(recs, base, gates, row_base=None):
         if rest[0].endswith(":"):  # "<metric>: no floor" / "missing": a gates.json or record gap, never a catch
             out.append((rest[0][:-1], "stamp"))
             continue
-        out.append((rest[0], "drift" if len(rest) > 1 and rest[1] == "drift" else "floor"))
+        kind = "drift" if len(rest) > 1 and rest[1] == "drift" else "floor"
+        row = re.search(r"\(row (-?\d+)\)", f)  # v1.27: the base's own failures are subtracted by (metric, row)
+        out.append((rest[0] + (f"@row{row.group(1)}" if row else ""), kind))
     return sorted(set(out))
 
 
@@ -262,6 +288,9 @@ def verdicts(cases, gates, fixed):
                     for r, g in zip(mk(recs), mk(sc["golden"])):
                         if all(r.get(k) == g.get(k) for k in r if isinstance(r[k], float)):
                             lab[r["name"]] = "not applicable (identical to the golden)"
+                            continue
+                        if label.startswith("top_q_") and abs(float(label[6:])) != TOP_Q[prec]:
+                            lab[r["name"]] = "not applicable (the other preset's probe)"
                             continue
                         gd = {m for m, kind in golden[r["name"]] if kind == "drift"}
                         lab[r["name"]] = [

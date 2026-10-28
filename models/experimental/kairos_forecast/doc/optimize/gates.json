@@ -1,5 +1,5 @@
 {
- "_doc": "G1 re-raise proposal, written by tests/perf/propose_gates.py (its docstring has the rules) from the round-0 suite record (pcc job 1051; the fixed records were re-recorded in pcc job 1105 and bench job 1107), with the D4 rules (bias_row_max_final floor, row-indexed bias drift, spread_ratio_p50 drift toward 1, median_err drift, spread_ratio_max case floors). Absolute floors on every case and precision (PLAN v1.20); p01 / p99 at >= 100 active rows and p50 at >= 8 (check_gates prints `not applicable` otherwise). Drift is against the fixed records iter_00/bench.json (bench) and iter_00/suite.jsonl (suite). D5 R1-0a adds spread_ratio_row_drift_max[_final] (per-row spread ratio against the fixed record, abs 0.15).",
+ "_doc": "G1 re-raise proposal, written by tests/perf/propose_gates.py (its docstring has the rules) from the round-0 suite record (pcc job 1051; the fixed records were re-recorded in pcc job 1105 and bench job 1107), with the D4 rules (bias_row_max_final floor, row-indexed bias drift, spread_ratio_p50 drift toward 1, median_err drift, spread_ratio_max case floors). Absolute floors on every case and precision (PLAN v1.20); p01 / p99 at >= 100 active rows and p50 at >= 8 (check_gates prints `not applicable` otherwise). Drift is against the fixed records iter_00/bench.json (bench) and iter_00/suite.jsonl (suite). D5 R1-0a adds spread_ratio_row_drift_max[_final] (per-row spread ratio against the fixed record, abs 0.15). PLAN v1.31 / v1.32 (round 2): bias_q_drift_max abs 0.01 / 0.03 (performance) on the active-row per-quantile signed bias, inside the v1.27 interval; inactive_max_err drift abs 0.01 / 0.02 (was rel 0.5).",
  "floors": {
   "*/accuracy": {
    "pcc_normalized": 0.999,
@@ -266,7 +266,7 @@
    "rel": 0.5
   },
   "inactive_max_err": {
-   "rel": 0.5
+   "abs": 0.01
   },
   "bias_row_p50": {
    "rel": 0.5
@@ -294,6 +294,9 @@
   },
   "spread_ratio_row_drift_max_final": {
    "abs": 0.15
+  },
+  "bias_q_drift_max": {
+   "abs": 0.01
   }
  },
  "drift_by": {
@@ -318,6 +321,12 @@
    },
    "pcc_row_min_active": {
     "abs": 0.02
+   },
+   "inactive_max_err": {
+    "abs": 0.02
+   },
+   "bias_q_drift_max": {
+    "abs": 0.03
    }
   },
   "single/accuracy": {
