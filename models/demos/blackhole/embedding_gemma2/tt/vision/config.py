@@ -40,6 +40,7 @@ VISION_L1_MAX_TOKENS = 4096
 # QKV output) also go to L1 up to this many patches, beyond the per-bank cap (121 KB / 91 KB per
 # bank at 2560 patches). The 128 KB cap for every tensor clashed with an op's circular buffers
 # (CB region end 1160576 B vs an L1 buffer at 1142784 B); naming the tensors keeps the rest in DRAM.
+# Batches above the "mlp" cap run the MLP one image at a time to reuse this path (VisionMLP).
 VISION_L1_WIDE_MAX_TOKENS = {"mlp": 2560, "qkv": 2560}
 
 
