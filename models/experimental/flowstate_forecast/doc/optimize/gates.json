@@ -1,5 +1,5 @@
 {
- "_comment": "G1 floors (D3: adopted with items 2-4 and 11). Floors per <case>/<precision> or */<precision>; drift against iter_00/fixed_record.json (the D3 item-12 bench + suite records). Applicability (v1.14): spread_ratio_p50 needs >= 8 active rows, spread_ratio_p01/p99 >= 100 (check_gates.MIN_ACTIVE); inactive_max_err applies only with inactive rows. bias_row_p50 / bias_row_max / pcc_step are outer bounds set from the item-12 measurement; the row gates are bias_row_drift_max (0.03 abs, both presets) and spread_ratio_row_drift_max (0.15). spread_ratio_p50 drift is centred on 1 (v1.26). performance inactive_max_err 0.045 (D3 item 11): round-0 max 0.0327 (long_context), the collapsed value 0.0575; nan_mix's inactive row is near-flat (collapsed error 0.0032, under its own device error), so its inactive collapse is caught by pcc_row_min. Outer bounds from the item-12 record (jobs 1122/1123 @ 40e7529f66f): accuracy max bias_row_p50 0.0068, bias_row_max 0.0207, min pcc_step 0.99856; performance 0.0343, 0.1073, 0.99260. D4 R1-0b: floors pcc_row_p01 (= pcc_row_min), pcc_row_min_var 0.99/0.98 (round-0 min 0.9994/0.9970), flat_max_err 0.05/0.045 (as inactive_max_err). R1-0c: drift pcc_step abs 0.005 (both presets); spread_ratio_max / spread_ratio_min abs 0.05 (second check of a 1.12x / 0.88x band, single_long/performance had only abs_err_max); pcc_row_min abs 0.1 / 0.2 (second check of nan_mix inactive collapse, which had only the pcc_row_min floor). R1-0c: inactive_spread_ratio_min floor 0.25 (second check of an inactive collapse, which is 0; nan_mix device 2.4 at performance, its golden band 0.0011). D5 (X3): bias_q_drift_max (quantile-indexed, v1.27 interval, against iter_00/fixed_record_bias_q.json = the fixed record's own dumps) abs 0.01 accuracy / 0.03 performance; inactive_max_err drift abs 0.01 / 0.02; named ceilings, head forward only: suite:single_long/accuracy abs_err_max <= 0.017 (row 0, q8, step 8) and suite:nan_mix/accuracy pcc_row_min >= 0.74 (row 3, inactive, flat), each replacing that case's drift on that metric; any further decline needs an X gate.",
+ "_comment": "G1 floors (D3: adopted with items 2-4 and 11). Floors per <case>/<precision> or */<precision>; drift against iter_00/fixed_record.json (the D3 item-12 bench + suite records). Applicability (v1.14): spread_ratio_p50 needs >= 8 active rows, spread_ratio_p01/p99 >= 100 (check_gates.MIN_ACTIVE); inactive_max_err applies only with inactive rows. bias_row_p50 / bias_row_max / pcc_step are outer bounds set from the item-12 measurement; the row gates are bias_row_drift_max (0.03 abs, both presets) and spread_ratio_row_drift_max (0.15). spread_ratio_p50 drift is centred on 1 (v1.26). performance inactive_max_err 0.045 (D3 item 11): round-0 max 0.0327 (long_context), the collapsed value 0.0575; nan_mix's inactive row is near-flat (collapsed error 0.0032, under its own device error), so its inactive collapse is caught by pcc_row_min. Outer bounds from the item-12 record (jobs 1122/1123 @ 40e7529f66f): accuracy max bias_row_p50 0.0068, bias_row_max 0.0207, min pcc_step 0.99856; performance 0.0343, 0.1073, 0.99260. D4 R1-0b: floors pcc_row_p01 (= pcc_row_min), pcc_row_min_var 0.99/0.98 (round-0 min 0.9994/0.9970), flat_max_err 0.05/0.045 (as inactive_max_err). R1-0c: drift pcc_step abs 0.005 (both presets); spread_ratio_max / spread_ratio_min abs 0.05 (second check of a 1.12x / 0.88x band, single_long/performance had only abs_err_max); pcc_row_min abs 0.1 / 0.2 (second check of nan_mix inactive collapse, which had only the pcc_row_min floor). R1-0c: inactive_spread_ratio_min floor 0.25 (second check of an inactive collapse, which is 0; nan_mix device 2.4 at performance, its golden band 0.0011). D5 (X3): bias_q_drift_max (quantile-indexed, v1.27 interval, against iter_00/fixed_record_bias_q.json = the fixed record's own dumps) abs 0.01 accuracy / 0.03 performance; inactive_max_err drift abs 0.01 / 0.02; named ceilings, head forward only: suite:single_long/accuracy abs_err_max <= 0.017 (row 0, q8, step 8) and suite:nan_mix/accuracy pcc_row_min >= 0.74 (row 3, inactive, flat), each a drift 'bound' replacing that case's margin on that metric (the outer floors unchanged); any further decline needs an X gate.",
  "floors": {
   "*/accuracy": {
    "pcc_normalized": 0.999,
@@ -92,12 +92,6 @@
   "suite:nan_mix/performance": {
    "spread_ratio_min": 0.9,
    "spread_ratio_max": 1.1
-  },
-  "suite:single_long/accuracy": {
-   "abs_err_max": 0.017
-  },
-  "suite:nan_mix/accuracy": {
-   "pcc_row_min": 0.74
   }
  },
  "drift": {
@@ -172,10 +166,14 @@
    }
   },
   "suite:single_long/accuracy": {
-   "abs_err_max": null
+   "abs_err_max": {
+    "bound": 0.017
+   }
   },
   "suite:nan_mix/accuracy": {
-   "pcc_row_min": null
+   "pcc_row_min": {
+    "bound": 0.74
+   }
   }
  }
 }

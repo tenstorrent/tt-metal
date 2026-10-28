@@ -30,6 +30,7 @@ signed row mean error of the candidate (``bias_rows``) against the same row of t
 failing row is its own failure, ``<metric> row <i>``. Fail closed (v1.27, R1-0b): a None, NaN or inf candidate
 value fails, and every gated key the record carries needs a floor or a drift tolerance.
 Every record also needs a floor for each REQUIRED_FLOORS metric and a tolerance for each REQUIRED_DRIFT metric.
+A tolerance with ``bound`` (D5) is a named absolute bound on that case and preset, in place of the margin.
 A tolerance with ``toward`` (v1.26: spread_ratio_p50 toward 1) is ``|v - toward| <= |baseline - toward| + abs``: a candidate may move
 toward the golden value freely, and away from it by ``abs``.
 
@@ -362,7 +363,11 @@ def check(
                 if not ok:
                     failures.append(f"{key} {metric} drift {v} vs {bv} +- {tol['abs']}")
                 continue
-            if metric in LOWER_IS_BETTER:
+            if "bound" in tol:  # D5: a named absolute bound in place of this case's margin (per case and preset)
+                limit = tol["bound"]
+                ok = v <= limit if metric in LOWER_IS_BETTER else v >= limit
+                rel = "<=" if metric in LOWER_IS_BETTER else ">="
+            elif metric in LOWER_IS_BETTER:
                 limit = bv * (1 + tol["rel"]) if "rel" in tol else bv + tol["abs"]
                 ok = v <= limit
                 rel = "<="
