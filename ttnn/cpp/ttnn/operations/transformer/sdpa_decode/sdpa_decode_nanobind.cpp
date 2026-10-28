@@ -37,7 +37,8 @@ std::variant<ttnn::Tensor, std::tuple<ttnn::Tensor, ttnn::Tensor>> paged_flash_m
     const std::optional<SDPAProgramConfig>& program_config,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
     bool return_lse,
-    uint32_t spec_multi_pos_tiles) {
+    uint32_t spec_multi_pos_tiles,
+    bool spec_multi_pos_packed) {
     if (return_lse) {
         return ttnn::transformer::paged_flash_multi_latent_attention_decode_with_lse(
             input_tensor_q,
@@ -54,7 +55,8 @@ std::variant<ttnn::Tensor, std::tuple<ttnn::Tensor, ttnn::Tensor>> paged_flash_m
             memory_config,
             program_config,
             compute_kernel_config,
-            spec_multi_pos_tiles);
+            spec_multi_pos_tiles,
+            spec_multi_pos_packed);
     }
     return ttnn::transformer::paged_flash_multi_latent_attention_decode(
         input_tensor_q,
@@ -71,7 +73,8 @@ std::variant<ttnn::Tensor, std::tuple<ttnn::Tensor, ttnn::Tensor>> paged_flash_m
         memory_config,
         program_config,
         compute_kernel_config,
-        spec_multi_pos_tiles);
+        spec_multi_pos_tiles,
+        spec_multi_pos_packed);
 }
 }  // namespace
 
@@ -234,6 +237,10 @@ void bind_sdpa_decode(nb::module_& mod) {
                 candidate j's heads in its own 32-row tile j, and cur_pos_tensor int32 [b * T], ascending within a
                 row's group except for -1 entries (a candidate with no visible key: output 0, lse -1e30). Needs
                 `input_tensor_v`. Defaults to 0 (off).
+            spec_multi_pos_packed (bool): with spec_multi_pos_tiles even and candidates of at most 16 heads, compute
+                two candidates per tile (candidate 2t + h in rows 16h..16h+15 of tile t: half the QK / PV work) while
+                Q, the output and lse keep a tile per candidate; output rows 16..31 of a candidate's tiles repeat rows
+                0..15 and its lse rows 16..31 are -1e30. Defaults to `False`.
 
         Returns:
             ttnn.Tensor: the output [1 x b x nh x head_dim_v], or with `return_lse=True` the tuple
@@ -269,6 +276,7 @@ void bind_sdpa_decode(nb::module_& mod) {
         nb::arg("program_config") = nb::none(),
         nb::arg("compute_kernel_config") = nb::none(),
         nb::arg("return_lse") = false,
-        nb::arg("spec_multi_pos_tiles") = 0u);
+        nb::arg("spec_multi_pos_tiles") = 0u,
+        nb::arg("spec_multi_pos_packed") = false);
 }
 }  // namespace ttnn::operations::transformer

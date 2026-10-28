@@ -77,7 +77,8 @@ ttnn::Tensor paged_flash_multi_latent_attention_decode(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    uint32_t spec_multi_pos_tiles = 0);
+    uint32_t spec_multi_pos_tiles = 0,
+    bool spec_multi_pos_packed = false);
 
 // paged_flash_multi_latent_attention_decode that also returns the log-sum-exp of every (user, Q head):
 // (output, lse), lse fp32 [1, B, nh, 1] TILE (each head's value in column 0 of its tile row, padding 0), in the
@@ -86,6 +87,8 @@ ttnn::Tensor paged_flash_multi_latent_attention_decode(
 // spec_multi_pos_tiles = T (both paged MLA entry points; 0 = off, needs input_tensor_v): T candidate positions per
 // page-table row share one scan of its KV, Q [1, b, T * 32, dh] with candidate j's heads in its 32-row tile j and
 // cur_pos [b * T] (see paged_scaled_dot_product_attention_decode); a candidate at -1 gets output 0 and lse -1e30.
+// spec_multi_pos_packed (T even, candidates of at most 16 heads): two candidates per compute tile, half the work;
+// Q, the output and lse keep a tile per candidate (output rows 16..31 repeat rows 0..15, lse rows 16..31 -1e30).
 std::tuple<ttnn::Tensor, ttnn::Tensor> paged_flash_multi_latent_attention_decode_with_lse(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
@@ -101,6 +104,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> paged_flash_multi_latent_attention_decode
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    uint32_t spec_multi_pos_tiles = 0);
+    uint32_t spec_multi_pos_tiles = 0,
+    bool spec_multi_pos_packed = false);
 
 }  // namespace ttnn::transformer

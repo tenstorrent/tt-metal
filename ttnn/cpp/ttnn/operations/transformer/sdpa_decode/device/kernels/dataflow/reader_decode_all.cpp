@@ -232,16 +232,22 @@ void kernel_main() {
     const uint32_t q_batch_offset = cur_batch * q_chunk_tiles;
 
     // Read Q
-    read_q<cb_q_in, cb_q_rm, q_tile_bytes, q_chunk_tiles, is_q_sharded, tilize_q, use_half_tile, barrier_threshold>(
-        q_locally_available,
-        is_output_core,
-        q_addr,
-        output_core_noc_x,
-        output_core_noc_y,
-        q_chunk_size_bytes,
-        q_args,
-        q_page_size_bytes,
-        q_batch_offset);
+    if constexpr (spec_multi_pos && spec_multi_pos_T == 2 * PNHt) {
+        // spec_multi_pos_packed: Q keeps a tile per candidate (DRAM interleaved, heads in rows 0..15)
+        read_q_spec_packed<cb_q_in, q_tile_bytes, PNHt, DHt>(
+            q_args, q_addr, q_page_size_bytes, cur_batch * spec_multi_pos_T * DHt);
+    } else {
+        read_q<cb_q_in, cb_q_rm, q_tile_bytes, q_chunk_tiles, is_q_sharded, tilize_q, use_half_tile, barrier_threshold>(
+            q_locally_available,
+            is_output_core,
+            q_addr,
+            output_core_noc_x,
+            output_core_noc_y,
+            q_chunk_size_bytes,
+            q_args,
+            q_page_size_bytes,
+            q_batch_offset);
+    }
 
     const auto k_reader = TensorAccessor(k_args, k_addr);
 

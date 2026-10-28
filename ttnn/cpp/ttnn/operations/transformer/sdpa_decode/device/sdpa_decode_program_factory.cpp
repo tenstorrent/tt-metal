@@ -169,7 +169,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     const uint32_t St = S / TILE_HEIGHT;
     const uint32_t DHt = DH / TILE_WIDTH;
     const uint32_t vDHt = vDH / TILE_WIDTH;
-    const uint32_t PNHt = PNH / q_heads_parallel_factor / TILE_HEIGHT;
+    // Packed spec mode computes two candidates per Q row-tile.
+    const bool spec_packed = operation_attributes.spec_multi_pos_packed;
+    const uint32_t PNHt = PNH / q_heads_parallel_factor / TILE_HEIGHT / (spec_packed ? 2 : 1);
     const uint32_t Sk_chunk_t = k_chunk_size / TILE_HEIGHT;
 
     // ========== Grid & Core Configuration ==========
@@ -534,10 +536,11 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
             "spec_multi_pos_tiles needs cache blocks of whole tiles, got a block of {} positions",
             original_block_size);
         TT_FATAL(
-            PNHt == spec_multi_pos_tiles,
-            "spec_multi_pos_tiles={} must equal PNHt={} (one 32-row Q tile per candidate)",
+            PNHt * (spec_packed ? 2 : 1) == spec_multi_pos_tiles,
+            "spec_multi_pos_tiles={} needs one 32-row Q tile per candidate, computed as PNHt={} row-tiles (packed: {})",
             spec_multi_pos_tiles,
-            PNHt);
+            PNHt,
+            spec_packed);
         TT_FATAL(q_heads_parallel_factor == 1, "spec_multi_pos_tiles requires q_heads_parallel_factor == 1");
         TT_FATAL(num_heads_per_core == 1, "spec_multi_pos_tiles requires num_heads_per_core == 1");
         // The mask CB is now push/pop cycled (one block per masked chunk) instead of pushed
@@ -662,7 +665,9 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
     if (return_lse) {
         // fp32 staging tiles for the LSE output (c_4 is free: return_lse rejects an attention sink).
         const uint32_t lse_tile_size = full_tile.get_tile_size(tt::DataFormat::Float32);
-        add_cb(CBIndex::c_4, PNHt * lse_tile_size, tt::DataFormat::Float32, lse_tile_size, &full_tile);
+        // packed spec: an lse tile per candidate (two per compute row-tile)
+        const uint32_t lse_tiles = spec_packed ? spec_multi_pos_tiles : PNHt;
+        add_cb(CBIndex::c_4, lse_tiles * lse_tile_size, tt::DataFormat::Float32, lse_tile_size, &full_tile);
     }
     add_cb(CBIndex::c_5, scale_tiles * scalar_tile_size, scalar_df, scalar_tile_size, &scalar_tile);   // scale
     add_cb(CBIndex::c_6, statistics_tiles * stats_tile_size, stats_df, stats_tile_size, &stats_tile);  // m_in

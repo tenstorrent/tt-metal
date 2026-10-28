@@ -60,6 +60,29 @@ inline void fill_lse_tile(
     }
 }
 
+// fill_lse_tile for one of the candidates a packed spec-decode stats tile holds: rows [0, rows) of the lse tile from
+// stats rows [first_row, first_row + rows) (kNoKeyLseBits for all of them when no_key), the rest kNoKeyLseBits.
+template <bool l_fp32>
+inline void fill_lse_tile_rows(
+    uint32_t lse_tile_addr,
+    uint32_t m_tile_addr,
+    uint32_t l_tile_addr,
+    uint32_t first_row,
+    uint32_t rows,
+    uint32_t scale_bits,
+    bool no_key) {
+    for (uint32_t row = 0; row < 32; ++row) {
+        uint32_t value = kNoKeyLseBits;
+        if (row < rows && !no_key) {
+            value = lse_bits(
+                stats_col0_bits<false>(m_tile_addr, first_row + row),
+                stats_col0_bits<l_fp32>(l_tile_addr, first_row + row),
+                scale_bits);
+        }
+        set_fp32_tile_col0(lse_tile_addr, row, value);
+    }
+}
+
 // Fill column 0 of the (zero-filled) fp32 tile at lse_tile_addr with kNoKeyLseBits.
 FORCE_INLINE void fill_no_key_lse_tile(uint32_t lse_tile_addr) {
     for (uint32_t row = 0; row < 32; ++row) {

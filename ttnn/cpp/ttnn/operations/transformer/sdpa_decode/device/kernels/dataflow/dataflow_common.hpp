@@ -327,9 +327,45 @@ void generate_mask(uint32_t /*k_num_chunks*/, uint32_t Sk_chunk_t, uint32_t cur_
  * Unlike the legacy single-shot mask, this is called once per masked chunk and the compute
  * kernel POPS the block after applying it (add_block_inplace<true>), so several masked
  * chunks can be served through the single-buffered mask CB.
+ *
+ * Packed (cands_per_tile == 2): row-tile j holds candidates 2j (rows 0..15, faces 0 and 1) and
+ * 2j + 1 (rows 16..31, faces 2 and 3), so each half of a tile takes its own candidate's bound.
  */
-template <uint32_t cb_mask_in, uint32_t PNHt>
+// Columns of the 32-key tile starting at tile_first_pos that a candidate with this bound sees: 0 .. 32 (all of them
+// for a -1 bound, UINT32_MAX, as the one-candidate tile does).
+inline uint32_t spec_visible_cols(uint32_t bound, uint32_t tile_first_pos) {
+    if (bound >= tile_first_pos + 31) {
+        return 32;
+    }
+    return bound < tile_first_pos ? 0 : bound - tile_first_pos + 1;
+}
+
+// Rows 16 * half .. 16 * half + 15 of a 32x32 bf16 mask tile (faces 2 * half and 2 * half + 1): columns below
+// `visible` get 0, the rest -inf.
+template <uint32_t tile_bytes>
+void fill_half_tile_mask(uint32_t cb_id, uint32_t tile_id, uint32_t half, uint32_t visible) {
+    static_assert(tile_bytes == 32 * 32 * 2, "a packed spec mask needs 32x32 bf16 tiles");
+    constexpr uint32_t NEG_INF16 = 0xFF80;
+    CircularBuffer cb(cb_id);
+    volatile tt_l1_ptr uint32_t* face =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cb.get_write_ptr() + tile_id * tile_bytes) + half * 256;
+    for (uint32_t f = 0; f < 2; ++f, face += 128) {  // a face: 16 rows of 16 bf16 columns, 8 words a row
+        uint32_t words[8];
+        for (uint32_t k = 0; k < 8; ++k) {
+            const uint32_t col = 16 * f + 2 * k;
+            words[k] = (col < visible ? 0 : NEG_INF16) | ((col + 1 < visible ? 0 : NEG_INF16) << 16);
+        }
+        for (uint32_t r = 0; r < 16; ++r) {
+            for (uint32_t k = 0; k < 8; ++k) {
+                face[r * 8 + k] = words[k];
+            }
+        }
+    }
+}
+
+template <uint32_t cb_mask_in, uint32_t PNHt, uint32_t cands_per_tile = 1>
 void generate_mask_spec_multi_pos(uint32_t Sk_chunk_t, uint32_t chunk_start_pos, const uint32_t* pos_vec) {
+    static_assert(cands_per_tile == 1 || cands_per_tile == 2, "one or two spec candidates per row-tile");
     constexpr uint32_t NEG_INF = 0xFF80FF80;
     constexpr uint32_t tile_bytes = get_tile_size(cb_mask_in);
     const uint32_t total_tiles = PNHt * Sk_chunk_t;
@@ -338,16 +374,27 @@ void generate_mask_spec_multi_pos(uint32_t Sk_chunk_t, uint32_t chunk_start_pos,
     cb_mask.reserve_back(total_tiles);
 
     for (uint32_t j = 0; j < PNHt; ++j) {
-        const uint32_t bound = pos_vec[j];
         for (uint32_t i = 0; i < Sk_chunk_t; ++i) {
             const uint32_t tile_id = j * Sk_chunk_t + i;
             const uint32_t tile_first_pos = chunk_start_pos + i * 32;
-            if (bound >= tile_first_pos + 31) {
-                fill_tile<tile_bytes>(cb_mask_in, tile_id, 0);
-            } else if (bound < tile_first_pos) {
-                fill_tile<tile_bytes>(cb_mask_in, tile_id, NEG_INF);
+            if constexpr (cands_per_tile == 1) {
+                const uint32_t bound = pos_vec[j];
+                if (bound >= tile_first_pos + 31) {
+                    fill_tile<tile_bytes>(cb_mask_in, tile_id, 0);
+                } else if (bound < tile_first_pos) {
+                    fill_tile<tile_bytes>(cb_mask_in, tile_id, NEG_INF);
+                } else {
+                    fill_tile_partial<tile_bytes>(cb_mask_in, tile_id, bound - tile_first_pos, NEG_INF);
+                }
             } else {
-                fill_tile_partial<tile_bytes>(cb_mask_in, tile_id, bound - tile_first_pos, NEG_INF);
+                const uint32_t top = spec_visible_cols(pos_vec[2 * j], tile_first_pos);
+                const uint32_t bottom = spec_visible_cols(pos_vec[2 * j + 1], tile_first_pos);
+                if (top == bottom && (top == 0 || top == 32)) {
+                    fill_tile<tile_bytes>(cb_mask_in, tile_id, top == 32 ? 0 : NEG_INF);
+                } else {
+                    fill_half_tile_mask<tile_bytes>(cb_mask_in, tile_id, 0, top);
+                    fill_half_tile_mask<tile_bytes>(cb_mask_in, tile_id, 1, bottom);
+                }
             }
         }
     }
@@ -640,6 +687,34 @@ void read_q(
         noc.async_read_barrier();
         cb_q.push_back(q_chunk_tiles);
     }
+}
+
+// Packed spec-decode Q (spec_multi_pos_packed): Q keeps one DRAM-interleaved tile per candidate with its heads in rows
+// 0..15 (faces 0 and 1, the tile's first half); compute row-tile t takes candidate 2t's half as its top half and
+// candidate 2t + 1's as its bottom half. q_batch_offset: this batch row's first Q page.
+template <uint32_t cb_q_in, uint32_t q_tile_bytes, uint32_t PNHt, uint32_t DHt, typename QArgsType>
+void read_q_spec_packed(const QArgsType& q_args, uint32_t q_addr, uint32_t q_page_size_bytes, uint32_t q_batch_offset) {
+    static_assert(q_tile_bytes == 32 * 32 * 2, "packed spec Q needs bf16 32x32 tiles");
+    constexpr uint32_t half_bytes = q_tile_bytes / 2;
+    Noc noc;
+    CircularBuffer cb_q(cb_q_in);
+    const auto q_reader = TensorAccessor(q_args, q_addr, q_page_size_bytes);
+    cb_q.reserve_back(PNHt * DHt);
+    uint32_t q_write_ptr = cb_q.get_write_ptr();
+    for (uint32_t t = 0; t < PNHt; ++t) {
+        for (uint32_t c = 0; c < DHt; ++c, q_write_ptr += q_tile_bytes) {
+            for (uint32_t h = 0; h < 2; ++h) {
+                noc.async_read(
+                    q_reader,
+                    CoreLocalMem<uint32_t>(q_write_ptr + h * half_bytes),
+                    half_bytes,
+                    {.page_id = q_batch_offset + (2 * t + h) * DHt + c},
+                    {});
+            }
+        }
+        noc.async_read_barrier();
+    }
+    cb_q.push_back(PNHt * DHt);
 }
 
 // Multicast parameters for K streaming (vertical multicast along y, same x)

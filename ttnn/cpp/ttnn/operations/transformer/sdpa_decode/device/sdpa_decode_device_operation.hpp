@@ -124,7 +124,8 @@ Tensor sdpa_decode(
     std::optional<uint32_t> head_dim_v,
     std::optional<ttnn::operations::transformer::PagedCacheGeometryOverride> paged_cache_geometry = std::nullopt,
     std::optional<uint32_t> cache_position_modulo = std::nullopt,
-    uint32_t spec_multi_pos_tiles = 0);
+    uint32_t spec_multi_pos_tiles = 0,
+    bool spec_multi_pos_packed = false);
 
 // sdpa_decode plus the per-(user, head) log-sum-exp as a second output (see SdpaDecodeInputs::lse_output).
 // Supported for causal decode with one KV head, no attention sink, a TILE layout Q and no Q-head parallelism
@@ -150,6 +151,7 @@ std::tuple<Tensor, Tensor> sdpa_decode_with_lse(
     std::optional<bool> share_cache,
     std::optional<bool> use_mla,
     std::optional<uint32_t> head_dim_v,
-    uint32_t spec_multi_pos_tiles = 0);
+    uint32_t spec_multi_pos_tiles = 0,
+    bool spec_multi_pos_packed = false);
 
 }  // namespace ttnn::prim

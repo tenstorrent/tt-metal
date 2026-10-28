@@ -82,16 +82,21 @@ PAIR_SPLIT_OPS = all(
 )
 
 # A speculative verify's global attention under the KV pair split (_verify_grouped): one KV scan per request for all
-# its candidates (paged MLA decode's spec_multi_pos_tiles) instead of one per candidate slot. One chip, ms per global
-# layer (tests/perf/verify_sdpa_bench.py; per slot / grouped / a plain decode step of the requests):
-# - 4 requests of 2 candidates (MIMO_SPEC_GROUPS=4, c=16): 1M 4.33 / 3.05 / 2.19, 256K 1.10 / 0.81 / 0.57, 32K even,
-#   4K 0.048 / 0.070 / 0.040 (0.2 ms of a ~19 ms verify step);
-# - 1 request of 4: 1M 2.19 / 1.57 / 0.62, 128K even, 8K 0.051 / 0.128 / 0.085 (0.7 ms of a ~15 ms step).
-# Each candidate's 16 heads fill a 32-row Q tile, half of it padding, so the grouped program is compute-bound. On by
-# default for groups of 2 slots, off for 4 (MIMO_VERIFY_GROUPED=1 / 0 overrides); the adapter then packs a verify's
-# requests one per group of GROUP_SLOTS slots (verify_grouped()).
+# its candidates (paged MLA decode's spec_multi_pos_tiles) instead of one per candidate slot. Each candidate's 16 heads
+# fill half a 32-row Q tile, so one tile per candidate is compute-bound; spec_multi_pos_packed (GROUPED_PACKED_OPS)
+# computes two candidates per tile. One chip, ms per global layer (tests/perf/verify_sdpa_bench.py; per slot /
+# grouped one tile per candidate / packed / a plain decode step of the requests):
+# - 4 requests of 2 candidates (MIMO_SPEC_GROUPS=4, c=16): 1M 4.33 / 3.04 / 2.19 / 2.19, 256K 1.10 / 0.82 / 0.58 /
+#   0.58, 32K 0.17 / 0.16 / 0.12 / 0.11, 4K 0.086 / 0.083 / 0.090 / 0.041;
+# - 1 request of 4: 1M 2.18 / 1.57 / 0.87 / 0.62, 128K 0.31 / 0.30 / 0.18 / 0.12, 8K 0.063 / 0.126 / 0.089 / 0.064.
+# On by default for groups of 2 slots, off for 4 (MIMO_VERIFY_GROUPED=1 / 0 overrides; packed, groups of 4 win from
+# ~32K and lose 0.2 ms a step at 8K); the adapter then packs a verify's requests one per group of GROUP_SLOTS slots
+# (verify_grouped()).
 VERIFY_GROUPED = os.environ.get("MIMO_VERIFY_GROUPED", "1" if GROUP_SLOTS == 2 else "0") == "1"
 GROUPED_VERIFY_OPS = "spec_multi_pos_tiles" in (
+    ttnn.transformer.paged_flash_multi_latent_attention_decode.__doc__ or ""
+)
+GROUPED_PACKED_OPS = "spec_multi_pos_packed" in (
     ttnn.transformer.paged_flash_multi_latent_attention_decode.__doc__ or ""
 )
 
@@ -1195,11 +1200,14 @@ class TtMiMoAttention:
         [1, groups, GROUP_SLOTS * 32, 192], the table ``table`` (a row per slot) as each group's first row, and every
         candidate keeps its SDPA position ``cur_pos`` [SPEC_SLOTS] (-1: no local key or a gap, output 0 and lse
         NO_KEY_LSE). Returns what _paged_mla_decode_lse returns for the slots: output [1, SPEC_SLOTS, 16, 128] in L1,
-        lse [1, SPEC_SLOTS, 16, 1] fp32, views of the grouped outputs (the padding rows of each tile are not heads)."""
+        lse [1, SPEC_SLOTS, 16, 1] fp32, views of the grouped outputs (the padding rows of each tile are not heads).
+        With GROUPED_PACKED_OPS the op computes two candidates per tile (spec_multi_pos_packed, half the compute) on
+        the same views."""
         k_cache, v_cache = kv_cache
         slots, cands = SPEC_SLOTS, GROUP_SLOTS
         groups = slots // cands
         nh, dk, width = q.shape[-2], q.shape[-1], table.shape[-1]
+        packed = GROUPED_PACKED_OPS and cands % 2 == 0 and 2 * nh == TILE
         q_dram = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
         q_slots = ttnn.slice(q_dram, (0, 0, 0, 0), (1, slots, nh, dk))
         q_dram.deallocate(True)
@@ -1223,6 +1231,7 @@ class TtMiMoAttention:
             memory_config=ttnn.L1_MEMORY_CONFIG,
             return_lse=True,
             spec_multi_pos_tiles=cands,
+            **({"spec_multi_pos_packed": True} if packed else {}),
         )  # [1, groups, cands * 32, 128], [.., 1]
         q_slots.deallocate(True)
         group_table.deallocate(True)
