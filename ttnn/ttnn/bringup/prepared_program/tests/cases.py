@@ -52,11 +52,18 @@ CASES = [
         "move": [0, 1, 7, 8, 9],
         "restore": [0],
         "compare": [2, 4, 5, 6, 11, 12, 13, 14, 15],
-        # vs float64 (test _check_head; owner 2026-10-28: limits = the measured error with a margin). Measured on seeds
-        # 0 / 1 / 2, A and B each (6 calls, worst chip): shared rows rel L2 0.0494-0.0495, PCC 0.99964 (bfp8 weights,
-        # LoFi); picks equal on 100% of the tokens clear of noise, 99.22-99.80% of all (near ties); weights max abs err
-        # 1.000-1.016e-3 (~1 bf16 ulp at 0.25). Limits: rel 0.06, PCC 0.9995, all picks 0.98, weights 2e-3; clear 100%.
-        "ref_limits": {"se_rel": 0.06, "se_pcc": 0.9995, "picks_all": 0.98, "w_err": 2e-3},
+        # vs float64 (test _check_head, reference.py), F139 limits = calib 2 x noise_limit of these formats vs float64 (no
+        # number from the device): the shared expert x bf16, W1 / W3 / W2 bfp8 at LoFi's operand bits, ~TF32 32-long
+        # partial dots (K-30), fp32 sums, h bf16, bf16 out; the router x and W_r bf16 at HiFi3, the same partial dots,
+        # fp32 softplus / sqrt / bias, keys of 15 mantissa bits (8 id bits), bf16 weights; picks exact on every token
+        # whose 6th / 7th keys are apart by more than 2 x calib x the formats run's largest key error. Seed 0, A and B,
+        # 4 chips each: shared rows rel 0.0494-0.0495 vs limit 0.1125-0.1126 (PCC 0.99964, a diagnostic); weights rel
+        # 1.675e-3-1.727e-3 vs limit 3.349e-3-3.451e-3; near-tie gap 1.46e-3-1.77e-3, 485-496 of 512 tokens clear,
+        # 0 differ (all tokens 99.41-100% equal, a diagnostic).
+        "noise": {
+            "shared": {"inputs": ["bf16", "bfp8", "bfp8", "bfp8"], "out": "bf16", "fidelity": "LoFi"},
+            "router": {"inputs": ["bf16", "bf16"], "out": "bf16", "key_bits": 15},
+        },
         "seed": 0,
     },
     {
@@ -76,6 +83,7 @@ CASES = [
         "move": [0, 1],
         "restore": [0, 1],
         "compare": [1],
+        "exact": True,  # (data movement: bit for bit vs its host model)
         "seed": 1,
     },
 ]
