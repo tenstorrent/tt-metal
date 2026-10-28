@@ -74,13 +74,15 @@ def block_model(cfg):
 def block_options():
     """MOE_HEAD=fused (the default, owner 2026-10-27): the fused head on the column split, the combine snapped (owner
     2026-10-27: keep the snap; bit-identical runs). ops: D2 x gathered, D4 ops head, D7 fixed combine order. MOE_TAIL:
-    ops (a program a stage) or fused (TailA2A: tilize + shared + TP all-to-all in one program)."""
+    ops (a program a stage) or fused (TailA2A: tilize + shared + TP all-to-all in one program); TAIL_A2A_PREPARED: the
+    fused tail's descriptors prepared once and dispatched with run_prepared."""
     from models.demos.moe_block.moe_block import MoEOptions
 
     tail = settings.get("MOE_TAIL")
+    tp = settings.get("TAIL_A2A_PREPARED") == "on"  # (P.2: the fused tail's descriptors as prepared programs)
     if settings.get("MOE_HEAD") == "fused":
-        return MoEOptions(head="fused", tail=tail, combine_snap=COMBINE_SNAP)
-    return MoEOptions(head="ops", tail=tail, x_gathered=True, combine_deterministic=True)
+        return MoEOptions(head="fused", tail=tail, tail_prepared=tp, combine_snap=COMBINE_SNAP)
+    return MoEOptions(head="ops", tail=tail, tail_prepared=tp, x_gathered=True, combine_deterministic=True)
 
 
 def block_dtypes():
