@@ -59,7 +59,8 @@ jobs:
         shell:
           run:
             - mkdir -p "$CCACHE_DIR" "$CCACHE_TEMPDIR"
-            - echo "restored ccache: $(du -sh "$CCACHE_DIR" | cut -f1), $(find "$CCACHE_DIR" -type f | wc -l) files"
+            - >-
+              echo "restored ccache: $(du -sh "$CCACHE_DIR" | cut -f1), $(find "$CCACHE_DIR" -type f | wc -l) files"
             - ccache -s
             - ccache -z
             - >-
