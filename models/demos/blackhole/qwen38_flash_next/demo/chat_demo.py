@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """Qwen3.8-Flash-Next end to end on a 1x4 Blackhole mesh: the chat server's start-up acceptance gate, then the
-GSM8K smoke subset (the first 64 of the 1,319 test items) through its OpenAI endpoint.
+first 64 of the 1,319 GSM8K test items through its OpenAI endpoint.
 
 The launcher starts the server with ``--mtp 4 --acceptance --require-json-96``: the server drafts with the MTP layer,
 replays the CPU greedy records and serves only when the ``json`` record matches 96/96. ``tools/benchmark.py`` then

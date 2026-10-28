@@ -49,7 +49,7 @@ def load_cases(path, limit):
         raise ValueError("GSM8K file does not match the pinned dataset")
     rows = [json.loads(line) for line in raw.splitlines()]
     if len(rows) != DATASET_SAMPLES or limit not in (64, DATASET_SAMPLES):
-        raise ValueError("Use the complete 1319-item test set or the predefined first-64 smoke subset")
+        raise ValueError("Use the complete 1319-item test set or its first 64 items")
     return [dict(id=index, **row) for index, row in enumerate(rows[:limit])]
 
 
@@ -140,7 +140,7 @@ def summarize(rows, requested, started, elapsed):
         "dataset_samples": DATASET_SAMPLES,
         "requested_samples": requested,
         "completed_samples": len(rows),
-        "scope": "full test set" if requested == DATASET_SAMPLES else "first 64/1319 smoke subset",
+        "scope": "full test set" if requested == DATASET_SAMPLES else "first 64 of 1319 items",
         "measurement_start": started,
         "measurement_end": utc_now(),
         "measured_s": elapsed,
