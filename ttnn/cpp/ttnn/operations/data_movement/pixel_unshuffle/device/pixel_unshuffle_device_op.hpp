@@ -46,6 +46,12 @@ struct PixelUnshuffle {
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output_tensor);
+        // COLUMN_MAJOR_PADDED: tilize -> tile transpose -> untilize on the compute engine;
+        // see pixel_unshuffle_channels_last_tiled_program_factory.cpp.
+        static tt::tt_metal::ProgramDescriptor create_descriptor_tiled(
+            const operation_attributes_t& operation_attributes,
+            const tensor_args_t& tensor_args,
+            tensor_return_value_t& output_tensor);
     };
 
     using program_factory_t = std::variant<MultiCore, MultiCoreChannelsLast>;

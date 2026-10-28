@@ -25,6 +25,15 @@ enum class PixelUnshuffleChannelOrder {
     //   c_out = rh*(r*C) + rw*C + c_in
     // Matches ONNX SpaceToDepth channel ordering.
     SPATIAL_MAJOR,
+
+    // channels_last only. Sub-pixel column rw varies slowest and every column's r*C channels are
+    // zero-padded to a 32-wide block:
+    //   c_out = rw*32 + rh*C + c_in,   padded_channels = r*32
+    // This is the order the tilize -> tile-transpose -> untilize kernel produces on the compute engine
+    // (no per-element gathers on the RISCs): requires 2-byte elements, r | 32, C*r <= 32, W % 32 == 0
+    // and a shard height that is a multiple of 32/r pixels. The consumer (a 1x1 conv / linear) absorbs
+    // the order and the padding in its weight rows.
+    COLUMN_MAJOR_PADDED,
 };
 
 // pixel_unshuffle: NCHW input [N, C, H, W] -> [N, C*r^2, H/r, W/r]

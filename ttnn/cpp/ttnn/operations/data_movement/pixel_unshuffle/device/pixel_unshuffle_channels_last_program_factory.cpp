@@ -36,6 +36,9 @@ using namespace tt::tt_metal;
 
 tt::tt_metal::ProgramDescriptor PixelUnshuffle::MultiCoreChannelsLast::create_descriptor(
     const operation_attributes_t& op_attr, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor) {
+    if (op_attr.channel_order == ttnn::PixelUnshuffleChannelOrder::COLUMN_MAJOR_PADDED) {
+        return create_descriptor_tiled(op_attr, tensor_args, output_tensor);
+    }
     const Tensor& input = tensor_args.input_tensor;
     const Tensor& output = output_tensor;
 

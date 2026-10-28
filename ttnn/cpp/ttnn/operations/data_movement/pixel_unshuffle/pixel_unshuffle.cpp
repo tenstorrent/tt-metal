@@ -8,6 +8,7 @@
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
+#include <tt-metalium/constants.hpp>
 
 namespace ttnn {
 
@@ -52,6 +53,9 @@ Tensor pixel_unshuffle(
     // Sharded input is supported natively: TensorAccessor encodes the full shard routing
     // table (core grid, shard shape, bank addresses) and resolves any page_id to the
     // correct (core, offset) via NOC reads, whether the buffer is interleaved or sharded.
+    TT_FATAL(
+        channels_last || channel_order != PixelUnshuffleChannelOrder::COLUMN_MAJOR_PADDED,
+        "pixel_unshuffle: COLUMN_MAJOR_PADDED is a channels_last-only channel order.");
     Tensor processed = input_tensor;
     if (processed.layout() == Layout::TILE) {
         processed = ttnn::to_layout(processed, Layout::ROW_MAJOR);
@@ -72,7 +76,9 @@ Tensor pixel_unshuffle(
         const uint32_t c_out = shape[1] * downscale_factor * downscale_factor;
         const uint32_t datum = processed.element_size();
         const uint32_t align_elems = tt::tt_metal::hal::get_l1_alignment() / datum;
-        const uint32_t cp = padded_channels.value_or(tt::round_up(c_out, align_elems));
+        const uint32_t cp = padded_channels.value_or(
+            channel_order == PixelUnshuffleChannelOrder::COLUMN_MAJOR_PADDED ? downscale_factor * tt::constants::TILE_WIDTH
+                                                                              : tt::round_up(c_out, align_elems));
         return ttnn::prim::pixel_unshuffle(processed, downscale_factor, memory_config.value(), channel_order, true, cp);
     }
 

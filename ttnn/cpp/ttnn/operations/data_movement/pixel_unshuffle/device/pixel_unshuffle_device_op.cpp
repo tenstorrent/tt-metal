@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "pixel_unshuffle_device_op.hpp"
+#include <tt-metalium/constants.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -57,6 +58,29 @@ static void validate_channels_last(const Tensor& input_tensor, const PixelUnshuf
         "PixelUnshuffle(channels_last): shard width {} must equal padded_channels {}.",
         ss.shape[1],
         op_attr.padded_channels);
+    if (op_attr.channel_order == ttnn::PixelUnshuffleChannelOrder::COLUMN_MAJOR_PADDED) {
+        // tilize -> transpose -> untilize path (pixel_unshuffle_channels_last_tiled_program_factory.cpp)
+        TT_FATAL(datum == 2, "PixelUnshuffle(COLUMN_MAJOR_PADDED): 2-byte elements only, got {} bytes.", datum);
+        TT_FATAL(
+            tt::constants::TILE_WIDTH % r == 0 && C * r <= tt::constants::TILE_HEIGHT,
+            "PixelUnshuffle(COLUMN_MAJOR_PADDED): needs r | 32 and C*r <= 32, got r={} C={}.",
+            r,
+            C);
+        TT_FATAL(
+            shape[3] % tt::constants::TILE_WIDTH == 0,
+            "PixelUnshuffle(COLUMN_MAJOR_PADDED): input width {} must be a multiple of 32.",
+            shape[3]);
+        TT_FATAL(
+            op_attr.padded_channels == r * tt::constants::TILE_WIDTH,
+            "PixelUnshuffle(COLUMN_MAJOR_PADDED): padded_channels must be r*32 = {}, got {}.",
+            r * tt::constants::TILE_WIDTH,
+            op_attr.padded_channels);
+        TT_FATAL(
+            ss.shape[0] % (tt::constants::TILE_WIDTH / r) == 0,
+            "PixelUnshuffle(COLUMN_MAJOR_PADDED): shard height {} must be a multiple of 32/r = {} pixels.",
+            ss.shape[0],
+            tt::constants::TILE_WIDTH / r);
+    }
     const uint64_t total_pixels = static_cast<uint64_t>(N) * Ho * Wo;
     TT_FATAL(
         static_cast<uint64_t>(ss.shape[0]) * ss.num_cores() >= total_pixels,
