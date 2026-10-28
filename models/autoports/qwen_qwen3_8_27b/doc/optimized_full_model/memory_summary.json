@@ -1,0 +1,505 @@
+{
+  "scope": "Actual full64 nativeB1 allocator checkpoint/unique physical owner accounting, not request peak or serving capacity. Eight-bank uniform reservations; TRACE arena separate.",
+  "normal_dram_capacity_bytes_per_device": 34044513280,
+  "trace_capacity_bytes_per_device": 134217728,
+  "stages": {
+    "control": {
+      "receipt": "/home/mvasiljev/build/qwen38-swe/local-tsu-ttft/full64-b1-final-v4-strict-control.memory.json",
+      "receipt_sha256": "f20f5d015f99e1699b5532aee46a861eedac5a9bf885950d0a26b649305a99f7",
+      "checkpoints": {
+        "after_construction": {
+          "regular_dram_bytes_per_device": 8695110656,
+          "categories": {
+            "other_named_model_runtime": {
+              "bytes_per_device": 24576,
+              "bytes_per_bank_uniform_reservation": 3072,
+              "named_physical_owners": 48
+            },
+            "layer_cached_position_indices": {
+              "bytes_per_device": 16777216,
+              "bytes_per_bank_uniform_reservation": 2097152,
+              "named_physical_owners": 32768
+            },
+            "layer_math_constants": {
+              "bytes_per_device": 7864320,
+              "bytes_per_bank_uniform_reservation": 983040,
+              "named_physical_owners": 240
+            },
+            "other_layer_weights_and_norms": {
+              "bytes_per_device": 88342528,
+              "bytes_per_bank_uniform_reservation": 11042816,
+              "named_physical_owners": 624
+            },
+            "CCL_persistent_workspace": {
+              "bytes_per_device": 72089600,
+              "bytes_per_bank_uniform_reservation": 9011200,
+              "named_physical_owners": 54
+            },
+            "layer_weight.gate": {
+              "bytes_per_device": 802160640,
+              "bytes_per_bank_uniform_reservation": 100270080,
+              "named_physical_owners": 64
+            },
+            "layer_weight.up": {
+              "bytes_per_device": 802160640,
+              "bytes_per_bank_uniform_reservation": 100270080,
+              "named_physical_owners": 64
+            },
+            "layer_weight.gateup": {
+              "bytes_per_device": 1604321280,
+              "bytes_per_bank_uniform_reservation": 200540160,
+              "named_physical_owners": 64
+            },
+            "layer_weight.down": {
+              "bytes_per_device": 802160640,
+              "bytes_per_bank_uniform_reservation": 100270080,
+              "named_physical_owners": 64
+            },
+            "layer_weight.mix": {
+              "bytes_per_device": 802160640,
+              "bytes_per_bank_uniform_reservation": 100270080,
+              "named_physical_owners": 64
+            },
+            "layer_weight.out": {
+              "bytes_per_device": 283115520,
+              "bytes_per_bank_uniform_reservation": 35389440,
+              "named_physical_owners": 64
+            },
+            "model_weight.embedding": {
+              "bytes_per_device": 635699200,
+              "bytes_per_bank_uniform_reservation": 79462400,
+              "named_physical_owners": 1
+            },
+            "model_weight.head": {
+              "bytes_per_device": 337715200,
+              "bytes_per_bank_uniform_reservation": 42214400,
+              "named_physical_owners": 1
+            },
+            "active_recurrent.conv": {
+              "bytes_per_device": 1966080,
+              "bytes_per_bank_uniform_reservation": 245760,
+              "named_physical_owners": 48
+            },
+            "model_weight.final_norm": {
+              "bytes_per_device": 327680,
+              "bytes_per_bank_uniform_reservation": 40960,
+              "named_physical_owners": 1
+            },
+            "active_recurrent.recurrent": {
+              "bytes_per_device": 37748736,
+              "bytes_per_bank_uniform_reservation": 4718592,
+              "named_physical_owners": 48
+            },
+            "request_logits_sampling_and_outputs": {
+              "bytes_per_device": 7991808,
+              "bytes_per_bank_uniform_reservation": 998976,
+              "named_physical_owners": 12
+            },
+            "sampler_persistent_buffers": {
+              "bytes_per_device": 51712,
+              "bytes_per_bank_uniform_reservation": 6464,
+              "named_physical_owners": 5
+            },
+            "prefill_request_buckets": {
+              "bytes_per_device": 38674432,
+              "bytes_per_bank_uniform_reservation": 4834304,
+              "named_physical_owners": 1290
+            },
+            "native_rope_tables": {
+              "bytes_per_device": 67108864,
+              "bytes_per_bank_uniform_reservation": 8388608,
+              "named_physical_owners": 2
+            },
+            "attention_KV": {
+              "bytes_per_device": 2281701376,
+              "bytes_per_bank_uniform_reservation": 285212672,
+              "named_physical_owners": 32
+            },
+            "attention_page_table": {
+              "bytes_per_device": 262144,
+              "bytes_per_bank_uniform_reservation": 32768,
+              "named_physical_owners": 1
+            },
+            "unmatched_runtime_program_and_allocator": {
+              "bytes_per_device": 4685824,
+              "bytes_per_bank_uniform_reservation": 585728,
+              "named_physical_owners": 0
+            }
+          }
+        },
+        "after_preparation": {
+          "regular_dram_bytes_per_device": 8865768448,
+          "categories": {
+            "unmatched_runtime_program_and_allocator": {
+              "bytes_per_device": 175343616,
+              "bytes_per_bank_uniform_reservation": 21917952,
+              "named_physical_owners": 0
+            },
+            "other_layer_weights_and_norms": {
+              "bytes_per_device": 88342528,
+              "bytes_per_bank_uniform_reservation": 11042816,
+              "named_physical_owners": 624
+            },
+            "layer_weight.gate": {
+              "bytes_per_device": 802160640,
+              "bytes_per_bank_uniform_reservation": 100270080,
+              "named_physical_owners": 64
+            },
+            "layer_weight.up": {
+              "bytes_per_device": 802160640,
+              "bytes_per_bank_uniform_reservation": 100270080,
+              "named_physical_owners": 64
+            },
+            "layer_weight.gateup": {
+              "bytes_per_device": 1604321280,
+              "bytes_per_bank_uniform_reservation": 200540160,
+              "named_physical_owners": 64
+            },
+            "layer_weight.down": {
+              "bytes_per_device": 802160640,
+              "bytes_per_bank_uniform_reservation": 100270080,
+              "named_physical_owners": 64
+            },
+            "layer_math_constants": {
+              "bytes_per_device": 7864320,
+              "bytes_per_bank_uniform_reservation": 983040,
+              "named_physical_owners": 240
+            },
+            "other_named_model_runtime": {
+              "bytes_per_device": 24576,
+              "bytes_per_bank_uniform_reservation": 3072,
+              "named_physical_owners": 48
+            },
+            "layer_weight.mix": {
+              "bytes_per_device": 802160640,
+              "bytes_per_bank_uniform_reservation": 100270080,
+              "named_physical_owners": 64
+            },
+            "layer_weight.out": {
+              "bytes_per_device": 283115520,
+              "bytes_per_bank_uniform_reservation": 35389440,
+              "named_physical_owners": 64
+            },
+            "CCL_persistent_workspace": {
+              "bytes_per_device": 72089600,
+              "bytes_per_bank_uniform_reservation": 9011200,
+              "named_physical_owners": 54
+            },
+            "layer_cached_position_indices": {
+              "bytes_per_device": 16777216,
+              "bytes_per_bank_uniform_reservation": 2097152,
+              "named_physical_owners": 32768
+            },
+            "model_weight.embedding": {
+              "bytes_per_device": 635699200,
+              "bytes_per_bank_uniform_reservation": 79462400,
+              "named_physical_owners": 1
+            },
+            "model_weight.head": {
+              "bytes_per_device": 337715200,
+              "bytes_per_bank_uniform_reservation": 42214400,
+              "named_physical_owners": 1
+            },
+            "model_weight.final_norm": {
+              "bytes_per_device": 327680,
+              "bytes_per_bank_uniform_reservation": 40960,
+              "named_physical_owners": 1
+            },
+            "native_rope_tables": {
+              "bytes_per_device": 67108864,
+              "bytes_per_bank_uniform_reservation": 8388608,
+              "named_physical_owners": 2
+            },
+            "active_recurrent.conv": {
+              "bytes_per_device": 1966080,
+              "bytes_per_bank_uniform_reservation": 245760,
+              "named_physical_owners": 48
+            },
+            "active_recurrent.recurrent": {
+              "bytes_per_device": 37748736,
+              "bytes_per_bank_uniform_reservation": 4718592,
+              "named_physical_owners": 48
+            },
+            "attention_KV": {
+              "bytes_per_device": 2281701376,
+              "bytes_per_bank_uniform_reservation": 285212672,
+              "named_physical_owners": 32
+            },
+            "attention_page_table": {
+              "bytes_per_device": 262144,
+              "bytes_per_bank_uniform_reservation": 32768,
+              "named_physical_owners": 1
+            },
+            "request_logits_sampling_and_outputs": {
+              "bytes_per_device": 7991808,
+              "bytes_per_bank_uniform_reservation": 998976,
+              "named_physical_owners": 12
+            },
+            "sampler_persistent_buffers": {
+              "bytes_per_device": 51712,
+              "bytes_per_bank_uniform_reservation": 6464,
+              "named_physical_owners": 5
+            },
+            "prefill_request_buckets": {
+              "bytes_per_device": 38674432,
+              "bytes_per_bank_uniform_reservation": 4834304,
+              "named_physical_owners": 1290
+            }
+          }
+        }
+      }
+    },
+    "candidate": {
+      "receipt": "/home/mvasiljev/build/qwen38-swe/local-tsu-ttft/full64-b1-final-v4-strict-candidate.memory.json",
+      "receipt_sha256": "5f75205fef370191a3a98a34f4bbd82b54b8e3a99c41e6634a2ac2142b050bfa",
+      "checkpoints": {
+        "after_construction": {
+          "regular_dram_bytes_per_device": 8695110656,
+          "categories": {
+            "other_named_model_runtime": {
+              "bytes_per_device": 24576,
+              "bytes_per_bank_uniform_reservation": 3072,
+              "named_physical_owners": 48
+            },
+            "layer_cached_position_indices": {
+              "bytes_per_device": 16777216,
+              "bytes_per_bank_uniform_reservation": 2097152,
+              "named_physical_owners": 32768
+            },
+            "layer_math_constants": {
+              "bytes_per_device": 7864320,
+              "bytes_per_bank_uniform_reservation": 983040,
+              "named_physical_owners": 240
+            },
+            "other_layer_weights_and_norms": {
+              "bytes_per_device": 88342528,
+              "bytes_per_bank_uniform_reservation": 11042816,
+              "named_physical_owners": 624
+            },
+            "CCL_persistent_workspace": {
+              "bytes_per_device": 72089600,
+              "bytes_per_bank_uniform_reservation": 9011200,
+              "named_physical_owners": 54
+            },
+            "layer_weight.gate": {
+              "bytes_per_device": 802160640,
+              "bytes_per_bank_uniform_reservation": 100270080,
+              "named_physical_owners": 64
+            },
+            "layer_weight.up": {
+              "bytes_per_device": 802160640,
+              "bytes_per_bank_uniform_reservation": 100270080,
+              "named_physical_owners": 64
+            },
+            "layer_weight.gateup": {
+              "bytes_per_device": 1604321280,
+              "bytes_per_bank_uniform_reservation": 200540160,
+              "named_physical_owners": 64
+            },
+            "layer_weight.down": {
+              "bytes_per_device": 802160640,
+              "bytes_per_bank_uniform_reservation": 100270080,
+              "named_physical_owners": 64
+            },
+            "layer_weight.mix": {
+              "bytes_per_device": 802160640,
+              "bytes_per_bank_uniform_reservation": 100270080,
+              "named_physical_owners": 64
+            },
+            "layer_weight.out": {
+              "bytes_per_device": 283115520,
+              "bytes_per_bank_uniform_reservation": 35389440,
+              "named_physical_owners": 64
+            },
+            "model_weight.embedding": {
+              "bytes_per_device": 635699200,
+              "bytes_per_bank_uniform_reservation": 79462400,
+              "named_physical_owners": 1
+            },
+            "model_weight.head": {
+              "bytes_per_device": 337715200,
+              "bytes_per_bank_uniform_reservation": 42214400,
+              "named_physical_owners": 1
+            },
+            "active_recurrent.conv": {
+              "bytes_per_device": 1966080,
+              "bytes_per_bank_uniform_reservation": 245760,
+              "named_physical_owners": 48
+            },
+            "model_weight.final_norm": {
+              "bytes_per_device": 327680,
+              "bytes_per_bank_uniform_reservation": 40960,
+              "named_physical_owners": 1
+            },
+            "active_recurrent.recurrent": {
+              "bytes_per_device": 37748736,
+              "bytes_per_bank_uniform_reservation": 4718592,
+              "named_physical_owners": 48
+            },
+            "request_logits_sampling_and_outputs": {
+              "bytes_per_device": 7991808,
+              "bytes_per_bank_uniform_reservation": 998976,
+              "named_physical_owners": 12
+            },
+            "sampler_persistent_buffers": {
+              "bytes_per_device": 51712,
+              "bytes_per_bank_uniform_reservation": 6464,
+              "named_physical_owners": 5
+            },
+            "prefill_request_buckets": {
+              "bytes_per_device": 38674432,
+              "bytes_per_bank_uniform_reservation": 4834304,
+              "named_physical_owners": 1290
+            },
+            "native_rope_tables": {
+              "bytes_per_device": 67108864,
+              "bytes_per_bank_uniform_reservation": 8388608,
+              "named_physical_owners": 2
+            },
+            "attention_KV": {
+              "bytes_per_device": 2281701376,
+              "bytes_per_bank_uniform_reservation": 285212672,
+              "named_physical_owners": 32
+            },
+            "attention_page_table": {
+              "bytes_per_device": 262144,
+              "bytes_per_bank_uniform_reservation": 32768,
+              "named_physical_owners": 1
+            },
+            "unmatched_runtime_program_and_allocator": {
+              "bytes_per_device": 4685824,
+              "bytes_per_bank_uniform_reservation": 585728,
+              "named_physical_owners": 0
+            }
+          }
+        },
+        "after_preparation": {
+          "regular_dram_bytes_per_device": 8865866752,
+          "categories": {
+            "other_named_model_runtime": {
+              "bytes_per_device": 24576,
+              "bytes_per_bank_uniform_reservation": 3072,
+              "named_physical_owners": 48
+            },
+            "layer_cached_position_indices": {
+              "bytes_per_device": 16777216,
+              "bytes_per_bank_uniform_reservation": 2097152,
+              "named_physical_owners": 32768
+            },
+            "layer_math_constants": {
+              "bytes_per_device": 7864320,
+              "bytes_per_bank_uniform_reservation": 983040,
+              "named_physical_owners": 240
+            },
+            "other_layer_weights_and_norms": {
+              "bytes_per_device": 88342528,
+              "bytes_per_bank_uniform_reservation": 11042816,
+              "named_physical_owners": 624
+            },
+            "CCL_persistent_workspace": {
+              "bytes_per_device": 72089600,
+              "bytes_per_bank_uniform_reservation": 9011200,
+              "named_physical_owners": 54
+            },
+            "layer_weight.gate": {
+              "bytes_per_device": 802160640,
+              "bytes_per_bank_uniform_reservation": 100270080,
+              "named_physical_owners": 64
+            },
+            "layer_weight.up": {
+              "bytes_per_device": 802160640,
+              "bytes_per_bank_uniform_reservation": 100270080,
+              "named_physical_owners": 64
+            },
+            "layer_weight.gateup": {
+              "bytes_per_device": 1604321280,
+              "bytes_per_bank_uniform_reservation": 200540160,
+              "named_physical_owners": 64
+            },
+            "layer_weight.down": {
+              "bytes_per_device": 802160640,
+              "bytes_per_bank_uniform_reservation": 100270080,
+              "named_physical_owners": 64
+            },
+            "layer_weight.mix": {
+              "bytes_per_device": 802160640,
+              "bytes_per_bank_uniform_reservation": 100270080,
+              "named_physical_owners": 64
+            },
+            "layer_weight.out": {
+              "bytes_per_device": 283115520,
+              "bytes_per_bank_uniform_reservation": 35389440,
+              "named_physical_owners": 64
+            },
+            "model_weight.embedding": {
+              "bytes_per_device": 635699200,
+              "bytes_per_bank_uniform_reservation": 79462400,
+              "named_physical_owners": 1
+            },
+            "model_weight.head": {
+              "bytes_per_device": 337715200,
+              "bytes_per_bank_uniform_reservation": 42214400,
+              "named_physical_owners": 1
+            },
+            "active_recurrent.conv": {
+              "bytes_per_device": 1966080,
+              "bytes_per_bank_uniform_reservation": 245760,
+              "named_physical_owners": 48
+            },
+            "model_weight.final_norm": {
+              "bytes_per_device": 327680,
+              "bytes_per_bank_uniform_reservation": 40960,
+              "named_physical_owners": 1
+            },
+            "active_recurrent.recurrent": {
+              "bytes_per_device": 37748736,
+              "bytes_per_bank_uniform_reservation": 4718592,
+              "named_physical_owners": 48
+            },
+            "request_logits_sampling_and_outputs": {
+              "bytes_per_device": 7991808,
+              "bytes_per_bank_uniform_reservation": 998976,
+              "named_physical_owners": 12
+            },
+            "sampler_persistent_buffers": {
+              "bytes_per_device": 51712,
+              "bytes_per_bank_uniform_reservation": 6464,
+              "named_physical_owners": 5
+            },
+            "prefill_request_buckets": {
+              "bytes_per_device": 38674432,
+              "bytes_per_bank_uniform_reservation": 4834304,
+              "named_physical_owners": 1290
+            },
+            "native_rope_tables": {
+              "bytes_per_device": 67108864,
+              "bytes_per_bank_uniform_reservation": 8388608,
+              "named_physical_owners": 2
+            },
+            "attention_KV": {
+              "bytes_per_device": 2281701376,
+              "bytes_per_bank_uniform_reservation": 285212672,
+              "named_physical_owners": 32
+            },
+            "attention_page_table": {
+              "bytes_per_device": 262144,
+              "bytes_per_bank_uniform_reservation": 32768,
+              "named_physical_owners": 1
+            },
+            "unmatched_runtime_program_and_allocator": {
+              "bytes_per_device": 175441920,
+              "bytes_per_bank_uniform_reservation": 21930240,
+              "named_physical_owners": 0
+            }
+          }
+        }
+      }
+    }
+  },
+  "trace_used_bytes_per_device": {
+    "control": 25624576,
+    "candidate": 24117248
+  },
+  "interpretation": "Constructor unchanged. Prepared regularDRAM increases98304B solely unmatched runtime/program category; named model/cache/metadata categories unchanged. TRACE use decreases1507328B inside fixed128MiB arena, returning no capacity to normalDRAM.",
+  "control_correction": "Historical coarse-type inventory failure retained. Numericbuffer_type0 normalDRAM and4 TRACE exactly reconcile using raw allocation events and actual buffer-address census; see B1_TRACE_DOMAIN_REPLAY.json. Candidate independently reconciles both allocator views."
+}

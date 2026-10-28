@@ -1,0 +1,61 @@
+{
+  "workload": {
+    "profile": "single_user_decode_opt_in",
+    "prompt_len": 4096,
+    "gen_len": 128,
+    "batch": 1,
+    "layers": 64,
+    "native_context": 262144,
+    "physical_prefill_chunk": 4096,
+    "warmed_repeats": 3
+  },
+  "configuration": {
+    "default_enabled": false,
+    "env": "QWEN38_COMPACT_B1_RECURRENCE=1",
+    "other_flags": [
+      "QWEN38_GROUPED_RECURRENCE=1",
+      "QWEN38_MASKED_RECURRENCE=1",
+      "QWEN38_FLAT_PREFILL=1"
+    ]
+  },
+  "ttft_ms": 436.6121059283614,
+  "decode_ms_per_token_e2e": 24.586279880196795,
+  "decode_ms_per_token_device": 23.694281999999998,
+  "device_time_is_extrapolated": true,
+  "device_time_scope": "Corrected representative same-ASIC48linear+16full kernel-duration sum plus prefix/terminal from real0/3 profile; not directly measured full64 device time. First-layer-only conversions counted once.",
+  "roofline_ms_per_token_estimate": 7.70088,
+  "roofline_basis": {
+    "bytes_per_device": {
+      "decoded_weight_tile_payload": 3829473280,
+      "kv_minimum_chunked_reads": 37879808,
+      "fp32_recurrent_state_read_write": 75497472
+    },
+    "nominal_dram_bandwidth_gb_s_per_device": 512,
+    "devices": 4,
+    "scope": "Payload traffic lower-bound estimate, not measured traffic/utilization. Excludes conv/norm/activation/cache-write/CCL/control traffic. Allocated262144 capacity is not262144tokensread in4K benchmark."
+  },
+  "baseline": {
+    "ttft_ms": 436.9326909072697,
+    "decode_ms_per_token_e2e": 27.707792858879163,
+    "decode_ms_per_token_device_estimate": 26.790020000000002,
+    "tsu": 36.09092954798609
+  },
+  "tsu": 40.67309104397927,
+  "tsu_gain_percent": 12.696158157691073,
+  "all_three_repeats_above40": true,
+  "e2e_over_corrected_bound_fraction": 0.03764612408161594,
+  "named_limitations": [
+    "Opt-in B1 unmasked decode only; unflagged runtime remains baseline",
+    "No meaningful TTFT gain established",
+    "Representative profile extrapolation, not a direct full64 device-time measurement",
+    "No vLLM or SWE-task speedup/capacity claim"
+  ],
+  "evidence": {
+    "native": "full64-b1-final-v4-native-comparison.json",
+    "strict": "full64-b1-final-v4-strict-comparison.json",
+    "profile": "final-v4-profile-attribution.json",
+    "watcher": "watcher-b1-final-v4-comparison.json",
+    "raw_root": "/home/mvasiljev/build/qwen38-swe/local-tsu-ttft"
+  },
+  "source_manifest_sha256": "2dd2e6053371e913d28b1c094eb9f943e73a5d4aae8a6e1f3244c2801740424a"
+}

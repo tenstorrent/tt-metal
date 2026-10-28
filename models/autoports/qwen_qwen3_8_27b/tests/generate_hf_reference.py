@@ -14,8 +14,9 @@ from readiness_check.schema import Reference, ReferenceEntry, save_reference
 p=argparse.ArgumentParser()
 p.add_argument('--checkpoint',default='.cache/qwen38-full')
 p.add_argument('--output',default='models/autoports/qwen_qwen3_8_27b/readiness_aime24_chat.refpt')
+p.add_argument('--threads',type=int,default=16)
 a=p.parse_args()
-torch.set_num_threads(16)
+torch.set_num_threads(a.threads)
 root=Path(a.checkpoint)
 cfg=AutoConfig.from_pretrained(root).text_config
 cfg._attn_implementation='sdpa'

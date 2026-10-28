@@ -85,3 +85,59 @@ not selected settings or measured memory/quality wins. Validate allocator
 checkpoints, exhaustion/backpressure, every layer's restored state and scored
 task time before selection. The decoder grouping candidate preserves cache
 precision and capacity; it is independently tested and initially disabled.
+
+## Standalone native B1 optimization, 2026-10-28
+
+The user additionally requests warmed full64 batch-1 token-out throughput above
+40 tokens/sec/user, scoped to optimized-full-model stage 07. The prescribed
+comparison is native context allocation 262144, 4096 input tokens, 128 output
+tokens, physical prefill chunk 4096, and three warmed repeats using canonical
+on-device greedy split sampling. TTFT includes request preparation, all prefill
+chunks, terminal/head/sampling and first-token readback; decode measures the
+remaining 127 transitions plus the final buffered-output boundary. Compilation,
+weight load and generator preparation are reported separately. This is a local
+standalone model/generator objective, not a serving concurrency or SWE score.
+
+The shared versioned native-chat suite (`qualitative_prompts.json`) and fresh
+exact-revision HF controls cover explanation, structured output and code under
+the same 512-token cap selected before TT execution. Strict source-matched
+control/candidate runs compare whole recurrent/conv and paged key/value state
+on all ASICs at fixed, ragged and nonaligned continuation checkpoints; the B1
+all-inactive slot uses the public no-replay decode bridge. The optimization
+guard excludes masked, larger-batch and prefill paths. Native context capability
+records are retained unchanged; this experiment does not establish a new
+long-context accuracy or concurrent-capacity claim.
+
+This B1 candidate changes transient recurrence/head dataflow only: weights,
+persistent cache/page tables, sampling state and trace region are unchanged.
+The separate memory investigator provides current B32 unique-owner ledgers and
+shared-layout experiments; those memory sizes are not B1 allocator measurements.
+Actual B1 accounting is in `optimized_full_model/memory_summary.json`, and
+profile attribution/roofline is in `optimized_full_model/perf_summary.json`.
+
+### Current native B1 allocation checkpoints
+
+These are actual full64 per-device setup checkpoints at native262144 physical
+capacity with eight DRAM banks. They are not continuous request peaks, shared
+prefix retention or concurrent-serving capacity. Unique backing owners are
+counted once, including actual bank reservation padding. The compact per-family
+per-device/per-bank table is in
+[the memory summary](optimized_full_model/memory_summary.json).
+
+| Domain/checkpoint | Control bytes/device | Opt-in bytes/device | Bytes/bank control → opt-in |
+|---|---:|---:|---:|
+| Regular DRAM after construction |8,695,110,656|8,695,110,656|1,086,888,832 →1,086,888,832|
+| Regular DRAM after preparation |8,865,768,448|8,865,866,752|1,108,221,056 →1,108,233,344|
+| Fixed TRACE reserved capacity |134,217,728|134,217,728|16,777,216 →16,777,216|
+| TRACE occupied within that arena |25,624,576|24,117,248|3,203,072 →3,014,656|
+
+Named weights, KV/recurrent/conv state, RoPE tables, page tables, CCL workspace,
+prefill buckets, sampler and request/output categories are unchanged. The98,304B
+normal-DRAM increase is confined to unmatched runtime/program allocations, which
+remain explicit rather than relabeled weights. Normal allocator capacity is
+34,044,513,280B/device, excluding the separate fixed arena and firmware reserve.
+Unused TRACE subspace cannot be counted as normal DRAM headroom. The initial
+coarse-type audit failure is retained and resolved using numeric BufferType0/4,
+three exact trace addresses and independent candidate allocator-domain views.
+No context or precision capability is reduced, and no new higher-precision or
+C32 capacity result is inferred from this B1 dataflow optimization.

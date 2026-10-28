@@ -20,6 +20,7 @@ def main():
     parser.add_argument("--grouped", action="store_true")
     parser.add_argument("--masked-recurrence", action="store_true")
     parser.add_argument("--flat-prefill", action="store_true")
+    parser.add_argument("--compact-b1-recurrence", action="store_true")
     parser.add_argument("--cache-state-fields", choices=("linear", "all"), default="linear")
     parser.add_argument("--batch", type=int, default=16)
     parser.add_argument("--active-requests", type=int, help="Useful requests; remaining resident rows stay inactive")
@@ -48,6 +49,7 @@ def main():
     os.environ["QWEN38_GROUPED_RECURRENCE"] = "1" if args.grouped else "0"
     os.environ["QWEN38_MASKED_RECURRENCE"] = "1" if args.masked_recurrence else "0"
     os.environ["QWEN38_FLAT_PREFILL"] = "1" if args.flat_prefill else "0"
+    os.environ["QWEN38_COMPACT_B1_RECURRENCE"] = "1" if args.compact_b1_recurrence else "0"
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=128 * 1024**2)
     result = dict(
@@ -60,6 +62,7 @@ def main():
         grouped=args.grouped,
         masked_recurrence=args.masked_recurrence,
         flat_prefill=args.flat_prefill,
+        compact_b1_recurrence=args.compact_b1_recurrence,
         cache_state_fields=args.cache_state_fields,
         batch=args.batch,
         active_requests=active_requests,
@@ -192,7 +195,7 @@ def main():
                 result["records"][-1]["state_sha256"] = state_receipt()
             save()
             print("FULL_MODEL_REPEAT", repeat, json.dumps(metrics), flush=True)
-        mixed = [[100] * 33, [101] * 65, [102]]
+        mixed = [[100] * 33, [101] * 65, [102]][: args.batch]
         first = gen.generate(mixed, 4, stop_on_eos=False)
         mixed_state = state_receipt() if args.state_checks else None
         second = gen.generate(mixed, 4, stop_on_eos=False)
@@ -213,17 +216,33 @@ def main():
             # while the other group's bound slots are inactive.
             for parity in (0, 1):
                 lengths = [7 if row % 2 == parity else 0 for row in range(args.batch)]
-                logits = gen.prefill_continuation(
-                    torch.full((args.batch, 7), 101 + parity, dtype=torch.int64),
-                    page_table=gen.page_table,
-                    kv_cache=gen.kv_cache,
-                    prompt_lens=lengths,
-                    start_position=args.continuation_prefix_length,
-                )
+                if any(lengths):
+                    logits = gen.prefill_continuation(
+                        torch.full((args.batch, 7), 101 + parity, dtype=torch.int64),
+                        page_table=gen.page_table,
+                        kv_cache=gen.kv_cache,
+                        prompt_lens=lengths,
+                        start_position=args.continuation_prefix_length,
+                    )
+                else:
+                    # At B1 the second parity has no active row. The public
+                    # continuation API requires one nonzero length; exercise
+                    # its legal all-inactive decode bridge instead of passing
+                    # an unsupported zero-length prefill request.
+                    for _ in range(7):
+                        logits = gen.decode_forward(
+                            torch.full((args.batch,), 101 + parity, dtype=torch.int32),
+                            torch.full((args.batch,), -1, dtype=torch.int32),
+                            page_table=gen.page_table,
+                            kv_cache=gen.kv_cache,
+                            return_logits=True,
+                            return_device=True,
+                        )
                 result["continuation"].append(
                     dict(
                         start_position=args.continuation_prefix_length,
                         prompt_lengths=lengths,
+                        mode="prefill_continuation" if any(lengths) else "all_inactive_decode_bridge",
                         state_sha256=state_receipt(),
                         logits_sha256=[
                             hashlib.sha256(
@@ -233,6 +252,10 @@ def main():
                         ],
                     )
                 )
+                if not any(lengths):
+                    assert (
+                        result["continuation"][-1]["state_sha256"] == result["continuation"][-2]["state_sha256"]
+                    ), "All-inactive decode changed state"
                 del logits  # A materialized bridge return must not survive another replay.
             # Both groups are now aligned at prefix+7. Cross the public decode
             # bridge into an eager padded prefill tail without resetting state.

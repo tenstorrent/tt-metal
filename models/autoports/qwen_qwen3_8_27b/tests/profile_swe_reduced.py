@@ -20,7 +20,14 @@ def main():
     parser.add_argument("--grouped", action="store_true")
     parser.add_argument("--masked-recurrence", action="store_true")
     parser.add_argument("--flat-prefill", action="store_true")
+    parser.add_argument("--compact-b1-recurrence", action="store_true")
     parser.add_argument("--batch", type=int, default=16)
+    parser.add_argument("--context", type=int, default=8192)
+    parser.add_argument(
+        "--fixed-profile-domain",
+        action="store_true",
+        help="Warm only this fixed profiler workload; not general generator acceptance",
+    )
     parser.add_argument("--active-requests", type=int)
     parser.add_argument("--prefill-chunk-size", type=int, default=256)
     parser.add_argument("--output", type=Path, required=True)
@@ -32,7 +39,9 @@ def main():
     os.environ["QWEN38_GROUPED_RECURRENCE"] = "1" if args.grouped else "0"
     os.environ["QWEN38_MASKED_RECURRENCE"] = "1" if args.masked_recurrence else "0"
     os.environ["QWEN38_FLAT_PREFILL"] = "1" if args.flat_prefill else "0"
+    os.environ["QWEN38_COMPACT_B1_RECURRENCE"] = "1" if args.compact_b1_recurrence else "0"
     torch.set_num_threads(8)
+    ttnn.CONFIG.throw_exception_on_fallback = True
     root = Path(__file__).resolve().parents[1]
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
     mesh = ttnn.open_mesh_device(ttnn.MeshShape(1, 4), trace_region_size=128 * 1024**2)
@@ -43,11 +52,11 @@ def main():
             checkpoint=args.checkpoint,
             layer_indices=[0, 3],
             batch_size=args.batch,
-            context_length=8192,
+            context_length=args.context,
             prepare=False,
             prefill_chunk_size=args.prefill_chunk_size,
         )
-        gen.prepare_decode()
+        gen.prepare_decode(prefill_lengths=[args.prefill_chunk_size] if args.fixed_profile_domain else None)
         prompts = [[100] * 4096 for _ in range(active_requests)]
         gen.generate(prompts, 3, stop_on_eos=False)
         gen.reset()
@@ -89,13 +98,18 @@ def main():
             grouped=args.grouped,
             masked_recurrence=args.masked_recurrence,
             flat_prefill=args.flat_prefill,
+            compact_b1_recurrence=args.compact_b1_recurrence,
             checkpoint=args.checkpoint,
             batch=args.batch,
             active_requests=active_requests,
             prompt=4096,
             decode_position=4096,
             physical_prefill_chunk=args.prefill_chunk_size,
-            fixture_cache_context=8192,
+            fixture_cache_context=args.context,
+            fixed_profile_domain=args.fixed_profile_domain,
+            preparation_scope=(
+                "Only measured physical chunk" if args.fixed_profile_domain else "Complete generator domain"
+            ),
             native_context=262144,
             history="synthetic token100 prompt, then autoregressive first sampled token",
             measured_decode_replays=1,
@@ -104,7 +118,12 @@ def main():
             precision=gen.model.precision_config,
             source_sha256={
                 str(p.relative_to(root)): hashlib.sha256(p.read_bytes()).hexdigest()
-                for p in [Path(__file__), *root.glob("tt/*.py"), *root.glob("tt/kernels/*grouped*")]
+                for p in [
+                    Path(__file__),
+                    *root.glob("tt/*.py"),
+                    root / "tt/selected_precision_config.json",
+                    *root.glob("tt/kernels/*.cpp"),
+                ]
             },
         )
         args.output.parent.mkdir(parents=True, exist_ok=True)

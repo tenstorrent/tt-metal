@@ -592,6 +592,9 @@ class MultichipDecoder(OptimizedDecoder):
 
     def _delta(self, x, state, *, prepared_metadata=None, active_mask=None):
         batch, length, _ = x.shape
+        compact_b1 = (self.policy.get("compact_b1_recurrence") and batch == 1 and length == 1
+                      and prepared_metadata is None and active_mask is None
+                      and not self.policy.get("_prefill_phase"))
         if active_mask is not None and (length != 1 or prepared_metadata is not None):
             raise ValueError("Decode active_mask requires a one-token non-prefill call")
         projected = self._linear(x, self.mix)
@@ -609,7 +612,10 @@ class MultichipDecoder(OptimizedDecoder):
                     program_config=ttnn.QkvCausalConv1dSiluProgramConfig(channel_chunk_size=128),
                     compute_kernel_config=ttnn.WormholeComputeKernelConfig(math_fidelity=ttnn.MathFidelity.HiFi4,
                         math_approx_mode=False, fp32_dest_acc_en=True, packer_l1_acc=False))
-                qs.append(cq[:, :length]); ks.append(ck[:, :length]); vs.append(cv[:, :length])
+                if compact_b1:
+                    qs.append(cq); ks.append(ck); vs.append(cv)
+                else:
+                    qs.append(cq[:, :length]); ks.append(ck[:, :length]); vs.append(cv[:, :length])
             qflat, kflat, vflat = [parts[0] if batch == 1 else ttnn.concat(parts, dim=0) for parts in (qs, ks, vs)]
             if prepared_metadata is not None:
                 # Select the last three *logical* projected inputs, including
@@ -638,12 +644,20 @@ class MultichipDecoder(OptimizedDecoder):
         ttnn.copy(next_conv, state.conv)
 
         def l2(t):
-            t = ttnn.typecast(t, ttnn.float32)
+            if t.dtype != ttnn.float32:
+                t = ttnn.typecast(t, ttnn.float32)
             return ttnn.rms_norm(t, weight=self.l2_weight, epsilon=1e-6/128, compute_kernel_config=self.ckc)
 
         a = ttnn.typecast(projected[..., 4096:4108], ttnn.float32)
-        decay = ttnn.multiply(self.neg_A, ttnn.softplus(ttnn.add(a, self.dt)))
-        beta = ttnn.sigmoid(ttnn.typecast(projected[..., 4128:4140], ttnn.float32))
+        if compact_b1:
+            positive = ttnn.add(self.dt, a,
+                activations=[ttnn.UnaryWithParam(ttnn.UnaryOpType.SOFTPLUS, 1.0, 20.0)])
+            decay = ttnn.multiply(self.neg_A, positive, activations=[ttnn.UnaryOpType.EXP])
+            beta = ttnn.add(projected[..., 4128:4140], 0.0, dtype=ttnn.float32,
+                activations=[ttnn.UnaryOpType.SIGMOID])
+        else:
+            decay = ttnn.multiply(self.neg_A, ttnn.softplus(ttnn.add(a, self.dt)))
+            beta = ttnn.sigmoid(ttnn.typecast(projected[..., 4128:4140], ttnn.float32))
         if prepared_metadata is not None or active_mask is not None:
             # Mask after convolution and nonlinear gates: zero hidden padding
             # alone leaves convolution carry and nonzero decay/beta behind.
@@ -683,14 +697,24 @@ class MultichipDecoder(OptimizedDecoder):
             ttnn.copy(new_state, state.recurrent)
             return self._linear(ttnn.multiply(norm_gate[:, :length], projected[..., 2560:4096]), self.out)
         else:
-            q = l2(reshape(qflat, [batch, length, 4, 128]))
-            k = l2(reshape(kflat, [batch, length, 4, 128]))
-            v = ttnn.typecast(reshape(vflat, [batch, length, 12, 128]), ttnn.float32)
+            if compact_b1:
+                from .fp32_head_rows import repack
+                q, k, v = repack(qflat, kflat, vflat)
+                q, k = l2(q), l2(k)
+            else:
+                q = l2(reshape(qflat, [batch, length, 4, 128]))
+                k = l2(reshape(kflat, [batch, length, 4, 128]))
+                v = ttnn.typecast(reshape(vflat, [batch, length, 12, 128]), ttnn.float32)
             # This kernel assigns one value head to each core. Split its batch axis,
             # retaining batched projections and an explicit state for every request.
             grid = self.mesh_device.compute_with_storage_grid_size()
             kernel_batch = (grid.x * grid.y) // 12
             recurrence = fp32_recurrence
+            if compact_b1:
+                # Exact compact head-row I/O around the unchanged FP32 kernel.
+                # Prefill, prepared/masked rows and larger batches retain their
+                # existing state and layout paths.
+                from .compact_b1_recurrence import fp32_recurrence as recurrence
             masked_commit = (self.policy.get("masked_recurrence") and prepared_metadata is None
                              and not self.policy.get("_prefill_phase")
                              and 8 <= batch <= 32 and active_mask is not None
@@ -715,6 +739,7 @@ class MultichipDecoder(OptimizedDecoder):
                     inplace_state=(masked_commit or (self.policy.get("inplace_recurrence", False)
                                    and prepared_metadata is None and active_mask is None)),
                     **({"active_mask": active_mask} if masked_commit else {}),
+                    **({"precomputed_decay": True} if compact_b1 else {}),
                 )
                 ys.append(y_part)
                 states.append(state_part)

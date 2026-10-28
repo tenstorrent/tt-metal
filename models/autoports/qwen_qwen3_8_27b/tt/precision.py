@@ -91,4 +91,9 @@ def decoder_policy(config, index):
         raise ValueError('QWEN38_FLAT_PREFILL must be 0 or 1')
     if flat_prefill == '1':
         policy['flat_prefill'] = True
+    compact_b1 = os.environ.get('QWEN38_COMPACT_B1_RECURRENCE', '0')
+    if compact_b1 not in ('0', '1'):
+        raise ValueError('QWEN38_COMPACT_B1_RECURRENCE must be 0 or 1')
+    if compact_b1 == '1':
+        policy['compact_b1_recurrence'] = True
     return policy

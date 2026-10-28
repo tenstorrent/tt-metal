@@ -1138,6 +1138,26 @@
       "memory_scope": "No new persistent model allocation. Peak serving memory and B16/block512 capacity remain pending; no batch/native-context Cartesian-product claim.",
       "independent_review": "swe_optimization/GROUPED_FINAL_REVIEW.md",
       "local_profile": "swe_optimization/grouped-fixed-clock-profile-comparison.json"
+    },
+    "07-local-b1-opt-in-2026-10-28": {
+      "supported_context": 262144,
+      "capability_reduction": null,
+      "default_enabled": false,
+      "configuration": "QWEN38_COMPACT_B1_RECURRENCE=1",
+      "guard": "B1/T1/unmasked/nonprefill only; prepared and masked paths retain existing implementation",
+      "state_layout": "Unchanged conv, FP32 recurrent, BFP8 pagedKV, page-table and residual contracts",
+      "current_accuracy_scope": "Fresh full64 AIME203-input top-k/sharednativechat; exact full64 fixed4096,ragged33,4097-prefix plus7/129continuations. Native262144physical allocation retained; no new maximum-context accuracy claim.",
+      "trace_region_capacity_bytes_per_device": 134217728,
+      "trace_used_bytes_per_device": {
+        "control": 25624576,
+        "candidate": 24117248
+      },
+      "regular_dram_prepared_bytes_per_device": {
+        "control": 8865768448,
+        "candidate": 8865866752
+      },
+      "evidence": "optimized_full_model/memory_summary.json",
+      "performance": "optimized_full_model/perf_summary.json"
     }
   },
   "stage05_prefill_policy": {
