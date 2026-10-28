@@ -11,6 +11,7 @@
 #include <tt_stl/fmt.hpp>
 
 #include "impl/metal2_host_api/program_spec/validation/validate_spec.hpp"
+#include "impl/metal2_host_api/raw_allocation_support.hpp"
 
 namespace tt::tt_metal::experimental {
 
@@ -67,11 +68,10 @@ void ValidatePrefetcherPipeLanesAndRelays(
 // raw_allocation.cpp
 void ValidateRawAllocationParameter(const RawAllocationParameter& parameter);
 void ValidateRawAllocationBorrowing(
-    const RawAllocationParamName& allocation_name,
+    const RawAllocationSource& source,
     const CollectedSpecData& collected,
     std::string_view borrower,
     const NodeRangeSet& occupied_nodes,
-    uint32_t offset,
     uint64_t size_per_node,
     uint32_t l1_alignment);
 

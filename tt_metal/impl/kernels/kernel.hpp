@@ -20,6 +20,7 @@
 #include "api/tt-metalium/experimental/offline_kernel_compile.hpp"
 #include <tt-metalium/experimental/metal2_host_api/scratchpad_spec.hpp>
 #include "impl/context/metal_context.hpp"
+#include "impl/metal2_host_api/raw_allocation_support.hpp"
 #include "core_coord.hpp"
 #include "hal_types.hpp"
 #include "jit_build/jit_build_settings.hpp"
@@ -194,7 +195,7 @@ struct ScratchpadBindingHandle {
     // The ScratchpadSpecName serves as an identifier & does not carry specific meaning.
     using AllocationIdentifier = experimental::ScratchpadSpecName;
     std::optional<experimental::ScratchpadSpecName> shared_allocation_identifier;
-    std::optional<experimental::ScratchpadAdvancedOptions::RawAllocationBorrowing> borrowed_from;
+    std::optional<RawAllocationSource> borrowed_from;
 };
 
 // Metal 2.0: per-kernel resolved PrefetcherPipe accessor (KernelAdvancedOptions::PrefetcherPipeBinding).

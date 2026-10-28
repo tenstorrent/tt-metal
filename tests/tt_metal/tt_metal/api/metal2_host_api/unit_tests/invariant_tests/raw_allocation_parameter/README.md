@@ -5,8 +5,6 @@ properties (`experimental/allocation/raw_allocation_properties.hpp`). Borrower n
 and is listed in `../program_spec/`. Borrower coverage and capacity constraints are listed in
 `../dataflow_buffer_spec/` and `../scratchpad_spec/`.
 
-These describe the API contract; raw-allocation parameter validation and its tests are not implemented yet.
-
 ## Listed invariants
 
 `RawAllocationParameter` as declared in `raw_allocation_parameter.hpp`, with every field and only its invariants.
