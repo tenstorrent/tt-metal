@@ -1,19 +1,19 @@
 {
   "schema_version": 1,
-  "config_id": "base_bfp8_hifi2",
-  "description": "E5a text policy (pre-sweep baseline): bfp8 weights, HiFi2 + fp32 accumulation matmuls, HiFi2 + fp32 SDPA, HiFi4 norms, bf16 activations and residual, bfp4 masks.",
+  "config_id": "p3_qkv_gu_exp",
+  "description": "E6a selected text policy: bfp8 weights, HiFi2 + fp32 accumulation matmuls; attn_qkv and mlp_gate_up outputs bfp8, every other activation bf16; SDPA HiFi2 + fp32 acc + exp_approx; HiFi4 norms; bf16 residual; bfp4 masks. Safe baseline: config_id base_bfp8_hifi2 (README).",
   "text": {
     "weights": {
-      "attn_qkv": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
+      "attn_qkv": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bfp8"},
       "attn_o": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
-      "mlp_gate_up": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
+      "mlp_gate_up": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bfp8"},
       "mlp_down": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
       "ple_proj": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
       "ple_block": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"},
       "final_proj": {"dtype": "bfp8", "fidelity": "HiFi2", "fp32_acc": true, "out_dtype": "bf16"}
     },
     "layer_exceptions": [],
-    "sdpa": {"fidelity": "HiFi2", "fp32_acc": true, "exp_approx": false},
+    "sdpa": {"fidelity": "HiFi2", "fp32_acc": true, "exp_approx": true},
     "norms": {"fidelity": "HiFi4", "fp32_acc": true},
     "residual_dtype": "bf16",
     "mask_dtype": "bfp4"
