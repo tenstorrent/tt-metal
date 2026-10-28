@@ -325,17 +325,11 @@ def test_kimi_runner_kv_cache_table(mesh_device, seq_len, num_users, num_layers,
 
     built = {}
 
-    def _keep_table(*, table_builder, num_layers, max_seq_len, num_users, chunk_n_tokens, chunk_size_bytes, path):
-        cfg = ttnn.experimental.disaggregation.KvChunkAddressTableConfig()
-        cfg.num_layers = num_layers
-        cfg.max_sequence_length = max_seq_len
-        cfg.num_slots = num_users
-        cfg.chunk_n_tokens = chunk_n_tokens
-        cfg.chunk_size_bytes = chunk_size_bytes
-        built["table"] = table_builder(config=cfg, chunk_size_bytes=chunk_size_bytes, num_users=num_users)
+    def _keep_table(*, path, walk, **_):
+        built["table"] = walk()
         return path
 
-    monkeypatch.setattr(kv_chunk_table, "serialize_kv_chunk_table", _keep_table)
+    monkeypatch.setattr(kv_chunk_table, "publish_kv_chunk_table", _keep_table)
     kv_chunk_table.build_and_serialize_kv_chunk_table(
         mesh_device=mesh_device,
         kvpe_cache=kvpe_cache,
