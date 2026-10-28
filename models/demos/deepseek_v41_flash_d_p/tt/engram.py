@@ -18,8 +18,10 @@ This runs in the device model's ``begin_chunk(tokens, start)`` (agent rule 5: a 
 Where the table is read from (ENGRAM_TABLE; bringup/ENGRAM_HOST_PATH.md): mmap = the checkpoint mapping with the
 kernel's read-ahead (a random 256-byte row faults in up to read_ahead_kb: ~7 s a 5120-token chunk cold on the QB);
 random = the same mapping with MADV_RANDOM over the table's bytes (one 4 KB page a row); resident = the table held in
-anonymous memory (huge pages) from build on: with ENGRAM_ROWS=bfp8 already as bfloat8_b (272 B a row, exponents next to
-the magnitudes; tt/engram_bfp8.py), the chunk's rows gathered straight into TILE bytes; with bf16 the 8-bit bytes. The gather is split over ENGRAM_GATHER_THREADS
+anonymous memory from build on (4 KB pages unless ENGRAM_HUGEPAGES=on; the file pages it read dropped from the page cache;
+with ENGRAM_BUILD=background built on one thread while the weights load, the first chunk waits for it): with
+ENGRAM_ROWS=bfp8 already as bfloat8_b (272 B a row, exponents next to the magnitudes; tt/engram_bfp8.py), the chunk's
+rows gathered straight into TILE bytes; with bf16 the 8-bit bytes. The gather is split over ENGRAM_GATHER_THREADS
 Python threads (torch indexing releases the GIL). Every mode gives EngramTable.rows' values bit for bit.
 """
 
@@ -39,6 +41,16 @@ from .settings import settings
 _HASHERS = {}  # model path -> EngramHasher (the compressed token map takes seconds to build)
 _RESIDENT = {}  # (checkpoint path, tensor name) -> resident uint8 tensor (one copy a process, whoever builds it)
 _RESIDENT_LOCK = threading.Lock()
+_BUILDER = []  # ENGRAM_BUILD=background: the one thread a process that builds the resident tables, one after another
+_BUILDER_LOCK = threading.Lock()  # (not _RESIDENT_LOCK: a build holds that for its whole run)
+
+
+def _build_in_background(fn):
+    """fn() on the builder thread (FIX.10: the resident tables build while the weights load) -> its Future."""
+    with _BUILDER_LOCK:
+        if not _BUILDER:
+            _BUILDER.append(ThreadPoolExecutor(1, thread_name_prefix="engram-build"))
+    return _BUILDER[0].submit(fn)
 
 
 def engram_hasher(model_path: str, cfg):
@@ -53,9 +65,29 @@ def engram_hasher(model_path: str, cfg):
     return _HASHERS[key]
 
 
-def resident_bfp8(ck, layer: int, threads: int = 16, block: int = 1 << 20):
-    """The layer's table as packed bfloat8_b rows [N, 272] uint8 in anonymous memory (MADV_HUGEPAGE), built once a
-    process: blocks of ``block`` rows read with pread (``threads`` ahead) and packed by tt/engram_bfp8.pack_into."""
+def _anonymous(nbytes: int, huge: bool):
+    buf = mmap.mmap(-1, nbytes, flags=mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS)
+    if huge:
+        try:
+            buf.madvise(mmap.MADV_HUGEPAGE)
+        except (AttributeError, OSError):
+            pass
+    return buf
+
+
+def _drop_cache(fd: int, off: int, nbytes: int):
+    """Drop a range of a file we read once from the page cache (FIX.10): the table bytes are never read again, and
+    leaving ~200 GB of them cached evicts the weight cache the load streams next."""
+    try:
+        os.posix_fadvise(fd, off, nbytes, os.POSIX_FADV_DONTNEED)
+    except (AttributeError, OSError):
+        pass
+
+
+def resident_bfp8(ck, layer: int, threads: int = 16, block: int = 1 << 20, huge: bool | None = None):
+    """The layer's table as packed bfloat8_b rows [N, 272] uint8 in anonymous memory, built once a process: blocks of
+    ``block`` rows read with pread (``threads`` ahead; each block's file pages dropped from the page cache after it)
+    and packed by tt/engram_bfp8.pack_into. ``huge``: MADV_HUGEPAGE on the rows (default ENGRAM_HUGEPAGES)."""
     from collections import deque
 
     import numpy as np
@@ -70,11 +102,7 @@ def resident_bfp8(ck, layer: int, threads: int = 16, block: int = 1 << 20):
         _, (n, d), woff, _ = ck.info(wname)
         _, (_, sd), soff, _ = ck.info(sname)
         width = d // 16 + d
-        buf = mmap.mmap(-1, n * width, flags=mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS)
-        try:
-            buf.madvise(mmap.MADV_HUGEPAGE)
-        except (AttributeError, OSError):
-            pass
+        buf = _anonymous(n * width, settings.get("ENGRAM_HUGEPAGES") == "on" if huge is None else huge)
         packed = np.frombuffer(buf, dtype=np.uint8).reshape(n, width)
         fw = os.open(os.path.join(ck.path, ck.weight_map[wname]), os.O_RDONLY)
         fs = os.open(os.path.join(ck.path, ck.weight_map[sname]), os.O_RDONLY)
@@ -84,6 +112,8 @@ def resident_bfp8(ck, layer: int, threads: int = 16, block: int = 1 << 20):
             w, s = torch.empty(m, d, dtype=torch.uint8), torch.empty(m, sd, dtype=torch.uint8)
             assert os.preadv(fw, [w.numpy()], woff + a * d) == m * d
             assert os.preadv(fs, [s.numpy()], soff + a * sd) == m * sd
+            _drop_cache(fw, woff + a * d, m * d)
+            _drop_cache(fs, soff + a * sd, m * sd)
             return a, w, s
 
         try:
@@ -108,6 +138,13 @@ def resident_bfp8(ck, layer: int, threads: int = 16, block: int = 1 << 20):
         return t
 
 
+def _warm_tiles(packed, threads: int):
+    """One tiny tile_rows call: numba loads the gather kernel (~0.5 s on the first call) off the first chunk."""
+    from .engram_bfp8 import tile_rows
+
+    tile_rows(packed, torch.zeros(32, 24, dtype=torch.int64), 32, threads)
+
+
 def _names(layer: int):
     return (f"layers.{layer}.engram.embed.weight", f"layers.{layer}.engram.embed.scale")
 
@@ -122,18 +159,15 @@ def madvise_random(ck, layer: int):
         ck._map(ck.weight_map[name])._mmap.madvise(mmap.MADV_RANDOM, a, off + nbytes - a)
 
 
-def resident_copy(ck, name: str, readers: int = 16) -> torch.Tensor:
-    """A stored tensor's bytes copied once into anonymous memory (MADV_HUGEPAGE), as uint8 of its shape's rows."""
+def resident_copy(ck, name: str, readers: int = 16, huge: bool | None = None) -> torch.Tensor:
+    """A stored tensor's bytes copied once into anonymous memory, as uint8 of its shape's rows (file pages dropped from
+    the page cache after each read; ``huge``: MADV_HUGEPAGE, default ENGRAM_HUGEPAGES)."""
     key = (str(ck.path), name)
     with _RESIDENT_LOCK:
         if key in _RESIDENT:
             return _RESIDENT[key]
         _, shape, off, nbytes = ck.info(name)
-        buf = mmap.mmap(-1, nbytes, flags=mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS)
-        try:
-            buf.madvise(mmap.MADV_HUGEPAGE)
-        except (AttributeError, OSError):
-            pass
+        buf = _anonymous(nbytes, settings.get("ENGRAM_HUGEPAGES") == "on" if huge is None else huge)
         fd = os.open(os.path.join(ck.path, ck.weight_map[name]), os.O_RDONLY)
         try:
             os.posix_fadvise(fd, off, nbytes, os.POSIX_FADV_SEQUENTIAL)
@@ -143,6 +177,7 @@ def resident_copy(ck, name: str, readers: int = 16) -> torch.Tensor:
                 a = k * step
                 n = min(step, nbytes - a)
                 assert os.preadv(fd, [view[a : a + n]], off + a) == n
+                _drop_cache(fd, off + a, n)
 
             with ThreadPoolExecutor(readers) as ex:
                 list(ex.map(read, range((nbytes + step - 1) // step)))
@@ -173,15 +208,32 @@ class TtEngramRows:
         self.mode = mode or settings.get("ENGRAM_TABLE")
         self.threads = threads or settings.get("ENGRAM_GATHER_THREADS")
         self.format = rows_format or settings.get("ENGRAM_ROWS")
-        self.weight, self.scale, self.packed = table.weight, table.scale, None
+        self.weight, self.scale, self._packed = table.weight, table.scale, None
         ck = getattr(table, "ckpt", None)
         if self.mode == "random":
             madvise_random(ck, layer)
         elif self.mode == "resident" and self.format == "bfp8":
-            self.packed = resident_bfp8(ck, layer, max(self.threads, 16)).numpy()
+
+            def build():
+                packed = resident_bfp8(ck, layer, max(self.threads, 16)).numpy()
+                _warm_tiles(packed, self.threads)  # (the compiled gather loaded here, not in the first chunk)
+                return packed
+
+            if settings.get("ENGRAM_BUILD") == "background":
+                self._packed = _build_in_background(build)
+            else:
+                self._packed = build()
         elif self.mode == "resident":
             self.weight, self.scale = (resident_copy(ck, n) for n in _names(layer))
         self.pool = ThreadPoolExecutor(self.threads) if self.threads > 1 else None
+
+    @property
+    def packed(self):
+        """The resident bfp8 rows [N, 272] (numpy uint8), else None; ENGRAM_BUILD=background: waits for the build."""
+        p = self._packed
+        if p is not None and not hasattr(p, "shape"):
+            p = self._packed = p.result()
+        return p
 
     def gather(self, ids: torch.Tensor):
         """The 8-bit table bytes of ids [...] in their order: (e4m3 [n, dim], e8m0 [n, dim / 32]) uint8, the gather
@@ -317,7 +369,7 @@ class TtEngramRows:
 
     def __call__(self, tokens: torch.Tensor, tail: torch.Tensor, valid: int | None = None):
         """begin_chunk work for this layer: (device rows [1, 1, S/SP, width] in ENGRAM_ROWS' format, new tail)."""
-        if self.packed is not None:
+        if self._packed is not None:
             tiles, new_tail = self.tiles_from_packed(tokens, tail, valid)
             return self.upload_tiles(tiles), new_tail
         if self.format == "bfp8":
