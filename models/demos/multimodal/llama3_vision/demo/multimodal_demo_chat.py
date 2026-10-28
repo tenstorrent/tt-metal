@@ -15,7 +15,7 @@ import ttnn
 IMG_PATH = Path("models/ttt_compat/demo/sample_prompts/llama_models").resolve()
 
 from models.common.llama_models import GeneratorChat
-from models.ttt_compat.demo.simple_vision_demo import create_multimodal_model
+from models.demos.multimodal.llama3_vision.demo.simple_vision_demo import create_multimodal_model
 from models.ttt_compat.tt.generator import Generator
 
 

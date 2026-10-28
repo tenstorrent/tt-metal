@@ -167,8 +167,8 @@ def create_multimodal_model(
     use_paged_kv_cache=False,
     checkpoint=None,
 ):
+    from models.demos.multimodal.llama3_vision.tt.llama_vision_model import CrossAttentionTransformer
     from models.ttt_compat.tt.model_config import ModelArgs
-    from models.ttt_compat.tt.multimodal.llama_vision_model import CrossAttentionTransformer
 
     tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size, max_seq_len=max_seq_len)
     assert tt_model_args.is_multimodal, "This model is multimodal"
@@ -260,8 +260,8 @@ def prepare_generator_args(
             False,  # enable_trace
             1,  # max_batch_size
             (
-                "models/ttt_compat/demo/sample_prompts/vision_input_data_trace.json",
-                "models/ttt_compat/demo/sample_prompts/vision_input_data.json",
+                "models/demos/multimodal/llama3_vision/demo/sample_prompts/vision_input_data_trace.json",
+                "models/demos/multimodal/llama3_vision/demo/sample_prompts/vision_input_data.json",
             ),  # input_prompts
         ),  # batch1-notrace
         (
@@ -269,8 +269,8 @@ def prepare_generator_args(
             True,  # enable_trace
             1,  # max_batch_size
             (
-                "models/ttt_compat/demo/sample_prompts/vision_input_data_trace.json",
-                "models/ttt_compat/demo/sample_prompts/vision_input_data.json",
+                "models/demos/multimodal/llama3_vision/demo/sample_prompts/vision_input_data_trace.json",
+                "models/demos/multimodal/llama3_vision/demo/sample_prompts/vision_input_data.json",
             ),  # input_prompts
         ),  # batch1-trace
         (
@@ -278,8 +278,8 @@ def prepare_generator_args(
             True,  # enable_trace
             16,  # max_batch_size
             (
-                "models/ttt_compat/demo/sample_prompts/vision_input_data_trace.json",
-                "models/ttt_compat/demo/sample_prompts/vision_input_data.json",
+                "models/demos/multimodal/llama3_vision/demo/sample_prompts/vision_input_data_trace.json",
+                "models/demos/multimodal/llama3_vision/demo/sample_prompts/vision_input_data.json",
             ),  # input_prompts
         ),  # batch16-trace
         (
@@ -287,8 +287,8 @@ def prepare_generator_args(
             True,  # enable_trace
             32,  # max_batch_size
             (
-                "models/ttt_compat/demo/sample_prompts/vision_input_data_trace.json",
-                "models/ttt_compat/demo/sample_prompts/vision_input_data.json",
+                "models/demos/multimodal/llama3_vision/demo/sample_prompts/vision_input_data_trace.json",
+                "models/demos/multimodal/llama3_vision/demo/sample_prompts/vision_input_data.json",
             ),  # input_prompts
         ),  # batch32-trace
         (
@@ -296,8 +296,8 @@ def prepare_generator_args(
             True,  # enable_trace
             4,  # max_batch_size
             (
-                "models/ttt_compat/demo/sample_prompts/vision_input_data_trace.json",
-                "models/ttt_compat/demo/sample_prompts/vision_input_data_w_text_only.json",
+                "models/demos/multimodal/llama3_vision/demo/sample_prompts/vision_input_data_trace.json",
+                "models/demos/multimodal/llama3_vision/demo/sample_prompts/vision_input_data_w_text_only.json",
             ),  # input_prompts
         ),  # batch4-trace-with-text-prompts
     ],

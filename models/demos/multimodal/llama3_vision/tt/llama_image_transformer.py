@@ -5,7 +5,7 @@
 from tqdm import tqdm
 
 from models.common.lightweightmodule import LightweightModule
-from models.ttt_compat.tt.multimodal.llama_image_block import TtLlamaImageTransformerBlock
+from models.demos.multimodal.llama3_vision.tt.llama_image_block import TtLlamaImageTransformerBlock
 
 
 class TtLlamaImageTransformer(LightweightModule):

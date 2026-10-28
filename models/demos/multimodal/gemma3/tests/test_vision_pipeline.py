@@ -97,7 +97,7 @@ def test_gemma_vision_piecewise(
 ):
     from models.demos.multimodal.gemma3.tt.gemma_image_transformer import TtGemmaImageTransformer
     from models.demos.multimodal.gemma3.tt.siglip_vision_embedding import TtSiglipVisionEmbeddings
-    from models.tt_transformers.tt.multimodal.llama_layernorm import TtLayerNorm
+    from models.demos.multimodal.llama_layernorm import TtLayerNorm
 
     pcc_required = 0.99
     dtype = ttnn.bfloat16

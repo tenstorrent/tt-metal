@@ -11,10 +11,10 @@ import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.rmsnorm import RMSNorm
 from models.common.utility_functions import nearest_32
+from models.demos.multimodal.llama3_vision.tt.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
 from models.ttt_compat.tt.common import Mode
 from models.ttt_compat.tt.decoder import TransformerBlock
 from models.ttt_compat.tt.distributed_norm import DistributedNorm
-from models.ttt_compat.tt.multimodal.llama_cross_block import TtLlamaCrossAttentionTransformerBlock
 from models.ttt_compat.tt.rope import RotarySetup
 
 
