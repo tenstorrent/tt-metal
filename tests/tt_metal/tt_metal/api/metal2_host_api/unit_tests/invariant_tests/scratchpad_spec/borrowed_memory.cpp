@@ -35,8 +35,8 @@ TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadExactFitAtZeroOffset) {
             },
     }};
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 2 * alignment}};
-    spec.scratchpads[0].advanced_options.borrowed_from =
-        ScratchpadAdvancedOptions::SRAMArenaBorrowing{.allocation = SRAMArenaParamName{"arena"}, .offset = 0};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = 0};
     spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
 
@@ -56,8 +56,8 @@ TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadExactFitAtNonzeroOffset) {
             },
     }};
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 2 * alignment}};
-    spec.scratchpads[0].advanced_options.borrowed_from =
-        ScratchpadAdvancedOptions::SRAMArenaBorrowing{.allocation = SRAMArenaParamName{"arena"}, .offset = alignment};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = alignment};
     spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
 
@@ -77,8 +77,8 @@ TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadExtraAllocationNodes) {
             },
     }};
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 2 * alignment}};
-    spec.scratchpads[0].advanced_options.borrowed_from =
-        ScratchpadAdvancedOptions::SRAMArenaBorrowing{.allocation = SRAMArenaParamName{"arena"}, .offset = 0};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = 0};
     spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
 
@@ -98,8 +98,8 @@ TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadMissingOccupiedNode) {
             },
     }};
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 2 * alignment}};
-    spec.scratchpads[0].advanced_options.borrowed_from =
-        ScratchpadAdvancedOptions::SRAMArenaBorrowing{.allocation = SRAMArenaParamName{"arena"}, .offset = 0};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = 0};
     spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
     spec.work_units[0].target_nodes = NodeRange{NodeCoord{0, 0}, NodeCoord{1, 0}};
@@ -107,7 +107,7 @@ TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadMissingOccupiedNode) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(
-            ::testing::HasSubstr("ScratchpadSpec 'scratch' borrows from SRAMArenaParameter 'arena', which does not "
+            ::testing::HasSubstr("ScratchpadSpec 'scratch' allocates from SRAMArenaParameter 'arena', which does not "
                                  "cover every occupied node.")));
 }
 
@@ -124,15 +124,15 @@ TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadExceedsCapacity) {
             },
     }};
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 2 * alignment}};
-    spec.scratchpads[0].advanced_options.borrowed_from =
-        ScratchpadAdvancedOptions::SRAMArenaBorrowing{.allocation = SRAMArenaParamName{"arena"}, .offset = 0};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = 0};
     spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(fmt::format(
-            "ScratchpadSpec 'scratch' borrowing offset {} + size_per_node {} exceeds SRAMArenaParameter 'arena' "
+            "ScratchpadSpec 'scratch' allocation offset {} + size_per_node {} exceeds SRAMArenaParameter 'arena' "
             "per_bank_size {}.",
             0,
             2 * alignment,
@@ -152,15 +152,15 @@ TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadOffsetCausesOverrun) {
             },
     }};
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 2 * alignment}};
-    spec.scratchpads[0].advanced_options.borrowed_from =
-        ScratchpadAdvancedOptions::SRAMArenaBorrowing{.allocation = SRAMArenaParamName{"arena"}, .offset = alignment};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = alignment};
     spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(fmt::format(
-            "ScratchpadSpec 'scratch' borrowing offset {} + size_per_node {} exceeds SRAMArenaParameter 'arena' "
+            "ScratchpadSpec 'scratch' allocation offset {} + size_per_node {} exceeds SRAMArenaParameter 'arena' "
             "per_bank_size {}.",
             alignment,
             2 * alignment,
@@ -168,7 +168,7 @@ TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadOffsetCausesOverrun) {
 }
 
 TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadMisalignedOffset) {
-    // The borrowing offset must satisfy L1 alignment, even when capacity is sufficient.
+    // The allocation offset must satisfy L1 alignment, even when capacity is sufficient.
     const uint32_t alignment = mesh_device_->allocator()->get_alignment(BufferType::L1);
     ASSERT_GT(alignment, 1u);
     auto spec = MakeMinimalValidProgramSpec();
@@ -181,15 +181,15 @@ TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadMisalignedOffset) {
             },
     }};
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 2 * alignment}};
-    spec.scratchpads[0].advanced_options.borrowed_from =
-        ScratchpadAdvancedOptions::SRAMArenaBorrowing{.allocation = SRAMArenaParamName{"arena"}, .offset = 1};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = 1};
     spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
 
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr(fmt::format(
-            "ScratchpadSpec 'scratch' borrowing offset 1 must be a multiple of L1 alignment {}.", alignment))));
+            "ScratchpadSpec 'scratch' allocation offset 1 must be a multiple of L1 alignment {}.", alignment))));
 }
 
 TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadAllBankLockstep) {
@@ -201,8 +201,8 @@ TEST_F(ProgramSpecTestQuasar, SRAMArenaScratchpadAllBankLockstep) {
         .properties = LockstepSRAMArenaProperties{.per_bank_size = 2 * alignment},
     }};
     spec.scratchpads = {ScratchpadSpec{.unique_id = ScratchpadSpecName{"scratch"}, .size_per_node = 2 * alignment}};
-    spec.scratchpads[0].advanced_options.borrowed_from =
-        ScratchpadAdvancedOptions::SRAMArenaBorrowing{.allocation = SRAMArenaParamName{"arena"}, .offset = 0};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = 0};
     spec.kernels[0].scratchpad_bindings = {KernelSpec::ScratchpadBinding{
         .scratchpad_spec_name = ScratchpadSpecName{"scratch"}, .accessor_name = "scratch"}};
 

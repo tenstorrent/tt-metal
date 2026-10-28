@@ -102,9 +102,7 @@ void ValidateTensorParametersUsed(const ValidationContext& ctx) {
     }
     for (const auto& dfb : spec.dataflow_buffers) {
         if (dfb.borrowed_from.has_value()) {
-            if (const auto* tensor_name = std::get_if<TensorParamName>(&*dfb.borrowed_from)) {
-                used_tensor_parameters.insert(*tensor_name);
-            }
+            used_tensor_parameters.insert(*dfb.borrowed_from);
         }
     }
     for (const auto& tensor_parameter : spec.tensor_parameters) {

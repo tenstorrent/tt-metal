@@ -24,9 +24,9 @@ namespace {
 
 // Validate borrowed-memory DFBs.
 //
-// DataflowBufferSpec::borrowed_from names either a TensorParameter or an SRAMArenaParameter.
+// DataflowBufferSpec::borrowed_from names a TensorParameter.
 // These checks use the declared properties; they neither allocate memory nor attach a runtime
-// backing object to the DFB. Without a borrow source, borrowed_memory_offset must be zero.
+// backing object to the DFB.
 //
 // For a TensorParameter, the backing MeshTensor flows through ProgramRunArgs::tensor_args at
 // execution time. We enforce the safety-relevant checks available from its TensorSpec:
@@ -34,48 +34,19 @@ namespace {
 //  - the TensorSpec places storage in L1 (L1 and L1_SMALL are accepted),
 //  - the tensor is not per-node allocated; each node must use the same backing address,
 //  - its per-bank allocation is large enough for entry_size * num_entries,
-//  - borrowed_memory_offset is zero; tensor borrowing does not support an offset.
 // We don't validate layout considerations (interleaved vs sharded, page / tile sizes, etc.).
 // Those remain the user's responsibility; this is an advanced feature. The attach-time sizing
 // check remains authoritative for the actual backing buffer (see the sizing discussion below).
 //
-// For an SRAMArenaParameter, ValidateSRAMArenaBorrowing checks that:
-//  - the named parameter exists,
-//  - the offset is a multiple of the device's L1 alignment,
-//  - range-lockstep properties cover every node occupied by the DFB; all-bank lockstep needs
-//    no additional coverage check,
-//  - offset + entry_size * num_entries fits within the declared per-bank size, including equality.
-// Occupied nodes are the union of the producer and consumer kernels' placements. Capacity is
-// checked per node against the requested extent, without counting allocator alignment padding;
-// the entry-size product and offset sum use 64-bit arithmetic to avoid 32-bit overflow.
-// SRAM arena parameter properties are validated before borrowers.
 void ValidateBorrowedMemory(
     const DataflowBufferSpec& dfb,
     const CollectedSpecData& collected,
     uint32_t l1_alignment,
     const NumBanksFromBufferType& num_banks_from_buffer_type) {
-    const uint32_t offset = dfb.advanced_options.borrowed_memory_offset;
-    if (!dfb.borrowed_from.has_value()) {
-        TT_FATAL(
-            offset == 0, "DFB '{}' borrowed_memory_offset must be zero when borrowed_from is unset.", dfb.unique_id);
+    if (!dfb.borrowed_from) {
         return;
     }
-    if (const auto* allocation_name = std::get_if<SRAMArenaParamName>(&*dfb.borrowed_from)) {
-        ValidateSRAMArenaBorrowing(
-            SRAMArenaSource{.allocation = *allocation_name, .offset = offset},
-            collected,
-            fmt::format("DFB '{}'", dfb.unique_id),
-            collected.dfb_node_set.at(dfb.unique_id),
-            uint64_t{dfb.entry_size} * dfb.num_entries,
-            l1_alignment);
-        return;
-    }
-    TT_FATAL(
-        offset == 0,
-        "DFB '{}' borrowed_memory_offset must be zero when borrowing from a TensorParameter.",
-        dfb.unique_id);
-    const auto* tensor_name = std::get_if<TensorParamName>(&*dfb.borrowed_from);
-    const TensorParamName& tp_name = *tensor_name;
+    const TensorParamName& tp_name = *dfb.borrowed_from;
     auto it = collected.tensor_parameter_by_name.find(tp_name);
     TT_FATAL(
         it != collected.tensor_parameter_by_name.end(),
@@ -123,6 +94,29 @@ void ValidateBorrowedMemory(
         dfb_bytes,
         tp_name,
         tensor_bytes);
+}
+
+// For an SRAMArenaParameter, ValidateSRAMArenaAllocation checks that:
+//  - the named parameter exists,
+//  - the offset is a multiple of the device's L1 alignment,
+//  - range-lockstep properties cover every node occupied by the DFB; all-bank lockstep needs
+//    no additional coverage check,
+//  - offset + entry_size * num_entries fits within the declared per-bank size, including equality.
+// Occupied nodes are the union of the producer and consumer kernels' placements. Capacity is
+// checked per node against the requested extent, without counting allocator alignment padding;
+// the entry-size product and offset sum use 64-bit arithmetic to avoid 32-bit overflow.
+// SRAM arena parameter properties are validated before resource allocations.
+void ValidateAllocationOverride(
+    const DataflowBufferSpec& dfb, const CollectedSpecData& collected, uint32_t l1_alignment) {
+    if (const auto& allocation = dfb.advanced_options.allocation_override) {
+        ValidateSRAMArenaAllocation(
+            SRAMArenaSource{.arena = allocation->arena, .offset = allocation->offset},
+            collected,
+            fmt::format("DFB '{}'", dfb.unique_id),
+            collected.dfb_node_set.at(dfb.unique_id),
+            uint64_t{dfb.entry_size} * dfb.num_entries,
+            l1_alignment);
+    }
 }
 
 }  // namespace
@@ -182,7 +176,19 @@ void ValidateDFBSpec(
         "pipe ring",
         dfb.unique_id);
 
+    TT_FATAL(
+        !dfb.advanced_options.allocation_override || !dfb.borrowed_from,
+        "DFB '{}' sets both borrowed_from and allocation_override; tensor storage and arena allocation "
+        "are mutually exclusive",
+        dfb.unique_id);
+    TT_FATAL(
+        !dfb.advanced_options.allocation_override || dfb.advanced_options.prefetcher_pipe_relays.empty(),
+        "DFB '{}' sets both prefetcher_pipe_relays and allocation_override; a relay DFB's backing memory "
+        "is the pipe ring",
+        dfb.unique_id);
+
     ValidateBorrowedMemory(dfb, collected, l1_alignment, num_banks_from_buffer_type);
+    ValidateAllocationOverride(dfb, collected, l1_alignment);
 }
 
 // DFB bindings: accessor names, self-loop pairs, role aliasing
@@ -719,6 +725,8 @@ void ValidateDFBEndpoints(const ValidationContext& ctx, tt::ARCH arch) {
 //  4. Consistent borrowed_from: either no member borrows, or all members borrow from
 //     the same TensorParameter. (Aliased borrows from the same memory object is a
 //     weird-but-valid scenario.)
+//  5. Consistent arena parameters: either no member overrides allocation, or all members
+//     allocate from the same SRAMArenaParameter.
 // (That every alias_with name resolves, and is not the DFB itself, is checked in
 // ValidateDFBSpec.)
 void ValidateDFBAliasing(const ValidationContext& ctx) {
@@ -782,6 +790,17 @@ void ValidateDFBAliasing(const ValidationContext& ctx) {
                 dfb.borrowed_from == alias_spec->borrowed_from,
                 "Aliased DFBs '{}' and '{}' have inconsistent borrowed_from. Either no member "
                 "of an alias group borrows, or all members borrow from the same TensorParameter.",
+                dfb.unique_id,
+                alias_name);
+
+            // Rule 5: consistent arena parameters.
+            const auto& allocation = dfb.advanced_options.allocation_override;
+            const auto& alias_allocation = alias_spec->advanced_options.allocation_override;
+            TT_FATAL(
+                allocation.has_value() == alias_allocation.has_value() &&
+                    (!allocation || allocation->arena == alias_allocation->arena),
+                "Aliased DFBs '{}' and '{}' have inconsistent allocation_override arena parameters. Either no "
+                "member overrides allocation, or all members allocate from the same SRAMArenaParameter.",
                 dfb.unique_id,
                 alias_name);
         }

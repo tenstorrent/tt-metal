@@ -222,6 +222,15 @@ struct KernelAdvancedOptions {
     Group<PrefetcherPipeBinding> prefetcher_pipe_bindings;
 };
 
+// Describes a resource allocation within a program's SRAM arena parameter.
+struct SRAMArenaAllocation {
+    // Invariant: arena identifies a parameter declared in ProgramAdvancedOptions::sram_arena_parameters.
+    SRAMArenaParamName arena;
+    // Byte offset from the arena's base address.
+    // Invariant: offset is a multiple of the SRAM alignment.
+    uint32_t offset = 0;
+};
+
 struct DFBAdvancedOptions {
     ////////////////////////////////////////////////////////////////////////////////
     // Aliased DFBs
@@ -276,34 +285,23 @@ struct DFBAdvancedOptions {
     bool allow_instance_multi_binding = false;
 
     ////////////////////////////////////////////////////////////////////////////////
-    // Borrowed memory offset
+    // Allocation override (experimental)
     ////////////////////////////////////////////////////////////////////////////////
 
-    // When a DFB is built on borrowed memory, its allocated storage is placed at the
-    // base address of the borrowed-from memory object. When borrowing from an
-    // SRAMArena, you may place the DFB's storage location at an arbitrary offset
-    // into that reserved memory region.
+    // Override default DFB storage allocation with an allocation in an SRAM arena.
+    // The DFB is placed at the arena's base address plus allocation_override->offset.
+    // The actual arena is supplied at runtime through ProgramRunArgs.
+    // The DFB owns its assigned region for its active lifetime; the arena owns the backing reservation.
+    // When omitted, the DFB uses default allocation unless tensor storage or a pipe relay is specified.
     //
-    // The borrowed_memory_offset feature enables advanced users to handle their own
-    // Program-scope resource allocation decisions (a form of arena allocation).
+    // Invariants:
+    //  - The arena covers every node occupied by the DFB.
+    //  - The offset plus entry_size * num_entries does not exceed the arena's declared per-bank size.
+    //  - An override is mutually exclusive with DataflowBufferSpec::borrowed_from and prefetcher_pipe_relays.
     //
-    // CONSTRAINTS:
-    //  - The DFB must fit within the SRAMArena on every node it occupies, i.e.
-    //    borrowed_memory_offset plus size_per_node cannot exceed the SRAMArena's
-    //    per-node size.
-    //  - borrowed_memory_offset must be a multiple of the SRAM alignment.
-    //  - A DFB that borrows from a MeshTensor must have a zero offset; this is a
-    //    constraint of the programming model.
-    //  - Specifying an offset for a non-borrowed DFB will trigger an error.
-
-    //
-    // CAUTION:
-    //  - There are NO legality checks concerning the overlap of DFBs or Scratchpads
-    //    allocated within the same SRAMArena. This permits advanced users to
-    //    implement sophisticated temporal memory re-use strategies. Responsibility
-    //    for ensuring correctness lies entirely with the user.
-    //
-    uint32_t borrowed_memory_offset = 0;  // in bytes
+    // The runtime does not check for overlap with other DFBs or scratchpads in the arena.
+    // The caller must ensure that resources with overlapping regions have non-overlapping active lifetimes.
+    std::optional<SRAMArenaAllocation> allocation_override = std::nullopt;
 
     ////////////////////////////////////////////////////////////////////////////////
     // PrefetcherPipe relay (experimental)
@@ -316,7 +314,7 @@ struct DFBAdvancedOptions {
     // pipe), the compute kernel is its CONSUMER. Empty = ordinary local DFB.
     //
     // Requirements (validated at MakeProgramFromSpec):
-    //  - mutually exclusive with borrowed_from
+    //  - mutually exclusive with DataflowBufferSpec::borrowed_from and allocation_override
     //  - entry_size == pipe entry_size and entry_size * num_entries == pipe ring_size, for every
     //    named pipe (all named pipes share ring_size and entry_size)
     //  - the DFB's node set (union of its bound kernels' nodes) equals the union of the named
@@ -360,42 +358,23 @@ struct ScratchpadAdvancedOptions {
     bool allow_instance_multi_binding = false;
 
     ////////////////////////////////////////////////////////////////////////////////
-    // Borrowed memory (experimental)
+    // Allocation override (experimental)
     ////////////////////////////////////////////////////////////////////////////////
 
-    // Build the scratchpad on borrowed memory.
+    // Override default scratchpad storage allocation with an allocation in an SRAM arena.
+    // The scratchpad is placed at the arena's base address plus allocation_override->offset.
+    // The actual arena is supplied at runtime through ProgramRunArgs.
+    // The scratchpad owns its assigned region for its active lifetime; the arena owns the backing reservation.
+    // When omitted, the runtime allocates scratchpad storage using its default behavior.
     //
-    // Instead of automatically allocating Program execution-lifetime scratchpad storage,
-    // place the scratchpad inside a user-managed SRAMArena. The scratchpad gets a
-    // non-owning view of the memory for the duration of Program execution.
+    // Invariants:
+    //  - The arena covers every node occupied by the scratchpad.
+    //  - The offset plus size_per_node does not exceed the arena's declared per-bank size.
     //
-    // The SRAMArenaParameter is declared in ProgramAdvancedOptions::sram_arena_parameters
-    // and bound here. The actual SRAMArena is supplied at runtime via ProgramRunArgs.
-    //
-    // The scratchpad's storage is placed borrowed_from->offset bytes past the base address of
-    // the SRAMArena. This enables advanced users to handle their own Program-scope resource
-    // allocation decisions (a form of arena allocation), e.g. packing several scratchpads and
-    // DFBs into one SRAMArena.
-    //
-    // Unlike a DFB, a scratchpad cannot borrow from a TensorParameter. To use a tensor's local
-    // shard as kernel working memory, use a regular host TensorBinding and a device-side
-    // LocalTensorAccessor instead.
-    //
-    // CONSTRAINTS:
-    //  - The scratchpad must fit within the SRAMArena on every node it occupies, i.e.
-    //    borrowed_from->offset plus size_per_node cannot exceed the SRAMArena's per-node size.
-    //  - borrowed_from->offset must be a multiple of the SRAM alignment.
-    //
-    // CAUTION:
-    //  - There are NO legality checks concerning the overlap of DFBs or Scratchpads
-    //    allocated within the same SRAMArena. This permits advanced users to
-    //    implement sophisticated temporal memory re-use strategies. Responsibility
-    //    for ensuring correctness lies entirely with the user.
-    struct SRAMArenaBorrowing {
-        SRAMArenaParamName allocation;
-        uint32_t offset = 0;  // in bytes
-    };
-    std::optional<SRAMArenaBorrowing> borrowed_from = std::nullopt;
+    // The runtime does not check for overlap with other DFBs or scratchpads in the arena.
+    // The caller must ensure that resources with overlapping regions have non-overlapping active lifetimes.
+    // To use a tensor's local shard as working memory, use a TensorBinding and LocalTensorAccessor.
+    std::optional<SRAMArenaAllocation> allocation_override = std::nullopt;
 };
 
 struct AdvancedKernelRunArgs {
@@ -433,8 +412,8 @@ struct AdvancedProgramRunArgs {
     // properties MUST match the SRAMArenaParameter's (see sram_arena_parameter.hpp).
     //
     // A different SRAMArena may be supplied for each Program execution. Every DFB and
-    // scratchpad that borrows from the parameter is then placed at the new SRAMArena's
-    // base address plus the borrower's offset.
+    // scratchpad whose allocation_override names the parameter is placed at the new arena's
+    // base address plus its allocation_override->offset.
     //
     // CAUTION: SRAMArena is an RAII object. The user is responsible for keeping it alive until
     //          the last Program execution that uses it has completed on the device. A stale binding

@@ -23,23 +23,23 @@ void ValidateSRAMArenaParameter(const SRAMArenaParameter& parameter) {
     }
 }
 
-void ValidateSRAMArenaBorrowing(
+void ValidateSRAMArenaAllocation(
     const SRAMArenaSource& source,
     const CollectedSpecData& collected,
-    std::string_view borrower,
+    std::string_view resource,
     const NodeRangeSet& occupied_nodes,
     uint64_t size_per_node,
     uint32_t l1_alignment) {
-    const auto it = collected.sram_arena_parameter_by_name.find(source.allocation);
+    const auto it = collected.sram_arena_parameter_by_name.find(source.arena);
     TT_FATAL(
         it != collected.sram_arena_parameter_by_name.end(),
-        "{} borrows memory from unknown SRAMArenaParameter '{}'.",
-        borrower,
-        source.allocation);
+        "{} allocates from unknown SRAMArenaParameter '{}'.",
+        resource,
+        source.arena);
     TT_FATAL(
         source.offset % l1_alignment == 0,
-        "{} borrowing offset {} must be a multiple of L1 alignment {}.",
-        borrower,
+        "{} allocation offset {} must be a multiple of L1 alignment {}.",
+        resource,
         source.offset,
         l1_alignment);
 
@@ -47,11 +47,11 @@ void ValidateSRAMArenaBorrowing(
     if (const auto* range = std::get_if<RangeLockstepSRAMArenaProperties>(&properties)) {
         TT_FATAL(
             range->banks_to_be_allocated_on.contains(occupied_nodes),
-            "{} borrows from SRAMArenaParameter '{}', which does not cover every occupied node.",
-            borrower,
-            source.allocation);
+            "{} allocates from SRAMArenaParameter '{}', which does not cover every occupied node.",
+            resource,
+            source.arena);
     }
-    ValidateSRAMArenaCapacity(source, properties, borrower, size_per_node);
+    ValidateSRAMArenaCapacity(source, properties, resource, size_per_node);
 }
 
 }  // namespace tt::tt_metal::experimental

@@ -648,7 +648,7 @@ KernelHandle detail::ProgramImpl::add_kernel(
     }
 
     if (std::ranges::any_of(kernel->scratchpad_binding_handles(), [](const auto& binding) {
-            return !binding.borrowed_from.has_value();
+            return !binding.allocation_override.has_value();
         })) {
         register_ephemeral_allocation(this->dfb_allocation_metadata_, kernel->core_range_set());
     }
@@ -938,19 +938,19 @@ const detail::BoundTensorFootprint* ProgramImpl::get_bound_tensor_footprint(cons
     return &*it->second.bound;
 }
 
-void ProgramImpl::register_dfb_borrowed_binding(DFBBorrowedBinding binding) {
+void ProgramImpl::register_dfb_storage_binding(DFBStorageBinding binding) {
     if (!metal2_registry_) {
         metal2_registry_ = Metal2NameRegistry{};
     }
-    metal2_registry_->dfb_borrowed_bindings.push_back(std::move(binding));
+    metal2_registry_->dfb_storage_bindings.push_back(std::move(binding));
 }
 
-const std::vector<ProgramImpl::DFBBorrowedBinding>& ProgramImpl::get_dfb_borrowed_bindings() const {
-    static const std::vector<DFBBorrowedBinding> empty;
+const std::vector<ProgramImpl::DFBStorageBinding>& ProgramImpl::get_dfb_storage_bindings() const {
+    static const std::vector<DFBStorageBinding> empty;
     if (!metal2_registry_) {
         return empty;
     }
-    return metal2_registry_->dfb_borrowed_bindings;
+    return metal2_registry_->dfb_storage_bindings;
 }
 // ============================================================================
 
@@ -2251,7 +2251,7 @@ void detail::ProgramImpl::prepare_ephemeral_allocation(const IDevice* device) {
     for (const auto& kernels_of_core_type : this->kernels_) {
         for (const auto& [kernel_handle, kernel] : kernels_of_core_type) {
             for (const auto& handle : kernel->scratchpad_binding_handles()) {
-                if (handle.shared_allocation_identifier && !handle.borrowed_from) {
+                if (handle.shared_allocation_identifier && !handle.allocation_override) {
                     auto& cores = shared_cores[*handle.shared_allocation_identifier];
                     cores = cores.merge(kernel->core_range_set());
                 }
@@ -2297,7 +2297,7 @@ void detail::ProgramImpl::allocate_scratchpads(const IDevice* device) {
             }
             const CoreRangeSet& kernel_cores = kernel->core_range_set();
             for (auto& handle : scratchpad_handles) {
-                if (handle.borrowed_from) {
+                if (handle.allocation_override) {
                     continue;
                 }
                 // Multi-binded scratchpad, let's collect it and deal with it later

@@ -961,7 +961,7 @@ void CommandListBuilderImpl::resolve_parameters(
             auto& program = *captured.trace_node.program;
             const auto* expected_spec = program.get_tensor_parameter_layout(*info.param_name);
             TT_FATAL(expected_spec != nullptr, "TensorParameter '{}' is not declared by the program", info.param_name);
-            for (const auto& binding : program.get_dfb_borrowed_bindings()) {
+            for (const auto& binding : program.get_dfb_storage_bindings()) {
                 const auto* tensor_name = std::get_if<tt::tt_metal::experimental::TensorParamName>(&binding.source);
                 TT_FATAL(
                     tensor_name == nullptr || tensor_name->get() != *info.param_name,

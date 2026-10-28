@@ -33,8 +33,8 @@ ProgramSpec BorrowedScratchpadSpec(bool shared = false) {
     spec.kernels = {test_helpers::MakeMinimalGen1DMKernel("writer")};
     spec.kernels[0].scratchpad_bindings = {{.scratchpad_spec_name = ScratchpadSpecName{"pad"}, .accessor_name = "pad"}};
     spec.scratchpads = {{.unique_id = ScratchpadSpecName{"pad"}, .size_per_node = 1024}};
-    spec.scratchpads[0].advanced_options.borrowed_from =
-        ScratchpadAdvancedOptions::SRAMArenaBorrowing{.allocation = SRAMArenaParamName{"arena"}, .offset = 1024};
+    spec.scratchpads[0].advanced_options.allocation_override =
+        SRAMArenaAllocation{.arena = SRAMArenaParamName{"arena"}, .offset = 1024};
     spec.advanced_options.sram_arena_parameters = {
         {.unique_id = SRAMArenaParamName{"arena"}, .properties = AllocationProperties()}};
     spec.work_units = {

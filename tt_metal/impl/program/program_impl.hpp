@@ -655,16 +655,16 @@ public:
     void set_bound_tensor_footprint(const std::string& name, const BoundTensorFootprint& footprint);
     const BoundTensorFootprint* get_bound_tensor_footprint(const std::string& name) const;
 
-    // Identifies the memory source and byte offset of a borrowed DFB.
-    struct DFBBorrowedBinding {
+    // Identifies the tensor storage or SRAM arena allocation used by a DFB.
+    struct DFBStorageBinding {
         uint32_t dfb_id;
         std::variant<experimental::TensorParamName, SRAMArenaSource> source;
     };
 
-    // Register the memory source and byte offset of a borrowed DFB.
-    void register_dfb_borrowed_binding(DFBBorrowedBinding binding);
-    // Return the program's borrowed DFB bindings.
-    const std::vector<DFBBorrowedBinding>& get_dfb_borrowed_bindings() const;
+    // Register the tensor storage or SRAM arena allocation used by a DFB.
+    void register_dfb_storage_binding(DFBStorageBinding binding);
+    // Return the program's DFB storage bindings.
+    const std::vector<DFBStorageBinding>& get_dfb_storage_bindings() const;
 
     // Metal 2.0: Get kernel by name (TT_FATAL if not found)
     std::shared_ptr<Kernel> get_kernel_by_spec_name(const std::string& name) const {
@@ -792,7 +792,7 @@ private:
         std::unordered_map<std::string, RegisteredTensorParameter> tensor_parameter_layouts;
         std::unordered_map<std::string, RegisteredSRAMArenaParameter> sram_arena_parameters;
 
-        std::vector<DFBBorrowedBinding> dfb_borrowed_bindings;
+        std::vector<DFBStorageBinding> dfb_storage_bindings;
     };
     std::optional<Metal2NameRegistry> metal2_registry_;  // Only populated for Metal 2.0 programs
 

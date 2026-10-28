@@ -44,11 +44,9 @@ struct ProgramSpec {
     // - Each KernelSpec::ScratchpadBinding::scratchpad_spec_name names a spec in scratchpads.
     // - Each KernelSpec::TensorBinding::tensor_parameter_name names a parameter in tensor_parameters.
     // - Each name in WorkUnitSpec::kernels names a spec in kernels.
-    // - Each DataflowBufferSpec::borrowed_from, when set:
-    //   - A TensorParamName names a parameter in tensor_parameters.
-    //   - An SRAMArenaParamName names a parameter in advanced_options.sram_arena_parameters.
-    // - Each ScratchpadSpec::advanced_options.borrowed_from, when set, has an allocation name
-    //   that names a parameter in advanced_options.sram_arena_parameters.
+    // - Each DataflowBufferSpec::borrowed_from, when set, names a parameter in tensor_parameters.
+    // - Each DFB or scratchpad advanced_options.allocation_override, when set, names an arena
+    //   parameter in ProgramAdvancedOptions::sram_arena_parameters.
     //
     // Every declaration is used:
     // - Each kernel is listed by at least one WorkUnitSpec.

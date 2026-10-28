@@ -242,31 +242,31 @@ void BindSRAMArenaArgs(
     if (args.empty()) {
         return;
     }
-    for (const auto& binding : program.get_dfb_borrowed_bindings()) {
+    for (const auto& binding : program.get_dfb_storage_bindings()) {
         const auto* source = std::get_if<SRAMArenaSource>(&binding.source);
         if (source == nullptr) {
             continue;
         }
-        if (const auto argument = args.get(source->allocation)) {
+        if (const auto argument = args.get(source->arena)) {
             const auto base = argument->get().impl().address();
             const uint64_t address = uint64_t{base} + source->offset;
             TT_FATAL(
                 address <= std::numeric_limits<uint32_t>::max(),
-                "Borrowed SRAMArena address {} for DFB id {} (SRAMArenaParameter '{}') exceeds uint32_t max.",
+                "SRAMArena allocation address {} for DFB id {} (SRAMArenaParameter '{}') exceeds uint32_t max.",
                 address,
                 binding.dfb_id,
-                source->allocation);
+                source->arena);
             program.get_dataflow_buffer(binding.dfb_id)->set_borrowed_memory_base_addr(static_cast<uint32_t>(address));
         }
     }
     for (const auto& name : program.get_registered_kernel_names()) {
         auto kernel = program.get_kernel_by_spec_name(name);
         for (auto& binding : kernel->scratchpad_binding_handles()) {
-            if (!binding.borrowed_from) {
+            if (!binding.allocation_override) {
                 continue;
             }
-            const auto& source = *binding.borrowed_from;
-            if (const auto argument = args.get(source.allocation)) {
+            const auto& source = *binding.allocation_override;
+            if (const auto argument = args.get(source.arena)) {
                 const auto base = argument->get().impl().address();
                 SetScratchpadBindingAddress(*kernel, binding, base + source.offset);
             }
@@ -324,16 +324,16 @@ void ValidateDFBRunOverrides(const detail::ProgramImpl& program_impl, const Prog
         if (!resizes) {
             continue;
         }
-        const auto& bindings = program_impl.get_dfb_borrowed_bindings();
+        const auto& bindings = program_impl.get_dfb_storage_bindings();
         const auto binding = std::ranges::find(
             bindings,
             program_impl.get_dfb_handle(dfb_spec_name.get()),
-            &detail::ProgramImpl::DFBBorrowedBinding::dfb_id);
+            &detail::ProgramImpl::DFBStorageBinding::dfb_id);
         if (binding == bindings.end()) {
             continue;
         }
         if (const auto* source = std::get_if<SRAMArenaSource>(&binding->source)) {
-            const auto& properties = program_impl.get_sram_arena_parameters().at(source->allocation.get()).properties;
+            const auto& properties = program_impl.get_sram_arena_parameters().at(source->arena.get()).properties;
             const auto& config = program_impl.get_dataflow_buffer(binding->dfb_id)->config;
             const uint64_t size_per_node = uint64_t{dfb_params.entry_size.value_or(config.entry_size)} *
                                            dfb_params.num_entries.value_or(config.num_entries);
@@ -752,7 +752,7 @@ void AttachBorrowedDFBBuffers(
     bool require_all = true) {
     // tensor_by_param is the param_name -> MeshTensor lookup the caller already built to fill the
     // binding CRTA sections; reuse it here rather than rebuilding an identical map per enqueue.
-    for (const auto& binding : program_impl.get_dfb_borrowed_bindings()) {
+    for (const auto& binding : program_impl.get_dfb_storage_bindings()) {
         const auto* tensor_name = std::get_if<TensorParamName>(&binding.source);
         if (tensor_name == nullptr) {
             continue;

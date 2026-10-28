@@ -195,7 +195,7 @@ struct ScratchpadBindingHandle {
     // The ScratchpadSpecName serves as an identifier & does not carry specific meaning.
     using AllocationIdentifier = experimental::ScratchpadSpecName;
     std::optional<experimental::ScratchpadSpecName> shared_allocation_identifier;
-    std::optional<SRAMArenaSource> borrowed_from;
+    std::optional<SRAMArenaSource> allocation_override;
 };
 
 // Metal 2.0: per-kernel resolved PrefetcherPipe accessor (KernelAdvancedOptions::PrefetcherPipeBinding).

@@ -118,12 +118,10 @@ tt::tt_metal::DataflowBufferBindingHandleMap MakeDataflowBufferBindingHandles(
         }
         // Borrowed-memory DFB: remember the tensor it is and this kernel's side, for op-to-op R/W inference.
         if (const auto& borrowed_from = dfb_by_name.at(dfb_binding.dfb_spec_name)->borrowed_from) {
-            if (const auto* tensor_name = std::get_if<TensorParamName>(&*borrowed_from)) {
-                handle.borrowed_dfb_id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
-                handle.borrowed_tensor_parameter_name = tensor_name->get();
-                handle.produces = dfb_binding.endpoint_type == DFBEndpointType::PRODUCER;
-                handle.consumes = !handle.produces;
-            }
+            handle.borrowed_dfb_id = dfb_name_to_id.at(dfb_binding.dfb_spec_name);
+            handle.borrowed_tensor_parameter_name = borrowed_from->get();
+            handle.produces = dfb_binding.endpoint_type == DFBEndpointType::PRODUCER;
+            handle.consumes = !handle.produces;
         }
         // A self-loop pair may bind one DFB as PRODUCER and as CONSUMER under the same accessor name; that is one
         // handle, on both sides.
@@ -235,12 +233,13 @@ experimental::dfb::DataflowBufferConfig MakeDataflowBufferConfig(
         .data_format = dfb_spec->data_format_metadata.value_or(tt::DataFormat::Invalid),
         .tile = dfb_spec->tile_format_metadata,
         .tensix_scope = tensix_scope,
-        // DFB borrowed memory mode is declared at program creation time.
+        // DFB externally placed storage is declared at program creation time.
         // The actual backing memory L1 address is attached at runtime: from the borrowed
         // TensorParameter's MeshTensor, an SRAMArenaParameter's allocation, or (relay) from the
         // PrefetcherPipe ring the relay aliases.
-        .borrows_memory =
-            dfb_spec->borrowed_from.has_value() || !dfb_spec->advanced_options.prefetcher_pipe_relays.empty(),
+        .borrows_memory = dfb_spec->borrowed_from.has_value() ||
+                          dfb_spec->advanced_options.allocation_override.has_value() ||
+                          !dfb_spec->advanced_options.prefetcher_pipe_relays.empty(),
         // A PrefetcherPipe relay is lane-interleaved (producer h owns entries h, h+P, ...).
         .is_relay = !dfb_spec->advanced_options.prefetcher_pipe_relays.empty()};
 }
@@ -266,7 +265,7 @@ DataflowBufferHandles RegisterDataflowBuffers(
 
         // Add the DFB to the ProgramImpl, and register the name -> handle mapping.
         // Allocation nodes are derived from binding kernels' WorkUnitSpec membership.
-        // (For borrowed-memory DFBs, config.borrows_memory was set in MakeDataflowBufferConfig;
+        // (For externally placed DFB storage, config.borrows_memory was set in MakeDataflowBufferConfig;
         // the device-side runtime uses that to skip regular L1 allocation.)
         uint32_t dfb_id = program_impl.add_dataflow_buffer(collected.dfb_node_set.at(dfb_name), config);
         program_impl.register_dfb_spec_name(dfb_name.get(), dfb_id);
@@ -275,16 +274,12 @@ DataflowBufferHandles RegisterDataflowBuffers(
         dfb_name_to_slot[dfb_name] = program_impl.get_dataflow_buffer(dfb_id)->device_slot;
         dfb_name_to_is_relay[dfb_name] = created_config.is_relay;
 
-        if (dfb_spec.borrowed_from.has_value()) {
-            detail::ProgramImpl::DFBBorrowedBinding binding{.dfb_id = dfb_id};
-            if (const auto* tensor_name = std::get_if<TensorParamName>(&*dfb_spec.borrowed_from)) {
-                binding.source = *tensor_name;
-            } else {
-                binding.source = SRAMArenaSource{
-                    .allocation = std::get<SRAMArenaParamName>(*dfb_spec.borrowed_from),
-                    .offset = dfb_spec.advanced_options.borrowed_memory_offset};
-            }
-            program_impl.register_dfb_borrowed_binding(std::move(binding));
+        if (const auto& tensor = dfb_spec.borrowed_from) {
+            program_impl.register_dfb_storage_binding({.dfb_id = dfb_id, .source = *tensor});
+        } else if (const auto& allocation = dfb_spec.advanced_options.allocation_override) {
+            program_impl.register_dfb_storage_binding(
+                {.dfb_id = dfb_id,
+                 .source = SRAMArenaSource{.arena = allocation->arena, .offset = allocation->offset}});
         }
     }
     return DataflowBufferHandles{

@@ -14,17 +14,17 @@ namespace tt::tt_metal {
 void ValidateSRAMArenaCapacity(
     const SRAMArenaSource& source,
     const experimental::SRAMArenaProperties& properties,
-    std::string_view borrower,
+    std::string_view resource,
     uint64_t size_per_node) {
     const auto per_bank_size = std::visit([](const auto& props) { return props.per_bank_size; }, properties);
     // Widen before adding the offset: the requested extent, not allocator padding, is the limit.
     TT_FATAL(
         uint64_t{source.offset} + size_per_node <= per_bank_size,
-        "{} borrowing offset {} + size_per_node {} exceeds SRAMArenaParameter '{}' per_bank_size {}.",
-        borrower,
+        "{} allocation offset {} + size_per_node {} exceeds SRAMArenaParameter '{}' per_bank_size {}.",
+        resource,
         source.offset,
         size_per_node,
-        source.allocation,
+        source.arena,
         per_bank_size);
 }
 

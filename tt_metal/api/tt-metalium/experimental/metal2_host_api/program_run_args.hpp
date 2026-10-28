@@ -127,16 +127,17 @@ struct ProgramRunArgs {
         std::optional<uint32_t> entry_size = std::nullopt;
         std::optional<uint32_t> num_entries = std::nullopt;
 
-        // NOTE: Borrowed-memory DFBs take their backing SRAM address from the user-managed object
-        // they borrow from.
+        // NOTE: Certain DFBs take their backing SRAM address from the user-managed object
+        // in the following cases:
         //  - Borrowed from a TensorParameter: if you update the DFB's size from an
         //    UpdateProgramRunArgs call (i.e. partial args update; advanced users only),
         //    you must ALSO supply its backing tensor_arg.
-        //  - Borrowed from an SRAMArenaParameter: the DFB may be resized without re-supplying
-        //    its SRAMArena. The resized DFB must still fit within the SRAMArena
+        //  - Custom allocation from an SRAMArenaParameter: the DFB may be resized without re-supplying
+        //    its SRAMArena. The allocation offset plus the resized DFB's storage must still fit
+        //    within the SRAMArena
         //    (checked against the SRAMArenaParameter's declared size). There are NO checks
         //    for overlap with other DFBs or scratchpads placed in the same SRAMArena
-        //    (see DFBAdvancedOptions::borrowed_memory_offset).
+        //    (see DFBAdvancedOptions::allocation_override->offset).
     };
     // DFBRunOverrides is optional. Provide entries only when overriding DFB sizes.
     Group<DFBRunOverrides> dfb_run_overrides;
