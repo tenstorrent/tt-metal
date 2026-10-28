@@ -44,17 +44,22 @@ private:
     friend struct UntilizerRtArgManager;
 
 #ifdef KERNEL_BUILD
+#ifdef CMBF2D_OVERLAPPED
+    // Overlapped, one kernel serves a whole untilizer group: the buffers are its common arguments, and each core's
+    // own arguments are only what tells it apart (my_index, produced_slot).
+    UntilizerRtArgs() :
+        dram_in(get_common_arg_val<uint32_t>(0)),
+        dram_counts(get_common_arg_val<uint32_t>(1)),
+        dram_region(get_common_arg_val<uint32_t>(2)),
+        dram_expert_offsets(get_common_arg_val<uint32_t>(3)),
+        dram_expert_table(get_common_arg_val<uint32_t>(4)) {}
+#else
     UntilizerRtArgs() :
         dram_in(get_arg_val<uint32_t>(0)),
         dram_counts(get_arg_val<uint32_t>(1)),
         dram_region(get_arg_val<uint32_t>(2)),
-        dram_expert_offsets(get_arg_val<uint32_t>(3))
-#ifdef CMBF2D_OVERLAPPED
-        ,
-        dram_expert_table(get_arg_val<uint32_t>(4))
+        dram_expert_offsets(get_arg_val<uint32_t>(3)) {}
 #endif
-    {
-    }
 #else
     UntilizerRtArgs() = default;
 #endif
@@ -72,6 +77,19 @@ struct UntilizerRtArgManager {
             args.push_back(dram_.expert_table);
         }
         kernel_desc.emplace_runtime_args(core, args);
+    }
+
+    // The overlapped form: the buffers once, as common arguments of a kernel shared by a group's cores, and per core
+    // the position in the group and its produced-count semaphore, which are all its cores differ by.
+    void setup_overlapped_rt_args(
+        tt::tt_metal::KernelDescriptor& kernel_desc,
+        const std::vector<tt::tt_metal::CoreCoord>& cores,
+        const std::vector<uint32_t>& produced_slots) const {
+        kernel_desc.emplace_common_runtime_args(
+            {dram_.in, dram_.counts, dram_.region, dram_.expert_offsets, dram_.expert_table});
+        for (uint32_t i = 0; i < cores.size(); i++) {
+            kernel_desc.emplace_runtime_args(cores[i], {i, produced_slots[i]});
+        }
     }
 
 private:

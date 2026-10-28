@@ -157,7 +157,7 @@ void walk_my_batches(const ::cmbf2d::ControlTables& ctl, OnStep on_step, Body bo
         on_step(step);
         const ::cmbf2d::GroupWalk walk = walk_for(ctl, step);
         for (uint32_t b = 0; b < walk.num_batches(); b++, batch++) {
-            if (batch % ct.num_peers == ct.my_index) {
+            if (batch % ct.num_peers == ct.core_index()) {
                 body(b, walk);
             }
         }
