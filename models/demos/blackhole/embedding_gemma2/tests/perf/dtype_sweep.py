@@ -495,43 +495,60 @@ def _chart(recs, metric_key, ylabel, bar, path, selected, title):
         for r in recs
         if "perf" in r and "accuracy" in r
     ]
-    fig, ax = plt.subplots(figsize=(11, 6.8), dpi=150)
-    ax.set_facecolor("#fbfaf7")
-    for x, y, cid, ok in pts:
-        if cid == selected:
-            continue
-        ax.scatter(x, y, s=46, color="#3b6ea8" if ok else "#b0b0b0", edgecolor="#22323f", linewidth=0.6, zorder=3)
     front = _pareto([(x, y, cid) for x, y, cid, _ in pts])
-    ax.plot(
-        [p[0] for p in front],
-        [p[1] for p in front],
-        color="#3b6ea8",
-        linewidth=1.4,
-        alpha=0.75,
-        zorder=2,
-        label="Pareto frontier",
-    )
-    for x, y, cid, ok in pts:
-        if cid == selected:
-            ax.scatter(
-                x, y, s=150, color="#d62728", edgecolor="black", linewidth=0.8, zorder=5, label=f"selected: {cid}"
-            )
-        ax.annotate(
-            cid,
-            (x, y),
-            textcoords="offset points",
-            xytext=(5, 4),
-            fontsize=6.5,
-            color="#d62728" if cid == selected else ("#22323f" if ok else "#888888"),
+    front_ids = {p[2] for p in front}
+    ys_ok = [y for _, y, _, ok in pts if ok] or [bar]
+    # left: every evaluated config; right: zoom on the region around the gate minimum
+    fig, axes = plt.subplots(1, 2, figsize=(15, 6.6), dpi=150, gridspec_kw={"width_ratios": [1, 1.25]})
+    span = max(max(ys_ok) - min(ys_ok), 1e-4)
+    zoom_lo = min(ys_ok) - 0.6 * span
+    if bar > zoom_lo - 0.6 * span:  # the gate line is near the passing cluster: keep it in view
+        zoom_lo = min(zoom_lo, bar - 0.2 * span)
+    for k, ax in enumerate(axes):
+        ax.set_facecolor("#fbfaf7")
+        for x, y, cid, ok in pts:
+            if cid != selected:
+                ax.scatter(
+                    x, y, s=42, color="#3b6ea8" if ok else "#b0b0b0", edgecolor="#22323f", linewidth=0.6, zorder=3
+                )
+        ax.plot(
+            [p[0] for p in front],
+            [p[1] for p in front],
+            color="#3b6ea8",
+            linewidth=1.4,
+            alpha=0.75,
+            zorder=2,
+            label="Pareto frontier",
         )
-    ax.axhline(bar, linestyle=":", color="#444444", linewidth=1.2, label=f"gate minimum {bar}")
-    ax.scatter([], [], s=46, color="#3b6ea8", label="passes screen")
-    ax.scatter([], [], s=46, color="#b0b0b0", label="fails screen")
-    ax.set_xlabel("traced device ms, burst median, 1x512 + 8x512 (lower is faster)")
-    ax.set_ylabel(ylabel)
-    ax.set_title(title, fontsize=11)
-    ax.grid(True, color="#e3e0d8", linewidth=0.6)
-    ax.legend(fontsize=7.5, loc="lower right", frameon=False)
+        for x, y, cid, ok in pts:
+            if cid == selected:
+                ax.scatter(
+                    x, y, s=150, color="#d62728", edgecolor="black", linewidth=0.8, zorder=5, label=f"selected: {cid}"
+                )
+            in_view = k == 0 or y >= zoom_lo
+            label = cid == selected or cid in front_ids or cid.startswith("base") or (k == 1 and in_view)
+            if label and in_view:
+                ax.annotate(
+                    cid,
+                    (x, y),
+                    textcoords="offset points",
+                    xytext=(5, 4 if k == 0 else -9 + 13 * (hash(cid) % 2)),
+                    fontsize=6.3,
+                    color="#d62728" if cid == selected else ("#22323f" if ok else "#888888"),
+                )
+        ax.axhline(bar, linestyle=":", color="#444444", linewidth=1.2, label=f"gate minimum {bar}")
+        ax.set_xlabel("traced device ms, burst median, 1x512 + 8x512 (lower is faster)")
+        ax.grid(True, color="#e3e0d8", linewidth=0.6)
+        if k == 1:
+            ax.set_ylim(zoom_lo, max(ys_ok) + 0.12 * (max(ys_ok) - zoom_lo))
+            ax.set_title("zoom: the passing configs", fontsize=9)
+            ax.scatter([], [], s=42, color="#3b6ea8", label="passes screen")
+            ax.scatter([], [], s=42, color="#b0b0b0", label="fails screen")
+            ax.legend(fontsize=7.5, loc="lower right", frameon=False)
+        else:
+            ax.set_ylabel(ylabel)
+            ax.set_title("every evaluated config", fontsize=9)
+    fig.suptitle(title, fontsize=11)
     fig.tight_layout()
     fig.savefig(path)
     plt.close(fig)
