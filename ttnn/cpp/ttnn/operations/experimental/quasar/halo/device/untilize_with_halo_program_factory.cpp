@@ -499,13 +499,22 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
             {"block_start_offset", reader_block_start_offset},
             {"block_stride", block_stride},
             {"enable_padding", static_cast<uint32_t>(enable_padding)},
-            {"input_npages", input_npages},
         };
 
         // DRAM config path reads config pages by page_id; the page index is a
         // per-core RTA.  L1 config path reads the local shard via base pointer.
+        // Tiled path: total_blocks (same per-core value as the compute's) lets each reader pop every
+        // block the compute untilizes for it and lets reader0 push exactly the src pages the compute
+        // pops, so the Quasar ~DataflowBuffer() drains balance.
+        Group<std::string> reader_rta_names;
         if (config_tensors_in_dram) {
-            reader.runtime_arg_schema = {.runtime_arg_names = {"config_read_index"}};
+            reader_rta_names.emplace_back("config_read_index");
+        }
+        if (!skip_untilize) {
+            reader_rta_names.emplace_back("total_blocks");
+        }
+        if (!reader_rta_names.empty()) {
+            reader.runtime_arg_schema = {.runtime_arg_names = std::move(reader_rta_names)};
         }
 
         // Preprocessor gates for conditionally-bound resources.  kernel_main() is a
@@ -592,17 +601,32 @@ ttnn::device_operation::ProgramArtifacts UntilizeWithHaloProgramFactory::create_
     // ------------------------------------------------------------------------
     ProgramRunArgs run_args;
 
+    KernelRunArgs reader0_args{.kernel = READER0};
+    KernelRunArgs reader1_args{.kernel = READER1};
     if (!skip_untilize) {
+        // The compute untilizes (and pops from src) only the blocks the gather config references
+        // (number_of_blocks = last referenced block + 1), which can be fewer than the input shard holds
+        // (e.g. the padded tail rows on the last core). reader0 pushes total_blocks blocks of src, not the
+        // whole shard, so it must not exceed the shard.
+        const uint32_t block_height_tiles = clamped_block_size_height / TILE_HEIGHT;
         KernelRunArgs compute_args{.kernel = COMPUTE};
         for (size_t core_id = 0; core_id < cores.size(); ++core_id) {
-            compute_args.runtime_arg_values["total_blocks"][NodeCoord{cores[core_id].x, cores[core_id].y}] =
-                static_cast<uint32_t>(number_of_blocks_per_core[core_id]);
+            const uint32_t total_blocks = static_cast<uint32_t>(number_of_blocks_per_core[core_id]);
+            TT_FATAL(
+                total_blocks * block_height_tiles <= input_nblocks_per_core,
+                "Halo core {} untilizes {} blocks of {} tile rows but its input shard has only {} tile rows",
+                core_id,
+                total_blocks,
+                block_height_tiles,
+                input_nblocks_per_core);
+            const NodeCoord node{cores[core_id].x, cores[core_id].y};
+            compute_args.runtime_arg_values["total_blocks"][node] = total_blocks;
+            reader0_args.runtime_arg_values["total_blocks"][node] = total_blocks;
+            reader1_args.runtime_arg_values["total_blocks"][node] = total_blocks;
         }
         run_args.kernel_run_args.push_back(std::move(compute_args));
     }
 
-    KernelRunArgs reader0_args{.kernel = READER0};
-    KernelRunArgs reader1_args{.kernel = READER1};
     if (config_tensors_in_dram) {
         for (uint32_t core_index = 0; core_index < cores.size(); ++core_index) {
             const auto& core = cores[core_index];

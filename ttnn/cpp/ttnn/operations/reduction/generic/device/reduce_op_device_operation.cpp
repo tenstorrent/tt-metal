@@ -135,12 +135,12 @@ void ReduceDeviceOperation::validate_on_program_cache_miss(
         // in compute_kernel_lib::reduce). See common.hpp.
         const bool is_int32_sfpu_reduce = tensor_args.dtype() == DataType::INT32 &&
                                           use_sfpu_reduce_path(tensor_args.dtype(), operation_attributes.math_op);
+        // UINT32 is not accepted here. ttnn.sum/max/min convert UINT32 to INT32 before reaching this op.
         TT_FATAL(
             tensor_args.dtype() == DataType::BFLOAT16 || tensor_args.dtype() == DataType::FLOAT32 ||
-                tensor_args.dtype() == DataType::BFLOAT8_B || tensor_args.dtype() == DataType::UINT32 ||
-                is_int32_sfpu_reduce,
-            "Only FLOAT32, BFLOAT16, BFLOAT8_B, and UINT32 are supported for generic reduction "
-            "(INT32 is supported for MAX/MIN/SUM) - got {}.",
+                tensor_args.dtype() == DataType::BFLOAT8_B || is_int32_sfpu_reduce,
+            "Only FLOAT32, BFLOAT16 and BFLOAT8_B are supported for generic reduction "
+            "(INT32 is supported for MAX/MIN/SUM; ttnn.sum/max/min route UINT32 through INT32) - got {}.",
             tensor_args.dtype());
     }
     validate_reduce_sharded_buffer_types(tensor_args.memory_config(), operation_attributes.output_mem_config, "reduce");

@@ -11,7 +11,7 @@
 #include <gtest/gtest.h>
 
 #include <random>
-#include <umd/device/cluster.hpp>
+#include <tt-umd/cluster.hpp>
 #include <vector>
 
 #include "autograd/auto_context.hpp"

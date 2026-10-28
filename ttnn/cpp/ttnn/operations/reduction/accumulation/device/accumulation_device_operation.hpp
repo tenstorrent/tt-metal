@@ -65,9 +65,9 @@ struct AccumulationDeviceOperation {
 };
 
 // True when the accumulation can run along `dim` without first permuting it to dim 0: `dim` is
-// one of the two tile axes (H or W) and the scan is a forward bf16 cumsum or bf16/fp32 cumprod (not
-// on Quasar) on 32x32 tiles. Every other combination still goes through the permute (#24824 tracks
-// the rest).
+// one of the two tile axes (H or W) and the scan is a forward bf16 or fp32 cumsum or cumprod on
+// 32x32 tiles (only bf16 cumsum on Quasar). Every other combination still goes through the permute
+// (#24824 tracks the rest).
 bool is_tile_axis_accumulation(
     const Tensor& input_tensor, int32_t dim, DataType output_dtype, bool flip, AccumulationOp op);
 

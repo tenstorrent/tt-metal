@@ -247,9 +247,7 @@ public:
     }
 
     std::string rvv_compile_flags(const Params& params) const override {
-        // Only the pack TRISC (TRISC2) fronts the Tensix vector unit on Blackhole.
-        if (!(params.core_type == HalProgrammableCoreType::TENSIX &&
-              params.processor_class == HalProcessorClassType::COMPUTE && params.processor_id == 2)) {
+        if (!hal_.get_supports_rvv(params.core_type, params.processor_class, params.processor_id)) {
             return {};
         }
         // -march is the exact ISA string -mcpu=tt-bh-tensix resolves to (per

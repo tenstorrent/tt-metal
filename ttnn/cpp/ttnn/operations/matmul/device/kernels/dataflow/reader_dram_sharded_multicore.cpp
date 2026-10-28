@@ -11,16 +11,16 @@
 //     alternate K blocks), runs the in-group reduce-scatter (DSMC_REDUCE) and writes the finished
 //     output tiles straight into the width-sharded output.
 //
-// Work item wi = (bank * CN + cn) * CK + kidx owns weight columns [n0, n1) of `bank`'s shard and
-// K rows [k0, k1). Every range below is derived from wi with the factory's formulas, so no per-core
+// Work item wi = ((bank * CM + cm) * CN + cn) * CK + kidx owns weight columns [n0, n1),
+// K rows [k0, k1) and M rows [cm * MT, (cm + 1) * MT). Ranges follow the factory, so no per-core
 // runtime arguments are needed; the only per-core table is DSMC_ROLE (one byte per logical core:
 // 0 = idle, else wi + 1), which lets the program run on the bounding rectangle of its cores.
 //
 // Device 2.0 APIs throughout: Noc reads/writes with BankView (weight), UnicastEndpoint
 // (activation and output shards, group partials) and CoreLocalMem / DataflowBuffer (local L1),
 // NocOptions::TXN_ID reads and barriers, Noc::is_read_trid_flushed for the in-order retire, and
-// Semaphore for the reduce. The one legacy call is noc_async_read_set_trid(0) at the end: the Noc
-// class sets the sticky read trid per call but has no call to clear it (see the comment there).
+// Semaphore for the reduce. The read-command readiness check prevents completion counters
+// from being sampled before submission; the sticky transaction tag is cleared on exit.
 
 #include <stdint.h>
 
@@ -38,9 +38,11 @@
 
 namespace {
 
-constexpr uint32_t Nbt = get_arg(args::Nbt);    // weight shard width per bank (tiles)
-constexpr uint32_t KT = get_arg(args::KT);      // K (tiles)
-constexpr uint32_t KB = get_arg(args::KB);      // K rows per streamed block
+constexpr uint32_t MT = get_arg(args::MT);    // output tile rows
+constexpr uint32_t Nbt = get_arg(args::Nbt);  // weight shard width per bank (tiles)
+constexpr uint32_t KT = get_arg(args::KT);    // K (tiles)
+constexpr uint32_t KB = get_arg(args::KB);    // K rows per streamed block
+constexpr uint32_t CM = get_arg(args::CM);
 constexpr uint32_t CN = get_arg(args::CN);      // column groups per bank
 constexpr uint32_t CK = get_arg(args::CK);      // row groups per column group (CK > 1: reduce-scatter)
 constexpr uint32_t P = get_arg(args::P);        // column passes per core
@@ -66,6 +68,11 @@ constexpr uint32_t OW = get_arg(args::OW);      // output shard width (tiles)
 constexpr uint32_t OCAP = get_arg(args::OCAP);  // output shard capacity over all shards (tiles)
 constexpr uint32_t MAXOWN = get_arg(args::MAXOWN);
 constexpr uint32_t X_TRID0 = 8;
+#ifdef DSMC_STREAMING
+constexpr uint32_t X_SLOTS = 3;
+#else
+constexpr uint32_t X_SLOTS = 8;
+#endif
 static_assert(XL >= 1 && XL <= 8, "at most 8 activation reads in flight (trids 8..15)");
 // NoC0 virtual coordinates (y << 16 | x) of the activation and output shard cores, in shard order.
 constexpr uint32_t kXCores[] = {DSMC_XC};
@@ -88,11 +95,25 @@ struct XQueue {
     uint32_t issued = 0, pushed = 0;
 };
 
+// A zero transaction count is not completion until the read command was accepted.
+// Poll command readiness at retirement instead of waiting after each issue: the
+// RISC can prepare more work while the command enters the NoC. Noc does not yet
+// expose this readiness check; read_cmd_buf is the buffer used by its read API.
+FORCE_INLINE bool read_batch_complete(const Noc& noc, uint32_t trid) {
+    return noc_cmd_buf_ready(noc.get_noc_id(), read_cmd_buf) && noc.is_read_trid_flushed(trid);
+}
+
+FORCE_INLINE void wait_read_batch(const Noc& noc, uint32_t trid) {
+    while (!noc_cmd_buf_ready(noc.get_noc_id(), read_cmd_buf)) {
+    }
+    noc.async_read_barrier<NocOptions::TXN_ID>({.trid = trid});
+}
+
 #ifdef DSMC_STREAM1
 // Push every activation block whose read has landed, in order.
 FORCE_INLINE void retire_x(const Noc& noc, DataflowBuffer& dfb_x, XQueue& xq) {
-    while (xq.pushed < xq.issued && noc.is_read_trid_flushed(X_TRID0 + (xq.pushed & 7))) {
-        dfb_x.push_back(KB);
+    while (xq.pushed < xq.issued && read_batch_complete(noc, X_TRID0 + (xq.pushed % X_SLOTS))) {
+        dfb_x.push_back(MT * KB);
         xq.pushed++;
     }
 }
@@ -114,12 +135,33 @@ FORCE_INLINE void read_x(const Noc& noc, uint32_t x_addr, uint32_t k, uint32_t n
         k += run;
     }
 }
+// A whole storage shard is contiguous across M, so issue one transfer for it.
+// Partial-shard blocks retain row strides without an intermediate layout conversion.
+FORCE_INLINE void read_x_block(const Noc& noc, uint32_t x_addr, uint32_t k, uint32_t rb, uint32_t l1, uint32_t trid) {
+    if constexpr (MT > 1 && KB == SW) {
+        if (rb == SW && k % SW == 0) {
+            const uint32_t xy = kXCores[k / SW];
+            noc.async_read<NocOptions::TXN_ID>(
+                kCore,
+                CoreLocalMem<uint32_t>(l1),
+                MT * SW * XT,
+                {.noc_x = core_x(xy), .noc_y = core_y(xy), .addr = x_addr},
+                {},
+                {.trid = trid});
+            return;
+        }
+    }
+    for (uint32_t m = 0; m < MT; ++m) {
+        read_x(noc, x_addr + m * SW * XT, k, rb, l1 + m * KB * XT, trid);
+    }
+}
+
 #endif
 
 #ifdef DSMC_STREAMS_W
 // Push every weight block whose read has landed, in order.
 FORCE_INLINE void retire_w(const Noc& noc, DataflowBuffer& dfb_w, Ring& ring) {
-    while (ring.pushed < ring.issued && noc.is_read_trid_flushed((ring.pushed % D) + 1)) {
+    while (ring.pushed < ring.issued && read_batch_complete(noc, (ring.pushed % D) + 1)) {
         dfb_w.push_back(BT);
         ring.pushed++;
     }
@@ -144,7 +186,7 @@ FORCE_INLINE void issue_w(
     while (!dfb_w.pages_reservable_at_back((ring.issued - ring.pushed + 1) * BT)) {
         retire_x_fn();  // compute may be waiting for an activation block before it frees a slot
         if (ring.pushed < ring.issued) {
-            noc.async_read_barrier<NocOptions::TXN_ID>({.trid = (ring.pushed % D) + 1});
+            wait_read_batch(noc, (ring.pushed % D) + 1);
             dfb_w.push_back(BT);
             ring.pushed++;
         }
@@ -175,7 +217,7 @@ FORCE_INLINE void issue_w(
 
 FORCE_INLINE void drain_w(const Noc& noc, DataflowBuffer& dfb_w, Ring& ring) {
     while (ring.pushed < ring.issued) {
-        noc.async_read_barrier<NocOptions::TXN_ID>({.trid = (ring.pushed % D) + 1});
+        wait_read_batch(noc, (ring.pushed % D) + 1);
         dfb_w.push_back(BT);
         ring.pushed++;
     }
@@ -189,7 +231,8 @@ void kernel_main() {
     if (role == 0) {
         return;
     }
-    const uint32_t wi = role - 1, kidx = wi % CK, grp = wi / CK, cn = grp % CN, bank = grp / CN;
+    const uint32_t wi = role - 1, kidx = wi % CK, grp = wi / CK, cn = grp % CN;
+    const uint32_t cm = (grp / CN) % CM, bank = grp / (CM * CN);
     const uint32_t n0 = Nbt * cn / CN, n1 = Nbt * (cn + 1) / CN;
     const uint32_t k0 = KT * kidx / CK, k1 = KT * (kidx + 1) / CK;
     const uint32_t nc = n1 - n0, rows = k1 - k0, nblk = (rows + KB - 1) / KB;
@@ -207,8 +250,11 @@ void kernel_main() {
 #ifdef DSMC_STREAM1
     DataflowBuffer dfb_x(dfb::x);
     // Raw: same L1 address on the activation shard cores (no handle form yet).
-    const uint32_t x_addr = tensor_accessor::detail::TransferAccess::bank_base(TensorAccessor(tensor::in0));
-    dfb_x.reserve_back(nblk * KB);
+    const uint32_t x_addr =
+        tensor_accessor::detail::TransferAccess::bank_base(TensorAccessor(tensor::in0)) + cm * MT * SW * XT;
+#ifndef DSMC_STREAMING
+    dfb_x.reserve_back(nblk * MT * KB);
+#endif
     const uint32_t xl1 = dfb_x.get_write_ptr();
     XQueue xq;
     [[maybe_unused]] auto retire_x_fn = [&]() { retire_x(noc, dfb_x, xq); };
@@ -222,19 +268,40 @@ void kernel_main() {
             [[maybe_unused]] const uint32_t j = (p + rot) % nblk, r = j * KB, rb = (rows - r) < KB ? (rows - r) : KB;
 #ifdef DSMC_STREAM1
             if (q == 0) {
-                // the activation is read once, in stream order, XL blocks ahead
+                // Issue ahead without a per-block barrier. While waiting for a reusable
+                // X slot, publish W completions too: compute needs both to return credits.
                 while (xq.issued < nblk && xq.issued < p + XL) {
-                    if (xq.issued - xq.pushed >= 8) {
-                        noc.async_read_barrier<NocOptions::TXN_ID>({.trid = X_TRID0 + (xq.pushed & 7)});
-                        dfb_x.push_back(KB);
+#ifdef DSMC_STREAMING
+                    retire_x_fn();
+                    if (!dfb_x.pages_reservable_at_back((xq.issued - xq.pushed + 1) * MT * KB) && xq.issued > p) {
+                        break;
+                    }
+                    while (!dfb_x.pages_reservable_at_back((xq.issued - xq.pushed + 1) * MT * KB)) {
+                        retire_x_fn();
+#ifdef DSMC_STREAMS_W
+                        retire_w(noc, dfb_w, ring);
+#endif
+                    }
+                    const uint32_t slot = xq.issued % X_SLOTS;
+#else
+                    if (xq.issued - xq.pushed >= X_SLOTS) {
+                        wait_read_batch(noc, X_TRID0 + (xq.pushed % X_SLOTS));
+                        dfb_x.push_back(MT * KB);
                         xq.pushed++;
                     }
+                    const uint32_t slot = xq.issued;
+#endif
                     const uint32_t jx = (xq.issued + rot) % nblk, rx = jx * KB;
                     const uint32_t rbx = (rows - rx) < KB ? (rows - rx) : KB;
-                    read_x(noc, x_addr, k0 + rx, rbx, xl1 + xq.issued * KB * XT, X_TRID0 + (xq.issued & 7));
+                    read_x_block(noc, x_addr, k0 + rx, rbx, xl1 + slot * MT * KB * XT, X_TRID0 + (xq.issued % X_SLOTS));
                     xq.issued++;
+#ifdef DSMC_X_SYNC
+                    wait_read_batch(noc, X_TRID0 + ((xq.issued - 1) % X_SLOTS));
+                    dfb_x.push_back(MT * KB);
+                    xq.pushed++;
+#endif
                 }
-                retire_x(noc, dfb_x, xq);
+                retire_x_fn();
             }
 #endif
 #ifdef DSMC_STREAMS_W
@@ -248,8 +315,8 @@ void kernel_main() {
 #ifdef DSMC_STREAM1
         if (q == 0) {
             while (xq.pushed < nblk) {
-                noc.async_read_barrier<NocOptions::TXN_ID>({.trid = X_TRID0 + (xq.pushed & 7)});
-                dfb_x.push_back(KB);
+                wait_read_batch(noc, X_TRID0 + (xq.pushed % X_SLOTS));
+                dfb_x.push_back(MT * KB);
                 xq.pushed++;
             }
         }
@@ -274,18 +341,20 @@ void kernel_main() {
         DataflowBuffer dfb_recv(dfb::recv);
         Semaphore sem(sem::reduce);
         const uint32_t recv = dfb_recv.get_write_ptr();
-        dfb_part.wait_front(NCP);
+        dfb_part.wait_front(MT * NCP);
         const uint32_t part = dfb_part.get_read_ptr();
         for (uint32_t q = 0; q < CK; q++) {
             const uint32_t pxy = kGroupCores[grp * CK + q];
             const uint32_t pc0 = n0 + nc * q / CK, pc1 = n0 + nc * (q + 1) / CK;
             if (pc1 > pc0) {
-                noc.async_write(
-                    CoreLocalMem<uint32_t>(part),
-                    kCore,
-                    (pc1 - pc0) * PT,
-                    {.offset_bytes = (pc0 - n0) * PT},
-                    {.noc_x = core_x(pxy), .noc_y = core_y(pxy), .addr = recv + kidx * MAXOWN * PT});
+                for (uint32_t m = 0; m < MT; ++m) {
+                    noc.async_write(
+                        CoreLocalMem<uint32_t>(part),
+                        kCore,
+                        (pc1 - pc0) * PT,
+                        {.offset_bytes = (m * NCP + pc0 - n0) * PT},
+                        {.noc_x = core_x(pxy), .noc_y = core_y(pxy), .addr = recv + (kidx * MT + m) * MAXOWN * PT});
+                }
             }
         }
         noc.async_write_barrier();
@@ -295,33 +364,41 @@ void kernel_main() {
                 sem.up(noc, core_x(pxy), core_y(pxy), 1);
             }
         }
-        dfb_part.pop_front(NCP);
-        dfb_recv.reserve_back(CK * MAXOWN);
+        dfb_part.pop_front(MT * NCP);
+        dfb_recv.reserve_back(CK * MT * MAXOWN);
         sem.wait(CK - 1);
         sem.set(0);
-        dfb_recv.push_back(CK * MAXOWN);
+        dfb_recv.push_back(CK * MT * MAXOWN);
     }
 #endif
     {
         DataflowBuffer dfb_out(dfb::out);
         // Raw: same L1 address on the output shard cores (no handle form yet).
         const uint32_t out_addr = tensor_accessor::detail::TransferAccess::bank_base(TensorAccessor(tensor::output));
-        dfb_out.wait_front(MAXOWN);
+        dfb_out.wait_front(MT * MAXOWN);
         const uint32_t l1 = dfb_out.get_read_ptr();
-        for (uint32_t i = 0; i < nown; i++) {
-            const uint32_t n = bank * Nbt + o0 + i;  // global output column (tile)
-            if (n < OCAP) {
+        for (uint32_t m = 0; m < MT; ++m) {
+            for (uint32_t i = 0; i < nown;) {
+                const uint32_t n = bank * Nbt + o0 + i;
+                if (n >= OCAP) {
+                    break;
+                }
+                const uint32_t offset = n % OW;
+                const uint32_t run = (OW - offset) < (nown - i) ? OW - offset : nown - i;
                 const uint32_t oxy = kOutCores[n / OW];
                 noc.async_write(
                     CoreLocalMem<uint32_t>(l1),
                     kCore,
-                    OT,
-                    {.offset_bytes = i * OT},
-                    {.noc_x = core_x(oxy), .noc_y = core_y(oxy), .addr = out_addr + (n % OW) * OT});
+                    run * OT,
+                    {.offset_bytes = (m * MAXOWN + i) * OT},
+                    {.noc_x = core_x(oxy),
+                     .noc_y = core_y(oxy),
+                     .addr = out_addr + ((cm * MT + m) * OW + offset) * OT});
+                i += run;
             }
         }
         noc.async_write_barrier();
-        dfb_out.pop_front(MAXOWN);
+        dfb_out.pop_front(MT * MAXOWN);
     }
 #ifdef DSMC_REDUCE
     noc.async_atomic_barrier();
