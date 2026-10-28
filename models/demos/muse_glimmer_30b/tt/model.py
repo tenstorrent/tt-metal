@@ -26,6 +26,10 @@ class MuseGlimmerModel:
         self.args = args
         self.mesh_device = mesh_device
         self.ccl = ccl if ccl is not None else MuseCCL(mesh_device)
+        if self.ccl.ring:
+            # Allocate before any prefill: prefill program plans depend on free L1, so creating this buffer at the
+            # first decode step made the next request compile new prefill programs after the decode trace capture.
+            self.ccl.decode_buffer((1, 1, DECODE_B_PAD, args.hidden_size), ttnn.bfloat16)
         self.tp = args.tp
 
         def cache(name, dtype, tag="v1"):

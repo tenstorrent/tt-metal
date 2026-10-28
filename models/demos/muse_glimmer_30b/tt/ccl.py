@@ -69,6 +69,21 @@ class MuseCCL:
             self._ar_buffers = {}
         logger.info(f"MuseCCL: tp={self.tp} topology={self.topology} num_links={self.num_links} ring={self.ring}")
 
+    def decode_buffer(self, shape, dtype):
+        """Persistent L1 all_reduce_async buffer for decode inputs of `shape` / `dtype`, created on first use."""
+        key = (tuple(shape), dtype)
+        if key not in self._ar_buffers:
+            shard = decode_memcfg(shape[-1], self.mesh_device).shard_spec
+            buf_spec = ttnn.ShardSpec(shard.grid, [32, shard.shape[1] * self.tp], ttnn.ShardOrientation.ROW_MAJOR)
+            self._ar_buffers[key] = ttnn.empty(
+                list(shape)[:-1] + [shape[-1] * self.tp],
+                device=self.mesh_device,
+                dtype=dtype,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, buf_spec),
+            )
+        return self._ar_buffers[key]
+
     def all_reduce(self, x, memory_config=ttnn.DRAM_MEMORY_CONFIG):
         if self.tp == 1:
             return x
@@ -76,22 +91,9 @@ class MuseCCL:
             mem = decode_memcfg(x.shape[-1], self.mesh_device)
             own = x.memory_config() != mem
             xs = ttnn.to_memory_config(x, mem) if own else x
-            key = (tuple(x.shape), x.dtype)
-            if key not in self._ar_buffers:
-                shard = mem.shard_spec
-                buf_spec = ttnn.ShardSpec(shard.grid, [32, shard.shape[1] * self.tp], ttnn.ShardOrientation.ROW_MAJOR)
-                self._ar_buffers[key] = ttnn.empty(
-                    list(x.shape)[:-1] + [x.shape[-1] * self.tp],
-                    device=self.mesh_device,
-                    dtype=x.dtype,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.MemoryConfig(
-                        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, buf_spec
-                    ),
-                )
             out = ttnn.experimental.all_reduce_async(
                 xs,
-                self._ar_buffers[key],
+                self.decode_buffer(x.shape, x.dtype),
                 cluster_axis=self.cluster_axis,
                 mesh_device=self.mesh_device,
                 multi_device_global_semaphore=self._ar_sems[self._ar_idx],
