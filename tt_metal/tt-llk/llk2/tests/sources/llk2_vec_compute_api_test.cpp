@@ -3,7 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Compute API test: the SFPU activations (llk2::vec_*) on Tensors, one kernel body for all three threads. The
-// activation is a compile-time parameter (VEC_FUNCTION, the value of llk2::VecFunction; VEC_FAST).
+// activation is a compile-time parameter (VEC_FUNCTION, the value of llk2::VecFunction; VEC_FAST), and so is the
+// thread that drives the SFPU (VEC_THREAD: llk2::Thread::Math or, as the target matmul kernel does, Thread::Pack).
 // Getting the input into Dest (unpack A + datacopy), the math-to-pack Dest sync and the pack still use today's LLKs
 // until llk2::copy and the pack + Dest sync API land.
 
@@ -41,20 +42,20 @@ constexpr DataFormat dest_format = llk2::kernel_settings.dest_fp32 ? DataFormat:
 constexpr std::uint32_t tiles    = (ROWS / llk2::default_tile_dim) * (COLS / llk2::default_tile_dim);
 
 // The scalars each activation takes, as FP32 bit patterns. The goldens in test_llk2_vec.py use the same values.
-constexpr std::uint32_t relu_max_max       = 0x40a00000u; // 5.0 (RELU_MAX_THRESHOLD)
-constexpr std::uint32_t hardtanh_min       = 0xbf800000u; // -1.0 (CLAMP_MIN)
-constexpr std::uint32_t hardtanh_max       = 0x3f800000u; // 1.0 (CLAMP_MAX)
-constexpr std::uint32_t selu_scale         = 0x3f867d5fu; // 1.0507 (torch selu)
-constexpr std::uint32_t selu_alpha         = 0x3fd62d7du; // 1.6733 (torch selu)
-constexpr std::uint32_t softplus_beta      = 0x3f800000u; // 1.0 (SOFTPLUS_BETA)
+constexpr std::uint32_t relu_max_max        = 0x40a00000u; // 5.0 (RELU_MAX_THRESHOLD)
+constexpr std::uint32_t hardtanh_min        = 0xbf800000u; // -1.0 (CLAMP_MIN)
+constexpr std::uint32_t hardtanh_max        = 0x3f800000u; // 1.0 (CLAMP_MAX)
+constexpr std::uint32_t selu_scale          = 0x3f867d5fu; // 1.0507 (torch selu)
+constexpr std::uint32_t selu_alpha          = 0x3fd62d7du; // 1.6733 (torch selu)
+constexpr std::uint32_t softplus_beta       = 0x3f800000u; // 1.0 (SOFTPLUS_BETA)
 constexpr std::uint32_t softplus_beta_recip = 0x3f800000u; // 1 / 1.0
-constexpr std::uint32_t softplus_threshold = 0x41a00000u; // 20.0 (SOFTPLUS_THRESHOLD)
+constexpr std::uint32_t softplus_threshold  = 0x41a00000u; // 20.0 (SOFTPLUS_THRESHOLD)
 
 template <const auto& Acc>
 inline void apply(const llk2::Tensor<Acc>& acc)
 {
     using llk2::VecFunction;
-    constexpr llk2::vec_modifiers mods {.fast = VEC_FAST};
+    constexpr llk2::vec_modifiers mods {.fast = VEC_FAST, .thread = static_cast<llk2::Thread>(VEC_THREAD)};
     constexpr VecFunction f = static_cast<VecFunction>(VEC_FUNCTION);
     if constexpr (f == VecFunction::Silu)
     {
@@ -136,17 +137,21 @@ void run_kernel(RUNTIME_PARAMETERS params)
     }
 #endif
 
-    apply(acc); // acc = f(acc), every tile
+    // Old style: the packer waits until math hands Dest over.
+#ifdef LLK_TRISC_PACK
+    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK);
+    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
+    _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
+    _llk_packer_wait_for_math_done_();
+#endif
+
+    apply(acc); // acc = f(acc), every tile: on the math thread before the hand-over, or on the pack thread after it
 
 #ifdef LLK_TRISC_MATH
     _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
 #endif
 
 #ifdef LLK_TRISC_PACK
-    _llk_pack_hw_configure_wrapper_<is_fp32_dest_acc_en, PackMode::Default>(formats.pack_src, formats.pack_dst, params.TILE_SIZE_PACK);
-    _llk_pack_init_wrapper_<PackMode::Default, false /* zero_output */>(formats.pack_dst);
-    _llk_pack_dest_init_<dest_sync, is_fp32_dest_acc_en>();
-    _llk_packer_wait_for_math_done_();
     for (std::uint32_t i = 0; i < tiles; i++)
     {
         _llk_pack_<dest_sync, is_fp32_dest_acc_en, ckernel::PackMode::Default>(i, L1_ADDRESS(buffer_Res[i]));

@@ -22,7 +22,7 @@ struct matmul_modifiers
 struct vec_modifiers
 {
     bool fast     = false;        ///< approximate mode: today's fast_and_approx / APPROX template argument
-    Thread thread = Thread::Math; ///< the thread that drives the SFPU. Only Thread::Math is ported; the target kernel uses Thread::Pack
+    Thread thread = Thread::Math; ///< the thread that drives the SFPU: Thread::Math or Thread::Pack (the target kernel's choice)
 };
 
 } // namespace llk2

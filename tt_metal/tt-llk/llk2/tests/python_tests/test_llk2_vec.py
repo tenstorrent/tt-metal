@@ -49,10 +49,15 @@ HAS_FAST_FORM = {"tanh", "gelu", "gelu_tanh", "sigmoid"}
 FAST_FORM_OP = {"sigmoid": MathOperation.SigmoidAppx}
 
 
+# The value of llk2::Thread (tensor/tensor.h) for the thread that drives the SFPU.
+VEC_THREADS = {"math": 1, "pack": 2}
+
+
 @dataclass
 class LLK2_VEC(TemplateParameter):
     function: int
     fast: bool
+    thread: int
     rows: int
     cols: int
 
@@ -60,6 +65,7 @@ class LLK2_VEC(TemplateParameter):
         return (
             f"constexpr std::uint32_t VEC_FUNCTION = {self.function};\n"
             f"constexpr bool VEC_FAST = {str(self.fast).lower()};\n"
+            f"constexpr std::uint32_t VEC_THREAD = {self.thread};\n"
             f"constexpr std::uint32_t ROWS = {self.rows};\n"
             f"constexpr std::uint32_t COLS = {self.cols};"
         )
@@ -75,8 +81,14 @@ def _variants():
 
 # bf16 in both Dest modes; fp32 in the 32-bit Dest mode, unpacked straight to Dest.
 FORMATS_AND_DEST = [
-    (InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b), DestAccumulation.No),
-    (InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b), DestAccumulation.Yes),
+    (
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.No,
+    ),
+    (
+        InputOutputFormat(DataFormat.Float16_b, DataFormat.Float16_b),
+        DestAccumulation.Yes,
+    ),
     (InputOutputFormat(DataFormat.Float32, DataFormat.Float32), DestAccumulation.Yes),
 ]
 
@@ -84,9 +96,10 @@ FORMATS_AND_DEST = [
 @parametrize(
     variant=_variants(),
     format_and_dest=FORMATS_AND_DEST,
+    thread=list(VEC_THREADS),
     input_dimensions=[[32, 32], [64, 64]],
 )
-def test_llk2_vec(variant, format_and_dest, input_dimensions):
+def test_llk2_vec(variant, format_and_dest, thread, input_dimensions):
     name, fast = variant
     formats, dest_acc = format_and_dest
     function, mathop = VEC_FUNCTIONS[name]
@@ -126,7 +139,13 @@ def test_llk2_vec(variant, format_and_dest, input_dimensions):
         formats,
         templates=[
             DEST_SYNC(),
-            LLK2_VEC(function, fast, input_dimensions[0], input_dimensions[1]),
+            LLK2_VEC(
+                function,
+                fast,
+                VEC_THREADS[thread],
+                input_dimensions[0],
+                input_dimensions[1],
+            ),
         ],
         runtimes=[],
         variant_stimuli=StimuliConfig(
@@ -147,7 +166,9 @@ def test_llk2_vec(variant, format_and_dest, input_dimensions):
     )
 
     res = configuration.run().result
-    assert len(res) == len(golden), "Result tensor and golden tensor are not of the same length"
+    assert len(res) == len(
+        golden
+    ), "Result tensor and golden tensor are not of the same length"
 
     contract = accuracy_contract(
         mathop,

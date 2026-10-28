@@ -6,7 +6,7 @@
 // rewrites in place, tile by tile. Nothing is unpacked, so the Plan's unpack streams are None and its walk is
 // empty; MathPlan.function names the activation and MathPlan.fast picks its approximate form.
 //
-//   vec_accepts   the operand is in Dest, in the kernel's Dest format, in 32x32 tiles, driven from the math thread
+//   vec_accepts   the operand is in Dest, in the kernel's Dest format, in 32x32 tiles, driven from math or pack
 //   vec_options   the SFPU reads and writes Dest in the Dest format; the result is the operand itself
 //   vec_work      tiles along y and x, faces per tile
 //   vec_plan      Exu::Sfpu, the function, approximate mode, the Dest mode
@@ -33,7 +33,8 @@ constexpr bool vec_accepts(const TensorSpec<6>& acc, const TensorSpec<6>&, const
 {
     const bool storage = acc.storage == Storage::Dest && acc.format == vec_dest_format(s.dest_fp32);
     const bool tiles   = tile_rows(acc.shape) == vec_tile_dim && tile_cols(acc.shape) == vec_tile_dim;
-    return storage && tiles && call.function != VecFunction::None && call.mods.thread == Thread::Math;
+    const bool thread  = call.mods.thread == Thread::Math || call.mods.thread == Thread::Pack;
+    return storage && tiles && call.function != VecFunction::None && thread;
 }
 
 constexpr OpConfig vec_options(const TensorSpec<6>& acc, const TensorSpec<6>&, const vec_call&, const KernelSettings& s)

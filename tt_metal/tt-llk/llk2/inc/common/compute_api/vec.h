@@ -15,7 +15,9 @@
 //   vec_selu(acc, scale, alpha)  vec_softplus(acc, beta, beta_reciprocal, threshold)
 //
 // acc is a Dest tensor the caller holds (from the Dest sync API). Which thread may touch it when is the sync API's
-// job, not the op's. Each call resolves itself as a chain of one (resolver/resolver.h): accepts is checked at compile
+// job, not the op's. vec_modifiers::thread picks the thread that drives the SFPU: Thread::Math (the default) runs
+// it right after the FPU wrote Dest; Thread::Pack runs it after math has handed Dest to the packer, as the target
+// matmul kernel does (llk_lib/vec.h describes the hand-over). Each call resolves itself as a chain of one (resolver/resolver.h): accepts is checked at compile
 // time, then the Plan drives llk-lib's vec on the thread vec_modifiers::thread names.
 
 #pragma once
@@ -33,7 +35,8 @@ inline __attribute__((always_inline)) void vec_apply(const Tensor<D, RD>& acc, S
 {
     constexpr vec_call call {F, Mods};
     static_assert(D.storage == Storage::Dest, "the SFPU activations work on Dest");
-    static_assert(accepted<vec_op, D, D, call>, "the SFPU activations take 32x32 tiles in Dest, in the kernel's Dest format, driven from the math thread");
+    static_assert(
+        accepted<vec_op, D, D, call>, "the SFPU activations take 32x32 tiles in Dest, in the kernel's Dest format, driven from the math or the pack thread");
 
     constexpr const Resolved& r = resolved<vec_op, D, D, call>;
     llk_lib::vec<Mods.thread, r.plan>(acc.address, scalars...);

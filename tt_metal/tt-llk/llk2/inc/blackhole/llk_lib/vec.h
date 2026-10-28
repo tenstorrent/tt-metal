@@ -17,7 +17,7 @@
 //   vec_execute<P>(row, ...)  the function on every tile of the tensor at Dest row `row`, in place. The scalars
 //                             (relu_max's max, ...) are FP32 bit patterns, passed on to the SFPI function
 //   vec<On, Plan>(row, ...)   the per-thread call the Compute API makes: configure, then execute, only when this
-//                             build is for thread On (the math thread)
+//                             build is for thread On, the math or the pack thread
 //
 // How one tile is done. The SFPU has 32 lanes. An SFPI load reads 32 datums from Dest: the even or the odd columns
 // of four rows, at the Dest row counter plus the Dest offset. One SFPI iteration loads, computes and stores those
@@ -26,9 +26,19 @@
 // function once (8 iterations) and move the row counter's CR to the next face. After each tile, the row counter goes
 // back to 0.
 //
+// Which thread drives the SFPU. Either the math or the pack thread can issue SFPU instructions; each has its own
+// Dest offset register, row counters and address modifiers, so configure and execute are the same on both. They
+// differ in the hand-over around the call, which belongs to the Dest sync API, not to the op:
+//   math   the FPU wrote Dest on the same thread: execute stalls the SFPU until the FPU is idle. The math thread then
+//          hands Dest to the packer as usual (today: _llk_math_dest_section_done_, which also waits for the SFPU).
+//   pack   the math thread has handed Dest over already (today: _llk_packer_wait_for_math_done_ before the call). The
+//          FPU is idle, so the same stall passes at once. After the last tile, vec stalls the packer until the SFPU is
+//          idle, so the pack that follows reads the results (today's apply_activation_from_pack does the same).
+//          get_dest_buffer_base() is the pack thread's copy, which follows the packer's Dest half.
+//
 // Not HAL yet:
 //   - SFPCONFIG (the SFPU lane config): ckernel::sfpu::_init_sfpu_config_reg(), flagged below.
-//   - get_dest_buffer_base(): the base of the Dest half the math thread owns now (as matmul.h).
+//   - get_dest_buffer_base(): the base of the Dest half the calling thread works on now (as matmul.h).
 //   - The SFPI init functions also issue one SETRWC each (math::reset_counters); they are called as they are.
 
 #pragma once
@@ -43,9 +53,9 @@
 #include "resolver/plan.h"
 #include "resolver/vec_function.h"
 
-// The SFPI code is compiled only into the thread that drives the SFPU; other threads plan only. The metal headers
-// are named with their folder: tt-llk's common/inc/sfpu has files of the same name (ckernel_sfpu_relu.h).
-#if defined(LLK_TRISC_MATH) || defined(TRISC_MATH)
+// The SFPI code is compiled only into the threads that can drive the SFPU (math, pack); unpack plans only. The
+// metal headers are named with their folder: tt-llk's common/inc/sfpu has files of the same name.
+#if defined(LLK_TRISC_MATH) || defined(TRISC_MATH) || defined(LLK_TRISC_PACK) || defined(TRISC_PACK)
 #define LLK2_SFPU_THREAD 1
 #include "cmath_common.h"
 #include "llk_sfpu/ckernel_sfpu_activations.h"
@@ -67,7 +77,7 @@ namespace cfg = hal::cfg;
 using hal::sync::StallCondition;
 using hal::sync::StallTarget;
 
-/// Parameters of an SFPU activation on the math thread. configure and execute take the same struct.
+/// Parameters of an SFPU activation on the thread that drives the SFPU. configure and execute take the same struct.
 struct vec_params
 {
     VecFunction function;     ///< which activation
@@ -90,8 +100,9 @@ constexpr vec_params vec_params_from(const Plan& p)
     };
 }
 
-inline constexpr int sfpu_iterations_per_face = 8; ///< one SFPI iteration covers 4 rows x 8 columns; 8 cover a 16 x 16 face
-inline constexpr std::uint32_t max_rwc_step   = 15; ///< the largest step SETRWC takes (a 4-bit field)
+inline constexpr int sfpu_iterations_per_face       = 8;  ///< one SFPI iteration covers 4 rows x 8 columns; 8 cover a 16 x 16 face
+inline constexpr std::uint32_t max_rwc_step         = 15; ///< the largest step SETRWC takes (a 4-bit field)
+inline constexpr std::uint32_t faces_per_32x32_tile = 4;  ///< 2 x 2 faces of 16 x 16
 
 /// Dest rows one tile takes.
 constexpr std::uint32_t dest_rows_per_tile(const vec_params& p)
@@ -225,7 +236,8 @@ template <vec_params P>
 inline __attribute__((always_inline)) void vec_configure()
 {
     using namespace hal::counters::rwc;
-    static_assert(P.num_faces == 4 && P.face_r_dim == max_face_rows, "32x32 tiles only, for now: the face loop below assumes four 16-row faces");
+    static_assert(
+        P.num_faces == faces_per_32x32_tile && P.face_r_dim == max_face_rows, "32x32 tiles only, for now: the face loop below assumes four 16-row faces");
     static_assert(P.function != VecFunction::None, "name an SFPU function");
 
     // The SFPU's Dest mode is ALU config, shared with the FPU: wait for both to drain before writing it.
@@ -275,7 +287,7 @@ inline __attribute__((always_inline)) void vec_execute(std::uint32_t dest_row, S
     {
         cfg::write<cfg::Access::TensixCfgUnit, cfg::DestTargetRegCfgMath::Offset, cfg::Sec::S0>(
             dest_row + tile * dest_rows_per_tile(P) + ckernel::get_dest_buffer_base());
-        // The SFPU waits until the FPU has finished writing Dest (math to SFPU, same thread).
+        // The SFPU waits until the FPU has finished writing Dest.
         hal::sync::wait::stall<StallTarget::Sfpu, StallCondition::MathIdle>();
 #pragma GCC unroll 0
         for (std::uint32_t face = 0; face < P.num_faces; face++)
@@ -288,16 +300,21 @@ inline __attribute__((always_inline)) void vec_execute(std::uint32_t dest_row, S
     }
 }
 
-/// The math thread's part of a Compute API vec_ call: configure, then the function on every tile from dest_row.
+/// The driving thread's part of a Compute API vec_ call: configure, then the function on every tile from dest_row.
 template <Thread On, Plan Pl, class... Scalars>
 inline __attribute__((always_inline)) void vec(std::uint32_t dest_row, Scalars... scalars)
 {
-    static_assert(On == Thread::Math, "only the math thread drives the SFPU so far");
+    static_assert(On == Thread::Math || On == Thread::Pack, "the SFPU is driven from the math or the pack thread");
     constexpr vec_params p = vec_params_from(Pl);
     if constexpr (runs_on<On>)
     {
         vec_configure<p>();
         vec_execute<p>(dest_row, scalars...);
+        if constexpr (On == Thread::Pack)
+        {
+            // The pack that follows on this thread reads the SFPU's results.
+            hal::sync::wait::stall<StallTarget::Pack, StallCondition::SfpuIdle>();
+        }
     }
 }
 
