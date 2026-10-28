@@ -1,15 +1,8 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+// SPDX-FileCopyrightText: Portions copyright LLVM Project (https://llvm.org): llvm::unique_function
+// SPDX-FileCopyrightText: Portions copyright (c) 2017 thecppzoo (https://github.com/thecppzoo/zoo): zoo::VTableFunction
 //
-// SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-//
-// Written for tt-metal (GitHub #57444), adapting the designs of two projects; see NOTICE:
-//   - zoo (https://github.com/thecppzoo/zoo), MIT License, Copyright (c) 2017 thecppzoo: the layout
-//     of zoo::VTableFunction -- a fixed inline buffer plus one pointer to a per-type table holding
-//     the invoker -- and an empty state whose table entry throws.
-//   - LLVM (llvm/ADT/FunctionExtras.h, llvm::unique_function), Apache License v2.0 with LLVM
-//     Exceptions, https://llvm.org/LICENSE.txt: the trivial-callable fast path, where a target that
-//     is trivially movable and destructible is moved by copying bytes and destroyed by doing
-//     nothing, flagged with the callback pointer rather than looked up.
+// SPDX-License-Identifier: Apache-2.0
 
 #pragma once
 
