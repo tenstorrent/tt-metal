@@ -2510,4 +2510,5 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc_set_state(
 
 }  // namespace tt::tt_fabric::mesh::experimental
 
+// API IMPL files for new architectures will be included here as they are added
 #include "tt_metal/fabric/hw/inc/mesh/tt-1xx/api_impl.h"
