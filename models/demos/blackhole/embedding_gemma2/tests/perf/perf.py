@@ -6,11 +6,29 @@ tower (text, vision, audio) and of the full multimodal model, with the selected 
 (`doc/datatype_sweep/selected_precision_config.json`, or the file named by EMBEDDING_GEMMA2_PRECISION).
 Report: doc/benchmark/REPORT.md. Layout follows models/demos/wormhole/bge_m3/tests/perf/perf.py.
 
-Sweep (batch x physical bucket; one trace per shape, all shapes of a group captured by one capture_all):
+A plain run is quick: headline shapes, `forward` mode only (text 1 x 512, vision 1 x 2560, audio 1 x 768,
+full text 472 tokens), finite-output asserts, no HF check. Everything else is opt-in (env, "1" = on);
+costs are from the full-sweep run 20261028-063930 (doc/benchmark/REPORT.md, model loads included):
+
+    option (env)                        adds                                                    ~min
+    (none)                              headline shapes x forward                                1.5
+    EMBEDDING_GEMMA2_PERF_SHAPES=1      every shape of TEXT / VISION / AUDIO / FULL_CASES        +0.5
+    EMBEDDING_GEMMA2_PERF_MODES=1       h2d_d2h, api (full), 2cq (records "not supported")      +0.3
+    EMBEDDING_GEMMA2_PERF_LONG=1        text 1 x 32768, own device session                      +0.8
+    EMBEDDING_GEMMA2_PERF_PROBE=1       text batch-capacity probe at 128 tokens                  +0.8
+    EMBEDDING_GEMMA2_PERF_SUSTAINED=1   30 s sustained vs burst per tower (text, vision, audio)  +2.5
+    EMBEDDING_GEMMA2_PERF_HF_CHECK=1    HF fp32 comparison on the timed output (CPU reference)  +0.5
+    EMBEDDING_GEMMA2_PERF_ALL=1         all of the above: the full sweep of REPORT.md            5.5
+
+Options combine (e.g. SHAPES=1 MODES=1 gives every shape in every mode); `-k` picks single cases
+among the collected ones. The selection decides collection, so `--collect-only` shows what will run.
+
+Full sweep (batch x physical bucket; one trace per shape, all shapes of a group captured by one
+capture_all):
 
     text    b1 x 128, 512, 2048, 8192; b8 x 512; b32 x 128 (TextEncoder, max_seq_len 8192)
             b1 x 32768 in its own device session (max_seq_len 32768)
-            batch probe: eager b {32 .. 1024} x 128, ascending, until the first device allocation failure
+            batch probe: eager b {32 .. 8192} x 128, ascending, until the first device allocation failure
     vision  1 x 2560 (landscape), 4 x 2560 (landscape, portrait, square, small), 8 x 1280 (8 video
             frames); patch buckets as in bench_vision.py (2560 = one image, 1280 = one video frame)
     audio   1 x 256 (10 s speech), 1 x 768 (30 s speech), 4 x 256 (4 x 10 s); token buckets as in
@@ -41,22 +59,24 @@ Modes (timing boundaries; `mode` in the records):
 Every timed case: N_WARMUP >= 3 replays first, then N timed iterations (default 20); mean, p50, p90,
 p99, min, max (numpy linear percentiles; with N = 20, p99 is close to max). Throughput: text tokens/s
 and embeddings/s; vision / audio items/s (images, video frames, clips); full embeddings/s and
-tokens/s (logical tokens). Checks: every case asserts a finite output (full: unit norm); for one
-shape per tower (text 1 x 512, vision 1 x 2560, audio 1 x 768) and every full case, the output of the
-timed replay path is compared with HF fp32 (text / full: embedding cosine >= 0.99; vision / audio:
-soft-token PCC >= 0.99, the tower tests' bar, and flattened soft-token cosine >= 0.99).
+tokens/s (logical tokens). Checks: every case asserts a finite output (full: unit norm). With
+EMBEDDING_GEMMA2_PERF_HF_CHECK=1, for one shape per tower (text 1 x 512, vision 1 x 2560, audio
+1 x 768) and every selected full case, the output of the timed replay path is compared with HF fp32
+(text / full: embedding cosine >= 0.99; vision / audio: soft-token PCC >= 0.99, the tower tests' bar,
+and flattened soft-token cosine >= 0.99).
 
 Raw records: doc/benchmark/run/perf.jsonl (with per-iteration samples) and perf.csv (summary), one
 `run_id` per pytest session; doc/benchmark/run/run_info.json (commit, precision file hash, versions)
 and device_info.json.
 
-Env: EMBEDDING_GEMMA2_PERF_ITERS (20), EMBEDDING_GEMMA2_PERF_WARMUP (3, minimum 3),
+Other env: EMBEDDING_GEMMA2_PERF_ITERS (20), EMBEDDING_GEMMA2_PERF_WARMUP (3, minimum 3),
 EMBEDDING_GEMMA2_SUSTAINED_S (30), EMBEDDING_GEMMA2_BENCH_DIR (doc/benchmark/run).
 
 Run (from the tt-metal root, HF_MODEL = the pinned snapshot, transformers overlay on PYTHONPATH):
 
-    pytest models/demos/blackhole/embedding_gemma2/tests/perf/perf.py -s
-    pytest models/demos/blackhole/embedding_gemma2/tests/perf/perf.py -k TestVision -s
+    pytest models/demos/blackhole/embedding_gemma2/tests/perf/perf.py -s                    # quick
+    EMBEDDING_GEMMA2_PERF_ALL=1 pytest models/demos/blackhole/embedding_gemma2/tests/perf/perf.py -s
+    EMBEDDING_GEMMA2_PERF_SHAPES=1 pytest models/demos/blackhole/embedding_gemma2/tests/perf/perf.py -k TestVision -s
 
 test_tracy_forward (text, one warmed eager forward between Tracy signposts PERF_TEXT / PERF_TEXT_END)
 runs only under the device profiler (`python -m tracy -r -p -v -m pytest ...`, see
@@ -122,6 +142,29 @@ NO_2CQ = (
     "num_command_queues=1; a second-queue input path is a code change outside the benchmark stage"
 )
 RUN_ID = time.strftime("%Y%m%d-%H%M%S")
+
+
+# ---------------------------------------------------------------------- selection (see the docstring)
+def _flag(name: str) -> bool:
+    return os.environ.get(name, "0").strip().lower() in ("1", "true", "yes", "on", "all")
+
+
+PERF_ALL = _flag("EMBEDDING_GEMMA2_PERF_ALL")
+SEL = {
+    "shapes": PERF_ALL or _flag("EMBEDDING_GEMMA2_PERF_SHAPES"),
+    "modes": PERF_ALL or _flag("EMBEDDING_GEMMA2_PERF_MODES"),
+    "long": PERF_ALL or _flag("EMBEDDING_GEMMA2_PERF_LONG"),
+    "probe": PERF_ALL or _flag("EMBEDDING_GEMMA2_PERF_PROBE"),
+    "sustained": PERF_ALL or _flag("EMBEDDING_GEMMA2_PERF_SUSTAINED"),
+    "hf_check": PERF_ALL or _flag("EMBEDDING_GEMMA2_PERF_HF_CHECK"),
+}
+PROFILER = os.environ.get("TT_METAL_DEVICE_PROFILER") == "1"
+RUN_TEXT = TEXT_CASES if SEL["shapes"] else (HEADLINE["text"],)
+RUN_VISION = VISION_CASES if SEL["shapes"] else (HEADLINE["vision"],)
+RUN_AUDIO = AUDIO_CASES if SEL["shapes"] else (HEADLINE["audio"],)
+RUN_FULL = FULL_CASES if SEL["shapes"] else ("text_b1x512",)
+RUN_MODES = MODES if SEL["modes"] else ("forward",)
+RUN_FULL_MODES = FULL_MODES if SEL["modes"] else ("forward",)
 
 CSV_FIELDS = (
     "run_id",
@@ -226,6 +269,7 @@ def run_info():
         "precision_sections": {
             k: (cfg[k].get("note") or cfg.get("config_id", "")).split(":")[0] for k in ("text", "vision", "audio")
         },
+        "selection": {"all": PERF_ALL, **SEL},
         "device_params": dict(DEVICE_PARAMS),
         "n_warmup": N_WARMUP,
         "n_iters": N_ITERS,
@@ -482,26 +526,31 @@ class TestText:
 
         snapshot = resolve_snapshot(MODEL_ID)
         sd = load_text_state_dict(snapshot)
-        ref = _text_reference(snapshot, sd, HEADLINE["text"])
+        ref = _text_reference(snapshot, sd, HEADLINE["text"]) if SEL["hf_check"] else None
         device = _open_device()
         try:
-            b = TextBench(device, TEXT_CASES, 8192, state_dict=sd)
-            b.reference[HEADLINE["text"]] = ref
+            b = TextBench(device, RUN_TEXT, 8192, state_dict=sd)
+            if ref is not None:
+                b.reference[HEADLINE["text"]] = ref
             yield b
             b.enc.release_traces()
         finally:
             ttnn.close_device(device)
 
-    @pytest.mark.parametrize("mode", MODES)
-    @pytest.mark.parametrize("shape", TEXT_CASES, ids=[_case_id(s) for s in TEXT_CASES])
+    @pytest.mark.parametrize("mode", RUN_MODES)
+    @pytest.mark.parametrize("shape", RUN_TEXT, ids=[_case_id(s) for s in RUN_TEXT])
     def test_perf(self, bench, shape, mode):
         run_mode(bench, shape, mode)
 
     def test_sustained(self, bench):
         run_sustained(bench, HEADLINE["text"])
 
+    test_sustained.__test__ = SEL["sustained"]
+
 
 class TestTextLong:
+    __test__ = SEL["long"]
+
     @pytest.fixture(scope="class")
     def bench(self):
         device = _open_device()
@@ -513,7 +562,7 @@ class TestTextLong:
         finally:
             ttnn.close_device(device)
 
-    @pytest.mark.parametrize("mode", MODES)
+    @pytest.mark.parametrize("mode", RUN_MODES)
     @pytest.mark.parametrize("shape", TEXT_LONG_CASES, ids=[_case_id(s) for s in TEXT_LONG_CASES])
     def test_perf(self, bench, shape, mode):
         run_mode(bench, shape, mode)
@@ -527,6 +576,8 @@ def _is_device_oom(err: Exception) -> bool:
 class TestTextBatchProbe:
     """Largest text batch at seq 128: one eager forward per batch, ascending, until the first device
     allocation failure (recorded, not timed). Batches above the first failure are skipped."""
+
+    __test__ = SEL["probe"]
 
     @pytest.fixture(scope="class")
     def probe(self):
@@ -623,28 +674,33 @@ class TestVision:
         from models.demos.blackhole.embedding_gemma2.tt.vision.vision_encoder import VisionEncoder
 
         snapshot = resolve_snapshot(MODEL_ID)
-        tower, embed, _ = load_reference_vision(snapshot)
-        pv, pid = _inputs(snapshot, *HEADLINE["vision"])
-        ref = run_vision_reference(tower, embed, pv, pid, capture_layers=()).soft_tokens
-        del tower, embed
-        gc.collect()
+        ref = None
+        if SEL["hf_check"]:
+            tower, embed, _ = load_reference_vision(snapshot)
+            pv, pid = _inputs(snapshot, *HEADLINE["vision"])
+            ref = run_vision_reference(tower, embed, pv, pid, capture_layers=()).soft_tokens
+            del tower, embed
+            gc.collect()
         device = _open_device()
         try:
             enc = VisionEncoder.from_pretrained(device, str(snapshot))
-            b = TowerBench("vision", device, enc, VISION_CASES, _inputs, "num_soft_tokens")
-            b.reference[HEADLINE["vision"]] = ref
+            b = TowerBench("vision", device, enc, RUN_VISION, _inputs, "num_soft_tokens")
+            if ref is not None:
+                b.reference[HEADLINE["vision"]] = ref
             yield b
             b.enc.release_traces()
         finally:
             ttnn.close_device(device)
 
-    @pytest.mark.parametrize("mode", MODES)
-    @pytest.mark.parametrize("shape", VISION_CASES, ids=[_case_id(s) for s in VISION_CASES])
+    @pytest.mark.parametrize("mode", RUN_MODES)
+    @pytest.mark.parametrize("shape", RUN_VISION, ids=[_case_id(s) for s in RUN_VISION])
     def test_perf(self, bench, shape, mode):
         run_mode(bench, shape, mode)
 
     def test_sustained(self, bench):
         run_sustained(bench, HEADLINE["vision"])
+
+    test_sustained.__test__ = SEL["sustained"]
 
 
 class TestAudio:
@@ -658,39 +714,45 @@ class TestAudio:
         from models.demos.blackhole.embedding_gemma2.tt.audio.audio_encoder import AudioEncoder
 
         snapshot = resolve_snapshot(MODEL_ID)
-        torch.set_num_threads(max(torch.get_num_threads(), 16))
-        tower, embed, _ = load_reference_audio(snapshot)
-        feats, mask = _inputs(snapshot, *HEADLINE["audio"])
-        ref = run_audio_reference(tower, embed, feats, mask, capture_layers=()).soft_tokens
-        del tower, embed
-        gc.collect()
+        ref = None
+        if SEL["hf_check"]:
+            torch.set_num_threads(max(torch.get_num_threads(), 16))
+            tower, embed, _ = load_reference_audio(snapshot)
+            feats, mask = _inputs(snapshot, *HEADLINE["audio"])
+            ref = run_audio_reference(tower, embed, feats, mask, capture_layers=()).soft_tokens
+            del tower, embed
+            gc.collect()
         device = _open_device()
         try:
             enc = AudioEncoder.from_pretrained(device, str(snapshot))
-            b = TowerBench("audio", device, enc, AUDIO_CASES, _inputs, "num_tokens")
-            b.reference[HEADLINE["audio"]] = ref
+            b = TowerBench("audio", device, enc, RUN_AUDIO, _inputs, "num_tokens")
+            if ref is not None:
+                b.reference[HEADLINE["audio"]] = ref
             yield b
             b.enc.release_traces()
         finally:
             ttnn.close_device(device)
 
-    @pytest.mark.parametrize("mode", MODES)
-    @pytest.mark.parametrize("shape", AUDIO_CASES, ids=[_case_id(s) for s in AUDIO_CASES])
+    @pytest.mark.parametrize("mode", RUN_MODES)
+    @pytest.mark.parametrize("shape", RUN_AUDIO, ids=[_case_id(s) for s in RUN_AUDIO])
     def test_perf(self, bench, shape, mode):
         run_mode(bench, shape, mode)
 
     def test_sustained(self, bench):
         run_sustained(bench, HEADLINE["audio"])
 
+    test_sustained.__test__ = SEL["sustained"]
+
 
 # ---------------------------------------------------------------------- full model
-def _full_items() -> dict:
+def _full_items(cases) -> dict:
     from models.demos.blackhole.embedding_gemma2.reference import full_model_inputs as F
 
-    catalogue = F.items()
     out = {"text_b1x512": F.DOC + F.long_text(FULL_TEXT_CHARS)}
-    out.update({case: catalogue[name] for case, name in FULL_ITEMS.items()})
-    return out
+    if any(c in FULL_ITEMS for c in cases):
+        catalogue = F.items()  # decodes every catalogue image / clip / video
+        out.update({case: catalogue[name] for case, name in FULL_ITEMS.items()})
+    return {c: out[c] for c in cases}
 
 
 class FullBench(Bench):
@@ -704,9 +766,10 @@ class FullBench(Bench):
         super().__init__(device)
         self.model = EmbeddingGemma2.from_pretrained(device, str(resolve_snapshot(MODEL_ID)), max_seq_len=8192)
         self.items = items
-        self.processed = {c: self.model.process(items[c]) for c in FULL_CASES}
-        self.hosts = {c: self.model.prepare_batch([self.processed[c]]) for c in FULL_CASES}
-        assert self.hosts["text_b1x512"].key.seq_len == 512
+        self.processed = {c: self.model.process(items[c]) for c in items}
+        self.hosts = {c: self.model.prepare_batch([self.processed[c]]) for c in items}
+        if "text_b1x512" in self.hosts:
+            assert self.hosts["text_b1x512"].key.seq_len == 512
         self.model.capture_all([h.key for h in self.hosts.values()])
 
     def key_shape(self, case):
@@ -731,6 +794,8 @@ class FullBench(Bench):
     def check(self, case, out):
         super().check(case, out)
         assert torch.allclose(out.norm(dim=-1), torch.ones(out.shape[0]), atol=1e-3), f"full {case}: not unit norm"
+        if case not in self.reference:
+            return
         c = float(torch.nn.functional.cosine_similarity(out[0], self.reference[case].float(), dim=-1))
         good = c >= COSINE_EMBEDDING
         key = self.hosts[case].key
@@ -748,12 +813,14 @@ class TestFull:
         from models.demos.blackhole.embedding_gemma2.tt.embedding_model import process_item
 
         snapshot = resolve_snapshot(MODEL_ID)
-        items = _full_items()
-        proc = AutoProcessor.from_pretrained(str(snapshot))
-        hf = load_reference_full_model(snapshot)
-        ref = {c: embed(hf, process_item(proc, items[c]))[0] for c in FULL_CASES}
-        del hf
-        gc.collect()
+        items = _full_items(RUN_FULL)
+        ref = {}
+        if SEL["hf_check"]:
+            proc = AutoProcessor.from_pretrained(str(snapshot))
+            hf = load_reference_full_model(snapshot)
+            ref = {c: embed(hf, process_item(proc, items[c]))[0] for c in RUN_FULL}
+            del hf
+            gc.collect()
         device = _open_device()
         try:
             b = FullBench(device, items)
@@ -763,8 +830,8 @@ class TestFull:
         finally:
             ttnn.close_device(device)
 
-    @pytest.mark.parametrize("mode", FULL_MODES)
-    @pytest.mark.parametrize("case", FULL_CASES)
+    @pytest.mark.parametrize("mode", RUN_FULL_MODES)
+    @pytest.mark.parametrize("case", RUN_FULL)
     def test_perf(self, bench, case, mode):
         run_mode(bench, case, mode)
 
@@ -790,3 +857,8 @@ def test_tracy_forward(batch, seq_len, eg2_device, tt_text_model, eg2_snapshot):
     ttnn.synchronize_device(eg2_device)
     signpost("PERF_TEXT_END")
     ttnn.ReadDeviceProfiler(eg2_device)
+
+
+# collected under the profiler, or with the all-on switch (where it skips without the profiler, as
+# in the full-sweep run)
+test_tracy_forward.__test__ = PROFILER or PERF_ALL
