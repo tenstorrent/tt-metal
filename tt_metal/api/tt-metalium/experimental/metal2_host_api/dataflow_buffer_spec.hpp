@@ -111,7 +111,7 @@ struct DataflowBufferSpec {
     //
     // The bound memory object must have SRAM-based storage on the nodes the dfb instanced to,
     // and its allocation on each node must be large enough to hold the DFB (entry_size * num_entries).
-    std::optional<std::variant<TensorParamName, RawAllocationParamName>> borrowed_from = std::nullopt;
+    std::optional<std::variant<TensorParamName, SRAMArenaParamName>> borrowed_from = std::nullopt;
 
     //////////////////////////////
     // Advanced options (see advanced_options.hpp)

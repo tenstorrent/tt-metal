@@ -44,8 +44,8 @@ void ValidateScratchpadSpec(
                 occupied_nodes = occupied_nodes.merge(collected.kernel_node_set.at(kernel->unique_id));
             }
         }
-        ValidateRawAllocationBorrowing(
-            RawAllocationSource{.allocation = borrowing->allocation, .offset = borrowing->offset},
+        ValidateSRAMArenaBorrowing(
+            SRAMArenaSource{.allocation = borrowing->allocation, .offset = borrowing->offset},
             collected,
             fmt::format("ScratchpadSpec '{}'", scratchpad.unique_id),
             occupied_nodes,

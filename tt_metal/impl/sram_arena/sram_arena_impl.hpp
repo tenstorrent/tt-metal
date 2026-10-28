@@ -11,7 +11,7 @@
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer_distribution_spec.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/experimental/allocation/raw_allocation_properties.hpp>
+#include <tt-metalium/experimental/sram_arena/sram_arena_properties.hpp>
 #include <tt-metalium/experimental/range_lockstep_allocation/buffer.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/mesh_buffer.hpp>
@@ -26,56 +26,55 @@ namespace tt::tt_metal::experimental {
 
 // Represent lockstep allocation across all banks of a common type,
 // with a common starting address and uniform extent.
-struct LockstepAllocation {
+struct LockstepSRAMArena {
     DeviceAddr addr;
-    LockstepAllocationProperties config;
+    LockstepSRAMArenaProperties config;
 
     auto size() const { return config.per_bank_size; }
 };
 
 // // Represent per-node allocation on a subset of available banks,
 // // with potentially different starting addresses and potentially different extent.
-// struct PerNodeAllocation {
+// struct PerNodeSRAMArena {
 //     std::unordered_map<CoreCoord, DeviceAddr> addr_per_node;
 //     // contains size per node.
-//     PerNodeAllocationProperties config;
+//     PerNodeSRAMArenaProperties config;
 // };
 
 // Represent range lockstep allocation on a subset of available banks,
 // with a common starting address and uniform extent.
-struct RangeLockstepAllocation {
+struct RangeLockstepSRAMArena {
     DeviceAddr addr;
-    RangeLockstepAllocationProperties config;
+    RangeLockstepSRAMArenaProperties config;
 
     auto size() const { return config.per_bank_size; }
 
     auto banks_allocated() const { return config.banks_to_be_allocated_on; }
 };
 
-struct RawAllocationImpl {
-    using AllocationLayout = std::variant<LockstepAllocation, /* PerNodeAllocation, */ RangeLockstepAllocation>;
+struct SRAMArenaImpl {
+    using ArenaLayout = std::variant<LockstepSRAMArena, /* PerNodeSRAMArena, */ RangeLockstepSRAMArena>;
 
-    RawAllocationImpl(AllocationLayout detail, distributed::MeshBuffer backing) :
+    SRAMArenaImpl(ArenaLayout detail, distributed::MeshBuffer backing) :
         layout(std::move(detail)), backing(std::move(backing)) {}
 
     // General move-only RAII resource type:
-    RawAllocationImpl() = delete;
-    RawAllocationImpl(const RawAllocationImpl&) = delete;
-    RawAllocationImpl& operator=(const RawAllocationImpl&) = delete;
-    RawAllocationImpl(RawAllocationImpl&&) noexcept = default;
-    RawAllocationImpl& operator=(RawAllocationImpl&&) noexcept = default;
+    SRAMArenaImpl() = delete;
+    SRAMArenaImpl(const SRAMArenaImpl&) = delete;
+    SRAMArenaImpl& operator=(const SRAMArenaImpl&) = delete;
+    SRAMArenaImpl(SRAMArenaImpl&&) noexcept = default;
+    SRAMArenaImpl& operator=(SRAMArenaImpl&&) noexcept = default;
     // Release allocation
-    ~RawAllocationImpl() = default;
+    ~SRAMArenaImpl() = default;
 
     // Return the common base address across the allocated SRAM banks.
     DeviceAddr address() const;
 
     // Return whether the allocation kind, per-bank size, and node set exactly match the given properties.
-    bool matches_properties(const RawAllocationProperties& properties) const;
+    bool matches_properties(const SRAMArenaProperties& properties) const;
 
-    static RawAllocationImpl allocate_on_sram(
-        distributed::MeshDevice& device, LockstepAllocationProperties properties) {
-        TT_FATAL(properties.per_bank_size > 0, "allocate_on_sram requires a non-zero per-bank size");
+    static SRAMArenaImpl allocate(distributed::MeshDevice& device, LockstepSRAMArenaProperties properties) {
+        TT_FATAL(properties.per_bank_size > 0, "SRAMArena::allocate requires a non-zero per-bank size");
 
         auto num_banks = device.allocator()->get_num_banks(BufferType::L1);
         auto total_size = properties.per_bank_size * num_banks;
@@ -92,15 +91,14 @@ struct RawAllocationImpl {
             &device);
 
         auto addr = buffer_ptr->address();
-        return RawAllocationImpl(LockstepAllocation(addr, properties), std::move(*buffer_ptr));
+        return SRAMArenaImpl(LockstepSRAMArena(addr, properties), std::move(*buffer_ptr));
     }
 
-    static RawAllocationImpl allocate_on_sram(
-        distributed::MeshDevice& device, RangeLockstepAllocationProperties properties) {
-        TT_FATAL(properties.per_bank_size > 0, "allocate_on_sram requires a non-zero per-bank size");
+    static SRAMArenaImpl allocate(distributed::MeshDevice& device, RangeLockstepSRAMArenaProperties properties) {
+        TT_FATAL(properties.per_bank_size > 0, "SRAMArena::allocate requires a non-zero per-bank size");
 
         auto num_banks = properties.banks_to_be_allocated_on.num_cores();
-        TT_FATAL(num_banks > 0, "allocate_on_sram requires a non-empty bank set");
+        TT_FATAL(num_banks > 0, "SRAMArena::allocate requires a non-empty bank set");
         const DeviceAddr total_size = DeviceAddr{properties.per_bank_size} * num_banks;
 
         // One page on each bank
@@ -121,14 +119,14 @@ struct RawAllocationImpl {
             &device);
 
         auto addr = buffer_ptr->address();
-        return RawAllocationImpl(RangeLockstepAllocation(addr, std::move(properties)), std::move(*buffer_ptr));
+        return SRAMArenaImpl(RangeLockstepSRAMArena(addr, std::move(properties)), std::move(*buffer_ptr));
     }
 
     // Describes the allocation layout (kind and their respective attributes)
-    AllocationLayout layout;
+    ArenaLayout layout;
     // Token to reserve the memory for us,
     // using MeshBuffer in the intrim,
-    // in the future MeshBuffer should use RawAllocation instead of the other way around.
+    // in the future MeshBuffer should use SRAMArena instead of the other way around.
     //
     // Invariant:
     // - Always allocated

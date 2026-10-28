@@ -30,7 +30,7 @@ namespace tt::tt_metal::experimental {
 //      o scratchpads
 //  - user-managed resources (parameters)
 //      o tensor parameters
-//      o raw allocation parameters (advanced option)
+//      o SRAM arena parameters (advanced option)
 //      o prefetcher pipe parameters (advanced option)
 //
 // It also specifies the device nodes (physical location) where kernels will run,

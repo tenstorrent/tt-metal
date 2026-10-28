@@ -31,19 +31,19 @@ struct ScratchpadSpec {
 struct ScratchpadAdvancedOptions {
     bool allow_instance_multi_binding = false;
 
-    struct RawAllocationBorrowing {
-        // Invariant: Names a RawAllocationParameter declared in
-        // ProgramAdvancedOptions::raw_allocation_parameters.
-        RawAllocationParamName allocation;
+    struct SRAMArenaBorrowing {
+        // Invariant: Names an SRAMArenaParameter declared in
+        // ProgramAdvancedOptions::sram_arena_parameters.
+        SRAMArenaParamName allocation;
 
         // Invariant: Must be a multiple of the L1 alignment.
         uint32_t offset = 0;  // in bytes
     };
 
     // Invariant: When set:
-    // - The supplied RawAllocation must cover every node occupied by the scratchpad.
+    // - The supplied SRAMArena must cover every node occupied by the scratchpad.
     // - borrowed_from->offset + ScratchpadSpec::size_per_node must not exceed
-    //   the RawAllocation's per-node size on any occupied node.
-    std::optional<RawAllocationBorrowing> borrowed_from = std::nullopt;
+    //   the SRAMArena's per-node size on any occupied node.
+    std::optional<SRAMArenaBorrowing> borrowed_from = std::nullopt;
 };
 ```

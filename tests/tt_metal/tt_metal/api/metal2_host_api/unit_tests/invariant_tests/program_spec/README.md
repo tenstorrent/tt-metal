@@ -46,9 +46,9 @@ struct ProgramSpec {
     // - Each name in WorkUnitSpec::kernels names a spec in kernels.
     // - Each DataflowBufferSpec::borrowed_from, when set:
     //   - A TensorParamName names a parameter in tensor_parameters.
-    //   - A RawAllocationParamName names a parameter in advanced_options.raw_allocation_parameters.
+    //   - An SRAMArenaParamName names a parameter in advanced_options.sram_arena_parameters.
     // - Each ScratchpadSpec::advanced_options.borrowed_from, when set, has an allocation name
-    //   that names a parameter in advanced_options.raw_allocation_parameters.
+    //   that names a parameter in advanced_options.sram_arena_parameters.
     //
     // Every declaration is used:
     // - Each kernel is listed by at least one WorkUnitSpec.
