@@ -694,6 +694,7 @@ uint32_t channel_semaphore_count(uint32_t ring_extent) {
 }
 
 tt::tt_metal::TensorSpec forwarding_buffer_spec(const CombineFabric2dParams& args, uint32_t token_size_bytes) {
+    TT_FATAL(args.num_links >= 1 && args.num_links <= 4, "num_links must be between 1 and 4 (got {})", args.num_links);
     const uint32_t page_bytes = token_size_bytes + cmbf2d::FORWARDING_METADATA_SIZE;
     TT_FATAL(
         page_bytes % 64 == 0, "combine_fabric2d: forwarding page {} B must be 64-byte aligned for DRAM", page_bytes);
