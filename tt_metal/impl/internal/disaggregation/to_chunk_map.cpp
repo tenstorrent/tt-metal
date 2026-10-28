@@ -28,6 +28,7 @@ using tt::constants::TILE_WIDTH;
 namespace {
 
 using tt::tt_fabric::FabricNodeId;
+using tt::tt_metal::distributed::MeshCoordinate;
 using tt::tt_metal::distributed::MeshCoordinateRange;
 using tt::tt_metal::distributed::MeshMapperConfig;
 using tt::tt_metal::distributed::MeshShape;
@@ -39,8 +40,8 @@ struct Derived {
     uint32_t seq_axis = 0;
     uint64_t f = 1;                    // per-token feature width
     uint32_t tpc = TILE_WIDTH;         // migration granule == the shard's seq-block size
-    uint32_t sp_dim = 1;              // extent of the seq-shard (CP) mesh axis
-    std::optional<uint32_t> seq_mesh_axis;   // distribution axis that shards the sequence
+    uint32_t sp_dim = 1;               // devices the sequence is sharded over (product of seq_mesh_axes)
+    std::vector<uint32_t> seq_mesh_axes;     // distribution axes that shard the sequence, outermost first
     std::optional<uint32_t> head_mesh_axis;  // distribution axis that shards the head
     std::optional<uint32_t> head_axis;  // tensor axis a non-seq mesh axis shards (GQA head)
     uint32_t n_heads = 1;
@@ -93,8 +94,8 @@ Derived derive(const CacheConfig& config) {
     for (size_t i = 0; i < placements.size(); ++i) {
         if (const auto* s = std::get_if<MeshMapperConfig::Shard>(&placements[i])) {
             if (seq.has_value() && static_cast<uint32_t>(s->dim) == *seq) {
-                d.seq_mesh_axis = static_cast<uint32_t>(i);
-                d.sp_dim = ms[static_cast<int>(i)];
+                d.seq_mesh_axes.push_back(static_cast<uint32_t>(i));
+                d.sp_dim *= ms[static_cast<int>(i)];
             } else {
                 d.head_mesh_axis = static_cast<uint32_t>(i);
                 d.head_axis = static_cast<uint32_t>(s->dim);
@@ -243,6 +244,19 @@ Located locate_one(
     return {bank_id, off, owner, 0};
 }
 
+// Whether distribution coord `t` holds seq shard `seq_shard`: the shard index is row-major over the
+// seq-shard axes, the first (outermost) axis varying slowest.
+bool holds_seq_shard(const Derived& d, const MeshShape& dist, const MeshCoordinate& t, uint32_t seq_shard) {
+    for (auto axis = d.seq_mesh_axes.rbegin(); axis != d.seq_mesh_axes.rend(); ++axis) {
+        const uint32_t extent = dist[static_cast<int>(*axis)];
+        if (t[static_cast<int32_t>(*axis)] != seq_shard % extent) {
+            return false;
+        }
+        seq_shard /= extent;
+    }
+    return true;
+}
+
 // The replica set holding a chunk: every device of the tensor's distribution whose seq/head shard
 // index matches, mapped through the topology's mesh coords to chip ids on the physical mesh.
 std::vector<FabricNodeId> device_group(
@@ -254,7 +268,7 @@ std::vector<FabricNodeId> device_group(
     const MeshShape& dist = topology.distribution_shape();
     std::vector<FabricNodeId> nodes;
     for (const auto& t : MeshCoordinateRange(dist)) {
-        if ((d.seq_mesh_axis.has_value() && t[static_cast<int32_t>(*d.seq_mesh_axis)] != loc.seq_shard) ||
+        if (!holds_seq_shard(d, dist, t, loc.seq_shard) ||
             (d.head_mesh_axis.has_value() && t[static_cast<int32_t>(*d.head_mesh_axis)] != loc.head_shard)) {
             continue;
         }

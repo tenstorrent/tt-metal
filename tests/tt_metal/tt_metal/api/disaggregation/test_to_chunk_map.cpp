@@ -411,5 +411,65 @@ TEST(ToChunkMap, CPU_GqaCyclicMatchesReference) {
     EXPECT_GT(checked, 0u);
 }
 
+// --- Kimi TP-deduped kvpe: the sequence sharded over both mesh axes, one chip per sub-slice ---
+// Chip (r, c) owns [n*chunk + r*chunk/sp + c*chunk/(sp*tp), +chunk/(sp*tp)) of each prefill chunk n, and pages
+// its own tokens from bank 0 (kv_cache_utils.create_kv_chunk_address_table with tp_axis set).
+TEST(ToChunkMap, CPU_SequenceShardedOverBothMeshAxesMatchesTheDedupedWalk) {
+    const uint32_t sp = 2;
+    const uint32_t tp = 4;
+    const uint64_t F = 576;
+    const uint32_t chunk = 1024;
+    const uint32_t tokens_per_device = chunk / (sp * tp);
+    const uint32_t max_seq_len = 2048;
+    const uint32_t per_dev_seq = max_seq_len / (sp * tp);
+    const uint32_t num_slots = 2;
+    const uint64_t base = 0x40000ull;
+    const uint32_t csb = bfp8_chunk_bytes(kTileLocal, F);
+
+    KvLayoutSpec spec{
+        .tensor = make_bfp8_ndshard_spec(Shape{num_slots, max_seq_len, F}, Shape{1, kTileLocal, F}),
+        .temporal = temporal::Dense{},
+        .arch = tt::ARCH::BLACKHOLE};
+    ttsl::SmallVector<MeshMapperConfig::Placement> placements = {
+        MeshMapperConfig::Shard{.dim = 1}, MeshMapperConfig::Shard{.dim = 1}};
+    TensorTopology topology(MeshShape{sp, tp}, placements, row_major_coords(sp, tp));
+
+    GenerationPolicy policy;
+    policy.bank_scheme = BankScheme::Natural;
+    policy.bank_order = BankOrder::Identity;
+    policy.k_chunk_size = KChunkSize{kTileLocal};
+    policy.device_chunk_size = DeviceChunkSize{tokens_per_device};
+
+    CacheConfig config{.spec = spec, .topology = topology, .policy = policy, .base_addr = base};
+    MapGeometry geom{.num_layers = 1, .num_slots = num_slots, .max_seq_len = max_seq_len, .position_step = kTileLocal};
+
+    auto table = to_chunk_map({config}, tt::tt_fabric::MeshId{0}, MeshShape{sp, tp}, geom);
+
+    uint32_t checked = 0;
+    for (uint32_t r = 0; r < sp; ++r) {
+        for (uint32_t c = 0; c < tp; ++c) {
+            uint32_t page = 0;
+            for (uint32_t slot = 0; slot < num_slots; ++slot) {
+                for (uint32_t n = 0; n < max_seq_len / chunk; ++n) {
+                    const uint32_t start = n * chunk + r * (chunk / sp) + c * tokens_per_device;
+                    for (uint32_t pos = start; pos < start + tokens_per_device; pos += kTileLocal, ++page) {
+                        const KvCacheLocation loc = table.lookup(0, pos, slot, 0u);
+                        EXPECT_EQ(addr_channel(loc.noc_addr), page % kNumBanks)
+                            << "r=" << r << " c=" << c << " pos=" << pos;
+                        EXPECT_EQ(addr_local(loc.noc_addr), base + (page / kNumBanks) * csb)
+                            << "r=" << r << " c=" << c << " pos=" << pos;
+                        const auto& grp = table.get_device_group(loc.device_group_index);
+                        ASSERT_EQ(grp.fabric_node_ids.size(), 1u);
+                        EXPECT_EQ(grp.fabric_node_ids[0].chip_id, r * tp + c);
+                        ++checked;
+                    }
+                }
+            }
+            EXPECT_EQ(page, num_slots * per_dev_seq / kTileLocal);
+        }
+    }
+    EXPECT_EQ(checked, num_slots * max_seq_len / kTileLocal);
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::internal::disaggregation
