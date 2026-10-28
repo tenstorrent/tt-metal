@@ -6,6 +6,7 @@
 table rendering). No device / ttnn dependency, so these run in a plain CPU job."""
 
 import json
+import os
 
 import pytest
 
@@ -95,6 +96,26 @@ def test_emit_perf_metrics_writes_json_and_summary(monkeypatch, tmp_path, capsys
     summary = (tmp_path / "perf" / "run_a.md").read_text()
     assert "median_ms" in summary and "samples_ms" not in summary
     assert "Layer perf" in capsys.readouterr().out
+
+
+def test_emit_perf_metrics_record_cannot_override_name_or_kind(monkeypatch, tmp_path):
+    # scaling_summary.py skips kind="test_perf"; a record must not be able to opt back in.
+    monkeypatch.setenv("PREFILL_SUMMARIES", str(tmp_path))
+    path = psu.emit_perf_metrics("run_a", "Layer perf", {"name": "other", "kind": "disagg", "median_ms": 1.5})
+
+    rec = json.loads(path.read_text())
+    assert (rec["name"], rec["kind"]) == ("run_a", "test_perf")
+
+
+def test_summaries_root_without_passwd_entry(monkeypatch):
+    # Containers can run as a uid with no passwd entry and no USER/LOGNAME; getuser() then raises.
+    monkeypatch.delenv("PREFILL_SUMMARIES", raising=False)
+
+    def no_user():
+        raise KeyError("getpwuid(): uid not found")
+
+    monkeypatch.setattr(psu.getpass, "getuser", no_user)
+    assert psu.summaries_root().name == f"prefill_summaries_{os.getuid()}"
 
 
 def test_emit_perf_metrics_non_primary_is_noop(monkeypatch, tmp_path):

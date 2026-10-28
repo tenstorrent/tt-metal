@@ -380,7 +380,7 @@ class PerfGateTableTests(unittest.TestCase):
         },
     }
 
-    def gate(self, model, throughput, power="14kw"):
+    def gate(self, model, throughput, power="14kw", extra_args=(), env=None):
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
         root = Path(temporary.name)
@@ -390,10 +390,12 @@ class PerfGateTableTests(unittest.TestCase):
         perf_json.write_text(json.dumps({"chunk_index": index, "throughput_tok_s": throughput}))
         result = subprocess.run(
             [sys.executable, str(HARNESS.with_name("perf_gate.py")), str(perf_json)]
-            + ["--table", str(root / "table.json"), "--model", model, "--config", "sc1", "--power", power],
+            + ["--table", str(root / "table.json"), "--model", model, "--config", "sc1"]
+            + (["--power", power] if power else [])
+            + list(extra_args),
             capture_output=True,
             text=True,
-            env={**os.environ, "PREFILL_SUMMARIES": str(root / "summaries")},
+            env={**os.environ, "PREFILL_SUMMARIES": str(root / "summaries"), **(env or {})},
         )
         verdicts = root / "summaries" / "perf" / "run_sc1_gate.md"
         return result, verdicts.read_text() if verdicts.exists() else ""
@@ -433,9 +435,36 @@ class PerfGateTableTests(unittest.TestCase):
 
     def test_baselined_leg_on_unbaselined_power_class_fails(self):
         # An sc1 perf leg baselined on 14kw only must not pass ungated on an 8kw host.
-        result, _ = self.gate("multi", {"@5k": 20000, "@55k": 10000}, power="8kw")
+        result, verdicts = self.gate("multi", {"@5k": 20000, "@55k": 10000}, power="8kw")
         self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("baselined on 14kw only but this host is 8kw", result.stderr)
+        self.assertIn("FAIL: multi sc1 is baselined on 14kw only", verdicts)
+
+    def test_unreadable_power_class_fails_without_blaming_the_runner(self):
+        # The harness falls back to probing locally when the remote probe fails; with no tt-smi the TDP is
+        # unreadable, which says nothing about the host's power class.
+        repo = HARNESS.parents[6]
+        result, verdicts = self.gate(
+            "multi", {"@5k": 20000, "@55k": 10000}, power="", env={"PATH": "", "PYTHONPATH": str(repo)}
+        )
+        self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("power class could not be determined", result.stderr)
+        self.assertNotIn("misrouted", result.stderr)
+        self.assertIn("could not be determined", verdicts)
+
+    def test_expected_tps_gates_the_deepest_probe(self):
+        result, verdicts = self.gate("unknown", {"@5k": 1.0, "@55k": 10000}, extra_args=["--expected-tps", "10000"])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("TPS GATE @55k", result.stdout)
+        self.assertNotIn("TPS GATE @5k", result.stdout)
+        self.assertIn("| @55k | TPS (tok/s) | 10,000 |", verdicts)
+
+    def test_require_without_baseline_reports(self):
+        result, verdicts = self.gate("unknown", {"@5k": 1.0, "@55k": 10000}, extra_args=["--require", "1"])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("TPS: 10,000 tok/s @55k", result.stdout)
+        self.assertIn("reporting, not gating", result.stdout)
+        self.assertEqual(verdicts, "")
 
     def test_unbaselined_leg_is_not_gated(self):
         result, _ = self.gate("unknown", {"@5k": 1.0, "@55k": 1.0}, power="8kw")

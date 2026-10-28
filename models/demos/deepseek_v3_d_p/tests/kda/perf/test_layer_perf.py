@@ -406,12 +406,25 @@ def test_synthetic_kimi_k3_perf(
         "device_perf_margin_pct": _DEVICE_PERF_MARGIN * 100.0,
     }
     print("KDA_SYNTHETIC_PERF=" + json.dumps(result, sort_keys=True))
-    emit_perf_metrics(f"kimi_k3_kda_layer_{layout}", f"Kimi-K3 KDA layer perf ({layout})", result)
+    tp_wrapped = layout != "SP8xTP4" or tp_axis_is_wrapped(mesh_device)
+    gated = not report_only and _ACTUAL_START_OVERRIDE is None and tp_wrapped
+    if device_reference_ms is not None:
+        gated_ms, gated_reference_ms, gated_margin = median_device_ms, device_reference_ms, _DEVICE_PERF_MARGIN
+    else:
+        gated_ms, gated_reference_ms, gated_margin = median_wall_ms, reference_ms, _PERF_MARGIN
+    within_band = (
+        abs(gated_ms - gated_reference_ms) <= gated_reference_ms * gated_margin if gated_reference_ms else None
+    )
+    emit_perf_metrics(
+        f"kimi_k3_kda_layer_{layout}",
+        f"Kimi-K3 KDA layer perf ({layout})",
+        {**result, "gated": gated, "within_band": within_band if gated else None},
+    )
     if report_only:
         return
     if _ACTUAL_START_OVERRIDE is not None:
         pytest.skip(f"KDA_PERF_ACTUAL_START={_ACTUAL_START_OVERRIDE} overrides the gated start; not gating")
-    if layout == "SP8xTP4" and not tp_axis_is_wrapped(mesh_device):
+    if not tp_wrapped:
         pytest.skip(
             f"TP axis not wrapped: measured {median_wall_ms:.3f} ms on Linear TP; "
             "the Galaxy reference assumes the TP ring"

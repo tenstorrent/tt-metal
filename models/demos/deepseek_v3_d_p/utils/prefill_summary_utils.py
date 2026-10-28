@@ -22,7 +22,14 @@ from loguru import logger
 def summaries_root() -> Path:
     """Root for all prefill CI summaries. A shared fixed dir is owned by whoever creates it first and
     raises PermissionError for everyone else, so the default is per-user."""
-    return Path(os.getenv("PREFILL_SUMMARIES", f"/tmp/prefill_summaries_{getpass.getuser()}"))
+    root = os.getenv("PREFILL_SUMMARIES")
+    if root:
+        return Path(root)
+    try:
+        user = getpass.getuser()
+    except Exception:  # a container uid with no passwd entry and no USER/LOGNAME
+        user = str(os.getuid())
+    return Path(f"/tmp/prefill_summaries_{user}")
 
 
 def summary_dir(kind: str) -> Path:
@@ -80,7 +87,7 @@ def emit_perf_metrics(run_name: str, title: str, record: dict) -> Path | None:
     or None on non-primary ranks (nothing written)."""
     if not is_primary_rank():
         return None
-    record = {"name": run_name, "kind": "test_perf", **record}
+    record = {**record, "name": run_name, "kind": "test_perf"}
     path = summary_dir("perf_json") / f"{run_name}.json"
     path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
     logger.info(f"perf metrics -> {path}")

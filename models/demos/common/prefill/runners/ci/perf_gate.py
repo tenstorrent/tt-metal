@@ -23,19 +23,26 @@ def fail(msg):
 
 
 def power_class():
-    from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import get_tdp_limit_max, is_high_power
-
-    cls = "14kw" if is_high_power() else "8kw"
+    """"14kw", "8kw", or "unknown" when tt-smi cannot report the TDP (no tt-smi here, or it timed out):
+    an unreadable TDP is not evidence of a low-power host."""
     try:
+        from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import get_tdp_limit_max
+
         tdp = get_tdp_limit_max()
     except Exception as e:
         tdp = f"unreadable ({type(e).__name__})"
+    cls = "unknown" if not isinstance(tdp, int) else "14kw" if tdp >= 130 else "8kw"
     print(f"perf baseline: TDP_LIMIT_MAX={tdp} -> {cls} (14kw needs >= 130 W)", file=sys.stderr)
     return cls
 
 
+class GateError(Exception):
+    """The leg is baselined but cannot be gated on this host."""
+
+
 def lookup(table, model, config, cls):
-    """[(probe label, {metric: (expected, margin)})] for this model/config/power class, or None.
+    """[(probe label, {metric: (expected, margin)})] for this model/config/power class, or None when the
+    leg has no baseline. Raises GateError when it has one but not for this host's power class.
 
     An entry either names one "probe" (the deepest) with its metrics flat under the power class, or keys
     the power class by probe label to gate every probe. A per-entry "margin" {label: {metric: margin}}
@@ -44,15 +51,19 @@ def lookup(table, model, config, cls):
     if entry is None:
         return None
     cls = cls or power_class()
+    classes = ", ".join(sorted(k for k in entry if k in ("8kw", "14kw")))
+    if cls == "unknown":
+        raise GateError(
+            f"{model} {config} is baselined on {classes} but this host's power class could not be determined "
+            "(TDP unreadable: tt-smi missing or timed out)"
+        )
     if cls not in entry:
-        # The leg is baselined, just not for this host's power class: it ran on the wrong pool (an sc1 perf
-        # leg on an 8kw host), so fail rather than pass ungated.
-        classes = sorted(k for k in entry if k in ("8kw", "14kw"))
-        fail(
-            f"PERF GATE FAIL: {model} {config} is baselined on {', '.join(classes)} only but this host is {cls}; "
+        # Baselined, just not for this power class: the leg ran on the wrong pool (an sc1 perf leg on an
+        # 8kw host), so fail rather than pass ungated.
+        raise GateError(
+            f"{model} {config} is baselined on {classes} only but this host is {cls}; "
             "the runner is misrouted or mislabeled"
         )
-        return []
     by_probe = {entry["probe"]: entry[cls]} if "probe" in entry else entry[cls]
     margins = entry.get("margin", {})
     print(f"perf baseline: {model} {config} on {cls}: {by_probe}", file=sys.stderr)
@@ -121,9 +132,13 @@ def main():
         baselines = [(None, {"throughput_tok_s": (float(args.expected_tps), float(args.margin or 0.15))})]
     elif args.table and os.path.isfile(args.table):
         with open(args.table) as f:
-            baselines = lookup(json.load(f), args.model, args.config, args.power)
-    if baselines == []:
-        return 1
+            table = json.load(f)
+        try:
+            baselines = lookup(table, args.model, args.config, args.power)
+        except GateError as e:
+            fail(f"PERF GATE FAIL: {e}")
+            publish_verdicts(args.perf_json, [["-", "-", "-", "-", f"FAIL: {e}"]])
+            return 1
     if baselines is None and args.require != "1":
         return 0
 
