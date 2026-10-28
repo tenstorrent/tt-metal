@@ -294,8 +294,10 @@ class TtKairos:
             compute_kernel_config=self.p.hifi4(),
             program_config=bmm_config(self.device, Sq, DK, Sk, fp32),
         )  # R1-2b: full grid
-        # R1-5a: the mask add fused into the softmax (bf16 mask, fp32 scores)
-        s = ttnn.scale_mask_softmax(s, None, mask, numeric_stable=True, compute_kernel_config=self.p.hifi4())
+        if Sq == Sk == D_PAD:  # decoder self-attention: a per-row causal mask, which the fused softmax cannot take
+            s = ttnn.softmax(ttnn.add(s, mask), dim=-1, numeric_stable=True, compute_kernel_config=self.p.hifi4())
+        else:  # R1-5a: a key mask (one row, broadcast) fused into the softmax (bf16 mask, fp32 scores)
+            s = ttnn.scale_mask_softmax(s, None, mask, numeric_stable=True, compute_kernel_config=self.p.hifi4())
         o = ttnn.matmul(
             ttnn.typecast(s, ttnn.bfloat16),
             v,
