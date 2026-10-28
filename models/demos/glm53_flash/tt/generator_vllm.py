@@ -490,12 +490,16 @@ class GLM53SpecEngine:
             pad_token_id=self.pad_token_id,
         )
         # the persistent per-length inputs (no allocation under live traces), refreshed in place for this chunk
+        probe = lambda what: logger.info(f"GLM53 vLLM spec fill probe ({what}): {self.dram_allocated()} B/bank")
+        probe("before")
         ids_dev, mask = self._fill_buffers(plan.t_pad)
         _spec_refresh(mesh, plan.next_ids, ids_dev, 3 if mesh.rows > 1 else None)
+        probe("after the fill buffers + ids refresh")
         h = self.model.head.collapse(streams)  # this row's slab [1,1,T_loc,H] fp32
         hidden = self.model.head.norm(h)  # bf16: the LM-head input of every prompt row
         if h is not streams:
             ttnn.deallocate(h)
+        probe("after collapse + norm (hidden live)")
         if plan.masked:
             # one exact 0/1 matmul (HiFi4, fp32 accumulation) + where: the rows past seq_len become 0 whatever they
             # held (NaN included), the real rows are copied bit for bit (``TtMoE._mask_pad_rows``); the matmul's
@@ -506,9 +510,12 @@ class GLM53SpecEngine:
             for t in (full, hidden):
                 ttnn.deallocate(t)
             hidden = clean
+        probe("after the mask path (hidden live)")
         out = self.mtp.prefill_cache(ids_dev, hidden, user=user, seq_len=plan.seq_len, start=plan.start)
+        probe("after mtp.prefill_cache (out + hidden live)")
         for t in (out, hidden):
             ttnn.deallocate(t)
+        probe("after the frees")
 
     def warmup_prefill_fill(self, lengths: Sequence[int]) -> None:
         """Run the prompt fill once at every padded chunk length the served prefill can produce (``vllm_spec.
@@ -1643,6 +1650,7 @@ class GLM53FlashForCausalLM:
                 self._free(out[1])
             chunk_ids = ids[s0 - plan.start : e - plan.start]
             out = self.model.prefill(chunk_ids, user=user, start=s0)
+            self._spec_alloc_check(f"the eager chunk [{s0}, {e})'s main-model prefill")
             if self.spec is not None:
                 # every chunk fills the drafter's rows [s0, e): the last row takes the chunk's greedy chunk-end token
                 # (the prompt's first generated token on the last chunk; on an intermediate chunk the model's own
