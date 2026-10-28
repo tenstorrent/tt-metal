@@ -764,3 +764,8 @@ Open for the owner: dlukic / node access; push; the in-RAM engram slowdown in th
   tag ENG, ~60-70 min, results /scratch/dnijemcevic/posprof/results/ENG*). Then: publish the profile page; set P.6's
   chunk_wall_ms bar to the ENG position-0 wall; orchestrator --until P.6 (accept on a clean win); release FIX.9 -> P.4 /
   P.5 -> index query fp4. 4-bit KV (FIX.8) set aside (owner 19:45).
+- 22:00 OWNER (order): finish the resident profile + page -> 4-bit KV integration (merge origin/dnijemcevic/model_bringup_bfp4kv
+  @ 9697878dfb0 "READY FOR GALAXY": CKV_FORMAT default bfp4_rows, 320 B rows, ttnn.bringup.ckv_bfp4 + sparse_sdpa ROW_BFP4,
+  F223; 2x2 rung `last` ladder + profile pass; ttnn rebuild needed; FIX.8 released as the full-size gate) -> P.6 (bar
+  from the post-FIX.8 wall) -> FIX.9 -> P.4 / P.5 -> index query fp4. Do not touch the tree until the profile series
+  ends (each position is a fresh process loading the code).
