@@ -1110,10 +1110,6 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
         "the fix is #52126). The Float16 cells' one lane in the gap below, x = +-13.3, "
         "is named in _KNOWN_NONFINITE_LANES, so those cells stay gated"
     ),
-    (MathOperation.I1, None, None, None, None): (
-        "saturates at +-1.16e37 where i1 overflows fp32, half the format: the input is "
-        "clamped at 88.5 (#52174, under #52178)"
-    ),
     (MathOperation.Lgamma, None, None, None, None): (
         "no defect: the driver runs calculate_lgamma_stirling alone, which answers "
         "lgamma(1 - x) below 0.5 (the reflection correction is the next stage, "
@@ -1141,6 +1137,16 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
 # Acknowledgements that hold on one architecture's table only, read beside the ones
 # above for the session's MEASURED_ARCH.
 _UNMEASURABLE_CELLS_ACKNOWLEDGED_ON = {
+    ChipArchitecture.WORMHOLE: {
+        (MathOperation.I1, None, None, None, None): (
+            "the Wormhole table still records the kernel that clamped its input at "
+            "+-88.5 and saturated at +-1.16e37 where i1 overflows fp32, half the "
+            "format. The clamp now sits at i1's own overflow point, +-92, so every "
+            "clamped lane overflows to +-inf as the golden does; the Blackhole table was "
+            "re-emitted on it and gates every I1 cell. A Wormhole re-emit of I1 retires "
+            "this entry"
+        ),
+    },
     ChipArchitecture.BLACKHOLE: {
         (
             MathOperation.Reciprocal,
@@ -1198,7 +1204,6 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
     ): 2,
     (MathOperation.Expm1Cw, None, None, None, None): 15,
     (MathOperation.I0, None, None, None, None): 10,
-    (MathOperation.I1, None, None, None, None): 10,
     (MathOperation.Lgamma, None, None, None, None): 1,
     (MathOperation.Polygamma, None, None, None, None): 11,
     (MathOperation.Rpow, None, None, None, None): 10,
@@ -1207,11 +1212,13 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
 # The same pins where another architecture's table parks a different number of cells
 # under a wildcard acknowledgement. On Blackhole: no fp16-in-Dest cell is swept
 # (ulp_sweep.fp16_dest_unusable), which drops the Exp/ExpWithBase/Expm1Cw/Polygamma
-# Float16 cells; I1 parks the same ten cells as on Wormhole, but its in-range figures
-# differ with the approximation mode there, so each parked cell is one row per
-# `approx`; and Polygamma also parks five cells on its pole at 0 (see its
-# acknowledgement).
+# Float16 cells; and Polygamma also parks five cells on its pole at 0 (see its
+# acknowledgement). On Wormhole: I1's ten cells, until its table is re-emitted on the
+# +-92 clamp (see its acknowledgement).
 _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS_ON = {
+    ChipArchitecture.WORMHOLE: {
+        (MathOperation.I1, None, None, None, None): 10,
+    },
     ChipArchitecture.BLACKHOLE: {
         (
             MathOperation.Exp,
@@ -1242,7 +1249,6 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS_ON = {
             None,
         ): 1,
         (MathOperation.Expm1Cw, None, None, None, None): 13,
-        (MathOperation.I1, None, None, None, None): 20,
         (MathOperation.Polygamma, None, None, None, None): 12,
     },
 }
