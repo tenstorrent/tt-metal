@@ -34,6 +34,9 @@ IN0_BLOCK_W = {
 }
 
 
+ACTIVATIONS = {"silu": ttnn.UnaryOpType.SILU, "sigmoid": ttnn.UnaryOpType.SIGMOID}
+
+
 def mm_config(device, role, precision, M, K, N, act=None):
     """The 1D (in1-mcast) program config of a (M, K) x (K, N) matmul over the whole grid, rows split across cores.
     None (the auto config) when N is not a multiple of 4 tiles or the rows do not fill the grid."""
@@ -57,7 +60,7 @@ def mm_config(device, role, precision, M, K, N, act=None):
         per_core_M=per_core_M,
         per_core_N=Nt,
         fuse_batch=True,
-        fused_activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU) if act == "silu" else None,
+        fused_activation=ttnn.UnaryWithParam(ACTIVATIONS[act]) if act else None,
         mcast_in0=False,
     )
 

@@ -127,8 +127,7 @@ class FlowStateTT:
         if not keep_x:
             ttnn.deallocate(x)
             x = None
-        g = self._linear(y, w["gate_w"], "gate", rows, bias=w["gate_b"])
-        g = ttnn.sigmoid(g)
+        g = self._linear(y, w["gate_w"], "gate", rows, bias=w["gate_b"], act="sigmoid")  # R1-2: sigmoid fused
         y = ttnn.multiply(g, y)
         y = ttnn.add(y, ttnn.multiply(u, w["D"]))
         return y, u, x
