@@ -11,6 +11,9 @@
    dataset, in the same order), one /v1/rerank request per query, ``--concurrency``
    in flight. Reports server logits vs the HF fp32 scores in ``--eval-set``, nDCG@10,
    request latency and throughput.
+
+Also works against tt-media-server (``MODEL=llama-nemotron-rerank-1b-v2``): pass
+``--api-key`` (its bearer token) and ``--model`` (the request's ``model`` field).
 """
 
 import argparse
@@ -55,9 +58,15 @@ def miracl_requests(n_queries, k):
     return out
 
 
+HEADERS = {}
+MODEL = None
+
+
 async def post(session, url, body):
+    if MODEL:
+        body = {"model": MODEL, **body}
     t = time.perf_counter()
-    async with session.post(url, json=body) as r:
+    async with session.post(url, json=body, headers=HEADERS) as r:
         r.raise_for_status()
         js = await r.json()
     return js, (time.perf_counter() - t) * 1e3
@@ -114,7 +123,8 @@ async def main_async(args):
                 line += f" | vs HF fp32: |err| mean {e.mean():.3f} max {e.max():.3f} pearson {torch.corrcoef(torch.stack([tt, ref]))[0, 1]:.5f}"
         print(line)
         async with s.get(base + "/metrics") as r:
-            print("server metrics", await r.json())
+            if r.content_type == "application/json":  # demo/serve.py; tt-media-server serves Prometheus text
+                print("server metrics", await r.json())
 
 
 def main():
@@ -124,7 +134,14 @@ def main():
     ap.add_argument("--queries", type=int, default=40)
     ap.add_argument("--k", type=int, default=25)
     ap.add_argument("--concurrency", type=int, default=4)
-    asyncio.run(main_async(ap.parse_args()))
+    ap.add_argument("--api-key", default=None, help="bearer token (tt-media-server's API_KEY)")
+    ap.add_argument("--model", default=None, help="the request's model field (tt-media-server requires it)")
+    args = ap.parse_args()
+    global MODEL
+    MODEL = args.model
+    if args.api_key:
+        HEADERS["Authorization"] = f"Bearer {args.api_key}"
+    asyncio.run(main_async(args))
 
 
 if __name__ == "__main__":
