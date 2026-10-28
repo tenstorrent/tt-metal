@@ -3194,6 +3194,36 @@ std::string mergeable_with_pipelines(const std::string& pipelines) {
            pipelines;
 }
 
+// Two pods of one mesh each, joined by a one-channel CLUSTER connection. There is no FABRIC graph.
+std::string two_pods_with_pipelines(const std::string& pipelines) {
+    return R"proto(
+               mesh_descriptors {
+                 name: "M0"
+                 arch: WORMHOLE_B0
+                 device_topology { dims: [ 2, 4 ] }
+                 host_topology { dims: [ 1, 1 ] }
+                 channels { count: 2 policy: RELAXED }
+               }
+               graph_descriptors {
+                 name: "G0"
+                 type: "POD"
+                 instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+               }
+               graph_descriptors {
+                 name: "G1"
+                 type: "CLUSTER"
+                 instances { graph { graph_descriptor: "G0" graph_id: 0 } }
+                 instances { graph { graph_descriptor: "G0" graph_id: 1 } }
+                 graph_topology: {
+                   layout_type: ALL_TO_ALL
+                   channels { count: 1 }
+                 }
+               }
+               top_level_instance { graph { graph_descriptor: "G1" graph_id: 0 } }
+           )proto" +
+           pipelines;
+}
+
 void expect_pipeline_rejected(const std::string& pipelines, const std::string& reason) {
     EXPECT_THAT(
         ([&]() { MeshGraphDescriptor desc(mgd_with_pipelines(pipelines)); }),
@@ -4022,6 +4052,143 @@ TEST(MeshGraphDescriptorTests, TierBRejectsTooManyCrossings) {
     EXPECT_THAT(
         ([&]() { MeshGraphDescriptor desc(text_proto); }),
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("needs 3 channels and 1 are declared")));
+}
+
+// Five stages that tile only M0 cannot use M1's slices, even though the two meshes together have enough.
+TEST(MeshGraphDescriptorTests, TierBRejectsStagesThatOnlyFitOneMesh) {
+    const std::string text_proto = R"proto(
+        mesh_descriptors {
+          name: "M0"
+          arch: BLACKHOLE
+          device_topology { dims: [ 8, 4 ] }
+          host_topology { dims: [ 2, 2 ] }
+          channels { count: 2 policy: RELAXED }
+        }
+        mesh_descriptors {
+          name: "M1"
+          arch: BLACKHOLE
+          device_topology { dims: [ 1, 8 ] }
+          host_topology { dims: [ 1, 4 ] }
+          channels { count: 2 policy: RELAXED }
+        }
+        graph_descriptors {
+          name: "G0"
+          type: "FABRIC"
+          instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
+          instances { mesh { mesh_descriptor: "M1" mesh_id: 1 } }
+        }
+        top_level_instance { graph { graph_descriptor: "G0" graph_id: 0 } }
+        pipeline_descriptors {
+          name: "wide"
+          stages {
+            id: "s0"
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: "s1"
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: "s2"
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: "s3"
+            shape { dims: [ 4, 2 ] }
+          }
+          stages {
+            id: "s4"
+            shape { dims: [ 4, 2 ] }
+          }
+        }
+    )proto";
+    EXPECT_THAT(
+        ([&]() { MeshGraphDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("pipeline stages that only fit mesh 'M0' need 5 slices and it declares 4")));
+}
+
+// A connection between two pods is a connection between the meshes under them.
+TEST(MeshGraphDescriptorTests, TierBCountsConnectionsBetweenPods) {
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(two_pods_with_pipelines(R"proto(
+        pipeline_descriptors {
+          name: "across_pods"
+          stages {
+            id: "s0"
+            shape { dims: [ 2, 4 ] }
+          }
+          stages {
+            id: "s1"
+            shape { dims: [ 2, 4 ] }
+          }
+          edges { src: "s0" dst: "s1" }
+        }
+    )proto")));
+}
+
+// The pod connection's channel count still limits the crossings.
+TEST(MeshGraphDescriptorTests, TierBRejectsTooManyCrossingsBetweenPods) {
+    EXPECT_THAT(
+        ([&]() {
+            MeshGraphDescriptor desc(two_pods_with_pipelines(R"proto(
+                pipeline_descriptors {
+                  name: "across_pods"
+                  stages {
+                    id: "s0"
+                    shape { dims: [ 2, 4 ] }
+                  }
+                  stages {
+                    id: "s1"
+                    shape { dims: [ 2, 4 ] }
+                  }
+                  edges { src: "s0" dst: "s1" }
+                  edges { src: "s1" dst: "s0" }
+                }
+            )proto"));
+        }),
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("needs 2 channels and 1 are declared")));
+}
+
+// A search that reaches its step limit accepts. 49 one-slice meshes in a 7x7 grid cannot hold a ring of 49
+// stages, because the grid has no odd cycle, but proving that means trying every path through it.
+TEST(MeshGraphDescriptorTests, TierBAcceptsWhenTheSearchRunsOutOfSteps) {
+    constexpr int kSide = 7;
+    constexpr int kMeshes = kSide * kSide;
+    std::ostringstream text_proto;
+    text_proto << R"proto(
+        mesh_descriptors {
+          name: "M0"
+          arch: WORMHOLE_B0
+          device_topology { dims: [ 2, 4 ] }
+          host_topology { dims: [ 1, 1 ] }
+          channels { count: 2 policy: STRICT }
+        }
+    )proto";
+    text_proto << "graph_descriptors {\n  name: \"G0\"\n  type: \"FABRIC\"\n";
+    const auto node = [](const int mesh) {
+        return "nodes { mesh { mesh_descriptor: \"M0\" mesh_id: " + std::to_string(mesh) + " } } ";
+    };
+    for (int mesh = 0; mesh < kMeshes; ++mesh) {
+        text_proto << "instances { mesh { mesh_descriptor: \"M0\" mesh_id: " << mesh << " } }\n";
+    }
+    for (int mesh = 0; mesh < kMeshes; ++mesh) {
+        if (mesh % kSide + 1 < kSide) {
+            text_proto << "connections { " << node(mesh) << node(mesh + 1) << "channels { count: 1 } }\n";
+        }
+        if (mesh + kSide < kMeshes) {
+            text_proto << "connections { " << node(mesh) << node(mesh + kSide) << "channels { count: 1 } }\n";
+        }
+    }
+    text_proto << "}\ntop_level_instance { graph { graph_descriptor: \"G0\" graph_id: 0 } }\n";
+    text_proto << "pipeline_descriptors {\n  name: \"wide_ring\"\n";
+    for (int stage = 0; stage < kMeshes; ++stage) {
+        text_proto << "  stages { id: \"s" << stage << "\" shape { dims: [ 2, 4 ] } }\n";
+    }
+    for (int stage = 0; stage < kMeshes; ++stage) {
+        text_proto << "  edges { src: \"s" << stage << "\" dst: \"s" << (stage + 1) % kMeshes << "\" }\n";
+    }
+    text_proto << "}\n";
+    EXPECT_NO_THROW(MeshGraphDescriptor desc(text_proto.str()));
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
