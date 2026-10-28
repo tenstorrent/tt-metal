@@ -275,16 +275,17 @@ class AudioAttention(LightweightModule):
         ttnn.deallocate(q)
         ttnn.deallocate(k_ctx)
 
-        logits = ttnn.add(ac, bd, memory_config=dram)
+        # tanh((ac + bd) / cap) * cap: the softcap runs as post-activations of the add (fp32 SFPU,
+        # same ops in the same order as separate multiply / tanh / multiply ops)
+        cap = cfg.logit_cap
+        softcap = [
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, 1.0 / cap),
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.TANH, 0.0),  # 0: accurate (fast_and_approximate_mode=False)
+            ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, cap),
+        ]
+        capped = ttnn.add(ac, bd, activations=softcap, memory_config=dram)
         ttnn.deallocate(ac)
         ttnn.deallocate(bd)
-        cap = cfg.logit_cap
-        t = ttnn.multiply(logits, 1.0 / cap, memory_config=dram)
-        ttnn.deallocate(logits)
-        th = ttnn.tanh(t, fast_and_approximate_mode=False, memory_config=dram)
-        ttnn.deallocate(t)
-        capped = ttnn.multiply(th, cap, memory_config=dram)
-        ttnn.deallocate(th)
         capped = ttnn.reshape(capped, (B, H, S, CTX))
         masked = ttnn.add(capped, mask, memory_config=dram)
         ttnn.deallocate(capped)
