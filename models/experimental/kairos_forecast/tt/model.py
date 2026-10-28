@@ -297,7 +297,7 @@ class TtKairos:
         )  # R1-2b: full grid
         s = ttnn.softmax(ttnn.add(s, mask), dim=-1, numeric_stable=True, compute_kernel_config=self.p.hifi4())
         o = ttnn.matmul(
-            ttnn.typecast(s, ttnn.bfloat16),
+            s,  # R2-6: fp32 probabilities straight in, no bf16 typecast (precision change)
             v,
             compute_kernel_config=self.p.mm(),
             program_config=bmm_config(self.device, Sq, Sk, DK, fp32),
