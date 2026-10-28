@@ -416,7 +416,7 @@ def test_fold_rejects_unsupported_row_major_dtype(device, dtype, expect_error):
     tt_input = ttnn.from_torch(
         torch.zeros((1, 16, 16, 32), dtype=torch.int32), dtype=dtype, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
     )
-    with expect_error(RuntimeError, "row-major input must be BFLOAT16, FLOAT32 or UINT16"):
+    with expect_error(RuntimeError, r"row-major output dtype \(.*\) must match the input dtype"):
         ttnn.fold(tt_input, 2, 2)
 
 
