@@ -38,8 +38,9 @@ Env:
   PACKED_REFERENCE   1 -> run each chunk alone on the plain path (see above)            [default 0]
   PACKED_PROFILE     1 -> zone-profile one extra forward of the last composition (run under
                      `python3 -m tracy -v -r -p`; root `profiled_chunk`; a packed forward re-enters the per-op
-                     zones once per chunk under `attn/gather{i}` / `attn/chunk{i}` (README_profiling.md); the
-                     profiler is drained every PACKED_PROFILE_READ_EVERY [16] forwards outside it)   [default 0]
+                     zones once per chunk under `attn/gather{i}` / `attn/chunk{i}` (README_profiling.md), which
+                     are FINE zones, so M3_PROFILE_LEVEL defaults to 3 here; the profiler is drained every
+                     PACKED_PROFILE_READ_EVERY [16] forwards outside it)                            [default 0]
   PACKED_STAGES      1, 2 or 4 (sub-mesh (8/S, 4)); PACKED_STAGE picks which one      [default 2 / 0]
   PACKED_TOKENS      metadata.json with token_ids, tiled to length                       [required]
   M3_FABRIC, M3_CCL_TOPOLOGY, EXPERT_DTYPE, HF_MODEL as for profile_prefill.py; TT_CACHE_PATH as in README.md.
@@ -55,11 +56,13 @@ import time
 PROFILE = os.getenv("PACKED_PROFILE", "0") == "1"
 if PROFILE:
     os.environ.setdefault("M3_PROFILE_ZONES", "1")
+    os.environ.setdefault("M3_PROFILE_LEVEL", "3")  # the per-chunk zones are FINE
     os.environ.setdefault("TT_METAL_DEVICE_PROFILER", "1")
 
 import ttnn
 from models.demos.minimax_m3.tests.perf.profile_prefill import _raise_nproc_limit, build_runtime
 from models.demos.minimax_m3.tt.ccl import L1_SMALL_SIZE
+from models.demos.minimax_m3.tt.moe import shared_overlap
 from models.demos.minimax_m3.tt.prefill_chunk import PrefillChunk
 from models.demos.minimax_m3.utils.fabric_env import fabric_config_from_env
 
@@ -124,6 +127,8 @@ def main():
     iters = int(os.getenv("PACKED_ITERS", "5"))
     stages = int(os.getenv("PACKED_STAGES", "2"))
     stage = int(os.getenv("PACKED_STAGE", "0"))
+    assert stages in (1, 2, 4), f"PACKED_STAGES must be 1, 2 or 4 (got {stages})"
+    assert 0 <= stage < stages, f"PACKED_STAGE={stage} out of range for {stages} stages"
     dump = os.getenv("PACKED_DUMP_KV")
     fill_mode = os.getenv("PACKED_FILL", "real")
     assert fill_mode in ("real", "none"), fill_mode
@@ -150,7 +155,6 @@ def main():
 
     ttnn.set_fabric_config(fabric_config_from_env())
     galaxy = ttnn.open_mesh_device(ttnn.MeshShape(8, 4), l1_small_size=L1_SMALL_SIZE)
-    runtime = None
     try:
         mesh = galaxy.create_submeshes(ttnn.MeshShape(8 // stages, 4))[stage] if stages > 1 else galaxy
         t0 = time.perf_counter()
@@ -266,9 +270,9 @@ def main():
             emit(kind="dumped", dir=dump, slots=n_slots)
         emit(kind="done")
     finally:
-        # A sub-device manager left registered at close can segfault the teardown.
-        if runtime is not None:
-            runtime.release_sub_device_managers()
+        # Every registered sub-device manager, whether or not the build finished: one left at close can segfault
+        # the teardown.
+        shared_overlap.release_all()
         for sub in galaxy.get_submeshes():
             ttnn.close_mesh_device(sub)
         ttnn.close_mesh_device(galaxy)
