@@ -117,11 +117,13 @@ class AudioLightConv1d(LightweightModule):
         ctx = block_context(h)  # [B, nb, 64, D]
         # both operands batched, so the block matmul config spreads the blocks over the grid
         sel = ttnn.repeat(self.selection, ttnn.Shape([B, nb, 1, 1]))
+        # bf16 output: every output is one bf16 h value times 1.0, so bf16 holds it exactly (E5c; was
+        # fp32, same values, twice the bytes for the slices below)
         shifted = ttnn.matmul(
             sel,
             ctx,
-            dtype=ttnn.float32,
-            program_config=block_bmm_config(h.device(), taps * ATTN_BLOCK, CTX, D, per_core_M=2),
+            dtype=ttnn.bfloat16,
+            program_config=block_bmm_config(h.device(), taps * ATTN_BLOCK, CTX, D, per_core_M=1),
             compute_kernel_config=self.compute_kernel_config,
             memory_config=dram,
         )  # [B, nb, taps*32, D]
@@ -131,7 +133,7 @@ class AudioLightConv1d(LightweightModule):
         acc = ttnn.reshape(acc, (B, nb, ATTN_BLOCK, D))
         for k in range(taps):
             sk = ttnn.slice(shifted, (0, 0, k * ATTN_BLOCK, 0), (B, nb, (k + 1) * ATTN_BLOCK, D))
-            term = ttnn.multiply(sk, self.taps[k], memory_config=dram)
+            term = ttnn.multiply(sk, self.taps[k], dtype=ttnn.float32, memory_config=dram)
             ttnn.deallocate(sk)
             nxt = ttnn.add(acc, term, memory_config=dram)
             ttnn.deallocate(term)
