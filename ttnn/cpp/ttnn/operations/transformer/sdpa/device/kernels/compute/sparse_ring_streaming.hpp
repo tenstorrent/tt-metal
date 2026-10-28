@@ -1363,14 +1363,13 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
  * (exactly full, write pointer held at the base), and are neither pushed nor popped until the last ring iteration,
  * where normalize_row_streaming consumes the n_res slots from the front in order and the unused slots are popped.
  *
- * Steps are per piece: per streamed piece, one step per sub-group of up to kGroupCap resident chunks of the
- * head that keep a block of it, each chunk with its own run table of kept 64-token blocks (its Q rows against those
- * blocks' K^T columns / V rows, addressed in place in the staged entry). A piece streamed only for another chain
- * member is drained. The reader forces block 0 of every shard kept for every chunk, so the first step of a head
- * on piece 0 creates every slot's state before any other piece.
- * Dropped blocks are pooled by the column bias of the pooled chunks that follow the local pieces on the first
- * active ring iteration: one full-width step per resident chunk of the head, each with its own bias row (pushed by
- * the reader in Q-chunk order after the pooled K/V entry).
+ * Steps are per piece: per streamed piece, one step per group of the head's resident chunks that keep a block of it,
+ * grouped until their compact scores fill kQkCap tiles; each chunk has its own run table of kept 64-token blocks (its Q
+ * rows against those blocks' K^T columns / V rows, addressed in place in the staged entry). A piece streamed only for
+ * another chain member is drained. The reader forces block 0 of every shard kept for every chunk, so the first step of
+ * a head on piece 0 creates every slot's state before any other piece. Dropped blocks are pooled by the column bias of
+ * the pooled chunks that follow the local pieces on the first active ring iteration: one full-width step per resident
+ * chunk of the head, each with its own bias row (pushed by the reader in Q-chunk order after the pooled K/V entry).
  *
  * The Q chunks a core owns can span two heads (a contiguous flat split); the reader streams the heads' pieces
  * interleaved per k, in head order, and this function mirrors that order. On the last ring iteration the normalized
@@ -1469,8 +1468,8 @@ void sdpa_ring_resident(
     // scratch holds max(qk_tiles, slots x Sq_chunk_t x kBlockTiles); the max/alpha scratches and the max/sum slot
     // CBs hold Sq_chunk_t per slot; the out slot CB holds Sq_chunk_t x vDHt per slot. The step pushes and pops the
     // scratches at full capacity and the slot CBs are filled at full capacity, so the counts must match exactly.
-    // A step covers one piece for a sub-group of up to kGroupCap resident chunks at the full piece width
-    // (the factory's kSolResidentGroup).
+    // The score scratch holds kGroupCap full-width chunks (the factory's kSolResidentGroup); a step packs as many
+    // compact members as fit in kQkCap.
     constexpr uint32_t kGroupCap = sol_resident_slots < 4 ? sol_resident_slots : 4;
     constexpr uint32_t kQkTiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t kQkCap =

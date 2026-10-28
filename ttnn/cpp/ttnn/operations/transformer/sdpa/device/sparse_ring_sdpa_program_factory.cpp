@@ -909,8 +909,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const uint32_t cb_identity_scale_in = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
     const uint32_t cb_col_identity = allocate_tile_cb(scale_tiles, scalar_tile_size, scalar_df);
 
-    // One step covers one piece for a sub-group of up to kSolResidentGroup resident Q blocks, each with its own kept
-    // blocks; the scores of every member use the full piece width as their row stride, so the scratch holds
+    // One step covers one piece for a group of resident Q blocks, each with its own kept blocks; member g's scores are
+    // stored compactly (row stride = its kept width), and members are grouped until the scores fill
     // kSolResidentGroup x Sq_chunk_t rows of Sk_chunk_t tiles (at least qk_tiles). The new-max / alpha scratches
     // hold one tile row per resident Q block. The compute kernel derives the same capacity (sdpa_ring_resident,
     // kGroupCap) and ASSERTs the page count.
