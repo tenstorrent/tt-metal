@@ -52,6 +52,8 @@ def matmul_qkv_rope(
     out_dtype=ttnn.bfloat16,
     memory_config=ttnn.DRAM_MEMORY_CONFIG,
     rope_fidelity=None,
+    defines=(),
+    fp32_acc=True,
 ):
     """x ``[1, 1, B * S, K]``, w ``[K, (n_heads + 2 * n_kv_heads) * head_dim]`` (Q, K, V column blocks)
     -> q ``[B, n_heads, S, head_dim]``, k and v ``[B, n_kv_heads, S, head_dim]``; RoPE applied to q, k.
@@ -79,7 +81,7 @@ def matmul_qkv_rope(
     g = mg.Grid(gx, gy, M, K, N, mb, kb, nb)
     if nb % 2 or g.N_per_core % 2:
         raise ValueError(f"N block {nb} and per-core N {g.N_per_core} must be even (whole heads)")
-    if mb % sh or nb % sw or sh * sw > 4:
+    if mb % sh or nb % sw or sh * sw > (4 if fp32_acc else 8):
         raise ValueError(f"bad subblock {sh}x{sw} for block {mb}x{nb}")
 
     q = ttnn.allocate_tensor_on_device(
@@ -149,11 +151,11 @@ def matmul_qkv_rope(
             core_ranges=all_cores,
             compile_time_args=compute_ct,
             runtime_args=compute_rt,
-            defines=[("ROPE_FIDELITY", rope_fidelity)] if rope_fidelity else [],
+            defines=list(defines) + ([("ROPE_FIDELITY", rope_fidelity)] if rope_fidelity else []),
             config=ttnn.ComputeConfigDescriptor(
                 math_fidelity=fidelity,
                 math_approx_mode=False,
-                fp32_dest_acc_en=True,
+                fp32_dest_acc_en=fp32_acc,
                 dst_full_sync_en=False,
             ),
         )

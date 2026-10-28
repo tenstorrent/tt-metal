@@ -25,6 +25,9 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
+#ifdef EMBED
+#include "api/compute/tilize.h"
+#endif
 #ifdef ZONES
 #include "api/debug/kernel_profiler.hpp"
 #endif
@@ -41,6 +44,7 @@ constexpr uint32_t part_cb = tt::CBIndex::c_9;
 constexpr uint32_t gath_cb = tt::CBIndex::c_10;
 constexpr uint32_t inv_cb = tt::CBIndex::c_11;
 constexpr uint32_t one_cb = tt::CBIndex::c_12;
+constexpr uint32_t stage_cb = tt::CBIndex::c_14;
 constexpr uint32_t y_cb = tt::CBIndex::c_17;
 constexpr auto D2B = EltwiseBinaryReuseDestType::DEST_TO_SRCB;
 }  // namespace
@@ -272,6 +276,26 @@ void pass1(uint32_t blk, uint32_t n_real) {
     cb_part.push_back(M_block_tiles);
 }
 
+#ifdef EMBED
+// embed_rmsnorm: tilize block `blk`'s tile-rows of gathered embedding rows (CB 14, row-major, from
+// embed_gather.cpp) into the residual shard, then hand them to pass 1 (the unpacker waits on the push).
+template <uint32_t M_block_tiles, uint32_t res_w>
+void embed_block(uint32_t blk) {
+    CircularBuffer cb_stage(stage_cb), cb_res(res_cb);
+    reconfig_data_format_srca(stage_cb);
+    pack_reconfig_data_format(res_cb);
+    tilize_init(stage_cb, res_w, res_cb);
+    for (uint32_t m = 0; m < M_block_tiles; ++m) {
+        cb_stage.wait_front(res_w);
+        tilize_block(stage_cb, res_w, res_cb, 0, m * res_w);  // relative to the shard's write pointer
+        cb_stage.pop_front(res_w);
+    }
+    tilize_uninit(stage_cb, res_cb);
+    cb_res.push_back(M_block_tiles * res_w);
+    cb_res.wait_front((blk + 1) * M_block_tiles * res_w);
+}
+#endif
+
 // inv = rsqrt(column-sum of the gathered partials + eps) per tile-row; y = h * inv * gamma, with h
 // read back from the residual shard.
 constexpr uint32_t G = 4;  // tile-rows per pass-2 group (their inverse RMS in one fp32 DST session)
@@ -401,11 +425,18 @@ void kernel_main() {
 #endif
     cb_inv_w.wait_front(1);
     cb_one.wait_front(1);
+#ifdef EMBED
+    cb_res.reserve_back(res_shard_tiles);
+#else
     cb_res.wait_front(res_shard_tiles);
+#endif
 
 #ifdef NORM_ONLY
     // y = rmsnorm(residual) only: block i's first pass, then block i - 1's second pass.
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
+#ifdef EMBED
+        embed_block<M_block_tiles, res_w>(m_block_iter);
+#endif
         pass1<M_block_tiles, N_block_tiles, res_w>(m_block_iter, n_real);
         if (m_block_iter > 0) {
             pass2_begin<M_block_tiles, N_block_tiles>();

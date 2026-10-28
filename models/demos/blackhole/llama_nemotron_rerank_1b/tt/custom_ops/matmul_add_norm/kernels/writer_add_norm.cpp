@@ -152,9 +152,12 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* xchg_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(xchg_sem_addr);
 
-    // The residual shard is resident: hand all of it to the compute once.
+#ifndef EMBED
+    // The residual shard is resident: hand all of it to the compute once (with EMBED the compute
+    // fills it, from embed_gather.cpp's staging, and pushes it itself).
     cb_res.reserve_back(res_shard_tiles);
     cb_res.push_back(res_shard_tiles);
+#endif
 
     in1_valid_semaphore.set(VALID);
 

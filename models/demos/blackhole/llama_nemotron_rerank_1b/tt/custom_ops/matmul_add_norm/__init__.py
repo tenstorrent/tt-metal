@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from .op import (
+    embed_rmsnorm,
     from_resident,
     make_matmul_add_norm_constants,
     matmul_add_norm,
@@ -12,6 +13,7 @@ from .op import (
 )
 
 __all__ = [
+    "embed_rmsnorm",
     "from_resident",
     "make_matmul_add_norm_constants",
     "matmul_add_norm",

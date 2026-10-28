@@ -33,7 +33,12 @@ from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops._common impor
 _HERE = os.path.dirname(os.path.abspath(__file__))
 WRITER_KERNEL = os.path.join(_HERE, "kernels", "writer_add_norm.cpp")
 COMPUTE_KERNEL = os.path.join(_HERE, "kernels", "compute_add_norm.cpp")
+GATHER_KERNEL = os.path.join(_HERE, "kernels", "embed_gather.cpp")
 TILE = 32
+# embed_rmsnorm: whole embedding rows in flight per core (read transaction ids 1-8), and the
+# semaphore of its start handshake (after matmul_semaphores' six and the exchange's).
+EMBED_ROW_SLOTS = 8
+EMBED_SEM = 7
 
 
 def make_matmul_add_norm_constants(gamma: torch.Tensor, device):
@@ -110,6 +115,7 @@ def matmul_add_norm(
     transposed=True,
     norm_only_shape=None,
     acc_cb_fp32=None,
+    embed=None,
 ):
     """x ``[1, 1, M, K]``, w ``[K, N]``, residual: the resident stream from ``to_resident`` for [M, N]
     (updated in place to residual + x @ w). Returns y = rmsnorm(residual) * gamma ``[1, 1, M, N]``.
@@ -120,7 +126,8 @@ def matmul_add_norm(
     to 8 tiles instead of 4). ``y_fidelity`` (e.g. "HiFi2") sets the fidelity of the y multiplies
     (default HiFi4). ``skip_gamma``: y = rmsnorm(h) only (gamma folded into the next matmul).
     ``norm_only_shape`` = (rows, width) with x = w = None: no matmul, y = rmsnorm(residual) (use
-    ``resident_rmsnorm``)."""
+    ``resident_rmsnorm``). ``embed`` = (token ids [B, S] uint32 row-major, embedding table [vocab, width]
+    bf16 row-major), norm-only: the residual is first filled with the tokens' embeddings (``embed_rmsnorm``)."""
     gamma_tiles, inv_w_tile, one_tile = consts
     norm_only = norm_only_shape is not None
     device = residual.device()
@@ -187,12 +194,23 @@ def matmul_add_norm(
         ]
         + ([] if skip_gamma else [mg.cb(5, nb, ttnn.bfloat16, all_cores)])
     )
-    semaphores = mg.matmul_semaphores(all_cores, extra=1)
+    if embed is not None:
+        # 13: this core's token ids (32 per tile-row); 14: the whole shard row-major (the gathered
+        # embedding rows); 15: whole embedding rows in flight (EMBED_ROW_SLOTS); 16: per-tile-row arrival counters.
+        cbs += [
+            mg.cb(13, g.M_per_core, ttnn.uint32, all_cores, page_size=TILE * 4),
+            mg.cb(14, res_shard_tiles, ttnn.bfloat16, all_cores),
+            mg.cb(15, EMBED_ROW_SLOTS, ttnn.bfloat16, all_cores, page_size=N * TILE * 2),
+            mg.cb(16, g.M_per_core, ttnn.uint32, all_cores, page_size=16),
+        ]
+    semaphores = mg.matmul_semaphores(all_cores, extra=2 if embed is not None else 1)
     xchg_sem = 6
 
     defines = list(defines) + ([("Y_FIDELITY", y_fidelity)] if y_fidelity else [])
     defines += [("NO_GAMMA", "1")] if skip_gamma else []
     defines += [("NORM_ONLY", "1")] if norm_only else []
+    if embed is not None:
+        defines += [("EMBED", "1")]
     w_slot = gamma_tiles if norm_only else w  # the writer's in1 accessor slot (unused without a matmul)
     zoned = any(d == "ZONES" for d, _ in defines)
     in0_kernel = os.path.join(_HERE, "kernels", "dm_in0_zoned.cpp") if zoned else mg.IN0_KERNEL
@@ -207,7 +225,8 @@ def matmul_add_norm(
     eps_bits = struct.unpack("<I", struct.pack("<f", eps))[0]
     compute_ct = [g.K_blocks, mb, kb, nb, g.M_blocks_per_core, sh, sw, eps_bits, g.N_per_core, res_shard_tiles]
 
-    send_rt, recv_rt, compute_rt = [], [], []
+    send_rt, recv_rt, compute_rt, gather_rt = [], [], [], []
+    seq = int(embed[0].padded_shape[-1]) if embed is not None else 0
     addrs = [
         w_slot.buffer_address(),
         gamma_tiles.buffer_address(),
@@ -234,6 +253,10 @@ def matmul_add_norm(
             rt += mg.in1_mcast_args(device, g, yy)
             (send_rt if mi == 0 else recv_rt).append(((xx, yy), rt + peers))
             compute_rt.append(((xx, yy), [m0, m1, n0, n1, min(n1, N) - n0]))
+            if embed is not None:
+                gather_rt.append(
+                    ((xx, yy), [embed[0].buffer_address(), embed[1].buffer_address(), seq, m0, m1, ni] + peers)
+                )
 
     def dm(ct, rt, core_set):
         return ttnn.KernelDescriptor(
@@ -267,9 +290,22 @@ def matmul_add_norm(
             ),
         )
     )
+    if embed is not None:
+        kernels.append(
+            ttnn.KernelDescriptor(
+                kernel_source=GATHER_KERNEL,
+                source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
+                core_ranges=all_cores,
+                compile_time_args=[M, N, nb, g.n_n, EMBED_ROW_SLOTS, EMBED_SEM] + mg.accessor_args(*embed),
+                runtime_args=gather_rt,
+                defines=[],
+                config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=mg.IN0_NOC),
+                compiler_include_paths=[mg.KERNEL_ROOT],
+            )
+        )
     program = ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=semaphores)
     ins = (
-        [residual, gamma_tiles, inv_w_tile, one_tile]
+        [residual, gamma_tiles, inv_w_tile, one_tile] + list(embed or ())
         if norm_only
         else [x, w, residual, gamma_tiles, inv_w_tile, one_tile]
     )
@@ -295,3 +331,23 @@ def resident_rmsnorm(residual, consts, *, rows, width, eps, block_m=4, grid=None
         norm_only_shape=(rows, width),
         **kwargs,
     )
+
+
+def embed_rmsnorm(tokens, table, consts, *, rows, width, eps, block_m=4, grid=None, **kwargs):
+    """tokens ``[B, S]`` (uint32, row-major), table ``[vocab, width]`` (bf16, row-major) -> (residual, y):
+    the L1-resident residual stream holding the tokens' embeddings, and y = rmsnorm(residual) * gamma.
+    Replaces embedding + to_resident + resident_rmsnorm: each core gathers its own rows and columns
+    of the embedding straight into its residual shard."""
+    device = tokens.device()
+    gxy = grid or device.compute_with_storage_grid_size()
+    residual = ttnn.allocate_tensor_on_device(
+        ttnn.Shape([1, 1, rows, width]),
+        ttnn.bfloat16,
+        ttnn.TILE_LAYOUT,
+        device,
+        residual_memory_config(rows, width, gxy, kwargs.get("transposed", True)),
+    )
+    y = resident_rmsnorm(
+        residual, consts, rows=rows, width=width, eps=eps, block_m=block_m, grid=gxy, embed=(tokens, table), **kwargs
+    )
+    return residual, y

@@ -59,8 +59,13 @@ def main():
     ap.add_argument("--xdtype", default="bfloat8_b")
     ap.add_argument("--no-time", action="store_true")
     ap.add_argument("--rope-fidelity", default=None)
+    ap.add_argument(
+        "--bf16-acc", action="store_true", help="bf16 DST (8-tile subblocks); the L1 accumulator stays fp32"
+    )
+    ap.add_argument("--defines", default="", help="comma-separated kernel defines (NAME or NAME=VAL)")
     args = ap.parse_args()
     block = tuple(int(v) for v in args.block.split(","))
+    defines = [tuple(d.split("=", 1)) if "=" in d else (d, "1") for d in args.defines.split(",") if d]
     B, S = args.batch, args.seq
     M = B * S
 
@@ -77,7 +82,16 @@ def main():
 
     def new():
         return matmul_qkv_rope(
-            tx, tw, table, batch=B, n_heads=H, n_kv_heads=KV, block=block, rope_fidelity=args.rope_fidelity
+            tx,
+            tw,
+            table,
+            batch=B,
+            n_heads=H,
+            n_kv_heads=KV,
+            block=block,
+            rope_fidelity=args.rope_fidelity,
+            defines=defines,
+            fp32_acc=not args.bf16_acc,
         )
 
     q, k, v = new()

@@ -94,7 +94,11 @@ template <uint32_t M_block_tiles, uint32_t N_block_tiles>
 void rope_block(uint32_t n_tile, uint32_t rope_tiles) {
     CircularBuffer cb_out(out_cb);
     pack_reconfig_data_format(out_cb);
+#ifdef NO_ROPE
+    const bool rotate = false;  // profiling: the matmul with a plain copy-out
+#else
     const bool rotate = n_tile < rope_tiles;
+#endif
     if (rotate) {
         reconfig_data_format(acc_cb, cs_cb);
         mul_hifi_init(acc_cb, cs_cb);

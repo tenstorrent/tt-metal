@@ -191,6 +191,10 @@ class RerankConfig:
     # Fused path: residual stream resident in L1, sharded like matmul_add_norm's grid; WO and FF2 run
     # as matmul_add_norm (matmul + residual add + RMSNorm in one program). Supersedes residual_l1.
     resident_residual: bool = True
+    # Resident path: embed_rmsnorm gathers each core's slice of the token embeddings straight into its
+    # residual shard (instead of ttnn.embedding to DRAM + to_resident + resident_rmsnorm).
+    # 32x512: 645 -> 304 us for the three (perf_tools/probe_embed_rmsnorm.py).
+    embed_gather: bool = True
     # Fold every RMSNorm's gamma into the rows of the matmul that consumes it (QKV, FF1+FF3, score head);
     # the norms then skip their gamma multiply. MIRACL Pearson batch 32 0.99963, batch 8 0.99967.
     fold_norm_gamma: bool = True
