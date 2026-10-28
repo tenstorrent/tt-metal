@@ -103,11 +103,11 @@ def use_int32_twos_complement(
     This matches how ttnn feeds the device: Int32 reduce operands sit in DEST as two's-complement.
 
     Both the column and the row MAX/MIN paths expect two's-complement operands. On Wormhole they now
-    load with plain ``INT32`` (bits preserved) and correct the ordering in software via a signed
-    compare-and-swap, so INT32_MIN is handled over the full range (see ckernel_sfpu_reduce.h). On
-    Blackhole they still cast two's-complement -> sign-magnitude explicitly around the sign-magnitude
-    ``SFPSWAP(VEC_MIN_MAX)`` comparator (tt-isa ``SFPSWAP.md``). Either way they expect two's-complement
-    operands. Row MAX must agree with the column path because a multi-axis reduce chains
+    load with plain ``INT32`` (bits preserved) and map each operand into the order of the
+    sign-magnitude ``SFPSWAP(VEC_MIN_MAX)`` comparator (``int32_to_swap_order``), so INT32_MIN is
+    handled over the full range (see ckernel_sfpu_reduce.h). On Blackhole they convert between the
+    two encodings around that comparator (tt-isa ``SFPSWAP.md``). Either way they expect
+    two's-complement operands. Row MAX must agree with the column path because a multi-axis reduce chains
     column-then-row over the same DEST (the column path leaves two's-complement there), so the row
     path consumes and produces two's-complement just like the column path.
 
@@ -702,8 +702,9 @@ class SignBoundaryRow:
     others: tuple[int, ...]
 
 
-# Rows whose MAX and MIN are decided by -1 vs 0, -2 vs -1 or INT32_MIN. Blackhole's row MAX/MIN
-# remaps negative Int32 values so that SFPSWAP orders them correctly (see int32_to_swap_order); that
+# Rows whose MAX and MIN are decided by -1 vs 0, -2 vs -1 or INT32_MIN. The Int32 MAX/MIN reduces (both
+# arches' rows, and Wormhole's columns) remap negative values so that SFPSWAP orders them correctly (see
+# int32_to_swap_order); that
 # turns -1 into -0, which only works if -0 is ranked just below 0. Random data almost never tests it.
 SIGN_BOUNDARY_ROWS = [
     SignBoundaryRow(fill=-1, others=(0,)),  # max 0, min -1
