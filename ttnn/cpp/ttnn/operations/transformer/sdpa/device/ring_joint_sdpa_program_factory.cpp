@@ -1467,22 +1467,13 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // set it for the whole process): the store-and-forward chain is ~10 cores deep and the sparse op's time per
     // chunk visit measures as reader time PLUS compute time rather than the larger of the two, which a 2-deep
     // buffer cannot decouple across that many hops. Costs Sk_chunk_t * (DHt + vDHt) tiles of L1 per extra page.
-    // M11 (resident): the chain runs the counting protocol (ChainLink::grant / forward_credited: credits and
-    // arrivals as monotonic counters, several transfers in flight per link) over a 3-deep K/V CB, so the upstream
-    // can write two pieces ahead of the piece this core computes. TT_SOL_CHAIN_CREDITS=0 restores the M8
-    // one-outstanding handshake for an A/B (then the default depth is 2 again); TT_SOL_KV_PAGES still overrides.
-    // D1 (sparse_attn_design_2026-10-23.md 4.2): the resident stream delivers each head chain's pieces by multicast
-    // from one producer per group instead of forwarding them core to core (see sol_res_mcast in the reader). It
-    // replaces the M11 credits; TT_SOL_RES_MCAST=0 falls back to the chain for an A/B. Same 3-deep K/V CB.
-    const bool sol_res_mcast =
-        sol_resident && build_kv_chains && use_head_chain && sol_chain_len == 0 &&
-        !(std::getenv("TT_SOL_RES_MCAST") && std::string(std::getenv("TT_SOL_RES_MCAST")) == "0");
-    const bool sol_chain_credits =
-        sol_resident && build_kv_chains && !sol_res_mcast &&
-        !(std::getenv("TT_SOL_CHAIN_CREDITS") && std::string(std::getenv("TT_SOL_CHAIN_CREDITS")) == "0");
+    // Resident mode delivers each head chain's pieces by multicast from one producer per group instead of
+    // forwarding them core to core (see sol_res_mcast in the reader), over a 3-deep K/V CB: the producer can send the
+    // next piece while every member computes on the previous ones.
+    const bool sol_res_mcast = sol_resident && build_kv_chains && use_head_chain && sol_chain_len == 0;
     const uint32_t kv_cb_pages = [&]() -> uint32_t {
         const char* env = std::getenv("TT_SOL_KV_PAGES");
-        const uint32_t default_pages = (sol_chain_credits || sol_res_mcast) ? 3u : 2u;
+        const uint32_t default_pages = sol_res_mcast ? 3u : 2u;
         const uint32_t pages = env ? static_cast<uint32_t>(std::atoi(env)) : default_pages;
         return (pages >= 2 && pages <= 8 && !v_shares_k_buffer) ? pages : default_pages;
     }();
@@ -2250,22 +2241,16 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     const uint32_t cb_sol_plan =
         sol_enabled ? allocate_cb((sol_compact ? 128 : 64) + sol_mask_row_bytes, 1, tt::DataFormat::UInt32)
                     : inactive_cb;
-    // U3: resident mode puts every chunk's plan record in one page per ring iteration, after the header (16 words)
-    // and the shard slice the reader scans (sol_nb_pad words), so the reader no longer waits for compute to pop a
-    // page per chunk at each iteration boundary. TT_SOL_RES_PLAN1=0 restores a page per chunk. The records fit in
-    // the scratch the whole-row reads already need. And no phase-alignment dummies (TT_SOL_RES_DUMMIES=1 keeps them):
-    // every chain / group member pushes the same sequence, so the pointers stay in step without them.
-    const auto env_is = [](const char* name, const char* value) {
-        const char* v = std::getenv(name);
-        return v && std::string(v) == value;
-    };
-    // A short row (one shard: the slice is the whole row) leaves no room for the records: a page per chunk then.
+    // Resident mode puts every chunk's plan record in one page per ring iteration, after the header (16 words) and
+    // the shard slice the reader scans (sol_nb_pad words), so the reader does not wait for compute to pop a page per
+    // chunk at each iteration boundary. The records fit in the scratch the whole-row reads already need; a short row
+    // (one shard: the slice is the whole row) leaves no room for them, and then each chunk gets its own page. And no
+    // phase-alignment dummies: every chain / group member pushes the same sequence, so the pointers stay in step.
     const uint32_t sol_res_rec_words = sol_resident ? tt::div_up(sol_nb, 32u) + 3 : 0;
     const bool sol_res_plan_fits =
         (16 + sol_nb_pad + max_q_per_core * sol_res_rec_words) * sizeof(uint32_t) <= 64 + sol_mask_row_bytes;
-    const uint32_t sol_res_plan_rec_base =
-        (sol_resident && sol_res_plan_fits && !env_is("TT_SOL_RES_PLAN1", "0")) ? 16 + sol_nb_pad : 0;
-    const bool sol_res_no_dummies = sol_resident && !env_is("TT_SOL_RES_DUMMIES", "1");
+    const uint32_t sol_res_plan_rec_base = (sol_resident && sol_res_plan_fits) ? 16 + sol_nb_pad : 0;
+    const bool sol_res_no_dummies = sol_resident;
     // One pooled chunk of bias tiles in flight (bias is read once per pooled chunk, 4 pooled chunks per Q chunk per
     // layer); 2*Sk_chunk_t pushed the static CB region past the L1 buffers at the 10 s / 15 s shapes.
     const uint32_t cb_sol_bias = sol_enabled ? allocate_tile_cb(Sk_chunk_t, mask_tile_size, mask_df) : inactive_cb;
@@ -3398,19 +3383,9 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         {"sol_resident", sol_resident ? 1u : 0u},
         {"sol_resident_slots", sol_resident ? max_q_per_core : 0u},
         {"sol_res_block_words", sol_resident ? tt::div_up(sol_nb, 32u) : 0u},
-        // M11: the resident piece stream's chain protocol (see kv_cb_pages above): 1 = counting credits.
-        {"sol_chain_credits", sol_chain_credits ? 1u : 0u},
-        // D1: resident group delivery by multicast (see sol_res_mcast above).
+        // Resident group delivery by multicast (see sol_res_mcast above).
         {"sol_res_mcast", sol_res_mcast ? 1u : 0u},
-        // Resident members stream every piece holding a full block of the shard instead of reading every member's
-        // mask row per ring iteration for the union (~200 us per iteration in the M9 profile). TT_SOL_MEMBER_UNION=1
-        // restores the union for an A/B.
-        {"sol_res_full_union",
-         (sol_resident &&
-          !(std::getenv("TT_SOL_MEMBER_UNION") && std::string(std::getenv("TT_SOL_MEMBER_UNION")) == "1"))
-             ? 1u
-             : 0u},
-        // U3 resident iteration boundary (see sol_res_plan_rec_base above): the one-page plan's record base word
+        // Resident iteration boundary (see sol_res_plan_rec_base above): the one-page plan's record base word
         // (0 = a page per chunk) and no phase-alignment dummies.
         {"sol_res_plan_rec_base", sol_res_plan_rec_base},
         {"sol_res_no_dummies", sol_res_no_dummies ? 1u : 0u},
@@ -3477,14 +3452,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         reader_kernel.defines.emplace_back("SOL_PACK_DEBUG", "1");
         compute_kernel.defines.emplace_back("SOL_PACK_DEBUG", "1");
     }
-    // DEV ONLY (perf branch). Resident-mode bisection switch: TT_SOL_RES_CHUNK_MAJOR=1 runs one step per resident
-    // chunk in chunk order instead of one step per group of chunks. Same in-place slot state, so a difference
-    // between the two isolates the grouping from the state handling. Not in the program hash: set it for the whole
-    // process.
-    if (sol_resident && std::getenv("TT_SOL_RES_CHUNK_MAJOR") &&
-        std::string(std::getenv("TT_SOL_RES_CHUNK_MAJOR")) == "1") {
-        compute_kernel.defines.emplace_back("SOL_RES_CHUNK_MAJOR", "1");
-    }
     // Resident-mode diagnostic: TT_SOL_DEBUG=1 makes the reader print one line per (core, ring iteration) with the
     // kept / union bits and the number of K/V entries it pushed (select cores and chips with TT_METAL_DPRINT_*).
     // Any mode: also the per-ring-iteration arrival-semaphore trace ("SYNC ...") in the reader.
@@ -3521,19 +3488,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     // binary for it.
     if (sol_resident) {
         compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
-    }
-    // DEV ONLY (perf branch). Resident-step ablation, timing only (results wrong): TT_SOL_ABLATE=qk|exp|pack5|pv|
-    // stats|pack1 skips that stage's instructions in the compact step while every CB, DEST and token operation
-    // stays (compute_streaming.hpp, kAblate*). Not hashed: set it for the whole process.
-    if (sol_resident && std::getenv("TT_SOL_ABLATE")) {
-        std::string knob = std::getenv("TT_SOL_ABLATE");
-        for (auto& ch : knob) {
-            ch = (ch >= 'a' && ch <= 'z') ? static_cast<char>(ch - 'a' + 'A') : ch;
-        }
-        if (!knob.empty()) {
-            compute_kernel.defines.emplace_back("SOL_ABLATE_" + knob, "1");
-            log_warning(tt::LogOp, "RingJoint resident: ablation SOL_ABLATE_{} on (timing only, results wrong)", knob);
-        }
     }
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,

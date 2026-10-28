@@ -610,23 +610,13 @@ void kernel_main() {
     constexpr uint32_t sol_res_block_words = get_named_compile_time_arg_val("sol_res_block_words");
     static_assert(!sol_resident || (sol_chunk_mode && !sol_compact && !sol_pack), "resident mode is a chunk mode");
     static_assert(!sol_resident || sol_res_block_words * 32 >= sol_nb, "resident: block words cover the shard");
-    // M11: the resident piece stream runs the chain on the counting protocol (ChainLink::grant / wait_arrival /
-    // forward_credited): a member grants a credit for every K/V page it can reserve ahead, so with a 3-deep K/V CB
-    // the upstream can have two pieces in flight while this core computes a third. 0 = the M8 one-outstanding
-    // handshake (TT_SOL_CHAIN_CREDITS=0, A/B).
-    constexpr bool sol_chain_credits = get_named_compile_time_arg_val("sol_chain_credits") == 1;
     // D1 (sparse_attn_design_2026-10-23.md 4.2): the resident piece stream replaces the chain with one producer per
     // head group that reads each piece from DRAM and multicasts it to every other member (no forwarding). The head
     // chain's membership and semaphores are reused: sender = the producer's credit count (+1 per consumer per
     // piece), receiver = each consumer's delivered count (set to the running piece count by multicast), valid = the
     // producer's local source word for that set. The group arguments follow the Sol chain members.
     constexpr bool sol_res_mcast = get_named_compile_time_arg_val("sol_res_mcast") == 1;
-    static_assert(!sol_res_mcast || (sol_resident && !sol_chain_credits), "group delivery is the resident stream");
-    // Resident chain / group members stream every piece that holds a full block of the shard instead of the union
-    // of the members' kept pieces. The union read every member's mask row each ring iteration (one DRAM read with
-    // a barrier and a bit scan per chunk, ~200 us per iteration in the M9 profile, while compute idled); at the
-    // densities this path runs, the union is nearly every piece anyway. Compute skips a piece it keeps no block of.
-    constexpr bool sol_res_full_union = get_named_compile_time_arg_val("sol_res_full_union") == 1;
+    static_assert(!sol_res_mcast || sol_resident, "group delivery is the resident stream");
     // Resident iteration boundary (U3). rec_base != 0: one plan page per ring iteration holding every chunk's record
     // from that word on (0 = one page per chunk). no_dummies: no phase-alignment pushes at the end of an iteration;
     // every member of a chain or group pushes the same sequence, so their CB pointers stay in step without them, and
@@ -638,8 +628,8 @@ void kernel_main() {
     constexpr uint32_t cb_k_stage = get_named_compile_time_arg_val("cb_k_stage");
     constexpr uint32_t cb_v_stage = get_named_compile_time_arg_val("cb_v_stage");
     constexpr uint32_t sol_blocks_per_page = get_named_compile_time_arg_val("sol_blocks_per_page");
-    // K/V CB depth in chunks (factory kv_cb_pages, default 2); the end-of-iteration phase alignment and the M11 grant
-    // lookahead use it.
+    // K/V CB depth in chunks (factory kv_cb_pages, default 2); the end-of-iteration phase alignment and the group
+    // delivery's credit lookahead use it.
     constexpr uint32_t kv_cb_pages = get_named_compile_time_arg_val("kv_cb_pages");
     constexpr uint32_t kSolBlockTiles = 2;  // 64-token blocks
     constexpr uint32_t sol_bias_tile_bytes = get_tile_size(cb_sol_bias);
@@ -1574,36 +1564,18 @@ void kernel_main() {
                     uhi |= res_hi[i1];
                     ++i1;
                 }
-                if constexpr (sol_res_full_union) {
-                    if (sol_n_members > 0 && head_cfg.participates && res_nq[i0] == head_cfg.head) {
-                        // Every piece that holds a full block of this shard (block 0 forced, as in row_block_bits):
-                        // a superset of the members' union that needs no mask reads. The same on every member
-                        // (it depends on the shard only), and inside every live piece, so compute agrees.
-                        uint32_t words[kBlockWords];
-                        for (uint32_t w = 0; w < kBlockWords; ++w) {
-                            words[w] = full_bits[w];
-                        }
-                        words[0] |= 1u;
-                        piece_bits(words, ulo, uhi);
+                if (sol_n_members > 0 && head_cfg.participates && res_nq[i0] == head_cfg.head) {
+                    // Chain / group members stream every piece that holds a full block of this shard (block 0
+                    // forced, as in row_block_bits): a superset of the members' union that needs no mask reads (the
+                    // union read every member's row per ring iteration, ~200 us while compute idled, and at these
+                    // densities it is nearly every piece anyway). The same on every member (it depends on the shard
+                    // only) and inside every live piece, so compute agrees; it skips a piece it keeps no block of.
+                    uint32_t words[kBlockWords];
+                    for (uint32_t w = 0; w < kBlockWords; ++w) {
+                        words[w] = full_bits[w];
                     }
-                } else if (sol_n_members > 0 && head_cfg.participates && res_nq[i0] == head_cfg.head) {
-                    SOL_ZONE("RD_RES_UNION");  // the members' mask rows: one DRAM read + bit scan per chunk
-                    for (uint32_t m = 0; m < sol_n_members; ++m) {
-                        const uint32_t m_start = get_arg_val<uint32_t>(sol_members_base + 2 * m);
-                        const uint32_t m_count = get_arg_val<uint32_t>(sol_members_base + 2 * m + 1);
-                        for (uint32_t c = 0; c < m_count; ++c) {
-                            const uint32_t qc = m_start + c;
-                            if (qc >= res_qc[i0] && qc < res_qc[i0] + (i1 - i0)) {
-                                continue;  // this core's own chunks are already in
-                            }
-                            read_shard_slice(res_nq[i0], qc);
-                            uint32_t lo;
-                            uint32_t hi;
-                            row_kept_bits(lo, hi);
-                            ulo |= lo;
-                            uhi |= hi;
-                        }
-                    }
+                    words[0] |= 1u;
+                    piece_bits(words, ulo, uhi);
                 }
                 for (uint32_t i = i0; i < i1; ++i) {
                     seg_ulo[i] = ulo;
@@ -1748,151 +1720,11 @@ void kernel_main() {
                 }
                 KV_chunks_processed_in_iter++;
             };
-            // M11: the counting chain protocol. Grants are issued in the link's transfer order, K(p), V(p),
-            // K(p+1), ..., each as soon as its page can be reserved (pages reserved ahead of their push are
-            // counted per CB in k_ahead / v_ahead; the CB's free count does not see them, so the reserve asks for
-            // ahead + 1 pages). The grant cursor (g_piece, g_phase) never passes the iteration's last piece. Before
-            // waiting for a chunk the stream makes sure its grant has gone out (a blocking reserve if the page is
-            // not free yet); after every push it issues whatever further grants the freed pages allow, so the
-            // upstream's writes of the next pieces overlap this core's compute and forwards. Fetchers grant nothing
-            // and forward on credits; every forward takes the next credit in the same order the downstream
-            // granted it. The page a chunk lands in is the write pointer at its push (pointer lockstep: the upstream
-            // wrote to the same offset in its own CB).
-            // A pushed page this core still has to forward is busy even after compute pops it (an empty piece pops
-            // at once): granting it would let the upstream overwrite the chunk before the forward reads it. The
-            // CB's free count does not see that either. That page is the one just behind the write pointer, so a
-            // grant lands on it exactly when it would be the CB's last page (ahead + 1 == kv_cb_pages); while a
-            // forward is pending (k_fwd_pending / v_fwd_pending, set at the push, cleared once forward_credited()
-            // returns) the lookahead stops one page short.
-            uint32_t n_pieces = 0;
-            uint32_t g_piece = 0;
-            uint32_t g_phase = 0;  // 0: next grant is a K page, 1: a V page
-            uint32_t k_ahead = 0;  // K pages reserved and granted, not yet pushed
-            uint32_t v_ahead = 0;
-            uint32_t k_fwd_pending = 0;  // K pages pushed, not yet forwarded
-            uint32_t v_fwd_pending = 0;
-            const bool chain_member = k_chain.should_receive(head_cfg.head) && v_chain.should_receive(head_cfg.head);
-            const auto try_grant = [&](bool blocking) -> bool {
-                if (g_piece >= n_pieces) {
-                    return false;
-                }
-                if (g_phase == 0) {
-                    CircularBuffer cb_k(cb_k_in);
-                    const uint32_t tiles = k_chunk_tiles * (k_ahead + 1);
-                    if (!blocking &&
-                        (k_ahead + 1 + k_fwd_pending > kv_cb_pages || !cb_k.pages_reservable_at_back(tiles))) {
-                        return false;
-                    }
-                    cb_k.reserve_back(tiles);
-                    ++k_ahead;
-                    k_chain.grant(noc);
-                    g_phase = 1;
-                } else {
-                    CircularBuffer cb_v(cb_v_in);
-                    const uint32_t tiles = v_cb_entry_tiles * (v_ahead + 1);
-                    if (!blocking &&
-                        (v_ahead + 1 + v_fwd_pending > kv_cb_pages || !cb_v.pages_reservable_at_back(tiles))) {
-                        return false;
-                    }
-                    cb_v.reserve_back(tiles);
-                    ++v_ahead;
-                    v_chain.grant(noc);
-                    g_phase = 0;
-                    ++g_piece;
-                }
-                return true;
-            };
-            const auto grant_ahead = [&]() {
-                while (try_grant(false)) {
-                }
-            };
-            const auto stream_piece_credited = [&](uint32_t nb, uint32_t nq, uint32_t k) {
-                const uint32_t nk = nq / q_heads_per_k;
-                const uint32_t nv = nq / q_heads_per_v;
-                const uint32_t kv_batch = indexed_kv_cache ? kv_cache_batch_idx : nb;
-                const uint32_t gathered_kv_batch = indexed_kv_cache ? 0 : nb;
-                const uint32_t src_batch = source_is_local ? kv_batch : gathered_kv_batch;
-                const uint32_t row0 = (source_is_local ? 0 : source_start_tile) + k * Sk_chunk_t;
-                const Slice k_slice(src_batch, nk, row0, row0 + Sk_chunk_t, 0, DHt);
-                const uint32_t k_head = gqa_grouped_kv ? nk : nq;
-                // A chain member receives every piece of its stream (two-head cores are kept off the chains).
-                ASSERT(k_chain.should_receive(k_head) == chain_member && v_chain.should_receive(nv) == chain_member);
-                CircularBuffer cb_k(cb_k_in);
-                if (chain_member) {
-                    if (k_ahead == 0) {
-                        // This piece's K grant has not gone out (its page was not free when the cursor reached it).
-                        ASSERT(g_phase == 0 && k_fwd_pending == 0);
-                        try_grant(true);
-                    }
-                    SOL_ZONE("RD_CHAIN_RX");  // the wait for the upstream write (the credit went out earlier)
-                    k_chain.wait_arrival();
-                } else {
-                    cb_k.reserve_back(k_chunk_tiles);
-                }
-                const uint32_t k_addr = cb_k.get_write_ptr();
-                if (!chain_member) {
-                    SOL_ZONE("RD_FETCH_K");
-                    if (source_is_local) {
-                        fetch_block(local_k_generator, k_slice, end_seq_tile, cb_k_in, k_addr, k_tile_bytes, true);
-                    } else {
-                        fetch_block(gathered_k_generator, k_slice, end_seq_tile, cb_k_in, k_addr, k_tile_bytes, true);
-                    }
-                }
-                // Push before the forward: the forward only reads the page, its NoC write is flushed inside
-                // forward_credited(), and the page is not granted again until that returns (k_fwd_pending). Both
-                // pushes go before either forward: a forward blocks on the downstream's credit, and compute must
-                // not sit on a V that is already in L1 while the reader waits on a slow neighbour.
-                const bool k_forwards = k_chain.should_forward(k_head, 0);
-                const bool v_forwards = v_chain.should_forward(nv, 0);
-                cb_k.push_back(k_chunk_tiles);
-                k_fwd_pending = k_forwards ? 1 : 0;
-                if (chain_member) {
-                    --k_ahead;
-                    grant_ahead();
-                }
-                const Slice v_slice(src_batch, nv, row0, row0 + Sk_chunk_t, v_col_offset_t, v_col_offset_t + vDHt);
-                CircularBuffer cb_v(cb_v_in);
-                if (chain_member) {
-                    if (v_ahead == 0) {
-                        ASSERT(g_phase == 1 && v_fwd_pending == 0);
-                        try_grant(true);
-                    }
-                    v_chain.wait_arrival();
-                } else {
-                    cb_v.reserve_back(v_cb_entry_tiles);
-                }
-                const uint32_t v_addr = cb_v.get_write_ptr();
-                if (!chain_member) {
-                    if (source_is_local) {
-                        fetch_block(local_v_generator, v_slice, end_seq_tile, cb_v_in, v_addr, v_tile_bytes, false);
-                    } else {
-                        fetch_block(gathered_v_generator, v_slice, end_seq_tile, cb_v_in, v_addr, v_tile_bytes, false);
-                    }
-                }
-                cb_v.push_back(v_cb_entry_tiles);
-                v_fwd_pending = v_forwards ? 1 : 0;
-                if (chain_member) {
-                    --v_ahead;
-                    grant_ahead();
-                }
-                if (k_forwards) {
-                    SOL_ZONE("RD_CHAIN_TX");  // the waits for the downstream credits, then the two writes
-                    k_chain.forward_credited(noc, k_addr, k_chunk_tiles, k_tile_bytes);
-                    k_fwd_pending = 0;
-                }
-                if (v_forwards) {
-                    v_chain.forward_credited(noc, v_addr);
-                    v_fwd_pending = 0;
-                }
-                if (chain_member) {
-                    grant_ahead();  // the pages the two forwards just released
-                }
-                KV_chunks_processed_in_iter++;
-            };
+            uint32_t n_pieces = 0;  // pieces streamed this iteration (the first pass counts them)
             // D1: group delivery. Arguments (after the Sol chain members): role (0 = not in a group: reads its own
             // K/V; 1 = producer; 2 = consumer), producer NoC x, y, receiver count, rectangle count, then per
             // rectangle (x_start, y_start, x_end, y_end, cores), producer only. Every member pushes the same page
-            // sequence into cb_k_in / cb_v_in (same pieces, same pooled pages, same phase-alignment dummies), so
+            // sequence into cb_k_in / cb_v_in (same pieces, same pooled pages), so
             // the producer's write pointer for a piece is every consumer's page for it.
             //   consumer: reserve the piece's K and V pages, credit the producer (+1), wait until the delivered
             //     count reaches the piece, push. At most one credit is outstanding (the next piece's), and never
@@ -2026,11 +1858,6 @@ void kernel_main() {
                 // whether another follows in this iteration (the lookahead arms the next page), then the stream.
                 uint32_t j = 0;
                 for (uint32_t pass = 0; pass < 2; ++pass) {
-                    if (pass == 1 && chain_member) {
-                        if constexpr (sol_chain_credits) {
-                            grant_ahead();  // the first pieces' grants, before the first wait
-                        }
-                    }
                     if constexpr (sol_res_mcast) {
                         if (pass == 1 && g_role == 2) {
                             g_grant_ahead();  // the first pieces' credits, before the first wait
@@ -2064,8 +1891,6 @@ void kernel_main() {
                                         } else {
                                             stream_piece(res_nb[i0], res_nq[i0], k, j < n_pieces);
                                         }
-                                    } else if constexpr (sol_chain_credits) {
-                                        stream_piece_credited(res_nb[i0], res_nq[i0], k);
                                     } else {
                                         stream_piece(res_nb[i0], res_nq[i0], k, j < n_pieces);
                                     }

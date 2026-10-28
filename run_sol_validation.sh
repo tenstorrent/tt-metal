@@ -547,6 +547,30 @@ if want trace; then
     done
 fi
 
+# Release acceptance (2026-10-28) for sosborne/sol-attn-cleanup: the perf line's kept changes (M10 exp / P@V interleave,
+# D1 group multicast, the full piece union, the one-page plan without phase-alignment dummies, 256-key resident pieces
+# at 5 s) with the ablation knobs, the M11 credit chain, the A/B switches and the slower one-trip rescale test removed.
+# Rebuild first. Correctness: every resident check vs compact and vs dense, the 5 s parity at 384 and 256 keys, the
+# 1024-row 256-key parity; then traced dense, gather alone, resident tau 1 / 2 / 3. Expected: all pass (PCC >= 0.999);
+# tau 1 ~4.15 ms, tau 2 ~3.4, tau 3 ~3.25, dense ~7.2-7.35.
+if want release; then
+    ok=1
+    run release_check 1800 pytest "$T" -s -k "4x8 and (resident_matches_compact or resident_dense_equivalence)" || ok=0
+    run release_parity 900 pytest "$T" -s -k "4x8 and resident_call_parity and (r4736 or r1024k256)" || ok=0
+    if [ "$ok" != 1 ]; then
+        echo "    release: a correctness run failed; skipping the timings"
+    else
+        run release_trace_dense 900 env SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 \
+            pytest "$B" -s -k "4x8 and nl2 and 768p_5s and dense"
+        run release_trace_agather 900 env SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 \
+            pytest "$B" -s -k "4x8 and nl2 and 768p_5s and agather"
+        for tau in 1.0 2.0 3.0; do
+            run "release_trace_tau${tau}" 900 env SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 SOL_BENCH_MODE=resident \
+                SOL_BENCH_PREFIX=off SOL_TAU=$tau pytest "$B" -s -k "4x8 and nl2 and 768p_5s and not dense and not agather"
+        done
+    fi
+fi
+
 # Production acceptance (2026-10-23) for the clean branch sosborne/sol-attn-q-opt: the resident correctness set
 # (vs compact, vs dense), the 5 s per-call parity, then the traced timings (dense, gather alone, resident at
 # tau 1/2/3). No profile, no untraced bench. Rebuild first (compute kernel + factory changed). Expected: 11/11

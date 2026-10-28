@@ -206,46 +206,6 @@ public:
     void wait_data() const { Semaphore<>(receiver_sem_id_).wait(VALID); }
 
     /**
-     * Counting protocol (Sol resident mode, unicast only): credits and arrivals are monotonic counters, so a link
-     * may have several transfers outstanding instead of one. The receiver grants one credit per chunk page it has
-     * reserved for the upstream (sender_sem on the upstream core, +1 per grant, in the link's transfer order:
-     * K(p), V(p), K(p+1), ...); the sender takes credits in that same order (wait_min on its own running count)
-     * and, once a chunk's write has left the NIU, bumps the receiver's arrival count (receiver_sem, +1, the same
-     * NoC and VC as the data, so it lands after it); the receiver waits for arrival t >= its running count. Both
-     * words start at INVALID (0) at program launch and are never reset within a launch. Every member of a chain
-     * streams the same transfer sequence, so the t-th credit and the t-th arrival are the t-th transfer on both
-     * sides. Nothing here touches the valid semaphore or sets the receiver flag, so the two protocols must not be
-     * mixed on one link within a launch.
-     */
-    void grant(Noc noc) { Semaphore<>(sender_sem_id_).up(noc, signal_target_x_, signal_target_y_, 1); }
-
-    void wait_arrival() {
-        ++arrived_;
-        Semaphore<>(receiver_sem_id_).wait_min(arrived_);
-    }
-
-    void forward_credited(Noc noc, uint32_t cb_addr) { forward_credited(noc, cb_addr, chunk_tiles_, tile_bytes_); }
-
-    void forward_credited(Noc noc, uint32_t cb_addr, uint32_t num_tiles, uint32_t tile_bytes) {
-        // Unicast only (a multicast link would need one credit per receiver). Not a static_assert: the reader is
-        // not a template, so a discarded resident branch is still checked in a multicast build.
-        if constexpr (mcast_enabled) {
-            ASSERT(false);
-        } else {
-            ++credits_taken_;
-            Semaphore<>(sender_sem_id_).wait_min(credits_taken_);
-            noc.async_write(
-                CoreLocalMem<uint32_t>(cb_addr),
-                UnicastEndpoint{},
-                num_tiles * tile_bytes,
-                {.offset_bytes = 0},
-                {.noc_x = next_core_x_, .noc_y = next_core_y_, .addr = cb_addr});
-            noc.async_writes_flushed();
-            Semaphore<>(receiver_sem_id_).up(noc, next_core_x_, next_core_y_, 1);
-        }
-    }
-
-    /**
      * Forward data to downstream link(s) using default chunk size.
      * In mcast mode: wait for all receivers, then broadcast.
      * In unicast mode: wait for next receiver, then point-to-point transfer.
@@ -323,8 +283,4 @@ private:
     uint32_t mcast_num_dests_;
     uint32_t chunk_tiles_;
     uint32_t tile_bytes_;
-
-    // Counting protocol: credits this sender has taken, arrivals this receiver has waited for.
-    uint32_t credits_taken_ = 0;
-    uint32_t arrived_ = 0;
 };

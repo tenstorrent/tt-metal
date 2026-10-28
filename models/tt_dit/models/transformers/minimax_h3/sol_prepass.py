@@ -40,27 +40,6 @@ import torch
 
 import ttnn
 
-
-def dump_block_mask(host: torch.Tensor, geo, sp_axis: int, mesh_shape: tuple, tau: float) -> None:
-    """SOL_DUMP_MASK_DIR (dev): the composed block mask of the first call per tau, for offline work-split studies
-    (d2_assign_sim.py, numpy only). Batch dim = SP device, head dim = the TP devices' heads concatenated."""
-    dump_dir = os.environ.get("SOL_DUMP_MASK_DIR")
-    if not dump_dir:
-        return
-    path = os.path.join(dump_dir, f"mask_tau{tau:g}_r{geo.rows}.npz")
-    if os.path.exists(path):
-        return
-    import numpy as np
-
-    os.makedirs(dump_dir, exist_ok=True)
-    np.savez_compressed(
-        path,
-        mask=(host != 0).to(torch.uint8).numpy(),
-        meta=np.array([geo.shards, geo.rows, geo.nb, geo.nb_pad, geo.nqc, sp_axis, *mesh_shape]),
-        tau=np.array(tau),
-    )
-
-
 LOG2E = 1.4426950408889634
 VAR_EPS = 1.0e-6
 NEG = -30000.0  # finite "minus infinity" for bf16 bias/mask arithmetic (exp2 underflows to exactly 0)
@@ -425,9 +404,8 @@ class SolPrepass:
         self.geo = geo
         self._key = key
 
-    def _host_density(self, mask01: ttnn.Tensor, cols: torch.Tensor, dump: bool = False) -> float:
-        """Mean of a [1,H,nqc_pad,W] 0/1 mask over the real Q chunks and the given real columns (host readback).
-        dump: a block-form mask, also written for offline studies when SOL_DUMP_MASK_DIR is set (dump_block_mask)."""
+    def _host_density(self, mask01: ttnn.Tensor, cols: torch.Tensor) -> float:
+        """Mean of a [1,H,nqc_pad,W] 0/1 mask over the real Q chunks and the given real columns (host readback)."""
         host = ttnn.to_torch(
             mask01,
             mesh_composer=ttnn.ConcatMesh2dToTensor(
@@ -436,8 +414,6 @@ class SolPrepass:
                 mesh_shape=tuple(self.mesh_device.shape),
             ),
         )
-        if dump:
-            dump_block_mask(host, self.geo, self.sp_axis, tuple(self.mesh_device.shape), self.tau)
         # host: [S, 4H (TP replicas), nqc_pad, W]; count real Q chunks and the real columns only
         sub = host[:, : host.shape[1] // tuple(self.mesh_device.shape)[1 - self.sp_axis], : self.geo.nqc].float()
         return float(sub[..., cols].mean())
@@ -451,7 +427,7 @@ class SolPrepass:
         geo = self.geo
         if report_density:
             # The block-level density (q_chunk x 64 keys) before the K-chunk union: the sparsity the model sees.
-            self.last_block_density = self._host_density(block01, self._block_cols(), dump=True)
+            self.last_block_density = self._host_density(block01, self._block_cols())
         # Any kept block in a K chunk keeps the chunk: [1,H,nqc_pad,nbg] @ [nbg,nkc_pad] -> [1,H,nqc_pad,nkc_pad]
         chunk01 = ttnn.gtz(ttnn.subtract(ttnn.matmul(block01, c["kc_pool"], compute_kernel_config=self.hifi2), 0.5))
         ttnn.deallocate(block01)
@@ -546,7 +522,7 @@ class SolPrepass:
             return out
         # gather / compact: block-form mask
         if report_density:
-            self.last_density = self._host_density(block01, self._block_cols(), dump=True)
+            self.last_density = self._host_density(block01, self._block_cols())
             self.last_block_density = self.last_density
         bias = None
         if self.emit_bias:
