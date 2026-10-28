@@ -42,6 +42,7 @@ from models.demos.deepseek_v3_d_p.tt.v41.attention import TOPK_ALIGN, TtV41Atten
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.decode import MOE_ROWS, ROWS, TtV41Decoder
 from models.demos.deepseek_v3_d_p.tt.v41.decode_norm import DECODE_NORM, DecodeRmsNorm
+from models.demos.deepseek_v3_d_p.tt.v41.flash_sdpa import FlashSdpa
 from models.demos.deepseek_v3_d_p.tt.v41.head_layout import o_heads, q_heads
 from models.demos.deepseek_v3_d_p.tt.v41.indexer import CandidateBlocks, DecodePins, TtV41Indexer
 from models.demos.deepseek_v3_d_p.tt.v41.indexer_kernels import range_scores
@@ -397,8 +398,21 @@ class TtV41BatchDecoder(TtV41Decoder):
         # as rows of a split layout) and selects by merging the rows' top-k (select_split); no 32-row dense score,
         # no mask round-trip, no per-step mask build
         self.single_query = os.environ.get("V41_DECODE_SINGLE_QUERY", "0") == "1"
-        # V41_DECODE_SDPA=local: the SDPA of both captures on the chip's own heads
-        self.sdpa_local = attention_module._SDPA == "local"
+        # V41_DECODE_SDPA=local: the SDPA of both captures on the chip's own heads;
+        # ``flash``: those heads through the flash-decode program (its constants and partial
+        # scratch allocated here, before any capture)
+        self.sdpa_local = attention_module._SDPA in ("local", "flash")
+        self.flash = None
+        if attention_module._SDPA == "flash":
+            attn0 = model.blocks[0].attn
+            self.flash = FlashSdpa(
+                self.mesh_device,
+                heads=attn0.sdpa_heads,
+                rows=ROWS,
+                width=RING + self.config.INDEX_TOPK,
+                v_dim=attn0.head_dim,
+                real_heads=attn0.local_heads,
+            )
         self.sampler = (
             DeviceSampler(self.mesh_device, self.config, model.blocks[0].attn.ccl, self.pool.gather_sp)
             if sample_on_device
@@ -850,6 +864,10 @@ class TtV41BatchDecoder(TtV41Decoder):
             if self.c1_index:
                 sel_all, _ = C1Moe.onehots(self.inputs["c1all"], self.inputs["c1all"], self.c1_table)
                 selection["c1"] = sel_all
+            if self.flash is not None:
+                # the flash SDPA's live page: ``c1put`` (word u 0 on the live rank's live row, the one-hot sentinel
+                # elsewhere); the 32-row capture keeps sparse_sdpa
+                selection["flash_live"] = self.inputs["c1put"]
         else:
             moes = self.moes
         for layer, block, moe in zip(model.layers, model.blocks, moes):
@@ -963,17 +981,30 @@ class TtV41BatchDecoder(TtV41Decoder):
         k_chunk = next(c for c in (128, 64, 32) if rows.shape[-1] % c == 0)
         if self.sdpa_local and self.tp > 1:
             # this chip's heads alone (padded with zero heads to sparse_sdpa's 32; their output rows are never read):
-            # no all-gather of the queries, half the SDPA, no partition of the output
-            out = ttnn.transformer.sparse_sdpa(
-                q_heads(q, cos, sin, attn.trans_mat, attn.local_heads, attn.rope_dim, out_heads=attn.sdpa_heads),
-                kv_tensor,
-                rows,
-                attn.head_dim,
-                kv_format=kv_format.sparse_sdpa_format,
-                scale=attn.scale,
-                k_chunk_size=k_chunk,
-                attention_sink=attn.sink_local,
-            )
+            # no all-gather of the queries, half the SDPA, no partition of the output; with
+            # ``flash`` the live rows' keys split over the grid
+            qh = q_heads(q, cos, sin, attn.trans_mat, attn.local_heads, attn.rope_dim, out_heads=attn.sdpa_heads)
+            if self.flash is not None and "flash_live" in selection:
+                out = self.flash(
+                    qh,
+                    kv_tensor,
+                    rows,
+                    kv_format == MlaKvCacheFormat.SCALED_FP8,
+                    attn.scale,
+                    attn.sink_local,
+                    live=selection["flash_live"],
+                )
+            else:
+                out = ttnn.transformer.sparse_sdpa(
+                    qh,
+                    kv_tensor,
+                    rows,
+                    attn.head_dim,
+                    kv_format=kv_format.sparse_sdpa_format,
+                    scale=attn.scale,
+                    k_chunk_size=k_chunk,
+                    attention_sink=attn.sink_local,
+                )
             out = o_heads(
                 out,
                 cos,

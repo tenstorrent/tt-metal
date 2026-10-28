@@ -47,10 +47,10 @@ _CONCAT = os.environ.get("V41_DECODE_CONCAT", "op")
 assert _CONCAT in ("op", "qdq"), _CONCAT
 # the decode step's SDPA: ``gather`` (the queries all-gathered over TP, every chip's sparse_sdpa over all 64 heads and
 # its own groups of the output kept) or ``local`` (each chip's 16 heads padded with zero heads to the 32 sparse_sdpa
-# takes: no all-gather, half the SDPA, no partition). The prefill keeps its head-to-sequence
-# all-to-all.
+# takes: no all-gather, half the SDPA, no partition) or ``flash`` (the local heads through the
+# flash-decode program of tt/v41/flash_sdpa.py: the live rows' keys split over the grid, one merge a row). The prefill keeps its head-to-sequence all-to-all.
 _SDPA = os.environ.get("V41_DECODE_SDPA", "gather")
-assert _SDPA in ("gather", "local"), _SDPA
+assert _SDPA in ("gather", "local", "flash"), _SDPA
 SDPA_MIN_HEADS = 32  # sparse_sdpa: H a multiple of the tile height
 
 
