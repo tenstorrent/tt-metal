@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <fstream>
+#include <iomanip>
 #include <optional>
 #include <sstream>
 #include <enchantum/enchantum.hpp>
@@ -1170,14 +1171,16 @@ nlohmann::json GraphProcessor::end_capture() {
     return to_json(graph);
 }
 
-nlohmann::json GraphProcessor::get_report() const {
+nlohmann::json GraphProcessor::get_report() const { return build_report(to_json(graph)); }
+
+nlohmann::json GraphProcessor::build_report(nlohmann::json graph_json) const {
     nlohmann::json report;
 
     // Version for forward compatibility
     report[kReportVersion] = kCurrentReportVersion;
 
     // Graph trace
-    report[kReportGraph] = to_json(graph);
+    report[kReportGraph] = std::move(graph_json);
 
     // Device info captured during trace
     nlohmann::json devices = nlohmann::json::array();
@@ -1311,9 +1314,9 @@ nlohmann::json GraphProcessor::end_graph_capture_to_file(const std::filesystem::
     auto* processor = dynamic_cast<GraphProcessor*>(processors.back().get());
     TT_ASSERT(processor != nullptr, "Current processor is not a GraphProcessor");
 
-    // Finalize the graph, then build the report via the shared get_report() path
-    auto graph_json = processor->end_capture();
-    nlohmann::json report = processor->get_report();
+    // Finalize the graph and build the report around it. The graph is the bulk of the report, so it is serialized
+    // once and moved into the report and back out, rather than copied.
+    nlohmann::json report = processor->build_report(processor->end_capture());
 
     // Write to file
     if (report_path.has_parent_path()) {
@@ -1323,7 +1326,8 @@ nlohmann::json GraphProcessor::end_graph_capture_to_file(const std::filesystem::
     if (!file.is_open()) {
         TT_THROW("Failed to open graph report file for writing: {}", report_path.string());
     }
-    file << report.dump(2);
+    // Streamed: dump() would first build the whole report as one string, another copy of it in memory.
+    file << std::setw(2) << report;
     if (!file) {
         TT_THROW("Failed to write graph report to file: {}", report_path.string());
     }
@@ -1331,7 +1335,7 @@ nlohmann::json GraphProcessor::end_graph_capture_to_file(const std::filesystem::
     log_info(tt::LogAlways, "Graph report written to: {}", report_path.string());
 
     tt::tt_metal::GraphTracker::instance().pop_processor();
-    return graph_json;
+    return std::move(report[kReportGraph]);
 }
 
 bool ProcessorHooks::hook_allocate(const tt::tt_metal::Buffer* /*buffer*/) { return do_block; }

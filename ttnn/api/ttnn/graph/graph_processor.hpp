@@ -165,6 +165,9 @@ public:
     nlohmann::json get_report() const;
 
 private:
+    // The report around an already serialized graph, so end_graph_capture_to_file serializes the graph once.
+    nlohmann::json build_report(nlohmann::json graph_json) const;
+
     std::shared_ptr<ProcessorHooks> hook;
 
     std::mutex mutex;
