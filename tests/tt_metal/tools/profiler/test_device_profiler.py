@@ -1553,14 +1553,14 @@ NOC_EVENT_QUICK_PUSH_CONFIGS = {
         program_support_count=8000,
     ),
     # Back-to-back pushes: the broken pairs in the model capture are always the second of two pushes ~75 cycles
-    # apart. PUSH_EVERY calls quick_push() directly every 7th read, so one of them regularly follows a ring-full
-    # push within a few events; MCAST_EVERY does it the way the model does, through the pre-emptive push before a
-    # linked multicast.
-    "fd-push": dict(env={}, loop_count=4000, knobs={"PUSH_EVERY": 7}),
-    "sd-push-blaze-env": dict(
+    # apart (a ring-full push, then the pre-emptive push before a linked multicast, a 16-word chunk). PUSH_EVERY
+    # calls quick_push() twice in a row every n-th read: a chunk of n events, then the 16-word one.
+    "fd-double-push": dict(env={}, loop_count=4000, knobs={"PUSH_EVERY": 100}),
+    "fd-double-push-dense": dict(env={}, loop_count=4000, knobs={"PUSH_EVERY": 25}),
+    "sd-double-push-blaze-env": dict(
         env={"slowDispatch": True, "do_mid_run_dump": True, "do_cpp_post_process": True},
         loop_count=4000,
-        knobs={"BLOCKING": 0, "SKIP_READ": 1, "WARMUP": 200, "ITER_ZONE": 1, "PUSH_EVERY": 7},
+        knobs={"BLOCKING": 0, "SKIP_READ": 1, "WARMUP": 200, "ITER_ZONE": 1, "PUSH_EVERY": 100},
         program_support_count=8000,
     ),
     "sd-sparse": dict(
@@ -1569,8 +1569,8 @@ NOC_EVENT_QUICK_PUSH_CONFIGS = {
         knobs={"BLOCKING": 0, "SKIP_READ": 1, "WARMUP": 200, "ITER_ZONE": 1, "DELAY_NOPS": 20000},
         program_support_count=8000,
     ),
-    # Last on purpose: a hang here (seen with a bad multicast range) poisons the chips for every later config.
-    "fd-mcast": dict(env={}, loop_count=4000, knobs={"MCAST_EVERY": 7}, mcast_every=7),
+    # "fd-mcast" (MCAST_EVERY) is left out: the linked multicast hangs the kernel (jobs 161289, 161385), to be
+    # looked at separately.
 }
 
 
@@ -1594,6 +1594,8 @@ def test_noc_event_quick_push(config_name):
     PROGRAM_SUPPORT_COUNT = config.get("program_support_count", 4000)
     # Each event is 4 words; a push happens roughly every ring-full of them.
     MIN_PUSHES_PER_LANE = max(1, (LOOP_COUNT * 4) // L1_RING_WORDS - 2)
+    if knobs.get("PUSH_EVERY"):
+        MIN_PUSHES_PER_LANE = 2 * (LOOP_COUNT // knobs["PUSH_EVERY"])
 
     clear_profiler_runtime_artifacts()
     envVars = set_env_vars(

@@ -10,8 +10,7 @@
 // The user zone spans every push, so its end lands in a different DRAM chunk than its start.
 // Defines: LOOP_COUNT (reads), DELAY_NOPS (nops between reads, stretches the kernel), ITER_ZONE (1 = also open a
 // zone around every read, as a model kernel with per-iteration zones does), PUSH_EVERY (n > 0 = every n-th
-// iteration calls kernel_profiler::quick_push() directly, so a push can follow the ring-full push within a few
-// dozen cycles), MCAST_EVERY (n > 0 = every n-th iteration also issues a linked multicast write to the whole core
+// iteration calls kernel_profiler::quick_push() twice back to back), MCAST_EVERY (n > 0 = every n-th iteration also issues a linked multicast write to the whole core
 // range, which makes the NoC tracer quick-push pre-emptively via quick_push_if_linked).
 // Runtime args: page size, then the NoC x0 y0 x1 y1 of the multicast range (the test's core range).
 void kernel_main() {
@@ -37,6 +36,11 @@ void kernel_main() {
             noc_async_read_barrier();
 #if PUSH_EVERY > 0 && defined(PROFILE_KERNEL)
             if (i % PUSH_EVERY == 0) {
+                // Two pushes back to back: the first pushes the ring as it is (PUSH_EVERY events), the second, a few
+                // dozen cycles later, pushes a 16-word chunk holding only the header and its own start/end pair.
+                // That is the pair the broken captures show: a ring-full push followed ~75 cycles later by the
+                // pre-emptive push of quick_push_if_linked.
+                kernel_profiler::quick_push();
                 kernel_profiler::quick_push();
             }
 #endif
