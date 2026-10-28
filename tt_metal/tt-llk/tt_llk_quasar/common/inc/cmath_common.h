@@ -309,7 +309,7 @@ inline void move_d2a_fixed_face(const std::uint8_t addrmod, const std::uint32_t 
         // Every face spans at least MAX_FPU_ROWS dest rows, so only the row groups past that depend on face height.
         if (row < MAX_FPU_ROWS || row < face_dest_rows)
         {
-            TTI_MOVD2A(0 /*dest_32b_lo*/, row, addrmod, FPU_MOV_ROWS, row);
+            TTI_MOVD2A(p_mov::DEST_NORM, row, addrmod, FPU_MOV_ROWS, row);
         }
     }
 }
@@ -335,7 +335,7 @@ inline void move_d2b_fixed_face(const std::uint8_t addrmod, const std::uint32_t 
         // Every face spans at least MAX_FPU_ROWS dest rows, so only the row groups past that depend on face height.
         if (row < MAX_FPU_ROWS || row < face_dest_rows)
         {
-            TTI_MOVD2B(0 /*dest_32b_lo*/, row, addrmod, FPU_MOV_ROWS, 0 /*transpose*/, row);
+            TTI_MOVD2B(p_mov::DEST_NORM, row, addrmod, FPU_MOV_ROWS, p_movd2b::TRANSPOSE_OFF, row);
         }
     }
 }

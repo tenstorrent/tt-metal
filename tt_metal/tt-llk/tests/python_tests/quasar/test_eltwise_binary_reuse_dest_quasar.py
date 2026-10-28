@@ -77,14 +77,10 @@ def reuse_dest_tile_dimensions(formats):
     """Tile shapes swept for a given format pair.
 
     The tile geometry the reuse_dest math path depends on is independent of packer format
-    conversion, so only the same-format plain pairs carry the sweep. MX formats are valid only
-    at (16, 16) and (32, 32) on the FPU path (MX_SUPPORTED_TILE_SIZES), and (16, 16) is already
-    swept by the plain pairs, so every converting pair stays on 32x32 and serves as the
-    unchanged-shape guard.
+    conversion, so only the same-format pairs carry the sweep. Every converting pair, including
+    the MX pair, stays on 32x32 and serves as the unchanged-shape guard.
     """
     if formats.input_format != formats.output_format:
-        return [(32, 32)]
-    if formats.input_format.is_mx_format():
         return [(32, 32)]
     return TILE_DIMENSIONS
 
@@ -132,29 +128,27 @@ def valid_output_dimensions(
         block-relative indexing; multi-block accumulates wrongly).
     """
     tile_rows, tile_cols = tile_dimensions
+    out_dims = [OUTPUT_TILE_COUNT * tile_rows, tile_cols]
     tile_cnt_input = _reuse_dest_tile_count(input_dimensions, tile_dimensions)
-    valid = []
-    for out_dims in [[OUTPUT_TILE_COUNT * tile_rows, tile_cols]]:
-        tile_cnt_output = _reuse_dest_tile_count(out_dims, tile_dimensions)
-        if tile_cnt_output == 0 or tile_cnt_input % tile_cnt_output != 0:
-            continue
-        if tile_cnt_input // tile_cnt_output <= 1:
-            continue
-        try:
-            num_blocks, _ = get_num_blocks_and_num_tiles_in_block(
-                dest_sync_mode,
-                DestAccumulation.No,
-                formats,
-                out_dims,
-                (tile_rows, tile_cols),
-                BlocksCalculationAlgorithm.Standard,
-            )
-        except ValueError:
-            continue  # tiles don't divide evenly into blocks for this combination
-        if num_blocks > 1:
-            continue
-        valid.append(out_dims)
-    return valid
+    tile_cnt_output = _reuse_dest_tile_count(out_dims, tile_dimensions)
+    if tile_cnt_output == 0 or tile_cnt_input % tile_cnt_output != 0:
+        return []
+    if tile_cnt_input // tile_cnt_output <= 1:
+        return []
+    try:
+        num_blocks, _ = get_num_blocks_and_num_tiles_in_block(
+            dest_sync_mode,
+            DestAccumulation.No,
+            formats,
+            out_dims,
+            (tile_rows, tile_cols),
+            BlocksCalculationAlgorithm.Standard,
+        )
+    except ValueError:
+        return []  # tiles don't divide evenly into blocks for this combination
+    if num_blocks > 1:
+        return []
+    return [out_dims]
 
 
 @pytest.mark.quasar
