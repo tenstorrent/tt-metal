@@ -91,6 +91,7 @@ def _runner_env(s, geo, out: Path, service_id: str, golden_dir: Path) -> dict:
         PREFILL_MIGRATION_EXPORT_TO_FILE="0",
         PREFILL_TRACE_DIR=str(golden_dir),
         PREFILL_H2D_CONNECT_TIMEOUT="600",
+        TT_METAL_OPERATION_TIMEOUT_SECONDS="600",  # the runner's blocking H2D read counts as a device op
     )
     if S.fabric_mode(s):
         env["PREFILL_FABRIC_MODE"] = S.fabric_mode(s)
