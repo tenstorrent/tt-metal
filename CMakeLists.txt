@@ -16,7 +16,7 @@ set_directory_properties(
 # Project setup
 ############################################
 
-# For single-config generators, default to RelWithDebInfo if unspecified
+# For single-config generators, default to RelWithDebInfo
 get_property(isMultiConfig GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
 if(NOT isMultiConfig)
     set(CMAKE_BUILD_TYPE RelWithDebInfo CACHE STRING "Build type")
