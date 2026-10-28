@@ -761,6 +761,27 @@ if want u1; then
     fi
 fi
 
+# PC1 (2026-10-28): what the pooled correction costs (the faster full-width pooled step's upper bound). No rebuild.
+# TT_SOL_POOLED_OFF=1 drops the pooled K/V entries (timing only: the results are wrong). Traced tau 1 at the 256-key
+# default with and without, the same at 384 keys, and one 384-key profile without (fits the profiler buffer; compare
+# with log_val_d2a_profile_summary.txt / log_val_d2a_cores.txt, the same run with pooled on).
+if want pc1; then
+    if ! python -c "import diffusers.models.transformers.transformer_minimax_h3" > /dev/null 2>&1; then
+        echo "    pc1: diffusers lacks transformer_minimax_h3; install the upgrade first"
+        exit 1
+    fi
+    S="4x8 and nl2 and 768p_5s and not dense and not agather"
+    TR="SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 SOL_BENCH_MODE=resident SOL_BENCH_PREFIX=off SOL_TAU=1.0"
+    run pc1_trace_tau1.0 900 env $TR pytest "$B" -s -k "$S"
+    run pc1_trace_nopooled_tau1.0 900 env $TR TT_SOL_POOLED_OFF=1 pytest "$B" -s -k "$S"
+    run pc1_trace_k384_tau1.0 900 env $TR SOL_BENCH_CHUNKS=320x384 pytest "$B" -s -k "$S"
+    run pc1_trace_k384_nopooled_tau1.0 900 env $TR SOL_BENCH_CHUNKS=320x384 TT_SOL_POOLED_OFF=1 pytest "$B" -s -k "$S"
+    PR="TT_METAL_DEVICE_PROFILER=1 TT_SOL_STEP_PROFILE=1 SOL_BENCH_PROFILE=1 SOL_BENCH_REPS=1 SOL_BENCH_MODE=resident"
+    run pc1_profile_nopooled 900 env $PR SOL_BENCH_PREFIX=off SOL_TAU=1.0 SOL_BENCH_CHUNKS=320x384 TT_SOL_POOLED_OFF=1 \
+        pytest "$B" -s -k "$S"
+    summarize_profile pc1_profile_nopooled_summary pc1_profile_nopooled log_val_pc1_cores_nopooled.txt
+fi
+
 # D2a (2026-10-27): which work split D2 should be, from the real mask. No rebuild (Python + script only).
 #   mask       one tau 1 call at 5 s with SOL_DUMP_MASK_DIR: the composed block mask -> d2_masks/mask_tau1_r4736.npz
 #   profile    tau 1 at 384-key pieces (256-key pieces overflow the profiler's ~125 zones per core), with the per-core
