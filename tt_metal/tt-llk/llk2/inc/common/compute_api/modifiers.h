@@ -28,4 +28,9 @@ struct sub_modifiers
     Broadcast bcast = Broadcast::None; // how in1 is spread over in0: Row is today's sub_tiles_bcast<BroadcastType::ROW>
 };
 
+struct copy_modifiers
+{
+    bool transpose = false; ///< width-height transpose of each tile on the way to Dest (today's transpose_wh_tile)
+};
+
 } // namespace llk2
