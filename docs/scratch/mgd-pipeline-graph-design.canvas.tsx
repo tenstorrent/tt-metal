@@ -1148,15 +1148,17 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
         //   "pipeline '{}': cycle {} has no loopback edge; mark one of its edges loopback: true"
         // and each loopback edge must close one, dst reaching src over the other edges:
         //   "pipeline '{}': loopback edge {} -> {} closes no cycle; {} does not reach {} over the other edges"
-        // NOTE: no stage-topology check. In-degree, out-degree, number of roots, and whether a
-        // branch is a chain are all accepted.
+        // With no cycle, exactly one stage may have no incoming edge besides loopbacks (it owns host I/O):
+        //   "pipeline '{}': stages {} have no incoming edge besides loopbacks; exactly one may, the stage that owns host I/O"
+        // NOTE: otherwise no stage-topology check. In-degree, out-degree, and whether a branch is a
+        // chain are all accepted.
     }
 }`,
       },
     ],
     tests: [
       "Golden textprotos: GPT-OSS ring, llama_8b_pod (40 stages), joint 4x4 stage, dflash fork with both returns on fabric, two pipelines in one MGD.",
-      "One negative textproto per rule (duplicate id, unknown stage, self-edge, rank-3 shape, two pipelines with one name). Two in-degree-0 stages, a stage with three outgoing edges, a branch stage with out-degree 2, and a dead-end branch all parse. An edge with policy: STRICT parses; policy: RELAXED is rejected.",
+      "One negative textproto per rule (duplicate id, unknown stage, self-edge, rank-3 shape, two pipelines with one name). Two chains, and a stage with no edges beside a chain, are rejected (one host I/O stage). A stage with three outgoing edges, a branch stage with out-degree 2, and a dead-end branch all parse. An edge with policy: STRICT parses; policy: RELAXED is rejected.",
       "Loopback: a ring with no loopback edge, a fork with one unmarked return, and a loopback edge that closes no cycle are rejected. A loopback on any edge of the cycle (repeated, too) parses, and the mark is stored. Every ring and fork above marks its closing edges.",
       "Every existing MGD in tt_metal/fabric/mesh_graph_descriptors still parses unchanged.",
     ],
@@ -1414,7 +1416,7 @@ TEST(PipelineBuilderFootprintTest, StageThatCannotFitIsFilteredBeforeTheSolve) {
       "slots_to_submesh_chips(rects, fabric_node_to_asic): (mesh_id, chip_id, row, col) per chip, (row, col) relative to the slot origin, recomputed when a slot spans several host slices.",
       "links_to_direct_links(slots, links): every link between two slots under {i, j} and mirrored under {j, i}; links inside one slot dropped; each list ordered by chip id (by tier once P16 lands).",
       "Keep (slot, row, col) -> FabricNodeId so a resolved edge maps back to two chips, then to the ExitNodeConnection recorded in R.",
-      "Stage inputs (nodes, edges with the loopback marked, node_chip_counts, blaze's default core counts) built once per MGD.",
+      "Stage inputs (nodes, edges with the loopback marked, node_chip_counts, blaze's default core counts computed from the graph shape) built once per MGD.",
     ],
     code: [
       {
@@ -1489,7 +1491,7 @@ std::vector<tt::tt_metal::ExitNodeConnection> inter_mesh_cables(
       "tools/scaleout/src/generate_rank_bindings.cpp",
     ],
     steps: [
-      "Conversion (moved here from P1): build_pipeline_graphs turns pipeline_descriptors() into PipelineGraph, with stage and edge indices. Each edge keeps the MGD's loopback mark, which the resolver call passes as is_loopback (4.2).",
+      "Conversion (moved here from P1): build_pipeline_graphs turns pipeline_descriptors() into PipelineGraph, with stage and edge indices. Each edge keeps the MGD's loopback mark, which the resolver call passes as is_loopback (4.2). stage0 is the one stage with no incoming edge besides loopbacks.",
       "Input: TopologyMappingConfig::pipelines (std::vector<PipelineGraph>); empty means off. TopologyMapper fills it with build_pipeline_graphs(mesh_graph_.get_mesh_graph_descriptor()) unless the kill switch is set; generate_rank_bindings fills it from the merged parts.",
       "Tier C sits beside Tier B in pipeline_builder.cpp: two entry points in pipeline_builder.hpp's detail namespace, build_pipeline_problem and check_pipeline_seating, with the pre-checks and R recording as file-local helpers. The header forward-declares PipelineProblem, PlacedMesh, TopologyMappingResult and PhysicalSystemDescriptor, so the ttnn and nanobind files that include it pull in no mapper or solver headers.",
       "The enumerator constructor merges config.pipelines into one PipelineProblem (detail::build_pipeline_problem), held as unique_ptr<const PipelineProblem> beside placement_session_. The vector of descriptor records becomes one target graph: global stage indices, one component per pipeline, no edges between pipelines, chip counts and core demand, and each stage's binding set (computed here; Tier B stores none). One footprint solve places every component.",
@@ -3137,7 +3139,7 @@ function DescriptorExamples() {
           ["s0 > s1, s0 > s2, s1 > s0; s2 has no out-edge", "pass", "a branch may dead-end; Tier A does not limit stage topology"],
           ["a stage with three outgoing branches", "pass", "Tier A does not limit stage topology"],
           ["a branch stage with out-degree 2", "pass", "Tier A does not limit stage topology"],
-          ["two stages with in-degree 0", "pass", "Tier A does not limit stage topology"],
+          ["two stages with in-degree 0", "reject", "exactly one stage may have no incoming edge besides loopbacks; it owns host I/O"],
           ["mixed4 with policy: RELAXED on s3 > s0", "reject", "RELAXED is rejected by Tier A in the first version. RELAXED (later): passes"],
           ["RELAXED (later): mixed4 with s0 > s1 RELAXED", "pass", "allowed; Tier C's planner still never cuts stage 0's outgoing edge"],
           ["RELAXED (later): dflash with router > draft0 RELAXED", "pass", "any edge may be RELAXED"],
@@ -4211,6 +4213,7 @@ edges { src: "s3" dst: "s0" policy: RELAXED loopback: true }   # may go over hos
             ["No self-edges", 'edges { src: "s0" dst: "s0" }'],
             ["The edges not marked loopback have no cycle", 'edges s0 > s1 and s1 > s0, neither marked loopback'],
             ["Each loopback edge closes a cycle", 'only edges { src: "s0" dst: "s1" loopback: true }'],
+            ["Exactly one stage has no incoming edge besides loopbacks; it owns host I/O", "two chains, s0 > s1 and s2 > s3"],
             ["Shapes rank 2, dims > 0", "shape { dims: [ 4, 2, 1 ] }"],
             ["Pipeline names unique and non-empty; each pipeline is checked on its own", "two pipelines both named mixed4"],
           ]}
@@ -4219,8 +4222,8 @@ edges { src: "s3" dst: "s0" policy: RELAXED loopback: true }   # may go over hos
           Repeating an edge declares a second channel on that hop. The edge that closes a ring is marked loopback: true, as in s3 to s0; a fork marks each return.
           Every edge is STRICT in the first version. RELAXED (later): any edge may be RELAXED; Tier A will not restrict where.
         </Text>
-        <Callout tone="info" title="NOTE: Tier A does not limit stage topology">
-          In-degree, out-degree, how many stages have in-degree 0, and whether a branch is a chain are all accepted. A graph
+        <Callout tone="info" title="NOTE: beyond one host I/O stage, Tier A does not limit stage topology">
+          In-degree, out-degree, and whether a branch is a chain are all accepted. A graph
           blaze cannot build still passes Tier A and fails at build time.
         </Callout>
         <Callout tone="warning" title="Dead-end branches are allowed">
@@ -4864,7 +4867,7 @@ function QuestionsTab() {
             ["4", "Seat-pair nogood API: when is a failure provably about one pair of seats?"],
             ["5", "Cost of unique_shapes off on large symmetric machines."],
             ["6", "Key name for the rank-binding env override (TT_PIPELINE_STAGE?)."],
-            ["7", "Per-stage core counts in PipelineStage, or accept the gap."],
+            ["7", "Per-stage core counts: no MGD field for now; C2 computes blaze's defaults from the graph shape. Add one only if a model overrides them."],
             ["8", "Agreement with blaze's planner: blaze calls the same C++ footprint solve, blaze's planner learns to retry, or Tier C restricts itself to what blaze builds (14, 15)?"],
             ["9", "Dropped: no spread fill. Spare links after phase 0 keep today's order; the pipeline only needs R."],
             ["10", "Decided: do not wait for part 9. P7 reads the PSD; P16 (later) switches to the candidate table. Does P16 need to land before the first pipeline model ships?"],

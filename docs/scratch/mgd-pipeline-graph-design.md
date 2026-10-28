@@ -843,7 +843,7 @@ Both run inside every `MeshGraphDescriptor` constructor, and again on the merged
 |---|---|---|
 | runs in | `static_validate`, on the proto alone | after `populate`, with the meshes, rank grids and connections |
 | asks | is the pipeline text a valid descriptor? | can these stages fit on the meshes this descriptor declares? |
-| checks | ids unique and resolved, no self-edges, loopback marks (the other edges acyclic, each loopback closes a cycle), positive shapes, unique pipeline names | binding sets, slice capacity, crossings ride declared connections within their channels (the per-mesh carve is a backup if the solve is slow) |
+| checks | ids unique and resolved, no self-edges, loopback marks (the other edges acyclic, each loopback closes a cycle), one host I/O stage, positive shapes, unique pipeline names | binding sets, slice capacity, crossings ride declared connections within their channels (the per-mesh carve is a backup if the solve is slow) |
 | `[2, 4]` stage on 4x2 slices | pass: two positive numbers | reject: no mesh's slice tiles it (no transpose) |
 | two copies of `mixed4` | pass: each is well-formed | reject: 12 slices needed, 8 declared |
 
@@ -896,9 +896,14 @@ a 4x2 stage never lands on a 2x4 rectangle (3.2).
   reach s0 over the other edges`. Which edge of a cycle is marked is not checked (the resolver
   takes any), and a repeated loopback edge is another channel. Tier B counts loopback edges as
   channels like any other edge.
-- **Stage topology is not limited.** In-degree, out-degree, how many stages have
-  in-degree 0, and whether a branch is a chain are all accepted. A graph blaze cannot build
-  still passes Tier A and fails at build time. A branch may dead-end.
+- **One host I/O stage.** Exactly one stage has no incoming edge besides loopbacks. It owns
+  host I/O, and the resolver starts its stage order there; with two such stages the resolver
+  would pick whichever id sorts first. Two chains, or a stage with no edges beside a chain,
+  are rejected: `pipeline 'p': stages 's0', 's2' have no incoming edge besides loopbacks;
+  exactly one may, the stage that owns host I/O`. Tier C's `stage0` is that stage (4).
+- **Otherwise stage topology is not limited.** In-degree, out-degree, and whether a branch
+  is a chain are all accepted. A graph blaze cannot build still passes Tier A and fails at
+  build time. A branch may dead-end.
 - **Every edge is STRICT.** `policy` may be omitted or `STRICT`; Tier A rejects anything else. RELAXED (later): any edge may be RELAXED, and Tier A will not restrict where; see
   the note in 1.4 for rules that might be good to add.
 
@@ -918,7 +923,7 @@ a 4x2 stage never lands on a 2x4 rectangle (3.2).
 | edges `s0 -> s1`, `s0 -> s2`, `s1 -> s0` (loopback); `s2` has no out-edge | pass | a branch may dead-end; Tier A does not limit stage topology |
 | a stage with three outgoing branches | pass | Tier A does not limit stage topology |
 | a branch stage with out-degree 2 (a fork inside a branch) | pass | Tier A does not limit stage topology |
-| two stages with in-degree 0 | pass | Tier A does not limit stage topology |
+| two stages with in-degree 0 (two chains, or a stage with no edges beside a chain) | reject | exactly one stage may have no incoming edge besides loopbacks; it owns host I/O |
 | `mixed4` with `policy: RELAXED` on `s3 -> s0` | reject | `RELAXED` is rejected by Tier A in the first version |
 | `mixed4` plus a copy named `mixed4_b` | pass here | each is checked on its own; Tier B checks them together and rejects on capacity (1.5) |
 | `mixed4` plus a copy also named `mixed4` | reject | pipeline names must be unique (1.5) |
@@ -1759,7 +1764,7 @@ each).
 | `mixed4` tiled 4x4 on both meshes | four 16-chip submeshes; s0 finds nothing with 8 chips |
 | a 1x2 stage that is stage 0 with 3 edges | 3 + 2 = 5 links against 2 chips x 2 = 4 slots: capacity fails |
 | a ring stage on a submesh with one neighbouring submesh (A3 or B3 in `mixed4` on (P, R)) | the neighbour-count check skips it before any link search |
-| harness overrides of pipeline-core pools | not in the MGD; Tier C uses blaze's defaults and can accept a layout runtime rejects (open question 7) |
+| harness overrides of pipeline-core pools | not in the MGD; Tier C computes blaze's defaults from the graph and can accept a layout runtime rejects (open question 7) |
 
 ### 3.2 Blaze's carve planner: the runtime reference, not ported
 
@@ -2039,7 +2044,6 @@ struct PipelineStageSpec {
     PipelineStageKey key;
     std::string label;
     tt::tt_metal::distributed::MeshShape shape;   // chips, logical orientation (no transpose)
-    std::optional<std::uint32_t> core_count;      // open question 7; empty: blaze's defaults
 };
 
 struct PipelineEdgeSpec {
@@ -2052,7 +2056,7 @@ struct PipelineGraph {                    // one descriptor record. The mapper m
     std::string name;
     std::vector<PipelineStageSpec> stages;
     std::vector<PipelineEdgeSpec> edges;
-    PipelineStageIndex stage0 = 0;        // owns host I/O
+    PipelineStageIndex stage0 = 0;        // owns host I/O: the one stage with no incoming edge besides loopbacks (2.1)
 };
 
 // Built in Tier C from the (merged) MGD's pipeline_descriptors(), which Tier A has validated.
@@ -2560,8 +2564,10 @@ Steps, in order:
 
 Everything in this list is new code in C1 and C2 (P5 to P8); none of it is a resolver change.
 
-**Gap.** Blaze's default core counts are used. Harness `pipeline_core_coords()` overrides
-are not in the MGD, so Tier C could accept a layout runtime rejects (open question 7).
+**Core counts.** C2 computes blaze's defaults from the graph shape when it builds the call:
+`stage0` is the head, and it is a ring head when a loopback enters it. Nothing is stored in
+the MGD. **Gap:** harness `pipeline_core_coords()` overrides are not in the MGD, so Tier C
+could accept a layout runtime rejects (open question 7).
 
 #### `R` must fit each connection's demand
 
@@ -3522,9 +3528,9 @@ at runtime as today.
 5. **Cost of `unique_shapes` off** (4.4): how many extra seatings the master solve yields on
    the large symmetric cases once mesh permutations are no longer collapsed.
 6. **Planned key name** for the rank-binding `env_overrides` entry (4.6).
-7. **Per-stage core counts.** Harnesses can override pipeline-core pools, which the MGD does
-   not carry. Add an optional core count to `PipelineStage`, or accept the gap (4.2, "From the
-   chosen rectangles to the resolver call")?
+7. **Per-stage core counts.** Decided for now: no MGD field. C2 computes blaze's defaults
+   from the graph shape (4.2). Harnesses can still override pipeline-core pools, which the MGD
+   does not carry; add an optional core count to `PipelineStage` only if a model needs one.
 8. **Agreement with blaze's planner** (3.2). Tier C accepts a seating if *any* carve passes
    the check; blaze commits to its first aligned cycle and also rejects carves the footprint
    finds (stage 0 on several slices, the 16 `no-alignment` cases, every budget-exhausted
