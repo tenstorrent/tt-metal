@@ -32,15 +32,17 @@
 namespace llk2
 {
 
+/// dst = src (with Mods' ReLU, or added into dst with l1_acc): every tile of the Dest tensor src to the L1 tensor dst.
 template <pack_modifiers Mods = pack_modifiers {}, const TensorSpec<tensor_rank>& D, class RD, const TensorSpec<tensor_rank>& O, class RO>
 inline __attribute__((always_inline)) void pack(const Tensor<D, RD>& src, const Tensor<O, RO>& dst)
 {
     static_assert(D.storage == Storage::Dest, "pack reads a Dest tensor");
     static_assert(O.storage == Storage::L1, "pack writes an L1 tensor");
     static_assert(!Mods.untilize, "pack: untilize is not ported yet");
-    static_assert(accepted<pack_op, D, O, Mods>,
-                  "pack takes a Dest tensor and a dense L1 tensor of the same shape in 32x32 tiles, a Dest format that matches the kernel's Dest "
-                  "mode, an L1 format the packer can convert to, and l1_acc only into Float32, Float16_b or Float16");
+    static_assert(
+        accepted<pack_op, D, O, Mods>,
+        "pack takes a Dest tensor and a dense L1 tensor of the same shape in 32x32 tiles, a Dest format that matches the kernel's Dest "
+        "mode, an L1 format the packer can convert to, and l1_acc only into Float32, Float16_b or Float16");
 
     constexpr const Resolved& r = resolved<pack_op, D, O, Mods>;
     llk_lib::pack<Thread::Pack, r.plan>(src.address, dst.address);

@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Format rules every Blackhole OpApi shares: which register format the unpacker writes for an L1 format, and which
-// formats are integers. Each op's options() builds its OpConfig from these.
+// Format rules every Blackhole OpApi shares: which register format the unpacker writes for an L1 format, which
+// formats are integers, and which have a 5-bit (A) or 8-bit (B) exponent. Each op's options() builds its OpConfig from these.
 
 #pragma once
 
@@ -12,10 +12,10 @@
 namespace llk2
 {
 
-// The register format the unpacker writes to SrcA/SrcB for an L1 format, or DataFormat::Invalid if it cannot.
-// Source: tt-isa-documentation, WormholeB0/TensixTile/TensixCoprocessor/Unpackers/FormatConversion.md, "To SrcA or
-// SrcB" (the page also covers Blackhole's FP8 e4m3; there is no separate Blackhole page). The format ids are what the
-// unpacker's InDataFormat / OutDataFormat fields take, so most formats keep their id and the unpacker converts.
+/// The register format the unpacker writes to SrcA/SrcB for an L1 format, or DataFormat::Invalid if it cannot.
+/// Source: tt-isa-documentation, WormholeB0/TensixTile/TensixCoprocessor/Unpackers/FormatConversion.md, "To SrcA or
+/// SrcB" (the page also covers Blackhole's FP8 e4m3; there is no separate Blackhole page). The format ids are what the
+/// unpacker's InDataFormat / OutDataFormat fields take, so most formats keep their id and the unpacker converts.
 constexpr DataFormat src_register_format(DataFormat l1, bool dest_fp32)
 {
     switch (l1)
@@ -51,17 +51,25 @@ constexpr DataFormat src_register_format(DataFormat l1, bool dest_fp32)
     }
 }
 
+/// Integer formats: INT8, UINT8, UINT16, INT32, UINT32.
 constexpr bool is_integer_format(DataFormat f)
 {
     return f == DataFormat::Int8 || f == DataFormat::UInt8 || f == DataFormat::UInt16 || f == DataFormat::Int32 || f == DataFormat::UInt32;
 }
 
-// The formats the FPU reads as FP16 (5-bit exponent): it writes them to a 16-bit Dest as FP16, the rest as BF16.
-// Source: tt-isa-documentation, WormholeB0/TensixTile/TensixCoprocessor/ELWADD.md, functional model (SrcAStyle).
+/// The formats with a 5-bit exponent ("A" formats), which the FPU reads as FP16: it writes them to a 16-bit Dest as
+/// FP16, the rest as BF16. Source: tt-isa-documentation, WormholeB0/TensixTile/TensixCoprocessor/ELWADD.md, functional model (SrcAStyle).
 constexpr bool has_5bit_exponent(DataFormat f)
 {
     return f == DataFormat::Float16 || f == DataFormat::Bfp8 || f == DataFormat::Bfp4 || f == DataFormat::Bfp2 || f == DataFormat::Lf8 ||
            f == DataFormat::Fp8_e4m3;
+}
+
+/// The formats with an 8-bit exponent ("B" formats): FP32, TF32, BF16 and the BFP-B family.
+constexpr bool is_b_format(DataFormat f)
+{
+    return f == DataFormat::Float32 || f == DataFormat::Tf32 || f == DataFormat::Float16_b || f == DataFormat::Bfp8_b || f == DataFormat::Bfp4_b ||
+           f == DataFormat::Bfp2_b;
 }
 
 } // namespace llk2

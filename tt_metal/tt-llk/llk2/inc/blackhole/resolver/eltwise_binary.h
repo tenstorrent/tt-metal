@@ -54,7 +54,8 @@ constexpr bool eltwise_binary_accepts(const TensorSpec<tensor_rank>& in0, const 
 {
     const bool tiles = is_eltwise_binary_tile(in0) && is_eltwise_binary_tile(in1);
     // No broadcast: the same tiles. Row: in1 is one row of tiles, its top row broadcast down each tile.
-    const bool shapes = m.bcast == Broadcast::None ? equal(in0.shape.sizes, in1.shape.sizes) : m.bcast == Broadcast::Row && is_eltwise_binary_bias_row(in0, in1);
+    const bool shapes =
+        m.bcast == Broadcast::None ? equal(in0.shape.sizes, in1.shape.sizes) : m.bcast == Broadcast::Row && is_eltwise_binary_bias_row(in0, in1);
     // Both operands are read in SrcA's style (ELWADD.md): same exponent width, floats only for now.
     const bool formats = src_register_format(in0.format, s.dest_fp32) != DataFormat::Invalid &&
                          src_register_format(in1.format, s.dest_fp32) != DataFormat::Invalid && !is_integer_format(in0.format) &&
@@ -79,7 +80,7 @@ constexpr OpConfig eltwise_binary_options(const TensorSpec<tensor_rank>& in0, co
 constexpr Work eltwise_binary_work(const TensorSpec<tensor_rank>& in0, const TensorSpec<tensor_rank>&, const OpConfig& c)
 {
     const Dims& out = c.result.shape.sizes;
-    return {out[TileY], out[TileX], 1 /* no K: one input tile pair per output tile */, in0.shape.sizes[DatumY], faces_per_tile(in0.shape)};
+    return {out[TileY], out[TileX], no_k_steps, in0.shape.sizes[DatumY], faces_per_tile(in0.shape)}; // one input tile pair per output tile
 }
 
 /// plan: the unpack walk described at the top of this file, and math running F.
@@ -99,7 +100,7 @@ constexpr Plan eltwise_binary_plan(const TensorSpec<tensor_rank>& in0, const Ten
         tile_bytes(in0),
         Layout::Tilized,
         Broadcast::None,
-        false,
+        false, // no transpose
         next_tile,
         next_tile_row,
         no_step,
@@ -113,18 +114,18 @@ constexpr Plan eltwise_binary_plan(const TensorSpec<tensor_rank>& in0, const Ten
         tile_bytes(in1),
         Layout::Tilized,
         m.bcast,
-        false,
+        false, // no transpose
         next_tile,
         m.bcast == Broadcast::Row ? 0 : next_tile_row, // run_step: a broadcast row of tiles starts over for every output row
         no_step,
     };
-    const UnpackWalk walk {1, k.rt_dim, k.ct_dim, Where::None};
+    const UnpackWalk walk {1 /* steps */, k.rt_dim, k.ct_dim, Where::None};
     const MathPlan math {
         Exu::Fpu,
         c.math_fidelity,
-        c.result.format == DataFormat::Float32,
+        is_32bit_format(c.result.format),
         c.in0.format,
-        false,
+        false, // no transpose
         static_cast<std::uint32_t>(F),
     };
     return {Op::EltwiseBinary, in0_plan, in1_plan, walk, math, PackPlan {}, k};

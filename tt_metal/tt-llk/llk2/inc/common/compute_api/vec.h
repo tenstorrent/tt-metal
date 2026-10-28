@@ -17,8 +17,9 @@
 // acc is a Dest tensor the caller holds (from the Dest sync API). Which thread may touch it when is the sync API's
 // job, not the op's. vec_modifiers::thread picks the thread that drives the SFPU: Thread::Math (the default) runs
 // it right after the FPU wrote Dest; Thread::Pack runs it after math has handed Dest to the packer, as the target
-// matmul kernel does (llk_lib/vec.h describes the hand-over). Each call resolves itself as a chain of one (resolver/resolver.h): accepts is checked at compile
-// time, then the Plan drives llk-lib's vec on the thread vec_modifiers::thread names.
+// matmul kernel does (llk_lib/vec.h describes the hand-over). Each call resolves itself as a chain of one
+// (resolver/resolver.h): accepts is checked at compile time, then the Plan drives llk-lib's vec on the thread
+// vec_modifiers::thread names.
 
 #pragma once
 

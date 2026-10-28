@@ -23,20 +23,16 @@ namespace llk2
 
 inline constexpr std::uint32_t vec_tile_dim = default_tile_dim; ///< the SFPU activations are ported for 32x32 tiles only
 
-/// The format the SFPU reads from Dest and writes back: FP32 in the 32-bit Dest mode, else BF16.
-constexpr DataFormat vec_dest_format(bool dest_fp32)
-{
-    return dest_fp32 ? DataFormat::Float32 : DataFormat::Float16_b;
-}
-
+/// accepts: see the file comment.
 constexpr bool vec_accepts(const TensorSpec<tensor_rank>& acc, const TensorSpec<tensor_rank>&, const vec_call& call, const KernelSettings& s)
 {
-    const bool storage = acc.storage == Storage::Dest && acc.format == vec_dest_format(s.dest_fp32);
+    const bool storage = acc.storage == Storage::Dest && acc.format == dest_format_for(s);
     const bool tiles   = tile_rows(acc.shape) == vec_tile_dim && tile_cols(acc.shape) == vec_tile_dim;
     const bool thread  = call.mods.thread == Thread::Math || call.mods.thread == Thread::Pack;
     return storage && tiles && call.function != VecFunction::None && thread;
 }
 
+/// options: the SFPU reads and writes Dest in the Dest format; the result is acc itself.
 constexpr OpConfig vec_options(const TensorSpec<tensor_rank>& acc, const TensorSpec<tensor_rank>&, const vec_call&, const KernelSettings& s)
 {
     return {
@@ -48,26 +44,25 @@ constexpr OpConfig vec_options(const TensorSpec<tensor_rank>& acc, const TensorS
     };
 }
 
+/// work: the tile grid and the tile geometry; no K.
 constexpr Work vec_work(const TensorSpec<tensor_rank>& acc, const TensorSpec<tensor_rank>&, const OpConfig&)
 {
-    constexpr std::uint32_t one_step = 1; // nothing is folded into an output tile
-    return {acc.shape.sizes[TileY], acc.shape.sizes[TileX], one_step, acc.shape.sizes[DatumY], faces_per_tile(acc.shape)};
+    return {acc.shape.sizes[TileY], acc.shape.sizes[TileX], no_k_steps, acc.shape.sizes[DatumY], faces_per_tile(acc.shape)};
 }
 
+/// plan: nothing unpacked, the function and its mode on the SFPU.
 constexpr Plan vec_plan(const TensorSpec<tensor_rank>&, const TensorSpec<tensor_rank>&, const vec_call& call, const OpConfig& c, const Work& k)
 {
-    const UnpackPlan not_unpacked {Where::None, DataFormat::Invalid, DataFormat::Invalid, 0, 0, 0, Layout::Tilized, Broadcast::None, false, 0, 0, 0};
-    const UnpackWalk no_walk {0, 0, 0, Where::None};
     const MathPlan math {
         Exu::Sfpu,
         c.math_fidelity,
-        c.result.format == DataFormat::Float32,
+        is_32bit_format(c.result.format),
         c.in0.format,
         false, // no transpose
         static_cast<std::uint32_t>(call.function),
         call.mods.fast,
     };
-    return {Op::Vec, not_unpacked, not_unpacked, no_walk, math, PackPlan {}, k};
+    return {Op::Vec, UnpackPlan {}, UnpackPlan {}, UnpackWalk {}, math, PackPlan {}, k};
 }
 
 inline constexpr OpApi<vec_call> vec_op {&vec_accepts, &vec_options, &vec_work, &vec_plan};

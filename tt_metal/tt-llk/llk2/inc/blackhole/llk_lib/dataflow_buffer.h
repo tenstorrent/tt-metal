@@ -92,6 +92,7 @@ struct dataflow_buffer_params
 };
 
 /// Any buffer spec with id, page_bytes and pages (tensor/dataflow_buffer.h's DataflowBufferSpec) as llk-lib params.
+/// The Dataflow buffer API converts its spec once and passes the params to every call below.
 template <class Spec>
 constexpr dataflow_buffer_params dataflow_buffer_params_from(const Spec& b)
 {
@@ -158,13 +159,12 @@ inline __attribute__((always_inline)) void advance_fifo_ptr(std::uint32_t& ptr, 
 // ---- calls ---------------------------------------------------------------------------------------------------------
 
 /// Every thread: the buffer starts at base_address (bytes, 16-byte aligned), empty as far as this thread has counted.
-template <const auto& B>
+template <dataflow_buffer_params P>
 inline __attribute__((always_inline)) void dataflow_buffer_setup(std::uint32_t base_address)
 {
-    constexpr dataflow_buffer_params p = dataflow_buffer_params_from(B);
-    static_assert(p.id < max_dataflow_buffers, "a buffer id is a stream id: 0 to 63");
-    dataflow_buffer_interface& b = dataflow_buffer_state<p.id>;
-    b.fifo_size                  = p.page_words * p.pages;
+    static_assert(P.id < max_dataflow_buffers, "a buffer id is a stream id: 0 to 63");
+    dataflow_buffer_interface& b = dataflow_buffer_state<P.id>;
+    b.fifo_size                  = P.page_words * P.pages;
     b.fifo_rd_ptr                = base_address / l1_word_bytes;
     b.fifo_wr_ptr                = b.fifo_rd_ptr;
     b.fifo_limit                 = b.fifo_rd_ptr + b.fifo_size;
@@ -175,27 +175,25 @@ inline __attribute__((always_inline)) void dataflow_buffer_setup(std::uint32_t b
 /// On thread On only: writes both counter registers from the RISC-V. Not part of the buffer protocol: in tt-metal
 /// the firmware zeroes them and the producer's pushes move them. The harness uses it to start a buffer empty, or
 /// full of pages it preloaded.
-template <Thread On, const auto& B>
+template <Thread On, dataflow_buffer_params P>
 inline __attribute__((always_inline)) void dataflow_buffer_set_counters(std::uint16_t acked, std::uint16_t received)
 {
     if constexpr (runs_on<On>)
     {
-        constexpr std::uint32_t id                                             = dataflow_buffer_params_from(B).id;
-        *reinterpret_cast<volatile std::uint32_t*>(tiles_acked_address(id))    = acked;
-        *reinterpret_cast<volatile std::uint32_t*>(tiles_received_address(id)) = received;
+        *reinterpret_cast<volatile std::uint32_t*>(tiles_acked_address(P.id))    = acked;
+        *reinterpret_cast<volatile std::uint32_t*>(tiles_received_address(P.id)) = received;
     }
 }
 
 /// Owner (On) waits until Pages are in the buffer; every thread returns the read pointer as a byte address.
-template <Thread On, const auto& B, std::uint32_t Pages>
+template <Thread On, dataflow_buffer_params P, std::uint32_t Pages>
 inline __attribute__((always_inline)) std::uint32_t dataflow_buffer_wait_front()
 {
-    constexpr dataflow_buffer_params p = dataflow_buffer_params_from(B);
-    const dataflow_buffer_interface& b = dataflow_buffer_state<p.id>;
+    const dataflow_buffer_interface& b = dataflow_buffer_state<P.id>;
     if constexpr (runs_on<On>)
     {
         // Same 16-bit arithmetic as llk_wait_tiles: pages in the buffer = received (register) - acked (local).
-        while (static_cast<std::uint16_t>(read_stream_counter(tiles_received_address(p.id)) - b.tiles_acked) < Pages)
+        while (static_cast<std::uint16_t>(read_stream_counter(tiles_received_address(P.id)) - b.tiles_acked) < Pages)
         {
         }
     }
@@ -204,30 +202,28 @@ inline __attribute__((always_inline)) std::uint32_t dataflow_buffer_wait_front()
 
 /// Every thread moves the read pointer on by Pages; the owner (On, the unpack thread) also tells the producer,
 /// once its unpackers have read the pages.
-template <Thread On, const auto& B, std::uint32_t Pages>
+template <Thread On, dataflow_buffer_params P, std::uint32_t Pages>
 inline __attribute__((always_inline)) void dataflow_buffer_pop_front()
 {
-    constexpr dataflow_buffer_params p = dataflow_buffer_params_from(B);
-    dataflow_buffer_interface& b       = dataflow_buffer_state<p.id>;
+    dataflow_buffer_interface& b = dataflow_buffer_state<P.id>;
     b.tiles_acked += Pages;
-    advance_fifo_ptr(b.fifo_rd_ptr, Pages * p.page_words, b);
+    advance_fifo_ptr(b.fifo_rd_ptr, Pages * P.page_words, b);
     if constexpr (runs_on<On>)
     {
         using hal::sync::StallCondition;
-        write_stream_counter<tiles_acked_address(p.id), pop_counter_gpr, StallCondition::Unpacker0Idle | StallCondition::Unpacker1Idle>(b.tiles_acked);
+        write_stream_counter<tiles_acked_address(P.id), pop_counter_gpr, StallCondition::Unpacker0Idle | StallCondition::Unpacker1Idle>(b.tiles_acked);
     }
 }
 
 /// Owner (On) waits until Pages are free; every thread returns the write pointer as a byte address.
-template <Thread On, const auto& B, std::uint32_t Pages>
+template <Thread On, dataflow_buffer_params P, std::uint32_t Pages>
 inline __attribute__((always_inline)) std::uint32_t dataflow_buffer_reserve_back()
 {
-    constexpr dataflow_buffer_params p = dataflow_buffer_params_from(B);
-    const dataflow_buffer_interface& b = dataflow_buffer_state<p.id>;
+    const dataflow_buffer_interface& b = dataflow_buffer_state<P.id>;
     if constexpr (runs_on<On>)
     {
         // Same 16-bit arithmetic as llk_wait_for_free_tiles: free = capacity - (received (local) - acked (register)).
-        while (static_cast<std::uint16_t>(p.pages - static_cast<std::uint16_t>(b.tiles_received - read_stream_counter(tiles_acked_address(p.id)))) < Pages)
+        while (static_cast<std::uint16_t>(P.pages - static_cast<std::uint16_t>(b.tiles_received - read_stream_counter(tiles_acked_address(P.id)))) < Pages)
         {
         }
     }
@@ -236,16 +232,15 @@ inline __attribute__((always_inline)) std::uint32_t dataflow_buffer_reserve_back
 
 /// Every thread moves the write pointer on by Pages; the owner (On, the pack thread) also tells the consumer, once
 /// its packer has written the pages.
-template <Thread On, const auto& B, std::uint32_t Pages>
+template <Thread On, dataflow_buffer_params P, std::uint32_t Pages>
 inline __attribute__((always_inline)) void dataflow_buffer_push_back()
 {
-    constexpr dataflow_buffer_params p = dataflow_buffer_params_from(B);
-    dataflow_buffer_interface& b       = dataflow_buffer_state<p.id>;
+    dataflow_buffer_interface& b = dataflow_buffer_state<P.id>;
     b.tiles_received += Pages;
-    advance_fifo_ptr(b.fifo_wr_ptr, Pages * p.page_words, b);
+    advance_fifo_ptr(b.fifo_wr_ptr, Pages * P.page_words, b);
     if constexpr (runs_on<On>)
     {
-        write_stream_counter<tiles_received_address(p.id), push_counter_gpr, hal::sync::StallCondition::PackerIdle>(b.tiles_received);
+        write_stream_counter<tiles_received_address(P.id), push_counter_gpr, hal::sync::StallCondition::PackerIdle>(b.tiles_received);
     }
 }
 

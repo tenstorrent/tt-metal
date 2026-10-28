@@ -3,13 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Tensor: the operand type every LLK 2.0 layer takes. Arch-independent.
-// Ported from tt-llk-lab lpremovic/llk-tensor, report 2 (02_tensor_shape_and_resolution.cpp) and its appendix.
+// Ported from tt-llk-lab lpremovic/llk-tensor, report 2 (02_tensor_shape_and_resolution.cpp) and its appendix:
+// https://github.com/tenstorrent/tt-llk-lab/tree/lpremovic/llk-tensor/experiments/llk-tensor
 //
-//   TensorShape  sizes and strides over 6 dims, outermost first, strides in datums, plus an offset in datums:
-//                tile y/x, face y/x, datum y/x
+//   TensorShape  sizes and strides over tensor_rank (6) dims, outermost first, strides in datums, plus an offset in
+//                datums: tile y/x, face y/x, datum y/x
 //   TensorSpec   the shape, the data format, the storage (L1 or Dest) and the owner (thread, unit). Compile time
 //   Tensor       a spec by reference and a release action, both in its type, and a run-time address
 //                (L1: the byte address of datum 0; Dest: the first row)
+//
+// A kernel names a spec with l1_spec / dst_spec (or make_spec), which lay the tile grid out with tiled() and give it
+// L1's dense strides or Dest's row strides (laid_out). The Resolver reads specs; llk-lib reads only the Plan.
 
 #pragma once
 
@@ -17,42 +21,46 @@
 #include <cstddef>
 #include <cstdint>
 
-#include "tensix_types.h"  // DataFormat
+#include "tensix_types.h" // DataFormat
 
 namespace llk2
 {
 
+/// The dims of a TensorShape, outermost first: the tile grid, the faces in a tile, the datums in a face.
 enum Dim : std::size_t
 {
-    TileY,
-    TileX,
-    FaceY,
-    FaceX,
-    DatumY,
-    DatumX
+    TileY,  ///< tile row
+    TileX,  ///< tile column
+    FaceY,  ///< face row in a tile
+    FaceX,  ///< face column in a tile
+    DatumY, ///< row in a face
+    DatumX  ///< column in a face
 };
 
+/// Where a tensor lives.
 enum class Storage : std::uint8_t
 {
-    L1,
-    Dest
+    L1,  ///< L1 memory; the address is a byte address
+    Dest ///< the Dest register; the address is a Dest row
 };
 
+/// A TRISC thread: the owner of a tensor, or the thread an llk-lib call runs on.
 enum class Thread : std::uint8_t
 {
-    Unpack,
-    Math,
-    Pack,
-    None
+    Unpack, ///< TRISC0
+    Math,   ///< TRISC1
+    Pack,   ///< TRISC2
+    None    ///< nobody's yet, or a host build
 };
 
+/// An execution unit: the unit that produces or consumes a tensor.
 enum class Exu : std::uint8_t
 {
-    Unpacker,
-    Fpu,
-    Sfpu,
-    Packer,
-    None
+    Unpacker, ///< the unpackers
+    Fpu,      ///< the matrix unit (FPU)
+    Sfpu,     ///< the vector unit (SFPU)
+    Packer,   ///< the packers
+    None      ///< nobody's yet
 };
 
 /// Dims of every TensorShape: one past the innermost, DatumX.
@@ -62,71 +70,85 @@ inline constexpr std::size_t tensor_rank = DatumX + 1;
 using Dims = std::array<std::uint32_t, tensor_rank>;
 
 // ---- tile geometry constants (the same on every arch) ---------------------------------------------------------------
-inline constexpr std::uint32_t face_cols          = 16; ///< datums in a face row; every face is this wide
-inline constexpr std::uint32_t max_face_rows      = 16; ///< rows in a full face; shorter tiles have shorter faces
-inline constexpr std::uint32_t default_tile_dim   = 32; ///< tile height and width when the caller names none
-inline constexpr std::uint32_t dest_row_datums    = 16; ///< datums in one Dest row
-inline constexpr std::uint32_t min_dest_face_rows = 8;  ///< every face takes at least an 8-row slot in Dest (Quasar's tiny_face_stride)
-inline constexpr std::uint32_t bfp_block_datums   = 16; ///< block float formats share one exponent byte per 16 datums
-inline constexpr std::uint32_t l1_word_bytes      = 16; ///< L1 word: tiles in L1 are padded to whole words, and the unpacker, packer and
-                                                         ///< dataflow buffer addresses and tile sizes count words
-inline constexpr std::uint32_t bits_per_byte      = 8;  ///< bits in one byte, for datum_bits to bytes
+inline constexpr std::uint32_t face_cols          = 16;                 ///< datums in a face row; every face is this wide
+inline constexpr std::uint32_t max_face_rows      = 16;                 ///< rows in a full face; shorter tiles have shorter faces
+inline constexpr std::uint32_t default_tile_dim   = 32;                 ///< tile height and width when the caller names none
+inline constexpr std::uint32_t dest_row_datums    = 16;                 ///< datums in one Dest row
+inline constexpr std::uint32_t min_dest_face_rows = 8;                  ///< every face takes at least an 8-row slot in Dest (Quasar's tiny_face_stride)
+inline constexpr std::uint32_t max_tiny_face_rows = min_dest_face_rows; ///< the tallest tiny tile: tiny tiles are 1, 2, 4 or 8 rows
+inline constexpr std::uint32_t bfp_block_datums   = 16;                 ///< block float formats share one exponent byte per 16 datums
+inline constexpr std::uint32_t l1_word_bytes      = 16;                 ///< L1 word: tiles in L1 are padded to whole words, and the unpacker, packer and
+                                                                        ///< dataflow buffer addresses and tile sizes count words
+inline constexpr std::uint32_t bits_per_byte      = 8;                  ///< bits in one byte, for datum_bits to bytes
 inline constexpr std::uint32_t faces_per_face_row = default_tile_dim / face_cols; ///< faces side by side in a full tile: 2
 inline constexpr std::uint32_t faces_per_full_tile =
     faces_per_face_row * (default_tile_dim / max_face_rows); ///< faces in a full 32x32 tile: 2 x 2, stored 0, 1 (top), 2, 3 (bottom)
+inline constexpr std::uint32_t default_tile_datums = default_tile_dim * default_tile_dim; ///< datums in one 32x32 tile
 
+/// Sizes and strides over Rank dims (Dim order), in datums, and the offset of datum 0 in datums.
 template <std::size_t Rank>
 struct TensorShape
 {
-    std::array<std::uint32_t, Rank> sizes, strides;
-    std::uint32_t offset;
+    std::array<std::uint32_t, Rank> sizes;   ///< elements along each dim
+    std::array<std::uint32_t, Rank> strides; ///< datums from one element to the next along each dim
+    std::uint32_t offset;                    ///< datums from the address to datum 0
 };
 
+/// Everything about a tensor but its address. Compile time.
 template <std::size_t Rank>
 struct TensorSpec
 {
-    TensorShape<Rank> shape;
-    DataFormat format;
-    Storage storage;
-    Thread thread; // the owner: its thread
-    Exu exu;       // and its unit
+    TensorShape<Rank> shape; ///< sizes, strides, offset
+    DataFormat format;       ///< the datum format
+    Storage storage;         ///< L1 or Dest
+    Thread thread;           ///< the owner: its thread
+    Exu exu;                 ///< the owner: its unit
 };
 
+/// The release action of a Tensor that needs none.
 struct NoRelease
 {
+    /// Does nothing.
     void operator()() const
     {
     }
 };
 
+/// A tensor: spec S and release action Release in its type, the address at run time.
 template <const auto& S, class Release = NoRelease>
 struct Tensor : Release
 {
-    static constexpr const auto& spec = S;
-    std::uint32_t address;
+    static constexpr const auto& spec = S; ///< the tensor's spec
+    std::uint32_t address;                 ///< L1: byte address of datum 0; Dest: the absolute first row
 
+    /// A tensor at address a.
     constexpr explicit Tensor(std::uint32_t a) : address(a)
     {
     }
 };
 
+/// Runs t's release action (a dataflow buffer pop or push; nothing for NoRelease).
 template <const auto& S, class R>
 inline void release(const Tensor<S, R>& t)
 {
     static_cast<const R&>(t)();
 }
 
-// ---- helpers over rank-6 shapes and specs ----------------------------------------------------------------------
+// ---- helpers over tensor_rank shapes and specs ---------------------------------------------------------------------
+
+/// The smaller of a and b.
 constexpr std::uint32_t min_u32(std::uint32_t a, std::uint32_t b)
 {
     return a < b ? a : b;
 }
 
+/// The larger of a and b.
 constexpr std::uint32_t max_u32(std::uint32_t a, std::uint32_t b)
 {
     return a > b ? a : b;
 }
 
+/// a and b hold the same values (std::array's == is not constexpr in C++17).
 constexpr bool equal(const Dims& a, const Dims& b)
 {
     for (std::size_t d = 0; d < tensor_rank; ++d)
@@ -139,7 +161,8 @@ constexpr bool equal(const Dims& a, const Dims& b)
     return true;
 }
 
-constexpr Dims dense_strides(const Dims& s) // L1: row-major in dim order
+/// L1 strides for sizes s: row-major in dim order.
+constexpr Dims dense_strides(const Dims& s)
 {
     Dims t {};
     t[DatumX] = 1; // datums are contiguous along x
@@ -150,7 +173,8 @@ constexpr Dims dense_strides(const Dims& s) // L1: row-major in dim order
     return t;
 }
 
-constexpr Dims dest_strides(const Dims& s) // Dest: rows of 16 datums, a face in at least an 8-row slot (every arch)
+/// Dest strides for sizes s: rows of 16 datums, a face in at least an 8-row slot (every arch).
+constexpr Dims dest_strides(const Dims& s)
 {
     Dims t {};
     t[DatumX] = 1; // datums are contiguous along a row
@@ -162,12 +186,14 @@ constexpr Dims dest_strides(const Dims& s) // Dest: rows of 16 datums, a face in
     return t;
 }
 
+/// f is a block float format (BFP8/4/2, A or B exponent).
 constexpr bool is_bfp(DataFormat f)
 {
     return f == DataFormat::Bfp8_b || f == DataFormat::Bfp4_b || f == DataFormat::Bfp2_b || f == DataFormat::Bfp8 || f == DataFormat::Bfp4 ||
            f == DataFormat::Bfp2;
 }
 
+/// Bits of one datum's mantissa (and sign) in L1; 0 for formats no Tensor can be made in yet.
 constexpr std::uint32_t datum_bits(DataFormat f)
 {
     switch (f)
@@ -202,60 +228,70 @@ constexpr bool is_32bit_format(DataFormat f)
     return datum_bits(f) == 32;
 }
 
+/// Rows of one tile.
 constexpr std::uint32_t tile_rows(const TensorShape<tensor_rank>& s)
 {
     return s.sizes[FaceY] * s.sizes[DatumY];
 }
 
+/// Columns of one tile.
 constexpr std::uint32_t tile_cols(const TensorShape<tensor_rank>& s)
 {
     return s.sizes[FaceX] * s.sizes[DatumX];
 }
 
+/// Tiles in the tensor.
 constexpr std::uint32_t tile_count(const TensorShape<tensor_rank>& s)
 {
     return s.sizes[TileY] * s.sizes[TileX];
 }
 
+/// Faces in one tile.
 constexpr std::uint32_t faces_per_tile(const TensorShape<tensor_rank>& s)
 {
     return s.sizes[FaceY] * s.sizes[FaceX];
 }
 
+/// value rounded up to a multiple of multiple.
 constexpr std::uint32_t round_up(std::uint32_t value, std::uint32_t multiple)
 {
     return (value + multiple - 1) / multiple * multiple;
 }
 
-// Bytes of one tile in L1: mantissas, plus one exponent byte per block for block formats; each part padded to
-// whole 16-byte words.
+/// Bytes of one tile of `datums` datums in L1: mantissas, plus one exponent byte per block for block formats; each
+/// part padded to whole L1 words.
 constexpr std::uint32_t tile_bytes(DataFormat f, std::uint32_t datums)
 {
     const std::uint32_t exponents = is_bfp(f) ? round_up(datums / bfp_block_datums, l1_word_bytes) : 0;
     return round_up(datums * datum_bits(f) / bits_per_byte + exponents, l1_word_bytes);
 }
 
+/// Bytes of one of t's tiles in L1.
 constexpr std::uint32_t tile_bytes(const TensorSpec<tensor_rank>& t)
 {
     return tile_bytes(t.format, tile_rows(t.shape) * tile_cols(t.shape));
 }
 
+/// s has L1's dense strides.
 constexpr bool is_contiguous(const TensorShape<tensor_rank>& s)
 {
     return equal(s.strides, dense_strides(s.sizes));
 }
 
+/// a and b are the same tensor, whoever owns them.
 constexpr bool same_except_owner(const TensorSpec<tensor_rank>& a, const TensorSpec<tensor_rank>& b)
 {
     return equal(a.shape.sizes, b.shape.sizes) && equal(a.shape.strides, b.shape.strides) && a.shape.offset == b.shape.offset && a.format == b.format &&
            a.storage == b.storage;
 }
 
-constexpr bool same(const TensorSpec<tensor_rank>& a, const TensorSpec<tensor_rank>& b) // specs are equal by value, not by type
+/// a and b are equal by value, owner included (not by type).
+constexpr bool same(const TensorSpec<tensor_rank>& a, const TensorSpec<tensor_rank>& b)
 {
     return same_except_owner(a, b) && a.thread == b.thread && a.exu == b.exu;
 }
 
+/// t with owner (thread, exu).
 constexpr TensorSpec<tensor_rank> with_owner(TensorSpec<tensor_rank> t, Thread thread, Exu exu)
 {
     t.thread = thread;
@@ -263,34 +299,47 @@ constexpr TensorSpec<tensor_rank> with_owner(TensorSpec<tensor_rank> t, Thread t
     return t;
 }
 
+/// The same tensor as S under owner (T, E), as a compile-time object a Tensor can name.
 template <const auto& S, Thread T, Exu E>
-inline constexpr auto owned_by = with_owner(S, T, E); // the same tensor under another owner
+inline constexpr auto owned_by = with_owner(S, T, E);
 
-constexpr bool free_or(const TensorSpec<tensor_rank>& d, Thread t, Exu e) // nobody's, or the writer's already
+/// d is nobody's, or already the writer's (t, e).
+constexpr bool free_or(const TensorSpec<tensor_rank>& d, Thread t, Exu e)
 {
     return d.thread == Thread::None || (d.thread == t && d.exu == e);
 }
 
 // ---- constructing: the tile is named, or min(dim, 32) per axis -------------------------------------------------
+
+/// n is a power of two.
+constexpr bool is_power_of_two(std::uint32_t n)
+{
+    return n > 0 && (n & (n - 1)) == 0;
+}
+
+/// An h x w tile can be laid out: whole faces wide; tiny (a power of two up to max_tiny_face_rows rows) or a whole
+/// number of full faces tall.
 constexpr bool is_valid_tile(std::uint32_t h, std::uint32_t w)
 {
-    // Tiny tiles are 1, 2, 4 or 8 rows tall; full tiles a whole number of faces tall.
-    const bool tiny_height = h == 1 || h == 2 || h == 4 || h == 8;
+    const bool tiny_height = is_power_of_two(h) && h <= max_tiny_face_rows;
     return w > 0 && w % face_cols == 0 && (tiny_height || (h > 0 && h % max_face_rows == 0));
 }
 
+/// Sizes of a tiles_y x tiles_x grid of h x w tiles: faces of min(h, 16) rows and face_cols columns.
 constexpr Dims tiled(std::uint32_t tiles_y, std::uint32_t tiles_x, std::uint32_t h, std::uint32_t w)
 {
     const std::uint32_t face_rows = min_u32(h, max_face_rows);
     return {tiles_y, tiles_x, h / face_rows, w / face_cols, face_rows, face_cols};
 }
 
+/// A spec of sizes in format f, with the strides of `storage`, offset 0 and no owner.
 constexpr TensorSpec<tensor_rank> laid_out(const Dims& sizes, DataFormat f, Storage storage)
 {
     const Dims strides = storage == Storage::Dest ? dest_strides(sizes) : dense_strides(sizes);
     return {{sizes, strides, 0}, f, storage, Thread::None, Exu::None}; // nobody's: nothing has produced it yet
 }
 
+/// The spec of a Rows x Cols tensor in format F, cut into H x W tiles, in `storage`.
 template <std::uint32_t Rows, std::uint32_t Cols, DataFormat F, std::uint32_t H, std::uint32_t W>
 constexpr TensorSpec<tensor_rank> make_spec(Storage storage)
 {
@@ -299,25 +348,49 @@ constexpr TensorSpec<tensor_rank> make_spec(Storage storage)
     return laid_out(tiled(Rows / H, Cols / W, H, W), F, storage);
 }
 
-template <std::uint32_t Rows, std::uint32_t Cols, DataFormat F, std::uint32_t H = min_u32(Rows, default_tile_dim), std::uint32_t W = min_u32(Cols, default_tile_dim)>
+/// The spec of a Rows x Cols L1 tensor in format F, in H x W tiles (default: min(dim, 32)).
+template <
+    std::uint32_t Rows,
+    std::uint32_t Cols,
+    DataFormat F,
+    std::uint32_t H = min_u32(Rows, default_tile_dim),
+    std::uint32_t W = min_u32(Cols, default_tile_dim)>
 inline constexpr TensorSpec<tensor_rank> l1_spec = make_spec<Rows, Cols, F, H, W>(Storage::L1);
 
-template <std::uint32_t Rows, std::uint32_t Cols, DataFormat F, std::uint32_t H = min_u32(Rows, default_tile_dim), std::uint32_t W = min_u32(Cols, default_tile_dim)>
+/// The spec of a Rows x Cols Dest tensor in format F, in H x W tiles (default: min(dim, 32)).
+template <
+    std::uint32_t Rows,
+    std::uint32_t Cols,
+    DataFormat F,
+    std::uint32_t H = min_u32(Rows, default_tile_dim),
+    std::uint32_t W = min_u32(Cols, default_tile_dim)>
 inline constexpr TensorSpec<tensor_rank> dst_spec = make_spec<Rows, Cols, F, H, W>(Storage::Dest);
 
-template <std::uint32_t Rows, std::uint32_t Cols, DataFormat F, std::uint32_t H = min_u32(Rows, default_tile_dim), std::uint32_t W = min_u32(Cols, default_tile_dim)>
+/// An L1 tensor of l1_spec<Rows, Cols, F, H, W> at byte address `address`.
+template <
+    std::uint32_t Rows,
+    std::uint32_t Cols,
+    DataFormat F,
+    std::uint32_t H = min_u32(Rows, default_tile_dim),
+    std::uint32_t W = min_u32(Cols, default_tile_dim)>
 constexpr auto l1_tensor(std::uint32_t address)
 {
     return Tensor<l1_spec<Rows, Cols, F, H, W>>(address);
 }
 
-template <std::uint32_t Rows, std::uint32_t Cols, DataFormat F, std::uint32_t H = min_u32(Rows, default_tile_dim), std::uint32_t W = min_u32(Cols, default_tile_dim)>
+/// A Dest tensor of dst_spec<Rows, Cols, F, H, W> from Dest row `row`.
+template <
+    std::uint32_t Rows,
+    std::uint32_t Cols,
+    DataFormat F,
+    std::uint32_t H = min_u32(Rows, default_tile_dim),
+    std::uint32_t W = min_u32(Cols, default_tile_dim)>
 constexpr auto dst_tensor(std::uint32_t row)
 {
     return Tensor<dst_spec<Rows, Cols, F, H, W>>(row);
 }
 
-// [M, K] x [K, N]: rows from a, columns from b.
+/// Sizes of [M, K] x [K, N]: rows from a, columns from b.
 constexpr Dims product_sizes(const Dims& a, const Dims& b)
 {
     return {a[TileY], b[TileX], a[FaceY], b[FaceX], a[DatumY], b[DatumX]};

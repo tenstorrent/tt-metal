@@ -82,7 +82,7 @@ inline __attribute__((always_inline)) void set_addr_mod()
         cfg::set<AddrMod[cfg::Dest].Clear, Slot, D.clr>(),
         cfg::set<AddrMod[cfg::Dest].CR, Slot, D.cr>(),
         cfg::set<AddrMod[cfg::Fidelity].Incr, Slot, FidelityIncr>(),
-        cfg::set<AddrMod[cfg::Fidelity].Clear, Slot, 0>()); // the fidelity phase only moves on (HiFi) or stays
+        cfg::set<AddrMod[cfg::Fidelity].Clear, Slot, 0>());                     // the fidelity phase only moves on (HiFi) or stays
     cfg::write<cfg::Access::TensixCfgUnit, AddrMod[cfg::Bias].Incr, Slot, 0>(); // no bias counter step
 }
 

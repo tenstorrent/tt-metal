@@ -7,7 +7,7 @@
 //
 // One Dest section per block of work, in this order:
 //
-//   inline constexpr auto& acc_spec = llk2::dst_spec<M, N, dest_format>;  // [M, N] in Dest
+//   inline constexpr auto& acc_spec = llk2::dst_spec<M, N, llk2::kernel_dest_format>;  // [M, N] in Dest
 //
 //   const auto acc = llk2::dest_acquire<acc_spec>(); // math: wait for a free section. Every thread: a Dest tensor at
 //                                                    // that section's first row (the section is zero)
@@ -25,7 +25,7 @@
 // Rules for ops (and their authors):
 //   - acc.address is the absolute Dest row the tensor starts at (0 or the second section's first row). Program Dest
 //     addresses from it (math: DestTargetRegCfgMath::Offset = acc.address + tile rows; pack: the packer's Dest offset)
-//     and do not add a section base of your own (no get_dest_buffer_base(), no dest_offset_id).
+//     and do not add a section base of your own.
 //   - Write Dest only between dest_acquire and dest_commit; read it (pack) only between dest_commit and dest_release.
 //   - The tensor must fit one section: 512 rows (8 tiles of 32x32) with a 16-bit Dest, 256 rows (4 tiles) with a
 //     32-bit Dest. dest_acquire rejects bigger ones at compile time.
@@ -51,8 +51,9 @@ template <const TensorSpec<tensor_rank>& S>
 inline __attribute__((always_inline)) Tensor<S> dest_acquire()
 {
     static_assert(S.storage == Storage::Dest, "dest_acquire returns a Dest tensor: use a dst_spec");
-    static_assert(kernel_settings.dest_fp32 ? datum_bits(S.format) == 32 : datum_bits(S.format) <= 16 && datum_bits(S.format) > 0,
-                  "the Dest tensor's format must match the kernel's Dest mode (LLK2_DEST_FP32)");
+    static_assert(
+        kernel_settings.dest_fp32 ? datum_bits(S.format) == 32 : datum_bits(S.format) <= 16 && datum_bits(S.format) > 0,
+        "the Dest tensor's format must match the kernel's Dest mode (LLK2_DEST_FP32)");
     constexpr llk_lib::dest_params p = llk_lib::dest_params_from(S, kernel_settings);
     llk_lib::dest_acquire<Thread::Math, p>();
     return Tensor<S>(llk_lib::dest_section_row());
