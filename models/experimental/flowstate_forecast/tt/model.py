@@ -59,6 +59,9 @@ class FlowStateTT:
                     "b1": _put(device, mlp.w1.bias.detach().view(1, 1024), wd),
                     "w2": _put(device, T(mlp.w2.weight), wd),
                     "b2": _put(device, mlp.w2.bias.detach().view(1, 1024), wd),
+                    "w12": _put(device, common.swiglu_interleave(T(mlp.w1.weight), T(mlp.w2.weight)), wd),
+                    "b12": _put(device, common.swiglu_interleave(mlp.w1.bias.detach().view(1, 1024),
+                                                                 mlp.w2.bias.detach().view(1, 1024)), wd),
                     "w3": _put(device, T(mlp.w3.weight), wd),
                     "b3": _put(device, mlp.w3.bias.detach().view(1, 512), wd),
                     "ln_w": _put(device, lay.norm.weight.detach().view(1, 512), ttnn.bfloat16),
@@ -137,12 +140,19 @@ class FlowStateTT:
         p, w = self.p, self.layers[i]
         h = ttnn.rms_norm(y, weight=w["rms_w"], epsilon=1e-6, compute_kernel_config=p.norm)
         rows = y.shape[-2]
-        a = self._linear(h, w["w1"], "w1", rows, bias=w["b1"], act="silu")
-        b = self._linear(h, w["w2"], "w2", rows, bias=w["b2"])
-        ttnn.deallocate(h)
-        ab = ttnn.multiply(a, b)
-        ttnn.deallocate(a)
-        ttnn.deallocate(b)
+        if p.fused_swiglu:  # R2-1: silu(w1 h + b1) * (w2 h + b2) in one op
+            ab = ttnn.experimental.minimal_matmul(
+                h, w["w12"], bias_tensor=w["b12"], config=common.swiglu_config(self.device, p.name),
+                compute_kernel_config=p.dense, dtype=ttnn.bfloat16, memory_config=p.mem, fuse_swiglu=True,
+            )
+            ttnn.deallocate(h)
+        else:
+            a = self._linear(h, w["w1"], "w1", rows, bias=w["b1"], act="silu")
+            b = self._linear(h, w["w2"], "w2", rows, bias=w["b2"])
+            ttnn.deallocate(h)
+            ab = ttnn.multiply(a, b)
+            ttnn.deallocate(a)
+            ttnn.deallocate(b)
         z = self._linear(ab, w["w3"], "w3", rows, bias=w["b3"])
         ttnn.deallocate(ab)
         return ttnn.add(z, y)

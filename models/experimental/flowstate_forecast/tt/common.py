@@ -18,6 +18,7 @@ The round-0 settings are a starting point; every change is measured per role (sk
 
 from types import SimpleNamespace
 
+import torch
 import ttnn
 
 
@@ -35,6 +36,28 @@ IN0_BLOCK_W = {
 
 
 ACTIVATIONS = {"silu": ttnn.UnaryOpType.SILU, "sigmoid": ttnn.UnaryOpType.SIGMOID}
+
+
+def swiglu_interleave(gate, up, tile=32):
+    """[K, N] gate and up (matmul layout, or [1, N] biases) -> the tile-pair-interleaved [K, 2N] operand of
+    minimal_matmul(fuse_swiglu=True): column tile 2p = gate tile p, 2p + 1 = up tile p."""
+    K, N = gate.shape
+    return torch.stack((gate.reshape(K, N // tile, tile), up.reshape(K, N // tile, tile)), 2).reshape(K, 2 * N)
+
+
+# R2-1 (sweep job TBD, paper): the fused SwiGLU's minimal_matmul blocks per precision; None = the op's auto config
+SWIGLU_BLOCKS = {"accuracy": None, "performance": None}
+
+
+def swiglu_config(device, precision):
+    b = SWIGLU_BLOCKS[precision]
+    if b is None:
+        return None
+    grid = device.compute_with_storage_grid_size()
+    return ttnn.MinimalMatmulConfig(
+        M_block_size=b[0], K_block_size=b[1], N_block_size=b[2], subblock_h=b[3], subblock_w=b[4],
+        compute_with_storage_grid_size=(grid.x, grid.y),
+    )
 
 
 def mm_config(device, role, precision, M, K, N, act=None):
@@ -85,4 +108,5 @@ def policy(device, precision="accuracy"):
         decoder_weight_dtype=ttnn.float32,
         mem=ttnn.DRAM_MEMORY_CONFIG,
         program_configs=True,  # R1-1
+        fused_swiglu=True,  # R2-1
     )
