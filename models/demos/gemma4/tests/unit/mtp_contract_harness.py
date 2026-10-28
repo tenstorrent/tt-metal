@@ -513,6 +513,47 @@ def _warmup(model, enable_trace):
     )
 
 
+# -- asynchronous scheduling: the deferred verify readback walked on the host ------------------
+
+
+def _read(model, out):
+    """The deferred read of a verify: the mode's tensor, unwrapped from the VerifyOutput as the runner does,
+    handed to ``read_decode_output`` and waited on later (the host tensor carries no events)."""
+    tensor = out.argmax_ids if out.spec_mode == "argmax_ids" else out.logits
+    host, events = model.read_decode_output(tensor, async_read=True)
+    assert events == []
+    return host
+
+
+def _greedy_walk(block, valid, ids):
+    """The plugin's greedy walk (``accept_greedy_drafts``): every draft the target argmax agrees with, then the
+    argmax at the first disagreeing column (the correction, or the bonus past the last draft)."""
+    accepted = 0
+    while accepted < valid and int(ids[accepted]) == int(block[1 + accepted]):
+        accepted += 1
+    return [int(ids[j]) for j in range(accepted + 1)], accepted + 1
+
+
+def _script_two_replays(model):
+    """Replay 1 agrees with three drafts, replay 2 with two (every id below the stub vocabulary)."""
+    model._mtp_decoder.script = [
+        [([101, 102, 103, 104, 105], [101, 102, 103, 477, 478, 479])],
+        [([201, 202, 203, 204, 205], [201, 202, 488, 489, 490, 491])],
+    ]
+
+
+def _verify_walk_propose(model, anchor, position, drafts, mode, deferred):
+    """One verify of ``drafts`` after ``anchor`` at ``position``, read now (synchronous order) or through the
+    deferred read, walked on the host, committed and proposed from."""
+    block = _block(anchor, drafts)
+    out = _verify(model, [block], [_positions(position, 6)], [5], [10], mode=mode)
+    host = _read(model, out) if deferred else (out.argmax_ids if mode == "argmax_ids" else out.logits)
+    ids = host[0] if mode == "argmax_ids" else host[0].float().argmax(dim=-1)
+    committed, count = _greedy_walk(block, 5, ids)
+    proposal = _propose(model, [committed + [-1] * (6 - count)], [_positions(position + 1, count)], counts=[count])
+    return committed, count, proposal.draft_token_ids[0].tolist()
+
+
 __all__ = [
     "DEFAULT_SHAPES",
     "Decoder",
@@ -524,18 +565,22 @@ __all__ = [
     "_block",
     "_commands",
     "_committed",
+    "_greedy_walk",
     "_ladder",
     "_names",
     "_ordinary",
     "_positions",
     "_prefill",
     "_propose",
+    "_read",
     "_sampling",
+    "_script_two_replays",
     "_start_solo",
     "_steps",
     "_table",
     "_tensor",
     "_verify",
+    "_verify_walk_propose",
     "_warmup",
     "_wire",
     "build_mtp_model",
