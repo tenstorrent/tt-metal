@@ -118,7 +118,9 @@ def run_once(ckpt: str, layer: int, tokens: int, threads: int, seed: int, check:
     h, _ = hasher.hashes(ids, layer, tail)
     t1 = time.perf_counter()
     flat = h.reshape(-1)
+    io0, flt0 = _io_read_bytes(), _majflt()
     v, t2 = gather(table, flat, threads, pool)
+    io1, flt1 = _io_read_bytes(), _majflt()
     t3 = time.perf_counter()
     rows = torch.zeros(tokens, h.shape[1] * table.dim, dtype=torch.bfloat16)
     rows[:] = v.view(tokens, -1).to(torch.bfloat16)
@@ -134,6 +136,8 @@ def run_once(ckpt: str, layer: int, tokens: int, threads: int, seed: int, check:
         dequant_ms=1e3 * (t3 - t2),
         assemble_ms=1e3 * (t4 - t3),
         total_ms=1e3 * (t4 - t0),
+        gather_disk_mb=round((io1 - io0) / 2**20, 1),  # bytes the gather really read from storage (cache misses)
+        gather_major_faults=flt1 - flt0,
     )
     if check:
         ref = table.rows(h).flatten(1).to(torch.bfloat16)
@@ -141,6 +145,61 @@ def run_once(ckpt: str, layer: int, tokens: int, threads: int, seed: int, check:
     if pool:
         pool.shutdown()
     return out
+
+
+def _io_read_bytes() -> int:
+    """Bytes this process caused to be read from storage (/proc/self/io read_bytes): disk traffic, not cache hits."""
+    with open("/proc/self/io") as f:
+        return int(next(line for line in f if line.startswith("read_bytes:")).split()[1])
+
+
+def _majflt() -> int:
+    import resource
+
+    return resource.getrusage(resource.RUSAGE_SELF).ru_majflt
+
+
+def load_resident(ck, layer: int, readers: int = 16):
+    """The layer's engram weight + scale copied once into anonymous memory (transparent huge pages): an EngramTable-
+    like object whose weight / scale are resident torch tensors. Returns (table, seconds, GiB)."""
+    import mmap
+
+    import numpy as np
+    import torch
+
+    from models.demos.deepseek_v41_flash_d_p.reference.weights import EngramTable
+
+    table = EngramTable(ck, layer)
+    t0, total = time.perf_counter(), 0
+    for attr, name in (
+        ("weight", f"layers.{layer}.engram.embed.weight"),
+        ("scale", f"layers.{layer}.engram.embed.scale"),
+    ):
+        _, shape, off, nbytes = ck.info(name)
+        buf = mmap.mmap(-1, nbytes, flags=mmap.MAP_PRIVATE | mmap.MAP_ANONYMOUS)
+        try:
+            buf.madvise(mmap.MADV_HUGEPAGE)
+        except (AttributeError, OSError):
+            pass
+        fd = os.open(os.path.join(ck.path, ck.weight_map[name]), os.O_RDONLY)
+        os.posix_fadvise(fd, off, nbytes, os.POSIX_FADV_SEQUENTIAL)
+        step = 64 << 20
+        view = memoryview(buf)
+
+        def read(k):
+            a = k * step
+            n = min(step, nbytes - a)
+            got = os.preadv(fd, [view[a : a + n]], off + a)
+            assert got == n, (got, n)
+
+        with ThreadPoolExecutor(readers) as ex:
+            list(ex.map(read, range((nbytes + step - 1) // step)))
+        os.close(fd)
+        arr = np.frombuffer(buf, dtype=np.uint8).reshape(shape)
+        setattr(table, attr, torch.from_numpy(arr))
+        setattr(table, f"_{attr}_buf", buf)
+        total += nbytes
+    return table, time.perf_counter() - t0, total / 2**30
 
 
 def drop_pages(ck, layer: int) -> int:
