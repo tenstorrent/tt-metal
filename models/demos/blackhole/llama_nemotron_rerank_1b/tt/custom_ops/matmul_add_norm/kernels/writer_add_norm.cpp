@@ -31,6 +31,8 @@ constexpr uint32_t cb_one_id = tt::CBIndex::c_12;
 constexpr uint32_t cb_h_id = tt::CBIndex::c_16;
 constexpr uint32_t cb_y_id = tt::CBIndex::c_17;
 constexpr uint32_t FWD_TRID = 1;
+constexpr uint32_t XCHG_TRID = 2;
+constexpr uint32_t OUT_TRID = 3;
 constexpr uint32_t FP32_TILE = 4096;
 constexpr uint32_t FP32_FACE = 1024;
 constexpr uint32_t FACE_ROW = 16 * sizeof(uint32_t);  // one row of one fp32 face
@@ -79,6 +81,15 @@ void kernel_main() {
     const uint32_t N_end_tile = get_arg_val<uint32_t>(argidx++);
     const uint32_t defer_write_k_block = get_arg_val<uint32_t>(argidx++);
     const uint32_t my_peer = get_arg_val<uint32_t>(argidx++);
+    // IN1_MCAST: the x = 0 core multicasts each in1 block to the rest of its row (rectangle in the
+    // order the NOC needs) instead of the block being relayed core to core.
+    const uint32_t mcast_x0 = get_arg_val<uint32_t>(argidx++);
+    const uint32_t mcast_y0 = get_arg_val<uint32_t>(argidx++);
+    const uint32_t mcast_x1 = get_arg_val<uint32_t>(argidx++);
+    const uint32_t mcast_y1 = get_arg_val<uint32_t>(argidx++);
+    const uint32_t mcast_n = get_arg_val<uint32_t>(argidx++);
+    const uint32_t row_sender_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t row_sender_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t peer_xy_idx = argidx;  // n_peers (x, y) NOC coordinates follow
 
     constexpr auto in1_args = TensorAccessorArgs<20>();
@@ -145,22 +156,108 @@ void kernel_main() {
 
     in1_valid_semaphore.set(VALID);
 
+    volatile tt_l1_ptr uint32_t* in1_sender_sem =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_compile_time_arg_val(14)));
+    volatile tt_l1_ptr uint32_t* in1_receiver_sem =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(get_compile_time_arg_val(15)));
+    constexpr uint32_t out_tiles = M_block_tiles * N_block_tiles;
+    CircularBuffer cb_h(cb_h_id), cb_y(cb_y_id);
+
+    // Epilogue DRAM traffic (residual reads, h and y writes) is the bulk of this kernel's NOC work
+    // and DRAM is close to saturated while it runs. Issued in blocking bursts it stalls this RISC,
+    // which also relays the weights along its row, and the matmuls downstream starve. So it is
+    // queued instead: `pump` issues one pending tile, and only when the NOC command buffer for it
+    // is free; every wait in the weight relay polls it. The queue is drained (blocking) at the end
+    // of each block, before the CBs it reads or fills are handed on.
+    struct {
+        uint32_t res_ptr, res_m, h_ptr, h_m, y_ptr, y_m;
+        bool res, h, y;
+        uint32_t cursor, end;
+    } io = {};
+    auto io_issue = [&](bool block) -> bool {
+        while (io.cursor < io.end) {
+            const uint32_t s = io.cursor % 3;
+            const uint32_t t = io.cursor / 3;
+            const uint32_t i = t / n_real;
+            const uint32_t j = t - i * n_real;
+            const uint32_t off = i * N_block_tiles + j;
+            bool valid;
+            uint32_t m;
+            if (s == 0) {
+                valid = io.res;
+                m = io.res_m + i;
+            } else if (s == 1) {
+                valid = io.h;
+                m = io.h_m + i;
+            } else {
+                valid = io.y;
+                m = io.y_m + i;
+            }
+            if (!valid || m >= m_limit) {
+                ++io.cursor;
+                continue;
+            }
+            if (!block && !noc_cmd_buf_ready(noc_index, s == 0 ? read_cmd_buf : write_cmd_buf)) {
+                return false;
+            }
+            const uint32_t page = m * N_tiles + N_start_tile + j;
+#ifdef SPLIT_RESIDUAL
+            // residual / h in the column-split layout: this core's slice of every row is contiguous
+            const uint32_t split_page = (my_peer * M_tiles + m) * N_block_tiles + j;
+#else
+            const uint32_t split_page = page;
+#endif
+            if (s == 0) {
+                noc.async_read(
+                    res_reader,
+                    CoreLocalMem<uint32_t>(io.res_ptr + off * res_tile_size),
+                    res_tile_size,
+                    {.page_id = split_page},
+                    {});
+            } else if (s == 1) {
+#ifdef POSTED_OUT
+                noc_async_write_one_packet_with_trid<true, true>(
+                    io.h_ptr + off * h_tile_size, h_writer.get_noc_addr(split_page), h_tile_size, OUT_TRID);
+#else
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(io.h_ptr + off * h_tile_size),
+                    h_writer,
+                    h_tile_size,
+                    {},
+                    {.page_id = split_page});
+#endif
+            } else {
+#ifdef POSTED_OUT
+                noc_async_write_one_packet_with_trid<true, true>(
+                    io.y_ptr + off * y_tile_size, y_writer.get_noc_addr(page), y_tile_size, OUT_TRID);
+#else
+                noc.async_write(
+                    CoreLocalMem<uint32_t>(io.y_ptr + off * y_tile_size), y_writer, y_tile_size, {}, {.page_id = page});
+#endif
+            }
+            ++io.cursor;
+            if (!block) {
+                return true;
+            }
+        }
+        return false;
+    };
+    auto pump = [&]() { io_issue(false); };
+    auto drain = [&]() { io_issue(true); };
+
     // Exchange the partial sums of squares of block `blk`. The compute leaves each tile-row's 32
     // partial sums in row 0 of its partial tile (two 16-value runs, faces 0 and 1); this core's
     // runs go straight into row `my_peer` of the matching gathered tile on every core of these
     // rows (itself included), into the half of the gathered CB for the block's parity. Rows past
     // n_peers stay zero, so the compute's column sum over a gathered tile is the full row statistic.
     auto exchange = [&](uint32_t blk) {
-#ifdef V_NO_XCHG
-        cb_part.wait_front(M_block_tiles);
-        cb_part.pop_front(M_block_tiles);
-        cb_gath.reserve_back(M_block_tiles);
-        cb_gath.push_back(M_block_tiles);
-        return;
-#endif
+        while (!cb_part.pages_available_at_front(M_block_tiles)) {
+            pump();
+        }
         cb_part.wait_front(M_block_tiles);
         const uint32_t part = cb_part.get_read_ptr();
         const uint32_t gdst = gath_base + (blk & 1) * M_block_tiles * FP32_TILE + my_peer * FACE_ROW;
+        noc_async_write_set_trid(XCHG_TRID);
         for (uint32_t p = 0; p < n_peers; ++p) {
             const uint32_t px = get_arg_val<uint32_t>(peer_xy_idx + 2 * p);
             const uint32_t py = get_arg_val<uint32_t>(peer_xy_idx + 2 * p + 1);
@@ -171,75 +268,31 @@ void kernel_main() {
                 noc_async_write(src + FP32_FACE, get_noc_addr(px, py, dst + FP32_FACE), FACE_ROW);
             }
         }
-        noc_async_write_barrier();
+        noc_async_write_barrier_with_trid(XCHG_TRID);
+        noc_async_write_set_trid(0);
         cb_part.pop_front(M_block_tiles);
         for (uint32_t p = 0; p < n_peers; ++p) {
             const uint32_t px = get_arg_val<uint32_t>(peer_xy_idx + 2 * p);
             const uint32_t py = get_arg_val<uint32_t>(peer_xy_idx + 2 * p + 1);
             noc_semaphore_inc(get_noc_addr(px, py, xchg_sem_addr), 1);
         }
-        noc_semaphore_wait_min(xchg_sem, n_peers * (blk + 1));
+        while (*xchg_sem < n_peers * (blk + 1)) {
+            pump();
+        }
         cb_gath.reserve_back(M_block_tiles);
         cb_gath.push_back(M_block_tiles);
     };
 
     // The compute runs block i's matmul, then block i - 1's second pass, then block i's first pass
-    // (see compute_add_norm.cpp), so during block i's K loop:
-    //   * block i - 1's partial sums exist once its first pass is done, just before block i's
-    //     matmul starts: the exchange runs after the first two in1 K blocks are pushed (all the
-    //     in1 CB holds), hidden behind block i's matmul;
-    //   * the residual CB is free from that point too (the first pass consumed it);
-    //   * block i - 1's h and block i - 2's y are ready to be written.
-    // The remaining K blocks each carry `rows` tile-rows of each stream, issued after the weight
-    // forward so its flush and the next read barrier only see traffic that had a K block to drain.
+    // (see compute_add_norm.cpp). So in block i's K loop, once the first two in1 K blocks are
+    // pushed (all the in1 CB holds): block i - 1's partial sums exist and the exchange runs,
+    // hidden behind block i's matmul; the residual CB is free (the first pass consumed it); and
+    // block i - 1's h and block i - 2's y are ready. Those become the block's queued I/O.
     // One N block per core: the in0 kernel starts every M block at K block 0 (it only alternates
     // direction between N blocks of one M block), so the K order here is always forward.
     constexpr uint32_t xchg_k = K_num_blocks > 1 ? 1 : 0;
-    constexpr uint32_t steps = K_num_blocks - xchg_k;
-    constexpr uint32_t rows = (M_block_tiles + steps - 1) / steps;
-    constexpr uint32_t out_tiles = M_block_tiles * N_block_tiles;
-    CircularBuffer cb_h(cb_h_id), cb_y(cb_y_id);
-    auto write_rows =
-        [&](const auto& out, uint32_t base, uint32_t tile_size, uint32_t m_tile, uint32_t i0, uint32_t i1) {
-#ifdef V_NO_OUT
-            return;
-#endif
-            for (uint32_t i = i0; i < i1 && i < M_block_tiles; ++i) {
-                if (m_tile + i < m_limit) {
-                    for (uint32_t j = 0; j < n_real; ++j) {
-                        noc.async_write(
-                            CoreLocalMem<uint32_t>(base + (i * N_block_tiles + j) * tile_size),
-                            out,
-                            tile_size,
-                            {},
-                            {.page_id = (m_tile + i) * N_tiles + N_start_tile + j});
-                    }
-                }
-            }
-        };
-    auto read_res_rows = [&](uint32_t base, uint32_t m_tile, uint32_t i0, uint32_t i1) {
-#ifdef V_NO_RES
-        return;
-#endif
-        for (uint32_t i = i0; i < i1 && i < M_block_tiles; ++i) {
-            if (m_tile + i < m_limit) {
-                for (uint32_t j = 0; j < n_real; ++j) {
-                    noc.async_read(
-                        res_reader,
-                        CoreLocalMem<uint32_t>(base + (i * N_block_tiles + j) * res_tile_size),
-                        res_tile_size,
-                        {.page_id = (m_tile + i) * N_tiles + N_start_tile + j},
-                        {});
-                }
-            }
-        }
-    };
-
-    uint32_t h_ptr = 0, y_ptr = 0, res_ptr = 0;
     for (uint32_t m_block_iter = 0; m_block_iter < M_blocks_per_core; m_block_iter++) {
         const uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
-        const uint32_t h_m_tile = m_tile - M_block_tiles;      // block i - 1
-        const uint32_t y_m_tile = m_tile - 2 * M_block_tiles;  // block i - 2
         const bool has_h = m_block_iter >= 1;
         const bool has_y = m_block_iter >= 2;
         const uint32_t n_tile = N_start_tile;
@@ -247,6 +300,9 @@ void kernel_main() {
         const uint32_t current_N_tiles_bytes = (n_tile_end - n_tile) * in1_tile_size;
 
         for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
+            while (!cb_in1.pages_reservable_at_back(in1_block_num_tiles)) {
+                pump();
+            }
             cb_in1.reserve_back(in1_block_num_tiles);
             uint32_t in1_start_address = cb_in1.get_write_ptr();
             if constexpr (is_injector_core) {
@@ -261,15 +317,48 @@ void kernel_main() {
                     n_tile_end);
             } else {
                 in1_receiver_semaphore.set(INVALID);
+#ifdef IN1_MCAST
+                in1_sender_semaphore.up(noc, row_sender_x, row_sender_y, 1);
+#else
                 in1_sender_semaphore.up(noc, in1_sender_noc_x, in1_sender_noc_y, 1);
-                in1_receiver_semaphore.wait(VALID);
+#endif
+                while (*in1_receiver_sem != VALID) {
+                    pump();
+                }
             }
             cb_in1.push_back(in1_block_num_tiles);
-            if (!is_sink_core) {
-                in1_sender_semaphore.wait(1);
+#ifdef IN1_MCAST
+            if (is_injector_core && mcast_n > 0) {
+                while (*in1_sender_sem != mcast_n) {
+                    pump();
+                }
                 in1_sender_semaphore.set(0);
-                // The forward gets its own transaction id so its flush does not also wait for the
-                // epilogue's DRAM writes still in flight.
+                noc_async_write_set_trid(FWD_TRID);
+                noc.async_write_multicast(
+                    CoreLocalMem<uint32_t>(in1_start_address),
+                    MulticastEndpoint{},
+                    in1_block_num_tiles * in1_tile_size,
+                    mcast_n,
+                    {},
+                    {.noc_x_start = mcast_x0,
+                     .noc_y_start = mcast_y0,
+                     .noc_x_end = mcast_x1,
+                     .noc_y_end = mcast_y1,
+                     .addr = in1_start_address},
+                    true);
+                noc_async_write_flushed_with_trid(FWD_TRID);
+                noc_async_write_set_trid(0);
+                in1_valid_semaphore.set_multicast(noc, mcast_x0, mcast_y0, mcast_x1, mcast_y1, mcast_n);
+            }
+            if (false) {
+#else
+            if (!is_sink_core) {
+#endif
+                while (*in1_sender_sem != 1) {
+                    pump();
+                }
+                in1_sender_semaphore.set(0);
+                // Own transaction id: the flush must not also wait for queued epilogue writes.
                 noc_async_write_set_trid(FWD_TRID);
                 for (uint32_t i = 0; i < K_block_tiles; i++) {
                     noc.async_write(
@@ -290,27 +379,27 @@ void kernel_main() {
                     exchange(m_block_iter - 1);
                 }
                 cb_res.reserve_back(out_tiles);
-                res_ptr = cb_res.get_write_ptr();
+                io.res = true;
+                io.res_ptr = cb_res.get_write_ptr();
+                io.res_m = m_tile;
+                io.h = has_h;
+                io.y = has_y;
                 if (has_h) {
                     cb_h.wait_front(out_tiles);
-                    h_ptr = cb_h.get_read_ptr();
+                    io.h_ptr = cb_h.get_read_ptr();
+                    io.h_m = m_tile - M_block_tiles;
                 }
                 if (has_y) {
                     cb_y.wait_front(out_tiles);
-                    y_ptr = cb_y.get_read_ptr();
+                    io.y_ptr = cb_y.get_read_ptr();
+                    io.y_m = m_tile - 2 * M_block_tiles;
                 }
+                io.cursor = 0;
+                io.end = 3 * M_block_tiles * n_real;
             }
-            if (k_block >= xchg_k) {
-                const uint32_t i0 = (k_block - xchg_k) * rows;
-                read_res_rows(res_ptr, m_tile, i0, i0 + rows);
-                if (has_h) {
-                    write_rows(h_writer, h_ptr, h_tile_size, h_m_tile, i0, i0 + rows);
-                }
-                if (has_y) {
-                    write_rows(y_writer, y_ptr, y_tile_size, y_m_tile, i0, i0 + rows);
-                }
-            }
+            pump();
         }
+        drain();
         noc.async_read_barrier();
         cb_res.push_back(out_tiles);
         noc.async_writes_flushed();
@@ -320,18 +409,30 @@ void kernel_main() {
         if (has_y) {
             cb_y.pop_front(out_tiles);
         }
+        io.res = io.h = io.y = false;
     }
-    // Tail: the last block's exchange and h, then the last two blocks' y.
+    // Tail: the last block's exchange and h, the last two blocks' y.
     const uint32_t last_m_tile = M_start_tile + (M_blocks_per_core - 1) * M_block_tiles;
     exchange(M_blocks_per_core - 1);
     cb_h.wait_front(out_tiles);
-    write_rows(h_writer, cb_h.get_read_ptr(), h_tile_size, last_m_tile, 0, M_block_tiles);
+    io = {};
+    io.h = true;
+    io.h_ptr = cb_h.get_read_ptr();
+    io.h_m = last_m_tile;
+    io.end = 3 * M_block_tiles * n_real;
+    drain();
     for (uint32_t b = (M_blocks_per_core >= 2 ? M_blocks_per_core - 2 : 0); b < M_blocks_per_core; ++b) {
         cb_y.wait_front(out_tiles);
-        write_rows(y_writer, cb_y.get_read_ptr(), y_tile_size, M_start_tile + b * M_block_tiles, 0, M_block_tiles);
+        io = {};
+        io.y = true;
+        io.y_ptr = cb_y.get_read_ptr();
+        io.y_m = M_start_tile + b * M_block_tiles;
+        io.end = 3 * M_block_tiles * n_real;
+        drain();
         noc.async_writes_flushed();
         cb_y.pop_front(out_tiles);
     }
+    noc.async_writes_flushed();
     cb_h.pop_front(out_tiles);
     noc.async_write_barrier();
     noc.async_atomic_barrier();

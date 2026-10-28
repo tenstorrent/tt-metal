@@ -150,3 +150,14 @@ def in1_chain_args(device, g: Grid, x, y):
     order, i = chain(device, x, y, g.gx, "x", IN1_NOC)
     prev, nxt = order[max(0, i - 1)], order[min(len(order) - 1, i + 1)]
     return [int(i == len(order) - 1), nxt.x, nxt.y, prev.x, prev.y]
+
+
+def in1_mcast_args(device, g: Grid, y):
+    """[rect x0, y0, x1, y1, n_dests, sender x, sender y] for multicasting in1 from (0, y) to (1..gx-1, y)
+    on NOC 1, whose multicast rectangle runs from the far end to the near one."""
+    if g.gx < 2:
+        s = physical(device, 0, y)
+        return [s.x, s.y, s.x, s.y, 0, s.x, s.y]
+    near, far = physical(device, 1, y), physical(device, g.gx - 1, y)
+    s = physical(device, 0, y)
+    return [far.x, far.y, near.x, near.y, g.gx - 1, s.x, s.y]

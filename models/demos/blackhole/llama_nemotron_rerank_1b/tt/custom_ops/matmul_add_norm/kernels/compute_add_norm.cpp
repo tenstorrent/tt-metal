@@ -24,6 +24,9 @@
 #include "api/compute/eltwise_unary/binop_with_scalar.h"
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/dataflow/circular_buffer.h"
+#ifdef ZONES
+#include "api/debug/kernel_profiler.hpp"
+#endif
 
 namespace {
 constexpr uint32_t in0_cb = tt::CBIndex::c_0;
@@ -308,6 +311,9 @@ void kernel_main() {
         const uint32_t current_M_block_tiles = m_tile_end - m_tile;
         const uint32_t current_subblock_h = std::min(current_M_block_tiles, subblock_h);
 
+#ifdef ZONES
+        DeviceZoneScopedN("MM");
+#endif
         reconfig_data_format(in1_cb, in0_cb);
         pack_reconfig_data_format(acc_cb);
         matmul_block_init(in0_cb, in1_cb, false, current_subblock_w, current_subblock_h, K_block_tiles);
@@ -352,9 +358,17 @@ void kernel_main() {
         continue;
 #endif
         if (m_block_iter > 0) {
+#ifdef ZONES
+            DeviceZoneScopedN("P2");
+#endif
             pass2<M_block_tiles, N_block_tiles>(eps_bits);
         }
-        pass1<M_block_tiles, N_block_tiles>(n_real);
+        {
+#ifdef ZONES
+            DeviceZoneScopedN("P1");
+#endif
+            pass1<M_block_tiles, N_block_tiles>(n_real);
+        }
     }
 #ifdef V_NO_EPI
     {

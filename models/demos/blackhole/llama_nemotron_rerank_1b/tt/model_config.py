@@ -156,6 +156,8 @@ class RerankConfig:
     use_minimal_matmul: bool = True
     # FF1 + FF3 + silu(gate) * up as one minimal_matmul (fuse_swiglu) over an interleaved weight.
     fuse_swiglu: bool = True
+    # The fused SwiGLU's silu in the SFPU's approximate mode.
+    swiglu_approx: bool = False
     # Activations up to this many bytes are kept in L1 (interleaved) instead of DRAM; 0 = always DRAM.
     l1_act_bytes: int = 8_500_000
     extra: dict = field(default_factory=dict)
@@ -180,11 +182,11 @@ class RerankConfig:
             setattr(c, k, v)
         return c
 
-    def compute_config(self, fidelity, fp32_acc=True, packer_l1_acc=True):
+    def compute_config(self, fidelity, fp32_acc=True, packer_l1_acc=True, approx=False):
         return ttnn.init_device_compute_kernel_config(
             ttnn.device.Arch.BLACKHOLE,
             math_fidelity=fidelity,
-            math_approx_mode=False,
+            math_approx_mode=approx,
             fp32_dest_acc_en=fp32_acc,
             packer_l1_acc=packer_l1_acc,
         )

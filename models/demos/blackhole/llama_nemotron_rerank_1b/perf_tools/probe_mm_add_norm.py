@@ -62,6 +62,9 @@ def main():
     ap.add_argument("--no-time", action="store_true")
     ap.add_argument("--no-time-old", action="store_true")
     ap.add_argument("--xdtype", default=None)
+    ap.add_argument("--in1-depth", type=int, default=2)
+    ap.add_argument("--in0-depth", type=int, default=2)
+    ap.add_argument("--y-l1", action="store_true")
     ap.add_argument("--debug-gather", action="store_true")
     ap.add_argument("--defines", default="", help="comma-separated compute defines for the fused op (timing variants)")
     args = ap.parse_args()
@@ -82,6 +85,18 @@ def main():
     tx = ttnn.from_torch(x, dtype=xdt, layout=ttnn.TILE_LAYOUT, device=device)
     tw = ttnn.from_torch(w, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, device=device)
     tr = ttnn.from_torch(r, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+    if "SPLIT_RESIDUAL" in args.defines:
+        # column-split layout: [gy, M, nb * 32], core row yy's N slice of every row contiguous
+        gy, nb = (int(args.grid.split(",")[1]) if args.grid else 10), block[2]
+        rp = torch.zeros(gy, args.m, nb * 32)
+        for yy in range(gy):
+            c0 = yy * (-(-N // 32 // gy)) * 32
+            w_ = min(N - c0, nb * 32)
+            if w_ > 0:
+                rp[yy, :, :w_] = r[0, 0, :, c0 : c0 + w_]
+        tr = ttnn.from_torch(
+            rp.reshape(1, 1, gy * args.m, nb * 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
     consts = make_matmul_add_norm_constants(gamma, device)
     old_consts = make_add_norm_constants(gamma, EPS, device)
     ckc = ttnn.init_device_compute_kernel_config(
@@ -167,10 +182,14 @@ def main():
             )
         return
     ref_h = r + x @ w
+    if "SPLIT_RESIDUAL" in args.defines:
+        print("(split layout: h accuracy not checked)")
     ref_y = ref_h * torch.rsqrt(ref_h.pow(2).mean(-1, keepdim=True) + EPS) * gamma
-    for name, fn in (("fused", new), ("old", old)):
+    split = "SPLIT_RESIDUAL" in args.defines
+    for name, fn in (("fused", new),) + ((("old", old),) if not split else ()):
         h, y = fn()
-        th, ty = ttnn.to_torch(h).float(), ttnn.to_torch(y).float()
+        ty = ttnn.to_torch(y).float()
+        th = ref_h if split else ttnn.to_torch(h).float()
         print(
             f"{name}: h pcc {pcc(th, ref_h):.6f} max|err| {(th - ref_h).abs().max():.4f} | "
             f"y pcc {pcc(ty, ref_y):.6f} max|err| {(ty - ref_y).abs().max():.4f}"

@@ -21,7 +21,8 @@ llama_nemotron_rerank_1b/
   tt/model_config.py           shapes, precisions, matmul / SDPA block tables (every knob documented with its measurement)
   tt/weights.py                checkpoint -> device tensors (Q/K row permutation for RoPE, attention scale folded into Wq)
   tt/runner.py                 TracedReranker: one trace per (batch {1,8,32}) x (length bucket), batching by bucket
-  tt/custom_ops/               generic_op kernels: fused_heads_rope (new), fused_add_rmsnorm (from pplx_embed_4b)
+  tt/custom_ops/               generic_op kernels: matmul_qkv_rope (QKV matmul + head split + RoPE), fused_add_rmsnorm
+                               (from pplx_embed_4b), matmul_add_norm (experimental), fused_heads_rope (previous path)
   reference/hf_reference.py    HF CPU reference
   demo/serve.py                FastAPI rerank server
   demo/generator_vllm.py       NemotronRerankForScoring (same interface as bge_m3's BgeM3ForEmbedding)
@@ -97,7 +98,7 @@ loaded server sees; "best" is at full clock.
 | 1 x 128 | 12.8 ms | 5.97 ms | 5.96 ms | |
 | 1 x 512 | 15.6 ms | 7.50 ms | 7.47 ms | 35.0 % |
 | 8 x 512 | 76.2 ms | 48.8 ms | 40.5 ms | 50.9 % |
-| 32 x 512 | 329 ms | 192 ms | 140 ms | 59.4 % |
+| 32 x 512 | 329 ms | 192 ms | 140 ms | 59.4 % (63.7 % with matmul_qkv_rope) |
 | 1 x 2048 | 46.5 ms | 27.4 ms | 25.5 ms | 49.9 % |
 | 1 x 8192 | 362 ms | 197 ms | 150 ms | 58.4 % |
 
@@ -108,9 +109,10 @@ cores than the next lets the idle cores start the next op's firmware early, so f
 and double count. The kernel-cycle totals match wall time at the measured clock (32x512: 187.8 M cycles
 in 140 ms = 1.34 GHz).
 
-32 x 512 per op (share of cycles, % of that op's compute speed of light): FF1+FF3 fused SwiGLU 42 % (84 %),
-custom data-movement ops 21 % (head split + RoPE, residual add + RMSNorm; DRAM bound at ~65 % of 512 GB/s),
-FF2 13 % (68 %), QKV 9 % (72 %), SDPA 8 % (58 %), WO 7 % (67 %).
+The latency columns predate matmul_qkv_rope (they were not re-measured after it). With it, 32 x 512 is
+175.1 M kernel cycles (was 185.2 M). Per op (share of cycles, % of that op's compute speed of light):
+FF1+FF3 fused SwiGLU 45 % (84 %), residual add + RMSNorm 14 % (DRAM bound, ~364 GB/s), FF2 14 % (68 %),
+QKV + head split + RoPE 11 % (62 %), SDPA 8 % (58 %), WO 7 % (67 %).
 
 ## What was done
 
@@ -125,6 +127,7 @@ Data movement, in the order they landed (32x512 unless noted):
 |---|---|---|
 | FF1 + FF3 + silu(gate) * up in one `minimal_matmul(fuse_swiglu=True)` over a tile-interleaved weight | one op writes the SwiGLU product instead of two matmul outputs and a multiply | part of 329 -> 276 ms with the matmul configs |
 | fused head split + RoPE (`tt/custom_ops/fused_heads_rope`, new) | one pass over the fused QKV row replaces `nlp_create_qkv_heads` + two `rotary_embedding_llama` (three DRAM round trips over Q and K) | 1349 -> 729 us per layer |
+| QKV matmul + head split + RoPE in one program (`tt/custom_ops/matmul_qkv_rope`) | minimal_matmul's dataflow with a new output stage: Q / K tiles rotated in L1 (HF half-split layout, lo' = lo cos - hi sin, hi' = hi cos + lo sin) and every tile written straight into the head layouts; the [B*S, 3072] QKV activation never reaches DRAM | QKV + heads 1406 -> 924 us per layer; 185.2 -> 175.1 M cycles |
 | fused residual add + RMSNorm (`tt/custom_ops/fused_add_rmsnorm`, from pplx_embed_4b) from 4096 rows | one pass writes the residual and the normed tensor (4 DRAM passes instead of 5, one launch) | 797 -> 670 us per call |
 | SDPA writes concatenated heads (`output_concat_heads`) | no `nlp_concat_heads` pass | |
 | padding mask built on device from a [B, 1, 32, S] valid row, stored as bfp4 | the mask holds only 0 and -1e9, exact in bfp4 at a quarter of bf16's bytes; the host sends no S x S tensor | SDPA 32x512 1780 -> 1113 us |
@@ -143,11 +146,16 @@ stream (0.99944). No effect: raising the power limit (the card stays at 150 W).
 
 ## Open items toward 75 % of speed of light
 
-* 32x512 needs 39 M fewer cycles (188 -> 149 M). The custom data-movement ops (40 M) are at ~65 % of DRAM
-  bandwidth; removing them takes keeping activations in L1 across ops (row-blocked layer execution), which
-  costs matmul efficiency at smaller M, or fusing them into matmul prologues / epilogues inside
-  `minimal_matmul`. QKV / WO / FF2 / SDPA at 58-72 % have tuning room toward 80 %.
+* 32x512 needs 26 M fewer cycles (175 -> 149 M). The matmuls and SDPA alone take ~147 M, so 75 % needs both
+  the residual add + RMSNorm (24 M) hidden inside the matmuls and every compute op near 80 % of its limit
+  (FF1+FF3, the largest, is at 84 %; the plain matmul of that shape tops out near 86 %).
+* `tt/custom_ops/matmul_add_norm` fuses WO / FF2 with the residual add and RMSNorm (cores sharing rows exchange
+  partial sums of squares over the NoC). It is correct (y PCC 0.99996 vs torch) but slower than the two ops it
+  replaces (WO 1110-1135 vs 1135 us, FF2 1745-1789 vs 1686 us at 16384 rows): the matmul starves once the
+  epilogue's residual / output traffic runs. Not the cause: flush coupling, in0 / in1 buffer depth, DRAM
+  locality, posted writes, y in L1, issuing the traffic only while the weight relay waits. A multicast in1 path
+  (`IN1_MCAST`) hung the device and is unfinished.
+* Tried and rejected: bfp8 Q / K / V into SDPA (Pearson 0.99927), approximate silu in the SwiGLU (no change),
+  bf16 accumulation with 8-tile subblocks on FF1+FF3 (-1.8 %).
 * bs1 (35 %): the matmuls at 512 rows run at 27-52 % of their limit; FF2 at LoFi is bound by its weight
   read. DRAM-sharded weights are the next step.
-* `fused_heads_rope` with a bfp8 input or output writes wrong K / V (Q is correct); it rejects a dtype
-  change until fixed. Fixed, it would halve that op's traffic and SDPA's reads.

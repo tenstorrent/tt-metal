@@ -89,6 +89,7 @@ class NemotronReranker:
         self.core_grid = ttnn.CoreGrid(y=grid.y, x=grid.x)
         self.grid = grid
         self.mm_ckc = cfg.compute_config(cfg.mm_fidelity)
+        self.mm_ckc_approx = cfg.compute_config(cfg.mm_fidelity, approx=True)
         self.mm_ckc_lofi = cfg.compute_config(ttnn.MathFidelity.LoFi)
         self.lofi_kinds = {k for k in cfg.lofi_kinds.split(",") if k}
         self.bf16_acc_kinds = {k for k in cfg.bf16_acc_kinds.split(",") if k}
@@ -195,6 +196,8 @@ class NemotronReranker:
                 compute_kernel_config=(
                     (self.mm_ckc_lofi_bf16acc if bf16_acc else self.mm_ckc_lofi)
                     if kind in self.lofi_kinds
+                    else self.mm_ckc_approx
+                    if fuse_swiglu and self.cfg.swiglu_approx
                     else (self.mm_ckc_bf16acc if bf16_acc else self.mm_ckc)
                 ),
                 dtype=dtype or self.cfg.act_dtype,

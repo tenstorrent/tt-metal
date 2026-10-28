@@ -19,7 +19,14 @@ import torch
 
 import ttnn
 
-SHAPES = {"qkv": (2048, 3072), "wo": (2048, 2048), "ff13": (2048, 8192), "ff2": (8192, 2048), "ff13s": (2048, 16384)}
+SHAPES = {
+    "qkv": (2048, 3072),
+    "wo": (2048, 2048),
+    "ff13": (2048, 8192),
+    "ff2": (8192, 2048),
+    "ff13s": (2048, 16384),
+    "ff13w": (2048, 16384),
+}
 REPS = 10
 
 
@@ -91,7 +98,7 @@ def main():
                 for (f, acc), c in ckc.items():
                     tag = f"{str(f).split('.')[-1]}{'/fp32' if acc else ''}"
                     try:
-                        if name == "ff13s":
+                        if name in ("ff13s", "ff13w"):
                             raise ValueError("no linear-auto for the fused SwiGLU shape")
                         us = timed(
                             dev,
@@ -128,7 +135,7 @@ def main():
                                     w,
                                     config=cfg,
                                     compute_kernel_config=c,
-                                    dtype=ttnn.bfloat16,
+                                    dtype=getattr(ttnn, args.odtype),
                                     fuse_swiglu=name == "ff13s",
                                 ),
                             )

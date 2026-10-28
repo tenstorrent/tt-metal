@@ -60,6 +60,9 @@ def matmul_add_norm(
     y_dtype=ttnn.bfloat8_b,
     memory_config=ttnn.DRAM_MEMORY_CONFIG,
     defines=(),
+    in1_depth=2,
+    in0_depth=2,
+    y_memory_config=None,
 ):
     """x ``[1, 1, M, K]``, w ``[K, N]``, residual ``[1, 1, M, N]`` (TILE, interleaved) -> (h, y), each ``[1, 1, M, N]``.
 
@@ -88,14 +91,16 @@ def matmul_add_norm(
         raise ValueError(f"bad subblock {sh}x{sw} for block {mb}x{nb}")
 
     out_shape = ttnn.Shape([1, 1, M * TILE, N * TILE])
-    h = ttnn.allocate_tensor_on_device(out_shape, h_dtype, ttnn.TILE_LAYOUT, device, memory_config)
-    y = ttnn.allocate_tensor_on_device(out_shape, y_dtype, ttnn.TILE_LAYOUT, device, memory_config)
+    split = any(d == "SPLIT_RESIDUAL" for d, _ in defines)
+    h_shape = ttnn.Shape([1, 1, gy * M * TILE, nb * TILE]) if split else out_shape
+    h = ttnn.allocate_tensor_on_device(h_shape, h_dtype, ttnn.TILE_LAYOUT, device, memory_config)
+    y = ttnn.allocate_tensor_on_device(out_shape, y_dtype, ttnn.TILE_LAYOUT, device, y_memory_config or memory_config)
 
     all_cores = g.all_cores()
     out_tiles = mb * nb
     cbs = [
-        mg.cb(0, mb * kb * 2, x.dtype, all_cores),
-        mg.cb(1, kb * nb * 2, w.dtype, all_cores),
+        mg.cb(0, mb * kb * in0_depth, x.dtype, all_cores),
+        mg.cb(1, kb * nb * in1_depth, w.dtype, all_cores),
         mg.cb(3, out_tiles, ttnn.float32, all_cores),
         mg.cb(4, out_tiles, residual.dtype, all_cores),
         mg.cb(5, nb, ttnn.bfloat16, all_cores),
@@ -142,6 +147,7 @@ def matmul_add_norm(
             m0, m1 = g.m_range(xx)
             n0, n1 = g.n_range(yy)
             rt = addrs + mg.in1_chain_args(device, g, xx, yy) + [m0, m1, n0, n1, g.defer_write_k_block(yy), yy]
+            rt += mg.in1_mcast_args(device, g, yy)
             (send_rt if xx == 0 else recv_rt).append(((xx, yy), rt + peers))
             compute_rt.append(((xx, yy), [m0, m1, n0, n1, min(n1, N) - n0]))
 
