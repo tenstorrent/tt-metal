@@ -199,6 +199,7 @@ class DeepseekV41ForCausalLM:
         self.next_drafts: dict[int, list[int]] = {}
         self.buffered: dict[int, list[int]] = {}  # slot -> the round's tokens not yet handed to the plugin
         self.handed: dict[int, int] = {}  # slot -> the token last handed (the plugin feeds it back)
+        self.last_drafts: dict[int, list[int]] = {}  # the ragged contract: row -> the next drafts (``take_drafts``)
         self.spec_stats = {"rounds": 0, "accepted": 0, "emitted": 0, "buffered_steps": 0}
         self.warmed_up = False
         # traced prefill per (slot, prompt length): the fixed input buffers are shared by every trace of a model
@@ -547,9 +548,20 @@ class DeepseekV41ForCausalLM:
 
     def _decode_forward_spec(self, tokens, positions, page_table, params, out) -> torch.Tensor:
         """``decode_forward`` under ``TT_V41_SPEC``: the verify decoder's round for the slot whose rows the
-        drafter holds (greedy, or every slot under ``TT_V41_SPEC_GREEDY_ALL``), plain rows for the others; a slot
-        with buffered tokens from its last round hands the next one over without a device step."""
+        drafter holds (greedy, or every slot under ``TT_V41_SPEC_GREEDY_ALL``), plain rows for the others. Two
+        contracts, told apart by the tokens' width: ``[B, 1]`` (the plugin unchanged): the
+        round's tokens are handed over one per call, a slot with buffered tokens from its last round hands the
+        next one over without a device step; ``[B, 1 + K]`` (the plugin's ragged contract): column 0 is
+        the last token, columns ``1 ..`` the drafts the scheduler scheduled (-1 past them: the ones this generator
+        proposed last step, as the scheduler clipped them), the result ``[B, 1 + K]`` int32 holds every row's
+        emitted tokens (the accepted drafts and the bonus; -1 past them) and ``take_drafts`` the next drafts per
+        row."""
         assert params is not None, "speculative decode samples on device"
+        ragged = tokens.shape[1] > 1
+        if ragged:
+            assert tokens.shape[1] == 1 + self.spec_k, (tuple(tokens.shape), self.spec_k)
+            out = torch.full((tokens.shape[0], 1 + self.spec_k), -1, dtype=torch.int32)
+            self.last_drafts = {}
         blocks, rows, sampling = {}, {}, {}
         speculating = False  # a live slot proposes this step (the drafter in the graph: the ``vd:`` variants)
         t0 = time.time()
@@ -561,7 +573,7 @@ class DeepseekV41ForCausalLM:
                 self._join_pending(key)
             slot = self._slot_for_decode(key)
             token, p = int(tokens[i, 0]), int(positions[i])
-            buffered = self.buffered.get(slot)
+            buffered = None if ragged else self.buffered.get(slot)
             if buffered:
                 # the plugin feeds back the token we handed it; the pool processed it in the last round and the
                 # next of the round's tokens follows without a step
@@ -577,7 +589,13 @@ class DeepseekV41ForCausalLM:
             temperature = float(params.temperature[i])
             greedy = temperature <= 0 or self.spec_greedy_all
             proposes = greedy and slot == self.ring_owner
-            drafts = self.next_drafts.get(slot, []) if proposes else []
+            if ragged:
+                given = [int(t) for t in tokens[i, 1:].tolist() if t >= 0]
+                drafts = given if proposes else []
+                if given and not proposes:  # verified by nobody: the scheduler counts them rejected
+                    logger.warning(f"DeepSeek-V4.1-Flash: slot {slot} runs plain; {len(given)} drafts dropped")
+            else:
+                drafts = self.next_drafts.get(slot, []) if proposes else []
             speculating = speculating or proposes
             blocks[slot] = [token] + drafts[: self.spec_k]
             rows[slot] = i
@@ -592,22 +610,34 @@ class DeepseekV41ForCausalLM:
             block, argmax = blocks[slot], result[slot]
             a, emitted = self.decoder.accept(block, argmax)
             self.decoder.commit(slot, a)
-            out[i] = self.handed[slot] = emitted[0]
-            self.buffered[slot] = list(emitted[1:])
             if slot in self.decoder.drafts:
                 self.next_drafts[slot] = self.decoder.drafts[slot][a][: self.spec_k]
             else:
                 self.next_drafts.pop(slot, None)
+            if ragged:
+                out[i, : len(emitted)] = torch.tensor(emitted, dtype=torch.int32)
+                self.last_drafts[i] = list(self.next_drafts.get(slot, []))
+                self.spec_stats["emitted_steps"] = self.spec_stats.get("emitted_steps", 0) + len(emitted)
+            else:
+                out[i] = self.handed[slot] = emitted[0]
+                self.buffered[slot] = list(emitted[1:])
             if len(block) > 1:
                 self.spec_stats["rounds"] += 1
                 self.spec_stats["accepted"] += a
                 self.spec_stats["emitted"] += len(emitted)
         last = self.decoder.last
+        accepted = [int((out[i] >= 0).sum()) - 1 if ragged else len(self.buffered[s]) for s, i in rows.items()]
         logger.debug(
             f"DeepSeek-V4.1-Flash: spec step of {len(blocks)} slots ({[len(b) for b in blocks.values()]} rows) in "
-            f"{time.time() - t0:.3f} s {last}; accepted {[len(self.buffered[s]) for s in blocks]} stats {self.spec_stats}"
+            f"{time.time() - t0:.3f} s {last}; accepted {accepted} stats {self.spec_stats}"
         )
         return out
+
+    def take_drafts(self) -> dict[int, list[int]]:
+        """The ragged contract's drafts after a ``decode_forward``: row index -> the drafts proposed for the row's
+        next step (empty for a plain row), once."""
+        drafts, self.last_drafts = self.last_drafts, {}
+        return drafts
 
     def read_decode_output(self, tt_out, async_read=False):
         return (tt_out, []) if async_read else tt_out
