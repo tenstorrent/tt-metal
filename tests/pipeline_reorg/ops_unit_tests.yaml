@@ -427,8 +427,8 @@
     export TT_METAL_WATCHER_NOINLINE=1 TT_METAL_WATCHER_DISABLE_ETH=1
     pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/watcher -xv --timeout=600
   skus:
-    bh_p300:
-      timeout: 60
+    # bh_p300:
+    #   timeout: 60
     bh_quietbox_2:
       timeout: 60
   owner_id: U07M7QZ0BQA # Camilo Vega

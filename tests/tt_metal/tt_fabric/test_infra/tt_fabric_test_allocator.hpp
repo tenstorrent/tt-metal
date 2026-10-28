@@ -950,9 +950,7 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
             auto& dest = pattern.destination.value();
 
             if (dest.core.has_value() && dest.target_address.has_value() &&
-                ((pattern.ntype.value() != NocSendType::NOC_UNICAST_ATOMIC_INC &&
-                  pattern.ntype.value() != NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC) ||
-                 dest.atomic_inc_address.has_value())) {
+                (!pattern_needs_atomic_inc(pattern) || dest.atomic_inc_address.has_value())) {
                 // Fully specified, just book-keep.
                 auto& device_resources = get_or_create_device_resources(dest.device.value());
                 device_resources.reserve_receiver_core(dest.core, sender.link_id, receiver_partitions);
@@ -1012,12 +1010,10 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
 
                 // Validate we found all required uniform addresses
                 bool needs_payload =
-                    (pattern.ntype.value() == NocSendType::NOC_UNICAST_WRITE ||
-                     pattern.ntype.value() == NocSendType::NOC_UNICAST_SCATTER_WRITE ||
-                     pattern.ntype.value() == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC);
-                bool needs_atomic =
-                    (pattern.ntype.value() == NocSendType::NOC_UNICAST_ATOMIC_INC ||
-                     pattern.ntype.value() == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC);
+                    (pattern.ntype->type == NocSendType::NOC_UNICAST_WRITE ||
+                     pattern.ntype->type == NocSendType::NOC_UNICAST_SCATTER_WRITE ||
+                     pattern.ntype->type == NocSendType::NOC_FUSED_UNICAST_ATOMIC_INC);
+                bool needs_atomic = pattern_needs_atomic_inc(pattern);
 
                 // Find a core that satisfies ALL requirements (both payload and atomic if both needed)
                 for (const auto& [core, device_count] : core_counts) {
@@ -1075,7 +1071,7 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                     (needs_atomic && !uniform_atomic_receiver.has_value())) {
                     TT_THROW(
                         "Could not find uniform core and memory addresses for multicast pattern with ntype {}.",
-                        static_cast<int>(pattern.ntype.value()));
+                        noc_send_type_label(pattern.ntype.value()));
                 }
 
                 dest.core = selected_core.value();
@@ -1121,14 +1117,8 @@ inline void GlobalAllocator::allocate_resources(TestConfig& test_config) {
                 auto& core_resources =
                     device_resources.get_or_create_core_resources(dest.core.value(), CoreType::RECEIVER);
 
-                bool allocate_write_address = true;
-                bool allocate_atomic_inc_address = true;
-                if (pattern.ntype.value() == NocSendType::NOC_UNICAST_WRITE ||
-                    pattern.ntype.value() == NocSendType::NOC_UNICAST_SCATTER_WRITE) {
-                    allocate_atomic_inc_address = false;
-                } else if (pattern.ntype.value() == NocSendType::NOC_UNICAST_ATOMIC_INC) {
-                    allocate_write_address = false;
-                }
+                bool allocate_write_address = pattern.ntype->type != NocSendType::NOC_UNICAST_ATOMIC_INC;
+                bool allocate_atomic_inc_address = pattern_needs_atomic_inc(pattern);
 
                 if (allocate_write_address) {
                     TT_FATAL(

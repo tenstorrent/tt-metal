@@ -44,10 +44,12 @@ inline void calculate_int_mask() {
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_mask_posinf() {
     const int mask_val_idx = 32;
+    // Hoisted: an fp32 literal inside the loop is re-issued as SFPLOADI every row.
+    const vFloat inf = std::numeric_limits<float>::infinity();
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         vFloat mask = dst_reg[mask_val_idx];
-        v_if(_sfpu_is_fp16_zero_(mask)) { dst_reg[0] = std::numeric_limits<float>::infinity(); }
+        v_if(_sfpu_is_fp16_zero_(mask)) { dst_reg[0] = inf; }
         v_endif;
         dst_reg++;
     }

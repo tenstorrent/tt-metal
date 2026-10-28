@@ -137,6 +137,7 @@ class MiniMaxM3PrefillAdapter(PrefillModelAdapter):
             sp_axis=params.sp_axis,
             num_users=params.num_users,
             head_dim=hf_config.head_dim,
+            bank_aligned=True,
         )
 
     def build_runtime(self, *, mesh_device, hf_config, params: PrefillRunParams):

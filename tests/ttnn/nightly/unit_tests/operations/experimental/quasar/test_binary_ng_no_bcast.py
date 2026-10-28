@@ -24,8 +24,7 @@ Run on Wormhole:
 
 Run on the Quasar simulator (the full bf16 FPU/SFPU matrix incl. lhs/rhs activations runs, plus fp32
 add/sub/mul/div — fp32 add/sub now route the ported SFPU primitives, see _run):
-    TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 ARCH_NAME=quasar CHIP_ARCH=quasar \
-        TT_METAL_SLOW_DISPATCH_MODE=1 \
+    TT_METAL_SIMULATOR=<path>/libttsim.so TT_SIMULATOR_LOCALHOST=1 TT_METAL_SLOW_DISPATCH_MODE=1 \
         pytest tests/ttnn/nightly/unit_tests/operations/experimental/quasar/test_binary_ng_no_bcast.py
 """
 
@@ -39,15 +38,14 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
     _DIVIDE_NOT_NAN,
     _SPECIAL,
-    _on_quasar,
     _run,
     _run_special,
     _run_mixed,
-    _act,
     _height_sharded_config,
     _block_sharded_config,
     _width_sharded_config,
 )
+from tt_py_test_utils_common.utility_functions import is_quasar
 
 # Interleaved tensor: 32x40 tiles (1280 tiles) so split_work_to_cores spreads many tiles per core on
 # both an 8x8 (Wormhole) and an 8x4 (Quasar sim) worker grid -- ~20 tiles/core on 8x8, ~40/core on 8x4,
@@ -270,7 +268,7 @@ def test_no_bcast_activation_supported(device, act, position, layout):
 # Special values: every pair of 1.5, -2, +0, -0, +inf, -inf and NaN, as production's test_div_fp32 checks them, so inf
 # and NaN must sit where torch puts them. Quasar only: Wormhole's bf16 has no NaN (a NaN operand comes out as inf or a
 # finite number), and its fp32 divide gives NaN for the pairs that Quasar's does not.
-_SPECIAL_SKIP = pytest.mark.skipif(not _on_quasar(), reason="Quasar's special values; Wormhole's bf16 has no NaN")
+_SPECIAL_SKIP = pytest.mark.skipif(not is_quasar(), reason="Quasar's special values; Wormhole's bf16 has no NaN")
 
 
 @_SPECIAL_SKIP

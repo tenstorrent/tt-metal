@@ -8,8 +8,8 @@
 #include <cstdint>
 
 #include <tt-metalium/core_coord.hpp>
-#include <umd/device/types/arch.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/arch.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 
 #include "device_fixture.hpp"
 #include "distributed/mesh_device_impl.hpp"

@@ -61,6 +61,8 @@ class MyModelAdapter(PrefillModelAdapter):
     supports_packed_forward: bool = False  # does the runtime implement prefill_forward (section 2.1)? Gates
                                # PREFILL_FORWARD_TOKENS_BUDGET > chunk size; the runner checks it before building
                                # the runtime.
+    passes_indexer_indices: bool = False  # can a pipeline split hand indexer indices between ranks? Packed
+                               # forwards do not carry them, so the runner refuses F > 1 across ranks.
 
     def load_hf_config(self):
         """Load and normalize the HF config from PREFILL_HF_MODEL (falling back to
@@ -138,8 +140,8 @@ class PrefillRuntime:  # structural contract — not a base class you must inher
         hidden state on a non-last pipeline rank, or None on the last/single rank (the
         populated cache is the output).
 
-        `request_id` is the runner's chunk counter, increasing by one per chunk; the runner ALWAYS
-        passes it, so accept it even if unused."""
+        `request_id` is the runner's forward index, increasing by one per forward. No runtime keys on it
+        (TODO: drop it from the contract); the runner ALWAYS passes it, so accept it even if unused."""
 
     def capture_trace(self, kv_cache) -> None:
         """OPTIONAL — implement only if your model supports segmented trace capture/replay. The
@@ -213,8 +215,8 @@ adapter, and the runtime then gets `prefill_forward` instead of `prefill_chunk`:
         chunk order: `chunk_layout.pack_forward_tokens`), or the `[1, 1, forward_tokens_budget, H]` activation
         from the previous rank. Return the forward_tokens_budget-row activation on a non-last rank, None on the
         last. Size the non-first-rank placeholder input to forward_tokens_budget. Report layer completions as
-        `prefill_chunk` does, once for each non-empty chunk, after that chunk's layers ran. `request_id` is the
-        runner's chunk counter at the forward's first chunk; it advances by the forward's non-empty chunks."""
+        `prefill_chunk` does, once for each non-empty chunk, after that chunk's layers ran. `request_id` is as
+        for `prefill_chunk`."""
 ```
 
 Metadata (`prefill_chunk`), little-endian uint32: at F = 1 today's 12 B `(slot_id, actual_start, actual_end)`
@@ -267,7 +269,7 @@ put them in a per-model **manifest** in your package and point the binding at it
 
 ```json
 // models/demos/my_model/tt/runners/manifests/my_model.json
-{ "env": { "PREFILL_MODEL": "my_model", "PREFILL_MAX_SEQ_LEN": "256000", "PREFILL_NUM_USERS": "86" } }
+{ "env": { "PREFILL_MODEL": "my_model", "PREFILL_MAX_SEQ_LEN": "262144", "PREFILL_NUM_USERS": "86" } }
 ```
 
 The manifest has two jobs, and only two: it names the model (the one thing the adapter cannot
@@ -299,8 +301,13 @@ swapping the manifest. (The runner reads only the manifest's `env` block; see `_
 and exports its descriptor; the producer (prefill_producer.py / the scheduler) connects by
 `PREFILL_H2D_SERVICE_ID` and pushes token chunks. The shared env (`PREFILL_MODEL`, `PREFILL_SP/TP`,
 `PREFILL_CHUNK_SIZE`, `PREFILL_NUM_USERS`, `PREFILL_MAX_SEQ_LEN`, `PREFILL_H2D_SERVICE_ID`) must match on
-both so the byte layout agrees. `PREFILL_MAX_SEQ_LEN` sizes the per-user cache (default 11 chunks) and
+both so the byte layout agrees. `PREFILL_MAX_SEQ_LEN` sizes the per-user cache (default 16 chunks) and
 must be ≥ `chunks * PREFILL_CHUNK_SIZE`, else the runner asserts when a chunk overruns a slot.
+
+Your adapter's `allocate_kv_cache` must pass `bank_aligned=True` to the model's KV allocator, and the
+allocator must call `check_kv_bank_aligned` (common/prefill/runners/kv_bank_alignment.py) on the per-device
+row count, so every slot and layer starts on DRAM bank 0. Nothing enforces this for a new adapter. `PREFILL_MAX_SEQ_LEN` must be a multiple of stripes × 32 × the DRAM
+bank count, where stripes is the number of devices a token row is split over (2048 for SP=8 on 8 banks).
 
 ```bash
 # terminal A — runner (creates the H2D service, exports the descriptor, serves):

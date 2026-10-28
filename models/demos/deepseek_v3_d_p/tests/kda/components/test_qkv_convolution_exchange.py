@@ -133,12 +133,7 @@ def _intervals(sp_size: int, local_rows: int) -> list[_Interval]:
 
 def _chronological_rows(interval: _Interval, sp_size: int, local_rows: int) -> list[tuple[int, int]]:
     """(rank, local row) of each valid row, in chronological order."""
-    topology = chronological_topology(interval.start, sp_size, local_rows)
-    first = topology.first_rank
-    order = [(first, row) for row in range(topology.head_rows)]
-    for step in range(1, sp_size):
-        order.extend(((first + step) % sp_size, row) for row in range(local_rows))
-    order.extend((first, row) for row in range(topology.head_rows, local_rows))
+    order = chronological_topology(interval.start, sp_size, local_rows).chronological_rows()
     valid = len(order) if interval.end is None else interval.end - interval.start
     return order[:valid]
 
@@ -344,8 +339,8 @@ def _ring_perf_case(shape: tuple[int, int], sp_axis: int, case_id: str, referenc
 
 
 _PERF_CASES = [
-    _ring_perf_case((8, 1), 0, "loudbox-SP8xTP1-ring", 70.3),
-    _ring_perf_case((4, 1), 0, "quietbox-SP4xTP1-ring", 71.5),
+    _ring_perf_case((8, 1), 0, "loudbox-SP8xTP1-ring", 63.6),
+    _ring_perf_case((4, 1), 0, "quietbox-SP4xTP1-ring", 64.0),
 ]
 
 

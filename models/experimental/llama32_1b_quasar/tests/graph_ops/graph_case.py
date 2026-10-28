@@ -1236,6 +1236,25 @@ _QUASAR_UNSUPPORTED_OPS = {
 }
 
 
+def _bfp_specs(case):
+    """The capture's tensor specs (args, kwargs, outs) whose dtype is a Bfp format, as "where:dtype"."""
+    found = []
+
+    def visit(node, where):
+        if isinstance(node, dict):
+            if node.get("dtype") in _BLOCK_FLOAT_DTYPES:
+                found.append(f"{where}:{node['dtype']}")
+            for key, value in node.items():
+                visit(value, f"{where}.{key}")
+        elif isinstance(node, (list, tuple)):
+            for i, value in enumerate(node):
+                visit(value, f"{where}[{i}]")
+
+    for key in ("args", "kwargs", "outs"):
+        visit(case.get(key), key)
+    return found
+
+
 def run_case(op, case, mesh_device, *, op_name=None, pcc=None, rtol=None):
     """Materialize one captured call, run it, and check the result.
 
@@ -1249,6 +1268,11 @@ def run_case(op, case, mesh_device, *, op_name=None, pcc=None, rtol=None):
     # RuntimeErrors -- so skip them pre-flight, before any device work, rather than hanging the run.
     if _is_quasar(mesh_device) and op_name in _QUASAR_UNSUPPORTED_OPS:
         pytest.skip(f"{op_name} faults on Quasar: {_QUASAR_UNSUPPORTED_OPS[op_name]}")
+    # Quasar has no Bfp formats (bfloat8_b / bfloat4_b): skip such a capture pre-flight rather than fail it.
+    if _is_quasar(mesh_device):
+        bfp = _bfp_specs(case)
+        if bfp:
+            pytest.skip(f"Quasar has no Bfp formats; this capture uses {', '.join(bfp)}")
 
     torch_inputs: dict[str, torch.Tensor] = {}
 

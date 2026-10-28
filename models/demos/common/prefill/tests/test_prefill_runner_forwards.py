@@ -79,13 +79,13 @@ FORWARDS = [
 ]
 
 
-def test_request_id_counts_chunks(loop):
+def test_request_id_counts_forwards(loop):
     runtime = _PackedRuntime()
     loop(runtime, FORWARDS, supports_packed_forward=True)
     assert [(rid, [c for c in chunks if not c.is_empty]) for rid, chunks in runtime.calls] == [
         (0, FORWARDS[0]),
-        (3, FORWARDS[1]),
-        (4, FORWARDS[2]),
+        (1, FORWARDS[1]),
+        (2, FORWARDS[2]),
     ]
 
 

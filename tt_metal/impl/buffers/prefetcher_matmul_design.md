@@ -17,8 +17,10 @@ specifically to catch such drift.
 The prefetcher streams weight tensors (and similarly-shaped activation
 helpers) from DRAM into a ring of worker cores running a gather-in0 matmul.
 The matmul kernel reads its in0 (activations) from L1 and its in1 (weights)
-from a global circular buffer (GCB); the prefetcher's job is to keep that GCB
-full so the matmul never stalls on a DRAM read.
+from a remote buffer the prefetcher fills -- a global circular buffer (GCB) for
+the worker-core prefetcher, DRAM-sender PrefetcherPipes for the Tensor
+prefetcher. The prefetcher's job is to keep it full so the matmul never stalls
+on a DRAM read.
 
 Two prefetcher variants exist:
 
@@ -33,10 +35,11 @@ Two prefetcher variants exist:
   can run at higher throughput on production shapes, but its DRISC L1 working
   region is only ~70 KB total, which constrains the staging strategy.
 
-Both feed the same receiver: worker cores running
+The worker-core prefetcher feeds the legacy gather-in0 receiver:
 `bmm_large_block_zm_fused_bias_activation_gathered.cpp` (compute) +
-`reader_bmm_tile_layout_in1_ring_all_gather.cpp` (in1 reader). Receivers see
-the same byte layout regardless of which prefetcher produced it.
+`reader_bmm_tile_layout_in1_ring_all_gather.cpp` (in1 reader). The Tensor
+prefetcher feeds the Metal 2.0 mcast-in0 and gather-in0 bodies over
+PrefetcherPipes (§6). Either way a receiver sees the same per-block byte layout.
 
 Production usage on Llama-3.1-8B (single Blackhole, ring=64): the DRAM-core
 path covers FF1, QKV, and O matmuls; FF2 (K=14336) uses a separate
@@ -64,10 +67,13 @@ receivers (worker cores, ring_size = S * recv_per_sender):
 The round-robin gather itself happens inside the matmul (the gather-in0 reader
 walks the ring), not in the sender→receiver transfer.
 
-Each sender has its own GCB sender interface; each receiver has its own GCB
-receiver interface. The GCB topology (which senders feed which receivers) is
-fixed at GCB creation time and visible to the prefetcher via
-`GlobalCircularBuffer::sender_receiver_core_mapping()`.
+For the worker-core prefetcher each sender has its own GCB sender interface and
+each receiver its own GCB receiver interface; the GCB topology (which senders
+feed which receivers) is fixed at GCB creation time and visible via
+`GlobalCircularBuffer::sender_receiver_core_mapping()`. For the Tensor
+prefetcher each DRAM sender core drives one PrefetcherPipe, whose receivers are
+fixed when `CreatePrefetcherPipesForTensorPrefetcher` carves it and visible via
+`GetPrefetcherPipeSenderReceiverMapping()`.
 
 ## 3. What is a "block"
 
@@ -77,9 +83,9 @@ all of this DRAM core's columns, so it carries data for every receiver this
 core feeds. Each receiver's portion of a block is its
 `k_block_w_tiles × n_per_recv_tiles` tile region — `block_height_in_tiles`
 K-rows, each `coalesced_num_pages` tensor pages wide, so a receiver generally
-gets more than one tensor page per block. The GCB carries that whole portion
-as a single fifo page, and each receiver is sent `num_blocks` fifo pages per
-layer per tensor (one per block).
+gets more than one tensor page per block. The GCB or pipe carries that whole
+portion as a single fifo page (pipe entry), and each receiver is sent
+`num_blocks` of them per layer per tensor (one per block).
 
 ```
 Tensor (K rows x N cols), tiled (each cell = 32x32 tiles):
@@ -146,7 +152,9 @@ relies on this mapping to derive expected bytes from the source tensor via
 
 ## 4. The receiver matmul contract
 
-The receiver matmul reader is
+This section is the worker-core prefetcher's consumer; the Tensor prefetcher's
+pipe consumers (§6) keep the same per-receiver page contract. The receiver
+matmul reader is
 `ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_tile_layout_in1_ring_all_gather.cpp`.
 Its in1 input arrives via the GCB:
 
@@ -272,13 +280,14 @@ factory) beside the GCB's descriptor factory; the geometry above is shared.
 For each DRAM bank b in [0, num_senders):
   one DRISC core, one kernel: tensor_prefetcher.cpp
     do GDDR DMA into a ping-pong stage in DRISC L1
-    NoC push from stage to GCB remote
+    NoC push from stage into each receiver's pipe ring
   no local reader_cb; stage IS the working buffer.
 ```
 
 The kernel uses `experimental::dma_async_read` (defined in
-`tt_metal/hw/inc/experimental/gddr_dma.h`) for GDDR reads and the GCB sender
-interface for NoC pushes. Both share the DRISC's working L1 region (see the
+`tt_metal/hw/inc/experimental/gddr_dma.h`) for GDDR reads and each pipe's
+sender config page (receiver NOC XY table, credit counters, write cursors; see
+`tt_metal/hw/inc/internal/prefetcher_pipe_dram_sender.h`) for NoC pushes. Both share the DRISC's working L1 region (see the
 "L1 budget" subsection below).
 
 ### Two purpose-built helpers (kernel-private)
@@ -292,7 +301,7 @@ instead defines two helpers, each doing one thing:
 
 ```c++
 // Writes one sub-band chunk from `src_l1_addr` to `dest_l1_base` on the given
-// receiver subset. No pages_sent, no semaphore, no iface.fifo_wr_ptr advance.
+// receiver subset. No pages_sent, no semaphore, no write-cursor advance.
 // Layout matches the receiver-side block layout described in section 4.
 FORCE_INLINE void prefetcher_write_chunk(
     uint32_t src_l1_addr,
@@ -304,15 +313,15 @@ FORCE_INLINE void prefetcher_write_chunk(
     uint32_t coalesced_page_size,
     uint8_t noc);
 
-// Bumps local pages_sent + remote NoC semaphore for all receivers by one
-// page (with wrap-gap adjustment), advances iface.fifo_wr_ptr by one page.
-// Called once per block, after all chunks of that block have been written
-// via prefetcher_write_chunk.
+// Bumps local pages_sent + remote NoC semaphore for all of the pipe's receivers
+// by one round (with wrap-gap adjustment), advances the pipe's write cursor.
+// Called once per block (K-row-major) or per batched round (receiver-
+// contiguous), after all chunks of it have been written via
+// prefetcher_write_chunk.
 template <bool skip_ptr_update>
 FORCE_INLINE void prefetcher_finalize_block(
-    RemoteSenderCBInterface& iface,
-    uint32_t page_bytes_per_recv,                // bytes per receiver per block
-    uint32_t num_receivers,
+    PipeSender& snd,                              // the pipe's config page + write cursor
+    uint32_t bytes_per_recv,                      // bytes per receiver this round
     uint8_t noc);
 ```
 
@@ -321,16 +330,17 @@ FORCE_INLINE void prefetcher_finalize_block(
 DRISC L1 total: 128 KB. The relevant slice for the prefetcher kernel:
 
 ```
-[UNRESERVED, UNRESERVED + kSenderStateZoneSize)   sender-state zone     (1 KB)
+[UNRESERVED, UNRESERVED + kSenderStateZoneSize)   sender-state zone     (1 KB; pipes'
+                                                  sender config pages)
 [UNRESERVED + kSenderStateZoneSize, END)          kernel_working_region (~92 KB)
 
   kernel_working_region:
-    +--- per-CQ signal slots
-    +--- H2D socket config + request FIFO
-    +--- selector scratch (512 B, DRAM-aligned: the mask a request's group selector names)
-    +--- stage ring     (the rest; split into rotating slots: two halves
-                         for the K-row-major path, three thirds for the
-                         receiver-contiguous path)
+    +--- per-CQ signal slots   (one L1_ALIGNMENT apiece)
+    +--- request socket        (config + FIFO of request pages)
+    +--- selector scratch      (512 B, DRAM-aligned: the mask a request's group selector names)
+    +--- stage ring            (the rest; split into rotating slots: two halves
+                                for the K-row-major path, three thirds for the
+                                receiver-contiguous path)
 ```
 
 See `tt_metal/impl/buffers/drisc_l1_arena.hpp` (specifically
@@ -381,8 +391,7 @@ DRAM-core analogue of the worker-core's per-tensor derivations in §5):
   GDDR byte stride between ring-blocks.
 - `page_bytes_per_recv[t] = k_block_w_tiles × coalesced_num_pages ×
   coalesced_page_size` — total bytes pushed per receiver per block (the
-  `resize_remote_sender_cb_interface` page size, and the argument to
-  `prefetcher_finalize_block`).
+  entry size the kernel re-grids the pipe to before delivering the tensor).
 
 ### Layout modes (per-tensor)
 
@@ -404,7 +413,7 @@ The caller selects receiver-contiguous mode by allocating the weight via
 `ttnn.MemoryConfig(BufferType.DRAM, NdShardSpec(Shape([K, n_per_recv]),
 dram_cores, ROUND_ROBIN_1D))`. BDS round-robin places shard m at bank
 `m % num_senders` slab `m // num_senders`; the caller pairs this with a
-strided GCB topology (bank b → ring positions
+strided bank pairing (bank b → ring positions
 `[b, b + num_senders, b + 2 * num_senders, ...]`) so that shard index ==
 ring position and no host permutation is needed.
 
@@ -431,19 +440,19 @@ src = bank_local_base[t]
 
 #### Matmul consumer contracts
 
-Two 1D matmul consumers can drain a DRAM-sender GCB:
+Two 1D matmul consumers drain the Tensor prefetcher's pipes:
 
-- **Ring gather-in0:** `block_count = receiver_count`. Batched mode uses no rotation and waits for
-  all blocks. `stream_in1=true` uses an identity rotation request so each receiver sees its
-  ring-rotated K-block sequence and can consume from a two-page GCB window.
+- **Ring gather-in0:** `block_count = receiver_count`. Batched mode uses no rotation and needs the
+  whole layer resident. `stream_in1=true` uses an identity rotation request so each receiver sees its
+  ring-rotated K-block sequence and can consume from a two-block ring.
 - **Mcast-in0:** `block_count = K_tiles / in0_block_w`. Every receiver sees K-blocks
   `0..block_count-1` in natural FIFO order, so the request has an empty rotation and
-  `stream_in1=false`. The reader still consumes each page as it arrives, allowing the same
-  two-page GCB window. Initially this mode requires one output block per receiver and one effective
-  activation batch, so each prefetched stream is consumed exactly once.
+  `stream_in1=false`. The reader still consumes each block as it arrives, allowing the same
+  two-block ring. This mode requires one output block per receiver and one effective activation
+  batch, so each prefetched stream is consumed exactly once.
 
-For both contracts one page contains `(K_tiles / block_count) * per_core_N` weight tiles for one
-receiver, and the GCB receiver set must exactly match the matmul output workers.
+For both contracts one pipe entry contains `(K_tiles / block_count) * per_core_N` weight tiles for
+one receiver, and the pipes' receiver set must exactly match the matmul output workers.
 
 Both consumers work on either DRAM layout. The per-receiver page stream is what the consumer sees,
 and neither layout constrains it: the receiver-contiguous NdShardSpec provides one full-K,
@@ -455,7 +464,7 @@ rotation).
 
 #### Mcast-in0 over PrefetcherPipes
 
-Mcast-in0 can also drain PrefetcherPipes (`ttnn.linear(..., prefetcher_pipes=pipes)`), through the
+Mcast-in0 drains PrefetcherPipes (`ttnn.linear(..., prefetcher_pipes=pipes)`) through the
 Metal 2.0 factory (`create_program_mcast_in0_artifacts`): either the DRAM-sender pipes from
 `CreatePrefetcherPipesForTensorPrefetcher`, or worker-sender pipes fed by another producer.
 
@@ -475,9 +484,11 @@ Metal 2.0 factory (`create_program_mcast_in0_artifacts`): either the DRAM-sender
 - `transpose_b=false`, and the pipes' receivers must be exactly the workers that compute an output
   block: the receiver at row-major position `i` computes output column block `i` and must be sent that
   block's K-blocks in K order.
-- Tensor prefetcher (DRAM-sender) pipes add the prefetcher's contract: a receiver-contiguous weight
-  and a bank pairing that sends worker `i` weight shard `i`. The matmul cannot check what a
-  worker-sender pipe's producer sends, so there that contract is the producer's.
+- Tensor prefetcher (DRAM-sender) pipes add the prefetcher's contract: a bank pairing that sends
+  worker `i` the weight's columns for output block `i` -- shard `i` of a receiver-contiguous weight, or
+  slice `i % R` of bank `i / R`'s shard of a K-row-major one, which needs one pipe per bank, each with
+  the same `R` receivers. The matmul cannot check what a worker-sender pipe's producer sends, so there
+  that contract is the producer's.
 
 #### Gather-in0 over PrefetcherPipes
 
@@ -622,7 +633,7 @@ Whoever changes prefetcher or receiver code must preserve these:
    and the receiver sees this many bytes per `wait_front(1)`-equivalent slot.
 2. **Receiver `num_blocks` compile arg equals ring_size.** Enforced because
    both prefetchers derive `num_blocks = num_senders * num_receivers_per_sender`
-   from the GCB.
+   from the GCB or the pipes.
 3. **One `pages_sent` increment per page per receiver per layer per tensor.**
    The DRAM-core kernel's `prefetcher_finalize_block` is the single
    `pages_sent`-bumping primitive; `prefetcher_write_chunk` never touches it.
@@ -666,8 +677,11 @@ Whoever changes prefetcher or receiver code must preserve these:
 - Tensor prefetcher:
   `tt_metal/impl/buffers/tensor_prefetcher_manager.cpp`,
   `tt_metal/impl/buffers/kernels/tensor_prefetcher.cpp`.
-- GCB / remote CB API:
+- GCB / remote CB API (worker-core prefetcher):
   `tt_metal/hw/inc/api/remote_circular_buffer.h`,
   `tt_metal/impl/buffers/global_circular_buffer.cpp`.
+- DRAM-sender PrefetcherPipes (Tensor prefetcher):
+  `tt_metal/impl/buffers/prefetcher_pipe.cpp`, `tt_metal/impl/buffers/prefetcher_pipe_dram_sender.cpp`,
+  `tt_metal/hw/inc/internal/prefetcher_pipe_dram_sender.h`.
 - DRISC L1 arena: `tt_metal/impl/buffers/drisc_l1_arena.hpp`.
 - DRISC GDDR DMA: `tt_metal/hw/inc/experimental/gddr_dma.h`.

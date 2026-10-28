@@ -118,7 +118,7 @@ assert (
     FORWARD_TOKENS_BUDGET >= CHUNK_SIZE and FORWARD_TOKENS_BUDGET % CHUNK_SIZE == 0
 ), f"PREFILL_FORWARD_TOKENS_BUDGET={FORWARD_TOKENS_BUDGET} must be a multiple of PREFILL_CHUNK_SIZE={CHUNK_SIZE}"
 FORWARD_CHUNKS = FORWARD_TOKENS_BUDGET // CHUNK_SIZE
-MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 11))
+MAX_SEQ_LEN = int(os.environ.get("PREFILL_MAX_SEQ_LEN", CHUNK_SIZE * 16))
 NUM_USERS = int(os.environ.get("PREFILL_NUM_USERS", 2))
 CAPACITY_FACTOR = int(os.environ.get("PREFILL_CAPACITY_FACTOR", 8))
 _gate_mode_name = os.environ.get("PREFILL_GATE_FALLBACK_MODE", ADAPTER.default_gate_mode)
@@ -140,10 +140,12 @@ CHUNK_METADATA_SIZE_BYTES = metadata_size_bytes(FORWARD_CHUNKS)
 
 D2D_METADATA_SIZE_BYTES = CHUNK_METADATA_SIZE_BYTES + (4 if MTP_LEVELS else 0)
 # The D2D FIFO must hold the L1-aligned metadata: 256 B, grown in 256 B steps for a wide packed forward.
-D2D_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_PP_D2D_FIFO_BYTES", -(-D2D_METADATA_SIZE_BYTES // 256) * 256))
-if D2D_FIFO_SIZE_BYTES < -(-D2D_METADATA_SIZE_BYTES // 256) * 256:
+_D2D_FIFO_MIN_BYTES = -(-D2D_METADATA_SIZE_BYTES // 256) * 256
+D2D_FIFO_SIZE_BYTES = int(os.environ.get("PREFILL_PP_D2D_FIFO_BYTES", _D2D_FIFO_MIN_BYTES))
+if D2D_FIFO_SIZE_BYTES < _D2D_FIFO_MIN_BYTES:
     raise ValueError(
-        f"PREFILL_PP_D2D_FIFO_BYTES={D2D_FIFO_SIZE_BYTES} is smaller than the {D2D_METADATA_SIZE_BYTES} B D2D record"
+        f"PREFILL_PP_D2D_FIFO_BYTES={D2D_FIFO_SIZE_BYTES} must be >= {_D2D_FIFO_MIN_BYTES} B "
+        f"(the {D2D_METADATA_SIZE_BYTES} B D2D record, in 256 B steps)"
     )
 TP_SHARD_KV = os.environ.get("PREFILL_TP_SHARD_KV", str(int(ADAPTER.tp_shard_kv_default))) == "1"
 assert (
@@ -218,10 +220,6 @@ def _decode_metadata(metadata_msg: ttnn.Tensor, with_provided_levels: bool = Fal
     if with_provided_levels and m.numel() > n:
         meta["provided_levels"] = max(0, int(m[n]))
     return meta
-
-
-def _chunks_in(meta: dict) -> int:
-    return 1 if FORWARD_CHUNKS == 1 else sum(not c.is_empty for c in meta["chunks"])
 
 
 def _chunks_str(meta: dict) -> str:
@@ -655,7 +653,6 @@ def _compute_and_send(
     kv_caches,
     rank: int,
     c: int,
-    forward_idx: int,
     inp,
     meta: Optional[dict],
     d2d_out,
@@ -671,7 +668,7 @@ def _compute_and_send(
     t_perf = time.perf_counter()
     where = f"slot={meta['slot_id']} [{meta['actual_start']},{meta['actual_end']})"
     logger.info(
-        f"[pp rank {rank}] CHUNK_START c={forward_idx} compute_start={t_start:.6f} {where} "
+        f"[pp rank {rank}] CHUNK_START c={c} compute_start={t_start:.6f} {where} "
         f"provided={meta.get('provided_levels')}{_chunks_str(meta)}"
     )
 
@@ -697,8 +694,8 @@ def _compute_and_send(
     if SYNC_PER_CHUNK:
         ttnn.synchronize_device(runtime.mesh_device)
         compute_ms = (time.perf_counter() - t_perf) * 1000.0
-        logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={forward_idx} compute_ms={compute_ms:.3f}")
-        _record_chunk_timing(rank, forward_idx, t_start, compute_ms)
+        logger.info(f"[pp rank {rank}] CHUNK_COMPUTE c={c} compute_ms={compute_ms:.3f}")
+        _record_chunk_timing(rank, c, t_start, compute_ms)
     forward_md = None
     if not runtime.config.is_last_rank:
         if sockets.send_trace is None:
@@ -732,7 +729,7 @@ def _drain_and_log_e2e(runtime, rank: int, d2d_out, first_compute_start, n_done:
     ttnn.synchronize_device(runtime.mesh_device)
     fcs = f"{first_compute_start:.6f}" if first_compute_start is not None else "n/a"
     logger.info(f"[pp rank {rank}] E2E_CLOCK first_compute_start={fcs} last_compute_end={time.time():.6f}")
-    logger.info(f"[pp rank {rank}] processed {n_done} chunks in {(time.perf_counter() - t0) * 1000.0:.2f} ms")
+    logger.info(f"[pp rank {rank}] processed {n_done} forwards in {(time.perf_counter() - t0) * 1000.0:.2f} ms")
 
 
 def run_request_loop(
@@ -764,8 +761,7 @@ def run_request_loop(
         f"(is_first={cfg.is_first_rank} is_last={cfg.is_last_rank} input={'h2d' if cfg.is_first_rank else 'd2d'})"
     )
     t0 = time.perf_counter()
-    c = 0  # chunks: the request_id prefill_chunk / prefill_forward see
-    forward_idx = 0  # forwards: the row index of the logs and the timing CSV
+    c = 0
     first = None
 
     def forward_shutdown():
@@ -811,7 +807,7 @@ def run_request_loop(
             raise
         indices = _d2d_recv_indices(d2d_in, idx_in) if idx_in is not None else None
         if _is_shutdown_sentinel(meta):
-            logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} chunks; exiting request loop")
+            logger.info(f"[pp rank {rank}] SHUTDOWN sentinel received after {c} forwards; exiting request loop")
             if sockets.tokens is None:
                 ttnn.deallocate(inp)
             # A sentinel chunk runs no prefill_chunk, so a drain-allocated record has no other owner.
@@ -841,7 +837,6 @@ def run_request_loop(
             kv_caches,
             rank,
             c,
-            forward_idx,
             inp,
             meta,
             d2d_out,
@@ -853,8 +848,7 @@ def run_request_loop(
         )
         if first is None:
             first = t
-        c += _chunks_in(meta)
-        forward_idx += 1
+        c += 1
         if layer_ack_service is not None:
             layer_ack_service.check()  # a lost D2H record is fatal for the run; surface it here, not at exit
     _drain_and_log_e2e(runtime, rank, d2d_out, first, c, t0, idx_out)
@@ -958,6 +952,11 @@ def main() -> None:
     rank = int(ttnn.distributed_context_get_rank())
     num_ranks = int(ttnn.distributed_context_get_size())
     _assert_ranks_agree_on_config(rank, num_ranks)
+    check_packed_forward_support(
+        FORWARD_CHUNKS,
+        supports_packed_forward=ADAPTER.supports_packed_forward,
+        indexer_indices=num_ranks > 1 and ADAPTER.passes_indexer_indices,
+    )
 
     layer_split = compute_layer_split(
         NUM_LAYERS, num_ranks, ADAPTER.layer_split_boundaries(NUM_LAYERS), MTP_LEVELS + int(DFLASH_ENABLED)
