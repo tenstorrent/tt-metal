@@ -2309,3 +2309,13 @@ vs-CPU checks still gate; a later step's waiver covers nothing before it. Selfte
 `test_swap_checks.py::test_a_waived_step_covers_the_golden_check_of_the_steps_it_feeds` (fixture: per-step noise,
 `fixture_model.NOISE["steps"]`); full selftests 650 pass (1 failure from before: xing40 fixed threshold). Device:
 S.swa_engram.18 and S.enc_source_engram.20 pass with ENGRAM_ROWS=bfp8.
+
+## F222: a setting may name a test value when it is bit-identical to the default (DeepSeek-V4.1 ENGRAM_TABLE, 2026-10-28)
+
+The owner made ENGRAM_TABLE=resident the served default: each engram table is built in RAM as bfp8 at process start
+(~45-84 s a layer). Every device test touching layers 1 or 14 is a new process and paid it (the engram_rows step test
+37 s -> 87 s). `core/model_settings.Setting` gains `test`: the value a pytest process gets instead of the default,
+only for a choice proven to give the default's numbers bit for bit (here `random`, read from disk with read-ahead
+off; tests/test_engram_table_modes.py). The environment variable still overrides both; a process without pytest (the
+server) gets the default. Selftest `test_model_settings.py::test_a_test_value_applies_only_under_pytest_and_the_
+environment_still_wins`; full selftests 651 pass (1 failure from before: xing40 fixed threshold).

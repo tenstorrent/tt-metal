@@ -7,6 +7,9 @@ the served model run, F137: there is no separate max-precision setting), its all
 emulate a reference format (``emulation``: never a default, agents' rule 17; testing/settings_lint.py) and the reason
 for the default (owner decisions with their date). An environment variable ``<PREFIX><NAME>`` overrides
 it for experiments and A/B reports; nothing else reads the environment. testing/settings_lint.py enforces this.
+F222: ``test`` is the value a test process (pytest) gets instead of the default, only for a choice that gives the
+default's numbers bit for bit (a host-side storage or speed choice, proven by a test), e.g. reading a table from disk
+instead of building it in RAM at every test's start; the environment variable still overrides it.
 
     from models.demos.common.bringup.core.model_settings import Setting, Settings
     S = Settings("XING_", {"KV_CACHE_DTYPE": Setting("bfp8", ("bfp8", "bf16"), "owner 2026-10-01: ...")})
@@ -16,6 +19,7 @@ it for experiments and A/B reports; nothing else reads the environment. testing/
 from __future__ import annotations
 
 import os
+import sys
 from dataclasses import dataclass
 
 
@@ -25,6 +29,8 @@ class Setting:
     choices: tuple | None = None  # None: any value of the default's type
     why: str = ""
     emulation: tuple = ()  # choices that round to a format the device neither computes nor stores in (rule 17)
+    # F222: the value under pytest, only when bit-identical to the default (its why names the test that proves it)
+    test: object = None
 
 
 class Settings:
@@ -38,7 +44,7 @@ class Settings:
         s = self.table[name]
         raw = os.environ.get(self.env_name(name))
         if raw is None:
-            return s.default
+            return s.test if s.test is not None and "pytest" in sys.modules else s.default
         val = type(s.default)(raw) if not isinstance(s.default, bool) else raw.lower() in ("1", "true", "yes")
         if s.choices is not None and val not in s.choices:
             raise ValueError(f"{self.env_name(name)}={raw!r}: expected one of {s.choices}")
