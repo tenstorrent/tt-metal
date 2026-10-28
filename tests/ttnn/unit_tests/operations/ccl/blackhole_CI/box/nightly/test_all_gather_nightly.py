@@ -118,10 +118,8 @@ def test_all_gather_linear_2D_nightly(
     ttnn.ReadDeviceProfiler(submesh_device)
 
 
-# Multicast writer with pages that do not use scatter writes: one page per packet (fp32 tile, 4096 B
-# against the 4352 B fabric payload) and a page larger than the packet (fp32 row-major, 8192 B rows).
-# The small volume keeps the op on the multicast factory. Run with Watcher enabled to catch the
-# scatter-state assert of the first class; the second class overruns the packet header in every build.
+# Multicast with pages that do not divide the packet: fp32 tiles (4096 B) against the 4352 B fabric payload, so packets
+# cut tiles, and fp32 row-major rows (8192 B) larger than a packet. The small volume keeps the op on multicast.
 @skip_for_wormhole_b0()
 @skip_for_n_or_less_dev(3)
 @pytest.mark.parametrize(
@@ -130,7 +128,7 @@ def test_all_gather_linear_2D_nightly(
         (4, [1, 1, 32, 512], 3, ttnn.float32, ttnn.TILE_LAYOUT),
         (4, [1, 1, 32, 8192], 3, ttnn.float32, ttnn.ROW_MAJOR_LAYOUT),
     ],
-    ids=["fp32_tile_one_page_per_packet", "fp32_rm_page_larger_than_packet"],
+    ids=["fp32_tile_straddles_packets", "fp32_rm_page_larger_than_packet"],
 )
 @pytest.mark.parametrize("mem_config_input, mem_config_ag", [(ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG)])
 @pytest.mark.parametrize(
@@ -594,7 +592,7 @@ def _l1_sharded(memory_layout, shard_height, shard_width, num_cores):
     )
 
 
-# 8 devices on a line and a ring; small shapes run multicast, large ones unicast. Slices that start mid-row (11 tiles x 7
+# 8 devices on a line and a ring; small shapes run multicast, large ones unicast. Slices that start mid-row (11 tiles x 5
 # rows per device), 256 B row-major rows, a row-major gather on dim 0, an ND-sharded DRAM output with each device's
 # stripe in one bank, a height-sharded L1 input, and 192 B row-major rows resharded into 256 B output pages.
 @skip_for_wormhole_b0()
@@ -602,7 +600,7 @@ def _l1_sharded(memory_layout, shard_height, shard_width, num_cores):
 @pytest.mark.parametrize(
     "ag_output_shape, dim, layout, mem_config_input, mem_config_ag",
     [
-        ([1, 1, 224, 2816], 3, ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        ([1, 1, 160, 2816], 3, ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
         ([1, 1, 1792, 2816], 3, ttnn.TILE_LAYOUT, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
         ([1, 1, 2048, 1024], 3, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
         ([8, 1, 256, 4096], 0, ttnn.ROW_MAJOR_LAYOUT, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
