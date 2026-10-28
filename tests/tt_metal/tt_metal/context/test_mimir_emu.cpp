@@ -209,8 +209,8 @@ TEST_P(CopiesGddrWithCompileTimeArgs, RoundTrip) {
                                   static_cast<uint32_t>(i);
             }
             const uint64_t slot_offset = host_slot_offset(target, slot);
-            write_gddr_view(*mesh_device, device, target.host_view, src_dram_offset + slot_offset, inputs[slot]);
-            write_gddr_view(*mesh_device, device, target.host_view, dst_dram_offset + slot_offset, cleared);
+            write_gddr_view(*mesh_device, target.host_view, src_dram_offset + slot_offset, inputs[slot]);
+            write_gddr_view(*mesh_device, target.host_view, dst_dram_offset + slot_offset, cleared);
         }
 
         Program program = CreateProgram();
@@ -240,7 +240,6 @@ TEST_P(CopiesGddrWithCompileTimeArgs, RoundTrip) {
             std::vector<uint32_t> output;
             read_gddr_view(
                 *mesh_device,
-                device,
                 target.host_view,
                 dst_dram_offset + host_slot_offset(target, slot),
                 transfer_size,
@@ -289,8 +288,8 @@ TEST_P(CopiesGddrWithRuntimeArgs, RoundTrip) {
                                   static_cast<uint32_t>(i);
             }
             const uint64_t slot_offset = host_slot_offset(target, slot);
-            write_gddr_view(*mesh_device, device, target.host_view, src_dram_offset + slot_offset, inputs[slot]);
-            write_gddr_view(*mesh_device, device, target.host_view, dst_dram_offset + slot_offset, cleared);
+            write_gddr_view(*mesh_device, target.host_view, src_dram_offset + slot_offset, inputs[slot]);
+            write_gddr_view(*mesh_device, target.host_view, dst_dram_offset + slot_offset, cleared);
         }
 
         Program program = CreateProgram();
@@ -318,7 +317,6 @@ TEST_P(CopiesGddrWithRuntimeArgs, RoundTrip) {
             std::vector<uint32_t> output;
             read_gddr_view(
                 *mesh_device,
-                device,
                 target.host_view,
                 dst_dram_offset + host_slot_offset(target, slot),
                 transfer_size,
@@ -407,8 +405,8 @@ TEST_P(CopiesEveryMimirBlock, RoundTrip) {
         for (std::size_t i = 0; i < inputs[mimir_index].size(); ++i) {
             inputs[mimir_index][i] = 0xE1E10000u | (cce_index << 12) | (mimir_index << 8) | static_cast<uint32_t>(i);
         }
-        write_mimir_gddr(*mesh_device, device, mimir_index, src_dram_offset, inputs[mimir_index]);
-        write_mimir_gddr(*mesh_device, device, mimir_index, dst_dram_offset, cleared);
+        write_mimir_gddr(*mesh_device, mimir_index, src_dram_offset, inputs[mimir_index]);
+        write_mimir_gddr(*mesh_device, mimir_index, dst_dram_offset, cleared);
     }
 
     const CoreCoord logical_dram_core = logical_cce_core(soc_desc_of(device), cce_index);
@@ -428,7 +426,7 @@ TEST_P(CopiesEveryMimirBlock, RoundTrip) {
 
     for (uint32_t mimir_index = 0; mimir_index < num_mimirs; ++mimir_index) {
         std::vector<uint32_t> output;
-        read_mimir_gddr(*mesh_device, device, mimir_index, dst_dram_offset, transfer_size, output);
+        read_mimir_gddr(*mesh_device, mimir_index, dst_dram_offset, transfer_size, output);
         EXPECT_EQ(output, inputs[mimir_index]) << "mimir " << mimir_index;
     }
 }
@@ -473,8 +471,8 @@ TEST_P(CopiesGddrLargerThanAlignment, RoundTrip) {
                                   static_cast<uint32_t>(i);
             }
             const uint64_t slot_offset = host_slot_offset(target, slot);
-            write_gddr_view(*mesh_device, device, target.host_view, src_dram_offset + slot_offset, inputs[slot]);
-            write_gddr_view(*mesh_device, device, target.host_view, dst_dram_offset + slot_offset, cleared);
+            write_gddr_view(*mesh_device, target.host_view, src_dram_offset + slot_offset, inputs[slot]);
+            write_gddr_view(*mesh_device, target.host_view, dst_dram_offset + slot_offset, cleared);
         }
 
         Program program = CreateProgram();
@@ -502,7 +500,6 @@ TEST_P(CopiesGddrLargerThanAlignment, RoundTrip) {
             std::vector<uint32_t> output;
             read_gddr_view(
                 *mesh_device,
-                device,
                 target.host_view,
                 dst_dram_offset + host_slot_offset(target, slot),
                 transfer_size,
@@ -543,8 +540,8 @@ TEST(MimirEmu, AllCcesCopyLocalMimirBlock) {
         }
         const uint32_t cce_src = src_dram_offset + cce_index * 2 * transfer_size;
         const uint32_t cce_dst = cce_src + transfer_size;
-        write_gddr_view(*mesh_device, device, local.host_view, cce_src, inputs[cce_index]);
-        write_gddr_view(*mesh_device, device, local.host_view, cce_dst, cleared);
+        write_gddr_view(*mesh_device, local.host_view, cce_src, inputs[cce_index]);
+        write_gddr_view(*mesh_device, local.host_view, cce_dst, cleared);
 
         const CoreCoord logical_dram_core = logical_cce_core(soc_desc_of(device), cce_index);
         const KernelHandle kernel = CreateKernel(
@@ -571,8 +568,7 @@ TEST(MimirEmu, AllCcesCopyLocalMimirBlock) {
     for (uint32_t cce_index = 0; cce_index < num_cces; ++cce_index) {
         std::vector<uint32_t> output;
         const uint32_t cce_dst = src_dram_offset + cce_index * 2 * transfer_size + transfer_size;
-        read_gddr_view(
-            *mesh_device, device, local_dram_view_for_cce(soc_desc, cce_index), cce_dst, transfer_size, output);
+        read_gddr_view(*mesh_device, local_dram_view_for_cce(soc_desc, cce_index), cce_dst, transfer_size, output);
         EXPECT_EQ(output, inputs[cce_index]) << "cce " << cce_index;
     }
 }
@@ -679,7 +675,7 @@ TEST_P(PrefetchesLocalGddrToRemoteCceSram, RoundTrip) {
     const uint64_t local_address_offset = soc_desc.get_address_offset(static_cast<int>(local_view));
     ASSERT_EQ(local_address_offset % kGddrSlotStride, 0ull);
     const uint32_t local_base_slots = static_cast<uint32_t>(local_address_offset / kGddrSlotStride);
-    write_gddr_view(*mesh_device, device, local_view, src_gddr_offset, input);
+    write_gddr_view(*mesh_device, local_view, src_gddr_offset, input);
 
     for (uint32_t dest_cce : dest_cces) {
         const CoreCoord dest_core = logical_cce_core(soc_desc_of(device), dest_cce);
@@ -749,8 +745,7 @@ TEST_P(AllHartsWriteGddr, WritesMagic) {
 
     for (const GddrTarget& target : targets) {
         for (uint32_t slot = 0; slot < target.num_slots; ++slot) {
-            write_gddr_view(
-                *mesh_device, device, target.host_view, dst_dram_offset + host_slot_offset(target, slot), cleared);
+            write_gddr_view(*mesh_device, target.host_view, dst_dram_offset + host_slot_offset(target, slot), cleared);
         }
 
         Program program = CreateProgram();
@@ -781,7 +776,6 @@ TEST_P(AllHartsWriteGddr, WritesMagic) {
             std::vector<uint32_t> output;
             read_gddr_view(
                 *mesh_device,
-                device,
                 target.host_view,
                 dst_dram_offset + host_slot_offset(target, slot),
                 static_cast<uint32_t>(num_harts * sizeof(uint32_t)),

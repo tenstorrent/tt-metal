@@ -355,44 +355,55 @@ inline uint64_t host_slot_offset(const GddrTarget& target, uint32_t slot) {
     return static_cast<uint64_t>(slot) * target.slot_stride;
 }
 
+// A unit mesh's DRAM view through the slow-dispatch host API. A write below the allocator's DRAM base is refused.
 inline void write_gddr_view(
-    distributed::MeshDevice& unit_mesh,
-    IDevice* device,
-    uint32_t view,
-    uint64_t address,
-    const std::vector<uint32_t>& data) {
-    const metal_SocDescriptor& soc_desc = soc_desc_of(device);
+    distributed::MeshDevice& unit_mesh, uint32_t view, uint64_t address, const std::vector<uint32_t>& data) {
+    const metal_SocDescriptor& soc_desc = soc_desc_of(&slow_dispatch::physical_device_from_unit_mesh(unit_mesh));
     const uint32_t size = static_cast<uint32_t>(data.size() * sizeof(uint32_t));
+    TT_FATAL(
+        view < soc_desc.get_num_dram_views(),
+        "DRAM view {} is outside the {} views",
+        view,
+        soc_desc.get_num_dram_views());
+    TT_FATAL(
+        address <= std::numeric_limits<uint32_t>::max(), "GDDR view offset 0x{:x} does not fit the host API", address);
     if (t_gddr_backing != nullptr) {
         const uint32_t channel = static_cast<uint32_t>(soc_desc.get_channel_for_dram_view(static_cast<int>(view)));
         t_gddr_backing->note(channel, soc_desc.get_address_offset(static_cast<int>(view)) + address, size);
     }
     TT_FATAL(
-        address <= std::numeric_limits<uint32_t>::max(), "GDDR view offset 0x{:x} does not fit the host API", address);
-    ASSERT_TRUE(slow_dispatch::WriteToDRAMChannel(
-        unit_mesh,
-        static_cast<int>(view),
-        static_cast<uint32_t>(address),
-        std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(data.data()), size)));
+        slow_dispatch::WriteToDRAMChannel(
+            unit_mesh,
+            static_cast<int>(view),
+            static_cast<uint32_t>(address),
+            std::span<const uint8_t>(reinterpret_cast<const uint8_t*>(data.data()), size)),
+        "write to DRAM view {} offset 0x{:x} failed",
+        view,
+        address);
 }
 
 inline void read_gddr_view(
-    distributed::MeshDevice& unit_mesh,
-    IDevice* device,
-    uint32_t view,
-    uint64_t address,
-    uint32_t size,
-    std::vector<uint32_t>& data) {
-    const metal_SocDescriptor& soc_desc = soc_desc_of(device);
+    distributed::MeshDevice& unit_mesh, uint32_t view, uint64_t address, uint32_t size, std::vector<uint32_t>& data) {
+    const metal_SocDescriptor& soc_desc = soc_desc_of(&slow_dispatch::physical_device_from_unit_mesh(unit_mesh));
+    TT_FATAL(size % sizeof(uint32_t) == 0, "DRAM read size {} is not a multiple of 4", size);
+    TT_FATAL(
+        view < soc_desc.get_num_dram_views(),
+        "DRAM view {} is outside the {} views",
+        view,
+        soc_desc.get_num_dram_views());
+    TT_FATAL(
+        address <= std::numeric_limits<uint32_t>::max(), "GDDR view offset 0x{:x} does not fit the host API", address);
     if (t_gddr_backing != nullptr) {
         const uint32_t channel = static_cast<uint32_t>(soc_desc.get_channel_for_dram_view(static_cast<int>(view)));
         t_gddr_backing->note(channel, soc_desc.get_address_offset(static_cast<int>(view)) + address, size);
     }
-    TT_FATAL(
-        address <= std::numeric_limits<uint32_t>::max(), "GDDR view offset 0x{:x} does not fit the host API", address);
     data.assign(size / sizeof(uint32_t), 0);
-    ASSERT_TRUE(slow_dispatch::ReadFromDRAMChannel(
-        unit_mesh, static_cast<int>(view), static_cast<uint32_t>(address), size, data));
+    TT_FATAL(
+        slow_dispatch::ReadFromDRAMChannel(
+            unit_mesh, static_cast<int>(view), static_cast<uint32_t>(address), size, data),
+        "read from DRAM view {} offset 0x{:x} failed",
+        view,
+        address);
 }
 
 inline uint32_t base_dram_view_for_mimir(const metal_SocDescriptor& soc_desc, uint32_t mimir_index) {
@@ -408,22 +419,19 @@ inline uint32_t base_dram_view_for_mimir(const metal_SocDescriptor& soc_desc, ui
 }
 
 inline void write_mimir_gddr(
-    distributed::MeshDevice& unit_mesh,
-    IDevice* device,
-    uint32_t mimir_index,
-    uint64_t address,
-    const std::vector<uint32_t>& data) {
-    write_gddr_view(unit_mesh, device, base_dram_view_for_mimir(soc_desc_of(device), mimir_index), address, data);
+    distributed::MeshDevice& unit_mesh, uint32_t mimir_index, uint64_t address, const std::vector<uint32_t>& data) {
+    const metal_SocDescriptor& soc_desc = soc_desc_of(&slow_dispatch::physical_device_from_unit_mesh(unit_mesh));
+    write_gddr_view(unit_mesh, base_dram_view_for_mimir(soc_desc, mimir_index), address, data);
 }
 
 inline void read_mimir_gddr(
     distributed::MeshDevice& unit_mesh,
-    IDevice* device,
     uint32_t mimir_index,
     uint64_t address,
     uint32_t size,
     std::vector<uint32_t>& data) {
-    read_gddr_view(unit_mesh, device, base_dram_view_for_mimir(soc_desc_of(device), mimir_index), address, size, data);
+    const metal_SocDescriptor& soc_desc = soc_desc_of(&slow_dispatch::physical_device_from_unit_mesh(unit_mesh));
+    read_gddr_view(unit_mesh, base_dram_view_for_mimir(soc_desc, mimir_index), address, size, data);
 }
 
 // Host view of one CCE's SRAM. The address is the HAL NOC address (base plus offset), which UMD
