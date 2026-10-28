@@ -158,6 +158,25 @@ token row, aligned to 16, so a 256-value table row is 16 whole groups (the byte-
 tested: per-device shards of a mesh tensor from such host tensors. Preview of B on these rows: bfp8 changes 10.0 % of
 the values, rel L2 3.5e-3 vs the exact rows; a format change, so C (accuracy) and the owner decide.
 
+**bfp8 without any float on the host (QB, 2026-10-28; setting `ENGRAM_ROWS=bf16|bfp8`, default bf16).**
+- Mechanics: `tt/engram_bfp8.py` turns the table's e4m3 + e8m0 bytes into bfloat8_b by integer operations only (a
+  lookup on (byte, exponent gap) + a max per 16 values); its bytes equal ttnn's float packer's (33.4 MB a layer, 0
+  differing); each mesh row's TILE bytes are wrapped with `tensor_from_bfp8_bytes`, joined with `from_host_shards`,
+  one upload; `engram_kv` reads bfloat8_b as sent (no typecast). On every chip the rows equal
+  `from_torch(exact rows, dtype=bfloat8_b)` bit for bit (`tests/test_engram_bfp8.py`, device). Pack (numba, the repo's
+  dev requirement): 5120 tokens 63 ms on 1 thread, **8 ms on 8** (torch form ~230 ms), vs today's fp32 dequant + bf16
+  assembly ~40 ms; plus ~7 ms tile reordering; 1.0625 B a value over PCIe (bf16: 2). Works on the table's own bytes,
+  so with any storage (mmap, random, resident, a cache): no second, converted copy of the tables.
+- Accuracy, CPU, 1M table rows a layer: bfp8 changes 10.0 % of the values (1.0 % to 0), rel 3.5e-3 (per row p99
+  5.0e-3); the wkv output rel 3.5e-3. DeepSeek's own fp8 re-quant of the rows before wkv (act_quant, 32-blocks,
+  ue8m0) changes **0 %**: the reference computes on exact rows, so bfp8 is an added error (today's device engram_kv:
+  rel 4.1e-3 from its bfp8 weights).
+- Accuracy, device ladder (2x2 subset, same code, bf16 vs bfp8, `/localdev/dnijemcevic/bringup/engram_2026-10-28/
+  ladder_*`): all three rungs PASS. err_layer_L01 0.0338 -> 0.0339 (s4096), 0.0329 -> 0.0330 (s55296); L14 0.0552 ->
+  0.0559, 0.0605 -> 0.0609; layers 2, 3 within +-1.3 % both ways; every metric far inside its limit (~2x); layers that
+  do not see the engram output identical. The 2x2 subset has no end-to-end token metric: the Galaxy's 40-layer ladder
+  at 56k + K.1 is the confirmation.
+
 ## 4. Plan (owner-agreed staging; each stage = its own setting in `tt/settings.py`, its own commit, its own A/B)
 
 Invariant for every stage: **the device rows stay bit-identical to today's** (check by byte comparison, not a

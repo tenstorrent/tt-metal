@@ -33,7 +33,7 @@ BLOCKS = 5  # hc_mult keys + one value
 
 
 class TtEngramKv:
-    """engram_kv of one layer. Call with the engram rows [1, 1, S/SP, K] (bf16 or fp32 TILE); returns
+    """engram_kv of one layer. Call with the engram rows [1, 1, S/SP, K] (bf16, fp32 or bfloat8_b TILE); returns
     [1, 1, S/SP, 5 x H/TP] fp32 TILE. Does not consume its input."""
 
     def __init__(self, mesh, wkv: torch.Tensor, hidden: int):
@@ -61,7 +61,7 @@ class TtEngramKv:
 
     def __call__(self, rows: ttnn.Tensor) -> ttnn.Tensor:
         assert rows.shape[-1] == self.k, (rows.shape, self.k)
-        xq = gemm_input(rows)  # GEMM_INPUTS (FIX.7): bfloat8_b, the reference's fp8 act quant of the rows
+        xq = gemm_input(rows)  # GEMM_INPUTS (FIX.7): bfloat8_b (ENGRAM_ROWS=bfp8: arrives in it, no typecast)
         # BF16_ACTIVATIONS=on (P.20): written bf16 (the GPU code's fp8 GEMM output), the engram add reads it as is
         out = mm.linear(
             xq, self.weight, site="engram_kv", dtype=act_dtype(), compute_kernel_config=self.ckc, memory_config=DRAM

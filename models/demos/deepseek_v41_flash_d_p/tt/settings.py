@@ -524,7 +524,7 @@ TABLE = {
         "the [S/SP, 32] mHC partial-row exchange over axis 1: gather_add = all_gather + SFPU ttnn.add (exact fp32, "
         "K-30); all_reduce = one CCL whose FPU add reads fp32 at about TF32",
     ),
-    # ---- engram host path (2x2 session, bringup/ENGRAM_HOST_PATH.md; rows bit-identical in every mode)
+    # ---- engram host path (2x2 session, bringup/ENGRAM_HOST_PATH.md; ENGRAM_TABLE / _GATHER_THREADS: rows bit-identical)
     "ENGRAM_TABLE": Setting(
         "mmap",
         ("mmap", "random", "resident"),
@@ -534,6 +534,16 @@ TABLE = {
         "(huge pages) once at build (~189 GiB of host RAM for both layers). QB 2x2 host (503 GB RAM, 990 EVO Plus "
         "NVMe, read_ahead_kb 128, 32 CPUs), layer 1, 5120 tokens, gather a layer a chunk: cold mmap 7.2 s, cold "
         "random 0.42 s (8 threads), resident 9-15 ms; load of one layer resident 109 s",
+    ),
+    "ENGRAM_ROWS": Setting(
+        "bf16",
+        ("bf16", "bfp8"),
+        "the engram rows' format from the host to engram_kv's matmul. bf16 = exact (e4m3 x 2^k; the host converts "
+        "8-bit -> fp32 -> bf16, 2 B a value); bfp8 = bfloat8_b packed from the table's bytes by integer operations "
+        "only (tt/engram_bfp8.py, byte-equal to ttnn's packer; 1.0625 B a value), wrapped per mesh row without a "
+        "float conversion and read by the matmul as sent. bfp8 is lossy: on 1M table rows a layer it changes 10 % "
+        "of the values (1 % to 0), rel 3.5e-3, and the wkv output by rel 3.5e-3, where DeepSeek's own fp8 re-quant "
+        "of the rows changes none (today's device engram_kv: rel 4.1e-3 from the bfp8 weights)",
     ),
     "ENGRAM_GATHER_THREADS": Setting(
         1,

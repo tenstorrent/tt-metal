@@ -1,0 +1,128 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+#
+# SPDX-License-Identifier: Apache-2.0
+"""Engram rows as bfloat8_b TILE bytes straight from the table's 8-bit bytes: integer operations only, no float.
+
+A table value is an e4m3 byte times its group's e8m0 power of two (32 values a scale). bfloat8_b (tt-metal
+blockfloat_common.cpp convert_u32_to_bfp, round to nearest even) keeps, per 16 consecutive values of a row, the
+largest fp32 exponent and per value a sign + 7-bit magnitude: the value's 24-bit significand shifted down by its
+exponent's gap to the shared one, rounded to 7 bits, capped at 127. An e4m3 value has a 4-bit significand q (8..15
+after normalizing), so its magnitude is RNE(q * 2^(3 - gap)): a lookup on (byte, gap). The output bytes equal
+ttnn's packing of the same values as floats (tests/test_engram_bfp8.py), so the device sees what
+from_torch(dtype=bfloat8_b) would give it.
+
+TILE bytes per 32 x 32 tile: 64 exponent bytes (face 0..3, 16 rows each) then 1024 sign-magnitude bytes (face 0..3,
+row-major 16 x 16); tiles row-major over the tensor's [rows / 32, cols / 32].
+"""
+
+from __future__ import annotations
+
+import torch
+
+_GAPS = 32  # a gap past 10 already rounds every e4m3 significand to 0
+
+
+def _tables():
+    b = torch.arange(256)
+    sign = (b >> 7) & 1
+    e = (b >> 3) & 0xF
+    m = b & 7
+    # normal: value = (8 + m) / 8 * 2^(e - 7); subnormal (e = 0): m / 8 * 2^-6 -> normalize m into 8..15
+    q = torch.where(e > 0, 8 + m, m)
+    exp = torch.where(e > 0, e - 7, torch.full_like(e, -6))  # exponent of q / 8 (before normalizing subnormals)
+    for _ in range(3):
+        small = (e == 0) & (q > 0) & (q < 8)
+        q = torch.where(small, q << 1, q)
+        exp = torch.where(small, exp - 1, exp)
+    zero = q == 0  # +-0 (e4m3fn has no inf; 0x7f / 0xff are NaN and never stored)
+    # magnitude for a gap g: RNE(q * 2^(3 - g)), capped at 127
+    g = torch.arange(_GAPS).view(1, -1)
+    qq = q.view(-1, 1)
+    sh = (g - 3).clamp(min=0)
+    num = qq << (3 - g).clamp(min=0)
+    half = torch.where(sh > 0, 1 << (sh - 1).clamp(min=0), torch.zeros_like(sh))
+    rem = qq & ((1 << sh) - 1)
+    mag = num >> sh
+    up = (sh > 0) & ((rem > half) | ((rem == half) & ((mag & 1) == 1)))
+    mag = (mag + up.long()).clamp(max=127)
+    mag = torch.where(zero.view(-1, 1), torch.zeros_like(mag), mag)
+    byte = torch.where(mag > 0, (sign.view(-1, 1) << 7) | mag, torch.zeros_like(mag)).to(torch.uint8)
+    return exp.to(torch.int16), zero, byte  # exp: fp32 exponent minus 127 minus the e8m0 bias, before the scale
+
+
+_EXP, _ZERO, _BYTE = _tables()
+
+
+def _numba_kernel():
+    import numba
+    import numpy as np
+
+    @numba.njit(parallel=True, cache=True)
+    def pack(w, s, exps, mags, exp_t, zero_t, byte_t):
+        n, d = w.shape
+        per_scale = d // s.shape[1]
+        for r in numba.prange(n):
+            for k in range(d // 16):
+                sc = np.int32(s[r, (k * 16) // per_scale])
+                mx = 0
+                for j in range(16):
+                    b = w[r, k * 16 + j]
+                    if not zero_t[b]:
+                        mx = max(mx, exp_t[b] + sc)
+                exps[r, k] = mx
+                for j in range(16):
+                    b = w[r, k * 16 + j]
+                    mags[r, k * 16 + j] = 0 if zero_t[b] else byte_t[b, min(mx - (exp_t[b] + sc), _GAPS - 1)]
+
+    return pack
+
+
+_KERNEL = None
+
+
+def pack_rows(w: torch.Tensor, s: torch.Tensor, threads: int | None = None):
+    """w [N, 256] uint8 e4m3 bytes, s [N, 8] uint8 e8m0 bytes -> (exponents [N, 16] uint8, magnitudes [N, 256] uint8):
+    the bfloat8_b shared exponent of each 16-value group and each value's sign + 7-bit magnitude. A compiled loop over
+    ``threads`` (QB: 5120-token chunk 63 ms on 1 thread, 8 ms on 8; the torch form below: ~230 ms)."""
+    global _KERNEL
+    import numba
+
+    if _KERNEL is None:
+        _KERNEL = _numba_kernel()
+    n, d = w.shape
+    exps = torch.empty(n, d // 16, dtype=torch.uint8)
+    mags = torch.empty(n, d, dtype=torch.uint8)
+    if threads:
+        numba.set_num_threads(min(threads, numba.config.NUMBA_NUM_THREADS))
+    _KERNEL(
+        w.contiguous().numpy(),
+        s.contiguous().numpy(),
+        exps.numpy(),
+        mags.numpy(),
+        _EXP.int().numpy(),
+        _ZERO.numpy(),
+        _BYTE.numpy(),
+    )
+    return exps, mags
+
+
+def pack_rows_torch(w: torch.Tensor, s: torch.Tensor):
+    """pack_rows in torch tensor operations (the readable form; the tests check the two agree)."""
+    n, d = w.shape
+    wi = w.long()
+    e = _EXP[wi].int() + s.int().repeat_interleave(d // s.shape[1], dim=1)  # fp32 biased exponent (127 + ...)
+    e = torch.where(_ZERO[wi], torch.zeros_like(e), e)
+    eg = e.view(n, d // 16, 16)
+    shared = eg.amax(-1)
+    gap = (shared.unsqueeze(-1) - eg).clamp(max=_GAPS - 1).view(n, d)
+    return shared.to(torch.uint8), _BYTE[wi, gap.long()]
+
+
+def tile_bytes(exps: torch.Tensor, mags: torch.Tensor) -> torch.Tensor:
+    """exps [S, W / 16] uint8, mags [S, W] uint8 (S, W multiples of 32) -> the bfloat8_b TILE bytes of [S, W]."""
+    s, w = mags.shape
+    tr, tc = s // 32, w // 32
+    # mags [tr, fr(2), 16 rows, tc, fc(2), 16 cols] -> [tr, tc, fr, fc, 16, 16]
+    m = mags.view(tr, 2, 16, tc, 2, 16).permute(0, 3, 1, 4, 2, 5).reshape(tr, tc, 1024)
+    x = exps.view(tr, 2, 16, tc, 2).permute(0, 3, 1, 4, 2).reshape(tr, tc, 64)
+    return torch.cat([x, m], dim=-1).reshape(-1)
