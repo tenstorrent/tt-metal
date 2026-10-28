@@ -8,12 +8,14 @@
 //
 // The calls, in the order they run:
 //   pack_params_from(Plan)                  Plan -> pack_params (compile time)
-//   pack_configure<P>()                     once the packer is idle, programs it completely: input and output
-//                                           formats, Dest read mode, ReLU, L1 accumulation, exponent threshold,
+//   pack_configure<P>(l1_acc)               once the packer is idle, programs it completely: input and output
+//                                           formats, Dest read mode, ReLU, L1 accumulation (an immediate, or the
+//                                           run-time l1_acc with Toggle::Runtime), exponent threshold,
 //                                           strides, edge mask, address modifiers, address counters and the MOP
 //   pack_execute<P>(dest_row, l1_address)   points the packer at Dest from dest_row, then packs every tile: tile i
 //                                           of Dest to tile i in L1
-//   pack<On, Plan>(dest_row, l1_address)    the per-thread call the Compute API makes: configure, then execute,
+//   pack<On, Plan>(dest_row, l1_address, l1_acc)
+//                                           the per-thread call the Compute API makes: configure, then execute,
 //                                           only when this build is for thread On (the pack thread)
 //
 // How one tile is packed. The packer reads Dest through four read interfaces, one Dest row (16 datums) each, so one
@@ -101,7 +103,7 @@ struct pack_params
     std::uint32_t tiles;      ///< tiles to pack
     std::uint32_t tile_words; ///< one tile in L1, in L1 words: the L1 address step from tile to tile
     bool relu;                ///< negatives to 0 on the way out
-    bool l1_acc;              ///< add into L1 instead of overwriting it
+    Toggle l1_acc;            ///< add into L1 instead of overwriting it; Runtime: from configure's argument
     bool untilize;            ///< write rows instead of tiles (not ported)
 };
 
@@ -171,9 +173,26 @@ constexpr std::uint32_t pacr(std::uint8_t addr_mod, hal::pack::TileBoundary boun
     return hal::pack::DataTransfer {.address_modifier = addr_mod, .interfaces = all_read_interfaces, .boundary = boundary}.get_operation();
 }
 
-/// Programs the packer for P. Waits for earlier packs to finish first.
+/// The Pack_L1_Acc assignment for P: an immediate for Toggle::Off and Toggle::On (l1_acc unused), the run-time value
+/// l1_acc for Toggle::Runtime.
 template <pack_params P>
-inline __attribute__((always_inline)) void pack_configure()
+inline __attribute__((always_inline)) auto pack_l1_acc_assignment([[maybe_unused]] bool l1_acc)
+{
+    using r1 = cfg::ThconReg1Fields;
+    if constexpr (P.l1_acc == Toggle::Runtime)
+    {
+        return cfg::set<r1::Pack_L1_Acc, cfg::Sec::S0>(l1_acc ? 1u : 0u);
+    }
+    else
+    {
+        return cfg::set<r1::Pack_L1_Acc, cfg::Sec::S0, P.l1_acc == Toggle::On ? 1u : 0u>();
+    }
+}
+
+/// Programs the packer for P. Waits for earlier packs to finish first. l1_acc is read only when P.l1_acc is
+/// Toggle::Runtime.
+template <pack_params P>
+inline __attribute__((always_inline)) void pack_configure(bool l1_acc = false)
 {
     using namespace hal::counters::adc;
     using cfg::Sec;
@@ -256,7 +275,7 @@ inline __attribute__((always_inline)) void pack_configure()
     cfg::write<cfg::Access::TensixCfgUnit>(
         cfg::set<r1::Downsample_mask, Sec::S0, no_downsampling>(),
         cfg::set<r1::Downsample_rate, Sec::S0, 0>(), // as configure_pack: config zeroed
-        cfg::set<r1::Pack_L1_Acc, Sec::S0, P.l1_acc ? 1u : 0u>(),
+        pack_l1_acc_assignment<P>(l1_acc),
         cfg::set<r1::Exp_threshold_en, Sec::S0, exp_threshold ? 1u : 0u>(),
         cfg::set<r1::Pac_LF8_4b_exp, Sec::S0, fp8_e4m3 ? 1u : 0u>(),
         cfg::set<r1::Exp_threshold, Sec::S0, exp_threshold ? bfp_a_exp_threshold : 0u>());
@@ -339,15 +358,16 @@ inline __attribute__((always_inline)) void pack_execute(std::uint32_t dest_row, 
 }
 
 /// The pack thread's part of a Compute API pack. dest_row is the Dest tensor's first row (absolute), l1_address the
-/// byte address of the L1 tensor.
+/// byte address of the L1 tensor, l1_acc the run-time L1 accumulation (read only when the Plan's l1_acc is
+/// Toggle::Runtime).
 template <Thread On, Plan Pl>
-inline __attribute__((always_inline)) void pack(std::uint32_t dest_row, std::uint32_t l1_address)
+inline __attribute__((always_inline)) void pack(std::uint32_t dest_row, std::uint32_t l1_address, bool l1_acc = false)
 {
     static_assert(On == Thread::Pack, "the packer is driven from the pack thread");
     constexpr pack_params p = pack_params_from(Pl);
     if constexpr (runs_on<On>)
     {
-        pack_configure<p>();
+        pack_configure<p>(l1_acc);
         pack_execute<p>(dest_row, l1_address);
     }
 }

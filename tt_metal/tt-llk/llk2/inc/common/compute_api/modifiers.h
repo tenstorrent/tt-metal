@@ -5,6 +5,13 @@
 // One named modifier struct per op, passed as a template argument on every call. Every field has a default, so a
 // call names only what it changes: matmul<matmul_modifiers{.transpose_in1 = true}>(in0, in1, acc).
 // Class-type template arguments in C++17 rely on the device compiler's -ftt-nttp.
+//
+// A modifier that is a single config bit is a Toggle (resolver/plan.h): Off, On or Runtime.
+//   Off, On   fixed at compile time; the call takes no extra argument and the bit is written as an immediate
+//   Runtime   the call takes the value as a run-time argument (after its tensors), and the bit is written from it;
+//             one build serves both values. Compile-time checks treat the feature as possibly on, so a Runtime
+//             modifier is accepted only where On would be.
+//   pack<pack_modifiers{.l1_acc = Toggle::Runtime}>(acc, out, /* l1_acc */ block > 0);
 
 #pragma once
 
@@ -48,9 +55,9 @@ struct vec_modifiers
 /// Modifiers of pack.
 struct pack_modifiers
 {
-    bool relu     = false; ///< ReLU on the way out: negatives become 0 (the packer's ZERO_RELU mode)
-    bool l1_acc   = false; ///< add into what is already in L1 instead of overwriting it (the packer's L1 accumulation)
-    bool untilize = false; ///< write rows instead of tiles; not ported yet, rejected at compile time
+    bool relu     = false;       ///< ReLU on the way out: negatives become 0 (the packer's ZERO_RELU mode)
+    Toggle l1_acc = Toggle::Off; ///< add into what is already in L1 instead of overwriting it (the packer's L1 accumulation, Pack_L1_Acc)
+    bool untilize = false;       ///< write rows instead of tiles; not ported yet, rejected at compile time
 };
 
 } // namespace llk2

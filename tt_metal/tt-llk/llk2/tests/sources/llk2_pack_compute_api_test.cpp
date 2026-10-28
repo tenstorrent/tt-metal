@@ -3,7 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Compute API test: llk2::pack modifiers (ReLU, L1 accumulation) behind a matmul, over PASSES Dest sections.
-// Pass 0 packs (overwrites) the result; every later pass packs it again with l1_acc, adding into L1. With PASSES > 2
+// Pass 0 packs (overwrites) the result; every later pass packs it again with l1_acc, adding into L1. Without
+// L1_ACC_RUNTIME those are two packs (l1_acc Off, then On); with it, one pack with l1_acc = Toggle::Runtime and the
+// run-time value pass > 0. With PASSES > 2
 // the sections wrap around, so the test also covers the Dest sync API's double buffering. Only Tensors, the Compute
 // API and the Dest sync API.
 
@@ -36,7 +38,8 @@ inline constexpr auto& out_spec = llk2::l1_spec<RT_DIM * llk2::default_tile_dim,
 inline constexpr auto& acc_spec = llk2::dst_spec<RT_DIM * llk2::default_tile_dim, CT_DIM * llk2::default_tile_dim, llk2::kernel_dest_format>;
 
 constexpr llk2::pack_modifiers first_pack {.relu = PACK_RELU};
-constexpr llk2::pack_modifiers accumulating_pack {.relu = PACK_RELU, .l1_acc = PASSES > 1}; // with one pass it never runs
+constexpr llk2::pack_modifiers accumulating_pack {.relu = PACK_RELU, .l1_acc = PASSES > 1 ? llk2::Toggle::On : llk2::Toggle::Off}; // with one pass it never runs
+constexpr llk2::pack_modifiers runtime_pack {.relu = PACK_RELU, .l1_acc = L1_ACC_RUNTIME ? llk2::Toggle::Runtime : llk2::Toggle::Off}; // compiled even when unused
 
 void run_kernel(RUNTIME_PARAMETERS params)
 {
@@ -49,7 +52,11 @@ void run_kernel(RUNTIME_PARAMETERS params)
         const auto acc = llk2::dest_acquire<acc_spec>();
         llk2::matmul(x, w, acc);
         llk2::dest_commit(acc);
-        if (pass == 0)
+        if constexpr (L1_ACC_RUNTIME)
+        {
+            llk2::pack<runtime_pack>(acc, out, /* l1_acc */ pass > 0);
+        }
+        else if (pass == 0)
         {
             llk2::pack<first_pack>(acc, out);
         }
