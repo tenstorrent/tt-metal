@@ -415,6 +415,8 @@ void validate_matmul_bias_shape(
         return;
     }
     const auto& bias = optional_bias.value();
+    // The bias is added in the float pipeline; an integer bias would be reinterpreted bit for bit.
+    TT_FATAL(is_floating_point(bias.dtype()), "Unsupported data format for bias: {}", bias.dtype());
     auto bias_tile_shape = bias.tensor_spec().tile().get_tile_shape();
     TT_FATAL(
         (bias_tile_shape[0] == in0_tile.get_height() && bias_tile_shape[1] == in1_tile.get_width()),
