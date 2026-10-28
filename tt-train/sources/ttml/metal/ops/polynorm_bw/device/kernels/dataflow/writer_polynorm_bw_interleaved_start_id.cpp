@@ -10,23 +10,10 @@
 //   2. packed_partials — 4 tiles per row containing [dw0, dw1, dw2, db]
 //      (later reduced on-device by the host wrapper across all rows/cores
 //      to produce final dL/dw and dL/db)
-// Each output is only written when requested (COMPUTE_GRAD_INPUT, COMPUTE_PACKED_PARTIALS).
 // ============================================================================
 
 #include "api/dataflow/dataflow_api.h"
 #include "tt-train/sources/ttml/metal/common/dataflow_utils.hpp"
-
-#ifdef COMPUTE_GRAD_INPUT
-constexpr bool compute_grad_input = true;
-#else
-constexpr bool compute_grad_input = false;
-#endif
-
-#ifdef COMPUTE_PACKED_PARTIALS
-constexpr bool compute_packed_partials = true;
-#else
-constexpr bool compute_packed_partials = false;
-#endif
 
 void kernel_main() {
     uint32_t arg_idx = 0U;
@@ -54,22 +41,18 @@ void kernel_main() {
 
     for (uint32_t r = start_row; r < (start_row + num_rows_to_process); ++r) {
         // Write dL/dx gradient tiles for this row
-        if constexpr (compute_grad_input) {
-            write_full_row_tiles(
-                cb_dL_dx_output, dL_dx_output_addr_generator, dL_dx_Wt, block_size, dL_dx_tile_bytes, r * dL_dx_Wt);
-        }
+        write_full_row_tiles(
+            cb_dL_dx_output, dL_dx_output_addr_generator, dL_dx_Wt, block_size, dL_dx_tile_bytes, r * dL_dx_Wt);
 
         // Write packed partial-gradient tiles [dw0, dw1, dw2, db].
         // These are always 4 scalar tiles per row and must be consumed as a 4-tile block
         // independent of dL/dx block_size.
-        if constexpr (compute_packed_partials) {
-            write_tiles_by_row(
-                cb_packed_partials_output,
-                packed_partials_output_addr_generator,
-                r * packed_partials_tiles_per_row,
-                packed_partials_tiles_per_row,
-                packed_partials_tile_bytes,
-                packed_partials_tiles_per_row);
-        }
+        write_tiles_by_row(
+            cb_packed_partials_output,
+            packed_partials_output_addr_generator,
+            r * packed_partials_tiles_per_row,
+            packed_partials_tiles_per_row,
+            packed_partials_tile_bytes,
+            packed_partials_tiles_per_row);
     }
 }
