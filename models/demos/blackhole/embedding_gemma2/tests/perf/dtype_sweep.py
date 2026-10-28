@@ -304,15 +304,23 @@ def _window_ms(enc, b, s, n) -> float:
     return (time.perf_counter() - t0) * 1e3 / n
 
 
+def parse_shapes(text: str) -> tuple[tuple[int, int], ...]:
+    """'1x2048,8x512' -> ((1, 2048), (8, 512)); empty -> PERF_SHAPES."""
+    if not text:
+        return PERF_SHAPES
+    return tuple(tuple(int(v) for v in s.split("x")) for s in text.split(","))
+
+
 def run_perf(device, model, snapshot, args) -> dict:
     from models.demos.blackhole.embedding_gemma2.tests.common import make_batch
     from models.demos.blackhole.embedding_gemma2.tt.text_encoder import TextEncoder
 
+    shapes = parse_shapes(args.shapes)
     enc = TextEncoder(model, device)
-    enc.capture_all(PERF_SHAPES)
+    enc.capture_all(shapes)
     out = {}
     try:
-        for b, s in PERF_SHAPES:
+        for b, s in shapes:
             ids, mask = make_batch(snapshot, [s] * b)
             emb = TextEncoder.read_embedding(enc.replay(enc.prepare_inputs(ids, mask))[1], b)
             assert torch.isfinite(emb).all()
@@ -341,8 +349,22 @@ def run_perf(device, model, snapshot, args) -> dict:
             time.sleep(args.idle)
     finally:
         enc.release_traces()
-    out["rank_ms"] = sum(out[f"{b}x{s}"]["burst_ms_median"] for b, s in RANK_SHAPES)
+    out["regime"] = {
+        shape_key(b, s): f"{len(shapes)} trace(s) captured in this process: {','.join(shape_key(*x) for x in shapes)}"
+        for b, s in shapes
+    }
+    _rank(out)
     return out
+
+
+def shape_key(b: int, s: int) -> str:
+    return f"{b}x{s}"
+
+
+def _rank(perf: dict) -> None:
+    """Ranking aggregate (burst 1x512 + 8x512), when both shapes were measured."""
+    if all(shape_key(b, s) in perf for b, s in RANK_SHAPES):
+        perf["rank_ms"] = sum(perf[shape_key(b, s)]["burst_ms_median"] for b, s in RANK_SHAPES)
 
 
 def construction_evidence(model) -> dict:
@@ -446,7 +468,10 @@ def cmd_run(args) -> None:
                 )
             if not args.no_perf:
                 rec["perf"] = run_perf(device, model, snapshot, args)
-                print(f"  RANK {cid}: {rec['perf']['rank_ms']:.3f} ms (1x512 + 8x512 burst)", flush=True)
+                if "rank_ms" in rec["perf"]:
+                    print(f"  RANK {cid}: {rec['perf']['rank_ms']:.3f} ms (1x512 + 8x512 burst)", flush=True)
+            if args.merge:
+                rec["merge"] = True
             rec["seconds"] = time.time() - t0
         except Exception as e:  # noqa: BLE001 - a candidate the runtime cannot build/run is recorded as blocked
             rec["error"] = f"{type(e).__name__}: {e}"
@@ -465,12 +490,29 @@ def cmd_list(_args) -> None:
 
 # ---------------------------------------------------------------------- report
 def _load(paths) -> list[dict]:
+    """A later run of the same id replaces an earlier one, except `merge` records (`run --merge`,
+    e.g. one perf shape per process), which add their accuracy / perf shapes to the earlier one."""
     recs = {}
     for p in paths:
         for line in Path(p).read_text().splitlines():
-            if line.strip():
-                r = json.loads(line)
-                recs[r["id"]] = r  # a later run of the same id replaces an earlier one
+            if not line.strip():
+                continue
+            r = json.loads(line)
+            old = recs.get(r["id"])
+            if r.pop("merge", False) and old is not None:
+                if "accuracy" in r:
+                    old["accuracy"] = r["accuracy"]
+                if "perf" in r:
+                    perf = old.setdefault("perf", {})
+                    regime = {**perf.get("regime", {}), **r["perf"].get("regime", {})}
+                    perf.update({k: v for k, v in r["perf"].items() if k not in ("regime", "rank_ms")})
+                    perf["regime"] = regime
+                    _rank(perf)
+                if "error" in r:
+                    old["error"] = r["error"]
+                old.setdefault("merged_commits", []).append(r["commit"])
+            else:
+                recs[r["id"]] = r
     return list(recs.values())
 
 
@@ -490,69 +532,145 @@ def _chart(recs, metric_key, ylabel, bar, path, selected, title):
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
+    from matplotlib.lines import Line2D
 
     pts = [
-        (r["perf"]["rank_ms"], r["accuracy"][metric_key]["value"], r["id"], r["accuracy"]["screen_pass"])
+        (
+            r["perf"]["rank_ms"],
+            r["accuracy"][metric_key]["value"],
+            r["id"],
+            r["accuracy"]["screen_pass"],
+            _one_trace_per_process(r["perf"]),
+        )
         for r in recs
-        if "perf" in r and "accuracy" in r
+        if "rank_ms" in r.get("perf", {}) and "accuracy" in r
     ]
-    front = _pareto([(x, y, cid) for x, y, cid, _ in pts])
+    front = _pareto([(x, y, cid) for x, y, cid, _, _ in pts])
     front_ids = {p[2] for p in front}
-    ys_ok = [y for _, y, _, ok in pts if ok] or [bar]
+    ys_ok = [y for _, y, _, ok, _ in pts if ok] or [bar]
+    probe_key = {"last_hidden_pcc": "min_last_hidden_pcc", "embedding_cos": "min_embedding_cos"}.get(metric_key)
+    probe_min = {r["id"]: r["probe"]["all"][probe_key] for r in recs if probe_key and r.get("probe")}
+    ys_ok += [v for v in probe_min.values()]
+    xs = [x for x, *_ in pts]
     # left: every evaluated config; right: zoom on the region around the gate minimum
-    fig, axes = plt.subplots(1, 2, figsize=(15, 6.6), dpi=150, gridspec_kw={"width_ratios": [1, 1.25]})
+    fig, axes = plt.subplots(1, 2, figsize=(15, 7.0), dpi=150, gridspec_kw={"width_ratios": [1, 1.25]})
     span = max(max(ys_ok) - min(ys_ok), 1e-4)
-    zoom_lo = min(ys_ok) - 0.6 * span
-    if bar > zoom_lo - 0.6 * span:  # the gate line is near the passing cluster: keep it in view
-        zoom_lo = min(zoom_lo, bar - 0.2 * span)
+    zoom_lo = min(min(ys_ok) - 0.25 * span, bar - 0.15 * span)
+    zoom_hi = max(ys_ok) + 0.10 * (max(ys_ok) - zoom_lo)
     for k, ax in enumerate(axes):
         ax.set_facecolor("#fbfaf7")
-        for x, y, cid, ok in pts:
-            if cid != selected:
-                ax.scatter(
-                    x, y, s=42, color="#3b6ea8" if ok else "#b0b0b0", edgecolor="#22323f", linewidth=0.6, zorder=3
-                )
-        ax.plot(
-            [p[0] for p in front],
-            [p[1] for p in front],
-            color="#3b6ea8",
-            linewidth=1.4,
-            alpha=0.75,
-            zorder=2,
-            label="Pareto frontier",
-        )
-        for x, y, cid, ok in pts:
+        ax.set_xlim(min(xs) - 0.8, max(xs) + 1.6)
+        if k == 1:
+            ax.set_ylim(zoom_lo, zoom_hi)
+            ax.set_title("zoom: the passing configs and the gate line", fontsize=9)
+        else:
+            lo = min(y for _, y, *_ in pts)
+            ax.set_ylim(lo - 0.04 * (1 - lo), 1 + 0.02 * (1 - lo))
+            ax.set_ylabel(ylabel)
+            ax.set_title("every evaluated config", fontsize=9)
+        ax.plot([p[0] for p in front], [p[1] for p in front], color="#3b6ea8", linewidth=1.4, alpha=0.75, zorder=2)
+        ax.axhline(bar, linestyle=":", color="#444444", linewidth=1.3, zorder=1)
+        for x, y, cid, ok, one in pts:
+            if probe_key and cid in probe_min:  # robustness probe: min over gate + probe inputs
+                ax.plot([x, x], [y, probe_min[cid]], color="#7a5195", linewidth=0.9, alpha=0.8, zorder=2)
+                ax.scatter(x, probe_min[cid], s=46, facecolor="none", edgecolor="#7a5195", linewidth=1.3, zorder=4)
             if cid == selected:
+                ax.scatter(x, y, s=170, color="#d62728", edgecolor="black", linewidth=0.8, zorder=5)
+            else:
                 ax.scatter(
-                    x, y, s=150, color="#d62728", edgecolor="black", linewidth=0.8, zorder=5, label=f"selected: {cid}"
+                    x,
+                    y,
+                    s=46,
+                    marker="D" if one else "o",
+                    color="#3b6ea8" if ok else "#b0b0b0",
+                    edgecolor="#22323f",
+                    linewidth=0.6,
+                    zorder=3,
                 )
-            in_view = k == 0 or y >= zoom_lo
-            label = cid == selected or cid in front_ids or cid.startswith("base") or (k == 1 and in_view)
-            if label and in_view:
-                ax.annotate(
+        # labels: selected first, then the frontier / baseline / precision candidates, then the
+        # rest; a label that would overlap one already placed tries other offsets, else is dropped
+        fig.canvas.draw()
+        order = sorted(
+            pts,
+            key=lambda p: (
+                p[2] != selected,
+                not (p[2] in front_ids or p[2].startswith(("base", "p3_", "bf16w"))),
+                p[0],
+            ),
+        )
+        placed = [ax.get_window_extent()]  # index 0 is the axes box (labels must fit inside)
+        marks = [ax.transData.transform((x, y)) for x, y, *_ in pts]
+        marks += [ax.transData.transform((x, probe_min[cid])) for x, _, cid, *_ in pts if cid in probe_min]
+        for x, y, cid, ok, _ in order:
+            if k == 1 and not (zoom_lo <= y <= zoom_hi):
+                continue
+            if k == 0 and not (cid == selected or cid in front_ids or cid.startswith(("base", "bf16w"))):
+                continue
+            color = "#d62728" if cid == selected else ("#22323f" if ok else "#8a8a8a")
+            for dx, dy in ((6, 3), (6, -10), (-6, 3), (-6, -10), (6, 12), (6, -19), (-6, 12), (-6, -19)):
+                t = ax.annotate(
                     cid,
                     (x, y),
                     textcoords="offset points",
-                    xytext=(5, 4 if k == 0 else -9 + 13 * (hash(cid) % 2)),
-                    fontsize=6.3,
-                    color="#d62728" if cid == selected else ("#22323f" if ok else "#888888"),
+                    xytext=(dx, dy),
+                    fontsize=6.6 if cid != selected else 7.6,
+                    fontweight="bold" if cid == selected else "normal",
+                    color=color,
+                    ha="left" if dx > 0 else "right",
+                    zorder=6,
                 )
-        ax.axhline(bar, linestyle=":", color="#444444", linewidth=1.2, label=f"gate minimum {bar}")
+                bb = t.get_window_extent(renderer=fig.canvas.get_renderer()).expanded(1.04, 1.15)
+                inside = placed[0].contains(bb.x0, bb.y0) and placed[0].contains(bb.x1, bb.y1)
+                on_marker = any(bb.expanded(1.0, 1.6).contains(mx, my) for mx, my in marks)
+                if inside and not on_marker and not any(bb.overlaps(o) for o in placed[1:]):
+                    placed.append(bb)
+                    break
+                t.remove()
         ax.set_xlabel("traced device ms, burst median, 1x512 + 8x512 (lower is faster)")
         ax.grid(True, color="#e3e0d8", linewidth=0.6)
-        if k == 1:
-            ax.set_ylim(zoom_lo, max(ys_ok) + 0.12 * (max(ys_ok) - zoom_lo))
-            ax.set_title("zoom: the passing configs", fontsize=9)
-            ax.scatter([], [], s=42, color="#3b6ea8", label="passes screen")
-            ax.scatter([], [], s=42, color="#b0b0b0", label="fails screen")
-            ax.legend(fontsize=7.5, loc="lower right", frameon=False)
-        else:
-            ax.set_ylabel(ylabel)
-            ax.set_title("every evaluated config", fontsize=9)
+    handles = [
+        Line2D([], [], color="#3b6ea8", linewidth=1.4, alpha=0.75, label="Pareto frontier (every evaluated config)"),
+        Line2D([], [], color="#444444", linestyle=":", linewidth=1.3, label=f"gate minimum {bar}"),
+        Line2D(
+            [], [], marker="o", linestyle="", markersize=12, color="#d62728", mec="black", label=f"selected: {selected}"
+        ),
+        Line2D([], [], marker="o", linestyle="", markersize=7, color="#3b6ea8", mec="#22323f", label="passes screen"),
+        Line2D([], [], marker="o", linestyle="", markersize=7, color="#b0b0b0", mec="#22323f", label="fails screen"),
+        Line2D(
+            [],
+            [],
+            marker="D",
+            linestyle="",
+            markersize=6,
+            color="#3b6ea8",
+            mec="#22323f",
+            label="perf: one trace per process",
+        ),
+    ]
+    if probe_min:
+        handles.append(
+            Line2D(
+                [],
+                [],
+                marker="o",
+                linestyle="",
+                markersize=7,
+                mfc="none",
+                mec="#7a5195",
+                label="min over gate + robustness probe inputs",
+            )
+        )
+    fig.legend(handles=handles, loc="lower center", ncol=4, fontsize=8, frameon=False, bbox_to_anchor=(0.5, 0.0))
     fig.suptitle(title, fontsize=11)
-    fig.tight_layout()
+    fig.tight_layout(rect=(0, 0.075, 1, 1))
     fig.savefig(path)
     plt.close(fig)
+
+
+def _one_trace_per_process(perf: dict) -> bool:
+    """True when the ranking shapes were measured with a single trace captured in the process."""
+    regime = perf.get("regime", {})
+    return any(regime.get(shape_key(b, s), "").startswith("1 trace(s)") for b, s in RANK_SHAPES)
 
 
 def _compact(rec: dict) -> dict:
@@ -577,11 +695,24 @@ def cmd_report(args) -> None:
     doc = Path(args.doc_dir)
     doc.mkdir(parents=True, exist_ok=True)
     recs.sort(key=lambda r: r.get("perf", {}).get("rank_ms", 1e9))
+    # robustness probe (tests/perf/dtype_probe.py): per-candidate summary on the gate + probe inputs
+    probe = {}
+    for p in filter(None, args.probe.split(",")):
+        for line in Path(p).read_text().splitlines():
+            if line.strip():
+                pr = json.loads(line)
+                key = "probe" if pr.get("inputs", "short") == "short" else f"probe_{pr['inputs']}"
+                probe.setdefault(pr["id"], {})[key] = pr["summary"]
+    for r in recs:
+        r.update(probe.get(r["id"], {}))
     (doc / "sweep_results.json").write_text(json.dumps([_compact(r) for r in recs], indent=1) + "\n")
     cols = ["id", "description", "screen_pass", "failing", "rank_ms"]
     cols += [f"burst_{b}x{s}" for b, s in PERF_SHAPES] + [f"sustained_{b}x{s}" for b, s in PERF_SHAPES]
+    cols += ["perf_regime"]
     cols += ["layer_pcc_gated", "layer_pcc_gated_at", "layer_pcc_all", "module_pcc", "module_pcc_at"]
-    cols += ["last_hidden_pcc", "embedding_cos", "embedding_cos_at", "retrieval_agree", "error", "commit"]
+    cols += ["last_hidden_pcc", "embedding_cos", "embedding_cos_at", "retrieval_agree"]
+    cols += ["probe_min_last_hidden_pcc", "probe_min_last_hidden_at", "probe_min_embedding_cos", "probe_pass"]
+    cols += ["error", "commit"]
     with open(doc / "sweep_results.csv", "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=cols)
         w.writeheader()
@@ -603,11 +734,27 @@ def cmd_report(args) -> None:
                     retrieval_agree=a["retrieval_agree"],
                 )
             if p:
-                row["rank_ms"] = f"{p['rank_ms']:.3f}"
+                if "rank_ms" in p:
+                    row["rank_ms"] = f"{p['rank_ms']:.3f}"
                 for b, s in PERF_SHAPES:
-                    k = f"{b}x{s}"
-                    row[f"burst_{k}"] = f"{p[k]['burst_ms_median']:.3f}"
-                    row[f"sustained_{k}"] = f"{p[k]['sustained_ms_median']:.3f}"
+                    k = shape_key(b, s)
+                    if k in p:
+                        row[f"burst_{k}"] = f"{p[k]['burst_ms_median']:.3f}"
+                        row[f"sustained_{k}"] = f"{p[k]['sustained_ms_median']:.3f}"
+                regimes = set(p.get("regime", {}).values())
+                row["perf_regime"] = (
+                    "one trace per process"
+                    if regimes and all(v.startswith("1 trace(s)") for v in regimes)
+                    else "all five traces captured in one process"
+                )
+            if r.get("probe"):
+                both = r["probe"]["all"]
+                row.update(
+                    probe_min_last_hidden_pcc=f"{both['min_last_hidden_pcc']:.6f}",
+                    probe_min_last_hidden_at=both["min_last_hidden_at"],
+                    probe_min_embedding_cos=f"{both['min_embedding_cos']:.6f}",
+                    probe_pass=both["pass"],
+                )
             w.writerow(row)
     _chart(
         recs,
@@ -627,6 +774,15 @@ def cmd_report(args) -> None:
         args.selected,
         "EmbeddingGemma 2 text tower: per-layer PCC vs traced device time (P150a)",
     )
+    _chart(
+        recs,
+        "last_hidden_pcc",
+        "min free-running last-hidden PCC vs HF fp32",
+        BAR_LAST,
+        doc / "text_lasthidden_perf_pareto.png",
+        args.selected,
+        "EmbeddingGemma 2 text tower: last-hidden PCC (the binding metric) vs traced device time (P150a)",
+    )
     print(f"wrote {len(recs)} records to {doc}")
 
 
@@ -644,11 +800,14 @@ def main() -> None:
     r.add_argument("--idle", type=float, default=3.0)
     r.add_argument("--soak", type=float, default=5.0)
     r.add_argument("--sustained-ms", type=float, default=1500.0, help="target length of one sustained window")
+    r.add_argument("--shapes", default="", help="perf shapes BxS,... captured in this process (default: all five)")
+    r.add_argument("--merge", action="store_true", help="report merges this record into the earlier one")
     sub.add_parser("list")
     rp = sub.add_parser("report")
     rp.add_argument("--inputs", required=True, help="comma-separated sweep jsonl files")
     rp.add_argument("--doc-dir", required=True)
     rp.add_argument("--selected", default="")
+    rp.add_argument("--probe", default="", help="comma-separated dtype_probe.py jsonl files")
     args = ap.parse_args()
     {"run": cmd_run, "list": cmd_list, "report": cmd_report}[args.cmd](args)
 
