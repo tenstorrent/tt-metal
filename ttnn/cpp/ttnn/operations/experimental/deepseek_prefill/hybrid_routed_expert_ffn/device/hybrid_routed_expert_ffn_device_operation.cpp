@@ -133,13 +133,73 @@ void HybridRoutedExpertFfnDeviceOperation::validate_on_program_cache_miss(
 
 void HybridRoutedExpertFfnDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t& op, const tensor_args_t& t) {
-    // Tensor specs and compile-time attributes participate in the cache key, but buffer addresses
-    // do not. Re-run validation so an address-only hit cannot alias the output onto x, move an
-    // argument to another device, or hand a half a buffer the cached program was not built for.
-    validate_arguments(op, t);
-    if (op.overlap_combine) {
-        validate_overlap(op, t);
+    // A hit has the specs and attributes the miss validated, since they make up the cache key, and the device's
+    // arch, grid and allocator base are the same device's. What a hit can still change is which buffers it is handed:
+    // re-check only that, not the full validation, whose cost is host time on every eager call.
+    const auto* device = t.x.device();
+    const auto check = [&](const Tensor& tensor, const char* name) {
+        TT_FATAL(
+            tensor.is_allocated() && tensor.device() == device,
+            "hybrid routed expert: {} must be allocated on dispatched_buffer's device",
+            name);
+    };
+    const auto check_optional = [&](const std::optional<Tensor>& tensor, const char* name) {
+        if (tensor.has_value()) {
+            check(*tensor, name);
+        }
+    };
+    const auto check_all = [&](const std::vector<Tensor>& tensors, const char* name) {
+        for (const auto& tensor : tensors) {
+            check(tensor, name);
+        }
+    };
+    TT_FATAL(t.x.is_allocated(), "hybrid routed expert: dispatched_buffer must be allocated");
+    check_all(t.gate_projs, "gate_projs");
+    check_all(t.up_projs, "up_projs");
+    check_all(t.down_projs, "down_projs");
+    check(t.counts, "counts");
+    check(t.global_expert_idx_table, "global_expert_idx_table");
+    check(t.output, "output");
+    check_optional(t.expert_region_offsets, "expert_region_offsets");
+    check_all(t.gate_biases, "gate_biases");
+    check_all(t.up_biases, "up_biases");
+    check_all(t.down_biases, "down_biases");
+    check_optional(t.l1_arena, "l1_arena");
+    check_optional(t.dispatched_metadata, "dispatched_metadata");
+    check_optional(t.expert_offsets, "expert_offsets");
+    check_optional(t.replicated_global_expert_idx_table, "replicated_global_expert_idx_table");
+    check_optional(t.forwarding_buffer, "forwarding_buffer");
+    if (!op.overlap_combine) {
+        return;
     }
+    TT_FATAL(
+        t.output.buffer() != t.x.buffer(),
+        "hybrid routed expert overlapped with combine needs an output distinct from dispatched_buffer");
+    // The semaphores are not tensors, so the key holds their addresses, not them.
+    TT_FATAL(
+        op.fwd_arrived.has_value() && op.final_arrived.has_value() && op.expert_go.has_value(),
+        "hybrid routed expert overlapped with combine needs the caller's fwd_arrived, final_arrived and expert_go "
+        "global semaphores, created once and passed on every call");
+    TT_FATAL(
+        op.fwd_arrived->device() == device && op.final_arrived->device() == device && op.expert_go->device() == device,
+        "hybrid routed expert overlapped with combine: fwd_arrived, final_arrived and expert_go must belong to the "
+        "same mesh device as dispatched_buffer");
+    TT_FATAL(
+        op.fwd_arrived_addr == op.fwd_arrived->address() && op.final_arrived_addr == op.final_arrived->address() &&
+            op.expert_go_addr == op.expert_go->address(),
+        "hybrid routed expert overlapped with combine: the hashed semaphore addresses do not match the semaphores");
+    TT_FATAL(
+        op.l1_arena_addr == (t.l1_arena.has_value() ? t.l1_arena->buffer()->address() : 0),
+        "hybrid routed expert overlapped with combine: the hashed L1 arena address 0x{:x} is not the arena's",
+        op.l1_arena_addr);
+}
+
+// The key the framework would derive, with no collision-check companion: that one is a string re-encoding every
+// attribute and the specs of some thirty tensors, rebuilt on every call, and a 64-bit hash that collides with this
+// op's few cache entries is not the risk it is worth paying for.
+ttsl::hash::hash_t HybridRoutedExpertFfnDeviceOperation::compute_program_hash(
+    const operation_attributes_t& op, const tensor_args_t& t) {
+    return ttsl::hash::hash_objects_with_default_seed(op, t);
 }
 
 HybridRoutedExpertFfnDeviceOperation::spec_return_value_t HybridRoutedExpertFfnDeviceOperation::compute_output_specs(
