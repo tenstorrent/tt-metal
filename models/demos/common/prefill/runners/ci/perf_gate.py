@@ -34,6 +34,19 @@ def power_class():
     return cls
 
 
+def dram_banks():
+    """The distinct DRAM bank counts of this host's chips, comma-separated; empty if unreadable."""
+    from models.demos.deepseek_v3_d_p.utils.smbus_telemetry import get_dram_bank_counts
+
+    try:
+        counts = get_dram_bank_counts()
+    except Exception as e:
+        print(f"DRAM bank probe failed: {type(e).__name__}: {e}", file=sys.stderr)
+        counts = None
+    print(f"DRAM banks per chip: {counts}", file=sys.stderr)
+    return ",".join(str(n) for n in sorted(set(counts or [])))
+
+
 def lookup(table, model, config, cls):
     entry = table["baselines"].get(model, {}).get(config)
     if entry is None:
@@ -70,6 +83,9 @@ def main():
     parser = argparse.ArgumentParser(description="Gate a prefill run's perf JSON against its baseline.")
     parser.add_argument("perf_json", nargs="?")
     parser.add_argument("--print-power", action="store_true", help="print this host's power class and exit")
+    parser.add_argument(
+        "--print-dram-banks", action="store_true", help="print this host's distinct DRAM bank counts per chip and exit"
+    )
     parser.add_argument("--table", default="")
     parser.add_argument("--model", default="")
     parser.add_argument("--config", default="")
@@ -82,6 +98,9 @@ def main():
     args = parser.parse_args()
     if args.print_power:
         print(power_class())
+        return 0
+    if args.print_dram_banks:
+        print(dram_banks())
         return 0
 
     probe, baseline = None, None

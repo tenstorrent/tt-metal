@@ -3,12 +3,15 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
 set -euo pipefail
 
-USAGE="usage: run_multirank_pcc.sh <model-key> [config] [--variant <manifest-suffix>]"
+USAGE="usage: run_multirank_pcc.sh <model-key> [config] [--variant <manifest-suffix>] [--bin6]"
 VARIANT=""
+# --bin6: run on a Bin6 Galaxy (7 of 8 DRAM banks on every chip) and skip on any other machine.
+BIN6=0
 POSITIONAL=()
 while [ $# -gt 0 ]; do
   case "$1" in
     --variant) VARIANT="_${2:?--variant needs a manifest suffix, e.g. mtp_kv_share or dflash}"; shift 2 ;;
+    --bin6) BIN6=1; shift ;;
     -*) echo "unknown option '$1'; ${USAGE}" >&2; exit 2 ;;
     *) POSITIONAL+=("$1"); shift ;;
   esac
@@ -17,6 +20,10 @@ set -- "${POSITIONAL[@]+"${POSITIONAL[@]}"}"
 
 MODEL="${1:?${USAGE}}"
 RUN_NAME="${MODEL}${VARIANT}"
+if [ "${BIN6}" = 1 ]; then
+  [ -z "${VARIANT}" ] || { echo "--bin6 does not combine with --variant" >&2; exit 2; }
+  RUN_NAME="${MODEL}_bin6"
+fi
 # First entry is the default; membership is the validation. These models support sc1 only.
 case "${MODEL}" in
   mistral4|gptoss120b) MODEL_CONFIGS="sc1" ;;
@@ -71,6 +78,9 @@ SC1_NUM_LAYERS=""
 SC1_NUM_USERS=1
 REQUEST_LEN=""
 SC1_REQUEST_LEN=""
+# The sc1 context on 7 DRAM banks, for a model that supports --bin6. Every KV slot starts on bank 0
+# (check_kv_bank_aligned), so it must be a multiple of the 7-bank quantum as well as of the chunk.
+BIN6_MAX_SEQ_LEN=""
 
 case "${MODEL}" in
   gptoss120b)
@@ -100,6 +110,10 @@ case "${MODEL}" in
     PCC_THRESHOLD=0.83
     PRODUCER_ENV="export PREFILL_TRACE_DIR=/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/glm53-1020k-last5120;"
     REQUEST_LEN=1044480
+    # On 7 banks the manifest's 1,064,960 breaks the alignment, which needs a multiple of 32 devices
+    # (the KV is deduplicated over TP) x 32 tokens x 7 banks = 7168. 1,075,200 is the first multiple of
+    # 7168 and 5120 that holds the request, so Bin6 pushes the same prompt and gates on the same tail.
+    BIN6_MAX_SEQ_LEN=1075200
     if [ "${VARIANT#_mtp}" != "${VARIANT}" ]; then
       MTP=1
       MANIFEST="${MANIFEST_DIR}/glm53${VARIANT}.json"
@@ -177,6 +191,13 @@ if [ -n "${VARIANT}" ]; then
   REQUIRE_TPS=0
   EXPECTED_TPS=""
 fi
+if [ "${BIN6}" = 1 ]; then
+  [ -n "${BIN6_MAX_SEQ_LEN}" ] || { echo "${MODEL} has no Bin6 configuration" >&2; exit 2; }
+  [ "${CONFIG}" = sc1 ] || { echo "--bin6 runs sc1 only: sc4 has not been run on Bin6" >&2; exit 2; }
+  SC1_MAX_SEQ_LEN=${BIN6_MAX_SEQ_LEN}
+  # There is no Bin6 baseline yet: report the rate, and fail if none was measured.
+  REQUIRE_TPS=1
+fi
 PRODUCER_ENV="export PREFILL_PRODUCER_MANIFEST='${MANIFEST}'; ${PRODUCER_ENV}"
 
 # A PP model carries its descriptor in its rank binding, so only the discovery path needs one.
@@ -231,6 +252,22 @@ TTRUN_PY="${TT_METAL_HOME}/ttnn/ttnn/distributed/ttrun.py"
 MPIRUN=$(command -v mpirun-ulfm || command -v mpirun)
 
 RESOLVED_HOSTS=$(awk 'NF && $1 !~ /^#/ {printf "%s,", $1}' "${TTRUN_DIR}/hostfile" | sed 's/,$//')
+if [ "${BIN6}" = 1 ]; then
+  # tt-smi on the worker, which opens no device: the distinct DRAM bank counts of its chips.
+  BIN6_HOST="${RESOLVED_HOSTS%%,*}"
+  DRAM_BANKS=$("${MPIRUN}" -np 1 --host "${BIN6_HOST}:1" --bind-to none --allow-run-as-root \
+    bash -lc "cd '${TT_METAL_HOME}' && PYTHONPATH='${TT_METAL_HOME}' python3 ${PERF_GATE} --print-dram-banks" | tail -n 1) || true
+  case "${DRAM_BANKS}" in
+    7) echo "Bin6: every chip on ${BIN6_HOST} has 7 DRAM banks" ;;
+    "" | *[!0-9,]*) echo "--bin6: could not read the DRAM bank count on ${BIN6_HOST} (got '${DRAM_BANKS}')" >&2; exit 1 ;;
+    *)
+      SKIP="skipped: --bin6 needs 7 DRAM banks on every chip, and ${BIN6_HOST} has ${DRAM_BANKS}"
+      echo "${SKIP}"
+      [ "${GITHUB_ACTIONS:-}" != true ] || echo "::warning title=Bin6 prefill::${SKIP}"
+      exit 0
+      ;;
+  esac
+fi
 TTRUN_CWD="${PIPELINE_DIR}/ttrun-cwd"
 mkdir -p "${TTRUN_CWD}"
 
@@ -495,7 +532,7 @@ if [ "${REQUIRE_TPS}" = 1 ] || [ -n "${EXPECTED_TPS}" ] || [ -f "${PERF_BASELINE
   fi
   python3 "${PERF_GATE}" \
     "${PREFILL_SUMMARIES}/perf_json/${RUN_NAME}_${CONFIG}.json" \
-    --table "${PERF_BASELINES}" --model "${MODEL}" --config "${CONFIG}" --power "${PERF_POWER}" \
+    --table "${PERF_BASELINES}" --model "${RUN_NAME}" --config "${CONFIG}" --power "${PERF_POWER}" \
     --expected-tps "${EXPECTED_TPS}" --margin "${PREFILL_PERF_MARGIN:-}" \
     --require "${REQUIRE_TPS}" 2>&1 | tee -a "${GATE_LOG}" || PERF_GATE_RC=$?
 fi

@@ -50,6 +50,28 @@ def get_tdp_limit_max():
     return None
 
 
+def get_dram_bank_counts():
+    """Enabled DRAM banks (GDDR channels) of every chip on the host, from smbus_telem ENABLED_GDDR, or None.
+
+    A Bin6 Galaxy has 7 of 8 on every chip. So does a regular one with a firmware soft-harvest
+    mask, which is how Bin6 is emulated.
+    """
+    data = get_smbus_telemetry()
+    if not data or not data.get("device_info"):
+        return None
+    counts = []
+    for device in data["device_info"]:
+        smbus_telem = device.get("smbus_telem", {})
+        mask = smbus_telem.get("ENABLED_GDDR")
+        if mask is None:
+            mask = smbus_telem.get("SMBUS_TX_ENABLED_GDDR")
+        if mask is None:
+            return None
+        mask = mask if isinstance(mask, int) else int(str(mask), 16)
+        counts.append(bin(mask & 0xFF).count("1"))
+    return counts
+
+
 def is_high_power(min_tdp_watts=130):
     """True iff the host's max TDP limit (smbus_telem TDP_LIMIT_MAX) is >= min_tdp_watts.
 
