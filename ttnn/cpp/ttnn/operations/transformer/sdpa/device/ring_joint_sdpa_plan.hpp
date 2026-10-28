@@ -96,8 +96,8 @@ double floater_compute_to_transfer(
 // those shapes the K split's 24 home blocks of 2x2 cores fill a 10x10 sub-grid, leaving the 25th block, the last grid
 // column and the gather column below its workers idle: 20 cores, five floater groups of 4 that take over pieces of the
 // homes' bands. The gather's workers are the top 2 x num_links cores of column grid.x (column-major from (grid.x, 0)).
-// The homes merge at interleaved ring steps, which need slice readiness; it is checked last, so other shapes never
-// query the gather's buffers or the fabric.
+// The floaters cut their pieces from the plain gathered slices (plain_gathered_slices), checked last, so other shapes
+// never query the gather's buffers or the fabric.
 //
 // refuse_unusable_schedule: TT_FATAL on a floater_schedule the call cannot use, or a malformed one. Set only after the
 // op's validation (the program factory); output-spec inference runs before it and leaves errors to the validator.

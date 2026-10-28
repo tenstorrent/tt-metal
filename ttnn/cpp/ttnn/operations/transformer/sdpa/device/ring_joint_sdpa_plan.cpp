@@ -251,8 +251,8 @@ double floater_compute_to_transfer(
             static_cast<uint32_t>(tt::tt_metal::operation::OpPerformanceModel::fidelity_multiplier(fidelity)),
         .bytes_per_token = bytes_per_token,
         .cores = static_cast<uint32_t>(ksplit.grid.x * ksplit.grid.y),
-        // A line's end devices receive every slice from one side.
-        .ring_links = (args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring ? 2u : 1u) *
+        // A wrapped axis brings slices in from both sides; a line's end devices receive every slice from one.
+        .ring_links = (tt::tt_fabric::is_ring_or_torus(args.all_gather_operation_attributes.topology) ? 2u : 1u) *
                       args.all_gather_operation_attributes.num_links,
     });
 }

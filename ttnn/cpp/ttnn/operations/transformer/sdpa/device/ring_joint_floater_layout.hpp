@@ -84,7 +84,7 @@ struct FloaterWorkload {
     uint32_t fidelity_multiplier;  // of the QK^T / PV matmuls: LoFi 1 to HiFi4 4
     double bytes_per_token;        // one token's K row and V heads on the ring
     uint32_t cores;                // SDPA compute cores
-    uint32_t ring_links;           // links into the busiest device: both directions on a ring, one on a line
+    uint32_t ring_links;           // links into the busiest device: both directions on a wrapped axis, one on a line
 };
 
 // Floaters add compute (20 idle cores beside the 96 working ones) at a fixed cost per piece (K expanded again, the
