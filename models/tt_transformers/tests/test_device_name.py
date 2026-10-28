@@ -15,6 +15,7 @@ def test_device_name_on_device(mesh_device):
         assert name == "P150"
 
 
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
 @pytest.mark.parametrize("hf_model", ["meta-llama/Llama-3.2-1B-Instruct"])
 def test_model_args_take_the_device_name(mesh_device, hf_model, monkeypatch):
     monkeypatch.setenv("HF_MODEL", hf_model)
