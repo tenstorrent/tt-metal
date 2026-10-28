@@ -642,6 +642,50 @@ tasks:
     - L.s56320
     - L.smoke
     - K.1
+- id: P.6
+  title: 'ENGRAM_ASYNC: engram rows looked up and uploaded off the critical path (layer 14 behind layers 1-13)'
+  step: perf
+  role: perf
+  device: true
+  deps:
+  - FIX.7
+  paths:
+  - models/demos/deepseek_v41_flash_d_p/tt
+  brief:
+    details: 'OWNER DECISION 2026-10-28 (owner assigned this engram task to the Galaxy session; the 2x2 session is told):
+      take the engram host path off the critical path. The engram tables are resident in host RAM as bfp8 (ENGRAM_TABLE=resident,
+      ENGRAM_ROWS=bfp8, commits up to c3d41c620db; bringup/engram_handoff.md, ENGRAM_HOST_PATH.md 3e). STEP 1, measure
+      first, with DS41_ENGRAM_TABLE=resident (pytest defaults to random, F222): per chunk and engram layer (1, 14) the host
+      ms of hash + gather + pack, the upload of the rows to the mesh (from_torch / copy to device, the PCIe part, which has
+      never been measured), and when the device first needs them; report the numbers before changing code. STEP 2: layer
+      1''s rows looked up and uploaded first (as today); layer 14''s lookup started on a background thread at the start of
+      the chunk and its upload issued as soon as it is ready, so lookup and PCIe overlap layers 1-13 on the device. A
+      write on the same command queue as the layers runs in queue order (serialized, not hidden): use a second command
+      queue with an event that layer 14''s first engram op waits on, if the mesh has one (check how tt-d-gen opens the
+      mesh: num_command_queues); else say what is possible. Prefetching the NEXT chunk''s rows is better (hides layer 1
+      too) but begin_chunk(tokens, start) only gets the current chunk under the serving contract: check whether the
+      engine exposes later tokens, report, do not change the contract. Behind the setting ENGRAM_ASYNC in tt/settings.py
+      (default on, ''off'' = today''s path); rows bit-identical to today''s (tests/test_engram_bfp8.py,
+      tests/test_engram_table_modes.py must pass). Host threads compete with dispatch for the CPU and the GIL: watch the
+      wall, not only the hidden ms. Report the warm wall before/after (F196 + F205) with the tables resident, and the
+      device time.'
+  ab:
+    env:
+      DS41_ENGRAM_ASYNC: 'off'
+      DS41_ENGRAM_TABLE: resident
+    change:
+      DS41_ENGRAM_ASYNC: 'on'
+      DS41_ENGRAM_TABLE: resident
+  gate:
+    cmd: BRINGUP_RUNG=last scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_ladder.py
+      && DS41_ENGRAM_TABLE=resident BRINGUP_PROFILE_WALL=1 scripts/run_safe_pytest.sh --run-all --no-precompile models/demos/common/bringup/tests/test_profile.py
+    metrics:
+      err_layer_L*: <= limit
+      err_state_*_L*: <= limit
+      err_final_hidden: <= limit
+      top5_overlap: '>= limit'
+      chunk_wall_ms: < 544
+      device_ms_total: <= 230
 - id: P.4
   title: 'CCL_PERSISTENT_OUT: persistent output buffers for the per-layer all-gathers (262 per chunk) and reduce-scatter'
   step: perf
@@ -650,6 +694,7 @@ tasks:
   deps:
   - P.3
   - FIX.7
+  - P.6
   paths:
   - models/demos/deepseek_v41_flash_d_p/tt
   brief:

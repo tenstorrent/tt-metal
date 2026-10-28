@@ -643,3 +643,17 @@ session's argv); a resume clears PAUSE (use --until to stop); watch + cron :07/:
   questions for the owner's reconsideration: prefill KV at the reference's width (with a conversion at the
   prefill->decode hand-over, which needs a loader anyway) vs matching decode's formats (bf16 rows for CSA2 KV, e4m3 +
   fp32 rows for index keys); whether the compressed-KV 4-bit work continues; FIX.7's per-matmul numbers still to report.
+- 18:05 ENGRAM 2x2 COMMITS TAKEN (rebased my 3 record commits on origin c3d41c620db, local). L.s56320 PASS (bfp8 rows,
+  582 s). K.1 runner smoke FAIL twice, neither from the model: run 1 (resident tables in the runner, 17:00) slowed to
+  ~2 min a step from 17:10 and died SIGBUS ~17:38, when user dlukic started a device job on this node
+  (run_safe_pytest --profile deepseek_v3_d_p test_dispatch_sweep, 17:38:11); run 2 (DS41_ENGRAM_TABLE=random) waited on
+  dlukic's CHIP_IN_USE lock until the 600 s no-progress stop. Cause class: infra (another user on our slurm node; our
+  private TTPOOL_LEGACY_LOCK makes us invisible to their tools). Today's two earlier BUS_ADRERRs likely the same. Owner
+  is coordinating with dlukic. The slowdown of run 1 before 17:38 is unexplained (resident in the runner?): the next
+  Paris run with the default tables decides.
+  OWNER: P.6 ENGRAM_ASYNC added (perf task before P.4; P.4 now deps P.6): measure lookup / pack / PCIe upload per
+  engram layer first (upload never measured), then layer 14 off the critical path (second CQ + event), next-chunk
+  prefetch only if the engine exposes later tokens. Owner assigned this engram task to the Galaxy session (tell the
+  2x2). Chain ready, NOT launched (waits for dlukic off the node): /scratch/dnijemcevic/run_ds41_chain.sh = Paris
+  (resident) -> if PASS the 5-position profile with resident tables (posprof/series_engram.sh, tag ENG) ->
+  orchestrator --until P.6. P.6's wall bar (< 544) to be replaced by the ENG profile's position-0 wall before P.6 starts.
