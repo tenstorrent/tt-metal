@@ -59,9 +59,9 @@ QKV_ROPE_FIDELITY = "HiFi2"
 
 # matmul_add_norm blocks (M_block, K_block, N_block, subblock_h, subblock_w); M_block (and with it
 # subblock_h) is lowered to a divisor of the rows per core. N_block 7 = the 64 columns over 10 core
-# rows, so no padding column is computed. 16384 rows (perf_tools/probe_mm_add_norm.py): WO 681 us,
-# FF2 1353 us, against 1131 / 1547 us for the matmul plus fused_add_rmsnorm.
-MM_ADD_NORM_CONFIGS = {"wo": (4, 8, 7, 4, 1), "ff2": (4, 16, 7, 4, 1)}
+# rows, so no padding column is computed. 16384 rows (perf_tools/probe_mm_add_norm.py, gamma folded):
+# WO 681 us, FF2 1216 us, against 1131 / 1547 us for the matmul plus fused_add_rmsnorm.
+MM_ADD_NORM_CONFIGS = {"wo": (4, 8, 7, 4, 1), "ff2": (8, 8, 7, 4, 1)}
 # Fidelity of matmul_add_norm's y multiplies (h * inv, * gamma). HiFi2 saves ~20 us per op but drops
 # MIRACL batch 32 Pearson 0.99965 -> 0.99947 (below the 0.9995 gate).
 MM_ADD_NORM_Y_FIDELITY = "HiFi4"
@@ -175,6 +175,9 @@ class RerankConfig:
     # Fused path: residual stream resident in L1, sharded like matmul_add_norm's grid; WO and FF2 run
     # as matmul_add_norm (matmul + residual add + RMSNorm in one program). Supersedes residual_l1.
     resident_residual: bool = True
+    # Fold every RMSNorm's gamma into the rows of the matmul that consumes it (QKV, FF1+FF3, score head);
+    # the norms then skip their gamma multiply. MIRACL Pearson batch 32 0.99963, batch 8 0.99967.
+    fold_norm_gamma: bool = True
     # Up to this many rows RMSNorm runs block-sharded over an 8-wide grid (with the interleaved <-> sharded
     # conversions): stock rms_norm gives each core whole tile-rows, 16 cores at 512 rows.
     # perf_tools/probe_norm.py: 128 rows 33.7 -> 10.7 us, 512 rows 33.9 -> 18.3 us.

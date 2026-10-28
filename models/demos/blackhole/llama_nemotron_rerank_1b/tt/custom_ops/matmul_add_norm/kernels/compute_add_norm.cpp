@@ -265,11 +265,13 @@ void pass2(uint32_t blk, uint32_t eps_bits) {
             for (uint32_t j = 0; j < cnt; ++j) {
                 mul_cols_tile(res_cb, inv_cb, row + (n + j < res_w ? n + j : 0), 0, j);
             }
+#ifndef NO_GAMMA
             reconfig_data_format_srca(gamma_cb);
             mul_dest_init(gamma_cb);
             for (uint32_t j = 0; j < cnt; ++j) {
                 mul_dest_tile(gamma_cb, n + j, j);
             }
+#endif
             tile_regs_commit();
             tile_regs_wait();
             pack_reconfig_data_format(y_cb);
@@ -314,7 +316,9 @@ void kernel_main() {
     const uint32_t current_N_block_tiles = N_end_tile - N_start_tile;
     const uint32_t current_subblock_w = std::min(current_N_block_tiles, subblock_w);
 
+#ifndef NO_GAMMA
     cb_gamma.wait_front(N_block_tiles);
+#endif
     cb_inv_w.wait_front(1);
     cb_one.wait_front(1);
     cb_res.wait_front(res_shard_tiles);

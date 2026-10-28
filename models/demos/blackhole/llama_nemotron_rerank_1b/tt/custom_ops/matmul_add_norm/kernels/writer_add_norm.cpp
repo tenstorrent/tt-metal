@@ -119,17 +119,21 @@ void kernel_main() {
     const uint32_t n_real = (N_end_tile < N_tiles ? N_end_tile : N_tiles) - N_start_tile;
     const uint32_t m_limit = M_end_tile < M_tiles ? M_end_tile : M_tiles;
 
-    // Resident constants: gamma for this core's columns, the 1/W and 1.0 scaler tiles.
+    // Resident constants: gamma for this core's columns (unless folded away), the 1/W and 1.0 scaler tiles.
+#ifndef NO_GAMMA
     cb_gamma.reserve_back(N_block_tiles);
+#endif
     cb_inv_w.reserve_back(1);
     cb_one.reserve_back(1);
     {
+#ifndef NO_GAMMA
         uint32_t ptr = cb_gamma.get_write_ptr();
         for (uint32_t j = 0; j < n_real; ++j) {
             noc.async_read(
                 gamma_reader, CoreLocalMem<uint32_t>(ptr), gamma_tile_size, {.page_id = N_start_tile + j}, {});
             ptr += gamma_tile_size;
         }
+#endif
         noc.async_read(
             inv_w_reader, CoreLocalMem<uint32_t>(cb_inv_w.get_write_ptr()), scaler_tile_size, {.page_id = 0}, {});
         noc.async_read(
@@ -140,7 +144,9 @@ void kernel_main() {
     fill_zeros_async(noc, cb_gath, 2 * M_block_tiles * FP32_TILE);
     noc.write_zeros_l1_barrier();
     noc.async_read_barrier();
+#ifndef NO_GAMMA
     cb_gamma.push_back(N_block_tiles);
+#endif
     cb_inv_w.push_back(1);
     cb_one.push_back(1);
 

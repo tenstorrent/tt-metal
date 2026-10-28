@@ -68,10 +68,17 @@ class Layer:
             # and SDPA runs at scale 1. At any other scale ttnn's SDPA wrapper multiplies the mask by
             # 1/scale on every call (one extra [B, 1, S, S] pass per layer).
             scales=[1.0 / math.sqrt(cfg.head_dim), None, None],
+            gamma_key=p + "input_layernorm.weight",
         )
         self.wo = loader.linear(f"l{i}_wo", [p + "self_attn.o_proj.weight"], cfg.wo_dtype)
         if cfg.fuse_swiglu:
-            self.w13 = loader.swiglu(f"l{i}_w13s", p + "mlp.gate_proj.weight", p + "mlp.up_proj.weight", cfg.w13_dtype)
+            self.w13 = loader.swiglu(
+                f"l{i}_w13s",
+                p + "mlp.gate_proj.weight",
+                p + "mlp.up_proj.weight",
+                cfg.w13_dtype,
+                gamma_key=p + "post_attention_layernorm.weight",
+            )
         else:
             self.w1 = loader.linear(f"l{i}_w1", [p + "mlp.gate_proj.weight"], cfg.w13_dtype)
             self.w3 = loader.linear(f"l{i}_w3", [p + "mlp.up_proj.weight"], cfg.w13_dtype)
@@ -87,7 +94,7 @@ class NemotronReranker:
         self.layers = [Layer(cfg, loader, i) for i in range(cfg.n_layers)]
         self.final_norm = loader.norm("final_norm", "model.norm.weight")
         self.final_norm_consts = loader.norm_consts("model.norm.weight") if cfg.fuse_add_norm else None
-        self.score_w = loader.score_head()
+        self.score_w = loader.score_head(gamma_key="model.norm.weight")
 
         grid = device.compute_with_storage_grid_size()
         self.core_grid = ttnn.CoreGrid(y=grid.y, x=grid.x)
@@ -435,6 +442,7 @@ class NemotronReranker:
             y_dtype=y_dtype or self.cfg.norm_out_dtype,
             memory_config=self._mem(rows, self.cfg.dim),
             y_fidelity=MM_ADD_NORM_Y_FIDELITY,
+            skip_gamma=self.cfg.fold_norm_gamma,
         )
 
     def _padding_mask(self, valid, S):

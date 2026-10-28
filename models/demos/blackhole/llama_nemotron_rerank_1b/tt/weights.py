@@ -67,10 +67,29 @@ class WeightLoader:
     def _get(self, key):
         return self.sd[key] if self.sd is not None else None
 
-    def norm(self, name, key):
+    def _gamma(self, key):
+        """An RMSNorm weight; all ones when cfg.fold_norm_gamma moves it into the next matmul."""
         w = self._get(key)
-        host = None if w is None else w.float().reshape(1, 1, self.cfg.dim // 32, 32)
-        return self._as_tensor(name, host, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
+        if w is None:
+            return None
+        return torch.ones_like(w.float()) if self.cfg.fold_norm_gamma else w.float()
+
+    def _fold(self, name, host, gamma_key):
+        """With cfg.fold_norm_gamma, scale the [.., in, out] weight's input rows by the RMSNorm gamma
+        that precedes it: rmsnorm(x) * g @ W = rmsnorm(x) @ (diag(g) W)."""
+        if not (self.cfg.fold_norm_gamma and gamma_key):
+            return name, host
+        if host is not None:
+            g = self._get(gamma_key).float()
+            host = host * g.reshape(*([1] * (host.dim() - 2)), -1, 1)
+        return name + "_g", host
+
+    def norm(self, name, key):
+        w = self._gamma(key)
+        host = None if w is None else w.reshape(1, 1, self.cfg.dim // 32, 32)
+        return self._as_tensor(
+            name + ("_unit" if self.cfg.fold_norm_gamma else ""), host, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT
+        )
 
     def norm_consts(self, key):
         """(gamma tiles, 1/W scaler, eps) for the fused add + RMSNorm op."""
@@ -78,9 +97,9 @@ class WeightLoader:
             make_add_norm_constants,
         )
 
-        return make_add_norm_constants(self._get(key).float(), self.cfg.norm_eps, self.device)
+        return make_add_norm_constants(self._gamma(key), self.cfg.norm_eps, self.device)
 
-    def linear(self, name, keys, dtype, permute_heads=None, scales=None):
+    def linear(self, name, keys, dtype, permute_heads=None, scales=None, gamma_key=None):
         """[out, in] HF rows (concatenated over ``keys``) -> [1, 1, in, out] device weight.
         ``scales`` multiplies each key's rows (e.g. the attention scale folded into Q)."""
         host = None
@@ -94,9 +113,10 @@ class WeightLoader:
                     w = w * sc
                 parts.append(w)
             host = torch.cat(parts, dim=0).T.contiguous().unsqueeze(0).unsqueeze(0)
+        name, host = self._fold(name, host, gamma_key)
         return self._as_tensor(name, host, dtype)
 
-    def swiglu(self, name, gate_key, up_key, dtype):
+    def swiglu(self, name, gate_key, up_key, dtype, gamma_key=None):
         """FF1 (gate) and FF3 (up) as one [1, 1, dim, 2 * hidden] weight for
         ``minimal_matmul(fuse_swiglu=True)``: column tiles alternate gate, up, gate, up, ...
         so the kernel writes silu(gate_tile) * up_tile per output tile."""
@@ -107,6 +127,7 @@ class WeightLoader:
             k, n = g.shape
             host = torch.stack([g.reshape(k, n // 32, 32), u.reshape(k, n // 32, 32)], dim=2).reshape(k, 2 * n)
             host = host.unsqueeze(0).unsqueeze(0).contiguous()
+        name, host = self._fold(name, host, gamma_key)
         return self._as_tensor(name, host, dtype)
 
     def embedding(self):
@@ -114,11 +135,12 @@ class WeightLoader:
         host = None if w is None else w.to(torch.bfloat16)
         return self._as_tensor("embed_tokens", host, ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT)
 
-    def score_head(self):
+    def score_head(self, gamma_key=None):
         """score.weight [1, dim] placed in column 0 of a [dim, 32] tile-padded matrix."""
         host = None
         w = self._get("score.weight")
         if w is not None:
             host = torch.zeros(1, 1, self.cfg.dim, 32)
             host[0, 0, :, 0] = w.float()[0]
-        return self._as_tensor("score_head", host, ttnn.bfloat16)
+        name, host = self._fold("score_head", host, gamma_key)
+        return self._as_tensor(name, host, ttnn.bfloat16)

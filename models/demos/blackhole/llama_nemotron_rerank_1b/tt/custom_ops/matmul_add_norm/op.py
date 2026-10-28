@@ -103,6 +103,7 @@ def matmul_add_norm(
     defines=(),
     fp32_acc=True,
     y_fidelity=None,
+    skip_gamma=False,
 ):
     """x ``[1, 1, M, K]``, w ``[K, N]``, residual: the resident stream from ``to_resident`` for [M, N]
     (updated in place to residual + x @ w). Returns y = rmsnorm(residual) * gamma ``[1, 1, M, N]``.
@@ -111,7 +112,7 @@ def matmul_add_norm(
     core's whole N slice (ceil(N / grid_y) tiles; exactly that avoids computing padding), and M_block must divide
     a core's rows (ceil(M / grid_x) tiles). ``fp32_acc=False`` accumulates in bf16 DST (subblocks up
     to 8 tiles instead of 4). ``y_fidelity`` (e.g. "HiFi2") sets the fidelity of the y multiplies
-    (default HiFi4)."""
+    (default HiFi4). ``skip_gamma``: y = rmsnorm(h) only (gamma folded into the next matmul)."""
     gamma_tiles, inv_w_tile, one_tile = consts
     device = x.device()
     shape = list(x.padded_shape)
@@ -151,7 +152,6 @@ def matmul_add_norm(
         mg.cb(1, kb * nb * 2, w.dtype, all_cores),
         mg.cb(3, out_tiles, ttnn.float32 if fp32_acc else ttnn.bfloat16, all_cores),
         ttnn.cb_descriptor_from_sharded_tensor(4, residual),
-        mg.cb(5, nb, ttnn.bfloat16, all_cores),
         mg.cb(6, 1, ttnn.bfloat16, all_cores),
         mg.cb(8, nb, ttnn.bfloat16, all_cores),
         mg.cb(9, mb, ttnn.float32, all_cores),
@@ -159,11 +159,12 @@ def matmul_add_norm(
         mg.cb(11, 1, ttnn.float32, all_cores),
         mg.cb(12, 1, ttnn.bfloat16, all_cores),
         mg.cb(17, 2 * out_tiles, y_dtype, all_cores),
-    ]
+    ] + ([] if skip_gamma else [mg.cb(5, nb, ttnn.bfloat16, all_cores)])
     semaphores = mg.matmul_semaphores(all_cores, extra=1)
     xchg_sem = 6
 
     defines = list(defines) + ([("Y_FIDELITY", y_fidelity)] if y_fidelity else [])
+    defines += [("NO_GAMMA", "1")] if skip_gamma else []
     zoned = any(d == "ZONES" for d, _ in defines)
     in0_kernel = os.path.join(_HERE, "kernels", "dm_in0_zoned.cpp") if zoned else mg.IN0_KERNEL
     kernels = mg.in0_kernels(device, g, x, y, kernel=in0_kernel)
