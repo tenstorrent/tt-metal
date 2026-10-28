@@ -30,7 +30,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from tt_py_test_utils_common.utility_functions import run_for_blackhole
+from tt_py_test_utils_common.utility_functions import run_for_blackhole, skip_for_slow_dispatch
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 from tests.ttnn.unit_tests.operations.prefetcher_common import (
     round_up as _round_up,
@@ -1573,6 +1573,7 @@ def _scattered_ring_sub_devices(device, shape, ring_xs, ring_ys, gap_x):
     return [_one_core_per_range(cells)]
 
 
+@skip_for_slow_dispatch("sub-device managers need fast dispatch")
 @pytest.mark.parametrize("shape", ["split", "hole", "ring_only", "checkerboard", "per_core"])
 def test_tensor_prefetcher_gather_in0_pipes_scattered_ring_sub_device_shapes(device, shape):
     """A scattered ring on a sub-device that is not one rectangle. The workers' kernels run on boxes
@@ -1611,6 +1612,46 @@ def test_tensor_prefetcher_gather_in0_pipes_scattered_ring_sub_device_shapes(dev
             runs=2,
         )
         del pipes, _space, setup
+    finally:
+        device.clear_loaded_sub_device_manager()
+        device.remove_sub_device_manager(manager)
+
+
+@skip_for_slow_dispatch("sub-device managers need fast dispatch")
+def test_tensor_prefetcher_gather_in0_pipes_scattered_ring_sub_device_manager_switch(device):
+    """The same scattered-ring matmul with no sub-device manager loaded, where its kernels run on the
+    ring's bounding box, then under a manager that gives every core but the ring's to a second
+    sub-device. The second must not reuse the first's program, whose box would straddle the two."""
+    recv_per_bank = 2
+    ring_xs, ring_ys, gap_x = _scattered_ring(device, recv_per_bank)
+    setup = _streaming_gather_in0_setup(
+        device,
+        "scattered_sub_device_manager_switch",
+        2,
+        2,
+        recv_per_bank,
+        ttnn.bfloat16,
+        ttnn.ShardDistributionStrategy.CONTIGUOUS_1D,
+        ring_xs=ring_xs,
+        ring_ys=ring_ys,
+    )
+    _space, pipes = _make_tensor_prefetcher_pipes(device, setup["bank_to_receivers"], setup["entry_size"] * 2)
+    label = "gather_in0_pipes_scattered_ring_sub_device_manager_switch"
+    _prefetch_and_check_runs_over_pipes(
+        device, setup, pipes, _hifi4_compute_kernel_config(device), f"{label} no manager", runs=1
+    )
+    manager = device.create_sub_device_manager(
+        [
+            ttnn.SubDevice([cores])
+            for cores in _scattered_ring_sub_devices(device, "ring_only", ring_xs, ring_ys, gap_x)
+        ],
+        0,
+    )
+    device.load_sub_device_manager(manager)
+    try:
+        _prefetch_and_check_runs_over_pipes(
+            device, setup, pipes, _hifi4_compute_kernel_config(device), f"{label} ring_only", runs=2
+        )
     finally:
         device.clear_loaded_sub_device_manager()
         device.remove_sub_device_manager(manager)
