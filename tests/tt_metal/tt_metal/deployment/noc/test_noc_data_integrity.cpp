@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <filesystem>
 #include <map>
+#include <mutex>
 #include <thread>
 
 #include "command_queue_fixture.hpp"
@@ -40,6 +41,7 @@ struct params {
     uint32_t burst;
     uint32_t vc;
     uint32_t tensix_rows;
+    uint32_t watchdog_s;
 };
 
 static params get_params() {
@@ -52,11 +54,12 @@ static params get_params() {
     TEST_PARAM(uint32_t, burst, 8, "NOC_TEST_BURST");
     TEST_PARAM(uint32_t, vc, 2, "NOC_TEST_VC");
     TEST_PARAM(uint32_t, tensix_rows, 0, "NOC_TEST_TENSIX_ROWS");
+    TEST_PARAM(uint32_t, watchdog_s, 120, "NOC_TEST_WATCHDOG_S");
     TT_FATAL(slice_size >= 64 && (slice_size % 64) == 0, "NOC_TEST_SLICE_SIZE must be a multiple of 64");
     TT_FATAL(packet_size >= 16 && (packet_size % 16) == 0, "NOC_TEST_PACKET_SIZE must be a multiple of 16");
     TT_FATAL(burst >= 1, "NOC_TEST_BURST must be at least 1");
     TT_FATAL(vc < 4, "NOC_TEST_VC must be a unicast VC (0-3)");
-    return {iterations, slice_size, timeout_ms, dram_all_nius, packet_size, burst, vc, tensix_rows};
+    return {iterations, slice_size, timeout_ms, dram_all_nius, packet_size, burst, vc, tensix_rows, watchdog_s};
 }
 
 struct core_layout {
@@ -157,6 +160,74 @@ static string dst_str(const dest& d) {
     }
     return fmt::format("dst eth ch {} [noc0 {}-{}, {}]", d.chan, d.noc0.x, d.noc0.y, d.active ? "active" : "idle");
 }
+
+// Turns a host-side hang into a failure that names the chip being accessed.
+class watchdog {
+public:
+    static watchdog& get() {
+        static watchdog* const w = new watchdog();  // leaked: the detached thread must outlive static destructors
+        return *w;
+    }
+
+    void arm(uint32_t limit_s) {
+        limit_ms_ = static_cast<int64_t>(limit_s) * 1000;
+        step("starting");
+        armed_ = true;
+    }
+
+    void disarm() { armed_ = false; }
+
+    void step(string what) {
+        {
+            lock_guard<mutex> lock(mutex_);
+            activity_ = std::move(what);
+        }
+        kick();
+    }
+
+    void kick() { last_ms_ = now_ms(); }
+
+    void note_wedged(string what) {
+        lock_guard<mutex> lock(mutex_);
+        wedged_.push_back(std::move(what));
+    }
+
+private:
+    watchdog() { thread([this] { run(); }).detach(); }
+
+    static int64_t now_ms() {
+        return chrono::duration_cast<chrono::milliseconds>(chrono::steady_clock::now().time_since_epoch()).count();
+    }
+
+    void run() {
+        for (;;) {
+            this_thread::sleep_for(chrono::milliseconds(500));
+            const int64_t idle = now_ms() - last_ms_;
+            if (!armed_ || limit_ms_ == 0 || idle < limit_ms_) {
+                continue;
+            }
+            lock_guard<mutex> lock(mutex_);
+            log_critical(tt::LogTest, "==================== NOC TEST HANG ====================");
+            log_critical(tt::LogTest, "No host progress for {} s while {}", idle / 1000, activity_);
+            for (const auto& w : wedged_) {
+                log_critical(tt::LogTest, "  previously wedged: {}", w);
+            }
+            log_critical(
+                tt::LogTest,
+                "Exiting without closing devices. Reset with tt-smi -glx_reset before the next run.");
+            fflush(stdout);
+            fflush(stderr);
+            _Exit(1);
+        }
+    }
+
+    mutex mutex_;
+    string activity_;
+    vector<string> wedged_;
+    atomic<int64_t> last_ms_{0};
+    atomic<int64_t> limit_ms_{0};
+    atomic<bool> armed_{false};
+};
 
 static vector<CoreCoord> all_eth_cores(IDevice* device) {
     vector<CoreCoord> cores;
@@ -451,6 +522,8 @@ static poll_result wait_for_sources(const vector<launched>& runs, const params& 
         pending.insert(chip);
     }
     while (!pending.empty()) {
+        // Each chip is bounded by stall_limit_ms below, so polling counts as progress.
+        watchdog::get().kick();
         this_thread::sleep_for(chrono::milliseconds(50));
         for (auto it = pending.begin(); it != pending.end();) {
             const ChipId chip = *it;
@@ -626,6 +699,13 @@ static vector<failure> run_phase(
             SetRuntimeArgs(program, kernel, s.logical, rt_args);
 
             // Stale progress from a previous batch must not look like completion.
+            watchdog::get().step(fmt::format(
+                "noc {} batch {}/{}: resetting progress of {} on {}",
+                noc,
+                batch + 1,
+                num_batches,
+                src_str(s),
+                chip_str(s.device)));
             MetalContext::instance().get_cluster().write_core(
                 s.device->id(), s.virt, vector<uint32_t>(NOC_PROGRESS_WORDS, 0), pl.layout.progress);
             runs.push_back(std::move(run));
@@ -644,11 +724,23 @@ static vector<failure> run_phase(
             programs.size());
         map<shared_ptr<distributed::MeshDevice>, shared_ptr<distributed::MeshWorkload>> workloads;
         for (auto& [mesh, program] : programs) {
+            watchdog::get().step(fmt::format(
+                "noc {} batch {}/{}: compiling for {}",
+                noc,
+                batch + 1,
+                num_batches,
+                chip_str(mesh->impl().get_devices()[0])));
             program->impl().compile(mesh.get());
             workloads[mesh] = make_shared<distributed::MeshWorkload>();
             workloads[mesh]->add_program(device_range, std::move(*program));
         }
         for (auto& [mesh, workload] : workloads) {
+            watchdog::get().step(fmt::format(
+                "noc {} batch {}/{}: launching on {}",
+                noc,
+                batch + 1,
+                num_batches,
+                chip_str(mesh->impl().get_devices()[0])));
             fixture->RunProgram(mesh, *workload, true);
         }
         log_info(tt::LogTest, "  noc {} batch {}/{}: running", noc, batch + 1, num_batches);
@@ -657,6 +749,12 @@ static vector<failure> run_phase(
 
         for (auto& [mesh, _] : workloads) {
             if (!poll.wedged.contains(mesh->get_device_ids()[0])) {
+                watchdog::get().step(fmt::format(
+                    "noc {} batch {}/{}: waiting for kernels to finish on {}",
+                    noc,
+                    batch + 1,
+                    num_batches,
+                    chip_str(mesh->impl().get_devices()[0])));
                 fixture->FinishCommands(mesh);
             }
         }
@@ -667,6 +765,13 @@ static vector<failure> run_phase(
             if (poll.unreadable.contains(r.src->device->id())) {
                 continue;
             }
+            watchdog::get().step(fmt::format(
+                "noc {} batch {}/{}: reading results of {} on {}",
+                noc,
+                batch + 1,
+                num_batches,
+                src_str(*r.src),
+                chip_str(r.src->device)));
             auto results = read_words(*r.src, r.layout.results, r.dests.size() * NOC_RESULT_WORDS);
             const auto& prog = poll.last_prog[i];
             for (size_t d = 0; d < r.dests.size(); d++) {
@@ -702,6 +807,8 @@ static vector<failure> run_phase(
                 num_batches,
                 reason);
             wedged[chip] = {device, noc, batch + 1, reason};
+            watchdog::get().note_wedged(
+                fmt::format("{} in noc {} batch {}/{}: {}", chip_str(device), noc, batch + 1, num_batches, reason));
         }
         log_info(
             tt::LogTest,
@@ -879,6 +986,7 @@ static test_result run_test(
     FIXTURE* fixture, const vector<shared_ptr<distributed::MeshDevice>>& devices, bool tensix_sources) {
     /* ==================== */
     const params p = get_params();
+    watchdog::get().arm(p.watchdog_s);
 
     vector<vector<source>> sources_per_chip;
     uint32_t num_slots = 0;
@@ -913,6 +1021,7 @@ static test_result run_test(
         const uint32_t page_size = num_slots * p.slice_size;
         distributed::DeviceLocalBufferConfig local{.page_size = page_size, .buffer_type = BufferType::DRAM};
         distributed::ReplicatedBufferConfig global{.size = static_cast<DeviceAddr>(page_size) * num_banks};
+        watchdog::get().step(fmt::format("allocating DRAM buffer on {}", chip_str(device)));
         auto buffer = distributed::MeshBuffer::create(global, local, mesh.get());
         dram_buffers.push_back(buffer);
 
@@ -936,6 +1045,7 @@ static test_result run_test(
         auto f = run_phase(fixture, noc, sources_per_chip, dests_per_chip, eth_l, tensix_l, p, result.wedged);
         result.failures.insert(result.failures.end(), f.begin(), f.end());
     }
+    watchdog::get().disarm();
     return result;
 }
 

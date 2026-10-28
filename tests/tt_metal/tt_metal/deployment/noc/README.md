@@ -67,6 +67,7 @@ NOC_TEST_ITERATIONS=10 NOC_TEST_TENSIX_ROWS=2 TT_METAL_SLOW_DISPATCH_MODE=1 \
 | `NOC_TEST_TENSIX_ROWS` | 0 | Worker rows used as destinations, from row 0 (0 = all) |
 | `NOC_TEST_TIMEOUT_MS` | 2000 | Barrier timeout in the kernel |
 | `NOC_TEST_DRAM_ALL_NIUS` | 0 | Also target non-preferred DRAM NIUs when DRISC firmware is off |
+| `NOC_TEST_WATCHDOG_S` | 120 | Fail and exit if one host step (compile, launch, finish, read) makes no progress for this long; reports the chip and UBB (0 = off) |
 
 ## Reading the output
 Per-batch progress:
