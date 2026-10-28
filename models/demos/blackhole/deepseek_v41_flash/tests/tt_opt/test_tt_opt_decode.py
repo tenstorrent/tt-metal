@@ -40,7 +40,7 @@ TRACY_LAYERS = [int(x) for x in os.environ.get("TT_OPT_TRACY_LAYER_IDS", ",".joi
 MAX_CTX = int(os.environ.get("TT_OPT_MAX_CTX", "1048576"))
 GSM = "models/demos/blackhole/deepseek_v41_flash/demo/sample_prompts/input_data_gsm8k_128.json"
 GOLDEN_DIR = os.environ.get("TT_OPT_GOLDEN_DIR", "/mnt/tt-data/ssinghal/dsv4-logs/ttopt/golden")
-B = 4
+B = int(os.environ.get("TT_OPT_B", "4"))  # 4 (shipped B=4) or 8 (U=2, B=8 build)
 KSEL = int(os.environ.get("TT_OPT_K", "3"))  # lever harness: the runner of the adaptive set to time (3 or 5)
 BASE_POS = int(
     os.environ.get("TT_OPT_BASE_POS", "0")
@@ -67,7 +67,7 @@ def _setup(md, minimal=False, tracy_layers=True):
     """-> (generator, spec runner, X [B, n], base [B], snapshot of the attention states at that point).
     minimal (Tracy): no prefill / seed / warm-up round (the device profiler records every program of 32 chips x all cores: the setup of a full run is tens of GB); the window is the FIRST
     eager round on fixed blocks (device kernel times do not depend on the host compile)."""
-    pp = default_page_params(MAX_CTX, 1)
+    pp = default_page_params(MAX_CTX, B // 4)
     args, m, _, _ = create_tt_model(
         md,
         B,
@@ -214,6 +214,16 @@ def test_decode_gate(mesh_device):
     _, runner, X, base, snaps = _setup(md, minimal=True, tracy_layers=False) if GATE_MINIMAL else _setup(md)
     dec = runner.dec
     cols = md.shape[1]
+    _gpath = os.path.join(GOLDEN_DIR, f"decode_k{runner.k}_L{'-'.join(map(str, LAYERS))}_P{BASE_POS}.pt")
+    if os.environ.get("TT_OPT_GOLDEN", "check") == "check" and os.path.exists(_gpath):
+        _g = torch.load(_gpath)
+        _log(
+            f"GATE inputs: X equal to golden {bool(torch.equal(_g['X'], X))}, base equal {bool(torch.equal(_g['base'], base))}"
+        )
+        if (
+            os.environ.get("TT_OPT_X_FROM_GOLDEN") == "1"
+        ):  # feed the golden's inputs: isolates the numerics of the verify window from the seed / drafter
+            X, base = _g["X"].clone(), _g["base"].clone()
     dec.dbg_store = []
     _feed_eager(runner, X, base, -1)
     dec.forward()
