@@ -6749,14 +6749,12 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
                 return width
         return None
 
-    def _mtp_shape_tables(self, shape, drafting_rows):
-        """Host page tables for one replay: the record's flat ``[B_v, blocks]`` and the full per-layer set.
+    def _mtp_step_page_tables(self):
+        """The latest decode step's flat ``[B_wire, blocks]`` table and the full per-layer set.
 
-        Flat row i is drafting row i's table from the latest decode step; the
-        record's padding rows are zero (block 0, vLLM's null block). The
-        per-layer set is built exactly as the plain decode builds its own
+        The per-layer set is built exactly as the plain decode builds its own
         (kv-share aliases, bounded ring padding) and kept at full width: the
-        decoder selects its rows by the row ids each step passes.
+        decoder selects its rows by the row ids each call passes.
         """
         if self._mtp_step_tables is None:
             raise RuntimeError("Gemma4MTP speculative contract: propose_draft_tokens before any decode step")
@@ -6766,17 +6764,28 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         if not isinstance(page_table, torch.Tensor):
             raise TypeError(f"Gemma4MTP speculative contract: page table of type {type(page_table).__name__}")
         full = page_table if page_table.dim() > 1 else page_table.reshape(1, -1)
-        flat = torch.zeros((int(shape[0]), int(full.shape[1])), dtype=torch.int32)
-        for i, r in enumerate(drafting_rows):
-            if r >= int(full.shape[0]):
-                raise ValueError(
-                    f"Gemma4MTP speculative contract: drafting row {r} is outside the {int(full.shape[0])}-row page table"
-                )
-            flat[i] = full[r].to(torch.int32)
         per_layer = self._build_per_layer_page_tables(page_tables_per_layer, page_table)
         if self._bounded_sliding_kv_cache:
             per_layer = self._pad_sliding_page_tables_for_bounded(per_layer, kv_cache, authoritative=True)
-        return flat, list(per_layer)
+        return full, list(per_layer)
+
+    @staticmethod
+    def _mtp_record_rows(full, b_v, row_ids):
+        """The record's flat ``[B_v, blocks]`` table for one decoder call: row i = ``full[row_ids[i]]``.
+
+        Every row past ``len(row_ids)`` is a padding row: zeros, i.e. block 0,
+        vLLM's null block, which the decoder's padding rows write into. The
+        decoder checks exactly that layout against the ``rows`` it is given,
+        so a reseed of a subset of the record's rows gets its own table.
+        """
+        flat = torch.zeros((int(b_v), int(full.shape[1])), dtype=torch.int32)
+        for i, r in enumerate(row_ids):
+            if r >= int(full.shape[0]):
+                raise ValueError(
+                    f"Gemma4MTP speculative contract: row {r} is outside the {int(full.shape[0])}-row page table"
+                )
+            flat[i] = full[r].to(torch.int32)
+        return flat
 
     def _mtp_tables_changed(self, layers):
         previous = self._mtp_installed_tables
@@ -6859,44 +6868,51 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             targets.append((r, session, anchor, position, n))
         if self._mtp_decoder is None or not self._mtp_captured:
             return self._mtp_decline_step(rows, k, live, "the verify records are not captured (warmup incomplete)")
-        if len(live) > self._mtp_max_rows:
-            return self._mtp_decline_step(
-                rows, k, live, f"{len(live)} live rows exceed {SPEC_MAX_ROWS_ENV}={self._mtp_max_rows}"
-            )
-        shape = self._mtp_shape_for(len(live))
-        if shape is None:
-            return self._mtp_decline_step(
-                rows, k, live, f"no captured record covers {len(live)} live rows (records {list(self._mtp_shapes)})"
-            )
-        # Rows the record cannot hold (width, max_seq_len, ring) are left out;
-        # fewer rows may select a smaller record with a longer draft, whose
-        # taller verify block can exclude more rows, so this iterates to a
-        # fixed point (the row set only shrinks).
+        # The record is chosen by the PROPOSING rows, never by the wire batch:
+        # a row the captured widths, max_seq_len or the ring cannot hold is
+        # left out first, and the smallest record covering what remains is
+        # replayed with those rows as its first rows; every other record row
+        # is padding. Fewer rows may select a smaller record with a longer
+        # draft, whose taller verify block can exclude more rows, so this
+        # iterates to a fixed point (the row set only shrinks). More rows than
+        # the largest record holds are judged at that record's draft length
+        # (the shortest block: a row failing there fails everywhere), and
+        # when they all fit the step declines as a whole.
         drafting, declined = list(targets), {}
-        while drafting:
+        largest = self._mtp_shapes[-1]
+        while True:
             shape = self._mtp_shape_for(len(drafting))
-            p_v = int(shape[1]) + 1
+            check = shape if shape is not None else largest
+            p_v = int(check[1]) + 1
             kept = []
             for target in drafting:
-                reason = self._spec_decline_reason(target[3], p_v, lambda pos: self._mtp_width_for(shape, pos))
+                reason = self._spec_decline_reason(target[3], p_v, lambda pos, s=check: self._mtp_width_for(s, pos))
                 if reason is None:
                     kept.append(target)
                 else:
                     declined[target[0]] = reason
                     target[1].retained = None
-            if len(kept) == len(drafting):
-                break
+            if len(kept) != len(drafting) and kept:
+                drafting = kept
+                continue
             drafting = kept
-        k_v = int(shape[1])
+            break
         if declined:
             reasons = "; ".join(f"row {r}: {reason}" for r, reason in declined.items())
             if reasons != self._mtp_decline_logged:
                 logger.info(f"Gemma4MTP speculative contract: rows left out of the proposal ({reasons})")
                 self._mtp_decline_logged = reasons
-        else:
-            self._mtp_decline_logged = None
         if not drafting:
             return self._spec_decline(rows, k)
+        if shape is None:
+            return self._mtp_decline_step(
+                rows,
+                k,
+                live,
+                f"{len(drafting)} proposing rows exceed the largest record {largest} "
+                f"({SPEC_MAX_ROWS_ENV}={self._mtp_max_rows})",
+            )
+        k_v = int(shape[1])
         last = self._mtp_last_replay
         # Row ids are the propose rows: the runner settled every slot move
         # before it asked, so a row is its state slot here, and the decoder
@@ -6930,7 +6946,7 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
             posits.append(int(position))
             seed_cols.append(seed)
         decoder = self._mtp_decoder
-        flat, layers = self._mtp_shape_tables(shape, row_ids)
+        full, layers = self._mtp_step_page_tables()
         if self._mtp_tables_changed(layers):
             decoder.serving_refresh_page_tables(layers)
             self._mtp_installed_tables = [None if table is None else table.clone() for table in layers]
@@ -6938,11 +6954,22 @@ class Gemma4MTPContractForCausalLM(Gemma4SpecContractBase):
         self._mtp_replay_serial += 1
         serial = self._mtp_replay_serial
         if reseed:
+            # The reseed is its own decoder call over ITS rows: its table is
+            # ordered by them and zero past them, like the replay's own.
             by_row = {r: (a, p) for r, a, p in zip(row_ids, anchors, posits)}
-            decoder.serving_reseed(shape, reseed, [by_row[r][0] for r in reseed], [by_row[r][1] for r in reseed], flat)
+            decoder.serving_reseed(
+                shape,
+                reseed,
+                [by_row[r][0] for r in reseed],
+                [by_row[r][1] for r in reseed],
+                self._mtp_record_rows(full, shape[0], reseed),
+            )
+        flat = self._mtp_record_rows(full, shape[0], row_ids)
         result = decoder.serving_step(shape, row_ids, anchors, posits, flat, seed_cols)
         self._mtp_check_result(result, shape, len(drafting))
         self._mtp_last_replay = result
+        if not declined:
+            self._mtp_decline_logged = None  # a full proposal: the next decline is a new event
         # A row that target argmax ids cannot answer is verified in logits
         # mode, possibly steps later (the scheduler keeps the drafts of a
         # request it did not schedule), after other rows' replays have rewritten

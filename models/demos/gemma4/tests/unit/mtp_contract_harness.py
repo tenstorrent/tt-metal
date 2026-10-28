@@ -130,6 +130,7 @@ class Decoder:
         self.results = []
         self.buffer = None  # the one verify-logits buffer; rewritten by every step and reseed
         self.readbacks = 0
+        self.reseed_tables = []  # the [B_v, blocks] table of every serving_reseed call
 
     # -- warmup --------------------------------------------------------------
     def serving_prepare(self, shapes, widths_by_shape, max_rows, max_context=None, max_rungs=None):
@@ -180,8 +181,25 @@ class Decoder:
     def serving_refresh_page_tables(self, page_tables_per_layer):
         self.events.append(("refresh", [t.tolist() for t in page_tables_per_layer]))
 
+    def _check_tables(self, shape, rows, page_tables):
+        """spec_decode's ``_srv_upload_tables`` / ``_srv_check_rows`` contract on one call's rows and table."""
+        rows = [int(r) for r in rows]
+        b_v = int(shape[0])
+        if not 1 <= len(rows) <= b_v:
+            raise ValueError(f"shape {shape}: {len(rows)} live rows, expected 1..{b_v}")
+        if len(set(rows)) != len(rows) or min(rows) < 0:
+            raise ValueError(f"shape {shape}: bad rows {rows}")
+        if tuple(page_tables.shape[:1]) != (b_v,):
+            raise ValueError(f"shape {shape}: page_tables must be [{b_v}, blocks], got {tuple(page_tables.shape)}")
+        if len(rows) < b_v and bool(page_tables[len(rows) :].any()):
+            raise ValueError(
+                f"shape {shape}: padding rows {len(rows)}..{b_v - 1} of page_tables must be zero (block 0)"
+            )
+
     def serving_reseed(self, shape, rows, anchors, positions, page_tables):
         self._check(shape)
+        self._check_tables(shape, rows, page_tables)
+        self.reseed_tables.append(page_tables.tolist())
         self.events.append(("reseed", tuple(shape), list(rows), list(anchors), list(positions)))
         if self.buffer is not None:
             self.buffer.fill_(-1.0)  # the seed forward writes through the shared buffer
@@ -197,10 +215,7 @@ class Decoder:
         rows, anchors, positions, seed_cols = list(rows), list(anchors), list(positions), list(seed_cols)
         if not (len(rows) == len(anchors) == len(positions) == len(seed_cols)):
             raise ValueError("serving_step row lists disagree")
-        if len(rows) > shape[0]:
-            raise ValueError(f"{len(rows)} rows do not fit record {shape}")
-        if tuple(page_tables.shape[:1]) != (shape[0],):
-            raise ValueError(f"page_tables must have {shape[0]} rows, got {tuple(page_tables.shape)}")
+        self._check_tables(shape, rows, page_tables)
         width = self.width_for(shape, positions)
         if width is None:
             raise ValueError(f"no rung of {shape} covers positions {positions}")

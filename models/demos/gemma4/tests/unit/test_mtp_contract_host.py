@@ -476,7 +476,8 @@ def test_above_the_row_cap_every_row_declines_once_logged_then_resumes_when_the_
         assert proposal.num_valid.tolist() == [0] * rows and proposal.draft_token_ids.eq(0).all()
     assert _steps(mtp) == []
     assert [m for m in messages if "proposing nothing" in m] == [
-        "Gemma4MTP speculative contract: proposing nothing (17 live rows exceed GEMMA4_SPEC_MAX_ROWS=16)"
+        "Gemma4MTP speculative contract: proposing nothing (17 proposing rows exceed the largest record (16, 1) "
+        "(GEMMA4_SPEC_MAX_ROWS=16))"
     ]
     out = _ordinary(mtp, [30] * rows, [3] * rows, keys, result="device")
     assert out == "device", "the ordinary step after a decline is the plain decode"
@@ -959,3 +960,222 @@ def test_a_deferred_greedy_row_is_read_back_when_a_sampled_request_takes_its_fir
     )
     assert out.logits[0].float().argmax(dim=-1).tolist() == [150, 151, 152, 153, 154, 155]
     assert decoder.readbacks == 2
+
+
+# -- the record follows the proposing rows, never the wire batch ---------------------------------
+
+
+def _wire(model, live_rows, anchors, positions, keys, total, result, **kwargs):
+    """An ordinary step over ``total`` wire rows with the given live rows (-1 positions elsewhere)."""
+    toks = [0] * total
+    poss = [-1] * total
+    ks = [0] * total
+    for r, a, p, key in zip(live_rows, anchors, positions, keys):
+        toks[r], poss[r], ks[r] = a, p, key
+    return _ordinary(model, toks, poss, ks, result=result, **kwargs)
+
+
+def _committed(total, live_rows, anchors, positions):
+    committed = [[-1] * 6 for _ in range(total)]
+    posits = [[-1] * 6 for _ in range(total)]
+    for r, a, p in zip(live_rows, anchors, positions):
+        committed[r] = [a] + [-1] * 5
+        posits[r] = [p] + [-1] * 5
+    return committed, posits
+
+
+def test_one_proposing_row_in_a_wide_batch_takes_the_solo_record_without_padding(mtp):
+    _prefill(mtp, slot=7, key=10)
+    _wire(mtp, [7], [3], [2], [10], 20, _tensor([0] * 7 + [30] + [0] * 12))
+    committed, posits = _committed(20, [7], [30], [3])
+    proposal = _propose(mtp, committed, posits)
+    assert proposal.num_valid.tolist() == [0] * 7 + [5] + [0] * 12
+    step = _steps(mtp)[-1]
+    assert step[1] == (1, 5) and step[2] == [7] and step[7] == [[10, 11, 0, 0]]
+    assert _names(mtp, "reseed")[-1] == ("reseed", (1, 5), [7], [30], [3])
+    assert mtp._mtp_decoder.reseed_tables[-1] == [[10, 11, 0, 0]]
+
+
+def test_rows_no_record_can_hold_leave_before_the_record_is_chosen(mtp):
+    """20 live rows, 19 of them at the end of max_seq_len: the one proposing row takes the solo record."""
+    mtp.model_args[0].max_seq_len = 1024
+    _prefill(mtp, rows=20)
+    keys = [10 + 2 * r for r in range(20)]
+    positions = [1023] * 20
+    positions[5] = 2
+    _ordinary(mtp, [3] * 20, positions, keys, result=_tensor([30] * 20))
+    committed, posits = _committed(20, range(20), [30] * 20, [p + 1 for p in positions])
+    proposal = _propose(mtp, committed, posits)
+    assert proposal.num_valid.tolist() == [0] * 5 + [5] + [0] * 14
+    step = _steps(mtp)[-1]
+    assert step[1] == (1, 5) and step[2] == [5] and step[7] == [[20, 21, 0, 0]]
+
+
+def test_three_proposing_rows_in_a_wide_batch_pad_the_record_with_zero_tables(mtp):
+    live = [4, 9, 17]
+    for slot, key in zip(live, (10, 20, 30)):
+        _prefill(mtp, slot=slot, key=key)
+    _wire(mtp, live, [3, 4, 5], [2, 2, 2], [10, 20, 30], 32, _tensor([0] * 32))
+    committed, posits = _committed(32, live, [30, 31, 32], [3, 3, 3])
+    proposal = _propose(mtp, committed, posits)
+    assert [int(v) for v in proposal.num_valid[live]] == [5, 5, 5] and int(proposal.num_valid.sum()) == 15
+    step = _steps(mtp)[-1]
+    assert step[1] == (5, 5) and step[2] == live
+    assert step[7] == [[10, 11, 0, 0], [20, 21, 0, 0], [30, 31, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]
+
+
+def test_seventeen_proposing_rows_decline_above_the_largest_record(mtp):
+    _prefill(mtp, rows=17)
+    keys = [10 + 2 * r for r in range(17)]
+    _ordinary(mtp, [3] * 17, [2] * 17, keys, result=_tensor([30] * 17))
+    committed, posits = _committed(17, range(17), [30] * 17, [3] * 17)
+    assert _propose(mtp, committed, posits).num_valid.tolist() == [0] * 17 and _steps(mtp) == []
+
+
+def test_a_reseed_of_a_subset_of_the_record_rows_carries_only_their_tables(mtp):
+    """Two rows in steady state and a newcomer: the reseed is the newcomer's own call (its table first,
+    zeros after), the replay's table lists every drafting row; the decoder's zero-padding check holds."""
+    _prefill(mtp, rows=2)
+    _ordinary(mtp, [3, 4], [2, 2], [10, 12], result=_tensor([30, 31]))
+    _propose(mtp, [[30] + [-1] * 5, [31] + [-1] * 5], [[3] + [-1] * 5] * 2)
+    drafts = [mtp._mtp_sessions[r].retained.drafts for r in range(2)]
+    _prefill(mtp, slot=2, key=40)  # C joins: its first decode is the straddle verify below
+    blocks = [_block(30, drafts[0]), _block(31, drafts[1]), _block(9, [])]
+    _verify(
+        mtp,
+        blocks,
+        [_positions(3, 6), _positions(3, 6), _positions(2, 1)],
+        [5, 5, 0],
+        [10, 12, 40],
+        result=_tensor([0, 0, 42]),
+    )
+    committed = [[150, 151, 152, 153, 154, 155], [160, 161, 162, 163, 164, 165], [42] + [-1] * 5]
+    proposal = _propose(mtp, committed, [_positions(4, 6), _positions(4, 6), [3] + [-1] * 5], counts=[6, 6, 1])
+    assert proposal.num_valid.tolist() == [5, 5, 5]
+    assert _names(mtp, "reseed")[-1] == ("reseed", (5, 5), [2], [42], [3])
+    assert mtp._mtp_decoder.reseed_tables[-1] == [[40, 41, 0, 0]] + [[0, 0, 0, 0]] * 4
+    step = _steps(mtp)[-1]
+    assert step[2:6] == ([0, 1, 2], [155, 165, 42], [9, 9, 3], [5, 5, None])
+    assert step[7] == [[10, 11, 0, 0], [12, 13, 0, 0], [40, 41, 0, 0], [0, 0, 0, 0], [0, 0, 0, 0]]
+
+
+def test_three_non_contiguous_rows_over_two_rounds_keep_every_per_row_value_aligned(mtp):
+    """Slots 4, 9, 17 of a 20-row wire batch through propose/verify/propose/verify with different accepted
+    counts: the decoder receives each row's own anchor, position, seed column and table in record order,
+    and the runner receives each wire row's own posterior, in both accept modes."""
+    live = [4, 9, 17]
+    keys = [10, 20, 30]
+    for slot, key in zip(live, keys):
+        _prefill(mtp, slot=slot, key=key)
+    first = [30, 31, 32]
+    _wire(
+        mtp,
+        live,
+        [3, 4, 5],
+        [2, 2, 2],
+        keys,
+        20,
+        _tensor([first[live.index(r)] if r in live else 0 for r in range(20)]),
+    )
+    committed, posits = _committed(20, live, first, [3, 3, 3])
+    proposal = _propose(mtp, committed, posits)
+    decoder = mtp._mtp_decoder
+    step = _steps(mtp)[-1]
+    assert step[1:7] == ((5, 5), live, first, [3, 3, 3], [None, None, None], 1024)
+    assert step[7][:3] == [[10, 11, 0, 0], [20, 21, 0, 0], [30, 31, 0, 0]] and step[7][3:] == [[0, 0, 0, 0]] * 2
+    for i, r in enumerate(live):
+        retained = mtp._mtp_sessions[r].retained
+        assert retained.shape_row == i and retained.row_id == r
+        assert retained.drafts == [100 + 10 * i + j for j in range(1, 6)]
+        assert proposal.draft_token_ids[r].tolist() == retained.drafts
+    # Round 1 verify (argmax mode): rows accept 5, 2 and 0 drafts; every wire row answers its own posterior.
+    valid = [5, 2, 0]
+    blocks = [[0] + [-1] * 5] * 20
+    positions = [[-1] * 6] * 20
+    for i, r in enumerate(live):
+        blocks[r] = _block(first[i], mtp._mtp_sessions[r].retained.drafts[: valid[i]])
+        positions[r] = _positions(3, 1 + valid[i])
+    out = _verify(
+        mtp,
+        blocks,
+        positions,
+        [valid[live.index(r)] if r in live else 0 for r in range(20)],
+        [keys[live.index(r)] if r in live else 0 for r in range(20)],
+    )
+    expected1 = [[150 + 10 * i + j for j in range(6)] for i in range(3)]
+    for i, r in enumerate(live):
+        assert out.argmax_ids[r].tolist() == expected1[i]
+    assert len(_names(mtp, "decode")) == 1, "no device forward for a fully answered verify"
+    # Round 2 propose: counts 6 / 3 / 1 commit the accepted prefix + bonus; each row seeds from ITS column.
+    counts = [6, 3, 1]
+    committed = [[-1] * 6 for _ in range(20)]
+    posits = [[-1] * 6 for _ in range(20)]
+    for i, r in enumerate(live):
+        committed[r] = [expected1[i][j] if j < counts[i] else -1 for j in range(6)]
+        posits[r] = _positions(4, counts[i])
+    proposal = _propose(mtp, committed, posits, counts=[counts[live.index(r)] if r in live else 1 for r in range(20)])
+    step = _steps(mtp)[-1]
+    assert step[2] == live
+    assert step[3] == [expected1[i][counts[i] - 1] for i in range(3)]
+    assert step[4] == [3 + c for c in counts]
+    assert step[5] == [c - 1 for c in counts]
+    assert len(_names(mtp, "reseed")) == 1 and decoder.replays == 2
+    assert step[7][:3] == [[10, 11, 0, 0], [20, 21, 0, 0], [30, 31, 0, 0]]
+    for i, r in enumerate(live):
+        retained = mtp._mtp_sessions[r].retained
+        assert retained.shape_row == i and retained.row_id == r and retained.anchor_position == 3 + counts[i]
+        assert proposal.draft_token_ids[r].tolist() == [200 + 10 * i + j for j in range(1, 6)]
+    # Round 2 verify in logits mode (a sampled request in the batch): each wire row's columns are its own.
+    valid = [4, 5, 1]
+    blocks = [[0] + [-1] * 5] * 20
+    positions = [[-1] * 6] * 20
+    for i, r in enumerate(live):
+        blocks[r] = _block(expected1[i][counts[i] - 1], mtp._mtp_sessions[r].retained.drafts[: valid[i]])
+        positions[r] = _positions(3 + counts[i], 1 + valid[i])
+    out = _verify(
+        mtp,
+        blocks,
+        positions,
+        [valid[live.index(r)] if r in live else 0 for r in range(20)],
+        [keys[live.index(r)] if r in live else 0 for r in range(20)],
+        mode="logits",
+    )
+    assert tuple(out.logits.shape) == (20, 6, VOCAB)
+    for i, r in enumerate(live):
+        assert out.logits[r].float().argmax(dim=-1).tolist() == [250 + 10 * i + j for j in range(6)]
+    for r in range(20):
+        if r not in live:
+            assert out.logits[r].eq(0).all()
+
+
+def test_a_sampled_request_is_verified_in_logits_mode_from_its_own_columns(mtp):
+    """The runner picks the mode per step (logits once a live row samples); the adapter answers either mode,
+    and in logits mode the sampled row's columns come from its own record row, not a neighbour's."""
+    live = [2, 7]
+    for slot, key in zip(live, (10, 20)):
+        _prefill(mtp, slot=slot, key=key)
+    sampling = _sampling(10, temperature=[0.7 if r == 7 else 0.0 for r in range(10)])
+    _wire(mtp, live, [3, 4], [2, 2], [10, 20], 10, _tensor([0, 0, 30, 0, 0, 0, 0, 31, 0, 0]), sampling_params=sampling)
+    assert mtp._mtp_row_needs_logits == {2: False, 7: True}
+    committed, posits = _committed(10, live, [30, 31], [3, 3])
+    _propose(mtp, committed, posits)
+    decoder = mtp._mtp_decoder
+    assert decoder.readbacks == 1, "a sampled row in the replay: the logits are read back at proposal time"
+    assert mtp._mtp_sessions[7].retained.logits.float().argmax(dim=-1).tolist() == [160, 161, 162, 163, 164, 165]
+    blocks = [[0] + [-1] * 5] * 10
+    positions = [[-1] * 6] * 10
+    for i, r in enumerate(live):
+        blocks[r] = _block([30, 31][i], mtp._mtp_sessions[r].retained.drafts)
+        positions[r] = _positions(3, 6)
+    out = _verify(
+        mtp,
+        blocks,
+        positions,
+        [5 if r in live else 0 for r in range(10)],
+        [10 if r == 2 else 20 if r == 7 else 0 for r in range(10)],
+        mode="logits",
+    )
+    assert out.spec_mode == "logits"
+    assert out.logits[2].float().argmax(dim=-1).tolist() == [150, 151, 152, 153, 154, 155]
+    assert out.logits[7].float().argmax(dim=-1).tolist() == [160, 161, 162, 163, 164, 165]
+    assert decoder.readbacks == 1
