@@ -79,14 +79,13 @@ its tag enum and cases ([STRUCT_LAYOUTS.md](STRUCT_LAYOUTS.md)). The collector a
 once, by name, and then the types its members and cases name. It fails when two different types have one name, which
 would make their schema ambiguous.
 - `types` **is written from the collector**, each kind sorted by name: a struct's size and its members in order, each
-with its name, offset, size and schema, and an enum's values by their lower-case names. A member's schema needs no
-collecting, since the collector already followed it.
+with its name, offset, size and schema; an enum's values by their lower-case names; and a tagged union's size, the
+enum its tag holds, and its cases, each with the tag value that picks it. A member holding a tagged union also names
+the struct member that holds its tag (`tag_member`). A member's schema needs no collecting, since the collector already
+followed it.
 
 So `types` holds exactly what the manifest's schemas reach, and every schema resolves. A type no schema reaches isn't
 written: a struct only named by a field the builder didn't allocate, for example.
-
-The manifest doesn't write tagged unions yet. If a schema ever reaches one, the writer fails, naming the union, rather
-than writing a schema `types` can't resolve.
 
 ## Vocabulary
 

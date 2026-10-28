@@ -158,12 +158,9 @@ size_t FabricContext::compute_packet_header_size_bytes(const ControlPlane& contr
     const size_t header_size =
         visit_packet_header_type(config, []<typename Header>(std::type_identity<Header>) { return sizeof(Header); });
 
-    if (control_plane.get_fabric_udm_mode() == tt::tt_fabric::FabricUDMMode::ENABLED) {
-        TT_FATAL(is_2D_routing_enabled_, "UDM mode only supports 2D routing");
-        // The UDM header is the 2D header followed by its control fields
-        return header_size + sizeof(tt::tt_fabric::UDMControlFields);
-    }
-    return header_size;
+    const bool is_udm = control_plane.get_fabric_udm_mode() == tt::tt_fabric::FabricUDMMode::ENABLED;
+    TT_FATAL(!is_udm || is_2D_routing_enabled_, "UDM mode only supports 2D routing");
+    return compute_pkt_hdr_size_bytes(header_size, is_udm);
 }
 
 size_t FabricContext::compute_max_payload_size_bytes(const tt_metal::Hal& hal, tt::ARCH arch) const {

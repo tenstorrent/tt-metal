@@ -47,9 +47,10 @@ and readers depend on it and on `manifest_version`. The other docs say how each 
   "manifest_version": 1,
   "file_kind": "fabric_manifest",
   "run":        { host_rank, mpi_rank, world_size, written_at, build: { git_sha, git_dirty } },
-  "fabric":     { config: { ... }, topology, is_2d_routing, packet_header_size_bytes, ... },
+  "fabric":     { config: { ... }, topology, is_2d_routing, packet_header: { size, schema }, ... },
   "arch":       { name, l1_areas: { ... }, stream_registers: { ... }, core_registers: [ ... ] },
-  "types":      { structs: { <Name>: { size, members: [ ... ] } }, enums: { <Name>: { values: { ... } } } },
+  "types":      { structs: { <Name>: { size, members: [ ... ] } }, enums: { <Name>: { values: { ... } } },
+                  tagged_unions: { <Name>: { size, tag: { schema }, cases: [ ... ] } } },
   "vocabulary": { <list name>: [ <name>, ... ] },
   "meshes": {
     "M<mesh>": {
@@ -98,11 +99,12 @@ count) or `remote_src` (a plain read-write register). Its address is
 | --- | --- |
 | `u8` to `u64`, `i8` to `i64` | An unsigned or signed integer, as wide as one element |
 | `enum:<Name>` | An enum, described in `types.enums` |
-| `struct:<Name>` | A struct, described in `types.structs` |
+| `struct:<Name>` | A struct, described in `types.structs`. A class template instance's name has its arguments as C++ spells them, such as `HybridMeshPacketHeaderT<36>` |
+| `union:<Name>` | A tagged union, described in `types.tagged_unions`: one of several types, picked by the value of the enclosing struct's member named by `tag_member` |
 | `bytes` | Raw bytes, for code that reads them by its own rules, such as a table packed below byte granularity |
 | `pad` | Bytes that mean nothing |
 
-Every `struct:` and `enum:` schema names an entry in `types` ([WRITER.md](WRITER.md)).
+Every `struct:`, `enum:` and `union:` schema names an entry in `types` ([WRITER.md](WRITER.md)).
 
 **Field**: `{ category, kind, ... }`, keyed by the field's name. `category` is `lifecycle`, `kernel_params`,
 `flow_control`, `control_info` or `diagnostics`.
@@ -144,7 +146,8 @@ id). A field the builder doesn't emit in this configuration, such as a 2D-only f
 | `config.router_config.max_packet_payload_size_bytes` | The payload size override, or null for the default |
 | `topology` | The fabric topology, such as `mesh` |
 | `is_2d_routing` | Whether 2D routing is on |
-| `packet_header_size_bytes`, `max_payload_size_bytes`, `channel_buffer_size_bytes` | Packet and buffer sizes |
+| `packet_header` | The packet header type the run's routers use: its `size`, and a `struct:` schema naming its layout, such as `struct:LowLatencyPacketHeaderT<0>` |
+| `max_payload_size_bytes`, `channel_buffer_size_bytes` | Payload and channel buffer sizes |
 | `routing_2d_route_buffer_size` | 2D routing only: the packet header's route buffer size |
 | `routing_1d_extension_words` | 1D routing only: the packet header's extension words |
 | `multi_txq` | Whether senders and receivers transmit on separate Ethernet TX queues |
@@ -164,10 +167,13 @@ id). A field the builder doesn't emit in this configuration, such as a 2D-only f
 
 | Key | Value |
 | --- | --- |
-| `structs.<Name>` | `size`, and `members` in order, each with its `name`, `offset`, `size`, `schema`, and for an array `num_elements` and `size_per_element`. Members cover every byte of the struct |
+| `structs.<Name>` | `size`, and `members` in order, each with its `name`, `offset`, `size`, `schema`, for an array `num_elements` and `size_per_element`, and for a tagged union `tag_member`. Members cover every byte of the struct |
 | `enums.<Name>` | `values`: each enumerator's lower-case name, and its integer value |
+| `tagged_unions.<Name>` | `size`, `tag.schema` (the `enum:` its tag holds), and `cases`, each a member as in a struct, at offset 0, with the `tag_value` that picks it |
 
-`types` holds every struct and enum a schema names, and every one those name in turn, and nothing else. A reader decodes bytes from these entries without the C++ headers ([STRUCT_LAYOUTS.md](STRUCT_LAYOUTS.md)).
+To read a tagged union, read the enclosing struct's `tag_member`, then the case whose `tag_value` names that value.
+
+`types` holds every struct, enum and tagged union a schema names, and every one those name in turn, and nothing else. A reader decodes bytes from these entries without the C++ headers ([STRUCT_LAYOUTS.md](STRUCT_LAYOUTS.md)).
 
 ## vocabulary
 
