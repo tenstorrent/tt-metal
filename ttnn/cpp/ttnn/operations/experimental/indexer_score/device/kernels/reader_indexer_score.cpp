@@ -36,7 +36,7 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/dataflow/metadata_scalar_read.hpp"
 #include "indexer_score_metadata.hpp"
 #include "indexer_score_causal_geometry.hpp"
-#include "ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/ring_attention_rank_mapping.hpp"
+#include "ttnn/operations/experimental/indexer_score/device/kernels/ring_attention_rank_mapping.hpp"
 
 constexpr uint32_t q_tile_bytes = get_tile_size(cb_q);     // q: bf16 or bfp8_b (smaller tile)
 constexpr uint32_t bf16_tile_bytes = get_tile_size(cb_w);  // w / mask: always bf16

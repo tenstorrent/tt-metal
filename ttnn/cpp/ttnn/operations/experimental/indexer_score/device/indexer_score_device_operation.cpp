@@ -367,9 +367,8 @@ void validate_cache_slot_metadata(const operation_attributes_t& attrs, const ten
 
 IndexerScoreDeviceOperation::program_factory_t IndexerScoreDeviceOperation::select_program_factory(
     const operation_attributes_t& attrs, const tensor_args_t&) {
-    if (attrs.has_fused_ring()) {
-        return program::RingIndexerScoreDsaMeshWorkloadFactory{};
-    }
+    // TODO(nuked-op ccl): the ring-fused factory was removed with the CCL ops.
+    TT_FATAL(!attrs.has_fused_ring(), "indexer_score: the ring-fused path was removed (TODO(nuked-op ccl))");
     return program::IndexerScoreProgramFactory{};
 }
 
@@ -1192,142 +1191,6 @@ ttnn::Tensor indexer_score_msa(
         /*allow_subshard=*/false,  // MSA has no TP sub-shard
         block_cyclic_sp_axis,
         block_cyclic_chunk_local);
-}
-
-ttnn::Tensor ring_indexer_score_dsa(
-    const ttnn::Tensor& q,
-    const ttnn::Tensor& k,
-    const ttnn::Tensor& weights,
-    const ttnn::Tensor& k_local,
-    const std::vector<tt::tt_metal::GlobalSemaphore>& ag_multi_device_global_semaphore,
-    std::optional<uint32_t> cluster_axis,
-    ttnn::ccl::Topology topology,
-    uint32_t num_links,
-    std::optional<tt::tt_metal::SubDeviceId> ag_sub_device_id,
-    std::optional<uint32_t> chunk_start_idx,
-    const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config,
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config,
-    std::optional<uint32_t> cache_batch_idx,
-    std::optional<uint32_t> kv_len,
-    std::optional<uint32_t> seq_subshard_axis,
-    std::optional<uint32_t> block_cyclic_sp_axis,
-    std::optional<uint32_t> block_cyclic_chunk_local,
-    bool block_cyclic_cache_tp_sharded,
-    const std::optional<ttnn::Tensor>& chunk_start_idx_tensor,
-    const std::optional<ttnn::Tensor>& valid_end_tensor,
-    const std::optional<ttnn::Tensor>& cache_batch_idx_tensor,
-    uint32_t index_cache_num_layers,
-    uint32_t index_cache_layer_idx) {
-    // Fused DSA: same knobs as indexer_score_dsa (relu, one plane, no pool, real weights) + the all-gather it
-    // subsumes. The factory auto-reserves the AG worker column(s) off the compute rectangle.
-    ttnn::operations::experimental::indexer_score::FusedRingConfig fused_ring;
-    fused_ring.num_links = num_links;
-    fused_ring.topology = topology;
-    fused_ring.ag_semaphore = ag_multi_device_global_semaphore;
-    fused_ring.ag_sub_device_id = ag_sub_device_id;
-    const auto mesh_shape = q.device()->get_view().shape();
-    const bool full_mesh = !cluster_axis.has_value();
-    std::vector<uint32_t> seq_shard_axes;
-    if (full_mesh) {
-        const uint32_t mesh_size = mesh_shape.mesh_size();
-        TT_FATAL(num_links > 0, "ring_indexer_score_dsa cluster_axis=None requires num_links > 0");
-        TT_FATAL(
-            topology == ttnn::ccl::Topology::Ring || topology == ttnn::ccl::Topology::Linear,
-            "ring_indexer_score_dsa cluster_axis=None requires Ring or Linear topology");
-        TT_FATAL(
-            !seq_subshard_axis.has_value(),
-            "ring_indexer_score_dsa cluster_axis=None does not allow seq_subshard_axis");
-        TT_FATAL(
-            !block_cyclic_sp_axis.has_value(),
-            "ring_indexer_score_dsa cluster_axis=None does not allow block_cyclic_sp_axis; pass only "
-            "block_cyclic_chunk_local for a full-mesh block-cyclic cache");
-        TT_FATAL(
-            ttnn::operations::ccl::common::has_row_major_mesh_coordinates(q) &&
-                ttnn::operations::ccl::common::has_row_major_mesh_coordinates(k) &&
-                ttnn::operations::ccl::common::has_row_major_mesh_coordinates(weights) &&
-                ttnn::operations::ccl::common::has_row_major_mesh_coordinates(k_local),
-            "ring_indexer_score_dsa cluster_axis=None requires row-major mesh coordinates for Q, K, weights, and "
-            "K-local");
-        TT_FATAL(
-            ttnn::operations::experimental::indexer_score::is_replicated_across_complete_mesh(k),
-            "ring_indexer_score_dsa cluster_axis=None requires the persistent gathered K buffer replicated "
-            "across the complete mesh");
-        // Extents, not placements: see the matching check in the program factory. Row-major coordinates
-        // above pin the device ORDER the snake walks; these pin the per-device sequence EXTENT.
-        TT_FATAL(
-            k_local.logical_shape()[2] * mesh_size == k.logical_shape()[2],
-            "ring_indexer_score_dsa cluster_axis=None expects K-local to be 1/{} of the gathered K extent; "
-            "got {} and {}",
-            mesh_size,
-            k_local.logical_shape()[2],
-            k.logical_shape()[2]);
-        TT_FATAL(
-            q.logical_shape()[2] == weights.logical_shape()[2],
-            "ring_indexer_score_dsa cluster_axis=None expects Q and weights to share a per-device sequence "
-            "extent; got {} and {}",
-            q.logical_shape()[2],
-            weights.logical_shape()[2]);
-        const auto fabric_config = tt::tt_fabric::GetFabricConfig();
-        // A full mesh is gathered as one snake across both axes, which only a 2D fabric can route.
-        TT_FATAL(
-            tt::tt_fabric::is_2d_fabric_config(fabric_config),
-            "ring_indexer_score_dsa cluster_axis=None requires a 2D fabric config (FABRIC_2D or "
-            "FABRIC_2D_TORUS_X/Y/XY), got {}",
-            fabric_config);
-        const std::array<tt::tt_fabric::Topology, 2> axis_topology{
-            ttnn::ccl::get_axis_topology(q, fabric_config, 0), ttnn::ccl::get_axis_topology(q, fabric_config, 1)};
-        const auto route = ttnn::operations::ccl::common::resolve_mesh_ring_plan(
-            q, std::nullopt, num_links, axis_topology, true, "ring_indexer_score_dsa", /*allow_open_path=*/true);
-        TT_FATAL(route.has_value(), "ring_indexer_score_dsa could not resolve a direct-neighbor full-mesh route");
-        TT_FATAL(
-            route->plan.ring_size <= ttnn::operations::experimental::indexer_score::kMaxRingSize,
-            "ring_indexer_score_dsa supports at most {} full-mesh ranks, got {}",
-            ttnn::operations::experimental::indexer_score::kMaxRingSize,
-            route->plan.ring_size);
-        fused_ring.full_mesh = true;
-        // The proved route decides closure; the caller's topology only asked for a full-mesh gather.
-        fused_ring.topology = route->topology;
-        fused_ring.snake_orientation = route->plan.orientation;
-        fused_ring.mesh_rows = route->plan.mesh_rows;
-        fused_ring.mesh_cols = route->plan.mesh_cols;
-        fused_ring.route_plan_hash = route->plan.route_plan_hash;
-    } else {
-        TT_FATAL(
-            *cluster_axis < mesh_shape.dims(),
-            "ring_indexer_score_dsa cluster_axis must be an in-range mesh axis or None; got {} for mesh {}",
-            *cluster_axis,
-            mesh_shape);
-        seq_shard_axes.push_back(*cluster_axis);
-        if (seq_subshard_axis.has_value()) {
-            seq_shard_axes.push_back(*seq_subshard_axis);
-        }
-    }
-    return launch_indexer_score(
-        q,
-        k,
-        weights,
-        chunk_start_idx,
-        /*apply_relu=*/true,
-        /*num_groups=*/1,
-        /*block_size=*/0,
-        /*synthesize_gate=*/false,
-        /*gate_scale=*/1.0f,
-        program_config,
-        compute_kernel_config,
-        cache_batch_idx,
-        kv_len,
-        std::move(seq_shard_axes),  // [SP] or [SP, TP] for a 2D query sequence sub-shard
-        /*allow_subshard=*/true,
-        block_cyclic_sp_axis,
-        block_cyclic_chunk_local,
-        block_cyclic_cache_tp_sharded,
-        k_local,
-        fused_ring,
-        chunk_start_idx_tensor,
-        valid_end_tensor,
-        cache_batch_idx_tensor,
-        index_cache_num_layers,
-        index_cache_layer_idx);
 }
 
 }  // namespace ttnn::experimental

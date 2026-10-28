@@ -13,7 +13,6 @@
 #include "ttnn/operation.hpp"
 #include "indexer_score_device_operation_types.hpp"
 #include "indexer_score_program_factory.hpp"
-#include "ring_indexer_score_dsa_program_factory.hpp"
 
 namespace ttnn::operations::experimental::indexer_score {
 
@@ -22,10 +21,9 @@ struct IndexerScoreDeviceOperation {
     using tensor_args_t = indexer_score::tensor_args_t;
     using spec_return_value_t = indexer_score::spec_return_value_t;
     using tensor_return_value_t = indexer_score::tensor_return_value_t;
-    // Classic factory for the unfused path (caller pre-gathers K); descriptor-based fused factory when the
-    // op subsumes the SP all-gather (attrs.fused_ring set). select_program_factory picks by has_fused_ring().
-    using program_factory_t =
-        std::variant<program::IndexerScoreProgramFactory, program::RingIndexerScoreDsaMeshWorkloadFactory>;
+    // Classic factory only: the ring-fused factory (which subsumed the SP all-gather) was removed for agent
+    // evaluation (TODO(nuked-op ccl)); select_program_factory rejects attrs.fused_ring.
+    using program_factory_t = std::variant<program::IndexerScoreProgramFactory>;
 
     static program_factory_t select_program_factory(const operation_attributes_t&, const tensor_args_t&);
 
@@ -133,48 +131,5 @@ ttnn::Tensor indexer_score_msa(
     const std::optional<std::vector<uint32_t>>& seq_shard_axes = std::nullopt,
     std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
     std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt);
-
-// FUSED DSA (ttnn.experimental.ring_indexer_score_dsa): subsumes the SP all-gather. Instead of pre-gathering
-// K, the caller hands this chip's LOCAL K shard `k_local` [B,1,sll,D] (the all-gather input) plus a
-// pre-allocated `k` persistent buffer (the gather output). With cache_batch_idx, k_local may be a multi-slot
-// ND-sharded cache and k is [1,1,T,D]; only the selected slot and populated block-cyclic slabs are gathered.
-// co-schedules the ring_attention all-gather + the indexer compute, overlapping fabric transport with scoring:
-// the reader gates each K band on only the SP shards its tiles land in (per-band overlap, not a coarse whole-
-// gather barrier), then scores exactly as indexer_score_dsa. Same score semantics +
-// block-cyclic remap as indexer_score_dsa. An integer `cluster_axis` keeps the existing independent axis ring.
-// Explicit nullopt selects one direct-neighbor snake ring over the complete 2D mesh, with canonical row-major
-// tensor and causal ranks; that mode requires Ring topology, no `seq_subshard_axis` or `block_cyclic_sp_axis`,
-// and accepts `block_cyclic_chunk_local` alone with SP equal to the mesh size and chunk_local equal to Q's local
-// sequence extent. `ag_multi_device_global_semaphore` are the all-gather's own out-ready semaphores;
-// `ag_sub_device_id` scopes the AG worker cores (kept disjoint from the compute rectangle).
-ttnn::Tensor ring_indexer_score_dsa(
-    const ttnn::Tensor& q,
-    const ttnn::Tensor& k,
-    const ttnn::Tensor& weights,
-    const ttnn::Tensor& k_local,
-    const std::vector<tt::tt_metal::GlobalSemaphore>& ag_multi_device_global_semaphore,
-    std::optional<uint32_t> cluster_axis,
-    ttnn::ccl::Topology topology,
-    uint32_t num_links = 1,
-    std::optional<tt::tt_metal::SubDeviceId> ag_sub_device_id = std::nullopt,
-    std::optional<uint32_t> chunk_start_idx = std::nullopt,
-    const ttnn::operations::experimental::indexer_score::IndexerScoreProgramConfig& program_config = {},
-    const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
-    std::optional<uint32_t> cache_batch_idx = std::nullopt,
-    std::optional<uint32_t> kv_len = std::nullopt,
-    std::optional<uint32_t> seq_subshard_axis = std::nullopt,
-    std::optional<uint32_t> block_cyclic_sp_axis = std::nullopt,
-    std::optional<uint32_t> block_cyclic_chunk_local = std::nullopt,
-    bool block_cyclic_cache_tp_sharded = false,
-    // For trace replay, supplies chunk_start_idx on-device. Mutually exclusive with chunk_start_idx and kv_len.
-    const std::optional<ttnn::Tensor>& chunk_start_idx_tensor = std::nullopt,
-    // Real-token end (actual_end); caps the derived kv_len at ceil32(valid_end) so a partial chunk scores
-    // the same window the scalar path does. Requires chunk_start_idx_tensor.
-    const std::optional<ttnn::Tensor>& valid_end_tensor = std::nullopt,
-    // Trace-safe cache-slot select: 1-element uint32 USER id; the reader recomposes
-    // user_id * index_cache_num_layers + index_cache_layer_idx. Mutually exclusive with cache_batch_idx.
-    const std::optional<ttnn::Tensor>& cache_batch_idx_tensor = std::nullopt,
-    uint32_t index_cache_num_layers = 1,
-    uint32_t index_cache_layer_idx = 0);
 
 }  // namespace ttnn::experimental

@@ -11,7 +11,6 @@
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/types.hpp"
-#include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_device_operation.hpp"
 
 namespace ttnn::transformer {
 
@@ -85,105 +84,6 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
     operations::transformer::SDPAProgramConfig program_config,
     std::optional<float> scale = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
-
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_product_attention(
-    const ttnn::Tensor& input_tensor_q,
-    const ttnn::Tensor& input_tensor_k,
-    const ttnn::Tensor& input_tensor_v,
-    const std::optional<ttnn::Tensor>& joint_tensor_q,
-    const std::optional<ttnn::Tensor>& joint_tensor_k,
-    const std::optional<ttnn::Tensor>& joint_tensor_v,
-    ttnn::Tensor& persistent_output_buffer_k,
-    ttnn::Tensor& persistent_output_buffer_v,
-    const std::string& joint_strategy,
-    // The tensor form of logical_l always selects the sharded-joint path (its placeholder is the padded
-    // ring total); omit it for a replicated joint.
-    const LogicalLength& logical_n,
-    const LogicalLength& logical_l,
-    operations::transformer::SDPAProgramConfig program_config,
-    int32_t dim,
-    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-    uint32_t num_links,
-    uint32_t cluster_axis,
-    const MeshDevice& mesh_device,
-    ttnn::ccl::Topology topology,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    CoreCoord ccl_core_grid_offset,
-    bool is_causal = false,
-    bool is_balanced = false,
-    bool is_cross = false,
-    std::optional<float> scale = std::nullopt,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
-    std::optional<uint32_t> kv_cache_batch_idx = std::nullopt,
-    std::optional<uint32_t> kv_actual_isl = std::nullopt,
-    const std::optional<ttnn::Tensor>& attention_sink = std::nullopt,
-    std::optional<uint32_t> sliding_window_size = std::nullopt,
-    bool circular_kv_cache = false,
-    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_k = std::nullopt,
-    const std::optional<ttnn::Tensor>& persistent_output_buffer_joint_v = std::nullopt,
-    // Metadata / cache-fold contract: ring_joint_scaled_dot_product_attention docstring (sdpa_nanobind.cpp).
-    // nullopt layers/idx resolve to 1/0.
-    const std::optional<ttnn::Tensor>& slot_id = std::nullopt,
-    const std::optional<ttnn::Tensor>& kv_actual_isl_tensor = std::nullopt,
-    std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
-    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt);
-
-std::tuple<ttnn::Tensor, ttnn::Tensor> ring_mla(
-    const ttnn::Tensor& input_tensor_q,
-    const ttnn::Tensor& input_tensor_kv,
-    ttnn::Tensor& persistent_output_buffer_kv,
-    uint32_t head_dim_v,
-    std::size_t logical_n,
-    operations::transformer::SDPAProgramConfig program_config,
-    int32_t dim,
-    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-    uint32_t num_links,
-    std::optional<uint32_t> cluster_axis,
-    const MeshDevice& mesh_device,
-    ttnn::ccl::Topology topology,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-    CoreCoord ccl_core_grid_offset,
-    bool is_balanced = false,
-    std::optional<float> scale = std::nullopt,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
-    std::optional<uint32_t> kv_cache_batch_idx = std::nullopt,
-    std::optional<uint32_t> kv_actual_isl = std::nullopt,
-    // Metadata / cache-fold contract: ring_joint_scaled_dot_product_attention docstring (sdpa_nanobind.cpp).
-    // nullopt layers/idx resolve to 1/0.
-    const std::optional<ttnn::Tensor>& slot_id = std::nullopt,
-    const std::optional<ttnn::Tensor>& kv_actual_isl_tensor = std::nullopt,
-    std::optional<uint32_t> kv_cache_num_layers = std::nullopt,
-    std::optional<uint32_t> kv_cache_layer_idx = std::nullopt);
-
-struct ExecuteExpRingJointAttention {
-    static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
-        const ttnn::Tensor& input_tensor_q,
-        const ttnn::Tensor& input_tensor_k,
-        const ttnn::Tensor& input_tensor_v,
-        const std::optional<ttnn::Tensor>& joint_tensor_q,
-        const std::optional<ttnn::Tensor>& joint_tensor_k,
-        const std::optional<ttnn::Tensor>& joint_tensor_v,
-        ttnn::Tensor& persistent_output_buffer_k,
-        ttnn::Tensor& persistent_output_buffer_v,
-        const std::string& joint_strategy,
-        // The tensor form transports the live length on-device so one captured trace replays at
-        // different lengths (its placeholder is the padded ring total).
-        const LogicalLength& logical_n,
-        operations::transformer::SDPAProgramConfig program_config,
-        int32_t dim,
-        const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-        uint32_t num_links,
-        uint32_t cluster_axis,
-        const MeshDevice& mesh_device,
-        ttnn::ccl::Topology topology,
-        std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
-        std::optional<float> scale = std::nullopt,
-        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        uint32_t num_workers_per_link = 1,
-        uint32_t num_buffers_per_channel = 8);
-};
 
 ttnn::Tensor flash_mla_prefill(
     const ttnn::Tensor& input_tensor_q,

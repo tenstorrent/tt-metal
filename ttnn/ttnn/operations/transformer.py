@@ -9,7 +9,6 @@ from ttnn.operations.transformer_golden import (
     chunk_gated_delta_rule_golden,
     chunked_flash_mla_prefill_golden,
     chunked_scaled_dot_product_attention_golden,
-    exp_ring_joint_scaled_dot_product_attention_golden,
     flash_mla_prefill_golden,
     flash_multi_latent_attention_decode_golden,
     gated_delta_attn_seq_golden,
@@ -17,8 +16,6 @@ from ttnn.operations.transformer_golden import (
     paged_flash_multi_latent_attention_decode_golden,
     paged_scaled_dot_product_attention_decode_golden,
     ring_distributed_scaled_dot_product_attention_golden,
-    ring_joint_scaled_dot_product_attention_golden,
-    ring_mla_golden,
     scaled_dot_product_attention_decode_golden,
     scaled_dot_product_attention_golden,
     sparse_sdpa_golden,
@@ -139,14 +136,6 @@ ttnn.attach_golden_function(
     golden_function=chunked_scaled_dot_product_attention_golden,
 )
 ttnn.attach_golden_function(
-    ttnn.transformer.exp_ring_joint_scaled_dot_product_attention,
-    golden_function=exp_ring_joint_scaled_dot_product_attention_golden,
-    output_tensor_kwarg_names=(
-        "persistent_output_buffer_k",
-        "persistent_output_buffer_v",
-    ),
-)
-ttnn.attach_golden_function(
     ttnn.transformer.flash_mla_prefill,
     golden_function=flash_mla_prefill_golden,
 )
@@ -173,21 +162,6 @@ ttnn.attach_golden_function(
 ttnn.attach_golden_function(
     ttnn.transformer.ring_distributed_scaled_dot_product_attention,
     golden_function=ring_distributed_scaled_dot_product_attention_golden,
-)
-ttnn.attach_golden_function(
-    ttnn.transformer.ring_joint_scaled_dot_product_attention,
-    golden_function=ring_joint_scaled_dot_product_attention_golden,
-    output_tensor_kwarg_names=(
-        "persistent_output_buffer_k",
-        "persistent_output_buffer_v",
-        "persistent_output_buffer_joint_k",
-        "persistent_output_buffer_joint_v",
-    ),
-)
-ttnn.attach_golden_function(
-    ttnn.transformer.ring_mla,
-    golden_function=ring_mla_golden,
-    output_tensor_kwarg_names=("persistent_output_buffer_kv",),
 )
 ttnn.attach_golden_function(
     ttnn.transformer.scaled_dot_product_attention,
