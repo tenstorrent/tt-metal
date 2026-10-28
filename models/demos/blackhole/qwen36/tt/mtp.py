@@ -149,6 +149,14 @@ class Qwen36MTP:
         # QWEN36_MTP_SDPA_MAX_CORES pins it (the bucket equivalence tests set 13: every row count then resolves to the same split).
         self.attention.decode_sdpa_max_cores = int(os.environ.get("QWEN36_MTP_SDPA_MAX_CORES", "64"))
 
+        # QWEN36_MTP_KV_ONLY=1 (TP only; default off): a need_logits=False forward (reseed / join warm / catch-up) stops
+        # after the drafter layer's paged KV write and returns (None, None). See tp_common.mtp_kv_only_enabled.
+        from models.demos.blackhole.qwen36.tt.tp_common import mtp_kv_only_enabled
+
+        self.kv_only_maint = self.num_devices > 1 and mtp_kv_only_enabled()
+        if self.kv_only_maint:
+            logger.info("MTP drafter: KV-only maintenance forwards (QWEN36_MTP_KV_ONLY=1)")
+
         # QWEN36_DRAFT_SHARDED_ARGMAX=1: the DRAFTER stops all-gathering its full-vocab fp32 logit
         # row. Each device argmaxes its own [1,1,B,vocab/tp] shard and the global winner is picked
         # on device from two 32-lane gathers (_argmax_sharded). The gathered
@@ -460,6 +468,9 @@ class Qwen36MTP:
         goes out as T calls of B rows. 1 keeps the per-row loop. Returns (logits, next_hidden), both fractured
         [1,1,B,dim/tp]. need_logits=True: next_hidden is mtp.norm's output re-fractured to dim/tp
         (chain value). need_logits=False skips the head norm and returns RAW block output — KV maintenance only (reseed / catch-up); callers discard it, so it is not a valid chain value.
+        With ``kv_only_maint`` (QWEN36_MTP_KV_ONLY=1) a need_logits=False call returns (None, None): the layer stops
+        after its KV write (same K/V bytes) and no block output exists. Callers free the second value only when it is
+        not None.
         """
         mode = Mode.DECODE
         tok_emb = self.embd(token_ids)  # [B,1,dim/tp]
@@ -467,6 +478,7 @@ class Qwen36MTP:
         fused = self._fuse(tok_emb, hidden_states, mode)
         ttnn.deallocate(tok_emb)
 
+        kv_only = not need_logits and getattr(self, "kv_only_maint", False)  # a __new__-built test head has none
         next_hidden = self.decoder.forward(
             fused,
             cos=cos,
@@ -476,8 +488,11 @@ class Qwen36MTP:
             page_table=page_table,
             alias_kv_write=alias_kv_write,
             n_users=spec_n_users,
+            **({"kv_only": True} if kv_only else {}),
         )
         ttnn.deallocate(fused)
+        if kv_only:
+            return None, None
 
         if not need_logits:
             # KV-maintenance step (reseed / catch-up): the caller only needs the drafter's KV written
