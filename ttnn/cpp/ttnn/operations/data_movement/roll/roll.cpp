@@ -42,7 +42,8 @@ ttnn::Tensor roll(
     }
 
     if (input_tensor.logical_volume() == 0) {
-        return input_tensor;
+        return memory_config.has_value() ? ttnn::to_memory_config(input_tensor, *memory_config, std::nullopt)
+                                         : input_tensor;
     }
 
     std::vector<int> adjusted_shifts(shifts.begin(), shifts.end());

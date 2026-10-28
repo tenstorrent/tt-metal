@@ -118,8 +118,19 @@ def _embedding_sharded_zero_shard(device):
     )
 
 
-def _reshape_volume_wraps(device):
+def _reshape_volume_overflows(device):
     ttnn.reshape(_rm(device, (1, 1, 32, 32)), [-1, 65536, 65536, 65536, 65536])
+
+
+def _interleaved_to_sharded_memory_config_zero_width(device):
+    x = ttnn.from_torch(torch.zeros(1, 1, 32, 0).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    ttnn.interleaved_to_sharded(x, mem)
 
 
 def _interleaved_to_sharded_zero_width(device):
@@ -158,8 +169,9 @@ def _sharded_to_interleaved_partial_zero_width_cache(device):
         (_interleaved_to_sharded_partial_wraps, "num_slices must be at most UINT32_MAX"),
         (_slice_tensor_args_num_devices, "num_devices must be greater than 0"),
         (_embedding_sharded_zero_shard, "Shard shape must be non-zero"),
-        (_reshape_volume_wraps, "Invalid arguments to reshape"),
+        (_reshape_volume_overflows, "Invalid arguments to reshape: the volume of the new shape overflows"),
         (_interleaved_to_sharded_zero_width, "Input tensor width must be greater than 0"),
+        (_interleaved_to_sharded_memory_config_zero_width, "Input tensor width must be greater than 0"),
         (_interleaved_to_sharded_partial_zero_width, "Input tensor width must be greater than 0"),
         (_sharded_to_interleaved_partial_zero_width_cache, "Cache tensor width must be greater than 0"),
     ],
@@ -176,8 +188,9 @@ def _sharded_to_interleaved_partial_zero_width_cache(device):
         "i2s_partial_num_slices_wraps",
         "slice_tensor_args_num_devices",
         "embedding_zero_shard",
-        "reshape_volume_wraps",
+        "reshape_volume_overflows",
         "i2s_zero_width",
+        "i2s_memory_config_zero_width",
         "i2s_partial_zero_width",
         "s2i_partial_zero_width_cache",
     ],
@@ -195,9 +208,29 @@ def test_roll_empty_tensor(device, dims):
     assert tuple(out.shape) == (0, 32)
 
 
+def test_roll_empty_tensor_honors_memory_config(device):
+    x = _rm(device, (0, 32))
+    out = ttnn.roll(x, 1, 0, memory_config=ttnn.L1_MEMORY_CONFIG)
+    assert tuple(out.shape) == (0, 32)
+    assert out.memory_config().buffer_type == ttnn.BufferType.L1
+
+
 # A zero-height height-sharded input took `% 0` while choosing the transpose factory and `Hts / Ht` in it.
 def test_transpose_empty_height_sharded(device, expect_error):
     mem = _height_sharded((1, 1, 0, 32), (32, 32))
     x = ttnn.from_torch(torch.zeros(1, 1, 0, 32).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem)
     with expect_error(RuntimeError, "Sharded WH transpose requires non-zero H and W"):
         ttnn.transpose(x, -2, -1)
+
+
+# A sharded output config on an interleaved input reaches the same sharded-transpose shape math.
+def test_transpose_empty_to_sharded_output(device, expect_error):
+    x = ttnn.from_torch(torch.zeros(1, 1, 0, 32).bfloat16(), layout=ttnn.TILE_LAYOUT, device=device)
+    grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    mem = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, (32, 32), ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    with expect_error(RuntimeError, "Sharded WH transpose requires non-zero H and W"):
+        ttnn.transpose(x, -2, -1, memory_config=mem)

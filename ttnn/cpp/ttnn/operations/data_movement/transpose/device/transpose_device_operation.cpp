@@ -393,8 +393,10 @@ void TransposeDeviceOperation::validate_on_program_cache_miss(
     const auto& shape = input_tensor.padded_shape();
     bool row_major = input_tensor.layout() == Layout::ROW_MAJOR;
     uint32_t W = shape[3], H = shape[2];
+    const bool any_sharded = input_tensor.is_sharded() ||
+                             derive_effective_output_memory_config(operation_attributes, tensor_args).is_sharded();
     TT_FATAL(
-        !(input_tensor.is_sharded() && dim == TransposeOpDim::WH) || (H > 0 && W > 0),
+        !(any_sharded && dim == TransposeOpDim::WH) || (H > 0 && W > 0),
         "Sharded WH transpose requires non-zero H and W, got shape {}",
         shape);
 
