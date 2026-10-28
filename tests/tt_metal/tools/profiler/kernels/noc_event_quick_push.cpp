@@ -18,13 +18,15 @@ void kernel_main() {
     const uint32_t l1_base = get_write_ptr(0);  // CB 0 has two pages: page 0 is read into page 1 over the local NoC
     const uint64_t src_noc_addr = get_noc_addr(l1_base);
 #if MCAST_EVERY > 0
-    const uint64_t mcast_noc_addr = get_noc_multicast_addr(
-        get_arg_val<uint32_t>(1),
-        get_arg_val<uint32_t>(2),
-        get_arg_val<uint32_t>(3),
-        get_arg_val<uint32_t>(4),
-        l1_base + page_size);
-    const uint32_t mcast_num_dests = get_arg_val<uint32_t>(5);  // receivers, the sender itself is not one
+    // Multicast to the OTHER column of the 2x2 core range (a sender inside its own multicast range hangs, jobs
+    // 161289/161385): runtime args give the NoC x of both columns and the NoC y of both rows.
+    const uint32_t col_a = get_arg_val<uint32_t>(1);
+    const uint32_t row_a = get_arg_val<uint32_t>(2);
+    const uint32_t col_b = get_arg_val<uint32_t>(3);
+    const uint32_t row_b = get_arg_val<uint32_t>(4);
+    const uint32_t other_col = (my_x[0] == col_a) ? col_b : col_a;
+    const uint64_t mcast_noc_addr = get_noc_multicast_addr(other_col, row_a, other_col, row_b, l1_base + page_size);
+    constexpr uint32_t mcast_num_dests = 2;
 #endif
     {
         DeviceZoneScopedN("TEST-NOC-QUICK-PUSH");
@@ -46,8 +48,10 @@ void kernel_main() {
 #endif
 #if MCAST_EVERY > 0
             if (i % MCAST_EVERY == 0) {
-                // linked write, then the closing unlinked one (a linked chain must be terminated)
-                noc_async_write_multicast(l1_base, mcast_noc_addr, page_size, mcast_num_dests, /*linked=*/true);
+                // a linked chain of 4 writes, then the closing unlinked one (MCAST_WRITES = 5 NoC events)
+                for (uint32_t k = 0; k < 4; k++) {
+                    noc_async_write_multicast(l1_base, mcast_noc_addr, page_size, mcast_num_dests, /*linked=*/true);
+                }
                 noc_async_write_multicast(l1_base, mcast_noc_addr, page_size, mcast_num_dests, /*linked=*/false);
                 noc_async_write_barrier();
             }

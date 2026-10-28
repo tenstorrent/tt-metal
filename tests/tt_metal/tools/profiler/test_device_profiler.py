@@ -1569,8 +1569,17 @@ NOC_EVENT_QUICK_PUSH_CONFIGS = {
         knobs={"BLOCKING": 0, "SKIP_READ": 1, "WARMUP": 200, "ITER_ZONE": 1, "DELAY_NOPS": 20000},
         program_support_count=8000,
     ),
-    # "fd-mcast" (MCAST_EVERY) is left out: the linked multicast hangs the kernel (jobs 161289, 161385), to be
-    # looked at separately.
+    # Linked multicasts, the way the model triggers its second push: quick_push_if_linked pushes a 16-word chunk
+    # right before a linked multicast chain on the same NoC command buffer. Last on purpose: a hang here poisons
+    # the chips for every later config (jobs 161289/161385, with the sender inside its own multicast range).
+    "fd-mcast": dict(env={}, loop_count=4000, knobs={"MCAST_EVERY": 7}, mcast_every=7),
+    "sd-mcast-blaze-env": dict(
+        env={"slowDispatch": True, "do_mid_run_dump": True, "do_cpp_post_process": True},
+        loop_count=4000,
+        knobs={"BLOCKING": 0, "SKIP_READ": 1, "WARMUP": 200, "ITER_ZONE": 1, "MCAST_EVERY": 7},
+        mcast_every=7,
+        program_support_count=8000,
+    ),
 }
 
 
@@ -1639,8 +1648,8 @@ def test_noc_event_quick_push(config_name):
         warmup = knobs.get("WARMUP", 0)
         noc_events = int((lane["timer_id"] == NOC_EVENT_TIMER_ID).sum()) - warmup
         if config.get("mcast_every"):
-            # two multicast writes per MCAST_EVERY-th iteration are events too
-            noc_events -= 2 * ((LOOP_COUNT + config["mcast_every"] - 1) // config["mcast_every"])
+            # the 5 multicast writes per MCAST_EVERY-th iteration (MCAST_WRITES in the kernel) are events too
+            noc_events -= 5 * ((LOOP_COUNT + config["mcast_every"] - 1) // config["mcast_every"])
         runs = lane["run host ID"].nunique()
         user = lane[lane["zone name"] == "TEST-NOC-QUICK-PUSH"]
         user_starts = int((user["type"] == "ZONE_START").sum()) - warmup
