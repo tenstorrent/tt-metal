@@ -559,6 +559,21 @@ TABLE = {
         "/ 32 threads 1265 / 424 / 484 ms; mmap hot 1 / 8 threads 10 / 19 ms; resident 1 / 8 threads 11-15 / 9-13 ms "
         "(torch intra-op 16 / 8 threads). Default 8: the cold gather (owner 2026-10-28); also the bfp8 pack's threads",
     ),
+    "CKV_FORMAT": Setting(
+        "bf16",
+        ("bf16", "bfp4_rows"),
+        "the compressed KV attention table (tt/compressor.AttnTable, read by sparse_sdpa; needs STATIC_TABLES=on). OWNER "
+        "DECISION 2026-10-28 (F208, FIX.8; developed on the 2x2): the reference stores the compressed KV in 4 bits (fp4 "
+        "e2m1 + e4m3 per 16, ds41_ref.py:797-799). bfp4_rows = the history as bfloat4_b row records, 288 B a row "
+        "(ttnn.bringup.ckv_bfp4: an SFPU round to nearest even before the pack, byte-equal to tt-metal's host packer; "
+        "the packer alone truncates bfp4 in effect, tests/test_bfp_packer_rounding.py), read by the sparse_sdpa fork's "
+        "kv_format ROW_BFP4 with the window region as its own bf16 tensor (index list not compacted). The served "
+        "records stay bf16 rows holding the rounded values (contract and tt-d-gen unchanged; a host load re-encodes "
+        "them exactly). Rows vs the reference's native: bfp4 RNE 0.112-0.120 rel L2, the reference's own fp4 "
+        "0.095 (bringup/ckv_derisk/CKV_4BIT_DERISK.md). 3.56x less table DRAM and gather traffic; sparse_sdpa one p150b "
+        "H 64: 160 queries 341 -> 517 us, 512 queries 1184 -> 1300 us (the row -> tile shuffle on the dataflow RISCs). "
+        "bf16 = today's stock path (bf16 rows, stock sparse_sdpa)",
+    ),
 }
 
 # F137 (owner): every test runs these defaults; there is no max-precision device run and no max-precision path. FIX.8
