@@ -28,7 +28,7 @@ from typing import Optional, Protocol
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
-from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import deallocate_state, device_scalar
+from models.demos.deepseek_v3_d_p.tt.kda.state_adapter import KdaStates, deallocate_state, device_scalar
 
 
 def validate_kda_bounds(actual_start: int | None, actual_end: int | None) -> None:
@@ -93,7 +93,7 @@ class K3AttnContext:
     # The engine-owned `KdaStates` slabs, the one store of every KDA carry: a KDA layer loads its
     # slot's carry from them and stores the replacement back, inside the captured region. The
     # runtime hands them to the model at `compile()`; a test that builds the model allocates its own.
-    kda_states: object = None
+    kda_states: Optional[KdaStates] = None
 
 
 class K3Attention(Protocol):
