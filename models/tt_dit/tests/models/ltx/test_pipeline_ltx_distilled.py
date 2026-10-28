@@ -64,13 +64,13 @@ def _ltx_checkpoint_cached(filename: str) -> bool:
 
 FAST_T2V_TIMING_LIMITS = {
     ((4, 8), 1088, 1920, 153): {
-        "Encoder": (0.23, 0.96),
-        "Stage 1 denoise": (1.47, 3.2),
-        "Latent upsample": (0.05, 0.26),
-        "Stage 2 denoise": (1.8, 4.9),
-        "VAE decode": (0.61, 1.4),
-        "Audio decode": (0.23, 0.52),
-        "Total": (4.5, 10.6),
+        "Encoder": (0.23, 0.94),
+        "Stage 1 denoise": (1.46, 2.76),
+        "Latent upsample": (0.05, 0.22),
+        "Stage 2 denoise": (1.81, 3.39),
+        "VAE decode": (0.62, 1.22),
+        "Audio decode": (0.25, 0.47),
+        "Total": (4.54, 8.57),
     },
 }
 
