@@ -191,7 +191,8 @@ text said "block 11", a label error of the test's printout, fixed in c2cb103069a
 
 In every row the error grows smoothly through the stack, at the same per-block rate as the controls; the performance
 preset's bf8/LoFi step shows from block 0 in every row. No row has a jump at one block. What differs is the head's
-gain on the last block's error. **Verdict: precision, not a defect.** These rows are ill-conditioned: under bf16-sized
+gain on the last block's error. (Correction, D6: horizon4 row 1 does jump at the head: at performance 0.0498 -> 0.0615
+while its controls fall, e.g. 0.0429 -> 0.0244, and at accuracy 0.0083 -> 0.0162; R1-0e(b) tests it.) **Verdict: precision, not a defect.** These rows are ill-conditioned: under bf16-sized
 weight noise (2^-9, fp32 reference, 3 seeds), their bias moves more than that of 94-100 % of 48 control rows:
 
 | row | case | d bias, rank | d ratio, rank |
@@ -210,3 +211,6 @@ weight noise (2^-9, fp32 reference, 3 seeds), their bias moves more than that of
   therefore not justified by conditioning: D4 says it reverts to the `*/performance` floor (0.04). Its round-0
   value of 0.056 then fails that floor, so this is a finding to fix or to take to an X gate. It is listed as an
   open item in GATE.md and has not been changed here.
+- **D6 (X-r1):** 0.08 stays as the **binding bound on row 1**, not an outer bound: under v1.27 row 1 (round 0 -0.0561)
+  fails 0.08 at -0.081, before the row drift at -0.086 (about 0.024 of room away from the reference). A candidate past
+  0.08 needs an X gate with the variance table. The `*/performance` 0.04 does not apply to horizon4.

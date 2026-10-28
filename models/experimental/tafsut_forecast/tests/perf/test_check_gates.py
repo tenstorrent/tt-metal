@@ -206,6 +206,31 @@ def test_shift_rows_sizes():
     assert [SB.n_shift_rows(b) for b in (4, 16, 32, 64, 512, 1024)] == [1, 1, 2, 4, 6, 11]
 
 
+def test_away_is_inside_interval():
+    """v1.28: a probe may pass only if it lands inside [min(0, e0) - 0.03, max(0, e0) + 0.03] (ratio: 1, 0.15)."""
+    from models.experimental.tafsut_forecast.tests.perf import score_broken as SB
+
+    assert not SB.away("level_shift_rows#0", [-0.056], [1.0], [0.05], [1.0])  # toward, lands at -0.006
+    assert SB.away("level_shift_rows#0", [-0.01], [1.0], [0.05], [1.0])  # crosses 0 and overshoots to +0.04
+    assert SB.away("level_shift_rows-#0", [-0.056], [1.0], [-0.05], [1.0])  # away
+    assert not SB.away("band0.7x_row#0", [0.0], [1.3], [0.0], [0.7])  # 1.3 -> 0.91: inside [0.85, 1.45]
+    assert SB.away("band0.7x_row#0", [0.0], [1.1], [0.0], [0.7])  # 1.1 -> 0.77: crosses 1 and overshoots
+    assert SB.away("collapsed", [0.0], [1.0], [0.0], [1.0])
+
+
+def test_compose_population():
+    """v1.28: bias_row_max / spread ratio extremes are recomputed from the composed rows."""
+    import torch
+
+    from models.experimental.tafsut_forecast.tests.perf import score_broken as SB
+
+    act = torch.tensor([True, True, False])
+    m = {"bias_row_p95": None, "spread_ratio_p50": None}
+    out = SB.compose_population(m, torch.tensor([0.0, -0.027, 0.0], dtype=torch.float64), act, [0.01, -0.056], [1.0, 1.2])
+    assert abs(out["bias_row_max"] - 0.083) < 1e-12 and out["spread_ratio_max"] == 1.2
+    assert "bias_row_p95" not in out and "spread_ratio_p50" not in out
+
+
 def test_coverage():
     """v1.24: the candidate set must hold every case and precision of the fixed record."""
     perf = dict(REC, precision="performance")
@@ -276,6 +301,11 @@ def test_g1_proposal_fails_broken():
     assert {(r["shape"], r["forward"]) for r in results} >= {("long_horizon", 2), ("horizon4", 2)}
     assert {r["broken"] for r in results} >= {"level_shift_rows#0", "band1.3x_row#0"}  # D4 items 1-2
     assert {r["broken"] for r in results} >= {"level_shift_rows-#0", "band0.7x_row#0"}  # v1.27: both signs
+    # D6 / v1.28: the forced row-1 probes on horizon4; the -0.027 one is caught only by the binding bias_row_max 0.08
+    h4 = {r["broken"]: r for r in results if (r["shape"], r["forward"], r["precision"]) == ("horizon4", 1, "performance")}
+    assert {"level_shift_row1", "level_shift_row1-", "bound_row1", "bound_row1-"} <= set(h4)
+    assert h4["bound_row1-"]["required"] and any("bias_row_max" in f for f in h4["bound_row1-"]["fails"])
+    assert not h4["bound_row1"]["required"]
     golden = [r for r in results if r["broken"] == "golden"]
     assert golden and not [r for r in golden if r["fails"] or r["golden_also_fails"]]  # D4 item 5: no vacuous catch
     passed = [

@@ -74,10 +74,16 @@ def lag1(head):
     return h.reshape(head.shape)
 
 
-def shift_rows(head, rows, sign=1.0):
+def shift_rows(head, rows, sign=1.0, size=LEVEL_SHIFT):
     h = head.clone()
-    h[rows] += sign * LEVEL_SHIFT
+    h[rows] += sign * size
     return h
+
+
+# D6 / PLAN v1.28: named rows whose population floor binds before the row drift get forced probes in both signs: the
+# level shift, and a smaller shift that lands between the floor and the drift (horizon4/performance row 1: round 0
+# -0.0561, bias_row_max 0.08 fails at -0.081, the drift at -0.086), which only the binding floor can catch.
+FORCED_ROWS = {"horizon4": {1: 0.027}}
 
 
 PLACEMENTS = 8
@@ -88,7 +94,7 @@ def n_shift_rows(rows: int) -> int:
     return 1 if rows <= 16 else 2 if rows <= 32 else 4 if rows <= 64 else math.ceil(0.01 * rows)
 
 
-def broken(g_head):
+def broken(g_head, shape=None):
     act = M.active_rows(g_head)
     idx = act.nonzero().flatten()
     k = math.ceil(0.01 * len(idx))
@@ -125,6 +131,11 @@ def broken(g_head):
         row = idx[torch.randint(len(idx), (1,), generator=gen)]
         out[f"band1.3x_row#{p}"] = (scale_band(g_head, row, 1.3), f"active row {int(row)}")
         out[f"band0.7x_row#{p}"] = (scale_band(g_head, row, 0.7), f"active row {int(row)}")
+    for row, size in FORCED_ROWS.get(shape, {}).items():
+        out[f"level_shift_row{row}"] = (shift_rows(g_head, [row]), f"forced row {row}")
+        out[f"level_shift_row{row}-"] = (shift_rows(g_head, [row], -1.0), f"forced row {row}")
+        out[f"bound_row{row}"] = (shift_rows(g_head, [row], size=size), f"forced row {row}, {size}")
+        out[f"bound_row{row}-"] = (shift_rows(g_head, [row], -1.0, size), f"forced row {row}, -{size}")
     if not bool((~act).any()):  # no inactive rows: the "broken" output is the golden itself
         del out["inactive_collapsed"]
     return out
@@ -146,14 +157,39 @@ def check_id(failure: str) -> str:
     return rest[0] + (" drift" if len(rest) > 1 and rest[1] == "drift" else "") + row
 
 
+BIAS_DRIFT, RATIO_DRIFT = 0.03, 0.15  # the v1.27 row drift bounds (gates.json drift)
+
+
 def away(name: str, e0: list, r0: list, e: list, r: list) -> bool:
-    """v1.27: whether a one-row probe moves a probed row away from the reference on the device rows (required to
-    fail); the toward sign is reported but may pass. Every other broken output is required to fail."""
-    if name.startswith(("level_shift_rows", "shift10pct")):
-        return any(abs(d) > 1e-9 and (x == 0 or (x > 0) == (d > 0)) for x, d in zip(e0, e))
+    """PLAN v1.28: whether a row probe is required to fail. It may pass ("toward") only if every probed row's composed
+    value lands inside the v1.27 interval [min(ref, x0) - d, max(ref, x0) + d] (ref 0 / d 0.03 for bias, 1 / 0.15 for
+    the spread ratio); a probe that crosses the reference and overshoots is required to fail. Every other broken
+    output is required to fail."""
+    inside = lambda x, x0, ref, d: min(ref, x0) - d <= x <= max(ref, x0) + d
+    if name.startswith(("level_shift_row", "shift10pct", "bound_row")):
+        return any(abs(d) > 1e-9 and not inside(x + d, x, 0.0, BIAS_DRIFT) for x, d in zip(e0, e))
     if name.startswith("band"):
-        return any(abs(q - 1) > 1e-9 and (q > 1) == (x >= 1) for x, q in zip(r0, r))
+        return any(abs(q - 1) > 1e-9 and not inside(x * q, x, 1.0, RATIO_DRIFT) for x, q in zip(r0, r))
     return True
+
+
+def compose_population(m: dict, sbias: torch.Tensor, act: torch.Tensor, e0: list, rv: list) -> dict:
+    """PLAN v1.28: the population metrics recomputed from the composed rows, so score_broken scores those floors too.
+    ``sbias`` is the probe's signed bias on every row; the fixed record's device bias is added on the active rows
+    (its inactive rows have no recorded bias and count as 0). ``rv`` is the composed spread ratio of the active rows."""
+    b = sbias.clone()
+    b[act] += torch.tensor(e0, dtype=b.dtype)
+    a = b.abs()
+    out = {"bias_row_p50": float(a.median()), "bias_row_max": float(a.max())}
+    if m.get("bias_row_p95") is not None:
+        out["bias_row_p95"] = float(torch.quantile(a, 0.95))
+    r = torch.tensor(rv, dtype=torch.float64)
+    if len(r):
+        out["spread_ratio_min"], out["spread_ratio_max"] = float(r.min()), float(r.max())
+    for kk, qq in (("spread_ratio_p01", 0.01), ("spread_ratio_p99", 0.99), ("spread_ratio_p50", 0.5)):
+        if m.get(kk) is not None:
+            out[kk] = float(torch.quantile(r, qq))
+    return out
 
 
 def score(gates, base, quiet=True):
@@ -171,7 +207,7 @@ def score(gates, base, quiet=True):
             gq = g["quantiles"].transpose(1, 2)  # [rows, 9, H]
             fam = "f2_" if k else ""
             golden_fails = {}
-            for name, (head, what) in [("golden", (gh, "none"))] + list(broken(gh).items()):
+            for name, (head, what) in [("golden", (gh, "none"))] + list(broken(gh, shape).items()):
                 qk = df.postprocess(head.float(), prep, take).transpose(1, 2)
                 if k == 0:  # forward 1: its quantiles are the forecast's first `take` steps
                     m = M.gate_metrics(head, gh, qk, gq[:, :, :take], prep.scale)
@@ -202,6 +238,12 @@ def score(gates, base, quiet=True):
                         mp["spread_ratio_row_vec"] = [
                             x * y for x, y in zip(b[fam + "spread_ratio_row_vec"], m["spread_ratio_row_vec"])
                         ]
+                        sbias = (head.double() - gh.double()).reshape(gh.shape[0], -1).mean(1)
+                        mp.update(
+                            compose_population(
+                                m, sbias, M.active_rows(gh), b[fam + "bias_row_vec"], mp["spread_ratio_row_vec"]
+                            )
+                        )
                     keep = {
                         kk: v for kk, v in b.items() if (kk.startswith("f2_") if not k else not kk.startswith("f2_"))
                     }
