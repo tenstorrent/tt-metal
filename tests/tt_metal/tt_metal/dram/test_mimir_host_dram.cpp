@@ -28,7 +28,6 @@
 namespace tt::tt_metal::mimir_test::host_dram {
 
 inline constexpr ChipId kChipId = 0;
-inline constexpr uint32_t kMaxDramViews = 4;
 inline constexpr uint32_t kTl1CceIndex = 0;
 inline constexpr uint32_t kPersistView = 0;
 inline constexpr uint32_t kRegionBytes = 1024;
@@ -184,13 +183,14 @@ struct PersistedTl1Region {
 class MimirHostDramView : public ::testing::TestWithParam<uint32_t> {};
 
 TEST(MimirHostDram, DiscoverAccessMatrix) {
-    MIMIR_SKIP_UNLESS_EMU();
-    const MimirTopology topology = topology_from(cluster_soc_desc(kChipId));
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
+    const MimirTopology topology = topology_from(configured_soc_desc());
     const std::string& identity_mismatch = mimir_identity_result();
     if (!identity_mismatch.empty()) {
         GTEST_SKIP() << identity_mismatch;
     }
-    const metal_SocDescriptor& soc = cluster_soc_desc(kChipId);
+    const metal_SocDescriptor& soc = configured_soc_desc();
     for (const MimirRegister& reg : read_gddr_config(MetalContext::instance().get_cluster(), soc, kChipId)) {
         log_info(tt::LogTest, "{} = 0x{:x}", reg.name, reg.value);
     }
@@ -258,8 +258,9 @@ TEST(MimirHostDram, DiscoverAccessMatrix) {
 }
 
 TEST_P(MimirHostDramView, PatternReadback) {
-    MIMIR_SKIP_UNLESS_EMU();
-    const MimirTopology topology = topology_from(cluster_soc_desc(kChipId));
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
+    const MimirTopology topology = topology_from(configured_soc_desc());
     const uint32_t view = GetParam();
     if (view >= topology.num_views) {
         GTEST_SKIP() << "Descriptor exposes " << topology.num_views << " DRAM views.";
@@ -329,8 +330,9 @@ TEST_P(MimirHostDramView, PatternReadback) {
 }
 
 TEST_P(MimirHostDramView, BoundaryAndAlias) {
-    MIMIR_SKIP_UNLESS_EMU();
-    const MimirTopology topology = topology_from(cluster_soc_desc(kChipId));
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
+    const MimirTopology topology = topology_from(configured_soc_desc());
     const uint32_t view = GetParam();
     if (view >= topology.num_views) {
         GTEST_SKIP() << "Descriptor exposes " << topology.num_views << " DRAM views.";
@@ -421,10 +423,12 @@ TEST_P(MimirHostDramView, BoundaryAndAlias) {
     log_info(tt::LogTest, "Legal unaligned host DRAM access: N/A, host DRAM access is 4 B aligned only.");
 }
 
-INSTANTIATE_TEST_SUITE_P(MM0, MimirHostDramView, ::testing::Range(0u, kMaxDramViews), view_param_name);
+INSTANTIATE_TEST_SUITE_P(
+    MM0, MimirHostDramView, ::testing::ValuesIn(mimir_contract::dram_view_indices()), view_param_name);
 
 TEST(MimirHostDram, ReconnectPersists) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     const std::string& identity_mismatch = mimir_identity_result();
     if (!identity_mismatch.empty()) {
         GTEST_SKIP() << identity_mismatch;
@@ -475,8 +479,8 @@ TEST(MimirHostDram, ReconnectPersists) {
         for (uint32_t cce_index : persisted_cces) {
             const MimirCceL1AddressInfo info =
                 mimir_cce_l1_address(writer_soc, kChipId, cce_index, tl1_data(0), kRegionBytes);
-            const std::vector<uint32_t> expected =
-                make_pattern(MimirPattern::Prng, kRegionBytes / sizeof(uint32_t), info.spa_address, mimir_test_seed());
+            const std::vector<uint32_t> expected = make_pattern(
+                MimirPattern::Prng, kRegionBytes / sizeof(uint32_t), info.host_axi_address, mimir_test_seed());
             write_cce_tl1(writer, kChipId, cce_index, tl1_data(0), expected, Tl1Range::WholeTl1);
             tl1_regions.push_back({cce_index, tl1_data(0), expected});
         }
@@ -504,7 +508,8 @@ TEST(MimirHostDram, ReconnectPersists) {
 }
 
 TEST(MimirHostDram, HostSideRejections) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     const std::string& identity_mismatch = mimir_identity_result();
     if (!identity_mismatch.empty()) {
         GTEST_SKIP() << identity_mismatch;

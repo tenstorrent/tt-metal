@@ -210,7 +210,7 @@ std::string hex_words(const std::vector<uint32_t>& words) { return fmt::format("
 class MimirDmScopedLockClm : public ::testing::TestWithParam<ClmCase> {};
 
 TEST_P(MimirDmScopedLockClm, CacheOps) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     const ClmCase clm_case = GetParam();
     if (const std::string skip_reason = clm_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
@@ -405,15 +405,11 @@ std::string mm41_cce_skip_reason(uint32_t cce_index) {
     if (const std::string watcher_reason = mimir_watcher_skip_reason(); !watcher_reason.empty()) {
         return watcher_reason;
     }
-    const MimirTopology topology = topology_from(cluster_soc_desc());
+    const MimirTopology topology = topology_from(configured_soc_desc());
     if (cce_index >= topology.num_cces) {
         return fmt::format("Descriptor exposes {} CCEs; CCE {} is not present.", topology.num_cces, cce_index);
     }
     return "";
-}
-
-uint32_t sibling_cce(uint32_t cce_index) {
-    return cce_index_for(mimir_index_for_cce(cce_index), 1 - location_for_cce(cce_index));
 }
 
 // One kernel of an MM41 scoped-lock Program.
@@ -497,7 +493,7 @@ void expect_consumer_results(
 class MimirCacheScopedLock : public ::testing::TestWithParam<uint32_t> {
 protected:
     void SetUp() override {
-        MIMIR_SKIP_UNLESS_EMU();
+        skip_unless_programmable_dram_package();
         if (const std::string skip_reason = mm41_cce_skip_reason(GetParam()); !skip_reason.empty()) {
             GTEST_SKIP() << skip_reason;
         }
@@ -752,6 +748,7 @@ TEST_P(MimirCacheScopedLock, NonSnoopingProducer) {
         "consumer");
 }
 
-INSTANTIATE_TEST_SUITE_P(MM41, MimirCacheScopedLock, ::testing::Range(0u, kMaxCces), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(
+    MM41, MimirCacheScopedLock, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 }  // namespace tt::tt_metal::mimir_test::dm_scoped_lock

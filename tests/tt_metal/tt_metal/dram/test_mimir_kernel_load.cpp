@@ -186,9 +186,9 @@ void update_echo_arguments(
 class MimirKernelLoad : public ::testing::TestWithParam<uint32_t> {};
 
 TEST_P(MimirKernelLoad, MinimalKernelExecutes) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     const uint32_t cce_index = GetParam();
-    const MimirTopology topology = topology_from(cluster_soc_desc());
+    const MimirTopology topology = topology_from(configured_soc_desc());
     if (cce_index >= topology.num_cces) {
         GTEST_SKIP() << "Descriptor exposes " << topology.num_cces << " CCEs.";
     }
@@ -220,9 +220,9 @@ TEST_P(MimirKernelLoad, MinimalKernelExecutes) {
 }
 
 TEST_P(MimirKernelLoad, EachHartAlone) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     const uint32_t cce_index = GetParam();
-    const MimirTopology topology = topology_from(cluster_soc_desc());
+    const MimirTopology topology = topology_from(configured_soc_desc());
     if (cce_index >= topology.num_cces) {
         GTEST_SKIP() << "Descriptor exposes " << topology.num_cces << " CCEs.";
     }
@@ -256,9 +256,9 @@ TEST_P(MimirKernelLoad, EachHartAlone) {
 }
 
 TEST_P(MimirKernelLoad, ArgsReplaceStale) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     const uint32_t cce_index = GetParam();
-    const MimirTopology topology = topology_from(cluster_soc_desc());
+    const MimirTopology topology = topology_from(configured_soc_desc());
     if (cce_index >= topology.num_cces) {
         GTEST_SKIP() << "Descriptor exposes " << topology.num_cces << " CCEs.";
     }
@@ -304,9 +304,9 @@ TEST_P(MimirKernelLoad, ArgsReplaceStale) {
 // launch after the reopen runs on the firmware loaded by the first open. Reset and reload on every open is
 // MimirFwReinit (TT_METAL_FORCE_REINIT).
 TEST_P(MimirKernelLoad, FirmwareKeepsRunningAcrossReopen) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     const uint32_t cce_index = GetParam();
-    const MimirTopology topology = topology_from(cluster_soc_desc());
+    const MimirTopology topology = topology_from(configured_soc_desc());
     if (cce_index >= topology.num_cces) {
         GTEST_SKIP() << "Descriptor exposes " << topology.num_cces << " CCEs.";
     }
@@ -335,11 +335,11 @@ TEST_P(MimirKernelLoad, FirmwareKeepsRunningAcrossReopen) {
     EXPECT_TRUE(launch_single_hart_echo(device, cce_index, logical_core, hart, arguments));
 }
 
-INSTANTIATE_TEST_SUITE_P(MM3, MimirKernelLoad, ::testing::Range(0u, kMaxCces), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(MM3, MimirKernelLoad, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 TEST(MimirKernelLoad, SameBinaryAllCcesUnicast) {
-    MIMIR_SKIP_UNLESS_EMU();
-    const MimirTopology topology = topology_from(cluster_soc_desc());
+    skip_unless_programmable_dram_package();
+    const MimirTopology topology = topology_from(configured_soc_desc());
     if (topology.num_cces == 0) {
         GTEST_SKIP() << "Descriptor exposes no CCEs.";
     }
@@ -395,7 +395,7 @@ class MimirDmRuntimeArgs : public ::testing::TestWithParam<uint32_t> {};
 // Unique and common runtime args up to the DRAM-core kernel-config area are accepted; one word more throws from both
 // the unique and the common API. A kernel with args at the ceiling launches and echoes its last unique and common args.
 TEST_P(MimirDmRuntimeArgs, IllegalTooManyRuntimeArgs) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     const uint32_t cce_index = GetParam();
     ScopedDevice device_closer;
     IDevice* device = device_closer.device();
@@ -457,7 +457,7 @@ std::vector<uint32_t> words_of(const RuntimeArgsData& args) {
 // After a launch, changing the count of unique runtime args throws, and so does setting common runtime args a second
 // time with the same count. Neither rejected call changes the stored args.
 TEST_P(MimirDmRuntimeArgs, IllegallyModifyRuntimeArgs) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     const uint32_t cce_index = GetParam();
     ScopedDevice device_closer;
     IDevice* device = device_closer.device();

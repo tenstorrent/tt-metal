@@ -20,6 +20,7 @@
 
 #include <fmt/format.h>
 
+#include "hostdev/cce_spa_routes.h"
 #include "impl/context/metal_context.hpp"
 #include "impl/dispatch/slow_dispatch.hpp"
 #include "llrt/hal.hpp"
@@ -150,6 +151,14 @@ inline uint32_t mimir_index_for_cce(uint32_t cce_index) {
 }
 
 inline uint32_t location_for_cce(uint32_t cce_index) { return location_for_cce(configured_soc_desc(), cce_index); }
+
+inline uint32_t cce_index_for(const metal_SocDescriptor& soc_desc, uint32_t mimir_index, uint32_t location) {
+    return mimir_index * locations_per_channel(soc_desc) + location;
+}
+
+inline uint32_t cce_index_for(uint32_t mimir_index, uint32_t location) {
+    return cce_index_for(configured_soc_desc(), mimir_index, location);
+}
 
 inline uint32_t num_cces_from_soc(const metal_SocDescriptor& soc_desc) {
     return static_cast<uint32_t>(soc_desc.get_num_dram_channels() * locations_per_channel(soc_desc));
@@ -450,6 +459,30 @@ inline void read_cce_sram(IDevice* device, CoreCoord logical_dram_core, uint64_t
 inline uint64_t cce_sram_noc_addr(uint64_t offset) {
     return MetalContext::instance().hal().get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BASE) +
            offset;
+}
+
+// The SPA routes CreateDevice wrote to one CCE, right after its bank-to-NOC staging range.
+inline CceSpaRoutes read_cce_spa_routes(IDevice* device, uint32_t cce_index) {
+    const Hal& hal = MetalContext::instance().hal();
+    const uint64_t routes_noc_addr =
+        hal.get_dev_noc_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BANK_TO_NOC_SCRATCH) +
+        hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::BANK_TO_NOC_SCRATCH);
+    CceSpaRoutes routes{};
+    read_cce_sram(device, logical_cce_core(soc_desc_of(device), cce_index), routes_noc_addr, &routes, sizeof(routes));
+    return routes;
+}
+
+// The SPA a CCE kernel's cce_gddr_address() issues with these routes.
+inline uint64_t cce_gddr_address(const CceSpaRoutes& routes, uint32_t mimir_index, uint64_t offset) {
+    TT_FATAL(mimir_index < CCE_SPA_ROUTES_MAX_INSTANCES, "Mimir {} has no SPA route", mimir_index);
+    const uint32_t port = routes.gddr_d2d[mimir_index];
+    TT_FATAL(port < 2, "Mimir {} route names D2D port {}", mimir_index, port);
+    return routes.gddr_d2d_base[port] + static_cast<uint64_t>(mimir_index) * routes.gddr_instance_stride + offset;
+}
+
+// The SPA a CCE kernel's cce_sram_address() issues with these routes.
+inline uint64_t cce_sram_address(const CceSpaRoutes& routes, uint32_t cce_index, uint64_t offset) {
+    return routes.sram_spa_base + static_cast<uint64_t>(cce_index) * routes.sram_tile_stride + offset;
 }
 
 // UMD logical DRAM coordinate {channel, location}. Backend checks that do not go through a Metal

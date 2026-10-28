@@ -158,7 +158,7 @@ std::string cce_skip_reason(uint32_t cce_index) {
     if (const std::string watcher_reason = mimir_watcher_skip_reason(); !watcher_reason.empty()) {
         return watcher_reason;
     }
-    const MimirTopology topology = topology_from(cluster_soc_desc());
+    const MimirTopology topology = topology_from(configured_soc_desc());
     if (cce_index >= topology.num_cces) {
         return fmt::format("Descriptor exposes {} CCEs; CCE {} is not present.", topology.num_cces, cce_index);
     }
@@ -235,7 +235,11 @@ std::vector<uint32_t> observer_args(uint32_t hart, uint32_t trid, uint64_t peer_
 // Seeds the source block, poisons the first line of every command's destination and writes a guard before and after
 // the destination region. Returns the source words.
 std::vector<uint32_t> prepare_batch(
-    IDevice* device, const metal_SocDescriptor& soc, const GddrBatch& batch, uint32_t tag) {
+    distributed::MeshDevice& unit_mesh,
+    IDevice* device,
+    const metal_SocDescriptor& soc,
+    const GddrBatch& batch,
+    uint32_t tag) {
     const uint32_t view = gddr_view_of(soc, batch.cce_index);
     const uint64_t view_offset = gddr_view_offset();
     const uint32_t seed = mimir_test_seed() ^ (tag * 0x9E3779B9u);
@@ -243,16 +247,15 @@ std::vector<uint32_t> prepare_batch(
         make_pattern(MimirPattern::Prng, batch.len_bytes / sizeof(uint32_t), tl1_data(batch.hart), seed);
     write_cce_tl1(device, batch.cce_index, tl1_data(batch.hart), source);
     for (uint32_t command = 0; command < batch.num_commands; ++command) {
-        EXPECT_TRUE(write_dram_view(
-            device,
-            soc,
+        mimir_contract::write_gddr_view(
+            unit_mesh,
             view,
             view_offset + static_cast<uint64_t>(command) * batch.len_bytes,
-            make_seed_pattern(tag, kGuardWords)));
+            make_seed_pattern(tag, kGuardWords));
     }
-    EXPECT_TRUE(write_dram_view(device, soc, view, view_offset - kGuardBytes, make_guard(kLeadingGuardTag + tag)));
-    EXPECT_TRUE(write_dram_view(
-        device, soc, view, view_offset + static_cast<uint64_t>(batch.num_commands) * batch.len_bytes, make_guard(tag)));
+    mimir_contract::write_gddr_view(unit_mesh, view, view_offset - kGuardBytes, make_guard(kLeadingGuardTag + tag));
+    mimir_contract::write_gddr_view(
+        unit_mesh, view, view_offset + static_cast<uint64_t>(batch.num_commands) * batch.len_bytes, make_guard(tag));
     record_leg(
         "batch",
         "config",
@@ -274,7 +277,7 @@ std::vector<uint32_t> prepare_batch(
 
 // Guards intact, and the first line of the first command and the last line of the last command hold the source.
 void expect_batch_sample(
-    IDevice* device,
+    distributed::MeshDevice& unit_mesh,
     const metal_SocDescriptor& soc,
     const GddrBatch& batch,
     const std::vector<uint32_t>& source,
@@ -284,14 +287,14 @@ void expect_batch_sample(
     const uint64_t view_offset = gddr_view_offset();
     const uint64_t region_bytes = static_cast<uint64_t>(batch.num_commands) * batch.len_bytes;
     std::vector<uint32_t> words;
-    EXPECT_TRUE(read_dram_view(device, soc, view, view_offset - kGuardBytes, kGuardBytes, words));
+    mimir_contract::read_gddr_view(unit_mesh, view, view_offset - kGuardBytes, kGuardBytes, words);
     EXPECT_EQ(words, make_guard(kLeadingGuardTag + tag)) << label << ": guard before the destination overwritten";
-    EXPECT_TRUE(read_dram_view(device, soc, view, view_offset + region_bytes, kGuardBytes, words));
+    mimir_contract::read_gddr_view(unit_mesh, view, view_offset + region_bytes, kGuardBytes, words);
     EXPECT_EQ(words, make_guard(tag)) << label << ": guard after the destination overwritten";
-    EXPECT_TRUE(read_dram_view(device, soc, view, view_offset, kGuardBytes, words));
+    mimir_contract::read_gddr_view(unit_mesh, view, view_offset, kGuardBytes, words);
     EXPECT_EQ(words, std::vector<uint32_t>(source.begin(), source.begin() + kGuardWords))
         << label << ": first line of command 0";
-    EXPECT_TRUE(read_dram_view(device, soc, view, view_offset + region_bytes - kGuardBytes, kGuardBytes, words));
+    mimir_contract::read_gddr_view(unit_mesh, view, view_offset + region_bytes - kGuardBytes, kGuardBytes, words);
     EXPECT_EQ(words, std::vector<uint32_t>(source.end() - kGuardWords, source.end()))
         << label << ": last line of the last command";
 }
@@ -345,14 +348,6 @@ std::string target_name(Target target) {
 }
 
 bool is_remote_target(Target target) { return target == Target::RemoteTl1 || target == Target::RemoteGddr; }
-
-uint32_t sibling_cce_of(uint32_t cce_index) {
-    return cce_index_for(mimir_index_for_cce(cce_index), (location_for_cce(cce_index) + 1) % kCcesPerMimir);
-}
-
-uint32_t remote_cce_of(uint32_t cce_index) {
-    return cce_index_for((mimir_index_for_cce(cce_index) + 1) % 2, location_for_cce(cce_index));
-}
 
 // MIM-407: a copy from the hart's own TL1 uses the destination's backend, any other copy kBackendFromRemote.
 uint32_t backend_for(Target source, Target destination) {
@@ -410,7 +405,7 @@ Endpoint region_base(const metal_SocDescriptor& soc, uint32_t cce_index, uint32_
         case Target::SiblingTl1:
             return {
                 .kind = EndpointKind::SramSpa,
-                .cce_index = sibling_cce_of(cce_index),
+                .cce_index = sibling_cce(cce_index),
                 .offset = tl1_remote_landing(cce_index, hart) + kGuardBytes};
         case Target::Gddr0:
             return {
@@ -425,12 +420,12 @@ Endpoint region_base(const metal_SocDescriptor& soc, uint32_t cce_index, uint32_
         case Target::RemoteTl1:
             return {
                 .kind = EndpointKind::SramSpa,
-                .cce_index = remote_cce_of(cce_index),
+                .cce_index = next_mimir_cce(cce_index),
                 .offset = tl1_remote_landing(cce_index, hart) + kGuardBytes};
         case Target::RemoteGddr:
             return {
                 .kind = EndpointKind::Gddr,
-                .view = base_dram_view_for_mimir(soc, (mimir_index + 1) % 2),
+                .view = base_dram_view_for_mimir(soc, next_mimir(mimir_index)),
                 .offset = gddr_offset};
     }
     return {};
@@ -462,19 +457,23 @@ Endpoint guard_before(const Endpoint& endpoint) {
 }
 
 void write_endpoint(
-    IDevice* device, const metal_SocDescriptor& soc, const Endpoint& endpoint, const std::vector<uint32_t>& words) {
+    distributed::MeshDevice& unit_mesh, IDevice* device, const Endpoint& endpoint, const std::vector<uint32_t>& words) {
     if (endpoint.kind == EndpointKind::Gddr) {
-        EXPECT_TRUE(write_dram_view(device, soc, endpoint.view, endpoint.offset, words));
+        mimir_contract::write_gddr_view(unit_mesh, endpoint.view, endpoint.offset, words);
     } else {
         write_cce_tl1(device, endpoint.cce_index, endpoint.offset, words);
     }
 }
 
 std::vector<uint32_t> read_endpoint(
-    IDevice* device, const metal_SocDescriptor& soc, const Endpoint& endpoint, uint64_t byte_offset, uint32_t bytes) {
+    distributed::MeshDevice& unit_mesh,
+    IDevice* device,
+    const Endpoint& endpoint,
+    uint64_t byte_offset,
+    uint32_t bytes) {
     std::vector<uint32_t> words;
     if (endpoint.kind == EndpointKind::Gddr) {
-        EXPECT_TRUE(read_dram_view(device, soc, endpoint.view, endpoint.offset + byte_offset, bytes, words));
+        mimir_contract::read_gddr_view(unit_mesh, endpoint.view, endpoint.offset + byte_offset, bytes, words);
     } else {
         words = read_cce_tl1(device, endpoint.cce_index, endpoint.offset + byte_offset, bytes);
     }
@@ -650,11 +649,12 @@ public:
     }
 
     // Seeds every region, writes its guards and records the configuration.
-    void write(IDevice* device) const {
+    void write(distributed::MeshDevice& unit_mesh, IDevice* device) const {
         for (const auto& [target, region] : regions_) {
-            write_endpoint(device, soc_, region.base, region.words);
-            write_endpoint(device, soc_, guard_before(region.base), leading_guard(target));
-            write_endpoint(device, soc_, offset_endpoint(region.base, region.words.size() * 4), trailing_guard(target));
+            write_endpoint(unit_mesh, device, region.base, region.words);
+            write_endpoint(unit_mesh, device, guard_before(region.base), leading_guard(target));
+            write_endpoint(
+                unit_mesh, device, offset_endpoint(region.base, region.words.size() * 4), trailing_guard(target));
         }
         std::string config;
         for (size_t index = 0; index < transfers_.size(); ++index) {
@@ -759,40 +759,41 @@ public:
     }
 
     // Every region a transfer writes holds the model's words, and every guard is intact.
-    void expect_landed(IDevice* device, const std::string& label) const {
+    void expect_landed(distributed::MeshDevice& unit_mesh, IDevice* device, const std::string& label) const {
         for (const auto& [target, region] : regions_) {
             const bool written = std::any_of(transfers_.begin(), transfers_.end(), [target](const Transfer& entry) {
                 return entry.destination == target;
             });
             if (written) {
-                expect_region(device, target, label);
+                expect_region(unit_mesh, device, target, label);
             }
         }
     }
 
-    void expect_region(IDevice* device, Target target, const std::string& label) const {
+    void expect_region(
+        distributed::MeshDevice& unit_mesh, IDevice* device, Target target, const std::string& label) const {
         const Region& region = regions_.at(target);
         EXPECT_TRUE(compare_with_recheck(
             fmt::format("MM43 {} {}", label, target_name(target)),
             name_ + "_" + target_name(target),
             final_model().at(target),
-            [this, device, &region](uint64_t byte_offset, uint32_t bytes) {
-                return read_endpoint(device, soc_, region.base, byte_offset, bytes);
+            [&unit_mesh, device, &region](uint64_t byte_offset, uint32_t bytes) {
+                return read_endpoint(unit_mesh, device, region.base, byte_offset, bytes);
             }))
             << label << " seed 0x" << std::hex << seed_;
         EXPECT_EQ(
-            read_endpoint(device, soc_, region.base, region.words.size() * 4, kGuardBytes), trailing_guard(target))
+            read_endpoint(unit_mesh, device, region.base, region.words.size() * 4, kGuardBytes), trailing_guard(target))
             << label << ": guard after " << target_name(target) << " overwritten";
-        EXPECT_EQ(read_endpoint(device, soc_, guard_before(region.base), 0, kGuardBytes), leading_guard(target))
+        EXPECT_EQ(read_endpoint(unit_mesh, device, guard_before(region.base), 0, kGuardBytes), leading_guard(target))
             << label << ": guard before " << target_name(target) << " overwritten";
     }
 
     // Words of `target` that differ from the model, with no recheck.
-    uint32_t mismatched_words(IDevice* device, Target target) const {
+    uint32_t mismatched_words(distributed::MeshDevice& unit_mesh, IDevice* device, Target target) const {
         const Region& region = regions_.at(target);
         const std::vector<uint32_t> expected = final_model().at(target);
         const std::vector<uint32_t> actual =
-            read_endpoint(device, soc_, region.base, 0, static_cast<uint32_t>(expected.size() * 4));
+            read_endpoint(unit_mesh, device, region.base, 0, static_cast<uint32_t>(expected.size() * 4));
         uint32_t mismatches = 0;
         for (size_t word = 0; word < expected.size(); ++word) {
             mismatches += expected[word] != actual[word] ? 1 : 0;
@@ -946,8 +947,12 @@ std::optional<std::vector<uint32_t>> run_launch(
 
 // Writes `scenario` and runs its transfer `index` as one kModeTridBatch launch, then checks status, trace and data.
 std::optional<std::vector<uint32_t>> run_scenario_batch(
-    IDevice* device, const TridScenario& scenario, size_t index, const std::string& label) {
-    scenario.write(device);
+    distributed::MeshDevice& unit_mesh,
+    IDevice* device,
+    const TridScenario& scenario,
+    size_t index,
+    const std::string& label) {
+    scenario.write(unit_mesh, device);
     const Transfer& batch = scenario.transfer(index);
     const std::string full_label = fmt::format("{}: {}", label, scenario.describe(index));
     const std::optional<std::vector<uint32_t>> status =
@@ -961,15 +966,15 @@ std::optional<std::vector<uint32_t>> run_scenario_batch(
             batch.num_commands,
             batch.used_trids(),
             full_label);
-        scenario.expect_landed(device, full_label);
+        scenario.expect_landed(unit_mesh, device, full_label);
     }
     return status;
 }
 
 // Writes `scenario` and its table and runs every transfer as one kModeTridTable launch, then checks it.
 std::optional<std::vector<uint32_t>> run_scenario_table(
-    IDevice* device, const TridScenario& scenario, const std::string& label) {
-    scenario.write(device);
+    distributed::MeshDevice& unit_mesh, IDevice* device, const TridScenario& scenario, const std::string& label) {
+    scenario.write(unit_mesh, device);
     scenario.write_table(device);
     const std::string full_label =
         fmt::format("{} on CCE{}: table of {} entries", label, scenario.cce_index(), scenario.num_transfers());
@@ -983,34 +988,39 @@ std::optional<std::vector<uint32_t>> run_scenario_table(
             static_cast<uint32_t>(scenario.num_transfers()),
             scenario.table_used_trids(),
             full_label);
-        scenario.expect_landed(device, full_label);
+        scenario.expect_landed(unit_mesh, device, full_label);
     }
     return status;
 }
 
 // "" when the descriptor has one Mimir (no remote legs) or the remote preflight passed.
 std::string remote_legs_skip_reason() {
-    if (topology_from(cluster_soc_desc()).num_mimirs < 2) {
+    if (topology_from(configured_soc_desc()).num_mimirs < 2) {
         return "";
     }
     return mimir_remote_preflight_result();
 }
 
-bool has_remote_mimir() { return topology_from(cluster_soc_desc()).num_mimirs >= 2; }
+bool has_remote_mimir() { return topology_from(configured_soc_desc()).num_mimirs >= 2; }
 
 class MimirTridProbe : public ::testing::TestWithParam<uint32_t> {
 protected:
     void SetUp() override {
-        MIMIR_SKIP_UNLESS_EMU();
+        skip_unless_programmable_dram_package();
         if (const std::string skip_reason = cce_skip_reason(GetParam()); !skip_reason.empty()) {
             GTEST_SKIP() << skip_reason;
         }
     }
 
     // Runs one GDDR batch on one hart and checks it landed; returns its status line, empty on the host deadline.
-    std::vector<uint32_t> run_batch(IDevice* device, const GddrBatch& batch, uint32_t tag, const std::string& label) {
+    std::vector<uint32_t> run_batch(
+        distributed::MeshDevice& unit_mesh,
+        IDevice* device,
+        const GddrBatch& batch,
+        uint32_t tag,
+        const std::string& label) {
         const metal_SocDescriptor& soc = soc_desc_of(device);
-        const std::vector<uint32_t> source = prepare_batch(device, soc, batch, tag);
+        const std::vector<uint32_t> source = prepare_batch(unit_mesh, device, soc, batch, tag);
         log_info(tt::LogTest, "MM43 {}", label);
         const std::optional<std::vector<std::vector<uint32_t>>> statuses =
             run_on_cce(device, batch.cce_index, {{batch.hart, batch_args(soc, batch)}});
@@ -1024,7 +1034,7 @@ protected:
         EXPECT_EQ(status[abi::kStatusCode], abi::kCodeLanded)
             << label << ": " << status_detail(status) << code_note(status[abi::kStatusCode]);
         EXPECT_EQ(status[abi::kStatusElementsIssued], batch.num_commands) << label;
-        expect_batch_sample(device, soc, batch, source, tag, label);
+        expect_batch_sample(unit_mesh, soc, batch, source, tag, label);
         return status;
     }
 };
@@ -1040,7 +1050,11 @@ TEST_P(MimirTridProbe, PendingVisible) {
     const GddrBatch batch{
         .cce_index = cce_index, .num_commands = 16, .len_bytes = abi::kMaxBytesInPacket, .first_trid = 3};
     const std::vector<uint32_t> status = run_batch(
-        device, batch, 1, fmt::format("PendingVisible on CCE{}: 16 x 8 KiB to local GDDR on trid 3", cce_index));
+        device_closer.mesh(),
+        device,
+        batch,
+        1,
+        fmt::format("PendingVisible on CCE{}: 16 x 8 KiB to local GDDR on trid 3", cce_index));
     if (!status.empty()) {
         RecordProperty("pending_high_water", static_cast<int>(status[abi::kStatusPendingHighWater]));
     }
@@ -1056,7 +1070,11 @@ TEST_P(MimirTridProbe, DepthBeyond16) {
     const GddrBatch batch{
         .cce_index = cce_index, .num_commands = 32, .len_bytes = 2048, .first_trid = 0, .trid_stride = 1};
     const std::vector<uint32_t> status = run_batch(
-        device, batch, 2, fmt::format("DepthBeyond16 on CCE{}: 32 x 2 KiB to local GDDR, trids 0-15 twice", cce_index));
+        device_closer.mesh(),
+        device,
+        batch,
+        2,
+        fmt::format("DepthBeyond16 on CCE{}: 32 x 2 KiB to local GDDR, trids 0-15 twice", cce_index));
     if (!status.empty()) {
         RecordProperty("vc_space_cycles", static_cast<int>(status[abi::kStatusVcSpaceCycles]));
         RecordProperty("pending_high_water", static_cast<int>(status[abi::kStatusPendingHighWater]));
@@ -1079,6 +1097,7 @@ TEST_P(MimirTridProbe, Width) {
         .len_bytes = abi::kMaxBytesInPacket,
         .first_trid = kWideTrid};
     const std::vector<uint32_t> status = run_batch(
+        device_closer.mesh(),
         device,
         batch,
         3,
@@ -1121,7 +1140,7 @@ TEST_P(MimirTridProbe, Scope) {
         .first_trid = kTrid,
         .peer_flag_offset = peer_flag_offset};
     const uint32_t tag = 4;
-    const std::vector<uint32_t> source = prepare_batch(device, soc, batch, tag);
+    const std::vector<uint32_t> source = prepare_batch(device_closer.mesh(), device, soc, batch, tag);
     write_cce_tl1(
         device, cce_index, peer_flag_offset, std::vector<uint32_t>(2 * abi::kLineBytes / sizeof(uint32_t), 0));
     const std::string label = fmt::format(
@@ -1145,7 +1164,7 @@ TEST_P(MimirTridProbe, Scope) {
     EXPECT_EQ(issuer[abi::kStatusCode], abi::kCodeLanded)
         << label << ": issuer " << status_detail(issuer) << code_note(issuer[abi::kStatusCode]);
     EXPECT_EQ(observer[abi::kStatusCode], abi::kCodeAcked) << label << ": observer " << status_detail(observer);
-    expect_batch_sample(device, soc, batch, source, tag, label);
+    expect_batch_sample(device_closer.mesh(), soc, batch, source, tag, label);
 
     const uint32_t issuer_before = issuer[abi::kStatusProbeFirst];
     const uint32_t issuer_after = issuer[abi::kStatusProbeSecond];
@@ -1160,7 +1179,7 @@ TEST_P(MimirTridProbe, Scope) {
     RecordProperty("trid_scope", result);
 }
 
-INSTANTIATE_TEST_SUITE_P(MM43, MimirTridProbe, ::testing::Range(0u, kMaxCces), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(MM43, MimirTridProbe, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 // Opens device 0 for one test and closes it at TearDown, or earlier with close_device().
 class MimirTridTest {
@@ -1182,7 +1201,7 @@ protected:
 class MimirTridIdma : public ::testing::TestWithParam<uint32_t>, protected MimirTridTest {
 protected:
     void SetUp() override {
-        MIMIR_SKIP_UNLESS_EMU();
+        skip_unless_programmable_dram_package();
         if (const std::string skip_reason = cce_skip_reason(GetParam()); !skip_reason.empty()) {
             GTEST_SKIP() << skip_reason;
         }
@@ -1197,6 +1216,7 @@ inline constexpr uint32_t kUniqueIdsCommandBytes = 512;
 // One kModeTridBatch launch per leg, each from its own scenario: kUniqueIdsCommands commands on trids 0-15. False once
 // a launch passed the host deadline.
 bool run_unique_id_legs(
+    distributed::MeshDevice& unit_mesh,
     IDevice* device,
     uint32_t cce_index,
     const std::vector<std::pair<Target, Target>>& legs,
@@ -1212,7 +1232,8 @@ bool run_unique_id_legs(
             kUniqueIdsCommands,
             /*first_trid=*/0,
             /*trid_stride=*/1);
-        if (!run_scenario_batch(device, scenario, batch, fmt::format("{} on CCE{}", name, cce_index)).has_value()) {
+        if (!run_scenario_batch(unit_mesh, device, scenario, batch, fmt::format("{} on CCE{}", name, cce_index))
+                 .has_value()) {
             return false;
         }
     }
@@ -1222,13 +1243,20 @@ bool run_unique_id_legs(
 // Per-command trids 0-15 from the hart's own TL1 into its own TL1 (MIM-407 backend 5).
 TEST_P(MimirTridIdma, UniqueIdsOwnTl1) {
     IDevice* device = open_device();
-    run_unique_id_legs(device, GetParam(), {{Target::OwnSource, Target::OwnDestination}}, "UniqueIdsOwnTl1", 0x10);
+    run_unique_id_legs(
+        device_closer_->mesh(),
+        device,
+        GetParam(),
+        {{Target::OwnSource, Target::OwnDestination}},
+        "UniqueIdsOwnTl1",
+        0x10);
 }
 
 // Per-command trids 0-15 to the sibling CCE's TL1 (backend 2) and back (backend 5).
 TEST_P(MimirTridIdma, UniqueIdsSiblingTl1) {
     IDevice* device = open_device();
     run_unique_id_legs(
+        device_closer_->mesh(),
         device,
         GetParam(),
         {{Target::OwnSource, Target::SiblingTl1}, {Target::SiblingTl1, Target::OwnDestination}},
@@ -1241,6 +1269,7 @@ TEST_P(MimirTridIdma, UniqueIdsSiblingTl1) {
 TEST_P(MimirTridIdma, UniqueIdsLocalGddr) {
     IDevice* device = open_device();
     run_unique_id_legs(
+        device_closer_->mesh(),
         device,
         GetParam(),
         {{Target::OwnSource, Target::Gddr0},
@@ -1257,6 +1286,7 @@ inline constexpr uint32_t kTableCommandBytes = 512;
 // (host-verified). Each entry has its own trid. Remote reads stay in MimirTridRemote: a table entry into the hart's own
 // TL1 that is host-verified gets no data poll, so the status store could overlap its landing (MIM-560).
 TEST_P(MimirTridIdma, MixedTargets) {
+    skip_unless_mimir_local_package();
     if (const std::string skip_reason = remote_legs_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -1281,7 +1311,7 @@ TEST_P(MimirTridIdma, MixedTargets) {
     for (uint32_t entry = 0; entry < entries.size(); ++entry) {
         scenario.add(entries[entry].first, entries[entry].second, kTableCommandBytes, 1, entry);
     }
-    run_scenario_table(device, scenario, "MixedTargets");
+    run_scenario_table(device_closer_->mesh(), device, scenario, "MixedTargets");
 }
 
 inline constexpr uint32_t kReuseWrapCommands = abi::kMaxElements;
@@ -1300,7 +1330,8 @@ TEST_P(MimirTridIdma, ReuseWrap) {
         kReuseWrapCommands,
         /*first_trid=*/0,
         /*trid_stride=*/1);
-    if (!run_scenario_batch(device, write_scenario, write_batch, fmt::format("ReuseWrap on CCE{}", GetParam()))
+    if (!run_scenario_batch(
+             device_closer_->mesh(), device, write_scenario, write_batch, fmt::format("ReuseWrap on CCE{}", GetParam()))
              .has_value()) {
         return;
     }
@@ -1312,7 +1343,8 @@ TEST_P(MimirTridIdma, ReuseWrap) {
         kReuseWrapCommands,
         /*first_trid=*/11,
         /*trid_stride=*/5);
-    run_scenario_batch(device, read_scenario, read_batch, fmt::format("ReuseWrap on CCE{}", GetParam()));
+    run_scenario_batch(
+        device_closer_->mesh(), device, read_scenario, read_batch, fmt::format("ReuseWrap on CCE{}", GetParam()));
 }
 
 // 16 commands outstanding on one trid: trid 9 writing GDDR0, then trid 15 writing the sibling CCE's TL1.
@@ -1322,8 +1354,8 @@ TEST_P(MimirTridIdma, DuplicateId) {
     TridScenario gddr_scenario(soc, "DuplicateId_gddr0", GetParam(), kTridHart, 0x58);
     const size_t gddr_batch = gddr_scenario.add(
         Target::OwnSource, Target::Gddr0, kUniqueIdsCommandBytes, kUniqueIdsCommands, /*first_trid=*/9);
-    const std::optional<std::vector<uint32_t>> gddr_status =
-        run_scenario_batch(device, gddr_scenario, gddr_batch, fmt::format("DuplicateId on CCE{}", GetParam()));
+    const std::optional<std::vector<uint32_t>> gddr_status = run_scenario_batch(
+        device_closer_->mesh(), device, gddr_scenario, gddr_batch, fmt::format("DuplicateId on CCE{}", GetParam()));
     if (!gddr_status.has_value()) {
         return;
     }
@@ -1331,8 +1363,12 @@ TEST_P(MimirTridIdma, DuplicateId) {
     TridScenario sibling_scenario(soc, "DuplicateId_sibling", GetParam(), kTridHart, 0x59);
     const size_t sibling_batch = sibling_scenario.add(
         Target::OwnSource, Target::SiblingTl1, kUniqueIdsCommandBytes, kUniqueIdsCommands, /*first_trid=*/15);
-    const std::optional<std::vector<uint32_t>> sibling_status =
-        run_scenario_batch(device, sibling_scenario, sibling_batch, fmt::format("DuplicateId on CCE{}", GetParam()));
+    const std::optional<std::vector<uint32_t>> sibling_status = run_scenario_batch(
+        device_closer_->mesh(),
+        device,
+        sibling_scenario,
+        sibling_batch,
+        fmt::format("DuplicateId on CCE{}", GetParam()));
     if (sibling_status.has_value()) {
         RecordProperty("sibling_pending_high_water", static_cast<int>((*sibling_status)[abi::kStatusPendingHighWater]));
     }
@@ -1343,6 +1379,7 @@ inline constexpr uint32_t kNominalDepthCommandBytes = 1024;
 // 16 trids outstanding back to back in one table: writes and reads alternating over GDDR0 and GDDR1 and, on 2x, writes
 // over D2D to the remote GDDR. Asserts a pending count was seen once MimirTridProbe.PendingVisible showed them.
 TEST_P(MimirTridIdma, NominalDepth) {
+    skip_unless_mimir_local_package();
     if (const std::string skip_reason = remote_legs_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -1364,7 +1401,8 @@ TEST_P(MimirTridIdma, NominalDepth) {
         const std::pair<Target, Target>& kind = kinds[trid % kinds.size()];
         scenario.add(kind.first, kind.second, kNominalDepthCommandBytes, 1, trid);
     }
-    const std::optional<std::vector<uint32_t>> status = run_scenario_table(device, scenario, "NominalDepth");
+    const std::optional<std::vector<uint32_t>> status =
+        run_scenario_table(device_closer_->mesh(), device, scenario, "NominalDepth");
     if (!status.has_value()) {
         return;
     }
@@ -1396,6 +1434,7 @@ std::vector<Target> saturate_destinations(bool remote) {
 // trid and the combined table more than one pending in total across its trids; every leg records its high water and
 // VC space stall cycles. Reads only the hart's own TL1.
 TEST_P(MimirTridIdma, Saturate) {
+    skip_unless_mimir_local_package();
     if (const std::string skip_reason = remote_legs_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -1419,8 +1458,12 @@ TEST_P(MimirTridIdma, Saturate) {
         TridScenario scenario(soc, fmt::format("Saturate_vc{}", backend), GetParam(), kTridHart, 0x68 + pool);
         const size_t batch = scenario.add_repeated(
             Target::OwnSource, destinations[pool], abi::kMaxBytesInPacket, kSaturateCommands, backend);
-        const std::optional<std::vector<uint32_t>> status =
-            run_scenario_batch(device, scenario, batch, fmt::format("Saturate VC {} on CCE{}", backend, GetParam()));
+        const std::optional<std::vector<uint32_t>> status = run_scenario_batch(
+            device_closer_->mesh(),
+            device,
+            scenario,
+            batch,
+            fmt::format("Saturate VC {} on CCE{}", backend, GetParam()));
         if (!status.has_value()) {
             return;
         }
@@ -1438,7 +1481,8 @@ TEST_P(MimirTridIdma, Saturate) {
             combined.add_sharing_slots(first_entry);
         }
     }
-    const std::optional<std::vector<uint32_t>> status = run_scenario_table(device, combined, "Saturate combined");
+    const std::optional<std::vector<uint32_t>> status =
+        run_scenario_table(device_closer_->mesh(), device, combined, "Saturate combined");
     if (status.has_value()) {
         // A trid's previous entry is a whole round back, so the per-trid high water was 1 (rv-zebu-08, 2026-10-22);
         // combined saturation is the total pending over every backend's trid.
@@ -1475,7 +1519,7 @@ TEST_P(MimirTridIdma, BarrierThenDependentReadAfterWrite) {
     scenario.set_host_verified(write_batch);
     const size_t read_batch = scenario.add_reading_destination_of(write_batch, Target::OwnDestination);
     scenario.set_host_verified(read_batch);
-    scenario.write(device);
+    scenario.write(device_closer_->mesh(), device);
 
     const std::string label = fmt::format("BarrierThenDependent ReadAfterWrite on CCE{}", GetParam());
     const std::optional<std::vector<uint32_t>> write_status =
@@ -1503,8 +1547,8 @@ TEST_P(MimirTridIdma, BarrierThenDependentReadAfterWrite) {
     EXPECT_TRUE(read_code == abi::kCodeAcked || read_code == abi::kCodeDataTimeout) << label << ": " << read_detail;
     EXPECT_EQ((*read_status)[abi::kStatusFlags] & abi::kFlagAcked, abi::kFlagAcked) << label << ": " << read_detail;
 
-    scenario.expect_region(device, Target::Gddr0, label);
-    const uint32_t stale_words = scenario.mismatched_words(device, Target::OwnDestination);
+    scenario.expect_region(device_closer_->mesh(), device, Target::Gddr0, label);
+    const uint32_t stale_words = scenario.mismatched_words(device_closer_->mesh(), device, Target::OwnDestination);
     log_info(tt::LogTest, "MM43 {}: dependent read saw {} stale words", label, stale_words);
     RecordProperty("dependent_stale_words", static_cast<int>(stale_words));
     RecordProperty("dependent_data_cycles", static_cast<int>((*read_status)[abi::kStatusDataCycles]));
@@ -1524,7 +1568,7 @@ TEST_P(MimirTridIdma, BarrierThenDependentWriteAfterRead) {
     scenario.set_host_verified(read_batch);
     const size_t write_batch = scenario.add_overwriting_source_of(read_batch);
     scenario.set_host_verified(write_batch);
-    scenario.write(device);
+    scenario.write(device_closer_->mesh(), device);
 
     const std::string label = fmt::format("BarrierThenDependent WriteAfterRead on CCE{}", GetParam());
     const std::optional<std::vector<uint32_t>> read_status =
@@ -1553,7 +1597,7 @@ TEST_P(MimirTridIdma, BarrierThenDependentWriteAfterRead) {
         kUniqueIdsCommands,
         scenario.transfer(write_batch).used_trids(),
         label + " dependent write");
-    scenario.expect_landed(device, label);
+    scenario.expect_landed(device_closer_->mesh(), device, label);
 }
 
 inline constexpr uint32_t kMultiHartCommands = 16;
@@ -1569,7 +1613,7 @@ TEST_P(MimirTridIdma, MultiHart) {
     const metal_SocDescriptor& soc = soc_desc_of(device);
     std::vector<std::unique_ptr<TridScenario>> scenarios;
     std::vector<CceKernelLaunch> launches;
-    for (uint32_t hart = 0; hart < kHartsPerCce; ++hart) {
+    for (uint32_t hart = 0; hart < cce_hart_count(); ++hart) {
         scenarios.push_back(
             std::make_unique<TridScenario>(soc, fmt::format("MultiHart_hart{}", hart), GetParam(), hart, 0x80 + hart));
         TridScenario& scenario = *scenarios.back();
@@ -1580,7 +1624,7 @@ TEST_P(MimirTridIdma, MultiHart) {
             kMultiHartCommands,
             kTridCountersPerHart ? 0 : 2 * hart,
             kTridCountersPerHart ? 1 : 0);
-        scenario.write(device);
+        scenario.write(device_closer_->mesh(), device);
         launches.push_back(scenario_launch(scenario, scenario.batch_args(0)));
     }
     RecordProperty("trid_partition", kTridCountersPerHart ? "every hart trids 0-15" : "hart h trid 2h");
@@ -1589,7 +1633,7 @@ TEST_P(MimirTridIdma, MultiHart) {
     const std::optional<std::vector<std::vector<uint32_t>>> statuses = run_kernels(device, launches);
     ASSERT_TRUE(statuses.has_value()) << label << ": no status after " << kHostDeadline.count() << " s"
                                       << kFreshSessionNote;
-    for (uint32_t hart = 0; hart < kHartsPerCce; ++hart) {
+    for (uint32_t hart = 0; hart < cce_hart_count(); ++hart) {
         const TridScenario& scenario = *scenarios[hart];
         const std::string hart_label = fmt::format("{} hart {}: {}", label, hart, scenario.describe(0));
         expect_status(
@@ -1600,7 +1644,7 @@ TEST_P(MimirTridIdma, MultiHart) {
             kMultiHartCommands,
             scenario.transfer(0).used_trids(),
             hart_label);
-        scenario.expect_landed(device, hart_label);
+        scenario.expect_landed(device_closer_->mesh(), device, hart_label);
     }
 }
 
@@ -1611,6 +1655,7 @@ inline constexpr uint32_t kFairnessTableEntries = 16;
 // and writes and, on 2x, D2D writes to the remote GDDR, all in one Program. Every source must finish; each one's VC
 // space and ack stalls are recorded. Only GDDR is written, so no CCE's TL1 takes a write while another stores status.
 TEST_P(MimirTridIdma, Fairness) {
+    skip_unless_mimir_local_package();
     if (const std::string skip_reason = remote_legs_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -1637,7 +1682,7 @@ TEST_P(MimirTridIdma, Fairness) {
         abi::kMaxElements,
         /*first_trid=*/0,
         /*trid_stride=*/1);
-    scenarios.back()->write(device);
+    scenarios.back()->write(device_closer_->mesh(), device);
     launches.push_back(scenario_launch(*scenarios.back(), scenarios.back()->batch_args(0)));
     expected_codes.push_back(abi::kCodeLanded);
     expected_commands.push_back(abi::kMaxElements);
@@ -1662,7 +1707,7 @@ TEST_P(MimirTridIdma, Fairness) {
             const std::pair<Target, Target>& kind = kinds[entry % kinds.size()];
             scenario.add(kind.first, kind.second, kTableCommandBytes, 1, entry);
         }
-        scenario.write(device);
+        scenario.write(device_closer_->mesh(), device);
         scenario.write_table(device);
         launches.push_back(scenario_launch(scenario, scenario.table_args()));
         expected_codes.push_back(scenario.table_success_code());
@@ -1687,7 +1732,7 @@ TEST_P(MimirTridIdma, Fairness) {
             expected_commands[source],
             used_trids[source],
             source_label);
-        scenario.expect_landed(device, source_label);
+        scenario.expect_landed(device_closer_->mesh(), device, source_label);
         RecordProperty(
             scenario.name() + "_stalls",
             fmt::format(
@@ -1705,6 +1750,7 @@ inline constexpr uint32_t kSoakMaxLines = 8;
 // wrap and repeat. Every round checks completion count, unique completion ranks, no trid left pending and the data,
 // and records its seed, per-trid use and stalls. Remote targets (2x) are written only, host-verified.
 TEST_P(MimirTridIdma, Soak) {
+    skip_unless_mimir_local_package();
     if (const std::string skip_reason = remote_legs_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -1741,7 +1787,7 @@ TEST_P(MimirTridIdma, Soak) {
             trid_uses[trid]++;
         }
         const std::optional<std::vector<uint32_t>> status =
-            run_scenario_table(device, scenario, fmt::format("Soak round {}", round));
+            run_scenario_table(device_closer_->mesh(), device, scenario, fmt::format("Soak round {}", round));
         if (!status.has_value()) {
             return;
         }
@@ -1758,11 +1804,14 @@ TEST_P(MimirTridIdma, Soak) {
     }
 }
 
-INSTANTIATE_TEST_SUITE_P(MM43, MimirTridIdma, ::testing::Range(0u, kMaxCces), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(MM43, MimirTridIdma, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 // One remote route from a source CCE to the CCE at its location on the other Mimir.
 std::string remote_route_name(const ::testing::TestParamInfo<uint32_t>& info) {
-    return fmt::format("Cce{}ToCce{}", info.param, remote_cce_of(info.param));
+    if (mimir_contract::selected_soc_desc_path() == nullptr) {
+        return cce_param_name(info);
+    }
+    return fmt::format("Cce{}ToCce{}", info.param, next_mimir_cce(info.param));
 }
 
 // 2x only, host-verified: 16 commands on trids 0-15 from the source CCE to the remote target over D2D (backend 3), and
@@ -1770,11 +1819,12 @@ std::string remote_route_name(const ::testing::TestParamInfo<uint32_t>& info) {
 class MimirTridRemote : public ::testing::TestWithParam<uint32_t>, protected MimirTridTest {
 protected:
     void SetUp() override {
-        MIMIR_SKIP_UNLESS_EMU();
+        skip_unless_programmable_dram_package();
+        skip_unless_mimir_local_package();
         if (const std::string watcher_reason = mimir_watcher_skip_reason(); !watcher_reason.empty()) {
             GTEST_SKIP() << watcher_reason;
         }
-        if (topology_from(cluster_soc_desc()).num_mimirs < 2) {
+        if (topology_from(configured_soc_desc()).num_mimirs < 2) {
             GTEST_SKIP() << "Remote trid cases need a 2x descriptor (two Mimirs).";
         }
         if (const std::string preflight = mimir_remote_preflight_result(); !preflight.empty()) {
@@ -1788,7 +1838,12 @@ protected:
         IDevice* device = open_device();
         ASSERT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
         run_unique_id_legs(
-            device, GetParam(), {{Target::OwnSource, target}, {target, Target::OwnDestination}}, name, tag);
+            device_closer_->mesh(),
+            device,
+            GetParam(),
+            {{Target::OwnSource, target}, {target, Target::OwnDestination}},
+            name,
+            tag);
     }
 };
 
@@ -1796,14 +1851,14 @@ TEST_P(MimirTridRemote, RemoteTl1) { run_remote(Target::RemoteTl1, "RemoteTl1", 
 
 TEST_P(MimirTridRemote, RemoteGddr) { run_remote(Target::RemoteGddr, "RemoteGddr", 0xC0 + GetParam() * 2); }
 
-INSTANTIATE_TEST_SUITE_P(MM43, MimirTridRemote, ::testing::Range(0u, kMaxCces), remote_route_name);
+INSTANTIATE_TEST_SUITE_P(MM43, MimirTridRemote, ::testing::ValuesIn(mimir_contract::cce_indices()), remote_route_name);
 
 // Hart reset and reload with TT_METAL_FORCE_REINIT=1 (as MM2 MimirFwReinit), quiesced first: no trid counter reads
 // pending after the reopen, and every trid 0-15 completes a command again.
 class MimirTridReset : public ::testing::TestWithParam<uint32_t>, protected MimirTridTest {
 protected:
     void SetUp() override {
-        MIMIR_SKIP_UNLESS_EMU();
+        skip_unless_programmable_dram_package();
         if (!MetalContext::instance().rtoptions().get_force_context_reinit()) {
             GTEST_SKIP() << "Set TT_METAL_FORCE_REINIT=1.";
         }
@@ -1830,7 +1885,11 @@ TEST_P(MimirTridReset, NoStaleIdAfterReinit) {
             /*first_trid=*/0,
             /*trid_stride=*/1);
         if (!run_scenario_batch(
-                 device, scenario, batch, fmt::format("NoStaleIdAfterReinit before reopen on CCE{}", cce_index))
+                 device_closer_->mesh(),
+                 device,
+                 scenario,
+                 batch,
+                 fmt::format("NoStaleIdAfterReinit before reopen on CCE{}", cce_index))
                  .has_value()) {
             return;
         }
@@ -1863,10 +1922,15 @@ TEST_P(MimirTridReset, NoStaleIdAfterReinit) {
         kUniqueIdsCommands,
         /*first_trid=*/0,
         /*trid_stride=*/1);
-    run_scenario_batch(device, scenario, batch, fmt::format("NoStaleIdAfterReinit after reopen on CCE{}", cce_index));
+    run_scenario_batch(
+        device_closer_->mesh(),
+        device,
+        scenario,
+        batch,
+        fmt::format("NoStaleIdAfterReinit after reopen on CCE{}", cce_index));
 }
 
-INSTANTIATE_TEST_SUITE_P(MM43, MimirTridReset, ::testing::Range(0u, kMaxCces), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(MM43, MimirTridReset, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 namespace gcb_abi = cce_gcb_receiver_abi;
 
@@ -1966,12 +2030,13 @@ private:
 class MimirTridConcurrent : public ::testing::TestWithParam<ConcurrentRoute> {
 protected:
     void SetUp() override {
-        MIMIR_SKIP_UNLESS_EMU();
+        skip_unless_programmable_dram_package();
+        skip_unless_mimir_local_package();
         if (const std::string watcher_reason = mimir_watcher_skip_reason(); !watcher_reason.empty()) {
             GTEST_SKIP() << watcher_reason;
         }
         const ConcurrentRoute& route = GetParam();
-        const uint32_t num_cces = topology_from(cluster_soc_desc()).num_cces;
+        const uint32_t num_cces = topology_from(configured_soc_desc()).num_cces;
         if (num_cces <= std::max({route.sender_cce, route.receiver_cce, route.stream_cce})) {
             GTEST_SKIP() << "WithPrefetcher needs a 2x descriptor; this one exposes " << num_cces << " CCEs.";
         }
@@ -2037,7 +2102,7 @@ TEST_P(MimirTridConcurrent, WithPrefetcher) {
         kStreamCommands,
         /*first_trid=*/0,
         /*trid_stride=*/1);
-    scenario.write(device);
+    scenario.write(*mesh, device);
     const uint64_t stop_offset = tl1_data(kTridHart) + kStopOffsetFromData;
     const uint64_t progress_offset = tl1_data(kTridHart) + kProgressOffsetFromData;
     write_cce_tl1(
@@ -2111,7 +2176,7 @@ TEST_P(MimirTridConcurrent, WithPrefetcher) {
         label + " trid stream");
     EXPECT_GE(stream_status[abi::kStatusProbeFirst], 1u) << label << ": the trid stream completed no round";
     RecordProperty("stream_rounds", static_cast<int>(stream_status[abi::kStatusProbeFirst]));
-    scenario.expect_landed(device, label + " trid stream");
+    scenario.expect_landed(*mesh, device, label + " trid stream");
 
     try {
         session->stop();

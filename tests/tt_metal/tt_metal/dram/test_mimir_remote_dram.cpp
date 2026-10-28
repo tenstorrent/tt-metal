@@ -40,8 +40,6 @@ inline constexpr uint64_t kRemoteGuardDistance = 4 * kGiB;
 inline constexpr uint32_t kMixedSlotBytes = 32 * 1024;
 inline constexpr uint32_t kMixedRemoteSlotBytes = 8 * 1024;
 inline constexpr uint32_t kTrafficReadBackTl1Offset = 64 * 1024;
-inline constexpr uint32_t kMaxMimirsInstantiated = 2;
-inline constexpr uint32_t kMaxViewsInstantiated = 4;
 inline constexpr std::array<uint32_t, 6> kTrafficSizeBytes = {4, 64, 124, 512, 4 * 1024, 32 * 1024};
 inline constexpr std::array<uint32_t, 5> kTrafficAlignments = {0, 4, 60, 124, static_cast<uint32_t>(kEmuPageBytes - 4)};
 // Test kinds salt the seeds and the pre-fill tags. AddressDerived and the constant patterns ignore the seed, so data
@@ -75,9 +73,17 @@ std::string remote_dram_source_name(const ::testing::TestParamInfo<RemoteDramSou
 
 std::vector<RemoteDramViewParam> remote_dram_view_params() {
     std::vector<RemoteDramViewParam> params;
-    for (uint32_t source_mimir = 0; source_mimir < kMaxMimirsInstantiated; ++source_mimir) {
-        for (uint32_t source_location = 0; source_location < kCcesPerMimir; ++source_location) {
-            for (uint32_t view = 0; view < kMaxViewsInstantiated; ++view) {
+    if (mimir_contract::selected_soc_desc_path() == nullptr) {
+        params.push_back(RemoteDramViewParam{});
+        return params;
+    }
+    const metal_SocDescriptor& soc = configured_soc_desc();
+    const uint32_t mimirs = static_cast<uint32_t>(soc.get_num_dram_channels());
+    const uint32_t locations = locations_per_channel(soc);
+    const uint32_t views = static_cast<uint32_t>(soc.get_num_dram_views());
+    for (uint32_t source_mimir = 0; source_mimir < mimirs; ++source_mimir) {
+        for (uint32_t source_location = 0; source_location < locations; ++source_location) {
+            for (uint32_t view = 0; view < views; ++view) {
                 params.push_back(RemoteDramViewParam{source_mimir, source_location, view});
             }
         }
@@ -87,8 +93,15 @@ std::vector<RemoteDramViewParam> remote_dram_view_params() {
 
 std::vector<RemoteDramSourceParam> remote_dram_source_params() {
     std::vector<RemoteDramSourceParam> params;
-    for (uint32_t source_mimir = 0; source_mimir < kMaxMimirsInstantiated; ++source_mimir) {
-        for (uint32_t source_location = 0; source_location < kCcesPerMimir; ++source_location) {
+    if (mimir_contract::selected_soc_desc_path() == nullptr) {
+        params.push_back(RemoteDramSourceParam{});
+        return params;
+    }
+    const metal_SocDescriptor& soc = configured_soc_desc();
+    const uint32_t mimirs = static_cast<uint32_t>(soc.get_num_dram_channels());
+    const uint32_t locations = locations_per_channel(soc);
+    for (uint32_t source_mimir = 0; source_mimir < mimirs; ++source_mimir) {
+        for (uint32_t source_location = 0; source_location < locations; ++source_location) {
             params.push_back(RemoteDramSourceParam{source_mimir, source_location});
         }
     }
@@ -125,6 +138,7 @@ std::string view_skip_reason(const MimirTopology& topology, const RemoteDramView
 }
 
 struct RemoteDramRun {
+    distributed::MeshDevice& unit_mesh;
     IDevice* device;
     const metal_SocDescriptor& soc;
     Cluster& cluster;
@@ -135,12 +149,19 @@ struct RemoteDramRun {
     uint32_t dest_mimir;
     uint32_t dest_view;
     uint64_t unreserved;
+    CceSpaRoutes source_routes;
 };
 
-RemoteDramRun make_run(IDevice* device, uint32_t source_mimir, uint32_t source_location, uint32_t dest_view) {
+RemoteDramRun make_run(
+    distributed::MeshDevice& unit_mesh,
+    IDevice* device,
+    uint32_t source_mimir,
+    uint32_t source_location,
+    uint32_t dest_view) {
     const metal_SocDescriptor& soc = soc_desc_of(device);
     const uint64_t unreserved = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
     return RemoteDramRun{
+        unit_mesh,
         device,
         soc,
         MetalContext::instance().get_cluster(),
@@ -150,7 +171,8 @@ RemoteDramRun make_run(IDevice* device, uint32_t source_mimir, uint32_t source_l
         cce_index_for(source_mimir, source_location),
         static_cast<uint32_t>(soc.get_channel_for_dram_view(static_cast<int>(dest_view))),
         dest_view,
-        unreserved};
+        unreserved,
+        mimir_contract::read_cce_spa_routes(device, cce_index_for(source_mimir, source_location))};
 }
 
 const MimirAnchor& anchor_named(const std::vector<MimirAnchor>& anchors, const std::string& name) {
@@ -172,6 +194,7 @@ std::string dram_label(uint32_t dest_mimir, uint32_t dest_view, uint64_t view_of
 }
 
 MimirTransferRecord make_gddr_record(
+    const CceSpaRoutes& source_routes,
     const metal_SocDescriptor& soc,
     uint32_t source_mimir,
     uint32_t dest_mimir,
@@ -180,18 +203,20 @@ MimirTransferRecord make_gddr_record(
     uint64_t chiplet_offset,
     uint32_t size_bytes,
     uint32_t seed) {
-    const AttEndpointPrediction endpoint = att_endpoint_for_remote_gddr(source_mimir);
+    const std::optional<AttEndpointPrediction> endpoint =
+        att_endpoint_for_remote_gddr(source_mimir, source_routes.gddr_d2d[dest_mimir]);
     MimirTransferRecord record;
     record.source = std::move(source);
     record.destination = std::move(destination);
-    record.requested_address = host_cce_gddr_address(soc, source_mimir, dest_mimir, chiplet_offset);
+    record.requested_address = mimir_contract::cce_gddr_address(source_routes, dest_mimir, chiplet_offset);
     record.destination_local_address = tt::umd::mimir_local_address_windows(soc).dram_base + chiplet_offset;
-    record.predicted_stages = {
-        {"issued SPA", record.requested_address},
-        {fmt::format("ATT endpoint {} (expected entry word 0x{:x})", endpoint.entry_index, endpoint.value),
-         endpoint.entry_index},
-        {"after SS_BAR2 (destination-local)", record.destination_local_address},
-    };
+    record.predicted_stages.emplace_back("issued SPA", record.requested_address);
+    if (endpoint.has_value()) {
+        record.predicted_stages.emplace_back(
+            fmt::format("ATT endpoint {} (expected entry word 0x{:x})", endpoint->entry_index, endpoint->value),
+            endpoint->entry_index);
+    }
+    record.predicted_stages.emplace_back("after SS_BAR2 (destination-local)", record.destination_local_address);
     record.length = size_bytes;
     record.alignment = static_cast<uint32_t>(record.requested_address % 64);
     record.crosses_d2d = source_mimir != dest_mimir;
@@ -321,64 +346,36 @@ bool expect_words(
     return true;
 }
 
-bool write_dram(
-    IDevice* device,
-    const metal_SocDescriptor& soc,
-    uint32_t view,
-    uint64_t view_offset,
-    const std::vector<uint32_t>& data,
-    const std::string& context) {
-    const ::testing::AssertionResult written = write_dram_view(device, soc, view, view_offset, data);
-    if (!written) {
-        ADD_FAILURE() << context << "\n" << written.message();
-        return false;
-    }
-    return true;
+void write_dram(
+    distributed::MeshDevice& unit_mesh, uint32_t view, uint64_t view_offset, const std::vector<uint32_t>& data) {
+    mimir_contract::write_gddr_view(unit_mesh, view, view_offset, data);
 }
 
 bool read_dram_and_expect(
-    IDevice* device,
-    const metal_SocDescriptor& soc,
+    distributed::MeshDevice& unit_mesh,
     uint32_t view,
     uint64_t view_offset,
     const std::vector<uint32_t>& expected,
     const std::string& context) {
     std::vector<uint32_t> actual;
-    const ::testing::AssertionResult read = read_dram_view(
-        device, soc, view, view_offset, static_cast<uint32_t>(expected.size() * sizeof(uint32_t)), actual);
-    if (!read) {
-        ADD_FAILURE() << context << "\n" << read.message();
-        return false;
-    }
+    mimir_contract::read_gddr_view(
+        unit_mesh, view, view_offset, static_cast<uint32_t>(expected.size() * sizeof(uint32_t)), actual);
     return expect_words("DRAM readback", expected, actual, context);
 }
 
-bool write_guards(const RemoteDramRun& run, const std::vector<GuardRegion>& guards) {
+void write_guards(const RemoteDramRun& run, const std::vector<GuardRegion>& guards) {
     for (const GuardRegion& guard : guards) {
-        if (!write_dram(
-                run.device,
-                run.soc,
-                guard.view,
-                guard.view_offset,
-                guard.expected,
-                guard.owner + "\nguard " + guard.label)) {
-            return false;
-        }
+        write_dram(run.unit_mesh, guard.view, guard.view_offset, guard.expected);
     }
-    return true;
 }
 
 bool check_guards(const RemoteDramRun& run, const std::vector<GuardRegion>& guards) {
     bool ok = true;
     for (const GuardRegion& guard : guards) {
-        ok = read_dram_and_expect(
-                 run.device,
-                 run.soc,
-                 guard.view,
-                 guard.view_offset,
-                 guard.expected,
-                 guard.owner + "\nguard " + guard.label) &&
-             ok;
+        ok =
+            read_dram_and_expect(
+                run.unit_mesh, guard.view, guard.view_offset, guard.expected, guard.owner + "\nguard " + guard.label) &&
+            ok;
     }
     return ok;
 }
@@ -552,6 +549,7 @@ RunOutcome write_from_tl1_anchor(
     std::vector<uint32_t> expected_xors;
     for (HartTransfer& transfer : transfers) {
         transfer.record = make_gddr_record(
+            run.source_routes,
             run.soc,
             run.source_mimir,
             run.dest_mimir,
@@ -561,16 +559,11 @@ RunOutcome write_from_tl1_anchor(
             kEveryAnchorBytes,
             transfer.seed);
         log_transfer(transfer.record);
-        if (!write_dram(
-                run.device,
-                run.soc,
-                run.dest_view,
-                transfer.view_offset,
-                make_seed_pattern(transfer.prefill_tag, kEveryAnchorWords),
-                transfer.record.to_string())) {
-            dump_debug_last(run.cluster, run.soc, run.chip);
-            return RunOutcome::Failed;
-        }
+        write_dram(
+            run.unit_mesh,
+            run.dest_view,
+            transfer.view_offset,
+            make_seed_pattern(transfer.prefill_tag, kEveryAnchorWords));
         write_cce_tl1(run.device, run.source_cce, transfer.tl1_offset, transfer.pattern);
         add_transfer_guards(run, transfer, guards, next_guard_tag);
 
@@ -584,11 +577,8 @@ RunOutcome write_from_tl1_anchor(
         expected_xors.push_back(xor_of(transfer.pattern));
     }
 
-    bool ok = write_guards(run, guards);
-    if (!ok) {
-        dump_debug_last(run.cluster, run.soc, run.chip);
-        return RunOutcome::Failed;
-    }
+    write_guards(run, guards);
+    bool ok = true;
 
     const D2dErrorSnapshot before = snapshot_d2d_errors(run.cluster, run.soc, run.chip);
     std::vector<CceCopyResult> results;
@@ -602,12 +592,7 @@ RunOutcome write_from_tl1_anchor(
 
     for (const HartTransfer& transfer : transfers) {
         ok = read_dram_and_expect(
-                 run.device,
-                 run.soc,
-                 run.dest_view,
-                 transfer.view_offset,
-                 transfer.pattern,
-                 transfer.record.to_string()) &&
+                 run.unit_mesh, run.dest_view, transfer.view_offset, transfer.pattern, transfer.record.to_string()) &&
              ok;
     }
     ok = check_guards(run, guards) && ok;
@@ -627,6 +612,7 @@ RunOutcome read_to_tl1_anchor(
     std::vector<uint32_t> expected_xors;
     for (HartTransfer& transfer : transfers) {
         transfer.record = make_gddr_record(
+            run.source_routes,
             run.soc,
             run.source_mimir,
             run.dest_mimir,
@@ -637,16 +623,7 @@ RunOutcome read_to_tl1_anchor(
             transfer.seed);
         add_transfer_guards(run, transfer, guards, next_guard_tag);
         log_transfer(transfer.record);
-        if (!write_dram(
-                run.device,
-                run.soc,
-                run.dest_view,
-                transfer.view_offset,
-                transfer.pattern,
-                transfer.record.to_string())) {
-            dump_debug_last(run.cluster, run.soc, run.chip);
-            return RunOutcome::Failed;
-        }
+        write_dram(run.unit_mesh, run.dest_view, transfer.view_offset, transfer.pattern);
         write_cce_tl1(run.device, run.source_cce, transfer.tl1_offset, make_guard(next_guard_tag++, kEveryAnchorWords));
 
         CceCopyLaunch launch;
@@ -659,10 +636,7 @@ RunOutcome read_to_tl1_anchor(
         expected_xors.push_back(xor_of(transfer.pattern));
     }
 
-    if (!write_guards(run, guards)) {
-        dump_debug_last(run.cluster, run.soc, run.chip);
-        return RunOutcome::Failed;
-    }
+    write_guards(run, guards);
 
     const D2dErrorSnapshot before = snapshot_d2d_errors(run.cluster, run.soc, run.chip);
     std::vector<CceCopyResult> results;
@@ -699,6 +673,7 @@ RunOutcome round_trip_anchor(
     for (HartTransfer& transfer : transfers) {
         const uint64_t tl1_b_offset = transfer.tl1_offset + kEveryAnchorBytes;
         transfer.record = make_gddr_record(
+            run.source_routes,
             run.soc,
             run.source_mimir,
             run.dest_mimir,
@@ -708,6 +683,7 @@ RunOutcome round_trip_anchor(
             kEveryAnchorBytes,
             transfer.seed);
         transfer.read_back_record = make_gddr_record(
+            run.source_routes,
             run.soc,
             run.source_mimir,
             run.dest_mimir,
@@ -719,16 +695,11 @@ RunOutcome round_trip_anchor(
         add_transfer_guards(run, transfer, guards, next_guard_tag);
         log_transfer(transfer.record);
         log_transfer(transfer.read_back_record);
-        if (!write_dram(
-                run.device,
-                run.soc,
-                run.dest_view,
-                transfer.view_offset,
-                make_seed_pattern(transfer.prefill_tag, kEveryAnchorWords),
-                transfer.record.to_string())) {
-            dump_debug_last(run.cluster, run.soc, run.chip);
-            return RunOutcome::Failed;
-        }
+        write_dram(
+            run.unit_mesh,
+            run.dest_view,
+            transfer.view_offset,
+            make_seed_pattern(transfer.prefill_tag, kEveryAnchorWords));
         write_cce_tl1(run.device, run.source_cce, transfer.tl1_offset, transfer.pattern);
         write_cce_tl1(run.device, run.source_cce, tl1_b_offset, make_guard(next_guard_tag++, kEveryAnchorWords));
 
@@ -750,10 +721,7 @@ RunOutcome round_trip_anchor(
         expected_xors.push_back(xor_of(transfer.pattern));
     }
 
-    if (!write_guards(run, guards)) {
-        dump_debug_last(run.cluster, run.soc, run.chip);
-        return RunOutcome::Failed;
-    }
+    write_guards(run, guards);
 
     const D2dErrorSnapshot before = snapshot_d2d_errors(run.cluster, run.soc, run.chip);
     std::vector<CceCopyResult> write_results;
@@ -768,9 +736,9 @@ RunOutcome round_trip_anchor(
         const std::vector<uint32_t> tl1_a =
             read_cce_tl1(run.device, run.source_cce, transfer.tl1_offset, kEveryAnchorBytes);
         ok = expect_words("TL1 A", transfer.pattern, tl1_a, write_context) && ok;
-        ok = read_dram_and_expect(
-                 run.device, run.soc, run.dest_view, transfer.view_offset, transfer.pattern, write_context) &&
-             ok;
+        ok =
+            read_dram_and_expect(run.unit_mesh, run.dest_view, transfer.view_offset, transfer.pattern, write_context) &&
+            ok;
     }
     if (write_outcome != RunOutcome::Passed) {
         // The write did not finish on every hart, so the read-back would not be ordered after it.
@@ -820,6 +788,7 @@ RunOutcome check_traffic_case(
         make_pattern(kAllMimirPatterns[case_index % kAllMimirPatterns.size()], words, chiplet_offset, seed);
     const uint64_t tl1_offset = tl1_data(hart);
     const MimirTransferRecord record = make_gddr_record(
+        run.source_routes,
         run.soc,
         run.source_mimir,
         run.dest_mimir,
@@ -845,11 +814,8 @@ RunOutcome check_traffic_case(
         next_guard_tag);
 
     write_cce_tl1(run.device, run.source_cce, tl1_offset, pattern);
-    if (!write_dram(
-            run.device, run.soc, run.dest_view, view_offset, make_guard(case_index + 1, words), record.to_string()) ||
-        !write_guards(run, guards)) {
-        return RunOutcome::Failed;
-    }
+    write_dram(run.unit_mesh, run.dest_view, view_offset, make_guard(case_index + 1, words));
+    write_guards(run, guards);
 
     CceCopyLaunch launch;
     launch.cce_index = run.source_cce;
@@ -867,7 +833,7 @@ RunOutcome check_traffic_case(
     bool ok = launched == RunOutcome::Passed;
     const D2dErrorSnapshot after = snapshot_d2d_errors(run.cluster, run.soc, run.chip);
     ok = expect_no_new_d2d_error_bits(before, after, record.to_string()) && ok;
-    ok = read_dram_and_expect(run.device, run.soc, run.dest_view, view_offset, pattern, record.to_string()) && ok;
+    ok = read_dram_and_expect(run.unit_mesh, run.dest_view, view_offset, pattern, record.to_string()) && ok;
     ok = check_guards(run, guards) && ok;
     if (!ok) {
         dump_debug_last(run.cluster, run.soc, run.chip);
@@ -880,6 +846,7 @@ RunOutcome check_traffic_case(
     write_cce_tl1(run.device, run.source_cce, tl1_b_offset, make_guard(next_guard_tag++, words));
     write_cce_tl1(run.device, run.source_cce, tl1_b_offset + size_bytes, tl1_guard);
     const MimirTransferRecord read_record = make_gddr_record(
+        run.source_routes,
         run.soc,
         run.source_mimir,
         run.dest_mimir,
@@ -945,7 +912,11 @@ struct MixedTransfer {
 // by source Mimir and location, so remote writes from different Mimirs never share an offset and the "source Mimir
 // same offset" decoy of one sender is not another sender's destination.
 std::vector<MixedTransfer> plan_mixed_transfers(
-    const metal_SocDescriptor& soc, uint64_t unreserved, uint32_t num_mimirs, uint32_t num_cces) {
+    const metal_SocDescriptor& soc,
+    const std::vector<CceSpaRoutes>& routes_by_cce,
+    uint64_t unreserved,
+    uint32_t num_mimirs,
+    uint32_t num_cces) {
     std::vector<MixedTransfer> transfers;
     for (uint32_t cce = 0; cce < num_cces; ++cce) {
         const uint32_t source_mimir = mimir_index_for_cce(cce);
@@ -956,8 +927,8 @@ std::vector<MixedTransfer> plan_mixed_transfers(
         const uint32_t remote_view = base_dram_view_for_mimir(soc, dest_mimir);
         const uint64_t local_offset = unreserved + static_cast<uint64_t>(location) * kMixedSlotBytes;
         const uint64_t remote_offset =
-            unreserved + 2 * static_cast<uint64_t>(kMixedSlotBytes) +
-            static_cast<uint64_t>(source_mimir * kCcesPerMimir + location) * kMixedRemoteSlotBytes;
+            unreserved + locations_per_channel(soc) * static_cast<uint64_t>(kMixedSlotBytes) +
+            static_cast<uint64_t>(cce_index_for(source_mimir, location)) * kMixedRemoteSlotBytes;
 
         for (uint32_t hart = 1; hart <= 3; ++hart) {
             MixedTransfer transfer;
@@ -992,6 +963,7 @@ std::vector<MixedTransfer> plan_mixed_transfers(
                 seed);
             if (transfer.target == MixedTransfer::Target::RemoteDram) {
                 transfer.record = make_gddr_record(
+                    routes_by_cce.at(cce),
                     soc,
                     source_mimir,
                     dest_mimir,
@@ -1003,6 +975,7 @@ std::vector<MixedTransfer> plan_mixed_transfers(
             } else if (transfer.target == MixedTransfer::Target::RemoteTl1) {
                 transfer.record = make_sram_record(
                     soc,
+                    routes_by_cce.at(cce),
                     source_tl1_label(source_mimir, location, hart, transfer.source_tl1_offset),
                     fmt::format("M{}.CCE{} TL1 0x{:x}", dest_mimir, location, transfer.dest_tl1_offset),
                     dest_cce,
@@ -1019,13 +992,11 @@ std::vector<MixedTransfer> plan_mixed_transfers(
 // Local DRAM, remote DRAM and remote TL1 writes on different harts, in both directions, in one program. The remote
 // DRAM writes have alias decoys. A second program then reads every destination back into TL1 B.
 TEST(MimirRemoteMixed, Concurrent) {
-    MIMIR_SKIP_UNLESS_EMU();
-    const MimirTopology topology = topology_from(cluster_soc_desc());
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
+    const MimirTopology topology = topology_from(configured_soc_desc());
     if (topology.num_mimirs < 2) {
         GTEST_SKIP() << "Remote DRAM needs two Mimirs; the descriptor has one.";
-    }
-    if (topology.num_cces < topology.num_mimirs * kCcesPerMimir) {
-        GTEST_SKIP() << "Descriptor does not expose two CCEs per Mimir.";
     }
     const std::string& preflight = mimir_remote_preflight_result();
     if (!preflight.empty()) {
@@ -1040,8 +1011,12 @@ TEST(MimirRemoteMixed, Concurrent) {
     Cluster& cluster = MetalContext::instance().get_cluster();
     const ChipId chip = device->id();
     const uint64_t unreserved = MetalContext::instance().hal().get_dev_addr(HalDramMemAddrType::UNRESERVED);
+    std::vector<CceSpaRoutes> routes_by_cce;
+    for (uint32_t cce = 0; cce < topology.num_cces; ++cce) {
+        routes_by_cce.push_back(mimir_contract::read_cce_spa_routes(device, cce));
+    }
     std::vector<MixedTransfer> transfers =
-        plan_mixed_transfers(soc, unreserved, topology.num_mimirs, topology.num_cces);
+        plan_mixed_transfers(soc, routes_by_cce, unreserved, topology.num_mimirs, topology.num_cces);
 
     uint32_t next_guard_tag = 1;
     std::vector<GuardRegion> decoys;
@@ -1054,7 +1029,7 @@ TEST(MimirRemoteMixed, Concurrent) {
         if (transfer.target == MixedTransfer::Target::RemoteTl1) {
             write_cce_tl1(device, transfer.dest_cce, transfer.dest_tl1_offset, guard);
         } else {
-            ASSERT_TRUE(write_dram_view(device, soc, transfer.dest_view, transfer.dest_view_offset, guard));
+            mimir_contract::write_gddr_view(device_closer.mesh(), transfer.dest_view, transfer.dest_view_offset, guard);
         }
         if (transfer.target != MixedTransfer::Target::LocalDram) {
             log_transfer(transfer.record);
@@ -1062,6 +1037,7 @@ TEST(MimirRemoteMixed, Concurrent) {
         }
         if (transfer.target == MixedTransfer::Target::RemoteDram) {
             const RemoteDramRun run = make_run(
+                device_closer.mesh(),
                 device,
                 mimir_index_for_cce(transfer.source_cce),
                 location_for_cce(transfer.source_cce),
@@ -1106,8 +1082,8 @@ TEST(MimirRemoteMixed, Concurrent) {
         }
     }
     if (!decoys.empty()) {
-        const RemoteDramRun decoy_run = make_run(device, 0, 0, decoys.front().view);
-        ASSERT_TRUE(write_guards(decoy_run, decoys));
+        const RemoteDramRun decoy_run = make_run(device_closer.mesh(), device, 0, 0, decoys.front().view);
+        write_guards(decoy_run, decoys);
     }
 
     const D2dErrorSnapshot before = snapshot_d2d_errors(cluster, soc, chip);
@@ -1130,12 +1106,12 @@ TEST(MimirRemoteMixed, Concurrent) {
                     ? fmt::format("local DRAM from CCE {} hart {}", transfer.source_cce, transfer.hart)
                     : transfer.record.to_string();
             ok = read_dram_and_expect(
-                     device, soc, transfer.dest_view, transfer.dest_view_offset, transfer.pattern, context) &&
+                     device_closer.mesh(), transfer.dest_view, transfer.dest_view_offset, transfer.pattern, context) &&
                  ok;
         }
     }
     if (!decoys.empty()) {
-        const RemoteDramRun decoy_run = make_run(device, 0, 0, decoys.front().view);
+        const RemoteDramRun decoy_run = make_run(device_closer.mesh(), device, 0, 0, decoys.front().view);
         ok = check_guards(decoy_run, decoys) && ok;
     }
     if (!ok) {
@@ -1160,6 +1136,7 @@ TEST(MimirRemoteMixed, Concurrent) {
                 sram_spa(transfer.dest_cce, transfer.dest_tl1_offset), own_tl1(tl1_b_offset), kEveryAnchorWords});
             const MimirTransferRecord read_record = make_sram_record(
                 soc,
+                routes_by_cce.at(transfer.source_cce),
                 fmt::format("M{}.CCE{} TL1 0x{:x}", transfer.dest_mimir, source_location, transfer.dest_tl1_offset),
                 source_tl1_label(source_mimir, source_location, transfer.hart, tl1_b_offset),
                 transfer.dest_cce,
@@ -1173,6 +1150,7 @@ TEST(MimirRemoteMixed, Concurrent) {
                 CopyOp{gddr(transfer.dest_mimir, transfer.chiplet_offset), own_tl1(tl1_b_offset), kEveryAnchorWords});
             if (transfer.target == MixedTransfer::Target::RemoteDram) {
                 const MimirTransferRecord read_record = make_gddr_record(
+                    routes_by_cce.at(transfer.source_cce),
                     soc,
                     source_mimir,
                     transfer.dest_mimir,
@@ -1217,9 +1195,10 @@ TEST(MimirRemoteMixed, Concurrent) {
 class MimirRemoteDram : public ::testing::TestWithParam<RemoteDramViewParam> {};
 
 TEST_P(MimirRemoteDram, WriteFromTl1) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     const RemoteDramViewParam param = GetParam();
-    const MimirTopology topology = topology_from(cluster_soc_desc());
+    const MimirTopology topology = topology_from(configured_soc_desc());
     const std::string skip_reason = view_skip_reason(topology, param);
     if (!skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
@@ -1233,7 +1212,8 @@ TEST_P(MimirRemoteDram, WriteFromTl1) {
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
-    const RemoteDramRun run = make_run(device, param.source_mimir, param.source_location, param.view);
+    const RemoteDramRun run =
+        make_run(device_closer.mesh(), device, param.source_mimir, param.source_location, param.view);
     const std::vector<MimirAnchor> anchors = mimir_dram_anchors(run.soc, run.dest_view, run.unreserved, false);
     uint32_t next_guard_tag = 1;
     for (uint32_t anchor_index = 0; anchor_index < anchors.size(); ++anchor_index) {
@@ -1244,9 +1224,10 @@ TEST_P(MimirRemoteDram, WriteFromTl1) {
 }
 
 TEST_P(MimirRemoteDram, ReadToTl1) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     const RemoteDramViewParam param = GetParam();
-    const MimirTopology topology = topology_from(cluster_soc_desc());
+    const MimirTopology topology = topology_from(configured_soc_desc());
     const std::string skip_reason = view_skip_reason(topology, param);
     if (!skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
@@ -1260,7 +1241,8 @@ TEST_P(MimirRemoteDram, ReadToTl1) {
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
-    const RemoteDramRun run = make_run(device, param.source_mimir, param.source_location, param.view);
+    const RemoteDramRun run =
+        make_run(device_closer.mesh(), device, param.source_mimir, param.source_location, param.view);
     const std::vector<MimirAnchor> anchors = mimir_dram_anchors(run.soc, run.dest_view, run.unreserved, false);
     uint32_t next_guard_tag = 1;
     for (uint32_t anchor_index = 0; anchor_index < anchors.size(); ++anchor_index) {
@@ -1271,9 +1253,10 @@ TEST_P(MimirRemoteDram, ReadToTl1) {
 }
 
 TEST_P(MimirRemoteDram, Tl1RoundTrip) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     const RemoteDramViewParam param = GetParam();
-    const MimirTopology topology = topology_from(cluster_soc_desc());
+    const MimirTopology topology = topology_from(configured_soc_desc());
     const std::string skip_reason = view_skip_reason(topology, param);
     if (!skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
@@ -1287,7 +1270,8 @@ TEST_P(MimirRemoteDram, Tl1RoundTrip) {
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
     ASSERT_EQ(device->arch(), tt::ARCH::QUASAR);
 
-    const RemoteDramRun run = make_run(device, param.source_mimir, param.source_location, param.view);
+    const RemoteDramRun run =
+        make_run(device_closer.mesh(), device, param.source_mimir, param.source_location, param.view);
     const std::vector<MimirAnchor> anchors = mimir_dram_anchors(run.soc, run.dest_view, run.unreserved, false);
     uint32_t next_guard_tag = 1;
     for (uint32_t anchor_index = 0; anchor_index < anchors.size(); ++anchor_index) {
@@ -1302,9 +1286,10 @@ class MimirRemoteDramTrafficMatrix : public ::testing::TestWithParam<RemoteDramS
 // One anchor per remote view, every size and alignment case. Each window starts and ends at least 64 B inside the
 // anchor, so its guards are inside the anchor too.
 TEST_P(MimirRemoteDramTrafficMatrix, TrafficMatrix) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     const RemoteDramSourceParam param = GetParam();
-    const MimirTopology topology = topology_from(cluster_soc_desc());
+    const MimirTopology topology = topology_from(configured_soc_desc());
     const std::string skip_reason = source_skip_reason(topology, param.source_mimir, param.source_location);
     if (!skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
@@ -1324,7 +1309,8 @@ TEST_P(MimirRemoteDramTrafficMatrix, TrafficMatrix) {
         if (topology.view_mimir[view] == param.source_mimir) {
             continue;
         }
-        const RemoteDramRun run = make_run(device, param.source_mimir, param.source_location, view);
+        const RemoteDramRun run =
+            make_run(device_closer.mesh(), device, param.source_mimir, param.source_location, view);
         const std::vector<MimirAnchor> anchors = mimir_dram_anchors(run.soc, view, run.unreserved, false);
         const MimirAnchor& anchor = anchor_named(anchors, "unres_g0");
         for (uint32_t size_bytes : kTrafficSizeBytes) {

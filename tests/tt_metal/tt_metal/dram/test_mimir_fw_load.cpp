@@ -40,7 +40,7 @@ constexpr uint64_t kFirmwareRegionEnd = MEM_CCE_MAP_END;
 constexpr uint64_t kFirmwareTextMaxBytes = MEM_CCE_FIRMWARE_SIZE;
 constexpr uint32_t kReinitCycles = 3;
 
-uint32_t emu_cce_count() { return topology_from(cluster_soc_desc()).num_cces; }
+uint32_t emu_cce_count() { return topology_from(configured_soc_desc()).num_cces; }
 
 const HalJitBuildConfig& cce_jit_build_config(uint32_t hart = 0) {
     const Hal& hal = MetalContext::instance().hal();
@@ -69,15 +69,14 @@ uint8_t read_go_signal(const tt::Cluster& cluster, ChipId chip, uint32_t cce_ind
     return go_message.view().signal();
 }
 
-CoreCoord read_core_info_xy(const tt::Cluster& cluster, ChipId chip, uint32_t cce_index) {
+CoreCoord read_core_info_xy(IDevice* device, uint32_t cce_index) {
     const Hal& hal = MetalContext::instance().hal();
     dev_msgs::core_info_msg_t core_info =
         hal.get_dev_msgs_factory(HalProgrammableCoreType::DRAM).create<dev_msgs::core_info_msg_t>();
     TT_FATAL(
         core_info.size() % sizeof(uint32_t) == 0, "core_info_msg_t is {} bytes, not whole words", core_info.size());
     const std::vector<uint32_t> words = read_cce_tl1(
-        cluster,
-        chip,
+        device,
         cce_index,
         hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::CORE_INFO),
         static_cast<uint32_t>(core_info.size()),
@@ -86,10 +85,9 @@ CoreCoord read_core_info_xy(const tt::Cluster& cluster, ChipId chip, uint32_t cc
     return {core_info.view().absolute_logical_x(), core_info.view().absolute_logical_y()};
 }
 
-uint64_t read_subordinate_sync(const tt::Cluster& cluster, ChipId chip, uint32_t cce_index) {
+uint64_t read_subordinate_sync(IDevice* device, uint32_t cce_index) {
     const std::vector<uint32_t> words = read_cce_tl1(
-        cluster,
-        chip,
+        device,
         cce_index,
         mailbox_field(dev_msgs::mailboxes_t::Field::subordinate_sync),
         sizeof(uint64_t),
@@ -97,15 +95,15 @@ uint64_t read_subordinate_sync(const tt::Cluster& cluster, ChipId chip, uint32_t
     return words[0] | (static_cast<uint64_t>(words[1]) << 32);
 }
 
-uint8_t read_globals_ready(const tt::Cluster& cluster, ChipId chip, uint32_t cce_index) {
+uint8_t read_globals_ready(IDevice* device, uint32_t cce_index) {
     const uint64_t offset = mailbox_field(dev_msgs::mailboxes_t::Field::fw_shared_globals_ready);
     const uint64_t aligned_offset = offset & ~uint64_t{sizeof(uint32_t) - 1};
     const std::vector<uint32_t> words =
-        read_cce_tl1(cluster, chip, cce_index, aligned_offset, sizeof(uint32_t), Tl1Range::WholeTl1);
+        read_cce_tl1(device, cce_index, aligned_offset, sizeof(uint32_t), Tl1Range::WholeTl1);
     return static_cast<uint8_t>((words[0] >> ((offset & 3) * 8)) & 0xFF);
 }
 
-uint32_t read_launch_enables(const tt::Cluster& cluster, ChipId chip, uint32_t cce_index) {
+uint32_t read_launch_enables(IDevice* device, uint32_t cce_index) {
     const Hal& hal = MetalContext::instance().hal();
     dev_msgs::launch_msg_t launch_message =
         hal.get_dev_msgs_factory(HalProgrammableCoreType::DRAM).create<dev_msgs::launch_msg_t>();
@@ -114,8 +112,7 @@ uint32_t read_launch_enables(const tt::Cluster& cluster, ChipId chip, uint32_t c
         "launch_msg_t is {} bytes, not whole words",
         launch_message.size());
     const std::vector<uint32_t> words = read_cce_tl1(
-        cluster,
-        chip,
+        device,
         cce_index,
         hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::LAUNCH),
         static_cast<uint32_t>(launch_message.size()),
@@ -124,28 +121,29 @@ uint32_t read_launch_enables(const tt::Cluster& cluster, ChipId chip, uint32_t c
     return launch_message.view().kernel_config().enables();
 }
 
-std::vector<uint32_t> read_mailbox(const tt::Cluster& cluster, ChipId chip, uint32_t cce_index) {
+std::vector<uint32_t> read_mailbox(IDevice* device, uint32_t cce_index) {
     const Hal& hal = MetalContext::instance().hal();
     return read_cce_tl1(
-        cluster,
-        chip,
+        device,
         cce_index,
         hal.get_dev_addr(HalProgrammableCoreType::DRAM, HalL1MemAddrType::MAILBOX),
         hal.get_dev_size(HalProgrammableCoreType::DRAM, HalL1MemAddrType::MAILBOX),
         Tl1Range::WholeTl1);
 }
 
-void expect_cce_initialized(const tt::Cluster& cluster, ChipId chip, uint32_t cce_index) {
+void expect_cce_initialized(IDevice* device, uint32_t cce_index) {
     const Hal& hal = MetalContext::instance().hal();
-    const metal_SocDescriptor& soc = cluster.get_soc_desc(chip);
+    const tt::Cluster& cluster = MetalContext::instance().get_cluster();
+    const ChipId chip = device->id();
+    const metal_SocDescriptor& soc = soc_desc_of(device);
     const uint32_t dram_core_type_index = hal.get_programmable_core_type_index(HalProgrammableCoreType::DRAM);
     const uint32_t expected_reset_vector = hal.get_jit_build_config(dram_core_type_index, 0, 0).fw_launch_addr_value;
 
-    EXPECT_EQ(read_globals_ready(cluster, chip, cce_index), dev_msgs::SHARED_GLOBALS_READY_GO) << "CCE " << cce_index;
-    EXPECT_EQ(read_subordinate_sync(cluster, chip, cce_index), dev_msgs::RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE)
+    EXPECT_EQ(read_globals_ready(device, cce_index), dev_msgs::SHARED_GLOBALS_READY_GO) << "CCE " << cce_index;
+    EXPECT_EQ(read_subordinate_sync(device, cce_index), dev_msgs::RUN_SYNC_MSG_ALL_SUBORDINATES_DMS_DONE)
         << "CCE " << cce_index;
-    const std::array<uint64_t, kHartsPerCce> reset_vectors = read_cce_reset_vectors(cluster, soc, chip, cce_index);
-    for (uint32_t hart = 0; hart < kHartsPerCce; ++hart) {
+    const std::vector<uint64_t> reset_vectors = read_cce_reset_vectors(cluster, soc, chip, cce_index);
+    for (uint32_t hart = 0; hart < cce_hart_count(); ++hart) {
         EXPECT_EQ(static_cast<uint32_t>(reset_vectors[hart]), expected_reset_vector)
             << "CCE " << cce_index << " hart " << hart << " low word of 0x" << std::hex << reset_vectors[hart];
     }
@@ -187,7 +185,8 @@ void zero_firmware_windows(const tt::Cluster& cluster) {
 // Defined first so that it is the first device open of its invocation: a later CreateDevice in the same process does
 // not reload firmware.
 TEST(MimirFwLoad, LoadAndReachInitDone) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     if (const std::string skip_reason = mimir_watcher_skip_reason(); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
@@ -196,7 +195,7 @@ TEST(MimirFwLoad, LoadAndReachInitDone) {
     ScopedDevice device_guard;
     IDevice* device = device_guard.device();
     for (uint32_t cce_index = 0; cce_index < emu_cce_count(); ++cce_index) {
-        expect_cce_initialized(cluster, kFwLoadChip, cce_index);
+        expect_cce_initialized(device, cce_index);
     }
 
     const MetalContext& context = MetalContext::instance();
@@ -213,8 +212,7 @@ TEST(MimirFwLoad, LoadAndReachInitDone) {
     ASSERT_NE(text_span_iterator, spans.end()) << "no span starts at the firmware base (fw_base_addr)";
     for (uint32_t cce_index = 0; cce_index < emu_cce_count(); ++cce_index) {
         const std::vector<uint32_t> readback = read_cce_tl1(
-            cluster,
-            device->id(),
+            device,
             cce_index,
             text_span_iterator->tl1_offset,
             static_cast<uint32_t>(text_span_iterator->words.size() * sizeof(uint32_t)),
@@ -224,7 +222,7 @@ TEST(MimirFwLoad, LoadAndReachInitDone) {
 }
 
 TEST(MimirFwLoad, ImageManifest) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
     ScopedDevice device_guard;
     IDevice* device = device_guard.device();
 
@@ -283,18 +281,18 @@ TEST(MimirFwLoad, ImageManifest) {
 }
 
 TEST(MimirFwLoad, AllCcesIndependent) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     const uint32_t cce_count = emu_cce_count();
     if (cce_count < 2) {
         GTEST_SKIP() << "Configured descriptor exposes " << cce_count << " CCEs.";
     }
     ScopedDevice device_guard;
     IDevice* device = device_guard.device();
-    const tt::Cluster& cluster = MetalContext::instance().get_cluster();
 
     for (uint32_t cce_index = 0; cce_index < cce_count; ++cce_index) {
         const CoreCoord expected_translated_core = translated_dram_core(soc_desc_of(device), cce_index);
-        const CoreCoord core_info_xy = read_core_info_xy(cluster, device->id(), cce_index);
+        const CoreCoord core_info_xy = read_core_info_xy(device, cce_index);
         EXPECT_EQ(core_info_xy.x, static_cast<uint8_t>(expected_translated_core.x)) << "CCE " << cce_index;
         EXPECT_EQ(core_info_xy.y, static_cast<uint8_t>(expected_translated_core.y)) << "CCE " << cce_index;
     }
@@ -303,7 +301,7 @@ TEST(MimirFwLoad, AllCcesIndependent) {
         std::vector<std::vector<uint32_t>> mailboxes_before(cce_count);
         for (uint32_t other_cce = 0; other_cce < cce_count; ++other_cce) {
             if (other_cce != launched_cce) {
-                mailboxes_before[other_cce] = read_mailbox(cluster, device->id(), other_cce);
+                mailboxes_before[other_cce] = read_mailbox(device, other_cce);
             }
         }
 
@@ -314,7 +312,7 @@ TEST(MimirFwLoad, AllCcesIndependent) {
                 EXPECT_TRUE(compare_words(
                     fmt::format("CCE {} mailbox while CCE {} ran", other_cce, launched_cce),
                     mailboxes_before[other_cce],
-                    read_mailbox(cluster, device->id(), other_cce)));
+                    read_mailbox(device, other_cce)));
             }
         }
     }
@@ -323,14 +321,14 @@ TEST(MimirFwLoad, AllCcesIndependent) {
 class MimirFwLaunch : public ::testing::TestWithParam<uint32_t> {};
 
 TEST_P(MimirFwLaunch, NoOpLaunchCompletes) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     const uint32_t cce_index = GetParam();
     if (cce_index >= emu_cce_count()) {
         GTEST_SKIP() << "Configured descriptor exposes only " << emu_cce_count() << " CCEs.";
     }
     ScopedDevice device_guard;
     IDevice* device = device_guard.device();
-    const tt::Cluster& cluster = MetalContext::instance().get_cluster();
 
     Program program = CreateProgram();
     add_null_kernel(program, device, cce_index);
@@ -338,12 +336,13 @@ TEST_P(MimirFwLaunch, NoOpLaunchCompletes) {
     for (uint32_t repeat = 0; repeat < kLaunchRepeats; ++repeat) {
         launch_program_and_wait(device, program);
         // The firmware skips a kernel whose enable bit is clear and still reports DONE.
-        EXPECT_NE(read_launch_enables(cluster, device->id(), cce_index), 0u) << "launch " << repeat;
+        EXPECT_NE(read_launch_enables(device, cce_index), 0u) << "launch " << repeat;
     }
 }
 
 TEST(MimirFwReinit, ReloadsOnEveryOpen) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     if (!MetalContext::instance().rtoptions().get_force_context_reinit()) {
         GTEST_SKIP() << "Set TT_METAL_FORCE_REINIT=1.";
     }
@@ -359,25 +358,23 @@ TEST(MimirFwReinit, ReloadsOnEveryOpen) {
     for (uint32_t cycle = 0; cycle < kReinitCycles; ++cycle) {
         ScopedDevice device_guard;
         IDevice* device = device_guard.device();
-        const tt::Cluster& cluster = MetalContext::instance().get_cluster();
 
         for (uint32_t cce_index = 0; cce_index < cce_count; ++cce_index) {
-            expect_cce_initialized(cluster, device->id(), cce_index);
-            EXPECT_EQ(read_launch_enables(cluster, device->id(), cce_index), 0u)
-                << "cycle " << cycle << " CCE " << cce_index;
+            expect_cce_initialized(device, cce_index);
+            EXPECT_EQ(read_launch_enables(device, cce_index), 0u) << "cycle " << cycle << " CCE " << cce_index;
         }
 
         launch_null_kernel(device, all_cces);
 
         for (uint32_t cce_index = 0; cce_index < cce_count; ++cce_index) {
-            EXPECT_NE(read_launch_enables(cluster, device->id(), cce_index), 0u)
-                << "cycle " << cycle << " CCE " << cce_index;
+            EXPECT_NE(read_launch_enables(device, cce_index), 0u) << "cycle " << cycle << " CCE " << cce_index;
         }
     }
 }
 
 TEST(MimirFwLoadNegative, SkipLoadNeverDone) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     const llrt::RunTimeOptions& rtoptions = MetalContext::instance().rtoptions();
     if (!rtoptions.get_skip_loading_fw()) {
         GTEST_SKIP() << "Set TT_METAL_SKIP_LOADING_FW=1.";
@@ -406,6 +403,6 @@ TEST(MimirFwLoadNegative, SkipLoadNeverDone) {
     }
 }
 
-INSTANTIATE_TEST_SUITE_P(MM2, MimirFwLaunch, ::testing::Range(0u, kMaxCces), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(MM2, MimirFwLaunch, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 }  // namespace tt::tt_metal::mimir_test::fw_load

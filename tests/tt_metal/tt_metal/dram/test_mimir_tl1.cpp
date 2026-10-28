@@ -97,7 +97,17 @@ std::string local_pair_name(const ::testing::TestParamInfo<LocalPair>& info) {
 
 std::string remote_pair_name(const ::testing::TestParamInfo<RemotePair>& info) { return remote_pair_label(info.param); }
 
-std::vector<LocalPair> same_chiplet_pairs() { return {{0, 1}, {1, 0}, {2, 3}, {3, 2}}; }
+// Each CCE to the next CCE on its Mimir.
+std::vector<LocalPair> same_chiplet_pairs() {
+    if (mimir_contract::selected_soc_desc_path() == nullptr) {
+        return {{0, 0}};
+    }
+    std::vector<LocalPair> pairs;
+    for (uint32_t cce_index : mimir_contract::cce_indices()) {
+        pairs.push_back({cce_index, sibling_cce(cce_index)});
+    }
+    return pairs;
+}
 
 std::vector<RemotePair> direct_remote_pairs() { return {{0, 1, 1, 0}, {1, 0, 0, 1}}; }
 
@@ -110,23 +120,23 @@ std::string local_skip_reason(const LocalPair& pair) {
     if (!watcher_reason.empty()) {
         return watcher_reason;
     }
-    const MimirTopology topology = topology_from(cluster_soc_desc());
-    const uint32_t highest_cce = std::max(pair.source_cce, pair.destination_cce);
-    if (highest_cce >= topology.num_cces) {
-        return fmt::format("Descriptor exposes {} CCEs; this pair needs CCE {}.", topology.num_cces, highest_cce);
+    if (pair.source_cce == pair.destination_cce) {
+        return "Descriptor has one CCE per Mimir; local TL1 needs two.";
     }
     return "";
 }
 
 // Topology first, then mimir_remote_preflight_result(), which reads the Cluster. Both run before any device is opened.
 std::string remote_skip_reason(const RemotePair& pair) {
-    const MimirTopology topology = topology_from(cluster_soc_desc());
+    const MimirTopology topology = topology_from(configured_soc_desc());
     if (topology.num_mimirs < 2) {
         return "Remote TL1 tests need a 2x descriptor (two Mimirs).";
     }
-    const uint32_t highest_cce = std::max(pair.source_cce(), pair.destination_cce());
-    if (highest_cce >= topology.num_cces) {
-        return fmt::format("Descriptor exposes {} CCEs; this pair needs CCE {}.", topology.num_cces, highest_cce);
+    const uint32_t cces_per_mimir = locations_per_channel(configured_soc_desc());
+    const uint32_t highest_location = std::max(pair.source_location, pair.destination_location);
+    if (highest_location >= cces_per_mimir) {
+        return fmt::format(
+            "Descriptor has {} CCEs per Mimir; this pair needs location {}.", cces_per_mimir, highest_location);
     }
     return mimir_remote_preflight_result();
 }
@@ -319,6 +329,10 @@ void run_remote_transfers(
     const metal_SocDescriptor& soc = soc_desc_of(device);
     const ChipId chip = device->id();
     const uint32_t num_cces = num_cces_from_soc(soc);
+    std::vector<CceSpaRoutes> routes_by_cce;
+    for (uint32_t cce = 0; cce < num_cces; ++cce) {
+        routes_by_cce.push_back(mimir_contract::read_cce_spa_routes(device, cce));
+    }
 
     std::vector<PreparedTransfer> prepared;
     for (const RemoteTransfer& transfer : transfers) {
@@ -333,6 +347,7 @@ void run_remote_transfers(
         item.expected = make_pattern(transfer.pattern, words, item.source_offset, seed);
         item.write_record = make_sram_record(
             soc,
+            routes_by_cce.at(transfer.source_cce),
             fmt::format(
                 "{} hart {} {}",
                 endpoint_name(transfer.source_cce, item.source_offset),
@@ -345,6 +360,7 @@ void run_remote_transfers(
             seed);
         item.read_record = make_sram_record(
             soc,
+            routes_by_cce.at(transfer.source_cce),
             endpoint_name(transfer.destination_cce, item.landing_offset),
             fmt::format(
                 "{} hart {} {}",
@@ -488,6 +504,7 @@ void run_remote_host_init_read(IDevice* device, const RemotePair& pair) {
         MimirTransferRecord record;
     };
 
+    const CceSpaRoutes source_routes = mimir_contract::read_cce_spa_routes(device, source);
     std::vector<HostFilledRead> reads;
     for (uint32_t hart = 0; hart < cce_hart_count(); ++hart) {
         HostFilledRead read;
@@ -500,6 +517,7 @@ void run_remote_host_init_read(IDevice* device, const RemotePair& pair) {
         read.expected = make_pattern(MimirPattern::Prng, read.size_bytes / 4, read.landing_offset, seed);
         read.record = make_sram_record(
             soc,
+            source_routes,
             endpoint_name(destination, read.landing_offset),
             fmt::format("{} hart {}", endpoint_name(source, read.copy_offset), hart),
             destination,
@@ -578,7 +596,8 @@ void run_remote_size_alignment(IDevice* device, const RemotePair& pair) {
 class MimirLocalTl1 : public ::testing::TestWithParam<LocalPair> {};
 
 TEST_P(MimirLocalTl1, SameChipletControl) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     const LocalPair pair = GetParam();
     if (const std::string skip_reason = local_skip_reason(pair); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
@@ -593,7 +612,8 @@ INSTANTIATE_TEST_SUITE_P(MM5, MimirLocalTl1, ::testing::ValuesIn(same_chiplet_pa
 class MimirRemoteTl1Direct : public ::testing::TestWithParam<RemotePair> {};
 
 TEST_P(MimirRemoteTl1Direct, WriteRead) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     const RemotePair pair = GetParam();
     if (const std::string skip_reason = remote_skip_reason(pair); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
@@ -605,7 +625,8 @@ TEST_P(MimirRemoteTl1Direct, WriteRead) {
 }
 
 TEST_P(MimirRemoteTl1Direct, HostInitRemoteRead) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     const RemotePair pair = GetParam();
     if (const std::string skip_reason = remote_skip_reason(pair); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
@@ -617,7 +638,8 @@ TEST_P(MimirRemoteTl1Direct, HostInitRemoteRead) {
 }
 
 TEST_P(MimirRemoteTl1Direct, SizeAlignment) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     const RemotePair pair = GetParam();
     if (const std::string skip_reason = remote_skip_reason(pair); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
@@ -633,7 +655,8 @@ INSTANTIATE_TEST_SUITE_P(MM5, MimirRemoteTl1Direct, ::testing::ValuesIn(direct_r
 class MimirRemoteTl1Routed : public ::testing::TestWithParam<RemotePair> {};
 
 TEST_P(MimirRemoteTl1Routed, WriteRead) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     const RemotePair pair = GetParam();
     if (const std::string skip_reason = remote_skip_reason(pair); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
@@ -645,7 +668,8 @@ TEST_P(MimirRemoteTl1Routed, WriteRead) {
 }
 
 TEST_P(MimirRemoteTl1Routed, HostInitRemoteRead) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     const RemotePair pair = GetParam();
     if (const std::string skip_reason = remote_skip_reason(pair); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
@@ -657,7 +681,8 @@ TEST_P(MimirRemoteTl1Routed, HostInitRemoteRead) {
 }
 
 TEST_P(MimirRemoteTl1Routed, SizeAlignment) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     const RemotePair pair = GetParam();
     if (const std::string skip_reason = remote_skip_reason(pair); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
@@ -674,7 +699,8 @@ INSTANTIATE_TEST_SUITE_P(MM5, MimirRemoteTl1Routed, ::testing::ValuesIn(routed_r
 class MimirRemoteTl1Bidir : public ::testing::Test {};
 
 TEST_F(MimirRemoteTl1Bidir, Concurrent) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     const std::vector<RemotePair> pairs = direct_remote_pairs();
     if (const std::string skip_reason = remote_skip_reason(pairs.front()); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
@@ -692,22 +718,27 @@ TEST_F(MimirRemoteTl1Bidir, Concurrent) {
 // hart. Each destination CCE is treated as the excluded CCE for its own transfers.
 // Plain TEST, not a fixture: test_mimir_remote_dram.cpp defines MimirRemoteMixed.Concurrent under the same suite name.
 TEST(MimirRemoteMixed, FanOutFanIn) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     if (const std::string skip_reason = remote_skip_reason(RemotePair{0, 0, 1, 1}); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
     }
     ScopedDevice device_closer;
     IDevice* device = device_closer.device();
     EXPECT_TRUE(mimir_remote_remap_result().empty()) << mimir_remote_remap_result();
+    const uint32_t mimir0_cce0 = cce_index_for(0, 0);
+    const uint32_t mimir0_cce1 = cce_index_for(0, 1);
+    const uint32_t mimir1_cce0 = cce_index_for(1, 0);
+    const uint32_t mimir1_cce1 = cce_index_for(1, 1);
     const std::vector<RemoteTransfer> transfers = {
-        {.source_cce = 1, .hart = 0, .destination_cce = 2, .size_bytes = 1024},
-        {.source_cce = 1, .hart = 1, .destination_cce = 3, .size_bytes = 2048},
-        {.source_cce = 0, .hart = 0, .destination_cce = 3, .size_bytes = 512},
-        {.source_cce = 1, .hart = 2, .destination_cce = 3, .size_bytes = 4096},
-        {.source_cce = 2, .hart = 0, .destination_cce = 1, .size_bytes = 1024},
-        {.source_cce = 2, .hart = 1, .destination_cce = 0, .size_bytes = 2048},
-        {.source_cce = 3, .hart = 0, .destination_cce = 0, .size_bytes = 512},
-        {.source_cce = 2, .hart = 2, .destination_cce = 0, .size_bytes = 4096},
+        {.source_cce = mimir0_cce1, .hart = 0, .destination_cce = mimir1_cce0, .size_bytes = 1024},
+        {.source_cce = mimir0_cce1, .hart = 1, .destination_cce = mimir1_cce1, .size_bytes = 2048},
+        {.source_cce = mimir0_cce0, .hart = 0, .destination_cce = mimir1_cce1, .size_bytes = 512},
+        {.source_cce = mimir0_cce1, .hart = 2, .destination_cce = mimir1_cce1, .size_bytes = 4096},
+        {.source_cce = mimir1_cce0, .hart = 0, .destination_cce = mimir0_cce1, .size_bytes = 1024},
+        {.source_cce = mimir1_cce0, .hart = 1, .destination_cce = mimir0_cce0, .size_bytes = 2048},
+        {.source_cce = mimir1_cce1, .hart = 0, .destination_cce = mimir0_cce0, .size_bytes = 512},
+        {.source_cce = mimir1_cce0, .hart = 2, .destination_cce = mimir0_cce0, .size_bytes = 4096},
     };
     run_remote_transfers(device, transfers, /*read_back=*/true, "MimirRemoteMixed.FanOutFanIn");
 }

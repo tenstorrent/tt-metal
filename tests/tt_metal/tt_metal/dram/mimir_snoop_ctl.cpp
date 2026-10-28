@@ -16,6 +16,7 @@
 #pragma push_macro("CCE_RESET_VECTOR_BASE")
 #undef CCE_RESET_VECTOR_BASE
 #include "umd/device/arch/grendel_implementation.hpp"
+#include "umd/device/coordinates/grendel_noc_address_resolver.hpp"
 namespace tt::tt_metal::mimir_test::snoop_ctl_impl {
 // SMC view of CCE0's tt_cluster_ctrl register plane: its first register is RESET_VECTOR_0 (CCE-local 0x03000000).
 inline constexpr uint64_t kClusterCtrlBaseAddress = tt::umd::grendel::CCE_RESET_VECTOR_BASE;
@@ -28,24 +29,24 @@ namespace snoop_ctl_impl {
 
 inline constexpr uint64_t kRemapBaseAddress = tt::umd::grendel::CCE_DMRISC_REMAP_BASE;
 inline constexpr uint64_t kRemapEntryStride = tt::umd::grendel::CCE_DMRISC_REMAP_ENTRY_STRIDE;
-// Per location within a Mimir, as mimir_hw_state.cpp composes it.
-inline constexpr uint64_t kCceLocationStride = tt::umd::grendel::CCE_WITHIN_TILE_STRIDE;
-// Entry 1 is the local Mimir's SRAM window (mimir_hw_state.cpp cce_remap_entry_values).
+// Entry 1 is the local Mimir's SRAM window (UMD cce_dmrisc_remap_entries).
 inline constexpr uint64_t kSramRemapEntry = 1;
 inline constexpr uint64_t kRemapAttrsOffset = 0x18;
 // NOC_SNOOP_TL_MASTER_CFG offset in tt_cluster_ctrl (tt-2.0.0 tt_cluster_ctrl_reg.h, CCE-local 0x03000124).
 inline constexpr uint64_t kSnoopMasterConfigOffset = 0x124;
 
-uint64_t location_offset(uint32_t cce_index) {
-    return static_cast<uint64_t>(location_for_cce(cce_index)) * kCceLocationStride;
+// Channel 0: the SMC core of the CCE's Mimir already selects the Mimir.
+uint64_t cce_register_address(uint32_t cce_index, uint64_t register_address) {
+    return tt::umd::mimir_local_address_windows(configured_soc_desc())
+        .cce_control_address(0, location_for_cce(cce_index), register_address);
 }
 
 uint64_t sram_remap_attrs_address(uint32_t cce_index) {
-    return kRemapBaseAddress + location_offset(cce_index) + kSramRemapEntry * kRemapEntryStride + kRemapAttrsOffset;
+    return cce_register_address(cce_index, kRemapBaseAddress + kSramRemapEntry * kRemapEntryStride + kRemapAttrsOffset);
 }
 
 uint64_t snoop_master_config_address(uint32_t cce_index) {
-    return kClusterCtrlBaseAddress + location_offset(cce_index) + kSnoopMasterConfigOffset;
+    return cce_register_address(cce_index, kClusterCtrlBaseAddress + kSnoopMasterConfigOffset);
 }
 
 tt_cxy_pair smc_target(const Cluster& cluster, ChipId chip, uint32_t cce_index) {

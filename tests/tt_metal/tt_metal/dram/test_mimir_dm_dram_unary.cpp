@@ -25,7 +25,6 @@
 #include "impl/context/metal_context.hpp"
 #include "impl/program/program_impl.hpp"
 #include "llrt/hal.hpp"
-#include "llrt/tt_cluster.hpp"
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include "tt_metal/tt_metal/dram/mimir_access.hpp"
@@ -68,7 +67,7 @@ std::string dram_unary_skip_reason(uint32_t cce_index) {
     if (const std::string watcher_reason = mimir_watcher_skip_reason(); !watcher_reason.empty()) {
         return watcher_reason;
     }
-    const MimirTopology topology = topology_from(cluster_soc_desc());
+    const MimirTopology topology = topology_from(configured_soc_desc());
     if (cce_index >= topology.num_cces) {
         return fmt::format("Descriptor has {} CCEs; CCE {} is not present.", topology.num_cces, cce_index);
     }
@@ -179,14 +178,7 @@ uint64_t semaphore_tl1_offset(Program& program, uint32_t semaphore_id) {
 }
 
 uint32_t read_semaphore(IDevice* device, uint32_t cce_index, uint64_t tl1_offset) {
-    return read_cce_tl1(
-               MetalContext::instance().get_cluster(),
-               device->id(),
-               cce_index,
-               tl1_offset,
-               sizeof(uint32_t),
-               Tl1Range::WholeTl1)
-        .front();
+    return read_cce_tl1(device, cce_index, tl1_offset, sizeof(uint32_t), Tl1Range::WholeTl1).front();
 }
 
 std::string code_name(uint32_t code) {
@@ -214,14 +206,15 @@ std::string status_detail(const std::vector<uint32_t>& status) {
         status[abi::kStatusDrainedAtStart]);
 }
 
-std::string gddr_label(const DramUnaryLayout& layout, uint64_t view_offset, uint64_t chiplet_offset) {
+std::string gddr_label(
+    const CceSpaRoutes& routes, const DramUnaryLayout& layout, uint64_t view_offset, uint64_t chiplet_offset) {
     return fmt::format(
         "GDDR view {} (M{}) +0x{:x} (chiplet 0x{:x}, SPA 0x{:x})",
         layout.view,
         layout.local_mimir,
         view_offset,
         chiplet_offset,
-        host_cce_gddr_address(cluster_soc_desc(), layout.local_mimir, layout.local_mimir, chiplet_offset));
+        mimir_contract::cce_gddr_address(routes, layout.local_mimir, chiplet_offset));
 }
 
 std::string staging_label(const DramUnaryLayout& layout) {
@@ -245,17 +238,17 @@ std::vector<uint32_t> expected_staging(const std::vector<uint32_t>& source) {
 }
 
 std::vector<uint32_t> read_destination(
-    IDevice* device, const DramUnaryLayout& layout, uint64_t byte_offset, uint32_t bytes) {
+    distributed::MeshDevice& unit_mesh, const DramUnaryLayout& layout, uint64_t byte_offset, uint32_t bytes) {
     std::vector<uint32_t> words;
-    read_dram_view(
-        device, soc_desc_of(device), layout.view, layout.destination_view_offset + byte_offset, bytes, words);
+    mimir_contract::read_gddr_view(unit_mesh, layout.view, layout.destination_view_offset + byte_offset, bytes, words);
     return words;
 }
 
 class MimirDmDramUnary : public ::testing::TestWithParam<uint32_t> {};
 
 TEST_P(MimirDmDramUnary, ReaderWriterHandshake) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     const uint32_t cce_index = GetParam();
     if (const std::string skip_reason = dram_unary_skip_reason(cce_index); !skip_reason.empty()) {
         GTEST_SKIP() << skip_reason;
@@ -279,9 +272,11 @@ TEST_P(MimirDmDramUnary, ReaderWriterHandshake) {
     destination_fill.insert(destination_fill.end(), destination_guard.begin(), destination_guard.end());
     std::vector<uint32_t> staging_fill = make_seed_pattern(2 * cce_index + 1, kStagingBytes / sizeof(uint32_t));
     staging_fill.insert(staging_fill.end(), staging_guard.begin(), staging_guard.end());
-    write_dram_view(device, soc, layout.view, layout.source_view_offset, source);
-    write_dram_view(device, soc, layout.view, layout.destination_view_offset, destination_fill);
-    write_dram_view(device, soc, layout.view, layout.destination_view_offset - kGuardBytes, destination_leading_guard);
+    mimir_contract::write_gddr_view(device_closer.mesh(), layout.view, layout.source_view_offset, source);
+    mimir_contract::write_gddr_view(
+        device_closer.mesh(), layout.view, layout.destination_view_offset, destination_fill);
+    mimir_contract::write_gddr_view(
+        device_closer.mesh(), layout.view, layout.destination_view_offset - kGuardBytes, destination_leading_guard);
     write_cce_tl1(device, cce_index, layout.staging_offset, staging_fill);
     write_cce_tl1(device, cce_index, layout.staging_offset - kGuardBytes, staging_leading_guard);
     for (const uint32_t hart : {kReaderHart, kWriterHart}) {
@@ -289,9 +284,11 @@ TEST_P(MimirDmDramUnary, ReaderWriterHandshake) {
             device, cce_index, tl1_done_block(hart), std::vector<uint32_t>(abi::kStatusWords, abi::kStatusPoison));
     }
 
-    const std::string source_label = gddr_label(layout, layout.source_view_offset, layout.source_chiplet_offset);
+    const CceSpaRoutes routes = mimir_contract::read_cce_spa_routes(device, layout.cce_index);
+    const std::string source_label =
+        gddr_label(routes, layout, layout.source_view_offset, layout.source_chiplet_offset);
     const std::string destination_label =
-        gddr_label(layout, layout.destination_view_offset, layout.destination_chiplet_offset);
+        gddr_label(routes, layout, layout.destination_view_offset, layout.destination_chiplet_offset);
     const CoreCoord translated_core = translated_dram_core(soc, cce_index);
     const std::string label = fmt::format(
         "CCE{} reader hart {} / writer hart {}: {} chunks of {} B, {} -> {} -> {}",
@@ -336,13 +333,7 @@ TEST_P(MimirDmDramUnary, ReaderWriterHandshake) {
     const uint64_t filled_offset = semaphore_tl1_offset(program, semaphores.filled);
     const uint64_t drained_offset = semaphore_tl1_offset(program, semaphores.drained);
     for (const uint64_t semaphore_offset : {filled_offset, drained_offset}) {
-        write_cce_tl1(
-            MetalContext::instance().get_cluster(),
-            device->id(),
-            cce_index,
-            semaphore_offset,
-            {kSemaphorePrefill},
-            Tl1Range::WholeTl1);
+        write_cce_tl1(device, cce_index, semaphore_offset, {kSemaphorePrefill}, Tl1Range::WholeTl1);
     }
     const std::optional<std::vector<std::vector<uint32_t>>> statuses = launch_and_wait_for_statuses(
         device, program, launches, {abi::kReaderDoneMagic, abi::kWriterDoneMagic}, abi::kStatusWords, kHostDeadline);
@@ -394,15 +385,19 @@ TEST_P(MimirDmDramUnary, ReaderWriterHandshake) {
         "dram_unary " + label + " destination",
         "writer",
         source,
-        [device, &layout](uint64_t byte_offset, uint32_t bytes) {
-            return read_destination(device, layout, byte_offset, bytes);
+        [&device_closer, &layout](uint64_t byte_offset, uint32_t bytes) {
+            return read_destination(device_closer.mesh(), layout, byte_offset, bytes);
         }))
         << writer_detail;
-    EXPECT_EQ(read_destination(device, layout, kTotalBytes, abi::kLineBytes), destination_guard)
+    EXPECT_EQ(read_destination(device_closer.mesh(), layout, kTotalBytes, abi::kLineBytes), destination_guard)
         << label << ": guard after the destination was overwritten";
     std::vector<uint32_t> destination_leading;
-    read_dram_view(
-        device, soc, layout.view, layout.destination_view_offset - kGuardBytes, kGuardBytes, destination_leading);
+    mimir_contract::read_gddr_view(
+        device_closer.mesh(),
+        layout.view,
+        layout.destination_view_offset - kGuardBytes,
+        kGuardBytes,
+        destination_leading);
     EXPECT_EQ(destination_leading, destination_leading_guard)
         << label << ": guard before the destination was overwritten";
     const std::vector<uint32_t> staging = read_cce_tl1(device, cce_index, layout.staging_offset, kStagingBytes);
@@ -413,6 +408,6 @@ TEST_P(MimirDmDramUnary, ReaderWriterHandshake) {
         << label << ": guard before the staging ring was overwritten";
 }
 
-INSTANTIATE_TEST_SUITE_P(MM8, MimirDmDramUnary, ::testing::Range(0u, kMaxCces), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(MM8, MimirDmDramUnary, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 }  // namespace tt::tt_metal::mimir_test::dm_dram_unary

@@ -39,7 +39,7 @@ constexpr uint32_t kDestinationPoisonWord = 0xDEADBEEFu;
 constexpr uint64_t kCopyTestBytes = 4 * kKiB;
 
 std::string topology_skip_reason(uint32_t cce_index) {
-    const MimirTopology topology = topology_from(cluster_soc_desc());
+    const MimirTopology topology = topology_from(configured_soc_desc());
     if (cce_index >= topology.num_cces) {
         return fmt::format("Descriptor has {} CCEs; CCE {} is not present.", topology.num_cces, cce_index);
     }
@@ -117,24 +117,22 @@ std::vector<uint32_t> with_guards(uint32_t guard_index, const std::vector<uint32
     return block;
 }
 
-::testing::AssertionResult write_guarded_dram(
-    IDevice* device,
-    const metal_SocDescriptor& soc,
+void write_guarded_dram(
+    distributed::MeshDevice& unit_mesh,
     uint32_t view,
     uint64_t data_offset,
     uint32_t guard_index,
     const std::vector<uint32_t>& payload) {
-    return write_dram_view(device, soc, view, data_offset - kGuardBytes, with_guards(guard_index, payload));
+    mimir_contract::write_gddr_view(unit_mesh, view, data_offset - kGuardBytes, with_guards(guard_index, payload));
 }
 
-::testing::AssertionResult read_guarded_dram(
-    IDevice* device,
-    const metal_SocDescriptor& soc,
+void read_guarded_dram(
+    distributed::MeshDevice& unit_mesh,
     uint32_t view,
     uint64_t data_offset,
     uint32_t payload_bytes,
     std::vector<uint32_t>& block) {
-    return read_dram_view(device, soc, view, data_offset - kGuardBytes, payload_bytes + 2 * kGuardBytes, block);
+    mimir_contract::read_gddr_view(unit_mesh, view, data_offset - kGuardBytes, payload_bytes + 2 * kGuardBytes, block);
 }
 
 CceCopyLaunch single_op_launch(uint32_t cce_index, uint32_t hart, const CopyOp& op) {
@@ -237,7 +235,8 @@ class MimirLocalDram : public ::testing::TestWithParam<uint32_t> {};
 
 // CCE c writes its own TL1 to every local DRAM view, from all 8 harts, at every anchor.
 TEST_P(MimirLocalDram, CceWritesTl1ToDram) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     const uint32_t cce_index = GetParam();
     const std::string skip_reason = topology_skip_reason(cce_index);
     if (!skip_reason.empty()) {
@@ -275,7 +274,7 @@ TEST_P(MimirLocalDram, CceWritesTl1ToDram) {
                 sources[hart] =
                     make_pattern(pattern_for(hart + anchor_index), region_words, tl1_data(hart), mimir_test_seed());
                 write_cce_tl1(device, cce_index, tl1_data(hart), sources[hart]);
-                ASSERT_TRUE(write_guarded_dram(device, soc, view, data_offset, hart, poison_payload(region_words)));
+                write_guarded_dram(session.mesh(), view, data_offset, hart, poison_payload(region_words));
                 data_offsets[hart] = data_offset;
                 launches.push_back(single_op_launch(
                     cce_index,
@@ -293,8 +292,7 @@ TEST_P(MimirLocalDram, CceWritesTl1ToDram) {
                     device, soc, cce_index, hart, view, anchor, data_offsets[hart], region_bytes_for_hart(hart));
                 expect_copy_done(results[hart], xor_of(sources[hart]), where);
                 std::vector<uint32_t> block;
-                ASSERT_TRUE(
-                    read_guarded_dram(device, soc, view, data_offsets[hart], region_bytes_for_hart(hart), block));
+                read_guarded_dram(session.mesh(), view, data_offsets[hart], region_bytes_for_hart(hart), block);
                 EXPECT_TRUE(compare_words(where, with_guards(hart, sources[hart]), block));
             }
         }
@@ -303,7 +301,8 @@ TEST_P(MimirLocalDram, CceWritesTl1ToDram) {
 
 // Host writes DRAM, CCE copies it into its own TL1 at each hart's guarded block, host reads TL1 back.
 TEST_P(MimirLocalDram, CceReadsDramToTl1) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     const uint32_t cce_index = GetParam();
     const std::string skip_reason = topology_skip_reason(cce_index);
     if (!skip_reason.empty()) {
@@ -341,7 +340,7 @@ TEST_P(MimirLocalDram, CceReadsDramToTl1) {
                 data_offsets[hart] = data_offset;
                 sources[hart] =
                     make_pattern(pattern_for(hart + anchor_index), region_words, chiplet_offset, mimir_test_seed());
-                ASSERT_TRUE(write_dram_view(device, soc, view, data_offset, sources[hart]));
+                mimir_contract::write_gddr_view(session.mesh(), view, data_offset, sources[hart]);
                 // The TL1 destination is the payload of a guarded block at tl1_data(hart).
                 write_cce_tl1(device, cce_index, tl1_data(hart), with_guards(hart, poison_payload(region_words)));
                 launches.push_back(single_op_launch(
@@ -370,7 +369,8 @@ TEST_P(MimirLocalDram, CceReadsDramToTl1) {
 
 // DRAM -> TL1 -> a different DRAM slot, per hart. The second slot of each hart sits 8 slots up in the same anchor.
 TEST_P(MimirLocalDram, LoopbackChecksIntermediate) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     const uint32_t cce_index = GetParam();
     const std::string skip_reason = topology_skip_reason(cce_index);
     if (!skip_reason.empty()) {
@@ -413,9 +413,9 @@ TEST_P(MimirLocalDram, LoopbackChecksIntermediate) {
                     make_pattern(pattern_for(hart + anchor_index), region_words, source_chiplet, mimir_test_seed());
                 source_offsets[hart] = source_offset;
                 destination_offsets[hart] = destination_offset;
-                ASSERT_TRUE(write_dram_view(device, soc, view, source_offset, sources[hart]));
-                ASSERT_TRUE(write_guarded_dram(
-                    device, soc, view, destination_offset, cce_hart_count() + hart, poison_payload(region_words)));
+                mimir_contract::write_gddr_view(session.mesh(), view, source_offset, sources[hart]);
+                write_guarded_dram(
+                    session.mesh(), view, destination_offset, cce_hart_count() + hart, poison_payload(region_words));
                 write_cce_tl1(device, cce_index, tl1_data(hart), with_guards(hart, poison_payload(region_words)));
 
                 CopyOpTable table;
@@ -442,7 +442,8 @@ TEST_P(MimirLocalDram, LoopbackChecksIntermediate) {
                 EXPECT_TRUE(results[hart].done) << source_where;
 
                 std::vector<uint32_t> source_readback;
-                ASSERT_TRUE(read_dram_view(device, soc, view, source_offsets[hart], region_bytes, source_readback));
+                mimir_contract::read_gddr_view(
+                    session.mesh(), view, source_offsets[hart], region_bytes, source_readback);
                 EXPECT_TRUE(compare_words(source_where + " source", sources[hart], source_readback));
 
                 const std::vector<uint32_t> intermediate =
@@ -451,8 +452,7 @@ TEST_P(MimirLocalDram, LoopbackChecksIntermediate) {
                     compare_words(source_where + " intermediate TL1", with_guards(hart, sources[hart]), intermediate));
 
                 std::vector<uint32_t> destination_block;
-                ASSERT_TRUE(
-                    read_guarded_dram(device, soc, view, destination_offsets[hart], region_bytes, destination_block));
+                read_guarded_dram(session.mesh(), view, destination_offsets[hart], region_bytes, destination_block);
                 EXPECT_TRUE(compare_words(
                     destination_where + " destination",
                     with_guards(cce_hart_count() + hart, sources[hart]),
@@ -465,7 +465,8 @@ TEST_P(MimirLocalDram, LoopbackChecksIntermediate) {
 // Every hart copies a 4 KiB-or-smaller region at each size and alignment in the matrix. Destinations are
 // disjoint blocks, one per hart, and then shared: all harts write the same block, each from its own TL1 source.
 TEST_P(MimirLocalDram, SizeAlignmentMatrix) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     const uint32_t cce_index = GetParam();
     const std::string skip_reason = topology_skip_reason(cce_index);
     if (!skip_reason.empty()) {
@@ -521,8 +522,7 @@ TEST_P(MimirLocalDram, SizeAlignmentMatrix) {
                 for (uint32_t hart = 0; hart < harts; ++hart) {
                     data_offsets[hart] = first_data_offset + hart * (size_bytes + 2ull * kGuardBytes);
                     const uint64_t chiplet_offset = chiplet_offset_of(soc, view, data_offsets[hart]);
-                    ASSERT_TRUE(
-                        write_guarded_dram(device, soc, view, data_offsets[hart], hart, poison_payload(size_words)));
+                    write_guarded_dram(session.mesh(), view, data_offsets[hart], hart, poison_payload(size_words));
                     launches.push_back(single_op_launch(
                         cce_index,
                         hart,
@@ -539,14 +539,14 @@ TEST_P(MimirLocalDram, SizeAlignmentMatrix) {
                         " disjoint " + case_label;
                     expect_copy_done(results[hart], xor_of(sources[hart]), where);
                     std::vector<uint32_t> block;
-                    ASSERT_TRUE(read_guarded_dram(device, soc, view, data_offsets[hart], size_bytes, block));
+                    read_guarded_dram(session.mesh(), view, data_offsets[hart], size_bytes, block);
                     EXPECT_TRUE(compare_words(where, with_guards(hart, sources[hart]), block));
                 }
 
                 if (harts < 2) {
                     continue;
                 }
-                ASSERT_TRUE(write_guarded_dram(device, soc, view, first_data_offset, 0, poison_payload(size_words)));
+                write_guarded_dram(session.mesh(), view, first_data_offset, 0, poison_payload(size_words));
                 const uint64_t shared_chiplet_offset = chiplet_offset_of(soc, view, first_data_offset);
                 std::vector<CceCopyLaunch> shared_launches;
                 for (uint32_t hart = 0; hart < harts; ++hart) {
@@ -567,7 +567,7 @@ TEST_P(MimirLocalDram, SizeAlignmentMatrix) {
                     expect_copy_done(shared_results[hart], xor_of(shared_sources[hart]), where);
                 }
                 std::vector<uint32_t> shared_block;
-                ASSERT_TRUE(read_guarded_dram(device, soc, view, first_data_offset, size_bytes, shared_block));
+                read_guarded_dram(session.mesh(), view, first_data_offset, size_bytes, shared_block);
                 EXPECT_TRUE(shared_block_matches(
                     describe_location(device, soc, cce_index, 0, view, anchor, first_data_offset, size_bytes) +
                         " shared " + case_label,
@@ -584,7 +584,8 @@ TEST_P(MimirLocalDram, SizeAlignmentMatrix) {
 // earlier ops left in DRAM. Overlaps are within one hart only, so the expected result is the host model in that hart's
 // program order.
 TEST_P(MimirLocalDram, RepeatedAndOverlappingPerHart) {
-    MIMIR_SKIP_UNLESS_EMU();
+    skip_unless_programmable_dram_package();
+    skip_unless_mimir_local_package();
     const uint32_t cce_index = GetParam();
     const std::string skip_reason = topology_skip_reason(cce_index);
     if (!skip_reason.empty()) {
@@ -631,8 +632,7 @@ TEST_P(MimirLocalDram, RepeatedAndOverlappingPerHart) {
                     make_pattern(pattern_for(repeat + hart + 1), kCopyWords, source_b_tl1, mimir_test_seed() ^ repeat);
                 write_cce_tl1(device, cce_index, source_a_tl1, source_a);
                 write_cce_tl1(device, cce_index, source_b_tl1, source_b);
-                ASSERT_TRUE(
-                    write_guarded_dram(device, soc, view, region_offsets[hart], 3 * hart, poison_payload(kSpanWords)));
+                write_guarded_dram(session.mesh(), view, region_offsets[hart], 3 * hart, poison_payload(kSpanWords));
                 write_cce_tl1(device, cce_index, result_c_tl1, with_guards(3 * hart + 1, poison_payload(kCopyWords)));
                 write_cce_tl1(device, cce_index, result_d_tl1, with_guards(3 * hart + 2, poison_payload(kCopyWords)));
 
@@ -678,7 +678,7 @@ TEST_P(MimirLocalDram, RepeatedAndOverlappingPerHart) {
                 expect_copy_done(results[hart], expected_signatures[hart], where);
 
                 std::vector<uint32_t> dram_block;
-                ASSERT_TRUE(read_guarded_dram(device, soc, view, region_offsets[hart], kSpanBytes, dram_block));
+                read_guarded_dram(session.mesh(), view, region_offsets[hart], kSpanBytes, dram_block);
                 EXPECT_TRUE(compare_words(where + " DRAM", with_guards(3 * hart, expected_drams[hart]), dram_block));
                 const std::vector<uint32_t> c_block =
                     read_cce_tl1(device, cce_index, tl1_data(hart) + 16 * kKiB, kCopyTestBytes + 2 * kGuardBytes);
@@ -691,6 +691,6 @@ TEST_P(MimirLocalDram, RepeatedAndOverlappingPerHart) {
     }
 }
 
-INSTANTIATE_TEST_SUITE_P(MM4, MimirLocalDram, ::testing::Range(0u, kMaxCces), cce_param_name);
+INSTANTIATE_TEST_SUITE_P(MM4, MimirLocalDram, ::testing::ValuesIn(mimir_contract::cce_indices()), cce_param_name);
 
 }  // namespace tt::tt_metal::mimir_test::local_dram
