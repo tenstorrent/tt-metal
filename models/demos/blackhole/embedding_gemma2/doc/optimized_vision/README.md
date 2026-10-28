@@ -21,20 +21,40 @@ video frames).
 
 | batch x bucket | E2 code burst ms | E2 code sustained ms | E5b burst ms | E5b sustained ms | speedup | ms per image |
 |---|---|---|---|---|---|---|
-| 1 x 2560 (image) | 62.797 | 62.787 | **26.263** | 26.277 | 2.39x | 62.8 -> 26.3 |
-| 4 x 2560 (images) | 323.257 | 323.296 | **121.619** | 121.673 | 2.66x | 80.8 -> 30.4 |
-| 8 x 1280 (video frames) | 228.314 | 228.262 | **94.643** | 94.662 | 2.41x | 28.5 -> 11.8 |
+| 1 x 2560 (image) | 62.797 | 62.787 | **26.271** | 26.277 | 2.39x | 62.8 -> 26.3 |
+| 4 x 2560 (images) | 323.257 | 323.296 | **116.020** | 116.153 | 2.79x | 80.8 -> 29.0 |
+| 8 x 1280 (video frames) | 228.314 | 228.262 | **88.142** | 88.164 | 2.59x | 28.5 -> 11.0 |
 
 **[M]** `e5b/bench.jsonl` labels `baseline_E2` (HEAD `86c6b9f9f7`, the E2 vision code) and
-`c3_wide_l1` (commit `47824a6e41`, the final code). `logs/bench_baseline.log`, `logs/final3.log`.
+`r_c4_mlp_split` (the final code: the E5b review fix, per-image MLP for batches, on top of
+`47824a6e41`). `logs/bench_baseline.log`, `logs/review_b4_code.log`. Before the review fix the E5b
+code (`47824a6e41`, label `c3_wide_l1`, `logs/final3.log`) measured 26.263 / 121.619 / 94.643 ms.
+
+Speedup against both baselines (E5b burst median):
+
+| batch x bucket | vs E2 code re-measured today | vs E2 published (E2 report) |
+|---|---|---|
+| E5b as reviewed (`47824a6e41`) | | |
+| 1 x 2560 | 62.797 / 26.263 = 2.39x | 55.60 / 26.263 = 2.12x |
+| 4 x 2560 | 323.257 / 121.619 = 2.66x | 294.47 / 121.619 = 2.42x |
+| 8 x 1280 | 228.314 / 94.643 = 2.41x | 199.61 / 94.643 = 2.11x |
+| E5b with the review fix (per-image MLP) | | |
+| 1 x 2560 | 62.797 / 26.271 = 2.39x | 55.60 / 26.271 = 2.12x |
+| 4 x 2560 | 323.257 / 116.020 = 2.79x | 294.47 / 116.020 = 2.54x |
+| 8 x 1280 | 228.314 / 88.142 = 2.59x | 199.61 / 88.142 = 2.26x |
 
 E2 published 55.60 / 294.47 / 199.61 ms for the same code. Re-measured today it is 62.80 / 323.26 /
-228.31 ms. Tracy of the E2 code today vs the E2 report: SDPA (2002 us per call), RMSNorm and
-eltwise rows are identical, but the default-config bf16 matmuls are 1.3-2.4x slower with the same
-program config (e.g. MLP down 2560x3072x768: 175 us in E2, 417 us today) **[M]**
-`tracy/before/b1_s2560` vs `doc/functional_vision/tracy/b1_s2560`. So the DRAM-heavy ops of the E2
-path run slower on the card today; the cause (DRAM/GDDR state of the card) is **[G]**. Every
-before/after number in this report is from today, same card, same harness.
+228.31 ms (+7.2 ms at 1 x 2560). Tracy of the E2 code today vs the E2 report: SDPA (2002 us per
+call), RMSNorm and eltwise rows are identical; the extra time is in the default-config HiFi4 bf16
+matmuls, 1.3-2.4x slower with the same program config (e.g. MLP down 2560x3072x768: 175 us in E2,
+417 us today) **[M]** `tracy/before/b1_s2560` vs `doc/functional_vision/tracy/b1_s2560`. The
+cause is **unexplained**. What it is not: the ttnn / tt_metal libraries predate E2 (built
+11:59-12:01, E2 ran from 13:00; file times of `build/lib/libtt_metal.so`, `ttnn/ttnn/_ttnn.so`,
+`e2/logs/`) **[M]**, and the text control reproduces: the E5a text forward at 1 x 512 measured
+7.315 ms in E5a (`e5a/logs/final.log`) and 7.315 ms again in the E5b gates
+(`results_gates_a410c73278.jsonl`, `full_latency_device_ms` b1_s512) **[M]**. The text path runs
+tuned HiFi2 matmuls, not default-config HiFi4 bf16 ones, so the control does not cover the slowed
+op type **[I]**. Every before / after number in this report is from today, same card, same harness.
 
 ## Op-topology audit (one encoder layer, 1 x 2560)
 
@@ -91,6 +111,34 @@ The windowed path flattens the batch into one sequence [1, 12, B*S, 64]: `cu_win
 cross-frame attention. It needs the valid patches to be a prefix (processor output always is;
 `prepare_inputs` raises otherwise). Batches 2-7 at 1280 were not measured and use the mask **[G]**.
 
+### Windowed SDPA unit test (E5b review fix)
+
+`tests/pcc/vision/test_vision_windowed_attention.py` (10 tests) checks the windowed path directly.
+
+- **Numerics, layers 0 and 15.** Input: 8 frames at bucket 1280 with different valid lengths (1080,
+  1260, 972, 1278, 81, 1170, 630, 1152; tile aligned and not, 2 to 1199 padding rows). The test
+  runs `VisionAttention` twice on the same input: once through `PaddingWindows`, once through the
+  bfp4 key-padding mask, as `VisionModel.forward_hidden` builds each. It checks four things:
+  - The valid rows match: PCC >= `PCC_LAYER` (0.995) per frame.
+  - The valid rows do not change when every padding row of the input is overwritten with noise
+    (x50), on either path.
+  - The windowed padding rows are exactly 0 (zero input, own window), while the masked padding
+    rows are not. So the padding rows differ by design.
+  - The pooling matrix from `prepare_inputs` has zero weight on every padding row and weight 1 on
+    every valid row. So the padding rows are never consumed.
+- **Host.** `padding_windows` structure (2B+1 int32 entries, windows 2b / 2b+1 = valid prefix /
+  padding of frame b, all non-empty), its `ValueError` for n in {0, S, S+1, -1}, the
+  `use_windowed_attention` gate (8 / 7 frames, 1280 / 2560), and the non-prefix `ValueError` in
+  `prepare_inputs`.
+
+Result **[M]**: 10 passed. Windowed and masked outputs are bit-identical on every valid row (max abs
+diff 0, PCC 1.0), and the noise changes no valid row (max abs diff 0).
+`e5b/logs/review_windowed_pass1.log`. The test catches a wrong window: with frames 0 and 1 merged
+into one window (planted in `padding_windows`, not committed), 3 tests fail
+(`test_padding_windows_structure` and both layers of `test_windowed_matches_masked`: PCC 0.830 /
+0.866 on frames 0 / 1 at layer 0, padding leak up to 14.5). Reverted, 10 pass again.
+`e5b/logs/review_windowed_bite_{planted,reverted}.log`.
+
 ## Matmul search
 
 `e5b/scripts/mm_sweep.py` (M = 2560 with L1 input, M = 10240 DRAM; every vision role; bf16 weights,
@@ -141,11 +189,45 @@ bfp8 weights pass the 0.99 gate but cut the worst soft token from 0.909 to 0.624
 only 0.6 % (1 x 2560) to 4.6 % (8 x 1280) faster than bf16 weights with the same configs, so bf16
 was kept; the bfp8 trade is left to the E6 precision sweep. SDPA without fp32 accumulation is 30 %
 faster end to end at 1 x 2560 but drops the soft-token PCC to 0.990, at the gate: rejected here,
-for E6. HF itself run in bf16 scores soft-token PCC 0.997011 and worst-token cosine 0.814844 (video
-frame 4) against the same fp32 reference; its worst token on the portrait image is 0.8662, the
-final TT path 0.8638 there **[M]** `results_gates.jsonl` (`hf_bf16_*`). The worst-token cosine moves
-by +-0.03 between rows whose op outputs are identical to 1e-6 (L2 -> L3), so it is a noisy tail
-metric; the PCC is the gate.
+for E6.
+
+**Accuracy cost of the kept path.** The E5b path loses a small, systematic amount of soft-token
+accuracy against E2; it is not at the level of HF's own bf16 run. Per image or frame, vs the HF fp32
+reference (E2 = row L0, E5b = the gate run, HF bf16 = HF run in bf16 against the same reference)
+**[M]** `results_L0_none.jsonl`, `results_gates.jsonl` (`vision_soft_token_*`, `hf_bf16_*`):
+
+| image | soft-token PCC E2 / E5b / HF bf16 | worst-token cosine E2 / E5b / HF bf16 |
+|---|---|---|
+| portrait | 0.99908 / 0.99804 / 0.99843 | 0.9429 / 0.8638 / 0.8662 |
+| video frame 5 | 0.99895 / 0.99733 / 0.99876 | 0.9862 / 0.9085 / 0.9816 |
+| video frame 3 (lowest PCC) | 0.99774 / 0.99716 / 0.99841 | 0.9523 / 0.9225 / 0.9654 |
+| mean of the 15 images / frames | 0.99896 / 0.99859 / 0.99895 | — |
+
+- Mean soft-token PCC drops by 3.7e-4 against E2, and by up to 1.6e-3 on one image (video frame
+  5). E5b is below HF bf16 on 11 of the 15 images.
+- Worst-token cosine falls from 0.943 to 0.864 on the portrait and from 0.986 to 0.909 on video
+  frame 5, where HF bf16 holds 0.982. (HF bf16's own worst token is 0.815, on video frame 4,
+  where E5b scores 0.964.)
+- The ablation rows attribute the loss mostly to two changes. The gelu-as-multiply row (L8 -> L9)
+  moves frame 5 from PCC 0.99827 to 0.99733 (cosine 0.970 to 0.909) and the portrait cosine from
+  0.887 to 0.862. The bf16-weight projection / MLP config rows (L3 -> L6, HiFi2 configs) move the
+  portrait cosine from 0.962 to 0.909. The SDPA HiFi2 table (L0 -> L1) also moves frame 5 from PCC
+  0.99895 to 0.99791.
+- Every gate still passes: the minimum soft-token PCC is 0.99716 against a bar of 0.99.
+- The worst-token cosine is a noisy tail metric: it moves by +-0.03 between rows whose op outputs
+  are identical to 1e-6 (L2 -> L3).
+- To revisit in the E6 datatype sweep: HiFi4 for the projections and MLP, and the gelu placement.
+
+The table above is the reviewed code (`47824a6e41`). The review fix (per-image MLP) changes only the
+batched cases (b2, video8), because their MLP matmuls now use the one-image configs; single images
+are bit-identical. With the fix **[M]** `results_review_fix.jsonl`:
+- The mean soft-token PCC is 0.99856 (was 0.99859); the loss against E2 is 4.0e-4 mean and 1.3e-3
+  at most (video frame 7).
+- Video frame 5 recovers to PCC 0.99830, cosine 0.965. Video frame 3 drops to PCC 0.99653 (the new
+  minimum), cosine 0.866 (HF bf16: 0.99841 / 0.965).
+- The portrait is unchanged (0.99804 / 0.8638, still the worst token). 12 of 15 images are below
+  HF bf16.
+- The gates pass: min soft-token PCC 0.99653 against a bar of 0.99.
 
 ## L1 placement
 
@@ -179,8 +261,46 @@ L1 only at batch 1 and the M = 10240 projections: matmul 8.0 vs 5.1 ms per image
 the QKV output and the MLP up / gate outputs in L1 (-4.5 ms together, rows L7 and 14); at batch 4
 (10240 patches, 4x the bytes per bank) the same placement clashes with op circular buffers (row
 L12), and the 2D matmul configs exceed L1 at M = 10240 (`mm_sweep.log`), so the projections run
-minimal_matmul. Not fixed further; a per-image split of the MLP at batch 4 (to reuse the batch-1
-L1 path) was not tried.
+minimal_matmul.
+
+### E5b review fix: residual-only L1 and per-image MLP
+
+Two levers, one change per measurement, screened by monkeypatch (`e5b/scripts/exp_b4.py`) with
+`bench_vision.py` (burst + sustained, 5 windows each) against a same-session control of the
+HEAD code (`none`) **[M]** `e5b/bench.jsonl` labels `r_b4_*`, `logs/review_b4_screens.log`,
+`logs/review_b4_both*.log`:
+
+| variant | 1 x 2560 | 4 x 2560 | 8 x 1280 | result |
+|---|---|---|---|---|
+| control (HEAD `4c14f6c978` = `47824a6e41` code) | 26.265 | 121.631 | 94.669 | — |
+| (a) residual stream (h1, layer out) in L1 up to 10240 patches | 26.266 | 120.319 (-1.31) | 92.506 (-2.16) | faster alone; clashes when combined with (b) |
+| (b) per-image MLP (slice -> one-image path, up / gate in L1 -> concat) | 26.269 | 115.692 (-5.94) | 87.813 (-6.86) | **kept** |
+| (a) + (b) | — | TT_THROW | 85.700 (8 x 1280 alone) | rejected: CB clash at 4 x 2560 |
+| (a) + (b), per-image MLP output in DRAM | TT_THROW at capture (all three shapes in one process; shape not isolated) | | | rejected: CB clash (L1 buffer at 958464) |
+
+The window spread is at most 0.08 ms on every row, so both levers beat noise. Combined, they fail
+at capture with "Statically allocated dataflow buffers in program 39 clash with L1 buffers on core
+range [0-0 - 11-9]. L1 buffer allocated at 1019904 and static dataflow buffer region ends at
+1029504". The combination runs at 8 x 1280 alone (85.70 ms). It is not kept because no single rule
+covers both shapes. Lever (b) is the larger win and works at every shape, so the code keeps only
+(b) (`VisionMLP._forward_per_image`, `tt/vision/mlp.py`). It applies to batches above 2560 patches
+whose bucket is at most 2560: 2+ images or 3+ frames.
+
+Committed code, `bench_vision.py`, label `r_c4_mlp_split` **[M]** `logs/review_b4_code.log`:
+
+| batch x bucket | before (control) | after | change |
+|---|---|---|---|
+| 1 x 2560 | 26.265 | 26.271 | unchanged (path not taken) |
+| 2 x 2560 | 65.057 (same-session control, `nosplit`) | 58.991 | -6.07 ms (-9.3 %) |
+| 4 x 2560 | 121.631 | 116.020 | -5.61 ms (-4.6 %) |
+| 8 x 1280 | 94.669 | 88.142 | -6.53 ms (-6.9 %) |
+
+Batch 4 now costs 29.0 ms per image, against 26.27 at batch 1: the gap shrinks from +4.1 ms to
++2.7 ms. The remaining gap is attention-side: the QKV and o_proj projections at M = 10240, plus
+norms, RoPE and heads in DRAM **[I]** (from the Tracy breakdown above; there is no Tracy capture of
+the new code). The committed numbers are 0.3 ms above the screen at 4 x 2560 and 8 x 1280. The
+committed run also captured the 2 x 2560 trace; the cause of the difference is not investigated
+**[G]**. Gates on the new code: see `work_log.md` "E5b review fixes".
 
 ## Change ledger
 
@@ -212,6 +332,10 @@ were A/B runs through a temporary switch (`EG2_VISION_LEVERS`, removed before co
 | 14d | screen: + QKV output in L1 | 26.268 | — | — | kept | `exp_wide_mlp_qkv` |
 | 14e | screen: bfp4 mask in L1 | fails | — | — | blocked: SDPA requires a DRAM mask (`sdpa_device_operation.cpp:165`) | `logs/exp_mask_l1b.log` |
 | 14 | 14c + 14d in code, commit `47824a6e41` | 26.263 (26.277) | 121.619 (121.673) | 94.643 (94.662) | kept | `c3_wide_l1` |
+| 15a | review screen: residual stream in L1 up to 10240 patches | 26.266 | 120.319 | 92.506 | faster alone; clashes with 15b | `r_b4_resid_l1` |
+| 15b | review screen: per-image MLP for batches > 2560 patches | 26.269 | 115.692 | 87.813 | kept | `r_b4_mlp_split` |
+| 15c | review screen: 15a + 15b | — | clash | 85.700 | rejected (CB clash at 4 x 2560) | `r_b4_both_*` |
+| 15 | 15b in code (E5b review fix) | 26.271 (26.277) | 116.020 (116.153) | 88.142 (88.164) | kept | `r_c4_mlp_split` |
 
 ## Gates
 
@@ -279,9 +403,13 @@ batch >= 8 at 1280) and the new `windows` device input. No reduction.
 - SDPA is 58 % of the 1 x 2560 forward (944 us per layer at HiFi2 + fp32 acc). The 2x lever is
   fp32 accumulation off, rejected here on accuracy (soft-token PCC 0.990): E6.
 - bfp8 weights (0.6-4.6 % faster, worst-token cosine 0.62): E6.
-- Batch 4 L1 placement (CB clash at 128 KB/bank); a residual-only L1 policy or a per-image MLP
-  split for batch > 1 was not tried.
+- Batch-4 L1 placement. The per-image MLP is kept (review fix). A residual-only L1 policy is
+  faster alone, but it clashes with the per-image MLP at 4 x 2560. It works with it at 8 x 1280
+  alone (85.70 vs 88.14 ms), which would need a per-bucket rule. The batch-4 gap is now +2.7 ms per
+  image, attention-side.
 - Windowed SDPA for batches 2-7 at bucket 1280 (not measured; masked there).
 - Per-layer tests (`test_vision_attention`, `test_vision_encoder_layer`) build the dense mask with
-  `key_padding_mask`, so they run the masked SDPA path; the windowed path is covered end to end
-  (`test_soft_tokens[video8]`, trace replay == eager, full-model video tests).
+  `key_padding_mask`, so they run the masked SDPA path. The windowed path has its own unit test
+  (E5b review fix, `tests/pcc/vision/test_vision_windowed_attention.py`, see "Windowed SDPA unit
+  test") and is covered end to end (`test_soft_tokens[video8]`, trace replay == eager, full-model
+  video tests).

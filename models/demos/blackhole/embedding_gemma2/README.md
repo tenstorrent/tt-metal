@@ -173,27 +173,40 @@ pytest models/demos/blackhole/embedding_gemma2/tests/pcc/vision/test_vision_perf
 ```
 
 Measured on real images and an 8-frame video (E5b path): per-layer PCC >= 0.99993 and soft-token
-PCC 0.9972-0.9997 per image vs the HF fp32 reference. HF's own bf16 run scores 0.9970-0.9998
-against the same reference.
+PCC 0.9965-0.9997 per image vs the HF fp32 reference (bar 0.99; 0.9972-0.9997 before the
+per-image MLP review fix, which reshuffles the batched cases). The E5b optimizations cost a small,
+systematic amount of accuracy against E2. The mean soft-token PCC drops by 3.7e-4 over 15 images
+and frames, and by up to 1.6e-3 on video frame 5. The worst-token cosine drops on the portrait image
+(0.943 to 0.864) and on video frame 5 (0.986 to 0.909; HF bf16 scores 0.982 there). E5b also scores
+below HF's own bf16 run on 11 of the 15 images (portrait 0.99804 vs 0.99843, frame 5 0.99733 vs
+0.99876). The E5b ablation attributes most of the loss to the gelu-multiply change and the
+bf16-weight projection / MLP config change. Both are to be revisited in the E6 datatype sweep. See
+`doc/optimized_vision/README.md` ("Precision").
 
 ### Vision tower performance (E5b, optimized)
 
 Traced device ms per forward (`tests/perf/bench_vision.py`, burst median of 5 windows; sustained
-after a 10 s soak is within 0.1 ms). Both columns were measured on the same day and card; the E2
-code measures slower today than in the E2 report (55.6 / 294.5 / 199.6 ms), see
-`doc/optimized_vision/README.md`.
+after a 10 s soak is within 0.1 ms). "E2 code today" was re-measured on the same day and card as
+E5b. It is slower than the E2 report (55.60 / 294.47 / 199.61 ms). The extra time is in the
+default-config HiFi4 bf16 matmuls, and the cause is unexplained: the libraries predate E2 and the
+E5a text control (1 x 512, 7.315 ms) reproduces. See `doc/optimized_vision/README.md`.
 
-| batch x bucket | E2 code ms | E5b ms | speedup | ms per image / frame |
-|---|---|---|---|---|
-| 1 x 2560 (image) | 62.80 | 26.26 | 2.39x | 26.3 |
-| 4 x 2560 (images) | 323.26 | 121.62 | 2.66x | 30.4 |
-| 8 x 1280 (video frames) | 228.31 | 94.65 | 2.41x | 11.8 |
+| batch x bucket | E2 code today ms | E2 published ms | E5b ms | speedup vs today / vs published | ms per image / frame |
+|---|---|---|---|---|---|
+| 1 x 2560 (image) | 62.80 | 55.60 | 26.27 | 2.39x / 2.12x | 26.3 |
+| 4 x 2560 (images) | 323.26 | 294.47 | 116.02 | 2.79x / 2.54x | 29.0 |
+| 8 x 1280 (video frames) | 228.31 | 199.61 | 88.14 | 2.59x / 2.26x | 11.0 |
+
+E5b numbers include the review fix (per-image MLP for batches, `tt/vision/mlp.py`). Before it, E5b
+(`47824a6e41`) measured 26.26 / 121.62 / 94.64 ms: 2.39x / 2.66x / 2.41x vs the E2 code today and
+2.12x / 2.42x / 2.11x vs E2 published.
 
 Policy: SDPA per-shape chunk/grid table with HiFi2 + fp32 accumulation and a bfp4 key-padding
 mask (windowed SDPA without a mask for 8+ video frames), fused axial RoPE, bf16 weights with
 HiFi2 2D-multicast / minimal_matmul configs, gelu fused into the gate * up multiply, activations,
-the QKV and MLP up / gate outputs and the residual stream in L1 for one image. bfp8 weights and SDPA without fp32 accumulation were
-measured and left for E6 (accuracy). Details: `doc/optimized_vision/README.md`.
+the QKV and MLP up / gate outputs and the residual stream in L1 for one image, and the MLP run one
+image / frame at a time for batches so it reuses that L1 path. bfp8 weights and SDPA without fp32
+accumulation were measured and left for E6 (accuracy). Details: `doc/optimized_vision/README.md`.
 
 ## Audio tower
 

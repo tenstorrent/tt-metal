@@ -51,7 +51,7 @@
     "pooled_rows_per_bucket": {"1280": 160, "2560": 288},
     "supported_max_patches_per_image": 2520,
     "largest_tested_patches_per_image": 2520,
-    "largest_tested_evidence": "tests/pcc/vision/test_vision_model.py::test_soft_tokens (5 images at N=2520, 8 video frames at N=1260; soft-token PCC 0.9977-0.9997 vs HF fp32 at E2, 0.9972-0.9997 on the E5b path)",
+    "largest_tested_evidence": "tests/pcc/vision/test_vision_model.py::test_soft_tokens (5 images at N=2520, 8 video frames at N=1260; soft-token PCC 0.9977-0.9997 vs HF fp32 at E2, 0.9972-0.9997 on the E5b path as reviewed, 0.9965-0.9997 with the per-image MLP review fix)",
     "valid_patches_tested": [1080, 2304, 2340, 2376, 2430],
     "largest_tested_batch": {"images_2560": 4, "video_frames_1280": 8},
     "video_frames_tested": 8,
@@ -64,9 +64,18 @@
       "windowed_attention_precondition": "valid patches are a prefix of each row (processor output always is); prepare_inputs raises otherwise for batch >= 8 at bucket 1280",
       "mask_bytes": "bfp4 [B,1,S,S]: 0.5625 B/element, 3.7 MB per image at 2560 (bf16 was 13.1 MB)",
       "l1_activations": "one image (2560 patches): [*,768] activations and the residual stream in L1 (64 KB per bank rule), plus the QKV output (91 KB per bank) and MLP up / gate outputs (121 KB per bank each); batch > 1 stays in DRAM (128 KB per bank for every tensor clashes with op circular buffers)",
-      "traced_device_ms_burst": {"1x2560": 26.263, "4x2560": 121.619, "8x1280": 94.643},
+      "traced_device_ms_burst": {"1x2560": 26.271, "2x2560": 58.991, "4x2560": 116.020, "8x1280": 88.142},
+      "traced_device_ms_burst_before_review_fix": {"1x2560": 26.263, "4x2560": 121.619, "8x1280": 94.643},
+      "per_image_mlp": "batches above 2560 patches with bucket <= 2560 run VisionMLP one image / frame at a time (slice -> one-image path with L1 up / gate -> concat): -5.6 ms at 4x2560, -6.5 ms at 8x1280 (E5b review fix)",
       "traced_device_ms_e2_code_same_day": {"1x2560": 62.797, "4x2560": 323.257, "8x1280": 228.314},
-      "evidence": "doc/optimized_vision/README.md; tt-ops/runs/embeddinggemma-2/e5b/bench.jsonl (labels baseline_E2, c3_wide_l1)"
+      "traced_device_ms_e2_published": {"1x2560": 55.60, "4x2560": 294.47, "8x1280": 199.61},
+      "speedup_vs_e2_same_day": {"1x2560": 2.39, "4x2560": 2.79, "8x1280": 2.59},
+      "speedup_vs_e2_published": {"1x2560": 2.12, "4x2560": 2.54, "8x1280": 2.26},
+      "speedup_before_review_fix": "vs E2 same day 2.39 / 2.66 / 2.41x, vs E2 published 2.12 / 2.42 / 2.11x (1x2560 / 4x2560 / 8x1280)",
+      "e2_baseline_drift": "unexplained: the E2 code re-measures slower than published (extra time in the default-config HiFi4 bf16 matmuls); libraries predate E2 and the E5a text control (1x512, 7.315 ms) reproduces",
+      "accuracy_vs_e2": "small systematic soft-token loss: mean PCC -3.7e-4 over 15 images / frames (max -1.6e-3, video frame 5); worst-token cosine portrait 0.943 -> 0.864, video frame 5 0.986 -> 0.909 (HF bf16 0.982); below HF bf16 PCC on 11 of 15; gates pass (min 0.99716, bar 0.99); revisit in E6",
+      "windowed_attention_test": "tests/pcc/vision/test_vision_windowed_attention.py: windowed == masked on valid rows (8 frames, valid 81..1278, bit-identical), padding-row invariance, padding_windows structure and ValueError",
+      "evidence": "doc/optimized_vision/README.md; tt-ops/runs/embeddinggemma-2/e5b/bench.jsonl (labels baseline_E2, c3_wide_l1, r_c4_mlp_split)"
     }
   },
   "audio": {

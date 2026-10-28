@@ -94,3 +94,80 @@ landscape, HF-bf16 0.8662 on portrait), end-to-end image / video embedding cosin
 0.999451 (video_text; E5a 0.999312; bar 0.99), trace replay == eager max abs diff 0.0 (vision and
 full model). Fallback audit (`test_vision_fallback_audit.py`, in the vision gate): passed, 0 torch
 calls, no host transfer inside the forward; Tracy after: 320 / 322 device ops, 0 host ops.
+
+## E5b review fixes (E5b-r)
+
+Reviewer verdict: `tt-ops/runs/embeddinggemma-2/verdicts.md`, E5b row. Same host, card and env.
+Results in `e5b/results_review_fix.jsonl`, logs in `e5b/logs/review_*.log` and
+`gate_review_*.log`, screens in `e5b/scripts/exp_b4.py`. Every device job ran alone.
+
+| time | step | result |
+|---|---|---|
+| 18:58 | new `tests/pcc/vision/test_vision_windowed_attention.py` (windowed vs masked on 8 frames with valid 81..1278; padding noise invariance; padding_windows structure / ValueError; prepare_inputs windows, pool, prefix ValueError) | first run 10 passed (`review_windowed_try1.log`) |
+| 19:00 | added the padding-row check (windowed padding rows 0, masked not) | **pass**: 10 passed, windowed == masked bit-identical on valid rows (max abs 0), noise changes no valid row (`review_windowed_pass1.log`) **[M]** |
+| 19:01 | bite proof: planted `del cu[1:3]` in `padding_windows` (frames 0 and 1 in one window), not committed | **fail**: 3 failed / 7 passed. `test_padding_windows_structure` (index 1: 2540 != 1080) and `test_windowed_matches_masked[0,15]`: frame 0 PCC 0.829743, frame 1 0.866171 (layer 0), windowed padding rows nonzero, valid rows change by up to 14.53 under padding noise (`review_windowed_bite_planted.log`) **[M]** |
+| 19:02 | reverted the plant; the first revert edit joined two lines (collection error, rc 2), fixed; `git diff tt/` empty | **pass**: 10 passed (`review_windowed_bite_reverted.log`) **[M]** |
+| 19:03 | `prefer-expect-error` hook: `pytest.raises` -> `expect_error` fixture; rerun 10 passed (`review_windowed_final.log`) | commit `4c14f6c978` |
+| 19:02-19:06 | b4 screens (`exp_b4.py none / resid_l1 / mlp_split`), first launch lost (PYTHONPATH override dropped the transformers overlay, `review_b4_screens_try1_pythonpath.log`) | see "Batch-4 screens" |
+| 19:09-19:12 | (a)+(b) combined: TT_THROW CB clash at 4 x 2560; 8 x 1280 alone 85.70 ms; (a)+(b) with DRAM MLP outputs: TT_THROW | rejected |
+| 19:13 | (b) in code (`VisionMLP._forward_per_image`); bench 1/2/4/8 + `nosplit` control at 2 x 2560 | 26.271 / 58.991 / 116.020 / 88.142 ms; control 2 x 2560 65.057 |
+| 19:16-19:27 | gates (`e5b/scripts/gates_review.sh`: the vision, full model, demo and watcher commands of `gates.sh`) on the working tree = the committed code | all pass, see below |
+| 19:30 | docs: README, optimized_vision README, context contract | one contract edit (the evidence label list) was made with `sed -i` against the worker rule; the result was checked by JSON load and grep |
+
+### Batch-4 screens
+
+`bench_vision.py`, burst / sustained medians of 5 windows, ms; same-session control **[M]**
+`e5b/bench.jsonl` labels `r_b4_*`, `r_c4_*`:
+
+| variant | 1 x 2560 | 4 x 2560 | 8 x 1280 | decision |
+|---|---|---|---|---|
+| control `none` | 26.265 / 26.275 | 121.631 / 121.653 | 94.669 / 94.682 | — |
+| (a) `resid_l1`: h1 and layer out in L1 up to 10240 patches | 26.266 / 26.284 | 120.319 / 120.378 | 92.506 / 92.576 | faster alone (-1.31 / -2.16), clashes with (b) at 4 x 2560 |
+| (b) `mlp_split`: MLP per image above 2560 patches | 26.269 / 26.294 | 115.692 / 115.751 | 87.813 / 87.823 | keep |
+| (a)+(b) `both` | — | TT_THROW | 85.700 / 85.742 (alone) | reject: "Statically allocated dataflow buffers in program 43 clash with L1 buffers on core range [0-0 - 11-9]. L1 buffer allocated at 1019904 and static dataflow buffer region ends at 1029504" |
+| (a)+(b) `both_dram` (per-image MLP output in DRAM) | TT_THROW at capture | | | reject: same clash, L1 buffer at 958464 |
+| (b) in code `r_c4_mlp_split` | 26.271 / 26.277 | 116.020 / 116.153 | 88.142 / 88.164 | kept; 2 x 2560 58.991 vs 65.057 (`nosplit` control) |
+
+Window spread at most 0.08 ms (0.1 %) on the kept rows. The committed run is 0.3 ms slower than the
+screen at 4 x 2560 and 8 x 1280; the cause is not investigated **[G]**.
+
+### Gates on the review-fix code
+
+`e5b/scripts/gates_review.sh`; HEAD `4c14f6c978` plus the uncommitted `tt/vision/mlp.py` change
+(`dirty_tt=1`), committed unchanged afterwards. HF `refs/main` read 914f7f89 (not modified).
+`tt/vision/config.py` got a comment-only edit during the run.
+
+| gate | result |
+|---|---|
+| vision `pytest tests/pcc/vision -q` | 91 passed (81 + 10 new), 135.6 s |
+| full model + trace | 41 passed, 70.0 s |
+| demo | 2 passed; retrieval argmax TT == HF (`retrieval_argmax_agree` 1.0) |
+| watcher (vision suite) | 91 passed, 166.3 s; `watcher_review/.../watcher.log` 328 lines, 0 error lines |
+
+Accuracy vs the E5b gates: single-image cases are bit-identical. Batched cases (b2, video8) change
+because their MLP now uses the one-image matmul configs. Min soft-token PCC is 0.99653 (video frame
+3; was 0.99716), worst-token cosine is 0.8638 (portrait, unchanged), and the mean soft-token PCC is
+0.99856 (was 0.99859). Per-layer PCC min is 0.999935 (unchanged), full-model cosine min is 0.999246
+(was 0.999264), and trace == eager max abs is 0.0 **[M]**.
+
+### Soft-token accuracy, re-derived
+
+From `results_L0_none.jsonl` (E2 path) and `results_gates.jsonl` (`47824a6e41` and the
+`hf_bf16_*` records), 15 images / frames **[M]**. Reviewer figures checked:
+- Portrait worst-token cosine 0.943 -> 0.864, frame 5 0.986 -> 0.909 (HF bf16 0.982), soft-token
+  PCC portrait 0.99804 vs HF bf16 0.99843, frame 5 0.99733 vs 0.99876: all match.
+- The "~1e-3 mean soft-token PCC" loss does not match. The mean loss against E2 is 3.7e-4 (max
+  1.6e-3, frame 5). E5b is 3.6e-4 below HF bf16 on the mean (0.99859 vs 0.99895), below it on 11 of
+  15 images. The docs use the measured values.
+- Attribution from the ablation rows: gelu-as-multiply (L8 -> L9: frame 5 PCC 0.99827 -> 0.99733,
+  cosine 0.970 -> 0.909; portrait cosine 0.887 -> 0.862); the bf16-weight projection / MLP config
+  rows (L3 -> L6: portrait cosine 0.962 -> 0.909); SDPA HiFi2 table (L0 -> L1: frame 5 PCC 0.99895 ->
+  0.99791).
+
+### E2 baseline drift
+
+The reviewer's text-control finding was checked. `e5a/logs/final.log` has 1 x 512 at 7.315 ms, and
+the E5b gates (`results_gates_a410c73278.jsonl`, `full_latency_device_ms` b1_s512) have 7.3153 ms.
+`build/lib/libtt_metal.so` dates from 11:59 and `ttnn/ttnn/_ttnn.so` from 12:01; the `e2/logs/`
+files are from 13:03 and 13:14 **[M]**. The "card DRAM state" guess is removed, and the cause is
+recorded as unexplained.
