@@ -148,6 +148,7 @@ void bind_cache_layout_api(nb::module_& mod) {
         last), its mesh (None => the model's), and for a head-sharded cache the one head it holds (None =>
         every head, fanned into slots). Caches sharing a name are one table config, one per pipeline stage.
         holds_only_published_layers: the cache's batch axis is slot x its published layers only.
+        layer_aliases: {alias layer: published layer}, further table layers that publish a layer's chunks.
     )")
         .def(
             "__init__",
@@ -162,7 +163,8 @@ void bind_cache_layout_api(nb::module_& mod) {
                uint32_t num_layers,
                std::optional<tt::tt_fabric::MeshId> mesh_id,
                std::optional<uint32_t> head,
-               bool holds_only_published_layers) {
+               bool holds_only_published_layers,
+               const std::map<uint32_t, uint32_t>& layer_aliases) {
                 new (t) CacheConfig{
                     .spec = spec,
                     .topology = topology,
@@ -174,7 +176,8 @@ void bind_cache_layout_api(nb::module_& mod) {
                     .num_layers = num_layers,
                     .mesh_id = mesh_id,
                     .head = head,
-                    .holds_only_published_layers = holds_only_published_layers};
+                    .holds_only_published_layers = holds_only_published_layers,
+                    .layer_aliases = layer_aliases};
             },
             nb::arg("spec"),
             nb::arg("topology"),
@@ -186,7 +189,8 @@ void bind_cache_layout_api(nb::module_& mod) {
             nb::arg("num_layers") = 0,
             nb::arg("mesh_id") = nb::none(),
             nb::arg("head") = nb::none(),
-            nb::arg("holds_only_published_layers") = false)
+            nb::arg("holds_only_published_layers") = false,
+            nb::arg("layer_aliases") = std::map<uint32_t, uint32_t>{})
         .def_rw("spec", &CacheConfig::spec)
         .def_rw("topology", &CacheConfig::topology)
         .def_rw("policy", &CacheConfig::policy)
@@ -197,7 +201,8 @@ void bind_cache_layout_api(nb::module_& mod) {
         .def_rw("num_layers", &CacheConfig::num_layers)
         .def_rw("mesh_id", &CacheConfig::mesh_id)
         .def_rw("head", &CacheConfig::head)
-        .def_rw("holds_only_published_layers", &CacheConfig::holds_only_published_layers);
+        .def_rw("holds_only_published_layers", &CacheConfig::holds_only_published_layers)
+        .def_rw("layer_aliases", &CacheConfig::layer_aliases);
 
     nb::class_<MapGeometry>(mod, "MapGeometry", "The (layer, slot, position) grid a table is enumerated over.")
         .def(

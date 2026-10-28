@@ -974,5 +974,121 @@ TEST(ToChunkMap, CPU_ATableOfSomeConfigsIsComparedByName) {
     EXPECT_NE(first_table_difference(all, to_chunk_map(some), /*only_actual_configs=*/true), std::nullopt);
 }
 
+// --- A ROW_MAJOR cache (GLM's scaled-FP8 KVPE): one page per token, padded to the DRAM alignment ---
+TEST(ToChunkMap, CPU_ARowMajorCacheChunksTokensOfAlignedPages) {
+    const uint32_t row_bytes = 656;  // packed FP8 latent + scales, not a multiple of the DRAM alignment
+    const uint32_t aligned_row_bytes = 704;
+    const uint32_t sp = 4;
+    const uint32_t num_slots = 2;
+    const uint32_t max_seq_len = 1024;
+    const uint32_t per_dev_seq = max_seq_len / sp;
+    const uint64_t base = 0x80000ull;
+
+    CoreRangeSet grid(CoreRange(CoreCoord(0, 0), CoreCoord(kNumBanks - 1, 0)));
+    NdShardSpec nd{
+        Shape{1, 1, kTileLocal, row_bytes},
+        grid,
+        ShardOrientation::ROW_MAJOR,
+        ShardDistributionStrategy::ROUND_ROBIN_1D};
+    const TensorSpec tensor(
+        Shape{num_slots, 1, max_seq_len, row_bytes},
+        TensorLayout(DataType::FP8_E4M3, PageConfig(Layout::ROW_MAJOR), MemoryConfig(BufferType::DRAM, nd)));
+    const KvLayoutSpec spec{.tensor = tensor, .temporal = temporal::Dense{}, .arch = tt::ARCH::BLACKHOLE};
+    ASSERT_EQ(dram_alignment(tt::ARCH::BLACKHOLE), 64u);
+    EXPECT_EQ(chunk_size_bytes(spec, kTileLocal), kTileLocal * aligned_row_bytes);
+
+    GenerationPolicy policy;
+    policy.bank_scheme = BankScheme::Natural;
+    policy.bank_order = BankOrder::Identity;
+    policy.k_chunk_size = KChunkSize{kTileLocal};
+    policy.device_chunk_size = DeviceChunkSize{per_dev_seq};
+    std::vector<MeshCoordinate> coords;
+    for (uint32_t r = 0; r < sp; ++r) {
+        coords.emplace_back(r, 0);
+    }
+    const CacheConfig config{
+        .spec = spec,
+        .topology = TensorTopology(MeshShape{sp}, {MeshMapperConfig::Shard{.dim = 2}}, coords),
+        .policy = policy,
+        .base_addr = base};
+    const MapGeometry geom{
+        .num_layers = 1, .num_slots = num_slots, .max_seq_len = max_seq_len, .position_step = kTileLocal};
+    const KvChunkAddressTable table = to_chunk_map({config}, tt::tt_fabric::MeshId{0}, MeshShape{sp, 1}, geom);
+
+    EXPECT_EQ(table.config(0).chunk_size_bytes, kTileLocal * aligned_row_bytes);
+    for (uint32_t slot = 0; slot < num_slots; ++slot) {
+        for (uint32_t pos = 0; pos < max_seq_len; pos += kTileLocal) {
+            const uint32_t page = slot * (per_dev_seq / kTileLocal) + (pos % per_dev_seq) / kTileLocal;
+            const KvCacheLocation loc = table.lookup(0, pos, slot, 0u);
+            EXPECT_EQ(addr_channel(loc.noc_addr), page % kNumBanks) << "slot=" << slot << " pos=" << pos;
+            EXPECT_EQ(addr_local(loc.noc_addr), base + (page / kNumBanks) * kTileLocal * aligned_row_bytes)
+                << "slot=" << slot << " pos=" << pos;
+            const auto& group = table.get_device_group(loc.device_group_index);
+            ASSERT_EQ(group.fabric_node_ids.size(), 1u);
+            EXPECT_EQ(group.fabric_node_ids[0].chip_id, pos / per_dev_seq);
+        }
+    }
+}
+
+// --- Layer aliases (GLM's MTP levels past the computed one read level 1's rows) ---
+CacheLayoutModel aliased_model() {
+    CacheLayoutModel model = m3_prefill_model(kTwoStages);
+    model.geometry.num_layers = kTwoStages.num_layers() + 2;
+    for (CacheConfig& cache : model.caches) {
+        if (cache.name == "00" && cache.first_layer > 0) {
+            cache.layer_aliases = {{5, 4}, {6, 4}};
+        }
+    }
+    return model;
+}
+
+// The second stage's K head 0 cache, which holds layers [2, 5).
+CacheConfig& second_stage_k_h0(CacheLayoutModel& model) {
+    return *std::find_if(model.caches.begin(), model.caches.end(), [](const CacheConfig& cache) {
+        return cache.name == "00" && cache.first_layer > 0;
+    });
+}
+
+TEST(ToChunkMap, CPU_AnAliasLayerPublishesItsSourceLayersChunks) {
+    const KvChunkAddressTable table = to_chunk_map(aliased_model());
+    const uint32_t k_h0 = table.config_id_of("00");
+    uint32_t checked = 0;
+    for (uint32_t slot = 0; slot < kPrefillUsers; ++slot) {
+        for (uint32_t pos = 0; pos < kPrefillSeqLen; pos += kTileLocal) {
+            const KvCacheLocation source = table.lookup(4, pos, slot, k_h0);
+            for (uint32_t alias : {5u, 6u}) {
+                const KvCacheLocation loc = table.lookup(alias, pos, slot, k_h0);
+                EXPECT_EQ(loc.size_bytes, source.size_bytes);
+                EXPECT_EQ(loc.noc_addr, source.noc_addr) << "alias=" << alias << " pos=" << pos;
+                EXPECT_EQ(loc.device_group_index, source.device_group_index);
+            }
+            EXPECT_EQ(table.lookup(5, pos, slot, table.config_id_of("01")).size_bytes, 0u);
+            ++checked;
+        }
+    }
+    EXPECT_GT(checked, 0u);
+}
+
+TEST(ToChunkMap, CPU_AnAliasNeedsAPublishedSourceAndALayerOutsideTheCache) {
+    CacheLayoutModel model = aliased_model();
+    second_stage_k_h0(model).layer_aliases = {{5, 1}};  // layer 1 is the first stage's, not this cache's
+    EXPECT_ANY_THROW(to_chunk_map(model));
+    model = aliased_model();
+    second_stage_k_h0(model).layer_aliases = {{3, 4}};  // layer 3 is a layer the cache holds
+    EXPECT_ANY_THROW(to_chunk_map(model));
+    model = aliased_model();
+    second_stage_k_h0(model).layer_aliases = {{7, 4}};  // past the model
+    EXPECT_ANY_THROW(to_chunk_map(model));
+}
+
+TEST(CacheLayoutModel, CPU_LayerAliasesRoundTrip) {
+    const CacheLayoutModel model = aliased_model();
+    const CacheLayoutModel imported = import_cache_layout_model_from_protobuf(export_to_protobuf(model));
+    for (size_t i = 0; i < model.caches.size(); ++i) {
+        EXPECT_EQ(imported.caches[i].layer_aliases, model.caches[i].layer_aliases);
+    }
+    EXPECT_EQ(first_table_difference(to_chunk_map(model), to_chunk_map(imported)), std::nullopt);
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::internal::disaggregation

@@ -41,6 +41,8 @@ message CacheLayoutConfig {
     optional uint32 head = 10;
     // The cache holds only its published layers, in order (its batch axis is slot x those layers).
     bool holds_only_published_layers = 11;
+    // Further table layers that publish a held layer's chunks: alias layer -> published layer.
+    map<uint32, uint32> layer_aliases = 12;
 }
 
 message CacheTensorLayoutSpec {

@@ -5,6 +5,7 @@
 #pragma once
 
 #include <cstdint>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -64,6 +65,9 @@ struct CacheConfig {
     // The cache holds only the layers it publishes, in order: its batch axis is slot x those layers
     // (an attention cache allocated on only some layers, e.g. MLA layers between linear-attention ones).
     bool holds_only_published_layers = false;
+    // Further table layers that publish a held layer's chunks, {alias layer: published layer} (decode's MTP
+    // levels past the ones prefill computes read level 1's rows).
+    std::map<uint32_t, uint32_t> layer_aliases;
 };
 
 // The commonized factory. `configs` is a model expressed as an ordered LIST of co-resident caches
