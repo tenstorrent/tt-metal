@@ -13,6 +13,7 @@
 
 #include "ttnn/operations/core/data_movement_kernel/datamovement_kernel_config.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::constants;
 using namespace tt::tt_metal;
@@ -61,6 +62,10 @@ ttnn::device_operation::ProgramArtifacts TilizeSingleCoreProgramFactory::create_
         uint32_t max_l1_size =
             (a.device()->l1_size_per_core() / 2) - a.device()->allocator()->get_base_allocator_addr(HalMemType::L1);
         uint32_t max_tiles = max_l1_size / (input_single_tile_size + output_single_tile_size);  // 2 CBs
+        if (a.device()->arch() == tt::ARCH::QUASAR) {
+            // Quasar caps the width of one tilize block (see QUASAR_MAX_TILIZE_BLOCK_TILES in common.hpp).
+            max_tiles = std::min(max_tiles, operations::data_movement::QUASAR_MAX_TILIZE_BLOCK_TILES);
+        }
         // Currently need the number of tiles in a row to be divisible by tiles in a block
         if (num_tiles_in_row <= max_tiles) {
             num_tiles_per_block = num_tiles_in_row;

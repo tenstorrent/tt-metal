@@ -15,6 +15,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/hal.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include <tt-metalium/host_api.hpp>
 using namespace tt::tt_metal;
@@ -356,6 +357,23 @@ TilizeDeviceOperation::program_factory_t TilizeDeviceOperation::select_program_f
 
     size_t grid_area = available_grid.num_cores();
     auto [ncores, nblocks_per_core] = compute_ncores(grid_area, nblocks);
+    // The default factory tilizes a whole row per block, which Quasar cannot do past
+    // QUASAR_MAX_TILIZE_BLOCK_TILES (see common.hpp); the block factory bounds the block width
+    // instead, whenever the grid admits such a split. Same routing as tilize_with_val_padding.
+    if (device->arch() == tt::ARCH::QUASAR &&
+        num_tiles_per_row > operations::data_movement::QUASAR_MAX_TILIZE_BLOCK_TILES) {
+        const uint32_t num_blocks_block =
+            (input_tensor_a.padded_shape()[-1] * input_tensor_a.padded_shape()[-2]) / (tile_height * tile_width);
+        if (ttnn::try_compute_ncores_wh_sb(
+                grid_area,
+                num_blocks_block,
+                num_tiles_per_row,
+                num_tiles_per_col,
+                operations::data_movement::QUASAR_MAX_TILIZE_BLOCK_TILES)
+                .has_value()) {
+            return ttnn::prim::TilizeMultiCoreBlockProgramFactory{};
+        }
+    }
     constexpr uint32_t threshold_row_block = WIDE_ROW_TILE_THRESHOLD;
     if (num_tiles_per_row > threshold_row_block &&
         (num_tiles_per_col > threshold_row_block || num_tiles_per_row > num_tiles_per_col)) {

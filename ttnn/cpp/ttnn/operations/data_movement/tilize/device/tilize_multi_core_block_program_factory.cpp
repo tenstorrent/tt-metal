@@ -65,7 +65,10 @@ ttnn::device_operation::ProgramArtifacts TilizeMultiCoreBlockProgramFactory::cre
         output_single_tile_size,
         tile_height,
         tile_width,
-        operation_attributes.sub_core_grids);
+        operation_attributes.sub_core_grids,
+        a.device()->arch() == tt::ARCH::QUASAR
+            ? std::optional<uint32_t>(operations::data_movement::QUASAR_MAX_TILIZE_BLOCK_TILES)
+            : std::nullopt);
     const BlockBufferSet& full_set = plan.full;
     const BlockBufferSet& cliffrow_set = plan.cliffrow;
     const auto& [ncores, all_cores, core_range, cliff_row_core_range, cliff_col_core_range, cliff_col_row_core_range, nblocks_per_core, single_block_size, single_block_size_cliff_row, single_block_size_cliff_col, has_cliff_row, has_cliff_col, full_cores_per_row, full_cores_per_col, single_sub_block_size] =
