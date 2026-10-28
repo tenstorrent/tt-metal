@@ -157,6 +157,7 @@ class TtKairos:
         causal[torch.triu(torch.ones(N_SEG, N_SEG, dtype=torch.bool), 1).nonzero(as_tuple=True)] = NEG
         self.causal = upload(device, causal.reshape(1, 1, D_PAD, D_PAD), dtype=ttnn.float32)
         self._const = {}
+        self._mc = ttnn.DRAM_MEMORY_CONFIG  # R2-3: L1 while the decoder runs
 
     # ---- host side -------------------------------------------------------------------------------------------
     def module_freqs(self, s_features):
@@ -258,29 +259,32 @@ class TtKairos:
             program_config=cfg,
             compute_kernel_config=self.p.mm(fid) if fid is None else fid,
             dtype=dtype,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=self._mc,
         )
 
     def _norm(self, x, w):
         import ttnn
 
-        return ttnn.rms_norm(
-            x, epsilon=1e-6, weight=w, compute_kernel_config=self.p.hifi4(), memory_config=ttnn.DRAM_MEMORY_CONFIG
-        )
+        return ttnn.rms_norm(x, epsilon=1e-6, weight=w, compute_kernel_config=self.p.hifi4(), memory_config=self._mc)
 
     def _rope(self, x, xr, cs):
         """x * cos + (x @ R) * sin; x @ R comes from the folded weight columns (R1-1)."""
         import ttnn
 
         cos, sin = cs
-        return ttnn.add(ttnn.multiply(x, cos), ttnn.multiply(xr, sin))
+        mc = self._mc
+        return ttnn.add(
+            ttnn.multiply(x, cos, memory_config=mc), ttnn.multiply(xr, sin, memory_config=mc), memory_config=mc
+        )
 
     def _split(self, x, w, B, S):
         """Normed x and a [a | b | c] weight -> three [B, 8, S, 64] head tensors."""
         import ttnn
 
         y = ttnn.reshape(self._lin(x, w), (B, S, 3 * D))
-        return ttnn.transformer.split_query_key_value_and_split_heads(y, num_heads=H, transpose_key=False)
+        return ttnn.transformer.split_query_key_value_and_split_heads(
+            y, num_heads=H, transpose_key=False, memory_config=self._mc
+        )
 
     def _attend(self, q, k, v, mask, B, Sq):
         """q [B, 8, Sq, 64], k / v [B, 8, Sk, 64] (rotated) -> (1, 1, B * Sq, 512). T5: no score scaling."""
@@ -294,15 +298,24 @@ class TtKairos:
             dtype=ttnn.float32,
             compute_kernel_config=self.p.hifi4(),
             program_config=bmm_config(self.device, Sq, DK, Sk, fp32),
+            memory_config=self._mc,
         )  # R1-2b: full grid
-        s = ttnn.softmax(ttnn.add(s, mask), dim=-1, numeric_stable=True, compute_kernel_config=self.p.hifi4())
+        mc = self._mc
+        s = ttnn.softmax(
+            ttnn.add(s, mask, memory_config=mc),
+            dim=-1,
+            numeric_stable=True,
+            compute_kernel_config=self.p.hifi4(),
+            memory_config=mc,
+        )
         o = ttnn.matmul(
-            ttnn.typecast(s, ttnn.bfloat16),
+            ttnn.typecast(s, ttnn.bfloat16, memory_config=mc),
             v,
             compute_kernel_config=self.p.mm(),
             program_config=bmm_config(self.device, Sq, Sk, DK, fp32),
+            memory_config=mc,
         )
-        o = ttnn.transformer.concatenate_heads(o)  # [B, Sq, 512]
+        o = ttnn.transformer.concatenate_heads(o, memory_config=mc)  # [B, Sq, 512]
         return ttnn.reshape(o, (1, 1, B * Sq, D))
 
     def _qkv(self, x, blk, cs, B, S):
@@ -327,14 +340,21 @@ class TtKairos:
         import ttnn
 
         q, qr, qd = self._split(self._norm(h, blk["n2"]), blk["q"], B, D_PAD)  # [q | qR | q]: q again, unused
-        k, v, kr = self._split(enc, blk["kv"], B, S_PAD)  # R1-3: no reshape + permute head split
+        mc, self._mc = self._mc, ttnn.DRAM_MEMORY_CONFIG  # R2-3: the encoder-side k / v (B x 96 rows) stay in DRAM
+        try:
+            k, v, kr = self._split(enc, blk["kv"], B, S_PAD)  # R1-3: no reshape + permute head split
+            k = self._rope(k, kr, cs_k)
+        finally:
+            self._mc = mc
         ttnn.deallocate(qd)
-        return self._lin(self._attend(self._rope(q, qr, cs_q), self._rope(k, kr, cs_k), v, mask, B, D_PAD), blk["co"])
+        return self._lin(self._attend(self._rope(q, qr, cs_q), k, v, mask, B, D_PAD), blk["co"])
 
     def _ff(self, h, blk, norm):
         import ttnn
 
-        return ttnn.add(h, self._lin(self._lin(self._norm(h, blk[norm]), blk["wi"], act="relu"), blk["wo"]))
+        return ttnn.add(
+            h, self._lin(self._lin(self._norm(h, blk[norm]), blk["wi"], act="relu"), blk["wo"]), memory_config=self._mc
+        )
 
     def enc_block(self, h, blk, cs, mask, B):
         import ttnn
@@ -346,8 +366,9 @@ class TtKairos:
         import ttnn
 
         cs_self, cs_q, cs_k = rope
-        h = ttnn.add(h, self.self_attention(h, blk, cs_self, self.causal, B, D_PAD))
-        h = ttnn.add(h, self.cross_attention(h, enc, blk, cs_q, cs_k, cross_mask, B))
+        mc = self._mc
+        h = ttnn.add(h, self.self_attention(h, blk, cs_self, self.causal, B, D_PAD), memory_config=mc)
+        h = ttnn.add(h, self.cross_attention(h, enc, blk, cs_q, cs_k, cross_mask, B), memory_config=mc)
         return self._ff(h, blk, "n3")
 
     def embed(self, xs):
@@ -374,14 +395,18 @@ class TtKairos:
         return self._norm(h, self.enc_norm)
 
     def decode(self, enc, inp, mark=None):
-        pass
+        import ttnn
 
         mark = mark or (lambda _name: None)
         B = inp["B"]
         h = inp["dec_in"]
-        for blk, rope in zip(self.dec, inp["dec_rope"]):
-            mark("dec_block")
-            h = self.dec_block(h, enc, blk, rope, inp["cross_mask"], B)
+        self._mc = ttnn.L1_MEMORY_CONFIG  # R2-3: decoder activations in L1 (B x 32 rows); the output goes to DRAM
+        try:
+            for blk, rope in zip(self.dec, inp["dec_rope"]):
+                mark("dec_block")
+                h = self.dec_block(h, enc, blk, rope, inp["cross_mask"], B)
+        finally:
+            self._mc = ttnn.DRAM_MEMORY_CONFIG
         mark("dec_norm")
         return self._norm(h, self.dec_norm)
 
