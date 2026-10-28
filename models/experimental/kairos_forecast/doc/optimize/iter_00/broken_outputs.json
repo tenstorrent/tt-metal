@@ -1,6 +1,6 @@
 {
- "started_at": 1793213684.8237944,
- "git_head": "2741f2940cf18b682dec50ab0469576c983160a9",
+ "started_at": 1793215334.242903,
+ "git_head": "bd966218ee348c0efd1ff8b0032d283e01da7af1",
  "git_dirty": "",
  "fixed": {
   "suite": "/home/andy/bringup/kairos/models/experimental/kairos_forecast/doc/optimize/iter_00/suite.jsonl",
@@ -52,9 +52,12 @@
     "collapsed": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_final_spread",
       "floor:pcc_final_spread",
@@ -80,6 +83,7 @@
     "band_0.88": {
      "paper": [
       "drift:abs_err_max",
+      "drift:median_err",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
       "floor:spread_ratio_p01",
@@ -90,6 +94,8 @@
     "band_1.12": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
+      "drift:median_err",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
       "drift:spread_ratio_p50",
@@ -100,6 +106,8 @@
     "band_0.3_1pct": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
+      "drift:median_err",
       "drift:pcc_final_spread",
       "floor:pcc_final_spread",
       "drift:pcc_normalized",
@@ -126,6 +134,7 @@
     },
     "level_shift": {
      "paper": [
+      "drift:bias_row_drift_max",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_p50",
@@ -137,10 +146,14 @@
     "lag1": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_normalized",
       "floor:pcc_normalized",
       "drift:pcc_normalized_full",
@@ -156,6 +169,8 @@
     },
     "level_shift_h0": {
      "paper": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
@@ -172,10 +187,13 @@
     "lag1_h0": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
       "drift:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
       "floor:pcc_row_min",
@@ -187,8 +205,19 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h0": {
+     "paper": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final"
+     ]
+    },
     "level_shift_h1": {
      "paper": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
@@ -205,9 +234,12 @@
     "lag1_h1": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "drift:median_err",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
       "floor:pcc_row_min",
@@ -219,18 +251,38 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h1": {
+     "paper": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final"
+     ]
+    },
+    "level_shift_rows": {
+     "paper": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max"
+     ]
+    },
     "no_negate": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -256,16 +308,30 @@
     },
     "level_shift_final": {
      "paper": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     },
     "lag1_final": {
      "paper": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:median_err",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_rows_final": {
+     "paper": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:median_err"
      ]
     }
    },
@@ -276,9 +342,12 @@
     "collapsed": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_final_spread",
       "floor:pcc_final_spread",
@@ -304,6 +373,7 @@
     "band_0.88": {
      "paper": [
       "drift:abs_err_max",
+      "drift:median_err",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
       "floor:spread_ratio_p01",
@@ -314,6 +384,8 @@
     "band_1.12": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
+      "drift:median_err",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
       "drift:spread_ratio_p50",
@@ -324,6 +396,8 @@
     "band_0.3_1pct": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
+      "drift:median_err",
       "drift:pcc_final_spread",
       "floor:pcc_final_spread",
       "drift:pcc_normalized",
@@ -350,6 +424,7 @@
     },
     "level_shift": {
      "paper": [
+      "drift:bias_row_drift_max",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_p50",
@@ -361,10 +436,14 @@
     "lag1": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_normalized",
       "floor:pcc_normalized",
       "drift:pcc_normalized_full",
@@ -380,6 +459,8 @@
     },
     "level_shift_h0": {
      "paper": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
@@ -396,10 +477,13 @@
     "lag1_h0": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
       "drift:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
       "floor:pcc_row_min",
@@ -411,8 +495,19 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h0": {
+     "paper": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final"
+     ]
+    },
     "level_shift_h1": {
      "paper": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
@@ -429,9 +524,12 @@
     "lag1_h1": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "drift:median_err",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
       "floor:pcc_row_min",
@@ -443,18 +541,38 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h1": {
+     "paper": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final"
+     ]
+    },
+    "level_shift_rows": {
+     "paper": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max"
+     ]
+    },
     "no_negate": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -480,16 +598,30 @@
     },
     "level_shift_final": {
      "paper": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     },
     "lag1_final": {
      "paper": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:median_err",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_rows_final": {
+     "paper": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:median_err"
      ]
     }
    }
@@ -497,18 +629,15 @@
   "paper/performance": {
    "suite": {
     "golden": {
-     "paper": [
-      [
-       "spread_ratio_p50",
-       "drift"
-      ]
-     ]
+     "paper": []
     },
     "collapsed": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_final_spread",
       "floor:pcc_final_spread",
@@ -527,6 +656,7 @@
       "floor:pcc_step_final",
       "floor:spread_ratio_min",
       "floor:spread_ratio_p01",
+      "drift:spread_ratio_p50",
       "floor:spread_ratio_p50"
      ]
     },
@@ -534,18 +664,23 @@
      "paper": [
       "drift:abs_err_max",
       "floor:spread_ratio_p01",
+      "drift:spread_ratio_p50",
       "floor:spread_ratio_p50"
      ]
     },
     "band_1.12": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
+      "drift:spread_ratio_p50",
       "floor:spread_ratio_p50"
      ]
     },
     "band_0.3_1pct": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
+      "drift:median_err",
       "drift:pcc_final_spread",
       "floor:pcc_row_min",
       "drift:pcc_row_min_active",
@@ -564,6 +699,7 @@
     },
     "level_shift": {
      "paper": [
+      "drift:bias_row_drift_max",
       "drift:bias_row_p50",
       "floor:bias_row_p50"
      ]
@@ -571,6 +707,9 @@
     "lag1": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:median_err",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
       "floor:pcc_row_min",
@@ -584,6 +723,8 @@
     },
     "level_shift_h0": {
      "paper": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
@@ -593,6 +734,9 @@
     "lag1_h0": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:median_err",
       "floor:pcc_row_min",
       "drift:pcc_row_min_active",
       "drift:pcc_row_p01_active",
@@ -602,8 +746,16 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h0": {
+     "paper": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final"
+     ]
+    },
     "level_shift_h1": {
      "paper": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
@@ -613,6 +765,9 @@
     "lag1_h1": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:median_err",
       "drift:pcc_row_min_active",
       "drift:pcc_row_p01_active",
       "drift:pcc_step",
@@ -621,18 +776,33 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h1": {
+     "paper": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final"
+     ]
+    },
+    "level_shift_rows": {
+     "paper": [
+      "drift:bias_row_drift_max"
+     ]
+    },
     "no_negate": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -649,37 +819,43 @@
       "floor:pcc_step",
       "drift:pcc_step_final",
       "floor:pcc_step_final",
+      "floor:spread_ratio_max",
       "floor:spread_ratio_min",
       "floor:spread_ratio_p01"
      ]
     },
     "level_shift_final": {
      "paper": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final"
      ]
     },
     "lag1_final": {
      "paper": [
+      "drift:bias_row_drift_max_final",
+      "drift:median_err",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_rows_final": {
+     "paper": [
+      "drift:bias_row_drift_max_final"
      ]
     }
    },
    "bench": {
     "golden": {
-     "paper": [
-      [
-       "spread_ratio_p50",
-       "drift"
-      ]
-     ]
+     "paper": []
     },
     "collapsed": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_final_spread",
       "floor:pcc_final_spread",
@@ -698,6 +874,7 @@
       "floor:pcc_step_final",
       "floor:spread_ratio_min",
       "floor:spread_ratio_p01",
+      "drift:spread_ratio_p50",
       "floor:spread_ratio_p50"
      ]
     },
@@ -705,18 +882,23 @@
      "paper": [
       "drift:abs_err_max",
       "floor:spread_ratio_p01",
+      "drift:spread_ratio_p50",
       "floor:spread_ratio_p50"
      ]
     },
     "band_1.12": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
+      "drift:spread_ratio_p50",
       "floor:spread_ratio_p50"
      ]
     },
     "band_0.3_1pct": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
+      "drift:median_err",
       "drift:pcc_final_spread",
       "floor:pcc_row_min",
       "drift:pcc_row_min_active",
@@ -735,6 +917,7 @@
     },
     "level_shift": {
      "paper": [
+      "drift:bias_row_drift_max",
       "drift:bias_row_p50",
       "floor:bias_row_p50"
      ]
@@ -742,6 +925,9 @@
     "lag1": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:median_err",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
       "floor:pcc_row_min",
@@ -755,6 +941,8 @@
     },
     "level_shift_h0": {
      "paper": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
@@ -764,6 +952,9 @@
     "lag1_h0": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:median_err",
       "floor:pcc_row_min",
       "drift:pcc_row_min_active",
       "drift:pcc_row_p01_active",
@@ -773,8 +964,16 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h0": {
+     "paper": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final"
+     ]
+    },
     "level_shift_h1": {
      "paper": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
@@ -784,6 +983,9 @@
     "lag1_h1": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:median_err",
       "drift:pcc_row_min_active",
       "drift:pcc_row_p01_active",
       "drift:pcc_step",
@@ -792,18 +994,33 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h1": {
+     "paper": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final"
+     ]
+    },
+    "level_shift_rows": {
+     "paper": [
+      "drift:bias_row_drift_max"
+     ]
+    },
     "no_negate": {
      "paper": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -820,20 +1037,29 @@
       "floor:pcc_step",
       "drift:pcc_step_final",
       "floor:pcc_step_final",
+      "floor:spread_ratio_max",
       "floor:spread_ratio_min",
       "floor:spread_ratio_p01"
      ]
     },
     "level_shift_final": {
      "paper": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final"
      ]
     },
     "lag1_final": {
      "paper": [
+      "drift:bias_row_drift_max_final",
+      "drift:median_err",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_rows_final": {
+     "paper": [
+      "drift:bias_row_drift_max_final"
      ]
     }
    }
@@ -847,9 +1073,11 @@
     "collapsed": {
      "long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_final_spread",
       "floor:pcc_final_spread",
@@ -873,6 +1101,7 @@
       "drift:abs_err_max",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_final_spread",
       "floor:pcc_final_spread",
@@ -917,6 +1146,7 @@
     "band_1.12": {
      "long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
@@ -976,6 +1206,7 @@
       "drift:abs_err_max",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final_spread",
       "floor:pcc_final_spread",
       "drift:pcc_normalized_full",
@@ -989,6 +1220,7 @@
     "level_shift": {
      "long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_p50",
@@ -997,6 +1229,8 @@
       "floor:inactive_max_err"
      ],
      "long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
@@ -1011,8 +1245,10 @@
     "lag1": {
      "long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:bias_row_max",
       "floor:bias_row_max",
+      "drift:median_err",
       "drift:pcc_normalized",
       "floor:pcc_normalized",
       "drift:pcc_normalized_full",
@@ -1026,9 +1262,11 @@
      ],
      "long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:bias_row_max",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_normalized",
       "floor:pcc_normalized",
       "drift:pcc_normalized_full",
@@ -1039,13 +1277,14 @@
       "drift:pcc_step",
       "floor:pcc_step",
       "drift:pcc_step_final",
-      "floor:pcc_step_final",
-      "drift:spread_ratio_p50"
+      "floor:pcc_step_final"
      ]
     },
     "level_shift_h0": {
      "long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
@@ -1057,6 +1296,8 @@
       "floor:inactive_max_err"
      ],
      "long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
@@ -1071,8 +1312,10 @@
     "lag1_h0": {
      "long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:bias_row_max",
       "floor:bias_row_max",
+      "drift:median_err",
       "drift:pcc_normalized",
       "floor:pcc_normalized",
       "drift:pcc_normalized_full",
@@ -1086,9 +1329,11 @@
      ],
      "long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:bias_row_max",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_normalized",
       "floor:pcc_normalized",
       "drift:pcc_normalized_full",
@@ -1102,13 +1347,35 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h0": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final"
+     ],
+     "long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err"
+     ]
+    },
     "level_shift_h1": {
      "long_horizon": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final"
      ],
      "long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
@@ -1122,12 +1389,15 @@
     },
     "lag1_h1": {
      "long_horizon": [
+      "drift:median_err",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
      ],
      "long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:bias_row_max",
+      "drift:median_err",
       "drift:pcc_normalized",
       "floor:pcc_normalized",
       "drift:pcc_normalized_full",
@@ -1141,11 +1411,46 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h1": {
+     "long_horizon": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final"
+     ],
+     "long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err"
+     ]
+    },
+    "level_shift_rows": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max"
+     ],
+     "long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err"
+     ]
+    },
     "no_negate": {
      "long_horizon": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -1155,13 +1460,17 @@
      ],
      "long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -1187,7 +1496,9 @@
     },
     "level_shift_final": {
      "long_horizon": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final"
      ],
@@ -1195,10 +1506,19 @@
     },
     "lag1_final": {
      "long_horizon": [
+      "drift:median_err",
       "drift:pcc_final_spread",
       "floor:pcc_final_spread",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ],
+     "long_horizon_tf": "not applicable (identical to the golden)"
+    },
+    "level_shift_rows_final": {
+     "long_horizon": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final"
      ],
      "long_horizon_tf": "not applicable (identical to the golden)"
     }
@@ -1211,9 +1531,11 @@
     "collapsed": {
      "long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_final_spread",
       "floor:pcc_final_spread",
@@ -1237,6 +1559,7 @@
       "drift:abs_err_max",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_final_spread",
       "floor:pcc_final_spread",
@@ -1281,6 +1604,7 @@
     "band_1.12": {
      "long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
@@ -1340,6 +1664,7 @@
       "drift:abs_err_max",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final_spread",
       "floor:pcc_final_spread",
       "drift:pcc_normalized_full",
@@ -1353,6 +1678,7 @@
     "level_shift": {
      "long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_p50",
@@ -1361,6 +1687,8 @@
       "floor:inactive_max_err"
      ],
      "long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
@@ -1375,8 +1703,10 @@
     "lag1": {
      "long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:bias_row_max",
       "floor:bias_row_max",
+      "drift:median_err",
       "drift:pcc_normalized",
       "floor:pcc_normalized",
       "drift:pcc_normalized_full",
@@ -1390,9 +1720,11 @@
      ],
      "long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:bias_row_max",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_normalized",
       "floor:pcc_normalized",
       "drift:pcc_normalized_full",
@@ -1403,13 +1735,14 @@
       "drift:pcc_step",
       "floor:pcc_step",
       "drift:pcc_step_final",
-      "floor:pcc_step_final",
-      "drift:spread_ratio_p50"
+      "floor:pcc_step_final"
      ]
     },
     "level_shift_h0": {
      "long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
@@ -1421,6 +1754,8 @@
       "floor:inactive_max_err"
      ],
      "long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
@@ -1435,8 +1770,10 @@
     "lag1_h0": {
      "long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:bias_row_max",
       "floor:bias_row_max",
+      "drift:median_err",
       "drift:pcc_normalized",
       "floor:pcc_normalized",
       "drift:pcc_normalized_full",
@@ -1450,9 +1787,11 @@
      ],
      "long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:bias_row_max",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_normalized",
       "floor:pcc_normalized",
       "drift:pcc_normalized_full",
@@ -1466,13 +1805,35 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h0": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final"
+     ],
+     "long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err"
+     ]
+    },
     "level_shift_h1": {
      "long_horizon": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final"
      ],
      "long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
@@ -1486,12 +1847,15 @@
     },
     "lag1_h1": {
      "long_horizon": [
+      "drift:median_err",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
      ],
      "long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:bias_row_max",
+      "drift:median_err",
       "drift:pcc_normalized",
       "floor:pcc_normalized",
       "drift:pcc_normalized_full",
@@ -1505,11 +1869,46 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h1": {
+     "long_horizon": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final"
+     ],
+     "long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err"
+     ]
+    },
+    "level_shift_rows": {
+     "long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max"
+     ],
+     "long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err"
+     ]
+    },
     "no_negate": {
      "long_horizon": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -1519,13 +1918,17 @@
      ],
      "long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -1551,7 +1954,9 @@
     },
     "level_shift_final": {
      "long_horizon": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final"
      ],
@@ -1559,10 +1964,19 @@
     },
     "lag1_final": {
      "long_horizon": [
+      "drift:median_err",
       "drift:pcc_final_spread",
       "floor:pcc_final_spread",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ],
+     "long_horizon_tf": "not applicable (identical to the golden)"
+    },
+    "level_shift_rows_final": {
+     "long_horizon": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final"
      ],
      "long_horizon_tf": "not applicable (identical to the golden)"
     }
@@ -1571,22 +1985,13 @@
   "long_horizon/performance": {
    "suite": {
     "golden": {
-     "long_horizon": [
-      [
-       "spread_ratio_p50",
-       "drift"
-      ]
-     ],
-     "long_horizon_tf": [
-      [
-       "spread_ratio_p50",
-       "drift"
-      ]
-     ]
+     "long_horizon": [],
+     "long_horizon_tf": []
     },
     "collapsed": {
      "long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
       "drift:pcc_final",
@@ -1605,12 +2010,14 @@
       "drift:pcc_step_final",
       "floor:pcc_step_final",
       "floor:spread_ratio_min",
+      "drift:spread_ratio_p50",
       "floor:spread_ratio_p50"
      ],
      "long_horizon_tf": [
       "drift:abs_err_max",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_final_spread",
       "floor:pcc_final_spread",
@@ -1629,6 +2036,7 @@
       "floor:pcc_step_final",
       "floor:spread_ratio_min",
       "floor:spread_ratio_p01",
+      "drift:spread_ratio_p50",
       "floor:spread_ratio_p50"
      ]
     },
@@ -1636,19 +2044,24 @@
      "long_horizon": [
       "drift:abs_err_max",
       "floor:spread_ratio_min",
+      "drift:spread_ratio_p50",
       "floor:spread_ratio_p50"
      ],
      "long_horizon_tf": [
       "floor:spread_ratio_p01",
+      "drift:spread_ratio_p50",
       "floor:spread_ratio_p50"
      ]
     },
     "band_1.12": {
      "long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
+      "drift:spread_ratio_p50",
       "floor:spread_ratio_p50"
      ],
      "long_horizon_tf": [
+      "drift:spread_ratio_p50",
       "floor:spread_ratio_p50"
      ]
     },
@@ -1694,10 +2107,13 @@
     },
     "level_shift": {
      "long_horizon": [
+      "drift:bias_row_drift_max",
       "drift:bias_row_p50",
       "floor:bias_row_p50"
      ],
      "long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
@@ -1707,6 +2123,7 @@
     "lag1": {
      "long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
       "drift:pcc_row_min_active",
@@ -1717,6 +2134,8 @@
      ],
      "long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:median_err",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
       "floor:pcc_row_min",
@@ -1730,12 +2149,16 @@
     },
     "level_shift_h0": {
      "long_horizon": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final"
      ],
      "long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50"
      ]
@@ -1743,6 +2166,7 @@
     "lag1_h0": {
      "long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
       "drift:pcc_row_min_active",
@@ -1753,6 +2177,8 @@
      ],
      "long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:median_err",
       "drift:pcc_normalized",
       "floor:pcc_row_min",
       "drift:pcc_row_min_active",
@@ -1763,12 +2189,25 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h0": {
+     "long_horizon": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final"
+     ],
+     "long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final"
+     ]
+    },
     "level_shift_h1": {
      "long_horizon": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final"
      ],
      "long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50"
      ]
@@ -1780,6 +2219,8 @@
      ],
      "long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:median_err",
       "drift:pcc_normalized",
       "drift:pcc_row_min_active",
       "drift:pcc_row_p01_active",
@@ -1789,11 +2230,32 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h1": {
+     "long_horizon": [
+      "drift:bias_row_drift_max_final"
+     ],
+     "long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final"
+     ]
+    },
+    "level_shift_rows": {
+     "long_horizon": [
+      "drift:bias_row_drift_max"
+     ],
+     "long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final"
+     ]
+    },
     "no_negate": {
      "long_horizon": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -1803,13 +2265,17 @@
      ],
      "long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -1835,6 +2301,7 @@
     },
     "level_shift_final": {
      "long_horizon": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final"
      ],
@@ -1846,28 +2313,25 @@
       "floor:pcc_final_spread",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ],
+     "long_horizon_tf": "not applicable (identical to the golden)"
+    },
+    "level_shift_rows_final": {
+     "long_horizon": [
+      "drift:bias_row_drift_max_final"
      ],
      "long_horizon_tf": "not applicable (identical to the golden)"
     }
    },
    "bench": {
     "golden": {
-     "long_horizon": [
-      [
-       "spread_ratio_p50",
-       "drift"
-      ]
-     ],
-     "long_horizon_tf": [
-      [
-       "spread_ratio_p50",
-       "drift"
-      ]
-     ]
+     "long_horizon": [],
+     "long_horizon_tf": []
     },
     "collapsed": {
      "long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
       "drift:pcc_final",
@@ -1886,12 +2350,14 @@
       "drift:pcc_step_final",
       "floor:pcc_step_final",
       "floor:spread_ratio_min",
+      "drift:spread_ratio_p50",
       "floor:spread_ratio_p50"
      ],
      "long_horizon_tf": [
       "drift:abs_err_max",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_final_spread",
       "floor:pcc_final_spread",
@@ -1910,6 +2376,7 @@
       "floor:pcc_step_final",
       "floor:spread_ratio_min",
       "floor:spread_ratio_p01",
+      "drift:spread_ratio_p50",
       "floor:spread_ratio_p50"
      ]
     },
@@ -1917,19 +2384,24 @@
      "long_horizon": [
       "drift:abs_err_max",
       "floor:spread_ratio_min",
+      "drift:spread_ratio_p50",
       "floor:spread_ratio_p50"
      ],
      "long_horizon_tf": [
       "floor:spread_ratio_p01",
+      "drift:spread_ratio_p50",
       "floor:spread_ratio_p50"
      ]
     },
     "band_1.12": {
      "long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
+      "drift:spread_ratio_p50",
       "floor:spread_ratio_p50"
      ],
      "long_horizon_tf": [
+      "drift:spread_ratio_p50",
       "floor:spread_ratio_p50"
      ]
     },
@@ -1975,10 +2447,13 @@
     },
     "level_shift": {
      "long_horizon": [
+      "drift:bias_row_drift_max",
       "drift:bias_row_p50",
       "floor:bias_row_p50"
      ],
      "long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
@@ -1988,6 +2463,7 @@
     "lag1": {
      "long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
       "drift:pcc_row_min_active",
@@ -1998,6 +2474,8 @@
      ],
      "long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:median_err",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
       "floor:pcc_row_min",
@@ -2011,12 +2489,16 @@
     },
     "level_shift_h0": {
      "long_horizon": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final"
      ],
      "long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50"
      ]
@@ -2024,6 +2506,7 @@
     "lag1_h0": {
      "long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
       "drift:pcc_row_min_active",
@@ -2034,6 +2517,8 @@
      ],
      "long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:median_err",
       "drift:pcc_normalized",
       "floor:pcc_row_min",
       "drift:pcc_row_min_active",
@@ -2044,12 +2529,25 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h0": {
+     "long_horizon": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final"
+     ],
+     "long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final"
+     ]
+    },
     "level_shift_h1": {
      "long_horizon": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final"
      ],
      "long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50"
      ]
@@ -2061,6 +2559,8 @@
      ],
      "long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:median_err",
       "drift:pcc_normalized",
       "drift:pcc_row_min_active",
       "drift:pcc_row_p01_active",
@@ -2070,11 +2570,32 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h1": {
+     "long_horizon": [
+      "drift:bias_row_drift_max_final"
+     ],
+     "long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final"
+     ]
+    },
+    "level_shift_rows": {
+     "long_horizon": [
+      "drift:bias_row_drift_max"
+     ],
+     "long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final"
+     ]
+    },
     "no_negate": {
      "long_horizon": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -2084,13 +2605,17 @@
      ],
      "long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -2116,6 +2641,7 @@
     },
     "level_shift_final": {
      "long_horizon": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final"
      ],
@@ -2127,6 +2653,12 @@
       "floor:pcc_final_spread",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ],
+     "long_horizon_tf": "not applicable (identical to the golden)"
+    },
+    "level_shift_rows_final": {
+     "long_horizon": [
+      "drift:bias_row_drift_max_final"
      ],
      "long_horizon_tf": "not applicable (identical to the golden)"
     }
@@ -2140,9 +2672,11 @@
     "collapsed": {
      "ragged": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_final_spread",
       "floor:pcc_final_spread",
@@ -2168,6 +2702,7 @@
     "band_0.88": {
      "ragged": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
       "floor:pcc_normalized_full",
@@ -2180,10 +2715,12 @@
     "band_1.12": {
      "ragged": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
       "floor:pcc_normalized_full",
       "drift:pcc_step_final",
+      "floor:spread_ratio_max",
       "drift:spread_ratio_p50",
       "floor:spread_ratio_p50",
       "floor:spread_ratio_p99"
@@ -2192,6 +2729,8 @@
     "band_0.3_1pct": {
      "ragged": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
+      "drift:median_err",
       "drift:pcc_final_spread",
       "floor:pcc_final_spread",
       "drift:pcc_normalized",
@@ -2214,6 +2753,7 @@
     },
     "level_shift": {
      "ragged": [
+      "drift:bias_row_drift_max",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:inactive_max_err",
@@ -2223,7 +2763,10 @@
     "lag1": {
      "ragged": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50",
+      "drift:median_err",
       "drift:pcc_normalized",
       "floor:pcc_normalized",
       "drift:pcc_normalized_full",
@@ -2240,6 +2783,8 @@
     },
     "level_shift_h0": {
      "ragged": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
@@ -2251,6 +2796,8 @@
     "lag1_h0": {
      "ragged": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:median_err",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
       "floor:pcc_row_min",
@@ -2262,8 +2809,16 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h0": {
+     "ragged": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final"
+     ]
+    },
     "level_shift_h1": {
      "ragged": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
@@ -2275,7 +2830,9 @@
     "lag1_h1": {
      "ragged": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:bias_row_p50",
+      "drift:median_err",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
       "floor:pcc_row_min",
@@ -2287,18 +2844,33 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h1": {
+     "ragged": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final"
+     ]
+    },
+    "level_shift_rows": {
+     "ragged": [
+      "drift:bias_row_drift_max"
+     ]
+    },
     "no_negate": {
      "ragged": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -2324,14 +2896,22 @@
     },
     "level_shift_final": {
      "ragged": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final"
      ]
     },
     "lag1_final": {
      "ragged": [
+      "drift:bias_row_drift_max_final",
+      "drift:median_err",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_rows_final": {
+     "ragged": [
+      "drift:bias_row_drift_max_final"
      ]
     }
    },
@@ -2342,9 +2922,11 @@
     "collapsed": {
      "ragged": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_final_spread",
       "floor:pcc_final_spread",
@@ -2370,6 +2952,7 @@
     "band_0.88": {
      "ragged": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
       "floor:pcc_normalized_full",
@@ -2382,10 +2965,12 @@
     "band_1.12": {
      "ragged": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
       "floor:pcc_normalized_full",
       "drift:pcc_step_final",
+      "floor:spread_ratio_max",
       "drift:spread_ratio_p50",
       "floor:spread_ratio_p50",
       "floor:spread_ratio_p99"
@@ -2394,6 +2979,8 @@
     "band_0.3_1pct": {
      "ragged": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
+      "drift:median_err",
       "drift:pcc_final_spread",
       "floor:pcc_final_spread",
       "drift:pcc_normalized",
@@ -2416,6 +3003,7 @@
     },
     "level_shift": {
      "ragged": [
+      "drift:bias_row_drift_max",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:inactive_max_err",
@@ -2425,7 +3013,10 @@
     "lag1": {
      "ragged": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50",
+      "drift:median_err",
       "drift:pcc_normalized",
       "floor:pcc_normalized",
       "drift:pcc_normalized_full",
@@ -2442,6 +3033,8 @@
     },
     "level_shift_h0": {
      "ragged": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
@@ -2453,6 +3046,8 @@
     "lag1_h0": {
      "ragged": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:median_err",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
       "floor:pcc_row_min",
@@ -2464,8 +3059,16 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h0": {
+     "ragged": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final"
+     ]
+    },
     "level_shift_h1": {
      "ragged": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
@@ -2477,7 +3080,9 @@
     "lag1_h1": {
      "ragged": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:bias_row_p50",
+      "drift:median_err",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
       "floor:pcc_row_min",
@@ -2489,18 +3094,33 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h1": {
+     "ragged": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final"
+     ]
+    },
+    "level_shift_rows": {
+     "ragged": [
+      "drift:bias_row_drift_max"
+     ]
+    },
     "no_negate": {
      "ragged": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -2526,14 +3146,22 @@
     },
     "level_shift_final": {
      "ragged": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final"
      ]
     },
     "lag1_final": {
      "ragged": [
+      "drift:bias_row_drift_max_final",
+      "drift:median_err",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_rows_final": {
+     "ragged": [
+      "drift:bias_row_drift_max_final"
      ]
     }
    }
@@ -2541,16 +3169,12 @@
   "ragged/performance": {
    "suite": {
     "golden": {
-     "ragged": [
-      [
-       "spread_ratio_p50",
-       "drift"
-      ]
-     ]
+     "ragged": []
     },
     "collapsed": {
      "ragged": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
       "drift:pcc_final",
@@ -2571,23 +3195,29 @@
       "floor:pcc_step_final",
       "floor:spread_ratio_min",
       "floor:spread_ratio_p01",
+      "drift:spread_ratio_p50",
       "floor:spread_ratio_p50"
      ]
     },
     "band_0.88": {
      "ragged": [
+      "drift:bias_row_drift_max_final",
       "floor:spread_ratio_p01",
+      "drift:spread_ratio_p50",
       "floor:spread_ratio_p50"
      ]
     },
     "band_1.12": {
      "ragged": [
+      "drift:bias_row_drift_max_final",
+      "drift:spread_ratio_p50",
       "floor:spread_ratio_p50"
      ]
     },
     "band_0.3_1pct": {
      "ragged": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
       "drift:pcc_final_spread",
       "floor:pcc_row_min",
       "drift:pcc_row_min_active",
@@ -2607,6 +3237,7 @@
     },
     "level_shift": {
      "ragged": [
+      "drift:bias_row_drift_max",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:inactive_max_err"
@@ -2615,6 +3246,9 @@
     "lag1": {
      "ragged": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:median_err",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
       "floor:pcc_row_min",
@@ -2628,6 +3262,8 @@
     },
     "level_shift_h0": {
      "ragged": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
@@ -2638,6 +3274,8 @@
     "lag1_h0": {
      "ragged": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:median_err",
       "floor:pcc_row_min",
       "drift:pcc_row_min_active",
       "drift:pcc_row_p01_active",
@@ -2647,8 +3285,16 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h0": {
+     "ragged": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final"
+     ]
+    },
     "level_shift_h1": {
      "ragged": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
@@ -2658,6 +3304,7 @@
     },
     "lag1_h1": {
      "ragged": [
+      "drift:bias_row_drift_max",
       "drift:pcc_row_p01_active",
       "drift:pcc_step",
       "floor:pcc_step",
@@ -2665,18 +3312,33 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h1": {
+     "ragged": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final"
+     ]
+    },
+    "level_shift_rows": {
+     "ragged": [
+      "drift:bias_row_drift_max"
+     ]
+    },
     "no_negate": {
      "ragged": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -2694,6 +3356,7 @@
       "floor:pcc_step",
       "drift:pcc_step_final",
       "floor:pcc_step_final",
+      "floor:spread_ratio_max",
       "floor:spread_ratio_min",
       "floor:spread_ratio_p01",
       "floor:spread_ratio_p99"
@@ -2701,29 +3364,33 @@
     },
     "level_shift_final": {
      "ragged": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final"
      ]
     },
     "lag1_final": {
      "ragged": [
+      "drift:bias_row_drift_max_final",
+      "drift:median_err",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_rows_final": {
+     "ragged": [
+      "drift:bias_row_drift_max_final"
      ]
     }
    },
    "bench": {
     "golden": {
-     "ragged": [
-      [
-       "spread_ratio_p50",
-       "drift"
-      ]
-     ]
+     "ragged": []
     },
     "collapsed": {
      "ragged": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
       "drift:pcc_final",
@@ -2744,23 +3411,29 @@
       "floor:pcc_step_final",
       "floor:spread_ratio_min",
       "floor:spread_ratio_p01",
+      "drift:spread_ratio_p50",
       "floor:spread_ratio_p50"
      ]
     },
     "band_0.88": {
      "ragged": [
+      "drift:bias_row_drift_max_final",
       "floor:spread_ratio_p01",
+      "drift:spread_ratio_p50",
       "floor:spread_ratio_p50"
      ]
     },
     "band_1.12": {
      "ragged": [
+      "drift:bias_row_drift_max_final",
+      "drift:spread_ratio_p50",
       "floor:spread_ratio_p50"
      ]
     },
     "band_0.3_1pct": {
      "ragged": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max_final",
       "drift:pcc_final_spread",
       "floor:pcc_row_min",
       "drift:pcc_row_min_active",
@@ -2780,6 +3453,7 @@
     },
     "level_shift": {
      "ragged": [
+      "drift:bias_row_drift_max",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:inactive_max_err"
@@ -2788,6 +3462,9 @@
     "lag1": {
      "ragged": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:median_err",
       "drift:pcc_normalized",
       "drift:pcc_normalized_full",
       "floor:pcc_row_min",
@@ -2801,6 +3478,8 @@
     },
     "level_shift_h0": {
      "ragged": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
@@ -2811,6 +3490,8 @@
     "lag1_h0": {
      "ragged": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:median_err",
       "floor:pcc_row_min",
       "drift:pcc_row_min_active",
       "drift:pcc_row_p01_active",
@@ -2820,8 +3501,16 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h0": {
+     "ragged": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final"
+     ]
+    },
     "level_shift_h1": {
      "ragged": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
@@ -2831,6 +3520,7 @@
     },
     "lag1_h1": {
      "ragged": [
+      "drift:bias_row_drift_max",
       "drift:pcc_row_p01_active",
       "drift:pcc_step",
       "floor:pcc_step",
@@ -2838,18 +3528,33 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h1": {
+     "ragged": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final"
+     ]
+    },
+    "level_shift_rows": {
+     "ragged": [
+      "drift:bias_row_drift_max"
+     ]
+    },
     "no_negate": {
      "ragged": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -2867,6 +3572,7 @@
       "floor:pcc_step",
       "drift:pcc_step_final",
       "floor:pcc_step_final",
+      "floor:spread_ratio_max",
       "floor:spread_ratio_min",
       "floor:spread_ratio_p01",
       "floor:spread_ratio_p99"
@@ -2874,14 +3580,22 @@
     },
     "level_shift_final": {
      "ragged": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final"
      ]
     },
     "lag1_final": {
      "ragged": [
+      "drift:bias_row_drift_max_final",
+      "drift:median_err",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_rows_final": {
+     "ragged": [
+      "drift:bias_row_drift_max_final"
      ]
     }
    }
@@ -2894,6 +3608,7 @@
     "collapsed": {
      "single": [
       "drift:abs_err_max",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -2932,6 +3647,7 @@
     "band_0.3_1pct": {
      "single": [
       "drift:abs_err_max",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_normalized",
@@ -2953,6 +3669,7 @@
     "level_shift": {
      "single": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_p50",
@@ -2965,6 +3682,7 @@
       "drift:bias_row_max_final",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_row_min_active",
       "drift:pcc_spread",
@@ -2977,13 +3695,17 @@
     "level_shift_h0": {
      "single": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     },
     "lag1_h0": {
@@ -2991,6 +3713,7 @@
       "drift:abs_err_max",
       "drift:bias_row_max_final",
       "drift:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_row_min_active",
       "drift:pcc_step",
@@ -2999,16 +3722,36 @@
       "floor:pcc_step_final"
      ]
     },
-    "level_shift_h1": {
+    "level_shift_rows_h0": {
      "single": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
+     ]
+    },
+    "level_shift_h1": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     },
     "lag1_h1": {
@@ -3016,6 +3759,7 @@
       "drift:abs_err_max",
       "drift:bias_row_max_final",
       "drift:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_spread",
       "drift:pcc_step",
@@ -3024,16 +3768,46 @@
       "floor:pcc_step_final"
      ]
     },
-    "no_negate": {
+    "level_shift_rows_h1": {
      "single": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
+      "drift:median_err"
+     ]
+    },
+    "level_shift_rows": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
+    "no_negate": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -3055,9 +3829,12 @@
     },
     "level_shift_final": {
      "single": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     },
     "lag1_final": {
@@ -3065,9 +3842,20 @@
       "drift:bias_row_max_final",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_rows_final": {
+     "single": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     }
    },
@@ -3078,6 +3866,7 @@
     "collapsed": {
      "single": [
       "drift:abs_err_max",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -3116,6 +3905,7 @@
     "band_0.3_1pct": {
      "single": [
       "drift:abs_err_max",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_normalized",
@@ -3137,6 +3927,7 @@
     "level_shift": {
      "single": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_p50",
@@ -3149,6 +3940,7 @@
       "drift:bias_row_max_final",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_row_min_active",
       "drift:pcc_spread",
@@ -3161,13 +3953,17 @@
     "level_shift_h0": {
      "single": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     },
     "lag1_h0": {
@@ -3175,6 +3971,7 @@
       "drift:abs_err_max",
       "drift:bias_row_max_final",
       "drift:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_row_min_active",
       "drift:pcc_step",
@@ -3183,16 +3980,36 @@
       "floor:pcc_step_final"
      ]
     },
-    "level_shift_h1": {
+    "level_shift_rows_h0": {
      "single": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
+     ]
+    },
+    "level_shift_h1": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     },
     "lag1_h1": {
@@ -3200,6 +4017,7 @@
       "drift:abs_err_max",
       "drift:bias_row_max_final",
       "drift:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_spread",
       "drift:pcc_step",
@@ -3208,16 +4026,46 @@
       "floor:pcc_step_final"
      ]
     },
-    "no_negate": {
+    "level_shift_rows_h1": {
      "single": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
+      "drift:median_err"
+     ]
+    },
+    "level_shift_rows": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
+    "no_negate": {
+     "single": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -3239,9 +4087,12 @@
     },
     "level_shift_final": {
      "single": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     },
     "lag1_final": {
@@ -3249,9 +4100,20 @@
       "drift:bias_row_max_final",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_rows_final": {
+     "single": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     }
    }
@@ -3316,6 +4178,7 @@
     },
     "level_shift": {
      "single": [
+      "drift:bias_row_drift_max",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_p50",
@@ -3324,6 +4187,7 @@
     },
     "lag1": {
      "single": [
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_step",
       "floor:pcc_step",
@@ -3333,6 +4197,8 @@
     },
     "level_shift_h0": {
      "single": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_p50",
@@ -3348,8 +4214,20 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h0": {
+     "single": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
     "level_shift_h1": {
      "single": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_p50",
@@ -3365,16 +4243,39 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h1": {
+     "single": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
+    "level_shift_rows": {
+     "single": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
     "no_negate": {
      "single": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -3395,16 +4296,30 @@
     },
     "level_shift_final": {
      "single": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     },
     "lag1_final": {
      "single": [
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_rows_final": {
+     "single": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     }
    },
@@ -3467,6 +4382,7 @@
     },
     "level_shift": {
      "single": [
+      "drift:bias_row_drift_max",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_p50",
@@ -3475,6 +4391,7 @@
     },
     "lag1": {
      "single": [
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_step",
       "floor:pcc_step",
@@ -3484,6 +4401,8 @@
     },
     "level_shift_h0": {
      "single": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_p50",
@@ -3499,8 +4418,20 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h0": {
+     "single": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
     "level_shift_h1": {
      "single": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_p50",
@@ -3516,16 +4447,39 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows_h1": {
+     "single": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
+    "level_shift_rows": {
+     "single": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
     "no_negate": {
      "single": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -3546,16 +4500,30 @@
     },
     "level_shift_final": {
      "single": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     },
     "lag1_final": {
      "single": [
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_rows_final": {
+     "single": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     }
    }
@@ -3633,18 +4601,23 @@
     "level_shift": {
      "single_plain": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     },
     "lag1": {
      "single_plain": [
       "drift:abs_err_max",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_normalized",
       "floor:pcc_normalized",
@@ -3657,18 +4630,48 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err"
+     ]
+    },
     "level_shift_final": {
      "single_plain": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     },
     "lag1_final": {
      "single_plain": [
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_rows_final": {
+     "single_plain": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     }
    },
@@ -3744,18 +4747,23 @@
     "level_shift": {
      "single_plain": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     },
     "lag1": {
      "single_plain": [
       "drift:abs_err_max",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_normalized",
       "floor:pcc_normalized",
@@ -3768,18 +4776,48 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err"
+     ]
+    },
     "level_shift_final": {
      "single_plain": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     },
     "lag1_final": {
      "single_plain": [
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_rows_final": {
+     "single_plain": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     }
    }
@@ -3850,18 +4888,23 @@
     "level_shift": {
      "single_plain": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     },
     "lag1": {
      "single_plain": [
       "drift:abs_err_max",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_normalized",
       "floor:pcc_normalized",
@@ -3872,18 +4915,48 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err"
+     ]
+    },
     "level_shift_final": {
      "single_plain": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     },
     "lag1_final": {
      "single_plain": [
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_rows_final": {
+     "single_plain": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     }
    },
@@ -3952,18 +5025,23 @@
     "level_shift": {
      "single_plain": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     },
     "lag1": {
      "single_plain": [
       "drift:abs_err_max",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_normalized",
       "floor:pcc_normalized",
@@ -3974,18 +5052,48 @@
       "floor:pcc_step_final"
      ]
     },
+    "level_shift_rows": {
+     "single_plain": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err"
+     ]
+    },
     "level_shift_final": {
      "single_plain": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     },
     "lag1_final": {
      "single_plain": [
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_rows_final": {
+     "single_plain": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     }
    }
@@ -3998,6 +5106,7 @@
     "collapsed": {
      "single_short": [
       "drift:abs_err_max",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -4041,6 +5150,7 @@
     "band_0.3_1pct": {
      "single_short": [
       "drift:abs_err_max",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_normalized",
       "floor:pcc_normalized",
@@ -4061,6 +5171,7 @@
     "level_shift": {
      "single_short": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_p50",
@@ -4072,6 +5183,7 @@
       "drift:abs_err_max",
       "drift:bias_row_max_final",
       "drift:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_step",
       "floor:pcc_step",
       "drift:pcc_step_final",
@@ -4081,35 +5193,61 @@
     "level_shift_h0": {
      "single_short": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_normalized"
      ]
     },
     "lag1_h0": {
      "single_short": [
       "drift:abs_err_max",
+      "drift:median_err",
       "drift:pcc_step",
       "floor:pcc_step",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
      ]
     },
-    "level_shift_h1": {
+    "level_shift_rows_h0": {
      "single_short": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
+      "drift:median_err",
+      "drift:pcc_normalized"
+     ]
+    },
+    "level_shift_h1": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_normalized"
      ]
     },
@@ -4118,22 +5256,54 @@
       "drift:abs_err_max",
       "drift:bias_row_max_final",
       "drift:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_step",
       "floor:pcc_step",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
      ]
     },
-    "no_negate": {
+    "level_shift_rows_h1": {
      "single_short": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
+      "drift:median_err",
+      "drift:pcc_normalized"
+     ]
+    },
+    "level_shift_rows": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
+    "no_negate": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_normalized",
       "floor:pcc_normalized",
@@ -4148,17 +5318,31 @@
     },
     "level_shift_final": {
      "single_short": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     },
     "lag1_final": {
      "single_short": [
       "drift:bias_row_max_final",
       "drift:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_rows_final": {
+     "single_short": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     }
    },
@@ -4169,6 +5353,7 @@
     "collapsed": {
      "single_short": [
       "drift:abs_err_max",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -4212,6 +5397,7 @@
     "band_0.3_1pct": {
      "single_short": [
       "drift:abs_err_max",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_normalized",
       "floor:pcc_normalized",
@@ -4232,6 +5418,7 @@
     "level_shift": {
      "single_short": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_p50",
@@ -4243,6 +5430,7 @@
       "drift:abs_err_max",
       "drift:bias_row_max_final",
       "drift:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_step",
       "floor:pcc_step",
       "drift:pcc_step_final",
@@ -4252,35 +5440,61 @@
     "level_shift_h0": {
      "single_short": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_normalized"
      ]
     },
     "lag1_h0": {
      "single_short": [
       "drift:abs_err_max",
+      "drift:median_err",
       "drift:pcc_step",
       "floor:pcc_step",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
      ]
     },
-    "level_shift_h1": {
+    "level_shift_rows_h0": {
      "single_short": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
+      "drift:median_err",
+      "drift:pcc_normalized"
+     ]
+    },
+    "level_shift_h1": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_normalized"
      ]
     },
@@ -4289,22 +5503,54 @@
       "drift:abs_err_max",
       "drift:bias_row_max_final",
       "drift:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_step",
       "floor:pcc_step",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
      ]
     },
-    "no_negate": {
+    "level_shift_rows_h1": {
      "single_short": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
+      "drift:median_err",
+      "drift:pcc_normalized"
+     ]
+    },
+    "level_shift_rows": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
+    "no_negate": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_normalized",
       "floor:pcc_normalized",
@@ -4319,17 +5565,31 @@
     },
     "level_shift_final": {
      "single_short": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     },
     "lag1_final": {
      "single_short": [
       "drift:bias_row_max_final",
       "drift:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_rows_final": {
+     "single_short": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     }
    }
@@ -4398,6 +5658,7 @@
     "level_shift": {
      "single_short": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_p50",
@@ -4416,13 +5677,17 @@
     "level_shift_h0": {
      "single_short": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     },
     "lag1_h0": {
@@ -4434,16 +5699,36 @@
       "floor:pcc_step_final"
      ]
     },
-    "level_shift_h1": {
+    "level_shift_rows_h0": {
      "single_short": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
+     ]
+    },
+    "level_shift_h1": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     },
     "lag1_h1": {
@@ -4455,16 +5740,46 @@
       "floor:pcc_step_final"
      ]
     },
-    "no_negate": {
+    "level_shift_rows_h1": {
      "single_short": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
+      "drift:median_err"
+     ]
+    },
+    "level_shift_rows": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
+    "no_negate": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_normalized",
       "floor:pcc_normalized",
@@ -4478,15 +5793,28 @@
     },
     "level_shift_final": {
      "single_short": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     },
     "lag1_final": {
      "single_short": [
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_rows_final": {
+     "single_short": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     }
    },
@@ -4553,6 +5881,7 @@
     "level_shift": {
      "single_short": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_p50",
@@ -4571,13 +5900,17 @@
     "level_shift_h0": {
      "single_short": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     },
     "lag1_h0": {
@@ -4589,16 +5922,36 @@
       "floor:pcc_step_final"
      ]
     },
-    "level_shift_h1": {
+    "level_shift_rows_h0": {
      "single_short": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
+     ]
+    },
+    "level_shift_h1": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     },
     "lag1_h1": {
@@ -4610,16 +5963,46 @@
       "floor:pcc_step_final"
      ]
     },
-    "no_negate": {
+    "level_shift_rows_h1": {
      "single_short": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
+      "drift:median_err"
+     ]
+    },
+    "level_shift_rows": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ]
+    },
+    "no_negate": {
+     "single_short": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_normalized",
       "floor:pcc_normalized",
@@ -4633,15 +6016,28 @@
     },
     "level_shift_final": {
      "single_short": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     },
     "lag1_final": {
      "single_short": [
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ]
+    },
+    "level_shift_rows_final": {
+     "single_short": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ]
     }
    }
@@ -4771,6 +6167,7 @@
     "level_shift": {
      "single_long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_p50",
@@ -4778,15 +6175,19 @@
      ],
      "single_long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
       "drift:inactive_max_err",
-      "floor:inactive_max_err"
+      "floor:inactive_max_err",
+      "drift:median_err"
      ]
     },
     "lag1": {
@@ -4801,6 +6202,7 @@
      "single_long_horizon_tf": [
       "drift:abs_err_max",
       "drift:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_step",
       "floor:pcc_step",
       "drift:pcc_step_final",
@@ -4811,9 +6213,12 @@
     "level_shift_h0": {
      "single_long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
@@ -4821,13 +6226,17 @@
      ],
      "single_long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:inactive_max_err",
-      "floor:inactive_max_err"
+      "floor:inactive_max_err",
+      "drift:median_err"
      ]
     },
     "lag1_h0": {
@@ -4841,27 +6250,63 @@
      ],
      "single_long_horizon_tf": [
       "drift:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_step",
       "floor:pcc_step",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
      ]
     },
-    "level_shift_h1": {
+    "level_shift_rows_h0": {
      "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final"
      ],
      "single_long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:inactive_max_err",
-      "floor:inactive_max_err"
+      "floor:inactive_max_err",
+      "drift:median_err"
+     ]
+    },
+    "level_shift_h1": {
+     "single_long_horizon": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:median_err"
      ]
     },
     "lag1_h1": {
@@ -4871,6 +6316,7 @@
      ],
      "single_long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:median_err",
       "drift:pcc_step",
       "floor:pcc_step",
       "drift:pcc_step_final",
@@ -4878,11 +6324,63 @@
       "drift:spread_ratio_p50"
      ]
     },
-    "no_negate": {
+    "level_shift_rows_h1": {
      "single_long_horizon": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:median_err"
+     ]
+    },
+    "level_shift_rows": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:median_err"
+     ]
+    },
+    "no_negate": {
+     "single_long_horizon": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -4892,13 +6390,17 @@
      ],
      "single_long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -4922,9 +6424,12 @@
     },
     "level_shift_final": {
      "single_long_horizon": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ],
      "single_long_horizon_tf": "not applicable (identical to the golden)"
     },
@@ -4935,6 +6440,17 @@
       "floor:pcc_final_spread",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ],
+     "single_long_horizon_tf": "not applicable (identical to the golden)"
+    },
+    "level_shift_rows_final": {
+     "single_long_horizon": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ],
      "single_long_horizon_tf": "not applicable (identical to the golden)"
     }
@@ -5063,6 +6579,7 @@
     "level_shift": {
      "single_long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_p50",
@@ -5070,15 +6587,19 @@
      ],
      "single_long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
       "drift:inactive_max_err",
-      "floor:inactive_max_err"
+      "floor:inactive_max_err",
+      "drift:median_err"
      ]
     },
     "lag1": {
@@ -5093,6 +6614,7 @@
      "single_long_horizon_tf": [
       "drift:abs_err_max",
       "drift:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_step",
       "floor:pcc_step",
       "drift:pcc_step_final",
@@ -5103,9 +6625,12 @@
     "level_shift_h0": {
      "single_long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
@@ -5113,13 +6638,17 @@
      ],
      "single_long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:inactive_max_err",
-      "floor:inactive_max_err"
+      "floor:inactive_max_err",
+      "drift:median_err"
      ]
     },
     "lag1_h0": {
@@ -5133,27 +6662,63 @@
      ],
      "single_long_horizon_tf": [
       "drift:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_step",
       "floor:pcc_step",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
      ]
     },
-    "level_shift_h1": {
+    "level_shift_rows_h0": {
      "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final"
      ],
      "single_long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:inactive_max_err",
-      "floor:inactive_max_err"
+      "floor:inactive_max_err",
+      "drift:median_err"
+     ]
+    },
+    "level_shift_h1": {
+     "single_long_horizon": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:median_err"
      ]
     },
     "lag1_h1": {
@@ -5163,6 +6728,7 @@
      ],
      "single_long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:median_err",
       "drift:pcc_step",
       "floor:pcc_step",
       "drift:pcc_step_final",
@@ -5170,11 +6736,63 @@
       "drift:spread_ratio_p50"
      ]
     },
-    "no_negate": {
+    "level_shift_rows_h1": {
      "single_long_horizon": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:median_err"
+     ]
+    },
+    "level_shift_rows": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ],
+     "single_long_horizon_tf": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
+      "drift:inactive_max_err",
+      "floor:inactive_max_err",
+      "drift:median_err"
+     ]
+    },
+    "no_negate": {
+     "single_long_horizon": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -5184,13 +6802,17 @@
      ],
      "single_long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -5214,9 +6836,12 @@
     },
     "level_shift_final": {
      "single_long_horizon": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50_final",
-      "floor:bias_row_p50_final"
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ],
      "single_long_horizon_tf": "not applicable (identical to the golden)"
     },
@@ -5227,6 +6852,17 @@
       "floor:pcc_final_spread",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ],
+     "single_long_horizon_tf": "not applicable (identical to the golden)"
+    },
+    "level_shift_rows_final": {
+     "single_long_horizon": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err"
      ],
      "single_long_horizon_tf": "not applicable (identical to the golden)"
     }
@@ -5340,20 +6976,25 @@
     "level_shift": {
      "single_long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_p50",
       "floor:bias_row_p50"
      ],
      "single_long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
-      "drift:inactive_max_err"
+      "drift:inactive_max_err",
+      "drift:median_err"
      ]
     },
     "lag1": {
@@ -5373,21 +7014,28 @@
     "level_shift_h0": {
      "single_long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final"
      ],
      "single_long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
-      "drift:inactive_max_err"
+      "drift:inactive_max_err",
+      "drift:median_err"
      ]
     },
     "lag1_h0": {
@@ -5404,19 +7052,52 @@
       "floor:pcc_step_final"
      ]
     },
-    "level_shift_h1": {
+    "level_shift_rows_h0": {
      "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final"
      ],
      "single_long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
-      "drift:inactive_max_err"
+      "drift:inactive_max_err",
+      "drift:median_err"
+     ]
+    },
+    "level_shift_h1": {
+     "single_long_horizon": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "drift:median_err"
      ]
     },
     "lag1_h1": {
@@ -5431,11 +7112,59 @@
       "floor:pcc_step_final"
      ]
     },
-    "no_negate": {
+    "level_shift_rows_h1": {
      "single_long_horizon": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "drift:median_err"
+     ]
+    },
+    "level_shift_rows": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ],
+     "single_long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
+      "drift:inactive_max_err",
+      "drift:median_err"
+     ]
+    },
+    "no_negate": {
+     "single_long_horizon": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -5444,13 +7173,17 @@
      ],
      "single_long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_final_spread",
       "floor:pcc_final_spread",
@@ -5472,7 +7205,9 @@
     },
     "level_shift_final": {
      "single_long_horizon": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final"
      ],
@@ -5484,6 +7219,16 @@
       "floor:pcc_final_spread",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ],
+     "single_long_horizon_tf": "not applicable (identical to the golden)"
+    },
+    "level_shift_rows_final": {
+     "single_long_horizon": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
      ],
      "single_long_horizon_tf": "not applicable (identical to the golden)"
     }
@@ -5595,20 +7340,25 @@
     "level_shift": {
      "single_long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_p50",
       "floor:bias_row_p50"
      ],
      "single_long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
-      "drift:inactive_max_err"
+      "drift:inactive_max_err",
+      "drift:median_err"
      ]
     },
     "lag1": {
@@ -5628,21 +7378,28 @@
     "level_shift_h0": {
      "single_long_horizon": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final"
      ],
      "single_long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
-      "drift:inactive_max_err"
+      "drift:inactive_max_err",
+      "drift:median_err"
      ]
     },
     "lag1_h0": {
@@ -5659,19 +7416,52 @@
       "floor:pcc_step_final"
      ]
     },
-    "level_shift_h1": {
+    "level_shift_rows_h0": {
      "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final"
      ],
      "single_long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
-      "drift:inactive_max_err"
+      "drift:inactive_max_err",
+      "drift:median_err"
+     ]
+    },
+    "level_shift_h1": {
+     "single_long_horizon": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "drift:median_err"
      ]
     },
     "lag1_h1": {
@@ -5686,11 +7476,59 @@
       "floor:pcc_step_final"
      ]
     },
-    "no_negate": {
+    "level_shift_rows_h1": {
      "single_long_horizon": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
+     ],
+     "single_long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
+      "drift:inactive_max_err",
+      "drift:median_err"
+     ]
+    },
+    "level_shift_rows": {
+     "single_long_horizon": [
+      "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50"
+     ],
+     "single_long_horizon_tf": [
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max",
+      "floor:bias_row_max",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50",
+      "floor:bias_row_p50",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final",
+      "drift:inactive_max_err",
+      "drift:median_err"
+     ]
+    },
+    "no_negate": {
+     "single_long_horizon": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final",
+      "drift:median_err",
       "drift:pcc_final",
       "floor:pcc_final",
       "drift:pcc_final_spread",
@@ -5699,13 +7537,17 @@
      ],
      "single_long_horizon_tf": [
       "drift:abs_err_max",
+      "drift:bias_row_drift_max",
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max",
       "floor:bias_row_max",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50",
       "floor:bias_row_p50",
       "drift:inactive_max_err",
       "floor:inactive_max_err",
+      "drift:median_err",
       "drift:pcc_final",
       "drift:pcc_final_spread",
       "floor:pcc_final_spread",
@@ -5727,7 +7569,9 @@
     },
     "level_shift_final": {
      "single_long_horizon": [
+      "drift:bias_row_drift_max_final",
       "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
       "drift:bias_row_p50_final",
       "floor:bias_row_p50_final"
      ],
@@ -5739,6 +7583,16 @@
       "floor:pcc_final_spread",
       "drift:pcc_step_final",
       "floor:pcc_step_final"
+     ],
+     "single_long_horizon_tf": "not applicable (identical to the golden)"
+    },
+    "level_shift_rows_final": {
+     "single_long_horizon": [
+      "drift:bias_row_drift_max_final",
+      "drift:bias_row_max_final",
+      "floor:bias_row_max_final",
+      "drift:bias_row_p50_final",
+      "floor:bias_row_p50_final"
      ],
      "single_long_horizon_tf": "not applicable (identical to the golden)"
     }
