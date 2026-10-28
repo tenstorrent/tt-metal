@@ -2352,3 +2352,26 @@ Why: the stress draws rd006_glm, d201 and d203 (GLM 2x4, chunk 1280) logged a ho
   2 / 4 (the soak logs show no one-column family outside GLM 640), so their mcast configs and programs are unchanged.
 - Still open: router_stream's W_r family is a rotating group over the router cores. One router core (RB = CR / TP =
   1) would hit the same check. No planned layout has one today.
+
+## Soak (2026-10-28, bh-lb-09): replay soak, fresh-process starts (SE_PORT_NOC0 A/B), random stress on the fixed tree
+Scratch tests zz_scratch_stress_{block,head}.py (now removed from the tree; copies, drivers, logs in the session
+scratchpad soak/: results.log, NOTES.md, run.sh / cycle.sh / tally*.py). Profiler off, combine snap 2^-14, safe runner.
+- Replay soak, e49692459bd: K3 ring 640 (3000 eager + 100K replays), GLM 2x4 5120 (2000 + 100K), K3 head ring
+  (1000 + 100K): no hang, 0 bitwise-differing same-x compares (checked every 500 replays, every eager call); PCC
+  0.99612-0.99625 / 0.98684-0.98700 / SE 0.99987-0.99989. K3 line: F1 shows, 193 of 1184 compares differ.
+- Same soak on the fixed tree (ea0aaa2ddfa, F1 line-end termination af4a8a89bc8 + review fixes): K3 line 3000 + 100K
+  0 of 3184 differ (worst row 0.098 = the ring); ring, GLM, head as above, 0 differ, same PCC ranges. F1 fixed.
+- F2 (GLM fused-head first-call hang, ~1 in 18 starts in the morning sweep) did not reproduce: fresh-process starts,
+  SE_PORT_NOC0=1 vs 0 interleaved: GLM 5120 back to back 0/100 vs 0/100; GLM right after a K3 ring run 0/52 vs 0/52;
+  GLM with a random draw per pair 0/32 vs 0/31; GLM 1280 (fused head since c888fc73612) 0/15 vs 0/15; K3 ring
+  0/52 vs 0/52. All GLM 5120 starts bit-identical across processes and arms. With p = 1/18, 0 of ~200 a arm has
+  P < 1e-5: the rate today is far lower (95% upper bound ~1.5% a arm) or F2 needs a condition not recreated. The
+  A/B cannot separate the arms. d103 hit with a warm kernel cache (no kernel compiled before the hang; its JIT
+  misses were the ops-head fallback). The safe runner does not reset cards after a passing run, so "no reset
+  between starts" was already the condition throughout.
+- Random stress on the fixed tree (19:07-22:47, 22 iterations: a random draw of each of K3 ring / line / head ring /
+  head line / GLM, plus the start pairs above): 116 draws, 0 hangs, timeouts or NaN; 0 of 13,298 same-x compares
+  differ (line 0 of 4044). PCC failures only the known ones: GLM rowmix / sink x 0.969-0.980 (F3), K3 x 0.01
+  0.4535 and x 0.1 sparse 0.975 (F4, snap range). GLM draws at 1280 / 2048 / 5120 all ran the fused head.
+- Before c888fc73612 the fused head never built at GLM 2x4 chunk 1280 (host TT_FATAL mcast.cpp:66, rotating
+  senders) and the block silently took the ops head (morning d201 / d203 too); now it builds, or raises.
