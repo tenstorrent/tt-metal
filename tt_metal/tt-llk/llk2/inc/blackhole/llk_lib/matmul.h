@@ -26,7 +26,7 @@
 // With HiFi, the MOP repeats the 16 MVMULs once per fidelity phase. After the tile, the streamed Src bank is
 // released; after the last tile of a reused one, the reused bank is.
 //
-// Not HAL yet: the Src zero-flag rule (requires_disabled_src_zero_flag, cmath_common.h) and the Dest buffer base.
+// Not HAL yet: the Dest buffer base (get_dest_buffer_base, cmath_common.h). Shared math configure: math_common.h.
 
 #pragma once
 
@@ -40,6 +40,7 @@
 #include "hal/replay.h"
 #include "hal/sync.h"
 #include "hal/tensix_counters.h"
+#include "llk_lib/math_common.h"
 #include "llk_lib/thread.h"
 #include "resolver/plan.h"
 
@@ -91,33 +92,6 @@ constexpr std::uint32_t dest_rows_per_tile(const matmul_params& p)
     return p.num_faces * p.face_r_dim;
 }
 
-/// Row counter behavior of one address modifier: {increment, clear, carriage return} for SrcA, SrcB and Dest.
-struct counter_step
-{
-    std::uint32_t incr, clr, cr;
-};
-
-/// Programs address modifier Slot. Fields this does not name are written 0, as addr_mod_t does.
-template <cfg::Sec Slot, counter_step A, counter_step B, counter_step D, std::uint32_t FidelityIncr = 0>
-inline __attribute__((always_inline)) void set_addr_mod()
-{
-    using cfg::AddrMod;
-    cfg::write<cfg::Access::TensixCfgUnit>(
-        cfg::set<AddrMod[cfg::SrcA].Incr, Slot, A.incr>(),
-        cfg::set<AddrMod[cfg::SrcA].Clear, Slot, A.clr>(),
-        cfg::set<AddrMod[cfg::SrcA].CR, Slot, A.cr>(),
-        cfg::set<AddrMod[cfg::SrcB].Incr, Slot, B.incr>(),
-        cfg::set<AddrMod[cfg::SrcB].Clear, Slot, B.clr>(),
-        cfg::set<AddrMod[cfg::SrcB].CR, Slot, B.cr>());
-    cfg::write<cfg::Access::TensixCfgUnit>(
-        cfg::set<AddrMod[cfg::Dest].Incr, Slot, D.incr>(),
-        cfg::set<AddrMod[cfg::Dest].Clear, Slot, D.clr>(),
-        cfg::set<AddrMod[cfg::Dest].CR, Slot, D.cr>(),
-        cfg::set<AddrMod[cfg::Fidelity].Incr, Slot, FidelityIncr>(),
-        cfg::set<AddrMod[cfg::Fidelity].Clear, Slot, 0>());
-    cfg::write<cfg::Access::TensixCfgUnit, AddrMod[cfg::Bias].Incr, Slot, 0>();
-}
-
 // The address modifier slots the replay uses (the ADDR_MOD_n numbers of the original LLK).
 inline constexpr std::uint8_t next_rows     = 0;
 inline constexpr std::uint8_t next_in1_face = 1;
@@ -142,18 +116,7 @@ inline __attribute__((always_inline)) void matmul_configure()
     constexpr bool hifi    = P.math_fidelity != 0;
     constexpr bool reuse_b = P.reuse_x;
 
-    // Dest mode and ALU format baseline (the math side of hw_configure). Wait for math and SFPU to drain first.
-    hal::sync::wait::stall<StallTarget::Config, StallCondition::MathIdle | StallCondition::SfpuIdle>();
-    cfg::write<cfg::Access::TensixCfgUnit, cfg::DestAccessCfg::zeroacc_absolute_tile_mode, cfg::Sec::S0, 0>();
-    constexpr std::uint32_t int8_math = is_int8_or_int32_format(static_cast<std::uint32_t>(P.math_format)) ? 1u : 0u;
-    cfg::write<cfg::Access::TensixCfgUnit, cfg::AluAccCtrl::INT8_math_enabled, cfg::Sec::S0, int8_math>();
-    cfg::write<cfg::Access::TensixCfgUnit, cfg::AluAccCtrl::Fp32_enabled, cfg::Sec::S0, P.dest_fp32 ? 1u : 0u>();
-    cfg::write<cfg::Access::TensixCfgUnit, cfg::AluAccCtrl::SFPU_Fp32_enabled, cfg::Sec::S0, P.dest_fp32 ? 1u : 0u>();
-    cfg::write<cfg::Access::TensixCfgUnit>(
-        cfg::set<cfg::AluFormatSpecReg::SrcA_val, cfg::Sec::S0, 0>(),
-        cfg::set<cfg::AluFormatSpecReg::SrcA_override, cfg::Sec::S0, 0>(),
-        cfg::set<cfg::AluFormatSpecReg::SrcB_val, cfg::Sec::S0, 0>(),
-        cfg::set<cfg::AluFormatSpecReg::SrcB_override, cfg::Sec::S0, 0>());
+    configure_math_formats<P.dest_fp32, P.math_format, P.math_format>();
 
     // Address modifiers. Row counters (RWCs) follow the ISA's ApplyAddrMod: a plain step adds incr to the counter; a
     // carriage-return step adds incr to the counter's CR register and copies it to the counter; clear zeroes both.
@@ -223,14 +186,6 @@ inline __attribute__((always_inline)) void matmul_configure()
         hal::mop::program<hal::mop::MopConfig<hal::mop::MopTemplate::Template1> {.outer_loop = {.count = 1}, .inner_loop = {.count = 1, .body_op = tile_op}}>();
     }
     set<MathCounter {.src_a = Set(0), .src_b = Set(0), .dest = Set(0), .clear_fidelity = true}>();
-
-    // Src zero-flag baseline for this format; the ckernel caches stay in step for the LLK asserts.
-    const std::uint32_t math_format = static_cast<std::uint32_t>(P.math_format);
-    math::src_zero_flag_srca_fmt    = math_format;
-    math::src_zero_flag_srcb_fmt    = math_format;
-    const std::uint32_t zero_flag   = requires_disabled_src_zero_flag(math_format, math_format) ? 1u : 0u;
-    cfg::write<cfg::Access::TensixCfgUnit, cfg::AluAccCtrl::Zero_Flag_disabled_src, cfg::Sec::S0>(zero_flag);
-    math::src_zero_flag_hw = zero_flag;
 }
 
 /// One K step into the rt_dim x ct_dim output tiles starting at dest_row (relative to the current Dest section).

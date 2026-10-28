@@ -8,12 +8,24 @@
 
 #pragma once
 
+#include "resolver/plan.h" // Broadcast
+
 namespace llk2
 {
 
 struct matmul_modifiers
 {
     bool transpose_in1 = false; // transpose the faces of in1 (today's IN1_TRANSPOSE_TILE / UNPACK_TRANSPOSE_FACES)
+};
+
+struct add_modifiers
+{
+    Broadcast bcast = Broadcast::None; // how in1 is spread over in0: Row is today's add_tiles_bcast_rows
+};
+
+struct sub_modifiers
+{
+    Broadcast bcast = Broadcast::None; // how in1 is spread over in0: Row is today's sub_tiles_bcast<BroadcastType::ROW>
 };
 
 } // namespace llk2
