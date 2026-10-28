@@ -277,6 +277,7 @@
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.to_memory_config.html">ttnn.to_memory_config</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.to_torch.html">ttnn.to_torch</a></li>
 <li class="toctree-l4"><a class="reference internal" href="api/ttnn.typecast.html">ttnn.typecast</a></li>
+<li class="toctree-l4"><a class="reference internal" href="api/ttnn.verify_shards_match_topology.html">ttnn.verify_shards_match_topology</a></li>
 </ul>
 </li>
 <li class="toctree-l3"><a class="reference internal" href="#tensor-creation">Tensor Creation</a><ul>
@@ -1067,6 +1068,10 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.typecast.html#ttnn.typecast" title="ttnn.typecast"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.typecast</span></code></a></p>
 <p class="tt-api-card-desc">Performs typecast on elements of a tensor on the host or device to the desired dtype.</p>
 </div>
+<div class="tt-api-card docutils container">
+<p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.verify_shards_match_topology.html#ttnn.verify_shards_match_topology" title="ttnn.verify_shards_match_topology"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.verify_shards_match_topology</span></code></a></p>
+<p class="tt-api-card-desc">Check that a host tensor's topology label describes its shards.</p>
+</div>
 </div>
 </section>
 <section id="tensor-creation">
@@ -1175,7 +1180,7 @@ use <code class="docutils literal notranslate"><span class="pre">align_shape_to_
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig.html#ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig" title="ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig</span></code></a></p>
-<p class="tt-api-card-desc">This program config is a specialized config for very narrow tensors stored in DRAM.</p>
+<p class="tt-api-card-desc">This program config multiplies width-sharded L1 activations by width-sharded DRAM weights.</p>
 </div>
 <div class="tt-api-card docutils container">
 <p class="tt-api-card-name"><a class="reference internal" href="api/ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig.html#ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig" title="ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig"><code class="xref py py-obj docutils literal notranslate"><span class="pre">ttnn.MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig</span></code></a></p>
