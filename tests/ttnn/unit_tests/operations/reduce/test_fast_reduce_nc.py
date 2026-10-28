@@ -275,3 +275,27 @@ def test_fast_reduce_nc_int32_requires_fp32_dest_acc(device, expect_error):
     config = ttnn.init_device_compute_kernel_config(device.arch(), fp32_dest_acc_en=False)
     with expect_error(RuntimeError, "requires fp32_dest_acc_en"):
         ttnn.experimental.fast_reduce_nc(x, dims=[0], compute_kernel_config=config)
+
+
+# The post-multiply factor is a runtime arg, so sum, scaled sum and mean of one tensor share one program,
+# and each cache hit must apply its own factor. (3, 7, 160, 160) dim 1 splits 75 output tiles over two core groups.
+@pytest.mark.parametrize("shape, dim", [((8, 16, 128, 128), 0), ((3, 7, 160, 160), 1)])
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32], ids=["bf16", "fp32"])
+def test_fast_reduce_nc_post_mul_shares_program(device, shape, dim, dtype):
+    device.disable_and_clear_program_cache()
+    device.enable_program_cache()
+    torch.manual_seed(0)
+    x = ttnn.from_torch(torch.randn(shape) * 0.25 + 1.0, dtype=dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    torch_sum = torch.sum(ttnn.to_torch(x).double(), dim=dim, keepdim=True)
+    calls = [
+        (lambda: ttnn.sum(x, dim=dim, keepdim=True), 1.0),
+        (lambda: ttnn.sum(x, dim=dim, keepdim=True, scalar=2.0), 2.0),
+        (lambda: ttnn.mean(x, dim=dim, keepdim=True), 1.0 / shape[dim]),
+        (lambda: ttnn.mean(x, dim=dim, keepdim=True, scalar=3.0), 3.0 / shape[dim]),
+    ]
+    entries = None
+    for call, factor in calls:
+        actual = ttnn.to_torch(call()).double()
+        torch.testing.assert_close(actual, torch_sum * factor, rtol=1e-2 if dtype == ttnn.bfloat16 else 1e-6, atol=0)
+        entries = entries or device.num_program_cache_entries()
+        assert device.num_program_cache_entries() == entries

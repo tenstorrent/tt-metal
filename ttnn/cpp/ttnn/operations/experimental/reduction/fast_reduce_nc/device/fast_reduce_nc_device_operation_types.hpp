@@ -20,7 +20,8 @@ struct FastReduceNCParams {
     const std::optional<uint32_t> split_output_width = std::nullopt;
     // Sum Float32 input on the SFPU at full precision instead of the FPU (tf32). Int32 always uses the SFPU.
     const bool use_sfpu_reduce = false;
-    // Multiplies each reduced tile before it is packed (mean's 1/N, or the caller's scalar).
+    // Multiplies each reduced tile before it is packed (mean's 1/N, or the caller's scalar). A runtime arg,
+    // not part of the program hash.
     const float post_mul_scaler = 1.0f;
 };
 

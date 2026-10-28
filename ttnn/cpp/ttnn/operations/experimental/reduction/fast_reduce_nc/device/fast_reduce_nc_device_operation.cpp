@@ -137,6 +137,26 @@ void FastReduceNCDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
+ttsl::hash::hash_t FastReduceNCDeviceOperation::compute_program_hash(
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    // Tripwire: adding a FastReduceNCParams field must be a deliberate choice — hash it below, or
+    // exclude it like post_mul_scaler, which the compute kernels read as a runtime arg.
+    static_assert(
+        reflect::size<operation_attributes_t>() == 8,
+        "FastReduceNCParams gained or lost a field: add it to compute_program_hash or document why it is "
+        "excluded, then update this count.");
+    return ttsl::hash::hash_objects_with_default_seed(
+        ttsl::hash::type_hash<FastReduceNCDeviceOperation>,
+        operation_attributes.dim,
+        operation_attributes.output_mem_config,
+        operation_attributes.compute_kernel_config,
+        operation_attributes.sub_core_grids,
+        operation_attributes.output_dtype,
+        operation_attributes.split_output_width,
+        operation_attributes.use_sfpu_reduce,
+        tensor_args);
+}
+
 FastReduceNCDeviceOperation::spec_return_value_t FastReduceNCDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     CMAKE_UNIQUE_NAMESPACE::validate_split_output(args, tensor_args);
