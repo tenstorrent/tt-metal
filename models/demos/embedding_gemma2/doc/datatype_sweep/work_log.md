@@ -270,3 +270,43 @@ trace tests 19 passed, no "still alive"; joint vision + audio soak 2052 replays,
 (tracking on; a second run without tracking: `logs/soak_g1_notrk.log`). Post-selection bench and
 baseline override: README Gates table. Text gate metrics equal to E6a r1 except one value E6a r1
 logged both ways (README).
+
+# E9.1-r re-selection (2026-10-28, text, 12 x 10 grid)
+
+Why, policy, table and choice: README "E9.1-r re-selection". Run folder
+`tt-ops/runs/embeddinggemma-2/e9/01r-geometry-precision/` (`$G`); scripts in `$G/scripts/`, every
+device command through `run.sh` (card-free check, `timeout -s KILL`, `__tt_exit`), one at a time,
+`EMBEDDING_GEMMA2_GRID=12x10` unless stated. Candidate files: `$G/precision/precision_<id>.json`
+(the selected file with the candidate's text section; `make_candidates.py`), merged combos
+`$G/precision/combos_all.json` (E6 `combos_p2/p3/r.json`).
+
+## 17. Screen (`chain_c1.sh`, `chain_c2.sh`, `chain_c4.sh`)
+
+1. Rank, all 19 (`dtype_sweep.py run --no-acc --shapes 1x512,8x512 --soak 0 --sustained-ms 200`,
+   baseline first and last): `logs/c_rank_12x10.log`. Baseline control 45.021 -> 45.016 ms.
+   `p3_qkv_gu_exp_ple_exc` errored (static CBs clash with L1 buffers).
+2. Five-shape timing for `p3_qkv_gu`, `p3_qkv_exp` between two baseline runs (`logs/c_shapes_12x10.log`);
+   both baseline runs errored with the same clash.
+3. `dtype_probe.py --inputs e9`, all 19 candidates (`logs/c_probe_e9_12x10.log`):
+   fails `p3_qkv_gu` (0.98836) and `p3_qkv_gu_exp` (0.98990); every other config >= 0.99117.
+4. In rank order: short + mid probe and 10-bucket contract gate (`prefill.py -k gate`,
+   `EMBEDDING_GEMMA2_PRECISION=<candidate file>`) for `p3_qkv_exp`, `act_bfp8_attn_qkv`, baseline
+   (`chain_c2.sh`); full gates for `p3_qkv_exp` (`gates.sh c_p3exp_12x10`: 1 failed
+   `test_full_model::test_retrieval[audio]`, demo 1 failed `test_multimodal_demo` text -> audio;
+   152 + 1 passed otherwise).
+5. Next four in rank order (`chain_c4.sh`): retrieval + demo tests, short + mid probe, contract gate.
+   `p2_sdpa_fast` and `sdpa_nofp32acc` pass all; `sdpa_exp_approx` and `act_bfp8_mlp_gate_up`
+   crash in the contract session <= 8192 (clash); the short-probe process stopped at
+   `sdpa_exp_approx` (clash), so `act_bfp8_mlp_gate_up` has no short-probe value.
+6. Clash repro (`repro_cb_clash.py`, README open item): `logs/c_repro_cb_clash_base_*`.
+7. Tie at 41.843 / 41.845 ms; orchestrator rule: the fastest measured, `p2_sdpa_fast`, unless its
+   full gates disqualify it.
+
+## 18. Selection and gates (`chain_c5.sh`)
+
+`selected_precision_config.json`: text section = `$G/precision/precision_p2_sdpa_fast.json` text
+(checked equal by a JSON compare; vision / audio unchanged), `config_id` `p2_sdpa_fast`.
+Then, with no override: `gates.sh c_p2_12x10` and `gates.sh c_p2_13x10` (153 + 1 + 2 passed
+each), 10-bucket contract gate at 12 x 10 with alloc tracking (10 passed), soak 2000 replays at
+1 x 2048 on 12 x 10 (0 mismatches), `perf.py` default at 13 x 10 new / `p3_qkv_gu` control / new
+(7.099 / 6.857 / 7.098 ms text 1 x 512). Values: README "E9.1-r re-selection".

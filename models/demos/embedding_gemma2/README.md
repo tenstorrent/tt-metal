@@ -196,6 +196,14 @@ override away: `EMBEDDING_GEMMA2_PRECISION=<doc/datatype_sweep/baseline_precisio
 The largest bucket is now 65536 (was 32768); 65536 has no HF reference (validated by padding
 equivalence vs 32768 only), so the HF-validated maximum stays 32768.
 
+**E9.1-r re-selection (2026-10-28): the text default is now `p2_sdpa_fast`** (E5a policy with SDPA
+fp32 accumulation off and `exp_approx` on; QKV and gate / up outputs back to bf16). `p3_qkv_gu`
+fails the E9 b1_s256 contract input (last-hidden PCC 0.98872), and the re-selection ran on the
+12 x 10 grid. The table and the policy paragraph above describe `p3_qkv_gu`. Selection, numbers
+and the E8 numbers it supersedes: `doc/datatype_sweep/README.md` ("E9.1-r re-selection") and
+`doc/benchmark/REPORT.md` (addendum). The serving wrapper (`demo/generator_vllm.py`) reads the
+same file, so served embeddings change with it.
+
 ## Vision tower
 
 `tt/vision/` implements HF `Gemma4VisionModel` + `embed_vision`: patch embedder with the learned

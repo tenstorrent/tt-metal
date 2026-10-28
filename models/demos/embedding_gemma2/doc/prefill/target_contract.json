@@ -7,11 +7,13 @@
     "commit": "4624946b1b67f3beb008d02037803a50446857b1",
     "commit_note": "stage-1 base commit; harness commit 7ef04f02da (tests/perf/prefill*.py, no model code change); baseline docs commit logged in doc/prefill/01-baseline/work_log.md",
     "model_dir": "models/demos/embedding_gemma2",
-    "precision_config": "doc/datatype_sweep/selected_precision_config.json (text p3_qkv_gu)"
+    "precision_config": "doc/datatype_sweep/selected_precision_config.json (text p2_sdpa_fast since E9.1-r, 2026-10-28; stage 1 measured p3_qkv_gu)",
+    "contract_changes": "2026-10-28 E9.1-r (orchestrator-approved, person's geometry instruction): compute_grid 13x10 -> 12x10, text precision p3_qkv_gu -> p2_sdpa_fast, open_decisions.b1_s256 resolved without override. Logged in doc/prefill/01-baseline/work_log.md."
   },
   "hardware": {
     "part": "Blackhole P150a (tt-smi board_type p150a, board_id 0000040331911033, bus 0000:01:00.0)",
-    "compute_grid": [13, 10],
+    "compute_grid": [12, 10],
+    "compute_grid_note": "Galaxy target grid (10 rows x 12 columns), person's instruction 2026-10-28; stage 1 was measured on the P150a's full 13 x 10. On the P150a, 12 x 10 is reached with the runtime option TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE=11,9, set by tt/config.py (EMBEDDING_GEMMA2_GRID=12x10, default of tests/perf/prefill.py) before the first device open and checked with compute_with_storage_grid_size() == (12, 10). DispatchCoreConfig axis COL is already the Blackhole default and gives (13, 10); axis ROW is rejected without fabric tensix MUX. Tracy at 1 x 2048: 0 of 646 ops above 120 cores. Evidence: doc/prefill/01-baseline/work_log.md, 'E9.1-r1: compute grid 12 x 10'.",
     "chips_used": 1,
     "power_limit_w": 150,
     "power_limits_detail": "TDP limit 150 W (tt-smi limits.tdp_limit, TDP_LIMIT_MAX 0x96; hwmon power1_max 150000000 uW), TDC limit 200 A (curr1_max), board power limit 300 W (BOARD_POWER_LIMIT 0x12c), AICLK max 1350 MHz (AICLK_LIMIT_MAX 0x546). Default limits, not changed; optimize at these.",
@@ -52,8 +54,12 @@
     "embedding_cosine_gate": 0.99,
     "embedding_cosine_metric": "pooled + normalized embedding cosine of the traced replay output vs HF fp32",
     "pcc_gate_overrides": {},
-    "open_decisions": {
-      "b1_s256": "measured stage-1 gate failure, no override applied: last-hidden PCC 0.98872 < 0.99 (embedding cosine 0.99763) with the selected text precision p3_qkv_gu on the contract input (logical 192, corpus offset 0); the E5a baseline precision gives 0.99692 on the same input at +6.6 % burst latency for this bucket. Options and evidence: doc/prefill/01-baseline/README.md, 'Gate failure at b1_s256'. Orchestrator decides (stage-7 precision change, precision revert, or a pcc_gate_override with this reason)."
+    "open_decisions": {},
+    "resolved_decisions": {
+      "b1_s256": "resolved 2026-10-28 (E9.1-r) without a pcc_gate_override: stage-1 failure with p3_qkv_gu (last-hidden PCC 0.98872 < 0.99 on logical 192, offset 0). The text precision was re-selected at 12 x 10 under the E6 policy with the E9 contract inputs and the b1_s256 family (offset 0, L 160-224) added to the probe; the selected p2_sdpa_fast gives 0.99438 / cosine 0.99873 on this input and passes all 10 buckets (doc/datatype_sweep/README.md, 'E9.1-r re-selection')."
+    },
+    "open_items": {
+      "baseline_precision_12x10": "The safe-baseline (fallback) text precision base_bfp8_hifi2 crashes at 12 x 10 in multi-bucket device sessions <= 8192 (TT_THROW: static circular buffers clash with L1 buffers, first at the 1 x 4096 full-attention SDPA). Cause (measured): its bf16 Q/K/V give a larger SDPA static CB region (ends at 1,437,056 B per core), and on 120 L1 banks the live L1-interleaved activations ([1, 1, 4096, 512] bf16: 18 tiles per bank instead of 16 on 130) plus the L1 RoPE tables start at 1,421,312 B; 13 x 10 starts at 1,445,888 B and passes; the residual stream in DRAM (EG2_RESIDUAL_L1=0) also passes. Open for E9 stage 5 (memory placement)."
     },
     "references": "cached once under tt-ops/runs/embeddinggemma-2/e9/refs/ (host RAM and time per bucket in doc/prefill/01-baseline/README.md)",
     "existing_tests": "per-layer PCC tests (>= 0.995) and every existing test in MODEL_DIR/tests keep passing unchanged",

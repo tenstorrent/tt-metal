@@ -13,6 +13,12 @@ log with `__start` / `__end wall_s` / `__tt_exit`), one at a time.
 | `3eed8629a2` | E8 review doc fixes (datatype_sweep README vision worst-token attribution; benchmark REPORT.md; README) - docs only |
 | `7ef04f02da` | stage-1 harness: `tests/perf/prefill.py`, `prefill_refs.py`, `prefill_telemetry.py`, `prefill_op_table.py`, `prefill_summary.py`; `perf.py::test_tracy_forward` contract buckets. No model code. |
 | `f6b3ded953` | `doc/prefill/target_contract.json`, `doc/prefill/01-baseline/` (this log, README, perf_summary, per-op tables) - docs only |
+| `5f597d364f` | E9.1-r1 part A: stage-1 review doc fixes - docs only |
+| `7224692da5`, `b0ae1e5ead` | E9.1-r1 part B (WIP): 12 x 10 grid switch (`tt/config.py`, `linear.py`, `attention.py`, `masks.py`, `conftest.py`, `prefill.py`); device opens of the perf / demo scripts, `dtype_probe --inputs e9` |
+| `d2e85760dd`, `0c6b153b18` | model folder moved to `models/demos/embedding_gemma2`; serving wrapper `demo/generator_vllm.py` (v1, v2) - not this unit |
+| `bc9cb3106c` | E9.1-r1 part B final: perf.py records the grid, demo `__main__` checks it; "E9.1-r1: compute grid 12 x 10" section |
+| `325fbd415d` | E9.1-r1 part C: text precision default `p3_qkv_gu` -> `p2_sdpa_fast` (`selected_precision_config.json`) |
+| (this commit) | E9.1-r1 part C docs: contract change, datatype_sweep README / work_log, REPORT addendum, README |
 
 The measurements ran on the working tree of `7ef04f02da` before two non-semantic changes: black
 reformatting at commit time, and `@pytest.mark.timeout(3600)` (added after the 65536 sustained case
@@ -170,3 +176,19 @@ the override also caps the ops that pick their own grid (norms, eltwise, `minima
   0.99420 / 0.99937 (`$G/run_b2_gate_12x10/prefill.jsonl`, `TT_METAL_TRACE_ALLOC_TRACKING=1`).
   Replay equals eager bitwise on every bucket. The 256 failure is the precision issue that the
   E9.1-r re-selection (part C) addresses.
+
+### Contract change (E9.1-r, 2026-10-28; approved by the orchestrator, person's geometry instruction)
+
+`doc/prefill/target_contract.json`:
+- `hardware.compute_grid` [13, 10] -> [12, 10], with `compute_grid_note` (how 12 x 10 is reached
+  and checked, above).
+- `checkout.precision_config`: text `p3_qkv_gu` -> `p2_sdpa_fast` (`doc/datatype_sweep/README.md`,
+  "E9.1-r re-selection"; selected at 12 x 10 under the E6 policy with the contract inputs and the
+  b1_s256 family in the probe).
+- `accuracy.open_decisions.b1_s256` resolved without a `pcc_gate_override` (moved to
+  `resolved_decisions`): with `p2_sdpa_fast` the input gives 0.99438 / 0.99873.
+- New `accuracy.open_items.baseline_precision_12x10`: the E5a fallback precision crashes at
+  12 x 10 in multi-bucket sessions <= 8192 (static CBs clash with L1 buffers at the 1 x 4096
+  full-attention SDPA); open for stage 5.
+- Stage-1 timing numbers (13 x 10, `p3_qkv_gu`) are not comparable with the new contract; the
+  12 x 10 re-baseline is the next unit.

@@ -1,10 +1,119 @@
 # EmbeddingGemma 2: datatype sweep (E6a text tower, E6b vision and audio towers)
 
-Selected defaults (`selected_precision_config.json`): text `p3_qkv_gu` (E6a, below), vision
-`v_exp_bfp8w4` and audio `a_h2b8_qkvbf16_shift2_sharded` (E6b,
-[Vision and audio towers (E6b)](#vision-and-audio-towers-e6b)).
+Selected defaults (`selected_precision_config.json`): text `p2_sdpa_fast` (E9.1-r re-selection at
+the 12 x 10 grid, next section; it replaces the E6a choice `p3_qkv_gu`), vision `v_exp_bfp8w4` and
+audio `a_h2b8_qkvbf16_shift2_sharded` (E6b, [Vision and audio towers (E6b)](#vision-and-audio-towers-e6b)).
 
-## Selected config: `p3_qkv_gu`
+## E9.1-r re-selection (2026-10-28): text `p2_sdpa_fast`
+
+**Why.** E9 stage 1 found the E6a default `p3_qkv_gu` below the hard gate on the b1_s256 contract
+input (offset 0, 192 tokens: last-hidden PCC 0.98872), and the person moved the target to a
+12 x 10 compute grid (Galaxy). The orchestrator ordered a re-selection at 12 x 10 under the E6
+policy, with a wider probe. Run folder: `tt-ops/runs/embeddinggemma-2/e9/01r-geometry-precision/`
+(`$G`); every number is **[M]** at 12 x 10 (`EMBEDDING_GEMMA2_GRID=12x10`) unless marked.
+
+**Policy (unchanged from E6a, applied at 12 x 10).** Candidates: the 18 E6a text configs that
+passed the E6a screen and were at least as fast as the E5a baseline in `sweep_results.json`, plus
+the baseline `base_bfp8_hifi2` as fallback. A candidate qualifies when, as the model default, it
+passes every existing text test, `test_full_model`, the demo, and the robustness probe with
+last-hidden PCC >= 0.99 and embedding cosine >= 0.99 on every input. The probe is the E6 set
+(`--inputs short`: gate cases + probe; `--inputs mid`), plus, new by orchestrator decision, the
+10 E9 contract inputs (3/4 of each bucket 128 ... 65536, offset 0, traced replay vs cached HF fp32,
+`tests/perf/prefill.py` gate) and the b1_s256 family (`--inputs e9`: offset 0, L 160 / 176 / 192 /
+200 / 208 / 224). Rank: burst 1x512 + 8x512 (`dtype_sweep.py --shapes 1x512,8x512`), baseline as
+the first and last candidate of the process (in-session control: 45.021 / 45.016 ms). Select the
+fastest qualifying config. Candidates were screened in rank order with the cheap, binding checks
+first; slower candidates past the first qualifiers were not taken through every check.
+
+| candidate | rank ms (1x512 + 8x512) | worst value / failing check | result |
+|---|---|---|---|
+| `p3_qkv_gu_exp` | 34.78 (6.69 + 28.09) | e9 probe: last hidden 0.98990 at L 208 | rejected |
+| `p3_qkv_gu_exp_ple_exc` | - | crashes at 12 x 10 (`TT_THROW` static CBs clash with L1 buffers) | rejected (also failed the E6a retrieval gate) |
+| `p3_qkv_exp` | 37.35 (6.85 + 30.50) | probes and 10 / 10 contract gates pass (min 0.99146, short `[512, 33]`); **fails** `test_full_model::test_retrieval[audio]` and `demo::test_multimodal_demo` (text -> audio near tie: TT 0.71355 vs 0.71371, HF margin 0.00463) | rejected |
+| `p3_qkv_gu` (E6a default) | 38.23 (7.04 + 31.19) | e9 probe 0.98836 at L 200; contract b1_s256 0.98872 | rejected |
+| `act_bfp8_attn_qkv` | 40.78 (7.18 + 33.60) | short probe 0.98953 on the 3-token input `[3]` | rejected |
+| **`p2_sdpa_fast`** | **41.84 (7.26 + 34.58)** | all pass: e9 0.99438, short 0.99094 (`[511]`) / cos 0.99565, mid 0.99605, contract min 0.99424 / 0.99834 (b1_s128), retrieval row margin 0.00137 | **selected** |
+| `sdpa_nofp32acc` | 41.85 (7.26 + 34.58) | all pass: e9 0.99345, short 0.99240 / 0.99565, mid 0.99631, contract min 0.99424 / 0.99834, retrieval margin 0.00094 | qualifies; ties on time |
+| `sdpa_exp_approx` | 42.17 | retrieval + demo pass, mid 0.99765; contract session <= 8192 and short probe crash (static CBs clash with L1) | rejected |
+| `act_bfp8_mlp_gate_up` | 42.51 | retrieval + demo pass, mid 0.99735; contract session <= 8192 crashes (same clash) | rejected |
+| 9 configs 44.43-45.00 | 44.43-45.00 | e9 probe passes (>= 0.99117); not taken further (slower than two qualifiers) | not needed |
+| `base_bfp8_hifi2` (fallback) | 45.02 | e9 0.99692, mid 0.99829; contract session <= 8192 and short probe crash (same clash); 16384-65536 pass | open item (below) |
+
+Logs: rank `$G/logs/c_rank_12x10.log` (`c_rank_12x10.jsonl`); probes `c_probe_e9_12x10`,
+`c_probe_{short,mid}_12x10`, `c4_probe_{short,mid}_12x10` (`.log` / `.jsonl`); contract gates
+`c_gate_<id>_12x10.log` (`run_c_gate_<id>/prefill.jsonl`); retrieval + demo `c4_retrieval_<id>_12x10.log`;
+`p3_qkv_exp` full gates `gates_c_p3exp_12x10_{text,s32768,demo}.log`.
+
+**Tie and the rule.** `p2_sdpa_fast` (41.843 ms) and `sdpa_nofp32acc` (41.845 ms) differ by 2 us,
+inside the run-to-run noise (the baseline control moved 5 us). The orchestrator's rule: pick the
+fastest measured, `p2_sdpa_fast`, unless its full gates disqualify it; then `sdpa_nofp32acc`.
+`p2_sdpa_fast` passed the full gates (below), so it is the default.
+
+**Selected `p2_sdpa_fast`.** The E5a policy with SDPA fp32 accumulation off and `exp_approx` on;
+the QKV and gate / up projection outputs go back to bf16 (they were bfp8 in `p3_qkv_gu`). The
+K / V `rms_norm` input is therefore bf16 again (the E5a dtype), so the KNOWN HAZARDS soak ran
+(below).
+
+**Gates with `p2_sdpa_fast` as the default** (`selected_precision_config.json`, no override;
+`$G/scripts/chain_c5.sh`, `logs/chain_c5.log`) **[M]**:
+
+| gate | 12 x 10 | 13 x 10 (P150 default path) |
+|---|---|---|
+| text tests + `test_trace` + `test_precision_config` + `test_full_model` + `test_full_model_trace` + `test_generator_vllm` (`gates.sh`, `-k "not s32768"`) | 153 passed | 153 passed |
+| `test_text_model[b1_s32768]` | 1 passed | 1 passed |
+| `demo/demo.py` | 2 passed | 2 passed |
+| min logged `last_hidden_pcc` (12 values) / `embedding_cosine` (22 values) | 0.99094 / 0.99605 | 0.99094 / 0.99605 |
+| min per-layer PCC (`layer_pcc`, 72 values) | 0.99983 | 0.99983 |
+| text -> audio near-tie row (`caption_speech2s`) TT margin | 0.00137 | 0.00137 |
+| serving wrapper (`test_generator_vllm`) min embedding cosine, 18 rows | 0.99433 | 0.99433 |
+
+`test_precision_config`: 1211 text checks pass against the new file. Logs:
+`$G/logs/gates_c_p2_{12x10,13x10}_{text,s32768,demo}.log`.
+
+Contract gate, 10 buckets, traced replay vs cached HF fp32 at 12 x 10, default precision,
+`TT_METAL_TRACE_ALLOC_TRACKING=1` (`$G/logs/c5_gate_12x10.log`, `$G/run_c5_gate_12x10/prefill.jsonl`)
+**[M]**, last-hidden PCC / embedding cosine (bars 0.99 / 0.99), replay == eager bitwise on all:
+
+| bucket | 128 | 256 | 512 | 1024 | 2048 | 4096 | 8192 | 16384 | 32768 | 65536 |
+|---|---|---|---|---|---|---|---|---|---|---|
+| PCC | 0.99424 | 0.99438 | 0.99446 | 0.99558 | 0.99535 | 0.99566 | 0.99685 | 0.99710 | 0.99700 | 0.99725 |
+| cosine | 0.99834 | 0.99873 | 0.99917 | 0.99935 | 0.99948 | 0.99961 | 0.99968 | 0.99967 | 0.99965 | 0.99958 |
+
+KNOWN HAZARDS soak (K / V `rms_norm` input dtype changed): 2000 trace replays at 1 x 2048 on
+12 x 10 with the new default, output re-read every 100 replays: `SOAK_DONE replays 2000 wall_s
+50.7 mismatches 0`, no hang (`$G/logs/c5_soak_1x2048_12x10.log`).
+
+Cost at 13 x 10 (P150 path, `perf.py` default, text 1 x 512 forward, mean of 20 after 3 warm-up,
+order new / control / new, `$G/run_c5_perf_13x10_*`): `p2_sdpa_fast` 7.099 / 7.098 ms vs
+`p3_qkv_gu` 6.857 ms (+3.5 %). At 12 x 10 the ranking aggregate is 41.84 vs 38.23 ms (+9.4 %):
+the accuracy fix costs time; the two faster configs that pass every text gate (`p3_qkv_exp`) or
+the contract gates (`act_bfp8_attn_qkv`) fail other parts of the policy (table).
+
+**Per-bucket precision (stage-7 recommendation only, not implemented).** `p3_qkv_exp` is 10.7 %
+faster on the ranking aggregate (37.35 vs 41.84 ms) and passes all 10 contract buckets and every
+text probe; it fails only the text -> audio near-tie retrieval gate of the multimodal model. At
+12 x 10 it also beats `p3_qkv_gu` on every timed shape (1x128 4.83 / 4.89, 1x512 6.85 / 7.04,
+1x2048 23.23 / 27.94, 8x512 30.51 / 31.20, 1x8192 97.19 / 116.60 ms, `$G/logs/c_shapes_12x10.log`).
+Stage 7 should evaluate it for the text-only prefill path (all contract buckets) with the
+contract gates and the probe; `p3_qkv_gu_exp` (34.78 ms) fails the short b1_s256 family and would
+need the same per-bucket evaluation for long buckets only.
+
+**Open item for E9 stage 5: the baseline fallback crashes at 12 x 10.** `base_bfp8_hifi2` (and `sdpa_exp_approx`,
+`act_bfp8_mlp_gate_up`, `p3_qkv_gu_exp_ple_exc`, which share bf16 Q/K/V with fp32-accumulating
+SDPA in at least some layers; the configs that pass have bfp8 Q/K/V or SDPA fp32 accumulation off,
+so a smaller SDPA CB region is the likely common factor **[I]**) fails at 12 x 10 in multi-bucket sessions <= 8192 with `TT_THROW:
+Statically allocated circular buffers ... clash with L1 buffers`. Reproduced
+(`$G/scripts/repro_cb_clash.py`, `logs/c_repro_cb_clash_base_*`): eager compile of buckets
+128 ... 8192 in one session fails at the 1 x 4096 full-attention SDPA (head_dim 512, q_chunk 128).
+Its static CB region ends at 1,437,056 B per core; the live L1 buffers (three L1-interleaved
+[1, 1, 4096, 512] bf16 activations at 18 tiles per bank on 120 banks, 16 on 130, plus the L1 RoPE
+tables of buckets <= 512) start at 1,421,312 B. Control: the same session at 13 x 10 starts at
+1,445,888 B and passes; at 12 x 10 with the residual stream in DRAM (`EG2_RESIDUAL_L1=0`) it
+passes; each bucket alone in its own session passes. So the fallback precision is not usable at
+12 x 10 until stage 5 (memory placement) fixes the L1 budget; the selected default and the
+13 x 10 path are not affected (gates below).
+
+## E6a selection: `p3_qkv_gu` (default until 2026-10-28; superseded by the E9.1-r re-selection above)
 
 The E5a text policy (bfp8 weights, HiFi2 + fp32 accumulation matmuls, bf16 activations, HiFi2 +
 fp32 SDPA, HiFi4 norms, bfp4 masks) with one change: the fused QKV projection and the MLP gate and

@@ -7,6 +7,35 @@ This report covers traced latency and throughput for every tower and for the ful
 - **Labels:** every number below is **[M]** from `run/perf.jsonl` unless labelled otherwise.
 - **No accuracy benchmark:** there is no MTEB or lm-eval run, by decision of the person running the bring-up. The HF checks below only guard the timed path.
 
+## Addendum 2026-10-28 (E9.1-r): text default changed to `p2_sdpa_fast`
+
+The text precision default in `doc/datatype_sweep/selected_precision_config.json` changed from
+`p3_qkv_gu` to `p2_sdpa_fast` (re-selected on the 12 x 10 Galaxy grid because `p3_qkv_gu` fails
+the E9 b1_s256 contract input; `doc/datatype_sweep/README.md`, "E9.1-r re-selection"). Vision and
+audio sections are unchanged. Every text and full-model number below was measured with
+`p3_qkv_gu` and is superseded for the current default: the text tower table, the text rows of
+the headline, the full-model rows (their text stack runs the same policy), and the text rows of
+"Burst vs sustained" and "Comparison with earlier stages". They stay as the record of E8.
+
+Re-measured headline, 13 x 10 P150 path, `pytest tests/perf/perf.py -s` (quick default), commit
+`bc9cb3106c` + the new config, order new / control / new **[M]**
+(`tt-ops/runs/embeddinggemma-2/e9/01r-geometry-precision/run_c5_perf_13x10_*`):
+
+| shape, mode | `p2_sdpa_fast` (new default) mean ms | `p3_qkv_gu` control mean ms | E8 report |
+|---|---|---|---|
+| text 1 x 512, forward | 7.099 / 7.098 (p50 7.099 / 7.097) | 6.857 (p50 6.854) | 6.869 (p50) |
+| full model text 1 x 512, forward | 7.092 / 7.072 | 6.865 | 6.869 (p50) |
+
+The new default costs +3.5 % at text 1 x 512 (141 vs 146 emb/s). Other text shapes were not
+re-measured here (the 12 x 10 re-baseline is the next E9 unit); at 12 x 10 the selection
+aggregate (1x512 + 8x512 burst) is 41.84 ms vs 38.23 ms for `p3_qkv_gu`.
+
+Served embeddings change with the precision: the tt-inference-server wrapper
+(`demo/generator_vllm.py`) builds `TextEncoder.from_pretrained`, which loads the same default
+file, so it serves `p2_sdpa_fast` with no code change. `tests/pcc/test_generator_vllm.py` passes
+with the new default at 13 x 10 and 12 x 10 (6 passed each; min serving embedding cosine vs HF fp32
+0.99433 over 18 rows, bar 0.99).
+
 ## Headline (batch 1)
 
 | workload | shape | forward p50 ms | request (h2d_d2h) p50 ms, excl. host prep | request + host prep, mean ms | public API p50 ms | throughput (forward) | serial throughput (request + host prep) |
