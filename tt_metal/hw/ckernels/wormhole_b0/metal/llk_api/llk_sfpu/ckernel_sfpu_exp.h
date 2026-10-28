@@ -366,8 +366,8 @@ inline void _sfpu_exp_21f_bf16_tti_(const std::uint16_t exp_base_scale_factor) {
     // by the two SFPSTOREs inside the body so each replay walks to the
     // next row pair correctly.
     //
-    // The accurate path (APPROXIMATION_MODE=false) does not otherwise use
-    // the replay buffer, so slot 0 is free here. Callers that mix this
+    // Neither accurate exp (APPROXIMATION_MODE=false) nor bf16 exp2 otherwise
+    // uses the replay buffer, so slot 0 is free here. Callers that mix this
     // function with other replay-buffer clients should ensure they don't
     // require slot 0 to survive across the call.
     TTI_REPLAY(0, BODY_LEN, 1, 1);
