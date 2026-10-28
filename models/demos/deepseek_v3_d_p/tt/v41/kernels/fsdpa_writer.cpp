@@ -6,11 +6,13 @@
 // the persistent compute tiles (the reduce scaler, the column identity, the -inf row, the per-head sink column: as
 // sparse_sdpa's writer builds them) and the grid's NoC table. From the reader's plan: this core's share of the dead
 // rows' output pages zeroed (the rows that are not live get a defined output). Per unit of this core: the compute's
-// max, sum and acc tiles to the partial slot (row rank, j) of the scratch, then one semaphore increment on each of
-// the row's VT merge cores. Per merge unit of this core: the untilized [32 heads x 32 columns] block to the
-// row-major output, one 64-byte write a head.
+// max, sum and column-v acc tiles written into each of the row's VT merge cores' partial CBs (page slot * UMAX + j
+// of their cb_pm / cb_ps / cb_pa; with DEBUG_SCRATCH also the whole partial to slot (row rank, j) of the DRAM
+// scratch), a write barrier, then one semaphore increment on each merge core. Per merge unit of this core: the
+// untilized [32 heads x 32 columns] block to the row-major output, one 64-byte write a head.
 //
-// compile_time_args = fsdpa::ct, then the accessors of scratch, out, sink, noc table
+// compile_time_args = fsdpa::ct, then the accessors of scratch (any DRAM tensor when DEBUG_SCRATCH is 0), out,
+// sink, noc table
 // common_runtime_args = [scratch_addr, out_addr, sink_addr, noc_table_addr]; runtime_args = [core]
 
 #include <stdint.h>
@@ -34,6 +36,7 @@ void kernel_main() {
     constexpr uint32_t N = get_compile_time_arg_val(ct::N);
     constexpr uint32_t VT = get_compile_time_arg_val(ct::VT);
     constexpr uint32_t SLOT_TILES = get_compile_time_arg_val(ct::SLOT_TILES);
+    constexpr bool debug_scratch = get_compile_time_arg_val(ct::DEBUG_SCRATCH) != 0;
     constexpr uint32_t tile_bytes = tt::constants::TILE_HW * sizeof(uint16_t);
     constexpr uint32_t out_row_bytes = V * sizeof(uint16_t);
     constexpr uint32_t noc_table_bytes = (N * 8 + 63) / 64 * 64;
@@ -134,6 +137,13 @@ void kernel_main() {
     }
 
     // ---- the units ----
+    // The merge cores' partial CBs start at the same L1 address on every core (one program, one CB layout) and
+    // this RISC never pushes to its own, so its write pointers are the CBs' bases: page (slot * UMAX + j) of the
+    // merge core's cb_pm / cb_ps / cb_pa is where unit j of its slot-th merge lands.
+    const uint32_t pm_base = experimental::CB(cb_pm).get_write_ptr();
+    const uint32_t ps_base = experimental::CB(cb_ps).get_write_ptr();
+    const uint32_t pa_base = experimental::CB(cb_pa).get_write_ptr();
+    const UnicastEndpoint remote_l1;
     const uint32_t total_units = n_live * UMAX;
     for (uint32_t u = core; u < total_units; u += N) {
         const uint32_t i = u / UMAX, j = u % UMAX;
@@ -143,16 +153,34 @@ void kernel_main() {
         if (valid == 0) {
             continue;
         }
-        const uint32_t base = (i * UMAX + j) * SLOT_TILES;
         max_cb.wait_front(1);
         sum_cb.wait_front(1);
         out_cb.wait_front(VT);
-        noc.async_write(max_cb, part, tile_bytes, {.offset_bytes = 0}, {.page_id = base});
-        noc.async_write(sum_cb, part, tile_bytes, {.offset_bytes = 0}, {.page_id = base + 1});
         for (uint32_t v = 0; v < VT; ++v) {
-            noc.async_write(out_cb, part, tile_bytes, {.offset_bytes = v * tile_bytes}, {.page_id = base + 2 + v});
+            const uint32_t mu = i * VT + v;
+            const uint32_t mc = merge_core(mu, N);
+            const uint32_t x = noc_xy[2 * mc], y = noc_xy[2 * mc + 1];
+            const uint32_t off = (merge_sem(mu, N) * UMAX + j) * tile_bytes;
+            noc.async_write(
+                max_cb, remote_l1, tile_bytes, {.offset_bytes = 0}, {.noc_x = x, .noc_y = y, .addr = pm_base + off});
+            noc.async_write(
+                sum_cb, remote_l1, tile_bytes, {.offset_bytes = 0}, {.noc_x = x, .noc_y = y, .addr = ps_base + off});
+            noc.async_write(
+                out_cb,
+                remote_l1,
+                tile_bytes,
+                {.offset_bytes = v * tile_bytes},
+                {.noc_x = x, .noc_y = y, .addr = pa_base + off});
         }
-        noc.async_write_barrier();
+        if constexpr (debug_scratch) {
+            const uint32_t base = (i * UMAX + j) * SLOT_TILES;
+            noc.async_write(max_cb, part, tile_bytes, {.offset_bytes = 0}, {.page_id = base});
+            noc.async_write(sum_cb, part, tile_bytes, {.offset_bytes = 0}, {.page_id = base + 1});
+            for (uint32_t v = 0; v < VT; ++v) {
+                noc.async_write(out_cb, part, tile_bytes, {.offset_bytes = v * tile_bytes}, {.page_id = base + 2 + v});
+            }
+        }
+        noc.async_write_barrier();  // the partials are in the merge cores' L1 before their semaphores move
         max_cb.pop_front(1);
         sum_cb.pop_front(1);
         out_cb.pop_front(VT);

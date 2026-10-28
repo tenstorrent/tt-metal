@@ -10,11 +10,11 @@
 // gathered as sparse_sdpa's reader gathers them (the packed scaled-FP8 slab with its scale rows scattered into the
 // fp32 broadcast tiles, or the bf16 rows; the rows past the valid count zero) and the partial-boundary mask tile.
 // Then for each of this core's merge units (row, v): the row's index row -> its valid count -> the number of
-// partials to expect, the wait on the merge semaphore the units' writers increment, and the partials' max, sum and
-// column-v acc tiles from the scratch into the merge CBs.
+// partials to expect, the wait on the merge semaphore the units' writers increment once their partials are in
+// this core's merge CBs, and the push of those pages to the compute.
 //
-// compile_time_args = fsdpa::ct, then the accessors of q, kv, idx, scratch, live
-// common_runtime_args = [q_addr, kv_addr, idx_addr, scratch_addr, live_addr]; runtime_args = [core]
+// compile_time_args = fsdpa::ct, then the accessors of q, kv, idx, live
+// common_runtime_args = [q_addr, kv_addr, idx_addr, live_addr]; runtime_args = [core]
 
 #include <stdint.h>
 #include <tt-metalium/constants.hpp>
@@ -65,7 +65,6 @@ void kernel_main() {
     constexpr uint32_t q_elem_bytes = get_compile_time_arg_val(ct::Q_ELEM_BYTES);
     constexpr uint32_t VT = get_compile_time_arg_val(ct::VT);
     constexpr uint32_t scale_blocks = get_compile_time_arg_val(ct::SCALE_BLOCKS);
-    constexpr uint32_t SLOT_TILES = get_compile_time_arg_val(ct::SLOT_TILES);
     constexpr uint32_t k_row_bytes = get_compile_time_arg_val(ct::K_ROW_BYTES);
     constexpr uint32_t live_sentinel = get_compile_time_arg_val(ct::LIVE_SENTINEL);
     constexpr uint32_t HQ = get_compile_time_arg_val(ct::HQ);
@@ -81,18 +80,15 @@ void kernel_main() {
     constexpr auto q_args = TensorAccessorArgs<ct::END, 0>();
     constexpr auto kv_args = TensorAccessorArgs<q_args.next_compile_time_args_offset(), 0>();
     constexpr auto idx_args = TensorAccessorArgs<kv_args.next_compile_time_args_offset(), 0>();
-    constexpr auto part_args = TensorAccessorArgs<idx_args.next_compile_time_args_offset(), 0>();
-    constexpr auto live_args = TensorAccessorArgs<part_args.next_compile_time_args_offset(), 0>();
+    constexpr auto live_args = TensorAccessorArgs<idx_args.next_compile_time_args_offset(), 0>();
     const uint32_t q_addr = get_common_arg_val<uint32_t>(0);
     const uint32_t kv_addr = get_common_arg_val<uint32_t>(1);
     const uint32_t idx_addr = get_common_arg_val<uint32_t>(2);
-    const uint32_t part_addr = get_common_arg_val<uint32_t>(3);
-    const uint32_t live_addr = get_common_arg_val<uint32_t>(4);
+    const uint32_t live_addr = get_common_arg_val<uint32_t>(3);
     const uint32_t core = get_arg_val<uint32_t>(0);
     const auto q = TensorAccessor(q_args, q_addr);
     const auto kv = TensorAccessor(kv_args, kv_addr);
     const auto idx = TensorAccessor(idx_args, idx_addr);
-    const auto part = TensorAccessor(part_args, part_addr);
     const auto live_page = TensorAccessor(live_args, live_addr);
 
     Noc noc;
@@ -113,8 +109,10 @@ void kernel_main() {
     // ---- phase 0: the live rows ----
     noc.async_read(live_page, local_l1, S * 4, {.page_id = 0}, {.addr = page_l1});
     noc.async_read_barrier();
+    constexpr uint32_t NSEM = get_compile_time_arg_val(ct::NSEM);
+    constexpr uint32_t max_live = NSEM * N / VT;  // the merge slots a core bound the live rows (flash_sdpa.py)
     uint32_t n_live = 0;
-    for (uint32_t s = 0; s < S; ++s) {
+    for (uint32_t s = 0; s < S && n_live < max_live; ++s) {
         if (page_words[s] != live_sentinel) {
             live[n_live++] = s;
         }
@@ -222,21 +220,17 @@ void kernel_main() {
         const uint32_t expected = ceil_div(nv, KPU);
         push_word(ctrl_c, expected);
         push_word(ctrl_w, expected);
+        // The partials land in this core's cb_pm / cb_ps / cb_pa by the units' writers (pages
+        // [sem_id * UMAX, (sem_id + 1) * UMAX): the CBs hold NSEM * UMAX pages and every merge takes UMAX, so the
+        // k-th merge of a core is slot k and the pages never wrap inside one reserve). The semaphore says they
+        // are all there; the reserve and the push only move this RISC's pointers for the compute.
+        pm_cb.reserve_back(UMAX);
+        ps_cb.reserve_back(UMAX);
+        pa_cb.reserve_back(UMAX);
         volatile tt_l1_ptr uint32_t* sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(sem_id));
         noc_semaphore_wait_min(sem, expected);
-        noc_semaphore_set(sem, 0);
-        pm_cb.reserve_back(expected);
-        ps_cb.reserve_back(expected);
-        pa_cb.reserve_back(expected);
-        for (uint32_t jj = 0; jj < expected; ++jj) {
-            const uint32_t base = (i * UMAX + jj) * SLOT_TILES;
-            noc.async_read(part, pm_cb, 2048, {.page_id = base}, {.offset_bytes = jj * 2048});
-            noc.async_read(part, ps_cb, 2048, {.page_id = base + 1}, {.offset_bytes = jj * 2048});
-            noc.async_read(part, pa_cb, 2048, {.page_id = base + 2 + v}, {.offset_bytes = jj * 2048});
-        }
-        noc.async_read_barrier();
-        pm_cb.push_back(expected);
-        ps_cb.push_back(expected);
-        pa_cb.push_back(expected);
+        pm_cb.push_back(UMAX);
+        ps_cb.push_back(UMAX);
+        pa_cb.push_back(UMAX);
     }
 }

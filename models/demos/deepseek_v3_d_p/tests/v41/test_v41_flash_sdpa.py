@@ -82,7 +82,12 @@ def test_v41_flash_sdpa(mesh_device, device_params):
     shard = lambda dims: ttnn.ShardTensor2dMesh(mesh_device, (sp, tp), dims=dims)
     replicate = ttnn.ReplicateTensorToMesh(mesh_device)
     torch.manual_seed(143)
-    fs = FlashSdpa(mesh_device, heads=sdpa_heads, rows=ROWS, width=width, v_dim=v_dim, real_heads=local_heads)
+    # the trials' instance copies every partial to its DRAM scratch for the diagnostic; the timing instances do not
+    # (``fs_t`` every row's slots, the test's default; ``fs_c1`` one slot, the decoder's c1-capture layout)
+    geo = dict(heads=sdpa_heads, rows=ROWS, width=width, v_dim=v_dim, real_heads=local_heads)
+    fs = FlashSdpa(mesh_device, debug_scratch=True, **geo)
+    fs_t = FlashSdpa(mesh_device, debug_scratch=False, **geo)
+    fs_c1 = FlashSdpa(mesh_device, debug_scratch=False, max_live=8, **geo)
 
     def tiled(t, dims, dtype=ttnn.bfloat16):
         return ttnn.from_torch(
@@ -235,10 +240,17 @@ def test_v41_flash_sdpa(mesh_device, device_params):
             attention_sink=sink_local,
         )
 
-    def flash(qh, kv, rows, fmt, w, live=None):
-        return fs(qh, kv, rows, fmt == MlaKvCacheFormat.SCALED_FP8, scale, sink_local, live=live)
+    def flash(qh, kv, rows, fmt, w, live=None, inst=None):
+        return (inst or fs)(qh, kv, rows, fmt == MlaKvCacheFormat.SCALED_FP8, scale, sink_local, live=live)
 
-    result = {"mesh": [sp, tp], "width": width, "cache_rows": cache_rows, "kpu": fs.kpu, "trials": []}
+    result = {
+        "mesh": [sp, tp],
+        "width": width,
+        "cache_rows": cache_rows,
+        "kpu": fs.kpu,
+        "nsem": [fs.nsem, fs_c1.nsem],
+        "trials": [],
+    }
     caches = {fmt.name: kv_cache(fmt, 7) for fmt in (MlaKvCacheFormat.BF16_RM, MlaKvCacheFormat.SCALED_FP8)}
     failures = []
     for trial in range(trials):
@@ -291,14 +303,17 @@ def test_v41_flash_sdpa(mesh_device, device_params):
     for fmt in (MlaKvCacheFormat.SCALED_FP8, MlaKvCacheFormat.BF16_RM):
         for pattern in patterns:
             rows, _, live = index_rows(pattern, 999)
-            for name, fn in (("sparse", sparse), ("flash", flash)):
+            timed = [("sparse", sparse), ("flash", lambda *a: flash(*a, inst=fs_t))]
+            if pattern in ("c1", "k2", "k3", "f8"):
+                timed.append(("flash1", lambda *a: flash(*a, inst=fs_c1)))  # the one-slot (served) layout
+            for name, fn in timed:
                 key = f"{name}_{fmt.name}_{pattern}"
                 timing[key] = _trace_us(
                     mesh_device, lambda: fn(qh, caches[fmt.name], rows, fmt, width, live), calls, replays
                 )
                 logger.info(f"flash sdpa traced {key}: {timing[key]} us a layer")
             if pattern == "c1" and fmt == MlaKvCacheFormat.SCALED_FP8:
-                for name, fn in (("sparse", sparse), ("flash", flash)):
+                for name, fn in (("sparse", sparse), ("flash", lambda *a: flash(*a, inst=fs_c1))):
                     chain = lambda: o_heads(
                         fn(
                             q_heads(q, cos, sin, trans, local_heads, rope_dim, out_heads=sdpa_heads),
@@ -329,7 +344,7 @@ def test_v41_flash_sdpa(mesh_device, device_params):
         rows = rm(rows_w.to(torch.int32), (1, None), ttnn.uint32)
         live = fs.live_page([5])
         fmt = MlaKvCacheFormat.BF16_RM
-        for name, fn in (("sparse", sparse), ("flash", flash)):
+        for name, fn in (("sparse", sparse), ("flash", lambda *a: flash(*a, inst=fs_c1))):
             key = f"{name}_{fmt.name}_c1_w128"
             timing[key] = _trace_us(mesh_device, lambda: fn(qh, caches[fmt.name], rows, fmt, 128, live), calls, replays)
             logger.info(f"flash sdpa traced {key}: {timing[key]} us a layer")

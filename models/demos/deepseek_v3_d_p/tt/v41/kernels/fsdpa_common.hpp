@@ -29,7 +29,7 @@ enum : uint32_t {
     SCALE,  // the softmax scale, fp32 bits
     USE_SINK,
     MATH_APPROX,
-    NSEM,          // semaphores a core (merge units a core at most)
+    NSEM,          // semaphores a core (merge units a core at most); the partial CBs hold NSEM * UMAX pages
     VT,            // output column tiles (V / 32)
     SCALE_BLOCKS,  // scaled: V / 128
     KV_IS_FP8,
@@ -37,6 +37,7 @@ enum : uint32_t {
     K_ROW_BYTES,    // the KV row's logical bytes
     LIVE_SENTINEL,  // the live page's word of a row that is not live
     HQ,             // the query heads read (the rest of the tile's heads are zero: not read, zeroed in L1)
+    DEBUG_SCRATCH,  // 1: the writer also copies every partial to the DRAM scratch (the test's diagnostic)
     END,
 };
 }  // namespace ct
@@ -85,7 +86,9 @@ constexpr uint32_t PLAN_N_LIVE = 0;
 constexpr uint32_t PLAN_LIVE = 16;
 
 // Unit u of the live rows' UMAX units each runs on core u % N; merge unit mu (VT a live row) on core
-// N - 1 - mu % N, its semaphore mu / N.
+// N - 1 - mu % N, its semaphore and partial slot mu / N. A unit's partial (max, sum, acc_v) goes straight into the
+// merge core's L1: page (slot * UMAX + j) of its cb_pm / cb_ps / cb_pa (sdpa_decode's reducer exchange: no DRAM
+// round trip, and the writer's barrier before the semaphore increment orders the data on the one NoC).
 inline uint32_t merge_core(uint32_t mu, uint32_t n_cores) { return n_cores - 1 - (mu % n_cores); }
 inline uint32_t merge_sem(uint32_t mu, uint32_t n_cores) { return mu / n_cores; }
 

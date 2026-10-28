@@ -309,9 +309,11 @@ void kernel_main() {
         ctrl.wait_front(1);
         const uint32_t U = ckernel::read_tile_value(cb_ctrl_c, 0, 0);
         ctrl.pop_front(1);
-        pm.wait_front(U);
-        ps.wait_front(U);
-        pa.wait_front(U);
+        // the partial CBs (and cb_mw) are taken whole per merge (UMAX pages, the first U used): a core's
+        // second merge then starts at page 0 (the reader's rule)
+        pm.wait_front(UMAX);
+        ps.wait_front(UMAX);
+        pa.wait_front(UMAX);
         colid.wait_front(1);
         sink_cb.wait_front(1);
 
@@ -351,7 +353,7 @@ void kernel_main() {
         reconfig_data_format(cb_pm, cb_mM);
         pack_reconfig_data_format(cb_mw);
         sub_init(cb_pm, cb_mM);
-        mw.reserve_back(U);
+        mw.reserve_back(UMAX);
         configure_single_tile_pack(cb_mw);
         for (uint32_t j = 0; j < U; ++j) {
             tile_regs_acquire();
@@ -364,7 +366,7 @@ void kernel_main() {
             pack_tile(0, cb_mw);
             tile_regs_release();
         }
-        mw.push_back(U);
+        mw.push_back(UMAX);
         mws.reserve_back(1);
         reconfig_data_format(cb_mM, cb_sink);
         sub_init(cb_mM, cb_sink);
@@ -378,7 +380,7 @@ void kernel_main() {
         pack_tile(0, cb_mws);
         tile_regs_release();
         mws.push_back(1);
-        mw.wait_front(U);
+        mw.wait_front(UMAX);
         mws.wait_front(1);
         mM.pop_front(1);  // cb_mM is the final tile's CB below
 
@@ -453,10 +455,10 @@ void kernel_main() {
         mM.push_back(1);
         compute_kernel_lib::untilize<1, cb_mM, cb_o_rm>(1);
 
-        pm.pop_front(U);
-        ps.pop_front(U);
-        pa.pop_front(U);
-        mw.pop_front(U);
+        pm.pop_front(UMAX);
+        ps.pop_front(UMAX);
+        pa.pop_front(UMAX);
+        mw.pop_front(UMAX);
         mws.pop_front(1);
         mS.pop_front(1);
         mA.pop_front(1);

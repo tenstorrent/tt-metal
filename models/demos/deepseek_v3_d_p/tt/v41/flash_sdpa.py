@@ -4,27 +4,44 @@
 
 """The decode step's SDPA as a flash-decode program over the tile's live rows (``V41_DECODE_SDPA=flash``).
 
-``sparse_sdpa`` gives each of the tile's 32 query rows one core, which walks the row's selected keys in chunks of
-128 serially: on the one-row (c1) step the live row's core takes ~83 us a layer while 129 cores idle. :func:`flash_sdpa` takes the same operands (the ``q_heads`` output ``[1, H, S, D]`` row-major
+``sparse_sdpa`` gives each of the tile's 32 query rows one core, which walks the row's selected keys in chunks
+of
+128 serially: on the one-row (c1) step the live row's core takes ~83 us a layer while 129 cores idle.
+:func:`flash_sdpa` takes the same operands (the ``q_heads`` output ``[1, H, S, D]`` row-major
 bf16 with the chip's heads padded to a tile, the layer's KV tensor in either served format, the index rows
-``[1, 1, S, W]`` uint32 with a contiguous sentinel tail per row, the per-head sinks) and the same contract, but
+``[1, 1, S, W]`` uint32 with a contiguous sentinel tail per row, the per-head sinks) and the same contract,
+but
 splits every live row's keys into units of ``kpu`` keys spread over the grid (``kernels/fsdpa_*.cpp``):
 
 * phase 0: every core reads the live page (``[1, 1, 1, S]`` uint32: row ``r`` is live unless word ``r`` is
-  ``LIVE_SENTINEL``; the c1 step's ``c1put`` page, ``FlashSdpa.all_live`` for every row) and agrees on the live rows
+  ``LIVE_SENTINEL``; the c1 step's ``c1put`` page, ``FlashSdpa.all_live`` for every row) and agrees on the
+  live rows
   and so on the same unit and merge assignment;
 * a unit ``(row, j)`` on core ``(row rank * UMAX + j) % N`` reads the row's query heads and the keys
-  ``[j * kpu, (j + 1) * kpu)`` of its index row (zero rows and ``-inf`` scores past the row's valid count, as the
+  ``[j * kpu, (j + 1) * kpu)`` of its index row (zero rows and ``-inf`` scores past the row's valid count, as
+  the
   kernel it replaces), computes the unnormalized partial ``(max, sum tile, P @ V)`` of those keys in one pass
   (``sparse_sdpa``'s chunk arithmetic: the scaled-FP8 decode, the latent and RoPE products, the running-max
-  softmax at the op's scale) and writes it to a DRAM scratch, then signals the row's mergers;
+  softmax at the op's scale), writes its max, sum and column-``v`` acc tiles straight into the L1 partial CBs
+  of
+  each of the row's ``VT`` merge cores (``sdpa_decode``'s reducer exchange: no DRAM round trip, the write
+  barrier before the semaphore increment orders the data), then signals the row's mergers;
 * a merge ``(row, v)`` for each 32-column tile ``v`` of the output on core ``N - 1 - (row rank * VT + v) % N``
-  waits for the row's partials, combines them by the log-sum-exp rule with the sink in the denominator
-  (``exp((m_j - M) * scale)`` weights, as ``sparse_sdpa``'s SALAD correction and sink fold compute them) and writes
-  the 32 heads' columns to the row-major output. The rows that are not live get zero output rows.
+  (its ``k``-th merge in slot ``k = (row rank * VT + v) // N`` of its partial CBs, ``k < nsem``) waits for the
+  row's partials, combines them by the log-sum-exp rule with the sink in the denominator (``exp((m_j - M) *
+  scale)``
+  weights, as ``sparse_sdpa``'s SALAD correction and sink fold compute them) and writes the 32 heads' columns
+  to
+  the row-major output. The rows that are not live get zero output rows.
 
-A row's ``1 + K`` verify rows (the speculative branch's design) are ``1 + K`` live rows of the tile, each with its
-own index row, so they need nothing beyond this. The output is not bit-identical to ``sparse_sdpa``'s: the keys'
+``max_live`` bounds the live rows a call may carry (``nsem = ceil(max_live * VT / N)`` partial slots a core:
+120 KB of L1 a slot); the decoder's c1 capture needs ``1 + K`` and sizes one slot. ``debug_scratch`` makes the
+writer also copy every partial to a DRAM scratch (``FlashSdpa.scratch``) for the test's per-unit diagnostic.
+
+A row's ``1 + K`` verify rows (the speculative branch's design) are ``1 + K`` live rows of the tile, each with
+its
+own index row, so they need nothing beyond this. The output is not bit-identical to ``sparse_sdpa``'s: the
+keys'
 accumulation order differs (``tests/v41/test_v41_flash_sdpa.py`` measures the difference).
 """
 
@@ -85,14 +102,29 @@ def _align(n: int, a: int) -> int:
 
 
 class FlashSdpa:
-    """The program's per-device constants: the grid's NoC coordinate table (a uint32 tensor the writer reads to
-    address the mergers' semaphores) and the partial scratch. Build one before any capture (a persistent tensor allocated after a capture may be overwritten by its replay)."""
+    """The program's per-device constants: the grid's NoC coordinate table (a uint32 tensor the writer reads
+    to
+    address the mergers' partial CBs and semaphores), the all-live page and, under ``debug_scratch``, the DRAM
+    partial scratch. Build one before any capture (a persistent tensor allocated after a
+    capture may be overwritten by its replay). A call with more live rows than ``max_live`` computes the first
+    ``max_live`` and zeroes the rest (the reader clamps the plan)."""
 
     def __init__(
-        self, device, heads: int = 32, rows: int = _TILE, width: int = 640, v_dim: int = 512, kpu=None, real_heads=None
+        self,
+        device,
+        heads: int = 32,
+        rows: int = _TILE,
+        width: int = 640,
+        v_dim: int = 512,
+        kpu=None,
+        real_heads=None,
+        max_live=None,
+        debug_scratch=None,
     ):
-        """``heads``: the query tile's heads (32); ``real_heads``: the leading ones that are not zero padding (the
-        chip's 16; the others are not read)."""
+        """``heads``: the query tile's heads (32); ``real_heads``: the leading ones that are not zero padding
+        (the
+        chip's 16; the others are not read); ``max_live``: the live rows a call may carry (default every row);
+        ``debug_scratch``: the DRAM copy of the partials (default ``V41_FLASH_DEBUG_SCRATCH``)."""
         import torch
 
         self.device = device
@@ -119,16 +151,25 @@ class FlashSdpa:
         assert 0 < self.real_heads <= heads, (self.real_heads, heads)
         self.vt = v_dim // _TILE
         self.umax = -(-width // self.kpu)
-        # the partial scratch: slot (row rank, unit) holds the max tile, the sum tile and the VT acc tiles
+        self.max_live = rows if max_live is None else max_live
+        assert 0 < self.max_live <= rows, (self.max_live, rows)
+        self.nsem = -(-self.max_live * self.vt // self.n_cores)
+        # the debug scratch: slot (row rank, unit) holds the max tile, the sum tile and the VT acc tiles
         self.slot_tiles = 2 + self.vt
-        self.scratch = ttnn.allocate_tensor_on_device(
-            ttnn.Shape([1, 1, rows * self.umax * self.slot_tiles * _TILE, _TILE]),
-            ttnn.bfloat16,
-            ttnn.TILE_LAYOUT,
-            device,
-            ttnn.DRAM_MEMORY_CONFIG,
+        self.debug_scratch = (
+            os.environ.get("V41_FLASH_DEBUG_SCRATCH", "0") == "1" if debug_scratch is None else bool(debug_scratch)
         )
-        self.nsem = -(-rows * self.vt // self.n_cores)
+        self.scratch = (
+            ttnn.allocate_tensor_on_device(
+                ttnn.Shape([1, 1, rows * self.umax * self.slot_tiles * _TILE, _TILE]),
+                ttnn.bfloat16,
+                ttnn.TILE_LAYOUT,
+                device,
+                ttnn.DRAM_MEMORY_CONFIG,
+            )
+            if self.debug_scratch
+            else None
+        )
         # the live page of a call without one: every row live
         self.all_live = ttnn.from_torch(
             torch.zeros(1, 1, 1, rows, dtype=torch.int32),
@@ -160,10 +201,13 @@ class FlashSdpa:
 
 def flash_sdpa(fs: FlashSdpa, q, kv, rows, scaled: bool, scale: float, sink, live=None):
     """``sparse_sdpa(q, kv, rows, v_dim, kv_format, scale, attention_sink=sink)`` as the flash-decode program:
-    ``q`` ``[1, H, S, D]`` row-major bf16 (``H`` one tile of heads), ``kv`` the KV tensor (``[B, 1, T, D]`` bf16 rows
-    or the packed scaled-FP8 rows, ``scaled``), ``rows`` ``[1, 1, S, W]`` uint32 row-major, ``sink`` ``[1, 1, 1, H]``
+    ``q`` ``[1, H, S, D]`` row-major bf16 (``H`` one tile of heads), ``kv`` the KV tensor (``[B, 1, T, D]``
+    bf16 rows
+    or the packed scaled-FP8 rows, ``scaled``), ``rows`` ``[1, 1, S, W]`` uint32 row-major, ``sink`` ``[1, 1,
+    1, H]``
     bf16 row-major, ``live`` ``[1, 1, 1, S]`` uint32 row-major (row ``r`` live unless word ``r`` is
-    ``LIVE_SENTINEL``; default every row) -> ``[1, H, S, V]`` row-major bf16: the live rows' attention, the other
+    ``LIVE_SENTINEL``; default every row) -> ``[1, H, S, V]`` row-major bf16: the live rows' attention, the
+    other
     rows zero."""
     import struct
 
@@ -200,7 +244,8 @@ def flash_sdpa(fs: FlashSdpa, q, kv, rows, scaled: bool, scale: float, sink, liv
     )
     common = [H, S, W, D, V, KPU, UMAX, N, int(scaled), packed_row_bytes, 2, kv_elem, scale_bits, 1]
     common += [1, fs.nsem, fs.vt, scale_blocks, int(kv_is_fp8), fs.slot_tiles, k_row_bytes, LIVE_SENTINEL]
-    common += [fs.real_heads]
+    common += [fs.real_heads, int(fs.debug_scratch)]
+    scratch = fs.scratch if fs.debug_scratch else out  # the writer's scratch accessor: unused without the flag
     live = fs.all_live if live is None else live
     assert live.dtype == ttnn.uint32 and live.layout == ttnn.ROW_MAJOR_LAYOUT and tuple(live.shape) == (1, 1, 1, S)
     acc = lambda t: ttnn.TensorAccessorArgs(t).get_compile_time_args()
@@ -218,13 +263,12 @@ def flash_sdpa(fs: FlashSdpa, q, kv, rows, scaled: bool, scale: float, sink, liv
         ttnn.KernelDescriptor(
             kernel_source=f"{_KERNELS}/fsdpa_reader.cpp",
             core_ranges=fs.cores,
-            compile_time_args=common + acc(q) + acc(kv) + acc(rows) + acc(fs.scratch) + acc(live),
+            compile_time_args=common + acc(q) + acc(kv) + acc(rows) + acc(live),
             runtime_args=rt,
             common_runtime_args=[
                 q.buffer_address(),
                 kv.buffer_address(),
                 rows.buffer_address(),
-                fs.scratch.buffer_address(),
                 live.buffer_address(),
             ],
             config=ttnn.ReaderConfigDescriptor(),
@@ -232,10 +276,10 @@ def flash_sdpa(fs: FlashSdpa, q, kv, rows, scaled: bool, scale: float, sink, liv
         ttnn.KernelDescriptor(
             kernel_source=f"{_KERNELS}/fsdpa_writer.cpp",
             core_ranges=fs.cores,
-            compile_time_args=common + acc(fs.scratch) + acc(out) + acc(sink) + acc(fs.noc_table),
+            compile_time_args=common + acc(scratch) + acc(out) + acc(sink) + acc(fs.noc_table),
             runtime_args=rt,
             common_runtime_args=[
-                fs.scratch.buffer_address(),
+                scratch.buffer_address(),
                 out.buffer_address(),
                 sink.buffer_address(),
                 fs.noc_table.buffer_address(),
@@ -274,11 +318,12 @@ def flash_sdpa(fs: FlashSdpa, q, kv, rows, scaled: bool, scale: float, sink, liv
         cb(CB["ctrl_w"], bf, 4, ctrl_page),
         cb(CB["col_identity"], bf, 1, _BF16_TILE),
         cb(CB["sink"], bf, 1, _BF16_TILE),
-        cb(CB["pm"], bf, UMAX, _BF16_TILE),
-        cb(CB["ps"], bf, UMAX, _BF16_TILE),
-        cb(CB["pa"], bf, UMAX, _BF16_TILE),
+        # the partial CBs: nsem slots of UMAX pages, written by the units' writers on other cores
+        cb(CB["pm"], bf, fs.nsem * UMAX, _BF16_TILE),
+        cb(CB["ps"], bf, fs.nsem * UMAX, _BF16_TILE),
+        cb(CB["pa"], bf, fs.nsem * UMAX, _BF16_TILE),
         cb(CB["mM"], bf, 2, _BF16_TILE),  # the running max ping-pong, then the final tile
-        cb(CB["mw"], bf, UMAX, _BF16_TILE),
+        cb(CB["mw"], bf, UMAX, _BF16_TILE),  # taken whole per merge
         cb(CB["mws"], bf, 1, _BF16_TILE),
         cb(CB["mS"], bf, 1, _BF16_TILE),
         cb(CB["mrecip"], bf, 1, _BF16_TILE),
@@ -291,7 +336,8 @@ def flash_sdpa(fs: FlashSdpa, q, kv, rows, scaled: bool, scale: float, sink, liv
         cb(CB["wscratch"], ttnn.uint32, 1, _align(N * 8, 64) + 64 + V * 2 + 256),
     ]
     if scaled:
-        # the packed rows' FIFO; with a RoPE tail (D > V) a format-only bf16 alias of the same pages (sparse_sdpa)
+        # the packed rows' FIFO; with a RoPE tail (D > V) a format-only bf16 alias of the same pages
+        # (sparse_sdpa)
         rope_alias = (CB["k_rope_rm"], bf) if rope_DHt > 0 else None
         cbs += [
             cb(CB["k_rm"], ttnn.fp8_e4m3, _TILE * 2, packed_row_bytes, alias=rope_alias),
@@ -305,7 +351,7 @@ def flash_sdpa(fs: FlashSdpa, q, kv, rows, scaled: bool, scale: float, sink, liv
         cbs += [cb(CB["k_rm"], bf, KPU, k_row_bytes)]
     sems = [ttnn.SemaphoreDescriptor(id=i, core_ranges=fs.cores, initial_value=0) for i in range(fs.nsem)]
     ttnn.generic_op(
-        [q, kv, rows, sink, live, fs.noc_table, fs.scratch, out],
+        [q, kv, rows, sink, live, fs.noc_table] + ([fs.scratch] if fs.debug_scratch else []) + [out],
         ttnn.ProgramDescriptor(kernels=kernels, semaphores=sems, cbs=cbs),
     )
     return out

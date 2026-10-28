@@ -399,8 +399,8 @@ class TtV41BatchDecoder(TtV41Decoder):
         # no mask round-trip, no per-step mask build
         self.single_query = os.environ.get("V41_DECODE_SINGLE_QUERY", "0") == "1"
         # V41_DECODE_SDPA=local: the SDPA of both captures on the chip's own heads;
-        # ``flash``: those heads through the flash-decode program (its constants and partial
-        # scratch allocated here, before any capture)
+        # ``flash``: those heads through the flash-decode program (its constants allocated
+        # here, before any capture; one merge slot a core: the c1 capture's live rows are 1 + K <= 8)
         self.sdpa_local = attention_module._SDPA in ("local", "flash")
         self.flash = None
         if attention_module._SDPA == "flash":
@@ -412,6 +412,7 @@ class TtV41BatchDecoder(TtV41Decoder):
                 width=RING + self.config.INDEX_TOPK,
                 v_dim=attn0.head_dim,
                 real_heads=attn0.local_heads,
+                max_live=8,
             )
         self.sampler = (
             DeviceSampler(self.mesh_device, self.config, model.blocks[0].attn.ccl, self.pool.gather_sp)
