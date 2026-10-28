@@ -103,4 +103,7 @@ std::optional<ring_joint::FloaterSchedule> floater_eligibility(
     const KSplitShape& ksplit,
     bool refuse_unusable_schedule);
 
+// Whether a validated call's program runs the floaters (floater_eligibility on its K split).
+bool runs_floaters(const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args);
+
 }  // namespace ttnn::prim::ring_joint_plan

@@ -436,13 +436,13 @@ void kernel_main() {
     [[maybe_unused]] const uint32_t visit_count = floater_core ? get_arg_val<uint32_t>(floater_args) : 0;
     // Home: ring iterations whose donated piece holds chunks (a floater partial with state to merge).
     [[maybe_unused]] uint32_t donated_nonempty_mask = 0;
-    // Floater: a visit's state sits staged in half A until the writer has saved it.
+    // Floater: a visit's state sits staged in half A until its home has read it.
     [[maybe_unused]] bool visit_staged = false;
     // Home: the floaters' partials of its donated pieces, in ring order. The writer lands each in the restore CBs as
-    // soon as it is saved. Compute merges the first piece's at a fixed step (the host's, after the floater has saved
-    // it), which frees the restore CBs for the second, and what is left before its K-split role: fixed points keep the
-    // result deterministic. An inactive ring iteration runs on no core, so its piece has no partial (the writer skips
-    // it too).
+    // soon as its floater has staged it. Compute merges the first piece's at a fixed step (the host's, after the
+    // floater has staged it), which frees the restore CBs for the second, and what is left before its K-split role:
+    // fixed points keep the result deterministic. An inactive ring iteration runs on no core, so its piece has no
+    // partial (the writer skips it too).
     uint32_t floater_iters[ring_joint::kDonatedPieces] = {};
     uint32_t floater_partials = 0;
     uint32_t floater_merged = 0;
@@ -741,7 +741,7 @@ void kernel_main() {
                 ring_joint::KSplitRange call_k_range = ksplit_k_range;
                 if constexpr (floater_core) {
                     if (visit_staged) {
-                        // The writer frees cb_signal only once the staged state is saved: then reclaim half A.
+                        // The writer frees cb_signal once the home has read the staged state: reclaim half A.
                         sdpa_cb_reserve_back_out_of_line(cb_signal, 1);
                         sdpa_cb_pop_front_out_of_line(cb_max_A, Sq_chunk_t);
                         sdpa_cb_pop_front_out_of_line(cb_sum_A, Sq_chunk_t);
@@ -758,7 +758,7 @@ void kernel_main() {
                     call_last = false;
                     call_k_range = visits.ranges[pass];
                     if (call_k_range.empty()) {
-                        // No chunks, no state: the writer still saves the slot and signals, and the home discards it.
+                        // No chunks, no state: the home still reads it, and discards it.
                         sdpa_cb_reserve_back_out_of_line(cb_signal, 1);
                         sdpa_cb_push_back_out_of_line(cb_signal, 1);
                         continue;
@@ -866,7 +866,7 @@ void kernel_main() {
                     call_padded_q_slots,
                     k_expand_rank);
                 if constexpr (floater_core) {
-                    // Stage the visit's state in half A for the writer to save; Q and W_UK leave with the visit.
+                    // Stage the visit's state in half A for its home to read; Q and W_UK leave with the visit.
                     configure_single_tile_pack(cb_max_A);
                     if (acc_state.prev.out != cb_out_im_A) {
                         copy_block(acc_state.prev.max, cb_max_A, Sq_chunk_t);

@@ -628,7 +628,7 @@ RingJointScalarBlocks ring_joint_scalar_blocks(
     };
 }
 
-// floaters: the program runs the floaters' kernel group (it has their scratch output).
+// floaters: the program runs the floaters' kernel group (ring_joint_plan::runs_floaters).
 void apply_ring_joint_scalar_runtime_args(
     Program& program,
     const ttnn::prim::RingJointSDPAParams& args,
@@ -1806,10 +1806,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
         ring_joint_plan::floater_eligibility(args, tensor_args, ksplit, /*refuse_unusable_schedule=*/true);
     const bool floaters = floater_plan.has_value();
     const ring_joint::FloaterSchedule floater_schedule = floater_plan.value_or(ring_joint::FloaterSchedule{});
-    // The device operation allocates the scratch on the same eligibility, and cache hits tell floater programs by it.
-    TT_FATAL(
-        floaters == (output_tensors.size() > RING_JOINT_SDPA_FLOATER_SCRATCH_IDX),
-        "ring_joint floaters: the scratch output must exist exactly when floaters run");
     const uint32_t gather_workers = 2 * ag.num_links;
     // Home blocks, floater groups and their visits (ring_joint_floater_layout.hpp); without floaters, every core keeps
     // the defaults. The gather column's cores below its workers join a floater program as extra cores (indices
@@ -2453,7 +2449,6 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
     constexpr uint32_t kNoGroup = ring_joint::kNoFloaterGroup;
     using HomePiece = ring_joint::HomePiece;
     auto block_core = [&](uint32_t g, uint32_t k) { return floater_layout.block_core(g, k); };
-    auto floater_slot = [](uint32_t f, uint32_t k, uint32_t v) { return ring_joint::FloaterLayout::slot(f, k, v); };
     // K split: core (x, y) is in band y / rows_per_split and owns unit (y % rows_per_split) * grid.x + x (with
     // floaters: its home block's band and unit). Idle cores report band 0; they own no unit.
     auto ksplit_band = [&](uint32_t core_idx) -> uint32_t {
@@ -3575,9 +3570,8 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
             }
         }
         if (floaters) {
-            // Floaters: [scratch], then a floater's [visit count][visits: iteration, slot, home x, home y], or a
-            // home's donated pieces [slot, floater x, floater y, floater semaphore ordinal].
-            writer_args.push_back(output_tensors.at(RING_JOINT_SDPA_FLOATER_SCRATCH_IDX).buffer());
+            // Floaters: a floater's [visit count][visits: iteration, home x, home y], or a home's donated pieces
+            // [floater x, floater y, floater semaphore ordinal].
             if (floater) {
                 const uint32_t f = floater_group_of[i];
                 const auto& visits = floater_visits[f];
@@ -3585,14 +3579,12 @@ tt::tt_metal::ProgramDescriptor build_ring_joint_sdpa_program_descriptor(
                 for (uint32_t v = 0; v < visits.size(); ++v) {
                     const uint32_t h = block_core(visits[v].block, floater_k_of[i]);
                     writer_args.push_back(visits[v].iter);
-                    writer_args.push_back(floater_slot(f, floater_k_of[i], v));
                     writer_args.push_back(core_work[h].physical_core.x);
                     writer_args.push_back(core_work[h].physical_core.y);
                 }
             } else {
                 for (uint32_t piece = 0; piece < ring_joint::kDonatedPieces; ++piece) {
                     const HomePiece& home_piece = home_pieces[i][piece];
-                    writer_args.push_back(home_piece.slot);
                     writer_args.push_back(core_work[home_piece.floater].physical_core.x);
                     writer_args.push_back(core_work[home_piece.floater].physical_core.y);
                     writer_args.push_back(home_piece.ordinal);
@@ -4004,6 +3996,7 @@ void RingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
     RingJointSDPAResult& output_tensors) {
     descriptor_adapter_t::apply_descriptor(cached_workload, args, tensor_args, output_tensors);
 
+    const bool floaters = ring_joint_plan::runs_floaters(args, tensor_args);
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         const ttnn::MeshCoordinate coord = coordinate_range.start_coord();
         TT_FATAL(
@@ -4011,8 +4004,7 @@ void RingJointSDPAMeshWorkloadFactory::override_runtime_arguments(
             "Expected RingJointSDPA cached programs to cover a single coordinate, got range {} to {}",
             coord,
             coordinate_range.end_coord());
-        apply_ring_joint_scalar_runtime_args(
-            program, args, tensor_args, coord, output_tensors.size() > RING_JOINT_SDPA_FLOATER_SCRATCH_IDX);
+        apply_ring_joint_scalar_runtime_args(program, args, tensor_args, coord, floaters);
     }
 }
 

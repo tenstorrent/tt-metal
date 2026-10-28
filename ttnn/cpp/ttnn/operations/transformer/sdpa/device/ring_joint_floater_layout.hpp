@@ -3,8 +3,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Host side of the expanded-K floaters (kernels/ring_joint_floaters.hpp holds the device ABI): the tuned schedules,
-// and the layout of home blocks, floater groups, their visit queues and scratch slots. Pure integer math, so it is
-// checked without hardware (tests/ttnn/unit_tests/gtests/sdpa/test_ring_joint_floater_layout.cpp).
+// and the layout of home blocks, floater groups and their visit queues. Pure integer math, so it is checked without
+// hardware (tests/ttnn/unit_tests/gtests/sdpa/test_ring_joint_floater_layout.cpp).
 
 #pragma once
 
@@ -26,7 +26,7 @@ namespace ttnn::operations::transformer::sdpa::ring_joint {
 // Floater groups of four cores (a 2x2 block's worth): group core k mirrors home core k of the block it visits.
 constexpr uint32_t kFloaterGroupCores = 4;
 constexpr uint32_t kFloaterGroups = 5;
-// Floater cores; core c owns scratch slots [c kFloaterRingSlots, (c + 1) kFloaterRingSlots).
+// Floater cores.
 constexpr uint32_t kFloaterCores = kFloaterGroupCores * kFloaterGroups;
 // Home blocks of the layout: 2x2 blocks of (2 heads x 2 Q chunks) per K-split band on a 10x10 sub-grid.
 constexpr uint32_t kFloaterHomeBlocks = 24;
@@ -50,7 +50,7 @@ struct FloaterSchedule {
 // floater_compute_to_transfer's call.
 inline constexpr std::array<std::pair<std::pair<uint32_t, uint32_t>, FloaterSchedule>, 2> kFloaterLayoutSchedules = {{
     // Kimi K3: 0.31 of iteration 1, 0.9 of iteration 4, from the band's start.
-    {{24, 2}, {{1, 4}, {947, 2765}, false, {4, 4, 4, 4, 4}}},
+    {{24, 2}, {{1, 4}, {947, 2765}, false, {2, 2, 2, 2, 2}}},
     // Kimi K2.7: 0.6 of iteration 1, 0.54 of iteration 3, from the band's end.
     {{16, 3}, {{1, 3}, {1843, 1664}, true, {2, 3, 4, 5, 5}}},
 }};
@@ -88,10 +88,10 @@ struct FloaterWorkload {
 };
 
 // Floaters add compute (20 idle cores beside the 96 working ones) at a fixed cost per piece (K expanded again, the
-// partial saved and merged). Compute helps only while a ring step's work outlasts the arrival of its K/V slice, so the
-// floaters pay off where the SDPA's compute per arriving token is large against that token's transfer: this ratio of
-// the two, both in ideal cycles (the matmuls at their fidelity, the links at full bandwidth). It rises with fidelity,
-// Q rows and heads.
+// partial handed over and merged). Compute helps only while a ring step's work outlasts the arrival of its K/V slice,
+// so the floaters pay off where the SDPA's compute per arriving token is large against that token's transfer: this
+// ratio of the two, both in ideal cycles (the matmuls at their fidelity, the links at full bandwidth). It rises with
+// fidelity, Q rows and heads.
 inline double floater_compute_to_transfer(const FloaterWorkload& w) {
     const double macs =
         static_cast<double>(w.heads) * (static_cast<double>(w.q_rows) * (w.qk_dim + w.v_dim) +
@@ -149,9 +149,9 @@ struct FloaterVisit {
     uint32_t iter, block, piece;
 };
 
-// A home core's donated piece: the scratch slot it lands, and the floater core whose semaphore ordinal it sets.
+// A home core's donated piece: the floater core that runs it, and that floater's semaphore ordinal the home sets.
 struct HomePiece {
-    uint32_t slot, floater, ordinal;
+    uint32_t floater, ordinal;
 };
 
 // Core indices are the program's: the SDPA grid row-major [0, num_cores), then the gather column's cores below its
@@ -175,10 +175,6 @@ struct FloaterLayout {
     uint32_t block_core(uint32_t g, uint32_t k) const {
         const uint32_t cols = (grid_x - 1) / 2;
         return (2 * (g / cols) + k / 2) * grid_x + 2 * (g % cols) + k % 2;
-    }
-    // Group core k of group f is floater core 4 f + k, and saves its visit v in its ring slot v % kFloaterRingSlots.
-    static uint32_t slot(uint32_t f, uint32_t k, uint32_t v) {
-        return (f * kFloaterGroupCores + k) * kFloaterRingSlots + v % kFloaterRingSlots;
     }
     bool is_floater(uint32_t core) const { return group_of[core] != kNoFloaterGroup; }
     // Logical (x, y) of a core: past the SDPA grid, the gather column below its workers.
@@ -278,7 +274,7 @@ inline FloaterLayout build_floater_layout(
         {at(8), num_cores + 4, at(9), num_cores + 5}};
     TT_FATAL(
         layout.groups.size() == kFloaterGroups,
-        "ring_joint floaters: {} groups, the scratch and schedules assume {}",
+        "ring_joint floaters: {} groups, the schedules assume {}",
         layout.groups.size(),
         kFloaterGroups);
     layout.visits.resize(layout.groups.size());
@@ -309,7 +305,7 @@ inline FloaterLayout build_floater_layout(
             for (uint32_t v = 0; v < visits.size(); ++v) {
                 const auto& visit = visits[v];
                 const uint32_t home = layout.block_core(visit.block, k);
-                layout.home_pieces[home][visit.piece] = {FloaterLayout::slot(f, k, v), layout.groups[f][k], v + 1};
+                layout.home_pieces[home][visit.piece] = {layout.groups[f][k], v + 1};
                 TT_FATAL(
                     v == 0 || visits[v - 1].piece <= visit.piece,
                     "ring_joint floaters: group {} runs its visits out of piece order",

@@ -1238,21 +1238,6 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
             joint_output_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config)),
         tt::tt_metal::TensorSpec(
             stats_shape, TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config))};
-    // Output specs come before validation, so derive_ksplit's TT_FATALs must not preempt it: only configs that can
-    // run floaters (an expanded K without a sliding window) derive the K split here.
-    if (tensor_args.has_k_expand() && !args.has_sliding_window() &&
-        ring_joint_plan::floater_eligibility(
-            args, tensor_args, ring_joint_plan::derive_ksplit(args, tensor_args), /*refuse_unusable_schedule=*/false)) {
-        // Floater scratch, exactly when the program runs floaters (the factory decides alike): per floater core, a
-        // ring of slots holding a partial's max, sum and out tiles, one float32 tile page each, in DRAM.
-        namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
-        const uint32_t sq_tiles = args.program_config->q_chunk_size / tt::constants::TILE_HEIGHT;
-        const uint32_t slot_tiles = 2 * sq_tiles + sq_tiles * tt::div_up(v_head_dim, tt::constants::TILE_WIDTH);
-        const uint32_t slots = ring_joint::kFloaterCores * ring_joint::kFloaterRingSlots;
-        specs.emplace_back(
-            ttnn::Shape({1, 1, slots * slot_tiles * tt::constants::TILE_HEIGHT, tt::constants::TILE_WIDTH}),
-            TensorLayout(DataType::FLOAT32, PageConfig(Layout::TILE), MemoryConfig{}));
-    }
     return specs;
 }
 

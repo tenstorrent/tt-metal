@@ -4,12 +4,12 @@
 
 // Floaters for the expanded-K K split (ring_joint_sdpa_program_factory.cpp). The K-split units leave cores
 // idle; they become floater groups that take over pieces of the home cores' work. Every home core donates a piece of
-// its band in two ring iterations; a floater runs each piece as a fresh accumulation in ring order and saves the
-// partial (max, sum, out) to a DRAM slot. The home's writer lands it in L1 as soon as it is saved and hands the slot
-// back to the floater. A floater core cycles through kFloaterRingSlots slots, so it saves visit v only once the home of
-// visit v - kFloaterRingSlots has read that slot. Compute merges the first piece at a fixed ring step, after the
-// floater has saved it (the schedule's merge_after), which frees the L1 for the second; the second merges before the
-// K-split role. Fixed merge points keep the result deterministic. A piece is a pure function of the band and the
+// its band in two ring iterations; a floater runs each piece as a fresh accumulation in ring order and stages the
+// partial (max, sum, out) in its accumulator half A. The home's writer reads it from there into its restore CBs and
+// tells the floater, which only then reuses half A for its next visit. Compute merges the first piece at a fixed ring
+// step (the schedule's merge_after), which frees the restore CBs for the second; the second merges before the K-split
+// role. Fixed merge points keep the result deterministic; a late first merge holds back the floater whose second
+// piece waits for it. A piece is a pure function of the band and the
 // donated fraction, so homes and floaters cut the same chunks.
 
 #pragma once
@@ -26,18 +26,13 @@ constexpr uint32_t kDonationFracOne = 3072;
 constexpr uint32_t kDonatedPieces = 2;
 // Visits a floater runs in one ring iteration.
 constexpr uint32_t kFloaterMaxVisitsPerIter = 8;
-// A scratch slot holds one partial's max, sum and out tiles, one float32-tile page each.
-constexpr uint32_t kFloaterSlotPageBytes = 4096;
-// The scratch slots each floater core cycles through (the host's layout, ring_joint_floater_layout.hpp, gives each
-// its own). Two let a floater save a visit while its home still lands the one before.
-constexpr uint32_t kFloaterRingSlots = 2;
-// Runtime args per floater visit: reader / compute [iteration, unit, band]; writer [iteration, slot, home x, home y].
+// Runtime args per floater visit: reader / compute [iteration, unit, band]; writer [iteration, home x, home y].
 // A visit's index v in the floater's list is its own semaphore ordinal v + 1, which the home sets once it has read the
-// slot; the home's ordinal for it follows the K-split senders' (piece_ordinal).
+// partial; the home's ordinal for it follows the K-split senders' (piece_ordinal).
 constexpr uint32_t kFloaterVisitArgs = 3;
-constexpr uint32_t kFloaterWriterVisitArgs = 4;
-// Runtime args per donated piece of a home's writer: [slot, floater x, floater y, floater semaphore ordinal].
-constexpr uint32_t kFloaterHomePieceArgs = 4;
+constexpr uint32_t kFloaterWriterVisitArgs = 3;
+// Runtime args per donated piece of a home's writer: [floater x, floater y, floater semaphore ordinal].
+constexpr uint32_t kFloaterHomePieceArgs = 3;
 
 // The program's donation schedule, the same on every home (named compile-time args donate_iter0 / 1 and
 // donate_frac0 / 1): a home donates fracs[p] of its band in ring iteration iters[p], iters ascending.
