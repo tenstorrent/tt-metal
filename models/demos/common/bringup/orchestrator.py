@@ -204,6 +204,10 @@ PRIOR_TEXT = {
 BRINGUP_OPS = "ttnn/ttnn/bringup"
 # A test killed by pytest-timeout ran out of time, it did not fail a check: an agent cannot fix that from the log.
 TEST_TIMEOUT = re.compile(r"Timeout \(>[\d.]+s\) from pytest-timeout")
+# F207: a measuring process that died of a signal (not the change: the run never reached a result) is run once more
+PROCESS_CRASH = re.compile(
+    r"Fatal Python error: (Bus error|Segmentation fault|Aborted)|\b(Bus error|Segmentation fault) \(core dumped\)"
+)
 # Perf picks (F57): the A/B report's lines. A component / swap check that fails prints "FAIL <metric>: <values> (...)".
 FAILED_CHECK = re.compile(r"^FAIL\s+\S.*$", re.M)
 LADDER_TEST = "models/demos/common/bringup/tests/test_ladder.py"
@@ -1649,6 +1653,15 @@ class Orchestrator:
             self.echo(label)
             rc = self.run_cmd(cmd, dict(base, **{M.RESULTS_ENV: str(res)}, **env, **extra), res / f"{name}.log")
             text = (res / f"{name}.log").read_text(errors="replace")
+            crash = PROCESS_CRASH.search(text) if rc != 0 else None
+            if (
+                crash
+            ):  # F207 (DeepSeek-V4.1 P.2, 2026-10-28: a bus error while loading cached weights lost the off side)
+                self.echo(f"{label}: the process died ({crash.group(0)}); running it once more (F207)")
+                (res / f"{name}.log").rename(res / f"{name}.crashed.log")
+                M.reset(tid, res)
+                rc = self.run_cmd(cmd, dict(base, **{M.RESULTS_ENV: str(res)}, **env, **extra), res / f"{name}.log")
+                text = (res / f"{name}.log").read_text(errors="replace")
             sig = INFRA_FAILURES.search(text) or TEST_TIMEOUT.search(text)
             if sig or rc == SAFE_HANG_RC:
                 raise InfraStop(tid, sig.group(0) if sig else f"{name} hung (rc {rc})")

@@ -2257,3 +2257,13 @@ Fix: the task a fix is placed before gets the fix as a dep (topo order and --unt
 approval's ledger signature ignores deps on overseer fixes (the edge is the fix's, not the plan's). Selftest
 test_overseer.py::test_a_queued_fix_runs_before_the_next_task_under_until; full selftests 639 pass (1 failure from
 before: xing40 server_rules.py:393 fixed threshold).
+
+## F207: an A/B side whose process died of a signal runs once more (DeepSeek-V4.1 P.2, 2026-10-28)
+Problem: P.2's off side (the old path) died with "Fatal Python error: Bus error" inside load_tensor_flatbuffer while
+loading cached expert weights, at model build, before the changed code ran; the files re-read cleanly afterwards
+(transient). ab_measure has no crash pattern (INFRA_FAILURES covers board errors only), so the side was recorded as
+failed (rc 1, no metrics) and the owner got a table with no comparison. Gate units are retried once on box errors
+(F170); A/B sides were not.
+Fix: PROCESS_CRASH (Fatal Python error: Bus error / Segmentation fault / Aborted, "(core dumped)"); a side item that
+exits non-zero with it runs once more (the crashed log kept as <name>.crashed.log, the results reset). A second crash
+is recorded as the side's result. Selftest test_perf_ab.py::test_a_side_whose_process_crashed_runs_once_more.

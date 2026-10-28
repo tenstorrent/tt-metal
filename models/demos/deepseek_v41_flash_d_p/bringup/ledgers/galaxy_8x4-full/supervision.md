@@ -531,3 +531,5 @@ check (F196 / F197); host times stay hidden until verified warm.
   ~4.6 s per engram layer per 5120-token chunk (read-ahead 256 KB x 122,880 random rows ~ 30 GB at the NVMe's
   ~6.9 GB/s); MADV_RANDOM: 0.79 s, 8 threads 0.48 s; pread+FADV_RANDOM the same. Hand-off for the 2x2 session:
   bringup/ENGRAM_HOST_PATH.md (problem, numbers, staged plan, 2x2 vs Galaxy split and pitfalls).
+- 11:38 OWNER: accept P.1 (GENERIC_OP_PREPARED: warm wall 673.2 -> 594.3 ms, accuracy identical, gate PASS with the change on). SEED-BOX RE-VERIFY += fabric_reduce_scatter prepared (setting on).
+- 12:10 P.2 TAIL_A2A_PREPARED A/B: on 544.4 ms warm wall; off side crashed (Fatal Python error: Bus error in load_tensor_flatbuffer while loading cached expert weights at model build; files re-read cleanly: transient). Off = the accepted P.1 tree: P.1 on 594.3 ms, all 103 accuracy metrics identical to P.2 on -> -49.9 ms. Brought to the owner without a re-run. Framework F207 (A/B side crash retried once, selftest) committed at this pause.
