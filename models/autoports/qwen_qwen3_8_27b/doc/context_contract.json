@@ -1138,6 +1138,18 @@
       "memory_scope": "No new persistent model allocation. Peak serving memory and B16/block512 capacity remain pending; no batch/native-context Cartesian-product claim.",
       "independent_review": "swe_optimization/GROUPED_FINAL_REVIEW.md",
       "local_profile": "swe_optimization/grouped-fixed-clock-profile-comparison.json"
+    },
+    "swe-20261028-shared-mlp-candidate": {
+      "status": "default_off_candidate_native_validation_pending",
+      "selection": "QWEN38_SHARED_MLP_WEIGHTS=1",
+      "supported_context": 262144,
+      "capability_reduction": null,
+      "changed_path": "Reuse separate gate/up physical owners in decode and one-row prefill; remove packed gateup owner",
+      "weight_dtype_fidelity": "unchanged selected FP4/LoFi; K blocking remains2; unfused matmul then SiLU multiply preserves decode rounding contract",
+      "expected_removed_weight_payload_bytes_per_device": 1604321280,
+      "measured_allocation_delta_bytes_per_device": null,
+      "cache_state_dtype_layout_change": false,
+      "validation": "tests/probe_shared_mlp_memory.py and tests/compare_shared_mlp_memory.py; reduced0/3 thenfull64; measured serving capacity and native-long-context revalidation remain pending"
     }
   },
   "stage05_prefill_policy": {

@@ -91,4 +91,9 @@ def decoder_policy(config, index):
         raise ValueError('QWEN38_FLAT_PREFILL must be 0 or 1')
     if flat_prefill == '1':
         policy['flat_prefill'] = True
+    shared_mlp = os.environ.get("QWEN38_SHARED_MLP_WEIGHTS", "0")
+    if shared_mlp not in ("0", "1"):
+        raise ValueError("QWEN38_SHARED_MLP_WEIGHTS must be 0 or 1")
+    if shared_mlp == "1":
+        policy["shared_mlp_weights"] = True
     return policy

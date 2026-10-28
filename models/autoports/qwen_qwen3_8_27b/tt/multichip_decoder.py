@@ -86,6 +86,14 @@ class MultichipDecoder(OptimizedDecoder):
         if self.policy.get('precision_prefill_activation'):
             for role in ('mix', 'gateup', 'gate', 'up'):
                 self.policy[role]['prefill_activation'] = self.policy['precision_prefill_activation']
+        if self.policy.get('shared_mlp_weights'):
+            # This candidate shares the existing prefill owners with decode.
+            # Minimal/packed prefill has a different activation-rounding contract.
+            if not self.policy.get('separate_prefill') or not self.policy.get('packed_mlp') or self.policy.get('minimal_mlp'):
+                raise ValueError('shared_mlp_weights requires separate_prefill, packed_mlp and no minimal_mlp')
+            for role in ('gate', 'up'):
+                if self.policy[role]['block'] != self.policy['gateup']['block']:
+                    raise ValueError('shared MLP decode must retain packed K blocking')
         # The inherited BFP4 reader geometry does not fit larger BFP8 tiles.
         # Resolve after dtype overrides and before packing/copying phase views.
         # Preserve explicit legal alternatives used by precision microchecks.
@@ -167,7 +175,8 @@ class MultichipDecoder(OptimizedDecoder):
         gates, ups=chunks("mlp.gate_proj.weight"),chunks("mlp.up_proj.weight")
         if self.policy.get("separate_prefill") or not self.policy.get("packed_mlp"):
             self.gate, self.up=matrix(gates,"gate"),matrix(ups,"up")
-        self.gateup=matrix([torch.cat([g,u],dim=0) for g,u in zip(gates,ups)],"gateup")
+        self.gateup = (None if self.policy.get("shared_mlp_weights") else
+                       matrix([torch.cat([g,u],dim=0) for g,u in zip(gates,ups)],"gateup"))
         self.down=matrix(chunks("mlp.down_proj.weight",1),"down")
         if self.layer_type == "linear_attention":
             eye=torch.eye(32).reshape(1,1,32,32)
@@ -531,7 +540,19 @@ class MultichipDecoder(OptimizedDecoder):
         if h.shape[-1] == 1280 and h.shape[1] > 1 and not packed_prefill:
             h=self._gather(h,"gateup")  # shared by separate projections; packed path retains selected input dtype
         compact = self.policy.get("packed_mlp") and h.shape[1] == 1 and h.shape[0] > 1 and not (self.policy.get("minimal_mlp") and self.policy.get("minimal_decode"))
-        if self.policy.get("packed_mlp") and (h.shape[1] == 1 or not self.policy.get("separate_prefill")):
+        shared_decode = self.policy.get("shared_mlp_weights") and h.shape[1] == 1
+        if shared_decode:
+            # Gather once, preserving the packed path's input dtype/CCL policy.
+            # Keep both matmuls unfused: packed decode rounds to BF16 before SiLU.
+            shared_batch = h.shape[0]
+            if h.shape[-1] == 1280:
+                h = self._gather(h, "gateup", compact_output=bool(
+                    self.policy.get("compact_column_gather") and not self.policy.get("_prefill_phase") and shared_batch > 1))
+            gate = self._linear(h, self.gate, packed_output=compact, decode_batch=shared_batch)
+            up = self._linear(h, self.up, packed_output=compact, decode_batch=shared_batch)
+            inter = ttnn.multiply(gate, up, input_tensor_a_activations=[ttnn.UnaryOpType.SILU],
+                memory_config=ttnn.L1_MEMORY_CONFIG if self.policy.get("l1_intermediates") else ttnn.DRAM_MEMORY_CONFIG)
+        elif self.policy.get("packed_mlp") and (h.shape[1] == 1 or not self.policy.get("separate_prefill")):
             if self.policy.get("minimal_mlp") and (h.shape[1] > 1 or self.policy.get("minimal_decode")):
                 grid = self.mesh_device.compute_with_storage_grid_size()
                 inter = ttnn.experimental.minimal_matmul(ttnn.to_memory_config(h, ttnn.DRAM_MEMORY_CONFIG),
@@ -548,7 +569,7 @@ class MultichipDecoder(OptimizedDecoder):
         else:
             gate = self._linear(h, self.gate, activation="silu")
             inter = ttnn.multiply(gate, self._linear(h, self.up))
-        mlp_decode_batch = h.shape[0] if compact else None
+        mlp_decode_batch = (shared_batch if shared_decode else h.shape[0]) if compact else None
         if packed_prefill:
             # The activation product owns its output; these projection inputs
             # and split-output backing storage are no longer consumed.
