@@ -1,0 +1,28 @@
+{
+  "status": "pass",
+  "scope": "all64layer B32 fixed-work baseline vs combined grouped/masked/flat,1024prompt+32output,512physicalchunks,4096fixturecache; native logical262144 remains CI requirement; not actual p2048sharedpool fit, qualitative completion, scored accuracy or repeatable speedclaim",
+  "metal_source": "126fde8d56bcb53853858f673a0199a5d585acc4",
+  "tokens_exact": true,
+  "all512_cache_state_hashes_exact": true,
+  "ragged_repeat_exact": true,
+  "three_continuation_states_logits_exact": true,
+  "runtime_source_matches_all27_overlay_files": true,
+  "baseline": {
+    "ttft_ms": 4340.621357318014,
+    "decode_seconds": 3.412682785652578,
+    "decode_tps_per_user": 9.083762525579164
+  },
+  "combined": {
+    "ttft_ms": 3836.3098953850567,
+    "decode_seconds": 2.3448805417865515,
+    "decode_tps_per_user": 13.220289668309189
+  },
+  "single_repeat_decode_speedup": 1.4553759668509483,
+  "single_repeat_ttft_reduction": 0.11618416360660433,
+  "allocation_tracking": "0",
+  "captures_stable": true,
+  "input_hashes": {
+    "baseline-b32.json": "24dd80b0d9c974be048966d3f303b65acb72c7e667b4842e8ebd6d9cf1d246ac",
+    "combined-b32.json": "773f1a147b915190c560ef6fad1a6743a1dcb07b101f0a867e086ba17291b57c"
+  }
+}
