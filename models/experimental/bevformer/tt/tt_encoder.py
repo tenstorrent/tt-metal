@@ -355,7 +355,7 @@ class TTBEVFormerEncoder:
 
         # The grid is fixed by bev_h, bev_w, and z_cfg; changing any of them requires
         # a new encoder instance. Batch size only broadcasts the leading dimension.
-        self._reference_points_3d = generate_reference_points(
+        self.reference_points_3d = generate_reference_points(
             bev_h=bev_h,
             bev_w=bev_w,
             z_cfg=z_cfg,
@@ -365,13 +365,13 @@ class TTBEVFormerEncoder:
         # float32: in bfloat16 a 100-cell grid's centres round by up to 0.4 cells. ROW_MAJOR, where
         # the trailing (1, 2) is not padded to a tile.
         self._bev_reference_points = ttnn.from_torch(
-            self._reference_points_3d[:, :, 0, :2].unsqueeze(2),
+            self.reference_points_3d[:, :, 0, :2].unsqueeze(2),
             device=device,
             dtype=ttnn.float32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
         # The grid in world coordinates, which every frame projects to the cameras.
-        self.world_points = world_points_ttnn(self._reference_points_3d, pc_range, device)
+        self.world_points = world_points_ttnn(self.reference_points_3d, pc_range, device)
 
         # Build transformer layers
         self.layers = []
@@ -432,7 +432,7 @@ class TTBEVFormerEncoder:
         prev_bev=None,
         shift=None,
         img_metas: Optional[List[Dict[str, Any]]] = None,
-        projection=None,
+        rebatch_plan=None,
         **kwargs,
     ):
         """
@@ -450,9 +450,9 @@ class TTBEVFormerEncoder:
             shift: Ego translation in BEV fractions, float32 ROW_MAJOR [B, 1, 1, 2]; applied only
                 with ``prev_bev``.
             img_metas: Camera metadata for point sampling
-            projection: The cameras' projection rows (``tt_point_sampling_3d_2d.camera_rows``) on
-                device, float32 TILE, as ``TTPerceptionTransformer.prepare_frame`` uploads them;
-                None builds them from ``img_metas`` and uploads them here.
+            rebatch_plan: The frame's spatial cross-attention plan (``build_rebatch_plan``), as
+                ``TTPerceptionTransformer.prepare_frame`` builds it ahead of the forward; None
+                projects the cameras from ``img_metas`` here and reads their mask back for it.
 
         Returns:
             Final BEV features [B, num_queries, embed_dims]
@@ -493,15 +493,14 @@ class TTBEVFormerEncoder:
         reference_points_cam = None
         bev_mask = None
 
-        if img_metas is not None:
-            if projection is None:
-                rows = camera_rows(
-                    self._host_lidar2img(img_metas),
-                    image_size(img_metas),
-                    self.world_points.num_queries,
-                    self.world_points.num_points,
-                )
-                projection = ttnn.from_torch(rows, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
+        if rebatch_plan is None and img_metas is not None:
+            rows = camera_rows(
+                self._host_lidar2img(img_metas),
+                image_size(img_metas),
+                self.world_points.num_queries,
+                self.world_points.num_points,
+            )
+            projection = ttnn.from_torch(rows, device=self.device, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT)
             # Project 3D reference points to 2D camera coordinates
             # This determines where each BEV query will sample from in each camera view
             # Returns: reference_points_cam [num_cams, B, num_queries, num_points, 2] (pixel coordinates)
@@ -517,9 +516,8 @@ class TTBEVFormerEncoder:
                 # Projected in float32; bfloat16 is the only dtype build_rebatch_plan's gather takes.
                 output_dtype=ttnn.bfloat16,
             )
-
-        # Camera projection is per-frame, so the SCA rebatch plan is too. Layers only gather query.
-        rebatch_plan = build_rebatch_plan(reference_points_cam, bev_mask, self.device) if bev_mask is not None else None
+            # Camera projection is per-frame, so the SCA rebatch plan is too. Layers only gather query.
+            rebatch_plan = build_rebatch_plan(reference_points_cam, bev_mask, self.device)
 
         signpost(header="BEVEncoder Reference Points End")
 

@@ -4,12 +4,12 @@
 """TTNN port of the BEV half of BEVFormer's ``PerceptionTransformer``
 (``reference/perception_transformer.py``): FPN levels and BEV queries in, the frame's BEV out.
 
-What changes from frame to frame and comes from the host, the cameras' projections, the CAN
-bus, the ego shift and the previous BEV's rotation, is prepared by
-:meth:`TTPerceptionTransformer.prepare_frame` into a :class:`PerceptionFrame` whose device
-buffers are allocated once and refilled in place. The encoder projects the cameras in its
-forward and reads its visibility mask on the host there, so the transformer runs live, not
-under a trace.
+What changes from frame to frame and comes from the host, the CAN bus, the ego shift and the
+previous BEV's rotation, is prepared by :meth:`TTPerceptionTransformer.prepare_frame` into a
+:class:`PerceptionFrame` whose device buffers are allocated once and refilled in place. So is
+the spatial cross-attention's plan: the cameras' projection depends on the frame's metas only,
+so the host projects them there and the forward reads nothing back. The plan's sizes follow the
+cameras' views, so the transformer runs live, not under a trace.
 
 The previous BEV's rotation is nearest-neighbour, so it moves whole cells: the host rotates an
 image of cell indices with the reference's own ``rotate``, and the device gathers the previous
@@ -24,10 +24,11 @@ import ttnn
 from torchvision.transforms.functional import rotate
 
 from models.experimental.bevformer.model_config import CAN_BUS_DIMS, GRID_DTYPE
+from models.experimental.bevformer.reference.point_sampling_3d_2d import point_sampling_3d_to_2d
 from models.experimental.bevformer.tt.model_preprocessing import bev_grid_length, ego_shift
 from models.experimental.bevformer.tt.tt_common import layer_norm, signpost
 from models.experimental.bevformer.tt.tt_encoder import TTBEVFormerEncoder
-from models.experimental.bevformer.tt.tt_point_sampling_3d_2d import camera_rows, image_size
+from models.experimental.bevformer.tt.tt_spatial_cross_attention import SCARebatchPlan, build_rebatch_plan
 
 
 @dataclass
@@ -36,9 +37,9 @@ class PerceptionFrame:
     address.
 
     Attributes:
-        img_metas: The frame's per-sample metas; the encoder reads the images' size from them.
-        projection: ``(bs, num_cams, 9, width)`` float32, the cameras' projections as rows that
-            weigh the encoder's reference grid (``tt_point_sampling_3d_2d.camera_rows``).
+        img_metas: The frame's per-sample metas.
+        rebatch_plan: The spatial cross-attention's plan for the frame's cameras, built anew per
+            frame, as its sizes follow what the cameras see.
         can_bus: ``(bs, 1, CAN_BUS_DIMS)`` bfloat16, the relative CAN bus.
         shift: ``(bs, 1, 1, 2)`` float32 ROW_MAJOR, the ego translation in BEV-grid fractions.
         rotation_index: ``(1, 1, 1, bs * num_query)`` uint32 ROW_MAJOR, the stacked previous-BEV row each
@@ -48,7 +49,7 @@ class PerceptionFrame:
     """
 
     img_metas: list
-    projection: ttnn.Tensor
+    rebatch_plan: SCARebatchPlan
     can_bus: ttnn.Tensor
     shift: ttnn.Tensor
     rotation_index: ttnn.Tensor
@@ -97,17 +98,20 @@ class TTPerceptionTransformer:
         grid_length = bev_grid_length(self.encoder.pc_range, self.bev_h, self.bev_w)
         shift = ego_shift(img_metas, self.bev_h, self.bev_w, grid_length).view(len(img_metas), 1, 1, 2)
         rotation_index, rotation_mask = rotation_gather(img_metas, self.bev_h, self.bev_w, self.rotate_center)
-        lidar2img = torch.stack([torch.as_tensor(meta["lidar2img"], dtype=torch.float32) for meta in img_metas])
-        grid = self.encoder.world_points
-        projection = camera_rows(lidar2img, image_size(img_metas), grid.num_queries, grid.num_points)
         return dict(
-            # float32: in bfloat16 the projection moves the points by several pixels on average.
-            projection=(projection, ttnn.float32, ttnn.TILE_LAYOUT),
             can_bus=(can_bus, ttnn.bfloat16, ttnn.TILE_LAYOUT),
             shift=(shift, GRID_DTYPE, ttnn.ROW_MAJOR_LAYOUT),
             rotation_index=(rotation_index, ttnn.uint32, ttnn.ROW_MAJOR_LAYOUT),
             rotation_mask=(rotation_mask, ttnn.bfloat16, ttnn.TILE_LAYOUT),
         )
+
+    def _rebatch_plan(self, img_metas):
+        """The spatial cross-attention's plan for the frame's cameras, projected on the host by the
+        reference's own ``point_sampling_3d_to_2d`` in float32."""
+        lidar2img = torch.stack([torch.as_tensor(meta["lidar2img"], dtype=torch.float32) for meta in img_metas])
+        grid = self.encoder.reference_points_3d.expand(len(img_metas), -1, -1, -1)
+        points, mask = point_sampling_3d_to_2d(grid, list(self.encoder.pc_range), lidar2img, img_metas=img_metas)
+        return build_rebatch_plan(points, mask, self.device)
 
     def prepare_frame(self, img_metas, frame=None):
         """This frame's :class:`PerceptionFrame` from ``img_metas`` (per sample ``lidar2img``,
@@ -117,12 +121,14 @@ class TTPerceptionTransformer:
         if frame is None:
             return PerceptionFrame(
                 img_metas=img_metas,
+                rebatch_plan=self._rebatch_plan(img_metas),
                 **{
                     name: ttnn.from_torch(tensor, dtype=dtype, layout=layout, device=self.device)
                     for name, (tensor, dtype, layout) in host.items()
                 },
             )
         frame.img_metas = img_metas
+        frame.rebatch_plan = self._rebatch_plan(img_metas)
         for name, (tensor, dtype, layout) in host.items():
             buffer = getattr(frame, name)
             assert tuple(buffer.shape) == tuple(
@@ -186,7 +192,7 @@ class TTPerceptionTransformer:
             prev_bev=prev_bev,
             shift=shift,
             img_metas=frame.img_metas,
-            projection=frame.projection,
+            rebatch_plan=frame.rebatch_plan,
         )
         ttnn.deallocate(value)
         signpost(header="TTNN PerceptionTransformer Forward End")

@@ -76,9 +76,11 @@ def build_rebatch_plan(reference_points_cam, bev_mask, device) -> SCARebatchPlan
 
     Args:
         reference_points_cam: Bfloat16 device tensor with shape
-            ``[num_cams, batch_size, num_queries, num_depth_levels, 2]``.
-        bev_mask: Device tensor with shape
-            ``[num_cams, batch_size, num_queries, num_depth_levels]``.
+            ``[num_cams, batch_size, num_queries, num_depth_levels, 2]``, or a torch tensor of it,
+            which is gathered on the host.
+        bev_mask: Device or torch tensor with shape
+            ``[num_cams, batch_size, num_queries, num_depth_levels]``. Torch inputs need no
+            readback, so their plan can be built ahead of the forward.
         device: Device on which plan tensors are allocated. It must match the input tensors.
 
     Returns:
@@ -88,8 +90,10 @@ def build_rebatch_plan(reference_points_cam, bev_mask, device) -> SCARebatchPlan
     num_cams, bs, num_queries, num_depth_levels = bev_mask.shape
 
     # max_len sizes tensors, so it must be a Python int. Mask reduction, index construction and
-    # the contributor count stay on the host; every gather runs on device.
-    valid_per_cam = ttnn.to_torch(bev_mask).sum(-1) > 0  # [num_cams, B, num_queries]
+    # the contributor count stay on the host.
+    if not isinstance(bev_mask, torch.Tensor):
+        bev_mask = ttnn.to_torch(bev_mask)
+    valid_per_cam = bev_mask.sum(-1) > 0  # [num_cams, B, num_queries]
     # As upstream, every sample gathers the queries the first sample's cameras see, and divides by
     # the cameras its own mask counts.
     seen_by = valid_per_cam
@@ -140,33 +144,46 @@ def build_rebatch_plan(reference_points_cam, bev_mask, device) -> SCARebatchPlan
             next_slot[j, valid_indices] += 1
     gather_ids = compact_ids.clamp(max=num_queries - 1)
 
-    reference_points_cam = ttnn.clamp(reference_points_cam, -10.0, 10.0)
-    assert (
-        reference_points_cam.dtype == ttnn.bfloat16
-    ), f"SCA rebatch gathers reference_points_cam, so it must be bfloat16, got {reference_points_cam.dtype}."
+    if isinstance(reference_points_cam, torch.Tensor):
+        # [bs, num_cams, rebatch_len, num_depth_levels, 2]: each camera's compacted rows.
+        clamped = reference_points_cam.to(torch.float32).clamp(-10.0, 10.0).permute(1, 0, 2, 3, 4)
+        batched = clamped[
+            torch.arange(bs).view(bs, 1, 1), torch.arange(num_cams).view(1, num_cams, 1), gather_ids.long()
+        ]
+        reference_points_batched = ttnn.from_torch(
+            batched.reshape(bs * num_cams, rebatch_len, num_depth_levels, 2),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+    else:
+        reference_points_cam = ttnn.clamp(reference_points_cam, -10.0, 10.0)
+        assert (
+            reference_points_cam.dtype == ttnn.bfloat16
+        ), f"SCA rebatch gathers reference_points_cam, so it must be bfloat16, got {reference_points_cam.dtype}."
 
-    # Reference points are camera-major, so their row IDs include camera and batch offsets.
-    ref_rows = ttnn.reshape(
-        ttnn.to_layout(reference_points_cam, ttnn.ROW_MAJOR_LAYOUT),
-        (1, 1, num_cams * bs * num_queries, num_depth_levels * 2),
-    )
-    ref_index = _flat_row_index(
-        gather_ids
-        + _batch_offsets(bs, num_queries)
-        + torch.arange(num_cams, dtype=torch.int32).reshape(1, num_cams, 1) * (bs * num_queries),
-        device,
-    )
-    # Split the gathered row back into MSDA's [.., rebatch_len, num_depth_levels, 2], the last
-    # dim being each depth level's (x, y) camera coordinate. Changing the row width from
-    # num_depth_levels * 2 to 2 requires a data-moving reshape before conversion to TILE layout.
-    # TODO: profile whether tilizing first is cheaper.
-    reference_points_batched = ttnn.to_layout(
-        ttnn.reshape(
-            ttnn.embedding(ref_index, ref_rows),
-            (bs * num_cams, rebatch_len, num_depth_levels, 2),
-        ),
-        ttnn.TILE_LAYOUT,
-    )
+        # Reference points are camera-major, so their row IDs include camera and batch offsets.
+        ref_rows = ttnn.reshape(
+            ttnn.to_layout(reference_points_cam, ttnn.ROW_MAJOR_LAYOUT),
+            (1, 1, num_cams * bs * num_queries, num_depth_levels * 2),
+        )
+        ref_index = _flat_row_index(
+            gather_ids
+            + _batch_offsets(bs, num_queries)
+            + torch.arange(num_cams, dtype=torch.int32).reshape(1, num_cams, 1) * (bs * num_queries),
+            device,
+        )
+        # Split the gathered row back into MSDA's [.., rebatch_len, num_depth_levels, 2], the last
+        # dim being each depth level's (x, y) camera coordinate. Changing the row width from
+        # num_depth_levels * 2 to 2 requires a data-moving reshape before conversion to TILE layout.
+        # TODO: profile whether tilizing first is cheaper.
+        reference_points_batched = ttnn.to_layout(
+            ttnn.reshape(
+                ttnn.embedding(ref_index, ref_rows),
+                (bs * num_cams, rebatch_len, num_depth_levels, 2),
+            ),
+            ttnn.TILE_LAYOUT,
+        )
 
     num_valid_queries = valid_per_cam.sum(-1).t().reshape(bs * num_cams, 1)
     row_mask = torch.arange(rebatch_len) < num_valid_queries
@@ -266,8 +283,10 @@ class TTSpatialCrossAttention:
 
         Args:
             query: Bfloat16 BEV queries [B, num_queries, embed_dims].
-            reference_points_cam: Bfloat16 camera projected reference points [num_cams, B, num_queries, D, 2].
-            bev_mask: Valid mask for camera projections [num_cams, B, num_queries, D].
+            reference_points_cam: Bfloat16 camera projected reference points [num_cams, B, num_queries, D, 2];
+                unused with ``rebatch_plan``.
+            bev_mask: Valid mask for camera projections [num_cams, B, num_queries, D]; unused with
+                ``rebatch_plan``.
             value: Multi-camera features [B, num_cams, H*W, embed_dims], batch-first; the
                 encoder permutes once per forward. Attention here takes no key: deformable
                 attention never scores query against one. Two Linears on query predict where to
@@ -300,29 +319,29 @@ class TTSpatialCrossAttention:
             logger.info("SCA Tensor Conversion Complete")
 
         bs, num_queries, _ = query.shape
+
+        # Every encoder layer in a forward shares one plan; building it here is the standalone path.
+        if rebatch_plan is None:
+            rebatch_plan = build_rebatch_plan(reference_points_cam, bev_mask, self.device)
+
+        if rebatch_plan.is_empty:
+            if ENABLE_LOGGING:
+                logger.warning("No valid points found in SCA, returning residual")
+            return inp_residual
+
+        assert rebatch_plan.reference_points_batched.shape[0] == bs * self.num_cams, (
+            f"rebatch_plan has {rebatch_plan.reference_points_batched.shape[0]} camera rows, but this SCA "
+            f"takes {bs} x {self.num_cams} cameras"
+        )
         # Extract number of depth levels for 3D point sampling
         # Each BEV query samples points at multiple Z-coordinates (depth levels) in 3D space
-        num_depth_levels = reference_points_cam.shape[3]
+        num_depth_levels = rebatch_plan.reference_points_batched.shape[2]
 
         # Validate sampling points divisibility to prevent runtime errors in deformable attention
         assert self.deformable_attention.num_points % num_depth_levels == 0, (
             f"num_points ({self.deformable_attention.num_points}) must be divisible by depth levels ({num_depth_levels}). "
             f"This is required for proper reshaping in deformable attention. Consider adjusting num_points in config."
         )
-
-        # Every encoder layer in a forward shares one plan; building it here is the standalone path.
-        if rebatch_plan is None:
-            rebatch_plan = build_rebatch_plan(reference_points_cam, bev_mask, self.device)
-        else:
-            assert bev_mask.shape[0] == self.num_cams, (
-                f"rebatch_plan built for num_cams={bev_mask.shape[0]} but this SCA is configured with "
-                f"num_cams={self.num_cams}"
-            )
-
-        if rebatch_plan.is_empty:
-            if ENABLE_LOGGING:
-                logger.warning("No valid points found in SCA, returning residual")
-            return inp_residual
 
         rebatch_len = rebatch_plan.rebatch_len
 
