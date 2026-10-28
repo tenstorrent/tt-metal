@@ -75,7 +75,8 @@ def _run_case(
     count_include_pad=None,  # avg only; None = op default (True). False -> per-stick scalars (config DFB)
     dtype="bf16",  # "bf16" | "bf8b" (bf8b forces TILE layout; golden runs on the quantized input)
     out_layout="rm",  # "rm" | "tile" output layout (tiled output runs single-lane by policy)
-    dram_slice=None,  # None = sharded L1 input; ("height" | "width", n) = DRAM input, n slices
+    dram_slice=None,  # None = sharded L1 input; ("height" | "width", n) = DRAM input, n slices; ("auto",) = DRAM
+    # input with no slice config (the op picks the slicing)
     rm_input=False,  # force ROW_MAJOR input even when C % 32 == 0
     tile_input=False,  # force TILE input even when C % 32 != 0 (channels padded to the tile width)
     shard_scheme=None,  # applied_shard_scheme: None = the op's choice | "height" | "width" | "block"
@@ -123,8 +124,9 @@ def _run_case(
     dram_slice_config = None
     if dram_slice is not None:
         mem_config = ttnn.DRAM_MEMORY_CONFIG
-        slice_type = {"height": ttnn.Op2DDRAMSliceHeight, "width": ttnn.Op2DDRAMSliceWidth}[dram_slice[0]]
-        dram_slice_config = ttnn.Op2DSliceConfig(num_slices=dram_slice[1], slice_type=slice_type)
+        if dram_slice[0] != "auto":
+            slice_type = {"height": ttnn.Op2DDRAMSliceHeight, "width": ttnn.Op2DDRAMSliceWidth}[dram_slice[0]]
+            dram_slice_config = ttnn.Op2DSliceConfig(num_slices=dram_slice[1], slice_type=slice_type)
         core_desc = f"DRAM-sliced {'x'.join(map(str, dram_slice))}" + (f" {shard_scheme}" if shard_scheme else "")
     elif shard == "height":
         height_tiles = tensor_height // 32
@@ -571,6 +573,20 @@ DRAM_SLICED_CASES = [
             sim_skip="Quasar tiled-output pool bug (see tiled_out_*): the same width-sharded TILE-output pool mismatches identically unsliced in L1 on craq-sim -- not a slicing issue",
         ),
     ),
+    # BFLOAT8_B TILE input, untilized to BFLOAT16 before slicing
+    (
+        "max_k3x3_s2_h2_bf8b",
+        dict(
+            channels=32,
+            in_h=16,
+            in_w=16,
+            dtype="bf8b",
+            dram_slice=("height", 2),
+            sim_skip="Metal-2.0 DFB bfp8 unsupported (dfb.cpp:111 is_data_format_supported), as bf8b_k3x3",
+        ),
+    ),
+    # DRAM input with no slice config: the op picks the slicing (one slice at this size -> the L1 path)
+    ("max_k3x3_s2_auto", dict(channels=32, in_h=16, in_w=16, dram_slice=("auto",))),
     (
         "avg_k2x2_s2_h2_tile",
         dict(
