@@ -501,20 +501,23 @@ class TestDeallocateTensorLookup:
 
     @staticmethod
     def _graph(events):
-        """Graph of ("tensor", tensor_id, address, buffer_type) and ("dealloc", address, buffer_type) events, in order.
-        A buffer_type of None leaves it out of the node, as older captures did."""
+        """Graph of ("tensor", tensor_id, address, buffer_type[, device_id]) and ("dealloc", address, buffer_type[,
+        device_id]) events, in order. A buffer_type or device_id of None leaves it out of the node, as older captures
+        did."""
         nodes = []
         for i, event in enumerate(events, start=1):
             if event[0] == "tensor":
-                _, tensor_id, address, buffer_type = event
+                _, tensor_id, address, buffer_type, *device = event
                 params = {"tensor_id": str(tensor_id), "address": str(address), "storage_type": "DEVICE"}
                 node_type = "tensor"
             else:
-                _, address, buffer_type = event
+                _, address, buffer_type, *device = event
                 params = {"address": str(address)}
                 node_type = "buffer_deallocate"
             if buffer_type is not None:
                 params["buffer_type"] = str(buffer_type)
+            if device and device[0] is not None:
+                params["device_id"] = str(device[0])
             nodes.append({"counter": i, "node_type": node_type, "params": params, "connections": []})
         end = len(events) + 1
         return [
@@ -569,6 +572,20 @@ class TestDeallocateTensorLookup:
         """Captures that predate the tensor's buffer_type still credit the deallocation."""
         events = [("tensor", 1, 4096, None), ("dealloc", 4096, _L1)]
         assert self._deallocated_tensor_ids(events, tmp_path) == [1]
+
+    def test_freed_tensor_is_not_credited_with_a_later_free_at_its_address(self, tmp_path):
+        """A scratch buffer that reuses tensor 1's freed address is freed in turn: tensor 1 is already gone."""
+        events = [("tensor", 1, 4096, _L1), ("dealloc", 4096, _L1), ("dealloc", 4096, _L1)]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [1, None]
+
+    def test_same_address_on_two_devices_is_credited_per_device(self, tmp_path):
+        events = [
+            ("tensor", 1, 4096, _L1, 0),
+            ("tensor", 2, 4096, _L1, 1),
+            ("dealloc", 4096, _L1, 1),
+            ("dealloc", 4096, _L1, 0),
+        ]
+        assert self._deallocated_tensor_ids(events, tmp_path) == [2, 1]
 
     def test_address_with_no_tensor_has_no_input(self, tmp_path):
         """A scratch buffer that no tensor node ever named: the operation is kept, with no input tensor."""
