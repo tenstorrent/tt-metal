@@ -414,6 +414,12 @@ Build fixes after fork_op.py (no behaviour change):
   window, sink): a full window equals the BF16 path bit for bit on one bf16 table holding the same values (H 32 / 64,
   fp32 dest off / on, top-k parts of 0 / 1 / 31 / 32 / 200 / 512 keys); a partial window (1 / 17 / 32 / 100 / 127 keys)
   vs float32: rel 0.0249 (the BF16 path with the compacted list: 0.0250); deterministic; the refusals.
+- Time (one p150b, H 64, K_DIM 512, 640 indices all valid, 30 back-to-back calls; the BF16 path on one bf16 table):
+  160 queries (a Galaxy 8x4 chip at chunk 5120) BF16 341 us, ROW_BFP4 517 us; 512 queries (a 2x2 chip) 1184 vs
+  1300 us. Without the row -> tile shuffle (an ablation, wrong output) ROW_BFP4 takes 251 / 957 us: the 3.6x smaller
+  gather and the skipped tilize make it faster than BF16, and the shuffle (64 words + 32 exponent bytes a row on the
+  two data-movement RISCs, ~11 cycles a word) costs the rest. The shuffle moves exponents 4 rows at a time as words
+  (byte stores cost 130 us at 160 queries); deeper load batching was slower (register spills).
 - Needed by: deepseek_v41_flash_d_p FIX.8 (CKV_FORMAT=bfp4_rows)
 - Files: `sparse_sdpa.hpp`, `sparse_sdpa.cpp`, `sdpa_nanobind.cpp`, `device/sparse_sdpa_device_operation*.{hpp,cpp}`,
   `device/sparse_sdpa_program_factory.cpp`, `device/kernels/sparse_sdpa_common.hpp`,

@@ -108,29 +108,51 @@ FORCE_INLINE void trid_ring_gather(
 template <uint32_t DHt>
 FORCE_INLINE void shuffle_rows_to_bfp4_tiles(
     uint32_t rows_l1, uint32_t row_stride, uint32_t tiles_l1, uint32_t row_begin, uint32_t row_end) {
+    // Rows in fours (the ranges are multiples of 16): the 4 rows' exponent bytes of a face in a tile are one aligned
+    // word (rows fr..fr+3), built by a 4x4 byte transpose in registers; the mantissas move as words. Plain (non-
+    // volatile) L1 pointers so loads and stores are scheduled freely; the barrier at the end orders them before the
+    // caller's CB push / ack.
     constexpr uint32_t n_groups = DHt * 2;
-    for (uint32_t p = row_begin; p < row_end; ++p) {
+    constexpr uint32_t ew = n_groups / 4;  // exponent words of a row
+    constexpr uint32_t tile_words = BFP4_TILE_BYTES / sizeof(uint32_t);
+    static_assert(n_groups % 4 == 0);
+    for (uint32_t p = row_begin; p < row_end; p += 4) {
         const uint32_t r = p % tt::constants::TILE_HEIGHT;
         const uint32_t fr = r % tt::constants::FACE_HEIGHT;
         const uint32_t face0 = (r / tt::constants::FACE_HEIGHT) * 2;
-        const uint32_t row = rows_l1 + p * row_stride;
-        volatile tt_l1_ptr uint8_t* rb = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(row);
-        volatile tt_l1_ptr uint32_t* rw = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(row + n_groups);
-        uint32_t tile = tiles_l1 + (p / tt::constants::TILE_HEIGHT) * DHt * BFP4_TILE_BYTES;
-        for (uint32_t c = 0; c < DHt; ++c, tile += BFP4_TILE_BYTES) {
-            volatile tt_l1_ptr uint8_t* tb = reinterpret_cast<volatile tt_l1_ptr uint8_t*>(tile);
-            tb[face0 * 16 + fr] = rb[2 * c];
-            tb[(face0 + 1) * 16 + fr] = rb[2 * c + 1];
-            volatile tt_l1_ptr uint32_t* m0 =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile + 64 + face0 * 128 + fr * 8);
-            volatile tt_l1_ptr uint32_t* m1 =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tile + 64 + (face0 + 1) * 128 + fr * 8);
-            m0[0] = rw[4 * c];
-            m0[1] = rw[4 * c + 1];
-            m1[0] = rw[4 * c + 2];
-            m1[1] = rw[4 * c + 3];
+        uint32_t* t32 =
+            reinterpret_cast<uint32_t*>(tiles_l1 + (p / tt::constants::TILE_HEIGHT) * DHt * BFP4_TILE_BYTES);
+        const uint32_t e0 = (face0 * 16 + fr) / 4, e1 = e0 + 16 / 4;  // exponent words (faces face0, face0 + 1)
+        const uint32_t* x0 = reinterpret_cast<const uint32_t*>(rows_l1 + p * row_stride);
+        const uint32_t* x1 = reinterpret_cast<const uint32_t*>(rows_l1 + (p + 1) * row_stride);
+        const uint32_t* x2 = reinterpret_cast<const uint32_t*>(rows_l1 + (p + 2) * row_stride);
+        const uint32_t* x3 = reinterpret_cast<const uint32_t*>(rows_l1 + (p + 3) * row_stride);
+#pragma GCC unroll 2
+        for (uint32_t k = 0; k < ew; ++k) {  // groups 4k..4k+3 = tiles 2k (face pair) and 2k + 1
+            const uint32_t a = x0[k], b = x1[k], c = x2[k], d = x3[k];
+            uint32_t* w0 = t32 + (2 * k) * tile_words;
+            uint32_t* w1 = w0 + tile_words;
+            w0[e0] = (a & 0xFF) | ((b & 0xFF) << 8) | ((c & 0xFF) << 16) | (d << 24);
+            w0[e1] = ((a >> 8) & 0xFF) | (b & 0xFF00) | ((c & 0xFF00) << 8) | ((d & 0xFF00) << 16);
+            w1[e0] = ((a >> 16) & 0xFF) | ((b >> 8) & 0xFF00) | (c & 0xFF0000) | ((d & 0xFF0000) << 8);
+            w1[e1] = (a >> 24) | ((b >> 16) & 0xFF00) | ((c >> 8) & 0xFF0000) | (d & 0xFF000000);
+        }
+#pragma GCC unroll 1
+        for (uint32_t i = 0; i < 4; ++i) {
+            const uint32_t* mw = reinterpret_cast<const uint32_t*>(rows_l1 + (p + i) * row_stride) + ew;
+            const uint32_t m0 = (64 + face0 * 128 + (fr + i) * 8) / 4, m1 = m0 + 128 / 4;  // mantissa words
+            uint32_t* w = t32;
+#pragma GCC unroll 4
+            for (uint32_t c = 0; c < DHt; ++c, w += tile_words, mw += 4) {
+                const uint32_t v0 = mw[0], v1 = mw[1], v2 = mw[2], v3 = mw[3];
+                w[m0] = v0;
+                w[m0 + 1] = v1;
+                w[m1] = v2;
+                w[m1 + 1] = v3;
+            }
         }
     }
+    asm volatile("" ::: "memory");
 }
 
 }  // namespace sparse_sdpa
