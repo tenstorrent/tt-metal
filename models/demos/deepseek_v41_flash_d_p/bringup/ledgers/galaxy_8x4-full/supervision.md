@@ -592,3 +592,9 @@ session's argv); a resume clears PAUSE (use --until to stop); watch + cron :07/:
   FIX.7's gate units (FIX.7 L.s56320 delayed ~2 min, unharmed). Lesson for briefs: "no device" includes `import ttnn`.
 - SWITCH POINT (owner): continue in a fresh session (/bringup, "report on deepseek_v41_flash_d_p galaxy_8x4") from
   the 14:35 hand-off entry + this one. FIX.7 still in its gate check (L.s56320, L.smoke, K.1 to go).
+- NEXT SESSION, first device step (one card, after FIX.7 commits): the device packer's bfp4 rounding rule (L1 test
+  1). Crafted bf16 tile (exact half-steps, just above / below, groups whose max forces shifts) -> packed to
+  bfloat4_b BY THE DEVICE (ttnn.typecast to bfloat4_b, or a matmul with a bfp4 output) -> read back -> compare with
+  RNE and truncation predictions and with the host packer (from_torch dtype=bfloat4_b = the de-risk codec). Hints:
+  PR #49811 and the K3 write-up say the Blackhole packer truncates fp8; unknown for bfp4. Truncation -> SFPU rounding
+  before the pack in the write kernel (else option B's error doubles: 0.21 vs 0.11).
