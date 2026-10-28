@@ -124,7 +124,13 @@ class FlowStateTT:
         xc, rows = x, (L - r0) * Bp
         if p.c_input_dtype != ttnn.float32:
             xc = ttnn.typecast(x, p.c_input_dtype)
-        y = self._linear(xc, w["C"], "c_proj", rows, dtype=ttnn.bfloat16, cfg=p.c_proj)
+        if p.program_configs:  # R2-4 (sweep job 1326): C through minimal_matmul, 6.52 -> 4.09 ms at paper
+            y = ttnn.experimental.minimal_matmul(
+                xc, w["C"], config=common.c_proj_config(self.device), compute_kernel_config=p.c_proj,
+                dtype=ttnn.bfloat16, memory_config=p.mem,
+            )
+        else:
+            y = self._linear(xc, w["C"], "c_proj", rows, dtype=ttnn.bfloat16, cfg=p.c_proj)
         if xc is not x:
             ttnn.deallocate(xc)
         if not keep_x:
