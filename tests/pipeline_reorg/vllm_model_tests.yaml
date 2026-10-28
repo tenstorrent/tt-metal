@@ -226,12 +226,14 @@
   # outputs, so the (16,1), (8,3) and (5,5) records and the width rungs past 2048
   # are all verified on a device (read the SpecDecoding metrics in the server log:
   # a mean acceptance length near 1.0 means the records draft garbage).
-  # --no-async-scheduling: the contract classes ship synchronous.
+  # --async-scheduling: the MTP contract class declares supports_async_spec_decode
+  #   (tt-metal#63019: Blackhole async is 6-21 % faster than sync); the leg proves
+  #   the deferred verify readback and the overlapped ordinary steps on a device.
   # GEMMA4_HYBRID_KV_CACHE_GROUPS=1 + unbounded sliding KV + prefix caching: the
   # tt-inference-server release entries' KV layout (sliding layers on vLLM's
   # 256-token blocks, full layers on 128), which no speculative capture had run
   # before the shield 12B QB2 eval accepted ~1 % of its drafts.
-  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --no-async-scheduling --speculative-config.method custom_class --speculative-config.model vllm_tt_plugin.model_owned_drafter --speculative-config.num_speculative_tokens 5"
+  additional-server-args: "--max_model_len 262144 --max_num_seqs 32 --enable_chunked_prefill --max_num_batched_tokens 4096 --long_prefill_token_threshold 4096 --async-scheduling --speculative-config.method custom_class --speculative-config.model vllm_tt_plugin.model_owned_drafter --speculative-config.num_speculative_tokens 5"
   additional-benchmark-args: "--max-concurrency 16 --num-prompts 32 --temperature 0 --random-output-len 2600"
   extra-env: "TT_MODEL_CLASS_OVERRIDES=Gemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM,Gemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM,Gemma4UnifiedForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM,TTGemma4ForCausalLM=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM,TTGemma4ForConditionalGeneration=models.demos.gemma4.tt.generator_vllm:Gemma4MTPContractForCausalLM GEMMA4_SPEC_DRAFT_LEN=5 GEMMA4_PAGE_BLOCK_SIZE=64 GEMMA4_HYBRID_KV_CACHE_GROUPS=1 GEMMA4_BOUNDED_SLIDING_KV_CACHE=0 GEMMA4_PREFIX_CACHING=1"
   multimodal: false
