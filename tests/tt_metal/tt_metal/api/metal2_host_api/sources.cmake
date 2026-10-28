@@ -15,6 +15,7 @@
 list(
     APPEND
     UNIT_TESTS_API_SOURCES
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/dfb_placement.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/scratchpad_allocations.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/advanced_options/dfb_advanced_options.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/invariant_tests/advanced_options/kernel_advanced_options.cpp
@@ -61,6 +62,7 @@ list(
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/prefetcher_pipe_slots.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program/semaphore_scope.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/borrowed_dfb_attach.cpp
+    ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/dfb_placement.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/dfb_run_overrides.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/kernel_run_args.cpp
     ${CMAKE_CURRENT_LIST_DIR}/unit_tests/program_run_args/merge_program_run_args.cpp

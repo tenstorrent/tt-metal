@@ -15,6 +15,8 @@
 #include "metal2_host_api/test_helpers/test_helpers.hpp"
 #include "metal2_host_api/test_helpers/mock_device_fixtures.hpp"
 
+#include "metal2_host_api/test_helpers/dfb_placement_test_helpers.hpp"
+
 namespace tt::tt_metal::experimental {
 namespace {
 
@@ -178,6 +180,41 @@ TEST_F(ProgramSpecTestQuasar, CPU_AliasDFBFailsOnInconsistentBorrowedFrom) {
     EXPECT_THAT(
         [&] { MakeProgramFromSpec(*mesh_device_, spec); },
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("inconsistent borrowed_from")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementAcceptsAliasesWithDifferentEndpointNodes) {
+    // Aliased DFBs with different endpoint nodes and identical placement overrides are accepted.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = test_helpers::MakeSeparateDFBEndpointPairs(tt::ARCH::QUASAR);
+    spec.dataflow_buffers[0].advanced_options.alias_with = {DFBSpecName{"dfb_1"}};
+    spec.dataflow_buffers[1].advanced_options.alias_with = {DFBSpecName{"dfb_0"}};
+    for (auto& dfb : spec.dataflow_buffers) {
+        dfb.advanced_options.override_placement = CoreRangeSet(CoreRange({2, 0}));
+    }
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementRejectsDifferentAliasNodes) {
+    // Aliased DFBs with different reserved nodes are rejected even when their endpoint nodes match.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR, 2);
+    spec.dataflow_buffers[0].advanced_options.alias_with = {DFBSpecName{"dfb_1"}};
+    spec.dataflow_buffers[1].advanced_options.alias_with = {DFBSpecName{"dfb_0"}};
+    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
+    spec.dataflow_buffers[1].advanced_options.override_placement = CoreRangeSet(CoreRange({1, 0}));
+    EXPECT_THAT(
+        [&] { MakeProgramFromSpec(fixture_device, spec); },
+        ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("different sets of nodes")));
+}
+
+TEST_F(ProgramSpecTestQuasar, CPU_DFBPlacementAllowsInferredAndExplicitAliases) {
+    // Aliasing is accepted when inferred and overridden placements contain the same nodes.
+    distributed::MeshDevice& fixture_device = *mesh_device_;
+    auto spec = test_helpers::MakeDFBPlacementSpec(tt::ARCH::QUASAR, 2);
+    spec.dataflow_buffers[0].advanced_options.alias_with = {DFBSpecName{"dfb_1"}};
+    spec.dataflow_buffers[1].advanced_options.alias_with = {DFBSpecName{"dfb_0"}};
+    spec.dataflow_buffers[0].advanced_options.override_placement = CoreRangeSet(CoreRange({0, 0}));
+    EXPECT_NO_THROW(MakeProgramFromSpec(fixture_device, spec));
 }
 
 }  // namespace
