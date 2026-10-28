@@ -45,6 +45,7 @@ class Qwen36ModelArgs(ModelArgs):
 
         # Mirror CKPT_DIR -> checkpoint_dir for weight_cache_path / load_state_dict.
         self.checkpoint_dir = self.CKPT_DIR
+        self._check_gptq_checkpoint(mesh_device)
 
         # Qwen3.5-specific params from HF text config (base sets dim, heads, layers, etc.).
         text_config = self.hf_config.get_text_config()
@@ -386,6 +387,30 @@ class Qwen36ModelArgs(ModelArgs):
             return self.model_name
         return super().base_model_name
 
+    def _check_gptq_checkpoint(self, mesh_device):
+        """GPTQ-BFP4 checkpoint (scripts/gptq_bfp4.py writes utils.gptq_bfp4.MARKER_NAME): remember its marker so
+        weight_cache_path uses a separate cache dir, and under QWEN36_GPTQ_BFP4=1 insist on a marker calibrated for
+        this TP degree (the GDN a/b BFP4 blocks are TP-specific)."""
+        from loguru import logger
+
+        from models.demos.blackhole.qwen36.utils import gptq_bfp4 as gq
+
+        self.gptq_meta = gq.read_marker(self.checkpoint_dir)
+        preset = gq.gptq_preset_enabled()
+        if self.gptq_meta is None:
+            if preset:
+                raise ValueError(
+                    f"{gq.GPTQ_PRESET_ENV}=1 needs a GPTQ checkpoint ({gq.MARKER_NAME} in {self.checkpoint_dir})"
+                )
+            return
+        tp = self.num_devices if mesh_device is not None else None
+        logger.info(
+            f"GPTQ-BFP4 checkpoint: targets {self.gptq_meta.get('targets')}, calibrated for TP={self.gptq_meta.get('tp')}, "
+            f"{gq.GPTQ_PRESET_ENV}={int(preset)}, tensor cache suffix {gq.cache_suffix(self.gptq_meta)}"
+        )
+        if preset and tp is not None and tp > 1 and self.gptq_meta.get("tp") != tp:
+            raise ValueError(f"GPTQ checkpoint calibrated for TP={self.gptq_meta.get('tp')}, running TP={tp}")
+
     def weight_cache_path(self, dtype=None):
         """Weight tensor cache dir, rooted at model_cache_path (TT_CACHE_PATH + device), NOT the HF
         snapshot (often read-only in CI -> caching there silently never persists); falls back to the
@@ -402,6 +427,11 @@ class Qwen36ModelArgs(ModelArgs):
             suffix = "tensor_cache_bf16"
         if self.num_devices > 1:
             suffix += "_mesh" + "x".join(str(d) for d in self.cluster_shape)
+        # GPTQ checkpoints get their own cache dir: as_tensor names cache files by tensor name + dtype only, so under
+        # the same TT_CACHE_PATH they would otherwise load the RTN tensors cached from the original checkpoint.
+        from models.demos.blackhole.qwen36.utils.gptq_bfp4 import cache_suffix
+
+        suffix += cache_suffix(getattr(self, "gptq_meta", None))
         root = getattr(self, "model_cache_path", None) or Path(self.checkpoint_dir)
         return Path(root) / suffix
 

@@ -611,22 +611,46 @@ class LMHeadDShard:
         return logits
 
 
+def _gptq_default(off_value, preset_value):
+    """Default of a weight-dtype flag: `preset_value` under QWEN36_GPTQ_BFP4=1 (GPTQ checkpoint preset, see
+    utils/gptq_bfp4.py), else `off_value`. An explicitly set flag always wins over either default."""
+    from models.demos.blackhole.qwen36.utils.gptq_bfp4 import gptq_preset_enabled
+
+    return preset_value if gptq_preset_enabled() else off_value
+
+
 BFP4_GDN_IN_ENV = "QWEN36_BFP4_GDN_IN"
 _BFP4_GDN_IN_LOGGED = False
 
 
 def bfp4_gdn_in_enabled():
-    """QWEN36_BFP4_GDN_IN (default 0): GDN input-projection weights in bfloat4_b (+ LoFi in decode only).
+    """QWEN36_BFP4_GDN_IN (default 0; 1 under QWEN36_GPTQ_BFP4=1): GDN input-projection weights in bfloat4_b (+ LoFi in decode only).
     Opt-in because BFP4 here costs about 1 pt of accuracy_512 top-1 (98.63 -> 97.66) and about 0.065 of
     B32 decode PCC, for +3.6% decode. Logs the choice once per process."""
     global _BFP4_GDN_IN_LOGGED
-    on = os.environ.get(BFP4_GDN_IN_ENV, "0") == "1"
+    on = os.environ.get(BFP4_GDN_IN_ENV, _gptq_default("0", "1")) == "1"
     if not _BFP4_GDN_IN_LOGGED:
         _BFP4_GDN_IN_LOGGED = True
         if on:
             logger.info(f"GDN in-proj weights: BFP4 + LOFI decode ({BFP4_GDN_IN_ENV}=1)")
         else:
             logger.info(f"GDN in-proj weights: BFP8 ({BFP4_GDN_IN_ENV}=0, default; =1 for BFP4 + LoFi decode)")
+    return on
+
+
+BFP4_GDN_OUT_ENV = "QWEN36_BFP4_GDN_OUT"
+_BFP4_GDN_OUT_LOGGED = False
+
+
+def bfp4_gdn_out_enabled():
+    """QWEN36_BFP4_GDN_OUT (default 0; 1 under QWEN36_GPTQ_BFP4=1): GDN out-projection weights (decode row-parallel
+    and prefill column-parallel copies) in bfloat4_b. Math fidelity unchanged (HiFi2). RTN BFP4 here cost -2.3 pt
+    emulated top-1 on Qwen3.8, so use it with a GPTQ checkpoint. Logs the choice once per process."""
+    global _BFP4_GDN_OUT_LOGGED
+    on = os.environ.get(BFP4_GDN_OUT_ENV, _gptq_default("0", "1")) == "1"
+    if not _BFP4_GDN_OUT_LOGGED:
+        _BFP4_GDN_OUT_LOGGED = True
+        logger.info(f"GDN out-proj weights: {'BFP4' if on else 'BFP8'} ({BFP4_GDN_OUT_ENV}={int(on)})")
     return on
 
 
@@ -651,9 +675,10 @@ _BFP4_MLP_DOWN_LOGGED = False
 
 
 def bfp4_mlp_down_enabled():
-    """QWEN36_BFP4_MLP_DOWN (default 0, opt-in pending task evals): dense-MLP down_proj (w2) weights in bfloat4_b
-    instead of bfloat8_b. +4.4% decode; accuracy-neutral on Qwen3.6, not on Qwen3.8 (see QWEN38_HANDOFF.md)."""
-    return os.environ.get(BFP4_MLP_DOWN_ENV, "0") == "1"
+    """QWEN36_BFP4_MLP_DOWN (default 0, opt-in pending task evals; 1 under QWEN36_GPTQ_BFP4=1): dense-MLP down_proj (w2)
+    weights in bfloat4_b instead of bfloat8_b. +4.4% decode; accuracy-neutral on Qwen3.6, not on Qwen3.8 (see QWEN38_HANDOFF.md).
+    """
+    return os.environ.get(BFP4_MLP_DOWN_ENV, _gptq_default("0", "1")) == "1"
 
 
 def resolve_mlp_down_dtype(down_dtype=None):
@@ -674,8 +699,8 @@ _BFP8_MLP_GATEUP_LOGGED = False
 
 
 def bfp8_mlp_gateup_enabled():
-    """QWEN36_MLP_GATEUP_BFP8 (default 1 (on); 0 reverts to bfloat4_b): dense-MLP gate/up (w1/w3, packed gate_up) weights in bfloat8_b instead of bfloat4_b."""
-    return os.environ.get(BFP8_MLP_GATEUP_ENV, "1") == "1"
+    """QWEN36_MLP_GATEUP_BFP8 (default 1 (on); 0 reverts to bfloat4_b; default 0 under QWEN36_GPTQ_BFP4=1): dense-MLP gate/up (w1/w3, packed gate_up) weights in bfloat8_b instead of bfloat4_b."""
+    return os.environ.get(BFP8_MLP_GATEUP_ENV, _gptq_default("1", "0")) == "1"
 
 
 def resolve_mlp_gateup_dtype(gateup_dtype=None):

@@ -396,8 +396,9 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
     qkv_per = args.gdn_qkv_dim_tp
     z_per = args.gdn_z_dim_tp
     nv_per = args.gdn_nv_tp
-    # In-proj weight dtype (QWEN36_BFP4_GDN_IN, opt-in): BFP4. Out-proj stays BFP8.
+    # In-proj weight dtype (QWEN36_BFP4_GDN_IN, opt-in): BFP4. Out-proj (QWEN36_BFP4_GDN_OUT, opt-in): BFP4.
     _in_dtype = ttnn.bfloat4_b if tpc.bfp4_gdn_in_enabled() else ttnn.bfloat8_b
+    _out_dtype = ttnn.bfloat4_b if tpc.bfp4_gdn_out_enabled() else ttnn.bfloat8_b
 
     if cache_dir is not None:
         import os
@@ -493,7 +494,7 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
         dim=0,
         memory_config=args.gdn_out_weight_memcfg if _out_sharded else ttnn.DRAM_MEMORY_CONFIG,
         cache_path=c("out.dramshard" if _out_sharded else "out"),
-        dtype=ttnn.bfloat8_b,
+        dtype=_out_dtype,
     )
     if getattr(args, "num_devices", 1) > 1:
         # COLUMN-parallel copy of the out-proj for prefill.
@@ -504,7 +505,7 @@ def load_gdn_weights_tp(mesh, sd, args, cache_dir=None):
             dim=-1,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             cache_path=c("out.colpar"),
-            dtype=ttnn.bfloat8_b,
+            dtype=_out_dtype,
         )
     # Per-head params
     tw["dt_bias"] = tpc.shard_small(sd[P + "dt_bias"].float(), mesh, c("dt_bias"))
