@@ -23,6 +23,7 @@ from helpers.llk_params import (
     format_tile_sizes,
 )
 from helpers.param_config import parametrize
+from helpers.perf.core import PerfRunType, create_test_or_perf_config
 from helpers.stimuli_config import StimuliConfig
 from helpers.stimuli_generator import generate_stimuli
 from helpers.test_config import TestConfig
@@ -32,6 +33,7 @@ from helpers.test_variant_parameters import (
     L1_ACC,
     NUM_BLOCKS,
     NUM_FACES,
+    LOOP_FACTOR,
     NUM_TILES_IN_BLOCK,
     TEST_FACE_DIMS,
     TILE_COUNT,
@@ -51,6 +53,9 @@ def _make_config(
     formats,
     dest_acc,
     pack_mode=0,
+    loop_factor=1,
+    is_perf=False,
+    run_types=None,
 ):
     """Build TestConfig for a given tile shape and tile count."""
     tile_r, tile_c = tile_dims
@@ -95,11 +100,11 @@ def _make_config(
         f"{num_blocks} blocks of {num_tiles_in_block}"
     )
 
-    configuration = TestConfig(
-        "sources/pack_tiny_tile_block_test.cpp",
-        formats,
-        templates=[TINY_PACK_MODE(pack_mode)],
-        runtimes=[
+    test_config_kwargs = {
+        "test_name": "sources/pack_tiny_tile_block_test.cpp",
+        "formats": formats,
+        "templates": [TINY_PACK_MODE(pack_mode)],
+        "runtimes": [
             DEST_INDEX(0),
             TILE_COUNT(tile_cnt_A),
             NUM_FACES(num_faces),
@@ -108,8 +113,9 @@ def _make_config(
             L1_ACC(L1Accumulation.No),
             NUM_BLOCKS(num_blocks),
             NUM_TILES_IN_BLOCK(num_tiles_in_block),
+            LOOP_FACTOR(loop_factor),
         ],
-        variant_stimuli=StimuliConfig(
+        "variant_stimuli": StimuliConfig(
             src_A,
             formats.input_format,
             src_B,
@@ -126,7 +132,13 @@ def _make_config(
                 formats.output_format, list(tile_dims), format_tile_sizes
             ),
         ),
-        dest_acc=dest_acc,
+        "dest_acc": dest_acc,
+    }
+
+    configuration = create_test_or_perf_config(
+        is_perf=is_perf,
+        run_types=run_types or [PerfRunType.L1_TO_L1],
+        test_config_kwargs=test_config_kwargs,
     )
 
     return configuration, golden_tensor, torch_format
