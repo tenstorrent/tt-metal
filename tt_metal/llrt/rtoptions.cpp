@@ -1244,7 +1244,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Value is the mhpmevent3 and mhpmevent4 selects, comma separated, hex or decimal. Each is
         // eight 4-bit nibbles, one per pipeline domain (BP, IF, DE, DE1, EX, LS, TTCSR, MEM from low
         // to high). mhpmevent4 defaults to 0 (counter 4 idle) if only one value is given.
-        // See BRISC_PERF_COUNTERS.md for the event catalog. Blackhole only.
+        // See tech_reports/PerfCounters/riscv-pmc.md for the event catalog. Blackhole only.
         // Default: disabled
         // Usage: export TT_METAL_PROFILE_RISCV_PMC=0x10110111,0x0A000000
         case EnvVarID::TT_METAL_PROFILE_RISCV_PMC: {
