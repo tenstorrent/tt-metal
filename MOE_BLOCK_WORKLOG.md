@@ -2325,3 +2325,30 @@ calls each, and the head (K3 ring, 300 replays). Before / after outputs were dum
   group without breaking the CB's group alignment. The fabric_all_gather_ttnn copy of the module is unchanged.
 - Perf (K3 ring4 640 traced, device sum, slowest chip, 3 reads each): 1700-1704 us before, 1697-1706 us after. Head
   388-391, dispatch 55, experts + combine 1151, tail 113-116 us: all unchanged.
+
+## GLM-5.3-Flash 2x4 chunk 1280: the fused head builds again; build failures raise (2026-10-28, bh-lb-09)
+Why: the stress draws rd006_glm, d201 and d203 (GLM 2x4, chunk 1280) logged a host TT_FATAL in the fused head's build
+(kernel_lib/mcast/host/mcast.cpp:66, "rotating sender grid needs multiple senders per group"). `MoEBlock` (head
+"auto") then quietly ran the ops head. 2x4 at chunk 1280 is our Galaxy per-chip test shape.
+- Cause: a regression from the llk merge (70ba8c8d940). At 640 rows the planner picks KB 16 for GLM: 8 K steps,
+  2 a shard over TP 4, so `_subsets(1, 11)` = (1, 1). Each x family (x0 / x1) has one owner column. Mcast1D took a
+  rotating sender line of one core and built it as a fixed sender (`rotating()` = more than one sender). The unified
+  `ttnn.Mcast` refuses a rotating grid with one sender a group. K3 640 / 1280 and GLM 5120 have families of 2 to 4
+  columns, so they never hit it.
+- Fix (se_engine3.attach_mcast): a family of one column is `McastFixedSenderConfig(sender_index=column)`, a fixed
+  sender a row. That is what Mcast1D built before the merge. The kernel calls are the same (that column always sends,
+  so it never calls receive). Families of more than one column are unchanged, so the other shapes build the same
+  programs.
+- Loud fallback: `MoEOptions.head_fallback` (default False). A fused head that `FusedHead.fits` allows but that fails
+  to build now logs an error with the reason and raises. True takes the ops head, as before, with a warning naming the
+  option. A shape `FusedHead.fits` refuses still takes the ops head under "auto", and the summary says why. The fused
+  tail had no build fallback, so a failure there already raised. Checked on device with the pre-fix x families
+  patched in: default raises the TT_FATAL; head_fallback=True builds the ops head with the reason in the summary.
+- GLM 2x4 1280 (test_moe_block_traced wall, owners residual, snap -14, 300 replays): fused head 11x10 MT 2 KB 16,
+  PCC min 0.98654 (pre-merge 0.98654), 0 of 286 same-x replays differ bitwise. Replay 1666 us wall, 1644 b2b. The ops
+  head (MOE_HEAD=ops, same run setup): 1825 / 1799 b2b, PCC 0.98655. So the fused head saves 155 us (-8.6%).
+- Unchanged checks (same test, snap -14, 100 replays): K3 ring4 640 PCC 0.99612, 0 of 86 differ, 1717 us b2b. GLM 2x4
+  5120 PCC 0.98686, 0 of 86 differ, 3030 us b2b. Both PCCs match the earlier runs. The planner's owners there are
+  2 / 4 (the soak logs show no one-column family outside GLM 640), so their mcast configs and programs are unchanged.
+- Still open: router_stream's W_r family is a rotating group over the router cores. One router core (RB = CR / TP =
+  1) would hit the same check. No planned layout has one today.
