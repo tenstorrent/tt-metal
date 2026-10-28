@@ -761,6 +761,45 @@ if want u1; then
     fi
 fi
 
+# G1 (2026-10-27): where the gather's time goes inside the op, and 256-key resident pieces as the 5 s default
+# (attention_minimax_h3.measured_resident_k_chunks; Python only). No rebuild: the u3 build. In U3 the busiest cores
+# waited for shards from iteration 3 on, and the last shard landed ~3.74 ms into the kernel against <= 3.14 in U2
+# (alone, the gather takes 3.09 ms traced). The summaries now print each device's gather arrival times.
+#   parity_k256    5 s parity with 256-key pieces (the new default's correctness gate)
+#   traced         dense; tau 1 / 2 / 3 at the new default; tau 1 at 384 keys (SOL_BENCH_CHUNKS=320x384)
+#   profiles       tau 1 (U3 on), tau 1 with U3 off (does the faster stream slow the gather?), tau 3 (light load),
+#                  the gather alone; each summarized on the machine
+if want g1; then
+    if ! python -c "import diffusers.models.transformers.transformer_minimax_h3" > /dev/null 2>&1; then
+        echo "    g1: diffusers lacks transformer_minimax_h3; install the upgrade first (no timings possible)"
+        exit 1
+    fi
+    if run g1_parity_k256 600 pytest "$T" -s -k "4x8 and resident_call_parity and r4736k256"; then
+        S="4x8 and nl2 and 768p_5s and not dense and not agather"
+        TR="SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 SOL_BENCH_MODE=resident SOL_BENCH_PREFIX=off"
+        run g1_trace_dense 900 env SOL_BENCH_TRACE=1 SOL_BENCH_REPS=6 pytest "$B" -s -k "4x8 and nl2 and 768p_5s and dense"
+        for tau in 1.0 2.0 3.0; do
+            run "g1_trace_tau${tau}" 900 env $TR SOL_TAU=$tau pytest "$B" -s -k "$S"
+        done
+        run g1_trace_k384_tau1.0 900 env $TR SOL_TAU=1.0 SOL_BENCH_CHUNKS=320x384 pytest "$B" -s -k "$S"
+    else
+        echo "    g1: 256-key parity failed; timings at 384 keys only"
+        S="4x8 and nl2 and 768p_5s and not dense and not agather"
+        export SOL_BENCH_CHUNKS=320x384
+    fi
+    PR="TT_METAL_DEVICE_PROFILER=1 TT_SOL_STEP_PROFILE=1 SOL_BENCH_PROFILE=1 SOL_BENCH_REPS=1"
+    PS="$PR SOL_BENCH_MODE=resident SOL_BENCH_PREFIX=off"
+    run g1_profile_tau1 900 env $PS SOL_TAU=1.0 pytest "$B" -s -k "$S"
+    summarize_profile g1_profile_tau1_summary g1_profile_tau1
+    run g1_profile_u3off_tau1 900 env $PS SOL_TAU=1.0 TT_SOL_RES_PLAN1=0 TT_SOL_RES_DUMMIES=1 pytest "$B" -s -k "$S"
+    summarize_profile g1_profile_u3off_tau1_summary g1_profile_u3off_tau1
+    run g1_profile_tau3 900 env $PS SOL_TAU=3.0 pytest "$B" -s -k "$S"
+    summarize_profile g1_profile_tau3_summary g1_profile_tau3
+    run g1_profile_agather 900 env $PR pytest "$B" -s -k "4x8 and nl2 and 768p_5s and agather"
+    summarize_profile g1_profile_agather_summary g1_profile_agather
+    unset SOL_BENCH_CHUNKS
+fi
+
 # U3 (2026-10-27): the ring-iteration boundary. The u2 profile: the busiest cores idle 0.5-0.65 ms in 7 gaps of
 # 75-260 us, one per iteration boundary, with the gather's data already there. At each boundary the reader (a) pushed
 # phase-alignment dummies, whose reserves waited for compute to nearly drain the K/V CBs, then (b) read every chunk's

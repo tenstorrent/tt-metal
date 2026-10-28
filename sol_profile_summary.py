@@ -30,7 +30,7 @@ READER_ZONES = [
     "AG_SLAB_WAIT",
     "AG_SIGNAL",
 ]
-OTHER_ZONES = ["RES_DUMMY", "RES_NORM", "WR_RES_OUT", "R_INPUT"]
+OTHER_ZONES = ["RES_DUMMY", "RES_NORM", "WR_RES_OUT", "R_INPUT", "AG_SLAB_WAIT", "AG_SIGNAL"]
 KERNEL_ZONES = ["BRISC-KERNEL", "NCRISC-KERNEL", "TRISC-KERNEL"]
 WANTED = set([COMPUTE_ZONE] + READER_ZONES + OTHER_ZONES + KERNEL_ZONES)
 
@@ -57,7 +57,7 @@ def main(path):
     count = collections.defaultdict(int)
     span = {}  # (run, dev, x, y) -> [first kernel start, last kernel end]
     zspan = {}  # (run, dev, x, y, risc, zone) -> [first start, last end] (compute steps and pooled reads)
-    TIMELINE_ZONES = ("RD_SYNC", "RD_RES_PIECES", "RD_RES_POOLED")
+    TIMELINE_ZONES = ("RD_SYNC", "RD_RES_PIECES", "RD_RES_POOLED", "AG_SIGNAL", "AG_SLAB_WAIT")
     events = collections.defaultdict(list)  # (run, dev, x, y) -> [(start, end, label)]: reader phases, step gaps
     last_step_end = {}  # (run, dev, x, y) -> end of the previous TRISC_0 step
     with open(path) as f:
@@ -140,7 +140,34 @@ def main(path):
         )
         row["pooled_start"] = us(p[0] - span[k][0]) if p else 0.0
         per[k] = row
+
+    # The all-gather's arrivals, from each device's first kernel start: the fused op's signals to the readers
+    # (AG_SIGNAL), or, for the gather alone, the end of each slab wait (AG_SLAB_WAIT: the slab has landed).
+    def print_gather():
+        dev_start = {}
+        for k in cores:
+            dev_start[k[1]] = min(dev_start.get(k[1], span[k][0]), span[k][0])
+        for label in ("AG_SIGNAL", "AG_SLAB_WAIT"):
+            ends = {}
+            for k in cores:
+                ends.setdefault(k[1], []).extend(b for a, b, z in events.get(k, []) if z == label)
+            ends = {d: v for d, v in ends.items() if v}
+            if not ends:
+                continue
+            lasts = sorted((us(max(v) - dev_start[d]), d) for d, v in ends.items())
+            print(
+                "\ngather %s: last end per device, us from the device's first kernel start: %s"
+                % (label, stats([t for t, _ in lasts]))
+            )
+            for t, d in lasts[-3:]:
+                times = sorted(set(round(us(b - dev_start[d]), -1) for b in ends[d]))
+                print("  dev %3s (last %.1f): %s" % (d, t, " ".join("%.0f" % x for x in times)))
+
     compute_cores = [k for k in cores if per[k]["busy"] > 0]
+    if not compute_cores:
+        print("  %d cores with kernels, no compute steps (the gather alone?)" % len(cores))
+        print_gather()
+        return
     print(
         "  %d cores with kernels, %d with compute steps, %d devices"
         % (len(cores), len(compute_cores), len({k[1] for k in cores}))
@@ -211,6 +238,7 @@ def main(path):
         )
         for a, b, label in sorted(events.get(k, [])):
             print("  %8.1f - %8.1f  %7.1f  %s" % (us(a - span[k][0]), us(b - span[k][0]), us(b - a), label))
+    print_gather()
     producers = [k for k in compute_cores if per[k]["RD_GROUP_TX"] > 0]
     if producers:
         dev0 = producers[0][1]
