@@ -727,6 +727,9 @@ sfpi_inline sfpi::vFloat _sfpu_quarter_exp_abs_(sfpi::vFloat x) {
     return y;
 }
 
+// Whether BF16 DEST runs the generated cosh kernel as one call over the whole tile.
+inline constexpr bool cosh_bf16_whole_tile = false;
+
 // t = exp(a); cosh(a) = 0.5 * (t + 1/t)
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, int ITERATIONS>
 inline void calculate_cosh() {
