@@ -64,3 +64,12 @@ One row per run (`--json` writes every metric):
 - Not modelled: loading a cached prefix into the device, and the first decode token.
 
 `--help` on each script lists its options and the other knobs: cache size, resume rounding (chunk, Gemma4's resume granularity, or exact), the extra cost of a chunk that starts mid-chunk, think-time cap, decode rate.
+
+## Mesh designs: SP8 vs two SP4 halves
+
+`agentx_designs.py` replays the corpus against measured step tables of Gemma4 mesh designs (`sp_designs_1028.json`, read by `designs.py`) instead of the calibrated cost model. `NAME:SERVERSxSLOTS` runs SERVERS prefill servers per Galaxy, each with every SERVERS-th session, 1 / SERVERS of the concurrency and the prefix cache, and SLOTS 2k lanes per step. Study and results: [SP4X2_VS_SP8.md](../docs/SP4X2_VS_SP8.md).
+
+```
+./agentx_designs.py --traces <dir>/traces.jsonl --designs sp8_lanes:1x4,sp4_lanes:2x2 --concurrency 32,64,96,128,192 --cache inf,1.7e6 --policy fcfs,pack -j 16
+./agentx_slice.py predict --slice slice.json --design sp4_lanes --slots 2 --split 0/2 --measured half0.json   # one half's replay
+```

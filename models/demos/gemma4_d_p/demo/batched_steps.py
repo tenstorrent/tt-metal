@@ -36,6 +36,13 @@ def build_batched_model(mesh_device, chunk_size, num_slots, capacity, hf_model_i
     )
     # Every lane's metadata up front, before any activation is live (see lane_prefill_metadata).
     model.lane_prefill_metadata(num_slots)
+    view = ttnn.get_memory_view(mesh_device, ttnn.BufferType.DRAM)
+    banks = mesh_device.dram_grid_size().x
+    logger.info(
+        f"[mem] {mesh_config}: {num_slots} slots x {capacity} tokens built; DRAM free per device "
+        f"{view.total_bytes_free_per_bank * banks / 2**30:.2f} GiB (largest contiguous per bank "
+        f"{view.largest_contiguous_bytes_free_per_bank / 2**20:.0f} MiB x {banks} banks)"
+    )
     return mesh_config, model_args, model
 
 

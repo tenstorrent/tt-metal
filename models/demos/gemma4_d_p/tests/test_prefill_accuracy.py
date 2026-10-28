@@ -32,7 +32,7 @@ from models.demos.gemma4_d_p.tests.scripts.likelihood import (
     format_report,
     gpu_final_layer_stream,
 )
-from models.demos.gemma4_d_p.tests.test_factory import parametrize_mesh_with_fabric
+from models.demos.gemma4_d_p.tests.test_factory import parametrize_mesh_with_fabric, sp4_half
 from models.demos.gemma4_d_p.tt.common import weight_cache_identity
 from models.demos.gemma4_d_p.tt.precision import Gemma4Precision
 from models.demos.gemma4_d_p.tt.runners.adapters.gemma4 import Gemma4PrefillAdapter, Gemma4ServiceConfig
@@ -94,10 +94,10 @@ def load_token_ids(adapter, dataset, context_len):
     return metadata["token_ids"]
 
 
-def run_params(adapter):
+def run_params(adapter, mesh_shape=Gemma4ServiceConfig.MESH_SHAPE):
     config = Gemma4ServiceConfig
     return PrefillRunParams(
-        mesh_shape=config.MESH_SHAPE,
+        mesh_shape=mesh_shape,
         num_layers=config.NUM_LAYERS,
         first_layer_idx=0,
         is_first_rank=True,
@@ -109,7 +109,7 @@ def run_params(adapter):
         num_links=2,
         gate_mode_name=adapter.default_gate_mode,
         kv_only_last_layer=True,
-        weight_cache_path=adapter.weight_cache_path(config.MESH_SHAPE),
+        weight_cache_path=adapter.weight_cache_path(mesh_shape),
         use_trace=True,
     )
 
@@ -221,13 +221,16 @@ def check_dataset(runtime, kv_cache, name, dataset, token_ids, context_len, outp
 )
 @pytest.mark.parametrize("context_len", [8192, 16384, 131072, 262144], ids=["8k", "16k", "128k", "256k"])
 def test_prefill_accuracy(mesh_device, context_len, tmp_path, request, monkeypatch):
+    # GEMMA4_TEST_SP4=1: the same gates on one CP4 x TP4 half (SP4 x 2 study).
+    mesh_device = sp4_half(mesh_device)
+    mesh_shape = tuple(mesh_device.shape)
     adapter = Gemma4PrefillAdapter()
     hf_config = adapter.load_hf_config()
-    cache = adapter.weight_cache_path(Gemma4ServiceConfig.MESH_SHAPE)
+    cache = adapter.weight_cache_path(mesh_shape)
     identity = weight_cache_identity(
         adapter.hf_model_id,
         Gemma4ServiceConfig.NUM_LAYERS,
-        Gemma4ServiceConfig.MESH_SHAPE,
+        mesh_shape,
         Gemma4Precision.load(adapter.hf_model_id),
     )
     assert weight_cache_is_complete(cache, **identity), f"Missing or incompatible TT weight cache: {cache}"
@@ -244,7 +247,7 @@ def test_prefill_accuracy(mesh_device, context_len, tmp_path, request, monkeypat
         output_root = Path(summaries) / "gemma4_d_p_prefill_accuracy" / request.node.name
     print(f"Accuracy test results: {output_root}", flush=True)
 
-    params = run_params(adapter)
+    params = run_params(adapter, mesh_shape)
     kv_cache = adapter.allocate_kv_cache(mesh_device=mesh_device, hf_config=hf_config, params=params)
     runtime = adapter.build_runtime(mesh_device=mesh_device, hf_config=hf_config, params=params)
     runtime.compile(kv_cache)

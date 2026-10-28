@@ -14,6 +14,9 @@ reads zeros.
 Env: AGENTX_MODES (comma list of demo modes, default all four), AGENTX_ALIGNS (chunk, resume or both; default chunk),
 DEMO_SLOTS (4), DEMO_CAPACITY (default: the slice's
 largest request, rounded up to 8192), AGENTX_NO_FILL=1 (skip the warm fill).
+
+SP4 x 2 study: GEMMA4_TEST_SP4=1 AGENTX_HALF=k replays every other request from the k-th (0 or 1) on one CP4 x TP4
+half, as one of the two prefill servers of a split Galaxy would see them (agentx_slice.py predict --split k/2).
 """
 
 import itertools
@@ -28,7 +31,7 @@ from loguru import logger
 
 from models.demos.gemma4_d_p.demo import batching_scheduler as bs
 from models.demos.gemma4_d_p.demo.batched_steps import TRACE_REGION_SIZE
-from models.demos.gemma4_d_p.tests.test_factory import parametrize_mesh_with_fabric
+from models.demos.gemma4_d_p.tests.test_factory import parametrize_mesh_with_fabric, sp4_half
 
 
 def _drive(scheduler, reqs, modes, fill_tokens, aligns=("chunk",)):
@@ -77,6 +80,9 @@ def test_agentx_replay(mesh_device, reset_seeds):
     with open(os.environ["AGENTX_SLICE"]) as f:
         sl = json.load(f)
     reqs = sl["requests"]
+    mesh_device = sp4_half(mesh_device)
+    if (half := os.environ.get("AGENTX_HALF")) is not None:
+        reqs = reqs[int(half) :: 2]
     modes = [m.strip() for m in os.environ.get("AGENTX_MODES", ",".join(bs.MODES)).split(",")]
     assert all(m in bs.MODES for m in modes), modes
     aligns = [a.strip() for a in os.environ.get("AGENTX_ALIGNS", "chunk").split(",")]

@@ -3,6 +3,8 @@
 
 """Parallelism configuration for Gemma4 prefill on one Galaxy."""
 
+import os
+
 import ttnn
 
 GALAXY_MESH_SHAPES = ((8, 4), (4, 8))
@@ -10,6 +12,9 @@ GALAXY_MESH_SHAPES = ((8, 4), (4, 8))
 
 def validate_galaxy_mesh(mesh_shape):
     """Require a full 32-device Galaxy with CP rows and TP columns."""
+    # SP4 x 2 study: GEMMA4_ALLOW_SUBMESH=1 also takes a CP4 x TP4 half-Galaxy submesh (one of two model copies).
+    if os.environ.get("GEMMA4_ALLOW_SUBMESH") == "1" and tuple(mesh_shape) == (4, 4):
+        return
     if tuple(mesh_shape) not in GALAXY_MESH_SHAPES:
         raise ValueError(f"Gemma4 P/D requires a Galaxy mesh {GALAXY_MESH_SHAPES}, got {tuple(mesh_shape)}")
 
@@ -22,7 +27,7 @@ class MeshConfig:
         self.device = mesh_device
         self.tp_axis = 1
         self.cp_axis = 0
-        self.total_devices = 32
+        self.total_devices = mesh_device.shape[0] * mesh_device.shape[1]
 
     @property
     def mesh_shape(self):

@@ -23,7 +23,7 @@ from loguru import logger
 import ttnn
 from models.demos.gemma4_d_p.demo.batched_steps import TRACE_REGION_SIZE, StepRunner, build_batched_model
 from models.demos.gemma4_d_p.demo.text_demo_prefill import _hf_model_id, _text_token_stream
-from models.demos.gemma4_d_p.tests.test_factory import parametrize_mesh_with_fabric
+from models.demos.gemma4_d_p.tests.test_factory import parametrize_mesh_with_fabric, sp4_half
 from models.demos.gemma4_d_p.tt.attention import ring_prefill
 from models.demos.gemma4_d_p.tt.attention.ring_prefill import GlobalRingKVCache
 from models.demos.gemma4_d_p.tt.runners.kv_validation import (
@@ -186,6 +186,7 @@ def _prompts(num_lanes, n_tokens, vocab_size):
 def test_batched_kv_matches_unbatched(mesh_device, num_lanes, reset_seeds):
     """Every slot's KV after batched steps vs the same request prefilled alone, chunk 2048. One more slot, which no
     batched step names, must stay bit-identical."""
+    mesh_device = sp4_half(mesh_device)
     chunk = 2048
     deep = os.environ.get("G4B_DEEP") == "1"
     steps = 4 if deep else 2
@@ -383,21 +384,31 @@ _MIXES = {
     "u32k": lambda b: [32768] * b,
     "mixed": lambda b: [2048, 16384, 65536, 131072][:b],
     "deep": lambda b: [131072] * b,
+    "d240k": lambda b: [245760] * b,
 }
+# GEMMA4_PERF_MESH=4x8 runs the step perf as CP4 x TP8 on the whole Galaxy (needs a tensor_cache_bf16_mesh4x8).
+_PERF_MESH = tuple(int(x) for x in os.environ.get("GEMMA4_PERF_MESH", "8x4").split("x"))
 
 
 @torch.no_grad()
-@pytest.mark.timeout(3600)
-@parametrize_mesh_with_fabric([(8, 4)], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
+@pytest.mark.timeout(9000)
+@parametrize_mesh_with_fabric([_PERF_MESH], device_params_extra={"trace_region_size": TRACE_REGION_SIZE})
 def test_batched_step_perf(mesh_device, reset_seeds):
-    """Traced step time of B requests x 2048 tokens vs B unbatched steps at the same prefixes."""
-    chunk_size, lane_counts, capacity = 2048, (1, 2, 4), 262144
+    """Traced step time of B requests x 2048 tokens vs B unbatched steps at the same prefixes.
+
+    SP4 x 2 study knobs: PERF_LANE_COUNTS (default 1,2,4), PERF_MIXES (names of _MIXES), PERF_SKIP_ALONE=1 (skip
+    the unbatched steps), GEMMA4_TEST_SP4=1 (one 4x4 half), GEMMA4_PERF_MESH, GEMMA4_SLIDING_LANES=0."""
+    mesh_device = sp4_half(mesh_device)
+    chunk_size, capacity = 2048, 262144
+    lane_counts = tuple(int(x) for x in os.environ.get("PERF_LANE_COUNTS", "1,2,4").split(","))
+    mixes = {k: v for k, v in _MIXES.items() if k in os.environ.get("PERF_MIXES", "shallow,u32k,mixed,deep").split(",")}
+    skip_alone = os.environ.get("PERF_SKIP_ALONE") == "1"
     num_slots = max(lane_counts)
     mesh_config, model_args, model = build_batched_model(mesh_device, chunk_size, num_slots, capacity)
 
     # Each slot gets its own window of real text, prefilled up to the deepest prefix any mix asks for, so the
     # cached prefixes hold real KV. A measured step rewrites its own rows with the same tokens.
-    deepest = max(max(mix(num_slots)) for mix in _MIXES.values()) + chunk_size
+    deepest = max(max(mix(num_slots)) for mix in mixes.values()) + chunk_size
     stream = _text_token_stream(_hf_model_id())[0]
     stride = min(100_000, (len(stream) - deepest) // max(1, num_slots - 1))
     assert stride > 0, f"token stream ({len(stream)}) too short for {num_slots} windows of {deepest}"
@@ -415,12 +426,12 @@ def test_batched_step_perf(mesh_device, reset_seeds):
             runner.step([lane(slot, start)])
     logger.info(f"[batching] filled {num_slots} slots to {deepest - chunk_size} tokens in {time.time() - t0:.0f}s")
 
-    for mix_name, mix in _MIXES.items():
+    for mix_name, mix in mixes.items():
         for b in lane_counts:
             prefixes = mix(b)
             lanes = [lane(slot, p) for slot, p in enumerate(prefixes)]
             batched_ms = runner.timed(lanes)
-            alone_ms = [runner.timed([single]) for single in lanes] if b > 1 else [batched_ms]
+            alone_ms = [runner.timed([single]) for single in lanes] if b > 1 and not skip_alone else [batched_ms]
             logger.info(
                 f"[batching] PERF chunk={chunk_size} B={b} mix={mix_name} prefixes={prefixes} "
                 f"batched={batched_ms:.1f}ms unbatched_sum={sum(alone_ms):.1f}ms "

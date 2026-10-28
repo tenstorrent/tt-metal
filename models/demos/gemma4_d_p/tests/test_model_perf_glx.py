@@ -14,6 +14,7 @@ margin. ``_measure_traced`` logs both as the ``[traced_perf] context wall and de
 """
 
 import gc
+import os
 
 import pytest
 import torch
@@ -28,10 +29,11 @@ from models.demos.gemma4_d_p.demo.text_demo_prefill import (
     _mesh_config,
     _shared_device_weights,
 )
-from models.demos.gemma4_d_p.tests.test_factory import parametrize_mesh_with_fabric
+from models.demos.gemma4_d_p.tests.test_factory import parametrize_mesh_with_fabric, sp4_half
 
 CONTEXT_LEN = 262144
-CHUNK_SIZES = (2048, 4096, 8192)
+# GEMMA4_PERF_CHUNKS narrows the chunk sizes (SP4 x 2 study).
+CHUNK_SIZES = tuple(int(c) for c in os.environ.get("GEMMA4_PERF_CHUNKS", "2048,4096,8192").split(","))
 # Baselines in ms to reach each context, keyed by (chunk_size, context_k), 1k = 1024 tokens.
 # A context with no baseline is not gated. Wall time to reach 1k is a single chunk, dominated by
 # host staging and dispatch noise, so it has none. Device time is gated at every context.
@@ -96,6 +98,8 @@ def test_model_perf_glx(mesh_device, reset_seeds):
     if unset := [(c, k) for c in CHUNK_SIZES for k in REPORT_CONTEXT_KS if (c, k) not in DEVICE_MS_RANGES]:
         pytest.fail(f"no device-time baseline for (chunk_size, context_k) {unset} (context in units of 1k)")
 
+    # GEMMA4_TEST_SP4=1: a lone 256k prefill on one CP4 x TP4 half; its times run past the 8x4 baselines.
+    mesh_device = sp4_half(mesh_device)
     mesh_config = _mesh_config(mesh_device)
     hf_model_id = _hf_model_id()
 

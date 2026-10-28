@@ -12,6 +12,7 @@ Local layers also apply the sliding window. Every chunk uses this path.
 """
 
 import json
+import os
 from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
@@ -208,7 +209,8 @@ def global_ring_prefill_attention(
         # Determine whether to use the tuned configurations for the ring prefill attention.
         use_tuned_configs = (
             mesh_device.arch() == ttnn.Arch.BLACKHOLE
-            and mesh_config.cp_degree == 8
+            # The table is keyed by the per-chip Q slab, so it also fits a CP4 x TP4 half of the SP4 x 2 study.
+            and (mesh_config.cp_degree == 8 or (mesh_config.cp_degree == 4 and _half_tuned_sdpa()))
             and mesh_config.tp_degree == 4
             and (sdpa_grid.x - 1, sdpa_grid.y) == (11, 10)
             and num_local_kv_heads == 1
@@ -283,6 +285,11 @@ _GLOBAL_Q_CHUNKS = (96, 128)
 
 
 @lru_cache(maxsize=1)
+def _half_tuned_sdpa():
+    """SP4 x 2 study: GEMMA4_HALF_TUNED_SDPA=1 gives a 4x4 half the CP8 tuned global configs (same per-chip shapes)."""
+    return os.environ.get("GEMMA4_ALLOW_SUBMESH") == "1" and os.environ.get("GEMMA4_HALF_TUNED_SDPA", "1") == "1"
+
+
 def _load_global_ring_sdpa_configs():
     """Load the tuned ring SDPA configurations from a JSON file."""
     try:
@@ -324,7 +331,8 @@ def ring_sdpa_chunk_sizes(q_slab_tokens, sliding, num_heads=8, grid=(11, 10), *,
         k_splits = _k_splits(units, grid)
         return q_chunk, 256, k_splits, k_splits == 1 and units <= num_cores
 
-    # Segmented accumulation needs one Q chunk per core.
+    # Segmented accumulation needs one Q chunk per core. A 4x4 half's 8k chunk (2048-row slab) cannot get it: one Q
+    # chunk per core needs q_chunk >= 160, whose circular buffers overflow L1 (SP4 x 2 study).
     for q_chunk in _GLOBAL_Q_CHUNKS:
         if -(-q_slab_tokens // q_chunk) * num_heads <= num_cores:
             return q_chunk, 256, 1, True

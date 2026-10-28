@@ -26,8 +26,10 @@ def is_global_layer_by_index(layer_idx):
 
 
 def validate_params(params):
+    # SP4 x 2 study: GEMMA4_ALLOW_SUBMESH=1 also takes one CP4 x TP4 half.
+    half = os.environ.get("GEMMA4_ALLOW_SUBMESH") == "1" and tuple(params.mesh_shape) == (4, 4)
     expected = {
-        "mesh_shape": Gemma4ServiceConfig.MESH_SHAPE,
+        "mesh_shape": (4, 4) if half else Gemma4ServiceConfig.MESH_SHAPE,
         "num_layers": Gemma4ServiceConfig.NUM_LAYERS,
         "first_layer_idx": 0,
         "is_first_rank": True,
@@ -78,7 +80,9 @@ class Gemma4PrefillAdapter(PrefillModelAdapter):
         return os.getenv("PREFILL_TTNN_CACHE") or os.getenv("TT_CACHE_PATH")
 
     def weight_cache_path(self, mesh_shape):
-        if tuple(mesh_shape) != Gemma4ServiceConfig.MESH_SHAPE:
+        # SP4 x 2 study: GEMMA4_ALLOW_SUBMESH=1 also takes one 4x4 half.
+        half = os.environ.get("GEMMA4_ALLOW_SUBMESH") == "1" and tuple(mesh_shape) == (4, 4)
+        if tuple(mesh_shape) != Gemma4ServiceConfig.MESH_SHAPE and not half:
             raise ValueError("Gemma4 prefill requires an 8x4 mesh")
         import ttnn
         from models.demos.gemma4_d_p.tt.model_config import resolve_cache_dir_from_tt_cache_path

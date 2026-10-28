@@ -32,6 +32,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from agentx_sim import load_sessions, pct, resume_step, run  # noqa: E402
 from cost_model import DEFAULT_DATA, Model  # noqa: E402
+from designs import DEFAULT_DESIGNS, DesignModel  # noqa: E402
 
 CHUNK = 2048
 # mode -> (chunk width, token budget per step)
@@ -167,12 +168,26 @@ def main():
     ap.add_argument("--decode-tps", type=float, default=100.0)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--align", default="chunk", help="chunk, resume or chunk,resume: how the demo rounds a resume")
+    ap.add_argument(
+        "--design",
+        help="price the batched mode with this measured design (designs.py), e.g. sp4_lanes, instead of the calibrated "
+        "8x4 cost model; the serial modes are not priced",
+    )
+    ap.add_argument("--designs-file", default=DEFAULT_DESIGNS)
+    ap.add_argument("--slots", type=int, default=4, help="batched lanes per step (the replay's DEMO_SLOTS)")
+    ap.add_argument(
+        "--split", help="K/N: only every N-th request from the K-th, as agentx_replay.py's AGENTX_HALF replays one half"
+    )
     a = ap.parse_args()
     if a.cmd == "build":
         return build(a)
-    model = Model.load(a.data)
+    MODES["batched"] = (CHUNK, CHUNK * a.slots)
+    model = DesignModel.load(a.design, a.designs_file) if a.design else Model.load(a.data)
     with open(a.slice) as f:
         reqs = json.load(f)["requests"]
+    if a.split:
+        k, n = (int(x) for x in a.split.split("/"))
+        reqs = reqs[k::n]
     meas = {}
     if a.measured:
         with open(a.measured) as f:
@@ -186,7 +201,7 @@ def main():
             else ""
         )
     )
-    for align, mode in [(al, m) for al in a.align.split(",") for m in MODES]:
+    for align, mode in [(al, m) for al in a.align.split(",") for m in MODES if not a.design or m == "batched"]:
         st, fi, busy, steps = predict(model, reqs, mode, align)
         mode = mode if align == "chunk" else f"{mode} (resume)"
         p = summary(reqs, st, fi)

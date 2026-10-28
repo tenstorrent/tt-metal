@@ -14,6 +14,7 @@ import pytest
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from agentx_sim import BLOCK, PrefixCache, json_record, parse_config, parse_sessions, run, ttft_record  # noqa: E402
 from cost_model import Model  # noqa: E402
+from designs import DesignModel  # noqa: E402
 from plot_ttft_cdf import labels, load_runs  # noqa: E402
 
 
@@ -229,3 +230,44 @@ def test_ttft_out_records_each_request_and_filters_by_knob(tmp_path):
         "8k",
         "2k x4 lanes, shortest-first",
     ]
+
+
+# ── Measured mesh designs (designs.py, agentx_designs.py) ──────────────────────
+
+
+def _design_file(tmp_path, steps):
+    path = tmp_path / "designs.json"
+    path.write_text(json.dumps({"host_ms": {"1": 4.0, "2": 6.0}, "gap_ms": 1.0, "designs": {"d": {"steps": steps}}}))
+    return str(path)
+
+
+def test_design_fit_reproduces_a_linear_step_table(tmp_path):
+    """F[n] + slope * sum(prefix), slope 0.25 ms per 1k prefix tokens per lane: F[1] = 50, F[2] = 80 ms."""
+    steps = {"1": {"2048": 50.5, "131072": 82.0}, "2": {"2048": 81.0, "131072": 144.0}}
+    model = DesignModel.load("d", _design_file(tmp_path, steps))
+    assert model.residuals(steps) == {1: {2048: 0.0, 131072: 0.0}, 2: {2048: 0.0, 131072: 0.0}}
+    # A mixed-prefix step prices each lane at its own depth, plus the 2-lane host time; the gap is separate.
+    busy, gap = model.step_s([(2048, 0), (2048, 131072)], 2048, 4096)
+    assert busy == pytest.approx((80.0 + 32.0 + 6.0) / 1e3) and gap == pytest.approx(0.001)
+    with pytest.raises(ValueError, match="no measured step with 3 lanes"):
+        model.step_s([(2048, 0)] * 3, 2048, 6144)
+
+
+def test_two_servers_split_sessions_and_the_cache(tmp_path, monkeypatch):
+    """NAME:2xN runs agentx_sim.run once per server: every other session, half the concurrency and of the cache."""
+    import agentx_designs
+    from agentx_sim import Stat
+
+    calls = []
+
+    def fake_run(model, sessions, C, budget, policy, concurrency, *, cache_tokens=None, **_):
+        calls.append(([s[0]["hashes"][0] for s in sessions], budget, concurrency, cache_tokens))
+        stats = [Stat(0.0, 1.0, BLOCK, 0, 0, BLOCK, 0) for _ in sessions]
+        return {"_stats": stats, "makespan_s": 1.0, "ss_useful_ideal_tok_s": 10.0 * len(sessions)}
+
+    monkeypatch.setattr(agentx_designs.agentx_sim, "run", fake_run)
+    path = _design_file(tmp_path, {"1": {"2048": 50.0}, "2": {"2048": 80.0}})
+    agentx_designs.G.update(designs=path, decode_tps=100.0, sessions=[[_node(BLOCK, [s])] for s in range(5)])
+    r = agentx_designs.run_spec(("d:2x2", 8, "2e6", "fcfs", 60.0))
+    assert calls == [([0, 2, 4], 4096, 4, 1_000_000), ([1, 3], 4096, 4, 1_000_000)]
+    assert r["requests"] == 5 and r["ss_useful_tok_s"] == 50.0

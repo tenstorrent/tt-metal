@@ -271,7 +271,8 @@ def read_cache_tensor(tensor, slot_id, real_len, staging=None, chunk_size=None):
     several times the transfer itself and holds the GIL while it frees.
     """
     staging = {} if staging is None else staging
-    cp, tp = Gemma4ServiceConfig.MESH_SHAPE
+    # CP rows x TP columns of the mesh the cache lives on (8x4, or a 4x4 half in the SP4 x 2 study).
+    cp, tp = tuple(tensor.device().shape)
     chunk_size = chunk_size or Gemma4ServiceConfig.CHUNK_SIZE
     local_chunk = chunk_size // cp
     if real_len % chunk_size:

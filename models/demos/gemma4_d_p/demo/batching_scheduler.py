@@ -18,6 +18,7 @@ take each request's own chunk fidelity: HiFi2 for 2k lanes, LoFi for serial 4k a
 
 import collections
 import itertools
+import os
 import queue
 import threading
 import time
@@ -237,6 +238,10 @@ def start_scheduler(mesh_device, num_slots, capacity, resume=False):
     # (StepRunner.always_lanes), and the widest layout compiles first, so lazily created all-gather semaphores land
     # above every layout's SDPA buffers.
     layouts = step_layouts(num_slots)
+    if os.environ.get("DEMO_BATCHED_ONLY") == "1":
+        # Batched mode only (SP4 x 2 study replays): 2k layouts alone, so steps take the same path as
+        # test_batched_step_perf's and no 8k layout has to fit a 4x4 half.
+        layouts = [layout for layout in layouts if set(layout) == {CHUNK}]
     logger.info(f"[demo] compiling and capturing {len(layouts)} step traces")
     runner.capture_all([_zero_lanes(layout) for layout in layouts])
     # One untimed replay of every trace, so no request pays a trace's first replay.

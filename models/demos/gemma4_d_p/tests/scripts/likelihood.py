@@ -27,7 +27,7 @@ from safetensors import safe_open
 from safetensors.torch import save_file
 
 import ttnn
-from models.demos.gemma4_d_p.tt.runners.adapters.gemma4 import Gemma4PrefillAdapter, Gemma4ServiceConfig
+from models.demos.gemma4_d_p.tt.runners.adapters.gemma4 import Gemma4PrefillAdapter
 
 HIDDEN_SAMPLES = "hidden_samples.safetensors"
 SAMPLE_STRIDE = 16
@@ -50,7 +50,7 @@ def next_tokens(token_ids, positions):
 
 def read_chunk_hidden(output):
     """Gather one chunk's final hidden states from the traced output, in position order."""
-    cp, tp = Gemma4ServiceConfig.MESH_SHAPE
+    cp, tp = tuple(output.device().shape)  # 8x4, or a 4x4 half in the SP4 x 2 study
     host = ttnn.from_device(output, blocking=True)
     # The output is all-gathered across TP, so one column of the mesh holds each CP rank's rows once.
     shards = ttnn.get_device_tensors(host)

@@ -3,6 +3,7 @@
 
 """Gemma4 context-parallel prefill attention with local and packed global ring caches."""
 
+import os
 import ttnn
 
 from models.demos.gemma4_d_p.tt.ccl import ccl_reduce_scatter_rows
@@ -369,7 +370,9 @@ class Gemma4Attention:
             stacked_k.deallocate(True)
             stacked_v.deallocate(True)
 
-        if not is_global and lanes.vector is not None and len(set(rows)) == 1:
+        # A/B knob: GEMMA4_SLIDING_LANES=0 runs one sliding ring SDPA per request instead of the lanes call.
+        use_lanes = os.environ.get("GEMMA4_SLIDING_LANES", "1") != "0"
+        if use_lanes and not is_global and lanes.vector is not None and len(set(rows)) == 1:
             # One sliding SDPA for every request: stacked Q in, stacked output out, no per-request slices or concat.
             tt_sdpa = self._attend(tt_q, lanes.vector, 0, num_local_kv_heads)
             tt_q.deallocate(True)

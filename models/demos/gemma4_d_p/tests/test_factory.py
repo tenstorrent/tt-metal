@@ -3,6 +3,8 @@
 
 """Galaxy prefill test helpers."""
 
+import os
+
 import pytest
 
 import ttnn
@@ -41,7 +43,9 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
             pytest.param(
                 shape,
                 {
-                    "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                    # GEMMA4_FABRIC=FABRIC_1D for a Galaxy whose ring (wrap-around) links do not train (pair it with
+                    # TT_MESH_GRAPH_DESC_PATH=.../single_bh_galaxy_mesh_graph_descriptor.textproto).
+                    "fabric_config": getattr(ttnn.FabricConfig, os.environ.get("GEMMA4_FABRIC", "FABRIC_1D_RING")),
                     "fabric_router_config": _fabric_router_config(),
                     **dict(device_params_extra or {}),
                 },
@@ -49,3 +53,19 @@ def parametrize_mesh_with_fabric(mesh_shapes=None, device_params_extra=None):
             )
         )
     return pytest.mark.parametrize("mesh_device, device_params", params, indirect=True)
+
+
+_HALVES = []  # keeps every half's submesh alive for the test's lifetime
+
+
+def sp4_half(mesh_device):
+    """SP4 x 2 study (GEMMA4_TEST_SP4=1): one CP4 x TP4 half of the 8x4 Galaxy instead of the whole mesh.
+
+    The Galaxy splits into two 4x4 submeshes that each run a full model copy; a single-model test uses the first.
+    Needs a TT_CACHE_PATH holding a tensor_cache_bf16_mesh4x4 cache. Otherwise returns mesh_device unchanged."""
+    if os.environ.get("GEMMA4_TEST_SP4") != "1":
+        return mesh_device
+    os.environ["GEMMA4_ALLOW_SUBMESH"] = "1"
+    halves = mesh_device.create_submeshes(ttnn.MeshShape(4, 4))
+    _HALVES.append(halves)
+    return halves[0]
