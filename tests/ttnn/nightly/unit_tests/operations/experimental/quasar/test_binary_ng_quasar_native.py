@@ -20,11 +20,11 @@ binary_ng_utils.cpp): 4 compute threads; where the operands move over the NoC, a
 thread and the writer threads that the 6 DM cores leave, and one of each where they are borrowed. With every
 operand in L1: batches of 8 tiles in the DM kernels, in rings of 16 entries per thread; in the compute, where each
 compute thread owns one tile counter of each ring, 4 tiles on the SFPU kernel (2 in fp32) and 8 on the FPU kernel at
-1,1,1 only. Beside a DRAM operand: batches of 1, in rings of 2 entries per thread. The tests in this process use DRAM
-tensors. Above ring stride 1 only one tile of each FPU-kernel compute batch comes out right, which is why the rule
-does not batch the FPU kernel there. A set batch still runs, so each test predicts its output from its
-configuration: the tests in this process from the invocation's knobs, the arms from their own. A test that predicts
-wrong output is a strict expected failure, and it passes only on exactly the predicted wrong tiles.
+1,1,1 only. Beside a DRAM operand: batches of 1, in rings of 2 entries per thread, except where every operand is
+interleaved and a compute thread draws 4 tiles or more. The tests in this process use DRAM tensors. Each test
+predicts its output from its configuration: the tests in this process from the invocation's knobs, the arms from
+their own. A test that predicts wrong output is a strict expected failure, and it passes only on exactly the
+predicted wrong tiles.
 """
 
 import json
@@ -96,7 +96,7 @@ def _resolve(knobs, path, sfpu=False):
     """(R, C, W, compute batch) of a program run with `knobs`, a mapping of TTNN_QSR_* names to values.
 
     `path` is _NOC_L1, _NOC_DRAM, _BORROWED or one from _path. A borrowed pair of inputs or a borrowed output
-    runs one reader or writer thread whatever is set. Beside a DRAM operand the rule batches nothing. `sfpu` is
+    runs one reader or writer thread whatever is set. Beside a DRAM operand it models batch 1. `sfpu` is
     True for an op on the SFPU kernel, whose rule batch is smaller. An empty value counts as unset, as in
     native_tuning().
     """
@@ -127,27 +127,9 @@ def _route(case, knobs):
     return r + w, len(split)
 
 
+# No tile is wrong: the binary unpack steps a batch by the ring stride (#61774). Kept so a new defect can be modeled.
 def _batched_wrong_tiles(tiles_per_cluster, knobs, path, sfpu=False):
-    """The output tiles that compute batching leaves wrong.
-
-    tiles_per_cluster lists each cluster's tile count. Above output ring stride 1 (stride max(C, W)), only one
-    tile of each FPU-kernel compute batch comes out right, in a full batch and in a short one: its binary unpack
-    reads tile p of a batch p entries on, not p strides on. The SFPU kernel copies each operand through the
-    single-operand unpack, which strides, so its batches are exact. Each compute thread's share
-    runs in full batches and one short batch, and thread t takes one extra tile while t < tiles % C. The tests
-    compare the count tile for tile. A borrowed shard that the compute threads do not divide sends its last
-    tiles through the tail rings, which this does not model; test_native_prediction_tables_cover_their_cases
-    keeps such shards out of the predicted cases.
-    """
-    _, c, w, batch = _resolve(knobs, path, sfpu)
-    if sfpu or max(c, w) == 1:
-        return 0
-    landed = 0
-    for tiles in tiles_per_cluster:
-        for thread in range(c):
-            share = tiles // c + (thread < tiles % c)
-            landed += -(-share // batch)
-    return sum(tiles_per_cluster) - landed
+    return 0
 
 
 def _noc_split(tiles, clusters=_CLUSTERS):
@@ -540,7 +522,7 @@ _DM_BATCH_ARMS = [(4, 4, 2), (1, 4, 1)]
 def test_native_dm_batch_above_one_counter_is_bit_exact(rcw):
     """A DM batch of 8 on a role that owns more than one tile counter must stay bit-exact.
 
-    The batch is set: the rule does not batch beside these DRAM tensors. The rule's depth for it, 16, is the
+    The batch is set by its knob. The rule's depth for it, 16, is the
     smallest legal one: a batch occupies n consecutive slots and the ring wraps only afterwards, so the
     factory demands entries_per_thread >= 2n and entries_per_thread % n == 0. The compute batch is 1, so the
     output stays exact at ring stride 4.
@@ -570,7 +552,7 @@ def test_native_tiles_per_cycle_is_bit_exact(dm_batch):
 
     The compute kernel splits a thread's share into full chunks of num_tiles_per_cycle and one remainder
     chunk; a truncating divide there once dropped the tail and hung. The tile counts above reach every
-    branch of that split. Both batches are set: the rule does not batch beside these DRAM tensors.
+    branch of that split. Both batches are set by their knobs.
     both-batches measured 1.81x the throughput of no batching at 1,1,1 on craq-sim (marginal cycles per
     tile), which models no DRAM time.
     """
@@ -580,17 +562,13 @@ def test_native_tiles_per_cycle_is_bit_exact(dm_batch):
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
-@_BATCHED_XFAIL
 def test_native_tiles_per_cycle_above_stride_one():
     """With the compute batch set to 8 and every other knob unset, the NoC path runs the rule's 4,4,2 and both
-    batches of 8 in L1, and its output is wrong until compute batching above ring stride 1 is fixed. The rule itself
-    runs the FPU kernel at 1 there, which the rule cases of the L1 tests check.
+    batches of 8 in L1, and its output is exact: the binary unpack steps a batch by the ring stride (#61774).
 
     L1-interleaved tensors of 288 and 2080 tiles hold 9 and 65 tiles per bank, which 4 does not divide, so they
     take the NoC path. The ring stride is 4 on every DFB. 288 tiles give each compute thread two or three
-    tiles, one short batch; 2080 give it sixteen or seventeen, two full batches of 8 and a tail. A refusal, a
-    hang, a fallback or wrong output without the predicted count fails this test instead of passing
-    as an expected failure, and so does an exact output: the batch then does not run.
+    tiles, one short batch; 2080 give it sixteen or seventeen, two full batches of 8 and a tail.
     """
     knobs = {"TTNN_QSR_TILES_PER_CYCLE": "8"}
     cases = [_anchored((f"l1_{t}", "l1", None, None, (32, t * 32)), None, "") for t in (288, 2080)]
@@ -598,15 +576,22 @@ def test_native_tiles_per_cycle_above_stride_one():
     _check_arm(p, "a compute batch of 8 on the L1 NoC path", expect_wrong=_expect_wrong(cases, knobs))
 
 
-@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
-def test_native_rule_does_not_batch_beside_dram():
-    """With every knob unset and an operand in DRAM, the rule batches nothing, so the output is exact.
+# Batching beside DRAM only regroups the work, so the output must stay exact. The ragged counts give threads with no
+# tiles, two core groups and short last batches; 2080 tiles batch 8 per compute thread at 4,4,2.
+_DRAM_BATCH_ARMS = [
+    ("rule", {}),
+    ("off", {"TTNN_QSR_DRAM_BATCH": "0"}),
+    ("R4C4W1", _threads(4, 4, 1)),
+    ("R1C1W1", _threads(1, 1, 1)),
+]
 
-    The rule keeps the legacy reader's one tile per barrier beside DRAM, and at compute batch 1 the batching
-    defect cannot occur. The shapes are the ones the L1 test above loses tiles on at a compute batch of 8.
-    """
-    p = _run_arm([288, 2080], knobs={}, timeout=900)
-    _check_arm(p, "the rule beside DRAM")
+
+@pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
+@pytest.mark.parametrize("arm", _DRAM_BATCH_ARMS, ids=[a[0] for a in _DRAM_BATCH_ARMS])
+def test_native_dram_batch_is_bit_exact(arm):
+    label, knobs = arm
+    p = _run_arm(_RAGGED_TILE_COUNTS + [2080], knobs=knobs, timeout=1200)
+    _check_arm(p, f"batching beside DRAM, {label}")
 
 
 # Each guard, the knob values that trip it, the text its TT_FATAL carries, and optionally the _SHARD_ARM_SRC
@@ -1186,14 +1171,9 @@ _BATCHED_BORROWED_CASES = [
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
-@_BATCHED_XFAIL
 def test_native_borrowed_tiles_per_cycle_above_stride_one():
     """With the compute batch set to 8 and every other knob unset, a borrowed shard runs the rule's 1,4,1 at a
-    compute batch of 8, and its output is wrong until compute batching above ring stride 1 is fixed. The rule itself
-    runs the FPU kernel at 1 there.
-
-    This is the test that becomes a plain pass when that fix lands. An exact output fails it too: the batch
-    then does not run.
+    compute batch of 8, and its output is exact: the binary unpack steps a batch by the ring stride (#61774).
     """
     knobs = {"TTNN_QSR_TILES_PER_CYCLE": "8"}
     p = _run_shard_arm(_BATCHED_BORROWED_SHARDS, expect="qsr", timeout=900, knobs=knobs)
@@ -1754,7 +1734,7 @@ _MIXED_PAD_SLOTS = {
 }
 
 # R1C4W1-n1 puts one reader thread on four tile counters, so the shard walk takes the counter-major steps.
-# Beside DRAM the rule batches nothing, so rule-dm8-n1 sets a DM batch of 8 for the cases with a DRAM operand.
+# Beside DRAM the rule batches only all-interleaved operands, so rule-dm8-n1 sets a DM batch of 8 for these cases.
 _MIXED_CONFIGS = {
     "rule-n1": _COMPUTE_BATCH_1,
     "rule-dm8-n1": {**_DM_BATCH_8, **_COMPUTE_BATCH_1},
@@ -2076,7 +2056,7 @@ def test_native_rule_follows_a_set_compute_count():
 
 # Each case: the knobs, the values each program shape's part of the settings line must name with their
 # sources, and whether the output must be exact. The line gives five shapes: every operand over the NoC and in
-# L1, the same beside a DRAM operand (where the rule batches nothing), the output borrowed beside an input that
+# L1, the same beside a DRAM operand (batch 1 in the line), the output borrowed beside an input that
 # moves, the inputs borrowed beside an output that moves, all of them borrowed. With no knob set, the rule runs the
 # FPU kernel at batch 1 above ring stride 1, and the SFPU kernel at 4 and 2. C = 1 alone gives 1,1,1 by the
 # rule. R = 2 beside C = 1 makes each compute thread own two tile counters of the input rings, so the rule's
