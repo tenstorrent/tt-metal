@@ -106,6 +106,10 @@ def test_ttsampling_reset_params_scale_logprobs_per_row(monkeypatch, expect_erro
         sampling.reset_params(**{**params, "log_probs_enable_temperature": [True]})
     assert not copies
 
+    sampling.reset_params(**{**params, "log_probs_enable_temperature": True})
+    expected_scalar = torch.tensor([1 / 0.7, 1 / 0.7, 1.0, 1 / 0.5]).reshape(1, 1, -1, 1).to(torch.bfloat16)
+    torch.testing.assert_close(copies["_scale_logprobs"], expected_scalar, rtol=0, atol=0)
+
     sampling.reset_params(**params)
     expected = torch.tensor([1 / 0.7, 1.0, 1.0, 1.0]).reshape(1, 1, -1, 1).to(torch.bfloat16)
     torch.testing.assert_close(copies["_scale_logprobs"], expected, rtol=0, atol=0)
