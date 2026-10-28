@@ -848,11 +848,12 @@ class Transformer(LightweightModule):
                 tt_out = ttnn.reshape(tt_out, ttnn.Shape([1, 1, padded_batch_size, 1]))
             return self.concat_host_output(tt_out, is_log_probs)[0, 0, :B, 0]
         if self.args.num_devices > 1:
-            tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0]).float()
+            tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
         else:
-            tt_out = ttnn.to_torch(tt_out).float()
-        # B is the serving limit; a bucketed decode can return fewer rows.
-        tt_out = tt_out[:, :, :B, : self.vocab_size].reshape(-1, S, self.vocab_size)
+            tt_out = ttnn.to_torch(tt_out)
+        # B is the serving limit; a bucketed decode can return fewer rows. Slice before the float copy: the tile-padded
+        # logits are 32 rows, and converting only B of them saves host time on every host-sampled decode step.
+        tt_out = tt_out[:, :, :B, : self.vocab_size].float().reshape(-1, S, self.vocab_size)
         return tt_out
 
     def ttnn_prefill_forward(
