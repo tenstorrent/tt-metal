@@ -54,6 +54,15 @@ pytest models/demos/multimodal/d1_3b/tests/test_model.py -s
 pytest models/demos/multimodal/d1_3b/tests/test_perf.py -s
 ```
 
+### Interactive UI
+
+A one-page web UI (type a state or drop an image, ask a typed question, see every option's probability) lives in
+[`ui/`](ui/README.md):
+
+```bash
+MESH_DEVICE=N150 ./python_env/bin/python models/demos/multimodal/d1_3b/ui/server.py  # then open http://<host>:8000
+```
+
 ### Regenerating the golden reference
 
 The committed `tests/reference/decision_reference.json` is the HF model's fp32 output
