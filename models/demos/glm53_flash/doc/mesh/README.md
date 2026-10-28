@@ -1298,3 +1298,26 @@ staging alone died at chunk 19, but the slabs cost ~6x on the prefill (40-47 s p
 run hit the 90-minute bound inside request 1; neither is a default. The served 1 M profile stays at two of four concurrent 1 M
 requests completing; the next levers are a bfp8 latent cache (halves the 11.7 GiB of caches), the regions MoE output pair (306 MB)
 and a 4096-token served chunk, and honest admission (2 concurrent at 1 M) until one lands.
+
+## 2026-10-28 served integration (`arg/glm53_served`: APC + image/video + speculative decode on the base)
+
+21:35 `arg/glm53_served` = the base tip (25806fdef6e: today's defaults, the continued-chunk warm-up, the sealed program cache) +
+the feature-only commits of `arg/glm53_served_apc` (9), `arg/glm53_served_image` (7) and `arg/glm53_served_spec_fix` (7), picked
+in that order with the base's versions kept for every ported hunk (the auto ladder, the fixed-width page-table views, the every-slot
+continued-chunk walk); APC x spec are declared mutually exclusive per launch (the verify path records no content / snapshots).
+Host suites (one process per serving suite): the 2026-10-28 default flips had left 24 host tests red on the base itself (the fakes
+had no `rewind_user`, the ladder / roofline / dispatch-guard tests encoded the pre-flip defaults): fixed on the base (46d04815672)
+and on this branch; all 23 host suites green (394 tests). Device (8x4, 4 layers): image + video (f97) and spec (f96) pass; the APC
+test's footprint check (`GLM53_VLLM_APC_ALLOC_CHECK=1`) caught a real bug of the spec convention: keeping only `(logits, ids)`
+of the decode capture freed the captured step's streams output under the live trace (-64 KiB per bank right after the baseline;
+on the spec branch's own runs a silent hole in the trace's address space). Fixed (1f2f4340629: every captured output pinned).
+45-layer served smokes: text on the base tree (1m profile, 4 requests): boot 1066 s (the full ladder + 1317 sealed programs),
+logits gate PASS on both references, coherent, decode 73.1 ms per step = 13.7 tok/s per user, traced 128-token TTFT 120-145 ms;
+APC on its branch (1m profile): logits gate + coherence PASS, the planner has no DRAM for a device snapshot ring at 1 M (spare
+124 MiB per chip vs 141 MiB per entry) so the ring lives in the host store (1 entry per slot). The spec smoke needs the 128k
+profile with `max_num_seqs=8` (4 x 1 M replicated caches do not fit; 28 users per row leave no draft rows at K=3). Smoke
+additions: stage e (the sample image + its 4-frame clip through `/v1/chat/completions`, PyAV mp4), `NEEDLE_ROUNDS=2` (round 2 of
+the 64 K needles = the served prefix-cache hit at 45 layers), frozen snapshots get `bringup/references` from the base worktree
+(untracked: the logits gate had no reference on a snapshot). Queued on `wt_frozen98`: the APC test with the default (16 K) and a
+32-token hit alignment (an unaligned restore under the sealed cache decides whether option 2 is a default flip), then the three
+45-layer smokes (text a-e, spec, APC with the repeated needles).
