@@ -287,13 +287,9 @@ prep_ubuntu_system() {
     # Also v23
     echo "deb [signed-by=$llvm_keyring] https://apt.llvm.org/$OS_CODENAME/ llvm-toolchain-$OS_CODENAME-23 main" | tee /etc/apt/sources.list.d/llvm-23.list
 
-    # apt.llvm.org ships some packages (e.g. libc++1, libc++abi1) under the same
-    # name in every major-version repo, so without a pin apt resolves them to the
-    # highest available version across all three repos and breaks libc++-20-dev's
-    # exact-version dependency ("held broken packages"). Pin the v23 repo below
-    # the default (500) priority of v17/v20 so ambiguous shared packages still
-    # resolve from v20; packages that only exist in v23 (clang-tidy-23, etc.)
-    # still install fine on request regardless of this pin.
+    # Without this, apt resolves shared package names (e.g. libc++1) to the
+    # highest major version across repos, breaking libc++-20-dev ("held broken
+    # packages"). Exact-name packages like clang-tidy-23 still install fine.
     cat <<EOF | tee /etc/apt/preferences.d/llvm-23
 Package: *
 Pin: release n=llvm-toolchain-$OS_CODENAME-23
@@ -417,9 +413,7 @@ install_llvm() {
         $TEMP_DIR/llvm.sh 20
     fi
 
-    # clang-tidy-23 only (not the full llvm-23 toolchain): the repo is already
-    # registered and pinned below v17/v20 in prep_ubuntu_system, so this is an
-    # exact-package install, same approach as the CI build image.
+    # clang-tidy-23 only, not the full llvm-23 toolchain.
     echo "[INFO] Checking if clang-tidy-23 is already installed..."
     if command -v clang-tidy-23 &> /dev/null; then
         echo "[INFO] clang-tidy-23 is already installed. Skipping installation."
