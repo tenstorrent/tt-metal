@@ -2,13 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""The decode step's SDPA on the chip's own heads (``V41_DECODE_SDPA=local``, ``tt/v41/batch_decode.py::_attention``) against the served path (the queries all-gathered over TP, ``sparse_sdpa`` over all 64 heads on
+"""The decode step's SDPA on the chip's own heads (``V41_DECODE_SDPA=local``,
+``tt/v41/batch_decode.py::_attention``) against the served path (the queries all-gathered over TP,
+``sparse_sdpa`` over all 64 heads on
 every chip, the chip's groups of the output kept with ``mesh_partition``).
 
-No weights, the decode tile: ``V41_SL_TRIALS`` random bf16 ``[1, 1, 32, 16 * 512]`` query tiles a chip (every chip its
-own), random RoPE tables, a random KV cache in both served formats (BF16 and the pool's scaled FP8), index rows in the
-c1 pattern (one live row a chip, the others sentinels) and the 32-row pattern (every row live, varying counts), the
-local path's ``[1, 2, 32, 4096]`` output compared bit for bit with the gather path's on every chip, then each path
+No weights, the decode tile: ``V41_SL_TRIALS`` random bf16 ``[1, 1, 32, 16 * 512]`` query tiles a chip (every
+chip its
+own), random RoPE tables, a random KV cache in both served formats (BF16 and the pool's scaled FP8), index
+rows in the
+c1 pattern (one live row a chip, the others sentinels) and the 32-row pattern (every row live, varying
+counts), the
+local path's ``[1, 2, 32, 4096]`` output compared bit for bit with the gather path's on every chip, then each
+path
 under trace (``V41_SL_REPLAYS`` replays of ``V41_SL_CALLS`` calls) for the per-layer device time. Results:
 ``V41_SL_RESULT``, ``V41_SL_OUT``."""
 
@@ -115,8 +121,10 @@ def test_v41_sdpa_local(mesh_device, device_params):
         return packed
 
     def index_rows(pattern: str, seed: int):
-        """``[1, 1, 32, width]`` uint32 per mesh row (the TP chips share it, as the pool's): ``c1`` one live row (a
-        random one), the rest sentinels; ``full`` every row live with a random valid count (a sentinel tail)."""
+        """``[1, 1, 32, width]`` uint32 per mesh row (the TP chips share it, as the pool's): ``c1`` one live
+        row (a
+        random one), the rest sentinels; ``full`` every row live with a random valid count (a sentinel
+        tail)."""
         gen = torch.Generator().manual_seed(seed)
         rows = torch.full((1, sp, ROWS, width), SENTINEL, dtype=torch.int64)
         for mesh_row in range(sp):
@@ -205,6 +213,39 @@ def test_v41_sdpa_local(mesh_device, device_params):
                 mesh_device, lambda: fn(q, cos, sin, caches[fmt.name], rows, fmt), calls, replays
             )
             logger.info(f"sdpa local traced {name} {pattern}: {timing[f'{name}_{pattern}']} us a layer")
+        if pattern == "c1" and os.environ.get("V41_SL_SPLIT", "0") == "1":
+            # the local chain's pieces alone: the SDPA kernel on the chip's 16 + 16 zero
+            # heads over the live row's rows, the two head ops, each under its own trace
+            qh = q_heads(q, cos, sin, trans, local_heads, rope_dim, out_heads=sdpa_heads)
+            sdpa = lambda: ttnn.transformer.sparse_sdpa(
+                qh,
+                caches[fmt.name],
+                rows,
+                head_dim,
+                kv_format=fmt.sparse_sdpa_format,
+                scale=scale,
+                k_chunk_size=next(c for c in (128, 64, 32) if width % c == 0),
+                attention_sink=sink_local,
+            )
+            timing["local_c1_sdpa"] = _trace_us(mesh_device, sdpa, calls, replays)
+            timing["local_c1_q_heads"] = _trace_us(
+                mesh_device,
+                lambda: q_heads(q, cos, sin, trans, local_heads, rope_dim, out_heads=sdpa_heads),
+                calls,
+                replays,
+            )
+            o = sdpa()
+            timing["local_c1_o_heads"] = _trace_us(
+                mesh_device,
+                lambda: o_heads(o, cos, ttnn.neg(sin), trans, groups // tp, rope_dim, heads=local_heads),
+                calls,
+                replays,
+            )
+            timing["local_c1_neg_sin"] = _trace_us(mesh_device, lambda: ttnn.neg(sin), calls, replays)
+            for k in ("local_c1_sdpa", "local_c1_q_heads", "local_c1_o_heads", "local_c1_neg_sin"):
+                logger.info(f"sdpa local traced {k}: {timing[k]} us a layer")
+            for t in (qh, o):
+                ttnn.deallocate(t)
         ttnn.deallocate(rows)
     result["layer_us"] = timing
     logger.info(f"V41_SL_RESULT {json.dumps(result)}")

@@ -32,6 +32,7 @@ from models.demos.deepseek_v3_d_p.tt.mla.rope import get_rot_transformation_mat
 from models.demos.deepseek_v3_d_p.tt.v41.cache import V41PrefillState
 from models.demos.deepseek_v3_d_p.tt.v41.ccl import V41Collectives
 from models.demos.deepseek_v3_d_p.tt.v41.compressor import TtV41Compressor
+from models.demos.deepseek_v3_d_p.tt.v41.decode_dense import DECODE_DENSE, DecodeDense
 from models.demos.deepseek_v3_d_p.tt.v41.head_layout import o_heads, q_heads
 from models.demos.deepseek_v3_d_p.tt.v41.indexer import TtV41Indexer, TtV41IndexKeys
 from models.demos.deepseek_v3_d_p.tt.v41.indexer_kernels import _cores, _split
@@ -184,6 +185,7 @@ class TtV41Attention(LightweightModule):
                 mesh_mapper=replicate,
             )
 
+        self._decode_dense = {}  # name -> DecodeDense (V41_DECODE_DENSE=matvec), built at the first decode call
         self.wq_a = linear_weight(weights["wq_a"], 2)  # row-parallel over hidden
         self.wq_b = linear_weight(weights["wq_b"], 3)  # column-parallel over heads
         self.wkv = linear_weight(weights["wkv"], 2)
@@ -234,8 +236,16 @@ class TtV41Attention(LightweightModule):
         self.indexer = TtV41Indexer(mesh_device, config, layer, weights["indexer"]) if self.is_index_source else None
 
     def _dense(self, x, name: str):
-        """``x @ self.<name>`` on its tuned program config."""
+        """``x @ self.<name>`` on its tuned program config; on the decode tile (one tile row, DRAM-interleaved)
+        with ``V41_DECODE_DENSE=matvec`` the :class:`DecodeDense` program of that weight."""
         w = getattr(self, name)
+        if DECODE_DENSE == "matvec" and int(x.shape[-2]) == 32 and not x.memory_config().is_sharded():
+            dense = self._decode_dense.get(name)
+            if dense is None:
+                dense = self._decode_dense[name] = DecodeDense(w, self.mesh_device)
+            return dense(x)
+        if name not in DENSE_IN0_BLOCK_W:
+            return ttnn.linear(x, w, compute_kernel_config=self.compute_kernel_config)
         config = dense_program_config(
             x.shape[-2], w.shape[-2], w.shape[-1], DENSE_IN0_BLOCK_W[name], one_d=name in DECODE_1D
         )
@@ -366,5 +376,5 @@ class TtV41Attention(LightweightModule):
         else:
             grouped = ttnn.experimental.nlp_concat_heads(low)  # [1, g, S, rank] -> [1, 1, S, g * rank]
             quant = fp8_qdq(grouped)
-        out = ttnn.linear(quant, self.wo_b, compute_kernel_config=self.compute_kernel_config)
+        out = self._dense(quant, "wo_b")
         return self.ccl.tp_reduce_scatter(out)
