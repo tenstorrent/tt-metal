@@ -45,8 +45,9 @@ def positions(n_tok, pad, reg_row=None):
 
 
 def rope_tables(freqs, pos):
-    """freqs [B, 32], pos [S] -> cos, sin [B, 1, S, 64] in half order."""
-    ang = pos[None, :, None] * freqs[:, None, :]
+    """freqs [B, 32], pos [S] or [B, S] -> cos, sin [B, 1, S, 64] in half order."""
+    pos = pos.expand(freqs.shape[0], -1) if pos.dim() == 1 else pos
+    ang = pos[:, :, None] * freqs[:, None, :]
     ang = torch.cat([ang, ang], -1)[:, None]
     return torch.cos(ang), torch.sin(ang)
 
@@ -153,7 +154,9 @@ class TtKairos:
         m = torch.zeros(B, S_PAD)
         m[:, :N] = am.float()
         m[:, N_TOK] = 1.0  # [REG]
-        pe, pd = positions(N, S_PAD, N_TOK), positions(N_SEG, D_PAD)
+        pe = positions(N, S_PAD, N_TOK).expand(B, -1).clone()
+        pe[:, N_TOK] = front["reg_pos"].float() if "reg_pos" in front else N  # [REG] sits at index N of its forward
+        pd = positions(N_SEG, D_PAD)
         key_add = (1.0 - m) * NEG
         enc_f, dec_f = self.module_freqs(front["s_features"])
         dev = self.device
