@@ -68,8 +68,9 @@ that spacing. The router pass fails if they aren't. Each array is `u32`s, one pe
 channel's compact index. The `to_sender` arrays count this router's own sender channels, and the `receiver` arrays the
 sender channels of the router on the other end of the link. The writer records which as `indexed_by`.
 
-**Leftover L1** (`leftover_l1`): the L1 from the end of the channel buffers to the end of loadable L1
-(`max_l1_loading_size`), as bytes, or null when the buffers reach the end.
+**Leftover L1** (`leftover_l1`): the L1 from the end of what the router uses (the builder's
+`get_allocated_l1_end_address`) to the end of loadable L1 (`max_l1_loading_size`), as bytes, or null when nothing is
+left.
 
 **ERISCs** (`eriscs`): one per RISC the kernel runs on, in RISC order, each with its processor, its fields, and its
 physical ERISC from the HAL. The physical ERISC is the processor's index, except in Blackhole single-ERISC mode, where
