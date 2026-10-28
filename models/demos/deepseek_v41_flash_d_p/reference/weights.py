@@ -173,6 +173,7 @@ class EngramTable:
     """One engram table (fp8 rows + e8m0 scale per 32), memory-mapped; rows are read when looked up."""
 
     def __init__(self, ckpt: Checkpoint, layer: int):
+        self.ckpt = ckpt
         self.weight = ckpt.view(f"layers.{layer}.engram.embed.weight").view(torch.uint8)  # [N, 256] fp8 bits
         self.scale = ckpt.view(f"layers.{layer}.engram.embed.scale").view(torch.uint8)  # [N, 8] e8m0 bits
         # Random row reads: no read-ahead around each page fault (owner 2026-10-28; ENGRAM_HOST_PATH.md 3b-3d: with the

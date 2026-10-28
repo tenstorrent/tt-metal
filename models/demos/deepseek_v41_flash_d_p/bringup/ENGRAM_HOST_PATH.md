@@ -121,6 +121,33 @@ Consequence for the plan: where the RAM exists, a resident table (load once at m
 huge pages) replaces stages 1/1b; the remaining engram host cost is then dequant + assembly + upload (~80 ms a
 chunk), which stages 2-4 address.
 
+### 3e. The 2x2 QuietBox host (2x2 session, 2026-10-28)
+
+Host: 503 GB RAM (~339 GB available), one Samsung 990 EVO Plus 4 TB NVMe (consumer, no LVM), **read_ahead_kb = 128**,
+AMD EPYC 8124P 16 cores / 32 threads, sudo, THP `madvise`, idle (load 0.35). Full engram tables of rev 5254448
+(`[384006168, 256]`, `[384016682, 256]`; 4 - 1 n-grams x 8 heads = 24 ids a token). Layer 1, 5120 tokens, rows
+byte-equal in every run. Logs: `/localdev/dnijemcevic/bringup/engram_2026-10-28/`.
+
+| mode | threads | gather ms | read from disk | Galaxy |
+|---|---|---|---|---|
+| cold, mmap (today's code) | 1 / 8 / 32 | 7279 / 7174 / 7403 | 16.9 GB | 4566 / 4518 |
+| cold, mmap + `MADV_RANDOM` | 1 / 8 / 16 / 32 | 1265 / **424** / 435 / 484 | 0.95 GB | 792 / 484 / - / 545 |
+| cold, `pread` + `FADV_RANDOM` | 8 / 16 / 32 | 425 / 433 / 475 | | 483 / - / 547 |
+| hot, same ids (idle host, 7 runs) | 1 / 8 / 16 | **9.9** / 19.4 / 24.8 | 0 | 191 / 172 (busy host) |
+
+- 3c.5 settled: hot, the gather is ~10 ms a layer (the Galaxy's 172-191 ms was its busy host); extra threads only
+  cost when the pages are hot. Hot, what remains per layer is the fp32 dequant (~28 ms at torch's default threads)
+  and the bf16 assembly (~12 ms).
+- Resident (one layer, `load_resident`, 16 readers): load **109 s** (0.93 GB/s: the copy, not the drive, limits it;
+  the Galaxy also got ~1 GiB/s). Gather median of 6 by torch intra-op x Python threads: 1x1 184 ms, 1x8 21.6, 4x8
+  12.9, 8x1 15.3, **8x8 8.9**, 16x1 11.2, 16x8 8.8. The fp32 dequant depends on torch's threads: 1 / 4 / 8 / 16 ->
+  322 / 85 / 53 / 42 ms (stage 4's lookup-table dequant removes it).
+
+In the model (`tt/engram.py`, settings `ENGRAM_TABLE=mmap|random|resident`, `ENGRAM_GATHER_THREADS`; defaults today's
+mmap / 1 until the owner picks): `tests/test_engram_table_modes.py` (CPU) checks the rows byte for byte in every mode
+(resident with `DS41_TEST_ENGRAM_RESIDENT=1`); the engram_rows component tests of layers 1 and 14 pass on the 2x2 with
+`random` / 8 threads (rel 0, bit-identical repeats).
+
 ## 4. Plan (owner-agreed staging; each stage = its own setting in `tt/settings.py`, its own commit, its own A/B)
 
 Invariant for every stage: **the device rows stay bit-identical to today's** (check by byte comparison, not a

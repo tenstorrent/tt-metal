@@ -524,6 +524,24 @@ TABLE = {
         "the [S/SP, 32] mHC partial-row exchange over axis 1: gather_add = all_gather + SFPU ttnn.add (exact fp32, "
         "K-30); all_reduce = one CCL whose FPU add reads fp32 at about TF32",
     ),
+    # ---- engram host path (2x2 session, bringup/ENGRAM_HOST_PATH.md; rows bit-identical in every mode)
+    "ENGRAM_TABLE": Setting(
+        "mmap",
+        ("mmap", "random", "resident"),
+        "where tt/engram.py reads the engram tables (layers 1, 14; 94.5 GiB each, 8-bit). mmap = the checkpoint "
+        "mapping with the kernel's read-ahead (each random 256-byte row faults in up to read_ahead_kb); random = the "
+        "same mapping with MADV_RANDOM over the table's bytes; resident = the 8-bit bytes copied into anonymous memory "
+        "(huge pages) once at build (~189 GiB of host RAM for both layers). QB 2x2 host (503 GB RAM, 990 EVO Plus "
+        "NVMe, read_ahead_kb 128, 32 CPUs), layer 1, 5120 tokens, gather a layer a chunk: cold mmap 7.2 s, cold "
+        "random 0.42 s (8 threads), resident 9-15 ms; load of one layer resident 109 s",
+    ),
+    "ENGRAM_GATHER_THREADS": Setting(
+        1,
+        None,
+        "Python threads the engram row gather is split over (torch indexing releases the GIL). QB: cold random 1 / 8 "
+        "/ 32 threads 1265 / 424 / 484 ms; mmap hot 1 / 8 threads 10 / 19 ms; resident 1 / 8 threads 11-15 / 9-13 ms "
+        "(torch intra-op 16 / 8 threads). 1 = today's single gather",
+    ),
 }
 
 # F137 (owner): every test runs these defaults; there is no max-precision device run and no max-precision path. FIX.8
