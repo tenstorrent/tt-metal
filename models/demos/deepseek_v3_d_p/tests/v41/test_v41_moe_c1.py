@@ -299,6 +299,22 @@ def test_v41_moe_c1(mesh_device, device_params):
                         want = (act @ d[:, : x.shape[0]]).float()
                         row_pcc.append((l, e, round(_pcc(want, y_host[32 * l + t]), 5)))
                 pieces["y_pcc"].append(row_pcc)
+            # the local weighted sum against W @ y on the host, the shared piece against the split's own weights
+            part_host = ttnn.to_torch(ttnn.get_device_tensors(c1.debug["part"])[0])[0, 0].float()
+            shared_host = ttnn.to_torch(ttnn.get_device_tensors(c1.debug["shared"])[0])[0, 0].float()
+            want_part = W_host @ y_host
+            pieces["part_pcc"] = [round(_pcc(want_part[t], part_host[t]), 5) for t in range(n_rows)]
+            pieces["part_absmax"] = [round(float(part_host[t].abs().max()), 4) for t in range(n_rows)]
+            if c1.shared_split is not None:
+                sp_ = c1.shared_split
+                g0 = two_d(ttnn.to_torch(ttnn.get_device_tensors(sp_.gate)[0]))
+                u0 = two_d(ttnn.to_torch(ttnn.get_device_tensors(sp_.up)[0]))
+                d0 = two_d(ttnn.to_torch(ttnn.get_device_tensors(sp_.down)[0]))
+                pieces["shared_pcc"] = []
+                for t in range(n_rows):
+                    x = x_rows[t]
+                    act = torch.nn.functional.silu(torch.clamp(x @ g0, max=limit)) * torch.clamp(x @ u0, -limit, limit)
+                    pieces["shared_pcc"].append(round(_pcc((act @ d0).float(), shared_host[t]), 5))
             per_row["chip0"] = pieces
             for k in ("W", "y", "part", "shared"):
                 ttnn.deallocate(c1.debug[k])
