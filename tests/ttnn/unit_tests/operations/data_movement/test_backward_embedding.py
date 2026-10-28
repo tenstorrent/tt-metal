@@ -174,3 +174,27 @@ def test_embedding_bw_with_program_cache(
         assert comp_pass
 
     assert device.cache_entries_counter.total == 1
+
+
+@pytest.mark.parametrize("weight_rank, num_embeddings", [(2, 64), (2, 33), (3, 64), (4, 64)])
+def test_embedding_bw_output_matches_weight_rank(weight_rank, num_embeddings, device):
+    torch.manual_seed(0)
+    batch_size, seq_len, embedding_dim = 2, 32, 96
+    input_index = torch.randint(0, num_embeddings, (batch_size, seq_len))
+    input_tensor = ttnn.from_torch(input_index, dtype=ttnn.uint32, device=device)
+
+    weights_shape = (1,) * (weight_rank - 2) + (num_embeddings, embedding_dim)
+    weights = torch.randn(weights_shape)
+    weights_ttnn = ttnn.from_torch(weights, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    grad_data = torch.randn((1, 1, batch_size * seq_len, embedding_dim))
+    grad_tensor = ttnn.from_torch(grad_data, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+
+    output = ttnn.to_torch(ttnn.embedding_bw(input_tensor, weights_ttnn, grad_tensor))
+
+    assert list(output.shape) == list(weights_shape)
+    golden = torch.zeros(num_embeddings, embedding_dim).index_add_(
+        0, input_index.flatten(), grad_data.reshape(-1, embedding_dim)
+    )
+    comp_pass, comp_out = comparison_funcs.comp_pcc(golden, output.reshape(num_embeddings, embedding_dim))
+    assert comp_pass, comp_out
