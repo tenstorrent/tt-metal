@@ -45,6 +45,7 @@ from models.demos.gemma4.tt.spec_decode import (
     serving_seed_index,
     serving_select_rows,
     serving_trace_projection,
+    serving_verify_table_widths,
     serving_width_for,
     serving_width_ladder,
     spec_capture_shapes,
@@ -1821,3 +1822,54 @@ def test_seed_index_padding_rows_take_row_zero_whatever_its_source():
     # row 0 was reseeded: the mirrors gather its reseed-pool row
     idx = serving_seed_index((5, 5), rows=[6, 5], seed_cols=[None, 2], previous=(3, [5]), seeded={6: 1})
     assert idx == [33, 2, 33, 33, 33]
+
+
+# Width-matched verify tables per layer type (hybrid kv-cache groups) ------------------------------
+_HYBRID_12B = {"sliding_attention": 256, "full_attention": 128}  # tokens per block, HMA byte-unified pools
+_SINGLE_POOL = {"sliding_attention": 64, "full_attention": 64}
+_NO_RING = {"sliding_attention": None, "full_attention": None}
+
+
+@pytest.mark.parametrize(("s_k", "sliding", "full"), [(2048, 8, 16), (8192, 32, 64), (263168, 1028, 2056)])
+def test_hybrid_pools_get_one_width_per_type_spanning_the_same_mask(s_k, sliding, full):
+    """Each type's table times its own block size spans the rung: one block size for both types would
+    give the full-attention table half the mask (the packed SDPA then attends 1024 tokens under a
+    2048-wide mask and reads the mask rows at the wrong pitch for every batch row past the first)."""
+    widths = serving_verify_table_widths(s_k, _HYBRID_12B, _NO_RING, blocks=4096)
+    assert widths == {"sliding_attention": sliding, "full_attention": full}
+    assert all(widths[lt] * _HYBRID_12B[lt] == s_k for lt in widths)
+
+
+def test_a_single_pool_is_the_control():
+    assert serving_verify_table_widths(2048, _SINGLE_POOL, _NO_RING, blocks=4096) == {
+        "sliding_attention": 32,
+        "full_attention": 32,
+    }
+
+
+def test_a_bounded_ring_sizes_the_sliding_table_from_the_ring():
+    ring = {"sliding_attention": 2048, "full_attention": None}
+    widths = serving_verify_table_widths(8192, _SINGLE_POOL, ring, blocks=4096)
+    assert widths == {"sliding_attention": 32, "full_attention": 128}
+    # a hybrid ring pool: the ring in tokens over the sliding type's own block size
+    widths = serving_verify_table_widths(8192, _HYBRID_12B, ring, blocks=4096)
+    assert widths == {"sliding_attention": 8, "full_attention": 64}
+
+
+def test_the_adapter_table_width_caps_every_type():
+    widths = serving_verify_table_widths(263168, _HYBRID_12B, _NO_RING, blocks=1500)
+    assert widths == {"sliding_attention": 1028, "full_attention": 1500}
+
+
+@pytest.mark.parametrize(
+    ("s_k", "bs", "ring", "blocks", "message"),
+    [
+        (2048, {"full_attention": 96}, {}, 64, "rung 2048 is not a multiple"),
+        (8192, {"sliding_attention": 96}, {"sliding_attention": 2048}, 64, "ring 2048 is not a multiple"),
+        (2048, {"full_attention": 0}, {}, 64, "block size must be >= 1"),
+        (0, {"full_attention": 64}, {}, 64, "must be >= 1"),
+    ],
+)
+def test_misaligned_geometries_are_refused(s_k, bs, ring, blocks, message):
+    with pytest.raises(ValueError, match=message):  # allow-pytest.raises (pure)
+        serving_verify_table_widths(s_k, bs, ring, blocks)

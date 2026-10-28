@@ -530,6 +530,36 @@ def packed_verify_kv_groups(h_local, nkv_local, P):
     return [(g, g * rows_per_group, (g + 1) * rows_per_group) for g in range(nkv_local)]
 
 
+def serving_verify_table_widths(s_k, block_size_by_type, ring_by_type, blocks):
+    """Width (columns) of each layer type's width-matched verify page table at rung ``s_k``.
+
+    The packed SDPA attends the TABLE width times the layer's block size, so a
+    type's table must span exactly its mask: ``s_k // block_size`` columns
+    (or ``ring // block_size`` for a bounded ring type, whose sliding mask is
+    ring-wide), capped by the ``blocks`` columns the adapter's tables hold.
+    ``block_size_by_type`` is each type's EFFECTIVE block size
+    (``effective_block_size`` of the layer's own view of its cache): under
+    vLLM hybrid kv-cache groups the sliding and full-attention pools hold a
+    different number of tokens per block (e.g. 256 and 128 for the 12B), so
+    one block size for both types would size one table at half or double its
+    mask. Pure: config-time arithmetic.
+    """
+    s_k, blocks = int(s_k), int(blocks)
+    if s_k < 1 or blocks < 1:
+        raise ValueError(f"s_k and blocks must be >= 1, got {s_k}, {blocks}")
+    widths = {}
+    for lt, bs in block_size_by_type.items():
+        bs = int(bs)
+        if bs < 1:
+            raise ValueError(f"{lt}: block size must be >= 1, got {bs}")
+        ring = ring_by_type.get(lt)
+        span = int(ring) if ring else s_k
+        if span % bs:
+            raise ValueError(f"{lt}: {'ring' if ring else 'rung'} {span} is not a multiple of its block size {bs}")
+        widths[lt] = min(span // bs, blocks)
+    return widths
+
+
 def serving_mask_padded_bytes(shape, width, elem_bytes=2):
     """Device bytes of ONE ``[B, 1, P, width]`` mask tensor or intermediate: TILE pads P to 32 rows."""
     rows, _k = spec_check_shape(shape)
@@ -1183,6 +1213,20 @@ class SpeculativeDecoder:
                     mesh_config=getattr(layer.self_attn, "mesh_config", None),
                 )
             self._pv_nkv[lt] = int(layer.self_attn.kv_staging[0].shape[1])
+        # Per-type EFFECTIVE block size: the token count one page-table column
+        # spans for a layer of that type, i.e. what its paged_update_cache and
+        # paged SDPA use (effective_block_size inverts the HMA byte-unified
+        # view). Under vLLM hybrid groups the sliding and full pools differ
+        # (12B: 256 vs 128 tokens); ``_pv_bs`` above is layer 0's physical
+        # block dim and serves the single-pool demo paths only.
+        from models.demos.gemma4.tt.attention.operations import effective_block_size
+
+        self._pv_bs_t = {}
+        for lt, idx in _ring_rep.items():
+            layer = target.layers[idx]
+            cfg = layer.self_attn.config
+            nkv_local = 1 if layer.self_attn.weights.kv_replicated else cfg.num_key_value_heads // tp
+            self._pv_bs_t[lt] = int(effective_block_size(self.tt_kv_cache[idx][0], cfg.head_dim, nkv_local))
         flat = (self.page_table_torch[0] if self.page_table_torch.dim() > 1 else self.page_table_torch).to(torch.int64)
         self._pv_pages = flat
         # Per-type page rows. Every layer of a type carries the same block IDs
@@ -2371,6 +2415,10 @@ class SpeculativeDecoder:
         # packed-only), so the ``_fused_packed_enabled`` tier rule does not
         # apply here: unbounded targets run packed too.
         self._pv_setup()
+        _lg.info(
+            f"[spec-serving] KV geometry per layer type: effective block size {self._pv_bs_t}, "
+            f"ring {self._pv_ring} (layer 0 physical block dim {self._pv_bs})"
+        )
         self._srv_blocks = int(self.page_table_torch.shape[-1])
         self._srv_max_rows = max_rows
         self._srv_shapes = shapes
@@ -2665,12 +2713,12 @@ class SpeculativeDecoder:
     def _srv_alloc_width(self, shape, S, s_k):
         """Width-dependent persistent inputs of one (shape, S_k) record: the width-matched verify tables."""
         B, K, P = S["B"], S["K"], S["P"]
-        bs = self._pv_bs
+        # Width-matched to the type's mask with the type's OWN block size (see
+        # serving_verify_table_widths): the packed SDPA attends the TABLE width
+        # times that block size, and under hybrid groups the types differ.
+        widths = serving_verify_table_widths(s_k, self._pv_bs_t, self._pv_ring, self._srv_blocks)
         v_ptl = {}
-        for lt, r in self._pv_ring.items():
-            # Width-matched to the type's mask (see _pv_tables_per_layer): the
-            # packed SDPA attends the TABLE width, so a wider table is unmasked.
-            width = min((r // bs) if r else max(1, int(s_k) // bs), self._srv_blocks)
+        for lt, width in widths.items():
             v_ptl[lt] = self._pv_from_torch(torch.zeros(B, width, dtype=torch.int32), ttnn.int32)
         return {
             "shape": shape,
