@@ -71,7 +71,7 @@ MESH = tuple(int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "2,4").split(","
 B = int(os.environ.get("GLM53_MODEL_B", "4"))  # users per row = max_num_seqs
 TRACE_MB = int(os.environ.get("GLM53_MODEL_TRACE_MB", "512"))
 MAX_SEQ_LEN = 1536
-CHUNK = 512 * MESH[0]  # 1024 tokens on 2 rows: 512-row slabs per chip
+CHUNK = 1024  # two device chunks inside MAX_SEQ_LEN on any row count (a multiple of 32 * rows up to 32 rows)
 N_DECODE = int(os.environ.get("GLM53_MM_DECODE_STEPS", "8"))
 SAMPLE_DIR = Path(__file__).resolve().parents[1] / "demo" / "sample_prompts"
 IMAGE = Path(os.environ.get("GLM53_MM_IMAGE", SAMPLE_DIR / "shapes_hello.png"))
@@ -199,7 +199,6 @@ def test_served_image_and_video_match_the_harness(mesh_device, monkeypatch):
     from transformers import AutoProcessor
 
     monkeypatch.setenv("GLM53_VLLM_PREFILL_CHUNK", str(CHUNK))
-    monkeypatch.setenv("GLM53_VLLM_WARMUP_PREFILL", "128")
     monkeypatch.setenv(gv.IMAGES_ENV, "auto")
     snapshot = default_snapshot_dir()
     proc = AutoProcessor.from_pretrained(str(snapshot))
