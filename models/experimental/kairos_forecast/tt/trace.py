@@ -56,7 +56,7 @@ class TracedKairos:
 
         self._switch(front)
         host = self.model.prepare_host(front)
-        dev = {k: v for k, v in self.inputs[self.B].items() if k not in ("reg", "dec_in", "causal")}
+        dev = {k: v for k, v in self.inputs[self.B].items() if k not in ("reg", "dec_in")}
         for h, d in zip(_leaves(host), _leaves(dev), strict=True):
             ttnn.copy_host_to_device_tensor(h, d)
         return self.B
