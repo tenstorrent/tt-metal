@@ -25,6 +25,7 @@ from loguru import logger
 import ttnn
 from models.demos.common.prefill.runners.cache_layout import publish_kv_chunk_table
 from models.demos.common.prefill.runners.migration import allgather_kv_stage_layout, serialize_prebuilt_kv_chunk_table
+from models.demos.deepseek_v3_d_p.tt.kimi_k3.cache_layout import kimi_k3_cache_layout_model
 from models.demos.deepseek_v3_d_p.tt.runners.cache_layout import deepseek_cache_layout_model
 from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
     NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
@@ -42,6 +43,8 @@ from models.demos.deepseek_v3_d_p.utils.kv_cache_utils import (
 
 # Set to 1 to publish the table derived from the KVPE cache's CacheLayoutModel without walking the classic one.
 LAYOUT_MODEL_ENV = "DEEPSEEK_KV_TABLE_FROM_LAYOUT_MODEL"
+# Kimi-K3's model declares only its kvpe config, so setting this to 1 is refused: its table is always walked.
+KIMI_K3_LAYOUT_MODEL_ENV = "KIMI_K3_KV_TABLE_FROM_LAYOUT_MODEL"
 
 # A KV chunk is one DRAM bank's worth of tokens (NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK=32) x head_dim.
 _TILE_DIM = 32  # bfp8 is tiled 32x32
@@ -131,6 +134,17 @@ def _num_layers_from_cache(cache, num_users: int) -> int:
     return cache.shape[0] // num_users
 
 
+def _stage_hosts(stage_layout):
+    """(fabric node id, host name) of every chip of the gathered stages; the walk names each stage's chips'
+    host from its gathered tag."""
+    return [
+        (fid, f"host-{stage['host_tag']:08x}")
+        for stage in (stage_layout or [])
+        for row in stage["fnids"]
+        for fid in row
+    ]
+
+
 def build_and_serialize_kv_chunk_table(
     *,
     mesh_device,
@@ -210,7 +224,9 @@ def build_and_serialize_kv_chunk_table(
     The single-config table is also derived from the KVPE cache's declared layout (``cache_layout.py``, a
     ``CacheLayoutModel`` over the gathered stages) with ``to_chunk_map``. Until that replaces the walk
     (``DEEPSEEK_KV_TABLE_FROM_LAYOUT_MODEL=1``), the walked table is published and the derived one is checked
-    against it; the model is written next to the table (``<path>.cache_layout.pb``) only when the two agree."""
+    against it; the model is written next to the table (``<path>.cache_layout.pb``) only when the two agree.
+    Kimi-K3's merged table (``kda``) is checked the same way on its kvpe config "00" alone
+    (``kimi_k3/cache_layout.py``); its KDA configs are walked only."""
     assert chunk_size_global == PREFILL_CHUNK_TOKENS, (
         f"create_kv_chunk_address_table_block_cyclic assumes a block-cyclic period of "
         f"PREFILL_CHUNK_TOKENS={PREFILL_CHUNK_TOKENS}, but chunk_size_global={chunk_size_global}. "
@@ -232,8 +248,12 @@ def build_and_serialize_kv_chunk_table(
     if kda is not None:
         assert index_kv_cache is None, "a DSA index cache and KDA state slabs in one table is not a supported layout"
         all_caches.extend((kind, kda) for kind in KDA_TABLE_KINDS)
+    # The KVPE cache is config 0 of either table, so its layout is the first one gathered.
+    stage_layout = stage_layouts[0] if stage_layouts else None
+    kv_dedup = is_tp_deduped_kv_cache(primary_cache, mesh_shape)
+
     if index_kv_cache is not None or dflash_caches is not None or dflash_spec is not None or kda is not None:
-        return _build_and_serialize_merged_kv_chunk_table(
+        merged = dict(
             mesh_device=mesh_device,
             caches=all_caches,
             seq_len=seq_len,
@@ -243,18 +263,40 @@ def build_and_serialize_kv_chunk_table(
             tp_axis=tp_axis,
             num_users=num_users,
             chunk_size_global=chunk_size_global,
-            path=path,
             stage_layouts=stage_layouts,
             index_layer_ids=index_layer_ids,
             dflash_first_layer=dflash_first_layer,
             kvpe_layer_rows=layer_rows,
             kvpe_alias_rows=kvpe_alias_rows,
         )
-    assert kvpe_alias_rows is None, "kvpe_alias_rows is wired into the merged (DSA) table only"
+        if kda is None:
+            return _build_and_serialize_merged_kv_chunk_table(path=path, **merged)
 
-    # Single config: the KVPE cache is the only one described, so its layout is the only one gathered.
-    stage_layout = stage_layouts[0] if stage_layouts else None
-    kv_dedup = is_tp_deduped_kv_cache(primary_cache, mesh_shape)
+        def kimi_k3_layout_model():
+            return kimi_k3_cache_layout_model(
+                kvpe_cache=primary_cache,
+                stage_layout=stage_layout,
+                mesh_shape=mesh_shape,
+                sp_axis=sp_axis,
+                num_users=num_users,
+                seq_len=seq_len,
+                chunk_size=chunk_size_global,
+                kv_dedup=kv_dedup,
+                layer_rows=layer_rows,
+            )
+
+        publish_kv_chunk_table(
+            path=path,
+            walk=lambda: _build_merged_kv_chunk_table(**merged),
+            layout_model=kimi_k3_layout_model,
+            hosts=_stage_hosts(stage_layout),
+            enable_env=KIMI_K3_LAYOUT_MODEL_ENV,
+            model_name="Kimi-K3",
+            declares_every_config=False,
+        )
+        logger.info(f"[migration] Kimi-K3 KV chunk address table serialized to {path}")
+        return path
+    assert kvpe_alias_rows is None, "kvpe_alias_rows is wired into the merged (DSA) table only"
 
     chunk_size_bytes = _dram_chunk_size_bytes(primary_cache)
 
@@ -294,18 +336,11 @@ def build_and_serialize_kv_chunk_table(
             layer_rows=layer_rows,
         )
 
-    # The walk names each stage's chips' host from its gathered tag.
-    hosts = [
-        (fid, f"host-{stage['host_tag']:08x}")
-        for stage in (stage_layout or [])
-        for row in stage["fnids"]
-        for fid in row
-    ]
     publish_kv_chunk_table(
         path=path,
         walk=walk,
         layout_model=layout_model,
-        hosts=hosts,
+        hosts=_stage_hosts(stage_layout),
         enable_env=LAYOUT_MODEL_ENV,
         model_name="DeepSeek-V3",
     )
@@ -313,7 +348,12 @@ def build_and_serialize_kv_chunk_table(
     return path
 
 
-def _build_and_serialize_merged_kv_chunk_table(
+def _build_and_serialize_merged_kv_chunk_table(*, path, **merged) -> str:
+    """Builds the merged table (``_build_merged_kv_chunk_table``) and serializes it to ``path``."""
+    return serialize_prebuilt_kv_chunk_table(table=_build_merged_kv_chunk_table(**merged), path=path)
+
+
+def _build_merged_kv_chunk_table(
     *,
     mesh_device,
     caches,
@@ -322,7 +362,6 @@ def _build_and_serialize_merged_kv_chunk_table(
     mesh_shape,
     sp_axis,
     num_users,
-    path,
     tp_axis=1,
     chunk_size_global=None,
     stage_layouts=None,
@@ -330,8 +369,8 @@ def _build_and_serialize_merged_kv_chunk_table(
     dflash_first_layer=0,
     kvpe_layer_rows=None,
     kvpe_alias_rows=None,
-) -> str:
-    """Build ONE KvChunkAddressTable over every cache this rank owns and serialize it to ``path``.
+):
+    """Build ONE KvChunkAddressTable over every cache this rank owns.
     ``caches`` is a tagged list of ``(kind, payload)``: ``("kvpe", tensor)`` / ``("index", tensor)`` for
     the block-cyclic MLA caches, named "00" (KVPE), "01" (GLM-5.3 index); ``("dflash", (k_cache, v_cache))``
     for the DFlash drafter (Kimi-only), which adds one config per (K|V, kv-head) via
@@ -615,4 +654,4 @@ def _build_and_serialize_merged_kv_chunk_table(
             layer_rows=spec.layer_rows,
         )
 
-    return serialize_prebuilt_kv_chunk_table(table=table, path=path)
+    return table
