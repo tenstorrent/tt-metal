@@ -56,14 +56,25 @@ void py_module_types(nb::module_& mod) {
             nb::arg("traceback").none())
         .def(
             "build",
-            &CommandListBuilder::build,
+            [](CommandListBuilder& self, std::optional<QueueId> cq_id) {
+                std::optional<CommandList> command_list;
+                {
+                    nb::gil_scoped_release release;
+                    command_list.emplace(self.build(cq_id));
+                }
+                // A list's destructor drains and unregisters through its device, so each list keeps the device
+                // alive. Tying it to the builder instead would also hold the builder's per-device reservation.
+                nb::object result = nb::cast(std::move(*command_list));
+                nb::detail::keep_alive(result.ptr(), nb::find(&self.device()).ptr());
+                return result;
+            },
             nb::kw_only(),
             nb::arg("cq_id") = nb::none(),
-            nb::call_guard<nb::gil_scoped_release>(),
             R"doc(
                 Builds an independent command list from everything recorded so far.
 
-                Repeatable: each call allocates a new list in device DRAM. Built lists outlive the builder.
+                Repeatable: each call allocates a new list in device DRAM. Built lists outlive the builder and keep
+                the mesh device alive.
 
                 Keyword Args:
                     cq_id (Optional[ttnn.QueueId]): Command queue the list replays on. Defaults to the current

@@ -4,6 +4,8 @@
 
 # Command lists need no warm-up run: the first call of every op below happens while recording.
 
+import sys
+
 import pytest
 import torch
 import ttnn
@@ -109,6 +111,16 @@ def test_build_on_two_command_queues(device, builder, command_lists):
 
 
 @skip_for_slow_dispatch()
+def test_command_list_keeps_device_alive(device, builder, command_lists):
+    device_input = allocate_input(device)
+    with builder:
+        out = ttnn.relu(device_input)
+    refs_before = sys.getrefcount(device)
+    command_lists.append(builder.build())
+    assert sys.getrefcount(device) == refs_before + 1
+
+
+@skip_for_slow_dispatch()
 @pytest.mark.parametrize("device_params", [{"num_command_queues": 2}], indirect=True)
 def test_build_defaults_to_current_command_queue(device, builder, command_lists):
     device_input = allocate_input(device)
@@ -148,20 +160,21 @@ def test_clear_and_rerecord(device, builder, command_lists, expect_error):
 def test_legacy_op_is_rejected(device, builder, command_lists, expect_error):
     device_input = allocate_input(device)
     with builder:
-        out = ttnn.relu(device_input)
+        relu = ttnn.relu(device_input)
         # binary_ng still uses a legacy ProgramFactory; command lists are Metal 2.0 only.
         with expect_error(RuntimeError, "Command lists only support Metal 2.0 programs") as exc_info:
-            ttnn.add(out, out)
+            ttnn.add(relu, relu)
         assert "cannot be recorded into a command list" in str(exc_info.value)
         assert builder.is_recording
+        out = ttnn.exp(relu)
 
-    # The rejected op left the recording unchanged: the list holds only relu.
+    # The rejected op left no trace: the list holds relu and exp.
     command_list = builder.build()
     command_lists.append(command_list)
     torch_input = torch.randn(SHAPE, dtype=torch.bfloat16)
     write_input(torch_input, device_input)
     command_list.enqueue()
-    assert_with_pcc(torch.relu(torch_input.float()), ttnn.to_torch(out).float(), pcc=0.99)
+    assert_with_pcc(torch.exp(torch.relu(torch_input.float())), ttnn.to_torch(out).float(), pcc=0.99)
 
 
 @skip_for_slow_dispatch()
