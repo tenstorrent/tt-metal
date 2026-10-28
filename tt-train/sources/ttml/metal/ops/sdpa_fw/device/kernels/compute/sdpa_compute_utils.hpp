@@ -368,7 +368,8 @@ void recip_tiles_inplace(uint32_t cb_in_idx, uint32_t row0, uint32_t n) {
 // FPU (19-bit inputs, once per partial); the merger's own fp32 output accumulator is scaled in DST so it is
 // never truncated.
 #ifdef SPLIT_UNITS
-template <uint32_t rows>
+// dst_tiles: output tiles per DST pass when copying the output tiles through.
+template <uint32_t rows, uint32_t dst_tiles>
 void send_partial(uint32_t Wt, uint32_t cb_mm_out, uint32_t cb_max, uint32_t cb_sum_exp, uint32_t cb_partial_out) {
     const uint32_t tiles_per_row = sdpa_fw_items::partial_row_tiles(Wt);
     cb_wait_front(cb_mm_out, rows * Wt);
@@ -377,7 +378,7 @@ void send_partial(uint32_t Wt, uint32_t cb_mm_out, uint32_t cb_max, uint32_t cb_
     pack_reconfig_data_format(cb_partial_out);
     for (uint32_t r = 0; r < rows; ++r) {
         cb_reserve_back(cb_partial_out, tiles_per_row);
-        // [max, sum, O_0, O_1], then the remaining O tiles four at a time
+        // [max, sum, O_0, O_1], then the remaining O tiles dst_tiles at a time
         tile_regs_acquire();
         reconfig_data_format_srca(cb_max);
         copy_init(cb_max);
@@ -399,8 +400,8 @@ void send_partial(uint32_t Wt, uint32_t cb_mm_out, uint32_t cb_max, uint32_t cb_
             pack_tile(i, cb_partial_out);
         }
         tile_regs_release();
-        for (uint32_t t0 = first; t0 < Wt; t0 += 4U) {
-            const uint32_t n = (Wt - t0 < 4U) ? (Wt - t0) : 4U;
+        for (uint32_t t0 = first; t0 < Wt; t0 += dst_tiles) {
+            const uint32_t n = (Wt - t0 < dst_tiles) ? (Wt - t0) : dst_tiles;
             tile_regs_acquire();
             copy_init(cb_mm_out);
             for (uint32_t i = 0; i < n; ++i) {

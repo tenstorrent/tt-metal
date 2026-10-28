@@ -415,7 +415,8 @@ FORCE_INLINE void process_q_chunk(
 
 #ifdef SPLIT_UNITS
     if (role == kUnitSender) {
-        send_partial<rows>(vWt, alias_cb_prev_mm_out, alias_cb_prev_max, alias_cb_prev_sum_exp, cb_partial_out);
+        send_partial<rows, kRowsPerPass>(
+            vWt, alias_cb_prev_mm_out, alias_cb_prev_max, alias_cb_prev_sum_exp, cb_partial_out);
         cb_pop_front(cb_query, q_tiles);
         return;
     }
