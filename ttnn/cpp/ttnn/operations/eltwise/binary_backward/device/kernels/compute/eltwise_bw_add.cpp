@@ -18,6 +18,9 @@ void kernel_main() {
     constexpr auto cb_grad_out = tt::CBIndex::c_0;
     constexpr auto cb_input_grad = tt::CBIndex::c_3;
     constexpr auto cb_other_grad = tt::CBIndex::c_4;
+    DataflowBuffer cb_grad_out_obj(cb_grad_out);
+    DataflowBuffer cb_input_grad_obj(cb_input_grad);
+    DataflowBuffer cb_other_grad_obj(cb_other_grad);
 
     compute_kernel_hw_startup(cb_grad_out, cb_input_grad);
 
@@ -32,12 +35,12 @@ void kernel_main() {
                     ckl::PopPolicy::None,
                     ckl::InputTileMapping::Scalar,
                     ckl::DataFormatReconfig::Enabled),
-                ckl::Dst::D0>{},
+                ckl::Dst::D0>{cb_grad_out_obj},
             ckl::PackTile<ckl::output(
                 cb_input_grad,
                 ckl::ReservePolicy::PerTile,
                 ckl::PushPolicy::PerTile,
-                ckl::DataFormatReconfig::Enabled)>{});
+                ckl::DataFormatReconfig::Enabled)>{cb_input_grad_obj});
 
         // Chain 2: other_grad = grad (identity). Pops grad now.
         ckl::eltwise_chain(
@@ -49,11 +52,11 @@ void kernel_main() {
                     ckl::PopPolicy::PerTile,
                     ckl::InputTileMapping::Scalar,
                     ckl::DataFormatReconfig::Enabled),
-                ckl::Dst::D0>{},
+                ckl::Dst::D0>{cb_grad_out_obj},
             ckl::PackTile<ckl::output(
                 cb_other_grad,
                 ckl::ReservePolicy::PerTile,
                 ckl::PushPolicy::PerTile,
-                ckl::DataFormatReconfig::Enabled)>{});
+                ckl::DataFormatReconfig::Enabled)>{cb_other_grad_obj});
     }
 }
