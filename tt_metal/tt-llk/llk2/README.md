@@ -17,7 +17,7 @@ inc/common/                 arch-independent, always on the include path
     llk_lib/thread.h        current_thread and the per-thread call pattern
 inc/blackhole/              one arch; the build adds inc/common and one inc/<arch>
     resolver/               each op's OpApi: accepts, options, work, plan
-    llk_lib/                one header per thread or op: unpack.h (every unpack op), matmul.h (math)
+    llk_lib/                one header per thread or op: unpack.h (every unpack op), matmul.h, copy.h (math)
 tests/                      an out-of-tree consumer of the tt-llk test harness
 ```
 
@@ -29,6 +29,7 @@ include path.
 | Op | Compute API | Blackhole llk-lib | Tests |
 |---|---|---|---|
 | `matmul` | `compute_api/matmul.h` | `llk_lib/unpack.h`, `llk_lib/matmul.h` | `test_llk2_matmul.py` |
+| `copy` | `compute_api/copy.h` | `llk_lib/unpack.h` (incl. unpack to Dest), `llk_lib/copy.h` | `test_llk2_copy.py` |
 
 Pack and the math-to-pack Dest sync still use today's LLKs in the tests.
 
