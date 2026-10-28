@@ -4,13 +4,14 @@ From `models/experimental/kairos_forecast/doc/optimize/iter_00/suite.jsonl`.
 
 ## Outlier rows (head-space bias_row_max > 0.05)
 
+One line per row; the bias columns give both precisions (D5 R1-0d: the ragged row was listed twice with the same numbers).
+
 | record | precision | row | series | half | fwd | n_valid | ctx std | golden row std | band half-width | bias perf | bias acc | perf bias / half-width |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | long_horizon | performance | 48 | 48 | x | 0 | 2048 | 9293 | 0.2683 | 0.3292 | +0.0692 | +0.0080 | 0.21 |
 | long_horizon_tf | performance | 448 | 0 | -x | 7 | 2176 | 3284 | 0.5688 | 0.5316 | +0.1264 | +0.0192 | 0.24 |
 | paper | performance | 15 | 15 | x | 0 | 2048 | 1090 | 0.6601 | 0.8295 | -0.0927 | -0.0205 | 0.11 |
-| ragged | accuracy | 238 | 110 | -x | 1 | 1422 | 1745 | 0.4524 | 0.6294 | +0.2873 | +0.0545 | 0.46 |
-| ragged | performance | 238 | 110 | -x | 1 | 1422 | 1745 | 0.4524 | 0.6294 | +0.2873 | +0.0545 | 0.46 |
+| ragged | both (over 0.05 in each) | 238 | 110 | -x | 1 | 1422 | 1745 | 0.4524 | 0.6294 | +0.2873 | +0.0545 | 0.46 |
 
 ## Row drift between the precisions
 

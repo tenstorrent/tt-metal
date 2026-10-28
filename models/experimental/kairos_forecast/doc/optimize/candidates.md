@@ -12,6 +12,9 @@
   free-running rollout steps >= 2; band / spread / row floors in `gates.json` (proposed at G1).
 - **Gate:** `check_gates.py` against the fixed round-0 records (`iter_00/bench.json`, `iter_00/suite.json`), both
   precisions, every shape; drift budget from the fixed record (v1.17).
+- **long_horizon records (D5 R1-0d):** the free-running `long_horizon` record scores only forward 0's x half in head
+  space (its final space covers the whole rollout). The teacher-forced `long_horizon_tf` record, which scores every
+  step's rows in both halves, is the guard for the -x half and for the later steps.
 - **Accept:** >= 2 % of target device time, no guard worse than 3 %, check_gates passes; chip 1 drifts up to 5 %, so
   every decision re-runs the baseline back to back.
 - **Exit:** a round whose accepted changes total < 5 % of target device time, or CONTRACT §4's criteria.
