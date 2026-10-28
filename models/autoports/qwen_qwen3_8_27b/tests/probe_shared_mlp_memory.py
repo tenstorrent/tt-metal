@@ -9,6 +9,7 @@ native-context capacity claim or a qualitative model judgment.
 import argparse
 import hashlib
 import json
+import math
 import os
 import time
 from pathlib import Path
@@ -39,6 +40,9 @@ def main():
         raise RuntimeError("Correctness fixture requires trace tracking and program-cache tracking")
     if max(a.lengths) + a.outputs > 1024 or min(a.lengths) < 1:
         raise ValueError("Short fixture pool must cover every request")
+    # paged_update_cache requires table_width <= total physical cache pages.
+    # Preserve native table width; supply the smallest legal aggregate pool.
+    pool_context = max(1024, math.ceil(262144 / (a.batch * 256)) * 256)
     torch.set_num_threads(8)
     ttnn.CONFIG.throw_exception_on_fallback = True
     ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_1D_RING)
@@ -48,7 +52,7 @@ def main():
         batch=a.batch,
         layers="all64" if a.full_stack else [0, 3],
         native_context=262144,
-        physical_pool_tokens_per_row=1024,
+        physical_pool_tokens_per_row=pool_context,
         scope="native standalone bounded external pool; not serving retention/capacity or quality",
         runtime=runtime_build(),
         records=[],
@@ -79,8 +83,8 @@ def main():
         ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
         try:
             model = Model(a.checkpoint, mesh, layer_indices=None if a.full_stack else [0, 3])
-            cache = model.allocate_cache(batch_size=a.batch, context_length=1024)
-            pages = 1024 // 32
+            cache = model.allocate_cache(batch_size=a.batch, context_length=pool_context)
+            pages = pool_context // 32
             table = torch.zeros(a.batch, 262144 // 32, dtype=torch.int32)
             table[:, :pages] = torch.arange(a.batch * pages, dtype=torch.int32).reshape(a.batch, pages)
             gen = Generator(
