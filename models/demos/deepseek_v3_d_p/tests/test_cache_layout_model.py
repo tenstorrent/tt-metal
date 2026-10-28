@@ -6,7 +6,8 @@ classic table.
 
 ``build_and_serialize_kv_chunk_table`` (single-config path) publishes the walked table, derives the same
 table from the cache's layout model with ``to_chunk_map``, and writes the model next to the table only when
-the two agree, on one mesh and across pipeline stages on their own meshes. With
+the two agree, on one mesh and across pipeline stages on their own meshes, TP-deduped or not, and for a
+compacted cache (``layer_rows``) holding only its MLA layers. With
 ``DEEPSEEK_KV_TABLE_FROM_LAYOUT_MODEL=1`` it publishes the derived table instead, which must equal the
 walked one.
 """
@@ -31,6 +32,10 @@ NUM_USERS = 2
 KVPE_DIM = 576  # kv_lora_rank 512 + qk_rope_head_dim 64
 ONE_MESH = (3,)  # layers per stage
 TWO_STAGES = (2, 3)
+# The middle stage holds no layer (a rank with no MLA layer).
+AN_EMPTY_STAGE = (2, 0, 3)
+# A compacted cache's slabs (in stage order) published at these model layers, the rest being non-MLA.
+LAYER_ROWS = {ONE_MESH: [1, 2, 4], TWO_STAGES: [1, 2, 4, 7, 8], AN_EMPTY_STAGE: [1, 2, 4, 7, 8]}
 
 
 def _fnids(mesh_id, chip_id=lambda r, c: r * TP + c):
@@ -77,7 +82,7 @@ def _stub_cache(stage_layers, *, tp_deduped=False, fp8=False):
     return SimpleNamespace(storage=storage)
 
 
-def _build(path, stage_layout, *, tp_deduped=False, fp8=False):
+def _build(path, stage_layout, *, tp_deduped=False, fp8=False, layer_rows=None):
     first_stage = stage_layout[0]["count"]
     build_and_serialize_kv_chunk_table(
         mesh_device=None,
@@ -93,6 +98,7 @@ def _build(path, stage_layout, *, tp_deduped=False, fp8=False):
         first_layer_idx=0,
         num_my_layers=first_stage,
         stage_layouts=[stage_layout],
+        layer_rows=layer_rows,
     )
     return disaggregation.import_from_protobuf_file(path)
 
@@ -101,29 +107,62 @@ def _derives(model_path, table):
     """None when the model at ``model_path``, with the stages' hosts, derives ``table``."""
     model = disaggregation.import_cache_layout_model_from_protobuf_file(model_path)
     derived = disaggregation.to_chunk_map(model)
-    for mesh_id in range(len({int(cache.mesh_id) for cache in model.caches})):
+    for mesh_id in {int(cache.mesh_id) for cache in model.caches}:
         for row in _fnids(mesh_id):
             for fid in row:
                 derived.set_fabric_node_host(fid, host_name=table.get_host(fid))
     return disaggregation.first_table_difference(table, derived)
 
 
-@pytest.mark.parametrize("stage_counts", [ONE_MESH, TWO_STAGES], ids=["one_mesh", "two_stages"])
-def test_the_model_derives_the_walked_table(tmp_path, monkeypatch, stage_counts):
+STAGE_COUNTS = pytest.mark.parametrize(
+    "stage_counts", [ONE_MESH, TWO_STAGES, AN_EMPTY_STAGE], ids=["one_mesh", "two_stages", "an_empty_stage"]
+)
+TP_DEDUPED = pytest.mark.parametrize("tp_deduped", [False, True], ids=["tp_replicated", "tp_deduped"])
+COMPACTED = pytest.mark.parametrize("compacted", [False, True], ids=["every_layer", "compacted"])
+
+
+@STAGE_COUNTS
+@TP_DEDUPED
+@COMPACTED
+def test_the_model_derives_the_walked_table(tmp_path, monkeypatch, stage_counts, tp_deduped, compacted):
     monkeypatch.delenv(LAYOUT_MODEL_ENV, raising=False)
     path = os.path.join(str(tmp_path), "table.pb")
-    walked = _build(path, _stage_layout(stage_counts))
+    layer_rows = LAYER_ROWS[stage_counts] if compacted else None
+    walked = _build(path, _stage_layout(stage_counts), tp_deduped=tp_deduped, layer_rows=layer_rows)
     model_path = path + LAYOUT_MODEL_SUFFIX
     assert os.path.exists(model_path)
     assert _derives(model_path, walked) is None
     assert walked.num_configs() == 1 and walked.config_name(0) == "0"
 
     model = disaggregation.import_cache_layout_model_from_protobuf_file(model_path)
-    assert [cache.name for cache in model.caches] == ["0"] * len(stage_counts)
-    assert [(cache.first_layer, cache.num_layers, int(cache.mesh_id)) for cache in model.caches] == [
-        (sum(stage_counts[:i]), count, i) for i, count in enumerate(stage_counts)
-    ]
-    assert model.geometry.num_layers == sum(stage_counts)
+    held = [i for i, count in enumerate(stage_counts) if count > 0]
+    assert [cache.name for cache in model.caches] == ["0"] * len(held)
+    assert [int(cache.mesh_id) for cache in model.caches] == held
+    assert [cache.holds_only_published_layers for cache in model.caches] == [compacted] * len(held)
+    if compacted:
+        assert [list(cache.layers) for cache in model.caches] == [
+            layer_rows[sum(stage_counts[:i]) : sum(stage_counts[: i + 1])] for i in held
+        ]
+        assert model.geometry.num_layers == layer_rows[-1] + 1
+    else:
+        assert [(cache.first_layer, cache.num_layers) for cache in model.caches] == [
+            (sum(stage_counts[:i]), stage_counts[i]) for i in held
+        ]
+        assert model.geometry.num_layers == sum(stage_counts)
+
+
+@TP_DEDUPED
+def test_a_compacted_cache_publishes_no_row_for_a_layer_it_does_not_hold(tmp_path, monkeypatch, tp_deduped):
+    monkeypatch.delenv(LAYOUT_MODEL_ENV, raising=False)
+    path = os.path.join(str(tmp_path), "table.pb")
+    layer_rows = LAYER_ROWS[TWO_STAGES]
+    _build(path, _stage_layout(TWO_STAGES), tp_deduped=tp_deduped, layer_rows=layer_rows)
+    derived = disaggregation.to_chunk_map(
+        disaggregation.import_cache_layout_model_from_protobuf_file(path + LAYOUT_MODEL_SUFFIX)
+    )
+    for layer in range(layer_rows[-1] + 1):
+        held = layer in layer_rows
+        assert (derived.lookup(layer, 0, 0, 0).size_bytes > 0) == held, f"layer {layer}"
 
 
 def test_a_model_that_derives_another_table_is_not_written(tmp_path, monkeypatch):
@@ -142,30 +181,33 @@ def test_a_model_that_derives_another_table_is_not_written(tmp_path, monkeypatch
 
 
 @pytest.mark.parametrize(
-    "stage_layout, tp_deduped, fp8",
+    "stage_layout, fp8, layer_rows",
     [
-        (_stage_layout(TWO_STAGES, chip_id=lambda r, c: c * SP + r), False, False),
-        (_stage_layout(TWO_STAGES, num_banks=BH_NUM_DRAM_BANKS - 1), False, False),
-        (_stage_layout(TWO_STAGES), True, False),
-        (_stage_layout(TWO_STAGES), False, True),
+        (_stage_layout(TWO_STAGES, chip_id=lambda r, c: c * SP + r), False, None),
+        (_stage_layout(TWO_STAGES, num_banks=BH_NUM_DRAM_BANKS - 1), False, None),
+        (_stage_layout(TWO_STAGES), True, None),
+        (_stage_layout(TWO_STAGES), False, [1, 2, 7, 4, 8]),
     ],
-    ids=["column_major_mesh", "harvested_bank", "tp_deduped", "fp8_row_major"],
+    ids=["column_major_mesh", "harvested_bank", "fp8_row_major", "layer_rows_out_of_order"],
 )
-def test_a_layout_the_model_cannot_declare_keeps_the_walk(tmp_path, monkeypatch, stage_layout, tp_deduped, fp8):
+def test_a_layout_the_model_cannot_declare_keeps_the_walk(tmp_path, monkeypatch, stage_layout, fp8, layer_rows):
     monkeypatch.delenv(LAYOUT_MODEL_ENV, raising=False)
     path = os.path.join(str(tmp_path), "table.pb")
-    walked = _build(path, stage_layout, tp_deduped=tp_deduped, fp8=fp8)
+    walked = _build(path, stage_layout, fp8=fp8, layer_rows=layer_rows)
     assert walked.total_entries() > 0
     assert not os.path.exists(path + LAYOUT_MODEL_SUFFIX)
 
 
-@pytest.mark.parametrize("stage_counts", [ONE_MESH, TWO_STAGES], ids=["one_mesh", "two_stages"])
-def test_publishing_the_derived_table_gives_the_walked_one(tmp_path, monkeypatch, stage_counts):
+@STAGE_COUNTS
+@TP_DEDUPED
+@COMPACTED
+def test_publishing_the_derived_table_gives_the_walked_one(tmp_path, monkeypatch, stage_counts, tp_deduped, compacted):
     monkeypatch.delenv(LAYOUT_MODEL_ENV, raising=False)
-    walked = _build(os.path.join(str(tmp_path), "walked.pb"), _stage_layout(stage_counts))
+    layout = dict(tp_deduped=tp_deduped, layer_rows=LAYER_ROWS[stage_counts] if compacted else None)
+    walked = _build(os.path.join(str(tmp_path), "walked.pb"), _stage_layout(stage_counts), **layout)
     monkeypatch.setenv(LAYOUT_MODEL_ENV, "1")
     path = os.path.join(str(tmp_path), "derived.pb")
-    derived = _build(path, _stage_layout(stage_counts))
+    derived = _build(path, _stage_layout(stage_counts), **layout)
     assert disaggregation.first_table_difference(walked, derived) is None
     assert os.path.exists(path + LAYOUT_MODEL_SUFFIX)
 
@@ -173,4 +215,4 @@ def test_publishing_the_derived_table_gives_the_walked_one(tmp_path, monkeypatch
 def test_publishing_the_derived_table_refuses_a_layout_the_model_cannot_declare(tmp_path, monkeypatch, expect_error):
     monkeypatch.setenv(LAYOUT_MODEL_ENV, "1")
     with expect_error(RuntimeError, "not derivable"):
-        _build(os.path.join(str(tmp_path), "table.pb"), _stage_layout(TWO_STAGES), tp_deduped=True)
+        _build(os.path.join(str(tmp_path), "table.pb"), _stage_layout(TWO_STAGES), fp8=True)

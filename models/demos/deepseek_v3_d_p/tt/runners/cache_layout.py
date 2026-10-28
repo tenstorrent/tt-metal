@@ -11,12 +11,18 @@ table from the model.
 
 The allocated tensor carries a 1-D Replicate topology (which sequence block a chip holds is decided at
 write time), so the distribution is declared here instead: the sequence sharded over the SP rows,
-replicated over the TP columns (a whole TP row is one replica group).
+replicated over the TP columns (a whole TP row is one replica group). A TP-deduped cache shards its
+sequence over both mesh axes instead (row-major, SP outer), each chip its own group.
 
 A stage's cache is ``[num_users * stage_layers, 1, seq_len, kvpe_dim]``, user-major, so ``to_chunk_map``
 folds the stage's layers into the batch axis. The writer's layout is the Natural scheme with the Identity
 bank order: 32-token blocks round-robin over the banks, and SP row r owning ``[n*chunk + r*chunk/sp,
-+chunk/sp)`` of each prefill chunk n (chunk-modulo ownership with ``device_chunk_size = chunk/sp``).
++chunk/sp)`` of each prefill chunk n (chunk-modulo ownership with ``device_chunk_size = chunk/sp``); deduped,
+chip (r, c) owns ``[n*chunk + r*chunk/sp + c*chunk/(sp*tp), +chunk/(sp*tp))`` (``device_chunk_size =
+chunk/(sp*tp)``).
+
+A compacted cache (``layer_rows``: a hybrid stack whose cache holds only its MLA layers, its stages numbered
+in compacted slab space) holds just the model layers it publishes, slot x those layers on its batch axis.
 """
 
 import ttnn
@@ -44,11 +50,22 @@ def _spec(kvpe_cache, *, num_users, stage_layers, seq_len):
     return disaggregation.KvLayoutSpec(tensor_spec, disaggregation.TemporalDense(), CACHE_ARCH)
 
 
-def _replicated_topology(sp, tp):
-    """The sequence sharded over the SP rows, replicated over the TP columns."""
+def _sequence_topology(sp, tp, *, kv_dedup):
+    """The sequence sharded over the SP rows, and over the TP columns too when ``kv_dedup`` (replicated
+    over them otherwise)."""
     shape = ttnn.MeshShape(sp, tp)
     coords = [ttnn.MeshCoordinate(row, col) for row in range(sp) for col in range(tp)]
-    return ttnn.TensorTopology(shape, [ttnn.PlacementShard(2), ttnn.PlacementReplicate()], coords)
+    tp_placement = ttnn.PlacementShard(2) if kv_dedup else ttnn.PlacementReplicate()
+    return ttnn.TensorTopology(shape, [ttnn.PlacementShard(2), tp_placement], coords)
+
+
+def _stage_model_layers(stage, layer_rows):
+    """The model layers ``stage`` holds: its layer range, or with ``layer_rows`` the rows its compacted slabs
+    publish at."""
+    first, count = stage["first_layer"], stage["count"]
+    if layer_rows is None:
+        return list(range(first, first + count))
+    return list(layer_rows[first : first + count])
 
 
 def deepseek_cache_layout_model(
@@ -62,21 +79,28 @@ def deepseek_cache_layout_model(
     chunk_size,
     kv_dedup,
     layer_rows=None,
+    config_name=KVPE_CONFIG_NAME,
 ):
     """The ``CacheLayoutModel`` of the KVPE cache over ``stage_layout`` (the gathered pipeline stages, each
     with ``first_layer``, ``count``, ``base_addr``, ``num_banks`` and ``fnids[row][col]``). ``kvpe_cache``
-    is this rank's cache tensor (its format and row width hold on every stage).
+    is this rank's cache tensor (its format and row width hold on every stage). ``kv_dedup`` declares the
+    sequence sharded over the TP columns as well. ``layer_rows`` maps the stages' compacted slabs to the
+    model layers they publish at; ``config_name`` names the table config.
 
-    Raises CacheLayoutNotDerivable for stages that were not gathered, a TP-deduped cache (its sequence is
-    sharded over both mesh axes), layers published at remapped rows, an SP axis other than the mesh rows, a
-    cache format other than bfp8 TILE, a stage whose chips are not numbered row-major, or a bank count other
-    than the cache's."""
+    A stage holding no layers (a rank with no MLA layer) publishes nothing and gets no cache.
+
+    Raises CacheLayoutNotDerivable for stages that were not gathered or hold no layer, layer rows not
+    strictly ascending (a cache holds its published layers in layer order), an SP axis other than the mesh
+    rows, a cache format other than bfp8 TILE, a stage whose chips are not numbered row-major, or a bank
+    count other than the cache's."""
     if stage_layout is None:
         raise CacheLayoutNotDerivable("the stages were not gathered (the walk gathers them inline)")
-    if kv_dedup:
-        raise CacheLayoutNotDerivable("a TP-deduped cache shards its sequence over both mesh axes")
-    if layer_rows is not None:
-        raise CacheLayoutNotDerivable("the cache's layers are published at remapped table rows")
+    stages = [stage for stage in stage_layout if stage["count"] > 0]
+    if not stages:
+        raise CacheLayoutNotDerivable("no stage holds a layer")
+    rows_ascend = layer_rows is None or all(a < b for a, b in zip(layer_rows, layer_rows[1:]))
+    if not rows_ascend:
+        raise CacheLayoutNotDerivable(f"the layer rows {list(layer_rows)} are not strictly ascending")
     if sp_axis != 0:
         raise CacheLayoutNotDerivable(f"the SP axis is mesh axis {sp_axis}, not the rows")
     if (kvpe_cache.dtype, kvpe_cache.layout) != (ttnn.bfloat8_b, ttnn.TILE_LAYOUT):
@@ -87,31 +111,34 @@ def deepseek_cache_layout_model(
         bank_order=disaggregation.BankOrder.Identity,
         # Natural/Identity pages the sequence at k_chunk_size tokens: one DRAM block.
         k_chunk_size=NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK,
-        device_chunk_size=chunk_size // sp,
+        device_chunk_size=chunk_size // (sp * tp if kv_dedup else sp),
     )
-    topology = _replicated_topology(sp, tp)
+    topology = _sequence_topology(sp, tp, kv_dedup=kv_dedup)
+    compacted = layer_rows is not None
 
     caches = []
-    for stage in stage_layout:
+    for stage in stages:
         if stage["num_banks"] != BH_NUM_DRAM_BANKS:
             raise CacheLayoutNotDerivable(
                 f"stage at layer {stage['first_layer']} has {stage['num_banks']} DRAM banks, "
                 f"not the cache's {BH_NUM_DRAM_BANKS}"
             )
+        model_layers = _stage_model_layers(stage, layer_rows)
         caches.append(
             disaggregation.CacheConfig(
                 _spec(kvpe_cache, num_users=num_users, stage_layers=stage["count"], seq_len=seq_len),
                 topology,
                 policy,
                 stage["base_addr"],
-                name=KVPE_CONFIG_NAME,
-                layers=[],
-                first_layer=stage["first_layer"],
-                num_layers=stage["count"],
+                name=config_name,
+                layers=model_layers if compacted else [],
+                first_layer=model_layers[0],
+                num_layers=model_layers[-1] + 1 - model_layers[0],
                 mesh_id=row_major_mesh_id(stage["fnids"], sp, tp, f"stage at layer {stage['first_layer']}"),
+                holds_only_published_layers=compacted,
             )
         )
-    num_layers = sum(stage["count"] for stage in stage_layout)
+    num_layers = max(layer_rows) + 1 if compacted else sum(stage["count"] for stage in stages)
     geometry = disaggregation.MapGeometry(
         num_layers, num_users, seq_len, position_step=NUM_CONTIGUOUS_TOKENS_IN_DRAM_BANK
     )
