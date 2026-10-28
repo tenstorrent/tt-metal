@@ -62,9 +62,13 @@ class VisionMLP(LightweightModule):
 
     def forward(self, x: ttnn.Tensor, memory_config=None) -> ttnn.Tensor:
         B, S = x.shape[0], x.shape[2]
-        mem = vision_act_memory_config(x.device(), B, S, self.config.intermediate_size)
-        up = vision_linear(x, self.w_up, memory_config=mem)
-        gate = vision_linear(x, self.w_gate, memory_config=mem)
+        I = self.config.intermediate_size
+        dev = x.device()
+        # up / gate outputs in L1 for one image (-1.3 ms at 1 x 2560); h in L1 gave nothing (E5b screen)
+        mem_ug = vision_act_memory_config(dev, B, S, I, wide="mlp")
+        mem = vision_act_memory_config(dev, B, S, I)
+        up = vision_linear(x, self.w_up, memory_config=mem_ug)
+        gate = vision_linear(x, self.w_gate, memory_config=mem_ug)
         h = ttnn.multiply(gate, up, memory_config=mem, input_tensor_a_activations=_GELU)
         ttnn.deallocate(gate)
         ttnn.deallocate(up)

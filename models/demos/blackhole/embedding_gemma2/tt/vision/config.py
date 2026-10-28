@@ -36,12 +36,19 @@ PATCH_BUCKETS = (1280, 2560)
 # DRAM. 128 KB / 10240 patches (batch 4 in L1) failed: op circular buffers clash with L1 buffers.
 VISION_L1_BYTES_PER_BANK = 64 * 1024
 VISION_L1_MAX_TOKENS = 4096
+# Wide intermediates named by the caller ("mlp": the up / gate projection outputs, "qkv": the fused
+# QKV output) also go to L1 up to this many patches, beyond the per-bank cap (121 KB / 91 KB per
+# bank at 2560 patches). The 128 KB cap for every tensor clashed with an op's circular buffers
+# (CB region end 1160576 B vs an L1 buffer at 1142784 B); naming the tensors keeps the rest in DRAM.
+VISION_L1_WIDE_MAX_TOKENS = {"mlp": 2560, "qkv": 2560}
 
 
-def vision_act_memory_config(device, batch: int, seq_len: int, width: int):
+def vision_act_memory_config(device, batch: int, seq_len: int, width: int, wide: str | None = None):
     """L1 interleaved for a bf16 [batch, 1, seq_len, width] TILE tensor when it fits the rule, else DRAM."""
     import ttnn
 
+    if wide is not None and batch * seq_len <= VISION_L1_WIDE_MAX_TOKENS.get(wide, 0):
+        return ttnn.L1_MEMORY_CONFIG
     per_bank, max_tokens = VISION_L1_BYTES_PER_BANK, VISION_L1_MAX_TOKENS
     grid = device.compute_with_storage_grid_size()
     n = 2 * int(batch) * int(seq_len) * int(width)

@@ -182,7 +182,7 @@ class VisionAttention(LightweightModule):
         windows = mask.cu if isinstance(mask, PaddingWindows) else None
         # the [B, H, S, 64] heads and the [B, 1, S, 768] SDPA output have the bytes of a [B, 1, S, 768] tensor
         mem = vision_act_memory_config(dev, B, S, cfg.width)
-        xqkv = vision_linear(x, self.wqkv, memory_config=vision_act_memory_config(dev, B, S, 3 * cfg.width))
+        xqkv = vision_linear(x, self.wqkv, memory_config=vision_act_memory_config(dev, B, S, 3 * cfg.width, wide="qkv"))
         if windows is not None:  # one [1, H, B*S, 64] sequence; cos/sin are [1, 1, B*S, 64]
             xqkv = ttnn.reshape(xqkv, (1, 1, B * S, 3 * cfg.width))
         q, k, v = ttnn.experimental.nlp_create_qkv_heads(
