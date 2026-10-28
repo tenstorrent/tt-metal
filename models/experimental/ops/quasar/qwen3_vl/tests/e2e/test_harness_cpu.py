@@ -374,6 +374,19 @@ def test_host_multiply_also_replaces_ttnn_mul(monkeypatch):
     assert s.host_ops_active == ["ttnn.multiply"]
 
 
+def test_diff_ops_flags_non_finite_outputs(capsys):
+    from models.experimental.ops.quasar.qwen3_vl.tests.e2e.repros.diff_ops import diff_ops
+
+    x = torch.ones(4)
+    nan = x.clone()
+    nan[1] = float("nan")
+    diff_ops(
+        [(0, "ttnn.add", None, x), (1, "ttnn.add", None, x)], [(0, "ttnn.add", None, x), (1, "ttnn.add", None, nan)]
+    )
+    out = capsys.readouterr().out
+    assert "#1 ttnn.add (4,): non-finite outputs 0 vs 1/4" in out and "no significant divergence" not in out
+
+
 def test_strip_fp32_dest_acc_rewrites_only_fp32_configs():
     import ttnn
 
