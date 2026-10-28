@@ -240,7 +240,7 @@ These are names the manifest writes as strings, so nothing appears both here and
 | `intra_chip_downstream_edges` | Keyed `vc<v>` then `edge<n>`. VCs with no edges are left out |
 | `fields` | The router's fields |
 | `eriscs` | Keyed `erisc<n>`, in RISC order: each with its `processor`, `physical_erisc` and `fields` |
-| `leftover_l1` | The L1 from the end of the channel buffers to the end of loadable L1, as `bytes`, or null when there is none |
+| `leftover_l1` | The L1 from the end of what the router uses to the end of loadable L1, as `bytes`, or null when there is none |
 
 ### Channels
 
