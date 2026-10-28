@@ -14,7 +14,14 @@ spec.loader.exec_module(module)
 def event(kind, address, per_bank=64):
     return dict(
         node_type=kind,
-        params=dict(device_id="7", type="DRAM", address=str(address), max_size_per_bank=str(per_bank), size="100"),
+        params=dict(
+            device_id="7",
+            type="DRAM",
+            buffer_type="0",
+            address=str(address),
+            max_size_per_bank=str(per_bank),
+            size="100",
+        ),
     )
 
 
