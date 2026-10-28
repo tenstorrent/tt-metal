@@ -57,6 +57,7 @@ yolo26n weights `yolo26n.pt` (ultralytics 8.4.184), computed with `models.common
 | YOLO26-0035 | Why on-screen latency exceeds capture-to-results, and by different amounts per configuration; synchronized batch 4 | 2026-10-27 | ANSWERED: ~9 ms fixed display work (panel ~2 ms, JPEG ~6 ms) plus up to one compose of waiting when the renderer is busy; synchronized batch 4 11.5 → 35.3 ms by set |
 | YOLO26-0036 | Cut the on-screen (display) overhead: parallel strip JPEG + panel at 10 Hz | 2026-10-27 | DONE: on screen bs4 staggered 21.4 → 11.3 ms, bs4 synchronized 34.2 → 24.6, bs20 53.0 → 48.0; live-view image identical; panel may lag tiles ≤ 100 ms |
 | YOLO26-0037 | Defect from 0036: panel at 10 Hz disagreed with the tiles in the recording | 2026-10-27 | FIXED: only changed panel rows redrawn on every update; 60/60 rows match in 3 checked frames; on screen 11.5 → 12.8 ms |
+| YOLO26-0038 | Like-for-like latency table: bs=4 vs bs=20, all 20 cameras captured together, with display breakdown | 2026-10-28 | RECORDED: bs=4 11.2 → 35.2 ms by set (on screen ~14.7 → ~38.7), bs=20 44.6 ms all (on screen ~50.3); display +3.5 / +5.7 ms |
 
 ## Entries
 
@@ -1196,3 +1197,31 @@ MEASURED (1 chip, batch 4, staggered, 20 × 30 FPS, 60 s, live view + recording,
 capture-to-results 9.4 / 9.4 / 10.0 / 9.8 / 9.5 ms by group; on screen 12.8 ms (11.5 ms with the 10 Hz panel, v2
 clip; 21.4 ms before YOLO26-0036). Frames at 15 / 30 / 45 s: 20/20 panel rows equal their tiles in each, totals
 52 / 42 / 62 equal the tile sums.
+
+### YOLO26-0038 — bs=4 vs bs=20 with all cameras captured together, display breakdown (appended 2026-10-28)
+
+Like-for-like comparison: in both columns all 20 cameras are captured at the same instant (bs=4 with
+`--synchronized-capture`, bs=20 by construction). Code of YOLO26-0037; 1 chip, 20 streams × 30 FPS, 60 s, live
+view on; 600.0 / 599.9 images/s.
+| cameras (set in tick) | bs=4, 20 streams latency | bs=20, 20 streams (one pass) latency |
+|---|---|---|
+| **capture → results** (MEASURED, median) | | |
+| CAM 01-04 (1st) | 11.2 ms | 44.6 ms |
+| CAM 05-08 (2nd) | 16.9 ms | 44.6 ms |
+| CAM 09-12 (3rd) | 22.5 ms | 44.6 ms |
+| CAM 13-16 (4th) | 28.2 ms | 44.6 ms |
+| CAM 17-20 (5th) | 35.2 ms | 44.6 ms |
+| **+ display** (draw tiles and panel, encode, publish) | +3.5 ms | +5.7 ms |
+| **= on screen** | | |
+| CAM 01-04 (1st) | ~14.7 ms | ~50.3 ms |
+| CAM 17-20 (5th) | ~38.7 ms | ~50.3 ms |
+Method:
+- capture → results: MEASURED per set (bs=4: run log `scratchpad/sync_b4_v3.log`, not recorded; bs=20: the 60 s
+  recording `yolo26_demo_outputs/multistream/yolo26s_20streams_1chip_batch20_v2.mp4`).
+- display: INFERRED as measured on-screen median minus results median (bs=4: 26.0 − 22.5 = 3.5 ms over all
+  cameras; bs=20: 50.3 − 44.6 = 5.7 ms). bs=20's step is longer because each update redraws all 20 tiles and panel
+  rows; a bs=4 update touches 4.
+- on screen per set: INFERRED as results + display; the demo measures only the on-screen median over all cameras.
+- For reference, staggered bs=4 (default, cameras on their own phases; recording `..._batch4_v3.mp4`): 9.4-10.0 ms
+  per set to results, 12.8 ms on screen (median). A full round of all 20 staggered cameras completes ~36 ms after
+  its first capture (26.7 ms capture spread + ~9.5 ms; INFERRED), about the same as synchronized (35.2 ms).
