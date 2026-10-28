@@ -48,8 +48,8 @@ enum SparseCB : uint32_t {
     cb_k_rope_tile,     // scaled FP8 only: one K chunk's BF16 RoPE tiles
     cb_attention_sink,  // persistent first-column vector: one sink scalar per head
     cb_sink_scratch,    // writer scratch for gathering sink scalars
-    cb_k4_rm,           // ROW_BFP4 only: one chunk's gathered row records (DRAM-aligned stride), dataflow scratch
-    cb_k4,              // ROW_BFP4 only: the chunk's K as bfloat4_b tiles [Skt, DHt], shuffled by the dataflow kernels
+    cb_k4_rm,           // ROW_BFP4 only: a chunk's gathered staging block [exponents | nibbles] (row-major bfloat4_b)
+    cb_k4,              // ROW_BFP4 only: the chunk's K as bfloat4_b tiles [Skt, DHt], made by the unpacker (compute)
     cb_count
 };
 
@@ -78,7 +78,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     // kv holds the bfloat4_b row records, gathered into cb_k4_rm and shuffled into cb_k4.
     const bool row_bfp4 = attrs.has_row_bfp4();
     const uint32_t kv_elem_bytes = row_bfp4 ? t.kv_window->element_size() : t.kv.element_size();
-    const uint32_t k4_stride = row_bfp4 ? t.kv.buffer()->aligned_page_size() : 0;
+
     const uint32_t idx_elem_bytes = t.indices.element_size();  // uint32 -> 4
     const uint32_t out_elem_bytes = output.element_size();
     const uint32_t q_row_bytes = k_dim * q_elem_bytes;
@@ -194,11 +194,13 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     }
 
     if (row_bfp4) {
-        cb(cb_k4_rm, k4_stride, k_chunk, tt::DataFormat::UInt8);
-        cb(cb_k4,
-           ::sparse_sdpa::BFP4_TILE_BYTES,
-           Skt * DHt * ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH,
+        // the staging block's format is the unpacker's input format (bfloat4_b); double-buffered so the next chunk's
+        // gather overlaps this chunk's conversion
+        cb(cb_k4_rm,
+           ::sparse_sdpa::row_bfp4_block_bytes(k_dim, k_chunk),
+           ::sparse_sdpa::CB_DOUBLE_BUFFER_DEPTH,
            tt::DataFormat::Bfp4_b);
+        cb(cb_k4, tt::tile_size(tt::DataFormat::Bfp4_b), Skt * DHt, tt::DataFormat::Bfp4_b);
     }
 
     if (use_attention_sink) {
@@ -242,7 +244,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
     TT_FATAL(
         reader_ct.size() == ::sparse_sdpa::reader_ct_arg::END,
         "sparse_sdpa reader compile-time argument layout is out of sync");
-    const std::vector<uint32_t> row_bfp4_ct = {cb_k4_rm, cb_k4, k4_stride};  // row_bfp4_ct_arg order
+    const std::vector<uint32_t> row_bfp4_ct = {cb_k4_rm, cb_k4, k_chunk};  // row_bfp4_ct_arg order
     if (row_bfp4) {
         reader_ct.insert(reader_ct.end(), row_bfp4_ct.begin(), row_bfp4_ct.end());
     }
@@ -354,6 +356,7 @@ tt::tt_metal::ProgramDescriptor SparseSDPAOperation::SparseSDPAProgramFactory::c
         "sparse_sdpa compute compile-time argument layout is out of sync");
     if (row_bfp4) {
         compute_ct.push_back(cb_k4);
+        compute_ct.push_back(cb_k4_rm);
     }
 
     tt::tt_metal::KernelDescriptor compute_desc;

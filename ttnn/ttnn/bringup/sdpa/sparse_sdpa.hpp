@@ -74,12 +74,14 @@ enum class SparseKVFormat : uint8_t {
 // fp32_output may be false: the output is then rounded to bf16 by the packer (the kernel's bf16 output). The flash
 // correction (more than one k_chunk) stays bf16.
 //
-// kv_format ROW_BFP4 (bring-up fork option, deepseek_v41_flash_d_p 4-bit compressed KV): kv is [B,1,T,K_DIM/16 +
-// K_DIM/2] uint8 ROW_MAJOR (288 B a row at K_DIM 512, written by ttnn.bringup.ckv_bfp4) and kv_window [1,1,Tw,K_DIM]
-// bf16 ROW_MAJOR. The index list is [window k_chunk | top-k]: its first k_chunk ids index kv_window (valid ids first, a
-// sentinel tail), the rest index kv (their own sentinel tail; none valid is allowed). Each gathered group of 32 rows is
-// shuffled into 32 x K_DIM bfloat4_b tiles that both matmuls read directly (no tilize, no scale); the window chunk is
-// tilized in bf16 as with BF16. bf16 q only; not with block_cyclic or high_precision.
+// kv_format ROW_BFP4 (bring-up fork option, deepseek_v41_flash_d_p 4-bit compressed KV): kv is [B,1,T,320] uint8
+// ROW_MAJOR bfloat4_b row records (K_DIM 512: the 32 shared exponents twice, then 256 bytes of nibbles; written by
+// ttnn.bringup.ckv_bfp4) and kv_window [1,1,Tw,K_DIM] bf16 ROW_MAJOR. The index list is [window k_chunk | top-k]: its
+// first k_chunk ids index kv_window (valid ids first, a sentinel tail), the rest index kv (their own sentinel tail;
+// none valid is allowed). A top-k chunk's rows are gathered by plain NoC reads into a row-major bfloat4_b block
+// (exponents | nibbles) that the unpacker turns into bfloat4_b K tiles (one UNPACR a face row, datacopy, pack): no
+// data-movement RISC byte work, no scale multiply; the window chunk is tilized in bf16 as with BF16. bf16 q only; K_DIM
+// 512; not with block_cyclic or high_precision.
 //
 // attention_sink: optional [1,1,1,H] unpadded interleaved ROW_MAJOR BF16 tensor in DRAM.
 // Like classic SDPA, the sink is multiplied by scale and contributes only to the softmax denominator.

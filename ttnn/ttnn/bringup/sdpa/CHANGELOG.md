@@ -394,32 +394,42 @@ Build fixes after fork_op.py (no behaviour change):
 
 ### sparse_sdpa: opt-in kv_format ROW_BFP4 (bfloat4_b row records + a bf16 window tensor)
 - What: `ttnn.bringup.SparseKVFormat.ROW_BFP4` with `kv_window=` (default: none; any other format refuses it). kv is
-  `[B, 1, T, K_DIM/16 + K_DIM/2]` uint8 row records (288 B at K_DIM 512: K_DIM/16 shared exponents, then the nibbles,
-  value 2i in the low nibble of byte i; written by `ttnn.bringup.ckv_bfp4`), kv_window `[1, 1, Tw, K_DIM]` bf16. The
-  index row is `[window k_chunk | top-k]`, each part with its own sentinel tail (a top-k part with no valid key is
-  allowed). Chunk 0 gathers the window rows and is tilized in bf16 as before. Chunks >= 1 gather the records into a
-  staging buffer (row stride = the kv page's DRAM-aligned size) on both NoCs, and each data-movement RISC shuffles its
-  own rows into the chunk's bfloat4_b tiles `[Skt, DHt]` (new double-buffered `cb_k4`); both matmuls read them as they
-  are (no tilize, no scale multiply). The RISCs split rows on a 16-row boundary, so a face's exponent bytes come from
-  one RISC. The window chunk gets its own boundary mask (control word WINDOW_VALID).
+  `[B, 1, T, 320]` uint8 row records (K_DIM 512: the 32 shared exponents twice, then 256 bytes of nibbles, value 2i in
+  the low nibble of byte i; written by `ttnn.bringup.ckv_bfp4`), kv_window `[1, 1, Tw, 512]` bf16. The index row is
+  `[window k_chunk | top-k]`, each part with its own sentinel tail (a top-k part with no valid key is allowed).
+  - Chunk 0 gathers the window rows and is tilized in bf16 as before.
+  - Chunks >= 1: the data-movement RISCs only issue NoC reads, two a row on both NoCs: the exponent copy whose offset
+    is congruent with its destination mod 64 -> the staging block's exponent region, the nibbles -> its data region
+    (the sentinel tail zeroed by NoC zero writes). The block [k_chunk x 512] is then a row-major bfloat4_b tensor.
+  - Compute turns it into the chunk's bfloat4_b K tiles (`cb_k4`) with the unpacker: tile descriptor x = 16,
+    y = 32 groups, z = k_chunk rows, one UNPACR per face row (16 values, 1 exponent; z += 1, SrcA row += 1), the MOP
+    doing a face (16, the last with SrcA valid, then SrcB valid), the stock datacopy -> DEST and a bfp4 pack (exact:
+    the values are on the grid). Both matmuls read the tiles as they are; no tilize, no scale multiply.
+  - ISA basis (tt-isa-documentation UNPACR_Regular): tileize mode is undefined for BFP4; outside it a BFP datum's
+    exponent is read by datum index from the exponent section; a BFP4 run may start mid 16 B word when it starts a
+    new exponent.
+  - Afterwards the conversion restores what it changed and the BF16 path's tilize leaves: the unpacker's SrcA Y
+    stride, tile x dim and descriptor (saved / written back), its X range, its Y / Z counters (left set they broke the
+    next matmul's unpack: rel inf), the base offset registers; the packer as tilize_uninit leaves it (a default pack
+    init on the bf16 K CB), L1 accumulation off for its packs.
+  - The window chunk gets its own boundary mask (control word WINDOW_VALID).
 - Default unchanged: everything is behind the define `SPARSE_SDPA_ROW_BFP4` (reader, writer, compute), added only for
   ROW_BFP4, with its compile-time args (after each block's END) and the kv_window address (after the fixed common args)
   only then. The request and control pages keep their sizes. The compute's matmul / reconfig calls take the chunk's K
-  CB as a value equal to `cb_k_in` without the define. The program hash adds kv_window's memory config (kv_format
-  already in it). The gather helper gained a destination-stride argument (default: the row size).
+  CB as a value equal to `cb_k_in` without the define. The program hash adds kv_window's memory config.
 - Why: deepseek_v41_flash_d_p FIX.8, the compressed KV attention table in 4 bits at the reference's width (F208):
-  3.56x less DRAM, gather traffic and L1 than bf16 rows; the device packer alone truncates bfp4 in effect, so the rows
-  are written by ckv_bfp4 (SFPU round to nearest even).
+  3.2x less table DRAM and gather traffic than bf16 rows (320 vs 1024 B); owner rule 2026-10-28: the data-movement
+  RISCs do no byte work (a first version shuffled rows into tiles on them: 517 / 1300 us, withdrawn).
 - Tests: `tests/unit/test_sparse_sdpa_row_bfp4.py` (6 cases, one device, K_DIM = v_dim 512, top-k 512 after a 128
   window, sink): a full window equals the BF16 path bit for bit on one bf16 table holding the same values (H 32 / 64,
   fp32 dest off / on, top-k parts of 0 / 1 / 31 / 32 / 200 / 512 keys); a partial window (1 / 17 / 32 / 100 / 127 keys)
   vs float32: rel 0.0249 (the BF16 path with the compacted list: 0.0250); deterministic; the refusals.
-- Time (one p150b, H 64, K_DIM 512, 640 indices all valid, 30 back-to-back calls; the BF16 path on one bf16 table):
-  160 queries (a Galaxy 8x4 chip at chunk 5120) BF16 341 us, ROW_BFP4 517 us; 512 queries (a 2x2 chip) 1184 vs
-  1300 us. Without the row -> tile shuffle (an ablation, wrong output) ROW_BFP4 takes 251 / 957 us: the 3.6x smaller
-  gather and the skipped tilize make it faster than BF16, and the shuffle (64 words + 32 exponent bytes a row on the
-  two data-movement RISCs, ~11 cycles a word) costs the rest. The shuffle moves exponents 4 rows at a time as words
-  (byte stores cost 130 us at 160 queries); deeper load batching was slower (register spills).
+  `test_sparse_sdpa_high_precision.py` 27 pass (option off unchanged).
+- Time (one p150b, H 64, K_DIM 512, 640 indices all valid, 30 back-to-back calls; BF16 on one bf16 table; probe
+  tests/ttnn/unit_tests/operations/ds41_ckv_bfp4/probes/probe_001.py): 160 queries (a Galaxy 8x4 chip at chunk 5120)
+  BF16 341 us, ROW_BFP4 353 us (+3.5 %); 512 queries (a 2x2 chip) 1182 vs 1245 us (+5 %). The unpacker conversion
+  costs ~7.5 us per 128-row chunk on the compute side (4096 one-row UNPACRs, ~2.5 cycles each) vs ~3.3 us for the bf16
+  tilize; with no conversion at all (an ablation, wrong output) it was 251 / 957 us.
 - Needed by: deepseek_v41_flash_d_p FIX.8 (CKV_FORMAT=bfp4_rows)
 - Files: `sparse_sdpa.hpp`, `sparse_sdpa.cpp`, `sdpa_nanobind.cpp`, `device/sparse_sdpa_device_operation*.{hpp,cpp}`,
   `device/sparse_sdpa_program_factory.cpp`, `device/kernels/sparse_sdpa_common.hpp`,

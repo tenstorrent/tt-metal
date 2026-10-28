@@ -140,8 +140,12 @@ def test_full_window_equals_bf16_on_the_same_values(device, H, fp32):
     run = _bfp4(device, q, win, rows, idx, sink, _ckc(fp32))
     got = ttnn.to_torch(run())
     exp = _bf16_combined(device, q, win, vals, idx, sink, _ckc(fp32), compact=False)
-    diff = (got.float() != exp.float()).flatten(2).any(-1)[0]  # [H, S]
-    assert not diff.any(), f"{int(diff.sum())} head-rows differ; tokens {diff.any(0).nonzero().flatten().tolist()}"
+    diff = (got.float() != exp.float()).any(-1)[0]  # [H, S]
+    toks = diff.any(0).nonzero().flatten().tolist()
+    assert not diff.any(), (
+        f"{int(diff.sum())} head-rows differ; tokens {toks} (top-k counts {[TOP_COUNTS[t % len(TOP_COUNTS)] for t in toks]}); "
+        f"rel {_rel(got, exp):.4f}"
+    )
     gold = _golden(q, win, vals, idx, sink)
     print(f"H {H} {'dest32' if fp32 else 'dest16'}: rel vs float32 {_rel(got, gold):.4f}")
 

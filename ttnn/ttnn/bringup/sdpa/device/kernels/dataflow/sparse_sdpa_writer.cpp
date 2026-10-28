@@ -82,9 +82,7 @@ void kernel_main() {
 #ifdef SPARSE_SDPA_ROW_BFP4
     // ROW_BFP4 (fork option): kv = bfloat4_b row records (chunks >= 1), kv_window = the bf16 rows of chunk 0
     constexpr uint32_t ct_rb = sparse_sdpa::writer_ct_arg::END;
-    constexpr uint32_t k4_stride = get_compile_time_arg_val(ct_rb + sparse_sdpa::row_bfp4_ct_arg::K4_ROW_STRIDE);
-    constexpr uint32_t k4_row_bytes = sparse_sdpa::row_bfp4_bytes(k_dim);
-    constexpr uint32_t k4_DHt = k_dim / tt::constants::TILE_WIDTH;
+    constexpr uint32_t k4_chunk = get_compile_time_arg_val(ct_rb + sparse_sdpa::row_bfp4_ct_arg::K_CHUNK);
     constexpr auto sink_args_rb =
         TensorAccessorArgs<kv_args.next_compile_time_args_offset(), kv_args.next_common_runtime_args_offset()>();
     constexpr auto kvw_args = TensorAccessorArgs<
@@ -171,7 +169,6 @@ void kernel_main() {
                     scale_dst_l1 = request[sparse_sdpa::gather_request::SCALE_DST_L1];
                 }
 #ifdef SPARSE_SDPA_ROW_BFP4
-                scale_dst_l1 = request[sparse_sdpa::gather_request::TILE_DST_L1];
                 kind = request[sparse_sdpa::gather_request::KIND];
 #endif
             }
@@ -179,9 +176,8 @@ void kernel_main() {
             (void)kind;
 #ifdef SPARSE_SDPA_ROW_BFP4
             if (kind == sparse_sdpa::gather_request::KIND_BFP4) {
-                sparse_sdpa::trid_ring_gather<false, 1, 1, 0, 0, sparse_sdpa::SCALED_K_TRID_RING>(
-                    noc, kv, dst_l1, idx_ptr, base, 0, split, k4_row_bytes, kv_batch_page_offset, k4_stride);
-                sparse_sdpa::shuffle_rows_to_bfp4_tiles<k4_DHt>(dst_l1, k4_stride, scale_dst_l1, 0, split);
+                sparse_sdpa::gather_bfp4_rows<k_dim, k4_chunk, sparse_sdpa::SCALED_K_TRID_RING>(
+                    noc, kv, dst_l1, idx_ptr, base, 0, split, kv_batch_page_offset);
             } else {
                 sparse_sdpa::trid_ring_gather<false, 1, 1, 0, 0, sparse_sdpa::K_TRID_RING>(
                     noc, kvw, dst_l1, idx_ptr, base, 0, split, k_row_bytes, 0);
