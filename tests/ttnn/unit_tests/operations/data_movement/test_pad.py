@@ -2214,3 +2214,15 @@ def test_pad_codegen_auto_keeps_execution_controls_on_native(device, controls):
     assert torch.equal(output, expected)
     msg = "auto routed a pad with an execution control to codegen"
     assert device.num_program_cache_entries() == entries_before, msg
+
+
+@pytest.mark.parametrize("layout", [ttnn.ROW_MAJOR_LAYOUT, ttnn.TILE_LAYOUT])
+def test_pad_without_padding_honours_memory_config(device, layout):
+    torch_input = torch.randn(1, 1, 64, 64, dtype=torch.bfloat16)
+    input_tensor = ttnn.from_torch(torch_input, layout=layout, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    output = ttnn.pad(
+        input_tensor, padding=((0, 0), (0, 0), (0, 0), (0, 0)), value=0, memory_config=ttnn.L1_MEMORY_CONFIG
+    )
+
+    assert output.memory_config().buffer_type == ttnn.BufferType.L1
+    assert torch.equal(ttnn.to_torch(output), torch_input)
