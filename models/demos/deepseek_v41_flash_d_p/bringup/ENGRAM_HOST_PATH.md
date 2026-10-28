@@ -148,6 +148,16 @@ mmap / 1 until the owner picks): `tests/test_engram_table_modes.py` (CPU) checks
 (resident with `DS41_TEST_ENGRAM_RESIDENT=1`); the engram_rows component tests of layers 1 and 14 pass on the 2x2 with
 `random` / 8 threads (rel 0, bit-identical repeats).
 
+**bfp8 probe A (API) on the QB: yes** (`tests/ttnn/unit_tests/operations/ds41_engram_bfp8/probes/probe_001.py`, one
+chip, 2560 x 6144 real table rows = one mesh row's share of a 5120 chunk). `ttnn.experimental.disaggregation.
+tensor_from_bfp8_bytes(raw, shape)` wraps pre-packed bfp8_b TILE bytes as a host tensor (BFLOAT8_B, TILE) with no
+float conversion; uploaded, its device values equal `from_torch(dtype=bfloat8_b)`'s bit for bit, and a `ttnn.linear`
+on it gives the same output bit for bit. Host time: wrap 11.7 ms + upload 1.1 ms vs `from_torch(bfloat8_b)` 69.3 +
+6.6 ms (16.7 MB = 1.0625 B a value vs bf16's 2). The tile's shared exponent covers 16 consecutive values of one
+token row, aligned to 16, so a 256-value table row is 16 whole groups (the byte-shuffle assembly of D holds). Not yet
+tested: per-device shards of a mesh tensor from such host tensors. Preview of B on these rows: bfp8 changes 10.0 % of
+the values, rel L2 3.5e-3 vs the exact rows; a format change, so C (accuracy) and the owner decide.
+
 ## 4. Plan (owner-agreed staging; each stage = its own setting in `tt/settings.py`, its own commit, its own A/B)
 
 Invariant for every stage: **the device rows stay bit-identical to today's** (check by byte comparison, not a
