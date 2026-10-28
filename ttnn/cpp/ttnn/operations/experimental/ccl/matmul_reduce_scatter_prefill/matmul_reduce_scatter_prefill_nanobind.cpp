@@ -39,7 +39,7 @@ nb::dict last_plan_dict() {
     if (!recorded.has_value()) {
         return out;
     }
-    const detail::Plan& plan = recorded->plan;
+    const detail::Plan& plan = recorded->plan();
     out["xblock"] = plan.resident ? "resident" : "stream";
     out["schedule"] = schedule_name(recorded->kind);
     out["kb"] = plan.kb;

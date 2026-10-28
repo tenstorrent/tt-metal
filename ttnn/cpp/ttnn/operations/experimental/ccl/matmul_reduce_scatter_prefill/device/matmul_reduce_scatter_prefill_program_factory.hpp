@@ -24,7 +24,7 @@ struct MatmulReduceScatterPrefillProgramFactory {
         Tensor& output,
         const std::optional<ttnn::MeshCoordinate>& mesh_dispatch_coordinate);
 
-    // Rewrites A / W / output / staging / mailbox / semaphore addresses (common args, tensor-backed CBs 3, 4, 5).
+    // Rewrites the A / W / output addresses, and the staging address and tensor-backed CBs 3, 4, 5 when it moved.
     static void override_runtime_arguments(
         tt::tt_metal::Program& program,
         const MatmulReduceScatterPrefillParams& attrs,
