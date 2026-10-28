@@ -17,8 +17,8 @@ inc/common/                 arch-independent, always on the include path
     llk_lib/thread.h        current_thread and the per-thread call pattern
 inc/blackhole/              one arch; the build adds inc/common and one inc/<arch>
     resolver/               each op's OpApi: accepts, options, work, plan
-    llk_lib/                one header per thread or op: unpack.h (every unpack op), matmul.h, eltwise_binary.h and
-                            copy.h (math), math_common.h (what every math configure shares)
+    llk_lib/                one header per thread or op: unpack.h (every unpack op), matmul.h, eltwise_binary.h,
+                            copy.h and vec.h (math or pack), math_common.h (what every math configure shares)
 tests/                      an out-of-tree consumer of the tt-llk test harness
 ```
 
@@ -30,8 +30,9 @@ include path.
 | Op | Compute API | Blackhole llk-lib | Tests |
 |---|---|---|---|
 | `matmul` | `compute_api/matmul.h` | `llk_lib/unpack.h`, `llk_lib/matmul.h` | `test_llk2_matmul.py` |
-    llk_lib/                one header per thread or op: unpack.h (every unpack op), matmul.h, eltwise_binary.h and
-                            copy.h (math), math_common.h (what every math configure shares)
+| `add`, `sub` (`Broadcast::Row`) | `compute_api/add.h`, `compute_api/sub.h` | `llk_lib/unpack.h`, `llk_lib/eltwise_binary.h` | `test_llk2_add.py` |
+| `copy` | `compute_api/copy.h` | `llk_lib/unpack.h` (incl. unpack to Dest), `llk_lib/copy.h` | `test_llk2_copy.py` |
+| `vec_silu`, `vec_tanh`, `vec_gelu`, `vec_gelu_tanh`, `vec_relu_max`, `vec_sigmoid`, `vec_hardsigmoid`, `vec_hardtanh`, `vec_selu`, `vec_softplus` | `compute_api/vec.h` | `llk_lib/vec.h` | `test_llk2_vec.py` |
 
 Pack and the math-to-pack Dest sync still use today's LLKs in the tests.
 
