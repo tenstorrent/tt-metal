@@ -135,7 +135,7 @@ void kernel_main() {
     };
 
     for_each_work_item(work_list_arg_idx, [&](uint32_t item) {
-        const uint32_t first_row_tile = (item % q_num_chunks) * Sq_chunk_t;
+        const uint32_t first_row_tile = sdpa_fw_items::first_row_tile_of(item, q_num_chunks, Sq_chunk_t);
         read_q_chunk(item, /* k_begin */ 0, num_kv_steps_of_chunk<Ht, Sq_chunk_t, Sk_chunk_t>(first_row_tile));
     });
 }
