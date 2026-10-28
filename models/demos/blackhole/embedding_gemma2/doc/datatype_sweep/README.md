@@ -307,7 +307,10 @@ On code commit `9adacfe162`, default construction path, `e6/scripts/trace_robust
   the watcher on, 1500 single-trace replays complete with 0 watcher errors **[M]** (timing
   dependent, so a race in the op is as likely **[I]**).
   bf16 weights are slower than bfp8 on every measured shape, so this does not affect selection;
-  the vision tower (bf16 weights, E5b) is a place to check in E6b.
+  the vision tower (bf16 weights, E5b) is a place to check in E6b. The shipped default
+  `p3_qkv_gu` ran 5000 replays at 1x2048 with the five perf traces captured, no hang **[M]**
+  (`e6/logs/review_soak_p3_qkv_gu_1x2048.log`, run on `1ea3591cc5`); `e6/logs/selected_soak_1x2048.log`
+  is the earlier default `p3_qkv_gu_exp` (2000 replays, no hang).
 - 1x8192 burst of the baseline is 109.7 ms when it is the first candidate of a sweep process and
   105.3-105.9 ms for the bfp8 configs with identical kernels later in a process (`mask_bfp8`,
   `bfp4_final_proj_*`) **[M]**; cause not investigated. Rankings use 1x512 + 8x512.

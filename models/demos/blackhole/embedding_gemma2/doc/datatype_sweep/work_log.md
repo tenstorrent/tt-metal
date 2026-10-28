@@ -110,8 +110,10 @@ selected 4.691 / 6.490 / 17.069 / 22.653 / 79.308 ms burst vs baseline override 
 
 `scripts/bf16w_repro.py bf16w_hifi2 1x2048 traced N [all]`: one captured trace, 200 replays OK;
 five captured traces (the perf set), hang after 240-260 replays of the 1x2048 trace
-(`logs/bf16w_repro_2.log`, killed by timeout, `tt-smi -r`, device smoke OK). The selected config
-with the same five traces: 2000 replays at 1x2048, no hang (`logs/selected_soak_1x2048.log`).
+(`logs/bf16w_repro_2.log`, killed by timeout, `tt-smi -r`, device smoke OK). With the same five
+traces captured, the then-selected `p3_qkv_gu_exp`: 2000 replays at 1x2048, no hang
+(`logs/selected_soak_1x2048.log`); the shipped default `p3_qkv_gu`: 5000 replays at 1x2048,
+`SOAK_DONE 5000`, no hang (`logs/review_soak_p3_qkv_gu_1x2048.log`, run on `1ea3591cc5`).
 bf16 weights are slower than bfp8 on every measured shape, so the hang does not affect selection;
 it is left as an open item (a candidate for E6b / a tt-metal issue if it reproduces with the E5a
 vision policy, which also uses bf16 weights).
@@ -170,9 +172,11 @@ the norm has the same shape and dtype in both policies]**. With the watcher on
 the single-trace repro completes all 1500 replays with 0 error lines in `watcher_bf16w/.../watcher.log`
 **[M]**: the hang does not reproduce under the watcher's timing, and the sanitizer flags no
 out-of-range NoC access in that run. Timing-dependent, so a race in the op is as likely as a stray
-write **[I]**; not pursued further (bf16w is not a selection candidate). The selected and
-earlier bfp8 configs ran 2000+ replays at 1x2048 without a hang (`selected_soak_1x2048.log`,
-soak below). Each hang: tt-triage, kill, `tt-smi -r`, device listed OK.
+write **[I]**; not pursued further (bf16w is not a selection candidate). The shipped default
+`p3_qkv_gu` ran 5000 replays at 1x2048 with the five perf traces captured, `SOAK_DONE 5000`, no
+hang (`logs/review_soak_p3_qkv_gu_1x2048.log`, run on `1ea3591cc5`); the earlier default
+`p3_qkv_gu_exp` ran 2000 (`logs/selected_soak_1x2048.log`); interleaved five-shape soak below.
+Each hang: tt-triage, kill, `tt-smi -r`, device listed OK.
 
 Final runs on `9adacfe162` (`scripts/chain_r.sh`, `logs/chain_r.log`) **[M]**: gates `r1` all pass
 (pcc 357, s32768 1, full model 30, demo 2, vision 91, audio 109, watcher 101 with 0 error lines;
