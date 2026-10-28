@@ -17,6 +17,7 @@
 #include <ttnn/distributed/distributed_tensor.hpp>
 
 #include "nanobind/nb_export_enum.hpp"
+#include "nanobind/nb_util.hpp"
 #include "serialization/serializable.hpp"
 #include "tt-metalium/distributed_context.hpp"
 #include "ttnn/distributed/create_socket.hpp"
@@ -137,6 +138,16 @@ void py_module(nb::module_& m) {
         nb::arg("dtype"),
         "Store every trainable bf16 or fp32 parameter in dtype (BFLOAT16 or FLOAT32). Call before creating the "
         "optimizer.");
+
+    m.def(
+        "apply_precision_config",
+        [](nb::dict training_config, const ttml::serialization::NamedParameters& parameters) {
+            return ttml::core::apply_precision_config(ttml::nanobind::util::obj_to_yaml(training_config), parameters);
+        },
+        nb::arg("training_config"),
+        nb::arg("parameters"),
+        "Apply training_config.precision to the parameters (precision.param_dtype) before creating the optimizer. "
+        "Returns the dtype applied, or None.");
 
     {
         auto py_distributed = static_cast<nb::module_>(m.attr("distributed"));

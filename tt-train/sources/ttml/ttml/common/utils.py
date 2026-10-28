@@ -207,7 +207,7 @@ def create_optimizer(model, yaml_config: dict):
         if _is_pipeline_parallel(yaml_config):
             optimizer_cfg = {**optimizer_cfg, "allow_empty_param_groups": True}
         params = model.parameters()
-        ttml.optimizers.apply_precision_config(tc, params)
+        ttml.core.apply_precision_config(tc, params)
         return ttml.optimizers.create_optimizer(optimizer_cfg, params)
     return ttml.optimizers.create_optimizer(optimizer_cfg, model.parameters())
 

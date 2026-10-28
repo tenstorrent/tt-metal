@@ -4,7 +4,6 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/function.h>
-#include <nanobind/stl/optional.h>
 #include <nanobind/stl/shared_ptr.h>
 #include <nanobind/stl/string.h>
 #include <nanobind/stl/unique_ptr.h>
@@ -12,7 +11,6 @@
 #include <nanobind/stl/vector.h>
 #include <nanobind/trampoline.h>
 
-#include "core/parameter_dtype.hpp"
 #include "serialization/serializable.hpp"
 
 // Make NamedParameters opaque - must be before unordered_map include
@@ -26,6 +24,7 @@ NB_MAKE_OPAQUE(ttml::serialization::NamedParameters)
 
 #include "nanobind/nb_export_enum.hpp"
 #include "nanobind/nb_fwd.hpp"
+#include "nanobind/nb_util.hpp"
 #include "optimizers/adamw.hpp"
 #include "optimizers/muon_composite.hpp"
 #include "optimizers/no_op.hpp"
@@ -145,36 +144,6 @@ void py_module_types(nb::module_& m) {
 
 namespace {
 
-YAML::Node obj_to_yaml(nb::object obj) {
-    if (nb::isinstance<nb::dict>(obj)) {
-        YAML::Node node;
-        for (auto [key, val] : nb::cast<nb::dict>(obj)) {
-            node[nb::cast<std::string>(key)] = obj_to_yaml(nb::borrow(val));
-        }
-        return node;
-    }
-    if (nb::isinstance<nb::list>(obj)) {
-        YAML::Node node;
-        for (auto item : nb::cast<nb::list>(obj)) {
-            node.push_back(obj_to_yaml(nb::borrow(item)));
-        }
-        return node;
-    }
-    if (nb::isinstance<nb::bool_>(obj)) {
-        return YAML::Node(nb::cast<bool>(obj));
-    }
-    if (nb::isinstance<nb::int_>(obj)) {
-        return YAML::Node(nb::cast<int64_t>(obj));
-    }
-    if (nb::isinstance<nb::float_>(obj)) {
-        return YAML::Node(nb::cast<double>(obj));
-    }
-    if (nb::isinstance<nb::str>(obj)) {
-        return YAML::Node(nb::cast<std::string>(obj));
-    }
-    return YAML::Node();
-}
-
 std::vector<ParamGroup> param_groups_from_py(const nb::list& groups) {
     std::vector<ParamGroup> result;
     for (auto group_obj : groups) {
@@ -248,21 +217,11 @@ void py_module(nb::module_& m) {
                 }
                 return py_registry[type.c_str()](config, std::move(params));
             }
-            return nb::cast(create_optimizer(obj_to_yaml(config), std::move(params)));
+            return nb::cast(create_optimizer(ttml::nanobind::util::obj_to_yaml(config), std::move(params)));
         },
         nb::arg("config"),
         nb::arg("params"),
         "Create an optimizer from a config dict and named parameters");
-
-    m.def(
-        "apply_precision_config",
-        [](nb::dict training_config, const serialization::NamedParameters& params) {
-            return ttml::core::apply_precision_config(obj_to_yaml(training_config), params);
-        },
-        nb::arg("training_config"),
-        nb::arg("params"),
-        "Apply training_config.precision to the parameters (precision.param_dtype) before creating the optimizer. "
-        "Returns the dtype applied, or None.");
 
     m.def(
         "register_optimizer",

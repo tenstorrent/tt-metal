@@ -521,4 +521,34 @@ ttnn::Tensor make_metal_tensor(
     return impl.template operator()<bfloat16>(new_type.value_or(tt::tt_metal::DataType::BFLOAT16));
 }
 
+YAML::Node obj_to_yaml(nb::object obj) {
+    if (nb::isinstance<nb::dict>(obj)) {
+        YAML::Node node;
+        for (auto [key, val] : nb::cast<nb::dict>(obj)) {
+            node[nb::cast<std::string>(key)] = obj_to_yaml(nb::borrow(val));
+        }
+        return node;
+    }
+    if (nb::isinstance<nb::list>(obj)) {
+        YAML::Node node;
+        for (auto item : nb::cast<nb::list>(obj)) {
+            node.push_back(obj_to_yaml(nb::borrow(item)));
+        }
+        return node;
+    }
+    if (nb::isinstance<nb::bool_>(obj)) {
+        return YAML::Node(nb::cast<bool>(obj));
+    }
+    if (nb::isinstance<nb::int_>(obj)) {
+        return YAML::Node(nb::cast<int64_t>(obj));
+    }
+    if (nb::isinstance<nb::float_>(obj)) {
+        return YAML::Node(nb::cast<double>(obj));
+    }
+    if (nb::isinstance<nb::str>(obj)) {
+        return YAML::Node(nb::cast<std::string>(obj));
+    }
+    return YAML::Node();
+}
+
 }  // namespace ttml::nanobind::util
