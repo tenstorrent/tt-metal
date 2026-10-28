@@ -35,9 +35,13 @@ class TracedForward:
         return k
 
     def capture(self):
-        for (s, L, Bp, r0, P), v in self.shapes.items():
+        pending = [(k, v) for k, v in self.shapes.items() if v["trace"] is None]
+        for (s, L, Bp, r0, P), v in pending:  # every compile run before the first capture (its outputs freed)
+            out, _ = self.tt.forward_device(v["inp"], s, L, Bp, r0, P)
+            ttnn.deallocate(out)
+        ttnn.synchronize_device(self.device)
+        for (s, L, Bp, r0, P), v in pending:
             if v["trace"] is None:
-                self.tt.forward_device(v["inp"], s, L, Bp, r0, P)  # compile run
                 tid = ttnn.begin_trace_capture(self.device, cq_id=0)
                 v["out"], _ = self.tt.forward_device(v["inp"], s, L, Bp, r0, P)
                 ttnn.end_trace_capture(self.device, tid, cq_id=0)
