@@ -8,6 +8,7 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/constants.hpp>
 #include "ttnn/operations/core/work_split/work_split_tilize.hpp"
+#include "ttnn/operations/data_movement/common/common.hpp"
 
 using namespace tt::tt_metal;
 using namespace tt::constants;
