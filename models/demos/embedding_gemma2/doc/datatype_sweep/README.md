@@ -36,6 +36,24 @@ tie-break within noise is the wider worst-case margin, not the 2 us.
 `test_precision_config`: `default precision sdpa_nofp32acc ...: 1211 checks passed`. Logs:
 `$A/logs/gates_r2a_{12x10,13x10}_{text,s32768,demo}.log`.
 
+Keys and counts in the two gates tables (this one and the `p2_sdpa_fast` one below) are exact
+`log_result` key names in the `_text` log, counted per key, not by substring **[M]** (E9.1-r2b,
+`grep -aoE 'log_result:[0-9]+ - [a-z_]+: [0-9.]+'` on `gates_r2a_12x10_text.log`; the same counts
+at 13 x 10 and in `$G/logs/gates_c_p2_{12x10,13x10}_text.log`):
+
+| key | emitted by | values | what it is |
+|---|---|---|---|
+| `last_hidden_pcc` | `test_text_model.py` | 12 | last-hidden PCC vs HF fp32, one per case (the s32768 case is in the `_s32768` log) |
+| `embedding_cosine` | `test_text_model.py` | 22 | pooled + normalized embedding cosine vs HF fp32, one per row of the eager text model |
+| `serving_embedding_cosine` | `test_generator_vllm.py` | 18 | the same cosine, through the serving wrapper (`demo/generator_vllm.py`), one per row; a separate key, not counted in `embedding_cosine` |
+| `layer_pcc` | `test_text_model.py` | 72 | per-layer hidden-state PCC (24 layers x 3 cases), bar 0.995 |
+
+A substring count gives larger numbers: `grep -c layer_pcc` = 94, because it also matches
+`encoder_layer_pcc` (22, `test_encoder_layer.py`); `grep -c embedding_cosine` = 66, because it also
+matches `trace_embedding_cosine` (26, `test_trace.py`) and `serving_embedding_cosine` (18). Those are
+other tests' keys, not more `layer_pcc` / `embedding_cosine` values. Their minima: `encoder_layer_pcc`
+0.99983, `trace_embedding_cosine` 0.99605.
+
 Contract gate, 10 buckets, traced replay vs cached HF fp32 (`e9/refs/`) at 12 x 10,
 `TT_METAL_TRACE_ALLOC_TRACKING=1` (`$A/logs/gate_12x10.log`, `$A/run_gate_12x10/prefill.jsonl`)
 **[M]**, last-hidden PCC / embedding cosine (bars 0.99 / 0.99), replay == eager bitwise on all 10:
@@ -62,6 +80,8 @@ Cost vs `p3_qkv_gu` **[M]**: 13 x 10, `perf.py` default, text 1 x 512 forward, m
 warm-up, order new / control / new in one session (`$A/run_perf_13x10_*`): `sdpa_nofp32acc` 7.078 /
 7.091 ms vs `p3_qkv_gu` 6.861 ms (+3.3 %). 12 x 10 ranking aggregate (1x512 + 8x512 burst, E9.1-r
 screen `$G/logs/c_rank_12x10.log`): 41.845 vs 38.234 ms (+9.4 %).
+
+### E9.1-r record (as written; it selected `p2_sdpa_fast`, superseded by the amendment above)
 
 **Why.** E9 stage 1 found the E6a default `p3_qkv_gu` below the hard gate on the b1_s256 contract
 input (offset 0, 192 tokens: last-hidden PCC 0.98872), and the person moved the target to a

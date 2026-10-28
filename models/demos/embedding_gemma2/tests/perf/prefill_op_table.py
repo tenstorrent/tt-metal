@@ -17,7 +17,8 @@ fidelity and memory). Roofline per row (model, not measured):
 grid_cores is the compute grid the profile was captured on (130 on the P150a's 13 x 10, 120 on the
 12 x 10 Galaxy grid, EMBEDDING_GEMMA2_GRID): --grid-cores if given, else the profiler's own record, the
 CSV column AVAILABLE WORKER CORE COUNT of the forward's ops (must be one value), else compute_grid in a
-device_info.json (perf.py) next to the CSV. No record and no --grid-cores is an error.
+device_info.json (perf.py) next to the CSV. No record and no --grid-cores is an error, and so is
+--grid-cores 0 or below (it is not a request to auto-detect). CPU-only test: test_prefill_op_table.py.
 
 flops_per_cycle per Tensix core: 4096 LoFi, 2048 HiFi2, 1365 HiFi3, 1024 HiFi4 (one 8x16 x 16x16 matrix-
 engine op per cycle, divided by the fidelity phases; tech_reports/GEMM_FLOPS/GEMM_FLOPS.md). Bytes are the
@@ -167,7 +168,11 @@ def load_forward(csv_path: Path, start="PERF_TEXT", end="PERF_TEXT_END"):
 def table(csv_path: Path, bucket: int, clock_mhz: float = 1350.0, grid_cores: int | None = None) -> dict:
     clock = clock_mhz * 1e6
     rows = load_forward(csv_path)
-    grid_cores = grid_cores or grid_cores_of(csv_path, rows)
+    if grid_cores is None:
+        grid_cores = grid_cores_of(csv_path, rows)
+    elif grid_cores <= 0:
+        # 0 is not "auto": a wrong explicit value must not silently fall back to the CSV
+        raise ValueError(f"grid_cores must be a positive core count, got {grid_cores}")
     groups: OrderedDict = OrderedDict()
     kernel_ns = gap_ns = floor_us = 0.0
     first_gap_us = float(rows[0]["OP TO OP LATENCY [ns]"] or 0) / 1e3 if rows else 0.0
@@ -271,6 +276,10 @@ def main():
     ap.add_argument("--out-md", type=Path)
     ap.add_argument("--out-json", type=Path)
     a = ap.parse_args()
+    if a.grid_cores is not None and a.grid_cores <= 0:
+        ap.error(
+            f"--grid-cores must be a positive core count, got {a.grid_cores} (omit it to read the grid from the CSV)"
+        )
     t = table(a.csv, a.bucket, a.clock_mhz, a.grid_cores)
     md = to_markdown(t)
     if a.out_md:

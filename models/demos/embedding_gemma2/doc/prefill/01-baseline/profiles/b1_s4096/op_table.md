@@ -1,4 +1,4 @@
-### b1_s4096: 646 ops, device kernel sum 33.570 ms, eager op-to-op gaps 0.616 ms, roofline floor 8.752 ms (clock 1350 MHz)
+### b1_s4096: 646 ops, device kernel sum 33.570 ms, eager op-to-op gaps 0.616 ms, roofline floor 8.752 ms (clock 1350 MHz, 130 cores)
 
 | op | variant | count | device us | share | cores | M x K x N / SDPA | dtypes (in.../out) | fidelity | memory (in.../out) | compute us | memory us | floor us | device / floor | bound |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|

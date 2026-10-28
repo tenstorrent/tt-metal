@@ -18,7 +18,10 @@ log with `__start` / `__end wall_s` / `__tt_exit`), one at a time.
 | `d2e85760dd`, `0c6b153b18` | model folder moved to `models/demos/embedding_gemma2`; serving wrapper `demo/generator_vllm.py` (v1, v2) - not this unit |
 | `bc9cb3106c` | E9.1-r1 part B final: perf.py records the grid, demo `__main__` checks it; "E9.1-r1: compute grid 12 x 10" section |
 | `325fbd415d` | E9.1-r1 part C: text precision default `p3_qkv_gu` -> `p2_sdpa_fast` (`selected_precision_config.json`) |
-| (this commit) | E9.1-r1 part C docs: contract change, datatype_sweep README / work_log, REPORT addendum, README |
+| `87aa096ffe` | E9.1-r1 part C docs: contract change, datatype_sweep README / work_log, REPORT addendum, README |
+| `4eed20c34c` | E9.1-r2a: text precision default `p2_sdpa_fast` -> `sdpa_nofp32acc` (`selected_precision_config.json` text section, config_id); contract / datatype_sweep / REPORT / work_log amendments |
+| `a903d517c6` | E9.1-r2a: root README cost and fallback fixes; `prefill_op_table.py` roofline uses the profiled grid (`--grid-cores`, CSV, `device_info.json`) |
+| (E9.1-r2b commit 1) | E9.1-r2a review minors: README cost label, this table and the config hash, datatype_sweep README layout and gate keys, `--grid-cores 0` error + CPU test |
 
 The measurements ran on the working tree of `7ef04f02da` before two non-semantic changes: black
 reformatting at commit time, and `@pytest.mark.timeout(3600)` (added after the 65536 sustained case
@@ -200,3 +203,21 @@ the override also caps the ops that pick their own grid (norms, eltwise, `minima
 gains the new default's value on the input (0.99432 / 0.99861). Reason, gates, soaks and cost:
 `doc/datatype_sweep/README.md`, "Amendment E9.1-r2a". Run folder
 `tt-ops/runs/embeddinggemma-2/e9/01r2a/`.
+
+Config identity of the r2a runs (E9.1-r2b, CPU only) **[M]**: every r2a device log
+(`01r2a/logs/*.log`, first `__start` 11:45:32, last 12:02:38) ran on `87aa096ffe` with
+`selected_precision_config.json` modified in the working tree (log headers: `dirty: M ...selected_precision_config.json`)
+and printed `default precision sdpa_nofp32acc from .../selected_precision_config.json`.
+`git hash-object doc/datatype_sweep/selected_precision_config.json` = `96c2c0b20b3ce99b623ac8a5b00af7491bbbbe91`,
+equal to the committed blob (`git rev-parse 4eed20c34c:models/demos/embedding_gemma2/doc/datatype_sweep/selected_precision_config.json`
+= `96c2c0b20b...`, unchanged at `a903d517c6`). The file's mtime is 11:44:41, before the first r2a log,
+so the logs read this content **[I: from mtime; the logs do not print a hash]**.
+
+E9.1-r2b commit 1 (r2a review minors, CPU only) **[M]**: `prefill_op_table.py --grid-cores 0` (or
+below) is now an error (argparse exit 2; `table(grid_cores=0)` raises) instead of falling back to
+the CSV; `tests/perf/test_prefill_op_table.py` (CPU only: grid from the CSV column, from
+`device_info.json`, column over `device_info.json`, no record, mixed values, explicit override,
+0 / -120, CLI 0): 9 passed (`e9/01r2b/logs/c1_test_prefill_op_table.log`). The committed 13 x 10
+tables (`profiles/b1_s*/`) were regenerated from their raw CSVs (`e9/01-baseline/tracy/`): JSON equal
+except the new `grid_cores` 130 key, markdown equal except the header's "130 cores", all 10 buckets
+(`e9/01r2b/logs/c1_regen_13x10_tables.log`).

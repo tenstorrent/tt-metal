@@ -1,4 +1,4 @@
-### b1_s1024: 646 ops, device kernel sum 10.536 ms, eager op-to-op gaps 5.530 ms, roofline floor 1.380 ms (clock 1350 MHz)
+### b1_s1024: 646 ops, device kernel sum 10.536 ms, eager op-to-op gaps 5.530 ms, roofline floor 1.380 ms (clock 1350 MHz, 130 cores)
 
 | op | variant | count | device us | share | cores | M x K x N / SDPA | dtypes (in.../out) | fidelity | memory (in.../out) | compute us | memory us | floor us | device / floor | bound |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|

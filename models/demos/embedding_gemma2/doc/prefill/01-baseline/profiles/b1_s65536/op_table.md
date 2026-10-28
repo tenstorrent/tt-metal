@@ -1,4 +1,4 @@
-### b1_s65536: 646 ops, device kernel sum 2013.640 ms, eager op-to-op gaps 0.560 ms, roofline floor 722.115 ms (clock 1350 MHz)
+### b1_s65536: 646 ops, device kernel sum 2013.640 ms, eager op-to-op gaps 0.560 ms, roofline floor 722.115 ms (clock 1350 MHz, 130 cores)
 
 | op | variant | count | device us | share | cores | M x K x N / SDPA | dtypes (in.../out) | fidelity | memory (in.../out) | compute us | memory us | floor us | device / floor | bound |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|

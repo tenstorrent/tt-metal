@@ -208,7 +208,8 @@ grid. E9.1-r first picked `p2_sdpa_fast` (the same policy plus SDPA `exp_approx`
 within noise on time, and amendment E9.1-r2a switched to `sdpa_nofp32acc` for its wider
 worst-case probe margin (last-hidden PCC 0.99240 vs 0.99094). Cost vs `p3_qkv_gu` **[M]**: text
 1 x 512 forward at 13 x 10, 7.078 / 7.091 ms vs 6.861 ms (+3.3 %, new / control / new in one
-session); 12 x 10 ranking aggregate (1x512 + 8x512 burst) 41.845 vs 38.234 ms (+9.4 %). The table
+session); 12 x 10 ranking aggregate (1x512 + 8x512 burst) 41.845 vs 38.234 ms (+9.4 %; E9.1-r
+screen, `c_rank_12x10.log`, not re-measured). The table
 and the policy paragraph above describe `p3_qkv_gu`. Selection, numbers and the E8 numbers it
 supersedes: `doc/datatype_sweep/README.md` ("E9.1-r re-selection", "Amendment E9.1-r2a") and
 `doc/benchmark/REPORT.md` (addendum). The serving wrapper (`demo/generator_vllm.py`) reads the

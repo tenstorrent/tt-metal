@@ -1,4 +1,4 @@
-### b1_s2048: 646 ops, device kernel sum 19.827 ms, eager op-to-op gaps 0.457 ms, roofline floor 2.991 ms (clock 1350 MHz)
+### b1_s2048: 646 ops, device kernel sum 19.827 ms, eager op-to-op gaps 0.457 ms, roofline floor 2.991 ms (clock 1350 MHz, 130 cores)
 
 | op | variant | count | device us | share | cores | M x K x N / SDPA | dtypes (in.../out) | fidelity | memory (in.../out) | compute us | memory us | floor us | device / floor | bound |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|

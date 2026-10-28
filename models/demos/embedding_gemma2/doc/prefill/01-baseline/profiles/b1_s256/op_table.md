@@ -1,4 +1,4 @@
-### b1_s256: 645 ops, device kernel sum 5.120 ms, eager op-to-op gaps 10.744 ms, roofline floor 0.362 ms (clock 1350 MHz)
+### b1_s256: 645 ops, device kernel sum 5.120 ms, eager op-to-op gaps 10.744 ms, roofline floor 0.362 ms (clock 1350 MHz, 130 cores)
 
 | op | variant | count | device us | share | cores | M x K x N / SDPA | dtypes (in.../out) | fidelity | memory (in.../out) | compute us | memory us | floor us | device / floor | bound |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|

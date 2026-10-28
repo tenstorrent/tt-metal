@@ -1,4 +1,4 @@
-### b1_s128: 645 ops, device kernel sum 4.454 ms, eager op-to-op gaps 12.995 ms, roofline floor 0.319 ms (clock 1350 MHz)
+### b1_s128: 645 ops, device kernel sum 4.454 ms, eager op-to-op gaps 12.995 ms, roofline floor 0.319 ms (clock 1350 MHz, 130 cores)
 
 | op | variant | count | device us | share | cores | M x K x N / SDPA | dtypes (in.../out) | fidelity | memory (in.../out) | compute us | memory us | floor us | device / floor | bound |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|

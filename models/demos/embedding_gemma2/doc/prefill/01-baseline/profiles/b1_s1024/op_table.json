@@ -2,6 +2,7 @@
  "bucket": 1024,
  "csv": "/local/ttuser/gtobar/tt-ops/runs/embeddinggemma-2/e9/01-baseline/tracy/b1_s1024/ops_perf_results.csv",
  "clock_mhz": 1350.0,
+ "grid_cores": 130,
  "ops": 646,
  "device_kernel_us": 10535.51800000001,
  "op_to_op_gap_us_eager": 5529.737,
