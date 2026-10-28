@@ -50,6 +50,10 @@ void check_support(
 void check_operands(
     const Tensor& input_tensor, const Tensor& weight, const std::optional<tt::tt_metal::MemoryConfig>& memory_config);
 
+// The group along cluster_axis: a 2D mesh, >= 2 devices on the axis and a scattered extent that splits into G tile
+// blocks (TT_FATAL otherwise). scatter_dim is canonical. Returns G.
+uint32_t check_group(const Tensor& input_tensor, const Tensor& weight, int32_t cluster_axis, int32_t scatter_dim);
+
 }  // namespace ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill
 
 namespace ttnn::prim {
@@ -58,6 +62,7 @@ Tensor matmul_reduce_scatter_prefill(
     const Tensor& input_tensor,
     const Tensor& weight,
     const std::optional<Tensor>& output_tensor,
+    const Tensor& staging,
     const ttnn::operations::experimental::ccl::matmul_reduce_scatter_prefill::MatmulReduceScatterPrefillParams& params);
 
 }  // namespace ttnn::prim

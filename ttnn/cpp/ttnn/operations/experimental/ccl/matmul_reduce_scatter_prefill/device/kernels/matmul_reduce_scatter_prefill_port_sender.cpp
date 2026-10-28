@@ -14,7 +14,10 @@
 // arrivals, so before the first unit of chunk c >= zone_sets this port waits for the downstream's credit "chunk
 // c - zone_sets consumed". Symmetrically it forwards, upstream to the peer it sends to, one credit per chunk this
 // chip's matmul cores (its link) consumed of that peer's arrivals (they report to the program semaphore `freed`). Every
-// wait polls the forwarding, so two ports waiting on each other's credits always make progress.
+// wait for a credit or for the port reader's chunks polls the forwarding, and a poll forwards every credit that is
+// ready: this port's credits gate the peer's arrivals, which this chip's matmul cores need before they finish the
+// sub-blocks this port is waiting for, so a credit held back while blocked could close a cycle between neighbouring
+// chips.
 //
 // Raw-API note (design "Helpers considered and rejected"): the CCL helper library is unmeasured and routes by 1D hop
 // count with a classic step schedule; the measured raw sender of fabric_reduce_scatter is the reference.
@@ -113,7 +116,7 @@ void kernel_main() {
             return;
         }
         invalidate_l1_cache();
-        if (*freed >= (forwarded + 1) * expect) {
+        while (forwarded < fwd_total && *freed >= (forwarded + 1) * expect) {
             credit_hdr->to_noc_unicast_atomic_inc(
                 NocUnicastAtomicIncCommandHeader{get_noc_addr(ready_x, ready_y, credit_addr), 1, true});
             conn.wait_for_empty_write_slot();
@@ -179,7 +182,9 @@ void kernel_main() {
             const uint32_t dst_base = zone_base + (ordinal % ring_slots) * slot_bytes;
             const uint64_t ctr = get_noc_addr(x, y, arrival_addr);
             for (uint32_t ci = 0; ci < chunks_per_core; ++ci) {
-                cb_wait_front(cb_port_chunks, chunk_tiles * (u + 1));
+                while (!cb_pages_available_at_front(cb_port_chunks, chunk_tiles * (u + 1))) {
+                    forward_poll();
+                }
                 const uint32_t src = get_read_ptr(cb_port_chunks) + u * chunk_bytes;
                 const uint32_t n = (tiles - ci * chunk_tiles) < chunk_tiles ? (tiles - ci * chunk_tiles) : chunk_tiles;
                 const uint32_t bytes = n * tile_bytes;

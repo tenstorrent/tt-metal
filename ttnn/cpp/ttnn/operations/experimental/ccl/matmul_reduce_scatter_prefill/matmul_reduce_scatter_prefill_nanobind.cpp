@@ -83,7 +83,7 @@ void bind_matmul_reduce_scatter_prefill(nb::module_& mod) {
             cluster_axis (int): the mesh axis of the group (0 or 1).
             scatter_dim (int, optional): -2 (M) or -1 (N). Defaults to -2.
             topology (ttnn.Topology, optional): Linear or Ring. Defaults to Linear.
-            num_links (int, optional): fabric links per hop (1 or 2); None uses every usable link.
+            num_links (int, optional): fabric links per hop (1 or 2); None uses every usable link, up to 2.
             compute_kernel_config (ttnn.ComputeConfigDescriptor, optional): math fidelity / approx mode; fp32 DEST
                 and full sync are always on. Defaults to HiFi2.
             memory_config (ttnn.MemoryConfig, optional): interleaved output placement. Defaults to DRAM interleaved.

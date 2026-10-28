@@ -22,7 +22,7 @@ namespace ttnn::experimental {
 //   cluster_axis           mesh axis of the group (0 or 1)
 //   scatter_dim            -1 / -2 (or the matching non-negative dim)
 //   topology               Linear or Ring (a 2-device ring is the line)
-//   num_links              links per hop; all usable links when absent
+//   num_links              links per hop (1 or 2); when absent, every usable link up to 2
 //   compute_kernel_config  math fidelity and approx mode (fp32 DEST and full sync are forced on); default HiFi2
 //   memory_config          interleaved output placement; default DRAM
 //   output_tensor          preallocated output; must match the spec the op allocates, never an input
