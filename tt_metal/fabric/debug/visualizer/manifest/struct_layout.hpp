@@ -19,7 +19,7 @@
 
 namespace tt::tt_fabric::layout {
 
-// The tagged union examples in this file describe these types.
+// The union examples in this file describe these types.
 //
 //   enum class Kind : uint32_t { DOT, LINE };
 //
@@ -37,10 +37,21 @@ namespace tt::tt_fabric::layout {
 //       Kind kind;          // offset 0: the tag, saying which of geometry's members holds its bytes
 //       Geometry geometry;  // offset 4
 //   };
+//
+//   enum class Dims : uint8_t { ONE_D, TWO_D };  // a setting fixed for the whole run
+//
+//   struct Marker {         // 8 bytes
+//       uint32_t id;        // offset 0
+//       union {             // offset 4, 4 bytes, as an anonymous union
+//           uint16_t x;     // holds the bytes when the run's Dims is ONE_D
+//           Point point;    // holds the bytes when the run's Dims is TWO_D
+//       };
+//   };
 
 struct EnumDescription;
 struct StructDescription;
 struct TaggedUnionDescription;
+struct RunSettingUnionDescription;
 
 // What one element is, with only the data decode needs to read it. An enum, struct or tagged union element points to
 // its type's description, which holds its name and what it contains. The examples below write such an element by its
@@ -87,6 +98,13 @@ struct TaggedUnion {
     std::string_view tag_member_name;
     constexpr bool operator==(const TaggedUnion&) const = default;
 };
+// An anonymous union whose member is picked by a setting fixed for the whole run. The manifest writes the member the
+// run picks, under the case's name.
+struct RunSettingUnion {
+    // The union's size, the enum its setting holds, and its cases
+    const RunSettingUnionDescription* description = nullptr;
+    constexpr bool operator==(const RunSettingUnion&) const = default;
+};
 // Raw bytes, which we rely on decode to interpret.
 struct Bytes {
     constexpr bool operator==(const Bytes&) const = default;
@@ -104,6 +122,7 @@ using Element = std::variant<
     element::Enum,
     element::Struct,
     element::TaggedUnion,
+    element::RunSettingUnion,
     element::Bytes,
     element::Pad>;
 
@@ -149,6 +168,14 @@ struct TaggedUnionCase {
     std::string_view tag_value;
 };
 
+// One case of a run-setting union. A member picked by several setting values has a case for each. Example: Marker's
+// union picks point when the run's Dims is TWO_D:
+// {member: {name: "point", offset: 4, type: {element: Struct{Point}, size: 4, count: 0}}, setting_value: "TWO_D"}
+struct RunSettingUnionCase {
+    Member member;
+    std::string_view setting_value;
+};
+
 // One enumerator of an enum.
 struct Enumerator {
     std::string_view name;
@@ -174,6 +201,17 @@ struct TaggedUnionDescription {
     uint32_t size = 0;
     const EnumDescription* tag = nullptr;
     std::span<const TaggedUnionCase> cases;
+};
+
+// A described run-setting union. It has no name as the union is anonymous, so only its cases, which become members of
+// the enclosing struct, have names.
+struct RunSettingUnionDescription {
+    // The size of the union in bytes (width of the widest union member)
+    uint32_t size = 0;
+    // The enum that the run's setting holds, where the setting determines which member of the union is active
+    const EnumDescription* setting = nullptr;
+    // Represents the different members of the union, where only one is active at a time
+    std::span<const RunSettingUnionCase> cases;
 };
 
 // Each described struct specializes StructLayout<T> with its member list. There is no primary definition, so if a
@@ -359,6 +397,28 @@ inline constexpr TaggedUnionDescription tagged_union_description{
     static_cast<uint32_t>(sizeof(U)),
     &enum_description<typename TaggedUnionLayout<U>::Tag>,
     TaggedUnionLayout<U>::cases};
+
+// A run-setting union represents an anonymous union whose member is chosen by a setting that the run determines for the
+// whole run. The members of the union are represented as cases, and are listed with LAYOUT_RUN_SETTING_UNION_CASE in
+// the union's enclosing struct's StructLayout, in the order the union declares them. The union has no type to key a
+// description on, so its description is keyed on that array. LAYOUT_RUN_SETTING_UNION makes the union a member of the
+// enclosing struct, and builds and checks its description from the cases. Example, for Marker, whose union's point
+// needs Point's StructLayout first:
+//   template <>
+//   struct StructLayout<Marker> {
+//       // The cases for the union's members, which are picked by the run's setting
+//       static constexpr std::array position_cases = {
+//           LAYOUT_RUN_SETTING_UNION_CASE(Marker, x, Dims::ONE_D),
+//           LAYOUT_RUN_SETTING_UNION_CASE(Marker, point, Dims::TWO_D),
+//       };
+//       // The members for the enclosing struct
+//       static constexpr std::array members = {
+//           LAYOUT_MEMBER(Marker, id),
+//           // The run-setting union member is created from the settings and the cases
+//           LAYOUT_RUN_SETTING_UNION(Dims, position_cases),
+//       };
+//   };
+//   static_assert(check_struct_layout<Marker>());
 
 namespace detail {
 
@@ -585,6 +645,63 @@ constexpr bool validate_tagged_union_cases(const std::array<TaggedUnionCase, N>&
     });
 }
 
+// Validate the cases for a run-setting union.
+template <typename Setting, std::size_t N>
+constexpr bool validate_run_setting_union_cases(const std::array<RunSettingUnionCase, N>& cases) {
+    static_assert(std::is_enum_v<Setting>, "a run-setting union's setting is an enum");
+    static_assert(N > 0, "a run-setting union has at least one case");
+    constexpr auto& setting_names = enchantum::names<Setting>;
+    for (const auto& [member, setting_value] : cases) {
+        // Ensure each case starts at the same offset as the first case, and the setting value names an enumerator
+        if (member.offset != cases.front().member.offset ||
+            std::ranges::find(setting_names, setting_value) == setting_names.end()) {
+            return false;
+        }
+    }
+
+    // Ensure each setting value picks exactly one case
+    return std::ranges::all_of(setting_names, [&cases](std::string_view value) {
+        return std::ranges::count(cases, value, &RunSettingUnionCase::setting_value) == 1;
+    });
+}
+
+namespace detail {
+
+// The size of a run-setting union: its widest case's.
+template <std::size_t N>
+constexpr uint32_t get_widest_case_size(const std::array<RunSettingUnionCase, N>& cases) {
+    uint32_t widest = 0;
+    for (const auto& union_case : cases) {
+        widest = std::max(widest, union_case.member.type.size);
+    }
+    return widest;
+}
+
+}  // namespace detail
+
+// The description of the run-setting union whose cases are Cases, picked by a setting of enum type Setting. Building it
+// checks the cases, so a layout can't skip validate_run_setting_union_cases.
+template <typename Setting, const auto& Cases>
+inline constexpr RunSettingUnionDescription get_run_setting_union_description = [] {
+    static_assert(
+        validate_run_setting_union_cases<Setting>(Cases),
+        "a run-setting union's cases must all start where the union does, and each of Setting's enumerators must pick "
+        "exactly one");
+    return RunSettingUnionDescription{detail::get_widest_case_size(Cases), &enum_description<Setting>, Cases};
+}();
+
+namespace detail {
+
+// The enclosing struct's member for the run-setting union with cases Cases.
+template <typename Setting, const auto& Cases>
+constexpr Member get_run_setting_union_member() {
+    constexpr const RunSettingUnionDescription& description = get_run_setting_union_description<Setting, Cases>;
+    const Member& first = Cases.front().member;
+    return Member{"", first.offset, {element::RunSettingUnion{&description}, description.size, 0}, first.initializers};
+}
+
+}  // namespace detail
+
 }  // namespace tt::tt_fabric::layout
 
 // Layout of a member whose type type_of() can describe: an integer, an enum, a described struct, or a
@@ -673,3 +790,17 @@ constexpr bool validate_tagged_union_cases(const std::array<TaggedUnionCase, N>&
              0},                                                                                    \
             ::tt::tt_fabric::layout::initializers_of<U>()};                                         \
     }()
+
+// Layout of a case of a run-setting union in struct T. Member is the union's member `member` that this case is for, and
+// that `setting_value` picks. Example:
+// LAYOUT_RUN_SETTING_UNION_CASE(Marker, point, Dims::TWO_D) is
+// {member: LAYOUT_MEMBER(Marker, point), setting_value: "TWO_D"}.
+#define LAYOUT_RUN_SETTING_UNION_CASE(T, member, setting_value) \
+    ::tt::tt_fabric::layout::RunSettingUnionCase { LAYOUT_MEMBER(T, member), ::enchantum::to_string(setting_value) }
+
+// Layout of the enclosing struct's member for a run-setting union, whose cases are `cases`, a static constexpr array of
+// LAYOUT_RUN_SETTING_UNION_CASE in the same StructLayout, picked by a setting of enum type Setting. Example:
+// LAYOUT_RUN_SETTING_UNION(Dims, position_cases) is
+// {name: "", offset: 4, type: {element: RunSettingUnion{...}, size: 4, count: 0}}, for Marker.
+#define LAYOUT_RUN_SETTING_UNION(Setting, cases) \
+    ::tt::tt_fabric::layout::detail::get_run_setting_union_member<Setting, cases>()

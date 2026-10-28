@@ -135,6 +135,18 @@ struct HoldsWords {
     Words<1> value;
 };
 
+// A setting fixed for the whole run, and a struct whose anonymous union it picks the member of.
+enum class Mode : uint8_t { NARROW, WIDE };
+
+struct Table {
+    uint32_t header;
+    union {
+        uint32_t narrow;
+        uint32_t wide[2];
+    };
+    uint32_t trailer;
+};
+
 }  // namespace tt::tt_fabric::layout_test
 
 namespace tt::tt_fabric::layout {
@@ -183,6 +195,20 @@ struct TaggedUnionLayout<layout_test::Words<1>> {
     };
 };
 
+template <>
+struct StructLayout<layout_test::Table> {
+    static constexpr std::array value_cases = {
+        LAYOUT_RUN_SETTING_UNION_CASE(layout_test::Table, narrow, layout_test::Mode::NARROW),
+        LAYOUT_RUN_SETTING_UNION_CASE(layout_test::Table, wide, layout_test::Mode::WIDE),
+    };
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(layout_test::Table, header),
+        LAYOUT_RUN_SETTING_UNION(layout_test::Mode, value_cases),
+        LAYOUT_MEMBER(layout_test::Table, trailer),
+    };
+};
+static_assert(check_struct_layout<layout_test::Table>());
+
 namespace {
 
 using layout_test::ByteRun;
@@ -196,9 +222,11 @@ using layout_test::HalvedWord;
 using layout_test::HoldsByteRun;
 using layout_test::HoldsWords;
 using layout_test::Inner;
+using layout_test::Mode;
 using layout_test::Outer;
 using layout_test::Shape;
 using layout_test::ShapeFields;
+using layout_test::Table;
 using layout_test::Tagged;
 using layout_test::ThreeWords;
 using layout_test::WithArrays;
@@ -573,6 +601,64 @@ TEST(StructLayout, TaggedUnionDescriptionNamesItsTagEnum) {
     EXPECT_EQ(shape_fields.size, sizeof(ShapeFields));
     EXPECT_EQ(shape_fields.tag, &enum_description<Shape>);
     EXPECT_EQ(shape_fields.cases.data(), TaggedUnionLayout<ShapeFields>::cases.data());
+}
+
+// A union whose every setting value picks exactly one member should pass, since the manifest can then write the member
+// the run picks whatever the setting holds.
+TEST(StructLayout, RunSettingUnionAcceptsEveryValuePickingOneMember) {
+    EXPECT_TRUE(validate_run_setting_union_cases<Mode>(StructLayout<Table>::value_cases));
+}
+
+// A setting value that no member lists should cause an error, since a run with that value would have no member to
+// write. This is also what fails when an enumerator is added to the setting, so whoever adds it decides what it picks.
+TEST(StructLayout, RunSettingUnionRejectsAValueNothingPicks) {
+    EXPECT_FALSE(validate_run_setting_union_cases<Mode>(std::array{
+        LAYOUT_RUN_SETTING_UNION_CASE(Table, narrow, Mode::NARROW),
+        // not listing WIDE
+    }));
+}
+
+// Two members listing the same setting value should cause an error, since the manifest couldn't tell which to write.
+TEST(StructLayout, RunSettingUnionRejectsAValuePickedTwice) {
+    EXPECT_FALSE(validate_run_setting_union_cases<Mode>(std::array{
+        LAYOUT_RUN_SETTING_UNION_CASE(Table, narrow, Mode::NARROW),
+        LAYOUT_RUN_SETTING_UNION_CASE(Table, wide, Mode::WIDE),
+        LAYOUT_RUN_SETTING_UNION_CASE(Table, wide, Mode::NARROW),
+    }));
+}
+
+// A case that doesn't start where the others do should cause an error, since every member of a union starts at its
+// first byte, so the case can't be the union's.
+TEST(StructLayout, RunSettingUnionRejectsACaseAtAnotherOffset) {
+    EXPECT_FALSE(validate_run_setting_union_cases<Mode>(std::array{
+        LAYOUT_RUN_SETTING_UNION_CASE(Table, narrow, Mode::NARROW),
+        RunSettingUnionCase{LAYOUT_MEMBER(Table, trailer), "WIDE"},  // trailer starts at a different offset
+    }));
+}
+
+// A setting value that names no enumerator of the setting should cause an error, since the setting can never hold it.
+TEST(StructLayout, RunSettingUnionRejectsAValueThatIsNotAnEnumerator) {
+    EXPECT_FALSE(validate_run_setting_union_cases<Mode>(std::array{
+        LAYOUT_RUN_SETTING_UNION_CASE(Table, narrow, Mode::NARROW),
+        LAYOUT_RUN_SETTING_UNION_CASE(Table, wide, Mode::WIDE),
+        RunSettingUnionCase{LAYOUT_MEMBER(Table, wide), "WIDEST"}, // widest is not an enumerator of Mode
+    }));
+}
+
+// A run-setting union's description should be as big as its widest case, point to its setting enum's description and
+// view its cases, and the enclosing struct's member for it should have no name, start where its cases do and point to
+// the description, so the manifest can write the case the run picks.
+TEST(StructLayout, RunSettingUnionMemberViewsItsDescription) {
+    constexpr const RunSettingUnionDescription& value =
+        get_run_setting_union_description<Mode, StructLayout<Table>::value_cases>;
+    EXPECT_EQ(value.size, sizeof(Table::wide));
+    EXPECT_EQ(value.setting, &enum_description<Mode>);
+    EXPECT_EQ(value.cases.data(), StructLayout<Table>::value_cases.data());
+
+    const Member& member = StructLayout<Table>::members[1];
+    EXPECT_EQ(member.name, "");
+    EXPECT_EQ(member.offset, offsetof(Table, narrow));
+    EXPECT_TRUE(member.type == (Type{element::RunSettingUnion{&value}, sizeof(Table::wide), 0}));
 }
 
 }  // namespace

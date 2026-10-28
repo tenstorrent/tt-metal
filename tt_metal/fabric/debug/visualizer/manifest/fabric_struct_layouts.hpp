@@ -137,8 +137,21 @@ struct StructLayout<RouterStateManager> {
 };
 static_assert(check_struct_layout<RouterStateManager>());
 
-// The 2D routing table, which decode applies to routing_l1_info_t's union bytes in a 2D run. Each region's live part is
-// sized by the mesh shape (routing_l1_info_t's mesh_y_size and mesh_x_size), so decode reads the regions by rule.
+// The routing mode a run uses, which picks routing_l1_info_t's route table.
+enum class RoutingMode : uint8_t { ONE_D, TWO_D };
+
+// The 1D path table.
+template <>
+struct StructLayout<intra_mesh_routing_path_t<1, false>> {
+    using T = intra_mesh_routing_path_t<1, false>;
+    static constexpr std::string_view name = template_name<"intra_mesh_routing_path_t", 1, false>;
+    static constexpr std::array members = {
+        LAYOUT_BYTES(T, paths),
+    };
+};
+static_assert(check_struct_layout<intra_mesh_routing_path_t<1, false>>());
+
+// The 2D route table.
 template <>
 struct StructLayout<route_table_2d_t> {
     static constexpr std::array members = {
@@ -150,16 +163,18 @@ static_assert(check_struct_layout<route_table_2d_t>());
 
 template <>
 struct StructLayout<routing_l1_info_t> {
+    // The route table
+    static constexpr std::array route_table_cases = {
+        LAYOUT_RUN_SETTING_UNION_CASE(routing_l1_info_t, routing_path_table_1d, RoutingMode::ONE_D),
+        LAYOUT_RUN_SETTING_UNION_CASE(routing_l1_info_t, route_table_2d, RoutingMode::TWO_D),
+    };
     static constexpr std::array members = {
         LAYOUT_MEMBER(routing_l1_info_t, state_manager),
         LAYOUT_MEMBER(routing_l1_info_t, my_mesh_id),
         LAYOUT_MEMBER(routing_l1_info_t, my_device_id),
         LAYOUT_BYTES(routing_l1_info_t, intra_mesh_direction_table),
         LAYOUT_BYTES(routing_l1_info_t, inter_mesh_direction_table),
-        // Although the actual member that is used to represent the route table is determined by whether the run
-        // is in 1D or 2D mode, we just use the 2d route table, which accounts for all the bytes that the union takes
-        // up, and rely on decode to interpret it in the appropriate manner.
-        LAYOUT_BYTES(routing_l1_info_t, route_table_2d),
+        LAYOUT_RUN_SETTING_UNION(RoutingMode, route_table_cases),
         LAYOUT_BYTES(routing_l1_info_t, exit_node_table),
         LAYOUT_MEMBER(routing_l1_info_t, my_mesh_coord_y),
         LAYOUT_MEMBER(routing_l1_info_t, my_mesh_coord_x),

@@ -13,13 +13,29 @@ the checks possible.
 ## Layouts and descriptions
 
 There are two levels. A **layout** is what you write, one per type. From each layout the build makes a
-**description**, one constant per type, which is what everything downstream reads:
+**description**, one constant per type, which is what everything downstream reads. Together they make a small type
+system, which follows four rules:
+
+1. **You write a layout, and the library builds the description.** A description is never constructed by hand.
+2. **A description is keyed on what identifies the thing it describes**: its type, or, for an anonymous union, which
+
+   has no type, its list of cases. So there's exactly one description per thing we want to represent, at a stable address.
+3. **An element points to a description and never copies it.** From any type, following elements reaches everything
+
+   needed to read its bytes, down to primitives.
+4. **Every layout is checked against its C++ type at compile time**, so a layout that drifts from its type fails the
+
+   build. A struct is checked by `check_struct_layout`, a tagged union by `validate_tagged_union_cases`, and a
+    run-setting union when its description is built.
+
+The descriptions each layout produces:
 
 | You write | The build makes | It holds |
 | --- | --- | --- |
 | `StructLayout<T>`, with an array named `members` | `struct_description<T>`, a `StructDescription` | The struct's name, its size, and its members |
 | `TaggedUnionLayout<U>`, with its `Tag` enum and an array named `cases` | `tagged_union_description<U>`, a `TaggedUnionDescription` | The union's name, its size, its tag enum's description, and its cases |
 | Nothing, for most enums (`EnumLayout<E>` only when enchantum can't list them; see special cases) | `enum_description<E>`, an `EnumDescription` | The enum's name, and every enumerator's name and value |
+| An array of a run-setting union's cases, in the enclosing struct's `StructLayout` | `run_setting_union_description<Setting, cases>`, a `RunSettingUnionDescription` | The union's size, its setting enum's description, and its cases. No name: the union is anonymous |
 
 A description doesn't copy its layout: a struct's description views the layout's `members` array, and a union's views
 its `cases`. Its name is the type's name, or the name its layout sets for a type enchantum can't name, such as a class
@@ -28,7 +44,36 @@ template instance (`template_name` in `struct_layout_helpers.hpp`). That name is
 ### The hierarchy
 
 A struct's description holds its members. Each member has a type, each type has an element, and an element of an enum,
-a struct or a tagged union points to that type's description:
+a struct or a union points to that type's description (recursive in a sense):
+
+```mermaid
+classDiagram
+    direction LR
+    class StructDescription { name; size; members : Member[] }
+    class Member { name; offset; type : Type; initializers }
+    class Type { element : Element; size; count }
+    class Element { <<variant>> Uint, Int, Bytes, Pad, Enum, Struct, TaggedUnion, RunSettingUnion }
+    class EnumDescription { name; enumerators : Enumerator[] }
+    class TaggedUnionDescription { name; size; tag : EnumDescription; cases : TaggedUnionCase[] }
+    class TaggedUnionCase { member : Member; tag_value }
+    class RunSettingUnionDescription { size; setting : EnumDescription; cases : RunSettingUnionCase[] }
+    class RunSettingUnionCase { member : Member; setting_value }
+    StructDescription --> Member : members
+    Member --> Type
+    Type --> Element
+    Element ..> StructDescription : Struct
+    Element ..> EnumDescription : Enum
+    Element ..> TaggedUnionDescription : TaggedUnion
+    Element ..> RunSettingUnionDescription : RunSettingUnion
+    TaggedUnionDescription --> EnumDescription : tag
+    TaggedUnionDescription --> TaggedUnionCase : cases
+    TaggedUnionCase --> Member
+    RunSettingUnionDescription --> EnumDescription : setting
+    RunSettingUnionDescription --> RunSettingUnionCase : cases
+    RunSettingUnionCase --> Member
+```
+
+The same structure as a tree:
 
 ```
 StructDescription                    struct_description<T>
@@ -41,7 +86,8 @@ StructDescription                    struct_description<T>
             ├── Uint, Int, Bytes, Pad     read as they are; nothing to follow
             ├── Enum         ──► EnumDescription
             ├── Struct       ──► StructDescription
-            └── TaggedUnion  ──► TaggedUnionDescription, and the name of the member holding the tag
+            ├── TaggedUnion  ──► TaggedUnionDescription, and the name of the member holding the tag
+            └── RunSettingUnion ──► RunSettingUnionDescription
 
 EnumDescription                      enum_description<E>
 ├── name
@@ -53,6 +99,13 @@ TaggedUnionDescription               tagged_union_description<U>
 └── cases[]: TaggedUnionCase
     ├── member: Member               like a struct's members
     └── tag_value                    the enumerator that picks it
+
+RunSettingUnionDescription           run_setting_union_description<Setting, cases>
+├── size                             its widest case's
+├── setting ──► EnumDescription
+└── cases[]: RunSettingUnionCase
+    ├── member: Member               a member of the enclosing struct, through the anonymous union
+    └── setting_value                the enumerator that picks it
 ```
 
 So from any type, following the arrows reaches everything needed to read its bytes, down to integers. With the example
@@ -84,14 +137,15 @@ Each entry in a layout's `members` is a `Member`:
 
 The element kinds are what decode needs to know to read a value:
 
-| Element | Read as |
-| --- | --- |
-| `Uint`, `Int` | An unsigned or signed integer, as wide as one element |
-| `Enum` | An enum. It points to the enum's description, so decode can show the enumerator's name |
-| `Struct` | Another described struct. It points to that struct's description, and is read with its members |
-| `TaggedUnion` | A union whose live member is picked by another field. It points to the union's description, and names the enclosing struct's member holding the tag (see tagged unions below) |
-| `Bytes` | Raw bytes that decode keeps as they are, for code that knows how to read them |
-| `Pad` | Bytes that mean nothing. Decode skips them |
+| Element           | Read as                                                                                                                                                                                                                                                          |
+| ----------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Uint`, `Int`     | An unsigned or signed integer, as wide as one element                                                                                                                                                                                                            |
+| `Enum`            | An enum. It points to the enum's description, so decode can show the enumerator's name                                                                                                                                                                           |
+| `Struct`          | Another described struct. It points to that struct's description, and is read with its members                                                                                                                                                                   |
+| `TaggedUnion`     | A union whose live member is picked by another field. It points to the union's description, and names the enclosing struct's member holding the tag (see tagged unions below)                                                                                    |
+| `RunSettingUnion` | An anonymous union whose member is chosen by a setting fixed by the run (ie. for routing tables, the routing mode). It points to the union's description. The manifest writes the member the run picks, so decode never reads one (see run-setting unions below) |
+| `Bytes`           | Raw bytes that decode keeps as they are, for code that knows how to read them                                                                                                                                                                                    |
+| `Pad`             | Bytes that mean nothing. Decode skips them                                                                                                                                                                                                                       |
 
 Nobody writes these entries by hand. The macros below build them from the struct itself, using `offsetof`, `sizeof` and
 the field's declared type, so the offsets and sizes can't drift from the real struct, and each element's description
@@ -117,6 +171,16 @@ union Geometry {        // 8 bytes
 struct Shape {          // 12 bytes
     Kind kind;          // offset 0: says which of geometry's members holds its bytes
     Geometry geometry;  // offset 4
+};
+
+enum class Dims : uint8_t { ONE_D, TWO_D };  // a setting fixed for the whole run
+
+struct Marker {         // 8 bytes
+    uint32_t id;        // offset 0
+    union {             // offset 4, 4 bytes: anonymous, so its members are Marker's own
+        uint16_t x;     // holds the bytes when the run's Dims is ONE_D
+        Point point;    // holds the bytes when the run's Dims is TWO_D
+    };
 };
 ```
 
@@ -231,6 +295,39 @@ packet in a buffer can have a different one.
 A union that nothing tags can't be listed this way. Listing it with `LAYOUT_MEMBER` fails to compile, with a message
 pointing at `LAYOUT_TAGGED_UNION`, or `LAYOUT_BYTES` when nothing tags it.
 
+### `LAYOUT_RUN_SETTING_UNION`: a union picked by a run setting
+
+Some unions aren't picked by a field at all. In `Marker`, the union holds `x` in a 1D run and `point` in a 2D run. The
+run's `Dims` picks the member, and it's the same for every value the run writes. The routing table is the real case:
+its route table holds the 1D path table or the 2D route table, depending on the run's routing mode.
+
+Since the setting is fixed for the run, and the manifest knows it when it writes, the manifest writes the member the run
+picks, under that member's name. Decode never sees the union as two members, just the chosen representation.
+
+Such a union is usually anonymous, as `Marker`'s is, so it has no type to give a layout of its own. Instead the
+enclosing struct's layout lists its **cases**, one per setting value, in the order the union declares its members, and
+then the union itself:
+
+```cpp
+template <>
+struct StructLayout<Marker> {
+    static constexpr std::array position_cases = {
+        LAYOUT_RUN_SETTING_UNION_CASE(Marker, x, Dims::ONE_D),
+        LAYOUT_RUN_SETTING_UNION_CASE(Marker, point, Dims::TWO_D),
+    };
+    static constexpr std::array members = {
+        LAYOUT_MEMBER(Marker, id),
+        LAYOUT_RUN_SETTING_UNION(Dims, position_cases),  // {name: "", element: RunSettingUnion{...}, size: 4}
+    };
+};
+```
+
+An anonymous union's members belong to the enclosing struct, so each case names one directly (`Marker::point`), and
+the macros read its offset and size from it as `LAYOUT_MEMBER` does. `LAYOUT_RUN_SETTING_UNION` builds the union's
+description, `run_setting_union_description<Dims, position_cases>`, keyed on the case list, since there's no union type
+to key it on. Building it checks the cases. The member it makes has no name, since C++ gives the union none, and is as
+big as the widest case.
+
 ## Padding
 
 There are three kinds of padding, and each is listed differently:
@@ -264,7 +361,7 @@ one. C++'s lack of reflexivity makes this a little challenging, but the idea boi
 
 C++ can't list a struct's fields, so neither rule can be checked by walking the fields directly. Instead, each layout
 is followed by `static_assert(check_struct_layout<T>())`, which runs the following checks that together give the same result:
-coverage for rule 1, and a field count for rule 2. Tagged unions get a check of their own.
+coverage for rule 1, and a field count for rule 2. Tagged and run-setting unions each get a check of their own.
 
 ### Coverage: rule 1
 
@@ -383,6 +480,15 @@ Each `TaggedUnionLayout` has its own check, `validate_tagged_union_cases`. It re
 by several enumerators, but an enumerator can't pick two members, since decode then couldn't tell which one holds the
 bytes. If someone adds an enumerator to the tag enum, the check fails until a case says what it picks.
 
+### Run-setting unions
+
+A run-setting union's check, `validate_run_setting_union_cases`, runs when its description is built, so a layout can't
+leave it out. It requires every case to start where the union does, and every enumerator of the setting to pick
+exactly one case. If someone adds an enumerator to the setting, the check fails until a case says what it picks.
+
+The union's size is its widest case's. The enclosing struct's coverage check then confirms that size fills the gap
+between the members around the union, so a case too small or too big shows up there.
+
 ### When a check fails
 
 All the struct checks live in one function, `find_layout_error<T>`, which returns which check failed:
@@ -421,7 +527,9 @@ check the kernels that use it.
 **An anonymous union counts as one value.** When the count reaches an anonymous union, one value fills the whole union.
 A layout lists the union by the members that span it. If that's a single member that isn't a C array, it already counts
 as one. Otherwise, wrap the members in `filled_by_one_initializer`, as the 2D packet header does for its chip and mesh
-ids and for `mcast_params`. A named union field is always one value.
+ids and for `mcast_params`. A named union field is always one value. A run-setting union counts as many values as its
+first case, the member the union declares first, which is why its cases are listed in declaration order. If they
+aren't, the field count catches it when the first case takes a different count.
 
 **An enum enchantum can't reflect needs an** `EnumLayout`**.** An enum's description gets its enumerators from enchantum,
 which finds them by scanning a range of values. An enum with values far outside that range, such as `EDMStatus`,
@@ -446,10 +554,11 @@ layouts  ──►  descriptions  ──►  manifest  ──►  capture  ─�
 2. **The manifest** starts from every type its schemas name. It follows each element to its description, and from there
 
    to the types that description names, and writes each description it reaches into its `types` section, keyed by name.
-     Since a schema like `"struct:Point"` is a description's name, `types` has an entry for every schema the manifest
-     writes. For a struct, the entry is its name and size, and for each member its name, offset, size, count and how to
-     read it (an integer width, an enum, another struct, a tagged union with its tag, raw bytes, or padding). This is the
-     hierarchy above, turned into data that tools outside the build can read.
+      Since a schema like `"struct:Point"` is a description's name, `types` has an entry for every schema the manifest
+      writes. For a struct, the entry is its name and size, and for each member its name, offset, size, count and how to
+      read it (an integer width, an enum, another struct, a tagged union with its tag, raw bytes, or padding). A
+      run-setting union is written as the case the run picks, under that case's name. This is the hierarchy above,
+      turned into data that tools outside the build can read.
 3. **Capture** reads the router's L1 regions as raw bytes and saves them alongside the manifest. It doesn't need to
 
    understand any of the structs.
@@ -469,7 +578,8 @@ code it was built from, and decode can trust it.
 
 1. Write a `StructLayout<T>` that lists every field in declaration order, using the macro that fits each one.
 2. List declared padding with `LAYOUT_MEMBER`, and compiler padding with `LAYOUT_PAD` or `LAYOUT_TAIL_PAD`.
-3. Describe any struct a field uses first, and any tagged union with its own `TaggedUnionLayout`. An enum a field uses
+3. Describe any struct a field uses first, any tagged union with its own `TaggedUnionLayout`, and any anonymous union a
 
-   needs nothing, unless enchantum can't list its enumerators; then give it an `EnumLayout`.
+   run setting picks with its cases and `LAYOUT_RUN_SETTING_UNION`. An enum a field uses needs nothing, unless
+    enchantum can't list its enumerators; then give it an `EnumLayout`.
 4. Follow it with `static_assert(check_struct_layout<T>())`, and the build tells you if anything is missing.
