@@ -610,3 +610,10 @@ session's argv); a resume clears PAUSE (use --until to stop); watch + cron :07/:
   KV -> bfp8 tiles; 3 indexer keys -> bfp4 tiles (record geometry: owner); 4 index query -> bfp4/bfp8; 5 serving
   contract + K.1 for the new formats (owner + server sign-off; bfp4 tooling); 6 precision audit hook. Then X.1
   re-baseline, P.4/P.5, F209, pad-row masking, 2x2 seed-box re-verify (incl. MOE_IMPL=block on its FABRIC_2D).
+- 15:46 FIX.7 PASS 0b85058efbc (GEMM inputs -> bfp8, GEMM_INPUTS setting; all 11 units incl. Paris through tt-d-gen).
+  A transient runner bus error (BUS_ADRERR "non-existent physical address", device-mapped memory; second today after
+  P.2's off side) failed one smoke run; the box test passed (15:40) and the agent's re-run passed (15:45). Watch for
+  a third: then a board reset (owner).
+- 15:50 OWNER: read-ahead fix done here, not on the 2x2: reference/weights.py EngramTable madvise(MADV_RANDOM) on the
+  two table mappings. Cold layer-1 lookup through EngramTable: 4,480 -> 610 ms, disk read ~23 GB -> ~0.95 GB, rows
+  byte-equal; 2-layer repro (engram layer 1) passes. ENGRAM_HOST_PATH.md: step 2's MADV_RANDOM part is DONE.
