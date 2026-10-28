@@ -30,8 +30,8 @@ void ValidateNodeCapacity(const ValidationContext& ctx, tt::ARCH arch, uint32_t 
 void ValidateWorkUnitSpec(const WorkUnitSpec& work_unit, const ValidationContext& ctx, tt::ARCH arch);
 
 // dfb.cpp
-void ValidateDFBSlotsPerNode(
-    const WorkUnitSpec& work_unit, const ValidationContext& ctx, uint32_t max_slots_per_core, tt::ARCH arch);
+// Check the DFB slot limit across all resource nodes.
+void ValidateDFBSlotsPerNode(const ValidationContext& ctx, uint32_t max_slots_per_core, tt::ARCH arch);
 
 // kernel.cpp
 void ValidateGen1DMPlacement(const ValidationContext& ctx, tt::ARCH arch);
