@@ -329,7 +329,14 @@ def test_glm_packed_forward_profile(
         # those switches sit between trace segments, as in serving.
         tokens = torch.randint(0, config.vocab_size, (chunk,), generator=g).tolist()
         msg = _metadata_msg(mesh_device, (0, chunk_start, chunk_start + chunk))
-        runtime.prefill_chunk(runtime.make_chunk_input(tokens), caches, metadata_msg=msg)
+        runtime.prefill_chunk(
+            runtime.make_chunk_input(tokens),
+            caches,
+            slot_id=0,
+            actual_start=chunk_start,
+            actual_end=chunk_start + chunk,
+            metadata_msg=msg,
+        )
         ttnn.synchronize_device(mesh_device)
         ttnn.deallocate(msg)
 
