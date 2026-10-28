@@ -4,14 +4,14 @@
 """Copied from TiRex-2 651e8c4af93 (CONTRACT §3, PLAN v1.20). Check bench records against the gate floors and the per-metric drift tolerances.
 
     python models/experimental/tafsut_forecast/tests/perf/check_gates.py <candidate bench.json>
-        [--baseline <baseline bench.json>] [--gates doc/optimize/gates.json]
+        [--baseline <record.json> ...] [--gates doc/optimize/gates.json]
 
 ``gates.json`` holds, per ``<shape>/<precision>`` (or ``*/<precision>``), the floor of every gate metric, and one
 drift tolerance per metric. Floors and tolerances change only through a decision (PLAN section 9): this script
 only reads them. Exit status 1 when any floor or drift check fails; every check is printed.
 
 Direction of each metric: higher is better except ``median_err``, ``flat_max_err``, ``inactive_max_err``,
-``abs_err_max`` (upper bounds) and
+``abs_err_max``, ``bias_row_p50`` (upper bounds) and
 ``spread_ratio_p99`` / ``spread_ratio_max`` (upper bounds near 1). A floor given as ``[lo, hi]`` is a range; a drift with
 ``two_sided`` is ``|candidate - baseline| <= abs``. Drift is ``candidate >= baseline - tol`` for higher-is-better
 metrics; ``candidate <= baseline + tol`` (absolute) or ``<= baseline x (1 + rel)`` for the others.
@@ -34,12 +34,17 @@ LOWER_IS_BETTER = {
     "flat_max_err",
     "inactive_max_err",
     "abs_err_max",
+    "bias_row_p50",
     "spread_ratio_p99",
     "spread_ratio_max",
 }
 DEFAULT_GATES = Path(__file__).resolve().parents[2] / "doc" / "optimize" / "gates.json"
-# drift is always against the fixed round-0 record (both precisions, all shapes; v1.14, v1.17)
-DEFAULT_BASELINE = DEFAULT_GATES.parent / "iter_00" / "bench.json"
+# drift is always against the fixed round-0 records (both precisions, every bench and suite case; v1.14, v1.17)
+DEFAULT_BASELINES = (DEFAULT_GATES.parent / "iter_00" / "bench.json", DEFAULT_GATES.parent / "iter_00" / "suite.json")
+
+
+def load_records(paths) -> list[dict]:
+    return [r for p in paths for r in json.loads(Path(p).read_text())]
 
 
 def git_stamp() -> dict:
@@ -122,6 +127,13 @@ def check(
                 failures.append(f"{key} {metric} drift: {where}")
                 continue
             v, bv = r[metric], b[metric]
+            if v is None and bv is None:  # v1.14: too few active rows in both records
+                print(f"n/a  drift {key[0]}/{key[1]} {metric}: not applicable (n_active={r.get('active_rows')})")
+                continue
+            if v is None or bv is None:
+                print(f"FAIL drift {key[0]}/{key[1]} {metric}: n/a in one record only")
+                failures.append(f"{key} {metric} drift: n/a in one record only")
+                continue
             if tol.get("two_sided"):
                 ok = abs(v - bv) <= tol["abs"]
                 print(
@@ -150,14 +162,14 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("candidate", type=Path)
     ap.add_argument(
-        "--baseline", type=lambda s: Path(s) if s else None, default=DEFAULT_BASELINE, help="'' = floors only"
+        "--baseline", nargs="*", type=Path, default=list(DEFAULT_BASELINES), help="none given = floors only"
     )
     ap.add_argument("--gates", type=Path, default=DEFAULT_GATES)
     ap.add_argument("--allow-unstamped", action="store_true", help="admit records without git_head (pre-v1.16)")
     args = ap.parse_args()
     gates = json.loads(args.gates.read_text())
     cand = json.loads(args.candidate.read_text())
-    base = json.loads(args.baseline.read_text()) if args.baseline else None
+    base = load_records(args.baseline) if args.baseline else None
     failures = check(cand, base, gates, args.gates.parent, args.allow_unstamped)
     print(f"{len(failures)} failure(s)" + (": " + "; ".join(failures) if failures else ""))
     sys.exit(1 if failures else 0)

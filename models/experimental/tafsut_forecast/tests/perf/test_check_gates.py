@@ -60,33 +60,50 @@ def _g1():
     import json
     from pathlib import Path
 
+    from models.experimental.tafsut_forecast.tests.perf.check_gates import DEFAULT_BASELINES, load_records
+
     doc = Path(__file__).resolve().parents[2] / "doc" / "optimize"
-    gates = json.loads((doc / "gates_g1_proposed.json").read_text())
-    r0 = [json.loads((doc / "iter_00" / f).read_text()) for f in ("bench.json", "suite.json")]
-    return gates, r0[0] + r0[1]
+    return json.loads((doc / "gates_g1_proposed.json").read_text()), load_records(DEFAULT_BASELINES)
 
 
 def test_g1_proposal_passes_round0():
-    """v1.17: the measured round-0 bench and suite records pass every proposed floor."""
+    """v1.17: the fixed round-0 bench and suite records pass every proposed floor and their own drift."""
     gates, r0 = _g1()
-    assert not check(r0, None, gates)
+    assert not check(r0, r0, gates)
+
+
+def test_g1_drift_covers_every_case():
+    """v1.22: drift budgets and the abs_err_max ceiling exist, and every bench and suite case has a round-0 record."""
+    from models.experimental.tafsut_forecast.tests.perf import score_broken as SB
+
+    gates, r0 = _g1()
+    assert {"abs_err_max", "spread_ratio_p50", "bias_row_p50", "pcc_step"} <= set(gates["drift"])
+    assert gates["drift"]["abs_err_max"] == {"rel": 0.5}
+    have = {(r["name"], r["precision"]) for r in r0}
+    assert {(c, p) for c in SB.BENCH + SB.SUITE for p in ("accuracy", "performance")} <= have
+
+
+def test_level_shift_and_lag1_shapes():
+    import torch
+
+    from models.experimental.tafsut_forecast.tests.pcc import metrics as M
+    from models.experimental.tafsut_forecast.tests.perf import score_broken as SB
+
+    h = torch.randn(3, 2, M.Q * M.P)
+    out = SB.broken(h)
+    assert torch.allclose(out["level_shift"][0] - h, torch.full_like(h, SB.LEVEL_SHIFT))
+    lag = out["lag1"][0].reshape(3, 2, M.Q, M.P)
+    hh = h.reshape(3, 2, M.Q, M.P)
+    assert torch.equal(lag[..., 1:], hh[..., :-1]) and torch.equal(lag[..., 0], hh[..., 0])
 
 
 def test_g1_proposal_fails_broken():
-    """v1.9 / v1.17: every broken output fails at least one proposed floor, on every case, in both precisions."""
-    from models.experimental.tafsut_forecast.reference import dataflow as df
-    from models.experimental.tafsut_forecast.tests.pcc import metrics as M
+    """v1.9 / v1.17 / v1.22: every broken output (level_shift and lag1 included) fails at least one proposed floor
+    or drift check, on every case, in both precisions."""
     from models.experimental.tafsut_forecast.tests.perf import score_broken as SB
-    from models.experimental.tafsut_forecast.tests.perf.check_gates import _floors, passes
 
-    gates, _ = _g1()
-    passed = []
-    for shape in SB.BENCH + SB.SUITE:
-        gh, prep, take, gq = SB.case_inputs(shape)  # skips when the goldens are missing
-        for name, (head, _) in SB.broken(gh).items():
-            m = M.gate_metrics(head, gh, df.postprocess(head.float(), prep, take).transpose(1, 2), gq, prep.scale)
-            for prec in ("accuracy", "performance"):
-                fl = _floors(gates, shape, prec)
-                if all(m.get(k) is None or passes(k, m[k], f) for k, f in fl.items()):
-                    passed.append(f"{shape}/{prec}/{name}")
+    gates, r0 = _g1()
+    results = SB.score(gates, r0)  # skips when the goldens are missing
+    assert {r["broken"] for r in results} >= {"level_shift", "lag1", "sign_flip", "collapsed"}
+    passed = [f"{r['shape']}/{r['precision']}/{r['broken']}" for r in results if not r["fails"]]
     assert not passed, passed
