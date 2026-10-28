@@ -187,7 +187,8 @@ ttnn::Tensor sparse_ring_sdpa_wrapper(
     ttnn::ccl::Topology topology,
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     CoreCoord ccl_core_grid_offset,
-    bool use_column_major_ccl) {
+    bool use_column_major_ccl,
+    uint32_t block_size) {
     return ttnn::transformer::sparse_ring_sdpa(
         input_tensor_q,
         input_tensor_k,
@@ -210,7 +211,8 @@ ttnn::Tensor sparse_ring_sdpa_wrapper(
         scale,
         compute_kernel_config,
         use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
-                             : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR);
+                             : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
+        block_size);
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> exp_ring_joint_scaled_dot_product_attention_wrapper(
@@ -858,7 +860,8 @@ void bind_sdpa(nb::module_& mod) {
         R"doc(
         Block-sparse ring attention (Sol-Attn) with the ring all-gather of K/V fused, non-causal, no joint tokens.
 
-        Per head and local 64-row Q block, `block_mask` names the global 64-token K/V blocks computed exactly.
+        Blocks are square, block_size (B) tokens. Per head and local B-row Q block, `block_mask` names the global
+        B-token K/V blocks computed exactly.
         Every other block enters the same softmax through one pooled entry: score q * mean(k), value mean(v),
         weighted by the block's token count. The pooled-entry column bias is generated on device.
 
@@ -875,7 +878,8 @@ void bind_sdpa(nb::module_& mod) {
             persistent_output_buffer_k (ttnn.Tensor): gathered K buffer.
             persistent_output_buffer_v (ttnn.Tensor): gathered V buffer.
             logical_n (int): logical (unpadded) global sequence length.
-            program_config (ttnn.SDPAProgramConfig): k_chunk_size sets the K/V piece size.
+            program_config (ttnn.SDPAProgramConfig): q_chunk_size must equal block_size; k_chunk_size sets the K/V
+                piece size and must be a multiple of block_size.
             scale (float, optional): defaults to D to the power of -0.5.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional).
             dim (int): all-gather dimension (2).
@@ -883,6 +887,8 @@ void bind_sdpa(nb::module_& mod) {
             num_links (int), cluster_axis (int), mesh_device (ttnn.MeshDevice), topology (ttnn.Topology),
             subdevice_id (optional), ccl_core_grid_offset (ttnn.CoreCoord), use_column_major_ccl (bool):
                 as ring_joint_scaled_dot_product_attention.
+            block_size (int): mask block size in tokens (square blocks). A compile-time parameter of the kernels;
+                only 64 is supported for now. nb_pad = round_up(ceil(N/ring_size / block_size), 32). Defaults to 64.
 
         Returns:
             ttnn.Tensor: [1, H, N/ring_size, D], same layout as input_tensor_q.
@@ -909,7 +915,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("topology"),
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("ccl_core_grid_offset"),
-        nb::arg("use_column_major_ccl") = false);
+        nb::arg("use_column_major_ccl") = false,
+        nb::arg("block_size") = 64);
 
     const auto* const ring_mla_doc = R"doc(
         Causal Ring MLA attention over a single KV tensor.

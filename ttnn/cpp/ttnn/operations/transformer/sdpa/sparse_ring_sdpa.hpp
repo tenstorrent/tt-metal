@@ -17,9 +17,11 @@
 namespace ttnn::transformer {
 
 // Block-sparse ring attention (Sol-Attn), non-causal, no joint tokens. The ring all-gather of K/V is fused, as in
-// ring_joint_scaled_dot_product_attention. Per (head, local 64-row Q block), `block_mask` names the global 64-token
-// K blocks computed exactly; every other block enters the same softmax through its pooled entry (score
-// q * mean(k), value mean(v), weight = the block's token count).
+// ring_joint_scaled_dot_product_attention. Blocks are square, `block_size` tokens (B): per (head, local B-row Q
+// block), `block_mask` names the global B-token K blocks computed exactly; every other block enters the same softmax
+// through its pooled entry (score q * mean(k), value mean(v), weight = the block's token count). block_size is a
+// compile-time parameter of the kernels; only 64 is supported for now. q_chunk_size must equal block_size and
+// k_chunk_size (the K/V piece) must be a multiple of it. nb_pad = round_up(ceil(N/ring_size / B), 32).
 //   q, k, v    [1, H, N/ring_size, D]  bf16 TILE (sequence-sharded along the ring axis)
 //   block_mask [1, H, nqb_pad, ring_size * nb_pad]  uint32 ROW_MAJOR; != 0 keeps global block s * nb_pad + b
 //   pooled_k   [1, H, ring_size * nb_pad, D]  bf16 TILE; per-block mean K over the valid tokens, zero padding
@@ -46,6 +48,7 @@ ttnn::Tensor sparse_ring_sdpa(
     CoreCoord ccl_core_grid_offset,
     std::optional<float> scale = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR);
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
+    uint32_t block_size = 64);
 
 }  // namespace ttnn::transformer

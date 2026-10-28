@@ -34,7 +34,7 @@ from tests.nightly.blackhole.sdpa.test_ring_joint_sdpa import (
     open_ring_joint_sdpa_runtime,
 )
 
-BLOCK = 64  # tokens per mask block; also the sparse op's query unit
+BLOCK = 64  # tokens per (square) mask block, passed as block_size; also the q chunk. The op supports 64 only for now
 HEADS_PER_DEVICE = 14  # MiniMax-H3 at TP=4
 D = 128
 KEEP_ALL = 1.0
@@ -228,6 +228,7 @@ class Case:
             subdevice_id=rt.worker_sub_device_id,
             ccl_core_grid_offset=(rt.ccl_column, 0),
             use_column_major_ccl=True,
+            block_size=BLOCK,
         )
         sparse = ttnn.to_torch(out, mesh_composer=self.composer).float()
         dense = None

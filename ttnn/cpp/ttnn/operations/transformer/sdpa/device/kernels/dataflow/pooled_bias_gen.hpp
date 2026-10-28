@@ -4,9 +4,10 @@
 
 #pragma once
 
-// Sol-Attn: on-device generation of the pooled-entry column-bias tiles (sparse_ring_reader.cpp).
+// On-device generation of the pooled-entry column-bias tiles (the skipped-block route of Sol-Attn)
+// (sparse_ring_reader.cpp).
 //
-// The pooled correction feeds the per-64-token-block mean K / mean V through the normal flash step with an
+// The pooled correction feeds the per-block mean K / mean V through the normal flash step with an
 // additive column bias on the QK^T tile: ln(len_j) / scale for a block the Q chunk approximates (so the
 // kernel's exp((QK + bias - max) * scale) weights the pooled column by its token count) and a large negative
 // for blocks it computes exactly (no double counting) or padding. The pre-pass used to upload these as a
@@ -24,10 +25,14 @@
 #include "api/dataflow/endpoints.h"
 #include "api/core_local_mem.h"
 
-namespace sol_bias_gen {
+namespace pooled_bias_gen {
 
-constexpr uint32_t kBlockTiles = 2;    // 64-token Sol blocks
-constexpr uint32_t kTableWords = 33;   // 66 packed bf16 entries, len 0..65
+// Mask block size in tiles (the op's block_size / 32), a named compile-time arg of the reader.
+constexpr uint32_t kBlockTiles = get_named_compile_time_arg_val("block_tiles");
+constexpr uint32_t kBlockTokens = kBlockTiles * 32;
+// Packed bf16 bias entries for len = 0 .. kBlockTokens + 1 (the last unused), two per word: 33 words at 64 tokens.
+// The host packs the same count (sparse_ring_sdpa_program_factory.cpp).
+constexpr uint32_t kTableWords = kBlockTiles * 16 + 1;
 constexpr uint32_t kFaceWords = 128;   // 16 x 16 bf16 = 512 B
 constexpr uint32_t kFaceRowWords = 8;  // 16 bf16 = 32 B
 
@@ -38,13 +43,13 @@ struct Geometry {
     uint32_t nb_pad;        // pooled rows per shard (tile multiple)
 };
 
-// Valid-token count of padded block b of shard s (64, a shard/logical tail, or 0 for padding).
+// Valid-token count of padded block b of shard s (kBlockTokens, a shard/logical tail, or 0 for padding).
 inline uint32_t block_len(const Geometry& geo, uint32_t s, uint32_t b) {
     if (b >= geo.nb) {
         return 0;
     }
-    const uint32_t start = s * geo.shard_tokens + b * (kBlockTiles * 32);
-    uint32_t end = start + kBlockTiles * 32;
+    const uint32_t start = s * geo.shard_tokens + b * kBlockTokens;
+    uint32_t end = start + kBlockTokens;
     const uint32_t shard_end = s * geo.shard_tokens + geo.shard_tokens;
     if (end > shard_end) {
         end = shard_end;
@@ -58,7 +63,7 @@ inline uint32_t block_len(const Geometry& geo, uint32_t s, uint32_t b) {
 // Block b of shard s is exact: its mask bit is set and it is a full block (a set bit on a partial tail block is
 // ignored, so the pooled entry still covers that block). mask_row holds the whole block-form row (n_blocks_pad words).
 inline bool block_exact(const Geometry& geo, CoreLocalMem<volatile uint32_t> mask_row, uint32_t s, uint32_t b) {
-    return b < geo.nb && block_len(geo, s, b) == kBlockTiles * 32 && mask_row[s * geo.nb_pad + b] != 0;
+    return b < geo.nb && block_len(geo, s, b) == kBlockTokens && mask_row[s * geo.nb_pad + b] != 0;
 }
 
 // bf16 bits of the bias for a block of `len` valid tokens; entry 0 is the "exact / padding" value.
@@ -78,7 +83,7 @@ inline uint32_t block_bias(
 }
 
 // Write `tiles` bias tiles for pooled tile rows [row0_t, row0_t + tiles) at L1 address dst (a reserved
-// cb_sol_bias region of >= tiles * tile_bytes). Blocking: returns after the face copies have landed.
+// cb_pooled_bias region of >= tiles * tile_bytes). Blocking: returns after the face copies have landed.
 template <uint32_t tile_bytes>
 inline void generate_tiles(
     const Noc& noc,
@@ -88,7 +93,7 @@ inline void generate_tiles(
     const Geometry& geo,
     CoreLocalMem<volatile uint32_t> mask_row,
     uint32_t table_base_arg) {
-    static_assert(tile_bytes == 4 * kFaceWords * 4, "sol bias tiles are Float16_b 32x32");
+    static_assert(tile_bytes == 4 * kFaceWords * 4, "pooled bias tiles are Float16_b 32x32");
     const uint8_t noc_id = noc.get_noc_id();
     uint32_t g = row0_t * 32;  // global padded block index of column 0
     uint32_t s = g / geo.nb_pad;
@@ -131,4 +136,4 @@ inline void generate_tiles(
     noc.async_read_barrier();
 }
 
-}  // namespace sol_bias_gen
+}  // namespace pooled_bias_gen

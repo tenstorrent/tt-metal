@@ -54,6 +54,7 @@ SparseRingSDPAResult sparse_ring_sdpa(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
     std::optional<float> scale = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR);
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
+    uint32_t block_size = 64);
 
 }  // namespace ttnn::prim

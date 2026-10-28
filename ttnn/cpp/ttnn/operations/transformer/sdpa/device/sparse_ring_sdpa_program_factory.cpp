@@ -14,6 +14,7 @@
 
 #include <algorithm>
 #include <array>
+#include <vector>
 #include <bit>
 #include <cstddef>
 #include <cstdint>
@@ -75,7 +76,7 @@ constexpr uint32_t kReaderKernelIndex = 0;
 constexpr uint32_t kWriterKernelIndex = 1;
 constexpr uint32_t kComputeKernelIndex = 2;
 // Q blocks a core may hold in L1 at once (the kernels' per-block state is a 32-bit bitmask).
-constexpr uint32_t kSolResidentMaxSlots = 32;
+constexpr uint32_t kResidentMaxSlots = 32;
 
 // The all-gather appends reader-forward, writer-forward, reader-backward, writer-backward after the three SDPA kernels.
 constexpr uint32_t kFirstAllGatherKernelIndex = 3;
@@ -260,9 +261,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         block_mask: 1 x NH x nb_pad x n_blocks_pad (uint32);  pooled_k / pooled_v: 1 x NH x n_blocks_pad x DH
         output_tensor: B x NH x local_N x DH
 
-    Every core holds its 64-row Q blocks in L1 for the whole op (one accumulator set each). Each ring iteration,
-    every K/V piece (k_chunk_size keys) that any Q block of the core's head group keeps is delivered once to the
-    group and applied to every resident Q block that keeps one of its 64-token blocks. On the first active ring
+    Every core holds its Q blocks (block_size rows) in L1 for the whole op (one accumulator set each). Each ring
+    iteration, every K/V piece (k_chunk_size keys) that any Q block of the core's head group keeps is delivered
+    once to the group and applied to every resident Q block that keeps one of its blocks. On the first active ring
     iteration the pooled entries (one per dropped block, weighted by its token count through a generated column
     bias) are applied too. After the last ring iteration each Q block is normalized and written out.
     */
@@ -347,22 +348,25 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const uint32_t Sq_chunk_t = q_chunk_size / tt::constants::TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / tt::constants::TILE_HEIGHT;
 
-    // Block geometry. Blocks are 64 tokens (2 tiles) inside each shard; the pooled tensors hold ring_size x
-    // sol_nb_pad blocks; a pooled "chunk" is Sk_chunk_t pooled rows.
-    constexpr uint32_t kSolBlockTiles = 2;
-    const uint32_t sol_nkc = tt::div_up(kv_local_padded_Nt, Sk_chunk_t);
-    const uint32_t sol_n_blocks_pad = tensor_args.pooled_k.logical_shape()[2];
-    const uint32_t sol_nb_pad = sol_n_blocks_pad / ring_size;
-    const uint32_t sol_nb = tt::div_up(kv_local_padded_Nt, kSolBlockTiles);
-    const uint32_t sol_nqc_pad = tensor_args.block_mask.logical_shape()[2];
-    const uint32_t sol_pooled_tiles = sol_n_blocks_pad / tt::constants::TILE_HEIGHT;
-    const uint32_t sol_pooled_chunks = tt::div_up(sol_pooled_tiles, Sk_chunk_t);
-    const uint32_t sol_pooled_last_tiles = sol_pooled_tiles - (sol_pooled_chunks - 1) * Sk_chunk_t;
+    // Block geometry. Blocks are block_size tokens (block_tiles tiles) inside each shard; the pooled tensors hold
+    // ring_size x mask_nb_pad blocks; a pooled "chunk" is Sk_chunk_t pooled rows.
+    const uint32_t block_tiles = args.block_tiles();
+    const uint32_t block_tokens = block_tiles * tt::constants::TILE_HEIGHT;
+    const uint32_t mask_nkc = tt::div_up(kv_local_padded_Nt, Sk_chunk_t);
+    const uint32_t mask_n_blocks_pad = tensor_args.pooled_k.logical_shape()[2];
+    const uint32_t mask_nb_pad = mask_n_blocks_pad / ring_size;
+    const uint32_t mask_nb = tt::div_up(kv_local_padded_Nt, block_tiles);
+    const uint32_t mask_nqb_pad = tensor_args.block_mask.logical_shape()[2];
+    const uint32_t pooled_tiles = mask_n_blocks_pad / tt::constants::TILE_HEIGHT;
+    const uint32_t pooled_chunks = tt::div_up(pooled_tiles, Sk_chunk_t);
+    const uint32_t pooled_last_tiles = pooled_tiles - (pooled_chunks - 1) * Sk_chunk_t;
     // The reader reads whole mask rows.
-    const uint32_t sol_mask_row_bytes = tensor_args.block_mask.logical_shape()[3] * sizeof(uint32_t);
-    TT_FATAL(sol_nkc <= 64, "SparseRingSDPA: at most 64 K pieces per shard");
-    TT_FATAL(sol_nb <= sol_nb_pad, "SparseRingSDPA: {} blocks per shard exceed the pooled row {}", sol_nb, sol_nb_pad);
-    TT_FATAL(Sk_chunk_t % kSolBlockTiles == 0, "SparseRingSDPA: k chunk must hold whole blocks");
+    const uint32_t mask_row_bytes = tensor_args.block_mask.logical_shape()[3] * sizeof(uint32_t);
+    TT_FATAL(mask_nkc <= 64, "SparseRingSDPA: at most 64 K pieces per shard");
+    TT_FATAL(
+        mask_nb <= mask_nb_pad, "SparseRingSDPA: {} blocks per shard exceed the pooled row {}", mask_nb, mask_nb_pad);
+    TT_FATAL(Sk_chunk_t % block_tiles == 0, "SparseRingSDPA: k chunk must hold whole blocks");
+    TT_FATAL(Sq_chunk_t == block_tiles, "SparseRingSDPA: one Q block per mask row (q chunk == block)");
 
     // Global chunk width the kernels divide by the ring size (one Q slab per device).
     const uint32_t q_chunk_group_tile_count = q_local_padded_Nt * ring_size;
@@ -456,22 +460,22 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
 
     // Every Q block the core owns stays fronted in cb_q_in for the whole op (read once).
     TT_FATAL(
-        max_q_per_core <= kSolResidentMaxSlots,
+        max_q_per_core <= kResidentMaxSlots,
         "SparseRingSDPA holds at most {} Q blocks per core, this split needs {}",
-        kSolResidentMaxSlots,
+        kResidentMaxSlots,
         max_q_per_core);
     // The plan page's 16-word header carries the shard's kept-block bits (one word per 32 blocks) plus the union
     // piece bits (2 words) and the pooled flag.
     TT_FATAL(
-        tt::div_up(sol_nb, 32u) + 3 <= 16,
+        tt::div_up(mask_nb, 32u) + 3 <= 16,
         "SparseRingSDPA: {} blocks per shard exceed the plan header (at most 416)",
-        sol_nb);
+        mask_nb);
     uint32_t q_tiles = Sq_chunk_t * DHt * max_q_per_core;
-    // Group delivery: one producer per head group multicasts each piece (see sol_res_mcast in the reader) over a
+    // Group delivery: one producer per head group multicasts each piece (see group_mcast in the reader) over a
     // 3-deep K/V CB, so the producer can send the next piece while every member computes on the previous ones.
     // Without it (B > 1, or no head chain) the K/V CBs are double-buffered.
-    const bool sol_res_mcast = build_kv_chains && use_head_chain;
-    const uint32_t kv_cb_pages = sol_res_mcast ? 3u : 2u;
+    const bool group_mcast = build_kv_chains && use_head_chain;
+    const uint32_t kv_cb_pages = group_mcast ? 3u : 2u;
     uint32_t k_tiles = Sk_chunk_t * DHt * kv_cb_pages;
     uint32_t v_tiles = Sk_chunk_t * vDHt * kv_cb_pages;
     uint32_t qk_tiles = Sq_chunk_t * Sk_chunk_t;
@@ -911,12 +915,12 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
 
     // One step covers one piece for a group of resident Q blocks, each with its own kept blocks; member g's scores are
     // stored compactly (row stride = its kept width), and members are grouped until the scores fill
-    // kSolResidentGroup x Sq_chunk_t rows of Sk_chunk_t tiles (at least qk_tiles). The new-max / alpha scratches
+    // kResidentGroup x Sq_chunk_t rows of Sk_chunk_t tiles (at least qk_tiles). The new-max / alpha scratches
     // hold one tile row per resident Q block. The compute kernel derives the same capacity (sdpa_ring_resident,
     // kGroupCap) and ASSERTs the page count.
-    constexpr uint32_t kSolResidentGroup = 4;
+    constexpr uint32_t kResidentGroup = 4;
     const uint32_t qk_im_cb_tiles =
-        std::max(qk_tiles, std::min(max_q_per_core, kSolResidentGroup) * Sq_chunk_t * Sk_chunk_t);
+        std::max(qk_tiles, std::min(max_q_per_core, kResidentGroup) * Sq_chunk_t * Sk_chunk_t);
     const uint32_t res_stats_tiles = statistics_tiles * max_q_per_core;
     const uint32_t cb_qk_im = allocate_tile_cb(qk_im_cb_tiles, qk_im_tile_size, qk_im_df);
     const uint32_t cb_max_A = allocate_tile_cb(res_stats_tiles, stats_tile_size, stats_df);
@@ -950,22 +954,22 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const uint32_t cb_kv_pad_derived = inactive_cb;
     // Reader->compute plan words per ring iteration, and the pooled-chunk column bias tiles.
     // Plan page: 16 summary words, then the Q block's full mask row (scratch the reader scans in place). The summary
-    // is [kept-block words (sol_res_block_words)][union piece bits lo, hi][do_pooled].
+    // is [kept-block words (plan_block_words)][union piece bits lo, hi][do_pooled].
     // Single page: a second page pushed the static CB region past the L1 buffers the full pipeline's CCL manager
     // pins (clash by 1792 B at the 10 s shape).
-    const uint32_t cb_sol_plan = allocate_cb(64 + sol_mask_row_bytes, 1, tt::DataFormat::UInt32);
+    const uint32_t cb_sparse_plan = allocate_cb(64 + mask_row_bytes, 1, tt::DataFormat::UInt32);
     // Every Q block's plan record goes in one page per ring iteration, after the header (16 words) and the shard
-    // slice the reader scans (sol_nb_pad words), so the reader does not wait for compute to pop a page per block at
+    // slice the reader scans (mask_nb_pad words), so the reader does not wait for compute to pop a page per block at
     // each iteration boundary. The records fit in the scratch the whole-row reads already need; a short row (one
     // shard: the slice is the whole row) leaves no room for them, and then each block gets its own page. No
     // phase-alignment dummies: every chain / group member pushes the same sequence, so the pointers stay in step.
-    const uint32_t sol_res_rec_words = tt::div_up(sol_nb, 32u) + 3;
-    const bool sol_res_plan_fits =
-        (16 + sol_nb_pad + max_q_per_core * sol_res_rec_words) * sizeof(uint32_t) <= 64 + sol_mask_row_bytes;
-    const uint32_t sol_res_plan_rec_base = sol_res_plan_fits ? 16 + sol_nb_pad : 0;
+    const uint32_t plan_rec_words = tt::div_up(mask_nb, 32u) + 3;
+    const bool plan_fits_one_page =
+        (16 + mask_nb_pad + max_q_per_core * plan_rec_words) * sizeof(uint32_t) <= 64 + mask_row_bytes;
+    const uint32_t plan_rec_base = plan_fits_one_page ? 16 + mask_nb_pad : 0;
     // One pooled chunk of bias tiles in flight; 2*Sk_chunk_t pushed the static CB region past the L1 buffers at the
     // 10 s / 15 s shapes.
-    const uint32_t cb_sol_bias = allocate_tile_cb(Sk_chunk_t, mask_tile_size, mask_df);
+    const uint32_t cb_pooled_bias = allocate_tile_cb(Sk_chunk_t, mask_tile_size, mask_df);
     {
         uint64_t cb_bytes = 0;
         for (const auto& cb : desc.cbs) {
@@ -1532,25 +1536,27 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const KernelDescriptor::NamedCompileTimeArgs named_args = {
         // The kernels share the dense op's chain and ring helpers, which take a KV split factor; no split here.
         {"kv_stripe_split", 1u},
+        // Mask block size in tiles (square blocks: Q block rows == K block columns). Only 2 (64 tokens) for now.
+        {"block_tiles", block_tiles},
         // Resident Q blocks: the slot count every core sizes its state arrays by, and the words of per-shard
         // kept-block bits the reader puts in every plan page (block b: word b/32, bit b%32).
-        {"sol_resident_slots", max_q_per_core},
-        {"sol_res_block_words", tt::div_up(sol_nb, 32u)},
-        // Group delivery by multicast (see sol_res_mcast above).
-        {"sol_res_mcast", sol_res_mcast ? 1u : 0u},
-        // The one-page plan's record base word (0 = a page per block); see sol_res_plan_rec_base above.
-        {"sol_res_plan_rec_base", sol_res_plan_rec_base},
-        {"sol_nb", sol_nb},
-        {"sol_nb_pad", sol_nb_pad},
-        {"sol_n_blocks_pad", sol_n_blocks_pad},
-        {"sol_nqc_pad", sol_nqc_pad},
-        {"sol_pooled_chunks", sol_pooled_chunks},
-        {"sol_pooled_last_tiles", sol_pooled_last_tiles},
-        {"sol_mask_row_bytes", sol_mask_row_bytes},
+        {"resident_slots", max_q_per_core},
+        {"plan_block_words", tt::div_up(mask_nb, 32u)},
+        // Group delivery by multicast (see group_mcast above).
+        {"group_mcast", group_mcast ? 1u : 0u},
+        // The one-page plan's record base word (0 = a page per block); see plan_rec_base above.
+        {"plan_rec_base", plan_rec_base},
+        {"mask_nb", mask_nb},
+        {"mask_nb_pad", mask_nb_pad},
+        {"mask_n_blocks_pad", mask_n_blocks_pad},
+        {"mask_nqb_pad", mask_nqb_pad},
+        {"pooled_chunks", pooled_chunks},
+        {"pooled_last_tiles", pooled_last_tiles},
+        {"mask_row_bytes", mask_row_bytes},
         // Logical length in tokens, for the on-device pooled-column bias.
-        {"sol_logical_n", static_cast<uint32_t>(args.logical_n)},
-        {"cb_sol_plan", cb_sol_plan},
-        {"cb_sol_bias", cb_sol_bias},
+        {"sparse_logical_n", static_cast<uint32_t>(args.logical_n)},
+        {"cb_sparse_plan", cb_sparse_plan},
+        {"cb_pooled_bias", cb_pooled_bias},
     };
     for (auto* kernel : {&reader_kernel, &writer_kernel, &compute_kernel}) {
         kernel->named_compile_time_args = named_args;
@@ -1565,18 +1571,18 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     // set it for the whole process. =1: one zone per step, so the per-core profiler buffer holds ~10 steps and the
     // gaps between them are measurable. =2: plus the two phase zones per Q subblock / row group. =3: plus the
     // per-key-subblock zones (~6 KB of TRISC code).
-    if (std::getenv("TT_SOL_STEP_PROFILE") && std::string(std::getenv("TT_SOL_STEP_PROFILE")) != "0" &&
-        std::string(std::getenv("TT_SOL_STEP_PROFILE")) != "") {
-        const std::string level = std::getenv("TT_SOL_STEP_PROFILE");
-        compute_kernel.defines.emplace_back("SOL_STEP_PROFILE", "1");
-        // The reader's and writer's wait zones (SOL_ZONE in sparse_ring_reader.cpp / sparse_ring_writer.cpp).
-        reader_kernel.defines.emplace_back("SOL_STEP_PROFILE", "1");
-        writer_kernel.defines.emplace_back("SOL_STEP_PROFILE", "1");
+    if (std::getenv("TT_SPARSE_STEP_PROFILE") && std::string(std::getenv("TT_SPARSE_STEP_PROFILE")) != "0" &&
+        std::string(std::getenv("TT_SPARSE_STEP_PROFILE")) != "") {
+        const std::string level = std::getenv("TT_SPARSE_STEP_PROFILE");
+        compute_kernel.defines.emplace_back("SPARSE_STEP_PROFILE", "1");
+        // The reader's and writer's wait zones (SPARSE_ZONE in sparse_ring_reader.cpp / sparse_ring_writer.cpp).
+        reader_kernel.defines.emplace_back("SPARSE_STEP_PROFILE", "1");
+        writer_kernel.defines.emplace_back("SPARSE_STEP_PROFILE", "1");
         if (level == "2" || level == "3") {
-            compute_kernel.defines.emplace_back("SOL_STEP_PROFILE_PHASES", "1");
+            compute_kernel.defines.emplace_back("SPARSE_STEP_PROFILE_PHASES", "1");
         }
         if (level == "3") {
-            compute_kernel.defines.emplace_back("SOL_STEP_PROFILE_FINE", "1");
+            compute_kernel.defines.emplace_back("SPARSE_STEP_PROFILE_FINE", "1");
         }
     }
     // The compute kernel builds at O2: at the default level the 5 s program sits at the 70,656 B kernel config buffer,
@@ -1592,8 +1598,10 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
 
     // On-device bias generator table (see the reader arg layout below). bf16 round-to-nearest-even of ln(len) / scale;
     // -30000 for len 0.
-    constexpr uint32_t kSolLenBiasTableWords = 33;  // 66 bf16 entries, len 0..65 (65 unused)
-    std::array<uint32_t, kSolLenBiasTableWords> sol_len_bias_table{};
+    // Bias per block token count, packed bf16, two per word: entries len = 0 .. block_tokens + 1 (the last unused),
+    // block_tiles * 16 + 1 words (33 at 64-token blocks). The reader derives the same count (pooled_bias_gen.hpp).
+    const uint32_t kPooledBiasTableWords = block_tiles * 16 + 1;
+    std::vector<uint32_t> pooled_bias_table(kPooledBiasTableWords, 0u);
     {
         const auto f2bf = [](float f) -> uint32_t {
             uint32_t u = std::bit_cast<uint32_t>(f);
@@ -1601,10 +1609,11 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
             u += 0x7FFFu + lsb;
             return u >> 16;
         };
-        constexpr float kSolBiasNeg = -30000.0f;  // sol_prepass.NEG
-        for (uint32_t len = 0; len <= 65; ++len) {
-            const float v = (len == 0 || len > 64) ? kSolBiasNeg : std::log(static_cast<float>(len)) / scale_value;
-            sol_len_bias_table[len / 2] |= f2bf(v) << (16 * (len % 2));
+        constexpr float kPooledBiasNeg = -30000.0f;  // exp underflows to 0 in bf16
+        for (uint32_t len = 0; len <= block_tokens + 1; ++len) {
+            const float v =
+                (len == 0 || len > block_tokens) ? kPooledBiasNeg : std::log(static_cast<float>(len)) / scale_value;
+            pooled_bias_table[len / 2] |= f2bf(v) << (16 * (len % 2));
         }
     }
 
@@ -1614,9 +1623,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     // on a core outside the group. The producer is the first member in core order (not the chain's injector): it
     // starts its row, so it does not split a rectangle, and a group of consecutive cores spanning two rows needs two
     // rectangles.
-    constexpr uint32_t kSolGroupMaxRects = 8;
-    std::vector<std::vector<uint32_t>> sol_group_args(num_cores, std::vector<uint32_t>{0u, 0u, 0u, 0u, 0u});
-    if (sol_res_mcast) {
+    constexpr uint32_t kGroupMaxRects = 8;
+    std::vector<std::vector<uint32_t>> group_args(num_cores, std::vector<uint32_t>{0u, 0u, 0u, 0u, 0u});
+    if (group_mcast) {
         for (uint32_t h = 0; h < static_cast<uint32_t>(head_segments.size()); ++h) {
             std::vector<uint32_t> members;
             for (const auto& seg : head_segments[h]) {
@@ -1655,14 +1664,14 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
                 }
             }
             TT_FATAL(
-                rects.size() <= kSolGroupMaxRects,
+                rects.size() <= kGroupMaxRects,
                 "SparseRingSDPA group delivery: head {} needs {} multicast rectangles (at most {})",
                 h,
                 rects.size(),
-                kSolGroupMaxRects);
+                kGroupMaxRects);
             const uint32_t n_receivers = static_cast<uint32_t>(members.size() - 1);
             for (const uint32_t ci : members) {
-                auto& a = sol_group_args[ci];
+                auto& a = group_args[ci];
                 a = {
                     ci == producer ? 1u : 2u,
                     static_cast<uint32_t>(prod_phys.x),
@@ -1740,7 +1749,7 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
 
         // Block-sparse args, read by the kernel at rotated_args_base. Word offsets from there:
         //   +0 mask, +1 pooled K, +2 pooled V, +3 bias (0: generated), +4 n_members, +5 my_start, then the
-        //   kSolLenBiasTableWords packed bf16 table, then members (start, count)..., then the group delivery words.
+        //   kPooledBiasTableWords packed bf16 table, then members (start, count)..., then the group delivery words.
         // Buffer entries are registered as bindings and re-patched on cache hits by the descriptor adapter.
         reader_args.push_back(tensor_args.block_mask.buffer());
         reader_args.push_back(tensor_args.pooled_k.buffer());
@@ -1750,8 +1759,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         // start. At stream position j every member is on Q block start_m + j, so each core derives the same
         // chain-wide kept set and the chain skips a piece nobody needs in lockstep. Non-participants (head-boundary
         // cores before the injector) get no members and skip on their own mask.
-        std::vector<std::pair<uint32_t, uint32_t>> sol_members;
-        uint32_t sol_my_start = 0;
+        std::vector<std::pair<uint32_t, uint32_t>> group_members;
+        uint32_t sparse_my_start = 0;
         if (use_head_chain && head_chain_configs[i].participates) {
             const uint32_t h = head_chain_configs[i].head;
             for (const auto& seg : head_segments[h]) {
@@ -1767,27 +1776,29 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
                 const uint32_t start_in_head = flat % num_q_chunks;
                 const uint32_t count = w.head_work[seg.head_work_index].q_chunk_count;
                 if (seg.core_idx == i) {
-                    sol_my_start = start_in_head;
+                    sparse_my_start = start_in_head;
                 }
-                sol_members.emplace_back(start_in_head, count);
+                group_members.emplace_back(start_in_head, count);
             }
             TT_FATAL(
-                sol_members.size() <= 64, "SparseRingSDPA: head chain of {} members is too long", sol_members.size());
+                group_members.size() <= 64,
+                "SparseRingSDPA: head chain of {} members is too long",
+                group_members.size());
         }
-        reader_args.push_back(static_cast<uint32_t>(sol_members.size()));
-        reader_args.push_back(sol_my_start);
-        // Column-bias value per block token count, bf16, two per word: entry[len] for len in [0, 64] (entry[0] = the
-        // "exact / padding" large negative). The generator weights each pooled column by its token count through
-        // exp((QK + ln(len)/scale - max) * scale) = len * exp(...).
-        for (uint32_t w = 0; w < kSolLenBiasTableWords; ++w) {
-            reader_args.push_back(sol_len_bias_table[w]);
+        reader_args.push_back(static_cast<uint32_t>(group_members.size()));
+        reader_args.push_back(sparse_my_start);
+        // Column-bias value per block token count, bf16, two per word: entry[len] for len in [0, block_tokens]
+        // (entry[0] = the "exact / padding" large negative). The generator weights each pooled column by its token
+        // count through exp((QK + ln(len)/scale - max) * scale) = len * exp(...).
+        for (uint32_t w = 0; w < kPooledBiasTableWords; ++w) {
+            reader_args.push_back(pooled_bias_table[w]);
         }
-        for (const auto& [start, count] : sol_members) {
+        for (const auto& [start, count] : group_members) {
             reader_args.push_back(start);
             reader_args.push_back(count);
         }
-        if (sol_res_mcast) {
-            for (const uint32_t w : sol_group_args[i]) {
+        if (group_mcast) {
+            for (const uint32_t w : group_args[i]) {
                 reader_args.push_back(w);
             }
         }

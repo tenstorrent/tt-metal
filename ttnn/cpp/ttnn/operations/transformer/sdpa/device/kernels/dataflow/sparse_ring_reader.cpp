@@ -13,26 +13,26 @@
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_mla_packing_plan.hpp"
 #include "ring_joint_kv_pad_derivation.hpp"
 #include "chain_link.hpp"
-#include "sol_bias_gen.hpp"
+#include "pooled_bias_gen.hpp"
 #include "fused_op_receiver.hpp"
 #include "ring_utils.hpp"
 
-// Device-profiler zones around the reader's waits (TT_SOL_STEP_PROFILE=1 under TT_METAL_DEVICE_PROFILER=1), so a
+// Device-profiler zones around the reader's waits (TT_SPARSE_STEP_PROFILE=1 under TT_METAL_DEVICE_PROFILER=1), so a
 // stall shows up as a long RD_* zone on the core that waits instead of as a gap in the compute zones.
-#if defined(PROFILE_KERNEL) && defined(SOL_STEP_PROFILE)
-#define SOL_ZONE(name) DeviceZoneScopedN(name)
+#if defined(PROFILE_KERNEL) && defined(SPARSE_STEP_PROFILE)
+#define SPARSE_ZONE(name) DeviceZoneScopedN(name)
 #else
-#define SOL_ZONE(name)
+#define SPARSE_ZONE(name)
 #endif
 #include "ttnn/operations/transformer/sdpa/device/kernels/ring_joint_chain_layout.hpp"
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
-// Reader of the block-sparse ring attention (Sol-Attn): every core holds its Q blocks ("resident" chunks of 64 rows)
-// in L1 for the whole op and streams each K/V piece of a ring iteration's shard once, for all of them. Per ring
-// iteration it publishes one plan (each chunk's kept blocks of the shard and its head group's piece union), streams
-// the pieces (own DRAM read, chain, or the head group's multicast), and on the first active iteration the pooled
-// K/V entries with their generated column bias.
+// Reader of the block-sparse ring SDPA: every core holds its Q blocks ("resident" chunks of
+// block_size rows) in L1 for the whole op and streams each K/V piece of a ring iteration's shard once, for all of
+// them. Per ring iteration it publishes one plan (each chunk's kept blocks of the shard and its head group's piece
+// union), streams the pieces (own DRAM read, chain, or the head group's multicast), and on the first active iteration
+// the pooled K/V entries with their generated column bias.
 void kernel_main() {
     constexpr uint32_t B = get_compile_time_arg_val(0);
     constexpr uint32_t NH = get_compile_time_arg_val(1);
@@ -41,6 +41,8 @@ void kernel_main() {
     constexpr uint32_t vDHt = get_compile_time_arg_val(4);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(5);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(6);
+    static_assert(Sq_chunk_t == pooled_bias_gen::kBlockTiles, "one Q block (q chunk) per mask row");
+    static_assert(Sk_chunk_t % pooled_bias_gen::kBlockTiles == 0, "a K/V piece holds whole blocks");
     constexpr uint32_t q_local_padded_Nt = get_compile_time_arg_val(7);
     constexpr uint32_t kv_local_padded_Nt = get_compile_time_arg_val(8);
     // Slots 9-12 and 14 are the joint-token sizes (no joint tokens), 17-19 the subblock and causal flags.
@@ -81,10 +83,10 @@ void kernel_main() {
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
     constexpr auto gathered_v_args = TensorAccessorArgs<gathered_k_args.next_compile_time_args_offset()>();
     constexpr auto attention_sink_args = TensorAccessorArgs<gathered_v_args.next_compile_time_args_offset()>();
-    constexpr auto sol_mask_args = TensorAccessorArgs<attention_sink_args.next_compile_time_args_offset()>();
-    constexpr auto sol_pk_args = TensorAccessorArgs<sol_mask_args.next_compile_time_args_offset()>();
-    constexpr auto sol_pv_args = TensorAccessorArgs<sol_pk_args.next_compile_time_args_offset()>();
-    constexpr uint32_t chains_base_offset = sol_pv_args.next_compile_time_args_offset();
+    constexpr auto mask_args = TensorAccessorArgs<attention_sink_args.next_compile_time_args_offset()>();
+    constexpr auto pooled_k_args = TensorAccessorArgs<mask_args.next_compile_time_args_offset()>();
+    constexpr auto pooled_v_args = TensorAccessorArgs<pooled_k_args.next_compile_time_args_offset()>();
+    constexpr uint32_t chains_base_offset = pooled_v_args.next_compile_time_args_offset();
 
     uint32_t argidx = 0;
     const uint32_t q_addr = get_arg_val<uint32_t>(argidx++);
@@ -122,8 +124,8 @@ void kernel_main() {
         true, /* wait_for_op_signal */
         argidx);
 
-    // The Sol-Attn runtime args follow the fused-op receiver block.
-    const uint32_t sol_args_base = argidx;
+    // The sparse runtime args follow the fused-op receiver block.
+    const uint32_t sparse_args_base = argidx;
     // Compile-time semaphore ids and chain flags are appended after all TensorAccessorArgs().
     // ChainLink takes semaphore IDs directly (the new Semaphore<> wrapper resolves them to L1 addrs).
     constexpr uint32_t chain_sender_semaphore_arg_offset = ring_joint::kChainSenderSemaphoreCompileArgOffset;
@@ -194,38 +196,38 @@ void kernel_main() {
     constexpr uint32_t cb_k_in = get_compile_time_arg_val(cb_arg_offset + 1);
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
 
-    const uint32_t sol_mask_addr = get_arg_val<uint32_t>(sol_args_base + 0);
-    const uint32_t sol_pk_addr = get_arg_val<uint32_t>(sol_args_base + 1);
-    const uint32_t sol_pv_addr = get_arg_val<uint32_t>(sol_args_base + 2);
+    const uint32_t mask_addr = get_arg_val<uint32_t>(sparse_args_base + 0);
+    const uint32_t pooled_k_addr = get_arg_val<uint32_t>(sparse_args_base + 1);
+    const uint32_t pooled_v_addr = get_arg_val<uint32_t>(sparse_args_base + 2);
     // +3: bias tensor address slot (the bias is generated). +4: head chain member count, +5: this core's first Q
-    // chunk in the chain. Then the packed bf16 bias-per-token-count table (sol_bias_gen::kTableWords words), the
+    // chunk in the chain. Then the packed bf16 bias-per-token-count table (pooled_bias_gen::kTableWords words), the
     // members (start, count) and the head group's delivery arguments.
-    const uint32_t sol_n_members = get_arg_val<uint32_t>(sol_args_base + 4);
-    const uint32_t sol_len_bias_table_base = sol_args_base + 6;
-    const uint32_t sol_members_base = sol_args_base + 6 + sol_bias_gen::kTableWords;
-    constexpr uint32_t sol_logical_n_tokens = get_named_compile_time_arg_val("sol_logical_n");
-    constexpr uint32_t sol_nb = get_named_compile_time_arg_val("sol_nb");
-    constexpr uint32_t sol_nb_pad = get_named_compile_time_arg_val("sol_nb_pad");
-    constexpr uint32_t sol_n_blocks_pad = get_named_compile_time_arg_val("sol_n_blocks_pad");
-    constexpr uint32_t sol_nqc_pad = get_named_compile_time_arg_val("sol_nqc_pad");
-    constexpr uint32_t sol_pooled_chunks = get_named_compile_time_arg_val("sol_pooled_chunks");
-    constexpr uint32_t sol_pooled_last_tiles = get_named_compile_time_arg_val("sol_pooled_last_tiles");
-    constexpr uint32_t sol_mask_row_bytes = get_named_compile_time_arg_val("sol_mask_row_bytes");
-    constexpr uint32_t cb_sol_plan = get_named_compile_time_arg_val("cb_sol_plan");
-    constexpr uint32_t cb_sol_bias = get_named_compile_time_arg_val("cb_sol_bias");
+    const uint32_t group_n_members = get_arg_val<uint32_t>(sparse_args_base + 4);
+    const uint32_t pooled_bias_table_base = sparse_args_base + 6;
+    const uint32_t group_members_base = sparse_args_base + 6 + pooled_bias_gen::kTableWords;
+    constexpr uint32_t logical_n_tokens = get_named_compile_time_arg_val("sparse_logical_n");
+    constexpr uint32_t mask_nb = get_named_compile_time_arg_val("mask_nb");
+    constexpr uint32_t mask_nb_pad = get_named_compile_time_arg_val("mask_nb_pad");
+    constexpr uint32_t mask_n_blocks_pad = get_named_compile_time_arg_val("mask_n_blocks_pad");
+    constexpr uint32_t mask_nqb_pad = get_named_compile_time_arg_val("mask_nqb_pad");
+    constexpr uint32_t pooled_chunks = get_named_compile_time_arg_val("pooled_chunks");
+    constexpr uint32_t pooled_last_tiles = get_named_compile_time_arg_val("pooled_last_tiles");
+    constexpr uint32_t mask_row_bytes = get_named_compile_time_arg_val("mask_row_bytes");
+    constexpr uint32_t cb_sparse_plan = get_named_compile_time_arg_val("cb_sparse_plan");
+    constexpr uint32_t cb_pooled_bias = get_named_compile_time_arg_val("cb_pooled_bias");
     // Words of per-shard kept-block bits in every plan record (block-form mask).
-    constexpr uint32_t sol_res_block_words = get_named_compile_time_arg_val("sol_res_block_words");
-    static_assert(sol_res_block_words * 32 >= sol_nb, "block words cover the shard");
+    constexpr uint32_t plan_block_words = get_named_compile_time_arg_val("plan_block_words");
+    static_assert(plan_block_words * 32 >= mask_nb, "block words cover the shard");
     // Head group delivery: one producer per head group reads each piece from DRAM and multicasts it to every other
     // member (no forwarding). The head chain's membership and semaphores are reused: sender = the producer's credit
     // count (+1 per consumer per piece), receiver = each consumer's delivered count (set to the running piece count
     // by multicast), valid = the producer's local source word for that set. Off when the factory builds no head
     // chains; the pieces then go over the chain or are read by each core.
-    constexpr bool sol_res_mcast = get_named_compile_time_arg_val("sol_res_mcast") == 1;
+    constexpr bool group_mcast = get_named_compile_time_arg_val("group_mcast") == 1;
     // rec_base != 0: one plan page per ring iteration holding every chunk's record from that word on (0 = one page
     // per chunk, when the records do not fit one page).
-    constexpr uint32_t sol_res_plan_rec_base = get_named_compile_time_arg_val("sol_res_plan_rec_base");
-    constexpr uint32_t sol_bias_tile_bytes = get_tile_size(cb_sol_bias);
+    constexpr uint32_t plan_rec_base = get_named_compile_time_arg_val("plan_rec_base");
+    constexpr uint32_t pooled_bias_tile_bytes = get_tile_size(cb_pooled_bias);
 
     constexpr uint32_t q_tile_bytes = get_tile_size(cb_q_in);
     constexpr uint32_t k_tile_bytes = get_tile_size(cb_k_in);
@@ -349,21 +351,21 @@ void kernel_main() {
     const auto gathered_v_input_tile_logical = TensorTileShape(B, NHV, gathered_padded_Nt, v_row_Wt);
     const auto local_v_generator = PaddedAddrGenerator(local_v_reader, input_v_tile_logical);
     const auto gathered_v_generator = PaddedAddrGenerator(gathered_v_reader, gathered_v_input_tile_logical);
-    // Sol-Attn sources: pooled K/V [1, NH, n_blocks_pad, DH] tiles, mask [1, NH, nqc_pad, n_blocks_pad] uint32
+    // Sparse sources: pooled K/V [1, NH, n_blocks_pad, DH] tiles, mask [1, NH, nqc_pad, n_blocks_pad] uint32
     // row-major (one page per row).
-    const auto sol_mask_reader = TensorAccessor(sol_mask_args, sol_mask_addr);
-    const auto sol_pk_generator = PaddedAddrGenerator(
-        TensorAccessor(sol_pk_args, sol_pk_addr), TensorTileShape(1, NH, sol_n_blocks_pad / 32, DHt));
-    const auto sol_pv_generator = PaddedAddrGenerator(
-        TensorAccessor(sol_pv_args, sol_pv_addr), TensorTileShape(1, NH, sol_n_blocks_pad / 32, vDHt));
+    const auto mask_reader = TensorAccessor(mask_args, mask_addr);
+    const auto pooled_k_generator = PaddedAddrGenerator(
+        TensorAccessor(pooled_k_args, pooled_k_addr), TensorTileShape(1, NH, mask_n_blocks_pad / 32, DHt));
+    const auto pooled_v_generator = PaddedAddrGenerator(
+        TensorAccessor(pooled_v_args, pooled_v_addr), TensorTileShape(1, NH, mask_n_blocks_pad / 32, vDHt));
     // Pooled chunks are consumed on the first active ring iteration.
-    bool sol_pooled_pending = true;
-    // Block b of shard s can be exact only if it is a FULL 64-token block (partial shard / logical_n tails are always
+    bool pooled_pending = true;
+    // Block b of shard s can be exact only if it is a FULL block (partial shard / logical_n tails are always
     // pooled, so a set mask bit on them is ignored here and in the bias generator alike).
-    const auto sol_block_is_full = [&](uint32_t s, uint32_t b) -> bool {
-        return sol_bias_gen::block_len(
-                   sol_bias_gen::Geometry{kv_local_padded_Nt * 32, sol_logical_n_tokens, sol_nb, sol_nb_pad}, s, b) ==
-               sol_bias_gen::kBlockTiles * 32;
+    const auto block_is_full = [&](uint32_t s, uint32_t b) -> bool {
+        return pooled_bias_gen::block_len(
+                   pooled_bias_gen::Geometry{kv_local_padded_Nt * 32, logical_n_tokens, mask_nb, mask_nb_pad}, s, b) ==
+               pooled_bias_gen::kBlockTokens;
     };
 
     // Q is read once, on the first active ring iteration.
@@ -419,7 +421,7 @@ void kernel_main() {
         };
         const bool ring_iter_is_active = packed_sources || ((active_ring_iter_mask >> ring_iter) & 1u) != 0;
         const uint32_t ring_id = [&]() -> uint32_t {
-            SOL_ZONE("RD_SYNC");  // the wait for this iteration's all-gather arrival signal
+            SPARSE_ZONE("RD_SYNC");  // the wait for this iteration's all-gather arrival signal
             return packed_sources
                        ? packed_source_ids[0]
                        : ttnn::ring_attention_all_gather::tensor_rank_from_transport_rank<full_mesh_rank_mapping>(
@@ -431,13 +433,13 @@ void kernel_main() {
             continue;
         }
 
-        const uint32_t do_pooled = sol_pooled_pending ? 1u : 0u;
+        const uint32_t do_pooled = pooled_pending ? 1u : 0u;
         // One pass of each K/V piece per ring iteration, applied by compute to every resident Q chunk
         // (sdpa_ring_resident). This reader:
         //   1. on the first active iteration reads every resident Q chunk into cb_q_in, once for the whole op;
         //   2. per head the core's chunks fall in: the piece union of the head group, then one plan record per
         //      resident chunk [this shard's kept-block words, union piece bits lo, hi, do_pooled]; a piece is kept by
-        //      a chunk when the chunk keeps any 64-token block of it, and compute steps only on those blocks;
+        //      a chunk when the chunk keeps any block of it, and compute steps only on those blocks;
         //   3. streams the shard's pieces once each, heads interleaved per k in head order, skipping a piece no
         //      member of the head group needs (compute mirrors both rules);
         //   4. on the first active iteration the pooled K/V chunks once per head, then one bias row per resident
@@ -457,7 +459,7 @@ void kernel_main() {
         }
         // 1. Q, once. Before any chain forward of this op, so no NoC write is in flight across the read barrier.
         if (!q_pushed) {
-            SOL_ZONE("RD_RES_Q");
+            SPARSE_ZONE("RD_RES_Q");
             for (uint32_t i = 0; i < n_res; ++i) {
                 const Slice q_slice(
                     res_nb[i], res_nq[i], res_qc[i] * Sq_chunk_t, res_qc[i] * Sq_chunk_t + Sq_chunk_t, 0, DHt);
@@ -467,40 +469,36 @@ void kernel_main() {
         }
         // 2. Kept bits and plans. The plan page's scratch (past the 64-byte header) holds one chunk row at a time:
         //    the whole block-form row (n_blocks_pad words, every shard), which the bias generator needs too.
-        CircularBuffer cb_plan(cb_sol_plan);
+        CircularBuffer cb_plan(cb_sparse_plan);
         cb_plan.reserve_back(1);
         uint32_t scratch = cb_plan.get_write_ptr() + 64;
         const auto read_chunk_row = [&](uint32_t nq, uint32_t qc) {
             noc.async_read(
-                sol_mask_reader,
-                CoreLocalMem<uint32_t>(scratch),
-                sol_mask_row_bytes,
-                {.page_id = nq * sol_nqc_pad + qc},
-                {});
+                mask_reader, CoreLocalMem<uint32_t>(scratch), mask_row_bytes, {.page_id = nq * mask_nqb_pad + qc}, {});
             noc.async_read_barrier();
         };
         // This shard's slice of a row (nb_pad words from block ring_id * nb_pad) into the scratch: all the bit
         // extraction needs, and 8x less than the whole row for every member row on the chain's critical path.
         const auto read_shard_slice = [&](uint32_t nq, uint32_t qc) {
             noc.async_read(
-                sol_mask_reader,
+                mask_reader,
                 CoreLocalMem<uint32_t>(scratch),
-                sol_nb_pad * sizeof(uint32_t),
-                {.page_id = nq * sol_nqc_pad + qc, .offset_bytes = ring_id * sol_nb_pad * sizeof(uint32_t)},
+                mask_nb_pad * sizeof(uint32_t),
+                {.page_id = nq * mask_nqb_pad + qc, .offset_bytes = ring_id * mask_nb_pad * sizeof(uint32_t)},
                 {});
             noc.async_read_barrier();
         };
         // This shard's kept FULL blocks of the slice in the scratch, as bits (block b: word b/32, bit b%32).
         // Block 0 forced: every (Q chunk, shard) computes at least one block, compute creates each chunk's state
         // on piece 0, and the pre-pass forces the same block (the bias row is patched to match below).
-        constexpr uint32_t kBlockWords = sol_res_block_words;
-        constexpr uint32_t kBlocksPerPiece = Sk_chunk_t / sol_bias_gen::kBlockTiles;
+        constexpr uint32_t kBlockWords = plan_block_words;
+        constexpr uint32_t kBlocksPerPiece = Sk_chunk_t / pooled_bias_gen::kBlockTiles;
         uint32_t full_bits[kBlockWords];  // the shard's full blocks, once per ring iteration
         for (uint32_t w = 0; w < kBlockWords; ++w) {
             full_bits[w] = 0;
         }
-        for (uint32_t b = 0; b < sol_nb; ++b) {
-            if (sol_block_is_full(ring_id, b)) {
+        for (uint32_t b = 0; b < mask_nb; ++b) {
+            if (block_is_full(ring_id, b)) {
                 full_bits[b >> 5] |= 1u << (b & 31);
             }
         }
@@ -509,7 +507,7 @@ void kernel_main() {
             for (uint32_t w = 0; w < kBlockWords; ++w) {
                 words[w] = 0;
             }
-            for (uint32_t b = 0; b < sol_nb; ++b) {
+            for (uint32_t b = 0; b < mask_nb; ++b) {
                 if (row[b] != 0) {
                     words[b >> 5] |= 1u << (b & 31);
                 }
@@ -527,7 +525,7 @@ void kernel_main() {
                 bool kept = false;
                 for (uint32_t j = 0; j < kBlocksPerPiece && !kept; ++j) {
                     const uint32_t b = k * kBlocksPerPiece + j;
-                    kept = b < sol_nb && ((words[b >> 5] >> (b & 31)) & 1u) != 0;
+                    kept = b < mask_nb && ((words[b >> 5] >> (b & 31)) & 1u) != 0;
                 }
                 if (kept) {
                     if (k < 32) {
@@ -547,20 +545,20 @@ void kernel_main() {
         uint32_t res_hi[kResMax];
         uint32_t seg_ulo[kResMax];
         uint32_t seg_uhi[kResMax];
-        // One-page plan (sol_res_plan_rec_base != 0): every chunk's record [kept-block words][union lo, hi]
+        // One-page plan (plan_rec_base != 0): every chunk's record [kept-block words][union lo, hi]
         // [do_pooled] in the one plan page, from word rec_base (past the shard slice the scratch reads), pushed
         // once per iteration. The per-chunk pages made the reader wait for compute to pop each one, so the next
         // iteration's plan could not go out before compute had finished this iteration's pieces.
         constexpr uint32_t kPlanRec = kBlockWords + 3;
         [[maybe_unused]] const auto plan_rec = [&](uint32_t i) {
             return CoreLocalMem<volatile uint32_t>(
-                cb_plan.get_write_ptr() + (sol_res_plan_rec_base + i * kPlanRec) * sizeof(uint32_t));
+                cb_plan.get_write_ptr() + (plan_rec_base + i * kPlanRec) * sizeof(uint32_t));
         };
         {
-            SOL_ZONE("RD_RES_BITS");  // mask rows of this core's chunks and of every chain member's
+            SPARSE_ZONE("RD_RES_BITS");  // mask rows of this core's chunks and of every chain member's
             for (uint32_t i = 0; i < n_res; ++i) {
                 read_shard_slice(res_nq[i], res_qc[i]);
-                if constexpr (sol_res_plan_rec_base != 0) {
+                if constexpr (plan_rec_base != 0) {
                     // One read per chunk: the block words go straight into the chunk's record.
                     uint32_t words[kBlockWords];
                     row_block_bits(words);
@@ -585,7 +583,7 @@ void kernel_main() {
                 uhi |= res_hi[i1];
                 ++i1;
             }
-            if (sol_n_members > 0 && head_cfg.participates && res_nq[i0] == head_cfg.head) {
+            if (group_n_members > 0 && head_cfg.participates && res_nq[i0] == head_cfg.head) {
                 // Chain / group members stream every piece that holds a full block of this shard (block 0
                 // forced, as in row_block_bits): a superset of the members' union that needs no mask reads (the
                 // union read every member's row per ring iteration, ~200 us while compute idled, and at these
@@ -604,8 +602,8 @@ void kernel_main() {
             }
             i0 = i1;
         }
-        if constexpr (sol_res_plan_rec_base != 0) {
-            SOL_ZONE("RD_RES_PLAN");
+        if constexpr (plan_rec_base != 0) {
+            SPARSE_ZONE("RD_RES_PLAN");
             for (uint32_t i = 0; i < n_res; ++i) {
                 auto rec = plan_rec(i);
                 rec[kBlockWords] = seg_ulo[i];
@@ -614,7 +612,7 @@ void kernel_main() {
             }
             cb_plan.push_back(1);
         } else {
-            SOL_ZONE("RD_RES_PLAN");  // long when compute is behind: the reserve waits for the previous plan pop
+            SPARSE_ZONE("RD_RES_PLAN");  // long when compute is behind: the reserve waits for the previous plan pop
             for (uint32_t i = 0; i < n_res; ++i) {
                 if (i > 0) {
                     cb_plan.reserve_back(1);  // one page: waits for compute to pop the previous plan
@@ -683,13 +681,13 @@ void kernel_main() {
                 }
             }
             if (k_rx) {
-                SOL_ZONE("RD_CHAIN_RX");  // member: the wait for the upstream write (the ready signal went early)
+                SPARSE_ZONE("RD_CHAIN_RX");  // member: the wait for the upstream write (the ready signal went early)
                 k_chain.wait_data();
             } else if (source_is_local) {
-                SOL_ZONE("RD_FETCH_K");
+                SPARSE_ZONE("RD_FETCH_K");
                 fetch_block(local_k_generator, k_slice, end_seq_tile, cb_k_in, k_addr, k_tile_bytes, true);
             } else {
-                SOL_ZONE("RD_FETCH_K");
+                SPARSE_ZONE("RD_FETCH_K");
                 fetch_block(gathered_k_generator, k_slice, end_seq_tile, cb_k_in, k_addr, k_tile_bytes, true);
             }
             // Push before the forward: the forward only reads the page, its NoC write is flushed inside
@@ -708,7 +706,7 @@ void kernel_main() {
                 v_chain.signal_ready(noc);
             }
             if (k_chain.should_forward(k_head, 0)) {
-                SOL_ZONE("RD_CHAIN_TX");  // the wait for the downstream ready signal, then the write
+                SPARSE_ZONE("RD_CHAIN_TX");  // the wait for the downstream ready signal, then the write
                 k_chain.forward(noc, k_addr, k_chunk_tiles, k_tile_bytes);
             }
             if (!v_reserved) {
@@ -739,7 +737,7 @@ void kernel_main() {
             }
         };
         uint32_t n_pieces = 0;  // pieces streamed this iteration (the first pass counts them)
-        // Group delivery. Arguments (after the Sol chain members): role (0 = not in a group: reads its own
+        // Group delivery. Arguments (after the chain members): role (0 = not in a group: reads its own
         // K/V; 1 = producer; 2 = consumer), producer NoC x, y, receiver count, rectangle count, then per
         // rectangle (x_start, y_start, x_end, y_end, cores), producer only. Every member pushes the same page
         // sequence into cb_k_in / cb_v_in (same pieces, same pooled pages), so
@@ -755,8 +753,8 @@ void kernel_main() {
         // has. With a deeper lookahead, a fast consumer's extra credits would stand in for a slow one's and the
         // multicast would overwrite a page the slow core's compute has not popped. The CB still holds
         // kv_cb_pages pieces: the lookahead bounds only the producer's lead over the slowest receipt.
-        [[maybe_unused]] const uint32_t g_base = sol_members_base + 2 * sol_n_members;
-        [[maybe_unused]] const uint32_t g_role = sol_res_mcast ? get_arg_val<uint32_t>(g_base) : 0;
+        [[maybe_unused]] const uint32_t g_base = group_members_base + 2 * group_n_members;
+        [[maybe_unused]] const uint32_t g_role = group_mcast ? get_arg_val<uint32_t>(g_base) : 0;
         [[maybe_unused]] uint32_t g_granted = 0;  // pieces credited this iteration
         [[maybe_unused]] uint32_t g_ahead = 0;    // pieces credited, not yet pushed
         const auto g_try_grant = [&](bool blocking) -> bool {
@@ -791,7 +789,7 @@ void kernel_main() {
                     g_try_grant(true);
                 }
                 {
-                    SOL_ZONE("RD_GROUP_RX");  // the wait for the producer's multicast (the credit went out earlier)
+                    SPARSE_ZONE("RD_GROUP_RX");  // the wait for the producer's multicast (the credit went out earlier)
                     Semaphore<>(head_receiver_semaphore_id).wait_min(res_group_pieces + 1);
                 }
                 cb_k.push_back(k_chunk_tiles);
@@ -813,7 +811,7 @@ void kernel_main() {
             const uint32_t k_addr = cb_k.get_write_ptr();
             const uint32_t v_addr = cb_v.get_write_ptr();
             {
-                SOL_ZONE("RD_FETCH_K");
+                SPARSE_ZONE("RD_FETCH_K");
                 if (source_is_local) {
                     fetch_block(local_k_generator, k_slice, end_seq_tile, cb_k_in, k_addr, k_tile_bytes, true);
                     fetch_block(local_v_generator, v_slice, end_seq_tile, cb_v_in, v_addr, v_tile_bytes, false);
@@ -830,7 +828,7 @@ void kernel_main() {
             const uint32_t n_recv = get_arg_val<uint32_t>(g_base + 3);
             const uint32_t n_rects = get_arg_val<uint32_t>(g_base + 4);
             {
-                SOL_ZONE("RD_GROUP_TX");  // the wait for the slowest consumer's credit, then the multicasts
+                SPARSE_ZONE("RD_GROUP_TX");  // the wait for the slowest consumer's credit, then the multicasts
                 Semaphore<>(head_sender_semaphore_id).wait_min(n_recv * res_group_pieces);
                 Semaphore<> count_src(head_valid_semaphore_id);
                 count_src.set(res_group_pieces);
@@ -867,12 +865,12 @@ void kernel_main() {
             }
         };
         {
-            SOL_ZONE("RD_RES_PIECES");  // the whole piece stream of this iteration (fetch / chain / CB waits)
+            SPARSE_ZONE("RD_RES_PIECES");  // the whole piece stream of this iteration (fetch / chain / CB waits)
             // Two passes over the same (piece, head group) order: a count first, so each streamed piece knows
             // whether another follows in this iteration (the lookahead arms the next page), then the stream.
             uint32_t j = 0;
             for (uint32_t pass = 0; pass < 2; ++pass) {
-                if constexpr (sol_res_mcast) {
+                if constexpr (group_mcast) {
                     if (pass == 1 && g_role == 2) {
                         g_grant_ahead();  // the first pieces' credits, before the first wait
                     }
@@ -898,7 +896,7 @@ void kernel_main() {
                                 ++n_pieces;
                             } else {
                                 ++j;
-                                if constexpr (sol_res_mcast) {
+                                if constexpr (group_mcast) {
                                     // A group serves one head; a member's chunks never span two (factory).
                                     if (g_role != 0) {
                                         stream_piece_group(res_nb[i0], res_nq[i0], k);
@@ -917,28 +915,28 @@ void kernel_main() {
         }
         // 4. Pooled chunks, once per head, then one bias row per resident chunk of the head.
         if (do_pooled) {
-            SOL_ZONE("RD_RES_POOLED");
-            if constexpr (sol_res_plan_rec_base != 0) {
+            SPARSE_ZONE("RD_RES_POOLED");
+            if constexpr (plan_rec_base != 0) {
                 // The row reads below fill the whole scratch, records included: take the page back first,
                 // which waits until compute has popped (read) this iteration's plan. Short iterations
                 // can push every piece before compute starts. The next iteration's reserve returns it.
                 cb_plan.reserve_back(1);
                 scratch = cb_plan.get_write_ptr() + 64;
             }
-            constexpr uint32_t pooled_rows_t = sol_n_blocks_pad / 32;
-            const sol_bias_gen::Geometry geo{kv_local_padded_Nt * 32, sol_logical_n_tokens, sol_nb, sol_nb_pad};
+            constexpr uint32_t pooled_rows_t = mask_n_blocks_pad / 32;
+            const pooled_bias_gen::Geometry geo{kv_local_padded_Nt * 32, logical_n_tokens, mask_nb, mask_nb_pad};
             for (uint32_t i0 = 0; i0 < n_res;) {
                 uint32_t i1 = i0;
                 while (i1 < n_res && res_nq[i1] == res_nq[i0]) {
                     ++i1;
                 }
                 const uint32_t nq = res_nq[i0];
-                for (uint32_t pc = 0; pc < sol_pooled_chunks; ++pc) {
-                    const uint32_t tiles = pc + 1 == sol_pooled_chunks ? sol_pooled_last_tiles : Sk_chunk_t;
+                for (uint32_t pc = 0; pc < pooled_chunks; ++pc) {
+                    const uint32_t tiles = pc + 1 == pooled_chunks ? pooled_last_tiles : Sk_chunk_t;
                     const uint32_t row0 = pc * Sk_chunk_t;
                     CircularBuffer cb_k(cb_k_in);
                     cb_k.reserve_back(k_chunk_tiles);
-                    sol_pk_generator.issue_reads(
+                    pooled_k_generator.issue_reads(
                         Slice(0, nq, row0, row0 + tiles, 0, DHt),
                         pooled_rows_t,
                         cb_k_in,
@@ -951,7 +949,7 @@ void kernel_main() {
                     cb_k.push_back(k_chunk_tiles);
                     CircularBuffer cb_v(cb_v_in);
                     cb_v.reserve_back(v_cb_entry_tiles);
-                    sol_pv_generator.issue_reads(
+                    pooled_v_generator.issue_reads(
                         Slice(0, nq, row0, row0 + tiles, 0, vDHt),
                         pooled_rows_t,
                         cb_v_in,
@@ -971,22 +969,22 @@ void kernel_main() {
                         {
                             CoreLocalMem<volatile uint32_t> row(scratch);
                             for (uint32_t s = 0; s < ring_size; ++s) {
-                                if (sol_block_is_full(s, 0)) {
-                                    row[s * sol_nb_pad] = 1u;
+                                if (block_is_full(s, 0)) {
+                                    row[s * mask_nb_pad] = 1u;
                                 }
                             }
                         }
-                        CircularBuffer cb_bias(cb_sol_bias);
+                        CircularBuffer cb_bias(cb_pooled_bias);
                         cb_bias.reserve_back(Sk_chunk_t);
                         // Block-form row: exact iff the block's own bit is set on a full block.
-                        sol_bias_gen::generate_tiles<sol_bias_tile_bytes>(
+                        pooled_bias_gen::generate_tiles<pooled_bias_tile_bytes>(
                             noc,
                             cb_bias.get_write_ptr(),
                             row0,
                             tiles,
                             geo,
                             CoreLocalMem<volatile uint32_t>(scratch),
-                            sol_len_bias_table_base);
+                            pooled_bias_table_base);
                         cb_bias.push_back(Sk_chunk_t);
                     }
                 }
@@ -994,7 +992,7 @@ void kernel_main() {
             }
         }
 
-        sol_pooled_pending = false;
+        pooled_pending = false;
         if (packed_sources) {
             // Cores without Q work still consume the group in sequencer order,
             // so the next group and subsequent dispatches start at the right source.

@@ -29,6 +29,10 @@ void kernel_main() {
     constexpr uint32_t vDHt = get_compile_time_arg_val(2);
     constexpr uint32_t Sq_chunk_t = get_compile_time_arg_val(3);
     constexpr uint32_t Sk_chunk_t = get_compile_time_arg_val(4);
+    // Mask block size in tiles; the Q block is the q chunk (one mask row each).
+    constexpr uint32_t block_tiles = get_named_compile_time_arg_val("block_tiles");
+    static_assert(Sq_chunk_t == block_tiles, "one Q block (q chunk) per mask row");
+    static_assert(Sk_chunk_t % block_tiles == 0, "a K/V piece holds whole blocks");
     constexpr uint32_t q_local_padded_Nt = get_compile_time_arg_val(5);
     constexpr uint32_t kv_local_padded_Nt = get_compile_time_arg_val(6);
     constexpr uint32_t logical_n_compile = get_compile_time_arg_val(7);
@@ -82,15 +86,15 @@ void kernel_main() {
     constexpr uint32_t cb_exp_max_diff = get_compile_time_arg_val(cb_arg_offset + 22);
 
     // Sparse-specific named args.
-    constexpr uint32_t cb_sol_plan = get_named_compile_time_arg_val("cb_sol_plan");
-    constexpr uint32_t cb_sol_bias = get_named_compile_time_arg_val("cb_sol_bias");
-    constexpr uint32_t sol_pooled_chunks = get_named_compile_time_arg_val("sol_pooled_chunks");
-    constexpr uint32_t sol_pooled_last_tiles = get_named_compile_time_arg_val("sol_pooled_last_tiles");
-    constexpr uint32_t sol_resident_slots = get_named_compile_time_arg_val("sol_resident_slots");
-    constexpr uint32_t sol_res_block_words = get_named_compile_time_arg_val("sol_res_block_words");
+    constexpr uint32_t cb_sparse_plan = get_named_compile_time_arg_val("cb_sparse_plan");
+    constexpr uint32_t cb_pooled_bias = get_named_compile_time_arg_val("cb_pooled_bias");
+    constexpr uint32_t pooled_chunks = get_named_compile_time_arg_val("pooled_chunks");
+    constexpr uint32_t pooled_last_tiles = get_named_compile_time_arg_val("pooled_last_tiles");
+    constexpr uint32_t resident_slots = get_named_compile_time_arg_val("resident_slots");
+    constexpr uint32_t plan_block_words = get_named_compile_time_arg_val("plan_block_words");
     // Plan layout: one plan page per ring iteration (record base word), or 0 for a page per resident chunk. The
     // reader takes the same arg.
-    constexpr uint32_t sol_res_plan_rec_base = get_named_compile_time_arg_val("sol_res_plan_rec_base");
+    constexpr uint32_t plan_rec_base = get_named_compile_time_arg_val("plan_rec_base");
 
     compute_kernel_hw_startup<SrcOrder::Reverse>(cb_q_in, cb_k_in, cb_qk_im);
     matmul_init(cb_q_in, cb_k_in);
@@ -162,13 +166,13 @@ void kernel_main() {
             global_n_has_padding,
             local_n_has_padding,
             local_n_padded_tiles,
-            cb_sol_plan,
-            cb_sol_bias,
-            sol_pooled_chunks,
-            sol_pooled_last_tiles,
-            sol_resident_slots,
-            sol_res_block_words,
-            sol_res_plan_rec_base>(
+            cb_sparse_plan,
+            cb_pooled_bias,
+            pooled_chunks,
+            pooled_last_tiles,
+            resident_slots,
+            plan_block_words,
+            plan_rec_base>(
             global_q_start,
             global_q_end,
             num_q_chunks,

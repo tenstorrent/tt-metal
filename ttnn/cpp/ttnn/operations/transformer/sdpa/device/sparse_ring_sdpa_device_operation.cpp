@@ -34,9 +34,9 @@ namespace {
 
 namespace ring_joint = ttnn::operations::transformer::sdpa::ring_joint;
 
-// The sparse op's query unit is the 64-row block: one mask row per block.
-constexpr uint32_t kSparseQChunkSize = 64;
-constexpr uint32_t kSparseBlockTokens = 64;
+// Block sizes the kernels support today (SparseRingSDPAParams::block_size). The kernels take the block size as a
+// compile-time parameter; other sizes need the work listed in sparse_ring_sdpa_refactor_plan.md.
+constexpr uint32_t kSupportedBlockSize = 64;
 
 void validate_all_gather_on_program_cache_miss(
     const ttnn::experimental::prim::RingAttentionAllGatherAsyncParams& operation_attributes,
@@ -135,15 +135,22 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
     const auto& gathered_v = tensor_args.gathered_v;
 
     TT_FATAL(args.program_config.has_value(), "Program config must be provided");
+    const uint32_t block_size = args.block_size;
     TT_FATAL(
-        args.get_q_chunk_size() == kSparseQChunkSize,
-        "SparseRingSDPA computes one 64-row query block per mask row: q_chunk_size must be {}, got {}",
-        kSparseQChunkSize,
+        block_size == kSupportedBlockSize,
+        "SparseRingSDPA: block_size must be {} (only {} is supported for now), got {}",
+        kSupportedBlockSize,
+        kSupportedBlockSize,
+        block_size);
+    TT_FATAL(
+        args.get_q_chunk_size() == block_size,
+        "SparseRingSDPA computes one {}-row query block per mask row: q_chunk_size must equal block_size, got {}",
+        block_size,
         args.get_q_chunk_size());
     TT_FATAL(
-        args.get_k_chunk_size() > 0 && args.get_k_chunk_size() % kSparseBlockTokens == 0,
+        args.get_k_chunk_size() > 0 && args.get_k_chunk_size() % block_size == 0,
         "k_chunk_size must be a positive multiple of the {}-token block, got {}",
-        kSparseBlockTokens,
+        block_size,
         args.get_k_chunk_size());
     TT_FATAL(
         !get_fp32_dest_acc_en(args.compute_kernel_config),
@@ -285,10 +292,8 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
         "pooled length {} must be ring_size x a tile multiple",
         n_blocks_pad);
     TT_FATAL(
-        nb_pad >= tt::div_up(N_local_kv, kSparseBlockTokens),
-        "pooled blocks per shard {} < blocks in the K shard",
-        nb_pad);
-    const uint32_t nqb = tt::div_up(N_local_q, kSparseQChunkSize);
+        nb_pad >= tt::div_up(N_local_kv, block_size), "pooled blocks per shard {} < blocks in the K shard", nb_pad);
+    const uint32_t nqb = tt::div_up(N_local_q, block_size);
     TT_FATAL(
         mask.logical_shape()[1] == NQH && mask.logical_shape()[2] >= nqb && mask.logical_shape()[3] == n_blocks_pad,
         "block_mask must be [1, NH, >= {} q blocks, {} blocks], got {}",
@@ -297,19 +302,20 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
         mask.logical_shape());
     const uint32_t nkc_local = tt::div_up(N_local_kv, args.get_k_chunk_size());
     TT_FATAL(nkc_local <= 64, "SparseRingSDPA: at most 64 K pieces per shard ({} given)", nkc_local);
-    // Every shard inside logical_n must hold at least one full 64-token block. Only full blocks are ever computed
-    // exactly; a shard with a 1..63-token live tail has none, so its ring iteration streams nothing, compute runs no
+    // Every shard inside logical_n must hold at least one full block. Only full blocks are ever computed exactly; a
+    // shard with a live tail shorter than one block has none, so its ring iteration streams nothing, compute runs no
     // step for it, and the writer waits forever. Pad logical_n up or re-shard so no shard has a sub-block tail.
     for (uint32_t s = 0; s < args.ring_size; ++s) {
         const int64_t valid = std::min<int64_t>(
             static_cast<int64_t>(N_local_kv),
             static_cast<int64_t>(args.logical_n) - static_cast<int64_t>(s) * static_cast<int64_t>(N_local_kv));
         TT_FATAL(
-            valid <= 0 || valid >= kSparseBlockTokens,
-            "SparseRingSDPA: shard {} holds {} valid tokens; every shard inside logical_n needs a full 64-token "
+            valid <= 0 || valid >= block_size,
+            "SparseRingSDPA: shard {} holds {} valid tokens; every shard inside logical_n needs a full {}-token "
             "block",
             s,
-            valid);
+            valid,
+            block_size);
     }
 }
 
@@ -356,7 +362,8 @@ ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
         args.program_config,
         args.ccl_core_grid_offset,
         args.all_gather_operation_attributes,
-        args.all_gather_tensor_args);
+        args.all_gather_tensor_args,
+        args.block_size);
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> SparseRingSDPADeviceOperation::create_op_performance_model(
@@ -419,7 +426,8 @@ SparseRingSDPAResult sparse_ring_sdpa(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const std::optional<float> scale,
     const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-    const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
+    const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
+    const uint32_t block_size) {
     using OperationType = ttnn::prim::SparseRingSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -477,7 +485,8 @@ SparseRingSDPAResult sparse_ring_sdpa(
         kernel_config_val,
         std::move(all_gather_operation_attributes),
         std::move(all_gather_tensor_args),
-        ccl_core_grid_offset);
+        ccl_core_grid_offset,
+        block_size);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,

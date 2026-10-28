@@ -9,6 +9,8 @@
 #include <tuple>
 #include <utility>
 
+#include <tt-metalium/constants.hpp>
+
 #include "ttnn/core.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
@@ -28,6 +30,9 @@ struct SparseRingSDPAParams {
     experimental::prim::RingAttentionAllGatherAsyncParams all_gather_operation_attributes;
     experimental::prim::RingAttentionAllGatherAsyncInputs all_gather_tensor_args;
     CoreCoord ccl_core_grid_offset;
+    // Square block of the mask, in tokens: one mask row per Q block of block_size rows, one mask column per K block
+    // of block_size tokens. A compile-time parameter of the kernels; only 64 is supported for now.
+    uint32_t block_size = 64;
 
     // We need a constructor, because all_gather_struct is not default initializable.
     SparseRingSDPAParams(
@@ -39,7 +44,8 @@ struct SparseRingSDPAParams {
         DeviceComputeKernelConfig compute_kernel_config,
         experimental::prim::RingAttentionAllGatherAsyncParams all_gather_operation_attributes,
         experimental::prim::RingAttentionAllGatherAsyncInputs all_gather_tensor_args,
-        CoreCoord ccl_core_grid_offset) :
+        CoreCoord ccl_core_grid_offset,
+        uint32_t block_size) :
         scale(scale),
         logical_n(logical_n),
         ring_size(ring_size),
@@ -48,11 +54,14 @@ struct SparseRingSDPAParams {
         compute_kernel_config(compute_kernel_config),
         all_gather_operation_attributes(std::move(all_gather_operation_attributes)),
         all_gather_tensor_args(std::move(all_gather_tensor_args)),
-        ccl_core_grid_offset(ccl_core_grid_offset) {}
+        ccl_core_grid_offset(ccl_core_grid_offset),
+        block_size(block_size) {}
 
     std::uint32_t get_q_chunk_size() const { return program_config.has_value() ? program_config->q_chunk_size : 32; }
 
     std::uint32_t get_k_chunk_size() const { return program_config.has_value() ? program_config->k_chunk_size : 32; }
+
+    std::uint32_t block_tiles() const { return block_size / tt::constants::TILE_HEIGHT; }
 
     static constexpr auto attribute_names = std::forward_as_tuple(
         "scale",
@@ -62,7 +71,8 @@ struct SparseRingSDPAParams {
         "program_config",
         "ccl_core_grid_offset",
         "all_gather_operation_attributes",
-        "all_gather_tensor_args");
+        "all_gather_tensor_args",
+        "block_size");
     auto attribute_values() const {
         return std::make_tuple(
             std::cref(scale),
@@ -72,17 +82,18 @@ struct SparseRingSDPAParams {
             std::cref(program_config),
             std::cref(ccl_core_grid_offset),
             std::cref(all_gather_operation_attributes),
-            std::cref(all_gather_tensor_args));
+            std::cref(all_gather_tensor_args),
+            std::cref(block_size));
     }
 };
 
 // Q / K / V are sequence-sharded along the ring; the fused all-gather fills gathered_k / gathered_v. The block
 // mask and pooled K / V come from the routing pre-pass (see ttnn::transformer::sparse_ring_sdpa):
-//   block_mask  uint32 row-major [1, NH, nb_pad, n_blocks_pad]: != 0 computes (local 64-row Q block, global
-//               64-token K block) exactly; global block s * nb_pad + b is block b of shard s.
+//   block_mask  uint32 row-major [1, NH, nb_pad, n_blocks_pad]: != 0 computes (local block_size-row Q block, global
+//               block_size-token K block) exactly; global block s * nb_pad + b is block b of shard s.
 //   pooled_k/v  bf16 tile [1, NH, n_blocks_pad, DH]: per-block mean K / mean V over the valid tokens, whole
 //               sequence. Every block the mask drops enters the softmax as one pooled entry weighted by its
-//               token count, through the column bias the reader generates (sol_bias_gen.hpp).
+//               token count, through the column bias the reader generates (pooled_bias_gen.hpp).
 struct SparseRingSDPAInputs {
     Tensor input_q;
     Tensor input_k;

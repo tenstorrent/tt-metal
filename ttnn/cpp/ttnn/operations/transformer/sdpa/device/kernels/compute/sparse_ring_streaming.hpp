@@ -105,8 +105,8 @@ struct MaybeProfileScope<true, timer_id> : kernel_profiler::profileScope<timer_i
 #endif
 
 // Ring joint SDPA: the per-phase zones of the inner step are compiled out unless the factory defines
-// SOL_STEP_PROFILE (TT_SOL_STEP_PROFILE=1), and they only emit under the device profiler (PROFILE_KERNEL).
-#if defined(SOL_STEP_PROFILE) && defined(PROFILE_KERNEL)
+// SPARSE_STEP_PROFILE (TT_SPARSE_STEP_PROFILE=1), and they only emit under the device profiler (PROFILE_KERNEL).
+#if defined(SPARSE_STEP_PROFILE) && defined(PROFILE_KERNEL)
 constexpr bool kRingStepProfiling = true;
 #else
 constexpr bool kRingStepProfiling = false;
@@ -223,7 +223,7 @@ ALWI bool configure_row_pack_width(uint32_t cb, uint32_t pack_width) {
 
 // kPackDoneMax: PACK_DONE's counter capacity. A SEMPOST at the maximum is lost (t6_semaphore_post does not stall
 // on it), so it must cover the most tokens a path ever has outstanding: 2 for the streaming paths, 15 (the 4-bit
-// field's limit) for the Sol resident step, whose interleaved exp / P@V stages post one token per S5 batch.
+// field's limit) for the resident step, whose interleaved exp / P@V stages post one token per S5 batch.
 template <uint32_t kPackDoneMax = 2>
 ALWI void init_sdpa_streaming_semaphores() {
     static_assert(kPackDoneMax >= 1 && kPackDoneMax <= 15, "SEMINIT's max value is a 4-bit field");
@@ -564,7 +564,7 @@ static inline void end_mask_l1_accumulate() { PACK((llk_pack_reconfig_l1_acc(0))
 // width unit_cw[u]; row r of member g is at off[g] + r * W[g]. Blocked (one call per row) when the unit is at least
 // MIN_BLOCKED_PACK_TILES wide, per tile otherwise; the pack width is reconfigured only when it changes (pk_w).
 template <uint32_t Sq_chunk_t, uint32_t cb>
-static __attribute__((noinline, noclone)) void sol_res_pack_units(
+static __attribute__((noinline, noclone)) void res_pack_units(
     const uint8_t* unit_g,
     const uint8_t* unit_c0,
     const uint8_t* unit_cw,
@@ -599,7 +599,7 @@ static __attribute__((noinline, noclone)) void sol_res_pack_units(
 // Members sorted by width (stable insertion sort of an index permutation), then stepped in groups of at most
 // kQkCap scratch tiles (Sq_chunk_t x width per member).
 template <uint32_t kSlots, uint32_t kBlocksPerPiece, uint32_t Sq_chunk_t, uint32_t kQkCap, typename StepFn>
-static __attribute__((noinline, noclone)) void sol_res_run_groups(
+static __attribute__((noinline, noclone)) void res_run_groups(
     StepFn& run_step,
     const uint8_t* members,
     const uint8_t* widths,
@@ -645,11 +645,11 @@ static __attribute__((noinline, noclone)) void sol_res_run_groups(
     }
 }
 
-// Per-step state of the compact step's DEST-batch issue, shared with its outlined flushes (sol_res_s1_flush,
-// sol_res_s5_flush): one copy of each flush body per TRISC instead of one per call site. The 5 s build sits within
+// Per-step state of the compact step's DEST-batch issue, shared with its outlined flushes (res_s1_flush,
+// res_s5_flush): one copy of each flush body per TRISC instead of one per call site. The 5 s build sits within
 // a few KB of the kernel config buffer (inlined flushes overflowed it).
 template <uint32_t kDst, uint32_t kMaxMembers>
-struct SolResStepState {
+struct ResidentStepState {
     // The step's member tables (set once per step).
     const uint8_t* slots = nullptr;
     const uint8_t* run_cols = nullptr;
@@ -691,7 +691,7 @@ template <
     uint32_t cb_qkt_im,
     uint32_t cb_v_in,
     uint32_t cb_prev_out>
-static __attribute__((noinline, noclone)) void sol_res_pv_member(
+static __attribute__((noinline, noclone)) void res_pv_member(
     const uint32_t slot,
     const bool acc,
     const uint32_t w,
@@ -751,13 +751,13 @@ static __attribute__((noinline, noclone)) void sol_res_pv_member(
 
 // S1 flush of the compact step: commit the open Q@K^T DEST batch and pack its units into the compact scratch.
 template <uint32_t Sq_chunk_t, uint32_t cb_qkt_im, uint32_t kDst, uint32_t kMaxMembers>
-static __attribute__((noinline, noclone)) void sol_res_s1_flush(SolResStepState<kDst, kMaxMembers>& st) {
+static __attribute__((noinline, noclone)) void res_s1_flush(ResidentStepState<kDst, kMaxMembers>& st) {
     if (st.uu == 0) {
         return;
     }
     tile_regs_commit();
     tile_regs_wait();
-    sol_res_pack_units<Sq_chunk_t, cb_qkt_im>(st.unit_g, st.unit_c0, st.unit_cw, st.uu, st.off, st.W, st.pk_w);
+    res_pack_units<Sq_chunk_t, cb_qkt_im>(st.unit_g, st.unit_c0, st.unit_cw, st.uu, st.off, st.W, st.pk_w);
     tile_regs_release();
     st.uu = 0;
     st.uu_tiles = 0;
@@ -778,8 +778,8 @@ template <
     uint32_t cb_qkt_im,
     uint32_t cb_v_in,
     uint32_t cb_prev_out>
-static __attribute__((noinline, noclone)) void sol_res_s5_flush(
-    SolResStepState<kDst, kMaxMembers>& st, const bool final) {
+static __attribute__((noinline, noclone)) void res_s5_flush(
+    ResidentStepState<kDst, kMaxMembers>& st, const bool final) {
     if (st.uu > 0) {
         tile_regs_commit();
         tile_regs_wait();
@@ -790,7 +790,7 @@ static __attribute__((noinline, noclone)) void sol_res_s5_flush(
             exp_packthread_tile<true, false, InputClamping::None, iterations>(i, vector_mode_exp);
         }
         PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
-        sol_res_pack_units<Sq_chunk_t, cb_qkt_im>(st.unit_g, st.unit_c0, st.unit_cw, st.uu, st.off, st.W, st.pk_w);
+        res_pack_units<Sq_chunk_t, cb_qkt_im>(st.unit_g, st.unit_c0, st.unit_cw, st.uu, st.off, st.W, st.pk_w);
         PACK((llk_pack_relu_config(ReluConfig::none())));
         if (st.batch_completes) {
             PACK((t6_semaphore_post<p_stall::STALL_PACK>(semaphore::PACK_DONE)));
@@ -817,7 +817,7 @@ static __attribute__((noinline, noclone)) void sol_res_s5_flush(
         }
         st.init_cw = 0;
         const uint32_t slot = st.slots[g];
-        sol_res_pv_member<Sq_chunk_t, vDHt, pv_w, kMaxRuns, cb_qkt_im, cb_v_in, cb_prev_out>(
+        res_pv_member<Sq_chunk_t, vDHt, pv_w, kMaxRuns, cb_qkt_im, cb_v_in, cb_prev_out>(
             slot,
             ((st.initialized_mask >> slot) & 1u) != 0,
             st.W[g],
@@ -873,7 +873,7 @@ template <
     uint32_t cb_sum_in,
     uint32_t cb_prev_out,
     uint32_t cb_out,
-    uint32_t cb_sol_bias,
+    uint32_t cb_pooled_bias,
     uint32_t v_cb_physical_width_t,
     uint32_t qk_cap,
     uint32_t stats_cap>
@@ -886,14 +886,14 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
     const uint32_t initialized_mask,
     const bool apply_col_bias) {
     constexpr uint32_t kDst = compute_kernel_lib::DEST_AUTO_LIMIT;
-    constexpr uint32_t kBlockTiles = 2;
+    constexpr uint32_t kBlockTiles = get_named_compile_time_arg_val("block_tiles");
     constexpr uint32_t kMaxRuns = Sk_chunk_t / kBlockTiles;
     constexpr uint32_t kMaxMembers = 32;
     constexpr uint32_t q_chunk_tiles = Sq_chunk_t * DHt;
     constexpr uint32_t kt_entry_tiles = DHt * Sk_chunk_t;
     constexpr uint32_t v_entry_tiles = Sk_chunk_t * v_cb_physical_width_t;
     static_assert(v_cb_physical_width_t == vDHt, "resident mode addresses V rows at a vDHt tile stride");
-    static_assert(Sk_chunk_t % kBlockTiles == 0, "a piece holds whole 64-token blocks");
+    static_assert(Sk_chunk_t % kBlockTiles == 0, "a piece holds whole blocks");
     constexpr uint32_t max_cols_per_acq = kDst / Sq_chunk_t;
     static_assert(max_cols_per_acq >= 1, "one Q chunk row of one tile column must fit DEST");
     constexpr uint32_t qk_cw_cap = qkt_subblock_w < max_cols_per_acq ? qkt_subblock_w : max_cols_per_acq;
@@ -941,7 +941,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
     CircularBuffer(cb_q_in).wait_front(q_wait_tiles);
     sdpa_maybe_pack_reconfig_data_format<cb_out, cb_qkt_im>();
     sdpa_maybe_reconfig_data_format<cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in>();
-    SolResStepState<kDst, kMaxMembers> st{};
+    ResidentStepState<kDst, kMaxMembers> st{};
     st.slots = slots;
     st.run_cols = run_cols;
     st.run_ws = run_ws;
@@ -959,7 +959,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
                 for (uint32_t q0 = 0; q0 < rw;) {
                     const uint32_t cw = rw - q0 < qk_cw_cap ? rw - q0 : qk_cw_cap;
                     if (st.uu_tiles + Sq_chunk_t * cw > kDst) {
-                        sol_res_s1_flush<Sq_chunk_t, cb_qkt_im, kDst, kMaxMembers>(st);
+                        res_s1_flush<Sq_chunk_t, cb_qkt_im, kDst, kMaxMembers>(st);
                     }
                     if (st.uu == 0) {
                         tile_regs_acquire();
@@ -985,7 +985,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
                 col += rw;
             }
         }
-        sol_res_s1_flush<Sq_chunk_t, cb_qkt_im, kDst, kMaxMembers>(st);
+        res_s1_flush<Sq_chunk_t, cb_qkt_im, kDst, kMaxMembers>(st);
     }
     sdpa_maybe_reconfig_data_format<cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im>();
     if (apply_col_bias) {
@@ -994,13 +994,13 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
         // one row).
         for (uint32_t g = 0; g < n_slots; ++g) {
             ASSERT(n_runs[g] == 1 && run_col(g, 0) == 0);
-            CircularBuffer(cb_sol_bias).wait_front(Sk_chunk_t);
-            begin_mask_l1_accumulate<false>(cb_qkt_im, cb_sol_bias);
+            CircularBuffer(cb_pooled_bias).wait_front(Sk_chunk_t);
+            begin_mask_l1_accumulate<false>(cb_qkt_im, cb_pooled_bias);
             for (uint32_t r = 0; r < Sq_chunk_t; ++r) {
-                l1_acc_tile_run(cb_sol_bias, 0, cb_qkt_im, sidx(g, r, 0), W[g]);
+                l1_acc_tile_run(cb_pooled_bias, 0, cb_qkt_im, sidx(g, r, 0), W[g]);
             }
             end_mask_l1_accumulate();
-            CircularBuffer(cb_sol_bias).pop_front(Sk_chunk_t);
+            CircularBuffer(cb_pooled_bias).pop_front(Sk_chunk_t);
         }
     }
     cb_push_back_hold_wr_ptr(cb_qkt_im, qk_cap);
@@ -1234,7 +1234,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
 
     // ---- S5 + S6, interleaved per member. S5: in-place exp of the scores, per member over its W_g columns
     //      in units of <= max_cols_per_acq (the broadcast subtract on MATH, the exp and the packs on PACK). S6: P@V
-    //      per member (sol_res_pv_member). The two stages load complementary threads (S5 is pack-thread bound, S6
+    //      per member (res_pv_member). The two stages load complementary threads (S5 is pack-thread bound, S6
     //      math/unpack bound), so instead of draining S5 for every member before the first P@V, the P@V of the
     //      members whose last S5 unit was packed in batch k is issued right after S5 batch k+1: with the half-sync
     //      DEST, MATH runs those matmuls while PACK is still on the exp and packs of batch k+1, and PACK's output
@@ -1249,7 +1249,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
     exp_packthread_tile_init<true, scale_fp32, InputClamping::None>();
     CircularBuffer(cb_col_identity).wait_front(1);
     {
-        constexpr auto s5_flush = sol_res_s5_flush<
+        constexpr auto s5_flush = res_s5_flush<
             Sq_chunk_t,
             vDHt,
             pv_w,
@@ -1364,7 +1364,7 @@ static __attribute__((noinline, noclone)) void sdpa_resident_piece_step_compact(
  * where normalize_row_streaming consumes the n_res slots from the front in order and the unused slots are popped.
  *
  * Steps are per piece: per streamed piece, one step per group of the head's resident chunks that keep a block of it,
- * grouped until their compact scores fill kQkCap tiles; each chunk has its own run table of kept 64-token blocks (its Q
+ * grouped until their compact scores fill kQkCap tiles; each chunk has its own run table of kept blocks (its Q
  * rows against those blocks' K^T columns / V rows, addressed in place in the staged entry). A piece streamed only for
  * another chain member is drained. The reader forces block 0 of every shard kept for every chunk, so the first step of
  * a head on piece 0 creates every slot's state before any other piece. Dropped blocks are pooled by the column bias of
@@ -1404,13 +1404,13 @@ template <
     bool global_n_mask_enabled,
     bool local_n_mask_enabled,
     uint32_t local_n_padded_tiles,
-    uint32_t cb_sol_plan,
-    uint32_t cb_sol_bias,
-    uint32_t sol_pooled_chunks,
-    uint32_t sol_pooled_last_tiles,
-    uint32_t sol_resident_slots,
-    uint32_t sol_res_block_words,
-    uint32_t sol_res_plan_rec_base>
+    uint32_t cb_sparse_plan,
+    uint32_t cb_pooled_bias,
+    uint32_t pooled_chunks,
+    uint32_t pooled_last_tiles,
+    uint32_t resident_slots,
+    uint32_t plan_block_words,
+    uint32_t plan_rec_base>
 void sdpa_ring_resident(
     const uint32_t global_q_start,
     const uint32_t global_q_end,
@@ -1428,7 +1428,7 @@ void sdpa_ring_resident(
     const bool is_first_active_iter) {
     // PACK_DONE capacity 15: the compact step's interleaved S5/S6 posts one token per S5 batch (see the step).
     init_sdpa_streaming_semaphores<15>();
-    static_assert(sol_resident_slots >= 1 && sol_resident_slots <= 32, "resident state is tracked in a 32-bit mask");
+    static_assert(resident_slots >= 1 && resident_slots <= 32, "resident state is tracked in a 32-bit mask");
     // The step reconfigures the unpacker/packer only around the Q@K^T and P@V matmuls (whose inputs may be block
     // float) and otherwise assumes every state, scratch and scale CB carries the intermediate format.
 #if defined(TRISC_UNPACK) || defined(TRISC_MATH)
@@ -1455,12 +1455,12 @@ void sdpa_ring_resident(
     constexpr uint32_t v_entry_tiles = Sk_chunk_t * v_cb_physical_width_t;
     constexpr uint32_t norm_dst_size = compute_kernel_lib::DEST_AUTO_LIMIT;
 
-    // 64-token blocks of 2 tiles; a piece holds kBlocksPerPiece of them. The plan page carries this shard's
-    // kept-block bits per resident chunk (block b: word b/32, bit b%32; only full blocks, block 0 forced).
-    constexpr uint32_t kBlockTiles = 2;
+    // Blocks of kBlockTiles tiles (block_tiles); a piece holds kBlocksPerPiece of them. The plan page carries this
+    // shard's kept-block bits per resident chunk (block b: word b/32, bit b%32; only full blocks, block 0 forced).
+    constexpr uint32_t kBlockTiles = get_named_compile_time_arg_val("block_tiles");
     constexpr uint32_t kBlocksPerPiece = Sk_chunk_t / kBlockTiles;
-    constexpr uint32_t kBW = sol_res_block_words;
-    static_assert(Sk_chunk_t % kBlockTiles == 0, "a piece holds whole 64-token blocks");
+    constexpr uint32_t kBW = plan_block_words;
+    static_assert(Sk_chunk_t % kBlockTiles == 0, "a piece holds whole blocks");
     static_assert(kBW >= 1 && kBW + 3 <= 16, "the plan header holds the block words, the union bits and the flag");
     static_assert(kBlocksPerPiece <= 255 && Sk_chunk_t <= 255, "run tables are byte-indexed");
 
@@ -1468,14 +1468,14 @@ void sdpa_ring_resident(
     // scratch holds max(qk_tiles, slots x Sq_chunk_t x kBlockTiles); the max/alpha scratches and the max/sum slot
     // CBs hold Sq_chunk_t per slot; the out slot CB holds Sq_chunk_t x vDHt per slot. The step pushes and pops the
     // scratches at full capacity and the slot CBs are filled at full capacity, so the counts must match exactly.
-    // The score scratch holds kGroupCap full-width chunks (the factory's kSolResidentGroup); a step packs as many
+    // The score scratch holds kGroupCap full-width chunks (the factory's kResidentGroup); a step packs as many
     // compact members as fit in kQkCap.
-    constexpr uint32_t kGroupCap = sol_resident_slots < 4 ? sol_resident_slots : 4;
+    constexpr uint32_t kGroupCap = resident_slots < 4 ? resident_slots : 4;
     constexpr uint32_t kQkTiles = Sq_chunk_t * Sk_chunk_t;
     constexpr uint32_t kQkCap =
         kQkTiles > kGroupCap * Sq_chunk_t * Sk_chunk_t ? kQkTiles : kGroupCap * Sq_chunk_t * Sk_chunk_t;
-    constexpr uint32_t kStatsCap = sol_resident_slots * Sq_chunk_t;
-    constexpr uint32_t kOutCap = sol_resident_slots * out_tiles;
+    constexpr uint32_t kStatsCap = resident_slots * Sq_chunk_t;
+    constexpr uint32_t kOutCap = resident_slots * out_tiles;
 #ifdef TRISC_PACK
     // ASSERT is a statement, not an expression: keep it out of the PACK(...) expression macro.
     ASSERT(get_local_cb_interface(cb_qkt_im).fifo_num_pages == kQkCap);
@@ -1487,44 +1487,44 @@ void sdpa_ring_resident(
 #endif
 
     const uint32_t n_res = global_q_end - global_q_start;
-    ASSERT(n_res >= 1 && n_res <= sol_resident_slots);
+    ASSERT(n_res >= 1 && n_res <= resident_slots);
 
     // Resident chunk i: head, kept-block words and the head chain's kept-piece union (plan words from the reader).
-    uint32_t res_head[sol_resident_slots];
-    uint32_t res_blk[sol_resident_slots][kBW];
-    uint32_t union_lo[sol_resident_slots];
-    uint32_t union_hi[sol_resident_slots];
+    uint32_t res_head[resident_slots];
+    uint32_t res_blk[resident_slots][kBW];
+    uint32_t union_lo[resident_slots];
+    uint32_t union_hi[resident_slots];
     uint32_t do_pooled = 0;
-    if constexpr (sol_res_plan_rec_base != 0) {
+    if constexpr (plan_rec_base != 0) {
         // One plan page per ring iteration: chunk i's record [kBW block words][union lo, hi][do_pooled] at word
         // rec_base + i * (kBW + 3). Popped once, early, so the reader can push the next iteration's plan while this
         // iteration's pieces are still being computed.
         constexpr uint32_t kRec = kBW + 3;
-        CircularBuffer(cb_sol_plan).wait_front(1);
+        CircularBuffer(cb_sparse_plan).wait_front(1);
         for (uint32_t i = 0; i < n_res; ++i) {
             const uint32_t flat = global_q_start + i;
             res_head[i] = (flat / num_q_chunks) % NH;
-            const uint32_t r = sol_res_plan_rec_base + i * kRec;
+            const uint32_t r = plan_rec_base + i * kRec;
             for (uint32_t w = 0; w < kBW; ++w) {
-                res_blk[i][w] = ckernel::read_tile_value(cb_sol_plan, 0, r + w);
+                res_blk[i][w] = ckernel::read_tile_value(cb_sparse_plan, 0, r + w);
             }
-            union_lo[i] = ckernel::read_tile_value(cb_sol_plan, 0, r + kBW);
-            union_hi[i] = ckernel::read_tile_value(cb_sol_plan, 0, r + kBW + 1);
-            do_pooled = ckernel::read_tile_value(cb_sol_plan, 0, r + kBW + 2);
+            union_lo[i] = ckernel::read_tile_value(cb_sparse_plan, 0, r + kBW);
+            union_hi[i] = ckernel::read_tile_value(cb_sparse_plan, 0, r + kBW + 1);
+            do_pooled = ckernel::read_tile_value(cb_sparse_plan, 0, r + kBW + 2);
         }
-        CircularBuffer(cb_sol_plan).pop_front(1);
+        CircularBuffer(cb_sparse_plan).pop_front(1);
     } else {
         for (uint32_t i = 0; i < n_res; ++i) {
             const uint32_t flat = global_q_start + i;
             res_head[i] = (flat / num_q_chunks) % NH;
-            CircularBuffer(cb_sol_plan).wait_front(1);
+            CircularBuffer(cb_sparse_plan).wait_front(1);
             for (uint32_t w = 0; w < kBW; ++w) {
-                res_blk[i][w] = ckernel::read_tile_value(cb_sol_plan, 0, w);
+                res_blk[i][w] = ckernel::read_tile_value(cb_sparse_plan, 0, w);
             }
-            union_lo[i] = ckernel::read_tile_value(cb_sol_plan, 0, kBW);
-            union_hi[i] = ckernel::read_tile_value(cb_sol_plan, 0, kBW + 1);
-            do_pooled = ckernel::read_tile_value(cb_sol_plan, 0, kBW + 2);
-            CircularBuffer(cb_sol_plan).pop_front(1);
+            union_lo[i] = ckernel::read_tile_value(cb_sparse_plan, 0, kBW);
+            union_hi[i] = ckernel::read_tile_value(cb_sparse_plan, 0, kBW + 1);
+            do_pooled = ckernel::read_tile_value(cb_sparse_plan, 0, kBW + 2);
+            CircularBuffer(cb_sparse_plan).pop_front(1);
         }
     }
     const auto bit = [](uint32_t lo, uint32_t hi, uint32_t k) -> bool {
@@ -1584,7 +1584,7 @@ void sdpa_ring_resident(
             cb_sum_in,
             cb_prev_out,
             cb_out,
-            cb_sol_bias,
+            cb_pooled_bias,
             v_cb_physical_width_t,
             kQkCap,
             kStatsCap>(slots, n_slots, run_cols, run_ws, n_runs, initialized, apply_col_bias);
@@ -1592,7 +1592,7 @@ void sdpa_ring_resident(
             initialized |= 1u << slots[g];
         }
     };
-    // Members sorted by width and stepped in groups of at most kQkCap scratch tiles (sol_res_run_groups, outlined:
+    // Members sorted by width and stepped in groups of at most kQkCap scratch tiles (res_run_groups, outlined:
     // reached from the piece loop and the pooled loop).
     const auto run_groups = [&](const uint8_t* members,
                                 const uint8_t* widths,
@@ -1601,7 +1601,7 @@ void sdpa_ring_resident(
                                 const uint8_t* mnruns,
                                 const uint32_t n,
                                 const bool apply_col_bias) {
-        sol_res_run_groups<sol_resident_slots, kBlocksPerPiece, Sq_chunk_t, kQkCap>(
+        res_run_groups<resident_slots, kBlocksPerPiece, Sq_chunk_t, kQkCap>(
             run_step, members, widths, mruns, mrunws, mnruns, n, apply_col_bias);
     };
     // One K/V entry, after its last step (or untouched: streamed for another chain member only).
@@ -1652,11 +1652,11 @@ void sdpa_ring_resident(
             }
             // The piece's group: every chunk of the head that keeps a block of it, with its run table (adjacent
             // kept blocks merged into one run; the whole group is stepped up to the scratch capacity).
-            uint8_t group[sol_resident_slots];
-            uint8_t gwidth[sol_resident_slots];
-            uint8_t runs[sol_resident_slots * kBlocksPerPiece];
-            uint8_t runws[sol_resident_slots * kBlocksPerPiece];
-            uint8_t n_runs[sol_resident_slots];
+            uint8_t group[resident_slots];
+            uint8_t gwidth[resident_slots];
+            uint8_t runs[resident_slots * kBlocksPerPiece];
+            uint8_t runws[resident_slots * kBlocksPerPiece];
+            uint8_t n_runs[resident_slots];
             uint32_t n_group = 0;
             uint32_t group_mask = 0;
             for (uint32_t i = i0; i < n_res; ++i) {
@@ -1718,11 +1718,11 @@ void sdpa_ring_resident(
                 }
             }
             heads_done |= head_mask;
-            uint8_t pgroup[sol_resident_slots];
-            uint8_t pwidth[sol_resident_slots];
-            uint8_t pcols[sol_resident_slots * kBlocksPerPiece];
-            uint8_t pws[sol_resident_slots * kBlocksPerPiece];
-            uint8_t pruns[sol_resident_slots];
+            uint8_t pgroup[resident_slots];
+            uint8_t pwidth[resident_slots];
+            uint8_t pcols[resident_slots * kBlocksPerPiece];
+            uint8_t pws[resident_slots * kBlocksPerPiece];
+            uint8_t pruns[resident_slots];
             uint32_t n_p = 0;
             for (uint32_t i = i0; i < n_res; ++i) {
                 if (((head_mask >> i) & 1u) == 0) {
@@ -1733,8 +1733,8 @@ void sdpa_ring_resident(
                 pruns[n_p] = 1;
                 ++n_p;
             }
-            for (uint32_t pc = 0; pc < sol_pooled_chunks; ++pc) {
-                const uint32_t active_width = (pc + 1 == sol_pooled_chunks) ? sol_pooled_last_tiles : Sk_chunk_t;
+            for (uint32_t pc = 0; pc < pooled_chunks; ++pc) {
+                const uint32_t active_width = (pc + 1 == pooled_chunks) ? pooled_last_tiles : Sk_chunk_t;
                 for (uint32_t g = 0; g < n_p; ++g) {
                     pwidth[g] = static_cast<uint8_t>(active_width);
                     pws[g * kBlocksPerPiece] = static_cast<uint8_t>(active_width);
@@ -1764,9 +1764,9 @@ void sdpa_ring_resident(
                 false,
                 INVALID_CB>(cb_sum_in, cb_prev_out, Sq_chunk_t, cb_max_in);
         }
-        if (n_res < sol_resident_slots) {
-            sdpa_cb_pop_front_out_of_line(cb_sum_in, (sol_resident_slots - n_res) * Sq_chunk_t);
-            sdpa_cb_pop_front_out_of_line(cb_prev_out, (sol_resident_slots - n_res) * out_tiles);
+        if (n_res < resident_slots) {
+            sdpa_cb_pop_front_out_of_line(cb_sum_in, (resident_slots - n_res) * Sq_chunk_t);
+            sdpa_cb_pop_front_out_of_line(cb_prev_out, (resident_slots - n_res) * out_tiles);
         }
         sdpa_cb_pop_front_out_of_line(cb_max_in, kStatsCap);
         sdpa_cb_pop_front_out_of_line(cb_q_in, n_res * q_chunk_tiles);
