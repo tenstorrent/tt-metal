@@ -20,6 +20,7 @@ def main():
     ap.add_argument("--shape", default="32x512")
     ap.add_argument("--q-chunk", type=int, nargs="+", default=[128, 256])
     ap.add_argument("--fid", default="HiFi4")
+    ap.add_argument("--once", action="store_true", help="one untraced call per config (device profiling)")
     args = ap.parse_args()
     B, S = map(int, args.shape.split("x"))
     dev = ttnn.open_device(device_id=0, l1_small_size=32768, trace_region_size=100_000_000)
@@ -55,6 +56,14 @@ def main():
             program_config=pc,
             output_concat_heads=True,
         )
+        if args.once:
+            ttnn.synchronize_device(dev)
+            ttnn.deallocate(fn())
+            ttnn.synchronize_device(dev)
+            print(f"q {qdt} kv {kvdt} q_chunk {qc}: ran once", flush=True)
+            for x in t.values():
+                ttnn.deallocate(x)
+            continue
         fn()
         tid = ttnn.begin_trace_capture(dev, cq_id=0)
         outs = [fn() for _ in range(REPS)]

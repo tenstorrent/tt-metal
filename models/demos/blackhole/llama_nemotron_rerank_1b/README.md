@@ -182,6 +182,14 @@ stream (0.99944). No effect: raising the power limit (the card stays at 150 W).
   (1206 vs 861 us), SDPA q chunk 256 (does not fit next to the resident residual). QKV + RoPE waits ~20 % of
   its K loop on inputs (zones), but multicasting its weight blocks (935 us) or activations (884 us) instead of
   relaying them is slower, and N blocks of 4 / 6 or M blocks of 10 / 20 land at 862-954 us (861 now).
+* A custom attention kernel for SDPA (all keys per query row, exp(S - c) without a row max, row sums from
+  P [V | 1], 1 / l in DST, padding keys as zero rows of [V | 1]): correct (PCC 0.99969 with the precise exp)
+  but 1298 us at 32 x 512, 968 us with the fast exp (PCC 0.99909), against ttnn's 610-660 us. The pack
+  thread's exp + pack of the 16 score tiles per query row (~8 k cycles) exceeds the ~5 k of matmul per row;
+  ttnn's streaming SDPA does a row in ~6.5 k, so it is within ~20 % of that bound. HF scores on MIRACL stay
+  in [-69, 26] (every row's max >= -1.01), which is what made a max-free exp possible. ttnn's SDPA ignores
+  SDPAProgramConfig.matmul_math_fidelity (only the ring-joint variant reads it): its matmuls run at the
+  compute config's fidelity.
 * bs1 (34 %): the matmuls at 512 rows run at 27-52 % of their limit; FF2 at LoFi is bound by its weight read.
   DRAM-sharded weights are the next step. 1 x 128 / 1 x 512 read ~0.3 ms slower than in the previous README
   (5.97 / 7.50 ms), not yet traced to a change.
