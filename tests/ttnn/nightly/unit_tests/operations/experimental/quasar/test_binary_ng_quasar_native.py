@@ -325,7 +325,7 @@ _NATIVE_ARMS = [(1, 1, 1), (4, 4, 2), (1, 4, 4), (4, 4, 1), (2, 4, 2)]
 # The child is a fixed script. Its parameters arrive as data in the environment (ARM_TILE_COUNTS, JSON),
 # never spliced into the source.
 _ARM_SRC = """
-import json, os, pathlib, sys
+import hashlib, json, os, pathlib, sys
 import torch, ttnn
 from tests.ttnn.nightly.unit_tests.operations.experimental.quasar.binary_ng_quasar_test_utils import (
     _add_goldens, _matches_none)
@@ -343,7 +343,11 @@ try:
         tb = ttnn.from_torch(torch.randn((32, tiles * 32), dtype=torch.float32), **cfg)
         out = ttnn.experimental.quasar.add(ta, tb, memory_config=ttnn.DRAM_MEMORY_CONFIG,
                                            dtype=ttnn.bfloat16)
-        differ = _matches_none(ttnn.to_torch(out), _add_goldens(ta, tb))
+        got = ttnn.to_torch(out)
+        # Output bits, to compare two arms.
+        bits = got.contiguous().view(torch.int16).numpy().tobytes()
+        print("digest {}: {}".format(tiles, hashlib.sha256(bits).hexdigest()))
+        differ = _matches_none(got, _add_goldens(ta, tb))
         if differ.any():
             h, w = differ.shape[-2:]
             wrong = int(differ.reshape(-1, h // 32, 32, w // 32, 32).any(dim=4).any(dim=2).sum())
@@ -576,22 +580,30 @@ def test_native_tiles_per_cycle_above_stride_one():
     _check_arm(p, "a compute batch of 8 on the L1 NoC path", expect_wrong=_expect_wrong(cases, knobs))
 
 
-# Batching beside DRAM only regroups the work, so the output must stay exact. The ragged counts give threads with no
-# tiles, two core groups and short last batches; 2080 tiles batch 8 per compute thread at 4,4,2.
-_DRAM_BATCH_ARMS = [
+# Batching on and off must give the same output bits. 2080 tiles batch 8 per compute thread.
+_DRAM_BATCH_SPLITS = [
     ("rule", {}),
-    ("off", {"TTNN_QSR_DRAM_BATCH": "0"}),
     ("R4C4W1", _threads(4, 4, 1)),
     ("R1C1W1", _threads(1, 1, 1)),
 ]
+_DRAM_BATCH_TILE_COUNTS = _RAGGED_TILE_COUNTS + [2080]
 
 
 @pytest.mark.skipif(not _native_enabled(), reason="native factory off: TTNN_QSR_NATIVE=0, or not Quasar")
-@pytest.mark.parametrize("arm", _DRAM_BATCH_ARMS, ids=[a[0] for a in _DRAM_BATCH_ARMS])
-def test_native_dram_batch_is_bit_exact(arm):
-    label, knobs = arm
-    p = _run_arm(_RAGGED_TILE_COUNTS + [2080], knobs=knobs, timeout=1200)
-    _check_arm(p, f"batching beside DRAM, {label}")
+@pytest.mark.parametrize("split", _DRAM_BATCH_SPLITS, ids=[s[0] for s in _DRAM_BATCH_SPLITS])
+def test_native_dram_batch_is_bit_exact(split):
+    label, knobs = split
+    digests = {}
+    for state, switch in (("ON", {}), ("OFF", {"TTNN_QSR_DRAM_BATCH": "0"})):
+        p = _run_arm(_DRAM_BATCH_TILE_COUNTS, knobs={**knobs, **switch, "TT_LOGGER_LEVEL": "info"}, timeout=1200)
+        _check_arm(p, f"batching beside DRAM {state}, {label}")
+        assert (
+            f"batching beside DRAM {state}" in p.stdout + p.stderr
+        ), f"{label}: the log does not report batching {state}"
+        digests[state] = dict(re.findall(r"^digest (\d+): (\w+)$", p.stdout, re.MULTILINE))
+    assert len(digests["ON"]) == len(_DRAM_BATCH_TILE_COUNTS), f"{label}: missing digests {digests['ON']}"
+    differ = sorted(int(t) for t in digests["ON"] if digests["ON"][t] != digests["OFF"].get(t))
+    assert not differ, f"{label}: batching changes the output at {differ} tiles"
 
 
 # Each guard, the knob values that trip it, the text its TT_FATAL carries, and optionally the _SHARD_ARM_SRC
