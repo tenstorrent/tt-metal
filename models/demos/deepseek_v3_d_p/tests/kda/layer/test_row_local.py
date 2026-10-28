@@ -6,6 +6,8 @@ the reference of ITS prompt, and rows must not mix (a row-swapped input swaps th
 
 from __future__ import annotations
 
+import os
+
 import pytest
 import torch
 
@@ -21,13 +23,17 @@ from models.demos.deepseek_v3_d_p.tests.kda.utils import (
 )
 from models.demos.deepseek_v3_d_p.tt.kda.config import KDAProgramConfig
 from models.demos.deepseek_v3_d_p.tt.kda.kda import ttKDA
+from models.demos.glm53_flash.tt.mesh import mesh_device_params
 from models.tt_transformers.tt.ccl import TT_CCL
 from tests.ttnn.unit_tests.operations.experimental.kda.kda_test_utils import assert_accurate, make_actual_start
 
+# The seed server's own mesh by default (the 8x4 Galaxy, one prompt per row, GLM53_MESH_SHAPE overrides): a (2,4) block
+# of a Galaxy does not bring its fabric up (Router Sync timeout on hosts 29 and 41, 10-28), so the block shape is opt-in.
+MESH = tuple(int(v) for v in os.environ.get("GLM53_MESH_SHAPE", "8,4").split(","))
 pytestmark = [
     run_for_blackhole(),
-    pytest.mark.parametrize("mesh_device", [(2, 4)], indirect=True),
-    pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True),
+    pytest.mark.parametrize("mesh_device", [MESH], indirect=True),
+    pytest.mark.parametrize("device_params", [mesh_device_params(*MESH)], indirect=True),
 ]
 
 ROW_AXIS, TP_AXIS = 0, 1
