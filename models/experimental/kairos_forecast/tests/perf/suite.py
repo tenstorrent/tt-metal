@@ -10,7 +10,9 @@ Every call starts from the golden's bias0 (RouterState restored). Records:
 """
 from __future__ import annotations
 
+import os
 import time
+from pathlib import Path
 
 import torch
 
@@ -35,8 +37,13 @@ def _routing(log, rec, free_from=None):
     for k, entry in enumerate(log):
         ref_w, ref_i = rec["gate"][k]
         rows = entry["context"].shape[0]
-        rr = routing_record(ref_i.view(rows, -1, 3), entry["routing"]["indices"].view(rows, -1, 3),
-                            rec["bias_after"][k], entry["routing"]["bias_after"], rec["scores"][k])
+        rr = routing_record(
+            ref_i.view(rows, -1, 3),
+            entry["routing"]["indices"].view(rows, -1, 3),
+            rec["bias_after"][k],
+            entry["routing"]["bias_after"],
+            rec["scores"][k],
+        )
         tgt = free if free_from is not None and k in free_from else out
         for key in ("route_mismatch_rows", "route_mismatch_patches"):
             tgt[key] += rr[key]
@@ -66,6 +73,14 @@ def _post(rec):
     return post
 
 
+def save_heads(name, precision, dev_raw, q):
+    """v1.32: with $KAIROS_SAVE_HEADS set, keep the record's device head and final quantiles (default off)."""
+    root = os.environ.get("KAIROS_SAVE_HEADS")
+    if root:
+        Path(root).mkdir(parents=True, exist_ok=True)
+        torch.save({"head": dev_raw.cpu(), "q": q.cpu()}, Path(root) / f"{name}_{precision}.pt")
+
+
 def score(dev_raw, gold_raw, q, g_q, scale, halves=1) -> dict:
     """halves: 2 when the rows are the x half then the -x half (flip cases), for the per-half row bias."""
     m = M.gate_metrics(M.head_view(dev_raw), M.head_view(gold_raw), q, g_q, scale, halves)
@@ -83,11 +98,17 @@ def run_case(model, name, precision, *, collapsed=False):
     e2e_s = time.perf_counter() - t0
     g_q = rec["prediction_outputs"]
     scale = rec["loc_scale"][0][1].reshape(-1)
-    base = {"name": name, "precision": precision, "rows": S * (2 if gift else 1), "forwards": len(gen.log),
-            "e2e_s": e2e_s}
+    base = {
+        "name": name,
+        "precision": precision,
+        "rows": S * (2 if gift else 1),
+        "forwards": len(gen.log),
+        "e2e_s": e2e_s,
+    }
     if steps == 1:
         dev = torch.cat([e["head"] for e in gen.log])
         gold = torch.cat(rec["head"])
+        save_heads(name, precision, dev, q)
         r = {**base, **score(dev, gold, q, g_q, scale, 2 if gift else 1), **_routing(gen.log, rec)}
         if collapsed:
             r["collapsed"] = M.collapsed_metrics(gold, g_q, _post(rec), scale)
@@ -96,6 +117,7 @@ def run_case(model, name, precision, *, collapsed=False):
     # whose bias follows the x half's device-fed contexts)
     free = set(range(1, len(gen.log)))
     first = gen.log[0]["head"]
+    save_heads(name, precision, first, q)
     r = {**base, **score(first, rec["head"][0], q, g_q, scale), **_routing(gen.log, rec, free), "free_step": 1}
     return [r, teacher_forced(model, name, precision, rec)], gen
 
@@ -115,9 +137,17 @@ def teacher_forced(model, name, precision, rec):
     dq = torch.cat([head_to_quantiles(heads[k], *rec["loc_scale"][k]) for k in range(len(heads))])
     gq = torch.cat([head_to_quantiles(rec["head"][k], *rec["loc_scale"][k]) for k in range(len(heads))])
     scale = torch.cat([rec["loc_scale"][k][1].reshape(-1) for k in range(len(heads))])
+    save_heads(f"{name}_tf", precision, dev, dq)
     m = score(dev, gold, dq, gq, scale, 2 if rec["gift"] else 1)  # steps of the x half, then of the -x half
     step_rows = rec["head"][0].shape[0]
     m["pcc_normalized_step_min"] = min(
-        M.pearson(M.head_view(rec["head"][k]), M.head_view(heads[k])) for k in range(len(heads)))
-    return {"name": f"{name}_tf", "precision": precision, "rows": step_rows * len(heads), "forwards": len(heads),
-            **m, **_routing(log, rec)}
+        M.pearson(M.head_view(rec["head"][k]), M.head_view(heads[k])) for k in range(len(heads))
+    )
+    return {
+        "name": f"{name}_tf",
+        "precision": precision,
+        "rows": step_rows * len(heads),
+        "forwards": len(heads),
+        **m,
+        **_routing(log, rec),
+    }
