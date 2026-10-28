@@ -1552,6 +1552,17 @@ NOC_EVENT_QUICK_PUSH_CONFIGS = {
         knobs={"BLOCKING": 0, "SKIP_READ": 1, "WARMUP": 1000, "ITER_ZONE": 1, "DELAY_NOPS": 2000},
         program_support_count=8000,
     ),
+    # Linked multicasts: every 7th read also issues a linked multicast, so quick_push_if_linked pushes pre-emptively
+    # at any ring fill level, including right after a regular push (the pattern of the broken pairs in the model
+    # capture: a second push ~75 cycles after the first).
+    "fd-mcast": dict(env={}, loop_count=4000, knobs={"MCAST_EVERY": 7}, mcast_every=7),
+    "sd-mcast-blaze-env": dict(
+        env={"slowDispatch": True, "do_mid_run_dump": True, "do_cpp_post_process": True},
+        loop_count=4000,
+        knobs={"BLOCKING": 0, "SKIP_READ": 1, "WARMUP": 200, "ITER_ZONE": 1, "MCAST_EVERY": 7},
+        mcast_every=7,
+        program_support_count=8000,
+    ),
     "sd-sparse": dict(
         env={"slowDispatch": True, "do_mid_run_dump": True, "do_cpp_post_process": True},
         loop_count=300,
@@ -1626,6 +1637,9 @@ def test_noc_event_quick_push(config_name):
         per_run = events.groupby("run host ID").size()
         main_run = per_run.idxmax() if len(per_run) else None
         noc_events = int(per_run.max()) if len(per_run) else 0
+        if config.get("mcast_every"):
+            # two multicast writes per MCAST_EVERY-th iteration are events too
+            noc_events -= 2 * ((LOOP_COUNT + config["mcast_every"] - 1) // config["mcast_every"])
         main = lane[lane["run host ID"] == main_run]
         user = main[main["zone name"] == "TEST-NOC-QUICK-PUSH"]
         user_starts, user_ends = int((user["type"] == "ZONE_START").sum()), int((user["type"] == "ZONE_END").sum())
