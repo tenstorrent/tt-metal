@@ -21,7 +21,8 @@ log with `__start` / `__end wall_s` / `__tt_exit`), one at a time.
 | `87aa096ffe` | E9.1-r1 part C docs: contract change, datatype_sweep README / work_log, REPORT addendum, README |
 | `4eed20c34c` | E9.1-r2a: text precision default `p2_sdpa_fast` -> `sdpa_nofp32acc` (`selected_precision_config.json` text section, config_id); contract / datatype_sweep / REPORT / work_log amendments |
 | `a903d517c6` | E9.1-r2a: root README cost and fallback fixes; `prefill_op_table.py` roofline uses the profiled grid (`--grid-cores`, CSV, `device_info.json`) |
-| (E9.1-r2b commit 1) | E9.1-r2a review minors: README cost label, this table and the config hash, datatype_sweep README layout and gate keys, `--grid-cores 0` error + CPU test |
+| `637e2b5292` | E9.1-r2b commit 1, E9.1-r2a review minors: README cost label, this table and the config hash, datatype_sweep README layout and gate keys, `--grid-cores 0` error + CPU test, 13 x 10 tables regenerated with `grid_cores` |
+| (E9.1-r2b re-baseline commit) | 12 x 10 re-baseline: README (12 x 10 headline first, 13 x 10 kept as superseded), `perf_summary.json` (12 x 10 top level, 13 x 10 nested), `profiles_12x10/`, this log; `prefill_summary.py --superseded` and extra keys - docs and tooling only |
 
 The measurements ran on the working tree of `7ef04f02da` before two non-semantic changes: black
 reformatting at commit time, and `@pytest.mark.timeout(3600)` (added after the 65536 sustained case
@@ -221,3 +222,77 @@ the CSV; `tests/perf/test_prefill_op_table.py` (CPU only: grid from the CSV colu
 tables (`profiles/b1_s*/`) were regenerated from their raw CSVs (`e9/01-baseline/tracy/`): JSON equal
 except the new `grid_cores` 130 key, markdown equal except the header's "130 cores", all 10 buckets
 (`e9/01r2b/logs/c1_regen_13x10_tables.log`).
+
+## E9.1-r2b: stage-1 re-baseline at 12 x 10 with `sdpa_nofp32acc` (2026-10-28)
+
+Run folder `/local/ttuser/gtobar/tt-ops/runs/embeddinggemma-2/e9/01r2b/` (below: `$B`). Every device
+command through `$B/scripts/run.sh` (card-free check polling every 60 s, env dump, `timeout -s KILL`,
+`TT_METAL_OPERATION_TIMEOUT_SECONDS=60`, `__start` / `__end wall_s` / `__tt_exit`), one at a time, in
+tmux `tt-bringup_embeddinggemma2_e901r2b_timing` (`chain.sh`) then `..._e901r2b_ctl2` (`chain2.sh`).
+The card was never held by another process (`card_wait.log` absent). Environment as above plus
+`EMBEDDING_GEMMA2_GRID`. All runs on HEAD `637e2b5292`; dirty files at run start (log headers) were
+only `doc/prefill/01-baseline/profiles_12x10/` (new tables), `tests/perf/prefill_summary.py` (not
+imported by `prefill.py`) and `perf_summary.json`; no model code.
+
+| time | label | command (`$B/scripts/run.sh <label> <timeout> ...`) | result |
+|---|---|---|---|
+| 12:23 (CPU) | verify captures | `python3 $B/scripts/verify_captures.py roofline/capture/out .../selected_precision_config.json a903d517c6` | 10 / 10 OK (`logs/verify_captures.log`) |
+| 12:23 (CPU) | op tables | per bucket `python -m ...tests.perf.prefill_op_table roofline/capture/out/text_b1_sB/ops_perf_results.csv --bucket B --grid-cores 120 --out-md profiles_12x10/b1_sB/op_table.md --out-json .../op_table.json` | 10 x exit 0 (`logs/op_tables_12x10.log`, with CSV sha256) |
+| 12:24:06 | `ctl_start` | `EMBEDDING_GEMMA2_GRID=12x10 EMBEDDING_GEMMA2_PREFILL_OUT=$B/run_ctl_start pytest prefill.py -s -q -p no:cacheprovider` | 3 passed, exit 0 |
+| 12:25:03-12:47:25 | `sweep_all` | `EMBEDDING_GEMMA2_GRID=12x10 EMBEDDING_GEMMA2_PREFILL_ALL=1 EMBEDDING_GEMMA2_PREFILL_OUT=$B/run pytest prefill.py -s -q -p no:cacheprovider` (timeout 5400) | 40 passed in 1339 s, exit 0 (run `20261028-122505`) |
+| 12:47:26 | `ctl13` | `EMBEDDING_GEMMA2_GRID=13x10 EMBEDDING_GEMMA2_PREFILL_BUCKETS=512,2048,8192 EMBEDDING_GEMMA2_PREFILL_HF_CHECK=1 EMBEDDING_GEMMA2_PREFILL_SUSTAINED=1 EMBEDDING_GEMMA2_PREFILL_TELEMETRY=1 EMBEDDING_GEMMA2_PREFILL_OUT=$B/run_ctl13 pytest prefill.py ...` | 9 passed, exit 0 |
+| 12:50:04 | `ctl12` | same with `EMBEDDING_GEMMA2_GRID=12x10`, `OUT=$B/run_ctl12` | 9 passed, exit 0 |
+| 12:52:43 | `ctl_end` | as `ctl_start`, `OUT=$B/run_ctl_end` | 3 passed, exit 0 |
+| 12:54:23 | `tracy_b1_s2048_13x10` | `EMBEDDING_GEMMA2_GRID=13x10 EMBEDDING_GEMMA2_BENCH_DIR=$B/tracy/b1_s2048_13x10 EMBEDDING_GEMMA2_MAX_SEQ_LEN=32768 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=4000 python -m tracy -r -p -v -m pytest "perf.py::test_tracy_forward[b1_s2048]" -q -s`; CSV copied to `$B/tracy/b1_s2048_13x10/`, then `prefill_op_table ... --bucket 2048` (130 cores from the CSV) | 1 passed, exit 0 |
+| 12:54:59 | `ctl13_32768` | `EMBEDDING_GEMMA2_GRID=13x10 EMBEDDING_GEMMA2_PREFILL_BUCKETS=32768 EMBEDDING_GEMMA2_PREFILL_SUSTAINED=1 EMBEDDING_GEMMA2_PREFILL_TELEMETRY=1 OUT=$B/run_ctl13_32768 pytest prefill.py ...` | 2 passed, exit 0 |
+| 12:58:42 | `ctl12_32768` | same with `EMBEDDING_GEMMA2_GRID=12x10`, `OUT=$B/run_ctl12_32768` | 2 passed, exit 0 |
+
+Analysis (CPU): `python3 $B/scripts/analyze.py doc/prefill/01-baseline/profiles_12x10 $B/run/prefill.jsonl
+roofline/out/roofline_sdpa_nofp32acc.json $B/analysis/r2b.json` (families, top-3, reconciliation,
+% of roofline; `logs/analyze.log`); `python3 $B/scripts/render.py $B` (README tables,
+`analysis/render.md`); `python -m ...tests.perf.prefill_summary --timing $B/run/prefill.jsonl --gate
+e9/01r2a/run_gate_12x10/prefill.jsonl --tables $B/analysis/tables --stage "01-baseline (E9.1-r2b
+re-baseline, 12x10)" --commit "637e2b5292 (...)" --extra $B/analysis/extra.json --superseded
+superseded_13x10_p3_qkv_gu=$B/analysis/perf_summary_13x10_committed.json --out
+doc/prefill/01-baseline/perf_summary.json` (`analysis/tables` = copies of the 12 x 10 op-table JSONs;
+`perf_summary_13x10_committed.json` = the committed 13 x 10 summary at `637e2b5292`). Hardware identity
+read from sysfs after the runs: fw bundle 19.8.0.0, DM app 0.24.0.0, KMD 2.11.0, power1_max 150 W,
+curr1_max 200 A, PCIe x16 32 GT/s, thermal trip count 0 (unchanged from the contract).
+
+### Decisions and findings
+
+- **Profiles reused, not recaptured** (brief): the roofline captures pass every check (commit, grid,
+  precision, signposts). One extra profile: 1 x 2048 at 13 x 10 with the current default, to split
+  the 12 x 10 cost at 2048 by op family (the existing 13 x 10 profiles are `p3_qkv_gu`).
+- **Gate inside the timing run**: `PREFILL_ALL` includes the HF check; 10 / 10 pass with values equal
+  to the r2a alloc-tracking gate run, so `perf_summary.json` cites that run as the alloc-tracking gate.
+- **Extra control at 32768** (not in the brief's list): the sustained clock drop at >= 16384 is larger
+  than in the 13 x 10 baseline; 13 x 10 vs 12 x 10 at 32768 on the same code shows no grid effect
+  (599.3 vs 599.7 ms, both 1237 MHz), so the drop comes with the code / precision change.
+- **SDPA at 2048**: the expected 13.8 ms is the `p3_qkv_gu` 12 x 10 profile; at `sdpa_nofp32acc` it
+  is 8.66 ms (13 x 10: 6.85 ms). The 2-wave cause stands (q_chunk 64, 128 units); its cost is +1.81 ms.
+- `target_contract.json` unchanged. Proposed to the orchestrator (not applied): `checkout.commit`
+  still names the 13 x 10 stage-1 base `4624946b1b`, and `compute_grid_note` says stage 1 was measured
+  at 13 x 10 and cites only the 1 x 2048 core check; after this unit both could name the 12 x 10
+  re-baseline (`637e2b5292` + the r2b docs commit; 0 ops above 120 cores at all 10 buckets).
+
+### Anomaly ledger (E9.1-r2b)
+
+| observation | evidence | control | resolution |
+|---|---|---|---|
+| sustained / burst 1.028 / 1.054 / 1.035 at 16384 / 32768 / 65536 (AICLK 1293 / 1237 / 1193) vs 1.015-1.019 at 13 x 10 `p3_qkv_gu` | `run/prefill.jsonl` telemetry last third | 13 x 10 vs 12 x 10 at 32768, same code: same clock and time | controlled: not the grid; follows the precision / code change **[I]**; recorded as a named limitation |
+| 8192 at 13 x 10 throttles in sustained (1318 MHz), 12 x 10 does not (1350) | `run_ctl13`, `run_ctl12` | burst numbers (no throttle) | documented: the sustained 12 x 10 cost at 8192 (+7.2 %) is below the burst cost (+8.5 %) |
+| traced residual 6.1 / 63.4 ms at 32768 / 65536 | `analysis/r2b.json` | kernel sum from a cold 1350 MHz profile | attributed to the clock drop inside burst windows **[I]** (as at 13 x 10) |
+| host work negative at >= 16384 | host records N = 14 / 6 / 5 | replay + sync timed in the same phase | noise under clock drift |
+| 8192 gate 0.99628 at 12 x 10 vs 0.99674 at 13 x 10 | `run_ctl12`, `run_ctl13` | known: gate projection on `minimal_matmul` at 12 x 10 (E9.1-r1) | expected; both pass |
+
+### Self-check against prefill-stage-review (not independent)
+
+- Every bucket at 12 x 10 has burst, sustained with sysfs telemetry, the gate on the traced replay
+  output, an op table (120 cores), reconciliation, host / H2D / D2H, and top three with owners.
+- 13 x 10 controls (512, 2048, 8192, plus 32768) and start / end drift controls are in the same session.
+- Both regimes measured; headline is sustained (contract). Numbers come from one harness, one commit
+  and one power limit. The 13 x 10 numbers in the README are labelled superseded and are not used as a
+  "before" for this geometry.
+- Gaps: one sustained run per bucket (repeats only at 512 / 2048 / 8192 / 32768); the roofline is a
+  model; traced gaps are not profiled; the larger clock drop at >= 16384 is not attributed per op.

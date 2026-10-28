@@ -1,8 +1,194 @@
 # Prefill stage 1: baseline and target contract (E9)
 
-Text-encoder prefill of `google/embeddinggemma-2` on one Blackhole P150a, batch 1, buckets 128 to
-65536, masked path, selected precision `p3_qkv_gu`. Contract: `../target_contract.json`. Labels:
-**[M]** measured (command and record named), **[I]** inferred. No model code changed in this stage.
+**This is the stage-1 baseline at the contract geometry: 12 x 10 compute grid (120 cores, Galaxy
+target), text precision `sdpa_nofp32acc`** (E9.1-r2b re-baseline, 2026-10-28). Text-encoder prefill of
+`google/embeddinggemma-2` on one Blackhole P150a (12 x 10 via `EMBEDDING_GEMMA2_GRID=12x10`, every
+record carries `compute_grid` [12, 10]), batch 1, buckets 128 to 65536, masked path. Contract:
+`../target_contract.json`. Labels: **[M]** measured (command and record named), **[I]** inferred.
+No model code changed (HEAD `637e2b5292` during the runs; model code as at `a903d517c6`). The 13 x 10
+`p3_qkv_gu` baseline of the morning is kept below, labelled as the superseded geometry.
+
+## Headline at 12 x 10 (latency_ms per traced warmed forward) [M]
+
+Sweep run `20261028-122505` (`EMBEDDING_GEMMA2_PREFILL_ALL=1`, `logs/sweep_all.log`, 40 passed),
+records `tt-ops/runs/embeddinggemma-2/e9/01r2b/run/prefill.jsonl`, summary `perf_summary.json` (top
+level; the 13 x 10 summary is nested unchanged under `superseded_13x10_p3_qkv_gu`). Power limit 150 W
+TDP (default), AICLK max 1350 MHz, fw bundle 19.8.0.0, KMD 2.11.0, PCIe x16 Gen5. Telemetry: median
+(min or max) over the last third of the sustained run, sysfs every 100 ms. Gate: traced replay output
+vs cached HF fp32 (bars 0.99 / 0.99), replay == eager bitwise on all 10. % of roofline = roofline ms
+(roofline session model, `sdpa_nofp32acc`, 120 cores, 1.35 GHz; see Roofline) / sustained ms.
+Owner stages: 02 topology, 03 matmul, 04 attention, 05 memory.
+
+| bucket (logical) | burst median ms (avg / best, n) | **sustained ms** | sust. / burst | AICLK MHz median (min) | power W median (max) | gate PCC / cos | % of roofline (roofline ms) | top-3 costs (device ms, owner stage) |
+|---|---|---|---|---|---|---|---|---|
+| 128 (96) | 4.918 (4.918 / 4.916, 20x5) | **4.914** | 0.999 | 1350 (1350) | 77 (81) | 0.99424 / 0.99834 pass | 6.6 % (0.323) | RMSNorm 1.73 (05); matmul 1.41 (03); rotary 0.60 (04 / 05) |
+| 256 (192) | 5.917 (5.917 / 5.916, 20x5) | **5.913** | 0.999 | 1350 (1350) | 84 (94) | 0.99432 / 0.99861 pass | 5.5 % (0.323) | RMSNorm 1.76 (05); matmul 1.46 (03); SDPA 0.95 (04) |
+| 512 (384) | 7.262 (7.262 / 7.260, 20x5) | **7.257** | 0.999 | 1350 (1343) | 98 (115) | 0.99537 / 0.99912 pass | 9.5 % (0.693) | RMSNorm 1.84 (05); matmul 1.80 (03); SDPA 1.49 (04) |
+| 1024 (768) | 11.740 (11.741 / 11.739, 18x5) | **11.734** | 0.999 | 1350 (1343) | 106 (155) | 0.99577 / 0.99939 pass | 13.1 % (1.535) | SDPA 3.05 (04); matmul 2.94 (03); RMSNorm 2.06 (05) |
+| 2048 (1536) | 25.341 (25.338 / 25.330, 8x5) | **25.335** | 1.000 | 1350 (1343) | 115 (173) | 0.99574 / 0.99952 pass | 13.4 % (3.404) | SDPA 8.66 (04); matmul 8.11 (03); RMSNorm 2.57 (05) |
+| 4096 (3072) | 44.713 (44.712 / 44.705, 5x5) | **44.714** | 1.000 | 1350 (1343) | 125 (186) | 0.99581 / 0.99961 pass | 17.6 % (7.886) | matmul 14.78 (03); SDPA 11.83 (04); rotary 5.49 (04 / 05) |
+| 8192 (6144) | 103.900 (103.911 / 103.888, 3x5) | **103.961** | 1.001 | 1350 (1343) | 109 (223) | 0.99628 / 0.99965 pass | 19.1 % (19.821) | SDPA 31.44 (04); matmul 31.29 (03); RMSNorm 11.69 (05) |
+| 16384 (12288) | 224.728 (224.737 / 224.695, 3x5) | **231.122** | 1.028 | 1293 (1287) | 118 (207) | 0.99706 / 0.99967 pass | 24.0 % (55.573) | SDPA 79.90 (04); matmul 59.50 (03); RMSNorm 22.17 (05) |
+| 32768 (24576) | 568.084 (568.075 / 567.433, 3x5) | **598.529** | 1.054 | 1237 (1231) | 121 (192) | 0.99693 / 0.99965 pass | 29.2 % (174.610) | SDPA 242.14 (04); matmul 123.90 (03); mask build 58.33 (02 / 05) |
+| 65536 (49152) | 1724.449 (1723.010 / 1718.434, 3x5) | **1785.044** | 1.035 | 1193 (1150) | 134 (188) | 0.99724 / 0.99958 pass | 33.8 % (602.815) | SDPA 893.60 (04); matmul 250.43 (03); mask build 242.01 (02 / 05) |
+
+- Gates: 10 / 10 pass, values identical to the E9.1-r2a gate run (`01r2a/run_gate_12x10`, which ran
+  with `TT_METAL_TRACE_ALLOC_TRACKING=1`; no allocation flagged) **[M]**. Minimum 0.99424 / 0.99834 (128).
+- Up to 8192 the sustained clock holds 1350 MHz and sustained = burst within 0.1 %. From 16384 up the
+  firmware lowers AICLK to 1293 / 1237 / 1193 MHz (minimum 1150) at 118-134 W median, and sustained
+  is 2.8 / 5.4 / 3.5 % above burst **[M]**. The drop is larger than in the 13 x 10 `p3_qkv_gu`
+  baseline (1325 / 1312 / 1306 MHz). It is not the grid: at 32768 the 13 x 10 control on the same code
+  gives the same clock and time (Controls) **[M]**; so it follows the code and precision change
+  (bf16 Q/K/V and gate / up outputs in `sdpa_nofp32acc`) **[I: by elimination; not isolated per op]**.
+  Power stays under the 150 W TDP and current under the 200 A TDC as medians; which limit the
+  firmware applies is not exposed in sysfs **[I]**.
+- Burst at >= 16384 is not a full-clock figure: the clock starts dropping inside the first windows
+  (as in the 13 x 10 baseline).
+
+## Controls in the same session (E9.1-r2b) [M]
+
+Order: `ctl_start`, sweep, `ctl13`, `ctl12`, `ctl_end`, then `tracy_b1_s2048_13x10`, `ctl13_32768`,
+`ctl12_32768` (`e9/01r2b/scripts/chain.sh`, `chain2.sh`, `logs/chain.log`). Same code, same precision;
+only `EMBEDDING_GEMMA2_GRID` differs.
+
+| bucket | 13 x 10 burst / sustained ms | 12 x 10 burst / sustained ms (ctl12; sweep sustained) | 12 x 10 cost (sustained) | sustained AICLK 13 x 10 / 12 x 10 |
+|---|---|---|---|---|
+| 512 | 7.054 / 7.050 | 7.262 / 7.258 (7.257) | +2.9 % | 1350 / 1350 |
+| 2048 | 20.069 / 20.067 | 25.338 / 25.337 (25.335) | **+26.3 %** | 1350 / 1350 |
+| 8192 | 95.610 / 96.896 | 103.768 / 103.877 (103.961) | +7.2 % (burst +8.5 %) | 1318 / 1350 |
+| 32768 | 567.833 / 599.322 | 567.598 / 599.656 (598.529) | +0.1 % (noise) | 1237 / 1237 |
+
+- The earlier uncontrolled 1 x 2048 pair (27.9 ms at 12 x 10 vs 20.1 ms at 13 x 10) mixed grid and
+  precision (`p3_qkv_gu` at 12 x 10, a different session). Controlled, the grid alone costs 5.27 ms at
+  2048 with `sdpa_nofp32acc`.
+- At 8192 the 13 x 10 run is power-throttled in sustained (1318 MHz) and 12 x 10 is not (1350 MHz),
+  so the sustained cost (+7.2 %) is smaller than the burst cost (+8.5 %).
+- Drift (unchanged code, plain default run at start and end, burst ms): 128 4.918 / 4.917, 1024
+  11.739 / 11.741, 8192 103.748 / 103.753 (<= 0.02 %). Sweep vs `ctl12` repeat: 512 7.262 / 7.262,
+  2048 25.341 / 25.338, 8192 103.900 / 103.768 burst.
+- 13 x 10 gates on the same inputs: 512 0.99537, 2048 0.99574 (the same values as at 12 x 10),
+  8192 0.99674 (12 x 10: 0.99628; the 8192 gate projection runs another kernel at 12 x 10, see below).
+
+## Profiles and per-op tables at 12 x 10
+
+Text profiles were not recaptured. The roofline session captured them at `a903d517c6` through the
+stage-1 harness path (`perf.py::test_tracy_forward[b1_s<bucket>]`, one warmed eager forward between
+`PERF_TEXT` / `PERF_TEXT_END`) into `tt-ops/runs/embeddinggemma-2/roofline/capture/out/text_b1_s<bucket>/`.
+Checked per bucket before use (`e9/01r2b/scripts/verify_captures.py`, `logs/verify_captures.log`)
+**[M]**: commit `a903d517c6` in `device_info.json` and `run_info.json`, clean tree, exit 0;
+`EMBEDDING_GEMMA2_GRID=12x10`, every forward op `AVAILABLE WORKER CORE COUNT` 120, max `CORE COUNT`
+120; `precision_config_id` `sdpa_nofp32acc`, sha256 of the precision file equal to the committed
+`selected_precision_config.json`; one `PERF_TEXT` and one `PERF_TEXT_END` signpost, 645 / 646 forward
+ops; `MAX_SEQ_LEN` 32768 (65536 for 65536). Between `a903d517c6` and the measured HEAD only docs and
+`tests/perf` tooling changed. CSV sha256 per bucket: `logs/op_tables_12x10.log`.
+
+Tables: `profiles_12x10/b1_s<bucket>/op_table.{md,json}`
+(`prefill_op_table <csv> --bucket B --grid-cores 120`; the header says 120 cores). The 13 x 10 tables
+stay in `profiles/` (130 cores, `p3_qkv_gu`).
+
+### Expected costs from the roofline work, checked against the 12 x 10 tables
+
+| expectation | verdict | evidence [M] |
+|---|---|---|
+| SDPA at 2048: 13.8 ms at 12 x 10 vs 7.95 ms at 13 x 10, from q_chunk 64 = 128 work units (2 waves on 120 cores, 1 on 130); stage 4 | **cause confirmed, size refuted for the current precision.** 13.8 ms is the `p3_qkv_gu` (fp32-accumulating SDPA) 12 x 10 profile. With `sdpa_nofp32acc` SDPA at 2048 is 8.66 ms at 12 x 10 vs 6.85 ms at 13 x 10 (+1.81 ms, +26 %). Both SDPA kinds run q_chunk 64 at 2048 (sliding k_chunk 128, full k_chunk 64; CSV attributes), so 4 x 2048 / 64 = 128 units. Owner 04-attention (`_SDPA_TABLE` chunks were tuned at 13 x 10) | `profiles_12x10/b1_s2048`; 13 x 10 control profile at the same code `e9/01r2b/tracy/b1_s2048_13x10/op_table.json` |
+| 2D matmuls run on 110 cores at 12 x 10; stage 3 | **confirmed at 2048 and 4096 only**: the N = 2048 gate / up / PLE projections (2048x512x2048: 44 plain + 24 gelu calls, 3.99 ms at 2048; 7.75 ms at 4096) run on 110 cores (per_core_N = ceil(64 / 12) = 6 tiles, so 11 of 12 columns **[I]**). At <= 1024 the matmuls run on 24-96 cores, at >= 8192 they are `minimal_matmul` on 120. At 2048 they cost +1.18 ms vs 13 x 10 (2.81 ms on 130 cores) | `profiles_12x10/b1_s{2048,4096}`, 2048 control |
+| layer-0 gelu gate falls back to `minimal_matmul`; stage 3 | **confirmed, wider than stated**: the gate projection with fused gelu (Mx512x2048) is `minimal_matmul` in all 24 layers at >= 8192 (2D `linear` at 13 x 10; layer 0 is only where outputs first differ). At 8192 it costs 9.99 ms (416 us a call) vs 8.26 ms for 44 plain `minimal_matmul` calls of the same shape (188 us a call): the fused activation doubles the call. From 32768 the Mx512x512 projection with fused gelu also moves to `minimal_matmul`: 26.5 ms at 32768 vs 7.15 ms as an 80-core `matmul` at 16384 (3.7x for 2x the tokens) | `profiles_12x10/b1_s{8192,16384,32768,65536}` |
+| per-forward mask build at 32K / 65K; stage 2 / 5 | **confirmed**: the two bfp4 [S, S] mask adds take 51.9 + 6.5 = 58.3 ms at 32768 (third cost) and 215.5 + 26.5 = 242.0 ms at 65536 (third cost, 8 ms behind matmul); 3.7 ms at 8192 | `profiles_12x10/b1_s{32768,65536}` |
+
+Grid cost at 2048 by op family (13 x 10 vs 12 x 10 device ms, same code; kernel sums 19.89 vs 25.10,
++5.21 ms, matching the +5.27 ms wall difference) **[M]**: SDPA 6.85 -> 8.66 (+1.81), matmul 6.75 ->
+8.11 (+1.36), eltwise 1.40 -> 2.36 (+0.96), rotary 1.80 -> 2.43 (+0.63), norms 2.27 -> 2.58 (+0.30),
+other +0.15. Part of the eltwise / rotary / norm cost is placement, not cores: at 12 x 10 the MLP
+gate x up multiply ([1, 1, 2048, 2048], 24 calls, 1.41 ms) and the full-attention layers' rotary and
+Q/K norms run on DRAM-interleaved tensors; at 13 x 10 the same ops run in L1 (op-table memory column;
+the 13 x 10 control has the multiply in L1 at 0.69 ms for 48 calls) **[M: placement; I: share of the
+cost]**. The activation memory config depends on the grid (`tt/config.act_memory_config`): a
+stage-5 item.
+
+## Reconciliation at 12 x 10: wall vs device kernel sum, gaps and host work [M]
+
+| bucket | ops | burst wall ms | device kernel sum ms | traced residual ms (share, per op) | eager op-to-op gaps ms | host work ms (round trip - replay) | round trip ms | roofline ms (+SFPU) | % of roofline vs device |
+|---|---|---|---|---|---|---|---|---|---|
+| 128 | 645 | 4.918 | 4.573 | 0.346 (7.0 %, 0.54 us) | 12.456 | 0.082 | 5.036 | 0.323 (0.323) | 7.1 % |
+| 256 | 645 | 5.917 | 5.584 | 0.333 (5.6 %, 0.52 us) | 11.854 | 0.084 | 6.035 | 0.323 (0.459) | 5.8 % |
+| 512 | 645 | 7.262 | 6.968 | 0.294 (4.1 %, 0.46 us) | 10.684 | 0.047 | 7.346 | 0.693 (1.014) | 9.9 % |
+| 1024 | 646 | 11.740 | 11.554 | 0.187 (1.6 %, 0.29 us) | 6.165 | 0.087 | 11.862 | 1.535 (2.271) | 13.3 % |
+| 2048 | 646 | 25.341 | 25.095 | 0.246 (1.0 %, 0.38 us) | 0.448 | 0.090 | 25.455 | 3.404 (5.050) | 13.6 % |
+| 4096 | 646 | 44.713 | 44.474 | 0.240 (0.5 %, 0.37 us) | 0.568 | 0.119 | 44.861 | 7.886 (11.660) | 17.7 % |
+| 8192 | 646 | 103.900 | 103.377 | 0.524 (0.5 %, 0.81 us) | 0.525 | 0.339 | 104.280 | 19.821 (29.095) | 19.2 % |
+| 16384 | 646 | 224.728 | 224.524 | 0.205 (0.1 %, 0.32 us) | 0.545 | -1.275 (noise) | 226.930 | 55.573 (80.819) | 24.8 % |
+| 32768 | 646 | 568.084 | 561.992 | 6.092 (1.1 %) | 0.532 | -12.190 (noise) | 578.638 | 174.610 (251.683) | 31.1 % |
+| 65536 | 646 | 1724.449 | 1661.090 | 63.358 (3.7 %) | 0.528 | -27.847 (noise) | 1755.799 | 602.815 (863.078) | 36.3 % |
+
+- wall = device kernel sum + traced residual. Kernel sum and eager gaps come from the eager profile;
+  the residual is wall minus kernel sum. Up to 16384 it is 0.2-0.5 ms (0.3-0.8 us per op, dispatch).
+  At 32768 / 65536 it follows the clock: the profile is one forward at 1350 MHz, and the burst windows
+  run while AICLK falls **[I, as in the 13 x 10 baseline]**.
+- Host work per request (round trip minus replay + sync) is 0.05-0.34 ms up to 8192. From 16384 up
+  it is negative: the two are timed one after the other while the clock drifts, at N = 14 / 6 / 5 **[M; noise]**.
+- Eager op-to-op gaps fall from 12.5 ms at 128 to about 0.5 ms from 2048 up; trace removes them.
+
+## Host round trip, H2D, D2H at 12 x 10 (`EMBEDDING_GEMMA2_PREFILL_HOST=1`) [M]
+
+Mean ms; N is the round-trip count.
+
+| bucket | host prep | H2D (bytes) | D2H embedding | D2H last hidden (bytes) | round trip | replay + sync | N |
+|---|---|---|---|---|---|---|---|
+| 128 | 0.078 | 0.019 (9 KB) | 0.044 | 0.129 (0.2 MB) | 5.036 | 4.954 | 20 |
+| 256 | 0.083 | 0.017 (17 KB) | 0.042 | 0.128 (0.4 MB) | 6.035 | 5.952 | 20 |
+| 512 | 0.104 | 0.020 (35 KB) | 0.036 | 0.199 (0.8 MB) | 7.346 | 7.299 | 20 |
+| 1024 | 0.115 | 0.026 (70 KB) | 0.038 | 0.414 (1.6 MB) | 11.862 | 11.775 | 20 |
+| 2048 | 0.171 | 0.028 (139 KB) | 0.036 | 0.824 (3.1 MB) | 25.455 | 25.366 | 20 |
+| 4096 | 0.276 | 0.038 (279 KB) | 0.038 | 1.940 (6.3 MB) | 44.861 | 44.743 | 20 |
+| 8192 | 0.487 | 0.048 (557 KB) | 0.038 | 4.455 (12.6 MB) | 104.280 | 103.942 | 20 |
+| 16384 | 0.937 | 0.062 (1114 KB) | 0.037 | 12.235 (25.2 MB) | 226.930 | 228.205 | 14 |
+| 32768 | 1.793 | 0.099 (2228 KB) | 0.038 | 37.154 (50.3 MB) | 578.638 | 590.827 | 6 |
+| 65536 | 3.486 | 0.231 (4456 KB) | 0.043 | 116.022 (100.7 MB) | 1755.799 | 1783.646 | 5 |
+
+The customer output is the embedding (0.04 ms D2H). Round trip = H2D + replay + embedding readback.
+
+## Top three costs per bucket at 12 x 10 and owning stage [M]
+
+Device ms per op family from `profiles_12x10` (share of burst wall, family floor from the op table),
+grouping as in the 13 x 10 analysis (`e9/01r2b/scripts/analyze.py`, `analysis/r2b.json`):
+
+| bucket | 1 | 2 | 3 |
+|---|---|---|---|
+| 128 | RMSNorm 1.73 ms (35 %): 05-memory | matmul 1.41 ms (29 %): 03-matmul | rotary 0.60 ms (12 %): 04-attention / 05-memory |
+| 256 | RMSNorm 1.76 ms (30 %): 05-memory | matmul 1.46 ms (25 %): 03-matmul | SDPA 0.95 ms (16 %): 04-attention |
+| 512 | RMSNorm 1.84 ms (25 %): 05-memory | matmul 1.80 ms (25 %): 03-matmul | SDPA 1.49 ms (20 %): 04-attention |
+| 1024 | SDPA 3.05 ms (26 %): 04-attention | matmul 2.94 ms (25 %): 03-matmul | RMSNorm 2.06 ms (18 %): 05-memory |
+| 2048 | SDPA 8.66 ms (34 %): 04-attention (2 waves at q_chunk 64) | matmul 8.11 ms (32 %): 03-matmul (110-core 2D) | RMSNorm 2.57 ms (10 %): 05-memory |
+| 4096 | matmul 14.78 ms (33 %): 03-matmul (110-core 2D) | SDPA 11.83 ms (26 %): 04-attention | rotary 5.49 ms (12 %): 04-attention / 05-memory |
+| 8192 | SDPA 31.44 ms (30 %): 04-attention | matmul 31.29 ms (30 %): 03-matmul (gelu gate on `minimal_matmul`) | RMSNorm 11.69 ms (11 %): 05-memory |
+| 16384 | SDPA 79.90 ms (36 %): 04-attention | matmul 59.50 ms (26 %): 03-matmul | RMSNorm 22.17 ms (10 %): 05-memory |
+| 32768 | SDPA 242.14 ms (43 %): 04-attention | matmul 123.90 ms (22 %): 03-matmul | mask build 58.33 ms (10 %): 02-topology / 05-memory |
+| 65536 | SDPA 893.60 ms (52 %): 04-attention | matmul 250.43 ms (15 %): 03-matmul | mask build 242.01 ms (14 %): 02-topology / 05-memory |
+
+The traced dispatch residual is never in the top three (<= 7.0 % of wall).
+
+## Roofline (roofline session, not duplicated here)
+
+Model, method and tables: `/local/ttuser/gtobar/tt-ops/runs/embeddinggemma-2/roofline/` (`README.md`,
+`roofline.py`, `out/table_text.md`, page linked in its README). The % of roofline column uses
+`out/roofline_sdpa_nofp32acc.json` (sha256 `58935ff3ee4f...`, written 12:19:26, read unchanged after the
+runs): roofline = max(FPU, SFPU, DRAM) for the text tower at 120 cores and 1.35 GHz, cold, every
+activation on chip (optimistic from 16384, where activations exceed L1). "+SFPU" serializes the SFPU
+term. The op-table floor in `profiles_12x10` is a separate, simpler model (per op, padded tensors
+once); the headline uses the roofline session's number.
+
+## Known open item (not fixed here)
+
+The E5a fallback text precision (`baseline_precision_config.json`) crashes at 12 x 10 in multi-bucket
+device sessions <= 8192 (static CBs clash with L1 buffers at the 1 x 4096 full-attention SDPA).
+Stage 5 owns it (`target_contract.json` `accuracy.open_items.baseline_precision_12x10`). The default
+`sdpa_nofp32acc` is not affected (sweep: buckets <= 8192 in one session, 40 passed).
+
+# Superseded geometry: stage 1 at 13 x 10 with `p3_qkv_gu` (2026-10-28 morning)
+
+Everything below was measured on the P150a's full 13 x 10 grid (130 cores) with the earlier text
+precision `p3_qkv_gu`. It is not comparable with the 12 x 10 contract numbers above (other grid,
+other precision). Kept as measured; the harness and telemetry sections still describe the harness.
 
 ## Headline (latency_ms per traced warmed forward)
 

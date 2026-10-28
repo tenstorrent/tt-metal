@@ -10,6 +10,8 @@
 --timing: the records of the timed sweep (burst, host, sustained, and its own gate rows); --gate:
 optional extra gate records (e.g. the run with TT_METAL_TRACE_ALLOC_TRACKING=1). The last record per
 (shape, phase) wins within a file. --tables: a directory with b1_s<bucket>.json from prefill_op_table.py.
+--superseded KEY=PATH embeds an earlier summary unchanged under KEY (E9.1-r2b: the 13 x 10 stage-1
+summary under `superseded_13x10_p3_qkv_gu`, the 12 x 10 re-baseline at the top level).
 """
 
 from __future__ import annotations
@@ -138,11 +140,26 @@ def main():
     ap.add_argument("--tables", type=Path)
     ap.add_argument("--stage", required=True)
     ap.add_argument("--commit", default="")
-    ap.add_argument("--extra", type=Path, help="json with hardware / named_limitations")
+    ap.add_argument("--extra", type=Path, help="json with hardware / named_limitations (and any other top-level keys)")
+    ap.add_argument(
+        "--superseded",
+        action="append",
+        default=[],
+        metavar="KEY=PATH",
+        help="embed an earlier perf_summary.json unchanged under KEY (e.g. a superseded geometry); repeatable",
+    )
     ap.add_argument("--out", type=Path, required=True)
     a = ap.parse_args()
     extra = json.loads(a.extra.read_text()) if a.extra else {}
     s = summarize(a.timing, a.gate, a.tables, a.stage, a.commit, extra)
+    for k, v in extra.items():  # e.g. compute_grid, precision_config, controls, roofline (added as-is)
+        if k not in ("hardware", "named_limitations") and k not in s:
+            s[k] = v
+    for item in a.superseded:
+        key, _, path = item.partition("=")
+        if not key or not path:
+            ap.error(f"--superseded wants KEY=PATH, got {item!r}")
+        s[key] = json.loads(Path(path).read_text())
     a.out.write_text(json.dumps(s, indent=1) + "\n")
     print(json.dumps({k: v.get("latency_ms_headline") for k, v in s["shapes"].items()}, indent=1))
 
