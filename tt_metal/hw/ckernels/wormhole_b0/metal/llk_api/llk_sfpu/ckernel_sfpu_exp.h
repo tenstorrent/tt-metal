@@ -311,6 +311,9 @@ sfpi_inline sfpi::vFloat _sfpu_exp_fp32_accurate_base2_(sfpi::vFloat x) {
  *   - LREG14 = c1    (sfpi::vConstFloatPrgm2)  — poly coeff 7.839635e-08f
  *   - ADDR_MOD_6 = {dest.incr = SFP_DESTREG_STRIDE}: each row's SFPSTORE advances
  *     the destination by one SFPU row, in place of a separate TTI_INCRWC per pair.
+ *     An init that writes ADDR_MOD_6 with another increment (square, topk, SFPU
+ *     reduce, a throttled matmul) must be followed by exp_init / exp2_init again
+ *     before this body runs; inits that program the same increment of 2 are compatible.
  *
  * exp2 runs the same body (exp2_init programs LREG12-14 and ADDR_MOD_6) with LREG12 = 1.0f
  * (x * 1 + 127 == x + 127 exactly) and FP32_C0 set, which loads c0 as the fp32
