@@ -164,6 +164,7 @@ def mesh_cache_root() -> Path | None:
 # ------------------------------------------------------------------------------------------- outputs
 
 
+COMPILE_CHECK_ENV = "GLM53_VLLM_COMPILE_CHECK"  # "1" (default): seal the program cache after the last capture
 MEM_LOG_ENV = "GLM53_VLLM_MEM_LOG"  # "1": log the DRAM allocator's state after every eager prefill device chunk
 
 
@@ -571,6 +572,19 @@ class GLM53FlashForCausalLM:
             logger.info(f"GLM53 vLLM: decode trace captured in {time.perf_counter() - t0:.1f} s ({U} slots)")
         self.tt_supported_decode_batch_sizes = (self.geometry.request_capacity,)
         self._decode_warmup_complete = True
+        self._seal_program_cache()
+
+    def _seal_program_cache(self) -> None:
+        """After the last capture no program may be built: a request-time compile allocates its kernel binaries
+        on the device under live traces (the 2026-10-27/28 served hangs, every one at the first op whose kernel
+        variant the warm-up had not built). With ``GLM53_VLLM_COMPILE_CHECK=1`` (default) the device forbids
+        program-cache misses from here on, so such a request fails with the op's name ("program cache miss
+        occurred, but cache misses are forbidden") instead of hanging the mesh."""
+        if os.environ.get(COMPILE_CHECK_ENV, "1") != "1":
+            return
+        dev = _mesh_device_of(self.model)
+        dev.set_program_cache_misses_allowed(False)
+        logger.info(f"GLM53 vLLM: program cache sealed after the captures ({dev.num_program_cache_entries()} programs)")
 
     def _warmup_prefill_lengths(self) -> list[int]:
         """``GLM53_VLLM_WARMUP_PREFILL``: comma-separated prompt lengths the eager warm-up walks (default ``128``:

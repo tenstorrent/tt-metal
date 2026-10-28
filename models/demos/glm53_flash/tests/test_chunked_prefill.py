@@ -40,7 +40,7 @@ from models.demos.glm53_flash.tt.functional_decoder import (
     device_streams_to_host,
     host_streams_to_device,
 )
-from models.demos.glm53_flash.tt.indexer import TtDSAIndexer, TtIndexCache
+from models.demos.glm53_flash.tt.indexer import STATIC_PREFILL_ENV, TtDSAIndexer, TtIndexCache
 
 REF = Path("bringup/references/glm53_flash")
 PCC_BAR = 0.995
@@ -307,3 +307,49 @@ def test_indexer_maintain_prefill_offsets(mesh_device):
     user0_after = ttnn.to_torch(cache.pools_batched())[0, 0, :17].float()
     assert torch.equal(user0_before, user0_after), "user 0's pools changed"
     logger.info("  user 0's pools untouched by user 1's chunked maintenance")
+
+
+@pytest.mark.parametrize("mesh_device", [(1, 1)], indirect=True)
+def test_indexer_static_maintenance_matches_offset_path(mesh_device, monkeypatch):
+    """The shape-static eager maintenance (an aligned chunk padded to a multiple of 128 rows: every op shape
+    depends on the padded length only, like the traced path) writes the same complete pools and ring rows as
+    the offset path for a prompt whose length is not a multiple of the pool (286 = 71 pools + 2 tail rows, the
+    served image prompt that hung the mesh on 2026-10-28), and matches the host reference."""
+    layer_idx = 3
+    snapshot = default_snapshot_dir()
+    cfg = GLM53FlashConfig.from_hf_config_json(snapshot / "config.json")
+    P, D = cfg.index_kpool, cfg.index_head_dim
+    keep = lambda n: n.startswith("self_attn.indexer.") or n.startswith("hc_attn") or n == "input_layernorm.weight"
+    raw = load_layer_raw(snapshot, layer_idx, shard_headers(snapshot), name_filter=keep)
+    idx = TtDSAIndexer(mesh_device, cfg, {k[len("self_attn.indexer.") :]: v for k, v in raw.items() if "indexer." in k})
+    cache = TtIndexCache(mesh_device, cfg, max_batch=2, max_seq_len=512)
+    x_streams = torch.load(REF / "R2040" / f"layer{layer_idx}_prefill.pt")["x_in"]
+    S, T_pad = 286, 512
+    x_all = _attention_input(raw, cfg, x_streams[:, :S])
+    k_ref, g_ref, ape = _hf_index_stems(raw, cfg, x_all)
+    pools_ref = _hf_pool(k_ref, g_ref, ape, P)  # [71, D]
+    n_complete, tail = S // P, S % P
+    xp = torch.zeros(1, 1, T_pad, cfg.hidden_size, dtype=torch.bfloat16)
+    xp[0, 0, :S] = x_all
+    chunk = lambda: ttnn.from_torch(xp, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
+
+    monkeypatch.setenv(STATIC_PREFILL_ENV, "0")
+    idx.maintain_prefill(chunk(), cache, user=0, seq_len=S)  # the offset path into user 0
+    assert idx.static_maintenance_calls == 0
+    monkeypatch.setenv(STATIC_PREFILL_ENV, "1")
+    idx.maintain_prefill(chunk(), cache, user=1, seq_len=S)  # the static path into user 1
+    assert idx.static_maintenance_calls == 1
+
+    pools = ttnn.to_torch(cache.pools_batched()).float()
+    rk, rg = ttnn.to_torch(cache.ring_k).float(), ttnn.to_torch(cache.ring_g).float()
+    worst_ref = min(pcc(pools_ref[i], pools[1, 0, i]) for i in range(n_complete))
+    same_pools = torch.equal(pools[0, 0, :n_complete], pools[1, 0, :n_complete])
+    same_ring = torch.equal(rk[0, 0, :tail], rk[1, 0, :tail]) and torch.equal(rg[0, 0, :tail], rg[1, 0, :tail])
+    p_ring = min(pcc(k_ref[n_complete * P : S], rk[1, 0, :tail]), pcc(g_ref[n_complete * P : S], rg[1, 0, :tail]))
+    logger.info(
+        f"  static vs offset maintenance of {S} tokens: {n_complete} complete pools "
+        f"{'bit-identical' if same_pools else 'differ'} (worst row pcc vs HF {worst_ref:.5f}); ring tail {tail} rows "
+        f"{'bit-identical' if same_ring else 'differ'} (pcc vs HF {p_ring:.5f})"
+    )
+    assert worst_ref > 0.98 and p_ring > 0.99
+    assert same_pools and same_ring, "the static maintenance must reproduce the offset path's writes"

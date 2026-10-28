@@ -45,6 +45,7 @@ import torch
 
 import ttnn
 from models.demos.deepseek_v3_d_p.tt.kda.kda import KdaState
+from models.demos.glm53_flash.tt.indexer import ring_selector
 from models.demos.glm53_flash.tt.mesh import GLMMesh
 from models.demos.glm53_flash.tt.moe import pad_row_mask_host
 
@@ -258,15 +259,9 @@ class PrefillTraceInputs:
     # ---- host values
     @staticmethod
     def ring_selector(S: int, T: int) -> torch.Tensor:
-        """[1,1,32,T]: row j < 4 selects the last prompt position p <= S-1 with p % 4 == j (a zero row when the
-        prompt has no such position: that ring slot then holds zeros, harmless because the pool it belongs to is
-        incomplete until decode rewrites the slot)."""
-        sel = torch.zeros(1, 1, TILE, T)
-        for j in range(RING_ROWS):
-            p = S - 1 - ((S - 1 - j) % RING_ROWS)
-            if p >= 0:
-                sel[0, 0, j, p] = 1.0
-        return sel
+        """[1,1,32,T]: row j < 4 selects the last prompt position p <= S-1 with p % 4 == j (``indexer.ring_selector``:
+        shared with the eager shape-static maintenance)."""
+        return ring_selector(S, T, RING_ROWS)
 
     def owner_row(self, S: int) -> int:
         """The mesh row whose slab holds the prompt's last token."""

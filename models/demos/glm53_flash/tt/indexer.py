@@ -44,6 +44,23 @@ from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.matmul_configs import prefill_linear
 
 TILE = 32
+STATIC_PREFILL_ENV = "GLM53_INDEX_STATIC_PREFILL"  # "1" (default): shape-static eager maintenance of aligned chunks
+
+
+def ring_selector(S: int, T: int, P: int = 4) -> torch.Tensor:
+    """``[1,1,32,T]`` one-hot selector of a chunk's ring rows: row ``j < P`` selects the last chunk position
+    ``p <= S-1`` with ``p % P == j`` (a zero row when the chunk has no such position: that ring slot then holds
+    zeros, harmless because its pool is incomplete until decode rewrites the slot); rows ``>= P`` are zero.
+    Applied as an exact matmul over the index stems ``[1,1,T,D]`` it yields the ring block ``[1,1,32,D]`` in one
+    program whose shape depends on ``T`` only (the traced prefill's tail write, and the eager static maintenance)."""
+    sel = torch.zeros(1, 1, TILE, T)
+    for j in range(P):
+        p = S - 1 - ((S - 1 - j) % P)
+        if p >= 0:
+            sel[0, 0, j, p] = 1.0
+    return sel
+
+
 SENTINEL = 0xFFFFFFFF
 DECODE_SCORE_SLACK = 8  # pools per user hidden by the traced decode scorer's fixed chunk start (TILE // index_kpool)
 # pooled-key cache dtype: bf16 (default) or bfp8_b (GLM53_POOL_DTYPE=bfloat8_b: halves the decode scorer's read,
@@ -303,6 +320,13 @@ class TtIndexCache:
             if self.scratch is not None:
                 ttnn.experimental.paged_fill_cache(ring, tile, self.ring_page_table, batch_idx_tensor=slot.scratch_idx)
 
+    def write_ring_block_user(self, k_tile: ttnn.Tensor, g_tile: ttnn.Tensor, user: int):
+        """``write_ring_block`` for a host-side ``user``: the ring block(s) a prefill of that user writes
+        (``prefill_ring_tables``: its own block, or the owner / scratch blocks per chip when partitioned)."""
+        for pt in self.prefill_ring_tables(user):
+            for ring, tile in ((self.ring_k, k_tile), (self.ring_g, g_tile)):
+                ttnn.experimental.paged_fill_cache(ring, tile, pt, batch_idx=0)
+
     def rings(self) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         """Rows 0..P-1 of every decode user's rings: ([B,1,P,D], [B,1,P,D]), B = the local users."""
         B = self.users_per_chip
@@ -338,6 +362,7 @@ class TtDSAIndexer(LightweightModule):
         )  # [1,1,P,D]
         self.hifi2 = _compute(device, ttnn.MathFidelity.HiFi2, packer_l1_acc=True)
         self.fp32 = _compute(device)
+        self.static_maintenance_calls = 0  # eager chunks that took the shape-static path (tests)
         self.score_cfg = ttnn.IndexerScoreProgramConfig(q_chunk_size=32, k_chunk_size=32, head_group_size=0)
         self._grid = device.compute_with_storage_grid_size()
         self._mesh_rows = tuple(device.shape)[0] if isinstance(device, ttnn.MeshDevice) else 1
@@ -462,6 +487,21 @@ class TtDSAIndexer(LightweightModule):
             for t in (k_idx, g_idx, k_tile, g_tile):
                 ttnn.deallocate(t)
             return
+        T = k_idx.shape[-2]
+        if (
+            os.environ.get(STATIC_PREFILL_ENV, "1") == "1"
+            and start % (TILE * P) == 0
+            and T % (TILE * P) == 0
+            and start // P + T // P <= cache.pools_per_user
+        ):
+            # Shape-static maintenance (every served chunk: starts at a multiple of 32*P, padded to a warmed bucket).
+            # The offset path below pools only the complete pools: it slices the stems to lead + n_pools*P rows and
+            # reshapes THAT, a kernel variant per prompt length (% P) that is built at request time, after the trace
+            # captures (the 2026-10-28 served image hang: tt-triage = reader/writer_reshape_tiled stuck on every
+            # chip at the first 286-token request, the warm-up prompt being 288). Here every op's shape depends on
+            # T only, exactly like the traced maintenance.
+            self._maintain_static(cache, user, k_idx, g_idx, seq_len, start)
+            return
         end = start + seq_len
         r = start % P  # rows of pool start // P already in the ring
         lead = min((P - r) % P, seq_len)  # this chunk's rows of that straddling pool
@@ -502,6 +542,28 @@ class TtDSAIndexer(LightweightModule):
         self._write_tail_rows(cache, user, k_idx, g_idx, row0=lead + n_pools * P, n=tail, slot0=0)
         ttnn.deallocate(k_idx)
         ttnn.deallocate(g_idx)
+
+    def _maintain_static(self, cache: TtIndexCache, user: int, k_idx, g_idx, seq_len: int, start: int):
+        """The traced path's maintenance with host-side ``user`` / ``seq_len`` (``start % 128 == 0``, ``T_pad % 128
+        == 0``): every pool of the padded chunk is written from pool ``start // P`` on (the pools past the prompt
+        are rewritten from the ring by decode before they become selectable: pool p is selectable only once
+        position 4p+3 was decoded) and the ring block gets the chunk's last row of each ``% P`` class through the
+        host-built one-hot selector (a buffer upload, no program) and an exact matmul."""
+        P = self.P
+        T = k_idx.shape[-2]
+        pooled = self.pool(k_idx, g_idx)  # [1,1,T/P,D]
+        cache.write_pools(pooled, user, start_pool=start // P)
+        ttnn.deallocate(pooled)
+        sel = ring_selector(seq_len, T, P)
+        sel_dev = (
+            self.mesh.upload(sel, ttnn.bfloat16) if self.mesh is not None else _upload(self.device, sel, ttnn.bfloat16)
+        )
+        k_tile = ttnn.matmul(sel_dev, k_idx, dtype=ttnn.bfloat16, compute_kernel_config=self.fp32)  # [1,1,32,D]
+        g_tile = ttnn.matmul(sel_dev, g_idx, dtype=ttnn.bfloat16, compute_kernel_config=self.fp32)
+        cache.write_ring_block_user(k_tile, g_tile, user)
+        for t in (sel_dev, k_idx, g_idx, k_tile, g_tile):
+            ttnn.deallocate(t)
+        self.static_maintenance_calls += 1
 
     def _write_tail_rows(self, cache: TtIndexCache, user: int, k_idx, g_idx, *, row0: int, n: int, slot0: int):
         """Chunk rows row0 .. row0+n-1 -> ring block of ``user``, slots slot0 .. slot0+n-1, written ONE
