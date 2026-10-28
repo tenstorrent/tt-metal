@@ -170,8 +170,10 @@ inline void calculate_tangent() {
     const float P0 = -0x1.92p+0f;   // representable as bf16
     const float P1 = -0x1.fbp-12f;  // representable as fp16
 
-    // Hoisted out of the loop: tan leaves an LReg free, so the bias is loaded once per
-    // call instead of once per row.
+    // Hoisted out of the loop, so the bias is loaded once per call instead of once per row.
+    // In the fp32 path it stays live through sfpu_tan's v_if, so the allocator copies the
+    // pole-branch result with an SFPMOV; that copy fills an existing NOP slot, so the hoist
+    // still saves one issue slot per row there too.
     const sfpi::vFloat rounding_bias = sfpi::sFloat16b(0x1.8p23f);
 
     for (int d = 0; d < ITERATIONS; d++) {
