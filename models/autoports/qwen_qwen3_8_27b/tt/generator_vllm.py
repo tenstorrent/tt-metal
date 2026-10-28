@@ -12,6 +12,7 @@ from .generator import Generator
 from .model import Model
 from .optimized_decoder import PagedState
 from .checkpoint_path import serving_checkpoint
+from .prefill_geometry import physical_prefill_chunk_size
 
 
 class Qwen38ForCausalLM:
@@ -157,18 +158,20 @@ class Qwen38ForCausalLM:
                 states.append(PagedState(allocate(), allocate()))
         self.kv_cache = states
         width = ((self.context_length + 255) // 256) * 8
-        physical_prefill_chunk_size=1024 if self.batch_size>16 else 4096
+        scheduler_block=None
         if getattr(self,'cache_groups',None):
             # Hybrid cache groups are set before this allocation; state_pool is
             # created afterwards. Prefill always splits at checkpoint boundaries,
             # so larger buckets are unreachable and needlessly reserve/warm DRAM.
-            physical_prefill_chunk_size=min(physical_prefill_chunk_size,self.scheduler_block_size)
+            scheduler_block=self.scheduler_block_size
+        prefill_chunk_size=physical_prefill_chunk_size(self.batch_size,scheduler_block,
+            cap=os.environ.get('QWEN38_PREFILL_CHUNK_CAP'))
         self.generator = Generator(self.model, self.checkpoint,
             batch_size=self.batch_size, context_length=self.context_length,
             kv_cache=states, page_table=torch.zeros(self.batch_size, width, dtype=torch.int32),
             # B32 prefix snapshots leave insufficient scratch for4096 rows;
             # measured OOM at1280. Internal chunks preserve logical context.
-            serving_state=True,prefill_chunk_size=physical_prefill_chunk_size)
+            serving_state=True,prefill_chunk_size=prefill_chunk_size)
         return states
 
     def warmup_model_prefill(self, *, kv_cache, **kwargs):

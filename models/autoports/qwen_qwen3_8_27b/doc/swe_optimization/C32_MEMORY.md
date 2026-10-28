@@ -96,7 +96,12 @@ screen, not a scheduler simulation, retention guarantee or scored result.
    logical context and exact scheduler save/restore boundaries. Test scratch
    and trace preparation independently of larger checkpoint spacing. Current
    B32 warmup can use1024-token physical chunks; retaining512 may avoid extra
-   scratch and reuse the validated flat geometry, but requires explicit testing.
+   scratch and reuse the validated flat geometry. The optional
+   `QWEN38_PREFILL_CHUNK_CAP=512` now prepares this path without changing default
+   policy or logical context. It requires a new source overlay; the existing
+   immutable image does not implement this flag. Only CPU policy checks have
+   run: native and exact0.30 serving save/restore, lifecycle, quality and latency
+   validation remain required before selection.
 3. **Group-exclusive union backing.** Existing shared pools already reuse storage
    across the three recurrent groups. Investigate including attention in the
    same ownership rule. Two page-aligned raw K/V carriers would reserve the
