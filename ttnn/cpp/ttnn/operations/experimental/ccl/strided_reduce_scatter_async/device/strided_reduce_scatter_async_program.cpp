@@ -355,8 +355,9 @@ StridedReduceScatterProgramArtifacts build_ring_strided_reduce_scatter_async_pro
         chunk_width_in_mm_blocks.value_or(tt::div_up(mm_N_full_block_wt_val, mm_block_wt_val));
     const uint32_t chunk_width_in_tiles_val = chunk_width_in_mm_blocks_val * mm_block_wt_val;
     TT_FATAL(
-        chunk_width_in_tiles_val > 0,
-        "strided_reduce_scatter_async: chunk width must be > 0 (chunk_width_in_mm_blocks={}, mm_N_full_block_wt={})",
+        chunk_width_in_tiles_val > 0 && mm_N_full_block_wt_val > 0,
+        "strided_reduce_scatter_async: chunk width and mm_N_full_block_wt must be > 0 (chunk_width_in_mm_blocks={}, "
+        "mm_N_full_block_wt={})",
         chunk_width_in_mm_blocks_val,
         mm_N_full_block_wt_val);
     TT_FATAL(
