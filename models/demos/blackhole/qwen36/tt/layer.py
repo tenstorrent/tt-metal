@@ -258,6 +258,7 @@ class Qwen36DecoderLayer:
             )
         if _dar is not None:
             attn_input = _dar.rms_norm(x, self.attention_norm.norm)
+            _dar.arm_residual(x)  # QWEN36_DECODE_AR_FUSE_RESIDUAL=1: the out-proj all_reduce adds x (no-op off)
         else:
             attn_input = self.attention_norm(x, mode=_norm_mode, norm_config=_attn_norm_config)
 
@@ -359,19 +360,22 @@ class Qwen36DecoderLayer:
             # The KV write is the whole effect; the residual, ffn_norm and MLP only fed an output nobody reads.
             return None
 
-        h = _dar.add(x, attn_output) if _dar is not None else ttnn.add(x, attn_output)
-        ttnn.deallocate(attn_output)
+        h = _dar.add_residual(x, attn_output) if _dar is not None else ttnn.add(x, attn_output)
+        if h is not attn_output:  # fused (QWEN36_DECODE_AR_FUSE_RESIDUAL=1): h is the all_reduce output itself
+            ttnn.deallocate(attn_output)
 
         if _dar is not None:
             ff_input = _dar.rms_norm(h, self.ffn_norm.norm)
+            _dar.arm_residual(h)  # QWEN36_DECODE_AR_FUSE_RESIDUAL=1: the down-proj all_reduce adds h (no-op off)
         else:
             ff_input = self.ffn_norm(h, mode=_norm_mode, norm_config=_ff_norm_config)
 
         ff_output = self.feed_forward.forward(ff_input, mode=mode, **_dar_kw)
         ttnn.deallocate(ff_input)
 
-        output = _dar.add(h, ff_output) if _dar is not None else ttnn.add(h, ff_output)
+        output = _dar.add_residual(h, ff_output) if _dar is not None else ttnn.add(h, ff_output)
         ttnn.deallocate(h)
-        ttnn.deallocate(ff_output)
+        if output is not ff_output:
+            ttnn.deallocate(ff_output)
 
         return output

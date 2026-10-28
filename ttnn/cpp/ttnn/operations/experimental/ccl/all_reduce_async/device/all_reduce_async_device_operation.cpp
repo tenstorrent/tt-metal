@@ -71,6 +71,33 @@ void AllReduceAsyncDeviceOperation::validate_on_program_cache_miss(
         "has {}",
         output_shard_shape_volume * args.ring_size,
         buffer_shard_shape_volume);
+
+    if (tensor_args.residual_tensor.has_value()) {
+        const auto& residual = tensor_args.residual_tensor.value();
+        TT_FATAL(residual.storage_type() == StorageType::DEVICE, "Fused residual of all_reduce needs to be on device!");
+        TT_FATAL(residual.buffer() != nullptr, "Fused residual of all_reduce needs to be allocated on device!");
+        TT_FATAL(residual.layout() == Layout::TILE, "Fused residual of all_reduce must be in TILE layout");
+        TT_FATAL(
+            residual.dtype() == input_tensor.dtype(),
+            "Fused residual dtype {} must match the input dtype {} (it is unpacked with the reduction CB format)",
+            residual.dtype(),
+            input_tensor.dtype());
+        TT_FATAL(
+            residual.padded_shape() == input_tensor.padded_shape(),
+            "Fused residual padded shape {} must match the input padded shape {}",
+            residual.padded_shape(),
+            input_tensor.padded_shape());
+        TT_FATAL(
+            residual.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED &&
+                residual.memory_config().buffer_type() == BufferType::L1,
+            "Fused residual must be L1 WIDTH_SHARDED, got {}",
+            residual.memory_config());
+        TT_FATAL(
+            residual.memory_config().shard_spec() == args.output_mem_config.shard_spec(),
+            "Fused residual memory config {} must have the output's shard spec {} (read in place on the output cores)",
+            residual.memory_config(),
+            args.output_mem_config);
+    }
 }
 
 AllReduceAsyncDeviceOperation::spec_return_value_t AllReduceAsyncDeviceOperation::compute_output_specs(
@@ -265,7 +292,8 @@ ttnn::experimental::prim::AllReduceAsyncDeviceOperation::tensor_return_value_t a
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     bool use_noc1_only,
     bool use_optimal_ccl_for_llama,
-    bool fp32_dest_acc) {
+    bool fp32_dest_acc,
+    const std::optional<Tensor>& residual_tensor) {
     using OperationType = ttnn::experimental::prim::AllReduceAsyncDeviceOperation;
     const auto& mesh_view = mesh_device.get_view();
     TT_FATAL(
@@ -285,7 +313,8 @@ ttnn::experimental::prim::AllReduceAsyncDeviceOperation::tensor_return_value_t a
         cluster_axis,
         &mesh_device,
         fp32_dest_acc);
-    auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor, .buffer_tensor = buffer_tensor};
+    auto tensor_args = OperationType::tensor_args_t{
+        .input_tensor = input_tensor, .buffer_tensor = buffer_tensor, .residual_tensor = residual_tensor};
 
     return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
