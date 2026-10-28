@@ -277,9 +277,11 @@ class TtDecoderLayer(LightweightModule):
             if self.is_kda:
                 start_t = actual_start if actual_start is not None else self.attn.chrono_scalar(start, "start")
                 end = actual_end
-                # the exclusive global valid end; a chunk at start > 0 always carries it so the kernels'
-                # chronology is the clipped interval [start, start + seq_len) (derive_interval)
-                if end is None and (seq_len != T or start):
+                # the exclusive global valid end, ALWAYS carried (a full first chunk included: end == T clips
+                # nothing): the conv kernel is a different program with and without the bound (has_actual_end
+                # is a compile-time define), and a chunk shape first seen without it after the captures compiled
+                # at request time under live traces (the 2026-10-28 served APC seal hit)
+                if end is None:
                     end = self.attn.chrono_scalar(start + seq_len, "end")
                 T_loc = h.shape[-2]
                 y, new_state.kda = self.attn.prefill_forward(
