@@ -13,7 +13,8 @@
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
-// Device-profiler zones around the writer's waits (TT_SPARSE_STEP_PROFILE=1 under TT_METAL_DEVICE_PROFILER=1).
+// Device-profiler zones around the writer's waits (when built with SPARSE_STEP_PROFILE, under
+// TT_METAL_DEVICE_PROFILER=1).
 #if defined(PROFILE_KERNEL) && defined(SPARSE_STEP_PROFILE)
 #define SPARSE_ZONE(name) DeviceZoneScopedN(name)
 #else

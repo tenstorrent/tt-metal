@@ -17,8 +17,9 @@
 #include "fused_op_receiver.hpp"
 #include "ring_utils.hpp"
 
-// Device-profiler zones around the reader's waits (TT_SPARSE_STEP_PROFILE=1 under TT_METAL_DEVICE_PROFILER=1), so a
-// stall shows up as a long RD_* zone on the core that waits instead of as a gap in the compute zones.
+// Device-profiler zones around the reader's waits (when built with SPARSE_STEP_PROFILE, under
+// TT_METAL_DEVICE_PROFILER=1), so a stall shows up as a long RD_* zone on the core that waits instead of as a gap in
+// the compute zones.
 #if defined(PROFILE_KERNEL) && defined(SPARSE_STEP_PROFILE)
 #define SPARSE_ZONE(name) DeviceZoneScopedN(name)
 #else
@@ -197,8 +198,8 @@ void kernel_main() {
     constexpr uint32_t cb_v_in = get_compile_time_arg_val(cb_arg_offset + 2);
 
     const uint32_t mask_addr = get_arg_val<uint32_t>(sparse_args_base + 0);
-    const uint32_t pooled_k_addr = get_arg_val<uint32_t>(sparse_args_base + 1);
-    const uint32_t pooled_v_addr = get_arg_val<uint32_t>(sparse_args_base + 2);
+    [[maybe_unused]] const uint32_t pooled_k_addr = get_arg_val<uint32_t>(sparse_args_base + 1);
+    [[maybe_unused]] const uint32_t pooled_v_addr = get_arg_val<uint32_t>(sparse_args_base + 2);
     // +3: bias tensor address slot (the bias is generated). +4: head chain member count, +5: this core's first Q
     // chunk in the chain. Then the packed bf16 bias-per-token-count table (pooled_bias_gen::kTableWords words), the
     // members (start, count) and the head group's delivery arguments.
@@ -215,6 +216,9 @@ void kernel_main() {
     constexpr uint32_t mask_row_bytes = get_named_compile_time_arg_val("mask_row_bytes");
     constexpr uint32_t cb_sparse_plan = get_named_compile_time_arg_val("cb_sparse_plan");
     constexpr uint32_t cb_pooled_bias = get_named_compile_time_arg_val("cb_pooled_bias");
+    // The pooled route (Sol-Attn's correction for the dropped blocks): pooled K/V entries and their column bias on
+    // each pass's first active ring iteration. Off: kept blocks only, the pooled accessors are null and unused.
+    constexpr bool pooled_route = get_named_compile_time_arg_val("pooled_route") == 1;
     // Words of per-shard kept-block bits in every plan record (block-form mask).
     constexpr uint32_t plan_block_words = get_named_compile_time_arg_val("plan_block_words");
     static_assert(plan_block_words * 32 >= mask_nb, "block words cover the shard");
@@ -358,13 +362,9 @@ void kernel_main() {
     const auto gathered_v_input_tile_logical = TensorTileShape(B, NHV, gathered_padded_Nt, v_row_Wt);
     const auto local_v_generator = PaddedAddrGenerator(local_v_reader, input_v_tile_logical);
     const auto gathered_v_generator = PaddedAddrGenerator(gathered_v_reader, gathered_v_input_tile_logical);
-    // Sparse sources: pooled K/V [1, NH, n_blocks_pad, DH] tiles, mask [1, NH, nqc_pad, n_blocks_pad] uint32
-    // row-major (one page per row).
+    // Sparse sources: mask [1, NH, nqc_pad, n_blocks_pad] uint32 row-major (one page per row); pooled K/V
+    // [1, NH, n_blocks_pad, DH] tiles (pooled route only, their readers are built where they are used).
     const auto mask_reader = TensorAccessor(mask_args, mask_addr);
-    const auto pooled_k_generator = PaddedAddrGenerator(
-        TensorAccessor(pooled_k_args, pooled_k_addr), TensorTileShape(1, NH, mask_n_blocks_pad / 32, DHt));
-    const auto pooled_v_generator = PaddedAddrGenerator(
-        TensorAccessor(pooled_v_args, pooled_v_addr), TensorTileShape(1, NH, mask_n_blocks_pad / 32, vDHt));
     // Pooled chunks are consumed on the first active ring iteration of every pass.
     bool pooled_pending = true;
     // Block b of shard s can be exact only if it is a FULL block (partial shard / logical_n tails are always
@@ -464,7 +464,7 @@ void kernel_main() {
                 continue;
             }
 
-            const uint32_t do_pooled = pooled_pending ? 1u : 0u;
+            const uint32_t do_pooled = (pooled_route && pooled_pending) ? 1u : 0u;
             // One pass of each K/V piece per ring iteration, applied by compute to every resident Q chunk
             // (sdpa_ring_resident). This reader:
             //   1. on the pass's first active iteration reads the pass's Q chunks into cb_q_in, once for the pass;
@@ -964,82 +964,91 @@ void kernel_main() {
                     }
                 }
             }
-            // 4. Pooled chunks, once per head, then one bias row per resident chunk of the head.
-            if (do_pooled) {
-                SPARSE_ZONE("RD_RES_POOLED");
-                if constexpr (plan_rec_base != 0) {
-                    // The row reads below fill the whole scratch, records included: take the page back first,
-                    // which waits until compute has popped (read) this iteration's plan. Short iterations
-                    // can push every piece before compute starts. The next iteration's reserve returns it.
-                    cb_plan.reserve_back(1);
-                    scratch = cb_plan.get_write_ptr() + 64;
-                }
-                constexpr uint32_t pooled_rows_t = mask_n_blocks_pad / 32;
-                const pooled_bias_gen::Geometry geo{kv_local_padded_Nt * 32, logical_n_tokens, mask_nb, mask_nb_pad};
-                for (uint32_t i0 = 0; i0 < n_res;) {
-                    uint32_t i1 = i0;
-                    while (i1 < n_res && res_nq[i1] == res_nq[i0]) {
-                        ++i1;
+            // 4. Pooled chunks, once per head, then one bias row per resident chunk of the head (pooled route only).
+            if constexpr (pooled_route) {
+                if (do_pooled) {
+                    const auto pooled_k_generator = PaddedAddrGenerator(
+                        TensorAccessor(pooled_k_args, pooled_k_addr),
+                        TensorTileShape(1, NH, mask_n_blocks_pad / 32, DHt));
+                    const auto pooled_v_generator = PaddedAddrGenerator(
+                        TensorAccessor(pooled_v_args, pooled_v_addr),
+                        TensorTileShape(1, NH, mask_n_blocks_pad / 32, vDHt));
+                    SPARSE_ZONE("RD_RES_POOLED");
+                    if constexpr (plan_rec_base != 0) {
+                        // The row reads below fill the whole scratch, records included: take the page back first,
+                        // which waits until compute has popped (read) this iteration's plan. Short iterations
+                        // can push every piece before compute starts. The next iteration's reserve returns it.
+                        cb_plan.reserve_back(1);
+                        scratch = cb_plan.get_write_ptr() + 64;
                     }
-                    const uint32_t nq = res_nq[i0];
-                    for (uint32_t pc = 0; pc < pooled_chunks; ++pc) {
-                        const uint32_t tiles = pc + 1 == pooled_chunks ? pooled_last_tiles : Sk_chunk_t;
-                        const uint32_t row0 = pc * Sk_chunk_t;
-                        CircularBuffer cb_k(cb_k_in);
-                        cb_k.reserve_back(k_chunk_tiles);
-                        pooled_k_generator.issue_reads(
-                            Slice(0, nq, row0, row0 + tiles, 0, DHt),
-                            pooled_rows_t,
-                            cb_k_in,
-                            cb_k.get_write_ptr(),
-                            k_tile_bytes,
-                            k_tile_bytes * Sk_chunk_t,
-                            0);
-                        noc.async_read_barrier();
-                        noc.write_zeros_l1_barrier();
-                        cb_k.push_back(k_chunk_tiles);
-                        CircularBuffer cb_v(cb_v_in);
-                        cb_v.reserve_back(v_cb_entry_tiles);
-                        pooled_v_generator.issue_reads(
-                            Slice(0, nq, row0, row0 + tiles, 0, vDHt),
-                            pooled_rows_t,
-                            cb_v_in,
-                            cb_v.get_write_ptr(),
-                            vDHt * v_tile_bytes,
-                            v_tile_bytes,
-                            0);
-                        noc.async_read_barrier();
-                        noc.write_zeros_l1_barrier();
-                        cb_v.push_back(v_cb_entry_tiles);
-                        for (uint32_t i = i0; i < i1; ++i) {
-                            // The chunk's own row back into the plan scratch: compute reads only the header
-                            // words of a plan page, and every page has been popped by now.
-                            read_chunk_row(nq, res_qc[i]);
-                            // Block 0 of every live shard is forced exact by every ring iteration's bits (above),
-                            // so mark it exact in the row the bias is generated from (no double counting).
-                            {
-                                CoreLocalMem<volatile uint32_t> row(scratch);
-                                for (uint32_t s = 0; s < ring_size; ++s) {
-                                    if (block_is_full(s, 0)) {
-                                        row[s * mask_nb_pad] = 1u;
+                    constexpr uint32_t pooled_rows_t = mask_n_blocks_pad / 32;
+                    const pooled_bias_gen::Geometry geo{
+                        kv_local_padded_Nt * 32, logical_n_tokens, mask_nb, mask_nb_pad};
+                    for (uint32_t i0 = 0; i0 < n_res;) {
+                        uint32_t i1 = i0;
+                        while (i1 < n_res && res_nq[i1] == res_nq[i0]) {
+                            ++i1;
+                        }
+                        const uint32_t nq = res_nq[i0];
+                        for (uint32_t pc = 0; pc < pooled_chunks; ++pc) {
+                            const uint32_t tiles = pc + 1 == pooled_chunks ? pooled_last_tiles : Sk_chunk_t;
+                            const uint32_t row0 = pc * Sk_chunk_t;
+                            CircularBuffer cb_k(cb_k_in);
+                            cb_k.reserve_back(k_chunk_tiles);
+                            pooled_k_generator.issue_reads(
+                                Slice(0, nq, row0, row0 + tiles, 0, DHt),
+                                pooled_rows_t,
+                                cb_k_in,
+                                cb_k.get_write_ptr(),
+                                k_tile_bytes,
+                                k_tile_bytes * Sk_chunk_t,
+                                0);
+                            noc.async_read_barrier();
+                            noc.write_zeros_l1_barrier();
+                            cb_k.push_back(k_chunk_tiles);
+                            CircularBuffer cb_v(cb_v_in);
+                            cb_v.reserve_back(v_cb_entry_tiles);
+                            pooled_v_generator.issue_reads(
+                                Slice(0, nq, row0, row0 + tiles, 0, vDHt),
+                                pooled_rows_t,
+                                cb_v_in,
+                                cb_v.get_write_ptr(),
+                                vDHt * v_tile_bytes,
+                                v_tile_bytes,
+                                0);
+                            noc.async_read_barrier();
+                            noc.write_zeros_l1_barrier();
+                            cb_v.push_back(v_cb_entry_tiles);
+                            for (uint32_t i = i0; i < i1; ++i) {
+                                // The chunk's own row back into the plan scratch: compute reads only the header
+                                // words of a plan page, and every page has been popped by now.
+                                read_chunk_row(nq, res_qc[i]);
+                                // Block 0 of every live shard is forced exact by every ring iteration's bits (above),
+                                // so mark it exact in the row the bias is generated from (no double counting).
+                                {
+                                    CoreLocalMem<volatile uint32_t> row(scratch);
+                                    for (uint32_t s = 0; s < ring_size; ++s) {
+                                        if (block_is_full(s, 0)) {
+                                            row[s * mask_nb_pad] = 1u;
+                                        }
                                     }
                                 }
+                                CircularBuffer cb_bias(cb_pooled_bias);
+                                cb_bias.reserve_back(Sk_chunk_t);
+                                // Block-form row: exact iff the block's own bit is set on a full block.
+                                pooled_bias_gen::generate_tiles<pooled_bias_tile_bytes>(
+                                    noc,
+                                    cb_bias.get_write_ptr(),
+                                    row0,
+                                    tiles,
+                                    geo,
+                                    CoreLocalMem<volatile uint32_t>(scratch),
+                                    pooled_bias_table_base);
+                                cb_bias.push_back(Sk_chunk_t);
                             }
-                            CircularBuffer cb_bias(cb_pooled_bias);
-                            cb_bias.reserve_back(Sk_chunk_t);
-                            // Block-form row: exact iff the block's own bit is set on a full block.
-                            pooled_bias_gen::generate_tiles<pooled_bias_tile_bytes>(
-                                noc,
-                                cb_bias.get_write_ptr(),
-                                row0,
-                                tiles,
-                                geo,
-                                CoreLocalMem<volatile uint32_t>(scratch),
-                                pooled_bias_table_base);
-                            cb_bias.push_back(Sk_chunk_t);
                         }
+                        i0 = i1;
                     }
-                    i0 = i1;
                 }
             }
 

@@ -14,8 +14,8 @@ checks the sparse output against:
              block one pooled entry (mean K, mean V) weighted by its token count. This is what the op computes,
              so it separates kernel errors from the approximation.
 
-Runs on a single ring (1xN) or the 4x8 Galaxy (TP=4 heads x SP=8 ring). The 5 s MiniMax-H3 geometry is opt-in
-with SPARSE_RING_FULL=1.
+Runs on a single ring (1xN) or the 4x8 Galaxy (TP=4 heads x SP=8 ring). The 5 s MiniMax-H3 geometry is skipped
+on CI.
 """
 
 import math
@@ -38,7 +38,7 @@ BLOCK = 64  # tokens per (square) mask block, passed as block_size; also the q c
 HEADS_PER_DEVICE = 14  # MiniMax-H3 at TP=4
 D = 128
 KEEP_ALL = 1.0
-SLOW = pytest.mark.skipif(os.environ.get("SPARSE_RING_FULL") != "1", reason="set SPARSE_RING_FULL=1")
+SLOW = pytest.mark.skipif(os.environ.get("CI") == "true", reason="production-size shapes - skip on CI")
 
 
 def _pad32(n):

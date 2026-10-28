@@ -105,7 +105,8 @@ struct MaybeProfileScope<true, timer_id> : kernel_profiler::profileScope<timer_i
 #endif
 
 // Ring joint SDPA: the per-phase zones of the inner step are compiled out unless the factory defines
-// SPARSE_STEP_PROFILE (TT_SPARSE_STEP_PROFILE=1), and they only emit under the device profiler (PROFILE_KERNEL).
+// SPARSE_STEP_PROFILE (not set by the factory; a profiling build adds it), and they only emit under the device profiler
+// (PROFILE_KERNEL).
 #if defined(SPARSE_STEP_PROFILE) && defined(PROFILE_KERNEL)
 constexpr bool kRingStepProfiling = true;
 #else

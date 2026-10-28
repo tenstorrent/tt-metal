@@ -171,8 +171,8 @@ ttnn::Tensor sparse_ring_sdpa_wrapper(
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
     const ttnn::Tensor& block_mask,
-    const ttnn::Tensor& pooled_k,
-    const ttnn::Tensor& pooled_v,
+    const std::optional<ttnn::Tensor>& pooled_k,
+    const std::optional<ttnn::Tensor>& pooled_v,
     ttnn::Tensor& persistent_output_buffer_k,
     ttnn::Tensor& persistent_output_buffer_v,
     std::size_t logical_n,
@@ -860,12 +860,17 @@ void bind_sdpa(nb::module_& mod) {
     ttnn::bind_function<"sparse_ring_sdpa", "ttnn.transformer.">(
         mod,
         R"doc(
-        Block-sparse ring attention (Sol-Attn) with the ring all-gather of K/V fused, non-causal, no joint tokens.
+        Block-sparse ring attention with the ring all-gather of K/V fused, non-causal, no joint tokens.
 
         Blocks are square, block_size (B) tokens. Per head and local B-row Q block, `block_mask` names the global
-        B-token K/V blocks computed exactly.
-        Every other block enters the same softmax through one pooled entry: score q * mean(k), value mean(v),
-        weighted by the block's token count. The pooled-entry column bias is generated on device.
+        B-token K/V blocks computed exactly. Block 0 of every shard inside logical_n is always computed (it is part
+        of every row's kept set). Two modes:
+
+        - Sol-Attn: pass pooled_k and pooled_v. Every other block enters the same softmax through one pooled entry:
+          score q * mean(k), value mean(v), weighted by the block's token count. The pooled-entry column bias is
+          generated on device.
+        - Kept blocks only (e.g. the VSA fine branch): omit pooled_k and pooled_v. The softmax normalizes over the
+          kept blocks.
 
         Args:
             input_tensor_q (ttnn.Tensor): [1, H, N/ring_size, D] bf16 TILE, sequence-sharded on cluster_axis.
@@ -873,8 +878,9 @@ void bind_sdpa(nb::module_& mod) {
             input_tensor_v (ttnn.Tensor): [1, H, N/ring_size, D] bf16 TILE, all-gather input.
             block_mask (ttnn.Tensor): [1, H, nqb_pad, ring_size * nb_pad] uint32 ROW_MAJOR. Entry
                 [0, h, qb, s * nb_pad + b] != 0 computes block b of shard s exactly for local Q block qb.
-            pooled_k (ttnn.Tensor): [1, H, ring_size * nb_pad, D] bf16 TILE, mean K per block (zero padding).
-            pooled_v (ttnn.Tensor): [1, H, ring_size * nb_pad, D] bf16 TILE, mean V per block.
+            pooled_k (ttnn.Tensor, optional): [1, H, ring_size * nb_pad, D] bf16 TILE, mean K per block (zero
+                padding). Omit together with pooled_v for kept-blocks-only attention.
+            pooled_v (ttnn.Tensor, optional): [1, H, ring_size * nb_pad, D] bf16 TILE, mean V per block.
 
         Keyword args:
             persistent_output_buffer_k (ttnn.Tensor): gathered K buffer.
@@ -905,8 +911,8 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("input_tensor_k").noconvert(),
         nb::arg("input_tensor_v").noconvert(),
         nb::arg("block_mask").noconvert(),
-        nb::arg("pooled_k").noconvert(),
-        nb::arg("pooled_v").noconvert(),
+        nb::arg("pooled_k").noconvert() = nb::none(),
+        nb::arg("pooled_v").noconvert() = nb::none(),
         nb::kw_only(),
         nb::arg("persistent_output_buffer_k").noconvert(),
         nb::arg("persistent_output_buffer_v").noconvert(),

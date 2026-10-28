@@ -350,23 +350,25 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const uint32_t Sq_chunk_t = q_chunk_size / tt::constants::TILE_HEIGHT;
     const uint32_t Sk_chunk_t = k_chunk_size / tt::constants::TILE_HEIGHT;
 
-    // Block geometry. Blocks are block_size tokens (block_tiles tiles) inside each shard; the pooled tensors hold
-    // ring_size x mask_nb_pad blocks; a pooled "chunk" is Sk_chunk_t pooled rows.
+    // Block geometry. Blocks are block_size tokens (block_tiles tiles) inside each shard; the mask row (and the
+    // pooled tensors, when given) hold ring_size x mask_nb_pad blocks; a pooled "chunk" is Sk_chunk_t pooled rows.
+    // Without pooled K / V (kept blocks only) the pooled route is compiled out and there are no pooled chunks.
+    const bool pooled_route = tensor_args.pooled_route();
     const uint32_t block_tiles = args.block_tiles();
     const uint32_t block_tokens = block_tiles * tt::constants::TILE_HEIGHT;
     const uint32_t mask_nkc = tt::div_up(kv_local_padded_Nt, Sk_chunk_t);
-    const uint32_t mask_n_blocks_pad = tensor_args.pooled_k.logical_shape()[2];
+    const uint32_t mask_n_blocks_pad = tensor_args.block_mask.logical_shape()[3];
     const uint32_t mask_nb_pad = mask_n_blocks_pad / ring_size;
     const uint32_t mask_nb = tt::div_up(kv_local_padded_Nt, block_tiles);
     const uint32_t mask_nqb_pad = tensor_args.block_mask.logical_shape()[2];
-    const uint32_t pooled_tiles = mask_n_blocks_pad / tt::constants::TILE_HEIGHT;
+    const uint32_t pooled_tiles = pooled_route ? mask_n_blocks_pad / tt::constants::TILE_HEIGHT : 0u;
     const uint32_t pooled_chunks = tt::div_up(pooled_tiles, Sk_chunk_t);
-    const uint32_t pooled_last_tiles = pooled_tiles - (pooled_chunks - 1) * Sk_chunk_t;
+    const uint32_t pooled_last_tiles = pooled_chunks > 0 ? pooled_tiles - (pooled_chunks - 1) * Sk_chunk_t : 0u;
     // The reader reads whole mask rows.
     const uint32_t mask_row_bytes = tensor_args.block_mask.logical_shape()[3] * sizeof(uint32_t);
     TT_FATAL(mask_nkc <= 64, "SparseRingSDPA: at most 64 K pieces per shard");
     TT_FATAL(
-        mask_nb <= mask_nb_pad, "SparseRingSDPA: {} blocks per shard exceed the pooled row {}", mask_nb, mask_nb_pad);
+        mask_nb <= mask_nb_pad, "SparseRingSDPA: {} blocks per shard exceed the mask row's {}", mask_nb, mask_nb_pad);
     TT_FATAL(Sk_chunk_t % block_tiles == 0, "SparseRingSDPA: k chunk must hold whole blocks");
     TT_FATAL(Sq_chunk_t == block_tiles, "SparseRingSDPA: one Q block per mask row (q chunk == block)");
 
@@ -640,8 +642,11 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         0,  // logical_l tensor
     };
 
-    // Accessors: Q, K, V, gathered K, gathered V, attention sink (null), then block mask, pooled K, pooled V.
+    // Accessors: Q, K, V, gathered K, gathered V, attention sink (null), then block mask, pooled K, pooled V (null
+    // without the pooled route, so the accessor offsets do not move).
     tt::tt_metal::Buffer* const attention_sink_buf = nullptr;
+    tt::tt_metal::Buffer* const pooled_k_buf = pooled_route ? tensor_args.pooled_k->buffer() : nullptr;
+    tt::tt_metal::Buffer* const pooled_v_buf = pooled_route ? tensor_args.pooled_v->buffer() : nullptr;
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_k.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);
@@ -649,8 +654,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     TensorAccessorArgs(gathered_input_tensor_v.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(attention_sink_buf).append_to(reader_compile_time_args);
     TensorAccessorArgs(tensor_args.block_mask.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(tensor_args.pooled_k.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(tensor_args.pooled_v.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(pooled_k_buf).append_to(reader_compile_time_args);
+    TensorAccessorArgs(pooled_v_buf).append_to(reader_compile_time_args);
 
     /**
      * Create semaphores used for L1-L1 store-and-forward of KV between cores.
@@ -932,7 +937,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         l.recip_scratch = tile_cb(1, im_tile_size, im_df);  // 1-tile recip scratch for normalize_row_streaming
         l.sum_in = tile_cb(statistics_tiles * slots, stats_tile_size, stats_df);
         l.sparse_plan = alloc(64 + mask_row_bytes, 1, tt::DataFormat::UInt32);
-        l.pooled_bias = tile_cb(Sk_chunk_t, mask_tile_size, mask_df);
+        // Without the pooled route nothing reads the bias CB; it is not allocated.
+        l.pooled_bias = pooled_route ? tile_cb(Sk_chunk_t, mask_tile_size, mask_df)
+                                     : std::numeric_limits<uint32_t>::max();  // inactive
         return l;
     };
     const auto cb_bytes_for_slots = [&](uint32_t slots) -> uint64_t {
@@ -1011,7 +1018,9 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     const uint32_t cb_recip_scratch = cbs.recip_scratch;
     const uint32_t cb_sum_in = cbs.sum_in;
     const uint32_t cb_sparse_plan = cbs.sparse_plan;
-    const uint32_t cb_pooled_bias = cbs.pooled_bias;
+    // Without the pooled route the bias CB is not allocated; the kernels still take an id (and its tile size), so
+    // they get Q's, which they never touch through it.
+    const uint32_t cb_pooled_bias = pooled_route ? cbs.pooled_bias : cbs.q_in;
 
     // The dense op's padding-mask and scale CBs: the resident step masks padding by narrowing its K width and applies
     // the scale inside its exp, so neither is allocated. Their slots in the shared CB argument block stay.
@@ -1622,6 +1631,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         {"mask_nb_pad", mask_nb_pad},
         {"mask_n_blocks_pad", mask_n_blocks_pad},
         {"mask_nqb_pad", mask_nqb_pad},
+        // The pooled route (Sol-Attn): pooled entries and their column bias. 0: kept blocks only.
+        {"pooled_route", pooled_route ? 1u : 0u},
         {"pooled_chunks", pooled_chunks},
         {"pooled_last_tiles", pooled_last_tiles},
         {"mask_row_bytes", mask_row_bytes},
@@ -1638,29 +1649,10 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
     reader_kernel.named_compile_time_args.emplace_back(
         "v_row_Wt", input_tensor_v.padded_shape()[3] / tt::constants::TILE_WIDTH);
     compute_kernel.defines = kernel_defines;
-    // Per-phase device-profiler zones inside the step. They only emit under TT_METAL_DEVICE_PROFILER=1
-    // (PROFILE_KERNEL); this define flips the template gate that is otherwise false. Measurement knob, not hashed:
-    // set it for the whole process. =1: one zone per step, so the per-core profiler buffer holds ~10 steps and the
-    // gaps between them are measurable. =2: plus the two phase zones per Q subblock / row group. =3: plus the
-    // per-key-subblock zones (~6 KB of TRISC code).
-    if (std::getenv("TT_SPARSE_STEP_PROFILE") && std::string(std::getenv("TT_SPARSE_STEP_PROFILE")) != "0" &&
-        std::string(std::getenv("TT_SPARSE_STEP_PROFILE")) != "") {
-        const std::string level = std::getenv("TT_SPARSE_STEP_PROFILE");
-        compute_kernel.defines.emplace_back("SPARSE_STEP_PROFILE", "1");
-        // The reader's and writer's wait zones (SPARSE_ZONE in sparse_ring_reader.cpp / sparse_ring_writer.cpp).
-        reader_kernel.defines.emplace_back("SPARSE_STEP_PROFILE", "1");
-        writer_kernel.defines.emplace_back("SPARSE_STEP_PROFILE", "1");
-        if (level == "2" || level == "3") {
-            compute_kernel.defines.emplace_back("SPARSE_STEP_PROFILE_PHASES", "1");
-        }
-        if (level == "3") {
-            compute_kernel.defines.emplace_back("SPARSE_STEP_PROFILE_FINE", "1");
-        }
-    }
     // The compute kernel builds at O2: at the default level the 5 s program sits at the 70,656 B kernel config buffer,
     // and O2 cuts the three TRISC binaries by ~30 %. Profiled runs at O2 showed the same per-piece compute as the
-    // default-level timings: the step is bound by Tensix instruction throughput, not by RISC issue. The kernel's build
-    // hash carries the level (ComputeKernel::config_hash), so the JIT cache cannot serve the other binary for it.
+    // default-level timings: the step is bound by Tensix instruction throughput, not by RISC issue. This kernel file
+    // is only ever built at O2.
     compute_kernel.opt_level = tt::tt_metal::KernelBuildOptLevel::O2;
     compute_kernel.config = ComputeConfigDescriptor{
         .math_fidelity = math_fidelity,
@@ -1824,8 +1816,8 @@ tt::tt_metal::ProgramDescriptor build_sparse_ring_sdpa_program_descriptor(
         //   kPooledBiasTableWords packed bf16 table, then members (start, count)..., then the group delivery words.
         // Buffer entries are registered as bindings and re-patched on cache hits by the descriptor adapter.
         reader_args.push_back(tensor_args.block_mask.buffer());
-        reader_args.push_back(tensor_args.pooled_k.buffer());
-        reader_args.push_back(tensor_args.pooled_v.buffer());
+        reader_args.push_back(pooled_k_buf);  // null without the pooled route; positions do not move
+        reader_args.push_back(pooled_v_buf);
         reader_args.push_back(0u);
         // Linear head chains: the chain's members as (Q block start within the head, count) plus this core's own
         // start. At stream position j every member is on Q block start_m + j, so each core derives the same

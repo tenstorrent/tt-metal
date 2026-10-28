@@ -271,32 +271,41 @@ void SparseRingSDPADeviceOperation::validate_on_program_cache_miss(
         NKH,
         NVH);
 
-    // Block mask and pooled K / V.
+    // Block mask and (optional) pooled K / V.
     const auto& mask = tensor_args.block_mask;
-    const auto& pk = tensor_args.pooled_k;
-    const auto& pv = tensor_args.pooled_v;
     TT_FATAL(
         mask.layout() == Layout::ROW_MAJOR && mask.dtype() == DataType::UINT32, "block_mask must be uint32 row-major");
     TT_FATAL(
         mask.buffer() != nullptr && mask.buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
         "block_mask must be in DRAM");
-    for (const auto* t : {&pk, &pv}) {
+    TT_FATAL(
+        tensor_args.pooled_k.has_value() == tensor_args.pooled_v.has_value(),
+        "pooled_k and pooled_v must be passed together (Sol-Attn) or both omitted (kept blocks only)");
+    const uint32_t n_blocks_pad = mask.logical_shape()[3];
+    if (tensor_args.pooled_route()) {
+        const auto& pk = *tensor_args.pooled_k;
+        const auto& pv = *tensor_args.pooled_v;
+        for (const auto* t : {&pk, &pv}) {
+            TT_FATAL(
+                t->layout() == Layout::TILE && t->dtype() == DataType::BFLOAT16,
+                "pooled_k / pooled_v must be bf16 tile");
+            TT_FATAL(
+                t->buffer() != nullptr && t->buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
+                "pooled_k / pooled_v must be in DRAM");
+        }
+        TT_FATAL(pk.logical_shape() == pv.logical_shape(), "pooled_k and pooled_v shapes differ");
         TT_FATAL(
-            t->layout() == Layout::TILE && t->dtype() == DataType::BFLOAT16, "pooled_k / pooled_v must be bf16 tile");
-        TT_FATAL(
-            t->buffer() != nullptr && t->buffer()->buffer_type() == tt::tt_metal::BufferType::DRAM,
-            "pooled_k / pooled_v must be in DRAM");
+            pk.logical_shape()[1] == NQH && pk.logical_shape()[2] == n_blocks_pad && pk.logical_shape()[3] == DH,
+            "pooled_k must be [1, NH, n_blocks_pad = block_mask width {}, DH], got {}",
+            n_blocks_pad,
+            pk.logical_shape());
     }
-    TT_FATAL(pk.logical_shape() == pv.logical_shape(), "pooled_k and pooled_v shapes differ");
-    TT_FATAL(pk.logical_shape()[1] == NQH && pk.logical_shape()[3] == DH, "pooled_k must be [1, NH, n_blocks_pad, DH]");
-    const uint32_t n_blocks_pad = pk.logical_shape()[2];
     const uint32_t nb_pad = n_blocks_pad / args.ring_size;
     TT_FATAL(
         n_blocks_pad % (32 * args.ring_size) == 0,
-        "pooled length {} must be ring_size x a tile multiple",
+        "block_mask width {} must be ring_size x a multiple of 32 blocks",
         n_blocks_pad);
-    TT_FATAL(
-        nb_pad >= tt::div_up(N_local_kv, block_size), "pooled blocks per shard {} < blocks in the K shard", nb_pad);
+    TT_FATAL(nb_pad >= tt::div_up(N_local_kv, block_size), "mask blocks per shard {} < blocks in the K shard", nb_pad);
     const uint32_t nqb = tt::div_up(N_local_q, block_size);
     TT_FATAL(
         mask.logical_shape()[1] == NQH && mask.logical_shape()[2] >= nqb && mask.logical_shape()[3] == n_blocks_pad,
@@ -347,15 +356,17 @@ SparseRingSDPAResult SparseRingSDPADeviceOperation::create_output_tensors(
 
 ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
     const SparseRingSDPAParams& args, const SparseRingSDPAInputs& tensor_args) {
-    const std::vector<Tensor> input_tensors = {
+    std::vector<Tensor> input_tensors = {
         tensor_args.input_q,
         tensor_args.input_k,
         tensor_args.input_v,
         tensor_args.gathered_k,
         tensor_args.gathered_v,
-        tensor_args.block_mask,
-        tensor_args.pooled_k,
-        tensor_args.pooled_v};
+        tensor_args.block_mask};
+    if (tensor_args.pooled_route()) {
+        input_tensors.push_back(*tensor_args.pooled_k);
+        input_tensors.push_back(*tensor_args.pooled_v);
+    }
     // logical_n is baked into the kernels (compile-time args and the bias generator), so it is keyed.
     return tt::tt_metal::operation::hash_operation<SparseRingSDPADeviceOperation>(
         input_tensors,
@@ -368,7 +379,8 @@ ttsl::hash::hash_t SparseRingSDPADeviceOperation::compute_program_hash(
         args.all_gather_operation_attributes,
         args.all_gather_tensor_args,
         args.block_size,
-        args.q_blocks_per_pass);
+        args.q_blocks_per_pass,
+        tensor_args.pooled_route());
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> SparseRingSDPADeviceOperation::create_op_performance_model(
@@ -415,8 +427,8 @@ SparseRingSDPAResult sparse_ring_sdpa(
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
     const ttnn::Tensor& block_mask,
-    const ttnn::Tensor& pooled_k,
-    const ttnn::Tensor& pooled_v,
+    const std::optional<ttnn::Tensor>& pooled_k,
+    const std::optional<ttnn::Tensor>& pooled_v,
     ttnn::Tensor& persistent_output_buffer_k,
     ttnn::Tensor& persistent_output_buffer_v,
     const std::size_t logical_n,

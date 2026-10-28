@@ -16,10 +16,14 @@
 
 namespace ttnn::transformer {
 
-// Block-sparse ring attention (Sol-Attn), non-causal, no joint tokens. The ring all-gather of K/V is fused, as in
+// Block-sparse ring attention, non-causal, no joint tokens. The ring all-gather of K/V is fused, as in
 // ring_joint_scaled_dot_product_attention. Blocks are square, `block_size` tokens (B): per (head, local B-row Q
-// block), `block_mask` names the global B-token K blocks computed exactly; every other block enters the same softmax
-// through its pooled entry (score q * mean(k), value mean(v), weight = the block's token count). block_size is a
+// block), `block_mask` names the global B-token K blocks computed exactly. Block 0 of every shard inside logical_n is
+// always computed (it is part of every row's kept set), so no row has an empty softmax. Two modes:
+//   Sol-Attn: pass pooled_k / pooled_v. Every other block enters the same softmax through its pooled entry
+//             (score q * mean(k), value mean(v), weight = the block's token count).
+//   kept blocks only (e.g. the VSA fine branch): omit both; the softmax normalizes over the kept blocks. block_size is
+//   a
 // compile-time parameter of the kernels; only 64 is supported for now. q_chunk_size must equal block_size and
 // k_chunk_size (the K/V piece) must be a multiple of it. nb_pad = round_up(ceil(N/ring_size / B), 32).
 // Every core keeps its Q blocks and their softmax state in L1. When they do not all fit, each core's blocks are split
@@ -27,16 +31,16 @@ namespace ttnn::transformer {
 // once, during the first pass. q_blocks_per_pass caps the blocks per core per pass (nullopt: the most that fit L1).
 //   q, k, v    [1, H, N/ring_size, D]  bf16 TILE (sequence-sharded along the ring axis)
 //   block_mask [1, H, nqb_pad, ring_size * nb_pad]  uint32 ROW_MAJOR; != 0 keeps global block s * nb_pad + b
-//   pooled_k   [1, H, ring_size * nb_pad, D]  bf16 TILE; per-block mean K over the valid tokens, zero padding
-//   pooled_v   [1, H, ring_size * nb_pad, D]  bf16 TILE; per-block mean V
+//   pooled_k   optional [1, H, ring_size * nb_pad, D]  bf16 TILE; per-block mean K over the valid tokens, zero padding
+//   pooled_v   optional [1, H, ring_size * nb_pad, D]  bf16 TILE; per-block mean V
 // Returns the attention output, [1, H, N/ring_size, D], same layout as q.
 ttnn::Tensor sparse_ring_sdpa(
     const ttnn::Tensor& input_tensor_q,
     const ttnn::Tensor& input_tensor_k,
     const ttnn::Tensor& input_tensor_v,
     const ttnn::Tensor& block_mask,
-    const ttnn::Tensor& pooled_k,
-    const ttnn::Tensor& pooled_v,
+    const std::optional<ttnn::Tensor>& pooled_k,
+    const std::optional<ttnn::Tensor>& pooled_v,
     ttnn::Tensor& persistent_output_buffer_k,
     ttnn::Tensor& persistent_output_buffer_v,
     std::size_t logical_n,
