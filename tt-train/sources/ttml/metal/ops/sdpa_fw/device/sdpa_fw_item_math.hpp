@@ -43,9 +43,14 @@ constexpr ItemCoords decode_item(
 //   w0: item [0,20) | role [20,22) | num_partials [22,28) | sem_idx [28,32)
 //   w1: whole: run length; sender / merger: step_begin [0,16) | step_end [16,32)
 //   w2: slot [0,16) | merger NoC x [16,24) | merger NoC y [24,32)
-constexpr uint32_t kUnitWhole = 0U;   // a run of consecutive items over their full K/V range
-constexpr uint32_t kUnitSender = 1U;  // one item's step range, sent to a merger as a partial
-constexpr uint32_t kUnitMerger = 2U;  // one item's step range, then the senders' partials folded in
+enum class UnitRole : uint32_t {
+    Whole = 0,   // a run of consecutive items over their full K/V range
+    Sender = 1,  // one item's step range, sent to a merger as a partial
+    Merger = 2,  // one item's step range, then the senders' partials folded in
+};
+constexpr uint32_t kUnitWhole = static_cast<uint32_t>(UnitRole::Whole);  // the role as the kernels decode it
+constexpr uint32_t kUnitSender = static_cast<uint32_t>(UnitRole::Sender);
+constexpr uint32_t kUnitMerger = static_cast<uint32_t>(UnitRole::Merger);
 
 constexpr uint32_t kUnitItemBits = 20U;
 constexpr uint32_t kUnitRoleBits = 2U;
