@@ -191,3 +191,15 @@ def _bu_k(lay, g, i, u):
     Bbar = g[f"Bbar{i}"]
     bu = u @ torch.cat((Bbar.real, Bbar.imag), 0).T
     return torch.complex(bu[..., :512], bu[..., 512:]), K
+
+
+def test_goldens_match_manifest():
+    """D4 R1-0d: every golden on disk is the one stamp_manifest.py hashed, and the MANIFEST carries a clean stamp."""
+    from models.experimental.flowstate_forecast.tests.golden.stamp_manifest import MANIFEST, sha256
+
+    m = json.loads(MANIFEST.read_text())
+    assert m["stamp"]["git_head"] and m["stamp"]["git_dirty"] == ""
+    on_disk = {p.stem for p in GOLDENS.glob("*.pt")}
+    assert on_disk == set(m["golden_sha256"])
+    for name, digest in m["golden_sha256"].items():
+        assert sha256(GOLDENS / f"{name}.pt") == digest, name
