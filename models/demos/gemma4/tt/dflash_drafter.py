@@ -158,6 +158,36 @@ def _rope_tables(head_dim, theta, max_pos):
     return emb.cos().to(torch.bfloat16), emb.sin().to(torch.bfloat16)
 
 
+def packed_verify_slot_sources(installed, flat, slots):
+    """Per KV group slot, the 1-D int64 host page row the packed verify reads: the installed per-layer table of
+    the slot's first layer (row 0 of a 2-D table) when one is installed, else the flat table. Under vLLM
+    hybrid KV-cache groups the layers of one type sit in several groups with disjoint block ids
+    (spec_decode.serving_kv_group_slots), so a table per layer TYPE would hand most layers another group's
+    blocks."""
+    flat = (flat[0] if flat.dim() > 1 else flat).to(torch.int64)
+    n_slots = (max(slots) + 1) if slots else 0
+    out = []
+    for slot in range(n_slots):
+        src = None
+        if installed:
+            idx = slots.index(slot)
+            lpt = installed[idx] if idx < len(installed) else None
+            if lpt is not None and hasattr(lpt, "dim"):
+                src = (lpt[0] if lpt.dim() > 1 else lpt).to(torch.int64)
+        out.append(flat if src is None else src)
+    return out
+
+
+def packed_verify_slot_row(src, width):
+    """``src`` zero-padded (never clamped) to ``width`` columns as a [1, width] int32 row: columns past the live
+    top sit where the mask is NEG and contribute nothing, while clamping would let a width record created by a
+    short request truncate a longer one's table."""
+    src = src.to(torch.int64)
+    if int(src.shape[0]) < width:
+        src = torch.cat([src, torch.zeros(width - int(src.shape[0]), dtype=src.dtype)])
+    return src[:width].to(torch.int32).reshape(1, width)
+
+
 class DFlashDrafter:
     """Device-side dFlash drafter (see module docstring)."""
 
@@ -944,7 +974,7 @@ class DFlashFusedDecoder:
         self.pv_widx_all = None
         self.pv_mask_slide = None
         self.pv_tables = None
-        self._pv_cache_by_type = None
+        self._pv_cache_by_slot = None
         # Persistent OUTPUT slots (lazy first-use clone on the compile pass,
         # then ttnn.copy per body run). The body's fresh draft_ids/vidx are
         # created MID-GRAPH; ops after them (the whole packed verify) can
@@ -1513,6 +1543,27 @@ class DFlashFusedDecoder:
         # only the full-attention layers at the grown flat table and leaves the
         # sliding-layer RING buffers alone (bounded target).
         self._pv_rep = rep
+        # One packed-verify page table per vLLM KV-cache group slot (not per
+        # layer type): under hybrid groups the layers of one type are spread
+        # over several groups with disjoint block ids.
+        from models.demos.gemma4.tt.attention.operations import effective_block_size
+        from models.demos.gemma4.tt.spec_decode import serving_kv_group_slots
+
+        layer_types = list(t.hf_config.layer_types[: len(t.layers)])
+        self._pv_slots, self._pv_n_slots = serving_kv_group_slots(layer_types)
+        self._pv_slot_type = {}
+        for i, slot in enumerate(self._pv_slots):
+            self._pv_slot_type.setdefault(slot, layer_types[i])
+        # Per-type EFFECTIVE block size: the token count one page-table column
+        # spans for a layer of that type (what its paged writes and paged SDPA
+        # use); under vLLM hybrid groups the sliding and full pools differ.
+        tp = int(self.drafter.tp)
+        self._pv_bs_t = {}
+        for lt, i in rep.items():
+            layer = t.layers[i]
+            cfg = layer.self_attn.config
+            nkv_local = 1 if layer.self_attn.weights.kv_replicated else cfg.num_key_value_heads // tp
+            self._pv_bs_t[lt] = int(effective_block_size(layer.self_attn.kv_cache[0], cfg.head_dim, nkv_local))
 
     def _pv_width_install(self, pv_sk):
         """Allocate (or reuse) the WIDTH-DEPENDENT packed-verify buffers for
@@ -1535,44 +1586,30 @@ class DFlashFusedDecoder:
             self._pv_width_activate(rec)
             return rec
         self.pv_sk = pv_sk
-        rows_t = {}
         installed = getattr(t, "_active_page_tables_per_layer", None)
-        flat = (self.page_table_torch[0] if self.page_table_torch.dim() > 1 else self.page_table_torch).to(torch.int64)
-        for lt in self.pv_ring:
-            rows_t[lt] = flat
-        if installed:
-            for lt, i in self._pv_rep.items():
-                lpt = installed[i]
-                if lpt is not None and hasattr(lpt, "dim"):
-                    rows_t[lt] = (lpt[0] if lpt.dim() > 1 else lpt).to(torch.int64)
-        bs = 64
+        sources = packed_verify_slot_sources(installed, self.page_table_torch, self._pv_slots)
         self.pv_tables = []
-        cache_by_type = {}
-        for i in range(len(t.layers)):
-            lt = t.hf_config.layer_types[i]
-            if lt not in cache_by_type:
-                ring = self.pv_ring.get(lt)
-                width = (ring // bs) if ring else max(1, pv_sk // bs)
-                row = rows_t[lt]
-                # Width-MATCHED to the mask, NOT clamped to this request's table
-                # row: the packed SDPA attends the table width, so the table and
-                # the mask must agree (root cause #4 on the MTP side). A row
-                # shorter than the width is zero-padded, exactly as
-                # refresh_page_tables pads it on every later request -- those
-                # columns sit past the live top, where the mask is NEG, so they
-                # contribute nothing. Clamping instead would have made a width
-                # record created by a SHORT request truncate a longer one's
-                # table, silently reading the null block past the clamp.
-                if int(row.shape[0]) < width:
-                    row = torch.cat([row, torch.zeros(width - int(row.shape[0]), dtype=row.dtype)])
-                cache_by_type[lt] = ttnn.from_torch(
-                    row[:width].to(torch.int32).reshape(1, width),
+        cache_by_slot = []
+        for slot in range(self._pv_n_slots):
+            lt = self._pv_slot_type[slot]
+            ring = self.pv_ring.get(lt)
+            bs = self._pv_bs_t[lt]
+            # Width-MATCHED to the mask with the type's own block size, NOT
+            # clamped to this request's table row: the packed SDPA attends the
+            # table width times the block size, so the table and the mask must
+            # agree (root cause #4 on the MTP side). A row shorter than the
+            # width is zero-padded (packed_verify_slot_row).
+            width = (ring // bs) if ring else max(1, pv_sk // bs)
+            cache_by_slot.append(
+                ttnn.from_torch(
+                    packed_verify_slot_row(sources[slot], width),
                     device=self.mesh_device,
                     dtype=ttnn.int32,
                     layout=ttnn.ROW_MAJOR_LAYOUT,
                     mesh_mapper=self._mapper,
                 )
-            self.pv_tables.append(cache_by_type[lt])
+            )
+        self.pv_tables = [cache_by_slot[slot] for slot in self._pv_slots]
         z = torch.zeros
         mkT = dict(device=self.mesh_device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=self._mapper)
         mkU = dict(device=self.mesh_device, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT, mesh_mapper=self._mapper)
@@ -1616,7 +1653,7 @@ class DFlashFusedDecoder:
             "pv_sk": pv_sk,
             "pv_iota": pv_iota,
             "pv_tables": self.pv_tables,
-            "cache_by_type": cache_by_type,
+            "cache_by_slot": cache_by_slot,
             "pv_ssl": pv_ssl,
             "pv_mask_slide": pv_mask_slide,
             "trace": None,
@@ -1630,7 +1667,7 @@ class DFlashFusedDecoder:
         self.pv_sk = rec["pv_sk"]
         self.pv_iota = rec["pv_iota"]
         self.pv_tables = rec["pv_tables"]
-        self._pv_cache_by_type = rec["cache_by_type"]
+        self._pv_cache_by_slot = rec["cache_by_slot"]
         self.pv_ssl = rec["pv_ssl"]
         self.pv_mask_slide = rec["pv_mask_slide"]
         self.trace = rec["trace"]
@@ -1933,29 +1970,20 @@ class DFlashFusedDecoder:
         h = ttnn.from_torch(pt, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=self._mapper)
         ttnn.copy_host_to_device_tensor(h, self.v_pt)
         h.deallocate(True)
-        if getattr(self, "_pv_cache_by_type", None):
-            # BOUNDED-aware refresh: full-attention layers grow with the sequence,
-            # so re-point them at the current flat table; sliding layers live in a
-            # STATIC ring pool, so re-point them at the installed per-layer ring
+        if getattr(self, "_pv_cache_by_slot", None):
+            # Refresh every KV group slot's table from the installed per-layer
+            # tables (the slot's first layer): full-attention groups grow with
+            # the sequence, sliding groups are their own tables under hybrid
+            # groups, and a bounded sliding RING is the installed per-layer ring
             # (never the flat global table -- doing so was the acceptance-collapse
-            # bug at >=131072). Unbounded targets have installed=None and every
-            # type is treated as full -> flat, i.e. the prior behaviour.
+            # bug at >=131072). With nothing installed every slot reads the flat
+            # table, i.e. the prior single-pool behaviour.
             installed = getattr(self.target, "_active_page_tables_per_layer", None)
-            seen = set()
-            for lt, buf in self._pv_cache_by_type.items():
-                if buf is None or id(buf) in seen:
+            sources = packed_verify_slot_sources(installed, flat, self._pv_slots)
+            for slot, buf in enumerate(self._pv_cache_by_slot):
+                if buf is None:
                     continue
-                seen.add(id(buf))
-                ring = self.pv_ring.get(lt)
-                if ring is not None and installed is not None and self._pv_rep.get(lt) is not None:
-                    lpt = installed[self._pv_rep[lt]]
-                    src = (lpt[0] if lpt.dim() > 1 else lpt).to(torch.int64)
-                else:
-                    src = flat
-                pw = int(buf.shape[-1])
-                p2 = pw - int(src.numel())
-                r = src if p2 <= 0 else torch.cat([src, torch.zeros(p2, dtype=src.dtype)])
-                row = r[:pw].to(torch.int32).reshape(1, pw)
+                row = packed_verify_slot_row(sources[slot], int(buf.shape[-1]))
                 h = ttnn.from_torch(row, layout=ttnn.ROW_MAJOR_LAYOUT, dtype=ttnn.int32, mesh_mapper=self._mapper)
                 ttnn.copy_host_to_device_tensor(h, buf)
                 h.deallocate(True)

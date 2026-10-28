@@ -1897,3 +1897,42 @@ def test_commit_ctx_caches_gathers_every_local_kv_head(drafter_module, monkeypat
     assert len(head_stacks) == (0 if local_kv == 1 else 2 * layers)
     assert all(len(c[2]) == local_kv for c in head_stacks)
     assert all(t.freed for layer in kv_new for t in layer)
+
+
+# ===== packed verify page tables follow vLLM's KV-cache group slots (not the layer type)
+def test_packed_verify_slot_sources_hand_every_group_its_own_table(drafter_module):
+    """vLLM-grouped per-layer tables with distinct block ids per group: each slot
+    reads its own group's row; with nothing installed every slot reads the flat
+    table; a slot whose layer has no installed table falls back to the flat row."""
+    from models.demos.gemma4.tt.spec_decode import serving_kv_group_slots
+
+    types = (["sliding_attention"] * 5 + ["full_attention"]) * 8
+    slots, n_slots = serving_kv_group_slots(types)
+    assert n_slots == 6
+    blocks = 16
+    installed = [torch.arange(blocks, dtype=torch.int64).reshape(1, blocks) + 1000 * slots[i] for i in range(48)]
+    flat = torch.full((1, blocks), 7, dtype=torch.int64)
+
+    sources = drafter_module.packed_verify_slot_sources(installed, flat, slots)
+    assert len(sources) == n_slots
+    for slot, src in enumerate(sources):
+        assert torch.equal(src, installed[slots.index(slot)][0]), f"slot {slot}"
+    # every layer resolves to its own group's ids through its slot
+    for i in range(48):
+        assert int(sources[slots[i]][0]) == 1000 * slots[i], f"layer {i}"
+    # the old per-type rule would have read layer 0's row for layer 1
+    assert not torch.equal(sources[slots[1]], installed[0][0])
+
+    assert all(torch.equal(src, flat[0]) for src in drafter_module.packed_verify_slot_sources(None, flat, slots))
+    partial = list(installed)
+    partial[1] = None  # slot 1's first layer has no table -> flat
+    assert torch.equal(drafter_module.packed_verify_slot_sources(partial, flat, slots)[1], flat[0])
+
+
+def test_packed_verify_slot_row_pads_and_never_clamps(drafter_module):
+    src = torch.arange(5, dtype=torch.int64) + 1
+    padded = drafter_module.packed_verify_slot_row(src, 8)
+    assert padded.shape == (1, 8) and padded.dtype == torch.int32
+    assert padded[0].tolist() == [1, 2, 3, 4, 5, 0, 0, 0]
+    clipped = drafter_module.packed_verify_slot_row(src, 3)
+    assert clipped[0].tolist() == [1, 2, 3]
