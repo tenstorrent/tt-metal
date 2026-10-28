@@ -22,7 +22,7 @@ from unittest.mock import Mock, create_autospec
 
 import pytest
 
-from models.demos.common.prefill.adapter import ADAPTER_PATHS, get_adapter
+from models.demos.common.prefill.adapter import ADAPTER_PATHS, PrefillRunParams, get_adapter
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_flash_config import DeepSeekV4FlashConfig
 from models.demos.deepseek_v3_d_p.reference.deepseek_v4_pro_config import DeepSeekV4ProConfig
 from models.demos.deepseek_v3_d_p.tt.tt_prefill_runtime import TtPrefillRuntime
@@ -228,3 +228,35 @@ def test_adapter_allocates_no_kv_cache_and_no_weight_cache(name, model_cfg):
     adapter = get_adapter(name)
     assert adapter.allocate_kv_cache(mesh_device=None, hf_config=None, params=None).kvpe is None
     assert adapter.weight_cache_path((8, 4)) is None
+
+
+@pytest.mark.parametrize("name, model_cfg", _ADAPTERS)
+def test_adapter_builds_the_runner_single_rank_params_without_a_kv_only_layer(monkeypatch, name, model_cfg):
+    adapter = get_adapter(name)
+    tt = "models.demos.deepseek_v3_d_p.tt"
+    monkeypatch.setattr(f"{tt}.tt_ccl.per_axis_topology", lambda: None)
+    monkeypatch.setattr(type(adapter), "checkpoint_path", lambda self: Path("/checkpoint"))
+    monkeypatch.setattr(f"{tt}.v4.weights.v4_model_from_checkpoint", lambda *args, **kwargs: {})
+    monkeypatch.setattr(f"{tt}.v4.weights.V4CheckpointLayers", Mock())
+    runtime_cls = Mock()
+    monkeypatch.setattr(f"{tt}.v4.runtime.TtV4Runtime", runtime_cls)
+    # What prefill_runner.main passes on a single rank with MTP off.
+    params = PrefillRunParams(
+        mesh_shape=(8, 4),
+        num_layers=4,
+        first_layer_idx=0,
+        is_first_rank=True,
+        is_last_rank=True,
+        max_seq_len=10240,
+        chunk_size=5120,
+        num_users=2,
+        capacity_factor=8,
+        num_links=2,
+        gate_mode_name=adapter.default_gate_mode,
+        kv_only_last_layer=True,
+        weight_cache_path=None,
+    )
+    adapter.build_runtime(mesh_device=None, hf_config=adapter.load_hf_config(), params=params)
+    config = runtime_cls.call_args.kwargs["config"]
+    assert not config.kv_only_last_layer
+    assert config.num_users == 2
