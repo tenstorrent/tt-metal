@@ -102,6 +102,8 @@ def test_f2_family_gated():
     assert check([dict(r, f2_pcc_normalized=0.99)], [r], GATES_F2)
     assert check([dict(r, f2_bias_row_max=0.05)], [r], GATES_F2)  # lower is better, floor and drift
     assert not check([dict(r, f2_bias_row_max=0.0)], [r], GATES_F2)
+    assert not check([REC], [REC], GATES_F2)  # a single-forward case skips the f2_* floors
+    assert any("f2_pcc_normalized" in f for f in check([REC], [r], GATES_F2))  # dropped forward 2 fails
     assert any("no floors" in f for f in check([r], [r], GATES))
     assert any("no drift" in f for f in check([r], [r], dict(GATES_F2, drift=GATES["drift"])))
 

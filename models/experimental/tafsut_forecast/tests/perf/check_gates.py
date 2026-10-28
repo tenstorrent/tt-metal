@@ -23,7 +23,8 @@ baseline (D6). A drift metric missing from either record is a FAIL (v1.17). A ca
 is taken once per session (``SESSION_STAMP``) with ``started_at``; a record started before its commit fails (v1.23).
 
 Key families (v1.24, D3 item 1): a metric ``f2_<m>`` is forward 2 (teacher-forced) of ``<m>``, same direction. A
-record that carries a family (any ``f2_*`` key) with no floor or no drift of that family for its case fails. The
+family is gated on a record when the record or its fixed record carries it (single-forward cases skip ``f2_*``);
+one with no floor or no drift of that family for its case fails. The
 candidate set must hold every case and precision of the baseline records (``--partial`` for screens only).
 """
 
@@ -173,7 +174,11 @@ def check(
         key = (r["name"], r["precision"])
         if not allow_unstamped:
             failures += check_stamp(r, commit_time)
-        floors, drift = _floors(gates, *key), _drift(gates, *key)
+        # a family is gated where the candidate or its fixed record has it: f2_* floors in "*/<precision>" skip
+        # single-forward cases, and a candidate that drops a family its fixed record has fails as missing
+        have = {_family(k) for k in r} | {_family(k) for k in base_by.get(key, {})}
+        floors = {m: f for m, f in _floors(gates, *key).items() if _family(m) in have}
+        drift = {m: t for m, t in _drift(gates, *key).items() if _family(m) in have}
         for fam in {_family(k) for k in r} - {""}:  # v1.24: a gated forward with no floors or no drift fails
             for what, table in (("floors", floors), ("drift", drift)):
                 if not any(_family(m) == fam for m in table):
