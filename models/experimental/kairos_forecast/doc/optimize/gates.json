@@ -1,5 +1,5 @@
 {
- "_doc": "G1 re-raise proposal, written by tests/perf/propose_gates.py (its docstring has the rules) from the round-0 suite record of pcc job 1051. Absolute floors on every case and precision (PLAN v1.20); p01 / p99 at >= 100 active rows and p50 at >= 8 (check_gates prints `not applicable` otherwise). Drift is against the fixed records iter_00/bench.json (bench) and iter_00/suite.jsonl (suite).",
+ "_doc": "G1 re-raise proposal, written by tests/perf/propose_gates.py (its docstring has the rules) from the round-0 suite record of pcc job 1051, with the D4 rules (bias_row_max_final floor, row-indexed bias drift, spread_ratio_p50 drift toward 1, median_err drift, spread_ratio_max case floors). Absolute floors on every case and precision (PLAN v1.20); p01 / p99 at >= 100 active rows and p50 at >= 8 (check_gates prints `not applicable` otherwise). Drift is against the fixed records iter_00/bench.json (bench) and iter_00/suite.jsonl (suite).",
  "floors": {
   "*/accuracy": {
    "pcc_normalized": 0.999,
@@ -47,6 +47,7 @@
    "bias_row_p50": 0.009000000000000001,
    "bias_row_max": 0.01,
    "bias_row_p50_final": 0.005,
+   "bias_row_max_final": 0.01,
    "inactive_max_err": 0.01,
    "pcc_step": 0.9986,
    "pcc_step_final": 0.9993,
@@ -57,6 +58,7 @@
    "bias_row_p50": 0.045,
    "bias_row_max": 0.045,
    "bias_row_p50_final": 0.042,
+   "bias_row_max_final": 0.042,
    "inactive_max_err": 0.01,
    "pcc_step": 0.9957,
    "pcc_step_final": 0.9978,
@@ -67,6 +69,7 @@
    "bias_row_p50": 0.009000000000000001,
    "bias_row_max": 0.01,
    "bias_row_p50_final": 0.009000000000000001,
+   "bias_row_max_final": 0.01,
    "inactive_max_err": 0.01,
    "pcc_step": 0.9987,
    "pcc_step_final": 0.9987,
@@ -77,6 +80,7 @@
    "bias_row_p50": 0.045,
    "bias_row_max": 0.045,
    "bias_row_p50_final": 0.045,
+   "bias_row_max_final": 0.045,
    "inactive_max_err": 0.01,
    "pcc_step": 0.996,
    "pcc_step_final": 0.996,
@@ -87,6 +91,7 @@
    "bias_row_p50": 0.005,
    "bias_row_max": 0.01,
    "bias_row_p50_final": 0.005,
+   "bias_row_max_final": 0.01,
    "inactive_max_err": 0.01,
    "pcc_step": 0.997,
    "pcc_step_final": 0.9987,
@@ -97,6 +102,7 @@
    "bias_row_p50": 0.021,
    "bias_row_max": 0.021,
    "bias_row_p50_final": 0.021,
+   "bias_row_max_final": 0.021,
    "inactive_max_err": 0.01,
    "pcc_step": 0.9952,
    "pcc_step_final": 0.9975,
@@ -107,22 +113,27 @@
    "bias_row_p50": 0.005,
    "bias_row_max": 0.11,
    "bias_row_p50_final": 0.005,
+   "bias_row_max_final": 0.094,
    "inactive_max_err": 0.02,
    "pcc_step": 0.9995,
-   "pcc_step_final": 0.9992
+   "pcc_step_final": 0.9992,
+   "spread_ratio_max": 1.1
   },
   "ragged/performance": {
    "bias_row_p50": 0.023,
    "bias_row_max": 0.58,
    "bias_row_p50_final": 0.019,
+   "bias_row_max_final": 0.47000000000000003,
    "inactive_max_err": 0.065,
    "pcc_step": 0.9952,
-   "pcc_step_final": 0.995
+   "pcc_step_final": 0.995,
+   "spread_ratio_max": 1.2000000000000002
   },
   "single_long_horizon/accuracy": {
    "bias_row_p50": 0.005,
    "bias_row_max": 0.01,
    "bias_row_p50_final": 0.005,
+   "bias_row_max_final": 0.01,
    "inactive_max_err": 0.01,
    "pcc_step": 0.9081,
    "pcc_step_final": 0.9624,
@@ -133,6 +144,7 @@
    "bias_row_p50": 0.005,
    "bias_row_max": 0.013000000000000001,
    "bias_row_p50_final": 0.005,
+   "bias_row_max_final": 0.014,
    "inactive_max_err": 0.012,
    "pcc_step": 0.9205,
    "pcc_step_final": 0.9412,
@@ -143,6 +155,7 @@
    "bias_row_p50": 0.023,
    "bias_row_max": 0.023,
    "bias_row_p50_final": 0.024,
+   "bias_row_max_final": 0.024,
    "inactive_max_err": 0.01,
    "pcc_step": 0.8888,
    "pcc_step_final": 0.92,
@@ -153,6 +166,7 @@
    "bias_row_p50": 0.036000000000000004,
    "bias_row_max": 0.046,
    "bias_row_p50_final": 0.034,
+   "bias_row_max_final": 0.048,
    "inactive_max_err": 0.054,
    "pcc_step": 0.875,
    "pcc_step_final": 0.8921,
@@ -163,6 +177,7 @@
    "bias_row_p50": 0.005,
    "bias_row_max": 0.026000000000000002,
    "bias_row_p50_final": 0.005,
+   "bias_row_max_final": 0.027,
    "inactive_max_err": 0.028,
    "pcc_step": 0.9997,
    "pcc_step_final": 0.9994,
@@ -173,14 +188,17 @@
    "bias_row_p50": 0.005,
    "bias_row_max": 0.043000000000000003,
    "bias_row_p50_final": 0.005,
+   "bias_row_max_final": 0.051000000000000004,
    "inactive_max_err": 0.032,
    "pcc_step": 0.9998,
-   "pcc_step_final": 0.999
+   "pcc_step_final": 0.999,
+   "spread_ratio_max": 1.2000000000000002
   },
   "long_horizon/performance": {
    "bias_row_p50": 0.024,
    "bias_row_max": 0.14,
    "bias_row_p50_final": 0.024,
+   "bias_row_max_final": 0.11,
    "inactive_max_err": 0.07200000000000001,
    "pcc_step": 0.9987,
    "pcc_step_final": 0.9937,
@@ -191,25 +209,31 @@
    "bias_row_p50": 0.02,
    "bias_row_max": 0.26,
    "bias_row_p50_final": 0.019,
+   "bias_row_max_final": 0.18,
    "inactive_max_err": 0.13,
    "pcc_step": 0.9991,
-   "pcc_step_final": 0.9945
+   "pcc_step_final": 0.9945,
+   "spread_ratio_max": 1.7000000000000002
   },
   "paper/accuracy": {
    "bias_row_p50": 0.005,
    "bias_row_max": 0.041,
    "bias_row_p50_final": 0.005,
+   "bias_row_max_final": 0.031,
    "inactive_max_err": 0.027,
    "pcc_step": 0.9997,
-   "pcc_step_final": 0.9993
+   "pcc_step_final": 0.9993,
+   "spread_ratio_max": 1.2000000000000002
   },
   "paper/performance": {
    "bias_row_p50": 0.02,
    "bias_row_max": 0.19,
    "bias_row_p50_final": 0.022,
+   "bias_row_max_final": 0.15,
    "inactive_max_err": 0.085,
    "pcc_step": 0.9986,
-   "pcc_step_final": 0.9978
+   "pcc_step_final": 0.9978,
+   "spread_ratio_max": 1.4000000000000001
   }
  },
  "drift": {
@@ -235,7 +259,7 @@
    "abs": 0.005
   },
   "spread_ratio_p50": {
-   "two_sided": true,
+   "toward": 1.0,
    "abs": 0.01
   },
   "abs_err_max": {
@@ -255,6 +279,15 @@
   },
   "bias_row_max_final": {
    "rel": 0.5
+  },
+  "median_err": {
+   "rel": 0.5
+  },
+  "bias_row_drift_max": {
+   "abs": 0.02
+  },
+  "bias_row_drift_max_final": {
+   "abs": 0.02
   }
  },
  "drift_by": {

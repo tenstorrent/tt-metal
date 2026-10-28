@@ -19,8 +19,18 @@ Per case, from the measured value m of that case and precision:
                                        performance [0.92, 1.08] (long_horizon [0.90, 1.20])
 Drift against the fixed record (iter_00), both precisions: the PCCs by an absolute margin (accuracy / performance),
 pcc_row_p01_active and pcc_row_min_active (not the all-row pcc_row_min, which is floor-only, v1.11),
-spread_ratio_p50 two-sided +-0.01 (v1.11, D3), and the lower-is-better errors at 1.5x (abs_err_max is the gross
-single-element ceiling, v1.16). pcc_step drift per case: max(1 - m, 1e-4).
+spread_ratio_p50 at most 0.01 further from 1 than the fixed record (D4 item 3), the lower-is-better errors at 1.5x
+(abs_err_max is the gross single-element ceiling, v1.16; median_err too, D4 item 6), and the row-indexed bias
+max_i |b_i - b0_i| <= ROW_DRIFT in head and final space (D4 item 1). pcc_step drift per case: max(1 - m, 1e-4).
+
+D4: bias_row_max_final floor max(2m, 0.01) like bias_row_max; at >= 100 active rows, spread_ratio_max gets a case
+floor 1 + 1.5 (m - 1) (two significant figures, up) where that is under the generic one (D4 item 6).
+
+ROW_DRIFT = 0.02, under half the v1.25 probe (+0.05 normalized on one row): the round-0 record is deterministic (two
+runs of the same commit are bit-identical, jobs 1051 / 1063), so the bound is set by the probe, not by noise. A probe
+on one flip half reaches the final forecast halved (0.025 of the scale), so the bound sits under 0.025 too. A candidate
+that moves one row's mean by more than 0.02 is a G2 reject until explained. The measured spread of the same vector
+between the two precisions (a far larger numeric change than one candidate) is in doc/optimize/iter_00/row_bias.md.
 """
 from __future__ import annotations
 
@@ -32,27 +42,68 @@ from models.experimental.kairos_forecast.tests.perf.check_gates import DEFAULT_G
 PRECS = ("accuracy", "performance")
 GLOBAL = {
     "accuracy": {
-        "pcc_normalized": 0.999, "pcc_normalized_full": 0.999, "pcc_final": 0.99, "pcc_final_spread": 0.999,
-        "pcc_spread": 0.9995, "pcc_row_min": 0.99, "route_mismatch_rows": 0, "bias_max_abs_diff": 1e-06,
-        "spread_ratio_p01": 0.97, "spread_ratio_p99": [0.0, 1.1], "spread_ratio_p50": [0.97, 1.03],
-        "spread_ratio_min": 0.8, "spread_ratio_max": 1.3,
+        "pcc_normalized": 0.999,
+        "pcc_normalized_full": 0.999,
+        "pcc_final": 0.99,
+        "pcc_final_spread": 0.999,
+        "pcc_spread": 0.9995,
+        "pcc_row_min": 0.99,
+        "route_mismatch_rows": 0,
+        "bias_max_abs_diff": 1e-06,
+        "spread_ratio_p01": 0.97,
+        "spread_ratio_p99": [0.0, 1.1],
+        "spread_ratio_p50": [0.97, 1.03],
+        "spread_ratio_min": 0.8,
+        "spread_ratio_max": 1.3,
     },
     "performance": {
-        "pcc_normalized": 0.995, "pcc_normalized_full": 0.995, "pcc_final": 0.98, "pcc_final_spread": 0.995,
-        "pcc_spread": 0.998, "pcc_row_min": 0.95, "route_mismatch_rows": 0, "bias_max_abs_diff": 1e-06,
-        "spread_ratio_p01": 0.9, "spread_ratio_p99": [0.0, 1.3], "spread_ratio_p50": [0.93, 1.07],
-        "spread_ratio_min": 0.7, "spread_ratio_max": 2.0,
+        "pcc_normalized": 0.995,
+        "pcc_normalized_full": 0.995,
+        "pcc_final": 0.98,
+        "pcc_final_spread": 0.995,
+        "pcc_spread": 0.998,
+        "pcc_row_min": 0.95,
+        "route_mismatch_rows": 0,
+        "bias_max_abs_diff": 1e-06,
+        "spread_ratio_p01": 0.9,
+        "spread_ratio_p99": [0.0, 1.3],
+        "spread_ratio_p50": [0.93, 1.07],
+        "spread_ratio_min": 0.7,
+        "spread_ratio_max": 2.0,
     },
 }
 SMALL_BAND = {"accuracy": (0.95, 1.05), "performance": (0.92, 1.08)}
 LONG_BAND = {"accuracy": (0.95, 1.10), "performance": (0.90, 1.20)}
 DRIFT = {
-    "accuracy": {"pcc_normalized": 2e-4, "pcc_normalized_full": 2e-4, "pcc_final": 5e-4, "pcc_spread": 2e-4,
-                 "pcc_final_spread": 2e-4, "pcc_row_p01_active": 2e-3, "pcc_row_min_active": 5e-3},
-    "performance": {"pcc_normalized": 1e-3, "pcc_normalized_full": 1e-3, "pcc_final": 1e-3, "pcc_spread": 1e-3,
-                    "pcc_final_spread": 1e-3, "pcc_row_p01_active": 1e-2, "pcc_row_min_active": 2e-2},
+    "accuracy": {
+        "pcc_normalized": 2e-4,
+        "pcc_normalized_full": 2e-4,
+        "pcc_final": 5e-4,
+        "pcc_spread": 2e-4,
+        "pcc_final_spread": 2e-4,
+        "pcc_row_p01_active": 2e-3,
+        "pcc_row_min_active": 5e-3,
+    },
+    "performance": {
+        "pcc_normalized": 1e-3,
+        "pcc_normalized_full": 1e-3,
+        "pcc_final": 1e-3,
+        "pcc_spread": 1e-3,
+        "pcc_final_spread": 1e-3,
+        "pcc_row_p01_active": 1e-2,
+        "pcc_row_min_active": 2e-2,
+    },
 }
-REL = ("abs_err_max", "inactive_max_err", "bias_row_p50", "bias_row_max", "bias_row_p50_final", "bias_row_max_final")
+REL = (
+    "abs_err_max",
+    "inactive_max_err",
+    "bias_row_p50",
+    "bias_row_max",
+    "bias_row_p50_final",
+    "bias_row_max_final",
+    "median_err",
+)
+ROW_DRIFT = 0.02
 
 
 def _up(x, digits=2):
@@ -74,8 +125,9 @@ def _down(x, digits=4):
 def propose(records):
     floors = {f"*/{p}": dict(GLOBAL[p]) for p in PRECS}
     drift = {k: {"abs": v} for k, v in DRIFT["accuracy"].items()}
-    drift["spread_ratio_p50"] = {"two_sided": True, "abs": 0.01}
+    drift["spread_ratio_p50"] = {"toward": 1.0, "abs": 0.01}
     drift.update({k: {"rel": 0.5} for k in REL})
+    drift.update({k: {"abs": ROW_DRIFT} for k in ("bias_row_drift_max", "bias_row_drift_max_final")})
     drift_by = {"*/performance": {k: {"abs": v} for k, v in DRIFT["performance"].items()}}
     for r in records:
         key = f"{r['name']}/{r['precision']}"
@@ -84,6 +136,7 @@ def propose(records):
             "bias_row_p50": _up(max(2 * r["bias_row_p50"], 0.005)),
             "bias_row_max": _up(max(2 * r["bias_row_max"], 0.01)),
             "bias_row_p50_final": _up(max(2 * r["bias_row_p50_final"], 0.005)),
+            "bias_row_max_final": _up(max(2 * r["bias_row_max_final"], 0.01)),
             "inactive_max_err": _up(max(2 * r["inactive_max_err"], 0.01)),
         }
         db = {}
@@ -93,14 +146,19 @@ def propose(records):
         if r["active_rows"] < 100:
             lo, hi = (LONG_BAND if r["name"] == "long_horizon" else SMALL_BAND)[p]
             f["spread_ratio_min"], f["spread_ratio_max"] = lo, hi
+        elif _up(1 + 1.5 * (r["spread_ratio_max"] - 1)) < GLOBAL[p]["spread_ratio_max"]:
+            f["spread_ratio_max"] = _up(1 + 1.5 * (r["spread_ratio_max"] - 1))
         floors[key] = f
         drift_by[key] = db
     return {
         "_doc": "G1 re-raise proposal, written by tests/perf/propose_gates.py (its docstring has the rules) from the "
-                "round-0 suite record of pcc job 1051. Absolute floors on every case and precision (PLAN v1.20); p01 / "
-                "p99 at >= 100 active rows and p50 at >= 8 (check_gates prints `not applicable` otherwise). Drift is "
-                "against the fixed records iter_00/bench.json (bench) and iter_00/suite.jsonl (suite).",
-        "floors": floors, "drift": drift, "drift_by": drift_by,
+        "round-0 suite record of pcc job 1051, with the D4 rules (bias_row_max_final floor, row-indexed bias drift, "
+        "spread_ratio_p50 drift toward 1, median_err drift, spread_ratio_max case floors). Absolute floors on every case and precision (PLAN v1.20); p01 / "
+        "p99 at >= 100 active rows and p50 at >= 8 (check_gates prints `not applicable` otherwise). Drift is "
+        "against the fixed records iter_00/bench.json (bench) and iter_00/suite.jsonl (suite).",
+        "floors": floors,
+        "drift": drift,
+        "drift_by": drift_by,
     }
 
 
