@@ -203,7 +203,6 @@ void kernel_main() {
     const uint32_t sol_n_members = get_arg_val<uint32_t>(sol_args_base + 4);
     const uint32_t sol_len_bias_table_base = sol_args_base + 6;
     const uint32_t sol_members_base = sol_args_base + 6 + sol_bias_gen::kTableWords;
-    constexpr uint32_t sol_nkc = get_named_compile_time_arg_val("sol_nkc");
     constexpr uint32_t sol_logical_n_tokens = get_named_compile_time_arg_val("sol_logical_n");
     constexpr uint32_t sol_nb = get_named_compile_time_arg_val("sol_nb");
     constexpr uint32_t sol_nb_pad = get_named_compile_time_arg_val("sol_nb_pad");
@@ -363,10 +362,8 @@ void kernel_main() {
     // pooled, so a set mask bit on them is ignored here and in the bias generator alike).
     const auto sol_block_is_full = [&](uint32_t s, uint32_t b) -> bool {
         return sol_bias_gen::block_len(
-                   sol_bias_gen::Geometry{
-                       kv_local_padded_Nt * 32, sol_logical_n_tokens, sol_nb, sol_nb_pad, sol_nkc, Sk_chunk_t},
-                   s,
-                   b) == sol_bias_gen::kBlockTiles * 32;
+                   sol_bias_gen::Geometry{kv_local_padded_Nt * 32, sol_logical_n_tokens, sol_nb, sol_nb_pad}, s, b) ==
+               sol_bias_gen::kBlockTiles * 32;
     };
 
     // Q is read once, on the first active ring iteration.
@@ -929,8 +926,7 @@ void kernel_main() {
                 scratch = cb_plan.get_write_ptr() + 64;
             }
             constexpr uint32_t pooled_rows_t = sol_n_blocks_pad / 32;
-            const sol_bias_gen::Geometry geo{
-                kv_local_padded_Nt * 32, sol_logical_n_tokens, sol_nb, sol_nb_pad, sol_nkc, Sk_chunk_t};
+            const sol_bias_gen::Geometry geo{kv_local_padded_Nt * 32, sol_logical_n_tokens, sol_nb, sol_nb_pad};
             for (uint32_t i0 = 0; i0 < n_res;) {
                 uint32_t i1 = i0;
                 while (i1 < n_res && res_nq[i1] == res_nq[i0]) {
@@ -983,7 +979,7 @@ void kernel_main() {
                         CircularBuffer cb_bias(cb_sol_bias);
                         cb_bias.reserve_back(Sk_chunk_t);
                         // Block-form row: exact iff the block's own bit is set on a full block.
-                        sol_bias_gen::generate_tiles<false, sol_bias_tile_bytes>(
+                        sol_bias_gen::generate_tiles<sol_bias_tile_bytes>(
                             noc,
                             cb_bias.get_write_ptr(),
                             row0,
