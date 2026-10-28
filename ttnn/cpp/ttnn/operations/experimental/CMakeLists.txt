@@ -22,7 +22,6 @@ add_subdirectory(cnn)
 
 # metalium-developers-ops-data-movement
 add_subdirectory(ccl)
-add_subdirectory(ccl/moe_gpt)
 
 # metalium-developers-mmfusedreduce
 add_subdirectory(matmul)
@@ -31,7 +30,6 @@ add_subdirectory(quasar)
 add_subdirectory(reduction)
 
 # metalium-developers-sdpa
-add_subdirectory(high_bw_all_gather)
 add_subdirectory(indexer_score)
 add_subdirectory(kda)
 add_subdirectory(topk_large_indices)
@@ -84,13 +82,10 @@ target_link_libraries(
         TTNN::Ops::Experimental::AdaptivePool
         TTNN::Ops::Experimental::Conv3d
         TTNN::Ops::Experimental::CNN
-        TTNN::Ops::Experimental::CCL
-        TTNN::Ops::Experimental::MoEGPT
         TTNN::Ops::Experimental::Matmul
         TTNN::Ops::Experimental::MatmulDecode
         TTNN::Ops::Experimental::Quasar
         TTNN::Ops::Experimental::Reduction
-        TTNN::Ops::Experimental::HighBwAllGather
         TTNN::Ops::Experimental::IndexerScore
         TTNN::Ops::Experimental::KDA
         TTNN::Ops::Experimental::TopkLargeIndices
@@ -136,13 +131,10 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::AdaptivePool>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Conv3d>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::CNN>
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::CCL>
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::MoEGPT>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Matmul>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::MatmulDecode>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Quasar>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::Reduction>
-        $<TARGET_OBJECTS:TTNN::Ops::Experimental::HighBwAllGather>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IndexerScore>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::TopkLargeIndices>
         $<TARGET_OBJECTS:TTNN::Ops::Experimental::IndexedPageCache>

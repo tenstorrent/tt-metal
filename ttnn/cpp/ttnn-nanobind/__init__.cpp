@@ -72,7 +72,6 @@
 #include "ttnn/operations/matmul/matmul_nanobind.hpp"
 #include "ttnn/operations/moreh/moreh_nanobind.hpp"
 #include "ttnn/operations/normalization/normalization_nanobind.hpp"
-#include "ttnn/operations/point_to_point/point_to_point_nanobind.hpp"
 #include "ttnn/operations/pool/generic/generic_pools_nanobind.hpp"
 #include "ttnn/operations/pool/rotate/rotate_nanobind.hpp"
 #include "ttnn/operations/pool/upsample/upsample_nanobind.hpp"
@@ -222,9 +221,6 @@ void py_module(nb::module_& mod) {
 
     auto m_randn = mod.def_submodule("randn", "ttnn randn operation");
     randn::bind_randn_operation(m_randn);
-
-    auto m_point_to_point = mod.def_submodule("point_to_point", "point_to_point operations");
-    point_to_point::bind_point_to_point(m_point_to_point);
 }
 }  // namespace ttnn::operations
 

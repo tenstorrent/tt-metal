@@ -15,7 +15,6 @@ set_target_properties(
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
-    all_reduce_create_qkv_heads/device/kernels/*.cpp
     concatenate_heads/device/kernels/*.cpp
     create_qkv_heads/device/kernels/*.cpp
     create_qkv_heads_from_separate_tensors/device/kernels/*.cpp

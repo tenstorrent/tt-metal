@@ -2,9 +2,6 @@
 # Module owners should update this file when adding/removing/renaming source files.
 
 set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_SRCS
-    all_reduce_create_qkv_heads/all_reduce_create_qkv_heads.cpp
-    all_reduce_create_qkv_heads/device/all_reduce_create_qkv_heads_device_operation.cpp
-    all_reduce_create_qkv_heads/device/all_reduce_create_qkv_heads_program_factory.cpp
     concatenate_heads/concatenate_heads.cpp
     concatenate_heads/device/concatenate_heads_device_operation.cpp
     concatenate_heads/device/concatenate_heads_program_factory.cpp
@@ -92,7 +89,6 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_API_HEADERS
 # add/remove/rename doesn't touch a file with metalium-developers-infra
 # as a required co-owner.
 set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_NANOBIND_SRCS
-    all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.cpp
     concatenate_heads/concatenate_heads_nanobind.cpp
     create_qkv_heads/create_qkv_heads_nanobind.cpp
     create_qkv_heads_from_separate_tensors/create_qkv_heads_from_separate_tensors_nanobind.cpp
@@ -115,5 +111,4 @@ set(TTNN_OP_EXPERIMENTAL_TRANSFORMER_NANOBIND_SRCS
     rotary_embedding_llama_fused_qk/rotary_embedding_llama_fused_qk_nanobind.cpp
     rotate_half/rotate_half_nanobind.cpp
     split_query_key_value_and_split_heads/split_query_key_value_and_split_heads_nanobind.cpp
-    all_reduce_create_qkv_heads/all_reduce_create_qkv_heads_nanobind.cpp
 )

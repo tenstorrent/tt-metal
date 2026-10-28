@@ -70,8 +70,6 @@ set(TTNNCPP_SRCS
     cpp/ttnn/operations/generic/device/generic_op_device_operation.cpp
     cpp/ttnn/operations/experimental/fusion/device/fusion_dispatch_op_device_operation.cpp
     cpp/ttnn/operations/data_movement/reshape_view/reshape_common.cpp
-    cpp/ttnn/operations/experimental/deepseek_prefill/dispatch/dispatch.cpp
-    cpp/ttnn/operations/experimental/deepseek_prefill/combine/combine.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_common.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_wh.cpp
     cpp/ttnn/operations/experimental/deepseek_prefill/routed_expert_ffn/routed_expert_ffn_bh.cpp

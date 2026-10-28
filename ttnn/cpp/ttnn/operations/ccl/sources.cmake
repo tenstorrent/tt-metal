@@ -14,45 +14,9 @@ set(TTNN_OP_CCL_SRCS
     common/host/ccl_command_stream_builders.cpp
     common/host/moe_utils.cpp
     common/host/mesh_ring_plan.cpp
-    all_broadcast/all_broadcast.cpp
-    all_broadcast/device/all_broadcast_device_operation.cpp
-    all_broadcast/device/all_broadcast_program_factory.cpp
-    all_gather/all_gather.cpp
-    all_gather/device/all_gather_device_operation.cpp
-    all_gather/device/all_gather_multicast_factory.cpp
-    all_gather/device/all_gather_unicast_factory.cpp
-    all_reduce/all_reduce.cpp
-    all_to_all_combine/all_to_all_combine.cpp
-    all_to_all_combine/device/all_to_all_combine_device_operation.cpp
-    all_to_all_combine/device/all_to_all_combine_program_factory.cpp
-    all_to_all_dispatch/all_to_all_dispatch.cpp
-    all_to_all_dispatch/device/all_to_all_dispatch_device_operation.cpp
-    all_to_all_dispatch/device/all_to_all_dispatch_program_factory.cpp
-    reduce_to_root/reduce_to_root.cpp
-    reduce_to_root/device/reduce_to_root_op.cpp
-    reduce_to_root/device/reduce_to_root_program.cpp
-    reduce_scatter/reduce_scatter.cpp
-    reduce_scatter/device/reduce_scatter_device_operation.cpp
-    reduce_scatter/device/reduce_scatter_program_factory.cpp
-    mesh_partition/mesh_partition.cpp
-    mesh_partition/device/mesh_partition_device_operation.cpp
-    mesh_partition/device/mesh_partition_program_factory.cpp
-    broadcast/broadcast.cpp
-    broadcast/device/broadcast_device_operation.cpp
-    broadcast/device/broadcast_program_factory.cpp
 )
 
 set(TTNN_OP_CCL_API_HEADERS
-    all_gather/all_gather.hpp
-    all_gather/device/all_gather_device_operation.hpp
-    all_gather/device/all_gather_device_operation_types.hpp
-    all_gather/device/all_gather_multicast_factory.hpp
-    all_gather/device/all_gather_unicast_factory.hpp
-    all_reduce/all_reduce.hpp
-    reduce_scatter/reduce_scatter.hpp
-    all_broadcast/device/all_broadcast_device_operation_types.hpp
-    all_broadcast/device/all_broadcast_device_operation.hpp
-    all_broadcast/device/all_broadcast_program_factory.hpp
     ccl_common.hpp
     ccl_host_datastructures.hpp
     ccl_host_types.hpp
@@ -62,7 +26,6 @@ set(TTNN_OP_CCL_API_HEADERS
     common/host/mesh_ring_plan.hpp
     common/types/ccl_types.hpp
     common/uops/ccl_command.hpp
-    mesh_partition/mesh_partition.hpp
     shared_with_host/hetergeneous_data_structs.hpp
     shared_with_host/snake_ring.hpp
 )
@@ -72,15 +35,4 @@ set(TTNN_OP_CCL_API_HEADERS
 # block there). Listed here rather than inline in CMakeLists.txt so that
 # add/remove/rename doesn't touch a file with metalium-developers-infra as a
 # required co-owner.
-set(TTNN_OP_CCL_NANOBIND_SRCS
-    ccl_nanobind.cpp
-    all_broadcast/all_broadcast_nanobind.cpp
-    all_gather/all_gather_nanobind.cpp
-    all_reduce/all_reduce_nanobind.cpp
-    all_to_all_combine/all_to_all_combine_nanobind.cpp
-    all_to_all_dispatch/all_to_all_dispatch_nanobind.cpp
-    broadcast/broadcast_nanobind.cpp
-    mesh_partition/mesh_partition_nanobind.cpp
-    reduce_scatter/reduce_scatter_nanobind.cpp
-    reduce_to_root/reduce_to_root_nanobind.cpp
-)
+set(TTNN_OP_CCL_NANOBIND_SRCS ccl_nanobind.cpp)

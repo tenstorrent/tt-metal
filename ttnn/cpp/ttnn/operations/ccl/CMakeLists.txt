@@ -15,17 +15,11 @@ set_target_properties(
 # Globbing non-build files is acceptable for now because devs don't generate packages.
 file(
     GLOB_RECURSE kernels
-    all_gather/device/kernels/*.cpp
-    all_gather/device/kernels/*.hpp
-    broadcast/device/kernels/*.cpp
     common/kernels/*.cpp
     common/kernels/*.hpp
     kernel_common/*.hpp
     kernels/*.cpp
     kernels/*.hpp
-    all_to_all_combine/device/kernels/*.cpp
-    all_to_all_dispatch/device/kernels/*.cpp
-    reduce_to_root/device/kernels/*.cpp
 )
 target_sources(
     ttnn_op_ccl
@@ -68,48 +62,6 @@ target_sources(
             common/uops/ccl_command_device.hpp
             common/uops/ccl_host_commands.hpp
             common/uops/command_lowering.hpp
-            # all_broadcast/
-            all_broadcast/all_broadcast.hpp
-            all_broadcast/all_broadcast_nanobind.hpp
-            all_broadcast/device/all_broadcast_device_operation.hpp
-            all_broadcast/device/all_broadcast_device_operation_types.hpp
-            all_broadcast/device/all_broadcast_program_factory.hpp
-            # all_gather/
-            all_gather/all_gather.hpp
-            all_gather/all_gather_nanobind.hpp
-            all_gather/device/all_gather_device_operation.hpp
-            all_gather/device/all_gather_device_operation_types.hpp
-            all_gather/device/all_gather_multicast_factory.hpp
-            all_gather/device/all_gather_unicast_factory.hpp
-            # all_reduce/
-            all_reduce/all_reduce.hpp
-            all_reduce/all_reduce_nanobind.hpp
-            # all_to_all_combine/
-            all_to_all_combine/all_to_all_combine.hpp
-            all_to_all_combine/all_to_all_combine_nanobind.hpp
-            all_to_all_combine/device/all_to_all_combine_device_operation.hpp
-            # all_to_all_dispatch/
-            all_to_all_dispatch/all_to_all_dispatch.hpp
-            all_to_all_dispatch/all_to_all_dispatch_nanobind.hpp
-            all_to_all_dispatch/device/all_to_all_dispatch_device_operation.hpp
-            # broadcast/
-            broadcast/broadcast.hpp
-            broadcast/broadcast_nanobind.hpp
-            broadcast/device/broadcast_device_operation.hpp
-            broadcast/device/broadcast_device_operation_types.hpp
-            broadcast/device/broadcast_program_factory.hpp
-            # mesh_partition/
-            mesh_partition/mesh_partition.hpp
-            mesh_partition/mesh_partition_nanobind.hpp
-            mesh_partition/device/mesh_partition_device_operation.hpp
-            # reduce_scatter/
-            reduce_scatter/reduce_scatter.hpp
-            reduce_scatter/reduce_scatter_nanobind.hpp
-            reduce_scatter/device/reduce_scatter_device_operation.hpp
-            # reduce_to_root/
-            reduce_to_root/reduce_to_root.hpp
-            reduce_to_root/reduce_to_root_nanobind.hpp
-            reduce_to_root/device/reduce_to_root_op.hpp
     PRIVATE
         ${TTNN_OP_CCL_SRCS}
 )

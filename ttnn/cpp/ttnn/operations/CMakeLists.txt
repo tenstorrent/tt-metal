@@ -19,7 +19,6 @@ add_subdirectory(sliding_window)
 
 # metalium-developers-ops-data-movement
 add_subdirectory(ccl)
-add_subdirectory(point_to_point)
 add_subdirectory(data_movement)
 add_subdirectory(embedding)
 add_subdirectory(embedding_backward)
@@ -72,7 +71,6 @@ target_link_libraries(
         TTNN::Ops::Loss
         TTNN::Ops::Matmul
         TTNN::Ops::Normalization
-        TTNN::Ops::PointToPoint
         TTNN::Ops::Pool
         TTNN::Ops::Prefetcher
         TTNN::Ops::Rand
@@ -113,7 +111,6 @@ target_sources(
         $<TARGET_OBJECTS:TTNN::Ops::Loss>
         $<TARGET_OBJECTS:TTNN::Ops::Matmul>
         $<TARGET_OBJECTS:TTNN::Ops::Normalization>
-        $<TARGET_OBJECTS:TTNN::Ops::PointToPoint>
         $<TARGET_OBJECTS:TTNN::Ops::Pool>
         $<TARGET_OBJECTS:TTNN::Ops::Prefetcher>
         $<TARGET_OBJECTS:TTNN::Ops::Rand>
