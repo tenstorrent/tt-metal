@@ -20,10 +20,10 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/eltwise/unary_backward/unary_backward.hpp"
-#include "ttnn/operations/moreh/moreh_mean/moreh_mean.hpp"
 #include "ttnn/operations/moreh/moreh_mean_backward/moreh_mean_backward.hpp"
 #include "ttnn/operations/moreh/moreh_softmax/moreh_softmax.hpp"
 #include "ttnn/operations/moreh/moreh_softmax_backward/moreh_softmax_backward.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -119,14 +119,17 @@ autograd::TensorPtr mean(const autograd::TensorPtr& tensor) {
     auto shape = ttnn::Shape({1, 1, 1, 1});
     auto out =
         autograd::create_tensor(core::empty(shape, &autograd::ctx().get_device(), tensor->get_value().memory_config()));
-    ttnn::moreh_mean(
+    ttnn::mean(
         tensor->get_value(),
-        std::nullopt,
-        true,
-        std::nullopt,
-        out->get_value(),
-        std::nullopt,
-        /* device_compute_kernel_config */ core::ComputeKernelConfig::precise());
+        /* dim */ std::nullopt,
+        /* keepdim */ true,
+        /* memory_config */ std::nullopt,
+        /* compute_kernel_config */ core::ComputeKernelConfig::precise(),
+        /* scalar */ 1.0F,
+        /* sub_core_grids */ std::nullopt,
+        /* fast_and_approximate_mode */ false,
+        /* output_layout */ std::nullopt,
+        /* output */ out->get_value());
     autograd::GradFunction grad = [tensor, out]() {
         auto resulting_shape = tensor->get_value().logical_shape();
         auto res = ttnn::moreh_mean_backward(
