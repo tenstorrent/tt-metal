@@ -10,24 +10,25 @@
 # that differs is the toolchain's doing and nothing else. It compares
 # disassembly, never bytes: ELF hashes embed the build path.
 #
-# The trees are `git clone -s` of a repo you already have, so they cost almost no
-# disk and never write to it. Put --work somewhere local: a home directory over
-# quota is what this script was written around.
+# Each tree is a depth-1 fetch of one commit over HTTPS, so it costs a checkout
+# and no history. Put --work somewhere local: a home directory over quota is what
+# this script was written around.
 #
 # Usage:
-#   sfpi_disasm.sh --repo <path> --work <dir> --python <venv python>
+#   sfpi_disasm.sh --work <dir> --python <venv python>
 #                  --commit <sha> --other-sfpi <sha>
-#                  [--test perf_math_matmul.py] [--select <-k expr>] [--jobs N]
-#                  [--collect-only]
+#                  [--repo-url <url>] [--test perf_math_matmul.py]
+#                  [--select <-k expr>] [--jobs N] [--collect-only]
 
 set -euo pipefail
 
-REPO="" WORK="" PY="" COMMIT="" OTHER="" TEST="perf_math_matmul.py"
+REPO="https://github.com/tenstorrent/tt-metal"
+WORK="" PY="" COMMIT="" OTHER="" TEST="perf_math_matmul.py"
 SELECT="" JOBS=4 COLLECT=no
 
 while [ $# -gt 0 ]; do
     case "$1" in
-        --repo) REPO=$2; shift 2 ;;
+        --repo-url) REPO=$2; shift 2 ;;
         --work) WORK=$2; shift 2 ;;
         --python) PY=$2; shift 2 ;;
         --commit) COMMIT=$2; shift 2 ;;
@@ -40,7 +41,7 @@ while [ $# -gt 0 ]; do
     esac
 done
 
-[ -n "$REPO$WORK$PY$COMMIT" ] || { echo "usage: see the header" >&2; exit 2; }
+[ -n "$WORK$PY$COMMIT" ] || { echo "usage: see the header" >&2; exit 2; }
 
 say() { echo "[$(date -u +%H:%M:%S)] $*"; }
 N() { nice -n 19 "$@"; }
@@ -50,13 +51,19 @@ mkdir -p "$WORK"
 # --- the trees ---------------------------------------------------------------
 tree() {
     local dir=$1 sfpi_from=$2
-    if [ ! -d "$dir/.git" ]; then
-        say "cloning $dir"
-        N git clone -q -s --no-checkout "$REPO" "$dir"
+    if [ ! -e "$dir/.git" ]; then
+        say "fetching $(basename "$dir") at ${COMMIT:0:11}"
+        mkdir -p "$dir"
+        ( cd "$dir"; git init -q .; git remote add origin "$REPO" )
     fi
-    N git -C "$dir" checkout -q -f "$COMMIT"
-    # Replace only the toolchain pin. The LLK sources stay byte-identical.
-    [ -n "$sfpi_from" ] && N git -C "$REPO" show "${sfpi_from}:tt_metal/sfpi-version" > "$dir/tt_metal/sfpi-version"
+    N git -C "$dir" fetch -q --depth=1 origin "$COMMIT"
+    N git -C "$dir" checkout -q -f FETCH_HEAD
+    # Replace only the toolchain pin. The LLK sources stay byte-identical, so a
+    # difference in the generated code can only come from the compiler.
+    if [ -n "$sfpi_from" ]; then
+        N git -C "$dir" fetch -q --depth=1 origin "$sfpi_from"
+        N git -C "$dir" show "FETCH_HEAD:tt_metal/sfpi-version" > "$dir/tt_metal/sfpi-version"
+    fi
     say "  $(basename "$dir"): $(grep -m1 '^sfpi_version=' "$dir/tt_metal/sfpi-version")"
 }
 
