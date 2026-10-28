@@ -57,6 +57,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/compute_kernel_api_debug.h
     inc/api/compute/compute_kernel_hw_startup.h
     inc/api/compute/copy_dest_values.h
+    inc/api/compute/cumprod.h
     inc/api/compute/cumsum.h
     inc/api/compute/debug/cb_hash.h
     inc/api/compute/div_int32_floor.h
@@ -186,6 +187,7 @@ set(HW_JIT_API_HEADERS
     inc/api/compute/logsigmoid.h
     inc/api/compute/mask.h
     inc/api/compute/matmul.h
+    inc/api/compute/moe_gate_sqrt_softplus.h
     inc/api/compute/mul_int_sfpu.h
     inc/api/compute/nextafter.h
     inc/api/compute/pack.h

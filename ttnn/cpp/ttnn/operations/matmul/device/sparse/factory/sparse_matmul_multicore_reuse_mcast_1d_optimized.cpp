@@ -799,6 +799,7 @@ ttnn::device_operation::ProgramArtifacts SparseMatmulMultiCoreReuseMcast1DProgra
                 // batch args
                 {"KtNt", Kt * Nt},
                 {"batch", batchA},
+                {"out_block_num_tiles", out_block_tiles},
                 {"bcast_B", 1u},
                 // sparsity args (in indexed/gather mode this slot carries the active-group id list)
                 {"batchB", batchB},

@@ -1209,7 +1209,7 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
 
     // Drain any in-flight Tensor prefetcher kernel and release its state before the
     // rest of the mesh tears down. If the caller forgot to call StopTensorPrefetcher
-    // we still wait for the kernel's natural num_layers exit so the GCB / receivers it
+    // we still wait for the kernel's natural num_layers exit so the pipes / receivers it
     // touches remain valid until it returns.
     if (tensor_prefetcher_) {
         if (tensor_prefetcher_->is_active()) {
@@ -1222,8 +1222,8 @@ bool MeshDeviceImpl::close_impl(MeshDevice* pimpl_wrapper) {
         tensor_prefetcher_.reset();
     }
 
-    // DRISC L1 arena is torn down after the prefetcher manager so any GCB-owned
-    // allocation handles have already been released (GCBs are user-owned and the
+    // DRISC L1 arena is torn down after the prefetcher manager so any pipe-owned
+    // allocation handles have already been released (pipes are user-owned and the
     // user's invariant is to destroy them before close).
     drisc_l1_arena_.reset();
 
@@ -1793,7 +1793,7 @@ void MeshDeviceImpl::replay_mesh_trace(uint8_t cq_id, const MeshTraceId& trace_i
         this->mesh_id_,
         *(active_sub_device_manager->id()));
     // Re-send any Tensor prefetcher requests captured during this trace's capture, before
-    // dispatching the trace so the host worker can begin filling the GCB as the consuming
+    // dispatching the trace so the host worker can begin filling the pipes as the consuming
     // program is dispatched. No-op (and no manager created) when the prefetcher is unused.
     if (tensor_prefetcher_) {
         tensor_prefetcher_->replay_trace(trace_id);
@@ -1892,7 +1892,7 @@ bool MeshDeviceImpl::initialize_impl(
     Inspector::mesh_device_initialized(this);
 
     // DRISC L1 arena: always constructed up-front when the HAL exposes programmable DRAM
-    // cores so users don't observe a lazy side-effect on first DRAM-sender GCB creation.
+    // cores so users don't observe a lazy side-effect on first DRAM-sender pipe creation.
     if (metal_env().get_hal().has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
         drisc_l1_arena_ = std::make_shared<::tt::tt_metal::DriscL1Arena>(context_id_);
     }

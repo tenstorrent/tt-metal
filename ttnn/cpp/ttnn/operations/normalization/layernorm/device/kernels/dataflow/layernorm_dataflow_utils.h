@@ -128,28 +128,15 @@ inline void compute_single_stage_noc_addrs(
     uint32_t start_core_y,
     uint32_t num_cores_x,
     uint32_t num_cores_y) {
-    uint32_t x = start_core_x;
-    uint32_t y = start_core_y;
+    // Non-rectangular shard grids fill a prefix of their bounding box in shard order.
+    // Rotate over the active workers, not the whole box, to avoid reading idle cores.
+    uint32_t worker = row_major ? start_core_y * num_cores_x + start_core_x : start_core_x * num_cores_y + start_core_y;
     for (uint32_t i = 0; i < num_remote_workers; ++i) {
+        const uint32_t x = row_major ? worker % num_cores_x : worker / num_cores_y;
+        const uint32_t y = row_major ? worker / num_cores_x : worker % num_cores_y;
         remote_coords[i] = {p_remote_noc_x[x], p_remote_noc_y[y]};
-        if constexpr (row_major) {
-            ++x;
-            if (x == num_cores_x) {
-                x = 0;
-                ++y;
-                if (y == num_cores_y) {
-                    y = 0;
-                }
-            }
-        } else {
-            ++y;
-            if (y == num_cores_y) {
-                y = 0;
-                ++x;
-                if (x == num_cores_x) {
-                    x = 0;
-                }
-            }
+        if (++worker == num_remote_workers) {
+            worker = 0;
         }
     }
 }
@@ -237,7 +224,7 @@ inline void write_row_major_block_from_dfb(
     const Block& block) {
     // Compute produces block_size tiles (full_block_size) in dfb_out_rm; the last block
     // may have fewer valid tiles (block.size() <= blk), but blk slots are reserved.
-    dfb_out_rm.wait_front(block.full_block_size());
+    dfb_out_rm.wait_front(static_cast<uint16_t>(block.full_block_size()));
 
     // Column byte offset in the output row where this block starts.
     const uint32_t col_byte_offset = block.start() * tile_width_bytes;
@@ -253,7 +240,7 @@ inline void write_row_major_block_from_dfb(
             {.page_id = abs_row_base + r, .offset_bytes = col_byte_offset});
     }
     noc.async_write_barrier();
-    dfb_out_rm.pop_front(block.full_block_size());
+    dfb_out_rm.pop_front(static_cast<uint16_t>(block.full_block_size()));
 }
 
 /**

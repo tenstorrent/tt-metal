@@ -62,8 +62,10 @@ template <
     tilize_config::WaitMode wait_mode,
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode,
     tilize_config::Fp32Mode fp32_mode,
-    tilize_config::RemapMode remap_mode>
-ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages) {
+    tilize_config::RemapMode remap_mode,
+    typename InDFB,
+    typename OutDFB>
+ALWI void tilize(InDFB& in_dfb, OutDFB& out_dfb, uint32_t num_blocks, std::optional<uint32_t> total_input_pages) {
     // Compile-time validation
     static_assert(block_width_tiles > 0, "block_width_tiles must be greater than 0");
     static_assert(
@@ -139,18 +141,14 @@ ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages)
         }
     }
 
-    // Construct DataflowBuffer objects for sync operations.
-    //
-    // The constructor runs dfb_ensure_ready(), which blocks until this buffer's producer has
-    // published its tile-counter state (buf_capacity et al.). The capacity ASSERTs below read
-    // buf_capacity through get_dfb_num_pages(), so they must come AFTER construction: placed before
-    // it, they race the producer's publish and can read a stale/zero capacity, tripping a false
-    // assert that only surfaces under timing shifts (e.g. multicore, or an extra unpack-thread init).
-    DataflowBuffer in_dfb(input_dfb);
-    DataflowBuffer out_dfb(output_dfb);
+    // The caller's buffers, bound by reference; tilize() never constructs a DataflowBuffer of its own
+    // (on Quasar one drains when it goes out of scope).
+    ASSERT(in_dfb.get_id() == input_dfb);
+    ASSERT(out_dfb.get_id() == output_dfb);
 
-    // Validate DFB capacity — race-free here because the DataflowBuffer constructors above ran
-    // dfb_ensure_ready(), guaranteeing the producer has programmed the tile counters.
+    // Validate DFB capacity — race-free here because the caller's DataflowBuffer constructors already
+    // ran dfb_ensure_ready(), which blocks until the producer has programmed the tile counters
+    // (buf_capacity, read by get_dfb_num_pages()).
     if (asymmetric_dfb_pages) {
         uint32_t max_in = (*total_input_pages < 32) ? *total_input_pages : 32;
         UNPACK(ASSERT(get_dfb_num_pages(input_dfb) >= max_in));

@@ -16,9 +16,12 @@ helpers are adapted from the Qwen3.6 Blackhole TP path (tp_common.py).
 import math
 import os
 
+from loguru import logger
+
 import ttnn
 from models.common.tensor_utils import with_dram_sharded_cores_per_bank
 from models.common.utility_functions import is_blackhole
+from models.demos.gemma4.tt.mesh_orientation import decode_flag
 
 TILE_SIZE = 32
 # P150 Blackhole DRAM bank count. Wormhole meshes differ — can_dram_shard is
@@ -35,6 +38,14 @@ _L1_HEADROOM_BYTES = 64_000
 # to find_largest_divisor(..., 8)). Prefer L1-aware shrinking below over a hard
 # empirical cap — set GEMMA4_DECODE_IN0_BLOCK_W_MAX only for sweeps.
 _DECODE_IN0_BLOCK_W_MAX = max(1, int(os.environ.get("GEMMA4_DECODE_IN0_BLOCK_W_MAX", "8")))
+# GEMMA4_DRAM_SHARD_ROW_VIEW=1: decode rows below one tile (batch < 32) take the matmul through metadata reshapes
+# of the row tile instead of a Pad program before and a Slice program after (see DramShardedLinear.__call__).
+# GEMMA4_DRAM_SHARD_DECODE_1D=1: decode through the 1D-multicast matmul (tt/decode_matmul.py, every worker core one
+# N tile, K streamed in GEMMA4_DECODE_MM_IN0_BLOCK_W blocks) on an interleaved on-device copy of the width-sharded
+# weight, instead of the DRAM-sharded kernel (whose core grid must divide both K and N tiles: 8 cores for the
+# dense 31B / 12B wqkv and o_proj) with its activation reshard before and after: 3 programs -> 1 per matmul. The
+# copy is made at load from the warm ``.ws`` cache (no second cache file); prefill keeps its 2D config.
+# Both are decode fusion flags (tt/mesh_orientation.py): the env var when set, else the build profile's default.
 
 
 def _roundup(a, b):
@@ -125,7 +136,62 @@ def prefill_max_cols_default(mesh_device=None):
 # ``cutoff`` rows (the extra batch dim is iterated by the kernel, reusing CBs).
 # This keeps per_core_M tiny AND avoids the memory blow-up of a chunk+concat
 # (which would need source chunks + a full-size destination simultaneously).
-_PREFILL_CUTOFF = 512 if is_blackhole() else 1024
+# The slab must fill the grid's rows: a 512-row slab is 16 row tiles, which the Blackhole (cols, 10) grid serves with
+# per_core_M = 2 on 8 of its 10 rows (the 0522 profile: every prefill matmul on 56 / 64 cores, at the floor of those
+# cores). Blackhole: grid rows x 8 row tiles (2560 rows; the 8 tiles per core fit the CBs); a prompt the slab does not
+# divide (2048, 8192, ...) takes the remainder path below in chunks of the same size, each filling all rows.
+# Wormhole keeps 1024 rows on its (8,8) grid (32 tiles = 4 per core on all 8 rows). GEMMA4_PREFILL_CUTOFF overrides.
+_PREFILL_CUTOFF = int(
+    os.environ.get("GEMMA4_PREFILL_CUTOFF") or (prefill_grid_default()[1] * 8 * TILE_SIZE if is_blackhole() else 1024)
+)
+# Leftover rows after the full slabs are processed in chunks of this size (default 1024: the pre-slab configs).
+_PREFILL_REMAINDER_CHUNK = int(os.environ.get("GEMMA4_PREFILL_REMAINDER_CHUNK") or min(1024, _PREFILL_CUTOFF))
+# The 2D matmul's static CB region must leave this much L1 free (serving interleaves prefills with decode-time L1
+# residents; the unit tests keep a 33 KB buffer at the top of L1): the slab shrinks per weight until it fits. 0 = no cap.
+# 64 KB (measured 2026-10-24): the 4096-token unit tests pass on both models, the 31B keeps its 2560-row slab (bfp8 MLP
+# weights) and the 12B's 2240-row slab still takes a 2K prompt as one matmul; 128 KB cost the 31B +1.0 % at 2K.
+_PREFILL_L1_HEADROOM = int(os.environ.get("GEMMA4_PREFILL_L1_HEADROOM_KB", "64")) * 1024
+# CB region start + the kernel's small CBs, measured on Blackhole: program 1650 (M 8, N 48, k-block 4, bf16 weights)
+# reported 1815936 B = 112000 + in0 + in1 + out below.
+_PREFILL_CB_BASE = 112000
+_L1_BYTES = 1572864 if is_blackhole() else 1499136
+
+
+def prefill_cb_bytes(per_core_M, per_core_N, in0_block_w, weight_tile_bytes):
+    """Static CB bytes per core of the 2D prefill matmul: in0 and in1 double-buffered, one bf16 output block."""
+    return (
+        _PREFILL_CB_BASE
+        + 2 * per_core_M * in0_block_w * 2048
+        + 2 * in0_block_w * per_core_N * weight_tile_bytes
+        + per_core_M * per_core_N * 2048
+    )
+
+
+def weight_tile_bytes(dtype) -> int:
+    return {ttnn.bfloat8_b: 1088, ttnn.bfloat4_b: 576}.get(dtype, 2048)
+
+
+def prefill_slab_rows(k, n, dtype, max_cols=None, grid=None, headroom=None, l1_bytes=None):
+    """Rows of one prefill slab for a weight of this shape / dtype: the largest per_core_M <= 8 (x grid rows x 32)
+    whose static CBs leave ``headroom`` bytes of L1 (GEMMA4_PREFILL_L1_HEADROOM_KB; 0 = the full 8-tile slab).
+    Calibrated examples (Blackhole): at 128 KB 31B gate_up bfp8 2240 rows, the same weight in bf16 (the unit tests)
+    1280, 12B gate_up bf16 1920; at the 64 KB default the 31B keeps 2560 and the 12B takes 2240; narrow weights 2560."""
+    grid = grid or prefill_grid_default()
+    headroom = _PREFILL_L1_HEADROOM if headroom is None else headroom
+    rows = grid[1] * TILE_SIZE
+    if headroom <= 0:
+        return 8 * rows
+    cols = _best_prefill_cols(n, max_cols if max_cols is not None else grid[0])
+    per_core_N = max(1, math.ceil(n / TILE_SIZE / cols))
+    k_tiles = math.ceil(k / TILE_SIZE)
+    in0_block_w = _find_largest_divisor(k_tiles, max_div=min(4, max(1, k_tiles // max(1, cols))))
+    budget = (l1_bytes or _L1_BYTES) - headroom
+    for m in range(8, 0, -1):
+        if prefill_cb_bytes(m, per_core_N, in0_block_w, weight_tile_bytes(dtype)) <= budget:
+            return m * rows
+    return rows
+
+
 # Fallback per-call row cap for the (rare) M not divisible by the cutoff.
 _PREFILL_M_CHUNK = prefill_grid_default()[1] * 8 * TILE_SIZE
 
@@ -204,10 +270,10 @@ def decode_progcfg(m, k, n, dtype=None):
 
 def activation_memcfg(k, n):
     """WIDTH_SHARDED L1 activation config matching ``decode_progcfg``'s core grid."""
-    rows, cols, num_cores = _decode_core_grid(k, n)
+    grid_rows, cols, num_cores = _decode_core_grid(k, n)
     return ttnn.create_sharded_memory_config(
         shape=(TILE_SIZE, k // num_cores),
-        core_grid=ttnn.CoreGrid(x=cols, y=rows),
+        core_grid=ttnn.CoreGrid(x=cols, y=grid_rows),
         strategy=ttnn.ShardStrategy.WIDTH,
         orientation=ttnn.ShardOrientation.ROW_MAJOR,
         use_height_and_width_as_shard_shape=True,
@@ -286,6 +352,9 @@ def prefill_progcfg(m, k, n, grid_size=None, max_cols=None, fused_activation=Non
         base = prefill_grid_default()
         cols = _best_prefill_cols(n, max_cols if max_cols is not None else base[0])
         grid_size = (cols, base[1])
+    # A short prefill (4 row tiles at 128 tokens) occupies only M/32 of the grid rows: the 2D kernel maps M over the
+    # rows, transpose_mcast is rejected for a sharded weight and the DRAM-sharded kernel takes one row tile only
+    # (measured 2026-10-24), so the small-M grid is not improvable here without a kernel or weight-layout change.
     per_core_M = max(1, math.ceil(m / TILE_SIZE / grid_size[1]))
     per_core_N = max(1, math.ceil(n / TILE_SIZE / grid_size[0]))
     out_subblock_h = 1
@@ -308,6 +377,19 @@ def prefill_progcfg(m, k, n, grid_size=None, max_cols=None, fused_activation=Non
     )
 
 
+def prefill_row_chunks(m, slab=None, remainder=None):
+    """Row ranges of a prefill matmul whose M is not a multiple of the slab: full slabs first, then the leftover in
+    chunks of at most ``remainder`` rows (the pre-slab configs; see ``__call__``)."""
+    slab = slab or _PREFILL_M_CHUNK
+    remainder = remainder or _PREFILL_REMAINDER_CHUNK
+    bounds, start = [], 0
+    while start < m:
+        step = slab if m - start >= slab else remainder
+        bounds.append((start, min(start + step, m)))
+        start += step
+    return bounds
+
+
 class DramShardedLinear:
     """A single DRAM-width-sharded weight served for both decode and prefill.
 
@@ -316,11 +398,24 @@ class DramShardedLinear:
     an FPU-tuned 2D program config (auto-selection overflows L1 for these shapes).
     """
 
-    def __init__(self, weight_torch, mesh_device, mesh_mapper, k, n, dtype, cache_file_name):
+    def __init__(self, weight_torch, mesh_device, mesh_mapper, k, n, dtype, cache_file_name, pipeline_row=None):
+        """``pipeline_row``: ``(workers per DRAM bank, in0_block_w)`` from ``decode_matmul.pipeline_row_for`` puts the
+        decode kernel on its multi-core pipeline (readers per bank reading the activation from its L1 shards; both
+        decode entry points, the prefill config untouched); None = the single-reader kernel."""
         self.k = k
         self.n = n
         self._dtype = dtype
         self._prefill_max_cols = prefill_max_cols_default(mesh_device)
+        # the slab this weight's CBs allow (GEMMA4_PREFILL_CUTOFF still pins it)
+        self._slab_rows = (
+            _PREFILL_CUTOFF
+            if os.environ.get("GEMMA4_PREFILL_CUTOFF")
+            else min(_PREFILL_CUTOFF, prefill_slab_rows(k, n, dtype, max_cols=self._prefill_max_cols))
+        )
+        if self._slab_rows < _PREFILL_CUTOFF:  # the rule's decision, once per weight (the knob arms grep this)
+            logger.info(
+                f"prefill slab {self._slab_rows} rows for k={k} n={n} dtype={dtype} (headroom {_PREFILL_L1_HEADROOM // 1024} KB)"
+            )
         self.weight = ttnn.as_tensor(
             weight_torch,
             device=mesh_device,
@@ -333,11 +428,88 @@ class DramShardedLinear:
         # Act shard grid must match decode_progcfg (K and N), not a K-only grid.
         self._act_memcfg = activation_memcfg(k, n)
         self._decode_pc = decode_progcfg(TILE_SIZE, k, n, dtype=dtype)
+        self.pipeline_row = None
+        if pipeline_row is not None:
+            workers, block_w = int(pipeline_row[0]), int(pipeline_row[1])
+            pc = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
+                in0_block_w=block_w,
+                per_core_M=self._decode_pc.per_core_M,
+                per_core_N=self._decode_pc.per_core_N,
+                fused_activation=None,
+            )
+            pc.num_workers_per_dram_bank = workers
+            pc.use_multicore_pipeline = True
+            self._decode_pc = pc
+            self.pipeline_row = (workers, block_w)
+        # The pipeline splits a column's K over the bank's workers and, without fp32 Dest accumulation, adds the
+        # partials in bf16 (16-bit Dest groups + a Float16_b L1 accumulator + the bf16 partial exchange): on real
+        # activations that cost the 12B 4 / 385 top-1 tokens. With fp32 Dest accumulation the whole K of a column
+        # pass stays in fp32 Dest (no L1 partials), more accurate than the single-reader kernel; the caller's own
+        # compute config, when given, still wins. GEMMA4_DRAM_SHARD_PIPELINE=l1acc keeps the packer-L1 form.
+        self._pipeline_ckc = None
+        if pipeline_row is not None:
+            from models.demos.gemma4.tt.decode_matmul import pipeline_fp32_acc
+
+            if pipeline_fp32_acc():
+                self._pipeline_ckc = ttnn.init_device_compute_kernel_config(
+                    mesh_device.arch(),
+                    math_fidelity=ttnn.MathFidelity.LoFi,
+                    math_approx_mode=False,
+                    fp32_dest_acc_en=True,
+                    packer_l1_acc=False,
+                )
+        self._decode_1d = None
+        if decode_flag("GEMMA4_DRAM_SHARD_DECODE_1D") == "1":
+            from models.demos.gemma4.tt.decode_matmul import decode_1d_progcfg, decode_compute_kernel_config
+
+            sharded = self.weight
+            self.weight = ttnn.to_memory_config(sharded, ttnn.DRAM_MEMORY_CONFIG)
+            sharded.deallocate(True)
+            n_padded = int(self.weight.shape[-1])
+            self._decode_1d = (
+                decode_1d_progcfg(mesh_device, k, n_padded),
+                decode_compute_kernel_config(mesh_device),
+            )
 
     def _prefill_pc(self, m):
         return prefill_progcfg(m, self.k, self.n, max_cols=self._prefill_max_cols)
 
-    def __call__(self, x, compute_kernel_config=None, out_memory_config=None):
+    def _decode_ckc(self, compute_kernel_config):
+        """The decode kernel's compute config: the caller's, else the pipelined row's fp32-Dest config, else None."""
+        return compute_kernel_config if compute_kernel_config is not None else self._pipeline_ckc
+
+    @property
+    def act_memory_config(self):
+        """The L1 width-sharded layout the decode kernel reads its activation in (one row tile)."""
+        return self._act_memcfg
+
+    def accepts_sharded_rows(self) -> bool:
+        """True when a producer may hand this matmul its decode activation already in ``act_memory_config``
+        (the DRAM-sharded kernel; the 1D decode path reads interleaved rows)."""
+        return self._decode_1d is None
+
+    def _decode_sharded_rows(self, x_sh, out_mc, compute_kernel_config, m_rows, keep_sharded=False):
+        """Decode on an activation that is already width-sharded in ``act_memory_config`` (no reshard program)."""
+        out = ttnn.linear(
+            x_sh,
+            self.weight,
+            program_config=self._decode_pc,
+            compute_kernel_config=self._decode_ckc(compute_kernel_config),
+            memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+        )
+        x_sh.deallocate(True)
+        if keep_sharded:
+            return out
+        out = ttnn.to_memory_config(out, out_mc)
+        if m_rows < TILE_SIZE:
+            n_out = int(out.shape[-1])
+            out = ttnn.reshape(out, ttnn.Shape([1, 1, m_rows, n_out]), ttnn.Shape([1, 1, TILE_SIZE, n_out]))
+        return out
+
+    def __call__(self, x, compute_kernel_config=None, out_memory_config=None, keep_sharded=False, rows=None):
+        """``keep_sharded``: a decode (one row tile) result is returned in the kernel's L1 width-sharded output
+        layout (no sharded -> interleaved copy; the consumer reads the shards). ``rows``: the logical row count of
+        the result when the input is a width-sharded one-row-tile activation (its logical rows are the tile)."""
         out_mc = out_memory_config if out_memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
         # Prefill with batch>1 reshapes activations to [B, 1, S, K] (see
         # DecoderLayer). Row count for the matmul is the product of all leading
@@ -350,6 +522,10 @@ class DramShardedLinear:
         M = 1
         for d in orig_leading:
             M *= d
+        if x.is_sharded() and M <= TILE_SIZE and self._decode_1d is None and x.memory_config() == self._act_memcfg:
+            return self._decode_sharded_rows(
+                x, out_mc, compute_kernel_config, M if rows is None else int(rows), keep_sharded=keep_sharded
+            )
         flat_shape = [1, 1, M, n_in]
         x_work = x if x_shape == flat_shape else ttnn.reshape(x, flat_shape)
 
@@ -366,21 +542,53 @@ class DramShardedLinear:
             # keep the logical [..., M, N] volume (avoids reshape volume mismatch).
             pad = TILE_SIZE - M
             x_run = x_work
-            if pad:
-                x_run = ttnn.pad(x_work, [(0, 0), (0, 0), (0, pad), (0, 0)], value=0.0)
-            x_sh = ttnn.to_memory_config(x_run, self._act_memcfg)
-            if pad:
-                x_run.deallocate(True)
-            out = ttnn.linear(
-                x_sh,
-                self.weight,
-                program_config=self._decode_pc,
-                compute_kernel_config=compute_kernel_config,
-                memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+            # GEMMA4_DRAM_SHARD_ROW_VIEW=1: a TILE activation of M < 32 logical rows already occupies one row tile
+            # (padded_shape rows == 32) and the decode kernel is row-independent, so the tile is presented as 32
+            # logical rows (a metadata reshape) and the result as M rows again, instead of a Pad program before and
+            # a Slice program after the matmul (2 of the 5 programs per decode matmul at batch 1).
+            row_view = (
+                pad > 0
+                and decode_flag("GEMMA4_DRAM_SHARD_ROW_VIEW") == "1"
+                and x_work.layout == ttnn.TILE_LAYOUT
+                and int(x_work.padded_shape[-2]) == TILE_SIZE
+                and len(x_work.shape) == 4
             )
-            x_sh.deallocate(True)
-            out = ttnn.to_memory_config(out, out_mc)
-            if pad:
+            if row_view:
+                full = ttnn.Shape([1, 1, TILE_SIZE, n_in])
+                x_run = ttnn.reshape(x_work, full, full)
+            elif pad:
+                x_run = ttnn.pad(x_work, [(0, 0), (0, 0), (0, pad), (0, 0)], value=0.0)
+            if self._decode_1d is not None:
+                # interleaved weight, 1D multicast config (no activation reshard)
+                pc, ckc = self._decode_1d
+                out = ttnn.linear(
+                    x_run,
+                    self.weight,
+                    program_config=pc,
+                    compute_kernel_config=compute_kernel_config if compute_kernel_config is not None else ckc,
+                    memory_config=out_mc,
+                )
+                if pad and not row_view:
+                    x_run.deallocate(True)
+            else:
+                x_sh = ttnn.to_memory_config(x_run, self._act_memcfg)
+                if pad and not row_view:
+                    x_run.deallocate(True)
+                out = ttnn.linear(
+                    x_sh,
+                    self.weight,
+                    program_config=self._decode_pc,
+                    compute_kernel_config=self._decode_ckc(compute_kernel_config),
+                    memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
+                )
+                x_sh.deallocate(True)
+                if keep_sharded:
+                    return out  # the kernel's L1 width-sharded form (one row tile; the consumer reads the shards)
+                out = ttnn.to_memory_config(out, out_mc)
+            if row_view:
+                n_out = int(out.shape[-1])
+                out = ttnn.reshape(out, ttnn.Shape([1, 1, M, n_out]), ttnn.Shape([1, 1, TILE_SIZE, n_out]))
+            elif pad:
                 out_pad = out
                 out = ttnn.slice(
                     out_pad,
@@ -391,7 +599,11 @@ class DramShardedLinear:
             return _restore(out)
 
         # Prefill on the width-sharded weight via the 2D matmul kernel.
-        if M <= _PREFILL_CUTOFF:
+        if os.environ.get("GEMMA4_DEBUG_L1_DUMP") == "1" and not getattr(self, "_l1_dumped", False):
+            self._l1_dumped = True  # diagnostics: the L1 residents a program's CBs must stay below
+            ttnn.dump_device_memory_state(x_work.device(), f"prefill_matmul_k{self.k}_n{self.n}_M{M}")
+        slab = self._slab_rows
+        if M <= slab:
             pc = self._prefill_pc(M)
             out = ttnn.linear(
                 x_work,
@@ -402,27 +614,31 @@ class DramShardedLinear:
             )
             return _restore(out)
 
-        if M % _PREFILL_CUTOFF == 0:
-            # Reshape M into (batch, cutoff) so per_core_M is sized to the cutoff
+        if M % slab == 0:
+            # Reshape M into (batch, slab) so per_core_M is sized to the slab
             # (tiny CBs) and the batch dim is iterated by the kernel. Both
-            # reshapes are metadata-only (cutoff is tile-aligned). Single matmul,
+            # reshapes are metadata-only (the slab is tile-aligned). Single matmul,
             # single-size output — no concat, no memory doubling.
-            batch = M // _PREFILL_CUTOFF
-            x_r = ttnn.reshape(x_work, (1, batch, _PREFILL_CUTOFF, n_in))
-            pc = self._prefill_pc(_PREFILL_CUTOFF)
+            batch = M // slab
+            x_r = ttnn.reshape(x_work, (1, batch, slab, n_in))
+            pc = self._prefill_pc(slab)
             out_r = ttnn.linear(
                 x_r, self.weight, program_config=pc, compute_kernel_config=compute_kernel_config, memory_config=out_mc
             )
             out = ttnn.reshape(out_r, (1, 1, M, out_r.shape[-1]))
             return _restore(out)
 
-        # Fallback for M not divisible by the cutoff (rare; small M in practice):
-        # chunk + concat. Only reached for shapes that don't hit the long-context
-        # memory pressure, so the concat's transient extra buffer is affordable.
+        # M not divisible by the slab: full slabs first, then the leftover in chunks of at most
+        # _PREFILL_REMAINDER_CHUNK rows (the pre-slab 1024-row configs, per_core_M <= 4): an odd leftover such as
+        # 4096 = 2560 + 1536 sized its own 1536-row config (per_core_M 5) whose CBs overflow L1 on the 31B's gate_up
+        # (7x10 grid, 1815936 B) and clash with live L1 buffers on the 12B (CI 2026-10-24, test_layer_forward /
+        # test_shared_mlp at 4096); 8192 = 3 x 2560 + 512 is unchanged. chunk + concat; only reached for shapes
+        # that don't hit the long-context memory pressure, so the concat's transient extra buffer is affordable.
         outs = []
-        for start in range(0, M, _PREFILL_M_CHUNK):
-            end = min(start + _PREFILL_M_CHUNK, M)
-            x_c = ttnn.slice(x_work, [0, 0, start, 0], [1, 1, end, self.k])
+        for start, end in prefill_row_chunks(M, slab=slab, remainder=min(_PREFILL_REMAINDER_CHUNK, slab)):
+            # a slice over the whole extent is a view of x_work (freeing it would free the caller's activation)
+            whole = start == 0 and end == M
+            x_c = x_work if whole else ttnn.slice(x_work, [0, 0, start, 0], [1, 1, end, self.k])
             pc = self._prefill_pc(end - start)
             outs.append(
                 ttnn.linear(
@@ -433,7 +649,8 @@ class DramShardedLinear:
                     memory_config=out_mc,
                 )
             )
-            x_c.deallocate(True)
+            if not whole:
+                x_c.deallocate(True)
         out = ttnn.concat(outs, dim=-2, memory_config=out_mc)
         for o in outs:
             o.deallocate(True)

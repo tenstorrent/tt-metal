@@ -53,8 +53,8 @@ bool is_neighbor_in_direction(
 
 namespace tt::tt_fabric {
 
-size_t get_tt_fabric_channel_buffer_size_bytes() {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+size_t get_tt_fabric_channel_buffer_size_bytes(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    const auto& control_plane = mesh_device.impl().metal_env().get_control_plane();
     return control_plane.get_fabric_context().get_fabric_channel_buffer_size_bytes();
 }
 
@@ -466,7 +466,7 @@ void append_routing_plane_connection_manager_rt_args_impl(
                 link_idx = connection_link_indices[i];
             }
         } else {
-            const auto links = get_forwarding_link_indices(src_fabric_node_id, dst_node);
+            const auto links = get_forwarding_link_indices(control_plane, src_fabric_node_id, dst_node);
             TT_FATAL(!links.empty(), "No forwarding links available from {} to {}", src_fabric_node_id, dst_node);
             link_idx = links[0];
         }
@@ -515,10 +515,11 @@ void append_routing_plane_connection_manager_rt_args(
 }
 
 std::vector<uint32_t> get_forwarding_link_indices(
-    const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id) {
-    // TODO(#52020): resolves the default context; take a const MeshDevice& instead.
+    const tt::tt_metal::distributed::MeshDevice& mesh_device,
+    const FabricNodeId& src_fabric_node_id,
+    const FabricNodeId& dst_fabric_node_id) {
     return get_forwarding_link_indices(
-        tt::tt_metal::MetalContext::instance().get_control_plane(), src_fabric_node_id, dst_fabric_node_id);
+        mesh_device.impl().metal_env().get_control_plane(), src_fabric_node_id, dst_fabric_node_id);
 }
 
 tt::tt_metal::CoreCoord get_forwarding_eth_core(
@@ -551,8 +552,8 @@ tt::tt_metal::CoreCoord get_forwarding_eth_core(
         physical_chip_id, cluster.get_virtual_eth_core_from_channel(physical_chip_id, eth_chans[link_idx]));
 }
 
-tt::tt_fabric::Topology get_fabric_topology() {
-    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+tt::tt_fabric::Topology get_fabric_topology(const tt::tt_metal::distributed::MeshDevice& mesh_device) {
+    const auto& control_plane = mesh_device.impl().metal_env().get_control_plane();
     return control_plane.get_fabric_context().get_fabric_topology();
 }
 

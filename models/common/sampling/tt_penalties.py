@@ -34,24 +34,7 @@ def apply_penalties(logits: ttnn.Tensor, context: Optional[PenaltyContext]) -> t
         return logits
 
     op_kwargs = {"sub_core_grids": context.sub_core_grids} if context.sub_core_grids else {}
-    # presence
-    presence_term = ttnn.multiply(
-        ttnn.typecast(context.output_mask, ttnn.bfloat16, **op_kwargs), context.presence_penalties, **op_kwargs
-    )
-    presence_term_bf16 = ttnn.typecast(presence_term, ttnn.bfloat16, **op_kwargs)
-    logits = ttnn.subtract(logits, presence_term_bf16, output_tensor=logits, **op_kwargs)
-    presence_term_bf16.deallocate()
-
-    # frequency
-    output_counts_bf16 = ttnn.typecast(context.output_counts, ttnn.bfloat16, **op_kwargs)
-
-    freq_term = ttnn.multiply(output_counts_bf16, context.frequency_penalties, **op_kwargs)
-
-    freq_term_bf16 = ttnn.typecast(freq_term, ttnn.bfloat16, **op_kwargs)
-    logits = ttnn.subtract(logits, freq_term_bf16, output_tensor=logits, **op_kwargs)
-    freq_term_bf16.deallocate()
-
-    # repetition
+    # repetition, applied before presence and frequency as in vLLM's apply_penalties
 
     # If token appears in prompt or output, apply, otherwise use 1.0 for no-op.
 
@@ -71,6 +54,23 @@ def apply_penalties(logits: ttnn.Tensor, context: Optional[PenaltyContext]) -> t
     inverse_penalties.deallocate()
     logits = ttnn.multiply(logits, scaling, output_tensor=logits, **op_kwargs)
     scaling.deallocate()
+
+    # presence
+    presence_term = ttnn.multiply(
+        ttnn.typecast(context.output_mask, ttnn.bfloat16, **op_kwargs), context.presence_penalties, **op_kwargs
+    )
+    presence_term_bf16 = ttnn.typecast(presence_term, ttnn.bfloat16, **op_kwargs)
+    logits = ttnn.subtract(logits, presence_term_bf16, output_tensor=logits, **op_kwargs)
+    presence_term_bf16.deallocate()
+
+    # frequency
+    output_counts_bf16 = ttnn.typecast(context.output_counts, ttnn.bfloat16, **op_kwargs)
+
+    freq_term = ttnn.multiply(output_counts_bf16, context.frequency_penalties, **op_kwargs)
+
+    freq_term_bf16 = ttnn.typecast(freq_term, ttnn.bfloat16, **op_kwargs)
+    logits = ttnn.subtract(logits, freq_term_bf16, output_tensor=logits, **op_kwargs)
+    freq_term_bf16.deallocate()
 
     return logits
 

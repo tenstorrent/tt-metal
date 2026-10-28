@@ -764,7 +764,7 @@ MeshWorkload make_stub_fabric_workload(
         const auto sender_node = mesh->get_fabric_node_id(coord);
         const tt::tt_fabric::FabricNodeId downstream_node(
             down_mesh_id, mesh_graph.coordinate_to_chip(down_mesh_id, coord, down_host_rank));
-        const auto links = tt::tt_fabric::get_forwarding_link_indices(sender_node, downstream_node);
+        const auto links = tt::tt_fabric::get_forwarding_link_indices(*mesh, sender_node, downstream_node);
         TT_FATAL(!links.empty(), "stub fabric op: no fabric link sender->downstream at coord {}", coord);
 
         auto kernel = CreateKernel(
@@ -829,7 +829,7 @@ MeshWorkload make_stress_fabric_workload(
                 continue;
             }
             const tt::tt_fabric::FabricNodeId neighbor_node(sender_node.mesh_id, neighbors.front());
-            for (auto link : tt::tt_fabric::get_forwarding_link_indices(sender_node, neighbor_node)) {
+            for (auto link : tt::tt_fabric::get_forwarding_link_indices(*mesh, sender_node, neighbor_node)) {
                 conns.emplace_back(neighbor_node, link);
             }
         }

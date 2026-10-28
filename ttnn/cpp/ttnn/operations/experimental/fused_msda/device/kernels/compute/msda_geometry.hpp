@@ -208,11 +208,13 @@ inline void corner_weight(
 
 // Geometry for one sampling point: the two axes, then the four corner scalars.
 //
-// The corner order is NW, NE, SW, SE, and it is a contract with the reader: the
-// four scalar tiles pushed here are consumed against the four input-tile groups
-// the reader gathers with `dy_off = (c < 2) ? 0 : 1; dx_off = (c & 1) ? 1 : 0`
-// in fused_msda_reader_common.hpp. The two orders must agree element for
-// element or every sample is silently wrong.
+// The corner order is NW, NE, SW, SE, and it is a contract with both gathers.
+// The four scalar tiles pushed here are consumed against the four input-tile
+// groups filled by fused_msda_gather::gather_rows (msda_gather_rows.hpp, slot
+// 2 * dy + dx; run by the reader and, with the split gather, the writer) and,
+// for D % 32 != 0, by the scatter in fused_msda_reader_common.hpp
+// (`dy_off = (c < 2) ? 0 : 1; dx_off = (c & 1) ? 1 : 0`). All three must agree
+// element for element or every sample is silently wrong.
 //
 // The floors go to the reader, which turns them into page indices; the
 // fractions never leave the compute kernel.

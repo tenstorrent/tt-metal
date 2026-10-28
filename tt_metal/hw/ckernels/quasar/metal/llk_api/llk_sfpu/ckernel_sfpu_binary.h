@@ -12,8 +12,8 @@
 #include "ckernel_sfpu_add.h"
 #include "ckernel_sfpu_conversions.h"
 #include "ckernel_sfpu_recip.h"
-#include "ckernel_sfpu_srcs.h"
 #include "sfpi.h"
+#include "ckernel_sfpu_operand.h"
 
 namespace ckernel {
 namespace sfpu {
@@ -35,7 +35,7 @@ namespace sfpu {
  * @tparam TILE_SHAPE: destination tile shape used to calculate operand offsets
  */
 template <
-    bool APPROXIMATION_MODE /*maybe_unused*/,
+    [[maybe_unused]] bool APPROXIMATION_MODE,
     BinaryOp BINOP,
     bool is_fp32_dest_acc_en,
     DstRoundingMode dst_rounding_mode = DstRoundingMode::Default,
@@ -56,7 +56,7 @@ inline void calculate_sfpu_binary(
             using Operand = SfpuOperand<SfpuReg::Dest, SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat>>;
             constexpr bool round_to_bf16 = !is_fp32_dest_acc_en && dst_rounding_mode == DstRoundingMode::NearestEven;
             using Output = SfpuOperand<SfpuReg::Dest, DestBf16RneFormat<round_to_bf16>>;
-            calculate_add_operands<1>(
+            calculate_binary_operands<AddFloatMath, 1 /*ITERATIONS*/>(
                 Operand{static_cast<int>(dst_index_in0 * dst_tile_size_sfpi)},
                 Operand{static_cast<int>(dst_index_in1 * dst_tile_size_sfpi)},
                 Output{static_cast<int>(dst_index_out * dst_tile_size_sfpi)});
@@ -106,28 +106,13 @@ inline void calculate_sfpu_binary(
 }
 
 /**
- * @brief ADD over one SrcS slice (slots per @ref SrcsLayout).
- *
- * @tparam LAYOUT: Load and store layout, values = <F16a/F16b/F32>; unpack destination and pack
- *         source formats must match.
- * @note The caller runs unpack/pack and clears the SrcS valids after this call, as
- *       llk_sfpu_srcs_binary does.
- */
-template <sfpi::DataLayout LAYOUT>
-sfpi_inline void calculate_add_srcs() {
-    using Layout = SrcsLayout<LAYOUT>;
-    using Operand = SfpuOperand<SfpuReg::SrcS, SfpiFormat<LAYOUT, sfpi::vFloat>>;
-    calculate_add_operands<Layout::ops>(Operand{Layout::in0}, Operand{Layout::in1}, Operand{Layout::out});
-}
-
-/**
  * @brief Initialisation hook for binary SFPU kernels.
  * For DIV, programs the Newton-Raphson reciprocal constant; no-op for MUL.
  *
  * @tparam APPROXIMATION_MODE: forwarded to the op-specific init
  * @tparam BINOP: selects which op's init to run
  */
-template <bool APPROXIMATION_MODE /*maybe_unused*/, BinaryOp BINOP>
+template <[[maybe_unused]] bool APPROXIMATION_MODE, BinaryOp BINOP>
 inline void sfpu_binary_init() {
     if constexpr (BINOP == BinaryOp::DIV) {
         // DIV always runs the Newton-refined _sfpu_reciprocal_<2>, so the Newton constant is

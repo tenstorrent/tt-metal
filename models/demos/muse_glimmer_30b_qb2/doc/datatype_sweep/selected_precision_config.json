@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "config_id": "head_bfloat4_b_LoFi_bf16_acc_r2_k4",
+  "model_id": "meta-models/Muse-Glimmer-30B",
+  "revision": "a4e59da52a7bc87ae7251dd5545c0dd437c44b68",
+  "max_context": 131072,
+  "default_physical_pages": 4096,
+  "decoder_kinds": {
+    "sliding_attention": {
+      "weight_groups": {
+        "qkv": {
+          "dtype": "bfloat4_b",
+          "fidelity": "LoFi",
+          "fp32": true
+        },
+        "self_attn.o_proj": {
+          "dtype": "bfloat4_b",
+          "fidelity": "LoFi",
+          "fp32": false
+        },
+        "mlp.gate_up": {
+          "dtype": "bfloat4_b",
+          "fidelity": "LoFi",
+          "fp32": false
+        },
+        "mlp.down_proj": {
+          "dtype": "bfloat4_b",
+          "fidelity": "LoFi",
+          "fp32": false
+        }
+      },
+      "activations": {
+        "attention_act_dtype": "bfloat16",
+        "mlp_act_dtype": "bfloat8_b",
+        "prefill_attention_act_dtype": "bfloat16",
+        "prefill_mlp_act_dtype": "bfloat16"
+      },
+      "ccl": {
+        "ccl_dtype": "bfloat16",
+        "decode.mlp.down_proj.ccl_dtype": "bfloat8_b"
+      },
+      "compute": {
+        "sdpa_fidelity": "HiFi2",
+        "norm_fidelity": "HiFi2",
+        "norm_fp32": true,
+        "input_layernorm.fidelity": "HiFi4",
+        "pre_feedforward_layernorm.fidelity": "LoFi",
+        "pre_feedforward_layernorm.fp32": false
+      }
+    },
+    "full_attention": {
+      "weight_groups": {
+        "qkv": {
+          "dtype": "bfloat4_b",
+          "fidelity": "LoFi",
+          "fp32": false
+        },
+        "self_attn.o_proj": {
+          "dtype": "bfloat4_b",
+          "fidelity": "LoFi",
+          "fp32": false
+        },
+        "mlp.gate_up": {
+          "dtype": "bfloat4_b",
+          "fidelity": "LoFi",
+          "fp32": false
+        },
+        "mlp.down_proj": {
+          "dtype": "bfloat4_b",
+          "fidelity": "LoFi",
+          "fp32": false
+        }
+      },
+      "activations": {
+        "attention_act_dtype": "bfloat8_b",
+        "mlp_act_dtype": "bfloat8_b",
+        "prefill_attention_act_dtype": "bfloat8_b",
+        "prefill_mlp_act_dtype": "bfloat8_b"
+      },
+      "ccl": {
+        "ccl_dtype": "bfloat8_b",
+        "decode.mlp.down_proj.ccl_dtype": "bfloat8_b"
+      },
+      "compute": {
+        "sdpa_fidelity": "HiFi2",
+        "norm_fidelity": "LoFi",
+        "norm_fp32": false
+      }
+    }
+  },
+  "layer_exceptions": {},
+  "kv_cache_dtype": "bfloat8_b",
+  "residual_dtype": "bfloat16",
+  "embedding_dtype": "bfloat16",
+  "norm_weight_dtype": "bfloat16",
+  "rope_dtype": "bfloat16",
+  "logits_dtype": "bfloat16",
+  "sampling_parameter_dtype": "bfloat16",
+  "sampling_index_dtype": "uint32",
+  "final_norm_fidelity": "HiFi4",
+  "final_norm_fp32": true,
+  "terminal": {
+    "weight_dtype": "bfloat4_b",
+    "fidelity": "LoFi",
+    "fp32": false,
+    "block_w": 4,
+    "readers": 2,
+    "splits": 1,
+    "input_cores": 52
+  },
+  "fixed_runtime_assumptions": {
+    "short_prefill_matmul_output": "bfloat16",
+    "normalized_activations": "bfloat16",
+    "qkv_head_split_input": "bfloat16",
+    "cache_update_input": "bfloat16",
+    "sampling": "Sampling1D split-greedy/top-k32; BF16 logits/parameters; uint32 indices/seeds",
+    "moe": "none: dense gated MLP; qkv includes attention gate projection"
+  },
+  "short_prefill_sliding_input_norm": {
+    "fidelity": "LoFi",
+    "fp32": false
+  }
+}

@@ -175,8 +175,9 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileIn
                                 cb_data_format == tt::DataFormat::UInt32;
         ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
         // Legacy set unpack_to_dest_mode[c_0] = UnpackToDestFp32 for Float32 → UnpackMode::UnpackToDest.
-        // Compute consumes SRC0 (c_0); the required-entry rule fires only for Float32.
-        if (cb_data_format == tt::DataFormat::Float32) {
+        // Compute consumes SRC0 (c_0). Int32/UInt32 also unpack to Dest: Quasar's transpose needs it
+        // for 32-bit data and rejects a 32-bit integer unpack into SrcA (#59515).
+        if (fp32_dest_acc_en) {
             compute_cfg.unpack_modes = {{SRC0, UnpackMode::UnpackToDest}};
         }
         kernels.push_back(KernelSpec{
@@ -478,8 +479,9 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileRo
                                 cb_data_format == tt::DataFormat::UInt32;
         ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
         // Legacy set unpack_to_dest_mode[c_0] = UnpackToDestFp32 for Float32 → UnpackMode::UnpackToDest.
-        // Compute consumes SRC0 (c_0); the required-entry rule fires only for Float32.
-        if (cb_data_format == tt::DataFormat::Float32) {
+        // Compute consumes SRC0 (c_0). Int32/UInt32 also unpack to Dest: Quasar's transpose needs it
+        // for 32-bit data and rejects a 32-bit integer unpack into SrcA (#59515).
+        if (fp32_dest_acc_en) {
             compute_cfg.unpack_modes = {{SRC0, UnpackMode::UnpackToDest}};
         }
         kernels.push_back(KernelSpec{
@@ -789,8 +791,9 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
     // Keep both the tilize input (c_0 = SRC_CB) and its output (c_1 = TILIZE_CB, which feeds the transpose)
     // in full Float32 on the unpack-to-dest path; otherwise the unpacker falls back to tf32 and drops the
     // low mantissa bits. UnpackToDest is the Metal 2.0 equivalent of the legacy UnpackToDestFp32.
-    // (Float32-only; Int32/UInt32 deferred, #49936.)
-    if (cb_data_format == tt::DataFormat::Float32) {
+    // Int32/UInt32 take the same route: Quasar's tilize and transpose unpack to Dest only when
+    // UnpackToDest is requested, and Quasar rejects a 32-bit integer unpack into SrcA (#59515).
+    if (fp32_dest_acc_en) {
         compute_cfg.unpack_modes = {{SRC_CB, UnpackMode::UnpackToDest}, {TILIZE_CB, UnpackMode::UnpackToDest}};
     }
 
