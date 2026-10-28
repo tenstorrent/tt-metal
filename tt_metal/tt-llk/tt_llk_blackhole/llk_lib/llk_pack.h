@@ -587,7 +587,7 @@ inline void _llk_pack_uninit_()
  * @note mutex_ADC has to match the value given to @ref _llk_pack_init_ ; guarding only one of the two
  *       leaves unguarded SETADC issues. Supported for PackMode::Default only, see @ref _llk_pack_init_.
  */
-template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool mutex_ADC = false>
+template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool mutex_ADC = false, bool rmw_dest = false>
 inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t address)
 {
     static_assert(
@@ -599,7 +599,7 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
 
     set_dst_write_addr<mutex_ADC>(tile_index);
 
-    program_packer_destination(address);
+    program_packer_destination<!rmw_dest>(address);
 
     ckernel::ckernel_template::run();
 
@@ -614,7 +614,7 @@ inline void _llk_pack_(const std::uint32_t tile_index, const std::uint32_t addre
  * @tparam pack_mode: Packing layout, must be PackMode::Default.
  * @param num_tiles: Number of consecutive tiles to pack; start_tile_index + num_tiles must fit the dest sync region.
  */
-template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
+template <DstSync Dst, bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default, bool rmw_dest = false>
 inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::uint32_t address, const std::uint32_t num_tiles)
 {
     static_assert(pack_mode == PackMode::Default, "Blackhole: _llk_pack_block_ supports PackMode::Default only");
@@ -626,13 +626,17 @@ inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::ui
 
     set_dst_write_addr(start_tile_index);
 
-    program_packer_destination(address);
+    program_packer_destination<!rmw_dest>(address);
 
     // Template 1 MOP: non-zero bits 19:10 override the programmed outer loop count for this run only.
     const std::uint32_t outer_loop_len = TILE_NUM_FACES * num_tiles;
     TT_MOP(1, outer_loop_len >> 6, (outer_loop_len & 0x3F) << 10);
 
-    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
+    // The opt-in destination write leaves the Z counters to the last PACR's ADDR_MOD (see _llk_pack_rmw_dest_init_)
+    if constexpr (!rmw_dest)
+    {
+        TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
+    }
 }
 
 /**
@@ -643,11 +647,12 @@ inline void _llk_pack_block_(const std::uint32_t start_tile_index, const std::ui
 /**
  * The destination words of _llk_pack_block_closed_, issued ahead of the math wait of a full-sync block.
  */
+template <bool rmw_dest = false>
 inline void _llk_pack_block_closed_pre_(const std::uint32_t start_tile_index, const std::uint32_t address)
 {
     set_dst_write_addr(start_tile_index);
 
-    program_packer_destination(address);
+    program_packer_destination<!rmw_dest>(address);
 }
 
 /**
@@ -672,7 +677,7 @@ inline void _llk_pack_block_closed_run_(const std::uint32_t num_tiles, const std
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b1101);
 }
 
-template <DstSync Dst, bool is_fp32_dest_acc_en>
+template <DstSync Dst, bool is_fp32_dest_acc_en, bool rmw_dest = false>
 inline void _llk_pack_block_closed_(
     const std::uint32_t start_tile_index,
     const std::uint32_t address,
@@ -687,7 +692,7 @@ inline void _llk_pack_block_closed_(
         "The block exceeds the destination register sync region");
     LLK_ASSERT((tile_stride & 0xF) == 0 && tile_stride < 0x10000, "tile_stride must be a multiple of 16 below 64 KB");
 
-    _llk_pack_block_closed_pre_(start_tile_index, address);
+    _llk_pack_block_closed_pre_<rmw_dest>(start_tile_index, address);
     _llk_pack_block_closed_run_(num_tiles, tile_stride, num_faces);
 }
 
@@ -786,6 +791,19 @@ inline void _llk_pack_block_dense_(
     TT_INSN(pacr_word(face_r_dim, ADDR_MOD_1, 1));
     TTI_INCADCZW(p_setadc::PAC, 0, 0, 1, 0);
     TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
+}
+
+/**
+ * Opt-in setup of the byte-wise destination write of _llk_pack_, _llk_pack_block_ and _llk_pack_block_closed_ (the rmw_dest template argument):
+ * three RMWCIB over the low bytes of L1_Dest_addr instead of SETDMAREG, STALLWAIT, WRCFG, SETDMAREG and DMANOP. Call it after _llk_pack_init_ and
+ * again after any program that replaces the pack MOP: it sets bit 31 of the register once and clears the Z counters, which the default block pack
+ * then no longer resets after each call. The write is faster per tile where the packer is the bound and slower where the pack thread's config
+ * writes contend with the unpacker's (latency-bound matmul and eltwise kernels), so it is not the default.
+ */
+inline void _llk_pack_rmw_dest_init_()
+{
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
+    TTI_RMWCIB3(0xff, 0x80, THCON_SEC0_REG1_L1_Dest_addr_ADDR32);
 }
 
 template <bool zero_output, std::uint32_t addr_mod, std::uint32_t last>

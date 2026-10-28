@@ -1579,6 +1579,13 @@ class PACK_BLOCK(TemplateParameter):
         )
 
 
+class PACK_RMW_DEST(TemplateParameter):
+    """Opt-in byte-wise destination write of the default packs (Blackhole), see _llk_pack_rmw_dest_init_."""
+
+    def convert_to_cpp(self) -> str:
+        return "#define PACK_RMW_DEST"
+
+
 class MATMUL_PACK_BLOCK(TemplateParameter):
     """Output pack form of the matmul kernels (see matmul_pack_form), picked from columns the test already reports, so
     it adds no column: 0 per tile, 1 one block run, 2 the closed block, 4 the dense replay run of small tiles."""

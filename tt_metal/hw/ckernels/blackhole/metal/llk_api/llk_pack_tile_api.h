@@ -22,6 +22,14 @@
  */
 inline void llk_pack_dummy([[maybe_unused]] const std::uint32_t pack_output) {}
 
+// Opt-in byte-wise destination write of the default packs (_llk_pack_rmw_dest_init_): a kernel defines LLK_PACK_RMW_DEST. Off, the packs write
+// the destination as main does.
+#ifdef LLK_PACK_RMW_DEST
+inline constexpr bool llk_pack_rmw_dest = true;
+#else
+inline constexpr bool llk_pack_rmw_dest = false;
+#endif
+
 // Unified cores, shared by the CB-id API below and the LLKOperand API (experimental/). They take
 // already-resolved scalar formats/geometry + the runtime write address; the per-source prologue
 // (resolving these from a CB id, or from an MemDescriptor) lives in the callers.
@@ -50,11 +58,14 @@ inline void llk_pack_init_impl(
 
     _llk_pack_init_<pack_mode, zero_output, skip_addrmod_config, skip_packer_strides>(
         pack_src_reg_format, face_r_dim, tile_c_dim, num_faces, num_tiles, is_input_8bit_format);
+    if constexpr (llk_pack_rmw_dest) {
+        _llk_pack_rmw_dest_init_();
+    }
 }
 
 template <bool is_fp32_dest_acc_en, PackMode pack_mode = PackMode::Default>
 inline void llk_pack_impl(std::uint32_t tile_index, std::uint32_t pack_tile_addr) {
-    _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
+    _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode, false, llk_pack_rmw_dest>(tile_index, pack_tile_addr);
 }
 
 template <
@@ -155,7 +166,7 @@ inline void llk_matmul_pack(
         std::uint32_t pack_tile_addr =
             get_output_tile_address<out_of_order_output, pack_mode>(output_id, output_tile_index);
 
-        _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode>(tile_index, pack_tile_addr);
+        _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, pack_mode, false, llk_pack_rmw_dest>(tile_index, pack_tile_addr);
     }
 }
 
@@ -277,7 +288,7 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output,
             get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
         get_local_cb_interface(output_id).fifo_wr_tile_ptr +=
             get_local_cb_interface(output_id).fifo_page_size * ntiles;
-        _llk_pack_block_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default>(
+        _llk_pack_block_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default, llk_pack_rmw_dest>(
             start_tile_index, pack_tile_addr, ntiles);
     } else if (dense_small && ntiles > 1 && llk_pack_block_is_dense(output_id)) {
         std::uint32_t pack_tile_addr =
@@ -293,12 +304,12 @@ inline void llk_pack_block(std::uint32_t start_tile_index, std::uint32_t output,
         std::uint32_t pack_tile_addr =
             get_local_cb_interface(output_id).fifo_wr_ptr + get_local_cb_interface(output_id).fifo_wr_tile_ptr - 1;
         get_local_cb_interface(output_id).fifo_wr_tile_ptr += page_size * ntiles;
-        _llk_pack_block_closed_<DST_SYNC_MODE, is_fp32_dest_acc_en>(
+        _llk_pack_block_closed_<DST_SYNC_MODE, is_fp32_dest_acc_en, llk_pack_rmw_dest>(
             start_tile_index, pack_tile_addr, ntiles, page_size << 4, get_output_num_faces(output_id));
     } else {
         for (std::uint32_t tile_index = start_tile_index; tile_index < start_tile_index + ntiles; tile_index++) {
             std::uint32_t pack_tile_addr = get_output_tile_address<false, PackMode::Default>(output_id, 0);
-            _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default>(tile_index, pack_tile_addr);
+            _llk_pack_<DST_SYNC_MODE, is_fp32_dest_acc_en, PackMode::Default, false, llk_pack_rmw_dest>(tile_index, pack_tile_addr);
         }
     }
 }
