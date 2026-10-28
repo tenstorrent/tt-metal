@@ -172,7 +172,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileIn
     // ---- Compute (donor fork: transpose_wh, swap-hw only) ----
     if (swap_hw) {
         bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32 || cb_data_format == tt::DataFormat::Int32 ||
-                                cb_data_format == tt::DataFormat::UInt32;
+                                cb_data_format == tt::DataFormat::UInt32 || cb_data_format == tt::DataFormat::UInt8;
         ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
         // Legacy set unpack_to_dest_mode[c_0] = UnpackToDestFp32 for Float32 → UnpackMode::UnpackToDest.
         // Compute consumes SRC0 (c_0); the required-entry rule fires only for Float32.
@@ -475,7 +475,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTileRo
     // ---- Compute (donor fork: transpose_wh, swap-hw only) ----
     if (swap_hw) {
         bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32 || cb_data_format == tt::DataFormat::Int32 ||
-                                cb_data_format == tt::DataFormat::UInt32;
+                                cb_data_format == tt::DataFormat::UInt32 || cb_data_format == tt::DataFormat::UInt8;
         ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
         // Legacy set unpack_to_dest_mode[c_0] = UnpackToDestFp32 for Float32 → UnpackMode::UnpackToDest.
         // Compute consumes SRC0 (c_0); the required-entry rule fires only for Float32.
@@ -782,7 +782,7 @@ ttnn::device_operation::ProgramArtifacts PermuteDeviceOperation::MultiCoreTiledG
 
     // ---- Compute config (Style B: build ComputeHardwareConfig directly, mirroring legacy) ----
     bool fp32_dest_acc_en = cb_data_format == tt::DataFormat::Float32 || cb_data_format == tt::DataFormat::Int32 ||
-                            cb_data_format == tt::DataFormat::UInt32;
+                            cb_data_format == tt::DataFormat::UInt32 || cb_data_format == tt::DataFormat::UInt8;
     ComputeHardwareConfig compute_cfg{.enable_32_bit_dest = fp32_dest_acc_en};
     // Metal 2.0 requires an explicit unpack_modes entry for each Float32 DFB the compute kernel consumes
     // when enable_32_bit_dest = true. Compute consumes SRC_CB (via tilize) and TILIZE_CB (self-loop).

@@ -78,7 +78,9 @@ tt::tt_metal::ProgramDescriptor TransposeWHShardedRMProgramFactory::create_descr
     log_debug(tt::LogOp, "shard_height: {}", shard_height);
     log_debug(tt::LogOp, "dst_single_tile_size: {}", dst_single_tile_size);
 
-    bool fp32_dest_acc_en = src0_cb_data_format == tt::DataFormat::Float32;
+    // UInt8 needs 32-bit Dest on WH/BH; UnpackToDestFp32 stays Float32-only below.
+    bool fp32_dest_acc_en =
+        src0_cb_data_format == tt::DataFormat::Float32 || src0_cb_data_format == tt::DataFormat::UInt8;
 
     auto& all_cores = shard_spec.grid;
     [[maybe_unused]] uint32_t num_cores = shard_spec.num_cores();
