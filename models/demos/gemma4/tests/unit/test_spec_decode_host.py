@@ -34,6 +34,7 @@ from models.demos.gemma4.tt.spec_decode import (
     SpeculativeDecoder,
     auto_draft_len,
     auto_draft_len_batched,
+    packed_verify_kv_groups,
     parse_k_by_rows,
     serving_mask_padded_bytes,
     serving_mask_plan,
@@ -1774,3 +1775,28 @@ def test_the_seed_column_is_the_pre_contract_current_mode():
         assert committed - 1 == spec._fused_shift_seed_row(accepted, K)
         idx = serving_seed_index((5, K), [3], [committed - 1], (K, [9, 3]), {})
         assert idx[0] == 1 * (K + 1) + accepted
+
+
+# Packed-verify GQA groups at nkv_local >= 2 (the TP4 column) --------------------------------------
+@pytest.mark.parametrize(("h_local", "nkv_local"), [(2, 1), (4, 1), (4, 2), (8, 4), (8, 2)])
+@pytest.mark.parametrize("P", [2, 4, 6])
+def test_packed_kv_groups_are_contiguous_head_blocks_in_the_head_major_order(h_local, nkv_local, P):
+    """Row h*P+p of the packed Q (and of the [B,1,H*P,S_k] mask the body H-repeats) lands in the KV group the
+    head-sharded GQA map gives its head, so the kernel's row-range grouping by num_q_heads/num_kv_heads on the
+    logical head count is the right one for every TP (nkv_local = 1 on TP8, 2 on TP4 for the 12B)."""
+    groups = packed_verify_kv_groups(h_local, nkv_local, P)
+    assert [g for g, _a, _b in groups] == list(range(nkv_local))
+    assert groups[0][1] == 0 and groups[-1][2] == h_local * P
+    heads_per_kv = h_local // nkv_local
+    for g, first, last in groups:
+        assert last - first == (h_local * P) // nkv_local  # num_q_heads / num_kv_heads, rows per KV head
+        for row in range(first, last):
+            head, _p = divmod(row, P)
+            assert head // heads_per_kv == g, (row, head, g)
+
+
+def test_packed_kv_groups_refuse_uneven_head_splits():
+    with pytest.raises(ValueError, match="do not split evenly"):  # allow-pytest.raises (pure)
+        packed_verify_kv_groups(6, 4, 2)
+    with pytest.raises(ValueError, match="must be >= 1"):  # allow-pytest.raises (pure)
+        packed_verify_kv_groups(4, 0, 2)

@@ -486,6 +486,29 @@ def serving_masks_from_plan(plan, S_k, window, ring=None):
     return mask_full.reshape(B, 1, P, int(S_k)), mask_slide.reshape(B, 1, P, int(ring) if ring else int(S_k))
 
 
+def packed_verify_kv_groups(h_local, nkv_local, P):
+    """The packed-verify query rows each local KV head attends, as the SDPA decode kernel groups them.
+
+    The packed Q is ``[1, B, h_local * P, hd]`` with row ``h * P + p`` (head-major);
+    the kernel keeps, for KV head g, output rows ``[g * n, (g + 1) * n)`` with
+    ``n = num_q_heads / num_kv_heads`` on the LOGICAL head count
+    (``sdpa_decode_program_factory.cpp`` num_q_heads = q.logical_shape[2],
+    ``writer_decode_all.cpp`` num_heads_to_write), written row by row. So a
+    KV group is a contiguous block of ``h_local / nkv_local`` heads x P rows,
+    which is the head-sharded GQA map ``h // (h_local / nkv_local)`` iff
+    ``h_local`` divides by ``nkv_local``. The mask is ``[B, 1, h_local * P, S_k]``
+    (read per batch for every KV head), the same rows.
+    Returns ``[(kv_head, first_row, last_row_exclusive)]``.
+    """
+    h_local, nkv_local, P = int(h_local), int(nkv_local), int(P)
+    if h_local < 1 or nkv_local < 1 or P < 1:
+        raise ValueError(f"h_local, nkv_local and P must be >= 1, got {h_local}, {nkv_local}, {P}")
+    if h_local % nkv_local:
+        raise ValueError(f"{h_local} local query heads do not split evenly over {nkv_local} local KV heads")
+    rows_per_group = (h_local // nkv_local) * P
+    return [(g, g * rows_per_group, (g + 1) * rows_per_group) for g in range(nkv_local)]
+
+
 def serving_mask_padded_bytes(shape, width, elem_bytes=2):
     """Device bytes of ONE ``[B, 1, P, width]`` mask tensor or intermediate: TILE pads P to 32 rows."""
     rows, _k = spec_check_shape(shape)

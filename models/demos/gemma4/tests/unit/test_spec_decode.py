@@ -3525,6 +3525,15 @@ def test_serving_record_matches_plain_greedy(mesh_device, reset_seeds, shape):
         logger.info(f"[serving {shape} live={live}] accepted/iter per row: {[round(a, 2) for a in mean_acc]}")
         for r, u in enumerate(users):
             logger.info(f"  row {r} (user {u}): {tokenizer.decode(outs[r][:n_new])!r}")
+        # Committed-token parity alone cannot see a verify that is right in column 0 and wrong in the
+        # draft columns (every draft rejected, the text still greedy): the acceptance floor does. A
+        # healthy drafter accepts ~1.7-2.8 of K=5 per step on these prompts; a broken verify ~0.05.
+        min_accept = float(os.environ.get("GEMMA4_SPEC_MIN_ACCEPT", 0.5))
+        overall = sum(sum(a) for a in accepts) / max(1, sum(len(a) for a in accepts))
+        assert overall >= min(min_accept, K), (
+            f"[serving {shape} live={live}] accepted {overall:.2f} of K={K} per step (floor {min_accept}): "
+            "the verify's draft columns or the drafts themselves are wrong while column 0 stays right"
+        )
     spec.serving_release()
     assert spec._srv_records is None
 
