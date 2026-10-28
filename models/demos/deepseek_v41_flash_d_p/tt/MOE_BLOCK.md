@@ -1,15 +1,17 @@
 # DeepSeek-V4.1 on Marko's MoE block (MOE_IMPL=block)
 
-Setting `MOE_IMPL` (env `DS41_MOE_IMPL`, tt/settings.py): `flat` (default, today's path, unchanged) or `block`
-(Marko Staletovic's MoE block, `models/demos/moe_block`, from `mstaletovic/combine-lean-sender-llk` @ `856d97d5864`).
-An A/B on the 2x2; the Galaxy keeps `flat` meanwhile. Owner decisions: `reports/moe_block_decisions_2026-10-27.md`
+Setting `MOE_IMPL` (env `DS41_MOE_IMPL`, tt/settings.py): `block` (the default since FIX.6: owner decision
+2026-10-28, the one configuration is the block MoE with its fused head on the Galaxy's FABRIC_2D_TORUS_XY; flat hangs
+on the torus, DS41-130, and the fused head does not build on 8x4 FABRIC_2D lines, DS41-129) or `flat` (the earlier
+path, kept selectable) (Marko Staletovic's MoE block, `models/demos/moe_block`, from
+`mstaletovic/combine-lean-sender-llk` @ `856d97d5864`). First an A/B on the 2x2. Owner decisions: `reports/moe_block_decisions_2026-10-27.md`
 (D1-D10); analysis: `reports/moe_block_for_ds41_2026-10-27.md`.
 
 ## What runs
 
 The block graph's step names do not change (reference/ds41_ref.py:block_steps). Per layer, after `ffn_norm`:
 
-| step | flat (default) | block |
+| step | flat | block (default) |
 |---|---|---|
 | ffn_norm | gathers whole rows `[S/SP, H]` (unchanged) | the same |
 | router | tt/router.py: whole-row logits (HiFi2, fp32 DEST), fused moe_grouped_topk (ROUTER_IMPL) | no work (`Keep()`) |
@@ -125,7 +127,7 @@ scripts: /localdev/dnijemcevic/bringup/fused_head_2026-10-27/.
 
 | # | Decision | Where |
 |---|---|---|
-| D1 | A/B on the 2x2 behind `MOE_IMPL` (default `flat`, unchanged) | tt/settings.py `MOE_IMPL`; tt/model.py `TtDS41Block.__init__` / `_fns` |
+| D1 | A/B on the 2x2 behind `MOE_IMPL` (default `flat` then; `block` since FIX.6, owner 2026-10-28) | tt/settings.py `MOE_IMPL`; tt/model.py `TtDS41Block.__init__` / `_fns` |
 | D2 | x reaches the block gathered; ffn_norm unchanged | moe_block.py `MoEOptions.x_gathered` (`_x_shape`, `_head`: no x all-gather, router fed `mesh_partition(x, dim=3)`, x not freed); adapter `block_options()` |
 | D3 | Marko's ops router with DS41's gate weight, bias, route scale 1.5, top 6 | moe_block.py `Router` (unchanged); adapter `host()` (bf16 gate, fp32 bias recentred as tt/router.py, rows permuted), `block_model()` (asserts the config's top-k, H, I, route scale, limit against `DSV41_FLASH`) |
 | D4 | ops head first; then the fused head, the default (owner 2026-10-27, after the A/B) | adapter `block_options()`: `MOE_HEAD=fused` (default): `head="fused"`, `combine_snap` (section above); `ops`: `head="ops"` (`x_gathered` also requires it) |

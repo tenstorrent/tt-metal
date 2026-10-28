@@ -3473,3 +3473,40 @@ models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --
   (DS41-128). New Setting TP_SUM_BLOCKS (default cols): tt/ccl.py:tp_sum splits by column blocks (dim 3) + column
   gather, or the fixed-order gather_add where the width does not split (mHC [S/SP, 32] row). Same volume, same bf16
   precision; rows keeps the old path. After it: test_runner_contract PASS (0 failures, tt-d-gen engine).
+
+## Merge of origin/dnijemcevic/model_bringup (owner's MoE work, d762b21db30) into the galaxy branch (2026-10-28)
+- Kept both sides: theirs (Marko sync of flat_routed_expert_ttnn / combine_rf, EXPERTS_LAYOUT=marko, MOE_IMPL=block,
+  MOE_HEAD / MOE_TAIL fused, matmul_reduce_scatter, D14 torus for the block, framework F200 / F201, O.1 cases); ours
+  (FIX.5 patch_addresses, max_y_writers, combine_rf payload check, test_hot_experts, TP_SUM_BLOCKS, contract work,
+  framework F202 open_mesh). Our framework F200 (engine wait) -> F203, F201 (hangdump) -> F204; F202 kept (free).
+- tt/experts.py: their flat_op() split (shared with the block) carries max_y_writers=L1_MAX_WRITERS; the block's
+  exchange (deepseek_v3_d_p tt_k3_token_split_moe.py) passes the op's max_y_writers to flat_routed_expert_with_program.
+  tt/weighted_combine.py passes layout + patch_addresses + extra_addrs + max_y_writers.
+- Weight cache: on this box the marko plan packs the routed weights exactly as the capped legacy plan (32 down x 5
+  columns, 16 readers, no tails; key lay9c3da689dd35): layer 0 loads cache=hit under marko, flat and block. No rebuild.
+- 1-layer repro (smoke prompt, prefill [0, 128) + tail [128, 160)): flat (defaults) PASS; block + fused head FAIL at
+  build (DS41-129, assertion, no hang); block + MOE_HEAD=ops PASS, same tokens as flat.
+- Re-run: `cd /scratch/dnijemcevic/diag && [DS41_MOE_IMPL=block [DS41_MOE_HEAD=ops]] REPRO_LAYERS=1 ./run.sh <name>
+  --no-precompile /scratch/dnijemcevic/diag/test_repro_tail.py -s`; fork: `BRINGUP_TEST_MESH=8x4 scripts/run_safe_pytest.sh
+  --run-all ttnn/ttnn/bringup/flat_routed_expert_ttnn/tests/unit/test_with_program_patch.py` (and test_hot_experts.py,
+  test_max_y_writers.py, combine_rf/tests/unit/test_fabric_payload.py).
+
+## FIX.6 (overseer fix): MOE_IMPL default block, the one configuration on the Galaxy torus (owner 2026-10-28)
+- tt/settings.py MOE_IMPL default flat -> block (MOE_HEAD / MOE_TAIL stay fused; no precision or limit changed); the
+  setting's text carries the owner decision and the 06:20 torus evidence (block on 8x4 FABRIC_2D_TORUS_XY device
+  219.5 / 233.9 / 237.5 / 249.1 / 284.4 ms at 0 / 50k / 100k / 200k / 500k vs flat FABRIC_2D 308.1 / 314.6 / 323.3 /
+  338.0 / 375.7; warm wall 615-646 vs 672-1005 ms). Flat stays selectable (DS41_MOE_IMPL=flat) for the FABRIC_2D boxes.
+  New DS41-130: flat hangs on the torus at the first MoE call. tt/MOE_BLOCK.md and the adapter docstring updated.
+- Fabric of every gate path, checked in this gate's logs (no code change needed): the ladder / smoke / contract meshes
+  open the spec's device_params (FABRIC_2D_TORUS_XY, hooks.device_params adds the 10880 B payload); the K.1 runner
+  process gets PREFILL_FABRIC_MODE=2d_torus_xy from caches.fabric_mode(spec) and the payload from
+  DS41Config.FABRIC_PAYLOAD_SIZE (10880, l1_small 24576): runner.log "Fabric config: FABRIC_2D_TORUS_XY (sp=8,
+  PREFILL_FABRIC_MODE=2d_torus_xy)", then MOE_BLOCK layer=0 head=fused; the stand-in decode opens harness.open_mesh(S)
+  (F202: every device_params entry, router_config included).
+- Gate numbers, block (FIX.6) vs flat (the earlier passes): L.s10240 err_final_hidden 0.1920 vs 0.1891, top5 1.0 / 1.0
+  (top1 0.9971); L.last 0.1878 vs 0.1852; L.s56320 0.1904 vs 0.1888 (limit 0.2586), top5 1.0; host_transfers 0;
+  L.smoke Paris; K.1 contract 0 failures, acks_early 0, producer KV PCC window 0.9771 vs 0.9774, compress 0.9846 vs
+  0.9845, index_k 0.9918 vs 0.9919; runner smoke (tt-d-gen a9701ce6675 prefill 333 s + stand-in decode) Paris.
+  Unit times: W.1 2.4 min, M.1 / L.s10240 7.2-7.4, L.last 7.6, L.s56320 8.1, smoke 6.2, contract units ~6 each.
+- Re-run: `PYTHONPATH=$PWD python -m models.demos.common.bringup gate FIX.6 --spec
+  models/demos/deepseek_v41_flash_d_p/bringup/ledgers/galaxy_8x4-full/spec.yaml --check`.
