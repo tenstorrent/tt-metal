@@ -49,17 +49,15 @@ MeshResources& ensure_mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh
 // has been enqueued: a neighbour writes into it only after this chip's fence_ready, and this chip's program finishes
 // only after every arrival has landed.
 //
-// Open trade-off (to revisit): allocating per call costs host time on every eager call. On a QuietBox 2 (1x4 ring and
-// line, a tiny 32x256 @ 256x512 per-device shape, program cache warm) a hot call went from 13.8 to ~35 us of host
-// time: creating + freeing a height-sharded L1 tensor over the full grid costs ~24 us there (an L1 interleaved one
-// ~4 us). Traced calls pay nothing. The alternatives considered:
-//   - one persistent staging per mesh, reallocated when the size changes (the previous scheme): no host cost, but a
-//     trace that holds two shapes with different staging sizes points at freed L1;
-//   - persistent, one tensor per staging size: no host cost and trace-safe, but holds L1 for every size used;
-//   - persistent, grow-only: no host cost, smallest persistent footprint, but a trace stays valid only if the largest
-//     shape ran before capture.
-// A cheaper per-call allocation (e.g. a buffer without the sharded page mapping) would remove the cost without the
-// persistent L1.
+// Per call by design: the op holds no L1 between calls. Costs:
+//   - host time on every eager call: creating + freeing a height-sharded L1 tensor over the full grid (~21 us on a
+//     QuietBox 2; a hot call 17 -> 34-36 us host, invisible end to end once the device time exceeds that). Traced
+//     replays pay nothing.
+//   - traces: the staging is freed during capture, so an L1 buffer allocated after capture can land on it and is
+//     overwritten by every replay (tt-metal's general rule: buffers allocated while a trace exists are unsafe unless
+//     released before it runs).
+// Persistent staging (per mesh, per size, or grow-only) avoids both but holds 170-362 KiB per core for the life of the
+// mesh.
 Tensor allocate_staging(tt::tt_metal::distributed::MeshDevice* mesh, uint32_t staging_tiles);
 // Lookup only (factory and the hit path); TT_FATAL when the entry has not created them.
 MeshResources& mesh_resources(tt::tt_metal::distributed::MeshDevice* mesh);
