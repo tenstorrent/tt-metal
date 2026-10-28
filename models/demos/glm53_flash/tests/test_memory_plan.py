@@ -52,3 +52,20 @@ def test_default_prefill_qblock_follows_the_slot_length():
     assert default_prefill_qblock(131072) == 2048 and default_prefill_qblock(262144) == 2048
     assert default_prefill_qblock(524288) == 512 and default_prefill_qblock(1048576) == 256
     assert reserve_bytes(1048576) == reserve_bytes(1048576, qblock=256)
+
+
+def test_memory_plan_layer_subset_on_a_2_row_block():
+    """The served entry point plans the depth it builds: layers 0-3 on a (2, 4) block (the image / APC / spec block
+    tests: 4 users per row x 1536 positions) fit, while the full 45-layer estimate on 2 rows does not even hold one
+    user (its 2-row expert shards exceed a chip) -- the refusal served_image_block hit on 2026-10-28."""
+    cfg = _cfg()
+    full = MemoryPlan.estimate(cfg, 2, 4, partition=True)
+    assert full.max_users_per_row(1536) == 0
+    sub = MemoryPlan.estimate(cfg, 2, 4, partition=True, layers=[0, 1, 2, 3])
+    assert sub.fits(4, 1536), sub.headroom(1536) / GIB
+    assert sub.weights_bytes < 4 * GIB  # one MoE layer (layer 3) of 2-row shards + the scaled static remainder
+    # the per-layer terms follow the subset: no DSA layer among 0-3 -> no latent cache per token; KDA states of 0-3 only
+    types = cfg.layer_types[:4]
+    assert sub.cache_per_token == 0.0 if all(t == "linear_attention" for t in types) else sub.cache_per_token > 0
+    assert sub.fixed_per_user < MemoryPlan.estimate(cfg, 2, 4, partition=True).fixed_per_user
+    assert sub.fixed_per_user > 0

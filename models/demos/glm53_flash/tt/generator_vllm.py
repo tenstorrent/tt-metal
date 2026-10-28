@@ -392,6 +392,7 @@ class GLM53FlashForCausalLM:
         expert_dtype = dt[os.environ.get("GLM53_MODEL_EXPERT_DTYPE", "bfp8")]
         expert_down_dtype = dt[os.environ.get("GLM53_MODEL_EXPERT_DOWN_DTYPE", "bfp8")]
         eb = {ttnn.bfloat8_b: BFP8_BYTES, ttnn.bfloat4_b: BFP4_BYTES, ttnn.bfloat16: BF16_BYTES}[expert_dtype]
+        layers = cls._layer_ids(n_layers, cfg.num_hidden_layers)
         plan = MemoryPlan.estimate(
             cfg,
             rows,
@@ -400,14 +401,15 @@ class GLM53FlashForCausalLM:
             expert_bytes=eb,
             scratch_slot=scratch,
             trace_mb=int(os.environ.get("GLM53_MODEL_TRACE_MB", "512")),
+            layers=layers,  # a GLM53_MODEL_LAYERS subset (block tests) is planned at its own depth
         )
         geometry.check_memory_plan(plan)
         logger.info(
             f"GLM53 vLLM: {rows}x{cols} mesh, {users_per_row} users per row ({geometry.request_capacity} requests, "
             f"{geometry.physical_slots} slots), max_seq_len {max_seq_len}, partitioned={partitioned}, planner headroom "
             f"{plan.headroom(int(max_seq_len)) / 2**30:.1f} GiB vs {plan.bytes_for(users_per_row, int(max_seq_len)) / 2**30:.1f} GiB of caches"
+            f" ({len(layers)} layers)"
         )
-        layers = cls._layer_ids(n_layers, cfg.num_hidden_layers)
         cache_root = mesh_cache_root()
         t0 = time.perf_counter()
         model = GLM53MeshModel(

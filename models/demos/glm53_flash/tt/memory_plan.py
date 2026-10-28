@@ -32,17 +32,28 @@ BF16_BYTES = 2.0
 P150_DRAM_BYTES = 8 * 4_205_232_512  # 8 banks x 3.916 GiB allocatable (the allocator's bank size on p150)
 
 
-def cache_bytes_per_token(cfg, pool_bytes: float = BF16_BYTES) -> float:
+def layer_types_of(cfg, layers=None) -> list:
+    """The ``layer_types`` of the layers a model instance builds (``GLM53_MODEL_LAYERS`` / ``n_layers`` subsets: the
+    block tests run layers 0-3 on 2 rows), the whole config's when ``layers`` is None."""
+    types = list(cfg.layer_types) if cfg.layer_types else []
+    if layers is None or not types:
+        return types
+    return [types[int(i)] for i in layers]
+
+
+def cache_bytes_per_token(cfg, pool_bytes: float = BF16_BYTES, layers=None) -> float:
     """DSA latent rows + pooled index keys of one user per token (every column of the user's row holds them)."""
-    n_dsa = sum(1 for t in cfg.layer_types if t != "linear_attention") if cfg.layer_types else 11
+    types = layer_types_of(cfg, layers)
+    n_dsa = sum(1 for t in types if t != "linear_attention") if types else 11
     latent = cfg.kv_lora_rank * BF16_BYTES
     pools = cfg.index_head_dim * pool_bytes / cfg.index_kpool
     return n_dsa * (latent + pools)
 
 
-def fixed_bytes_per_user(cfg, cols: int) -> float:
+def fixed_bytes_per_user(cfg, cols: int, layers=None) -> float:
     """KDA recurrent [H/cols, K, V] fp32 + conv taps per KDA layer, the index rings and page tables (ISL-independent)."""
-    n_kda = sum(1 for t in cfg.layer_types if t == "linear_attention") if cfg.layer_types else 34
+    types = layer_types_of(cfg, layers)
+    n_kda = sum(1 for t in types if t == "linear_attention") if types else 34
     h_local = cfg.kda_num_heads // cols
     rec = h_local * cfg.kda_head_dim * cfg.kda_head_dim * 4
     conv = (cfg.kda_conv_kernel - 1) * (3 * h_local * cfg.kda_head_dim) * 2
@@ -50,25 +61,31 @@ def fixed_bytes_per_user(cfg, cols: int) -> float:
     return n_kda * (rec + conv) + rings
 
 
-def expert_bytes_per_chip(cfg, rows: int, cols: int, expert_bytes: float = BFP8_BYTES) -> float:
-    """The routed experts of the hybrid layout: E/cols experts, each I/rows wide, per MoE layer."""
-    n_moe = cfg.num_hidden_layers - 3  # first_k_dense_replace = 3
+def expert_bytes_per_chip(cfg, rows: int, cols: int, expert_bytes: float = BFP8_BYTES, layers=None) -> float:
+    """The routed experts of the hybrid layout: E/cols experts, each I/rows wide, per MoE layer (the layers at or
+    past ``first_k_dense_replace`` = 3 among ``layers``; every one of the config's when None)."""
+    n_moe = cfg.num_hidden_layers - 3 if layers is None else sum(1 for i in layers if int(i) >= 3)
     e_loc, i_loc = cfg.n_routed_experts // cols, cfg.moe_intermediate_size // rows
     per_expert = 3 * cfg.hidden_size * i_loc
     return n_moe * e_loc * per_expert * expert_bytes
 
 
 def weights_bytes_estimate(
-    cfg, rows: int, cols: int, expert_bytes: float = BFP8_BYTES, keep_stacked: bool = False
+    cfg, rows: int, cols: int, expert_bytes: float = BFP8_BYTES, keep_stacked: bool = False, layers=None
 ) -> float:
-    """Experts (x2 with keep_stacked) + the TP4-sharded dense weights (attention, shared expert, mHC, embedding, head)."""
-    experts = expert_bytes_per_chip(cfg, rows, cols, expert_bytes) * (2 if keep_stacked else 1)
+    """Experts (x2 with keep_stacked) + the TP4-sharded dense weights (attention, shared expert, mHC, embedding, head).
+    ``layers``: the subset an instance builds (block tests); the per-layer terms count its layers only and the
+    static remainder is scaled by its share of the config's layers (floor 1 GiB: embedding + head shards, the traced
+    prefill slot and its inputs stay whatever the depth)."""
+    experts = expert_bytes_per_chip(cfg, rows, cols, expert_bytes, layers) * (2 if keep_stacked else 1)
     # the non-expert static footprint, calibrated on the 8x4 (2026-10-21): 28.85 GiB allocated after a 45-layer bfp8
     # build with ONE 1 M slot per chip (11.15 GiB of latent + pools) -> 17.7 GiB of weights + fixed buffers, i.e. ~8.2 GiB
     # beyond the bfp8 experts (dense TP4 weights, the stream / block expert layouts, embedding + head shards, the traced
     # prefill slot and its per-length inputs, page tables, CCL semaphores; attribution pending). With this term the
     # single-user 1 M run fits by ~60 MB, as observed (4.0 of 4.2 GB per bank in use at the first chunk).
     other = 8.2 * GIB
+    if layers is not None:
+        other = max(1.0 * GIB, other * len(list(layers)) / cfg.num_hidden_layers)
     return experts + other
 
 
@@ -136,12 +153,15 @@ class MemoryPlan:
         scratch_slot: bool = True,
         trace_mb: int = 512,
         dram_bytes: float = P150_DRAM_BYTES,
+        layers=None,
     ) -> "MemoryPlan":
+        """``layers``: the layer ids the instance builds (None = the whole config); the block tests' 4-layer models
+        on 2 rows do not fit the full-depth estimate (the 2-row expert shards alone exceed a chip)."""
         return cls(
             dram_bytes,
-            weights_bytes_estimate(cfg, rows, cols, expert_bytes, keep_stacked),
-            cache_bytes_per_token(cfg),
-            fixed_bytes_per_user(cfg, cols),
+            weights_bytes_estimate(cfg, rows, cols, expert_bytes, keep_stacked, layers),
+            cache_bytes_per_token(cfg, layers=layers),
+            fixed_bytes_per_user(cfg, cols, layers),
             rows,
             cols,
             partition,
