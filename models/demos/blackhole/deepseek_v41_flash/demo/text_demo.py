@@ -154,8 +154,8 @@ SCENARIOS = [
     # round-timeline runs (tt/round_timeline.py): no early stop so that every user decodes 1600 (gsm) or 1000 (needle) tokens (>= 100 rounds after the warm-up)
     _s(GSM, 4, 1048576, 1600, "gsm8k_b4_m1M_rt", instruct=True, stop_at_eos=False, chunk=512),
     _s(GSM, 8, 524288, 1600, "gsm8k_b8_m512k_rt", instruct=True, stop_at_eos=False, chunk=512),
-    _s(f"{PROMPTS}/long/needle_64k.json", 4, 1048576, 1000, "needle64k_b4_rt", instruct=True, chunk=512),
-    _s(f"{PROMPTS}/long/needle_128k.json", 4, 1048576, 1000, "needle128k_b4_rt", instruct=True, chunk=512),
+    _s("/mnt/tt-data/ssinghal/dsv4-logs/b8_a/prompts/needle_64000_8.json", 4, 1048576, 1000, "needle64k_b4_rt", instruct=True, chunk=512),
+    _s("/mnt/tt-data/ssinghal/dsv4-logs/b8_a/prompts/needle_128000_8.json", 4, 1048576, 1000, "needle128k_b4_rt", instruct=True, chunk=512),
     _s("/mnt/tt-data/ssinghal/dsv4-logs/b8_a/prompts/needle_64000_8.json", 8, 524288, 1000, "needle64k_b8_m512k_rt", instruct=True, chunk=512),
     _s("/mnt/tt-data/ssinghal/dsv4-logs/b8_a/prompts/needle_128000_8.json", 8, 524288, 1000, "needle128k_b8_m512k_rt", instruct=True, chunk=512),
     _s(GSM, 8, 512, 384, "gsm8k_b8", instruct=True, stop_at_eos=True),
