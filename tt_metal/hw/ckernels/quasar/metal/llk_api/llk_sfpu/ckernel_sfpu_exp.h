@@ -345,7 +345,7 @@ void calculate_exponential([[maybe_unused]] const std::uint32_t exp_base_scale_f
     LLK_ASSERT(
         exp_base_scale_factor == p_sfpu::kCONST_1_FP16B,
         "Scaling is not supported in the current version of exp on Quasar.");
-    ExpDest<APPROXIMATION_MODE, EN_32BIT_DEST, sfpi::DataLayout::Default, ITERATIONS>::calculate();
+    ExpDest<APPROXIMATION_MODE, EN_32BIT_DEST, dest_float_layout<EN_32BIT_DEST>, ITERATIONS>::calculate();
 }
 
 template <

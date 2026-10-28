@@ -40,12 +40,13 @@ inline void init_square() {
 /**
  * @brief Square a Dest span in place.
  *
+ * @tparam LAYOUT: SFPLOAD/SFPSTORE format; Default lets the HW derive it from the ALU config.
  * @note Call @ref init_square before this.
  */
-template <int ITERATIONS = SFPU_ITERATIONS>
+template <int ITERATIONS = SFPU_ITERATIONS, sfpi::DataLayout LAYOUT = sfpi::DataLayout::Default>
 inline void calculate_square() {
-    using Input = SfpuOperand<SfpuReg::Dest, SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat>>;
-    using Output = SfpuOperand<SfpuReg::Dest, SfpiFormat<sfpi::DataLayout::Default, sfpi::vFloat, ADDR_MOD_6>>;
+    using Input = SfpuOperand<SfpuReg::Dest, SfpiFormat<LAYOUT, sfpi::vFloat>>;
+    using Output = SfpuOperand<SfpuReg::Dest, SfpiFormat<LAYOUT, sfpi::vFloat, ADDR_MOD_6>>;
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
         calculate_unary_operands<SquareMath, 1 /*ITERATIONS*/>(Input{}, Output{});
@@ -53,10 +54,12 @@ inline void calculate_square() {
 }
 
 /** @brief Dest square op type: keeps the ADDR_MOD_6 store loop of @ref calculate_square. */
-template <int ITERATIONS = SFPU_ITERATIONS>
-struct SquareDest : SfpuDestUnaryOp<SquareDest<ITERATIONS>> {
+template <sfpi::DataLayout LAYOUT = sfpi::DataLayout::Default, int ITERATIONS = SFPU_ITERATIONS>
+struct SquareDest : SfpuDestUnaryOp<SquareDest<LAYOUT, ITERATIONS>> {
+    using value_type = sfpi::vFloat;
+    static constexpr sfpi::DataLayout layout = LAYOUT;
     static void init_op() { init_square(); }
-    static void calculate() { calculate_square<ITERATIONS>(); }
+    static void calculate() { calculate_square<ITERATIONS, LAYOUT>(); }
 };
 
 /** @brief SrcS square op type; Sfpi only. */

@@ -19,16 +19,21 @@
 namespace ckernel {
 namespace sfpu {
 
-/** @brief Dest float ADD op type; rounds to bf16 (RNE) on store when the Dest is 16-bit and NearestEven is set. */
+/**
+ * @brief Dest float ADD op type; rounds to bf16 (RNE) on store when the Dest is 16-bit and NearestEven is set.
+ *
+ * @tparam LAYOUT: SFPLOAD/SFPSTORE format; explicit F32 on a 32-bit Dest, HW-implied on a 16-bit one by default.
+ */
 template <
     bool is_fp32_dest_acc_en,
     DstRoundingMode dst_rounding_mode = DstRoundingMode::Default,
     int ITERATIONS = SFPU_ITERATIONS,
-    trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
+    trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32,
+    sfpi::DataLayout LAYOUT = dest_float_layout<is_fp32_dest_acc_en>>
 using AddDest = DestBinary<
     AddFloatMath,
-    sfpi::DataLayout::Default,
-    DestBf16RneFormat<!is_fp32_dest_acc_en && dst_rounding_mode == DstRoundingMode::NearestEven>,
+    LAYOUT,
+    DestBf16RneFormat<!is_fp32_dest_acc_en && dst_rounding_mode == DstRoundingMode::NearestEven, LAYOUT>,
     ITERATIONS,
     TILE_SHAPE>;
 
