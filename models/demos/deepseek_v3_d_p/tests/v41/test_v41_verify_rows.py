@@ -242,7 +242,7 @@ def test_v41_verify_rows(mesh_device, device_params):
             decoder.commit(slot, 0)
         tok = out[0]
         plain.append(tok)
-        entry = {"i": i, "wall_s": round(wall, 4), **{k: v for k, v in decoder.last.items() if k != "items"}}
+        entry = {"i": i, "wall_s": round(wall, 4), **decoder.last}
         plain_steps.append(entry)
         logger.info(f"plain step {json.dumps(entry)}")
     replays = [e for e in plain_steps if e["mode"] == "replay"]
@@ -326,6 +326,8 @@ def test_v41_verify_rows(mesh_device, device_params):
                 "verify_read_s": decoder.last.get("read_s"),
                 "commit_s": round(t5 - t4, 4),
             }
+            if "items" in decoder.last:  # V41_DECODE_INPUT_TIMING=1: the host inputs' items (ms)
+                entry["verify_items"] = decoder.last["items"]
             if fused:
                 entry["next_drafts"] = decoder.drafts[0]
             rounds.append(entry)
