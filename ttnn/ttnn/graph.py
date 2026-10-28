@@ -328,8 +328,13 @@ def end_graph_capture():
     return result
 
 
-def end_graph_capture_to_file(report_path):
-    """Wrapper that appends Python I/O data to the JSON report."""
+def end_graph_capture_to_file(report_path, *, return_graph=True):
+    """Wrapper that appends Python I/O data to the JSON report.
+
+    Returns the captured graph, parsed into Python, unless ``return_graph`` is false: a caller that only wants the
+    file, as the graph report fixture does, then skips building a Python copy of the whole graph, which on a large
+    model costs seconds and gigabytes.
+    """
     global _python_io_recording_enabled, _python_stack_traces_auto_for_session
     result_str = _cpp_end_graph_capture_to_file(report_path)
     if _python_io_data:
@@ -342,7 +347,7 @@ def end_graph_capture_to_file(report_path):
         if _python_stack_traces_auto_for_session:
             disable_python_stack_traces()
             _python_stack_traces_auto_for_session = False
-    return json.loads(result_str)
+    return json.loads(result_str) if return_graph else None
 
 
 def _ttnn_tensor_summary(t) -> str:

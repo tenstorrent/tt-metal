@@ -154,7 +154,7 @@ def _run_pytest_graph_report_fixture(request) -> Generator[None, None, None]:
                     json_path = report_path / f"graph_capture_{rank+1}_of_{world_size}.json"
                 else:
                     json_path = report_path / "graph_capture.json"
-                ttnn.graph.end_graph_capture_to_file(str(json_path))
+                ttnn.graph.end_graph_capture_to_file(str(json_path), return_graph=False)
                 if ttnn.distributed_context_is_initialized():
                     ttnn.distributed_context_barrier()
                 if not ttnn.distributed_context_is_initialized() or int(ttnn.distributed_context_get_rank()) == 0:

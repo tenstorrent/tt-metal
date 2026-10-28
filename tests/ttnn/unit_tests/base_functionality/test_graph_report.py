@@ -6859,6 +6859,18 @@ class TestReportModesDuringTraceCapture:
         ttnn.synchronize_device(device)
 
 
+def test_end_graph_capture_to_file_can_skip_returning_the_graph(tmp_path):
+    """The report fixture only wants the file; parsing the whole graph back into Python for it is wasted."""
+    if ttnn.graph.is_graph_capture_active():
+        pytest.skip("graph reporting is already on for this run, so this capture would nest inside the fixture's")
+    report_path = tmp_path / "report.json"
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NORMAL)
+    assert ttnn.graph.end_graph_capture_to_file(report_path, return_graph=False) is None
+    assert not ttnn.graph.is_graph_capture_active()
+    report = json.loads(report_path.read_text())
+    assert [node["node_type"] for node in report["graph"]] == ["capture_start", "capture_end"]
+
+
 # mesh_device depends on silicon_arch_name, which conftest only parametrizes for tests that name it at collection.
 @pytest.mark.usefixtures("silicon_arch_name")
 def test_multihost_graph_report(request):
