@@ -61,6 +61,9 @@ struct CacheConfig {
     // For a cache whose topology shards a head axis: the one head this config holds, its slots kept as
     // slots; nullopt => every head, fanned into the slots (slot = head * num_slots + slot).
     std::optional<uint32_t> head;
+    // The cache holds only the layers it publishes, in order: its batch axis is slot x those layers
+    // (an attention cache allocated on only some layers, e.g. MLA layers between linear-attention ones).
+    bool holds_only_published_layers = false;
 };
 
 // The commonized factory. `configs` is a model expressed as an ordered LIST of co-resident caches

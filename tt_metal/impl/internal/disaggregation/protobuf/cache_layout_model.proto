@@ -39,6 +39,8 @@ message CacheLayoutConfig {
     optional uint32 mesh_id = 9;
     // The one head of a head-sharded cache this config holds; absent => every head, fanned into slots.
     optional uint32 head = 10;
+    // The cache holds only its published layers, in order (its batch axis is slot x those layers).
+    bool holds_only_published_layers = 11;
 }
 
 message CacheTensorLayoutSpec {

@@ -263,6 +263,12 @@ bool holds_seq_shard(const Derived& d, const MeshShape& dist, const MeshCoordina
     return true;
 }
 
+// How many of the ascending `layers` fall in [first, end).
+uint32_t published_layers_in(const std::vector<uint32_t>& layers, uint32_t first, uint32_t end) {
+    return static_cast<uint32_t>(
+        std::lower_bound(layers.begin(), layers.end(), end) - std::lower_bound(layers.begin(), layers.end(), first));
+}
+
 // The replica set holding a chunk: every device of the tensor's distribution whose seq/head shard
 // index matches, mapped through the topology's mesh coords to chip ids on the physical mesh.
 std::vector<FabricNodeId> device_group(
@@ -326,10 +332,23 @@ KvChunkAddressTable to_chunk_map(
             "to_chunk_map: cache '{}' publishes layers that are not ascending and distinct",
             config.name);
 
+        TT_FATAL(
+            !config.holds_only_published_layers || !config.layers.empty(),
+            "to_chunk_map: cache '{}' holds only its published layers but lists none",
+            config.name);
+        const uint32_t held_layers_count = config.holds_only_published_layers
+                                               ? published_layers_in(config.layers, config.first_layer, end_layer)
+                                               : cache_layers;
         Derived d = derive(config);
         const bool layers_folded =
-            cache_layers > 1 && config.spec.tensor.logical_shape()[0] == geometry.num_slots * cache_layers;
-        d.fold_layers = layers_folded ? cache_layers : 0;
+            held_layers_count > 1 && config.spec.tensor.logical_shape()[0] == geometry.num_slots * held_layers_count;
+        TT_FATAL(
+            !config.holds_only_published_layers || held_layers_count <= 1 || layers_folded,
+            "to_chunk_map: cache '{}' holds its {} published layers, but its batch axis is not {} slots x layers",
+            config.name,
+            held_layers_count,
+            geometry.num_slots);
+        d.fold_layers = layers_folded ? held_layers_count : 0;
         const bool identity_natural =
             config.policy.bank_scheme == BankScheme::Natural && config.policy.bank_order == BankOrder::Identity;
         TT_FATAL(
@@ -407,6 +426,7 @@ KvChunkAddressTable to_chunk_map(
             }
         }
 
+        uint32_t held_index = 0;
         for (uint32_t local_layer = 0; local_layer < cache_layers; ++local_layer) {
             const uint32_t layer = config.first_layer + local_layer;
             const bool published =
@@ -414,6 +434,7 @@ KvChunkAddressTable to_chunk_map(
             if (!published) {
                 continue;
             }
+            const uint32_t cache_row_layer = config.holds_only_published_layers ? held_index++ : local_layer;
             const uint32_t first_head = config.head.value_or(0);
             const uint32_t end_head = config.head.has_value() ? *config.head + 1 : d.n_heads;
             for (uint32_t h = first_head; h < end_head; ++h) {
@@ -421,7 +442,7 @@ KvChunkAddressTable to_chunk_map(
                 for (uint32_t slot = 0; slot < geometry.num_slots; ++slot) {
                     for (uint32_t pos = 0; pos < extent && pos < geometry.max_seq_len; pos += geometry.position_step) {
                         const Located loc =
-                            locate_one(spec, policy, d, head, local_layer, pos, slot, config.base_addr, geometry);
+                            locate_one(spec, policy, d, head, cache_row_layer, pos, slot, config.base_addr, geometry);
                         const DeviceGroupIndex grp =
                             table.add_device_group(device_group(config.topology, d, loc, cache_mesh, mesh_shape));
                         const uint64_t noc_addr = (static_cast<uint64_t>(loc.bank_id) << 32) | addr_local(loc.offset);

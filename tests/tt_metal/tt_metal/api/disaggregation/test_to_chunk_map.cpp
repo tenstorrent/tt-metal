@@ -873,5 +873,88 @@ TEST(ToChunkMap, CPU_SequenceShardedOverBothMeshAxesMatchesTheDedupedWalk) {
     EXPECT_EQ(checked, num_slots * max_seq_len / kTileLocal);
 }
 
+// --- An attention cache on only some layers (Kimi's MLA layers between KDA ones): each stage's cache
+// holds its published layers back to back, slot x held layer on the batch axis ---
+const std::vector<uint32_t> kMlaLayers = {1, 2, 4};
+
+CacheLayoutModel mla_only_model(const PrefillLayout& layout) {
+    CacheLayoutModel model = m3_prefill_model(layout);
+    std::vector<CacheConfig> caches;
+    for (const CacheConfig& cache : model.caches) {
+        if (cache.name != "00") {
+            continue;
+        }
+        CacheConfig mla = cache;
+        const auto first = std::lower_bound(kMlaLayers.begin(), kMlaLayers.end(), cache.first_layer);
+        const auto end = std::lower_bound(kMlaLayers.begin(), kMlaLayers.end(), cache.first_layer + cache.num_layers);
+        const uint32_t held = static_cast<uint32_t>(end - first);
+        mla.spec.tensor = make_bfp8_ndshard_spec(
+            Shape{kPrefillUsers * held, 1, kPrefillSeqLen, kPrefillHeadDim}, Shape{1, 1, kTileLocal, kPrefillHeadDim});
+        mla.layers = kMlaLayers;
+        mla.holds_only_published_layers = true;
+        caches.push_back(mla);
+    }
+    model.caches = caches;
+    return model;
+}
+
+TEST(ToChunkMap, CPU_ACacheHoldingOnlyItsPublishedLayersFoldsJustThose) {
+    const KvChunkAddressTable table = to_chunk_map(mla_only_model(kTwoStages));
+    uint32_t checked = 0;
+    for (const PrefillStage& stage : kTwoStages.stages) {
+        std::vector<uint32_t> held;
+        for (uint32_t layer : kMlaLayers) {
+            if (layer >= stage.first_layer && layer < stage.first_layer + stage.num_layers) {
+                held.push_back(layer);
+            }
+        }
+        for (uint32_t row = 0; row < kPrefillSp; ++row) {
+            const uint32_t chunk_local = kPrefillChunk / kPrefillSp;
+            uint32_t page = 0;
+            for (uint32_t slot = 0; slot < kPrefillUsers; ++slot) {
+                for (uint32_t layer : held) {
+                    for (uint32_t n = 0; n < kPrefillSeqLen / kPrefillChunk; ++n) {
+                        const uint32_t start = n * kPrefillChunk + row * chunk_local;
+                        for (uint32_t pos = start; pos < start + chunk_local; pos += kTileLocal, ++page) {
+                            const KvCacheLocation loc = table.lookup(layer, pos, slot, 0u);
+                            EXPECT_EQ(addr_channel(loc.noc_addr), page % kNumBanks) << "layer=" << layer;
+                            EXPECT_EQ(
+                                addr_local(loc.noc_addr), stage.bases[0] + (page / kNumBanks) * kPrefillChunkBytes)
+                                << "layer=" << layer << " slot=" << slot << " pos=" << pos;
+                            ++checked;
+                        }
+                    }
+                }
+            }
+        }
+        for (uint32_t layer = stage.first_layer; layer < stage.first_layer + stage.num_layers; ++layer) {
+            if (!std::binary_search(kMlaLayers.begin(), kMlaLayers.end(), layer)) {
+                EXPECT_EQ(table.lookup(layer, 0, 0, 0u).size_bytes, 0u) << "non-MLA layer " << layer << " has a row";
+            }
+        }
+    }
+    EXPECT_EQ(checked, kMlaLayers.size() * kPrefillUsers * (kPrefillSeqLen / kTileLocal));
+}
+
+TEST(ToChunkMap, CPU_ACacheHoldingOnlyItsPublishedLayersMustBeSizedForThem) {
+    CacheLayoutModel model = mla_only_model(kTwoStages);
+    // Stage 1 holds layers 2 and 4; declare a batch axis of every stage layer instead.
+    model.caches.back().spec.tensor = make_bfp8_ndshard_spec(
+        Shape{kPrefillUsers * 3, 1, kPrefillSeqLen, kPrefillHeadDim}, Shape{1, 1, kTileLocal, kPrefillHeadDim});
+    EXPECT_ANY_THROW(to_chunk_map(model));
+    model = mla_only_model(kTwoStages);
+    model.caches.front().layers.clear();
+    EXPECT_ANY_THROW(to_chunk_map(model));
+}
+
+TEST(CacheLayoutModel, CPU_HoldingOnlyPublishedLayersRoundTrips) {
+    const CacheLayoutModel model = mla_only_model(kTwoStages);
+    const CacheLayoutModel imported = import_cache_layout_model_from_protobuf(export_to_protobuf(model));
+    for (size_t i = 0; i < model.caches.size(); ++i) {
+        EXPECT_TRUE(imported.caches[i].holds_only_published_layers);
+    }
+    EXPECT_EQ(first_table_difference(to_chunk_map(model), to_chunk_map(imported)), std::nullopt);
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::internal::disaggregation
