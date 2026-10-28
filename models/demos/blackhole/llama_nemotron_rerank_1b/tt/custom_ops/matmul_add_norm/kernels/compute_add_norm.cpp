@@ -40,6 +40,7 @@ constexpr uint32_t res_cb = tt::CBIndex::c_4;
 constexpr uint32_t gamma_cb = tt::CBIndex::c_5;
 constexpr uint32_t inv_w_cb = tt::CBIndex::c_6;
 constexpr uint32_t x2_cb = tt::CBIndex::c_8;
+constexpr uint32_t sq_cb = tt::CBIndex::c_18;
 constexpr uint32_t part_cb = tt::CBIndex::c_9;
 constexpr uint32_t gath_cb = tt::CBIndex::c_10;
 constexpr uint32_t inv_cb = tt::CBIndex::c_11;
@@ -57,6 +58,13 @@ constexpr auto EPI_FIDELITY = MathFidelity::HiFi4;
 constexpr auto RS_FID = MathFidelity::ROWSUM_FIDELITY;
 #else
 constexpr auto RS_FID = MathFidelity::HiFi4;
+#endif
+// The squares of h (bf16) for the row statistic: HiFi2 left y's PCC unchanged at 16384 rows
+// (FF2 1171 -> 1160 us, WO 623 -> 615 us against HiFi4).
+#ifdef SQ_FIDELITY
+constexpr auto SQ_FID = MathFidelity::SQ_FIDELITY;
+#else
+constexpr auto SQ_FID = MathFidelity::HiFi2;
 #endif
 // The y multiplies (h * inv, * gamma) feed a bfp8 output; their fidelity is a define.
 #ifdef Y_FIDELITY
@@ -127,6 +135,25 @@ ALWI void mul_dest_tile(uint32_t icb, uint32_t itile, uint32_t idst) {
         icb, icb, idst, true)));
 }
 
+// h * h with both operands unpacked from the same tile, added onto DST slot `idst` unless `clear`
+// (the sum of squares over a row's tiles accumulates in DST).
+ALWI void square_init(uint32_t icb) {
+    reconfig_data_format(icb, icb);
+    state_configure(icb, icb, __builtin_LINE());
+    MATH((llk_math_eltwise_binary_init<EltwiseBinaryType::ELWMUL, BroadcastType::NONE, SQ_FID>(icb, icb, false)));
+    UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb, icb, Transpose::None)));
+}
+
+ALWI void square_acc_tile(uint32_t icb, uint32_t itile, uint32_t idst, bool clear) {
+    UNPACK((llk_unpack_AB(icb, icb, itile, itile)));
+    MATH((llk_math_eltwise_binary<
+          EltwiseBinaryType::ELWMUL,
+          BroadcastType::NONE,
+          DST_ACCUM_MODE,
+          SQ_FID,
+          EltwiseBinaryReuseDestType::NONE>(icb, icb, idst, clear)));
+}
+
 // add_unary_tile / rsqrt_tile over the column faces only (faces 0 and 2, VectorMode::C): the inverse
 // RMS lives in column 0, so the other half of the tile is wasted SFPU work.
 ALWI void add_scalar_col(uint32_t idst, uint32_t bits) {
@@ -184,93 +211,106 @@ void matmul_blocks(
 }
 
 // h = acc + residual, written back over the residual (CB 4 is this core's resident shard of the
-// residual stream, res_w tiles wide; block `blk` row m is shard row blk * M_block + m). h^2 row sums
-// over this core's real columns, transposed into row 0 of one partial tile per tile-row (the
-// writer's exchange format). Columns past res_w (N block padding) read a real tile and are dropped.
+// residual stream, res_w tiles wide; block `blk` row m is shard row blk * M_block + m). Then each
+// row's sum of squares: the FPU multiplies each real h tile by itself, read back from the shard,
+// accumulating in one DST slot per row; those tiles (CB 18) are row-summed / W and transposed into
+// row 0 of one partial tile per row (the writer's exchange format). The phases run over the whole
+// block, so the packer-to-unpacker handoffs (CB 8 for h, CB 18 for the squares) happen once per
+// block. Columns past res_w (N block padding) read a real tile and are dropped.
 template <uint32_t M_block_tiles, uint32_t N_block_tiles, uint32_t res_w>
 void pass1(uint32_t blk, uint32_t n_real) {
     constexpr uint32_t out_tiles = M_block_tiles * N_block_tiles;
-    constexpr uint32_t P = 2;  // h in DST slots 0-1, h^2 in 2-3 (fits fp32 DST's 4 half-sync slots)
-    CircularBuffer cb_acc(acc_cb), cb_x2(x2_cb), cb_part(part_cb);
+    constexpr uint32_t P = 2;  // h tiles per DST session
+    constexpr uint32_t R = 4;  // rows per DST session (fp32 DST's 4 half-sync slots)
+    CircularBuffer cb_acc(acc_cb), cb_x2(x2_cb), cb_sq(sq_cb), cb_part(part_cb);
+    const uint32_t base = blk * M_block_tiles * res_w;
 #ifndef NORM_ONLY
-    cb_acc.wait_front(out_tiles);
-#endif
-    cb_part.reserve_back(M_block_tiles);
-    for (uint32_t m = 0; m < M_block_tiles; ++m) {
-        const uint32_t row = (blk * M_block_tiles + m) * res_w;
-        cb_x2.reserve_back(N_block_tiles);
-        {
+    {
 #ifdef ZONES
-            DeviceZoneScopedN("P1A");
+        DeviceZoneScopedN("P1A");
 #endif
-            // res_cb and x2_cb are both bf16: one pack format for the row.
-            // The FPU add and the SFPU square are initialised once per row (the SFPU init does not
-            // touch the FPU's eltwise state).
-#ifdef NORM_ONLY
-            reconfig_data_format_srca(res_cb);
-            copy_init(res_cb);
-#else
-            reconfig_data_format(acc_cb, res_cb);
-            add_init(acc_cb, res_cb);
-#endif
-            pack_reconfig_data_format(res_cb);
-            mul_binary_tile_init();
+        cb_acc.wait_front(out_tiles);
+        reconfig_data_format(acc_cb, res_cb);
+        add_init(acc_cb, res_cb);
+        pack_reconfig_data_format(res_cb);
+        for (uint32_t m = 0; m < M_block_tiles; ++m) {
+            const uint32_t row = base + m * res_w;
             for (uint32_t n = 0; n < N_block_tiles; n += P) {
                 const uint32_t t = m * N_block_tiles + n;
                 const uint32_t cnt = N_block_tiles - n < P ? N_block_tiles - n : P;
                 tile_regs_acquire();
                 for (uint32_t j = 0; j < cnt; ++j) {
-#ifdef NORM_ONLY
-                    copy_tile(res_cb, row + (n + j < res_w ? n + j : 0), j);
-#else
                     add_tiles(acc_cb, res_cb, t + j, row + (n + j < res_w ? n + j : 0), j);
-#endif
-                }
-                for (uint32_t j = 0; j < cnt; ++j) {
-                    mul_binary_tile(j, j, P + j);
                 }
                 tile_regs_commit();
                 tile_regs_wait();
-#ifndef NORM_ONLY
                 for (uint32_t j = 0; j < cnt; ++j) {
                     if (n + j < res_w) {
                         pack_tile<true>(j, res_cb, row + n + j);
                     }
                 }
-#endif
-                for (uint32_t j = 0; j < cnt; ++j) {
-                    pack_tile<true>(P + j, x2_cb, n + j);
-                }
                 tile_regs_release();
             }
-        cb_x2.push_back(N_block_tiles);
         }
+        cb_acc.pop_front(out_tiles);
+        // The unpacker reads h back below only after this push, i.e. after the packs above.
+        cb_x2.reserve_back(1);
+        cb_x2.push_back(1);
+        cb_x2.wait_front(1);
+    }
+#endif
+    {
 #ifdef ZONES
         DeviceZoneScopedN("P1B");
 #endif
-
-#ifdef SKIP_SQ
-        cb_x2.wait_front(N_block_tiles);
-        cb_x2.pop_front(N_block_tiles);
-        continue;
-#endif
-        cb_x2.wait_front(N_block_tiles);
-        pack_reconfig_data_format(part_cb);
-        row_sum_init(x2_cb, inv_w_cb, part_cb);
-        tile_regs_acquire();
-        for (uint32_t j = 0; j < n_real; ++j) {
-            row_sum_tile(x2_cb, inv_w_cb, j, 0);
+        cb_sq.reserve_back(M_block_tiles);
+        pack_reconfig_data_format(sq_cb);
+        square_init(res_cb);
+        for (uint32_t m0 = 0; m0 < M_block_tiles; m0 += R) {
+            const uint32_t cnt = M_block_tiles - m0 < R ? M_block_tiles - m0 : R;
+            tile_regs_acquire();
+            for (uint32_t i = 0; i < cnt; ++i) {
+                const uint32_t row = base + (m0 + i) * res_w;
+                for (uint32_t j = 0; j < n_real; ++j) {
+                    square_acc_tile(res_cb, row + j, i, j == 0);
+                }
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t i = 0; i < cnt; ++i) {
+                pack_tile<true>(i, sq_cb, m0 + i);
+            }
+            tile_regs_release();
         }
-        transpose_slot0();  // partial sums: column 0 -> row 0, for the writer's contiguous sends
-        tile_regs_commit();
-        tile_regs_wait();
-        pack_tile<true>(0, part_cb, m);
-        tile_regs_release();
-        cb_x2.pop_front(N_block_tiles);
+        cb_sq.push_back(M_block_tiles);
     }
 #ifndef NORM_ONLY
-    cb_acc.pop_front(out_tiles);
+    cb_x2.pop_front(1);
 #endif
+    cb_sq.wait_front(M_block_tiles);
+    cb_part.reserve_back(M_block_tiles);
+    pack_reconfig_data_format(part_cb);
+    for (uint32_t m0 = 0; m0 < M_block_tiles; m0 += R) {
+        const uint32_t cnt = M_block_tiles - m0 < R ? M_block_tiles - m0 : R;
+        row_sum_init(sq_cb, inv_w_cb, part_cb);
+        tile_regs_acquire();
+        for (uint32_t i = 0; i < cnt; ++i) {
+            row_sum_tile(sq_cb, inv_w_cb, m0 + i, i);
+        }
+        // Partial sums: column 0 -> row 0, for the writer's contiguous sends.
+        MATH((llk_math_reduce_uninit()));
+        transpose_dest_init<DST_ACCUM_MODE, true>();
+        for (uint32_t i = 0; i < cnt; ++i) {
+            transpose_dest<DST_ACCUM_MODE, true>(i);
+        }
+        tile_regs_commit();
+        tile_regs_wait();
+        for (uint32_t i = 0; i < cnt; ++i) {
+            pack_tile<true>(i, part_cb, m0 + i);
+        }
+        tile_regs_release();
+    }
+    cb_sq.pop_front(M_block_tiles);
     // Pushed after every h tile is packed: the writer's exchange waits on it, and pass 2 waits on
     // the gathered tiles the exchange produces, so pass 2's reads of h follow these packs.
     cb_part.push_back(M_block_tiles);

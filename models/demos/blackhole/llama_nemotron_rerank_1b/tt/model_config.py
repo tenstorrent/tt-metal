@@ -52,7 +52,7 @@ MM_CONFIGS = {
 
 # matmul_qkv_rope blocks (M_block, K_block, N_block, subblock_h, subblock_w) per rows, from
 # perf_tools/probe_qkv_rope.py; N_block must be even (whole heads).
-QKV_ROPE_CONFIGS = {512: (2, 8, 2, 1, 2), 2048: (4, 8, 4, 1, 4), 4096: (8, 8, 4, 1, 4), 16384: (8, 16, 2, 2, 2)}
+QKV_ROPE_CONFIGS = {512: (2, 8, 2, 1, 2), 2048: (4, 8, 4, 1, 4), 4096: (8, 8, 4, 1, 4), 16384: (8, 16, 2, 4, 1)}
 # Fidelity of the rotation's multiplies: HiFi2 keeps Q / K PCC at 0.999996 (HiFi4 0.999998), 32x512 910 -> 887 us.
 QKV_ROPE_FIDELITY = "HiFi2"
 

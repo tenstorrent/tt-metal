@@ -14,6 +14,9 @@
 #include "api/compute/eltwise_binary.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
+#ifdef ZONES
+#include "api/debug/kernel_profiler.hpp"
+#endif
 
 namespace {
 constexpr uint32_t in0_cb = tt::CBIndex::c_0;
@@ -176,8 +179,18 @@ void kernel_main() {
             matmul_block_init(in0_cb, in1_cb, false, current_subblock_w, current_subblock_h, K_block_tiles);
             cb_acc.reserve_back(out_block_num_tiles);
             for (uint32_t k_block = 0; k_block < K_num_blocks; k_block++) {
-                cb_in0.wait_front(in0_block_num_tiles);
-                cb_in1.wait_front(in1_block_num_tiles);
+                {
+#ifdef ZONES
+                    DeviceZoneScopedN("W0");
+#endif
+                    cb_in0.wait_front(in0_block_num_tiles);
+                }
+                {
+#ifdef ZONES
+                    DeviceZoneScopedN("W1");
+#endif
+                    cb_in1.wait_front(in1_block_num_tiles);
+                }
                 matmul_blocks(
                     current_M_block_tiles,
                     current_N_block_tiles,
@@ -202,6 +215,9 @@ void kernel_main() {
             PACK((llk_pack_reconfig_l1_acc(0)));
 
             cb_acc.wait_front(out_block_num_tiles);
+#ifdef ZONES
+            DeviceZoneScopedN("EP");
+#endif
             rope_block<M_block_tiles, N_block_tiles>(n_tile, rope_tiles);
             cb_acc.pop_front(out_block_num_tiles);
         }

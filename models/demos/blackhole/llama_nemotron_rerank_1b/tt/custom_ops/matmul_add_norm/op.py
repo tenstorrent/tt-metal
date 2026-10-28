@@ -185,7 +185,8 @@ def matmul_add_norm(
         + [
             ttnn.cb_descriptor_from_sharded_tensor(4, residual),
             mg.cb(6, 1, ttnn.bfloat16, all_cores),
-            mg.cb(8, nb, ttnn.bfloat16, all_cores),
+            mg.cb(8, 2, ttnn.bfloat16, all_cores),
+            mg.cb(18, mb, ttnn.float32, all_cores),
             mg.cb(9, mb, ttnn.float32, all_cores),
             mg.cb(10, 2 * mb, ttnn.float32, all_cores),
             mg.cb(11, 4, ttnn.float32, all_cores),
