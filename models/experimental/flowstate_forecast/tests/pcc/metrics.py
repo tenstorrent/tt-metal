@@ -100,7 +100,7 @@ def _row(g_h, i, extra=None):
 GATE_KEYS = {
     "pcc_normalized", "pcc_spread", "pcc_row_p01", "pcc_row_min", "pcc_row_p01_active", "pcc_row_min_active",
     "active_rows", "excluded_rows", "spread_ratio_p01", "spread_ratio_p99", "spread_ratio_p50", "spread_ratio_min",
-    "spread_ratio_max", "pcc_row_min_var", "flat_rows", "flat_max_err", "inactive_max_err", "abs_err_max",
+    "spread_ratio_max", "pcc_row_min_var", "flat_rows", "flat_max_err", "inactive_max_err", "inactive_spread_ratio_min", "abs_err_max",
     "bias_row_p50", "bias_row_max", "bias_row_argmax", "bias_rows", "spread_ratio_rows", "pcc_step", "row_info",
     "pcc_final", "pcc_final_spread", "pcc_mean",
 }
@@ -149,6 +149,8 @@ def gate_metrics(h, g_h, q, g_q, mean=None, g_mean=None) -> dict:
         "flat_rows": int(flat.sum()),
         "flat_max_err": float(err[flat].max()) if bool(flat.any()) else 0.0,
         "inactive_max_err": float(err[~act].max()) if bool((~act).any()) else 0.0,
+        # R1-0c: band of the inactive rows against the golden's (an inactive collapse is 0; n/a without them)
+        "inactive_spread_ratio_min": float(ratio_all[~act].min()) if bool((~act).any()) else 1.0,
         "abs_err_max": float(err.max()),
         "bias_row_p50": float(bias.median()),
         "bias_row_max": float(bias.max()),

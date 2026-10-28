@@ -81,6 +81,7 @@ REQUIRED_FLOORS = {
     "spread_ratio_p01",
     "spread_ratio_p50",
     "spread_ratio_p99",
+    "inactive_spread_ratio_min",
 }
 # R1-0b: keys metrics.gate_metrics writes that gate nothing by themselves (counts, indices, row vectors, info)
 NOT_GATED = {"active_rows", "excluded_rows", "flat_rows", "bias_row_argmax", "bias_rows", "spread_ratio_rows", "row_info"}
@@ -110,7 +111,7 @@ def not_applicable(record: dict, metric: str) -> str | None:
     n = record.get("active_rows")
     if need is not None and n is not None and n < need:
         return f"n_active={n} < {need}"
-    if metric == "inactive_max_err" and record.get("excluded_rows") == 0:
+    if metric in ("inactive_max_err", "inactive_spread_ratio_min") and record.get("excluded_rows") == 0:
         return "no inactive rows"
     return None
 

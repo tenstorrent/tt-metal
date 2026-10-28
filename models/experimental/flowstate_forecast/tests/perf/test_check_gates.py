@@ -203,3 +203,18 @@ def test_pcc_step_drift(recs):
     for r in base:
         c = dict(r, pcc_step=r["pcc_step"] - 0.006)
         assert any("pcc_step drift" in f for f in _check([c], [r], gates, require_coverage=False)), r["precision"]
+
+
+def test_inactive_collapse_second_check(recs):
+    """R1-0c: collapsing nan_mix's inactive row fails inactive_spread_ratio_min as well as pcc_row_min."""
+    gates, base = recs
+    g = torch.load(GOLDENS / "nan_mix.pt", weights_only=True)
+    gh, gq = M.head(g["combined_normalized"]), M.head(g["quantile_outputs"])
+    act = M.active_rows(gh)
+    h = gh.clone()
+    h[~act] = h[~act].mean(1, keepdim=True).expand_as(h[~act])
+    m = M.gate_metrics(h, gh, gq, gq, g["prediction_outputs"], g["prediction_outputs"])
+    for r in base:
+        if r["name"] == "suite:nan_mix":
+            c = dict(r, **m)
+            assert any("inactive_spread_ratio_min" in f for f in _check([c], [r], gates, require_coverage=False))
