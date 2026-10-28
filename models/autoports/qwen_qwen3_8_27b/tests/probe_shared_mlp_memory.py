@@ -147,8 +147,7 @@ def main():
     target = Path(a.output)
     target.parent.mkdir(parents=True, exist_ok=True)
 
-    def consume_graph(graph, label):
-        ledger.update(graph)
+    def archive_graph(graph, label):
         if capacity_mode:
             events = [node for node in graph if node["node_type"] in ("buffer_allocate", "buffer_deallocate")]
             path = target.with_name(target.stem + "." + label + ".allocations.json.gz")
@@ -233,7 +232,8 @@ def main():
                 ttnn.synchronize_device(mesh)
         finally:
             graph = ttnn.graph.end_graph_capture()
-        consume_graph(graph, "construction")
+            archive_graph(graph, "construction")
+        ledger.update(graph)
         del graph
 
         def checkpoint(label):
@@ -296,7 +296,8 @@ def main():
                 ttnn.synchronize_device(mesh)
         finally:
             graph = ttnn.graph.end_graph_capture()
-        consume_graph(graph, "preparation")
+            archive_graph(graph, "preparation")
+        ledger.update(graph)
         del graph
         checkpoint("after_preparation")
         result["preparation"] = gen.last_preparation_memory
@@ -377,6 +378,7 @@ def main():
                     ttnn.synchronize_device(mesh)
             finally:
                 graph = ttnn.graph.end_graph_capture()
+                archive_graph(graph, f"request{request_index}")
             maximum_request_allocation_per_bank = max(
                 maximum_request_allocation_per_bank,
                 max(
@@ -388,7 +390,7 @@ def main():
                     default=0,
                 ),
             )
-            consume_graph(graph, f"request{request_index}")
+            ledger.update(graph)
             del graph
             request_memory = memory()
             reconciled = ledger.snapshot(
