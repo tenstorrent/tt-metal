@@ -56,6 +56,18 @@ from models.demos.glm53_flash.tt.indexer import TtDSAIndexer, TtIndexCache, heig
 from models.demos.glm53_flash.tt.matmul_configs import PREFILL_ROW_BLOCK, DecodeLinear, prefill_linear
 from models.demos.glm53_flash.tt.memory_plan import default_prefill_qblock
 from models.demos.glm53_flash.tt.mesh import TP_AXIS, GLMMesh, single_chip
+
+try:  # the allocation discipline under live traces (lazily built constants as chunk transients, GLMMesh.lazy)
+    from models.demos.glm53_flash.tt.mesh import lazy_const
+except ImportError:  # a tree without it: plain caching
+
+    def lazy_const(mesh, cache: dict, key, make):
+        t = cache.get(key)
+        if t is None:
+            t = cache[key] = make()
+        return t
+
+
 from models.demos.glm53_flash.tt.packed_inputs import sparse_host_values
 
 TILE = 32
