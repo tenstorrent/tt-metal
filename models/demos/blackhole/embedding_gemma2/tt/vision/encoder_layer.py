@@ -6,12 +6,15 @@
     h = x + post_attn_norm( attn( input_norm(x), mask, cos, sin ) )
     h = h + post_ff_norm( mlp( pre_ff_norm(h) ) )                  mlp: down(gelu_tanh(gate h) * up h)
 
-No per-layer input and no layer_scalar (unlike the text layer). The MLP is the E1 `MLP` module
-(same math: bias-free gated gelu-tanh), loaded with the vision widths 768 -> 3072 -> 768.
+No per-layer input and no layer_scalar (unlike the text layer). The MLP is `VisionMLP` (same math
+as the text `MLP`, vision policy: see mlp.py), widths 768 -> 3072 -> 768.
+
+E5b: the norm outputs, the attention / MLP outputs and the residual stream (h, out) are placed by
+`vision_act_memory_config` (L1 for one image, DRAM for batched inputs).
 
 Contract
-    input   x [B, 1, S, 768] bf16 TILE DRAM; mask [B, 1, S, S]; cos/sin [B, 1, S, 64] (see attention.py)
-    output  [B, 1, S, 768] bf16 TILE DRAM
+    input   x [B, 1, S, 768] bf16 TILE (DRAM or L1); mask [B, 1, S, S]; cos/sin (see attention.py)
+    output  [B, 1, S, 768] bf16 TILE, L1 when it fits the vision L1 rule, else DRAM
 """
 
 from __future__ import annotations
@@ -23,10 +26,10 @@ import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.embedding_gemma2.tt.config import RMSNormConfig
-from models.demos.blackhole.embedding_gemma2.tt.mlp import MLP
 from models.demos.blackhole.embedding_gemma2.tt.rms_norm import RMSNorm
 from models.demos.blackhole.embedding_gemma2.tt.vision.attention import VisionAttention
-from models.demos.blackhole.embedding_gemma2.tt.vision.config import VisionLayerConfig
+from models.demos.blackhole.embedding_gemma2.tt.vision.config import VisionLayerConfig, vision_act_memory_config
+from models.demos.blackhole.embedding_gemma2.tt.vision.mlp import VisionMLP
 from models.demos.blackhole.embedding_gemma2.tt.vision.rope import AxialRope
 from models.demos.blackhole.embedding_gemma2.tt.weights import substate
 
@@ -34,7 +37,9 @@ _NORMS = ("input_layernorm", "post_attention_layernorm", "pre_feedforward_layern
 
 
 class VisionEncoderLayer(LightweightModule):
-    def __init__(self, config: VisionLayerConfig, norms: dict[str, RMSNorm], attention: VisionAttention, mlp: MLP):
+    def __init__(
+        self, config: VisionLayerConfig, norms: dict[str, RMSNorm], attention: VisionAttention, mlp: VisionMLP
+    ):
         super().__init__()
         self.config = config
         self.input_layernorm = norms["input_layernorm"]
@@ -71,27 +76,29 @@ class VisionEncoderLayer(LightweightModule):
             cache_dir=cache_dir,
             name=f"{prefix}.self_attn",
         )
-        mlp = MLP.from_state_dict(
+        mlp = VisionMLP.from_state_dict(
             substate(state_dict, "mlp"), config.mlp, device, cache_dir=cache_dir, name=f"{prefix}.mlp"
         )
         return cls(config, norms, attention, mlp)
 
     def forward(self, x: ttnn.Tensor, mask: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
-        dram = ttnn.DRAM_MEMORY_CONFIG
-        h = self.input_layernorm(x)
-        a = self.self_attn(h, mask, cos, sin)
+        B, S, D = x.shape[0], x.shape[2], x.shape[3]
+        # [B, 1, S, 768] activations and the residual stream in L1 when they fit (vision_act_memory_config)
+        mem = vision_act_memory_config(x.device(), B, S, D)
+        h = self.input_layernorm(x, memory_config=mem)
+        a = self.self_attn(h, mask, cos, sin, memory_config=mem)
         ttnn.deallocate(h)
-        a_n = self.post_attention_layernorm(a)
+        a_n = self.post_attention_layernorm(a, memory_config=mem)
         ttnn.deallocate(a)
-        h1 = ttnn.add(x, a_n, memory_config=dram)
+        h1 = ttnn.add(x, a_n, memory_config=mem)
         ttnn.deallocate(a_n)
 
-        f = self.pre_feedforward_layernorm(h1)
-        m = self.mlp(f)
+        f = self.pre_feedforward_layernorm(h1, memory_config=mem)
+        m = self.mlp(f, memory_config=mem)
         ttnn.deallocate(f)
-        m_n = self.post_feedforward_layernorm(m)
+        m_n = self.post_feedforward_layernorm(m, memory_config=mem)
         ttnn.deallocate(m)
-        out = ttnn.add(h1, m_n, memory_config=dram)
+        out = ttnn.add(h1, m_n, memory_config=mem)
         ttnn.deallocate(h1)
         ttnn.deallocate(m_n)
         return out

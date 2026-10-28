@@ -29,6 +29,27 @@ from models.demos.blackhole.embedding_gemma2.tt.config import MLPConfig, RMSNorm
 PATCH_BUCKETS = (1280, 2560)
 
 
+# E5b: vision activations live in L1 (interleaved over every bank) when one tensor needs at most
+# this many bytes per bank and the forward has at most this many patches (batch x bucket); the E5a
+# text rule. One image (2560 patches): the [*, 768]-wide activations, heads and the residual stream
+# go to L1 (-2.5 ms per forward); the 3072-wide MLP intermediates and every batch > 1 tensor stay in
+# DRAM. 128 KB / 10240 patches (batch 4 in L1) failed: op circular buffers clash with L1 buffers.
+VISION_L1_BYTES_PER_BANK = 64 * 1024
+VISION_L1_MAX_TOKENS = 4096
+
+
+def vision_act_memory_config(device, batch: int, seq_len: int, width: int):
+    """L1 interleaved for a bf16 [batch, 1, seq_len, width] TILE tensor when it fits the rule, else DRAM."""
+    import ttnn
+
+    per_bank, max_tokens = VISION_L1_BYTES_PER_BANK, VISION_L1_MAX_TOKENS
+    grid = device.compute_with_storage_grid_size()
+    n = 2 * int(batch) * int(seq_len) * int(width)
+    if batch * seq_len <= max_tokens and n <= per_bank * grid.x * grid.y:
+        return ttnn.L1_MEMORY_CONFIG
+    return ttnn.DRAM_MEMORY_CONFIG
+
+
 def round_up(x: int, m: int) -> int:
     return (x + m - 1) // m * m
 

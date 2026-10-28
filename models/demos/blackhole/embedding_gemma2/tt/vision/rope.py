@@ -13,13 +13,21 @@ where rotate_half_32 maps a 32-channel block [a, b] (16 + 16) to [-b, a].
 
 Device form: both halves at once,
     y = x * cos + (x @ R) * sin
-with R a constant [64, 64] block-diagonal signed permutation (exact in bf16, so x @ R is exact
-with fp32 accumulation). cos/sin depend on each image's patch positions, so the host builds them
-per forward (`axial_cos_sin`) and uploads them as forward inputs, broadcast over heads.
+with R a constant [64, 64] block-diagonal signed permutation. Each 32-channel block is exactly one
+tile column, and R's diagonal block T = R[:32, :32] is the same for both, so this is what
+`ttnn.experimental.rotary_embedding_llama` (prefill mode) computes per 32-wide tile with
+`trans_mat = T`: one fused op instead of matmul + 2 multiplies + add (E5b: 44 us vs 130 us at
+[1, 12, 2560, 64]; 152 vs 491 us at batch 4; same output). T is exact in bf16.
+
+cos/sin depend on each image's patch positions, so the host builds them per forward
+(`axial_cos_sin`) and uploads them as forward inputs [B, 1, S, D]. The fused op takes cos/sin with
+batch 1, so for B > 1 `expand(cos, sin, num_heads)` turns them once per forward into the
+head-expanded form [1, B*H, S, D], and q/k are viewed as [1, B*H, S, D] (free reshape).
 Padding patches keep HF's position -1 (their rows are masked as keys and dropped by the pooler).
 
 Contract
-    forward(x, cos, sin)   x [B, H, S, D] bf16 TILE; cos/sin [B, 1, S, D] bf16 TILE -> [B, H, S, D] bf16
+    forward(x, cos, sin)   x [B, H, S, D] bf16 TILE; cos/sin [B, 1, S, D] or expand() output
+                           -> [B, H, S, D] bf16 TILE DRAM
 """
 
 from __future__ import annotations
@@ -28,7 +36,6 @@ import torch
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.blackhole.embedding_gemma2.tt.config import compute_kernel_config_hifi4
 
 
 def axial_inv_freq(theta: float, head_dim: int) -> torch.Tensor:
@@ -60,27 +67,60 @@ def rotate_half_blocks_matrix(head_dim: int, num_blocks: int = 2) -> torch.Tenso
 
 
 class AxialRope(LightweightModule):
-    def __init__(self, head_dim: int, rot: ttnn.Tensor):
+    def __init__(self, head_dim: int, trans_mat: ttnn.Tensor):
         super().__init__()
         self.head_dim = head_dim
-        self.rot = rot
-        self.compute_kernel_config = compute_kernel_config_hifi4()
+        self.trans_mat = trans_mat
+        self.compute_kernel_config = ttnn.types.BlackholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        )
 
     @classmethod
     def build(cls, head_dim: int, device) -> "AxialRope":
-        R = rotate_half_blocks_matrix(head_dim).reshape(1, 1, head_dim, head_dim)
-        rot = ttnn.from_torch(
-            R, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        tile = ttnn.TILE_SIZE
+        if head_dim != 2 * tile:
+            raise ValueError(f"fused axial RoPE needs head_dim == {2 * tile} (one tile per spatial half)")
+        T = rotate_half_blocks_matrix(head_dim)[:tile, :tile].reshape(1, 1, tile, tile)
+        trans_mat = ttnn.from_torch(
+            T, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG
         )
-        return cls(head_dim, rot)
+        return cls(head_dim, trans_mat)
 
-    def forward(self, x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor) -> ttnn.Tensor:
+    @staticmethod
+    def expand(cos: ttnn.Tensor, sin: ttnn.Tensor, num_heads: int) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        """[B, 1, S, D] tables -> the form `forward` consumes without per-call work.
+
+        B == 1: unchanged. B > 1: [1, B*H, S, D] (each image's table repeated over its heads).
+        """
+        B, _, S, D = cos.shape
+        if B == 1:
+            return cos, sin
         dram = ttnn.DRAM_MEMORY_CONFIG
-        xr = ttnn.matmul(x, self.rot, compute_kernel_config=self.compute_kernel_config, memory_config=dram)
-        a = ttnn.multiply(x, cos, memory_config=dram)
-        b = ttnn.multiply(xr, sin, memory_config=dram)
-        ttnn.deallocate(xr)
-        out = ttnn.add(a, b, memory_config=dram)
-        ttnn.deallocate(a)
-        ttnn.deallocate(b)
-        return out
+        out = []
+        for t in (cos, sin):
+            r = ttnn.repeat(t, ttnn.Shape([1, num_heads, 1, 1]), memory_config=dram)
+            out.append(ttnn.reshape(r, (1, B * num_heads, S, D)))
+        return out[0], out[1]
+
+    def forward(self, x: ttnn.Tensor, cos: ttnn.Tensor, sin: ttnn.Tensor, memory_config=None) -> ttnn.Tensor:
+        B, H, S, D = x.shape
+        expanded = None
+        if B > 1 and cos.shape[0] != 1:
+            # raw [B, 1, S, D] tables (single-module tests); VisionModel passes expand() output
+            cos, sin = expanded = self.expand(cos, sin, H)
+        xf = ttnn.reshape(x, (1, B * H, S, D)) if B > 1 else x
+        out = ttnn.experimental.rotary_embedding_llama(
+            xf,
+            cos,
+            sin,
+            self.trans_mat,
+            memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG,
+            compute_kernel_config=self.compute_kernel_config,
+        )
+        if expanded is not None:
+            ttnn.deallocate(expanded[0])
+            ttnn.deallocate(expanded[1])
+        return ttnn.reshape(out, (B, H, S, D)) if B > 1 else out

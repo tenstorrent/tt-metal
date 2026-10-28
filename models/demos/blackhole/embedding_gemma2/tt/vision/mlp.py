@@ -1,0 +1,73 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent USA, Inc.
+# SPDX-License-Identifier: Apache-2.0
+
+"""VisionMLP (HF `Gemma4VisionMLP`): down( gelu_tanh(gate x) * up x ), no biases, 768 -> 3072 -> 768.
+
+Same math as the text `MLP`; E5b gives the vision tower its own module so its policy can differ:
+    weights      bf16 (bfp8 cost too much worst-token accuracy, see tt/vision/linear.py)
+    projections  `vision_linear` (2D multicast configs at M <= 4096, text rule above)
+    gelu_tanh    applied as an SFPU pre-activation of the gate * up multiply, not in the gate
+                 matmul's packer: -0.3 ms at 1 x 2560, -6.9 ms at 4 x 2560 and 8 x 1280 per forward
+                 (E5b A/B; the packer gelu cost 52 us per gate matmul at M = 2560, Tracy)
+
+Contract
+    input   x [B, 1, S, 768] bf16 TILE (DRAM or L1 interleaved)
+    output  [B, 1, S, 768] bf16 TILE, `memory_config` (DRAM when None)
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+import torch
+
+import ttnn
+from models.common.lightweightmodule import LightweightModule
+from models.demos.blackhole.embedding_gemma2.tt.config import MLPConfig
+from models.demos.blackhole.embedding_gemma2.tt.vision.config import vision_act_memory_config
+from models.demos.blackhole.embedding_gemma2.tt.vision.linear import vision_linear
+from models.demos.blackhole.embedding_gemma2.tt.weights import as_weight, linear_weight
+
+_GELU = [ttnn.UnaryWithParam(ttnn.UnaryOpType.GELU_TANH)]
+
+
+class VisionMLP(LightweightModule):
+    def __init__(self, config: MLPConfig, w_gate: ttnn.Tensor, w_up: ttnn.Tensor, w_down: ttnn.Tensor):
+        super().__init__()
+        self.config = config
+        self.w_gate = w_gate
+        self.w_up = w_up
+        self.w_down = w_down
+
+    @classmethod
+    def from_state_dict(
+        cls,
+        state_dict: dict[str, torch.Tensor],
+        config: MLPConfig,
+        device,
+        *,
+        cache_dir: Path | None = None,
+        name: str = "vision.mlp",
+    ) -> "VisionMLP":
+        """`state_dict` holds the HF `encoder.layers.<i>.mlp.` sub-state (`.linear.` folded)."""
+        H, I = config.hidden_size, config.intermediate_size
+        shapes = {"gate_proj": (I, H), "up_proj": (I, H), "down_proj": (H, I)}
+        ws = {}
+        for k, shp in shapes.items():
+            w = state_dict[f"{k}.weight"]
+            if tuple(w.shape) != shp:
+                raise ValueError(f"{name}.{k}: expected {shp}, got {tuple(w.shape)}")
+            ws[k] = as_weight(linear_weight(w), device, cache_dir=cache_dir, name=f"{name}.{k}.weight")
+        return cls(config, ws["gate_proj"], ws["up_proj"], ws["down_proj"])
+
+    def forward(self, x: ttnn.Tensor, memory_config=None) -> ttnn.Tensor:
+        B, S = x.shape[0], x.shape[2]
+        mem = vision_act_memory_config(x.device(), B, S, self.config.intermediate_size)
+        up = vision_linear(x, self.w_up, memory_config=mem)
+        gate = vision_linear(x, self.w_gate, memory_config=mem)
+        h = ttnn.multiply(gate, up, memory_config=mem, input_tensor_a_activations=_GELU)
+        ttnn.deallocate(gate)
+        ttnn.deallocate(up)
+        out = vision_linear(h, self.w_down, memory_config=memory_config or ttnn.DRAM_MEMORY_CONFIG)
+        ttnn.deallocate(h)
+        return out

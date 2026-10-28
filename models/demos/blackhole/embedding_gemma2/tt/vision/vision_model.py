@@ -4,7 +4,8 @@
 """VisionModel: device forward of the vision path (HF `Gemma4VisionModel` + `embed_vision`).
 
     h      = patch_embedder(pixel_values, pos_x, pos_y)                 [B,1,S,768]
-    mask   = repeat((keep - 1) * 1e9, S rows)                           [B,1,S,S]   key padding
+    mask   = zeros[B,1,S,1] + (keep - 1) * 1e9                          [B,1,S,S]   key padding, bfp4
+    cos, sin = AxialRope.expand(cos, sin)                               once per forward (B > 1)
     for i in 0..15:  h = layer_i(h, mask, cos, sin)
     pooled = (P @ h) * sqrt(768) / 9                                    [B,1,S_out,768] fp32
     soft   = RMSNorm_noscale(pooled) @ W_embed_vision                   [B,1,S_out,512] bf16
@@ -52,14 +53,25 @@ class VisionDeviceInputs:
         return (self.pixel_values, self.pos_x, self.pos_y, self.cos, self.sin, self.keep, self.pool)
 
 
+MASK_DTYPE = ttnn.bfloat4_b
+
+
 def key_padding_mask(keep: ttnn.Tensor) -> ttnn.Tensor:
-    """keep [B,1,1,S] (1 valid / 0 pad) -> additive [B,1,S,S]: 0 for valid keys, -1e9 for padding keys."""
-    S = keep.shape[-1]
+    """keep [B,1,1,S] (1 valid / 0 pad) -> additive [B,1,S,S] bfp4: 0 for valid keys, -1e9 for padding keys.
+
+    bfp4 (E5b, as the text masks in E5a): 0 stays exactly 0 and -1e9 stays fully masking; SDPA
+    reads 3.6x fewer bytes. Built as zeros[B,1,S,1] + bias[B,1,1,S] (one broadcast add writing
+    bfp4) instead of a bf16 repeat; the zero column is derived from `keep` on device.
+    """
     dram = ttnn.DRAM_MEMORY_CONFIG
     shifted = ttnn.subtract(keep, 1.0, memory_config=dram)
     bias = ttnn.multiply(shifted, -MASK_NEG, memory_config=dram)
     ttnn.deallocate(shifted)
-    mask = ttnn.repeat(bias, ttnn.Shape([1, 1, S, 1]), memory_config=dram)
+    col = ttnn.transpose(keep, -2, -1, memory_config=dram)  # [B,1,S,1]
+    zero_col = ttnn.multiply(col, 0.0, memory_config=dram)
+    ttnn.deallocate(col)
+    mask = ttnn.add(zero_col, bias, dtype=MASK_DTYPE, memory_config=dram)
+    ttnn.deallocate(zero_col)
     ttnn.deallocate(bias)
     return mask
 
@@ -117,12 +129,16 @@ class VisionModel(LightweightModule):
     def forward_hidden(self, x: VisionDeviceInputs) -> ttnn.Tensor:
         """Patch embedding + 16 encoder layers. [B,1,S,768] bf16 (padding rows not meaningful)."""
         mask = key_padding_mask(x.keep)
+        cos, sin = self.rope.expand(x.cos, x.sin, self.config.num_heads)  # once per forward
         h = self.patch_embedder(x.pixel_values, x.pos_x, x.pos_y)
         for layer in self.layers:
-            h_next = layer(h, mask, x.cos, x.sin)
+            h_next = layer(h, mask, cos, sin)
             ttnn.deallocate(h)
             h = h_next
         ttnn.deallocate(mask)
+        if cos is not x.cos:
+            ttnn.deallocate(cos)
+            ttnn.deallocate(sin)
         return h
 
     def forward(self, x: VisionDeviceInputs) -> tuple[ttnn.Tensor, ttnn.Tensor]:
