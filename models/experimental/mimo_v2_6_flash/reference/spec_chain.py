@@ -77,7 +77,7 @@ the last committed token), so the relay does not depend on the drafter.
 from dataclasses import dataclass
 
 from .sample_verify import GROUP_WORDS, GROUPS, NO_TOKEN, OUT_WORDS, unpack_out
-from .spec_decode import DRAFT_GROUPS, GROUP_SLOTS, MAX_DRAFTS, SPEC_SLOTS, mtp_cache_position
+from .spec_decode import DRAFT_GROUPS, GROUP_SLOTS, MAX_DRAFTS, SPEC_SLOTS, mtp_cache_position, planned_drafts
 from .spec_inputs import (
     DESC_A,
     DESC_COUNT,
@@ -195,15 +195,17 @@ def chain_step(verify, accept, argmax, layers=1):
     """The chain step (mode 0): ``verify`` the verify upload's int32 values [VERIFY_ROWS * B], ``accept`` the accept
     page's uint32 words [ACCEPT_WORDS], ``argmax`` the verify's greedy tokens [B]. Returns (the draft's packed upload,
     int32 values [MTP_ROWS * B]; the result header, uint32 words [HEADER_WORDS]). Draft group g's request commits accept
-    group g (its source in chain block g). ``layers`` > 1: the upload holds each group's commit description
-    (pack_mtp_layers, row g) and a group's anchor is its last slot; one layer drafts one group."""
+    group g (its source in chain block g). Planned drafting (planned_drafts(layers)): the upload holds each group's
+    commit description (pack_mtp_layers, row g) and a group's anchor is its last slot; the one-layer program drafts
+    one group."""
     header, pos, chain = _header(verify, accept, argmax)
     b = len(pos)
+    planned = planned_drafts(layers)
     # pack_mtp's idle draft: tokens 0, cache positions -1, RoPE indices 0 (pack_mtp_layers': zeros).
-    mtp = [0] * b + [-1 if layers == 1 else 0] * (3 * b) + [0] * ((MTP_ROWS - 4) * b)
-    assert layers > 1 or DRAFT_GROUPS == 1, "one MTP layer drafts one request per lane"
+    mtp = [0] * b + [0 if planned else -1] * (3 * b) + [0] * ((MTP_ROWS - 4) * b)
+    assert planned or DRAFT_GROUPS == 1, "the one-layer program drafts one request per lane"
     for g, m, slots, tokens, bonus in _commits(header, pos, chain, accept):
-        if layers > 1:
+        if planned:
             # pack_mtp_layers of the commit: committed position c at P[slots[c]] + 1, so A = P[slots[0]].
             d = g * b
             mtp[d + DESC_DRAFTING], mtp[d + DESC_COUNT], mtp[d + DESC_A] = 1, m, pos[slots[0]]
@@ -262,12 +264,12 @@ def relay_step(verify, result, ctrl):
 def drafts_step(mtp, heads, layers=1):
     """The drafts step (mode 1): ``mtp`` the draft's packed upload [MTP_ROWS * B] (int32 values), ``heads`` each MTP
     pass's greedy tokens [B]. Returns the result's drafts section, uint32 words [RESULT_WORDS - DRAFTS_AT]: per draft
-    group its anchor and the anchor's token of each pass. With ``layers`` > 1 the upload holds descriptions, and a
-    drafting group's anchor is its last slot."""
+    group its anchor and the anchor's token of each pass. Planned drafting (planned_drafts(layers)): the upload holds
+    descriptions, and a drafting group's anchor is its last slot."""
     b = len(mtp) // MTP_ROWS
     out = [0] * (RESULT_WORDS - DRAFTS_AT)
     for g in range(DRAFT_GROUPS):
-        if layers > 1:
+        if planned_drafts(layers):
             anchor = (g + 1) * GROUP_SLOTS - 1 if mtp[g * b + DESC_DRAFTING] != 0 else None
         else:
             anchor = next((s for s in range(SPEC_SLOTS) if mtp[2 * b + s] >= 0), None)
@@ -532,14 +534,15 @@ class ChainedDraft:
 def chained_draft(result, source, positions=None, layers=1):
     """The ChainedDraft of a source pass's ChainResult (its draft group's), or None when the chain declined or its
     drafts are not the anchor's. ``positions``: the pass's slot positions (VerifyPass.positions; None: the page's, as
-    the verify ran them, which a relayed pass needs). ``layers`` > 1: the anchor is the group's last slot."""
+    the verify ran them, which a relayed pass needs). Planned drafting (planned_drafts(layers)): the anchor is the
+    group's last slot."""
     positions = result.positions if positions is None else positions
     chain = result.groups[source.group]
     if not chain.drafting or chain.draft_anchor != chain.anchor:
         return None
     count, tokens, _ = result.accept[source.group]
     last = (source.group + 1) * GROUP_SLOTS - 1
-    anchor = last if layers > 1 else (source.slots[count - 1] if 1 <= count <= len(source.slots) else None)
+    anchor = last if planned_drafts(layers) else (source.slots[count - 1] if 1 <= count <= len(source.slots) else None)
     if not 1 <= count <= len(source.slots) or anchor != chain.anchor:
         raise RuntimeError(f"row {source.row}: the chain drafted at slot {chain.anchor} after {count} tokens")
     committed = [int(positions[s]) + 1 for s in source.slots[:count]]

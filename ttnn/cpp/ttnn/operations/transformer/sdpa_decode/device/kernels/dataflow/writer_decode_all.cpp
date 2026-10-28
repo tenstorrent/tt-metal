@@ -124,6 +124,7 @@ void kernel_main() {
     // popped, so the per-row-tile mask bounds stay readable for the rest of the kernel.
     constexpr uint32_t spec_pos_n = spec_multi_pos ? spec_multi_pos_T : 1;
     uint32_t spec_pos[spec_pos_n];
+    uint32_t spec_pos_lo = 0;  // the group's mask threshold (spec_group_bounds)
     // using UINT32_MAX as a flag to indicate that cur_pos is not provided as a list
     if constexpr (is_causal) {
         if (cur_pos_arg != UINT32_MAX) {
@@ -140,17 +141,11 @@ void kernel_main() {
                 for (uint32_t j = 0; j < spec_multi_pos_T; ++j) {
                     spec_pos[j] = index_ptr[spec_pos_base + j];
                 }
-#if ASSERT_ENABLED
-                // The reader derives the group's KV scan range from the group's LAST entry and skips
-                // k-chunks that end before its FIRST, so a non-ascending group silently drops KV; this
-                // is the on-device half of a contract validate cannot see, because in spec mode the
-                // positions live in cur_pos_tensor and are only ever read here, on device.
-                for (uint32_t j = 0; j + 1 < spec_multi_pos_T; ++j) {
-                    ASSERT(spec_pos[j] <= spec_pos[j + 1]);
-                }
-#endif
-                // Positions are ascending within a group, so its last entry sets the KV scan range.
-                cur_pos = spec_pos[spec_multi_pos_T - 1];
+                // Positions ascend within a group, -1 entries apart: its largest sets the KV scan range,
+                // its smallest the mask threshold (spec_group_bounds).
+                const SpecGroupBounds bounds = spec_group_bounds<spec_multi_pos_T>(spec_pos);
+                cur_pos = bounds.hi;
+                spec_pos_lo = bounds.lo;
             } else {
                 cur_pos = index_ptr[(uint32_t)(cur_batch / q_heads_parallel_factor)];
             }
@@ -160,48 +155,56 @@ void kernel_main() {
         if (cur_pos == UINT32_MAX) {
             // cur_pos of -1 indicates that the user should be skipped
 #ifdef SDPA_DECODE_RETURN_LSE
-            // return_lse: the user's root writes output rows 0 and lse -1e30 (no visible key), so a merge of
-            // partial attentions weights this user's part 0 instead of reading stale memory.
-            if (is_tree_root) {
-                constexpr uint32_t skip_out_tiles = PNHt * vDHt;
-                constexpr uint32_t skip_out_tile_bytes = get_tile_size(cb_out);
-                CircularBuffer cb_out_zero(cb_out);
-                cb_out_zero.reserve_back(skip_out_tiles);
-                for (uint32_t t = 0; t < skip_out_tiles; ++t) {
-                    fill_tile<skip_out_tile_bytes>(cb_out, t, 0);
-                }
-                // Sharded output: cb_out is this user's output shard, now zero. Interleaved: write the zeros.
-                if constexpr (!is_out_sharded) {
-                    const auto zero_out_writer = TensorAccessor(out_args, out_addr);
-                    uint32_t zero_addr = cb_out_zero.get_write_ptr();
-                    for (uint32_t t = 0; t < skip_out_tiles; ++t) {
-                        noc.async_write(
-                            CoreLocalMem<uint32_t>(zero_addr),
-                            zero_out_writer,
-                            skip_out_tile_bytes,
-                            {},
-                            {.page_id = cur_batch * skip_out_tiles + t});
-                        zero_addr += skip_out_tile_bytes;
-                    }
-                }
-                constexpr uint32_t lse_tile_bytes = get_tile_size(cb_lse_out);
-                const auto lse_writer = TensorAccessor(lse_args, get_arg_val<uint32_t>(lse_arg_idx));
-                CircularBuffer cb_lse(cb_lse_out);
-                cb_lse.reserve_back(PNHt);
-                for (uint32_t t = 0; t < PNHt; ++t) {
-                    const uint32_t lse_tile_addr = cb_lse.get_write_ptr() + t * lse_tile_bytes;
-                    fill_tile<lse_tile_bytes>(cb_lse_out, t, 0);
-                    sdpa_lse::fill_no_key_lse_tile(lse_tile_addr);
-                    noc.async_write(
-                        CoreLocalMem<uint32_t>(lse_tile_addr),
-                        lse_writer,
-                        lse_tile_bytes,
-                        {},
-                        {.page_id = cur_batch * PNHt + t});
-                }
-                noc.async_write_barrier();
-            }
+            constexpr bool zero_skipped = true;
+#else
+            constexpr bool zero_skipped = spec_multi_pos;
 #endif
+            // return_lse: the user's root writes output rows 0 and lse -1e30 (no visible key), so a merge of
+            // partial attentions weights this user's part 0 instead of reading stale memory. Spec mode: a group of
+            // -1 candidates only gets output 0, as the -1 candidates of a group with others do (below).
+            if constexpr (zero_skipped) {
+                if (is_tree_root) {
+                    constexpr uint32_t skip_out_tiles = PNHt * vDHt;
+                    constexpr uint32_t skip_out_tile_bytes = get_tile_size(cb_out);
+                    CircularBuffer cb_out_zero(cb_out);
+                    cb_out_zero.reserve_back(skip_out_tiles);
+                    for (uint32_t t = 0; t < skip_out_tiles; ++t) {
+                        fill_tile<skip_out_tile_bytes>(cb_out, t, 0);
+                    }
+                    // Sharded output: cb_out is this user's output shard, now zero. Interleaved: write the zeros.
+                    if constexpr (!is_out_sharded) {
+                        const auto zero_out_writer = TensorAccessor(out_args, out_addr);
+                        uint32_t zero_addr = cb_out_zero.get_write_ptr();
+                        for (uint32_t t = 0; t < skip_out_tiles; ++t) {
+                            noc.async_write(
+                                CoreLocalMem<uint32_t>(zero_addr),
+                                zero_out_writer,
+                                skip_out_tile_bytes,
+                                {},
+                                {.page_id = cur_batch * skip_out_tiles + t});
+                            zero_addr += skip_out_tile_bytes;
+                        }
+                    }
+#ifdef SDPA_DECODE_RETURN_LSE
+                    constexpr uint32_t lse_tile_bytes = get_tile_size(cb_lse_out);
+                    const auto lse_writer = TensorAccessor(lse_args, get_arg_val<uint32_t>(lse_arg_idx));
+                    CircularBuffer cb_lse(cb_lse_out);
+                    cb_lse.reserve_back(PNHt);
+                    for (uint32_t t = 0; t < PNHt; ++t) {
+                        const uint32_t lse_tile_addr = cb_lse.get_write_ptr() + t * lse_tile_bytes;
+                        fill_tile<lse_tile_bytes>(cb_lse_out, t, 0);
+                        sdpa_lse::fill_no_key_lse_tile(lse_tile_addr);
+                        noc.async_write(
+                            CoreLocalMem<uint32_t>(lse_tile_addr),
+                            lse_writer,
+                            lse_tile_bytes,
+                            {},
+                            {.page_id = cur_batch * PNHt + t});
+                    }
+#endif
+                    noc.async_write_barrier();
+                }
+            }
             return;
         }
     }
@@ -296,7 +299,7 @@ void kernel_main() {
         // different cores. The compute kernel evaluates the identical predicate and pops one
         // block per masked chunk, so pushes and pops stay in lockstep through the
         // single-buffered mask CB.
-        const uint32_t spec_pos_min = spec_pos[0];
+        const uint32_t spec_pos_min = spec_pos_lo;
         for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
             const uint32_t chunk_start_pos = k_chunk * k_chunk_size_dynamic;
             const uint32_t chunk_last_pos = chunk_start_pos + k_chunk_size_dynamic - 1;
@@ -494,13 +497,21 @@ void kernel_main() {
             for (uint32_t t = 0; t < PNHt; ++t) {
                 const uint32_t lse_tile_addr = cb_lse.get_write_ptr() + t * lse_tile_bytes;
                 fill_tile<lse_tile_bytes>(cb_lse_out, t, 0);  // column 0 is set below, the rest stays 0
-                sdpa_lse::fill_lse_tile<false>(
-                    lse_tile_addr,
-                    cb_m.get_read_ptr() + t * stats_tile_bytes,
-                    cb_l.get_read_ptr() + t * stats_tile_bytes,
-                    stats_rows,
-                    lse_scale_bits,
-                    [](uint32_t) { return false; });
+                bool candidate_sees_no_key = false;
+                if constexpr (spec_multi_pos) {
+                    candidate_sees_no_key = spec_pos[t] == UINT32_MAX;  // row-tile t is candidate t
+                }
+                if (candidate_sees_no_key) {
+                    sdpa_lse::fill_no_key_lse_tile(lse_tile_addr);
+                } else {
+                    sdpa_lse::fill_lse_tile<false>(
+                        lse_tile_addr,
+                        cb_m.get_read_ptr() + t * stats_tile_bytes,
+                        cb_l.get_read_ptr() + t * stats_tile_bytes,
+                        stats_rows,
+                        lse_scale_bits,
+                        [](uint32_t) { return false; });
+                }
                 noc.async_write(
                     CoreLocalMem<uint32_t>(lse_tile_addr),
                     lse_writer,
@@ -519,6 +530,22 @@ void kernel_main() {
         CircularBuffer cb_out_buf(cb_out);
         if constexpr (num_kv_heads > 1 || !is_out_sharded) {
             cb_out_buf.wait_front(out_chunk_tiles);
+        }
+        if constexpr (spec_multi_pos && !is_out_sharded) {
+            // A candidate at -1 saw no mask (spec_group_bounds): its rows are not attention, so it gets output 0,
+            // as a skipped row does (an interleaved output: the tiles are fronted above).
+            for (uint32_t j = 0; j < spec_multi_pos_T; ++j) {
+                if (spec_pos[j] != UINT32_MAX) {
+                    continue;
+                }
+                for (uint32_t c = 0; c < vDHt; ++c) {
+                    volatile tt_l1_ptr uint32_t* tile = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                        cb_out_buf.get_read_ptr() + (j * vDHt + c) * tile_bytes);
+                    for (uint32_t w = 0; w < tile_bytes / sizeof(uint32_t); ++w) {
+                        tile[w] = 0;
+                    }
+                }
+            }
         }
         noc.async_writes_flushed();
 

@@ -251,7 +251,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> paged_flash_multi_latent_attention_decode
     std::optional<uint32_t> sliding_window_size,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    uint32_t spec_multi_pos_tiles) {
     // Same argument handling as paged_flash_multi_latent_attention_decode below.
     uint32_t k_chunk_size = 0;
     if (program_config.has_value() && program_config.value().k_chunk_size > 0) {
@@ -291,7 +292,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> paged_flash_multi_latent_attention_decode
         k_chunk_size,
         std::nullopt,
         true,
-        head_dim_v);
+        head_dim_v,
+        spec_multi_pos_tiles);
 }
 
 ttnn::Tensor paged_flash_multi_latent_attention_decode(
@@ -308,7 +310,8 @@ ttnn::Tensor paged_flash_multi_latent_attention_decode(
     std::optional<uint32_t> sliding_window_size,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::operations::transformer::SDPAProgramConfig> program_config,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config) {
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    uint32_t spec_multi_pos_tiles) {
     // NOTE: If V tensor is not provided, the operator assumes that V is subset of K in the hidden dimension.
     // and V will be read from the K tensor buffer.
 
@@ -356,7 +359,10 @@ ttnn::Tensor paged_flash_multi_latent_attention_decode(
         k_chunk_size,
         std::nullopt,
         true,
-        head_dim_v);
+        head_dim_v,
+        std::nullopt,  // paged_cache_geometry
+        std::nullopt,  // cache_position_modulo
+        spec_multi_pos_tiles);
 }
 
 }  // namespace ttnn::transformer

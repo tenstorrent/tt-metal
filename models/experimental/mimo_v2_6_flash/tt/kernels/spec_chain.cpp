@@ -19,16 +19,16 @@
 // - accept: the accept page, uint32 [accept_words]: group g's committed count m and tokens at g * out_words.
 // - argmax: the verify's greedy tokens, uint32 [B].
 // Writes the draft's packed upload, idle except for the groups whose block names a source with 1 <= m <= columns and
-// the bonus P[slots[m - 1]] + 1 below the limit. One layer (layers == 1, G == 1): reference.spec_inputs pack_mtp's
+// the bonus P[slots[m - 1]] + 1 below the limit. One layer (planned == 0, G == 1): reference.spec_inputs pack_mtp's
 // rows (tokens; fill, step2, step3 ring cache positions; fill, step2, step3 RoPE indices) as pack_mtp(plan_mtp(...)):
 // slot slots[c] (c < m) takes committed token c with its fill at P[slots[c]], and the anchor slots[m - 1] the steps at
-// the bonus and the bonus + 1. Every layer: pack_mtp_layers' description of each group's commit (drafting, m,
-// A = P[slots[0]], the slots, the committed tokens). Writes the result header: the accept page, the argmax and the
-// positions of slots 0 .. S - 1, and each group's status.
+// the bonus and the bonus + 1. Planned (every layer, or one layer of one-draft groups): pack_mtp_layers' description
+// of each group's commit (drafting, m, A = P[slots[0]], the slots, the committed tokens). Writes the result header:
+// the accept page, the argmax and the positions of slots 0 .. S - 1, and each group's status.
 //
 // Mode 1, the drafts step (end of the draft trace): reads the draft's upload (written by mode 0 or copied by the host)
 // and each MTP pass's greedy tokens (heads, uint32 [B]); a group's anchor is the slot with a step2 position (one
-// layer) or its last slot when its description drafts (every layer). Writes each group's drafts section: the anchor
+// layer) or its last slot when its description drafts (planned). Writes each group's drafts section: the anchor
 // (0xFFFFFFFF: none) and the anchor's token of each pass.
 //
 // Mode 2, the relay step (first in the verify trace, a chained verify): reads verify as the host copied it, the
@@ -106,6 +106,9 @@ void kernel_main() {
     constexpr uint32_t G = get_compile_time_arg_val(27);            // draft groups of a pass
     constexpr uint32_t out_words = get_compile_time_arg_val(28);    // an accept page group's words
     constexpr uint32_t group_words = get_compile_time_arg_val(29);  // a control page group's words
+    // The MTP drafter's planned program (reference.spec_decode.planned_drafts: per-group commit descriptions, the plan
+    // step, the hidden gather): every MTP layer, or the one layer of one-draft groups. 0: the one-layer program.
+    constexpr uint32_t planned = get_compile_time_arg_val(30);
     constexpr uint32_t GS = S / G;                                  // a draft group's slots
     constexpr uint32_t cgw = 4 + GS;                                // a chain block's words
     constexpr uint32_t draft_words = 1 + D;                         // a group's drafts section
@@ -113,7 +116,8 @@ void kernel_main() {
     static_assert(S <= B && B * 4 <= 1024 && mtp_rows == 7 && chain_row < verify_rows && G <= mtp_rows);
     static_assert(chain_relay == 3 + GS && G * cgw + S <= B && ctrl_drafts + D <= group_words);
     static_assert(G * group_words <= ctrl_words && 3 + 2 * GS <= B && 2 * S <= B && B <= table_rows);
-    static_assert(layer < layers + (layers == 1) && (layers > 1 || drafter == 1 || G == 1));
+    static_assert(layer < layers + (layers == 1) && (planned == 1 || drafter == 1 || G == 1));
+    static_assert(planned <= 1 && (planned == 1 || layers == 1) && (drafter == 0 || planned == 0));
     static_assert(accept_words <= argmax_at && argmax_at + S <= positions_at && positions_at + S <= status_at);
     static_assert(status_at + 4 * G <= drafts_at && 1 + D <= out_words);
     static_assert(drafts_at + G * draft_words <= result_words && drafts_at % 16 == 0 && result_words % 16 == 0);
@@ -176,7 +180,7 @@ void kernel_main() {
             }
         } else {
             for (uint32_t i = 0; i < mtp_rows * B; ++i) {
-                mtp[i] = (layers == 1 && i >= B && i < 4 * B) ? -1 : 0;
+                mtp[i] = (planned == 0 && i >= B && i < 4 * B) ? -1 : 0;
             }
         }
         int32_t starts[G];
@@ -208,7 +212,7 @@ void kernel_main() {
                         mtp[drows + s] = static_cast<int32_t>(g * dring) + t % static_cast<int32_t>(dring);
                     }
                 }
-            } else if constexpr (layers > 1) {
+            } else if constexpr (planned == 1) {
                 // The description: drafting, m, A = P[slots[0]], the slots (-1 past m), the committed tokens.
                 volatile tt_l1_ptr int32_t* desc = mtp + g * B;
                 desc[0] = 1;
@@ -282,7 +286,7 @@ void kernel_main() {
             if constexpr (drafter == 1) {
                 const uint32_t flag = static_cast<uint32_t>(upload[g * dblock + 1]);
                 anchor = flag != 0 ? flag - 1 : kNone;
-            } else if constexpr (layers > 1) {
+            } else if constexpr (planned == 1) {
                 anchor = upload[g * B] != 0 ? (g + 1) * GS - 1 : kNone;
             } else {
                 const int32_t* step2 = upload + 2 * B;
@@ -296,9 +300,11 @@ void kernel_main() {
             volatile tt_l1_ptr uint32_t* section = out + g * draft_words;
             section[0] = anchor;
             for (uint32_t k = 0; k < D; ++k) {
+                // DFlash: draft k of group g in row g * D + k of its one head; MTP: pass k's head at the anchor (one
+                // head when D == 1, so the drafter, not the head count, picks the layout).
                 const uint32_t* head =
-                    reinterpret_cast<const uint32_t*>(heads_l1 + (heads == 1 ? 0 : k * align64(row_bytes)));
-                section[1 + k] = anchor == kNone ? kNone : head[heads == 1 ? g * D + k : anchor];
+                    reinterpret_cast<const uint32_t*>(heads_l1 + (drafter == 1 ? 0 : k * align64(row_bytes)));
+                section[1 + k] = anchor == kNone ? kNone : head[drafter == 1 ? g * D + k : anchor];
             }
         }
         noc_async_write(out_l1, dram_addr(result_addr, result_bytes, drafts_at * 4), drafts_bytes);

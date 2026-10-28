@@ -3,13 +3,14 @@
 
 """Draft groups on one Galaxy row (TP=8; no weights): the chain kernels (tt/spec_chain.py, kernels/spec_chain.cpp)
 with two requests per verify pass against reference/spec_chain.py bit for bit, eager and replayed from one capture.
-Skipped unless the process runs with MIMO_SPEC_SLOTS=8 MIMO_SPEC_GROUPS=2.
+Skipped unless the process runs with MIMO_SPEC_SLOTS=8 and MIMO_SPEC_GROUPS=2 (3 drafts per request, every MTP
+layer) or 4 (1 draft per request: one MTP layer through the planned program).
 
-test_spec_chain_groups_tp8 (every MTP layer): the chain and drafts steps on two-row passes (every pair of accepted
-counts, each group's limit on its own, one row alone in either group), the plan and tokens steps on two descriptions
-and random stash pages, and the relay of every pair of pages into a chained verify.
+test_spec_chain_groups_tp8 (the planned MTP program): the chain and drafts steps on passes of a row per group
+(accepted counts, each group's limit on its own, one row alone in any group), the plan and tokens steps on a
+description per group and random stash pages, and the relay of the pages into a chained verify.
 
-test_spec_chain_groups_dflash_tp8: the chain and drafts steps with DFlash drafting on the same passes."""
+test_spec_chain_groups_dflash_tp8: the chain and drafts steps with DFlash drafting on the same passes (3 drafts)."""
 
 import pytest
 import torch
@@ -58,7 +59,7 @@ from models.experimental.mimo_v2_6_flash.tt.spec_chain import CTRL_WORDS, SpecCh
 from models.experimental.mimo_v2_6_flash.tt.spec_inputs import SpecInputs
 
 pytestmark = pytest.mark.skipif(
-    DRAFT_GROUPS != 2 or SPEC_SLOTS != 8, reason="draft groups: run with MIMO_SPEC_SLOTS=8 MIMO_SPEC_GROUPS=2"
+    DRAFT_GROUPS < 2 or SPEC_SLOTS != 8, reason="draft groups: run with MIMO_SPEC_SLOTS=8 MIMO_SPEC_GROUPS=2 or 4"
 )
 
 MAX_SEQ_LEN = 4096
@@ -87,29 +88,32 @@ def accept_words(groups):
 
 
 def pass_cases(rng):
-    """(verify pass, chain row sources, accept page) of two-row passes and of one row in either group."""
+    """(verify pass, chain row sources, accept page) of passes with a row per group (rows 5, 6, .. in a shuffled
+    group each) and of one row in any group."""
     cases = []
-    for b0, b1 in ((1, 300), (255, 257), (1023, 2000), (MAX_SEQ_LEN - 1 - MAX_DRAFTS, 40), (500, MAX_SEQ_LEN - 2)):
-        for m0 in range(1, GROUP_SLOTS + 1):
-            m1 = rng.randrange(1, GROUP_SLOTS + 1)
-            if b0 - m0 < 0 or b1 - m1 < 0:
-                continue
-            groups = rng.choice([{5: 0, 6: 1}, {5: 1, 6: 0}])
-            rows = [
-                (5, [rng.randrange(VOCAB) for _ in range(GROUP_SLOTS)], list(range(b0 - m0, b0 - m0 + GROUP_SLOTS)), 3),
-                (6, [rng.randrange(VOCAB) for _ in range(GROUP_SLOTS)], list(range(b1 - m1, b1 - m1 + GROUP_SLOTS)), 3),
-            ]
-            (vp,) = plan_verify_passes(rows, groups=groups)
-            sources = draft_sources([vp])
-            committed = {
-                5: (m0, [rng.randrange(VOCAB) for _ in range(m0)]),
-                6: (m1, [rng.randrange(VOCAB) for _ in range(m1)]),
-            }
-            cases.append((vp, sources, accept_words([committed[groups_row(groups, g)] for g in range(DRAFT_GROUPS)])))
+    bases = [1, 300, 255, 257, 1023, 2000, MAX_SEQ_LEN - 1 - MAX_DRAFTS, 40, 500, MAX_SEQ_LEN - 2]
+    for k in range(5 * GROUP_SLOTS):
+        rows_ids = [5 + g for g in range(DRAFT_GROUPS)]
+        order = list(range(DRAFT_GROUPS))
+        for i in range(DRAFT_GROUPS - 1, 0, -1):  # Fisher-Yates (SeededRng has no shuffle)
+            j = rng.randrange(0, i + 1)
+            order[i], order[j] = order[j], order[i]
+        groups = dict(zip(rows_ids, order))
+        rows, committed = [], {}
+        for r in rows_ids:
+            m = (k % GROUP_SLOTS) + 1 if r == 5 else rng.randrange(1, GROUP_SLOTS + 1)
+            b = max(rng.choice(bases), m)
+            tokens = [rng.randrange(VOCAB) for _ in range(GROUP_SLOTS)]
+            rows.append((r, tokens, list(range(b - m, b - m + GROUP_SLOTS)), MAX_DRAFTS))
+            committed[r] = (m, [rng.randrange(VOCAB) for _ in range(m)])
+        (vp,) = plan_verify_passes(rows, groups=groups)
+        sources = draft_sources([vp])
+        cases.append((vp, sources, accept_words([committed[groups_row(groups, g)] for g in range(DRAFT_GROUPS)])))
     for g in range(DRAFT_GROUPS):
-        (vp,) = plan_verify_passes([(7, [11, 12, 13], [700, 701, 702], 2)], groups={7: g})
+        tokens, positions = list(range(11, 11 + GROUP_SLOTS)), list(range(700, 700 + GROUP_SLOTS))
+        (vp,) = plan_verify_passes([(7, tokens, positions, MAX_DRAFTS)], groups={7: g})
         acc = [None] * DRAFT_GROUPS
-        acc[g] = (2, [21, 22])
+        acc[g] = (min(2, GROUP_SLOTS), [21, 22][: min(2, GROUP_SLOTS)])
         cases.append((vp, draft_sources([vp]), accept_words(acc)))
     return cases
 
@@ -174,7 +178,12 @@ def test_spec_chain_groups_tp8(mesh_device):
         rows = sorted({s.row for s in sources})
         groups = {s.row: s.group for s in sources}
         nxt_rows = [
-            (r, [rng.randrange(VOCAB) for _ in range(GROUP_SLOTS)], list(range(3000 + 10 * r, 3004 + 10 * r)), 3)
+            (
+                r,
+                [rng.randrange(VOCAB) for _ in range(GROUP_SLOTS)],
+                list(range(3000 + 10 * r, 3000 + 10 * r + GROUP_SLOTS)),
+                MAX_DRAFTS,
+            )
             for r in rows
         ]
         (nxt,) = plan_verify_passes(nxt_rows, groups=groups)
@@ -191,7 +200,7 @@ def test_spec_chain_groups_tp8(mesh_device):
             for c, got in enumerate(words_of(ctrl)):
                 assert got == want_ctrl, f"relay {k} chip {c}: control page"
 
-    # The plan step, then the tokens steps, on two descriptions and random stash pages.
+    # The plan step, then the tokens steps, on a description per group and random stash pages.
     def run_plan():
         chain.plan_layers()
         for layer in range(1, MAX_DRAFTS):
@@ -244,6 +253,7 @@ def test_spec_chain_groups_tp8(mesh_device):
                 assert got == new, f"plan {k}: stash page chip {c}"
 
 
+@pytest.mark.skipif(MAX_DRAFTS < 3, reason="DFlash drafts a block of 3 or 7")
 @pytest.mark.parametrize("device_params", [DEVICE_PARAMS], indirect=True)
 @pytest.mark.parametrize("mesh_device", [(4, 8)], indirect=True)
 def test_spec_chain_groups_dflash_tp8(mesh_device):

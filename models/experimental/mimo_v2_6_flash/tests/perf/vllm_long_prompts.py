@@ -7,7 +7,13 @@
 many tokens; distinct per request, so no prefix-cache hits), ``--output-len`` greedy tokens with ``ignore_eos``, at most
 ``--concurrency`` in flight. Each request streams; the script logs its TTFT (from its own send and from the run start),
 its decode inter-chunk latency (the server may stream more than one token per chunk) and the prompt tokens the server
-counted, then a summary, and writes everything to ``--out`` (JSON). Every line to grep starts with ``LONG``.
+counted, then a summary, and writes everything to ``--out`` (JSON, with each chunk's time, ``stamps``, and the
+completion tokens the server had sent by then, ``tokens``). Every line to grep starts with ``LONG``.
+
+The summary's decode window runs from the last request's first token to the first request's last one, when every
+request decodes and none prefills: the tokens all of them received in it per second (``window_tok_s``), which is the
+c=N decode throughput at the prompts' context. A speculating server streams more than one token per chunk; the server's
+running usage counts (``continuous_usage_stats``) count them.
 
     python models/experimental/mimo_v2_6_flash/tests/perf/vllm_long_prompts.py --n 16 --concurrency 16 \\
         --input-len 1048000 --out c16.json
@@ -33,10 +39,10 @@ async def one(session, args, idx, prompt, t_run, sem, results):
             "temperature": 0,
             "ignore_eos": True,
             "stream": True,
-            "stream_options": {"include_usage": True},
+            "stream_options": {"include_usage": True, "continuous_usage_stats": True},
         }
         t_send = time.perf_counter()
-        stamps, usage, text = [], None, []
+        stamps, tokens, usage, text = [], [], None, []
         async with session.post(args.url, json=body) as resp:
             if resp.status != 200:
                 err = await resp.text()
@@ -53,6 +59,7 @@ async def one(session, args, idx, prompt, t_run, sem, results):
                 for choice in chunk.get("choices", []):
                     if choice.get("text"):
                         stamps.append(time.perf_counter())
+                        tokens.append((chunk.get("usage") or {}).get("completion_tokens", len(stamps)))
                         text.append(choice["text"])
         if not stamps:
             print(f"LONG req {idx}: no tokens", flush=True)
@@ -69,6 +76,8 @@ async def one(session, args, idx, prompt, t_run, sem, results):
             "itl_median_ms": float(np.median(itl)) if itl.size else None,
             "usage": usage,
             "text": "".join(text)[:200],
+            "stamps": [round(t - t_run, 4) for t in stamps],  # each streamed chunk, seconds into the run
+            "tokens": tokens,  # completion tokens sent by each chunk (cumulative)
         }
         results[idx] = r
         print(
@@ -77,6 +86,20 @@ async def one(session, args, idx, prompt, t_run, sem, results):
             f"{r['itl_median_ms'] or 0:.1f} ms, prompt tokens {usage and usage.get('prompt_tokens')}",
             flush=True,
         )
+
+
+def decode_window(ok):
+    """Tokens per second all requests received while all of them decoded: (start, end, tokens, tok/s) or None."""
+    start = max(r["first_token_at_s"] for r in ok)
+    end = min(r["stamps"][-1] for r in ok)
+    if end <= start:
+        return None
+
+    def sent_by(r, t):
+        return max((n for s, n in zip(r["stamps"], r["tokens"]) if s <= t), default=0)
+
+    n = sum(sent_by(r, end) - sent_by(r, start) for r in ok)
+    return start, end, n, n / (end - start)
 
 
 async def main():
@@ -102,6 +125,7 @@ async def main():
     wall = time.perf_counter() - t_run
     ok = [r for r in results.values() if "ttft_s" in r]
     ttfts = sorted(r["ttft_s"] for r in ok)
+    window = decode_window(ok) if ok else None
     json.dump(
         {
             "n": args.n,
@@ -111,6 +135,9 @@ async def main():
             "wall_s": wall,
             "ok": len(ok),
             "ttft_s": ttfts,
+            "window_s": window and [window[0], window[1]],
+            "window_tokens": window and window[2],
+            "window_tok_s": window and window[3],
             "requests": results,
         },
         open(args.out, "w"),
@@ -123,6 +150,12 @@ async def main():
             f"over the run",
             flush=True,
         )
+        if window:
+            print(
+                f"LONG decode window {window[0]:.0f}-{window[1]:.0f} s (all {len(ok)} decoding): {window[2]} tokens, "
+                f"{window[3]:.1f} tok/s ({window[3] / len(ok):.2f} per request)",
+                flush=True,
+            )
     else:
         print(f"LONG done: 0/{args.n} ok in {wall:.0f} s", flush=True)
 

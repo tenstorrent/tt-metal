@@ -65,7 +65,7 @@ import ttnn
 from ..reference.mtp import load_mtp_weights
 from ..reference.mtp_backfill import MTP_WINDOW
 from ..reference.spec_chain import stash_page
-from ..reference.spec_decode import DRAFT_GROUPS, GROUP_SLOTS, MAX_DRAFTS, SPEC_SLOTS, mtp_table_row
+from ..reference.spec_decode import DRAFT_GROUPS, GROUP_SLOTS, MAX_DRAFTS, SPEC_SLOTS, mtp_table_row, planned_drafts
 from ..reference.spec_inputs import pack_mtp_commits
 from .common import TILE, as_weight, cache_name, compute_config
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
@@ -160,15 +160,17 @@ class TtMiMoMTP:
     def __init__(self, model, ckpt=None, cache_dir=None, layers=(0,), weight_dtype=ttnn.bfloat8_b, backfill=False):
         """``model``: the replica's TtMiMoModel (embedding, LM head, RoPE setups, greedy head, final hidden buffer).
         ``layers``: the MTP layers to load, one (it drafts every token) or MAX_DRAFTS (0, 1, 2: draft i + 1 from layer
-        i). ``ckpt`` may be None when ``cache_dir`` already holds their tensors (a later replica). ``backfill``: keep
+        i). Every layer, and one layer drafting one token (groups of 2 slots, MIMO_SPEC_GROUPS=4), run the planned
+        program (``multi``: reference.spec_decode.planned_drafts), which drafts for every draft group. ``ckpt`` may be None when ``cache_dir`` already holds their tensors (a later replica). ``backfill``: keep
         the target-hidden history and the backfill program (with the decode RoPE tables)."""
         layers = (layers,) if isinstance(layers, int) else tuple(layers)
-        assert GROUP_SLOTS == 4, "the MTP drafter drafts 3 tokens per request (MIMO_SPEC_SLOTS / MIMO_SPEC_GROUPS = 4)"
+        planned = planned_drafts(len(layers))
+        assert planned or GROUP_SLOTS == 4, "the one-layer program drafts 3 tokens (MIMO_SPEC_SLOTS / GROUPS = 4)"
         assert len(layers) == 1 or layers == tuple(range(MAX_DRAFTS)), f"MTP layers {layers}: one, or one per draft"
-        assert len(layers) > 1 or DRAFT_GROUPS == 1, "one MTP layer drafts for one request per lane"
+        assert planned or DRAFT_GROUPS == 1, "the one-layer program drafts for one request per lane"
         self.model, self.cfg, self.plan = model, model.cfg, model.plan
         self.layers = [TtMtpLayer(model, ckpt, cache_dir, i, weight_dtype) for i in layers]
-        self.multi = len(self.layers) > 1
+        self.multi = planned  # the planned program (plan step, hidden gather, a pass per layer)
         self.mm_config = compute_config(ttnn.MathFidelity.HiFi2)
         self.page_table = None
         self.heads = None  # one GreedyHead per draft: their persistent token rows are the drafts

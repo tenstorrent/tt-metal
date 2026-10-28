@@ -525,8 +525,14 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         TT_FATAL(use_cur_pos_tensor, "spec_multi_pos_tiles requires a cur_pos tensor");
         TT_FATAL(!is_q_sharded, "spec_multi_pos_tiles requires an unsharded Q tensor");
         TT_FATAL(sliding_window_size == 0, "spec_multi_pos_tiles is not supported with a sliding window");
-        TT_FATAL(!use_mla, "spec_multi_pos_tiles is not supported with MLA");
+        TT_FATAL(!use_mla || tensor_args.v.has_value(), "spec_multi_pos_tiles with MLA needs a separate V cache");
         TT_FATAL(!use_attention_mask, "spec_multi_pos_tiles is not supported with an explicit attention mask");
+        // Sub-tile cache blocks move positions into padded tile space; the kernels convert the group's scan bound
+        // but not the candidates' mask bounds.
+        TT_FATAL(
+            !has_block_padding,
+            "spec_multi_pos_tiles needs cache blocks of whole tiles, got a block of {} positions",
+            original_block_size);
         TT_FATAL(
             PNHt == spec_multi_pos_tiles,
             "spec_multi_pos_tiles={} must equal PNHt={} (one 32-row Q tile per candidate)",
@@ -550,7 +556,6 @@ ProgramDescriptor SdpaDecodeDeviceOperation::create_descriptor(
         TT_FATAL(num_heads_per_core == 1, "return_lse needs num_heads_per_core == 1");
         TT_FATAL(!use_attention_sink, "return_lse is not supported with an attention sink");
         TT_FATAL(!tilize_q, "return_lse needs a TILE layout Q");
-        TT_FATAL(!spec_multi_pos, "return_lse is not supported with spec_multi_pos_tiles");
         TT_FATAL(is_causal, "return_lse needs causal decode");
     }
     const auto q_tile = use_half_tile ? half_tile : full_tile;

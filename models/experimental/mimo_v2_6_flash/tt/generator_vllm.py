@@ -132,8 +132,9 @@ from ..reference.spec_decode import (
     draft_sources,
     plan_mtp,
     plan_verify_passes,
+    planned_drafts,
 )
-from .attention import PAIR_SPLIT_OPS, page_table_width
+from .attention import PAIR_SPLIT_OPS, page_table_width, verify_grouped
 from .device_sampler import CANDIDATES_PER_CHIP, stream_states
 from .generator import MiMoGalaxyGenerator
 from .model import prefill_padded_len, prefill_warmup_batches, prefill_warmup_chunks
@@ -179,7 +180,8 @@ ROPE_TABLE_FULL_WIDTH_MAX_LEN = 131072
 # row at a time (each chunk writes its last rows into the lane's DFlash context ring).
 SPEC_DECODE = os.environ.get("MIMO_SPEC_DECODE", "")
 DFLASH = SPEC_DECODE == "dflash"
-MTP_LAYERS = int(os.environ.get("MIMO_MTP_LAYERS", "3"))
+# One MTP layer per draft by default: 3, or 1 with one-draft groups (MIMO_SPEC_GROUPS=4, K = 1: c=16 drafting).
+MTP_LAYERS = int(os.environ.get("MIMO_MTP_LAYERS", str(min(3, MAX_DRAFTS))))
 MTP_LAYER = int(os.environ.get("MIMO_MTP_LAYER", "0"))
 # MIMO_MTP_BACKFILL=0: no target-hidden history, no ring backfill (the rings start empty for each prompt and keep the
 # gaps of the steps the lane did not draft); it needs the decode RoPE tables.
@@ -513,6 +515,10 @@ class MiMoV2ForCausalLM:
                     f"{SPEC_SLOTS} per lane (got {max_batch_size // dp})"
                 )
         if DFLASH:
+            if MAX_DRAFTS < 3:
+                raise ValueError(
+                    f"MIMO_SPEC_DECODE=dflash drafts a block of 3 or 7: groups of {GROUP_SLOTS} slots hold 1"
+                )
             if not os.path.exists(os.path.join(path, "dflash", "config.json")):
                 raise ValueError(f"MIMO_SPEC_DECODE=dflash: no DFlash draft model in {path}/dflash")
             dflash_path = path
@@ -521,8 +527,8 @@ class MiMoV2ForCausalLM:
                 raise ValueError(f"MIMO_MTP_LAYERS={MTP_LAYERS}: 1, or {MAX_DRAFTS} (one MTP layer per draft)")
             if MTP_LAYERS > cfg.num_nextn_predict_layers:
                 raise ValueError(f"MIMO_MTP_LAYERS={MTP_LAYERS}: the checkpoint has {cfg.num_nextn_predict_layers}")
-            if MTP_LAYERS > 1 and not DEVICE_ROPE:
-                raise ValueError("MIMO_MTP_LAYERS=3 plans its passes on device: it needs MIMO_DEVICE_ROPE=1")
+            if planned_drafts(MTP_LAYERS) and not DEVICE_ROPE:
+                raise ValueError("the planned MTP program plans its passes on device: it needs MIMO_DEVICE_ROPE=1")
             mtp_layers = (MTP_LAYER,) if MTP_LAYERS == 1 else tuple(range(MAX_DRAFTS))
             if MTP_BACKFILL and not DEVICE_ROPE:
                 logger.warning("MiMo vLLM: MIMO_MTP_BACKFILL needs the decode RoPE tables (MIMO_DEVICE_ROPE=1): off")
@@ -1173,7 +1179,8 @@ class MiMoV2ForCausalLM:
             groups = None
             if DRAFT_GROUPS > 1:  # each row in its request's draft group
                 groups = {first + s: g for s, g in self._draft_groups(lane, live).items() if g is not None}
-            passes = plan_verify_passes(active, groups=groups)
+            # The grouped verify attention scans each group's KV once: one request per group (verify_grouped).
+            passes = plan_verify_passes(active, groups=groups, aligned=KV_PAIR_SPLIT and verify_grouped())
             lanes.append(passes)
             lane_sources = sources[lane] = draft_sources(passes)
             # The draft sources run one pass: its chain row goes with it, a block per source.

@@ -155,15 +155,21 @@ void kernel_main() {
             // that group's largest bound (positions are ascending within a group). Per-row
             // bounds are applied later, by the mask.
             if constexpr (spec_multi_pos) {
-                cur_pos = index_ptr[cur_batch * spec_multi_pos_T + (spec_multi_pos_T - 1)];
-#if ASSERT_ENABLED
-                // The reader derives the group's KV scan range from the group's LAST entry and skips
-                // k-chunks that end before its FIRST, so a non-ascending group silently drops KV; this
-                // is the on-device half of a contract validate cannot see, because in spec mode the
-                // positions live in cur_pos_tensor and are only ever read here, on device.
+                // The group's largest entry other than -1 (spec_group_bounds) sets the KV scan range.
                 const uint32_t spec_pos_base = cur_batch * spec_multi_pos_T;
-                for (uint32_t j = 0; j + 1 < spec_multi_pos_T; ++j) {
-                    ASSERT(index_ptr[spec_pos_base + j] <= index_ptr[spec_pos_base + j + 1]);
+                cur_pos = spec_group_bounds<spec_multi_pos_T>(index_ptr + spec_pos_base).hi;
+#if ASSERT_ENABLED
+                // The group's KV scan range comes from its largest entry and the mask threshold from its
+                // smallest, so a non-ascending group silently drops KV; this is the on-device half of a
+                // contract validate cannot see, because in spec mode the positions live in cur_pos_tensor and
+                // are only ever read here, on device. -1 entries (UINT32_MAX) take no part.
+                uint32_t spec_prev = 0;
+                for (uint32_t j = 0; j < spec_multi_pos_T; ++j) {
+                    const uint32_t p = index_ptr[spec_pos_base + j];
+                    if (p != UINT32_MAX) {
+                        ASSERT(spec_prev <= p);
+                        spec_prev = p;
+                    }
                 }
 #endif
             } else {

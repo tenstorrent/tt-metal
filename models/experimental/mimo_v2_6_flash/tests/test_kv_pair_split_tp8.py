@@ -11,7 +11,8 @@ Galaxy row (row 0 of the 4x8 mesh).
   chips (LSE -1e30).
 * ``test_pair_split_compact_verify_tp8``: the decode configurations serving runs, split vs unsplit: the compact SDPA
   over the first 4 table rows (MIMO_COMPACT_SDPA with 4 decode users per lane) and speculative verifies whose slots
-  write K / V one after another (the serial rows) at positions straddling 63 / 64 and 127 / 128.
+  write K / V one after another (the serial rows) at positions straddling 63 / 64 and 127 / 128: one request in every
+  slot, and with draft groups (MIMO_SPEC_GROUPS) a different request in each group, as c=16 speculation packs them.
 * ``test_pair_split_layer_tp8``: one global layer's attention through vLLM-style tables with the split on and off
   (64-position blocks, both copies on the pair): the same prompts prefilled in chunks (a first chunk, then later
   chunks through chunked MLA prefill), then decode steps whose positions straddle the 64 / 128 boundaries. Every
@@ -38,6 +39,7 @@ from models.experimental.mimo_v2_6_flash.tests.common import (
     load_config_and_ckpt,
     pcc,
 )
+from models.experimental.mimo_v2_6_flash.reference.spec_decode import GROUP_SLOTS, SPEC_SLOTS
 from models.experimental.mimo_v2_6_flash.tt import kv as kv_lib
 from models.experimental.mimo_v2_6_flash.tt.attention import PAIR_SPLIT_OPS, TtMiMoAttention, page_table_width
 from models.experimental.mimo_v2_6_flash.tt.common import MeshPlan, pad_to
@@ -48,7 +50,7 @@ from models.experimental.mimo_v2_6_flash.tt.rope import MiMoRotarySetup
 MAX_BATCH = 32
 BLOCK = 64
 HIDDEN_STD = 1.0
-SERIAL = 4
+SERIAL = SPEC_SLOTS  # a verify pass's slots
 
 
 def per_chip_torch(t):
@@ -330,9 +332,12 @@ def test_pair_split_compact_verify_tp8(mesh_device):
     """The decode configurations serving runs, split vs unsplit: MIMO_COMPACT_SDPA with 4 decode users (the SDPA over
     the first 4 table rows and SDPA positions, as decode_forward_device slices them: its program spreads each user over
     many cores with the tree reduction, the LSE comes from the reduction's root, and the merge runs on [1, 4, 16, 1]),
-    and speculative verifies (4 slots of one request on its table row at consecutive positions straddling 63 / 64 and
-    127 / 128, K / V written slot by slot through the serial rows, then the compact SDPA). Every slot's output must
-    agree (PCC > 0.999) and the split cache must hold the unsplit one's K / V."""
+    and speculative verifies (SERIAL slots of one request on its table row at consecutive positions straddling 63 / 64
+    and 127 / 128, K / V written slot by slot through the serial rows, then the compact SDPA). With draft groups a
+    verify also packs a different request into each group of GROUP_SLOTS slots (the users in reverse order, so a group
+    that read table row g instead of its first slot's row would read another user's): with groups of 2 slots its global
+    attention is the grouped verify (one KV scan per request, each group's own table row, length and -1 candidates). Every slot's
+    output must agree (PCC > 0.999) and the split cache must hold the unsplit one's K / V."""
     users, steps, max_seq = 4, 3, 2048
     lengths = (62, 126, 1000, 63)
     cfg, ckpt = load_config_and_ckpt()
@@ -354,25 +359,38 @@ def test_pair_split_compact_verify_tp8(mesh_device):
             off.prefill(x[s : s + 256], u, s)
 
     worst = {"verify": 1.0, "decode": 1.0}
-    # Verifies of users 0 and 1: every verify slot holds the request's table row.
-    for u in (0, 1):
+    now = list(lengths)  # each user's next position
+
+    def verify(owners, what):
+        """One verify pass: slot j holds user owners[j] (its table row) at that user's next positions."""
         positions = torch.full((MAX_BATCH,), -1, dtype=torch.int32)
-        positions[:SERIAL] = lengths[u] + torch.arange(SERIAL, dtype=torch.int32)
+        for j, u in enumerate(owners):
+            positions[j] = now[u] + owners[:j].count(u)
         tables = []
         for layout in (on, off):
             t = layout.table.clone()
-            t[:SERIAL] = layout.table[u]
+            t[:SERIAL] = layout.table[list(owners)]
             tables.append(t)
         x = (torch.randn(MAX_BATCH, cfg.hidden_size, generator=g) * HIDDEN_STD).bfloat16().float()
         a = on.decode(x, positions, table=tables[0], rows=SERIAL, serial=SERIAL)
         b = off.decode(x, positions, table=tables[1], rows=SERIAL, serial=SERIAL)
-        for j in range(SERIAL):
+        for j, u in enumerate(owners):
             score = pcc(a[j], b[j])
             worst["verify"] = min(worst["verify"], score)
-            logger.info(f"verify of user {u}, slot {j} at {int(positions[j])}: split vs not {score:.6f}")
+            logger.info(f"{what}: slot {j} user {u} at {int(positions[j])}: split vs not {score:.6f}")
+        for u in set(owners):
+            now[u] += owners.count(u)
 
-    # Compact decode steps of the 4 users (users 0 and 1 past their verified positions).
-    now = [lengths[0] + SERIAL, lengths[1] + SERIAL, lengths[2], lengths[3]]
+    # Verifies of users 0 and 1: every verify slot holds the request's table row.
+    for u in (0, 1):
+        verify([u] * SERIAL, f"verify of user {u}")
+    # With draft groups: one verify of a different user per group, users in reverse order.
+    groups = SERIAL // GROUP_SLOTS
+    if groups > 1:
+        owners = [(groups - 1 - j // GROUP_SLOTS) % users for j in range(SERIAL)]
+        verify(owners, f"verify of {groups} users")
+
+    # Compact decode steps of the 4 users (past their verified positions).
     for step in range(steps):
         positions = torch.full((MAX_BATCH,), -1, dtype=torch.int32)
         positions[:users] = torch.tensor(now, dtype=torch.int32) + step

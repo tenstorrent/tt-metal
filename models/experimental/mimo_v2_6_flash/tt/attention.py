@@ -56,6 +56,7 @@ import torch
 
 import ttnn
 
+from ..reference.spec_decode import GROUP_SLOTS, SPEC_SLOTS
 from .proj_stream import BankStreamMatmul
 from .common import TILE, DramShardedMatmul, as_weight, cache_name, compute_config, decode_linear_config, pad_to
 from .kv import BatchFillTables, kv_replication, per_chip, slot_owner_masks
@@ -79,6 +80,28 @@ PAIR_SPLIT_OPS = all(
     )
     for word in words
 )
+
+# A speculative verify's global attention under the KV pair split (_verify_grouped): one KV scan per request for all
+# its candidates (paged MLA decode's spec_multi_pos_tiles) instead of one per candidate slot. One chip, ms per global
+# layer (tests/perf/verify_sdpa_bench.py; per slot / grouped / a plain decode step of the requests):
+# - 4 requests of 2 candidates (MIMO_SPEC_GROUPS=4, c=16): 1M 4.33 / 3.05 / 2.19, 256K 1.10 / 0.81 / 0.57, 32K even,
+#   4K 0.048 / 0.070 / 0.040 (0.2 ms of a ~19 ms verify step);
+# - 1 request of 4: 1M 2.19 / 1.57 / 0.62, 128K even, 8K 0.051 / 0.128 / 0.085 (0.7 ms of a ~15 ms step).
+# Each candidate's 16 heads fill a 32-row Q tile, half of it padding, so the grouped program is compute-bound. On by
+# default for groups of 2 slots, off for 4 (MIMO_VERIFY_GROUPED=1 / 0 overrides); the adapter then packs a verify's
+# requests one per group of GROUP_SLOTS slots (verify_grouped()).
+VERIFY_GROUPED = os.environ.get("MIMO_VERIFY_GROUPED", "1" if GROUP_SLOTS == 2 else "0") == "1"
+GROUPED_VERIFY_OPS = "spec_multi_pos_tiles" in (
+    ttnn.transformer.paged_flash_multi_latent_attention_decode.__doc__ or ""
+)
+
+
+def verify_grouped():
+    """Whether a pair-split verify runs its global attention one KV scan per request (VERIFY_GROUPED, groups of 2 or 4
+    candidates, and a ttnn build with spec_multi_pos_tiles on paged MLA decode). 8 candidates (DFlash's one group)
+    need 128-token K chunks and at most 32 cores per request to fit L1 beside decode's buffers: not wired."""
+    return VERIFY_GROUPED and GROUPED_VERIFY_OPS and GROUP_SLOTS in (2, 4)
+
 
 # A global layer's later prefill chunks stream the whole cached context once per (head group, Q chunk) unit. With
 # grouped heads (SDPAProgramConfig.q_heads_per_unit: G heads share each K/V chunk read) and a K split (k_splits: each
@@ -1152,6 +1175,50 @@ class TtMiMoAttention:
         )
         return attn, lse
 
+    def _verify_grouped(self, q, kv_cache, table, cur_pos):
+        """A verify's global SDPA with its LSE, one KV scan per request (paged MLA decode's spec_multi_pos_tiles): the
+        pass's SPEC_SLOTS slots are SPEC_SLOTS / GROUP_SLOTS groups, each one request's candidates (the adapter packs
+        them so: reference.spec_decode.plan_verify_passes with ``aligned``), candidate j of group g in slot
+        g * GROUP_SLOTS + j. q [1, B, 16, 192] (each slot's 16 heads in its own 32-row tile) goes in as
+        [1, groups, GROUP_SLOTS * 32, 192], the table ``table`` (a row per slot) as each group's first row, and every
+        candidate keeps its SDPA position ``cur_pos`` [SPEC_SLOTS] (-1: no local key or a gap, output 0 and lse
+        NO_KEY_LSE). Returns what _paged_mla_decode_lse returns for the slots: output [1, SPEC_SLOTS, 16, 128] in L1,
+        lse [1, SPEC_SLOTS, 16, 1] fp32, views of the grouped outputs (the padding rows of each tile are not heads)."""
+        k_cache, v_cache = kv_cache
+        slots, cands = SPEC_SLOTS, GROUP_SLOTS
+        groups = slots // cands
+        nh, dk, width = q.shape[-2], q.shape[-1], table.shape[-1]
+        q_dram = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
+        q_slots = ttnn.slice(q_dram, (0, 0, 0, 0), (1, slots, nh, dk))
+        q_dram.deallocate(True)
+        tiles = ttnn.Shape([1, slots, TILE, dk])
+        q_grouped = ttnn.reshape(ttnn.reshape(q_slots, tiles, tiles), (1, groups, cands * TILE, dk))  # views
+        rows = [ttnn.slice(table, (g * cands, 0), (g * cands + 1, width)) for g in range(groups)]
+        group_table = ttnn.concat(rows, dim=0) if groups > 1 else rows[0]
+        if groups > 1:
+            for t in rows:
+                t.deallocate(True)
+        attn, lse = ttnn.transformer.paged_flash_multi_latent_attention_decode(
+            q_grouped,
+            k_cache,
+            v_cache,
+            head_dim_v=self.v_head_dim,
+            page_table_tensor=group_table,
+            cur_pos_tensor=cur_pos,
+            scale=self.scale,
+            program_config=self._split_sdpa_program(groups, width * k_cache.shape[-2]),
+            compute_kernel_config=self.decode_sdpa_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            return_lse=True,
+            spec_multi_pos_tiles=cands,
+        )  # [1, groups, cands * 32, 128], [.., 1]
+        q_slots.deallocate(True)
+        group_table.deallocate(True)
+        dv = attn.shape[-1]
+        out = ttnn.reshape(attn, ttnn.Shape([1, slots, nh, dv]), ttnn.Shape([1, slots, TILE, dv]))
+        lse = ttnn.reshape(lse, ttnn.Shape([1, slots, nh, 1]), ttnn.Shape([1, slots, TILE, TILE]))
+        return out, lse
+
     def _paged_mla_decode_lse(self, q, kv_cache, page_table, cur_pos):
         """Global decode SDPA with its LSE (the ops' interface in runs/kvsplit/SPEC.md): q (height-sharded, 16 heads)
         over the chip's local keys up to each user's SDPA position ``cur_pos`` (-1: none) through ``page_table``.
@@ -1407,7 +1474,12 @@ class TtMiMoAttention:
         table, pos = page_table, positions["pair_sdpa"]
         if positions.get("page_table_sdpa") is not None:
             table, pos = positions["page_table_sdpa"], positions["pos_sdpa"]
-        attn, lse = self._paged_mla_decode_lse(q_rot, kv_cache, table, pos)  # [1, B or n, 16, 128], [.., 16, 1]
+        # A verify over exactly its pass's slots (the compact rows): one KV scan per request.
+        grouped = positions.get("pair_serial") and verify_grouped() and pos is not positions["pair_sdpa"]
+        if grouped and pos.shape[0] == SPEC_SLOTS:
+            attn, lse = self._verify_grouped(q_rot, kv_cache, table, pos)  # [1, SPEC_SLOTS, 16, 128], [.., 16, 1]
+        else:
+            attn, lse = self._paged_mla_decode_lse(q_rot, kv_cache, table, pos)  # [1, B or n, 16, 128], [.., 16, 1]
         q_rot.deallocate(True)
         attn_cat = self.pair.merge_heads(attn, lse, self.concat_heads)
         attn.deallocate(True)

@@ -54,12 +54,24 @@ from dataclasses import dataclass, field
 # derives from it.
 SPEC_SLOTS = int(os.environ.get("MIMO_SPEC_SLOTS", "4"))
 assert SPEC_SLOTS in (4, 8), f"MIMO_SPEC_SLOTS={SPEC_SLOTS}: 4 or 8"
-# Requests a pass drafts for: 1, or 2 (MIMO_SPEC_GROUPS=2 with MIMO_SPEC_SLOTS=8: a lane's two requests, each in a
-# draft group of GROUP_SLOTS consecutive slots with its own drafter state; c=8 over 4 lanes).
+# Requests a pass drafts for: 1, 2 or 4 (MIMO_SPEC_GROUPS with MIMO_SPEC_SLOTS=8: a lane's requests, each in a draft
+# group of GROUP_SLOTS consecutive slots with its own drafter state; 2: c=8 over 4 lanes with 3 drafts each, 4: c=16
+# with 1 draft each, which one MTP layer drafts through the planned program, planned_drafts).
 DRAFT_GROUPS = int(os.environ.get("MIMO_SPEC_GROUPS", "1"))
-assert DRAFT_GROUPS in (1, 2) and SPEC_SLOTS // DRAFT_GROUPS >= 4, f"MIMO_SPEC_GROUPS={DRAFT_GROUPS}"
+assert DRAFT_GROUPS == 1 or (
+    DRAFT_GROUPS in (2, 4) and SPEC_SLOTS == 8
+), f"MIMO_SPEC_GROUPS={DRAFT_GROUPS}: 1, or 2 / 4 with MIMO_SPEC_SLOTS=8"
 GROUP_SLOTS = SPEC_SLOTS // DRAFT_GROUPS
 MAX_DRAFTS = GROUP_SLOTS - 1  # drafts per request: its last committed token and drafts fill one draft group
+
+
+def planned_drafts(layers):
+    """Whether the MTP drafter runs its planned program (per-group commit descriptions, the plan step, the hidden
+    gather: tt/mtp.py ``planned``) with ``layers`` MTP layers drafting: every layer (``layers`` > 1, one per draft), or
+    one layer drafting one token per request (MAX_DRAFTS == 1, groups of 2 slots), which is every-layer drafting with
+    one layer (no re-prefill). Otherwise one layer runs the one-layer program (fill, then continuation steps), which
+    drafts for one request per lane."""
+    return layers > 1 or MAX_DRAFTS == 1
 
 
 @dataclass
@@ -77,11 +89,13 @@ class VerifyPass:
         return sum(p >= 0 for p in self.positions)
 
 
-def plan_verify_passes(rows, slots=SPEC_SLOTS, groups=None, group_slots=GROUP_SLOTS):
+def plan_verify_passes(rows, slots=SPEC_SLOTS, groups=None, group_slots=GROUP_SLOTS, aligned=False):
     """rows: (row, tokens [1 + K], positions [1 + K], num_valid_drafts) of a lane's active rows, in batch order.
     Returns the lane's passes. A row takes columns 0 .. num_valid_drafts, in consecutive slots of one pass. With draft
     groups (``group_slots`` < ``slots``) each row starts a group: its own (``groups`` {row: group}, the request's
-    sticky group) in the first pass where that group is free, or the first free group."""
+    sticky group) in the first pass where that group is free, or the first free group. ``aligned`` (the grouped
+    verify attention, one KV scan per group: tt/attention.py verify_grouped): without draft groups too, each row
+    starts a pass of its own, so every group of slots holds one request."""
     passes = []
     multi = group_slots < slots
 
@@ -104,7 +118,7 @@ def plan_verify_passes(rows, slots=SPEC_SLOTS, groups=None, group_slots=GROUP_SL
                 passes.append(p)
             first = g * group_slots
         else:
-            if not passes or passes[-1].used + width > slots:
+            if not passes or passes[-1].used + width > slots or (aligned and passes[-1].used > 0):
                 passes.append(VerifyPass())
             p = passes[-1]
             first = p.used
