@@ -41,7 +41,7 @@ namespace {
 
 namespace fs = std::filesystem;
 
-std::string read_text(const fs::path& path) {
+std::string read_file_text(const fs::path& path) {
     std::ifstream file(path);
     return {std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>()};
 }
@@ -96,7 +96,7 @@ public:
         const fs::path out_dir = kernel_dir / get_target_name();
         fs::create_directories(out_dir);
         compile_one(out_dir.string() + "/", &settings, 0);
-        std::istringstream lines(read_text(out_dir / (objs_[0] + ".log")));
+        std::istringstream lines(read_file_text(out_dir / (objs_[0] + ".log")));
         for (std::string line; std::getline(lines, line);) {
             if (line.starts_with("! ") && line.ends_with(".gch")) {
                 return line.substr(2);
@@ -218,7 +218,7 @@ TEST(KernelPchDeathTest, SecondKernelBuildsPchSharedAcrossCbFormats) {
         bool lists_header = false;
         for (const auto& entry : fs::directory_iterator(h.root / "fp32" / "brisc")) {
             if (entry.path().extension() == ".dephash") {
-                lists_header |= read_text(entry.path()).find("probe_pch.h") != std::string::npos;
+                lists_header |= read_file_text(entry.path()).find("probe_pch.h") != std::string::npos;
             }
         }
         ASSERT_TRUE(lists_header);
