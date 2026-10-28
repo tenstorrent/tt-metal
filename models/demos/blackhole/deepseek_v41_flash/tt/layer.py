@@ -28,6 +28,8 @@ from models.demos.blackhole.deepseek_v41_flash.tt.shared_expert_v2 import (
 )
 
 _STREAM_BF16 = os.environ.get("DSV41_STREAM_BF16") == "1"
+_TLOG = os.environ.get("DSV41_MHC_TLOG") == "1"
+_TLOG_SEEN = set()
 _X2LITE = (
     os.environ.get("DSV41_MHC_X2LITE", "0") == "1"
 )  # default OFF: the attention-side expand writes only rows 0..3 of x2 (see mhc_expand2 lite)
@@ -233,6 +235,16 @@ class DSV41Layer:
         fuse_pre = (not _STREAM_BF16) and self.mhc_attn.pre_fused_ok(
             int(xp.shape[0])
         )  # L02: mixes + collapse + norm of a sub-block in ONE program
+        if (
+            _TLOG
+        ):  # diagnostic (default off): one line per distinct (layer class, T, stream rows, fused?) seen while tracing
+            _k = (type(self).__name__, T, int(x.shape[0]), int(xp.shape[0]), bool(fuse_pre))
+            if _k not in _TLOG_SEEN:
+                _TLOG_SEEN.add(_k)
+                print(
+                    f"MHC_TLOG layer={type(self).__name__} T={_k[1]} x_rows={_k[2]} mhc_rows={_k[3]} fused_front={_k[4]}",
+                    flush=True,
+                )
         if fuse_pre:
             (attn_pre, attn_post, attn_comb), h = self.mhc_attn.mixes_collapse(xp, prep, self.attn_norm_w, self.eps)
             mark("mhc_attn_mixes+collapse+norm")
