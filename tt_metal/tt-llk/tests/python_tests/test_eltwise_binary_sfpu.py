@@ -1117,7 +1117,7 @@ def test_eltwise_binary_sfpu_mask(formats, dest_acc, mathop, **run_kwargs):
 def test_eltwise_binary_sfpu_atan2(formats, dest_acc, mathop, **run_kwargs):
     # atan2(y, x): y = tile0, x = tile1. Signed [-5, 5] gives mixed signs so all quadrants
     # (and the |y|>=|x| / x<0 branches) are exercised. A minimax approximation: gated by
-    # its step budget on Wormhole, and by tolerance + PCC elsewhere.
+    # its step budget on Wormhole and Blackhole, and by tolerance + PCC on Quasar.
     skip_if_32bit_input_without_dest_acc(formats, dest_acc)
 
     sfpu_binary(
@@ -1194,7 +1194,8 @@ def test_eltwise_binary_sfpu_xlogy_denormal(mathop, dest_acc):
 @parametrize(**LOGSIGMOID_SWEEP)
 def test_eltwise_binary_sfpu_logsigmoid(formats, dest_acc, mathop, **run_kwargs):
     # logsigmoid(x) with x = tile0. Piecewise poly/passthrough approximation, gated by its
-    # step budget on Wormhole and by tolerance + PCC elsewhere; x swept over [-8, 3.9].
+    # step budget on Wormhole and Blackhole and by tolerance + PCC on Quasar; x swept
+    # over [-8, 3.9].
     # The x > 4 (-exp(-x)) branch needs a device-computed
     # exp(-x) operand the shared harness can't provide, left to a future driver.
     skip_if_32bit_input_without_dest_acc(formats, dest_acc)
