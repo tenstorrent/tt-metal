@@ -43,6 +43,7 @@ from models.demos.glm53_flash.custom_ops.topk_rows.op import TopkRows
 from models.demos.glm53_flash.tt.config import GLM53FlashConfig
 from models.demos.glm53_flash.tt.matmul_configs import prefill_linear
 from models.demos.glm53_flash.tt.mesh import from_torch_host_layout
+from models.demos.glm53_flash.tt.vllm_config import PREFIX_BUCKET_ENV
 
 TILE = 32
 STATIC_PREFILL_ENV = "GLM53_INDEX_STATIC_PREFILL"  # "1" (default): shape-static eager maintenance of aligned chunks
@@ -387,6 +388,11 @@ class TtDSAIndexer(LightweightModule):
         # test hook: emulate mesh row r of a multi-row mesh on one chip (the shared scorer's chunk start + r*Sq
         # offset applied explicitly, the selection bounded per row as on the mesh)
         self.row_offset_sim = 0
+        # the scored width of a prefill sub-block rounds up to the prefix bucket in pools (GLM53_PREFIX_BUCKET / P,
+        # 0 = exact): the crop of the score block and the custom scorer's column count then key their programs on
+        # the bucket, not on the chunk's position (the 2026-10-28 served 64K prompts: the chunk at 32768 was a new
+        # crop width under the sealed program cache). The extra columns are causally invisible (-inf) to every query.
+        self.prefix_bucket_pools = int(os.environ.get(PREFIX_BUCKET_ENV, "0")) // self.P
         self._const_cache: dict[tuple, ttnn.Tensor] = {}
         self.stage_timer = None  # TtDSA.set_stage_timer installs a StageTimer (test instrumentation)
 
@@ -761,6 +767,8 @@ class TtDSAIndexer(LightweightModule):
             extra = 0 if q_rows_form else self._extra_rows()
             bounded = bool(extra)
             kv_len = self._kv_len(cache, num_pools_valid, extra * T)
+        if self.prefix_bucket_pools:  # one scored width per prefix bucket (served: no program per chunk position)
+            kv_len = min(cache.pools_per_user, -(-kv_len // self.prefix_bucket_pools) * self.prefix_bucket_pools)
         if q_rows_form:
             scores_rm = self._score_prefill_rows(q, w, cache, user, positions=positions, kv_len=kv_len)
             self._mark("index_score")
