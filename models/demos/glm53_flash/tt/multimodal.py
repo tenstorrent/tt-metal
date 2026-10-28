@@ -62,7 +62,7 @@ from models.demos.glm53_flash.tt.mm_inputs import (
     vision_batches,
 )
 from models.demos.glm53_flash.tt.vision import GLM53VisionConfig, TtVisionTower, load_vision_weights
-from models.demos.glm53_flash.tt.vllm_config import DEFAULT_VISION_BATCH_PATCHES
+from models.demos.glm53_flash.tt.vllm_config import DEFAULT_VISION_BATCH_PATCHES, eager_pad_length
 
 TILE = 32
 THINK_END = "</think>"
@@ -413,7 +413,7 @@ def multimodal_streams(
     ids = input_ids.reshape(-1).long()
     S = int(ids.numel())
     unit = TILE * model.mesh.rows
-    T_pad = -(-S // unit) * unit if pad_to is None else int(pad_to)
+    T_pad = eager_pad_length(S, unit) if pad_to is None else int(pad_to)  # a warmed bucket, never a new length
     rows = image_rows(ids, image_token_id)
     feats = torch.cat(list(features), dim=0) if not torch.is_tensor(features) else features
     if feats.shape[0] != rows.numel():
