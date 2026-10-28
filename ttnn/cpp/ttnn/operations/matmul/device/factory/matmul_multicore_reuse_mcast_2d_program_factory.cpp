@@ -137,8 +137,7 @@ static NamedRuntimeArgs build_in1_sender_writer_args(
     bool last_col,
     uint32_t per_core_M,
     uint32_t per_core_N,
-    uint32_t out_row_tiles,
-    uint32_t out_column_offset_tiles,
+    uint32_t N,
     uint32_t in1_tensor_start_tile_id_stride,
     CoreCoord in1_mcast_start,
     CoreCoord in1_mcast_end,
@@ -150,8 +149,7 @@ static NamedRuntimeArgs build_in1_sender_writer_args(
         {"in1_mcast_dest_noc_start_y", (std::uint32_t)in1_mcast_start.y},
         {"in1_mcast_dest_noc_end_x", (std::uint32_t)in1_mcast_end.x},
         {"in1_mcast_dest_noc_end_y", (std::uint32_t)in1_mcast_end.y},
-        {"out_tensor_start_tile_id",
-         out_column_offset_tiles + (in1_idx * per_core_N) + (in0_idx * per_core_M * out_row_tiles)},
+        {"out_tensor_start_tile_id", ((std::uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)},
         // padding args (READER)
         {"last_block_w", last_col ? pad.last_out_block_w : pad.out_block_w},
         // padding args (WRITER)
@@ -184,15 +182,13 @@ static NamedRuntimeArgs build_in1_receiver_writer_args(
     bool last_col,
     uint32_t per_core_M,
     uint32_t per_core_N,
-    uint32_t out_row_tiles,
-    uint32_t out_column_offset_tiles,
+    uint32_t N,
     CoreCoord in1_mcast_sender,
     bool output_is_sharded) {
     NamedRuntimeArgs args = {
         {"in1_mcast_sender_noc_x", (std::uint32_t)in1_mcast_sender.x},
         {"in1_mcast_sender_noc_y", (std::uint32_t)in1_mcast_sender.y},
-        {"out_tensor_start_tile_id",
-         out_column_offset_tiles + (in1_idx * per_core_N) + (in0_idx * per_core_M * out_row_tiles)},
+        {"out_tensor_start_tile_id", ((std::uint32_t)in1_idx * per_core_N) + (in0_idx * per_core_M * N)},
         // padding args (WRITER)
         {"out_num_nonzero_subblocks_h", pad.out_block_h / pad.out_subblock_h},
         {"out_last_num_nonzero_subblocks_h",
@@ -352,20 +348,13 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
     bool row_broadcast_bias = true,
     CoreCoord sub_device_start_core = {0, 0},
     uint32_t in0_row_tiles = 0,
-    uint32_t in0_column_offset_tiles = 0,
-    uint32_t out_row_tiles = 0,
-    uint32_t out_column_offset_tiles = 0) {
+    uint32_t in0_column_offset_tiles = 0) {
     using namespace tt;
     using tt::tt_metal::TensorMemoryLayout;
 
     // A column window reads in0's K tiles from rows of in0_row_tiles tiles, starting at in0_column_offset_tiles.
     if (in0_row_tiles == 0) {
         in0_row_tiles = K;
-    }
-    // An output column window writes the N output tiles of each row into rows of out_row_tiles tiles, starting at
-    // out_column_offset_tiles.
-    if (out_row_tiles == 0) {
-        out_row_tiles = N;
     }
 
     ttsl::optional_reference<const tt_metal::MeshTensor> bias_mesh;
@@ -1210,8 +1199,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                     /*last_col=*/in1_idx == in1_end_idx,  // right cores when no transpose_mcast
                     per_core_M,
                     per_core_N,
-                    out_row_tiles,
-                    out_column_offset_tiles,
+                    N,
                     in1_tensor_start_tile_id_stride,
                     in1_mcast_start,
                     in1_mcast_end,
@@ -1240,8 +1228,7 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                     /*last_col=*/in1_idx == in1_end_idx,
                     per_core_M,
                     per_core_N,
-                    out_row_tiles,
-                    out_column_offset_tiles,
+                    N,
                     in1_mcast_sender,
                     output_is_sharded);
 
@@ -1526,15 +1513,15 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                     {"batchB", 0u},
                     {"sparsity_pagesize", 0u},
                     {"out_tensor_stride_w", 1u},
-                    {"out_tensor_stride_h", out_row_tiles},
+                    {"out_tensor_stride_h", N},
                     {"out_tensor_next_subblock_stride_w", out_subblock_w},
-                    {"out_tensor_next_subblock_stride_h", out_subblock_h * out_row_tiles},
+                    {"out_tensor_next_subblock_stride_h", out_subblock_h * N},
                     {"out_tensor_next_w_dim_block_stride", out_block_w},
-                    {"out_tensor_next_h_dim_block_stride", out_block_h * out_row_tiles},
+                    {"out_tensor_next_h_dim_block_stride", out_block_h * N},
                     {"out_subblock_w", out_subblock_w},
                     {"out_subblock_h", out_subblock_h},
                     {"out_subblock_tile_count", out_subblock_w * out_subblock_h},
-                    {"MtNt", M * out_row_tiles},
+                    {"MtNt", M * N},
                     {"compact_output", 0u},
                     {"num_active", 0u},
                 },
@@ -1651,15 +1638,15 @@ static ttnn::device_operation::ProgramArtifacts create_program_mcast_in0_in1_spe
                         {"batch", B},
                         {"out_block_num_tiles", out_block_tiles},
                         {"out_tensor_stride_w", 1u},
-                        {"out_tensor_stride_h", out_row_tiles},
+                        {"out_tensor_stride_h", N},
                         {"out_tensor_next_subblock_stride_w", out_subblock_w},
-                        {"out_tensor_next_subblock_stride_h", out_subblock_h * out_row_tiles},
+                        {"out_tensor_next_subblock_stride_h", out_subblock_h * N},
                         {"out_tensor_next_w_dim_block_stride", out_block_w},
-                        {"out_tensor_next_h_dim_block_stride", out_block_h * out_row_tiles},
+                        {"out_tensor_next_h_dim_block_stride", out_block_h * N},
                         {"out_subblock_w", out_subblock_w},
                         {"out_subblock_h", out_subblock_h},
                         {"out_subblock_tile_count", out_subblock_w * out_subblock_h},
-                        {"MtNt", M * out_row_tiles},
+                        {"MtNt", M * N},
                     },
                 .runtime_arg_schema = {},
                 .hw_config = dm_hw_config(tt_metal::DataMovementProcessor::RISCV_0, noc),
@@ -2045,11 +2032,6 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast2DProgramFacto
                                       ? 0
                                       : a_shape_logical[-1] % in0_tile.get_width();
     const auto in0_last_ktile_h = transpose_a ? a_shape_logical[-1] % in0_tile.get_width() : 0;
-    // With an output column window the output's rows keep their full width (0: N tiles); the window is tile aligned.
-    const bool output_window = operation_attributes.output_column_offset.has_value();
-    const uint32_t out_row_tiles = output_window ? output.padded_shape()[-1] / output_tile.get_width() : 0;
-    const uint32_t out_column_offset_tiles =
-        operation_attributes.output_column_offset.value_or(0) / output_tile.get_width();
     TT_FATAL(
         in0_last_ktile_w == 0 || in0_last_ktile_h == 0,
         "At most one of in0_last_ktile_w ({}) and in0_last_ktile_h ({}) can be non-zero",
@@ -2132,9 +2114,7 @@ ttnn::device_operation::ProgramArtifacts MatmulMultiCoreReuseMcast2DProgramFacto
         fused_matmul_bias_row_broadcastable(bias),
         sub_device_start_core,
         in0_row_tiles,
-        in0_column_offset_tiles,
-        out_row_tiles,
-        out_column_offset_tiles);
+        in0_column_offset_tiles);
 }
 
 }  // namespace ttnn::prim
