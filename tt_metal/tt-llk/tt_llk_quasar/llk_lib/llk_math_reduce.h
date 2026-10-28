@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cstdint>
 
+#include "ckernel_ops.h"
 #include "llk_defs.h"
 #include "llk_math_common.h"
 #include "tensor_shape.h"
@@ -37,9 +38,7 @@ void tti_pool_instr_func()
     }
 }
 
-// The replays hold every fidelity phase a face can take; a face with fewer phases replays only the last ones.
-constexpr static std::uint32_t REDUCE_MAX_FIDELITY_PHASES = math_fidelity_phase_count(MathFidelity::HiFi4);
-constexpr static std::uint32_t REDUCE_ROW_GROUPS          = FACE_R_DIM / ELTWISE_MATH_ROWS;
+constexpr static std::uint32_t REDUCE_ROW_GROUPS = FACE_R_DIM / ELTWISE_MATH_ROWS;
 
 /**
  * @brief Dest rows one face occupies; faces shorter than MAX_FPU_ROWS are padded to MAX_FPU_ROWS rows.
@@ -84,49 +83,57 @@ inline void _llk_math_reduce_row_sum_addrmod_(const MathFidelitySchedule fidelit
  */
 inline void _llk_math_reduce_row_sum_mop_config_(const MathFidelitySchedule fidelity, const TensorShape& tensor_shape)
 {
-    constexpr std::uint32_t face_len = REDUCE_MAX_FIDELITY_PHASES * REDUCE_ROW_GROUPS;
+    const std::uint32_t row_groups = std::max<std::uint32_t>(tensor_shape.face_r_dim / ELTWISE_MATH_ROWS, 1);
+    const std::uint32_t last_row   = (row_groups - 1) * ELTWISE_MATH_ROWS;
+    // Every tiny face is its own SrcB bank, so each face waits for its bank.
+    const bool wait_srcb    = tensor_shape.face_r_dim < FACE_R_DIM;
+    const std::uint32_t len = fidelity.phase_count * row_groups + (wait_srcb ? 1 : 0);
 
-    load_replay_buf<0, 2 * face_len>(
-        []
+    load_replay_buf(
+        0,
+        2 * len,
+        false,
+        0,
+        0,
+        [phase_count = fidelity.phase_count, last_row, wait_srcb]
         {
-#pragma GCC unroll 3
-            for (std::uint32_t phase = 1; phase < REDUCE_MAX_FIDELITY_PHASES; phase++)
+            for (std::uint32_t face = 0; face < 2; face++)
             {
-#pragma GCC unroll 4
-                for (const auto row : fpu_row_offsets<FACE_R_DIM - ELTWISE_MATH_ROWS>())
+                if (wait_srcb)
                 {
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, row);
+                    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::MATH, p_stall::SRCB_VLD);
                 }
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, FACE_R_DIM - ELTWISE_MATH_ROWS);
-            }
-#pragma GCC unroll 4
-            for (const auto row : fpu_row_offsets<FACE_R_DIM - ELTWISE_MATH_ROWS>())
-            {
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, row);
-            }
-            TTI_MVMUL(p_setrwc::CLR_B, 0, ADDR_MOD_2, FACE_R_DIM - ELTWISE_MATH_ROWS);
-
-#pragma GCC unroll 3
-            for (std::uint32_t phase = 1; phase < REDUCE_MAX_FIDELITY_PHASES; phase++)
-            {
-#pragma GCC unroll 4
-                for (const auto row : fpu_row_offsets<FACE_R_DIM - ELTWISE_MATH_ROWS>())
+                for (std::uint32_t phase = 1; phase <= phase_count; phase++)
                 {
-                    TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, row);
-                }
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, FACE_R_DIM - ELTWISE_MATH_ROWS);
-            }
 #pragma GCC unroll 4
-            for (const auto row : fpu_row_offsets<FACE_R_DIM - ELTWISE_MATH_ROWS>())
-            {
-                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, row);
+                    for (const auto row : fpu_row_offsets<FACE_R_DIM>())
+                    {
+                        if (row < last_row)
+                        {
+                            TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_0, row);
+                        }
+                        else if (row == last_row)
+                        {
+                            if (phase < phase_count)
+                            {
+                                TTI_MVMUL(p_setrwc::CLR_NONE, 0, ADDR_MOD_1, row);
+                            }
+                            else if (face == 0)
+                            {
+                                TTI_MVMUL(p_setrwc::CLR_B, 0, ADDR_MOD_2, row);
+                            }
+                            else
+                            {
+                                TTI_MVMUL(p_setrwc::CLR_B, 0, ADDR_MOD_3, row);
+                            }
+                        }
+                    }
+                }
             }
-            TTI_MVMUL(p_setrwc::CLR_B, 0, ADDR_MOD_3, FACE_R_DIM - ELTWISE_MATH_ROWS);
         });
 
-    const std::uint32_t len              = fidelity.phase_count * REDUCE_ROW_GROUPS;
-    const std::uint32_t face             = TT_OP_REPLAY(face_len - len, len, 0, 0, 0, 0);
-    const std::uint32_t last_face_in_row = TT_OP_REPLAY(2 * face_len - len, len, 0, 0, 0, 0);
+    const std::uint32_t face             = TT_OP_REPLAY(0, len, 0, 0, 0, 0);
+    const std::uint32_t last_face_in_row = TT_OP_REPLAY(len, len, 0, 0, 0, 0);
     ckernel_template temp = (tensor_shape.num_faces_c_dim == 1) ? ckernel_template(1 /*outer loop*/, tensor_shape.num_faces_r_dim, last_face_in_row)
                                                                 : ckernel_template(1 /*outer loop*/, tensor_shape.num_faces_r_dim, face, last_face_in_row);
     temp.program_bank0_sw_cntl(instrn_buffer);
@@ -426,8 +433,8 @@ inline void _llk_math_reduce_init_(const DataFormat src_a_format, const DataForm
 
     LLK_ASSERT(validate_tensor_shape_tile_dependent_ops_(tensor_shape), "Invalid tensor shape for tile-dependent op");
     LLK_ASSERT(
-        src_a_format != DataFormat::Int8 || (tensor_shape.face_r_dim == FACE_R_DIM && tensor_shape.total_num_faces() == NUM_FACES),
-        "Int8 reduce only supports 32x32 tiles");
+        src_a_format != DataFormat::Int8 || REDUCE_DIMENSION != ReduceDim::REDUCE_SCALAR || POOL_TYPE == PoolType::MAX,
+        "Int8 scalar SUM is not supported, partials do not fit back into source registers");
     [[maybe_unused]] const auto fidelity = math_fidelity_schedule<FIDELITY>(src_a_format, src_b_format);
 
     if constexpr (REDUCE_DIMENSION == ReduceDim::REDUCE_ROW && POOL_TYPE == PoolType::MAX)

@@ -66,7 +66,21 @@ quasar:
   - "tt_metal/tt-llk/tests/python_tests/quasar/test_eltwise_unary_sfpu_quasar.py::test_eltwise_unary_sfpu_quasar[mathop_formats_dest_acc_sync_input_dims:(<MathOperation.Dropout:"
   - tt_metal/tt-llk/tests/python_tests/quasar/test_fused_quasar.py::test_fuser[quasar/sfpu_dropout_
   # ttsim: tensix_movb2a with ALU_ACC_CTRL_INT8_math_enabled is unimplemented (Int8 scalar reduce).
+  - "tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Int8->Int32-tile_dimensions:(1, 32)-dest_acc:Yes-reduce_dim:Scalar-"
+  - "tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Int8->Int32-tile_dimensions:(2, 32)-dest_acc:Yes-reduce_dim:Scalar-"
+  - "tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Int8->Int32-tile_dimensions:(4, 32)-dest_acc:Yes-reduce_dim:Scalar-"
+  - "tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Int8->Int32-tile_dimensions:(8, 32)-dest_acc:Yes-reduce_dim:Scalar-"
+  - "tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Int8->Int32-tile_dimensions:(16, 16)-dest_acc:Yes-reduce_dim:Scalar-"
+  - "tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Int8->Int32-tile_dimensions:(16, 32)-dest_acc:Yes-reduce_dim:Scalar-"
+  - "tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Int8->Int32-tile_dimensions:(32, 16)-dest_acc:Yes-reduce_dim:Scalar-"
   - "tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Int8->Int32-tile_dimensions:(32, 32)-dest_acc:Yes-reduce_dim:Scalar-"
+  - "tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Int8->Int8-tile_dimensions:(1, 32)-dest_acc:Yes-reduce_dim:Scalar-"
+  - "tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Int8->Int8-tile_dimensions:(2, 32)-dest_acc:Yes-reduce_dim:Scalar-"
+  - "tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Int8->Int8-tile_dimensions:(4, 32)-dest_acc:Yes-reduce_dim:Scalar-"
+  - "tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Int8->Int8-tile_dimensions:(8, 32)-dest_acc:Yes-reduce_dim:Scalar-"
+  - "tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Int8->Int8-tile_dimensions:(16, 16)-dest_acc:Yes-reduce_dim:Scalar-"
+  - "tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Int8->Int8-tile_dimensions:(16, 32)-dest_acc:Yes-reduce_dim:Scalar-"
+  - "tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Int8->Int8-tile_dimensions:(32, 16)-dest_acc:Yes-reduce_dim:Scalar-"
   - "tt_metal/tt-llk/tests/python_tests/quasar/test_reduce_quasar.py::test_reduce_quasar[formats:Int8->Int8-tile_dimensions:(32, 32)-dest_acc:Yes-reduce_dim:Scalar-"
 
   # --- Sanity ttnn sim_quasar tests ---

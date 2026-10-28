@@ -109,8 +109,6 @@ def reduce_pool_types(formats, reduce_dim):
 
 
 def reduce_tile_dimensions(formats, *, is_perf=False):
-    if formats.input_format.is_integer():
-        return [(32, 32)]
     functional_tile_sizes = [
         td
         for td in SUPPORTED_TILE_SIZES
