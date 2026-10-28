@@ -528,7 +528,7 @@ DETERMINISM_REPS = 3
 # subprocess, no signposts and no ops-CSV re-parse -- it runs on the plain build. Not comparable to
 # the Tracy path's number -- Tracy averages collectives across chips, this takes the max.
 # TorusXY Galaxy (DDR 14000), median of 3 runs.
-K3_CHUNKED_RT_PERF_NS = 6_368_000
+K3_CHUNKED_RT_PERF_NS = 5_531_000
 K3_CHUNKED_RT_PERF_MARGIN = 0.03
 
 
