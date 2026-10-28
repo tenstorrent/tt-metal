@@ -3,8 +3,8 @@
 //
 // QKV projection + RoPE: in1 (weight) reader / multicaster and output writer, from minimal_matmul's
 // dm_in1_sender_out.cpp (transposed grid: M split over x, N over y). Two changes:
-//   * at the start of each M block it reads the cos / sin tiles of the block's tile-rows into
-//     CB 4 (cos then sin per tile-row; row m's sequence tile is m % seq_tiles);
+//   * at the start of each M block it reads the cos, sin, -sin tiles of the block's tile-rows
+//     into CB 4 (row m's sequence tile is m % seq_tiles);
 //   * output tiles go straight to the head layouts instead of a [M, N] tensor: QKV column tile n
 //     of token tile m (batch b = m / seq_tiles, sequence tile s) lands in Q (n < q_tiles), K or V
 //     as page ((b * heads + n / head_tiles) * seq_tiles + s) * head_tiles + n % head_tiles.
@@ -136,27 +136,28 @@ void kernel_main() {
         const uint32_t m_tile = M_start_tile + m_block_iter * M_block_tiles;
         const uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
 
-        // cos / sin for this block's tile-rows (CB 4 holds two blocks, so this rarely waits).
-        cb_cs.reserve_back(2 * M_block_tiles);
+        // cos, sin, -sin for this block's tile-rows (CB 4 holds two blocks, so this rarely waits).
+        cb_cs.reserve_back(3 * M_block_tiles);
         {
             uint32_t ptr = cb_cs.get_write_ptr();
             for (uint32_t i = 0; i < M_block_tiles; ++i) {
                 const uint32_t m = m_tile + i;
                 if (m < m_tile_end && m < M_tiles) {
                     const uint32_t s = m % seq_tiles;
-                    noc.async_read(cs_reader, CoreLocalMem<uint32_t>(ptr), cs_tile_size, {.page_id = 2 * s}, {});
-                    noc.async_read(
-                        cs_reader,
-                        CoreLocalMem<uint32_t>(ptr + cs_tile_size),
-                        cs_tile_size,
-                        {.page_id = 2 * s + 1},
-                        {});
+                    for (uint32_t t = 0; t < 3; ++t) {
+                        noc.async_read(
+                            cs_reader,
+                            CoreLocalMem<uint32_t>(ptr + t * cs_tile_size),
+                            cs_tile_size,
+                            {.page_id = 3 * s + t},
+                            {});
+                    }
                 }
-                ptr += 2 * cs_tile_size;
+                ptr += 3 * cs_tile_size;
             }
             noc.async_read_barrier();
         }
-        cb_cs.push_back(2 * M_block_tiles);
+        cb_cs.push_back(3 * M_block_tiles);
 
         k_forward = true;
         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {

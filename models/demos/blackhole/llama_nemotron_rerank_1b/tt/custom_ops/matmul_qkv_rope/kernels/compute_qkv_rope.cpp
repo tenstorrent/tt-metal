@@ -5,14 +5,13 @@
 // blocks) with an output stage that rotates Q and K. Weights are in HF order, so each 64-wide
 // head is two tiles (lo = dims 0-31, hi = dims 32-63) and rotate_half pairs dim j with j + 32:
 //   lo' = lo * cos - hi * sin,   hi' = hi * cos + lo * sin
-// cos / sin are one tile each per 32-token sequence tile (the 32 frequencies; CB 4 holds them
-// interleaved, cos then sin, for the M block's tile-rows). Output tiles at N >= rope_tiles (V)
+// cos / sin are one tile each per 32-token sequence tile (the 32 frequencies; CB 4 holds cos, sin
+// and -sin for each of the M block's tile-rows). Output tiles at N >= rope_tiles (V)
 // are copied. The writer scatters tiles into the Q / K / V head layouts.
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/matmul.h"
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "api/compute/eltwise_binary.h"
-#include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/dataflow/circular_buffer.h"
 
@@ -38,14 +37,14 @@ ALWI void mul_hifi_init(uint32_t icb0, uint32_t icb1) {
     UNPACK((llk_unpack_AB_init<BroadcastType::NONE>(icb0, icb1, Transpose::None)));
 }
 
-ALWI void mul_hifi_tile(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst) {
+ALWI void mul_hifi_tile(uint32_t icb0, uint32_t icb1, uint32_t itile0, uint32_t itile1, uint32_t idst, bool clear) {
     UNPACK((llk_unpack_AB(icb0, icb1, itile0, itile1)));
     MATH((llk_math_eltwise_binary<
           EltwiseBinaryType::ELWMUL,
           BroadcastType::NONE,
           DST_ACCUM_MODE,
           EPI_FIDELITY,
-          EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, true)));
+          EltwiseBinaryReuseDestType::NONE>(icb0, icb1, idst, clear)));
 }
 
 // From minimal_matmul compute.cpp.
@@ -87,43 +86,42 @@ void matmul_blocks(
 }
 
 // Rotate (or copy) one output block from the accumulator into the output CB, a tile-row at a time.
+// CB 4 holds cos, sin, -sin per tile-row. Each rotated tile is two multiplies into one DST slot,
+// the second accumulating (clear = false): lo' = lo * cos + hi * (-sin), hi' = hi * cos + lo * sin.
+// A block lies entirely in Q / K or entirely in V (N blocks are whole heads, Q / K / V are whole
+// heads), so the init happens once per block.
 template <uint32_t M_block_tiles, uint32_t N_block_tiles>
 void rope_block(uint32_t n_tile, uint32_t rope_tiles) {
     CircularBuffer cb_out(out_cb);
     pack_reconfig_data_format(out_cb);
+    const bool rotate = n_tile < rope_tiles;
+    if (rotate) {
+        reconfig_data_format(acc_cb, cs_cb);
+        mul_hifi_init(acc_cb, cs_cb);
+    } else {
+        reconfig_data_format_srca(acc_cb);
+        copy_init(acc_cb);
+    }
     for (uint32_t m = 0; m < M_block_tiles; ++m) {
         cb_out.reserve_back(N_block_tiles);
+        const uint32_t c = 3 * m, sn = c + 1, nsn = c + 2;
         for (uint32_t n = 0; n < N_block_tiles; n += 2) {
             const uint32_t lo = m * N_block_tiles + n;
-            if (n_tile + n < rope_tiles) {
-                reconfig_data_format(acc_cb, cs_cb);
-                mul_hifi_init(acc_cb, cs_cb);
-                tile_regs_acquire();
-                mul_hifi_tile(acc_cb, cs_cb, lo, 2 * m, 0);          // lo * cos
-                mul_hifi_tile(acc_cb, cs_cb, lo + 1, 2 * m + 1, 1);  // hi * sin
-                mul_hifi_tile(acc_cb, cs_cb, lo + 1, 2 * m, 2);      // hi * cos
-                mul_hifi_tile(acc_cb, cs_cb, lo, 2 * m + 1, 3);      // lo * sin
-                sub_binary_tile_init();
-                sub_binary_tile(0, 1, 0);
-                add_binary_tile_init();
-                add_binary_tile(2, 3, 2);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile<true>(0, out_cb, n);
-                pack_tile<true>(2, out_cb, n + 1);
-                tile_regs_release();
+            tile_regs_acquire();
+            if (rotate) {
+                mul_hifi_tile(acc_cb, cs_cb, lo, c, 0, true);         // lo * cos
+                mul_hifi_tile(acc_cb, cs_cb, lo + 1, nsn, 0, false);  // + hi * (-sin)
+                mul_hifi_tile(acc_cb, cs_cb, lo + 1, c, 1, true);     // hi * cos
+                mul_hifi_tile(acc_cb, cs_cb, lo, sn, 1, false);       // + lo * sin
             } else {
-                reconfig_data_format_srca(acc_cb);
-                copy_init(acc_cb);
-                tile_regs_acquire();
                 copy_tile(acc_cb, lo, 0);
                 copy_tile(acc_cb, lo + 1, 1);
-                tile_regs_commit();
-                tile_regs_wait();
-                pack_tile<true>(0, out_cb, n);
-                pack_tile<true>(1, out_cb, n + 1);
-                tile_regs_release();
             }
+            tile_regs_commit();
+            tile_regs_wait();
+            pack_tile<true>(0, out_cb, n);
+            pack_tile<true>(1, out_cb, n + 1);
+            tile_regs_release();
         }
         cb_out.push_back(N_block_tiles);
     }
@@ -161,7 +159,7 @@ void kernel_main() {
         const uint32_t m_tile_end = std::min(m_tile + M_block_tiles, M_end_tile);
         const uint32_t current_M_block_tiles = m_tile_end - m_tile;
         const uint32_t current_subblock_h = std::min(current_M_block_tiles, subblock_h);
-        cb_cs.wait_front(2 * M_block_tiles);
+        cb_cs.wait_front(3 * M_block_tiles);
 
         for (uint32_t n_block_iter = 0; n_block_iter < N_blocks_per_core; n_block_iter++) {
             const uint32_t n_tile = N_start_tile + n_block_iter * N_block_tiles;
@@ -203,6 +201,6 @@ void kernel_main() {
             rope_block<M_block_tiles, N_block_tiles>(n_tile, rope_tiles);
             cb_acc.pop_front(out_block_num_tiles);
         }
-        cb_cs.pop_front(2 * M_block_tiles);
+        cb_cs.pop_front(3 * M_block_tiles);
     }
 }

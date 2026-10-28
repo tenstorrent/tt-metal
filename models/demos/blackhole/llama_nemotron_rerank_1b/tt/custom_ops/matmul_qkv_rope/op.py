@@ -12,7 +12,8 @@ and its writer puts every tile straight at its place in the head layout.
 The weight keeps HF's row order (no Meta pair interleave), so rotate_half pairs dim j with
 j + 32: with head_dim 64 a head is two tiles (lo, hi) and
     lo' = lo * cos - hi * sin,   hi' = hi * cos + lo * sin
-with one cos and one sin tile (the 32 frequencies) per 32-token sequence tile.
+with one cos, sin and -sin tile (the 32 frequencies) per 32-token sequence tile; each output tile is
+two multiplies, the second accumulating into DST.
 """
 
 import os
@@ -30,9 +31,9 @@ TILE = 32
 
 
 def make_rope_table(cos: torch.Tensor, sin: torch.Tensor, device):
-    """cos / sin ``[S, 32]`` (one column per frequency) -> ``[1, 1, S, 64]`` bf16 TILE: per
-    sequence tile s, page 2s is the cos tile and page 2s + 1 the sin tile."""
-    cs = torch.cat([cos, sin], dim=-1).to(torch.float32).reshape(1, 1, cos.shape[0], 2 * TILE)
+    """cos / sin ``[S, 32]`` (one column per frequency) -> ``[1, 1, S, 96]`` bf16 TILE: per
+    sequence tile s, pages 3s, 3s + 1, 3s + 2 are the cos, sin and -sin tiles."""
+    cs = torch.cat([cos, sin, -sin], dim=-1).to(torch.float32).reshape(1, 1, cos.shape[0], 3 * TILE)
     return ttnn.from_torch(cs, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
 
@@ -97,7 +98,7 @@ def matmul_qkv_rope(
         mg.cb(1, kb * nb * 2, w.dtype, all_cores),
         mg.cb(2, mb * nb * 2, out_dtype, all_cores),
         mg.cb(3, mb * nb, ttnn.float32, all_cores),
-        mg.cb(4, 4 * mb, ttnn.bfloat16, all_cores),
+        mg.cb(4, 6 * mb, ttnn.bfloat16, all_cores),
     ]
     semaphores = mg.matmul_semaphores(all_cores)
     kernels = mg.in0_kernels(device, g, x, q)

@@ -350,7 +350,7 @@ class NemotronReranker:
                 compute_with_storage_grid_size=self.grid,
                 q_chunk_size=qc,
                 k_chunk_size=kc,
-                exp_approx_mode=False,
+                exp_approx_mode=cfg.sdpa_exp_approx,
             ),
         )
         for t in (q_r, k_r, v):

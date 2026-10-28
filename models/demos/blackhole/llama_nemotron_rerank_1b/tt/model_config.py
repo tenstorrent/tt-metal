@@ -142,6 +142,8 @@ class RerankConfig:
     bf16_acc_kinds: str = "ff2,ff13s"
     # HiFi2 SDPA raised the MIRACL mean score error 0.23 -> 0.30 at no measurable speed gain.
     sdpa_fidelity: object = ttnn.MathFidelity.HiFi4
+    # SDPA softmax exp in the SFPU's approximate mode.
+    sdpa_exp_approx: bool = False
     # SDPA q / k chunk sizes; 0 = the sdpa_chunks table.
     sdpa_q_chunk: int = 0
     sdpa_k_chunk: int = 0
