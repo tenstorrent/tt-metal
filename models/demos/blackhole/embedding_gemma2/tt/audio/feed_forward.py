@@ -85,8 +85,8 @@ class AudioFeedForward(LightweightModule):
         ttnn.deallocate(s)
         n = self.post_norm(d)
         ttnn.deallocate(d)
-        scaled = ttnn.multiply(n, self.config.residual_weight, memory_config=dram)
+        # x + residual_weight * n with the scale as the add's SFPU pre-activation on n
+        scale = ttnn.UnaryWithParam(ttnn.UnaryOpType.MUL_UNARY_SFPU, self.config.residual_weight)
+        out = ttnn.add(x, n, input_tensor_b_activations=[scale], memory_config=dram)
         ttnn.deallocate(n)
-        out = ttnn.add(x, scaled, memory_config=dram)
-        ttnn.deallocate(scaled)
         return out
