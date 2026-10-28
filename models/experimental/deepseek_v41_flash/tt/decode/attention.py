@@ -29,8 +29,8 @@ SDPA reads a tiled ``[ring | selected]`` buffer the group shares (``sel_tile``).
 rows are refreshed only by a select; every compressed layer then copies its own tiled ring
 over rows ``[0, window)``.
 
-``decode_rows`` steps ``T`` consecutive positions of one session at once (DSpark's parallel
-verify, ``DSPARK_PARALLEL_VERIFY.md``), equal to ``T`` ``decode`` steps.
+``decode`` with ``S > 1`` steps ``S`` consecutive positions of one session at once (DSpark's
+parallel verify, ``DSPARK_PARALLEL_VERIFY.md``), equal to ``S`` single-row ``decode`` steps.
 """
 
 import torch
@@ -44,6 +44,7 @@ from models.experimental.deepseek_v4_flash.tt.common import (
     DeepSeekV4Module,
     _profile,
     _region,
+    width_sharded_l1_config,
 )
 from models.experimental.deepseek_v4_flash.tt.decode.attention import (
     CSA_INDEX_BLOCK_SIZE,
@@ -58,7 +59,6 @@ from models.experimental.deepseek_v4_flash.tt.decode.attention import (
     _sdpa_decode_output_config,
     _tp_cluster_axis,
     _update_cache_at,
-    int32_pos_tensor,
     make_rope_table,
 )
 from models.experimental.deepseek_v4_flash.tt.decode.attention_csa import DeepSeekV4Indexer, _scale_linear_weight
@@ -199,12 +199,14 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
         candidates: bool = False,
         build_pool: bool = False,
         page_row: ttnn.Tensor | None = None,
-        block_row: int | None = None,
     ) -> ttnn.Tensor:
         """V4's :meth:`~DeepSeekV4Indexer.select_kv`, two-level when ``candidates`` is set.
 
-        ``block_row`` (a multi-row step, :meth:`DeepSeekV41Attention.decode_rows`) writes the selection
-        into that row's ``window + index_topk`` rows of ``scache.sel_kv_rows`` instead of ``sel_kv``.
+        ``tokens`` / ``q_a`` may hold ``T`` rows of one session (``decode`` with ``S == T``): ``cos_row`` /
+        ``sin_row`` are then ROW_MAJOR ``[1, 1, T, Rd]``, ``compress_pos`` ``[T]``, and ``new_row`` /
+        ``new_row_index`` ``[1, 1, n, Dh]`` / ``[n]``. One call selects every row's top-k at its own
+        position, row ``j`` into its ``window + index_topk`` rows of ``scache.sel_kv_rows`` instead of
+        ``sel_kv``. Such a select is one-level and unsplit.
 
         The candidate source then also writes its blocks into ``scache.cand_blocks`` /
         ``pool_count``. A consumer selects from ``scache.pool_keys`` and gathers ``comp_kv`` rows
@@ -217,24 +219,27 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
         which the op takes only with ``page_row``) while its selected rows are not. A consumer given
         ``new_row`` therefore needs ``page_row``, also with one session.
         """
-        users = _packed_users(tokens)
-        assert users == 1, f"fused_lightning_select_kv decodes one user, got {users}"
+        rows = _packed_users(tokens)
         assert not candidates or self.is_candidate_source or self.uses_candidates
+        assert rows == 1 or not (candidates or self.split_keys), "a multi-row select is one-level and unsplit"
         q = self.q_b_proj(_decode_activation(self.q_b_proj, q_a))
         q = _apply_rope(q, cos_row, sin_row, self.rot, self.rope_dim, head_dim=self.head_dim)
         w = self.weights_proj(_decode_activation(self.weights_proj, tokens))
-        query = self._replicate_heads(q, self.num_heads, self.head_dim)
-        weights = self._replicate_heads(w, 1, self.num_heads)
-        cur_pos = ttnn.reshape(compress_pos, [1])
+        # Row j's heads are rows [j * Hi, (j + 1) * Hi) of the query replica.
+        query = self._replicate_heads(q, rows * self.num_heads, self.head_dim)
+        weights = self._replicate_heads(w, rows, self.num_heads)
+        weights = ttnn.experimental.view(weights, [weights.shape[0], 1, rows, self.num_heads])
+        cur_pos = ttnn.reshape(compress_pos, [rows])
 
         extra = {}
         if new_row is not None:
             row = ttnn.to_memory_config(new_row, ttnn.DRAM_MEMORY_CONFIG)
             if row.layout != ttnn.ROW_MAJOR_LAYOUT:
                 row = ttnn.to_layout(row, ttnn.ROW_MAJOR_LAYOUT)
+            n = row.shape[-2]
             extra = {
-                "new_kv_row": ttnn.reshape(row, [1, 1, 1, row.shape[-1]]),
-                "new_kv_row_index": ttnn.reshape(new_row_index, [1]),
+                "new_kv_row": ttnn.reshape(row, [1, 1, n, row.shape[-1]]),
+                "new_kv_row_index": ttnn.reshape(new_row_index, [n]),
             }
         key_cache, page_table = scache.idx_key_cache, scache.idx_page_table
         if page_row is not None:
@@ -274,14 +279,16 @@ class DeepSeekV41Indexer(DeepSeekV4Indexer):
                 extra["kv_page_table"] = scache.idx_page_table
             elif page_row is not None:
                 del extra["page_table_row_tensor"]
-        output, output_row_offset = scache.sel_kv, self.sliding_window
-        if block_row is not None:
-            output = scache.sel_kv_rows
-            output_row_offset += block_row * (self.sliding_window + self.index_topk)
+        output = scache.sel_kv if rows == 1 else scache.sel_kv_rows
+        output_row_offset = self.sliding_window
         if split:
             extra.update(num_parts=self.tp_size, part_index_tensor=self.part_index)
         else:
-            extra.update(output_tensor=output, output_row_offset=output_row_offset)
+            extra.update(
+                output_tensor=output,
+                output_row_offset=output_row_offset,
+                output_row_stride=self.sliding_window + self.index_topk,
+            )
         sel_kv, scores, *_ = ttnn.experimental.deepseek.fused_lightning_select_kv(
             query,
             key_cache,
@@ -340,7 +347,7 @@ class DeepSeekV41LayerCache(_StaticLayerCache):
     ``win_view_kv`` /     ``win_view_gate`` (TILE ``[1, 1, 32, Dh]``). The views are ``None`` with
     one session's dense buffers.
 
-    A cache built for ``T``-row steps (:meth:`DeepSeekV41Attention.decode_rows`) also has
+    A cache built for ``T``-row steps (:meth:`DeepSeekV41Attention.decode` with ``S == T``) also has
     ``sel_kv_rows`` (ROW_MAJOR) and ``sel_tile_rows`` (TILE), DRAM ``[1, 1, T * (window + index_topk), Dh]``:
     row ``j``'s ``[ring | selected]`` at rows ``[j * (window + index_topk), (j + 1) * (window + index_topk))``.
     Single-row steps keep using ``sel_kv`` / ``sel_tile``, so the two kinds of step interleave.
@@ -397,6 +404,25 @@ class DeepSeekV41LayerCache(_StaticLayerCache):
         self.ring_view = ring_view
         self.win_view_kv = win_view_kv
         self.win_view_gate = win_view_gate
+
+
+def _rows_on_one_core(x: ttnn.Tensor) -> ttnn.Tensor:
+    """``[1, 1, R, F]`` -> ROW_MAJOR, height-sharded on one core (shard ``[R, F]``): one user's ``R`` rows,
+    which ``paged_update_cache`` writes at ``R`` positions in one call. :func:`_one_row_per_user` at ``R == 1``."""
+    r, f = x.shape[-2], x.shape[-1]
+    grid = ttnn.num_cores_to_corerangeset(1, x.device().compute_with_storage_grid_size(), row_wise=True)
+    want = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(grid, [r, f], ttnn.ShardOrientation.ROW_MAJOR),
+    )
+    if x.layout == ttnn.ROW_MAJOR_LAYOUT and x.memory_config() == want:
+        return x
+    if x.is_sharded():
+        x = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+    if x.layout != ttnn.ROW_MAJOR_LAYOUT:
+        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    return ttnn.to_memory_config(x, want)
 
 
 def _stash_row(row: ttnn.Tensor, buffer: ttnn.Tensor) -> None:
@@ -666,57 +692,59 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         )
 
     def _attend(self, q, kv, mask, cos, neg_sin, sdpa_cur_pos=None):
-        """SDPA-decode of packed ``q`` over the dense K == V ``kv``, output RoPE, then o_a and o_b.
+        """SDPA-decode of packed ``q`` ``[1, 1, B, H_local*Dh]`` over the dense K == V ``kv``, output RoPE,
+        then o_a and o_b.
 
-        Exactly one of ``sdpa_cur_pos`` (causal) / ``mask`` (additive ``[1, 1, 1, Skv]``) bounds
-        the KV axis. Returns the block's output on packed rows, ``[1, 1, B, D]``.
+        ``B`` is the users, or one session's ``B`` rows (``kv`` ``[B, 1, Skv, Dh]``, row ``j``'s keys at batch
+        ``j``). Exactly one of ``sdpa_cur_pos`` (causal, ``[B]``) / ``mask`` (additive ``[1 or B, 1, 1, Skv]``)
+        bounds the KV axis. ``cos`` / ``neg_sin`` are :meth:`decode`'s. Returns the block's output on packed
+        rows, ``[1, 1, B, D]``.
         """
         h, dh = self.local_num_heads, self.head_dim
         batch = _packed_users(q)
         out_mem = _sdpa_decode_output_config(batch, h, dh, self._sdpa_pcfg.compute_with_storage_grid_size)
-        gathered = ttnn.experimental.deepseek.all_gather_for_matmul(q, out_mem.shard_spec.grid)
+        if batch == 1:
+            gathered = ttnn.experimental.deepseek.all_gather_for_matmul(q, out_mem.shard_spec.grid)
+        else:
+            # The gather replicates every row onto every core; SDPA reads row b alone on core b.
+            dram = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
+            one_row_per_core = ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(out_mem.shard_spec.grid, [1, h * dh], ttnn.ShardOrientation.ROW_MAJOR),
+            )
+            gathered = ttnn.to_memory_config(dram, one_row_per_core)
+            if dram.buffer_address() != q.buffer_address():
+                ttnn.deallocate(dram)
         if gathered is not q:
             ttnn.deallocate(q)
         q = ttnn.experimental.view(gathered, [1, batch, h, dh])
         attn = self._sdpa(q, kv, mask, sdpa_cur_pos, out_mem)
-        attn = _apply_rope(attn, cos, neg_sin, self.rot, self.rope_dim)
+        # One row per core with its heads side by side, so a per-row RoPE table row covers all of them.
+        attn = ttnn.experimental.view(attn, [1, 1, batch, h * dh])
+        attn = _apply_rope(attn, cos, neg_sin, self.rot, self.rope_dim, head_dim=dh)
         return self._project_out(attn)
 
-    def _attend_rows(self, q, kv, mask, q_cos, q_neg_sin, sdpa_cur_pos=None):
-        """:meth:`_attend` for the ``T`` rows of :meth:`decode_rows`: ``q`` ``[1, T, H_local, Dh]`` (DRAM TILE,
-        RoPE'd) over row ``j``'s keys ``kv[j]`` -> ``[1, 1, T, D]`` (DRAM).
-
-        ``q_cos`` / ``q_neg_sin`` are ``[1, 1, T * H_local, Rd]``, each row's position repeated per head.
-        Batched ``matmul_decode`` with an output grid takes one row, so o_a and o_b run once per row.
-        """
-        h, dh = self.local_num_heads, self.head_dim
-        t = q.shape[1]
-        attn = self._sdpa(q, kv, mask, sdpa_cur_pos, ttnn.DRAM_MEMORY_CONFIG)
-        attn = _rope_tail(ttnn.reshape(attn, [1, 1, t * h, dh]), q_cos, q_neg_sin, self.rot)
-        attn = ttnn.to_layout(attn, ttnn.ROW_MAJOR_LAYOUT)
-        # The single-row layout SDPA hands o_a: one user's [H, Dh] on one core.
-        row_mem = _sdpa_decode_output_config(1, h, dh, self._sdpa_pcfg.compute_with_storage_grid_size)
-        outs = []
-        for j in range(t):
-            row = ttnn.to_memory_config(ttnn.slice(attn, [0, 0, j * h, 0], [1, 1, (j + 1) * h, dh]), row_mem)
-            out = self._project_out(row)
-            outs.append(ttnn.reshape(ttnn.to_memory_config(out, ttnn.DRAM_MEMORY_CONFIG), [1, 1, 1, out.shape[-1]]))
-            ttnn.deallocate(out)
-        ttnn.deallocate(attn)
-        return ttnn.concat(outs, dim=2)
-
     def _project_out(self, attn):
-        """Grouped o_a and row-parallel o_b of one row's attention ``[1, 1, H_local, Dh]`` (RoPE undone)."""
-        dh = self.head_dim
-        # At M == 1, [1, 1, H, Dh] is already group-major: each group's K features are contiguous.
-        _, m, heads, _ = attn.shape
-        assert m == 1, f"batched o_a is decode-only (M == 1), got M={m}"
-        in_per_group = (heads * dh) // self.local_o_groups
+        """Grouped o_a and row-parallel o_b of ``M`` rows of attention ``[1, 1, M, H_local*Dh]`` (RoPE undone),
+        ROW_MAJOR height-sharded one row per core -> ``[1, 1, M, D]``."""
+        m, width = attn.shape[-2], attn.shape[-1]
+        in_per_group = width // self.local_o_groups
         oa_dest = ttnn.CoreRangeSet({self.o_a_proj.b_core_grid().bounding_box()})
+        if m > 1:
+            # all_gather_for_matmul takes a height-sharded input only on one core.
+            dram = ttnn.to_memory_config(attn, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(attn)
+            attn = ttnn.to_memory_config(
+                dram, width_sharded_l1_config(m, width, self.device, num_cores=self.local_o_groups, tile_height=1)
+            )
+            ttnn.deallocate(dram)
         gathered = ttnn.experimental.deepseek.all_gather_for_matmul(attn, oa_dest)
         if gathered is not attn:
             ttnn.deallocate(attn)
-        attn = ttnn.experimental.view(gathered, [1, self.local_o_groups, oa_dest.num_cores(), in_per_group])
+        # A row's groups are contiguous, so the replica's [M * groups, K] rows are ordered [M][group],
+        # the order batched o_a reads.
+        attn = ttnn.experimental.view(gathered, [1, self.local_o_groups, oa_dest.num_cores() * m, in_per_group])
         y = self.o_a_proj(attn)
         y = ttnn.experimental.view(y, [1, 1, y.shape[-2], self.local_o_groups * self.o_lora_rank])
         out = self.o_b_proj(_decode_activation(self.o_b_proj, y))
@@ -774,14 +802,70 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             kv = ttnn.add(k1, ttnn.multiply(w0, ttnn.subtract(k0, k1)))
         return self.comp_norm(kv)
 
+    def _latent_rows(self, kv, gate, scache, win_slot, pool_rows: tuple, hist_slot=None):
+        """:meth:`_latent` for ``T`` consecutive rows: the pre-RoPE latents ``[1, 1, n, Dh]`` of the ``n``
+        groups that rows ``pool_rows`` close, in row order, else ``None``.
+
+        ``kv`` / ``gate`` are :meth:`_compressor_rows` of the ``T`` rows; ``win_slot`` / ``hist_slot`` are
+        ``[T]``. The window ends as ``T`` single-row steps leave it.
+        """
+        if self.compress_ratio == 1:
+            assert pool_rows == tuple(range(kv.shape[-2])), "at ratio 1 every row closes its group"
+            return self.comp_norm(kv)
+        t, dh = kv.shape[-2], self.head_dim
+        # Row 0 may close the group the previous step opened in window slot 0; read it before the writes.
+        prevs = [
+            ttnn.to_layout(ttnn.slice(w, [0, 0, 0, 0], [1, 1, 1, dh]), ttnn.ROW_MAJOR_LAYOUT)
+            for w in (scache.win_kv, scache.win_gate)
+        ]
+        rows = [_rows_on_one_core(kv), _rows_on_one_core(gate)]
+        # A slot named twice keeps the later row, as the single-row steps would.
+        for win, row in zip((scache.win_kv, scache.win_gate), rows):
+            ttnn.experimental.paged_update_cache(win, row, update_idxs_tensor=win_slot)
+        if hist_slot is not None:
+            for hist, row in zip((scache.win_hist_kv, scache.win_hist_gate), rows):
+                ttnn.experimental.paged_update_cache(hist, row, update_idxs_tensor=hist_slot)
+        for row in rows:
+            ttnn.deallocate(row)
+        if not pool_rows:
+            return None
+        first, n = pool_rows[0], len(pool_rows)
+        assert pool_rows == tuple(range(first, t, 2)), f"ratio-2 groups close every other row, got {pool_rows}"
+        # Closing row j pairs xs[j] (the row before it) with xs[j + 1] (itself).
+        pairs = []
+        for prev, x in zip(prevs, (kv, gate)):
+            xs = ttnn.concat([prev, x], dim=2)
+            ttnn.deallocate(prev)
+            for start in (first, first + 1):
+                pick = ttnn.slice(xs, [0, 0, start, 0], [1, 1, start + 2 * n - 1, dh], [1, 1, 2, 1])
+                pairs.append(ttnn.to_layout(pick, ttnn.TILE_LAYOUT))
+            ttnn.deallocate(xs)
+        k0, k1, g0, g1 = pairs
+        w0 = ttnn.sigmoid(ttnn.subtract(g0, g1))
+        return self.comp_norm(ttnn.add(k1, ttnn.multiply(w0, ttnn.subtract(k0, k1))))
+
+    def _write_causal_rows(self, kv, copies, ring_rows) -> None:
+        """Write row ``i`` of ``kv`` ``[1, 1, T, Dh]`` (ROW_MAJOR, on one core) into ring copy ``j`` of
+        ``copies`` ``[T, 1, Skv, Dh]`` (TILE) at row ``ring_rows[j * T + i]``, ``-1`` skipping it: copy ``j``
+        then holds rows ``0 .. j`` in their slots and the older keys in the rest."""
+        t = kv.shape[-2]
+        grid = ttnn.num_cores_to_corerangeset(t, self.device.compute_with_storage_grid_size(), row_wise=True)
+        # paged_update_cache takes copy j's rows on core j.
+        replicas = ttnn.experimental.deepseek.all_gather_for_matmul(kv, grid)
+        ttnn.experimental.paged_update_cache(
+            copies, ttnn.experimental.view(replicas, [1, t, t, kv.shape[-1]]), update_idxs_tensor=ring_rows
+        )
+        ttnn.deallocate(replicas)
+
     def _write_index_key(self, latent, cos_win, sin_win, scache, entry, page_row=None) -> None:
-        """``k_norm(wk(latent))``, RoPE'd at the group's position, into index-key row ``entry`` (logical,
-        through row ``page_row`` of ``idx_page_table`` when given)."""
+        """``k_norm(wk(latent))``, RoPE'd at the groups' positions, into index-key rows ``entry`` (logical,
+        through row ``page_row`` of ``idx_page_table`` when given). ``latent`` is ``[1, 1, n, Dh]``, ``entry``
+        ``[n]``."""
         k = self.index_k_norm(self.index_wk(ttnn.to_memory_config(latent, ttnn.DRAM_MEMORY_CONFIG)))
         k = _apply_rope(k, cos_win, sin_win, self.rot, self.rope_dim)
         if scache.new_key_row is not None:
             _stash_row(k, scache.new_key_row)
-        k = _one_row_per_user(k)
+        k = _rows_on_one_core(k)
         ttnn.experimental.paged_update_cache(
             scache.idx_key_cache,
             k,
@@ -828,13 +912,23 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         page_row: ttnn.Tensor | None = None,
         ring_offset: ttnn.Tensor | None = None,
         win_offset: ttnn.Tensor | None = None,
+        ring_rows: ttnn.Tensor | None = None,
+        pool_rows: tuple = (),
     ) -> ttnn.Tensor:
-        """One decode step: ``hidden`` ``[B, 1, 1, D]`` -> the block's output, same shape.
+        """One decode step: ``hidden`` ``[B, S, 1, D]`` -> the block's output, same shape.
 
-        The arguments are what :meth:`decode_inputs` builds for a position. ``pool`` closes a
-        compressor group (``cos_win`` / ``sin_win`` its RoPE row, ``entry`` its index);
-        ``select`` re-selects the top-k rows. Exactly one of ``sdpa_cur_pos`` / ``mask``
-        bounds the KV axis. ``received_entry`` (an index source on a stage without its kv
+        ``S > 1`` (``B == 1``) steps one session's ``S`` consecutive positions at once: row ``j`` is position
+        ``p + j`` and sees what a single-row step at ``p + j`` would after rows ``0 .. j - 1``, so the output and
+        every cache equal ``S`` single-row steps (up to bf16), e.g. a DSpark verify of ``[t, d1 .. d(S-1)]``.
+        ``hidden`` is ROW_MAJOR, width-sharded in L1 with all ``S`` rows on every core. Each row attends its own
+        copy of the ring with the slots of rows ``0 .. j`` replaced (``ring_rows``, see :meth:`_write_causal_rows`),
+        and a compressed layer reads row ``j``'s ``[ring | selected]`` from ``scache.sel_tile_rows``. Such a
+        step needs one session's dense caches, and has no cross-stage hand-off or two-level select.
+
+        The arguments are what :meth:`decode_inputs` builds for a position (``rows=S`` for ``S > 1``,
+        where ``pool_rows`` replaces ``pool``). ``pool`` closes a compressor group (``cos_win`` /
+        ``sin_win`` its RoPE row, ``entry`` its index); ``select`` re-selects the top-k rows. Exactly
+        one of ``sdpa_cur_pos`` / ``mask`` bounds the KV axis. ``received_entry`` (an index source on a stage without its kv
         source, on a step the source pooled) writes the rows in ``scache.new_kv_row`` /
         ``new_key_row`` at that index before selecting. ``hist_slot`` (speculative decode) is
         where a ratio > 1 kv source keeps this step's window rows (see :class:`DeepSeekV41LayerCache`).
@@ -848,11 +942,24 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         session's logical row.
         """
         b, s, _, d = hidden.shape
-        assert s == 1, f"decode attends one token per user, but S == {s}; decode_rows takes one session's S rows"
+        if s > 1:
+            assert b == 1, f"S > 1 steps the rows of one session, got B == {b}"
+            assert s <= self.window, f"{s} rows would overwrite each other's ring slots"
+            assert ring_offset is None and win_offset is None, "several sessions' rings decode one row at a time"
+            assert ring_rows is not None, "decode_inputs(..., rows=S) builds the rows' ring copies"
         tokens = ttnn.experimental.deepseek.all_gather_for_matmul(_pack_tokens(hidden), self._decode_activation_grid())
         if self.compress_ratio == 0:
             q, kv, q_a = self._qkv(tokens, cos, sin)
             ttnn.deallocate(q_a)
+            ttnn.deallocate(tokens)
+            if s > 1:
+                rings = ttnn.repeat(scache.kv, ttnn.Shape([s, 1, 1, 1]))
+                self._write_causal_rows(kv, rings, ring_rows)
+                ttnn.experimental.paged_update_cache(scache.kv, kv, update_idxs_tensor=sliding_pos)
+                ttnn.deallocate(kv)
+                out = self._attend(q, rings, None, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos)
+                ttnn.deallocate(rings)
+                return ttnn.reshape(out, [b, s, 1, d])
             if b > 1:
                 kv = _one_row_per_user(kv)
             _update_cache_at(scache.kv, kv, sliding_pos)
@@ -862,22 +969,32 @@ class DeepSeekV41Attention(DeepSeekV4Module):
                 ring = scache.ring_view
                 ttnn.fill_cache(ring, scache.kv, 0, input_row_offset_tensor=ring_offset, num_input_rows=ring.shape[2])
             out = self._attend(q, ring, None, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos)
-            ttnn.deallocate(tokens)
             return ttnn.reshape(out, [b, s, 1, d])
         assert b == 1, "fused_lightning_select_kv decodes one user"
+        if s > 1:
+            assert scache.new_kv_row is None and scache.new_key_row is None, "the cross-stage hand-off is one row"
+            assert received_entry is None and not candidates, "S > 1 selects one level, from its own kv source"
+            stride = self.window + self.index_topk
+            assert (
+                scache.sel_tile_rows is not None and scache.sel_tile_rows.shape[2] == s * stride
+            ), f"build_decode_caches(..., verify_rows={s}) holds this step's selections"
         latent = None
         if self.is_kv_source:
             # V4 marks its CSA/HCA compressor's decode the same way; V4.1 inlines the compressor
             # into this method, so without this the whole compressed path is one ATTENTION blob.
             with _region("COMPRESSOR"):
                 kv, gate = self._compressor_rows(tokens)
-                latent = self._latent(kv, gate, scache, win_slot, pool, hist_slot, win_offset=win_offset)
+                if s == 1:
+                    latent = self._latent(kv, gate, scache, win_slot, pool, hist_slot, win_offset=win_offset)
+                else:
+                    latent = self._latent_rows(kv, gate, scache, win_slot, pool_rows, hist_slot)
         assert latent is None or select, "a closed group is written by the select that follows it"
         assert received_entry is None or (select and latent is None), "received rows are written by a non-source select"
         assert select or not candidates, "candidates are a select mode"
         q, kv, q_a = self._qkv(tokens, cos, sin)
-        _update_cache_at(scache.kv, kv, sliding_pos)
-        ttnn.deallocate(kv)
+        if s == 1:
+            _update_cache_at(scache.kv, kv, sliding_pos)
+            ttnn.deallocate(kv)
         if select:
             # The select runs on the whole grid; keep q out of its L1 until SDPA.
             q_l1 = q.memory_config()
@@ -906,10 +1023,24 @@ class DeepSeekV41Attention(DeepSeekV4Module):
             )
             if latent is not None:
                 ttnn.deallocate(row)
-            ttnn.tilize(scache.sel_kv, output_tensor=scache.sel_tile)
-            q = ttnn.to_memory_config(q, q_l1)
+            if s == 1:
+                ttnn.tilize(scache.sel_kv, output_tensor=scache.sel_tile)
+                q = ttnn.to_memory_config(q, q_l1)
+            else:
+                # _attend reshards the rows one per core from DRAM.
+                ttnn.tilize(scache.sel_kv_rows, output_tensor=scache.sel_tile_rows)
         ttnn.deallocate(q_a)
         ttnn.deallocate(tokens)
+        if s > 1:
+            sel = ttnn.experimental.view(scache.sel_tile_rows, [s, 1, stride, self.head_dim])
+            # Every row's copy starts from the ring before this step.
+            for j in range(s):
+                ttnn.fill_cache(sel, scache.kv, j)
+            self._write_causal_rows(kv, sel, ring_rows)
+            ttnn.experimental.paged_update_cache(scache.kv, kv, update_idxs_tensor=sliding_pos)
+            ttnn.deallocate(kv)
+            out = self._attend(q, sel, mask, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos)
+            return ttnn.reshape(out, [b, s, 1, d])
         if ring_offset is None:
             ttnn.fill_cache(scache.sel_tile, scache.kv, 0)
         else:
@@ -919,204 +1050,73 @@ class DeepSeekV41Attention(DeepSeekV4Module):
         out = self._attend(q, scache.sel_tile, mask, cos, neg_sin, sdpa_cur_pos=sdpa_cur_pos)
         return ttnn.reshape(out, [b, s, 1, d])
 
-    def decode_rows(self, hidden: ttnn.Tensor, scache: DeepSeekV41LayerCache, rows: dict) -> ttnn.Tensor:
-        """``T`` consecutive positions of one session in one step: ``hidden`` ``[1, T, 1, D]`` -> ``[1, T, 1, D]`` (DRAM).
+    def decode_inputs(self, pos: int, cos_half: torch.Tensor, sin_half: torch.Tensor, rows: int = 1) -> dict:
+        """Host-built :meth:`decode` keyword arguments for absolute positions ``pos .. pos + rows - 1``.
 
-        ``hidden`` is ROW_MAJOR, width-sharded in L1 like :meth:`decode`'s row, and ``rows`` is
-        :meth:`decode_rows_inputs` for the first row's position ``p``. Row ``j`` is position ``p + j`` and
-        sees what :meth:`decode` at ``p + j`` would after rows ``0 .. j - 1``, so the output and every cache
-        equal ``T`` :meth:`decode` calls (up to bf16): a DSpark verify of the block ``[t, d1 .. d(T-1)]``.
-
-        The projections run once over the ``T`` rows. Row ``j`` attends its own copy of the ring with the
-        slots of rows ``0 .. j`` replaced (``ring * keep[j] + scatter[j] @ kv``, products with 0 / 1, so
-        exact), and the last copy becomes the ring. A compressed layer closes its groups, writes its index
-        keys and selects row by row, in order, each row into its slice of ``scache.sel_kv_rows``; SDPA
-        reads row ``j``'s ``[ring | selected]`` as batch ``j``.
-
-        One session's dense caches only, without the cross-stage hand-off (``new_kv_row`` /
-        ``new_key_row``) or the two-level select, which :meth:`decode_rows_inputs` rejects.
-        """
-        b, t, _, d = hidden.shape
-        assert b == 1, f"decode_rows steps the rows of one session, got B == {b}"
-        window, dh, h = self.window, self.head_dim, self.local_num_heads
-        assert scache.kv.shape[2] == window, "several sessions' rings decode one row at a time"
-        tokens = ttnn.experimental.deepseek.all_gather_for_matmul(_pack_tokens(hidden), self._decode_activation_grid())
-        steps = rows.get("steps", [])
-        latents = [None] * t
-        if self.is_kv_source:
-            assert scache.new_kv_row is None and scache.new_key_row is None, "the cross-stage hand-off is one row"
-            with _region("COMPRESSOR"):
-                kv, gate = self._compressor_rows(tokens)
-                for j, step in enumerate(steps):
-                    latents[j] = self._latent(
-                        ttnn.slice(kv, [0, 0, j, 0], [1, 1, j + 1, dh]),
-                        None if gate is None else ttnn.slice(gate, [0, 0, j, 0], [1, 1, j + 1, dh]),
-                        scache,
-                        step.get("win_slot"),
-                        step.get("pool", False),
-                        step.get("hist_slot"),
-                    )
-                ttnn.deallocate(kv)
-                if gate is not None:
-                    ttnn.deallocate(gate)
-
-        q, kv, q_a = self._project_qkv(tokens)
-        q = ttnn.reshape(ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG), [1, 1, t * h, dh])
-        q = _rope_tail(ttnn.to_layout(q, ttnn.TILE_LAYOUT), rows["q_cos"], rows["q_sin"], self.rot)
-        q = ttnn.reshape(q, [1, t, h, dh])
-        kv = ttnn.reshape(ttnn.to_memory_config(kv, ttnn.DRAM_MEMORY_CONFIG), [1, 1, t, dh])
-        kv = _rope_tail(ttnn.to_layout(kv, ttnn.TILE_LAYOUT), rows["cos"], rows["sin"], self.rot)
-        written = ttnn.matmul(rows["scatter"], kv, compute_kernel_config=_HIFI4)
-        ttnn.deallocate(kv)
-        rings = ttnn.add(ttnn.multiply(scache.kv, rows["keep"]), written)
-        ttnn.deallocate(written)
-        ttnn.copy(ttnn.slice(rings, [t - 1, 0, 0, 0], [t, 1, window, dh]), scache.kv)
-        if self.compress_ratio == 0:
-            ttnn.deallocate(q_a)
-            ttnn.deallocate(tokens)
-            out = self._attend_rows(q, rings, None, rows["q_cos"], rows["q_neg_sin"], sdpa_cur_pos=rows["sdpa_cur_pos"])
-            ttnn.deallocate(rings)
-            return ttnn.reshape(out, [b, t, 1, d])
-
-        stride = window + self.index_topk
-        assert (
-            scache.sel_tile_rows is not None and scache.sel_tile_rows.shape[2] == t * stride
-        ), f"build_decode_caches(..., verify_rows={t}) holds this step's selections"
-        if any(step.get("select") for step in steps):
-            # Row j of a replica (or of its DRAM copy) is position p + j's A.
-            token_rows = ttnn.to_memory_config(tokens, ttnn.DRAM_MEMORY_CONFIG)
-            token_rows = ttnn.reshape(token_rows, [1, 1, token_rows.shape[-2], d])
-            q_a_rows = ttnn.to_memory_config(q_a, ttnn.DRAM_MEMORY_CONFIG)
-            q_a_rows = ttnn.reshape(q_a_rows, [1, 1, q_a_rows.shape[-2], q_a_rows.shape[-1]])
-            for j, step in enumerate(steps):
-                latent = latents[j]
-                assert latent is None or step.get("select"), "a closed group is written by the select that follows it"
-                if not step.get("select"):
-                    continue
-                row = entry = None
-                if latent is not None:
-                    entry = step["entry"]
-                    self._write_index_key(latent, step["cos_win"], step["sin_win"], scache, entry)
-                    row = _apply_rope(latent, step["cos_win"], step["sin_win"], self.rot, self.rope_dim)
-                self.indexer.select_kv(
-                    ttnn.slice(token_rows, [0, 0, j, 0], [1, 1, j + 1, d]),
-                    ttnn.slice(q_a_rows, [0, 0, j, 0], [1, 1, j + 1, q_a_rows.shape[-1]]),
-                    step["cos"],
-                    step["sin"],
-                    scache,
-                    step["index_pos"],
-                    new_row=row,
-                    new_row_index=entry,
-                    block_row=j,
-                )
-                if row is not None:
-                    ttnn.deallocate(row)
-            ttnn.deallocate(token_rows)
-            ttnn.deallocate(q_a_rows)
-            ttnn.tilize(scache.sel_kv_rows, output_tensor=scache.sel_tile_rows)
-        ttnn.deallocate(q_a)
-        ttnn.deallocate(tokens)
-        sel = ttnn.experimental.view(scache.sel_tile_rows, [t, 1, stride, dh])
-        for j in range(t):
-            ttnn.fill_cache(sel, ttnn.slice(rings, [j, 0, 0, 0], [j + 1, 1, window, dh]), j)
-        ttnn.deallocate(rings)
-        out = self._attend_rows(
-            q, sel, rows.get("mask"), rows["q_cos"], rows["q_neg_sin"], sdpa_cur_pos=rows.get("sdpa_cur_pos")
-        )
-        return ttnn.reshape(out, [b, t, 1, d])
-
-    def decode_inputs(self, pos: int, cos_half: torch.Tensor, sin_half: torch.Tensor) -> dict:
-        """Host-built :meth:`decode` keyword arguments for absolute position ``pos``.
-
-        ``cos_half`` / ``sin_half`` are this layer's ``[max_seq, Rd / 2]`` RoPE tables.
+        ``cos_half`` / ``sin_half`` are this layer's ``[max_seq, Rd / 2]`` RoPE tables. Every per-position
+        argument has one entry per row: ``sliding_pos`` / ``win_slot`` / ``index_pos`` / ``sdpa_cur_pos``
+        ``[T]``, ``mask`` ``[T, 1, 1, Skv]``, and ``cos_win`` / ``sin_win`` ``[1, 1, n, Rd]`` / ``entry`` ``[n]``
+        for the ``n`` groups the rows close. ``cos`` / ``sin`` / ``neg_sin`` are TILE ``[1, 1, 1, Rd]`` for one
+        row and ROW_MAJOR ``[1, 1, T, Rd]`` (one row per position) otherwise. ``rows > 1`` also gives
+        ``ring_rows`` (:meth:`_write_causal_rows`) and ``pool_rows``, the rows that close a group.
         """
         device, window, r = self.device, self.window, self.compress_ratio
-
-        def to_device(t):
-            return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-        def rope_rows(p):
-            cos, sin = make_rope_table(cos_half[p : p + 1], sin_half[p : p + 1])
-            return to_device(cos), to_device(sin), to_device(-sin)
-
-        cos, sin, neg_sin = rope_rows(pos)
-        kw = dict(cos=cos, sin=sin, neg_sin=neg_sin, sliding_pos=int32_pos_tensor(pos % window, device))
-        if r == 0:
-            kw["sdpa_cur_pos"] = int32_pos_tensor(min(pos, window - 1), device)
-            return kw
-        n = (pos + 1) // r
-        if self.is_kv_source:
-            kw["pool"] = (pos + 1) % r == 0
-            if r > 1:
-                kw["win_slot"] = int32_pos_tensor(pos % r, device)
-            if kw["pool"]:
-                # Group j stands at its first token, j * ratio.
-                kw["cos_win"], kw["sin_win"], _ = rope_rows(pos + 1 - r)
-                kw["entry"] = int32_pos_tensor(pos // r, device)
-        if self.is_index_source and n > 0:
-            kw["select"] = True
-            kw["index_pos"] = int32_pos_tensor(_SELECT_KV_RATE * n - 1, device)
-            indexer = self.indexer
-            if n > indexer.candidate_topk_blocks * indexer.candidate_block_size and (
-                indexer.is_candidate_source or indexer.uses_candidates
-            ):
-                kw["candidates"] = True
-                kw["build_pool"] = indexer.uses_candidates
-        selected = min(n, self.index_topk)
-        if pos >= window - 1:
-            kw["sdpa_cur_pos"] = int32_pos_tensor(window + selected - 1, device)
-        else:
-            mask = torch.full((1, 1, 1, window + self.index_topk), _MASK_NEG)
-            mask[..., : pos + 1] = 0
-            mask[..., window : window + selected] = 0
-            kw["mask"] = to_device(mask)
-        return kw
-
-    def decode_rows_inputs(self, pos: int, rows: int, cos_half: torch.Tensor, sin_half: torch.Tensor) -> dict:
-        """Host-built :meth:`decode_rows` ``rows`` argument for positions ``pos .. pos + rows - 1``.
-
-        ``steps`` (compressed layers) is each row's :meth:`decode_inputs`: its compressor slot and group,
-        index-key entry and select. The rest covers the block: RoPE tables ``cos`` / ``sin``
-        ``[1, 1, T, Rd]`` and ``q_cos`` / ``q_sin`` / ``q_neg_sin`` ``[1, 1, T * H_local, Rd]`` (each row
-        repeated per head), the ring copies' one-hots ``scatter`` ``[T, 1, window, T]`` / ``keep``
-        ``[T, 1, window, 1]``, and per-row ``sdpa_cur_pos`` ``[T]`` or, while the first row is below the full
-        window, ``mask`` ``[T, 1, 1, Skv]``.
-        """
-        device, window, r, h = self.device, self.window, self.compress_ratio, self.local_num_heads
-        assert rows <= window, f"{rows} rows would overwrite each other's ring slots"
+        multi = rows > 1
         positions = range(pos, pos + rows)
 
-        def to_device(t):
-            return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
+        def to_device(t, layout=ttnn.TILE_LAYOUT):
+            return ttnn.from_torch(t, dtype=ttnn.bfloat16, layout=layout, device=device)
 
         def int32_rows(values):
             return ttnn.from_torch(
                 torch.tensor(values, dtype=torch.int32), dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=device
             )
 
+        # A TILE table carries per-row positions only for TILE input, so ROW_MAJOR rows take a ROW_MAJOR one.
+        rope_layout = ttnn.ROW_MAJOR_LAYOUT if multi else ttnn.TILE_LAYOUT
         cos, sin = make_rope_table(cos_half[pos : pos + rows], sin_half[pos : pos + rows])
-        q_cos, q_sin = (x.repeat_interleave(h, dim=2) for x in (cos, sin))
-        # Copy j holds rows 0 .. j in their slots.
-        scatter = torch.zeros(rows, 1, window, rows)
-        for j in range(rows):
-            for i in range(j + 1):
-                scatter[j, 0, (pos + i) % window, i] = 1
         kw = dict(
-            cos=to_device(cos),
-            sin=to_device(sin),
-            q_cos=to_device(q_cos),
-            q_sin=to_device(q_sin),
-            q_neg_sin=to_device(-q_sin),
-            scatter=to_device(scatter),
-            keep=to_device(1 - scatter.sum(-1, keepdim=True)),
+            cos=to_device(cos, rope_layout),
+            sin=to_device(sin, rope_layout),
+            neg_sin=to_device(-sin, rope_layout),
+            sliding_pos=int32_rows([p % window for p in positions]),
         )
+        if multi:
+            assert rows <= window, f"{rows} rows would overwrite each other's ring slots"
+            # Copy j holds rows 0 .. j in their slots.
+            kw["ring_rows"] = int32_rows(
+                [(pos + i) % window if i <= j else -1 for j in range(rows) for i in range(rows)]
+            )
         if r == 0:
             kw["sdpa_cur_pos"] = int32_rows([min(p, window - 1) for p in positions])
             return kw
-        steps = [self.decode_inputs(p, cos_half, sin_half) for p in positions]
-        assert not any(step.get("candidates") for step in steps), "the two-level select decodes one row at a time"
-        kw["steps"] = steps
-        selected = [min((p + 1) // r, self.index_topk) for p in positions]
+        counts = [(p + 1) // r for p in positions]
+        if self.is_kv_source:
+            closing = tuple(j for j, p in enumerate(positions) if (p + 1) % r == 0)
+            if multi:
+                kw["pool_rows"] = closing
+            else:
+                kw["pool"] = bool(closing)
+            if r > 1:
+                kw["win_slot"] = int32_rows([p % r for p in positions])
+            if closing:
+                # Group j stands at its first token, j * ratio.
+                starts = [positions[j] + 1 - r for j in closing]
+                cos_win, sin_win = make_rope_table(cos_half[starts], sin_half[starts])
+                kw["cos_win"], kw["sin_win"] = to_device(cos_win), to_device(sin_win)
+                kw["entry"] = int32_rows([positions[j] // r for j in closing])
+        if self.is_index_source and counts[-1] > 0:
+            kw["select"] = True
+            # A row with no key yet still selects one; its mask hides the result.
+            kw["index_pos"] = int32_rows([_SELECT_KV_RATE * max(n, 1) - 1 for n in counts])
+            indexer = self.indexer
+            if counts[-1] > indexer.candidate_topk_blocks * indexer.candidate_block_size and (
+                indexer.is_candidate_source or indexer.uses_candidates
+            ):
+                assert not multi, "the two-level select decodes one row at a time"
+                kw["candidates"] = True
+                kw["build_pool"] = indexer.uses_candidates
+        selected = [min(n, self.index_topk) for n in counts]
         if pos >= window - 1:
             kw["sdpa_cur_pos"] = int32_rows([window + s - 1 for s in selected])
         else:
@@ -1199,8 +1199,8 @@ def build_decode_caches(device, config, layers, max_seq: int, verify_rows: int =
     compressed-KV, index-key and selection buffers, so its kv and index sources must be
     in ``layers`` too. Past the candidate pool the candidate source's group also gets
     :func:`candidate_buffers`, so the candidate source must be in ``layers`` with its consumers.
-    ``verify_rows > 1`` adds the selection buffers of a ``verify_rows``-row
-    :meth:`~DeepSeekV41Attention.decode_rows` step.
+    ``verify_rows > 1`` adds the selection buffers of a :meth:`~DeepSeekV41Attention.decode` step with
+    ``S == verify_rows``.
     """
     window, dh = config.sliding_window, config.head_dim
     two_level = uses_candidate_pool(config, max_seq)
