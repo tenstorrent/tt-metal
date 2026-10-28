@@ -77,12 +77,19 @@ PROPERTIES = {
 # ---------------------------------------------------------------------------
 
 
+_FP32_MAX = 3.4028234663852886e38
+
+
 def _check_bound(name, value):
     if isinstance(value, bool) or not isinstance(value, numbers.Real):
         raise ValueError(f"clamp_square_practice: {name} must be a real number, got {type(value).__name__}")
     value = float(value)
     if value != value or value in (float("inf"), float("-inf")):
         raise ValueError(f"clamp_square_practice: {name} must be finite, got {value}")
+    # Bounds travel as fp32 bit patterns; a finite double past fp32 range would overflow the
+    # host packer (struct.pack OverflowError). torch.clamp refuses such scalars too.
+    if abs(value) > _FP32_MAX:
+        raise ValueError(f"clamp_square_practice: {name} ({value}) is outside the fp32 range")
     return value
 
 

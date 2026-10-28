@@ -36,6 +36,7 @@ def dest_limit(fp32_dest_acc_en: bool, dst_full_sync_en: bool) -> int:
 
 
 def _fp32_bits(value: float) -> int:
+    """IEEE-754 fp32 bit pattern. validate() guarantees `value` is within fp32 range."""
     return struct.unpack("<I", struct.pack("<f", value))[0]
 
 
