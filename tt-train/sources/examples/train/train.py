@@ -238,18 +238,17 @@ def resolve_warmup_steps(training_cfg: TrainingConfig, total_steps: int) -> int:
     return max(0, min(warmup, total_steps))
 
 
-def build_lr_schedule(training_cfg: TrainingConfig, optimizer: Any, total_steps: int) -> Callable[[int], float]:
-    """Return a `step -> lr` callable. `warmup_linear` runs warmup → linear decay; anything else is constant LR.
+def build_lr_lambda(training_cfg: TrainingConfig, total_steps: int) -> Callable[[int], float]:
+    """Return a `step -> factor` callable that scales each param group's initial LR.
 
+    Training scheduler type `warmup_linear` runs warmup → linear decay; anything else is a constant factor of 1.0.
     `total_steps` is the horizon the curve is shaped over — the run may stop before reaching it.
     """
-    base_lr = optimizer.get_lr()
-
     if training_cfg.scheduler_type == "warmup_linear":
         sched = SpeedrunScheduler(
             SpeedrunSchedulerConfig(
-                max_lr=base_lr,
-                min_lr=base_lr * training_cfg.min_lr_ratio,
+                max_lr=1.0,
+                min_lr=training_cfg.min_lr_ratio,
                 warmup_steps=resolve_warmup_steps(training_cfg, total_steps),
                 hold_steps=0,
                 total_steps=total_steps,
@@ -257,7 +256,7 @@ def build_lr_schedule(training_cfg: TrainingConfig, optimizer: Any, total_steps:
         )
         return sched.lr_at
 
-    return lambda _step: base_lr
+    return lambda _step: 1.0
 
 
 # ── Inference ─────────────────────────────────────────────────────────────────
@@ -582,7 +581,7 @@ def run_training(
     # Shape the LR curve over lr_schedule_steps (default: the run length). A larger horizon runs only
     # a prefix of a longer curve; warmup + decay otherwise complete exactly at the end of training.
     schedule_horizon = training_cfg.lr_schedule_steps or effective_max_steps
-    schedule = build_lr_schedule(training_cfg, optimizer, schedule_horizon)
+    lr_lambda = build_lr_lambda(training_cfg, schedule_horizon)
 
     sft_cfg = SFTConfig(
         max_steps=effective_max_steps,
@@ -607,7 +606,7 @@ def run_training(
         eval_dataloader=None,
         config=sft_cfg,
         optimizer=optimizer,
-        lr_schedule=schedule,
+        lr_lambda=lr_lambda,
         callbacks=callbacks,
         attention_mask=attn_mask_for_model,
         checkpoint_saver=saver,
@@ -652,7 +651,7 @@ def run_training(
 
     optimizer_fields: list[tuple[str, str]] = [
         ("name", optimizer.get_name()),
-        ("lr", f"{optimizer.get_lr():.2e}"),
+        ("lr", ", ".join(f"{lr:.2e}" for lr in optimizer.get_group_lrs())),
         ("schedule", schedule_str),
     ]
     if training_cfg.use_clip_grad_norm:

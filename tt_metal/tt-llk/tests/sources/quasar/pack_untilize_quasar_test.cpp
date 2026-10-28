@@ -21,6 +21,7 @@
 #include "llk_math_common.h"
 #include "llk_unpack_common.h"
 #include "llk_unpack_unary_operand.h"
+#include "llk_unpack_unary_operand_to_dest.h"
 #include "params.h"
 
 void run_kernel(RUNTIME_PARAMETERS params)
@@ -73,10 +74,8 @@ void run_kernel(RUNTIME_PARAMETERS params)
         if constexpr (unpack_to_dest)
         {
             _llk_unpack_configure_unary_<SELECTED_UNPACKER>(static_cast<DataFormat>(formats.unpack_A_dst));
-            // Unpack one tile row at a time for double-buffering with packer (SyncHalf).
-            // Writing all tiles at once would cause _llk_pack_dest_dvalid_section_done_'s
-            // ZEROACC to wipe subsequent tile rows after packing the first one.
-            _llk_unpack_unary_operand_init_<SELECTED_UNPACKER, false /*transpose*/, is_fp32_dest_acc_en>(bfd_unpack, tensor_shape_A, BLOCK_CT_DIM);
+            _llk_unpack_dest_init_();
+            _llk_unpack_unary_operand_to_dest_init_(bfd_unpack);
         }
         else
         {
@@ -122,7 +121,10 @@ void run_kernel(RUNTIME_PARAMETERS params)
             {
                 for (std::uint32_t block_rt = 0; block_rt < BLOCK_RT_DIM; block_rt++)
                 {
-                    _llk_unpack_unary_operand_<SELECTED_UNPACKER>(block_rt * BLOCK_CT_DIM, tensor_shape_A);
+                    // Unpack one tile row at a time for double-buffering with packer (SyncHalf).
+                    // Writing all tiles at once would cause _llk_pack_dest_dvalid_section_done_'s
+                    // ZEROACC to wipe subsequent tile rows after packing the first one.
+                    _llk_unpack_unary_operand_to_dest_block_(block_rt * BLOCK_CT_DIM /*l1_tile_idx*/, 0 /*dst_tile_idx*/, BLOCK_CT_DIM);
                     if constexpr (PERF_RUN_TYPE == PerfRunType::L1_TO_L1)
                     {
                         _llk_unpack_dest_dvalid_section_done_<dest_sync>();

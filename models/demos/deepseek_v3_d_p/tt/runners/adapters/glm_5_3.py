@@ -37,6 +37,7 @@ class GLM53Adapter(MLAPrefillAdapter):
     hf_model_default = "/mnt/weka/model-weights/llm/zai-org/GLM-5.3-fp8-aca966e4"
     ttnn_cache_default = "/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/GLM-5.3-Cache-prefill"
     default_gate_mode = "DEVICE_FP32"
+    passes_indexer_indices = True
     prefill_trace_default = (
         "/mnt/weka/model-cache/scratch/zai-org/GLM-5.3-Cache/golden_traces/vllm-glm53-indexer-kcache-55k"
     )
