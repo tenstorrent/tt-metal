@@ -563,10 +563,21 @@ ONLY_EVER_TOLERANCE = frozenset(
 )
 
 
+# Enrolled on one architecture's table only: its figures there are carried from the
+# other table as tolerance rows, which bind nowhere, until a card of this one sweeps it.
+# #54080: Logsigmoid was swept on the ttsim Wormhole model only.
+_TOLERANCE_UNTIL_SWEPT_ON = {
+    ChipArchitecture.BLACKHOLE: frozenset({MathOperation.Logsigmoid}),
+}
+
+
 def test_every_enrolled_op_reaches_its_step_budget():
     with_budget = {op for op, _, _, _ in _live_step_budgets()}
     missing = set(enrolled_ops()) - with_budget
-    assert missing == ONLY_EVER_TOLERANCE, sorted(op.name for op in missing)
+    expected = ONLY_EVER_TOLERANCE | _TOLERANCE_UNTIL_SWEPT_ON.get(
+        MEASURED_ARCH, frozenset()
+    )
+    assert missing == expected, sorted(op.name for op in missing)
 
 
 # Ops exact by construction: a sign-bit change, a copy, or an integer-valued result.
@@ -1057,19 +1068,6 @@ def test_a_carried_figure_binds_nowhere():
 # each with that cause. A cell whose disagreeing lanes are a tracked defect on a
 # handful of inputs belongs in `ulp_sweep._KNOWN_NONFINITE_LANES` instead.
 _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
-    # -- the kernel's own bfloat16 rounding on a 16-bit Dest ---------------------------
-    (
-        MathOperation.Logsigmoid,
-        DataFormat.Float16,
-        DataFormat.Float16,
-        None,
-        DestAccumulation.No,
-    ): (
-        "the kernel rounds its result to bfloat16 before the store on a 16-bit Dest, so "
-        "the four top-of-fp16 inputs (-65504 down to -65408, where logsigmoid(x) = x) "
-        "round to -65536 and pack to -inf; the rest of the cell reads up to 12 fp16 "
-        "steps, that rounding on top of the bfloat16-level residual (#58607's class)"
-    ),
     # -- the approximation's own shortfall at the fp16 and fp32 overflow edges -----
     (
         MathOperation.Exp,
@@ -1178,6 +1176,20 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED = {
 # Acknowledgements that hold on one architecture's table only, read beside the ones
 # above for the session's MEASURED_ARCH.
 _UNMEASURABLE_CELLS_ACKNOWLEDGED_ON = {
+    ChipArchitecture.WORMHOLE: {
+        (
+            MathOperation.Logsigmoid,
+            DataFormat.Float16,
+            DataFormat.Float16,
+            None,
+            DestAccumulation.No,
+        ): (
+            "the kernel rounds its result to bfloat16 before the store on a 16-bit Dest, so "
+            "the four top-of-fp16 inputs (-65504 down to -65408, where logsigmoid(x) = x) "
+            "round to -65536 and pack to -inf; the rest of the cell reads up to 12 fp16 "
+            "steps, that rounding on top of the bfloat16-level residual (#58607's class)"
+        ),
+    },
     ChipArchitecture.BLACKHOLE: {
         (
             MathOperation.Reciprocal,
@@ -1204,13 +1216,6 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_ON = {
 # a newly demoted cell is a change someone has to read rather than one an op-wide
 # acknowledgement approves for any cause. Exact-cell keys need no pin.
 _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
-    (
-        MathOperation.Logsigmoid,
-        DataFormat.Float16,
-        DataFormat.Float16,
-        None,
-        DestAccumulation.No,
-    ): 1,
     (
         MathOperation.Exp,
         DataFormat.Float16,
@@ -1256,6 +1261,15 @@ _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS = {
 # `approx`; and Polygamma also parks five cells on its pole at 0 (see its
 # acknowledgement).
 _UNMEASURABLE_CELLS_ACKNOWLEDGED_COUNTS_ON = {
+    ChipArchitecture.WORMHOLE: {
+        (
+            MathOperation.Logsigmoid,
+            DataFormat.Float16,
+            DataFormat.Float16,
+            None,
+            DestAccumulation.No,
+        ): 1,
+    },
     ChipArchitecture.BLACKHOLE: {
         (
             MathOperation.Exp,
