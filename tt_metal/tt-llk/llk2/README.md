@@ -12,6 +12,7 @@ Resolver are used by more than one layer. Everything is compile time except addr
 inc/common/                 arch-independent, always on the include path
     kernel_settings.h       Dest mode and math fidelity for the kernel
     tensor/tensor.h         TensorShape, TensorSpec, Tensor
+    tensor/dataflow_buffer.h  Tensors from dataflow buffers: wait_front, reserve_back; release pops / pushes
     compute_api/            one op per file, on Tensors, taking the op's modifier struct
     resolver/               plan structs and the driver (a chain of one call)
     llk_lib/thread.h        current_thread and the per-thread call pattern
@@ -29,6 +30,7 @@ include path.
 | Op | Compute API | Blackhole llk-lib | Tests |
 |---|---|---|---|
 | `matmul` | `compute_api/matmul.h` | `llk_lib/unpack.h`, `llk_lib/matmul.h` | `test_llk2_matmul.py` |
+| dataflow buffers (`wait_front`, `reserve_back`, `release`) | `tensor/dataflow_buffer.h` | `llk_lib/dataflow_buffer.h` | `test_llk2_dfb.py` |
 
 Pack and the math-to-pack Dest sync still use today's LLKs in the tests.
 
