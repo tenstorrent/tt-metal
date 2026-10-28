@@ -56,9 +56,14 @@ elif ! cmp -s "$LLK/tests/sfpi-version" "$BASE/tt_metal/tt-llk/tests/sfpi-versio
   exit 0
 fi
 ln -s "$LLK/tests/sfpi" "$BASE/tt_metal/tt-llk/tests/sfpi"
-# Each side gets half of the time left.
-measure head "$LLK" $(( ($(date +%s) + DEADLINE) / 2 ))
-measure base "$BASE/tt_metal/tt-llk" "$DEADLINE"
+if [[ -s "$OUT/nodes.over" ]]; then
+  # More tests than the leg can re-measure: every regression is reported as not re-measured, which blocks.
+  echo "::warning::$(wc -l < "$OUT/nodes.over") stage-1 regression(s) are over the limit of ${CAP} tests; stage 2 does not measure."
+else
+  # Each side gets half of the time left.
+  measure head "$LLK" $(( ($(date +%s) + DEADLINE) / 2 ))
+  measure base "$BASE/tt_metal/tt-llk" "$DEADLINE"
+fi
 
 mkdir -p "$BASE/tt_metal/tt-llk/perf_data/runs"
 python3 "$LLK/perf/placement_check.py" decide "${COMPARE[@]}" --candidates "$OUT/stage1.regressions.csv" \

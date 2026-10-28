@@ -399,10 +399,10 @@ jobs:
         id: stage2
         if: ${{ !cancelled() && hashFiles('stage2/**/stage2.json') != '' && hashFiles('perf_gate_report.md') != '' }}
         run: |
-          CONFIRMED=false
+          BLOCKS=false
           python3 ${{ env.LLK_PATH }}/perf/placement_check.py render \
-            --results 'stage2/**/stage2.json' --arch '${{ inputs.arch }}' --report stage2.md || CONFIRMED=true
-          echo "confirmed=$CONFIRMED" >> "$GITHUB_OUTPUT"
+            --results 'stage2/**/stage2.json' --arch '${{ inputs.arch }}' --report stage2.md || BLOCKS=true
+          echo "blocks=$BLOCKS" >> "$GITHUB_OUTPUT"
           printf '\n' >> perf_gate_report.md
           cat stage2.md >> perf_gate_report.md
 
@@ -623,8 +623,8 @@ jobs:
           if [ "$EXIT_CODE" != "0" ]; then
             echo "❌ Performance regressions detected"
             cat perf_gate_report.md
-            if [ "${{ steps.stage2.outputs.confirmed }}" = "false" ]; then
-              echo "Stage 2 confirmed none of them: the job does not fail."
+            if [ "${{ steps.stage2.outputs.blocks }}" = "false" ]; then
+              echo "Stage 2 re-measured all of them and none is slower at every code position: the job does not fail."
               exit 0
             fi
             if [ "${{ inputs.fail_on_regression }}" = "true" ]; then

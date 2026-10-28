@@ -12,11 +12,14 @@ Each stage-1 regression gets one outcome; none is dropped from the report:
 - placement: the loop code did not change and it is slower at some code positions only, so the move follows
   where the code sits (a hardware effect).
 - not-reproduced: slower at no code position when measured again.
-- unmeasured: not measured at every position on both sides, or no window fingerprint.
+- unmeasured: over the test limit, not measured at every position on both sides, no window fingerprint, or
+  not a TILE_LOOP point.
+
+A blocking gate fails on regression, review and unmeasured: slower at every position, or not cleared.
 
     placement_check.py nodes  --candidates R.regressions.csv --map 'current/**/*.windowhash' --out nodes.txt
     placement_check.py decide --candidates R.regressions.csv --baseline DIR --current DIR --report stage2.md
-    placement_check.py render --results 'legs/**/stage2.json' --report stage2.md   (exit 1: a confirmed regression)
+    placement_check.py render --results 'legs/**/stage2.json' --report stage2.md   (exit 1: it blocks)
 """
 
 import argparse
@@ -90,12 +93,13 @@ def read_window_map(paths):
     return out
 
 
-def read_candidates(path):
+def read_candidates(path, tile_loop=True):
+    """The stage-1 regressions stage 2 re-measures (TILE_LOOP), or with tile_loop=False the others."""
     with open(path, newline="") as fh:
         rows = list(csv.DictReader(fh))
     out = []
     for row in rows:
-        if row["marker"] != "TILE_LOOP":
+        if (row["marker"] == "TILE_LOOP") != tile_loop:
             continue
         config = [
             (c, _value(v))
@@ -106,6 +110,7 @@ def read_candidates(path):
             {
                 "module": row[MODULE_COL],
                 "run_type": row["run_type"],
+                "marker": row["marker"],
                 "config": config,
                 "delta_pct": float(row["delta_pct"]),
             }
@@ -168,7 +173,9 @@ def decide(
     min_cycles,
     module_thresholds,
     over_cap=(),
+    others=(),
 ):
+    """others: stage-1 regressions on other markers; stage 2 cannot re-measure them, so they are unmeasured."""
     over_cap = set(over_cap)
     base, base_windows = _side(baseline_root)
     cur, cur_windows = _side(current_root)
@@ -230,6 +237,10 @@ def decide(
         row["slower"] = sum(slower)
         row.update(outcome=outcome, why=why, deltas=deltas, threads=threads)
         results.append(row)
+    for c in others:
+        results.append(
+            dict(c, deltas=[], threads=[], slower=0, outcome="unmeasured", why="not a TILE_LOOP point")
+        )
     return results
 
 
@@ -292,18 +303,26 @@ _SECTIONS = (
 )
 
 
+# A blocking gate fails on these: slower at every position, or not re-measured at all.
+BLOCKING = ("regression", "review", "unmeasured")
+
+
+def blocks(results):
+    return any(r["outcome"] in BLOCKING for r in results)
+
+
 def render(results, arch, limit_note=""):
     by = collections.defaultdict(list)
     for r in results:
         by[r["outcome"]].append(r)
     fixed = _fixed(results)
     name = f"{arch.capitalize()} stage 2" if arch else "Stage 2"
-    if by["regression"]:
-        verdict = f"❌ {len(by['regression'])} confirmed regression(s)"
-    elif by["review"] or by["partial"]:
-        verdict = f"⚠️ no confirmed regression, {len(by['review']) + len(by['partial'])} to review"
+    if by["regression"] or by["review"]:
+        verdict = f"❌ {len(by['regression']) + len(by['review'])} slower at every code position"
     elif by["unmeasured"]:
-        verdict = f"⚠️ no confirmed regression, {len(by['unmeasured'])} not re-measured"
+        verdict = f"❌ {len(by['unmeasured'])} not re-measured"
+    elif by["partial"]:
+        verdict = f"⚠️ no regression at every position, {len(by['partial'])} to review"
     elif by["placement"]:
         verdict = "ℹ️ no confirmed regression, code-placement effects only"
     else:
@@ -387,7 +406,7 @@ def main(argv=None):
             for row in json.loads(Path(path).read_text())
         ]
         Path(a.report).write_text(render(results, a.arch) + "\n")
-        return 1 if any(r["outcome"] == "regression" for r in results) else 0
+        return 1 if blocks(results) else 0
     candidates = read_candidates(a.candidates)
     if a.cmd == "nodes":
         selected, over = nodes(
@@ -411,13 +430,13 @@ def main(argv=None):
         a.min_cycles,
         _module_thresholds(a.module_threshold),
         over_cap,
+        read_candidates(a.candidates, tile_loop=False),
     )
     Path(a.report).write_text(render(results, a.arch, a.limit_note) + "\n")
     Path(a.report).with_suffix(".json").write_text(json.dumps(results, default=str))
     counts = collections.Counter(r["outcome"] for r in results)
     print("stage2", " ".join(f"{k}={v}" for k, v in sorted(counts.items())))
-    confirmed = counts["regression"]
-    return 1 if confirmed else 0
+    return 1 if blocks(results) else 0
 
 
 if __name__ == "__main__":
