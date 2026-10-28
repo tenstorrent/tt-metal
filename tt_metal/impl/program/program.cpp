@@ -1712,10 +1712,7 @@ void detail::ProgramImpl::check_prefetcher_pipe_slot_bind(
 }
 
 void detail::ProgramImpl::commit_prefetcher_pipe_slot_bind(
-    uint8_t prefetcher_pipe_id,
-    const CoreRangeSet& cores,
-    const CoreRangeSet& extra_cores,
-    const experimental::PrefetcherPipeImpl& prefetcher_pipe) {
+    uint8_t prefetcher_pipe_id, const CoreRangeSet& cores, const experimental::PrefetcherPipeImpl& prefetcher_pipe) {
     const PrefetcherPipeSlot& slot = get_prefetcher_pipe_slot(prefetcher_pipe_id);
     if (slot.relay_dfb_host_id.has_value() && prefetcher_pipe.receiver_cores().intersects(cores)) {
         auto relay_dfb = get_dataflow_buffer(*slot.relay_dfb_host_id);
@@ -1725,7 +1722,7 @@ void detail::ProgramImpl::commit_prefetcher_pipe_slot_bind(
         }
     }
 
-    for (const CoreCoord& core : corerange_to_cores(cores.merge(extra_cores))) {
+    for (const CoreCoord& core : corerange_to_cores(cores)) {
         auto& participants = per_core_prefetcher_pipes_.at(core);
         auto participant = std::find_if(participants.begin(), participants.end(), [prefetcher_pipe_id](const auto& a) {
             return a.prefetcher_pipe_id == prefetcher_pipe_id;
@@ -2002,11 +1999,12 @@ void detail::ProgramImpl::bind_prefetcher_pipe_parameters(std::span<const Prefet
     // Pass 2: commit.
     for (const Checked& checked : to_commit) {
         for (const auto& slot_cores : checked.binding->slots) {
-            commit_prefetcher_pipe_slot_bind(
-                slot_cores.prefetcher_pipe_id,
-                prefetcher_pipe_slot_bind_cores(*checked.name, slot_cores, *checked.pipe),
-                slot_cores.extra_cores,
-                *checked.pipe);
+            CoreRangeSet cores = prefetcher_pipe_slot_bind_cores(*checked.name, slot_cores, *checked.pipe);
+            if (slot_cores.binds_extra_cores) {
+                // Disjoint from the pipe's receivers, so the extra cores only add per-core records.
+                cores = cores.merge(get_prefetcher_pipe_slot(slot_cores.prefetcher_pipe_id).extra_cores);
+            }
+            commit_prefetcher_pipe_slot_bind(slot_cores.prefetcher_pipe_id, cores, *checked.pipe);
         }
         checked.binding->bound_pipe_identity = checked.pipe->identity();
         checked.binding->bound_pipe_key = prefetcher_pipe_binding_key(*checked.pipe);

@@ -478,9 +478,7 @@ public:
     //     per relay slot, pipe per core) so two bindings in one batch are checked against each
     //     other as well as against committed state.
     //   commit_prefetcher_pipe_slot_bind points the slot's relay DFB (if any) at the pipe ring and
-    //     fills the per-core records on `cores` and on `extra_cores` (the slot's extra cores when the
-    //     pipe is its accessor group's first, else empty). Only valid right after a successful check
-    //     of the same batch.
+    //     fills the per-core records. Only valid right after a successful check of the same batch.
     // Rebinding the same pipe is a no-op. A different pipe on an already-bound core is rejected
     // unless it replaces `replaced`, the identity of the pipe the parameter was bound to, whose key
     // it matches.
@@ -498,10 +496,7 @@ public:
         experimental::PrefetcherPipeIdentity replaced,
         PrefetcherPipeBindPreflight& preflight) const;
     void commit_prefetcher_pipe_slot_bind(
-        uint8_t prefetcher_pipe_id,
-        const CoreRangeSet& cores,
-        const CoreRangeSet& extra_cores,
-        const experimental::PrefetcherPipeImpl& prefetcher_pipe);
+        uint8_t prefetcher_pipe_id, const CoreRangeSet& cores, const experimental::PrefetcherPipeImpl& prefetcher_pipe);
 
     // The slot whose relay DFB is `relay_dfb_host_id`, if that DFB relays a pipe.
     std::optional<uint8_t> get_prefetcher_pipe_id_for_relay(uint32_t relay_dfb_host_id) const;
@@ -553,9 +548,9 @@ public:
         struct SlotCores {
             uint8_t prefetcher_pipe_id;
             CoreRangeSet cores;
-            // The slot's extra cores if this parameter is its accessor group's first pipe (they take
-            // this pipe's record), else empty.
-            CoreRangeSet extra_cores;
+            // This parameter is its accessor group's first pipe, so its bind also gives the slot's
+            // extra cores this pipe's record.
+            bool binds_extra_cores = false;
             bool sender_role = false;
         };
         std::vector<SlotCores> slots;

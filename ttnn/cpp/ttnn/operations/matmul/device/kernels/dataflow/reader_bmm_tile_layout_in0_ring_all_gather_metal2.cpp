@@ -28,7 +28,7 @@ void kernel_main() {
     constexpr auto k_tiles = get_arg(args::k_tiles);  // the activation's unpadded K
 
     // A core that only fills out the ring's rectangle: it holds no shard and takes no part.
-    if (get_arg(args::is_worker) == 0) {
+    if (get_arg(args::is_worker_core) == 0) {
         return;
     }
 
