@@ -18,6 +18,36 @@ the tt_dit cache namespace and `return_commit_hash` behave as they do for a norm
 `HF_HUB_OFFLINE=1` nothing touches the hub; without it, a repo absent from the mirror downloads as usual.
 
 The mirror is opt-in: it is only consulted when `$TT_DIT_LOCAL_WEIGHTS_ROOT` names its root.
+
+Setting up a shared mirror and cache (CI reads both but never writes them, so they are filled by hand)
+
+On the Weka-mounted CI runners the mirror root is `/mnt/weka/model-weights/video` and `HF_HOME` is
+`/mnt/weka/model-weights/video/huggingface`. Both are owned by `storage-wg`, and CI runs as a user
+outside that group, so every file must be readable by others. Run the steps as a `storage-wg` member:
+
+1. Download the repo into the mirror, pinning the commit the tests were validated against:
+
+       umask 002   # group-writable for storage-wg, readable for CI
+       hf download <org>/<repo> --revision <commit> --local-dir <mirror root>/<org>/<repo>
+
+   Use `--local-dir`: it writes the per-file metadata this module reads.
+
+2. Link it into the shared cache, from a checkout that has this module:
+
+       umask 002
+       HF_HOME=<mirror root>/huggingface TT_DIT_LOCAL_WEIGHTS_ROOT=<mirror root> \\
+           python3 -c "from models.tt_dit.utils.hf_local_mirror import ensure_cached; ensure_cached('<org>/<repo>')"
+
+   It logs "Linking N files ..." and adds only links, so the cache stays a few hundred KB.
+
+3. Check that nothing is unreadable to CI (this should print nothing):
+
+       find <mirror root>/<org>/<repo> <mirror root>/huggingface ! -perm -o=r
+
+To check the result, load something offline, e.g. `HF_HUB_OFFLINE=1` with `load_config(...,
+return_commit_hash=True)`, which should return the pinned commit. When the mirror moves to a new
+commit, remove `<mirror root>/huggingface/hub/models--<org>--<repo>` and repeat step 2; until then
+CI fails with `CheckpointCacheError`, because the cache and the mirror are at different commits.
 """
 
 from __future__ import annotations
