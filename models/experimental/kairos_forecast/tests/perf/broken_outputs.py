@@ -18,7 +18,9 @@ drift from a fixed record (suite.json and bench.json).
     spread_shift_rows_<f>[_h0|_h1|_final]  one row's band x1.3 or x0.7, on the level_shift_rows row counts (D5 R1-0a)
     top_q_<+-d>         the top quantile of every active row shifted by d (v1.31 / v1.32: 0.02 is the accuracy probe,
                         0.05 the performance one; the other preset's is not required to fail)
-    inactive_shift_<+-0.03>  the inactive rows level-shifted by 0.03 (v1.31)
+    dev_inactive_shift_<+-d>  on the fixed record's saved device heads (v1.27, v1.32): the inactive rows shifted by
+                        d (0.03 at accuracy, 0.04 at performance), scored against the fixed record itself; the
+                        sign moving away from the reference (at least one of the two) must fail
     level_shift_rows[_h0|_h1|_final]  +0.05 on a few rows only (v1.25, D4 item 1): 1 row at B <= 16, 2 at 32, 4 at 64,
                         1 % of the rows on paper / ragged (B = series per forward; the first active rows)
 
@@ -59,7 +61,7 @@ if os.environ.get("KAIROS_FIXED_SUITE"):  # development: score against another r
 SHIFT = 0.05
 SPREAD_SHIFTS = (1.3, 0.7)  # D5 R1-0a: per-row band scaling probes
 TOP_Q = {"accuracy": 0.02, "performance": 0.05}  # v1.32: bound + 0.01 / + 0.02
-INACTIVE_SHIFT = 0.03  # v1.31
+INACTIVE_SHIFT = {"accuracy": 0.03, "performance": 0.04}  # v1.31; v1.32: bound 0.02 + 0.02 at performance
 PERFECT = {"route_mismatch_rows": 0, "route_mismatch_patches": 0, "bias_max_abs_diff": 0.0, "min_top3_margin": 1.0}
 
 
@@ -114,9 +116,10 @@ def _top_q(raw, d):
     return h.reshape(raw.shape)
 
 
-def _inactive_shift(raw, d):
+def _inactive_shift(raw, d, ref):
+    """+d on the rows that are inactive in ref (the golden head)."""
     out = raw.clone()
-    out[~_active(raw)] += d
+    out[~_active(ref)] += d
     return out
 
 
@@ -148,8 +151,6 @@ def head_transforms(k_rows=1):
     for d in sorted(set(TOP_Q.values())):
         for sgn in (1, -1):
             t[f"top_q_{sgn * d:+g}"] = lambda r, h, x=sgn * d: _top_q(r, x)
-    for sgn in (1, -1):
-        t[f"inactive_shift_{sgn * INACTIVE_SHIFT:+g}"] = lambda r, h, x=sgn * INACTIVE_SHIFT: _inactive_shift(r, x)
     for f in SPREAD_SHIFTS:  # D5 R1-0a: one row's band scaled, on the level_shift_rows row counts
         t[f"spread_shift_rows_{f}"] = lambda r, h, f=f: _band(r, f, _active(r).nonzero().flatten()[:k_rows])
         for half in (0, 1):
@@ -304,6 +305,45 @@ def verdicts(cases, gates, fixed):
     return res
 
 
+HEADS = {"suite": "suite_1137", "bench": "bench_1138"}
+HEADS_ROOT = Path("/home/andy/bringup/goldens/kairos/fixed_heads")
+
+
+def device_probes(fixed, gates):
+    """{case/precision: {set: {label: {record: caught-by list}}}} for the probes on the saved device heads."""
+    from models.experimental.kairos_forecast.tests.perf.backfill_heads import golden
+
+    res, stamp = {}, session_stamp()
+    for set_name, recs in fixed.items():
+        if set_name not in HEADS:
+            continue
+        for r in recs:
+            if not r.get("excluded_rows"):
+                continue
+            prec, d = r["precision"], INACTIVE_SHIFT[r["precision"]]
+            h = torch.load(HEADS_ROOT / HEADS[set_name] / f"{r['name']}_{prec}.pt")
+            gold, g_q, scale, halves = golden(r["name"])
+            base = [x for x in recs if x["precision"] == prec]
+            lab = {}
+            for sgn in (1, -1):
+                m = score(_inactive_shift(h["head"], sgn * d, gold), gold, h["q"], g_q, scale, halves)
+                rec = {**r, **m, **stamp}
+                lab[f"{sgn * d:+g}"] = [f"{k}:{m_}" for m_, k in _failed_metrics([rec], base, gates) if k != "stamp"]
+            case = r["name"].removesuffix("_tf")
+            res.setdefault(f"{case}/{prec}", {}).setdefault(set_name, {})[r["name"]] = lab
+    return res
+
+
+def device_problems(dev):
+    return [
+        f"{cp} {s} dev_inactive_shift {name}: neither sign caught by inactive_max_err"
+        for cp, sets in dev.items()
+        for s, names in sets.items()
+        for name, lab in names.items()
+        if not any("drift:inactive_max_err" in v for v in lab.values())  # v1.32: by name
+    ]
+
+
 def problems(res):
     """Every way the scoring fails its purpose: a golden floor miss, or a broken record that nothing catches."""
     bad = []
@@ -325,12 +365,14 @@ def main(out_path, cases):
     gates = json.loads(DEFAULT_GATES.read_text())
     fixed = {k: load_records(p) for k, p in FIXED.items()}
     res = verdicts(cases, gates, fixed)
-    bad = problems(res)
+    dev = device_probes(fixed, gates)
+    bad = problems(res) + device_problems(dev)
     out = {
         **session_stamp(),
         "fixed": {k: str(p) for k, p in FIXED.items()},
         "level_shift_real_units": {c: real_units(c) for c in cases},
         "verdicts": res,
+        "device_probes": dev,
         "problems": bad,
     }
     with open(out_path, "w") as f:
