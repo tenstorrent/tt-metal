@@ -58,6 +58,12 @@ def main():
             ),
             6.125 * mb,
         ),
+        "fused_add_rmsnorm data movement only": (
+            lambda: fused_add_rmsnorm(
+                a, b, consts, out_dtype=ttnn.bfloat8_b, sum_dtype=ttnn.bfloat16, defines=[("DM_ONLY", "1")]
+            ),
+            6.125 * mb,
+        ),
         "fused_add_rmsnorm LoFi": (
             lambda: fused_add_rmsnorm(
                 a, b, consts, out_dtype=ttnn.bfloat8_b, sum_dtype=ttnn.bfloat16, fidelity=ttnn.MathFidelity.LoFi

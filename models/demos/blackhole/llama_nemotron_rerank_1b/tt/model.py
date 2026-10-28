@@ -23,11 +23,14 @@ import torch
 import ttnn
 from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops.fused_add_rmsnorm import fused_add_rmsnorm
 from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops.fused_heads_rope import fused_heads_rope
+from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops.matmul_add_norm import matmul_add_norm, to_resident
 from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops.matmul_qkv_rope import (
     make_rope_table,
     matmul_qkv_rope,
 )
 from models.demos.blackhole.llama_nemotron_rerank_1b.tt.model_config import (
+    MM_ADD_NORM_CONFIGS,
+    MM_ADD_NORM_Y_FIDELITY,
     MM_CONFIGS,
     PAD_TOKEN_ID,
     QKV_ROPE_CONFIGS,
@@ -99,6 +102,9 @@ class NemotronReranker:
         # packer_l1_acc off: SDPA accumulates in its own CBs; with it on, 32x512 SDPA took 2.5 vs 1.6 M cycles.
         self.sdpa_ckc = cfg.compute_config(cfg.sdpa_fidelity, fp32_acc=False, packer_l1_acc=False)
         self.norm_ckc = cfg.compute_config(ttnn.MathFidelity.HiFi4)
+        self.one_tile = ttnn.from_torch(
+            torch.ones(1, 1, 32, 32), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
+        )
         self.trans_mat = ttnn.from_torch(
             get_rot_transformation_mat(cfg.head_dim), dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device
         )
@@ -297,8 +303,9 @@ class NemotronReranker:
             memory_config=self._mem(rows, width),
         )
 
-    def _attention(self, layer, xn, B, S, mask, block_map, rope):
-        """xn: the attention-normed residual [1, 1, B * S, dim]."""
+    def _attention(self, layer, xn, B, S, mask, block_map, rope, wo=True):
+        """xn: the attention-normed residual [1, 1, B * S, dim]. ``wo=False`` returns the concatenated
+        heads before WO (for matmul_add_norm)."""
         cfg = self.cfg
         qc, kc = self.sdpa_chunks(B, S)
         if cfg.fuse_qkv_rope:
@@ -347,6 +354,8 @@ class NemotronReranker:
             o = ttnn.experimental.nlp_concat_heads(attn, memory_config=self._mem(B * S, cfg.dim))
             ttnn.deallocate(attn)
         o = ttnn.reshape(o, [1, 1, B * S, o.shape[-1]])
+        if not wo:
+            return o
         out = self._linear(o, layer.wo, "wo", dtype=cfg.wo_out_dtype)
         ttnn.deallocate(o)
         return out
@@ -384,8 +393,8 @@ class NemotronReranker:
             ttnn.deallocate(k)
         return q_r, k_r, v
 
-    def _mlp(self, layer, h):
-        """h: the ffn-normed residual [1, 1, rows, dim]."""
+    def _mlp(self, layer, h, ff2=True):
+        """h: the ffn-normed residual [1, 1, rows, dim]. ``ff2=False`` returns the SwiGLU product before FF2."""
         if self.cfg.fuse_swiglu:
             a = self._linear(h, layer.w13, "ff13s", fuse_swiglu=True, dtype=self.cfg.ff2_in_dtype)
         else:
@@ -400,9 +409,33 @@ class NemotronReranker:
             )
             ttnn.deallocate(g)
             ttnn.deallocate(u)
+        if not ff2:
+            return a
         out = self._linear(a, layer.w2, "ff2", dtype=self.cfg.ff2_out_dtype)
         ttnn.deallocate(a)
         return out
+
+    def _mm_add_norm(self, x, w, res, consts, kind, y_dtype=None):
+        """res += x @ w (res: the L1-resident residual stream), returns rmsnorm(res) * gamma."""
+        rows = x.shape[-2] * x.shape[-3]
+        mpc = -(-(rows // 32) // self.grid.x)
+        mb, kb, nb, sh, sw = MM_ADD_NORM_CONFIGS[kind]
+        mb = max(d for d in range(1, mb + 1) if mpc % d == 0)
+        sh = max(d for d in range(1, sh + 1) if mb % d == 0)
+        gamma, inv_w, _eps = consts
+        return matmul_add_norm(
+            x,
+            w,
+            res,
+            (gamma, inv_w, self.one_tile),
+            eps=self.cfg.norm_eps,
+            block=(mb, kb, nb, sh, sw),
+            grid=self.grid,
+            fidelity=ttnn.MathFidelity.LoFi if kind in self.lofi_kinds else self.cfg.mm_fidelity,
+            y_dtype=y_dtype or self.cfg.norm_out_dtype,
+            memory_config=self._mem(rows, self.cfg.dim),
+            y_fidelity=MM_ADD_NORM_Y_FIDELITY,
+        )
 
     def _padding_mask(self, valid, S):
         """valid [B, 1, 32, S] (1 real / 0 pad) -> additive mask [B, 1, S, S]: 0 on real keys, MASK_NEG on padding."""
@@ -428,7 +461,25 @@ class NemotronReranker:
             memory_config=ttnn.L1_MEMORY_CONFIG if resid_l1 else ttnn.DRAM_MEMORY_CONFIG,
         )
         x = ttnn.reshape(x, [1, 1, B * S, self.cfg.dim])
-        if fused:
+        if fused and self.cfg.resident_residual:
+            # The residual stream stays in L1 (sharded like matmul_add_norm's grid); WO and FF2 add
+            # into it in place and write the following RMSNorm's output.
+            xn = self._norm(x, self.layers[0].attn_norm, self.cfg.norm_out_dtype)
+            res = to_resident(x, self.grid)
+            ttnn.deallocate(x)
+            for i, layer in enumerate(self.layers):
+                o = self._attention(layer, xn, B, S, mask, block_map, rope, wo=False)
+                ttnn.deallocate(xn)
+                h = self._mm_add_norm(o, layer.wo, res, layer.ffn_norm_consts, "wo")
+                ttnn.deallocate(o)
+                a = self._mlp(layer, h, ff2=False)
+                ttnn.deallocate(h)
+                last = i + 1 == len(self.layers)
+                nxt = self.final_norm_consts if last else self.layers[i + 1].attn_norm_consts
+                xn = self._mm_add_norm(a, layer.w2, res, nxt, "ff2", self.cfg.act_dtype if last else None)
+                ttnn.deallocate(a)
+            ttnn.deallocate(res)
+        elif fused:
             xn = self._norm(x, self.layers[0].attn_norm, self.cfg.norm_out_dtype)
             for i, layer in enumerate(self.layers):
                 a = self._attention(layer, xn, B, S, mask, block_map, rope)

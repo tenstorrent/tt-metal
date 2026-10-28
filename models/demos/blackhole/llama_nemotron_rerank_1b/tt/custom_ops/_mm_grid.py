@@ -108,7 +108,7 @@ def matmul_semaphores(core_set, extra=0):
     return [ttnn.SemaphoreDescriptor(id=i, core_ranges=core_set, initial_value=v) for i, v in enumerate(vals)]
 
 
-def in0_kernels(device, g: Grid, x_tensor, out_tensor):
+def in0_kernels(device, g: Grid, x_tensor, out_tensor, kernel=IN0_KERNEL):
     """The two in0 KernelDescriptors (senders on y = 0, receivers elsewhere); ``out_tensor`` only
     fills the accessor slot the stock kernel expects (it does not write when in1 is the writer)."""
     x_bytes = TILE_BYTES[x_tensor.dtype]
@@ -130,13 +130,14 @@ def in0_kernels(device, g: Grid, x_tensor, out_tensor):
 
     def kd(ct, rt, core_set):
         return ttnn.KernelDescriptor(
-            kernel_source=IN0_KERNEL,
+            kernel_source=kernel,
             source_type=ttnn.KernelDescriptor.SourceType.FILE_PATH,
             core_ranges=core_set,
             compile_time_args=ct,
             runtime_args=rt,
             defines=[],
             config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=IN0_NOC),
+            compiler_include_paths=[KERNEL_ROOT],
         )
 
     kernels = [kd(send_ct, send_rt, cores(0, 0, g.gx - 1, 0))]

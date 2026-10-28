@@ -57,6 +57,16 @@ QKV_ROPE_CONFIGS = {512: (2, 8, 2, 1, 2), 2048: (4, 8, 4, 1, 4), 4096: (8, 8, 4,
 QKV_ROPE_FIDELITY = "HiFi2"
 
 
+# matmul_add_norm blocks (M_block, K_block, N_block, subblock_h, subblock_w); M_block (and with it
+# subblock_h) is lowered to a divisor of the rows per core. N_block 7 = the 64 columns over 10 core
+# rows, so no padding column is computed. 16384 rows (perf_tools/probe_mm_add_norm.py): WO 681 us,
+# FF2 1353 us, against 1131 / 1547 us for the matmul plus fused_add_rmsnorm.
+MM_ADD_NORM_CONFIGS = {"wo": (4, 8, 7, 4, 1), "ff2": (4, 16, 7, 4, 1)}
+# Fidelity of matmul_add_norm's y multiplies (h * inv, * gamma). HiFi2 saves ~20 us per op but drops
+# MIRACL batch 32 Pearson 0.99965 -> 0.99947 (below the 0.9995 gate).
+MM_ADD_NORM_Y_FIDELITY = "HiFi4"
+
+
 def sdpa_chunks(batch, seq_len):
     """(q_chunk, k_chunk) per shape, from perf_tools/sweep_sdpa.py and probe_mask.py on a P150."""
     if seq_len <= 512:
@@ -162,6 +172,9 @@ class RerankConfig:
     residual_dtype: object = ttnn.bfloat16
     # Fused path: keep the residual stream in L1 (one buffer, updated in place by the fused add + norm).
     residual_l1: bool = False
+    # Fused path: residual stream resident in L1, sharded like matmul_add_norm's grid; WO and FF2 run
+    # as matmul_add_norm (matmul + residual add + RMSNorm in one program). Supersedes residual_l1.
+    resident_residual: bool = True
     # Up to this many rows RMSNorm runs block-sharded over an 8-wide grid (with the interleaved <-> sharded
     # conversions): stock rms_norm gives each core whole tile-rows, 16 cores at 512 rows.
     # perf_tools/probe_norm.py: 128 rows 33.7 -> 10.7 us, 512 rows 33.9 -> 18.3 us.

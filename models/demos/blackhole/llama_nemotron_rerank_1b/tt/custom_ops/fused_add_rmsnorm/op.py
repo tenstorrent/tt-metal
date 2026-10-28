@@ -63,6 +63,7 @@ def fused_add_rmsnorm(
     inplace=False,
     max_buffers=2,
     fidelity=ttnn.MathFidelity.HiFi4,
+    defines=(),
 ):
     """``a``, ``b``: ``[..., M, W]`` TILE interleaved. Returns ``(a + b, rmsnorm(a + b) * gamma)``.
 
@@ -159,6 +160,7 @@ def fused_add_rmsnorm(
             core_ranges=used_cores,
             compile_time_args=ct,
             runtime_args=rt,
+            defines=list(defines),
             config=config,
         )
 

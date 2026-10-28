@@ -39,6 +39,17 @@ void kernel_main() {
     ceps.wait_front(1);
 
     for (uint32_t r = 0; r < num_rows; ++r) {
+#ifdef DM_ONLY
+        ca.wait_front(Wt);
+        cbb.wait_front(Wt);
+        so.reserve_back(Wt);
+        no.reserve_back(Wt);
+        so.push_back(Wt);
+        no.push_back(Wt);
+        ca.pop_front(Wt);
+        cbb.pop_front(Wt);
+        continue;
+#endif
         ca.wait_front(Wt);
         cbb.wait_front(Wt);
         // sum = a + b -> residual output + working copy
