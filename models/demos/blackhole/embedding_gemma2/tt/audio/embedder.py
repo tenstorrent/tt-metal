@@ -19,6 +19,7 @@ from pathlib import Path
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.demos.blackhole.embedding_gemma2.tt.audio.config import AudioConfig
+from models.demos.blackhole.embedding_gemma2.tt.audio.linear import audio_linear
 from models.demos.blackhole.embedding_gemma2.tt.config import compute_kernel_config_hifi4
 from models.demos.blackhole.embedding_gemma2.tt.rms_norm import RMSNorm
 from models.demos.blackhole.embedding_gemma2.tt.weights import as_weight, linear_weight
@@ -48,7 +49,7 @@ class AudioOutputProj(LightweightModule):
         return cls(weight, bias)
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        return ttnn.linear(
+        return audio_linear(
             x,
             self.weight,
             bias=self.bias,
@@ -79,7 +80,7 @@ class AudioEmbedder(LightweightModule):
 
     def forward(self, hidden: ttnn.Tensor) -> ttnn.Tensor:
         n = self.norm(hidden)
-        out = ttnn.linear(
+        out = audio_linear(
             n,
             self.w_proj,
             dtype=ttnn.bfloat16,
