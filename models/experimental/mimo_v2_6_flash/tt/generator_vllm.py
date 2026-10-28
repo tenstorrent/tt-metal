@@ -852,7 +852,9 @@ class MiMoV2ForCausalLM:
             # A replayed later chunk goes first: a replay must not run while an eager pass's output of that lane is
             # alive (its own output is copied into the slot's persistent logits row, which a batch replay leaves be).
             model = self.models[lane]
-            traced = [g for g in rows_ if model.chunk_traced(g[0][2], g[0][3], g[0][4] - g[0][3])]
+            traced = [
+                g for g in rows_ if PREFILL_CHUNK_TRACE and model.chunk_traced(g[0][2], g[0][3], g[0][4] - g[0][3])
+            ]
             by_lane.append(traced + batches + [g for g in rows_ if not any(g is t for t in traced)])
         order = [passes[k] for k in range(max(map(len, by_lane))) for passes in by_lane if k < len(passes)]
         # Nothing chains onto a verify a prefill followed (the plugin builds the next decode from host state).
