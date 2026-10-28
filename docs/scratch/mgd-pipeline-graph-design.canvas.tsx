@@ -1068,10 +1068,10 @@ const PRS: Pr[] = [
       "tt_metal/api/tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp",
     ],
     steps: [
-      "Add messages PipelineDescriptor, PipelineStage, PipelineEdge; field 6 on MeshGraphDescriptor. Every edge is STRICT: PipelineEdge has optional Policy policy = 3, omitted or STRICT is accepted, and RELAXED is rejected by validation until P14.",
+      "Add messages PipelineDescriptor, PipelineStage, PipelineEdge; field 6 on MeshGraphDescriptor. Every edge is STRICT: PipelineEdge has optional Policy policy = 3, omitted or STRICT is accepted, and RELAXED is rejected by validation until P14. PipelineEdge also has bool loopback = 4, set on the edge that closes a cycle.",
       "Add validate_pipeline_descriptors to static_validate, after validate_pinnings.",
       "Add accessors has_pipeline_descriptors() and pipeline_descriptors().",
-      "Store each pipeline as PipelineDescriptorData (string stage ids, textproto order). The index-based PipelineGraph is built in Tier C (P8), with no loopback marking.",
+      "Store each pipeline as PipelineDescriptorData (string stage ids, textproto order). Each stored edge keeps its loopback mark. The index-based PipelineGraph is built in Tier C (P8).",
     ],
     code: [
       {
@@ -1103,6 +1103,7 @@ const PRS: Pr[] = [
 +    string src = 1;
 +    string dst = 2;
 +    optional Policy policy = 3;  // omitted or STRICT; RELAXED is rejected until P14
++    bool loopback = 4;           // closes a cycle; the other edges must have none
 +}`,
       },
       {
@@ -1143,6 +1144,10 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
                 errors.push_back(fmt::format("pipeline '{}': self-edge on '{}'", p.name(), e.src()));
             }
         }
+        // The edges not marked loopback must have no cycle (a depth-first walk names the first one):
+        //   "pipeline '{}': cycle {} has no loopback edge; mark one of its edges loopback: true"
+        // and each loopback edge must close one, dst reaching src over the other edges:
+        //   "pipeline '{}': loopback edge {} -> {} closes no cycle; {} does not reach {} over the other edges"
         // NOTE: no stage-topology check. In-degree, out-degree, number of roots, and whether a
         // branch is a chain are all accepted.
     }
@@ -1152,6 +1157,7 @@ void validate_pipeline_descriptors(const proto::MeshGraphDescriptor& proto, std:
     tests: [
       "Golden textprotos: GPT-OSS ring, llama_8b_pod (40 stages), joint 4x4 stage, dflash fork with both returns on fabric, two pipelines in one MGD.",
       "One negative textproto per rule (duplicate id, unknown stage, self-edge, rank-3 shape, two pipelines with one name). Two in-degree-0 stages, a stage with three outgoing edges, a branch stage with out-degree 2, and a dead-end branch all parse. An edge with policy: STRICT parses; policy: RELAXED is rejected.",
+      "Loopback: a ring with no loopback edge, a fork with one unmarked return, and a loopback edge that closes no cycle are rejected. A loopback on any edge of the cycle (repeated, too) parses, and the mark is stored. Every ring and fork above marks its closing edges.",
       "Every existing MGD in tt_metal/fabric/mesh_graph_descriptors still parses unchanged.",
     ],
     behaviour: "No behaviour change without the new section.",
@@ -1483,7 +1489,7 @@ std::vector<tt::tt_metal::ExitNodeConnection> inter_mesh_cables(
       "tools/scaleout/src/generate_rank_bindings.cpp",
     ],
     steps: [
-      "Conversion (moved here from P1): build_pipeline_graphs turns pipeline_descriptors() into PipelineGraph, with stage and edge indices. It marks no loopbacks; the resolver call marks one edge per cycle (4.2).",
+      "Conversion (moved here from P1): build_pipeline_graphs turns pipeline_descriptors() into PipelineGraph, with stage and edge indices. Each edge keeps the MGD's loopback mark, which the resolver call passes as is_loopback (4.2).",
       "Input: TopologyMappingConfig::pipelines (std::vector<PipelineGraph>); empty means off. TopologyMapper fills it with build_pipeline_graphs(mesh_graph_.get_mesh_graph_descriptor()) unless the kill switch is set; generate_rank_bindings fills it from the merged parts.",
       "Tier C sits beside Tier B in pipeline_builder.cpp: two entry points in pipeline_builder.hpp's detail namespace, build_pipeline_problem and check_pipeline_seating, with the pre-checks and R recording as file-local helpers. The header forward-declares PipelineProblem, PlacedMesh, TopologyMappingResult and PhysicalSystemDescriptor, so the ttnn and nanobind files that include it pull in no mapper or solver headers.",
       "The enumerator constructor merges config.pipelines into one PipelineProblem (detail::build_pipeline_problem), held as unique_ptr<const PipelineProblem> beside placement_session_. The vector of descriptor records becomes one target graph: global stage indices, one component per pipeline, no edges between pipelines, chip counts and core demand, and each stage's binding set (computed here; Tier B stores none). One footprint solve places every component.",
@@ -2268,6 +2274,8 @@ rank_bindings:
 +    // STRICT: the edge rides a fabric link. RELAXED: fabric where the placement
 +    // allows, otherwise host MPI. INVALID_POLICY is rejected.
      optional Policy policy = 3;
+
+     bool loopback = 4;
  }`,
       },
       {
@@ -2283,20 +2291,24 @@ rank_bindings:
              }
 
  // populate_pipeline_descriptors:
--            record.edges.push_back(PipelineDescriptorData::Edge{.src = edge.src(), .dst = edge.dst()});
+-            record.edges.push_back(
+-                PipelineDescriptorData::Edge{.src = edge.src(), .dst = edge.dst(), .loopback = edge.loopback()});
 +            record.edges.push_back(PipelineDescriptorData::Edge{
 +                .src = edge.src(),
 +                .dst = edge.dst(),
++                .loopback = edge.loopback(),
 +                .relaxed = edge.has_policy() && edge.policy() == proto::Policy::RELAXED});
 
  // mesh_graph_descriptor.hpp (proto::Policy is only forward-declared there, so a bool):
--// Edges stay directional pairs of stage ids. Omitted and explicit STRICT both survive
--// validation, so a stored edge has no policy of its own.
-+// Edges stay directional pairs of stage ids. relaxed is policy: RELAXED; omitted is STRICT.
+-// Edges stay directional pairs of stage ids, each with its loopback mark. Omitted and explicit
+-// STRICT both survive validation, so a stored edge has no policy of its own.
++// Edges stay directional pairs of stage ids, each with its loopback mark. relaxed is
++// policy: RELAXED; omitted is STRICT.
  struct PipelineDescriptorData {
      struct Edge {
          std::string src;
          std::string dst;
+         bool loopback = false;  // closes a cycle; the other edges have none
 +        bool relaxed = false;
      };`,
       },
@@ -2309,6 +2321,7 @@ rank_bindings:
  struct PipelineEdgeSpec {
      std::size_t src = 0;
      std::size_t dst = 0;
+     bool loopback = false;       // loopback: true in the MGD
 +    bool relaxed = false;        // policy: RELAXED in the MGD
 +    // STRICT, or RELAXED out of stage 0: blaze's host-cut planner never cuts that
 +    // (_group_walk skips cuts at stage 0). The one rule Tier B, Plan 1 and (P11) Tier C all read.
@@ -2316,8 +2329,10 @@ rank_bindings:
  };
 
  // pipeline_graph.cpp, convert_pipeline
--        graph.edges.push_back(PipelineEdgeSpec{.src = src->second, .dst = dst->second});
-+        graph.edges.push_back(PipelineEdgeSpec{.src = src->second, .dst = dst->second, .relaxed = edge.relaxed});
+-        graph.edges.push_back(
+-            PipelineEdgeSpec{.src = src->second, .dst = dst->second, .loopback = edge.loopback});
++        graph.edges.push_back(PipelineEdgeSpec{
++            .src = src->second, .dst = dst->second, .loopback = edge.loopback, .relaxed = edge.relaxed});
      }
 
 +    for (PipelineEdgeSpec& edge : graph.edges) {
@@ -3113,9 +3128,12 @@ function DescriptorExamples() {
         rows={[
           ["mixed4", "pass", "ids unique, edges name declared stages, out-degree 1 everywhere, one cycle (s3 > s0 is the loopback)"],
           ["pod8", "pass", "a ring of 8; loopback s7 > s0"],
+          ["mixed4 with s3 > s0 not marked loopback", "reject", "the cycle s0 > s1 > s2 > s3 > s0 has no loopback edge"],
+          ["mixed4 with s1 > s2 marked loopback instead", "pass", "any edge of the cycle may be the loopback"],
+          ["a chain s0 > s1 marked loopback", "reject", "the loopback closes no cycle"],
           ["mixed4 + edge s1 > s1", "reject", "self-edge"],
           ["mixed4 with s0 > s1 repeated", "pass", "two channels on that hop; the builder reads one link per edge"],
-          ["dflash: router > target0..37 > router, router > draft0..10 > router", "pass", "ids unique, edges name declared stages, shapes positive"],
+          ["dflash: router > target0..37 > router, router > draft0..10 > router, both returns loopback", "pass", "ids unique, edges name declared stages, shapes positive, each cycle has its loopback"],
           ["s0 > s1, s0 > s2, s1 > s0; s2 has no out-edge", "pass", "a branch may dead-end; Tier A does not limit stage topology"],
           ["a stage with three outgoing branches", "pass", "Tier A does not limit stage topology"],
           ["a branch stage with out-degree 2", "pass", "Tier A does not limit stage topology"],
@@ -4131,7 +4149,7 @@ stages { id: "s8" shape { dims: [ 1, 2 ] } }
 edges { src: "s0" dst: "s1" }                    # STRICT
 edges { src: "s1" dst: "s2" }                    # STRICT
 edges { src: "s2" dst: "s3" }                    # STRICT
-edges { src: "s3" dst: "s0" policy: RELAXED }    # may go over host`}
+edges { src: "s3" dst: "s0" policy: RELAXED loopback: true }   # may go over host`}
           />
           <Table
             headers={["Step", "STRICT edge", "RELAXED edge"]}
@@ -4191,12 +4209,14 @@ edges { src: "s3" dst: "s0" policy: RELAXED }    # may go over host`}
           rows={[
             ["Stage ids unique and non-empty; edges name real stages", 'edges { src: "s0" dst: "s9" } with no s9'],
             ["No self-edges", 'edges { src: "s0" dst: "s0" }'],
+            ["The edges not marked loopback have no cycle", 'edges s0 > s1 and s1 > s0, neither marked loopback'],
+            ["Each loopback edge closes a cycle", 'only edges { src: "s0" dst: "s1" loopback: true }'],
             ["Shapes rank 2, dims > 0", "shape { dims: [ 4, 2, 1 ] }"],
             ["Pipeline names unique and non-empty; each pipeline is checked on its own", "two pipelines both named mixed4"],
           ]}
         />
         <Text size="small" tone="tertiary">
-          Repeating an edge declares a second channel on that hop. The ring needs no loopback marker: s3 to s0 is the loopback.
+          Repeating an edge declares a second channel on that hop. The edge that closes a ring is marked loopback: true, as in s3 to s0; a fork marks each return.
           Every edge is STRICT in the first version. RELAXED (later): any edge may be RELAXED; Tier A will not restrict where.
         </Text>
         <Callout tone="info" title="NOTE: Tier A does not limit stage topology">
@@ -4373,7 +4393,7 @@ function MapperTab() {
           headers={["Resolver argument", "What C2 builds for the chosen rectangles", "Rule it enforces"]}
           rows={[
             ["nodes", "every stage name, isolated stages included", "every edge endpoint listed, no duplicates"],
-            ["edges", "(src, dst, is_loopback); C2 marks one edge per cycle here; nothing upstream stores it", "non-loopback edges form a DAG"],
+            ["edges", "(src, dst, is_loopback); is_loopback is the MGD edge's loopback mark, checked by Tier A", "non-loopback edges form a DAG"],
             ["submesh_chips", "per rectangle: (mesh_id, chip_id, row, col)", "(row, col) slot-local, from the rectangle's own origin"],
             ["node_chip_counts", "rows x cols of each stage's shape", "forces each stage onto its own rectangle"],
             ["node_pipeline_core_counts", "blaze's _pipeline_core_defaults, or empty", "empty: 1 slot per chip on 8+ chips, 2 on smaller"],
