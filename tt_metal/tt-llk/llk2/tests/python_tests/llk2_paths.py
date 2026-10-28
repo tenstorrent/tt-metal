@@ -1,0 +1,34 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+"""Where the LLK 2.0 tests find their drivers and headers."""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from helpers.chip_architecture import ChipArchitecture
+from helpers.test_config import TestConfig
+
+LLK2_ROOT = Path(__file__).resolve().parents[2]  # tt-llk/llk2
+
+_ARCH_DIR = {
+    ChipArchitecture.BLACKHOLE: "blackhole",
+    ChipArchitecture.WORMHOLE: "wormhole_b0",
+    ChipArchitecture.QUASAR: "quasar",
+}
+
+
+def cpp_source(name: str) -> str:
+    """Absolute driver path, so the harness never resolves it from tests/sources/."""
+    path = LLK2_ROOT / "tests" / "sources" / name
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    return str(path)
+
+
+def include_dirs() -> list[str]:
+    """inc/common plus the arch's folder, for TestConfig(include_dirs=...)."""
+    return [
+        str(LLK2_ROOT / "inc" / "common"),
+        str(LLK2_ROOT / "inc" / _ARCH_DIR[TestConfig.CHIP_ARCH]),
+    ]
