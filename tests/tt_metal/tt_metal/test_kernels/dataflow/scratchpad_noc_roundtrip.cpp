@@ -26,6 +26,7 @@
 #include "api/dataflow/dataflow_api.h"
 #include "api/dataflow/endpoints.h"
 #include "experimental/kernel_args.h"
+#include "internal/local_mem/address_access.h"
 
 // Must match the host-side constants in metal2_host_api/integration_tests/scratchpad_fast_dispatch.cpp.
 constexpr uint32_t kOffsetBytes = 32;
@@ -81,5 +82,6 @@ void kernel_main() {
     // Report where the framework put the scratchpad, so the host can inspect its L1 directly. A plain
     // volatile L1 write is host-visible via ReadFromDeviceL1 after the (blocking) enqueue completes.
     volatile tt_l1_ptr uint32_t* report = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(report_addr);
-    report[0] = pad.get_base_address();
+    // Raw address: the base is reported to the host for comparison.
+    report[0] = static_cast<uint32_t>(local_mem::detail::AddressAccess::address(pad.local_mem()));
 }

@@ -9,6 +9,14 @@
 namespace hal::cfg::detail
 {
 
+/**
+ * @brief Report an invalid descriptor-table index and trap without returning.
+ *
+ * LLK_ASSERT supplies the diagnostic when enabled. The unconditional trap also
+ * prevents invalid indices from being accepted during constant evaluation.
+ *
+ * @tparam T: Result type of the surrounding lookup, allowing use in its conditional expression.
+ */
 template <typename T>
 [[noreturn]] inline T invalid_index()
 {

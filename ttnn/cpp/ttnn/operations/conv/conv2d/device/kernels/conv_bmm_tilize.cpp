@@ -61,8 +61,8 @@ void tilize_in(
         reconfig_mode>(in_num_subblocks);
 }  // tilize_in()
 
-template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id>
-inline void tilize_single_block(DataflowBuffer in_dfb) {
+template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id, typename DFBIn>
+inline void tilize_single_block(DFBIn in_dfb) {
     in_dfb.wait_front(in_block_w);
     fast_tilize_block(in_cb_id, in_block_w, out_cb_id);
     in_dfb.pop_front(in_block_w);
@@ -74,8 +74,8 @@ inline uint32_t update_in_cb(uint32_t in_cb_addr) {
     return in_cb_addr + window_reuse_offset;
 }
 
-template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id, uint32_t tilized_cb_row_offset>
-inline void tilize_single_block_with_out_cb_update(DataflowBuffer in_dfb, uint32_t& out_cb_addr) {
+template <uint32_t in_cb_id, uint32_t in_block_w, uint32_t out_cb_id, uint32_t tilized_cb_row_offset, typename DFBIn>
+inline void tilize_single_block_with_out_cb_update(DFBIn in_dfb, uint32_t& out_cb_addr) {
     PACK((get_local_cb_interface(out_cb_id).fifo_wr_ptr = out_cb_addr));
     PACK((out_cb_addr += tilized_cb_row_offset));
     tilize_single_block<in_cb_id, in_block_w, out_cb_id>(in_dfb);
@@ -92,11 +92,14 @@ template <
     uint32_t window_reuse_offset,
     uint32_t tilized_cb_row_offset,
     uint32_t tilized_cb_second_reader_offset,
-    uint32_t image_width_in_tiles>
+    uint32_t image_width_in_tiles,
+    typename DFBIn1,
+    typename DFBIn2,
+    typename DFBOut>
 inline void tilize_in_reuse_split_reader(
-    DataflowBuffer in1_dfb,
-    DataflowBuffer in2_dfb,
-    DataflowBuffer out_dfb,
+    DFBIn1 in1_dfb,
+    DFBIn2 in2_dfb,
+    DFBOut out_dfb,
     uint32_t act_cb_start_address,
     uint32_t act_cb_second_reader_start_address) {
     // with activation reuse, the activation buffers are sized to fit one output image width only,
@@ -167,10 +170,10 @@ inline void tilize_in_reuse_split_reader(
     fast_tilize_uninit(in2_cb_id, out_cb_id, in_block_w);
 }
 
-template <uint32_t out_subblock_w, uint32_t out_block_w>
+template <uint32_t out_subblock_w, uint32_t out_block_w, typename DFBInterm, typename DFBOut>
 inline void reblock_and_untilize(
-    DataflowBuffer interm_dfb,
-    DataflowBuffer out_dfb,
+    DFBInterm interm_dfb,
+    DFBOut out_dfb,
     uint32_t num_out_subblocks_in_col,
     uint32_t out_subblock_num_tiles,
     uint32_t out_subblock_h) {
@@ -476,8 +479,7 @@ void kernel_main() {
                         }
 #endif
                         tile_regs_commit();
-                        DataflowBuffer curr_out_dfb =
-                            curr_matmul_out_cb == matmul_partials_cb ? dfb_matmul_partials : dfb_mm_out;
+                        auto curr_out_dfb = curr_matmul_out_cb == matmul_partials_cb ? dfb_matmul_partials : dfb_mm_out;
                         curr_out_dfb.reserve_back(out_subblock_num_tiles);
                         tile_regs_wait();
 

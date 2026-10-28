@@ -82,6 +82,9 @@ jobs:
       matrix:
         test-group: ${{ fromJson(inputs.matrix) }}
     runs-on: ${{ matrix.test-group.runs_on }}
+    # SC4 container initialization provisions remote worker pods and counts against
+    # the job timeout. Two days; other supercluster configs keep the six-hour default.
+    timeout-minutes: ${{ startsWith(matrix.test-group.sku, 'bh_sc4') && 2880 || 360 }}
     outputs:
       test-result: ${{ steps.run-test.outcome }}
     steps:

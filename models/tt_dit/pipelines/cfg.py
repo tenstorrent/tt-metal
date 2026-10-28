@@ -155,23 +155,25 @@ def _create_sockets(device0: ttnn.MeshDevice, device1: ttnn.MeshDevice) -> tuple
     return _SocketPair(tx_0to1, rx_0to1), _SocketPair(tx_1to0, rx_1to0)
 
 
+def submesh_shape(parallel_config: DiTParallelConfig, *, dims: int = 2) -> ttnn.MeshShape:
+    """Return the shape of the cfg-parallel submeshes (sp x tp)."""
+    shape = [1] * dims
+    shape[parallel_config.sequence_parallel.mesh_axis] *= parallel_config.sequence_parallel.factor
+    shape[parallel_config.tensor_parallel.mesh_axis] *= parallel_config.tensor_parallel.factor
+    return ttnn.MeshShape(*shape)
+
+
 def create_submeshes(
     device: ttnn.MeshDevice, parallel_config: DiTParallelConfig
 ) -> tuple[ttnn.MeshDevice] | tuple[ttnn.MeshDevice, ttnn.MeshDevice]:
     """Slice the mesh into cfg-parallel submeshes sized for tensor and sequence parallelism."""
-    tp = parallel_config.tensor_parallel
-    sp = parallel_config.sequence_parallel
     cp = parallel_config.cfg_parallel
 
     if cp.factor not in (1, 2):
         msg = "cfg parallel factor must be 1 or 2"
         raise ValueError(msg)
 
-    submesh_shape = [1] * device.shape.dims()
-    submesh_shape[sp.mesh_axis] *= sp.factor
-    submesh_shape[tp.mesh_axis] *= tp.factor
-
-    devices = device.create_submeshes(ttnn.MeshShape(*submesh_shape))
+    devices = device.create_submeshes(submesh_shape(parallel_config, dims=device.shape.dims()))
     if len(devices) < cp.factor:
         msg = f"not enough submeshes created: expected {cp.factor}, got {len(devices)}"
         raise ValueError(msg)

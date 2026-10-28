@@ -113,7 +113,7 @@ uint32_t arg_value(const KernelSpec::CompileTimeArgs& args, const std::string& n
         ADD_FAILURE() << "compute kernel has no compile-time arg " << name;
         return 0;
     }
-    return it->second;
+    return it->second.to_uint32();
 }
 
 class MorehMeanBackwardProgramSpecFixture : public TTNNFixtureWithSuiteDevice<MorehMeanBackwardProgramSpecFixture> {};

@@ -10,12 +10,22 @@
 #include "api/tensor/noc_traits.h"
 #include "api/dataflow/endpoints.h"
 #include "experimental/kernel_args.h"
+#include "mask_padded_tile.hpp"
 
 #include <cstdint>
 
 void kernel_main() {
     constexpr auto dfb_max_scaler = dfb::max_scaler;
     constexpr auto dfb_sum_scaler = dfb::sum_scaler;
+
+#ifdef MASK_PADDED_DATA
+    // The last dimension is not a multiple of the tile width: the compute adds this -inf tile to the last tile of
+    // every row so the padding columns stay out of the row max and sum.
+    constexpr std::uint32_t num_datum_padded = get_arg(args::num_datum_padded);
+    constexpr std::uint32_t tile_hw = get_arg(args::tile_hw);
+    DataflowBuffer dfb_mask_padded_obj(dfb::mask_padded);
+    push_mask_padded_tile<num_datum_padded, tile_hw>(dfb_mask_padded_obj);
+#endif
 
 #ifdef FUSED_SCALE_MASK
     constexpr std::uint32_t block_wt = get_arg(args::block_w);

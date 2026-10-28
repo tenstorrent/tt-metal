@@ -4,8 +4,7 @@
 
 #include "mla_kv_assemble_bw_device_operation.hpp"
 
-#include <enchantum/enchantum.hpp>
-
+#include "metal/common/tensor_validation.hpp"
 #include "mla_kv_assemble_bw_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 
@@ -15,34 +14,10 @@ void MLAKVAssembleBwDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     using namespace tt::constants;
 
-    auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
-        TT_FATAL(
-            tensor.storage_type() == ttnn::StorageType::DEVICE,
-            "MLAKVAssembleBw requires {} to be on device. Got storage type: {}",
-            name,
-            enchantum::to_string(tensor.storage_type()));
-        TT_FATAL(tensor.buffer() != nullptr, "MLAKVAssembleBw: {} buffer must be allocated.", name);
-        TT_FATAL(
-            tensor.layout() == tt::tt_metal::Layout::TILE,
-            "MLAKVAssembleBw requires {} to be in TILE layout. Got: {}",
-            name,
-            enchantum::to_string(tensor.layout()));
-        TT_FATAL(
-            tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
-            "MLAKVAssembleBw requires {} dtype to be BFLOAT16. Got: {}",
-            name,
-            enchantum::to_string(tensor.dtype()));
-        TT_FATAL(
-            tensor.memory_config().memory_layout() == tt::tt_metal::TensorMemoryLayout::INTERLEAVED,
-            "MLAKVAssembleBw requires {} memory layout to be INTERLEAVED. Got: {}",
-            name,
-            enchantum::to_string(tensor.memory_config().memory_layout()));
-    };
-
     const auto& dK = tensor_args.dK;
     const auto& dV = tensor_args.dV;
-    check_tensor(dK, "dK");
-    check_tensor(dV, "dV");
+    check_device_tensor(dK, "MLAKVAssembleBw", "dK");
+    check_device_tensor(dV, "MLAKVAssembleBw", "dV");
 
     TT_FATAL(dK.device() == dV.device(), "MLAKVAssembleBw: dK and dV must be on the same device.");
 

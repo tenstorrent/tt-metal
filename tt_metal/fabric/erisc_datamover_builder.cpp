@@ -12,6 +12,7 @@
 #include "erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_interface.hpp"
 #include "tt_metal/fabric/builder/fabric_stream_assignment.hpp"
+#include "impl/streaming_profiler/sync/link_sync.hpp"
 #include "tt_metal/hw/inc/hostdev/fabric_edm_packet_header.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/telemetry/code_profiling_types.hpp"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_trimming_types.hpp"
@@ -40,7 +41,7 @@
 #include "core_coord.hpp"
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/types/core_coordinates.hpp>
+#include <tt-umd/types/core_coordinates.hpp>
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
 
@@ -371,6 +372,10 @@ FabricEriscDatamoverConfig::FabricEriscDatamoverConfig(const FabricContext& fabr
 
     // Channel Allocations
     this->max_l1_loading_size = erisc_l1_unreserved_size + erisc_l1_unreserved_base;
+    if (rtoptions.get_streaming_profiler_enabled()) {
+        this->max_l1_loading_size =
+            tt::tt_metal::streaming_profiler::link_sync::router_l1_limit(fabric_context, this->max_l1_loading_size);
+    }
     auto buffer_region_start = (buffer_address + buffer_alignment) & ~(buffer_alignment - 1);  // Align
     auto available_channel_buffering_space = max_l1_loading_size - buffer_region_start;
     this->available_buffer_memory_regions.emplace_back(buffer_region_start, available_channel_buffering_space);
@@ -1217,6 +1222,30 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
             static_cast<uint32_t>(this->is_receiver_channel_serviced_[risc_id][i]);
     }
 
+    // --- Downstream connection open gates (trimming-aware) ---
+    // Receiver 0 services VC0 downstreams. For VC1 the consuming receiver depends on the VC1 mode:
+    // crossover routers (inter-mesh full-mesh) forward into the VC1 downstream array from receiver
+    // 0's crossover step (their VC1 receiver step is compiled out), while VC1-serviced routers
+    // consume it from receiver 1. Gating VC1 opens on receiver 1 unconditionally breaks crossover
+    // routers once trimming legitimately clears their (always-idle) receiver 1.
+    {
+        const auto& intermesh_config = builder_context.get_intermesh_vc_config();
+        const bool vc0_crossover_to_vc1 = intermesh_config.vc0_crossover_to_vc1_for(this->is_inter_mesh);
+        const bool vc1_serviced = intermesh_config.vc1_serviced_for(this->is_inter_mesh);
+        const bool open_vc0_downstreams = this->is_receiver_channel_serviced_[risc_id][0];
+        const bool open_vc1_downstreams = (vc0_crossover_to_vc1 && this->is_receiver_channel_serviced_[risc_id][0]) ||
+                                          (vc1_serviced && this->is_receiver_channel_serviced_[risc_id][1]);
+        named_args["OPEN_DOWNSTREAM_VC0_CONNECTIONS"] = static_cast<uint32_t>(open_vc0_downstreams);
+        named_args["OPEN_DOWNSTREAM_VC1_CONNECTIONS"] = static_cast<uint32_t>(open_vc1_downstreams);
+    }
+
+    // --- Structural per-RISC role flags (untrimmed — do NOT gate on trimming) ---
+    // Used for role obligations (e.g. TXQ1 init) where "which RISC" is a structural property of the
+    // 2-erisc split, not a workload property that trimming may change.
+    named_args["RISC_SERVICES_SENDER_CHANNELS"] = static_cast<uint32_t>(should_risc_service_sender_channels(config.arch, config.num_riscv_cores, risc_id));
+    named_args["RISC_SERVICES_RECEIVER_CHANNELS"] =
+        static_cast<uint32_t>(should_risc_service_receiver_channels(config.arch, config.num_riscv_cores, risc_id));
+
     // --- RISC configuration ---
     named_args["ENABLE_ETHERNET_HANDSHAKE"] = config.risc_configs[risc_id].enable_handshake();
     named_args["ENABLE_CONTEXT_SWITCH"] = config.risc_configs[risc_id].enable_context_switch();
@@ -1270,10 +1299,17 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
                                       : 0;
     }
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
+        // Gate the bringup wait on trimming: a trimmed sender channel is never stepped, so it must
+        // not wait for its upstream receiver to open the connection (a fully-trimmed receiver never
+        // opens). Safe because a serviced static sender implies its upstream receiver forwarded
+        // during capture and is therefore still serviced.
+        // (Kernel-side gating exists only in the multi-TXQ branch of wait_for_static_connection_to_ready;
+        // the common non-multi-TXQ branch intentionally has no serviced gate.)
         named_args[fmt::format("SENDER_CH_{}_WAIT_STATIC_CONNECTION", i)] =
-            (i < num_sender_channels)
-                ? static_cast<uint32_t>(this->sender_channel_connection_liveness_check_disable_array[i])
-                : 0;
+            (i < num_sender_channels) ? static_cast<uint32_t>(
+                                            this->sender_channel_connection_liveness_check_disable_array[i] &&
+                                            this->is_sender_channel_serviced_[risc_id][i])
+                                      : 0;
     }
     for (size_t i = 0; i < builder_config::num_max_sender_channels; i++) {
         named_args[fmt::format("SENDER_CH_{}_IS_INJECTION", i)] =
@@ -1317,6 +1353,11 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
 
     // --- Telemetry ---
     get_telemetry_compile_time_args(risc_id, named_args);
+
+    if (this->fabric_context_.get_rtoptions().get_streaming_profiler_enabled()) {
+        tt::tt_metal::streaming_profiler::link_sync::add_router_compile_args(
+            this->fabric_context_, risc_id, this->local_fabric_node_id, this->my_eth_core_logical, named_args);
+    }
 
     // Addresses are emitted unconditionally because the regions are now always reserved, so the
     // compile-time selection above cannot disagree with the L1 map.

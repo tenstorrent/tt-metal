@@ -26,7 +26,9 @@
 #define DEBUG_PRINT 0
 using namespace ckernel;
 
-static void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
+namespace {
+
+void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
     compute_kernel_hw_startup(dfb_id, dfb_id);
     copy_init(dfb_id);
 
@@ -57,6 +59,8 @@ static void generate_rand_tile(const uint32_t dfb_id, const uint32_t seed) {
 
     dfb_obj.push_back(1);
 }
+
+}  // namespace
 
 template <uint32_t in0_dfb, uint32_t in1_dfb, uint32_t rows, uint32_t cols>
 void sub_exp_block_bcast_cols_inplace() {
@@ -98,7 +102,9 @@ void sub_exp_block_bcast_cols_inplace() {
     }
 }
 
-static void add_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
+namespace {
+
+void add_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_tiles) {
     // Precondition: in0_cb and in1_cb have num_tiles produced
     // Postcondition: in0_cb has num_tiles produced
     // Postcondition: in1_cb has num_tiles produced
@@ -126,7 +132,7 @@ static void add_block_inplace(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t num_t
     }
 }
 
-static void mul_block_bcast_cols(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t rows, uint32_t cols) {
+void mul_block_bcast_cols(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t out_dfb, uint32_t rows, uint32_t cols) {
     // Precondition: in0_cb has rows*cols produced
     // Precondition: in1_cb has rows produced
     // Postcondition: in0_cb has rows*cols produced
@@ -159,7 +165,7 @@ static void mul_block_bcast_cols(uint32_t in0_dfb, uint32_t in1_dfb, uint32_t ou
     in1_dfb_obj.pop_front(static_cast<uint16_t>(rows));
 }
 
-static void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
+void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
     // Precondition: in_cb has num_tiles produced
     // Postcondition: in_cb has num_tiles produced
     DataflowBuffer in_dfb_obj(static_cast<uint16_t>(in_dfb));
@@ -185,6 +191,8 @@ static void recip_block_inplace(uint32_t in_dfb, uint32_t num_tiles) {
     }
 }
 
+}  // namespace
+
 template <
     PoolType pool_type,
     ReduceDim reduce_dim,
@@ -205,7 +213,6 @@ void reduce_c() {
         compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop,
         compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
         compute_kernel_lib::ReduceInputBlockShape::of(rows, cols));
-    UNPACK(tensix_sync());  // Workaround for issue #9370
 }
 
 template <
@@ -275,7 +282,7 @@ void top_k() {
                 DST_ACCUM_MODE,
                 /*fused=*/false,
                 /*rank_stamped=*/false,
-                ckernel::TopkTieOrder::Descending>(0, (int)ascending, logk - 1);
+                ckernel::TopkTieOrder::Descending>(0, static_cast<int>(ascending), logk - 1);
 
             tile_regs_commit();
 
@@ -329,14 +336,15 @@ void top_k() {
                     DST_ACCUM_MODE,
                     /*fused=*/false,
                     /*rank_stamped=*/false,
-                    ckernel::TopkTieOrder::Descending>(0, m_iter, K);
+                    ckernel::TopkTieOrder::Descending>(0, static_cast<int>(m_iter), K);
                 // sort within the larger 32 values
                 ckernel::topk_rebuild<
                     stable_sort,
                     DST_ACCUM_MODE,
                     /*fused=*/false,
                     /*rank_stamped=*/false,
-                    ckernel::TopkTieOrder::Descending>(0, (uint32_t)a, m_iter, K, logk, true);
+                    ckernel::TopkTieOrder::Descending>(
+                    0, static_cast<uint32_t>(a), static_cast<int>(m_iter), K, logk, true);
 
                 tile_regs_commit();
                 tile_regs_wait();

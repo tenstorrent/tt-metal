@@ -6,80 +6,33 @@
 
 #include <cstdint>
 #include <optional>
+#include <vector>
 
 #include "moe_compute_device_operation_types.hpp"
 #include "ttnn/operations/experimental/ccl/moe/selective_reduce_combine/device/selective_reduce_combine_program_factory.hpp"
 
-#include "ttnn/device_operation.hpp"
+#include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/workload_descriptor.hpp>
 
 namespace ttnn::experimental::prim {
 
 struct MoEComputeMeshWorkloadFactory {
-    struct shared_variables_t {
-        // Tilize kernel handles
-        std::vector<tt::tt_metal::KernelHandle> tilize_kernel_handles;
+    using operation_attributes_t = MoEComputeParams;
+    using tensor_args_t = MoEComputeInputs;
+    using tensor_return_value_t = std::vector<ttnn::Tensor>;
 
-        // Tilize cores
-        std::vector<CoreCoord> tilize_cores;
-
-        // Matmul kernel handles
-        std::vector<tt::tt_metal::KernelHandle> matmul_kernel_handles;
-
-        // Matmul cores
-        std::vector<CoreCoord> matmul_cores;
-
-        // CB handle for tensor backed indices tensor
-        tt::tt_metal::CBHandle indices_cb_handle;
-
-        // CB handle for tensor backed scores tensor
-        tt::tt_metal::CBHandle scores_cb_handle;
-
-        // CB handle for shared global sharded tensor
-        tt::tt_metal::CBHandle sharded_output_cb_handle;
-
-        // CB handle for matmul output
-        tt::tt_metal::CBHandle matmul_writer_cb_handle;
-
-        // Combine kernel handles (empty in ComputeOnly mode)
-        std::vector<tt::tt_metal::KernelHandle> combine_kernel_handles;
-
-        // CB handle for combine global sharded input tensor (default-constructed in ComputeOnly)
-        tt::tt_metal::CBHandle combine_data_cb_handle;
-
-        // CB handle for token counts per expert
-        tt::tt_metal::CBHandle expert_tokens_cb_handle;
-
-        // Combine cores (empty in ComputeOnly mode)
-        std::vector<CoreCoord> combine_cores;
-
-        // Combine global semaphores (empty in ComputeOnly mode)
-        std::vector<GlobalSemaphore> combine_global_semaphores;
-
-        // Path used to build this workload (FullCcl/FullLocal = combine kernels built; ComputeOnly = bypassed).
-        MoEComputePath path = MoEComputePath::FullCcl;
-    };
-    using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-    static cached_mesh_workload_t create_mesh_workload(
-        const MoEComputeParams& args,
-        const ttnn::MeshCoordinateRangeSet& mesh_coordinates,
-        const MoEComputeInputs& tensor_args,
-        std::vector<ttnn::Tensor>& tensor_return_value);
-
-    static ttnn::device_operation::CachedProgram<shared_variables_t> create_at(
-        const MoEComputeParams& args,
-        const ttnn::MeshCoordinate& mesh_coordinate,
-        const MoEComputeInputs& tensor_args,
-        std::vector<ttnn::Tensor>& tensor_return_value,
-        const ttnn::MeshCoordinateRangeSet& mesh_coordinates,
-        const std::optional<GlobalSemaphore>& init_barrier_semaphore,
-        const std::optional<GlobalSemaphore>& final_barrier_semaphore);
+    static tt::tt_metal::WorkloadDescriptor create_workload_descriptor(
+        const operation_attributes_t& args,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value,
+        const ttnn::MeshCoordinateRangeSet& tensor_coords);
 
     static void override_runtime_arguments(
-        cached_mesh_workload_t& cached_workload,
-        const MoEComputeParams& args,
-        const MoEComputeInputs& tensor_args,
-        std::vector<ttnn::Tensor>& tensor_return_value);
+        tt::tt_metal::Program& program,
+        const operation_attributes_t& args,
+        const tensor_args_t& tensor_args,
+        tensor_return_value_t& tensor_return_value,
+        const std::optional<ttnn::MeshCoordinate>& coord = std::nullopt);
 };
 
 std::vector<ttnn::CoreCoord> get_moe_combine_cores(

@@ -9,7 +9,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_numeric_metrics
-from models.common.utility_functions import run_for_blackhole, run_for_wormhole_b0_or_blackhole
+from tt_py_test_utils_common.utility_functions import run_for_blackhole, run_for_wormhole_b0_or_blackhole
 from tests.ttnn.unit_tests.operations.fused.test_layer_norm import assert_output_accuracy, create_recip_tensor
 
 pytestmark = pytest.mark.use_module_device

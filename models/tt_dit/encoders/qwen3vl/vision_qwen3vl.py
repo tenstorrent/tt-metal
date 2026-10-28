@@ -25,6 +25,7 @@ Two things about this tower differ from the text encoder in `model_qwen3vl.py`:
 from __future__ import annotations
 
 import math
+from pathlib import Path
 from typing import TYPE_CHECKING, NamedTuple
 
 import torch
@@ -922,10 +923,26 @@ class Qwen3VlVisionPatchMerger(Module):
             raise ValueError(msg)
 
         if self.use_postshuffle_norm:
-            x = self.norm.forward(ttnn.reshape(x, (-1, self.merged_size)))
+            x = self.norm.forward(_reshape_tiled_rows(x, (-1, self.merged_size)))
         else:
-            x = ttnn.reshape(self.norm.forward(x), (-1, self.merged_size))
+            x = _reshape_tiled_rows(self.norm.forward(x), (-1, self.merged_size))
         return _row_parallel_forward(self.linear_fc2, ttnn.gelu(self.linear_fc1.forward(x)), self._p)
+
+
+def _reshape_tiled_rows(x: ttnn.Tensor, shape: tuple[int, ...]) -> ttnn.Tensor:
+    """`ttnn.reshape` for a TILE tensor whose row count changes, without the op's per-shape residue.
+
+    `ttnn.reshape` on a tiled tensor that folds rows into columns (the merge groups here) goes through
+    `reshape_tiled`, which leaves a buffer of half the tensor's size allocated per distinct shape for the
+    life of the cached program. The row-major round trip is a plain view between two layout conversions.
+    """
+    rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    view = ttnn.reshape(rm, shape)
+    out = ttnn.to_layout(view, ttnn.TILE_LAYOUT)
+    ttnn.deallocate(rm)
+    if view.is_allocated():
+        ttnn.deallocate(view)
+    return out
 
 
 class Qwen3VlVisionModel(Module):
@@ -937,7 +954,8 @@ class Qwen3VlVisionModel(Module):
 
     The position table is kept on the host rather than the device: interpolating it is a pure function
     of `grid_thw` and the table, so `prepare_pos_embeds` settles it with host arithmetic and the result
-    is uploaded, as with the rotary tensors.
+    is uploaded, as with the rotary tensors. Being no `Parameter`, it is saved to and loaded from the
+    weight cache next to them by `save` and `load`.
     """
 
     def __init__(
@@ -1024,6 +1042,17 @@ class Qwen3VlVisionModel(Module):
         weight = state.pop("pos_embed.weight", None)
         if weight is not None:
             self._pos_embed_weight = weight.detach().float()
+
+    def save(self, directory: str | Path, /, *, prefix: str = "") -> None:
+        if self._pos_embed_weight is None:
+            msg = "pos_embed weight is unavailable; call load_torch_state_dict first"
+            raise ValueError(msg)
+        super().save(directory, prefix=prefix)
+        torch.save(self._pos_embed_weight, Path(directory) / f"{prefix}pos_embed.weight.pt")
+
+    def load(self, directory: str | Path, /, *, prefix: str = "") -> None:
+        super().load(directory, prefix=prefix)
+        self._pos_embed_weight = torch.load(Path(directory) / f"{prefix}pos_embed.weight.pt")
 
     def prepare_pos_embeds(self, grid_thw: torch.Tensor) -> torch.Tensor:
         """The `(total_patches, hidden_size)` interpolated position embedding, on the host."""

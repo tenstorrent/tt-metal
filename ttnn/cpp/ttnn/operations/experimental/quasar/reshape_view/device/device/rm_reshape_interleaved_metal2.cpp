@@ -52,8 +52,8 @@ void kernel_main() {
     // replace the legacy cb_in0/cb_in1 single-kernel scratch CBs (which would be Gen2 self-loops).
     Scratchpad<uint8_t> src_stage(scratch::src_stage);
     Scratchpad<uint8_t> dst_stage(scratch::dst_stage);
-    const uint32_t source_buffer = src_stage.get_base_address();
-    const uint32_t dest_buffer = dst_stage.get_base_address();
+    const auto source_buffer = src_stage.local_mem();
+    const auto dest_buffer = dst_stage.local_mem();
 
     uint32_t read_offset = 0;
     uint32_t write_page = write_start_page;
@@ -79,9 +79,11 @@ void kernel_main() {
                 noc, src_noc_addr & MASK_64, source_buffer, source_read_size_bytes);
             read_offset = src_noc_addr & OFFSET_64;
         } else {  // L1 but not aligned to 16
-            tt::data_movement::common::enhanced_noc_async_read<(source_page_size_bytes + 128), false>(
-                noc, src_noc_addr & MASK_16, source_buffer, source_read_size_bytes);
+            // Read only the page (plus its sub-16B lead-in): the DRAM-sized source_read_size_bytes
+            // over-reads ~128 B past the page, which runs off the end of L1 for a top-of-L1 page.
             read_offset = src_noc_addr & OFFSET_16;
+            tt::data_movement::common::enhanced_noc_async_read<(source_page_size_bytes + 128), false>(
+                noc, src_noc_addr & MASK_16, source_buffer, source_page_size_bytes + read_offset);
         }
 
         readable = source_page_size_bytes;

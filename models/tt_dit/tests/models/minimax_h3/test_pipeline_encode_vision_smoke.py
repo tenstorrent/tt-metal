@@ -11,6 +11,8 @@ import pytest
 import torch
 from PIL import Image
 
+import ttnn
+
 from ....pipelines.minimax_h3.packing import MINIMAX_H3_CANVAS_MULTIPLE
 from ....pipelines.minimax_h3.pipeline_minimax_h3 import MiniMaxH3Pipeline
 from ....pipelines.minimax_h3.policy import decodable_canvases
@@ -36,16 +38,23 @@ def test_encode_prompt_vision_sp_tower(mesh_device, num_keyframes):
     keyframes = [_noise_image(seed) for seed in range(num_keyframes)]
     embeds, tags = pipeline.encode_prompt(PROMPT, keyframes=keyframes)
 
-    assert embeds.ndim == 3 and embeds.shape[-1] == 5120, f"unexpected embeds shape {tuple(embeds.shape)}"
-    assert embeds.shape[1] == tags.shape[0], f"embeds seq {embeds.shape[1]} != tags {tags.shape[0]}"
-    assert torch.isfinite(embeds).all(), "prompt embeds contain NaN or Inf"
-    assert embeds.shape[1] > num_keyframes * 1008, "presentation is missing the vision rows"
+    # The embeds stay on device as [1, seq_len, 5120] with seq_len padded up to the SP alignment bucket the
+    # presentation lands in; every device's shard must be finite.
+    alignment = pipeline.sp_factor * ttnn.TILE_SIZE
+    shape = tuple(embeds.shape)
+    assert len(shape) == 3 and shape[-1] == 5120, f"unexpected embeds shape {shape}"
+    expected_seq = -(-tags.shape[0] // alignment) * alignment
+    assert shape[1] == expected_seq, f"embeds seq {shape[1]} != {tags.shape[0]} tags padded to {expected_seq}"
+    for index, shard in enumerate(ttnn.get_device_tensors(embeds)):
+        assert torch.isfinite(ttnn.to_torch(shard)).all(), f"prompt embeds contain NaN or Inf on device {index}"
+    assert shape[1] > num_keyframes * 1008, "presentation is missing the vision rows"
 
 
 @pytest.mark.timeout(3600)
 @pytest.mark.parametrize(("mesh_device", "device_params"), GALAXY_MESHES, indirect=["mesh_device", "device_params"])
 def test_encode_prompt_vision_ring_shares_kv_pair(mesh_device):
-    """Two single-keyframe canvases with distinct SP-aligned patch counts both take the tower's ring SDPA."""
+    """Two single-keyframe canvases with distinct SP-aligned patch counts both take the tower's ring SDPA and
+    share one K/V ping-pong pair while they encode; `encode_prompt` then leaves no pair behind."""
     pipeline = MiniMaxH3Pipeline.create_pipeline(mesh_device=mesh_device, weights_dir=weights_dir(), warmup=False)
     assert pipeline.sp_factor > 1, "this smoke exists to exercise the SP tower; the mesh has no SP axis"
 
@@ -58,11 +67,24 @@ def test_encode_prompt_vision_ring_shares_kv_pair(mesh_device):
     assert len(by_patches) >= 2, f"need two SP-aligned keyframe canvases at alignment {alignment}"
     canvases = [by_patches[patches] for patches in sorted(by_patches)[:2]]
 
-    for height, width in canvases:
-        pipeline.encode_prompt(PROMPT, keyframes=[Image.new("RGB", (width, height), (127, 127, 127))])
+    manager = pipeline.encoder_ccl_manager
 
-    head_dim = pipeline._vision_tower.blocks[0].attn.padded_head_dim
-    tower_pairs = [
-        key for key in pipeline.encoder_ccl_manager._ping_pong_buffer_cache if key[0] == "ag" and key[1][-1] == head_dim
-    ]
-    assert len(tower_pairs) == 1, f"canvases {canvases} pinned {len(tower_pairs)} tower K/V pairs: {tower_pairs}"
+    def tower_pairs():
+        # The tower is built on the first encode, so read its head dim only once an encode has run.
+        head_dim = pipeline._vision_tower.blocks[0].attn.padded_head_dim
+        return [key for key in manager._ping_pong_buffer_cache if key[0] == "ag" and key[1][-1] == head_dim]
+
+    # The pair is keyed by the tower's gather shape, not by the canvas, so both encodes reuse the one pair.
+    # `encode_prompt` frees its pairs on return, so run the encode body under one scope of our own to look.
+    with manager.transient_ping_pong_buffers():
+        for height, width in canvases:
+            pipeline._encode_prompt_device(PROMPT, keyframes=[Image.new("RGB", (width, height), (127, 127, 127))])
+        assert (
+            len(tower_pairs()) == 1
+        ), f"canvases {canvases} pinned {len(tower_pairs())} tower K/V pairs: {tower_pairs()}"
+    assert not tower_pairs(), f"the transient scope left tower K/V pairs behind: {tower_pairs()}"
+
+    # The public entry point owns the same scope: the pair must not outlive the call.
+    height, width = canvases[0]
+    pipeline.encode_prompt(PROMPT, keyframes=[Image.new("RGB", (width, height), (127, 127, 127))])
+    assert not tower_pairs(), f"encode_prompt left tower K/V pairs behind: {tower_pairs()}"

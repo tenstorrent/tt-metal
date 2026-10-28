@@ -1629,6 +1629,7 @@ ENV_PASSTHROUGH_PREFIXES = (
     "ARCH_",  # Architecture variables (e.g., ARCH_NAME)
     "WH_",  # Wormhole-specific variables (e.g., WH_ARCH_YAML)
     "TTNN_",  # TTNN-specific variables (e.g., TTNN_CONFIG_OVERRIDES)
+    "RELIABILITY_MODE",  # Fabric reliability mode: the one rtoptions env var without a TT_ prefix
     "DEEPSEEK_",  # DeepSeek model vars (e.g., DEEPSEEK_V3_HF_MODEL, DEEPSEEK_V3_CACHE)
     "MESH_",  # Mesh config (e.g., MESH_DEVICE)
 )
@@ -1660,6 +1661,8 @@ ENV_BLOCKLIST = frozenset(
         "TT_RUN_SUBCONTEXT_SIZES",
         "TT_METAL_MOCK_CLUSTER_DESC_PATH",  # Mock cluster path for testing
         "TT_METAL_FACTORY_SYSTEM_DESCRIPTOR_PATH",  # FSD path - set from --factory-system-descriptor, not parent env
+        # Cluster id is the phase-1 PSD hostname, written into rank-binding env_overrides.
+        "TT_METAL_CLUSTER_ID",
         # Should only come from rank binding env_overrides
         "TT_VISIBLE_DEVICES",  # Per-rank device visibility - must be set via rank bindings
     }
@@ -1780,7 +1783,8 @@ def get_rank_environment(
     # Apply environment variables with expansion and proper precedence
     # Global environment variables first
     env.update({k: os.path.expandvars(v) for k, v in config.global_env.items()})
-    # Rank-specific overrides last (higher precedence)
+    # Rank-specific overrides last (higher precedence). TT_METAL_CLUSTER_ID arrives here from the
+    # phase-1 rank binding; a value exported in the parent environment is on ENV_BLOCKLIST.
     env.update({k: os.path.expandvars(v) for k, v in binding.env_overrides.items()})
 
     if extra_env:

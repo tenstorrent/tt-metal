@@ -14,6 +14,7 @@
 
 #include "hal_types.hpp"
 #include "noc_debugging_fixture.hpp"
+#include "distributed/mesh_device_impl.hpp"
 
 using namespace tt;
 using namespace tt::tt_metal;
@@ -364,6 +365,13 @@ void RunSemaphoreIncMulticastTest(
         EXPECT_TRUE(has_issue) << "Without atomic barrier, should have unflushed multicast semaphore issue at device "
                                << device_id << " core " << sender_core_virtual.str();
     }
+
+    // Only BRISC runs here. When the suite runs in order, this core's NCRISC recorded unflushed semaphore increments
+    // in SemaphoreIncWriteBarrierDoesNotFlush, and those events are still in its L1 profiler buffer. BRISC must not
+    // push them again, which relies on init_profiler clearing every RISC's DEVICE_BUFFER_END_INDEX.
+    EXPECT_FALSE(fixture->has_unflushed_semaphore_issue(device_id, sender_core_virtual, NCRISC_PROCESSOR_ID))
+        << "NCRISC does not run in this program, yet an issue was reported for it at device " << device_id << " core "
+        << sender_core_virtual.str();
 }
 
 // Every core issues repeated inline dword writes (4-byte immediate value, no L1 source buffer) to one destination
@@ -1142,7 +1150,7 @@ TEST_F(NOCDebuggingFixture, IncrementalProcessingFastCycle) {
     // covering every device, not just the one this test runs on -- see ScopedDebugDumpTuning.
     std::vector<tt::tt_metal::IDevice*> all_devices;
     for (const auto& md : this->devices_) {
-        for (auto* d : md->get_devices()) {
+        for (auto* d : md->impl().get_devices()) {
             all_devices.push_back(d);
         }
     }
@@ -1174,10 +1182,16 @@ TEST_F(NOCDebuggingFixture, IncrementalProcessingFastCycle) {
 
             // NO user read: only the background thread drains, processes, reports and discharges.
             run_stress_write_program(fixture, mesh_device, writes, /*read_after=*/false, wait_iters, burst);
-            // Let the last full-read pass land after the kernel finished.
-            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            // Let the full-read passes after the kernel land. Wait for them rather than a fixed time: on Blackhole a
+            // pass that finds new data reads the whole profiler DRAM buffer over MMIO (no DMA), which takes ~0.5 s.
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+            auto summary = noc_debug_state->get_state_summary();
+            while ((summary.issues == 0 || summary.pending_events >= writes / 2) &&
+                   std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                summary = noc_debug_state->get_state_summary();
+            }
 
-            const auto summary = noc_debug_state->get_state_summary();
             const size_t markers = total_device_marker_count(device_id);
             log_info(
                 tt::LogMetal,

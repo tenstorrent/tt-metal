@@ -581,10 +581,11 @@ ttnn::device_operation::ProgramArtifacts LayerNormMultiCoreProgramFactory::creat
 
     const bool compact_fp32_finalizer = selected_plan.compact_fp32_finalizer;
     const bool compact_fp32_pre_add = compact_fp32_finalizer && b.has_value();
+    // The large-tensor reader reads gamma/beta as whole tiles, so row-major gamma/beta (32-wide pages) would be
+    // misread as tiles and silently give wrong results. TILE gamma/beta work with both input layouts.
     TT_FATAL(
-        !large_tensor_needed || !use_row_major_kernel || input_is_row_major,
-        "The LayerNorm large-tensor reader and compute kernel do not support row-major affine tensors with tiled "
-        "input");
+        !large_tensor_needed || !use_row_major_kernel,
+        "The LayerNorm large-tensor path does not support row-major gamma/beta; pass gamma/beta in TILE layout");
 
     // When the input is ROW_MAJOR and float32, the in-flight tilize_block path requires
     // fp32_dest_acc_en=True. Without it, UNPACK's SRCA register file is 16-bit and

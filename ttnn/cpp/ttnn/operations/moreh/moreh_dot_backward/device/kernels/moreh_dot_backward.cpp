@@ -16,6 +16,10 @@ void kernel_main() {
     const auto per_core_block_cnt = get_arg(args::per_core_block_cnt);
 
     DataflowBuffer dfb_c0(dfb::in0);
+    DataflowBuffer dfb_in1(dfb::in1);
+    DataflowBuffer dfb_in2(dfb::in2);
+    DataflowBuffer dfb_out0(dfb::out0);
+    DataflowBuffer dfb_out1(dfb::out1);
 
     compute_kernel_hw_startup(dfb::in2, dfb::in0, dfb::out0);
     dfb_c0.wait_front(onetile);
@@ -34,7 +38,7 @@ void kernel_main() {
                     dfb::out0,
                     ckl::ReservePolicy::PerTile,
                     ckl::PushPolicy::PerTile,
-                    ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::tiles(onetile));
+                    ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::tiles(onetile), dfb_in2, dfb_c0, dfb_out0);
         }
 
         if (has_other_grad) {
@@ -51,7 +55,7 @@ void kernel_main() {
                     dfb::out1,
                     ckl::ReservePolicy::PerTile,
                     ckl::PushPolicy::PerTile,
-                    ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::tiles(onetile));
+                    ckl::DataFormatReconfig::Disabled)>(ckl::IterationShape::tiles(onetile), dfb_in1, dfb_c0, dfb_out1);
         }
     }
 }

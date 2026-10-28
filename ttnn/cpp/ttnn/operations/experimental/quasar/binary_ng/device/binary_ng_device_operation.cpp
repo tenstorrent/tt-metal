@@ -252,6 +252,24 @@ void BinaryNgDeviceOperation::validate_on_program_cache_miss(
             "If both output dtype and output tensor provided dtype should match");
     }
 
+    // MX is unpacked to and packed from Float16_b, so pairing it with an integer dtype needs a numeric cast on top,
+    // and no factory wires one: MX -> Int32 packs Float16_b bits as Int32, and other pairs fail deep in the stack.
+    {
+        const DataType a_dtype = input_tensor_a.dtype();
+        const std::optional<DataType> b_dtype =
+            input_tensor_b.has_value() ? std::optional<DataType>(input_tensor_b->dtype()) : std::nullopt;
+        const DataType output_dtype = output_tensor.has_value() ? output_tensor->dtype() : attributes.get_dtype();
+        const bool has_mx = is_mx(a_dtype) || (b_dtype.has_value() && is_mx(*b_dtype)) || is_mx(output_dtype);
+        const bool has_integer = !is_floating_point(a_dtype) || (b_dtype.has_value() && !is_floating_point(*b_dtype)) ||
+                                 !is_floating_point(output_dtype);
+        TT_FATAL(
+            !(has_mx && has_integer),
+            "MX/integer conversions are not supported yet (a: {}, b: {}, output: {}); convert through bfloat16 first",
+            a_dtype,
+            b_dtype.has_value() ? fmt::format("{}", *b_dtype) : std::string("scalar"),
+            output_dtype);
+    }
+
     TT_FATAL(
         input_tensor_a.layout() == Layout::TILE || input_tensor_a.layout() == Layout::ROW_MAJOR,
         "First operand to eltwise binary must have TILE or ROW_MAJOR layout, got {}",
@@ -391,6 +409,14 @@ BinaryNgDeviceOperation::spec_return_value_t BinaryNgDeviceOperation::compute_ou
             shape,
             output_shape);
         return output_tensor->tensor_spec();
+    }
+
+    // An ND_SHARDED config is_sharded() with an empty shard_spec(), but its nd_shard_spec applies to any shape
+    // as is, so keep it instead of treating the missing legacy spec as unspecified and dereferencing it below.
+    if (attributes.memory_config.is_sharded() && !attributes.memory_config.shard_spec().has_value() &&
+        attributes.memory_config.nd_shard_spec().has_value()) {
+        return tt::tt_metal::TensorSpec(
+            output_shape, TensorLayout(output_dtype, PageConfig(attributes.output_layout), attributes.memory_config));
     }
 
     if (attributes.memory_config.is_sharded()) {
@@ -638,17 +664,18 @@ bool BinaryNgDeviceOperation::matches_metal_v2_slice(
 
 bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
-    // Narrower than matches_metal_v2_slice in op, dtype and broadcast, but it also admits DRAM shards.
-    // kernels_qsr/ holds only the four no-broadcast FPU sources, so every rejection below is also a
-    // precondition of create_no_bcast_artifacts.
-    const NativeTuning& tuning = native_tuning();
-    // Cheapest possible check first: this predicate runs on EVERY dispatch, cache hits included.
-    if (!tuning.enabled) {
-        return false;
-    }
+    // Narrower than matches_metal_v2_slice in op, dtype and broadcast, but it also admits DRAM shards. The broadcast
+    // and tensor-scalar rejections are also preconditions of create_no_bcast_artifacts, which asserts them. The others
+    // keep the slice to what has been validated on Quasar.
+    // Cheap checks first: this predicate runs on EVERY dispatch, cache hits included. The arch goes before
+    // native_tuning(), so that off Quasar the knobs are never parsed and the settings line is never logged.
     const auto& a = tensor_args.input_tensor_a;
     // device()->arch(), not the host arch-name helper: that returns "invalid" under the simulator.
     if (a.device()->arch() != tt::ARCH::QUASAR) {
+        return false;
+    }
+    const NativeTuning& tuning = native_tuning();
+    if (!tuning.enabled) {
         return false;
     }
     // MUST precede every input_tensor_b dereference below.
@@ -661,27 +688,39 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     if (attributes.is_where_op || attributes.is_quant_op) {
         return false;
     }
-    // Implied by bf16 ADD, but asserted: the gate is the sole guarantor of the factory's precondition.
-    if (attributes.is_sfpu) {
-        return false;
-    }
     if (attributes.subtile_broadcast_type != SubtileBroadcastType::NONE) {
         return false;
     }
-    if (attributes.binary_op_type != BinaryOpType::ADD) {
+    // In bf16, add and subtract run the FPU kernel, multiply and divide run the SFPU kernel, and multiply runs the FPU
+    // kernel in fast and approximate mode. In fp32 all four run the SFPU kernel. The SFPU kernel runs no other op here:
+    // each needs its own validation on Quasar.
+    const BinaryOpType op_type = attributes.binary_op_type;
+    if (op_type != BinaryOpType::ADD && op_type != BinaryOpType::SUB && op_type != BinaryOpType::MUL &&
+        op_type != BinaryOpType::DIV) {
         return false;
     }
-    // Each activation adds a self-loop DFB whose multi-thread behaviour is unproven.
-    if (!attributes.lhs_activations.empty() || !attributes.rhs_activations.empty() ||
-        !attributes.post_activations.empty()) {
+    // a and b in one format, bf16 or fp32; the output's format is checked below. Mixed formats are not validated on
+    // Quasar.
+    const DataType dtype = a.dtype();
+    if ((dtype != DataType::BFLOAT16 && dtype != DataType::FLOAT32) || b.dtype() != dtype) {
+        return false;
+    }
+    // Implied by the format, but checked, so that a routing change falls back instead of running untested: fp32 runs
+    // only the SFPU kernel, and bf16 runs add and subtract only on the FPU kernel.
+    const bool fp32 = dtype == DataType::FLOAT32;
+    if (fp32 && !attributes.is_sfpu) {
+        return false;
+    }
+    if (!fp32 && attributes.is_sfpu && op_type != BinaryOpType::MUL && op_type != BinaryOpType::DIV) {
+        return false;
+    }
+    // Divide in fast and approximate mode, a reciprocal pass on b before an FPU multiply, is not validated on Quasar.
+    if (!attributes.is_sfpu && op_type == BinaryOpType::DIV) {
         return false;
     }
     // Attributes, not tensor.layout(): output_layout has no tensor when none was supplied.
     if (attributes.input_layout_a != Layout::TILE || attributes.input_layout_b != Layout::TILE ||
         attributes.output_layout != Layout::TILE) {
-        return false;
-    }
-    if (a.dtype() != DataType::BFLOAT16 || b.dtype() != DataType::BFLOAT16) {
         return false;
     }
     const auto& a_tile = a.tensor_spec().tile();
@@ -696,7 +735,7 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
 
     // is_binary_sfpu_op sees only the INPUT dtypes, so add(bf16, bf16, dtype=float32) reaches here with
     // is_sfpu false. data_type(), not dtype(), on TensorSpec.
-    if (out_spec.data_type() != DataType::BFLOAT16) {
+    if (out_spec.data_type() != dtype) {
         return false;
     }
     // get_shard_volumes counts every operand's shard in the output's tiles, so those must be 32x32 too.
@@ -709,36 +748,16 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     if (a.padded_shape() != b.padded_shape() || a.padded_shape() != out_spec.padded_shape()) {
         return false;
     }
-    // An L1 shard runs here only when all three operands are L1 shards with one memory config, which the
-    // factory borrows; beside any other placement it stays on the fallback. Without an L1 shard each operand
-    // is interleaved or a DRAM shard: the factory borrows L1-interleaved slices when it can, else uses the NoC.
-    // out_spec is the supplied output tensor's spec when one is given.
-    const auto is_l1_shard = [](const tt::tt_metal::MemoryConfig& mc) {
-        return mc.is_sharded() && mc.buffer_type() == BufferType::L1;
+    // Each operand on its own is interleaved (L1 or DRAM), an L1 shard or a DRAM shard with a 2D spec, in any
+    // mix. The factory borrows each operand that sits in its anchor, an L1 shard config or the L1 banks, and
+    // moves the rest over the NoC through each operand's sharding-aware TensorAccessor. out_spec is the supplied
+    // output tensor's spec when one is given.
+    const auto placement_ok = [](const tt::tt_metal::MemoryConfig& mc) {
+        return CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(mc) || CMAKE_UNIQUE_NAMESPACE::noc_operand_ok(mc);
     };
-    const bool any_l1_shard =
-        is_l1_shard(a.memory_config()) || is_l1_shard(b.memory_config()) || is_l1_shard(out_spec.memory_config());
-    if (any_l1_shard) {
-        // Any shard tile count is admitted: the factory keeps the compute count and moves the tiles that do
-        // not divide by it through small owned rings.
-        if (!CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(a.memory_config()) ||
-            !CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(b.memory_config()) ||
-            !CMAKE_UNIQUE_NAMESPACE::sharded_operand_ok(out_spec.memory_config())) {
-            return false;
-        }
-        // Reports all three volumes only for one memory config (is_native_L1_sharding).
-        const auto shard_volumes = get_shard_volumes(a.tensor_spec(), b.tensor_spec(), out_spec);
-        if (!shard_volumes.has_value() || !shard_volumes->a_shard_volume.has_value() ||
-            !shard_volumes->b_shard_volume.has_value() || !shard_volumes->c_shard_volume.has_value()) {
-            return false;
-        }
-    } else {
-        const bool all_noc_operands = CMAKE_UNIQUE_NAMESPACE::noc_operand_ok(a.memory_config()) &&
-                                      CMAKE_UNIQUE_NAMESPACE::noc_operand_ok(b.memory_config()) &&
-                                      CMAKE_UNIQUE_NAMESPACE::noc_operand_ok(out_spec.memory_config());
-        if (!all_noc_operands) {
-            return false;
-        }
+    if (!placement_ok(a.memory_config()) || !placement_ok(b.memory_config()) ||
+        !placement_ok(out_spec.memory_config())) {
+        return false;
     }
 
     // A zero-volume output has no work to place, and an empty worker grid has nowhere to place it.
@@ -748,16 +767,18 @@ bool BinaryNgDeviceOperation::matches_quasar_native_slice(
     if (out_spec.padded_shape().volume() == 0 || attributes.worker_grid.num_cores() == 0) {
         return false;
     }
-    // Mirrors dataflow_buffer.cpp's two directional STRIDED asserts; reject rather than trip them.
+    // Mirrors dataflow_buffer.cpp's two directional STRIDED asserts; reject rather than trip them. The counts
+    // are the NoC path's, the most DM threads a program runs. The rule's values always pass, so only a set R or
+    // W beside the compute count can fail.
+    const NativeConfig noc = resolve_native_config(tuning, {.inputs = true, .output = true});
     const auto ratio_ok = [](uint32_t p, uint32_t c) { return std::max(p, c) % std::min(p, c) == 0; };
-    return ratio_ok(tuning.reader_threads, tuning.compute_threads) &&
-           ratio_ok(tuning.compute_threads, tuning.writer_threads);
+    return ratio_ok(noc.reader_threads, noc.compute_threads) && ratio_ok(noc.compute_threads, noc.writer_threads);
 }
 
 BinaryNgDeviceOperation::program_factory_t BinaryNgDeviceOperation::select_program_factory(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     // Order matters for the hot path: this runs on EVERY dispatch, cache hits included, and the native
-    // gate's first check is a cached bool that is false unless TTNN_QSR_NATIVE is set.
+    // gate's first checks are the arch and a cached bool, false when TTNN_QSR_NATIVE=0.
     if (matches_quasar_native_slice(attributes, tensor_args)) {
         return ProgramFactoryQuasarNative{};
     }

@@ -8,6 +8,7 @@ from fuser.block_data import BlockData
 from fuser.fpu_node import FpuNode
 from fuser.fuser_config import GlobalConfig
 from fuser.l1_operation import L1Operation
+from fuser.quasar.fpu.common import fidelity_source_formats
 
 from .matmul import MatmulFpu
 
@@ -24,7 +25,13 @@ class MatmulNoMopFpu(MatmulFpu):
         block: BlockData,
     ) -> str:
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
-        return f"_llk_math_matmul_init_no_mop_<{math_fidelity}>({block.block_cols}, {block.block_rows});\n"
+        src_a_format, src_b_format = fidelity_source_formats(
+            config, operation, compute_unit
+        )
+        return (
+            f"_llk_math_matmul_init_no_mop_<{math_fidelity}>"
+            f"({src_a_format}, {src_b_format}, {block.block_cols}, {block.block_rows});\n"
+        )
 
     def calculate(
         self,
@@ -34,6 +41,9 @@ class MatmulNoMopFpu(MatmulFpu):
         block: BlockData,
     ) -> str:
         math_fidelity = compute_unit.math_fidelity.cpp_enum_value
+        src_a_format, src_b_format = fidelity_source_formats(
+            config, operation, compute_unit
+        )
         kt_dim = (
             compute_unit.src_a.dimensions[1]
             // compute_unit.src_a.tile_shape.total_col_dim()
@@ -41,6 +51,7 @@ class MatmulNoMopFpu(MatmulFpu):
         return (
             f"for (std::uint32_t kt = 0; kt < {kt_dim}; kt++)\n"
             f"{{\n"
-            f"    _llk_math_matmul_block_no_mop_<{math_fidelity}>({block.block_cols}, {block.block_rows});\n"
+            f"    _llk_math_matmul_block_no_mop_<{math_fidelity}>"
+            f"({src_a_format}, {src_b_format}, {block.block_cols}, {block.block_rows});\n"
             f"}}\n"
         )

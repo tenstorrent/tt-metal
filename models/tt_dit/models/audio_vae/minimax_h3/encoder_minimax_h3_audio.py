@@ -39,7 +39,7 @@ import torch
 import ttnn
 
 from ....layers.audio_ops import DEFAULT_MAX_C_IN_BLOCK, Snake, _AlignedOutConv1d, _all_gather_t
-from ....layers.module import Module, ModuleList
+from ....layers.module import Module, ModuleList, release_device_cache
 from ....layers.normalization import LayerNorm
 from ....parallel.config import ParallelFactor
 from ....parallel.manager import CCLManager
@@ -173,6 +173,11 @@ class MiniMaxH3AudioEncoderBlock(Module):
             ]
         )
 
+    def deallocate_weights(self) -> None:
+        super().deallocate_weights()
+        # Eviction must take the lazily cached device constants with the weights (see `release_device_cache`).
+        release_device_cache(self._tail_mask_cache)
+
     def forward(self, x_BTC: ttnn.Tensor, *, tail_rows: int = 0) -> ttnn.Tensor:
         """``tail_rows`` > 0 marks trailing T-shard alignment pad rows, re-zeroed after each conv."""
         expected_out = x_BTC.shape[1] // self.stride
@@ -229,6 +234,11 @@ class MiniMaxH3AudioDACEncoder(Module):
         self.mesh_device = mesh_device
         self.parallel_config = parallel_config
         self._tail_mask_cache: dict = {}
+
+    def deallocate_weights(self) -> None:
+        super().deallocate_weights()
+        # Eviction must take the lazily cached device constants with the weights (see `release_device_cache`).
+        release_device_cache(self._tail_mask_cache)
 
     def forward(self, x_BTC: ttnn.Tensor, *, tail_rows: int = 0) -> ttnn.Tensor:
         """``tail_rows`` marks trailing T-shard alignment pad; see the block forward's docstring."""

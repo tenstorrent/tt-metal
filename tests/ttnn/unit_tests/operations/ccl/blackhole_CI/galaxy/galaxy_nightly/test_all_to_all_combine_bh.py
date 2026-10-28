@@ -5,7 +5,7 @@
 import pytest
 
 import ttnn
-from models.common.utility_functions import (
+from tt_py_test_utils_common.utility_functions import (
     skip_for_wormhole_b0,
     skip_for_n_or_less_dev,
 )

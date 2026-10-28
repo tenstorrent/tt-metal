@@ -22,6 +22,10 @@
     # every tt_transformers e2e leg depends on. See #45400.
     pytest --timeout 120 models/tt_transformers/tests/test_warm_cache_marker.py
     pytest --timeout 60 models/tt_transformers/tests/test_decode_output_rows.py
+    pytest --timeout 60 models/tt_transformers/tests/test_generator_logprobs_single_device.py
+    pytest --timeout 60 models/tt_transformers/tests/test_batched_prefill_slots.py
+    pytest --timeout 300 models/tt_transformers/tests/test_batched_prefill_extract.py
+    pytest --timeout 60 models/tt_transformers/tests/test_accuracy_precision_family.py
     pytest --timeout 300 models/tt_transformers/tests/test_load_state_dict_layers.py
     pytest --timeout 300 models/tt_transformers/tests/test_traced_prefill_rope_slice.py
     pytest --timeout 300 models/tt_transformers/tests/test_embedding.py
@@ -216,15 +220,18 @@
     # the tests kept here are host-only (monkeypatched, no device), so 120 s is ample.
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_decode_bucketing.py -k "test_bucket_warmup_compiles_all_widths_before_capture or test_bucket_trace_teardown_releases_all_stores or test_condense_remaps_gdn_before_decode_in_both_sampling_modes or test_decode_warmup_stages_every_width_before_capture or test_decode_warmup_restages_when_num_blocks_changes or test_prefill_warmup_prepares_eagerly_and_only_records_when_traced or test_prefill_prepare_is_idempotent_and_record_requires_it"
     TT_METAL_TRACE_ALLOC_TRACKING=1 pytest --timeout 900 models/demos/blackhole/qwen36/tests/test_decode_bucketing.py -k "test_vllm_warmup_leaves_no_late_allocations"
-    # MTP speculative decode (unit-test coverage only until batch>1 lands; e2e runs plain decode).
+    # MTP speculative decode, single-user and batched (B <= 8); unit-test coverage, e2e runs plain decode.
     # QWEN36_SPEC_TEST_N_LAYERS=8: lossless/determinism hold on a truncated model, and the 8 layers are
     # already in the tensor cache from test_model_tp, so no 64-layer load happens in this leg.
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_spec_sampling_math.py
+    pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_spec_batch_helpers.py
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mtp_torch_ref.py
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_fused_recurrent_gdn.py -k "not perf and not (no_initial_state and (blackhole-1 or blackhole-2))"
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_mtp_tp.py
     QWEN36_SPEC_TEST_N_LAYERS=8 pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_spec_lossless.py
     QWEN36_SPEC_TEST_N_LAYERS=8 pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_spec_determinism.py -k "not (test_spec_decode_is_deterministic and 128)"
+    # Batched spec decode at B=8, K=3 (all 32 verify rows): lossless vs plain, determinism, traced == eager.
+    QWEN36_SPEC_TEST_N_LAYERS=8 pytest --timeout 600 models/demos/blackhole/qwen36/tests/test_spec_batched.py -k "test_spec_batched_lossless and 8"
     pytest --timeout 120 models/demos/blackhole/qwen36/tests/test_patch_merger.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_vision_block.py
     pytest --timeout 300 models/demos/blackhole/qwen36/tests/test_wrapped_model.py
@@ -483,7 +490,7 @@
     # heavy full-model-build + device-trace tests added *after* that PR by #45355
     # (prefill device trace + batched prefill) time out the larger variants on
     # constrained runners (e.g. 26B/31B on wh_llmbox), so the whole
-    # test_prefill_trace_* and test_batched_prefill_perf files are ignored here.
+    # the prefill trace audit (test_prefill_trace.py, a device audit) is ignored here.
     # test_full_model_parity_* (vLLM full-model parity decode loops, from #44265)
     # is likewise deselected. The tier-1 promotion of 26B/31B/12B is intentionally
     # kept — only the heavy test cases are removed, not the tiers.
@@ -494,15 +501,17 @@
     # constrained runners. They are validated locally on 1x4/1x8 (issue #44953).
     # The cheap pure-Python test_gemma4_make_sampling_args_* regression (no device)
     # does not match "test_sampling_" and is intentionally still run.
+    # The custom-op shape sweeps (tests/unit/custom_ops) run in the whole-dir unit entries that carry no custom_ops
+    # ignore (26B, 31B, 12B on bh_quietbox_2; 26B / 31B on wh_llmbox); they do not fit the tier-3 budgets here.
     pytest --timeout 600 \
+      --ignore-glob='*/tests/unit/test_vision_*.py' \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
-      --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace.py \
       --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
+      --ignore=models/demos/gemma4/tests/unit/custom_ops \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
+      {unit_extra_args} \
       models/demos/gemma4/tests/unit/
   model: gemma-4-e2b
   model_family: Gemma
@@ -510,9 +519,14 @@
     wh_n150:
       timeout: 10
       tier: 3
+      # The N150 VM runs the whole dir at ~0.45 s per host case plus the slow single-chip device cases; the 2026-10-24
+      # run hit the 10-min step with ~1 min of tests left. The 4096-token prefill cases (layer / attention / MLP, ~35 s
+      # here) run on the Blackhole legs and the 26B / 31B wh_llmbox units, so this leg caps prefill at 2048.
+      unit_extra_args: "--max-prefill 2048"
     bh_p150:
       timeout: 10
       tier: 3
+      unit_extra_args: ""
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
   budget_type: unit
@@ -537,13 +551,12 @@
     export TT_METAL_WATCHER=30
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-E4B-it
     pytest --timeout 600 \
+      --ignore-glob='*/tests/unit/test_vision_*.py' \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
-      --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace.py \
       --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
+      --ignore=models/demos/gemma4/tests/unit/custom_ops \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
       models/demos/gemma4/tests/unit/
   model: gemma-4-e4b
@@ -553,9 +566,9 @@
     # wh_n300:
     #   timeout: 5
     #   tier: 3
-    bh_p300:
-      timeout: 15
-      tier: 3
+    # bh_p300:
+    #   timeout: 15
+    #   tier: 3
     bh_quietbox_2:
       timeout: 15
       tier: 3
@@ -568,24 +581,28 @@
     export TT_METAL_WATCHER=30
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-26B-A4B-it
+    # Only the MoE-specific paths: the generic Gemma-4 unit suite (attention,
+    # norms, page tables, spec-decode and dFlash host logic, ...) is identical
+    # across the variants and runs once, on the 31B config. The 26B keeps the
+    # expert / router / shared-MLP tests and the layer + single-layer-model tests
+    # that assemble them (the 16/8-head attention config itself is covered by the 12B).
     pytest --timeout 900 \
-      --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
-      --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
-      --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
-      models/demos/gemma4/tests/unit/
+      models/demos/gemma4/tests/unit/test_experts.py \
+      models/demos/gemma4/tests/unit/test_moe.py \
+      models/demos/gemma4/tests/unit/test_router.py \
+      models/demos/gemma4/tests/unit/test_shared_mlp.py \
+      models/demos/gemma4/tests/unit/test_layer.py \
+      models/demos/gemma4/tests/unit/test_model.py
   model: gemma-4-26b-a4b
   model_family: Gemma
   skus:
     wh_llmbox:
-      timeout: 30
+      timeout: 14
       tier: 2
     bh_quietbox_2:
-      timeout: 15
+      timeout: 8
       tier: 1
     # bh_galaxy: temporarily disabled — sliding-1x32 path hits an unrecoverable
     # ethernet / fabric hang on Blackhole Galaxy that surfaces during
@@ -604,12 +621,14 @@
     uv pip install -r models/demos/gemma4/requirements.txt
     export TT_METAL_WATCHER=30
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-31B-it
+    # The SigLIP vision-tower unit tests (test_vision_*.py) load the real HF
+    # vision weights, so they cannot run on the checked-in config.json; the
+    # weight-backed e2e jobs run them. The unified (encoder-free) embedder and
+    # multimodal-merge tests are weight-free and stay here.
     pytest --timeout 900 \
+      --ignore-glob='*/tests/unit/test_vision_*.py' \
       --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
-      --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
+      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace.py \
       --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
@@ -618,10 +637,10 @@
   model_family: Gemma
   skus:
     wh_llmbox:
-      timeout: 25
+      timeout: 20
       tier: 2
     bh_quietbox_2:
-      timeout: 15
+      timeout: 12
       tier: 1
     # bh_galaxy: temporarily disabled — same Blackhole Galaxy ethernet / fabric
     # hang as Gemma-4-26B-A4B above (surfaces during sliding-1x32 attention
@@ -638,21 +657,27 @@
     export TT_METAL_WATCHER=30
     uv pip install -r models/demos/gemma4/requirements.txt
     export HF_MODEL=models/demos/gemma4/configs/gemma-4-12B-it
+    # The 12B-specific paths: attention / layer / single-layer-model at the
+    # 12B dims (16 query heads, 8 KV heads: the configs the 31B's 32/16 does not
+    # exercise) and the unified (encoder-free) image / audio embedders with the
+    # soft-token merge. The generic host suite runs once, on the 31B config.
     pytest --timeout 900 \
-      --ignore=models/demos/gemma4/tests/unit/test_lm_head.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_parity.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_perf.py \
-      --ignore=models/demos/gemma4/tests/unit/test_prefill_trace_tracy_csv.py \
-      --ignore=models/demos/gemma4/tests/unit/test_batched_prefill_perf.py \
-      --ignore=models/demos/gemma4/tests/unit/test_packed_verify.py \
       --deselect models/demos/gemma4/tests/unit/test_model.py::test_full_model \
       -k "not test_bridge_ and not test_full_model_parity and not test_attention_decode_paged_batched and not test_sampling_" \
-      models/demos/gemma4/tests/unit/
+      models/demos/gemma4/tests/unit/test_attention.py \
+      models/demos/gemma4/tests/unit/test_layer.py \
+      models/demos/gemma4/tests/unit/test_model.py \
+      models/demos/gemma4/tests/unit/test_vision_encoder.py::test_unified_vision_embedder \
+      models/demos/gemma4/tests/unit/test_vision_encoder.py::test_merge_orders_modalities_by_prompt_position \
+      models/demos/gemma4/tests/unit/test_vision_encoder.py::test_merge_single_modality_and_two_images \
+      models/demos/gemma4/tests/unit/test_vision_encoder.py::test_merge_rejects_count_mismatch_and_missing_id \
+      models/demos/gemma4/tests/unit/test_vision_encoder.py::test_merge_cached_prefix_fills_trailing_placeholders \
+      models/demos/gemma4/tests/unit/test_unified_audio_embedder.py
   model: gemma-4-12b
   model_family: Gemma
   skus:
     bh_quietbox_2:
-      timeout: 15
+      timeout: 8
       tier: 1
   owner_id: U088413NP0Q # Ashai Reddy
   team: models
@@ -773,7 +798,7 @@
     bh_galaxy:
       timeout: 5
       tier: 1
-  owner_id: U089NPHL0GN # Diego Gomez
+  owner_id: U085GDCAZTN # Pavle Josipovic
   team: models
   budget_type: unit
 
@@ -783,7 +808,8 @@
 # Deploy mesh is SP=8 x TP=4 -> (8, 4) on BH Galaxy
 - name: MiniMax-M3 unit tests (1-card)
   cmd: |
-    pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "1x1 and not msa_layer"
+    # Host-only layout tests (rotated / packed chunk layout) have no mesh id; run them here.
+    pytest --timeout 300 models/demos/minimax_m3/tests/unit/ -k "(1x1 and not msa_layer) or rotated_chunk_layout or packed_forward_layout"
   model: minimax-m3
   skus:
     bh_p150:
@@ -802,10 +828,9 @@
   model: minimax-m3
   skus:
     bh_galaxy:
-      # 15 -> 30 (2026-10-07): #58594 added four test_ep_moe_vs_ref cases (shared_schedule x3,
-      # overlap_release_recreate) at ~140-280 s each (host-side random-weight build + bf8 convert);
-      # the leg went from 700 s (last green, c187c31050b) to ~1410 s projected.
-      timeout: 30
+      # ~1750 s measured: the test_ep_moe_vs_ref cases take ~140-280 s each (host-side random-weight
+      # build + bf8 convert) and test_attention_packed_vs_alone ~85 s.
+      timeout: 38
       tier: 1
   owner_id: U08ECJQ848G # Viacheslav Melnykov
   team: models
@@ -974,6 +999,7 @@
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_codec_pcc.py
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_codec_encoder_pcc.py
     pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_decode_pcc.py
+    pytest --timeout 900 models/demos/audio/qwen3_tts/tests/pcc/test_kv_cache_guard.py
   model: qwen3-tts-1.7b
   model_family: Qwen3-TTS
   skus:
@@ -1095,7 +1121,7 @@
   model_family: Qwen
   skus:
     wh_llmbox_perf:
-      timeout: 15
+      timeout: 30
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -1112,6 +1138,22 @@
   skus:
     wh_llmbox_perf:
       timeout: 5
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz
+  team: models
+  budget_type: unit
+
+- name: Qwen2.5-VL-7B unit tests
+  cmd: |
+    export TT_METAL_WATCHER=30
+    uv pip install -r models/demos/qwen25_vl/requirements.txt
+    export HF_MODEL=Qwen/Qwen2.5-VL-7B-Instruct TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/Qwen/Qwen2.5-VL-7B-Instruct MESH_DEVICE=T3K
+    pytest --timeout 600 models/demos/qwen25_vl/tests/ --ignore=models/demos/qwen25_vl/tests/test_ci_dispatch.py --ignore=models/demos/qwen25_vl/tests/conftest.py
+  model: qwen2.5-vl-7b
+  model_family: Qwen
+  skus:
+    wh_llmbox_perf:
+      timeout: 15
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
@@ -1194,7 +1236,30 @@
   model: dit-encoders
   skus:
     wh_llmbox:
-      timeout: 45 # 35m02s measured on run 33021627869, +~28% margin
+      # 37m26s of pytest on run 39317745110 (10-19), plus ~11.5 min of tests added by #57208 (FIBO-vlm,
+      # smollm3, vision injection; timed on job 118869109132), so ~49 min. +~22% margin.
+      timeout: 60
+      tier: 1
+  owner_id: U0ATR08RCQ0 # James Lee
+  team: models
+  budget_type: unit
+
+# Mock-device memory gate: MiniMax-H3 ref2va's full warmup on a mock WH 4x8 mesh; see the test's docstring.
+- name: Minimax H3 Memory Test
+  cmd: |
+    export TT_METAL_MOCK_CLUSTER_DESC_PATH=tt_metal/third_party/tt-cluster-descriptors/wormhole/6u_cluster_desc/6u_cluster_desc.yaml
+    unset TT_METAL_WATCHER
+    export HF_HOME=/mnt/MLPerf/huggingface
+    unset HF_HUB_OFFLINE
+    export TT_DIT_ALLOW_HF_DOWNLOAD=1
+    export MINIMAX_H3_REQUIRE_WEIGHTS=1
+    export MINIMAX_H3_DRAM_PROBE=1
+    export TT_DIT_CACHE_DIR=/mnt/MLPerf/huggingface/tt_dit_cache/MiniMaxAI/MiniMax-H3
+    pytest --timeout 7200 -s models/tt_dit/tests/models/minimax_h3/test_mock_oom_minimax_h3.py
+  model: minimax-h3
+  skus:
+    wh_llmbox:
+      timeout: 180
       tier: 1
   owner_id: U0ATR08RCQ0 # James Lee
   team: models
@@ -1709,7 +1774,7 @@
     export TT_MESH_ID=0
     export TT_MESH_HOST_RANK=0
     export TT_MESH_GRAPH_DESC_PATH="${TT_METAL_HOME}/tt_metal/fabric/mesh_graph_descriptors/single_bh_galaxy_torus_xy_graph_descriptor.textproto"
-    for d in /mnt/models/vbench /mnt/MLPerf/vbench; do
+    for d in /mnt/weka/model-weights/video/vbench /mnt/models/vbench /mnt/MLPerf/vbench; do
       if [ -d "$d" ]; then export VBENCH_CACHE_DIR="$d" TORCH_HOME="$d/torch_hub"; break; fi
     done
     [ -n "${VBENCH_CACHE_DIR:-}" ] || echo "WARNING: no vbench cache found; quality checks may download"
@@ -1801,7 +1866,7 @@
   model_family: BEVFormer
   skus:
     bh_p150b_civ2:
-      timeout: 16
+      timeout: 36
       tier: 3
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: shield
@@ -1932,7 +1997,7 @@
   cmd: |
     export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
-    pytest --tb=short --ignore=models/common/tests/modules models/common/tests
+    pytest --tb=short --ignore=models/common/tests/moe models/common/tests
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -1949,13 +2014,10 @@
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/mlp_1d \
-    pytest models/common/tests/modules/mlp/test_mlp_1d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/mlp/test_mlp_1d.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.mlp.mlp_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
+      --durations=10
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -1972,13 +2034,10 @@
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/rmsnorm_1d \
-    pytest models/common/tests/modules/rmsnorm/test_rmsnorm_1d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/rmsnorm/test_rmsnorm_1d.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.rmsnorm.rmsnorm_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
+      --durations=10
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -1995,13 +2054,10 @@
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/rope_1d \
-    pytest models/common/tests/modules/rope/test_rope_1d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/rope/test_rope_1d.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.rope.rope_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
+      --durations=10
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -2018,13 +2074,10 @@
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/lm_head_1d \
-    pytest models/common/tests/modules/lm_head/test_lm_head_1d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/lm_head/test_lm_head_1d.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.lm_head.lm_head_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
+      --durations=10
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -2040,13 +2093,10 @@
     export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/attention_1d \
-    pytest models/common/tests/modules/attention/test_attention_1d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/attention/test_attention_1d.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.attention.attention_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
+      --durations=10
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -2063,13 +2113,10 @@
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
     TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache/tttv2/embedding_1d \
-    pytest models/common/tests/modules/embedding/test_embedding_1d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/embedding/test_embedding_1d.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.embedding.embedding_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
+      --durations=10
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -2085,25 +2132,18 @@
     export TT_METAL_WATCHER=30
     export HF_HOME=/mnt/MLPerf/huggingface
     # Stop at the first failed command: the devices are not reset between commands (#57706).
-    pytest models/common/tests/modules/sampling/test_penalties_1d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/sampling/test_penalties_1d.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.sampling.penalties_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg || exit $?
-    pytest models/common/tests/modules/sampling/test_params.py \
+      --durations=10 || exit $?
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/sampling/test_params.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --deselect "models/common/tests/modules/sampling/test_params.py::test_legacy_device_sampling_capabilities_declare_the_exact_limit[models/tt_transformers/tt/generator_vllm.py]" || exit $?
-    pytest models/common/tests/modules/sampling/test_sampling_1d.py \
+      --durations=10 || exit $?
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/sampling/test_sampling_1d.py \
       -m "not slow" \
       --tb=short \
-      --durations=10 \
-      --cov=models.common.modules.sampling.sampling_1d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg || exit $?
+      --durations=10 || exit $?
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -2119,13 +2159,10 @@
     export TT_METAL_WATCHER=15
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-    pytest models/common/tests/modules/rmsnorm/test_rmsnorm_2d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/rmsnorm/test_rmsnorm_2d.py \
       -m "not slow" \
       --tb=short \
-      --durations-min=3.0 \
-      --cov=models.common.modules.rmsnorm.rmsnorm_2d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
+      --durations-min=3.0
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -2141,13 +2178,10 @@
     export TT_METAL_WATCHER=15
     export HF_HOME=/mnt/MLPerf/huggingface
     HF_MODEL=meta-llama/Llama-3.1-8B-Instruct \
-    pytest models/common/tests/modules/mlp/test_mlp_2d.py \
+    tests/scripts/run_tt_transformers_tests.sh tests/modules/mlp/test_mlp_2d.py \
       -m "not slow" \
       --tb=short \
-      --durations-min=3.0 \
-      --cov=models.common.modules.mlp.mlp_2d \
-      --cov-report=term-missing \
-      --cov-config=models/common/tests/setup.cfg
+      --durations-min=3.0
   model: tt-transformers-common
   model_family: TTTv2
   skus:
@@ -2315,5 +2349,44 @@
       timeout: 8
       tier: 3
   owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by ign-rahultp)
+  team: models
+  budget_type: unit
+
+# ESM-2 650M protein language model (facebook/esm2_t33_650M_UR50D).
+# 10 tests in ~66 s warm on bh_p150 (run 38277387590); the checkpoint
+# resolves from the shared HF cache. 5 min covers first-run JIT compilation.
+- name: esm2 unit tests
+  cmd: |
+    pytest models/experimental/esm2/tests --timeout=300
+  model: esm2-650m
+  model_family: ESM
+  skus:
+    bh_p150:
+      timeout: 5
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by murodbecks)
+  team: models
+  budget_type: unit
+
+# VoxCPM2 component qualification only; integrated TT speech synthesis remains pending.
+# The 16 device replay cases need the two pinned CUDA captures and the checkpoint under
+# /mnt/MLPerf/tt_dnn-models/openbmb/VoxCPM2 (see models/experimental/voxcpm2/validation/cases.py).
+# Until those are provisioned the device cases skip and this leg runs the host tests only
+# (seconds on bh_p150, run 38267491428). Once the assets are staged, add
+# `export VOXCPM2_REQUIRE_DEVICE_TESTS=1` so missing assets fail instead of skip, and raise
+# the timeout (with the models unit_tier3 bh_p150 budget) to cover the device replays.
+- name: VoxCPM2 component accuracy tests
+  cmd: |
+    set -e
+    export TT_METAL_WATCHER=30
+    uv pip install -r models/experimental/voxcpm2/requirements.txt
+    pytest models/experimental/voxcpm2/tests --timeout=120
+  model: voxcpm2
+  model_family: VoxCPM
+  skus:
+    bh_p150:
+      timeout: 2
+      tier: 3
+  owner_id: U03PUAKE719 # Miguel Tairum Cruz (external bring-up by erertertet)
   team: models
   budget_type: unit

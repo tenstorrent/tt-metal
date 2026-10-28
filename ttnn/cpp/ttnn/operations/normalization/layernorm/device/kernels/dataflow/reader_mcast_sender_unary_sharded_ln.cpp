@@ -84,16 +84,16 @@ void kernel_main() {
     for (uint32_t i = 0; i < num_y; ++i) {
         remote_noc_y[i] = get_vararg(num_x + i);
     }
-    df::L1Ptr in0_remote_noc_x = reinterpret_cast<df::L1Ptr>(remote_noc_x);
-    df::L1Ptr in0_remote_noc_y = reinterpret_cast<df::L1Ptr>(remote_noc_y);
+    auto* in0_remote_noc_x = reinterpret_cast<df::L1Ptr>(remote_noc_x);
+    auto* in0_remote_noc_y = reinterpret_cast<df::L1Ptr>(remote_noc_y);
 
     // ---------------------------------------------------------------------------
     // Set up experimental API objects
     // ---------------------------------------------------------------------------
     Noc noc;
-    Semaphore reduce_receiver_sem(sem::reduce_receiver);
-    Semaphore reduce_sender_sem(sem::reduce_sender);
-    Semaphore reduce_second_stage_sem(sem::reduce_second_stage);
+    Semaphore<> reduce_receiver_sem(sem::reduce_receiver);
+    Semaphore<> reduce_sender_sem(sem::reduce_sender);
+    Semaphore<> reduce_second_stage_sem(sem::reduce_second_stage);
     UnicastEndpoint remote_ep;
     MulticastEndpoint mcast_ep;
 
@@ -316,6 +316,12 @@ void kernel_main() {
     // Welford produces the mean and variance together in the pass above, so it has no separate
     // variance reduction and those buffers are not declared either.
 #ifndef USE_WELFORD
+#ifdef TWO_STAGE_REDUCE
     global_reduce_sender(dfb::ex_partial2, dfb::ex_external2, dfb::ex2pe, dfb::ex_global, dfb::ex2, 1);
+#else
+    // A single-stage reduce has no first-stage result, so ex2 does not exist. The argument goes unused;
+    // ex2pe stands in for it, as ex does in the E[x] call above.
+    global_reduce_sender(dfb::ex_partial2, dfb::ex_external2, dfb::ex2pe, dfb::ex_global, dfb::ex2pe, 1);
+#endif
 #endif
 }

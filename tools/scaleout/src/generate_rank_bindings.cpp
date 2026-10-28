@@ -131,8 +131,9 @@ MultiMeshSolutionEnumerator make_topology_mapping_enumerator(
     config.strict_mode = true;
     config.disable_rank_bindings = false;
 
+    // Keyed by address, matching the physical graph the solver is handed.
     for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
-        config.hostname_to_asics[desc.host_name].insert(asic_id);
+        config.hostname_to_asics[desc.host_name].insert(desc.physical_node_id);
     }
 
     std::vector<MultiMeshMappingPart> parts(mesh_graph_descriptors.size());
@@ -248,15 +249,16 @@ TopologyMappingParts run_topology_mapping(
 std::vector<RankBindingConfig> extract_rank_bindings(
     const PhysicalSystemDescriptor& psd, const TopologyMappingResult& mapping_result, const MeshGraph& mesh_graph) {
     struct AsicGrouping {
-        std::vector<AsicID> asic_ids;
+        std::vector<tt::tt_metal::experimental::PhysicalNodeId> physical_node_ids;
         std::vector<tt::ChipId> chip_ids;
         std::optional<MeshHostRankId> mesh_host_rank;
+        uint32_t mpi_rank = 0;
     };
 
     // mesh_id -> hostname -> mesh_host_rank -> AsicGrouping
     std::map<int, std::map<std::string, std::map<int, AsicGrouping>>> mesh_host_asics;
 
-    for (const auto& [fabric_node_id, asic_id] : mapping_result.fabric_node_to_asic) {
+    for (const auto& [fabric_node_id, physical_node_id] : mapping_result.fabric_node_to_physical) {
         const MeshId mesh_id_local = fabric_node_id.mesh_id;
         tt::ChipId chip_id_from_fabric_node = static_cast<tt::ChipId>(fabric_node_id.chip_id);
 
@@ -272,15 +274,20 @@ std::vector<RankBindingConfig> extract_rank_bindings(
             continue;
         }
 
+        // Emit the hostname exactly as the descriptor spells it, not the canonical form carried in the
+        // node id. The rankfile uses it to place the process, and the binding exports it as
+        // TT_METAL_CLUSTER_ID so phase 2 discovery stamps the same cluster id phase 1 saw.
+        const AsicID asic_id = psd.get_asic_id(physical_node_id);
         std::string hostname = psd.get_host_name_for_asic(asic_id);
         tt::ChipId chip_id = psd.get_umd_unique_id(asic_id);
 
         int mesh_id_int = static_cast<int>(*mesh_id_local);
         const int mesh_host_rank_int = static_cast<int>(*mesh_host_rank.value());
         auto& bucket = mesh_host_asics[mesh_id_int][hostname][mesh_host_rank_int];
-        bucket.asic_ids.push_back(asic_id);
+        bucket.physical_node_ids.push_back(physical_node_id);
         bucket.chip_ids.push_back(chip_id);
         bucket.mesh_host_rank = mesh_host_rank;
+        bucket.mpi_rank = psd.get_mpi_rank_for_asic(asic_id);
     }
 
     // Build flat list of (mesh_id, hostname, chip_ids, mesh_host_rank, psd_rank) for canonical ordering.
@@ -296,13 +303,7 @@ std::vector<RankBindingConfig> extract_rank_bindings(
                 if (!mesh_host_rank.has_value()) {
                     continue;
                 }
-                uint32_t psd_rank = 0;
-                if (psd.get_host_to_rank_map().contains(hostname)) {
-                    psd_rank = psd.get_rank_for_hostname(hostname);
-                } else {
-                    log_warning(
-                        tt::LogFabric, "Hostname {} not in PSD host_to_rank map, using 0 for rank ordering", hostname);
-                }
+                const uint32_t psd_rank = asic_data.mpi_rank;
                 entries.emplace_back(
                     mesh_id, hostname, chip_ids, static_cast<int>(*mesh_host_rank.value()), static_cast<int>(psd_rank));
             }
@@ -338,18 +339,16 @@ std::vector<RankBindingConfig> extract_rank_bindings(
         // binding.psd_mpi_rank stores the PSD MPI rank from discovery, used for phase2_mock_mapping.yaml lookup.
         binding.rank = static_cast<int>(i);  // Sequential rank for rankfile and rank_bindings.yaml
 
-        // Store PSD MPI rank separately for phase2_mock_mapping.yaml lookup
-        if (psd.get_host_to_rank_map().contains(hostname)) {
-            binding.psd_mpi_rank = static_cast<int>(psd.get_rank_for_hostname(hostname));
-        } else {
-            log_warning(
-                tt::LogFabric, "Hostname {} not found in PSD host_to_rank_map, psd_mpi_rank will be -1", hostname);
-        }
+        // The chip's MPI rank. Several ranks share a hostname, so the host map cannot supply this.
+        binding.psd_mpi_rank = psd_rank;
         binding.mesh_id = mesh_id;
         binding.mesh_host_rank = mesh_host_rank;
         binding.hostname = hostname;
         binding.slot = host_slot_counters[hostname]++;
         binding.env_overrides = {};
+        if (!hostname.empty()) {
+            binding.env_overrides["TT_METAL_CLUSTER_ID"] = hostname;
+        }
 
         // Build TT_VISIBLE_DEVICES from ChipIds - only include MMIO devices, not remote devices.
         // For each chip, get its associated MMIO device; remote chips share an MMIO device.
