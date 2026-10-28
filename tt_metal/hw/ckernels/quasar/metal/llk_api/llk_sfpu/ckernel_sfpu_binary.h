@@ -19,17 +19,13 @@
 namespace ckernel {
 namespace sfpu {
 
-/**
- * @brief Dest float ADD op type; rounds to bf16 (RNE) on store when the Dest is 16-bit and NearestEven is set.
- *
- * @tparam LAYOUT: SFPLOAD/SFPSTORE format; explicit F32 on a 32-bit Dest, HW-implied on a 16-bit one by default.
- */
+/** @brief Dest float ADD op type; rounds to bf16 (RNE) on store when the Dest is 16-bit and NearestEven is set. */
 template <
     bool is_fp32_dest_acc_en,
     DstRoundingMode dst_rounding_mode = DstRoundingMode::Default,
+    sfpi::DataLayout LAYOUT = dest_float_layout<is_fp32_dest_acc_en>,
     int ITERATIONS = SFPU_ITERATIONS,
-    trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32,
-    sfpi::DataLayout LAYOUT = dest_float_layout<is_fp32_dest_acc_en>>
+    trisc::DstTileShape TILE_SHAPE = trisc::DstTileShape::Tile32x32>
 using AddDest = DestBinary<
     AddFloatMath,
     LAYOUT,
@@ -69,8 +65,12 @@ inline void calculate_sfpu_binary(
         dst_rounding_mode == DstRoundingMode::Default || BINOP == BinaryOp::ADD || BINOP == BinaryOp::SUB,
         "NearestEven rounding parameter is currently supported for ADD and SUB only");
     if constexpr (BINOP == BinaryOp::ADD) {
-        AddDest<is_fp32_dest_acc_en, dst_rounding_mode, ITERATIONS, TILE_SHAPE>::calculate(
-            dst_index_in0, dst_index_in1, dst_index_out);
+        AddDest<
+            is_fp32_dest_acc_en,
+            dst_rounding_mode,
+            dest_float_layout<is_fp32_dest_acc_en>,
+            ITERATIONS,
+            TILE_SHAPE>::calculate(dst_index_in0, dst_index_in1, dst_index_out);
         return;
     }
     constexpr std::uint32_t dst_tile_size_sfpi = 1U << (trisc::get_dest_tile_size_log2(TILE_SHAPE) - 1);

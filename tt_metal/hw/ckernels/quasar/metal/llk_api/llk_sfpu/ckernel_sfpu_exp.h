@@ -320,15 +320,11 @@ struct ExpFp32Accurate {
 template <bool APPROXIMATION_MODE, bool FP32_RESULT>
 using ExpAlgo = std::conditional_t<(!FP32_RESULT || APPROXIMATION_MODE), ExpHwLut, ExpFp32Accurate>;
 
-/**
- * @brief Dest EXP op type; the fp32 accurate path runs only for a 32-bit Dest without APPROXIMATION_MODE.
- *
- * @tparam LAYOUT: SFPLOAD/SFPSTORE format; Default lets the HW derive it from the ALU config.
- */
+/** @brief Dest EXP op type; the fp32 accurate path runs only for a 32-bit Dest without APPROXIMATION_MODE. */
 template <
     bool APPROXIMATION_MODE,
     bool EN_32BIT_DEST,
-    sfpi::DataLayout LAYOUT = sfpi::DataLayout::Default,
+    sfpi::DataLayout LAYOUT = dest_float_layout<EN_32BIT_DEST>,
     int ITERATIONS = SFPU_ITERATIONS>
 using ExpDest = DestUnary<ExpAlgo<APPROXIMATION_MODE, EN_32BIT_DEST>, LAYOUT, ITERATIONS>;
 
