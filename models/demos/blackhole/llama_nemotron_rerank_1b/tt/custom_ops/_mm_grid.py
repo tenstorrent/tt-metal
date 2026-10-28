@@ -21,11 +21,16 @@ from __future__ import annotations
 import math
 import os
 from dataclasses import dataclass
+from pathlib import Path
 
 import ttnn
 from models.demos.blackhole.llama_nemotron_rerank_1b.tt.custom_ops._common import TILE_BYTES
 
 KERNEL_ROOT = "ttnn/cpp/ttnn/operations/experimental/minimal_matmul/device/kernels"
+# Kernel sources resolve against the tt-metal root, but compiler include directories resolve against the
+# process's working directory, so includes take the absolute path (servers do not run from the tt-metal root).
+_TT_METAL_ROOT = os.environ.get("TT_METAL_HOME") or str(Path(__file__).resolve().parents[6])
+KERNEL_INCLUDE = os.path.join(_TT_METAL_ROOT, KERNEL_ROOT)
 IN0_KERNEL = f"{KERNEL_ROOT}/dm_in0_sender.cpp"
 IN0_MCAST_KERNEL = os.path.join(os.path.dirname(os.path.abspath(__file__)), "kernels", "dm_in0_mcast.cpp")
 IN0_NOC = ttnn.NOC.NOC_0
@@ -163,7 +168,7 @@ def in0_kernels(device, g: Grid, x_tensor, out_tensor, kernel=IN0_KERNEL):
             runtime_args=rt,
             defines=[],
             config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=IN0_NOC),
-            compiler_include_paths=[KERNEL_ROOT],
+            compiler_include_paths=[KERNEL_INCLUDE],
         )
 
     if g.transposed:
@@ -203,7 +208,7 @@ def in0_mcast_kernels(device, g: Grid, x_tensor):
             runtime_args=rt,
             defines=[],
             config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=IN0_NOC),
-            compiler_include_paths=[KERNEL_ROOT],
+            compiler_include_paths=[KERNEL_INCLUDE],
         )
 
     kernels = [kd(send_ct, send_rt, cores(0, 0, g.gx - 1, 0))]

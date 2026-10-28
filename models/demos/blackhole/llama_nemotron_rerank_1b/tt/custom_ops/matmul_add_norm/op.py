@@ -274,7 +274,7 @@ def matmul_add_norm(
             runtime_args=rt,
             defines=list(defines),
             config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=mg.IN1_NOC),
-            compiler_include_paths=[mg.KERNEL_ROOT],
+            compiler_include_paths=[mg.KERNEL_INCLUDE],
         )
 
     kernels.append(dm(send_ct, send_rt, g.in1_sender_cores()))
@@ -307,7 +307,7 @@ def matmul_add_norm(
                 runtime_args=gather_rt,
                 defines=[],
                 config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_0, noc=mg.IN0_NOC),
-                compiler_include_paths=[mg.KERNEL_ROOT],
+                compiler_include_paths=[mg.KERNEL_INCLUDE],
             )
         )
     program = ttnn.ProgramDescriptor(kernels=kernels, cbs=cbs, semaphores=semaphores)

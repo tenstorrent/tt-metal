@@ -141,7 +141,7 @@ def matmul_qkv_rope(
             runtime_args=rt,
             defines=[],
             config=ttnn.DataMovementConfigDescriptor(processor=ttnn.DataMovementProcessor.RISCV_1, noc=mg.IN1_NOC),
-            compiler_include_paths=[mg.KERNEL_ROOT],
+            compiler_include_paths=[mg.KERNEL_INCLUDE],
         )
 
     kernels.append(dm(send_ct, send_rt, g.in1_sender_cores()))
