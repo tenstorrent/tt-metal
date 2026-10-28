@@ -136,35 +136,48 @@ void kernel_main() {
         for (uint32_t t = 0; t < teams; t++) {
             load[t] = 0;
         }
-        for (uint32_t n = cap; n > 0; n--) {
-            for (uint32_t e = E; e-- > 0;) {
-                const uint32_t eg = (count[e] + 31) >> 5;
-                const uint32_t full = eg / cap;
-                const uint32_t rest = eg - full * cap;
-                uint32_t chunks = 0, last = 0;
-                if (n == cap) {
-                    chunks = full;
-                    last = full > 0 ? (full - 1) * cap : 0;
+        auto deal = [&](uint32_t e, uint32_t off, uint32_t n) {
+            uint32_t best = 0;
+            for (uint32_t t = 1; t < teams; t++) {
+                if (load[t] < load[best]) {
+                    best = t;
                 }
-                if (rest == n && rest != cap) {
-                    chunks = 1;
-                    last = full * cap;
-                }
-                for (uint32_t c = 0; c < chunks; c++) {
-                    const uint32_t off = last - c * cap;
-                    uint32_t best = 0;
-                    for (uint32_t t = 1; t < teams; t++) {
-                        if (load[t] < load[best]) {
-                            best = t;
-                        }
-                    }
-                    tt_l1_ptr uint32_t* page = plan + best * plan_words;
-                    const uint32_t j = page[0]++;
-                    page[1 + 3 * j] = e;
-                    page[2 + 3 * j] = first_group[e] + off;
-                    page[3 + 3 * j] = n;
-                    load[best] += 2 * n + 1;
-                }
+            }
+            tt_l1_ptr uint32_t* page = plan + best * plan_words;
+            const uint32_t j = page[0]++;
+            page[1 + 3 * j] = e;
+            page[2 + 3 * j] = first_group[e] + off;
+            page[3 + 3 * j] = n;
+            load[best] += 2 * n + 1;
+        };
+        // plan.cpp's order without its cap x E scan: first every expert's whole chunks of cap groups (experts from
+        // the last, chunks from the last), then for n = cap - 1 .. 1 the remainder chunk of every expert whose
+        // remainder is n (experts from the last). The slice counts are done with: cnt holds full chunks per expert,
+        // the next expert of the same remainder, and the first expert of each remainder.
+        tt_l1_ptr uint32_t* full = cnt;
+        tt_l1_ptr uint32_t* next = cnt + E;
+        tt_l1_ptr uint32_t* head = cnt + 2 * E;  // cap entries
+        for (uint32_t n = 0; n < cap; n++) {
+            head[n] = E;  // none
+        }
+        for (uint32_t e = 0; e < E; e++) {
+            const uint32_t eg = (count[e] + 31) >> 5;
+            const uint32_t f = eg / cap;
+            const uint32_t rest = eg - f * cap;
+            full[e] = f;
+            if (rest != 0) {
+                next[e] = head[rest];
+                head[rest] = e;  // pushed in increasing e: the list runs from the last expert
+            }
+        }
+        for (uint32_t e = E; e-- > 0;) {
+            for (uint32_t c = full[e]; c-- > 0;) {
+                deal(e, c * cap, cap);
+            }
+        }
+        for (uint32_t n = cap - 1; n > 0; n--) {
+            for (uint32_t e = head[n]; e != E; e = next[e]) {
+                deal(e, full[e] * cap, n);
             }
         }
         const InterleavedAddrGen<true> plan_gen = {.bank_base_address = plan_addr, .page_size = plan_words * 4};

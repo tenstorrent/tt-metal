@@ -647,6 +647,10 @@ class TtMiMoAttention:
         self._split_sdpa_programs = {}
         # The KV pair split (vLLM mode, MIMO_KV_PAIR_SPLIT): the model's PairSplit, on the global layers.
         self.pair = None
+        # The zero query rows in front of a later SWA chunk (its cached window's rows), {lead rows: tensor}, shared by
+        # the SWA layers and made before any trace capture (TtMiMoModel._setup_lead_zeros): ttnn.zeros writes from the
+        # host, which a captured later chunk cannot do. Missing: made per chunk.
+        self.lead_zeros = {}
 
     def _split_sdpa_program(self, batch, table_tokens):
         """Global decode SDPA program for a batch of ``batch`` page-table rows: every core of the 8 x 8 grid works
@@ -877,6 +881,16 @@ class TtMiMoAttention:
                 t.deallocate(True)
         return out
 
+    def make_lead_zeros(self, lead):
+        """Zero query rows [1, nh_local, lead, head_dim] for the cached window in front of a later SWA chunk."""
+        return ttnn.zeros(
+            (1, self.nh_local, lead, self.head_dim),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.plan.mesh_device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
     def forward_prefill(self, x, user_id, page_table, kv_cache, start_pos=0, real_len=None, tables=None, users=1):
         """x [1, 1, S, hidden] (S a multiple of 32): positions start_pos .. start_pos + S - 1 of the user in slot
         ``user_id`` (``real_len`` real tokens, then padding whose K/V land past them, where decode overwrites them).
@@ -934,17 +948,15 @@ class TtMiMoAttention:
         self._fill(kv_cache, k_rot, v, page_table, user_id, tables)
         step("sdpa")
         if lead:
-            q_lead = ttnn.zeros(
-                (1, self.nh_local, lead, self.head_dim),
-                dtype=ttnn.bfloat16,
-                layout=ttnn.TILE_LAYOUT,
-                device=self.plan.mesh_device,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            q_lead = self.lead_zeros.get(lead)
+            own_lead = q_lead is None
+            if own_lead:
+                q_lead = self.make_lead_zeros(lead)
             joined = []
             for head, tail in ((q_lead, q_rot), (k_win, k_rot), (v_win, v)):
                 joined.append(ttnn.concat([head, tail], dim=2, memory_config=ttnn.DRAM_MEMORY_CONFIG))
-                head.deallocate(True)
+                if head is not q_lead or own_lead:
+                    head.deallocate(True)
                 tail.deallocate(True)
             q_rot, k_rot, v = joined
 

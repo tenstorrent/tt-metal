@@ -31,6 +31,7 @@ from ..reference.model import load_layer_weights
 from ..reference.mtp_backfill import HISTORY_ROWS
 from ..reference.spec_decode import SPEC_SLOTS, serial_positions
 from . import kv as kv_lib
+from . import attention as attention_lib
 from .attention import GLOBAL_SDPA_MIN_START, TtMiMoAttention, later_chunk_split, page_table_width
 from .common import TILE, MeshPlan, as_weight, cache_name, compute_config, pad_to
 from .decoder import TtMiMoDecoderLayer, TtRMSNorm
@@ -41,7 +42,7 @@ from .moe_stream import ReduceExpand, fabric_row_gather, user_rows, zero_output
 from .mtp import TtMiMoMTP
 from .pair_split import PairSplit
 from .profiling import zone
-from .rope import MiMoRotarySetup, partial_rope_table
+from .rope import MiMoRotarySetup, partial_rope_cos_sin, partial_rope_table
 from .dflash import TtDFlash
 from .spec_inputs import SpecInputs
 from .verify_sampler import GreedyVerify, VerifySampler
@@ -49,6 +50,11 @@ from .verify_sampler import GreedyVerify, VerifySampler
 # Rows of the decode RoPE tables past max_seq_len - 1: a position derived on device before the host checks it (a
 # verify or draft chained on device, a few positions ahead) still reads a row of the table, not another buffer.
 ROPE_TABLE_MARGIN = 32  # one tile
+
+# MIMO_PREFILL_CHUNK_TRACE=1: a later prefill chunk (start > 0) of a padded length set up with
+# ``setup_prefill_chunk_traces`` replays a trace of the whole chunk instead of dispatching its ~2,500 ops (about 0.4 s of
+# host time per chunk, which several rows or vLLM lanes on one host thread pay one after another).
+PREFILL_CHUNK_TRACE = os.environ.get("MIMO_PREFILL_CHUNK_TRACE", "0") == "1"
 
 
 def prefill_padded_len(seq_len, start_pos=0, pair_split=False):
@@ -271,6 +277,11 @@ class TtMiMoModel:
         self.verify_sampler = None  # vLLM mode with MTP: a verify's acceptance on device (setup_vllm_kv_cache)
         self.spec_chain = None  # the draft chained behind a verify, and its result page (TtMiMoMTP.setup_cache)
         self.prefill_traces = {}  # (users, padded length) -> traced prefill batch (setup_prefill_batch_trace)
+        # Traced later chunks (setup_prefill_chunk_traces): key (_chunk_trace_key) -> trace; their inputs per padded
+        # length; and per slot the persistent logits row a replay's output is copied into.
+        self.chunk_traces = {}
+        self.chunk_inputs = {}
+        self.chunk_logits = None
         self.rope_tables = None  # decode cos / sin of every position (setup_decode_rope_tables)
         self.rope_table_tails = None  # with compact tables: the 1 / 0 the rows' rotated dims are followed by
         self.decode_users = None
@@ -389,6 +400,7 @@ class TtMiMoModel:
         if self.kv_pair_split:
             self._setup_pair_split({False})
         self._setup_fused_norms()
+        self._setup_lead_zeros()
 
     def _setup_pair_split(self, keys):
         """The KV pair split on the global layers, whose page tables ``keys`` (``_table_key``) have one block per
@@ -403,6 +415,20 @@ class TtMiMoModel:
         for layer in self.layers:
             if not layer.is_swa:
                 layer.attn.pair = self.pair
+
+    def _setup_lead_zeros(self):
+        """The zero query rows a later SWA chunk puts in front of its cached window (TtMiMoAttention.lead_zeros), one
+        tensor per window length, shared by the SWA layers: persistent, so a captured later chunk reads them."""
+        swa = [layer.attn for layer in self.layers if layer.is_swa]
+        if not swa or swa[0].lead_zeros:
+            return
+        window = swa[0].sliding_window
+        zeros = {
+            k * self.block_size: swa[0].make_lead_zeros(k * self.block_size)
+            for k in range(1, -(-window // self.block_size) + 1)
+        }
+        for attn in swa:
+            attn.lead_zeros = zeros
 
     def _keep_global_kv_on_both_chips(self):
         """Both chips of a global layer's pair keep every slot's K / V: decode writes it on both, and a later prefill
@@ -475,6 +501,7 @@ class TtMiMoModel:
             for g, table in self.vllm_tables.items()
         }
         self._setup_fused_norms()
+        self._setup_lead_zeros()
 
     def set_vllm_page_tables(self, rows):
         """rows: {slot: {group: int32 block ids}} (vLLM's table row of the user in that slot). A row wider than its
@@ -747,6 +774,7 @@ class TtMiMoModel:
         layers=None,
         history_continues=False,
         draft_group=0,
+        allow_trace=True,
     ):
         """Enqueue prefill of one user (``tokens`` 1D torch, positions start_pos ..) into batch ``slot``, in chunks
         of ``chunk_size`` tokens (default ``max_prefill_chunk``; a multiple of the block size, as is ``start_pos``).
@@ -755,24 +783,56 @@ class TtMiMoModel:
         history each chunk also writes its last rows' final normed hidden into the slot's history
         (tt/mtp_backfill.py); ``history_continues``: the first chunk continues the request's earlier chunks (their
         entries stay), else it is the request's first and the slot's other entries are invalidated.
-        ``draft_group``: the request's draft group (its DFlash context ring)."""
+        ``draft_group``: the request's draft group (its DFlash context ring). ``allow_trace=False``: every chunk runs
+        eagerly, even one a captured later-chunk trace covers (vLLM's prefill_forward runs a row that would mix
+        replays and eager chunks all eager: ``chunk_traced``)."""
         n = tokens.numel()
         chunk = chunk_size or self.max_prefill_chunk
         align = self.block_size * (2 if self.pair is not None else 1)  # pair split: 128-token global blocks
         assert n > 0 and chunk % align == 0 and start_pos % align == 0, (n, chunk, start_pos, align)
         hidden = [[] for _ in (range(len(self.layers)) if layers is None else layers)] if return_hidden else None
         hist = self._history()
+        x = replayed = None
         for s in range(0, n, chunk):
-            x, padded = self._prefill_chunk(tokens[s : s + chunk], slot, start_pos + s, hidden, layers, draft_group)
+            piece = tokens[s : s + chunk]
+            writes = None
             if hist is not None and slot < SPEC_SLOTS:
-                writes = hist.chunk_writes(slot, start_pos + s, tokens[s : s + chunk], 0, history_continues or s > 0)
+                writes = hist.chunk_writes(slot, start_pos + s, piece, 0, history_continues or s > 0)
+            eager = not allow_trace or hidden is not None or layers is not None
+            trace = None if eager else self._chunk_trace(slot, start_pos + s, piece)
+            if trace is not None:
+                replayed = self._replay_prefill_chunk(trace, piece, slot, start_pos + s, writes or [])
+                continue
+            replayed = None
+            x, padded = self._prefill_chunk(piece, slot, start_pos + s, hidden, layers, draft_group)
+            if writes is not None:
                 write_list = hist.prefill_list(writes)
                 hist.prefill(x, self.final_norm, write_list, len(writes))
                 write_list.deallocate(True)
             if s + chunk < n:
                 x.deallocate(True)
+        if replayed is not None:  # the last chunk was a replay: its logits row is the slot's persistent one
+            return replayed
         seq_len = n - s
         tile_start = ((seq_len - 1) // TILE) * TILE
+        if (
+            hidden is None
+            and self.layer_groups is None
+            and any(t["id"] is not None for t in self.chunk_traces.values())
+        ):
+            # With later-chunk traces captured, a pending eager output could be alive while another slot's chunk
+            # replays (the model's own callers enqueue several prompts before reading); the trace's intermediates may
+            # sit where it is. So the logits row goes into the slot's persistent row, as a replay's does. (vLLM's
+            # prefill_forward instead replays before it runs any eager pass of the lane.)
+            at = kv_lib.replicated(self.plan, torch.tensor([0, 0, tile_start, 0], dtype=torch.int32), ttnn.uint32)
+            pick = kv_lib.replicated(
+                self.plan, torch.tensor([[seq_len - 1 - tile_start]], dtype=torch.int32), ttnn.uint32
+            )
+            logits = self._pick_logits(x, [at], pick, 1, padded)
+            ttnn.copy(logits, self.chunk_logits[slot])
+            for t in (logits, at, pick):
+                t.deallocate(True)
+            return {"logits": self.chunk_logits[slot], "row": 0, "hidden": None, "persistent": True}
         if padded == TILE:
             last = x  # a slice covering the whole tensor shares its buffer, so it must not be freed separately
         else:
@@ -886,6 +946,11 @@ class TtMiMoModel:
                 x = y
         if history_list is not None:
             self._history().prefill(x, self.final_norm, history_list, history_list.shape[-1] // 4)
+        return self._pick_logits(x, ats, picks_tt, num, padded)
+
+    def _pick_logits(self, x, ats, picks_tt, num, padded):
+        """The last-token logits of a pass's R users (x [1, 1, R * S, hidden], freed): row-major [1, 1, R, vocab / tp]
+        (see ``_prefill_batch_device``)."""
         if num * padded == TILE:
             tiles = x  # a slice covering the whole tensor shares its buffer, so it must not be freed separately
         else:
@@ -1006,6 +1071,245 @@ class TtMiMoModel:
             ttnn.copy_host_to_device_tensor(host, trace["history"])
         ttnn.execute_trace(self.mesh_device, trace["id"], cq_id=0, blocking=False)
         return {"logits": trace["logits"], "row": list(range(num)), "hidden": None, "persistent": True}
+
+    # ------------------------------------------------------------------ traced later chunks
+    def _swa_window(self):
+        return next((layer.attn.sliding_window for layer in self.layers if layer.is_swa), None)
+
+    def _owner_rep(self):
+        """The global pair's replication when it splits the users (a later chunk reads its slot's owner mask), else 0."""
+        for layer in self.layers:
+            attn = layer.attn
+            if not layer.is_swa and attn.split_users and attn.pair is None and not attn.kv_both_chips:
+                return attn.rep
+        return 0
+
+    def _chunk_trace_key(self, slot, start_pos, padded):
+        """What a later chunk's programs key on besides its padded length (attention.py): the global layers' SDPA chunk
+        size and whether they take the grouped / K split program (TtMiMoAttention._prefill_sdpa_program,
+        later_chunk_split), the SWA layers' cached window rows, and the slot's parity when the pair splits the users
+        (its owner mask). Everything else a later chunk reads is a device input of the trace."""
+        chunk = TtMiMoAttention._prefill_sdpa_program(None, padded, start_pos).q_chunk_size
+        split = later_chunk_split(chunk, start_pos) is not None
+        window = self._swa_window()
+        lead = 0 if window is None else start_pos - max(0, start_pos - window) // self.block_size * self.block_size
+        rep = self._owner_rep()
+        return (padded, chunk, split, lead, slot % rep if rep else 0)
+
+    def _chunk_trace_keys(self, padded):
+        """The keys a later chunk of ``padded`` tokens can have once its start is past the SWA window: every SDPA chunk
+        size and program the start can bring (the sizes repeat every 256 positions; the grouped program from
+        GLOBAL_SDPA_MIN_START), every slot parity. Each with the first start that has it (the start the trace is
+        warmed and captured at, which the Python of a chunk sees; a replay reads its start from the device)."""
+        align = self.block_size * (2 if self.pair is not None else 1)
+        window = self._swa_window() or 0
+        first = pad_to(max(window, align), align)
+        late = pad_to(GLOBAL_SDPA_MIN_START, max(align, 256))
+        starts = list(range(first, first + 512, align)) + list(range(late, late + 512, align))
+        rep = self._owner_rep() or 1
+        keys = {}
+        for start in starts:
+            if start + padded > self.max_seq_len:
+                continue
+            for parity in range(rep):
+                keys.setdefault(self._chunk_trace_key(parity, start, padded), start)
+        return keys
+
+    def setup_prefill_chunk_traces(self, padded_lengths, sdpa_chunks=None):
+        """The persistent buffers of the traced later chunks of each padded length in ``padded_lengths``
+        (``_chunk_trace_keys``; ``sdpa_chunks``: only the keys whose global SDPA chunk size is in it). Allocate before
+        any trace capture (a buffer allocated after a capture can sit where that trace's replays write); then
+        ``warm_prefill_chunk_traces`` and, after the decode capture, ``capture_prefill_chunk_traces``. Returns the
+        keys set up. Refuses (before allocating anything) on a build whose chunked MLA prefill takes no runtime start
+        (``chunk_traces_supported``)."""
+        assert self.kv_caches is not None and self.dflash is None, "traced later chunks need the KV cache, no DFlash"
+        if not self.chunk_traces_supported():
+            raise RuntimeError(
+                "traced later prefill chunks need chunked_flash_mla_prefill's chunk_start_idx_tensor (this ttnn build "
+                "keys the global layers' later chunks on a scalar start, which a replay at another start cannot "
+                "change); rebuild ttnn or run without MIMO_PREFILL_CHUNK_TRACE"
+            )
+        if self.chunk_logits is None:
+            self.chunk_logits = [self._logits_row() for _ in range(self.max_batch)]
+        made = []
+        for padded in padded_lengths:
+            assert padded == prefill_padded_len(padded, 1, self.pair is not None), f"{padded} is not a padded length"
+            for key, start in self._chunk_trace_keys(padded).items():
+                if key in self.chunk_traces or (sdpa_chunks is not None and key[1] not in sdpa_chunks):
+                    continue
+                inputs = self._chunk_inputs(padded, start)
+                self.chunk_traces[key] = {
+                    "id": None,
+                    "key": key,
+                    "start": start,
+                    "tables": self._chunk_tables(padded, key[3], inputs["start"]),
+                    "logits": self._logits_row(),
+                }
+                made.append(key)
+        return made
+
+    def chunk_traces_supported(self):
+        """Whether a later chunk's trace can replay at a start other than its capture's: every global layer reads the
+        chunk's start from a device input. The KV pair split's chunked MLA prefill always does; the other global
+        later-chunk paths only on a build whose chunked_flash_mla_prefill takes chunk_start_idx_tensor
+        (attention.MLA_RUNTIME_START), else they key their program on the scalar start the trace was captured at."""
+        return attention_lib.MLA_RUNTIME_START or all(
+            layer.is_swa or layer.attn.pair is not None for layer in self.layers
+        )
+
+    def _logits_row(self):
+        return ttnn.allocate_tensor_on_device(
+            ttnn.Shape([1, 1, 1, self.vocab_local]),
+            self.logits_dtype,
+            ttnn.ROW_MAJOR_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+    def _chunk_inputs(self, padded, start):
+        """The inputs the traced later chunks of ``padded`` tokens share (a replay rewrites them before it runs):
+        tokens, the start position, the RoPE cos / sin of the chunk's positions, the last token's tile start and row,
+        the MTP history's write list."""
+        if padded not in self.chunk_inputs:
+            hist = self._history()
+            self.chunk_inputs[padded] = {
+                "tokens": self._to_device_tokens(torch.zeros(padded, dtype=torch.int32)),
+                "start": kv_lib.replicated(self.plan, torch.tensor([start], dtype=torch.int32), ttnn.int32),
+                "rope": {name: setup.get_prefill_rot_mats(start, padded) for name, setup in self.rope_setups.items()},
+                "at": kv_lib.replicated(self.plan, torch.zeros(4, dtype=torch.int32), ttnn.uint32),
+                "pick": kv_lib.replicated(self.plan, torch.zeros(1, 1, dtype=torch.int32), ttnn.uint32),
+                "history": hist.prefill_list([], HISTORY_ROWS) if hist is not None else None,
+            }
+        return self.chunk_inputs[padded]
+
+    def _chunk_tables(self, padded, lead, start):
+        """{page table key: kv.ChunkTables} of a traced later chunk whose SWA layers read ``lead`` cached rows."""
+        tables = {}
+        for i, layer in enumerate(self.layers):
+            key = self._table_key(i)
+            if key in tables:
+                continue
+            pair = self._pair_key(key)
+            scratch = self._host_table(key)[1] or 0
+            context = None if layer.is_swa else (self.pair_context_blocks if pair else self.prefill_context_blocks)
+            window = lead // self.block_size if layer.is_swa else 0
+            tables[key] = kv_lib.ChunkTables(self.plan, padded, self.block_size, scratch, context, window, start)
+        return tables
+
+    def _chunk_trace_body(self, trace):
+        """The traced later chunk: reads only its persistent inputs, writes its persistent logits row."""
+        padded, parity = trace["key"][0], trace["key"][4]
+        start, inputs = trace["start"], self.chunk_inputs[padded]
+        for name, setup in self.rope_setups.items():
+            setup.begin_prefill_chunk(pinned={(start, padded): inputs["rope"][name]})
+        x = ttnn.embedding(inputs["tokens"], self.embedding, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16)
+        x = ttnn.reshape(x, (1, 1, padded, self.cfg.hidden_size))
+        with self._prefill_reduce(padded):
+            for i, layer in enumerate(self.layers):
+                y = layer.forward_prefill(
+                    x,
+                    parity,
+                    self._layer_page_table(i),
+                    self.kv_caches[i],
+                    start_pos=start,
+                    tables=trace["tables"][self._table_key(i)],
+                )
+                x.deallocate(True)
+                x = y
+        if inputs["history"] is not None:
+            self._history().prefill(x, self.final_norm, inputs["history"], HISTORY_ROWS)
+        logits = self._pick_logits(x, [inputs["at"]], inputs["pick"], 1, padded)
+        for setup in self.rope_setups.values():
+            setup.end_prefill_chunk()
+        ttnn.copy(logits, trace["logits"])
+        logits.deallocate(True)
+
+    def warm_prefill_chunk_traces(self):
+        """Run every traced later chunk not yet captured eagerly once (on its scratch tables: it writes only scratch
+        blocks), compiling every program it runs, and the copy of its logits row."""
+        for trace in self.chunk_traces.values():
+            if trace["id"] is None:
+                self._chunk_trace_body(trace)
+                ttnn.copy(trace["logits"], self.chunk_logits[0])
+        ttnn.synchronize_device(self.mesh_device)
+
+    def capture_prefill_chunk_traces(self):
+        """Capture every traced later chunk not yet captured (after ``warm_prefill_chunk_traces``). Every buffer a
+        capture makes is freed by its end."""
+        for trace in self.chunk_traces.values():
+            if trace["id"] is not None:
+                continue
+            ttnn.synchronize_device(self.mesh_device)
+            trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+            self._chunk_trace_body(trace)
+            ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+            ttnn.synchronize_device(self.mesh_device)
+            trace["id"] = trace_id
+
+    def release_prefill_chunk_traces(self):
+        """Release the captured later-chunk traces (their buffers stay, for a later capture)."""
+        for trace in self.chunk_traces.values():
+            if trace["id"] is not None:
+                ttnn.release_trace(self.mesh_device, trace["id"])
+                trace["id"] = None
+
+    def _chunk_trace(self, slot, start_pos, tokens):
+        """The captured trace a later chunk of ``tokens`` at ``start_pos`` of ``slot`` replays, or None (eager)."""
+        if not self.chunk_traces or start_pos == 0 or self.dflash is not None:
+            return None
+        padded = prefill_padded_len(tokens.numel(), start_pos, self.pair is not None)
+        trace = self.chunk_traces.get(self._chunk_trace_key(slot, start_pos, padded))
+        return trace if trace is not None and trace["id"] is not None else None
+
+    def chunk_traced(self, slot, start_pos, num_tokens, chunk_size=None):
+        """Whether every chunk ``prefill_enqueue`` splits a later prefill of ``num_tokens`` tokens at ``start_pos``
+        into (``chunk_size``, default max_prefill_chunk) replays a trace. A prefill longer than one chunk (an
+        unaligned start moved back past the chunk budget) can have chunks that replay and chunks that run eagerly;
+        it is not traced, and vLLM's prefill_forward runs it with ``allow_trace=False``."""
+        chunk = chunk_size or self.max_prefill_chunk
+        return num_tokens > 0 and all(
+            self._chunk_trace(slot, start_pos + s, torch.empty(min(chunk, num_tokens - s))) is not None
+            for s in range(0, num_tokens, chunk)
+        )
+
+    def _replay_prefill_chunk(self, trace, tokens, slot, start_pos, writes):
+        """Copy a later chunk's inputs into its trace's buffers, replay it (non-blocking) and copy its logits row into
+        the slot's own (a later replay of the trace rewrites the trace's). ``writes``: its MTP history writes."""
+        n = tokens.numel()
+        padded = trace["key"][0]
+        inputs = self.chunk_inputs[padded]
+        if self.swa_table is not None:  # the host bookkeeping of the eager chunk (its device copy waits for decode)
+            self.swa_table.prefill(slot, start_pos, start_pos + n, start_pos + padded)
+        host = torch.nn.functional.pad(tokens.to(torch.int32), (0, padded - n)).reshape(1, -1)
+        ttnn.copy_host_to_device_tensor(kv_lib.replicated(self.plan, host, ttnn.uint32, False), inputs["tokens"])
+        start = torch.tensor([start_pos], dtype=torch.int32)
+        ttnn.copy_host_to_device_tensor(kv_lib.replicated(self.plan, start, ttnn.int32, False), inputs["start"])
+        positions = torch.arange(start_pos, start_pos + padded)
+        for name, setup in self.rope_setups.items():
+            cos, sin = partial_rope_cos_sin(positions, setup.head_dim, setup.rope_dim, setup.theta)
+            for value, t in zip((cos, sin), inputs["rope"][name]):
+                ttnn.copy_host_to_device_tensor(setup._host(value, False), t)
+        for key, tables in trace["tables"].items():
+            table, scratch = self._host_table(key)
+            pair, swa = self._pair_key(key), tables.context is None
+            context = None if swa else (self.pair_context_blocks if pair else self.prefill_context_blocks)
+            fill, ctx = kv_lib.PrefillTables.host_rows(
+                table, slot, start_pos, padded, self.block_size, scratch, context, pair
+            )
+            window = self._window_blocks(key, slot, start_pos) if swa else None
+            tables.write(fill, ctx, window)
+        tile_start = (n - 1) // TILE * TILE
+        at = torch.tensor([0, 0, tile_start, 0], dtype=torch.int32)
+        ttnn.copy_host_to_device_tensor(kv_lib.replicated(self.plan, at, ttnn.uint32, False), inputs["at"])
+        pick = torch.tensor([[(n - 1) % TILE]], dtype=torch.int32)
+        ttnn.copy_host_to_device_tensor(kv_lib.replicated(self.plan, pick, ttnn.uint32, False), inputs["pick"])
+        if inputs["history"] is not None:
+            host = self._history().prefill_list(writes, HISTORY_ROWS, device=False)
+            ttnn.copy_host_to_device_tensor(host, inputs["history"])
+        ttnn.execute_trace(self.mesh_device, trace["id"], cq_id=0, blocking=False)
+        out = self.chunk_logits[slot]
+        ttnn.copy(trace["logits"], out)
+        return {"logits": out, "row": 0, "hidden": None, "persistent": True}
 
     def prefill_read(self, pending):
         """-> (last-token logits [vocab], per-layer hidden states [tokens, hidden] when requested). A batch's pending
